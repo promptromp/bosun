@@ -442,11 +442,17 @@ class CommandTest(WorldTest):
         self.assertEqual(self.calls[-1], ["install.sh"])
 
     def test_a_terminal_gets_the_wizard_and_anything_explicit_does_not(self) -> None:
-        tty = mock.Mock(isatty=lambda: True)
-        with mock.patch.object(sys, "stdin", tty), mock.patch.object(sys, "stdout", tty):
-            self.assertTrue(init.wants_wizard(init.parse_args([])))
-            for argv in (["--recommended"], ["--answers", "x"], ["--dry-run"], ["--print-answers"]):
-                self.assertFalse(init.wants_wizard(init.parse_args(argv)))
+        # Parsed first: argparse looks at the real stdout, for colour, since Python 3.14.
+        plain = init.parse_args([])
+        explicit = [
+            init.parse_args(argv)
+            for argv in (["--recommended"], ["--answers", "x"], ["--dry-run"], ["--print-answers"])
+        ]
+        terminal = mock.Mock(isatty=lambda: True)
+        with mock.patch.object(sys, "stdin", terminal), mock.patch.object(sys, "stdout", terminal):
+            self.assertTrue(init.wants_wizard(plain))
+            for args in explicit:
+                self.assertFalse(init.wants_wizard(args))
 
     def test_no_terminal_no_wizard(self) -> None:
         self.assertFalse(init.wants_wizard(init.parse_args([])))
