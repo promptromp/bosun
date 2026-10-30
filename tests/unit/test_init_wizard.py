@@ -85,7 +85,7 @@ def run(
     ), ui
 
 
-ALL_RECOMMENDED = [ENTER] * 5 + ["y"]
+ALL_RECOMMENDED = [ENTER] * 6 + ["y"]
 
 
 class FlowTest(unittest.TestCase):
@@ -97,12 +97,12 @@ class FlowTest(unittest.TestCase):
 
     def test_each_question_gets_a_screen_and_says_which(self) -> None:
         _, ui = run(ALL_RECOMMENDED)
-        self.assertEqual(len(ui.screens), 6)
-        self.assertIn("step 1 of 5", ui.screens[0])
-        self.assertIn("step 5 of 5", ui.screens[4])
+        self.assertEqual(len(ui.screens), 7)
+        self.assertIn("step 1 of 6", ui.screens[0])
+        self.assertIn("step 6 of 6", ui.screens[5])
 
     def test_q_anywhere_changes_nothing(self) -> None:
-        for at in range(6):
+        for at in range(7):
             answers, ui = run([ENTER] * at + ["q"])
             self.assertIsNone(answers)
             self.assertEqual(len(ui.screens), at + 1)
@@ -114,16 +114,16 @@ class FlowTest(unittest.TestCase):
         answers, ui = run(["2", ENTER, "r", *ALL_RECOMMENDED])
         assert answers is not None
         self.assertEqual([r.name for r in answers.repos], ["api", "web"])
-        self.assertEqual(sum("step 1 of 5" in screen for screen in ui.screens), 3)
+        self.assertEqual(sum("step 1 of 6" in screen for screen in ui.screens), 3)
 
     def test_r_on_the_plan_starts_again(self) -> None:
-        _, ui = run([*[ENTER] * 5, "r", "q"])
-        self.assertIn("step 1 of 5", ui.screens[-1])
+        _, ui = run([*[ENTER] * 6, "r", "q"])
+        self.assertIn("step 1 of 6", ui.screens[-1])
 
     def test_keys_that_mean_nothing_are_ignored(self) -> None:
         answers, ui = run(["z", "!", *ALL_RECOMMENDED])
         self.assertIsNotNone(answers)
-        self.assertEqual(len(ui.screens), 6)
+        self.assertEqual(len(ui.screens), 7)
 
     def test_every_screen_offers_a_way_out(self) -> None:
         _, ui = run(ALL_RECOMMENDED)
@@ -133,7 +133,7 @@ class FlowTest(unittest.TestCase):
 
     def test_recommended_is_marked(self) -> None:
         _, ui = run(ALL_RECOMMENDED)
-        for screen in ui.screens[1:5]:
+        for screen in ui.screens[1:6]:
             self.assertIn("(recommended)", screen)
 
     def test_lines_fit_a_normal_terminal(self) -> None:
@@ -146,7 +146,7 @@ class FlowTest(unittest.TestCase):
                     self.assertLessEqual(len(line), 90, line)
 
     def test_a_blocked_plan_cannot_be_accepted(self) -> None:
-        answers, ui = run([*[ENTER] * 5, "y", "y", "q"], missing=("~/gone",))
+        answers, ui = run([*[ENTER] * 6, "y", "y", "q"], missing=("~/gone",))
         self.assertIsNone(answers)
         self.assertIn("No such folder: ~/gone", ui.screens[-1])
         self.assertNotIn("(y) do it", ui.screens[-1])
@@ -249,23 +249,23 @@ class ScheduleTest(unittest.TestCase):
         self.assertTrue(options[0].recommended)
 
     def test_picking_one(self) -> None:
-        answers, _ = run([ENTER, "1", ENTER, ENTER, ENTER, "y"])
+        answers, _ = run([ENTER, "1", ENTER, ENTER, ENTER, ENTER, "y"])
         assert answers is not None
         self.assertEqual((answers.days, answers.start, answers.until), ("MTWRF", "08:00", "20:00"))
 
     def test_typing_your_own(self) -> None:
-        answers, _ = run([ENTER, "2", ENTER, ENTER, ENTER, "y"], lines=("MWF", "07:15", "16:45"))
+        answers, _ = run([ENTER, "2", ENTER, ENTER, ENTER, ENTER, "y"], lines=("MWF", "07:15", "16:45"))
         assert answers is not None
         self.assertEqual((answers.days, answers.start, answers.until), ("MWF", "07:15", "16:45"))
 
     def test_return_keeps_each_part(self) -> None:
-        answers, _ = run([ENTER, "2", ENTER, ENTER, ENTER, "y"], lines=("", "07:15", ""))
+        answers, _ = run([ENTER, "2", ENTER, ENTER, ENTER, ENTER, "y"], lines=("", "07:15", ""))
         assert answers is not None
         self.assertEqual((answers.days, answers.start, answers.until), ("MTWRF", "07:15", "20:00"))
 
     def test_what_makes_no_sense_is_asked_again(self) -> None:
         answers, ui = run(
-            [ENTER, "2", ENTER, ENTER, ENTER, "y"], lines=("XX", "25:00", "", "MWF", "07:00", "16:00")
+            [ENTER, "2", ENTER, ENTER, ENTER, ENTER, "y"], lines=("XX", "25:00", "", "MWF", "07:00", "16:00")
         )
         assert answers is not None
         self.assertEqual(answers.days, "MWF")
@@ -285,20 +285,20 @@ class OtherQuestionsTest(unittest.TestCase):
         self.assertIn("Proactive, with the Slack watcher (recommended)", ui.screens[2])
 
     def test_proactive_without_the_watcher_can_be_picked(self) -> None:
-        answers, _ = run([ENTER, ENTER, "2", ENTER, ENTER, "y"], facts(slack_plugin=True))
+        answers, _ = run([ENTER, ENTER, "2", ENTER, ENTER, ENTER, "y"], facts(slack_plugin=True))
         assert answers is not None
         self.assertTrue(answers.events and answers.learning)
         self.assertFalse(answers.slack_watch)
 
     def test_little_else_turns_it_all_off(self) -> None:
-        answers, _ = run([ENTER, ENTER, "2", ENTER, ENTER, "y"])
+        answers, _ = run([ENTER, ENTER, "2", ENTER, ENTER, ENTER, "y"])
         assert answers is not None
         self.assertFalse(answers.events or answers.approvals or answers.learning or answers.slack_watch)
 
     def test_the_model_follows_the_plan_and_can_be_changed(self) -> None:
         _, ui = run([ENTER, ENTER, ENTER, "q"], facts(claude_plan="pro"))
         self.assertIn("sonnet (recommended)", ui.screens[3])
-        answers, _ = run([ENTER, ENTER, ENTER, "2", ENTER, "y"])
+        answers, _ = run([ENTER, ENTER, ENTER, "2", ENTER, ENTER, "y"])
         assert answers is not None
         self.assertEqual(answers.model, "sonnet")
 
@@ -307,51 +307,47 @@ class OtherQuestionsTest(unittest.TestCase):
         self.assertEqual(options[-1].label, "haiku, as now")
         self.assertTrue(options[-1].recommended)
 
+    def test_auto_mode_is_recommended_and_says_what_it_does(self) -> None:
+        answers, ui = run(ALL_RECOMMENDED)
+        assert answers is not None
+        self.assertEqual(answers.permissions, "auto")
+        self.assertIn("Auto mode (recommended)", ui.screens[4])
+        self.assertIn("blocks risky ones", " ".join(ui.screens[4].split()))
+        self.assertIn("slightly more tokens", " ".join(ui.screens[4].split()))
+
+    def test_skipping_permission_checks_is_a_choice_that_says_what_it_costs(self) -> None:
+        answers, ui = run([ENTER, ENTER, ENTER, ENTER, "2", ENTER, "y"])
+        assert answers is not None
+        self.assertEqual(answers.permissions, "bypass")
+        self.assertIn("no protection against prompt injection", " ".join(ui.screens[4].split()))
+        self.assertIn("accept its warning once", " ".join(ui.screens[4].split()))
+
     def test_the_wake_says_what_it_runs_and_that_it_needs_your_password(self) -> None:
-        _, ui = run([*[ENTER] * 4, "q"], facts(has_battery=True))
-        self.assertIn("sudo pmset repeat wakeorpoweron MTWRF 08:01:00", ui.screens[4])
-        self.assertIn("password once", ui.screens[4])
-        self.assertIn("charger", ui.screens[4])
+        _, ui = run([*[ENTER] * 5, "q"], facts(has_battery=True))
+        self.assertIn("sudo pmset repeat wakeorpoweron MTWRF 08:01:00", ui.screens[5])
+        self.assertIn("password once", ui.screens[5])
+        self.assertIn("charger", ui.screens[5])
 
     def test_someone_elses_wake_is_kept_unless_you_say_otherwise(self) -> None:
         the_facts = facts(repeating_wake="wake at 6:00AM")
-        answers, ui = run([*[ENTER] * 4, ENTER, "y"], the_facts)
+        answers, ui = run([*[ENTER] * 5, ENTER, "y"], the_facts)
         assert answers is not None
         self.assertFalse(answers.wake)
-        self.assertIn("this replaces: wake at 6:00AM", ui.screens[4])
-        answers, _ = run([*[ENTER] * 4, "y", "y"], the_facts)
+        self.assertIn("this replaces: wake at 6:00AM", ui.screens[5])
+        answers, _ = run([*[ENTER] * 5, "y", "y"], the_facts)
         assert answers is not None
         self.assertTrue(answers.wake)
 
     def test_aws_is_only_asked_when_there_are_profiles(self) -> None:
         _, ui = run(ALL_RECOMMENDED)
         self.assertFalse(any("AWS" in screen for screen in ui.screens))
-        answers, ui = run([*[ENTER] * 5, "2", ENTER, "y"], facts(aws_sso_profiles=("dev", "prod")))
+        answers, ui = run([*[ENTER] * 6, "2", ENTER, "y"], facts(aws_sso_profiles=("dev", "prod")))
         assert answers is not None
         self.assertEqual(answers.aws_sso_profiles, ("prod",))
-        self.assertIn("step 6 of 6", ui.screens[5])
+        self.assertIn("step 7 of 7", ui.screens[6])
 
 
 class BeforeAndAfterTest(unittest.TestCase):
-    def test_only_the_logins_that_are_missing(self) -> None:
-        self.assertEqual(init_wizard.missing_logins(facts()), [])
-        self.assertEqual(
-            init_wizard.missing_logins(facts(claude_logged_in=False, gh_logged_in=False)),
-            ["Claude Code", "The GitHub CLI"],
-        )
-
-    def test_a_login_can_wait(self) -> None:
-        self.assertTrue(init_wizard.ask_login(FakeUi([ENTER]), "Claude Code"))
-        self.assertTrue(init_wizard.ask_login(FakeUi("y"), "Claude Code"))
-        self.assertFalse(init_wizard.ask_login(FakeUi("n"), "Claude Code"))
-        ui = FakeUi("n")
-        init_wizard.ask_login(ui, "The GitHub CLI")
-        self.assertIn("gh auth login", ui.screens[0])
-
-    def test_q_at_a_login_leaves(self) -> None:
-        with self.assertRaises(init_wizard.Quit):
-            init_wizard.ask_login(FakeUi("q"), "Claude Code")
-
     def test_starting_says_what_will_happen_and_keeps_the_screen(self) -> None:
         ui = FakeUi([ENTER])
         self.assertTrue(init_wizard.ask_start(ui))

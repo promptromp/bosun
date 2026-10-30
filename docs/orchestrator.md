@@ -35,8 +35,8 @@ pushes to the default branch or posts in Slack, Jira or Confluence. The orchestr
 `review` and `fix-my-pr` tasks on its own; other work (for example a Slack ask for a code change)
 only once you ask or approve, and so does handing an item over again before its window reported,
 or moving it to another window. Each session reports with `bosun ledger report` (see Ledger).
-These rules live in the task text: a repo session running with
-`--dangerously-skip-permissions` follows them but is not technically prevented from doing more.
+These rules live in the task text: a repo session follows them, but neither auto mode nor
+`--dangerously-skip-permissions` technically prevents it from doing more.
 To change a rule, edit the task file; `tests/smoke.sh` checks that the ledger steps are valid and
 that this table matches.
 

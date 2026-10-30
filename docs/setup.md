@@ -6,10 +6,15 @@ Requirements, installation and configuration, and the morning's logins.
 
 - macOS on Apple silicon or Intel, an **admin account** (for the one-time `sudo pmset`)
 - Charger connected and **lid open** (or an external display) overnight
-- `brew install tmux jq python` (`python3` must be 3.13 or newer; the macOS system one is 3.9), plus
-  `ruby` (the macOS system one is fine)
-- For the orchestrator: [GitHub CLI](https://cli.github.com) (`gh`), logged in (`gh auth login`)
-- [Claude Code](https://claude.com/claude-code), logged in
+- [Homebrew](https://brew.sh), which also brings Apple's command line tools
+- `brew install tmux jq python gh` (`python3` must be 3.13 or newer; the macOS system one is 3.9), plus
+  `ruby` and `curl` (the macOS system ones are fine)
+- [GitHub CLI](https://cli.github.com), logged in: `gh auth login`
+- [Claude Code](https://claude.com/claude-code) 2.1.283 or newer, logged in, and opened once by hand:
+  run `claude`, go through its first screens, then `/exit`
+
+You do not have to check these yourself. `bosun preflight` does, changes nothing, and lists everything
+missing at once, with what to do about each. `bosun init` and `bosun doctor` start with the same check.
 
 ## Install
 
@@ -17,8 +22,11 @@ Requirements, installation and configuration, and the morning's logins.
 curl -fsSL https://raw.githubusercontent.com/promptromp/bosun/main/get.sh | sh
 ```
 
-[`get.sh`](../get.sh) checks what bosun needs and offers to install what is missing with Homebrew
-(and Homebrew itself, on a new Mac). It puts bosun in `~/.local/share/bosun` and starts `bosun init`.
+[`get.sh`](../get.sh) puts bosun in `~/.local/share/bosun` and starts `bosun init`. It installs nothing
+else: if something is missing, it says what, gives you the lines to run and the pages to go to, and
+stops. Do those, and run the same line again. It takes a few minutes the first time, most of it
+Homebrew's, and once everything is there the questions take about a minute.
+
 Run it again to update. After the pipe, `sh -s -- --dry-run` says what it would do and does nothing,
 and `sh -s -- --unattended` asks nothing and takes the recommended setup. `BOSUN_DIR`, `BOSUN_REPO` and
 `BOSUN_BRANCH` override where it goes and what it gets.
@@ -42,6 +50,23 @@ bosun init --recommended       # or just take what it recommends
 Run it again whenever you like: it starts from your config, keeps anything you added to `bosun.env`,
 keeps a backup of what it changes, and never changes your `setup.sh` once it exists. How it decides,
 and what it never does: [design note](design/init.md).
+
+### If you get stuck
+
+`bosun preflight` tells you where you are, and `bosun doctor` tells you what is wrong once bosun is
+installed. The usual ones:
+
+| What you see | What it means | What to do |
+|---|---|---|
+| `missing  Homebrew` | Nothing to install the tools with | Install it from [brew.sh](https://brew.sh), then do what it prints at the end to add it to your PATH, and open a new terminal |
+| A tool you just installed is still `missing` | Your terminal has the old PATH | Open a new terminal |
+| `first-run screens not done` | Claude Code stops at its theme and security screens the first time, and a window nobody is watching would wait there for ever | Run `claude`, go through them, then `/exit` |
+| `not logged in` | Claude Code has no login | Run `claude`, and follow what it asks |
+| A window is on a screen, and the watchdog reports `stalled-start` | Claude Code is asking something only you can answer, usually about trusting the folder | `bosun attach`, then read it. Do not just press Return: on several of these screens the default is to exit |
+| `does not run on <your OS> yet` | bosun runs on macOS today, and Linux is next | See the [roadmap](../ROADMAP.md) |
+
+If none of these fit, open an issue with what `bosun preflight` and `bosun doctor` print:
+<https://github.com/promptromp/bosun/issues>.
 
 ### By hand
 

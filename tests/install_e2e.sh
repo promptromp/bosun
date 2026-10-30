@@ -50,6 +50,7 @@ a_new_machine() {
   echo "a new machine"
   mkdir -p "$HOME/.local/bin"
   cp "$ROOT/tests/sandbox/claude-stand-in" "$HOME/.local/bin/claude"
+  echo '{"hasCompletedOnboarding": true}' >"$HOME/.claude.json" # a person went through its first-run screens
   # With GH_TOKEN the real gh counts as logged in; without one, it needs its stand-in too.
   [ -n "${GH_TOKEN:-}" ] || cp "$ROOT/tests/sandbox/gh-stand-in" "$HOME/.local/bin/gh"
   # A repo by hand: on a new Mac there is no git until the installer has run.
@@ -65,17 +66,37 @@ a_new_machine() {
   command -v tmux >/dev/null && echo "  note  tmux is already on this runner"
 }
 
+# What someone on a new Mac is told, followed to the letter. get.sh installs nothing itself.
+follow_what_it_says() {
+  echo "what bosun needs: it says what to do, and stops"
+  check "a dry run changes nothing" bash -c 'sh "$1/get.sh" --dry-run; [ ! -e "$2" ]' _ "$ROOT" "$DIR"
+  if ! command -v brew >/dev/null; then
+    # shellcheck disable=SC2002 # the pipe is the point: this is how people run it
+    cat "$ROOT/get.sh" | sh >"$OUT/first.txt" 2>&1
+    check "on a new Mac it stops and points at Homebrew" grep -q "https://brew.sh" "$OUT/first.txt"
+    NONINTERACTIVE=1 /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)" </dev/null >/dev/null
+  fi
+  # shellcheck disable=SC2002
+  cat "$ROOT/get.sh" | sh >"$OUT/second.txt" 2>&1
+  cat "$OUT/second.txt"
+  local line
+  line="$(grep -oE "brew install [a-z0-9 ]+" "$OUT/second.txt" | head -1)"
+  check "it says what to install" test -n "$line"
+  # shellcheck disable=SC2086 # the words of the line it printed
+  check "that line works" $line
+}
+
 install() {
   echo "the piped installer, unattended"
-  check "a dry run changes nothing" bash -c 'sh "$1/get.sh" --dry-run && [ ! -e "$2" ]' _ "$ROOT" "$DIR"
-  # shellcheck disable=SC2002 # the pipe is the point: this is how people run it
+  # shellcheck disable=SC2002
   cat "$ROOT/get.sh" | sh -s -- --unattended >"$OUT/install.txt" 2>&1
-  local status=$?
+  local installed=$?
   cat "$OUT/install.txt"
-  check "it finishes with bosun doctor passing" test "$status" = 0
+  check "it finishes with bosun doctor passing" test "$installed" = 0
   check "Homebrew's tmux is here" command -v tmux
   check "python3 is new enough" python3 -c 'import sys; sys.exit(sys.version_info < (3, 13))'
   check "it found the repo in the usual folder" grep -q "name: acme-api" "$CONFIG/sessions.yml"
+  check "repo sessions are in auto mode" grep -q -- "--permission-mode auto" "$CONFIG/bosun.env"
   check "bosun is linked" test -L "$HOME/.local/bin/bosun"
 }
 
@@ -120,6 +141,7 @@ uninstall() {
 }
 
 a_new_machine
+follow_what_it_says
 install
 launchd_for_real
 run_again

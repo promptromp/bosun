@@ -258,9 +258,10 @@ nothing.
 
 ## Repo sessions
 
-Repo sessions run with `BOSUN_CLAUDE_FLAGS` (by default `--dangerously-skip-permissions`):
-bypass mode never prompts, so they do not hang on these calls (a week of real transcripts had no
-permission prompt in a repo session other than questions). A site that runs them in a prompting
+Repo sessions run with `BOSUN_CLAUDE_FLAGS` (by default `--permission-mode auto`). Auto mode prompts
+only after blocking several actions in a row, and bypass mode never does, so they rarely hang on these
+calls (a week of real transcripts in bypass mode had no permission prompt in a repo session other than
+questions; the watchdog's `waiting` check reports the rest). A site that runs them in a prompting
 mode could get the same pair of hooks through `repo_session_settings`, behind the same flag; the
 quote check would then read the repo window's own transcript, and `pasted_hashes` for that window.
 Not wired.

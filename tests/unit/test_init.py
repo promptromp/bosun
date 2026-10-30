@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import contextlib
-import dataclasses
 import io
 import json
 import os
@@ -66,6 +65,7 @@ class WorldTest(unittest.TestCase):
             mock.patch.object(claude_state, "PROJECTS_DIR", self.home / ".claude" / "projects"),
             mock.patch.object(claude_state, "CONFIG_FILE", self.home / ".claude.json"),
             mock.patch.object(claude_state, "INSTALLED_PLUGINS", self.home / "plugins.json"),
+            mock.patch.object(claude_state, "SETTINGS_FILE", self.home / ".claude" / "settings.json"),
             mock.patch.object(Path, "home", return_value=self.home),
             # This scratch home is itself in a temporary folder.
             mock.patch.object(init_detect, "TEMPORARY_FOLDERS", (str(self.home / "scratch"),)),
@@ -359,6 +359,12 @@ class CommandTest(WorldTest):
             sorted(p.name for p in self.config.iterdir()), ["bosun.env", "sessions.yml", "setup.sh"]
         )
 
+    def test_what_claude_state_says_about_its_screens(self) -> None:
+        self.assertFalse(claude_state.onboarded())
+        (self.home / ".claude.json").write_text('{"hasCompletedOnboarding": true}')
+        self.assertTrue(claude_state.onboarded())
+        self.assertFalse(claude_state.bypass_accepted())
+
     def test_a_rerun_writes_nothing_and_backs_up_nothing(self) -> None:
         self.bosun_init("--recommended")
         before = {p.name: p.read_text() for p in self.config.iterdir()}
@@ -470,44 +476,11 @@ class CommandTest(WorldTest):
         with mock.patch.dict(os.environ, {"BOSUN_USER_PATH": f"/usr/bin:{self.home}/.local/bin"}):
             self.assertEqual(init.path_note(), "")
 
-    def test_logins_are_offered_then_everything_is_looked_at_again(self) -> None:
-        missing = init_detect.detect(self.config)
-        missing = dataclasses.replace(missing, gh_logged_in=False, claude_logged_in=True)
-        ui = mock.Mock()
-        with (
-            mock.patch.object(init_wizard, "ask_login", return_value=True),
-            mock.patch.object(init_detect, "detect", return_value="looked again") as detect,
-            mock.patch.object(subprocess, "run") as run,
-        ):
-            self.assertEqual(init.log_in_first(ui, missing, self.config), "looked again")
-        run.assert_called_once_with(("gh", "auth", "login"), check=False)
-        detect.assert_called_once()
-
-    def test_a_tool_that_is_not_installed_is_not_offered_a_login(self) -> None:
-        facts = dataclasses.replace(init_detect.detect(self.config), gh_logged_in=False)
-        with (
-            mock.patch.object(shutil, "which", return_value=None),
-            mock.patch.object(init_wizard, "ask_login") as ask,
-        ):
-            self.assertIs(init.log_in_first(mock.Mock(), facts, self.config), facts)
-        ask.assert_not_called()
-
-    def test_no_login_wanted_nothing_to_look_at_again(self) -> None:
-        facts = init_detect.detect(self.config)
-        with mock.patch.object(init_wizard, "ask_login", return_value=False):
-            self.assertIs(
-                init.log_in_first(
-                    mock.Mock(), dataclasses.replace(facts, gh_logged_in=False), self.config
-                ).home,
-                facts.home,
-            )
-
     def wizard(self, keys: list[str]) -> tuple[int, str]:
         out = io.StringIO()
         with (
             contextlib.redirect_stdout(out),
             mock.patch.object(init_terminal, "TerminalUi", return_value=FakeTerminal(keys)),
-            mock.patch.object(init_wizard, "missing_logins", return_value=[]),
         ):
             status = init.run_wizard(init_detect.detect(self.config), self.config)
         return status, out.getvalue()
@@ -519,7 +492,7 @@ class CommandTest(WorldTest):
         self.assertFalse(self.config.exists())
 
     def test_the_wizard_carries_out_what_you_accepted_then_offers_to_start(self) -> None:
-        status, _ = self.wizard([*[init_wizard.ENTER] * 5, "y", "y"])
+        status, _ = self.wizard([*[init_wizard.ENTER] * 6, "y", "y"])
         self.assertEqual(status, 0)
         self.assertIn("name: api", (self.config / "sessions.yml").read_text())
         self.assertEqual(self.calls[-1], ["bosun", "start"])
@@ -528,7 +501,7 @@ class CommandTest(WorldTest):
         self.bosun_init("--recommended")
         self.repo("Development/web")
         self.prompts(self.home / "Development" / "web", 30, session="s9")
-        status, _ = self.wizard(["1", "2", *[init_wizard.ENTER] * 5, "y", "n"])
+        status, _ = self.wizard(["1", "2", *[init_wizard.ENTER] * 6, "y", "n"])
         self.assertEqual(status, 0)
         self.assertIn("name: web", (self.config / "sessions.yml").read_text())
         self.assertTrue(any(name.startswith("sessions.yml.pre-init-") for name in self.backups()))

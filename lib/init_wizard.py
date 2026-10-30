@@ -327,6 +327,41 @@ def ask_model(ui: Ui, answers: Answers, top: Sequence[str]) -> Answers:
     return replace(answers, **picked.changes)
 
 
+AUTO_PREVIEW = (
+    "A safety check reviews each action and blocks risky ones.",
+    "Nothing to accept first, and it uses slightly more tokens.",
+    "If it blocks several in a row, the session waits at a prompt, and the watchdog tells you.",
+)
+BYPASS_PREVIEW = (
+    "No safety checks at all, and Claude's docs say it offers no protection against prompt injection.",
+    "You also accept its warning once before the first start, or the sessions stop there.",
+)
+
+
+def permission_options(answers: Answers) -> list[Option]:
+    return [
+        Option(
+            "1",
+            "Auto mode",
+            {"permissions": init_plan.AUTO},
+            AUTO_PREVIEW,
+            answers.permissions == init_plan.AUTO,
+        ),
+        Option(
+            "2",
+            "Skip permission checks",
+            {"permissions": init_plan.BYPASS},
+            BYPASS_PREVIEW,
+            answers.permissions == init_plan.BYPASS,
+        ),
+    ]
+
+
+def ask_permissions(ui: Ui, answers: Answers, top: Sequence[str]) -> Answers:
+    picked = choose(ui, top, permission_options(answers))
+    return replace(answers, **picked.changes)
+
+
 def wake_options(facts: Facts, answers: Answers) -> list[Option]:
     command = init_plan.wake_command(facts, replace(answers, wake=True))
     yes = ["The Mac wakes itself for the morning run."]
@@ -367,7 +402,7 @@ def ask_aws(ui: Ui, facts: Facts, answers: Answers, top: Sequence[str]) -> Answe
 
 
 def ask_all(ui: Ui, facts: Facts, answers: Answers, machine: Machine) -> Answers:
-    steps = 5 + bool(facts.aws_sso_profiles)
+    steps = 6 + bool(facts.aws_sso_profiles)
     windows_intro = ("Each gets a window: one Claude Code session that keeps running in that repo.",)
     answers = ask_repos(
         ui, facts, answers, machine, header(1, steps, "Which repos should get a window?", windows_intro)
@@ -375,10 +410,11 @@ def ask_all(ui: Ui, facts: Facts, answers: Answers, machine: Machine) -> Answers
     answers = ask_schedule(ui, facts, answers, header(2, steps, "When should bosun run?"))
     answers = ask_features(ui, facts, answers, header(3, steps, "How proactive should it be?"))
     answers = ask_model(ui, answers, header(4, steps, "Which model should the sessions use?"))
-    answers = ask_wake(ui, facts, answers, header(5, steps, "Should the Mac wake by itself?"))
+    answers = ask_permissions(ui, answers, header(5, steps, "How should repo sessions handle permissions?"))
+    answers = ask_wake(ui, facts, answers, header(6, steps, "Should the Mac wake by itself?"))
     if facts.aws_sso_profiles:
         title = "Which AWS SSO profiles should each morning log in to?"
-        answers = ask_aws(ui, facts, answers, header(6, steps, title))
+        answers = ask_aws(ui, facts, answers, header(7, steps, title))
     return answers
 
 
@@ -404,27 +440,6 @@ def run(ui: Ui, facts: Facts, recommended: Answers, machine: Machine, config_dir
 
 
 # ---- before and after ----------------------------------------------------------------------------
-
-LOGIN_COMMANDS = {"Claude Code": ("claude", "auth", "login"), "The GitHub CLI": ("gh", "auth", "login")}
-
-
-def missing_logins(facts: Facts) -> list[str]:
-    logged_in = {"Claude Code": facts.claude_logged_in, "The GitHub CLI": facts.gh_logged_in}
-    return [tool for tool, done in logged_in.items() if not done]
-
-
-def ask_login(ui: Ui, tool: str) -> bool:
-    command = " ".join(LOGIN_COMMANDS[tool])
-    top = [dim("bosun setup"), "", bold(f"{tool} is not logged in"), "bosun needs it. Now, or later?", ""]
-    options = [
-        Option("y", f"Log in now: {command}", recommended=True),
-        Option("n", "Later", preview=(f"Until then `bosun doctor` will say so. Run: {command}",)),
-    ]
-    try:
-        return choose(ui, top, options).key == "y"
-    except Restart:
-        return False
-
 
 START_TEXT = (
     "One window per repo, plus the orchestrator, which starts its morning chores right away: it reads "

@@ -9,7 +9,8 @@ anything.
 
 | Part | File | What it does |
 |---|---|---|
-| Bootstrap | `get.sh` | Plain `sh`, because it runs before anything is installed: Homebrew and what is missing, then bosun itself. |
+| Bootstrap | `get.sh` | Plain `sh`, because it runs before anything is known to be there: only gets bosun and starts `init`. |
+| Preflight | `lib/preflight.sh`, `lib/platforms/`, `lib/harnesses/` | Plain `sh`: what bosun needs, and what to do about anything missing. Changes nothing. |
 | Detect | `lib/init_detect.py` | Read-only: the facts. Claude Code's files are read through `lib/claude_state.py`. |
 | Plan | `lib/init_plan.py` | Pure: facts to recommended answers, answers to file contents and a plan. |
 | Wizard | `lib/init_wizard.py` | Pure over a `Ui`: the questions, from recommended answers to yours. |
@@ -76,8 +77,49 @@ It only reads where and when prompts were typed, never what they say.
   output into issues, and `bosun.env` can hold a webhook.
 - **Replace another repeating wake,** or start anything before the plan has been shown.
 
-The plan also says that repo sessions run with `--dangerously-skip-permissions`: that is the
-default that lets an unattended session keep going, and you should know about it on day one.
+It asks how repo sessions handle permissions, and recommends Claude Code's auto mode: a safety check
+reviews each action, and there is no warning to accept before the first start. If auto mode blocks
+several actions in a row the session waits at a prompt, and the watchdog says so. The other answer,
+`--dangerously-skip-permissions`, has no checks at all, and its warning has to be accepted once by
+hand: its cursor starts on "No, exit", so a window nobody is watching stops there.
+
+## What it needs first
+
+`bosun init` does not install anything for you. It used to offer to, and that made it the one piece of
+this that had to know every OS's package manager, and it could still not do the parts that need a
+person: logging in, and the screens Claude Code shows the first time. So it finds out what is missing,
+says all of it at once, with the line to run or the page to go to, and exits. You do those, and run the
+same line again.
+
+`lib/preflight.sh` does this in layers, so that another OS or agent is one more file, not a change to
+the flow:
+
+1. **The OS picks a platform profile**, `lib/platforms/<os>.sh`: its package manager, the line that
+   installs from it, how a tool's package is named, and what to say when any of that is missing.
+2. **`BOSUN_HARNESS` picks a harness profile**, `lib/harnesses/<harness>.sh`: how to tell that agent is
+   installed, new enough, logged in, and past whatever it asks a person the first time.
+3. **The flow** in `lib/preflight.sh` knows neither. It checks everything and prints a list, then
+   numbered next steps. Exit status 0 means all there, 1 something to do, 2 no profile for this OS or
+   harness.
+
+It is plain `sh` because it runs before Python 3.13 is known to be there, and the harness's checks that
+need Python wait until it is. `bosun init` and `bosun doctor` both start with it, so `doctor` cannot say
+"all checks passed" over a machine that would stall on its first morning.
+
+**To add an OS:** add `lib/platforms/<os>.sh` with the same functions as `macos.sh`, map its `uname -s`
+in `load_profiles`, and let `get.sh`'s `check_os` through. `tests/unit/test_preflight.py` checks that a
+profile has them all. That covers this check only. What else assumes macOS: `install.sh` and the
+launchd templates, `pmset` and the wake, `caffeinate` in the keep-awake, and `osascript` for alerts.
+
+**To add a harness:** add `lib/harnesses/<harness>.sh` with the same functions as `claude.sh`. That too
+covers this check only. What else assumes Claude Code: `lib/claude_state.py` (every file of its that
+bosun reads), `build_launch_command` and its flags, and the hooks in `repo_session_settings`.
+
+**A window can still stop at a screen nobody knew about.** So the watchdog's `stalled-start` check does
+not look at the screen: a Claude that has run for five minutes without writing its session record has
+not reached a session. It alerts and leaves the answer to you. bosun never answers these screens with a
+keypress, since several of them default to exit, and a key sent to a screen it misread can agree to
+something nobody saw.
 
 ## Testing
 

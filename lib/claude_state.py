@@ -32,6 +32,9 @@ Usage: claude_state.py resolve <workdir> <name>    the most recent session named
        claude_state.py field <pid> <field>         a field of a running Claude's record
        claude_state.py describe <pid>              a running Claude's record and transcript (JSON)
        claude_state.py trusted <dir>               exit 0 if Claude Code trusts <dir>
+       claude_state.py onboarded                   exit 0 if its first-run screens are done
+       claude_state.py bypass-accepted             exit 0 if its bypass-mode warning was accepted
+       claude_state.py logged-in                   exit 0 if `claude auth status` says so
        claude_state.py set-trust <dir> true|false  record (or remove) folder trust
        claude_state.py prompts <transcript> [<ISO time>]
                                                    the prompts typed into a session (JSON lines),
@@ -64,6 +67,7 @@ HOME = Path.home()
 PROJECTS_DIR = HOME / ".claude" / "projects"
 LIVE_SESSIONS_DIR = HOME / ".claude" / "sessions"
 CONFIG_FILE = HOME / ".claude.json"
+SETTINGS_FILE = HOME / ".claude" / "settings.json"
 INSTALLED_PLUGINS = HOME / ".claude" / "plugins" / "installed_plugins.json"
 SLACK_PLUGIN = "slack"
 TITLE_MARKER = '"custom-title"'
@@ -254,6 +258,18 @@ def trusted(directory: str) -> bool:
     return (
         config.get("projects", {}).get(os.path.realpath(directory), {}).get("hasTrustDialogAccepted") is True
     )
+
+
+def onboarded() -> bool:
+    """Whether someone went through the first-run screens (the theme, the security notes). Until then
+    every interactive Claude stops at them, and no setting skips them."""
+    return (read_object(CONFIG_FILE) or {}).get("hasCompletedOnboarding") is True
+
+
+def bypass_accepted() -> bool:
+    """Whether someone accepted the warning that --dangerously-skip-permissions shows once per machine:
+    its cursor starts on "No, exit", so an unattended window never gets past it."""
+    return (read_object(SETTINGS_FILE) or {}).get("skipDangerousModePermissionPrompt") is True
 
 
 def set_trust(directory: str, trust: bool) -> None:
@@ -1311,6 +1327,10 @@ def cmd_describe(args: list[str]) -> int:
     return emit(json.dumps(described) if described else None)
 
 
+def cmd_logged_in(_args: list[str]) -> int:
+    return 0 if auth_status(os.environ.get("BOSUN_CLAUDE_BIN") or "claude").logged_in is True else NOT_FOUND
+
+
 def cmd_set_trust(args: list[str]) -> int:
     if args[1] not in ("true", "false"):
         print(__doc__.strip(), file=sys.stderr)
@@ -1347,6 +1367,9 @@ COMMANDS: dict[str, tuple[int | None, Callable[[list[str]], int]]] = {
     "field": (2, lambda args: emit((record(args[0]) or {}).get(args[1]))),
     "describe": (1, cmd_describe),
     "trusted": (1, lambda args: 0 if trusted(args[0]) else NOT_FOUND),
+    "onboarded": (0, lambda _args: 0 if onboarded() else NOT_FOUND),
+    "bypass-accepted": (0, lambda _args: 0 if bypass_accepted() else NOT_FOUND),
+    "logged-in": (0, cmd_logged_in),
     "set-trust": (2, cmd_set_trust),
     "prompts": (None, cmd_prompts),
     "api-error": (1, cmd_api_error),

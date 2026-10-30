@@ -3,7 +3,7 @@
 # the login check, and a window's session stays up with the running-session record bosun knows a
 # Claude by.
 case "$*" in
-*--version*) echo "2.0.0 (Claude Code)" ;;
+*--version*) echo "2.1.308 (Claude Code)" ;;
 "auth status --json") echo '{"loggedIn":true,"authMethod":"claude.ai","subscriptionType":"max"}' ;;
 *--print* | *-p\ *) echo '{"type":"result","is_error":false,"total_cost_usd":0}' ;;
 *)
@@ -13,7 +13,7 @@ case "$*" in
 		shift
 	done
 	mkdir -p "$HOME/.claude/sessions"
-	printf '{"pid":%d,"status":"idle","version":"2.0.0","statusUpdatedAt":%d,"name":"%s"}' \
+	printf '{"pid":%d,"status":"idle","version":"2.1.308","statusUpdatedAt":%d,"name":"%s"}' \
 		"$$" "$(($(date +%s) * 1000))" "$name" >"$HOME/.claude/sessions/$$.json"
 	exec sleep 86400
 	;;
