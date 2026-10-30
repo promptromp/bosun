@@ -1394,9 +1394,9 @@ for path in Path(sys.argv[1], "orchestrator", "tasks").glob("[!_]*.md"):
             states = KINDS[kind]["transitions"]
             assert any(state in allowed_targets(kind, s) for s in states), (path.name, kind, state)
 PY
-check "the README table matches the task files, row for row" bash -c '
-  readme="$(sed -n "/^### Delegated tasks/,/^### /p" "$2" | grep "^| " | grep -v "^| Task |")"
-  diff <(sort <<<"$1") <(sort <<<"$readme")' _ "$("$BOSUN" delegate --list --markdown)" "$ROOT/README.md"
+check "the task table in docs/orchestrator.md matches the task files, row for row" bash -c '
+  table="$(sed -n "/^## Delegated tasks/,/^## /p" "$2" | grep "^| " | grep -v "^| Task |")"
+  diff <(sort <<<"$1") <(sort <<<"$table")' _ "$("$BOSUN" delegate --list --markdown)" "$ROOT/docs/orchestrator.md"
 
 echo "chores dry run (fake claude)"
 cat >"$WORK/fake-claude" <<FAKE

@@ -59,7 +59,7 @@ JIRA_STATUSES = {
     **dict.fromkeys(("done", "closed", "resolved", "released"), "done"),
     **dict.fromkeys(("won't do", "won't fix", "cancelled", "canceled", "declined", "duplicate"), "cancelled"),
 }
-# A new tracker is one more row here (and its line in the README's tickets section).
+# A new tracker is one more row here (and its line in docs/orchestrator.md's tickets section).
 BACKENDS: dict[str, Backend] = {
     "jira": Backend(
         key=re.compile(r"^[A-Z][A-Z0-9_]+-\d+$"),

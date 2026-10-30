@@ -37,7 +37,7 @@ class Relation:
 LINEAGE = "lineage"  # the family of spawned_from and produces (and outreach under its parent)
 DUPLICATE = "duplicate"  # the family of duplicate_of and folded_into: what carries an item on
 WORKSTREAM = "workstream"  # the family of part_of: a workstream's parent workstreams
-# A new relation is one more row here, plus its line in the README's lineage section.
+# A new relation is one more row here, plus its line in docs/orchestrator.md's lineage section.
 RELATIONS: dict[str, Relation] = {
     "spawned_from": Relation(
         "spawned",

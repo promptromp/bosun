@@ -28,8 +28,8 @@ check-in and the morning run got only "please run /login" error replies, the
 check-in loop logged them as delivered and nothing alerted. Now the transcript's structured error
 fields (backed by `claude auth status` and a tiny login check request) drive a morning setup step
 (`ensure_claude_login`), a check-in gate that stops sending to a session that only gets login
-errors, the watchdog's `login-expired` check, and `bosun status` / `doctor` (README, "Claude
-Code login").
+errors, the watchdog's `login-expired` check, and `bosun status` / `doctor` (`docs/setup.md`,
+"Claude Code login").
 
 ### 2. Cloud watchdog (track only)
 
