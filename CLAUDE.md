@@ -179,7 +179,10 @@ request's title, description and commit messages are checked too), the unit test
 to 3.15 (`test (<version>)`), the smoke suite on macOS (`smoke`) and gitleaks over the pull
 request's commits (`gitleaks`; a made-up value in a test carries a `gitleaks:allow` comment). The
 logs are public, so neither check prints what it matched. `main` takes changes only through a pull
-request with those checks green and up to date with `main`, squashed or rebased: the ruleset in
+request with those checks green and up to date with `main`, CodeQL's results clean (GitHub's
+default setup; no error alerts, no high or critical security alerts) and every review thread
+resolved (the ruleset also asks for a Copilot review on each push, which takes effect once
+Copilot code review is enabled for the organization); squashed or rebased: the ruleset in
 `.github/rulesets/main.json`. A new or renamed job goes in its list too, applied with `gh api -X PUT
 repos/{owner}/{repo}/rulesets/<id> --input .github/rulesets/main.json`. Dependabot
 (`.github/dependabot.yml`) opens monthly grouped updates of the actions, `uv.lock` and the hook
