@@ -10,6 +10,7 @@
 #
 #   curl ... | sh -s -- --dry-run      say what it would do, and do nothing
 #   curl ... | sh -s -- --unattended   ask nothing: take the recommended setup
+#   curl ... | BOSUN_HARNESS=codex sh  run repo sessions on Codex, and check that it is ready
 #
 # BOSUN_DIR (where it goes), BOSUN_REPO and BOSUN_BRANCH (what it gets) override the defaults.
 #
@@ -22,7 +23,7 @@ set -eu
 REPO="${BOSUN_REPO:-https://github.com/promptromp/bosun.git}"
 DIR="${BOSUN_DIR:-$HOME/.local/share/bosun}"
 BRANCH="${BOSUN_BRANCH:-main}"
-THIS_LINE="curl -fsSL https://raw.githubusercontent.com/promptromp/bosun/main/get.sh | sh"
+THIS_LINE="curl -fsSL https://raw.githubusercontent.com/promptromp/bosun/main/get.sh | ${BOSUN_HARNESS:+BOSUN_HARNESS=$BOSUN_HARNESS }sh"
 ROADMAP="https://github.com/promptromp/bosun/blob/main/ROADMAP.md"
 USER_PATH="$PATH"
 PATH="/opt/homebrew/bin:/usr/local/bin:$HOME/.local/bin:$PATH" # where Homebrew and Claude Code go

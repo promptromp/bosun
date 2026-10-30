@@ -1,11 +1,11 @@
 #!/bin/bash
 # Usage: bosun trust [--check | --revoke] [--any] <dir>...
 #
-# Mark directories as trusted by Claude Code, as if you had accepted its folder trust prompt there.
-# In an untrusted folder an interactive Claude shows that prompt at startup and waits, which stalls
-# an unattended start; Claude Code has no setting or flag that skips it. This records the same
-# entry Claude writes when you accept the prompt (`hasTrustDialogAccepted` in ~/.claude.json, an
-# internal format), and checks it took.
+# Mark directories as trusted by each agent in use, as if you had accepted its folder trust prompt there.
+# In an untrusted folder an agent shows that prompt at startup and waits, which stalls an unattended
+# start, and neither has a setting or flag that skips it. This records the same entry the agent writes
+# when you accept the prompt (Claude Code: `hasTrustDialogAccepted` in ~/.claude.json; Codex: `trust_level`
+# in ~/.codex/config.toml; both internal formats), and checks it took.
 #
 # Only git repositories whose origin matches BOSUN_REPO_MASK are trusted, unless --any.
 # --check exits 0 if every directory is trusted. --revoke removes the trust.
@@ -33,7 +33,19 @@ while [ $# -gt 0 ]; do
 done
 [ ${#dirs[@]} -gt 0 ] || die_usage "give at least one directory"
 
-set_trust() { claude_state set-trust "$1" "$2"; }
+set_trust() { # <dir> <true|false>
+  local harness
+  for harness in $(harnesses_in_use); do
+    agent_state set-trust "$harness" "$1" "$2" || return 1
+  done
+}
+
+all_agents_trust() { # <dir>
+  local harness
+  for harness in $(harnesses_in_use); do
+    agent_trusts "$harness" "$1" || return 1
+  done
+}
 
 status=0
 for dir in "${dirs[@]}"; do
@@ -45,13 +57,13 @@ for dir in "${dirs[@]}"; do
   dir="$(cd "$dir" && pwd -P)"
   case "$MODE" in
     check)
-      if claude_trusts "$dir"; then log "trusted: $dir"; else
+      if all_agents_trust "$dir"; then log "trusted: $dir"; else
         log "not trusted: $dir"
         status=1
       fi
       ;;
     revoke)
-      if set_trust "$dir" false && ! claude_trusts "$dir"; then
+      if set_trust "$dir" false && ! all_agents_trust "$dir"; then
         log "revoked: $dir"
       else
         log "could not revoke $dir"
@@ -59,7 +71,7 @@ for dir in "${dirs[@]}"; do
       fi
       ;;
     trust)
-      if claude_trusts "$dir"; then
+      if all_agents_trust "$dir"; then
         log "already trusted: $dir"
         continue
       fi
@@ -75,7 +87,7 @@ for dir in "${dirs[@]}"; do
           continue
         }
       fi
-      if set_trust "$dir" true && claude_trusts "$dir"; then
+      if set_trust "$dir" true && all_agents_trust "$dir"; then
         log "trusted: $dir"
       else
         log "could not trust $dir"

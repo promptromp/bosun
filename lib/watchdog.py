@@ -36,6 +36,8 @@ from typing import Any
 
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+import agent_files
+import agent_state
 import awake
 import claude_state
 import event_model
@@ -212,7 +214,7 @@ class Config:
 @dataclass(frozen=True)
 class WindowFact:
     name: str
-    claude_pid: int | None
+    agent_pid: int | None
     starting_pid: int | None = None  # a Claude in this window with no session record yet
 
 
@@ -238,7 +240,7 @@ class Facts:
             session_exists=bool(data.get("session_exists")),
             windows=tuple(
                 WindowFact(
-                    str(w["name"]), optional_pid(w.get("claude_pid")), optional_pid(w.get("starting_pid"))
+                    str(w["name"]), optional_pid(w.get("agent_pid")), optional_pid(w.get("starting_pid"))
                 )
                 for w in data.get("windows") or []
             ),
@@ -449,7 +451,7 @@ class Context:
     facts: Facts
     now: datetime
     state: State
-    record: Callable[[int], dict[str, Any] | None] = claude_state.record
+    record: Callable[[int], dict[str, Any] | None] = agent_state.record
     alive: Callable[[int], bool] = pid_alive
     auth_status: Callable[[str], claude_state.AuthStatus] = claude_state.auth_status
     morning_run: MorningRun | None = field(init=False)
@@ -544,10 +546,10 @@ def waiting_finding(ctx: Context, window: WindowFact, record: dict[str, Any]) ->
         f"prompt or question{question}{paused} (bosun attach, or Remote Control)."
     )
     return Finding(
-        f"waiting:{window.name}:{window.claude_pid}:{updated}",
+        f"waiting:{window.name}:{window.agent_pid}:{updated}",
         message,
         legacy_marker=ctx.config.state_dir / f"alerted-{window.name}" if orchestrator else None,
-        legacy_value=f"{window.claude_pid}:{updated}",
+        legacy_value=f"{window.agent_pid}:{updated}",
     )
 
 
@@ -557,7 +559,7 @@ def stalled_finding(ctx: Context, window: WindowFact) -> Finding | None:
     That also covers screens that do not exist yet, so nothing here reads what is on the screen."""
     if window.starting_pid is None:
         return None
-    started = claude_state.process_start(window.starting_pid)
+    started = agent_files.process_start(window.starting_pid)
     if started is None:
         return None
     waited = ctx.now.timestamp() - started
@@ -565,7 +567,7 @@ def stalled_finding(ctx: Context, window: WindowFact) -> Finding | None:
         return None
     return Finding(
         f"stalled-start:{window.name}:{window.starting_pid}",
-        f"The {window.name} window's Claude started {int(waited // SECONDS_PER_MINUTE)} min ago and never "
+        f"The {window.name} window's agent started {int(waited // SECONDS_PER_MINUTE)} min ago and never "
         "reached a session: it is probably on a first-run or trust screen only you can answer (bosun "
         "attach). Do not just press Return: on several of these screens the default is to exit.",
     )
@@ -583,7 +585,7 @@ def check_waiting(ctx: Context) -> Result:
         return Result("no tmux session")
     findings = []
     for window in ctx.facts.windows:
-        record = ctx.record(window.claude_pid) if window.claude_pid else None
+        record = ctx.record(window.agent_pid) if window.agent_pid else None
         finding = waiting_finding(ctx, window, record) if record else None
         if finding:
             findings.append(finding)
@@ -723,7 +725,7 @@ def orchestrator_down_reason(ctx: Context) -> str | None:
     window = next((w for w in ctx.facts.windows if w.name == ctx.config.orchestrator), None)
     if window is None:
         return f"its window '{ctx.config.orchestrator}' is missing"
-    if window.claude_pid is None:
+    if window.agent_pid is None:
         return f"no Claude runs in its window '{ctx.config.orchestrator}'"
     return None
 
@@ -1010,7 +1012,7 @@ def window_logins(ctx: Context) -> list[str]:
     """The Claude windows whose latest replies are all login errors, with since when."""
     found = []
     for window in ctx.facts.windows if ctx.facts.session_exists else ():
-        entry = ctx.record(window.claude_pid) if window.claude_pid else None
+        entry = ctx.record(window.agent_pid) if window.agent_pid else None
         transcript = claude_state.transcript_of(entry) if entry else None
         verdict = login.window_verdict(transcript, None) if transcript else None
         if verdict and verdict.state == login.NEEDS_LOGIN:
@@ -1079,10 +1081,10 @@ def check_long_shell(ctx: Context) -> Result:
         return Result("no tmux session", shells={})
     shells, findings = {}, []
     for window in ctx.facts.windows:
-        record = ctx.record(window.claude_pid) if window.claude_pid else None
-        if record is None or window.claude_pid is None:
+        record = ctx.record(window.agent_pid) if window.agent_pid else None
+        if record is None or window.agent_pid is None:
             continue
-        episode = shell_episode(ctx.state.shells.get(window.name), window.claude_pid, record)
+        episode = shell_episode(ctx.state.shells.get(window.name), window.agent_pid, record)
         if episode is None:
             continue
         shells[window.name] = episode
@@ -1148,7 +1150,7 @@ def hook_limited(ctx: Context, window: str, entry: dict[str, Any] | None) -> tup
 def window_stop(ctx: Context, window: WindowFact) -> dict[str, Any] | None:
     """The usage-limit stop of the Claude in <window>: pid, since, its latest error (at) and how
     many subagents."""
-    entry = ctx.record(window.claude_pid) if window.claude_pid else None
+    entry = ctx.record(window.agent_pid) if window.agent_pid else None
     transcript = claude_state.transcript_of(entry) if entry else None
     if transcript is None:
         return None
@@ -1157,7 +1159,7 @@ def window_stop(ctx: Context, window: WindowFact) -> dict[str, Any] | None:
     if not rows:
         return None
     return {
-        "pid": window.claude_pid,
+        "pid": window.agent_pid,
         "since": stamp(min(since for since, _ in rows)),
         "at": stamp(max(latest for _, latest in rows)),
         "main": main is not None,
@@ -1244,13 +1246,13 @@ def naive_local(moment: datetime) -> datetime:
 
 
 def context_finding(ctx: Context, window: WindowFact) -> Finding | None:
-    entry = ctx.record(window.claude_pid) if window.claude_pid else None
+    entry = ctx.record(window.agent_pid) if window.agent_pid else None
     transcript = claude_state.transcript_of(entry) if entry else None
     run = claude_state.context_run(transcript, ctx.config.context_warn_tokens) if transcript else None
     if run is None or ctx.now - naive_local(run.since) < timedelta(hours=CONTEXT_HOURS):
         return None
     hours = (ctx.now - naive_local(run.since)).total_seconds() / SECONDS_PER_HOUR
-    session = str((entry or {}).get("sessionId") or window.claude_pid)
+    session = str((entry or {}).get("sessionId") or window.agent_pid)
     return Finding(
         f"{CONTEXT_SIZE}:{window.name}:{session}",
         f"the {window.name} window's conversation has re-read {run.tokens // 1000}k tokens a turn for "
@@ -1313,7 +1315,7 @@ CHECKS: tuple[Check, ...] = (
     Check(
         "stalled-start",
         "error",
-        f"a Claude window has run for {STALLED_START_MINUTES}+ min without reaching a session "
+        f"a window's agent has run for {STALLED_START_MINUTES}+ min without reaching a session "
         "(a first-run or trust screen)",
         check_stalled_start,
     ),
@@ -1603,7 +1605,7 @@ class Inputs:
     config: Config
     facts: Facts
     now: datetime
-    record: Callable[[int], dict[str, Any] | None] = claude_state.record
+    record: Callable[[int], dict[str, Any] | None] = agent_state.record
     alive: Callable[[int], bool] = pid_alive
     auth_status: Callable[[str], claude_state.AuthStatus] = claude_state.auth_status
     probe: Callable[[str], claude_state.ProbeResult] = claude_state.probe
@@ -1685,7 +1687,7 @@ def resume_stopped(inputs: Inputs) -> None:
     if not state.limits:
         return
     probe = probe_if_due(inputs, state)
-    live = {w.name: w.claude_pid for w in inputs.facts.windows}
+    live = {w.name: w.agent_pid for w in inputs.facts.windows}
     with locked_state(inputs.config.state_dir) as locked:
         locked.limit_probe = probe
         for window, stop in list(locked.limits.items()):
@@ -1695,7 +1697,7 @@ def resume_stopped(inputs: Inputs) -> None:
 
 def resume_plan(state: State, facts: Facts, now: datetime) -> list[str]:
     """What resume_stopped would do now, from the last probe (a dry run makes none)."""
-    live = {w.name: w.claude_pid for w in facts.windows}
+    live = {w.name: w.agent_pid for w in facts.windows}
     lines = []
     for window, stop in state.limits.items():
         action = resume_action(stop, live.get(window), state.limit_probe)

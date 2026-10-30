@@ -12,7 +12,7 @@ from unittest import mock
 
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "lib"))
-import claude_state
+import agent_files
 import watchdog
 
 
@@ -26,7 +26,7 @@ def context(*windows: watchdog.WindowFact) -> Any:
 class StalledStartTest(unittest.TestCase):
     def check(self, minutes: float) -> watchdog.Result:
         started = NOW.timestamp() - minutes * 60
-        with mock.patch.object(claude_state, "process_start", return_value=started):
+        with mock.patch.object(agent_files, "process_start", return_value=started):
             return watchdog.check_stalled_start(context(watchdog.WindowFact("api", None, 123)))
 
     def test_no_session_after_a_while_is_a_stall(self) -> None:
@@ -46,13 +46,13 @@ class StalledStartTest(unittest.TestCase):
         self.assertEqual(watchdog.check_stalled_start(context(with_session, without_claude)).findings, [])
 
     def test_a_process_that_has_gone_is_not_a_stall(self) -> None:
-        with mock.patch.object(claude_state, "process_start", return_value=None):
+        with mock.patch.object(agent_files, "process_start", return_value=None):
             gone = watchdog.WindowFact("api", None, 123)
             self.assertEqual(watchdog.check_stalled_start(context(gone)).findings, [])
 
     def test_the_facts_carry_it(self) -> None:
         facts = watchdog.Facts.from_json(
-            {"windows": [{"name": "api", "claude_pid": None, "starting_pid": 123}]}
+            {"windows": [{"name": "api", "agent_pid": None, "starting_pid": 123}]}
         )
         self.assertEqual(facts.windows, (watchdog.WindowFact("api", None, 123),))
 

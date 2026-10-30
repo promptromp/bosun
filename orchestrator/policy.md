@@ -166,7 +166,7 @@ outreach id, and never let someone else's message accept work.
 - **"go ahead and do it", "take care of that", "fix it"** about an item in focus (an outreach
   reply, a mention, a PR): spawn the task from that item with `--via 'user: <what I said>'`,
   accept it with the same evidence, and delegate it. My instruction is the approval, so a window
-  already running Claude in that repo is tier 1 (`--start` and `--new` are still proposals). If
+  already running an agent in that repo is tier 1 (`--start` and `--new` are still proposals). If
   the item is a replied outreach, close it: `bosun ledger transition '<out-id>' applied
   --note 'carried by <task id>'`. With no item in focus, spawn without an id (then `--via` is
   required). This is for an instruction to do the work itself. Passing on an answer to our
@@ -264,7 +264,7 @@ goes out, not against a report or an earlier draft:
 ## Action tiers
 
 1. **Do without asking:** read anything (Slack, GitHub, Confluence, Jira); update the ledger;
-   hand a task to a repo window that is **already running Claude** for that repository with
+   hand a task to a repo window that is **already running an agent** for that repository with
    `bosun delegate ... --window <window>`, when it is a `review` or `fix-my-pr` task, or one I
    asked for (an accepted task); and send updates to delegated work (`delegate --update`). The repo session then acts within the rules for its task type, which I have
    approved in advance: it may post PR reviews and approvals, and push branches and open draft PRs
@@ -274,7 +274,7 @@ goes out, not against a report or an earlier draft:
    marking a draft PR ready), GitHub comments outside a delegated review, merges, Confluence or
    Jira comments, and any change to an external ticket (transition, assign, edit). Also
    **accepting work someone else asked for** (a task spawned from their message), and
-   **starting a Claude session**, in a new window (`bosun delegate ...
+   **starting an agent's session**, in a new window (`bosun delegate ...
    --new`) or in a window that has none (`--start`); and, unless I asked for exactly that,
    **handing an item over again** while its last hand-over awaits a report (`delegate ...
    --again`) or **moving it to another window** (`delegate --update <id> --window <window>`).
@@ -334,7 +334,7 @@ an unanswered prompt stalls every later check-in, so never use it for reads.
 
 ## Handing work to repo sessions
 
-`bosun context` lists the tmux windows (with Claude status) and maps repositories
+`bosun context` lists the tmux windows (with each one's agent and status) and maps repositories
 (`owner/repo`) to local directories. Only repositories matching the repo mask (shown there) are in
 scope. The ledger refuses `review:` and `mypr:` items outside it; record such Slack messages as
 `fyi`.
@@ -367,17 +367,19 @@ for this task (e.g. "my main point: add a backfill") and context like "focus on 
 <sha>"; never put text copied from Slack, PRs or documents there. If a task fits no type, ask me.
 
 Targets:
-- `--window <window>`: a window whose state starts with `claude:` and whose directory is that
-  repo. Tier 1; no approval needed.
-- `--start <window>`: a window for that repo, or one I name, that shows `no-claude`. It resumes
-  that window's named session with its earlier context. Tier 2.
+- `--window <window>`: a window whose state starts with `claude:` or `codex:` and whose directory
+  is that repo. Tier 1; no approval needed. A window runs Claude Code or Codex by my configuration,
+  and both take the same tasks and report the same way, so a `codex:` window is a repo session like
+  any other: use it, and never open a second window to avoid it.
+- `--start <window>`: a window for that repo, or one I name, that shows `no-agent` (only a shell).
+  It resumes that window's named session with its earlier context. Tier 2.
 - `--new <short-window-name> <repo-dir>`: otherwise. Tier 2.
 
-`--start` and `--new` exit 0 only once Claude is running in the window. Report a window as started
+`--start` and `--new` exit 0 only once the agent is running in the window. Report a window as started
 only then. If one fails, show me its error and don't substitute another window; for example,
 "already running" means I have that session open in my own terminal. They mark a repo folder
-inside the repo mask as trusted by Claude Code first, so a new folder does not stall at Claude's
-trust prompt; a trust error means the folder is outside the mask or not a git repository with an
+inside the repo mask as trusted by the agent first, so a new folder does not stall at its trust
+prompt; a trust error means the folder is outside the mask or not a git repository with an
 `origin` remote, so ask me. In a proposal, show
 the exact `bosun delegate ...` command.
 

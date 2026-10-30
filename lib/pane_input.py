@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""What sits in a Claude window's input box, read from a tmux pane capture (pure).
+"""What sits in an agent window's input box, read from a tmux pane capture (pure).
 
 `bosun send` pastes a prompt and presses Enter. If you are typing in that window at the same
 moment (a half-typed prompt, `/clear`), the paste joins your text and the Enter submits the mix:
@@ -12,9 +12,15 @@ continuation lines down to the next rule. Text Claude Code draws faint (a placeh
 is not typed text, so the capture must keep its escape sequences (`capture-pane -e`): dim or grey
 runs are dropped.
 
+Codex draws its box differently: the last line starting with its mark (U+203A), down to the first blank
+line, and "Ask Codex to do anything" drawn dim when empty. It also shows its questions (approving a
+command, trusting a folder) with that same mark on the first choice, and pressing Enter there answers them,
+so send asks about those first. Its session file does not record them (lib/codex_state.py).
+
     pane_input.py typed       stdin: `tmux capture-pane -e -p`; prints the typed text.
                               Exit 0: the box is empty; 3: it holds text; 4: no input box found
     pane_input.py rejected    stdin: a plain capture; prints Claude's "Unknown command" lines
+    pane_input.py question    stdin: a plain capture; exit 0 if Codex is asking something, 3 if not
 """
 
 from __future__ import annotations
@@ -24,6 +30,9 @@ import sys
 
 
 PROMPT_MARK = "\u276f"  # the input line's prompt mark
+CODEX_MARK = "\u203a"  # the same in Codex
+CODEX_QUESTIONS = ("Press enter to confirm", "enter continue")  # the last line of each kind of question
+CODEX_QUESTION_LINES = 6  # how far up from the bottom of the screen it can be
 RULE_CHAR = "─"
 MIN_RULE_LENGTH = 10
 SGR = re.compile(r"\x1b\[([0-9;]*)m")
@@ -99,15 +108,44 @@ def box_lines(lines: list[str]) -> list[str] | None:
     return None
 
 
-def typed_text(capture: str) -> str | None:
-    """The text typed in the input box of <capture> ("" when empty); None if no box is found."""
-    box = box_lines(capture.splitlines())
+def codex_typed_text(lines: list[str]) -> str | None:
+    """The text in Codex's box, if this screen has one."""
+    start = next(
+        (i for i in range(len(lines) - 1, -1, -1) if SGR.sub("", lines[i]).startswith(CODEX_MARK)),
+        None,
+    )
+    if start is None:
+        return None
+    end = next((i for i in range(start + 1, len(lines)) if not SGR.sub("", lines[i]).strip()), len(lines))
+    texts = [visible(line).replace(NBSP, " ") for line in lines[start:end]]
+    texts[0] = texts[0].removeprefix(CODEX_MARK)
+    return "\n".join(texts).strip()
+
+
+def codex_question(capture: str) -> bool:
+    """Whether Codex is asking something on this screen."""
+    lines = [line for line in capture.splitlines() if line.strip()]
+    return any(question in line for line in lines[-CODEX_QUESTION_LINES:] for question in CODEX_QUESTIONS)
+
+
+def claude_typed_text(lines: list[str]) -> str | None:
+    """The text in Claude Code's box, if this screen has one."""
+    box = box_lines(lines)
     if box is None:
         return None
     first = visible(box[0]).replace(NBSP, " ").lstrip()
     first = first.removeprefix(PROMPT_MARK)
     rest = [visible(line).replace(NBSP, " ") for line in box[1:]]
     return "\n".join([first, *rest]).strip()
+
+
+BOX_READERS = (claude_typed_text, codex_typed_text)
+
+
+def typed_text(capture: str) -> str | None:
+    """The text typed in the input box of <capture> ("" when empty); None if no box is found."""
+    lines = capture.splitlines()
+    return next((text for reader in BOX_READERS if (text := reader(lines)) is not None), None)
 
 
 def rejected_lines(capture: str) -> list[str]:
@@ -127,7 +165,9 @@ def main(argv: list[str]) -> int:
     if command == "rejected":
         print("\n".join(rejected_lines(capture)))
         return 0
-    print("usage: pane_input.py typed|rejected < capture", file=sys.stderr)
+    if command == "question":
+        return 0 if codex_question(capture) else EXIT_TYPED
+    print("usage: pane_input.py typed|rejected|question < capture", file=sys.stderr)
     return 2
 
 

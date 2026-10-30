@@ -82,6 +82,7 @@ def site_tasks_dir() -> Path | None:
 
 
 BOSUN = str(ROOT / "bin" / "bosun")
+SUBAGENT_HARNESS = "claude"  # the agent whose Agent tool subagent_preamble names
 FRONT_MATTER_FIELDS = ("title", "kinds", "may", "never", "followup")
 ANY_KIND = "any"
 # Front-matter `model` and `effort`: a model or effort level for the task, or "session" (the
@@ -355,6 +356,24 @@ def send(*arguments: str) -> int:
     return subprocess.run([BOSUN, "send", *arguments], env=os.environ, check=False).returncode
 
 
+def window_harness(window: str) -> str:
+    """Which agent runs <window>: the one running there, else the one configured for it."""
+    result = subprocess.run([BOSUN, "sessions", "--json"], check=False, capture_output=True, text=True)
+    try:
+        windows = json.loads(result.stdout)
+    except ValueError:
+        return SUBAGENT_HARNESS
+    entry: dict[str, Any] = next((w for w in windows if w.get("name") == window), {})
+    return str((entry.get("agent") or {}).get("harness") or entry.get("harness") or SUBAGENT_HARNESS)
+
+
+def can_use_subagents(args: argparse.Namespace) -> bool:
+    """The preamble names Claude Code's Agent tool, so another agent runs the task at its own settings.
+    --print shows what a window on Claude Code would get."""
+    target = args.window or args.start
+    return not target or window_harness(target) == SUBAGENT_HARNESS
+
+
 def hand_over(args: argparse.Namespace, chosen: list[Task]) -> int:
     """Print the task or send it to its target, at the task's model and effort."""
     model, effort = task_model_effort(chosen, args.model, args.effort)
@@ -365,8 +384,9 @@ def hand_over(args: argparse.Namespace, chosen: list[Task]) -> int:
             *(["--effort", effort] if effort != SESSION else []),
         ]
         return send("--new", *launch, args.new[0], args.new[1], render(args, chosen))
-    # A running (or resumed) session keeps its own settings; the task runs in a subagent.
-    preamble = subagent_preamble(model, effort) if (model, effort) != (SESSION, SESSION) else ""
+    # A running (or resumed) session keeps its own settings; the task runs in a subagent, where it can.
+    wants_own_settings = (model, effort) != (SESSION, SESSION)
+    preamble = subagent_preamble(model, effort) if wants_own_settings and can_use_subagents(args) else ""
     task = render(args, chosen, preamble)
     if args.print:
         print(task)

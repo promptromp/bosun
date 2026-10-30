@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import io
 import json
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -228,15 +229,37 @@ class ModelEffortTest(unittest.TestCase):
         self.assertNotIn("model", text.split("passing")[0])
         self.assertIn('effort "high" and model "sonnet"', delegate.subagent_preamble("sonnet", "high"))
 
-    def run_main(self, argv: list[str]) -> tuple[mock.MagicMock, str]:
+    def run_main(self, argv: list[str], harness: str = "claude") -> tuple[mock.MagicMock, str]:
         with (
             mock.patch.object(delegate, "check_ids"),
             mock.patch.object(delegate, "check_not_awaiting"),
+            mock.patch.object(delegate, "window_harness", return_value=harness),
             mock.patch("delegate.subprocess.run", return_value=mock.Mock(returncode=0, stdout="")) as run,
             mock.patch("sys.stdout", io.StringIO()) as out,
         ):
             self.assertEqual(delegate.main(argv), 0)
         return run, out.getvalue()
+
+    def test_a_window_on_another_agent_gets_the_task_itself(self) -> None:
+        run, _ = self.run_main(
+            ["review", "--id", "review:a/b#1", "--ask", "a", "--window", "w"], harness="codex"
+        )
+        self.assertTrue(run.call_args_list[0].args[0][3].startswith("Ledger id: review:a/b#1"))
+
+    def test_which_agent_a_window_runs(self) -> None:
+        sessions = json.dumps(
+            [
+                {"name": "running", "harness": "claude", "agent": {"harness": "codex"}},
+                {"name": "configured", "harness": "codex", "agent": None},
+            ]
+        )
+        done = subprocess.CompletedProcess([], 0, sessions, "")
+        with mock.patch("subprocess.run", return_value=done):
+            self.assertEqual(delegate.window_harness("running"), "codex")
+            self.assertEqual(delegate.window_harness("configured"), "codex")
+            self.assertEqual(delegate.window_harness("unknown"), "claude")
+        with mock.patch("subprocess.run", return_value=subprocess.CompletedProcess([], 1, "", "")):
+            self.assertEqual(delegate.window_harness("running"), "claude")
 
     def test_a_running_window_gets_the_subagent_preamble(self) -> None:
         run, _ = self.run_main(["review", "--id", "review:a/b#1", "--ask", "a", "--window", "w"])
@@ -303,6 +326,7 @@ class RecordDelegationTest(unittest.TestCase):
         with (
             mock.patch.object(delegate, "check_ids"),
             mock.patch.object(delegate, "check_not_awaiting"),
+            mock.patch.object(delegate, "window_harness", return_value="claude"),
             mock.patch.object(delegate, "send", return_value=0) as send,
             mock.patch.object(delegate, "ledger", record),
             mock.patch("sys.stderr", io.StringIO()) as err,

@@ -29,7 +29,7 @@ section() { printf '\n%s\n' "$*"; }
 
 check_preflight() {
   local output
-  if output="$(BOSUN_RERUN="bosun doctor" sh "$BOSUN_ROOT/lib/preflight.sh" --quiet 2>&1)"; then
+  if output="$(BOSUN_RERUN="bosun doctor" run_preflight --quiet 2>&1)"; then
     ok "everything is here (bosun preflight)"
   else
     fail "something is missing or not done yet:"
@@ -41,7 +41,7 @@ check_preflight() {
 check_bypass_warning() {
   case " $BOSUN_CLAUDE_FLAGS " in
     *" --dangerously-skip-permissions "*)
-      if claude_state_accepts_bypass; then
+      if claude_state bypass-accepted; then
         ok "bypass mode's warning was accepted"
       else
         fail "repo sessions use --dangerously-skip-permissions, and its warning was never accepted, so they would stop at it: run claude --dangerously-skip-permissions, choose Yes, then /exit"
@@ -49,7 +49,6 @@ check_bypass_warning() {
       ;;
   esac
 }
-claude_state_accepts_bypass() { python3 "$BOSUN_ROOT/lib/claude_state.py" bypass-accepted; }
 
 check_tools() {
   for tool in tmux ruby python3 jq curl caffeinate pmset "$BOSUN_CLAUDE_BIN"; do
@@ -60,23 +59,24 @@ check_tools() {
 
 # One window from the window list: its folder, trust, and which session it will resume.
 check_window() { # <name> <dir> <kind>
-  local name="$1" dir="$2" kind="$3" claude_name id pid
+  local name="$1" dir="$2" kind="$3" session_name id pid harness
   [ "$kind" = "checkin" ] && return
   if [ ! -d "$dir" ]; then
     fail "$name: directory $dir does not exist"
     return
   fi
-  claude_trusts "$dir" ||
-    fail "$name: Claude Code does not trust $dir yet, so an unattended start would stall at the trust prompt: run 'bosun trust $dir'"
-  claude_name="$(expected_claude_name "$name")"
-  if id="$("$BOSUN_ROOT/libexec/bosun-resolve" "$dir" "$claude_name" 2>/dev/null)"; then
-    if pid="$("$BOSUN_ROOT/libexec/bosun-resolve" --live "$id")"; then
+  harness="$(window_harness "$name")"
+  agent_trusts "$harness" "$dir" ||
+    fail "$name: $(agent_display_name "$harness") does not trust $dir yet, so an unattended start would stall at the trust prompt: run 'bosun trust $dir'"
+  session_name="$(expected_session_name "$name")"
+  if id="$(agent_state resolve "$harness" "$dir" "$session_name" 2>/dev/null)"; then
+    if pid="$(agent_state live "$id")"; then
       warn "$name: resumes $id, but it is running now (pid $pid); launch will skip it while that runs"
     else
-      ok "$name: resumes $claude_name ($id) in $dir"
+      ok "$name: resumes $session_name ($id) in $dir"
     fi
   elif is_orchestrator "$name"; then
-    ok "$name: will start today's conversation '$claude_name' in $dir"
+    ok "$name: will start today's conversation '$session_name' in $dir"
   else
     warn "$name: no session with this exact name in $dir; a new one will be created"
   fi
@@ -90,7 +90,7 @@ check_config() {
     return
   fi
   ok "sessions manifest: $BOSUN_SESSIONS_FILE"
-  while IFS=$'\t' read -r name dir kind model effort; do
+  while IFS=$'\t' read -r name dir kind model effort _; do
     check_window "$name" "$dir" "$kind"
   done <<<"$sessions"
 }
@@ -182,7 +182,7 @@ check_orchestrator() {
 check_models() {
   local specs name dir kind model effort saved login_env
   if specs="$(window_specs 2>/dev/null)"; then
-    while IFS=$'\t' read -r name dir kind model effort; do
+    while IFS=$'\t' read -r name dir kind model effort _; do
       [ "$kind" = "checkin" ] && continue
       if valid_effort "$effort"; then ok "$name: $model / $effort"; else fail "$name: effort '$effort' is not one of: $EFFORT_LEVELS"; fi
     done <<<"$specs"
@@ -318,7 +318,7 @@ check_claude_login() {
   session_exists || return 0
   while IFS= read -r line; do
     fail "window $(sed -E 's/ +/ /g' <<<"$line"); run /login there"
-  done < <(window_claude_pids | claude_login status | tail -n +2 | grep -F " $NEEDS_LOGIN ")
+  done < <(window_agent_pids | claude_login status | tail -n +2 | grep -F " $NEEDS_LOGIN ")
   return 0
 }
 

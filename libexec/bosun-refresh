@@ -67,7 +67,9 @@ if [ "$UNLESS_ACTIVE" = "1" ] && minutes="$(minutes_since_client_input)" &&
   exit 0
 fi
 
-installed_version="$(claude_installed_version)" || die "cannot determine installed Claude Code version"
+for harness in $(harnesses_in_use); do
+  [ -n "$(agent_installed_version "$harness")" ] || die "cannot determine the installed version of $(agent_display_name "$harness")"
+done
 
 act() { # <window> <action description> <command...>
   local window="$1" description="$2"
@@ -100,9 +102,9 @@ launch_mode() { # <name> [status]
 
 FRESH_PROMPT="Bosun started this fresh conversation for this window because the previous one grew large (every prompt re-reads all of it). Your memory notes carry what you learned before; bosun ledger list --open shows the items handed to this window. Reply with a one-line status and stay idle for my next command."
 
-restart_in() { # <window_id> <dir> <name> <claude_pid> [prompt]
+restart_in() { # <window_id> <dir> <name> <agent_pid> [prompt]
   local window_id="$1" name="$3" pid="$4" deadline
-  if [ "$(claude_session_field "$pid" status)" != "idle" ]; then
+  if [ "$(agent_session_field "$pid" status)" != "idle" ]; then
     log "$name: no longer idle; not restarting"
     return 0
   fi
@@ -123,7 +125,7 @@ restart_in() { # <window_id> <dir> <name> <claude_pid> [prompt]
 }
 
 # Start a fresh conversation in repo window <name>: record its new name, then restart into it.
-start_fresh_conversation() { # <window_id> <dir> <name> <claude_pid>
+start_fresh_conversation() { # <window_id> <dir> <name> <agent_pid>
   local file
   file="$(conversation_file "$3")"
   mkdir -p "$(dirname "$file")"
@@ -133,11 +135,11 @@ start_fresh_conversation() { # <window_id> <dir> <name> <claude_pid>
 
 # Whether repo window <name> should get a fresh conversation: idle long enough, nothing in flight,
 # and a conversation past BOSUN_FRESH_CONTEXT_TOKENS. Prints why (tokens) when it should.
-fresh_conversation_reason() { # <name> <claude_pid> <status> <idle_seconds>
+fresh_conversation_reason() { # <name> <agent_pid> <status> <idle_seconds>
   local tokens
   is_orchestrator "$1" && return 1
   [ "$3" = "idle" ] && [ "${4:-0}" -ge "$BOSUN_RESTART_MIN_IDLE_SECONDS" ] || return 1
-  tokens="$(claude_state context "$2" 2>/dev/null)"
+  tokens="$(agent_state context "$2" 2>/dev/null)"
   [ -n "$tokens" ] && [ "$tokens" -gt "$BOSUN_FRESH_CONTEXT_TOKENS" ] || return 1
   in_flight "$1" "$3" && return 1
   echo "context $((tokens / 1000))k > $((BOSUN_FRESH_CONTEXT_TOKENS / 1000))k tokens, nothing in flight"
@@ -145,7 +147,7 @@ fresh_conversation_reason() { # <name> <claude_pid> <status> <idle_seconds>
 
 # Start a fresh conversation when one is due (and BOSUN_FRESH_CONVERSATIONS=1); returns 0 when
 # it handled the window. A dry run names the windows that would get one, also with the flag off.
-maybe_fresh_conversation() { # <name> <dir> <window_id> <claude_pid> <status> <idle_seconds>
+maybe_fresh_conversation() { # <name> <dir> <window_id> <agent_pid> <status> <idle_seconds>
   local why
   why="$(fresh_conversation_reason "$1" "$4" "$5" "$6")" || return 1
   if [ "$BOSUN_FRESH_CONVERSATIONS" != "1" ] || [ "$DRAIN_ONLY" = "1" ]; then
@@ -156,20 +158,21 @@ maybe_fresh_conversation() { # <name> <dir> <window_id> <claude_pid> <status> <i
 }
 
 # Whether the orchestrator in window <name> is still on yesterday's conversation.
-on_yesterdays_conversation() { # <name> <claude_pid>
-  is_orchestrator "$1" && [ "$(claude_session_field "$2" name)" != "$(expected_claude_name "$1")" ]
+on_yesterdays_conversation() { # <name> <agent_pid>
+  is_orchestrator "$1" && [ "$(agent_session_field "$2" name)" != "$(expected_session_name "$1")" ]
 }
 
 # Why the Claude in window <name> should restart, if it should; prints nothing otherwise.
-restart_reason() { # <name> <claude_pid> <want_model> <want_effort>
-  local name="$1" pid="$2" want="$3/$4" version running running_model running_effort launched_by_us
-  version="$(claude_session_field "$pid" version)"
-  IFS=$'\t' read -r running_model running_effort launched_by_us <<<"$(claude_launch_model_effort "$pid")"
+restart_reason() { # <name> <agent_pid> <want_model> <want_effort>
+  local name="$1" pid="$2" want="$3/$4" version running running_model running_effort launched_by_us installed
+  version="$(agent_session_field "$pid" version)"
+  installed="$(agent_installed_version "$(agent_session_field "$pid" harness)")"
+  IFS=$'\t' read -r running_model running_effort launched_by_us <<<"$(agent_launch_model_effort "$pid")"
   running="$running_model/$running_effort"
-  if [ "$version" != "$installed_version" ]; then
-    echo "Claude v$version -> v$installed_version"
+  if [ "$version" != "$installed" ]; then
+    echo "v$version -> v$installed"
   elif on_yesterdays_conversation "$name" "$pid"; then
-    echo "new day: $(claude_session_field "$pid" name) -> $(expected_claude_name "$name")"
+    echo "new day: $(agent_session_field "$pid" name) -> $(expected_session_name "$name")"
   elif { [ "$running" != "-/-" ] || [ "$launched_by_us" = "yes" ]; } && [ "$running" != "$want" ]; then
     # Sessions bosun launched (with --remote-control) follow the config; a Claude you started
     # yourself in the window keeps its settings.
@@ -180,11 +183,11 @@ restart_reason() { # <name> <claude_pid> <want_model> <want_effort>
 }
 
 # Restart, drain or leave alone the Claude running in a window.
-refresh_claude() { # <name> <dir> <window_id> <claude_pid> <want_model> <want_effort>
+refresh_agent() { # <name> <dir> <window_id> <agent_pid> <want_model> <want_effort>
   local name="$1" dir="$2" window_id="$3" pid="$4" status version idle_seconds reason="" new_day=0
-  status="$(claude_session_field "$pid" status)"
-  version="$(claude_session_field "$pid" version)"
-  idle_seconds="$(claude_seconds_in_status "$pid")"
+  status="$(agent_session_field "$pid" status)"
+  version="$(agent_session_field "$pid" version)"
+  idle_seconds="$(agent_seconds_in_status "$pid")"
   on_yesterdays_conversation "$name" "$pid" && new_day=1
   # --drain-only spares repo sessions; the orchestrator still moves to today's conversation.
   if [ "$DRAIN_ONLY" = "0" ] || [ "$new_day" = "1" ]; then
@@ -194,7 +197,7 @@ refresh_claude() { # <name> <dir> <window_id> <claude_pid> <want_model> <want_ef
     log "$name: busy (v$version); leaving alone"
     return 0
   fi
-  if ! claude_takes_input "$status"; then
+  if ! agent_takes_input "$status"; then
     log "$name: ${status:-unknown status} (a permission prompt or question waits for you); leaving alone"
     return 0
   fi
@@ -218,23 +221,23 @@ refresh_claude() { # <name> <dir> <window_id> <claude_pid> <want_model> <want_ef
 }
 
 refresh_window() { # <name> <dir> <kind> <model> <effort>
-  local name="$1" dir="$2" kind="$3" pane_pid window_id claude_pid
+  local name="$1" dir="$2" kind="$3" pane_pid window_id agent_pid
   read -r pane_pid window_id <<<"$(find_window "$name")"
   if [ -z "${window_id:-}" ]; then
     act "$name" "create the missing window" create_and_launch "$name" "$dir" "$kind"
     return
   fi
   [ "$kind" = "checkin" ] && return 0 # runs the check-in loop, not Claude
-  if ! claude_pid="$(claude_pid_under "$pane_pid")"; then
+  if ! agent_pid="$(agent_pid_under "$pane_pid")"; then
     act "$name" "relaunch Claude (not running)" relaunch_in_window "$window_id" "$name" "" "$dir" "$(launch_mode "$name")"
     return
   fi
-  refresh_claude "$name" "$dir" "$window_id" "$claude_pid" "$4" "$5"
+  refresh_agent "$name" "$dir" "$window_id" "$agent_pid" "$4" "$5"
 }
 
 [ -f "$BOSUN_SESSIONS_FILE" ] || die "sessions manifest not found: $BOSUN_SESSIONS_FILE"
 failures=0
-while IFS=$'\t' read -r name dir kind model effort; do
+while IFS=$'\t' read -r name dir kind model effort _; do
   if [ ${#windows[@]} -gt 0 ] && ! printf '%s\n' "${windows[@]}" | grep -qxF "$name"; then
     continue
   fi

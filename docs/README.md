@@ -5,7 +5,7 @@ the design notes in [design/](design/) explain why it works that way.
 
 | Guide | What it covers |
 |---|---|
-| [Setup](setup.md) | Requirements, install, configuration, sessions, Claude Code login, AWS SSO |
+| [Setup](setup.md) | Requirements, install, configuration, sessions, Codex, Claude Code login, AWS SSO |
 | [Commands](commands.md) | Every `bosun` command |
 | [Orchestrator](orchestrator.md) | Chores, delegated tasks, the ledger, outreach, tasks, tickets, workstreams |
 | [Permissions](permissions.md) | What needs your approval, and approvals bound to the exact call |
@@ -23,11 +23,11 @@ Every morning bosun:
 
 1. **Wakes the Mac** on a schedule (`pmset`) and **keeps it awake** until evening (`caffeinate`).
 2. **Refreshes credentials**, for example AWS SSO, skipping any that are still valid.
-3. **Starts a tmux session** with one window per Claude Code session. Each window
-   resumes a named session with **Remote Control** enabled, so you can drive it from your phone,
-   and sends a **drain prompt** that finishes any work cut off by sleep or usage limits.
+3. **Starts a tmux session** with one window per agent session (Claude Code, or Codex if you chose it).
+   Each window resumes a named session, on Claude Code with **Remote Control** enabled so you can drive
+   it from your phone, and sends a **drain prompt** that finishes any work cut off by sleep or usage limits.
    On later days the session is usually still there. It is then **refreshed** window by window:
-   idle sessions on an outdated Claude Code are restarted on the new version, and other idle
+   idle sessions on an outdated agent are restarted on the new version, and other idle
    sessions get the drain prompt. Busy ones are left alone.
 4. Runs an **orchestrator** session that does the daily chores: Slack mentions (PR and tech-design
    review requests, other asks) and your own open PRs (reviewed? comments to address? needs a

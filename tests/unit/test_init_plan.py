@@ -492,6 +492,42 @@ class PlanTest(unittest.TestCase):
         )
         self.assertIn("--dangerously-skip-permissions", init_plan.parse_env(changed)["BOSUN_CLAUDE_FLAGS"])
 
+    def test_codex_is_recommended_when_it_is_what_you_use_and_it_is_ready(self) -> None:
+        def recommended(ready: tuple[str, ...], claude: int, codex: int) -> str:
+            prompts = {"claude": claude, "codex": codex}
+            return init_plan.recommend(facts(ready_agents=ready, agent_prompts=prompts)).harness
+
+        both = ("claude", "codex")
+        self.assertEqual(recommended(both, 2, 9), "codex")
+        self.assertEqual(recommended(both, 2, 1), "claude")
+        self.assertEqual(recommended(both, 2, 2), "claude")
+        self.assertEqual(recommended(("claude",), 2, 9), "claude")
+        self.assertEqual(init_plan.recommend(facts()).harness, "claude")
+
+    def test_asking_for_an_agent_when_installing_wins(self) -> None:
+        the_facts = facts(asked_harness="codex", env={"BOSUN_HARNESS": "claude"})
+        self.assertEqual(init_plan.recommend(the_facts).harness, "codex")
+
+    def test_your_config_says_which_agent_on_a_rerun(self) -> None:
+        self.assertEqual(init_plan.recommend(facts(env={"BOSUN_HARNESS": "codex"})).harness, "codex")
+
+    def test_the_answer_becomes_the_setting(self) -> None:
+        self.assertIn('BOSUN_HARNESS="codex"', init_plan.render_env(Answers(harness="codex")))
+        self.assertIn('BOSUN_HARNESS="claude"', init_plan.render_env(Answers()))
+
+    def test_on_codex_the_plan_says_so(self) -> None:
+        the_facts = facts()
+        answers = Answers(harness="codex")
+        plan = self.plan(the_facts, answers)
+        text = init_plan.render_plan(plan, answers, the_facts, "/c")
+        self.assertIn("Codex, with its automatic reviewer", text)
+        self.assertIn("for the orchestrator", text)
+        self.assertIn("stays on Claude Code", " ".join(" ".join(plan.notes).split()))
+        self.assertNotIn("auto mode", " ".join(plan.notes))
+
+    def test_an_unknown_agent_is_refused(self) -> None:
+        self.assertIn("harness", " ".join(init_plan.validate(Answers(harness="nosuch"))))
+
     def test_an_unknown_answer_is_refused(self) -> None:
         self.assertIn("permissions", " ".join(init_plan.validate(Answers(permissions="yolo"))))
 

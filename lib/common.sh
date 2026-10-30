@@ -12,6 +12,13 @@ export LANG="${LANG:-en_US.UTF-8}"
 
 # Defaults. Every value can be overridden in $BOSUN_CONFIG_DIR/bosun.env,
 # and an BOSUN_* variable already set in the environment beats both.
+set_harness_defaults() {
+  BOSUN_HARNESS="claude"
+  BOSUN_CODEX_BIN="codex"
+  BOSUN_CODEX_FLAGS="--no-daemon --approve-for-me"
+  BOSUN_CODEX_MODEL=""
+}
+
 set_defaults() {
   BOSUN_CONFIG_DIR="${BOSUN_CONFIG_DIR:-$HOME/.config/bosun}"
   BOSUN_SESSION_NAME="bosun"
@@ -61,6 +68,7 @@ set_defaults() {
   BOSUN_COMPACT_CONTEXT="1"
   BOSUN_COMPACT_CONTEXT_MAX_CHARS="1500"
   BOSUN_CLAUDE_BIN="claude"
+  set_harness_defaults
   BOSUN_CLAUDE_FLAGS="--permission-mode auto --chrome"
   # Model and effort for the repo sessions; sessions.yml entries can override them per window.
   # Model: an alias (opus, sonnet, haiku, fable) or a full model name. Effort: low, medium, high,
@@ -569,26 +577,28 @@ reap_session_helpers() {
   done < <(tmux_cmd list-panes -s -t "=$BOSUN_SESSION_NAME" -F '#{window_name}	#{pane_pid}' 2>/dev/null)
 }
 
-# Every window of the session, in order, as "name<TAB>dir<TAB>kind<TAB>model<TAB>effort": the
+# Every window of the session, in order, as "name<TAB>dir<TAB>kind<TAB>model<TAB>effort<TAB>harness": the
 # orchestrator (kind orchestrator, if enabled), one per sessions.yml entry (kind session), and
 # checkin (kind checkin, when the orchestrator and check-ins are on). Model and effort come from
-# the sessions.yml entry or the defaults; "-" means Claude Code's own default. The one list that
+# the sessions.yml entry or the defaults; "-" means the agent's own default. The one list that
 # start, refresh, launch, morning --dry-run and doctor work from.
 window_specs() {
   [ -f "$BOSUN_SESSIONS_FILE" ] || die "sessions manifest not found: $BOSUN_SESSIONS_FILE"
   if [ -n "$BOSUN_ORCHESTRATOR" ]; then
-    printf '%s\t%s\torchestrator\t%s\t%s\n' "$BOSUN_ORCHESTRATOR" "$BOSUN_ORCHESTRATOR_DIR" \
-      "${BOSUN_ORCHESTRATOR_MODEL:--}" "${BOSUN_ORCHESTRATOR_EFFORT:--}"
+    printf '%s\t%s\torchestrator\t%s\t%s\t%s\n' "$BOSUN_ORCHESTRATOR" "$BOSUN_ORCHESTRATOR_DIR" \
+      "${BOSUN_ORCHESTRATOR_MODEL:--}" "${BOSUN_ORCHESTRATOR_EFFORT:--}" "$ORCHESTRATOR_HARNESS"
   fi
   ruby -ryaml -e '
     pick = ->(value, default) { value.to_s.empty? ? default : value.to_s }
+    default_model = { "claude" => ARGV[1], "codex" => ARGV[4] }  # as harness_default_model says
     (YAML.safe_load(File.read(ARGV[0])) || {}).fetch("sessions", []).each do |s|
+      harness = pick.(s["harness"], ARGV[3])
       puts [s.fetch("name"), File.expand_path(s.fetch("dir")), "session",
-            pick.(s["model"], ARGV[1]), pick.(s["effort"], ARGV[2])].join("\t")
-    end' "$BOSUN_SESSIONS_FILE" "${BOSUN_MODEL:--}" "${BOSUN_EFFORT:--}" ||
+            pick.(s["model"], default_model.fetch(harness, "-")), pick.(s["effort"], ARGV[2]), harness].join("\t")
+    end' "$BOSUN_SESSIONS_FILE" "$(harness_default_model claude)" "${BOSUN_EFFORT:--}" "$BOSUN_HARNESS" "$(harness_default_model codex)" ||
     die "could not read $BOSUN_SESSIONS_FILE"
   if checkin_loop_wanted; then
-    printf 'checkin\t%s\tcheckin\t-\t-\n' "$HOME"
+    printf 'checkin\t%s\tcheckin\t-\t-\t-\n' "$HOME"
   fi
 }
 
@@ -612,7 +622,7 @@ window_model_effort() {
     return
   fi
   { window_specs 2>/dev/null | awk -F'\t' -v name="$1" '$1 == name { print $4 "\t" $5; found = 1; exit } END { exit !found }'; } ||
-    printf '%s\t%s\n' "${BOSUN_MODEL:--}" "${BOSUN_EFFORT:--}"
+    printf '%s\t%s\n' "$(harness_default_model "$(window_harness "$1")")" "${BOSUN_EFFORT:--}"
 }
 
 # Sets model_effort_args to the Claude flags for <model> and <effort> ("-": Claude Code's default).
@@ -745,66 +755,7 @@ caller_window() {
   tmux_cmd display-message -p -t "$TMUX_PANE" '#{window_name}' 2>/dev/null
 }
 
-# One line per window of the session: its name and the pid of the Claude running in it, if any.
-window_claude_pids() {
-  local name pane_pid pid
-  tmux_cmd list-windows -t "=$BOSUN_SESSION_NAME" -F '#{window_name}	#{pane_pid}' 2>/dev/null |
-    while IFS=$'\t' read -r name pane_pid; do
-      pid="$(claude_pid_under "$pane_pid")" || pid=""
-      printf '%s\t%s\n' "$name" "$pid"
-    done
-}
-
-# window_claude_pids plus, for a window whose Claude has no session record yet, that process's pid.
-window_claude_facts() {
-  local name pane_pid pid starting
-  tmux_cmd list-windows -t "=$BOSUN_SESSION_NAME" -F '#{window_name}	#{pane_pid}' 2>/dev/null |
-    while IFS=$'\t' read -r name pane_pid; do
-      starting=""
-      pid="$(claude_pid_under "$pane_pid")" || {
-        pid=""
-        starting="$(claude_pid_starting "$pane_pid")"
-      }
-      printf '%s\t%s\t%s\n' "$name" "$pid" "$starting"
-    done
-}
-
-# PID of a Claude Code process under a tmux pane, session record or not. Every screen before a session
-# (first run, trust) runs without a record, so claude_pid_under cannot see it. Goes by the first word of
-# its command line, which is the name however it was installed: the npm one's process is called node.
-claude_pid_starting() { # <pane_pid>
-  local pid command name
-  name="$(basename "$BOSUN_CLAUDE_BIN")"
-  for pid in $(descendants "$1"); do
-    command="$(ps -o command= -p "$pid" 2>/dev/null)"
-    if [ "$(basename "${command%% *}")" = "$name" ]; then
-      echo "$pid"
-      return 0
-    fi
-  done
-  return 1
-}
-
-# The model and effort a running Claude was launched with, as "model<TAB>effort<TAB>bosun"
-# ("-" when not set at launch; bosun: "yes" if bosun launched it, i.e. --remote-control is
-# in its command line). Reads the first --model and effortLevel in its command line; bosun
-# passes them before the orchestrator's (long) system prompt.
-claude_launch_model_effort() { # <pid>
-  local command model effort ours=no
-  command="$(ps -o command= -p "$1" 2>/dev/null)"
-  model="$(awk '{ for (i = 1; i < NF; i++) if ($i == "--model") { print $(i + 1); exit } }' <<<"$command")"
-  effort="$(grep -oE '"effortLevel":"[a-z]+"' <<<"$command" | head -1 | cut -d'"' -f4)"
-  grep -q -- " --remote-control " <<<"$command " && ours=yes
-  printf '%s\t%s\t%s\n' "${model:--}" "${effort:--}" "$ours"
-}
-
-# Whether Claude Code has accepted its folder trust prompt for <dir>. In an untrusted folder Claude
-# shows that prompt at startup and waits, which stalls an unattended start.
-# Claude records it by the directory's physical path. `bosun trust` sets it.
-claude_trusts() { [ -d "$1" ] && claude_state trusted "$1"; }
-
-# lib/claude_state.py holds everything bosun knows about Claude Code's own files.
-claude_state() { python3 "$BOSUN_ROOT/lib/claude_state.py" "$@"; }
+source "$BOSUN_ROOT/lib/agents.sh"
 
 # lib/login.py: whether Claude Code is still logged in, and whether a window's session gets real
 # replies or only login errors.
@@ -825,7 +776,7 @@ is_orchestrator() { [ -n "$BOSUN_ORCHESTRATOR" ] && [ "$1" = "$BOSUN_ORCHESTRATO
 # Claude session name a window should be running: the orchestrator starts a fresh, dated
 # conversation each day; every other window keeps its name, or the name of the fresh conversation
 # `bosun refresh` last started for it (BOSUN_FRESH_CONVERSATIONS).
-expected_claude_name() {
+expected_session_name() {
   local recorded
   if is_orchestrator "$1"; then
     echo "$1-$(date +%F)"
@@ -888,15 +839,6 @@ run_with_timeout() {
   pkill -P "$watcher" 2>/dev/null
   kill "$watcher" 2>/dev/null
   return "$rc"
-}
-
-# PID of the Claude Code process running anywhere under a tmux pane, if any.
-claude_pid_under() {
-  local pids
-  pids="$(descendants "$1")" || return 1
-  [ -n "$pids" ] || return 1
-  # shellcheck disable=SC2086
-  claude_state registered $pids
 }
 
 # Whether the check-in loop (`bosun checkin --loop`) runs under tmux pane <pane_pid>.
@@ -1019,14 +961,6 @@ find_window() {
     awk -F'\t' -v name="$1" '$1 == name { print $2; found = 1; exit } END { exit !found }'
 }
 
-# Version of the Claude Code CLI that a fresh launch would run, e.g. 2.1.299.
-claude_installed_version() {
-  "$BOSUN_CLAUDE_BIN" --version 2>/dev/null | awk 'NR == 1 && $1 ~ /^[0-9]/ { print $1; found = 1 } END { exit !found }'
-}
-
-# A field (status, version, sessionId, ...) from a running Claude's ~/.claude/sessions/<pid>.json.
-claude_session_field() { claude_state field "$1" "$2" 2>/dev/null; }
-
 # With events on, tell <window>'s prompt hook that <text> is bosun's, not yours, so it is not
 # recorded as something you said (`ledger said`, user-said events): every prompt bosun gives a
 # window, pasted (`send`) or passed at launch (refresh's fresh conversation, `send --new`).
@@ -1036,21 +970,6 @@ note_bosun_prompt() { # <window> <text>
     log "warning: could not note bosun's prompt for $1's prompt hook"
 }
 
-# Whether a Claude with <status> can take a pasted message: idle, busy (it queues the message) or
-# shell (turn over, a background shell still running). Never "waiting": that is a permission
-# prompt or a question to you, where a pasted Enter would answer it.
-claude_takes_input() { case "$1" in idle | busy | shell) return 0 ;; *) return 1 ;; esac }
-
-# Whether a Claude with <status> has finished its turn: idle, or shell (only a background command
-# still runs; its completion notice queues behind a prompt pasted meanwhile). Check-ins and events
-# wait for this. In both, statusUpdatedAt is when the turn ended (claude_seconds_in_status).
-claude_turn_over() { case "$1" in idle | shell) return 0 ;; *) return 1 ;; esac }
-
-# How lists show a running Claude's <status>: "shell" (its turn is over and a background command
-# it started still runs) reads as no Claude at all, so it shows as "idle-bg". The status names
-# the scripts compare stay as Claude Code writes them.
-claude_status_label() { if [ "$1" = shell ]; then echo idle-bg; else echo "${1:-?}"; fi; }
-
 # Minutes since the last keystroke from any client attached to the session, or with a window id
 # only from clients showing that window; fails if no such client is attached.
 minutes_since_client_input() { # [window_id]
@@ -1059,13 +978,6 @@ minutes_since_client_input() { # [window_id]
     awk -v window="${1:-}" 'window == "" || $2 == window { print $1 }' | sort -n | tail -1)"
   [ -n "$latest" ] || return 1
   echo $((($(date +%s) - latest) / 60))
-}
-
-# Seconds since a running Claude last changed status (busy/idle/shell); empty if unknown.
-claude_seconds_in_status() {
-  local updated_ms
-  updated_ms="$(claude_session_field "$1" statusUpdatedAt)"
-  [ -n "$updated_ms" ] && echo $(($(date +%s) - updated_ms / 1000))
 }
 
 # Succeeds if owner/repo matches BOSUN_REPO_MASK (see lib/repo_mask.py; empty mask matches all).

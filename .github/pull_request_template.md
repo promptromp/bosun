@@ -9,5 +9,6 @@
 
 ## Checklist
 
-- [ ] The docs follow the change (README, the lists in `CLAUDE.md`, the design note)
+- [ ] The docs follow the change, in this pull request: the README, `docs/` (install steps, what runs where,
+  known limits), the lists in `CLAUDE.md`, the design note, `ROADMAP.md`
 - [ ] Placeholders only: no real names, ids, emails or tokens

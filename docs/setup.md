@@ -11,7 +11,10 @@ Requirements, installation and configuration, and the morning's logins.
   `ruby` and `curl` (the macOS system ones are fine)
 - [GitHub CLI](https://cli.github.com), logged in: `gh auth login`
 - [Claude Code](https://claude.com/claude-code) 2.1.283 or newer, logged in, and opened once by hand:
-  run `claude`, go through its first screens, then `/exit`
+  run `claude`, go through its first screens, then `/exit`. The orchestrator always runs on it
+- Optional, to run repo sessions on it: [Codex](https://developers.openai.com/codex/cli) 0.166.0 or newer
+  (`brew install codex`), logged in (`codex login`). See
+  [Running repo sessions on Codex](#running-repo-sessions-on-codex)
 
 You do not have to check these yourself. `bosun preflight` does, changes nothing, and lists everything
 missing at once, with what to do about each. `bosun init` and `bosun doctor` start with the same check.
@@ -27,11 +30,17 @@ else: if something is missing, it says what, gives you the lines to run and the 
 stops. Do those, and run the same line again. It takes a few minutes the first time, most of it
 Homebrew's, and once everything is there the questions take about a minute.
 
+To run the repo sessions on Codex, ask for it after the pipe, so that it checks Codex is ready too:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/promptromp/bosun/main/get.sh | BOSUN_HARNESS=codex sh
+```
+
 Run it again to update. After the pipe, `sh -s -- --dry-run` says what it would do and does nothing,
 and `sh -s -- --unattended` asks nothing and takes the recommended setup. `BOSUN_DIR`, `BOSUN_REPO` and
 `BOSUN_BRANCH` override where it goes and what it gets.
 
-`bosun init` reads what this Mac already shows: the repos you use Claude Code in, your usual hours,
+`bosun init` reads what this Mac already shows: the repos you use your agents in, your usual hours,
 your logins. In a terminal it asks a few questions, one key each: Return takes the recommended
 answer, `r` starts again and `q` leaves with nothing changed. It says why it recommends what it does,
 and lists every file and command for you to accept before it touches anything. Then it writes the
@@ -61,9 +70,10 @@ installed. The usual ones:
 | `missing  Homebrew` | Nothing to install the tools with | Install it from [brew.sh](https://brew.sh), then do what it prints at the end to add it to your PATH, and open a new terminal |
 | A tool you just installed is still `missing` | Your terminal has the old PATH | Open a new terminal |
 | `first-run screens not done` | Claude Code stops at its theme and security screens the first time, and a window nobody is watching would wait there for ever | Run `claude`, go through them, then `/exit` |
-| `not logged in` | Claude Code has no login | Run `claude`, and follow what it asks |
-| A window is on a screen, and the watchdog reports `stalled-start` | Claude Code is asking something only you can answer, usually about trusting the folder | `bosun attach`, then read it. Do not just press Return: on several of these screens the default is to exit |
-| `does not run on <your OS> yet` | bosun runs on macOS today, and Linux is next | See the [roadmap](../ROADMAP.md) |
+| `not logged in` under Claude Code | It has no login | Run `claude`, and follow what it asks |
+| `not logged in` under Codex | It has no login | Run `codex login`. With an API key: `printenv OPENAI_API_KEY \| codex login --with-api-key` |
+| A window is on a screen, and the watchdog reports `stalled-start` | The agent is asking something only you can answer, usually about trusting the folder | `bosun attach`, then read it. Do not just press Return: on several of Claude Code's screens the default is to exit, and on Codex's it says yes |
+| `does not run on <your OS> yet`, or `bosun runs on macOS today` | bosun runs on macOS today, and Linux is next | See the [roadmap](../ROADMAP.md) |
 
 If none of these fit, open an issue with what `bosun preflight` and `bosun doctor` print:
 <https://github.com/promptromp/bosun/issues>.
@@ -92,7 +102,8 @@ Waking *before* the job would leave a gap in which an unattended Mac can doze of
 `~/.local/bin` and loads the launchd jobs: the morning run, the [watchdog](watchdog.md#watchdog) and, with
 `BOSUN_LEARN_ENABLED=1`, the daily [learning](learning.md#learning) run
 (`<BOSUN_LAUNCHD_LABEL>.learn`).
-`./uninstall.sh [--with-wake] [--purge]` reverses it.
+`./uninstall.sh [--with-wake] [--purge]`, from the checkout (`~/.local/share/bosun` after `get.sh`), reverses
+it. It leaves the checkout itself, which you can delete.
 
 ## Configuration
 
@@ -101,7 +112,7 @@ All configuration lives in `~/.config/bosun/` (override with `BOSUN_CONFIG_DIR`)
 | File | Purpose |
 |---|---|
 | `bosun.env` | Schedule, session name, Claude flags, drain prompt, orchestrator and chores settings. Every `BOSUN_*` value can also be overridden from the environment. Commands read the file each time they run, so edits apply at once, also inside running sessions. See `examples/generic/bosun.env` for all keys. |
-| `sessions.yml` | One entry per repo window: `name` (the Claude session name) and `dir`, optionally `model` and `effort` for that window. The orchestrator is configured in `bosun.env`, not here. |
+| `sessions.yml` | One entry per repo window: `name` (the session name) and `dir`, optionally `harness` (`claude` or `codex`), `model` and `effort`, and on Claude Code `autocompact`, for that window. The orchestrator is configured in `bosun.env`, not here. |
 | `setup.sh` | Defines `setup_steps()`. Helpers: `ensure_claude_login` (see Claude Code login), `ensure_aws_sso <profile>`, `run_step "<desc>" cmd...`. |
 
 State and logs go to `~/.local/state/bosun/`:
@@ -111,6 +122,7 @@ State and logs go to `~/.local/state/bosun/`:
   (`launchd.{out,err}`, `watchdog.launchd.{out,err}`, `learn.launchd.{out,err}`)
 - `watchdog.json`: the watchdog's de-duplication state
 - `login.json`: the last Claude Code login check (see Claude Code login)
+- `codex-sessions.json`: which Codex session each window's name stands for
 - `events/`: the event queue (`queue.jsonl`) and what was delivered (`state.json`), with events on
 - `slack-watch/state.json`: the Slack watcher's last runs, with it on
 - `learn/`: the learning runs (`state.json`, and per run its digest and report, kept 14 days)
@@ -118,20 +130,22 @@ State and logs go to `~/.local/state/bosun/`:
 
 ### Model and effort
 
-Every session bosun starts gets an explicit model and effort, so cost does not depend on
+Every Claude Code session bosun starts gets an explicit model and effort, so cost does not depend on
 whatever you last picked by hand (Claude Code's `/model` and `/effort` save your choice as the
 default for all future sessions, which is how sessions drift to Opus on high effort).
 
 - Repo sessions: `BOSUN_MODEL` / `BOSUN_EFFORT` (default `opus` / `medium`), overridable
-  per window in `sessions.yml` (`model:`, `effort:`).
+  per window in `sessions.yml` (`model:`, `effort:`). On Codex: `BOSUN_CODEX_MODEL` (empty: Codex's own
+  default) and `BOSUN_EFFORT`, passed as `-c model_reasoning_effort`.
 - Orchestrator: `BOSUN_ORCHESTRATOR_MODEL` / `BOSUN_ORCHESTRATOR_EFFORT` (`opus` /
   `medium`).
 - Delegated tasks: each task type sets an effort (reviews and investigations: `medium`; fixes on
   your PRs and new work: the session's own). A window opened for the task starts at it; a session
-  that is already running runs the task in a subagent at it, so its own setting is untouched. The
+  that is already running runs the task in a subagent at it, so its own setting is untouched (on Codex,
+  which has no such instruction yet, it runs at the session's own settings). The
   orchestrator passes `--effort high` only when you ask for more depth.
 
-The model goes in as `--model`; the effort as a session-level setting (`--settings
+On Claude Code the model goes in as `--model`; the effort as a session-level setting (`--settings
 '{"effortLevel":...}'`) rather than `--effort`, so `/effort` inside a session can still change
 it. Empty values leave Claude Code's own default. `bosun send --list` shows what each window
 was launched with, `refresh` restarts idle sessions whose launch settings no longer match the
@@ -146,7 +160,9 @@ and resumes it by UUID. If none exists it starts a new session with that name. I
 already open in another terminal (per `~/.claude/sessions/<pid>.json`), it refuses rather than
 running two copies on one transcript.
 
-Every window gets `--name <name> --remote-control <name>` plus `BOSUN_CLAUDE_FLAGS`.
+Every repo window on Claude Code gets `--name <name> --remote-control <name>` plus `BOSUN_CLAUDE_FLAGS`.
+Codex has no session names, so a [Codex window](#running-repo-sessions-on-codex) resumes from bosun's own
+table, `codex-sessions.json`.
 
 ### Steady state: the session already exists
 
@@ -156,12 +172,12 @@ It runs `bosun refresh`, which handles each window on its own:
 
 | Window | Action |
 |---|---|
-| missing | create it and launch Claude |
-| Claude not running | relaunch in the manifest directory (resume by UUID, drain prompt) |
-| Claude `busy` (mid-turn) | leave alone |
-| Claude `waiting` (a permission prompt or a question to you) | leave alone: a pasted Enter could answer it |
+| missing | create it and launch its agent |
+| agent not running | relaunch in the manifest directory (resume by UUID, drain prompt) |
+| agent `busy` (mid-turn) | leave alone |
+| agent `waiting` (a permission prompt or a question to you) | leave alone: a pasted Enter could answer it |
 | window split into several panes | leave alone and report it (relaunching could kill the other pane's process) |
-| Claude `idle`, on a different version than the installed Claude Code (usually older), idle at least `BOSUN_RESTART_MIN_IDLE_SECONDS` | restart: SIGTERM (Claude exits cleanly in about 2s), then relaunch on the new version. Same session UUID, so the conversation is intact, plus a fresh Remote Control connection. |
+| agent `idle`, on a different version than that agent's installed one (usually older), idle at least `BOSUN_RESTART_MIN_IDLE_SECONDS` | restart: SIGTERM (Claude exits cleanly in about 2s), then relaunch on the new version. Same session UUID, so the conversation is intact, plus, on Claude Code, a fresh Remote Control connection. |
 | anything else (idle and current, idle too briefly, or `shell`: turn over but a background shell still running) | send the drain prompt |
 
 The drain prompt, also the one a relaunch or restart sends, goes only to a window with something in
@@ -173,17 +189,18 @@ every prompt re-reads the whole conversation; it costs nothing until it gets wor
 With `BOSUN_FRESH_CONVERSATIONS=1` (off by default), refresh, and so the morning run, also
 starts a fresh conversation for a repo window that is idle for `BOSUN_RESTART_MIN_IDLE_SECONDS`,
 holds nothing in flight, and whose conversation grew past `BOSUN_FRESH_CONTEXT_TOKENS` (200000;
-the size its latest turn read, `claude_state.py context <pid>`). The new conversation is named
+the size its latest turn read, `agent_state.py context <pid>`). The new conversation is named
 `<window>-<date>-<n>` (kept in the state dir's `conversations/<window>`, which `launch` resumes from
 then on) and starts with a short prompt pointing at its memory notes and `bosun ledger list
 --open`. `refresh --dry-run` names the windows that would get one, also with the flag off.
 
-Fresh conversations only start at a refresh. In between, every window is launched with
+Fresh conversations only start at a refresh. In between, every Claude Code window is launched with
 `claude --autocompact BOSUN_AUTOCOMPACT_TOKENS` (300000; the orchestrator:
 `BOSUN_ORCHESTRATOR_AUTOCOMPACT_TOKENS`; a sessions.yml entry can set its own `autocompact`;
 empty or 0 leaves Claude Code's default, `auto` is accepted): once a conversation passes that size,
 Claude Code compacts it by itself, mid-task, into a summary, so no window re-reads 300k-900k tokens
-a turn for the rest of the day. Claude Code's own idle compaction (200k+ tokens idle about an hour)
+a turn for the rest of the day. On Codex bosun sets no compaction: `BOSUN_AUTOCOMPACT_TOKENS`, `autocompact:`
+and `BOSUN_COMPACT_CONTEXT` do nothing there. Claude Code's own idle compaction (200k+ tokens idle about an hour)
 still applies. A summary can drop which ledger items the window holds, so with
 `BOSUN_COMPACT_CONTEXT=1` launch also installs a SessionStart hook (matcher `compact`,
 `bosun hook compact-context`) that adds them back, in at most
@@ -193,7 +210,8 @@ waiting for my approval and the open items per window. Both are read at launch, 
 picks them up at its next restart. The fresh conversation stays as the backstop: a window still over
 `BOSUN_FRESH_CONTEXT_TOKENS` at the morning refresh starts a new one.
 
-Status and version come from Claude Code's own `~/.claude/sessions/<pid>.json`. The status is
+Status and version come from Claude Code's own `~/.claude/sessions/<pid>.json`, and on Codex from its
+session files. The status is
 re-read just before a restart. With `BOSUN_HOOK_SIGNALS=1` (the default) launch also installs
 async hooks (`bosun hook signal`) on Notification, PermissionRequest, Stop, StopFailure,
 SessionStart and SessionEnd that record Claude Code's own signals per window in
@@ -210,6 +228,46 @@ draft. Run `bosun refresh` by hand any time; add `--dry-run` to preview it.
 
 `BOSUN_ON_EXISTING` picks the behaviour: `refresh` (default), `drain` (never restart) or
 `restart` (kill the whole session and start fresh).
+
+## Running repo sessions on Codex
+
+[Codex](https://developers.openai.com/codex/cli) can run the repo sessions. The orchestrator stays on Claude
+Code, so you need both, and it hands tasks to a Codex window the way it does to any other: the same tasks,
+the same reports to the ledger.
+
+```bash
+brew install codex
+codex login
+```
+
+Then choose it: in `bosun init`, which asks once Codex is installed and logged in (and recommends it if you
+use it more than Claude Code), or in `bosun.env`:
+
+```bash
+BOSUN_HARNESS="codex"                # every repo window
+BOSUN_CODEX_MODEL="gpt-6.1-sol"      # optional. Empty: Codex's own default
+```
+
+Or one window at a time, in `sessions.yml`:
+
+```yaml
+sessions:
+  - name: my-service
+    dir: ~/Development/my-service
+    harness: codex
+    model: gpt-6.1-sol               # optional
+```
+
+Then run `bosun trust <dir>` for any folder Codex has not seen, and `bosun doctor`.
+
+**What it may do.** Windows start with `BOSUN_CODEX_FLAGS`, by default `--no-daemon --approve-for-me`: Codex's
+sandbox, and an automatic reviewer that decides when a command may go past it, with no prompts. bosun also
+gives the sandbox the repo's `.git`, its own state folder and the network, or nothing could be committed,
+reported or pushed. Keep `--no-daemon`: bosun needs each session in its own process.
+
+**What differs from a Claude Code window**, among them no Remote Control from your phone, a revoked login
+that is not reported, and no Impact stats or learning yet:
+[what Codex windows do not have yet](design/harnesses.md#what-codex-windows-do-not-have-yet).
 
 ## Claude Code login
 

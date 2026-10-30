@@ -1,4 +1,4 @@
-"""Replays of real orchestrator and repo-session interactions (anonymized, and moved to a
+"""Replays of orchestrator and repo-session interactions (rewritten as fiction, in a
 fictional domain: acme's invoice exporter), from tests/fixtures/corpus/:
 
 - orchestrator_commands.json: every Bash command two orchestrator conversations ran

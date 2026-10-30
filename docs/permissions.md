@@ -2,9 +2,9 @@
 
 | Tier | Examples | How it is enforced |
 |---|---|---|
-| Do without asking | read Slack/GitHub/Confluence, update the ledger, `bosun delegate --window` (and `--update`) to a repo window already running Claude; that session then acts within its task type's rules (see Delegated tasks) | auto mode, plus an explicit allow list |
+| Do without asking | read Slack/GitHub/Confluence, update the ledger, `bosun delegate --window` (and `--update`) to a repo window already running an agent; that session then acts within its task type's rules (see Delegated tasks) | auto mode, plus an explicit allow list |
 | Propose, then wait | the orchestrator's own Slack posts and reactions, `gh pr merge/review/comment/edit/close/ready/update-branch`, `gh api`, `git push`, Confluence/Jira comments, and any other MCP tool whose name has a write verb (send, create, update, delete, transition, execute, ...) | the policy, `ask` rules in `orchestrator/settings.json`, and `bosun guard`, a PreToolUse hook that asks before every MCP write tool, including ones the rules do not list (verified: Claude Code prompts even in auto mode) |
-| Propose, then wait | starting a Claude session: in a new window (`bosun delegate ... --new`) or in a window that has none (`--start`) | the policy and chores procedure only, so you approve once in the plan without a second permission prompt |
+| Propose, then wait | starting an agent's session: in a new window (`bosun delegate ... --new`) or in a window that has none (`--start`) | the policy and chores procedure only, so you approve once in the plan without a second permission prompt |
 | Propose, then wait | accepting work someone else asked for (a task spawned from their message); changing an external ticket (transition, assign, edit) | a task is accepted only with `user:` evidence and `delegate` refuses it before; ticket changes are proposals from `ledger tickets --mismatch`, and the tracker's write tools ask (guard) |
 | Propose, then wait | applying a learning proposal (`bosun learn apply`, or `done`/`reject` for one) | the policy and the chores procedure; `ledger resolve` refuses `learn:` items, so they close only through `bosun learn`, which applies the change and closes the item together |
 | Propose, then wait (unless you asked for it) | handing an item over again while its last hand-over awaits a report (`delegate ... --again`), or moving it to another window (`delegate --update <id> --window W`) | `delegate` refuses the first without `--again`; the policy covers both |
@@ -70,3 +70,10 @@ Repo sessions run in Claude Code's auto mode by default (`BOSUN_CLAUDE_FLAGS`), 
 reviews each action. A site can change that to `--dangerously-skip-permissions`, which has no checks and,
 in Claude Code's own words, "offers no protection against prompt injection": not on a machine holding
 production credentials.
+
+A repo session on Codex runs in its sandbox with its automatic reviewer (`BOSUN_CODEX_FLAGS`:
+`--no-daemon --approve-for-me`), and bosun adds the repo's `.git`, its own state folder and the network to
+what the sandbox allows. `--dangerously-bypass-approvals-and-sandbox` in that setting would remove both, for
+the same reasons not to. The rules in a task are text on Codex as they are on Claude Code: a session follows
+them, but neither agent's safety check is what enforces them. See
+[Agents](design/harnesses.md#what-codex-needed).

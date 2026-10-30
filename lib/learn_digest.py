@@ -147,7 +147,7 @@ class Window:
                     kind=str(entry.get("kind", "")),
                     dir=str(entry.get("dir", "")),
                     session_id=claude.get("sessionId"),
-                    status=str(claude.get("status") or ("no-claude" if entry.get("window") else "no-window")),
+                    status=str(claude.get("status") or ("no-agent" if entry.get("window") else "no-window")),
                 )
             )
         return windows

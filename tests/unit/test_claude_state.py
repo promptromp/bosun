@@ -17,6 +17,7 @@ from unittest import mock
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "lib"))
+import agent_files  # noqa: E402
 import claude_state as resolve  # noqa: E402  (most tests exercise the lookup)
 
 
@@ -79,7 +80,7 @@ class NamesTest(ResolveTestCase):
     def test_the_latest_title_counts_after_a_rename(self) -> None:
         self.transcript("renamed", "alpha", "beta", age=1)
         self.assertEqual(self.main(WORKDIR, "beta"), (0, "renamed"))
-        self.assertEqual(self.main(WORKDIR, "alpha")[0], resolve.NOT_FOUND)
+        self.assertEqual(self.main(WORKDIR, "alpha")[0], agent_files.NOT_FOUND)
 
     def test_unreadable_entries_are_skipped(self) -> None:
         (self.project / "broken.jsonl").mkdir()
@@ -87,7 +88,7 @@ class NamesTest(ResolveTestCase):
         self.assertEqual(self.main(WORKDIR, "alpha"), (0, "good"))
 
     def test_exit_codes(self) -> None:
-        self.assertEqual(self.main(WORKDIR, "missing")[0], resolve.NOT_FOUND)
+        self.assertEqual(self.main(WORKDIR, "missing")[0], agent_files.NOT_FOUND)
         self.assertEqual(self.main(WORKDIR)[0], 2)
         self.assertEqual(self.main("--help")[0], 0)
 
@@ -105,12 +106,12 @@ class LiveTest(ResolveTestCase):
         self.registry("dead", pid=2**22 + 12345, sessionId="S")
         self.registry("bad", sessionId="S")
         (resolve.LIVE_SESSIONS_DIR / "junk.json").write_text("{not json")
-        self.assertEqual(self.main("--live", "S")[0], resolve.NOT_FOUND)
+        self.assertEqual(self.main("--live", "S")[0], agent_files.NOT_FOUND)
 
     def test_a_reused_pid_is_stale(self) -> None:
         # This process started long after 1970, so the record cannot be its own.
         self.registry("stale", pid=os.getpid(), sessionId="S", startedAt=1000)
-        self.assertEqual(self.main("--live", "S")[0], resolve.NOT_FOUND)
+        self.assertEqual(self.main("--live", "S")[0], agent_files.NOT_FOUND)
 
     def test_a_record_written_after_the_process_started_is_live(self) -> None:
         self.registry("ok", pid=os.getpid(), sessionId="S", startedAt=int(time.time() * 1000))
@@ -124,8 +125,8 @@ class RecordsTest(ResolveTestCase):
             self.assertEqual(resolve.main(["registered", "1", str(os.getpid())]), 0)
             self.assertEqual(resolve.main(["field", str(os.getpid()), "status"]), 0)
         self.assertEqual(out.getvalue().split(), [str(os.getpid()), "idle"])
-        self.assertEqual(resolve.main(["field", str(os.getpid()), "missing"]), resolve.NOT_FOUND)
-        self.assertEqual(resolve.main(["registered", "1"]), resolve.NOT_FOUND)
+        self.assertEqual(resolve.main(["field", str(os.getpid()), "missing"]), agent_files.NOT_FOUND)
+        self.assertEqual(resolve.main(["registered", "1"]), agent_files.NOT_FOUND)
 
 
 class TrustTest(ResolveTestCase):

@@ -22,8 +22,8 @@ Daily flow
 
 Inside the tmux session
   refresh     Per window: restart idle outdated sessions, drain idle ones, relaunch exited ones
-  launch      Resume a named Claude session in the current directory (no picker)
-  send        Deliver a message to a Claude window, or open a new one
+  launch      Resume a window's named session in the current directory (no picker)
+  send        Deliver a message to an agent's window, or open a new one
   delegate    Hand a task to a repo session with the rules for its task type
   chores      Run the orchestrator chores now, or rehearse them with --dry-run (no side effects)
   checkin     Nudge the orchestrator to run /bosun:chores check-in (the `checkin` window)
@@ -37,14 +37,14 @@ Inside the tmux session
               Record new reviews on my PRs after their last hand-over, and queue them as events
   my-prs      My open PRs within the repo mask and a time window (--since 48h|7d|2w)
   resolve     Map a session name to its UUID; check whether a session is live
-  trust       Mark repo folders as trusted by Claude Code, so unattended starts do not stall
+  trust       Mark repo folders as trusted by each agent in use, so unattended starts do not stall
   guard       Permission guard hooks for the orchestrator (asks before MCP writes, denies force pushes; approvals)
-  sessions    Every window with its Claude session id, status and transcript (--json)
+  sessions    Every window with its agent, session id, status and transcript (--json)
   events      Push events from repo sessions (reports, what I typed there, drafts, windows at a
               prompt) to the idle orchestrator (the check-in loop, with BOSUN_EVENTS_ENABLED=1)
   slack-watch Look for new Slack mentions, DMs and thread replies (read-only headless Claude) and
               queue them as events (the check-in loop, with BOSUN_SLACK_WATCH_ENABLED=1)
-  hook        Claude Code hook for repo sessions: record what I type there (user-prompt)
+  hook        What the agents call: Claude Code's hooks, and what Codex runs when a turn ends
   learn       Look back over recent sessions, the ledger and the logs; propose memory notes,
               rules and setup changes for my approval (its own launchd agent, if enabled)
 

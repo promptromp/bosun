@@ -167,6 +167,50 @@ esac""",
         self.assertIn("brew install tmux", result.stdout)
         self.assertNotIn("ok ", result.stdout)
 
+    def with_codex(self, status: str = "exit 0") -> None:
+        self.tool(
+            "codex",
+            f"""case "$*" in
+  --version) echo "codex-cli 0.166.0" ;;
+  "login status") {status} ;;
+esac""",
+        )
+
+    def test_codex_is_only_asked_about_when_it_is_in_use(self) -> None:
+        result = self.run_it()
+        self.assertNotIn("Codex", result.stdout)
+
+    def test_codex_in_use_is_checked_with_claude_code(self) -> None:
+        self.with_codex()
+        result = self.run_it(BOSUN_HARNESSES="claude codex")
+        self.assertEqual(result.returncode, 0, result.stdout)
+        self.assertIn("Claude Code", result.stdout)
+        self.assertIn("Codex", result.stdout)
+        self.assertIn("version 0.166.0", result.stdout)
+
+    def test_codex_missing_says_where_to_get_it(self) -> None:
+        result = self.run_it(BOSUN_HARNESSES="claude codex")
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("missing    Codex", result.stdout)
+        self.assertIn("https://developers.openai.com/codex/cli", result.stdout)
+
+    def test_codex_logged_out_says_how_to_log_in(self) -> None:
+        self.with_codex("exit 1")
+        result = self.run_it(BOSUN_HARNESSES="claude codex")
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("codex login", result.stdout)
+
+    def test_codex_only_needs_no_claude_code(self) -> None:
+        self.remove("claude")
+        self.with_codex()
+        result = self.run_it(BOSUN_HARNESSES="codex")
+        self.assertEqual(result.returncode, 0, result.stdout)
+        self.assertNotIn("Claude Code", result.stdout)
+
+    def test_each_agent_is_checked_once(self) -> None:
+        result = self.run_it(BOSUN_HARNESSES="claude claude")
+        self.assertEqual(result.stdout.count("Claude Code\n"), 1)
+
     def test_an_os_without_a_profile_says_so(self) -> None:
         result = self.run_it(BOSUN_PLATFORM="plan9")
         self.assertEqual(result.returncode, 2)
@@ -174,7 +218,7 @@ esac""",
         self.assertIn("ROADMAP", result.stdout)
 
     def test_a_harness_without_a_profile_says_which_there_are(self) -> None:
-        result = self.run_it(BOSUN_HARNESS="nosuch")
+        result = self.run_it(BOSUN_HARNESSES="nosuch")
         self.assertEqual(result.returncode, 2)
         self.assertIn("'nosuch'", result.stdout)
         self.assertIn("claude", result.stdout)

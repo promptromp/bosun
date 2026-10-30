@@ -1,6 +1,6 @@
 #!/bin/bash
 # Usage: tests/sandbox.sh [init | unit | smoke | all | shell]
-#        tests/sandbox.sh mac (setup | run [--from-nothing] | shell | clean)
+#        tests/sandbox.sh mac (setup | run [--from-nothing] | live [claude|codex] | shell | clean)
 #
 # Run bosun on a clean machine that cannot touch this one: a throwaway Linux container with a
 # read-only copy of this checkout. Docker on a Mac is Linux, so launchctl, pmset and the like are

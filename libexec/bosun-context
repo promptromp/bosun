@@ -2,7 +2,7 @@
 # Usage: bosun context
 #
 # Print what the orchestrator needs at the start of a chores run: the time, chores config, my
-# GitHub login, tmux windows with Claude status, the owner/repo -> directory map (limited to
+# GitHub login, tmux windows with each one's agent and status, the owner/repo -> directory map (limited to
 # BOSUN_REPO_MASK), and the open ledger items with pending proposals.
 set -uo pipefail
 source "$(dirname "$0")/../lib/common.sh"
@@ -27,8 +27,8 @@ echo "- review_escalate_after_nudges: $BOSUN_REVIEW_ESCALATE_AFTER_NUDGES"
 echo "- repo_mask: ${BOSUN_REPO_MASK:-(none: all repositories)}. Only matching repositories are tracked; the ledger rejects others."
 echo "- github_login: $(gh api user --jq .login 2>/dev/null || echo unknown)"
 echo
-echo "## tmux windows in '$BOSUN_SESSION_NAME' (name, Claude status, version, model/effort at launch, directory)"
-echo "(claude:<status> means Claude runs there: idle, busy, waiting at a prompt or question, or idle-bg: its turn is over and a background command it started still runs. no-claude: only a shell.)"
+echo "## tmux windows in '$BOSUN_SESSION_NAME' (name, agent and status, version, model/effort at launch, directory)"
+echo "(claude:<status> or codex:<status> means that agent runs there: idle, busy, waiting at a prompt or question, or idle-bg: its turn is over and a background command it started still runs. no-agent: no agent, only a shell.)"
 if session_exists; then "$BOSUN" send --list; else echo "(session not running)"; fi
 echo
 echo "## Repositories within the repo mask (owner/repo -> directory)"

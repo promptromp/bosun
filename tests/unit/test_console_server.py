@@ -40,7 +40,7 @@ TASK = "task:2026-10-20/1"  # the fixture's delegated task
 SETTINGS = console_live.Settings(state_dir=Path("/state"), log_dir=Path("/state/logs"), session="acme")
 WINDOWS = [
     {"name": "exporter", "kind": "session", "dir": "/Users/me/repos/exporter", "model": "opus", "effort": "-",
-     "window": True, "claude": {"pid": 4102, "status": "waiting", "statusUpdatedAt": 1700000000000}},
+     "window": True, "agent": {"pid": 4102, "status": "waiting", "statusUpdatedAt": 1700000000000}},
 ]  # fmt: skip
 
 

@@ -72,7 +72,7 @@ For every open `review:` item, check GitHub:
   re-review, `--details 'focus on changes since <reviewed_sha>'`). The session posts the review
   itself and transitions the item to `reviewed`. If a window already runs Claude in that repo,
   transition to `delegated` first, then delegate (`--window`); if delegate fails, transition back
-  to `requested` with the error as the note. Otherwise propose the `--start` (a `no-claude` window
+  to `requested` with the error as the note. Otherwise propose the `--start` (a `no-agent` window
   in that repo) or `--new` command (`ledger propose`), and do the same once I approve. A re-review
   after `reviewed` is a new hand-over and needs no `--again`. If delegate refuses because the
   item still awaits a report from its window, send what changed with `delegate --update`, or
@@ -233,7 +233,7 @@ the ledger refuses `done` until that outreach is applied or dropped.
 - `proposed`: under **Needs your approval**, with the exact delegate command (recorded once with
   `ledger propose '<task id>' '...'`). On my yes: `ledger transition '<task id>' accepted --note
   '...' --evidence 'user: <my answer>'`, then delegate it as step 2 does (`--window` to a window
-  running Claude in its repo; otherwise propose `--start` or `--new`). On my no: `declined`.
+  running an agent in its repo; otherwise propose `--start` or `--new`). On my no: `declined`.
 - `accepted`: hand it over the same way.
 - `delegated`: follow it like any delegation (its report, `delegate --update`). Its PR: upsert the
   `mypr:` item and `ledger link '<task id>' produces 'mypr:...'`. Once all it produced landed

@@ -1,0 +1,123 @@
+#!/usr/bin/env python3
+"""Codex's stand-in, for the sandbox: logged in unless ~/.sandbox/codex-logged-out exists, stops at its trust
+screen in a folder its config does not trust, and a window's session holds a session file open the way the
+real one does, with a turn for each prompt, and runs what notify= says when a turn ends."""
+
+import json
+import os
+import subprocess
+import sys
+import time
+import tomllib
+import uuid
+from datetime import UTC, datetime
+from pathlib import Path
+
+
+HOME = Path(os.environ.get("CODEX_HOME") or Path.home() / ".codex")
+MARK = chr(0x203A)  # Codex's prompt mark
+VALUE_FLAGS = ("-c", "--config", "-m", "--model", "-s", "--sandbox", "-a", "--ask-for-approval")
+
+
+def now() -> str:
+    return datetime.now(UTC).isoformat(timespec="milliseconds").replace("+00:00", "Z")
+
+
+def parse(argv: list[str]) -> tuple[str, str, list[str]]:
+    """(the session to resume, the prompt, the notify program)"""
+    session, prompt, notify = "", "", []
+    words = argv[1:] if argv[:1] == ["resume"] else argv
+    index = 0
+    while index < len(words):
+        word = words[index]
+        if word == "--":
+            prompt = " ".join(words[index + 1 :])
+            break
+        if word in VALUE_FLAGS:
+            index += 1
+            if words[index].startswith("notify="):
+                notify = json.loads(words[index].removeprefix("notify="))
+        elif not word.startswith("-") and argv[:1] == ["resume"]:
+            session = word
+        index += 1
+    return session, prompt, notify
+
+
+def trusted() -> bool:
+    try:
+        config = tomllib.loads((HOME / "config.toml").read_text())
+    except (OSError, ValueError):
+        return False
+    return config.get("projects", {}).get(os.path.realpath("."), {}).get("trust_level") == "trusted"
+
+
+def at_a_trust_screen() -> None:
+    print(
+        f"Trust this folder?\n\n{MARK} 1. Trust and continue\n  2. Quit\n\n  enter continue · esc quit",
+        flush=True,
+    )
+    time.sleep(86400)
+
+
+def open_session(session: str) -> tuple[str, object]:
+    if session:
+        found = next(HOME.glob(f"sessions/*/*/*/rollout-*-{session}.jsonl"))
+        return session, found.open("a", buffering=1)
+    session = str(uuid.uuid4())
+    day = datetime.now(UTC)
+    folder = HOME / "sessions" / day.strftime("%Y/%m/%d")
+    folder.mkdir(parents=True, exist_ok=True)
+    file = (folder / f"rollout-{day.strftime('%Y-%m-%dT%H-%M-%S')}-{session}.jsonl").open("a", buffering=1)
+    meta = {"id": session, "cwd": os.path.realpath("."), "cli_version": "0.166.0", "source": "cli"}
+    print(json.dumps({"timestamp": now(), "type": "session_meta", "payload": meta}), file=file)
+    return session, file
+
+
+def earlier_prompts(session: str) -> list[str]:
+    found = next(HOME.glob(f"sessions/*/*/*/rollout-*-{session}.jsonl"))
+    entries = [json.loads(line) for line in found.read_text().splitlines()]
+    return [e["payload"]["text"] for e in entries if e["payload"].get("role") == "user"]
+
+
+def turn(session: str, file: object, prompt: str, notify: list[str]) -> None:
+    said = {"type": "message", "role": "user", "text": prompt}
+    print(json.dumps({"timestamp": now(), "type": "response_item", "payload": said}), file=file)
+    for kind in ("task_started", "task_complete"):
+        print(json.dumps({"timestamp": now(), "type": "event_msg", "payload": {"type": kind}}), file=file)
+    payload = {
+        "type": "agent-turn-complete",
+        "thread-id": session,
+        "cwd": os.path.realpath("."),
+        "input-messages": earlier_prompts(session),
+    }
+    if notify:
+        subprocess.run([*notify, json.dumps(payload)], check=False)
+        # Real Codex reports its title-writing helper the same way, under an id with no session file.
+        helper = {**payload, "thread-id": str(uuid.uuid4()), "input-messages": ["Write a title for this"]}
+        subprocess.run([*notify, json.dumps(helper)], check=False)
+    print(f"• ok\n\n{MARK} ", end="", flush=True)
+
+
+def main(argv: list[str]) -> int:
+    if argv == ["--version"]:
+        print("codex-cli 0.166.0")
+        return 0
+    if argv[:2] == ["login", "status"]:
+        logged_out = (Path.home() / ".sandbox" / "codex-logged-out").exists()
+        print("Not logged in" if logged_out else "Logged in using an API key")
+        return 1 if logged_out else 0
+    session, prompt, notify = parse(argv)
+    if not trusted():
+        at_a_trust_screen()
+    session, file = open_session(session)
+    if prompt:
+        turn(session, file, prompt, notify)
+    for line in sys.stdin:
+        if line.strip():
+            turn(session, file, line.strip(), notify)
+    time.sleep(86400)
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))

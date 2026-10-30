@@ -15,6 +15,7 @@ from unittest import mock
 
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "lib"))
+import codex_state
 import events
 import hook
 import ledger
@@ -59,6 +60,49 @@ class HookTest(unittest.TestCase):
 
     def payload(self, prompt: str) -> str:
         return json.dumps({"hook_event_name": "UserPromptSubmit", "session_id": "s-1", "prompt": prompt})
+
+    def codex_turn(
+        self, prompts: str | list[str], env: dict[str, str] | None = None, thread: str = "t-1"
+    ) -> int:
+        session_meta = {"type": "session_meta", "payload": {"id": "t-1", "source": "cli"}}
+        rollouts = self.state_dir / "codex" / "2026" / "10" / "30"
+        rollouts.mkdir(parents=True, exist_ok=True)
+        (rollouts / "rollout-2026-10-30T00-00-00-t-1.jsonl").write_text(json.dumps(session_meta) + "\n")
+        patcher = mock.patch.object(codex_state, "SESSIONS_DIR", self.state_dir / "codex")
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        inputs = [prompts] if isinstance(prompts, str) else prompts
+        payload = {"thread-id": thread, "cwd": "/repo", "input-messages": inputs}
+        argv = ["codex-turn-end", "--window", WINDOW, "--conversation", f"{WINDOW}-2", json.dumps(payload)]
+        return hook.main(argv, env or self.env)
+
+    def test_a_codex_turn_says_which_session_a_window_s_name_stands_for(self) -> None:
+        self.assertEqual(self.codex_turn("go with option b"), 0)
+        names = json.loads((self.state_dir / "codex-sessions.json").read_text())
+        self.assertEqual(names[f"{WINDOW}-2"]["id"], "t-1")
+
+    def test_what_i_said_in_a_codex_window_is_recorded_like_in_any_other(self) -> None:
+        self.codex_turn("go with option b")
+        [entry] = self.said()
+        self.assertEqual((entry["items"], entry["window"], entry["session"]), ([PR], WINDOW, "t-1"))
+
+    def test_codex_s_hidden_helpers_are_not_the_window_s_session_or_what_i_said(self) -> None:
+        self.codex_turn("go with option b")
+        self.codex_turn("Write a short title for this conversation", thread="a-helper")
+        names = json.loads((self.state_dir / "codex-sessions.json").read_text())
+        self.assertEqual(names[f"{WINDOW}-2"]["id"], "t-1")
+        self.assertEqual(len(self.said()), 1)
+        self.assertIn("one of Codex's helpers", self.log())
+
+    def test_a_prompt_codex_lists_again_is_not_recorded_again(self) -> None:
+        self.codex_turn("go with option b")
+        self.codex_turn(["go with option b", "and keep the tests"])
+        self.assertEqual([e["text"] for e in self.said()], ["go with option b", "and keep the tests"])
+
+    def test_a_codex_turn_without_events_only_remembers_the_name(self) -> None:
+        self.codex_turn("go with option b", {**self.env, "BOSUN_EVENTS_ENABLED": "0"})
+        self.assertEqual(self.said(), [])
+        self.assertTrue((self.state_dir / "codex-sessions.json").exists())
 
     def test_a_prompt_i_type_is_recorded_and_queued(self) -> None:
         self.assertEqual(self.run_hook(self.payload("go with option b")), 0)

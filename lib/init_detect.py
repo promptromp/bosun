@@ -14,11 +14,13 @@ import re
 import shutil
 import subprocess
 from collections import Counter
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping, Sequence
 from datetime import datetime, timedelta
+from itertools import chain
 from pathlib import Path
 from typing import Any
 
+import agent_state
 import claude_state
 import init_plan
 from init_plan import Facts, RepoUse
@@ -167,11 +169,24 @@ def sessions_listed(path: Path) -> tuple[dict[str, Any], ...]:
     return tuple(entry for entry in listed if isinstance(entry, dict))
 
 
+def uses_per_agent(since: datetime) -> dict[str, list[tuple[str, datetime]]]:
+    return {name: list(agent.prompt_history(since)) for name, agent in agent_state.AGENTS.items()}
+
+
+def counts(uses: Mapping[str, Sequence[object]]) -> dict[str, int]:
+    return {name: len(used) for name, used in uses.items()}
+
+
+def ready_agents() -> tuple[str, ...]:
+    return tuple(name for name, agent in agent_state.AGENTS.items() if agent.ready())
+
+
 def detect(config_dir: Path, now: datetime | None = None) -> Facts:
     moment = now or datetime.now().astimezone()
     home = Path.home()
     since = moment - timedelta(days=HISTORY_DAYS)
-    uses = list(claude_state.prompt_history(since))
+    agent_uses = uses_per_agent(since)
+    uses = list(chain.from_iterable(agent_uses.values()))
     auth = claude_state.auth_status(os.environ.get("BOSUN_CLAUDE_BIN") or "claude")
     files = config_files(config_dir)
     return Facts(
@@ -188,6 +203,9 @@ def detect(config_dir: Path, now: datetime | None = None) -> Facts:
         aws_sso_profiles=aws_sso_profiles(home / ".aws" / "config"),
         slack_plugin=claude_state.slack_plugin_mcp_config() is not None,
         bypass_accepted=claude_state.bypass_accepted(),
+        ready_agents=ready_agents(),
+        asked_harness=os.environ.get("BOSUN_HARNESS", ""),
+        agent_prompts=counts(agent_uses),
         has_battery="InternalBattery" in (output_of("pmset", "-g", "batt") or ""),
         repeating_wake=repeating_wake(output_of("pmset", "-g", "sched") or ""),
         files=files,

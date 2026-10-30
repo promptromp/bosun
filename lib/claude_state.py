@@ -55,7 +55,6 @@ import re
 import subprocess
 import sys
 import tempfile
-import time
 from collections.abc import Callable, Iterable, Iterator
 from dataclasses import dataclass, field, replace
 from datetime import datetime
@@ -63,6 +62,26 @@ from pathlib import Path
 from typing import Any
 
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from agent_files import (
+    NOT_FOUND,
+    USAGE,
+    Command,
+    LaunchSettings,
+    command_line,
+    emit,
+    process_start,
+    read_object,
+    reversed_lines,
+    run_command,
+    write_atomically,
+)
+
+
+HARNESS = "claude"
+MODEL_FLAG = re.compile(r"(?:^|\s)--model\s+(\S+)")
+EFFORT_SETTING = re.compile(r'"effortLevel":"([a-z]+)"')
+BOSUN_LAUNCHED = re.compile(r"\s--remote-control\s")
 HOME = Path.home()
 PROJECTS_DIR = HOME / ".claude" / "projects"
 LIVE_SESSIONS_DIR = HOME / ".claude" / "sessions"
@@ -72,8 +91,6 @@ INSTALLED_PLUGINS = HOME / ".claude" / "plugins" / "installed_plugins.json"
 SLACK_PLUGIN = "slack"
 TITLE_MARKER = '"custom-title"'
 SESSION_PREFIX = re.compile(r"^[0-9a-f]{8,36}$")  # a session id or its start, as references quote it
-NOT_FOUND = 3
-USAGE = 2
 START_TIME_TOLERANCE_SECONDS = 2
 
 
@@ -154,15 +171,6 @@ def subagent_transcripts(transcript: Path) -> list[Path]:
 # ---- running sessions --------------------------------------------------------------------------
 
 
-def read_object(path: Path) -> dict[str, Any] | None:
-    """The JSON object in <path>, or None if it is missing, unreadable or not an object."""
-    try:
-        value = json.loads(path.read_text())
-    except (OSError, json.JSONDecodeError):
-        return None
-    return value if isinstance(value, dict) else None
-
-
 # ---- plugins -----------------------------------------------------------------------------------
 
 
@@ -194,17 +202,6 @@ def plugin_server(install: object) -> tuple[str, Any] | None:
 
 def record(pid: int | str) -> dict[str, Any] | None:
     return read_object(LIVE_SESSIONS_DIR / f"{pid}.json")
-
-
-def process_start(pid: int) -> float | None:
-    """Start time of <pid> as a Unix timestamp, from ps."""
-    result = subprocess.run(
-        ["ps", "-o", "lstart=", "-p", str(pid)], check=False, capture_output=True, text=True
-    )
-    try:
-        return time.mktime(time.strptime(result.stdout.strip(), "%a %b %d %H:%M:%S %Y"))
-    except ValueError:
-        return None
 
 
 def is_stale(entry: dict[str, Any]) -> bool:
@@ -273,8 +270,8 @@ def bypass_accepted() -> bool:
 
 
 def set_trust(directory: str, trust: bool) -> None:
-    """Rewrite ~/.claude.json with the entry set or removed: read, update, write a temp file and
-    rename it, so a reader never sees a partial file. Claude Code re-reads the file before its own
+    """Rewrite ~/.claude.json with the entry set or removed, so a reader never sees a partial file.
+    Claude Code re-reads the file before its own
     writes, so the entry survives running sessions."""
     target = Path(os.path.realpath(CONFIG_FILE))
     try:
@@ -287,11 +284,7 @@ def set_trust(directory: str, trust: bool) -> None:
         projects.setdefault(key, {})["hasTrustDialogAccepted"] = True
     elif key in projects:
         projects[key].pop("hasTrustDialogAccepted", None)
-    fd, tmp = tempfile.mkstemp(dir=target.parent, prefix=".claude.json.bosun-")
-    with os.fdopen(fd, "w") as fh:
-        json.dump(config, fh, indent=2)
-    os.chmod(tmp, 0o600)
-    os.replace(tmp, target)
+    write_atomically(target, json.dumps(config, indent=2), mode=0o600)
 
 
 # ---- what happened in a transcript (read by `bosun learn`) ---------------------------------
@@ -985,24 +978,6 @@ def reply_error(entry: dict[str, Any], status: object = None) -> ApiError | None
     return ApiError(AUTH if looks_like_auth_error(text) else OTHER, PATTERN, "unclassified")
 
 
-TAIL_CHUNK_BYTES = 1 << 16
-
-
-def reversed_lines(path: Path) -> Iterator[bytes]:
-    """The lines of <path>, last first, read from the end in chunks (transcripts grow large)."""
-    with path.open("rb") as fh:
-        position = fh.seek(0, os.SEEK_END)
-        rest = b""
-        while position > 0:
-            size = min(TAIL_CHUNK_BYTES, position)
-            position -= size
-            fh.seek(position)
-            lines = (fh.read(size) + rest).split(b"\n")
-            rest = lines.pop(0)
-            yield from reversed(lines)
-        yield rest
-
-
 def replies_last_first(transcript: Path, sidechain: bool = False) -> Iterator[dict[str, Any]]:
     """The session's replies, newest first; <sidechain>: a subagent's transcript, whose every entry
     is a sidechain one."""
@@ -1241,14 +1216,6 @@ def add_memory_note(workdir: str, slug: str, description: str, body: str) -> Pat
 # ---- command line ------------------------------------------------------------------------------
 
 
-def emit(value: object) -> int:
-    """Print <value> and exit 0, or exit NOT_FOUND if there is none."""
-    if value is None:
-        return NOT_FOUND
-    print(value)
-    return 0
-
-
 def cmd_resolve(args: list[str]) -> int:
     session_id = resolve(args[0], args[1])
     if session_id is None:
@@ -1262,8 +1229,13 @@ def cmd_list(args: list[str]) -> int:
     return 0
 
 
+def registered(pids: Iterable[str]) -> str | None:
+    """The first of <pids> that is a Claude with a session."""
+    return next((pid for pid in pids if (LIVE_SESSIONS_DIR / f"{pid}.json").is_file()), None)
+
+
 def cmd_registered(args: list[str]) -> int:
-    return emit(next((pid for pid in args if (LIVE_SESSIONS_DIR / f"{pid}.json").is_file()), None))
+    return emit(registered(args))
 
 
 def describe(pid: str) -> dict[str, Any] | None:
@@ -1316,10 +1288,34 @@ def message_usage(line: str) -> dict[str, Any] | None:
     return usage if isinstance(usage, dict) and any(usage.values()) else None
 
 
-def cmd_context(args: list[str]) -> int:
-    entry = record(args[0])
+def launch_settings(pid: str) -> LaunchSettings:
+    """The model and effort a running Claude was launched with, read from its command line, where bosun
+    passes them before the orchestrator's long system prompt; and whether bosun launched it, which only
+    bosun's --remote-control says. A Claude you started yourself in the window keeps its settings."""
+    command = command_line(pid)
+    model = MODEL_FLAG.search(command)
+    effort = EFFORT_SETTING.search(command)
+    return LaunchSettings(
+        model.group(1) if model else None,
+        effort.group(1) if effort else None,
+        BOSUN_LAUNCHED.search(command) is not None,
+    )
+
+
+def conversation_size(pid: str) -> int | None:
+    """How large the conversation in the running Claude <pid> was at its last reply."""
+    entry = record(pid)
     path = transcript_of(entry) if entry else None
-    return emit(context_tokens(path) if path else None)
+    return context_tokens(path) if path else None
+
+
+def ready() -> bool:
+    """Whether Claude Code is installed and logged in."""
+    return auth_status(os.environ.get("BOSUN_CLAUDE_BIN") or "claude").logged_in is True
+
+
+def cmd_context(args: list[str]) -> int:
+    return emit(conversation_size(args[0]))
 
 
 def cmd_describe(args: list[str]) -> int:
@@ -1328,7 +1324,7 @@ def cmd_describe(args: list[str]) -> int:
 
 
 def cmd_logged_in(_args: list[str]) -> int:
-    return 0 if auth_status(os.environ.get("BOSUN_CLAUDE_BIN") or "claude").logged_in is True else NOT_FOUND
+    return 0 if ready() else NOT_FOUND
 
 
 def cmd_set_trust(args: list[str]) -> int:
@@ -1359,7 +1355,7 @@ def cmd_api_error(args: list[str]) -> int:
 
 
 # subcommand -> (number of arguments, or None for any; handler)
-COMMANDS: dict[str, tuple[int | None, Callable[[list[str]], int]]] = {
+COMMANDS: dict[str, Command] = {
     "resolve": (2, cmd_resolve),
     "list": (1, cmd_list),
     "live": (1, lambda args: emit(live_pid(args[0]))),
@@ -1378,14 +1374,7 @@ COMMANDS: dict[str, tuple[int | None, Callable[[list[str]], int]]] = {
 
 
 def main(argv: list[str]) -> int:
-    if argv[:1] in (["-h"], ["--help"]):
-        print(__doc__.strip())
-        return 0
-    command = COMMANDS.get(argv[0]) if argv else None
-    if command is None or (command[0] is not None and len(argv) - 1 != command[0]):
-        print(__doc__.strip(), file=sys.stderr)
-        return USAGE
-    return command[1](argv[1:])
+    return run_command(__doc__, COMMANDS, argv)
 
 
 if __name__ == "__main__":

@@ -17,9 +17,9 @@ of tmux. One table of checks, each with a de-duplication key: morning run missin
 window waiting at a prompt, new ERROR lines in the logs, session or check-in loop missing during
 awake hours, items stuck in `delegated`, and (with `BOSUN_LEARN_ENABLED=1`) a daily learning
 run that is missing, failed, crashed or stalled. Alerts only during scheduled awake hours, once per key,
-through `bosun alert`. Checks added since: `events` and `slack-watch` (with those features
-on), `login-expired` (below) and `long-shell` (2026-10-21: a background command keeping a window in
-shell); `bosun orphans` finds the helpers a pane's launch shell leaves behind, and `launch`,
+through `bosun alert`. Checks added since, 17 in all now (`docs/watchdog.md`): among them `events` and
+`slack-watch` (with those features on), `login-expired` (below), `long-shell` (2026-10-21: a background
+command keeping a window in shell) and `stalled-start` (2026-10-30: an agent stopped at a screen); `bosun orphans` finds the helpers a pane's launch shell leaves behind, and `launch`,
 `stop` and the check-in loop stop them. Follow-ups: see "Watchdog follow-ups" and "Urgent watchdog alerts
 outside the awake window" below.
 
@@ -58,7 +58,7 @@ refuses a second hand-over while the first awaits a report (`--again` overrides)
 item. Repo sessions report outcomes with `ledger report` (summary, results, open points), read
 with `ledger reports`. `send -` reads stdin; the guard requires `--id <ledger id>` or `--no-item`
 on the orchestrator's sends. Writes take an exclusive `flock`, replace the file atomically and
-keep a backup. Real interactions from two days (anonymized, in a fictional domain) are replayed
+keep a backup. Two days of interactions, rewritten as fiction in a made-up domain, are replayed
 in `tests/fixtures/corpus/`.
 
 **Done (2026-10-16): outreach**, what we wait on from other people. Real sessions left product
@@ -70,7 +70,7 @@ proposes and sends the messages, matches Slack thread replies (`ledger seen`), p
 hands replies to the window holding the work (`delegate --update <out-id>`); repo sessions record
 outreach instead of asking in chat. The policy maps free text ("ask Dana ...", "ping Priya
 again", "Marco answered, go with b") to these steps, checked with the real Claude in
-`tests/llm/` (17 cases at first, all passing on two runs each; 21 now). Follow-ups: see "Outreach follow-ups".
+`tests/llm/` (17 cases at first, all passing on two runs each; 36 now). Follow-ups: see "Outreach follow-ups".
 Same day, after overlapping drafts in a live session: one-way messages (`fyi`, done once sent),
 one message recorded on several items (`sent <id> <id> ...`), a warning on a second open item to
 the same person, every item sharing a thread named by `seen`, and the chores merging overlaps.
@@ -243,6 +243,20 @@ prompt once phone approvals are verified.
 
 ## Features
 
+### Other agents and other operating systems
+
+Repo sessions run on Claude Code and Codex, and the installer's checks are split by OS and by agent
+(`docs/design/init.md`, `docs/design/harnesses.md`).
+
+**Next on Codex:** the orchestrator (a system prompt, chores without a plugin, the guard and approvals on its
+own hooks and sandbox; hooks stop at a review screen, so this needs thought); noticing a revoked login;
+its sessions in the Impact stats and the learning digest (`Harness` in `lib/learn_digest.py`); a real GitHub
+login inside a session, which so far has only been run with a stand-in `gh`; per-task effort on a running
+session; running without Claude Code at all (`bosun init`, `install.sh` and `bosun doctor` still need it).
+
+**Next OS: Linux.** `lib/platforms/linux.sh` is the easy part. What else assumes macOS: `install.sh` and the
+launchd templates, `pmset` and the wake, `caffeinate`, `osascript` alerts, `dscl`, `date -j` and `lsof`'s flags.
+
 ### Impact (productivity) stats
 
 **Why:** after a week or two of real use the question is no longer what bosun did but what it
@@ -314,7 +328,7 @@ poorly for questions across many: what is open and who it waits on, what last we
 which learnings were applied, what the policy says right now.
 
 **What we know:** design in [docs/design/console.md](docs/design/console.md) (accepted
-2026-10-20). A read-only, local-only (`127.0.0.1`, per-start token) page served by `bosun
+2026-10-20). A read-only, local-only (`127.0.0.1`, a token) page served by `bosun
 console` with stdlib `http.server` and one static page, no build step and no new dependencies.
 It reads the ledger as a snapshot (never its lock) and never touches the panes. Views: Ledger,
 Sessions, Stats, Learning, Library; a knowledge graph is phase 2. Write actions are out of the

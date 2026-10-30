@@ -19,7 +19,7 @@ best first (everything Claude Code-specific is read through lib/claude_state.py)
 Usage: login.py window <name> <claude pid> [--after <epoch>] [--wait <seconds>] [--probe] [--pane -]
                          [--dry-run]
        login.py global [--probe]
-       login.py status          (lines "<window>\\t<claude pid>" on stdin, as window_claude_pids)
+       login.py status          (lines "<window>\\t<claude pid>" on stdin, as window_agent_pids)
 
 `window` prints "<state> <change> <detail>": state ok, needs-login or unknown; change new (it has
 just started needing a login), same, recovered or -. It records the windows that need a login,

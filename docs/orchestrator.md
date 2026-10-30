@@ -1,7 +1,8 @@
 # Orchestrator
 
-The `orchestrator` window runs an interactive Claude session with Remote Control, so you can
-answer it from your phone. Unlike the repo windows it:
+The `orchestrator` window runs an interactive Claude Code session with Remote Control, so you can
+answer it from your phone. It hands tasks to repo windows whichever agent runs in them, Claude Code or
+[Codex](setup.md#running-repo-sessions-on-codex). Unlike the repo windows it:
 
 - **starts a fresh conversation every day** (`orchestrator-YYYY-MM-DD`). `refresh` restarts it once
   it is idle the next morning. Continuity lives in the ledger, not the chat history.
@@ -48,9 +49,9 @@ directory: `policy.md` is appended to the orchestrator policy; `tasks/<type>.md`
 
 Claude Code shows a folder trust prompt the first time it opens a repository (trusting a parent
 folder does not cover it) and has no setting or flag to skip it; only headless `-p` runs skip it.
-An unattended start would stall there. `bosun trust <dir>` records the same entry Claude
-writes when you accept the prompt (`hasTrustDialogAccepted` in `~/.claude.json`, an internal
-format) for git repos inside the repo mask, and `bosun send --new|--start` (and so
+An unattended start would stall there. `bosun trust <dir>` records the same entry each agent in use
+writes when you accept the prompt (Claude Code: `hasTrustDialogAccepted` in `~/.claude.json`; Codex:
+`trust_level` in `~/.codex/config.toml`; both internal formats) for git repos inside the repo mask, and `bosun send --new|--start` (and so
 `delegate --new|--start`) call it for their folder (`BOSUN_TRUST_MASKED_REPOS=1`). Outside the mask they fail at once with the command to
 run. `bosun doctor` checks every session folder.
 

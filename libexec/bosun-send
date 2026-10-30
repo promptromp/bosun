@@ -1,10 +1,10 @@
 #!/bin/bash
 # Usage: bosun send --list
 #        bosun send [--id <ledger id> | --no-item] <window> <message>
-#                                                            paste into a running Claude window
+#                                                            paste into a window running an agent
 #        bosun send --new [--model <m>] [--effort <e>] <window> <workdir> <message>
 #                                                            open a new window with a fresh session
-#        bosun send --start <window> [message]           start Claude in an existing window
+#        bosun send --start <window> [message]           start the agent in an existing window
 #                                                            that has none (resumes its named session;
 #                                                            without a message, sends the drain prompt)
 #
@@ -15,12 +15,12 @@
 # message is about no work item; the orchestrator's guard requires one of the two.
 #
 # Messages use bracketed paste, so multi-line text arrives as a single prompt. Delivery needs
-# Claude to be idle, busy (the message joins the running turn or waits for it) or "shell"; a
+# the agent to be idle, busy (the message joins the running turn or waits for it) or "shell"; a
 # session waiting at a permission prompt or a question is refused, so a pasted Enter never answers
 # it. It also waits while someone typed in that window within BOSUN_SEND_TYPING_MINUTES or its
-# input line holds unsent text (up to BOSUN_SEND_WAIT_SECONDS), and fails unless Claude took
+# input line holds unsent text (up to BOSUN_SEND_WAIT_SECONDS), and fails unless the agent took
 # the prompt (the line emptied, no "Unknown command"), so the caller can send it again.
-# --new and --start exit 0 only once Claude is running in the window; otherwise they print the
+# --new and --start exit 0 only once the agent is running in the window; otherwise they print the
 # window's last output and exit 1.
 # With BOSUN_SEND_DRY_RUN=1 (set by `bosun chores --dry-run`), deliveries and new windows
 # are only logged.
@@ -35,32 +35,34 @@ FAILED_START_OUTPUT_LINES=8
 INPUT_TYPED=3 # lib/pane_input.py typed: the input line holds text
 
 list_windows() {
-  local name path pane_pid claude_pid state version model_effort
+  local name path pane_pid agent_pid state version model_effort
   tmux_cmd list-windows -t "=$SESSION" -F '#{window_name}	#{pane_current_path}	#{pane_pid}' |
     while IFS=$'\t' read -r name path pane_pid; do
-      state="no-claude"
+      state="no-agent"
       version="-"
       model_effort="-"
-      if claude_pid="$(claude_pid_under "$pane_pid")"; then
-        state="claude:$(claude_status_label "$(claude_session_field "$claude_pid" status)")"
-        version="$(claude_session_field "$claude_pid" version)"
-        model_effort="$(claude_launch_model_effort "$claude_pid" | cut -f1,2 | tr '\t' /)"
+      if agent_pid="$(agent_pid_under "$pane_pid")"; then
+        state="$(agent_session_field "$agent_pid" harness):$(agent_status_label "$(agent_session_field "$agent_pid" status)")"
+        version="$(agent_session_field "$agent_pid" version)"
+        model_effort="$(agent_launch_model_effort "$agent_pid" | cut -f1,2 | tr '\t' /)"
       fi
       printf '%-28s %-14s %-10s %-14s %s\n' "$name" "$state" "$version" "$model_effort" "$path"
     done
 }
 
 send_message() {
-  local window="$1" message="$2" pane_pid window_id claude_pid status buffer rejected_before
+  local window="$1" message="$2" pane_pid window_id agent_pid status buffer rejected_before
   if [ "${BOSUN_SEND_DRY_RUN:-0}" = "1" ]; then
     log "dry-run: would deliver to $SESSION:$window: $(head -c 300 <<<"$message" | tr '\n' ' ')"
     return 0
   fi
   read -r pane_pid window_id <<<"$(find_window "$window")"
   [ -n "$window_id" ] || die "no window '$window' in session '$SESSION'"
-  claude_pid="$(claude_pid_under "$pane_pid")" || die "window '$window' is not running Claude"
-  status="$(claude_session_field "$claude_pid" status)"
-  claude_takes_input "$status" ||
+  agent_pid="$(agent_pid_under "$pane_pid")" || die "window '$window' is not running an agent"
+  status="$(agent_session_field "$agent_pid" status)"
+  ! tmux_cmd capture-pane -p -t "$window_id" 2>/dev/null | python3 "$BOSUN_ROOT/lib/pane_input.py" question ||
+    die "window '$window' is asking something on its screen, and Enter would answer it; nothing sent (bosun attach)"
+  agent_takes_input "$status" ||
     die "window '$window' is ${status:-in an unknown state} (a permission prompt or question waits for you there); not pasting into it"
   wait_until_pasteable "$window" "$window_id"
   note_bosun_prompt "$window" "$message"
@@ -134,7 +136,7 @@ wait_for_claude() { # <window_id>
   local deadline=$((SECONDS + BOSUN_START_TIMEOUT)) pane_pid
   while [ "$SECONDS" -lt "$deadline" ]; do
     pane_pid="$(tmux_cmd list-panes -t "$1" -F '#{pane_pid}' 2>/dev/null)" || return 1
-    claude_pid_under "$pane_pid" >/dev/null && return 0
+    agent_pid_under "$pane_pid" >/dev/null && return 0
     sleep "$START_POLL_SECONDS"
   done
   return 1
@@ -150,12 +152,14 @@ confirm_started() { # <window> <window_id> <what happened>
   die "start failed; inspect with: $(attach_hint) (window $1)"
 }
 
-# An untrusted folder would stall the start at Claude's trust prompt, so trust it first (repos in
+# An untrusted folder would stall the start at the agent's trust screen, so trust it first (repos in
 # the mask, BOSUN_TRUST_MASKED_REPOS=1) or stop here with a clear error.
-ensure_trusted() { # <dir>
-  claude_trusts "$1" && return 0
-  if [ "$BOSUN_TRUST_MASKED_REPOS" = "1" ] && "$BOSUN" trust "$1"; then return 0; fi
-  die "Claude Code does not trust $1, so Claude would stop at its trust prompt; trust it with 'bosun trust $1' (add --any outside the repo mask), then retry"
+ensure_trusted() { # <window> <dir>
+  local harness
+  harness="$(window_harness "$1")"
+  agent_trusts "$harness" "$2" && return 0
+  if [ "$BOSUN_TRUST_MASKED_REPOS" = "1" ] && "$BOSUN" trust "$2"; then return 0; fi
+  die "$(agent_display_name "$harness") does not trust $2, so it would stop at its trust prompt; trust it with 'bosun trust $2' (add --any outside the repo mask), then retry"
 }
 
 new_window() { # <window> <workdir> <message> [model] [effort]
@@ -167,7 +171,7 @@ new_window() { # <window> <workdir> <message> [model] [effort]
     return 0
   fi
   find_window "$window" >/dev/null && die "window '$window' already exists; use: bosun send $window <message>"
-  ensure_trusted "$workdir"
+  ensure_trusted "$window" "$workdir"
   build_launch_command "$window" "$message" "" "$model" "$effort"
   window_id="$(tmux_cmd new-window -d -P -F '#{window_id}' -t "=$SESSION:" -n "$window" -c "$workdir" "${launch_cmd[@]}")" ||
     die "tmux could not open window '$window'"
@@ -182,8 +186,8 @@ start_in_window() {
   fi
   read -r pane_pid window_id <<<"$(find_window "$window")"
   [ -n "$window_id" ] || die "no window '$window' in session '$SESSION'"
-  claude_pid_under "$pane_pid" >/dev/null && die "window '$window' already runs Claude; use: bosun send $window <message>"
-  ensure_trusted "$(tmux_cmd display-message -p -t "$window_id" '#{pane_current_path}')"
+  agent_pid_under "$pane_pid" >/dev/null && die "window '$window' already runs Claude; use: bosun send $window <message>"
+  ensure_trusted "$window" "$(tmux_cmd display-message -p -t "$window_id" '#{pane_current_path}')"
   relaunch_in_window "$window_id" "$window" "$message" || die "could not start Claude in window '$window'"
   confirm_started "$window" "$window_id" "started Claude in $SESSION:$window"
 }

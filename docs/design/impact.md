@@ -1,6 +1,6 @@
 # Impact stats: what bosun changes
 
-Status: accepted 2026-10-26; Phase A built, in review (see the checklist at the end). Plan for the phase
+Status: accepted 2026-10-26; Phase A built and merged (see the checklist at the end). Plan for the phase
 being built: [docs/plans/impact-phase-a.md](../plans/impact-phase-a.md). Roadmap entry:
 [ROADMAP.md](../../ROADMAP.md), "Impact (productivity) stats".
 

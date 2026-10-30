@@ -16,7 +16,7 @@ from collections import Counter
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, field, fields, replace
 from datetime import date, datetime, timedelta
-from typing import Any
+from typing import Any, NamedTuple
 
 from awake import DAY_LETTERS
 
@@ -43,6 +43,24 @@ MAX_UNUSED_REPOS = 3  # when there is no history to go by
 MIN_PROMPTS = 20
 OPUS_PLANS = frozenset({"max", "team", "enterprise"})
 LINE_WIDTH = 78
+CLAUDE, CODEX = "claude", "codex"
+
+
+class OtherAgent(NamedTuple):
+    """What the plan says about repo sessions on an agent other than Claude Code."""
+
+    sessions: str
+    note: str
+
+
+OTHER_AGENTS = {
+    CODEX: OtherAgent(
+        "Codex, with its automatic reviewer",
+        "Repo sessions run on Codex with its automatic reviewer (BOSUN_CODEX_FLAGS): a sandbox, and a safety "
+        "check that decides when something may go past it, with no prompts. The orchestrator stays on "
+        "Claude Code.",
+    ),
+}
 AUTO, BYPASS = "auto", "bypass"
 PERMISSION_FLAGS = {
     AUTO: "--permission-mode auto --chrome",
@@ -96,6 +114,9 @@ class Facts:
     aws_sso_profiles: tuple[str, ...] = ()
     slack_plugin: bool = False
     bypass_accepted: bool = False
+    ready_agents: tuple[str, ...] = ()  # installed and logged in
+    asked_harness: str = ""  # BOSUN_HARNESS in the environment: curl ... | BOSUN_HARNESS=codex sh
+    agent_prompts: Mapping[str, int] = field(default_factory=dict)  # per agent, over the history
     has_battery: bool = False
     repeating_wake: str = ""  # the repeating event pmset has now
     files: Mapping[str, str] = field(default_factory=dict)  # the config files that exist, by name
@@ -124,6 +145,7 @@ class Answers:
     learning: bool = True
     slack_watch: bool = False
     model: str = DEFAULT_MODEL
+    harness: str = CLAUDE
     permissions: str = AUTO
     repo_mask: str = ""
     repos_dir: str = DEFAULT_REPOS_DIR
@@ -141,7 +163,7 @@ WINDOW_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]*$")
 MODEL_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._\[\]-]*$")
 CONTROL = re.compile(r"[\x00-\x1f\x7f]")
 BOOL_ANSWERS = ("events", "approvals", "learning", "slack_watch", "wake", "trust")
-TEXT_ANSWERS = ("days", "start", "until", "model", "permissions", "repo_mask", "repos_dir")
+TEXT_ANSWERS = ("days", "start", "until", "model", "harness", "permissions", "repo_mask", "repos_dir")
 
 
 def answers_to_json(answers: Answers) -> dict[str, Any]:
@@ -231,6 +253,8 @@ def validate(answers: Answers) -> list[str]:
     problems = schedule_problems(answers) + repo_problems(answers.repos)
     if answers.slack_watch and not answers.events:
         problems.append("slack_watch: the Slack watcher needs events on")
+    if answers.harness not in (CLAUDE, CODEX):
+        problems.append(f"harness: '{answers.harness}' must be {CLAUDE} or {CODEX}")
     if answers.permissions not in PERMISSION_FLAGS:
         problems.append(f"permissions: '{answers.permissions}' must be {AUTO} or {BYPASS}")
     if not MODEL_NAME.match(answers.model):
@@ -363,6 +387,17 @@ def recommended_mask(facts: Facts, uses: Sequence[RepoUse]) -> str:
     return " ".join(sorted({use.owner for use in uses if use.owner}))
 
 
+def recommended_harness(facts: Facts) -> str:
+    """What you asked for, or else what your config says, or else the agent you use most, if it is ready
+    to run."""
+    chosen = facts.asked_harness or facts.env.get("BOSUN_HARNESS")
+    if chosen:
+        return chosen
+    prompts = facts.agent_prompts.get
+    most_used = max(facts.ready_agents, key=lambda agent: prompts(agent, 0), default=CLAUDE)
+    return most_used if prompts(most_used, 0) > prompts(CLAUDE, 0) else CLAUDE
+
+
 def recommended_permissions(facts: Facts) -> str:
     return BYPASS if BYPASS_FLAG in facts.env.get("BOSUN_CLAUDE_FLAGS", "") else AUTO
 
@@ -393,6 +428,7 @@ def recommend(facts: Facts) -> Answers:
         learning=on("BOSUN_LEARN_ENABLED", True),
         slack_watch=on("BOSUN_SLACK_WATCH_ENABLED", facts.slack_plugin and events),
         model=recommended_model(facts),
+        harness=recommended_harness(facts),
         permissions=recommended_permissions(facts),
         repo_mask=recommended_mask(facts, uses),
         repos_dir=recommended_repos_dir(facts, uses),
@@ -442,6 +478,7 @@ def env_groups(answers: Answers) -> list[tuple[str, list[tuple[str, str]]]]:
                 ("BOSUN_LEARN_MODEL", answers.model),
             ],
         ),
+        ("Which agent runs repo sessions", [("BOSUN_HARNESS", answers.harness)]),
         (
             "How repo sessions handle permissions",
             [("BOSUN_CLAUDE_FLAGS", PERMISSION_FLAGS[answers.permissions])],
@@ -553,9 +590,10 @@ def yaml_scalar(value: object) -> str:
 
 
 SESSIONS_HEADER = """\
-# One tmux window per entry, written by `bosun init`. `name` is the Claude session name: the most
-# recent session with exactly this name in `dir` is resumed; if none exists, a new one is created.
-# Optional per window: `model`, `effort` and `autocompact` (defaults: bosun.env).
+# One tmux window per entry, written by `bosun init`. `name` is the window's name, and the name its
+# session is resumed by; if there is no such session in `dir`, a new one is created.
+# Optional per window: `harness` (claude or codex), `model`, `effort` and, on Claude Code, `autocompact`
+# (defaults: bosun.env).
 """
 
 
@@ -678,7 +716,7 @@ def windows_reason(facts: Facts, answers: Answers) -> list[str]:
     if not answers.repos or SESSIONS_FILE in facts.files:
         return []
     if any(use.prompts for use in facts.repos):
-        return [f"Windows: the repos you used Claude Code in most over the last {facts.history_days} days."]
+        return [f"Windows: the repos you used your agents in most over the last {facts.history_days} days."]
     return ["Windows: the git repos found in your usual folders, newest first."]
 
 
@@ -748,6 +786,9 @@ def feature_notes(facts: Facts, answers: Answers) -> list[str]:
 
 
 def permission_notes(facts: Facts, answers: Answers) -> list[str]:
+    """Permissions as asked are Claude Code's. Another agent has its own flags and its own note."""
+    if answers.harness in OTHER_AGENTS:
+        return [OTHER_AGENTS[answers.harness].note]
     if answers.permissions == BYPASS:
         return [BYPASS_NOTE] + ([] if facts.bypass_accepted else [BYPASS_ACCEPT_NOTE])
     return [AUTO_NOTE] if ENV_FILE not in facts.files else []
@@ -823,8 +864,7 @@ def summary_lines(answers: Answers) -> list[str]:
         f"  Windows   {windows} (plus the orchestrator and its check-in loop)",
         f"  Schedule  {describe_days(answers.days)}, {answers.start} to {answers.until}",
         f"  Features  {describe_features(answers)}",
-        f"  Model     {answers.model}",
-        f"  Sessions  {'auto mode' if answers.permissions == AUTO else 'bypass mode, no permission checks'}",
+        *model_lines(answers),
     ]
 
 
@@ -849,6 +889,14 @@ def bullets(items: Sequence[str]) -> list[str]:
         for item in items
         for line in textwrap.wrap(item, LINE_WIDTH, initial_indent="  - ", subsequent_indent="    ")
     ]
+
+
+def model_lines(answers: Answers) -> list[str]:
+    if answers.harness in OTHER_AGENTS:
+        sessions = OTHER_AGENTS[answers.harness].sessions
+        return [f"  Model     {answers.model} for the orchestrator", f"  Sessions  {sessions}"]
+    how = "auto mode" if answers.permissions == AUTO else "bypass mode, no permission checks"
+    return [f"  Model     {answers.model}", f"  Sessions  {how}"]
 
 
 def render_plan(plan: Plan, answers: Answers, facts: Facts, config_dir: str) -> str:

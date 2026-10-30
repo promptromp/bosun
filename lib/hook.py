@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
-"""Claude Code hooks for repo sessions (design: docs/design/events.md).
+"""Claude Code hooks for repo sessions (design: docs/design/events.md), and what Codex runs when a turn
+ends (design: docs/design/harnesses.md).
 
 Usage: hook.py user-prompt --window <window>    (the hook's JSON on stdin)
+       hook.py codex-turn-end --window <window> --conversation <name> <json>
 
 Run it as `bosun hook user-prompt --window <window>`: `bosun launch` installs it as the
 UserPromptSubmit hook of a repo window's Claude when BOSUN_EVENTS_ENABLED=1. It records each
@@ -29,6 +31,7 @@ from typing import Any
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import activity
+import codex_state
 import events
 import ledger
 
@@ -65,6 +68,20 @@ def record_prompt(window: str, payload: Mapping[str, Any], env: Mapping[str, str
     return f"user-said in {window} recorded on {on}"
 
 
+def codex_turn_end(window: str, conversation: str, payload: Mapping[str, Any], env: Mapping[str, str]) -> str:
+    """Remember which session <conversation> is, and with events on what was said in this turn."""
+    session_id = str(payload.get("thread-id") or "")
+    if not codex_state.is_terminal_session(session_id):
+        return f"ignored: {session_id or 'no id'} is one of Codex's helpers, not {conversation}"
+    prompts = [str(text) for text in payload.get("input-messages") or []]
+    new = codex_state.new_prompts(conversation, session_id, prompts)
+    codex_state.remember(conversation, session_id, str(payload.get("cwd") or ""), len(prompts))
+    done = [f"{conversation} is {session_id}"]
+    if env.get("BOSUN_EVENTS_ENABLED") == "1":
+        done += [record_prompt(window, {"prompt": text, "session_id": session_id}, env) for text in new]
+    return "; ".join(done)
+
+
 def detach(env: Mapping[str, str]) -> bool:
     """Fork; True in the parent, which returns at once. The child leaves the hook's process group
     and its pipes, so Claude Code neither waits for it nor kills it."""
@@ -81,18 +98,23 @@ def detach(env: Mapping[str, str]) -> bool:
 
 def main(argv: list[str], env: Mapping[str, str]) -> int:
     parser = argparse.ArgumentParser(prog="bosun hook", description=__doc__)
-    parser.add_argument("event", choices=("user-prompt",))
+    parser.add_argument("event", choices=("user-prompt", "codex-turn-end"))
     parser.add_argument("--window", required=True)
+    parser.add_argument("--conversation", default="")
+    parser.add_argument("payload", nargs="?")
     args = parser.parse_args(argv)
     try:
-        payload = json.loads(sys.stdin.read() or "{}")
+        payload = json.loads(args.payload or sys.stdin.read() or "{}")
     except (OSError, json.JSONDecodeError) as exc:
         log(env, f"ERROR: unreadable hook input in {args.window}: {exc}")
         return 0
     if detach(env):
         return 0
     try:
-        log(env, record_prompt(args.window, payload, env))
+        if args.event == "codex-turn-end":
+            log(env, codex_turn_end(args.window, args.conversation or args.window, payload, env))
+        else:
+            log(env, record_prompt(args.window, payload, env))
     except Exception as exc:  # noqa: BLE001  (a hook never fails the prompt; the log has it)
         log(env, f"ERROR: could not record a prompt typed in {args.window}: {exc!r}")
     return 0

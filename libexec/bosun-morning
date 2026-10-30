@@ -104,7 +104,7 @@ if [ "$DRY_RUN" = "1" ]; then
     "$BOSUN" refresh --dry-run --unless-active $drain_flag
   else
     log "dry-run: would start session '$BOSUN_SESSION_NAME' with windows:"
-    window_specs | while IFS=$'\t' read -r name dir kind model effort; do log "  $name ($kind, $model/$effort) -> $dir"; done
+    window_specs | while IFS=$'\t' read -r name dir kind model effort _; do log "  $name ($kind, $model/$effort) -> $dir"; done
   fi
 else
   "$BOSUN" start --unless-active || problems+=("tmux")

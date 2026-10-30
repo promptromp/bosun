@@ -31,6 +31,15 @@ check() { # <description> <command...>: on failure, show the end of its output
     [ -n "$output" ] && tail -8 <<<"$output" | sed 's/^/          /'
   fi
 }
+wait_for() {
+  local deadline=$((SECONDS + $1))
+  shift
+  until "$@" >/dev/null 2>&1; do
+    [ "$SECONDS" -ge "$deadline" ] && return 1
+    sleep 0.2
+  done
+}
+
 says() { # <text> <file>
   grep -qF -- "$1" "$2" || {
     echo "expected to find: $1"
@@ -212,6 +221,55 @@ the_installer() {
   unset BOSUN_REPO BOSUN_BRANCH
 }
 
+the_first_day_on_codex() {
+  local out="$HOME/codex.txt" sessions_before state="$HOME/.local/state/bosun"
+  local bosun="$HOME/.local/bin/bosun"
+  echo "the first day on Codex: the same steps, then real windows on the stand-in"
+  rm -rf "$CONFIG"
+  check "asking for Codex without it says where to get it" bash -c '! BOSUN_HARNESS=codex "$1" init --recommended >"$2" 2>&1 && grep -q "developers.openai.com/codex" "$2"' _ "$BOSUN" "$out"
+  check "the installer's next line keeps that choice" bash -c '! cat "$1/get.sh" | BOSUN_DIR="$HOME/.local/share/bosun" BOSUN_REPO="$1" BOSUN_BRANCH="$(git -C "$1" branch --show-current)" BOSUN_HARNESS=codex sh >"$2" 2>&1 && grep -q "get.sh | BOSUN_HARNESS=codex sh" "$2"' _ "$ROOT" "$out"
+  brew install codex
+  check "with Codex here, the wizard offers it" python3 "$DRIVE" "$out" \
+    "Which repos" "<enter>" \
+    "When should" "<enter>" \
+    "How proactive" "<enter>" \
+    "Which agent" "2" \
+    "model should the orchestrator" "<enter>" \
+    "wake by itself" "<enter>" \
+    "Nothing has changed yet" "y" \
+    "Start the windows now?" "y" \
+    "The windows are up" "" \
+    -- "$BOSUN" init
+  check "the config says Codex" says 'BOSUN_HARNESS="codex"' "$CONFIG/bosun.env"
+  check "Codex trusts the repos" grep -q "Development/api" "$HOME/.codex/config.toml"
+  check "doctor agrees" bash -c '"$1" doctor >"$2" 2>&1 || { tail -12 "$2"; exit 1; }' _ "$bosun" "$out"
+  check "the repo window runs Codex" wait_for 20 bash -c '"$1" sessions --json | jq -e ".[] | select(.name == \"api\") | .agent.harness == \"codex\" and .agent.status == \"idle\"" >/dev/null' _ "$bosun"
+  check "the orchestrator stays on Claude Code" wait_for 20 bash -c '"$1" sessions --json | jq -e ".[] | select(.name == \"orchestrator\") | .agent.harness == \"claude\"" >/dev/null' _ "$bosun"
+  check "lists say which agent" bash -c '"$1" sessions | grep -q "codex:idle"' _ "$bosun"
+  check "bosun knows each session by its window" wait_for 10 jq -e '.api.id and .web.id' "$state/codex-sessions.json"
+  sessions_before="$(find "$HOME/.codex/sessions" -name '*.jsonl' | wc -l)"
+  check "a message reaches it" "$bosun" send --no-item api "please look at the failing test"
+  check "... as a turn of its own" wait_for 10 bash -c '[ "$(cat "$HOME"/.codex/sessions/*/*/*/*.jsonl | grep -c task_started)" -ge 3 ]'
+  tmux -L bosun send-keys -t "=bosun:=api" "go with option b" Enter
+  check "what you type there is recorded" wait_for 10 jq -e '[.said[]? | select(.text == "go with option b")] | length == 1' "$state/ledger.json"
+  tmux -L bosun send-keys -t "=bosun:=api" "and keep the tests" Enter
+  check "... once, though Codex lists every prompt again" wait_for 10 jq -e '[.said[]? | select(.text == "and keep the tests")] | length == 1' "$state/ledger.json"
+  check "... and bosun's own prompts are not yours" jq -e '[.said[]? | select(.text | test("nothing to do yet|look at the failing test"))] | length == 0' "$state/ledger.json"
+  "$bosun" stop >/dev/null 2>&1
+  "$bosun" start >/dev/null 2>&1
+  check "a restart picks the same session up" wait_for 20 bash -c '"$1" sessions --json | jq -e ".[] | select(.name == \"api\") | .agent.status == \"idle\"" >/dev/null' _ "$bosun"
+  check "... with no new one" test "$sessions_before" = "$(find "$HOME/.codex/sessions" -name '*.jsonl' | wc -l)"
+  "$bosun" stop >/dev/null 2>&1
+  "$bosun" trust --revoke "$HOME/Development/api" >/dev/null 2>&1
+  "$bosun" start >/dev/null 2>&1
+  check "a folder it does not trust stops at its screen, and send refuses" wait_for 15 bash -c '! "$1" send --no-item api "hello" >"$2" 2>&1 && grep -qE "is not running|asking something" "$2"' _ "$bosun" "$out"
+  "$bosun" stop >/dev/null 2>&1
+  touch "$HOME/.sandbox/codex-logged-out"
+  check "logged out, doctor says so" bash -c '! "$1" doctor >"$2" 2>&1; grep -q "codex login" "$2"' _ "$bosun" "$out"
+  rm "$HOME/.sandbox/codex-logged-out"
+  "$HOME/.local/share/bosun/uninstall.sh" --with-wake --purge >/dev/null 2>&1 || "$ROOT/uninstall.sh" --with-wake --purge >/dev/null 2>&1
+}
+
 "$ROOT/tests/sandbox/world.sh"
 first_look
 set_up
@@ -222,6 +280,7 @@ uninstall
 the_wizard_quit
 preflight_stops_early
 the_installer
+the_first_day_on_codex
 echo
 echo "$passed passed, $failed failed"
 [ "$failed" -eq 0 ]

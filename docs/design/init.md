@@ -11,7 +11,7 @@ anything.
 |---|---|---|
 | Bootstrap | `get.sh` | Plain `sh`, because it runs before anything is known to be there: only gets bosun and starts `init`. |
 | Preflight | `lib/preflight.sh`, `lib/platforms/`, `lib/harnesses/` | Plain `sh`: what bosun needs, and what to do about anything missing. Changes nothing. |
-| Detect | `lib/init_detect.py` | Read-only: the facts. Claude Code's files are read through `lib/claude_state.py`. |
+| Detect | `lib/init_detect.py` | Read-only: the facts. Each agent's files are read through its adapter, by way of `AGENTS` in `lib/agent_state.py`. |
 | Plan | `lib/init_plan.py` | Pure: facts to recommended answers, answers to file contents and a plan. |
 | Wizard | `lib/init_wizard.py` | Pure over a `Ui`: the questions, from recommended answers to yours. |
 | Terminal | `lib/init_terminal.py` | A key at a time, a screen at a time, and the terminal put back. |
@@ -35,7 +35,7 @@ Taken from what makes oh-my-zsh and Powerlevel10k pleasant, with what they lack 
 - `(recommended)` on the answer it would pick, and the reason from your own history above it.
 - `r` starts again and `q` leaves with nothing changed, on every screen, as does Ctrl-C.
 - It asks only what it cannot find out: the AWS question only appears if there are SSO profiles, and
-  a login is only offered for a tool that is installed and logged out.
+  which agent to use only if Codex is ready to run.
 - Re-runnable, starting from your config, and usable without a terminal (Powerlevel10k has no such
   mode, and it is what lets everything here be tested).
 
@@ -49,11 +49,12 @@ On a first run your own history beats a generic default. A re-run starts from yo
 
 | Answer | From |
 |---|---|
-| Repos | The ones you typed the most Claude Code prompts in over 30 days (20 or more, at most 6). Worktrees count for their main checkout; scripted runs (`claude -p`) do not count. With no history, up to 3 git repos from the usual folders, newest first. |
+| Repos | The ones you typed the most prompts in over 30 days, in Claude Code and Codex (20 or more, at most 6). Worktrees count for their main checkout; scripted runs (`claude -p`) do not count. With no history, up to 3 git repos from the usual folders, newest first. |
 | Days | Weekdays you worked on at least 60% of since your first prompt. |
 | Hours | Half an hour before your median first prompt, to after your median last one, at least 4 hours. Work before 04:00 belongs to the day before. With under 5 active days: 08:00 to 20:00, Monday to Friday. |
 | Features | Events, approvals and learning on. The Slack watcher only if the Slack plugin is installed. |
-| Model | `opus` on Max, Team and Enterprise plans, else `sonnet`. |
+| Agent | Only asked once Codex is installed and logged in: what `BOSUN_HARNESS` asks for, else your config, else Codex if you typed more prompts there, else Claude Code. |
+| Model | `opus` on Max, Team and Enterprise plans, else `sonnet`. On Codex this is for the orchestrator, and repo sessions use `BOSUN_CODEX_MODEL`. |
 | Repo mask | The GitHub owners of the chosen repos. |
 | Orchestrator folder | The folder the repos share, never your home folder. |
 | AWS SSO | The profile, if there is exactly one; with more, the choice is yours. |
@@ -77,7 +78,7 @@ It only reads where and when prompts were typed, never what they say.
   output into issues, and `bosun.env` can hold a webhook.
 - **Replace another repeating wake,** or start anything before the plan has been shown.
 
-It asks how repo sessions handle permissions, and recommends Claude Code's auto mode: a safety check
+On Claude Code it asks how repo sessions handle permissions, and recommends its auto mode: a safety check
 reviews each action, and there is no warning to accept before the first start. If auto mode blocks
 several actions in a row the session waits at a prompt, and the watchdog says so. The other answer,
 `--dangerously-skip-permissions`, has no checks at all, and its warning has to be accepted once by
@@ -96,8 +97,9 @@ the flow:
 
 1. **The OS picks a platform profile**, `lib/platforms/<os>.sh`: its package manager, the line that
    installs from it, how a tool's package is named, and what to say when any of that is missing.
-2. **`BOSUN_HARNESS` picks a harness profile**, `lib/harnesses/<harness>.sh`: how to tell that agent is
-   installed, new enough, logged in, and past whatever it asks a person the first time.
+2. **Each agent in use picks a harness profile**, `lib/harnesses/<harness>.sh`: how to tell it is installed,
+   new enough, logged in, and past whatever it asks a person the first time. Those are Claude Code for
+   the orchestrator, `BOSUN_HARNESS`, and the `harness:` of any window.
 3. **The flow** in `lib/preflight.sh` knows neither. It checks everything and prints a list, then
    numbered next steps. Exit status 0 means all there, 1 something to do, 2 no profile for this OS or
    harness.
@@ -109,14 +111,13 @@ need Python wait until it is. `bosun init` and `bosun doctor` both start with it
 **To add an OS:** add `lib/platforms/<os>.sh` with the same functions as `macos.sh`, map its `uname -s`
 in `load_profiles`, and let `get.sh`'s `check_os` through. `tests/unit/test_preflight.py` checks that a
 profile has them all. That covers this check only. What else assumes macOS: `install.sh` and the
-launchd templates, `pmset` and the wake, `caffeinate` in the keep-awake, and `osascript` for alerts.
+launchd templates, `pmset` and the wake, `caffeinate` in the keep-awake, `osascript` for alerts, `dscl`, `date -j` and `lsof`'s flags.
 
-**To add a harness:** add `lib/harnesses/<harness>.sh` with the same functions as `claude.sh`. That too
-covers this check only. What else assumes Claude Code: `lib/claude_state.py` (every file of its that
-bosun reads), `build_launch_command` and its flags, and the hooks in `repo_session_settings`.
+**To add an agent:** see [Agents](harnesses.md#adding-another). There are two so far, and a profile is
+only the first step.
 
 **A window can still stop at a screen nobody knew about.** So the watchdog's `stalled-start` check does
-not look at the screen: a Claude that has run for five minutes without writing its session record has
+not look at the screen: an agent that has run for five minutes without writing its session record has
 not reached a session. It alerts and leaves the answer to you. bosun never answers these screens with a
 keypress, since several of them default to exit, and a key sent to a screen it misread can agree to
 something nobody saw.
@@ -136,6 +137,9 @@ something nobody saw.
 Docker on a Mac runs Linux, so `tests/sandbox/macos/` holds stand-ins that record what they are asked
 and keep the state `bosun doctor` reads. A macOS guest cannot sleep, so only real hardware proves a wake.
 How to choose and set them up: [docs/development.md](../development.md#which-sandbox-for-what).
+
+On Codex the same first day runs in the Docker sandbox on a stand-in (`the_first_day_on_codex`), and for
+real with `tests/sandbox.sh mac live codex`.
 
 ## What comes next
 

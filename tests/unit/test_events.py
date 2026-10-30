@@ -419,7 +419,7 @@ class QueueTest(unittest.TestCase):
         data = {
             "orchestrator": {"pid": 7, "name": "o-1", "expected_name": "o-2"},
             "client_idle_minutes": None,
-            "windows": [{"name": "exporter", "claude_pid": 8}, {"name": "shell", "claude_pid": None}],
+            "windows": [{"name": "exporter", "agent_pid": 8}, {"name": "shell", "agent_pid": None}],
         }
         facts = Facts.from_json(json.loads(json.dumps(data)))
         self.assertEqual(

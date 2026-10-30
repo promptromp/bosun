@@ -24,7 +24,7 @@ light or dark mode and works down to a narrow window.
   Confluence, Slack or Web, and the history. Only `http(s)` links are clickable; they open in a
   new tab.
 - **Sessions** (`#/sessions`): a card per window (`bosun sessions --json`): its kind, folder,
-  model and effort, its Claude's status (idle, busy, shell, waiting) and for how long, the items it
+  model and effort, its agent's status (idle, busy, shell, waiting) and for how long, the items it
   holds, its active item and whether it works on it now, its last report, its login verdict, and
   the `tmux attach` command with a copy button. Below, **Health**: the watchdog's checks (as
   `watchdog --status` shows them; nothing is alerted or recorded), today's morning run and the
@@ -95,8 +95,8 @@ light or dark mode and works down to a narrow window.
   knowledge entities only by an opaque key from a list it builds itself
   (no path from a request ever reaches the filesystem). It reads `ledger.json` as a snapshot (never its lock), re-read when the file changes.
   It reads the windows the way `bosun sessions --json` and the watchdog do (list them, read
-  Claude Code's session records), at most every 10 s; it never sends keys to a pane, never reads
-  a pane's text and never starts Claude.
+  each agent's session records), at most every 10 s; it never sends keys to a pane, never reads
+  a pane's text and never starts an agent.
 - It logs only refused requests (to stderr), never ledger content or item ids.
 
 ## Impact
@@ -109,7 +109,9 @@ time to merge, reviews given per week and time to my first review, agent busy ho
 touch time (leverage, week by week and before the start against since where transcripts from before
 exist), what learning has produced (runs, findings that came back, proposals, the knowledge base's
 growth), cost per week and per merged PR, and where agent time went per window, with the PRs behind
-each week as links. Estimates (my touch time: `BOSUN_IMPACT_PROMPT_MINUTES` per
+each week as links. Codex windows are not counted yet
+([what they lack](design/harnesses.md#what-codex-windows-do-not-have-yet)), so with them leverage and cost
+come out low. Estimates (my touch time: `BOSUN_IMPACT_PROMPT_MINUTES` per
 prompt I typed; cost at list prices) carry an "estimate" badge and a range, every number says how
 many weeks it rests on, and fewer than four weeks since the start is marked early data. Other people
 are never named. The view reads the snapshot `bosun impact collect` writes to

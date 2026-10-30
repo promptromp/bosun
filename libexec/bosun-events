@@ -44,17 +44,17 @@ done
 collect_facts() {
   local pane_pid pid="" name="" idle windows
   read -r pane_pid _ <<<"$(find_window "$BOSUN_ORCHESTRATOR")"
-  if [ -n "${pane_pid:-}" ] && pid="$(claude_pid_under "$pane_pid")"; then
-    name="$(claude_session_field "$pid" name)"
+  if [ -n "${pane_pid:-}" ] && pid="$(agent_pid_under "$pane_pid")"; then
+    name="$(agent_session_field "$pid" name)"
   fi
   idle="$(minutes_since_client_input)" || idle=""
-  windows="$(window_claude_pids)"
-  jq -n --arg pid "$pid" --arg name "$name" --arg expected "$(expected_claude_name "$BOSUN_ORCHESTRATOR")" \
+  windows="$(window_agent_pids)"
+  jq -n --arg pid "$pid" --arg name "$name" --arg expected "$(expected_session_name "$BOSUN_ORCHESTRATOR")" \
     --arg idle "$idle" --arg windows "$windows" '{
       orchestrator: {pid: (if $pid == "" then null else ($pid | tonumber) end), name: $name, expected_name: $expected},
       client_idle_minutes: (if $idle == "" then null else ($idle | tonumber) end),
       windows: [$windows | split("\n")[] | select(length > 0) | split("\t")
-        | {name: .[0], claude_pid: ((.[1] // "") | if . == "" then null else tonumber end)}]
+        | {name: .[0], agent_pid: ((.[1] // "") | if . == "" then null else tonumber end)}]
     }'
 }
 

@@ -12,8 +12,8 @@ issue.
 
 ## Setting up
 
-The [requirements](docs/setup.md#requirements) are macOS, tmux, jq, Python 3.13 or newer, the GitHub
-CLI and Claude Code; for development also [uv](https://docs.astral.sh/uv/). Fork the repository,
+The [requirements](docs/setup.md#requirements) are macOS, Homebrew, tmux, jq, Python 3.13 or newer, the GitHub
+CLI and Claude Code (Codex is optional); for development also [uv](https://docs.astral.sh/uv/). Fork the repository,
 then:
 
 ```bash
@@ -34,7 +34,7 @@ parts your change touches.
 
 - **Tests.** Add a unit test in `tests/unit/` for a change to `lib/*.py`, and a check in
   `tests/smoke.sh` for a command's behaviour. Before you push, run `tests/smoke.sh` (hermetic: its
-  own HOME, tmux socket and a fake Claude) and `uv run pre-commit run --all-files`. Never test an install
+  own HOME, tmux socket and a fake agent) and `uv run pre-commit run --all-files`. Never test an install
   on your own Mac: [the sandboxes](docs/development.md#which-sandbox-for-what) are throwaway machines.
 - **Wording that Claude acts on** (`orchestrator/policy.md`, the task files, the prompts) is
   tested against the real Claude by `tests/llm/`. Those runs cost money, so CI does not run them:
