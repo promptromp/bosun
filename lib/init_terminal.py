@@ -16,6 +16,7 @@ from init_wizard import ENTER
 ANSI = re.compile(r"\x1b\[[0-9;]*[A-Za-z]")
 CLEAR = "\x1b[H\x1b[2J"
 ESCAPE, CTRL_C, CTRL_D = b"\x1b", b"\x03", b"\x04"
+NUL = b"\x00"  # what Linux can turn Ctrl-D into, if it was pressed just before the mode switch
 ESCAPE_SEQUENCE_SECONDS = 0.05  # how long the rest of an arrow key's bytes may take
 
 
@@ -62,7 +63,7 @@ class TerminalUi:
         """One key, lowercase: ENTER for Return, "" for Ctrl-D or the end of the input, and an escape
         sequence as a key that means nothing."""
         data = self.read_byte()
-        if data in (b"", CTRL_D):
+        if data in (b"", CTRL_D, NUL):
             return ""
         if data in (b"\r", b"\n"):
             return ENTER

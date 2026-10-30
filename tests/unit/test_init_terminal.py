@@ -58,6 +58,10 @@ class PtyTest(unittest.TestCase):
         os.write(self.master, b"\x04")
         self.assertEqual(self.ui.key(), "")
 
+    def test_ctrl_d_as_linux_can_deliver_it_ends_the_input_too(self) -> None:
+        with mock.patch.object(self.ui, "read_byte", return_value=b"\x00"):
+            self.assertEqual(self.ui.key(), "")
+
     def test_a_terminal_that_went_away_ends_the_input(self) -> None:
         self.close_master()
         self.assertEqual(self.ui.key(), "")
