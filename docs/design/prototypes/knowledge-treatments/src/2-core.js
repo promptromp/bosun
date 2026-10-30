@@ -198,7 +198,7 @@ KG.active = null;
 KG.focus = function (id) { const t = KG.treatments[KG.active]; if (t && t.focus) t.focus(id); };
 
 function activate(key, pushHash = true) {
-  if (!KG.treatments[key]) key = 'A';
+  if (!Object.hasOwn(KG.treatments, key)) key = 'A';
   if (KG.active === key) return;
   const prev = KG.treatments[KG.active];
   if (prev && prev.hide) prev.hide();
