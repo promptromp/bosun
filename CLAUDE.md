@@ -181,7 +181,8 @@ request's commits (`gitleaks`; a made-up value in a test carries a `gitleaks:all
 logs are public, so neither check prints what it matched. `main` takes changes only through a pull
 request with those checks green and up to date with `main`, CodeQL's results clean (GitHub's
 default setup; no error alerts, no high or critical security alerts) and every review thread
-resolved, including those of the Copilot review on each push; squashed or rebased: the ruleset in
+resolved (the ruleset also asks for a Copilot review on each push, which takes effect once
+Copilot code review is enabled for the organization); squashed or rebased: the ruleset in
 `.github/rulesets/main.json`. A new or renamed job goes in its list too, applied with `gh api -X PUT
 repos/{owner}/{repo}/rulesets/<id> --input .github/rulesets/main.json`. Dependabot
 (`.github/dependabot.yml`) opens monthly grouped updates of the actions, `uv.lock` and the hook
