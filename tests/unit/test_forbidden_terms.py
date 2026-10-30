@@ -124,6 +124,13 @@ class ForbiddenTermsTest(unittest.TestCase):
         path.write_bytes(b"\xff\xfe Initech \x00")
         self.assertEqual(self.run_check(str(path))[0], forbidden_terms.EXIT_FOUND)
 
+    def test_a_binary_file_is_only_checked_in_its_readable_text(self) -> None:
+        path = self.base / "image.png"
+        path.write_bytes(b"\x89PNG\x00\xffInitech\x00")  # seven bytes of compressed data, by chance
+        self.assertEqual(self.run_check(str(path))[0], 0)
+        path.write_bytes(b"\x89PNG\x00\xffSoftware: Initech 1.0\x00")  # metadata
+        self.assertEqual(self.run_check(str(path))[0], forbidden_terms.EXIT_FOUND)
+
     def test_default_list_location(self) -> None:
         with mock.patch.dict(os.environ, {"BOSUN_CONFIG_DIR": ""}):
             expected = Path("~/.config/bosun/forbidden-terms.txt").expanduser()

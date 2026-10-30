@@ -12,7 +12,8 @@ never has to contain them. Without the file every check passes, so other users a
 affected. Paths are checked as given (pre-commit passes them relative to the repo);
 --contents-only skips them, as for a commit message file outside the repo. --redact (or
 FORBIDDEN_TERMS_REDACT=1, as CI sets it) leaves out the matched text, which would otherwise show
-the term itself in a log that anyone can read.
+the term itself in a log that anyone can read. In a binary file only its runs of readable text are
+checked: metadata can hold a name, but a short term turns up by chance in compressed data.
 
 Exit status: 0 nothing found (or no list), 1 a match, 2 the list or a file cannot be read, or a
 pattern is invalid.
@@ -33,6 +34,7 @@ DEFAULT_CONFIG_DIR = "~/.config/bosun"
 EXIT_FOUND = 1
 EXIT_ERROR = 2
 PATH_LINE = 0  # Hit.line for a match in the file's path
+READABLE_RUN = re.compile(rb"[\x20-\x7e]{8,}")
 
 
 class TermsError(Exception):
@@ -87,14 +89,21 @@ def scan_line(path: str, number: int, text: str, terms: list[Term]) -> list[Hit]
     return [Hit(path, number, term, match.group(0)) for term in terms if (match := term.pattern.search(text))]
 
 
+def lines_to_check(data: bytes) -> list[str]:
+    """A text file's lines (read as UTF-8, invalid bytes replaced), a binary file's readable runs."""
+    if b"\0" in data:
+        return [run.decode("ascii") for run in READABLE_RUN.findall(data)]
+    return data.decode("utf-8", errors="replace").splitlines()
+
+
 def scan_file(path: str, terms: list[Term], check_path: bool = True) -> list[Hit]:
-    """Matches in <path>'s text (read as UTF-8, invalid bytes replaced), and in <path> itself."""
+    """Matches in <path>'s contents, and in <path> itself."""
     try:
-        text = Path(path).read_text(encoding="utf-8", errors="replace")
+        data = Path(path).read_bytes()
     except OSError as error:
         raise TermsError(f"cannot read {path}: {error}") from error
     hits = scan_line(path, PATH_LINE, path, terms) if check_path else []
-    for number, line in enumerate(text.splitlines(), 1):
+    for number, line in enumerate(lines_to_check(data), 1):
         hits.extend(scan_line(path, number, line, terms))
     return hits
 
