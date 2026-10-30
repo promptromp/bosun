@@ -1083,6 +1083,7 @@ KG.treatments = {};   // key -> { init(), show(), hide(), focus(id) }
 KG.active = null;
 KG.focus = function (id) { const t = KG.treatments[KG.active]; if (t && t.focus) t.focus(id); };
 
+const started = new Set();   // the treatments whose init() has run
 function activate(key, pushHash = true) {
   if (!Object.hasOwn(KG.treatments, key)) key = 'A';
   if (KG.active === key) return;
@@ -1094,7 +1095,7 @@ function activate(key, pushHash = true) {
   $$('.notes').forEach(m => m.classList.toggle('active', m.id === 'notes-' + key));
   KG.active = key;
   const t = KG.treatments[key];
-  if (!t.inited) { t.init(); t.inited = true; }
+  if (!started.has(key)) { t.init(); started.add(key); }
   if (t.show) t.show();
   if (pushHash) history.replaceState(null, '', '#' + key);
 }
@@ -1853,7 +1854,7 @@ KG.treatments.B = (function () {
   function redraw() { drawMetro(); drawPeople(); drawProduct(); }
 
   return {
-    init() { redraw(); bind(); KG.bus.on('theme', () => { if (KG.treatments.B.inited) redraw(); }); KG.bus.on('status', () => { drawPeople(); drawProduct(); }); },
+    init() { redraw(); bind(); KG.bus.on('theme', () => redraw()); KG.bus.on('status', () => { drawPeople(); drawProduct(); }); },
     show() { running = true; raf = requestAnimationFrame(animate); },
     hide() { running = false; cancelAnimationFrame(raf); highlight(null); },
     focus(id) { KG.drawer.open(id); highlight(id); },
@@ -2106,7 +2107,7 @@ KG.treatments.C = (function () {
   }
   return {
     init() { wrap = $('#c-wrap'); buildBatch(); render(); bind(); KG.bus.on('theme', () => { if (KG.active === 'C') { $('.c-strip', wrap).innerHTML = stripHtml(); } }); },
-    show() { if (this.inited && wrap.children.length) animateIn(); },
+    show() { if (wrap.children.length) animateIn(); },
     hide() {},
     focus(id) { KG.drawer.open(id); },
   };

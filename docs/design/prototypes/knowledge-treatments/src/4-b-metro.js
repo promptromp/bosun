@@ -334,7 +334,7 @@ KG.treatments.B = (function () {
   function redraw() { drawMetro(); drawPeople(); drawProduct(); }
 
   return {
-    init() { redraw(); bind(); KG.bus.on('theme', () => { if (KG.treatments.B.inited) redraw(); }); KG.bus.on('status', () => { drawPeople(); drawProduct(); }); },
+    init() { redraw(); bind(); KG.bus.on('theme', () => redraw()); KG.bus.on('status', () => { drawPeople(); drawProduct(); }); },
     show() { running = true; raf = requestAnimationFrame(animate); },
     hide() { running = false; cancelAnimationFrame(raf); highlight(null); },
     focus(id) { KG.drawer.open(id); highlight(id); },
