@@ -1,0 +1,2398 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Knowledge home - visualization treatments (prototype)</title>
+<style>
+/* =========================================================================
+   1. Design tokens. Dark is the default; light is a selected theme, not an
+   automatic inversion. Axis colors were checked with a palette validator:
+   People / Process / Product pass all-pairs CVD separation in both modes.
+   Systems is deliberately a neutral (the "substrate" layer) and always
+   carries a secondary encoding (hexagon shape + label), never color alone.
+   ========================================================================= */
+:root {
+  --font: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  --mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  --r-sm: 6px; --r-md: 10px; --r-lg: 16px;
+  --ease-out: cubic-bezier(.2, .8, .2, 1);
+  --ease-spring: cubic-bezier(.34, 1.56, .64, 1);
+}
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --bg: #0c0d0f; --surface: #141518; --surface-2: #1a1c20; --surface-3: #23262b;
+  --line: #2b2e34; --line-2: #3a3e45;
+  --ink: #f0efec; --ink-2: #c3c2b7; --ink-3: #8f8e87;
+  --people: #3987e5; --process: #d95926; --product: #199e70; --systems: #9a9890;
+  --accent: #7fb0ff; --focus: #9cc2ff;
+  --good: #3fae6a; --warn: #c98500; --bad: #e66767;
+  --m1: #3987e5; --m2: #d95926; --m3: #199e70; --m4: #c98500; --m5: #d55181; --m6: #2f9a3a; --m7: #9085e9; --m8: #e66767;
+  --glow: 1;
+  --vignette: radial-gradient(1200px 700px at 50% 40%, #171a20 0%, #0c0d0f 70%);
+  --shadow: 0 10px 40px rgba(0,0,0,.45), 0 2px 8px rgba(0,0,0,.35);
+  --glass: rgba(20,21,24,.72);
+}
+:root[data-theme="light"] {
+  color-scheme: light;
+  --bg: #f1f1ee; --surface: #fcfcfb; --surface-2: #f5f5f2; --surface-3: #eaeae5;
+  --line: #deded8; --line-2: #cbcbc4;
+  --ink: #0b0b0b; --ink-2: #52514e; --ink-3: #77766f;
+  --people: #2a78d6; --process: #eb6834; --product: #1baf7a; --systems: #6f6e69;
+  --accent: #2a63c4; --focus: #2a63c4;
+  --good: #1d7f45; --warn: #a86f00; --bad: #c93c3b;
+  --m1: #2a78d6; --m2: #eb6834; --m3: #1baf7a; --m4: #eda100; --m5: #e87ba4; --m6: #008300; --m7: #6250d6; --m8: #e34948;
+  --glow: 0;
+  --vignette: radial-gradient(1200px 700px at 50% 40%, #ffffff 0%, #f1f1ee 75%);
+  --shadow: 0 10px 30px rgba(20,20,10,.10), 0 2px 6px rgba(20,20,10,.08);
+  --glass: rgba(252,252,251,.80);
+}
+
+/* =========================================================================
+   2. Base
+   ========================================================================= */
+* { box-sizing: border-box; }
+html, body { margin: 0; background: var(--bg); color: var(--ink); font-family: var(--font); font-size: 14px; line-height: 1.45; }
+body { min-width: 1280px; transition: background-color .3s, color .3s; }
+a { color: var(--accent); text-decoration: none; }
+a:hover { text-decoration: underline; }
+button { font: inherit; color: inherit; }
+:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; border-radius: 4px; }
+.sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+.mono { font-family: var(--mono); }
+.muted { color: var(--ink-3); }
+@media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation-duration: .001ms !important; transition-duration: .001ms !important; } }
+:root.reduce-motion *, :root.reduce-motion *::before, :root.reduce-motion *::after { animation-duration: .001ms !important; transition-duration: .001ms !important; }
+
+/* =========================================================================
+   3. Page header: title, research paragraph, treatment switcher, toggles
+   ========================================================================= */
+.top { display: grid; grid-template-columns: minmax(420px, 1fr) auto; gap: 10px 32px; padding: 16px 28px 12px; border-bottom: 1px solid var(--line); background: var(--surface); }
+.brand { display: flex; align-items: center; gap: 12px; }
+.brand-mark { width: 30px; height: 30px; flex: none; }
+.brand h1 { margin: 0; font-size: 17px; font-weight: 650; letter-spacing: -.01em; }
+.brand .sub { margin: 0; color: var(--ink-3); font-size: 12px; }
+.controls { display: flex; align-items: center; gap: 12px; justify-content: flex-end; }
+.seg { display: inline-flex; padding: 3px; gap: 2px; background: var(--surface-3); border-radius: 10px; border: 1px solid var(--line); }
+.seg button { border: 0; background: transparent; padding: 7px 14px; border-radius: 8px; cursor: pointer; color: var(--ink-2); font-weight: 550; display: inline-flex; gap: 8px; align-items: center; transition: background-color .2s, color .2s; }
+.seg button .k { font-family: var(--mono); font-size: 11px; width: 18px; height: 18px; border-radius: 5px; display: inline-grid; place-items: center; background: var(--surface-2); color: var(--ink-3); border: 1px solid var(--line); }
+.seg button[aria-selected="true"] { background: var(--surface); color: var(--ink); box-shadow: 0 1px 3px rgba(0,0,0,.25); }
+.seg button[aria-selected="true"] .k { background: var(--accent); color: var(--surface); border-color: transparent; }
+.toggle { border: 1px solid var(--line); background: var(--surface-2); padding: 7px 12px; border-radius: 8px; cursor: pointer; color: var(--ink-2); display: inline-flex; align-items: center; gap: 6px; }
+.toggle[aria-pressed="true"] { color: var(--ink); border-color: var(--line-2); }
+.research { grid-column: 1 / -1; display: grid; grid-template-columns: 1fr auto; gap: 16px; align-items: start; }
+.research p { margin: 0; color: var(--ink-2); font-size: 12.5px; max-width: 1400px; }
+.research details { font-size: 12.5px; }
+.research summary { cursor: pointer; color: var(--accent); white-space: nowrap; list-style: none; }
+.research summary::-webkit-details-marker { display: none; }
+.ideas { position: absolute; right: 28px; z-index: 60; width: 760px; margin-top: 8px; padding: 18px 22px; background: var(--surface); border: 1px solid var(--line-2); border-radius: var(--r-lg); box-shadow: var(--shadow); }
+.ideas ol { margin: 0; padding-left: 18px; display: grid; gap: 8px; }
+.ideas li { color: var(--ink-2); }
+.ideas li b { color: var(--ink); font-weight: 600; }
+
+/* =========================================================================
+   4. Stage + shared "console chrome" around each mock
+   ========================================================================= */
+.stage { position: relative; margin: 14px 20px 0; height: max(640px, calc(100vh - var(--hdr, 170px) - 28px)); border-radius: var(--r-lg); overflow: hidden; border: 1px solid var(--line); background: var(--vignette); box-shadow: var(--shadow); }
+.mock { position: absolute; inset: 0; display: none; }
+.mock.active { display: block; animation: mockIn .45s var(--ease-out); }
+@keyframes mockIn { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
+.chrome { position: absolute; left: 0; right: 0; top: 0; height: 52px; display: flex; align-items: center; gap: 16px; padding: 0 18px; z-index: 20; pointer-events: none; }
+.chrome > * { pointer-events: auto; }
+.chrome .title { font-size: 15px; font-weight: 650; letter-spacing: -.01em; display: flex; align-items: center; gap: 10px; }
+.chrome .crumbs { color: var(--ink-3); font-size: 12.5px; }
+.chrome .spacer { flex: 1; pointer-events: none; }
+.stat-pills { display: flex; gap: 6px; }
+.pill { font-size: 12px; padding: 4px 10px; border-radius: 999px; background: var(--glass); border: 1px solid var(--line); color: var(--ink-2); backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px); white-space: nowrap; }
+.pill b { color: var(--ink); font-weight: 600; }
+.btn { border: 1px solid var(--line-2); background: var(--surface-2); color: var(--ink); padding: 6px 12px; border-radius: 8px; cursor: pointer; font-size: 12.5px; display: inline-flex; align-items: center; gap: 6px; transition: background-color .15s, border-color .15s, transform .15s; }
+.btn:hover { background: var(--surface-3); }
+.btn:active { transform: scale(.97); }
+.btn.ghost { background: transparent; border-color: var(--line); color: var(--ink-2); }
+.btn.primary { background: var(--accent); border-color: transparent; color: var(--surface); font-weight: 600; }
+.live-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--good); box-shadow: 0 0 0 0 var(--good); animation: live 2.4s infinite; }
+@keyframes live { 0% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--good) 60%, transparent); } 70% { box-shadow: 0 0 0 8px transparent; } 100% { box-shadow: 0 0 0 0 transparent; } }
+
+/* Notes strip below each treatment */
+.notes { margin: 14px 20px 40px; display: none; grid-template-columns: 1.2fr 1.2fr 1fr 1fr; gap: 14px; }
+.notes.active { display: grid; }
+.note { background: var(--surface); border: 1px solid var(--line); border-radius: var(--r-md); padding: 14px 16px; }
+.note h3 { margin: 0 0 6px; font-size: 11.5px; letter-spacing: .06em; text-transform: uppercase; color: var(--ink-3); font-weight: 650; }
+.note p, .note ul { margin: 0; color: var(--ink-2); font-size: 13px; }
+.note ul { padding-left: 16px; }
+.note li + li { margin-top: 3px; }
+.note b { color: var(--ink); font-weight: 600; }
+
+/* =========================================================================
+   5. Shared bits: badges, entity chips, legend, toast, tooltip, drawer
+   ========================================================================= */
+.badge { display: inline-flex; align-items: center; gap: 4px; font-size: 11px; padding: 1px 7px; border-radius: 999px; border: 1px solid var(--line-2); color: var(--ink-2); white-space: nowrap; line-height: 17px; }
+.badge.st-confirmed { border-color: color-mix(in srgb, var(--good) 60%, transparent); color: var(--good); }
+.badge.st-proposed { border-style: dashed; }
+.badge.st-superseded { text-decoration: line-through; color: var(--ink-3); }
+.badge.st-rejected { border-color: color-mix(in srgb, var(--bad) 60%, transparent); color: var(--bad); }
+.chip { display: inline-flex; align-items: center; gap: 6px; padding: 2px 8px 2px 6px; border-radius: 6px; background: var(--surface-3); border: 1px solid var(--line); font-size: 12px; color: var(--ink); cursor: pointer; white-space: nowrap; max-width: 100%; overflow: hidden; text-overflow: ellipsis; }
+.chip:hover { border-color: var(--line-2); }
+.chip svg { flex: none; }
+.axis-chip { display: inline-flex; align-items: center; gap: 6px; padding: 5px 10px; border-radius: 999px; border: 1px solid var(--line); background: var(--glass); color: var(--ink-2); cursor: pointer; font-size: 12px; backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px); transition: opacity .2s, border-color .2s; }
+.axis-chip[aria-pressed="false"] { opacity: .45; }
+.axis-chip .n { color: var(--ink-3); font-variant-numeric: tabular-nums; }
+.toast { position: fixed; left: 50%; bottom: 24px; transform: translate(-50%, 20px); opacity: 0; background: var(--surface-3); color: var(--ink); border: 1px solid var(--line-2); padding: 10px 16px; border-radius: 10px; box-shadow: var(--shadow); transition: opacity .25s, transform .25s var(--ease-out); z-index: 100; pointer-events: none; font-size: 13px; }
+.toast.show { opacity: 1; transform: translate(-50%, 0); }
+.tip { position: absolute; z-index: 40; pointer-events: none; background: var(--glass); backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px); border: 1px solid var(--line-2); border-radius: 8px; padding: 7px 10px; font-size: 12px; color: var(--ink); box-shadow: var(--shadow); max-width: 280px; opacity: 0; transition: opacity .12s; }
+.tip.show { opacity: 1; }
+.tip .t2 { color: var(--ink-3); font-size: 11.5px; }
+
+.drawer { position: absolute; top: 12px; right: 12px; bottom: 12px; width: 400px; z-index: 30; background: var(--glass); backdrop-filter: blur(16px) saturate(1.2); -webkit-backdrop-filter: blur(16px) saturate(1.2); border: 1px solid var(--line-2); border-radius: var(--r-lg); box-shadow: var(--shadow); transform: translateX(calc(100% + 24px)); transition: transform .38s var(--ease-out); display: flex; flex-direction: column; overflow: hidden; }
+.drawer.open { transform: none; }
+.drawer .close { position: absolute; right: 10px; top: 10px; }
+.detail { padding: 18px 18px 8px; overflow: auto; flex: 1; }
+.detail .kicker { display: flex; align-items: center; gap: 8px; font-size: 11.5px; color: var(--ink-3); text-transform: uppercase; letter-spacing: .06em; }
+.detail h2 { margin: 6px 0 4px; font-size: 20px; letter-spacing: -.015em; line-height: 1.2; padding-right: 30px; }
+.detail .summary { color: var(--ink-2); margin: 0 0 12px; }
+.detail .mini-stats { display: flex; gap: 14px; margin: 8px 0 14px; font-size: 12px; color: var(--ink-3); }
+.detail .mini-stats b { display: block; font-size: 18px; color: var(--ink); font-variant-numeric: tabular-nums; }
+.detail h4 { margin: 14px 0 6px; font-size: 11px; text-transform: uppercase; letter-spacing: .06em; color: var(--ink-3); }
+.fact { padding: 9px 10px; border-radius: 8px; border: 1px solid var(--line); background: var(--surface-2); margin-bottom: 6px; transition: border-color .2s, opacity .3s; }
+.fact.proposed { border-style: dashed; }
+.fact.superseded { opacity: .6; }
+.fact.superseded .fv { text-decoration: line-through; }
+.fact .fp { font-size: 11px; color: var(--ink-3); text-transform: uppercase; letter-spacing: .05em; }
+.fact .fv { margin: 2px 0 6px; color: var(--ink); }
+.fact .fm { display: flex; flex-wrap: wrap; gap: 5px; align-items: center; font-size: 11px; color: var(--ink-3); }
+.fact .fm .src { font-family: var(--mono); font-size: 10.5px; }
+.fact .ok { margin-left: auto; border: 1px solid var(--line-2); background: transparent; border-radius: 6px; font-size: 11px; padding: 1px 8px; cursor: pointer; color: var(--ink-2); }
+.fact .ok:hover { color: var(--good); border-color: var(--good); }
+.detail-foot { border-top: 1px solid var(--line); padding: 10px 18px; display: flex; gap: 8px; align-items: center; font-size: 12px; color: var(--ink-3); }
+
+/* =========================================================================
+   6. Treatment A: Constellation
+   ========================================================================= */
+#mock-A canvas { position: absolute; inset: 0; width: 100%; height: 100%; display: block; cursor: grab; touch-action: none; }
+#mock-A canvas.dragging { cursor: grabbing; }
+#mock-A canvas.pointer { cursor: pointer; }
+.a-search { position: absolute; top: 60px; left: 18px; width: 320px; z-index: 22; }
+.a-search input { width: 100%; padding: 10px 12px 10px 34px; border-radius: 10px; border: 1px solid var(--line-2); background: var(--glass); color: var(--ink); font: inherit; backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px); box-shadow: var(--shadow); }
+.a-search input::placeholder { color: var(--ink-3); }
+.a-search .ico { position: absolute; left: 11px; top: 11px; color: var(--ink-3); }
+.a-search .kbd { position: absolute; right: 10px; top: 9px; font-family: var(--mono); font-size: 11px; color: var(--ink-3); border: 1px solid var(--line-2); border-radius: 5px; padding: 0 5px; }
+.a-results { margin-top: 6px; background: var(--surface); border: 1px solid var(--line-2); border-radius: 10px; box-shadow: var(--shadow); overflow: hidden; display: none; }
+.a-results.show { display: block; }
+.a-results button { display: flex; width: 100%; border: 0; background: transparent; padding: 8px 12px; gap: 8px; align-items: center; cursor: pointer; text-align: left; }
+.a-results button[aria-selected="true"], .a-results button:hover { background: var(--surface-3); }
+.a-results .t { color: var(--ink-3); font-size: 11.5px; margin-left: auto; }
+.a-chips { position: absolute; top: 110px; left: 18px; display: flex; gap: 6px; z-index: 21; flex-wrap: wrap; width: 420px; }
+.a-time { position: absolute; left: 18px; bottom: 16px; width: min(620px, 46%); z-index: 21; padding: 10px 14px 10px; border-radius: 12px; background: var(--glass); border: 1px solid var(--line); backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px); display: grid; grid-template-columns: auto 1fr; gap: 4px 12px; align-items: center; }
+.a-time .lbl { font-size: 11.5px; color: var(--ink-3); grid-column: 1 / -1; display: flex; justify-content: space-between; }
+.a-time .lbl b { color: var(--ink); font-weight: 600; }
+.a-hist { position: relative; height: 40px; }
+.a-hist .bars { position: absolute; inset: 0 0 16px 0; display: flex; gap: 4px; align-items: flex-end; }
+.a-hist .bars i { flex: 1; background: color-mix(in srgb, var(--accent) 35%, transparent); border-radius: 3px 3px 0 0; transition: background-color .2s; }
+.a-hist .bars i.on { background: color-mix(in srgb, var(--accent) 80%, transparent); }
+.a-hist input[type=range] { position: absolute; left: 0; right: 0; bottom: -2px; width: 100%; margin: 0; accent-color: var(--accent); }
+.a-play { width: 34px; height: 34px; border-radius: 50%; border: 1px solid var(--line-2); background: var(--surface-2); cursor: pointer; display: grid; place-items: center; }
+.a-legend { position: absolute; right: 18px; bottom: 16px; z-index: 21; padding: 10px 14px; border-radius: 12px; background: var(--glass); border: 1px solid var(--line); backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px); font-size: 12px; color: var(--ink-2); display: grid; gap: 5px; }
+.a-legend .row { display: flex; align-items: center; gap: 8px; }
+.a-zoom { position: absolute; right: 18px; top: 64px; z-index: 21; display: flex; flex-direction: column; gap: 4px; }
+.a-zoom button { width: 32px; height: 32px; border-radius: 8px; border: 1px solid var(--line); background: var(--glass); cursor: pointer; backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px); }
+.drawer-open .a-zoom { right: 428px; }
+
+/* =========================================================================
+   7. Treatment B: Metro map + atlas
+   ========================================================================= */
+.b-grid { position: absolute; inset: 52px 12px 12px; display: grid; grid-template-columns: 2fr 1fr; gap: 12px; }
+.panel { background: color-mix(in srgb, var(--surface) 82%, transparent); border: 1px solid var(--line); border-radius: var(--r-lg); position: relative; overflow: hidden; }
+.panel-h { display: flex; align-items: baseline; gap: 10px; padding: 12px 16px 0; }
+.panel-h h3 { margin: 0; font-size: 13px; font-weight: 650; }
+.panel-h .muted { font-size: 12px; }
+#b-metro { width: 100%; height: calc(100% - 36px); display: block; }
+.b-atlas { display: grid; grid-template-rows: .85fr 1.15fr; gap: 12px; background: transparent; border: 0; }
+.b-atlas .panel > svg { width: 100%; height: calc(100% - 34px); display: block; }
+.metro-line { fill: none; stroke-linecap: round; stroke-linejoin: round; transition: opacity .25s, stroke-width .25s; }
+.metro-station { cursor: pointer; transition: opacity .25s; }
+.metro-station:focus-visible { outline: none; }
+.metro-station:focus-visible circle, .metro-station:focus-visible rect { stroke: var(--focus); stroke-width: 3; }
+.metro-label { font-size: 11.5px; fill: var(--ink-2); pointer-events: none; transition: opacity .25s, fill .25s; }
+.metro-label.strong { fill: var(--ink); font-weight: 600; }
+.metro-tag { font-size: 12px; font-weight: 650; fill: #fff; pointer-events: none; }
+.dim { opacity: .14 !important; }
+.b-leg { position: absolute; left: 16px; bottom: 10px; display: flex; gap: 16px; font-size: 11.5px; color: var(--ink-3); align-items: center; }
+.b-leg span { display: inline-flex; gap: 6px; align-items: center; }
+.atlas-node { cursor: pointer; transition: opacity .25s; }
+.atlas-node:focus-visible { outline: none; }
+.atlas-node:focus-visible > :first-child { stroke: var(--focus); stroke-width: 2.5; }
+.tm-label { font-size: 11px; fill: var(--ink); pointer-events: none; }
+.tm-sub { font-size: 10px; fill: var(--ink-3); pointer-events: none; }
+.tm-group { font-size: 10.5px; fill: var(--ink-3); text-transform: uppercase; letter-spacing: .06em; pointer-events: none; font-weight: 650; }
+
+/* =========================================================================
+   8. Treatment C: Briefing feed
+   ========================================================================= */
+.c-wrap { position: absolute; inset: 52px 14px 14px; display: grid; grid-template-columns: 1.35fr 1fr; grid-template-rows: auto 1fr auto; gap: 12px; }
+.c-hero { grid-column: 1 / -1; display: grid; grid-template-columns: 1.15fr .9fr .9fr .8fr; gap: 12px; }
+.c-tile { background: color-mix(in srgb, var(--surface) 86%, transparent); border: 1px solid var(--line); border-radius: var(--r-lg); padding: 14px 16px; position: relative; overflow: hidden; }
+.c-tile h3 { margin: 0 0 4px; font-size: 11.5px; letter-spacing: .06em; text-transform: uppercase; color: var(--ink-3); font-weight: 650; }
+.c-greet h2 { margin: 2px 0 6px; font-size: 22px; letter-spacing: -.02em; line-height: 1.2; }
+.c-greet p { margin: 0; color: var(--ink-2); font-size: 13px; }
+.c-big { font-size: 38px; font-weight: 700; letter-spacing: -.03em; font-variant-numeric: tabular-nums; line-height: 1.05; }
+.c-big small { font-size: 13px; font-weight: 500; color: var(--ink-3); letter-spacing: 0; margin-left: 6px; }
+.c-delta { font-size: 12px; color: var(--ink-2); }
+.c-rings { display: flex; gap: 10px; margin-top: 6px; }
+.c-ring { text-align: center; font-size: 11px; color: var(--ink-3); }
+.c-ring svg { display: block; margin: 0 auto 2px; }
+.c-ring b { color: var(--ink); font-variant-numeric: tabular-nums; }
+.c-feed { display: flex; flex-direction: column; min-height: 0; }
+.c-feed .scroll { overflow: auto; padding: 4px 16px 16px; flex: 1; scroll-behavior: smooth; }
+.c-day { position: relative; padding-left: 22px; margin-top: 12px; }
+.c-day::before { content: ""; position: absolute; left: 6px; top: 22px; bottom: -12px; width: 1px; background: var(--line-2); }
+.c-day h4 { margin: 0 0 6px; font-size: 12px; color: var(--ink-2); font-weight: 650; display: flex; gap: 8px; align-items: center; }
+.c-day h4::before { content: ""; position: absolute; left: 2px; top: 4px; width: 9px; height: 9px; border-radius: 50%; background: var(--accent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 25%, transparent); }
+.c-item { display: flex; gap: 10px; align-items: flex-start; padding: 7px 10px; border-radius: 8px; transition: background-color .15s; cursor: pointer; }
+.c-item:hover, .c-item:focus-visible { background: var(--surface-3); }
+.c-item .txt { flex: 1; color: var(--ink-2); font-size: 13px; }
+.c-item .txt b { color: var(--ink); font-weight: 600; }
+.c-change { margin: 6px 0 8px; display: grid; grid-template-columns: 1fr 26px 1fr; align-items: stretch; gap: 0; border: 1px solid var(--line); border-radius: 10px; overflow: hidden; cursor: pointer; background: var(--surface-2); }
+.c-change > div { padding: 9px 12px; font-size: 12.5px; }
+.c-change .before { color: var(--ink-3); text-decoration: line-through; text-decoration-color: color-mix(in srgb, var(--bad) 70%, transparent); }
+.c-change .after { color: var(--ink); background: color-mix(in srgb, var(--good) 9%, transparent); }
+.c-change .arrow { display: grid; place-items: center; color: var(--ink-3); padding: 0; background: var(--surface-3); }
+.c-change .lab { display: block; font-size: 10px; text-transform: uppercase; letter-spacing: .06em; margin-bottom: 2px; text-decoration: none; color: var(--ink-3); }
+.c-review { display: flex; flex-direction: column; min-height: 0; }
+.c-stack { position: relative; flex: 1; margin: 6px 16px 8px; min-height: 230px; perspective: 1000px; }
+.c-card { position: absolute; inset: 0; background: var(--surface-2); border: 1px solid var(--line-2); border-radius: 14px; padding: 16px 18px; box-shadow: var(--shadow); transition: transform .35s var(--ease-out), opacity .35s; will-change: transform; display: flex; flex-direction: column; gap: 8px; user-select: none; touch-action: none; }
+.c-card.top { cursor: grab; }
+.c-card .group { font-size: 11px; text-transform: uppercase; letter-spacing: .06em; color: var(--ink-3); }
+.c-card .sentence { font-size: 17px; line-height: 1.35; letter-spacing: -.01em; }
+.c-card .sentence b { font-weight: 650; }
+.c-card .meta { margin-top: auto; display: flex; gap: 6px; flex-wrap: wrap; align-items: center; font-size: 11.5px; color: var(--ink-3); }
+.c-card .stamp { position: absolute; top: 16px; right: 16px; font-weight: 800; font-size: 13px; letter-spacing: .1em; padding: 3px 10px; border: 2px solid currentColor; border-radius: 6px; opacity: 0; transform: rotate(8deg); }
+.c-card .stamp.confirm { color: var(--good); }
+.c-card .stamp.reject { color: var(--bad); left: 16px; right: auto; transform: rotate(-8deg); }
+.c-card .stamp.skip { color: var(--ink-3); left: 50%; right: auto; transform: translateX(-50%); }
+.c-actions { display: flex; justify-content: center; gap: 10px; padding: 0 16px 14px; }
+.c-act { display: inline-flex; gap: 8px; align-items: center; padding: 9px 16px; border-radius: 999px; border: 1px solid var(--line-2); background: var(--surface-2); cursor: pointer; font-weight: 600; transition: transform .15s var(--ease-spring), border-color .15s, color .15s; }
+.c-act:hover { transform: translateY(-1px); }
+.c-act:active { transform: scale(.95); }
+.c-act.confirm:hover { color: var(--good); border-color: var(--good); }
+.c-act.reject:hover { color: var(--bad); border-color: var(--bad); }
+.c-act kbd { font-family: var(--mono); font-size: 10.5px; color: var(--ink-3); border: 1px solid var(--line-2); border-radius: 4px; padding: 0 4px; }
+.c-prog { display: flex; gap: 4px; padding: 0 16px; }
+.c-prog i { flex: 1; height: 4px; border-radius: 2px; background: var(--surface-3); transition: background-color .3s; }
+.c-prog i.confirmed { background: var(--good); } .c-prog i.rejected { background: var(--bad); } .c-prog i.skipped { background: var(--ink-3); } .c-prog i.cur { background: var(--accent); }
+.c-done { position: absolute; inset: 0; display: grid; place-items: center; text-align: center; color: var(--ink-2); }
+.c-done svg path { stroke-dasharray: 60; stroke-dashoffset: 60; animation: draw .6s .1s var(--ease-out) forwards; }
+@keyframes draw { to { stroke-dashoffset: 0; } }
+.c-strip { grid-column: 1 / -1; display: grid; grid-template-columns: repeat(6, 1fr); gap: 10px; }
+.c-ego { background: color-mix(in srgb, var(--surface) 86%, transparent); border: 1px solid var(--line); border-radius: 12px; padding: 8px 10px; display: grid; grid-template-columns: 74px 1fr; gap: 8px; align-items: center; cursor: pointer; transition: border-color .2s, transform .2s var(--ease-out); text-align: left; color: inherit; font: inherit; }
+.c-ego:hover { border-color: var(--line-2); transform: translateY(-2px); }
+.c-ego .nm { font-weight: 600; font-size: 12.5px; line-height: 1.25; }
+.c-ego .ds { font-size: 11px; color: var(--ink-3); }
+.spark path.area { opacity: .18; }
+
+/* =========================================================================
+   9. Treatment D: Radial explorer
+   ========================================================================= */
+.d-grid { position: absolute; inset: 52px 12px 12px; display: grid; grid-template-columns: 1fr 420px; gap: 12px; }
+.d-sun { position: relative; }
+.d-sun svg { position: absolute; inset: 0; width: 100%; height: 100%; }
+.d-crumbs { position: absolute; left: 16px; top: 12px; z-index: 2; display: flex; gap: 4px; align-items: center; font-size: 12.5px; }
+.d-crumbs button { border: 1px solid var(--line); background: var(--glass); border-radius: 999px; padding: 3px 10px; cursor: pointer; color: var(--ink-2); }
+.d-crumbs button:last-child { color: var(--ink); border-color: var(--line-2); }
+.d-crumbs .sep { color: var(--ink-3); }
+.d-arc { cursor: pointer; transition: opacity .2s; stroke: var(--bg); stroke-width: 1.5; }
+.d-arc:focus { outline: none; }
+.d-arc:focus-visible { outline: none; stroke: var(--focus); stroke-width: 3; }
+.d-center { cursor: pointer; }
+.d-center:focus-visible { outline: none; }
+.d-center:focus-visible circle { stroke: var(--focus); stroke-width: 3; }
+.d-lab { pointer-events: none; font-size: 11px; fill: var(--ink); }
+.d-lab.ax { font-weight: 650; font-size: 12px; }
+.d-lab.on-axis { fill: #fff; }
+:root[data-theme="light"] .d-lab.on-axis { fill: #0b0b0b; }
+.d-edge { fill: none; stroke-width: 1.6; pointer-events: none; }
+.d-side { display: flex; flex-direction: column; min-height: 0; }
+.d-side .detail { padding-top: 14px; }
+.d-hint { position: absolute; right: 16px; top: 16px; max-width: 360px; text-align: right; font-size: 11.5px; color: var(--ink-3); }
+</style>
+</head>
+<body>
+<!-- =======================================================================
+     Header: title, research summary, treatment switcher, theme + motion
+     ======================================================================= -->
+<header class="top">
+  <div class="brand">
+    <svg class="brand-mark" viewBox="0 0 32 32" aria-hidden="true">
+      <circle cx="16" cy="16" r="15" fill="none" stroke="var(--line-2)"/>
+      <line x1="9" y1="11" x2="22" y2="9" stroke="var(--ink-3)"/><line x1="22" y1="9" x2="21" y2="22" stroke="var(--ink-3)"/><line x1="9" y1="11" x2="21" y2="22" stroke="var(--ink-3)"/><line x1="9" y1="11" x2="11" y2="22" stroke="var(--ink-3)"/>
+      <circle cx="9" cy="11" r="3" fill="var(--people)"/><rect x="19.5" y="6.5" width="5" height="5" transform="rotate(45 22 9)" fill="var(--process)"/><rect x="18.5" y="19.5" width="5" height="5" rx="1" fill="var(--product)"/><circle cx="11" cy="22" r="2.5" fill="var(--systems)"/>
+    </svg>
+    <div>
+      <h1>Knowledge home: four visualization treatments</h1>
+      <p class="sub">bosun console prototype. All data is fictional ("Acme"). Self-contained: no network requests, no libraries.</p>
+    </div>
+  </div>
+  <div class="controls">
+    <div class="seg" role="tablist" aria-label="Treatment">
+      <button role="tab" id="tab-A" aria-controls="mock-A" aria-selected="true" data-t="A"><span class="k">A</span>Constellation</button>
+      <button role="tab" id="tab-B" aria-controls="mock-B" aria-selected="false" data-t="B" tabindex="-1"><span class="k">B</span>Metro + atlas</button>
+      <button role="tab" id="tab-C" aria-controls="mock-C" aria-selected="false" data-t="C" tabindex="-1"><span class="k">C</span>Briefing</button>
+      <button role="tab" id="tab-D" aria-controls="mock-D" aria-selected="false" data-t="D" tabindex="-1"><span class="k">D</span>Radial</button>
+    </div>
+    <button class="toggle" id="motionBtn" aria-pressed="false" title="Reduce motion (also follows the OS setting)">Reduce motion</button>
+    <button class="toggle" id="themeBtn" aria-pressed="true" title="Toggle light / dark theme"><svg width="14" height="14" viewBox="0 0 16 16" aria-hidden="true"><path d="M8 1a7 7 0 1 0 0 14A7 7 0 0 0 8 1zm0 1.5v11a5.5 5.5 0 0 1 0-11z" fill="currentColor"/></svg><span>Dark</span></button>
+  </div>
+  <div class="research">
+    <p><b>Research summary.</b> Good graph products follow <a href="https://webspace.science.uu.nl/~telea001/uploads/VACourse/Shneiderman96.pdf">Shneiderman's mantra</a> (overview first, zoom and filter, details on demand) and fight the hairball by
+      <a href="https://cambridge-intelligence.com/how-to-fix-hairballs/">filtering, aggregating and ranking by centrality</a> rather than drawing everything.
+      They fade context instead of hiding it (<a href="https://docs.kumu.io/overview/advanced-editor-hub/controls-reference">Kumu focus/showcase</a>), let the graph grow over time
+      (<a href="https://obsidian.md/help/plugins/graph">Obsidian time-lapse</a>, <a href="https://doc.linkurious.com/ogma/latest/">Ogma timelines</a>), and offer task-specific lenses
+      (<a href="https://neo4j.com/blog/developer/autumn-is-bloom-ing-with-new-visualization-features/">Neo4j Bloom perspectives</a>, <a href="https://backstage.io/docs/features/software-catalog/creating-the-catalog-graph">Backstage kind/depth filters</a>).
+      Structural layouts beat force layouts when position should mean something (<a href="https://mk.bcgsc.ca/linnet">hive plots</a>,
+      <a href="https://www.cg.tuwien.ac.at/courses/InfoVis/HallOfFame/2007/Grasberger/InfoVis2006%20Hierarchical%20Edge%20Bundles%20-%20Visualization%20of%20Adjacency%20Relations%20in%20Hierarchical%20Data%20%5BDanny%20Holten%5D.pdf">hierarchical edge bundling</a>,
+      <a href="https://timetableworld.com/?p=29341">metaphorical metro maps</a>), and motion supports meaning without carrying it alone (<a href="https://web.dev/articles/prefers-reduced-motion">reduced motion</a>).</p>
+    <details id="ideas">
+      <summary>10 applied ideas</summary>
+      <div class="ideas">
+        <ol>
+          <li><b>Overview, then zoom/filter, then details on demand.</b> Every treatment opens on a whole-base overview; facts only appear in a panel on click. <a href="https://webspace.science.uu.nl/~telea001/uploads/VACourse/Shneiderman96.pdf">Shneiderman 1996</a></li>
+          <li><b>Show less: rank and filter instead of drawing every edge.</b> Size by connectedness, axis filter chips, labels only for important nodes. <a href="https://cambridge-intelligence.com/how-to-fix-hairballs/">Cambridge Intelligence</a></li>
+          <li><b>Fade, do not hide.</b> Hover dims non-neighbors to ~15% so context stays readable. <a href="https://docs.kumu.io/overview/advanced-editor-hub/controls-reference">Kumu showcase/focus</a></li>
+          <li><b>Time as a first-class filter.</b> An "as of" slider replays how the base grew, like Obsidian's Animate and Ogma's temporal filtering. <a href="https://obsidian.md/help/plugins/graph">Obsidian</a>, <a href="https://doc.linkurious.com/ogma/latest/">Ogma</a></li>
+          <li><b>Task-specific lenses over one graph.</b> Bloom perspectives and Backstage's kind/depth filters argue for several purpose-built views over one model, which is what the A-D switcher is. <a href="https://neo4j.com/blog/developer/autumn-is-bloom-ing-with-new-visualization-features/">Neo4j Bloom</a>, <a href="https://backstage.io/docs/features/software-catalog/creating-the-catalog-graph">Backstage</a></li>
+          <li><b>Position should mean something.</b> Hive plots and radial hierarchies give stable, comparable layouts; force layouts do not. <a href="https://mk.bcgsc.ca/linnet">Krzywinski hive plots</a></li>
+          <li><b>Bundle edges along the hierarchy.</b> Route relations through type and axis rings to cut clutter. <a href="https://www.cg.tuwien.ac.at/courses/InfoVis/HallOfFame/2007/Grasberger/InfoVis2006%20Hierarchical%20Edge%20Bundles%20-%20Visualization%20of%20Adjacency%20Relations%20in%20Hierarchical%20Data%20%5BDanny%20Holten%5D.pdf">Holten 2006</a></li>
+          <li><b>Processes read best as routes.</b> Metro maps give lines, stations and interchanges for free, but the metaphor needs checking against the domain. <a href="https://timetableworld.com/?p=29341">Haverkort, metaphorical metro maps</a></li>
+          <li><b>People, content, activity.</b> Enterprise graphs that work pair entities with the activity around them, which is what the "this week" feed shows. <a href="https://docs.glean.com/security/knowledge-graph">Glean knowledge graph</a>, <a href="https://docs.capacities.io/reference/glossary">Capacities typed objects</a></li>
+          <li><b>Motion supports meaning, never carries it alone.</b> All animation stops under reduced motion and state stays visible as text and shape. <a href="https://web.dev/articles/prefers-reduced-motion">web.dev</a></li>
+        </ol>
+      </div>
+    </details>
+  </div>
+</header>
+
+<!-- =======================================================================
+     Stage: one mock per treatment, plus the shared detail drawer
+     ======================================================================= -->
+<main class="stage" id="stage">
+  <!-- A: Constellation -->
+  <section class="mock active" id="mock-A" role="tabpanel" aria-labelledby="tab-A">
+    <canvas id="a-canvas" aria-label="Knowledge constellation graph. Use the search box to find and open entities."></canvas>
+    <div class="chrome">
+      <div class="title"><span class="live-dot" aria-hidden="true"></span>Knowledge</div>
+      <div class="crumbs">Constellation</div>
+      <div class="spacer"></div>
+      <div class="stat-pills" id="a-pills"></div>
+      <button class="btn ghost raw-link">Raw data</button>
+    </div>
+    <div class="a-search">
+      <svg class="ico" width="14" height="14" viewBox="0 0 16 16" aria-hidden="true"><circle cx="7" cy="7" r="5" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="M11 11l3.5 3.5" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>
+      <input id="a-q" type="text" placeholder="Search people, processes, systems..." autocomplete="off" role="combobox" aria-expanded="false" aria-controls="a-results" aria-label="Search entities">
+      <span class="kbd">/</span>
+      <div class="a-results" id="a-results" role="listbox"></div>
+    </div>
+    <div class="a-chips" id="a-chips" role="group" aria-label="Filter by axis"></div>
+    <div class="a-zoom">
+      <button id="a-zin" aria-label="Zoom in">+</button><button id="a-zout" aria-label="Zoom out">&minus;</button><button id="a-fit" aria-label="Fit to screen" title="Fit">&#9634;</button>
+    </div>
+    <div class="a-time">
+      <div class="lbl"><span>As of <b id="a-asof">Tue 20 Oct</b></span><span id="a-asof-n"></span></div>
+      <button class="a-play" id="a-play" aria-label="Replay the week"><svg width="12" height="12" viewBox="0 0 12 12"><path d="M3 1.5l7 4.5-7 4.5z" fill="currentColor"/></svg></button>
+      <div class="a-hist"><div class="bars" id="a-bars"></div><input type="range" id="a-day" min="1" max="7" step="1" value="7" aria-label="As-of day"></div>
+    </div>
+    <div class="a-legend" id="a-legend"></div>
+  </section>
+
+  <!-- B: Metro + atlas -->
+  <section class="mock" id="mock-B" role="tabpanel" aria-labelledby="tab-B">
+    <div class="chrome">
+      <div class="title"><span class="live-dot" aria-hidden="true"></span>Knowledge</div>
+      <div class="crumbs">Process metro and atlas</div>
+      <div class="spacer"></div>
+      <div class="stat-pills" id="b-pills"></div>
+      <button class="btn ghost raw-link">Raw data</button>
+    </div>
+    <div class="b-grid">
+      <div class="panel b-metro">
+        <div class="panel-h"><h3>How work moves</h3><span class="muted">Processes as lines, steps as stations, shared systems as interchanges</span></div>
+        <svg id="b-metro" role="img" aria-label="Process metro map"></svg>
+        <div class="b-leg" id="b-leg"></div>
+      </div>
+      <div class="b-atlas">
+        <div class="panel"><div class="panel-h"><h3>People</h3><span class="muted">by team, sized by facts</span></div><svg id="b-people" role="img" aria-label="People by team"></svg></div>
+        <div class="panel"><div class="panel-h"><h3>Product</h3><span class="muted">repos, features, decisions, lessons</span></div><svg id="b-product" role="img" aria-label="Product treemap"></svg></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- C: Briefing -->
+  <section class="mock" id="mock-C" role="tabpanel" aria-labelledby="tab-C">
+    <div class="chrome">
+      <div class="title"><span class="live-dot" aria-hidden="true"></span>Knowledge</div>
+      <div class="crumbs">Weekly briefing</div>
+      <div class="spacer"></div>
+      <div class="stat-pills" id="c-pills"></div>
+      <button class="btn ghost raw-link">Raw data</button>
+    </div>
+    <div class="c-wrap" id="c-wrap"></div>
+  </section>
+
+  <!-- D: Radial -->
+  <section class="mock" id="mock-D" role="tabpanel" aria-labelledby="tab-D">
+    <div class="chrome">
+      <div class="title"><span class="live-dot" aria-hidden="true"></span>Knowledge</div>
+      <div class="crumbs">Radial explorer</div>
+      <div class="spacer"></div>
+      <div class="stat-pills" id="d-pills"></div>
+      <button class="btn ghost raw-link">Raw data</button>
+    </div>
+    <div class="d-grid">
+      <div class="panel d-sun" id="d-sun">
+        <div class="d-crumbs" id="d-crumbs" aria-label="Breadcrumbs"></div>
+        <svg id="d-svg" role="img" aria-label="Radial explorer of axes, entity types and entities"></svg>
+        <div class="d-hint">Click a segment to zoom in, the center to zoom out. Hover an entity to see its relations. Arrow keys move between segments.</div>
+      </div>
+      <div class="panel d-side"><div class="detail" id="d-detail"></div></div>
+    </div>
+  </section>
+
+  <!-- Shared slide-in detail drawer (A, B, C) -->
+  <aside class="drawer" id="drawer" aria-label="Entity details" aria-hidden="true">
+    <button class="btn ghost close" id="drawer-close" aria-label="Close details">&times;</button>
+    <div class="detail" id="drawer-body"></div>
+    <div class="detail-foot"><a href="#" class="raw-link" id="drawer-raw">Open raw view</a><span style="flex:1"></span><span>Esc to close</span></div>
+  </aside>
+  <div class="tip" id="tip" role="status" aria-live="polite"></div>
+</main>
+
+<!-- Notes per treatment -->
+<section class="notes active" id="notes-A">
+  <div class="note"><h3>Why</h3><p>The most "alive" option and the closest to what people picture when they hear knowledge graph. Clusters by axis give an instant sense of where knowledge is thick or thin; the time slider shows the base growing; hover-dimming keeps 70+ nodes readable instead of a hairball.</p></div>
+  <div class="note"><h3>Trade-offs</h3><ul><li>Positions carry no meaning beyond cluster; layout differs slightly per load.</li><li>Weak for ordered things (process steps) and for "what should I do today".</li><li>At 500+ entities it needs aggregation (collapse by type) to stay readable.</li></ul></div>
+  <div class="note"><h3>Production effort</h3><p><b>Medium, 3-5 days.</b> Canvas renderer, camera, hit-testing and the panel are hand-written here (~450 lines). Persist node positions so the map is stable across visits.</p></div>
+  <div class="note"><h3>Library</h3><p>Hand-written physics works at this size (this file). For robustness vendor <b>d3-force</b> as one file (~15 KB min / ~6 KB gz incl. quadtree for Barnes-Hut). Avoid force-graph (~150 KB+).</p></div>
+</section>
+<section class="notes" id="notes-B">
+  <div class="note"><h3>Why</h3><p>Processes are the hardest knowledge to grasp from a fact list and the most valuable to an agent. A metro map makes order, gates and hand-offs readable at a glance, and interchanges show which systems tie processes together. The atlas covers People and Product with forms where size and grouping mean something.</p></div>
+  <div class="note"><h3>Trade-offs</h3><ul><li>Automatic octilinear layout is hard; this mock uses a hand-tuned grid.</li><li>Lines only fit about 6-10 processes before a picker is needed.</li><li>Three panels compete for attention; less "single hero".</li></ul></div>
+  <div class="note"><h3>Production effort</h3><p><b>High, 6-9 days.</b> Auto-layout: one row per process, shared stations aligned to columns, simple octilinear router (as here). Treemap and team packing are ~120 lines each.</p></div>
+  <div class="note"><h3>Library</h3><p>Hand-write. Squarified treemap and packing are small; <b>d3-hierarchy</b> (~7 KB gz) is an option for packing. No library solves metro layout well.</p></div>
+</section>
+<section class="notes" id="notes-C">
+  <div class="note"><h3>Why</h3><p>Answers "what changed and what needs me?" in five seconds, which is the real daily job of the home screen. The review stack turns the nearly-all-proposed base into a habit (confirm / skip / reject with keys), and superseded decisions read as before/after.</p></div>
+  <div class="note"><h3>Trade-offs</h3><ul><li>Less spatial "wow"; the graph appears only as mini ego views.</li><li>Needs good fact sentence rendering (predicate templates).</li><li>Metrics like "rediscovery saved" need instrumentation we do not have yet.</li></ul></div>
+  <div class="note"><h3>Production effort</h3><p><b>Low-medium, 3-4 days.</b> Plain HTML/CSS plus tiny SVG; the review stack wires straight to the existing confirm/skip/reject API.</p></div>
+  <div class="note"><h3>Library</h3><p><b>None.</b> Rings, sparklines and ego graphs are 10-30 lines of SVG each.</p></div>
+</section>
+<section class="notes" id="notes-D">
+  <div class="note"><h3>Why</h3><p>Puts the user at the center and makes the axis/type/entity hierarchy literal, so position always means the same thing (stable across visits, unlike a force layout). Zoom-to-segment plus breadcrumbs gives clean drill-down; bundled edges show cross-axis relations only when asked.</p></div>
+  <div class="note"><h3>Trade-offs</h3><ul><li>Arc lengths are hard to compare; labels crowd past ~120 entities per ring (zoom fixes it).</li><li>Says little about time or status.</li><li>Feels more analytical than inviting.</li></ul></div>
+  <div class="note"><h3>Production effort</h3><p><b>Medium, 4-5 days.</b> Partition layout, arc paths, zoom tween and B-spline bundling are hand-written here (~300 lines).</p></div>
+  <div class="note"><h3>Library</h3><p>Hand-write, or vendor <b>d3-hierarchy + d3-shape</b> (~15 KB gz together) for partition, arcs and curveBundle.</p></div>
+</section>
+
+<div class="toast" id="toast" role="status" aria-live="polite"></div>
+
+<script>
+window.__errors = []; window.addEventListener('error', e => { window.__errors.push(String(e.message)); document.documentElement.dataset.errors = window.__errors.join(' | '); });
+'use strict';
+/* =========================================================================
+   DATA: an entirely fictional "Acme" knowledge base. The shape mirrors the
+   real store (entities + sourced facts along People / Process / Product /
+   Systems), but every name, channel, ticket and identifier is invented.
+   ========================================================================= */
+const KG = {};
+
+KG.DAYS = ['Wed 14 Oct', 'Thu 15 Oct', 'Fri 16 Oct', 'Sat 17 Oct', 'Sun 18 Oct', 'Mon 19 Oct', 'Tue 20 Oct'];
+
+KG.AXES = {
+  people:  { label: 'People',  shape: 'circle'  },
+  process: { label: 'Process', shape: 'diamond' },
+  product: { label: 'Product', shape: 'square'  },
+  systems: { label: 'Systems', shape: 'hex'     },
+};
+KG.AXIS_ORDER = ['people', 'process', 'product', 'systems'];
+KG.TYPE_AXIS = {
+  person: 'people', team: 'people',
+  process: 'process', step: 'process', gate: 'process', channel: 'process',
+  repo: 'product', service: 'product', feature: 'product', decision: 'product', principle: 'product', lesson: 'product',
+  system: 'systems', environment: 'systems',
+};
+KG.TYPE_PLURAL = { person: 'People', team: 'Teams', process: 'Processes', step: 'Steps', gate: 'Gates', channel: 'Channels',
+  repo: 'Repos', service: 'Services', feature: 'Features', decision: 'Decisions', principle: 'Principles', lesson: 'Lessons',
+  system: 'Systems', environment: 'Environments' };
+
+/* [id, type, name, summary] */
+const ENTITY_ROWS = [
+  // People
+  ['p.you', 'person', 'You', 'Engineer; owns the invoice exporter'],
+  ['p.priya', 'person', 'Priya Shah', 'PM, invoices and localization'],
+  ['p.marco', 'person', 'Marco Rossi', 'Platform engineer, leads on-call'],
+  ['p.lena', 'person', 'Lena Okafor', 'Finance operations lead'],
+  ['p.tomas', 'person', 'Tomas Lind', 'Tech lead, reviews exporter changes'],
+  ['p.aiko', 'person', 'Aiko Tanaka', 'Billing engineer'],
+  ['p.dev', 'person', 'Dev Patel', 'Backend engineer'],
+  ['p.sofia', 'person', 'Sofia Marin', 'QA lead'],
+  ['p.noah', 'person', 'Noah Berg', 'Platform engineer'],
+  ['p.grace', 'person', 'Grace Kim', 'Product designer'],
+  ['p.omar', 'person', 'Omar Haddad', 'Data analyst'],
+  ['p.ines', 'person', 'Ines Duarte', 'Localization PM'],
+  ['p.ben', 'person', 'Ben Carver', 'Support engineer'],
+  ['t.billing', 'team', 'Billing', 'Builds the invoice exporter'],
+  ['t.platform', 'team', 'Platform', 'CI, environments, on-call'],
+  ['t.product', 'team', 'Product', 'PM and design'],
+  ['t.finance', 'team', 'Finance ops', 'Close, dunning, billing questions'],
+  // Process
+  ['pr.release', 'process', 'Release to prod', 'Merge, staging, canary checks, gradual rollout'],
+  ['pr.bug', 'process', 'Customer bug report', 'From #billing-support to a fix'],
+  ['pr.review', 'process', 'Code review', 'Every change reviewed before merge'],
+  ['pr.launch', 'process', 'Feature launch', 'A flag turned on in stages'],
+  ['pr.hotfix', 'process', 'Hotfix', 'Urgent fix outside the normal cadence'],
+  ['pr.incident', 'process', 'Incident response', 'Declare, mitigate, follow up'],
+  ['pr.l10n', 'process', 'Localization update', 'Freeze, translate, roll out behind a flag'],
+  ['st.merge', 'step', 'Merge to main', 'Step 1 of release'],
+  ['st.staging', 'step', 'Deploy to staging', 'Step 2 of release'],
+  ['st.canary', 'step', 'Canary checks', 'Step 3 of release'],
+  ['st.rollout', 'step', 'Gradual rollout', 'Step 4 of release'],
+  ['st.announce', 'step', 'Announce in #deploys', 'Step 5 of release'],
+  ['g.smoke', 'gate', 'Smoke tests', 'Canary check'],
+  ['g.errors', 'gate', 'Error rate', 'Canary check'],
+  ['g.checks', 'gate', 'PR checks', 'Review gate'],
+  ['ch.support', 'channel', '#billing-support', 'Customer billing questions'],
+  ['ch.deploys', 'channel', '#deploys', 'Deploy announcements'],
+  ['ch.incidents', 'channel', '#incidents', 'Incident coordination'],
+  ['ch.reviews', 'channel', '#code-reviews', 'Review requests'],
+  ['ch.team', 'channel', '#acme-billing', 'Billing team channel'],
+  // Product
+  ['r.invoices', 'repo', 'invoice-api', 'Invoice API and exports'],
+  ['r.web', 'repo', 'web-app', 'Customer-facing web app'],
+  ['r.pdf', 'repo', 'pdf-templates', 'Invoice and credit-note templates'],
+  ['r.tax', 'repo', 'tax-rules', 'Tax rates and rounding per country'],
+  ['sv.gen', 'service', 'invoice-renderer', 'Renders invoices as PDF'],
+  ['sv.trans', 'service', 'translator', 'Translation service'],
+  ['sv.notify', 'service', 'notifier', 'Emails invoices and dunning reminders'],
+  ['ft.invoice', 'feature', 'Invoice export', 'Invoices as PDF and JSON'],
+  ['ft.l10n', 'feature', 'Localization', 'Invoices and UI in 12 languages'],
+  ['ft.batch', 'feature', 'Batch exports', 'Many invoices in one download'],
+  ['ft.credit', 'feature', 'Credit notes', 'Corrections to issued invoices'],
+  ['dc.limit20', 'decision', '20 MB batch limit', 'Superseded'],
+  ['dc.limit50', 'decision', '50 MB batch limit', 'Raised from 20 MB'],
+  ['dc.firstday', 'decision', 'Invoice on the 1st', 'Superseded'],
+  ['dc.billday', 'decision', 'Invoice on the billing day', 'Each customer on their own day'],
+  ['dc.pdf', 'decision', 'PDF-only export', 'Superseded'],
+  ['dc.pdfjson', 'decision', 'PDF and JSON export', 'Adds JSON for the ERP'],
+  ['dc.locale', 'decision', 'Invoice language per customer', 'Account default otherwise'],
+  ['dc.credit', 'decision', 'Credit notes, never edits', 'Issued invoices stay as issued'],
+  ['dc.retire', 'decision', 'Retire staging-2', 'One staging environment is enough'],
+  ['pp.evidence', 'principle', 'Evidence before assertions', ''],
+  ['pp.small', 'principle', 'Small PRs', ''],
+  ['pp.latest', 'principle', 'Latest decision wins', ''],
+  ['ls.rounding', 'lesson', 'Round tax per line', ''],
+  ['ls.canary', 'lesson', 'Watch the canary first', ''],
+  ['ls.retired', 'lesson', 'Test on staging, not staging-2', ''],
+  ['ls.credit', 'lesson', 'Never edit an issued invoice', ''],
+  // Systems
+  ['sy.ci', 'system', 'CI pipeline', 'Build, test, deploy'],
+  ['sy.tickets', 'system', 'Ticket tracker', 'Bugs, incidents, follow-ups'],
+  ['sy.queue', 'system', 'Message queue', 'Async jobs: rendering, emails'],
+  ['sy.erp', 'system', 'ERP connector', 'Syncs invoices to the ERP'],
+  ['sy.obs', 'system', 'Observability', 'Dashboards, logs, alerts'],
+  ['sy.oncall', 'system', 'Paging', 'Pages the on-call engineer'],
+  ['sy.flags', 'system', 'Feature flags', 'Gradual rollout'],
+  ['en.dev', 'environment', 'dev', 'Shared development'],
+  ['en.staging', 'environment', 'staging', 'Pre-prod; every merge lands here first'],
+  ['en.prod', 'environment', 'prod', 'Production'],
+  ['en.staging2', 'environment', 'staging-2', 'Retired'],
+];
+
+KG.entities = ENTITY_ROWS.map(([id, type, name, summary]) => ({ id, type, name, summary, axis: KG.TYPE_AXIS[type] }));
+KG.byId = Object.fromEntries(KG.entities.map(e => [e.id, e]));
+
+/* Fact helper. x is an entity id (relation) or a literal value.
+   auth: U user said, S stakeholder said, O observed, I inferred.
+   src: "kind:ref" (all refs invented). opts: st c|s (confirmed / superseded),
+   ord (step order), rw (times the fact was reused instead of re-asking). */
+KG.facts = [];
+const AUTH = { U: 'user_said', S: 'stakeholder_said', O: 'observed', I: 'inferred' };
+function F(s, p, x, a, day, src, opts = {}) {
+  const isRel = Object.prototype.hasOwnProperty.call(KG.byId, x);
+  const [kind, ...ref] = src.split(':');
+  KG.facts.push({
+    id: 'f' + (KG.facts.length + 1), s, p,
+    o: isRel ? x : null, v: isRel ? null : x,
+    auth: AUTH[a], day, src: { kind, ref: ref.join(':') },
+    status: opts.st === 'c' ? 'confirmed' : opts.st === 's' ? 'superseded' : 'proposed',
+    order: opts.ord || null, reuse: opts.rw || 0, supersededBy: null,
+  });
+}
+
+// --- People (day 1 survey, then filled in) -------------------------------
+F('p.you', 'role', 'Engineer; owns the invoice exporter end to end', 'U', 1, 'chat:session 1a', { st: 'c', rw: 2 });
+F('p.you', 'member_of', 't.billing', 'O', 1, 'slack:#acme-billing', { st: 'c' });
+F('p.you', 'owns', 'r.invoices', 'U', 1, 'chat:session 1a', { st: 'c' });
+F('p.you', 'prefers_channel', 'ch.team', 'O', 1, 'slack:#acme-billing');
+F('p.priya', 'role', 'Product manager for invoices and localization', 'O', 1, 'slack:#acme-billing', { rw: 1 });
+F('p.priya', 'member_of', 't.product', 'O', 1, 'slack:#acme-billing');
+F('p.priya', 'owns', 'ft.invoice', 'O', 2, 'ticket:ACME-1042');
+F('p.priya', 'timezone', 'Europe/London', 'O', 2, 'slack:profile');
+F('p.priya', 'prefers_channel', 'ch.team', 'O', 2, 'slack:#acme-billing');
+F('p.marco', 'role', 'Platform engineer; leads the on-call rotation', 'S', 1, 'slack:#incidents', { rw: 3 });
+F('p.marco', 'member_of', 't.platform', 'O', 1, 'slack:#incidents');
+F('p.marco', 'prefers_channel', 'ch.incidents', 'S', 1, 'slack:#incidents');
+F('p.marco', 'timezone', 'Europe/Rome', 'O', 3, 'slack:profile');
+F('p.marco', 'owns', 'en.prod', 'O', 3, 'doc:on-call rota');
+F('p.lena', 'role', 'Finance operations lead; runs the month-end close', 'O', 1, 'slack:#acme-billing');
+F('p.lena', 'member_of', 't.finance', 'O', 1, 'slack:#acme-billing');
+F('p.lena', 'reviews', 'ft.credit', 'S', 4, 'ticket:ACME-1101');
+F('p.tomas', 'role', 'Tech lead: reviews exporter changes and owns its test suite', 'U', 1, 'chat:session 1a', { st: 'c', rw: 4 });
+F('p.tomas', 'member_of', 't.billing', 'O', 1, 'slack:#acme-billing');
+F('p.tomas', 'reviews', 'r.invoices', 'U', 1, 'chat:session 1a', { st: 'c' });
+F('p.aiko', 'role', 'Billing engineer; tax rules and currencies', 'U', 1, 'chat:session 1a', { st: 'c', rw: 3 });
+F('p.aiko', 'member_of', 't.billing', 'O', 1, 'slack:#acme-billing');
+F('p.aiko', 'owns', 'r.tax', 'O', 2, 'pr:tax-rules#88');
+F('p.dev', 'role', 'Backend engineer on the invoice renderer', 'O', 2, 'pr:invoice-api#412');
+F('p.dev', 'member_of', 't.billing', 'O', 2, 'slack:#acme-billing');
+F('p.dev', 'owns', 'sv.gen', 'O', 2, 'pr:invoice-api#412');
+F('p.sofia', 'role', 'QA lead; maintains the smoke suite', 'O', 2, 'slack:#deploys');
+F('p.sofia', 'member_of', 't.platform', 'O', 2, 'slack:#deploys');
+F('p.sofia', 'owns', 'g.smoke', 'O', 2, 'doc:release runbook');
+F('p.noah', 'role', 'Platform engineer; CI and environments', 'O', 3, 'doc:service catalog');
+F('p.noah', 'member_of', 't.platform', 'O', 3, 'doc:service catalog');
+F('p.noah', 'owns', 'sy.ci', 'O', 3, 'doc:service catalog');
+F('p.grace', 'role', 'Product designer', 'O', 4, 'ticket:ACME-1101');
+F('p.grace', 'member_of', 't.product', 'O', 4, 'ticket:ACME-1101');
+F('p.grace', 'reviews', 'r.web', 'O', 4, 'pr:web-app#977');
+F('p.omar', 'role', 'Data analyst; revenue and aging reports', 'O', 3, 'slack:#acme-billing');
+F('p.omar', 'member_of', 't.finance', 'O', 3, 'slack:#acme-billing');
+F('p.omar', 'reviews', 'r.tax', 'O', 4, 'pr:tax-rules#91');
+F('p.ines', 'role', 'Localization PM', 'S', 5, 'slack:#acme-billing');
+F('p.ines', 'member_of', 't.product', 'S', 5, 'slack:#acme-billing');
+F('p.ines', 'owns', 'ft.l10n', 'S', 5, 'ticket:ACME-1130');
+F('p.ben', 'role', 'Support engineer; answers customer billing questions', 'O', 3, 'slack:#billing-support');
+F('p.ben', 'member_of', 't.finance', 'O', 3, 'slack:#billing-support');
+F('p.ben', 'owns', 'ch.support', 'O', 3, 'slack:#billing-support');
+F('t.billing', 'purpose', 'Builds the exporter: rendering, taxes, exports', 'O', 1, 'slack:#acme-billing');
+F('t.platform', 'purpose', 'CI, environments, release checks and the on-call rotation', 'O', 3, 'doc:service catalog');
+F('t.platform', 'owns', 'pr.incident', 'S', 3, 'slack:#incidents', { rw: 2 });
+F('t.finance', 'purpose', 'Month-end close, dunning and customer billing questions', 'O', 3, 'slack:#billing-support');
+
+// --- Release process (day 2, 5 ordered steps) ----------------------------
+F('pr.release', 'purpose', 'Ship merged changes to production in small, checked stages', 'U', 2, 'chat:session 2c', { st: 'c', rw: 3 });
+F('pr.release', 'has_step', 'st.merge', 'U', 2, 'chat:session 2c', { ord: 1 });
+F('pr.release', 'has_step', 'st.staging', 'U', 2, 'chat:session 2c', { ord: 2 });
+F('pr.release', 'has_step', 'st.canary', 'U', 2, 'chat:session 2c', { ord: 3 });
+F('pr.release', 'has_step', 'st.rollout', 'U', 2, 'chat:session 2c', { ord: 4 });
+F('pr.release', 'has_step', 'st.announce', 'O', 2, 'slack:#deploys', { ord: 5 });
+F('pr.release', 'entry_point', 'sy.ci', 'O', 2, 'doc:release runbook');
+F('pr.release', 'actor', 'p.you', 'O', 2, 'slack:#deploys');
+F('pr.release', 'actor', 'p.sofia', 'O', 2, 'slack:#deploys');
+F('pr.release', 'actor', 'p.noah', 'O', 3, 'slack:#deploys');
+F('pr.release', 'caveat', 'Hotfixes skip the gradual rollout but still wait for smoke tests', 'S', 4, 'slack:#deploys');
+F('st.merge', 'uses', 'sy.ci', 'O', 2, 'doc:release runbook');
+F('st.staging', 'uses', 'en.staging', 'O', 2, 'doc:release runbook');
+F('st.staging', 'rule', 'Every merge deploys to staging first; nothing goes straight to production', 'U', 2, 'chat:session 2c', { rw: 2 });
+F('st.canary', 'gated_by', 'g.smoke', 'O', 2, 'doc:release runbook');
+F('st.canary', 'gated_by', 'g.errors', 'O', 3, 'doc:release runbook');
+F('st.canary', 'states', 'Canary checks run on a small share of production traffic for about 30 minutes', 'O', 2, 'slack:#deploys', { rw: 1 });
+F('g.smoke', 'uses', 'sy.ci', 'O', 2, 'doc:release runbook');
+F('g.smoke', 'rule', 'Smoke tests export one invoice of each kind and compare the totals', 'O', 2, 'doc:release runbook');
+F('g.errors', 'uses', 'sy.obs', 'O', 3, 'doc:release runbook');
+F('g.errors', 'rule', 'The error rate must stay below 1% during the canary', 'S', 3, 'slack:#deploys');
+F('g.checks', 'uses', 'sy.ci', 'O', 2, 'doc:contributing guide');
+F('g.checks', 'rule', 'Lint and unit tests pass before anyone is asked to review', 'O', 2, 'doc:contributing guide');
+F('st.rollout', 'uses', 'sy.flags', 'O', 2, 'doc:release runbook');
+F('st.rollout', 'uses', 'en.prod', 'O', 2, 'doc:release runbook');
+F('st.rollout', 'rule', 'Roll out to 10%, then 50%, then all customers', 'U', 2, 'chat:session 2c', { st: 'c', rw: 3 });
+F('st.announce', 'posts_to', 'ch.deploys', 'O', 2, 'slack:#deploys');
+
+// --- Customer bug report -------------------------------------------------
+F('pr.bug', 'purpose', 'Turn a customer billing problem into a fix', 'O', 3, 'slack:#billing-support');
+F('pr.bug', 'entry_point', 'ch.support', 'S', 3, 'slack:#billing-support', { rw: 2 });
+F('pr.bug', 'rule', 'Reproduce on staging with a copy of the invoice before fixing anything', 'S', 3, 'slack:#billing-support', { rw: 2 });
+F('pr.bug', 'uses', 'sy.tickets', 'O', 3, 'slack:#billing-support');
+F('pr.bug', 'uses', 'en.staging', 'O', 3, 'slack:#billing-support');
+F('pr.bug', 'actor', 'p.ben', 'S', 3, 'slack:#billing-support');
+F('pr.bug', 'actor', 'p.you', 'O', 3, 'slack:#billing-support');
+F('pr.bug', 'caveat', 'Anything that stops invoices going out also pages the on-call engineer', 'O', 6, 'doc:on-call rota');
+F('sy.oncall', 'states', 'Pages the on-call engineer within 5 minutes, day or night', 'O', 3, 'doc:on-call rota');
+
+// --- Code review ---------------------------------------------------------
+F('pr.review', 'purpose', 'Every change is reviewed before merge', 'U', 1, 'chat:session 1a', { st: 'c' });
+F('pr.review', 'rule', 'The tech lead reviews every change to the exporter', 'U', 1, 'chat:session 1a', { st: 'c', rw: 3 });
+F('pr.review', 'rule', 'Changes to tax rules need a second reviewer from billing', 'U', 1, 'chat:session 1a', { st: 'c', rw: 3 });
+F('pr.review', 'actor', 'p.tomas', 'U', 1, 'chat:session 1a');
+F('pr.review', 'actor', 'p.aiko', 'U', 1, 'chat:session 1a');
+F('pr.review', 'uses', 'r.invoices', 'O', 1, 'pr:invoice-api#403');
+F('pr.review', 'gated_by', 'g.checks', 'O', 1, 'pr:invoice-api#403');
+F('pr.review', 'posts_to', 'ch.reviews', 'O', 2, 'slack:#code-reviews');
+
+// --- Feature launch, hotfix, incident, localization ----------------------
+F('pr.launch', 'purpose', 'Turn a finished feature on for customers in stages', 'O', 3, 'doc:launch checklist');
+F('pr.launch', 'uses', 'sy.flags', 'O', 3, 'doc:launch checklist');
+F('pr.launch', 'depends_on', 'pr.release', 'I', 3, 'doc:launch checklist');
+F('pr.launch', 'actor', 'p.priya', 'O', 3, 'slack:#acme-billing');
+F('pr.launch', 'actor', 'p.grace', 'O', 3, 'slack:#acme-billing');
+F('pr.launch', 'caveat', 'Beta customers hear a week before a flag turns on', 'O', 5, 'slack:#acme-billing');
+F('pr.hotfix', 'purpose', 'Ship an urgent fix outside the normal cadence', 'O', 4, 'slack:#deploys');
+F('pr.hotfix', 'rule', 'Hotfix branches are cut from the prod tag, not main', 'O', 4, 'doc:release runbook', { rw: 1 });
+F('pr.hotfix', 'uses', 'sy.ci', 'O', 4, 'doc:release runbook');
+F('pr.hotfix', 'gated_by', 'g.smoke', 'S', 4, 'slack:#deploys');
+F('pr.hotfix', 'actor', 'p.marco', 'O', 4, 'slack:#deploys');
+F('p.tomas', 'approves', 'pr.hotfix', 'S', 4, 'slack:#deploys');
+F('pr.incident', 'purpose', 'Coordinate the response when prod degrades', 'O', 5, 'doc:incident guide');
+F('pr.incident', 'entry_point', 'ch.incidents', 'O', 5, 'doc:incident guide');
+F('pr.incident', 'uses', 'sy.obs', 'O', 5, 'doc:incident guide');
+F('pr.incident', 'uses', 'sy.oncall', 'I', 6, 'slack:#incidents');
+F('pr.incident', 'actor', 'p.marco', 'O', 5, 'slack:#incidents');
+F('pr.incident', 'rule', 'Declare in #incidents first, then open the ticket', 'S', 6, 'slack:#incidents');
+F('pr.incident', 'uses', 'sy.tickets', 'O', 6, 'slack:#incidents');
+F('pr.l10n', 'purpose', 'Translate the UI and invoices into supported languages', 'S', 5, 'ticket:ACME-1130');
+F('pr.l10n', 'uses', 'sv.trans', 'O', 5, 'ticket:ACME-1130');
+F('pr.l10n', 'actor', 'p.ines', 'S', 5, 'ticket:ACME-1130');
+F('pr.l10n', 'uses', 'sy.flags', 'O', 6, 'ticket:ACME-1131');
+F('pr.l10n', 'depends_on', 'pr.release', 'I', 6, 'ticket:ACME-1131');
+F('pr.l10n', 'rule', 'New strings freeze three days before a language ships', 'S', 6, 'slack:#acme-billing');
+
+// --- Product: repos, services, features ----------------------------------
+F('r.invoices', 'purpose', 'API that issues and exports invoices', 'O', 1, 'pr:invoice-api#403');
+F('r.web', 'purpose', 'Customer-facing web app', 'O', 2, 'pr:web-app#977');
+F('r.pdf', 'purpose', 'Invoice and credit-note PDF templates', 'O', 1, 'pr:pdf-templates#203');
+F('r.tax', 'purpose', 'Tax rates and rounding rules per country', 'O', 2, 'pr:tax-rules#88');
+F('sv.gen', 'lives_in', 'r.invoices', 'O', 2, 'pr:invoice-api#412');
+F('sv.gen', 'depends_on', 'sy.queue', 'O', 3, 'pr:invoice-api#415');
+F('sv.gen', 'depends_on', 'sv.trans', 'O', 5, 'pr:invoice-api#420');
+F('sv.trans', 'lives_in', 'r.web', 'O', 5, 'pr:web-app#981');
+F('sv.notify', 'lives_in', 'r.invoices', 'O', 3, 'pr:invoice-api#416');
+F('sv.notify', 'depends_on', 'sy.queue', 'O', 3, 'pr:invoice-api#416');
+F('ft.invoice', 'about', 'Issues invoices with line items, taxes, currencies and payment terms', 'O', 1, 'ticket:ACME-1042');
+F('ft.invoice', 'lives_in', 'r.invoices', 'O', 1, 'ticket:ACME-1042');
+F('ft.invoice', 'uses', 'r.pdf', 'O', 1, 'pr:pdf-templates#203');
+F('ft.invoice', 'uses', 'sv.gen', 'O', 2, 'pr:invoice-api#412');
+F('ft.l10n', 'about', 'Invoices and UI in 12 languages', 'S', 5, 'ticket:ACME-1130');
+F('ft.l10n', 'uses', 'sv.trans', 'O', 5, 'ticket:ACME-1130');
+F('ft.l10n', 'uses', 'sy.flags', 'I', 6, 'ticket:ACME-1131');
+F('ft.batch', 'about', 'Download many invoices as one archive', 'O', 3, 'ticket:ACME-1077');
+F('ft.batch', 'part_of', 'ft.invoice', 'O', 3, 'ticket:ACME-1077');
+F('ft.credit', 'about', 'Credit notes that correct issued invoices', 'S', 4, 'ticket:ACME-1101');
+F('ft.credit', 'part_of', 'ft.invoice', 'S', 4, 'ticket:ACME-1101');
+F('ft.credit', 'caveat', "A credit note keeps the original invoice's currency and tax rates", 'S', 4, 'ticket:ACME-1101', { rw: 1 });
+F('ft.credit', 'uses', 'r.tax', 'O', 4, 'pr:tax-rules#90');
+
+// --- Decisions (three supersede earlier ones) ----------------------------
+F('dc.limit20', 'decided', 'Batch exports are limited to 20 MB', 'O', 1, 'ticket:ACME-1077', { st: 's' });
+F('dc.limit20', 'about', 'ft.batch', 'O', 1, 'ticket:ACME-1077');
+F('dc.limit50', 'decided', 'Raise the batch export limit to 50 MB', 'S', 4, 'slack:#acme-billing');
+F('dc.limit50', 'supersedes', 'dc.limit20', 'S', 4, 'slack:#acme-billing');
+F('dc.limit50', 'about', 'ft.batch', 'O', 4, 'slack:#acme-billing');
+F('dc.firstday', 'decided', 'All invoices go out on the 1st of the month', 'O', 1, 'doc:billing handbook', { st: 's' });
+F('dc.billday', 'decided', 'Each customer is invoiced on their own billing day', 'U', 2, 'chat:session 2c', { st: 'c', rw: 3 });
+F('dc.billday', 'supersedes', 'dc.firstday', 'U', 2, 'chat:session 2c', { st: 'c' });
+F('dc.billday', 'about', 'ft.invoice', 'O', 2, 'chat:session 2c');
+F('p.lena', 'approves', 'dc.billday', 'S', 2, 'slack:#acme-billing');
+F('dc.pdf', 'decided', 'Export invoices as PDF only', 'O', 1, 'ticket:ACME-1042', { st: 's' });
+F('dc.pdf', 'about', 'ft.invoice', 'O', 1, 'ticket:ACME-1042');
+F('dc.pdfjson', 'decided', 'Export as PDF and JSON, so the ERP can import invoices', 'S', 5, 'ticket:ACME-1120');
+F('dc.pdfjson', 'supersedes', 'dc.pdf', 'S', 5, 'ticket:ACME-1120');
+F('dc.pdfjson', 'about', 'ft.invoice', 'O', 5, 'ticket:ACME-1120');
+F('dc.locale', 'decided', 'Each customer picks an invoice language; the account default otherwise', 'S', 5, 'ticket:ACME-1130');
+F('dc.locale', 'about', 'ft.l10n', 'O', 5, 'ticket:ACME-1130');
+F('dc.credit', 'decided', 'An issued invoice is never edited; a credit note corrects it', 'S', 4, 'ticket:ACME-1101');
+F('dc.credit', 'about', 'ft.credit', 'O', 4, 'ticket:ACME-1101');
+F('dc.retire', 'decided', 'Retire staging-2; one staging environment is enough', 'O', 3, 'doc:environments page');
+F('dc.retire', 'about', 'en.staging2', 'O', 3, 'doc:environments page');
+
+// --- Principles and lessons ----------------------------------------------
+F('pp.evidence', 'states', 'Show evidence before claiming something works', 'U', 1, 'chat:session 1a', { st: 'c', rw: 2 });
+F('pp.small', 'states', 'Small PRs, each reviewable in one sitting', 'U', 2, 'chat:session 2c', { rw: 2 });
+F('pp.small', 'about', 'pr.review', 'I', 2, 'chat:session 2c');
+F('pp.latest', 'states', 'When stakeholders disagree, the latest decision wins', 'U', 3, 'chat:session 3b', { rw: 1 });
+F('ls.rounding', 'states', 'Round tax per line, then add up; rounding only the total is off by a cent', 'U', 3, 'chat:session 3b', { rw: 3 });
+F('ls.rounding', 'about', 'r.tax', 'O', 3, 'chat:session 3b');
+F('ls.rounding', 'about', 'ft.invoice', 'I', 3, 'chat:session 3b');
+F('ls.canary', 'states', 'Watch the error rate through the first rollout stage before calling a deploy healthy', 'O', 4, 'slack:#deploys', { rw: 2 });
+F('ls.canary', 'about', 'g.errors', 'O', 4, 'slack:#deploys');
+F('ls.retired', 'states', 'staging-2 is retired; point test runs at staging', 'O', 5, 'chat:session 5d', { rw: 1 });
+F('ls.retired', 'about', 'en.staging2', 'O', 5, 'chat:session 5d');
+F('ls.credit', 'states', 'Editing an issued invoice broke the ERP sync; issue a credit note instead', 'S', 6, 'slack:#billing-support', { rw: 1 });
+F('ls.credit', 'about', 'dc.credit', 'O', 6, 'slack:#billing-support');
+F('ls.credit', 'about', 'sy.erp', 'I', 6, 'slack:#billing-support');
+
+// --- Systems and environments --------------------------------------------
+F('sy.ci', 'purpose', 'Builds, tests and deploys every merge', 'O', 2, 'doc:service catalog');
+F('sy.ci', 'uses', 'en.staging', 'O', 2, 'doc:release runbook');
+F('sy.tickets', 'purpose', 'Tracks bugs, incidents and follow-ups', 'O', 2, 'doc:service catalog');
+F('sy.queue', 'purpose', 'Async jobs: PDF rendering and emails', 'O', 3, 'doc:service catalog');
+F('sy.erp', 'purpose', 'Syncs issued invoices and credit notes to the ERP', 'O', 3, 'doc:service catalog');
+F('sy.erp', 'uses', 'r.invoices', 'O', 3, 'doc:service catalog');
+F('sy.erp', 'caveat', 'A failed sync retries three times, then opens a ticket', 'O', 4, 'doc:service catalog');
+F('sy.obs', 'purpose', 'Dashboards, logs and alerts', 'O', 5, 'doc:incident guide');
+F('sy.obs', 'about', 'en.prod', 'O', 5, 'doc:incident guide');
+F('sy.oncall', 'purpose', 'Paging for the on-call rotation', 'O', 3, 'doc:on-call rota');
+F('sy.oncall', 'posts_to', 'ch.incidents', 'O', 3, 'doc:on-call rota');
+F('sy.flags', 'purpose', 'Feature flags for gradual rollout', 'O', 4, 'doc:service catalog');
+F('en.dev', 'purpose', 'Shared development environment', 'O', 2, 'doc:service catalog');
+F('en.staging', 'purpose', 'Pre-production; every merge deploys here first', 'O', 2, 'doc:release runbook');
+F('en.prod', 'purpose', 'Production', 'O', 2, 'doc:service catalog');
+F('en.staging2', 'status', 'Retired; kept only until its config is removed', 'O', 5, 'chat:session 5d');
+F('en.staging2', 'caveat', 'Do not deploy or run tests there', 'S', 6, 'doc:environments page', { rw: 1 });
+F('ch.support', 'purpose', 'Customer billing questions from support', 'S', 3, 'slack:#billing-support');
+F('ch.deploys', 'purpose', 'Deploy announcements', 'O', 2, 'slack:#deploys');
+F('ch.incidents', 'purpose', 'Incident declaration and updates', 'O', 5, 'doc:incident guide');
+F('ch.reviews', 'purpose', 'Review requests', 'O', 2, 'slack:#code-reviews');
+F('ch.team', 'purpose', 'Billing team day-to-day', 'O', 1, 'slack:#acme-billing');
+F('p.you', 'prefers_channel', 'ch.reviews', 'O', 7, 'slack:#code-reviews');
+F('pr.release', 'caveat', 'No deploys after 15:00 on Fridays', 'O', 7, 'slack:#deploys');
+F('sy.obs', 'states', 'The error-rate alert fires above 2% for 5 minutes', 'O', 7, 'slack:#incidents');
+F('dc.limit50', 'caveat', 'Larger batches are split into several downloads', 'S', 7, 'slack:#acme-billing');
+F('p.dev', 'reviews', 'r.invoices', 'O', 7, 'pr:invoice-api#423');
+
+// Wire supersession: the old decision's "decided" fact points at the new one.
+(function linkSupersession() {
+  KG.facts.filter(f => f.p === 'supersedes').forEach(f => {
+    const oldFact = KG.facts.find(x => x.s === f.o && x.p === 'decided');
+    const newFact = KG.facts.find(x => x.s === f.s && x.p === 'decided');
+    if (oldFact && newFact) { oldFact.supersededBy = newFact.id; oldFact.status = 'superseded'; }
+  });
+})();
+
+// Derived indexes: facts per entity, neighbors, degree, first-seen day.
+KG.reindex = function reindex() {
+  KG.factsBy = {}; KG.nbrs = {};
+  KG.entities.forEach(e => { KG.factsBy[e.id] = []; KG.nbrs[e.id] = new Set(); e.day = 8; });
+  KG.facts.forEach(f => {
+    KG.factsBy[f.s].push(f);
+    KG.byId[f.s].day = Math.min(KG.byId[f.s].day, f.day);
+    if (f.o) {
+      KG.factsBy[f.o].push(f);
+      KG.nbrs[f.s].add(f.o); KG.nbrs[f.o].add(f.s);
+      KG.byId[f.o].day = Math.min(KG.byId[f.o].day, f.day);
+    }
+  });
+  KG.entities.forEach(e => { e.degree = KG.nbrs[e.id].size; e.nFacts = KG.factsBy[e.id].length; if (e.day > 7) e.day = 7; });
+};
+KG.reindex();
+
+// Relation links (deduplicated pairs), used by A and D.
+KG.links = (function buildLinks() {
+  const m = new Map();
+  KG.facts.filter(f => f.o).forEach(f => {
+    const key = f.s < f.o ? f.s + '|' + f.o : f.o + '|' + f.s;
+    const cur = m.get(key);
+    if (!cur) m.set(key, { s: f.s, t: f.o, facts: [f], day: f.day });
+    else { cur.facts.push(f); cur.day = Math.min(cur.day, f.day); }
+  });
+  return [...m.values()];
+})();
+KG.linkStatus = l => l.facts.some(f => f.status === 'confirmed') ? 'confirmed' : l.facts.every(f => f.status === 'superseded') ? 'superseded' : 'proposed';
+
+/* =========================================================================
+   CORE: utilities, theme + motion, event bus, shapes, fact rendering,
+   shared detail drawer, tooltip, toast, treatment switcher.
+   ========================================================================= */
+const $ = (sel, root = document) => root.querySelector(sel);
+const $$ = (sel, root = document) => [...root.querySelectorAll(sel)];
+const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
+const lerp = (a, b, t) => a + (b - a) * t;
+const easeInOut = t => t < .5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2;
+const esc = s => String(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+const SVGNS = 'http://www.w3.org/2000/svg';
+function svgEl(tag, attrs = {}, parent) {
+  const el = document.createElementNS(SVGNS, tag);
+  for (const k in attrs) if (attrs[k] != null) el.setAttribute(k, attrs[k]);
+  if (parent) parent.appendChild(el);
+  return el;
+}
+// Deterministic PRNG so layouts are stable across loads.
+function mulberry32(a) { return function () { a |= 0; a = a + 0x6D2B79F5 | 0; let t = Math.imul(a ^ a >>> 15, 1 | a); t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t; return ((t ^ t >>> 14) >>> 0) / 4294967296; }; }
+
+// --- Event bus ------------------------------------------------------------
+KG.bus = { h: {}, on(ev, fn) { (this.h[ev] = this.h[ev] || []).push(fn); }, emit(ev, d) { (this.h[ev] || []).forEach(fn => fn(d)); } };
+
+// --- Theme, colors, reduced motion ---------------------------------------
+KG.colors = {};
+KG.readColors = function () {
+  const cs = getComputedStyle(document.documentElement);
+  const g = n => cs.getPropertyValue(n).trim();
+  ['people', 'process', 'product', 'systems'].forEach(a => KG.colors[a] = g('--' + a));
+  ['bg', 'surface', 'surface-2', 'surface-3', 'line', 'line-2', 'ink', 'ink-2', 'ink-3', 'accent', 'good', 'bad', 'warn'].forEach(n => KG.colors[n] = g('--' + n));
+  KG.colors.metro = [1, 2, 3, 4, 5, 6, 7, 8].map(i => g('--m' + i));
+  KG.dark = document.documentElement.dataset.theme === 'dark';
+};
+KG.axisColor = id => KG.colors[KG.byId[id].axis];
+function hexA(hex, a) {
+  const h = hex.replace('#', '');
+  const n = parseInt(h.length === 3 ? h.split('').map(c => c + c).join('') : h, 16);
+  return `rgba(${n >> 16 & 255},${n >> 8 & 255},${n & 255},${a})`;
+}
+const osReduce = matchMedia('(prefers-reduced-motion: reduce)');
+KG.reduced = () => osReduce.matches || document.documentElement.classList.contains('reduce-motion');
+
+function setTheme(t) {
+  document.documentElement.dataset.theme = t;
+  const b = $('#themeBtn'); b.setAttribute('aria-pressed', String(t === 'dark')); $('span', b).textContent = t === 'dark' ? 'Dark' : 'Light';
+  KG.readColors(); KG.bus.emit('theme');
+}
+$('#themeBtn').addEventListener('click', () => setTheme(KG.dark ? 'light' : 'dark'));
+$('#motionBtn').addEventListener('click', e => {
+  const on = !document.documentElement.classList.contains('reduce-motion');
+  document.documentElement.classList.toggle('reduce-motion', on);
+  e.currentTarget.setAttribute('aria-pressed', String(on));
+  KG.bus.emit('motion');
+});
+osReduce.addEventListener('change', () => KG.bus.emit('motion'));
+
+// --- Shapes (secondary encoding for axis) --------------------------------
+// Returns an SVG path centered on 0,0 with "radius" r.
+KG.shapePath = function (shape, r) {
+  if (shape === 'circle') return `M${-r},0a${r},${r} 0 1,0 ${2 * r},0a${r},${r} 0 1,0 ${-2 * r},0`;
+  if (shape === 'diamond') { const q = r * 1.18; return `M0,${-q}L${q},0L0,${q}L${-q},0Z`; }
+  if (shape === 'square') { const q = r * .86; return `M${-q},${-q}H${q}V${q}H${-q}Z`; }
+  const pts = []; for (let i = 0; i < 6; i++) { const a = Math.PI / 6 + i * Math.PI / 3; pts.push((r * 1.05 * Math.cos(a)).toFixed(2) + ',' + (r * 1.05 * Math.sin(a)).toFixed(2)); }
+  return 'M' + pts.join('L') + 'Z';
+};
+KG.shapeCanvas = function (ctx, shape, x, y, r) {
+  ctx.beginPath();
+  if (shape === 'circle') ctx.arc(x, y, r, 0, Math.PI * 2);
+  else if (shape === 'diamond') { const q = r * 1.18; ctx.moveTo(x, y - q); ctx.lineTo(x + q, y); ctx.lineTo(x, y + q); ctx.lineTo(x - q, y); ctx.closePath(); }
+  else if (shape === 'square') { const q = r * .86; if (ctx.roundRect) ctx.roundRect(x - q, y - q, 2 * q, 2 * q, Math.min(3, q * .3)); else ctx.rect(x - q, y - q, 2 * q, 2 * q); }
+  else { for (let i = 0; i < 6; i++) { const a = Math.PI / 6 + i * Math.PI / 3; const px = x + r * 1.05 * Math.cos(a), py = y + r * 1.05 * Math.sin(a); i ? ctx.lineTo(px, py) : ctx.moveTo(px, py); } ctx.closePath(); }
+};
+KG.shapeIcon = function (axis, size = 12) {
+  const r = size / 2 - 1.5;
+  return `<svg width="${size}" height="${size}" viewBox="${-size / 2} ${-size / 2} ${size} ${size}" aria-hidden="true"><path d="${KG.shapePath(KG.AXES[axis].shape, r)}" fill="var(--${axis})"/></svg>`;
+};
+KG.initials = name => name === 'You' ? 'You' : name.split(/\s+/).map(w => w[0]).join('').slice(0, 2).toUpperCase();
+
+// --- Fact rendering ------------------------------------------------------
+const PRED = { role: 'role', member_of: 'member of', owns: 'owns', reviews: 'reviews', approves: 'approves', prefers_channel: 'prefers channel', timezone: 'timezone',
+  purpose: 'purpose', has_step: 'step', entry_point: 'entry point', actor: 'actor', caveat: 'caveat', uses: 'uses', rule: 'rule', states: 'states', gated_by: 'gated by',
+  posts_to: 'posts to', depends_on: 'depends on', lives_in: 'lives in', about: 'about', part_of: 'part of', decided: 'decided', supersedes: 'supersedes', status: 'status', replicates_from: 'replicates from' };
+KG.pred = p => PRED[p] || p.replace(/_/g, ' ');
+KG.AUTH_LABEL = { user_said: 'user said', stakeholder_said: 'stakeholder', observed: 'observed', inferred: 'inferred' };
+KG.AUTH_GLYPH = { user_said: '●', stakeholder_said: '◆', observed: '○', inferred: '◌' };
+KG.authBadge = f => `<span class="badge" title="Authority">${KG.AUTH_GLYPH[f.auth]} ${KG.AUTH_LABEL[f.auth]}</span>`;
+KG.statusBadge = f => `<span class="badge st-${f.status}">${f.status === 'confirmed' ? '✓ ' : ''}${f.status}</span>`;
+KG.chip = id => { const e = KG.byId[id]; return `<button class="chip" data-goto="${id}">${KG.shapeIcon(e.axis)}${esc(e.name)}</button>`; };
+// Plain-language sentence for a fact (used by the feed and review stack).
+KG.sentence = function (f, withSubject = true) {
+  const s = KG.byId[f.s];
+  const subj = withSubject ? `<b>${esc(s.name)}</b> ` : '';
+  const obj = f.o ? `<b>${esc(KG.byId[f.o].name)}</b>` : esc(f.v);
+  switch (f.p) {
+    case 'role': return `${subj}is ${obj}`;
+    case 'member_of': return `${subj}is on ${obj}`;
+    case 'has_step': return `${subj}step ${f.order}: ${obj}`;
+    case 'purpose': case 'about': case 'states': case 'rule': case 'caveat': case 'decided': case 'status': return `${subj}<span class="muted">${KG.pred(f.p)}:</span> ${obj}`;
+    case 'timezone': return `${subj}works in ${obj}`;
+    default: return `${subj}${KG.pred(f.p)} ${obj}`;
+  }
+};
+
+// Shared entity detail renderer (drawer in A/B/C, side panel in D).
+KG.renderDetail = function (container, id) {
+  const e = KG.byId[id];
+  if (!e) { container.innerHTML = ''; return; }
+  const facts = KG.factsBy[id].slice().sort((a, b) => (a.status === 'superseded') - (b.status === 'superseded') || (a.order || 99) - (b.order || 99) || b.day - a.day);
+  const conf = facts.filter(f => f.status === 'confirmed').length;
+  const prop = facts.filter(f => f.status === 'proposed').length;
+  const rows = facts.map(f => {
+    const outgoing = f.s === id;
+    const other = outgoing ? f.o : f.s;
+    const pred = outgoing ? KG.pred(f.p) : KG.pred(f.p) + ' (from)';
+    const val = other ? KG.chip(other) : esc(f.v);
+    const sup = f.supersededBy ? ` <span class="muted">replaced by</span> ${KG.chip(KG.facts.find(x => x.id === f.supersededBy).s)}` : '';
+    return `<div class="fact ${f.status}">
+      <div class="fp">${pred}${f.order ? ' ' + f.order : ''}</div>
+      <div class="fv">${val}${sup}</div>
+      <div class="fm">${KG.authBadge(f)}${KG.statusBadge(f)}<span class="src" title="Source">${esc(f.src.kind)}: ${esc(f.src.ref)}</span><span>${KG.DAYS[f.day - 1]}</span>
+      ${f.status === 'proposed' ? `<button class="ok" data-confirm="${f.id}" aria-label="Confirm fact">Confirm</button>` : ''}</div></div>`;
+  }).join('');
+  container.innerHTML = `
+    <div class="kicker">${KG.shapeIcon(e.axis)} ${KG.AXES[e.axis].label} <span aria-hidden="true">/</span> ${e.type}</div>
+    <h2>${esc(e.name)}</h2>
+    ${e.summary ? `<p class="summary">${esc(e.summary)}</p>` : ''}
+    <div class="mini-stats"><div><b>${facts.length}</b>facts</div><div><b>${e.degree}</b>links</div><div><b>${conf}</b>confirmed</div><div><b>${prop}</b>proposed</div><div><b>${KG.DAYS[e.day - 1].slice(0, 3)}</b>first seen</div></div>
+    <h4>Key facts</h4>${rows || '<p class="muted">No facts yet.</p>'}`;
+};
+
+// Delegated clicks inside any detail view: navigate + confirm.
+document.addEventListener('click', ev => {
+  const go = ev.target.closest('[data-goto]');
+  if (go) { ev.preventDefault(); KG.focus(go.dataset.goto); return; }
+  const ok = ev.target.closest('[data-confirm]');
+  if (ok) { KG.setStatus(ok.dataset.confirm, 'confirmed'); return; }
+  const raw = ev.target.closest('.raw-link');
+  if (raw) { ev.preventDefault(); KG.toast('Opens the existing "Raw data" view (cards, entity pages, fact lists).'); }
+});
+
+KG.setStatus = function (factId, status) {
+  const f = KG.facts.find(x => x.id === factId);
+  if (!f) return;
+  f.status = status;
+  KG.bus.emit('status', f);
+};
+
+// --- Drawer --------------------------------------------------------------
+KG.drawer = {
+  el: $('#drawer'), body: $('#drawer-body'), id: null,
+  open(id) {
+    this.id = id; KG.renderDetail(this.body, id);
+    this.el.classList.add('open'); this.el.setAttribute('aria-hidden', 'false');
+    $('#stage').classList.add('drawer-open');
+    this.body.scrollTop = 0;
+  },
+  close() {
+    this.id = null; this.el.classList.remove('open'); this.el.setAttribute('aria-hidden', 'true');
+    $('#stage').classList.remove('drawer-open');
+    KG.bus.emit('drawerclose');
+  },
+};
+$('#drawer-close').addEventListener('click', () => KG.drawer.close());
+KG.bus.on('status', () => { if (KG.drawer.id) KG.renderDetail(KG.drawer.body, KG.drawer.id); });
+
+// --- Tooltip + toast -----------------------------------------------------
+KG.tip = {
+  el: $('#tip'),
+  show(html, x, y) {
+    const st = $('#stage').getBoundingClientRect();
+    this.el.innerHTML = html; this.el.classList.add('show');
+    const w = this.el.offsetWidth, h = this.el.offsetHeight;
+    let lx = x - st.left + 14, ly = y - st.top + 14;
+    if (lx + w > st.width - 8) lx = x - st.left - w - 14;
+    if (ly + h > st.height - 8) ly = y - st.top - h - 14;
+    this.el.style.left = lx + 'px'; this.el.style.top = ly + 'px';
+  },
+  hide() { this.el.classList.remove('show'); },
+};
+let toastTimer;
+KG.toast = function (msg) {
+  const t = $('#toast'); t.textContent = msg; t.classList.add('show');
+  clearTimeout(toastTimer); toastTimer = setTimeout(() => t.classList.remove('show'), 2600);
+};
+
+// Stat pills shared by every mock header.
+KG.renderPills = function () {
+  const c = KG.facts.filter(f => f.status === 'confirmed').length;
+  const p = KG.facts.filter(f => f.status === 'proposed').length;
+  const html = `<span class="pill"><b>${KG.entities.length}</b> entities</span><span class="pill"><b>${KG.facts.length}</b> facts</span><span class="pill"><b>${c}</b> confirmed</span><span class="pill"><b>${p}</b> to review</span>`;
+  ['a', 'b', 'c', 'd'].forEach(k => { const el = $('#' + k + '-pills'); if (el) el.innerHTML = html; });
+};
+KG.bus.on('status', KG.renderPills);
+
+// --- Treatments registry + switcher --------------------------------------
+KG.treatments = {};   // key -> { init(), show(), hide(), focus(id) }
+KG.active = null;
+KG.focus = function (id) { const t = KG.treatments[KG.active]; if (t && t.focus) t.focus(id); };
+
+function activate(key, pushHash = true) {
+  if (!KG.treatments[key]) key = 'A';
+  if (KG.active === key) return;
+  const prev = KG.treatments[KG.active];
+  if (prev && prev.hide) prev.hide();
+  KG.drawer.close(); KG.tip.hide();
+  $$('.seg [role=tab]').forEach(b => { const on = b.dataset.t === key; b.setAttribute('aria-selected', String(on)); b.tabIndex = on ? 0 : -1; });
+  $$('.mock').forEach(m => m.classList.toggle('active', m.id === 'mock-' + key));
+  $$('.notes').forEach(m => m.classList.toggle('active', m.id === 'notes-' + key));
+  KG.active = key;
+  const t = KG.treatments[key];
+  if (!t.inited) { t.init(); t.inited = true; }
+  if (t.show) t.show();
+  if (pushHash) history.replaceState(null, '', '#' + key);
+}
+$$('.seg [role=tab]').forEach(b => b.addEventListener('click', () => activate(b.dataset.t)));
+$('.seg').addEventListener('keydown', e => {
+  const keys = ['A', 'B', 'C', 'D']; const i = keys.indexOf(KG.active);
+  if (e.key === 'ArrowRight' || e.key === 'ArrowLeft') {
+    const n = keys[(i + (e.key === 'ArrowRight' ? 1 : 3)) % 4]; activate(n); $('#tab-' + n).focus(); e.preventDefault();
+  }
+});
+document.addEventListener('keydown', e => {
+  if (e.key === 'Escape') { if (KG.drawer.id) KG.drawer.close(); const d = $('#ideas'); if (d.open) d.open = false; }
+});
+// Close the research popover when clicking elsewhere.
+document.addEventListener('click', e => { const d = $('#ideas'); if (d.open && !d.contains(e.target)) d.open = false; });
+
+/* =========================================================================
+   TREATMENT A: Constellation map
+   Canvas renderer + small hand-written force simulation (O(n^2) charge is
+   fine below ~400 nodes; swap in a quadtree / d3-force beyond that).
+   ========================================================================= */
+KG.treatments.A = (function () {
+  const ANCHORS = { people: [-440, 30], process: [-60, -210], product: [420, -20], systems: [40, 260] };
+  let canvas, ctx, W = 0, H = 0, dpr = 1, raf = 0, running = false;
+  let nodes = [], nodeById = {}, links = [], stars = [];
+  const cam = { x: 0, y: 0, k: 1 };
+  let camAnim = null;
+  let alpha = 1, alphaTarget = 0;
+  let hover = null, selected = null, drag = null, pointer = { x: 0, y: 0, down: false, moved: false, sx: 0, sy: 0, panning: false };
+  let asOf = 7, playTimer = null;
+  const axesOn = new Set(KG.AXIS_ORDER);
+  const t0 = performance.now();
+  let FF = 'sans-serif'; // cached font stack for canvas text
+
+  // ---- Model ------------------------------------------------------------
+  function build() {
+    const rnd = mulberry32(7);
+    nodes = KG.entities.map((e, i) => {
+      const [ax, ay] = ANCHORS[e.axis];
+      const ang = rnd() * Math.PI * 2, rad = 40 + rnd() * 140;
+      return {
+        id: e.id, e, axis: e.axis, shape: KG.AXES[e.axis].shape,
+        r: e.id === 'p.you' ? 15 : 4.5 + Math.sqrt(e.degree) * 3.1,
+        x: ax + Math.cos(ang) * rad, y: ay + Math.sin(ang) * rad, vx: 0, vy: 0,
+        a: 0, want: true, appearAt: 0, hl: 1, phase: rnd() * Math.PI * 2, fixed: false,
+      };
+    });
+    nodeById = Object.fromEntries(nodes.map(n => [n.id, n]));
+    links = KG.links.map(l => ({ l, s: nodeById[l.s], t: nodeById[l.t], same: nodeById[l.s].axis === nodeById[l.t].axis }));
+    refreshConfirmed();
+    // Pre-settle so the first paint is calm, then let it breathe.
+    nodes.forEach(n => n.want = true);
+    for (let i = 0; i < 320; i++) { alpha = Math.max(.02, 1 - i / 320); tick(); }
+    alpha = .25;
+    const rs = mulberry32(3);
+    stars = Array.from({ length: 160 }, () => ({ x: rs(), y: rs(), r: rs() * 1.1 + .2, a: rs() * .35 + .05 }));
+  }
+  function refreshConfirmed() { nodes.forEach(n => n.confirmed = KG.factsBy[n.id].some(f => f.status === 'confirmed')); }
+
+  function updateVisibility(animateIn) {
+    const now = performance.now();
+    nodes.forEach(n => {
+      const want = axesOn.has(n.axis) && n.e.day <= asOf;
+      if (want && !n.want) {
+        // New arrivals spawn next to a visible neighbor so growth reads as growth.
+        const nb = [...KG.nbrs[n.id]].map(id => nodeById[id]).find(m => m.want);
+        if (nb) { n.x = nb.x + (Math.random() - .5) * 30; n.y = nb.y + (Math.random() - .5) * 30; }
+        n.appearAt = animateIn ? now + Math.random() * 250 : 0;
+      }
+      n.want = want;
+    });
+    reheat(.5);
+  }
+  function reheat(a) { alpha = Math.max(alpha, a); }
+
+  // ---- Physics ----------------------------------------------------------
+  function tick() {
+    alpha += (alphaTarget - alpha) * .02;
+    if (alpha < .003) return;
+    const act = nodes.filter(n => n.want);
+    for (const n of act) {
+      const [ax, ay] = ANCHORS[n.axis];
+      n.vx += (ax - n.x) * .06 * alpha; n.vy += (ay - n.y) * .06 * alpha;
+    }
+    for (let i = 0; i < act.length; i++) {
+      const a = act[i];
+      for (let j = i + 1; j < act.length; j++) {
+        const b = act[j];
+        let dx = b.x - a.x, dy = b.y - a.y; let d2 = dx * dx + dy * dy;
+        if (d2 < 1) { dx = Math.random() - .5; dy = Math.random() - .5; d2 = 1; }
+        if (d2 < 90000) {
+          const f = 260 * alpha / d2;
+          a.vx -= dx * f; a.vy -= dy * f; b.vx += dx * f; b.vy += dy * f;
+        }
+        const min = a.r + b.r + 9;
+        if (d2 < min * min) {
+          const d = Math.sqrt(d2), push = (min - d) / d * .25;
+          a.x -= dx * push; a.y -= dy * push; b.x += dx * push; b.y += dy * push;
+        }
+      }
+    }
+    for (const L of links) {
+      if (!L.s.want || !L.t.want) continue;
+      const dx = L.t.x - L.s.x, dy = L.t.y - L.s.y, d = Math.sqrt(dx * dx + dy * dy) || 1;
+      const len = L.same ? 52 : 170, f = (d - len) / d * alpha * (L.same ? .22 : .025);
+      L.s.vx += dx * f; L.s.vy += dy * f; L.t.vx -= dx * f; L.t.vy -= dy * f;
+    }
+    for (const n of act) {
+      if (n.fixed) { n.vx = n.vy = 0; continue; }
+      n.vx *= .58; n.vy *= .58; n.x += n.vx; n.y += n.vy;
+    }
+  }
+
+  // ---- Camera -----------------------------------------------------------
+  const toScreen = (x, y) => [(x - cam.x) * cam.k + W / 2, (y - cam.y) * cam.k + H / 2];
+  const toWorld = (sx, sy) => [(sx - W / 2) / cam.k + cam.x, (sy - H / 2) / cam.k + cam.y];
+  function fitTarget() {
+    const vis = nodes.filter(n => n.want);
+    if (!vis.length) return { x: 0, y: 0, k: 1 };
+    let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+    vis.forEach(n => { x0 = Math.min(x0, n.x); y0 = Math.min(y0, n.y); x1 = Math.max(x1, n.x); y1 = Math.max(y1, n.y); });
+    const k = clamp(Math.min((W - 220) / (x1 - x0 + 120), (H - 230) / (y1 - y0 + 120)), .5, 1.9);
+    return { x: (x0 + x1) / 2 - 20 / k, y: (y0 + y1) / 2 + 10 / k, k };
+  }
+  function flyTo(target, ms = 750) {
+    if (KG.reduced()) { Object.assign(cam, target); camAnim = null; return; }
+    camAnim = { from: { ...cam }, to: target, t0: performance.now(), ms };
+  }
+
+  // ---- Rendering --------------------------------------------------------
+  function resize() {
+    const r = canvas.parentElement.getBoundingClientRect();
+    dpr = Math.min(2, window.devicePixelRatio || 1);
+    W = r.width; H = r.height;
+    canvas.width = Math.round(W * dpr); canvas.height = Math.round(H * dpr);
+  }
+  function focusSet() {
+    const f = hover || selected;
+    if (!f) return null;
+    const s = new Set([f.id]); KG.nbrs[f.id].forEach(id => s.add(id));
+    return s;
+  }
+  function easeOutBack(t) { const c1 = 1.70158, c3 = c1 + 1; return 1 + c3 * Math.pow(t - 1, 3) + c1 * Math.pow(t - 1, 2); }
+
+  function draw(now) {
+    const C = KG.colors, dark = KG.dark, reduced = KG.reduced();
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.clearRect(0, 0, W, H);
+    // Star field with slight parallax (dark only, purely decorative).
+    if (dark) {
+      ctx.fillStyle = '#ffffff';
+      for (const s of stars) {
+        const x = ((s.x * W * 1.4 - cam.x * .08 * cam.k) % W + W) % W, y = ((s.y * H * 1.4 - cam.y * .08 * cam.k) % H + H) % H;
+        ctx.globalAlpha = s.a * (reduced ? 1 : .75 + .25 * Math.sin(now * .001 + s.x * 40));
+        ctx.fillRect(x, y, s.r, s.r);
+      }
+      ctx.globalAlpha = 1;
+    }
+    const fs = focusSet();
+    const breathe = reduced ? 0 : 1;
+    // Per-node animated values.
+    for (const n of nodes) {
+      const targetA = n.want ? (n.appearAt > now ? 0 : 1) : 0;
+      n.a = reduced ? targetA : lerp(n.a, targetA, targetA > n.a ? .09 : .14);
+      const targetH = !fs || fs.has(n.id) ? 1 : .13;
+      n.hl = reduced ? targetH : lerp(n.hl, targetH, .16);
+      n.ox = Math.sin(now * .00055 + n.phase) * 1.6 * breathe;
+      n.oy = Math.cos(now * .00047 + n.phase * 1.3) * 1.6 * breathe;
+      const [sx, sy] = toScreen(n.x + n.ox, n.y + n.oy); n.sx = sx; n.sy = sy;
+    }
+    // Axis cluster captions.
+    ctx.font = '650 11px ' + FF;
+    ctx.textAlign = 'center';
+    for (const ax of KG.AXIS_ORDER) {
+      if (!axesOn.has(ax)) continue;
+      const vis = nodes.filter(n => n.axis === ax && n.a > .3);
+      if (!vis.length) continue;
+      let cx = 0, minY = Infinity; vis.forEach(n => { cx += n.sx; minY = Math.min(minY, n.sy); }); cx /= vis.length;
+      ctx.globalAlpha = (fs ? .25 : .6);
+      ctx.fillStyle = C[ax];
+      ctx.fillText(KG.AXES[ax].label.toUpperCase().split('').join(' '), cx, minY - 26);
+    }
+    ctx.globalAlpha = 1;
+    // Links.
+    const f = hover || selected;
+    for (const L of links) {
+      const a = Math.min(L.s.a, L.t.a); if (a < .02) continue;
+      if (L.l.day > asOf) continue;
+      const st = KG.linkStatus(L.l);
+      const inc = f && (L.s === f || L.t === f);
+      ctx.globalAlpha = a * (f ? (inc ? .95 : .05) : (st === 'confirmed' ? .5 : .3));
+      ctx.strokeStyle = inc ? C[(L.s === f ? L.t : L.s).axis] : C['ink-3'];
+      ctx.lineWidth = inc ? 1.6 : 1;
+      ctx.setLineDash(st === 'confirmed' ? [] : st === 'superseded' ? [1, 4] : [3, 4]);
+      ctx.beginPath(); ctx.moveTo(L.s.sx, L.s.sy); ctx.lineTo(L.t.sx, L.t.sy); ctx.stroke();
+    }
+    ctx.setLineDash([]); ctx.globalAlpha = 1;
+    // Nodes.
+    const k = clamp(cam.k, .6, 1.8);
+    for (const n of nodes) {
+      if (n.a < .02) continue;
+      const appear = n.want ? easeOutBack(clamp(n.a, 0, 1)) : n.a;
+      const r = n.r * k * Math.max(0, appear);
+      const col = C[n.axis];
+      const al = n.a * n.hl;
+      if (dark && al > .2) {
+        const g = ctx.createRadialGradient(n.sx, n.sy, r * .4, n.sx, n.sy, r * 2.8);
+        g.addColorStop(0, hexA(col, .32 * al)); g.addColorStop(1, hexA(col, 0));
+        ctx.fillStyle = g; ctx.beginPath(); ctx.arc(n.sx, n.sy, r * 2.8, 0, Math.PI * 2); ctx.fill();
+      }
+      // "New on this day" pulse.
+      if (n.e.day === asOf && n.want && al > .5) {
+        const ph = reduced ? .4 : ((now - t0) / 1800 + n.phase / 6) % 1;
+        ctx.globalAlpha = (1 - ph) * .7 * al; ctx.strokeStyle = col; ctx.lineWidth = 1.5;
+        ctx.beginPath(); ctx.arc(n.sx, n.sy, r + 3 + ph * 12, 0, Math.PI * 2); ctx.stroke();
+      }
+      ctx.globalAlpha = al;
+      KG.shapeCanvas(ctx, n.shape, n.sx, n.sy, r);
+      ctx.fillStyle = n.confirmed ? col : hexA(col, .42); ctx.fill();
+      ctx.strokeStyle = n.confirmed ? (dark ? 'rgba(255,255,255,.35)' : 'rgba(0,0,0,.25)') : col;
+      ctx.lineWidth = 1.2; ctx.stroke();
+      if (n === selected) { ctx.strokeStyle = C.ink; ctx.lineWidth = 2; KG.shapeCanvas(ctx, n.shape, n.sx, n.sy, r + 4); ctx.stroke(); }
+    }
+    ctx.globalAlpha = 1;
+    // Labels: focus neighborhood, hubs, or everything when zoomed in.
+    // Greedy collision avoidance: focus first, then by connectedness.
+    ctx.textAlign = 'center'; ctx.textBaseline = 'top'; ctx.lineJoin = 'round';
+    const placed = [];
+    const cands = nodes.filter(n => n.a >= .5 && ((fs && fs.has(n.id)) || (!fs && (n.e.degree >= 6 || cam.k > 1.35 || n.id === 'p.you'))))
+      .sort((a, b) => (b === f) - (a === f) || b.e.degree - a.e.degree);
+    for (const n of cands) {
+      const inFocus = fs && fs.has(n.id);
+      const strong = n === f;
+      ctx.font = (strong ? '650 13px ' : '500 11.5px ') + FF;
+      const y = n.sy + n.r * k + 5;
+      const w = ctx.measureText(n.e.name).width + 6, box = [n.sx - w / 2, y - 1, n.sx + w / 2, y + 15];
+      if (!strong && placed.some(p => box[0] < p[2] && box[2] > p[0] && box[1] < p[3] && box[3] > p[1])) continue;
+      placed.push(box);
+      ctx.globalAlpha = n.a * (fs && !inFocus ? .2 : 1);
+      ctx.strokeStyle = C.bg; ctx.lineWidth = 4; ctx.strokeText(n.e.name, n.sx, y);
+      ctx.fillStyle = strong ? C.ink : C['ink-2']; ctx.fillText(n.e.name, n.sx, y);
+    }
+    ctx.globalAlpha = 1; ctx.textBaseline = 'alphabetic';
+  }
+
+  function loop() {
+    if (!running) return;
+    const now = performance.now();
+    if (camAnim) {
+      const t = clamp((now - camAnim.t0) / camAnim.ms, 0, 1), e = easeInOut(t);
+      cam.x = lerp(camAnim.from.x, camAnim.to.x, e); cam.y = lerp(camAnim.from.y, camAnim.to.y, e); cam.k = lerp(camAnim.from.k, camAnim.to.k, e);
+      if (t >= 1) camAnim = null;
+    }
+    tick(); draw(now);
+    raf = requestAnimationFrame(loop);
+  }
+
+  // ---- Interaction ------------------------------------------------------
+  function hit(sx, sy) {
+    let best = null, bd = Infinity;
+    for (const n of nodes) {
+      if (n.a < .5) continue;
+      const d = Math.hypot(n.sx - sx, n.sy - sy), r = Math.max(8, n.r * clamp(cam.k, .6, 1.8) + 4);
+      if (d < r && d < bd) { bd = d; best = n; }
+    }
+    return best;
+  }
+  function select(n, open = true) {
+    selected = n;
+    if (n && open) KG.drawer.open(n.id);
+  }
+  function tipFor(n) {
+    const facts = KG.factsBy[n.id];
+    const p = facts.filter(f => f.status === 'proposed').length;
+    return `<div><b>${esc(n.e.name)}</b></div><div class="t2">${KG.AXES[n.axis].label} / ${n.e.type} &middot; ${n.e.degree} links &middot; ${facts.length} facts (${p} proposed)</div>`;
+  }
+  function bindPointer() {
+    canvas.addEventListener('pointerdown', e => {
+      const r = canvas.getBoundingClientRect(); const sx = e.clientX - r.left, sy = e.clientY - r.top;
+      pointer = { x: sx, y: sy, sx, sy, down: true, moved: false, panning: false };
+      const n = hit(sx, sy);
+      if (n) { drag = n; n.fixed = true; alphaTarget = .25; reheat(.25); }
+      else pointer.panning = true;
+      canvas.setPointerCapture(e.pointerId); canvas.classList.add('dragging');
+    });
+    canvas.addEventListener('pointermove', e => {
+      const r = canvas.getBoundingClientRect(); const sx = e.clientX - r.left, sy = e.clientY - r.top;
+      if (pointer.down) {
+        if (Math.hypot(sx - pointer.sx, sy - pointer.sy) > 4) pointer.moved = true;
+        if (drag) { const [wx, wy] = toWorld(sx, sy); drag.x = wx; drag.y = wy; }
+        else if (pointer.panning) { cam.x -= (sx - pointer.x) / cam.k; cam.y -= (sy - pointer.y) / cam.k; camAnim = null; }
+        pointer.x = sx; pointer.y = sy; KG.tip.hide();
+        return;
+      }
+      const n = hit(sx, sy);
+      if (n !== hover) { hover = n; canvas.classList.toggle('pointer', !!n); }
+      if (n) KG.tip.show(tipFor(n), e.clientX, e.clientY); else KG.tip.hide();
+    });
+    const end = e => {
+      if (!pointer.down) return;
+      canvas.classList.remove('dragging');
+      if (drag) { drag.fixed = false; alphaTarget = 0; }
+      if (!pointer.moved) {
+        const n = hit(pointer.x, pointer.y);
+        if (n) select(n); else { selected = null; KG.drawer.close(); }
+      }
+      drag = null; pointer.down = false;
+    };
+    canvas.addEventListener('pointerup', end);
+    canvas.addEventListener('pointercancel', end);
+    canvas.addEventListener('pointerleave', () => { if (!pointer.down) { hover = null; KG.tip.hide(); } });
+    canvas.addEventListener('wheel', e => {
+      e.preventDefault(); camAnim = null;
+      const r = canvas.getBoundingClientRect(); const sx = e.clientX - r.left, sy = e.clientY - r.top;
+      const [wx, wy] = toWorld(sx, sy);
+      cam.k = clamp(cam.k * Math.exp(-e.deltaY * .0016), .35, 3.5);
+      cam.x = wx - (sx - W / 2) / cam.k; cam.y = wy - (sy - H / 2) / cam.k;
+    }, { passive: false });
+  }
+  function zoomBy(f) { flyTo({ x: cam.x, y: cam.y, k: clamp(cam.k * f, .35, 3.5) }, 300); }
+
+  // Search with fly-to.
+  function bindSearch() {
+    const q = $('#a-q'), box = $('#a-results');
+    let items = [], idx = 0;
+    const render = () => {
+      box.innerHTML = items.map((e, i) => `<button role="option" aria-selected="${i === idx}" data-id="${e.id}">${KG.shapeIcon(e.axis)}<span>${esc(e.name)}</span><span class="t">${e.type}</span></button>`).join('');
+      box.classList.toggle('show', items.length > 0); q.setAttribute('aria-expanded', String(items.length > 0));
+    };
+    q.addEventListener('input', () => {
+      const s = q.value.trim().toLowerCase(); idx = 0;
+      items = s ? KG.entities.filter(e => e.name.toLowerCase().includes(s) || e.type.includes(s) || (e.summary || '').toLowerCase().includes(s))
+        .sort((a, b) => a.name.toLowerCase().indexOf(s) - b.name.toLowerCase().indexOf(s) || b.degree - a.degree).slice(0, 8) : [];
+      render();
+      hover = items[0] ? nodeById[items[0].id] : null;
+    });
+    q.addEventListener('keydown', e => {
+      if (e.key === 'ArrowDown') { idx = Math.min(idx + 1, items.length - 1); render(); hover = items[idx] && nodeById[items[idx].id]; e.preventDefault(); }
+      else if (e.key === 'ArrowUp') { idx = Math.max(idx - 1, 0); render(); hover = items[idx] && nodeById[items[idx].id]; e.preventDefault(); }
+      else if (e.key === 'Enter' && items[idx]) { go(items[idx].id); }
+      else if (e.key === 'Escape') { q.value = ''; items = []; render(); hover = null; q.blur(); }
+    });
+    box.addEventListener('click', e => { const b = e.target.closest('[data-id]'); if (b) go(b.dataset.id); });
+    const go = id => { items = []; render(); q.value = KG.byId[id].name; hover = null; KG.tip.hide(); api.focus(id); q.blur(); };
+    document.addEventListener('keydown', e => {
+      if (KG.active === 'A' && e.key === '/' && document.activeElement !== q && !/INPUT|TEXTAREA/.test(document.activeElement.tagName)) { e.preventDefault(); q.focus(); q.select(); }
+    });
+  }
+
+  function renderChips() {
+    $('#a-chips').innerHTML = KG.AXIS_ORDER.map(ax => {
+      const n = KG.entities.filter(e => e.axis === ax).length;
+      return `<button class="axis-chip" aria-pressed="${axesOn.has(ax)}" data-ax="${ax}">${KG.shapeIcon(ax)}${KG.AXES[ax].label} <span class="n">${n}</span></button>`;
+    }).join('');
+  }
+  function renderTime() {
+    const per = [1, 2, 3, 4, 5, 6, 7].map(d => KG.facts.filter(f => f.day === d).length), mx = Math.max(...per);
+    $('#a-bars').innerHTML = per.map((c, i) => `<i class="${i + 1 <= asOf ? 'on' : ''}" style="height:${Math.max(8, c / mx * 100)}%" title="${KG.DAYS[i]}: ${c} facts"></i>`).join('');
+    $('#a-asof').textContent = KG.DAYS[asOf - 1];
+    const nf = KG.facts.filter(f => f.day <= asOf).length, ne = KG.entities.filter(e => e.day <= asOf).length;
+    $('#a-asof-n').textContent = `${ne} entities, ${nf} facts`;
+    $('#a-day').value = asOf;
+  }
+  function setAsOf(d, animate = true) { asOf = d; renderTime(); updateVisibility(animate); }
+  function renderLegend() {
+    const ic = (shape, fill, stroke) => `<svg width="14" height="14" viewBox="-7 -7 14 14" aria-hidden="true"><path d="${KG.shapePath(shape, 5)}" fill="${fill}" stroke="${stroke}" stroke-width="1.2"/></svg>`;
+    $('#a-legend').innerHTML = `
+      <div class="row">${ic('circle', 'var(--ink-3)', 'none')} Has confirmed facts</div>
+      <div class="row">${ic('circle', 'color-mix(in srgb, var(--ink-3) 40%, transparent)', 'var(--ink-3)')} Proposed only</div>
+      <div class="row"><svg width="22" height="6" aria-hidden="true"><line x1="0" y1="3" x2="22" y2="3" stroke="var(--ink-3)" stroke-width="1.5"/></svg> Confirmed relation</div>
+      <div class="row"><svg width="22" height="6" aria-hidden="true"><line x1="0" y1="3" x2="22" y2="3" stroke="var(--ink-3)" stroke-width="1.5" stroke-dasharray="3 3"/></svg> Proposed relation</div>
+      <div class="row"><svg width="14" height="14" viewBox="-7 -7 14 14" aria-hidden="true"><circle r="5.5" fill="none" stroke="var(--ink-3)" stroke-width="1.2"/><circle r="2.5" fill="var(--ink-3)"/></svg> Pulse: new on the as-of day</div>
+      <div class="row muted">Size = connectedness. Shape = axis.</div>`;
+  }
+
+  const api = {
+    init() {
+      canvas = $('#a-canvas'); ctx = canvas.getContext('2d'); FF = getComputedStyle(document.body).fontFamily;
+      resize(); build();
+      new ResizeObserver(() => { resize(); }).observe(canvas.parentElement);
+      Object.assign(cam, fitTarget());
+      // Entrance: nodes pop in day by day.
+      const now = performance.now();
+      nodes.forEach(n => { n.a = 0; n.appearAt = KG.reduced() ? 0 : now + (n.e.day - 1) * 110 + Math.random() * 180; });
+      bindPointer(); bindSearch(); renderChips(); renderTime(); renderLegend();
+      $('#a-chips').addEventListener('click', e => {
+        const b = e.target.closest('[data-ax]'); if (!b) return;
+        const ax = b.dataset.ax;
+        if (axesOn.has(ax) && axesOn.size > 1) axesOn.delete(ax); else axesOn.add(ax);
+        renderChips(); updateVisibility(true);
+      });
+      $('#a-day').addEventListener('input', e => { stopPlay(); setAsOf(+e.target.value); });
+      $('#a-play').addEventListener('click', () => playTimer ? stopPlay() : startPlay());
+      $('#a-zin').addEventListener('click', () => zoomBy(1.3));
+      $('#a-zout').addEventListener('click', () => zoomBy(1 / 1.3));
+      $('#a-fit').addEventListener('click', () => flyTo(fitTarget()));
+      KG.bus.on('status', () => refreshConfirmed());
+      KG.bus.on('drawerclose', () => { selected = null; });
+    },
+    show() { running = true; resize(); raf = requestAnimationFrame(loop); },
+    hide() { running = false; cancelAnimationFrame(raf); stopPlay(); hover = null; selected = null; },
+    // Test hook: screen position of a node (used by the headless check).
+    _screenPos(id) { const n = nodeById[id]; const r = canvas.getBoundingClientRect(); return n ? [r.left + n.sx, r.top + n.sy] : null; },
+    focus(id) {
+      const n = nodeById[id]; if (!n) return;
+      if (!axesOn.has(n.axis)) { axesOn.add(n.axis); renderChips(); }
+      if (n.e.day > asOf) setAsOf(7);
+      updateVisibility(true);
+      flyTo({ x: n.x + 150 / 1.25, y: n.y, k: 1.25 }); // offset so the drawer does not cover the neighborhood
+      select(n);
+    },
+  };
+  const playIcon = '<svg width="12" height="12" viewBox="0 0 12 12"><path d="M3 1.5l7 4.5-7 4.5z" fill="currentColor"/></svg>';
+  const pauseIcon = '<svg width="12" height="12" viewBox="0 0 12 12"><rect x="2.5" y="2" width="2.5" height="8" fill="currentColor"/><rect x="7" y="2" width="2.5" height="8" fill="currentColor"/></svg>';
+  function startPlay() {
+    setAsOf(1); $('#a-play').innerHTML = pauseIcon; $('#a-play').setAttribute('aria-label', 'Pause replay');
+    playTimer = setInterval(() => { if (asOf >= 7) { stopPlay(); flyTo(fitTarget()); return; } setAsOf(asOf + 1); }, 1000);
+  }
+  function stopPlay() { if (!playTimer) return; clearInterval(playTimer); playTimer = null; $('#a-play').innerHTML = playIcon; $('#a-play').setAttribute('aria-label', 'Replay the week'); }
+  return api;
+})();
+
+/* =========================================================================
+   TREATMENT B: Process metro map + atlas (People bubbles, Product treemap)
+   The metro uses a hand-tuned grid plus a tiny octilinear router. In
+   production: one row per process, shared stations snapped to columns.
+   ========================================================================= */
+KG.treatments.B = (function () {
+  const GX = 54, GY = 86, OX = 44, OY = 40;
+  const px = (gx, gy) => [OX + gx * GX, OY + gy * GY];
+
+  // Stations: label (\n wraps), ref entity, grid position, label placement, gate flag.
+  const S = {
+    l10nFreeze: { label: 'String\nfreeze', ref: 'pr.l10n', g: [0.2, 3], lp: 'b' },
+    l10nTrans:  { label: 'Translate', ref: 'sv.trans', g: [1.5, 3], lp: 'a' },
+    l10nFlag:   { label: 'Behind a\nflag', ref: 'sy.flags', g: [2.8, 3], lp: 'b' },
+    merge:      { label: 'Merge to\nmain', ref: 'st.merge', g: [4.1, 3], lp: 'a' },
+    ci:         { label: 'CI pipeline', ref: 'sy.ci', g: [5.6, 3], lp: 'a' },
+    staging:    { label: 'Deploy to\nstaging', ref: 'st.staging', g: [7.1, 3], lp: 'b' },
+    canary:     { label: 'Canary\nchecks', ref: 'st.canary', g: [8.6, 3], lp: 'a' },
+    smoke:      { label: 'Smoke\ntests', ref: 'g.smoke', g: [10.1, 3], lp: 'a', gate: true },
+    errors:     { label: 'Error\nrate', ref: 'g.errors', g: [11.6, 3], lp: 'bl', gate: true },
+    rollout:    { label: 'Gradual\nrollout', ref: 'st.rollout', g: [13.1, 3], lp: 'br' },
+    prod:       { label: 'Live in\nprod', ref: 'en.prod', g: [14.6, 3], lp: 'a' },
+    announce:   { label: '#deploys', ref: 'ch.deploys', g: [16, 3], lp: 'b' },
+    // Customer bug report
+    report:     { label: 'Customer\nreport', ref: 'ch.support', g: [2.2, 0.75], lp: 'b' },
+    triage:     { label: 'Ticket\ntriaged', ref: 'sy.tickets', g: [3.9, 0.75], lp: 'a' },
+    fix:        { label: 'Owner fixes', ref: 'p.you', g: [9.3, 0.75], lp: 'a' },
+    told:       { label: 'Customer\ntold', ref: 'pr.bug', g: [10.9, 0.75], lp: 'b' },
+    // Code review
+    rPR:        { label: 'Open a\nPR', ref: 'r.invoices', g: [0, 5.3], lp: 'b' },
+    rReview:    { label: 'Tech lead\nreviews', ref: 'p.tomas', g: [1.6, 5.3], lp: 'b' },
+    rChecks:    { label: 'PR checks\npass', ref: 'g.checks', g: [3.2, 5.3], lp: 'b', gate: true },
+    // Feature launch (vertical through the gradual rollout)
+    lStart:     { label: 'Flag created', ref: 'pr.launch', g: [13.1, 0.55], lp: 'r' },
+    lBeta:      { label: 'Beta customers', ref: 'p.priya', g: [13.1, 1.75], lp: 'r' },
+    lDone:      { label: 'Flag\nremoved', ref: 'sy.flags', g: [13.1, 5.35], lp: 'r' },
+    // Incident (vertical through the error-rate gate)
+    iAlert:     { label: 'Alert fires', ref: 'sy.obs', g: [11.6, 6.3], lp: 'l' },
+    iDeclare:   { label: 'Declare in\n#incidents', ref: 'ch.incidents', g: [11.6, 5.3], lp: 'l' },
+    iFollow:    { label: 'Follow-up\nticket', ref: 'sy.tickets', g: [11.6, 1.75], lp: 'l' },
+    // Hotfix (parallel express track below the trunk)
+    hCut:       { label: 'Cut from\nprod tag', ref: 'pr.hotfix', g: [4.6, 4.2], lp: 'b' },
+    hCI:        { label: '', ref: 'sy.ci', g: [5.6, 4.2], lp: 'b' },
+    hSmoke:     { label: 'Skips the\ngradual rollout', ref: 'g.smoke', g: [10.1, 4.2], lp: 'b' },
+    hProd:      { label: '', ref: 'en.prod', g: [14.6, 4.2], lp: 'b' },
+  };
+  const LINES = [
+    { id: 'pr.release', name: 'Release', stations: ['merge', 'ci', 'staging', 'canary', 'smoke', 'errors', 'rollout', 'prod', 'announce'], tag: [4.1, 3] },
+    { id: 'pr.bug', name: 'Bug report', stations: ['report', 'triage', 'staging', 'fix', 'told'] },
+    { id: 'pr.review', name: 'Code review', stations: ['rPR', 'rReview', 'rChecks', 'merge'] },
+    { id: 'pr.launch', name: 'Launch', stations: ['lStart', 'lBeta', 'rollout', 'lDone'] },
+    { id: 'pr.incident', name: 'Incident', stations: ['iAlert', 'iDeclare', 'errors', 'iFollow'] },
+    { id: 'pr.l10n', name: 'Localization', stations: ['l10nFreeze', 'l10nTrans', 'l10nFlag', 'merge'] },
+    { id: 'pr.hotfix', name: 'Hotfix', stations: ['hCut', 'hCI', 'hSmoke', 'hProd'], dashed: true },
+  ];
+  // Vertical interchange connectors between the trunk and the hotfix track.
+  const CONNECTORS = [['ci', 'hCI'], ['smoke', 'hSmoke'], ['prod', 'hProd']];
+  const TAG_POS = { 'pr.release': ['announce', -81, -50], 'pr.bug': ['report', -6, -56], 'pr.review': ['rPR', -6, -28], 'pr.launch': ['lStart', -40, -22],
+    'pr.incident': ['iAlert', -6, 30], 'pr.l10n': ['l10nFreeze', -6, -64], 'pr.hotfix': ['hProd', 16, 0] };
+
+  let svg, linesG, stationsG, trainsG, raf = 0, running = false;
+  const lineEls = {}, stationEls = {}, personEls = {}, tileEls = {};
+  let trains = [];
+
+  // Octilinear route between two px points: straight run, then 45 degrees.
+  function route(a, b) {
+    const dx = b[0] - a[0], dy = b[1] - a[1], adx = Math.abs(dx), ady = Math.abs(dy);
+    if (adx < .5 || ady < .5) return [a, b];
+    if (adx >= ady) { const m = [b[0] - Math.sign(dx) * ady, a[1]]; return [a, m, b]; }
+    const m = [a[0], b[1] - Math.sign(dy) * adx]; return [a, m, b];
+  }
+  function roundedPath(pts, r = 14) {
+    let d = `M${pts[0][0]},${pts[0][1]}`;
+    for (let i = 1; i < pts.length - 1; i++) {
+      const p0 = pts[i - 1], p1 = pts[i], p2 = pts[i + 1];
+      const v1 = [p1[0] - p0[0], p1[1] - p0[1]], v2 = [p2[0] - p1[0], p2[1] - p1[1]];
+      const l1 = Math.hypot(...v1), l2 = Math.hypot(...v2);
+      if (l1 < 1 || l2 < 1) continue;
+      const rr = Math.min(r, l1 / 2, l2 / 2);
+      const a = [p1[0] - v1[0] / l1 * rr, p1[1] - v1[1] / l1 * rr], b = [p1[0] + v2[0] / l2 * rr, p1[1] + v2[1] / l2 * rr];
+      d += `L${a[0].toFixed(1)},${a[1].toFixed(1)}Q${p1[0]},${p1[1]} ${b[0].toFixed(1)},${b[1].toFixed(1)}`;
+    }
+    const last = pts[pts.length - 1]; return d + `L${last[0]},${last[1]}`;
+  }
+  function linePoints(line) {
+    const pts = [];
+    line.stations.forEach((k, i) => {
+      const p = px(...S[k].g);
+      if (i === 0) { pts.push(p); return; }
+      const seg = route(pts[pts.length - 1], p); seg.slice(1).forEach(q => pts.push(q));
+    });
+    return pts;
+  }
+
+  // Which lines touch each station (for interchanges).
+  function stationLines() {
+    const m = {}; LINES.forEach((l, i) => l.stations.forEach(k => (m[k] = m[k] || []).push(i))); return m;
+  }
+
+  function drawMetro() {
+    svg = $('#b-metro'); svg.innerHTML = '';
+    svg.setAttribute('viewBox', '0 0 990 610'); svg.setAttribute('preserveAspectRatio', 'xMidYMid meet');
+    const defs = svgEl('defs', {}, svg);
+    const glow = svgEl('filter', { id: 'b-glow', x: '-50%', y: '-50%', width: '200%', height: '200%' }, defs);
+    svgEl('feGaussianBlur', { stdDeviation: '3' }, glow);
+    // Faint grid for the "map" feel.
+    const grid = svgEl('g', { opacity: .35 }, svg);
+    for (let x = 0; x < 990; x += 27) svgEl('line', { x1: x, y1: 0, x2: x, y2: 610, stroke: 'var(--line)', 'stroke-width': .5 }, grid);
+    for (let y = 0; y < 610; y += 27) svgEl('line', { x1: 0, y1: y, x2: 990, y2: y, stroke: 'var(--line)', 'stroke-width': .5 }, grid);
+    linesG = svgEl('g', {}, svg); trainsG = svgEl('g', {}, svg); stationsG = svgEl('g', {}, svg);
+    const sl = stationLines();
+
+    LINES.forEach((line, i) => {
+      const col = KG.colors.metro[i];
+      const d = roundedPath(linePoints(line));
+      const g = svgEl('g', { class: 'metro-line-g', 'data-line': line.id }, linesG);
+      svgEl('path', { d, class: 'metro-line', stroke: 'var(--bg)', 'stroke-width': 11 }, g);
+      const p = svgEl('path', { d, class: 'metro-line', stroke: `var(--m${i + 1})`, 'stroke-width': line.dashed ? 4 : 6, 'stroke-dasharray': line.dashed ? '1 9' : null }, g);
+      if (line.dashed) p.setAttribute('stroke-dasharray', '10 6');
+      lineEls[line.id] = g;
+      // Line name tag + actor avatars.
+      const [sk, ox, oy] = TAG_POS[line.id]; const [sx, sy] = px(...S[sk].g);
+      const tg = svgEl('g', { class: 'metro-station', tabindex: 0, role: 'button', 'aria-label': line.name + ' process', 'data-ent': line.id, transform: `translate(${sx + ox},${sy + oy})` }, g);
+      const w = line.name.length * 7 + 18;
+      svgEl('rect', { x: 0, y: -11, width: w, height: 22, rx: 11, fill: `var(--m${i + 1})` }, tg);
+      const t = svgEl('text', { x: 9, y: 4, class: 'metro-tag' }, tg); t.textContent = line.name;
+      const actors = KG.factsBy[line.id].filter(f => f.p === 'actor' && f.s === line.id).map(f => f.o);
+      actors.forEach((a, j) => {
+        const ag = svgEl('g', { transform: `translate(${w + 12 + j * 17},0)` }, tg);
+        svgEl('circle', { r: 9, fill: 'var(--surface-3)', stroke: 'var(--people)', 'stroke-width': 1.5 }, ag);
+        const at = svgEl('text', { y: 3.5, 'text-anchor': 'middle', 'font-size': 8, 'font-weight': 700, fill: 'var(--ink)' }, ag); at.textContent = KG.initials(KG.byId[a].name);
+      });
+      line.pathD = d;
+    });
+    // Interchange connectors (trunk <-> hotfix track).
+    CONNECTORS.forEach(([a, b]) => {
+      const [x1, y1] = px(...S[a].g), [, y2] = px(...S[b].g);
+      svgEl('rect', { x: x1 - 8, y: y1 - 8, width: 16, height: y2 - y1 + 16, rx: 8, fill: 'var(--surface)', stroke: 'var(--ink)', 'stroke-width': 2.5, class: 'connector' }, stationsG);
+    });
+    // Stations.
+    Object.entries(S).forEach(([k, st]) => {
+      const [x, y] = px(...st.g);
+      const lines = sl[k] || [];
+      const inter = lines.length > 1;
+      const g = svgEl('g', { class: 'metro-station', tabindex: 0, role: 'button', 'data-ent': st.ref, 'data-st': k, 'aria-label': `${st.label.replace('\n', ' ')} station${inter ? ', interchange' : ''}${st.gate ? ', gate' : ''}`, transform: `translate(${x},${y})` }, stationsG);
+      if (st.gate) {
+        svgEl('rect', { x: -9, y: -9, width: 18, height: 18, rx: 4, fill: 'var(--surface)', stroke: 'var(--ink)', 'stroke-width': 2.5 }, g);
+        svgEl('path', { d: 'M-4,0h8M0,-4v8', stroke: 'var(--ink)', 'stroke-width': 2, 'stroke-linecap': 'round', transform: 'rotate(45)' }, g);
+      } else if (inter) {
+        svgEl('circle', { r: 9.5, fill: 'var(--surface)', stroke: 'var(--ink)', 'stroke-width': 3 }, g);
+      } else if (st.label) {
+        const li = lines[0] ?? 0;
+        svgEl('circle', { r: 6, fill: 'var(--surface)', stroke: `var(--m${li + 1})`, 'stroke-width': 3 }, g);
+      } else {
+        svgEl('circle', { r: 5, fill: 'var(--surface)', stroke: 'var(--ink)', 'stroke-width': 2 }, g);
+      }
+      svgEl('circle', { r: 16, fill: 'transparent' }, g); // generous hit target
+      if (st.label) {
+        const lp = st.lp; const parts = st.label.split('\n');
+        let tx = 0, ty = 24, anchor = 'middle';
+        if (lp === 'a') ty = -16 - (parts.length - 1) * 13;
+        if (lp === 'r') { tx = 14; ty = 4 - (parts.length - 1) * 6.5; anchor = 'start'; }
+        if (lp === 'l') { tx = -14; ty = 4 - (parts.length - 1) * 6.5; anchor = 'end'; }
+        if (lp === 'br') { tx = 10; ty = 24; anchor = 'start'; }
+        if (lp === 'bl') { tx = -10; ty = 24; anchor = 'end'; }
+        const t = svgEl('text', { class: 'metro-label' + (inter || st.gate ? ' strong' : ''), 'text-anchor': anchor, transform: `translate(${tx},${ty})` }, g);
+        parts.forEach((p, i) => { const ts = svgEl('tspan', { x: 0, dy: i ? 13 : 0 }, t); ts.textContent = p; });
+      }
+      stationEls[k] = g;
+    });
+    // Legend.
+    $('#b-leg').innerHTML = `
+      <span><svg width="14" height="14" viewBox="-7 -7 14 14"><circle r="4.5" fill="var(--surface)" stroke="var(--m1)" stroke-width="2.5"/></svg>Step</span>
+      <span><svg width="16" height="16" viewBox="-8 -8 16 16"><circle r="6" fill="var(--surface)" stroke="var(--ink)" stroke-width="2.5"/></svg>Interchange (shared)</span>
+      <span><svg width="16" height="16" viewBox="-8 -8 16 16"><rect x="-6" y="-6" width="12" height="12" rx="3" fill="var(--surface)" stroke="var(--ink)" stroke-width="2"/><path d="M-3,0h6M0,-3v6" stroke="var(--ink)" stroke-width="1.6" transform="rotate(45)"/></svg>Gate</span>
+      <span><svg width="22" height="10"><line x1="1" y1="5" x2="21" y2="5" stroke="var(--m7)" stroke-width="3" stroke-dasharray="6 4"/></svg>Express track</span>
+      <span><svg width="14" height="14" viewBox="-7 -7 14 14"><circle r="6" fill="var(--surface-3)" stroke="var(--people)" stroke-width="1.5"/></svg>Actor</span>`;
+    setupTrains();
+  }
+
+  // Animated "trains" along a few lines (decorative; off under reduced motion).
+  function setupTrains() {
+    trainsG.innerHTML = ''; trains = [];
+    ['pr.release', 'pr.bug', 'pr.review', 'pr.launch'].forEach((id, j) => {
+      const i = LINES.findIndex(l => l.id === id);
+      const path = svgEl('path', { d: LINES[i].pathD, fill: 'none', stroke: 'none' }, trainsG);
+      const dot = svgEl('circle', { r: 4.5, fill: KG.dark ? '#fff' : 'var(--ink)', filter: KG.dark ? 'url(#b-glow)' : null, opacity: .95 }, trainsG);
+      const core = svgEl('circle', { r: 2.6, fill: KG.dark ? '#fff' : 'var(--surface)' }, trainsG);
+      trains.push({ path, dot, core, len: path.getTotalLength(), speed: 0.045 + j * .008, off: j * 0.27 });
+    });
+  }
+  function animate(now) {
+    if (!running) return;
+    const red = KG.reduced();
+    trains.forEach(t => {
+      t.dot.style.display = t.core.style.display = red ? 'none' : '';
+      if (red) return;
+      const u = ((now / 1000 * t.speed) + t.off) % 1;
+      const p = t.path.getPointAtLength(u * t.len);
+      t.dot.setAttribute('cx', p.x); t.dot.setAttribute('cy', p.y); t.core.setAttribute('cx', p.x); t.core.setAttribute('cy', p.y);
+    });
+    raf = requestAnimationFrame(animate);
+  }
+
+  // ---- Atlas: People bubbles packed by team --------------------------
+  function relax(items, cx, cy, iters, pull, pad) {
+    for (let it = 0; it < iters; it++) {
+      for (const a of items) { a.x += (cx - a.x) * pull; a.y += (cy - a.y) * pull; }
+      for (let i = 0; i < items.length; i++) for (let j = i + 1; j < items.length; j++) {
+        const a = items[i], b = items[j]; const dx = b.x - a.x, dy = b.y - a.y; const d = Math.hypot(dx, dy) || .01; const m = a.r + b.r + pad;
+        if (d < m) { const p = (m - d) / d / 2; a.x -= dx * p; a.y -= dy * p; b.x += dx * p; b.y += dy * p; }
+      }
+    }
+  }
+  function drawPeople() {
+    const s = $('#b-people'); s.innerHTML = ''; s.setAttribute('viewBox', '0 0 520 290'); s.setAttribute('preserveAspectRatio', 'xMidYMid meet');
+    const teams = KG.entities.filter(e => e.type === 'team');
+    const groups = teams.map((t, ti) => {
+      const members = KG.facts.filter(f => f.p === 'member_of' && f.o === t.id).map(f => KG.byId[f.s]);
+      const rnd = mulberry32(ti + 11);
+      const items = members.map((m, i) => ({ e: m, r: 13 + Math.sqrt(m.nFacts) * 3.2, x: Math.cos(i * 2.4) * (8 + i * 6) + rnd(), y: Math.sin(i * 2.4) * (8 + i * 6) + rnd() }));
+      relax(items, 0, 0, 160, .04, 4);
+      const R = Math.max(...items.map(m => Math.hypot(m.x, m.y) + m.r)) + 14;
+      return { t, items, r: R, x: 0, y: 0 };
+    });
+    // Place teams on a row then relax inside the panel.
+    let cx = 0; groups.forEach(g => { g.x = cx + g.r; g.y = 150; cx += g.r * 2 + 10; });
+    relax(groups, 260, 150, 120, .03, 10);
+    const x0 = Math.min(...groups.map(g => g.x - g.r)) - 8, x1 = Math.max(...groups.map(g => g.x + g.r)) + 8;
+    const y0 = Math.min(...groups.map(g => g.y - g.r)) - 22, y1 = Math.max(...groups.map(g => g.y + g.r)) + 8;
+    s.setAttribute('viewBox', `${x0.toFixed(0)} ${y0.toFixed(0)} ${(x1 - x0).toFixed(0)} ${(y1 - y0).toFixed(0)}`);
+    groups.forEach(g => {
+      const gg = svgEl('g', { transform: `translate(${g.x.toFixed(1)},${g.y.toFixed(1)})` }, s);
+      const tg = svgEl('g', { class: 'atlas-node', tabindex: 0, role: 'button', 'data-ent': g.t.id, 'aria-label': g.t.name + ' team' }, gg);
+      svgEl('circle', { r: g.r, fill: 'color-mix(in srgb, var(--people) 7%, transparent)', stroke: 'color-mix(in srgb, var(--people) 35%, transparent)', 'stroke-dasharray': '3 3' }, tg);
+      const lbl = svgEl('text', { y: -g.r - 6, 'text-anchor': 'middle', class: 'tm-group' }, tg); lbl.textContent = g.t.name;
+      personEls[g.t.id] = tg;
+      g.items.forEach(m => {
+        const conf = KG.factsBy[m.e.id].some(f => f.status === 'confirmed');
+        const pg = svgEl('g', { class: 'atlas-node', tabindex: 0, role: 'button', 'data-ent': m.e.id, 'aria-label': `${m.e.name}, ${m.e.summary}`, transform: `translate(${m.x.toFixed(1)},${m.y.toFixed(1)})` }, gg);
+        svgEl('circle', { r: m.r, fill: conf ? 'var(--people)' : 'color-mix(in srgb, var(--people) 30%, var(--surface))', stroke: m.e.id === 'p.you' ? 'var(--ink)' : 'var(--people)', 'stroke-width': m.e.id === 'p.you' ? 2.5 : 1.5 }, pg);
+        const t = svgEl('text', { y: 4, 'text-anchor': 'middle', 'font-size': m.e.id === 'p.you' ? 10 : 11, 'font-weight': 700, fill: conf ? '#fff' : 'var(--ink)' }, pg);
+        t.textContent = KG.initials(m.e.name);
+        personEls[m.e.id] = pg;
+      });
+    });
+  }
+
+  // ---- Atlas: Product treemap (squarified) ---------------------------
+  function squarify(items, x, y, w, h) {
+    // items: [{value}] sorted desc; returns items with x,y,w,h.
+    const out = []; let rest = items.slice(); const total = rest.reduce((s, d) => s + d.value, 0);
+    const scale = (w * h) / total;
+    rest.forEach(d => d.area = d.value * scale);
+    const worst = (row, len) => { const s = row.reduce((a, d) => a + d.area, 0); const mx = Math.max(...row.map(d => d.area)), mn = Math.min(...row.map(d => d.area)); return Math.max(len * len * mx / (s * s), (s * s) / (len * len * mn)); };
+    while (rest.length) {
+      const len = Math.min(w, h); let row = [rest[0]]; let i = 1;
+      while (i < rest.length && worst(row.concat(rest[i]), len) <= worst(row, len)) { row.push(rest[i]); i++; }
+      const s = row.reduce((a, d) => a + d.area, 0), thick = s / len;
+      let off = 0;
+      row.forEach(d => {
+        const l = d.area / thick;
+        if (w >= h) out.push(Object.assign(d, { x, y: y + off, w: thick, h: l })); else out.push(Object.assign(d, { x: x + off, y, w: l, h: thick }));
+        off += l;
+      });
+      if (w >= h) { x += thick; w -= thick; } else { y += thick; h -= thick; }
+      rest = rest.slice(i);
+    }
+    return out;
+  }
+  function drawProduct() {
+    const s = $('#b-product'); s.innerHTML = ''; const W = 520, H = 290;
+    s.setAttribute('viewBox', `0 0 ${W} ${H}`); s.setAttribute('preserveAspectRatio', 'xMidYMid meet');
+    const defs = svgEl('defs', {}, s);
+    const pat = svgEl('pattern', { id: 'b-hatch', width: 6, height: 6, patternUnits: 'userSpaceOnUse', patternTransform: 'rotate(45)' }, defs);
+    svgEl('line', { x1: 0, y1: 0, x2: 0, y2: 6, stroke: 'var(--ink-3)', 'stroke-width': 1.2, opacity: .5 }, pat);
+    const types = ['feature', 'decision', 'repo', 'service', 'lesson', 'principle'];
+    const groups = types.map(t => {
+      const leaves = KG.entities.filter(e => e.type === t).map(e => ({ e, value: 1 + e.nFacts })).sort((a, b) => b.value - a.value);
+      return { t, leaves, value: leaves.reduce((a, d) => a + d.value, 0) };
+    }).sort((a, b) => b.value - a.value);
+    squarify(groups, 2, 2, W - 4, H - 4).forEach(g => {
+      svgEl('rect', { x: g.x + 1, y: g.y + 1, width: g.w - 2, height: g.h - 2, rx: 6, fill: 'none', stroke: 'var(--line-2)' }, s);
+      const gl = svgEl('text', { x: g.x + 8, y: g.y + 13, class: 'tm-group' }, s); gl.textContent = KG.TYPE_PLURAL[g.t];
+      squarify(g.leaves, g.x + 4, g.y + 18, g.w - 8, g.h - 22).forEach(d => {
+        const sup = KG.factsBy[d.e.id].some(f => f.s === d.e.id && f.status === 'superseded');
+        const conf = KG.factsBy[d.e.id].some(f => f.status === 'confirmed');
+        const tg = svgEl('g', { class: 'atlas-node', tabindex: 0, role: 'button', 'data-ent': d.e.id, 'aria-label': `${d.e.name}${sup ? ', superseded' : ''}` }, s);
+        svgEl('rect', { x: d.x + 1.5, y: d.y + 1.5, width: Math.max(0, d.w - 3), height: Math.max(0, d.h - 3), rx: 4,
+          fill: sup ? 'url(#b-hatch)' : `color-mix(in srgb, var(--product) ${conf ? 55 : 22}%, var(--surface))`, stroke: sup ? 'var(--line-2)' : 'color-mix(in srgb, var(--product) 60%, transparent)' }, tg);
+        if (d.w > 44 && d.h > 20) {
+          const maxc = Math.floor((d.w - 10) / 5.8);
+          const name = d.e.name.length > maxc ? d.e.name.slice(0, maxc - 1) + '…' : d.e.name;
+          const t = svgEl('text', { x: d.x + 6, y: d.y + 15, class: 'tm-label', 'text-decoration': sup ? 'line-through' : null }, tg); t.textContent = name;
+          if (d.h > 34) { const t2 = svgEl('text', { x: d.x + 6, y: d.y + 28, class: 'tm-sub' }, tg); t2.textContent = sup ? 'superseded' : `${d.e.nFacts} facts`; }
+        }
+        tileEls[d.e.id] = tg;
+      });
+    });
+  }
+
+  // ---- Cross-highlighting -------------------------------------------
+  function relevantLines(id) {
+    return LINES.filter(l => l.id === id || KG.nbrs[l.id].has(id) || l.stations.some(k => S[k].ref === id)).map(l => l.id);
+  }
+  function highlight(id) {
+    const dimAll = !!id;
+    const lines = id ? new Set(relevantLines(id)) : null;
+    const rel = id ? new Set([id, ...KG.nbrs[id]]) : null;
+    LINES.forEach(l => lineEls[l.id].classList.toggle('dim', dimAll && !lines.has(l.id)));
+    Object.entries(stationEls).forEach(([k, el]) => {
+      const st = S[k];
+      const on = !dimAll || rel.has(st.ref) || LINES.some(l => lines.has(l.id) && l.stations.includes(k));
+      el.classList.toggle('dim', !on);
+    });
+    Object.entries(personEls).forEach(([eid, el]) => el.classList.toggle('dim', dimAll && !(rel.has(eid) || LINES.some(l => lines.has(l.id) && KG.nbrs[l.id].has(eid)))));
+    Object.entries(tileEls).forEach(([eid, el]) => el.classList.toggle('dim', dimAll && !rel.has(eid)));
+  }
+  function tipHtml(id) {
+    const e = KG.byId[id]; const f = KG.factsBy[id];
+    const top = f.filter(x => x.s === id && x.v).slice(0, 2).map(x => `<div class="t2">${esc(x.v)}</div>`).join('');
+    return `<div><b>${esc(e.name)}</b> <span class="t2">${e.type}</span></div>${top}<div class="t2">${f.length} facts &middot; click for details</div>`;
+  }
+  function bind() {
+    const root = $('#mock-B');
+    root.addEventListener('pointerover', e => { const n = e.target.closest('[data-ent]'); if (!n) return; highlight(n.dataset.ent); });
+    root.addEventListener('pointermove', e => { const n = e.target.closest('[data-ent]'); if (n) KG.tip.show(tipHtml(n.dataset.ent), e.clientX, e.clientY); else KG.tip.hide(); });
+    root.addEventListener('pointerout', e => { const n = e.target.closest('[data-ent]'); if (n && !n.contains(e.relatedTarget)) { highlight(KG.drawer.id); KG.tip.hide(); } });
+    root.addEventListener('click', e => { const n = e.target.closest('[data-ent]'); if (n && n.closest('svg')) { KG.drawer.open(n.dataset.ent); highlight(n.dataset.ent); } });
+    root.addEventListener('focusin', e => { const n = e.target.closest('[data-ent]'); if (n) highlight(n.dataset.ent); });
+    root.addEventListener('keydown', e => { const n = e.target.closest('[data-ent]'); if (n && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); KG.drawer.open(n.dataset.ent); } });
+    KG.bus.on('drawerclose', () => { if (KG.active === 'B') highlight(null); });
+  }
+  function redraw() { drawMetro(); drawPeople(); drawProduct(); }
+
+  return {
+    init() { redraw(); bind(); KG.bus.on('theme', () => { if (KG.treatments.B.inited) redraw(); }); KG.bus.on('status', () => { drawPeople(); drawProduct(); }); },
+    show() { running = true; raf = requestAnimationFrame(animate); },
+    hide() { running = false; cancelAnimationFrame(raf); highlight(null); },
+    focus(id) { KG.drawer.open(id); highlight(id); },
+  };
+})();
+
+/* =========================================================================
+   TREATMENT C: Briefing / insight feed
+   Magazine-style home: headline + metrics, "this week we learned" timeline
+   with before -> after decisions, review batch as a card stack, and a
+   "most connected" strip with mini ego graphs. Plain HTML + tiny SVG.
+   ========================================================================= */
+KG.treatments.C = (function () {
+  let wrap, batch = [], idx = 0, history = [], feedAxis = 'all', expanded = new Set();
+  const GROUP = { people: 'People and roles', process: 'How work moves', product: 'Product decisions', systems: 'Systems and environments' };
+
+  // ---- Small SVG builders ------------------------------------------------
+  function sparkline(values, w = 150, h = 34, color = 'var(--accent)') {
+    const mx = Math.max(...values, 1), step = w / (values.length - 1);
+    const pts = values.map((v, i) => [i * step, h - 3 - (v / mx) * (h - 8)]);
+    const line = pts.map((p, i) => (i ? 'L' : 'M') + p[0].toFixed(1) + ',' + p[1].toFixed(1)).join('');
+    const last = pts[pts.length - 1];
+    return `<svg class="spark" width="${w}" height="${h}" viewBox="-2 0 ${w + 6} ${h}" aria-hidden="true">
+      <path class="area" d="${line}L${w},${h}L0,${h}Z" fill="${color}"/>
+      <path d="${line}" fill="none" stroke="${color}" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>
+      <circle cx="${last[0]}" cy="${last[1]}" r="3.5" fill="${color}" stroke="var(--surface)" stroke-width="2"/></svg>`;
+  }
+  function ring(pct, color, size = 56) {
+    const r = size / 2 - 5, c = 2 * Math.PI * r;
+    return `<svg width="${size}" height="${size}" viewBox="0 0 ${size} ${size}" aria-hidden="true">
+      <circle cx="${size / 2}" cy="${size / 2}" r="${r}" fill="none" stroke="var(--surface-3)" stroke-width="6"/>
+      <circle class="ring-v" cx="${size / 2}" cy="${size / 2}" r="${r}" fill="none" stroke="${color}" stroke-width="6" stroke-linecap="round"
+        stroke-dasharray="${c.toFixed(1)}" stroke-dashoffset="${c.toFixed(1)}" data-to="${(c * (1 - pct)).toFixed(1)}" transform="rotate(-90 ${size / 2} ${size / 2})" style="transition: stroke-dashoffset 1.1s var(--ease-out)"/>
+      <text x="50%" y="54%" text-anchor="middle" font-size="12" font-weight="650" fill="var(--ink)">${Math.round(pct * 100)}%</text></svg>`;
+  }
+  function ego(id, size = 74) {
+    const c = size / 2, nb = [...KG.nbrs[id]].slice(0, 12), R = size / 2 - 9;
+    let s = `<svg width="${size}" height="${size}" viewBox="0 0 ${size} ${size}" aria-hidden="true">`;
+    nb.forEach((n, i) => {
+      const a = i / nb.length * Math.PI * 2 - Math.PI / 2, x = c + Math.cos(a) * R, y = c + Math.sin(a) * R;
+      s += `<line x1="${c}" y1="${c}" x2="${x.toFixed(1)}" y2="${y.toFixed(1)}" stroke="var(--line-2)" stroke-width="1"/>`;
+      s += `<path transform="translate(${x.toFixed(1)},${y.toFixed(1)})" d="${KG.shapePath(KG.AXES[KG.byId[n].axis].shape, 3.6)}" fill="var(--${KG.byId[n].axis})"/>`;
+    });
+    const e = KG.byId[id];
+    s += `<path transform="translate(${c},${c})" d="${KG.shapePath(KG.AXES[e.axis].shape, 8)}" fill="var(--${e.axis})" stroke="var(--surface)" stroke-width="2"/></svg>`;
+    return s;
+  }
+  function countUp(el, to) {
+    if (KG.reduced()) { el.textContent = to; return; }
+    const t0 = performance.now();
+    const step = now => { const t = clamp((now - t0) / 900, 0, 1); el.textContent = Math.round(to * easeInOut(t)); if (t < 1) requestAnimationFrame(step); };
+    requestAnimationFrame(step);
+  }
+
+  // ---- Sections ----------------------------------------------------------
+  function heroHtml() {
+    const perDay = [1, 2, 3, 4, 5, 6, 7].map(d => KG.facts.filter(f => f.day === d).length);
+    const reusePerDay = [1, 2, 3, 4, 5, 6, 7].map(d => KG.facts.filter(f => f.day <= d).reduce((a, f) => a + f.reuse, 0));
+    const saved = KG.facts.reduce((a, f) => a + f.reuse, 0);
+    const changed = KG.facts.filter(f => f.p === 'supersedes').length;
+    const proposed = KG.facts.filter(f => f.status === 'proposed').length;
+    const cov = KG.AXIS_ORDER.map(ax => { const es = KG.entities.filter(e => e.axis === ax); return [ax, es.filter(e => e.nFacts >= 3).length / es.length]; });
+    const topReuse = KG.facts.filter(f => f.reuse).sort((a, b) => b.reuse - a.reuse)[0];
+    return `
+      <div class="c-tile c-greet">
+        <h3>Weekly briefing &middot; ${KG.DAYS[6]}</h3>
+        <h2>This week the agent learned <span class="c-count" data-to="${KG.facts.length}">0</span> facts about how Acme works.</h2>
+        <p>${KG.entities.length} entities across four axes, ${changed} decisions changed, ${proposed} facts still waiting for a human.</p>
+        <div style="margin-top:8px; display:flex; align-items:end; gap:10px">${sparkline(perDay, 220, 34)}<span class="muted" style="font-size:11.5px">facts per day</span></div>
+      </div>
+      <div class="c-tile">
+        <h3>Rediscovery saved</h3>
+        <div class="c-big"><span class="c-count" data-to="${saved}">0</span><small>re-asks avoided</small></div>
+        <div class="c-delta">Most reused: <b>${esc(KG.byId[topReuse.s].name)}</b>, ${topReuse.reuse}x</div>
+        <div style="margin-top:6px">${sparkline(reusePerDay, 200, 30, 'var(--good)')}</div>
+      </div>
+      <div class="c-tile">
+        <h3>Coverage <span class="muted" style="text-transform:none; letter-spacing:0; font-weight:500">(entities with 3+ facts)</span></h3>
+        <div class="c-rings">${cov.map(([ax, p]) => `<div class="c-ring">${ring(p, `var(--${ax})`)}${KG.shapeIcon(ax, 10)} ${KG.AXES[ax].label}</div>`).join('')}</div>
+      </div>
+      <div class="c-tile">
+        <h3>Today's review</h3>
+        <div class="c-big"><span id="c-left">${batch.length}</span><small>facts in 3 groups</small></div>
+        <div class="c-delta">About 2 minutes. Keys: <span class="mono">Y</span> confirm, <span class="mono">S</span> skip, <span class="mono">N</span> reject.</div>
+        <button class="btn primary" id="c-start" style="margin-top:10px">Start review</button>
+      </div>`;
+  }
+
+  function feedHtml() {
+    const chips = ['all', ...KG.AXIS_ORDER].map(a => `<button class="axis-chip" aria-pressed="${feedAxis === a}" data-fax="${a}">${a === 'all' ? '' : KG.shapeIcon(a)}${a === 'all' ? 'All' : KG.AXES[a].label}</button>`).join('');
+    let html = `<div class="panel-h"><h3>This week we learned</h3><span class="muted">newest first</span><span style="flex:1"></span><div style="display:flex; gap:5px">${chips}</div></div><div class="scroll" id="c-scroll">`;
+    for (let d = 7; d >= 1; d--) {
+      const facts = KG.facts.filter(f => f.day === d && f.p !== 'supersedes' && (feedAxis === 'all' || KG.byId[f.s].axis === feedAxis));
+      const changes = KG.facts.filter(f => f.day === d && f.p === 'supersedes' && (feedAxis === 'all' || KG.byId[f.s].axis === feedAxis));
+      if (!facts.length && !changes.length) continue;
+      const newEnts = KG.entities.filter(e => e.day === d && (feedAxis === 'all' || e.axis === feedAxis)).length;
+      html += `<div class="c-day"><h4>${KG.DAYS[d - 1]} <span class="muted" style="font-weight:500">${facts.length + changes.length} facts &middot; ${newEnts} new entities</span></h4>`;
+      changes.forEach(f => {
+        const before = KG.facts.find(x => x.s === f.o && x.p === 'decided'), after = KG.facts.find(x => x.s === f.s && x.p === 'decided');
+        html += `<div class="c-change" role="button" tabindex="0" data-open="${f.s}" aria-label="Decision changed: ${esc(after.v)}">
+          <div class="before"><span class="lab">Before</span>${esc(before.v)}</div>
+          <div class="arrow" aria-hidden="true"><svg width="14" height="14" viewBox="0 0 14 14"><path d="M2 7h9M8 3.5L11.5 7 8 10.5" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg></div>
+          <div class="after"><span class="lab">Now &middot; ${KG.AUTH_LABEL[after.auth]}</span>${esc(after.v)}</div></div>`;
+      });
+      // Highlights first: lessons, rules and decisions read best.
+      const rank = f => (/lesson|decision|principle/.test(KG.byId[f.s].type) ? 0 : /rule|caveat|states/.test(f.p) ? 1 : 2);
+      const sorted = facts.slice().sort((a, b) => rank(a) - rank(b));
+      const limit = expanded.has(d) ? sorted.length : 6;
+      sorted.slice(0, limit).forEach(f => {
+        html += `<div class="c-item" role="button" tabindex="0" data-open="${f.s}">${KG.shapeIcon(KG.byId[f.s].axis, 12)}<div class="txt">${KG.sentence(f)}</div>${KG.statusBadge(f)}</div>`;
+      });
+      if (sorted.length > limit) html += `<button class="btn ghost" data-more="${d}" style="margin:2px 0 4px 10px">Show ${sorted.length - limit} more</button>`;
+      html += `</div>`;
+    }
+    return html + `</div>`;
+  }
+
+  function stripHtml() {
+    const top = KG.entities.slice().sort((a, b) => b.degree - a.degree).slice(0, 6);
+    return top.map(e => `<button class="c-ego" data-open="${e.id}" aria-label="${esc(e.name)}, ${e.degree} links">${ego(e.id)}<div><div class="nm">${esc(e.name)}</div><div class="ds">${KG.AXES[e.axis].label} / ${e.type}</div><div class="ds">${e.degree} links &middot; ${e.nFacts} facts</div></div></button>`).join('');
+  }
+
+  // ---- Review stack ------------------------------------------------------
+  function buildBatch() {
+    const prop = KG.facts.filter(f => f.status === 'proposed' && f.p !== 'has_step');
+    const pick = ax => prop.filter(f => KG.byId[f.s].axis === ax).sort((a, b) => b.day - a.day || b.reuse - a.reuse);
+    batch = [...pick('process').slice(0, 4), ...pick('product').slice(0, 3), ...pick('systems').slice(0, 2)].map(f => ({ f, result: null }));
+    idx = 0; history = [];
+  }
+  function reviewHtml() {
+    return `<div class="panel-h"><h3>Daily review batch</h3><span class="muted" id="c-rv-sub"></span></div>
+      <div class="c-prog" id="c-prog" style="margin-top:10px"></div>
+      <div class="c-stack" id="c-stack" aria-live="polite"></div>
+      <div class="c-actions">
+        <button class="c-act reject" data-act="reject" aria-label="Reject (N or left arrow)"><svg width="12" height="12" viewBox="0 0 12 12"><path d="M2 2l8 8M10 2l-8 8" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>Reject <kbd>N</kbd></button>
+        <button class="c-act skip" data-act="skip" aria-label="Skip (S or down arrow)">Skip <kbd>S</kbd></button>
+        <button class="c-act confirm" data-act="confirm" aria-label="Confirm (Y or right arrow)"><svg width="12" height="12" viewBox="0 0 12 12"><path d="M2 6.5l2.5 2.5L10 3" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>Confirm <kbd>Y</kbd></button>
+        <button class="c-act" data-act="undo" aria-label="Undo (Z)" title="Undo (Z)">Undo <kbd>Z</kbd></button>
+      </div>`;
+  }
+  function renderStack() {
+    const stack = $('#c-stack');
+    $('#c-prog').innerHTML = batch.map((b, i) => `<i class="${b.result ? b.result + (b.result === 'skip' ? 'ped' : 'ed') : i === idx ? 'cur' : ''}"></i>`).join('');
+    const left = batch.length - idx;
+    $('#c-rv-sub').textContent = left ? `${idx + 1} of ${batch.length} · ${GROUP[KG.byId[batch[idx].f.s].axis]}` : 'Done';
+    const cl = $('#c-left'); if (cl) cl.textContent = left;
+    if (!left) {
+      const n = r => batch.filter(b => b.result === r).length;
+      stack.innerHTML = `<div class="c-done"><div><svg width="56" height="56" viewBox="0 0 56 56" aria-hidden="true"><circle cx="28" cy="28" r="26" fill="none" stroke="var(--good)" stroke-width="2.5" opacity=".35"/><path d="M17 29l7 7 15-16" fill="none" stroke="var(--good)" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        <p style="font-size:16px; color:var(--ink); margin:8px 0 2px; font-weight:600">Batch done</p><p style="margin:0">${n('confirm')} confirmed, ${n('skip')} skipped, ${n('reject')} rejected.</p>
+        <button class="btn" id="c-again" style="margin-top:10px">Review another batch</button></div></div>`;
+      return;
+    }
+    let html = '';
+    for (let i = Math.min(batch.length - 1, idx + 2); i >= idx; i--) {
+      const f = batch[i].f, depth = i - idx, e = KG.byId[f.s];
+      html += `<div class="c-card ${depth === 0 ? 'top' : ''}" data-i="${i}" style="transform: translateY(${depth * 12}px) scale(${1 - depth * .045}); opacity:${1 - depth * .25}; z-index:${10 - depth}">
+        <span class="stamp confirm">CONFIRM</span><span class="stamp reject">REJECT</span><span class="stamp skip">SKIP</span>
+        <div class="group">${GROUP[e.axis]}</div>
+        <div class="sentence">${KG.sentence(f)}</div>
+        <div><button class="chip" data-goto="${e.id}">${KG.shapeIcon(e.axis)}${esc(e.name)}</button>${f.o ? ' <span class="muted">to</span> ' + KG.chip(f.o) : ''}</div>
+        ${context(f)}
+        <div class="meta">${KG.authBadge(f)}${KG.statusBadge(f)}<span class="mono">${esc(f.src.kind)}: ${esc(f.src.ref)}</span><span>${KG.DAYS[f.day - 1]}</span></div>
+      </div>`;
+    }
+    stack.innerHTML = html;
+    bindDrag(stack.querySelector('.c-card.top'));
+  }
+  // Other things we already know about the same entity, to judge the fact in context.
+  function context(f) {
+    const rel = KG.factsBy[f.s].filter(x => x !== f && x.s === f.s && x.status !== 'superseded').sort((a, b) => (b.status === 'confirmed') - (a.status === 'confirmed')).slice(0, 3);
+    if (!rel.length) return '';
+    return `<div style="margin-top:4px; border-top:1px solid var(--line); padding-top:8px"><div class="group" style="margin-bottom:4px">Already known about ${esc(KG.byId[f.s].name)}</div>${rel.map(x => `<div style="font-size:12.5px; color:var(--ink-2); margin:3px 0; display:flex; gap:6px; align-items:baseline">${KG.statusBadge(x)}<span>${KG.sentence(x, false)}</span></div>`).join('')}</div>`;
+  }
+  function decide(action) {
+    if (idx >= batch.length) return;
+    const card = $('#c-stack .c-card.top');
+    const b = batch[idx]; b.result = action;
+    history.push({ i: idx, prev: b.f.status });
+    if (action === 'confirm') KG.setStatus(b.f.id, 'confirmed');
+    if (action === 'reject') KG.setStatus(b.f.id, 'rejected');
+    const out = { confirm: 'translate(140%, -10px) rotate(14deg)', reject: 'translate(-140%, -10px) rotate(-14deg)', skip: 'translate(0, 120%) scale(.9)' }[action];
+    idx++;
+    if (card && !KG.reduced()) {
+      $('.stamp.' + action, card).style.opacity = 1;
+      card.style.transition = 'transform .38s cubic-bezier(.3,.7,.3,1), opacity .38s';
+      card.style.transform = out; card.style.opacity = 0;
+      setTimeout(renderStack, 260);
+    } else renderStack();
+  }
+  function undo() {
+    const h = history.pop(); if (!h) return;
+    const b = batch[h.i]; b.result = null; KG.setStatus(b.f.id, h.prev); idx = h.i; renderStack();
+  }
+  function bindDrag(card) {
+    if (!card) return;
+    let sx = 0, sy = 0, dx = 0, dy = 0, on = false;
+    card.addEventListener('pointerdown', e => { if (e.target.closest('button')) return; on = true; sx = e.clientX; sy = e.clientY; card.setPointerCapture(e.pointerId); card.style.transition = 'none'; card.style.cursor = 'grabbing'; });
+    card.addEventListener('pointermove', e => {
+      if (!on) return; dx = e.clientX - sx; dy = e.clientY - sy;
+      card.style.transform = `translate(${dx}px, ${Math.max(dy, -20)}px) rotate(${dx / 18}deg)`;
+      $('.stamp.confirm', card).style.opacity = clamp(dx / 110, 0, 1);
+      $('.stamp.reject', card).style.opacity = clamp(-dx / 110, 0, 1);
+      $('.stamp.skip', card).style.opacity = Math.abs(dx) < 50 ? clamp(dy / 90, 0, 1) : 0;
+    });
+    const end = () => {
+      if (!on) return; on = false; card.style.cursor = '';
+      if (dx > 110) decide('confirm'); else if (dx < -110) decide('reject'); else if (dy > 90) decide('skip');
+      else { card.style.transition = 'transform .45s var(--ease-spring)'; card.style.transform = ''; $$('.stamp', card).forEach(s => s.style.opacity = 0); }
+      dx = dy = 0;
+    };
+    card.addEventListener('pointerup', end); card.addEventListener('pointercancel', end);
+  }
+
+  // ---- Render + bind -----------------------------------------------------
+  function render() {
+    wrap.innerHTML = `<div class="c-hero">${heroHtml()}</div>
+      <div class="panel c-feed" id="c-feed">${feedHtml()}</div>
+      <div class="panel c-review">${reviewHtml()}</div>
+      <div class="c-strip">${stripHtml()}</div>`;
+    renderStack(); animateIn();
+  }
+  function animateIn() {
+    $$('.c-count', wrap).forEach(el => countUp(el, +el.dataset.to));
+    requestAnimationFrame(() => requestAnimationFrame(() => $$('.ring-v', wrap).forEach(r => r.setAttribute('stroke-dashoffset', r.dataset.to))));
+  }
+  function bind() {
+    wrap.addEventListener('click', e => {
+      const a = e.target.closest('[data-act]');
+      if (a) { a.dataset.act === 'undo' ? undo() : decide(a.dataset.act); return; }
+      if (e.target.closest('#c-again')) { buildBatch(); renderStack(); return; }
+      if (e.target.closest('#c-start')) { $('#c-stack .c-card.top')?.scrollIntoView({ block: 'nearest' }); $('.c-act.confirm', wrap).focus(); return; }
+      const fx = e.target.closest('[data-fax]');
+      if (fx) { feedAxis = fx.dataset.fax; $('#c-feed').innerHTML = feedHtml(); return; }
+      const more = e.target.closest('[data-more]');
+      if (more) { expanded.add(+more.dataset.more); const st = $('#c-scroll').scrollTop; $('#c-feed').innerHTML = feedHtml(); $('#c-scroll').scrollTop = st; return; }
+      const o = e.target.closest('[data-open]');
+      if (o && !e.target.closest('[data-goto]')) KG.drawer.open(o.dataset.open);
+    });
+    wrap.addEventListener('keydown', e => { const o = e.target.closest('[data-open]'); if (o && (e.key === 'Enter' || e.key === ' ') && o.tagName !== 'BUTTON') { e.preventDefault(); KG.drawer.open(o.dataset.open); } });
+    document.addEventListener('keydown', e => {
+      if (KG.active !== 'C' || /INPUT|TEXTAREA|SELECT/.test(document.activeElement.tagName) || e.metaKey || e.ctrlKey || e.altKey) return;
+      const k = e.key.toLowerCase();
+      if (k === 'y' || e.key === 'ArrowRight') { decide('confirm'); e.preventDefault(); }
+      else if (k === 'n' || e.key === 'ArrowLeft') { decide('reject'); e.preventDefault(); }
+      else if (k === 's' || e.key === 'ArrowDown') { decide('skip'); e.preventDefault(); }
+      else if (k === 'z') { undo(); e.preventDefault(); }
+    });
+    KG.bus.on('status', () => { if (KG.active === 'C') { const st = $('#c-scroll')?.scrollTop || 0; $('#c-feed').innerHTML = feedHtml(); $('#c-scroll').scrollTop = st; } });
+  }
+  return {
+    init() { wrap = $('#c-wrap'); buildBatch(); render(); bind(); KG.bus.on('theme', () => { if (KG.active === 'C') { $('.c-strip', wrap).innerHTML = stripHtml(); } }); },
+    show() { if (this.inited && wrap.children.length) animateIn(); },
+    hide() {},
+    focus(id) { KG.drawer.open(id); },
+  };
+})();
+
+/* =========================================================================
+   TREATMENT D: Radial explorer
+   "You" at the center; rings = axis -> entity type -> entity. Zoom-to-
+   segment tween, breadcrumbs, hierarchical edge bundling (Holten 2006)
+   on hover via straightened B-splines (port of d3 curveBasis/curveBundle).
+   ========================================================================= */
+KG.treatments.D = (function () {
+  let svg, gArcs, gEdges, gLabels, gCenter, W = 0, H = 0, R = 280, cx = 0, cy = 0;
+  let root, all = [], dom = [0, 1], tween = null, focus = null, hoverLeaf = null, selected = null, kbd = null;
+  const BETA = .82;
+
+  // ---- Hierarchy + partition ---------------------------------------------
+  function build() {
+    root = { name: 'You', depth: 0, children: [], id: 'root' };
+    KG.AXIS_ORDER.forEach(ax => {
+      const a = { name: KG.AXES[ax].label, axis: ax, depth: 1, parent: root, children: [], id: 'ax:' + ax };
+      const types = [...new Set(KG.entities.filter(e => e.axis === ax).map(e => e.type))];
+      types.forEach(t => {
+        const tn = { name: KG.TYPE_PLURAL[t], type: t, axis: ax, depth: 2, parent: a, children: [], id: 'ty:' + t };
+        KG.entities.filter(e => e.type === t).sort((x, y) => y.degree - x.degree).forEach(e => tn.children.push({ name: e.name, e, axis: ax, depth: 3, parent: tn, id: e.id, value: 1 + e.nFacts * .22 }));
+        a.children.push(tn);
+      });
+      root.children.push(a);
+    });
+    const sum = n => n.value = n.children ? n.children.reduce((s, c) => s + sum(c), 0) : n.value;
+    sum(root);
+    const part = (n, x0) => { n.x0 = x0; n.x1 = x0 + n.value / root.value; let x = x0; (n.children || []).forEach(c => { part(c, x); x = c.x1; }); };
+    part(root, 0);
+    all = []; const walk = n => { if (n.depth) all.push(n); (n.children || []).forEach(walk); }; walk(root);
+    focus = root;
+  }
+  const ringR = d => [[0, R * .2], [R * .21, R * .34], [R * .35, R * .5], [R * .51, R * .73]][d];
+  const ang = x => clamp((x - dom[0]) / (dom[1] - dom[0]), 0, 1) * Math.PI * 2;
+  const pt = (a, r) => [cx + Math.sin(a) * r, cy - Math.cos(a) * r];
+  function arcPath(a0, a1, r0, r1) {
+    if (a1 - a0 < 1e-4) return '';
+    const pad = Math.min(.006, (a1 - a0) / 4); a0 += pad; a1 -= pad;
+    const large = a1 - a0 > Math.PI ? 1 : 0;
+    if (a1 - a0 > Math.PI * 2 - .02) { // full ring: two halves
+      const m = (a0 + a1) / 2;
+      return arcPath(a0 - pad, m + pad / 2, r0, r1) + arcPath(m - pad / 2, a1 + pad, r0, r1);
+    }
+    const [x0, y0] = pt(a0, r1), [x1, y1] = pt(a1, r1), [x2, y2] = pt(a1, r0), [x3, y3] = pt(a0, r0);
+    return `M${x0.toFixed(1)},${y0.toFixed(1)}A${r1},${r1} 0 ${large} 1 ${x1.toFixed(1)},${y1.toFixed(1)}L${x2.toFixed(1)},${y2.toFixed(1)}A${r0},${r0} 0 ${large} 0 ${x3.toFixed(1)},${y3.toFixed(1)}Z`;
+  }
+
+  // ---- DOM build ---------------------------------------------------------
+  function fill(n) {
+    if (n.depth === 1) return `var(--${n.axis})`;
+    if (n.depth === 2) return `color-mix(in srgb, var(--${n.axis}) 55%, var(--surface))`;
+    const conf = KG.factsBy[n.id].some(f => f.status === 'confirmed');
+    const sup = KG.factsBy[n.id].some(f => f.s === n.id && f.status === 'superseded');
+    return sup ? 'var(--surface-3)' : `color-mix(in srgb, var(--${n.axis}) ${conf ? 75 : 32}%, var(--surface))`;
+  }
+  function createEls() {
+    svg = $('#d-svg'); svg.innerHTML = '';
+    gArcs = svgEl('g', {}, svg); gEdges = svgEl('g', {}, svg); gLabels = svgEl('g', {}, svg); gCenter = svgEl('g', { class: 'd-center', tabindex: 0, role: 'button', 'aria-label': 'Zoom out' }, svg);
+    all.forEach(n => {
+      n.el = svgEl('path', { class: 'd-arc', fill: fill(n), tabindex: -1, role: 'button', 'data-id': n.id, 'aria-label': `${n.name}${n.depth < 3 ? ', ' + (n.children.length) + ' children' : ''}` }, gArcs);
+      n.lab = svgEl('text', { class: 'd-lab' + (n.depth === 1 ? ' ax' : ''), 'dominant-baseline': 'middle' }, gLabels);
+      n.lab.textContent = n.name;
+      if (n.depth === 1) n.lab.classList.add('on-axis');
+    });
+    svgEl('circle', { r: 1, fill: 'var(--surface-2)', stroke: 'var(--line-2)', class: 'center-c' }, gCenter);
+    svgEl('text', { class: 'd-lab ax', 'text-anchor': 'middle', style: 'font-size:18px' }, gCenter).textContent = 'You';
+    svgEl('text', { class: 'd-lab', 'text-anchor': 'middle', style: 'fill: var(--ink-2)' }, gCenter);
+  }
+  function layout() {
+    const box = $('#d-sun').getBoundingClientRect();
+    W = box.width; H = box.height; cx = W / 2; cy = H / 2 + 8;
+    R = Math.min(W, H) / 2 - 26;
+    svg.setAttribute('viewBox', `0 0 ${W} ${H}`);
+    const c = $('.center-c', gCenter); c.setAttribute('cx', cx); c.setAttribute('cy', cy); c.setAttribute('r', ringR(0)[1] - 2);
+    const [t1, t2] = $$('text', gCenter);
+    t1.setAttribute('x', cx); t1.setAttribute('y', cy - 4);
+    t2.setAttribute('x', cx); t2.setAttribute('y', cy + 16); t2.style.fontSize = '11.5px';
+  }
+  function render() {
+    const fs = selected || hoverLeaf ? new Set([(selected || hoverLeaf).id, ...KG.nbrs[(selected || hoverLeaf).id]]) : null;
+    all.forEach(n => {
+      const a0 = ang(n.x0), a1 = ang(n.x1), [r0, r1] = ringR(n.depth);
+      n.el.setAttribute('d', arcPath(a0, a1, r0, r1));
+      n.vis = a1 - a0 > 1e-4;
+      const dimmed = fs && n.depth === 3 && !fs.has(n.id);
+      n.el.style.opacity = dimmed ? .22 : fs && n.depth < 3 ? .55 : 1;
+      if (n === selected) { n.el.style.stroke = 'var(--ink)'; n.el.style.strokeWidth = 2; } else { n.el.style.stroke = ''; n.el.style.strokeWidth = ''; }
+      // Labels.
+      const span = a1 - a0, mid = (a0 + a1) / 2, lab = n.lab;
+      if (n.depth === 3) {
+        const ok = span * r1 > 10.5;
+        lab.style.display = ok ? '' : 'none'; if (!ok) return;
+        const deg = mid * 180 / Math.PI - 90, flip = mid > Math.PI;
+        const [x, y] = pt(mid, r1 + 6);
+        lab.setAttribute('transform', `translate(${x.toFixed(1)},${y.toFixed(1)}) rotate(${flip ? deg + 180 : deg})`);
+        lab.setAttribute('text-anchor', flip ? 'end' : 'start');
+        lab.style.opacity = dimmed ? .3 : 1;
+        lab.style.fontWeight = n === selected || n === hoverLeaf ? 650 : '';
+      } else {
+        const rm = (r0 + r1) / 2;
+        const ok = span * rm > (n.depth === 1 ? 50 : 40);
+        lab.style.display = ok ? '' : 'none'; if (!ok) return;
+        const [x, y] = pt(mid, rm);
+        let deg = mid * 180 / Math.PI; if (deg > 90 && deg < 270) deg += 180;
+        const full = span > Math.PI * 1.9;
+        lab.setAttribute('transform', `translate(${x.toFixed(1)},${y.toFixed(1)}) rotate(${n.depth === 1 || full ? 0 : deg})`);
+        lab.setAttribute('text-anchor', 'middle');
+        if (n.depth === 2) lab.style.fontSize = '10.5px';
+      }
+    });
+    const [, t2] = $$('text', gCenter);
+    t2.textContent = focus === root ? `${KG.entities.length} entities` : focus.name;
+    drawEdges();
+  }
+
+  // ---- Edge bundling -----------------------------------------------------
+  function anchorFor(n) {
+    if (n.depth === 3) return pt(ang((n.x0 + n.x1) / 2), ringR(3)[0] - 2);
+    if (n.depth === 2) return pt(ang((n.x0 + n.x1) / 2), (ringR(2)[0] + ringR(2)[1]) / 2);
+    if (n.depth === 1) return pt(ang((n.x0 + n.x1) / 2), (ringR(1)[0] + ringR(1)[1]) / 2);
+    return [cx, cy];
+  }
+  function pathNodes(a, b) {
+    const up = [], down = [];
+    let x = a, y = b;
+    while (x.depth > y.depth) { up.push(x); x = x.parent; }
+    while (y.depth > x.depth) { down.push(y); y = y.parent; }
+    while (x !== y) { up.push(x); down.push(y); x = x.parent; y = y.parent; }
+    return [...up, x, ...down.reverse()];
+  }
+  function basis(pts) {
+    // Port of d3.curveBasis.
+    let d = '', x0, y0, x1, y1, p = 0;
+    const bz = (x, y) => { d += `C${((2 * x0 + x1) / 3).toFixed(1)},${((2 * y0 + y1) / 3).toFixed(1)} ${((x0 + 2 * x1) / 3).toFixed(1)},${((y0 + 2 * y1) / 3).toFixed(1)} ${((x0 + 4 * x1 + x) / 6).toFixed(1)},${((y0 + 4 * y1 + y) / 6).toFixed(1)}`; };
+    for (const [x, y] of pts) {
+      if (p === 0) { p = 1; d += `M${x},${y}`; }
+      else if (p === 1) p = 2;
+      else { if (p === 2) { p = 3; d += `L${((5 * x0 + x1) / 6).toFixed(1)},${((5 * y0 + y1) / 6).toFixed(1)}`; } bz(x, y); }
+      x0 = x1; x1 = x; y0 = y1; y1 = y;
+    }
+    if (p === 3) { bz(x1, y1); d += `L${x1},${y1}`; } else if (p === 2) d += `L${x1},${y1}`;
+    return d;
+  }
+  function bundle(pts) {
+    const n = pts.length - 1, [ax, ay] = pts[0], [bx, by] = pts[n];
+    return pts.map(([x, y], i) => [BETA * x + (1 - BETA) * (ax + (bx - ax) * i / n), BETA * y + (1 - BETA) * (ay + (by - ay) * i / n)]);
+  }
+  function drawEdges() {
+    gEdges.innerHTML = '';
+    const src = hoverLeaf || selected; if (!src || !src.vis) return;
+    const byId = Object.fromEntries(all.filter(n => n.depth === 3).map(n => [n.id, n]));
+    KG.nbrs[src.id].forEach(id => {
+      const t = byId[id]; if (!t || !t.vis) return;
+      const pts = bundle(pathNodes(src, t).map(anchorFor));
+      const l = KG.links.find(L => (L.s === src.id && L.t === id) || (L.t === src.id && L.s === id));
+      const st = l ? KG.linkStatus(l) : 'proposed';
+      svgEl('path', { d: basis(pts), class: 'd-edge', stroke: `var(--${t.axis})`, opacity: .9, 'stroke-dasharray': st === 'confirmed' ? 'none' : '4 3' }, gEdges);
+      const [ex, ey] = anchorFor(t);
+      svgEl('circle', { cx: ex, cy: ey, r: 2.5, fill: `var(--${t.axis})` }, gEdges);
+    });
+  }
+
+  // ---- Zoom + selection --------------------------------------------------
+  function zoomTo(n) {
+    if (!n) return;
+    focus = n;
+    const target = [n.x0, n.x1];
+    if (KG.reduced()) { dom = target; render(); renderCrumbs(); renderSide(); return; }
+    const from = dom.slice(), t0 = performance.now();
+    cancelAnimationFrame(tween);
+    const step = now => {
+      const t = clamp((now - t0) / 650, 0, 1), e = easeInOut(t);
+      dom = [lerp(from[0], target[0], e), lerp(from[1], target[1], e)]; render();
+      if (t < 1) tween = requestAnimationFrame(step);
+    };
+    tween = requestAnimationFrame(step);
+    renderCrumbs(); renderSide();
+  }
+  function selectLeaf(n) {
+    selected = n; render(); renderCrumbs(); renderSide();
+  }
+  function renderCrumbs() {
+    const chain = []; let n = selected || focus; while (n) { chain.unshift(n); n = n.parent; }
+    $('#d-crumbs').innerHTML = chain.map((c, i) => `${i ? '<span class="sep">/</span>' : ''}<button data-crumb="${c.id}">${esc(c.name)}</button>`).join('');
+  }
+  function renderSide() {
+    const box = $('#d-detail');
+    if (selected) { KG.renderDetail(box, selected.id); return; }
+    const f = focus;
+    const leaves = []; const walk = n => n.children ? n.children.forEach(walk) : leaves.push(n); walk(f);
+    const top = leaves.slice().sort((a, b) => b.e.degree - a.e.degree).slice(0, 10);
+    const groups = (f.depth === 2 ? [f] : f.depth === 1 ? f.children : f.children.flatMap(a => a.children));
+    const facts = new Set(); leaves.forEach(l => KG.factsBy[l.id].forEach(x => facts.add(x)));
+    const prop = [...facts].filter(x => x.status === 'proposed').length;
+    box.innerHTML = `<div class="kicker">${f.axis ? KG.shapeIcon(f.axis) + ' ' + KG.AXES[f.axis].label : 'Whole knowledge base'}</div>
+      <h2>${esc(f === root ? 'Everything you know' : f.name)}</h2>
+      <p class="summary">${f === root ? 'Four axes, from people and teams to the systems they run on. Click a ring to zoom.' : 'Click an entity in the outer ring to see its facts and relations.'}</p>
+      <div class="mini-stats"><div><b>${leaves.length}</b>entities</div><div><b>${facts.size}</b>facts</div><div><b>${prop}</b>proposed</div></div>
+      <h4>Composition</h4>
+      ${groups.map(g => { const n = g.children.length; return `<div style="display:flex; align-items:center; gap:8px; margin:4px 0; font-size:12.5px"><span style="width:110px">${esc(g.name)}</span><span style="flex:1; height:8px; border-radius:4px; background:var(--surface-3); overflow:hidden"><span style="display:block; height:100%; width:${n / Math.max(...groups.map(x => x.children.length)) * 100}%; background:var(--${g.axis}); border-radius:4px"></span></span><span class="muted" style="width:20px; text-align:right">${n}</span></div>`; }).join('')}
+      <h4>Most connected here</h4><div style="display:flex; flex-wrap:wrap; gap:6px">${top.map(l => KG.chip(l.id)).join('')}</div>`;
+  }
+  const nodeById = id => id === 'root' ? root : all.find(n => n.id === id);
+  function activateNode(n) {
+    if (!n) return;
+    if (n.depth === 3) { selectLeaf(n); return; }
+    selected = null;
+    if (n === focus && n.parent) zoomTo(n.parent); else zoomTo(n);
+  }
+
+  function bind() {
+    svg.addEventListener('pointermove', e => {
+      const p = e.target.closest('[data-id]'); const n = p && nodeById(p.dataset.id);
+      if (n) {
+        KG.tip.show(`<b>${esc(n.name)}</b><div class="t2">${n.depth === 3 ? `${n.e.type} &middot; ${n.e.degree} links &middot; ${n.e.nFacts} facts` : `${n.children.length} ${n.depth === 1 ? 'types' : 'entities'} &middot; click to zoom`}</div>`, e.clientX, e.clientY);
+        const leaf = n.depth === 3 ? n : null;
+        if (leaf !== hoverLeaf) { hoverLeaf = leaf; render(); }
+      } else { KG.tip.hide(); if (hoverLeaf) { hoverLeaf = null; render(); } }
+    });
+    svg.addEventListener('pointerleave', () => { KG.tip.hide(); if (hoverLeaf) { hoverLeaf = null; render(); } });
+    svg.addEventListener('click', e => {
+      const p = e.target.closest('[data-id]');
+      if (p) { activateNode(nodeById(p.dataset.id)); return; }
+      if (e.target.closest('g') === gCenter) { selected = null; if (focus.parent) zoomTo(focus.parent); else { render(); renderCrumbs(); renderSide(); } }
+    });
+    gCenter.addEventListener('keydown', e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); selected = null; zoomTo(focus.parent || root); } });
+    // Roving keyboard navigation over arcs.
+    svg.addEventListener('keydown', e => {
+      const cur = kbd || (focus.children ? focus.children[0] : null); if (!cur) return;
+      let next = null;
+      const sib = cur.parent.children, i = sib.indexOf(cur);
+      if (e.key === 'ArrowRight') next = sib[(i + 1) % sib.length];
+      else if (e.key === 'ArrowLeft') next = sib[(i - 1 + sib.length) % sib.length];
+      else if (e.key === 'ArrowDown' && cur.children) next = cur.children[0];
+      else if (e.key === 'ArrowUp' && cur.parent !== root) next = cur.parent;
+      else if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); activateNode(cur); return; }
+      if (next) { e.preventDefault(); kbd = next; all.forEach(n => n.el.tabIndex = n === next ? 0 : -1); next.el.focus(); if (next.depth === 3) { hoverLeaf = next; render(); } }
+    });
+    $('#d-crumbs').addEventListener('click', e => {
+      const b = e.target.closest('[data-crumb]'); if (!b) return;
+      const n = nodeById(b.dataset.crumb);
+      if (n.depth === 3) return;
+      selected = null; zoomTo(n);
+    });
+    new ResizeObserver(() => { if (KG.active === 'D') { layout(); render(); } }).observe($('#d-sun'));
+    KG.bus.on('status', () => { all.forEach(n => n.el.setAttribute('fill', fill(n))); if (KG.active === 'D') renderSide(); });
+  }
+
+  return {
+    init() {
+      build(); createEls(); layout(); bind();
+      all[0].el.tabIndex = 0;
+      // Entrance: unfold from a closed fan.
+      if (!KG.reduced()) { dom = [0, 1]; const t0 = performance.now(); const grow = now => { const t = clamp((now - t0) / 900, 0, 1), e = 1 - Math.pow(1 - t, 3); dom = [0, 1 / Math.max(e, .02)]; render(); if (t < 1) requestAnimationFrame(grow); }; requestAnimationFrame(grow); }
+      else render();
+      renderCrumbs(); renderSide();
+    },
+    show() { layout(); render(); },
+    hide() { KG.tip.hide(); hoverLeaf = null; },
+    focus(id) {
+      const n = all.find(x => x.id === id); if (!n) return;
+      // Zoom to the entity's type unless it's already in view.
+      if (!(n.x0 >= dom[0] - 1e-9 && n.x1 <= dom[1] + 1e-9) || focus === root) zoomTo(n.parent);
+      selectLeaf(n);
+    },
+  };
+})();
+
+// =========================================================================
+// BOOT
+// =========================================================================
+(function boot() {
+  const setHdr = () => document.documentElement.style.setProperty('--hdr', $('.top').offsetHeight + 'px');
+  setHdr(); window.addEventListener('resize', setHdr);
+  if (/[?&]rm\b/.test(location.search)) { document.documentElement.classList.add('reduce-motion'); $('#motionBtn').setAttribute('aria-pressed', 'true'); }
+  KG.readColors();
+  KG.renderPills();
+  const initial = (location.hash || '#A').slice(1).toUpperCase();
+  activate(['A', 'B', 'C', 'D'].includes(initial) ? initial : 'A', false);
+  window.addEventListener('hashchange', () => activate((location.hash || '#A').slice(1).toUpperCase(), false));
+})();
+
+</script>
+</body>
+</html>

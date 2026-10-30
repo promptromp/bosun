@@ -1,0 +1,177 @@
+#!/bin/bash
+# Usage: bosun wake-test [minutes] [--full]   schedule a wake, then put the Mac to sleep
+#        bosun wake-test --report             after waking: what happened?
+#        bosun wake-test --cleanup            remove the test job and test tmux session
+#
+# End-to-end test of the real chain without waiting for the daily schedule, mirroring production:
+# a temporary launchd job at now+<minutes>-1 (default 3), which falls due while the Mac sleeps,
+# and a one-off pmset wake one minute later. launchd should run the missed job right after the
+# wake: `bosun morning` with a 20-minute keep-awake into session <name>-waketest.
+# By default the test skips setup steps and windows only print the claude command they would
+# run. --full runs setup and really launches Claude (it resumes your real named sessions).
+# Scheduling the wake needs admin rights: sudo in a terminal, otherwise (e.g. Claude Code's `!`)
+# the macOS administrator password dialog. Leave the lid open and the charger connected.
+set -uo pipefail
+source "$(dirname "$0")/../lib/common.sh"
+load_config
+
+TEST_LABEL="$BOSUN_LAUNCHD_LABEL.waketest"
+TEST_PLIST="$HOME/Library/LaunchAgents/$TEST_LABEL.plist"
+TEST_SESSION="$BOSUN_SESSION_NAME-waketest"
+MARKER="$BOSUN_STATE_DIR/wake-test.env"
+TEST_AWAKE_MINUTES=20
+SLEEP_COUNTDOWN_SECONDS=20
+SLEEP_ATTEMPTS=3
+SLEEP_RETRY_SECONDS=20
+WAKE_POLL_SECONDS=5
+WAKE_GRACE_SECONDS=120
+MIN_SECONDS_BEFORE_WAKE=60
+
+# Schedule a one-off wake. sudo needs a terminal for its password prompt; without one, ask through
+# the macOS administrator dialog instead.
+schedule_wake() { # <MM/DD/YYYY HH:MM:SS>
+  if [ -t 0 ]; then
+    sudo pmset schedule wake "$1"
+  else
+    osascript -e "do shell script \"/usr/bin/pmset schedule wake '$1'\" with administrator privileges" >/dev/null
+  fi
+}
+
+schedule() {
+  local minutes="$1" full="$2" wake_epoch wake_hm run_hm morning_args extra_env
+  wake_epoch=$((($(date +%s) / 60 + minutes) * 60))
+  wake_hm="$(date -r "$wake_epoch" +%H:%M)"
+  run_hm="$(shift_time "$wake_hm" -1)"
+
+  morning_args="--awake-minutes $TEST_AWAKE_MINUTES"
+  extra_env=(BOSUN_TRIGGER=wake-test "BOSUN_SESSION_NAME=$TEST_SESSION")
+  if [ "$full" = "0" ]; then
+    morning_args+=" --skip-setup"
+    extra_env+=(BOSUN_LAUNCH_DRY_RUN=1)
+  fi
+
+  log "test job at $run_hm (falls due during sleep), wake at $wake_hm, session '$TEST_SESSION' (full=$full)"
+
+  # Privileged step first, so a failed or cancelled password prompt leaves nothing behind.
+  log "scheduling the wake (admin password needed)"
+  schedule_wake "$(date -r "$wake_epoch" '+%m/%d/%Y %H:%M:%S')" || die "could not schedule the wake (password prompt failed or cancelled); nothing was changed"
+  pmset -g sched | grep -q "$(date -r "$wake_epoch" '+%m/%d/%Y %H:%M')" || die "wake not found in 'pmset -g sched'"
+  [ $((wake_epoch - $(date +%s))) -ge "$MIN_SECONDS_BEFORE_WAKE" ] ||
+    die "the wake time is now less than ${MIN_SECONDS_BEFORE_WAKE}s away (slow password entry?); rerun with more minutes"
+
+  render_launchd_plist "$TEST_LABEL" "$run_hm" MTWRFSU "$morning_args" "${extra_env[@]}" >"$TEST_PLIST"
+  launchctl bootout "gui/$(id -u)/$TEST_LABEL" 2>/dev/null
+  launchctl bootstrap "gui/$(id -u)" "$TEST_PLIST" || die "could not load $TEST_PLIST"
+  printf 'SLEPT_AT=%q\nWAKE_AT=%q\nRUN_AT=%q\n' "$(date '+%F %T')" "$(date -r "$wake_epoch" '+%F %T')" "$run_hm" >"$MARKER"
+
+  log "sleeping in $SLEEP_COUNTDOWN_SECONDS seconds. Take your hands off the keyboard and trackpad:"
+  log "any touch while the Mac goes to sleep cancels the sleep. (Ctrl-C aborts; then run --cleanup.)"
+  sleep "$SLEEP_COUNTDOWN_SECONDS"
+  local requested_at attempt
+  requested_at="$(date '+%F %T')"
+  # A sleep request is cancelled by a keyboard/trackpad touch or by a notification lighting the
+  # display, so retry. Once the Mac sleeps this process is frozen until the wake, and the next
+  # check finds the Sleep event.
+  for ((attempt = 1; attempt <= SLEEP_ATTEMPTS; attempt++)); do
+    pmset sleepnow >/dev/null
+    sleep "$SLEEP_RETRY_SECONDS"
+    if slept_since "$requested_at"; then
+      log "the Mac went to sleep; waiting for the scheduled wake"
+      wait_for_full_wake "$requested_at"
+      return
+    fi
+    log "sleep attempt $attempt did not take (touch or notification?)"
+  done
+  log "the Mac did not go to sleep. The wake and test job are still scheduled, so --report will show"
+  log "an awake run. Run --cleanup, then retry and step away from the Mac during the countdown."
+}
+
+slept_since() { # <YYYY-MM-DD HH:MM:SS>
+  pmset -g log | grep -E '^[0-9-]+ [0-9:]+ [+-][0-9]+ Sleep ' | awk -v since="$1" '$1" "$2 >= since' | grep -q .
+}
+
+# Background maintenance wakes (DarkWake, display off) also let this process run, so poll until
+# the log shows a full wake: the scheduled one, or a dark wake promoted by user activity.
+wait_for_full_wake() { # <YYYY-MM-DD HH:MM:SS>
+  local deadline wake reason
+  # shellcheck disable=SC1090
+  source "$MARKER"
+  deadline=$(($(date -j -f '%Y-%m-%d %H:%M:%S' "$WAKE_AT" +%s) + WAKE_GRACE_SECONDS))
+  while [ "$(date +%s)" -lt "$deadline" ]; do
+    wake="$(pmset -g log | grep -E $'\t(Wake from|DarkWake to FullWake)' | awk -v since="$1" '$1" "$2 >= since' | tail -1)"
+    if [ -n "$wake" ]; then
+      case "$wake" in
+        *rtc*) reason="the scheduled wake" ;;
+        *HID*) reason="keyboard or trackpad, so this is not an unattended wake" ;;
+        *) reason="$(sed -E 's/.*: due to ([^ ]+).*/\1/' <<<"$wake")" ;;
+      esac
+      log "the Mac woke at $(cut -c12-19 <<<"$wake") ($reason); run: bosun wake-test --report"
+      return
+    fi
+    sleep "$WAKE_POLL_SECONDS"
+  done
+  log "no full wake logged by $WAKE_AT plus ${WAKE_GRACE_SECONDS}s; run: bosun wake-test --report"
+}
+
+report() {
+  [ -f "$MARKER" ] || die "no wake test recorded; run: bosun wake-test [minutes]"
+  # shellcheck disable=SC1090
+  source "$MARKER"
+  echo "Test: slept at $SLEPT_AT, wake scheduled $WAKE_AT, morning job at $RUN_AT"
+  echo
+  echo "Power events since sleeping"
+  pmset -g log | awk -v since="$SLEPT_AT" '$1" "$2 >= since' |
+    grep -E '^\S+ \S+ \S+ (Sleep|Wake|DarkWake|Assertions) ' | grep -vE 'Assertions.*(Summary|Released)' |
+    tail -25 | cut -c1-150 | sed 's/^/  /'
+  echo
+  echo "Interpretation: expect a 'Sleep', then a 'Wake' at about $WAKE_AT due to rtc (the scheduled"
+  echo "wake), the morning run starting within seconds of it (its job time $RUN_AT passed during sleep),"
+  echo "a PreventSystemSleep caffeinate assertion, and no 'Sleep' until the $TEST_AWAKE_MINUTES-minute keep-awake ends."
+  echo
+  echo "Morning log"
+  # Only the latest wake-test run: from its header to the next run's header.
+  latest="$(cat "$BOSUN_LOG_DIR"/morning-*.log 2>/dev/null |
+    awk '/=== morning run/ { keep = /trigger=wake-test/; if (keep) buf = "" } keep { buf = buf $0 "\n" } END { printf "%s", buf }')"
+  if [ -n "$latest" ]; then
+    echo "  ${latest//$'\n'/$'\n'  }"
+  else
+    echo "  no wake-test run logged (check $BOSUN_LOG_DIR/launchd.err)"
+  fi
+  echo
+  echo "Test tmux session '$TEST_SESSION'"
+  if tmux_cmd has-session -t "=$TEST_SESSION" 2>/dev/null; then
+    tmux_cmd list-windows -t "=$TEST_SESSION" -F '#{window_id} #{window_name}' | while read -r id w; do
+      echo "  [$w]"
+      tmux_cmd capture-pane -p -t "$id" | grep -v '^\s*$' | tail -3 | cut -c1-150 | sed 's/^/    /'
+    done
+  else
+    echo "  not running"
+  fi
+  echo
+  echo "Run 'bosun wake-test --cleanup' when done."
+}
+
+cleanup() {
+  launchctl bootout "gui/$(id -u)/$TEST_LABEL" 2>/dev/null && log "unloaded $TEST_LABEL"
+  rm -f "$TEST_PLIST" "$MARKER"
+  BOSUN_SESSION_NAME="$TEST_SESSION" "$BOSUN" stop
+}
+
+case "${1:-}" in
+  -h | --help) usage ;;
+  --report) report ;;
+  --cleanup) cleanup ;;
+  *)
+    minutes=3
+    full=0
+    for arg in "$@"; do
+      case "$arg" in
+        --full) full=1 ;;
+        *[!0-9]*) die_usage "unknown argument $arg" ;;
+        *) minutes="$arg" ;;
+      esac
+    done
+    [ "$minutes" -ge 3 ] || die "use at least 3 minutes so the job falls due while the Mac sleeps"
+    schedule "$minutes" "$full"
+    ;;
+esac

@@ -1,0 +1,23 @@
+# Editor settings; shfmt (run by pre-commit) reads the [*.sh] / shell sections too.
+root = true
+
+[*]
+end_of_line = lf
+insert_final_newline = true
+trim_trailing_whitespace = true
+charset = utf-8
+
+[*.py]
+indent_style = space
+indent_size = 4
+
+# Shell: a section with a "/" matches paths from here, so *.sh (any directory) gets its own.
+[*.sh]
+indent_style = space
+indent_size = 2
+switch_case_indent = true
+
+[{bin/bosun,libexec/bosun-*}]
+indent_style = space
+indent_size = 2
+switch_case_indent = true

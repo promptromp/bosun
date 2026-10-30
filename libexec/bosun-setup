@@ -1,0 +1,38 @@
+#!/bin/bash
+# Usage: bosun setup [--dry-run]
+#
+# Run the setup_steps() function defined in $BOSUN_SETUP_FILE (default
+# ~/.config/bosun/setup.sh). Helpers such as ensure_aws_sso and run_step are
+# available inside it; see lib/setup-helpers.sh. --dry-run checks state without logging in.
+# Exits non-zero if any step failed.
+set -uo pipefail
+source "$(dirname "$0")/../lib/common.sh"
+source "$BOSUN_ROOT/lib/setup-helpers.sh"
+load_config
+
+for arg in "$@"; do
+  case "$arg" in
+    -h | --help)
+      usage
+      exit 0
+      ;;
+    --dry-run) BOSUN_SETUP_DRY_RUN=1 ;;
+    *) die_usage "unknown argument '$arg'" ;;
+  esac
+done
+
+if [ ! -f "$BOSUN_SETUP_FILE" ]; then
+  log "no setup file at $BOSUN_SETUP_FILE; nothing to do"
+  exit 0
+fi
+
+# shellcheck disable=SC1090
+source "$BOSUN_SETUP_FILE"
+declare -F setup_steps >/dev/null || die "$BOSUN_SETUP_FILE must define a setup_steps function"
+
+setup_steps
+if [ "$SETUP_FAILURES" -gt 0 ]; then
+  log "setup finished with $SETUP_FAILURES failed step(s)"
+  exit 1
+fi
+log "setup finished"

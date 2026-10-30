@@ -1,0 +1,61 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(bosun context:*)",
+      "Bash(bosun ledger:*)",
+      "Bash(bosun delegate:*)",
+      "Bash(bosun send:*)",
+      "Bash(bosun pr-threads:*)",
+      "Bash(bosun review-watch:*)",
+      "Bash(bosun my-prs:*)",
+      "Bash(gh pr list:*)",
+      "Bash(gh pr view:*)",
+      "Bash(gh pr checks:*)",
+      "Bash(gh pr diff:*)",
+      "Bash(gh search prs:*)"
+    ],
+    "ask": [
+      "mcp__plugin_slack_slack__slack_send_message",
+      "mcp__plugin_slack_slack__slack_schedule_message",
+      "mcp__plugin_slack_slack__slack_add_reaction",
+      "mcp__plugin_slack_slack__slack_create_canvas",
+      "mcp__plugin_slack_slack__slack_update_canvas",
+      "mcp__plugin_slack_slack__slack_create_conversation",
+      "mcp__claude_ai_Slack__slack_send_message",
+      "mcp__claude_ai_Slack__slack_schedule_message",
+      "mcp__claude_ai_Slack__slack_add_reaction",
+      "mcp__claude_ai_Slack__slack_create_canvas",
+      "mcp__claude_ai_Slack__slack_update_canvas",
+      "mcp__claude_ai_Slack__slack_create_conversation",
+      "Bash(gh pr merge:*)",
+      "Bash(gh pr review:*)",
+      "Bash(gh pr comment:*)",
+      "Bash(gh pr edit:*)",
+      "Bash(gh pr close:*)",
+      "Bash(gh pr ready:*)",
+      "Bash(gh pr update-branch:*)",
+      "Bash(gh api:*)",
+      "Bash(git push:*)"
+    ],
+    "deny": [
+      "Edit",
+      "Write",
+      "NotebookEdit",
+      "Bash(gh pr merge --admin:*)",
+      "Bash(git push --force:*)"
+    ]
+  },
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash|mcp__.*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"$HOME/.local/bin/bosun\" guard"
+          }
+        ]
+      }
+    ]
+  }
+}

@@ -1,0 +1,77 @@
+#!/bin/bash
+# bosun: scheduled wake, credential refresh and Remote Control Claude Code sessions.
+set -uo pipefail
+
+ROOT="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/.." && pwd)"
+
+usage() {
+  cat <<'EOF'
+Usage: bosun <command> [args]
+
+Daily flow
+  morning     Scheduled entry point: keep awake, run setup steps, start or refresh sessions
+  setup       Run only the setup steps from setup.sh (credential refresh etc.)
+  start       Start the tmux session, or refresh it if it already exists
+  stop        Kill the tmux session and release the keep-awake assertion
+  attach      Attach to the tmux session (it runs on its own tmux server)
+
+Inside the tmux session
+  refresh     Per window: restart idle outdated sessions, drain idle ones, relaunch exited ones
+  launch      Resume a named Claude session in the current directory (no picker)
+  send        Deliver a message to a Claude window, or open a new one
+  delegate    Hand a task to a repo session with the rules for its task type
+  chores      Run the orchestrator chores now, or rehearse them with --dry-run (no side effects)
+  checkin     Nudge the orchestrator to run /bosun:chores check-in (the `checkin` window)
+  alert       Notify me (macOS notification, Slack DM to myself) that something needs me
+  context     Print the orchestrator's working context (config, windows, repos, open items)
+  ledger      Work-item ledger: ids, state machines, processed messages, pending approvals
+  kg          Knowledge (people, process, product): facts with sources, a review batch, lookups
+              and small context packs (in $BOSUN_CONFIG_DIR/knowledge/)
+  pr-threads  Review threads on a GitHub PR: replies, which await the author, threads per round
+  review-watch
+              Record new reviews on my PRs after their last hand-over, and queue them as events
+  my-prs      My open PRs within the repo mask and a time window (--since 48h|7d|2w)
+  resolve     Map a session name to its UUID; check whether a session is live
+  trust       Mark repo folders as trusted by Claude Code, so unattended starts do not stall
+  guard       Permission guard hooks for the orchestrator (asks before MCP writes, denies force pushes; approvals)
+  sessions    Every window with its Claude session id, status and transcript (--json)
+  events      Push events from repo sessions (reports, what I typed there, drafts, windows at a
+              prompt) to the idle orchestrator (the check-in loop, with BOSUN_EVENTS_ENABLED=1)
+  slack-watch Look for new Slack mentions, DMs and thread replies (read-only headless Claude) and
+              queue them as events (the check-in loop, with BOSUN_SLACK_WATCH_ENABLED=1)
+  hook        Claude Code hook for repo sessions: record what I type there (user-prompt)
+  learn       Look back over recent sessions, the ledger and the logs; propose memory notes,
+              rules and setup changes for my approval (its own launchd agent, if enabled)
+
+Looking at it
+  console     Local web console: ledger, sessions, health, stats, knowledge; read-only except
+              knowledge review decisions (127.0.0.1, token in the printed URL)
+  impact      Collect the console's Impact snapshot: my PRs and reviews (GitHub, read-only),
+              agent busy time, my prompts and tokens per window (`impact collect`)
+
+Checking it works
+  doctor      Check dependencies, config, schedule and credentials
+  orphans     List shells earlier window starts left behind (ppid 1); --apply stops them
+  watchdog    Alert me about a missed or failed morning run, a missing session, stuck prompts,
+              errors in the logs (its own launchd agent runs it every 5 minutes; --status)
+  status      Show schedule, keep-awake, tmux windows and the latest log
+  wake-test   Real sleep/wake end-to-end test in N minutes (needs sudo)
+
+Run `bosun <command> --help` for details.
+EOF
+}
+
+command="${1:-}"
+case "$command" in
+  "" | -h | --help | help) usage ;;
+  *)
+    target="$ROOT/libexec/bosun-$command"
+    [ -x "$target" ] || {
+      echo "bosun: unknown command '$command'" >&2
+      usage >&2
+      exit 2
+    }
+    shift
+    BOSUN_COMMAND="$command" exec "$target" "$@"
+    ;;
+esac

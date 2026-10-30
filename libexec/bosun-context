@@ -1,0 +1,41 @@
+#!/bin/bash
+# Usage: bosun context
+#
+# Print what the orchestrator needs at the start of a chores run: the time, chores config, my
+# GitHub login, tmux windows with Claude status, the owner/repo -> directory map (limited to
+# BOSUN_REPO_MASK), and the open ledger items with pending proposals.
+set -uo pipefail
+source "$(dirname "$0")/../lib/common.sh"
+load_config
+
+case "${1:-}" in -h | --help)
+  usage
+  exit 0
+  ;;
+esac
+
+echo "## Now"
+date '+%F %T %Z (%A)'
+echo
+echo "## Chores config"
+echo "- slack_lookback_hours: $BOSUN_SLACK_LOOKBACK_HOURS (max $BOSUN_SLACK_MAX_LOOKBACK_HOURS; 'bosun ledger mark-run' prints the scan start)"
+echo "- my_pr_window: $BOSUN_MY_PR_WINDOW (default window for discovering my PRs; 'bosun my-prs --since 7d' looks further back)"
+echo "- nudge_after_business_days: $BOSUN_NUDGE_AFTER_BUSINESS_DAYS"
+echo "- max_nudges: $BOSUN_MAX_NUDGES (outreach other than review)"
+echo "- max_review_nudges: $BOSUN_MAX_REVIEW_NUDGES (PRs waiting on reviewers; 0 = no cap, nudge each business day while the next move is theirs)"
+echo "- review_escalate_after_nudges: $BOSUN_REVIEW_ESCALATE_AFTER_NUDGES"
+echo "- repo_mask: ${BOSUN_REPO_MASK:-(none: all repositories)}. Only matching repositories are tracked; the ledger rejects others."
+echo "- github_login: $(gh api user --jq .login 2>/dev/null || echo unknown)"
+echo
+echo "## tmux windows in '$BOSUN_SESSION_NAME' (name, Claude status, version, model/effort at launch, directory)"
+echo "(claude:<status> means Claude runs there: idle, busy, waiting at a prompt or question, or idle-bg: its turn is over and a background command it started still runs. no-claude: only a shell.)"
+if session_exists; then "$BOSUN" send --list; else echo "(session not running)"; fi
+echo
+echo "## Repositories within the repo mask (owner/repo -> directory)"
+find "$BOSUN_REPOS_DIR" -mindepth 2 -maxdepth 2 -name .git 2>/dev/null | sort | while read -r git_dir; do
+  dir="$(dirname "$git_dir")"
+  slug="$(repo_slug_of_dir "$dir")" && printf '%s\t%s\n' "$slug" "$dir"
+done | repo_mask_filter "" | awk -F'\t' '{ print "- " $1 " -> " $2 }'
+echo
+echo "## Open ledger items"
+"$BOSUN" ledger list --open

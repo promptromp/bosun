@@ -1,0 +1,87 @@
+#!/bin/bash
+# Usage: bosun trust [--check | --revoke] [--any] <dir>...
+#
+# Mark directories as trusted by Claude Code, as if you had accepted its folder trust prompt there.
+# In an untrusted folder an interactive Claude shows that prompt at startup and waits, which stalls
+# an unattended start; Claude Code has no setting or flag that skips it. This records the same
+# entry Claude writes when you accept the prompt (`hasTrustDialogAccepted` in ~/.claude.json, an
+# internal format), and checks it took.
+#
+# Only git repositories whose origin matches BOSUN_REPO_MASK are trusted, unless --any.
+# --check exits 0 if every directory is trusted. --revoke removes the trust.
+# `bosun send --new|--start` calls this for their directory when BOSUN_TRUST_MASKED_REPOS=1.
+set -uo pipefail
+source "$(dirname "$0")/../lib/common.sh"
+load_config
+
+MODE=trust
+ANY=0
+dirs=()
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --check) MODE=check ;;
+    --revoke) MODE=revoke ;;
+    --any) ANY=1 ;;
+    -h | --help)
+      usage
+      exit 0
+      ;;
+    -*) die_usage "unknown option $1" ;;
+    *) dirs+=("$1") ;;
+  esac
+  shift
+done
+[ ${#dirs[@]} -gt 0 ] || die_usage "give at least one directory"
+
+set_trust() { claude_state set-trust "$1" "$2"; }
+
+status=0
+for dir in "${dirs[@]}"; do
+  [ -d "$dir" ] || {
+    log "no such directory: $dir"
+    status=1
+    continue
+  }
+  dir="$(cd "$dir" && pwd -P)"
+  case "$MODE" in
+    check)
+      if claude_trusts "$dir"; then log "trusted: $dir"; else
+        log "not trusted: $dir"
+        status=1
+      fi
+      ;;
+    revoke)
+      if set_trust "$dir" false && ! claude_trusts "$dir"; then
+        log "revoked: $dir"
+      else
+        log "could not revoke $dir"
+        status=1
+      fi
+      ;;
+    trust)
+      if claude_trusts "$dir"; then
+        log "already trusted: $dir"
+        continue
+      fi
+      if [ "$ANY" != "1" ]; then
+        slug="$(repo_slug_of_dir "$dir")" || {
+          log "not trusting $dir: not a git repository with an origin remote (use --any)"
+          status=1
+          continue
+        }
+        repo_in_mask "$slug" || {
+          log "not trusting $dir: $slug is outside the repo mask '$BOSUN_REPO_MASK' (use --any)"
+          status=1
+          continue
+        }
+      fi
+      if set_trust "$dir" true && claude_trusts "$dir"; then
+        log "trusted: $dir"
+      else
+        log "could not trust $dir"
+        status=1
+      fi
+      ;;
+  esac
+done
+exit "$status"

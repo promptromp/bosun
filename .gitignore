@@ -1,0 +1,42 @@
+# Python, and the development tools' environment and caches (see pyproject.toml)
+__pycache__/
+*.py[cod]
+.venv/
+.ruff_cache/
+.mypy_cache/
+.pytest_cache/
+.complexipy_cache/
+
+# Runtime state and logs (live in ~/.local/state/bosun, but never commit strays)
+logs/
+state/
+dry-runs/
+*.log
+last-result.json
+ledger.json*
+watchdog.json
+
+# Site-specific files: they belong in ~/.config/bosun, never in this repo
+forbidden-terms.txt
+orchestrator-settings*.json
+.claude/settings.local.json
+
+# Personal configuration and credentials. Real config lives in ~/.config/bosun;
+# only the examples/ directory is meant to be committed.
+/config/
+.env
+.env.*
+*.pem
+*.key
+*.p12
+credentials
+.aws/
+
+# Editors and OS
+.DS_Store
+.idea/
+.vscode/
+*.swp
+*~
+*.bak
+.claude/worktrees/

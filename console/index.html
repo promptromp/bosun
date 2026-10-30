@@ -1,0 +1,48 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="referrer" content="no-referrer">
+    <meta name="color-scheme" content="light dark">
+    <title>bosun console</title>
+    <link rel="stylesheet" href="/app.css">
+    <script src="/app.js" defer></script>
+  </head>
+  <body>
+    <a class="skip-link" href="#main">Skip to content</a>
+    <div class="masthead">
+      <div class="masthead-inner">
+        <pre class="masthead-logo" aria-hidden="true">              _               _  _       _
+  __ _  _  _ | |_  ___  _ __ (_)| | ___ | |_
+ / _` || || ||  _|/ _ \| '_ \| || |/ _ \|  _|
+ \__,_| \_,_| \__|\___/| .__/|_||_|\___/ \__|
+                       |_|</pre>
+        <p class="masthead-tagline">console</p>
+      </div>
+    </div>
+    <header class="topbar">
+      <div class="topbar-inner">
+        <a class="brand" href="#/ledger"><span class="brand-mark" aria-hidden="true"></span>bosun</a>
+        <nav aria-label="Views">
+          <a href="#/ledger" data-view="ledger">Ledger</a>
+          <a href="#/sessions" data-view="sessions">Sessions</a>
+          <a href="#/stats" data-view="stats">Stats</a>
+          <a href="#/impact" data-view="impact">Impact</a>
+          <a href="#/learning" data-view="learning">Improvements</a>
+          <a href="#/knowledge" data-view="knowledge">Knowledge Graph</a>
+          <a href="#/library" data-view="library">Config</a>
+        </nav>
+        <a id="needs-badge" class="needs-badge is-empty" href="#/ledger" title="What waits on you">
+          Needs you <span id="needs-count" class="count">0</span>
+        </a>
+      </div>
+    </header>
+    <main id="main" tabindex="-1">
+      <p class="placeholder">Loading...</p>
+    </main>
+    <footer class="footer">
+      <span id="status">Connecting...</span>
+    </footer>
+  </body>
+</html>

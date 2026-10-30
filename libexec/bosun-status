@@ -1,0 +1,66 @@
+#!/bin/bash
+# Usage: bosun status
+#
+# Show the wake schedule, recent sleep/wake events, keep-awake assertions, tmux windows, the Claude
+# Code login (and whether each window gets real replies), the watchdog's checks, proposals awaiting
+# approval, open outreach (what we wait on from other people) and the tail of today's morning log.
+set -uo pipefail
+source "$(dirname "$0")/../lib/common.sh"
+load_config
+
+case "${1:-}" in
+  -h | --help)
+    usage
+    exit 0
+    ;;
+  "") ;;
+  *) die_usage "unknown argument '$1'" ;;
+esac
+
+echo "Schedule"
+pmset -g sched | sed 's/^/  /'
+launchctl print "gui/$(id -u)/$BOSUN_LAUNCHD_LABEL" 2>/dev/null |
+  grep -E '^\s+(state|last exit code|runs) ' | sed 's/^\s*/  launchd /'
+
+echo
+echo "Recent sleep/wake (last 10)"
+pmset -g log | grep -E '^\S+ \S+ \S+ (Sleep|Wake|DarkWake) ' | tail -10 | cut -c1-140 | sed 's/^/  /'
+
+echo
+echo "Keep-awake assertions"
+pmset -g assertions | grep -iE 'caffeinate' | sed 's/^ */  /' || echo "  none"
+
+echo
+echo "tmux session '$BOSUN_SESSION_NAME'"
+if session_exists; then
+  "$BOSUN" send --list | sed 's/^/  /'
+  echo "  attach: bosun attach  ($(attach_hint))"
+else
+  echo "  not running"
+fi
+
+echo
+echo "Claude login (the watchdog's login-expired check alerts when it fails)"
+{ session_exists && window_claude_pids; } | claude_login status | sed 's/^/  /'
+
+echo
+echo "Watchdog ($(watchdog_label))"
+if launchctl print "gui/$(id -u)/$(watchdog_label)" >/dev/null 2>&1; then
+  launchctl print "gui/$(id -u)/$(watchdog_label)" | grep -E '^\s+(state|last exit code|runs) ' | sed 's/^\s*/  launchd /'
+else
+  echo "  launchd agent not loaded (install.sh installs it)"
+fi
+"$BOSUN" watchdog --status | sed 's/^/  /'
+
+echo
+echo "Proposals awaiting your approval (full view: $BOSUN_STATE_DIR/ledger.md)"
+"$BOSUN" ledger list --proposals | sed 's/^/  /'
+
+echo
+echo "Waiting on others (open outreach)"
+"$BOSUN" ledger outreach --open | sed 's/^/  /'
+
+log_file="$BOSUN_LOG_DIR/morning-$(date +%F).log"
+echo
+echo "Today's morning log ($log_file)"
+if [ -f "$log_file" ]; then tail -15 "$log_file" | sed 's/^/  /'; else echo "  none yet"; fi

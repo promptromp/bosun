@@ -1,0 +1,49 @@
+{
+ "source": "day 2: within an hour of learning outreach, a repo session recorded several drafts that overlapped each other or outreach already sent: two drafts to the same QA lead about one SFTP password left in a log, an addition to a decision already sent in a Slack thread (as a second item that would also wait for a reply, and would have taken the credit for the decision's answer), and an FYI about one more commit with no reply expected (it would have waited, and been nudged, forever). The check-in also sent one nudge for several sent decisions but recorded it on one. Replayed: reach-out warns about the overlap; the addition goes out as a follow-up on the existing item and the draft is dropped as merged; the trimmed decision gets its subject and options updated; the FYI is purpose fyi and is done once sent; the combined nudge is recorded on every item it covers; the decision's reply is then matched to it alone.",
+ "setup": [
+  "bosun ledger upsert 'mypr:acme/exporter#120' --kind my-pr --title 'Export: currency columns per customer' --url https://github.com/acme/exporter/pull/120",
+  "bosun ledger record-delegation 'mypr:acme/exporter#120' --window exporter-pdf --task fix-my-pr --ask 'address the review'",
+  "bosun ledger reach-out 'mypr:acme/exporter#120' --to 'Marco Rossi' --purpose decision --subject 'Decision 6: round currencies per line or per invoice?'",
+  "bosun ledger sent 'out:mypr:acme/exporter#120/1' --ref 'https://acme.slack.com/archives/C0000000003/p1700000061000061?thread_ts=1700000060.000060&cid=C0000000003'",
+  "bosun ledger reach-out 'mypr:acme/exporter#120' --to 'Marco Rossi' --purpose decision --subject 'Decision 1: one currency column or one per currency?'",
+  "bosun ledger reach-out 'mypr:acme/exporter#120' --to 'Marco Rossi' --purpose decision --subject 'Decision 2: keep the old column order?'",
+  "bosun ledger sent 'out:mypr:acme/exporter#120/2' 'out:mypr:acme/exporter#120/3' --ref 'https://acme.slack.com/archives/C0000000003/p1700000063000063?thread_ts=1700000062.000062&cid=C0000000003'"
+ ],
+ "steps": [
+  {"actor": "repo", "why": "an addition to decision 6, already sent: created, with a warning naming the open conversation", "run": "bosun ledger reach-out 'mypr:acme/exporter#120' --to 'Marco Rossi' --purpose info-ack --subject 'Addition to decision 6: the totals row rounds the same way'",
+   "out": ["out:mypr:acme/exporter#120/4\ncreated:", "warning: mypr:acme/exporter#120 already has open outreach to the same person: out:mypr:acme/exporter#120/1 (decision, sent: Decision 6", "fold 'out:mypr:acme/exporter#120/4' --into '<existing id>'"]},
+  {"actor": "repo", "why": "two drafts to the QA lead that both carry the log-growth issue: the second is warned about the first", "run": [
+   "bosun ledger reach-out 'mypr:acme/exporter#120' --to 'Lena Park' --purpose decision --subject 'Skip the flaky upload suite for now, and note that upload.log grows without bound on the export host?' --option 'a) skip' --option 'b) fix first' --option 'c) rotate the log daily'",
+   "bosun ledger reach-out 'mypr:acme/exporter#120' --to 'Lena Park (QA)' --purpose review --subject 'upload.log grows without bound: rotate it daily and cap its size'"],
+   "out": ["warning: mypr:acme/exporter#120 already has open outreach to the same person: out:mypr:acme/exporter#120/5 (decision, draft: Skip the flaky"]},
+  {"actor": "repo", "why": "a one-way update: purpose fyi, no reply expected", "run": "bosun ledger reach-out 'mypr:acme/exporter#120' --to 'Marco Rossi' --purpose fyi --subject 'One more commit on the PR: the totals row'",
+   "out": ["it needs no reply: once sent, it is done"], "not_out": ["hold the work"]},
+  {"actor": "orchestrator", "why": "approved: the addition goes in the decision 6 thread as a follow-up on that item", "run": "bosun ledger sent 'out:mypr:acme/exporter#120/1' --ref 'https://acme.slack.com/archives/C0000000003/p1700000071000071?thread_ts=1700000060.000060&cid=C0000000003'",
+   "out": ["ok: follow-up 1 recorded on out:mypr:acme/exporter#120/1"]},
+  {"actor": "orchestrator", "why": "the separate draft for it is folded into the existing item, not left waiting", "run": "bosun ledger fold 'out:mypr:acme/exporter#120/4' --into 'out:mypr:acme/exporter#120/1'",
+   "out": ["draft -> dropped"]},
+  {"actor": "orchestrator", "why": "the password leak is left to the review item; the decision's record follows the trimmed message", "run": "bosun ledger upsert 'out:mypr:acme/exporter#120/5' --field 'subject=Skip the flaky upload suite for now?' --field 'options=a) skip | b) fix first'",
+   "out": ["updated: out:mypr:acme/exporter#120/5 [outreach] state=draft"]},
+  {"actor": "orchestrator", "why": "the FYI, approved and sent, is done at once", "run": [
+   "bosun ledger propose 'out:mypr:acme/exporter#120/7' 'Slack reply in the PR thread: one more commit landed (totals row).'",
+   "bosun ledger sent 'out:mypr:acme/exporter#120/7' --ref 'https://acme.slack.com/archives/C0000000003/p1700000072000072?thread_ts=1700000060.000060&cid=C0000000003'"],
+   "out": ["proposed -> sent -> applied (fyi: one-way, no reply expected)"]},
+  {"actor": "orchestrator", "why": "one nudge for decisions 1 and 2, recorded on both", "run": [
+   "bosun ledger propose 'out:mypr:acme/exporter#120/2' 'Slack reply in the decisions thread: a gentle nudge on decisions 1 and 2'",
+   "bosun ledger sent 'out:mypr:acme/exporter#120/2' 'out:mypr:acme/exporter#120/3' --ref 'https://acme.slack.com/archives/C0000000003/p1700000073000073?thread_ts=1700000062.000062&cid=C0000000003'"],
+   "out": ["ok: follow-up 1 recorded on out:mypr:acme/exporter#120/2", "ok: follow-up 1 recorded on out:mypr:acme/exporter#120/3"]},
+  {"actor": "orchestrator", "why": "Marco's answer in the decision 6 thread goes to decision 6 alone", "run": "bosun ledger seen 'https://acme.slack.com/archives/C0000000003/p1700000080000080?thread_ts=1700000060.000060&cid=C0000000003'", "rc": 1,
+   "out": ["in the conversation of out:mypr:acme/exporter#120/1 (decision to Marco Rossi"]},
+  {"actor": "orchestrator", "why": "nothing waits on the merged draft or the FYI", "run": "bosun ledger outreach --open",
+   "not_out": ["out:mypr:acme/exporter#120/4 ", "out:mypr:acme/exporter#120/7 "]}
+ ],
+ "expect": {
+  "out:mypr:acme/exporter#120/1": {"state": "sent", "events": {"follow-up": 1}},
+  "out:mypr:acme/exporter#120/2": {"state": "sent", "events": {"follow-up": 1, "proposal-done": 1}},
+  "out:mypr:acme/exporter#120/3": {"state": "sent", "events": {"follow-up": 1}},
+  "out:mypr:acme/exporter#120/4": {"state": "dropped"},
+  "out:mypr:acme/exporter#120/5": {"state": "draft", "fields": {"subject": "Skip the flaky upload suite for now?", "options": ["a) skip", "b) fix first"]}},
+  "out:mypr:acme/exporter#120/6": {"state": "draft", "fields": {"purpose": "review"}},
+  "out:mypr:acme/exporter#120/7": {"state": "applied", "fields": {"purpose": "fyi"}}
+ }
+}

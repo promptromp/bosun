@@ -1,0 +1,43 @@
+{
+ "source": "day 2: a draft PR had to choose between sending a due date and having another team's connector compute it; the follow-up 'note it for the other team' lived in chat and the draft PR was not in the ledger. Replayed with outreach: the session records the question on its item, I reject the first wording, the DM goes out, one nudge, and the reply in the DM is matched and handed back to the session.",
+ "setup": [
+  "bosun ledger upsert 'slack:C0000000003/1700000035.000035' --kind mention --title 'Marco: the ERP sync drops payment terms'",
+  "bosun ledger record-delegation 'slack:C0000000003/1700000035.000035' --window exporter --task new-work --ask 'send payment terms in the ERP sync'"
+ ],
+ "steps": [
+  {"actor": "repo", "why": "the fork in the design, recorded with the options", "run": [
+   "bosun ledger reach-out 'slack:C0000000003/1700000035.000035' --to 'ERP connector team (Omar)' --purpose decision --subject 'Due dates: we send due_date with each invoice, or the connector computes it from payment_terms?' --option 'a) we send due_date (recommended)' --option 'b) the connector computes it' --details - <<'EOF'",
+   "Draft PR https://github.com/acme/exporter/pull/111 implements a). b) needs a change in the connector.",
+   "EOF"],
+   "out": ["out:slack:C0000000003/1700000035.000035/1\ncreated:"]},
+  {"actor": "repo", "why": "the PR itself becomes a tracked item too", "run": "bosun ledger upsert 'mypr:acme/exporter#111' --kind my-pr --title 'Payment terms in the ERP sync (draft)' --url https://github.com/acme/exporter/pull/111"},
+  {"actor": "repo", "why": "nothing else left: the report says what waits", "run": "bosun ledger report 'slack:C0000000003/1700000035.000035' --summary 'Draft PR #111 sends payment_terms and due_date' --result https://github.com/acme/exporter/pull/111 --open 'waiting on out:slack:C0000000003/1700000035.000035/1 (due date source)'"},
+  {"actor": "orchestrator", "why": "the proposed DM", "run": "bosun ledger propose 'out:slack:C0000000003/1700000035.000035/1' 'Slack DM to Omar: Hi Omar, the ERP sync now sends payment terms. Should we send the due date too, or would the connector rather compute it from the terms? Draft: https://github.com/acme/exporter/pull/111'",
+   "out": ["draft -> proposed"]},
+  {"actor": "user", "why": "I want different wording: rejected, back to draft", "run": "bosun ledger resolve 'out:slack:C0000000003/1700000035.000035/1' rejected --note 'shorter, lead with the recommendation'",
+   "out": ["proposed -> draft"]},
+  {"actor": "orchestrator", "why": "the new wording", "run": "bosun ledger propose 'out:slack:C0000000003/1700000035.000035/1' 'Slack DM to Omar: We plan to send due_date with each synced invoice, next to payment_terms. OK for the connector? Draft: https://github.com/acme/exporter/pull/111'"},
+  {"actor": "orchestrator", "why": "approved and sent", "run": "bosun ledger sent 'out:slack:C0000000003/1700000035.000035/1' --ref https://acme.slack.com/archives/D0000000005/p1700000050000050",
+   "out": ["proposed -> sent"]},
+  {"actor": "orchestrator", "why": "no reply after the nudge window: a proposed follow-up, then sent", "run": [
+   "bosun ledger propose 'out:slack:C0000000003/1700000035.000035/1' 'Slack DM to Omar: friendly ping on the due date question'",
+   "bosun ledger sent 'out:slack:C0000000003/1700000035.000035/1' --ref https://acme.slack.com/archives/D0000000005/p1700000060000060"],
+   "out": ["ok: follow-up 1 recorded"]},
+  {"actor": "orchestrator", "why": "the listing shows both messages", "run": "bosun ledger outreach --parent 'slack:C0000000003/1700000035.000035'",
+   "out": ["  sent:     https://acme.slack.com/archives/D0000000005/p1700000050000050 (slack,", "  nudge 1: https://acme.slack.com/archives/D0000000005/p1700000060000060 (slack,", "nudged 1x"]},
+  {"actor": "orchestrator", "why": "a later message in that DM is the reply", "run": "bosun ledger seen https://acme.slack.com/archives/D0000000005/p1700000070000070", "rc": 1,
+   "out": ["in the conversation of out:slack:C0000000003/1700000035.000035/1"]},
+  {"actor": "orchestrator", "why": "recorded and handed back to the session", "run": [
+   "bosun ledger replied 'out:slack:C0000000003/1700000035.000035/1' --evidence https://acme.slack.com/archives/D0000000005/p1700000070000070 --summary 'a) is fine; the connector uses due_date when it is there'",
+   "bosun ledger record-source https://acme.slack.com/archives/D0000000005/p1700000070000070 --class outreach --item 'out:slack:C0000000003/1700000035.000035/1'",
+   "bosun delegate --update 'out:slack:C0000000003/1700000035.000035/1'"],
+   "out": ["would deliver to replay:exporter: Update to ledger item slack:C0000000003/1700000035.000035", "replied -> applied"]},
+  {"actor": "orchestrator", "why": "now the mention may close", "run": "bosun ledger transition 'slack:C0000000003/1700000035.000035' done --note 'PR #111 tracked as mypr'",
+   "out": ["new -> done"]}
+ ],
+ "expect": {
+  "out:slack:C0000000003/1700000035.000035/1": {"state": "applied", "events": {"proposal-rejected": 1, "proposal-done": 2, "follow-up": 1}},
+  "slack:C0000000003/1700000035.000035": {"state": "done", "updates": 1},
+  "mypr:acme/exporter#111": {"state": "awaiting-review"}
+ }
+}

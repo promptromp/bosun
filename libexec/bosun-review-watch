@@ -1,0 +1,32 @@
+#!/bin/bash
+# Usage: bosun review-watch [--dry-run] [--quiet] [--id <mypr id> ...]
+#
+# Raise new reviews on my open PRs: for each open my-pr item in addressing, awaiting-review or
+# approved (or the --id ones), read the PR (read-only, as `bosun pr-threads` does) and find
+# reviews by people other than the author (never bots), with changes requested or comments, after the
+# item's last hand-over to a repo session (for an item not in addressing: or its last report) and
+# after it was created. Each is recorded once on the item as a `review-arrived` history entry (no
+# state change) and, with BOSUN_EVENTS_ENABLED=1, queued as a `review` event for the
+# orchestrator. Prints one line per review still to act on, with the next step (addressing: forward
+# the threads with `bosun delegate --update`; otherwise chores step 4). --dry-run records and
+# queues nothing. The chores run it in step 4; with events on, the check-in loop runs it every
+# BOSUN_REVIEW_WATCH_MINUTES with --quiet (only reviews found new in this run, and no line
+# when there are none). Exit 1 if the ledger cannot be read; a PR that cannot be read is
+# a `warn:` line.
+set -uo pipefail
+source "$(dirname "$0")/../lib/common.sh"
+load_config
+case "${1:-}" in
+  -h | --help)
+    usage
+    exit 0
+    ;;
+esac
+# With events on, the window the command runs in is the origin of the events it queues.
+caller="${BOSUN_CALLER_WINDOW:-}"
+if [ "$BOSUN_EVENTS_ENABLED" = "1" ] && [ -z "$caller" ]; then caller="$(caller_window)"; fi
+BOSUN_STATE_DIR="$BOSUN_STATE_DIR" BOSUN_REPO_MASK="$BOSUN_REPO_MASK" \
+  BOSUN_EVENTS_ENABLED="$BOSUN_EVENTS_ENABLED" BOSUN_CALLER_WINDOW="$caller" \
+  BOSUN_CONFIG_DIR="$BOSUN_CONFIG_DIR" BOSUN_REVIEWER_BOTS="$BOSUN_REVIEWER_BOTS" \
+  BOSUN_REVIEWER_BOT_VERDICT_PATTERN="$BOSUN_REVIEWER_BOT_VERDICT_PATTERN" \
+  exec python3 "$BOSUN_ROOT/lib/review_watch.py" "$@"

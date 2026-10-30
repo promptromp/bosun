@@ -1,0 +1,37 @@
+{
+ "source": "day 2: a proposed Slack reply to a stakeholder's question awaited my approval; the reply itself asked them back how instalments are invoiced. Once sent, nothing recorded that we now waited for them, and their answer would have arrived as a new, unrelated mention. Replayed with outreach on the mention: the reply is the outreach's message, their thread answer is matched to it, and with no repo session holding the mention the answer is surfaced to me.",
+ "setup": [
+  "bosun ledger upsert 'slack:C0000000003/1700000033.000033' --kind mention --title 'Marco: instalment plans need backend support'",
+  "bosun ledger transition 'slack:C0000000003/1700000033.000033' surfaced --note 'surfaced'"
+ ],
+ "steps": [
+  {"actor": "orchestrator", "why": "the reply asks something back, so it is outreach on the mention", "run": "bosun ledger ask 'slack:C0000000003/1700000033.000033' --to 'Marco Rossi' --purpose clarification --question 'For instalment plans: one invoice per instalment, or one invoice with a payment schedule?'",
+   "out": ["out:slack:C0000000003/1700000033.000033/1"]},
+  {"actor": "orchestrator", "why": "the exact reply, for my approval", "run": "bosun ledger propose 'out:slack:C0000000003/1700000033.000033/1' 'Slack reply in the thread: The backend can support instalment plans. Open question: one invoice per instalment, or one invoice with a payment schedule?'",
+   "out": ["draft -> proposed"]},
+  {"actor": "orchestrator", "why": "a habit from other proposals: resolve done is refused with the right command", "run": "bosun ledger resolve 'out:slack:C0000000003/1700000033.000033/1' done", "rc": 1,
+   "out": ["record it with bosun ledger sent"]},
+  {"actor": "orchestrator", "why": "approved and sent", "run": "bosun ledger sent 'out:slack:C0000000003/1700000033.000033/1' --ref 'https://acme.slack.com/archives/C0000000003/p1700000043000043?thread_ts=1700000033.000033&cid=C0000000003'"},
+  {"actor": "orchestrator", "why": "the mention is answered but waits on Marco, so it stays open", "run": "bosun ledger transition 'slack:C0000000003/1700000033.000033' done --note 'replied'", "rc": 1,
+   "out": ["is waiting on: out:slack:C0000000003/1700000033.000033/1 (slack to Marco Rossi, "]},
+  {"actor": "orchestrator", "why": "his answer in the thread is matched, not a new mention", "run": "bosun ledger seen 'https://acme.slack.com/archives/C0000000003/p1700000044000044?thread_ts=1700000033.000033&cid=C0000000003'", "rc": 1,
+   "out": ["in the conversation of out:slack:C0000000003/1700000033.000033/1 (clarification to Marco Rossi"]},
+  {"actor": "orchestrator", "why": "recorded; no window holds the mention, so it goes to me", "run": [
+   "R='https://acme.slack.com/archives/C0000000003/p1700000044000044?thread_ts=1700000033.000033&cid=C0000000003'",
+   "bosun ledger replied 'out:slack:C0000000003/1700000033.000033/1' --evidence \"$R\" --summary 'one invoice with a schedule'",
+   "bosun ledger record-source \"$R\" --class outreach --item 'out:slack:C0000000003/1700000033.000033/1'"],
+   "out": ["slack:C0000000003/1700000033.000033 is not with a repo session; tell me the reply"]},
+  {"actor": "orchestrator", "why": "handing it to a window is refused, with the way out", "run": "bosun delegate --update 'out:slack:C0000000003/1700000033.000033/1'", "rc": 1,
+   "out": ["no window holds slack:C0000000003/1700000033.000033", "tell me the reply"]},
+  {"actor": "orchestrator", "why": "surfaced in the plan, then applied", "run": "bosun ledger transition 'out:slack:C0000000003/1700000033.000033/1' applied --note 'surfaced to the user'",
+   "out": ["replied -> applied"]},
+  {"actor": "orchestrator", "why": "the reply is a processed outreach source", "run": "bosun ledger seen 'https://acme.slack.com/archives/C0000000003/p1700000044000044?thread_ts=1700000033.000033&cid=C0000000003'",
+   "out": ["\"classification\": \"outreach\""]},
+  {"actor": "orchestrator", "why": "now the mention closes", "run": "bosun ledger transition 'slack:C0000000003/1700000033.000033' done --note 'answered; Marco clarified'",
+   "out": ["surfaced -> done"]}
+ ],
+ "expect": {
+  "slack:C0000000003/1700000033.000033": {"state": "done", "window": null, "events": {"outreach": 1}},
+  "out:slack:C0000000003/1700000033.000033/1": {"state": "applied", "fields": {"purpose": "clarification", "answer": "one invoice with a schedule"}, "events": {"proposal-done": 1, "source": 1}}
+ }
+}

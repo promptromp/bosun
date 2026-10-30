@@ -1,0 +1,114 @@
+#!/bin/bash
+# Usage: bosun watchdog [--once | --dry-run | --status | --list | --facts] [--only <check>[,<check>...]]
+#
+# Look for problems that need you and alert you about each once (`bosun alert`: macOS
+# notification, Slack DM). Its own launchd agent (installed by install.sh) runs it every 5 minutes,
+# outside the tmux session, so it also notices when the session or the morning run is missing.
+#   morning-missing  no morning run by BOSUN_START_TIME + wake delay + grace period
+#   morning-failed   today's morning run reported problems (setup, network, windows) or never finished
+#   session-missing  no tmux session after the morning run (not once you ran `bosun stop`)
+#   checkin-missing  the checkin window is gone or not running the check-in loop
+#   orchestrator-down the orchestrator's Claude has not run for BOSUN_WATCHDOG_ORCHESTRATOR_DOWN_MINUTES
+#                    awake minutes; relaunches it once per outage (BOSUN_WATCHDOG_ORCHESTRATOR_RESTART)
+#   waiting          a Claude window has waited BOSUN_ALERT_WAITING_MINUTES at a prompt
+#   log-errors       new ERROR lines in the check-in and launchd logs (the first run only baselines)
+#   ledger-stuck     a ledger item delegated for BOSUN_WATCHDOG_DELEGATED_HOURS awake hours
+#   long-shell       a background command has kept a Claude window in "shell" (turn over, the
+#                    command still running) for BOSUN_LONG_SHELL_HOURS awake hours
+#   spend-limit      a Claude window, or a subagent of its, stopped on a usage limit (spend limit):
+#                    names it and the items it holds; once the limit is lifted (a login check
+#                    request works again) it asks the window to resume, once
+#   context-size     a Claude window's conversation has re-read BOSUN_CONTEXT_WARN_TOKENS+ tokens
+#                    a turn for a day, which makes every turn there expensive (once per conversation)
+#   overhead-share   the turns bosun started itself cost more than BOSUN_OVERHEAD_WARN_SHARE
+#                    of the last 7 days, from the Impact snapshot (once a week)
+#   learn            with BOSUN_LEARN_ENABLED=1: the daily learning run is missing, failed,
+#                    crashed or runs past BOSUN_LEARN_TIMEOUT_MINUTES
+#   events           with BOSUN_EVENTS_ENABLED=1: the check-in loop stopped dispatching events
+#                    to the orchestrator, or a delivery failed
+#   slack-watch      with BOSUN_SLACK_WATCH_ENABLED=1 and events on: no Slack watch for two
+#                    intervals in the awake window, 3 failed runs in a row, or the daily budget spent
+#   login-expired    Claude Code is logged out, the last login check failed, or a Claude window
+#                    answers every prompt with a login error (once per outage; held, like every
+#                    alert, until the awake window opens)
+#
+#   --once     check, record and alert (the default; what launchd runs)
+#   --dry-run  print what would alert; sends nothing and changes no state
+#   --status   every check and its current result (read-only)
+#   --list     the checks, with their severity and de-duplication rule
+#   --facts    the live facts it collects (tmux windows and the Claude in each, the check-in loop,
+#              the morning launchd job) as JSON, read-only; what `bosun console` reads
+#   --only     run only these checks (the check-in loop runs `--only waiting`)
+#
+# Alerts go out on scheduled days (BOSUN_DAYS) between BOSUN_START_TIME and
+# BOSUN_AWAKE_UNTIL; anything found outside that window is held until it opens. Each problem
+# alerts once (per day, per prompt, per item, per outage); what one run finds goes out as one
+# message. A missing run, session or check-in loop must be seen on two runs in a row first. State:
+# $BOSUN_STATE_DIR/watchdog.json.
+set -uo pipefail
+source "$(dirname "$0")/../lib/common.sh"
+load_config
+
+args=()
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --once | --dry-run | --status | --list | --facts) args+=("$1") ;;
+    --only)
+      [ -n "${2:-}" ] || die_usage "--only needs a check name"
+      args+=(--only "$2")
+      shift
+      ;;
+    -h | --help)
+      usage
+      exit 0
+      ;;
+    *) die_usage "unknown option $1" ;;
+  esac
+  shift
+done
+
+# The morning launchd job's state and last exit code, as `launchctl print` shows them (empty if
+# it is not loaded). Its first, top-level "state" line is the job's.
+morning_job() {
+  launchctl print "gui/$(id -u)/$BOSUN_LAUNCHD_LABEL" 2>/dev/null |
+    awk -F' = ' '$1 == "\tstate" && state == "" { state = $2 }
+      $1 == "\tlast exit code" && code == "" { code = $2 }
+      END { printf "%s\t%s\n", state, code }'
+}
+
+# What the watchdog needs from tmux, ps and launchd, as JSON for lib/watchdog.py.
+collect_facts() {
+  local session=false checkin_window=false checkin_loop=false windows="" pane_pid
+  if session_exists; then
+    session=true
+    windows="$(window_claude_pids)"
+    read -r pane_pid _ <<<"$(find_window checkin)"
+    if [ -n "${pane_pid:-}" ]; then
+      checkin_window=true
+      checkin_loop_running "$pane_pid" && checkin_loop=true
+    fi
+  fi
+  jq -n --argjson session "$session" --argjson checkin_window "$checkin_window" \
+    --argjson checkin_loop "$checkin_loop" --arg windows "$windows" --arg job "$(morning_job)" '{
+      session_exists: $session,
+      windows: [$windows | split("\n")[] | select(length > 0) | split("\t")
+        | {name: .[0], claude_pid: ((.[1] // "") | if . == "" then null else tonumber end)}],
+      checkin_window: $checkin_window,
+      checkin_loop: $checkin_loop,
+      morning_job: ($job | split("\t") | {state: .[0], last_exit_code: .[1]})
+    }'
+}
+
+# lib/watchdog.py gets the settings it uses explicitly (load_config does not export them).
+settings=()
+# shellcheck disable=SC2086  # one name per word, on purpose
+while IFS= read -r line; do settings+=("$line"); done < <(settings_lines $WATCHDOG_SETTINGS)
+
+if [ "${args[*]-}" = "--facts" ]; then
+  collect_facts
+  exit
+fi
+if [ "${args[*]-}" = "--list" ]; then
+  exec python3 "$BOSUN_ROOT/lib/watchdog.py" --list
+fi
+collect_facts | env "${settings[@]}" python3 "$BOSUN_ROOT/lib/watchdog.py" ${args[@]+"${args[@]}"}

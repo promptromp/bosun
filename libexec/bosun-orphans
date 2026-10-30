@@ -1,0 +1,39 @@
+#!/bin/bash
+# Usage: bosun orphans [--apply]
+#
+# List the shells that earlier window starts and restarts left behind: helpers that a pane's launch
+# shell (`<shell> -lic <this checkout>/bin/bosun launch ...` or `... checkin --loop ...`) forked
+# off while reading your startup files (a prompt theme's git-status daemon, for one). That shell
+# never shows a prompt, so they never exit; launchd adopted them (ppid 1). Only processes with
+# exactly that command line start, no children and not tmux itself are listed (the tmux server's
+# command line can hold the same text). `launch`, `checkin --loop`, `refresh` and `stop` stop such
+# helpers themselves; this clears what was left before, or by other ways of closing a window.
+#   --apply  send each one SIGTERM, after checking once more that its pid still runs that command
+set -uo pipefail
+source "$(dirname "$0")/../lib/common.sh"
+load_config
+
+kill_args=()
+case "${1:-}" in
+  -h | --help)
+    usage
+    exit 0
+    ;;
+  --apply) kill_args=(--kill) ;;
+  "") ;;
+  *) die_usage "unknown argument '$1'" ;;
+esac
+
+set_wrapper_args
+found="$(orphans launch-shells "${wrapper_args[@]}" ${kill_args[@]+"${kill_args[@]}"})" || die "could not list processes"
+if [ -z "$found" ]; then
+  log "no shells left behind by earlier window starts"
+  exit 0
+fi
+count="$(grep -c . <<<"$found")"
+if [ ${#kill_args[@]} -gt 0 ]; then
+  log "stopped $count shell(s) left behind by earlier window starts:"
+else
+  log "$count shell(s) left behind by earlier window starts (bosun orphans --apply stops them):"
+fi
+printf '%s\n' "$found" | sed 's/^/  /'

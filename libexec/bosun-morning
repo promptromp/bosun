@@ -1,0 +1,124 @@
+#!/bin/bash
+# Usage: bosun morning [--dry-run] [--skip-setup] [--awake-minutes N]
+#
+# The scheduled entry point (launchd runs this at BOSUN_START_TIME):
+#   1. promote the wake to a full wake and hold a keep-awake assertion until BOSUN_AWAKE_UNTIL
+#   2. wait for the network
+#   3. run setup steps (credential refresh) from setup.sh
+#   4. start the tmux session, or refresh it if it survived the night (unless you are typing in it)
+#   5. post a macOS notification with the outcome
+#
+#   --dry-run          report what would happen; no keep-awake, logins or tmux changes
+#   --skip-setup       skip step 3
+#   --awake-minutes N  hold the keep-awake for N minutes instead of until BOSUN_AWAKE_UNTIL
+set -uo pipefail
+source "$(dirname "$0")/../lib/common.sh"
+load_config
+
+DRY_RUN=0
+SKIP_SETUP=0
+AWAKE_MINUTES=""
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --dry-run) DRY_RUN=1 ;;
+    --skip-setup) SKIP_SETUP=1 ;;
+    --awake-minutes)
+      AWAKE_MINUTES="${2:?minutes}"
+      shift
+      ;;
+    -h | --help)
+      usage
+      exit 0
+      ;;
+    *) die_usage "unknown option $1" ;;
+  esac
+  shift
+done
+
+LOG_FILE="$BOSUN_LOG_DIR/morning-$(date +%F).log"
+exec > >(tee -a "$LOG_FILE") 2>&1
+
+KEEP_AWAKE_PIDFILE="$(keep_awake_pidfile)"
+
+start_keep_awake() {
+  local seconds old_pid
+  if [ -n "$AWAKE_MINUTES" ]; then
+    seconds=$((AWAKE_MINUTES * 60))
+  else
+    seconds="$(seconds_until_awake_end)" || die "bad BOSUN_AWAKE_UNTIL '$BOSUN_AWAKE_UNTIL'"
+  fi
+  if [ "$seconds" -le 0 ]; then
+    log "past $BOSUN_AWAKE_UNTIL; not holding a keep-awake assertion"
+    return
+  fi
+  if [ "$DRY_RUN" = "1" ]; then
+    log "dry-run: would hold keep-awake for $((seconds / 60)) minutes"
+    return
+  fi
+  # Declaring user activity turns a scheduled (possibly dark) wake into a full wake.
+  caffeinate -u -t 2
+  if [ -f "$KEEP_AWAKE_PIDFILE" ] && old_pid="$(cat "$KEEP_AWAKE_PIDFILE")" &&
+    ps -p "$old_pid" -o comm= 2>/dev/null | grep -q caffeinate; then
+    kill "$old_pid"
+  fi
+  # -i: no idle sleep; -s: no system sleep while on AC power.
+  nohup caffeinate -i -s -t "$seconds" >/dev/null 2>&1 &
+  echo $! >"$KEEP_AWAKE_PIDFILE"
+  log "holding keep-awake for $((seconds / 60)) minutes (caffeinate pid $!)"
+}
+
+wait_for_network() {
+  local deadline=$((SECONDS + BOSUN_NETWORK_TIMEOUT))
+  until curl -fsS -o /dev/null -m 5 "$BOSUN_NETWORK_PROBE_URL"; do
+    [ "$SECONDS" -ge "$deadline" ] && {
+      log "network still down after ${BOSUN_NETWORK_TIMEOUT}s; continuing"
+      return 1
+    }
+    sleep 5
+  done
+  log "network is up"
+}
+
+log "=== morning run (trigger=${BOSUN_TRIGGER:-manual}, session=$BOSUN_SESSION_NAME, dry_run=$DRY_RUN) ==="
+pmset -g batt | head -1 | sed 's/^/power: /'
+
+problems=()
+start_keep_awake
+wait_for_network || problems+=("network")
+
+if [ "$SKIP_SETUP" = "1" ]; then
+  log "skipping setup steps"
+elif [ "$DRY_RUN" = "1" ]; then
+  "$BOSUN" setup --dry-run
+else
+  "$BOSUN" setup || problems+=("setup")
+fi
+
+if [ "$DRY_RUN" = "1" ]; then
+  if session_exists && [ "$BOSUN_ON_EXISTING" = "restart" ]; then
+    log "dry-run: session '$BOSUN_SESSION_NAME' exists; would restart it"
+  elif session_exists; then
+    log "dry-run: session '$BOSUN_SESSION_NAME' exists; would $BOSUN_ON_EXISTING it:"
+    drain_flag=""
+    [ "$BOSUN_ON_EXISTING" = "drain" ] && drain_flag="--drain-only"
+    "$BOSUN" refresh --dry-run --unless-active $drain_flag
+  else
+    log "dry-run: would start session '$BOSUN_SESSION_NAME' with windows:"
+    window_specs | while IFS=$'\t' read -r name dir kind model effort; do log "  $name ($kind, $model/$effort) -> $dir"; done
+  fi
+else
+  "$BOSUN" start --unless-active || problems+=("tmux")
+  # The Impact view's daily snapshot: in the background, so a slow GitHub never delays the run.
+  if [ "$BOSUN_IMPACT_COLLECT" = "1" ]; then
+    "$BOSUN" impact collect >>"$BOSUN_LOG_DIR/impact-$(date +%F).log" 2>&1 &
+  fi
+fi
+
+if [ ${#problems[@]} -eq 0 ]; then
+  log "morning run complete"
+  notify "bosun" "Sessions ready in tmux '$BOSUN_SESSION_NAME'"
+else
+  log "morning run finished with problems: ${problems[*]} (log: $LOG_FILE)"
+  notify "bosun: needs attention" "Problems: ${problems[*]}. See $LOG_FILE"
+  exit 1
+fi

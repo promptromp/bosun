@@ -1,0 +1,60 @@
+[project]
+name = "bosun-dev"
+version = "0"
+description = "Development tooling for bosun (the tool itself is bash plus stdlib Python)."
+requires-python = ">=3.13"
+dependencies = []
+
+[dependency-groups]
+dev = [
+    "complexipy>=4",
+    "detect-secrets>=1.5",
+    "lizard>=1.17",
+    "mypy>=1.15",
+    "pre-commit>=4",
+    "pytest>=8",
+    "ruff>=0.11",
+    "shellcheck-py>=0.10",
+    "shfmt-py>=3.7",
+]
+
+[tool.uv]
+package = false
+
+[tool.pytest.ini_options]
+testpaths = ["tests/unit"]
+pythonpath = ["lib"]
+
+[tool.ruff]
+line-length = 110
+target-version = "py313"
+extend-include = ["libexec/bosun-resolve"]
+
+[tool.ruff.lint]
+extend-select = ["A", "B", "C4", "C90", "E", "F", "G", "I", "PERF", "PL", "PLC", "SIM", "T", "UP", "BLE", "S", "PGH", "RUF"]
+ignore = [
+    "T201",    # print is how these command-line tools talk
+    "S603",    # subprocess calls with argument lists, no shell
+    "S607",    # partial executable paths (ps, bosun) are intended
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["S101", "PLR2004", "PLC0415"]
+
+[tool.ruff.lint.mccabe]
+max-complexity = 10
+
+[tool.ruff.lint.pylint]
+max-args = 6
+max-branches = 12
+max-statements = 50
+
+[tool.ruff.lint.isort]
+combine-as-imports = true
+lines-after-imports = 2
+
+[tool.mypy]
+python_version = "3.13"
+strict = true
+files = ["lib", "libexec/bosun-resolve", "tests/unit", "tests/llm", "tools"]
+mypy_path = "lib:tools:tests/llm"

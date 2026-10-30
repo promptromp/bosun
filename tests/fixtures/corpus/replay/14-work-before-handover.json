@@ -1,0 +1,33 @@
+{
+ "source": "day 2: the same reply ('yes please fix'), with the delegation proposed under the outreach id. Before I approved it, I asked the repo window directly and its session opened a new draft PR. The orchestrator then closed the outreach with a note naming the PR, which withdrew the proposal: the new PR had no ledger item and its origin lived only in that note. Replayed: closing the outreach says the work needs a task; the task is spawned from the outreach (via the reply) and accepted on my instruction, the PR is recorded and linked as what it produced, the Jira ticket of the original PR is linked, and once that PR merged the ticket mismatch is a proposal.",
+ "setup": [
+  "date +%F >\"$HOME/today\"",
+  "bosun ledger upsert 'mypr:acme/exporter#102' --kind my-pr --title 'Credit notes: round negative totals correctly' --url https://github.com/acme/exporter/pull/102",
+  "bosun ledger reach-out 'mypr:acme/exporter#102' --to 'Marco Rossi' --subject 'The PDF renderer rounds negative totals the same wrong way: shall I fix it as well?'",
+  "bosun ledger sent 'out:mypr:acme/exporter#102/1' --ref 'https://acme.slack.com/archives/C0000000003/p1700000047000047'",
+  "bosun ledger replied 'out:mypr:acme/exporter#102/1' --evidence 'https://acme.slack.com/archives/C0000000003/p1700000048000048?thread_ts=1700000047.000047&cid=C0000000003' --summary 'yes please fix the PDF renderer too'",
+  "bosun ledger propose 'out:mypr:acme/exporter#102/1' \"bosun delegate new-work --id 'out:mypr:acme/exporter#102/1' --window exporter --ask 'fix the PDF renderer'\""
+ ],
+ "steps": [
+  {"actor": "orchestrator", "why": "the live close: a note about the PR, and the proposal withdrawn; the ledger says the work still needs an id", "run": "bosun ledger transition 'out:mypr:acme/exporter#102/1' applied --note 'session opened draft acme/pdf-renderer#8 before the delegation proposal was approved'",
+   "out": ["replied -> applied", "next: a delegate command was proposed for its reply, record that work so it has an id: bosun ledger spawn 'out:mypr:acme/exporter#102/1'"]},
+  {"actor": "orchestrator", "why": "the work gets its task, spawned from the outreach via the reply", "run": "bosun ledger spawn 'out:mypr:acme/exporter#102/1' --title 'Fix negative-total rounding in the PDF renderer' --ask 'apply the #102 rounding fix to the PDF renderer' --via 'https://acme.slack.com/archives/C0000000003/p1700000048000048?thread_ts=1700000047.000047&cid=C0000000003' --requester 'Marco Rossi'",
+   "out": ["state=proposed, spawned from out:mypr:acme/exporter#102/1"]},
+  {"actor": "orchestrator", "why": "I asked the window myself: my instruction accepted it", "run": ["read -r D <\"$HOME/today\"", "bosun ledger transition \"task:$D/1\" accepted --note 'started in the exporter window at my request' --evidence 'user: asked the exporter window to fix the PDF renderer'"],
+   "out": ["proposed -> accepted"]},
+  {"actor": "orchestrator", "why": "the PR it produced, recorded and linked", "run": ["read -r D <\"$HOME/today\"", "bosun ledger upsert 'mypr:acme/pdf-renderer#8' --kind my-pr --url 'https://github.com/acme/pdf-renderer/pull/8' --title 'PDF renderer: round negative totals like the exporter'", "bosun ledger link \"task:$D/1\" produces 'mypr:acme/pdf-renderer#8'"],
+   "out": ["produces mypr:acme/pdf-renderer#8"]},
+  {"actor": "orchestrator", "why": "the Jira ticket tracks the original PR", "run": "bosun ledger link 'mypr:acme/exporter#102' tracks 'jira:EXP-123' && bosun ledger ticket-sync 'jira:EXP-123' --status 'In Progress'",
+   "out": ["unsynced -> in-progress ('In Progress')"]},
+  {"actor": "me", "why": "the original PR merged", "run": "bosun ledger transition 'mypr:acme/exporter#102' merged --note 'merged'"},
+  {"actor": "orchestrator", "why": "the ticket is still in progress: a proposal, never a call to the tracker", "run": "bosun ledger tickets --mismatch",
+   "out": ["mypr:acme/exporter#102 merged, but jira:EXP-123 is in-progress ('In Progress'): propose transitioning jira:EXP-123 to done"]},
+  {"actor": "orchestrator", "why": "the new PR's origin is a link, not a note", "run": "bosun ledger tree 'mypr:acme/pdf-renderer#8'",
+   "out": ["[task: accepted] Fix negative-total rounding in the PDF renderer (spawned)", "* mypr:acme/pdf-renderer#8 [my-pr: awaiting-review]"]}
+ ],
+ "expect": {
+  "out:mypr:acme/exporter#102/1": {"state": "applied", "events": {"proposal-withdrawn": 1, "spawned": 1}},
+  "mypr:acme/pdf-renderer#8": {"state": "awaiting-review"},
+  "jira:EXP-123": {"state": "in-progress"}
+ }
+}

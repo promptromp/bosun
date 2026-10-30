@@ -1,0 +1,42 @@
+#!/bin/bash
+# Usage: bosun pr-threads <pr-url> [--awaiting-author] [--json]
+#
+# Review threads and review rounds on a GitHub PR (read-only GraphQL query), so the orchestrator
+# and repo sessions can tell which review comments still need the PR author. Threads are never
+# resolved by bosun, so each thread shows its replies and who commented last: it **awaits the
+# author** while it is unresolved and its last comment is not by the PR's author (`author.login`;
+# a reply by anyone else, the gh user included when that is not the author, does not answer it).
+# Bots never count: a review or thread by a bot (GraphQL type Bot, or a login ending in [bot]) is
+# shown, marked "(bot)", but a bot's thread never awaits the author and never makes it exit 3.
+# Reviewer bots (BOSUN_REVIEWER_BOTS: logins of automated reviewers a site relies on) count like
+# people instead, marked "(automated)", and their latest verdict is shown (read from the review body
+# with BOSUN_REVIEWER_BOT_VERDICT_PATTERN); a reviewer bot's review is never an approval.
+#
+# Prints the unresolved threads (and how many await the author), then the review rounds: each
+# review by someone other than the author that started threads, requested changes, approved or has
+# a body, with the threads it started and how many of them await the author. Then one block per
+# unresolved thread: who, where, when, its first comment, its round, replies and last commenter.
+# It also says whether the PR's repository allows auto-merge (`gh pr merge --auto`).
+#   --awaiting-author  only the threads that await the author (the check before saying a review
+#                      is addressed)
+#   --json             the same as JSON (every thread, or with --awaiting-author only those)
+# Exit codes: 0 ok (with --awaiting-author: nothing awaits the author), 3 --awaiting-author found
+# threads that await the author, 1 GitHub could not be read (or not a PR URL), 2 usage error.
+set -uo pipefail
+source "$(dirname "$0")/../lib/common.sh"
+load_config
+
+case "${1:-}" in
+  -h | --help)
+    usage
+    exit 0
+    ;;
+  "")
+    usage >&2
+    exit 2
+    ;;
+esac
+
+BOSUN_REVIEWER_BOTS="$BOSUN_REVIEWER_BOTS" \
+  BOSUN_REVIEWER_BOT_VERDICT_PATTERN="$BOSUN_REVIEWER_BOT_VERDICT_PATTERN" \
+  exec python3 "$BOSUN_ROOT/lib/pr_threads.py" "$@"

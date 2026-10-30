@@ -1,0 +1,45 @@
+{
+ "source": "day 2: a new-work task for a product stakeholder's Slack ask ended with four product decisions deferred to that stakeholder (which exchange rate, a base-currency total, credit notes, which currencies first). They lived only in chat, the PR text and a Slack reply, and the mention that started the work was marked done, so nothing tracked them. Replayed with outreach: the session records the four, the orchestrator proposes and sends one message for them, the mention cannot be closed while they are open, and the stakeholder's thread reply is matched to its outreach instead of becoming a new mention.",
+ "setup": [
+  "bosun ledger upsert 'slack:C0000000003/1700000040.000040' --kind mention --title 'Priya: customers want invoices in their own currency'",
+  "bosun ledger transition 'slack:C0000000003/1700000040.000040' surfaced --note 'surfaced'",
+  "bosun ledger record-delegation 'slack:C0000000003/1700000040.000040' --window exporter-tax --task new-work --ask 'export invoices in the customer currency'"
+ ],
+ "steps": [
+  {"actor": "repo", "why": "the four deferred decisions, recorded instead of only written in chat", "run": [
+   "M='slack:C0000000003/1700000040.000040'",
+   "bosun ledger reach-out \"$M\" --to 'Priya (product)' --purpose decision --subject 'Exchange rate: the rate on the invoice date, or on the payment date?' --option 'a) invoice date' --option 'b) payment date'",
+   "bosun ledger reach-out \"$M\" --to 'Priya (product)' --purpose decision --subject 'Show the total in our base currency as well?'",
+   "bosun ledger reach-out \"$M\" --to 'Priya (product)' --purpose decision --subject 'Credit notes: convert at the rate of the original invoice, or at the current rate?'",
+   "bosun ledger reach-out \"$M\" --to 'Priya (product)' --purpose decision --subject 'Which currencies first: EUR and GBP only, or all of them?'"],
+   "out": ["created: out:slack:C0000000003/1700000040.000040/1 [outreach] state=draft", "out:slack:C0000000003/1700000040.000040/4", "warning: slack:C0000000003/1700000040.000040 already has open outreach to the same person: out:slack:C0000000003/1700000040.000040/1 (decision, draft: Exchange rate", "Keep both only for a genuinely separate question"]},
+  {"actor": "repo", "why": "the work that does not depend on them is done; the report says what waits", "run": "bosun ledger report 'slack:C0000000003/1700000040.000040' --summary 'Draft PR exports invoices in EUR and GBP' --result https://github.com/acme/exporter/pull/110 --open 'waiting on out:slack:C0000000003/1700000040.000040/1-4 (product decisions)'"},
+  {"actor": "orchestrator", "why": "the next check-in sees the drafts", "run": "bosun ledger outreach --open",
+   "out": ["out:slack:C0000000003/1700000040.000040/1  [draft] decision: draft, slack to Priya (product); for slack:C0000000003/1700000040.000040 @exporter-tax (reported)", "  options:  a) invoice date | b) payment date"]},
+  {"actor": "orchestrator", "why": "one message for the four, proposed on each", "run": [
+   "for n in 1 2 3 4; do bosun ledger propose \"out:slack:C0000000003/1700000040.000040/$n\" 'Slack reply in the request thread: four decisions for the currency work (1 rate date, 2 base-currency total, 3 credit notes, 4 currencies first)'; done"],
+   "out": ["draft -> proposed"]},
+  {"actor": "orchestrator", "why": "the old slip: closing the mention while decisions are open is refused", "run": "bosun ledger transition 'slack:C0000000003/1700000040.000040' done --note 'PR opened'", "rc": 1,
+   "out": ["is waiting on: out:slack:C0000000003/1700000040.000040/1 (slack to Priya (product): message awaits approval)", "--force-open-outreach"]},
+  {"actor": "orchestrator", "why": "approved and sent: the same message is the ref of all four", "run": [
+   "R='https://acme.slack.com/archives/C0000000003/p1700000041000041?thread_ts=1700000040.000040&cid=C0000000003'",
+   "for n in 1 2 3 4; do bosun ledger sent \"out:slack:C0000000003/1700000040.000040/$n\" --ref \"$R\"; done"],
+   "out": ["proposed -> sent"]},
+  {"actor": "orchestrator", "why": "the parent shows what it waits on", "run": "bosun ledger list --open",
+   "out": ["slack:C0000000003/1700000040.000040  [mention: surfaced] @exporter-tax (reported) - Priya: customers want invoices in their own currency | waiting on out:slack:C0000000003/1700000040.000040/1 (slack to Priya (product), "]},
+  {"actor": "orchestrator", "why": "Priya's thread reply is recognised as a reply, not a new mention; the four share the thread, so all are named and the orchestrator picks the one it answers", "run": "bosun ledger seen 'https://acme.slack.com/archives/C0000000003/p1700000042000042?thread_ts=1700000040.000040&cid=C0000000003'", "rc": 1,
+   "out": ["in a conversation shared by 4 open outreach items (latest message first). Read it and pick the one it answers", "\n  out:slack:C0000000003/1700000040.000040/1 [sent] decision to Priya (product): Exchange rate", "\n  out:slack:C0000000003/1700000040.000040/4 [sent] decision to Priya (product): Which currencies first"]},
+  {"actor": "orchestrator", "why": "it answers decision 1; recorded with the reply as evidence", "run": [
+   "R='https://acme.slack.com/archives/C0000000003/p1700000042000042?thread_ts=1700000040.000040&cid=C0000000003'",
+   "bosun ledger replied 'out:slack:C0000000003/1700000040.000040/1' --evidence \"$R\" --summary 'a: the invoice date, like the amounts on the invoice'",
+   "bosun ledger record-source \"$R\" --class outreach --item 'out:slack:C0000000003/1700000040.000040/1'"],
+   "out": ["sent -> replied", "next: window exporter-tax holds slack:C0000000003/1700000040.000040"]},
+  {"actor": "orchestrator", "why": "the reply goes to the window holding the work", "run": "bosun delegate --update 'out:slack:C0000000003/1700000040.000040/1'",
+   "out": ["would deliver to replay:exporter-tax: Update to ledger item slack:C0000000003/1700000040.000040", "ok: update 1 recorded", "replied -> applied"]}
+ ],
+ "expect": {
+  "slack:C0000000003/1700000040.000040": {"state": "surfaced", "window": "exporter-tax", "updates": 1, "events": {"outreach": 4, "update": 1}},
+  "out:slack:C0000000003/1700000040.000040/1": {"state": "applied", "fields": {"answer": "a: the invoice date, like the amounts on the invoice", "purpose": "decision", "channel": "slack"}, "events": {"proposal-done": 1, "source": 1}},
+  "out:slack:C0000000003/1700000040.000040/4": {"state": "sent", "fields": {"to": "Priya (product)", "subject": "Which currencies first: EUR and GBP only, or all of them?"}}
+ }
+}

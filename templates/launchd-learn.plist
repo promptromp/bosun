@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- Rendered by bosun install.sh (only with BOSUN_LEARN_ENABLED=1). Edit bosun.env and re-run install.sh instead. -->
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>__LABEL__</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/bin/bash</string>
+    <string>-lc</string>
+    <string>exec "__BOSUN_ROOT__/bin/bosun" learn --scheduled</string>
+  </array>
+  <key>EnvironmentVariables</key>
+  <dict>
+__ENV__
+  </dict>
+  <!-- Daily at BOSUN_LEARN_AT on BOSUN_DAYS; if the Mac is asleep then, launchd runs it on
+       the next wake, and `learn --scheduled` skips a day that already had its run. -->
+  <key>StartCalendarInterval</key>
+__CALENDAR__
+  <key>RunAtLoad</key>
+  <false/>
+  <key>StandardOutPath</key>
+  <string>__LOG_DIR__/learn.launchd.out</string>
+  <key>StandardErrorPath</key>
+  <string>__LOG_DIR__/learn.launchd.err</string>
+</dict>
+</plist>

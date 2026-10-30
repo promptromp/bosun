@@ -1,0 +1,8 @@
+#!/bin/bash
+# Usage: bosun delegate <type> --id <ledger id> --ask "<one line>" ... (see `bosun delegate --help`)
+#
+# Hand a task to a repo session, with the rules for its task type from orchestrator/tasks/.
+set -uo pipefail
+source "$(dirname "$0")/../lib/common.sh"
+load_config
+BOSUN_CONFIG_DIR="$BOSUN_CONFIG_DIR" exec python3 "$BOSUN_ROOT/lib/delegate.py" "$@"

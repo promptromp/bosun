@@ -1,0 +1,266 @@
+#!/bin/bash
+# Usage: bosun send --list
+#        bosun send [--id <ledger id> | --no-item] <window> <message>
+#                                                            paste into a running Claude window
+#        bosun send --new [--model <m>] [--effort <e>] <window> <workdir> <message>
+#                                                            open a new window with a fresh session
+#        bosun send --start <window> [message]           start Claude in an existing window
+#                                                            that has none (resumes its named session;
+#                                                            without a message, sends the drain prompt)
+#
+# A message of "-" is read from stdin (use a quoted heredoc: - <<'EOF'); an empty one is refused.
+# --id names the work item the message is about: the item must exist, the message starts with
+# "Ledger item <id>:" unless it already names it, and the item's history notes the delivery. To add
+# to a task already delegated, use `bosun delegate --update <id>` instead. --no-item says the
+# message is about no work item; the orchestrator's guard requires one of the two.
+#
+# Messages use bracketed paste, so multi-line text arrives as a single prompt. Delivery needs
+# Claude to be idle, busy (the message joins the running turn or waits for it) or "shell"; a
+# session waiting at a permission prompt or a question is refused, so a pasted Enter never answers
+# it. It also waits while someone typed in that window within BOSUN_SEND_TYPING_MINUTES or its
+# input line holds unsent text (up to BOSUN_SEND_WAIT_SECONDS), and fails unless Claude took
+# the prompt (the line emptied, no "Unknown command"), so the caller can send it again.
+# --new and --start exit 0 only once Claude is running in the window; otherwise they print the
+# window's last output and exit 1.
+# With BOSUN_SEND_DRY_RUN=1 (set by `bosun chores --dry-run`), deliveries and new windows
+# are only logged.
+set -uo pipefail
+source "$(dirname "$0")/../lib/common.sh"
+load_config
+
+SESSION="$BOSUN_SESSION_NAME"
+PASTE_SETTLE_SECONDS=0.5
+START_POLL_SECONDS=1
+FAILED_START_OUTPUT_LINES=8
+INPUT_TYPED=3 # lib/pane_input.py typed: the input line holds text
+
+list_windows() {
+  local name path pane_pid claude_pid state version model_effort
+  tmux_cmd list-windows -t "=$SESSION" -F '#{window_name}	#{pane_current_path}	#{pane_pid}' |
+    while IFS=$'\t' read -r name path pane_pid; do
+      state="no-claude"
+      version="-"
+      model_effort="-"
+      if claude_pid="$(claude_pid_under "$pane_pid")"; then
+        state="claude:$(claude_status_label "$(claude_session_field "$claude_pid" status)")"
+        version="$(claude_session_field "$claude_pid" version)"
+        model_effort="$(claude_launch_model_effort "$claude_pid" | cut -f1,2 | tr '\t' /)"
+      fi
+      printf '%-28s %-14s %-10s %-14s %s\n' "$name" "$state" "$version" "$model_effort" "$path"
+    done
+}
+
+send_message() {
+  local window="$1" message="$2" pane_pid window_id claude_pid status buffer rejected_before
+  if [ "${BOSUN_SEND_DRY_RUN:-0}" = "1" ]; then
+    log "dry-run: would deliver to $SESSION:$window: $(head -c 300 <<<"$message" | tr '\n' ' ')"
+    return 0
+  fi
+  read -r pane_pid window_id <<<"$(find_window "$window")"
+  [ -n "$window_id" ] || die "no window '$window' in session '$SESSION'"
+  claude_pid="$(claude_pid_under "$pane_pid")" || die "window '$window' is not running Claude"
+  status="$(claude_session_field "$claude_pid" status)"
+  claude_takes_input "$status" ||
+    die "window '$window' is ${status:-in an unknown state} (a permission prompt or question waits for you there); not pasting into it"
+  wait_until_pasteable "$window" "$window_id"
+  note_bosun_prompt "$window" "$message"
+  rejected_before="$(rejected_count "$window_id")"
+  # A buffer per call, so overlapping sends never swap messages.
+  buffer="bosun-send-$$"
+  printf '%s' "$message" | tmux_cmd load-buffer -b "$buffer" - || die "tmux could not load the message"
+  if ! tmux_cmd paste-buffer -p -d -b "$buffer" -t "$window_id"; then
+    tmux_cmd delete-buffer -b "$buffer" 2>/dev/null
+    die "tmux could not paste into window '$window'"
+  fi
+  sleep "$PASTE_SETTLE_SECONDS"
+  tmux_cmd send-keys -t "$window_id" Enter || die "tmux could not press Enter in window '$window'"
+  confirm_taken "$window" "$window_id" "$rejected_before"
+  log "delivered to $SESSION:$window"
+}
+
+# The text in the Claude input line of window <id> (lib/pane_input.py); exit 0 empty, 3 text, 4
+# no input line found (not a Claude screen we can read: the checks are skipped).
+input_line() { tmux_cmd capture-pane -e -p -t "$1" 2>/dev/null | python3 "$BOSUN_ROOT/lib/pane_input.py" typed; }
+
+rejected_count() { # <window_id>: Claude's "Unknown command" replies on screen
+  tmux_cmd capture-pane -p -S -200 -t "$1" 2>/dev/null | python3 "$BOSUN_ROOT/lib/pane_input.py" rejected | grep -c .
+}
+
+# Prints why a paste into window <id> must wait, or fails if it need not: someone typing there
+# (their text and our Enter would merge into one prompt) or unsent text in its input line.
+paste_blocker() { # <window_id>
+  local minutes typed
+  if [ "$BOSUN_SEND_TYPING_MINUTES" -gt 0 ] && minutes="$(minutes_since_client_input "$1")" &&
+    [ "$minutes" -lt "$BOSUN_SEND_TYPING_MINUTES" ]; then
+    echo "someone typed in it $minutes minute(s) ago"
+    return 0
+  fi
+  typed="$(input_line "$1")"
+  if [ $? -eq "$INPUT_TYPED" ]; then
+    echo "its input line holds unsent text ($(printf '%s' "$typed" | head -c 80 | tr '\n' ' '))"
+    return 0
+  fi
+  return 1
+}
+
+wait_until_pasteable() { # <window> <window_id>
+  local deadline=$((SECONDS + BOSUN_SEND_WAIT_SECONDS)) why
+  while why="$(paste_blocker "$2")"; do
+    [ "$SECONDS" -lt "$deadline" ] ||
+      die "not pasting into window '$1': $why, still after ${BOSUN_SEND_WAIT_SECONDS}s; nothing sent, try again later"
+    log "waiting to paste into $SESSION:$1: $why"
+    sleep "$BOSUN_SEND_RETRY_SECONDS"
+  done
+}
+
+# Fails unless Claude in window <id> took the prompt: no new "Unknown command" reply (the paste
+# ran as a slash command) and, where the input line can be read, the line emptied.
+confirm_taken() { # <window> <window_id> <rejected count before>
+  local deadline=$((SECONDS + BOSUN_SEND_CONFIRM_SECONDS)) status
+  while :; do
+    [ "$(rejected_count "$2")" -gt "$3" ] &&
+      die "window '$1' ran the paste as an unknown command, so the message was not delivered; send it again"
+    input_line "$2" >/dev/null
+    status=$?
+    [ "$status" -ne "$INPUT_TYPED" ] && return 0
+    [ "$SECONDS" -lt "$deadline" ] ||
+      die "the message is still in window '$1''s input line after ${BOSUN_SEND_CONFIRM_SECONDS}s; it was not submitted"
+    sleep "$PASTE_SETTLE_SECONDS"
+  done
+}
+
+# Succeeds once a Claude process runs in the window's pane.
+wait_for_claude() { # <window_id>
+  local deadline=$((SECONDS + BOSUN_START_TIMEOUT)) pane_pid
+  while [ "$SECONDS" -lt "$deadline" ]; do
+    pane_pid="$(tmux_cmd list-panes -t "$1" -F '#{pane_pid}' 2>/dev/null)" || return 1
+    claude_pid_under "$pane_pid" >/dev/null && return 0
+    sleep "$START_POLL_SECONDS"
+  done
+  return 1
+}
+
+confirm_started() { # <window> <window_id> <what happened>
+  if wait_for_claude "$2"; then
+    log "$3; Claude is running in $SESSION:$1"
+    return 0
+  fi
+  log "$3, but no Claude session started there within ${BOSUN_START_TIMEOUT}s (it may be waiting at a prompt). Last output:"
+  tmux_cmd capture-pane -p -J -t "$2" 2>/dev/null | grep -v '^[[:space:]]*$' | tail -n "$FAILED_START_OUTPUT_LINES" | sed 's/^/    /'
+  die "start failed; inspect with: $(attach_hint) (window $1)"
+}
+
+# An untrusted folder would stall the start at Claude's trust prompt, so trust it first (repos in
+# the mask, BOSUN_TRUST_MASKED_REPOS=1) or stop here with a clear error.
+ensure_trusted() { # <dir>
+  claude_trusts "$1" && return 0
+  if [ "$BOSUN_TRUST_MASKED_REPOS" = "1" ] && "$BOSUN" trust "$1"; then return 0; fi
+  die "Claude Code does not trust $1, so Claude would stop at its trust prompt; trust it with 'bosun trust $1' (add --any outside the repo mask), then retry"
+}
+
+new_window() { # <window> <workdir> <message> [model] [effort]
+  local window="$1" workdir="$2" message="$3" model="${4:-}" effort="${5:-}" window_id
+  valid_effort "$effort" || die_usage "effort must be one of: $EFFORT_LEVELS (got '$effort')"
+  [ -d "$workdir" ] || die "no such directory: $workdir"
+  if [ "${BOSUN_SEND_DRY_RUN:-0}" = "1" ]; then
+    log "dry-run: would open window $SESSION:$window in $workdir with: $(head -c 300 <<<"$message" | tr '\n' ' ')"
+    return 0
+  fi
+  find_window "$window" >/dev/null && die "window '$window' already exists; use: bosun send $window <message>"
+  ensure_trusted "$workdir"
+  build_launch_command "$window" "$message" "" "$model" "$effort"
+  window_id="$(tmux_cmd new-window -d -P -F '#{window_id}' -t "=$SESSION:" -n "$window" -c "$workdir" "${launch_cmd[@]}")" ||
+    die "tmux could not open window '$window'"
+  confirm_started "$window" "$window_id" "opened $SESSION:$window in $workdir"
+}
+
+start_in_window() {
+  local window="$1" message="${2:-}" pane_pid window_id
+  if [ "${BOSUN_SEND_DRY_RUN:-0}" = "1" ]; then
+    log "dry-run: would start Claude in $SESSION:$window with: $(head -c 300 <<<"$message" | tr '\n' ' ')"
+    return 0
+  fi
+  read -r pane_pid window_id <<<"$(find_window "$window")"
+  [ -n "$window_id" ] || die "no window '$window' in session '$SESSION'"
+  claude_pid_under "$pane_pid" >/dev/null && die "window '$window' already runs Claude; use: bosun send $window <message>"
+  ensure_trusted "$(tmux_cmd display-message -p -t "$window_id" '#{pane_current_path}')"
+  relaunch_in_window "$window_id" "$window" "$message" || die "could not start Claude in window '$window'"
+  confirm_started "$window" "$window_id" "started Claude in $SESSION:$window"
+}
+
+# Prints the message argument; "-" reads it from stdin. Run it in $(...) and check its status.
+message_arg() { # <message|->
+  local text
+  if [ "$1" != "-" ]; then
+    printf '%s' "$1"
+    return 0
+  fi
+  [ -t 0 ] && die_usage "'-' reads the message from stdin, which is a terminal; pass it in a quoted heredoc (- <<'EOF')"
+  text="$(cat)"
+  [ -n "${text//[[:space:]]/}" ] || die "the message on stdin is empty; nothing sent"
+  printf '%s' "$text"
+}
+
+# send [--id <ledger id> | --no-item] <window> <message|->
+send_plain() {
+  local item="" window message
+  case "$1" in
+    --id)
+      [ $# -ge 2 ] || die_usage "--id needs a ledger id"
+      item="$2"
+      shift 2
+      ;;
+    --no-item) shift ;;
+  esac
+  [ $# -eq 2 ] || die_usage "give a window and a message"
+  window="$1"
+  message="$(message_arg "$2")" || exit $?
+  if [ -n "$item" ]; then
+    "$BOSUN" ledger show "$item" >/dev/null 2>&1 || die "no ledger item $item; check the id (bosun ledger list)"
+    grep -qF -- "$item" <<<"$message" || message="Ledger item $item: $message"
+  fi
+  send_message "$window" "$message"
+  if [ -n "$item" ]; then
+    "$BOSUN" ledger note "$item" "message sent to $window: $(head -c 200 <<<"$message" | tr '\n' ' ')" >/dev/null ||
+      log "warning: delivered, but could not note it on $item"
+  fi
+}
+
+case "${1:-}" in
+  --list) list_windows ;;
+  --new)
+    shift
+    new_model=""
+    new_effort=""
+    while [ $# -gt 0 ]; do
+      case "$1" in
+        --model)
+          new_model="${2:?model}"
+          shift 2
+          ;;
+        --effort)
+          new_effort="${2:?effort}"
+          shift 2
+          ;;
+        *) break ;;
+      esac
+    done
+    [ $# -eq 3 ] || die_usage "give a window, a directory and a message"
+    new_message="$(message_arg "$3")" || exit $?
+    new_window "$1" "$2" "$new_message" "$new_model" "$new_effort"
+    ;;
+  --start)
+    [ $# -ge 2 ] || die_usage "give a window"
+    start_message=""
+    if [ $# -ge 3 ]; then start_message="$(message_arg "$3")" || exit $?; fi
+    start_in_window "$2" "$start_message"
+    ;;
+  -h | --help) usage ;;
+  "")
+    usage >&2
+    exit 2
+    ;;
+  --id | --no-item) send_plain "$@" ;;
+  -*) die_usage "unknown option $1" ;;
+  *) send_plain "$@" ;;
+esac

@@ -1,0 +1,319 @@
+#!/bin/bash
+# Usage: bosun checkin [--loop] [--dry-run]
+#
+# Ask the orchestrator to run `/bosun:chores check-in` (or, if it is still on yesterday's
+# conversation, start today's, which runs the morning chores unless
+# BOSUN_ORCHESTRATOR_MORNING_CHORES=0), but only when it is safe to interrupt:
+# its Claude finished its turn CHECKIN_MIN_IDLE_SECONDS ago (so it is not in the middle of a
+# conversation with you): idle, or "shell" (only a background command still runs, e.g. a wait for a
+# review to settle; the check-in goes in ahead of that command's completion notice), never busy or
+# at a prompt; and nobody typed in an attached tmux client within BOSUN_ACTIVE_CLIENT_MINUTES.
+# --loop checks every BOSUN_CHECKIN_MINUTES, the first one interval after it starts (the
+# `checkin` window runs this); time asleep does not count. A check-in held back only by timing (the
+# orchestrator busy, or idle too briefly, or you typing) stays due: the loop retries it every tick
+# until it goes out, logging the skip once, and events keep flowing meanwhile. Without --loop, such
+# a deferred check-in exits 3. A check-in also goes out only when something is new since the last
+# one (lib/checkin_gate.py), or after BOSUN_CHECKIN_MAX_QUIET_HOURS without one; otherwise it
+# logs "skip: nothing new since HH:MM", which counts as the interval's check-in.
+#
+# It also alerts you (`bosun alert`: macOS notification, Slack DM) once per prompt when a Claude
+# window has waited BOSUN_ALERT_WAITING_MINUTES at a permission prompt or question (check-ins
+# skip the orchestrator until you answer): it runs `bosun watchdog --only waiting`, every few
+# minutes with --loop. Once the watchdog's own launchd agent is installed, it leaves that to it.
+#
+# With BOSUN_EVENTS_ENABLED=1 (read when the loop starts), the loop also runs `bosun events`
+# every BOSUN_EVENTS_INTERVAL_SECONDS, which pushes events from the repo sessions to an idle
+# orchestrator; a check-in that goes out covers the events pending at that moment. With events on,
+# each tick also runs `bosun slack-watch --scheduled` in the background, which looks for new
+# Slack activity every BOSUN_SLACK_WATCH_MINUTES once BOSUN_SLACK_WATCH_ENABLED=1, and
+# every BOSUN_REVIEW_WATCH_MINUTES `bosun review-watch` in the background (new reviews on my
+# PRs after their last hand-over become events). With check-ins off (BOSUN_CHECKIN_MINUTES=0)
+# and BOSUN_EVENTS_WITHOUT_CHECKINS=1, --loop still does all of that and the waiting alerts, and
+# never sends a check-in.
+#
+# When the orchestrator answers only with login errors (an expired or revoked Claude Code login),
+# it logs "<window> needs /login" once and sends it no check-ins or events until it works again: a
+# normal reply (after you run /login and talk to it), or a login check request that succeeds. The
+# watchdog's login-expired check alerts you.
+set -uo pipefail
+source "$(dirname "$0")/../lib/common.sh"
+load_config
+
+CHECKIN_PROMPT="/bosun:chores check-in"
+CHECKIN_MIN_IDLE_SECONDS=300
+CHECKIN_DEFERRED=3 # checkin_once's status when only timing held the check-in back
+SECONDS_PER_MINUTE=60
+ALERT_CHECK_MINUTES=5
+# After a delivery, how long to wait for the reply that says whether the login still works (a
+# login error comes back at once; a real turn takes longer and is not waited for).
+REPLY_WAIT_SECONDS="${BOSUN_LOGIN_REPLY_WAIT_SECONDS:-15}" # the variable is for tests
+
+LOOP=0
+DRY_RUN=0
+for arg in "$@"; do
+  case "$arg" in
+    --loop) LOOP=1 ;;
+    --dry-run) DRY_RUN=1 ;;
+    -h | --help)
+      usage
+      exit 0
+      ;;
+    *) die_usage "unknown option $arg" ;;
+  esac
+done
+
+# While the orchestrator only gets login errors back, a check-in may first make a login check
+# request (lib/login.py: at most every 30 minutes) to see whether the login works again.
+LOGIN_PROBE=(--probe)
+LOGIN_DRY_RUN=()
+if [ "$DRY_RUN" = "1" ]; then
+  LOGIN_PROBE=()
+  LOGIN_DRY_RUN=(--dry-run)
+fi
+
+[ -n "$BOSUN_ORCHESTRATOR" ] || die "no orchestrator configured (BOSUN_ORCHESTRATOR is empty)"
+# 1: check-ins are on; 0: the loop runs without them (BOSUN_EVENTS_WITHOUT_CHECKINS=1).
+checkins_mode() {
+  [ "$BOSUN_CHECKIN_MINUTES" -gt 0 ] && echo 1 && return
+  if [ "$LOOP" = "1" ] && checkin_loop_wanted; then
+    echo 0
+    return
+  fi
+  die "check-ins are disabled (BOSUN_CHECKIN_MINUTES=0; BOSUN_EVENTS_WITHOUT_CHECKINS=1 keeps the loop for events)"
+}
+CHECKINS="$(checkins_mode)" || exit 1
+
+checkin_once() {
+  local pane_pid window_id claude_pid status idle minutes
+  read -r pane_pid window_id <<<"$(find_window "$BOSUN_ORCHESTRATOR")"
+  [ -n "${window_id:-}" ] || {
+    log "skip: no '$BOSUN_ORCHESTRATOR' window"
+    return 0
+  }
+  claude_pid="$(claude_pid_under "$pane_pid")" || {
+    log "skip: orchestrator Claude is not running"
+    return 0
+  }
+  status="$(claude_session_field "$claude_pid" status)"
+  # Idle time counts from the end of the turn: statusUpdatedAt, for idle and for shell alike.
+  idle="$(claude_seconds_in_status "$claude_pid")"
+  if ! claude_turn_over "$status" || [ "${idle:-0}" -lt "$CHECKIN_MIN_IDLE_SECONDS" ]; then
+    log "skip: orchestrator is ${status:-unknown} (for ${idle:-?}s)"
+    return "$CHECKIN_DEFERRED"
+  fi
+  if minutes="$(minutes_since_client_input)" && [ "$minutes" -lt "$BOSUN_ACTIVE_CLIENT_MINUTES" ]; then
+    log "skip: you typed in tmux $minutes minute(s) ago"
+    return "$CHECKIN_DEFERRED"
+  fi
+  if [ "$(claude_session_field "$claude_pid" name)" != "$(expected_claude_name "$BOSUN_ORCHESTRATOR")" ]; then
+    start_todays_conversation "$status"
+    return 0
+  fi
+  checkin_has_news || return 0
+  deliver_checkin "$window_id" "$claude_pid"
+  return 0
+}
+
+# Whether the check-in has anything to do: something new since the last one (lib/checkin_gate.py:
+# events, Slack, reports, outreach, watchdog alerts), or BOSUN_CHECKIN_MAX_QUIET_HOURS without
+# one. Every check-in makes the orchestrator re-read its whole conversation. A skip counts as the
+# interval's check-in; a gate that fails lets the check-in go out.
+checkin_has_news() {
+  local slack=0 out
+  [ "$BOSUN_CHECKIN_MAX_QUIET_HOURS" = "0" ] && return 0
+  [ "$BOSUN_EVENTS_ENABLED" = "1" ] && [ "$BOSUN_SLACK_WATCH_ENABLED" = "1" ] && slack=1
+  out="$(python3 "$BOSUN_ROOT/lib/checkin_gate.py" --state-dir "$BOSUN_STATE_DIR" \
+    --max-quiet-hours "$BOSUN_CHECKIN_MAX_QUIET_HOURS" --slack-watch "$slack" 2>&1)"
+  case $? in
+    0) [ "$DRY_RUN" = "1" ] && log "check-in has news: ${out#news: }" ;;
+    1)
+      log "skip: $out"
+      return 1
+      ;;
+    *) log "the check-in gate failed ($out); checking in anyway" ;;
+  esac
+  return 0
+}
+
+# One check-in attempt, logged. A deferred one stays due (since_checkin is left as it is) and logs
+# its skip only the first time; with --loop, the tick then also pushes events, since the check-in
+# did not start a turn. Sets checkin_status to checkin_once's status.
+checkin_tick() {
+  local out
+  out="$(checkin_once 2>&1)"
+  checkin_status=$?
+  if [ "$checkin_status" -ne "$CHECKIN_DEFERRED" ]; then
+    since_checkin=0
+    checkin_deferred=0
+  elif [ "$checkin_deferred" = "1" ]; then
+    out=""
+  else
+    checkin_deferred=1
+    [ "$LOOP" = "1" ] && out="$out"$'\n'"$(log "the check-in stays due; retrying every tick until it goes out")"
+  fi
+  [ -n "$out" ] && printf '%s\n' "$out" | tee -a "$(checkin_log)"
+  if [ "$checkin_status" -eq "$CHECKIN_DEFERRED" ] && [ "$LOOP" = "1" ]; then
+    events_once 2>&1 | tee -a "$(checkin_log)"
+  fi
+  return 0
+}
+
+# Still on yesterday's conversation (the morning restart had to wait): start today's, which runs
+# the morning chores, instead of a check-in. Not while a background command runs (shell): refresh
+# restarts only an idle Claude, and a check-in would only extend yesterday's conversation.
+start_todays_conversation() { # <status>
+  if [ "$1" = "shell" ]; then
+    log "skip: orchestrator is still on yesterday's conversation and a background command runs (shell); today's starts once it is idle"
+  elif [ "$DRY_RUN" = "1" ]; then
+    log "dry-run: would start today's conversation (bosun refresh $BOSUN_ORCHESTRATOR)"
+  else
+    log "orchestrator is still on yesterday's conversation; starting today's"
+    "$BOSUN" refresh "$BOSUN_ORCHESTRATOR"
+  fi
+}
+
+# Send the check-in, unless the orchestrator only gets login errors back; then see whether this
+# one did. A login error leaves pending events pending.
+deliver_checkin() { # <window_id> <claude_pid>
+  local sent_at
+  if ! login_ok "$BOSUN_ORCHESTRATOR" "$1" "$2" ${LOGIN_PROBE[@]+"${LOGIN_PROBE[@]}"}; then
+    log "skip: $BOSUN_ORCHESTRATOR needs /login (bosun status shows since when)"
+    return
+  fi
+  if [ "$DRY_RUN" = "1" ]; then
+    log "dry-run: would send '$CHECKIN_PROMPT' to $BOSUN_ORCHESTRATOR"
+    return
+  fi
+  sent_at="$(date +%s)"
+  "$BOSUN" send "$BOSUN_ORCHESTRATOR" "$CHECKIN_PROMPT" || return
+  login_ok "$BOSUN_ORCHESTRATOR" "$1" "$2" --after "$sent_at" --wait "$REPLY_WAIT_SECONDS" || return
+  if [ "$BOSUN_EVENTS_ENABLED" = "1" ]; then "$BOSUN" events --covered; fi
+}
+
+# Whether <window>'s Claude still gets real replies, not only login errors (lib/login.py: its
+# transcript, else its last lines), logging when that changes. Options go to `login.py window`.
+login_ok() { # <window> <window_id> <claude_pid> [--probe | --after <epoch> --wait <seconds>]
+  local window="$1" window_id="$2" verdict
+  shift 2
+  verdict="$(tmux_cmd capture-pane -p -t "$window_id" 2>/dev/null |
+    claude_login window "$window" "$@" --pane - ${LOGIN_DRY_RUN[@]+"${LOGIN_DRY_RUN[@]}"})"
+  case "$verdict" in
+    "needs-login new "*) log "$window needs /login: ${verdict#needs-login new }; check-ins and events to it pause until it works again" ;;
+    "ok recovered "*) log "$window works again (${verdict#ok recovered }); check-ins and events resume" ;;
+  esac
+  [ "${verdict%% *}" != "needs-login" ]
+}
+
+# Push pending events to the orchestrator (with BOSUN_EVENTS_ENABLED=1), unless it only gets
+# login errors back.
+events_once() {
+  local pane_pid window_id claude_pid="" sent_at out
+  [ "$BOSUN_EVENTS_ENABLED" = "1" ] || return 0
+  if [ "$DRY_RUN" = "1" ]; then
+    "$BOSUN" events --dry-run
+    return
+  fi
+  read -r pane_pid window_id <<<"$(find_window "$BOSUN_ORCHESTRATOR")"
+  if [ -n "${window_id:-}" ] && claude_pid="$(claude_pid_under "$pane_pid")"; then
+    login_ok "$BOSUN_ORCHESTRATOR" "$window_id" "$claude_pid" || return 0
+  fi
+  sent_at="$(date +%s)"
+  out="$("$BOSUN" events --once)"
+  [ -n "$out" ] && printf '%s\n' "$out"
+  if [ -n "$claude_pid" ] && grep -q "delivered " <<<"$out"; then
+    login_ok "$BOSUN_ORCHESTRATOR" "$window_id" "$claude_pid" --after "$sent_at" --wait "$REPLY_WAIT_SECONDS"
+  fi
+  return 0
+}
+
+# Look for new Slack activity (with events on). In the background, writing straight to the log, so
+# a slow search never delays the loop; slack-watch keeps its own interval, the awake window, one run
+# at a time and the budget, and is quiet while nothing is due.
+slack_watch_once() {
+  [ "$BOSUN_EVENTS_ENABLED" = "1" ] || return 0
+  if [ "$DRY_RUN" = "1" ]; then
+    log "dry-run: would run bosun slack-watch --scheduled" | tee -a "$(checkin_log)"
+    return 0
+  fi
+  "$BOSUN" slack-watch --scheduled >>"$(checkin_log)" 2>&1 &
+}
+
+# Raise new reviews on my PRs as events (with events on): in the background, writing straight to the
+# log, so a slow GitHub never delays the loop. review-watch is quiet unless it finds something.
+review_watch_once() {
+  [ "$BOSUN_EVENTS_ENABLED" = "1" ] && [ "$BOSUN_REVIEW_WATCH_MINUTES" -gt 0 ] || return 0
+  if [ "$DRY_RUN" = "1" ]; then
+    "$BOSUN" review-watch --dry-run 2>&1 | tee -a "$(checkin_log)"
+    return 0
+  fi
+  "$BOSUN" review-watch --quiet 2>&1 | while IFS= read -r line; do log "review-watch: $line"; done >>"$(checkin_log)" &
+}
+
+# Alert once per prompt when a Claude window waits for you. This is the watchdog's `waiting` check,
+# with its de-dup state, so the loop and the watchdog's launchd agent never alert twice. Once that
+# agent is installed it covers this every 5 minutes, also when this session is gone, and the loop
+# leaves it to the agent.
+alert_if_stuck() {
+  [ -f "$(watchdog_plist)" ] && return 0
+  if [ "$DRY_RUN" = "1" ]; then
+    "$BOSUN" watchdog --dry-run --only waiting
+  else
+    "$BOSUN" watchdog --only waiting
+  fi
+}
+
+checkin_log() {
+  echo "$BOSUN_LOG_DIR/checkin-$(date +%F).log"
+}
+
+# The loop starts alongside the orchestrator, which runs the morning chores first, so the first
+# check-in comes one interval later. In between it looks for a stuck orchestrator every
+# ALERT_CHECK_MINUTES (or every interval, if that is shorter), and with events on it dispatches
+# them every BOSUN_EVENTS_INTERVAL_SECONDS. Times are in seconds of sleep.
+# How often to look for a stuck window: ALERT_CHECK_MINUTES, or the check-in interval if shorter.
+alert_seconds() {
+  local minutes=$ALERT_CHECK_MINUTES
+  if [ "$CHECKINS" = "1" ] && [ "$BOSUN_CHECKIN_MINUTES" -lt "$minutes" ]; then minutes=$BOSUN_CHECKIN_MINUTES; fi
+  echo $((minutes * SECONDS_PER_MINUTE))
+}
+alert_every="$(alert_seconds)"
+checkin_every="${BOSUN_CHECKIN_EVERY_SECONDS:-$((BOSUN_CHECKIN_MINUTES * SECONDS_PER_MINUTE))}" # the variable is for tests
+tick=$alert_every
+if [ "$BOSUN_EVENTS_ENABLED" = "1" ] && [ "$BOSUN_EVENTS_INTERVAL_SECONDS" -lt "$tick" ]; then
+  tick=$BOSUN_EVENTS_INTERVAL_SECONDS
+fi
+# The loop is its pane's launch shell's only command, and that shell never shows a prompt: stop the
+# helpers your startup files forked off there (see bosun-launch).
+[ "$LOOP" = "1" ] && reap_shell_helpers "$PPID" --wrapper-only >/dev/null
+review_every=$((BOSUN_REVIEW_WATCH_MINUTES * SECONDS_PER_MINUTE))
+since_alert=0
+since_checkin=0
+since_review=0
+checkin_deferred=0
+checkin_status=0
+while true; do
+  if [ "$LOOP" = "1" ]; then
+    sleep "$tick"
+    since_alert=$((since_alert + tick))
+    since_checkin=$((since_checkin + tick))
+    since_review=$((since_review + tick))
+  fi
+  if [ "$LOOP" = "0" ] || [ "$since_alert" -ge "$alert_every" ]; then
+    since_alert=0
+    alert_if_stuck 2>&1 | tee -a "$(checkin_log)"
+  fi
+  # Events wait for the next tick after a check-in that went out: the orchestrator may just have
+  # started it.
+  if [ "$CHECKINS" = "1" ] && { [ "$LOOP" = "0" ] || [ "$since_checkin" -ge "$checkin_every" ]; }; then
+    checkin_tick
+  else
+    events_once 2>&1 | tee -a "$(checkin_log)"
+  fi
+  slack_watch_once
+  if [ "$LOOP" = "0" ] || [ "$since_review" -ge "$review_every" ]; then
+    since_review=0
+    review_watch_once
+  fi
+  [ "$LOOP" = "1" ] || break
+done
+exit "$checkin_status"

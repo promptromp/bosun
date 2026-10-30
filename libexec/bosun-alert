@@ -1,0 +1,68 @@
+#!/bin/bash
+# Usage: bosun alert [--dry-run] <message>
+#
+# Tell me about something that needs me: a macOS notification and, when BOSUN_ALERT_SLACK_USER
+# is set, a Slack DM to myself. The DM goes through a one-shot headless Claude (claude -p) that may
+# use only ToolSearch and Slack's send-message tool, in --permission-mode dontAsk with
+# --permission-prompts none: anything else is refused at once, so it never waits for an approval
+# (the thing that is stuck may be the orchestrator itself). Exits 1 if the DM was not delivered.
+set -uo pipefail
+source "$(dirname "$0")/../lib/common.sh"
+load_config
+
+ALERT_TIMEOUT_SECONDS=120
+ALERT_TITLE="bosun"
+# The Slack plugin's tool and the claude.ai connector's; either may be the one that is loaded.
+SLACK_SEND_TOOLS="mcp__plugin_slack_slack__slack_send_message mcp__claude_ai_Slack__slack_send_message"
+
+DRY_RUN=0
+MESSAGE=""
+for arg in "$@"; do
+  case "$arg" in
+    --dry-run) DRY_RUN=1 ;;
+    -h | --help)
+      usage
+      exit 0
+      ;;
+    -*) die_usage "unknown option $arg" ;;
+    *)
+      [ -z "$MESSAGE" ] || die_usage "give the message as one argument"
+      MESSAGE="$arg"
+      ;;
+  esac
+done
+[ -n "$MESSAGE" ] || die_usage "no message"
+if [ -n "$BOSUN_ALERT_SLACK_USER" ] && ! [[ "$BOSUN_ALERT_SLACK_USER" =~ ^[UW][A-Z0-9]+$ ]]; then
+  die "BOSUN_ALERT_SLACK_USER must be a Slack member id (U..., in your Slack profile under More > Copy member ID)"
+fi
+TEXT="[bosun] $MESSAGE"
+
+if [ "$DRY_RUN" = "1" ]; then
+  log "dry-run: would notify${BOSUN_ALERT_SLACK_USER:+ and DM you on Slack}: $TEXT"
+  exit 0
+fi
+notify "$ALERT_TITLE" "$MESSAGE"
+if [ -z "$BOSUN_ALERT_SLACK_USER" ]; then
+  log "alert (notification only; BOSUN_ALERT_SLACK_USER is empty): $MESSAGE"
+  exit 0
+fi
+
+result_dir="$BOSUN_STATE_DIR/alerts"
+mkdir -p "$result_dir"
+result="$result_dir/last.json"
+prompt="Load a slack_send_message tool with ToolSearch, then call it once with channel_id \"$BOSUN_ALERT_SLACK_USER\" and this exact message text, unchanged (given here as a JSON string): $(jq -Rn --arg m "$TEXT" '$m'). Then reply with only the message link."
+# shellcheck disable=SC2086  # SLACK_SEND_TOOLS is a list of tool names
+(cd "$BOSUN_STATE_DIR" &&
+  run_with_timeout "$ALERT_TIMEOUT_SECONDS" "$BOSUN_CLAUDE_BIN" -p \
+    --model "$BOSUN_ALERT_MODEL" \
+    --permission-mode dontAsk --permission-prompts none \
+    --tools ToolSearch --allowedTools ToolSearch $SLACK_SEND_TOOLS \
+    --no-session-persistence --output-format json \
+    -- "$prompt") >"$result" 2>"$result_dir/last.err"
+rc=$?
+if [ "$rc" = "0" ] && jq -e '(.permission_denials // []) == [] and (.result // "" | test("/archives/"))' "$result" >/dev/null 2>&1; then
+  log "alert sent as a Slack DM (\$$(jq -r '.total_cost_usd // 0 | . * 100 | round / 100' "$result")): $MESSAGE"
+  exit 0
+fi
+log "ERROR: alert not delivered on Slack (claude exited $rc; details in $result_dir): $MESSAGE" >&2
+exit 1

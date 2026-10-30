@@ -1,0 +1,72 @@
+#!/bin/bash
+# Usage: bosun start [--restart] [--unless-active]
+#
+# If the tmux session does not exist, start it: the orchestrator, one window per sessions.yml entry,
+# and checkin, each running its command directly (see build_launch_command).
+# If it exists, act per BOSUN_ON_EXISTING:
+#   refresh (default)  per window: restart idle sessions running an outdated Claude Code, send
+#                      the drain prompt to other idle ones, leave busy ones alone, relaunch
+#                      exited ones and recreate missing windows (see `bosun refresh`)
+#   drain              the same, but never restart
+#   restart            kill the whole session and start it fresh (also: --restart)
+# --unless-active is passed to `bosun refresh` (skip if you are typing in the session).
+set -uo pipefail
+source "$(dirname "$0")/../lib/common.sh"
+load_config
+
+refresh_args=()
+for arg in "$@"; do
+  case "$arg" in
+    -h | --help)
+      usage
+      exit 0
+      ;;
+    --restart) BOSUN_ON_EXISTING=restart ;;
+    --unless-active) refresh_args+=(--unless-active) ;;
+    *) die_usage "unknown option $arg" ;;
+  esac
+done
+
+SESSION="$BOSUN_SESSION_NAME"
+rm -f "$(stop_marker)" # the watchdog expects the session again
+
+start_fresh() {
+  local specs name dir kind created=0
+  specs="$(window_specs)" || exit 1
+  log "starting tmux session '$SESSION' from $BOSUN_SESSIONS_FILE"
+  while IFS=$'\t' read -r name dir kind model effort; do
+    [ -n "$name" ] || continue
+    if [ ! -d "$dir" ]; then
+      log "$name: directory $dir does not exist; skipping the window"
+      continue
+    fi
+    build_launch_command "$name" "" "$kind"
+    if [ "$created" = "0" ]; then
+      tmux_cmd new-session -d -s "$SESSION" -n "$name" -c "$dir" "${launch_cmd[@]}" ||
+        die "tmux could not start session '$SESSION'"
+      created=1
+    else
+      tmux_cmd new-window -d -t "=$SESSION:" -n "$name" -c "$dir" "${launch_cmd[@]}" ||
+        log "$name: tmux could not open the window"
+    fi
+  done <<<"$specs"
+  [ "$created" = "1" ] || die "no windows to start: sessions.yml lists none and the orchestrator is disabled"
+  log "started '$SESSION' with windows: $(tmux_cmd list-windows -t "=$SESSION" -F '#{window_name}' | tr '\n' ' ')"
+}
+
+if session_exists; then
+  log "session '$SESSION' already exists; mode: $BOSUN_ON_EXISTING"
+  case "$BOSUN_ON_EXISTING" in
+    restart)
+      log "restarting existing session '$SESSION'"
+      reap_session_helpers
+      tmux_cmd kill-session -t "=$SESSION"
+      start_fresh
+      ;;
+    refresh) "$BOSUN" refresh ${refresh_args[@]+"${refresh_args[@]}"} ;;
+    drain) "$BOSUN" refresh --drain-only ${refresh_args[@]+"${refresh_args[@]}"} ;;
+    *) die "BOSUN_ON_EXISTING must be refresh, drain or restart, got '$BOSUN_ON_EXISTING'" ;;
+  esac
+else
+  start_fresh
+fi

@@ -1,0 +1,38 @@
+{
+ "source": "day 1 09:01Z to day 2 06:45Z, my PR #102: a hand-written fix task sent with raw `send`, a report as a long note, a second round delegated with the next PR, then a third round re-delegated as a whole task ('Follow-up to the earlier fix task') to the same busy window.",
+ "setup": [
+  "bosun ledger upsert 'mypr:acme/exporter#102' --kind my-pr --url https://github.com/acme/exporter/pull/102",
+  "bosun ledger upsert 'mypr:acme/exporter#103' --kind my-pr --url https://github.com/acme/exporter/pull/103"
+ ],
+ "steps": [
+  {"actor": "orchestrator", "why": "the real day-1 hand-written task over raw send", "command_id": "O028", "guard": "deny"},
+  {"actor": "orchestrator", "why": "the same hand-over through delegate", "run": [
+   "bosun ledger transition 'mypr:acme/exporter#102' changes-requested --note '4 unresolved CodeQL threads'",
+   "bosun ledger transition 'mypr:acme/exporter#102' addressing --note 'fix-my-pr delegated to exporter-tax'",
+   "bosun delegate fix-my-pr --id 'mypr:acme/exporter#102' --link https://github.com/acme/exporter/pull/102 --requester 'github-advanced-security (CodeQL)' --ask 'Address the 4 unresolved CodeQL review threads; explain false positives in the reply' --window exporter-tax"],
+   "out": ["dry-run: would deliver to replay:exporter-tax: Ledger id: mypr:acme/exporter#102"]},
+  {"actor": "repo", "why": "the outcome as a report instead of a long note", "run": "bosun ledger report 'mypr:acme/exporter#102' --summary 'Fixed the 6 CodeQL findings in 2 commits; answered every thread' --result https://github.com/acme/exporter/pull/102 --result 0000002abc --result 0000003abc"},
+  {"actor": "orchestrator", "why": "re-review requested after the push", "run": "bosun ledger transition 'mypr:acme/exporter#102' awaiting-review --note 'fixes pushed; review requested' --field last_push_at=2026-03-12T09:03:00Z"},
+  {"actor": "orchestrator", "why": "day 2: the real round for #102 and #103 together", "command_id": "O055",
+   "out": ["rc103=0", "rc102=0"]},
+  {"actor": "repo", "why": "the second round's outcome, with what is left", "run": "bosun ledger report 'mypr:acme/exporter#102' --summary 'Pushed 1 commit: a test for zero-amount lines; answered the open thread' --result 0000004abc --open 'Lena requested changes with 4 threads this task did not cover'"},
+  {"actor": "orchestrator", "why": "the third round as an update to the same window, not a second task", "run": [
+   "bosun delegate --update 'mypr:acme/exporter#102' --details - <<'EOF'",
+   "Lena requested changes (4 open threads: credit-note rounding order, tax subtotal header, a mixed-currency test, a stale docstring). Address them as for the earlier threads; queue this after the #103 work in progress.",
+   "EOF"],
+   "out": ["Update to ledger item mypr:acme/exporter#102 (the fix-my-pr task", "ok: update 1 recorded"]},
+  {"actor": "repo", "why": "the third round's outcome", "run": "bosun ledger report 'mypr:acme/exporter#102' --summary 'Pushed 4 commits; answered the 4 threads and a summary comment' --result https://github.com/acme/exporter/pull/102 --open 're-review by Lena and Priya; #104 rebases onto this after merge'"},
+  {"actor": "orchestrator", "why": "the next check-in reads the open points", "run": "bosun ledger reports",
+   "out": ["mypr:acme/exporter#102  [my-pr: addressing] reported", "open:    re-review by Lena"], "not_out": ["mypr:acme/exporter#103"]},
+  {"actor": "orchestrator", "why": "and sees which delegated work has not reported", "run": "bosun ledger list --open",
+   "out": ["mypr:acme/exporter#103  [my-pr: addressing] @exporter-tax (awaiting report)", "mypr:acme/exporter#102  [my-pr: addressing] @exporter-tax (reported)"]}
+ ],
+ "expect": {
+  "mypr:acme/exporter#102": {
+   "state": "addressing", "window": "exporter-tax", "updates": 1,
+   "report_open": "re-review by Lena and Priya; #104 rebases onto this after merge",
+   "events": {"delegated": 2, "update": 1, "report": 3}
+  },
+  "mypr:acme/exporter#103": {"state": "addressing", "window": "exporter-tax", "updates": 0}
+ }
+}

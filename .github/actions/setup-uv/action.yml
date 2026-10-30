@@ -1,0 +1,25 @@
+# uv and a Python for a CI job. Downloading uv sometimes fails with a transient "fetch failed", so
+# the install is retried once after a short wait.
+name: Set up uv
+description: Install uv and a Python version (cached), retrying the download once.
+inputs:
+  python-version:
+    description: The Python version uv uses.
+    required: true
+runs:
+  using: composite
+  steps:
+    - id: install
+      continue-on-error: true
+      uses: astral-sh/setup-uv@v10.3.2
+      with:
+        python-version: ${{ inputs.python-version }}
+        enable-cache: true
+    - if: steps.install.outcome == 'failure'
+      shell: bash
+      run: sleep 20
+    - if: steps.install.outcome == 'failure'
+      uses: astral-sh/setup-uv@v10.3.2
+      with:
+        python-version: ${{ inputs.python-version }}
+        enable-cache: true

@@ -1,0 +1,16 @@
+{
+  "rules": [
+    {
+      "ws": "ws:widget-search",
+      "repo": ["acme/widgets", "acme/widget-*"],
+      "title": ["widget", "search"],
+      "note": "work in the widget repos about widgets"
+    },
+    {
+      "ws": "ws:widget-search",
+      "channel": "C0000000042",
+      "kind": ["mention", "outreach", "review-request"],
+      "note": "messages from the project channel"
+    }
+  ]
+}

@@ -1,0 +1,72 @@
+#!/bin/bash
+# Usage: bosun learn [--since 24h|3d|<ISO time>] [--until <ISO time>] [--dry-run | --collect-only] [--out <dir>]
+#        bosun learn --status   (also: status, list)
+#        bosun learn apply <learn-id>
+#        bosun learn done <learn-id> [--note <text>]
+#        bosun learn reject <learn-id> [--note <text>]
+#
+# Look back over recent work and propose what should change. A digest of the window (each
+# bosun window's sessions: prompts, permission prompts and how long they waited, refused and
+# failed tool calls, guard denials, questions, bosun commands; the ledger's activity; the logs;
+# the watchdog's alerts) goes to one headless Claude with no tools and no MCP servers (the prompt is
+# orchestrator/learn.md, plus $BOSUN_CONFIG_DIR/learn.md). It returns findings with evidence
+# quoted from the digest: mishaps, stalls, gaps, duplicates, corrections you repeated, instruction
+# gaps, setup and outreach ideas, memory candidates.
+#
+# Nothing is applied on its own: each new proposal (at most BOSUN_LEARN_MAX_PROPOSALS) becomes a
+# learn:<YYYY-MM-DD>/<n> ledger item holding the exact change, which the orchestrator lists under
+# "Needs your approval". The report is in $BOSUN_STATE_DIR/learn/runs/<time>/report.md.
+#   (no command)    a run: the window starts where the last run ended, at most BOSUN_LEARN_HOURS back
+#   --since/--until the window instead (48h, 3d, 90m back, or an ISO time)
+#   --dry-run       analyse and report, but no ledger items, state or log file (folder: --out, or
+#                   $BOSUN_STATE_DIR/learn/dry-runs/)
+#   --collect-only  only write the digest (no Claude call, no cost)
+#   --scheduled     what the launchd agent runs: only if BOSUN_LEARN_ENABLED=1 and today's run at
+#                   BOSUN_LEARN_AT has not happened yet
+#   --status        schedule, last runs, remembered findings, proposals waiting for you (`status`
+#                   and `list` are the same)
+#   apply <id>      make an approved change: a memory note for a window's folder, or a rule appended to
+#                   $BOSUN_CONFIG_DIR/policy.md or $BOSUN_CONFIG_DIR/tasks/_common.md
+#   done <id>       you made the change yourself (repo, sessions.yml, outreach)
+#   reject <id>     declined; the finding is never proposed again
+set -uo pipefail
+source "$(dirname "$0")/../lib/common.sh"
+load_config
+
+for arg in "$@"; do
+  case "$arg" in
+    -h | --help)
+      usage
+      exit 0
+      ;;
+  esac
+done
+# lib/learn.py checks the arguments (usage errors exit 2, like die_usage).
+case "${1:-}" in
+  --status | status | list)
+    shift
+    set -- status "$@"
+    ;;
+  apply | done | reject) ;;
+  *) set -- run "$@" ;;
+esac
+
+# lib/learn.py gets the settings it uses explicitly (load_config does not export them).
+settings=()
+for name in BOSUN_STATE_DIR BOSUN_LOG_DIR BOSUN_CONFIG_DIR BOSUN_ORCHESTRATOR \
+  BOSUN_DRAIN_PROMPT BOSUN_CLAUDE_BIN BOSUN_DAYS BOSUN_LEARN_ENABLED BOSUN_LEARN_AT \
+  BOSUN_LEARN_HOURS BOSUN_LEARN_MODEL BOSUN_LEARN_EFFORT BOSUN_LEARN_MAX_BUDGET_USD \
+  BOSUN_LEARN_MAX_PROPOSALS BOSUN_LEARN_MAX_EVENTS BOSUN_LEARN_MAX_DIGEST_KB \
+  BOSUN_LEARN_TIMEOUT_MINUTES \
+  BOSUN_LEARN_EXCLUDE_SESSIONS; do
+  settings+=("$name=${!name}")
+done
+
+# A run reads the windows from `bosun sessions --json`.
+if [ "$1" = "run" ]; then
+  sessions_file="$(mktemp "${TMPDIR:-/tmp}/bosun-learn-sessions.XXXXXX")" || die "cannot create a temp file"
+  trap 'rm -f "$sessions_file"' EXIT
+  "$BOSUN" sessions --json >"$sessions_file" || die "bosun sessions --json failed"
+  set -- "$@" --sessions "$sessions_file"
+fi
+env "${settings[@]}" python3 "$BOSUN_ROOT/lib/learn.py" "$@"

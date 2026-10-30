@@ -1,0 +1,45 @@
+{
+ "source": "day 2: my PR's outreach offered a colleague to fix the same bug in the PDF renderer; he replied 'yes please fix'. The orchestrator proposed delegating new work under the outreach id, since no kind fit work we decide to do. Replayed with tasks and links: delegate refuses the outreach id, the reply becomes a proposed task spawned from the outreach (via the reply), my yes accepts it, delegate moves it to delegated, the session's report names its PR, and the PR is linked as what the task produced. A Jira ticket that tracks the original PR is linked and read.",
+ "setup": [
+  "date +%F >\"$HOME/today\"",
+  "bosun ledger upsert 'mypr:acme/exporter#102' --kind my-pr --title 'Credit notes: round negative totals correctly' --url https://github.com/acme/exporter/pull/102",
+  "bosun ledger reach-out 'mypr:acme/exporter#102' --to 'Marco Rossi' --subject 'The PDF renderer rounds negative totals the same wrong way: shall I fix it as well?'",
+  "bosun ledger sent 'out:mypr:acme/exporter#102/1' --ref 'https://acme.slack.com/archives/C0000000003/p1700000047000047'"
+ ],
+ "steps": [
+  {"actor": "orchestrator", "why": "his answer in the thread", "run": "bosun ledger replied 'out:mypr:acme/exporter#102/1' --evidence 'https://acme.slack.com/archives/C0000000003/p1700000048000048?thread_ts=1700000047.000047&cid=C0000000003' --summary 'yes please fix the PDF renderer too'",
+   "out": ["sent -> replied"]},
+  {"actor": "orchestrator", "why": "the old habit: the outreach as the work item is refused, with the way out", "run": "bosun delegate new-work --id 'out:mypr:acme/exporter#102/1' --ask 'fix the PDF renderer' --print", "rc": 1,
+   "out": ["is outreach, not a work item", "bosun ledger spawn 'out:mypr:acme/exporter#102/1'"]},
+  {"actor": "orchestrator", "why": "his request becomes a proposed task spawned from the outreach", "run": "bosun ledger spawn 'out:mypr:acme/exporter#102/1' --title 'Fix negative-total rounding in the PDF renderer' --ask 'apply the #102 rounding fix to the PDF renderer' --via 'https://acme.slack.com/archives/C0000000003/p1700000048000048?thread_ts=1700000047.000047&cid=C0000000003' --requester 'Marco Rossi' --repo acme/pdf-renderer",
+   "out": ["[task] state=proposed, spawned from out:mypr:acme/exporter#102/1", "Not accepted work yet"]},
+  {"actor": "orchestrator", "why": "accepting someone's request is tier 2: proposed with the exact command", "run": ["read -r D <\"$HOME/today\"", "bosun ledger propose \"task:$D/1\" \"accept it, then: bosun delegate new-work --id 'task:$D/1' --window exporter --ask 'apply the #102 rounding fix to the PDF renderer'\""],
+   "out": ["ok: proposal pending on task:"]},
+  {"actor": "orchestrator", "why": "a colleague's message is not my approval", "run": ["read -r D <\"$HOME/today\"", "bosun ledger transition \"task:$D/1\" accepted --note 'Marco asked' --evidence 'https://acme.slack.com/archives/C0000000003/p1700000048000048'"], "rc": 1,
+   "out": ["needs my approval as --evidence 'user: <what I said>'"]},
+  {"actor": "orchestrator", "why": "my yes accepts it and closes the proposal", "run": ["read -r D <\"$HOME/today\"", "bosun ledger transition \"task:$D/1\" accepted --note 'approved in the plan' --evidence 'user: 1 yes'"],
+   "out": ["proposed -> accepted"]},
+  {"actor": "orchestrator", "why": "the reply is carried by the task", "run": ["read -r D <\"$HOME/today\"", "bosun ledger transition 'out:mypr:acme/exporter#102/1' applied --note \"carried by task:$D/1\""],
+   "out": ["replied -> applied"], "not_out": ["next:"]},
+  {"actor": "orchestrator", "why": "handed over under the task's own id", "run": ["read -r D <\"$HOME/today\"", "bosun delegate new-work --id \"task:$D/1\" --window exporter --ask 'apply the #102 rounding fix to the PDF renderer'"],
+   "out": ["dry-run: would deliver to replay:exporter: Ledger id: task:", "accepted -> delegated"]},
+  {"actor": "repo", "why": "the session reports its draft PR", "run": ["read -r D <\"$HOME/today\"", "bosun ledger report \"task:$D/1\" --summary 'draft PR applies the rounding fix to the PDF renderer' --result https://github.com/acme/pdf-renderer/pull/7"]},
+  {"actor": "orchestrator", "why": "the report says how to record and link the new PR", "run": "bosun ledger reports",
+   "out": ["bosun ledger upsert 'mypr:acme/pdf-renderer#7' --kind my-pr --url 'https://github.com/acme/pdf-renderer/pull/7'", "produces 'mypr:acme/pdf-renderer#7'"]},
+  {"actor": "orchestrator", "why": "recorded and linked", "run": ["read -r D <\"$HOME/today\"", "bosun ledger upsert 'mypr:acme/pdf-renderer#7' --kind my-pr --url 'https://github.com/acme/pdf-renderer/pull/7' --title 'PDF renderer: round negative totals like the exporter'", "bosun ledger link \"task:$D/1\" produces 'mypr:acme/pdf-renderer#7'"],
+   "out": ["produces mypr:acme/pdf-renderer#7"]},
+  {"actor": "orchestrator", "why": "'#102 is for EXP-123': the ticket is created by the link", "run": "bosun ledger link 'mypr:acme/exporter#102' tracks 'jira:EXP-123'",
+   "out": ["created jira:EXP-123 [ticket: unsynced]"]},
+  {"actor": "orchestrator", "why": "what the Jira read tool showed", "run": "bosun ledger ticket-sync 'jira:EXP-123' --status 'To Do' --category 'To Do' --title 'Credit notes round negative totals wrong' --url 'https://jira.example.com/browse/EXP-123'",
+   "out": ["unsynced -> todo ('To Do')", "propose moving it to in-review"]},
+  {"actor": "orchestrator", "why": "a ticket is never transitioned by bosun", "run": "bosun ledger transition 'jira:EXP-123' in-review --note 'PR open'", "rc": 1,
+   "out": ["mirrors its tracker"]},
+  {"actor": "orchestrator", "why": "the whole chain, from the new PR", "run": "bosun ledger tree 'mypr:acme/pdf-renderer#7'",
+   "out": ["- mypr:acme/exporter#102 [my-pr: awaiting-review]", "tracks jira:EXP-123 [todo]", "[outreach: applied]", "[task: delegated @exporter (reported)] Fix negative-total rounding in the PDF renderer (spawned)", "* mypr:acme/pdf-renderer#7 [my-pr: awaiting-review] PDF renderer: round negative totals like the exporter (produces)"]}
+ ],
+ "expect": {
+  "out:mypr:acme/exporter#102/1": {"state": "applied", "fields": {"answer": "yes please fix the PDF renderer too"}, "events": {"spawned": 1}},
+  "mypr:acme/pdf-renderer#7": {"state": "awaiting-review"},
+  "jira:EXP-123": {"state": "todo", "fields": {"external_status": "To Do", "status_category": "todo"}}
+ }
+}

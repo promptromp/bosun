@@ -1,0 +1,44 @@
+#!/bin/bash
+# Usage: bosun console [--port N] [--open]
+#
+# A local web console over the ledger, the sessions, bosun's health, stats, learning, the
+# knowledge base and the editorial files (design: docs/design/console.md). Read-only, except that
+# the Knowledge view's review queue may confirm, reject or defer proposed knowledge facts (local
+# data, never outward-facing; through the same code as `bosun kg batch apply`). Runs in the
+# foreground until Ctrl-C; it reads the ledger as a snapshot and never takes its lock. The Sessions
+# view reads the windows the way `bosun sessions --json` and the watchdog do (no keys sent, no
+# pane captured) and never starts Claude. It prints a URL with a token that is new each start:
+# open that URL (the token becomes a cookie, so the API answers only that browser).
+#   --port N     port on 127.0.0.1 (default BOSUN_CONSOLE_PORT, 8765); 0 picks a free one,
+#                printed in the URL. A port in use is an error.
+#   --open       also open the URL in the default browser
+#   --host H     only 127.0.0.1 is accepted: the console never listens beyond this machine
+# Only refused requests are logged (to stderr: method, path, status), never ledger content.
+set -uo pipefail
+source "$(dirname "$0")/../lib/common.sh"
+load_config
+
+for arg in "$@"; do
+  case "$arg" in
+    -h | --help)
+      usage
+      exit 0
+      ;;
+  esac
+done
+# lib/console_server.py gets the settings its health panel reads explicitly (load_config does not
+# export them): the watchdog's, the tmux socket for the attach command, the daily limits of the
+# events dispatcher and the Slack watcher, where the Library looks (the config dir, the sessions
+# file, the orchestrator settings, memory folders), the knowledge base's git history and batch
+# limits (the knowledge base lives in the config dir), and the ticket projects you own (for "needs
+# you"). No secrets: only these names; the Library masks bosun.env itself.
+settings=()
+# shellcheck disable=SC2086  # one name per word, on purpose
+while IFS= read -r line; do settings+=("$line"); done < <(settings_lines $WATCHDOG_SETTINGS \
+  BOSUN_TMUX_SOCKET BOSUN_EVENTS_MAX_PER_DAY BOSUN_SLACK_WATCH_MAX_USD_PER_DAY \
+  BOSUN_CONFIG_DIR BOSUN_SESSIONS_FILE BOSUN_ORCHESTRATOR_SETTINGS BOSUN_CONSOLE_MEMORY_DIRS \
+  BOSUN_KNOWLEDGE_GIT BOSUN_KNOWLEDGE_BATCH_CAP BOSUN_KNOWLEDGE_BATCH_FACTS BOSUN_KNOWLEDGE_GROUP_FACTS \
+  BOSUN_TICKET_OWNED_PROJECTS)
+# It checks the arguments (usage errors exit 2, like die_usage); exec, so Ctrl-C and a kill reach
+# the server itself.
+exec env "${settings[@]}" python3 "$BOSUN_ROOT/lib/console_server.py" --port "$BOSUN_CONSOLE_PORT" "$@"

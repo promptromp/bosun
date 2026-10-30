@@ -1,0 +1,46 @@
+#!/bin/bash
+# Usage: bosun hook user-prompt --window <window>
+#
+# The UserPromptSubmit hook of repo sessions (Claude Code passes the hook's JSON on stdin).
+# `bosun launch` installs it, only with BOSUN_EVENTS_ENABLED=1, through the session's
+# --settings; it does nothing once that is 0 again. It records each prompt you type in the window
+# (also from your phone) as a user-said ledger entry on the item(s) the window holds, so the
+# orchestrator knows what you decided there (`bosun ledger said`). Prompts bosun pasted,
+# slash commands and messages from peer sessions are skipped.
+#
+# It never blocks or changes the prompt: it always exits 0 at once and records in the background;
+# what it did, and any ERROR, goes to $BOSUN_LOG_DIR/hook-YYYY-MM-DD.log (the watchdog reports
+# ERROR lines). Design: docs/design/events.md.
+set -uo pipefail
+source "$(dirname "$0")/../lib/common.sh"
+load_config
+
+case "${1:-}" in -h | --help)
+  usage
+  exit 0
+  ;;
+esac
+
+if [ "$BOSUN_EVENTS_ENABLED" != "1" ]; then
+  cat >/dev/null
+  exit 0
+fi
+record() {
+  BOSUN_STATE_DIR="$BOSUN_STATE_DIR" BOSUN_LOG_DIR="$BOSUN_LOG_DIR" \
+    BOSUN_REPO_MASK="$BOSUN_REPO_MASK" BOSUN_EVENTS_ENABLED=1 \
+    BOSUN_TICKET_STATUS_MAP="$BOSUN_TICKET_STATUS_MAP" \
+    BOSUN_TICKET_STALE_HOURS="$BOSUN_TICKET_STALE_HOURS" \
+    BOSUN_DRAIN_PROMPT="$BOSUN_DRAIN_PROMPT" \
+    python3 "$BOSUN_ROOT/lib/hook.py" "$@" <<<"$input" >/dev/null 2>>"$BOSUN_LOG_DIR/hook-$(date +%F).log"
+}
+
+input="$(cat)"
+# Exit 0 at once whatever happens: the prompt waits for the hook, and for UserPromptSubmit an exit
+# code of 2 would block the prompt and erase it. The recording runs in the background (in its own
+# session, see lib/hook.py); BOSUN_HOOK_SYNC=1 waits for it (tests).
+if [ "${BOSUN_HOOK_SYNC:-0}" = "1" ]; then
+  record "$@"
+else
+  record "$@" &
+fi
+exit 0

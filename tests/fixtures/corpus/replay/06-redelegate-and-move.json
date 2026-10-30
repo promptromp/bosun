@@ -1,0 +1,38 @@
+{
+ "source": "day 2, 06:03-06:06Z: the orchestrator handed a fix task for #102 to the same busy window a second time ('Follow-up to the earlier fix task'), after the session had answered only with a note; the session found the work already covered by its own agents. Separately, the payment-terms task was queued behind a busy window. Under the protocol the second hand-over is refused in favour of --update, --again overrides it once I approve, and the queued task can move to an idle window.",
+ "setup": [
+  "bosun ledger upsert 'mypr:acme/exporter#102' --kind my-pr --url https://github.com/acme/exporter/pull/102",
+  "bosun ledger transition 'mypr:acme/exporter#102' changes-requested --note 'Priya: 1 open thread'",
+  "bosun ledger transition 'mypr:acme/exporter#102' addressing --note 'fix-my-pr delegated to exporter-tax'",
+  "bosun ledger record-delegation 'mypr:acme/exporter#102' --window exporter-tax --task fix-my-pr --ask 'Address the open thread on zero-amount lines' --link https://github.com/acme/exporter/pull/102",
+  "bosun ledger note 'mypr:acme/exporter#102' 'Pushed 1 commit; answered the thread. Left open: Lena requested changes with 4 threads not covered by this task.'",
+  "bosun ledger upsert 'slack:C0000000003/1700000035.000035' --kind mention --title 'Marco: the ERP sync drops payment terms'",
+  "bosun ledger transition 'slack:C0000000003/1700000035.000035' surfaced --note 'surfaced'"
+ ],
+ "steps": [
+  {"actor": "orchestrator", "why": "the real second hand-over: a note is not a report, so it is refused", "command_id": "O079",
+   "out": ["mypr:acme/exporter#102 was handed to window exporter-tax at", "has not reported since", "bosun delegate --update 'mypr:acme/exporter#102'", "add --again", "rc=1"],
+   "not_out": ["would deliver"]},
+  {"actor": "orchestrator", "why": "what the refusal points to", "run": [
+   "bosun delegate --update 'mypr:acme/exporter#102' --details - <<'EOF'",
+   "Lena requested changes with 4 open threads. Address them as for the earlier thread; queue this after the #103 work in progress.",
+   "EOF"],
+   "out": ["Update to ledger item mypr:acme/exporter#102", "ok: update 1 recorded"]},
+  {"actor": "orchestrator", "why": "a whole new hand-over, once I approved it", "run": "bosun delegate fix-my-pr --id 'mypr:acme/exporter#102' --link https://github.com/acme/exporter/pull/102 --requester 'lortiz-acme' --ask 'Address the 4 open review threads from Lena' --window exporter-tax --again",
+   "out": ["dry-run: would deliver to replay:exporter-tax: Ledger id: mypr:acme/exporter#102"]},
+  {"actor": "orchestrator", "why": "the real queued hand-over to a busy window", "command_id": "O083"},
+  {"actor": "orchestrator", "why": "a move to the same window is refused", "run": "bosun delegate --update 'slack:C0000000003/1700000035.000035' --window exporter-tax --details 'x'", "rc": 1,
+   "out": ["already delegated to exporter-tax; drop --window"]},
+  {"actor": "orchestrator", "why": "moving it to an idle window (approved)", "run": "bosun delegate --update 'slack:C0000000003/1700000035.000035' --window exporter --details 'exporter-tax is busy with review fixes for the rest of the day; start this here.'",
+   "out": [
+    "dry-run: would deliver to replay:exporter: Ledger item slack:C0000000003/1700000035.000035 moves to this window from window exporter-tax",
+    "dry-run: would deliver to replay:exporter-tax: Ledger item slack:C0000000003/1700000035.000035 has moved to window exporter. Stop working on it here",
+    "moved from exporter-tax to exporter (the old window was told to stop)"]},
+  {"actor": "orchestrator", "why": "where it is now", "run": "bosun ledger list --open",
+   "out": ["slack:C0000000003/1700000035.000035  [mention: surfaced] @exporter (awaiting report)", "mypr:acme/exporter#102  [my-pr: addressing] @exporter-tax (awaiting report)"]}
+ ],
+ "expect": {
+  "mypr:acme/exporter#102": {"state": "addressing", "window": "exporter-tax", "updates": 0, "events": {"delegated": 2, "update": 1, "note": 2}},
+  "slack:C0000000003/1700000035.000035": {"state": "surfaced", "window": "exporter", "updates": 0, "events": {"delegated": 1, "moved": 1, "note": 1}}
+ }
+}

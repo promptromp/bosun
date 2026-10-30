@@ -1,0 +1,35 @@
+{
+ "source": "day 2: outreach was recorded after the fact. Product decisions a repo session had posted in a Slack thread the day before, a DM it sent that morning, and more were backfilled at one moment, so every message carried the recording time and the nudge clock started up to a day late. Replayed: a Slack permalink's own ts is the message time; a ref without a time (an email I sent by hand) takes --at, and --at on a ref already recorded corrects its time. The history keeps the recording time.",
+ "setup": [
+  "bosun ledger upsert 'mypr:acme/exporter#113' --kind my-pr --title 'Pause dunning reminders during a payment plan' --url https://github.com/acme/exporter/pull/113",
+  "bosun ledger record-delegation 'mypr:acme/exporter#113' --window exporter-tax --task fix-my-pr --ask 'address the review'"
+ ],
+ "steps": [
+  {"actor": "repo", "why": "two decisions the session had already posted in the product thread, recorded once outreach existed", "run": [
+   "bosun ledger reach-out 'mypr:acme/exporter#113' --to 'Priya (product)' --purpose decision --subject 'Pause reminders for the whole account, or only for the invoices in the plan?'",
+   "bosun ledger reach-out 'mypr:acme/exporter#113' --to 'Priya (product)' --purpose decision --subject 'Tell the customer when reminders pause?'"],
+   "out": ["created: out:mypr:acme/exporter#113/2 [outreach] state=draft"]},
+  {"actor": "orchestrator", "why": "backfilled as sent: each permalink's own ts is when it went out, not now", "run": [
+   "R='https://acme.slack.com/archives/C0000000003/p'",
+   "bosun ledger sent 'out:mypr:acme/exporter#113/1' --ref \"${R}1700000100000100?thread_ts=1700000090.000090&cid=C0000000003\"",
+   "bosun ledger sent 'out:mypr:acme/exporter#113/2' --ref \"${R}1700000105000105?thread_ts=1700000090.000090&cid=C0000000003\""],
+   "out": ["draft -> sent; at 2023-11-14T22:15:00+00:00 (slack ref)", "draft -> sent; at 2023-11-14T22:15:05+00:00 (slack ref)"]},
+  {"actor": "orchestrator", "why": "an email I sent by hand yesterday, first recorded without its time", "run": [
+   "bosun ledger ask 'mypr:acme/exporter#113' --channel email --to 'customer contact' --question 'Which address should reminders go to from now on?'",
+   "bosun ledger sent 'out:mypr:acme/exporter#113/3' --ref '<reminder-address@example.com>'"],
+   "out": ["draft -> sent"]},
+  {"actor": "orchestrator", "why": "the same ref again with --at corrects the time; a repeat changes nothing", "run": [
+   "bosun ledger sent 'out:mypr:acme/exporter#113/3' --ref '<reminder-address@example.com>' --at '2026-03-12T12:20:59+01:00'",
+   "bosun ledger sent 'out:mypr:acme/exporter#113/3' --ref '<reminder-address@example.com>' --at '2026-03-12T11:20:59Z'"],
+   "out": ["now at 2026-03-12T11:20:59+00:00 (was ", "unchanged: out:mypr:acme/exporter#113/3 already recorded <reminder-address@example.com> (at 2026-03-12T11:20:59+00:00)"]},
+  {"actor": "orchestrator", "why": "a time in the future is refused", "run": "bosun ledger sent 'out:mypr:acme/exporter#113/3' --ref '<reminder-address@example.com>' --at '2999-01-01 09:00'", "rc": 1,
+   "out": ["is in the future"]},
+  {"actor": "orchestrator", "why": "the listing shows when each message went out", "run": "bosun ledger outreach --parent 'mypr:acme/exporter#113'",
+   "out": ["  sent:     https://acme.slack.com/archives/C0000000003/p1700000100000100?thread_ts=1700000090.000090&cid=C0000000003 (slack, 2023-11-14T22:15:00+00:00)", "  sent:     <reminder-address@example.com> (email, 2026-03-12T11:20:59+00:00)"]}
+ ],
+ "expect": {
+  "out:mypr:acme/exporter#113/1": {"state": "sent", "fields": {"messages": [{"ref": "https://acme.slack.com/archives/C0000000003/p1700000100000100?thread_ts=1700000090.000090&cid=C0000000003", "channel": "slack", "at": "2023-11-14T22:15:00+00:00"}]}},
+  "out:mypr:acme/exporter#113/3": {"state": "sent", "events": {"transition": 1, "message-time-corrected": 1}, "fields": {"messages": [{"ref": "<reminder-address@example.com>", "channel": "email", "at": "2026-03-12T11:20:59+00:00"}]}},
+  "mypr:acme/exporter#113": {"state": "awaiting-review", "window": "exporter-tax", "events": {"outreach": 3}}
+ }
+}

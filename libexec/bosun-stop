@@ -1,0 +1,34 @@
+#!/bin/bash
+# Usage: bosun stop
+#
+# Kill the tmux session and release the keep-awake assertion started by `bosun morning`.
+# The watchdog then expects no session for the rest of the day (or until `bosun start`).
+set -uo pipefail
+source "$(dirname "$0")/../lib/common.sh"
+load_config
+
+case "${1:-}" in
+  -h | --help)
+    usage
+    exit 0
+    ;;
+  "") ;;
+  *) die_usage "unknown argument '$1'" ;;
+esac
+
+if session_exists; then
+  reap_session_helpers
+  tmux_cmd kill-session -t "=$BOSUN_SESSION_NAME"
+  log "killed tmux session '$BOSUN_SESSION_NAME'"
+else
+  log "no tmux session '$BOSUN_SESSION_NAME'"
+fi
+# You stopped it on purpose: the watchdog does not alert about a missing session today.
+date '+%F %T' >"$(stop_marker)"
+
+pidfile="$(keep_awake_pidfile)"
+if [ -f "$pidfile" ] && pid="$(cat "$pidfile")" && ps -p "$pid" -o comm= 2>/dev/null | grep -q caffeinate; then
+  kill "$pid"
+  log "released keep-awake (caffeinate pid $pid)"
+fi
+rm -f "$pidfile"

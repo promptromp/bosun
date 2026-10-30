@@ -1,0 +1,41 @@
+#!/bin/bash
+# Usage: bosun guard [--approvals | --permission-request | --post-tool-use]   (reads a Claude Code hook event on stdin)
+#
+# Permission guard for the orchestrator, run as a PreToolUse hook (orchestrator/settings.json):
+# asks before any MCP tool with a write verb in its name, and denies force pushes and
+# `gh pr merge --admin` anywhere in a Bash command. See lib/guard.py.
+# With BOSUN_APPROVALS_ENABLED=1, `bosun launch` also runs it as `--approvals` (PreToolUse:
+# deny unapproved outward calls), `--permission-request` (PermissionRequest: allow approved
+# ones) and `--post-tool-use` (PostToolUse, PostToolUseFailure: close the proposal an approved
+# call carried out, or record that it failed). See docs/design/approvals.md. A re-review request on
+# your PR is also checked against the live PR first (BOSUN_APPROVALS_CHECK_REVIEW_THREADS).
+set -uo pipefail
+case "${1:-}" in
+  -h | --help)
+    sed -n '2,11p' "$0"
+    exit 0
+    ;;
+  "") exec python3 "$(dirname "$0")/../lib/guard.py" ;;
+  --approvals | --permission-request | --post-tool-use) ;;
+  *)
+    echo "bosun guard: unknown argument '$1'" >&2
+    exit 2
+    ;;
+esac
+source "$(dirname "$0")/../lib/common.sh"
+load_config
+BOSUN_STATE_DIR="$BOSUN_STATE_DIR" BOSUN_ORCHESTRATOR="$BOSUN_ORCHESTRATOR" \
+  BOSUN_DRAIN_PROMPT="$BOSUN_DRAIN_PROMPT" \
+  BOSUN_APPROVALS_ENABLED="$BOSUN_APPROVALS_ENABLED" \
+  BOSUN_APPROVALS_DENY_UNAPPROVED="$BOSUN_APPROVALS_DENY_UNAPPROVED" \
+  BOSUN_APPROVALS_GATED_COMMANDS="$BOSUN_APPROVALS_GATED_COMMANDS" \
+  BOSUN_APPROVALS_CHECK_REVIEW_THREADS="$BOSUN_APPROVALS_CHECK_REVIEW_THREADS" \
+  BOSUN_STANDING_CLASSES="$BOSUN_STANDING_CLASSES" \
+  BOSUN_STANDING_SLACK_CHANNELS="$BOSUN_STANDING_SLACK_CHANNELS" \
+  BOSUN_STANDING_SLACK_MENTIONS="$BOSUN_STANDING_SLACK_MENTIONS" \
+  BOSUN_STANDING_GH_REVIEWERS="$BOSUN_STANDING_GH_REVIEWERS" \
+  BOSUN_STANDING_GH_COMMENTS="$BOSUN_STANDING_GH_COMMENTS" \
+  BOSUN_STANDING_GH_COMMENTS_MAX_PER_PR="$BOSUN_STANDING_GH_COMMENTS_MAX_PER_PR" \
+  BOSUN_REVIEWER_BOTS="$BOSUN_REVIEWER_BOTS" \
+  BOSUN_REVIEWER_BOT_VERDICT_PATTERN="$BOSUN_REVIEWER_BOT_VERDICT_PATTERN" \
+  exec python3 "$BOSUN_ROOT/lib/guard.py" "$1"

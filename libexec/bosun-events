@@ -1,0 +1,88 @@
+#!/bin/bash
+# Usage: bosun events [--once | --dry-run | --status | --list [--all] | --covered]
+#
+# Push events from the repo sessions to the orchestrator (design: docs/design/events.md). With
+# BOSUN_EVENTS_ENABLED=1 the ledger queues an event when a repo session reports, records
+# outreach or a follow-up task, or when you type in a repo window; a repo window waiting at a
+# prompt for BOSUN_EVENTS_WAITING_SECONDS is one too. The check-in loop runs this every
+# BOSUN_EVENTS_INTERVAL_SECONDS; it delivers the pending events as one summary (`bosun send
+# --no-item`) once a lane is due: the fast lane (BOSUN_EVENTS_FAST_KINDS) after
+# BOSUN_EVENTS_FAST_DEBOUNCE_SECONDS of quiet (at most BOSUN_EVENTS_FAST_MAX_WAIT_SECONDS),
+# the routine lane after BOSUN_EVENTS_DEBOUNCE_SECONDS (at most BOSUN_EVENTS_MAX_WAIT_SECONDS;
+# the AWAY_ ones while nobody typed in tmux for BOSUN_EVENTS_AWAY_MINUTES). Only while the
+# orchestrator has been idle (or in "shell": turn over, only a background command running)
+# BOSUN_EVENTS_MIN_IDLE_SECONDS on today's conversation and nobody typed in tmux within
+# BOSUN_ACTIVE_CLIENT_MINUTES, at most BOSUN_EVENTS_MAX_PER_DAY times a day. Each line
+# carries up to BOSUN_EVENTS_INLINE_CHARS of what was recorded. Events the orchestrator caused
+# itself are never sent back to it.
+#   --once     note waiting windows and deliver if the gates allow (the default)
+#   --dry-run  print what a run would deliver; sends nothing and changes no state
+#   --status   pending events, the last run, deliveries today, the last delivery error
+#   --list     pending events (--all: also delivered ones, and how)
+#   --covered  mark the pending events delivered: a check-in went out, which reads them anyway
+set -uo pipefail
+source "$(dirname "$0")/../lib/common.sh"
+load_config
+
+mode="--once"
+all=()
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --once | --dry-run | --status | --list | --covered) mode="$1" ;;
+    --all) all=(--all) ;;
+    -h | --help)
+      usage
+      exit 0
+      ;;
+    *) die_usage "unknown option $1" ;;
+  esac
+  shift
+done
+
+# What the dispatcher needs from tmux: the orchestrator's Claude (pid, session name, today's name),
+# the repo windows' Claude pids, and minutes since the last keystroke in an attached client.
+collect_facts() {
+  local pane_pid pid="" name="" idle windows
+  read -r pane_pid _ <<<"$(find_window "$BOSUN_ORCHESTRATOR")"
+  if [ -n "${pane_pid:-}" ] && pid="$(claude_pid_under "$pane_pid")"; then
+    name="$(claude_session_field "$pid" name)"
+  fi
+  idle="$(minutes_since_client_input)" || idle=""
+  windows="$(window_claude_pids)"
+  jq -n --arg pid "$pid" --arg name "$name" --arg expected "$(expected_claude_name "$BOSUN_ORCHESTRATOR")" \
+    --arg idle "$idle" --arg windows "$windows" '{
+      orchestrator: {pid: (if $pid == "" then null else ($pid | tonumber) end), name: $name, expected_name: $expected},
+      client_idle_minutes: (if $idle == "" then null else ($idle | tonumber) end),
+      windows: [$windows | split("\n")[] | select(length > 0) | split("\t")
+        | {name: .[0], claude_pid: ((.[1] // "") | if . == "" then null else tonumber end)}]
+    }'
+}
+
+settings=()
+for name in BOSUN_STATE_DIR BOSUN_ORCHESTRATOR BOSUN_ACTIVE_CLIENT_MINUTES \
+  BOSUN_EVENTS_DEBOUNCE_SECONDS BOSUN_EVENTS_MAX_WAIT_SECONDS BOSUN_EVENTS_FAST_KINDS \
+  BOSUN_EVENTS_FAST_DEBOUNCE_SECONDS BOSUN_EVENTS_FAST_MAX_WAIT_SECONDS BOSUN_EVENTS_AWAY_MINUTES \
+  BOSUN_EVENTS_AWAY_DEBOUNCE_SECONDS BOSUN_EVENTS_AWAY_MAX_WAIT_SECONDS BOSUN_EVENTS_MIN_IDLE_SECONDS \
+  BOSUN_EVENTS_MAX_PER_DAY BOSUN_EVENTS_WAITING_SECONDS BOSUN_EVENTS_MAX_LINES \
+  BOSUN_EVENTS_INLINE_CHARS BOSUN_EVENTS_TRANSPORT; do
+  settings+=("$name=${!name}")
+done
+events_py() { env "${settings[@]}" python3 "$BOSUN_ROOT/lib/events.py" "$@"; }
+
+case "$mode" in
+  --status) events_py status ;;
+  --list) events_py list ${all[@]+"${all[@]}"} ;;
+  --covered) events_py covered ;;
+  *)
+    if [ "$BOSUN_EVENTS_ENABLED" != "1" ]; then
+      log "events are off (BOSUN_EVENTS_ENABLED=0)"
+      exit 0
+    fi
+    [ -n "$BOSUN_ORCHESTRATOR" ] || die "no orchestrator configured (BOSUN_ORCHESTRATOR is empty)"
+    dispatch_args=(dispatch)
+    [ "$mode" = "--dry-run" ] && dispatch_args+=(--dry-run)
+    outcome="$(collect_facts | events_py "${dispatch_args[@]}")" || exit $?
+    [ -n "$outcome" ] && log "$outcome"
+    ;;
+esac
+exit 0

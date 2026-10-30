@@ -1,0 +1,34 @@
+{
+ "source": "day 2, 05:32-05:52Z: a Slack question proposed as an investigation, delegated to a different window than proposed, answered in a note and a findings file; I then asked the orchestrator to 'review the relevant session and draft a response', and it read the window's screen.",
+ "setup": [
+  "bosun ledger upsert 'slack:C0000000001/1700000032.000032' --kind mention --title 'Priya: drop the merged backfill scripts now or later?'",
+  "bosun ledger transition 'slack:C0000000001/1700000032.000032' surfaced --note 'surfaced'",
+  "bosun ledger upsert 'slack:C0000000003/1700000033.000033' --kind mention --title 'Marco: instalment plans need backend support'",
+  "bosun ledger transition 'slack:C0000000003/1700000033.000033' surfaced --note 'surfaced'",
+  "bosun ledger upsert 'slack:C0000000003/1700000034.000034' --kind mention --title 'Omar: does anything still use the legacy XML export?'",
+  "bosun ledger transition 'slack:C0000000003/1700000034.000034' surfaced --note 'surfaced'"
+ ],
+ "steps": [
+  {"actor": "orchestrator", "why": "the real proposals, one an exact delegate command", "command_id": "O057", "out": ["ok"]},
+  {"actor": "orchestrator", "why": "my approval (the real command also listed windows with tmux)", "run": "bosun ledger resolve 'slack:C0000000003/1700000034.000034' done"},
+  {"actor": "orchestrator", "why": "the real delegation, to exporter rather than the proposed window", "command_id": "O059",
+   "out": ["dry-run: would deliver to replay:exporter: Run this task in a subagent", "rc=0"]},
+  {"actor": "orchestrator", "why": "the real note", "command_id": "O060"},
+  {"actor": "orchestrator", "why": "the window it went to is on the item, whatever the proposal said", "run": "bosun ledger delegation 'slack:C0000000003/1700000034.000034'",
+   "out": ["\"window\": \"exporter\"", "\"task\": \"investigate\""]},
+  {"actor": "repo", "why": "the answer as a report", "run": "bosun ledger report 'slack:C0000000003/1700000034.000034' --summary 'NO callers in our code; two accounts called the XML export in the last 30 days' --result /Users/me/Development/exporter/TICKET-106-xml-export-usage.md --open 'ask the two accounts before removing the endpoint'"},
+  {"actor": "orchestrator", "why": "the draft reply comes from the report, not the screen", "run": "bosun ledger reports --since 2026-03-13T05:00:00+00:00",
+   "out": ["summary: NO callers in our code", "result:  /Users/me/Development/exporter/TICKET-106-xml-export-usage.md", "open:    ask the two accounts"]},
+  {"actor": "orchestrator", "why": "the real proposal of the reply", "command_id": "O066"},
+  {"actor": "orchestrator", "why": "the real approval and close", "command_id": "O067"},
+  {"actor": "orchestrator", "why": "the second investigation, delegated the same way", "command_id": "O062", "out": ["rc=0"]}
+ ],
+ "expect": {
+  "slack:C0000000003/1700000034.000034": {
+   "state": "done", "window": "exporter",
+   "report_results": ["/Users/me/Development/exporter/TICKET-106-xml-export-usage.md"],
+   "events": {"proposed": 2, "proposal-done": 2, "delegated": 1, "report": 1}
+  },
+  "slack:C0000000003/1700000033.000033": {"state": "surfaced", "window": "exporter", "report_summary": null}
+ }
+}

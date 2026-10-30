@@ -1,0 +1,327 @@
+#!/bin/bash
+# Usage: bosun doctor
+#
+# Check everything the morning run depends on, without changing anything: tools (also as
+# launchd would see them), the Claude Code login, config, session names, schedule (with the
+# watchdog and learning agents), power, keychain, setup steps and the knowledge base.
+# Exits non-zero if any check fails.
+set -uo pipefail
+source "$(dirname "$0")/../lib/common.sh"
+load_config
+
+case "${1:-}" in
+  -h | --help)
+    usage
+    exit 0
+    ;;
+  "") ;;
+  *) die_usage "unknown argument '$1'" ;;
+esac
+
+failures=0
+ok() { printf '  ok    %s\n' "$*"; }
+warn() { printf '  warn  %s\n' "$*"; }
+fail() {
+  printf '  FAIL  %s\n' "$*"
+  failures=$((failures + 1))
+}
+section() { printf '\n%s\n' "$*"; }
+
+check_tools() {
+  for tool in tmux ruby python3 jq curl caffeinate pmset "$BOSUN_CLAUDE_BIN"; do
+    path="$(env -i HOME="$HOME" /bin/bash -c "source '$BOSUN_ROOT/lib/common.sh'; command -v '$tool'")"
+    if [ -n "$path" ]; then ok "$tool -> $path"; else fail "$tool not found on launchd PATH"; fi
+  done
+}
+
+# One window from the window list: its folder, trust, and which session it will resume.
+check_window() { # <name> <dir> <kind>
+  local name="$1" dir="$2" kind="$3" claude_name id pid
+  [ "$kind" = "checkin" ] && return
+  if [ ! -d "$dir" ]; then
+    fail "$name: directory $dir does not exist"
+    return
+  fi
+  claude_trusts "$dir" ||
+    fail "$name: Claude Code does not trust $dir yet, so an unattended start would stall at the trust prompt: run 'bosun trust $dir'"
+  claude_name="$(expected_claude_name "$name")"
+  if id="$("$BOSUN_ROOT/libexec/bosun-resolve" "$dir" "$claude_name" 2>/dev/null)"; then
+    if pid="$("$BOSUN_ROOT/libexec/bosun-resolve" --live "$id")"; then
+      warn "$name: resumes $id, but it is running now (pid $pid); launch will skip it while that runs"
+    else
+      ok "$name: resumes $claude_name ($id) in $dir"
+    fi
+  elif is_orchestrator "$name"; then
+    ok "$name: will start today's conversation '$claude_name' in $dir"
+  else
+    warn "$name: no session with this exact name in $dir; a new one will be created"
+  fi
+}
+
+check_config() {
+  local sessions name dir kind model effort
+  if [ -f "$BOSUN_CONFIG_DIR/bosun.env" ]; then ok "bosun.env"; else warn "no bosun.env; using defaults"; fi
+  if ! sessions="$(window_specs 2>&1)"; then
+    fail "$sessions"
+    return
+  fi
+  ok "sessions manifest: $BOSUN_SESSIONS_FILE"
+  while IFS=$'\t' read -r name dir kind model effort; do
+    check_window "$name" "$dir" "$kind"
+  done <<<"$sessions"
+}
+
+# Knowledge (docs/design/knowledge.md): whether there is a knowledge base, and what it holds.
+check_knowledge() {
+  local stats
+  if [ ! -d "$BOSUN_CONFIG_DIR/knowledge" ]; then
+    ok "knowledge: none yet (bosun kg add-entity or kg import starts $BOSUN_CONFIG_DIR/knowledge)"
+    return
+  fi
+  if stats="$("$BOSUN" kg stats 2>&1)"; then ok "knowledge: $stats"; else fail "knowledge: $stats"; fi
+}
+
+# A site settings file (BOSUN_ORCHESTRATOR_SETTINGS) replaces orchestrator/settings.json, so it
+# should still carry the default rules; report any it lacks (for example after an update here).
+check_site_settings() {
+  local default="$BOSUN_ROOT/orchestrator/settings.json" missing
+  [ "$BOSUN_ORCHESTRATOR_SETTINGS" -ef "$default" ] && return
+  # shellcheck disable=SC2016  # a jq program, not shell
+  missing="$(jq -rn --slurpfile site "$BOSUN_ORCHESTRATOR_SETTINGS" --slurpfile base "$default" '
+    [("allow", "ask", "deny") as $list | $base[0].permissions[$list][]? as $rule
+      | select(($site[0].permissions[$list] // []) | any(. == $rule) | not) | "\($list) \($rule)"]
+    | join(", ")' 2>/dev/null)"
+  if [ -n "$missing" ]; then
+    warn "site settings lack these rules of $default: $missing"
+  else
+    ok "site settings include every rule of $default"
+  fi
+}
+
+# Approvals (docs/design/approvals.md): whether they are on, and that the hooks answer.
+check_approvals() {
+  local probe='{"tool_name":"Bash","tool_input":{"command":"gh api user"}}'
+  if [ "$BOSUN_APPROVALS_ENABLED" != "1" ]; then
+    ok "approvals off: outward calls ask at Claude Code's prompt (BOSUN_APPROVALS_ENABLED)"
+    return
+  fi
+  if printf '%s' "$probe" | "$BOSUN" guard --approvals | grep -q '"permissionDecision": "deny"'; then
+    ok "approvals on (the orchestrator gets the hooks at its next start); standing classes: ${BOSUN_STANDING_CLASSES:-none}"
+  elif [ "$BOSUN_APPROVALS_DENY_UNAPPROVED" = "0" ]; then
+    ok "approvals on, unapproved calls ask as before (DENY_UNAPPROVED=0); standing classes: ${BOSUN_STANDING_CLASSES:-none}"
+  else
+    fail "approvals are on but 'bosun guard --approvals' does not deny an unapproved call"
+  fi
+}
+
+check_orchestrator() {
+  local probe site_tasks task_file pending
+  if jq -e .permissions "$BOSUN_ORCHESTRATOR_SETTINGS" >/dev/null 2>&1; then
+    ok "settings: $BOSUN_ORCHESTRATOR_SETTINGS"
+    check_site_settings
+  else
+    fail "invalid or missing settings: $BOSUN_ORCHESTRATOR_SETTINGS"
+  fi
+  probe='{"tool_name":"mcp__example__send_message","tool_input":{}}'
+  # shellcheck disable=SC2016  # a jq program, not shell
+  if jq -e '[.hooks.PreToolUse[]?.hooks[]?.command] | any(test("bosun\"? guard"))' "$BOSUN_ORCHESTRATOR_SETTINGS" >/dev/null 2>&1 &&
+    printf '%s' "$probe" | "$BOSUN" guard | grep -q '"permissionDecision": "ask"'; then
+    ok "permission guard hook is configured and asks before MCP writes"
+  else
+    fail "the orchestrator settings do not run 'bosun guard' as a PreToolUse hook, or it does not answer; copy the hooks block of orchestrator/settings.json"
+  fi
+  [ -f "$BOSUN_CONFIG_DIR/policy.md" ] && ok "site policy: $BOSUN_CONFIG_DIR/policy.md (appended to the orchestrator policy)"
+  site_tasks=""
+  for task_file in "$BOSUN_CONFIG_DIR"/tasks/*.md; do
+    [ -f "$task_file" ] && site_tasks+="$(basename "$task_file") "
+  done
+  [ -n "$site_tasks" ] && ok "site task files in $BOSUN_CONFIG_DIR/tasks: $site_tasks"
+  if [ -f "$BOSUN_ROOT/orchestrator/plugin/.claude-plugin/plugin.json" ] && [ -f "$BOSUN_ROOT/orchestrator/policy.md" ]; then
+    ok "plugin and policy present"
+  else
+    fail "orchestrator plugin or policy missing under $BOSUN_ROOT/orchestrator"
+  fi
+  if gh auth status >/dev/null 2>&1; then
+    ok "gh is logged in ($(gh api user --jq .login 2>/dev/null))"
+  else
+    fail "gh is not logged in: run 'gh auth login'"
+  fi
+  if [ "$BOSUN_CHECKIN_MINUTES" -gt 0 ]; then ok "check-ins every $BOSUN_CHECKIN_MINUTES min"; else ok "check-ins disabled"; fi
+  pending="$("$BOSUN" ledger list --proposals)"
+  if [ "$pending" = "(no items)" ]; then
+    ok "no proposals awaiting approval"
+  else
+    warn "proposals awaiting approval:"$'\n'"          ${pending//$'\n'/$'\n'          }"
+  fi
+}
+
+check_models() {
+  local specs name dir kind model effort saved login_env
+  if specs="$(window_specs 2>/dev/null)"; then
+    while IFS=$'\t' read -r name dir kind model effort; do
+      [ "$kind" = "checkin" ] && continue
+      if valid_effort "$effort"; then ok "$name: $model / $effort"; else fail "$name: effort '$effort' is not one of: $EFFORT_LEVELS"; fi
+    done <<<"$specs"
+  fi
+  saved="$(jq -r '"\(.model // "account default") / \(.effortLevel // "model default")" + (if .modelSettings then " (per model: " + ([.modelSettings | to_entries[] | "\(.key)=\(.value.effortLevel // "-")"] | join(", ")) + ")" else "" end)' "$HOME/.claude/settings.json" 2>/dev/null)"
+  ok "your saved Claude Code default, used by sessions you start yourself: ${saved:-none}. /model and /effort save to it; in /model, press s to keep a choice to one session"
+  # shellcheck disable=SC2016  # the login shell expands these, not this one
+  login_env="$(env -i HOME="$HOME" USER="$USER" TERM=dumb "$(login_shell)" -lic 'printf "%s %s" "${ANTHROPIC_MODEL:-}" "${CLAUDE_CODE_EFFORT_LEVEL:-}"' 2>/dev/null | tail -1)"
+  [ -n "${login_env// /}" ] &&
+    warn "your login shell sets ANTHROPIC_MODEL / CLAUDE_CODE_EFFORT_LEVEL ($login_env); they override bosun's model and effort in every session"
+}
+
+# The watchdog's launchd agent: loaded, and when it last ran (it runs every few minutes while the
+# Mac is awake, so a stale time means it is failing; see watchdog.launchd.err in the log dir).
+check_watchdog() {
+  local label last last_epoch age
+  label="$(watchdog_label)"
+  if ! launchctl print "gui/$(id -u)/$label" >/dev/null 2>&1; then
+    warn "watchdog agent $label not loaded: nothing alerts you when the morning run or the session fails; run install.sh"
+    return
+  fi
+  last="$(jq -r '.last_run // empty' "$BOSUN_STATE_DIR/watchdog.json" 2>/dev/null)"
+  last_epoch="$(date -j -f '%Y-%m-%d %H:%M:%S' "$last" +%s 2>/dev/null)"
+  age=$(($(date +%s) - ${last_epoch:-0}))
+  if [ -z "$last_epoch" ] || [ "$age" -gt $((3 * WATCHDOG_INTERVAL_SECONDS)) ]; then
+    warn "watchdog agent $label loaded, but its last full run was ${last:-never}; see $BOSUN_LOG_DIR/watchdog.launchd.err"
+  else
+    ok "watchdog agent $label loaded; last full run $last (bosun watchdog --status shows its checks)"
+  fi
+}
+
+# The learning agent, only with BOSUN_LEARN_ENABLED=1 (install.sh removes it otherwise).
+check_learn_agent() {
+  local label
+  label="$(learn_label)"
+  if [ "$BOSUN_LEARN_ENABLED" != "1" ]; then
+    ok "learning agent off (BOSUN_LEARN_ENABLED is not 1)"
+  elif launchctl print "gui/$(id -u)/$label" >/dev/null 2>&1; then
+    ok "learning agent $label loaded (bosun learn at $BOSUN_LEARN_AT on $BOSUN_DAYS; bosun learn --status shows its runs)"
+  else
+    warn "learning agent $label not loaded, though BOSUN_LEARN_ENABLED=1; run install.sh"
+  fi
+}
+
+check_schedule() {
+  local wake_hm wake_label wake_cmd repeat
+  if launchctl print "gui/$(id -u)/$BOSUN_LAUNCHD_LABEL" >/dev/null 2>&1; then
+    ok "launchd job $BOSUN_LAUNCHD_LABEL loaded (runs at $BOSUN_START_TIME on $BOSUN_DAYS)"
+  else
+    fail "launchd job $BOSUN_LAUNCHD_LABEL not loaded; run install.sh"
+  fi
+  check_watchdog
+  check_learn_agent
+  wake_hm="$(shift_time "$BOSUN_START_TIME" "$BOSUN_WAKE_DELAY_MINUTES")"
+  wake_label="$(date -j -f '%H:%M' "$wake_hm" '+%l:%M%p' | tr -d ' ')" # pmset prints e.g. 8:01AM
+  wake_cmd="sudo pmset repeat wakeorpoweron $BOSUN_DAYS $wake_hm:00"
+  repeat="$(pmset -g sched | sed -n '/Repeating power events/,/^[A-Z]/p' | grep -iE 'wake' || true)"
+  if [ -z "$repeat" ]; then
+    fail "no repeating pmset wake; run: $wake_cmd"
+  elif grep -q " at $wake_label" <<<"$repeat"; then
+    ok "pmset repeating wake:$(echo "$repeat" | head -1) ($BOSUN_WAKE_DELAY_MINUTES min after the job, which runs on wake)"
+  else
+    fail "pmset repeating wake is$(echo "$repeat" | head -1), expected $wake_label; run: $wake_cmd"
+  fi
+}
+
+check_power() {
+  local leaked keychain
+  if session_exists; then
+    # Variables set in the session environment override the server's; "-NAME" means removed.
+    leaked="$({
+      tmux_cmd show-environment -t "=$BOSUN_SESSION_NAME"
+      tmux_cmd show-environment -g
+    } 2>/dev/null |
+      awk -F= '/^-/ { removed[substr($1, 2)] = 1; next } { seen[$1] = 1 }
+        END { for (v in seen) if (v ~ /^AWS_(ACCESS_KEY_ID|SECRET_ACCESS_KEY|SESSION_TOKEN)$/ && !(v in removed)) print v }' | sort | paste -sd ' ' -)"
+    if [ -n "$leaked" ]; then
+      warn "new windows in '$BOSUN_SESSION_NAME' inherit static AWS credentials ($leaked) from the tmux server; they override SSO profiles. Remove them with: tmux${BOSUN_TMUX_SOCKET:+ -L $BOSUN_TMUX_SOCKET} set-environment -t $BOSUN_SESSION_NAME -r <name>"
+    else
+      ok "no static AWS credentials in the session's tmux environment"
+    fi
+  fi
+  if pmset -g batt | head -1 | grep -q "AC Power"; then
+    ok "on AC power"
+  else
+    warn "on battery; scheduled wakes and caffeinate -s need AC"
+  fi
+  if ioreg -r -k AppleClamshellState -d 4 | grep -q '"AppleClamshellState" = Yes'; then
+    warn "lid is closed; without an external display the Mac will go back to sleep"
+  else
+    ok "lid is open"
+  fi
+  keychain="$(security show-keychain-info "$HOME/Library/Keychains/login.keychain-db" 2>&1)"
+  case "$keychain" in
+    *lock-on-sleep*) fail "login keychain locks on sleep; Claude cannot read its credentials after an unattended wake" ;;
+    *no-timeout*) ok "login keychain stays unlocked" ;;
+    *) warn "login keychain has a timeout: $keychain" ;;
+  esac
+  if pgrep -qx caffeinate; then
+    ok "a caffeinate assertion is active now"
+  else
+    ok "no caffeinate running now (expected outside the awake window)"
+  fi
+  check_orphans
+}
+
+# Shells that earlier window starts left behind (lib/orphans.py launch-shells); listing only.
+check_orphans() {
+  local found
+  set_wrapper_args
+  if ! found="$(orphans launch-shells "${wrapper_args[@]}")"; then
+    warn "could not list the shells earlier window starts left behind"
+  elif [ -n "$found" ]; then
+    warn "$(grep -c . <<<"$found") shell(s) left behind by earlier window starts (ppid 1): bosun orphans lists them, --apply stops them"
+  else
+    ok "no shells left behind by earlier window starts"
+  fi
+}
+
+# The Claude Code login, and whether each running Claude window gets real replies. No request is
+# made here: `claude auth status` only sees stored credentials; the morning's ensure_claude_login
+# step makes a real one.
+NEEDS_LOGIN="needs-login" # lib/login.py's state for a window that gets only login errors
+check_claude_login() {
+  local verdict line
+  if verdict="$(claude_login global)"; then
+    ok "Claude Code login: $verdict"
+  elif [ $? -eq 1 ]; then
+    fail "Claude Code needs a login: $verdict; run /login in a Claude window (or claude auth login)"
+  else
+    warn "Claude Code login unknown: $verdict"
+  fi
+  session_exists || return 0
+  while IFS= read -r line; do
+    fail "window $(sed -E 's/ +/ /g' <<<"$line"); run /login there"
+  done < <(window_claude_pids | claude_login status | tail -n +2 | grep -F " $NEEDS_LOGIN ")
+  return 0
+}
+
+section "Tools (as launchd sees them)"
+check_tools
+section "Claude Code login"
+check_claude_login
+section "Config ($BOSUN_CONFIG_DIR)"
+check_config
+check_knowledge
+if [ -n "$BOSUN_ORCHESTRATOR" ]; then
+  section "Orchestrator ($BOSUN_ORCHESTRATOR in $BOSUN_ORCHESTRATOR_DIR)"
+  check_orchestrator
+  check_approvals
+fi
+section "Models and effort"
+check_models
+section "Schedule"
+check_schedule
+section "Power and session"
+check_power
+section "Setup steps (dry run)"
+"$BOSUN" setup --dry-run 2>&1 | sed 's/^/  /'
+
+printf '\n'
+if [ "$failures" -gt 0 ]; then
+  echo "$failures check(s) failed"
+  exit 1
+fi
+echo "all checks passed"

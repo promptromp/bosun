@@ -1,0 +1,5 @@
+{
+  "name": "bosun",
+  "version": "0.1.0",
+  "description": "bosun orchestrator chores: Slack triage, review requests, my open PRs, with a ledger and human approval for outward-facing actions."
+}

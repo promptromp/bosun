@@ -1,0 +1,67 @@
+#!/bin/bash
+# Usage: bosun slack-watch [--once | --scheduled] [--dry-run] | --status
+#
+# Look for new Slack activity for you and queue it as events for the orchestrator (design:
+# docs/design/events.md, "Slack watcher"). One headless Claude (BOSUN_SLACK_WATCH_MODEL) that
+# can only read Slack lists the messages since the last watch that @-mention or name you, DMs and
+# group DMs to you, and replies in threads you started or replied in. Code then drops what the
+# ledger has processed (`ledger seen`), what belongs to open outreach and what is already queued,
+# and queues one `slack` event per new message; `bosun events` delivers them. It never posts
+# and never writes the ledger.
+#
+# The call has no built-in tools, only the Slack MCP server (the Slack plugin's, or the one in
+# BOSUN_SLACK_WATCH_MCP_CONFIG), no settings files, Slack's write tools removed and everything
+# else it was not allowed denied without a prompt; a call that could see a write tool is refused.
+#   --once       a run now (the default): needs BOSUN_EVENTS_ENABLED=1, no other run going, and
+#                BOSUN_SLACK_WATCH_MAX_USD_PER_CALL left of BOSUN_SLACK_WATCH_MAX_USD_PER_DAY
+#   --scheduled  what the check-in loop runs: also only with BOSUN_SLACK_WATCH_ENABLED=1, in the
+#                awake window, BOSUN_SLACK_WATCH_MINUTES after the last run started
+#   --dry-run    call Claude and print what a run would queue; queues nothing and writes no state
+#   --status     the settings, the last run, the budget spent today, failures
+set -uo pipefail
+source "$(dirname "$0")/../lib/common.sh"
+load_config
+
+mode="--once"
+dry_run=()
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --once | --scheduled | --status) mode="$1" ;;
+    --dry-run) dry_run=(--dry-run) ;;
+    -h | --help)
+      usage
+      exit 0
+      ;;
+    *) die_usage "unknown option $1" ;;
+  esac
+  shift
+done
+
+# lib/slack_watch.py gets the settings it uses explicitly (load_config does not export them).
+settings=()
+for name in BOSUN_STATE_DIR BOSUN_CLAUDE_BIN BOSUN_DAYS BOSUN_START_TIME BOSUN_AWAKE_UNTIL \
+  BOSUN_EVENTS_ENABLED BOSUN_SLACK_LOOKBACK_HOURS BOSUN_SLACK_WATCH_ENABLED \
+  BOSUN_SLACK_WATCH_MINUTES BOSUN_SLACK_WATCH_MODEL BOSUN_SLACK_WATCH_MAX_USD_PER_CALL \
+  BOSUN_SLACK_WATCH_MAX_USD_PER_DAY BOSUN_SLACK_WATCH_MCP_CONFIG BOSUN_SLACK_WATCH_QUIET_AUTHORS; do
+  settings+=("$name=${!name}")
+done
+watch_py() { env "${settings[@]}" python3 "$BOSUN_ROOT/lib/slack_watch.py" "$@"; }
+
+if [ "$mode" = "--status" ]; then
+  watch_py status
+  exit $?
+fi
+args=(run)
+[ "$mode" = "--scheduled" ] && args+=(--scheduled)
+if [ ${#dry_run[@]} -gt 0 ]; then
+  watch_py "${args[@]}" --dry-run
+  exit $?
+fi
+output="$(watch_py "${args[@]}" 2>&1)"
+rc=$?
+while IFS= read -r line; do
+  [ -z "$line" ] && continue
+  if [ "$rc" != "0" ] && [[ "$line" != ERROR:* ]]; then line="ERROR: $line"; fi
+  log "$line"
+done <<<"$output"
+exit "$rc"

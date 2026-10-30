@@ -1,0 +1,22 @@
+#!/bin/bash
+# Usage: bosun ledger <command> [args]   (see `bosun ledger --help`)
+#
+# Work-item ledger used by the orchestrator: stable ids, per-kind state machines, processed
+# Slack messages and proposals awaiting approval. Stored in $BOSUN_STATE_DIR/ledger.json,
+# with a readable view in ledger.md next to it.
+set -uo pipefail
+source "$(dirname "$0")/../lib/common.sh"
+load_config
+# With events on, the window the command runs in is the origin of the events it queues.
+caller="${BOSUN_CALLER_WINDOW:-}"
+if [ "$BOSUN_EVENTS_ENABLED" = "1" ] && [ -z "$caller" ]; then caller="$(caller_window)"; fi
+BOSUN_STATE_DIR="$BOSUN_STATE_DIR" BOSUN_REPO_MASK="$BOSUN_REPO_MASK" \
+  BOSUN_TICKET_STATUS_MAP="$BOSUN_TICKET_STATUS_MAP" \
+  BOSUN_TICKET_STALE_HOURS="$BOSUN_TICKET_STALE_HOURS" \
+  BOSUN_TICKET_OWNED_PROJECTS="$BOSUN_TICKET_OWNED_PROJECTS" \
+  BOSUN_ORCHESTRATOR_DIR="$BOSUN_ORCHESTRATOR_DIR" \
+  BOSUN_SLACK_LOOKBACK_HOURS="$BOSUN_SLACK_LOOKBACK_HOURS" \
+  BOSUN_SLACK_MAX_LOOKBACK_HOURS="$BOSUN_SLACK_MAX_LOOKBACK_HOURS" \
+  BOSUN_EVENTS_ENABLED="$BOSUN_EVENTS_ENABLED" BOSUN_CALLER_WINDOW="$caller" \
+  BOSUN_CONFIG_DIR="$BOSUN_CONFIG_DIR" \
+  exec python3 "$BOSUN_ROOT/lib/ledger.py" "$@"

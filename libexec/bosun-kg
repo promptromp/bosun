@@ -1,0 +1,22 @@
+#!/bin/bash
+# Usage: bosun kg <command> [args]   (see `bosun kg --help`)
+#
+# Organizational knowledge (People, Process, Product): entities and facts with sources, two
+# timelines and a daily review batch. Stored in $BOSUN_CONFIG_DIR/knowledge/, with its own
+# git history (BOSUN_KNOWLEDGE_GIT=1). Commands: add-entity, propose, confirm, reject,
+# supersede, batch, batch apply, import, identify, forget, expire, lookup, facts, search,
+# neighbors, context, lint, stats, schema. Design: docs/design/knowledge.md.
+set -uo pipefail
+source "$(dirname "$0")/../lib/common.sh"
+load_config
+# A quote of my own words is checked against what bosun pasted into this window.
+caller="${BOSUN_CALLER_WINDOW:-}"
+[ -z "$caller" ] && caller="$(caller_window)"
+BOSUN_CONFIG_DIR="$BOSUN_CONFIG_DIR" BOSUN_STATE_DIR="$BOSUN_STATE_DIR" \
+  BOSUN_KNOWLEDGE_GIT="$BOSUN_KNOWLEDGE_GIT" \
+  BOSUN_KNOWLEDGE_BATCH_CAP="$BOSUN_KNOWLEDGE_BATCH_CAP" \
+  BOSUN_KNOWLEDGE_BATCH_FACTS="$BOSUN_KNOWLEDGE_BATCH_FACTS" \
+  BOSUN_KNOWLEDGE_GROUP_FACTS="$BOSUN_KNOWLEDGE_GROUP_FACTS" \
+  BOSUN_KNOWLEDGE_STALE_DAYS="$BOSUN_KNOWLEDGE_STALE_DAYS" \
+  BOSUN_DRAIN_PROMPT="$BOSUN_DRAIN_PROMPT" BOSUN_CALLER_WINDOW="$caller" \
+  exec python3 "$BOSUN_ROOT/lib/knowledge.py" "$@"

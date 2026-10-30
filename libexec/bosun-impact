@@ -1,0 +1,48 @@
+#!/bin/bash
+# Usage: bosun impact collect [--since YYYY-MM-DD] [--dry-run]
+#
+# Collect the console's Impact view snapshot (design: docs/design/impact.md): my merged PRs and my
+# reviews of other people's PRs from GitHub (`gh`, reads only) in BOSUN_IMPACT_REPOS (empty:
+# the repos of the ledger's mypr: and review: items), and per bosun window and day the agent's
+# busy time, the prompts I typed and the tokens used, from the windows' transcripts. Writes
+# $BOSUN_STATE_DIR/impact/snapshot.json; a cache there keeps a daily run to the transcripts
+# that changed. The baseline runs from BOSUN_IMPACT_BASELINE_FROM (empty: 13 weeks before the
+# start; --since overrides it) to BOSUN_IMPACT_START (empty: the ledger's first item).
+#
+#   --since DATE   the baseline's first day
+#   --dry-run      read everything and print what would be written; write nothing
+#
+# It also records what started each turn (my prompts, hand-overs, check-ins, events summaries,
+# background-task notifications, resume prompts, other sessions' messages, and the prompt openings in
+# BOSUN_IMPACT_OVERHEAD_PREFIXES, separated by '|') with its tokens and the context it re-read,
+# and per day the guardrails (tasks reported and done, approval failures, outreach answered, events
+# delivered and pending, check-ins sent and skipped) for the Overhead panel;
+# BOSUN_IMPACT_OVERHEAD_FIXED_AT marks the day overhead fixes went in.
+#
+# Cost per task: each turn's tokens, its subagents' included, go to the ledger item it worked on
+# (the item a hand-over names, else the window's next report or its active item within
+# BOSUN_IMPACT_ATTRIBUTION_HOURS, else unattributed); the panel lists the
+# BOSUN_IMPACT_TASKS_TOP most expensive items.
+#
+# With BOSUN_IMPACT_COLLECT=1 the morning run collects it each day. Other people are never
+# named in the snapshot.
+set -uo pipefail
+source "$(dirname "$0")/../lib/common.sh"
+load_config
+case "${1:-}" in
+  -h | --help | "")
+    usage
+    exit 0
+    ;;
+esac
+windows="$(window_specs | awk -F'\t' '$3 != "checkin" { print $1 "\t" $2 }')"
+BOSUN_STATE_DIR="$BOSUN_STATE_DIR" BOSUN_IMPACT_REPOS="$BOSUN_IMPACT_REPOS" \
+  BOSUN_IMPACT_START="$BOSUN_IMPACT_START" \
+  BOSUN_IMPACT_BASELINE_FROM="$BOSUN_IMPACT_BASELINE_FROM" \
+  BOSUN_IMPACT_PROMPT_MINUTES="$BOSUN_IMPACT_PROMPT_MINUTES" \
+  BOSUN_IMPACT_OVERHEAD_PREFIXES="$BOSUN_IMPACT_OVERHEAD_PREFIXES" \
+  BOSUN_IMPACT_OVERHEAD_FIXED_AT="$BOSUN_IMPACT_OVERHEAD_FIXED_AT" BOSUN_LOG_DIR="$BOSUN_LOG_DIR" \
+  BOSUN_IMPACT_ATTRIBUTION_HOURS="$BOSUN_IMPACT_ATTRIBUTION_HOURS" \
+  BOSUN_IMPACT_TASKS_TOP="$BOSUN_IMPACT_TASKS_TOP" \
+  BOSUN_IMPACT_WINDOWS="$windows" BOSUN_DRAIN_PROMPT="$BOSUN_DRAIN_PROMPT" \
+  exec python3 "$BOSUN_ROOT/lib/impact_collect.py" "$@"

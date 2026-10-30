@@ -1,0 +1,832 @@
+{
+  "items": {
+    "ghissue:acme/exporter#7": {
+      "created_at": "2026-10-20T12:41:05+00:00",
+      "fields": {
+        "external_status": "open",
+        "key": "acme/exporter#7",
+        "project": "acme/exporter",
+        "status_category": "todo",
+        "synced_at": "2026-10-20T12:41:05+00:00",
+        "system": "ghissue"
+      },
+      "history": [
+        {
+          "at": "2026-10-20T12:41:05+00:00",
+          "event": "created",
+          "state": "unsynced"
+        },
+        {
+          "at": "2026-10-20T12:41:05+00:00",
+          "event": "synced",
+          "fields": {
+            "external_status": "open",
+            "state": "todo",
+            "title": "Header shows the wrong date",
+            "url": "https://github.com/acme/exporter/issues/7"
+          },
+          "from": "unsynced",
+          "note": "unsynced -> todo",
+          "to": "todo"
+        }
+      ],
+      "id": "ghissue:acme/exporter#7",
+      "kind": "ticket",
+      "proposal": null,
+      "state": "todo",
+      "title": "Header shows the wrong date",
+      "updated_at": "2026-10-20T12:41:05+00:00",
+      "url": "https://github.com/acme/exporter/issues/7"
+    },
+    "jira:EXP-12": {
+      "created_at": "2026-10-20T12:41:04+00:00",
+      "fields": {
+        "external_status": "Done",
+        "key": "EXP-12",
+        "project": "EXP",
+        "status_category": "done",
+        "synced_at": "2026-10-20T12:41:04+00:00",
+        "system": "jira"
+      },
+      "history": [
+        {
+          "at": "2026-10-20T12:41:04+00:00",
+          "event": "created",
+          "state": "unsynced"
+        },
+        {
+          "at": "2026-10-20T12:41:04+00:00",
+          "event": "synced",
+          "fields": {
+            "external_status": "Done",
+            "state": "done",
+            "title": "Credit notes in exports",
+            "url": "https://acme.atlassian.net/browse/EXP-12"
+          },
+          "from": "unsynced",
+          "note": "unsynced -> done",
+          "to": "done"
+        }
+      ],
+      "id": "jira:EXP-12",
+      "kind": "ticket",
+      "proposal": null,
+      "state": "done",
+      "title": "Credit notes in exports",
+      "updated_at": "2026-10-20T12:41:04+00:00",
+      "url": "https://acme.atlassian.net/browse/EXP-12"
+    },
+    "learn:2026-10-20/1": {
+      "created_at": "2026-10-20T12:41:08+00:00",
+      "fields": {},
+      "history": [
+        {
+          "at": "2026-10-20T12:41:08+00:00",
+          "event": "created",
+          "state": "proposed"
+        },
+        {
+          "at": "2026-10-20T12:41:09+00:00",
+          "event": "proposed",
+          "note": "Add to policy.md: ask the finance owner before reusing a number sequence"
+        }
+      ],
+      "id": "learn:2026-10-20/1",
+      "kind": "learning",
+      "proposal": {
+        "action": "Add to policy.md: ask the finance owner before reusing a number sequence",
+        "proposed_at": "2026-10-20T12:41:09+00:00"
+      },
+      "state": "proposed",
+      "title": "Ask before reusing a number sequence",
+      "updated_at": "2026-10-20T12:41:09+00:00",
+      "url": ""
+    },
+    "mypr:acme/exporter#102": {
+      "created_at": "2026-10-20T12:41:03+00:00",
+      "fields": {},
+      "history": [
+        {
+          "at": "2026-10-20T12:41:03+00:00",
+          "event": "created",
+          "state": "awaiting-review"
+        },
+        {
+          "at": "2026-10-20T12:41:05+00:00",
+          "event": "outreach",
+          "note": "out:mypr:acme/exporter#102/1: slack to Marco: Could you review the template PR?"
+        }
+      ],
+      "id": "mypr:acme/exporter#102",
+      "kind": "my-pr",
+      "proposal": null,
+      "state": "awaiting-review",
+      "title": "VAT breakdown on invoice exports",
+      "updated_at": "2026-10-20T12:41:05+00:00",
+      "url": "https://github.com/acme/exporter/pull/102"
+    },
+    "mypr:acme/exporter#103": {
+      "created_at": "2026-10-20T12:41:03+00:00",
+      "fields": {},
+      "history": [
+        {
+          "at": "2026-10-20T12:41:03+00:00",
+          "event": "created",
+          "state": "awaiting-review"
+        },
+        {
+          "at": "2026-10-20T12:41:05+00:00",
+          "event": "linked",
+          "note": "tracks ghissue:acme/exporter#7"
+        }
+      ],
+      "id": "mypr:acme/exporter#103",
+      "kind": "my-pr",
+      "links": [
+        {
+          "at": "2026-10-20T12:41:05+00:00",
+          "id": "ghissue:acme/exporter#7",
+          "rel": "tracks"
+        }
+      ],
+      "proposal": null,
+      "state": "awaiting-review",
+      "title": "Header fix <script>alert(1)</script>",
+      "updated_at": "2026-10-20T12:41:05+00:00",
+      "url": "https://github.com/acme/exporter/pull/103"
+    },
+    "mypr:acme/exporter#104": {
+      "created_at": "2026-10-20T12:41:04+00:00",
+      "fields": {},
+      "history": [
+        {
+          "at": "2026-10-20T12:41:04+00:00",
+          "event": "created",
+          "state": "awaiting-review"
+        }
+      ],
+      "id": "mypr:acme/exporter#104",
+      "kind": "my-pr",
+      "proposal": null,
+      "state": "awaiting-review",
+      "title": "Credit notes in the invoice export",
+      "updated_at": "2026-10-20T12:41:04+00:00",
+      "url": "https://github.com/acme/exporter/pull/104"
+    },
+    "out:2026-10-20/1": {
+      "created_at": "2026-10-20T12:41:06+00:00",
+      "fields": {
+        "answer": "Yes, Thursday",
+        "channel": "email",
+        "messages": [
+          {
+            "at": "2026-10-20T12:41:06+00:00",
+            "channel": "email",
+            "ref": "<msg-0001@example.com>"
+          }
+        ],
+        "purpose": "decision",
+        "replied_at": "2026-10-20T09:00:00+00:00",
+        "reply_ref": "https://acme.slack.com/archives/D0000000002/p1792486800000200",
+        "subject": "Ship exporter 2.4 this week?",
+        "to": "Lena"
+      },
+      "history": [
+        {
+          "at": "2026-10-20T12:41:06+00:00",
+          "event": "created",
+          "note": "decision by email to Lena: Ship exporter 2.4 this week?",
+          "state": "draft"
+        },
+        {
+          "at": "2026-10-20T12:41:06+00:00",
+          "event": "transition",
+          "from": "draft",
+          "note": "message sent",
+          "to": "sent"
+        },
+        {
+          "at": "2026-10-20T12:41:06+00:00",
+          "event": "transition",
+          "evidence": "https://acme.slack.com/archives/D0000000002/p1792486800000200",
+          "from": "sent",
+          "happened_at": "2026-10-20T09:00:00+00:00",
+          "note": "Yes, Thursday",
+          "time_from": "slack ref",
+          "to": "replied"
+        }
+      ],
+      "id": "out:2026-10-20/1",
+      "kind": "outreach",
+      "proposal": null,
+      "state": "replied",
+      "title": "Ship exporter 2.4 this week?",
+      "updated_at": "2026-10-20T12:41:06+00:00",
+      "url": ""
+    },
+    "out:2026-10-20/2": {
+      "created_at": "2026-10-20T12:41:06+00:00",
+      "fields": {
+        "channel": "slack",
+        "messages": [
+          {
+            "at": "2026-10-20T10:00:00+00:00",
+            "channel": "slack",
+            "ref": "https://acme.slack.com/archives/C0000000002/p1792490400000300"
+          }
+        ],
+        "purpose": "fyi",
+        "subject": "Exporter 2.4 goes out Thursday",
+        "to": "exporter channel"
+      },
+      "history": [
+        {
+          "at": "2026-10-20T12:41:06+00:00",
+          "event": "created",
+          "note": "fyi by slack to exporter channel: Exporter 2.4 goes out Thursday",
+          "state": "draft"
+        },
+        {
+          "at": "2026-10-20T12:41:06+00:00",
+          "event": "transition",
+          "from": "draft",
+          "happened_at": "2026-10-20T10:00:00+00:00",
+          "note": "message sent",
+          "time_from": "slack ref",
+          "to": "sent"
+        },
+        {
+          "at": "2026-10-20T12:41:06+00:00",
+          "event": "transition",
+          "from": "sent",
+          "note": "one-way message sent: no reply expected",
+          "to": "applied"
+        }
+      ],
+      "id": "out:2026-10-20/2",
+      "kind": "outreach",
+      "proposal": null,
+      "state": "applied",
+      "title": "Exporter 2.4 goes out Thursday",
+      "updated_at": "2026-10-20T12:41:06+00:00",
+      "url": ""
+    },
+    "out:mypr:acme/exporter#102/1": {
+      "created_at": "2026-10-20T12:41:05+00:00",
+      "fields": {
+        "channel": "slack",
+        "messages": [],
+        "parent": "mypr:acme/exporter#102",
+        "purpose": "review",
+        "subject": "Could you review the template PR?",
+        "to": "Marco"
+      },
+      "history": [
+        {
+          "at": "2026-10-20T12:41:05+00:00",
+          "event": "created",
+          "note": "review by slack to Marco: Could you review the template PR?",
+          "state": "draft"
+        },
+        {
+          "at": "2026-10-20T12:41:05+00:00",
+          "event": "proposed",
+          "note": "Slack DM to Marco: could you review https://github.com/acme/exporter/pull/102 when you have a moment?"
+        },
+        {
+          "at": "2026-10-20T12:41:05+00:00",
+          "event": "transition",
+          "from": "draft",
+          "note": "outgoing message proposed",
+          "to": "proposed"
+        }
+      ],
+      "id": "out:mypr:acme/exporter#102/1",
+      "kind": "outreach",
+      "proposal": {
+        "action": "Slack DM to Marco: could you review https://github.com/acme/exporter/pull/102 when you have a moment?",
+        "proposed_at": "2026-10-20T12:41:05+00:00"
+      },
+      "state": "proposed",
+      "title": "Could you review the template PR?",
+      "updated_at": "2026-10-20T12:41:05+00:00",
+      "url": ""
+    },
+    "out:task:2026-10-20/1/1": {
+      "created_at": "2026-10-20T12:41:05+00:00",
+      "fields": {
+        "channel": "slack",
+        "messages": [
+          {
+            "at": "2026-10-20T08:00:00+00:00",
+            "channel": "slack",
+            "ref": "https://acme.slack.com/archives/D0000000001/p1792483200000100"
+          }
+        ],
+        "options": [
+          "reuse",
+          "own sequence"
+        ],
+        "parent": "task:2026-10-20/1",
+        "purpose": "question",
+        "subject": "Do credit notes reuse the invoice number sequence?",
+        "to": "Dana (finance)"
+      },
+      "history": [
+        {
+          "at": "2026-10-20T12:41:05+00:00",
+          "event": "created",
+          "note": "question by slack to Dana (finance): Do credit notes reuse the invoice number sequence?",
+          "state": "draft"
+        },
+        {
+          "at": "2026-10-20T12:41:05+00:00",
+          "event": "proposed",
+          "note": "Slack DM to Dana: do credit notes reuse the invoice number sequence?"
+        },
+        {
+          "at": "2026-10-20T12:41:05+00:00",
+          "event": "transition",
+          "from": "draft",
+          "note": "outgoing message proposed",
+          "to": "proposed"
+        },
+        {
+          "action": "Slack DM to Dana: do credit notes reuse the invoice number sequence?",
+          "at": "2026-10-20T12:41:05+00:00",
+          "event": "proposal-done"
+        },
+        {
+          "at": "2026-10-20T12:41:05+00:00",
+          "event": "transition",
+          "from": "proposed",
+          "happened_at": "2026-10-20T08:00:00+00:00",
+          "note": "message sent",
+          "time_from": "slack ref",
+          "to": "sent"
+        }
+      ],
+      "id": "out:task:2026-10-20/1/1",
+      "kind": "outreach",
+      "proposal": null,
+      "state": "sent",
+      "title": "Do credit notes reuse the invoice number sequence?",
+      "updated_at": "2026-10-20T12:41:05+00:00",
+      "url": ""
+    },
+    "review:acme/ledger-sync#57": {
+      "created_at": "2026-10-20T12:41:08+00:00",
+      "delegation": {
+        "at": "2026-10-20T12:41:08+00:00",
+        "requester": "Omar",
+        "task": "review",
+        "updates": 0,
+        "window": "ledger-sync"
+      },
+      "fields": {},
+      "history": [
+        {
+          "at": "2026-10-20T12:41:08+00:00",
+          "event": "created",
+          "state": "requested"
+        },
+        {
+          "at": "2026-10-20T12:41:08+00:00",
+          "event": "delegated",
+          "task": "review",
+          "window": "ledger-sync"
+        },
+        {
+          "at": "2026-10-20T12:41:08+00:00",
+          "event": "transition",
+          "from": "requested",
+          "note": "handed to ledger-sync",
+          "to": "delegated"
+        },
+        {
+          "at": "2026-10-20T12:41:08+00:00",
+          "event": "transition",
+          "from": "delegated",
+          "note": "Reviewed: two comments on the backoff",
+          "to": "reviewed"
+        },
+        {
+          "at": "2026-10-20T12:41:08+00:00",
+          "event": "report",
+          "note": "Reviewed: two comments on the backoff",
+          "results": [
+            "https://github.com/acme/ledger-sync/pull/57#pullrequestreview-1"
+          ],
+          "window": "ledger-sync"
+        }
+      ],
+      "id": "review:acme/ledger-sync#57",
+      "kind": "review-request",
+      "proposal": null,
+      "report": {
+        "at": "2026-10-20T12:41:08+00:00",
+        "open": "",
+        "results": [
+          "https://github.com/acme/ledger-sync/pull/57#pullrequestreview-1"
+        ],
+        "summary": "Reviewed: two comments on the backoff",
+        "window": "ledger-sync"
+      },
+      "state": "reviewed",
+      "title": "Retry on 429 from the ledger API",
+      "updated_at": "2026-10-20T12:41:08+00:00",
+      "url": "https://github.com/acme/ledger-sync/pull/57"
+    },
+    "slack:C0000000001/1700000001.000001": {
+      "created_at": "2026-10-20T12:41:03+00:00",
+      "fields": {},
+      "history": [
+        {
+          "at": "2026-10-20T12:41:03+00:00",
+          "event": "created",
+          "state": "new"
+        },
+        {
+          "at": "2026-10-20T12:41:03+00:00",
+          "classification": "mention",
+          "event": "source",
+          "note": "https://acme.slack.com/archives/C0000000001/p1700000001000001"
+        },
+        {
+          "at": "2026-10-20T12:41:03+00:00",
+          "event": "spawned",
+          "note": "task:2026-10-20/1: Export credit notes"
+        },
+        {
+          "at": "2026-10-20T12:41:06+00:00",
+          "event": "spawned",
+          "note": "task:2026-10-20/2: Credit notes in CSV"
+        },
+        {
+          "at": "2026-10-20T12:41:07+00:00",
+          "event": "spawned",
+          "note": "task:2026-10-20/3: Credit note totals in the summary sheet"
+        }
+      ],
+      "id": "slack:C0000000001/1700000001.000001",
+      "kind": "mention",
+      "proposal": null,
+      "state": "new",
+      "title": "Priya: could you also export credit notes?",
+      "updated_at": "2026-10-20T12:41:07+00:00",
+      "url": "https://acme.slack.com/archives/C0000000001/p1700000001000001"
+    },
+    "slack:C0000000003/1700000003.000003": {
+      "created_at": "2026-10-20T12:41:09+00:00",
+      "fields": {},
+      "history": [
+        {
+          "at": "2026-10-20T12:41:09+00:00",
+          "event": "created",
+          "state": "new"
+        },
+        {
+          "at": "2026-10-20T12:41:09+00:00",
+          "event": "transition",
+          "from": "new",
+          "note": "not for me <b>bold</b>",
+          "to": "dismissed"
+        }
+      ],
+      "id": "slack:C0000000003/1700000003.000003",
+      "kind": "mention",
+      "proposal": null,
+      "state": "dismissed",
+      "title": "Lunch <img src=x onerror=alert(2)>",
+      "updated_at": "2026-10-20T12:41:09+00:00",
+      "url": ""
+    },
+    "slack:C0000000004/1700000004.000004": {
+      "created_at": "2026-10-20T12:41:09+00:00",
+      "fields": {},
+      "history": [
+        {
+          "at": "2026-10-20T12:41:09+00:00",
+          "event": "created",
+          "state": "new"
+        }
+      ],
+      "id": "slack:C0000000004/1700000004.000004",
+      "kind": "mention",
+      "proposal": null,
+      "state": "new",
+      "title": "A link that is not a web link",
+      "updated_at": "2026-10-20T12:41:09+00:00",
+      "url": "javascript:alert(document.cookie)"
+    },
+    "task:2026-10-20/1": {
+      "created_at": "2026-10-20T12:41:03+00:00",
+      "delegation": {
+        "ask": "Add credit notes to the export",
+        "at": "2026-10-20T12:41:04+00:00",
+        "link": "https://acme.slack.com/archives/C0000000001/p1700000001000001",
+        "requester": "Priya",
+        "task": "new-work",
+        "updates": 0,
+        "window": "exporter"
+      },
+      "fields": {
+        "ask": "Add credit notes to the invoice export",
+        "done_when": "credit notes appear in the monthly export",
+        "repo": "acme/exporter",
+        "requester": "Priya"
+      },
+      "history": [
+        {
+          "at": "2026-10-20T12:41:03+00:00",
+          "event": "created",
+          "note": "ask: Add credit notes to the invoice export",
+          "state": "proposed"
+        },
+        {
+          "at": "2026-10-20T12:41:03+00:00",
+          "event": "linked",
+          "note": "spawned_from slack:C0000000001/1700000001.000001",
+          "via": "https://acme.slack.com/archives/C0000000001/p1700000001000001"
+        },
+        {
+          "at": "2026-10-20T12:41:03+00:00",
+          "event": "transition",
+          "evidence": "user: yes, do the credit notes",
+          "from": "proposed",
+          "note": "go ahead",
+          "to": "accepted"
+        },
+        {
+          "at": "2026-10-20T12:41:04+00:00",
+          "event": "delegated",
+          "note": "Add credit notes to the export",
+          "task": "new-work",
+          "window": "exporter"
+        },
+        {
+          "at": "2026-10-20T12:41:04+00:00",
+          "event": "transition",
+          "from": "accepted",
+          "note": "handed to exporter",
+          "to": "delegated"
+        },
+        {
+          "at": "2026-10-20T12:41:04+00:00",
+          "event": "linked",
+          "note": "produces mypr:acme/exporter#104"
+        },
+        {
+          "at": "2026-10-20T12:41:04+00:00",
+          "event": "report",
+          "note": "Opened the credit notes PR; numbering still open",
+          "open": "whether credit notes reuse the invoice sequence",
+          "results": [
+            "https://github.com/acme/exporter/pull/104"
+          ],
+          "window": "exporter"
+        },
+        {
+          "at": "2026-10-20T12:41:04+00:00",
+          "event": "note",
+          "note": "Odd note <img src=x onerror=alert(1)> kept as text"
+        },
+        {
+          "at": "2026-10-20T12:41:04+00:00",
+          "event": "linked",
+          "note": "tracks jira:EXP-12"
+        },
+        {
+          "at": "2026-10-20T12:41:05+00:00",
+          "event": "outreach",
+          "note": "out:task:2026-10-20/1/1: slack to Dana (finance): Do credit notes reuse the invoice number sequence?"
+        },
+        {
+          "at": "2026-10-20T12:41:09+00:00",
+          "event": "user-said",
+          "note": "keep the numbering per customer, as Dana said",
+          "window": "exporter"
+        }
+      ],
+      "id": "task:2026-10-20/1",
+      "kind": "task",
+      "links": [
+        {
+          "at": "2026-10-20T12:41:03+00:00",
+          "id": "slack:C0000000001/1700000001.000001",
+          "rel": "spawned_from",
+          "via": "https://acme.slack.com/archives/C0000000001/p1700000001000001"
+        },
+        {
+          "at": "2026-10-20T12:41:04+00:00",
+          "id": "mypr:acme/exporter#104",
+          "rel": "produces"
+        },
+        {
+          "at": "2026-10-20T12:41:04+00:00",
+          "id": "jira:EXP-12",
+          "rel": "tracks"
+        }
+      ],
+      "proposal": null,
+      "report": {
+        "at": "2026-10-20T12:41:04+00:00",
+        "open": "whether credit notes reuse the invoice sequence",
+        "results": [
+          "https://github.com/acme/exporter/pull/104"
+        ],
+        "summary": "Opened the credit notes PR; numbering still open",
+        "window": "exporter"
+      },
+      "state": "delegated",
+      "title": "Export credit notes",
+      "updated_at": "2026-10-20T12:41:09+00:00",
+      "url": ""
+    },
+    "task:2026-10-20/2": {
+      "created_at": "2026-10-20T12:41:06+00:00",
+      "fields": {
+        "ask": "Export credit notes as CSV too"
+      },
+      "history": [
+        {
+          "at": "2026-10-20T12:41:06+00:00",
+          "event": "created",
+          "note": "ask: Export credit notes as CSV too",
+          "state": "proposed"
+        },
+        {
+          "at": "2026-10-20T12:41:06+00:00",
+          "event": "linked",
+          "note": "spawned_from slack:C0000000001/1700000001.000001",
+          "via": "same thread"
+        },
+        {
+          "at": "2026-10-20T12:41:07+00:00",
+          "event": "linked",
+          "note": "duplicate_of task:2026-10-20/1"
+        },
+        {
+          "at": "2026-10-20T12:41:07+00:00",
+          "event": "transition",
+          "from": "proposed",
+          "note": "duplicate of task:2026-10-20/1",
+          "to": "dropped"
+        }
+      ],
+      "id": "task:2026-10-20/2",
+      "kind": "task",
+      "links": [
+        {
+          "at": "2026-10-20T12:41:06+00:00",
+          "id": "slack:C0000000001/1700000001.000001",
+          "rel": "spawned_from",
+          "via": "same thread"
+        },
+        {
+          "at": "2026-10-20T12:41:07+00:00",
+          "id": "task:2026-10-20/1",
+          "rel": "duplicate_of"
+        }
+      ],
+      "proposal": null,
+      "state": "dropped",
+      "title": "Credit notes in CSV",
+      "updated_at": "2026-10-20T12:41:07+00:00",
+      "url": ""
+    },
+    "task:2026-10-20/3": {
+      "created_at": "2026-10-20T12:41:07+00:00",
+      "fields": {
+        "ask": "Show credit note totals"
+      },
+      "history": [
+        {
+          "at": "2026-10-20T12:41:07+00:00",
+          "event": "created",
+          "note": "ask: Show credit note totals",
+          "state": "proposed"
+        },
+        {
+          "at": "2026-10-20T12:41:07+00:00",
+          "event": "linked",
+          "note": "spawned_from slack:C0000000001/1700000001.000001",
+          "via": "same thread"
+        },
+        {
+          "at": "2026-10-20T12:41:07+00:00",
+          "event": "linked",
+          "note": "folded_into task:2026-10-20/1"
+        },
+        {
+          "at": "2026-10-20T12:41:07+00:00",
+          "event": "transition",
+          "from": "proposed",
+          "note": "folded into task:2026-10-20/1: same PR",
+          "to": "dropped"
+        }
+      ],
+      "id": "task:2026-10-20/3",
+      "kind": "task",
+      "links": [
+        {
+          "at": "2026-10-20T12:41:07+00:00",
+          "id": "slack:C0000000001/1700000001.000001",
+          "rel": "spawned_from",
+          "via": "same thread"
+        },
+        {
+          "at": "2026-10-20T12:41:07+00:00",
+          "id": "task:2026-10-20/1",
+          "rel": "folded_into"
+        }
+      ],
+      "proposal": null,
+      "state": "dropped",
+      "title": "Credit note totals in the summary sheet",
+      "updated_at": "2026-10-20T12:41:07+00:00",
+      "url": ""
+    },
+    "task:2026-10-20/4": {
+      "created_at": "2026-10-20T12:41:07+00:00",
+      "fields": {
+        "ask": "Tag and release 2.4",
+        "via": "user: release once 102 is in"
+      },
+      "history": [
+        {
+          "at": "2026-10-20T12:41:07+00:00",
+          "event": "created",
+          "note": "ask: Tag and release 2.4",
+          "state": "proposed"
+        },
+        {
+          "at": "2026-10-20T12:41:07+00:00",
+          "event": "linked",
+          "note": "blocked_by mypr:acme/exporter#102"
+        },
+        {
+          "at": "2026-10-20T12:41:08+00:00",
+          "event": "proposed",
+          "note": "accept task:2026-10-20/4 and bosun delegate 'task:2026-10-20/4' --window exporter --task new-work"
+        }
+      ],
+      "id": "task:2026-10-20/4",
+      "kind": "task",
+      "links": [
+        {
+          "at": "2026-10-20T12:41:07+00:00",
+          "id": "mypr:acme/exporter#102",
+          "rel": "blocked_by"
+        }
+      ],
+      "proposal": {
+        "action": "accept task:2026-10-20/4 and bosun delegate 'task:2026-10-20/4' --window exporter --task new-work",
+        "proposed_at": "2026-10-20T12:41:08+00:00"
+      },
+      "state": "proposed",
+      "title": "Release exporter 2.4",
+      "updated_at": "2026-10-20T12:41:08+00:00",
+      "url": ""
+    },
+    "td:000000001": {
+      "created_at": "2026-10-20T12:41:08+00:00",
+      "fields": {},
+      "history": [
+        {
+          "at": "2026-10-20T12:41:08+00:00",
+          "event": "created",
+          "state": "requested"
+        }
+      ],
+      "id": "td:000000001",
+      "kind": "td-review",
+      "proposal": null,
+      "state": "requested",
+      "title": "Exporter v2 tech design",
+      "updated_at": "2026-10-20T12:41:08+00:00",
+      "url": "https://acme.atlassian.net/wiki/spaces/ENG/pages/000000001"
+    }
+  },
+  "runs": {},
+  "said": [
+    {
+      "also_held": [],
+      "at": "2026-10-20T12:41:09+00:00",
+      "items": [
+        "task:2026-10-20/1"
+      ],
+      "session": "s-0001",
+      "text": "keep the numbering per customer, as Dana said",
+      "window": "exporter"
+    }
+  ],
+  "sources": {
+    "https://acme.slack.com/archives/C0000000001/p1700000001000001": {
+      "classification": "mention",
+      "item": "slack:C0000000001/1700000001.000001",
+      "seen_at": "2026-10-20T12:41:03+00:00"
+    }
+  },
+  "version": 1
+}

@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- Rendered by bosun install.sh. Edit bosun.env and re-run install.sh instead. -->
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>__LABEL__</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/bin/bash</string>
+    <string>-lc</string>
+    <string>exec "__BOSUN_ROOT__/bin/bosun" watchdog --once</string>
+  </array>
+  <key>EnvironmentVariables</key>
+  <dict>
+__ENV__
+  </dict>
+  <!-- Every few minutes while the Mac is awake; launchd runs one missed interval on wake. -->
+  <key>StartInterval</key>
+  <integer>__INTERVAL__</integer>
+  <key>RunAtLoad</key>
+  <false/>
+  <key>StandardOutPath</key>
+  <string>__LOG_DIR__/watchdog.launchd.out</string>
+  <key>StandardErrorPath</key>
+  <string>__LOG_DIR__/watchdog.launchd.err</string>
+</dict>
+</plist>

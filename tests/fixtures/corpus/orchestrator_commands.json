@@ -1,0 +1,646 @@
+[
+ {
+  "id": "O001",
+  "at": "day1 05:00Z",
+  "command": "bosun ledger mark-run morning",
+  "before": "allow",
+  "after": "allow"
+ },
+ {
+  "id": "O002",
+  "at": "day1 05:00Z",
+  "command": "bosun context",
+  "before": "allow",
+  "after": "allow"
+ },
+ {
+  "id": "O003",
+  "at": "day1 05:00Z",
+  "command": "bosun ledger kinds",
+  "before": "allow",
+  "after": "allow"
+ },
+ {
+  "id": "O004",
+  "at": "day1 05:01Z",
+  "command": "date -u -j -f \"%Y-%m-%dT%H:%M:%S\" \"2026-03-11T05:00:53\" +%s",
+  "before": "allow",
+  "after": "allow"
+ },
+ {
+  "id": "O005",
+  "at": "day1 05:01Z",
+  "command": "bosun my-prs",
+  "before": "allow",
+  "after": "allow"
+ },
+ {
+  "id": "O006",
+  "at": "day1 05:01Z",
+  "command": "for p in \\\n \"https://acme.slack.com/archives/C0000000001/p1700000001000001\" \\\n \"https://acme.slack.com/archives/C0000000001/p1700000002000002\" \\\n \"https://acme.slack.com/archives/C0000000002/p1700000003000003\" \\\n \"https://acme.slack.com/archives/C0000000003/p1700000004000004\" \\\n \"https://acme.slack.com/archives/C0000000003/p1700000005000005\" \\\n \"https://acme.slack.com/archives/C0000000003/p1700000006000006\" \\\n \"https://acme.slack.com/archives/C0000000003/p1700000007000007\" \\\n \"https://acme.slack.com/archives/D0000000004/p1700000008000008\" \\\n \"https://acme.slack.com/archives/C0000000001/p1700000009000009\" \\\n \"https://acme.slack.com/archives/C0000000001/p1700000010000010\"; do echo \"== $p\"; bosun ledger seen \"$p\"; done",
+  "before": "allow",
+  "after": "allow"
+ },
+ {
+  "id": "O007",
+  "at": "day1 05:01Z",
+  "command": "gh pr view https://github.com/acme/customers/pull/109 --json state,author,title,headRefOid,reviews,reviewRequests,mergedAt,closedAt; echo ===; gh pr view https://github.com/acme/ci-config/pull/110 --json state,reviewDecision,latestReviews,reviewRequests,mergeable,mergeStateStatus,statusCheckRollup,commits,updatedAt,createdAt; echo ===; gh pr view https://github.com/acme/exporter/pull/101 --json state,isDraft,reviewDecision,latestReviews,reviewRequests,mergeable,mergeStateStatus,mergedAt,updatedAt,createdAt",
+  "before": "allow",
+  "after": "allow"
+ },
+ {
+  "id": "O008",
+  "at": "day1 05:01Z",
+  "command": "bosun ledger seen \"https://acme.slack.com/archives/C0000000001/p1700000001000001\"; echo \"exit=$?\"; bosun ledger --help 2>&1 | head -40",
+  "before": "allow",
+  "after": "allow"
+ },
+ {
+  "id": "O009",
+  "at": "day1 05:01Z",
+  "command": "gh pr view https://github.com/acme/ci-config/pull/110 --json state,reviewDecision,latestReviews,reviewRequests,mergeable,mergeStateStatus,statusCheckRollup,commits,updatedAt,createdAt; echo \"-----\"; gh pr view https://github.com/acme/exporter/pull/101 --json state,isDraft,reviewDecision,latestReviews,reviewRequests,mergeable,mergeStateStatus,mergedAt,updatedAt,createdAt; echo \"-----\"; bosun pr-threads https://github.com/acme/ci-config/pull/110",
+  "before": "allow",
+  "after": "allow"
+ },
+ {
+  "id": "O010",
+  "at": "day1 05:02Z",
+  "command": "set -e\nL=\"bosun ledger\"\nS=https://acme.slack.com/archives\n# Review request: customers#109\n$L upsert \"review:acme/customers#109\" --kind review-request --title \"TICKET-101: add billing_email and tax_region to the customers table\" --url https://github.com/acme/customers/pull/109 --field requester=\"Priya Nair\" --field request_permalink=$S/C0000000001/p1700000001000001\n$L record-source $S/C0000000001/p1700000001000001 --class pr-review --item \"review:acme/customers#109\"\n$L record-source $S/C0000000001/p1700000002000002 --class pr-review --item \"review:acme/customers#109\"\n# My PRs\n$L upsert \"mypr:acme/ci-config#110\" --kind my-pr --title \"TICKET-102: drop the retired PDF snapshot job from CI\" --url https://github.com/acme/ci-config/pull/110 --field review_thread=$S/C0000000001/p1700000009000009\n$L record-source $S/C0000000001/p1700000009000009 --class my-pr --item \"mypr:acme/ci-config#110\"\n$L upsert \"mypr:acme/exporter#101\" --kind my-pr --title \"bump the currency-rates library to 2.3.0\" --url https://github.com/acme/exporter/pull/101 --field review_thread=$S/C0000000001/p1700000010000010\n$L record-source $S/C0000000001/p1700000010000010 --class my-pr --item \"mypr:acme/exporter#101\"\n$L transition \"mypr:acme/exporter#101\" merged --note \"Merged 2026-03-11 14:02Z after approval by pnair-acme\"\n# Mentions\n$L upsert \"slack:C0000000002/1700000003.000003\" --kind mention --title \"Priya: OK to add billing_email/tax_region columns + an index to the customers table? (TICKET-101)\" --url $S/C0000000002/p1700000003000003\n$L record-source $S/C0000000002/p1700000003000003 --class mention --item \"slack:C0000000002/1700000003.000003\"\n$L upsert \"slack:C0000000003/1700000004.000004\" --kind mention --title \"Marco: should overdue reminders use the customer's language? (TICKET-103)\" --url $S/C0000000003/p1700000004000004\n$L record-source $S/C0000000003/p1700000004000004 --class mention --item \"slack:C0000000003/1700000004.000004\"\n$L upsert \"slack:C0000000003/1700000005.000005\" --kind mention --title \"Dana: two exported CSV invoices for a retail customer have wrong totals\" --url $S/C0000000003/p1700000005000005\n$L record-source $S/C0000000003/p1700000005000005 --class mention --item \"slack:C0000000003/1700000005.000005\"\n$L upsert \"slack:C0000000003/1700000006.000006\" --kind mention --title \"Dana: credit notes show positive amounts in the CSV export; asks how the tax rate per line is chosen\" --url $S/C0000000003/p1700000006000006\n$L record-source $S/C0000000003/p1700000006000006 --class mention --item \"slack:C0000000003/1700000006.000006\"\n$L upsert \"slack:C0000000003/1700000007.000007\" --kind mention --title \"Lena: the monthly statement export has the same wrong totals\" --url $S/C0000000003/p1700000007000007\n$L record-source $S/C0000000003/p1700000007000007 --class mention --item \"slack:C0000000003/1700000007.000007\"\nfor id in C0000000002/1700000003.000003 C0000000003/1700000004.000004 C0000000003/1700000005.000005 C0000000003/1700000006.000006 C0000000003/1700000007.000007; do\n  $L transition \"slack:$id\" surfaced --note \"Surfaced in morning run 2026-03-12\"\ndone\n# FYI\n$L record-source $S/D0000000004/p1700000008000008 --class fyi\necho OK",
+  "before": "allow",
+  "after": "allow"
+ },
+ {
+  "id": "O011",
+  "at": "day1 05:02Z",
+  "command": "gh pr view https://github.com/acme/ci-config/pull/110 --json mergeable,mergeStateStatus",
+  "before": "allow",
+  "after": "allow"
+ },
+ {
+  "id": "O012",
+  "at": "day1 05:02Z",
+  "command": "set -e\nL() { bosun ledger \"$@\"; }\nS=https://acme.slack.com/archives\nL upsert \"review:acme/customers#109\" --kind review-request --title \"TICKET-101: add billing_email and tax_region to the customers table\" --url https://github.com/acme/customers/pull/109 --field requester=\"Priya Nair\" --field request_permalink=$S/C0000000001/p1700000001000001\nL record-source $S/C0000000001/p1700000001000001 --class pr-review --item \"review:acme/customers#109\"\nL record-source $S/C0000000001/p1700000002000002 --class pr-review --item \"review:acme/customers#109\"\nL upsert \"mypr:acme/ci-config#110\" --kind my-pr --title \"TICKET-102: drop the retired PDF snapshot job from CI\" --url https://github.com/acme/ci-config/pull/110 --field review_thread=$S/C0000000001/p1700000009000009\nL record-source $S/C0000000001/p1700000009000009 --class my-pr --item \"mypr:acme/ci-config#110\"\nL transition \"mypr:acme/ci-config#110\" approved --note \"Approved by ksato-acme and bot-acme; checks green; 0 unresolved threads; branch BEHIND base\"\nL upsert \"mypr:acme/exporter#101\" --kind my-pr --title \"bump the currency-rates library to 2.3.0\" --url https://github.com/acme/exporter/pull/101 --field review_thread=$S/C0000000001/p1700000010000010\nL record-source $S/C0000000001/p1700000010000010 --class my-pr --item \"mypr:acme/exporter#101\"\nL transition \"mypr:acme/exporter#101\" merged --note \"Merged 2026-03-11 14:02Z after approval by pnair-acme\"\nL upsert \"slack:C0000000002/1700000003.000003\" --kind mention --title \"Priya: OK to add billing_email/tax_region columns + an index to the customers table? (TICKET-101)\" --url $S/C0000000002/p1700000003000003\nL record-source $S/C0000000002/p1700000003000003 --class mention --item \"slack:C0000000002/1700000003.000003\"\nL upsert \"slack:C0000000003/1700000004.000004\" --kind mention --title \"Marco: should overdue reminders use the customer's language? (TICKET-103)\" --url $S/C0000000003/p1700000004000004\nL record-source $S/C0000000003/p1700000004000004 --class mention --item \"slack:C0000000003/1700000004.000004\"\nL upsert \"slack:C0000000003/1700000005.000005\" --kind mention --title \"Dana: two exported CSV invoices for a retail customer have wrong totals\" --url $S/C0000000003/p1700000005000005\nL record-source $S/C0000000003/p1700000005000005 --class mention --item \"slack:C0000000003/1700000005.000005\"\nL upsert \"slack:C0000000003/1700000006.000006\" --kind mention --title \"Dana: credit notes show positive amounts in the CSV export; asks how the tax rate per line is chosen\" --url $S/C0000000003/p1700000006000006\nL record-source $S/C0000000003/p1700000006000006 --class mention --item \"slack:C0000000003/1700000006.000006\"\nL upsert \"slack:C0000000003/1700000007.000007\" --kind mention --title \"Lena: the monthly statement export has the same wrong totals\" --url $S/C0000000003/p1700000007000007\nL record-source $S/C0000000003/p1700000007000007 --class mention --item \"slack:C0000000003/1700000007.000007\"\nfor id in C0000000002/1700000003.000003 C0000000003/1700000004.000004 C0000000003/1700000005.000005 C0000000003/1700000006.000006 C0000000003/1700000007.000007; do\n  L transition \"slack:$id\" surfaced --note \"Surfaced in morning run 2026-03-12\"\ndone\nL record-source $S/D0000000004/p1700000008000008 --class fyi\necho OK",
+  "before": "allow",
+  "after": "allow"
+ },
+ {
+  "id": "O013",
+  "at": "day1 05:02Z",
+  "command": "set -e\nL() { bosun ledger \"$@\"; }\nL propose \"review:acme/customers#109\" \"bosun send --new customers /Users/me/Development/customers \\\"<review-prep task for PR #109>\\\"\"\nL propose \"mypr:acme/ci-config#110\" \"gh pr update-branch https://github.com/acme/ci-config/pull/110, then once checks pass: gh pr merge https://github.com/acme/ci-config/pull/110 --squash\"\nL list --proposals",
+  "before": "allow",
+  "after": "allow"
+ },
+ {
+  "id": "O014",
+  "at": "day1 06:00Z",
+  "command": "bosun ledger mark-run check-in; bosun context | sed -n '/## Now/,/## Chores/p;/## tmux/,/## Repositories/p;/## Open ledger items/,$p'",
+  "before": "allow",
+  "after": "allow"
+ },
+ {
+  "id": "O015",
+  "at": "day1 06:00Z",
+  "command": "gh pr view https://github.com/acme/customers/pull/109 --json state,headRefOid,reviews,reviewRequests,mergedAt,closedAt --jq '{state,headRefOid,mergedAt,closedAt,reviewers:[.reviews[].author.login],reqs:[.reviewRequests[].slug]}'; echo \"-----\"; gh pr view https://github.com/acme/ci-config/pull/110 --json state,reviewDecision,mergeable,mergeStateStatus,updatedAt; echo \"-----\"; bosun pr-threads https://github.com/acme/ci-config/pull/110; echo \"-----\"; bosun my-prs",
+  "before": "allow",
+  "after": "allow"
+ },
+ {
+  "id": "O016",
+  "at": "day1 06:39Z",
+  "command": "bosun send --help; bosun context | sed -n '/## tmux/,/## Repositories/p'",
+  "before": "allow",
+  "after": "allow"
+ },
+ {
+  "id": "O017",
+  "at": "day1 06:39Z",
+  "command": "bosun send --new customers /Users/me/Development/customers \"Ledger id: review:acme/customers#109\nPR: https://github.com/acme/customers/pull/109\nRequester: Priya Nair (Slack: https://acme.slack.com/archives/C0000000001/p1700000001000001)\nAsk: review the PR adding billing_email and tax_region (plus an index) to the customers table (TICKET-101). Priya also asks whether the one-off backfill belongs in the repo or should be run by hand.\n\nPrepare this locally: run git pull origin main first, then check out the PR and draft a review in a local markdown file. Use a straightforward, informal tone, include inline comments with file:line, and end with a verdict (approve with comments, or request changes). the user's main feedback, which must be in the review: add a backfill for existing rows so the new columns do not have to be nullable. Also answer the backfill question and check the repo's conventions for schema changes.\nDo not post, comment, approve, merge or push anything.\nWhen done, run: bosun ledger transition review:acme/customers#109 prepared --note \\\"<one-line summary incl. verdict; where the draft is>\\\"\"",
+  "before": "allow",
+  "after": "deny"
+ },
+ {
+  "id": "O018",
+  "at": "day1 06:39Z",
+  "command": "bosun send --new exporter-totals /Users/me/Development/exporter \"Ledger ids: slack:C0000000003/1700000005.000005, slack:C0000000003/1700000006.000006, slack:C0000000003/1700000007.000007\nThread: https://acme.slack.com/archives/C0000000003/p1700000011000011 (#exports)\nRequesters: Dana Brooks (wrong totals on two exported invoices, accounts 00000000-0000-0000-0000-000000000001 and 00000000-0000-0000-0000-000000000002), Lena Ortiz (the same totals in the monthly statement export)\nAsk: find why those two CSV invoices have wrong totals and why their credit notes come out positive, fix both, and check the monthly statement export for the same bug.\n\nPrepare this locally:\n1. Read the Slack thread for the full list. For each item find the cause (rounding, currency conversion, the sign of credit notes, the tax rate lookup), with logs where useful. Also answer Dana's question about how the export picks the tax rate for each line.\n2. Draft fixes as local commits on a new branch, with a unit test for each case.\n3. Check the monthly statement export for the same bug and fix it there too if it has it.\n4. Write a short triage report (markdown) with the cause of each item and the fixes made.\nDo not post, comment, approve, merge or push anything.\nWhen done, run for each ledger id: bosun ledger note <id> \\\"<one-line summary; branch and report path>\\\"\"",
+  "before": "allow",
+  "after": "deny"
+ },
+ {
+  "id": "O019",
+  "at": "day1 06:39Z",
+  "command": "set -e\nL() { bosun ledger \"$@\"; }\nL resolve \"review:acme/customers#109\" done --note \"Approved; window customers opened\"\nL transition \"review:acme/customers#109\" delegated --note \"Sent to customers window; the user's key point: backfill so new columns are non-nullable. the user pre-approved posting an approval if the review finds no blockers\"\nfor id in C0000000003/1700000005.000005 C0000000003/1700000006.000006 C0000000003/1700000007.000007; do\n  L note \"slack:$id\" \"Delegated to exporter-totals window: triage and fixes as local commits\"\ndone",
+  "before": "allow",
+  "after": "allow"
+ },
+ {
+  "id": "O020",
+  "at": "day1 07:12Z",
+  "command": "cat /Users/me/Development/bosun/orchestrator/policy.md; echo \"-----\"; cat /Users/me/Development/bosun/orchestrator/plugin/commands/chores.md; echo \"-----\"; bosun context | sed -n '/## tmux/,/## Repositories/p'; bosun ledger show \"review:acme/customers#109\"",
+  "before": "allow",
+  "after": "allow"
+ },
+ {
+  "id": "O021",
+  "at": "day1 07:27Z",
+  "command": "bosun ledger list --open; date",
+  "before": "allow",
+  "after": "allow"
+ },
+ {
+  "id": "O022",
+  "at": "day1 08:00Z",
+  "command": "bosun ledger mark-run check-in; bosun context | sed -n '/## Now/,/## Chores/p;/## tmux/,/## Repositories/p;/## Open ledger items/,$p'",
+  "before": "allow",
+  "after": "allow"
+ },
+ {
+  "id": "O023",
+  "at": "day1 08:00Z",
+  "command": "gh pr view https://github.com/acme/customers/pull/109 --json state,headRefOid,reviews,reviewRequests,mergedAt,closedAt,commits --jq '{state,headRefOid,mergedAt,closedAt,reviews:[.reviews[]|{a:.author.login,s:.state,t:.submittedAt,c:.commit.oid}],reqs:[.reviewRequests[]|(.login // .slug)],lastCommit:(.commits[-1]|{oid,committedDate})}'; echo \"-----\"; bosun ledger show \"review:acme/customers#109\" | grep -A3 '\"fields\"'; echo \"-----\"; gh pr view https://github.com/acme/ci-config/pull/110 --json state,reviewDecision,mergeable,mergeStateStatus,updatedAt; bosun pr-threads https://github.com/acme/ci-config/pull/110; echo \"-----\"; bosun my-prs",
+  "before": "allow",
+  "after": "allow"
+ },
+ {
+  "id": "O024",
+  "at": "day1 08:01Z",
+  "command": "set -e\nL() { bosun ledger \"$@\"; }\nL transition \"mypr:acme/ci-config#110\" merged --note \"Merged 2026-03-12 06:45Z by the user directly\"\nL resolve \"mypr:acme/ci-config#110\" withdrawn --note \"Merged outside bosun\"\nL transition \"slack:C0000000002/1700000003.000003\" done --note \"the user replied in thread: OK if needed, but non-nullable with backfill\"\nL transition \"slack:C0000000003/1700000004.000004\" done --note \"the user replied in thread: yes, the customer's language, English as the fallback\"\nL record-source https://acme.slack.com/archives/D0000000005/p1700000012000012 --class fyi\nfor id in C0000000003/1700000005.000005 C0000000003/1700000006.000006; do L show \"slack:$id\" | grep '\"note\"' | tail -1; done",
+  "before": "allow",
+  "after": "allow"
+ },
+ {
+  "id": "O025",
+  "at": "day1 09:00Z",
+  "command": "bosun ledger mark-run check-in; bosun context | sed -n '/## Now/,/## Chores/p;/## tmux/,/## Repositories/p;/## Open ledger items/,$p'",
+  "before": "allow",
+  "after": "allow"
+ },
+ {
+  "id": "O026",
+  "at": "day1 09:00Z",
+  "command": "gh pr view https://github.com/acme/customers/pull/109 --json state,headRefOid,reviewRequests,mergedAt,closedAt --jq '{state,headRefOid,mergedAt,closedAt,reqs:[.reviewRequests[]|(.login // .slug)]}'; echo \"-----\"; bosun my-prs; echo \"-----\"; for id in C0000000003/1700000005.000005 C0000000003/1700000006.000006 C0000000003/1700000007.000007; do bosun ledger show \"slack:$id\" | grep '\"note\"' | tail -1; done",
+  "before": "allow",
+  "after": "allow"
+ },
+ {
+  "id": "O027",
+  "at": "day1 09:01Z",
+  "command": "U=https://github.com/acme/exporter/pull/102; gh pr view $U --json state,author,isDraft,reviewDecision,latestReviews,reviewRequests,mergeable,mergeStateStatus,statusCheckRollup,commits,updatedAt,createdAt --jq '{state,author:.author.login,isDraft,reviewDecision,mergeable,mergeStateStatus,reviews:[.latestReviews[]|{a:.author.login,s:.state}],reqs:[.reviewRequests[]|(.login // .slug)],checks:[.statusCheckRollup[]|{n:(.name // .context),s:(.conclusion // .state // .status)}],commits:(.commits|length)}'; bosun pr-threads $U",
+  "before": "allow",
+  "after": "allow"
+ },
+ {
+  "id": "O028",
+  "at": "day1 09:01Z",
+  "command": "set -e\nL() { bosun ledger \"$@\"; }\nID=\"mypr:acme/exporter#102\"\nL upsert \"$ID\" --kind my-pr --title \"fix(csv-export): correct totals and credit-note signs in CSV exports\" --url https://github.com/acme/exporter/pull/102\nL transition \"$ID\" changes-requested --note \"4 unresolved CodeQL threads (unused imports in totals.py and credit_notes.py); CodeQL check failing; CI push pending\"\nbosun send exporter-tax \"Ledger id: mypr:acme/exporter#102\nPR: https://github.com/acme/exporter/pull/102\nRequester: github-advanced-security (CodeQL)\nAsk: address the 4 unresolved CodeQL review threads (unused imports in exporter/totals.py and exporter/credit_notes.py). If one is a false positive, say why in the reply instead of changing code.\n\nFix the unresolved review comments as new commits on the PR branch and push them (no force push).\nReply in each review thread you addressed with one line on what changed and the commit.\nDo not resolve threads, re-request review, merge, or post on Slack.\nWhen done, run: bosun ledger note mypr:acme/exporter#102 \\\"<pushed commits; threads answered; anything left open>\\\"\"\nL transition \"$ID\" addressing --note \"Sent CodeQL fixes to exporter-tax window (session was busy; task queued)\"\nfor id in C0000000003/1700000005.000005 C0000000003/1700000006.000006 C0000000003/1700000007.000007; do L note \"slack:$id\" \"Work landed in exporter#102\"; done",
+  "before": "allow",
+  "after": "deny"
+ },
+ {
+  "id": "O029",
+  "at": "day1 09:47Z",
+  "command": "bosun ledger seen \"https://acme.slack.com/archives/C0000000001/p1700000013000013\"; echo \"exit=$?\"",
+  "before": "allow",
+  "after": "allow"
+ },
+ {
+  "id": "O030",
+  "at": "day1 09:47Z",
+  "command": "gh pr view https://github.com/acme/billing-api/pull/111 --json state,author,title,headRefOid,reviews,reviewRequests,mergedAt,closedAt,commits --jq '{state,title,headRefOid,mergedAt,closedAt,mine:[.reviews[]|select(.author.login==\"me-acme\")|{s:.state,t:.submittedAt,c:.commit.oid}],reqs:[.reviewRequests[]|(.login // .slug)],commits:[.commits[]|{oid:.oid[0:8],d:.committedDate,h:.messageHeadline}]}'; bosun ledger show \"review:acme/billing-api#111\" 2>&1 | head -3",
+  "before": "allow",
+  "after": "allow"
+ },
+ {
+  "id": "O031",
+  "at": "day1 09:47Z",
+  "command": "set -e\nL() { bosun ledger \"$@\"; }\nID=\"review:acme/billing-api#111\"\nP=https://acme.slack.com/archives/C0000000001/p1700000013000013\nL upsert \"$ID\" --kind review-request --title \"TICKET-104: show amounts in the invoice currency on the payment page\" --url https://github.com/acme/billing-api/pull/111 --field requester=\"Priya Nair\" --field request_permalink=$P\nL record-source $P --class pr-review --item \"$ID\"\nL transition \"$ID\" reviewed --note \"the user reviewed 2026-03-11 10:02Z (COMMENT)\" --field reviewed_at=2026-03-11T10:02:10Z --field reviewed_sha=0000001abc\nL transition \"$ID\" closed --note \"Merged 2026-03-11 17:48Z after Omar's re-review; Priya's re-review request to the user was not acted on\"",
+  "before": "allow",
+  "after": "allow"
+ },
+ {
+  "id": "O032",
+  "at": "day1 10:00Z",
+  "command": "bosun ledger mark-run check-in; bosun context | sed -n '/## Now/,/## Chores/p;/## tmux/,/## Repositories/p;/## Open ledger items/,$p'; bosun my-prs; for id in \"mypr:acme/exporter#102\" \"slack:C0000000003/1700000005.000005\"; do bosun ledger show \"$id\" | grep '\"note\"' | tail -2; done",
+  "before": "allow",
+  "after": "allow"
+ },
+ {
+  "id": "O033",
+  "at": "day1 10:01Z",
+  "command": "for n in 102 103 104; do U=https://github.com/acme/exporter/pull/$n; echo \"== #$n\"; gh pr view $U --json state,isDraft,reviewDecision,latestReviews,mergeable,mergeStateStatus,statusCheckRollup,updatedAt --jq '{state,isDraft,reviewDecision,mergeable,mergeStateStatus,reviews:[.latestReviews[]|{a:.author.login,s:.state}],failing:[.statusCheckRollup[]|select((.conclusion // .state)==\"FAILURE\")|(.name // .context)],pending:[.statusCheckRollup[]|select((.conclusion // .state // \"\")==\"\" or (.state // \"\")==\"PENDING\")|(.name // .context)]}'; bosun pr-threads $U | head -8; done",
+  "before": "allow",
+  "after": "allow"
+ },
+ {
+  "id": "O034",
+  "at": "day1 10:01Z",
+  "command": "set -e\nL() { bosun ledger \"$@\"; }\nG=https://github.com/acme/exporter/pull\nL transition \"mypr:acme/exporter#102\" awaiting-review --note \"CodeQL fixes pushed (0000002ab, 0000003ab); 0 unresolved threads; CI push pending; session still addressing its own /code-review findings\"\nL upsert \"mypr:acme/exporter#103\" --kind my-pr --title \"feat(pdf-export): print the payment terms and due date on invoice PDFs\" --url $G/103\nL transition \"mypr:acme/exporter#103\" changes-requested --note \"9 unresolved CodeQL threads (unused variables in tests); CI push and lint checks failing\"\nL upsert \"mypr:acme/exporter#104\" --kind my-pr --title \"feat(csv-export): export discounts as their own lines\" --url $G/104\nL note \"mypr:acme/exporter#104\" \"Opened 09:44Z, review required; lint check failing; 0 threads\"\nbosun send exporter-tax \"Ledger id: mypr:acme/exporter#103\nPR: $G/103\nRequester: github-advanced-security (CodeQL)\nAsk: address the 9 unresolved CodeQL review threads (mostly unused variables in tests), and check why ci/push is failing. If a finding is a false positive, say why in the reply instead of changing code.\n\nFix the unresolved review comments as new commits on the PR branch and push them (no force push).\nReply in each review thread you addressed with one line on what changed and the commit.\nDo not resolve threads, re-request review, merge, or post on Slack.\nWhen done, run: bosun ledger note mypr:acme/exporter#103 \\\"<pushed commits; threads answered; anything left open>\\\"\"\nL transition \"mypr:acme/exporter#103\" addressing --note \"Sent CodeQL + CI fixes to exporter-tax (queued; session busy)\"\nL record-source https://acme.slack.com/archives/D0000000005/p1700000014000014 --class fyi\nL propose \"slack:C0000000003/1700000007.000007\" \"Reply in thread C0000000003/1700000011.000011: Thanks Dana and Lena. The fix for both invoices and the monthly statement is up for review in https://github.com/acme/exporter/pull/102. I'll follow up here on how the tax rate is picked per line.\"",
+  "before": "allow",
+  "after": "deny"
+ },
+ {
+  "id": "O035",
+  "at": "day1 11:00Z",
+  "command": "bosun ledger mark-run check-in; bosun context | sed -n '/## Now/,/## Chores/p;/## tmux/,/## Repositories/p;/## Open ledger items/,$p'; bosun my-prs; for id in \"mypr:acme/exporter#102\" \"mypr:acme/exporter#103\" \"mypr:acme/exporter#104\"; do echo \"-- $id\"; bosun ledger show \"$id\" | grep '\"note\"' | tail -1; done",
+  "before": "allow",
+  "after": "allow"
+ },
+ {
+  "id": "O036",
+  "at": "day1 11:01Z",
+  "command": "for n in 102 103 104; do U=https://github.com/acme/exporter/pull/$n; echo \"== #$n\"; gh pr view $U --json state,reviewDecision,latestReviews,mergeStateStatus,statusCheckRollup --jq '{state,reviewDecision,mergeStateStatus,reviews:[.latestReviews[]|{a:.author.login,s:.state}],failing:[.statusCheckRollup[]|select((.conclusion // .state)==\"FAILURE\")|(.name // .context)],pending:[.statusCheckRollup[]|select((.conclusion // .state // \"\")==\"\" or (.state // \"\")==\"PENDING\")|(.name // .context)]}'; bosun pr-threads $U | head -1; done; gh pr view https://github.com/acme/customers/pull/109 --json state,headRefOid,reviewRequests --jq '{state,headRefOid,reqs:[.reviewRequests[]|(.login // .slug)]}'",
+  "before": "allow",
+  "after": "allow"
+ },
+ {
+  "id": "O037",
+  "at": "day1 11:01Z",
+  "command": "bosun pr-threads https://github.com/acme/exporter/pull/103",
+  "before": "allow",
+  "after": "allow"
+ },
+ {
+  "id": "O038",
+  "at": "day1 11:01Z",
+  "command": "gh pr view https://github.com/acme/exporter/pull/103 --json body --jq .body | head -40",
+  "before": "allow",
+  "after": "allow"
+ },
+ {
+  "id": "O039",
+  "at": "day1 11:01Z",
+  "command": "set -e\nL() { bosun ledger \"$@\"; }\nS=https://acme.slack.com/archives/C0000000001\nL upsert \"mypr:acme/exporter#102\" --field review_thread=$S/p1700000015000015\nL record-source $S/p1700000015000015 --class my-pr --item \"mypr:acme/exporter#102\"\nL upsert \"mypr:acme/exporter#104\" --field review_thread=$S/p1700000016000016\nL record-source $S/p1700000016000016 --class my-pr --item \"mypr:acme/exporter#104\"\nL transition \"mypr:acme/exporter#103\" awaiting-review --note \"All CodeQL threads answered; 2 left unresolved are false positives (re-exported names in exporter/__init__.py); CI push pending; no Slack review request yet\"\nL propose \"mypr:acme/exporter#103\" \"Post in #code-review: review request for exporter #103 (text in plan)\"\nL resolve \"slack:C0000000003/1700000007.000007\" withdrawn --note \"Replaced with revised text including the tax-rate answer\"\nL propose \"slack:C0000000003/1700000007.000007\" \"Reply in Dana's thread C0000000003/1700000011.000011 (revised text in plan)\"",
+  "before": "allow",
+  "after": "allow"
+ },
+ {
+  "id": "O040",
+  "at": "day1 11:01Z",
+  "command": "S=https://acme.slack.com/archives/C0000000001\nbosun ledger upsert \"mypr:acme/exporter#102\" --kind my-pr --field review_thread=$S/p1700000015000015\nbosun ledger upsert \"mypr:acme/exporter#104\" --kind my-pr --field review_thread=$S/p1700000016000016",
+  "before": "allow",
+  "after": "allow"
+ },
+ {
+  "id": "O041",
+  "at": "day1 11:31Z",
+  "command": "set -e\nL() { bosun ledger \"$@\"; }\nL resolve \"slack:C0000000003/1700000007.000007\" rejected --note \"the user: already replied comprehensively in the project channel via exporter-tax sessions\"\nfor id in C0000000003/1700000005.000005 C0000000003/1700000006.000006 C0000000003/1700000007.000007; do\n  L transition \"slack:$id\" done --note \"Replied in project channel via exporter-tax sessions (per the user)\"\ndone",
+  "before": "allow",
+  "after": "allow"
+ },
+ {
+  "id": "O042",
+  "at": "day1 11:31Z",
+  "command": "set -e\nS=https://acme.slack.com/archives/C0000000001\nbosun ledger resolve \"mypr:acme/exporter#103\" withdrawn --note \"Already posted by the user's exporter-tax session at 11:03Z\"\nbosun ledger upsert \"mypr:acme/exporter#103\" --kind my-pr --field review_thread=$S/p1700000017000017\nbosun ledger record-source $S/p1700000017000017 --class my-pr --item \"mypr:acme/exporter#103\"\nbosun ledger record-source $S/p1700000018000018 --class my-pr --item \"mypr:acme/exporter#103\"",
+  "before": "allow",
+  "after": "allow"
+ },
+ {
+  "id": "O043",
+  "at": "day1 11:32Z",
+  "command": "date; date -u",
+  "before": "allow",
+  "after": "allow"
+ },
+ {
+  "id": "O044",
+  "at": "day1 12:02Z",
+  "command": "date; bosun ledger list --open; bosun ledger list --proposals",
+  "before": "allow",
+  "after": "allow"
+ },
+ {
+  "id": "O045",
+  "at": "day1 12:28Z",
+  "command": "bosun ledger mark-run check-in; bosun context | sed -n '/## Now/,/## Chores/p;/## tmux/,/## Repositories/p;/## Open ledger items/,$p'; bosun my-prs; bosun delegate --help 2>&1 | head -30",
+  "before": "allow",
+  "after": "allow"
+ },
+ {
+  "id": "O046",
+  "at": "day1 12:29Z",
+  "command": "for n in 102 103 104; do U=https://github.com/acme/exporter/pull/$n; echo \"== #$n\"; gh pr view $U --json state,reviewDecision,latestReviews,mergeStateStatus,statusCheckRollup,updatedAt --jq '{state,reviewDecision,mergeStateStatus,updatedAt,reviews:[.latestReviews[]|{a:.author.login,s:.state,t:.submittedAt}],failing:[.statusCheckRollup[]|select((.conclusion // .state)==\"FAILURE\")|(.name // .context)]}'; bosun pr-threads $U | head -1; done; gh pr view https://github.com/acme/customers/pull/109 --json state,headRefOid,reviewRequests --jq '{state,headRefOid,reqs:[.reviewRequests[]|(.login // .slug)]}'",
+  "before": "allow",
+  "after": "allow"
+ },
+ {
+  "id": "O047",
+  "at": "day1 14:28Z",
+  "command": "date; bosun ledger mark-run check-in; bosun context",
+  "before": "allow",
+  "after": "allow"
+ },
+ {
+  "id": "O048",
+  "at": "day1 14:29Z",
+  "command": "bosun my-prs; for n in 102 103 104; do echo \"== $n\"; gh pr view https://github.com/acme/exporter/pull/$n --json state,reviewDecision,latestReviews,reviewRequests,mergeStateStatus,updatedAt -q '{state,reviewDecision,mergeStateStatus,updatedAt,reviews:[.latestReviews[]|{a:.author.login,s:.state,t:.submittedAt}],req:[.reviewRequests[]|(.login//.name)]}'; bosun pr-threads https://github.com/acme/exporter/pull/$n; done; echo \"== customers#109\"; gh pr view https://github.com/acme/customers/pull/109 --json state,headRefOid,reviewRequests,mergedAt -q '{state,headRefOid,mergedAt,req:[.reviewRequests[]|(.login//.name)]}'",
+  "before": "allow",
+  "after": "allow"
+ },
+ {
+  "id": "O049",
+  "at": "day1 14:29Z",
+  "command": "L() { bosun ledger \"$@\"; }; for n in 102 103; do L show mypr:acme/exporter#$n; done; gh api repos/acme/exporter/pulls/102/comments -q '.[]|select(.id==1000000001)|.body'; echo ----; gh api repos/acme/exporter/pulls/103/reviews -q '.[]|select(.user.login==\"pnair-acme\")|.body' | head -40; gh api repos/acme/exporter/pulls/102/reviews -q '.[]|select(.user.login==\"pnair-acme\")|.body' | head -20; bosun delegate --help 2>&1 | head -40",
+  "before": "allow",
+  "after": "allow"
+ },
+ {
+  "id": "O050",
+  "at": "day2 05:30Z",
+  "command": "date",
+  "before": "allow",
+  "after": "allow"
+ },
+ {
+  "id": "O051",
+  "at": "day2 05:31Z",
+  "command": "for p in D0000000006/p1700000019000019 D0000000007/p1700000020000020 D0000000007/p1700000021000021 D0000000004/p1700000022000022 D0000000004/p1700000023000023 D0000000008/p1700000024000024 D0000000009/p1700000025000025 D0000000009/p1700000026000026 D0000000009/p1700000027000027 C0000000002/p1700000028000028 C0000000001/p1700000029000029 C0000000001/p1700000030000030 C0000000001/p1700000031000031 C0000000001/p1700000032000032 C0000000003/p1700000033000033 C0000000003/p1700000034000034 C0000000003/p1700000035000035 C0000000010/p1700000036000036; do printf '%s: ' $p; bosun ledger seen https://acme.slack.com/archives/$p; done\nfor u in exporter/pull/105 billing-api/pull/112 exporter/pull/106; do echo \"== $u\"; gh pr view https://github.com/acme/$u --json state,author,title,headRefOid,mergedAt,reviews,reviewRequests -q '{state,a:.author.login,title,headRefOid,mergedAt,mine:[.reviews[]|select(.author.login==\"me-acme\")|{s:.state,t:.submittedAt}],req:[.reviewRequests[]|(.login//.name)]}'; done",
+  "before": "allow",
+  "after": "allow"
+ },
+ {
+  "id": "O052",
+  "at": "day2 05:31Z",
+  "command": "bosun ledger seen https://acme.slack.com/archives/C0000000001/p1700000017000017; echo \"rc=$?\"; bosun ledger seen https://acme.slack.com/archives/C0000000001/p1700000029000029; echo \"rc=$?\"",
+  "before": "allow",
+  "after": "allow"
+ },
+ {
+  "id": "O053",
+  "at": "day2 05:31Z",
+  "command": "bosun ledger kinds 2>&1 | head -60",
+  "before": "allow",
+  "after": "allow"
+ },
+ {
+  "id": "O054",
+  "at": "day2 05:32Z",
+  "command": "set -e; L() { bosun ledger \"$@\"; }; S=https://acme.slack.com/archives\n# fyi\nfor p in D0000000006/p1700000019000019 D0000000007/p1700000020000020 D0000000007/p1700000021000021 D0000000008/p1700000024000024 D0000000009/p1700000025000025 D0000000009/p1700000026000026 D0000000009/p1700000027000027 C0000000002/p1700000028000028 C0000000010/p1700000036000036; do L record-source $S/$p --class fyi >/dev/null; done\n# pr reviews\nL upsert review:acme/exporter#105 --kind review-request --title 'TICKET-105: print the billing email and tax region on exported invoices' --url https://github.com/acme/exporter/pull/105 --field requester='Priya Nair' --field request_permalink=$S/C0000000001/p1700000029000029 >/dev/null\nL record-source $S/C0000000001/p1700000029000029 --class pr-review --item review:acme/exporter#105 >/dev/null\nL upsert review:acme/billing-api#112 --kind review-request --title 'Move the late-fee calculation to a nightly job' --url https://github.com/acme/billing-api/pull/112 --field requester='Priya Nair' --field request_permalink=$S/C0000000001/p1700000031000031 >/dev/null\nL record-source $S/C0000000001/p1700000031000031 --class pr-review --item review:acme/billing-api#112 >/dev/null\nL upsert review:acme/exporter#106 --kind review-request --title 'fix(reminders): skip reminders for invoices already paid by bank transfer' --url https://github.com/acme/exporter/pull/106 --field requester='Lena Ortiz' --field request_permalink=$S/C0000000001/p1700000030000030 >/dev/null\nL record-source $S/C0000000001/p1700000030000030 --class pr-review --item review:acme/exporter#106 >/dev/null\n# mentions\nm() { L upsert slack:$1 --kind mention --title \"$2\" --url $S/$3 >/dev/null; L record-source $S/$3 --class mention --item slack:$1 >/dev/null; L transition slack:$1 surfaced --note \"$2\" >/dev/null; }\nm D0000000004/1700000023.000023 'Elif: suggests a quick note to Tomas re the moved planning meeting' D0000000004/p1700000022000022\nL record-source $S/D0000000004/p1700000023000023 --class mention --item slack:D0000000004/1700000023.000023 >/dev/null\nm C0000000001/1700000032.000032 'Priya: remove merged backfill scripts from customers now or with the non-nullable PR?' C0000000001/p1700000032000032\nm C0000000003/1700000033.000033 'Marco: instalment plans need backend support; asks the user for a plan' C0000000003/p1700000033000033\nm C0000000003/1700000034.000034 'Omar Haddad: does anything still use the legacy XML export? (TICKET-106)' C0000000003/p1700000034000034\nm C0000000003/1700000035.000035 'Marco: the ERP sync drops payment terms; asks the user to see his earlier note' C0000000003/p1700000035000035\necho ok",
+  "before": "allow",
+  "after": "allow"
+ },
+ {
+  "id": "O055",
+  "at": "day2 05:32Z",
+  "command": "L() { bosun ledger \"$@\"; }\nL transition mypr:acme/exporter#102 changes-requested --note 'Priya approved 14:13Z with 1 open thread: a test for zero-amount lines in totals.py; merge order vs #104' >/dev/null\nL transition mypr:acme/exporter#103 changes-requested --note 'Priya CHANGES_REQUESTED 13:15Z: 2 threads (the terms block overlaps the footer on two-page invoices; due date printed in UTC, not in the customer time zone)' >/dev/null\nfor n in 102 103; do L transition mypr:acme/exporter#$n addressing --note 'fix-my-pr delegated to exporter-tax' >/dev/null; done\nbosun delegate fix-my-pr --id 'mypr:acme/exporter#103' --link 'https://github.com/acme/exporter/pull/103' --requester 'Priya Nair' --ask 'Address the two threads in the changes-requested review' --window exporter-tax; echo \"rc103=$?\"\nbosun delegate fix-my-pr --id 'mypr:acme/exporter#102' --link 'https://github.com/acme/exporter/pull/102' --requester 'Priya Nair' --ask 'Address the open thread on zero-amount lines (and the merge order with #104)' --window exporter-tax --details - <<'EOF'\nThe PR is already approved; only the one open thread remains. Do not merge. #104 also changes totals.py, so keep the change small and say if the two conflict.\nEOF\necho \"rc102=$?\"",
+  "before": "allow",
+  "after": "allow"
+ },
+ {
+  "id": "O056",
+  "at": "day2 05:32Z",
+  "command": "L() { bosun ledger \"$@\"; }\nd() { id=$1; url=$2; req=$3; ask=$4; win=$5\n  L transition \"$id\" delegated --note \"review delegated to $win\" >/dev/null\n  if bosun delegate review --id \"$id\" --link \"$url\" --requester \"$req\" --ask \"$ask\" --window \"$win\"; then echo \"$id ok\"; else L transition \"$id\" requested --note \"delegate to $win failed\" >/dev/null; echo \"$id FAILED\"; fi; }\nd 'review:acme/exporter#105' 'https://github.com/acme/exporter/pull/105' 'Priya Nair' 'Review printing the billing email and tax region on exported invoices (builds on customers#109)' exporter\nd 'review:acme/exporter#106' 'https://github.com/acme/exporter/pull/106' 'Lena Ortiz' 'Review skipping reminders for invoices paid by bank transfer' exporter\nd 'review:acme/billing-api#112' 'https://github.com/acme/billing-api/pull/112' 'Priya Nair' 'Review moving the late-fee calculation to a nightly job' billing-api",
+  "before": "allow",
+  "after": "allow"
+ },
+ {
+  "id": "O057",
+  "at": "day2 05:32Z",
+  "command": "L() { bosun ledger \"$@\"; }\nL propose 'slack:C0000000001/1700000032.000032' 'Reply in thread: \"No rush, fine to drop them in the follow-up PR that makes the columns non-nullable.\"' >/dev/null\nL propose 'slack:C0000000003/1700000034.000034' \"bosun delegate investigate --id 'slack:C0000000003/1700000034.000034' --link <permalink> --requester 'Omar Haddad' --ask 'Find out whether anything still uses the legacy XML export (TICKET-106)' --window exporter-tax\" >/dev/null\nL propose 'slack:C0000000003/1700000033.000033' \"bosun delegate investigate,new-work --id 'slack:C0000000003/1700000033.000033' --link <permalink> --requester 'Marco Rossi' --ask 'Scope and build backend support for instalment plans' --window exporter-tax\" >/dev/null; echo ok",
+  "before": "allow",
+  "after": "allow"
+ },
+ {
+  "id": "O058",
+  "at": "day2 05:40Z",
+  "command": "L() { bosun ledger \"$@\"; }\nL resolve 'slack:C0000000001/1700000032.000032' done >/dev/null; L transition 'slack:C0000000001/1700000032.000032' done --note 'Replied in thread: drop scripts in the non-nullable follow-up PR' >/dev/null\nL resolve 'slack:C0000000003/1700000034.000034' done >/dev/null\ntmux list-windows -t bosun -F '#{window_name}' >/dev/null; bosun context | sed -n '/tmux windows/,/Repositories/p'",
+  "before": "allow",
+  "after": "allow"
+ },
+ {
+  "id": "O059",
+  "at": "day2 05:40Z",
+  "command": "bosun delegate investigate --id 'slack:C0000000003/1700000034.000034' --link 'https://acme.slack.com/archives/C0000000003/p1700000034000034' --requester 'Omar Haddad' --ask 'Does anything still call the legacy XML export (TICKET-106)?' --window exporter --details - <<'EOF'\nthe user wants a clear yes or no. Search exporter and billing-api for callers (billing-api checkout: /Users/me/Development/billing-api; pull main first in both), and count the requests to the XML endpoint per account in the last 30 days of access logs. Relevant PRs: exporter #107/#108 and billing-api #113 (the CSV and PDF endpoints that replaced it).\nIf anything still uses it: list the callers and the accounts, and say what removing the endpoint would take. Do not change code, open PRs, or reply in Slack; report findings only.\nEOF\necho rc=$?",
+  "before": "allow",
+  "after": "allow"
+ },
+ {
+  "id": "O060",
+  "at": "day2 05:40Z",
+  "command": "bosun ledger note 'slack:C0000000003/1700000034.000034' 'Investigation delegated to exporter window (approved by the user); awaiting a clear answer, no Slack reply yet' 2>&1 | tail -1",
+  "before": "allow",
+  "after": "allow"
+ },
+ {
+  "id": "O061",
+  "at": "day2 05:42Z",
+  "command": "bosun delegate --list 2>&1 | sed -n '/investigate/,/^$/p' | head -30; bosun context | sed -n '/tmux windows/,/Repositories/p'",
+  "before": "allow",
+  "after": "allow"
+ },
+ {
+  "id": "O062",
+  "at": "day2 05:42Z",
+  "command": "bosun delegate investigate --id 'slack:C0000000003/1700000033.000033' --link 'https://acme.slack.com/archives/C0000000003/p1700000033000033' --requester 'Marco Rossi' --ask 'Plan backend support for instalment plans' --window exporter --details - <<'EOF'\nRead Marco's thread (link above) for what he wants, and write a short plan: what changes in the invoice and payment data, how reminders and the ERP sync treat an instalment, and the open questions for product.\nWrite the plan to /Users/me/Development/plans/instalment-plans.md (outside the repo). Pull main first. Do not change code, open PRs, or post anything. Report a short summary when done.\nEOF\necho rc=$?; bosun ledger resolve 'slack:C0000000003/1700000033.000033' done >/dev/null; bosun ledger note 'slack:C0000000003/1700000033.000033' 'Plan for instalment plans delegated to exporter window per the user; plan file plans/instalment-plans.md' | tail -1",
+  "before": "allow",
+  "after": "allow"
+ },
+ {
+  "id": "O063",
+  "at": "day2 05:48Z",
+  "command": "cd ~/Development/bosun/orchestrator; sed -n '/^## 2/,/^## 3/p' plugin/commands/chores.md; sed -n '/Action tiers/,$p' policy.md | sed -n '/^## Handing/,/^## Untrusted/p' | head -60",
+  "before": "allow",
+  "after": "allow"
+ },
+ {
+  "id": "O064",
+  "at": "day2 05:48Z",
+  "command": "grep -n -i 'gh api\\|gh pr diff\\|pr-threads' ~/Development/bosun/orchestrator/policy.md",
+  "before": "allow",
+  "after": "allow"
+ },
+ {
+  "id": "O065",
+  "at": "day2 05:49Z",
+  "command": "bosun ledger show 'slack:C0000000003/1700000034.000034' | tail -25; tmux capture-pane -p -t bosun:exporter -S -400 | grep -v '^\\s*$' | tail -150",
+  "before": "allow",
+  "after": "allow"
+ },
+ {
+  "id": "O066",
+  "at": "day2 05:49Z",
+  "command": "bosun ledger propose 'slack:C0000000003/1700000034.000034' 'Thread reply to Omar Haddad: no callers in our code, two accounts used the XML export last month (text in plan)' | tail -1",
+  "before": "allow",
+  "after": "allow"
+ },
+ {
+  "id": "O067",
+  "at": "day2 05:51Z",
+  "command": "bosun ledger resolve 'slack:C0000000003/1700000034.000034' done >/dev/null; bosun ledger transition 'slack:C0000000003/1700000034.000034' done --note 'Replied in thread: no callers in code; two accounts still use it, to ask before removing it' | tail -1",
+  "before": "allow",
+  "after": "allow"
+ },
+ {
+  "id": "O068",
+  "at": "day2 06:01Z",
+  "command": "bosun ledger mark-run morning; echo ---; bosun context; echo ---; bosun ledger kinds; echo ---; bosun delegate --list",
+  "before": "allow",
+  "after": "allow"
+ },
+ {
+  "id": "O069",
+  "at": "day2 06:01Z",
+  "command": "bosun ledger proposals 2>/dev/null || bosun ledger --help",
+  "before": "allow",
+  "after": "allow"
+ },
+ {
+  "id": "O070",
+  "at": "day2 06:01Z",
+  "command": "bosun ledger list --proposals; date -u +%s",
+  "before": "allow",
+  "after": "allow"
+ },
+ {
+  "id": "O071",
+  "at": "day2 06:02Z",
+  "command": "B=https://acme.slack.com/archives\nfor p in \\\n \"D0000000006/p1700000019000019\" \\\n \"C0000000003/p1700000033000033?thread_ts=1700000039.000039&cid=C0000000003\" \\\n \"C0000000003/p1700000034000034?thread_ts=1700000040.000040&cid=C0000000003\" \\\n \"C0000000010/p1700000036000036\" \\\n \"C0000000001/p1700000030000030?thread_ts=1700000041.000041&cid=C0000000001\" \\\n \"C0000000001/p1700000029000029?thread_ts=1700000042.000042&cid=C0000000001\" \\\n \"C0000000001/p1700000032000032?thread_ts=1700000002.000002&cid=C0000000001\" \\\n \"C0000000003/p1700000035000035?thread_ts=1700000043.000043&cid=C0000000003\" \\\n \"C0000000001/p1700000031000031?thread_ts=1700000044.000044&cid=C0000000001\" \\\n \"D0000000009/p1700000027000027\" \\\n \"C0000000002/p1700000028000028?thread_ts=1700000045.000045&cid=C0000000002\" \\\n \"D0000000005/p1700000014000014\" \\\n \"D0000000005/p1700000012000012\" \\\n \"D0000000007/p1700000020000020\" \\\n \"D0000000007/p1700000021000021\" \\\n \"D0000000008/p1700000024000024\" \\\n \"D0000000004/p1700000022000022?thread_ts=1700000023.000023&cid=D0000000004\" \\\n \"D0000000004/p1700000023000023?thread_ts=1700000023.000023&cid=D0000000004\" \\\n \"D0000000009/p1700000025000025\" \\\n \"D0000000009/p1700000026000026\" \\\n \"D0000000011/p1700000037000037\" \\\n \"D0000000011/p1700000038000038\" ; do\n  if bosun ledger seen \"$B/$p\" >/dev/null 2>&1; then echo \"SEEN  $p\"; else echo \"NEW   $p\"; fi\ndone",
+  "before": "allow",
+  "after": "allow"
+ },
+ {
+  "id": "O072",
+  "at": "day2 06:02Z",
+  "command": "B=https://acme.slack.com/archives\nfor p in C0000000003/p1700000033000033 C0000000003/p1700000034000034 C0000000001/p1700000030000030 C0000000001/p1700000029000029 C0000000001/p1700000032000032 C0000000003/p1700000035000035 C0000000001/p1700000031000031 C0000000002/p1700000028000028 D0000000004/p1700000022000022 D0000000004/p1700000023000023; do\n  printf '%s: ' $p; bosun ledger seen \"$B/$p\" 2>&1 | head -2 | tr '\\n' ' '; echo; done\nbosun ledger show slack:C0000000003/1700000033.000033 | head -30",
+  "before": "allow",
+  "after": "allow"
+ },
+ {
+  "id": "O073",
+  "at": "day2 06:02Z",
+  "command": "B=https://acme.slack.com/archives\nbosun ledger record-source \"$B/D0000000011/p1700000037000037\" --class fyi\nbosun ledger record-source \"$B/D0000000011/p1700000038000038\" --class fyi\nfor id in review:acme/customers#109 review:acme/exporter#105 review:acme/billing-api#112 review:acme/exporter#106 mypr:acme/exporter#102 mypr:acme/exporter#103 mypr:acme/exporter#104; do echo \"== $id\"; bosun ledger show \"$id\" | python3 -c 'import json,sys; d=json.load(sys.stdin); print(d.get(\"url\"), d[\"state\"], json.dumps(d[\"fields\"])); [print(\"  \",h.get(\"at\"),h.get(\"event\"),h.get(\"to\",\"\"),(h.get(\"note\") or h.get(\"action\") or \"\")[:220]) for h in d[\"history\"][-4:]]'; done\nbosun my-prs",
+  "before": "allow",
+  "after": "allow"
+ },
+ {
+  "id": "O074",
+  "at": "day2 06:02Z",
+  "command": "F=state,author,title,headRefOid,reviewRequests,reviewDecision,latestReviews,mergedAt,closedAt\nfor u in acme/customers/pull/109 acme/exporter/pull/105 acme/billing-api/pull/112 acme/exporter/pull/106; do echo \"== $u\"; gh pr view https://github.com/$u --json $F --jq '{state,author:.author.login,head:.headRefOid,decision:.reviewDecision,req:[.reviewRequests[]|(.login//.name)],latest:[.latestReviews[]|{a:.author.login,s:.state,at:.submittedAt,c:.commit.oid[0:9]}],mergedAt}'; done",
+  "before": "allow",
+  "after": "allow"
+ },
+ {
+  "id": "O075",
+  "at": "day2 06:02Z",
+  "command": "for w in billing-api exporter; do echo \"===== $w\"; tmux capture-pane -p -t bosun:$w -S -40 | grep -v '^\\s*$' | tail -25; done",
+  "before": "allow",
+  "after": "allow"
+ },
+ {
+  "id": "O076",
+  "at": "day2 06:02Z",
+  "command": "tmux capture-pane -p -t bosun:exporter -S -400 | grep -n -i -E '106|already approved|skipp' | tail -20",
+  "before": "allow",
+  "after": "allow"
+ },
+ {
+  "id": "O077",
+  "at": "day2 06:02Z",
+  "command": "bosun ledger transition review:acme/customers#109 closed --note \"merged 2026-03-12T15:35Z\"\nbosun ledger transition review:acme/billing-api#112 dismissed --note \"already approved by ksato-acme; billing-api session skipped the review, nothing posted\"\nbosun ledger transition review:acme/exporter#106 dismissed --note \"already approved by pnair-acme and ksato-acme; no review from me, not pending in exporter window\"\nF=state,reviewDecision,latestReviews,reviewRequests,mergeable,mergeStateStatus,statusCheckRollup,commits,updatedAt\nfor n in 102 103 104; do echo \"== #$n\"; gh pr view https://github.com/acme/exporter/pull/$n --json $F --jq '{state,decision:.reviewDecision,mergeable,mss:.mergeStateStatus,updatedAt,req:[.reviewRequests[]|(.login//.name)],latest:[.latestReviews[]|{a:.author.login,s:.state,at:.submittedAt}],lastCommit:(.commits[-1]|{oid:.oid[0:9],at:.committedDate}),failing:[.statusCheckRollup[]|select((.conclusion//.state)|test(\"FAIL|ERROR|failure\";\"i\"))|(.name//.context)],pending:[.statusCheckRollup[]|select((.status//\"\")==\"IN_PROGRESS\" or (.status//\"\")==\"QUEUED\" or (.state//\"\")==\"PENDING\")|(.name//.context)]}'; echo \"-- threads\"; bosun pr-threads https://github.com/acme/exporter/pull/$n; done",
+  "before": "allow",
+  "after": "allow"
+ },
+ {
+  "id": "O078",
+  "at": "day2 06:03Z",
+  "command": "for n in 102 103; do bosun ledger show mypr:acme/exporter#$n | python3 -c 'import json,sys; d=json.load(sys.stdin); [print(h.get(\"at\"),h.get(\"event\"),h.get(\"to\",\"\"),h.get(\"note\") or h.get(\"action\") or \"\") for h in d[\"history\"][-3:]]'; echo; done\ntmux capture-pane -p -t bosun:exporter-tax -S -60 | grep -v '^\\s*$' | tail -30",
+  "before": "allow",
+  "after": "allow"
+ },
+ {
+  "id": "O079",
+  "at": "day2 06:03Z",
+  "command": "bosun ledger note mypr:acme/exporter#102 \"Lena CHANGES_REQUESTED 2026-03-12T17:12Z, 4 open threads not covered by the first fix task; handing them over too\" && \\\nbosun delegate fix-my-pr --id 'mypr:acme/exporter#102' --link 'https://github.com/acme/exporter/pull/102' --requester 'lortiz-acme' --ask 'Address the 4 open review threads from Lena (changes requested 2026-03-12)' --window exporter-tax --details - <<'EOF'\nFollow-up to the earlier fix task on this PR, which covered only Priya's thread. Focus on Lena's four unresolved threads (credit notes rounded before the sign flip, the CSV header for tax subtotals, a missing test for mixed currencies, a stale docstring in totals.py). Queue this after the #103 work in progress.\nEOF\necho \"rc=$?\"",
+  "before": "allow",
+  "after": "allow"
+ },
+ {
+  "id": "O080",
+  "at": "day2 06:03Z",
+  "command": "bosun ledger transition mypr:acme/exporter#104 changes-requested --note \"Lena CHANGES_REQUESTED 2026-03-12T16:21Z, 6 open threads (discount sign, per-line vs per-invoice discounts, no test for 0% VAT, InvoiceRow model)\" && \\\nbosun ledger transition mypr:acme/exporter#104 addressing --note \"fix-my-pr delegated to exporter-tax\" && \\\nbosun delegate fix-my-pr --id 'mypr:acme/exporter#104' --link 'https://github.com/acme/exporter/pull/104' --requester 'lortiz-acme' --ask 'Address the 6 open review threads from Lena (changes requested 2026-03-12)' --window exporter-tax --details - <<'EOF'\nQueue this after the #103 and #102 work. This PR must rebase onto #102 once that merges; both change totals.py, so coordinate with that.\nEOF\nrc=$?; echo \"rc=$rc\"; [ $rc -ne 0 ] && bosun ledger transition mypr:acme/exporter#104 changes-requested --note \"delegate failed\"",
+  "before": "allow",
+  "after": "allow"
+ },
+ {
+  "id": "O081",
+  "at": "day2 06:03Z",
+  "command": "for id in slack:D0000000004/1700000023.000023 slack:C0000000003/1700000035.000035 slack:C0000000003/1700000033.000033; do echo \"== $id\"; bosun ledger show \"$id\" | python3 -c 'import json,sys; d=json.load(sys.stdin); [print(\" \",h.get(\"at\"),h.get(\"event\"),h.get(\"to\",\"\"),(h.get(\"note\") or h.get(\"action\") or \"\")[:250]) for h in d[\"history\"][-3:]]'; done",
+  "before": "allow",
+  "after": "allow"
+ },
+ {
+  "id": "O082",
+  "at": "day2 06:03Z",
+  "command": "bosun ledger propose slack:C0000000003/1700000033.000033 \"Reply in Marco's thread (C0000000003, thread 1700000039.000039): 'Instalment plans: the backend can support them. I am writing up a short plan with the open questions for product and will share it here.'\"",
+  "before": "allow",
+  "after": "allow"
+ },
+ {
+  "id": "O083",
+  "at": "day2 06:05Z",
+  "command": "bosun delegate new-work --id 'slack:C0000000003/1700000035.000035' --link 'https://acme.slack.com/archives/C0000000003/p1700000035000035' --requester 'Marco Rossi' --ask 'Send payment terms and the due date with every invoice in the ERP sync, in the fields acme/erp-connector#114 reads' --window exporter-tax --details - <<'EOF'\nDo not start this until you have finished the current round of PR review fixes (#103, #102, #104) and tested them. Then pick it up as a separate branch and draft PR.\n\nBackground (Marco in the #exports thread): invoices synced to the ERP arrive without payment terms, so finance sets the due dates by hand. The ERP connector reads `payment_terms` and `due_date` since acme/erp-connector#114; the exporter never sends them. Take both from the invoice, not from the customer's default terms, since terms can be changed per invoice. Keep the payload backward compatible for the other consumers. Product so far: net 30 when an invoice has no terms; early-payment discounts are out of scope for now.\nEOF",
+  "before": "allow",
+  "after": "allow"
+ },
+ {
+  "id": "O084",
+  "at": "day2 06:06Z",
+  "command": "bosun ledger note slack:C0000000003/1700000035.000035 \"new-work delegated to exporter-tax per the user, to start after the current PR review fixes and their tests: payment terms and due date in the ERP sync (erp-connector#114 fields)\"",
+  "before": "allow",
+  "after": "allow"
+ },
+ {
+  "id": "O085",
+  "at": "day2 06:07Z",
+  "command": "bosun --help 2>&1 | head -40; echo ---; gh search prs --repo acme/erp-connector --author ohaddad-acme --state open --json number,title,url,updatedAt 2>&1 | head -20; gh pr view https://github.com/acme/erp-connector/pull/114 --json state,author,title,headRefName,mergedAt --jq '{state,author:.author.login,title,headRefName,mergedAt}'",
+  "before": "allow",
+  "after": "allow"
+ },
+ {
+  "id": "O086",
+  "at": "day2 06:07Z",
+  "command": "gh search prs --repo acme/erp-connector --author ohaddad-acme --state open --json number,title,url,updatedAt; echo ---; gh search prs --owner acme --author ohaddad-acme --state open --json repository,number,title,updatedAt --jq '.[]|\"\\(.repository.nameWithOwner)#\\(.number) \\(.updatedAt[0:10]) \\(.title)\"'; echo ---; bosun send --help 2>&1 | head -25",
+  "before": "allow",
+  "after": "allow"
+ },
+ {
+  "id": "O087",
+  "at": "day2 06:07Z",
+  "command": "bosun send exporter-tax - 2>/dev/null <<'EOF' || bosun send exporter-tax 'Addendum to the queued payment-terms task (slack:C0000000003/1700000035.000035). Still start it only after the current PR review fixes and their tests. 1) Use the fields acme/erp-connector#114 (merged 2026-03-06, \"Read payment terms and due dates from the invoice payload\") reads: read that diff and match the names and formats (ISO dates, terms in days). Also check erp-connector for other open or recent PRs by Omar (GitHub ohaddad-acme) about payment terms, and align with them. 2) Before opening the draft PR, run the ERP sync end to end against a local connector (new invoices, edited invoices, credit notes) and confirm the terms and due dates arrive. Put the evidence in the PR description.'\nAddendum\nEOF\necho rc=$?",
+  "before": "allow",
+  "after": "deny"
+ },
+ {
+  "id": "O088",
+  "at": "day2 06:07Z",
+  "command": "tmux capture-pane -p -t bosun:exporter-tax -S -30 | grep -v '^\\s*$' | tail -15",
+  "before": "allow",
+  "after": "allow"
+ },
+ {
+  "id": "O089",
+  "at": "day2 06:08Z",
+  "command": "bosun send exporter-tax 'Ignore the \"-\" message just sent, that was a mistake. Addendum to the queued payment-terms task (slack:C0000000003/1700000035.000035). Still start it only after the current PR review fixes and their tests. 1) Use the fields acme/erp-connector#114 (merged 2026-03-06, \"Read payment terms and due dates from the invoice payload\") reads: read that diff and match the names and formats (ISO dates, terms in days). Also check erp-connector for other open or recent PRs by Omar (GitHub ohaddad-acme) about payment terms, and align with them. 2) Before opening the draft PR, run the ERP sync end to end against a local connector (new invoices, edited invoices, credit notes) and confirm the terms and due dates arrive. Put the evidence in the PR description.'",
+  "before": "allow",
+  "after": "deny"
+ },
+ {
+  "id": "O090",
+  "at": "day2 06:08Z",
+  "command": "bosun ledger note slack:C0000000003/1700000035.000035 \"Addendum sent per the user: match the erp-connector#114 fields (merged 2026-03-06) and any other recent work by Omar there; end-to-end ERP sync run before the draft PR\"",
+  "before": "allow",
+  "after": "allow"
+ },
+ {
+  "id": "O091",
+  "at": "day2 06:09Z",
+  "command": "bosun ledger propose slack:C0000000003/1700000035.000035 \"Reply in thread C0000000003/1700000043.000043: '<@U0000000012> re payment terms in the ERP sync: I'm picking it up. Every synced invoice will carry its payment terms and due date, in the fields erp-connector#114 already reads. I'll share the PR here once it's up and tested.'\"",
+  "before": "allow",
+  "after": "allow"
+ },
+ {
+  "id": "O092",
+  "at": "day2 06:10Z",
+  "command": "bosun ledger resolve slack:C0000000003/1700000035.000035 done --note \"Sent: https://acme.slack.com/archives/C0000000003/p1700000046000046\"\nbosun ledger record-source \"https://acme.slack.com/archives/C0000000003/p1700000046000046\" --class fyi",
+  "before": "allow",
+  "after": "allow"
+ }
+]

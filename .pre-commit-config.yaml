@@ -1,0 +1,120 @@
+# Run once after cloning: `uv sync && uv run pre-commit install` (installs the pre-commit,
+# commit-msg and pre-push hooks). Every tool runs from the uv-locked dev group (pyproject.toml /
+# uv.lock), so the hooks, CI and `uv run <tool>` by hand always use the same versions.
+default_install_hook_types: [pre-commit, commit-msg, pre-push]
+# Only the forbidden-terms hook below also checks commit messages.
+default_stages: [pre-commit, pre-push, manual]
+fail_fast: false
+repos:
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v6.0.0
+    hooks:
+      - id: check-added-large-files
+        args: [--maxkb=500]
+      - id: check-case-conflict
+      - id: check-executables-have-shebangs
+      - id: check-json
+      - id: check-merge-conflict
+      - id: check-shebang-scripts-are-executable
+      - id: check-toml
+      - id: check-yaml
+      - id: detect-aws-credentials
+        args: [--allow-missing-credentials]
+      - id: detect-private-key
+      - id: end-of-file-fixer
+      - id: mixed-line-ending
+        args: [--fix=lf]
+      - id: trailing-whitespace
+  - repo: https://github.com/astral-sh/uv-pre-commit
+    rev: 0.13.5
+    hooks:
+      - id: uv-lock
+  - repo: local
+    hooks:
+      # Publishing hygiene: secrets (audited baseline in .secrets.baseline), and terms that must
+      # never reach this repo, listed outside it in $BOSUN_CONFIG_DIR/forbidden-terms.txt (no
+      # list: the hook passes). Commit messages are checked too.
+      - id: detect-secrets
+        name: detect-secrets (against .secrets.baseline)
+        entry: uv run detect-secrets-hook --baseline .secrets.baseline
+        language: system
+        exclude: ^\.secrets\.baseline$
+      - id: forbidden-terms
+        name: forbidden terms (local list, outside the repo)
+        entry: uv run python tools/forbidden_terms.py
+        language: system
+      - id: forbidden-terms-message
+        name: forbidden terms in the commit message
+        entry: uv run python tools/forbidden_terms.py --contents-only
+        language: system
+        stages: [commit-msg]
+      # Python: lint (incl. McCabe complexity), format, types, cognitive and cyclomatic complexity.
+      - id: ruff-check
+        name: ruff check
+        entry: uv run ruff check --force-exclude --fix
+        language: system
+        types_or: [python, pyi]
+        require_serial: true
+      - id: ruff-format
+        name: ruff format
+        entry: uv run ruff format --force-exclude
+        language: system
+        types_or: [python, pyi]
+        require_serial: true
+      - id: mypy
+        name: mypy (strict)
+        entry: uv run mypy
+        language: system
+        types: [python]
+        pass_filenames: false
+      - id: complexipy
+        name: complexipy (cognitive complexity <= 15)
+        entry: uv run complexipy --max-complexity-allowed 15 --quiet --failed lib libexec/bosun-resolve tools
+        language: system
+        types: [python]
+        pass_filenames: false
+      - id: lizard
+        name: lizard (cyclomatic complexity <= 10, functions <= 60 lines)
+        entry: uv run lizard -l python -C 10 -L 60 -w lib libexec/bosun-resolve tools tests/unit
+        language: system
+        types: [python]
+        pass_filenames: false
+      # Shell: lint, format (2-space indent, indented case; see .editorconfig) and complexity.
+      - id: shellcheck
+        name: shellcheck
+        entry: uv run shellcheck -x -S style
+        language: system
+        types: [shell]
+      - id: shfmt
+        name: shfmt
+        entry: uv run shfmt -w
+        language: system
+        types: [shell]
+      - id: shell-complexity
+        name: shell complexity (functions and script bodies)
+        entry: uv run python tools/shell_complexity.py
+        language: system
+        types: [shell]
+        exclude: ^tests/smoke\.sh$
+      # Tests: unit tests on every commit (fast); the end-to-end suite before pushing.
+      - id: unit-tests
+        name: unit tests
+        entry: uv run pytest -q tests/unit
+        language: system
+        types_or: [python, shell]
+        pass_filenames: false
+      # The console page's JavaScript: node --check and a fake-DOM render (no npm packages); it
+      # passes with a note when node is not on PATH.
+      - id: js-check
+        name: console JS check (node, if present)
+        entry: tests/js_check.sh
+        language: system
+        files: ^(console/|tests/js|lib/console_)
+        pass_filenames: false
+      - id: smoke-tests
+        name: smoke tests (end to end)
+        entry: tests/smoke.sh
+        language: system
+        pass_filenames: false
+        always_run: true
+        stages: [pre-push]

@@ -1,0 +1,306 @@
+{
+ "about": "Interactions about work items in two orchestrator conversations and five repo sessions (and their subagents) over 2026-03-12/16, anonymized and moved to a fictional domain (acme's invoice exporter). Counts are occurrences in that window. 'protocol' is how the ledger protocol handles the pattern now; 'replay' and 'guard' name the scenarios (replay/*.json) and real commands (orchestrator_commands.json) that check it.",
+ "sources": {
+  "orchestrator_bash_commands": 92,
+  "orchestrator_user_messages": 30,
+  "repo_session_tasks_received": 14,
+  "repo_session_ledger_writes": 22,
+  "ledger_items_after_two_days": 20,
+  "ledger_history_events": 140
+ },
+ "patterns": [
+  {
+   "id": "P01",
+   "name": "delegation through bosun delegate",
+   "count": 10,
+   "detail": "fix-my-pr 4, review 3, investigate 2, new-work 1; all to windows already running Claude; 6 with --details on a quoted heredoc",
+   "example": "bosun delegate new-work --id 'slack:C0000000003/1700000035.000035' --requester 'Marco Rossi' --ask '...' --window exporter-tax --details - <<'EOF' ... EOF",
+   "protocol": "unchanged, and the ledger now records the window on each item once the task is delivered",
+   "replay": [
+    "01-addendum-to-queued-task",
+    "02-review-batch",
+    "03-fix-rounds",
+    "04-investigate-answer"
+   ],
+   "guard": [
+    "O055",
+    "O056",
+    "O059",
+    "O062",
+    "O083"
+   ]
+  },
+  {
+   "id": "P02",
+   "name": "hand-written task over raw bosun send (before delegate existed)",
+   "count": 4,
+   "detail": "2 with send --new (day 1 06:39), 2 to a running window (day 1 09:01, 10:01); all carried 'Ledger id:' in the text",
+   "example": "bosun send exporter-tax \"Ledger id: mypr:acme/exporter#102\\nPR: ...\\nAsk: address the 4 unresolved CodeQL review threads ...\"",
+   "protocol": "the guard denies the orchestrator's send without --id/--no-item and send --new; tasks go through delegate",
+   "replay": [
+    "03-fix-rounds"
+   ],
+   "guard": [
+    "O017",
+    "O018",
+    "O028",
+    "O034"
+   ]
+  },
+  {
+   "id": "P03",
+   "name": "addendum to a task already delegated",
+   "count": 5,
+   "detail": "orchestrator: 1 over raw send (day 2 06:07, the '-' incident) and 1 as a whole second delegate ('Follow-up to the earlier fix task', day 2 06:03); me: 1 through my other session without an id ('Update from the user on how to finish this task', day 1 07:12) and 2 typed into windows ('make sure the PRs are not approved or merged yet'), which interrupted running review subagents",
+   "example": "bosun send exporter-tax 'Addendum to the queued payment-terms task (slack:C0000000003/1700000035.000035). ...'",
+   "protocol": "bosun delegate --update <id> --details -: goes to the recorded window, framed 'Update to ledger item <id>', kept in history, refused for items never delegated or finished; a second whole hand-over of an item that has not reported is refused, pointing to --update, unless --again",
+   "replay": [
+    "01-addendum-to-queued-task",
+    "03-fix-rounds",
+    "05-compat-and-slips",
+    "06-redelegate-and-move"
+   ],
+   "guard": [
+    "O079",
+    "O087"
+   ]
+  },
+  {
+   "id": "P04",
+   "name": "free-text correction of an earlier message",
+   "count": 2,
+   "detail": "orchestrator: 'Ignore the \"-\" message just sent' (day 2 06:08); me to the orchestrator: 'Wrong window, ignore last message' (day 2 06:10)",
+   "example": "bosun send exporter-tax 'Ignore the \"-\" message just sent, that was a mistake. Addendum ...'",
+   "protocol": "send no longer pastes '-', and the guard denies the orchestrator's free-text send; corrections go through delegate --update",
+   "replay": [
+    "01-addendum-to-queued-task"
+   ],
+   "guard": [
+    "O089"
+   ]
+  },
+  {
+   "id": "P05",
+   "name": "literal '-' pasted into a repo session",
+   "count": 1,
+   "detail": "`send <window> -` with a heredoc: send did not read stdin; the session answered with a status line",
+   "example": "bosun send exporter-tax - 2>/dev/null <<'EOF' || bosun send exporter-tax '...'",
+   "protocol": "'-' reads stdin; an empty stdin is refused",
+   "replay": [
+    "01-addendum-to-queued-task"
+   ],
+   "guard": [
+    "O087"
+   ]
+  },
+  {
+   "id": "P06",
+   "name": "outcome reported as a free-text ledger note",
+   "count": 15,
+   "detail": "notes of 26-1063 characters (median about 400): commits, PR URLs, report paths, open questions and decisions needed, all in one string",
+   "example": "bosun ledger note 'mypr:acme/exporter#104' 'Pushed 3 commits (CI green). Answered all 6 threads ... OPEN: ... Needs a decision ...'",
+   "protocol": "bosun ledger report <id> --summary <one line> --result <URL or path> --open <what is left> [--state]; notes still work for tasks handed over earlier",
+   "replay": [
+    "01-addendum-to-queued-task",
+    "03-fix-rounds",
+    "04-investigate-answer",
+    "05-compat-and-slips"
+   ]
+  },
+  {
+   "id": "P07",
+   "name": "state transitions by repo sessions",
+   "count": 5,
+   "detail": "prepared 1, reviewed 3 (one already reviewed: 'unchanged'), 1 refused: a guessed state 'posted'",
+   "example": "bosun ledger transition review:acme/customers#109 posted --note '...'",
+   "protocol": "report --state makes the same validated transition with the outcome; the refusal lists the allowed states",
+   "replay": [
+    "02-review-batch",
+    "05-compat-and-slips"
+   ]
+  },
+  {
+   "id": "P08",
+   "name": "field update that needed --kind",
+   "count": 3,
+   "detail": "2 orchestrator upserts without --kind (day 1 11:01) and 1 repo-session upsert with a wrong kind name ('review')",
+   "example": "bosun ledger upsert 'mypr:acme/exporter#102' --field review_thread=...",
+   "protocol": "upsert updates an existing item without --kind; a wrong kind is still refused",
+   "replay": [
+    "05-compat-and-slips"
+   ]
+  },
+  {
+   "id": "P09",
+   "name": "orchestrator reads a window's screen to learn an outcome",
+   "count": 5,
+   "detail": "tmux capture-pane on 4 occasions: an investigation's answer (for a draft reply I asked for), two reviews that recorded nothing, a queued task's status, and to check the '-' delivery",
+   "example": "tmux capture-pane -p -t bosun:exporter -S -400 | grep -v '^\\s*$' | tail -150",
+   "protocol": "ledger reports and list (@window, awaiting report|reported); policy: no screen reading, ask with delegate --update",
+   "replay": [
+    "02-review-batch",
+    "04-investigate-answer"
+   ],
+   "guard": [
+    "O065",
+    "O075",
+    "O076",
+    "O088"
+   ]
+  },
+  {
+   "id": "P10",
+   "name": "orchestrator greps notes to find outcomes",
+   "count": 6,
+   "example": "for id in ...; do bosun ledger show \"$id\" | grep '\"note\"' | tail -1; done",
+   "protocol": "ledger reports [--since]",
+   "replay": [
+    "03-fix-rounds"
+   ]
+  },
+  {
+   "id": "P11",
+   "name": "my directives to the orchestrator",
+   "count": 16,
+   "detail": "delegate 4 ('delegate this to a sub-agent', 'spawn a sub agent', 'after it finishes its current round'), approve or reject proposals 4 ('send the Slack message', 'send it as written', 'no need, mark it done'), addendum 1, look-ups 2 ('see if we addressed this already'), draft from a session's result 1, re-read policy 2, chat 2 (a date question; a message meant for another window and its retraction)",
+   "protocol": "delegations and addenda map to delegate and delegate --update; drafts come from reports",
+   "replay": [
+    "01-addendum-to-queued-task",
+    "04-investigate-answer"
+   ]
+  },
+  {
+   "id": "P12",
+   "name": "proposals and approvals",
+   "count": 11,
+   "detail": "11 proposed; 6 done, 3 withdrawn (2 superseded, 1 already done elsewhere), 1 rejected, 1 pending",
+   "protocol": "unchanged",
+   "replay": [
+    "01-addendum-to-queued-task",
+    "04-investigate-answer"
+   ],
+   "guard": [
+    "O057",
+    "O091"
+   ]
+  },
+  {
+   "id": "P13",
+   "name": "messages about no work item",
+   "count": 33,
+   "detail": "chores commands 9 and drain prompts 3 to the orchestrator; drain and restart notices 14 to repo sessions; 2 notes from my other session to repo sessions (AWS credentials, session moved); 2 policy re-reads to the orchestrator; 3 interrupts. None came from the orchestrator itself, but they show itemless messages are legitimate",
+   "example": "bosun send --no-item exporter - <<'EOF' ... EOF",
+   "protocol": "send --no-item for the orchestrator; internal callers and my own sends are unchanged",
+   "replay": [
+    "05-compat-and-slips"
+   ]
+  },
+  {
+   "id": "P14",
+   "name": "duplicate or overlapping work",
+   "count": 3,
+   "detail": "a review request proposed after the repo session had already posted it; two fix-my-pr tasks for PRs the session's own agents were already fixing ('already covered by the agents running on those PRs')",
+   "protocol": "delegate refuses a second hand-over while the first awaits a report (--again after my approval), and list shows which window works on each item; work a session starts on its own is still invisible",
+   "replay": [
+    "03-fix-rounds",
+    "06-redelegate-and-move"
+   ]
+  },
+  {
+   "id": "P15",
+   "name": "delegated review with no outcome recorded",
+   "count": 2,
+   "detail": "both PRs were already approved; one session said so only in its window, the other was interrupted",
+   "protocol": "report --state dismissed; list shows 'awaiting report'; delegate --update asks for one",
+   "replay": [
+    "02-review-batch"
+   ]
+  },
+  {
+   "id": "P16",
+   "name": "delegated to another window than proposed",
+   "count": 2,
+   "detail": "two investigations proposed for exporter-tax went to exporter because the first was busy; only a note said so",
+   "protocol": "the recorded delegation names the window actually used; delegate --update <id> --window <window> moves an item (whole task to the new window, a stop notice to the old one, the move recorded)",
+   "replay": [
+    "04-investigate-answer",
+    "06-redelegate-and-move"
+   ],
+   "guard": [
+    "O057",
+    "O059"
+   ]
+  },
+  {
+   "id": "P17",
+   "name": "window start reported but not started",
+   "count": 2,
+   "detail": "day 1 09:39 send --new; fixed the same day (send exits non-zero)",
+   "protocol": "a delegation is recorded only after send exits 0",
+   "not_covered": "fixed before this corpus; covered by smoke tests of send --new"
+  },
+  {
+   "id": "P18",
+   "name": "orchestrator shell slips",
+   "count": 2,
+   "detail": "`L=\"bosun ledger\"; $L upsert ...` does not split under zsh (nothing written); `bosun ledger proposals` does not exist",
+   "protocol": "unchanged (the CLI refuses unknown commands)",
+   "replay": [
+    "05-compat-and-slips"
+   ]
+  },
+  {
+   "id": "P19",
+   "name": "orchestrator stalled at a permission prompt",
+   "count": 1,
+   "detail": "a `gh api` read asked for approval at night; check-ins were skipped for about 14 hours",
+   "protocol": "out of scope here (policy: never use gh api for reads; the watchdog work covers alerts)",
+   "not_covered": "not a ledger interaction"
+  },
+  {
+   "id": "P20",
+   "name": "work waiting on someone else's answer",
+   "count": 4,
+   "detail": "day 2 (later sessions): four product decisions deferred to a stakeholder at the end of a PR's work, kept in chat, PR text and a Slack reply while the mention that started it was marked done; a draft PR choosing between sending a due date and having another team's connector compute it, with 'note it for the other team' only in chat; a proposed Slack reply that asked the stakeholder back, with nothing recording that we then waited (their answer would have become a new mention); a session asking me twice whether to address bot reviews now or wait for the human reviewers",
+   "protocol": "outreach items (out:<parent>/<n>): ledger reach-out/ask in draft, propose (-> proposed), sent with the message ref (follow-ups counted as nudges), replied with evidence, delegate --update <out-id> to the parent's window (-> applied); ledger seen names the outreach for messages in its Slack thread or DM; a parent with open outreach is not finished without --force-open-outreach. Questions for me stay in the report's open points",
+   "replay": [
+    "07-deferred-product-decisions",
+    "08-cross-team-question",
+    "09-reply-then-wait",
+    "10-reviewer-wait"
+   ]
+  },
+  {
+   "id": "P21",
+   "name": "things recorded after they happened",
+   "count": 7,
+   "detail": "day 2: seven outreach messages (decisions a repo session posted in a Slack thread the day before, a DM it sent that morning, two decisions posted two hours earlier) were backfilled at one moment and all carried the recording time, so the nudge clock started up to a day late. Also seen, with the real time only in the note: PR merges, approvals and change requests recorded 1 to 16 hours after they happened, and Slack posts by a repo session recorded at the next check-in",
+   "protocol": "ledger sent/replied take the time from --at (ISO 8601 with an offset, or local 'YYYY-MM-DD HH:MM'; never the future), else from a Slack permalink's own ts, else now; sent --at with a ref already recorded corrects its time; the history keeps the recording time with happened_at and time_from; the wait counts from the latest message time. State-change times stay in notes (ROADMAP)",
+   "replay": [
+    "11-backfilled-messages"
+   ]
+  },
+  {
+   "id": "P22",
+   "name": "overlapping outreach",
+   "count": 4,
+   "detail": "day 2: a repo session recorded five drafts within an hour: two to the same person about one log that grows without bound; an addition to a decision already sent in a Slack thread, as a second item waiting in that thread (`ledger seen` credited a reply there to the first item in ledger order); an FYI with no reply expected, which would have waited and been nudged forever. The check-in sent one nudge covering four sent items and recorded it on one, so the other three kept their old wait clocks",
+   "protocol": "reach-out warns (does not refuse) when the parent has open outreach to the same person, naming it; an addition goes out as a follow-up on the existing item (ledger sent <existing id>) and the draft is folded into it (ledger fold <draft id> --into <existing id>, recording folded_into); upsert --field subject=/options= keeps the record in line with the message (title and subject are one); purpose fyi is one-way, sent -> applied at once; sent <id> [<id> ...] records one message on each item it covers; ledger seen names every open item sharing the thread, latest message first",
+   "replay": [
+    "07-deferred-product-decisions",
+    "12-overlapping-drafts"
+   ]
+  },
+  {
+   "id": "P23",
+   "name": "work we decided to do, with no item of its own",
+   "count": 3,
+   "detail": "day 2: a colleague answered my PR's outreach with 'yes please fix' the same bug in the PDF renderer; the orchestrator proposed delegating new work under the outreach id. Before that was approved I asked the repo window directly, its session opened a new draft PR, and the orchestrator closed the outreach with a note naming the PR, which withdrew the proposal: the new PR had no ledger item. A Jira ticket assigned to me tracked the original PR, with nothing in the ledger about it; another PR carried its origin only as a free-form field",
+   "protocol": "task items (task:<date>/<n>) spawned from the item that asked (ledger spawn, spawned_from with the reply as via), accepted only with 'user:' evidence, delegated under their own id; delegate refuses an outreach id as the work item; closing a replied outreach with no task prints the spawn command; reports print the commands that record and link a PR (produces); tickets (jira:<KEY>-<n>) are linked with tracks and mirrored read-only with ticket-sync, mismatches proposed; ledger migrate-links moves origin fields into spawned_from",
+   "replay": [
+    "13-reply-becomes-task",
+    "14-work-before-handover"
+   ]
+  }
+ ]
+}

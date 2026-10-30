@@ -1,0 +1,499 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Knowledge home - visualization treatments (prototype)</title>
+<style>
+/* =========================================================================
+   1. Design tokens. Dark is the default; light is a selected theme, not an
+   automatic inversion. Axis colors were checked with a palette validator:
+   People / Process / Product pass all-pairs CVD separation in both modes.
+   Systems is deliberately a neutral (the "substrate" layer) and always
+   carries a secondary encoding (hexagon shape + label), never color alone.
+   ========================================================================= */
+:root {
+  --font: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  --mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  --r-sm: 6px; --r-md: 10px; --r-lg: 16px;
+  --ease-out: cubic-bezier(.2, .8, .2, 1);
+  --ease-spring: cubic-bezier(.34, 1.56, .64, 1);
+}
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --bg: #0c0d0f; --surface: #141518; --surface-2: #1a1c20; --surface-3: #23262b;
+  --line: #2b2e34; --line-2: #3a3e45;
+  --ink: #f0efec; --ink-2: #c3c2b7; --ink-3: #8f8e87;
+  --people: #3987e5; --process: #d95926; --product: #199e70; --systems: #9a9890;
+  --accent: #7fb0ff; --focus: #9cc2ff;
+  --good: #3fae6a; --warn: #c98500; --bad: #e66767;
+  --m1: #3987e5; --m2: #d95926; --m3: #199e70; --m4: #c98500; --m5: #d55181; --m6: #2f9a3a; --m7: #9085e9; --m8: #e66767;
+  --glow: 1;
+  --vignette: radial-gradient(1200px 700px at 50% 40%, #171a20 0%, #0c0d0f 70%);
+  --shadow: 0 10px 40px rgba(0,0,0,.45), 0 2px 8px rgba(0,0,0,.35);
+  --glass: rgba(20,21,24,.72);
+}
+:root[data-theme="light"] {
+  color-scheme: light;
+  --bg: #f1f1ee; --surface: #fcfcfb; --surface-2: #f5f5f2; --surface-3: #eaeae5;
+  --line: #deded8; --line-2: #cbcbc4;
+  --ink: #0b0b0b; --ink-2: #52514e; --ink-3: #77766f;
+  --people: #2a78d6; --process: #eb6834; --product: #1baf7a; --systems: #6f6e69;
+  --accent: #2a63c4; --focus: #2a63c4;
+  --good: #1d7f45; --warn: #a86f00; --bad: #c93c3b;
+  --m1: #2a78d6; --m2: #eb6834; --m3: #1baf7a; --m4: #eda100; --m5: #e87ba4; --m6: #008300; --m7: #6250d6; --m8: #e34948;
+  --glow: 0;
+  --vignette: radial-gradient(1200px 700px at 50% 40%, #ffffff 0%, #f1f1ee 75%);
+  --shadow: 0 10px 30px rgba(20,20,10,.10), 0 2px 6px rgba(20,20,10,.08);
+  --glass: rgba(252,252,251,.80);
+}
+
+/* =========================================================================
+   2. Base
+   ========================================================================= */
+* { box-sizing: border-box; }
+html, body { margin: 0; background: var(--bg); color: var(--ink); font-family: var(--font); font-size: 14px; line-height: 1.45; }
+body { min-width: 1280px; transition: background-color .3s, color .3s; }
+a { color: var(--accent); text-decoration: none; }
+a:hover { text-decoration: underline; }
+button { font: inherit; color: inherit; }
+:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; border-radius: 4px; }
+.sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+.mono { font-family: var(--mono); }
+.muted { color: var(--ink-3); }
+@media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation-duration: .001ms !important; transition-duration: .001ms !important; } }
+:root.reduce-motion *, :root.reduce-motion *::before, :root.reduce-motion *::after { animation-duration: .001ms !important; transition-duration: .001ms !important; }
+
+/* =========================================================================
+   3. Page header: title, research paragraph, treatment switcher, toggles
+   ========================================================================= */
+.top { display: grid; grid-template-columns: minmax(420px, 1fr) auto; gap: 10px 32px; padding: 16px 28px 12px; border-bottom: 1px solid var(--line); background: var(--surface); }
+.brand { display: flex; align-items: center; gap: 12px; }
+.brand-mark { width: 30px; height: 30px; flex: none; }
+.brand h1 { margin: 0; font-size: 17px; font-weight: 650; letter-spacing: -.01em; }
+.brand .sub { margin: 0; color: var(--ink-3); font-size: 12px; }
+.controls { display: flex; align-items: center; gap: 12px; justify-content: flex-end; }
+.seg { display: inline-flex; padding: 3px; gap: 2px; background: var(--surface-3); border-radius: 10px; border: 1px solid var(--line); }
+.seg button { border: 0; background: transparent; padding: 7px 14px; border-radius: 8px; cursor: pointer; color: var(--ink-2); font-weight: 550; display: inline-flex; gap: 8px; align-items: center; transition: background-color .2s, color .2s; }
+.seg button .k { font-family: var(--mono); font-size: 11px; width: 18px; height: 18px; border-radius: 5px; display: inline-grid; place-items: center; background: var(--surface-2); color: var(--ink-3); border: 1px solid var(--line); }
+.seg button[aria-selected="true"] { background: var(--surface); color: var(--ink); box-shadow: 0 1px 3px rgba(0,0,0,.25); }
+.seg button[aria-selected="true"] .k { background: var(--accent); color: var(--surface); border-color: transparent; }
+.toggle { border: 1px solid var(--line); background: var(--surface-2); padding: 7px 12px; border-radius: 8px; cursor: pointer; color: var(--ink-2); display: inline-flex; align-items: center; gap: 6px; }
+.toggle[aria-pressed="true"] { color: var(--ink); border-color: var(--line-2); }
+.research { grid-column: 1 / -1; display: grid; grid-template-columns: 1fr auto; gap: 16px; align-items: start; }
+.research p { margin: 0; color: var(--ink-2); font-size: 12.5px; max-width: 1400px; }
+.research details { font-size: 12.5px; }
+.research summary { cursor: pointer; color: var(--accent); white-space: nowrap; list-style: none; }
+.research summary::-webkit-details-marker { display: none; }
+.ideas { position: absolute; right: 28px; z-index: 60; width: 760px; margin-top: 8px; padding: 18px 22px; background: var(--surface); border: 1px solid var(--line-2); border-radius: var(--r-lg); box-shadow: var(--shadow); }
+.ideas ol { margin: 0; padding-left: 18px; display: grid; gap: 8px; }
+.ideas li { color: var(--ink-2); }
+.ideas li b { color: var(--ink); font-weight: 600; }
+
+/* =========================================================================
+   4. Stage + shared "console chrome" around each mock
+   ========================================================================= */
+.stage { position: relative; margin: 14px 20px 0; height: max(640px, calc(100vh - var(--hdr, 170px) - 28px)); border-radius: var(--r-lg); overflow: hidden; border: 1px solid var(--line); background: var(--vignette); box-shadow: var(--shadow); }
+.mock { position: absolute; inset: 0; display: none; }
+.mock.active { display: block; animation: mockIn .45s var(--ease-out); }
+@keyframes mockIn { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
+.chrome { position: absolute; left: 0; right: 0; top: 0; height: 52px; display: flex; align-items: center; gap: 16px; padding: 0 18px; z-index: 20; pointer-events: none; }
+.chrome > * { pointer-events: auto; }
+.chrome .title { font-size: 15px; font-weight: 650; letter-spacing: -.01em; display: flex; align-items: center; gap: 10px; }
+.chrome .crumbs { color: var(--ink-3); font-size: 12.5px; }
+.chrome .spacer { flex: 1; pointer-events: none; }
+.stat-pills { display: flex; gap: 6px; }
+.pill { font-size: 12px; padding: 4px 10px; border-radius: 999px; background: var(--glass); border: 1px solid var(--line); color: var(--ink-2); backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px); white-space: nowrap; }
+.pill b { color: var(--ink); font-weight: 600; }
+.btn { border: 1px solid var(--line-2); background: var(--surface-2); color: var(--ink); padding: 6px 12px; border-radius: 8px; cursor: pointer; font-size: 12.5px; display: inline-flex; align-items: center; gap: 6px; transition: background-color .15s, border-color .15s, transform .15s; }
+.btn:hover { background: var(--surface-3); }
+.btn:active { transform: scale(.97); }
+.btn.ghost { background: transparent; border-color: var(--line); color: var(--ink-2); }
+.btn.primary { background: var(--accent); border-color: transparent; color: var(--surface); font-weight: 600; }
+.live-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--good); box-shadow: 0 0 0 0 var(--good); animation: live 2.4s infinite; }
+@keyframes live { 0% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--good) 60%, transparent); } 70% { box-shadow: 0 0 0 8px transparent; } 100% { box-shadow: 0 0 0 0 transparent; } }
+
+/* Notes strip below each treatment */
+.notes { margin: 14px 20px 40px; display: none; grid-template-columns: 1.2fr 1.2fr 1fr 1fr; gap: 14px; }
+.notes.active { display: grid; }
+.note { background: var(--surface); border: 1px solid var(--line); border-radius: var(--r-md); padding: 14px 16px; }
+.note h3 { margin: 0 0 6px; font-size: 11.5px; letter-spacing: .06em; text-transform: uppercase; color: var(--ink-3); font-weight: 650; }
+.note p, .note ul { margin: 0; color: var(--ink-2); font-size: 13px; }
+.note ul { padding-left: 16px; }
+.note li + li { margin-top: 3px; }
+.note b { color: var(--ink); font-weight: 600; }
+
+/* =========================================================================
+   5. Shared bits: badges, entity chips, legend, toast, tooltip, drawer
+   ========================================================================= */
+.badge { display: inline-flex; align-items: center; gap: 4px; font-size: 11px; padding: 1px 7px; border-radius: 999px; border: 1px solid var(--line-2); color: var(--ink-2); white-space: nowrap; line-height: 17px; }
+.badge.st-confirmed { border-color: color-mix(in srgb, var(--good) 60%, transparent); color: var(--good); }
+.badge.st-proposed { border-style: dashed; }
+.badge.st-superseded { text-decoration: line-through; color: var(--ink-3); }
+.badge.st-rejected { border-color: color-mix(in srgb, var(--bad) 60%, transparent); color: var(--bad); }
+.chip { display: inline-flex; align-items: center; gap: 6px; padding: 2px 8px 2px 6px; border-radius: 6px; background: var(--surface-3); border: 1px solid var(--line); font-size: 12px; color: var(--ink); cursor: pointer; white-space: nowrap; max-width: 100%; overflow: hidden; text-overflow: ellipsis; }
+.chip:hover { border-color: var(--line-2); }
+.chip svg { flex: none; }
+.axis-chip { display: inline-flex; align-items: center; gap: 6px; padding: 5px 10px; border-radius: 999px; border: 1px solid var(--line); background: var(--glass); color: var(--ink-2); cursor: pointer; font-size: 12px; backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px); transition: opacity .2s, border-color .2s; }
+.axis-chip[aria-pressed="false"] { opacity: .45; }
+.axis-chip .n { color: var(--ink-3); font-variant-numeric: tabular-nums; }
+.toast { position: fixed; left: 50%; bottom: 24px; transform: translate(-50%, 20px); opacity: 0; background: var(--surface-3); color: var(--ink); border: 1px solid var(--line-2); padding: 10px 16px; border-radius: 10px; box-shadow: var(--shadow); transition: opacity .25s, transform .25s var(--ease-out); z-index: 100; pointer-events: none; font-size: 13px; }
+.toast.show { opacity: 1; transform: translate(-50%, 0); }
+.tip { position: absolute; z-index: 40; pointer-events: none; background: var(--glass); backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px); border: 1px solid var(--line-2); border-radius: 8px; padding: 7px 10px; font-size: 12px; color: var(--ink); box-shadow: var(--shadow); max-width: 280px; opacity: 0; transition: opacity .12s; }
+.tip.show { opacity: 1; }
+.tip .t2 { color: var(--ink-3); font-size: 11.5px; }
+
+.drawer { position: absolute; top: 12px; right: 12px; bottom: 12px; width: 400px; z-index: 30; background: var(--glass); backdrop-filter: blur(16px) saturate(1.2); -webkit-backdrop-filter: blur(16px) saturate(1.2); border: 1px solid var(--line-2); border-radius: var(--r-lg); box-shadow: var(--shadow); transform: translateX(calc(100% + 24px)); transition: transform .38s var(--ease-out); display: flex; flex-direction: column; overflow: hidden; }
+.drawer.open { transform: none; }
+.drawer .close { position: absolute; right: 10px; top: 10px; }
+.detail { padding: 18px 18px 8px; overflow: auto; flex: 1; }
+.detail .kicker { display: flex; align-items: center; gap: 8px; font-size: 11.5px; color: var(--ink-3); text-transform: uppercase; letter-spacing: .06em; }
+.detail h2 { margin: 6px 0 4px; font-size: 20px; letter-spacing: -.015em; line-height: 1.2; padding-right: 30px; }
+.detail .summary { color: var(--ink-2); margin: 0 0 12px; }
+.detail .mini-stats { display: flex; gap: 14px; margin: 8px 0 14px; font-size: 12px; color: var(--ink-3); }
+.detail .mini-stats b { display: block; font-size: 18px; color: var(--ink); font-variant-numeric: tabular-nums; }
+.detail h4 { margin: 14px 0 6px; font-size: 11px; text-transform: uppercase; letter-spacing: .06em; color: var(--ink-3); }
+.fact { padding: 9px 10px; border-radius: 8px; border: 1px solid var(--line); background: var(--surface-2); margin-bottom: 6px; transition: border-color .2s, opacity .3s; }
+.fact.proposed { border-style: dashed; }
+.fact.superseded { opacity: .6; }
+.fact.superseded .fv { text-decoration: line-through; }
+.fact .fp { font-size: 11px; color: var(--ink-3); text-transform: uppercase; letter-spacing: .05em; }
+.fact .fv { margin: 2px 0 6px; color: var(--ink); }
+.fact .fm { display: flex; flex-wrap: wrap; gap: 5px; align-items: center; font-size: 11px; color: var(--ink-3); }
+.fact .fm .src { font-family: var(--mono); font-size: 10.5px; }
+.fact .ok { margin-left: auto; border: 1px solid var(--line-2); background: transparent; border-radius: 6px; font-size: 11px; padding: 1px 8px; cursor: pointer; color: var(--ink-2); }
+.fact .ok:hover { color: var(--good); border-color: var(--good); }
+.detail-foot { border-top: 1px solid var(--line); padding: 10px 18px; display: flex; gap: 8px; align-items: center; font-size: 12px; color: var(--ink-3); }
+
+/* =========================================================================
+   6. Treatment A: Constellation
+   ========================================================================= */
+#mock-A canvas { position: absolute; inset: 0; width: 100%; height: 100%; display: block; cursor: grab; touch-action: none; }
+#mock-A canvas.dragging { cursor: grabbing; }
+#mock-A canvas.pointer { cursor: pointer; }
+.a-search { position: absolute; top: 60px; left: 18px; width: 320px; z-index: 22; }
+.a-search input { width: 100%; padding: 10px 12px 10px 34px; border-radius: 10px; border: 1px solid var(--line-2); background: var(--glass); color: var(--ink); font: inherit; backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px); box-shadow: var(--shadow); }
+.a-search input::placeholder { color: var(--ink-3); }
+.a-search .ico { position: absolute; left: 11px; top: 11px; color: var(--ink-3); }
+.a-search .kbd { position: absolute; right: 10px; top: 9px; font-family: var(--mono); font-size: 11px; color: var(--ink-3); border: 1px solid var(--line-2); border-radius: 5px; padding: 0 5px; }
+.a-results { margin-top: 6px; background: var(--surface); border: 1px solid var(--line-2); border-radius: 10px; box-shadow: var(--shadow); overflow: hidden; display: none; }
+.a-results.show { display: block; }
+.a-results button { display: flex; width: 100%; border: 0; background: transparent; padding: 8px 12px; gap: 8px; align-items: center; cursor: pointer; text-align: left; }
+.a-results button[aria-selected="true"], .a-results button:hover { background: var(--surface-3); }
+.a-results .t { color: var(--ink-3); font-size: 11.5px; margin-left: auto; }
+.a-chips { position: absolute; top: 110px; left: 18px; display: flex; gap: 6px; z-index: 21; flex-wrap: wrap; width: 420px; }
+.a-time { position: absolute; left: 18px; bottom: 16px; width: min(620px, 46%); z-index: 21; padding: 10px 14px 10px; border-radius: 12px; background: var(--glass); border: 1px solid var(--line); backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px); display: grid; grid-template-columns: auto 1fr; gap: 4px 12px; align-items: center; }
+.a-time .lbl { font-size: 11.5px; color: var(--ink-3); grid-column: 1 / -1; display: flex; justify-content: space-between; }
+.a-time .lbl b { color: var(--ink); font-weight: 600; }
+.a-hist { position: relative; height: 40px; }
+.a-hist .bars { position: absolute; inset: 0 0 16px 0; display: flex; gap: 4px; align-items: flex-end; }
+.a-hist .bars i { flex: 1; background: color-mix(in srgb, var(--accent) 35%, transparent); border-radius: 3px 3px 0 0; transition: background-color .2s; }
+.a-hist .bars i.on { background: color-mix(in srgb, var(--accent) 80%, transparent); }
+.a-hist input[type=range] { position: absolute; left: 0; right: 0; bottom: -2px; width: 100%; margin: 0; accent-color: var(--accent); }
+.a-play { width: 34px; height: 34px; border-radius: 50%; border: 1px solid var(--line-2); background: var(--surface-2); cursor: pointer; display: grid; place-items: center; }
+.a-legend { position: absolute; right: 18px; bottom: 16px; z-index: 21; padding: 10px 14px; border-radius: 12px; background: var(--glass); border: 1px solid var(--line); backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px); font-size: 12px; color: var(--ink-2); display: grid; gap: 5px; }
+.a-legend .row { display: flex; align-items: center; gap: 8px; }
+.a-zoom { position: absolute; right: 18px; top: 64px; z-index: 21; display: flex; flex-direction: column; gap: 4px; }
+.a-zoom button { width: 32px; height: 32px; border-radius: 8px; border: 1px solid var(--line); background: var(--glass); cursor: pointer; backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px); }
+.drawer-open .a-zoom { right: 428px; }
+
+/* =========================================================================
+   7. Treatment B: Metro map + atlas
+   ========================================================================= */
+.b-grid { position: absolute; inset: 52px 12px 12px; display: grid; grid-template-columns: 2fr 1fr; gap: 12px; }
+.panel { background: color-mix(in srgb, var(--surface) 82%, transparent); border: 1px solid var(--line); border-radius: var(--r-lg); position: relative; overflow: hidden; }
+.panel-h { display: flex; align-items: baseline; gap: 10px; padding: 12px 16px 0; }
+.panel-h h3 { margin: 0; font-size: 13px; font-weight: 650; }
+.panel-h .muted { font-size: 12px; }
+#b-metro { width: 100%; height: calc(100% - 36px); display: block; }
+.b-atlas { display: grid; grid-template-rows: .85fr 1.15fr; gap: 12px; background: transparent; border: 0; }
+.b-atlas .panel > svg { width: 100%; height: calc(100% - 34px); display: block; }
+.metro-line { fill: none; stroke-linecap: round; stroke-linejoin: round; transition: opacity .25s, stroke-width .25s; }
+.metro-station { cursor: pointer; transition: opacity .25s; }
+.metro-station:focus-visible { outline: none; }
+.metro-station:focus-visible circle, .metro-station:focus-visible rect { stroke: var(--focus); stroke-width: 3; }
+.metro-label { font-size: 11.5px; fill: var(--ink-2); pointer-events: none; transition: opacity .25s, fill .25s; }
+.metro-label.strong { fill: var(--ink); font-weight: 600; }
+.metro-tag { font-size: 12px; font-weight: 650; fill: #fff; pointer-events: none; }
+.dim { opacity: .14 !important; }
+.b-leg { position: absolute; left: 16px; bottom: 10px; display: flex; gap: 16px; font-size: 11.5px; color: var(--ink-3); align-items: center; }
+.b-leg span { display: inline-flex; gap: 6px; align-items: center; }
+.atlas-node { cursor: pointer; transition: opacity .25s; }
+.atlas-node:focus-visible { outline: none; }
+.atlas-node:focus-visible > :first-child { stroke: var(--focus); stroke-width: 2.5; }
+.tm-label { font-size: 11px; fill: var(--ink); pointer-events: none; }
+.tm-sub { font-size: 10px; fill: var(--ink-3); pointer-events: none; }
+.tm-group { font-size: 10.5px; fill: var(--ink-3); text-transform: uppercase; letter-spacing: .06em; pointer-events: none; font-weight: 650; }
+
+/* =========================================================================
+   8. Treatment C: Briefing feed
+   ========================================================================= */
+.c-wrap { position: absolute; inset: 52px 14px 14px; display: grid; grid-template-columns: 1.35fr 1fr; grid-template-rows: auto 1fr auto; gap: 12px; }
+.c-hero { grid-column: 1 / -1; display: grid; grid-template-columns: 1.15fr .9fr .9fr .8fr; gap: 12px; }
+.c-tile { background: color-mix(in srgb, var(--surface) 86%, transparent); border: 1px solid var(--line); border-radius: var(--r-lg); padding: 14px 16px; position: relative; overflow: hidden; }
+.c-tile h3 { margin: 0 0 4px; font-size: 11.5px; letter-spacing: .06em; text-transform: uppercase; color: var(--ink-3); font-weight: 650; }
+.c-greet h2 { margin: 2px 0 6px; font-size: 22px; letter-spacing: -.02em; line-height: 1.2; }
+.c-greet p { margin: 0; color: var(--ink-2); font-size: 13px; }
+.c-big { font-size: 38px; font-weight: 700; letter-spacing: -.03em; font-variant-numeric: tabular-nums; line-height: 1.05; }
+.c-big small { font-size: 13px; font-weight: 500; color: var(--ink-3); letter-spacing: 0; margin-left: 6px; }
+.c-delta { font-size: 12px; color: var(--ink-2); }
+.c-rings { display: flex; gap: 10px; margin-top: 6px; }
+.c-ring { text-align: center; font-size: 11px; color: var(--ink-3); }
+.c-ring svg { display: block; margin: 0 auto 2px; }
+.c-ring b { color: var(--ink); font-variant-numeric: tabular-nums; }
+.c-feed { display: flex; flex-direction: column; min-height: 0; }
+.c-feed .scroll { overflow: auto; padding: 4px 16px 16px; flex: 1; scroll-behavior: smooth; }
+.c-day { position: relative; padding-left: 22px; margin-top: 12px; }
+.c-day::before { content: ""; position: absolute; left: 6px; top: 22px; bottom: -12px; width: 1px; background: var(--line-2); }
+.c-day h4 { margin: 0 0 6px; font-size: 12px; color: var(--ink-2); font-weight: 650; display: flex; gap: 8px; align-items: center; }
+.c-day h4::before { content: ""; position: absolute; left: 2px; top: 4px; width: 9px; height: 9px; border-radius: 50%; background: var(--accent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 25%, transparent); }
+.c-item { display: flex; gap: 10px; align-items: flex-start; padding: 7px 10px; border-radius: 8px; transition: background-color .15s; cursor: pointer; }
+.c-item:hover, .c-item:focus-visible { background: var(--surface-3); }
+.c-item .txt { flex: 1; color: var(--ink-2); font-size: 13px; }
+.c-item .txt b { color: var(--ink); font-weight: 600; }
+.c-change { margin: 6px 0 8px; display: grid; grid-template-columns: 1fr 26px 1fr; align-items: stretch; gap: 0; border: 1px solid var(--line); border-radius: 10px; overflow: hidden; cursor: pointer; background: var(--surface-2); }
+.c-change > div { padding: 9px 12px; font-size: 12.5px; }
+.c-change .before { color: var(--ink-3); text-decoration: line-through; text-decoration-color: color-mix(in srgb, var(--bad) 70%, transparent); }
+.c-change .after { color: var(--ink); background: color-mix(in srgb, var(--good) 9%, transparent); }
+.c-change .arrow { display: grid; place-items: center; color: var(--ink-3); padding: 0; background: var(--surface-3); }
+.c-change .lab { display: block; font-size: 10px; text-transform: uppercase; letter-spacing: .06em; margin-bottom: 2px; text-decoration: none; color: var(--ink-3); }
+.c-review { display: flex; flex-direction: column; min-height: 0; }
+.c-stack { position: relative; flex: 1; margin: 6px 16px 8px; min-height: 230px; perspective: 1000px; }
+.c-card { position: absolute; inset: 0; background: var(--surface-2); border: 1px solid var(--line-2); border-radius: 14px; padding: 16px 18px; box-shadow: var(--shadow); transition: transform .35s var(--ease-out), opacity .35s; will-change: transform; display: flex; flex-direction: column; gap: 8px; user-select: none; touch-action: none; }
+.c-card.top { cursor: grab; }
+.c-card .group { font-size: 11px; text-transform: uppercase; letter-spacing: .06em; color: var(--ink-3); }
+.c-card .sentence { font-size: 17px; line-height: 1.35; letter-spacing: -.01em; }
+.c-card .sentence b { font-weight: 650; }
+.c-card .meta { margin-top: auto; display: flex; gap: 6px; flex-wrap: wrap; align-items: center; font-size: 11.5px; color: var(--ink-3); }
+.c-card .stamp { position: absolute; top: 16px; right: 16px; font-weight: 800; font-size: 13px; letter-spacing: .1em; padding: 3px 10px; border: 2px solid currentColor; border-radius: 6px; opacity: 0; transform: rotate(8deg); }
+.c-card .stamp.confirm { color: var(--good); }
+.c-card .stamp.reject { color: var(--bad); left: 16px; right: auto; transform: rotate(-8deg); }
+.c-card .stamp.skip { color: var(--ink-3); left: 50%; right: auto; transform: translateX(-50%); }
+.c-actions { display: flex; justify-content: center; gap: 10px; padding: 0 16px 14px; }
+.c-act { display: inline-flex; gap: 8px; align-items: center; padding: 9px 16px; border-radius: 999px; border: 1px solid var(--line-2); background: var(--surface-2); cursor: pointer; font-weight: 600; transition: transform .15s var(--ease-spring), border-color .15s, color .15s; }
+.c-act:hover { transform: translateY(-1px); }
+.c-act:active { transform: scale(.95); }
+.c-act.confirm:hover { color: var(--good); border-color: var(--good); }
+.c-act.reject:hover { color: var(--bad); border-color: var(--bad); }
+.c-act kbd { font-family: var(--mono); font-size: 10.5px; color: var(--ink-3); border: 1px solid var(--line-2); border-radius: 4px; padding: 0 4px; }
+.c-prog { display: flex; gap: 4px; padding: 0 16px; }
+.c-prog i { flex: 1; height: 4px; border-radius: 2px; background: var(--surface-3); transition: background-color .3s; }
+.c-prog i.confirmed { background: var(--good); } .c-prog i.rejected { background: var(--bad); } .c-prog i.skipped { background: var(--ink-3); } .c-prog i.cur { background: var(--accent); }
+.c-done { position: absolute; inset: 0; display: grid; place-items: center; text-align: center; color: var(--ink-2); }
+.c-done svg path { stroke-dasharray: 60; stroke-dashoffset: 60; animation: draw .6s .1s var(--ease-out) forwards; }
+@keyframes draw { to { stroke-dashoffset: 0; } }
+.c-strip { grid-column: 1 / -1; display: grid; grid-template-columns: repeat(6, 1fr); gap: 10px; }
+.c-ego { background: color-mix(in srgb, var(--surface) 86%, transparent); border: 1px solid var(--line); border-radius: 12px; padding: 8px 10px; display: grid; grid-template-columns: 74px 1fr; gap: 8px; align-items: center; cursor: pointer; transition: border-color .2s, transform .2s var(--ease-out); text-align: left; color: inherit; font: inherit; }
+.c-ego:hover { border-color: var(--line-2); transform: translateY(-2px); }
+.c-ego .nm { font-weight: 600; font-size: 12.5px; line-height: 1.25; }
+.c-ego .ds { font-size: 11px; color: var(--ink-3); }
+.spark path.area { opacity: .18; }
+
+/* =========================================================================
+   9. Treatment D: Radial explorer
+   ========================================================================= */
+.d-grid { position: absolute; inset: 52px 12px 12px; display: grid; grid-template-columns: 1fr 420px; gap: 12px; }
+.d-sun { position: relative; }
+.d-sun svg { position: absolute; inset: 0; width: 100%; height: 100%; }
+.d-crumbs { position: absolute; left: 16px; top: 12px; z-index: 2; display: flex; gap: 4px; align-items: center; font-size: 12.5px; }
+.d-crumbs button { border: 1px solid var(--line); background: var(--glass); border-radius: 999px; padding: 3px 10px; cursor: pointer; color: var(--ink-2); }
+.d-crumbs button:last-child { color: var(--ink); border-color: var(--line-2); }
+.d-crumbs .sep { color: var(--ink-3); }
+.d-arc { cursor: pointer; transition: opacity .2s; stroke: var(--bg); stroke-width: 1.5; }
+.d-arc:focus { outline: none; }
+.d-arc:focus-visible { outline: none; stroke: var(--focus); stroke-width: 3; }
+.d-center { cursor: pointer; }
+.d-center:focus-visible { outline: none; }
+.d-center:focus-visible circle { stroke: var(--focus); stroke-width: 3; }
+.d-lab { pointer-events: none; font-size: 11px; fill: var(--ink); }
+.d-lab.ax { font-weight: 650; font-size: 12px; }
+.d-lab.on-axis { fill: #fff; }
+:root[data-theme="light"] .d-lab.on-axis { fill: #0b0b0b; }
+.d-edge { fill: none; stroke-width: 1.6; pointer-events: none; }
+.d-side { display: flex; flex-direction: column; min-height: 0; }
+.d-side .detail { padding-top: 14px; }
+.d-hint { position: absolute; right: 16px; top: 16px; max-width: 360px; text-align: right; font-size: 11.5px; color: var(--ink-3); }
+</style>
+</head>
+<body>
+<!-- =======================================================================
+     Header: title, research summary, treatment switcher, theme + motion
+     ======================================================================= -->
+<header class="top">
+  <div class="brand">
+    <svg class="brand-mark" viewBox="0 0 32 32" aria-hidden="true">
+      <circle cx="16" cy="16" r="15" fill="none" stroke="var(--line-2)"/>
+      <line x1="9" y1="11" x2="22" y2="9" stroke="var(--ink-3)"/><line x1="22" y1="9" x2="21" y2="22" stroke="var(--ink-3)"/><line x1="9" y1="11" x2="21" y2="22" stroke="var(--ink-3)"/><line x1="9" y1="11" x2="11" y2="22" stroke="var(--ink-3)"/>
+      <circle cx="9" cy="11" r="3" fill="var(--people)"/><rect x="19.5" y="6.5" width="5" height="5" transform="rotate(45 22 9)" fill="var(--process)"/><rect x="18.5" y="19.5" width="5" height="5" rx="1" fill="var(--product)"/><circle cx="11" cy="22" r="2.5" fill="var(--systems)"/>
+    </svg>
+    <div>
+      <h1>Knowledge home: four visualization treatments</h1>
+      <p class="sub">bosun console prototype. All data is fictional ("Acme"). Self-contained: no network requests, no libraries.</p>
+    </div>
+  </div>
+  <div class="controls">
+    <div class="seg" role="tablist" aria-label="Treatment">
+      <button role="tab" id="tab-A" aria-controls="mock-A" aria-selected="true" data-t="A"><span class="k">A</span>Constellation</button>
+      <button role="tab" id="tab-B" aria-controls="mock-B" aria-selected="false" data-t="B" tabindex="-1"><span class="k">B</span>Metro + atlas</button>
+      <button role="tab" id="tab-C" aria-controls="mock-C" aria-selected="false" data-t="C" tabindex="-1"><span class="k">C</span>Briefing</button>
+      <button role="tab" id="tab-D" aria-controls="mock-D" aria-selected="false" data-t="D" tabindex="-1"><span class="k">D</span>Radial</button>
+    </div>
+    <button class="toggle" id="motionBtn" aria-pressed="false" title="Reduce motion (also follows the OS setting)">Reduce motion</button>
+    <button class="toggle" id="themeBtn" aria-pressed="true" title="Toggle light / dark theme"><svg width="14" height="14" viewBox="0 0 16 16" aria-hidden="true"><path d="M8 1a7 7 0 1 0 0 14A7 7 0 0 0 8 1zm0 1.5v11a5.5 5.5 0 0 1 0-11z" fill="currentColor"/></svg><span>Dark</span></button>
+  </div>
+  <div class="research">
+    <p><b>Research summary.</b> Good graph products follow <a href="https://webspace.science.uu.nl/~telea001/uploads/VACourse/Shneiderman96.pdf">Shneiderman's mantra</a> (overview first, zoom and filter, details on demand) and fight the hairball by
+      <a href="https://cambridge-intelligence.com/how-to-fix-hairballs/">filtering, aggregating and ranking by centrality</a> rather than drawing everything.
+      They fade context instead of hiding it (<a href="https://docs.kumu.io/overview/advanced-editor-hub/controls-reference">Kumu focus/showcase</a>), let the graph grow over time
+      (<a href="https://obsidian.md/help/plugins/graph">Obsidian time-lapse</a>, <a href="https://doc.linkurious.com/ogma/latest/">Ogma timelines</a>), and offer task-specific lenses
+      (<a href="https://neo4j.com/blog/developer/autumn-is-bloom-ing-with-new-visualization-features/">Neo4j Bloom perspectives</a>, <a href="https://backstage.io/docs/features/software-catalog/creating-the-catalog-graph">Backstage kind/depth filters</a>).
+      Structural layouts beat force layouts when position should mean something (<a href="https://mk.bcgsc.ca/linnet">hive plots</a>,
+      <a href="https://www.cg.tuwien.ac.at/courses/InfoVis/HallOfFame/2007/Grasberger/InfoVis2006%20Hierarchical%20Edge%20Bundles%20-%20Visualization%20of%20Adjacency%20Relations%20in%20Hierarchical%20Data%20%5BDanny%20Holten%5D.pdf">hierarchical edge bundling</a>,
+      <a href="https://timetableworld.com/?p=29341">metaphorical metro maps</a>), and motion supports meaning without carrying it alone (<a href="https://web.dev/articles/prefers-reduced-motion">reduced motion</a>).</p>
+    <details id="ideas">
+      <summary>10 applied ideas</summary>
+      <div class="ideas">
+        <ol>
+          <li><b>Overview, then zoom/filter, then details on demand.</b> Every treatment opens on a whole-base overview; facts only appear in a panel on click. <a href="https://webspace.science.uu.nl/~telea001/uploads/VACourse/Shneiderman96.pdf">Shneiderman 1996</a></li>
+          <li><b>Show less: rank and filter instead of drawing every edge.</b> Size by connectedness, axis filter chips, labels only for important nodes. <a href="https://cambridge-intelligence.com/how-to-fix-hairballs/">Cambridge Intelligence</a></li>
+          <li><b>Fade, do not hide.</b> Hover dims non-neighbors to ~15% so context stays readable. <a href="https://docs.kumu.io/overview/advanced-editor-hub/controls-reference">Kumu showcase/focus</a></li>
+          <li><b>Time as a first-class filter.</b> An "as of" slider replays how the base grew, like Obsidian's Animate and Ogma's temporal filtering. <a href="https://obsidian.md/help/plugins/graph">Obsidian</a>, <a href="https://doc.linkurious.com/ogma/latest/">Ogma</a></li>
+          <li><b>Task-specific lenses over one graph.</b> Bloom perspectives and Backstage's kind/depth filters argue for several purpose-built views over one model, which is what the A-D switcher is. <a href="https://neo4j.com/blog/developer/autumn-is-bloom-ing-with-new-visualization-features/">Neo4j Bloom</a>, <a href="https://backstage.io/docs/features/software-catalog/creating-the-catalog-graph">Backstage</a></li>
+          <li><b>Position should mean something.</b> Hive plots and radial hierarchies give stable, comparable layouts; force layouts do not. <a href="https://mk.bcgsc.ca/linnet">Krzywinski hive plots</a></li>
+          <li><b>Bundle edges along the hierarchy.</b> Route relations through type and axis rings to cut clutter. <a href="https://www.cg.tuwien.ac.at/courses/InfoVis/HallOfFame/2007/Grasberger/InfoVis2006%20Hierarchical%20Edge%20Bundles%20-%20Visualization%20of%20Adjacency%20Relations%20in%20Hierarchical%20Data%20%5BDanny%20Holten%5D.pdf">Holten 2006</a></li>
+          <li><b>Processes read best as routes.</b> Metro maps give lines, stations and interchanges for free, but the metaphor needs checking against the domain. <a href="https://timetableworld.com/?p=29341">Haverkort, metaphorical metro maps</a></li>
+          <li><b>People, content, activity.</b> Enterprise graphs that work pair entities with the activity around them, which is what the "this week" feed shows. <a href="https://docs.glean.com/security/knowledge-graph">Glean knowledge graph</a>, <a href="https://docs.capacities.io/reference/glossary">Capacities typed objects</a></li>
+          <li><b>Motion supports meaning, never carries it alone.</b> All animation stops under reduced motion and state stays visible as text and shape. <a href="https://web.dev/articles/prefers-reduced-motion">web.dev</a></li>
+        </ol>
+      </div>
+    </details>
+  </div>
+</header>
+
+<!-- =======================================================================
+     Stage: one mock per treatment, plus the shared detail drawer
+     ======================================================================= -->
+<main class="stage" id="stage">
+  <!-- A: Constellation -->
+  <section class="mock active" id="mock-A" role="tabpanel" aria-labelledby="tab-A">
+    <canvas id="a-canvas" aria-label="Knowledge constellation graph. Use the search box to find and open entities."></canvas>
+    <div class="chrome">
+      <div class="title"><span class="live-dot" aria-hidden="true"></span>Knowledge</div>
+      <div class="crumbs">Constellation</div>
+      <div class="spacer"></div>
+      <div class="stat-pills" id="a-pills"></div>
+      <button class="btn ghost raw-link">Raw data</button>
+    </div>
+    <div class="a-search">
+      <svg class="ico" width="14" height="14" viewBox="0 0 16 16" aria-hidden="true"><circle cx="7" cy="7" r="5" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="M11 11l3.5 3.5" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>
+      <input id="a-q" type="text" placeholder="Search people, processes, systems..." autocomplete="off" role="combobox" aria-expanded="false" aria-controls="a-results" aria-label="Search entities">
+      <span class="kbd">/</span>
+      <div class="a-results" id="a-results" role="listbox"></div>
+    </div>
+    <div class="a-chips" id="a-chips" role="group" aria-label="Filter by axis"></div>
+    <div class="a-zoom">
+      <button id="a-zin" aria-label="Zoom in">+</button><button id="a-zout" aria-label="Zoom out">&minus;</button><button id="a-fit" aria-label="Fit to screen" title="Fit">&#9634;</button>
+    </div>
+    <div class="a-time">
+      <div class="lbl"><span>As of <b id="a-asof">Tue 20 Oct</b></span><span id="a-asof-n"></span></div>
+      <button class="a-play" id="a-play" aria-label="Replay the week"><svg width="12" height="12" viewBox="0 0 12 12"><path d="M3 1.5l7 4.5-7 4.5z" fill="currentColor"/></svg></button>
+      <div class="a-hist"><div class="bars" id="a-bars"></div><input type="range" id="a-day" min="1" max="7" step="1" value="7" aria-label="As-of day"></div>
+    </div>
+    <div class="a-legend" id="a-legend"></div>
+  </section>
+
+  <!-- B: Metro + atlas -->
+  <section class="mock" id="mock-B" role="tabpanel" aria-labelledby="tab-B">
+    <div class="chrome">
+      <div class="title"><span class="live-dot" aria-hidden="true"></span>Knowledge</div>
+      <div class="crumbs">Process metro and atlas</div>
+      <div class="spacer"></div>
+      <div class="stat-pills" id="b-pills"></div>
+      <button class="btn ghost raw-link">Raw data</button>
+    </div>
+    <div class="b-grid">
+      <div class="panel b-metro">
+        <div class="panel-h"><h3>How work moves</h3><span class="muted">Processes as lines, steps as stations, shared systems as interchanges</span></div>
+        <svg id="b-metro" role="img" aria-label="Process metro map"></svg>
+        <div class="b-leg" id="b-leg"></div>
+      </div>
+      <div class="b-atlas">
+        <div class="panel"><div class="panel-h"><h3>People</h3><span class="muted">by team, sized by facts</span></div><svg id="b-people" role="img" aria-label="People by team"></svg></div>
+        <div class="panel"><div class="panel-h"><h3>Product</h3><span class="muted">repos, features, decisions, lessons</span></div><svg id="b-product" role="img" aria-label="Product treemap"></svg></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- C: Briefing -->
+  <section class="mock" id="mock-C" role="tabpanel" aria-labelledby="tab-C">
+    <div class="chrome">
+      <div class="title"><span class="live-dot" aria-hidden="true"></span>Knowledge</div>
+      <div class="crumbs">Weekly briefing</div>
+      <div class="spacer"></div>
+      <div class="stat-pills" id="c-pills"></div>
+      <button class="btn ghost raw-link">Raw data</button>
+    </div>
+    <div class="c-wrap" id="c-wrap"></div>
+  </section>
+
+  <!-- D: Radial -->
+  <section class="mock" id="mock-D" role="tabpanel" aria-labelledby="tab-D">
+    <div class="chrome">
+      <div class="title"><span class="live-dot" aria-hidden="true"></span>Knowledge</div>
+      <div class="crumbs">Radial explorer</div>
+      <div class="spacer"></div>
+      <div class="stat-pills" id="d-pills"></div>
+      <button class="btn ghost raw-link">Raw data</button>
+    </div>
+    <div class="d-grid">
+      <div class="panel d-sun" id="d-sun">
+        <div class="d-crumbs" id="d-crumbs" aria-label="Breadcrumbs"></div>
+        <svg id="d-svg" role="img" aria-label="Radial explorer of axes, entity types and entities"></svg>
+        <div class="d-hint">Click a segment to zoom in, the center to zoom out. Hover an entity to see its relations. Arrow keys move between segments.</div>
+      </div>
+      <div class="panel d-side"><div class="detail" id="d-detail"></div></div>
+    </div>
+  </section>
+
+  <!-- Shared slide-in detail drawer (A, B, C) -->
+  <aside class="drawer" id="drawer" aria-label="Entity details" aria-hidden="true">
+    <button class="btn ghost close" id="drawer-close" aria-label="Close details">&times;</button>
+    <div class="detail" id="drawer-body"></div>
+    <div class="detail-foot"><a href="#" class="raw-link" id="drawer-raw">Open raw view</a><span style="flex:1"></span><span>Esc to close</span></div>
+  </aside>
+  <div class="tip" id="tip" role="status" aria-live="polite"></div>
+</main>
+
+<!-- Notes per treatment -->
+<section class="notes active" id="notes-A">
+  <div class="note"><h3>Why</h3><p>The most "alive" option and the closest to what people picture when they hear knowledge graph. Clusters by axis give an instant sense of where knowledge is thick or thin; the time slider shows the base growing; hover-dimming keeps 70+ nodes readable instead of a hairball.</p></div>
+  <div class="note"><h3>Trade-offs</h3><ul><li>Positions carry no meaning beyond cluster; layout differs slightly per load.</li><li>Weak for ordered things (process steps) and for "what should I do today".</li><li>At 500+ entities it needs aggregation (collapse by type) to stay readable.</li></ul></div>
+  <div class="note"><h3>Production effort</h3><p><b>Medium, 3-5 days.</b> Canvas renderer, camera, hit-testing and the panel are hand-written here (~450 lines). Persist node positions so the map is stable across visits.</p></div>
+  <div class="note"><h3>Library</h3><p>Hand-written physics works at this size (this file). For robustness vendor <b>d3-force</b> as one file (~15 KB min / ~6 KB gz incl. quadtree for Barnes-Hut). Avoid force-graph (~150 KB+).</p></div>
+</section>
+<section class="notes" id="notes-B">
+  <div class="note"><h3>Why</h3><p>Processes are the hardest knowledge to grasp from a fact list and the most valuable to an agent. A metro map makes order, gates and hand-offs readable at a glance, and interchanges show which systems tie processes together. The atlas covers People and Product with forms where size and grouping mean something.</p></div>
+  <div class="note"><h3>Trade-offs</h3><ul><li>Automatic octilinear layout is hard; this mock uses a hand-tuned grid.</li><li>Lines only fit about 6-10 processes before a picker is needed.</li><li>Three panels compete for attention; less "single hero".</li></ul></div>
+  <div class="note"><h3>Production effort</h3><p><b>High, 6-9 days.</b> Auto-layout: one row per process, shared stations aligned to columns, simple octilinear router (as here). Treemap and team packing are ~120 lines each.</p></div>
+  <div class="note"><h3>Library</h3><p>Hand-write. Squarified treemap and packing are small; <b>d3-hierarchy</b> (~7 KB gz) is an option for packing. No library solves metro layout well.</p></div>
+</section>
+<section class="notes" id="notes-C">
+  <div class="note"><h3>Why</h3><p>Answers "what changed and what needs me?" in five seconds, which is the real daily job of the home screen. The review stack turns the nearly-all-proposed base into a habit (confirm / skip / reject with keys), and superseded decisions read as before/after.</p></div>
+  <div class="note"><h3>Trade-offs</h3><ul><li>Less spatial "wow"; the graph appears only as mini ego views.</li><li>Needs good fact sentence rendering (predicate templates).</li><li>Metrics like "rediscovery saved" need instrumentation we do not have yet.</li></ul></div>
+  <div class="note"><h3>Production effort</h3><p><b>Low-medium, 3-4 days.</b> Plain HTML/CSS plus tiny SVG; the review stack wires straight to the existing confirm/skip/reject API.</p></div>
+  <div class="note"><h3>Library</h3><p><b>None.</b> Rings, sparklines and ego graphs are 10-30 lines of SVG each.</p></div>
+</section>
+<section class="notes" id="notes-D">
+  <div class="note"><h3>Why</h3><p>Puts the user at the center and makes the axis/type/entity hierarchy literal, so position always means the same thing (stable across visits, unlike a force layout). Zoom-to-segment plus breadcrumbs gives clean drill-down; bundled edges show cross-axis relations only when asked.</p></div>
+  <div class="note"><h3>Trade-offs</h3><ul><li>Arc lengths are hard to compare; labels crowd past ~120 entities per ring (zoom fixes it).</li><li>Says little about time or status.</li><li>Feels more analytical than inviting.</li></ul></div>
+  <div class="note"><h3>Production effort</h3><p><b>Medium, 4-5 days.</b> Partition layout, arc paths, zoom tween and B-spline bundling are hand-written here (~300 lines).</p></div>
+  <div class="note"><h3>Library</h3><p>Hand-write, or vendor <b>d3-hierarchy + d3-shape</b> (~15 KB gz together) for partition, arcs and curveBundle.</p></div>
+</section>
+
+<div class="toast" id="toast" role="status" aria-live="polite"></div>
+
+<script>
+{{SCRIPT}}
+</script>
+</body>
+</html>

@@ -1,0 +1,42 @@
+#!/usr/bin/env python3
+"""Resolve a Claude Code session name to a session UUID, without the interactive picker.
+
+Usage: bosun resolve <workdir> <name>        print the session UUID
+       bosun resolve <workdir> --list        list named sessions, newest first
+       bosun resolve --live <session-uuid>   print the PID of a running claude holding it
+
+Picks the most recently modified session in <workdir>'s project dir whose *latest*
+custom title equals <name> exactly. Exit codes: 0 found, 3 no such session (or none live), 2 usage;
+anything else is an error, so callers never mistake a failure for "not found".
+The knowledge of Claude Code's files lives in lib/claude_state.py.
+"""
+
+from __future__ import annotations
+
+import sys
+from pathlib import Path
+
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "lib"))
+import claude_state
+
+
+ARGUMENTS = 2  # <workdir> <name>, <workdir> --list or --live <uuid>
+
+
+def main(argv: list[str]) -> int:
+    if argv[:1] in (["-h"], ["--help"]):
+        print(__doc__.strip())
+        return 0
+    if len(argv) != ARGUMENTS:
+        print(__doc__.strip(), file=sys.stderr)
+        return claude_state.USAGE
+    if argv[0] == "--live":
+        return claude_state.main(["live", argv[1]])
+    if argv[1] == "--list":
+        return claude_state.main(["list", argv[0]])
+    return claude_state.main(["resolve", argv[0], argv[1]])
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))

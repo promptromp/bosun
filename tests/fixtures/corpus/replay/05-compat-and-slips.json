@@ -1,0 +1,43 @@
+{
+ "source": "Slips seen in the corpus (a guessed state name, a wrong kind, field updates that needed --kind), the legacy note-based outcome still working for tasks handed over before this change, the rollout backfill for them, and the refusals.",
+ "setup": [
+  "bosun ledger upsert 'review:acme/customers#109' --kind review-request --field requester='Priya Nair'",
+  "bosun ledger transition 'review:acme/customers#109' delegated --note 'sent to customers'",
+  "bosun ledger upsert 'mypr:acme/exporter#104' --kind my-pr"
+ ],
+ "steps": [
+  {"actor": "repo", "why": "a state name guessed by a repo session (day 1)", "run": "bosun ledger transition 'review:acme/customers#109' posted --note 'Posted with 14 inline comments'", "rc": 1,
+   "out": ["delegated -> posted is not allowed for review-request; allowed: closed, dismissed, requested, reviewed"]},
+  {"actor": "repo", "why": "an old task text's transition still works", "run": "bosun ledger transition 'review:acme/customers#109' reviewed --note 'COMMENT; https://github.com/acme/customers/pull/109#pullrequestreview-2' --field reviewed_at=2026-03-12T07:33:13Z --field reviewed_sha=0000005abc",
+   "out": ["delegated -> reviewed"]},
+  {"actor": "repo", "why": "a wrong kind name (day 1)", "run": "ID='review:acme/customers#109'; bosun ledger upsert \"$ID\" --kind review --field review_url=https://github.com/acme/customers/pull/109#pullrequestreview-2", "rc": 1,
+   "out": ["unknown kind 'review'"]},
+  {"actor": "repo", "why": "a field update no longer needs --kind", "run": "ID='review:acme/customers#109'; bosun ledger upsert \"$ID\" --field review_url=https://github.com/acme/customers/pull/109#pullrequestreview-2",
+   "out": ["updated: review:acme/customers#109 [review-request] state=reviewed"]},
+  {"actor": "orchestrator", "why": "the day-1 field update that failed for lack of --kind", "run": "S=https://acme.slack.com/archives/C0000000001; bosun ledger upsert 'mypr:acme/exporter#104' --field review_thread=$S/p1700000016000016",
+   "out": ["updated: mypr:acme/exporter#104"]},
+  {"actor": "orchestrator", "why": "a command that does not exist (day 2)", "run": "bosun ledger proposals", "rc": 2},
+  {"actor": "repo", "why": "a task handed over before this change still reports with a note", "run": "bosun ledger note 'mypr:acme/exporter#104' 'Pushed 3 commits; answered all 6 threads; one decision left open'"},
+  {"actor": "orchestrator", "why": "such an item has no recorded window", "run": "bosun delegate --update 'mypr:acme/exporter#104' --details 'also fix the schema wording'", "rc": 1,
+   "out": ["was never handed to a repo session", "bosun ledger record-delegation mypr:acme/exporter#104 --window <window> --task <type>"]},
+  {"actor": "orchestrator", "why": "rollout: record where in-flight work is", "run": "bosun ledger record-delegation 'mypr:acme/exporter#104' --window exporter-tax --task fix-my-pr",
+   "out": ["ok: mypr:acme/exporter#104 delegated to exporter-tax (fix-my-pr)"]},
+  {"actor": "orchestrator", "why": "then updates work", "run": "bosun delegate --update 'mypr:acme/exporter#104' --details 'also fix the schema wording'",
+   "out": ["Update to ledger item mypr:acme/exporter#104", "ok: update 1 recorded"]},
+  {"actor": "orchestrator", "why": "a message about an unknown item is refused", "run": "bosun send --id 'mypr:acme/exporter#9999' exporter 'is this done?'", "rc": 1,
+   "out": ["no ledger item mypr:acme/exporter#9999"]},
+  {"actor": "orchestrator", "why": "a message about an item that was never delegated there", "run": "bosun send --id 'review:acme/customers#109' exporter 'The schema change you depend on merged.'",
+   "out": ["would deliver to replay:exporter: Ledger item review:acme/customers#109: The schema change you depend on merged."]},
+  {"actor": "orchestrator", "why": "a message about no work item", "run": ["bosun send --no-item exporter - <<'EOF'", "Pause after your current step and save your state; a restart follows.", "EOF"],
+   "out": ["would deliver to replay:exporter: Pause after your current step"]},
+  {"actor": "orchestrator", "why": "opening a window goes through delegate", "run": "bosun send --new svc-x /Users/me/Development/exporter 'Ledger id: mypr:acme/exporter#104 ...'", "guard": "deny"},
+  {"actor": "user", "why": "I can still send plain text by hand", "run": "bosun send exporter 'hello'", "out": ["would deliver to replay:exporter: hello"]},
+  {"actor": "orchestrator", "why": "merged: no more updates", "run": "bosun ledger transition 'mypr:acme/exporter#104' merged --note merged", "out": ["-> merged"]},
+  {"actor": "orchestrator", "why": "refused once finished", "run": "bosun delegate --update 'mypr:acme/exporter#104' --details 'x'", "rc": 1,
+   "out": ["is merged; a finished item takes no updates"]}
+ ],
+ "expect": {
+  "review:acme/customers#109": {"state": "reviewed", "fields": {"review_url": "https://github.com/acme/customers/pull/109#pullrequestreview-2", "reviewed_sha": "0000005abc"}, "window": null, "events": {"note": 1}},
+  "mypr:acme/exporter#104": {"state": "merged", "window": "exporter-tax", "updates": 1, "events": {"note": 1, "update": 1}}
+ }
+}

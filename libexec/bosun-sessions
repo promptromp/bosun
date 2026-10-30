@@ -1,0 +1,67 @@
+#!/bin/bash
+# Usage: bosun sessions [--json]
+#
+# Every window bosun knows: the orchestrator, the sessions.yml entries and checkin (whether or
+# not they run now), then any other window of the tmux session (for example one that
+# `bosun send --new` opened). For each: its kind (orchestrator, session, checkin, extra), folder,
+# configured model and effort, whether the window exists, and, when Claude runs in it, the Claude's
+# pid, status (and when it last changed), version, session id, name and transcript path.
+#   --json  one JSON array instead of the table (what `bosun learn` and `console` read)
+set -uo pipefail
+source "$(dirname "$0")/../lib/common.sh"
+load_config
+
+JSON=0
+for arg in "$@"; do
+  case "$arg" in
+    --json) JSON=1 ;;
+    -h | --help)
+      usage
+      exit 0
+      ;;
+    *) die_usage "unknown argument $arg" ;;
+  esac
+done
+
+specs=""
+[ -f "$BOSUN_SESSIONS_FILE" ] && specs="$(window_specs)"
+live=""
+session_exists && live="$(tmux_cmd list-windows -t "=$BOSUN_SESSION_NAME" -F '#{window_name}	#{pane_current_path}	#{pane_pid}')"
+
+# One window as a JSON object: name, kind, dir, model, effort, window (exists), claude (or null).
+window_json() { # <name> <dir> <kind> <model> <effort>
+  local pane_pid claude_pid described="null" exists=false
+  pane_pid="$(awk -F'\t' -v name="$1" '$1 == name { print $3; exit }' <<<"$live")"
+  if [ -n "$pane_pid" ]; then
+    exists=true
+    claude_pid="$(claude_pid_under "$pane_pid")" && described="$(claude_state describe "$claude_pid")" || described="null"
+  fi
+  jq -cn --arg name "$1" --arg dir "$2" --arg kind "$3" --arg model "$4" --arg effort "$5" \
+    --argjson exists "$exists" --argjson claude "${described:-null}" \
+    '{name: $name, kind: $kind, dir: $dir, model: $model, effort: $effort, window: $exists, claude: $claude}'
+}
+
+windows_json() {
+  local name dir kind model effort path pane_pid
+  while IFS=$'\t' read -r name dir kind model effort; do
+    [ -n "$name" ] && window_json "$name" "$dir" "$kind" "$model" "$effort"
+  done <<<"$specs"
+  while IFS=$'\t' read -r name path pane_pid; do
+    [ -n "$name" ] || continue
+    awk -F'\t' -v name="$name" '$1 == name { found = 1 } END { exit !found }' <<<"$specs" && continue
+    window_json "$name" "$path" extra - -
+  done <<<"$live"
+}
+
+all="$(windows_json | jq -s .)"
+if [ "$JSON" = "1" ]; then
+  printf '%s\n' "$all"
+  exit 0
+fi
+jq -r '.[] | [.name, .kind,
+    (if .claude then "claude:\(.claude.status // "?")" elif .window then "no-claude" else "no-window" end),
+    (.claude.sessionId // "-"), (.claude.transcript // "-")] | @tsv' <<<"$all" |
+  while IFS=$'\t' read -r name kind state session transcript; do
+    case "$state" in claude:*) state="claude:$(claude_status_label "${state#claude:}")" ;; esac
+    printf '%-24s %-13s %-13s %-37s %s\n' "$name" "$kind" "$state" "$session" "$transcript"
+  done

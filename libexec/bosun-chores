@@ -1,0 +1,121 @@
+#!/bin/bash
+# Usage: bosun chores [morning|check-in]                     run now in the orchestrator window
+#        bosun chores [morning|check-in] --dry-run [--fresh|--continue]  headless rehearsal
+#
+# Without --dry-run: send /bosun:chores <mode> to the orchestrator window (default: check-in),
+# skipping the idle checks that the scheduled check-in applies.
+#
+# --dry-run runs the same command headless (claude -p) with the orchestrator's policy, settings and
+# plugin, and real Slack/GitHub/Confluence reads, but with no side effects:
+#   - the ledger is a scratch copy of the real one under $BOSUN_STATE_DIR/dry-runs/<timestamp>/,
+#     so idempotency is exercised against current state. --fresh starts empty; --continue starts
+#     from the previous rehearsal's ledger (run twice to check that nothing is processed again)
+#   - `bosun send` only logs what it would deliver (BOSUN_SEND_DRY_RUN=1)
+#   - outward-facing tools on the settings' ask list are denied (headless mode cannot prompt, and
+#     they are passed to --disallowedTools as well)
+# Prints the plan, the scratch ledger changes and any denied tool calls.
+set -uo pipefail
+source "$(dirname "$0")/../lib/common.sh"
+load_config
+
+MODE="check-in"
+DRY_RUN=0
+FRESH=0
+CONTINUE=0
+for arg in "$@"; do
+  case "$arg" in
+    morning | check-in) MODE="$arg" ;;
+    --dry-run) DRY_RUN=1 ;;
+    --fresh) FRESH=1 ;;
+    --continue) CONTINUE=1 ;;
+    -h | --help)
+      usage
+      exit 0
+      ;;
+    *) die_usage "unknown argument $arg" ;;
+  esac
+done
+
+[ "$FRESH" = "1" ] && [ "$CONTINUE" = "1" ] && die_usage "use either --fresh or --continue"
+{ [ "$FRESH" = "1" ] || [ "$CONTINUE" = "1" ]; } && [ "$DRY_RUN" = "0" ] && die_usage "--fresh and --continue only apply to --dry-run"
+[ -n "$BOSUN_ORCHESTRATOR" ] || die "no orchestrator configured (BOSUN_ORCHESTRATOR is empty)"
+COMMAND="/bosun:chores $MODE"
+
+if [ "$DRY_RUN" = "0" ]; then
+  exec "$BOSUN" send "$BOSUN_ORCHESTRATOR" "$COMMAND"
+fi
+
+DRY_RUN_NOTICE="
+
+## Dry run
+This is a rehearsal started by \`bosun chores --dry-run\`. Follow the procedure exactly as
+normal: the ledger is a scratch copy and \`bosun send\` only logs what it would deliver.
+Outward-facing tools are blocked; propose such actions as usual instead of calling them.
+There is no human to answer in this run, so end with the plan."
+
+seed="$BOSUN_STATE_DIR/ledger.json"
+if [ "$CONTINUE" = "1" ]; then
+  runs=("$BOSUN_STATE_DIR"/dry-runs/*/) # timestamped names, so the glob sorts them by time
+  [ -d "${runs[${#runs[@]} - 1]}" ] || die "no previous dry run to continue from"
+  previous="${runs[${#runs[@]} - 1]}"
+  seed="${previous%/}/ledger.json"
+fi
+run_dir="$BOSUN_STATE_DIR/dry-runs/$(date +%Y%m%d-%H%M%S)"
+mkdir -p "$run_dir"
+if [ "$FRESH" = "0" ] && [ -f "$seed" ]; then
+  cp "$seed" "$run_dir/ledger.json"
+  log "scratch ledger seeded from $seed"
+fi
+cp "$run_dir/ledger.json" "$run_dir/ledger.before.json" 2>/dev/null || echo '{"items": {}}' >"$run_dir/ledger.before.json"
+
+log "dry run of '$COMMAND' in $BOSUN_ORCHESTRATOR_DIR; scratch state: $run_dir"
+# shellcheck disable=SC2206
+flags=($BOSUN_ORCHESTRATOR_FLAGS)
+# The same model, effort and settings as the live orchestrator.
+build_model_effort_args "$BOSUN_ORCHESTRATOR_MODEL" "$BOSUN_ORCHESTRATOR_EFFORT" "$BOSUN_ORCHESTRATOR_SETTINGS"
+# Headless Claude cannot ask, so the settings' ask list is denied anyway; deny it by name too.
+deny=(--disallowedTools)
+while IFS= read -r tool; do deny+=("$tool"); done < <(jq -r '.permissions.ask[]?' "$BOSUN_ORCHESTRATOR_SETTINGS")
+[ ${#deny[@]} -gt 1 ] || deny=()
+# This checkout's bosun first: common.sh puts ~/.local/bin (the installed one) first.
+(cd "$BOSUN_ORCHESTRATOR_DIR" &&
+  BOSUN_STATE_DIR="$run_dir" BOSUN_SEND_DRY_RUN=1 PATH="$BOSUN_ROOT/bin:$PATH" "$BOSUN_CLAUDE_BIN" -p \
+    "${flags[@]}" \
+    "${model_effort_args[@]}" \
+    --no-session-persistence \
+    --output-format json \
+    --plugin-dir "$BOSUN_ROOT/orchestrator/plugin" \
+    ${deny[@]+"${deny[@]}"} \
+    --append-system-prompt "$(orchestrator_policy)$DRY_RUN_NOTICE" \
+    -- "$COMMAND") >"$run_dir/result.json" 2>"$run_dir/stderr.log"
+log "claude exited with $? (cost and raw output: $run_dir/result.json)"
+
+python3 - "$run_dir" "$BOSUN" <<'EOF'
+import json
+import os
+import subprocess
+import sys
+from pathlib import Path
+
+run_dir, bosun = Path(sys.argv[1]), sys.argv[2]
+raw = (run_dir / "result.json").read_text()
+try:
+    result = json.loads(raw[raw.index("{"):])
+except ValueError:
+    print(f"no JSON result; see {run_dir}/stderr.log")
+    sys.exit(1)
+
+print("\n=== Plan ===\n")
+print(result.get("result", "(no result)"))
+
+print("\n=== Scratch ledger changes ===\n", flush=True)
+subprocess.run([bosun, "ledger", "diff", str(run_dir / "ledger.before.json")],
+               env={**os.environ, "BOSUN_STATE_DIR": str(run_dir)})
+
+denials = result.get("permission_denials", [])
+print("\n=== Blocked tool calls ===\n")
+for d in denials:
+    detail = d.get("tool_input", {}).get("command") or json.dumps(d.get("tool_input", {}))[:200]
+    print(f"- {d.get('tool_name')}: {detail}")
+print(f"({len(denials)} blocked; cost ${result.get('total_cost_usd', 0):.2f}, {result.get('num_turns', '?')} turns)")
+EOF

@@ -1,0 +1,139 @@
+#!/bin/bash
+# Usage: bosun launch [--model <model>] [--effort <level>] [--no-prompt] <session-name> [initial-prompt | --prompt-file <file>]
+#
+# Run from the session's working directory (each tmux window's root). Resumes the most
+# recent session named exactly <session-name> by UUID, so the /resume picker never opens,
+# with Remote Control enabled under the same name, and submits the drain prompt (or
+# [initial-prompt]). Starts a fresh named session if none exists yet. Refuses to resume a
+# session that another claude process already holds. --prompt-file reads the initial prompt from
+# a file and deletes it (`bosun send --new|--start` hands prompts over this way).
+# --no-prompt resumes without the drain prompt, leaving the session idle (`bosun refresh`
+# uses it for a window with nothing in flight: every prompt re-reads the whole conversation).
+# Model and effort: --model / --effort, else the window's sessions.yml entry, else
+# BOSUN_MODEL / BOSUN_EFFORT (orchestrator: BOSUN_ORCHESTRATOR_MODEL / _EFFORT).
+#
+# The orchestrator window is special: it runs a fresh conversation named <name>-YYYY-MM-DD each
+# day (the ledger carries state across days), uses BOSUN_ORCHESTRATOR_FLAGS instead of
+# BOSUN_CLAUDE_FLAGS, loads the orchestrator settings, plugin and policy, and starts each day
+# with /bosun:chores morning (BOSUN_ORCHESTRATOR_MORNING_CHORES=0: idle, no prompt).
+set -uo pipefail
+source "$(dirname "$0")/../lib/common.sh"
+load_config
+
+model_override=""
+effort_override=""
+no_prompt=0
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --no-prompt)
+      no_prompt=1
+      shift
+      ;;
+    --model)
+      model_override="${2:?model}"
+      shift 2
+      ;;
+    --effort)
+      effort_override="${2:?effort}"
+      shift 2
+      ;;
+    *) break ;;
+  esac
+done
+case "${1:-}" in
+  -h | --help)
+    usage
+    exit 0
+    ;;
+  "")
+    usage >&2
+    exit 2
+    ;;
+  -*) die_usage "unknown option $1" ;;
+esac
+
+# This runs as the pane's launch shell's only command, and that shell never shows a prompt: stop the
+# helpers your startup files forked off there, which only a prompt would end (lib/orphans.py).
+reap_shell_helpers "$PPID" --wrapper-only >/dev/null
+
+name="$1"
+initial_prompt="${2:-}"
+if [ "$initial_prompt" = "--prompt-file" ]; then
+  prompt_file="${3:?prompt file}"
+  [ -f "$prompt_file" ] || die "no prompt file $prompt_file"
+  initial_prompt="$(cat "$prompt_file")"
+  rm -f "$prompt_file"
+  [ -n "$initial_prompt" ] || die "prompt file $prompt_file was empty"
+fi
+claude_name="$(expected_claude_name "$name")"
+prompt="${initial_prompt:-$BOSUN_DRAIN_PROMPT}"
+new_session_prompt="$initial_prompt"
+
+IFS=$'\t' read -r model effort <<<"$(window_model_effort "$name")"
+model="${model_override:-$model}"
+effort="${effort_override:-$effort}"
+valid_effort "$effort" || die_usage "effort must be one of: $EFFORT_LEVELS (got '$effort')"
+
+if is_orchestrator "$name"; then
+  # With BOSUN_APPROVALS_ENABLED=1, also the approvals hooks.
+  build_model_effort_args "$model" "$effort" "$BOSUN_ORCHESTRATOR_SETTINGS" "$(orchestrator_extra_settings)"
+  # shellcheck disable=SC2206
+  args=($BOSUN_ORCHESTRATOR_FLAGS "${model_effort_args[@]}"
+    --plugin-dir "$BOSUN_ROOT/orchestrator/plugin"
+    --append-system-prompt "$(orchestrator_policy)")
+  # BOSUN_ORCHESTRATOR_MORNING_CHORES=0: today's conversation starts idle.
+  [ "$BOSUN_ORCHESTRATOR_MORNING_CHORES" = "1" ] && new_session_prompt="${initial_prompt:-/bosun:chores morning}"
+else
+  # With BOSUN_EVENTS_ENABLED=1, also the hook that records what you type here.
+  build_model_effort_args "$model" "$effort" "" "$(repo_session_settings "$name")"
+  # shellcheck disable=SC2206
+  args=($BOSUN_CLAUDE_FLAGS ${model_effort_args[@]+"${model_effort_args[@]}"})
+fi
+args+=(--name "$claude_name" --remote-control "$name")
+
+run_claude() {
+  if [ "$BOSUN_LAUNCH_DRY_RUN" = "1" ]; then
+    printf 'dry-run: would run:'
+    printf ' %q' "$BOSUN_CLAUDE_BIN" "$@"
+    printf '\n'
+    return 0
+  fi
+  # exec: no bash process stays behind reading this script while Claude runs, so editing the
+  # script can never make a running launcher execute the wrong lines when Claude exits.
+  exec "$BOSUN_CLAUDE_BIN" "$@"
+}
+
+RESOLVE_NOT_FOUND=3
+
+# Prompts go after `--`, so one that starts with "-" is not read as an option.
+session_id="$("$BOSUN_ROOT/libexec/bosun-resolve" "$PWD" "$claude_name" 2>/dev/null)"
+case $? in
+  0) ;;
+  "$RESOLVE_NOT_FOUND")
+    log "no session named '$claude_name' in $PWD; starting a new one"
+    note_bosun_prompt "$name" "$new_session_prompt"
+    if [ -n "$new_session_prompt" ]; then run_claude "${args[@]}" -- "$new_session_prompt"; else run_claude "${args[@]}"; fi
+    exit $?
+    ;;
+  *) die "could not look up session '$claude_name' in $PWD (bosun resolve failed); not starting a blank one" ;;
+esac
+
+holder="$("$BOSUN_ROOT/libexec/bosun-resolve" --live "$session_id")"
+case $? in
+  0)
+    log "'$claude_name' ($session_id) is already running as pid $holder; not starting a second copy."
+    log "close that one, then rerun: bosun launch '$name'"
+    exit 1
+    ;;
+  "$RESOLVE_NOT_FOUND") ;;
+  *) die "could not check whether '$claude_name' is already running (bosun resolve --live failed)" ;;
+esac
+
+if [ "$no_prompt" = "1" ] && [ -z "$initial_prompt" ]; then
+  log "resuming '$claude_name' ($session_id), idle: no prompt"
+  run_claude "${args[@]}" --resume "$session_id"
+  exit $?
+fi
+log "resuming '$claude_name' ($session_id)"
+note_bosun_prompt "$name" "$prompt"
+run_claude "${args[@]}" --resume "$session_id" -- "$prompt"

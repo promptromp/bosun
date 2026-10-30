@@ -1,0 +1,37 @@
+{"type": "entity", "id": "process/release", "name": "Release process", "aliases": {"strong": ["releases", "release flow"], "weak": ["deploy"]}, "summary": "How a merged exporter change reaches production."}
+{"type": "entity", "id": "step/merge", "name": "Merge to main"}
+{"type": "entity", "id": "gate/smoke-tests", "name": "Smoke tests", "aliases": ["smoke"]}
+{"type": "entity", "id": "step/rollout", "name": "Gradual rollout"}
+{"type": "entity", "id": "system/deploy-bot", "name": "Deploy bot"}
+{"type": "entity", "id": "channel/acme-prs", "name": "#acme-prs", "summary": "PR review requests for the exporter team."}
+{"type": "entity", "id": "channel/deploys", "name": "#deploys"}
+{"type": "entity", "id": "process/hotfix", "name": "Hotfix", "aliases": ["hotfixes"]}
+{"type": "entity", "id": "repo/invoice-exporter", "name": "invoice exporter", "aliases": ["exporter", "acme/invoice-exporter"]}
+{"type": "entity", "id": "repo/pdf-renderer", "name": "pdf renderer", "aliases": ["acme/pdf-renderer"]}
+{"type": "entity", "id": "environment/staging-2", "name": "staging 2"}
+{"type": "entity", "id": "lesson/retired-env", "name": "A retired environment takes no new work"}
+{"type": "entity", "id": "team/billing", "name": "Billing team"}
+{"type": "entity", "id": "person/dana", "name": "Dana Example"}
+{"type": "entity", "id": "person/lee", "name": "Lee Sample", "aliases": ["Lee"]}
+{"type": "fact", "subject": "process/release", "predicate": "has_step", "object": "step/merge", "order": 1, "sources": ["ledger:mypr:acme/invoice-exporter#102", "report:task:2026-10-01/1"]}
+{"type": "fact", "subject": "process/release", "predicate": "has_step", "object": "gate/smoke-tests", "order": 2, "sources": ["ledger:mypr:acme/invoice-exporter#102", "memory:deploys.md"]}
+{"type": "fact", "subject": "process/release", "predicate": "has_step", "object": "step/rollout", "order": 3, "sources": ["memory:deploys.md"], "rework": true}
+{"type": "fact", "subject": "process/release", "predicate": "rule", "value": "Every release deploys to staging first; the gradual rollout to production starts only after the canary checks pass.", "sources": ["memory:deploys.md", "transcript:00000000-0000-0000-0000-000000000001"], "authority": "user_said", "rework": true}
+{"type": "fact", "subject": "step/rollout", "predicate": "actor", "object": "system/deploy-bot", "sources": ["memory:deploys.md", "ledger:mypr:acme/invoice-exporter#102"]}
+{"type": "fact", "subject": "system/deploy-bot", "predicate": "posts_to", "object": "channel/deploys", "sources": ["slack:C0000000001/1700000001.000001"]}
+{"type": "fact", "subject": "process/hotfix", "predicate": "entry_point", "object": "channel/deploys", "sources": ["transcript:00000000-0000-0000-0000-000000000002"]}
+{"type": "fact", "subject": "process/hotfix", "predicate": "rule", "value": "Only you can approve a hotfix; agents prepare the change and its notes.", "sources": ["transcript:00000000-0000-0000-0000-000000000002"], "authority": "user_said"}
+{"type": "fact", "subject": "environment/staging-2", "predicate": "status", "value": "retired", "sources": ["memory:staging-2.md", "ledger:task:2026-10-02/3"], "rework": true}
+{"type": "fact", "subject": "lesson/retired-env", "predicate": "about", "object": "environment/staging-2", "sources": ["memory:staging-2.md", "ledger:task:2026-10-02/3"]}
+{"type": "fact", "subject": "lesson/retired-env", "predicate": "states", "value": "Never point new test runs at a retired environment; use staging and record a follow-up to remove its config.", "sources": ["memory:staging-2.md"], "rework": true}
+{"type": "fact", "subject": "repo/invoice-exporter", "predicate": "depends_on", "object": "repo/pdf-renderer", "sources": ["report:task:2026-10-01/1", "ledger:mypr:acme/pdf-renderer#7"]}
+{"type": "fact", "subject": "repo/invoice-exporter", "predicate": "caveat", "value": "Invoice totals round per line, not per invoice; tests compare amounts to the cent.", "sources": ["memory:exporter-totals.md"]}
+{"type": "fact", "subject": "person/dana", "predicate": "reviews", "object": "repo/invoice-exporter", "sources": ["ledger:review:acme/invoice-exporter#99", "report:task:2026-10-01/1"]}
+{"type": "fact", "subject": "person/lee", "predicate": "reviews", "object": "repo/invoice-exporter", "sources": ["ledger:review:acme/invoice-exporter#101"]}
+{"type": "fact", "subject": "person/dana", "predicate": "member_of", "object": "team/billing", "sources": ["profile:directory"]}
+{"type": "fact", "subject": "person/dana", "predicate": "timezone", "value": "Europe/Lisbon", "sources": ["profile:directory"]}
+{"type": "fact", "subject": "person/lee", "predicate": "stated_preference", "value": "Prefers several questions as one table rather than separate messages.", "sources": ["slack:D0000000001/1700000002.000002"], "authority": "stakeholder_said"}
+{"type": "fact", "subject": "person/lee", "predicate": "prefers_channel", "object": "channel/acme-prs", "sources": ["ledger:out:mypr:acme/invoice-exporter#102/1"]}
+{"type": "fact", "subject": "person/lee", "predicate": "strengths", "value": "fast reviewer", "sources": ["slack:C0000000001/1700000003.000003"]}
+{"type": "fact", "subject": "person/dana", "predicate": "stated_working_hours", "value": "09:00-17:00", "sources": ["transcript:00000000-0000-0000-0000-000000000003"], "authority": "inferred"}
+{"type": "fact", "subject": "repo/invoice-exporter", "predicate": "rule", "value": "A change to tax rounding needs a test with a credit note and a multi-currency invoice.", "sources": ["pr:acme/invoice-exporter#102"]}

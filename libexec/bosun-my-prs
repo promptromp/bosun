@@ -1,0 +1,55 @@
+#!/bin/bash
+# Usage: bosun my-prs [--since <window>] [--by updated|created] [--include-drafts]
+#
+# My open PRs in repositories matching BOSUN_REPO_MASK, within a time window.
+#   --since   24h, 48h, 7d, 2w (hours, days, weeks) or a date (YYYY-MM-DD). Default:
+#             BOSUN_MY_PR_WINDOW (48h)
+#   --by      which timestamp the window applies to: updated (default; any activity, e.g. a new
+#             review or push) or created
+# Drafts are skipped unless --include-drafts. Prints one JSON object per line: url, repo, number,
+# title, createdAt, updatedAt, isDraft.
+set -uo pipefail
+source "$(dirname "$0")/../lib/common.sh"
+load_config
+
+SEARCH_LIMIT=200
+WINDOW="$BOSUN_MY_PR_WINDOW"
+BY="updated"
+DRAFT_FILTER=(--draft=false)
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --since)
+      WINDOW="${2:?window, e.g. 48h or 7d}"
+      shift
+      ;;
+    --by)
+      BY="${2:?updated or created}"
+      shift
+      ;;
+    --include-drafts) DRAFT_FILTER=() ;;
+    -h | --help)
+      usage
+      exit 0
+      ;;
+    *) die_usage "unknown argument $1" ;;
+  esac
+  shift
+done
+case "$BY" in updated | created) ;; *) die "--by must be updated or created, got '$BY'" ;; esac
+
+# GitHub search timestamp (UTC) for the start of the window.
+window_start() {
+  case "$1" in
+    [0-9]*h) date -u -v-"${1%h}"H +%Y-%m-%dT%H:%M:%SZ ;;
+    [0-9]*d) date -u -v-"${1%d}"d +%Y-%m-%dT%H:%M:%SZ ;;
+    [0-9]*w) date -u -v-"${1%w}"w +%Y-%m-%dT%H:%M:%SZ ;;
+    [0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]) echo "$1" ;;
+    *) return 1 ;;
+  esac
+}
+since="$(window_start "$WINDOW" 2>/dev/null)" || die "bad window '$WINDOW'; use e.g. 24h, 7d, 2w or YYYY-MM-DD"
+
+gh search prs --author=@me --state=open ${DRAFT_FILTER[@]+"${DRAFT_FILTER[@]}"} "--$BY=>=$since" \
+  --limit "$SEARCH_LIMIT" --json url,number,title,repository,createdAt,updatedAt,isDraft \
+  --jq '.[] | {url, repo: .repository.nameWithOwner, number, title, createdAt, updatedAt, isDraft} | @json' |
+  repo_mask_filter repo

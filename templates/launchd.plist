@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- Rendered by bosun install.sh. Edit bosun.env and re-run install.sh instead. -->
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>__LABEL__</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/bin/bash</string>
+    <string>-lc</string>
+    <string>exec "__BOSUN_ROOT__/bin/bosun" morning __ARGS__</string>
+  </array>
+  <key>EnvironmentVariables</key>
+  <dict>
+__ENV__
+  </dict>
+  <!-- If the Mac is asleep at the scheduled time, launchd runs the job on the next wake. -->
+  <key>StartCalendarInterval</key>
+__CALENDAR__
+  <!-- The keep-awake caffeinate outlives this job; without this launchd would kill it on exit. -->
+  <key>AbandonProcessGroup</key>
+  <true/>
+  <key>RunAtLoad</key>
+  <false/>
+  <key>StandardOutPath</key>
+  <string>__LOG_DIR__/launchd.out</string>
+  <key>StandardErrorPath</key>
+  <string>__LOG_DIR__/launchd.err</string>
+</dict>
+</plist>

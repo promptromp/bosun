@@ -1,0 +1,117 @@
+# The checks a pull request to main must pass; the ruleset on main (.github/rulesets/main.json)
+# requires these jobs by name, so rename or add a job there too. Every tool comes from uv.lock, as
+# for the local hooks. Pull requests only, not again on the push to main: main only ever gets what
+# a pull request passed, up to date with main. The logs are public, so neither check prints what it
+# matched: FORBIDDEN_TERMS_REDACT and gitleaks --redact.
+name: CI
+
+on:
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  # Every hook in .pre-commit-config.yaml, so a commit made without them (--no-verify, or a clone
+  # where they were never installed) cannot slip past. The unit tests run in `test`.
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7.0.1
+        with:
+          fetch-depth: 0 # the pull request's commit messages
+      - uses: ./.github/actions/setup-uv
+        with:
+          python-version: "3.13"
+      - run: uv sync --locked
+      - uses: actions/cache@v6.1.0
+        with:
+          path: ~/.cache/pre-commit
+          key: pre-commit-${{ hashFiles('.pre-commit-config.yaml') }}
+      # The list of terms that must never reach the repo lives outside it; here it comes from the
+      # FORBIDDEN_TERMS secret (one regex per line). Without the secret the list is empty and the
+      # check passes, as on a machine without the file.
+      - name: Forbidden-terms list
+        env:
+          FORBIDDEN_TERMS: ${{ secrets.FORBIDDEN_TERMS }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/config"
+          printf '%s\n' "$FORBIDDEN_TERMS" >"$RUNNER_TEMP/config/forbidden-terms.txt"
+      - name: pre-commit
+        run: uv run pre-commit run --all-files --show-diff-on-failure
+        env:
+          SKIP: unit-tests
+          BOSUN_CONFIG_DIR: ${{ runner.temp }}/config
+          FORBIDDEN_TERMS_REDACT: "1"
+      - name: Forbidden terms in the pull request's title, description and commit messages
+        if: github.event_name == 'pull_request'
+        env:
+          BOSUN_CONFIG_DIR: ${{ runner.temp }}/config
+          FORBIDDEN_TERMS_REDACT: "1"
+          TITLE: ${{ github.event.pull_request.title }}
+          BODY: ${{ github.event.pull_request.body }}
+          BASE: ${{ github.event.pull_request.base.sha }}
+          HEAD: ${{ github.event.pull_request.head.sha }}
+        run: |
+          { printf '%s\n\n%s\n\n' "$TITLE" "$BODY"; git log --format=%B "$BASE..$HEAD"; } >"$RUNNER_TEMP/messages.txt"
+          uv run python tools/forbidden_terms.py --contents-only "$RUNNER_TEMP/messages.txt"
+
+  test:
+    name: test (${{ matrix.python-version }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.13", "3.14", "3.15"]
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - uses: ./.github/actions/setup-uv
+        with:
+          python-version: ${{ matrix.python-version }}
+      - run: uv sync --locked
+      - run: uv run pytest
+
+  # The end-to-end suite, on macOS like the machines bosun runs on: the scripts use BSD date and
+  # /bin/bash 3.2.
+  smoke:
+    runs-on: macos-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - name: Install tmux
+        run: brew install tmux
+        env:
+          HOMEBREW_NO_AUTO_UPDATE: "1"
+          HOMEBREW_NO_INSTALL_CLEANUP: "1"
+      - run: tests/smoke.sh
+
+  # Secrets in any commit of the pull request (all history when run by hand), not only in the final
+  # tree that the detect-secrets hook sees: a commit that adds a token and a later one that removes
+  # it. A made-up value in a test carries a `gitleaks:allow` comment. The CLI rather than the
+  # action, which wants a license key in a repository owned by an organization; Dependabot does not
+  # update it, so bump VERSION and SHA256 together (the release's checksums.txt).
+  gitleaks:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7.0.1
+        with:
+          fetch-depth: 0
+      - name: Install gitleaks
+        env:
+          VERSION: 8.30.1
+          SHA256: 551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb # pragma: allowlist secret (a public checksum)
+        run: |
+          archive="gitleaks_${VERSION}_linux_x64.tar.gz"
+          curl -sSfLo "$RUNNER_TEMP/$archive" "https://github.com/gitleaks/gitleaks/releases/download/v$VERSION/$archive"
+          echo "$SHA256  $RUNNER_TEMP/$archive" | sha256sum -c -
+          tar -xzf "$RUNNER_TEMP/$archive" -C "$RUNNER_TEMP" gitleaks
+      - name: Scan
+        env:
+          RANGE: ${{ github.event_name == 'pull_request' && format('{0}..{1}', github.event.pull_request.base.sha, github.event.pull_request.head.sha) || '--all' }}
+        run: '"$RUNNER_TEMP/gitleaks" git --no-banner --redact --log-opts="$RANGE" .'
