@@ -1,6 +1,10 @@
-# bosun
+<p align="center">
+  <img src="docs/assets/bosun.png" alt="bosun" width="280">
+</p>
 
-**Agents write the code. Bosun runs the rest of the day, and remembers it.**
+<p align="center">
+  <strong>Agents write the code. Bosun runs the rest of the day, and remembers it.</strong>
+</p>
 
 On a ship, the bosun runs the deck crew and the day's work so the captain can steer. This bosun
 runs a fleet of coding agents (Claude Code today) and the work around the code: reviews,
