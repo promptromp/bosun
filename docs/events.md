@@ -4,7 +4,8 @@ Off by default (`BOSUN_EVENTS_ENABLED=0`); design: [docs/design/events.md](desig
 With it on:
 
 - **What I tell a repo window is recorded.** Repo sessions launched from then on get a
-  `UserPromptSubmit` hook (in their `--settings`, nothing global) that records each prompt I type
+  `UserPromptSubmit` hook on Claude Code (in their `--settings`, nothing global), and on Codex its
+  `notify=` program, which reports when the turn ends. They record each prompt I type
   in the window, or send from my phone, on the item(s) the window holds: `bosun ledger said
   [<id>]`, also in `ledger show` and `ledger reports --since`. Prompts bosun pasted, slash
   commands and messages from other sessions are skipped; secrets are redacted. The orchestrator
@@ -30,8 +31,7 @@ With it on:
   reaches the PR's window (`delegate --update`) even while it still works on the first.
 
 Without the flag, the rest of this works too: `ledger reports --since` lists every report,
-`ledger said`, `working` and `idle` exist (on [Codex](design/harnesses.md), what you said is recorded when
-the turn ends, not when you press Return; a window is `working` on its active item while its agent
+`ledger said`, `working` and `idle` exist (a window is `working` on its active item while its agent
 is mid-turn), `ledger spawn` warns about a task that already comes from the same source or
 Slack thread, and the chores run `review-watch` in step 4 (it records, but queues nothing).
 

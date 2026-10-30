@@ -83,7 +83,7 @@ bosun console [--port N] [--open]
 
 - Bound to `127.0.0.1` only; refuses to start on another address (`--host` exists only to be
   refused, so a mistaken bind fails loudly).
-- A random token per start, printed in the URL (`http://127.0.0.1:8765/?t=...`), exchanged for an
+- A random token, kept across restarts (below), printed in the URL (`http://127.0.0.1:8765/?t=...`), exchanged for an
   `HttpOnly; SameSite=Strict` cookie on first load, then a redirect drops it from the address bar.
   The cookie's name carries the port, since cookies are not kept apart by port. Every API call
   needs it (other local processes and browser tabs cannot read the ledger by guessing the port).
@@ -195,7 +195,7 @@ This answers "what am I holding up" at a glance.
 
 ### 2. Sessions (`#/sessions`)
 
-- One card per window (from `sessions --json`): repo directory, model and effort, Claude status
+- One card per window (from `sessions --json`): repo directory, model and effort, agent status
   (idle, busy, shell, waiting) and for how long, held items, active item and whether it is
   working, last report. The `tmux attach` command can be copied.
 - Health panel: the watchdog table (`watchdog --status` as data), last check-in and morning run,
@@ -205,7 +205,7 @@ This answers "what am I holding up" at a glance.
 
 **Built in step 3.** `lib/console_live.py` collects the facts; `lib/console_sessions.py` turns them
 into `/api/sessions` and `/api/health`.
-- Sources, all read-only: `bosun sessions --json` (whose Claude record now carries
+- Sources, all read-only: `bosun sessions --json` (whose `agent` record carries
   `statusUpdatedAt`, for "for how long"), `bosun watchdog --facts` (new: the facts the
   watchdog collects from tmux, ps and launchd, as JSON), `watchdog.status_data` (the data behind
   `--status`: no alert, no de-dup state, no lock), the events state and queue, the Slack watcher's
@@ -229,7 +229,7 @@ One stylesheet with a small design system in CSS custom properties at its top: a
 two radii, a neutral palette with one accent, and state colours whose text meets WCAG AA (4.5:1)
 on their own background, light and dark through `prefers-color-scheme`. Ledger groups have their
 colours (needs me: amber, waiting: blue, open: green, closed: grey), and so do Claude statuses
-(idle: green, busy: violet, shell: teal, waiting: amber, no Claude: grey). Cards with subtle
+(idle: green, busy: violet, shell: teal, waiting: amber, no agent: grey). Cards with subtle
 borders and shadows, a sticky top bar with the views and the "Needs you" count, a two-column item
 page on wide screens (content, and a side panel with waiting on, delegation, lineage and links
 out), focus rings on `:focus-visible`, a skip link, and a layout that drops optional columns on a

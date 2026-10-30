@@ -14,9 +14,27 @@ on:
       - uninstall.sh
       - bin/**
       - libexec/bosun-init
+      - libexec/bosun-preflight
+      - libexec/bosun-launch
+      - libexec/bosun-doctor
+      - libexec/bosun-trust
+      - libexec/bosun-start
+      - libexec/bosun-stop
+      - libexec/bosun-refresh
+      - libexec/bosun-setup
+      - lib/setup-helpers.sh
+      - lib/login.py
       - libexec/bosun-morning
       - lib/common.sh
+      - lib/agents.sh
+      - lib/preflight.sh
+      - lib/platforms/**
+      - lib/harnesses/**
+      - lib/launch/**
       - lib/init*.py
+      - lib/agent_*.py
+      - lib/claude_state.py
+      - lib/codex_state.py
       - templates/**
       - tests/install_e2e.sh
       - tests/sandbox.sh

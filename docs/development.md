@@ -35,8 +35,8 @@ launchd, `pmset` and your config for real. Use the cheapest of these that can sh
 | How an agent behaves: launching it, its screens and files, a task handed to it | `tests/sandbox.sh mac live claude`, `... live codex` | the real agents from nothing, through setup and sessions | 10 minutes, about a dollar |
 | The wake itself | `bosun wake-test`, on real hardware | a real sleep and a real wake | 5 minutes |
 
-The first two also run in CI, and so does the third on a clean GitHub macOS runner, whenever the install
-could have changed (`.github/workflows/install.yml`). The sandboxes' scripts install for real, so they
+The first also runs in CI (the second's unit and smoke suites run there natively), and so does the third on
+a clean GitHub macOS runner, whenever the install could have changed (`.github/workflows/install.yml`). The sandboxes' scripts install for real, so they
 refuse to run anywhere else.
 
 ### Docker: `tests/sandbox.sh`
@@ -133,7 +133,7 @@ Work up the levels; each one exercises more of the real chain.
 1. **Unit and integration:** `tests/smoke.sh`. It runs the Python unit tests in `tests/unit/`
    (ledger and outreach, delegate, Claude Code state, repo mask, permission guard, the watchdog's
    checks with an injected clock, learning's digest, ledger checks and proposals, and replays of
-   real orchestrator and repo-session interactions, anonymized and moved to a fictional domain,
+   orchestrator and repo-session interactions, rewritten as fiction in the acme domain,
    from `tests/fixtures/corpus/`) and then end-to-end checks,
    including setup with a fake `aws`, the morning dry run, and install/uninstall with fake
    `launchctl` and `pmset` under a test label. Hermetic: temp HOME, fixture sessions, fake Claude

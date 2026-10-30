@@ -10,8 +10,8 @@ otherwise.
 
 ## Supported versions
 
-bosun has no releases yet, so fixes land on `main` only: update with `git pull` and re-run
-`./install.sh`.
+bosun has no releases yet, so fixes land on `main` only: run the install line again, or update with
+`git pull` and re-run `./install.sh`.
 
 ## What matters most
 

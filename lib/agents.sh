@@ -27,6 +27,14 @@ window_harness() { # <window>
   echo "${harness:-$BOSUN_HARNESS}"
 }
 
+# The model a window on <harness> runs unless it says otherwise; each agent names its models differently.
+harness_default_model() { # <harness>
+  case "$1" in
+    codex) echo "${BOSUN_CODEX_MODEL:--}" ;;
+    *) echo "${BOSUN_MODEL:--}" ;;
+  esac
+}
+
 # Every agent this setup uses, as one line of words: what preflight and `bosun trust` go through.
 harnesses_in_use() {
   {

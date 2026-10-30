@@ -3,7 +3,7 @@
 #        bosun init --detect
 #        bosun init --print-answers [--answers <file>]
 #
-# Set bosun up from what this Mac shows: the repos you use Claude Code in, your usual hours, your
+# Set bosun up from what this Mac shows: the repos you use your agents in, your usual hours, your
 # logins. It starts by checking what bosun needs (`bosun preflight`), and stops there if something is
 # missing. In a terminal it then asks a few questions, one key each, and shows the plan before it
 # changes anything. Without a terminal, or with --dry-run, it only prints the plan.

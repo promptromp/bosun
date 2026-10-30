@@ -4,7 +4,7 @@
 # If the tmux session does not exist, start it: the orchestrator, one window per sessions.yml entry,
 # and checkin, each running its command directly (see build_launch_command).
 # If it exists, act per BOSUN_ON_EXISTING:
-#   refresh (default)  per window: restart idle sessions running an outdated Claude Code, send
+#   refresh (default)  per window: restart idle sessions running an outdated agent, send
 #                      the drain prompt to other idle ones, leave busy ones alone, relaunch
 #                      exited ones and recreate missing windows (see `bosun refresh`)
 #   drain              the same, but never restart

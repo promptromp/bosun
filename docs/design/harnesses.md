@@ -79,12 +79,16 @@ does not record the question, and Enter would answer it. So `bosun send` reads t
 
 | Feature | On Codex |
 |---|---|
-| The orchestrator | Claude Code only. Without Claude Code, set `BOSUN_ORCHESTRATOR=""` to run windows alone |
+| The orchestrator | Claude Code only, and it must be installed. `BOSUN_ORCHESTRATOR=""` runs windows with no orchestrator and stops preflight asking for it, but `bosun init`, `install.sh` and `bosun doctor` still require the `claude` command |
 | Remote Control from your phone | No such thing: drive the window from a terminal |
 | A revoked login | Not reported. `codex login status` only says a key is there, and a failed request shows on the screen but not in the session file |
 | What you said in a window | Recorded when the turn ends, not when you press Return, because that is when Codex reports it |
 | The watchdog's `waiting`, `spend-limit` and `context-size` | `waiting` cannot fire with the default flags. The other two read Claude Code's transcripts |
 | Impact stats and daily learning | Read Claude Code's transcripts, so Codex sessions are not counted. `lib/learn_digest.py`'s `Harness` protocol is where an adapter goes |
+| Autocompact | Claude Code only: `BOSUN_AUTOCOMPACT_TOKENS` and `autocompact:` do nothing on a Codex window |
+| `shell`, `idle-bg` and the watchdog's `long-shell` | Codex's session file records only idle or busy, so a background command left running does not show |
+| Per-task model and effort on a running session | A task's settings reach a running Claude Code session through a subagent, an instruction that names its Agent tool. A running Codex session gets the task at its own settings. A window opened for the task (`--new`) does start at them |
+| `bosun resolve` | Claude Code's names only. A Codex window's are in `codex-sessions.json` |
 | Compact-context and signal hooks | Claude Code only. Codex has hooks, but each new one stops at a review screen until a person accepts it, which is why bosun uses `notify=` |
 | A real GitHub login inside a session | Not tested: the runs so far used a stand-in `gh`. A real one is expected to go through the reviewer, since the sandbox blocks the Keychain |
 

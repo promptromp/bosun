@@ -4,7 +4,7 @@
 #                                                            paste into a window running an agent
 #        bosun send --new [--model <m>] [--effort <e>] <window> <workdir> <message>
 #                                                            open a new window with a fresh session
-#        bosun send --start <window> [message]           start Claude in an existing window
+#        bosun send --start <window> [message]           start the agent in an existing window
 #                                                            that has none (resumes its named session;
 #                                                            without a message, sends the drain prompt)
 #
@@ -15,10 +15,10 @@
 # message is about no work item; the orchestrator's guard requires one of the two.
 #
 # Messages use bracketed paste, so multi-line text arrives as a single prompt. Delivery needs
-# Claude to be idle, busy (the message joins the running turn or waits for it) or "shell"; a
+# the agent to be idle, busy (the message joins the running turn or waits for it) or "shell"; a
 # session waiting at a permission prompt or a question is refused, so a pasted Enter never answers
 # it. It also waits while someone typed in that window within BOSUN_SEND_TYPING_MINUTES or its
-# input line holds unsent text (up to BOSUN_SEND_WAIT_SECONDS), and fails unless Claude took
+# input line holds unsent text (up to BOSUN_SEND_WAIT_SECONDS), and fails unless the agent took
 # the prompt (the line emptied, no "Unknown command"), so the caller can send it again.
 # --new and --start exit 0 only once the agent is running in the window; otherwise they print the
 # window's last output and exit 1.

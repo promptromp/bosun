@@ -44,7 +44,7 @@ showed where that breaks:
 ## Shape
 
 **What I say in a window (`user-said`).** With events on, `bosun launch` gives each repo
-session a `UserPromptSubmit` hook (`bosun hook user-prompt --window <window>`, in the
+session on Claude Code a `UserPromptSubmit` hook (`bosun hook user-prompt --window <window>`, in the
 session's `--settings`, so nothing global changes). Each prompt I type there, or send from my phone,
 is recorded in the ledger's `said` list and on the item(s) it is about: the held items it names by
 id, else the held item whose title shares the most words with it, else the window's active item;

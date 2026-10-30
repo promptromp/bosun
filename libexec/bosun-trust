@@ -1,11 +1,11 @@
 #!/bin/bash
 # Usage: bosun trust [--check | --revoke] [--any] <dir>...
 #
-# Mark directories as trusted by Claude Code, as if you had accepted its folder trust prompt there.
-# In an untrusted folder an interactive Claude shows that prompt at startup and waits, which stalls
-# an unattended start; Claude Code has no setting or flag that skips it. This records the same
-# entry Claude writes when you accept the prompt (`hasTrustDialogAccepted` in ~/.claude.json, an
-# internal format), and checks it took.
+# Mark directories as trusted by each agent in use, as if you had accepted its folder trust prompt there.
+# In an untrusted folder an agent shows that prompt at startup and waits, which stalls an unattended
+# start, and neither has a setting or flag that skips it. This records the same entry the agent writes
+# when you accept the prompt (Claude Code: `hasTrustDialogAccepted` in ~/.claude.json; Codex: `trust_level`
+# in ~/.codex/config.toml; both internal formats), and checks it took.
 #
 # Only git repositories whose origin matches BOSUN_REPO_MASK are trusted, unless --any.
 # --check exits 0 if every directory is trusted. --revoke removes the trust.

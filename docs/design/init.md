@@ -11,7 +11,7 @@ anything.
 |---|---|---|
 | Bootstrap | `get.sh` | Plain `sh`, because it runs before anything is known to be there: only gets bosun and starts `init`. |
 | Preflight | `lib/preflight.sh`, `lib/platforms/`, `lib/harnesses/` | Plain `sh`: what bosun needs, and what to do about anything missing. Changes nothing. |
-| Detect | `lib/init_detect.py` | Read-only: the facts. Claude Code's files are read through `lib/claude_state.py`. |
+| Detect | `lib/init_detect.py` | Read-only: the facts. Each agent's files are read through its adapter, by way of `AGENTS` in `lib/agent_state.py`. |
 | Plan | `lib/init_plan.py` | Pure: facts to recommended answers, answers to file contents and a plan. |
 | Wizard | `lib/init_wizard.py` | Pure over a `Ui`: the questions, from recommended answers to yours. |
 | Terminal | `lib/init_terminal.py` | A key at a time, a screen at a time, and the terminal put back. |
@@ -78,7 +78,7 @@ It only reads where and when prompts were typed, never what they say.
   output into issues, and `bosun.env` can hold a webhook.
 - **Replace another repeating wake,** or start anything before the plan has been shown.
 
-It asks how repo sessions handle permissions, and recommends Claude Code's auto mode: a safety check
+On Claude Code it asks how repo sessions handle permissions, and recommends its auto mode: a safety check
 reviews each action, and there is no warning to accept before the first start. If auto mode blocks
 several actions in a row the session waits at a prompt, and the watchdog says so. The other answer,
 `--dangerously-skip-permissions`, has no checks at all, and its warning has to be accepted once by
@@ -111,13 +111,13 @@ need Python wait until it is. `bosun init` and `bosun doctor` both start with it
 **To add an OS:** add `lib/platforms/<os>.sh` with the same functions as `macos.sh`, map its `uname -s`
 in `load_profiles`, and let `get.sh`'s `check_os` through. `tests/unit/test_preflight.py` checks that a
 profile has them all. That covers this check only. What else assumes macOS: `install.sh` and the
-launchd templates, `pmset` and the wake, `caffeinate` in the keep-awake, and `osascript` for alerts.
+launchd templates, `pmset` and the wake, `caffeinate` in the keep-awake, `osascript` for alerts, `dscl`, `date -j` and `lsof`'s flags.
 
 **To add an agent:** see [Agents](harnesses.md#adding-another). There are two so far, and a profile is
 only the first step.
 
 **A window can still stop at a screen nobody knew about.** So the watchdog's `stalled-start` check does
-not look at the screen: a Claude that has run for five minutes without writing its session record has
+not look at the screen: an agent that has run for five minutes without writing its session record has
 not reached a session. It alerts and leaves the answer to you. bosun never answers these screens with a
 keypress, since several of them default to exit, and a key sent to a screen it misread can agree to
 something nobody saw.

@@ -12,7 +12,7 @@ issue.
 
 ## Setting up
 
-The [requirements](docs/setup.md#requirements) are macOS, tmux, jq, Python 3.13 or newer, the GitHub
+The [requirements](docs/setup.md#requirements) are macOS, Homebrew, tmux, jq, Python 3.13 or newer, the GitHub
 CLI and Claude Code (Codex is optional); for development also [uv](https://docs.astral.sh/uv/). Fork the repository,
 then:
 

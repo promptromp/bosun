@@ -8,7 +8,7 @@ of truth, so don't copy rules into this file.
 - `bin/bosun` dispatches `bosun <cmd>` to `libexec/bosun-<cmd>`. Each command's
   `# Usage:` header is its `--help`.
 - `lib/common.sh`: config defaults (`load_config`) and shared helpers: the window list
-  (`window_specs`: orchestrator, sessions.yml entries, checkin), tmux, Claude status, the one
+  (`window_specs`: orchestrator, sessions.yml entries, checkin), tmux, the one
   launch path (`build_launch_command`, used by `start`, `refresh` and `send`), and the launchd
   labels and plist rendering (from `templates/launchd.plist`, `launchd-watchdog.plist`,
   `launchd-learn.plist`). `lib/setup-helpers.sh`: the helpers a site's `setup.sh` calls
@@ -38,7 +38,7 @@ of truth, so don't copy rules into this file.
   `review-arrived` and queued as `review` events; design: `docs/design/events.md`).
   `lib/claude_state.py`: everything read or written in Claude Code's own files (transcripts,
   running-session records, folder trust, error replies, `claude auth status`, the login check
-  request); bash reaches them only through it. `lib/signals.py`: Claude Code's own signals,
+  request); bash reaches them only through it, but for `bosun doctor` showing your saved default. `lib/signals.py`: Claude Code's own signals,
   recorded by async hooks (`bosun hook signal`: what a waiting window was asked, what a turn
   left running, StopFailure); design: `docs/design/signals.md`. `lib/login.py`: whether the login
   works and a window gets real replies (signals combined, the check-in gate, `login.json`). `lib/orphans.py`:
@@ -117,7 +117,7 @@ of truth, so don't copy rules into this file.
 - `orchestrator/policy.md` (appended to the orchestrator's system prompt),
   `orchestrator/plugin/commands/chores.md` (the chores procedure), `orchestrator/settings.json`
   (the orchestrator's own permissions, generic; a site replaces it with
-  `BOSUN_ORCHESTRATOR_SETTINGS`; repo sessions use `BOSUN_CLAUDE_FLAGS`).
+  `BOSUN_ORCHESTRATOR_SETTINGS`; repo sessions use `BOSUN_CLAUDE_FLAGS` or `BOSUN_CODEX_FLAGS`).
 - `orchestrator/tasks/<type>.md`: one file per delegated task type (front matter: what the repo
   session may and never does, what the orchestrator does afterwards; body: the rules sent to the
   session). `_common.md`: rules every task gets. Sites can add or replace task types and add shared
@@ -258,7 +258,7 @@ you changed (the table and how to set them up: `docs/development.md`, "Which san
   checkout. `init` walks a new user's first day with no network (`tests/sandbox/fresh_user.sh`, in the
   fictional world of `world.sh`), through a real terminal (`drive.py`). Docker on a Mac is Linux, so
   `tests/sandbox/macos/` holds stand-ins: it proves bosun's logic, never launchd or the Keychain.
-- `tests/sandbox.sh mac [setup|run [--from-nothing]|shell|clean]`: a real throwaway Mac in a Tart VM
+- `tests/sandbox.sh mac [setup|run [--from-nothing]|live [claude|codex]|shell|clean]`: a real throwaway Mac in a Tart VM (`live`: the real agents, about a dollar a run)
   (`tests/sandbox/mac.sh`), running `tests/install_e2e.sh`, the same script as the GitHub macOS runner.
   Use it for `get.sh`, `install.sh`, launchd, `pmset` and whatever macOS does its own way. A clone costs
   no time or disk, so make one rather than be careful with one. It has already shown what Docker could
@@ -333,8 +333,8 @@ The repo is meant to be shareable, so nothing in it may identify an organization
   sessions and the tmux server and then masked later edits to `bosun.env`. Pass a setting to a
   child process explicitly (as `bosun-ledger` does for `ledger.py`); only real environment
   overrides are exported.
-- Model and effort: launch passes `--model` and the effort as `--settings '{"effortLevel":...}'`
-  (before the orchestrator's long `--append-system-prompt`, so `agent_launch_model_effort` can read
+- Model and effort, on Claude Code: launch passes `--model` and the effort as `--settings '{"effortLevel":...}'`
+  (before the orchestrator's long `--append-system-prompt`, so `claude_state.launch_settings` can read
   them back from `ps`). Not `--effort` or `CLAUDE_CODE_EFFORT_LEVEL`: those beat `/effort`, so you
   could not change effort inside the session. Never paste `/model` or `/effort` into a session:
   both save the choice to `~/.claude/settings.json` for every future session. Per-task effort for a

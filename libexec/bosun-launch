@@ -2,10 +2,10 @@
 # Usage: bosun launch [--model <model>] [--effort <level>] [--no-prompt] <session-name> [initial-prompt | --prompt-file <file>]
 #
 # Run from the session's working directory (each tmux window's root). Resumes the most
-# recent session named exactly <session-name> by UUID, so the /resume picker never opens,
+# recent session named exactly <session-name> by its id, so no picker opens, on Claude Code
 # with Remote Control enabled under the same name, and submits the drain prompt (or
 # [initial-prompt]). Starts a fresh named session if none exists yet. Refuses to resume a
-# session that another claude process already holds. --prompt-file reads the initial prompt from
+# session that another agent process already holds. --prompt-file reads the initial prompt from
 # a file and deletes it (`bosun send --new|--start` hands prompts over this way).
 # --no-prompt resumes without the drain prompt, leaving the session idle (`bosun refresh`
 # uses it for a window with nothing in flight: every prompt re-reads the whole conversation).

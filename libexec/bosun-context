@@ -2,7 +2,7 @@
 # Usage: bosun context
 #
 # Print what the orchestrator needs at the start of a chores run: the time, chores config, my
-# GitHub login, tmux windows with Claude status, the owner/repo -> directory map (limited to
+# GitHub login, tmux windows with each one's agent and status, the owner/repo -> directory map (limited to
 # BOSUN_REPO_MASK), and the open ledger items with pending proposals.
 set -uo pipefail
 source "$(dirname "$0")/../lib/common.sh"

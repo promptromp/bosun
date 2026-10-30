@@ -590,9 +590,10 @@ def yaml_scalar(value: object) -> str:
 
 
 SESSIONS_HEADER = """\
-# One tmux window per entry, written by `bosun init`. `name` is the Claude session name: the most
-# recent session with exactly this name in `dir` is resumed; if none exists, a new one is created.
-# Optional per window: `model`, `effort` and `autocompact` (defaults: bosun.env).
+# One tmux window per entry, written by `bosun init`. `name` is the window's name, and the name its
+# session is resumed by; if there is no such session in `dir`, a new one is created.
+# Optional per window: `harness` (claude or codex), `model`, `effort` and, on Claude Code, `autocompact`
+# (defaults: bosun.env).
 """
 
 
@@ -715,7 +716,7 @@ def windows_reason(facts: Facts, answers: Answers) -> list[str]:
     if not answers.repos or SESSIONS_FILE in facts.files:
         return []
     if any(use.prompts for use in facts.repos):
-        return [f"Windows: the repos you used Claude Code in most over the last {facts.history_days} days."]
+        return [f"Windows: the repos you used your agents in most over the last {facts.history_days} days."]
     return ["Windows: the git repos found in your usual folders, newest first."]
 
 

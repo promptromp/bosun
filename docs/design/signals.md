@@ -1,6 +1,6 @@
 # Claude Code's own signals (hooks)
 
-`BOSUN_HOOK_SIGNALS=1` (default) adds async hooks to every window bosun launches (repo
+`BOSUN_HOOK_SIGNALS=1` (default) adds async hooks to every Claude Code window bosun launches (repo
 sessions through `repo_session_settings`, the orchestrator through `orchestrator_extra_settings`).
 Each runs `bosun hook signal --window <window>`, which appends one compact line to
 `$BOSUN_STATE_DIR/signals/<window>.jsonl` (`lib/signals.py`). The hooks are `async`, so they

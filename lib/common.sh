@@ -577,10 +577,10 @@ reap_session_helpers() {
   done < <(tmux_cmd list-panes -s -t "=$BOSUN_SESSION_NAME" -F '#{window_name}	#{pane_pid}' 2>/dev/null)
 }
 
-# Every window of the session, in order, as "name<TAB>dir<TAB>kind<TAB>model<TAB>effort": the
+# Every window of the session, in order, as "name<TAB>dir<TAB>kind<TAB>model<TAB>effort<TAB>harness": the
 # orchestrator (kind orchestrator, if enabled), one per sessions.yml entry (kind session), and
 # checkin (kind checkin, when the orchestrator and check-ins are on). Model and effort come from
-# the sessions.yml entry or the defaults; "-" means Claude Code's own default. The one list that
+# the sessions.yml entry or the defaults; "-" means the agent's own default. The one list that
 # start, refresh, launch, morning --dry-run and doctor work from.
 window_specs() {
   [ -f "$BOSUN_SESSIONS_FILE" ] || die "sessions manifest not found: $BOSUN_SESSIONS_FILE"
@@ -590,12 +590,12 @@ window_specs() {
   fi
   ruby -ryaml -e '
     pick = ->(value, default) { value.to_s.empty? ? default : value.to_s }
-    default_model = { "claude" => ARGV[1], "codex" => ARGV[4] }
+    default_model = { "claude" => ARGV[1], "codex" => ARGV[4] }  # as harness_default_model says
     (YAML.safe_load(File.read(ARGV[0])) || {}).fetch("sessions", []).each do |s|
       harness = pick.(s["harness"], ARGV[3])
       puts [s.fetch("name"), File.expand_path(s.fetch("dir")), "session",
             pick.(s["model"], default_model.fetch(harness, "-")), pick.(s["effort"], ARGV[2]), harness].join("\t")
-    end' "$BOSUN_SESSIONS_FILE" "${BOSUN_MODEL:--}" "${BOSUN_EFFORT:--}" "$BOSUN_HARNESS" "${BOSUN_CODEX_MODEL:--}" ||
+    end' "$BOSUN_SESSIONS_FILE" "$(harness_default_model claude)" "${BOSUN_EFFORT:--}" "$BOSUN_HARNESS" "$(harness_default_model codex)" ||
     die "could not read $BOSUN_SESSIONS_FILE"
   if checkin_loop_wanted; then
     printf 'checkin\t%s\tcheckin\t-\t-\t-\n' "$HOME"
@@ -622,7 +622,7 @@ window_model_effort() {
     return
   fi
   { window_specs 2>/dev/null | awk -F'\t' -v name="$1" '$1 == name { print $4 "\t" $5; found = 1; exit } END { exit !found }'; } ||
-    printf '%s\t%s\n' "${BOSUN_MODEL:--}" "${BOSUN_EFFORT:--}"
+    printf '%s\t%s\n' "$(harness_default_model "$(window_harness "$1")")" "${BOSUN_EFFORT:--}"
 }
 
 # Sets model_effort_args to the Claude flags for <model> and <effort> ("-": Claude Code's default).

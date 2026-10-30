@@ -19,8 +19,8 @@ goes by, seen in Codex 0.166.0 and not a public API:
     session_meta says it came from the terminal.
   - The file only appears with the first prompt, so `bosun launch` always gives a new session one, and
     like Claude Code's screens, a Codex with no session file is at a screen or still starting.
-  - A turn is `task_started` to `task_complete` or `turn_aborted`. With --ask-for-approval never there
-    is no waiting at a prompt; in a mode that asks, a turn waiting for you still reads as busy, because
+  - A turn is `task_started` to `task_complete` or `turn_aborted`. With the default flags nothing asks
+    a person; in a mode that asks, a turn waiting for you still reads as busy, because
     the file does not record it (lib/pane_input.py reads that from the screen).
   - Codex has no way to name a session from outside, so bosun keeps its own table of names, filled in by
     the program Codex runs when a turn ends (`bosun hook codex-turn-end`). That program also runs for
