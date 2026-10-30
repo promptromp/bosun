@@ -244,7 +244,7 @@ KG.treatments.C = (function () {
   }
   return {
     init() { wrap = $('#c-wrap'); buildBatch(); render(); bind(); KG.bus.on('theme', () => { if (KG.active === 'C') { $('.c-strip', wrap).innerHTML = stripHtml(); } }); },
-    show() { if (this.inited && wrap.children.length) animateIn(); },
+    show() { if (wrap.children.length) animateIn(); },
     hide() {},
     focus(id) { KG.drawer.open(id); },
   };

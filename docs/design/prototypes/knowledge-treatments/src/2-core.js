@@ -197,6 +197,7 @@ KG.treatments = {};   // key -> { init(), show(), hide(), focus(id) }
 KG.active = null;
 KG.focus = function (id) { const t = KG.treatments[KG.active]; if (t && t.focus) t.focus(id); };
 
+const started = new Set();   // the treatments whose init() has run
 function activate(key, pushHash = true) {
   if (!Object.hasOwn(KG.treatments, key)) key = 'A';
   if (KG.active === key) return;
@@ -208,7 +209,7 @@ function activate(key, pushHash = true) {
   $$('.notes').forEach(m => m.classList.toggle('active', m.id === 'notes-' + key));
   KG.active = key;
   const t = KG.treatments[key];
-  if (!t.inited) { t.init(); t.inited = true; }
+  if (!started.has(key)) { t.init(); started.add(key); }
   if (t.show) t.show();
   if (pushHash) history.replaceState(null, '', '#' + key);
 }
