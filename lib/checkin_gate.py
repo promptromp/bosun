@@ -71,7 +71,7 @@ def quiet_too_long(inputs: Inputs, last: datetime) -> list[str]:
     return [f"{hours:.1f} h since the last check-in"] if inputs.now - last >= inputs.max_quiet else []
 
 
-def events_news(inputs: Inputs, last: datetime) -> list[str]:
+def events_news(inputs: Inputs, _last: datetime) -> list[str]:
     return [f"{inputs.pending_events} event(s) not yet delivered"] if inputs.pending_events else []
 
 

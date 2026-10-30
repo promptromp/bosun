@@ -23,14 +23,15 @@ jobs:
   lint:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7.0.1
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          persist-credentials: false
           fetch-depth: 0 # the pull request's commit messages
       - uses: ./.github/actions/setup-uv
         with:
           python-version: "3.13"
       - run: uv sync --locked
-      - uses: actions/cache@v6.1.0
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ~/.cache/pre-commit
           key: pre-commit-${{ hashFiles('.pre-commit-config.yaml') }}
@@ -46,7 +47,7 @@ jobs:
       - name: pre-commit
         run: uv run pre-commit run --all-files --show-diff-on-failure
         env:
-          SKIP: unit-tests
+          SKIP: unit-tests,no-commit-to-branch
           BOSUN_CONFIG_DIR: ${{ runner.temp }}/config
           FORBIDDEN_TERMS_REDACT: "1"
       - name: Forbidden terms in the pull request's title, description and commit messages
@@ -70,12 +71,15 @@ jobs:
       matrix:
         python-version: ["3.13", "3.14", "3.15"]
     steps:
-      - uses: actions/checkout@v7.0.1
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - uses: ./.github/actions/setup-uv
         with:
           python-version: ${{ matrix.python-version }}
       - run: uv sync --locked
-      - run: uv run pytest
+      # Coverage here only: it would slow the commit hook, and a floor is about the long run.
+      - run: uv run pytest --cov=lib --cov=tools --cov-fail-under=94 --cov-report=term:skip-covered
 
   # The end-to-end suite, on macOS like the machines bosun runs on: the scripts use BSD date and
   # /bin/bash 3.2.
@@ -83,7 +87,9 @@ jobs:
     runs-on: macos-latest
     timeout-minutes: 20
     steps:
-      - uses: actions/checkout@v7.0.1
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - name: Install tmux
         run: brew install tmux
         env:
@@ -99,8 +105,9 @@ jobs:
   gitleaks:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7.0.1
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          persist-credentials: false
           fetch-depth: 0
       - name: Install gitleaks
         env:

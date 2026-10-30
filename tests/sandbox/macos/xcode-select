@@ -1,0 +1,3 @@
+#!/bin/bash
+# Apple's command line tools are installed.
+echo /Library/Developer/CommandLineTools

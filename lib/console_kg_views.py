@@ -233,7 +233,7 @@ def reversed_decisions(kb: KB, start: date, zone: tzinfo) -> list[Change]:
     return found
 
 
-def rank(kb: KB, fact: Record) -> int:
+def rank(fact: Record) -> int:
     """Lessons, decisions and principles read best, then rules and caveats, then the rest."""
     if ks.entity_type(fact["subject"]) in HIGHLIGHT_TYPES:
         return 0
@@ -254,7 +254,7 @@ def new_entities(kb: KB, zone: tzinfo) -> Counter[date | None]:
 
 
 def day_row(kb: KB, day: date, facts: list[Record], changes: list[Change], entities: int) -> dict[str, Any]:
-    ranked = sorted(facts, key=lambda f: (rank(kb, f), ck.fact_number(f)))
+    ranked = sorted(facts, key=lambda f: (rank(f), ck.fact_number(f)))
     return {
         "day": day.isoformat(),
         "changes": [c.model for c in changes],
@@ -368,7 +368,7 @@ def kept_nodes(kb: KB, near: Mapping[str, list[str]]) -> list[str]:
 
 
 def constellation_edges(
-    kb: KB, links: list[graph.Link], index: Mapping[str, int], days: Mapping[str, str]
+    links: list[graph.Link], index: Mapping[str, int], days: Mapping[str, str]
 ) -> list[dict[str, Any]]:
     """One edge per pair of kept entities: every predicate between them, confirmed when every fact
     is, and the first day any of them was captured."""
@@ -425,9 +425,7 @@ def constellation_model(kb: KB, zone: tzinfo) -> dict[str, Any]:
         constellation_node(kb, i, near, first.get(i, today), {"confirmed": i in covered, "facts": counts[i]})
         for i in kept
     ]
-    edges = constellation_edges(
-        kb, links, {i: n for n, i in enumerate(kept)}, link_days(kb, links, zone, today)
-    )
+    edges = constellation_edges(links, {i: n for n, i in enumerate(kept)}, link_days(kb, links, zone, today))
     days = sorted({n["day"] for n in nodes} | {e["day"] for e in edges})
     return {
         "exists": True,

@@ -3267,7 +3267,7 @@ def landed_task_hint(items: dict[str, Item], index: Index, task_id: str) -> list
     return [f"all {task_id} produced has landed ({landed[0]['id']}): transition it to done"]
 
 
-def tracked_tickets(items: dict[str, Item], index: Index, item_id: str) -> list[str]:
+def tracked_tickets(index: Index, item_id: str) -> list[str]:
     """Tickets that track <item_id>, or the item that produced it."""
     sources = [item_id, *(link.source for link in index.into(item_id, lineage.PRODUCES))]
     return list(dict.fromkeys(link.target for s in sources for link in index.out(s, lineage.TRACKS)))
@@ -3294,7 +3294,7 @@ def item_hints(items: dict[str, Item], index: Index, item_id: str) -> list[str]:
         return []
     if item["kind"] == TICKET_KIND:
         return ticket_hints(items, index, item_id).lines()
-    found = [t for t in tracked_tickets(items, index, item_id) if t in items]
+    found = [t for t in tracked_tickets(index, item_id) if t in items]
     return task_hints(items, index, item) + [
         hint for t in found for hint in ticket_hints(items, index, t).lines()
     ]
@@ -3724,7 +3724,7 @@ WS_ACTIONS: dict[str, Callable[[argparse.Namespace], str]] = {
 
 
 def cmd_ws(args: argparse.Namespace) -> str:
-    if args.action not in ("list",) and not args.name:
+    if args.action != "list" and not args.name:
         raise LedgerError(f"usage: bosun ledger ws {args.action} <ws> ...")
     return WS_ACTIONS[args.action](args)
 

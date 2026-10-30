@@ -566,7 +566,7 @@ def hints_model(view: LedgerView, item: Item) -> list[str]:
         return []
     if item["kind"] == ledger.TICKET_KIND:
         return [*view.mismatches.get(item["id"], []), *view.fyi.get(item["id"], [])]
-    tracking = ledger.tracked_tickets(view.items, view.index, item["id"])
+    tracking = ledger.tracked_tickets(view.index, item["id"])
     found = ledger.task_hints(view.items, view.index, item)
     found += [hint for ticket in tracking for hint in view.mismatches.get(ticket, [])]
     found += [hint for ticket in tracking for hint in view.fyi.get(ticket, [])]

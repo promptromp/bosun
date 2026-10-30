@@ -7,15 +7,21 @@ dependencies = []
 
 [dependency-groups]
 dev = [
+    "actionlint-py>=1.7.12.25",
+    "check-jsonschema>=0.39.0",
     "complexipy>=4",
     "detect-secrets>=1.5",
+    "hadolint-bin>=2.15.1",
     "lizard>=1.17",
     "mypy>=1.15",
     "pre-commit>=4",
     "pytest>=8",
+    "pytest-cov>=7.1.0",
     "ruff>=0.11",
     "shellcheck-py>=0.10",
     "shfmt-py>=3.7",
+    "typos>=1.51.1",
+    "zizmor>=1.31.1",
 ]
 
 [tool.uv]
@@ -31,7 +37,7 @@ target-version = "py313"
 extend-include = ["libexec/bosun-resolve"]
 
 [tool.ruff.lint]
-extend-select = ["A", "B", "C4", "C90", "E", "F", "G", "I", "PERF", "PL", "PLC", "SIM", "T", "UP", "BLE", "S", "PGH", "RUF"]
+extend-select = ["A", "ARG", "B", "C4", "C90", "E", "ERA", "F", "FURB", "G", "I", "PERF", "PIE", "PL", "PLC", "RET", "SIM", "T", "UP", "BLE", "S", "PGH", "RUF"]
 ignore = [
     "T201",    # print is how these command-line tools talk
     "S603",    # subprocess calls with argument lists, no shell
@@ -39,7 +45,7 @@ ignore = [
 ]
 
 [tool.ruff.lint.per-file-ignores]
-"tests/**" = ["S101", "PLR2004", "PLC0415"]
+"tests/**" = ["S101", "PLR2004", "PLC0415", "ARG"]  # a stand-in has to take what it stands in for
 
 [tool.ruff.lint.mccabe]
 max-complexity = 10
@@ -56,5 +62,5 @@ lines-after-imports = 2
 [tool.mypy]
 python_version = "3.13"
 strict = true
-files = ["lib", "libexec/bosun-resolve", "tests/unit", "tests/llm", "tools"]
+files = ["lib", "libexec/bosun-resolve", "tests/unit", "tests/llm", "tests/sandbox/drive.py", "tools"]
 mypy_path = "lib:tools:tests/llm"

@@ -1,0 +1,7 @@
+#!/bin/bash
+# What get.sh asks to know it is on a Mac; anything else goes to the real uname.
+[ "${1:-}" = "-s" ] && {
+	echo Darwin
+	exit 0
+}
+exec /bin/uname "$@"

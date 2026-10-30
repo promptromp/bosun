@@ -71,20 +71,18 @@ bosun did for you.
 
 ## Quick start
 
-You need macOS, `brew install tmux jq python` (Python 3.13 or newer), the
-[GitHub CLI](https://cli.github.com) and [Claude Code](https://claude.com/claude-code), both
-logged in.
+On a Mac:
 
 ```bash
-git clone https://github.com/promptromp/bosun.git ~/Development/bosun
-cd ~/Development/bosun
-bin/bosun init                 # prints the plan and changes nothing
-bin/bosun init --recommended   # carries it out
+curl -fsSL https://raw.githubusercontent.com/promptromp/bosun/main/get.sh | sh
 ```
 
-`bosun init` works out your repos and hours from how you already use Claude Code, shows you the plan,
-and asks for `sudo` once, for the wake schedule. [Setup](docs/setup.md) covers the details:
-changing the answers, configuration and logins.
+It offers to install what is missing, then asks a few questions, one key each. Bosun works out your
+repos and hours from how you already use Claude Code and recommends a setup; nothing changes until
+you have seen the plan, and it asks for `sudo` once, for the wake schedule.
+
+Prefer to look first? [`get.sh`](get.sh) is short, and `sh -s -- --dry-run` after the pipe says what it
+would do. [Setup](docs/setup.md) covers the details: other ways to install, configuration and logins.
 
 ## Status
 

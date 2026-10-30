@@ -16,12 +16,18 @@ repos:
       - id: check-json
       - id: check-merge-conflict
       - id: check-shebang-scripts-are-executable
+      - id: check-symlinks
       - id: check-toml
+      - id: check-xml # a launchd plist: Apple's plutil lets through XML that is not valid
+        types: [file]
+        files: \.plist$
       - id: check-yaml
       - id: detect-aws-credentials
         args: [--allow-missing-credentials]
       - id: detect-private-key
       - id: end-of-file-fixer
+      - id: no-commit-to-branch # main only takes pull requests
+        args: [--branch, main]
       - id: mixed-line-ending
         args: [--fix=lf]
       - id: trailing-whitespace
@@ -69,13 +75,13 @@ repos:
         pass_filenames: false
       - id: complexipy
         name: complexipy (cognitive complexity <= 15)
-        entry: uv run complexipy --max-complexity-allowed 15 --quiet --failed lib libexec/bosun-resolve tools
+        entry: uv run complexipy --max-complexity-allowed 15 --quiet --failed lib libexec/bosun-resolve tools tests/sandbox/drive.py
         language: system
         types: [python]
         pass_filenames: false
       - id: lizard
         name: lizard (cyclomatic complexity <= 10, functions <= 60 lines)
-        entry: uv run lizard -l python -C 10 -L 60 -w lib libexec/bosun-resolve tools tests/unit
+        entry: uv run lizard -l python -C 10 -L 60 -w lib libexec/bosun-resolve tools tests/unit tests/sandbox/drive.py
         language: system
         types: [python]
         pass_filenames: false
@@ -97,6 +103,40 @@ repos:
         types: [shell]
         exclude: ^tests/smoke\.sh$
       # Tests: unit tests on every commit (fast); the end-to-end suite before pushing.
+      # Everything else that gets written by hand here.
+      - id: hadolint
+        name: hadolint (Dockerfiles)
+        entry: uv run hadolint
+        language: system
+        types: [dockerfile]
+      - id: actionlint
+        name: actionlint (GitHub workflows)
+        entry: uv run actionlint
+        language: system
+        files: ^\.github/workflows/
+        types: [yaml]
+      - id: zizmor
+        name: zizmor (GitHub workflow security)
+        entry: uv run zizmor --offline --no-progress .github
+        language: system
+        files: ^\.github/
+        pass_filenames: false
+      - id: dependabot-schema
+        name: the Dependabot config's schema
+        entry: uv run check-jsonschema --builtin-schema vendor.dependabot
+        language: system
+        files: ^\.github/dependabot\.yml$
+      - id: typos
+        name: typos (spelling in code and docs)
+        entry: uv run typos --force-exclude
+        language: system
+        types: [text]
+        exclude: ^(uv\.lock|\.secrets\.baseline)$
+      - id: check-links
+        name: links between the docs
+        entry: uv run python tools/check_links.py
+        language: system
+        types: [markdown]
       - id: unit-tests
         name: unit tests
         entry: uv run pytest -q tests/unit

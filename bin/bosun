@@ -9,8 +9,8 @@ usage() {
 Usage: bosun <command> [args]
 
 Getting started
-  init        Set bosun up from what this Mac shows (repos, hours, logins): prints the plan, and
-              --recommended or --answers carries it out
+  init        Set bosun up from what this Mac shows (repos, hours, logins): a few questions in a
+              terminal, then a plan to accept; --recommended or --answers to skip the questions
 
 Daily flow
   morning     Scheduled entry point: keep awake, run setup steps, start or refresh sessions

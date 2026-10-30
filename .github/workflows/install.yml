@@ -1,0 +1,53 @@
+# A new machine's install: for real on a clean macOS runner (tests/install_e2e.sh: the piped installer,
+# launchd jobs that really fire, the real pmset and plutil), and the wizard through a real terminal in
+# the Docker sandbox (tests/sandbox.sh), which would otherwise only run by hand and rot. Not required
+# checks: they only run when the install could have changed, and a required check that does not run
+# blocks a merge. Also weekly, to notice when a new macOS or Homebrew breaks it.
+name: Install
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - get.sh
+      - install.sh
+      - uninstall.sh
+      - bin/**
+      - libexec/bosun-init
+      - libexec/bosun-morning
+      - lib/common.sh
+      - lib/init*.py
+      - templates/**
+      - tests/install_e2e.sh
+      - tests/sandbox.sh
+      - tests/sandbox/**
+      - .github/workflows/install.yml
+  schedule:
+    - cron: "17 6 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  clean-mac:
+    runs-on: macos-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - run: tests/install_e2e.sh
+        env:
+          GH_TOKEN: ${{ github.token }} # so `gh auth status` passes, as for someone logged in
+          HOMEBREW_NO_AUTO_UPDATE: "1"
+          HOMEBREW_NO_INSTALL_CLEANUP: "1"
+
+  sandbox:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - run: tests/sandbox.sh init

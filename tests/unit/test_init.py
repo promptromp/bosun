@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import contextlib
+import dataclasses
 import io
 import json
 import os
@@ -23,9 +24,33 @@ import claude_state
 import init
 import init_detect
 import init_plan
+import init_terminal
+import init_wizard
 
 
 NOW = datetime(2026, 11, 2, 12, 0, tzinfo=UTC)
+
+
+class FakeTerminal:
+    """Keys from a list (an exception in it is raised), and the end of the input after them."""
+
+    def __init__(self, keys: list[str]) -> None:
+        self.keys = keys
+
+    def show(self, text: str) -> None:
+        pass
+
+    def say(self, text: str) -> None:
+        pass
+
+    def key(self) -> str:
+        key = self.keys.pop(0) if self.keys else ""
+        if not isinstance(key, str):
+            raise key
+        return key
+
+    def line(self, prompt: str) -> str:
+        return ""
 
 
 class WorldTest(unittest.TestCase):
@@ -250,10 +275,15 @@ class CommandTest(WorldTest):
         real_run = subprocess.run
 
         def run(command: Any, *args: Any, **kwargs: Any) -> Any:
-            if str(command[0]).endswith(("install.sh", "bin/bosun")):
-                self.calls.append([Path(command[0]).name, *command[1:]])
+            """What bosun would run is recorded. Only git and ruby really run, on this scratch home:
+            a test must never reach a real login or anything else that changes a machine."""
+            name = Path(str(command[0])).name
+            if name in ("install.sh", "bosun"):
+                self.calls.append([name, *command[1:]])
                 return subprocess.CompletedProcess(command, self.install_status)
-            return real_run(command, *args, **kwargs)
+            if name in ("git", "ruby"):
+                return real_run(command, *args, **kwargs)
+            raise AssertionError(f"a unit test tried to run {command}")
 
         self.install_status = 0
         patcher = mock.patch.object(subprocess, "run", run)
@@ -410,6 +440,104 @@ class CommandTest(WorldTest):
             _, out, _ = self.bosun_init("--recommended")
         self.assertIn("run this once yourself: sudo pmset repeat", out)
         self.assertEqual(self.calls[-1], ["install.sh"])
+
+    def test_a_terminal_gets_the_wizard_and_anything_explicit_does_not(self) -> None:
+        # Parsed first: argparse looks at the real stdout, for colour, since Python 3.14.
+        plain = init.parse_args([])
+        explicit = [
+            init.parse_args(argv)
+            for argv in (["--recommended"], ["--answers", "x"], ["--dry-run"], ["--print-answers"])
+        ]
+        terminal = mock.Mock(isatty=lambda: True)
+        with mock.patch.object(sys, "stdin", terminal), mock.patch.object(sys, "stdout", terminal):
+            self.assertTrue(init.wants_wizard(plain))
+            for args in explicit:
+                self.assertFalse(init.wants_wizard(args))
+
+    def test_no_terminal_no_wizard(self) -> None:
+        self.assertFalse(init.wants_wizard(init.parse_args([])))
+
+    def test_a_typed_folder_counts_for_its_repo(self) -> None:
+        (self.api / "src").mkdir()
+        use = init.typed_repo(str(self.api / "src"))
+        assert use is not None
+        self.assertEqual((use.dir, use.owner), (str(self.api), "acme"))
+        self.assertIsNone(init.typed_repo(str(self.home / "gone")))
+
+    def test_it_says_how_to_reach_bosun_only_if_your_path_cannot(self) -> None:
+        with mock.patch.dict(os.environ, {"BOSUN_USER_PATH": "/usr/bin"}):
+            self.assertIn("not on your PATH", init.path_note())
+        with mock.patch.dict(os.environ, {"BOSUN_USER_PATH": f"/usr/bin:{self.home}/.local/bin"}):
+            self.assertEqual(init.path_note(), "")
+
+    def test_logins_are_offered_then_everything_is_looked_at_again(self) -> None:
+        missing = init_detect.detect(self.config)
+        missing = dataclasses.replace(missing, gh_logged_in=False, claude_logged_in=True)
+        ui = mock.Mock()
+        with (
+            mock.patch.object(init_wizard, "ask_login", return_value=True),
+            mock.patch.object(init_detect, "detect", return_value="looked again") as detect,
+            mock.patch.object(subprocess, "run") as run,
+        ):
+            self.assertEqual(init.log_in_first(ui, missing, self.config), "looked again")
+        run.assert_called_once_with(("gh", "auth", "login"), check=False)
+        detect.assert_called_once()
+
+    def test_a_tool_that_is_not_installed_is_not_offered_a_login(self) -> None:
+        facts = dataclasses.replace(init_detect.detect(self.config), gh_logged_in=False)
+        with (
+            mock.patch.object(shutil, "which", return_value=None),
+            mock.patch.object(init_wizard, "ask_login") as ask,
+        ):
+            self.assertIs(init.log_in_first(mock.Mock(), facts, self.config), facts)
+        ask.assert_not_called()
+
+    def test_no_login_wanted_nothing_to_look_at_again(self) -> None:
+        facts = init_detect.detect(self.config)
+        with mock.patch.object(init_wizard, "ask_login", return_value=False):
+            self.assertIs(
+                init.log_in_first(
+                    mock.Mock(), dataclasses.replace(facts, gh_logged_in=False), self.config
+                ).home,
+                facts.home,
+            )
+
+    def wizard(self, keys: list[str]) -> tuple[int, str]:
+        out = io.StringIO()
+        with (
+            contextlib.redirect_stdout(out),
+            mock.patch.object(init_terminal, "TerminalUi", return_value=FakeTerminal(keys)),
+            mock.patch.object(init_wizard, "missing_logins", return_value=[]),
+        ):
+            status = init.run_wizard(init_detect.detect(self.config), self.config)
+        return status, out.getvalue()
+
+    def test_the_wizard_writes_nothing_until_you_accept(self) -> None:
+        status, out = self.wizard([init_wizard.ENTER, "q"])
+        self.assertEqual(status, 0)
+        self.assertIn("Nothing was changed", out)
+        self.assertFalse(self.config.exists())
+
+    def test_the_wizard_carries_out_what_you_accepted_then_offers_to_start(self) -> None:
+        status, _ = self.wizard([*[init_wizard.ENTER] * 5, "y", "y"])
+        self.assertEqual(status, 0)
+        self.assertIn("name: api", (self.config / "sessions.yml").read_text())
+        self.assertEqual(self.calls[-1], ["bosun", "start"])
+
+    def test_the_wizard_replaces_other_windows_once_you_saw_it_would(self) -> None:
+        self.bosun_init("--recommended")
+        self.repo("Development/web")
+        self.prompts(self.home / "Development" / "web", 30, session="s9")
+        status, _ = self.wizard(["1", "2", *[init_wizard.ENTER] * 5, "y", "n"])
+        self.assertEqual(status, 0)
+        self.assertIn("name: web", (self.config / "sessions.yml").read_text())
+        self.assertTrue(any(name.startswith("sessions.yml.pre-init-") for name in self.backups()))
+
+    def test_ctrl_c_in_the_wizard_changes_nothing(self) -> None:
+        status, out = self.wizard([KeyboardInterrupt])  # type: ignore[list-item]
+        self.assertEqual(status, 0)
+        self.assertIn("Nothing was changed", out)
+        self.assertFalse(self.config.exists())
 
     def test_no_wake_asked_for_means_no_wake_flag(self) -> None:
         self.bosun_init("--answers", self.answers_file(wake=False))

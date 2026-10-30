@@ -1,0 +1,6 @@
+#!/bin/bash
+# The GitHub CLI's stand-in, for the sandboxes: logged in, and nothing is open.
+case "$*" in
+"auth status") echo "Logged in to github.com" ;;
+*) echo "[]" ;;
+esac

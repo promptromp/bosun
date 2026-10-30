@@ -1,0 +1,20 @@
+#!/bin/bash
+# Claude Code's stand-in, for the sandbox and the clean Mac (tests/install_e2e.sh): logged in, answers
+# the login check, and a window's session stays up with the running-session record bosun knows a
+# Claude by.
+case "$*" in
+*--version*) echo "2.0.0 (Claude Code)" ;;
+"auth status --json") echo '{"loggedIn":true,"authMethod":"claude.ai","subscriptionType":"max"}' ;;
+*--print* | *-p\ *) echo '{"type":"result","is_error":false,"total_cost_usd":0}' ;;
+*)
+	name=""
+	while [ $# -gt 0 ]; do
+		[ "$1" = "--name" ] && name="$2"
+		shift
+	done
+	mkdir -p "$HOME/.claude/sessions"
+	printf '{"pid":%d,"status":"idle","version":"2.0.0","statusUpdatedAt":%d,"name":"%s"}' \
+		"$$" "$(($(date +%s) * 1000))" "$name" >"$HOME/.claude/sessions/$$.json"
+	exec sleep 86400
+	;;
+esac

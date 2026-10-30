@@ -554,12 +554,21 @@ class Handler(BaseHTTPRequestHandler):
         if self.command != "HEAD" and body:
             self.wfile.write(body)
 
-    def send_error(self, code: int, message: str | None = None, explain: str | None = None) -> None:
+    def send_error(
+        self,
+        code: int,
+        message: str | None = None,
+        explain: str | None = None,  # noqa: ARG002 (the stdlib's signature)
+    ) -> None:
         """The stdlib's own refusals (malformed request, line too long), with our headers and text."""
         self.close_connection = True
         self.reply(http.HTTPStatus(code), f"{message or http.HTTPStatus(code).phrase}\n".encode())
 
-    def log_request(self, code: int | str = "-", size: int | str = "-") -> None:
+    def log_request(
+        self,
+        code: int | str = "-",
+        size: int | str = "-",  # noqa: ARG002 (the stdlib's signature)
+    ) -> None:
         if isinstance(code, int) and code >= http.HTTPStatus.BAD_REQUEST:
             path = logged_path(self.path) if hasattr(self, "path") else "-"
             self.log_message("%s %s %s", self.command or "-", path, code)

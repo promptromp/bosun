@@ -22,8 +22,8 @@ cd bosun
 uv sync && uv run pre-commit install
 ```
 
-Commits then run ruff, mypy --strict, the complexity limits, shellcheck, shfmt, the secrets scans
-and the unit tests; pushes also run the smoke suite.
+Commits then run ruff, mypy --strict, the complexity limits, shellcheck, shfmt, hadolint, actionlint,
+zizmor, spelling and link checks, the secrets scans and the unit tests; pushes also run the smoke suite.
 
 ## Making a change
 
@@ -34,7 +34,8 @@ parts your change touches.
 
 - **Tests.** Add a unit test in `tests/unit/` for a change to `lib/*.py`, and a check in
   `tests/smoke.sh` for a command's behaviour. Before you push, run `tests/smoke.sh` (hermetic: its
-  own HOME, tmux socket and a fake Claude) and `uv run pre-commit run --all-files`.
+  own HOME, tmux socket and a fake Claude) and `uv run pre-commit run --all-files`. Never test an install
+  on your own Mac: [the sandboxes](docs/development.md#which-sandbox-for-what) are throwaway machines.
 - **Wording that Claude acts on** (`orchestrator/policy.md`, the task files, the prompts) is
   tested against the real Claude by `tests/llm/`. Those runs cost money, so CI does not run them:
   say in the pull request that you changed such wording, and they will be run before merging.

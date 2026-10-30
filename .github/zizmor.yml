@@ -1,0 +1,4 @@
+# The workflow security audit (zizmor, in .pre-commit-config.yaml).
+rules:
+  self-repository: # `./.github/actions/...` is what actionlint and our readers know; `$/` is too new
+    disable: true
