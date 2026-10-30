@@ -619,7 +619,7 @@ def repo_match(names: set[str], repos: set[str]) -> bool:
     return any(r in names or r.rpartition("/")[2] in names for r in repos)
 
 
-def matched_how(kb: KB, entity: Record, item: Item, names: set[str]) -> str:
+def matched_how(entity: Record, item: Item, names: set[str]) -> str:
     if entity["type"] == ks.PERSON:
         return next((how for name, how in person_roles(item) if name in names), "")
     return "repo" if repo_match(names, item_repos(item)) else ""
@@ -637,7 +637,7 @@ def related_items(kb: KB, entity: Record, ledger: Mapping[str, Any]) -> dict[str
     items = ledger.get("items") if isinstance(ledger.get("items"), dict) else {}
     rows = []
     for item in (items or {}).values():
-        how = matched_how(kb, entity, item, names) if isinstance(item, dict) else ""
+        how = matched_how(entity, item, names) if isinstance(item, dict) else ""
         if how:
             rows.append(
                 {

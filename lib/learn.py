@@ -881,7 +881,7 @@ def append_rule(config: Config, learn_id: str, path: Path, text: str) -> str:
     return f"appended to {path}"
 
 
-def apply_memory(config: Config, learn_id: str, change: dict[str, Any]) -> str:
+def apply_memory(_config: Config, learn_id: str, change: dict[str, Any]) -> str:
     if not change.get("dir"):
         raise LearnError(
             f"{learn_id}: no folder for the memory note (window {change.get('window')!r} is unknown)"

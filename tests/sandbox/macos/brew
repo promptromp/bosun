@@ -1,0 +1,11 @@
+#!/bin/bash
+# Homebrew's stand-in: records what it is asked and "installs" the package a test set aside for it,
+# from ~/.sandbox/packages/<name>.
+mkdir -p "$HOME/.sandbox"
+echo "brew $*" >>"$HOME/.sandbox/system.log"
+[ "${1:-}" = "install" ] || exit 0
+shift
+for package in "$@"; do
+	[ -e "$HOME/.sandbox/packages/$package" ] && mv "$HOME/.sandbox/packages/$package" "$HOME/.local/bin/$package"
+done
+exit 0

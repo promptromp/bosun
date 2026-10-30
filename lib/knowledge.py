@@ -607,7 +607,7 @@ def cmd_lint(args: argparse.Namespace) -> str | tuple[str, int]:
     return ("\n".join(f"{f.kind}: {f.message}" for f in findings) or "ok: nothing to report"), code
 
 
-def cmd_stats(args: argparse.Namespace) -> str:
+def cmd_stats(_args: argparse.Namespace) -> str:
     with opened(False) as kb:
         counts: dict[str, int] = {}
         for fact in kb.facts.values():

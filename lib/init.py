@@ -26,7 +26,9 @@ from pathlib import Path
 import claude_state
 import init_detect
 import init_plan
-from init_plan import Answers, AnswersError, DirState, Facts, Plan
+import init_terminal
+import init_wizard
+from init_plan import Answers, AnswersError, DirState, Facts, Plan, RepoUse
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -131,8 +133,23 @@ def run_steps(plan: Plan) -> int:
     return subprocess.run([str(ROOT / "install.sh"), *flags], check=False).returncode
 
 
+def user_path() -> str:
+    """Your PATH, not the one bosun's scripts extend: what your own shell will find."""
+    return os.environ.get("BOSUN_USER_PATH") or os.environ.get("PATH") or ""
+
+
+def path_note() -> str:
+    """How to reach `bosun`, if the folder install.sh links it in is not on your PATH."""
+    if str(Path.home() / ".local" / "bin") in user_path().split(os.pathsep):
+        return ""
+    return (
+        "\n`bosun` is in ~/.local/bin, which is not on your PATH. To add it:"
+        "\n  echo 'export PATH=\"$HOME/.local/bin:$PATH\"' >> ~/.zshrc && exec zsh"
+    )
+
+
 def apply_hint() -> str:
-    command = "bosun init" if shutil.which("bosun") else f"{ROOT / 'bin' / 'bosun'} init"
+    command = "bosun init" if shutil.which("bosun", path=user_path()) else f"{ROOT / 'bin' / 'bosun'} init"
     return (
         f"\nTo carry it out: {command} --recommended"
         f"\nTo change something: {command} --print-answers > answers.json, edit it, then "
@@ -149,8 +166,57 @@ def carry_out(plan: Plan, config_dir: Path) -> int:
     if status != 0:
         print("\n`bosun doctor` found problems, listed above. Fix them and run it again.", file=sys.stderr)
         return EXIT_BLOCKED
-    print("\nbosun is set up. `bosun start` brings the windows up now; `bosun console` shows them.")
+    print(path_note(), end="\n" if path_note() else "")
     return 0
+
+
+def typed_repo(typed: str) -> RepoUse | None:
+    folder = Path(typed).expanduser()
+    if not folder.is_dir():
+        return None
+    root = init_detect.repo_root(folder) or folder
+    return RepoUse(str(root), 0, init_detect.github_owner(root))
+
+
+def wants_wizard(args: argparse.Namespace) -> bool:
+    asked_for_something = args.recommended or args.answers is not None or args.dry_run or args.print_answers
+    return not asked_for_something and sys.stdin.isatty() and sys.stdout.isatty()
+
+
+def log_in_first(ui: init_wizard.Ui, facts: Facts, config_dir: Path) -> Facts:
+    """Offer the logins that are missing. They decide what is recommended: the plan picks the model."""
+    logins = init_wizard.LOGIN_COMMANDS
+    missing = [tool for tool in init_wizard.missing_logins(facts) if shutil.which(logins[tool][0])]
+    wanted = [tool for tool in missing if init_wizard.ask_login(ui, tool)]
+    for tool in wanted:
+        subprocess.run(logins[tool], check=False)
+    return init_detect.detect(config_dir) if wanted else facts
+
+
+def start_windows() -> None:
+    subprocess.run([str(ROOT / "bin" / "bosun"), "start"], check=False)
+    print("\nThe windows are up. `bosun attach` opens them, and `bosun console` shows what they are doing.")
+
+
+def run_wizard(facts: Facts, config_dir: Path) -> int:
+    ui = init_terminal.TerminalUi()
+
+    def plan_for(answers: Answers) -> Plan:  # you see what it would replace before you accept it
+        return init_plan.build_plan(facts, answers, dir_state(answers), force=True)
+
+    try:
+        facts = log_in_first(ui, facts, config_dir)
+        machine = init_wizard.Machine(plan_for, typed_repo)
+        answers = init_wizard.run(ui, facts, init_plan.recommend(facts), machine, str(config_dir))
+    except (init_wizard.Quit, KeyboardInterrupt):
+        answers = None
+    if answers is None:
+        print("\nNothing was changed. `bosun init` starts again whenever you like.")
+        return 0
+    status = carry_out(plan_for(answers), config_dir)
+    if status == 0 and init_wizard.ask_start(ui):
+        start_windows()
+    return status
 
 
 def show_plan(facts: Facts, answers: Answers, args: argparse.Namespace, config_dir: Path) -> int:
@@ -161,7 +227,10 @@ def show_plan(facts: Facts, answers: Answers, args: argparse.Namespace, config_d
     if not args.recommended and args.answers is None:
         print(apply_hint())
         return 0
-    return carry_out(plan, config_dir)
+    status = carry_out(plan, config_dir)
+    if status == 0:
+        print("\nbosun is set up. `bosun start` brings the windows up now; `bosun console` shows them.")
+    return status
 
 
 def main(argv: list[str]) -> int:
@@ -171,6 +240,8 @@ def main(argv: list[str]) -> int:
     if args.detect:
         print(json.dumps(printable(facts), indent=2))
         return 0
+    if wants_wizard(args):
+        return run_wizard(facts, config_dir)
     try:
         answers = load_answers(args.answers, init_plan.recommend(facts))
     except AnswersError as error:

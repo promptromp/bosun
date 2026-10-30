@@ -27,10 +27,10 @@ WAKE_POLL_SECONDS=5
 WAKE_GRACE_SECONDS=120
 MIN_SECONDS_BEFORE_WAKE=60
 
-# Schedule a one-off wake. sudo needs a terminal for its password prompt; without one, ask through
-# the macOS administrator dialog instead.
+# Schedule a one-off wake. sudo needs a terminal for its password prompt, unless it needs no password;
+# otherwise ask through the macOS administrator dialog instead.
 schedule_wake() { # <MM/DD/YYYY HH:MM:SS>
-  if [ -t 0 ]; then
+  if [ -t 0 ] || sudo -n true 2>/dev/null; then
     sudo pmset schedule wake "$1"
   else
     osascript -e "do shell script \"/usr/bin/pmset schedule wake '$1'\" with administrator privileges" >/dev/null

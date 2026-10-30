@@ -1912,6 +1912,14 @@ if [ "$(bash -c 'source "$1/lib/common.sh"; command -v launchctl; command -v pms
   check "the learning agent is valid XML, not only what plutil lets through" python3 -c 'import plistlib, sys; plistlib.loads(open(sys.argv[1], "rb").read())' "$HOME/Library/LaunchAgents/$BOSUN_LAUNCHD_LABEL.learn.plist"
   check "... at the time the answers imply" grep -q "<key>Hour</key><integer>16</integer><key>Minute</key><integer>30</integer>" "$HOME/Library/LaunchAgents/$BOSUN_LAUNCHD_LABEL.learn.plist"
   BOSUN_CONFIG_DIR="$INIT_CFG" "$ROOT/uninstall.sh" >/dev/null 2>&1
+
+  echo "get.sh (a dry run: it changes nothing)"
+  check "it is plain sh" sh -n "$ROOT/get.sh"
+  check "it says how to use it" bash -c 'sh "$1/get.sh" --help | grep -q "Usage: get.sh"' _ "$ROOT"
+  check "it refuses what it does not know" fails_with "unknown option" sh "$ROOT/get.sh" --typo
+  check "a dry run says what it would do" bash -c 'BOSUN_DIR="$2" sh "$1/get.sh" --dry-run | grep -q "Then it would start: $2/bin/bosun init"' _ "$ROOT" "$WORK/get-bosun"
+  check "... and does none of it" test ! -e "$WORK/get-bosun"
+  check "everything in it is in functions, so a download cut short does nothing" bash -c '[ "$(tail -1 "$1/get.sh")" = "main \"\$@\"" ]' _ "$ROOT"
 else
   failed=$((failed + 1))
   echo "  FAIL  fake launchctl/pmset are not first on PATH; skipped install tests"

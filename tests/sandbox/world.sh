@@ -20,35 +20,8 @@ make_repo web https://github.com/acme/web.git
 make_repo toy git@gitlab.example.com:me/toy.git
 
 mkdir -p "$HOME/.local/bin"
-cat >"$HOME/.local/bin/claude" <<'CLAUDE'
-#!/bin/bash
-# Claude Code's stand-in: logged in, answers the login check, and a window's session stays up with
-# the running-session record bosun knows a Claude by.
-case "$*" in
-  *--version*) echo "2.0.0 (Claude Code)" ;;
-  "auth status --json") echo '{"loggedIn":true,"authMethod":"claude.ai","subscriptionType":"max"}' ;;
-  *--print* | *-p\ *) echo '{"type":"result","is_error":false,"total_cost_usd":0}' ;;
-  *)
-    name=""
-    while [ $# -gt 0 ]; do
-      [ "$1" = "--name" ] && name="$2"
-      shift
-    done
-    mkdir -p "$HOME/.claude/sessions"
-    printf '{"pid":%d,"status":"idle","version":"2.0.0","statusUpdatedAt":%d,"name":"%s"}' \
-      "$$" "$(($(date +%s) * 1000))" "$name" >"$HOME/.claude/sessions/$$.json"
-    exec sleep 86400
-    ;;
-esac
-CLAUDE
-cat >"$HOME/.local/bin/gh" <<'GH'
-#!/bin/bash
-# The GitHub CLI's stand-in: logged in, and nothing is open.
-case "$*" in
-  "auth status") echo "Logged in to github.com" ;;
-  *) echo "[]" ;;
-esac
-GH
+cp "$(dirname "$0")/claude-stand-in" "$HOME/.local/bin/claude"
+cp "$(dirname "$0")/gh-stand-in" "$HOME/.local/bin/gh"
 chmod +x "$HOME/.local/bin/claude" "$HOME/.local/bin/gh"
 
 python3 - <<'HISTORY'

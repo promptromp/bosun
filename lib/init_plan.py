@@ -11,6 +11,7 @@ import posixpath
 import re
 import shlex
 import statistics
+import textwrap
 from collections import Counter
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, field, fields, replace
@@ -41,6 +42,7 @@ MAX_REPOS = 6  # each is a window, so a Claude that resumes and a context to kee
 MAX_UNUSED_REPOS = 3  # when there is no history to go by
 MIN_PROMPTS = 20
 OPUS_PLANS = frozenset({"max", "team", "enterprise"})
+LINE_WIDTH = 78
 SKIP_PERMISSIONS_NOTE = (
     "Repo sessions start with --dangerously-skip-permissions (BOSUN_CLAUDE_FLAGS), so an unattended "
     "session does not stall at a prompt. Change it in bosun.env if you prefer prompts."
@@ -650,20 +652,21 @@ def windows_reason(facts: Facts, answers: Answers) -> list[str]:
     return ["Windows: the git repos found in your usual folders, newest first."]
 
 
-def schedule_reason(facts: Facts) -> list[str]:
-    if len(facts.days) < MIN_ACTIVE_DAYS or "BOSUN_START_TIME" in facts.env:
-        return []
+def usual_hours(facts: Facts) -> str:
+    """What your history says about your hours, if a schedule came from it."""
+    if len(facts.days) < MIN_ACTIVE_DAYS or facts.env:
+        return ""
     first = clock(int(statistics.median(d.first for d in facts.days)))
     last = clock(int(statistics.median(d.last for d in facts.days)))
-    reason = (
-        f"Schedule: your usual first prompt is {first} and your last {last}, over {len(facts.days)} active "
-        "days. Sessions are ready half an hour before you start."
+    return (
+        f"your usual first prompt is {first} and your last {last}, over {len(facts.days)} active days. "
+        "Sessions are ready half an hour before you start."
     )
-    return [reason]
 
 
 def reasons(facts: Facts, answers: Answers) -> tuple[str, ...]:
-    found = windows_reason(facts, answers) + schedule_reason(facts)
+    hours = usual_hours(facts)
+    found = windows_reason(facts, answers) + ([f"Schedule: {hours}"] if hours else [])
     if facts.env:
         found.append("Everything else: what your config says now.")
     return tuple(found)
@@ -799,16 +802,24 @@ def section(title: str, lines: Sequence[str]) -> list[str]:
     return ["", title, *lines] if lines else []
 
 
+def bullets(items: Sequence[str]) -> list[str]:
+    return [
+        line
+        for item in items
+        for line in textwrap.wrap(item, LINE_WIDTH, initial_indent="  - ", subsequent_indent="    ")
+    ]
+
+
 def render_plan(plan: Plan, answers: Answers, facts: Facts, config_dir: str) -> str:
     files = [f"  {c.action:<8} {c.name:<13} {c.detail}" for c in plan.files]
     lines = [
         "bosun init: the plan. Nothing has changed yet.",
         "",
         *summary_lines(answers),
-        *section("Why", [f"  - {reason}" for reason in plan.reasons]),
+        *section("Why", bullets(plan.reasons)),
         *section(f"Files in {tilde(config_dir, facts.home)}", files),
         *section("Then", step_lines(plan, facts.home)),
-        *section("Worth knowing", [f"  - {note}" for note in plan.notes]),
-        *section("Blocked", [f"  - {blocker}" for blocker in plan.blockers]),
+        *section("Worth knowing", bullets(plan.notes)),
+        *section("Blocked", bullets(plan.blockers)),
     ]
     return "\n".join(lines) + "\n"

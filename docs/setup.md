@@ -14,22 +14,29 @@ Requirements, installation and configuration, and the morning's logins.
 ## Install
 
 ```bash
-git clone https://github.com/promptromp/bosun.git ~/Development/bosun
-cd ~/Development/bosun
-bin/bosun init                 # prints the plan and changes nothing
-bin/bosun init --recommended   # carries it out
+curl -fsSL https://raw.githubusercontent.com/promptromp/bosun/main/get.sh | sh
 ```
 
-`bosun init` reads what this Mac already shows: the repos you use Claude Code in, your usual hours,
-your logins. It recommends a setup from that, says why, and lists every file and command before
-it touches anything. Then it writes the config, trusts the folders, and runs `install.sh`.
+[`get.sh`](../get.sh) checks what bosun needs and offers to install what is missing with Homebrew
+(and Homebrew itself, on a new Mac). It puts bosun in `~/.local/share/bosun` and starts `bosun init`.
+Run it again to update. After the pipe, `sh -s -- --dry-run` says what it would do and does nothing,
+and `sh -s -- --unattended` asks nothing and takes the recommended setup. `BOSUN_DIR`, `BOSUN_REPO` and
+`BOSUN_BRANCH` override where it goes and what it gets.
 
-To change an answer, edit them and pass them back. A file only needs what it changes:
+`bosun init` reads what this Mac already shows: the repos you use Claude Code in, your usual hours,
+your logins. In a terminal it asks a few questions, one key each: Return takes the recommended
+answer, `r` starts again and `q` leaves with nothing changed. It says why it recommends what it does,
+and lists every file and command for you to accept before it touches anything. Then it writes the
+config, trusts the folders, and runs `install.sh`.
+
+Without a terminal, or with `--dry-run`, it only prints the plan. To use answers from a file instead,
+which only needs what it changes:
 
 ```bash
-bin/bosun init --print-answers > answers.json
+bosun init --print-answers > answers.json
 $EDITOR answers.json           # repos, days, start, until, events, approvals, learning, ...
-bin/bosun init --answers answers.json
+bosun init --answers answers.json
+bosun init --recommended       # or just take what it recommends
 ```
 
 Run it again whenever you like: it starts from your config, keeps anything you added to `bosun.env`,
@@ -38,9 +45,11 @@ and what it never does: [design note](design/init.md).
 
 ### By hand
 
-If you prefer to write the config yourself:
+If you prefer your own checkout and to write the config yourself:
 
 ```bash
+git clone https://github.com/promptromp/bosun.git ~/Development/bosun
+cd ~/Development/bosun
 ./install.sh --example generic        # seeds the config from examples/generic
 $EDITOR ~/.config/bosun/{bosun.env,sessions.yml,setup.sh}
 ./install.sh                          # re-run after editing schedule values

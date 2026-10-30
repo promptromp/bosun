@@ -9,6 +9,8 @@ updates:
     directories: ["/", "/.github/actions/*"]
     schedule:
       interval: monthly
+    cooldown: # not a release in its first week, in case it turns out to be bad; security updates do not wait
+      default-days: 7
     groups:
       actions:
         patterns: ["*"]
@@ -16,13 +18,23 @@ updates:
     directory: /
     schedule:
       interval: monthly
+    cooldown: # not a release in its first week, in case it turns out to be bad; security updates do not wait
+      default-days: 7
     groups:
       dev-tools:
         patterns: ["*"]
+  - package-ecosystem: docker # the sandbox's base image
+    directory: /tests/sandbox
+    schedule:
+      interval: monthly
+    cooldown: # not a release in its first week, in case it turns out to be bad; security updates do not wait
+      default-days: 7
   - package-ecosystem: pre-commit
     directory: /
     schedule:
       interval: monthly
+    cooldown: # not a release in its first week, in case it turns out to be bad; security updates do not wait
+      default-days: 7
     groups:
       hooks:
         patterns: ["*"]

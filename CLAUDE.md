@@ -46,10 +46,13 @@ of truth, so don't copy rules into this file.
   the one repo-mask implementation. `lib/watchdog.py`: the watchdog's table of checks (`CHECKS`),
   awake window, de-dup state and alert sinks; `libexec/bosun-watchdog` only collects the live
   facts (tmux windows, the Claude in each, the check-in loop, launchd) for it.
-- Setup (`bosun init`, design: `docs/design/init.md`): `lib/init_detect.py` (read-only: what the Mac
-  shows, Claude Code's files through `lib/claude_state.py`), `lib/init_plan.py` (pure: recommended
-  answers, the config files' text, the plan) and `lib/init.py` (the CLI: writes the config with
-  backups, trusts the folders, then runs `install.sh`, the one place that knows launchd and `pmset`).
+- Setup (design: `docs/design/init.md`): `get.sh` (what `curl | sh` runs: plain POSIX sh, everything in
+  functions with `main` last, because people pipe it straight from `main`), `lib/init_detect.py`
+  (read-only: what the Mac shows, Claude Code's files through `lib/claude_state.py`), `lib/init_plan.py`
+  (pure: recommended answers, the config files' text, the plan), `lib/init_wizard.py` (pure over a `Ui`:
+  the questions), `lib/init_terminal.py` (the keys and screens) and `lib/init.py` (the CLI: writes the
+  config with backups, trusts the folders, then runs `install.sh`, the one place that knows launchd and
+  `pmset`).
 - Events (design: `docs/design/events.md`, behind `BOSUN_EVENTS_ENABLED`): `lib/activity.py`
   (pure: what I said in a window and its attribution, a window's active item, `working`, which
   prompts are mine), `lib/hook.py` + `libexec/bosun-hook` (the repo sessions'
@@ -161,8 +164,11 @@ of truth, so don't copy rules into this file.
 - **An answer `bosun init` offers:** a field of `Answers` (`lib/init_plan.py`) with its check, what
   it recommends, the key in `env_groups` if it sets one, the table in `docs/design/init.md` and a
   test in `tests/unit/test_init_plan.py`.
-- **A macOS tool bosun starts to use:** a stand-in in `tests/sandbox/macos/` if `tests/sandbox.sh` should
-  still pass without it.
+- **A macOS tool bosun starts to use:** a stand-in in `tests/sandbox/macos/`, so `tests/sandbox.sh` still
+  passes without it, and a check in `tests/install_e2e.sh` for the real one.
+- **A new kind of file written by hand:** its linter in `.pre-commit-config.yaml` and `pyproject.toml`'s
+  dev group, here under Tooling. If it is glue code in Python, add it to mypy's `files` and to the
+  complexity hooks, which do not cover `tests/`.
 - **A command:** `libexec/bosun-<cmd>` with a `# Usage:` header (`usage` prints it for
   `--help`; `die_usage` reports usage errors with exit 2), a line in `bin/bosun`'s usage, the
   table in `docs/commands.md`, and smoke tests.
@@ -179,8 +185,13 @@ and CI agree on versions. On commit (`.pre-commit-config.yaml`; run all with `uv
   indented `case`, from `.editorconfig`), and `tools/shell_complexity.py` (functions: branch
   count <= 15 and <= 60 lines; script bodies <= 25 and <= 120 lines), since the Python tools do
   not read shell.
-- Hygiene: whitespace, line endings, JSON/TOML/YAML syntax, shebangs vs executable bits,
-  credentials and private keys, and `uv.lock` in sync.
+- Everything else written by hand: hadolint (Dockerfiles), actionlint and zizmor (workflows; actions are
+  pinned by commit, with the tag in a comment that Dependabot keeps up to date), the Dependabot config's
+  schema, valid XML in the plist templates (Apple's `plutil` is more lenient than XML), `typos`
+  (`_typos.toml` lists words it should leave alone) and `tools/check_links.py` (relative links and
+  anchors between the docs).
+- Hygiene: whitespace, line endings, JSON/TOML/YAML syntax, shebangs vs executable bits, symlinks,
+  credentials and private keys, `uv.lock` in sync, and no commit directly on `main`.
 - Publishing: detect-secrets against the audited `.secrets.baseline` (after a reviewed false
   positive: `uv run detect-secrets scan --baseline .secrets.baseline`, then `uv run
   detect-secrets audit .secrets.baseline`), and `tools/forbidden_terms.py` on staged files and
@@ -190,8 +201,11 @@ and CI agree on versions. On commit (`.pre-commit-config.yaml`; run all with `uv
 CI (`.github/workflows/ci.yml`) runs the same on every pull request to `main`: all the hooks
 (`lint`; the forbidden-terms list comes from the `FORBIDDEN_TERMS` Actions secret, and the pull
 request's title, description and commit messages are checked too), the unit tests on Python 3.13
-to 3.15 (`test (<version>)`), the smoke suite on macOS (`smoke`) and gitleaks over the pull
-request's commits (`gitleaks`; a made-up value in a test carries a `gitleaks:allow` comment). The
+to 3.15 with a floor under coverage (`test (<version>)`), the smoke suite on macOS (`smoke`) and
+gitleaks over the pull request's commits (`gitleaks`; a made-up value in a test carries a
+`gitleaks:allow` comment). `.github/workflows/install.yml` runs the install for real on a clean macOS
+runner and the Docker sandbox, when the install could have changed and weekly; those are not required
+checks, because a required check that did not run blocks a merge. The
 logs are public, so neither check prints what it matched. `main` takes changes only through a pull
 request with those checks green and up to date with `main`, CodeQL's results clean (GitHub's
 default setup; no error alerts, no high or critical security alerts) and every review thread
@@ -216,13 +230,25 @@ use `fails_with "<expected error>" cmd` for refusals (a crash must not count as 
 osascript) are faked in the temp HOME's `~/.local/bin`, and the install test uses its own launchd
 label and refuses to run unless the fakes come first on PATH.
 
-`tests/sandbox.sh [init|unit|smoke|all|shell]` runs bosun on a clean machine that cannot touch this
-one: a throwaway Linux container with a read-only copy of the checkout. `init` walks a new user's
-first day with no network (`tests/sandbox/fresh_user.sh`, in the fictional world of `world.sh`);
-`shell` gives you that machine to try things by hand. Use it for anything that installs or changes a
-machine, instead of your own. Its scripts install for real, so they refuse to run outside its image.
-Docker on a Mac is Linux, so `tests/sandbox/macos/` holds stand-ins: it proves bosun's logic, never
-launchd, a real wake or the Keychain (`bosun wake-test` does, on real hardware).
+**Never test an install on the machine you are running on: `install.sh`, `bosun init --recommended` and
+`get.sh` change launchd, `pmset` and the config for real.** Use the cheapest sandbox that can show what
+you changed (the table and how to set them up: `docs/development.md`, "Which sandbox for what"):
+
+- `tests/sandbox.sh [init|unit|smoke|all|shell]`: a throwaway Linux container with a read-only copy of the
+  checkout. `init` walks a new user's first day with no network (`tests/sandbox/fresh_user.sh`, in the
+  fictional world of `world.sh`), through a real terminal (`drive.py`). Docker on a Mac is Linux, so
+  `tests/sandbox/macos/` holds stand-ins: it proves bosun's logic, never launchd or the Keychain.
+- `tests/sandbox.sh mac [setup|run [--from-nothing]|shell|clean]`: a real throwaway Mac in a Tart VM
+  (`tests/sandbox/mac.sh`), running `tests/install_e2e.sh`, the same script as the GitHub macOS runner.
+  Use it for `get.sh`, `install.sh`, launchd, `pmset` and whatever macOS does its own way. A clone costs
+  no time or disk, so make one rather than be careful with one. It has already shown what Docker could
+  not: a new Mac has no Apple tools, and launchd has no `gui/<uid>` domain until the auto-login is done.
+- `bosun wake-test` on real hardware: the only proof of a real wake, because a macOS guest cannot sleep and
+  `tart suspend` does not make launchd catch up. Check a job's time in the VM by moving its clock.
+
+Those scripts install for real, so they refuse to run outside their machines. A test never reaches a real
+tool either: `tests/unit/test_init.py` fails on any command but git and ruby, after one reached a real
+`gh auth login`.
 
 `tests/llm/` holds tests with the real, headless Claude: what I say in my own words, and the
 ledger state it must lead to (`cases.py`), each run in a scratch world (`world.py`: scratch HOME,

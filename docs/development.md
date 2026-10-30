@@ -1,8 +1,9 @@
 # Development
 
 `uv sync && uv run pre-commit install` once after cloning. Commits then run ruff, mypy --strict,
-complexity limits (complexipy, lizard, and a shell checker in `tools/`), shellcheck, shfmt, a
-secrets scan (detect-secrets) and the unit tests; pushes also run the smoke suite. A
+complexity limits (complexipy, lizard, and a shell checker in `tools/`), shellcheck, shfmt, hadolint for
+the Dockerfile, actionlint and zizmor for the workflows, spelling, the links between the docs, a secrets
+scan (detect-secrets) and the unit tests; pushes also run the smoke suite. A
 forbidden-terms check (`tools/forbidden_terms.py`) refuses staged files and commit messages that
 contain a term from `~/.config/bosun/forbidden-terms.txt` (one case-insensitive regex
 per line, `#` comments), a list you keep outside the repo of names that must never be committed:
@@ -12,7 +13,7 @@ limits and conventions.
 
 On GitHub, every pull request to `main` runs the same checks (`.github/workflows/ci.yml`), the
 smoke suite on macOS and a gitleaks scan of the new commits, and `main` only takes pull requests
-that pass them. For the forbidden-terms check to run there too, store your list as the
+that pass them. The unit tests there also keep a floor under coverage. For the forbidden-terms check to run there too, store your list as the
 `FORBIDDEN_TERMS` Actions secret with `gh secret set FORBIDDEN_TERMS <
 ~/.config/bosun/forbidden-terms.txt`; the logs never print what it matched.
 
@@ -20,20 +21,72 @@ Issues and pull requests are welcome: see [CONTRIBUTING.md](../CONTRIBUTING.md) 
 [code of conduct](../CODE_OF_CONDUCT.md). Report security problems privately, as
 [SECURITY.md](../SECURITY.md) describes.
 
-## A sandbox for anything that changes a machine
+## Which sandbox for what
 
-`tests/sandbox.sh` runs bosun on a clean machine that cannot touch yours: a throwaway Linux container
-with a read-only copy of the checkout. It needs Docker.
+**Never test an install on your own Mac.** `install.sh`, `bosun init --recommended` and `get.sh` change
+launchd, `pmset` and your config for real. Use the cheapest of these that can show what you changed:
+
+| What you changed | Run | What it can prove | Time |
+|---|---|---|---|
+| Logic, config, the wizard | `tests/sandbox.sh` | bosun's logic, on a machine with nothing installed, through a real terminal | 1 minute |
+| Anything else in bosun | `tests/sandbox.sh all` | also the unit tests and the smoke suite | 3 minutes |
+| `get.sh`, `install.sh`, launchd, `pmset`, anything macOS does its own way | `tests/sandbox.sh mac run` | the real thing on real macOS, except sleep | 75 seconds |
+| What a new Mac lacks: Homebrew, Apple's tools | `tests/sandbox.sh mac run --from-nothing` | the same from a Mac with nothing on it | 4 minutes |
+| The wake itself | `bosun wake-test`, on real hardware | a real sleep and a real wake | 5 minutes |
+
+The first two also run in CI, and so does the third on a clean GitHub macOS runner, whenever the install
+could have changed (`.github/workflows/install.yml`). The sandboxes' scripts install for real, so they
+refuse to run anywhere else.
+
+### Docker: `tests/sandbox.sh`
+
+A throwaway Linux container with a read-only copy of your checkout, and no network for the first-day
+scenario. It needs Docker.
 
 ```bash
-tests/sandbox.sh          # a new user's first day: bosun init, a morning, re-runs, uninstall (no network)
-tests/sandbox.sh all      # also the unit tests and the smoke suite, about 3 minutes
+tests/sandbox.sh          # a new user's first day: the wizard, a morning, re-runs, uninstall
+tests/sandbox.sh all      # also the unit tests and the smoke suite
 tests/sandbox.sh shell    # that new user's machine, to try things by hand; it goes away on exit
 ```
 
 Docker on a Mac is Linux, so `launchctl`, `pmset`, `caffeinate` and the like are stand-ins
-(`tests/sandbox/macos/`). It proves bosun's logic, not launchd, a real wake or the Keychain:
-`bosun wake-test`, below, does that on real hardware.
+(`tests/sandbox/macos/`). It proves bosun's logic, never launchd, a real wake or the Keychain.
+
+### A real Mac: `tests/sandbox.sh mac`
+
+macOS in a [Tart](https://tart.run) VM on your Mac (Apple silicon). A run clones a base image, boots it,
+runs `tests/install_e2e.sh` in it and deletes the clone: the real installer, real launchd jobs that really
+fire, the real `pmset`, `plutil` and bash 3.2.
+
+```bash
+brew install openai/tools/tart
+tests/sandbox.sh mac setup                # once: pulls the image (6 minutes) and prepares the bases (4)
+tests/sandbox.sh mac run                  # on a developer's Mac: Homebrew is already there
+tests/sandbox.sh mac run --from-nothing   # on a new Mac: no Homebrew, no Apple tools
+tests/sandbox.sh mac shell                # a window, to try the wizard as a new user would
+tests/sandbox.sh mac clean                # delete the base images (`tart prune` removes the pulled one)
+```
+
+If Homebrew refuses the tap, it wants to be told you trust it. These two are enough, not the whole tap:
+`brew trust --formula openai/tools/tart openai/tools/softnet`.
+
+- **It costs disk once.** The image is about 29 GB to download and takes about 33 GB; a clone takes no
+  time and no space until it writes, so keep 10 GB or so free for a run. `du` double-counts clones:
+  trust `df`.
+- **It is a stranger's Mac, not yours.** The login is `admin`, password `admin`, with passwordless `sudo`
+  and ssh on. Never put a real token in one, and never push an image you logged in to.
+- **It cannot sleep.** `pmset sleepnow` fails in a macOS guest (`error 0xe00002e2`), and `tart suspend` is
+  no stand-in: launchd did not catch up on a job that fell due while the VM was frozen. To check a job's
+  *time*, move the clock past it instead (`sudo systemsetup -setusingnetworktime off`, then `sudo date`):
+  launchd fires on time. Only `bosun wake-test` on real hardware proves the wake.
+- **It only runs here.** GitHub's macOS runners cannot nest a macOS VM, so CI uses the runner itself.
+- **Wait for the login.** ssh answers before the auto-login finishes, and until then launchd has no
+  `gui/<uid>` domain and `launchctl bootstrap` fails with error 125. `mac.sh` waits for it; do the same
+  if you script a VM by hand.
+
+Tart is OpenAI's since it acquired Cirrus Labs in 2026. The repository's licence is FSL-1.1-ALv2, which
+allows internal use and becomes Apache 2.0 after two years (the licensing page on tart.run still shows the
+older terms). It is only a test tool here: nothing in bosun needs it or ships it.
 
 ## Testing without waiting for the schedule
 

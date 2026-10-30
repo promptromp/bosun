@@ -14,6 +14,7 @@ BOSUN="$ROOT/bin/bosun"
 CONFIG="$HOME/.config/bosun"
 AGENTS="$HOME/Library/LaunchAgents"
 LOG="$HOME/.sandbox/system.log"
+DRIVE="$ROOT/tests/sandbox/drive.py"
 export BOSUN_NETWORK_PROBE_URL="file:///etc/hostname" # there is no network here
 passed=0
 failed=0
@@ -133,6 +134,64 @@ uninstall() {
   check "the wake is gone" test ! -e "$HOME/.sandbox/pmset-repeat"
 }
 
+the_wizard_quit() {
+  local out="$HOME/wizard-quit.txt"
+  echo "the wizard: leaving changes nothing"
+  check "q on the first screen" python3 "$DRIVE" "$out" "Which repos" "q" -- "$BOSUN" init
+  check "... says so" says "Nothing was changed" "$out"
+  check "... and nothing is there" test ! -e "$CONFIG"
+  check "q on the plan" python3 "$DRIVE" "$out" "Which repos" "<enter>" "When should" "<enter>" "How proactive" "<enter>" "Which model" "<enter>" "wake by itself" "<enter>" "Nothing has changed yet" "q" -- "$BOSUN" init
+  check "... and nothing is there" test ! -e "$CONFIG"
+  check "ctrl-c leaves too" python3 "$DRIVE" "$out" "Which repos" "<ctrl-c>" -- "$BOSUN" init
+  check "... and says so" says "Nothing was changed" "$out"
+  # shellcheck disable=SC2088 # typed into the wizard, which expands it
+  check "a typed folder, typed hours and the plan" python3 "$DRIVE" "$out" \
+    "Which repos" "a" "Folder:" "~/Development/toy<enter>" "Development/toy" "<enter>" \
+    "When should" "3" "Days, from" "MWF<enter>" "Start" "07:15<enter>" "Awake until" "16:45<enter>" \
+    "How proactive" "<enter>" "Which model" "<enter>" "wake by itself" "<enter>" \
+    "Mon, Wed, Fri, 07:15 to 16:45" "q" -- "$BOSUN" init
+  check "r goes back to the start" python3 "$DRIVE" "$out" "Which repos" "<enter>" "When should" "r" "Which repos" "q" -- "$BOSUN" init
+  check "no answers without a terminal: only the plan" bash -c '"$1" init </dev/null | grep -q "Nothing has changed yet"' _ "$BOSUN"
+  check "... and nothing is there" test ! -e "$CONFIG"
+}
+
+the_installer() {
+  local out="$HOME/installer.txt" branch
+  echo "the installer: curl | sh, then the wizard, in a real terminal"
+  branch="$(git -C "$ROOT" branch --show-current)"
+  export BOSUN_REPO="$ROOT" BOSUN_BRANCH="$branch"
+  mkdir -p "$HOME/.sandbox/packages"
+  mv "$HOME/.local/bin/gh" "$HOME/.sandbox/packages/gh" # something for it to offer
+  check "a dry run says what it would do" bash -c 'sh "$1/get.sh" --dry-run >"$2" && grep -q "brew install gh" "$2"' _ "$ROOT" "$out"
+  check "... and does none of it" test ! -e "$HOME/.local/share/bosun"
+  check "it is plain sh" sh -n "$ROOT/get.sh"
+  check "the piped installer asks, installs and hands over to the wizard" python3 "$DRIVE" "$out" \
+    "Install them with Homebrew?" "y<enter>" \
+    "Which repos" "2<enter>" \
+    "When should" "2" \
+    "How proactive" "<enter>" \
+    "Which model" "2" \
+    "wake by itself" "<enter>" \
+    "Nothing has changed yet" "y" \
+    "Start the windows now?" "y" \
+    "The windows are up" "" \
+    -- sh -c "cat '$ROOT/get.sh' | sh"
+  check "it installed what was missing" says "brew install gh" "$LOG"
+  check "it put bosun where it said" test -x "$HOME/.local/share/bosun/bin/bosun"
+  check "it linked that one" bash -c '[ "$(readlink "$HOME/.local/bin/bosun")" = "$HOME/.local/share/bosun/bin/bosun" ]'
+  check "the toggled-off repo has no window" absent "name: web" "$CONFIG/sessions.yml"
+  check "... and the chosen one does" says "name: api" "$CONFIG/sessions.yml"
+  check "the schedule it was given" says 'BOSUN_DAYS="MTWRF"' "$CONFIG/bosun.env"
+  check "the model it was given" says 'BOSUN_MODEL="sonnet"' "$CONFIG/bosun.env"
+  check "the windows it started" bash -c '[ "$1" = "api checkin orchestrator " ] || { echo "windows: $1"; exit 1; }' _ "$(windows)"
+  "$HOME/.local/bin/bosun" stop >/dev/null 2>&1
+  check "running it again updates, then asks again" python3 "$DRIVE" "$out" "Updating" "" "Which repos" "q" -- sh -c "cat '$ROOT/get.sh' | sh"
+  check "a download cut short does nothing" bash -c 'head -c 900 "$1/get.sh" | BOSUN_DIR="$HOME/cut-short" sh; [ ! -e "$HOME/cut-short" ]' _ "$ROOT"
+  "$HOME/.local/share/bosun/uninstall.sh" --with-wake --purge >/dev/null 2>&1
+  check "uninstall leaves no link" test ! -e "$HOME/.local/bin/bosun"
+  unset BOSUN_REPO BOSUN_BRANCH
+}
+
 "$ROOT/tests/sandbox/world.sh"
 first_look
 set_up
@@ -140,6 +199,8 @@ a_morning
 run_again
 other_windows
 uninstall
+the_wizard_quit
+the_installer
 echo
 echo "$passed passed, $failed failed"
 [ "$failed" -eq 0 ]

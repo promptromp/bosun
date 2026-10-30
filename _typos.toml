@@ -1,0 +1,7 @@
+# Words the spell check (`typos`, in .pre-commit-config.yaml) should leave alone. Each is real here.
+[default.extend-words]
+ines = "ines"               # a name in the knowledge prototype's fictional data
+mis = "mis"                 # as in "mis-" prefixes split over a line
+unparseable = "unparseable" # a fine spelling
+duplicat = "duplicat"       # a word stem in a test's pattern
+skipp = "skipp"             # a word cut short in a fixture's quoted text

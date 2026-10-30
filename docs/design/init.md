@@ -1,26 +1,46 @@
 # Installing: `bosun init`
 
-Before this, installing meant cloning, running `install.sh`, hand-editing three files (`bosun.env`
-alone has over 130 settings), re-running and pasting a `sudo` line. `bosun init` replaces the
-editing with what the Mac already shows, and shows its plan before it changes anything. The target
-is one command, `curl ... | sh`, that ends in a short wizard: see [What comes next](#what-comes-next).
+Installing used to mean cloning, running `install.sh`, hand-editing three files (`bosun.env` alone has
+over 130 settings), re-running and pasting a `sudo` line. Now it is one command, `curl ... | sh`, which
+ends in a short wizard that starts from what the Mac already shows and shows its plan before it changes
+anything.
 
 ## How it works
 
-Three parts, split the way the rest of bosun is:
-
 | Part | File | What it does |
 |---|---|---|
+| Bootstrap | `get.sh` | Plain `sh`, because it runs before anything is installed: Homebrew and what is missing, then bosun itself. |
 | Detect | `lib/init_detect.py` | Read-only: the facts. Claude Code's files are read through `lib/claude_state.py`. |
 | Plan | `lib/init_plan.py` | Pure: facts to recommended answers, answers to file contents and a plan. |
+| Wizard | `lib/init_wizard.py` | Pure over a `Ui`: the questions, from recommended answers to yours. |
+| Terminal | `lib/init_terminal.py` | A key at a time, a screen at a time, and the terminal put back. |
 | Apply | `lib/init.py` | The CLI. Writes the config with backups, trusts the folders, runs `install.sh`. |
 
 `install.sh` stays the one place that knows launchd, `pmset` and `bosun doctor`, so `init` only
 writes what `install.sh` reads. Answers are JSON (`--print-answers`), and a file only needs what it
-changes. That is what makes this testable, and what the wizard will fill in.
+changes: the wizard only fills those in, so `--answers` and the wizard cannot disagree.
 
-**On its own `bosun init` changes nothing:** it prints the plan. `--recommended` or `--answers`
-carries it out.
+**Nothing changes until you accept the plan.** In a terminal `bosun init` asks its questions and then
+shows the plan. Without a terminal, or with `--dry-run`, it only prints the plan; `--recommended` or
+`--answers` carry one out without asking.
+
+## The wizard
+
+Taken from what makes oh-my-zsh and Powerlevel10k pleasant, with what they lack added:
+
+- One key per answer, no Return. Return takes the recommended answer, so a new user can lean on it.
+- A preview under each choice: the awake window drawn on a day's ruler, what a level of proactivity
+  will actually do, the exact `sudo` line.
+- `(recommended)` on the answer it would pick, and the reason from your own history above it.
+- `r` starts again and `q` leaves with nothing changed, on every screen, as does Ctrl-C.
+- It asks only what it cannot find out: the AWS question only appears if there are SSO profiles, and
+  a login is only offered for a tool that is installed and logged out.
+- Re-runnable, starting from your config, and usable without a terminal (Powerlevel10k has no such
+  mode, and it is what lets everything here be tested).
+
+`get.sh` follows oh-my-zsh: one line, an unattended mode, plain `sh`. Behind a pipe its standard input is
+the script, so it hands `bosun init` the terminal from `/dev/tty`. All of it is in functions with `main`
+last, so a download cut short does nothing.
 
 ## What it recommends
 
@@ -67,17 +87,16 @@ default that lets an unattended session keep going, and you should know about it
 |---|---|---|
 | Unit tests | Recommendations, merging, quoting, refusals | `tests/unit/test_init_plan.py`, `test_init.py` |
 | Smoke suite | The real command on macOS: plists through the real `plutil`, config that loads | `tests/smoke.sh`, in CI on macOS |
-| Sandbox | A new user's first day from nothing, end to end, with no network | `tests/sandbox.sh` |
+| Docker sandbox | A new user's first day from nothing, through a real terminal, with no network | `tests/sandbox.sh` |
+| Real Mac | The real installer, launchd jobs that really fire, `pmset`, `plutil` | `tests/sandbox.sh mac`, and a GitHub macOS runner in CI |
+| Real hardware | A real sleep and a real wake | `bosun wake-test` |
 
-Docker on a Mac runs Linux, so **the sandbox cannot prove anything about launchd, a real wake or the
-Keychain**. `tests/sandbox/macos/` holds stand-ins that record what they are asked and keep the state
-that `bosun doctor` reads. `bosun wake-test` remains the proof of a real wake, on real hardware.
+Docker on a Mac runs Linux, so `tests/sandbox/macos/` holds stand-ins that record what they are asked
+and keep the state `bosun doctor` reads. A macOS guest cannot sleep, so only real hardware proves a wake.
+How to choose and set them up: [docs/development.md](../development.md#which-sandbox-for-what).
 
 ## What comes next
 
-1. **This step:** the core, `--answers`, and the Docker sandbox.
-2. The wizard (one keypress per question, a preview of each choice, `(recommended)` labels, restart
-   and quit keys, as Powerlevel10k does), a `curl ... | sh` bootstrap in plain `sh` (it runs before
-   Python 3.13 exists), and a job that runs it all on a clean GitHub macOS runner.
-3. A real macOS VM (Tart) for what Docker cannot show, and morning scenarios: "Monday 08:00, tmux
-   survived, one window at a prompt, the login expired".
+- Morning scenarios on a real Mac: "Monday 08:00, tmux survived, one window at a prompt, the login
+  expired".
+- A Homebrew tap, once there are releases to pin it to.

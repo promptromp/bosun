@@ -2,7 +2,7 @@
 
 | Command | What it does |
 |---|---|
-| `bosun init [--recommended \| --answers <file>] [--force] [--dry-run]` / `--detect` / `--print-answers` | Set bosun up from what this Mac shows: the repos you use Claude Code in, your usual hours, your logins. On its own it prints the plan and changes nothing. See [Setup](setup.md#install) |
+| `bosun init [--recommended \| --answers <file>] [--force] [--dry-run]` / `--detect` / `--print-answers` | Set bosun up from what this Mac shows: the repos you use Claude Code in, your usual hours, your logins. In a terminal it asks a few questions and shows the plan before it changes anything; otherwise it only prints the plan. See [Setup](setup.md#install) |
 | `bosun morning [--dry-run] [--skip-setup] [--awake-minutes N]` | The scheduled entry point |
 | `bosun setup [--dry-run]` | Run (or just check) the setup steps |
 | `bosun alert [--dry-run] <message>` | Notify you: a macOS notification and, with `BOSUN_ALERT_SLACK_USER` set, a Slack DM to yourself sent by a headless Claude that can use only Slack's send-message tool and never waits for an approval |
