@@ -1,0 +1,17 @@
+#!/bin/bash
+# pmset's stand-in: keeps the one repeating event, as pmset does, in ~/.sandbox.
+state="$HOME/.sandbox/pmset-repeat"
+mkdir -p "$HOME/.sandbox"
+echo "pmset $*" >>"$HOME/.sandbox/system.log"
+case "${1:-} ${2:-}" in
+"-g batt") printf "Now drawing from 'AC Power'\n -InternalBattery-0 (id=1)\t100%%; charged\n" ;;
+"-g sched")
+	if [ -s "$state" ]; then
+		printf 'Repeating power events:\n  %s\n' "$(cat "$state")"
+	fi
+	;;
+"repeat cancel") rm -f "$state" ;;
+"repeat wakeorpoweron")
+	printf 'wakepoweron at %s %s\n' "$(date -d "$4" '+%l:%M%p' | tr -d ' ')" "$3" >"$state"
+	;;
+esac

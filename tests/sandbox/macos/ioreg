@@ -1,0 +1,3 @@
+#!/bin/bash
+# A desk with no lid to close.
+echo '"AppleClamshellState" = No'

@@ -418,6 +418,44 @@ def user_prompts(transcript: Path, since: datetime | None = None) -> list[Prompt
     return sorted(found, key=lambda p: p.at)
 
 
+PROMPT_LINE = re.compile(r'"type":\s*"user"|"queued_command"')  # skips the rest of a long transcript unparsed
+SCRIPTED_ENTRYPOINT = "sdk"  # `claude -p` and the Agent SDK: a script's prompts, not someone at work
+
+
+def prompt_entries(transcript: Path) -> Iterator[dict[str, Any]]:
+    """The entries of a transcript that can be prompts someone typed, parsed."""
+    with transcript.open(errors="replace") as fh:
+        for line in fh:
+            if not PROMPT_LINE.search(line):
+                continue
+            try:
+                entry = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if isinstance(entry, dict) and not str(entry.get("entrypoint")).startswith(SCRIPTED_ENTRYPOINT):
+                yield entry
+
+
+def transcript_prompt_uses(transcript: Path, since: datetime) -> Iterator[tuple[str, datetime]]:
+    cwd = ""
+    for entry in prompt_entries(transcript):
+        cwd = str(entry.get("cwd") or cwd)
+        at = entry_time(entry)
+        if at is not None and at >= since and cwd and typed_prompt(entry):
+            yield cwd, at
+
+
+def prompt_history(since: datetime) -> Iterator[tuple[str, datetime]]:
+    """Where and when someone typed a prompt since <since>, across all projects, never what: what
+    `bosun init` recommends repos and a schedule from."""
+    for transcript in PROJECTS_DIR.glob("*/*.jsonl"):
+        try:
+            if transcript.stat().st_mtime >= since.timestamp():
+                yield from transcript_prompt_uses(transcript, since)
+        except OSError:
+            continue  # vanished or unreadable
+
+
 @dataclass(frozen=True)
 class Activity:
     """One entry of a transcript as the Impact view counts it: when, what kind (`assistant`, a
@@ -1022,6 +1060,7 @@ def last_reply_at(transcript: Path) -> datetime | None:
 class AuthStatus:
     logged_in: bool | None  # None: no answer that could be read
     method: str = ""
+    plan: str = ""  # subscriptionType: pro, max, team, enterprise; empty for an API key
 
 
 AUTH_STATUS_TIMEOUT_SECONDS = 30
@@ -1034,7 +1073,9 @@ def parse_auth_status(text: str) -> AuthStatus:
         return AuthStatus(None)
     if not isinstance(data, dict) or not isinstance(data.get("loggedIn"), bool):
         return AuthStatus(None)
-    return AuthStatus(data["loggedIn"], str(data.get("authMethod") or ""))
+    return AuthStatus(
+        data["loggedIn"], str(data.get("authMethod") or ""), str(data.get("subscriptionType") or "")
+    )
 
 
 def auth_status(claude_bin: str) -> AuthStatus:

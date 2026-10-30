@@ -78,13 +78,13 @@ logged in.
 ```bash
 git clone https://github.com/promptromp/bosun.git ~/Development/bosun
 cd ~/Development/bosun
-./install.sh --example generic   # seeds ~/.config/bosun from examples/generic
-$EDITOR ~/.config/bosun/{bosun.env,sessions.yml,setup.sh}
-./install.sh                     # loads the morning and watchdog jobs
-bosun doctor
+bin/bosun init                 # prints the plan and changes nothing
+bin/bosun init --recommended   # carries it out
 ```
 
-[Setup](docs/setup.md) covers the details: the wake schedule, configuration and logins.
+`bosun init` works out your repos and hours from how you already use Claude Code, shows you the plan,
+and asks for `sudo` once, for the wake schedule. [Setup](docs/setup.md) covers the details:
+changing the answers, configuration and logins.
 
 ## Status
 

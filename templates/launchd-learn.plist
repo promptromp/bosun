@@ -16,7 +16,7 @@
 __ENV__
   </dict>
   <!-- Daily at BOSUN_LEARN_AT on BOSUN_DAYS; if the Mac is asleep then, launchd runs it on
-       the next wake, and `learn --scheduled` skips a day that already had its run. -->
+       the next wake, and a scheduled run skips a day that already had its run. -->
   <key>StartCalendarInterval</key>
 __CALENDAR__
   <key>RunAtLoad</key>

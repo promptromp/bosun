@@ -1,0 +1,40 @@
+#!/bin/bash
+# BSD date on GNU date, for the flags bosun uses: -j, -f <format> <value> (GNU parses the value by
+# itself), -r <epoch> and -v[+-]N<unit>.
+args=()
+when=""
+adjust=""
+unit_name() {
+	case "$1" in
+	y) echo years ;;
+	m) echo months ;;
+	w) echo weeks ;;
+	d) echo days ;;
+	H) echo hours ;;
+	M) echo minutes ;;
+	S) echo seconds ;;
+	esac
+}
+while [ $# -gt 0 ]; do
+	case "$1" in
+	-j) ;;
+	-f)
+		when="$3"
+		shift 2
+		;;
+	-r)
+		when="@$2"
+		shift
+		;;
+	-v?*)
+		amount="${1#-v}"
+		adjust="$adjust ${amount%?} $(unit_name "${amount: -1}")"
+		;;
+	*) args+=("$1") ;;
+	esac
+	shift
+done
+if [ -n "$when$adjust" ]; then
+	exec /bin/date -d "${when:-now}$adjust" "${args[@]}"
+fi
+exec /bin/date "${args[@]}"
