@@ -104,6 +104,9 @@ of truth, so don't copy rules into this file.
   session). `_common.md`: rules every task gets. Sites can add or replace task types and add shared
   rules in `$BOSUN_CONFIG_DIR/tasks/`, and append to the policy with
   `$BOSUN_CONFIG_DIR/policy.md`; keep team- or person-specific procedure there, not here.
+- Docs: `README.md` is the front page (what bosun is, a quick start, the guide list), kept short;
+  the user guides are `docs/*.md` (index: `docs/README.md`), one per part; design notes are in
+  `docs/design/`, plans in `docs/plans/`. A user-facing change goes in its part's guide.
 
 ## Common changes
 
@@ -112,7 +115,7 @@ of truth, so don't copy rules into this file.
   changes a ledger step, check the state exists (`bosun ledger kinds`). If the orchestrator's
   part changes (what it proposes afterwards, when it may delegate), also update `followup:`, and
   `policy.md` or `chores.md` only where they name that step. Paste the new
-  `bosun delegate --list --markdown` rows into the README table.
+  `bosun delegate --list --markdown` rows into the task table in `docs/orchestrator.md`.
 - **A new task type:** add `orchestrator/tasks/<type>.md`; mention it where `policy.md` lists the
   types and where `chores.md` should use it.
 - **Wording the orchestrator or repo sessions act on** (`policy.md`, `chores.md`, task files):
@@ -125,22 +128,22 @@ of truth, so don't copy rules into this file.
   `chores.md` step 5.
 - **An outreach purpose:** `PURPOSES` (`lib/ledger.py`) and the `reach-out` help there, the
   purpose lists in `policy.md` (with what each means) and `orchestrator/tasks/_common.md`, and the
-  README's outreach table.
+  outreach table in `docs/orchestrator.md`.
 - **A watchdog check:** a row in `CHECKS` (`lib/watchdog.py`), a line in
-  `libexec/bosun-watchdog`'s usage (smoke checks they match), and the README's watchdog table.
-- **A ledger kind:** an entry in `KINDS` (`lib/ledger.py`) and the README's list of item ids.
+  `libexec/bosun-watchdog`'s usage (smoke checks they match), and the table in `docs/watchdog.md`.
+- **A ledger kind:** an entry in `KINDS` (`lib/ledger.py`) and the list of item ids in `docs/orchestrator.md`.
 - **A link relation:** a row in `RELATIONS` (`lib/lineage.py`, with its inverse and the family in
-  which cycles are refused), the README's lineage section and the relation list in `policy.md`.
+  which cycles are refused), the lineage section of `docs/orchestrator.md` and the relation list in `policy.md`.
 - **A workstream rule criterion** (beyond repo, title, channel, kind): `RULE_KEYS`, a test in
   `RULE_TESTS` (`lib/workstreams.py`), the rules section of `docs/design/workstreams.md`, and
   `examples/generic/workstreams.json` if it helps. Sites' rules stay in their config dir.
 - **A ticket backend** (another tracker): a row in `BACKENDS` (`lib/tickets.py`: key format, how
-  to read it, how an approved change is made, its status categories and names), the README's
-  tickets section, and a test in `tests/unit/test_tickets.py`. Site status names belong in
+  to read it, how an approved change is made, its status categories and names), the tickets
+  section of `docs/orchestrator.md`, and a test in `tests/unit/test_tickets.py`. Site status names belong in
   `BOSUN_TICKET_STATUS_MAP`, not in the table.
 - **An outward tool to gate** (approvals): a row in `GATED_MCP` / `GATED_COMMANDS` (`lib/guard.py`)
   and its `ask` rule in `orchestrator/settings.json`; a standing class: `STANDING_CLASSES` and its
-  check in `lib/approvals.py`, its config keys, the design note and the README's Approvals section.
+  check in `lib/approvals.py`, its config keys, the design note and `docs/permissions.md`.
 - **A knowledge predicate or entity type:** an entry in `PREDICATE_LIST` or `ENTITY_TYPES`
   (`lib/knowledge_schema.py`), the table and the single-valued and high-risk lists in
   `docs/design/knowledge.md`, and a test in `tests/unit/test_knowledge_schema.py`. A predicate
@@ -148,10 +151,10 @@ of truth, so don't copy rules into this file.
   the commit. Site-specific predicates belong in `$BOSUN_CONFIG_DIR/knowledge/schema.json`.
 - **A config key:** default in `lib/common.sh` and the same value in
   `examples/generic/bosun.env` (tests check they match); any other example only lists
-  overrides. README if users should know.
+  overrides. The guide in `docs/` if users should know.
 - **A command:** `libexec/bosun-<cmd>` with a `# Usage:` header (`usage` prints it for
   `--help`; `die_usage` reports usage errors with exit 2), a line in `bin/bosun`'s usage, the
-  README Commands table, and smoke tests.
+  table in `docs/commands.md`, and smoke tests.
 
 ## Tooling and checks
 
@@ -196,7 +199,7 @@ loop bash has already parsed), but for hand edits to `libexec/` keep to atomic r
 Always run `tests/smoke.sh` (hermetic: temp HOME, own tmux socket, fake Claude). It runs the Python
 unit tests in `tests/unit/` first (add one there for any change to `lib/*.py` or
 `bosun-resolve`), then end-to-end checks, including that task files only use valid ledger
-transitions and that the README table matches them. Then `bosun doctor`. In `tests/smoke.sh`,
+transitions and that the task table in `docs/orchestrator.md` matches them. Then `bosun doctor`. In `tests/smoke.sh`,
 use `fails_with "<expected error>" cmd` for refusals (a crash must not count as a pass) and
 `wait_for <seconds> cmd` instead of fixed sleeps; external tools (aws, gh, launchctl, pmset,
 osascript) are faked in the temp HOME's `~/.local/bin`, and the install test uses its own launchd

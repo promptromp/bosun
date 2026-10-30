@@ -42,7 +42,7 @@ Sites can add task types in $BOSUN_CONFIG_DIR/tasks/<type>.md (a file named like
 type replaces it) and add shared rules in $BOSUN_CONFIG_DIR/tasks/_common.md.
 
   --list       the task types: what the repo session may and may never do, and what the
-               orchestrator does afterwards (--markdown: the README table rows)
+               orchestrator does afterwards (--markdown: the rows of the task table in docs/orchestrator.md)
   --details -  read the details from stdin (use a quoted heredoc: --details - <<'EOF')
   --model, --effort  override the task type's model and effort (front matter `model`/`effort`;
                "session" means the session's own). A new window starts with them; a running or
