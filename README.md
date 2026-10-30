@@ -216,6 +216,10 @@ that pass them. For the forbidden-terms check to run there too, store your list 
 `FORBIDDEN_TERMS` Actions secret with `gh secret set FORBIDDEN_TERMS <
 ~/.config/bosun/forbidden-terms.txt`; the logs never print what it matched.
 
+Issues and pull requests are welcome: see [CONTRIBUTING.md](CONTRIBUTING.md) and the
+[code of conduct](CODE_OF_CONDUCT.md). Report security problems privately, as
+[SECURITY.md](SECURITY.md) describes.
+
 ## Testing without waiting for the schedule
 
 Work up the levels; each one exercises more of the real chain.
