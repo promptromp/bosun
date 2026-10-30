@@ -1,5 +1,5 @@
 #!/bin/bash
-# Usage: bosun console [--port N] [--open]
+# Usage: bosun console [--port N] [--open] [--new-token]
 #
 # A local web console over the ledger, the sessions, bosun's health, stats, learning, the
 # knowledge base and the editorial files (design: docs/design/console.md). Read-only, except that
@@ -7,11 +7,14 @@
 # data, never outward-facing; through the same code as `bosun kg batch apply`). Runs in the
 # foreground until Ctrl-C; it reads the ledger as a snapshot and never takes its lock. The Sessions
 # view reads the windows the way `bosun sessions --json` and the watchdog do (no keys sent, no
-# pane captured) and never starts Claude. It prints a URL with a token that is new each start:
-# open that URL (the token becomes a cookie, so the API answers only that browser).
+# pane captured) and never starts Claude. It prints a URL with a token: open that URL (the token
+# becomes a cookie, so the API answers only that browser). The token is kept across restarts in
+# $BOSUN_STATE_DIR/console/token (0600), so an open tab stays signed in; with
+# BOSUN_CONSOLE_PERSIST_TOKEN=0 it is new each start.
 #   --port N     port on 127.0.0.1 (default BOSUN_CONSOLE_PORT, 8765); 0 picks a free one,
 #                printed in the URL. A port in use is an error.
 #   --open       also open the URL in the default browser
+#   --new-token  replace the stored token (signs out every open tab)
 #   --host H     only 127.0.0.1 is accepted: the console never listens beyond this machine
 # Only refused requests are logged (to stderr: method, path, status), never ledger content.
 set -uo pipefail
@@ -37,6 +40,7 @@ settings=()
 while IFS= read -r line; do settings+=("$line"); done < <(settings_lines $WATCHDOG_SETTINGS \
   BOSUN_TMUX_SOCKET BOSUN_EVENTS_MAX_PER_DAY BOSUN_SLACK_WATCH_MAX_USD_PER_DAY \
   BOSUN_CONFIG_DIR BOSUN_SESSIONS_FILE BOSUN_ORCHESTRATOR_SETTINGS BOSUN_CONSOLE_MEMORY_DIRS \
+  BOSUN_CONSOLE_PERSIST_TOKEN \
   BOSUN_KNOWLEDGE_GIT BOSUN_KNOWLEDGE_BATCH_CAP BOSUN_KNOWLEDGE_BATCH_FACTS BOSUN_KNOWLEDGE_GROUP_FACTS \
   BOSUN_TICKET_OWNED_PROJECTS)
 # It checks the arguments (usage errors exit 2, like die_usage); exec, so Ctrl-C and a kill reach

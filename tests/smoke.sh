@@ -149,6 +149,7 @@ sessions:
     dir: $REPO_B
     model: sonnet
     effort: high
+    autocompact: 500000
 EOF
 
 echo "resolve"
@@ -176,6 +177,23 @@ out="$(cd "$REPO_B" && "$BOSUN" launch --model haiku --effort low gamma 2>&1)"
 check "launch --model/--effort override the entry" bash -c 'grep -q -- "--model haiku" <<<"$1" && grep -q "effortLevel\\\\\":\\\\\"low" <<<"$1"' _ "$out"
 check "empty settings leave Claude Code's defaults" bash -c '! grep -qE -- "--model|effortLevel" <<<"$1"' _ "$(cd "$REPO_A" && BOSUN_MODEL='' BOSUN_EFFORT='' "$BOSUN" launch alpha 2>&1)"
 check "an unknown effort is refused" fails_with "effort must be one of" "$BOSUN" launch --effort huge alpha
+check "repo sessions launch with the default auto-compact window" contains "$(cd "$REPO_A" && "$BOSUN" launch alpha 2>&1)" "--autocompact 300000 --name alpha"
+check "a sessions.yml entry sets its own auto-compact window" contains "$(cd "$REPO_B" && "$BOSUN" launch gamma 2>&1)" "--autocompact 500000"
+check "an empty auto-compact setting leaves Claude Code's default" bash -c '! grep -q -- "--autocompact" <<<"$1"' _ "$(cd "$REPO_A" && BOSUN_AUTOCOMPACT_TOKENS=0 "$BOSUN" launch alpha 2>&1)"
+check "an auto-compact window out of range is refused" fails_with "must be auto or 100000-1000000" env BOSUN_AUTOCOMPACT_TOKENS=5000 "$BOSUN" launch alpha
+out="$(cd "$REPO_A" && "$BOSUN" launch alpha 2>&1)"
+check "repo sessions get the compaction hook" bash -c 'grep -q "SessionStart" <<<"$1" && grep -qE "compact-context.{0,2} --window.{0,2} alpha" <<<"$1"' _ "$out"
+check "BOSUN_COMPACT_CONTEXT=0 leaves the hook out" bash -c '! grep -q "compact-context" <<<"$1"' _ "$(cd "$REPO_A" && BOSUN_COMPACT_CONTEXT=0 "$BOSUN" launch alpha 2>&1)"
+out="$(printf '{"hook_event_name":"SessionStart","source":"compact"}' | "$BOSUN" hook compact-context --window alpha)"
+check "the compaction hook adds the window's items as SessionStart context" bash -c 'jq -e ".hookSpecificOutput.hookEventName == \"SessionStart\" and (.hookSpecificOutput.additionalContext | test(\"compacted\"))" <<<"$1" >/dev/null' _ "$out"
+check "the compaction hook adds nothing when it is off" test -z "$(echo '{}' | BOSUN_COMPACT_CONTEXT=0 "$BOSUN" hook compact-context --window alpha)"
+check "the compaction hook never fails the session start" bash -c 'echo "{}" | BOSUN_STATE_DIR=/nonexistent/x "$1" hook compact-context --window alpha' _ "$BOSUN"
+check "repo sessions get the async signal hooks" bash -c 'grep -qE "hook.{0,2} signal.{0,2} --window.{0,2} alpha" <<<"$1" && grep -q "StopFailure" <<<"$1" && grep -q "PermissionRequest" <<<"$1" && grep -qE "async.{0,4}true" <<<"$1"' _ "$(cd "$REPO_A" && "$BOSUN" launch alpha 2>&1)"
+check "BOSUN_HOOK_SIGNALS=0 leaves the signal hooks out" bash -c '! grep -q "StopFailure" <<<"$1"' _ "$(cd "$REPO_A" && BOSUN_HOOK_SIGNALS=0 "$BOSUN" launch alpha 2>&1)"
+printf '{"session_id":"s1","hook_event_name":"StopFailure","error":"rate_limit","last_assistant_message":"spend limit"}' | "$BOSUN" hook signal --window alpha
+check "the signal hook records the event for the window" bash -c 'jq -e "select(.event == \"StopFailure\" and .kind == \"rate_limit\" and .session == \"s1\")" "$1" >/dev/null' _ "$BOSUN_STATE_DIR/signals/alpha.jsonl"
+check "the signal hook never fails" bash -c 'echo "{broken" | BOSUN_STATE_DIR=/nonexistent/x "$1" hook signal --window alpha' _ "$BOSUN"
+check "the signal hook records nothing when it is off" bash -c 'echo "{\"session_id\":\"s2\",\"hook_event_name\":\"Stop\"}" | BOSUN_HOOK_SIGNALS=0 "$1" hook signal --window alpha; ! grep -q s2 "$2"' _ "$BOSUN" "$BOSUN_STATE_DIR/signals/alpha.jsonl"
 out="$(cd "$REPO_B" && "$BOSUN" launch beta 2>&1)"
 check "refuses to resume a live session" contains "$out" "already running as pid $$"
 out="$(cd "$REPO_B" && "$BOSUN" launch gamma 2>&1)"
@@ -492,6 +510,8 @@ check "orchestrator starts a dated conversation" contains "$out" "--name orch-$(
 check "orchestrator runs in auto mode, with its model and effort before the long policy" contains "$out" "--permission-mode auto --model opus --settings"
 check "its settings keep the permission rules and guard, plus the effort" bash -c 'grep -q "PreToolUse" <<<"$1" && grep -q "effortLevel" <<<"$1"' _ "$out"
 check "orchestrator loads the plugin" contains "$out" "--plugin-dir $ROOT/orchestrator/plugin"
+check "orchestrator launches with its auto-compact window and the compaction hook" bash -c 'grep -q -- "--autocompact 300000" <<<"$1" && grep -qE "compact-context.{0,2} --orchestrator" <<<"$1"' _ "$out"
+check "orchestrator gets the async signal hooks next to the guard" bash -c 'grep -qE "hook.{0,2} signal.{0,2} --window.{0,2} orch" <<<"$1" && grep -q "PermissionRequest" <<<"$1"' _ "$out"
 check "orchestrator starts with the morning chores" contains "$out" "/bosun:chores\ morning"
 out="$(cd "$REPO_A" && BOSUN_ORCHESTRATOR=orch BOSUN_ORCHESTRATOR_MORNING_CHORES=0 "$BOSUN" launch orch 2>&1)"
 check "with morning chores off, today's conversation starts idle" bash -c '! grep -qF "/bosun:chores\ morning" <<<"$1" && grep -q -- "--name orch-" <<<"$1"' _ "$out"
@@ -601,7 +621,8 @@ echo "tmux session (isolated socket, dry-run windows)"
 wait_for 10 has_windows "alpha beta gamma "
 windows="$(tmux -L "$SOCKET" list-windows -t "=smoke" -F '#{window_name}' 2>/dev/null | tr '\n' ' ')"
 check "start creates one window per session" test "$windows" = "alpha beta gamma "
-check "window runs the launcher" wait_for 10 bash -c 'tmux -L "$1" capture-pane -p -t "=smoke:0" | grep -q "dry-run: would run"' _ "$SOCKET"
+# -S -200: the launch line (its --settings JSON) wraps over more rows than the window shows.
+check "window runs the launcher" wait_for 10 bash -c 'tmux -L "$1" capture-pane -p -S -200 -t "=smoke:0" | grep -q "dry-run: would run"' _ "$SOCKET"
 tmux -L "$SOCKET" kill-window -t "=smoke:2"
 out="$("$BOSUN" start 2>&1)"
 check "second start refreshes instead of duplicating" contains "$out" "already exists; mode: refresh"
@@ -689,9 +710,9 @@ alpha_pane_pid="$(tmux -L "$SOCKET" display -p -t "=smoke:alpha" '#{pane_pid}')"
 check "restart stops the old process" wait_for 10 bash -c "! kill -0 $alpha_pid 2>/dev/null"
 check "restart relaunches in the same window, in a new process" wait_for 10 bash -c '
   [ "$(tmux -L "$1" display -p -t "=smoke:alpha" "#{pane_pid}")" != "$2" ] &&
-  tmux -L "$1" capture-pane -p -t "=smoke:alpha" | grep -q "resuming '"'"'alpha'"'"'"' _ "$SOCKET" "$alpha_pane_pid"
+  tmux -L "$1" capture-pane -p -S -200 -t "=smoke:alpha" | grep -q "resuming '"'"'alpha'"'"'"' _ "$SOCKET" "$alpha_pane_pid"
 check "... without the drain prompt, since nothing is in flight there" wait_for 10 bash -c '
-  tmux -L "$1" capture-pane -p -t "=smoke:alpha" | grep -q "idle: no prompt"' _ "$SOCKET"
+  tmux -L "$1" capture-pane -p -S -200 -t "=smoke:alpha" | grep -q "idle: no prompt"' _ "$SOCKET"
 check "--unless-active is a no-op without attached clients" "$BOSUN" refresh --dry-run --unless-active
 beta_window="$(tmux -L "$SOCKET" list-windows -t =smoke -F '#{window_name} #{window_id}' | awk '$1 == "beta" { print $2 }')"
 beta_pane="$(tmux -L "$SOCKET" display -p -t "$beta_window" '#{pane_pid}')"
@@ -751,8 +772,9 @@ check "/api/sessions and /api/health need the cookie: 401" bash -c '
   for path in /api/sessions /api/health; do
     [ "$(curl -s -o /dev/null -w "%{http_code}" "$1$path")" = 401 ] || exit 1
   done' _ "$LIVE_BASE"
+# The console's own access token (console/token, written at start) is its only file there.
 check "... and reading them started no Claude, wrote no state and left the panes alone" bash -c '
-  [ ! -e "$1/claude-was-started" ] && [ -z "$(find "$2" -type f -newer "$1/before-console")" ] &&
+  [ ! -e "$1/claude-was-started" ] && [ -z "$(find "$2" -type f -newer "$1/before-console" ! -path "$2/console/token")" ] &&
     [ "$(tmux -L "$3" capture-pane -p -t "=smoke:gamma")" = "$4" ]' _ "$WORK" "$BOSUN_STATE_DIR" "$SOCKET" "$gamma_screen"
 kill "$CONSOLE_PID" 2>/dev/null
 check "... and it stops" wait_for 10 bash -c '! kill -0 "$1" 2>/dev/null' _ "$CONSOLE_PID"
@@ -789,7 +811,7 @@ saved_shell="$SHELL" saved_zdotdir="${ZDOTDIR-}"
 export SHELL=/bin/zsh ZDOTDIR="$HOME" HELPER_PIDS
 "$BOSUN" start >/dev/null 2>&1
 wait_for 10 has_windows "alpha beta gamma "
-launched_in() { tmux -L "$SOCKET" capture-pane -p -t "=smoke:$1" | grep -q "dry-run: would run"; }
+launched_in() { tmux -L "$SOCKET" capture-pane -p -S -200 -t "=smoke:$1" | grep -q "dry-run: would run"; }
 for _ in 1 2 3; do
   wait_for 10 launched_in alpha
   helper_pane="$(tmux -L "$SOCKET" display -p -t "=smoke:alpha" '#{pane_pid}')"
@@ -1810,6 +1832,22 @@ kill "$CONSOLE_PID" 2>/dev/null
 check "a TERM stops it cleanly" wait_for 10 grep -q "bosun console: stopped" "$WORK/console.out"
 check "... and it exits" wait_for 10 bash -c '! kill -0 "$1" 2>/dev/null' _ "$CONSOLE_PID"
 CONSOLE_PID=""
+# console_token_of_start [args...]: start the console on the same state, print its URL's token, stop it.
+console_token_of_start() {
+  local out="$WORK/console-again.out" pid
+  BOSUN_STATE_DIR="$CONSOLE_STATE" BOSUN_CONFIG_DIR="$CONSOLE_CONFIG" \
+    "$BOSUN" console --port 0 "$@" >"$out" 2>"$WORK/console-again.err" &
+  pid=$!
+  console_started "$out" "$WORK/console-again.err" >/dev/null && grep -o '?t=[^ ]*' "$out" | cut -c4-
+  kill "$pid" 2>/dev/null
+  wait "$pid" 2>/dev/null
+}
+FIRST_TOKEN="${CONSOLE_URL##*\?t=}"
+check "a restart keeps the token, so an open tab stays signed in" test "$(console_token_of_start)" = "$FIRST_TOKEN"
+check "... stored 0600 in a 0700 folder" bash -c '
+  [ "$(stat -f %Lp "$1/console/token" 2>/dev/null || stat -c %a "$1/console/token")" = 600 ] &&
+    [ "$(stat -f %Lp "$1/console" 2>/dev/null || stat -c %a "$1/console")" = 700 ]' _ "$CONSOLE_STATE"
+check "--new-token rotates it" bash -c '[ -n "$1" ] && [ "$1" != "$2" ]' _ "$(console_token_of_start --new-token)" "$FIRST_TOKEN"
 
 echo "install and uninstall (fake launchctl and pmset, test label)"
 for tool in launchctl pmset; do

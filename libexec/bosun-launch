@@ -89,7 +89,9 @@ else
   # shellcheck disable=SC2206
   args=($BOSUN_CLAUDE_FLAGS ${model_effort_args[@]+"${model_effort_args[@]}"})
 fi
-args+=(--name "$claude_name" --remote-control "$name")
+# BOSUN_AUTOCOMPACT_TOKENS: Claude Code compacts the conversation past that size by itself.
+set_autocompact_flag "$name"
+args+=(${autocompact_flag[@]+"${autocompact_flag[@]}"} --name "$claude_name" --remote-control "$name")
 
 run_claude() {
   if [ "$BOSUN_LAUNCH_DRY_RUN" = "1" ]; then

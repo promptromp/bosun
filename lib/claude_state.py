@@ -423,7 +423,8 @@ class Activity:
     """One entry of a transcript as the Impact view counts it: when, what kind (`assistant`, a
     `tool-result`, a `prompt` someone typed, or a message `injected` into the session that starts a
     turn without being typed: a background-task notification, another session's message), and for
-    an assistant message its id, model and token usage (input, output, cache_write, cache_read)."""
+    an assistant message its id, model and token usage (input, output, cache_write, cache_read, and
+    cache_write_1h: the part of cache_write written with the 1-hour lifetime)."""
 
     at: datetime
     kind: str
@@ -443,12 +444,17 @@ USAGE_FIELDS = (
     ("cache_write", "cache_creation_input_tokens"),
     ("cache_read", "cache_read_input_tokens"),
 )
+# The 1-hour share of the cache writes, from usage.cache_creation (absent in older transcripts: then
+# every write counts as a 5-minute one).
+CACHE_WRITE_1H = ("cache_write_1h", "cache_creation", "ephemeral_1h_input_tokens")
 
 
 def assistant_activity(entry: dict[str, Any], at: datetime) -> Activity:
     message = entry.get("message") or {}
     usage = message.get("usage") or {}
-    counts = tuple((name, int(usage.get(key) or 0)) for name, key in USAGE_FIELDS)
+    name_1h, group, key_1h = CACHE_WRITE_1H
+    write_1h = (name_1h, int((usage.get(group) or {}).get(key_1h) or 0))
+    counts = (*((name, int(usage.get(key) or 0)) for name, key in USAGE_FIELDS), write_1h)
     return Activity(
         at, ACTIVITY_ASSISTANT, str(message.get("id") or ""), str(message.get("model") or ""), counts
     )

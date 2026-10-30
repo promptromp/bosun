@@ -81,10 +81,13 @@ light or dark mode and works down to a narrow window.
 
 - It listens on `127.0.0.1` only, on `BOSUN_CONSOLE_PORT` (8765) or `--port N`; `--port 0`
   picks a free port. A port in use is an error, not a silent fallback.
-- The token is new on every start. The first visit swaps it for an HttpOnly, SameSite=Strict
-  cookie and drops it from the address bar; the API answers 401 without the cookie, so other
-  local processes and pages cannot read the ledger by finding the port. Restarting the console
-  signs the browser out: open the new URL.
+- The first visit swaps the URL's token for an HttpOnly, SameSite=Strict cookie and drops it from
+  the address bar; the API answers 401 without the cookie, so other local processes and pages
+  cannot read the ledger by finding the port. The token is kept across restarts in
+  `$BOSUN_STATE_DIR/console/token` (file 0600, folder 0700), so an open tab stays signed in
+  when the console restarts. A stored token that others could read, or a damaged file, is
+  replaced by a new one. `bosun console --new-token` rotates it (signing out every tab), and
+  `BOSUN_CONSOLE_PERSIST_TOKEN=0` makes it new on every start.
 - Read-only: GET and HEAD only, a strict Content-Security-Policy, and only its own files are
   served. The one exception is a knowledge review decision (`POST /api/knowledge/review`): local
   data, never outward-facing, and only with the cookie, this page's Origin, a JSON body and a

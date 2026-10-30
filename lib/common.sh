@@ -49,6 +49,17 @@ set_defaults() {
   # prompt re-reads all of it). The ledger and its memory carry what it needs.
   BOSUN_FRESH_CONVERSATIONS="0"
   BOSUN_FRESH_CONTEXT_TOKENS="200000"
+  # Claude Code compacts a conversation by itself once its context passes this many tokens
+  # (`claude --autocompact`, 100000 to 1000000, or auto), mid-task, keeping a summary. Every prompt
+  # re-reads the whole conversation, so a window left to grow to 300k-900k tokens costs that much
+  # per turn; fresh conversations above only start at the next refresh. A sessions.yml entry can set
+  # its own `autocompact`. Empty or 0: Claude Code's own default. Read at launch (restart a window).
+  BOSUN_AUTOCOMPACT_TOKENS="300000"
+  BOSUN_ORCHESTRATOR_AUTOCOMPACT_TOKENS="300000"
+  # After a compaction a SessionStart hook adds back, in at most this many characters, the ledger
+  # items the window holds (the orchestrator: what waits for my approval). 0: no hook.
+  BOSUN_COMPACT_CONTEXT="1"
+  BOSUN_COMPACT_CONTEXT_MAX_CHARS="1500"
   BOSUN_CLAUDE_BIN="claude"
   BOSUN_CLAUDE_FLAGS="--dangerously-skip-permissions --chrome"
   # Model and effort for the repo sessions; sessions.yml entries can override them per window.
@@ -118,6 +129,17 @@ set_feature_defaults() {
   set_approval_defaults
   set_reviewer_bot_defaults
   set_delivery_defaults
+  set_signal_defaults
+}
+
+# Claude Code's own signals, recorded by async hooks (`bosun hook signal`, lib/signals.py;
+# design: docs/design/signals.md): what a waiting window was asked, what a finished turn left
+# running, a turn that failed on a usage limit. The watchdog and events read them next to the
+# session records and transcripts. 0: no hooks, and readers ignore what was recorded. Read at
+# launch (restart a window). Each window's file keeps its newest half past BOSUN_SIGNALS_MAX_KB.
+set_signal_defaults() {
+  BOSUN_HOOK_SIGNALS="1"
+  BOSUN_SIGNALS_MAX_KB="256"
 }
 
 # Getting prompts to Claude windows: pasting safely, and the orchestrator being there to read them.
@@ -300,6 +322,9 @@ set_knowledge_defaults() {
 set_console_defaults() {
   # `bosun console` (docs/design/console.md): its port on 127.0.0.1 (--port overrides it).
   BOSUN_CONSOLE_PORT="8765"
+  # 1: keep the console's access token across restarts ($BOSUN_STATE_DIR/console/token, 0600),
+  # so an open tab stays signed in; `bosun console --new-token` rotates it. 0: new each start.
+  BOSUN_CONSOLE_PERSIST_TOKEN="1"
   # Claude Code memory folders the console's Library may show (read-only, .md files only),
   # separated by ':'. Empty: none.
   BOSUN_CONSOLE_MEMORY_DIRS=""
@@ -615,9 +640,17 @@ build_model_effort_args() { # <model> <effort> [settings-file] [extra settings J
 
 # The settings the orchestrator gets on top of its settings file: with BOSUN_APPROVALS_ENABLED=1,
 # the approvals hooks (`bosun guard --approvals`, `--permission-request` and, after the call,
-# `--post-tool-use` for both PostToolUse and PostToolUseFailure; lib/guard.py); else nothing, so its
-# launch is unchanged.
+# `--post-tool-use` for both PostToolUse and PostToolUseFailure; lib/guard.py); and the compaction
+# hook (compact_hook_settings). Nothing when neither is on, so its launch is unchanged.
 orchestrator_extra_settings() {
+  {
+    approvals_hook_settings
+    compact_hook_settings --orchestrator
+    signal_hook_settings "$BOSUN_ORCHESTRATOR"
+  } | merge_settings
+}
+
+approvals_hook_settings() {
   [ "$BOSUN_APPROVALS_ENABLED" = "1" ] || return 0
   jq -cn --arg guard "$(printf '%q ' "$BOSUN" guard)" '
     def hook($mode; $timeout): [{matcher: "Bash|mcp__.*", hooks: [{type: "command", command: ($guard + $mode), timeout: $timeout}]}];
@@ -630,11 +663,76 @@ orchestrator_extra_settings() {
 }
 
 # The settings a repo session gets on top of its model and effort: with BOSUN_EVENTS_ENABLED=1,
-# the UserPromptSubmit hook that records what you type in <window> (`bosun hook`); else nothing.
+# the UserPromptSubmit hook that records what you type in <window> (`bosun hook`); and the
+# compaction hook (compact_hook_settings). Nothing when neither is on.
 repo_session_settings() { # <window>
-  [ "$BOSUN_EVENTS_ENABLED" = "1" ] || return 0
-  jq -cn --arg command "$(printf '%q ' "$BOSUN" hook user-prompt --window "$1")" \
-    '{hooks: {UserPromptSubmit: [{hooks: [{type: "command", command: $command, timeout: 10}]}]}}'
+  {
+    if [ "$BOSUN_EVENTS_ENABLED" = "1" ]; then
+      jq -cn --arg command "$(printf '%q ' "$BOSUN" hook user-prompt --window "$1")" \
+        '{hooks: {UserPromptSubmit: [{hooks: [{type: "command", command: $command, timeout: 10}]}]}}'
+    fi
+    compact_hook_settings --window "$1"
+    signal_hook_settings "$1"
+  } | merge_settings
+}
+
+# With BOSUN_HOOK_SIGNALS=1, async hooks that record Claude Code's own signals for <window>
+# (`bosun hook signal`): they never block or change anything, so the session never waits on them.
+signal_hook_settings() { # <window>
+  [ "$BOSUN_HOOK_SIGNALS" = "1" ] || return 0
+  jq -cn --arg command "$(printf '%q ' "$BOSUN" hook signal --window "$1")" '
+    [{hooks: [{type: "command", command: $command, async: true, timeout: 10}]}] as $hook
+    | {hooks: {Notification: $hook, PermissionRequest: $hook, Stop: $hook, StopFailure: $hook,
+        SessionStart: $hook, SessionEnd: $hook}}'
+}
+
+# With BOSUN_COMPACT_CONTEXT=1, the SessionStart hook (matcher compact) that adds back what the
+# window holds once Claude Code compacts its conversation (`bosun hook compact-context`).
+compact_hook_settings() { # --window <window> | --orchestrator
+  [ "$BOSUN_COMPACT_CONTEXT" = "1" ] || return 0
+  jq -cn --arg command "$(printf '%q ' "$BOSUN" hook compact-context "$@")" \
+    '{hooks: {SessionStart: [{matcher: "compact", hooks: [{type: "command", command: $command, timeout: 15}]}]}}'
+}
+
+# Settings objects on stdin (one per line) merged into one: keys from later ones win, hooks for the
+# same event are concatenated. Prints nothing when there is nothing to merge.
+merge_settings() {
+  jq -cs '
+    reduce .[] as $s ({}; (. * ($s | del(.hooks))) as $merged
+      | $merged | .hooks = (reduce (($s.hooks // {}) | to_entries[]) as $e ($merged.hooks // {};
+          .[$e.key] = ((.[$e.key] // []) + $e.value))))
+    | if .hooks == {} then del(.hooks) else . end
+    | select(. != {})'
+}
+
+# Sets autocompact_flag to `--autocompact <n>` for window <name>: the orchestrator's setting, else
+# its sessions.yml `autocompact`, else BOSUN_AUTOCOMPACT_TOKENS; empty when that is empty or 0.
+set_autocompact_flag() { # <name>
+  local tokens
+  if is_orchestrator "$1"; then
+    tokens="$BOSUN_ORCHESTRATOR_AUTOCOMPACT_TOKENS"
+  else
+    tokens="$(window_autocompact "$1")"
+  fi
+  autocompact_flag=()
+  if [ -z "$tokens" ] || [ "$tokens" = "0" ]; then return 0; fi
+  valid_autocompact "$tokens" || die "autocompact for $1 must be auto or 100000-1000000 tokens (got '$tokens')"
+  autocompact_flag=(--autocompact "$tokens")
+}
+
+valid_autocompact() { [ "$1" = "auto" ] || { [[ "$1" =~ ^[0-9]+$ ]] && [ "$1" -ge 100000 ] && [ "$1" -le 1000000 ]; }; }
+
+# Window <name>'s sessions.yml `autocompact`, else BOSUN_AUTOCOMPACT_TOKENS.
+window_autocompact() { # <name>
+  [ -f "$BOSUN_SESSIONS_FILE" ] || {
+    printf '%s\n' "$BOSUN_AUTOCOMPACT_TOKENS"
+    return 0
+  }
+  ruby -ryaml -e '
+    entry = (YAML.safe_load(File.read(ARGV[0])) || {}).fetch("sessions", []).find { |s| s["name"] == ARGV[1] } || {}
+    puts entry.key?("autocompact") ? entry["autocompact"].to_s : ARGV[2]' \
+    "$BOSUN_SESSIONS_FILE" "$1" "$BOSUN_AUTOCOMPACT_TOKENS" 2>/dev/null ||
+    printf '%s\n' "$BOSUN_AUTOCOMPACT_TOKENS"
 }
 
 # The bosun window this command runs in (from tmux's TMUX_PANE, when the pane belongs to the
@@ -830,7 +928,7 @@ WATCHDOG_SETTINGS="BOSUN_STATE_DIR BOSUN_LOG_DIR BOSUN_SESSION_NAME BOSUN_ORCHES
   BOSUN_ALERT_WAITING_MINUTES BOSUN_CHECKIN_MINUTES BOSUN_EVENTS_WITHOUT_CHECKINS
   BOSUN_WATCHDOG_GRACE_MINUTES
   BOSUN_WATCHDOG_DELEGATED_HOURS BOSUN_LONG_SHELL_HOURS BOSUN_WATCHDOG_ORCHESTRATOR_DOWN_MINUTES
-  BOSUN_WATCHDOG_ORCHESTRATOR_RESTART BOSUN_LEARN_ENABLED BOSUN_LEARN_AT BOSUN_LEARN_TIMEOUT_MINUTES
+  BOSUN_WATCHDOG_ORCHESTRATOR_RESTART BOSUN_HOOK_SIGNALS BOSUN_LEARN_ENABLED BOSUN_LEARN_AT BOSUN_LEARN_TIMEOUT_MINUTES
   BOSUN_EVENTS_ENABLED BOSUN_EVENTS_INTERVAL_SECONDS BOSUN_SLACK_WATCH_ENABLED
   BOSUN_SLACK_WATCH_MINUTES BOSUN_CLAUDE_BIN BOSUN_CONTEXT_WARN_TOKENS
   BOSUN_OVERHEAD_WARN_SHARE"

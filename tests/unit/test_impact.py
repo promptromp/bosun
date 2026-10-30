@@ -184,6 +184,20 @@ class ActivityTest(unittest.TestCase):
         since = model()["since"]
         self.assertEqual((since["cost"], since["merged"], since["cost_per_pr"]), (8.0, 9, 0.89))
 
+    def test_one_hour_cache_writes_cost_double_input(self) -> None:
+        # Opus 5.5 input is $4/MTok: a 5-minute write costs 1.25x that, a 1-hour write 2x.
+        five_minute = {"cache_write": 1_000_000}
+        mixed = {"cache_write": 1_000_000, "cache_write_1h": 250_000}
+        all_hour = {"cache_write": 1_000_000, "cache_write_1h": 1_000_000}
+        self.assertAlmostEqual(impact.usage_cost("claude-opus-5-5", five_minute), 5.0)
+        self.assertAlmostEqual(impact.usage_cost("claude-opus-5-5", mixed), 0.75 * 5.0 + 0.25 * 8.0)
+        self.assertAlmostEqual(impact.usage_cost("claude-opus-5-5", all_hour), 8.0)
+
+    def test_one_hour_share_never_exceeds_the_writes(self) -> None:
+        # A stray 1-hour count larger than the total is capped at the total, not added on top.
+        usage = {"cache_write": 100_000, "cache_write_1h": 400_000}
+        self.assertAlmostEqual(impact.usage_cost("claude-opus-5-5", usage), 0.8)
+
     def test_unknown_models_are_priced_high_and_named(self) -> None:
         rows = [{"usage": {"mystery-1": {"output": 1_000_000}, "<synthetic>": {"output": 0}}}]
         self.assertEqual(impact.unpriced_models(rows), ["mystery-1"])

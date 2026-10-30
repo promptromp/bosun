@@ -49,7 +49,8 @@ import watchdog
 SUBDIR = "impact"
 SNAPSHOT_FILE = "snapshot.json"
 CACHE_FILE = "transcripts.json"
-CACHE_VERSION = 3  # 2: per-day turn triggers (the Overhead panel); 3: turn records (cost per task)
+CACHE_VERSION = 4  # 2: per-day turn triggers (the Overhead panel); 3: turn records (cost per task);
+# 4: 1-hour cache writes counted apart (cache_write_1h)
 BUSY_GAP_SECONDS = 300  # a longer pause between an agent's steps counts as idle
 GH_TIMEOUT_SECONDS = 120
 GH_LIMIT = "1000"
