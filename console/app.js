@@ -864,18 +864,18 @@ function heldList(w) {
 }
 
 function windowCard(w) {
-  const claude = w.claude;
-  const since = claude && claude.seconds !== null ? `for ${duration(claude.seconds)}` : "";
+  const agent = w.agent;
+  const since = agent && agent.seconds !== null ? `for ${duration(agent.seconds)}` : "";
   const model = [w.model, w.effort].filter(Boolean).join(" / ");
-  const stateClass = w.state === "waiting" ? "state-waiting" : claude ? "" : "state-none";
+  const stateClass = w.state === "waiting" ? "state-waiting" : agent ? "" : "state-none";
   return card(
     `window-card ${stateClass}`,
     el("div", { className: "card-head" }, el("h3", {}, `@${w.name}`), statusBadge(w.state)),
     pairs([
       ["kind", w.kind],
-      ["status", claude ? `${claude.status} ${since}`.trim() : w.state],
+      ["status", agent ? `${agent.status} ${since}`.trim() : w.state],
       ["model", model],
-      ["claude", claude ? [claude.version ? `v${claude.version}` : "", claude.name ? ` ${claude.name}` : ""].join("") : ""],
+      ["agent", agent ? [agent.harness || "", agent.version ? ` v${agent.version}` : "", agent.name ? ` ${agent.name}` : ""].join("") : ""],
       ["folder", w.dir ? el("span", { className: "dir mono" }, w.dir) : ""],
       ["login", w.login ? el("span", { className: w.login.state === "needs-login" ? "problem" : "" }, `${w.login.state}: ${w.login.detail}`) : ""],
     ]),

@@ -30,7 +30,8 @@ With it on:
   reaches the PR's window (`delegate --update`) even while it still works on the first.
 
 Without the flag, the rest of this works too: `ledger reports --since` lists every report,
-`ledger said`, `working` and `idle` exist (a window is `working` on its active item while its Claude
+`ledger said`, `working` and `idle` exist (on [Codex](design/harnesses.md), what you said is recorded when
+the turn ends, not when you press Return; a window is `working` on its active item while its agent
 is mid-turn), `ledger spawn` warns about a task that already comes from the same source or
 Slack thread, and the chores run `review-watch` in step 4 (it records, but queues nothing).
 

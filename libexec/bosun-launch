@@ -10,7 +10,9 @@
 # --no-prompt resumes without the drain prompt, leaving the session idle (`bosun refresh`
 # uses it for a window with nothing in flight: every prompt re-reads the whole conversation).
 # Model and effort: --model / --effort, else the window's sessions.yml entry, else
-# BOSUN_MODEL / BOSUN_EFFORT (orchestrator: BOSUN_ORCHESTRATOR_MODEL / _EFFORT).
+# BOSUN_MODEL / BOSUN_EFFORT (orchestrator: BOSUN_ORCHESTRATOR_MODEL / _EFFORT; Codex: BOSUN_CODEX_MODEL).
+# What differs per agent (BOSUN_HARNESS, or a window's `harness:` in sessions.yml) is in lib/launch/<harness>.sh:
+# build_agent_args, first_prompt, run_new and run_resumed.
 #
 # The orchestrator window is special: it runs a fresh conversation named <name>-YYYY-MM-DD each
 # day (the ledger carries state across days), uses BOSUN_ORCHESTRATOR_FLAGS instead of
@@ -65,77 +67,63 @@ if [ "$initial_prompt" = "--prompt-file" ]; then
   rm -f "$prompt_file"
   [ -n "$initial_prompt" ] || die "prompt file $prompt_file was empty"
 fi
-claude_name="$(expected_claude_name "$name")"
-prompt="${initial_prompt:-$BOSUN_DRAIN_PROMPT}"
-new_session_prompt="$initial_prompt"
-
+session_name="$(expected_session_name "$name")"
 IFS=$'\t' read -r model effort <<<"$(window_model_effort "$name")"
 model="${model_override:-$model}"
 effort="${effort_override:-$effort}"
 valid_effort "$effort" || die_usage "effort must be one of: $EFFORT_LEVELS (got '$effort')"
 
-if is_orchestrator "$name"; then
-  # With BOSUN_APPROVALS_ENABLED=1, also the approvals hooks.
-  build_model_effort_args "$model" "$effort" "$BOSUN_ORCHESTRATOR_SETTINGS" "$(orchestrator_extra_settings)"
-  # shellcheck disable=SC2206
-  args=($BOSUN_ORCHESTRATOR_FLAGS "${model_effort_args[@]}"
-    --plugin-dir "$BOSUN_ROOT/orchestrator/plugin"
-    --append-system-prompt "$(orchestrator_policy)")
-  # BOSUN_ORCHESTRATOR_MORNING_CHORES=0: today's conversation starts idle.
-  [ "$BOSUN_ORCHESTRATOR_MORNING_CHORES" = "1" ] && new_session_prompt="${initial_prompt:-/bosun:chores morning}"
-else
-  # With BOSUN_EVENTS_ENABLED=1, also the hook that records what you type here.
-  build_model_effort_args "$model" "$effort" "" "$(repo_session_settings "$name")"
-  # shellcheck disable=SC2206
-  args=($BOSUN_CLAUDE_FLAGS ${model_effort_args[@]+"${model_effort_args[@]}"})
-fi
-# BOSUN_AUTOCOMPACT_TOKENS: Claude Code compacts the conversation past that size by itself.
-set_autocompact_flag "$name"
-args+=(${autocompact_flag[@]+"${autocompact_flag[@]}"} --name "$claude_name" --remote-control "$name")
+harness="$(window_harness "$name")"
+agent_module="$BOSUN_ROOT/lib/launch/$harness.sh"
+[ -f "$agent_module" ] || die "no way to run a window on '$harness' (BOSUN_HARNESS, or harness: in sessions.yml)"
+# shellcheck disable=SC1090  # one module per agent, each with the same functions
+source "$agent_module"
+build_agent_args "$name" "$session_name" "$model" "$effort"
 
-run_claude() {
+run_agent() {
   if [ "$BOSUN_LAUNCH_DRY_RUN" = "1" ]; then
     printf 'dry-run: would run:'
-    printf ' %q' "$BOSUN_CLAUDE_BIN" "$@"
+    printf ' %q' "$AGENT_BIN" "$@"
     printf '\n'
     return 0
   fi
-  # exec: no bash process stays behind reading this script while Claude runs, so editing the
-  # script can never make a running launcher execute the wrong lines when Claude exits.
-  exec "$BOSUN_CLAUDE_BIN" "$@"
+  # exec: no bash process stays behind reading this script while the agent runs, so editing the
+  # script can never make a running launcher execute the wrong lines when the agent exits.
+  exec "$AGENT_BIN" "$@"
 }
 
 RESOLVE_NOT_FOUND=3
 
-# Prompts go after `--`, so one that starts with "-" is not read as an option.
-session_id="$("$BOSUN_ROOT/libexec/bosun-resolve" "$PWD" "$claude_name" 2>/dev/null)"
+session_id="$(agent_state resolve "$harness" "$PWD" "$session_name" 2>/dev/null)"
 case $? in
   0) ;;
   "$RESOLVE_NOT_FOUND")
-    log "no session named '$claude_name' in $PWD; starting a new one"
+    log "no session named '$session_name' in $PWD; starting a new one"
+    new_session_prompt="$(first_prompt "$name" "$initial_prompt")"
     note_bosun_prompt "$name" "$new_session_prompt"
-    if [ -n "$new_session_prompt" ]; then run_claude "${args[@]}" -- "$new_session_prompt"; else run_claude "${args[@]}"; fi
+    run_new "$new_session_prompt"
     exit $?
     ;;
-  *) die "could not look up session '$claude_name' in $PWD (bosun resolve failed); not starting a blank one" ;;
+  *) die "could not look up session '$session_name' in $PWD; not starting a blank one" ;;
 esac
 
-holder="$("$BOSUN_ROOT/libexec/bosun-resolve" --live "$session_id")"
+holder="$(agent_state live "$session_id")"
 case $? in
   0)
-    log "'$claude_name' ($session_id) is already running as pid $holder; not starting a second copy."
+    log "'$session_name' ($session_id) is already running as pid $holder; not starting a second copy."
     log "close that one, then rerun: bosun launch '$name'"
     exit 1
     ;;
   "$RESOLVE_NOT_FOUND") ;;
-  *) die "could not check whether '$claude_name' is already running (bosun resolve --live failed)" ;;
+  *) die "could not check whether '$session_name' is already running" ;;
 esac
 
 if [ "$no_prompt" = "1" ] && [ -z "$initial_prompt" ]; then
-  log "resuming '$claude_name' ($session_id), idle: no prompt"
-  run_claude "${args[@]}" --resume "$session_id"
+  log "resuming '$session_name' ($session_id), idle: no prompt"
+  run_resumed "$session_id"
   exit $?
 fi
-log "resuming '$claude_name' ($session_id)"
+log "resuming '$session_name' ($session_id)"
+prompt="${initial_prompt:-$BOSUN_DRAIN_PROMPT}"
 note_bosun_prompt "$name" "$prompt"
-run_claude "${args[@]}" --resume "$session_id" -- "$prompt"
+run_resumed "$session_id" "$prompt"

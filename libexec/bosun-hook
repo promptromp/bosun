@@ -1,7 +1,13 @@
 #!/bin/bash
 # Usage: bosun hook user-prompt --window <window>
+#        bosun hook codex-turn-end --window <window> --conversation <name> <json>
 #        bosun hook compact-context (--window <window> | --orchestrator)
 #        bosun hook signal --window <window>
+#
+# codex-turn-end: what Codex runs when a turn ends (its notify= setting, from lib/launch/codex.sh), with the JSON
+# as the last argument. It remembers which session this window's name stands for, since Codex has no way to
+# name one from outside, and with events on records the prompts of that turn like user-prompt does. It runs
+# at the end of a turn, not its start, because that is the moment Codex offers.
 #
 # signal: the async hook `bosun launch` installs with BOSUN_HOOK_SIGNALS=1 on Notification,
 # PermissionRequest, Stop, StopFailure, SessionStart and SessionEnd. It records the event as one
@@ -66,18 +72,25 @@ if [ "${1:-}" = "compact-context" ]; then
   exit 0
 fi
 
+python_hook() {
+  BOSUN_STATE_DIR="$BOSUN_STATE_DIR" BOSUN_LOG_DIR="$BOSUN_LOG_DIR" \
+    BOSUN_REPO_MASK="$BOSUN_REPO_MASK" BOSUN_EVENTS_ENABLED="$BOSUN_EVENTS_ENABLED" \
+    BOSUN_TICKET_STATUS_MAP="$BOSUN_TICKET_STATUS_MAP" \
+    BOSUN_TICKET_STALE_HOURS="$BOSUN_TICKET_STALE_HOURS" \
+    BOSUN_DRAIN_PROMPT="$BOSUN_DRAIN_PROMPT" \
+    python3 "$BOSUN_ROOT/lib/hook.py" "$@" >/dev/null 2>>"$BOSUN_LOG_DIR/hook-$(date +%F).log"
+}
+
+if [ "${1:-}" = "codex-turn-end" ]; then
+  if [ "${BOSUN_HOOK_SYNC:-0}" = "1" ]; then python_hook "$@" </dev/null; else python_hook "$@" </dev/null & fi
+  exit 0
+fi
+
 if [ "$BOSUN_EVENTS_ENABLED" != "1" ]; then
   cat >/dev/null
   exit 0
 fi
-record() {
-  BOSUN_STATE_DIR="$BOSUN_STATE_DIR" BOSUN_LOG_DIR="$BOSUN_LOG_DIR" \
-    BOSUN_REPO_MASK="$BOSUN_REPO_MASK" BOSUN_EVENTS_ENABLED=1 \
-    BOSUN_TICKET_STATUS_MAP="$BOSUN_TICKET_STATUS_MAP" \
-    BOSUN_TICKET_STALE_HOURS="$BOSUN_TICKET_STALE_HOURS" \
-    BOSUN_DRAIN_PROMPT="$BOSUN_DRAIN_PROMPT" \
-    python3 "$BOSUN_ROOT/lib/hook.py" "$@" <<<"$input" >/dev/null 2>>"$BOSUN_LOG_DIR/hook-$(date +%F).log"
-}
+record() { python_hook "$@" <<<"$input"; }
 
 input="$(cat)"
 # Exit 0 at once whatever happens: the prompt waits for the hook, and for UserPromptSubmit an exit

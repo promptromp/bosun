@@ -32,7 +32,7 @@ from console_live import Facts, Settings
 
 WAITING = "waiting"  # Claude Code's status while a permission prompt or question waits for me
 NO_WINDOW = "no window"
-NO_CLAUDE = "no claude"
+NO_AGENT = "no agent"
 STATUSES = ("idle", "busy", "shell", WAITING)
 MS_PER_SECOND = 1000
 LEFT_OUT = (
@@ -61,28 +61,29 @@ def epoch_seconds(epoch_ms: Any) -> float | None:
     return epoch_ms / MS_PER_SECOND
 
 
-def claude_model(claude: Mapping[str, Any] | None, now: datetime) -> dict[str, Any] | None:
-    """The Claude in a window: status, how long in it (and since when), version, conversation name."""
-    if not claude:
+def agent_model(agent: Mapping[str, Any] | None, now: datetime) -> dict[str, Any] | None:
+    """The agent in a window: which, status, how long in it (and since when), version, conversation name."""
+    if not agent:
         return None
-    updated = epoch_seconds(claude.get("statusUpdatedAt"))
+    updated = epoch_seconds(agent.get("statusUpdatedAt"))
     return {
-        "pid": claude.get("pid"),
-        "status": str(claude.get("status") or "unknown"),
+        "harness": agent.get("harness") or "",
+        "pid": agent.get("pid"),
+        "status": str(agent.get("status") or "unknown"),
         "seconds": None if updated is None else max(0, int(now.timestamp() - updated)),
         "since": iso_time(updated),
-        "version": claude.get("version") or "",
-        "name": claude.get("name") or "",
+        "version": agent.get("version") or "",
+        "name": agent.get("name") or "",
     }
 
 
 def state_of(window: Mapping[str, Any]) -> str:
-    """What a card's badge says: the Claude's status, else no claude (a window with a shell) or no
+    """What a card's badge says: the agent's status, else no agent (a window with a shell) or no
     window (configured, not running)."""
     if not window.get("window"):
         return NO_WINDOW
-    claude = window.get("claude") or {}
-    return str(claude.get("status") or "unknown") if claude else NO_CLAUDE
+    agent = window.get("agent") or {}
+    return str(agent.get("status") or "unknown") if agent else NO_AGENT
 
 
 def item_summary(item: Item, working: bool = False) -> dict[str, Any]:
@@ -139,7 +140,7 @@ def window_card(
     window: Mapping[str, Any], facts: Facts, items: list[Item], reports: Mapping[str, Any], now: datetime
 ) -> dict[str, Any]:
     name = str(window.get("name", ""))
-    claude = claude_model(window.get("claude"), now)
+    agent = agent_model(window.get("agent"), now)
     return {
         "name": name,
         "kind": window.get("kind", ""),
@@ -148,8 +149,8 @@ def window_card(
         "effort": "" if window.get("effort") in (None, "-") else window.get("effort"),
         "window": bool(window.get("window")),
         "state": state_of(window),
-        "claude": claude,
-        **held_model(items, name, claude["status"] if claude else None),
+        "agent": agent,
+        **held_model(items, name, agent["status"] if agent else None),
         "last_report": reports.get(name),
         "login": login_model(facts.window_logins.get(name)),
         "attach": attach_command(facts.settings, name),
@@ -181,9 +182,9 @@ def waiting_windows(facts: Facts, now: datetime) -> list[dict[str, Any]] | None:
         return None
     found = []
     for window in facts.windows:
-        claude = claude_model(window.get("claude"), now)
-        if window.get("window") and claude and claude["status"] == WAITING:
-            found.append({"name": window["name"], "since": claude["since"], "seconds": claude["seconds"]})
+        agent = agent_model(window.get("agent"), now)
+        if window.get("window") and agent and agent["status"] == WAITING:
+            found.append({"name": window["name"], "since": agent["since"], "seconds": agent["seconds"]})
     return sorted(found, key=lambda w: -(w["seconds"] or 0))
 
 

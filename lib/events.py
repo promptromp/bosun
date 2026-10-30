@@ -50,7 +50,7 @@ from typing import Any
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import activity
-import claude_state
+import agent_state
 import event_lanes
 import event_summary
 import signals
@@ -81,7 +81,7 @@ VIA_OWN = "own"  # caused by the orchestrator itself: never delivered to it
 NOTHING_PENDING = "nothing pending"
 # The orchestrator's turn is over: idle, or shell (only a background command still runs). It takes a
 # prompt in both, and the command's completion notice queues behind it. In both, statusUpdatedAt is
-# when the turn ended, so the idle time counts from there (claude_turn_over in lib/common.sh).
+# when the turn ended, so the idle time counts from there (agent_turn_over in lib/common.sh).
 TURN_OVER = ("idle", "shell")
 
 
@@ -340,9 +340,9 @@ class Facts:
                 str(orch.get("expected_name") or ""),
             ),
             tuple(
-                (str(w["name"]), int(w["claude_pid"]))
+                (str(w["name"]), int(w["agent_pid"]))
                 for w in data.get("windows") or []
-                if isinstance(w.get("claude_pid"), int)
+                if isinstance(w.get("agent_pid"), int)
             ),
             float(idle) if isinstance(idle, (int, float)) else None,
         )
@@ -454,7 +454,7 @@ class Inputs:
     config: Config
     facts: Facts
     now: datetime
-    record: Record = claude_state.record
+    record: Record = agent_state.record
     transports: Mapping[str, Transport] = field(default_factory=lambda: TRANSPORTS)
 
 

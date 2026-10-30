@@ -243,6 +243,19 @@ prompt once phone approvals are verified.
 
 ## Features
 
+### Other agents and other operating systems
+
+Repo sessions run on Claude Code and Codex, and the installer's checks are split by OS and by agent
+(`docs/design/init.md`, `docs/design/harnesses.md`).
+
+**Next on Codex:** the orchestrator (a system prompt, chores without a plugin, the guard and approvals on its
+own hooks and sandbox; hooks stop at a review screen, so this needs thought); noticing a revoked login;
+its sessions in the Impact stats and the learning digest (`Harness` in `lib/learn_digest.py`); a real GitHub
+login inside a session, which so far has only been run with a stand-in `gh`.
+
+**Next OS: Linux.** `lib/platforms/linux.sh` is the easy part. What else assumes macOS: `install.sh` and the
+launchd templates, `pmset` and the wake, `caffeinate`, `osascript` alerts and `lsof`'s flags.
+
 ### Impact (productivity) stats
 
 **Why:** after a week or two of real use the question is no longer what bosun did but what it

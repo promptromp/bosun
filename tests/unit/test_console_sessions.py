@@ -69,7 +69,7 @@ def window(name: str, kind: str = "session", running: Any = None, exists: bool =
         "model": "opus" if kind == "session" else "-",
         "effort": "medium" if kind == "session" else "-",
         "window": exists,
-        "claude": running,
+        "agent": running,
     }
 
 
@@ -97,9 +97,7 @@ class SessionsTestCase(unittest.TestCase):
         self.assertEqual(
             [c["name"] for c in model["windows"]], ["orch", "exporter", "ledger-sync", "checkin", "docs"]
         )
-        self.assertEqual(
-            model["counts"], {"idle": 1, "busy": 1, "waiting": 1, "no claude": 1, "no window": 1}
-        )
+        self.assertEqual(model["counts"], {"idle": 1, "busy": 1, "waiting": 1, "no agent": 1, "no window": 1})
         self.assertEqual(model["attach"], "tmux -L bosun attach -t acme-bosun")
         self.assertIsNone(model["error"])
 
@@ -109,8 +107,8 @@ class SessionsTestCase(unittest.TestCase):
             (card["kind"], card["model"], card["effort"], card["state"]),
             ("session", "opus", "medium", "busy"),
         )
-        self.assertEqual(card["claude"]["seconds"], 300)
-        self.assertEqual(card["claude"]["since"], "2026-10-20T13:55:00Z")
+        self.assertEqual(card["agent"]["seconds"], 300)
+        self.assertEqual(card["agent"]["since"], "2026-10-20T13:55:00Z")
         self.assertEqual(card["attach"], "tmux -L bosun attach -t acme-bosun:exporter")
 
     def test_unset_model_and_effort_are_empty(self) -> None:
@@ -155,15 +153,15 @@ class SessionsTestCase(unittest.TestCase):
         self.assertEqual(console_sessions.last_reports(data["items"].values())["w"]["id"], newer["id"])
 
     def test_states_without_a_claude(self) -> None:
-        self.assertEqual(cards()["checkin"]["state"], console_sessions.NO_CLAUDE)
+        self.assertEqual(cards()["checkin"]["state"], console_sessions.NO_AGENT)
         self.assertEqual(cards()["docs"]["state"], console_sessions.NO_WINDOW)
-        self.assertIsNone(cards()["docs"]["claude"])
+        self.assertIsNone(cards()["docs"]["agent"])
 
     def test_a_record_without_a_status_time(self) -> None:
         running = claude("idle", 0)
         del running["statusUpdatedAt"]
         card = cards(facts(windows=[window("w", running=running)]))["w"]
-        self.assertEqual((card["claude"]["seconds"], card["claude"]["since"]), (None, None))
+        self.assertEqual((card["agent"]["seconds"], card["agent"]["since"]), (None, None))
 
     def test_the_attach_command_is_quoted_and_without_a_socket(self) -> None:
         plain = replace(SETTINGS, tmux_socket="", session="my session")

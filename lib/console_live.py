@@ -12,7 +12,7 @@ for CACHE_SECONDS, shared by the request threads):
 - The state files of the events dispatcher, the Slack watcher and the login (login.json), the
   morning log, and each window's transcript for its login verdict (lib/login.py).
 
-Left out because only a side effect could tell them: whether the login works right now (`claude
+Left out because only a side effect could tell them: whether the login works right now (`agent
 auth status` starts Claude Code; the login check request costs money), and a window's visible text
 (capture-pane), which the login's pattern fallback reads.
 """
@@ -167,7 +167,7 @@ def window_logins(windows: list[dict[str, Any]], state: login.State) -> dict[str
     """Each Claude window's login verdict from its transcript (none without one: no pane is read)."""
     found = {}
     for window in windows:
-        transcript = (window.get("claude") or {}).get("transcript")
+        transcript = (window.get("agent") or {}).get("transcript")
         if transcript:
             found[str(window["name"])] = login.window_verdict(Path(transcript), state.last_probe)
     return found

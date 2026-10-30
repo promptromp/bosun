@@ -84,20 +84,20 @@ checkins_mode() {
 CHECKINS="$(checkins_mode)" || exit 1
 
 checkin_once() {
-  local pane_pid window_id claude_pid status idle minutes
+  local pane_pid window_id agent_pid status idle minutes
   read -r pane_pid window_id <<<"$(find_window "$BOSUN_ORCHESTRATOR")"
   [ -n "${window_id:-}" ] || {
     log "skip: no '$BOSUN_ORCHESTRATOR' window"
     return 0
   }
-  claude_pid="$(claude_pid_under "$pane_pid")" || {
+  agent_pid="$(agent_pid_under "$pane_pid")" || {
     log "skip: orchestrator Claude is not running"
     return 0
   }
-  status="$(claude_session_field "$claude_pid" status)"
+  status="$(agent_session_field "$agent_pid" status)"
   # Idle time counts from the end of the turn: statusUpdatedAt, for idle and for shell alike.
-  idle="$(claude_seconds_in_status "$claude_pid")"
-  if ! claude_turn_over "$status" || [ "${idle:-0}" -lt "$CHECKIN_MIN_IDLE_SECONDS" ]; then
+  idle="$(agent_seconds_in_status "$agent_pid")"
+  if ! agent_turn_over "$status" || [ "${idle:-0}" -lt "$CHECKIN_MIN_IDLE_SECONDS" ]; then
     log "skip: orchestrator is ${status:-unknown} (for ${idle:-?}s)"
     return "$CHECKIN_DEFERRED"
   fi
@@ -105,12 +105,12 @@ checkin_once() {
     log "skip: you typed in tmux $minutes minute(s) ago"
     return "$CHECKIN_DEFERRED"
   fi
-  if [ "$(claude_session_field "$claude_pid" name)" != "$(expected_claude_name "$BOSUN_ORCHESTRATOR")" ]; then
+  if [ "$(agent_session_field "$agent_pid" name)" != "$(expected_session_name "$BOSUN_ORCHESTRATOR")" ]; then
     start_todays_conversation "$status"
     return 0
   fi
   checkin_has_news || return 0
-  deliver_checkin "$window_id" "$claude_pid"
+  deliver_checkin "$window_id" "$agent_pid"
   return 0
 }
 
@@ -174,7 +174,7 @@ start_todays_conversation() { # <status>
 
 # Send the check-in, unless the orchestrator only gets login errors back; then see whether this
 # one did. A login error leaves pending events pending.
-deliver_checkin() { # <window_id> <claude_pid>
+deliver_checkin() { # <window_id> <agent_pid>
   local sent_at
   if ! login_ok "$BOSUN_ORCHESTRATOR" "$1" "$2" ${LOGIN_PROBE[@]+"${LOGIN_PROBE[@]}"}; then
     log "skip: $BOSUN_ORCHESTRATOR needs /login (bosun status shows since when)"
@@ -192,7 +192,7 @@ deliver_checkin() { # <window_id> <claude_pid>
 
 # Whether <window>'s Claude still gets real replies, not only login errors (lib/login.py: its
 # transcript, else its last lines), logging when that changes. Options go to `login.py window`.
-login_ok() { # <window> <window_id> <claude_pid> [--probe | --after <epoch> --wait <seconds>]
+login_ok() { # <window> <window_id> <agent_pid> [--probe | --after <epoch> --wait <seconds>]
   local window="$1" window_id="$2" verdict
   shift 2
   verdict="$(tmux_cmd capture-pane -p -t "$window_id" 2>/dev/null |
@@ -207,21 +207,21 @@ login_ok() { # <window> <window_id> <claude_pid> [--probe | --after <epoch> --wa
 # Push pending events to the orchestrator (with BOSUN_EVENTS_ENABLED=1), unless it only gets
 # login errors back.
 events_once() {
-  local pane_pid window_id claude_pid="" sent_at out
+  local pane_pid window_id agent_pid="" sent_at out
   [ "$BOSUN_EVENTS_ENABLED" = "1" ] || return 0
   if [ "$DRY_RUN" = "1" ]; then
     "$BOSUN" events --dry-run
     return
   fi
   read -r pane_pid window_id <<<"$(find_window "$BOSUN_ORCHESTRATOR")"
-  if [ -n "${window_id:-}" ] && claude_pid="$(claude_pid_under "$pane_pid")"; then
-    login_ok "$BOSUN_ORCHESTRATOR" "$window_id" "$claude_pid" || return 0
+  if [ -n "${window_id:-}" ] && agent_pid="$(agent_pid_under "$pane_pid")"; then
+    login_ok "$BOSUN_ORCHESTRATOR" "$window_id" "$agent_pid" || return 0
   fi
   sent_at="$(date +%s)"
   out="$("$BOSUN" events --once)"
   [ -n "$out" ] && printf '%s\n' "$out"
-  if [ -n "$claude_pid" ] && grep -q "delivered " <<<"$out"; then
-    login_ok "$BOSUN_ORCHESTRATOR" "$window_id" "$claude_pid" --after "$sent_at" --wait "$REPLY_WAIT_SECONDS"
+  if [ -n "$agent_pid" ] && grep -q "delivered " <<<"$out"; then
+    login_ok "$BOSUN_ORCHESTRATOR" "$window_id" "$agent_pid" --after "$sent_at" --wait "$REPLY_WAIT_SECONDS"
   fi
   return 0
 }

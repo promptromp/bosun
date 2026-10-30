@@ -327,6 +327,13 @@ def ask_model(ui: Ui, answers: Answers, top: Sequence[str]) -> Answers:
     return replace(answers, **picked.changes)
 
 
+ALWAYS_ASKED = 5  # repos, schedule, features, model, wake
+CLAUDE_PREVIEW = ("One Claude Code session per repo, and the orchestrator runs on it too.",)
+CODEX_PREVIEW = (
+    "One Codex session per repo, in its sandbox, with its reviewer deciding when something may go past it.",
+    "The orchestrator stays on Claude Code. Costs and what you said in a window show less for Codex so far.",
+)
+AGENT_CHOICES = {init_plan.CLAUDE: ("Claude Code", CLAUDE_PREVIEW), init_plan.CODEX: ("Codex", CODEX_PREVIEW)}
 AUTO_PREVIEW = (
     "A safety check reviews each action and blocks risky ones.",
     "Nothing to accept first, and it uses slightly more tokens.",
@@ -401,20 +408,54 @@ def ask_aws(ui: Ui, facts: Facts, answers: Answers, top: Sequence[str]) -> Answe
 # ---- the whole conversation ----------------------------------------------------------------------
 
 
-def ask_all(ui: Ui, facts: Facts, answers: Answers, machine: Machine) -> Answers:
-    steps = 6 + bool(facts.aws_sso_profiles)
-    windows_intro = ("Each gets a window: one Claude Code session that keeps running in that repo.",)
-    answers = ask_repos(
-        ui, facts, answers, machine, header(1, steps, "Which repos should get a window?", windows_intro)
+def has_a_choice_of_agents(facts: Facts) -> bool:
+    """Claude Code runs the orchestrator, so it is always there to pick."""
+    return any(agent != init_plan.CLAUDE for agent in facts.ready_agents)
+
+
+def harness_options(facts: Facts, answers: Answers) -> list[Option]:
+    offered = [a for a in AGENT_CHOICES if a == init_plan.CLAUDE or a in facts.ready_agents]
+    return [
+        Option(str(n), AGENT_CHOICES[a][0], {"harness": a}, AGENT_CHOICES[a][1], answers.harness == a)
+        for n, a in enumerate(offered, 1)
+    ]
+
+
+def ask_harness(ui: Ui, facts: Facts, answers: Answers, top: Sequence[str]) -> Answers:
+    return replace(answers, **choose(ui, top, harness_options(facts, answers)).changes)
+
+
+def total_steps(facts: Facts, answers: Answers) -> int:
+    return (
+        ALWAYS_ASKED
+        + has_a_choice_of_agents(facts)
+        + (answers.harness == init_plan.CLAUDE)
+        + bool(facts.aws_sso_profiles)
     )
-    answers = ask_schedule(ui, facts, answers, header(2, steps, "When should bosun run?"))
-    answers = ask_features(ui, facts, answers, header(3, steps, "How proactive should it be?"))
-    answers = ask_model(ui, answers, header(4, steps, "Which model should the sessions use?"))
-    answers = ask_permissions(ui, answers, header(5, steps, "How should repo sessions handle permissions?"))
-    answers = ask_wake(ui, facts, answers, header(6, steps, "Should the Mac wake by itself?"))
+
+
+def ask_all(ui: Ui, facts: Facts, answers: Answers, machine: Machine) -> Answers:
+    step = 0
+
+    def top(title: str, intro: Sequence[str] = ()) -> Sequence[str]:
+        nonlocal step
+        step += 1
+        return header(step, total_steps(facts, answers), title, intro)
+
+    windows_intro = ("Each gets a window: one session that keeps running in that repo.",)
+    answers = ask_repos(ui, facts, answers, machine, top("Which repos should get a window?", windows_intro))
+    answers = ask_schedule(ui, facts, answers, top("When should bosun run?"))
+    answers = ask_features(ui, facts, answers, top("How proactive should it be?"))
+    if has_a_choice_of_agents(facts):
+        answers = ask_harness(ui, facts, answers, top("Which agent should run the repo sessions?"))
+    on_claude = answers.harness == init_plan.CLAUDE
+    who = "sessions" if on_claude else "orchestrator"
+    answers = ask_model(ui, answers, top(f"Which model should the {who} use?"))
+    if on_claude:
+        answers = ask_permissions(ui, answers, top("How should repo sessions handle permissions?"))
+    answers = ask_wake(ui, facts, answers, top("Should the Mac wake by itself?"))
     if facts.aws_sso_profiles:
-        title = "Which AWS SSO profiles should each morning log in to?"
-        answers = ask_aws(ui, facts, answers, header(7, steps, title))
+        answers = ask_aws(ui, facts, answers, top("Which AWS SSO profiles should each morning log in to?"))
     return answers
 
 

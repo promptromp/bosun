@@ -237,6 +237,7 @@ from typing import Any
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import activity
+import agent_state
 import approvals
 import claude_state
 import compact_context
@@ -372,7 +373,7 @@ class Store:
 
 STORE = Store()
 # A repo window's live Claude status, by window name (tests replace it).
-STATUS_OF: activity.StatusOf = claude_state.live_status
+STATUS_OF: activity.StatusOf = agent_state.live_status
 
 
 def configure(

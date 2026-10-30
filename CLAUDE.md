@@ -81,6 +81,14 @@ of truth, so don't copy rules into this file.
   `lib/knowledge.py` + `libexec/bosun-kg` (the CLI and import). Quotes of my words are checked
   with `lib/approvals.py`'s genuine-prompt test. `tools/survey_to_kg.py` converts a survey into an
   import file; the fixture knowledge base is `tests/fixtures/knowledge/acme-import.jsonl`.
+- Agents (design: `docs/design/harnesses.md`): an adapter per agent, `lib/claude_state.py` and
+  `lib/codex_state.py`, each a module with the functions of `Agent` in `lib/agent_state.py`, whose `AGENTS`
+  table is the one place that lists them and whose `record` the watchdog, ledger and events use. They share
+  `lib/agent_files.py`, and neither imports the other. `lib/agents.sh` is the shell side: `agent_state`,
+  `window_harness`, `harnesses_in_use`, `agent_*`. `libexec/bosun-launch` holds the flow, and
+  `lib/launch/<harness>.sh` what differs in it (`build_agent_args`, `first_prompt`, `run_new`, `run_resumed`).
+  `window_specs` says which agent each window runs. `bosun hook codex-turn-end` (`lib/hook.py`) is what Codex
+  runs when a turn ends; `lib/pane_input.py` has a reader per agent for its input box.
 - Console (`bosun console`, design: `docs/design/console.md`): `lib/console_server.py` (the
   HTTP server and its request checks: bind address, Host, token cookie, static allowlist,
   headers), `lib/console_data.py` (ledger snapshots, `/api/version`, what the views share),
@@ -163,9 +171,16 @@ of truth, so don't copy rules into this file.
 - **A config key:** default in `lib/common.sh` and the same value in
   `examples/generic/bosun.env` (tests check they match); any other example only lists
   overrides. The guide in `docs/` if users should know.
-- **An OS or an agent to support:** a profile in `lib/platforms/` or `lib/harnesses/` with the same
-  functions as the others (`tests/unit/test_preflight.py` checks); what else still assumes macOS and
-  Claude Code is listed in `docs/design/init.md`.
+- **Any substantial change** (an agent or OS, install steps, what runs where, a default, a command): every doc
+  it affects changes in the same pull request, not later. Grep for what it touches ("Claude Code", "macOS
+  only", old flags, install lines) across the README, `docs/`, `ROADMAP.md`, `SECURITY.md`, `CONTRIBUTING.md`,
+  `examples/` and `.github/` templates, and say in the pull request which changed.
+- **An OS to support:** a profile in `lib/platforms/` with the same functions as the others
+  (`tests/unit/test_preflight.py` checks); what else still assumes macOS is in `docs/design/init.md`.
+- **An agent to support:** `docs/design/harnesses.md#adding-another`. Shared code asks the `AGENTS` table or
+  a module per agent; an `if` on an agent's name in shared code means something belongs in its module.
+- **A Codex fact changes** (after a Codex update): `lib/codex_state.py`, the note at its top,
+  `tests/sandbox/codex-stand-in` so the stand-in does it too, and `docs/design/harnesses.md`.
 - **An answer `bosun init` offers:** a field of `Answers` (`lib/init_plan.py`) with its check, what
   it recommends, the key in `env_groups` if it sets one, the table in `docs/design/init.md` and a
   test in `tests/unit/test_init_plan.py`.
@@ -319,12 +334,12 @@ The repo is meant to be shareable, so nothing in it may identify an organization
   child process explicitly (as `bosun-ledger` does for `ledger.py`); only real environment
   overrides are exported.
 - Model and effort: launch passes `--model` and the effort as `--settings '{"effortLevel":...}'`
-  (before the orchestrator's long `--append-system-prompt`, so `claude_launch_model_effort` can read
+  (before the orchestrator's long `--append-system-prompt`, so `agent_launch_model_effort` can read
   them back from `ps`). Not `--effort` or `CLAUDE_CODE_EFFORT_LEVEL`: those beat `/effort`, so you
   could not change effort inside the session. Never paste `/model` or `/effort` into a session:
   both save the choice to `~/.claude/settings.json` for every future session. Per-task effort for a
   running session goes through a subagent (the Agent tool takes `model` and `effort`).
-- Only paste into a Claude whose status `claude_takes_input` accepts. `waiting` means a permission
+- Only paste into a Claude whose status `agent_takes_input` accepts. `waiting` means a permission
   prompt or question is open, and the Enter that `send` presses would answer it.
 - tmux windows inherit the environment of whatever started the tmux server, hence the dedicated
   server (`BOSUN_TMUX_SOCKET`). Static `AWS_*` credentials leaked that way override SSO
@@ -334,6 +349,9 @@ The repo is meant to be shareable, so nothing in it may identify an organization
   daemon) outlive it, adopted by launchd. `lib/orphans.py` finds them by exact command line and
   terminal; `launch`, `checkin --loop`, `relaunch_in_window` and `stop` stop them. Never kill
   processes by a pattern match: the tmux server's own command line contains the launch string.
+- Codex's report at the end of a turn fires for its hidden helpers too, and lists every prompt of the session
+  each time; Enter on its trust screen says yes. Facts like these only come from running the real thing:
+  `tests/sandbox.sh mac live codex`. The rest are in `docs/design/harnesses.md`.
 - Claude Code internals this relies on (not public APIs) are all in `lib/claude_state.py`: session
   records in `~/.claude/sessions/<pid>.json`, transcript `custom-title` entries, error replies
   (`isApiErrorMessage`, `error`, `apiErrorStatus`), `claude auth status --json`, and

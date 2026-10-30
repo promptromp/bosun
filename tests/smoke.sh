@@ -49,6 +49,7 @@ check() {
   fi
 }
 
+not_contains() { ! grep -qF -- "$2" <<<"$1"; }
 contains() { grep -qF -- "$2" <<<"$1" || {
   echo "expected to find: $2"
   echo "in: $(tail -3 <<<"$1")"
@@ -240,7 +241,7 @@ for url in git@github.com:acme/api.git https://github.com/acme/api.git https://g
 done
 check "minutes since the latest client keystroke" test "$(bash -c 'source "$1/lib/common.sh"; tmux_cmd() { echo $(( $(date +%s) - 600 )); echo $(( $(date +%s) - 125 )); }; minutes_since_client_input' _ "$ROOT")" = 2
 check "no attached client means no answer" bash -c 'source "$1/lib/common.sh"; tmux_cmd() { :; }; ! minutes_since_client_input' _ "$ROOT"
-check "only idle, busy and shell sessions take input" bash -c 'source "$1/lib/common.sh"; claude_takes_input idle && claude_takes_input busy && claude_takes_input shell && ! claude_takes_input waiting && ! claude_takes_input ""' _ "$ROOT"
+check "only idle, busy and shell sessions take input" bash -c 'source "$1/lib/common.sh"; agent_takes_input idle && agent_takes_input busy && agent_takes_input shell && ! agent_takes_input waiting && ! agent_takes_input ""' _ "$ROOT"
 check "run_with_timeout stops a slow command" bash -c 'source "$1/lib/common.sh"; start=$SECONDS; ! run_with_timeout 1 sleep 10 && [ $((SECONDS - start)) -lt 5 ]' _ "$ROOT"
 check "run_with_timeout passes a fast command's status" bash -c 'source "$1/lib/common.sh"; run_with_timeout 5 true && ! run_with_timeout 5 false' _ "$ROOT"
 
@@ -622,7 +623,7 @@ wait_for 10 has_windows "alpha beta gamma "
 windows="$(tmux -L "$SOCKET" list-windows -t "=smoke" -F '#{window_name}' 2>/dev/null | tr '\n' ' ')"
 check "start creates one window per session" test "$windows" = "alpha beta gamma "
 tmux -L "$SOCKET" new-window -d -t "=smoke" -n at-a-screen "bash -c '(exec -a fake-claude sleep 60); true'"
-check "the watchdog sees a Claude that has no session yet" wait_for 5 bash -c '"$1" watchdog --facts | jq -e ".windows[] | select(.name == \"at-a-screen\") | .starting_pid > 0 and .claude_pid == null" >/dev/null' _ "$BOSUN"
+check "the watchdog sees a Claude that has no session yet" wait_for 5 bash -c '"$1" watchdog --facts | jq -e ".windows[] | select(.name == \"at-a-screen\") | .starting_pid > 0 and .agent_pid == null" >/dev/null' _ "$BOSUN"
 tmux -L "$SOCKET" kill-window -t "=smoke:at-a-screen"
 check "windows are found without a UTF-8 locale too" bash -c 'LC_ALL=C "$1" sessions --json | jq -e "[.[] | select(.name == \"alpha\")] | .[0].window == true" >/dev/null' _ "$BOSUN"
 # -S -200: the launch line (its --settings JSON) wraps over more rows than the window shows.
@@ -631,7 +632,7 @@ tmux -L "$SOCKET" kill-window -t "=smoke:2"
 out="$("$BOSUN" start 2>&1)"
 check "second start refreshes instead of duplicating" contains "$out" "already exists; mode: refresh"
 check "refresh recreates missing windows" contains "$out" "gamma: create the missing window"
-check "send refuses windows without Claude" fails_with "is not running Claude" "$BOSUN" send alpha hello
+check "send refuses windows without Claude" fails_with "is not running an agent" "$BOSUN" send alpha hello
 check "send refuses unknown windows" fails_with "no window 'no-such-window'" "$BOSUN" send no-such-window hello
 check "stop rejects unknown arguments and keeps the session" bash -c '! "$1" stop --dry-run 2>/dev/null && tmux -L "$2" has-session -t =smoke' _ "$BOSUN" "$SOCKET"
 check "setup rejects unknown arguments" bash -c '! "$1" setup --dryrun 2>/dev/null' _ "$BOSUN"
@@ -661,7 +662,7 @@ alpha_pid="$(fake_claude alpha idle 1.0.0 3600)"
 fake_claude beta busy 1.0.0 3600 >/dev/null
 gamma_pid="$(fake_claude gamma idle 2.0.0 3600)"
 out="$("$BOSUN" refresh --dry-run 2>&1)"
-check "restarts idle outdated sessions" contains "$out" "alpha: would restart (Claude v1.0.0 -> v2.0.0"
+check "restarts idle outdated sessions" contains "$out" "alpha: would restart (v1.0.0 -> v2.0.0"
 check "leaves busy sessions alone" contains "$out" "beta: busy (v1.0.0); leaving alone"
 check "leaves an idle up-to-date session with nothing in flight idle, without a prompt" contains "$out" "gamma: left idle: nothing in flight (idle, v2.0.0)"
 L upsert 'slack:C77/1' --kind mention >/dev/null
@@ -698,7 +699,7 @@ mkdir -p "$BOSUN_STATE_DIR/conversations"
 echo "gamma-$(date +%F)-1" >"$BOSUN_STATE_DIR/conversations/gamma"
 check "a fresh conversation's name is what the window resumes, and the next one counts up" bash -c '
   source "$1/lib/common.sh"; load_config
-  [ "$(expected_claude_name gamma)" = "gamma-$(date +%F)-1" ] && [ "$(next_conversation_name gamma)" = "gamma-$(date +%F)-2" ]' _ "$ROOT"
+  [ "$(expected_session_name gamma)" = "gamma-$(date +%F)-1" ] && [ "$(next_conversation_name gamma)" = "gamma-$(date +%F)-2" ]' _ "$ROOT"
 rm -f "$BOSUN_STATE_DIR/conversations/gamma"
 out="$("$BOSUN" refresh --dry-run --restart-idle gamma 2>&1)"
 check "--restart-idle restarts up-to-date idle sessions" contains "$out" "gamma: would restart (--restart-idle"
@@ -747,11 +748,11 @@ check "refresh leaves a session waiting for you alone" contains "$("$BOSUN" refr
 check "send refuses a session waiting for you" contains "$("$BOSUN" send gamma hello 2>&1)" "not pasting into it"
 
 echo "console sessions and health (these fake Claude windows; it never starts Claude)"
-printf '#!/bin/sh\ntouch "%s"\nexit 1\n' "$WORK/claude-was-started" >"$WORK/no-claude"
-chmod +x "$WORK/no-claude"
+printf '#!/bin/sh\ntouch "%s"\nexit 1\n' "$WORK/claude-was-started" >"$WORK/no-agent"
+chmod +x "$WORK/no-agent"
 touch "$WORK/before-console"
 gamma_screen="$(tmux -L "$SOCKET" capture-pane -p -t "=smoke:gamma")"
-BOSUN_CLAUDE_BIN="$WORK/no-claude" "$BOSUN" console --port 0 >"$WORK/live-console.out" 2>"$WORK/live-console.err" &
+BOSUN_CLAUDE_BIN="$WORK/no-agent" "$BOSUN" console --port 0 >"$WORK/live-console.out" 2>"$WORK/live-console.err" &
 CONSOLE_PID=$!
 check "the console starts on the live session's state" console_started "$WORK/live-console.out" "$WORK/live-console.err"
 LIVE_URL="$(grep -o 'http://[^ ]*' "$WORK/live-console.out")"
@@ -760,7 +761,7 @@ LIVE_COOKIE="bosun_console_${LIVE_BASE##*:}=${LIVE_URL##*t=}"
 check "/api/sessions has a card per window, with its Claude's status, model and attach command" bash -c '
   curl -sf -H "Cookie: $2" "$1/api/sessions" | jq -e --arg socket "$3" "
     ([.windows[] | select(.kind == \"session\") | .name] == [\"alpha\", \"beta\", \"gamma\"]) and
-    (.windows[] | select(.name == \"gamma\") | .state == \"waiting\" and .model == \"sonnet\" and .claude.seconds >= 3600
+    (.windows[] | select(.name == \"gamma\") | .state == \"waiting\" and .model == \"sonnet\" and .agent.seconds >= 3600
       and .attach == \"tmux -L \(\$socket) attach -t smoke:gamma\") and
     (.counts.waiting == 1)"' _ "$LIVE_BASE" "$LIVE_COOKIE" "$SOCKET"
 check "/api/health has every watchdog check, and the flags as booleans" bash -c '
@@ -1217,7 +1218,7 @@ live() { BOSUN_LAUNCH_DRY_RUN=0 BOSUN_START_TIMEOUT=5 "$BOSUN" send "$@"; }
 claude_in() { # <window>: prints the pid of the fake Claude running in the window
   local pane_pid
   pane_pid="$(tmux -L "$SOCKET" list-windows -t "=smoke" -F '#{window_name} #{pane_pid}' | awk -v w="$1" '$1 == w { print $2 }')"
-  bash -c 'source "$1/lib/common.sh"; claude_pid_under "$2"' _ "$ROOT" "$pane_pid"
+  bash -c 'source "$1/lib/common.sh"; agent_pid_under "$2"' _ "$ROOT" "$pane_pid"
 }
 # Longer than the 1024-byte terminal line limit, multi-line, and full of shell metacharacters.
 long_prompt="$(
@@ -1352,7 +1353,7 @@ L report 'slack:C8/5' --summary 'first pass done' >/dev/null
 check "after a report a new hand-over needs no --again" contains "$("$BOSUN" delegate investigate --id slack:C8/5 --ask 'next question' --window echo 2>&1)" "delivered to smoke:echo"
 tmux -L "$SOCKET" new-window -d -t "=smoke:" -n plain
 check "a move to an unknown window changes nothing" fails_with "not delivered to nowhere (see above); slack:C8/5 stays with echo" "$BOSUN" delegate --update slack:C8/5 --window nowhere --details 'echo is stuck'
-check "a move to a window without Claude changes nothing" fails_with "is not running Claude" "$BOSUN" delegate --update slack:C8/5 --window plain --details 'echo is stuck'
+check "a move to a window without Claude changes nothing" fails_with "is not running an agent" "$BOSUN" delegate --update slack:C8/5 --window plain --details 'echo is stuck'
 check "a move to the same window is refused" fails_with "already delegated to echo; drop --window" "$BOSUN" delegate --update slack:C8/5 --window echo --details x
 check "--update --window moves the item and tells the old window" contains "$("$BOSUN" delegate --update slack:C8/5 --window delta --details 'echo is stuck' 2>&1)" "moved from echo to delta (the old window was told to stop)"
 check "... the old window gets the stop notice by id" wait_for 5 grep -q "Ledger item slack:C8/5 has moved to window delta. Stop working on it here" "$WORK/received.txt"
@@ -1918,6 +1919,33 @@ if [ "$(bash -c 'source "$1/lib/common.sh"; command -v launchctl; command -v pms
   check "... at the time the answers imply" grep -q "<key>Hour</key><integer>16</integer><key>Minute</key><integer>30</integer>" "$HOME/Library/LaunchAgents/$BOSUN_LAUNCHD_LABEL.learn.plist"
   BOSUN_CONFIG_DIR="$INIT_CFG" "$ROOT/uninstall.sh" >/dev/null 2>&1
   unset BOSUN_SKIP_PREFLIGHT
+
+  echo "a window on Codex (launch's dry run)"
+  CX_HOME="$WORK/cx-home"
+  CX_REPO="$WORK/cx-repo"
+  mkdir -p "$CX_HOME/sessions/2026/10/30" "$CX_REPO"
+  git -C "$CX_REPO" init -q
+  printf 'sessions:\n  - name: cx\n    dir: %s\n    harness: codex\n  - name: cl\n    dir: %s\n' "$CX_REPO" "$CX_REPO" >"$WORK/cx-sessions.yml"
+  CX() { (cd "$CX_REPO" && CODEX_HOME="$CX_HOME" BOSUN_SESSIONS_FILE="$WORK/cx-sessions.yml" BOSUN_LAUNCH_DRY_RUN=1 BOSUN_EVENTS_ENABLED=0 "$BOSUN" "$@" 2>&1); }
+  out="$(CX launch cx)"
+  check "a new Codex session starts with what keeps it unattended" contains "$out" "--no-daemon --approve-for-me"
+  check "... can reach git and bosun's state" contains "$out" "sandbox_workspace_write.writable_roots"
+  check "... reports when a turn ends" contains "$out" "codex-turn-end"
+  check "... and always has a first prompt" contains "$out" 'nothing\ to\ do\ yet'
+  check "... with the model only if one is set" not_contains "$out" "--model"
+  check "a prompt it was given goes after --" contains "$(CX launch cx '-starts with a dash')" "-- -starts\\ with\\ a\\ dash"
+  check "a window without a harness: stays on Claude Code" contains "$(CX launch cl)" "$WORK/fake-claude"
+  check "BOSUN_CODEX_MODEL applies to a Codex window" contains "$(BOSUN_CODEX_MODEL=gpt-test CX launch cx)" "--model gpt-test"
+  check "... and not BOSUN_MODEL" not_contains "$(BOSUN_MODEL=opus CX launch cx)" "--model opus"
+  out="$(CX sessions --json)"
+  check "sessions knows its model" contains "$(BOSUN_CODEX_MODEL=gpt-test CX sessions --json | jq -r '.[] | select(.name == "cx") | .model')" "gpt-test"
+  printf '{"type":"session_meta","payload":{"id":"cx-1","cwd":"%s","source":"cli"}}\n' "$(cd "$CX_REPO" && pwd -P)" >"$CX_HOME/sessions/2026/10/30/rollout-2026-10-30T00-00-00-cx-1.jsonl"
+  CX hook codex-turn-end --window cx --conversation cx "{\"thread-id\":\"cx-1\",\"cwd\":\"$CX_REPO\"}" >/dev/null
+  CX hook codex-turn-end --window cx --conversation cx "{\"thread-id\":\"a-helper\",\"cwd\":\"$CX_REPO\"}" >/dev/null
+  check "once a turn has ended it resumes that session" wait_for 5 bash -c 'cd "$1" && CODEX_HOME="$2" BOSUN_SESSIONS_FILE="$3" BOSUN_LAUNCH_DRY_RUN=1 "$4" launch cx 2>&1 | grep -q "resume .* cx-1"' _ "$CX_REPO" "$CX_HOME" "$WORK/cx-sessions.yml" "$BOSUN"
+  check "bosun trust covers each agent in use" bash -c 'cd "$1" && CODEX_HOME="$2" BOSUN_SESSIONS_FILE="$3" "$4" trust --any "$1" >/dev/null 2>&1 && grep -q "trust_level = \"trusted\"" "$2/config.toml"' _ "$CX_REPO" "$CX_HOME" "$WORK/cx-sessions.yml" "$BOSUN"
+  check "... and can take it back" bash -c 'cd "$1" && CODEX_HOME="$2" BOSUN_SESSIONS_FILE="$3" "$4" trust --revoke "$1" >/dev/null 2>&1 && ! grep -q trust_level "$2/config.toml"' _ "$CX_REPO" "$CX_HOME" "$WORK/cx-sessions.yml" "$BOSUN"
+  check "preflight checks each agent in use" contains "$(CX preflight)" "Codex"
 
   echo "get.sh (a dry run: it changes nothing)"
   check "it is plain sh" sh -n "$ROOT/get.sh"

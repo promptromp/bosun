@@ -1,0 +1,32 @@
+#!/bin/bash
+# GitHub's stand-in for tests/sandbox/live.sh: logged in as acme-dev, and it remembers pull requests in
+# ~/.sandbox/gh. Writing there goes past Codex's sandbox, as reading a real login from the Keychain does.
+state="$HOME/.sandbox/gh"
+mkdir -p "$state"
+echo "gh $*" >>"$state/calls.log"
+case "$*" in
+"auth status"*) echo "Logged in to github.com account acme-dev" ;;
+"api user"*)
+	case "$*" in
+	*--jq* | *-q*) echo "acme-dev" ;;
+	*) echo '{"login":"acme-dev"}' ;;
+	esac
+	;;
+"pr create"*)
+	number=$(($(find "$state" -name 'pr-*.json' | wc -l) + 1))
+	url="https://github.com/acme/exporter/pull/$number"
+	printf '{"number":%d,"url":"%s","state":"OPEN","isDraft":true,"title":"A pull request"}\n' "$number" "$url" \
+		>"$state/pr-$number.json"
+	echo "$url"
+	;;
+"pr view"*)
+	newest="$(find "$state" -name 'pr-*.json' | sort | tail -1)"
+	if [ -n "$newest" ]; then
+		cat "$newest"
+	else
+		echo "no pull requests found" >&2
+		exit 1
+	fi
+	;;
+*) echo "[]" ;;
+esac

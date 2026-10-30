@@ -4,7 +4,7 @@
 FROM python:3.13-slim-bookworm
 # hadolint ignore=DL3008 # Debian's current versions: this image is thrown away, and pins would only go stale
 RUN apt-get update -qq \
-  && apt-get install -y -qq --no-install-recommends tmux jq ruby git curl procps perl zsh >/dev/null \
+  && apt-get install -y -qq --no-install-recommends tmux jq ruby git curl procps lsof perl zsh >/dev/null \
   && rm -rf /var/lib/apt/lists/* \
   && pip install --quiet --no-cache-dir uv==0.13.6
 COPY macos/ /usr/local/bin/

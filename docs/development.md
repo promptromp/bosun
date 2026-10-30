@@ -32,6 +32,7 @@ launchd, `pmset` and your config for real. Use the cheapest of these that can sh
 | Anything else in bosun | `tests/sandbox.sh all` | also the unit tests and the smoke suite | 3 minutes |
 | `get.sh`, `install.sh`, launchd, `pmset`, anything macOS does its own way | `tests/sandbox.sh mac run` | the real thing on real macOS, except sleep | 75 seconds |
 | What a new Mac lacks: Homebrew, Apple's tools | `tests/sandbox.sh mac run --from-nothing` | the same from a Mac with nothing on it | 4 minutes |
+| How an agent behaves: launching it, its screens and files, a task handed to it | `tests/sandbox.sh mac live claude`, `... live codex` | the real agents from nothing, through setup and sessions | 10 minutes, about a dollar |
 | The wake itself | `bosun wake-test`, on real hardware | a real sleep and a real wake | 5 minutes |
 
 The first two also run in CI, and so does the third on a clean GitHub macOS runner, whenever the install
@@ -63,6 +64,7 @@ brew install openai/tools/tart
 tests/sandbox.sh mac setup                # once: pulls the image (6 minutes) and prepares the bases (4)
 tests/sandbox.sh mac run                  # on a developer's Mac: Homebrew is already there
 tests/sandbox.sh mac run --from-nothing   # on a new Mac: no Homebrew, no Apple tools
+tests/sandbox.sh mac live codex           # the real agents: see below
 tests/sandbox.sh mac shell                # a window, to try the wizard as a new user would
 tests/sandbox.sh mac clean                # delete the base images (`tart prune` removes the pulled one)
 ```
@@ -74,7 +76,8 @@ If Homebrew refuses the tap, it wants to be told you trust it. These two are eno
   time and no space until it writes, so keep 10 GB or so free for a run. `du` double-counts clones:
   trust `df`.
 - **It is a stranger's Mac, not yours.** The login is `admin`, password `admin`, with passwordless `sudo`
-  and ssh on. Never put a real token in one, and never push an image you logged in to.
+  and ssh on. Never put a real token in one by hand, and never push an image you logged in to. `live` is the
+  one exception, and how it handles its keys is below.
 - **It cannot sleep.** `pmset sleepnow` fails in a macOS guest (`error 0xe00002e2`), and `tart suspend` is
   no stand-in: launchd did not catch up on a job that fell due while the VM was frozen. To check a job's
   *time*, move the clock past it instead (`sudo systemsetup -setusingnetworktime off`, then `sudo date`):
@@ -83,6 +86,41 @@ If Homebrew refuses the tap, it wants to be told you trust it. These two are eno
 - **Wait for the login.** ssh answers before the auto-login finishes, and until then launchd has no
   `gui/<uid>` domain and `launchctl bootstrap` fails with error 125. `mac.sh` waits for it; do the same
   if you script a VM by hand.
+
+### The real agents: `tests/sandbox.sh mac live`
+
+The stand-ins only behave the way you already believed. Every surprising thing about Codex in
+[Agents](design/harnesses.md#what-codex-needed) was found by running the real one, and so was the first-run
+stall on Claude Code. So after a change in how bosun talks to an agent, or an update of one, run this:
+
+```bash
+tests/sandbox.sh mac live claude
+tests/sandbox.sh mac live codex
+BOSUN_SANDBOX_CODEX_MODEL=<a cheap model> tests/sandbox.sh mac live codex
+```
+
+On a clone of the developer's Mac it does what a new user does, following only what the installer prints:
+it stops for what is missing, runs the line it gave, logs in, goes through Claude Code's first screens, and
+installs. Then real windows, a restart that must come back on the same session, and a real task: the real
+orchestrator hands a fix to the real repo session, which must report to the ledger, push a branch whose
+tests pass and open a pull request, and the orchestrator must link it. `live codex` runs the repo window on
+Codex and the orchestrator on Claude Code. GitHub is a stand-in and the remote a local bare repo, so nothing
+leaves the Mac but requests to the agents' APIs. It is not in CI, because it costs money and needs keys.
+
+**The keys.** It reads two API keys from your Keychain, one for Anthropic, and for `live codex` one for OpenAI.
+Use keys made for this, with a spend limit. Copy each to the clipboard and store it like this, because
+`security add-generic-password -w` with no value silently cuts what you type at 128 characters and a key is
+longer. It also keeps the key out of the process list, and clears the clipboard:
+
+```bash
+printf 'add-generic-password -U -a "%s" -s bosun-sandbox-anthropic -w "%s"\n' "$USER" "$(pbpaste)" | security -i; pbcopy </dev/null
+printf 'add-generic-password -U -a "%s" -s bosun-sandbox-openai -w "%s"\n' "$USER" "$(pbpaste)" | security -i; pbcopy </dev/null
+```
+
+A key only ever goes through a pipe: never a variable, an argument or the screen. In the clone it is a `0600`
+file that `apiKeyHelper` reads, or Codex's own login. What comes back through ssh has anything shaped like a
+key masked, and the clone is deleted at the end, even on failure. The clone holds no ssh key, no GitHub
+token and no shared folder of yours, and an image with a key in it is never saved.
 
 Tart is OpenAI's since it acquired Cirrus Labs in 2026. The repository's licence is FSL-1.1-ALv2, which
 allows internal use and becomes Apache 2.0 after two years (the licensing page on tart.run still shows the

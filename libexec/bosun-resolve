@@ -19,6 +19,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "lib"))
 import claude_state
+from agent_files import USAGE
 
 
 ARGUMENTS = 2  # <workdir> <name>, <workdir> --list or --live <uuid>
@@ -30,7 +31,7 @@ def main(argv: list[str]) -> int:
         return 0
     if len(argv) != ARGUMENTS:
         print(__doc__.strip(), file=sys.stderr)
-        return claude_state.USAGE
+        return USAGE
     if argv[0] == "--live":
         return claude_state.main(["live", argv[1]])
     if argv[1] == "--list":

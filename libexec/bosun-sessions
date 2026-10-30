@@ -28,22 +28,22 @@ specs=""
 live=""
 session_exists && live="$(tmux_cmd list-windows -t "=$BOSUN_SESSION_NAME" -F '#{window_name}	#{pane_current_path}	#{pane_pid}')"
 
-# One window as a JSON object: name, kind, dir, model, effort, window (exists), claude (or null).
+# One window as a JSON object: name, kind, dir, model, effort, window (exists), agent (or null).
 window_json() { # <name> <dir> <kind> <model> <effort>
-  local pane_pid claude_pid described="null" exists=false
+  local pane_pid agent_pid described="null" exists=false
   pane_pid="$(awk -F'\t' -v name="$1" '$1 == name { print $3; exit }' <<<"$live")"
   if [ -n "$pane_pid" ]; then
     exists=true
-    claude_pid="$(claude_pid_under "$pane_pid")" && described="$(claude_state describe "$claude_pid")" || described="null"
+    agent_pid="$(agent_pid_under "$pane_pid")" && described="$(agent_state describe "$agent_pid")" || described="null"
   fi
   jq -cn --arg name "$1" --arg dir "$2" --arg kind "$3" --arg model "$4" --arg effort "$5" \
-    --argjson exists "$exists" --argjson claude "${described:-null}" \
-    '{name: $name, kind: $kind, dir: $dir, model: $model, effort: $effort, window: $exists, claude: $claude}'
+    --argjson exists "$exists" --argjson agent "${described:-null}" \
+    '{name: $name, kind: $kind, dir: $dir, model: $model, effort: $effort, window: $exists, agent: $agent}'
 }
 
 windows_json() {
   local name dir kind model effort path pane_pid
-  while IFS=$'\t' read -r name dir kind model effort; do
+  while IFS=$'\t' read -r name dir kind model effort _; do
     [ -n "$name" ] && window_json "$name" "$dir" "$kind" "$model" "$effort"
   done <<<"$specs"
   while IFS=$'\t' read -r name path pane_pid; do
@@ -59,9 +59,9 @@ if [ "$JSON" = "1" ]; then
   exit 0
 fi
 jq -r '.[] | [.name, .kind,
-    (if .claude then "claude:\(.claude.status // "?")" elif .window then "no-claude" else "no-window" end),
-    (.claude.sessionId // "-"), (.claude.transcript // "-")] | @tsv' <<<"$all" |
+    (if .agent then "\(.agent.harness):\(.agent.status // "?")" elif .window then "no-agent" else "no-window" end),
+    (.agent.sessionId // "-"), (.agent.transcript // "-")] | @tsv' <<<"$all" |
   while IFS=$'\t' read -r name kind state session transcript; do
-    case "$state" in claude:*) state="claude:$(claude_status_label "${state#claude:}")" ;; esac
+    case "$state" in *:*) state="${state%%:*}:$(agent_status_label "${state#*:}")" ;; esac
     printf '%-24s %-13s %-13s %-37s %s\n' "$name" "$kind" "$state" "$session" "$transcript"
   done

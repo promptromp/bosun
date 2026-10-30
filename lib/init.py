@@ -23,7 +23,7 @@ from dataclasses import asdict, replace
 from datetime import datetime
 from pathlib import Path
 
-import claude_state
+import agent_state
 import init_detect
 import init_plan
 import init_terminal
@@ -74,13 +74,18 @@ def load_answers(source: str | None, base: Answers) -> Answers:
         raise AnswersError(f"{source} is not JSON: {error}") from error
 
 
+def is_trusted(folder: str, harness: str) -> bool:
+    """`bosun trust` covers the orchestrator's agent and the one chosen, so this asks both."""
+    return all(agent_state.AGENTS[agent].trusted(folder) for agent in {init_plan.CLAUDE, harness})
+
+
 def dir_state(answers: Answers) -> DirState:
     folders = list(dict.fromkeys([*(r.dir for r in answers.repos), answers.repos_dir]))
     missing = [folder for folder in folders if not Path(folder).expanduser().is_dir()]
     untrusted = [
         str(Path(folder).expanduser())
         for folder in folders
-        if folder not in missing and not claude_state.trusted(str(Path(folder).expanduser()))
+        if folder not in missing and not is_trusted(str(Path(folder).expanduser()), answers.harness)
     ]
     return DirState(tuple(missing), tuple(untrusted))
 

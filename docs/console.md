@@ -24,7 +24,7 @@ light or dark mode and works down to a narrow window.
   Confluence, Slack or Web, and the history. Only `http(s)` links are clickable; they open in a
   new tab.
 - **Sessions** (`#/sessions`): a card per window (`bosun sessions --json`): its kind, folder,
-  model and effort, its Claude's status (idle, busy, shell, waiting) and for how long, the items it
+  model and effort, its agent's status (idle, busy, shell, waiting) and for how long, the items it
   holds, its active item and whether it works on it now, its last report, its login verdict, and
   the `tmux attach` command with a copy button. Below, **Health**: the watchdog's checks (as
   `watchdog --status` shows them; nothing is alerted or recorded), today's morning run and the

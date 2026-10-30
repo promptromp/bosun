@@ -4,11 +4,13 @@
 # Check what bosun needs on this machine, and say exactly what to do about anything missing. It
 # changes nothing and installs nothing. `bosun init` and `bosun doctor` start with the same check.
 #   --quiet   only print what needs doing
-# The OS picks a platform profile (lib/platforms/) and BOSUN_HARNESS a harness profile
-# (lib/harnesses/); BOSUN_PLATFORM overrides the first. Exit status: 0 all there, 1 something to do,
-# 2 no profile for this OS or harness. Design: docs/design/init.md.
+# The OS picks a platform profile (lib/platforms/), and each agent this setup uses (BOSUN_HARNESS, the
+# `harness:` of a window, Claude Code for the orchestrator) a harness profile (lib/harnesses/);
+# BOSUN_PLATFORM overrides the first. Exit status: 0 all there, 1 something to do, 2 no profile for this
+# OS or harness. Design: docs/design/init.md.
 set -uo pipefail
 source "$(dirname "$0")/../lib/common.sh"
+load_config
 
 case "${1:-}" in
   -h | --help)
@@ -18,4 +20,4 @@ case "${1:-}" in
   "" | --quiet) ;;
   *) die_usage "unknown argument: $1" ;;
 esac
-exec sh "$BOSUN_ROOT/lib/preflight.sh" "$@"
+run_preflight "$@"

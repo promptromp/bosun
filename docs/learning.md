@@ -4,7 +4,8 @@
 mishaps do not happen twice. Design and phasing: [docs/design/learning.md](design/learning.md).
 
 1. **Digest** (no Claude, free): for every bosun window (`bosun sessions`), including the
-   orchestrator's daily conversations, it reads the window's Claude Code transcripts in the time
+   orchestrator's daily conversations, it reads the window's Claude Code transcripts (not yet
+   [Codex's](design/harnesses.md#what-codex-windows-do-not-have-yet)) in the time
    window and keeps what tells a story: who sent each prompt (you or bosun, and whether it
    arrived while the session was busy), permission prompts and how long they waited, refused and
    failed tool calls, guard denials, questions to you, the `bosun` commands run and the end of

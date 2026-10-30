@@ -19,6 +19,7 @@
 set -uo pipefail
 export BOSUN_USER_PATH="${BOSUN_USER_PATH:-$PATH}" # before common.sh extends PATH for launchd's sake
 source "$(dirname "$0")/../lib/common.sh"
+load_config
 
 case "${1:-}" in
   -h | --help)
@@ -32,7 +33,7 @@ case " $* " in
   *" --detect "* | *" --print-answers "* | *" --dry-run "*) ;;
   *)
     if [ "${BOSUN_SKIP_PREFLIGHT:-}" != "1" ]; then
-      sh "$BOSUN_ROOT/lib/preflight.sh" --quiet || exit $?
+      run_preflight --quiet || exit $?
     fi
     ;;
 esac

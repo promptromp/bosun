@@ -11,7 +11,10 @@ Requirements, installation and configuration, and the morning's logins.
   `ruby` and `curl` (the macOS system ones are fine)
 - [GitHub CLI](https://cli.github.com), logged in: `gh auth login`
 - [Claude Code](https://claude.com/claude-code) 2.1.283 or newer, logged in, and opened once by hand:
-  run `claude`, go through its first screens, then `/exit`
+  run `claude`, go through its first screens, then `/exit`. The orchestrator always runs on it
+- Optional, to run repo sessions on it: [Codex](https://developers.openai.com/codex/cli) 0.166.0 or newer
+  (`brew install codex`), logged in (`codex login`). See
+  [Running repo sessions on Codex](#running-repo-sessions-on-codex)
 
 You do not have to check these yourself. `bosun preflight` does, changes nothing, and lists everything
 missing at once, with what to do about each. `bosun init` and `bosun doctor` start with the same check.
@@ -26,6 +29,12 @@ curl -fsSL https://raw.githubusercontent.com/promptromp/bosun/main/get.sh | sh
 else: if something is missing, it says what, gives you the lines to run and the pages to go to, and
 stops. Do those, and run the same line again. It takes a few minutes the first time, most of it
 Homebrew's, and once everything is there the questions take about a minute.
+
+To run the repo sessions on Codex, ask for it after the pipe, so that it checks Codex is ready too:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/promptromp/bosun/main/get.sh | BOSUN_HARNESS=codex sh
+```
 
 Run it again to update. After the pipe, `sh -s -- --dry-run` says what it would do and does nothing,
 and `sh -s -- --unattended` asks nothing and takes the recommended setup. `BOSUN_DIR`, `BOSUN_REPO` and
@@ -61,8 +70,9 @@ installed. The usual ones:
 | `missing  Homebrew` | Nothing to install the tools with | Install it from [brew.sh](https://brew.sh), then do what it prints at the end to add it to your PATH, and open a new terminal |
 | A tool you just installed is still `missing` | Your terminal has the old PATH | Open a new terminal |
 | `first-run screens not done` | Claude Code stops at its theme and security screens the first time, and a window nobody is watching would wait there for ever | Run `claude`, go through them, then `/exit` |
-| `not logged in` | Claude Code has no login | Run `claude`, and follow what it asks |
-| A window is on a screen, and the watchdog reports `stalled-start` | Claude Code is asking something only you can answer, usually about trusting the folder | `bosun attach`, then read it. Do not just press Return: on several of these screens the default is to exit |
+| `not logged in` under Claude Code | It has no login | Run `claude`, and follow what it asks |
+| `not logged in` under Codex | It has no login | Run `codex login`. With an API key: `printenv OPENAI_API_KEY \| codex login --with-api-key` |
+| A window is on a screen, and the watchdog reports `stalled-start` | The agent is asking something only you can answer, usually about trusting the folder | `bosun attach`, then read it. Do not just press Return: on several of Claude Code's screens the default is to exit, and on Codex's it says yes |
 | `does not run on <your OS> yet` | bosun runs on macOS today, and Linux is next | See the [roadmap](../ROADMAP.md) |
 
 If none of these fit, open an issue with what `bosun preflight` and `bosun doctor` print:
@@ -101,7 +111,7 @@ All configuration lives in `~/.config/bosun/` (override with `BOSUN_CONFIG_DIR`)
 | File | Purpose |
 |---|---|
 | `bosun.env` | Schedule, session name, Claude flags, drain prompt, orchestrator and chores settings. Every `BOSUN_*` value can also be overridden from the environment. Commands read the file each time they run, so edits apply at once, also inside running sessions. See `examples/generic/bosun.env` for all keys. |
-| `sessions.yml` | One entry per repo window: `name` (the Claude session name) and `dir`, optionally `model` and `effort` for that window. The orchestrator is configured in `bosun.env`, not here. |
+| `sessions.yml` | One entry per repo window: `name` (the session name) and `dir`, optionally `harness` (`claude` or `codex`), `model` and `effort` for that window. The orchestrator is configured in `bosun.env`, not here. |
 | `setup.sh` | Defines `setup_steps()`. Helpers: `ensure_claude_login` (see Claude Code login), `ensure_aws_sso <profile>`, `run_step "<desc>" cmd...`. |
 
 State and logs go to `~/.local/state/bosun/`:
@@ -111,6 +121,7 @@ State and logs go to `~/.local/state/bosun/`:
   (`launchd.{out,err}`, `watchdog.launchd.{out,err}`, `learn.launchd.{out,err}`)
 - `watchdog.json`: the watchdog's de-duplication state
 - `login.json`: the last Claude Code login check (see Claude Code login)
+- `codex-sessions.json`: which Codex session each window's name stands for
 - `events/`: the event queue (`queue.jsonl`) and what was delivered (`state.json`), with events on
 - `slack-watch/state.json`: the Slack watcher's last runs, with it on
 - `learn/`: the learning runs (`state.json`, and per run its digest and report, kept 14 days)
@@ -146,7 +157,7 @@ and resumes it by UUID. If none exists it starts a new session with that name. I
 already open in another terminal (per `~/.claude/sessions/<pid>.json`), it refuses rather than
 running two copies on one transcript.
 
-Every window gets `--name <name> --remote-control <name>` plus `BOSUN_CLAUDE_FLAGS`.
+Every Claude Code window gets `--name <name> --remote-control <name>` plus `BOSUN_CLAUDE_FLAGS` ([Codex windows](#running-repo-sessions-on-codex) differ).
 
 ### Steady state: the session already exists
 
@@ -210,6 +221,46 @@ draft. Run `bosun refresh` by hand any time; add `--dry-run` to preview it.
 
 `BOSUN_ON_EXISTING` picks the behaviour: `refresh` (default), `drain` (never restart) or
 `restart` (kill the whole session and start fresh).
+
+## Running repo sessions on Codex
+
+[Codex](https://developers.openai.com/codex/cli) can run the repo sessions. The orchestrator stays on Claude
+Code, so you need both, and it hands tasks to a Codex window the way it does to any other: the same tasks,
+the same reports to the ledger.
+
+```bash
+brew install codex
+codex login
+```
+
+Then choose it: in `bosun init`, which asks once Codex is installed and logged in (and recommends it if you
+use it more than Claude Code), or in `bosun.env`:
+
+```bash
+BOSUN_HARNESS="codex"                # every repo window
+BOSUN_CODEX_MODEL="gpt-6.1-sol"      # optional. Empty: Codex's own default
+```
+
+Or one window at a time, in `sessions.yml`:
+
+```yaml
+sessions:
+  - name: my-service
+    dir: ~/Development/my-service
+    harness: codex
+    model: gpt-6.1-sol               # optional
+```
+
+Then run `bosun trust <dir>` for any folder Codex has not seen, and `bosun doctor`.
+
+**What it may do.** Windows start with `BOSUN_CODEX_FLAGS`, by default `--no-daemon --approve-for-me`: Codex's
+sandbox, and an automatic reviewer that decides when a command may go past it, with no prompts. bosun also
+gives the sandbox the repo's `.git`, its own state folder and the network, or nothing could be committed,
+reported or pushed. Keep `--no-daemon`: bosun needs each session in its own process.
+
+**What differs from a Claude Code window**, among them no Remote Control from your phone, a revoked login
+that is not reported, and no Impact stats or learning yet:
+[what Codex windows do not have yet](design/harnesses.md#what-codex-windows-do-not-have-yet).
 
 ## Claude Code login
 

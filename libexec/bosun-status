@@ -41,7 +41,7 @@ fi
 
 echo
 echo "Claude login (the watchdog's login-expired check alerts when it fails)"
-{ session_exists && window_claude_pids; } | claude_login status | sed 's/^/  /'
+{ session_exists && window_agent_pids; } | claude_login status | sed 's/^/  /'
 
 echo
 echo "Watchdog ($(watchdog_label))"

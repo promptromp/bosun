@@ -70,3 +70,10 @@ Repo sessions run in Claude Code's auto mode by default (`BOSUN_CLAUDE_FLAGS`), 
 reviews each action. A site can change that to `--dangerously-skip-permissions`, which has no checks and,
 in Claude Code's own words, "offers no protection against prompt injection": not on a machine holding
 production credentials.
+
+A repo session on Codex runs in its sandbox with its automatic reviewer (`BOSUN_CODEX_FLAGS`:
+`--no-daemon --approve-for-me`), and bosun adds the repo's `.git`, its own state folder and the network to
+what the sandbox allows. `--dangerously-bypass-approvals-and-sandbox` in that setting would remove both, for
+the same reasons not to. The rules in a task are text on Codex as they are on Claude Code: a session follows
+them, but neither agent's safety check is what enforces them. See
+[Agents](design/harnesses.md#what-codex-needed).

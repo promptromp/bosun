@@ -3,6 +3,8 @@
 # The same name is used for the window, --name and the Remote Control session.
 # Optional per window: `model` (opus, sonnet, haiku, fable or a full name) and `effort` (low,
 # medium, high, xhigh, max); defaults: BOSUN_MODEL / BOSUN_EFFORT in bosun.env.
+# Optional per window: `harness` (claude or codex), to run this one on another agent than BOSUN_HARNESS.
+# On Codex `model` is one of its models, and the default is BOSUN_CODEX_MODEL.
 sessions:
   - name: my-service
     dir: ~/Development/my-service

@@ -307,6 +307,30 @@ class OtherQuestionsTest(unittest.TestCase):
         self.assertEqual(options[-1].label, "haiku, as now")
         self.assertTrue(options[-1].recommended)
 
+    def test_codex_is_only_offered_when_it_is_ready(self) -> None:
+        _, ui = run(ALL_RECOMMENDED)
+        self.assertFalse(any("Which agent" in screen for screen in ui.screens))
+
+    def test_choosing_codex_asks_nothing_about_claude_s_permissions(self) -> None:
+        answers, ui = run(
+            [ENTER, ENTER, ENTER, "2", ENTER, ENTER, "y"], facts(ready_agents=("claude", "codex"))
+        )
+        assert answers is not None
+        self.assertEqual(answers.harness, "codex")
+        self.assertTrue(any("Which agent" in screen for screen in ui.screens))
+        self.assertTrue(any("model should the orchestrator" in screen for screen in ui.screens))
+        self.assertFalse(any("handle permissions" in screen for screen in ui.screens))
+        self.assertIn("step 6 of 6", ui.screens[5])
+
+    def test_staying_on_claude_code_asks_as_before(self) -> None:
+        answers, ui = run(
+            [ENTER, ENTER, ENTER, ENTER, ENTER, ENTER, ENTER, "y"], facts(ready_agents=("claude", "codex"))
+        )
+        assert answers is not None
+        self.assertEqual(answers.harness, "claude")
+        self.assertTrue(any("handle permissions" in screen for screen in ui.screens))
+        self.assertIn("step 7 of 7", ui.screens[6])
+
     def test_auto_mode_is_recommended_and_says_what_it_does(self) -> None:
         answers, ui = run(ALL_RECOMMENDED)
         assert answers is not None

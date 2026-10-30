@@ -34,7 +34,7 @@ start_fresh() {
   local specs name dir kind created=0
   specs="$(window_specs)" || exit 1
   log "starting tmux session '$SESSION' from $BOSUN_SESSIONS_FILE"
-  while IFS=$'\t' read -r name dir kind model effort; do
+  while IFS=$'\t' read -r name dir kind model effort _; do
     [ -n "$name" ] || continue
     if [ ! -d "$dir" ]; then
       log "$name: directory $dir does not exist; skipping the window"

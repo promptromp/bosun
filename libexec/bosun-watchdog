@@ -10,7 +10,7 @@
 #   checkin-missing  the checkin window is gone or not running the check-in loop
 #   orchestrator-down the orchestrator's Claude has not run for BOSUN_WATCHDOG_ORCHESTRATOR_DOWN_MINUTES
 #                    awake minutes; relaunches it once per outage (BOSUN_WATCHDOG_ORCHESTRATOR_RESTART)
-#   stalled-start    a Claude window has run 5+ min without reaching a session: a first-run or trust screen
+#   stalled-start    a window's agent has run 5+ min without reaching a session: a first-run or trust screen
 #   waiting          a Claude window has waited BOSUN_ALERT_WAITING_MINUTES at a prompt
 #   log-errors       new ERROR lines in the check-in and launchd logs (the first run only baselines)
 #   ledger-stuck     a ledger item delegated for BOSUN_WATCHDOG_DELEGATED_HOURS awake hours
@@ -82,7 +82,7 @@ collect_facts() {
   local session=false checkin_window=false checkin_loop=false windows="" pane_pid
   if session_exists; then
     session=true
-    windows="$(window_claude_facts)"
+    windows="$(window_agent_facts)"
     read -r pane_pid _ <<<"$(find_window checkin)"
     if [ -n "${pane_pid:-}" ]; then
       checkin_window=true
@@ -93,7 +93,7 @@ collect_facts() {
     --argjson checkin_loop "$checkin_loop" --arg windows "$windows" --arg job "$(morning_job)" '{
       session_exists: $session,
       windows: [$windows | split("\n")[] | select(length > 0) | split("\t")
-        | {name: .[0], claude_pid: ((.[1] // "") | if . == "" then null else tonumber end),
+        | {name: .[0], agent_pid: ((.[1] // "") | if . == "" then null else tonumber end),
            starting_pid: ((.[2] // "") | if . == "" then null else tonumber end)}],
       checkin_window: $checkin_window,
       checkin_loop: $checkin_loop,

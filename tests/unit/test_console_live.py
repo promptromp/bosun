@@ -35,7 +35,7 @@ def window(name: str, kind: str, pid: int | None = None, status: str = "idle") -
         "model": "-",
         "effort": "-",
         "window": True,
-        "claude": running if pid else None,
+        "agent": running if pid else None,
     }
 
 
@@ -46,7 +46,7 @@ WINDOWS = [
 ]
 WATCHDOG_FACTS = {
     "session_exists": True,
-    "windows": [{"name": "orch", "claude_pid": 4101}, {"name": "exporter", "claude_pid": 4102}],
+    "windows": [{"name": "orch", "agent_pid": 4101}, {"name": "exporter", "agent_pid": 4102}],
     "checkin_window": True,
     "checkin_loop": True,
     "morning_job": {"state": "not running", "last_exit_code": "0"},
@@ -213,7 +213,7 @@ class CollectTestCase(unittest.TestCase):
         transcript = self.state / "orch.jsonl"
         transcript.write_text("")
         windows: list[dict[str, Any]] = [
-            {**WINDOWS[0], "claude": {**WINDOWS[0]["claude"], "transcript": str(transcript)}}
+            {**WINDOWS[0], "agent": {**WINDOWS[0]["agent"], "transcript": str(transcript)}}
         ]
         facts = Collector(self.settings, FakeCommands({"sessions --json": json.dumps(windows)})).collect()
         self.assertEqual(list(facts.window_logins), ["orch"])

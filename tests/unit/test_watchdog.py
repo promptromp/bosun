@@ -934,7 +934,7 @@ class InputsTest(unittest.TestCase):
         facts = Facts.from_json(
             {
                 "session_exists": True,
-                "windows": [{"name": "a", "claude_pid": 5}, {"name": "b", "claude_pid": None}],
+                "windows": [{"name": "a", "agent_pid": 5}, {"name": "b", "agent_pid": None}],
                 "morning_job": {"state": "", "last_exit_code": ""},
             }
         )

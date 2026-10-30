@@ -1,7 +1,8 @@
 # Orchestrator
 
-The `orchestrator` window runs an interactive Claude session with Remote Control, so you can
-answer it from your phone. Unlike the repo windows it:
+The `orchestrator` window runs an interactive Claude Code session with Remote Control, so you can
+answer it from your phone. It hands tasks to repo windows whichever agent runs in them, Claude Code or
+[Codex](setup.md#running-repo-sessions-on-codex). Unlike the repo windows it:
 
 - **starts a fresh conversation every day** (`orchestrator-YYYY-MM-DD`). `refresh` restarts it once
   it is idle the next morning. Continuity lives in the ledger, not the chat history.

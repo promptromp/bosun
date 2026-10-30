@@ -31,6 +31,7 @@ Security problems: report them privately as SECURITY.md describes, not here.
 **Versions**
 - bosun: `git -C <your checkout> rev-parse --short HEAD`
 - Claude Code: `claude --version`
+- Codex, if a window runs it: `codex --version`
 - macOS: `sw_vers -productVersion`
 - tmux: `tmux -V`
 

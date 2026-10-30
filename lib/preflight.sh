@@ -6,11 +6,12 @@
 # exits early. In three layers, so that another OS or agent is one more file:
 #   1. the OS picks a platform profile (lib/platforms/<os>.sh): its package manager, how to install
 #      from it, and what to say when something is missing
-#   2. a harness profile (lib/harnesses/<harness>.sh): how to check that agent is ready
+#   2. a harness profile for each agent in use (lib/harnesses/<harness>.sh): how to check it is ready
 #   3. this flow, which knows neither
 # Plain POSIX sh, because it runs before Python 3.13 is known to be there.
 #   --quiet   only print what needs doing
-# BOSUN_PLATFORM and BOSUN_HARNESS override what it picks. BOSUN_RERUN is what to run afterwards.
+# BOSUN_PLATFORM overrides the OS it goes by. BOSUN_HARNESSES lists the agents to check, from
+# harnesses_in_use (lib/agents.sh). BOSUN_RERUN is what to run afterwards.
 #
 # Exit status: 0 all there, 1 something to do, 2 this OS or harness has no profile.
 
@@ -56,19 +57,18 @@ load_profiles() {
     printf "bosun does not run on %s yet. It runs on macOS today, and Linux is next: %s\n" "$platform" "$ROADMAP_URL"
     exit 2
   fi
-  harness="${BOSUN_HARNESS:-claude}"
-  if [ ! -f "$ROOT/lib/harnesses/$harness.sh" ]; then
+  # shellcheck disable=SC1090 # chosen just above
+  . "$ROOT/lib/platforms/$platform.sh"
+  harnesses="${BOSUN_HARNESSES:-claude}"
+  for harness in $harnesses; do
+    [ -f "$ROOT/lib/harnesses/$harness.sh" ] && continue
     printf "bosun has no profile for the harness '%s' yet. It has:" "$harness"
     for profile in "$ROOT"/lib/harnesses/*.sh; do
       printf ' %s' "$(basename "$profile" .sh)"
     done
     printf '\n'
     exit 2
-  fi
-  # shellcheck disable=SC1090 # chosen just above
-  . "$ROOT/lib/platforms/$platform.sh"
-  # shellcheck disable=SC1090 # chosen just above
-  . "$ROOT/lib/harnesses/$harness.sh"
+  done
 }
 
 # The two things everything else stands on. Without the first, even asking can open a dialog.
@@ -119,6 +119,17 @@ check_logins() {
   else
     check_todo "GitHub CLI not logged in" "Log in to GitHub: gh auth login"
   fi
+}
+
+check_harnesses() {
+  checked=" "
+  for harness in $harnesses; do
+    case "$checked" in *" $harness "*) continue ;; esac
+    checked="$checked$harness "
+    # shellcheck disable=SC1090 # checked in load_profiles
+    . "$ROOT/lib/harnesses/$harness.sh"
+    check_harness
+  done
 }
 
 check_harness() {
@@ -172,7 +183,7 @@ main() {
     steps="$steps$(platform_install_command $packages)$NEWLINE"
   fi
   check_logins
-  check_harness
+  check_harnesses
   finish
 }
 

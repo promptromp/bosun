@@ -29,7 +29,7 @@ showed where that breaks:
 - The ledger (items, history, delegations, reports, proposals) is the protocol between sessions;
   only `bosun` commands write it ([lineage.md](lineage.md) for tasks and links).
 - `bosun send` pastes into a window (tmux bracketed paste), only when Claude takes input
-  (`claude_takes_input`: idle, busy, shell; never `waiting`), nobody typed in that window within
+  (`agent_takes_input`: idle, busy, shell; never `waiting`), nobody typed in that window within
   `BOSUN_SEND_TYPING_MINUTES` and its input line is empty (`lib/pane_input.py`; it waits up
   to `BOSUN_SEND_WAIT_SECONDS`). After the Enter it checks Claude took the prompt (the line
   emptied, no "Unknown command") within `BOSUN_SEND_CONFIRM_SECONDS`, else it fails so the

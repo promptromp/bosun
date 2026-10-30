@@ -15,7 +15,7 @@ bosun has no releases yet, so fixes land on `main` only: update with `git pull` 
 
 ## What matters most
 
-bosun runs Claude Code sessions with your credentials and can act in Slack, GitHub and your
+bosun runs Claude Code and Codex sessions with your credentials and can act in Slack, GitHub and your
 tracker, so these are the reports we most want:
 
 - a way around the approvals gate (`lib/guard.py`, `lib/approvals.py`): an outward action, such as
@@ -26,7 +26,8 @@ tracker, so these are the reports we most want:
   without redaction (`lib/redact.py`);
 - the launchd jobs and scripts: a way to make them run code that another user can write.
 
-Problems in Claude Code itself go to Anthropic, through its responsible disclosure policy.
+Problems in Claude Code itself go to Anthropic, and in Codex itself to OpenAI, through their responsible
+disclosure policies.
 
 ## Bug bounties
 

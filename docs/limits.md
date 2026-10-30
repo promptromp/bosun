@@ -9,6 +9,12 @@ See also [ROADMAP.md](../ROADMAP.md) for planned work and open questions.
   --json` (login detection, verified on 2.1.304). Verified on Claude Code 2.1.296 to 2.1.300. If a Claude Code update changes
   them, `tests/smoke.sh` still passes (it uses fixtures), so check with
   `bosun refresh --dry-run` and `bosun doctor` after major updates.
+- Relies on Codex internals that are not a public API either, all in `lib/codex_state.py`: the session
+  files in `~/.codex/sessions/`, `[projects]` in `~/.codex/config.toml`, the JSON of its `notify=` program
+  and the screens `lib/pane_input.py` reads. Verified on Codex 0.166.0. After a Codex update, check with
+  `bosun doctor`, and with `tests/sandbox.sh mac live codex` if you can.
+- Codex windows do not have everything a Claude Code window has, and the orchestrator needs Claude Code:
+  see [the list](design/harnesses.md#what-codex-windows-do-not-have-yet).
 - Whether Remote Control reconnects after a long sleep without a restart is not verified. Sessions
   that `refresh` restarts get a fresh connection.
 - Static AWS credential variables (`AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`,
@@ -34,7 +40,7 @@ See also [ROADMAP.md](../ROADMAP.md) for planned work and open questions.
   Check-ins only process what is new since the last run. `bosun chores --dry-run` prints the
   cost of a run.
 - Every delegated task starts work in a repo window. `bosun send --new` and `--start` each
-  start a Claude session, so the orchestrator proposes them for approval rather than running them
+  start an agent's session, so the orchestrator proposes them for approval rather than running them
   itself. A session you have open in your own terminal cannot be started in tmux at the same time;
   `--start` then fails with "already running", and the orchestrator tells you rather than opening
   another window.

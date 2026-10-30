@@ -18,6 +18,7 @@ from unittest import mock
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "lib"))
+import agent_files  # noqa: E402
 import claude_state  # noqa: E402
 import login  # noqa: E402
 from claude_state import (  # noqa: E402
@@ -197,7 +198,7 @@ class LastApiErrorTest(TmpCase):
         self.add(prompt(0), reply(1))
         self.add(*[reply(2, "x" * 500) for _ in range(40)])
         self.add(*[error_reply(10 + n, "Login expired", **EXPIRED) for n in range(30)])
-        with mock.patch.object(claude_state, "TAIL_CHUNK_BYTES", 1024):
+        with mock.patch.object(agent_files, "TAIL_CHUNK_BYTES", 1024):
             error = claude_state.last_api_error(self.transcript)
         assert error is not None
         self.assertEqual(error.since, T0 + timedelta(minutes=10))
@@ -216,7 +217,7 @@ class LastApiErrorTest(TmpCase):
             self.assertEqual(claude_state.main(["api-error", str(self.transcript)]), 0)
         self.assertEqual(json.loads(out.getvalue())["category"], AUTH)
         self.add(reply(5))
-        self.assertEqual(claude_state.main(["api-error", str(self.transcript)]), claude_state.NOT_FOUND)
+        self.assertEqual(claude_state.main(["api-error", str(self.transcript)]), agent_files.NOT_FOUND)
 
 
 class AuthStatusTest(unittest.TestCase):
