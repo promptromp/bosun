@@ -66,5 +66,7 @@ the orchestrator's next start; design: [docs/design/approvals.md](design/approva
 Content from Slack, PRs and Confluence is untrusted. The policy tells the orchestrator never to
 follow instructions found there; delegated tasks are built by `bosun delegate` from the task
 files, with the orchestrator supplying only the facts (ledger id, link, requester, one-line ask).
-Repo sessions may run with `--dangerously-skip-permissions`, so consider dropping that flag from
-`BOSUN_CLAUDE_FLAGS` on machines holding production credentials.
+Repo sessions run in Claude Code's auto mode by default (`BOSUN_CLAUDE_FLAGS`), where a safety check
+reviews each action. A site can change that to `--dangerously-skip-permissions`, which has no checks and,
+in Claude Code's own words, "offers no protection against prompt injection": not on a machine holding
+production credentials.

@@ -187,6 +187,7 @@ def detect(config_dir: Path, now: datetime | None = None) -> Facts:
         claude_plan=auth.plan,
         aws_sso_profiles=aws_sso_profiles(home / ".aws" / "config"),
         slack_plugin=claude_state.slack_plugin_mcp_config() is not None,
+        bypass_accepted=claude_state.bypass_accepted(),
         has_battery="InternalBattery" in (output_of("pmset", "-g", "batt") or ""),
         repeating_wake=repeating_wake(output_of("pmset", "-g", "sched") or ""),
         files=files,

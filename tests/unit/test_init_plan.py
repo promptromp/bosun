@@ -462,8 +462,38 @@ class PlanTest(unittest.TestCase):
         self.assertIn(" 09:05:00", delayed.wake_command)
         self.assertEqual(self.plan(facts(), Answers(wake=False)).wake_command, "")
 
-    def test_skipping_permissions_is_disclosed_on_a_first_run(self) -> None:
-        self.assertIn("--dangerously-skip-permissions", " ".join(self.plan(facts(), Answers()).notes))
+    def test_a_first_run_says_how_sessions_handle_permissions(self) -> None:
+        self.assertIn("auto mode", " ".join(self.plan(facts(), Answers()).notes))
+
+    def test_bypass_says_what_it_costs_and_that_its_warning_needs_accepting(self) -> None:
+        notes = " ".join(self.plan(facts(), Answers(permissions="bypass")).notes)
+        self.assertIn("no protection against prompt injection", notes)
+        self.assertIn("accept that mode's warning once", notes)
+        accepted = " ".join(self.plan(facts(bypass_accepted=True), Answers(permissions="bypass")).notes)
+        self.assertNotIn("accept that mode's warning once", accepted)
+
+    def test_the_answer_becomes_the_flags(self) -> None:
+        self.assertIn('BOSUN_CLAUDE_FLAGS="--permission-mode auto --chrome"', init_plan.render_env(Answers()))
+        bypass = init_plan.render_env(Answers(permissions="bypass"))
+        self.assertIn('BOSUN_CLAUDE_FLAGS="--dangerously-skip-permissions --chrome"', bypass)
+
+    def test_a_config_on_bypass_stays_on_bypass(self) -> None:
+        env = {"BOSUN_CLAUDE_FLAGS": "--dangerously-skip-permissions --chrome"}
+        self.assertEqual(init_plan.recommend(facts(env=env)).permissions, "bypass")
+        self.assertEqual(init_plan.recommend(facts()).permissions, "auto")
+
+    def test_flags_you_added_stay_until_you_change_the_answer(self) -> None:
+        text = 'BOSUN_CLAUDE_FLAGS="--permission-mode auto --verbose"\n'
+        the_facts = facts(files={"bosun.env": text}, env=init_plan.parse_env(text))
+        same = self.plan(the_facts, init_plan.recommend(the_facts)).files[0].text
+        self.assertEqual(init_plan.parse_env(same)["BOSUN_CLAUDE_FLAGS"], "--permission-mode auto --verbose")
+        changed = (
+            self.plan(the_facts, replace(init_plan.recommend(the_facts), permissions="bypass")).files[0].text
+        )
+        self.assertIn("--dangerously-skip-permissions", init_plan.parse_env(changed)["BOSUN_CLAUDE_FLAGS"])
+
+    def test_an_unknown_answer_is_refused(self) -> None:
+        self.assertIn("permissions", " ".join(init_plan.validate(Answers(permissions="yolo"))))
 
     def test_a_kept_wake_says_how_to_replace_it(self) -> None:
         plan = self.plan(facts(repeating_wake="wake at 6:00AM"), Answers(wake=False))

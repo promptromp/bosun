@@ -621,6 +621,10 @@ echo "tmux session (isolated socket, dry-run windows)"
 wait_for 10 has_windows "alpha beta gamma "
 windows="$(tmux -L "$SOCKET" list-windows -t "=smoke" -F '#{window_name}' 2>/dev/null | tr '\n' ' ')"
 check "start creates one window per session" test "$windows" = "alpha beta gamma "
+tmux -L "$SOCKET" new-window -d -t "=smoke" -n at-a-screen "bash -c '(exec -a fake-claude sleep 60); true'"
+check "the watchdog sees a Claude that has no session yet" wait_for 5 bash -c '"$1" watchdog --facts | jq -e ".windows[] | select(.name == \"at-a-screen\") | .starting_pid > 0 and .claude_pid == null" >/dev/null' _ "$BOSUN"
+tmux -L "$SOCKET" kill-window -t "=smoke:at-a-screen"
+check "windows are found without a UTF-8 locale too" bash -c 'LC_ALL=C "$1" sessions --json | jq -e "[.[] | select(.name == \"alpha\")] | .[0].window == true" >/dev/null' _ "$BOSUN"
 # -S -200: the launch line (its --settings JSON) wraps over more rows than the window shows.
 check "window runs the launcher" wait_for 10 bash -c 'tmux -L "$1" capture-pane -p -S -200 -t "=smoke:0" | grep -q "dry-run: would run"' _ "$SOCKET"
 tmux -L "$SOCKET" kill-window -t "=smoke:2"
@@ -1888,6 +1892,7 @@ if [ "$(bash -c 'source "$1/lib/common.sh"; command -v launchctl; command -v pms
   check "uninstall keeps the config without --purge" test -f "$INSTALL_CFG/bosun.env"
 
   echo "init (fake launchctl and pmset, test label)"
+  export BOSUN_SKIP_PREFLIGHT=1 # what bosun needs has its own tests, on a made-up machine
   INIT_CFG="$WORK/init-config"
   INIT_REPO="$HOME/Development/init-api"
   git init -q "$INIT_REPO"
@@ -1912,12 +1917,13 @@ if [ "$(bash -c 'source "$1/lib/common.sh"; command -v launchctl; command -v pms
   check "the learning agent is valid XML, not only what plutil lets through" python3 -c 'import plistlib, sys; plistlib.loads(open(sys.argv[1], "rb").read())' "$HOME/Library/LaunchAgents/$BOSUN_LAUNCHD_LABEL.learn.plist"
   check "... at the time the answers imply" grep -q "<key>Hour</key><integer>16</integer><key>Minute</key><integer>30</integer>" "$HOME/Library/LaunchAgents/$BOSUN_LAUNCHD_LABEL.learn.plist"
   BOSUN_CONFIG_DIR="$INIT_CFG" "$ROOT/uninstall.sh" >/dev/null 2>&1
+  unset BOSUN_SKIP_PREFLIGHT
 
   echo "get.sh (a dry run: it changes nothing)"
   check "it is plain sh" sh -n "$ROOT/get.sh"
   check "it says how to use it" bash -c 'sh "$1/get.sh" --help | grep -q "Usage: get.sh"' _ "$ROOT"
   check "it refuses what it does not know" fails_with "unknown option" sh "$ROOT/get.sh" --typo
-  check "a dry run says what it would do" bash -c 'BOSUN_DIR="$2" sh "$1/get.sh" --dry-run | grep -q "Then it would start: $2/bin/bosun init"' _ "$ROOT" "$WORK/get-bosun"
+  check "a dry run says what it would do" bash -c 'BOSUN_DIR="$2" sh "$1/get.sh" --dry-run | grep -q "git clone"' _ "$ROOT" "$WORK/get-bosun"
   check "... and does none of it" test ! -e "$WORK/get-bosun"
   check "everything in it is in functions, so a download cut short does nothing" bash -c '[ "$(tail -1 "$1/get.sh")" = "main \"\$@\"" ]' _ "$ROOT"
 else

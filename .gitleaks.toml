@@ -1,0 +1,10 @@
+# gitleaks' own Anthropic rule only matches one key length, and keys in use are shorter: it let a
+# made-up key of the length Anthropic issues today straight through. This one matches any length.
+[extend]
+useDefault = true
+
+[[rules]]
+id = "anthropic-api-key-any-length"
+description = "An Anthropic API key, of any length"
+regex = '''sk-ant-[a-zA-Z0-9_-]{20,}'''
+keywords = ["sk-ant-"]

@@ -43,9 +43,24 @@ MAX_UNUSED_REPOS = 3  # when there is no history to go by
 MIN_PROMPTS = 20
 OPUS_PLANS = frozenset({"max", "team", "enterprise"})
 LINE_WIDTH = 78
-SKIP_PERMISSIONS_NOTE = (
-    "Repo sessions start with --dangerously-skip-permissions (BOSUN_CLAUDE_FLAGS), so an unattended "
-    "session does not stall at a prompt. Change it in bosun.env if you prefer prompts."
+AUTO, BYPASS = "auto", "bypass"
+PERMISSION_FLAGS = {
+    AUTO: "--permission-mode auto --chrome",
+    BYPASS: "--dangerously-skip-permissions --chrome",
+}
+BYPASS_FLAG = "--dangerously-skip-permissions"
+AUTO_NOTE = (
+    "Repo sessions run in Claude's auto mode (BOSUN_CLAUDE_FLAGS): a safety check reviews each action and "
+    "blocks risky ones. If it blocks several in a row, the session waits at a prompt, and the watchdog "
+    "tells you."
+)
+BYPASS_NOTE = (
+    "Repo sessions run with --dangerously-skip-permissions (BOSUN_CLAUDE_FLAGS): no safety checks, and "
+    "Claude's docs say it offers no protection against prompt injection."
+)
+BYPASS_ACCEPT_NOTE = (
+    "Before the first start, accept that mode's warning once, or the sessions will stop at it: run "
+    "claude --dangerously-skip-permissions, choose Yes, then /exit."
 )
 
 
@@ -80,6 +95,7 @@ class Facts:
     claude_plan: str = ""
     aws_sso_profiles: tuple[str, ...] = ()
     slack_plugin: bool = False
+    bypass_accepted: bool = False
     has_battery: bool = False
     repeating_wake: str = ""  # the repeating event pmset has now
     files: Mapping[str, str] = field(default_factory=dict)  # the config files that exist, by name
@@ -108,6 +124,7 @@ class Answers:
     learning: bool = True
     slack_watch: bool = False
     model: str = DEFAULT_MODEL
+    permissions: str = AUTO
     repo_mask: str = ""
     repos_dir: str = DEFAULT_REPOS_DIR
     aws_sso_profiles: tuple[str, ...] = ()
@@ -124,7 +141,7 @@ WINDOW_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]*$")
 MODEL_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._\[\]-]*$")
 CONTROL = re.compile(r"[\x00-\x1f\x7f]")
 BOOL_ANSWERS = ("events", "approvals", "learning", "slack_watch", "wake", "trust")
-TEXT_ANSWERS = ("days", "start", "until", "model", "repo_mask", "repos_dir")
+TEXT_ANSWERS = ("days", "start", "until", "model", "permissions", "repo_mask", "repos_dir")
 
 
 def answers_to_json(answers: Answers) -> dict[str, Any]:
@@ -214,6 +231,8 @@ def validate(answers: Answers) -> list[str]:
     problems = schedule_problems(answers) + repo_problems(answers.repos)
     if answers.slack_watch and not answers.events:
         problems.append("slack_watch: the Slack watcher needs events on")
+    if answers.permissions not in PERMISSION_FLAGS:
+        problems.append(f"permissions: '{answers.permissions}' must be {AUTO} or {BYPASS}")
     if not MODEL_NAME.match(answers.model):
         problems.append(f"model: '{answers.model}' is not a model name")
     texts = [answers.repo_mask, answers.repos_dir, *answers.aws_sso_profiles, *(r.dir for r in answers.repos)]
@@ -344,6 +363,10 @@ def recommended_mask(facts: Facts, uses: Sequence[RepoUse]) -> str:
     return " ".join(sorted({use.owner for use in uses if use.owner}))
 
 
+def recommended_permissions(facts: Facts) -> str:
+    return BYPASS if BYPASS_FLAG in facts.env.get("BOSUN_CLAUDE_FLAGS", "") else AUTO
+
+
 def recommended_model(facts: Facts) -> str:
     if facts.env:
         return facts.env.get("BOSUN_MODEL") or DEFAULT_MODEL
@@ -370,6 +393,7 @@ def recommend(facts: Facts) -> Answers:
         learning=on("BOSUN_LEARN_ENABLED", True),
         slack_watch=on("BOSUN_SLACK_WATCH_ENABLED", facts.slack_plugin and events),
         model=recommended_model(facts),
+        permissions=recommended_permissions(facts),
         repo_mask=recommended_mask(facts, uses),
         repos_dir=recommended_repos_dir(facts, uses),
         # With more than one profile, which one the mornings should log in to is your call.
@@ -417,6 +441,10 @@ def env_groups(answers: Answers) -> list[tuple[str, list[tuple[str, str]]]]:
                 ("BOSUN_ORCHESTRATOR_MODEL", answers.model),
                 ("BOSUN_LEARN_MODEL", answers.model),
             ],
+        ),
+        (
+            "How repo sessions handle permissions",
+            [("BOSUN_CLAUDE_FLAGS", PERMISSION_FLAGS[answers.permissions])],
         ),
         (
             "Where the repos are, and which are in scope",
@@ -486,6 +514,8 @@ def settings_to_keep(facts: Facts, answers: Answers) -> frozenset[str]:
     set apart from it stays yours; changing the answer moves them along."""
     env = facts.env
     kept: set[str] = set()
+    if recommended_permissions(facts) == answers.permissions:
+        kept.add("BOSUN_CLAUDE_FLAGS")  # other flags you added to them stay
     if env.get("BOSUN_MODEL", DEFAULT_MODEL) == answers.model:
         kept |= {"BOSUN_ORCHESTRATOR_MODEL", "BOSUN_LEARN_MODEL"}
     schedule = (env.get("BOSUN_START_TIME", DEFAULT_START), env.get("BOSUN_AWAKE_UNTIL", DEFAULT_UNTIL))
@@ -717,9 +747,19 @@ def feature_notes(facts: Facts, answers: Answers) -> list[str]:
     return found
 
 
+def permission_notes(facts: Facts, answers: Answers) -> list[str]:
+    if answers.permissions == BYPASS:
+        return [BYPASS_NOTE] + ([] if facts.bypass_accepted else [BYPASS_ACCEPT_NOTE])
+    return [AUTO_NOTE] if ENV_FILE not in facts.files else []
+
+
 def notes(facts: Facts, answers: Answers) -> tuple[str, ...]:
-    first_run = [SKIP_PERMISSIONS_NOTE] if ENV_FILE not in facts.files else []
-    return tuple(login_notes(facts) + feature_notes(facts, answers) + wake_notes(facts, answers) + first_run)
+    return tuple(
+        login_notes(facts)
+        + feature_notes(facts, answers)
+        + wake_notes(facts, answers)
+        + permission_notes(facts, answers)
+    )
 
 
 def blockers(facts: Facts, state: DirState, files: Sequence[FileChange]) -> tuple[str, ...]:
@@ -784,6 +824,7 @@ def summary_lines(answers: Answers) -> list[str]:
         f"  Schedule  {describe_days(answers.days)}, {answers.start} to {answers.until}",
         f"  Features  {describe_features(answers)}",
         f"  Model     {answers.model}",
+        f"  Sessions  {'auto mode' if answers.permissions == AUTO else 'bypass mode, no permission checks'}",
     ]
 
 

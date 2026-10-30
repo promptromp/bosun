@@ -61,7 +61,7 @@ set_defaults() {
   BOSUN_COMPACT_CONTEXT="1"
   BOSUN_COMPACT_CONTEXT_MAX_CHARS="1500"
   BOSUN_CLAUDE_BIN="claude"
-  BOSUN_CLAUDE_FLAGS="--dangerously-skip-permissions --chrome"
+  BOSUN_CLAUDE_FLAGS="--permission-mode auto --chrome"
   # Model and effort for the repo sessions; sessions.yml entries can override them per window.
   # Model: an alias (opus, sonnet, haiku, fable) or a full model name. Effort: low, medium, high,
   # xhigh or max. Empty: Claude Code's own default, i.e. your last /model and /effort choice.
@@ -407,10 +407,12 @@ notify() {
 }
 
 tmux_cmd() {
+  # -u: without a UTF-8 locale (LC_ALL=C), tmux prints the tabs in its -F formats as "_", and every
+  # window would look missing.
   if [ -n "$BOSUN_TMUX_SOCKET" ]; then
-    tmux -L "$BOSUN_TMUX_SOCKET" "$@"
+    tmux -u -L "$BOSUN_TMUX_SOCKET" "$@"
   else
-    tmux "$@"
+    tmux -u "$@"
   fi
 }
 
@@ -751,6 +753,36 @@ window_claude_pids() {
       pid="$(claude_pid_under "$pane_pid")" || pid=""
       printf '%s\t%s\n' "$name" "$pid"
     done
+}
+
+# window_claude_pids plus, for a window whose Claude has no session record yet, that process's pid.
+window_claude_facts() {
+  local name pane_pid pid starting
+  tmux_cmd list-windows -t "=$BOSUN_SESSION_NAME" -F '#{window_name}	#{pane_pid}' 2>/dev/null |
+    while IFS=$'\t' read -r name pane_pid; do
+      starting=""
+      pid="$(claude_pid_under "$pane_pid")" || {
+        pid=""
+        starting="$(claude_pid_starting "$pane_pid")"
+      }
+      printf '%s\t%s\t%s\n' "$name" "$pid" "$starting"
+    done
+}
+
+# PID of a Claude Code process under a tmux pane, session record or not. Every screen before a session
+# (first run, trust) runs without a record, so claude_pid_under cannot see it. Goes by the first word of
+# its command line, which is the name however it was installed: the npm one's process is called node.
+claude_pid_starting() { # <pane_pid>
+  local pid command name
+  name="$(basename "$BOSUN_CLAUDE_BIN")"
+  for pid in $(descendants "$1"); do
+    command="$(ps -o command= -p "$pid" 2>/dev/null)"
+    if [ "$(basename "${command%% *}")" = "$name" ]; then
+      echo "$pid"
+      return 0
+    fi
+  done
+  return 1
 }
 
 # The model and effort a running Claude was launched with, as "model<TAB>effort<TAB>bosun"

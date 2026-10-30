@@ -183,16 +183,6 @@ def wants_wizard(args: argparse.Namespace) -> bool:
     return not asked_for_something and sys.stdin.isatty() and sys.stdout.isatty()
 
 
-def log_in_first(ui: init_wizard.Ui, facts: Facts, config_dir: Path) -> Facts:
-    """Offer the logins that are missing. They decide what is recommended: the plan picks the model."""
-    logins = init_wizard.LOGIN_COMMANDS
-    missing = [tool for tool in init_wizard.missing_logins(facts) if shutil.which(logins[tool][0])]
-    wanted = [tool for tool in missing if init_wizard.ask_login(ui, tool)]
-    for tool in wanted:
-        subprocess.run(logins[tool], check=False)
-    return init_detect.detect(config_dir) if wanted else facts
-
-
 def start_windows() -> None:
     subprocess.run([str(ROOT / "bin" / "bosun"), "start"], check=False)
     print("\nThe windows are up. `bosun attach` opens them, and `bosun console` shows what they are doing.")
@@ -205,7 +195,6 @@ def run_wizard(facts: Facts, config_dir: Path) -> int:
         return init_plan.build_plan(facts, answers, dir_state(answers), force=True)
 
     try:
-        facts = log_in_first(ui, facts, config_dir)
         machine = init_wizard.Machine(plan_for, typed_repo)
         answers = init_wizard.run(ui, facts, init_plan.recommend(facts), machine, str(config_dir))
     except (init_wizard.Quit, KeyboardInterrupt):

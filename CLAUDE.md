@@ -47,7 +47,9 @@ of truth, so don't copy rules into this file.
   awake window, de-dup state and alert sinks; `libexec/bosun-watchdog` only collects the live
   facts (tmux windows, the Claude in each, the check-in loop, launchd) for it.
 - Setup (design: `docs/design/init.md`): `get.sh` (what `curl | sh` runs: plain POSIX sh, everything in
-  functions with `main` last, because people pipe it straight from `main`), `lib/init_detect.py`
+  functions with `main` last, because people pipe it straight from `main`), `lib/preflight.sh` (what
+  bosun needs and what to do about what is missing; plain sh, changes nothing, and `init` and `doctor`
+  start with it) with its profiles `lib/platforms/<os>.sh` and `lib/harnesses/<harness>.sh`, `lib/init_detect.py`
   (read-only: what the Mac shows, Claude Code's files through `lib/claude_state.py`), `lib/init_plan.py`
   (pure: recommended answers, the config files' text, the plan), `lib/init_wizard.py` (pure over a `Ui`:
   the questions), `lib/init_terminal.py` (the keys and screens) and `lib/init.py` (the CLI: writes the
@@ -161,6 +163,9 @@ of truth, so don't copy rules into this file.
 - **A config key:** default in `lib/common.sh` and the same value in
   `examples/generic/bosun.env` (tests check they match); any other example only lists
   overrides. The guide in `docs/` if users should know.
+- **An OS or an agent to support:** a profile in `lib/platforms/` or `lib/harnesses/` with the same
+  functions as the others (`tests/unit/test_preflight.py` checks); what else still assumes macOS and
+  Claude Code is listed in `docs/design/init.md`.
 - **An answer `bosun init` offers:** a field of `Answers` (`lib/init_plan.py`) with its check, what
   it recommends, the key in `env_groups` if it sets one, the table in `docs/design/init.md` and a
   test in `tests/unit/test_init_plan.py`.

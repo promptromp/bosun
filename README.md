@@ -77,9 +77,11 @@ On a Mac:
 curl -fsSL https://raw.githubusercontent.com/promptromp/bosun/main/get.sh | sh
 ```
 
-It offers to install what is missing, then asks a few questions, one key each. Bosun works out your
-repos and hours from how you already use Claude Code and recommends a setup; nothing changes until
-you have seen the plan, and it asks for `sudo` once, for the wake schedule.
+You need macOS, [Homebrew](https://brew.sh) and [Claude Code](https://claude.com/claude-code). If
+anything is missing, it says what, gives you the lines to run, and stops; run the same line again once
+they are done. Then it asks a few questions, one key each. Bosun works out your repos and hours from how
+you already use Claude Code and recommends a setup; nothing changes until you have seen the plan, and it
+asks for `sudo` once, for the wake schedule.
 
 Prefer to look first? [`get.sh`](get.sh) is short, and `sh -s -- --dry-run` after the pipe says what it
 would do. [Setup](docs/setup.md) covers the details: other ways to install, configuration and logins.

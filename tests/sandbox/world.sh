@@ -23,6 +23,7 @@ mkdir -p "$HOME/.local/bin"
 cp "$(dirname "$0")/claude-stand-in" "$HOME/.local/bin/claude"
 cp "$(dirname "$0")/gh-stand-in" "$HOME/.local/bin/gh"
 chmod +x "$HOME/.local/bin/claude" "$HOME/.local/bin/gh"
+echo '{"hasCompletedOnboarding": true}' >"$HOME/.claude.json" # a person went through the first-run screens
 
 python3 - <<'HISTORY'
 import json

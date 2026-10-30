@@ -56,7 +56,7 @@ first_look() {
   check "... the schedule from the history" says "Mon-Fri, 08:30 to 19:00" "$out"
   check "... the recommended features" says "events, approvals, learning on; Slack watcher off" "$out"
   check "... says why" says "your usual first prompt is 09:10" "$out"
-  check "... discloses the permissions" says "--dangerously-skip-permissions" "$out"
+  check "... says how sessions handle permissions" says "auto mode" "$out"
   check "... says what sudo is for" says "sudo pmset repeat wakeorpoweron MTWRF 08:31:00" "$out"
   check "... and changed nothing" bash -c '[ ! -e "$1" ] && [ ! -e "$2" ]' _ "$HOME/.local/bin/bosun" "$CONFIG"
 }
@@ -140,7 +140,7 @@ the_wizard_quit() {
   check "q on the first screen" python3 "$DRIVE" "$out" "Which repos" "q" -- "$BOSUN" init
   check "... says so" says "Nothing was changed" "$out"
   check "... and nothing is there" test ! -e "$CONFIG"
-  check "q on the plan" python3 "$DRIVE" "$out" "Which repos" "<enter>" "When should" "<enter>" "How proactive" "<enter>" "Which model" "<enter>" "wake by itself" "<enter>" "Nothing has changed yet" "q" -- "$BOSUN" init
+  check "q on the plan" python3 "$DRIVE" "$out" "Which repos" "<enter>" "When should" "<enter>" "How proactive" "<enter>" "Which model" "<enter>" "handle permissions" "<enter>" "wake by itself" "<enter>" "Nothing has changed yet" "q" -- "$BOSUN" init
   check "... and nothing is there" test ! -e "$CONFIG"
   check "ctrl-c leaves too" python3 "$DRIVE" "$out" "Which repos" "<ctrl-c>" -- "$BOSUN" init
   check "... and says so" says "Nothing was changed" "$out"
@@ -148,11 +148,29 @@ the_wizard_quit() {
   check "a typed folder, typed hours and the plan" python3 "$DRIVE" "$out" \
     "Which repos" "a" "Folder:" "~/Development/toy<enter>" "Development/toy" "<enter>" \
     "When should" "3" "Days, from" "MWF<enter>" "Start" "07:15<enter>" "Awake until" "16:45<enter>" \
-    "How proactive" "<enter>" "Which model" "<enter>" "wake by itself" "<enter>" \
+    "How proactive" "<enter>" "Which model" "<enter>" "handle permissions" "<enter>" "wake by itself" "<enter>" \
     "Mon, Wed, Fri, 07:15 to 16:45" "q" -- "$BOSUN" init
   check "r goes back to the start" python3 "$DRIVE" "$out" "Which repos" "<enter>" "When should" "r" "Which repos" "q" -- "$BOSUN" init
   check "no answers without a terminal: only the plan" bash -c '"$1" init </dev/null | grep -q "Nothing has changed yet"' _ "$BOSUN"
   check "... and nothing is there" test ! -e "$CONFIG"
+}
+
+preflight_stops_early() {
+  local out="$HOME/preflight.txt"
+  echo "what bosun needs: it says what to do, and stops"
+  mkdir -p "$HOME/.sandbox/packages"
+  mv "$HOME/.local/bin/gh" "$HOME/.sandbox/packages/gh"
+  check "something missing stops it, with the line to run" bash -c '! "$1" init >"$2" 2>&1 && grep -q "brew install gh" "$2"' _ "$BOSUN" "$out"
+  check "... and where to get help" says "docs/setup.md#if-you-get-stuck" "$out"
+  check "... with nothing written" test ! -e "$CONFIG"
+  check "the line it gives works" bash -c '$(grep -oE "brew install [a-z0-9 ]+" "$1" | head -1) && "$2" preflight --quiet' _ "$out" "$BOSUN"
+  rm "$HOME/.claude.json"
+  check "first-run screens are for a person" bash -c '! "$1" init >"$2" 2>&1 && grep -q "run claude, then /exit" "$2"' _ "$BOSUN" "$out"
+  check "doctor agrees" bash -c '! "$1" doctor >"$2" 2>&1; grep -q "first-run screens not done" "$2"' _ "$BOSUN" "$out"
+  echo '{"hasCompletedOnboarding": true}' >"$HOME/.claude.json"
+  check "and then it passes" "$BOSUN" preflight --quiet
+  check "an OS with no profile says so" bash -c '[ "$(BOSUN_PLATFORM=plan9 "$1" preflight >/dev/null; echo $?)" = 2 ]' _ "$BOSUN"
+  check "a harness with no profile says so" bash -c 'BOSUN_HARNESS=nosuch "$1" preflight | grep -q "no profile"' _ "$BOSUN"
 }
 
 the_installer() {
@@ -160,29 +178,31 @@ the_installer() {
   echo "the installer: curl | sh, then the wizard, in a real terminal"
   branch="$(git -C "$ROOT" branch --show-current)"
   export BOSUN_REPO="$ROOT" BOSUN_BRANCH="$branch"
-  mkdir -p "$HOME/.sandbox/packages"
-  mv "$HOME/.local/bin/gh" "$HOME/.sandbox/packages/gh" # something for it to offer
-  check "a dry run says what it would do" bash -c 'sh "$1/get.sh" --dry-run >"$2" && grep -q "brew install gh" "$2"' _ "$ROOT" "$out"
+  mv "$HOME/.local/bin/gh" "$HOME/.sandbox/packages/gh"
+  check "a dry run says what it would do" bash -c 'sh "$1/get.sh" --dry-run >"$2" && grep -q "git clone" "$2"' _ "$ROOT" "$out"
   check "... and does none of it" test ! -e "$HOME/.local/share/bosun"
   check "it is plain sh" sh -n "$ROOT/get.sh"
-  check "the piped installer asks, installs and hands over to the wizard" python3 "$DRIVE" "$out" \
-    "Install them with Homebrew?" "y<enter>" \
+  check "with something missing it gets bosun, says what to do and stops" bash -c '! cat "$1/get.sh" | sh >"$2" 2>&1 && grep -q "brew install gh" "$2"' _ "$ROOT" "$out"
+  check "... and says to run the same line again" says "Then run this again: curl -fsSL" "$out"
+  brew install gh
+  check "the piped installer hands over to the wizard" python3 "$DRIVE" "$out" \
     "Which repos" "2<enter>" \
     "When should" "2" \
     "How proactive" "<enter>" \
     "Which model" "2" \
+    "handle permissions" "<enter>" \
     "wake by itself" "<enter>" \
     "Nothing has changed yet" "y" \
     "Start the windows now?" "y" \
     "The windows are up" "" \
     -- sh -c "cat '$ROOT/get.sh' | sh"
-  check "it installed what was missing" says "brew install gh" "$LOG"
   check "it put bosun where it said" test -x "$HOME/.local/share/bosun/bin/bosun"
   check "it linked that one" bash -c '[ "$(readlink "$HOME/.local/bin/bosun")" = "$HOME/.local/share/bosun/bin/bosun" ]'
   check "the toggled-off repo has no window" absent "name: web" "$CONFIG/sessions.yml"
   check "... and the chosen one does" says "name: api" "$CONFIG/sessions.yml"
   check "the schedule it was given" says 'BOSUN_DAYS="MTWRF"' "$CONFIG/bosun.env"
   check "the model it was given" says 'BOSUN_MODEL="sonnet"' "$CONFIG/bosun.env"
+  check "repo sessions are in auto mode" says "--permission-mode auto" "$CONFIG/bosun.env"
   check "the windows it started" bash -c '[ "$1" = "api checkin orchestrator " ] || { echo "windows: $1"; exit 1; }' _ "$(windows)"
   "$HOME/.local/bin/bosun" stop >/dev/null 2>&1
   check "running it again updates, then asks again" python3 "$DRIVE" "$out" "Updating" "" "Which repos" "q" -- sh -c "cat '$ROOT/get.sh' | sh"
@@ -200,6 +220,7 @@ run_again
 other_windows
 uninstall
 the_wizard_quit
+preflight_stops_early
 the_installer
 echo
 echo "$passed passed, $failed failed"

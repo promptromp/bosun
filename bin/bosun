@@ -9,6 +9,7 @@ usage() {
 Usage: bosun <command> [args]
 
 Getting started
+  preflight   Check what bosun needs on this machine, and say exactly what to do about anything missing
   init        Set bosun up from what this Mac shows (repos, hours, logins): a few questions in a
               terminal, then a plan to accept; --recommended or --answers to skip the questions
 

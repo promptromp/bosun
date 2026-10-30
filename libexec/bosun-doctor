@@ -27,6 +27,30 @@ fail() {
 }
 section() { printf '\n%s\n' "$*"; }
 
+check_preflight() {
+  local output
+  if output="$(BOSUN_RERUN="bosun doctor" sh "$BOSUN_ROOT/lib/preflight.sh" --quiet 2>&1)"; then
+    ok "everything is here (bosun preflight)"
+  else
+    fail "something is missing or not done yet:"
+    printf '%s\n' "$output" | sed 's/^/    /'
+  fi
+}
+
+# Its warning shows once per machine, with the cursor on "No, exit": an unattended window stops there.
+check_bypass_warning() {
+  case " $BOSUN_CLAUDE_FLAGS " in
+    *" --dangerously-skip-permissions "*)
+      if claude_state_accepts_bypass; then
+        ok "bypass mode's warning was accepted"
+      else
+        fail "repo sessions use --dangerously-skip-permissions, and its warning was never accepted, so they would stop at it: run claude --dangerously-skip-permissions, choose Yes, then /exit"
+      fi
+      ;;
+  esac
+}
+claude_state_accepts_bypass() { python3 "$BOSUN_ROOT/lib/claude_state.py" bypass-accepted; }
+
 check_tools() {
   for tool in tmux ruby python3 jq curl caffeinate pmset "$BOSUN_CLAUDE_BIN"; do
     path="$(env -i HOME="$HOME" /bin/bash -c "source '$BOSUN_ROOT/lib/common.sh'; command -v '$tool'")"
@@ -298,10 +322,13 @@ check_claude_login() {
   return 0
 }
 
+section "What bosun needs"
+check_preflight
 section "Tools (as launchd sees them)"
 check_tools
 section "Claude Code login"
 check_claude_login
+check_bypass_warning
 section "Config ($BOSUN_CONFIG_DIR)"
 check_config
 check_knowledge

@@ -53,6 +53,7 @@ import slack_watch
 BOSUN = Path(__file__).resolve().parent.parent / "bin" / "bosun"
 STAMP = "%Y-%m-%d %H:%M:%S"
 SECONDS_PER_MINUTE = 60
+STALLED_START_MINUTES = 5  # well past any normal start, which takes seconds
 SECONDS_PER_HOUR = 3600
 # A `confirm` finding alerts once it has been seen for CONFIRM_SECONDS by runs at most
 # CONFIRM_MAX_GAP_SECONDS apart (launchd runs the watchdog every 300s). A longer gap means the
@@ -212,6 +213,11 @@ class Config:
 class WindowFact:
     name: str
     claude_pid: int | None
+    starting_pid: int | None = None  # a Claude in this window with no session record yet
+
+
+def optional_pid(value: Any) -> int | None:
+    return value if isinstance(value, int) else None
 
 
 @dataclass(frozen=True)
@@ -231,7 +237,9 @@ class Facts:
         return cls(
             session_exists=bool(data.get("session_exists")),
             windows=tuple(
-                WindowFact(str(w["name"]), w["claude_pid"] if isinstance(w.get("claude_pid"), int) else None)
+                WindowFact(
+                    str(w["name"]), optional_pid(w.get("claude_pid")), optional_pid(w.get("starting_pid"))
+                )
                 for w in data.get("windows") or []
             ),
             checkin_window=bool(data.get("checkin_window")),
@@ -541,6 +549,31 @@ def waiting_finding(ctx: Context, window: WindowFact, record: dict[str, Any]) ->
         legacy_marker=ctx.config.state_dir / f"alerted-{window.name}" if orchestrator else None,
         legacy_value=f"{window.claude_pid}:{updated}",
     )
+
+
+def stalled_finding(ctx: Context, window: WindowFact) -> Finding | None:
+    """A Claude that has been running for a while without ever writing its session record is on a screen
+    only a person can answer: every screen before a session has none, and a ready session always does.
+    That also covers screens that do not exist yet, so nothing here reads what is on the screen."""
+    if window.starting_pid is None:
+        return None
+    started = claude_state.process_start(window.starting_pid)
+    if started is None:
+        return None
+    waited = ctx.now.timestamp() - started
+    if waited < STALLED_START_MINUTES * SECONDS_PER_MINUTE:
+        return None
+    return Finding(
+        f"stalled-start:{window.name}:{window.starting_pid}",
+        f"The {window.name} window's Claude started {int(waited // SECONDS_PER_MINUTE)} min ago and never "
+        "reached a session: it is probably on a first-run or trust screen only you can answer (bosun "
+        "attach). Do not just press Return: on several of these screens the default is to exit.",
+    )
+
+
+def check_stalled_start(ctx: Context) -> Result:
+    findings = [finding for window in ctx.facts.windows if (finding := stalled_finding(ctx, window))]
+    return Result("every Claude reached a session" if not findings else "", findings)
 
 
 def check_waiting(ctx: Context) -> Result:
@@ -1277,6 +1310,13 @@ class Check:
 
 
 CHECKS: tuple[Check, ...] = (
+    Check(
+        "stalled-start",
+        "error",
+        f"a Claude window has run for {STALLED_START_MINUTES}+ min without reaching a session "
+        "(a first-run or trust screen)",
+        check_stalled_start,
+    ),
     Check(
         "morning-missing",
         "error",

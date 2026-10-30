@@ -120,8 +120,8 @@ Probed between scratch sessions on their own tmux server (Claude Code 2.1.303):
   message that joins the running turn at its next tool round; three quick messages arrived in
   order. It reads `Another Claude session sent a message: <cross-session-message from="uds:..."
   from-name="..." from-mode="...">`; the transcript entry has `origin.kind` `peer`.
-- **Held across permission modes.** The orchestrator runs in `auto` mode and repo sessions with
-  `--dangerously-skip-permissions`. Across that boundary every message is held for the recipient's
+- **Held across permission modes.** The orchestrator runs in `auto` mode, and repo sessions do too
+  unless a site runs them with `--dangerously-skip-permissions`. Across that boundary every message is held for the recipient's
   user: the recipient stops at an approval dialog ("Deny" / "Deliver this message to Claude") and
   its status is `waiting`. That is exactly the stall bosun works to avoid: `send` refuses the
   window, check-ins pause, the watchdog alerts. A recipient setting, `"crossSessionInbound":

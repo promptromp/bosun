@@ -2,6 +2,7 @@
 
 | Command | What it does |
 |---|---|
+| `bosun preflight [--quiet]` | Check what bosun needs on this machine, and say exactly what to do about anything missing. It changes nothing. `bosun init` and `bosun doctor` start with the same check. See [Setup](setup.md#requirements) |
 | `bosun init [--recommended \| --answers <file>] [--force] [--dry-run]` / `--detect` / `--print-answers` | Set bosun up from what this Mac shows: the repos you use Claude Code in, your usual hours, your logins. In a terminal it asks a few questions and shows the plan before it changes anything; otherwise it only prints the plan. See [Setup](setup.md#install) |
 | `bosun morning [--dry-run] [--skip-setup] [--awake-minutes N]` | The scheduled entry point |
 | `bosun setup [--dry-run]` | Run (or just check) the setup steps |
