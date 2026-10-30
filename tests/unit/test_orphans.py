@@ -8,6 +8,7 @@ import io
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 import unittest.mock
 from contextlib import redirect_stdout
@@ -103,6 +104,13 @@ def start_sleeper(case: unittest.TestCase) -> subprocess.Popen[bytes]:
         sleeper.wait()
 
     case.addCleanup(end)
+    # Popen returns before the child has exec'd sleep, and until then ps shows the parent's command.
+    deadline = time.monotonic() + 5
+    while time.monotonic() < deadline:
+        now = orphans.parse_ps(orphans.read_ps("-p", str(sleeper.pid)))
+        if now and now[0].command == "sleep 30":
+            break
+        time.sleep(0.01)
     return sleeper
 
 
