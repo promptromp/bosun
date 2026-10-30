@@ -20,6 +20,7 @@ from typing import Any
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "lib"))
 import claude_state
 import login
+import signals
 import watchdog
 from watchdog import CHECKS, Config, Facts, Inputs, WindowFact
 
@@ -43,6 +44,21 @@ def ms(moment: datetime) -> int:
 
 def iso(moment: datetime) -> str:
     return moment.astimezone(UTC).isoformat(timespec="seconds")
+
+
+PERMISSION = {
+    "session_id": "alpha-session",
+    "hook_event_name": "PermissionRequest",
+    "tool_name": "Bash",
+    "tool_input": {"command": "make deploy"},
+}
+
+
+def add_signal(state_dir: Path, window: str, moment: datetime, payload: dict[str, Any]) -> None:
+    """A hook signal recorded at local time <moment>."""
+    line = signals.signal_from(payload, moment.astimezone(UTC))
+    assert line is not None
+    signals.append(state_dir, window, line, 1 << 20)
 
 
 class WatchdogCase(unittest.TestCase):
@@ -334,6 +350,20 @@ class WaitingTest(WatchdogCase):
         self.waiting(ORCH_PID, at(MONDAY, "06:00"))
         self.records[ORCH_PID] = {"status": "idle", "statusUpdatedAt": ms(at(MONDAY, "09:00"))}
         self.assertEqual(self.watch(at(MONDAY, "10:00")), [])
+
+    def test_the_alert_says_what_the_window_was_asked(self) -> None:
+        self.waiting(REPO_PID, at(MONDAY, "09:00"))
+        self.records[REPO_PID]["sessionId"] = "alpha-session"
+        add_signal(self.state_dir, "alpha", at(MONDAY, "09:00"), PERMISSION)
+        sent = self.watch(at(MONDAY, "10:00"))
+        self.assertIn("at a permission prompt or question (Bash: make deploy)", sent[0])
+
+    def test_without_hook_signals_the_alert_has_no_question(self) -> None:
+        self.config = replace(self.config, hook_signals=False)
+        self.waiting(REPO_PID, at(MONDAY, "09:00"))
+        self.records[REPO_PID]["sessionId"] = "alpha-session"
+        add_signal(self.state_dir, "alpha", at(MONDAY, "09:00"), PERMISSION)
+        self.assertNotIn("make deploy", self.watch(at(MONDAY, "10:00"))[0])
 
     def test_off_when_the_threshold_is_zero(self) -> None:
         self.config = replace(self.config, waiting_minutes=0)
@@ -729,6 +759,18 @@ class LongShellTest(WatchdogCase):
         self.assertEqual(len(sent), 1)
         self.assertIn("kept orch in shell for 4h (awake hours, since Mon 09:00)", sent[0])
 
+    def test_the_warning_names_what_is_still_running(self) -> None:
+        self.status(REPO_PID, "shell", at(MONDAY, "09:00"))
+        self.records[REPO_PID]["sessionId"] = "alpha-session"
+        stop = {
+            "session_id": "alpha-session",
+            "hook_event_name": "Stop",
+            "background_tasks": [{"type": "shell", "status": "running", "command": "make watch"}],
+        }
+        add_signal(self.state_dir, "alpha", at(MONDAY, "09:00"), stop)
+        sent = self.watch(at(MONDAY, "13:00"))
+        self.assertIn("(shell `make watch`)", sent[0])
+
     def test_idle_ends_the_episode_and_the_next_one_warns_again(self) -> None:
         self.status(REPO_PID, "shell", at(MONDAY, "08:30"))
         self.assertEqual(len(self.watch(at(MONDAY, "12:30"))), 1)
@@ -1065,6 +1107,20 @@ class SpendLimitTest(WatchdogCase):
         self.assertIn("it holds task:2026-01-05/1", sent[0])
         self.add(self.transcript(REPO_PID), self.limit(at(MONDAY, "09:20")))
         self.assertEqual(self.runs(at(MONDAY, "09:25"), 3, only="spend-limit"), [])
+
+    def test_a_stop_only_the_hook_saw_alerts(self) -> None:
+        failure = {
+            "session_id": "alpha-session",
+            "hook_event_name": "StopFailure",
+            "error": "rate_limit",
+            "last_assistant_message": "You've hit your individual spend limit",
+        }
+        add_signal(self.state_dir, "alpha", at(MONDAY, "09:00"), failure)
+        sent = self.watch(at(MONDAY, "09:05"), only="spend-limit")
+        self.assertIn("alpha: it stopped on a usage limit (spend limit) at Mon 09:00", sent[0])
+        stop = {"session_id": "alpha-session", "hook_event_name": "Stop", "background_tasks": []}
+        add_signal(self.state_dir, "alpha", at(MONDAY, "09:30"), stop)
+        self.assertEqual(watchdog.check_spend_limit(self.context(at(MONDAY, "09:35"))).findings, [])
 
     def test_a_short_rate_limit_is_not_a_stop(self) -> None:
         self.add(self.transcript(REPO_PID), self.limit(at(MONDAY, "09:00"), apiError=None))

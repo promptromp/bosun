@@ -119,8 +119,30 @@ the size its latest turn read, `claude_state.py context <pid>`). The new convers
 then on) and starts with a short prompt pointing at its memory notes and `bosun ledger list
 --open`. `refresh --dry-run` names the windows that would get one, also with the flag off.
 
+Fresh conversations only start at a refresh. In between, every window is launched with
+`claude --autocompact BOSUN_AUTOCOMPACT_TOKENS` (300000; the orchestrator:
+`BOSUN_ORCHESTRATOR_AUTOCOMPACT_TOKENS`; a sessions.yml entry can set its own `autocompact`;
+empty or 0 leaves Claude Code's default, `auto` is accepted): once a conversation passes that size,
+Claude Code compacts it by itself, mid-task, into a summary, so no window re-reads 300k-900k tokens
+a turn for the rest of the day. Claude Code's own idle compaction (200k+ tokens idle about an hour)
+still applies. A summary can drop which ledger items the window holds, so with
+`BOSUN_COMPACT_CONTEXT=1` launch also installs a SessionStart hook (matcher `compact`,
+`bosun hook compact-context`) that adds them back, in at most
+`BOSUN_COMPACT_CONTEXT_MAX_CHARS` (1500) characters, from `bosun ledger compact-context`:
+for a repo window its items (in flight first) and how to report; for the orchestrator the proposals
+waiting for my approval and the open items per window. Both are read at launch, so a running window
+picks them up at its next restart. The fresh conversation stays as the backstop: a window still over
+`BOSUN_FRESH_CONTEXT_TOKENS` at the morning refresh starts a new one.
+
 Status and version come from Claude Code's own `~/.claude/sessions/<pid>.json`. The status is
-re-read just before a restart. Claude Code installs updates automatically but keeps running the old
+re-read just before a restart. With `BOSUN_HOOK_SIGNALS=1` (the default) launch also installs
+async hooks (`bosun hook signal`) on Notification, PermissionRequest, Stop, StopFailure,
+SessionStart and SessionEnd that record Claude Code's own signals per window in
+`$BOSUN_STATE_DIR/signals/<window>.jsonl` (`BOSUN_SIGNALS_MAX_KB`, 256): the watchdog's
+`waiting` alert and the events' waiting line then say what the window was asked (`Bash: make
+deploy`), `long-shell` names what is still running, and `spend-limit` also sees a stop only the
+StopFailure hook reported. They add to the session records and transcripts, never replace them;
+design: [design/signals.md](design/signals.md). Claude Code installs updates automatically but keeps running the old
 version until restarted. `refresh` is how sessions pick up updates without losing work.
 
 The morning run passes `--unless-active`: if someone typed in an attached tmux client within the

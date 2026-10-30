@@ -46,6 +46,7 @@ import learn
 import ledger
 import lineage
 import login
+import signals
 import slack_watch
 
 
@@ -148,6 +149,7 @@ class Config:
     overhead_warn_share: float = 0.5
     orchestrator_down_minutes: float = 15
     orchestrator_restart: bool = True
+    hook_signals: bool = True
 
     @property
     def loop_wanted(self) -> bool:
@@ -202,6 +204,7 @@ class Config:
             overhead_warn_share=float(env.get("BOSUN_OVERHEAD_WARN_SHARE") or 0.5),
             orchestrator_down_minutes=float(env.get("BOSUN_WATCHDOG_ORCHESTRATOR_DOWN_MINUTES") or 15),
             orchestrator_restart=env.get("BOSUN_WATCHDOG_ORCHESTRATOR_RESTART", "1") == "1",
+            hook_signals=env.get("BOSUN_HOOK_SIGNALS", "1") == "1",
         )
 
 
@@ -455,6 +458,13 @@ class Context:
         return self.config.log_dir / f"morning-{self.today:%Y-%m-%d}.log"
 
 
+def window_signals(ctx: Context, window: str, record: dict[str, Any] | None) -> signals.Signals:
+    """The hook signals of the Claude session in <window> (none with BOSUN_HOOK_SIGNALS=0)."""
+    if not ctx.config.hook_signals or not record:
+        return signals.Signals(())
+    return signals.Signals.load(ctx.config.state_dir, window, record.get("sessionId"))
+
+
 def check_morning_missing(ctx: Context) -> Result:
     if not scheduled(ctx.config, ctx.today):
         return Result("not a scheduled day")
@@ -518,9 +528,12 @@ def waiting_finding(ctx: Context, window: WindowFact, record: dict[str, Any]) ->
         return None
     orchestrator = window.name == ctx.config.orchestrator
     paused = "; check-ins are paused until you answer it" if orchestrator else ""
+    since = datetime.fromtimestamp(updated / 1000) - signals.WAITING_SLACK
+    asked = window_signals(ctx, window.name, record).asking(since)
+    question = f" ({asked})" if asked else ""
     message = (
         f"The {window.name} session has waited {int(waited // SECONDS_PER_MINUTE)} min at a permission "
-        f"prompt or question{paused} (bosun attach, or Remote Control)."
+        f"prompt or question{question}{paused} (bosun attach, or Remote Control)."
     )
     return Finding(
         f"waiting:{window.name}:{window.claude_pid}:{updated}",
@@ -1011,14 +1024,17 @@ def shell_episode(prior: dict[str, int] | None, pid: int, record: dict[str, Any]
     return None
 
 
-def long_shell_finding(ctx: Context, window: str, episode: dict[str, int]) -> Finding | None:
+def long_shell_finding(
+    ctx: Context, window: str, episode: dict[str, int], running: str = ""
+) -> Finding | None:
     since = datetime.fromtimestamp(episode["since"] / 1000)
     hours = awake_seconds(ctx.config, since, ctx.now) / SECONDS_PER_HOUR
     if hours < ctx.config.long_shell_hours:
         return None
+    what = f" ({running})" if running else ""
     message = (
         f"A background command has kept {window} in shell for {hours:.0f}h (awake hours, since "
-        f"{since:%a %H:%M}): check it is still wanted. Meanwhile refresh does not restart that Claude."
+        f"{since:%a %H:%M}){what}: check it is still wanted. Meanwhile refresh does not restart that Claude."
     )
     return Finding(f"{LONG_SHELL}:{window}:{episode['pid']}:{episode['since']}", message)
 
@@ -1037,7 +1053,10 @@ def check_long_shell(ctx: Context) -> Result:
         if episode is None:
             continue
         shells[window.name] = episode
-        finding = long_shell_finding(ctx, window.name, episode) if record.get("status") == SHELL else None
+        if record.get("status") != SHELL:
+            continue
+        running = signals.describe(window_signals(ctx, window.name, record).running())
+        finding = long_shell_finding(ctx, window.name, episode, running)
         if finding:
             findings.append(finding)
     hours = f"{ctx.config.long_shell_hours:g}"
@@ -1087,6 +1106,12 @@ def stopped_subagents(transcript: Path, now: datetime) -> list[tuple[datetime, d
     return found
 
 
+def hook_limited(ctx: Context, window: str, entry: dict[str, Any] | None) -> tuple[datetime, datetime] | None:
+    """A usage-limit stop only the StopFailure hook saw (no turn has finished since), as limited()."""
+    since = window_signals(ctx, window, entry).usage_limit_stop()
+    return (since, since) if since else None
+
+
 def window_stop(ctx: Context, window: WindowFact) -> dict[str, Any] | None:
     """The usage-limit stop of the Claude in <window>: pid, since, its latest error (at) and how
     many subagents."""
@@ -1094,7 +1119,7 @@ def window_stop(ctx: Context, window: WindowFact) -> dict[str, Any] | None:
     transcript = claude_state.transcript_of(entry) if entry else None
     if transcript is None:
         return None
-    main = limited(claude_state.last_api_error(transcript))
+    main = limited(claude_state.last_api_error(transcript)) or hook_limited(ctx, window.name, entry)
     rows = ([main] if main else []) + stopped_subagents(transcript, ctx.now)
     if not rows:
         return None

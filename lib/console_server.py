@@ -4,9 +4,11 @@ JSON API over the state directory. Design: docs/design/console.md.
 
 Security (the ledger holds colleagues' names and untrusted Slack text):
 - Listens on 127.0.0.1 only; any other address is refused.
-- A random token per start, in the printed URL, is exchanged for an HttpOnly, SameSite=Strict
-  cookie (the redirect drops it from the address bar). /api/* answers 401 without the cookie, so
-  other local processes and pages cannot read the ledger by finding the port.
+- A random token, in the printed URL, is exchanged for an HttpOnly, SameSite=Strict cookie (the
+  redirect drops it from the address bar). /api/* answers 401 without the cookie, so other local
+  processes and pages cannot read the ledger by finding the port. The token is kept across
+  restarts in a private file (lib/console_token.py), so an open tab stays signed in;
+  `--new-token` rotates it, and BOSUN_CONSOLE_PERSIST_TOKEN=0 makes it new per start.
 - The Host header must be 127.0.0.1:<port> or localhost:<port> (403 otherwise: DNS rebinding).
 - GET and HEAD only (405 otherwise), with one exception: POST /api/knowledge/review, a review
   decision on the knowledge base (local data, never outward-facing; design decision 2 of
@@ -69,6 +71,7 @@ import console_live
 import console_sessions
 import console_state
 import console_stats
+import console_token
 import impact
 import impact_learning
 import impact_overhead
@@ -82,6 +85,7 @@ BIND_HOST = "127.0.0.1"
 LOCAL_NAMES = ("127.0.0.1", "localhost")
 DEFAULT_PORT = 8765
 STATIC_DIR = Path(__file__).resolve().parent.parent / "console"
+PERSIST_SETTING = "BOSUN_CONSOLE_PERSIST_TOKEN"
 QUERY_KEY = "t"  # the printed URL's query parameter that carries the token
 ITEM_PREFIX = "/api/items/"  # + the item's id, URL-encoded
 LIBRARY_PREFIX = "/api/library/"  # + a file's opaque key
@@ -594,9 +598,10 @@ def knowledge_settings() -> console_kb.Settings:
         raise ConsoleError(str(exc)) from exc
 
 
-def new_app(state_dir: Path) -> App:
+def new_app(state_dir: Path, rotate: bool = False) -> App:
+    persist = console_token.persist_setting(os.environ.get(PERSIST_SETTING))
     return App(
-        token=secrets.token_urlsafe(TOKEN_BYTES),
+        token=console_token.console_token(state_dir, persist, rotate),
         assets=load_assets(STATIC_DIR),
         ledger=console_data.SnapshotCache(state_dir / console_data.LEDGER_FILE),
         live=console_live.live_cache(os.environ),
@@ -638,13 +643,14 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--port", type=int, default=DEFAULT_PORT)
     parser.add_argument("--host", default=BIND_HOST)
     parser.add_argument("--open", action="store_true")
+    parser.add_argument("--new-token", action="store_true", help="replace the stored access token")
     return parser
 
 
 def main(argv: list[str]) -> int:
     args = build_parser().parse_args(argv)
     try:
-        app = new_app(state_dir())
+        app = new_app(state_dir(), rotate=args.new_token)
         server = make_server(app, args.host, args.port)
     except ConsoleError as exc:
         print(f"bosun console: {exc}", file=sys.stderr)

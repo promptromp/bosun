@@ -53,6 +53,7 @@ import activity
 import claude_state
 import event_lanes
 import event_summary
+import signals
 from event_lanes import Lanes, Timing
 from event_model import SUMMARY_LENGTH, Event, EventsError, new_event, parse_kinds, short
 from event_summary import Render
@@ -292,6 +293,7 @@ class Config:
     waiting_seconds: float
     active_client_minutes: float
     transport: str = VIA_SEND
+    hook_signals: bool = True
 
     @classmethod
     def from_env(cls, env: Mapping[str, str]) -> Config:
@@ -306,6 +308,7 @@ class Config:
             waiting_seconds=settings.number("EVENTS_WAITING_SECONDS"),
             active_client_minutes=settings.number("ACTIVE_CLIENT_MINUTES"),
             transport=settings.transport(),
+            hook_signals=env.get("BOSUN_HOOK_SIGNALS", "1") == "1",
         )
 
 
@@ -353,6 +356,16 @@ def seconds_in_status(record: Mapping[str, Any], now: datetime) -> float:
     return now.timestamp() - updated / MS_PER_SECOND if isinstance(updated, (int, float)) else 0.0
 
 
+def asked(config: Config, window: str, entry: Mapping[str, Any]) -> str:
+    """What the waiting window was asked, from its hook signals (" (Bash: make test)"), or ""."""
+    updated = entry.get("statusUpdatedAt")
+    if not config.hook_signals or not isinstance(updated, (int, float)):
+        return ""
+    since = datetime.fromtimestamp(updated / MS_PER_SECOND) - signals.WAITING_SLACK
+    question = signals.Signals.load(config.state_dir, window, entry.get("sessionId")).asking(since)
+    return f" ({question})" if question else ""
+
+
 def waiting_windows(config: Config, facts: Facts, state: State, now: datetime, record: Record) -> list[Event]:
     """New events for repo windows waiting at a prompt for BOSUN_EVENTS_WAITING_SECONDS: once
     per prompt (pid and status time)."""
@@ -366,7 +379,8 @@ def waiting_windows(config: Config, facts: Facts, state: State, now: datetime, r
         if key in state.waiting_seen or waited < config.waiting_seconds:
             continue
         state.waiting_seen = [*state.waiting_seen, key][-WAITING_SEEN_KEEP:]
-        summary = f"waiting at a permission prompt or a question for {waited / 60:.0f} min"
+        question = asked(config, name, entry)
+        summary = f"waiting at a permission prompt or a question for {waited / 60:.0f} min{question}"
         found.append(new_event("waiting", window=name, origin=name, summary=summary, now=now))
     return found
 

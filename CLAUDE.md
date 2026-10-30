@@ -38,8 +38,10 @@ of truth, so don't copy rules into this file.
   `review-arrived` and queued as `review` events; design: `docs/design/events.md`).
   `lib/claude_state.py`: everything read or written in Claude Code's own files (transcripts,
   running-session records, folder trust, error replies, `claude auth status`, the login check
-  request); bash reaches them only through it. `lib/login.py`: whether the login works and a
-  window gets real replies (signals combined, the check-in gate, `login.json`). `lib/orphans.py`:
+  request); bash reaches them only through it. `lib/signals.py`: Claude Code's own signals,
+  recorded by async hooks (`bosun hook signal`: what a waiting window was asked, what a turn
+  left running, StopFailure); design: `docs/design/signals.md`. `lib/login.py`: whether the login
+  works and a window gets real replies (signals combined, the check-in gate, `login.json`). `lib/orphans.py`:
   the helpers a pane's shell leaves behind (`bosun orphans`). `lib/repo_mask.py`:
   the one repo-mask implementation. `lib/watchdog.py`: the watchdog's table of checks (`CHECKS`),
   awake window, de-dup state and alert sinks; `libexec/bosun-watchdog` only collects the live

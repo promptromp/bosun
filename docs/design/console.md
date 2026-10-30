@@ -87,6 +87,15 @@ bosun console [--port N] [--open]
   `HttpOnly; SameSite=Strict` cookie on first load, then a redirect drops it from the address bar.
   The cookie's name carries the port, since cookies are not kept apart by port. Every API call
   needs it (other local processes and browser tabs cannot read the ledger by guessing the port).
+- The token is kept across restarts (before, every restart after a merge signed the open tab
+  out with 401s). `lib/console_token.py` stores it in `$BOSUN_STATE_DIR/console/token`,
+  written atomically, the file 0600 in a 0700 folder, and reuses it on start. A file that is
+  missing, unreadable, malformed or readable by group or others is replaced by a new token
+  rather than reused or fixed in place, since a token others could read may already be known.
+  `bosun console --new-token` rotates it, and `BOSUN_CONSOLE_PERSIST_TOKEN=0` restores
+  a new token per start. The token is printed only in the startup URL, never logged. The CSRF
+  token stays per start: a page open across a restart gets a 403 on a review decision until it
+  reloads, which it says.
 - There is no way to turn the token off (the first sketch had `--no-token` for tests). The tests
   do not need one: the smoke test reads the token from the printed URL like a user does, and the
   unit tests build the server with a known token. A switch that disables the only access control

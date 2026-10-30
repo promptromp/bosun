@@ -18,6 +18,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "lib"))
 import activity
 import event_model
 import events
+import signals
 from event_lanes import Lanes, Timing
 from event_model import Event
 from event_summary import Render
@@ -294,6 +295,21 @@ class WaitingWindowsTest(DispatcherTestCase):
         self.assertIn("exporter is waiting at a permission prompt or a question for 3 min", self.sent[0])
         self.dispatch(later + timedelta(minutes=2))
         self.assertEqual(len(self.sent), 1)  # the same prompt: no second event
+
+    def test_the_event_says_what_the_window_was_asked(self) -> None:
+        self.records[REPO_PID] = {**record("waiting", 200, "exporter"), "sessionId": "exporter-session"}
+        request = {
+            "session_id": "exporter-session",
+            "hook_event_name": "PermissionRequest",
+            "tool_name": "Bash",
+            "tool_input": {"command": "make release"},
+        }
+        line = signals.signal_from(request, NOW - timedelta(seconds=200))
+        assert line is not None
+        signals.append(self.state_dir, "exporter", line, 1 << 20)
+        self.dispatch()
+        self.dispatch(NOW + timedelta(minutes=2))
+        self.assertIn("for 3 min (Bash: make release)", self.sent[0])
 
 
 class CoverAndPruneTest(DispatcherTestCase):

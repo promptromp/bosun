@@ -75,7 +75,10 @@ partial.
   cache reads), counted once per message id, priced with `PRICES` in `lib/impact.py` per model
   (input, output and cache-read list prices per million tokens, matched on the model id, most
   specific first; first-party API rates, so an estimate, not a bill: a subscription or a partner
-  platform bills differently). Per week, per window, and per merged PR since the start.
+  platform bills differently). Cache writes are priced by lifetime: 1.25x input for the 5-minute
+  cache, 2x for the 1-hour cache (`usage.cache_creation.ephemeral_1h_input_tokens`, kept as
+  `cache_write_1h`; a transcript without that breakdown counts every write as 5-minute). Per week,
+  per window, and per merged PR since the start.
 - **Where time went:** agent busy hours since the start, per window.
 
 ## Collector

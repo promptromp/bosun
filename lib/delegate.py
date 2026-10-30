@@ -153,7 +153,7 @@ def subagent_preamble(model: str, effort: str) -> str:
         f"Run this task in a subagent: make one Agent tool call with {' and '.join(settings)}, passing "
         "everything below the line as its prompt, and wait for it. Then reply here with a one-line "
         "summary of its result. This keeps the task at its own model and effort without changing "
-        f"this session's settings. {SUBAGENT_LIMITS}\n\n---"
+        f"this session's settings. {SUBAGENT_LIMITS}\n{SUBAGENT_WAITS}\n\n---"
     )
 
 
@@ -163,6 +163,15 @@ SUBAGENT_LIMITS = (
     "worktree or checkout it names (isolation refuses commands that leave its own copy). Tell it "
     "that it cannot call ReadNotifications (main conversation only) and that it returns the "
     "content of any findings or report file as text, for you to write."
+)
+# How a subagent waits: each time it idles on a background command, Claude Code wakes the parent
+# session, which then re-reads its whole conversation; a foreground wait wakes nobody.
+SUBAGENT_WAITS = (
+    "Tell it to wait for tests, eval runs or CI in the foreground, with one blocking Bash call of at "
+    "most 9 minutes at a time (`timeout 540 bash -c 'until <check>; do sleep 60; done'`, the call's "
+    "timeout set to 600000 ms), repeated within the task's 2-hour limit, and never to end its turn "
+    "while it waits: each time a subagent idles on a background command, Claude Code wakes this "
+    "session to say so."
 )
 
 

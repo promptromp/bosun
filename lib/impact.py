@@ -29,7 +29,9 @@ DAYS_PER_WEEK = 7
 PER_MILLION = 1_000_000
 # List prices in USD per million tokens (input, output, cache read), matched on the model id, most
 # specific first: an estimate, not a bill (first-party API rates as of 2026-10; a subscription or
-# a partner platform bills differently). Cache writes cost CACHE_WRITE x input. Haiku 5.5 is the
+# a partner platform bills differently). Cache writes cost CACHE_WRITE_5M x input with the
+# 5-minute lifetime and CACHE_WRITE_1H x input with the 1-hour one (`cache_write` counts both;
+# `cache_write_1h` is the 1-hour part). Haiku 5.5 is the
 # rate for prompts up to 100K tokens. An unknown model is priced like FALLBACK_MODEL and counted
 # in `unpriced_models`.
 PRICES = (
@@ -43,8 +45,9 @@ PRICES = (
     ("haiku", (1.0, 5.0, 0.10)),
 )
 FALLBACK_MODEL = "opus"
-CACHE_WRITE = 1.25
-TOKEN_KINDS = ("input", "output", "cache_write", "cache_read")
+CACHE_WRITE_5M = 1.25
+CACHE_WRITE_1H = 2.0
+TOKEN_KINDS = ("input", "output", "cache_write", "cache_read", "cache_write_1h")
 BASELINE, SINCE = "baseline", "since"
 QUARTER, THREE_QUARTERS = 0.25, 0.75
 
@@ -118,10 +121,12 @@ def usage_cost(model: str, usage: Mapping[str, Any]) -> float:
     """USD at list prices for one model's token counts (TOKEN_KINDS)."""
     price_in, price_out, price_cache_read = dict(PRICES)[family(model) or FALLBACK_MODEL]
     tokens = {kind: float(usage.get(kind) or 0) for kind in TOKEN_KINDS}
+    write_1h = min(tokens["cache_write_1h"], tokens["cache_write"])
     total = (
         tokens["input"] * price_in
         + tokens["output"] * price_out
-        + tokens["cache_write"] * price_in * CACHE_WRITE
+        + (tokens["cache_write"] - write_1h) * price_in * CACHE_WRITE_5M
+        + write_1h * price_in * CACHE_WRITE_1H
         + tokens["cache_read"] * price_cache_read
     )
     return total / PER_MILLION

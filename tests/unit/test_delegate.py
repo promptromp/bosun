@@ -271,6 +271,18 @@ class ModelEffortTest(unittest.TestCase):
         )
         self.assertTrue(preamble.endswith("\n\n---"))
 
+    def test_the_subagent_preamble_keeps_its_waits_in_the_foreground(self) -> None:
+        # An idle subagent wakes the parent session each time; a foreground wait does not.
+        preamble = delegate.subagent_preamble("sonnet", "high")
+        self.assertIn("in the foreground", preamble)
+        self.assertIn("timeout 540 bash -c 'until <check>; do sleep 60; done'", preamble)
+        self.assertIn("never to end its turn while it waits", preamble)
+
+    def test_the_shared_rules_tell_subagents_to_wait_in_the_foreground(self) -> None:
+        rules = delegate.COMMON_FILE.read_text()
+        self.assertIn("a subagent waits in the foreground", rules)
+        self.assertIn("never ends its turn while waiting", rules)
+
 
 DELEGATION = {
     "id": "slack:C1/1",

@@ -1,6 +1,21 @@
 #!/bin/bash
 # Usage: bosun hook user-prompt --window <window>
+#        bosun hook compact-context (--window <window> | --orchestrator)
+#        bosun hook signal --window <window>
 #
+# signal: the async hook `bosun launch` installs with BOSUN_HOOK_SIGNALS=1 on Notification,
+# PermissionRequest, Stop, StopFailure, SessionStart and SessionEnd. It records the event as one
+# line in $BOSUN_STATE_DIR/signals/<window>.jsonl (lib/signals.py; design:
+# docs/design/signals.md): what the window waits on, what a finished turn left running, why a turn
+# failed. It never blocks, changes or fails anything; errors go to the hook log.
+#
+# compact-context: the SessionStart hook (matcher compact) `bosun launch` installs with
+# BOSUN_COMPACT_CONTEXT=1. After Claude Code compacts the conversation it adds back, in at most
+# BOSUN_COMPACT_CONTEXT_MAX_CHARS characters, the ledger items the window holds (the
+# orchestrator: proposals waiting for my approval and open items per window), from
+# `bosun ledger compact-context`. It never fails the session start: on any error it adds nothing.
+#
+# user-prompt:
 # The UserPromptSubmit hook of repo sessions (Claude Code passes the hook's JSON on stdin).
 # `bosun launch` installs it, only with BOSUN_EVENTS_ENABLED=1, through the session's
 # --settings; it does nothing once that is 0 again. It records each prompt you type in the window
@@ -20,6 +35,36 @@ case "${1:-}" in -h | --help)
   exit 0
   ;;
 esac
+
+compact_context() {
+  local context
+  cat >/dev/null
+  [ "$BOSUN_COMPACT_CONTEXT" = "1" ] || return 0
+  context="$("$BOSUN" ledger compact-context "$@" --max-chars "$BOSUN_COMPACT_CONTEXT_MAX_CHARS" \
+    2>>"$BOSUN_LOG_DIR/hook-$(date +%F).log")" || return 0
+  jq -n --arg context "$context" '{hookSpecificOutput: {hookEventName: "SessionStart", additionalContext: $context}}'
+}
+
+signal() {
+  [ "$BOSUN_HOOK_SIGNALS" = "1" ] || {
+    cat >/dev/null
+    return 0
+  }
+  BOSUN_STATE_DIR="$BOSUN_STATE_DIR" BOSUN_SIGNALS_MAX_KB="$BOSUN_SIGNALS_MAX_KB" \
+    python3 "$BOSUN_ROOT/lib/signals.py" record "$@" 2>>"$BOSUN_LOG_DIR/hook-$(date +%F).log" || true
+}
+
+if [ "${1:-}" = "signal" ]; then
+  shift
+  signal "$@"
+  exit 0
+fi
+
+if [ "${1:-}" = "compact-context" ]; then
+  shift
+  compact_context "$@"
+  exit 0
+fi
 
 if [ "$BOSUN_EVENTS_ENABLED" != "1" ]; then
   cat >/dev/null

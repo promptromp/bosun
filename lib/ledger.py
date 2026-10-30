@@ -115,6 +115,8 @@ ids out:<parent-id>/<n>, or out:<YYYY-MM-DD>/<n> when it belongs to no item):
   in the future. Pass --at when it happened before you record it and the ref has no Slack time.
   outreach [--open] [--parent ID]              outreach with status, messages and replies
   in-flight <window>                           ids of the items <window> holds with work not done
+  compact-context (--window <w> | --orchestrator) [--max-chars N]
+                                               the block a session gets back after a compaction
 
   Hand a reply to the window holding the parent with `bosun delegate --update <out-id>`
   (-> applied); otherwise tell me and transition it to applied. Gave up after the last nudge:
@@ -237,6 +239,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import activity
 import approvals
 import claude_state
+import compact_context
 import event_model
 import events
 import lineage
@@ -265,6 +268,7 @@ MAX_RESULT_LENGTH = 300
 # A report's CI status (`report --ci`): what the window saw on its pushed commit. Standing approvals
 # (lib/approvals.py) need green on the PR's latest report.
 CI_STATES = ("green", "red", "pending", "none")
+COMPACT_ROW_CHARS = 220  # one row of the post-compaction block (lib/compact_context.py)
 # History events that hand work to a repo session. A hand-over ends with a report, or when the item
 # reaches a state that shows the work done (the kind's `work_done`, or a terminal state).
 HANDOVER_EVENTS = ("delegated", "update", "moved")
@@ -2350,6 +2354,45 @@ def cmd_in_flight(args: argparse.Namespace) -> str:
     return "\n".join(item["id"] for item in in_flight(items, args.window))
 
 
+def window_rows(items: dict[str, Item], window: str) -> list[str]:
+    """One list row per open item handed to <window>, the ones in flight first."""
+    view = View.of(items)
+    flying = {item["id"] for item in in_flight(items, window)}
+    held = sorted(activity.held(items.values(), window, is_open), key=lambda item: item["id"] not in flying)
+    return [shorten(item_row(item, view)) for item in held]
+
+
+def pending_approval_rows(items: dict[str, Item]) -> list[str]:
+    """One row per proposal waiting for my approval: the item and the proposed action."""
+    pending = [item for item in items.values() if approvals.needs_you(item.get("proposal"))]
+    return [shorten(f"{item['id']}: {item['proposal']['action']}") for item in pending]
+
+
+def held_counts(items: dict[str, Item]) -> list[str]:
+    """'<window> <n>' for each window that holds open items, busiest first."""
+    counts: dict[str, int] = {}
+    for item in items.values():
+        window = (item.get("delegation") or {}).get("window")
+        if window and is_open(item):
+            counts[window] = counts.get(window, 0) + 1
+    return [f"{window} {count}" for window, count in sorted(counts.items(), key=lambda pair: -pair[1])]
+
+
+def shorten(line: str, limit: int = COMPACT_ROW_CHARS) -> str:
+    return line if len(line) <= limit else line[: limit - 3] + "..."
+
+
+def cmd_compact_context(args: argparse.Namespace) -> str:
+    """The block a session gets back after a compaction (lib/compact_context.py)."""
+    with locked_ledger(write=False) as ledger:
+        items = ledger["items"]
+    if args.orchestrator:
+        block = compact_context.orchestrator_block(pending_approval_rows(items), held_counts(items))
+    else:
+        block = compact_context.window_block(args.window, window_rows(items, args.window))
+    return block.render(args.max_chars)
+
+
 def cmd_outreach(args: argparse.Namespace) -> str:
     with locked_ledger(write=False) as ledger:
         items = ledger["items"]
@@ -3910,6 +3953,14 @@ COMMANDS: dict[str, tuple[Handler, Arguments]] = {
     ),
     "outreach": (cmd_outreach, [(("--open",), {"action": "store_true"}), (("--parent",), {})]),
     "in-flight": (cmd_in_flight, [(("window",), {})]),
+    "compact-context": (
+        cmd_compact_context,
+        [
+            (("--window",), {"default": ""}),
+            (("--orchestrator",), {"action": "store_true"}),
+            (("--max-chars",), {"type": int, "default": compact_context.DEFAULT_MAX_CHARS}),
+        ],
+    ),
     "mark-run": (cmd_mark_run, [(("name",), {})]),
     "seen": (cmd_seen, [(("key",), {})]),
     "record-source": (

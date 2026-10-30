@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import sys
 import unittest
+from collections.abc import Mapping
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -68,3 +69,25 @@ class TurnRecordsTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class UsageFieldsTest(unittest.TestCase):
+    def entry(self, usage: Mapping[str, object]) -> dict[str, object]:
+        return {"type": "assistant", "message": {"id": "m1", "model": MODEL, "usage": usage}}
+
+    def test_one_hour_cache_writes_are_counted_apart(self) -> None:
+        usage = {
+            "input_tokens": 2,
+            "output_tokens": 30,
+            "cache_creation_input_tokens": 1000,
+            "cache_read_input_tokens": 50,
+            "cache_creation": {"ephemeral_5m_input_tokens": 600, "ephemeral_1h_input_tokens": 400},
+        }
+        counts = dict(claude_state.assistant_activity(self.entry(usage), at(1)).usage)
+        self.assertEqual(counts["cache_write"], 1000)
+        self.assertEqual(counts["cache_write_1h"], 400)
+
+    def test_without_the_breakdown_every_write_is_five_minute(self) -> None:
+        usage = {"input_tokens": 2, "output_tokens": 30, "cache_creation_input_tokens": 1000}
+        counts = dict(claude_state.assistant_activity(self.entry(usage), at(1)).usage)
+        self.assertEqual((counts["cache_write"], counts["cache_write_1h"]), (1000, 0))
