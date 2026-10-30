@@ -1,0 +1,29 @@
+#!/bin/bash
+# Usage: bosun init [--recommended | --answers <file>] [--force] [--dry-run]
+#        bosun init --detect
+#        bosun init --print-answers [--answers <file>]
+#
+# Set bosun up from what this Mac shows: the repos you use Claude Code in, your usual hours, your
+# logins. On its own it changes nothing: it prints the plan.
+#   --recommended      carry out the recommended plan: write the config, trust the folders, then run
+#                      install.sh (links `bosun`, loads the launchd jobs, runs `bosun doctor`)
+#   --answers <file>   the same with your answers, JSON, `-` for stdin; it only needs what it changes
+#   --force            also replace a sessions.yml that lists other windows (backed up)
+#   --dry-run          print the plan for those answers and stop
+#   --detect           print what it found, as JSON (read-only)
+#   --print-answers    print the recommended answers, as JSON to edit and pass back with --answers
+# A re-run starts from your config: bosun.env is updated in place, keeping anything you added, with
+# a backup next to it, and setup.sh is never changed once it exists. See docs/design/init.md.
+set -uo pipefail
+source "$(dirname "$0")/../lib/common.sh"
+
+case "${1:-}" in
+  -h | --help)
+    usage
+    exit 0
+    ;;
+esac
+
+python3 -c 'import sys; sys.exit(sys.version_info < (3, 13))' 2>/dev/null ||
+  die "bosun needs Python 3.13 or newer as python3: brew install python"
+BOSUN_CONFIG_DIR="${BOSUN_CONFIG_DIR:-$HOME/.config/bosun}" exec python3 "$BOSUN_ROOT/lib/init.py" "$@"

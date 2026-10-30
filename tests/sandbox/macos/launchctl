@@ -1,0 +1,13 @@
+#!/bin/bash
+# launchd's stand-in: remembers which jobs are loaded, in ~/.sandbox, and never runs them.
+state="$HOME/.sandbox/launchd"
+mkdir -p "$state"
+echo "launchctl $*" >>"$HOME/.sandbox/system.log"
+case "${1:-}" in
+bootstrap) cp "$3" "$state/$(basename "$3" .plist)" ;;
+bootout) rm -f "$state/${2##*/}" ;;
+print)
+	[ -e "$state/${2##*/}" ] || exit 113
+	printf '%s = {\n\tstate = not running\n\truns = 0\n\tlast exit code = 0\n}\n' "$2"
+	;;
+esac

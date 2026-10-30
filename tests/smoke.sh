@@ -1845,8 +1845,8 @@ console_token_of_start() {
 FIRST_TOKEN="${CONSOLE_URL##*\?t=}"
 check "a restart keeps the token, so an open tab stays signed in" test "$(console_token_of_start)" = "$FIRST_TOKEN"
 check "... stored 0600 in a 0700 folder" bash -c '
-  [ "$(stat -f %Lp "$1/console/token" 2>/dev/null || stat -c %a "$1/console/token")" = 600 ] &&
-    [ "$(stat -f %Lp "$1/console" 2>/dev/null || stat -c %a "$1/console")" = 700 ]' _ "$CONSOLE_STATE"
+  [ "$(stat -c %a "$1/console/token" 2>/dev/null || stat -f %Lp "$1/console/token")" = 600 ] &&
+    [ "$(stat -c %a "$1/console" 2>/dev/null || stat -f %Lp "$1/console")" = 700 ]' _ "$CONSOLE_STATE"
 check "--new-token rotates it" bash -c '[ -n "$1" ] && [ "$1" != "$2" ]' _ "$(console_token_of_start --new-token)" "$FIRST_TOKEN"
 
 echo "install and uninstall (fake launchctl and pmset, test label)"
@@ -1886,6 +1886,32 @@ if [ "$(bash -c 'source "$1/lib/common.sh"; command -v launchctl; command -v pms
   check "uninstall unloads the learning agent" grep -q "launchctl bootout gui/$(id -u)/$BOSUN_LAUNCHD_LABEL.learn" "$WORK/system.log"
   check "uninstall removes the link" test ! -L "$HOME/.local/bin/bosun"
   check "uninstall keeps the config without --purge" test -f "$INSTALL_CFG/bosun.env"
+
+  echo "init (fake launchctl and pmset, test label)"
+  INIT_CFG="$WORK/init-config"
+  INIT_REPO="$HOME/Development/init-api"
+  git init -q "$INIT_REPO"
+  git -C "$INIT_REPO" remote add origin git@github.com:acme/init-api.git
+  # No wake in these answers: `sudo pmset` would find the real pmset, whatever PATH says here.
+  INIT_ANSWERS="$WORK/init-answers.json"
+  printf '{"repos": [{"dir": "%s"}], "repos_dir": "%s", "days": "MWF", "start": "09:00", "until": "18:00", "wake": false}' \
+    "$INIT_REPO" "$HOME/Development" >"$INIT_ANSWERS"
+  INIT_PLAN="$(BOSUN_CONFIG_DIR="$INIT_CFG" "$BOSUN" init 2>&1)"
+  check "init on its own prints the plan" contains "$INIT_PLAN" "Nothing has changed yet"
+  check "... and changes nothing" test ! -e "$INIT_CFG"
+  check "init --dry-run changes nothing" env BOSUN_CONFIG_DIR="$INIT_CFG" bash -c '"$1" init --answers "$2" --dry-run >/dev/null && [ ! -e "$BOSUN_CONFIG_DIR" ]' _ "$BOSUN" "$INIT_ANSWERS"
+  check "init --detect prints JSON" env BOSUN_CONFIG_DIR="$INIT_CFG" bash -c '"$1" init --detect | jq -e .home >/dev/null' _ "$BOSUN"
+  check "init --print-answers prints JSON" env BOSUN_CONFIG_DIR="$INIT_CFG" bash -c '"$1" init --print-answers | jq -e .days >/dev/null' _ "$BOSUN"
+  check "init refuses bad answers" fails_with "unknown answers" env BOSUN_CONFIG_DIR="$INIT_CFG" "$BOSUN" init --answers <(echo '{"typo": 1}')
+  BOSUN_CONFIG_DIR="$INIT_CFG" "$BOSUN" init --answers "$INIT_ANSWERS" >"$WORK/init.out" 2>&1
+  check "init writes the config" bash -c 'grep -q "BOSUN_DAYS=\"MWF\"" "$1/bosun.env" && grep -q "name: init-api" "$1/sessions.yml" && [ -f "$1/setup.sh" ]' _ "$INIT_CFG"
+  check "what it writes loads as config" env BOSUN_CONFIG_DIR="$INIT_CFG" bash -c 'source "$1/lib/common.sh"; load_config; [ "$BOSUN_START_TIME" = 09:00 ] && [ "$BOSUN_EVENTS_ENABLED" = 1 ] && [ "$BOSUN_REPOS_DIR" = "$HOME/Development" ]' _ "$ROOT"
+  check "... and as windows" env BOSUN_CONFIG_DIR="$INIT_CFG" bash -c 'source "$1/lib/common.sh"; load_config; window_specs | grep -q "^init-api	$HOME/Development/init-api	session"' _ "$ROOT"
+  check "init trusts the folders" python3 "$ROOT/lib/claude_state.py" trusted "$INIT_REPO"
+  check "init loads the jobs through install.sh, with valid plists" bash -c 'plutil -lint -s "$1" && plutil -lint -s "$2" && grep -q "launchctl bootstrap gui/$(id -u) $1" "$3"' _ "$PLIST" "$HOME/Library/LaunchAgents/$BOSUN_LAUNCHD_LABEL.learn.plist" "$WORK/system.log"
+  check "the learning agent is valid XML, not only what plutil lets through" python3 -c 'import plistlib, sys; plistlib.loads(open(sys.argv[1], "rb").read())' "$HOME/Library/LaunchAgents/$BOSUN_LAUNCHD_LABEL.learn.plist"
+  check "... at the time the answers imply" grep -q "<key>Hour</key><integer>16</integer><key>Minute</key><integer>30</integer>" "$HOME/Library/LaunchAgents/$BOSUN_LAUNCHD_LABEL.learn.plist"
+  BOSUN_CONFIG_DIR="$INIT_CFG" "$ROOT/uninstall.sh" >/dev/null 2>&1
 else
   failed=$((failed + 1))
   echo "  FAIL  fake launchctl/pmset are not first on PATH; skipped install tests"

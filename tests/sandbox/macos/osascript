@@ -1,0 +1,4 @@
+#!/bin/bash
+# No notifications in a container: only recorded.
+mkdir -p "$HOME/.sandbox"
+echo "osascript $*" >>"$HOME/.sandbox/system.log"

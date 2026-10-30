@@ -1,0 +1,8 @@
+#!/bin/bash
+# caffeinate's stand-in: there is no sleep to prevent, but it lives as long as the real one.
+seconds=0
+while [ $# -gt 0 ]; do
+	[ "$1" = "-t" ] && seconds="$2"
+	shift
+done
+exec sleep "$seconds"

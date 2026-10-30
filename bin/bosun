@@ -8,6 +8,10 @@ usage() {
   cat <<'EOF'
 Usage: bosun <command> [args]
 
+Getting started
+  init        Set bosun up from what this Mac shows (repos, hours, logins): prints the plan, and
+              --recommended or --answers carries it out
+
 Daily flow
   morning     Scheduled entry point: keep awake, run setup steps, start or refresh sessions
   setup       Run only the setup steps from setup.sh (credential refresh etc.)

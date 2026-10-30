@@ -20,6 +20,21 @@ Issues and pull requests are welcome: see [CONTRIBUTING.md](../CONTRIBUTING.md) 
 [code of conduct](../CODE_OF_CONDUCT.md). Report security problems privately, as
 [SECURITY.md](../SECURITY.md) describes.
 
+## A sandbox for anything that changes a machine
+
+`tests/sandbox.sh` runs bosun on a clean machine that cannot touch yours: a throwaway Linux container
+with a read-only copy of the checkout. It needs Docker.
+
+```bash
+tests/sandbox.sh          # a new user's first day: bosun init, a morning, re-runs, uninstall (no network)
+tests/sandbox.sh all      # also the unit tests and the smoke suite, about 3 minutes
+tests/sandbox.sh shell    # that new user's machine, to try things by hand; it goes away on exit
+```
+
+Docker on a Mac is Linux, so `launchctl`, `pmset`, `caffeinate` and the like are stand-ins
+(`tests/sandbox/macos/`). It proves bosun's logic, not launchd, a real wake or the Keychain:
+`bosun wake-test`, below, does that on real hardware.
+
 ## Testing without waiting for the schedule
 
 Work up the levels; each one exercises more of the real chain.

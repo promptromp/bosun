@@ -1,0 +1,16 @@
+#!/usr/local/bin/python3
+"""plutil -lint [-s] <file or ->: a real check of the plist, with Python's stricter parser."""
+
+import plistlib
+import sys
+from pathlib import Path
+from xml.parsers.expat import ExpatError
+
+
+path = sys.argv[-1]
+try:
+    plistlib.loads(sys.stdin.buffer.read() if path == "-" else Path(path).read_bytes())
+except (OSError, ValueError, ExpatError) as error:
+    sys.exit(f"{path}: {error}")
+if "-s" not in sys.argv:
+    print(f"{path}: OK")

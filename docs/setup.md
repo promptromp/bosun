@@ -14,8 +14,33 @@ Requirements, installation and configuration, and the morning's logins.
 ## Install
 
 ```bash
-git clone <this repo> ~/Development/bosun
+git clone https://github.com/promptromp/bosun.git ~/Development/bosun
 cd ~/Development/bosun
+bin/bosun init                 # prints the plan and changes nothing
+bin/bosun init --recommended   # carries it out
+```
+
+`bosun init` reads what this Mac already shows: the repos you use Claude Code in, your usual hours,
+your logins. It recommends a setup from that, says why, and lists every file and command before
+it touches anything. Then it writes the config, trusts the folders, and runs `install.sh`.
+
+To change an answer, edit them and pass them back. A file only needs what it changes:
+
+```bash
+bin/bosun init --print-answers > answers.json
+$EDITOR answers.json           # repos, days, start, until, events, approvals, learning, ...
+bin/bosun init --answers answers.json
+```
+
+Run it again whenever you like: it starts from your config, keeps anything you added to `bosun.env`,
+keeps a backup of what it changes, and never changes your `setup.sh` once it exists. How it decides,
+and what it never does: [design note](design/init.md).
+
+### By hand
+
+If you prefer to write the config yourself:
+
+```bash
 ./install.sh --example generic        # seeds the config from examples/generic
 $EDITOR ~/.config/bosun/{bosun.env,sessions.yml,setup.sh}
 ./install.sh                          # re-run after editing schedule values

@@ -46,6 +46,10 @@ of truth, so don't copy rules into this file.
   the one repo-mask implementation. `lib/watchdog.py`: the watchdog's table of checks (`CHECKS`),
   awake window, de-dup state and alert sinks; `libexec/bosun-watchdog` only collects the live
   facts (tmux windows, the Claude in each, the check-in loop, launchd) for it.
+- Setup (`bosun init`, design: `docs/design/init.md`): `lib/init_detect.py` (read-only: what the Mac
+  shows, Claude Code's files through `lib/claude_state.py`), `lib/init_plan.py` (pure: recommended
+  answers, the config files' text, the plan) and `lib/init.py` (the CLI: writes the config with
+  backups, trusts the folders, then runs `install.sh`, the one place that knows launchd and `pmset`).
 - Events (design: `docs/design/events.md`, behind `BOSUN_EVENTS_ENABLED`): `lib/activity.py`
   (pure: what I said in a window and its attribution, a window's active item, `working`, which
   prompts are mine), `lib/hook.py` + `libexec/bosun-hook` (the repo sessions'
@@ -154,6 +158,11 @@ of truth, so don't copy rules into this file.
 - **A config key:** default in `lib/common.sh` and the same value in
   `examples/generic/bosun.env` (tests check they match); any other example only lists
   overrides. The guide in `docs/` if users should know.
+- **An answer `bosun init` offers:** a field of `Answers` (`lib/init_plan.py`) with its check, what
+  it recommends, the key in `env_groups` if it sets one, the table in `docs/design/init.md` and a
+  test in `tests/unit/test_init_plan.py`.
+- **A macOS tool bosun starts to use:** a stand-in in `tests/sandbox/macos/` if `tests/sandbox.sh` should
+  still pass without it.
 - **A command:** `libexec/bosun-<cmd>` with a `# Usage:` header (`usage` prints it for
   `--help`; `die_usage` reports usage errors with exit 2), a line in `bin/bosun`'s usage, the
   table in `docs/commands.md`, and smoke tests.
@@ -206,6 +215,14 @@ use `fails_with "<expected error>" cmd` for refusals (a crash must not count as 
 `wait_for <seconds> cmd` instead of fixed sleeps; external tools (aws, gh, launchctl, pmset,
 osascript) are faked in the temp HOME's `~/.local/bin`, and the install test uses its own launchd
 label and refuses to run unless the fakes come first on PATH.
+
+`tests/sandbox.sh [init|unit|smoke|all|shell]` runs bosun on a clean machine that cannot touch this
+one: a throwaway Linux container with a read-only copy of the checkout. `init` walks a new user's
+first day with no network (`tests/sandbox/fresh_user.sh`, in the fictional world of `world.sh`);
+`shell` gives you that machine to try things by hand. Use it for anything that installs or changes a
+machine, instead of your own. Its scripts install for real, so they refuse to run outside its image.
+Docker on a Mac is Linux, so `tests/sandbox/macos/` holds stand-ins: it proves bosun's logic, never
+launchd, a real wake or the Keychain (`bosun wake-test` does, on real hardware).
 
 `tests/llm/` holds tests with the real, headless Claude: what I say in my own words, and the
 ledger state it must lead to (`cases.py`), each run in a scratch world (`world.py`: scratch HOME,
