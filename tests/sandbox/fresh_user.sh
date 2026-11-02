@@ -135,12 +135,91 @@ other_windows() {
 }
 
 uninstall() {
-  echo "uninstall"
-  check "it runs" "$ROOT/uninstall.sh" --with-wake --purge
+  echo "uninstall, all of it"
+  check "it runs" "$ROOT/uninstall.sh" --yes --purge
   check "the link is gone" test ! -e "$HOME/.local/bin/bosun"
   check "the config is gone" test ! -e "$CONFIG"
+  # Only what uninstall knows goes, so this says that it knew everything a first day writes.
+  check "the state is gone" test ! -e "$HOME/.local/state/bosun"
   check "the launchd jobs are gone" bash -c '[ -z "$(ls -A "$HOME/.sandbox/launchd" 2>/dev/null)" ]'
+  check "their plists are gone" bash -c '[ -z "$(ls -A "$1" 2>/dev/null)" ]' _ "$AGENTS"
   check "the wake is gone" test ! -e "$HOME/.sandbox/pmset-repeat"
+  check "the trust it gave is gone" bash -c '! jq -e --arg d "$HOME/Development/api" ".projects[\$d].hasTrustDialogAccepted" "$HOME/.claude.json"'
+  check "the checkout it did not make stays" test -x "$ROOT/bin/bosun"
+}
+
+# Everything on this machine but the agents' own folders, the repos and what these tests write themselves.
+machine_files() {
+  find "$HOME" \( -path "$HOME/.sandbox" -o -path "$HOME/.claude" -o -path "$HOME/.codex" -o -path "$HOME/.cache" \
+    -o -path "$HOME/Development" -o -path "$ROOT" \) -prune -o \( -type f -o -type l \) -print |
+    grep -vE "^$HOME/[^/]+$|/\.local/bin/gh$|/__pycache__/" | sort
+}
+# The same, but for the folders that hold your settings and records.
+other_files() { machine_files | grep -vE "/\.config/bosun/|/\.local/state/bosun/"; }
+same_files() { diff <("$1") <(echo "$2"); } # <what lists them> <what it listed before>
+
+# Through a real terminal, on a machine the piped installer set up, with windows up and records to keep.
+the_uninstall() { # <what the machine held before it was installed>
+  local out="$HOME/uninstall.txt" bosun="$HOME/.local/bin/bosun" state="$HOME/.local/state/bosun"
+  local before_install="$1" settings ledger installed
+  echo "uninstall: what it says, what it asks and what it leaves, in a real terminal"
+  "$bosun" start >/dev/null 2>&1
+  "$bosun" ledger spawn --title "Keep me" --ask "Stay through an uninstall" --via "user: test" >/dev/null
+  "$bosun" kg import "$ROOT/tests/fixtures/knowledge/acme-import.jsonl" --apply --auto-confirm >/dev/null 2>&1
+  settings="$(cat "$CONFIG"/bosun.env "$CONFIG"/sessions.yml "$CONFIG"/setup.sh | cksum)"
+  ledger="$(cksum <"$state/ledger.json")"
+  installed="$(other_files | cksum)"
+
+  check "Enter at are-you-sure is a no" python3 "$DRIVE" "$out" "Are you sure" "<enter>" -- "$bosun" uninstall
+  check "... which says so" says "Nothing was changed" "$out"
+  check "it first says what goes" says "launchd job com.bosun.morning" "$out"
+  check "... and that it stops the windows" says "orchestrator" "$out"
+  check "... and what stays" says "your settings: " "$out"
+  check "... and what it will ask" says "It will ask whether to keep" "$out"
+  check "ctrl-c at the next question leaves too" python3 "$DRIVE" "$out" "Are you sure" "y<enter>" "Keep your ledger" "<ctrl-c>" -- "$bosun" uninstall
+  check "... and says so" says "Nothing was changed" "$out"
+  check "... with the windows still up" bash -c 'tmux -L bosun has-session -t "=bosun"'
+  check "... and nothing gone" test "$installed" = "$(other_files | cksum)"
+  check "a dry run takes nothing away" bash -c '"$1" uninstall --dry-run >/dev/null && [ -L "$1" ]' _ "$bosun"
+
+  check "yes, then Enter to keep your records" python3 "$DRIVE" "$out" \
+    "Are you sure" "y<enter>" \
+    "Keep your ledger" "<enter>" \
+    "Keep your knowledge graph" "<enter>" \
+    "bosun is uninstalled" "" \
+    -- "$bosun" uninstall
+  check "the windows have stopped" bash -c '! tmux -L bosun has-session -t "=bosun"'
+  check "the jobs are gone" bash -c '[ -z "$(ls -A "$HOME/.sandbox/launchd" 2>/dev/null)" ]'
+  check "the wake is gone" test ! -e "$HOME/.sandbox/pmset-repeat"
+  check "the checkout it made is gone" test ! -e "$HOME/.local/share/bosun"
+  check "the link is gone" test ! -e "$bosun"
+  check "it said sudo first, and used it for the wake" bash -c 'grep -q "sudo.*pmset repeat cancel" "$1"' _ "$LOG"
+  check "your settings are as you left them" test "$settings" = "$(cat "$CONFIG"/bosun.env "$CONFIG"/sessions.yml "$CONFIG"/setup.sh | cksum)"
+  check "your ledger is as you left it" test "$ledger" = "$(cksum <"$state/ledger.json")"
+  check "your knowledge graph is there" test -s "$CONFIG/knowledge/facts.jsonl"
+  check "only your records are left of the state" bash -c '[ "$(ls -A "$1" | tr "\n" " ")" = "ledger.json ledger.json.bak ledger.md " ] || ls -A "$1"' _ "$state"
+  check "it says where they are" says ".config/bosun" "$out"
+  check "... and how to come back" says "get.sh | sh" "$out"
+  check "nothing else on the machine changed" same_files other_files "$before_install"
+
+  # shellcheck disable=SC2002 # the pipe is the point: this is how people run it
+  check "installing again picks it all up" bash -c 'cat "$1/get.sh" | sh -s -- --unattended >"$2" 2>&1 || { tail -5 "$2"; exit 1; }' _ "$ROOT" "$out"
+  check "... your settings" test "$settings" = "$(cat "$CONFIG"/bosun.env "$CONFIG"/sessions.yml "$CONFIG"/setup.sh | cksum)"
+  check "... your ledger" bash -c '"$1" ledger list | grep -q "Keep me"' _ "$bosun"
+  check "... your knowledge graph" test -s "$CONFIG/knowledge/facts.jsonl"
+  check "... the jobs" says "launchctl bootstrap gui/$(id -u) $AGENTS/com.bosun.morning.plist" "$LOG"
+
+  check "this time no, and no" python3 "$DRIVE" "$out" \
+    "Are you sure" "y<enter>" \
+    "Keep your ledger" "n<enter>" \
+    "Keep your knowledge graph" "n<enter>" \
+    "bosun is uninstalled" "" \
+    -- "$bosun" uninstall
+  check "the state folder is gone" test ! -e "$state"
+  check "the knowledge graph is gone" test ! -e "$CONFIG/knowledge"
+  check "your settings still are not" test -f "$CONFIG/bosun.env"
+  rm -rf "$CONFIG"
+  check "what is left is what the machine held before" same_files machine_files "$before_install"
 }
 
 the_wizard_quit() {
@@ -183,11 +262,12 @@ preflight_stops_early() {
 }
 
 the_installer() {
-  local out="$HOME/installer.txt" branch
+  local out="$HOME/installer.txt" branch before_install
   echo "the installer: curl | sh, then the wizard, in a real terminal"
   branch="$(git -C "$ROOT" branch --show-current)"
   export BOSUN_REPO="$ROOT" BOSUN_BRANCH="$branch"
   mv "$HOME/.local/bin/gh" "$HOME/.sandbox/packages/gh"
+  before_install="$(other_files)" # bosun's own folders are not new here: earlier steps ran bosun too
   check "a dry run says what it would do" bash -c 'sh "$1/get.sh" --dry-run >"$2" && grep -q "git clone" "$2"' _ "$ROOT" "$out"
   check "... and does none of it" test ! -e "$HOME/.local/share/bosun"
   check "it is plain sh" sh -n "$ROOT/get.sh"
@@ -216,8 +296,7 @@ the_installer() {
   "$HOME/.local/bin/bosun" stop >/dev/null 2>&1
   check "running it again updates, then asks again" python3 "$DRIVE" "$out" "Updating" "" "Which repos" "q" -- sh -c "cat '$ROOT/get.sh' | sh"
   check "a download cut short does nothing" bash -c 'head -c 900 "$1/get.sh" | BOSUN_DIR="$HOME/cut-short" sh; [ ! -e "$HOME/cut-short" ]' _ "$ROOT"
-  "$HOME/.local/share/bosun/uninstall.sh" --with-wake --purge >/dev/null 2>&1
-  check "uninstall leaves no link" test ! -e "$HOME/.local/bin/bosun"
+  the_uninstall "$before_install"
   unset BOSUN_REPO BOSUN_BRANCH
 }
 
@@ -267,7 +346,10 @@ the_first_day_on_codex() {
   touch "$HOME/.sandbox/codex-logged-out"
   check "logged out, doctor says so" bash -c '! "$1" doctor >"$2" 2>&1; grep -q "codex login" "$2"' _ "$bosun" "$out"
   rm "$HOME/.sandbox/codex-logged-out"
-  "$HOME/.local/share/bosun/uninstall.sh" --with-wake --purge >/dev/null 2>&1 || "$ROOT/uninstall.sh" --with-wake --purge >/dev/null 2>&1
+  "$HOME/.local/bin/bosun" trust --any "$HOME/Development/api" >/dev/null 2>&1
+  check "uninstall takes back what it told Codex" bash -c '"$1" uninstall --yes --purge >"$2" 2>&1; ! grep -q "Development/" "$HOME/.codex/config.toml"' _ "$HOME/.local/bin/bosun" "$out"
+  check "... and leaves no link" test ! -e "$HOME/.local/bin/bosun"
+  check "... and nothing of its state" test ! -e "$state"
 }
 
 "$ROOT/tests/sandbox/world.sh"

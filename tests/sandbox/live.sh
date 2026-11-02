@@ -160,6 +160,47 @@ hand_over() {
   check "no errors in the hook's log" bash -c '! grep -h ERROR "$1"/logs/hook-*.log' _ "$STATE"
 }
 
+# What a plain Claude Code offers here, from its first message: about a cent, on the smallest model. Read to
+# the end, so that no Claude is left running when this returns.
+claude_offers() { # [flags...]
+  local out
+  out="$(claude -p "Reply with the single word OK. Do not use any tools." --model haiku --max-turns 1 \
+    --no-session-persistence --output-format stream-json --verbose "$@" 2>/dev/null)"
+  jq -r 'select(.type == "system" and .subtype == "init") | .slash_commands[]?' <<<"$out"
+}
+# What still runs from <folder>, with its command line, but for this test's own processes.
+runs_from() { # <folder>
+  # shellcheck disable=SC2009 # the command lines are the point: pgrep would only give the numbers
+  ps -axo pid=,ppid=,etime=,command= | grep -F "$1/" | grep -vE "grep -F|ps -axo" || true
+}
+nothing_runs_from() { [ -z "$(runs_from "$1")" ]; }              # <folder>
+offers_chores() { claude_offers "$@" | grep -q "bosun:chores"; } # [flags...]
+offers_nothing_of_bosun() { ! claude_offers | grep -q "bosun:"; }
+
+# After real windows on the real agents: nothing of bosun may stay behind in either of them.
+off_again() {
+  local checkout="$HOME/.local/share/bosun" out="$OUT/uninstall.txt"
+  echo "off again"
+  check "with its plugin, Claude Code offers /bosun:chores, so the next check can see one" offers_chores --plugin-dir "$checkout/orchestrator/plugin"
+  check "uninstall passes" bash -c 'bosun uninstall --yes >"$1" 2>&1 || { tail -20 "$1"; exit 1; }' _ "$out"
+  cat "$out"
+  check "the windows have stopped" bash -c '! tmux -L bosun has-session -t "=bosun"'
+  check "no process runs from the checkout" wait_for 30 nothing_runs_from "$checkout"
+  runs_from "$checkout"
+  check "the checkout is gone" test ! -e "$checkout"
+  check "your ledger stays" test -s "$STATE/ledger.json"
+  check "Claude Code no longer offers /bosun:chores" offers_nothing_of_bosun
+  check "... and still works" bash -c 'claude -p "Reply with the single word OK." --model haiku --max-turns 1 --no-session-persistence | grep -q OK'
+  check "its settings do not name bosun" bash -c '! grep -qi bosun "$HOME/.claude/settings.json" 2>/dev/null'
+  check "nor do its skills, commands or plugins" bash -c '[ -z "$(find "$HOME/.claude/skills" "$HOME/.claude/commands" "$HOME/.claude/plugins" -iname "*bosun*" 2>/dev/null)" ]'
+  check "it no longer trusts the repo" bash -c '! jq -e --arg dir "$HOME/Development/exporter" ".projects[\$dir].hasTrustDialogAccepted" "$HOME/.claude.json"'
+  if [ "$AGENT" = "codex" ]; then
+    check "Codex's config does not name bosun" bash -c '! grep -qi "bosun\|Development/exporter" "$HOME/.codex/config.toml"'
+    check "nor its skills" bash -c '[ -z "$(find "$HOME/.codex/skills" -iname "*bosun*" 2>/dev/null)" ]'
+    check "... and it still works" bash -c 'cd "$HOME" && codex exec --skip-git-repo-check "Reply with the single word OK." 2>/dev/null | grep -q OK'
+  fi
+}
+
 show_what_happened() {
   echo "what the windows show"
   bosun sessions 2>&1 | head -3 | cut -c1-100
@@ -174,7 +215,7 @@ case "$STEP" in
     real_windows
     hand_over
     show_what_happened
-    bosun stop >/dev/null 2>&1
+    off_again
     ;;
   *)
     echo "unknown step $STEP" >&2

@@ -89,6 +89,8 @@ installed and logged in. See [Running repo sessions on Codex](docs/setup.md#runn
 
 Prefer to look first? [`get.sh`](get.sh) is short, and `sh -s -- --dry-run` after the pipe says what it
 would do. [Setup](docs/setup.md) covers the details: other ways to install, configuration and logins.
+[`bosun uninstall`](docs/setup.md#uninstall) takes it all off again: it says what goes and what stays, and
+asks first.
 
 ## Status
 

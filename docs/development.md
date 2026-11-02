@@ -45,7 +45,7 @@ A throwaway Linux container with a read-only copy of your checkout, and no netwo
 scenario. It needs Docker.
 
 ```bash
-tests/sandbox.sh          # a new user's first day: the wizard, a morning, re-runs, uninstall
+tests/sandbox.sh          # a new user's first day: the wizard, a morning, re-runs, uninstall and back
 tests/sandbox.sh all      # also the unit tests and the smoke suite
 tests/sandbox.sh shell    # that new user's machine, to try things by hand; it goes away on exit
 ```

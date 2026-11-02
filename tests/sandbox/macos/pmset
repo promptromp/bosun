@@ -12,6 +12,13 @@ case "${1:-} ${2:-}" in
 	;;
 "repeat cancel") rm -f "$state" ;;
 "repeat wakeorpoweron")
-	printf 'wakepoweron at %s %s\n' "$(date -d "$4" '+%l:%M%p' | tr -d ' ')" "$3" >"$state"
+	# The days as real pmset prints them.
+	case "$3" in
+	MTWRFSU) days="every day" ;;
+	MTWRF) days="weekdays only" ;;
+	SU) days="weekends only" ;;
+	*) days="some days" ;;
+	esac
+	printf 'wakepoweron at %s %s\n' "$(date -d "$4" '+%l:%M%p' | tr -d ' ')" "$days" >"$state"
 	;;
 esac

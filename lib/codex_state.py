@@ -225,13 +225,22 @@ def trust_header(directory: str) -> str:
     return f"[projects.{json.dumps(os.path.realpath(directory))}]"
 
 
-def trusted(directory: str) -> bool:
-    try:
-        config = tomllib.loads(CONFIG_FILE.read_text())
-    except (OSError, ValueError):
+def trust_recorded(directory: str) -> bool | None:
+    """Whether config.toml marks <directory> as trusted; None if the file is there but cannot be read."""
+    if not CONFIG_FILE.exists():
         return False
-    projects = config.get("projects", {})
-    return bool(projects.get(os.path.realpath(directory), {}).get("trust_level") == "trusted")
+    try:
+        projects = tomllib.loads(CONFIG_FILE.read_text()).get("projects", {})
+    except (OSError, ValueError):
+        return None
+    if not isinstance(projects, dict):
+        return None
+    entry = projects.get(os.path.realpath(directory), {})
+    return isinstance(entry, dict) and entry.get("trust_level") == "trusted"
+
+
+def trusted(directory: str) -> bool:
+    return trust_recorded(directory) is True
 
 
 def without_section(text: str, header: str) -> str:

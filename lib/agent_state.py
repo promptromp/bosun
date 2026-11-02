@@ -20,6 +20,7 @@ Exit status 0 found or done, 3 not found, 2 usage.
 from __future__ import annotations
 
 import json
+import os
 import sys
 from collections.abc import Iterable, Iterator
 from datetime import datetime
@@ -28,6 +29,7 @@ from typing import Any, Protocol
 
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+import agent_changes
 import claude_state
 import codex_state
 from agent_files import NOT_FOUND, USAGE, Command, LaunchSettings, emit, run_command
@@ -47,6 +49,7 @@ class Agent(Protocol):
     def conversation_size(self, pid: str) -> int | None: ...
     def resolve(self, workdir: str, name: str) -> str | None: ...
     def trusted(self, directory: str) -> bool: ...
+    def trust_recorded(self, directory: str) -> bool | None: ...  # None: its config cannot be read
     def set_trust(self, directory: str, trust: bool) -> None: ...
     def prompt_history(self, since: datetime) -> Iterator[tuple[str, datetime]]: ...
     def ready(self) -> bool: ...
@@ -124,7 +127,16 @@ def cmd_set_trust(harness: str, args: list[str]) -> int:
     if args[1] not in ("true", "false"):
         print(__doc__.strip(), file=sys.stderr)
         return USAGE
-    AGENTS[harness].set_trust(args[0], args[1] == "true")
+    agent = AGENTS[harness]
+    trust = args[1] == "true"
+    # Only a change is bosun's: trust you gave a folder yourself stays yours when bosun goes.
+    bosun_gives_it = trust and not agent.trusted(args[0])
+    agent.set_trust(args[0], trust)
+    state_dir = os.environ.get("BOSUN_STATE_DIR")
+    if state_dir and bosun_gives_it:
+        agent_changes.record_trust(Path(state_dir), harness, args[0])
+    elif state_dir and not trust:
+        agent_changes.forget_trust(Path(state_dir), harness, args[0])
     return 0
 
 

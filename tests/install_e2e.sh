@@ -50,7 +50,8 @@ a_new_machine() {
   echo "a new machine"
   mkdir -p "$HOME/.local/bin"
   cp "$ROOT/tests/sandbox/claude-stand-in" "$HOME/.local/bin/claude"
-  echo '{"hasCompletedOnboarding": true}' >"$HOME/.claude.json" # a person went through its first-run screens
+  # A person went through its first-run screens, and accepted the folder trust for the repos' folder.
+  jq -n --arg dir "$HOME/Development" '{hasCompletedOnboarding: true, projects: {($dir): {hasTrustDialogAccepted: true}}}' >"$HOME/.claude.json"
   # With GH_TOKEN the real gh counts as logged in; without one, it needs its stand-in too.
   [ -n "${GH_TOKEN:-}" ] || cp "$ROOT/tests/sandbox/gh-stand-in" "$HOME/.local/bin/gh"
   # A repo by hand: on a new Mac there is no git until the installer has run.
@@ -129,15 +130,76 @@ run_again() {
   check "... and back nothing up" bash -c '! ls "$1"/*.pre-init-* >/dev/null 2>&1' _ "$CONFIG"
 }
 
-uninstall() {
-  echo "uninstall"
-  check "it runs" "$DIR/uninstall.sh" --with-wake --purge
-  check "the link is gone" test ! -e "$HOME/.local/bin/bosun"
-  check "the config is gone" test ! -e "$CONFIG"
+jobs_are_gone() {
   for job in "$LABEL" "$LABEL.watchdog" "$LABEL.learn"; do
-    check "$job is gone" bash -c '! launchctl print "$1"' _ "$DOMAIN/$job"
+    check "$job is unloaded" bash -c '! launchctl print "$1"' _ "$DOMAIN/$job"
+    check "... launchd cannot run it" bash -c '! launchctl kickstart "$1"' _ "$DOMAIN/$job"
+    check "... and its plist is gone" test ! -e "$HOME/Library/LaunchAgents/$job.plist"
   done
+}
+settings_sum() { cat "$CONFIG"/bosun.env "$CONFIG"/sessions.yml "$CONFIG"/setup.sh | cksum; }
+trusted() { jq -e --arg dir "$1" '.projects[$dir].hasTrustDialogAccepted == true' "$HOME/.claude.json"; }
+# Anything of bosun's anywhere in this home folder, by name. Not the agents' own folders, nor this test's.
+named_bosun() {
+  find "$HOME" \( -path "$ROOT" -o -path "$HOME/.claude" -o -path "$HOME/Library/Caches" -o -path "$HOME/repo.bundle" \
+    -o -path "$HOME/work" -o -path "$HOME/runners" -o -path "$HOME/hostedtoolcache" \) -prune -o -iname '*bosun*' -print 2>/dev/null
+}
+
+# Through a real terminal, with real launchd and pmset.
+uninstall() {
+  local bosun="$HOME/.local/bin/bosun" state="$HOME/.local/state/bosun" out="$OUT/uninstall.txt"
+  local drive=(python3 "$ROOT/tests/sandbox/drive.py" "$out") settings ledger
+  echo "uninstall, through a real terminal"
+  "$bosun" start >/dev/null 2>&1
+  "$bosun" ledger spawn --title "Keep me" --ask "Stay through an uninstall" --via "user: test" >/dev/null
+  "$bosun" kg import "$ROOT/tests/fixtures/knowledge/acme-import.jsonl" --apply --auto-confirm >/dev/null 2>&1
+  settings="$(settings_sum)"
+  ledger="$(cksum <"$state/ledger.json")"
+
+  check "Enter at are-you-sure is a no" "${drive[@]}" "Are you sure" "<enter>" -- "$bosun" uninstall
+  cat "$out"
+  check "... which says so" grep -q "Nothing was changed" "$out"
+  check "... and it is so" launchctl print "$DOMAIN/$LABEL"
+  check "... with the wake still set" bash -c 'pmset -g sched | grep -i -A3 "repeating" | grep -iq wake'
+  check "... and the windows up" tmux -L bosun has-session -t "=bosun"
+
+  check "yes, then Enter to keep your records" "${drive[@]}" \
+    "Are you sure" "y<enter>" \
+    "Keep your ledger" "<enter>" \
+    "Keep your knowledge graph" "<enter>" \
+    "bosun is uninstalled" "" \
+    -- "$bosun" uninstall
+  cat "$out"
+  jobs_are_gone
   check "the wake is gone" bash -c '! pmset -g sched | grep -i -A3 "repeating" | grep -iq wake'
+  check "the windows have stopped" bash -c '! tmux -L bosun has-session -t "=bosun"'
+  check "the checkout it made is gone" test ! -e "$DIR"
+  check "the link is gone" test ! -e "$bosun"
+  check "your settings are as you left them" test "$settings" = "$(settings_sum)"
+  check "your ledger is as you left it" test "$ledger" = "$(cksum <"$state/ledger.json")"
+  check "your knowledge graph is there" test -s "$CONFIG/knowledge/facts.jsonl"
+  check "the trust it gave a repo is gone" bash -c '! jq -e --arg dir "$1" ".projects[\$dir].hasTrustDialogAccepted" "$HOME/.claude.json"' _ "$HOME/Development/acme-api"
+  check "the trust you gave stays" trusted "$HOME/Development"
+
+  # shellcheck disable=SC2002 # the pipe is the point: this is how people run it
+  cat "$ROOT/get.sh" | sh -s -- --unattended >"$OUT/back.txt" 2>&1
+  check "installing again passes" test "$?" = 0
+  check "... with your settings" test "$settings" = "$(settings_sum)"
+  check "... your ledger" bash -c '"$1" ledger list | grep -q "Keep me"' _ "$bosun"
+  check "... the jobs" launchctl print "$DOMAIN/$LABEL"
+  check "... the wake" bash -c 'pmset -g sched | grep -i -A3 "repeating" | grep -iq wake'
+
+  echo "a wake that is not bosun's"
+  sudo pmset repeat wakeorpoweron MTWRFSU 03:17:00
+  check "uninstall leaves it" bash -c '"$1" uninstall --yes --purge >"$2" 2>&1; pmset -g sched | grep -i -A3 "repeating" | grep -q "3:17AM"' _ "$bosun" "$out"
+  cat "$out"
+  check "... and says so" grep -q "may not be bosun" "$out"
+  sudo pmset repeat cancel
+  jobs_are_gone
+  check "the state folder is gone" test ! -e "$state"
+  check "the config folder is gone" test ! -e "$CONFIG"
+  check "nothing named bosun is left in this home folder" bash -c '[ -z "$1" ] || { echo "$1"; exit 1; }' _ "$(named_bosun)"
+  check "the agent's own config is still there" jq -e '.hasCompletedOnboarding == true' "$HOME/.claude.json"
 }
 
 a_new_machine

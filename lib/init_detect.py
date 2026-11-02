@@ -136,17 +136,23 @@ def aws_sso_profiles(path: Path) -> tuple[str, ...]:
     )
 
 
-def repeating_wake(schedule: str) -> str:
-    """The wake among the repeating events in `pmset -g sched`, if there is one."""
+def repeating_events(schedule: str) -> tuple[str, ...]:
+    """The repeating events in `pmset -g sched`."""
+    events = []
     repeating = False
     for line in schedule.splitlines():
         if line.startswith("Repeating power events"):
             repeating = True
         elif repeating and not line.startswith((" ", "\t")):
             repeating = False
-        elif repeating and "wake" in line.lower():
-            return line.strip()
-    return ""
+        elif repeating and line.strip():
+            events.append(line.strip())
+    return tuple(events)
+
+
+def repeating_wake(schedule: str) -> str:
+    """The wake among the repeating events in `pmset -g sched`, if there is one."""
+    return next((event for event in repeating_events(schedule) if "wake" in event.lower()), "")
 
 
 def config_files(config_dir: Path) -> dict[str, str]:

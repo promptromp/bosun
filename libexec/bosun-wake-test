@@ -15,7 +15,7 @@ set -uo pipefail
 source "$(dirname "$0")/../lib/common.sh"
 load_config
 
-TEST_LABEL="$BOSUN_LAUNCHD_LABEL.waketest"
+TEST_LABEL="$(waketest_label)"
 TEST_PLIST="$HOME/Library/LaunchAgents/$TEST_LABEL.plist"
 TEST_SESSION="$BOSUN_SESSION_NAME-waketest"
 MARKER="$BOSUN_STATE_DIR/wake-test.env"
