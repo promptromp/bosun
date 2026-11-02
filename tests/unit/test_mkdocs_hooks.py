@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import importlib.util
 import sys
 import tempfile
 import unittest
@@ -10,9 +11,10 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "tools"))
 import mkdocs_hooks
-from mkdocs.commands.build import build
-from mkdocs.config import load_config
-from mkdocs.exceptions import Abort
+
+
+# MkDocs is in the docs group; the smoke suite runs these with a plain python3 that has no MkDocs.
+HAVE_MKDOCS = importlib.util.find_spec("mkdocs") is not None
 
 
 BLOB = "https://github.com/acme/widget/blob/main"
@@ -99,6 +101,7 @@ class GluedListsTest(unittest.TestCase):
         self.assertEqual(mkdocs_hooks.glued_lists("<p>Since\n2. was all</p>"), [])
 
 
+@unittest.skipUnless(HAVE_MKDOCS, "MkDocs is not installed (uv sync installs the docs group)")
 class BuildTest(unittest.TestCase):
     """A whole strict build of a small site with the hooks, as `mkdocs build --strict` runs it."""
 
@@ -126,6 +129,9 @@ class BuildTest(unittest.TestCase):
         )
 
     def build(self) -> Path:
+        from mkdocs.commands.build import build
+        from mkdocs.config import load_config
+
         config = load_config(str(self.root / "mkdocs.yml"), strict=True, site_dir=str(self.root / "site"))
         build(config)
         return self.root / "site"
@@ -142,6 +148,8 @@ class BuildTest(unittest.TestCase):
 
     def test_a_glued_list_fails_the_strict_build(self) -> None:
         (self.root / "docs" / "guide.md").write_text("# Guide\n\n## Usage\n\nSteps:\n- one\n- two\n")
+        from mkdocs.exceptions import Abort
+
         with self.assertRaises(Abort), self.assertLogs("mkdocs", "WARNING") as logged:
             self.build()
         self.assertEqual(

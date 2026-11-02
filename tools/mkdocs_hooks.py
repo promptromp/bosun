@@ -23,12 +23,14 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from check_links import HTML_LINK, MARKDOWN_LINK, WEB, without_code
-from mkdocs.structure.files import File, Files
 
 
+# MkDocs only for types, and in on_files: the rest is plain Python, which the smoke suite's unit run
+# (python3 without the docs group) tests too.
 if TYPE_CHECKING:
     from mkdocs.config.defaults import MkDocsConfig
     from mkdocs.livereload import LiveReloadServer
+    from mkdocs.structure.files import File, Files
     from mkdocs.structure.pages import Page
 
 
@@ -56,6 +58,8 @@ def repo_root(config: MkDocsConfig) -> Path:
 def on_files(files: Files, config: MkDocsConfig) -> Files:
     """The root files become pages; one that is missing is left out, and the strict build then fails on
     the nav entry or links that name it."""
+    from mkdocs.structure.files import File  # noqa: PLC0415 (see the imports above)
+
     root = repo_root(config)
     for source, page in ROOT_PAGES.items():
         if (root / source).is_file():
