@@ -110,8 +110,12 @@ check "usage errors exit 2" bash -c '
 
 echo "python unit tests (tests/unit)"
 unit_out="$(python3 -m unittest discover -s "$ROOT/tests/unit" 2>&1)"
-check "$(grep -o 'Ran [0-9]* tests' <<<"$unit_out" || echo 'unit tests'), all passing" grep -qx OK <<<"$(tail -1 <<<"$unit_out")"
-grep -qx OK <<<"$(tail -1 <<<"$unit_out")" || tail -25 <<<"$unit_out"
+unit_end="$(tail -1 <<<"$unit_out")"
+# A plain python3 has no MkDocs, so the docs site's whole-build tests skip here (they run under uv);
+# the label says how many skipped, so a new skip shows.
+unit_ok='^OK( \(skipped=[0-9]+\))?$'
+check "$(grep -o 'Ran [0-9]* tests' <<<"$unit_out" || echo 'unit tests'), all passing$(grep -o ' (skipped=[0-9]*)' <<<"$unit_end")" grep -qE "$unit_ok" <<<"$unit_end"
+grep -qE "$unit_ok" <<<"$unit_end" || tail -25 <<<"$unit_out"
 
 # Fixture HOME with two projects and named sessions.
 export HOME="$WORK/home"
