@@ -3,6 +3,9 @@
 Design: [docs/design/impact.md](../design/impact.md), "Overhead and guardrails". This file is the
 build plan; tick items as they land so a later session can resume.
 
+Status: done but for step 7. The panel, guardrails and watchdog checks merged 2026-10-27; the
+fixes they measure merged 2026-10-27/28, so step 7 is due now.
+
 ## Scope
 
 Measure what bosun itself costs and whether fixing it hurts the work: classify what started
@@ -38,8 +41,9 @@ measures them.
 - [x] 6. A real collect, the per-class table for the last 14 days against the saved baseline
       (`~/.local/state/bosun/overhead-baseline/2026-10-27-7d.txt`, outside the repo), a
       screenshot of `#/impact`.
-- [ ] 7. When the fixes roll out: set `BOSUN_IMPACT_OVERHEAD_FIXED_AT` to that day, collect daily,
-      read the before/after table after a week (cost down, guardrails holding).
+- [ ] 7. The fixes merged 2026-10-27/28, so this is due: set `BOSUN_IMPACT_OVERHEAD_FIXED_AT` to
+      the day they rolled out, collect daily, read the before/after table after a week (cost down,
+      guardrails holding).
 
 ## Comparing daily
 

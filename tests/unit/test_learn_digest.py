@@ -4,6 +4,7 @@ in tests/llm/learn_world.py (sessions, ledger, logs, hints), redaction and the s
 from __future__ import annotations
 
 import json
+import re
 import tempfile
 import unittest
 from datetime import UTC, datetime, timedelta
@@ -181,6 +182,28 @@ class CapTest(WorldCase):
         self.assertIn("- cut at the cap: the end of the activity sections is missing", digest.text)
         self.assertIn("## Watchdog alerts in the window", digest.text)
         self.assertIn("## Instructions and memory in force", digest.text)
+
+
+class WindowTest(unittest.TestCase):
+    def test_the_world_s_windows_have_the_keys_bosun_sessions_prints(self) -> None:
+        script = (ROOT / "libexec" / "bosun-sessions").read_text()
+        printed = re.search(r"'\{(name: \$name[^}]*)\}'", script)
+        assert printed is not None, "bosun-sessions no longer prints a window as a jq object"
+        keys = {part.split(":")[0].strip() for part in printed.group(1).split(",")}
+        self.assertEqual(set(learn_world.window("w", "session", Path("/x"), "id")), keys)
+
+    def test_the_agent_in_a_window_is_read(self) -> None:
+        [window] = learn_digest.Window.from_json(
+            [learn_world.window("api", "session", Path("/x"), "abc", "busy")]
+        )
+        self.assertEqual((window.session_id, window.status), ("abc", "busy"))
+
+    def test_a_window_without_an_agent(self) -> None:
+        empty = learn_world.window("api", "session", Path("/x"), None)
+        gone = {**empty, "window": False}
+        self.assertEqual(
+            [w.status for w in learn_digest.Window.from_json([empty, gone])], ["no-agent", "no-window"]
+        )
 
 
 class HelpersTest(unittest.TestCase):

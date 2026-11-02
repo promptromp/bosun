@@ -2,8 +2,8 @@
 
 `uv sync && uv run pre-commit install` once after cloning. Commits then run ruff, mypy --strict,
 complexity limits (complexipy, lizard, and a shell checker in `tools/`), shellcheck, shfmt, hadolint for
-the Dockerfile, actionlint and zizmor for the workflows, spelling, the links between the docs, a secrets
-scan (detect-secrets) and the unit tests; pushes also run the smoke suite. A
+the Dockerfile, actionlint and zizmor for the workflows, spelling, the links between the docs, a build of
+the docs site, a secrets scan (detect-secrets) and the unit tests; pushes also run the smoke suite. A
 forbidden-terms check (`tools/forbidden_terms.py`) refuses staged files and commit messages that
 contain a term from `~/.config/bosun/forbidden-terms.txt` (one case-insensitive regex
 per line, `#` comments), a list you keep outside the repo of names that must never be committed:
@@ -21,10 +21,29 @@ Issues and pull requests are welcome: see [CONTRIBUTING.md](../CONTRIBUTING.md) 
 [code of conduct](../CODE_OF_CONDUCT.md). Report security problems privately, as
 [SECURITY.md](../SECURITY.md) describes.
 
+## The docs site
+
+The guides, design notes and plans in `docs/`, with `README.md` as the home page and `ROADMAP.md`,
+`CONTRIBUTING.md`, `SECURITY.md` and `CODE_OF_CONDUCT.md`, are also a website:
+[promptromp.github.io/bosun](https://promptromp.github.io/bosun/), built with
+[MkDocs](https://www.mkdocs.org/) and [Material for MkDocs](https://squidfunk.github.io/mkdocs-material/)
+from `mkdocs.yml`. `.github/workflows/docs.yml` publishes it each time `main` changes them.
+
+```bash
+uv run mkdocs serve            # preview at http://127.0.0.1:8000, rebuilt as you edit
+uv run mkdocs build --strict   # what the docs-site hook and CI run
+```
+
+Write the Markdown for GitHub, with relative links between files; `tools/mkdocs_hooks.py` makes the root
+files pages and points each link at its page on the site, or at the file on GitHub when the site does not
+have it. The strict build fails on a page missing from `nav` in `mkdocs.yml`, a broken link or anchor, and
+a list that starts on the line after a paragraph: GitHub shows a list there, the site one paragraph, so
+put a blank line before it.
+
 ## Which sandbox for what
 
-**Never test an install on your own Mac.** `install.sh`, `bosun init --recommended` and `get.sh` change
-launchd, `pmset` and your config for real. Use the cheapest of these that can show what you changed:
+**Never test an install on your own Mac.** `install.sh`, `bosun init --recommended`, `get.sh` and
+`bosun uninstall` change launchd, `pmset` and your config for real. Use the cheapest of these that can show what you changed:
 
 | What you changed | Run | What it can prove | Time |
 |---|---|---|---|
@@ -46,7 +65,8 @@ scenario. It needs Docker.
 
 ```bash
 tests/sandbox.sh          # a new user's first day: the wizard, a morning, re-runs, uninstall and back
-tests/sandbox.sh all      # also the unit tests and the smoke suite
+tests/sandbox.sh unit     # only the unit tests; `smoke` only the smoke suite
+tests/sandbox.sh all      # the first day, the unit tests and the smoke suite
 tests/sandbox.sh shell    # that new user's machine, to try things by hand; it goes away on exit
 ```
 

@@ -769,15 +769,19 @@ def project_dir(projects: Path, folder: Path) -> Path:
 def window(
     name: str, kind: str, folder: Path, session_id: str | None, status: str = "idle"
 ) -> dict[str, Any]:
-    claude = {"sessionId": session_id, "status": status, "name": name} if session_id else None
+    """A window as `bosun sessions --json` prints it (libexec/bosun-sessions, window_json)."""
+    agent = (
+        {"sessionId": session_id, "status": status, "name": name, "harness": "claude"} if session_id else None
+    )
     return {
         "name": name,
         "kind": kind,
         "dir": str(folder),
         "model": "opus",
         "effort": "medium",
+        "harness": "claude",
         "window": True,
-        "claude": claude,
+        "agent": agent,
     }
 
 
@@ -816,7 +820,7 @@ def build(base: Path) -> LearnWorld:
                 window("exporter", "session", folders["exporter"], EXPORTER),
                 window("exporter-tax", "session", folders["exporter-tax"], EXPORTER_TAX),
                 window("exporter-pdf", "session", folders["exporter-pdf"], EXPORTER_PDF),
-                {"name": "checkin", "kind": "checkin", "dir": str(base), "window": True, "claude": None},
+                {"name": "checkin", "kind": "checkin", "dir": str(base), "window": True, "agent": None},
             ],
             indent=2,
         )

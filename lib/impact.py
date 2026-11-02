@@ -468,5 +468,6 @@ def impact_model(snapshot: Mapping[str, Any] | None, now: datetime, zone: tzinfo
         "leverage": leverage_compare(weeks, minutes),
         "windows": by_window(snapshot, frame),
         "unpriced_models": unpriced_models(snapshot.get("activity") or []),
+        "fallback_model": FALLBACK_MODEL,
         "weeks": [week_view(w, minutes) for w in weeks],
     }

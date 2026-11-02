@@ -127,8 +127,11 @@ of truth, so don't copy rules into this file.
   rules in `$BOSUN_CONFIG_DIR/tasks/`, and append to the policy with
   `$BOSUN_CONFIG_DIR/policy.md`; keep team- or person-specific procedure there, not here.
 - Docs: `README.md` is the front page (what bosun is, a quick start, the guide list), kept short;
-  the user guides are `docs/*.md` (index: `docs/README.md`), one per part; design notes are in
-  `docs/design/`, plans in `docs/plans/`. A user-facing change goes in its part's guide.
+  the user guides are `docs/*.md`, one per part; design notes are in `docs/design/`, plans in
+  `docs/plans/`. A user-facing change goes in its part's guide. They are also the docs site
+  (`mkdocs.yml`: its `nav` lists every page; `tools/mkdocs_hooks.py` adds the root pages and points
+  links at the site; published by `.github/workflows/docs.yml`; guide: `docs/development.md`, "The
+  docs site"). A new page goes in `nav` and the guide table of `README.md`.
 
 ## Common changes
 
@@ -215,8 +218,10 @@ and CI agree on versions. On commit (`.pre-commit-config.yaml`; run all with `uv
 - Everything else written by hand: hadolint (Dockerfiles), actionlint and zizmor (workflows; actions are
   pinned by commit, with the tag in a comment that Dependabot keeps up to date), the Dependabot config's
   schema, valid XML in the plist templates (Apple's `plutil` is more lenient than XML), `typos`
-  (`_typos.toml` lists words it should leave alone) and `tools/check_links.py` (relative links and
-  anchors between the docs).
+  (`_typos.toml` lists words it should leave alone), `tools/check_links.py` (relative links and
+  anchors between the docs, as GitHub resolves them) and `mkdocs build --strict` (the docs site: every
+  page in `nav`, links and anchors on the site, and no list glued to the paragraph above it, which the
+  site would show as one paragraph).
 - Hygiene: whitespace, line endings, JSON/TOML/YAML syntax, shebangs vs executable bits, symlinks,
   credentials and private keys, `uv.lock` in sync, and no commit directly on `main`.
 - Publishing: detect-secrets against the audited `.secrets.baseline` (after a reviewed false
@@ -232,7 +237,8 @@ to 3.15 with a floor under coverage (`test (<version>)`), the smoke suite on mac
 gitleaks over the pull request's commits (`gitleaks`; a made-up value in a test carries a
 `gitleaks:allow` comment). `.github/workflows/install.yml` runs the install for real on a clean macOS
 runner and the Docker sandbox, when the install could have changed and weekly; those are not required
-checks, because a required check that did not run blocks a merge. The
+checks, because a required check that did not run blocks a merge. `.github/workflows/docs.yml`
+publishes the docs site to GitHub Pages from `main` (the repository's Pages source is GitHub Actions). The
 logs are public, so neither check prints what it matched. `main` takes changes only through a pull
 request with those checks green and up to date with `main`, CodeQL's results clean (GitHub's
 default setup; no error alerts, no high or critical security alerts) and every review thread
@@ -257,8 +263,8 @@ use `fails_with "<expected error>" cmd` for refusals (a crash must not count as 
 osascript) are faked in the temp HOME's `~/.local/bin`, and the install test uses its own launchd
 label and refuses to run unless the fakes come first on PATH.
 
-**Never test an install on the machine you are running on: `install.sh`, `bosun init --recommended` and
-`get.sh` change launchd, `pmset` and the config for real.** Use the cheapest sandbox that can show what
+**Never test an install on the machine you are running on: `install.sh`, `bosun init --recommended`,
+`get.sh` and `bosun uninstall` change launchd, `pmset` and the config for real.** Use the cheapest sandbox that can show what
 you changed (the table and how to set them up: `docs/development.md`, "Which sandbox for what"):
 
 - `tests/sandbox.sh [init|unit|smoke|all|shell]`: a throwaway Linux container with a read-only copy of the

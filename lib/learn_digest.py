@@ -140,14 +140,14 @@ class Window:
     def from_json(cls, data: list[dict[str, Any]]) -> list[Window]:
         windows = []
         for entry in data:
-            claude = entry.get("claude") or {}
+            agent = entry.get("agent") or {}  # what runs in the window, Claude Code or Codex
             windows.append(
                 cls(
                     name=str(entry["name"]),
                     kind=str(entry.get("kind", "")),
                     dir=str(entry.get("dir", "")),
-                    session_id=claude.get("sessionId"),
-                    status=str(claude.get("status") or ("no-agent" if entry.get("window") else "no-window")),
+                    session_id=agent.get("sessionId"),
+                    status=str(agent.get("status") or ("no-agent" if entry.get("window") else "no-window")),
                 )
             )
         return windows

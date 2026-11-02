@@ -100,14 +100,20 @@ asks first.
   and Codex windows do not have everything yet: see
   [what they lack](docs/design/harnesses.md#what-codex-windows-do-not-have-yet).
 - **One engineer, one Mac** today. A ledger and knowledge base shared across a team is next.
-- **The proactive parts are opt-in** while they mature: events and the Slack watcher, approvals
-  and learning are each switched on in `bosun.env` ([Setup](docs/setup.md#configuration)).
+- **The proactive parts are off in bosun's own defaults** while they mature: events, approvals,
+  learning and the Slack watcher. `bosun init` recommends turning them on (the Slack watcher only
+  with Slack's plugin installed); you choose in its questions, or later in `bosun.env`
+  ([Setup](docs/setup.md#configuration)).
 
 ## Documentation
 
+The guides, design notes and roadmap are also a website, with search:
+[promptromp.github.io/bosun](https://promptromp.github.io/bosun/).
+
 | Guide | What it covers |
 |---|---|
-| [Setup](docs/setup.md) | Requirements, install, configuration, sessions, Codex, Claude Code login, AWS SSO |
+| [Setup](docs/setup.md) | Requirements, install, uninstall, configuration, sessions, Codex, Claude Code login, AWS SSO |
+| [How a day runs](docs/day.md) | What runs when: the morning, check-ins, the watchdog, the evening |
 | [Commands](docs/commands.md) | Every `bosun` command |
 | [Orchestrator](docs/orchestrator.md) | Chores, delegated tasks, the ledger, outreach, tasks, tickets, workstreams |
 | [Permissions](docs/permissions.md) | What needs your approval, and approvals bound to the exact call |

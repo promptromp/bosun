@@ -123,12 +123,13 @@ Its **Overhead** panel shows what bosun itself costs. Every turn's tokens count 
 started it: my requests, tasks handed to a window and subagents are work; check-ins, events
 summaries, background-task notifications, resume prompts, messages between sessions, prompts Claude
 Code sends on a schedule (a session's own cron or wake-up) and the prompt openings in
-`BOSUN_IMPACT_OVERHEAD_PREFIXES` (a site's own scheduled prompts, `|`-separated) are overhead. The panel shows the overhead share per week, the cost per check-in, notification and
-resume, and the context each window's turns re-read (a long conversation makes every turn there
-expensive). Guardrails beside it (tasks reported and done, hand-over to report time, approval
-failures, outreach answered, events delivered and waiting, check-ins sent and skipped) show the
-work did not get worse when the cost fell; they, the context per window and cost per turn are on
-**Bosun internals** (`#/impact/internals`, linked from the page). `BOSUN_IMPACT_OVERHEAD_FIXED_AT` (a date) adds a
+`BOSUN_IMPACT_OVERHEAD_PREFIXES` (a site's own scheduled prompts, `|`-separated) are overhead. The panel shows the overhead share over the last 7 days against the 7 before, the
+cost per check-in and per notification, the context a turn re-reads (median and p90; a long
+conversation makes every turn there expensive), and the cost per week by what started each turn.
+**Bosun internals** (`#/impact/internals`, linked from the page) has the context per window, the
+cost per turn by week (check-in, notification, resume, events) and guardrails (tasks reported and
+done, hand-over to report time, approval failures, outreach answered, events delivered and
+waiting, check-ins sent and skipped) that show the work did not get worse when the cost fell. `BOSUN_IMPACT_OVERHEAD_FIXED_AT` (a date) adds a
 before/after table there for the week on each side. The watchdog's `context-size` and `overhead-share`
 checks warn when either grows.
 

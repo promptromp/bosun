@@ -23,9 +23,15 @@ dev = [
     "typos>=1.51.1",
     "zizmor>=1.31.1",
 ]
+# The docs site (mkdocs.yml). Its own group, so the publishing workflow installs only this.
+docs = [
+    "mdx-truly-sane-lists>=1.3",
+    "mkdocs-material>=9.8",
+]
 
 [tool.uv]
 package = false
+default-groups = ["dev", "docs"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests/unit"]

@@ -407,6 +407,7 @@ async function impactChecks() {
     if (!count(page, (n) => n.nodeName === "line" && n.getAttribute("class") === "start-line")) return "no start line";
     if (!count(page, (n) => n.nodeName === "rect" && n.getAttribute("class") === "baseline-band")) return "no baseline band";
     if (!text.includes("mystery-1")) return "the unpriced model is not named";
+    if (!text.includes(`priced as ${m.fallback_model}: mystery-1`)) return "the note does not say how an unpriced model is priced";
     return problems(page);
   });
   check("#/impact: every merged PR is a link in the week-by-week list", () => {

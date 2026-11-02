@@ -31,6 +31,13 @@ fields (backed by `claude auth status` and a tiny login check request) drive a m
 errors, the watchdog's `login-expired` check, and `bosun status` / `doctor` (`docs/setup.md`,
 "Claude Code login").
 
+**Done (2026-10-30): Claude Code's own signals.** Async hooks (`bosun hook signal`,
+`BOSUN_HOOK_SIGNALS=1`) record each Claude Code window's Notification, PermissionRequest, Stop,
+StopFailure, SessionStart and SessionEnd events, and never block it. The watchdog's `waiting` alert
+now says what the window was asked, `long-shell` names what is still running, and `spend-limit` also
+sees a stop only the StopFailure hook reported. Design note:
+[docs/design/signals.md](docs/design/signals.md).
+
 ### 2. Cloud watchdog (track only)
 
 **Why:** a machine-local watchdog cannot report that the machine is off, asleep or offline.
@@ -135,7 +142,15 @@ rounds (read-only; which threads await the author; bots never count), and `bosun
 raises new reviews on my PRs after their last hand-over as `review-arrived` and, with events on,
 `review` events (the check-in loop runs it every `BOSUN_REVIEW_WATCH_MINUTES`).
 
+**Done (2026-10-30): compaction keeps the window's items.** Every prompt re-reads the whole
+conversation, so a window left to grow to 300k-900k tokens cost that much a turn. Claude Code windows
+now start with `--autocompact` (`BOSUN_AUTOCOMPACT_TOKENS`, 300000; a `sessions.yml` entry can set its
+own), and with `BOSUN_COMPACT_CONTEXT=1` a SessionStart hook adds back, after a compaction, the ledger
+items the window holds (the orchestrator: what waits for approval and the open items per window), in
+at most `BOSUN_COMPACT_CONTEXT_MAX_CHARS` (1500) characters (`docs/setup.md`).
+
 **Next (lineage, phase 3):**
+
 - **Derived closing.** A task whose PR merged, or a ticket closed while its work is open, is a
   hint today; the plan could carry the exact transition automatically, and a merged task could
   close without asking (a merge is a fact).
@@ -235,18 +250,62 @@ budget, since Claude Code checks `--max-budget-usd` only after a turn. The diges
 (`BOSUN_LEARN_MAX_DIGEST_KB`, leaving out routine history first and saying what it left out),
 and a run whose estimated cost exceeds the budget is refused before the call.
 
+**Done (2026-10-29): what learning has produced.** The Impact page's panel of that name
+([docs/design/impact.md](docs/design/impact.md)) lists learning's runs with their findings and cost,
+the findings that came back in a later run, the `learn:` proposals by state, and the knowledge base's
+size and weekly growth.
+
 **Next:** give the analysis the watchdog's checks and the command list (it re-proposed an alert the
-watchdog has); check whether applied changes stop their finding from recurring; sandboxed on-demand
-reads of transcript excerpts; proposals as diffs to the generic prompts (reviewed as PRs); trends
-across runs; a second harness adapter. Open: whether `learn apply` should also need a permission
-prompt once phone approvals are verified.
+watchdog has); check whether an applied change stops its finding from recurring (the panel shows
+findings that came back, not yet against when their fix was applied); sandboxed on-demand reads of
+transcript excerpts; proposals as diffs to the generic prompts (reviewed as PRs); a second harness
+adapter, for Codex windows. Open: whether `learn apply` should also need a permission prompt once
+phone approvals are verified.
 
 ## Features
 
+### Installing and uninstalling
+
+**Why:** installing meant cloning, running `install.sh`, editing three files by hand and pasting a
+`sudo` line. Taking bosun off took a list from the docs and two flags, and purging deleted every
+file in the config folder, yours included.
+
+**Done (2026-10-30): `bosun init`.** It reads the repos you use the agent in, your usual hours and
+your logins (where and when, never what), recommends answers and prints the plan before it changes
+anything; in a terminal it is a wizard, one key per answer. It writes the config with backups,
+trusts the folders and runs `install.sh`. `tests/sandbox.sh` walks a new user's first day in a
+throwaway container. Design note: [docs/design/init.md](docs/design/init.md).
+
+**Done (2026-10-30): one-line install.** `curl ... get.sh | sh` puts bosun in
+`~/.local/share/bosun` and starts `bosun init`; run again, it updates. `tests/sandbox.sh mac` runs
+the install on a throwaway Mac in a Tart VM, and the Install workflow on a clean GitHub macOS runner.
+
+**Done (2026-10-30): the installer's checks.** A fresh install stalled on first-run screens while
+`bosun doctor` said all was well. Now `lib/preflight.sh` lists everything missing and what to do
+about it, installs nothing and stops early, with a profile per OS (`lib/platforms/`) and per agent
+(`lib/harnesses/`); `init` and `doctor` start with it. Repo sessions default to auto mode, and the
+watchdog's `stalled-start` check reports an agent stopped at a screen.
+
+**Done (2026-11-02): `bosun uninstall`.** `./uninstall.sh` now runs it. It says what goes and what
+stays and asks before anything changes (Enter is no, and keeps the ledger and the knowledge base);
+it deletes only files it lists as bosun's, takes back only the folder trust and memory notes bosun
+added (`lib/agent_changes.py`), cancels the wake only when it is bosun's alone, and reports what is
+left at the end. Design note: [docs/design/uninstall.md](docs/design/uninstall.md).
+
+### Docs site
+
+**Done (2026-11-02):** a docs site, <https://promptromp.github.io/bosun/>, built with MkDocs
+Material from `docs/` and the root pages (`mkdocs.yml`, `tools/mkdocs_hooks.py`) and published from
+`main` by `.github/workflows/docs.yml`. Every pull request builds it with `--strict`.
+
 ### Other agents and other operating systems
 
-Repo sessions run on Claude Code and Codex, and the installer's checks are split by OS and by agent
-(`docs/design/init.md`, `docs/design/harnesses.md`).
+**Done (2026-10-30): repo sessions on Codex.** A window runs Codex with `harness: codex` in
+`sessions.yml`, or all of them with `BOSUN_HARNESS=codex`; the orchestrator stays on Claude Code.
+Shared code goes through one interface (`Agent` and the `AGENTS` table in `lib/agent_state.py`), and
+what differs at launch is in `lib/launch/<harness>.sh`. `tests/sandbox.sh mac live` runs both real
+agents on a clean Mac. Design note: [docs/design/harnesses.md](docs/design/harnesses.md). The
+installer's checks are split by OS and by agent ([docs/design/init.md](docs/design/init.md)).
 
 **Next on Codex:** the orchestrator (a system prompt, chores without a plugin, the guard and approvals on its
 own hooks and sandbox; hooks stop at a review screen, so this needs thought); noticing a revoked login;
@@ -270,6 +329,7 @@ counts only), every metric's definition, a daily read-only collector and an Impa
 per week and time to merge can move apart, so the page must show both.
 
 **Phases:**
+
 - **A.** `bosun impact collect` (a GitHub and transcript snapshot) and the first Impact page:
   PRs merged per week against the baseline, time to merge, reviews given, agent busy time against
   my touch time (leverage, an estimate), tokens and cost per week and per merged PR, where agent
@@ -293,9 +353,12 @@ per week and time to merge can move apart, so the page must show both.
   work holds, and watchdog warnings; then measure the overhead fixes before and after. Plan:
   [docs/plans/impact-overhead.md](docs/plans/impact-overhead.md).
 
-**Status:** Phase A merged (2026-10-27, daily collection on); overhead panel and guardrails merged
+**Status:** Phase A merged (2026-10-27; daily collection with `BOSUN_IMPACT_COLLECT=1`); overhead panel and guardrails merged
 (2026-10-27); overhead fixes merged (2026-10-27/28). B0, cost per task, built (2026-10-28, plan:
-[docs/plans/impact-cost-per-task.md](docs/plans/impact-cost-per-task.md)). Next: Phase B.
+[docs/plans/impact-cost-per-task.md](docs/plans/impact-cost-per-task.md)). Page rework (2026-10-29):
+"Your time and agent time" with leverage before and since, "What learning has produced" from what
+learning and the knowledge base already record, and the overhead diagnostics moved to
+`#/impact/internals`. Next: Phase B.
 
 ### Approvals for outward calls
 
@@ -315,10 +378,13 @@ wrapper (`timeout`, `env`, `xargs`, ...) runs, and denies an approved command wi
 A PR counts as ready only on a report with `--ci green` and nothing open after its last hand-over.
 
 **Next:**
+
 - After a week of `ledger approvals --auto` data, revisit the standing classes (kept strict for
   now): re-review bumps after an addendum, "reviewed" notes on other people's PRs.
 - The same hooks for repo sessions that run in a prompting mode (`repo_session_settings`), if a
-  site needs it; with `--dangerously-skip-permissions` they never prompt.
+  site needs it. Repo sessions run in auto mode by default (`--permission-mode auto --chrome`, see
+  [docs/permissions.md](docs/permissions.md)), which prompts only after blocking several actions in
+  a row; a site that sets `--dangerously-skip-permissions` never gets a prompt.
 
 ### Local web console
 
@@ -377,6 +443,7 @@ search tool to the `allow` list of the site settings file (`BOSUN_ORCHESTRATOR_S
 by procedure, not code.
 
 **Open:**
+
 - **Reply detection beyond Slack.** Only Slack replies are matched in code (`ledger seen` finds the
   thread or DM of a sent message). For GitHub and Jira the chores read the comments after the ref;
   Confluence likewise; for email they ask me. Next: match comment URLs (GitHub, Jira) the way
@@ -422,6 +489,7 @@ login` opens a browser page that needs a click. Unattended, the morning step tim
 `BOSUN_LOGIN_TIMEOUT` and posts a macOS notification.
 
 **Options considered:**
+
 - **Approve from the phone:** run `aws sso login --use-device-code --no-browser`, capture the
   verification URL and code, and send them to me (for example a Slack DM to myself, or via the
   orchestrator's Remote Control session). This needs no browser automation, and the approval
@@ -451,6 +519,7 @@ new windows per day in `bosun send`.
 **Why:** the watchdog (`lib/watchdog.py`) started deliberately narrow, to keep false alarms out.
 
 **Open:**
+
 - `ledger-stuck` watches `delegated` (review requests and tasks), counted from the hand-over or
   the latest report, and skips items waiting on open outreach or tasks whose PRs all wait on
   review. `my-pr` items in `addressing` are the same situation for fix-my-pr tasks; add the state
@@ -490,6 +559,7 @@ loudly: the watchdog saw the orchestrator as `busy`, not stalled, and `bosun doc
 lid only when run by hand.
 
 **Idea:**
+
 - Check-ins skip while the lid is closed (`ioreg -r -k AppleClamshellState`) or the network is
   unreachable, and log why, instead of starting a turn that hangs on the API.
 - A watchdog check: lid closed while sessions run, alerting once per closure, so I know bosun is
@@ -508,6 +578,7 @@ organization approves `/usage-credits` requests automatically, bosun could ask o
 instead of waiting for someone to notice.
 
 **What we know (research 2026-10-21):**
+
 - `/usage-credits` asks for confirmation in a dialog, then notifies the admins. It sends nothing in
   print mode (`claude -p`) or from Remote Control ("run it in an interactive session"), and there
   is no CLI subcommand or API for it. Asking again while a request is pending replies "already
@@ -527,7 +598,12 @@ while capped, like the login gate; a watchdog check alerts "capped at X, credits
 and again if still capped later. Needs one supervised real run (with my consent) to record the
 dialog's text and key before it can be switched on.
 
-**Status:** researched; deferred as P2 (2026-10-21).
+**Status:** researched; deferred as P2 (2026-10-21). Since built: the watchdog's `spend-limit` check
+([docs/watchdog.md](docs/watchdog.md)) names a window, or a subagent of its, stopped on a usage limit
+(from the transcript, or a StopFailure [hook signal](docs/design/signals.md)) with the ledger items it
+holds. While it is stopped, the watchdog makes the login check request at most every 30 minutes
+(`LIMIT_PROBE_MINUTES`), and once the limit is lifted it sends the window one resume prompt. Still
+open: requesting credits automatically, and pausing check-ins and events while capped.
 
 ### SQLite ledger (P2)
 

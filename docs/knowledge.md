@@ -32,7 +32,8 @@ bosun kg context --for releases         # a small cited pack of confirmed facts
   anything. The rest waits for `kg batch`: one list, grouped by entity and axis, rework-preventing
   groups first, at most 10 groups, 8 facts a group and 40 facts a day
   (`BOSUN_KNOWLEDGE_BATCH_CAP`, `_GROUP_FACTS`, `_BATCH_FACTS`), answered in one line;
-  "confirm all except 2b" leaves 2b proposed, only "reject 2b" rejects it.
+  "confirm all except 2b" leaves 2b proposed, only "reject 2b" rejects it. The same batch can
+  be answered in the [console](console.md#console)'s review page (`#/knowledge/review`).
   Unreviewed proposals expire after 30 days unless something observes them again.
 - **Two timelines:** facts are never edited or deleted when they change: `kg supersede` closes
   one (`valid_to`, `superseded_by`), and `kg facts <entity> --as-of <date>` shows what held then.

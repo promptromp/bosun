@@ -9,10 +9,10 @@ through. This hook is the catch-all:
 - `git push` with any force form (-f, --force*, +refspec) or `gh pr merge --admin`, anywhere in
   a compound command -> deny
 - `bosun delegate`, `bosun send` or `bosun ledger
-  reach-out|ask|replied|propose|spawn|link|unlink|fold|ticket-sync` with a command substitution ($(...)
-  or backticks) that the shell would run: outside single quotes, or in an unquoted heredoc ->
-  deny. Their text often comes from Slack, PRs or a tracker, so it must never be able to run
-  commands.
+  reach-out|ask|replied|propose|approve|spawn|link|unlink|fold|ticket-sync` with a command
+  substitution ($(...) or backticks) that the shell would run: outside single quotes, or in an
+  unquoted heredoc -> deny. Their text often comes from Slack, PRs or a tracker, so it must never
+  be able to run commands.
 - `bosun send <window> <message>` without `--id <ledger id>` or `--no-item`, `send --new`, and
   `send --start` with a message -> deny. Every message about a work item names its ledger id;
   updates to delegated tasks go through `bosun delegate --update`, new windows through
@@ -378,8 +378,10 @@ def decide(event: dict[str, Any]) -> dict[str, str] | None:
 
 # ---- approvals (BOSUN_APPROVALS_ENABLED; docs/design/approvals.md) -------------------------
 #
-# Outward calls the approvals hooks gate: the orchestrator settings' `ask` rules name them too, and
-# stay as the backstop (a hook that fails or decides nothing leaves Claude Code's prompt). MCP
+# Outward calls the approvals hooks gate. The orchestrator settings' `ask` rules name the Slack and
+# gh ones; the rest (CI builds, tracker and wiki writes) get their prompt from the plain guard's
+# write verbs. Either prompt stays as the backstop (a hook that fails or decides nothing leaves
+# Claude Code's prompt). MCP
 # tools by their tool part (any server), Bash commands by their leading words anywhere in a
 # compound command.
 GATED_MCP = {

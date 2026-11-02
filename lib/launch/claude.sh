@@ -5,8 +5,8 @@
 # shellcheck disable=SC2034  # for run_agent, in the script that sources this
 AGENT_BIN="$BOSUN_CLAUDE_BIN"
 
-# The orchestrator has its own flags, settings, plugin and policy. With BOSUN_APPROVALS_ENABLED=1 also the
-# approvals hooks, and for a repo session with BOSUN_EVENTS_ENABLED=1 the hook that records what you type.
+# The orchestrator has its own flags, settings, plugin and policy, and the hooks of
+# orchestrator_extra_settings; a repo session gets the hooks of repo_session_settings (lib/common.sh).
 # shellcheck disable=SC2154  # build_model_effort_args and set_autocompact_flag (lib/common.sh) set their arrays
 build_agent_args() { # <window> <session name> <model> <effort>
   if is_orchestrator "$1"; then

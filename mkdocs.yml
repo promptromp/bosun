@@ -1,0 +1,122 @@
+# The docs site, https://promptromp.github.io/bosun/, built from docs/ and the root files in
+# tools/mkdocs_hooks.py (README.md is the home page). Build it with `uv run mkdocs build --strict`,
+# or preview it with `uv run mkdocs serve`; .github/workflows/docs.yml publishes it from main.
+site_name: bosun
+site_description: Agents write the code. Bosun runs the rest of the day, and remembers it.
+site_url: https://promptromp.github.io/bosun/
+repo_name: promptromp/bosun
+repo_url: https://github.com/promptromp/bosun
+
+theme:
+  name: material
+  logo: assets/logo.png
+  favicon: assets/logo.png
+  font:
+    text: Merriweather Sans
+    code: Red Hat Mono
+  palette:
+    # Dark mode
+    - scheme: slate
+      toggle:
+        icon: material/weather-sunny
+        name: Light mode
+      primary: teal
+      accent: amber
+    # Light mode
+    - scheme: default
+      toggle:
+        icon: material/weather-night
+        name: Dark mode
+      primary: teal
+      accent: amber
+  features:
+    - content.code.copy
+    - navigation.footer
+    - navigation.sections
+    - navigation.tabs
+    - search.suggest
+
+hooks:
+  - tools/mkdocs_hooks.py
+
+# A prototype page with its own build; it stays a link to GitHub.
+exclude_docs: |
+  design/prototypes/
+
+# Fail the strict build on anything that would be a broken page or link.
+validation:
+  omitted_files: warn
+  absolute_links: warn
+  unrecognized_links: warn
+  anchors: warn
+
+markdown_extensions:
+  - admonition
+  - attr_list
+  - pymdownx.details
+  - pymdownx.highlight:
+      anchor_linenums: true
+      line_spans: __span
+      pygments_lang_class: true
+  - pymdownx.inlinehilite
+  - pymdownx.superfences:
+      custom_fences:
+        - name: mermaid
+          class: mermaid
+          format: !!python/name:pymdownx.superfences.fence_code_format
+  - pymdownx.tabbed:
+      alternate_style: true
+  # Nested lists two spaces in, as GitHub reads them (Python-Markdown wants four).
+  - mdx_truly_sane_lists:
+      nested_indent: 2
+  # Heading anchors as GitHub makes them, so a link with an anchor works on both.
+  - toc:
+      permalink: true
+      slugify: !!python/object/apply:pymdownx.slugs.slugify
+        kwds:
+          case: lower
+
+nav:
+  - Home: index.md
+  - Guides:
+      - Setup: setup.md
+      - How a day runs: day.md
+      - Commands: commands.md
+      - Orchestrator: orchestrator.md
+      - Permissions: permissions.md
+      - Events: events.md
+      - Knowledge: knowledge.md
+      - Learning: learning.md
+      - Watchdog: watchdog.md
+      - Console: console.md
+      - Known limits: limits.md
+  - Design:
+      - Installing: design/init.md
+      - Uninstalling: design/uninstall.md
+      - Agents: design/harnesses.md
+      - Approvals: design/approvals.md
+      - Events: design/events.md
+      - Signals: design/signals.md
+      - Lineage and trackers: design/lineage.md
+      - Workstreams: design/workstreams.md
+      - Knowledge: design/knowledge.md
+      - Learning: design/learning.md
+      - Console: design/console.md
+      - Impact: design/impact.md
+      - Plans:
+          - Impact, phase A: plans/impact-phase-a.md
+          - Impact, cost per task: plans/impact-cost-per-task.md
+          - Impact, overhead: plans/impact-overhead.md
+  - Project:
+      - Roadmap: roadmap.md
+      - Development: development.md
+      - Contributing: contributing.md
+      - Security: security.md
+      - Code of conduct: code-of-conduct.md
+
+extra:
+  social:
+    - icon: simple/github
+      link: https://github.com/promptromp/bosun
+
+copyright: Copyright &copy; 2025-2026 PromptRomp

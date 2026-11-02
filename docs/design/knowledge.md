@@ -79,6 +79,7 @@ Single-valued (a second current value is a contradiction): `title`, `timezone`,
 `states`.
 
 Examples, in the fictional acme world:
+
 - **The release process:** merge to main, deploy to staging, canary checks (smoke tests, error
   rate), then a gradual rollout to production. Deploys are announced in `#deploys`.
 - **The hotfix process:** the entry point is the `#deploys` channel. Only the user approves a
@@ -88,15 +89,17 @@ Examples, in the fictional acme world:
 
 ## How it grows (capture)
 
-1. **From the user's own words, the most valuable source.** When the user states a standing fact
-   or rule in any window ("deploys are announced in #deploys"), the session runs
-   `bosun kg propose ... --from-user --quote '<their words>' --transcript <session>`.
+1. **From the user's own words, the most valuable source.** Today you run
+   `bosun kg propose ... --from-user --quote '<their words>' --transcript <session>` by hand.
    Confirmation reuses the approvals check: if the quote appears in a genuine user prompt in that
-   transcript, the fact is confirmed. Otherwise it stays proposed.
-2. **From the daily learning run.** `bosun learn` already reads the week's sessions and the
-   ledger. A knowledge pass proposes facts with sources (reports, ledger items, permalinks), and
-   flags facts that were rediscovered or caused rework. Nothing from chat, PR, ticket or document
-   text is ever confirmed automatically, because it is untrusted.
+   transcript, the fact is confirmed. Otherwise it stays proposed. Planned for MVP 3: when the
+   user states a standing fact or rule in any window ("deploys are announced in #deploys"), the
+   session runs that command itself. No prompt or task rule asks for it yet.
+2. **From the daily learning run** (planned, Later). `bosun learn` already reads the week's
+   sessions and the ledger, but it has no knowledge pass yet. That pass would propose facts with
+   sources (reports, ledger items, permalinks), and flag facts that were rediscovered or caused
+   rework. Nothing from chat, PR, ticket or document text is ever confirmed automatically, because
+   it is untrusted.
 3. **Seed import.** A survey's facts and the existing memory notes are imported as proposals
    (`kg import`, a dry run first), for one review pass.
 4. **Maintenance (lint).** It flags:
@@ -106,8 +109,9 @@ Examples, in the fictional acme world:
    - alias collisions (two people sharing a first name, unless a `distinct_from` says so);
    - merge suggestions (near-identical names of one type).
 
-   Person facts expire after 12 months without being re-observed. `kg forget person/<id>`
-   deletes a person on request.
+   Person facts not re-observed for 12 months (`RETENTION_DAYS`) are reported by `kg lint` and
+   deleted by `kg expire`, which you run by hand; nothing runs it on a schedule yet.
+   `kg forget person/<id>` deletes a person on request.
 
 ## How it is used (retrieval)
 
@@ -120,8 +124,9 @@ Examples, in the fictional acme world:
   cited, current, confirmed facts. `bosun delegate` appends the pack for the task's repo and
   area to each brief (behind a flag, MVP 3). The orchestrator policy gains one rule: check
   `kg lookup` before asking the user about routing, reviewers, channels or process.
-- **Measurement:** the learning run counts rediscovery and rework episodes per week. Packs stay
-  only if that count falls, and pack size and cost are tracked.
+- **Measurement** (planned, with the learning run's knowledge pass): the learning run counts
+  rediscovery and rework episodes per week. Packs stay only if that count falls, and pack size and
+  cost are tracked.
 
 ## Console: Knowledge view (`#/knowledge`, MVP 2)
 
@@ -222,7 +227,8 @@ a stream of questions.
     own words.
 - **What remains goes to one daily batch.** It is grouped by entity and axis ("Release process: 4
   facts", "Reviewers for repo X: 3 facts"), with one decision per group and per-fact exceptions.
-  The batch appears in the morning summary and in the console's review queue. Reply in a single
+  `kg batch` prints it, and the console shows it as its review queue; nothing puts it in the
+  morning summary. Reply in a single
   line, for example "confirm all except 2b": 2b is deferred (it stays proposed for a later batch);
   only an explicit "reject 2b" rejects.
 - **The batch is small:** at most 10 groups, 8 facts a group and 40 facts in all
@@ -234,8 +240,9 @@ a stream of questions.
   on you.
 - **A seed import of about a hundred facts is spread over several daily batches** (the survey's
   seed: 30 groups over 6 batches of at most 40 facts), every fact a proposal until reviewed.
-- **Corrections are cheap.** "That's wrong: X" in any window supersedes the fact, using your words
-  as its source (`kg supersede <id> --value X --from-user --quote ...`).
+- **Corrections are cheap.** `kg supersede <id> --value X --from-user --quote ...` closes the fact,
+  with your words as its source. A session doing that when you say "That's wrong: X" in any window
+  comes with the capture above (MVP 3).
 
 ## Decisions (2026-10-21)
 

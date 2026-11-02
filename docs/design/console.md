@@ -3,7 +3,8 @@
 Status: accepted (2026-10-20); step 1 (skeleton and security), step 2 (Ledger), step 3
 (Sessions and health, with the visual refresh), step 4 (Stats) and step 5 (Learning and Library)
 built; the Knowledge view (section 6, the knowledge note's MVP 2) built 2026-10-21, with the
-console's only write: a knowledge review decision. Tracked in
+console's only write: a knowledge review decision. The Impact view (section 7, with its own design
+note, [impact.md](impact.md)) built 2026-10-27. Tracked in
 [ROADMAP.md](../../ROADMAP.md#local-web-console).
 
 ## Why
@@ -18,6 +19,7 @@ answers those without adding load to the sessions.
 ## Goals and non-goals (MVP)
 
 Goals:
+
 - Browse and search the ledger, follow links between items and out to GitHub, Jira and Slack.
 - See the live sessions and bosun's own health on one page.
 - A small stats dashboard derived from data we already record.
@@ -49,15 +51,19 @@ second, unaudited path around that. Actions come later and only through the same
 ## Architecture
 
 ```
-bosun console [--port N] [--open]
+bosun console [--port N] [--open] [--new-token]
   libexec/bosun-console      -> parses options, starts lib/console_server.py
   lib/console_server.py          -> HTTP: static files, JSON API, auth, headers
+  lib/console_token.py           -> the access token, kept across restarts (see Security)
   lib/console_data.py            -> the ledger snapshot, /api/version, what the views share
   lib/console_ledger.py          -> pure: the Ledger views (reuses ledger, lineage, activity, tickets)
   lib/console_live.py            -> the only I/O of Sessions and health (cached; see section 2)
   lib/console_sessions.py        -> pure: window cards, waiting windows, health
   lib/console_stats.py           -> pure: the Stats metrics (section 3)
-  lib/console_state.py           -> reads bosun's own state files: events, Slack watcher, learning
+  lib/console_state.py           -> reads bosun's own state files: events, Slack watcher, learning,
+                                    the Impact snapshot
+  lib/impact.py, impact_overhead.py, impact_tasks.py, impact_learning.py
+                                 -> pure: the Impact view (section 7, docs/design/impact.md)
   lib/console_learn.py           -> pure: the Learning view (runs, learn: items, findings)
   lib/console_library.py         -> pure: Library entries, masking, front matter, effective badges
   lib/console_files.py           -> the Library's file list (fixed roots, opaque keys) and reads
@@ -74,8 +80,9 @@ bosun console [--port N] [--open]
 
 - The view models are pure over loaded data, like `lineage.py` and `activity.py`, so they and the
   stats are unit-tested against fixture ledgers and hand-made facts without a server.
-- The server re-reads the ledger when its mtime changes (cheap; about 100 items today, fine to
-  thousands), and the page polls `/api/version` every 15 s and refreshes the open view on change.
+- The server re-reads the ledger when its stamp (the file's inode, mtime and size) changes (cheap;
+  about 100 items today, fine to thousands), and the page polls `/api/version` every 15 s and
+  refreshes the open view on change.
 - Run on demand (`bosun console --open`). An optional `console` window in the tmux session can
   come later if it proves useful.
 
@@ -117,10 +124,10 @@ bosun console [--port N] [--open]
   "confirm"|"reject"|"defer", "facts": ["f12", ...]}`; 413 when larger, 411 without a
   Content-Length, 400 otherwise), and every fact must be
   waiting in today's batch (409), checked under the knowledge base's own lock.
-- `Content-Security-Policy: default-src 'self'; script-src 'self'; style-src 'self'` (plus
-  `base-uri`, `form-action` and `frame-ancestors` closed), no inline script or style;
-  `X-Content-Type-Options: nosniff`, `Referrer-Policy: no-referrer`, and `Cache-Control: no-store`
-  on the API. All ledger text is rendered with `textContent`, never `innerHTML` (Slack excerpts, PR
+- `Content-Security-Policy: default-src 'self'; script-src 'self'; style-src 'self'; img-src
+  'self'` (plus `base-uri`, `form-action` and `frame-ancestors` closed), no inline script or style;
+  `X-Content-Type-Options: nosniff`, `Referrer-Policy: no-referrer`, `X-Frame-Options: DENY`, and
+  `Cache-Control: no-store` on the API. All ledger text is rendered with `textContent`, never `innerHTML` (Slack excerpts, PR
   titles and notes are untrusted).
 - Files are served from an allowlist (the static assets, read once at start, and later the
   editorial files listed below); no path from the request reaches the filesystem directly, so
@@ -135,6 +142,7 @@ bosun console [--port N] [--open]
 ### 1. Ledger (`#/ledger`, `#/item/<id>`)
 
 **List.** One row per item: id, kind, state, title, window (`@exporter`), waiting-on, updated.
+
 - Filters: kind (task, my-pr, review-request, td-review, mention, outreach, ticket, learning,
   workstream); state group
   (open / waiting on someone / needs me / closed, mapped from each kind's state machine in
@@ -162,12 +170,14 @@ this order:
 - Filters: `kind`, `group`, `window` (the delegation's), `person` (case-insensitive substring of a
   requester, an outreach recipient, or the recipient of the item's outreach), `since` (updated
   within: `90m`, `24h`, `7d`, `2w`, or an ISO time), `q` (every word must occur, case-insensitive),
-  `sort` (`updated`, `created`, `kind`). An unknown value is 400.
+  `sort` (`updated`, `created`, `kind`), `ws` (a workstream by id or alias, with the workstreams
+  under it, or `unassigned`; docs/design/workstreams.md). An unknown value is 400.
 
 **"Needs you" strip** at the top: windows waiting at a prompt, and the items of the *needs me*
 group: proposals awaiting my approval (with the exact proposed action), outreach in `proposed`
 whose message is not approved yet, and the items a mismatch of a ticket I own asks me to decide on.
 This answers "what am I holding up" at a glance.
+
 - Mismatches count per item, as the *needs me* group does: one entry per flagged item (the open
   ticket, or the open work tracking a closed one), with the tickets behind it and their hints. The
   count is of distinct items (an item with a proposal and a mismatch counts once) plus the waiting
@@ -177,6 +187,7 @@ This answers "what am I holding up" at a glance.
 - The top bar shows the same count on every view.
 
 **Item page.**
+
 - Header: id, kind, state, title, external URL (PR, ticket), created and updated times.
 - Fields; delegation (window, task type, when, awaiting report or not); latest report (summary,
   result).
@@ -205,6 +216,7 @@ This answers "what am I holding up" at a glance.
 
 **Built in step 3.** `lib/console_live.py` collects the facts; `lib/console_sessions.py` turns them
 into `/api/sessions` and `/api/health`.
+
 - Sources, all read-only: `bosun sessions --json` (whose `agent` record carries
   `statusUpdatedAt`, for "for how long"), `bosun watchdog --facts` (new: the facts the
   watchdog collects from tmux, ps and launchd, as JSON), `watchdog.status_data` (the data behind
@@ -240,6 +252,7 @@ classes in 10% steps, not style attributes.
 ### 3. Stats (`#/stats`)
 
 Period: 7, 30 or 90 days. MVP metrics come only from ledger history:
+
 - **Throughput:** items opened and closed per day, by kind (stacked bars).
 - **PRs:** my PRs merged, median time from open to merge, review requests done, and review
   turnaround (requested to reviewed).
@@ -252,13 +265,16 @@ Period: 7, 30 or 90 days. MVP metrics come only from ledger history:
 
 Charts are inline SVG drawn by `app.js`, with no chart library. Phase 1.5 adds code volume
 (additions and deletions of merged PRs, fetched once with `gh pr view --json additions,deletions`
-and cached in the state directory).
+and cached in the state directory). Since then the Impact collector fetches the additions and
+deletions of my merged PRs into its snapshot, and the Impact view never shows them on purpose
+(docs/design/impact.md, "No vanity metrics"); Stats still shows no code volume.
 
 **Built in step 4.** `lib/console_stats.py` (pure) computes `/api/stats?days=N` from the ledger
 snapshot and what `lib/console_state.py` reads of bosun's own state files (read-only, through
 the writers' own `State` loaders). `days` must be 7, 30 or 90 (default 7; anything else is 400).
 
 Definitions:
+
 - **Period:** the last N local days (the server's time zone), today included, up to now. A day's
   bucket is the local date of the time.
 - **A time** is a history entry's `happened_at` (the real time, when `--at` or a Slack ref gave
@@ -302,8 +318,11 @@ Definitions:
   (and failed ones) and its daily spend; learning runs, dry runs (from their folders) and failed
   runs, and their cost; spend per day (Slack watcher and learning, stacked). The events and Slack
   watcher state keep 7 days, which the page says.
+- **Workstreams:** items opened and closed in the period per top-level workstream (the
+  workstreams under it rolled up), and those in none, as `ledger` resolves them
+  (docs/design/workstreams.md). In the API only; the page does not show it yet.
 - Left out: alerts by check (the watchdog keeps only de-dup state, not a history), and code volume
-  (phase 1.5, through `gh`).
+  (phase 1.5, through `gh`; see above).
 
 The page has a period picker (7, 30, 90 days, in the URL: `#/stats?days=30`), summary tiles with
 sparklines, stacked bars for opened and closed per day by kind and for spend, and horizontal bars
@@ -357,6 +376,7 @@ request becomes a path, and an unknown key is 404. Never listed: the forbidden-t
 file with `.bak` in its name. A file found by listing a folder (`tasks/`, memory) must stay inside
 it with symlinks resolved; one that leads out is skipped. Files over 1 MB are listed, not shown.
 `lib/console_library.py` (pure) decides how a file is shown:
+
 - config files from the site (`bosun.env`, `sessions.yml`, the settings JSON): `lib/redact.py`,
   then every `NAME=value`, `NAME: value` or `"NAME": "value"` whose name contains TOKEN, SECRET,
   KEY, PASSWORD, PASSWD, CREDENTIAL, COOKIE or PRIVATE gets its value masked (`<masked>`, quotes
@@ -507,6 +527,22 @@ is created; the views then say how to start one (`bosun kg import`, `kg propose`
   entity page in place (no "Loading", the history kept open), and the review only while nothing
   is ticked and no decision is being sent, so a review in progress is never thrown away.
 
+### 7. Impact (`#/impact`, `#/impact/internals`)
+
+What bosun changes: delivery against my own baseline from before bosun, agent time against my
+prompting time, cost, cost per task, overhead, and what learning has produced. Phase A built
+2026-10-27, the later panels since; the metrics, the collector and the page are defined in
+[impact.md](impact.md).
+
+- `/api/impact` reads the snapshot `bosun impact collect` wrote (`console_state.read_impact`;
+  never GitHub or the transcripts) and builds its model with `lib/impact.py`, plus the Overhead
+  panel (`lib/impact_overhead.py`) and the Cost per task panel (`lib/impact_tasks.py`) from the same
+  snapshot. The learning panel (`lib/impact_learning.py`) is not in the snapshot: learning's runs
+  and reports, the ledger's `learn:` items and the knowledge base's growth (`console_kb.growth`)
+  are read when the page asks. Without a snapshot the page says how to collect one.
+- `#/impact/internals` shows bosun's own diagnostics from the same model (the overhead fixes
+  before and after, context per window, cost per turn, the guardrails), kept off the Impact page.
+
 ### Phase 2: knowledge graph (`#/graph`)
 
 - Nodes: ledger items, people (outreach recipients and requesters), repositories, tickets and Slack
@@ -523,13 +559,14 @@ is created; the views then say how to start one (`bosun kg import`, `kg propose`
 
 | Path | Returns |
 |---|---|
-| `/api/version` | ledger mtime and version, state-dir change stamp, and the knowledge base's own stamp (for polling) |
+| `/api/version` | the ledger's stamp (the file's inode, mtime and size), its mtime, version and item count, and the knowledge base's own stamp (for polling) |
 | `/api/items?kind=&group=&window=&person=&q=&since=&sort=&ws=` | list rows |
 | `/api/items/<id>` | item detail view model (lineage, anchors, outreach, said) |
 | `/api/needs-you` | pending proposals, proposed outreach, waiting windows, mismatches |
 | `/api/sessions` | a card per window: status and for how long, held and active items, working, last report, login, attach command |
 | `/api/health` | watchdog checks, morning and chores runs, events, slack-watch, login, flags, what is left out |
 | `/api/stats?days=` | the metrics above |
+| `/api/impact` | the Impact view: the snapshot's metrics, and the Overhead, Cost per task and learning panels (section 7) |
 | `/api/learn` | runs and `learn:` items |
 | `/api/learn/report/<key>` | one run's `report.md` (only reports under the learn state folder) |
 | `/api/library` / `/api/library/<key>` | the editorial tree, and one file (redacted where config) |
@@ -612,6 +649,7 @@ Steps 1 to 3 already give a usable console; 4 and 5 can follow in either order.
 Nav labels (2026-10-21): Learning became **Improvements** (what bosun proposes to change about
 its own prompts and rules), Knowledge became **Knowledge Graph**, and Library became **Config**
 (prompts, task types and site overlays). The routes keep their old names, so links still work.
+**Impact** joined the nav with the Impact view (section 7, 2026-10-27).
 
 ## Decisions (2026-10-20)
 

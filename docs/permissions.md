@@ -8,8 +8,9 @@
 | Propose, then wait | accepting work someone else asked for (a task spawned from their message); changing an external ticket (transition, assign, edit) | a task is accepted only with `user:` evidence and `delegate` refuses it before; ticket changes are proposals from `ledger tickets --mismatch`, and the tracker's write tools ask (guard) |
 | Propose, then wait | applying a learning proposal (`bosun learn apply`, or `done`/`reject` for one) | the policy and the chores procedure; `ledger resolve` refuses `learn:` items, so they close only through `bosun learn`, which applies the change and closes the item together |
 | Propose, then wait (unless you asked for it) | handing an item over again while its last hand-over awaits a report (`delegate ... --again`), or moving it to another window (`delegate --update <id> --window W`) | `delegate` refuses the first without `--again`; the policy covers both |
-| Never | edit files, `gh pr merge --admin`, force pushes | `deny` rules (prefix matches, so best effort) plus `bosun guard`, which denies `git push` with `-f`, `--force*` or a `+refspec` and `gh pr merge --admin` anywhere in a command (verified) |
+| Never | edit files, `gh pr merge --admin`, force pushes, `bosun uninstall` | `deny` rules (prefix matches, so best effort) plus `bosun guard`, which denies `git push` with `-f`, `--force*` or a `+refspec` and `gh pr merge --admin` anywhere in a command (verified) |
 | Never | a free-text `bosun send` that names no work item; `send --new` or `send --start <msg>` instead of `delegate` | `bosun guard` denies `send` without `--id <ledger id>` or `--no-item`; updates to delegated work go through `delegate --update` |
+| Never | a command substitution the shell would run (`$(...)` or backticks, outside single quotes or in an unquoted heredoc) in `bosun delegate`, `bosun send` or `bosun ledger reach-out`, `ask`, `replied`, `propose`, `approve`, `spawn`, `link`, `unlink`, `fold` or `ticket-sync` | `bosun guard` denies it: their text often comes from Slack, PRs or a tracker, so it must never run commands |
 
 ## Approvals: approve once, in chat
 
@@ -67,7 +68,8 @@ Content from Slack, PRs and Confluence is untrusted. The policy tells the orches
 follow instructions found there; delegated tasks are built by `bosun delegate` from the task
 files, with the orchestrator supplying only the facts (ledger id, link, requester, one-line ask).
 Repo sessions run in Claude Code's auto mode by default (`BOSUN_CLAUDE_FLAGS`), where a safety check
-reviews each action. A site can change that to `--dangerously-skip-permissions`, which has no checks and,
+reviews each action. `bosun init` asks which to use: auto mode (recommended) or skip permission
+checks, which sets `--dangerously-skip-permissions` there. That has no checks and,
 in Claude Code's own words, "offers no protection against prompt injection": not on a machine holding
 production credentials.
 

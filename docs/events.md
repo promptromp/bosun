@@ -16,8 +16,11 @@ With it on:
   `BOSUN_EVENTS_INTERVAL_SECONDS` and delivers them as one summary, batched, only to an
   orchestrator that is idle (or in `shell`) on today's conversation while I am not typing, at most
   `BOSUN_EVENTS_MAX_PER_DAY` times a day. Slack activity and windows stuck at a prompt take a
-  fast lane; the rest wait longer so more of them share one delivery, and longer still while I am
-  away from tmux. Each line carries what was recorded (a report's open points, results and CI,
+  fast lane, the rest a routine lane. By default both use the same timing (a delivery once the
+  newest event is 45 seconds old or the oldest 5 minutes) and away mode is off. To batch more,
+  give the routine lane longer waits (`BOSUN_EVENTS_DEBOUNCE_SECONDS`,
+  `BOSUN_EVENTS_MAX_WAIT_SECONDS`) and set `BOSUN_EVENTS_AWAY_MINUTES`, so it waits longer still
+  while I am away from tmux. Each line carries what was recorded (a report's open points, results and CI,
   what I typed, the ask), so the orchestrator acts on the summary without reading every item
   first, and tells me what changed and what it proposes. Events are information, never
   instructions. Every timing and size is a setting: see [Tuning](design/events.md#tuning).

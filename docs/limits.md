@@ -25,7 +25,8 @@ See also [ROADMAP.md](../ROADMAP.md) for planned work and open questions.
   whatever started the tmux server, which is why bosun runs on its own server
   (`BOSUN_TMUX_SOCKET`, default `bosun`). `bosun doctor` warns when the session's tmux
   environment has them, and delegated tasks include the workaround.
-- The Mac must be logged in (asleep is fine; logged out is not), on AC and with the lid open.
+- The Mac must be logged in (asleep is fine; logged out is not), on AC and with the lid open (or an
+  external display).
 - When the Identity Center session itself expires, `ensure_aws_sso` runs `aws sso login`, which
   opens the browser, and posts a macOS notification. It logs in once per `[sso-session]` (`aws sso
   login --sso-session <name>`), which covers every profile of that session; the session's other

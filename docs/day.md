@@ -1,23 +1,9 @@
-# bosun documentation
+# How a day runs
 
-The [README](../README.md) is the overview. These guides cover how bosun works and how to run it;
-the design notes in [design/](design/) explain why it works that way.
+[A day with bosun](../README.md#a-day-with-bosun) is the short version. This is what runs, and when.
+The times are the defaults; [Setup](setup.md#configuration) says how to change them.
 
-| Guide | What it covers |
-|---|---|
-| [Setup](setup.md) | Requirements, install, uninstall, configuration, sessions, Codex, Claude Code login, AWS SSO |
-| [Commands](commands.md) | Every `bosun` command |
-| [Orchestrator](orchestrator.md) | Chores, delegated tasks, the ledger, outreach, tasks, tickets, workstreams |
-| [Permissions](permissions.md) | What needs your approval, and approvals bound to the exact call |
-| [Events](events.md) | Events from repo sessions and the Slack watcher |
-| [Knowledge](knowledge.md) | The organizational knowledge graph |
-| [Learning](learning.md) | The daily learning run |
-| [Watchdog](watchdog.md) | Health checks and alerts |
-| [Console](console.md) | The local web console and the Impact view |
-| [Development](development.md) | Working on bosun, and testing without waiting for the schedule |
-| [Known limits](limits.md) | What bosun does not do yet |
-
-## What happens each day
+## Morning
 
 Every morning bosun:
 
@@ -27,8 +13,9 @@ Every morning bosun:
    Each window resumes a named session, on Claude Code with **Remote Control** enabled so you can drive
    it from your phone, and sends a **drain prompt** that finishes any work cut off by sleep or usage limits.
    On later days the session is usually still there. It is then **refreshed** window by window:
-   idle sessions on an outdated agent are restarted on the new version, and other idle
-   sessions get the drain prompt. Busy ones are left alone.
+   idle sessions on an outdated agent, or with a changed model or effort, are restarted, and the
+   drain prompt goes only to windows with work in flight. Busy ones are left alone. See
+   [Steady state](setup.md#steady-state-the-session-already-exists).
 4. Runs an **orchestrator** session that does the daily chores: Slack mentions (PR and tech-design
    review requests, other asks) and your own open PRs (reviewed? comments to address? needs a
    nudge? ready to merge?). It hands tasks to the repo sessions on its own, each with rules for what
@@ -51,3 +38,24 @@ pmset wake 08:01 ─> launchd runs the 08:00 job it missed during sleep ──> 
                                            └─ checkin       every 60 min, when the orchestrator is idle:
                                                               /bosun:chores check-in
 ```
+
+## During the day
+
+- **Check-ins.** The `checkin` window asks the orchestrator for `/bosun:chores check-in` every 60 minutes
+  (`BOSUN_CHECKIN_MINUTES`), when it is idle and something is new since the last one, or after 4 quiet
+  hours (`BOSUN_CHECKIN_MAX_QUIET_HOURS`). See [Orchestrator](orchestrator.md).
+- **Events.** With `BOSUN_EVENTS_ENABLED=1`, repo sessions' reports and, with the Slack watcher on, new
+  mentions and replies reach the orchestrator as they happen instead of at the next check-in. See
+  [Events](events.md).
+- **The watchdog** checks every 5 minutes that the windows, the check-in loop and the launchd jobs are
+  alive, and alerts you when something is down or a window has waited at a question too long. See
+  [Watchdog](watchdog.md).
+- **Approvals.** Whatever would go out under your name waits for your one-line approval. See
+  [Permissions](permissions.md).
+
+## Evening
+
+- **18:30, learning** (with `BOSUN_LEARN_ENABLED=1`, `BOSUN_LEARN_AT`): a headless Claude reads the day's
+  sessions, the ledger and the logs and proposes fixes for your approval. See [Learning](learning.md).
+- **20:00** (`BOSUN_AWAKE_UNTIL`): bosun stops keeping the Mac awake. The sessions stay in tmux, and the next
+  morning starts from where they are.

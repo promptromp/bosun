@@ -3,6 +3,8 @@
 Design: [docs/design/impact.md](../design/impact.md). This file is the build plan; tick items as
 they land so a later session can resume.
 
+Status: done. Phase A merged 2026-10-27; what comes next is in the design note's checklist.
+
 ## Scope
 
 A daily snapshot of GitHub and the transcripts, pure metrics over it, an `/api/impact` route and an
@@ -38,16 +40,16 @@ Impact page with delivery against the baseline, leverage, reviews and cost. No d
 - [x] 5. Smoke checks, README, pre-commit, unit, JS and smoke suites.
 - [x] 6. A real collect on this machine and screenshots of `#/impact`; the numbers sanity-checked
       against `gh` by hand.
-- [x] 7. PR #10 (2026-10-27).
+- [x] 7. Pull request, merged 2026-10-27 (before this repo's public history began, so its number
+      is not one of this repo's).
 
-## Status (2026-10-27)
+## Status (merged 2026-10-27)
 
-All steps done; Phase A is in review as PR #10. After it merges: review the page, then set
-`BOSUN_IMPACT_COLLECT=1` and start Phase B. The first real collect takes a few minutes, as it
-reads the GitHub review history of every reviewed PR; later runs reuse the per-transcript cache
-and the reviews of PRs that did not change. Collecting daily stays off (`BOSUN_IMPACT_COLLECT=0`)
-until the page has been reviewed. Prices in `PRICES` are assumed list prices: check them against
-the current price list before trusting the cost tiles.
+All steps were done and Phase A merged on 2026-10-27. The first real collect took a few minutes,
+as it reads the GitHub review history of every reviewed PR; later runs reuse the per-transcript
+cache and the reviews of PRs that did not change. Collecting daily is off by default
+(`BOSUN_IMPACT_COLLECT=0`); `BOSUN_IMPACT_COLLECT=1` makes the morning run collect. Prices in `PRICES`
+are assumed list prices: check them against the current price list before trusting the cost tiles.
 
 ## Notes for the next session
 

@@ -98,13 +98,15 @@ run. `bosun doctor` checks every session folder.
 space-separated list of `owner/repo` glob patterns, for example `my-org/*` or
 `my-org other-org/one-repo` (a bare owner means all its repos; empty means everything). It is
 enforced in code, not just the prompt:
+
 - `bosun my-prs` filters by it
-- the ledger refuses `review:` and `mypr:` items outside it
+- the ledger refuses `review:`, `mypr:` and `ghissue:` items outside it
 - `bosun context` only maps matching repos
 
 **PR window.** `bosun my-prs` discovers your open PRs with activity within
 `BOSUN_MY_PR_WINDOW` (default `48h`). Pass `--since 7d`, `--since 2w` or `--since 2026-09-01`
-for a wider sweep, and `--by created` to filter by creation time instead of activity. You can also
+for a wider sweep, and `--by created` to filter by creation time instead of activity. Drafts are
+skipped unless you pass `--include-drafts`. You can also
 just ask the orchestrator ("check my PRs from the last week"). PRs already in the ledger stay
 tracked until merged or closed, whatever the window.
 
@@ -163,7 +165,7 @@ delegates to, record state. It keeps:
   `delegate` refuses the item without `--again`, and `delegate --update <id> --window <window>`
   can move it: the new window gets the whole task, the old one a stop notice by id (if it cannot
   take it, the move is still made and the history says so). A report ends the hand-over, not the
-  work: `ledger list` shows `(working)` while the window's Claude is mid-turn on the item (its
+  work: `ledger list` shows `(working)` while the window's agent is mid-turn on the item (its
   active item: the latest hand-over, report, `ledger working` or something I said there), and
   `ledger delegation` has `"working"`; a window is free only when none of its items is working.
 - **what I said in repo windows** (`said`), with [events](events.md#events-from-repo-sessions) on: each
@@ -223,7 +225,9 @@ surfaced to me). `no-reply` gives up after the last nudge; `dropped` is the way 
   each business day while the next move is the reviewers', after a fresh check of the PR, its
   threads, the conversation and the ledger, at most once per reviewer per day. After
   `review_escalate_after_nudges` unanswered nudges the chores also propose another reviewer.
-  The watchdog does not alert on outreach.
+  `bosun context` prints these limits; set them in `bosun.env` with
+  `BOSUN_NUDGE_AFTER_BUSINESS_DAYS` (1), `BOSUN_MAX_NUDGES` (2), `BOSUN_MAX_REVIEW_NUDGES` (0)
+  and `BOSUN_REVIEW_ESCALATE_AFTER_NUDGES` (3). The watchdog does not alert on outreach.
 - **Times are when it happened, not when it was recorded.** The wait counts from the latest
   message's time. `ledger sent` and `ledger replied` take it from `--at` (ISO 8601 with an offset,
   or local `YYYY-MM-DD HH:MM`; never in the future), else from a Slack permalink's own ts, else

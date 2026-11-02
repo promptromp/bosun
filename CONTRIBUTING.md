@@ -23,7 +23,8 @@ uv sync && uv run pre-commit install
 ```
 
 Commits then run ruff, mypy --strict, the complexity limits, shellcheck, shfmt, hadolint, actionlint,
-zizmor, spelling and link checks, the secrets scans and the unit tests; pushes also run the smoke suite.
+zizmor, spelling and link checks, a build of the [docs site](docs/development.md#the-docs-site), the
+secrets scans and the unit tests; pushes also run the smoke suite.
 
 ## Making a change
 
