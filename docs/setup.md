@@ -102,8 +102,44 @@ Waking *before* the job would leave a gap in which an unattended Mac can doze of
 `~/.local/bin` and loads the launchd jobs: the morning run, the [watchdog](watchdog.md#watchdog) and, with
 `BOSUN_LEARN_ENABLED=1`, the daily [learning](learning.md#learning) run
 (`<BOSUN_LAUNCHD_LABEL>.learn`).
-`./uninstall.sh [--with-wake] [--purge]`, from the checkout (`~/.local/share/bosun` after `get.sh`), reverses
-it. It leaves the checkout itself, which you can delete.
+[`bosun uninstall`](#uninstall) reverses it.
+
+## Uninstall
+
+```bash
+bosun uninstall             # says what goes and what stays, then asks
+bosun uninstall --dry-run   # only says
+```
+
+It changes nothing until you have answered everything, and Enter always takes the safe answer: at
+"Are you sure?" it means no, at "Keep your ledger?" it means keep. Ctrl-C at any question leaves everything
+as it was.
+
+| What | What happens |
+|---|---|
+| Your windows | Stopped, so any work in them stops. It says which are running first |
+| The launchd jobs (morning, watchdog, learning) | Unloaded and deleted, before the windows stop, so the watchdog cannot bring them back |
+| The repeating wake | Cancelled with `sudo pmset repeat cancel`, if it is the one bosun set. `pmset` can only cancel every repeating event at once, so another event, or a wake at another time, stays and it says so |
+| Folder trust | Taken back for the folders bosun marked, in Claude Code and Codex. A folder you had accepted yourself stays trusted |
+| Memory notes from [`bosun learn`](learning.md#learning) | Deleted, with their line in `MEMORY.md`. Your own notes stay |
+| `~/.local/bin/bosun` and bosun's working files | Deleted |
+| The checkout in `~/.local/share/bosun` | Deleted, last. One you cloned yourself stays, and so does one with anything of yours in it: changes, a stash, commits not pushed, another worktree, a file git ignores |
+| Your ledger and learning history, your knowledge graph | It asks, and Enter keeps them |
+| `~/.config/bosun`: `bosun.env`, `sessions.yml`, `setup.sh`, `policy.md`, `tasks/` | Stay, and it says where. `--purge` deletes them too |
+| Anything else in those folders | Stays, and it names it. It only deletes what it knows is bosun's, and if you pointed `BOSUN_STATE_DIR` or `BOSUN_LOG_DIR` at a folder that also holds other files, it leaves that folder whole |
+
+`/bosun:chores` and bosun's hooks need no removing: bosun passes them to each window it starts, so neither
+Claude Code nor Codex has them installed. Your repos, branches and pull requests are not touched, nor are
+your conversations.
+
+Install again with the same line, and bosun picks up what you kept. For scripts, `--yes` asks nothing and keeps
+your records; `--delete-ledger`, `--delete-knowledge` and `--purge` say otherwise. `--purge` leaves
+`forbidden-terms.txt`, which guards commits to this repo and is not part of running bosun. Run it from a
+terminal outside bosun's windows, since it stops them. If something could not be removed it says what to run,
+and running it again finishes the job.
+
+If you deleted the checkout by hand, the jobs and the wake are still there. Run the install line again, and
+then `bosun uninstall`.
 
 ## Configuration
 

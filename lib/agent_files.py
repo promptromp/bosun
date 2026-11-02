@@ -51,7 +51,7 @@ def read_object(path: Path) -> dict[str, Any] | None:
     """The JSON object in <path>, or None if it is missing, unreadable or not an object."""
     try:
         value = json.loads(path.read_text())
-    except (OSError, json.JSONDecodeError):
+    except (OSError, ValueError):  # ValueError: not JSON, or not text at all
         return None
     return value if isinstance(value, dict) else None
 

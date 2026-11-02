@@ -5,7 +5,7 @@ the design notes in [design/](design/) explain why it works that way.
 
 | Guide | What it covers |
 |---|---|
-| [Setup](setup.md) | Requirements, install, configuration, sessions, Codex, Claude Code login, AWS SSO |
+| [Setup](setup.md) | Requirements, install, uninstall, configuration, sessions, Codex, Claude Code login, AWS SSO |
 | [Commands](commands.md) | Every `bosun` command |
 | [Orchestrator](orchestrator.md) | Chores, delegated tasks, the ledger, outreach, tasks, tickets, workstreams |
 | [Permissions](permissions.md) | What needs your approval, and approvals bound to the exact call |

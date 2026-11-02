@@ -1855,17 +1855,34 @@ check "... stored 0600 in a 0700 folder" bash -c '
 check "--new-token rotates it" bash -c '[ -n "$1" ] && [ "$1" != "$2" ]' _ "$(console_token_of_start --new-token)" "$FIRST_TOKEN"
 
 echo "install and uninstall (fake launchctl and pmset, test label)"
-for tool in launchctl pmset; do
-  printf '#!/bin/bash\necho "%s $*" >>"%s"\n' "$tool" "$WORK/system.log" >"$HOME/.local/bin/$tool"
-  chmod +x "$HOME/.local/bin/$tool"
-done
+# launchd has a job while it has its plist; pmset's schedule is what a test leaves in a file; sudo only
+# reaches these.
+cat >"$HOME/.local/bin/launchctl" <<EOF
+#!/bin/bash
+echo "launchctl \$*" >>"$WORK/system.log"
+[ "\$1" != print ] || [ -e "\$HOME/Library/LaunchAgents/\${2##*/}.plist" ]
+EOF
+cat >"$HOME/.local/bin/pmset" <<EOF
+#!/bin/bash
+echo "pmset \$*" >>"$WORK/system.log"
+if [ "\$1 \$2" = "-g sched" ] && [ -s "$WORK/pmset-sched" ]; then cat "$WORK/pmset-sched"; fi
+if [ "\$1 \$2" = "repeat cancel" ]; then rm -f "$WORK/pmset-sched"; fi
+exit 0
+EOF
+cat >"$HOME/.local/bin/sudo" <<EOF
+#!/bin/bash
+echo "sudo \$*" >>"$WORK/system.log"
+[ "\$1" = -n ] && shift
+exec "\$@"
+EOF
+chmod +x "$HOME/.local/bin/launchctl" "$HOME/.local/bin/pmset" "$HOME/.local/bin/sudo"
 # install.sh refuses to run without Claude Code on PATH: the fake, not one this machine may have.
 ln -sf "$WORK/fake-claude" "$HOME/.local/bin/claude"
 export BOSUN_LAUNCHD_LABEL="com.bosun.smoke-test"
 INSTALL_CFG="$WORK/install-config"
 PLIST="$HOME/Library/LaunchAgents/$BOSUN_LAUNCHD_LABEL.plist"
-# Never let a test touch the real launchd or pmset: only run if the fakes come first on PATH.
-if [ "$(bash -c 'source "$1/lib/common.sh"; command -v launchctl; command -v pmset' _ "$ROOT" | tr '\n' ' ')" = "$HOME/.local/bin/launchctl $HOME/.local/bin/pmset " ]; then
+# Never let a test touch the real launchd, pmset or sudo: only run if the fakes come first on PATH.
+if [ "$(bash -c 'source "$1/lib/common.sh"; command -v launchctl; command -v pmset; command -v sudo' _ "$ROOT" | tr '\n' ' ')" = "$HOME/.local/bin/launchctl $HOME/.local/bin/pmset $HOME/.local/bin/sudo " ]; then
   BOSUN_CONFIG_DIR="$INSTALL_CFG" "$ROOT/install.sh" --example generic >/dev/null 2>&1
   check "install copies the example config" bash -c '[ -f "$1/bosun.env" ] && [ -f "$1/sessions.yml" ] && [ -f "$1/setup.sh" ]' _ "$INSTALL_CFG"
   check "install links bosun into ~/.local/bin" test "$(readlink "$HOME/.local/bin/bosun")" = "$BOSUN"
@@ -1885,12 +1902,48 @@ if [ "$(bash -c 'source "$1/lib/common.sh"; command -v launchctl; command -v pms
   check "doctor checks the learning agent once it is enabled" contains "$(BOSUN_LEARN_ENABLED=1 "$BOSUN" doctor 2>&1)" "ok    learning agent $BOSUN_LAUNCHD_LABEL.learn loaded"
   BOSUN_CONFIG_DIR="$INSTALL_CFG" "$ROOT/install.sh" >/dev/null 2>&1
   check "... and removes it again once disabled" test ! -e "$LEARN_PLIST"
-  BOSUN_CONFIG_DIR="$INSTALL_CFG" "$ROOT/uninstall.sh" >/dev/null 2>&1
+
+  echo "uninstall (fake launchctl, pmset and sudo, test label)"
+  # Its own session and state: it would otherwise stop and delete what the rest of this run uses.
+  un() {
+    BOSUN_CONFIG_DIR="$INSTALL_CFG" BOSUN_STATE_DIR="$WORK/un-state" BOSUN_LOG_DIR="$WORK/un-state/logs" \
+      BOSUN_SESSION_NAME=un-test BOSUN_START_TIME=09:00 BOSUN_WAKE_DELAY_MINUTES=1 BOSUN_DAYS=MTWRFSU \
+      "$ROOT/uninstall.sh" "$@"
+  }
+  un_with_no_terminal() { un </dev/null; }
+  un_in_its_tmux() { TMUX="/tmp/tmux-1/$BOSUN_TMUX_SOCKET,1,0" un --yes; }
+  UN_REPO="$WORK/un-repo"
+  mkdir -p "$UN_REPO"
+  check "uninstall will not start with no terminal to ask on" fails_with "no terminal" un_with_no_terminal
+  check "... or from inside the session it would stop" fails_with "another terminal" un_in_its_tmux
+  check "... or with an option it does not know" bash -c '"$1" uninstall --bogus >/dev/null 2>&1; [ $? -eq 2 ]' _ "$BOSUN"
+  check "--dry-run says what it would remove" contains "$(un --dry-run 2>&1)" "launchd job $BOSUN_LAUNCHD_LABEL"
+  check "... and creates nothing, not even its own folders" test ! -e "$WORK/un-state"
+  check "... and removes nothing" test -e "$PLIST"
+  printf 'Repeating power events:\n  wakepoweron at 7:00AM every day\n' >"$WORK/pmset-sched"
+  check "a wake at another time would stay" contains "$(un --dry-run 2>&1)" "may not be bosun's"
+  printf 'Repeating power events:\n  wakepoweron at 9:01AM every day\n' >"$WORK/pmset-sched"
+  BOSUN_STATE_DIR="$WORK/un-state" "$BOSUN" trust --any "$UN_REPO" >/dev/null
+  echo "# mine" >"$WORK/un-state/a-file-of-mine"
+  UN_OUT="$(un --yes 2>&1)"
+  check "uninstall takes back the trust it gave" bash -c '! python3 "$1/lib/claude_state.py" trusted "$2"' _ "$ROOT" "$UN_REPO"
+  check "... cancels its wake, through sudo" grep -q "sudo .*pmset repeat cancel" "$WORK/system.log"
+  check "... says it is done" contains "$UN_OUT" "bosun is uninstalled"
+  check "... says where your settings are" contains "$UN_OUT" "your settings: bosun.env"
+  check "... leaves a checkout you made" test -x "$ROOT/bin/bosun"
+  check "... and says why" contains "$UN_OUT" "not made by the installer"
+  check "... leaves a file it does not know, and names it" contains "$UN_OUT" "a-file-of-mine"
+  check "a second run finds nothing to do" contains "$(un --yes 2>&1)" "Nothing of bosun is left"
   check "uninstall unloads and removes the job" bash -c 'grep -q "launchctl bootout gui/$(id -u)/$2" "$1" && [ ! -e "$3" ]' _ "$WORK/system.log" "$BOSUN_LAUNCHD_LABEL" "$PLIST"
   check "uninstall unloads and removes the watchdog agent" bash -c 'grep -q "launchctl bootout gui/$(id -u)/$2.watchdog" "$1" && [ ! -e "$3" ]' _ "$WORK/system.log" "$BOSUN_LAUNCHD_LABEL" "$WATCHDOG_PLIST"
   check "uninstall unloads the learning agent" grep -q "launchctl bootout gui/$(id -u)/$BOSUN_LAUNCHD_LABEL.learn" "$WORK/system.log"
   check "uninstall removes the link" test ! -L "$HOME/.local/bin/bosun"
   check "uninstall keeps the config without --purge" test -f "$INSTALL_CFG/bosun.env"
+  un_purge() {
+    un --yes --purge >/dev/null 2>&1
+    [ ! -e "$INSTALL_CFG/bosun.env" ]
+  }
+  check "--purge takes that too" un_purge
 
   echo "init (fake launchctl and pmset, test label)"
   export BOSUN_SKIP_PREFLIGHT=1 # what bosun needs has its own tests, on a made-up machine
@@ -1917,7 +1970,8 @@ if [ "$(bash -c 'source "$1/lib/common.sh"; command -v launchctl; command -v pms
   check "init loads the jobs through install.sh, with valid plists" bash -c 'plutil -lint -s "$1" && plutil -lint -s "$2" && grep -q "launchctl bootstrap gui/$(id -u) $1" "$3"' _ "$PLIST" "$HOME/Library/LaunchAgents/$BOSUN_LAUNCHD_LABEL.learn.plist" "$WORK/system.log"
   check "the learning agent is valid XML, not only what plutil lets through" python3 -c 'import plistlib, sys; plistlib.loads(open(sys.argv[1], "rb").read())' "$HOME/Library/LaunchAgents/$BOSUN_LAUNCHD_LABEL.learn.plist"
   check "... at the time the answers imply" grep -q "<key>Hour</key><integer>16</integer><key>Minute</key><integer>30</integer>" "$HOME/Library/LaunchAgents/$BOSUN_LAUNCHD_LABEL.learn.plist"
-  BOSUN_CONFIG_DIR="$INIT_CFG" "$ROOT/uninstall.sh" >/dev/null 2>&1
+  BOSUN_CONFIG_DIR="$INIT_CFG" BOSUN_STATE_DIR="$WORK/un-state" BOSUN_LOG_DIR="$WORK/un-state/logs" \
+    BOSUN_SESSION_NAME=un-test "$ROOT/uninstall.sh" --yes >/dev/null 2>&1
   unset BOSUN_SKIP_PREFLIGHT
 
   echo "a window on Codex (launch's dry run)"
@@ -1963,6 +2017,23 @@ else
   echo "  FAIL  fake launchctl/pmset are not first on PATH; skipped install tests"
 fi
 unset BOSUN_LAUNCHD_LABEL
+
+# What this whole run left behind is the best list there is of what bosun writes: uninstall must know it all,
+# or the file stays on people's machines after they uninstall. A new file goes in lib/uninstall_plan.py's tables.
+echo "uninstall knows every file bosun writes"
+knows_all_of() { # <state dir> <config dir>: names what it does not know
+  local unknown
+  unknown="$(BOSUN_STATE_DIR="$1" BOSUN_LOG_DIR="$1/logs" BOSUN_CONFIG_DIR="$2" "$BOSUN" uninstall --dry-run 2>&1 |
+    grep -B1 "does not know this file" | grep -v "does not know this file\|^--")"
+  [ -z "$unknown" ] || {
+    echo "$unknown"
+    return 1
+  }
+}
+for state in "$WORK/state" "$WORK/approvals-state"; do
+  check "what a run left in $(basename "$state")" knows_all_of "$state" "$WORK/config"
+done
+check "what it left in the knowledge base's config" knows_all_of "$WORK/state" "$WORK/kg-config"
 
 echo "the repository this ran from"
 repo_unchanged() {

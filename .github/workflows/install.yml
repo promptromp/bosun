@@ -14,6 +14,7 @@ on:
       - uninstall.sh
       - bin/**
       - libexec/bosun-init
+      - libexec/bosun-uninstall
       - libexec/bosun-preflight
       - libexec/bosun-launch
       - libexec/bosun-doctor
@@ -32,6 +33,7 @@ on:
       - lib/harnesses/**
       - lib/launch/**
       - lib/init*.py
+      - lib/uninstall*.py
       - lib/agent_*.py
       - lib/claude_state.py
       - lib/codex_state.py

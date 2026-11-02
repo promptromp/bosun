@@ -46,6 +46,7 @@ from typing import Any
 
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+import agent_changes
 import claude_state
 import learn_digest
 import ledger
@@ -881,7 +882,7 @@ def append_rule(config: Config, learn_id: str, path: Path, text: str) -> str:
     return f"appended to {path}"
 
 
-def apply_memory(_config: Config, learn_id: str, change: dict[str, Any]) -> str:
+def apply_memory(config: Config, learn_id: str, change: dict[str, Any]) -> str:
     if not change.get("dir"):
         raise LearnError(
             f"{learn_id}: no folder for the memory note (window {change.get('window')!r} is unknown)"
@@ -890,6 +891,7 @@ def apply_memory(_config: Config, learn_id: str, change: dict[str, Any]) -> str:
     for suffix in ("", "-2", "-3", "-4"):
         with contextlib.suppress(FileExistsError):
             note = claude_state.add_memory_note(change["dir"], name + suffix, change["title"], change["text"])
+            agent_changes.record_note(config.state_dir, note)
             return f"memory note {note}"
     raise LearnError(f"{learn_id}: memory notes named {name} already exist")
 

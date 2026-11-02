@@ -55,6 +55,7 @@ Looking at it
               agent busy time, my prompts and tokens per window (`impact collect`)
 
 Checking it works
+  uninstall   Take bosun off this Mac: says what goes and what stays, then asks first
   doctor      Check dependencies, config, schedule and credentials
   orphans     List shells earlier window starts left behind (ppid 1); --apply stops them
   watchdog    Alert me about a missed or failed morning run, a missing session, stuck prompts,

@@ -6,7 +6,7 @@
 # read-only copy of this checkout. Docker on a Mac is Linux, so launchctl, pmset and the like are
 # stand-ins (tests/sandbox/macos/): this tests bosun's logic, not launchd or a real wake. For those,
 # `mac` uses a real Mac in a Tart VM (tests/sandbox/mac.sh --help). Guide: docs/development.md.
-#   init   (default) a new user's first day: `bosun init`, a morning, re-runs, uninstall. No network.
+#   init   (default) a new user's first day: `bosun init`, a morning, re-runs, uninstall and back. No network.
 #   unit   the unit tests
 #   smoke  the smoke suite
 #   all    all three

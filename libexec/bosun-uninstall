@@ -1,0 +1,38 @@
+#!/bin/bash
+# Usage: bosun uninstall [--dry-run] [--yes] [--delete-ledger] [--delete-knowledge] [--purge]
+#
+# Take bosun off this Mac. It first shows what goes and what stays, then asks whether you are sure, and
+# changes nothing until you have answered everything. Ctrl-C at any question leaves it all as it was.
+#
+# It stops the windows, and removes the launchd jobs, the repeating wake it set (sudo, once), the trust it
+# gave folders, the memory notes it learned, the `bosun` link, its working files and the checkout get.sh
+# made. It asks whether to keep your ledger and your knowledge graph: Enter keeps them. Your settings stay
+# in ~/.config/bosun, and it says where everything it left is. Installing again picks all of that up.
+#
+# It leaves what it cannot say is bosun's: another repeating wake, trust you gave a folder yourself, any
+# file it does not know, a checkout you made or with work in it that is not pushed.
+#   --dry-run           show what it would do, and do nothing
+#   --yes               ask nothing: uninstall, keeping your ledger and knowledge graph
+#   --delete-ledger     delete the ledger and the learning history without asking
+#   --delete-knowledge  delete the knowledge graph without asking
+#   --purge             also delete your settings (all but forbidden-terms.txt, which guards your commits)
+# Run it from a terminal outside bosun's windows: it stops them. Exit status: 0 done, or nothing was
+# changed; 1 something could not be removed, and it says what to run; 2 bad usage, or it refused.
+# Design: docs/design/uninstall.md.
+set -uo pipefail
+source "$(dirname "$0")/../lib/common.sh"
+
+case "${1:-}" in
+  -h | --help)
+    usage
+    exit 0
+    ;;
+esac
+read_config # and not load_config, which creates the very folders this removes
+
+python3 -c 'import sys; sys.exit(sys.version_info < (3, 13))' 2>/dev/null ||
+  die "bosun needs Python 3.13 or newer as python3: bosun preflight says how to get it"
+BOSUN_CONFIG_DIR="$BOSUN_CONFIG_DIR" BOSUN_STATE_DIR="$BOSUN_STATE_DIR" BOSUN_LOG_DIR="$BOSUN_LOG_DIR" \
+  BOSUN_SESSION_NAME="$BOSUN_SESSION_NAME" BOSUN_TMUX_SOCKET="$BOSUN_TMUX_SOCKET" \
+  BOSUN_START_TIME="$BOSUN_START_TIME" BOSUN_WAKE_DELAY_MINUTES="$BOSUN_WAKE_DELAY_MINUTES" BOSUN_DAYS="$BOSUN_DAYS" \
+  BOSUN_JOB_LABELS="$(job_labels)" exec python3 "$BOSUN_ROOT/lib/uninstall.py" "$@"

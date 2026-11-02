@@ -19,6 +19,7 @@ from unittest import mock
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path[:0] = [str(ROOT / "lib"), str(ROOT / "tests" / "llm")]
+import agent_changes  # noqa: E402
 import claude_state  # noqa: E402
 import learn  # noqa: E402
 import learn_world  # noqa: E402
@@ -271,6 +272,7 @@ class ApplyTest(LearnCase):
         note = memory / "bosun-exporter-opens-drafts.md"
         self.assertIn("Open normal PRs, never drafts.", note.read_text())
         self.assertIn("bosun-exporter-opens-drafts.md", (memory / "MEMORY.md").read_text())
+        self.assertEqual(agent_changes.notes(self.world.state), (str(note),), "so that uninstall can find it")
 
     def test_apply_a_task_rule(self) -> None:
         rule = finding(

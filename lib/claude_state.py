@@ -247,14 +247,20 @@ def live_status(name: str) -> str | None:
 # ---- folder trust ------------------------------------------------------------------------------
 
 
-def trusted(directory: str) -> bool:
-    try:
-        config = json.loads(CONFIG_FILE.read_text())
-    except (OSError, json.JSONDecodeError):
+def trust_recorded(directory: str) -> bool | None:
+    """Whether ~/.claude.json marks <directory> as trusted; None if the file is there but cannot be read."""
+    if not CONFIG_FILE.exists():
         return False
-    return (
-        config.get("projects", {}).get(os.path.realpath(directory), {}).get("hasTrustDialogAccepted") is True
-    )
+    config = read_object(CONFIG_FILE)
+    projects = config.get("projects", {}) if config is not None else None
+    if not isinstance(projects, dict):
+        return None
+    entry = projects.get(os.path.realpath(directory), {})
+    return isinstance(entry, dict) and entry.get("hasTrustDialogAccepted") is True
+
+
+def trusted(directory: str) -> bool:
+    return trust_recorded(directory) is True
 
 
 def onboarded() -> bool:
@@ -284,6 +290,8 @@ def set_trust(directory: str, trust: bool) -> None:
         projects.setdefault(key, {})["hasTrustDialogAccepted"] = True
     elif key in projects:
         projects[key].pop("hasTrustDialogAccepted", None)
+        if not projects[key]:  # nothing but the trust was ever known of this folder
+            del projects[key]
     write_atomically(target, json.dumps(config, indent=2), mode=0o600)
 
 
@@ -1211,6 +1219,16 @@ def add_memory_note(workdir: str, slug: str, description: str, body: str) -> Pat
     existing = index.read_text() if index.exists() else "# Memory Index\n"
     index.write_text(existing.rstrip("\n") + f"\n- [{description}]({note.name})\n")
     return note
+
+
+def remove_memory_note(note: Path) -> None:
+    """Delete a note add_memory_note wrote, and its line in MEMORY.md. The other lines stay as they are. The
+    line first: a note whose line could not be taken out is still there to try again."""
+    index = note.parent / MEMORY_INDEX
+    if index.exists():
+        lines = index.read_text().splitlines(keepends=True)
+        index.write_text("".join(line for line in lines if f"]({note.name})" not in line))
+    note.unlink(missing_ok=True)
 
 
 # ---- command line ------------------------------------------------------------------------------

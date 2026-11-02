@@ -141,6 +141,8 @@ How to choose and set them up: [docs/development.md](../development.md#which-san
 On Codex the same first day runs in the Docker sandbox on a stand-in (`the_first_day_on_codex`), and for
 real with `tests/sandbox.sh mac live codex`.
 
+Taking it all off again has a note of its own: [uninstall.md](uninstall.md).
+
 ## What comes next
 
 - Morning scenarios on a real Mac: "Monday 08:00, tmux survived, one window at a prompt, the login

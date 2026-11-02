@@ -42,7 +42,8 @@
       "Write",
       "NotebookEdit",
       "Bash(gh pr merge --admin:*)",
-      "Bash(git push --force:*)"
+      "Bash(git push --force:*)",
+      "Bash(bosun uninstall:*)"
     ]
   },
   "hooks": {

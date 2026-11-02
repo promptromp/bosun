@@ -370,7 +370,9 @@ set_impact_defaults() {
 # The result is not exported: child commands load the config themselves, so a long-running process
 # (a Claude session, the tmux server) never carries a frozen copy that would mask later edits to
 # bosun.env. Only real environment overrides stay exported, and pass on to children.
-load_config() {
+# The settings, from the defaults, bosun.env and the environment. Creates nothing, for what must not
+# (`bosun uninstall`); every other command wants load_config.
+read_config() {
   local name i=0
   local -a override_names=() override_values=()
   for name in $(compgen -e | grep '^BOSUN_' | grep -vx BOSUN_COMMAND); do
@@ -388,6 +390,10 @@ load_config() {
   done
   : "${BOSUN_ORCHESTRATOR_DIR:=$BOSUN_REPOS_DIR}"
   : "${BOSUN_ORCHESTRATOR_SETTINGS:=$BOSUN_ROOT/orchestrator/settings.json}"
+}
+
+load_config() {
+  read_config
   mkdir -p "$BOSUN_STATE_DIR" "$BOSUN_LOG_DIR"
 }
 
@@ -925,6 +931,12 @@ render_watchdog_plist() {
 # BOSUN_DAYS; install.sh loads it only with BOSUN_LEARN_ENABLED=1.
 learn_label() { echo "$BOSUN_LAUNCHD_LABEL.learn"; }
 learn_plist() { echo "$HOME/Library/LaunchAgents/$(learn_label).plist"; }
+
+# `bosun wake-test`'s own job, which it removes when it finishes.
+waketest_label() { echo "$BOSUN_LAUNCHD_LABEL.waketest"; }
+
+# Every launchd job bosun can have loaded: what `bosun uninstall` looks for.
+job_labels() { echo "$BOSUN_LAUNCHD_LABEL $(watchdog_label) $(learn_label) $(waketest_label)"; }
 
 render_learn_plist() {
   ENV_XML="$(launchd_env_xml)" CALENDAR="$(launchd_calendar_xml "$BOSUN_LEARN_AT" "$BOSUN_DAYS")" \

@@ -6,7 +6,7 @@
 # It puts bosun in ~/.local/share/bosun and starts `bosun init`, which checks what bosun needs and says
 # what to do about anything missing, then asks a few questions and shows its plan before it changes
 # anything. It installs nothing else, and never uses sudo; `bosun init` asks for it once, for the wake
-# schedule, and says so first. Run it again to update.
+# schedule, and says so first. Run it again to update. `bosun uninstall` takes it all off again.
 #
 #   curl ... | sh -s -- --dry-run      say what it would do, and do nothing
 #   curl ... | sh -s -- --unattended   ask nothing: take the recommended setup
@@ -77,6 +77,7 @@ get_bosun() {
     say "Getting bosun into $DIR"
     run mkdir -p "$(dirname "$DIR")"
     run git clone --quiet --branch "$BRANCH" "$REPO" "$DIR"
+    run git -C "$DIR" config bosun.managed true # `bosun uninstall` only deletes a checkout marked so
   fi
 }
 
