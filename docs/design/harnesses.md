@@ -83,7 +83,7 @@ does not record the question, and Enter would answer it. So `bosun send` reads t
 | Remote Control from your phone | No such thing: drive the window from a terminal |
 | A revoked login | Not reported. `codex login status` only says a key is there, and a failed request shows on the screen but not in the session file |
 | What you said in a window | Recorded when the turn ends, not when you press Return, because that is when Codex reports it |
-| The watchdog's `waiting`, `spend-limit` and `context-size` | `waiting` cannot fire with the default flags. The other two read Claude Code's transcripts |
+| The watchdog's `waiting`, `spend-limit` and `context-size` | `waiting` never fires, whatever the flags: the session file records only idle or busy, so a question reads as busy. Only `bosun send` reads a question, from the screen (above). The other two read Claude Code's transcripts |
 | Impact stats and daily learning | Read Claude Code's transcripts, so Codex sessions are not counted. `lib/learn_digest.py`'s `Harness` protocol is where an adapter goes |
 | Autocompact | Claude Code only: `BOSUN_AUTOCOMPACT_TOKENS` and `autocompact:` do nothing on a Codex window |
 | `shell`, `idle-bg` and the watchdog's `long-shell` | Codex's session file records only idle or busy, so a background command left running does not show |

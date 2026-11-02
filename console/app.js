@@ -1625,7 +1625,7 @@ function impactNotes(m) {
   const notes = [];
   if (m.early) notes.push("Early data: fewer than 4 full weeks since the start, so the comparison can still swing a lot.");
   if (m.stale) notes.push(`The snapshot is from ${when(m.collected_at)}; run bosun impact collect for fresh numbers.`);
-  if (m.unpriced_models.length) notes.push(`Priced at the highest list price (not in the price table): ${m.unpriced_models.join(", ")}.`);
+  if (m.unpriced_models.length) notes.push(`Not in the price table, priced as ${m.fallback_model}: ${m.unpriced_models.join(", ")}.`);
   notes.push("A heavy project week, holidays or a change in team load move these numbers as much as bosun does: read single weeks with that in mind.");
   return card("impact-notes", el("ul", { className: "plain small" }, notes.map((text) => el("li", {}, text))));
 }

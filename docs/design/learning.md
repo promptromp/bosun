@@ -30,8 +30,9 @@ evidence rather than static framework files.
 - **The ledger** (`ledger.json`): every work item with its full history (transitions, delegations,
   reports, proposals and their outcome, outreach messages, corrections).
 - **Logs** (`logs/morning-*`, `checkin-*`) and the **watchdog's** alerts (`watchdog.json`).
-- **Live windows**: `bosun sessions --json` (new) lists every configured or open window with
-  its Claude session id, status and transcript path.
+- **Live windows**: `bosun sessions --json` lists every configured or open window, and under
+  `agent` the one running in it: which (`harness`, `claude` or `codex`), its session id, status and
+  transcript path.
 - **What is in force**: `orchestrator/policy.md`, `chores.md`, the task rules, the site overlays,
   and the orchestrator folder's Claude Code memory index.
 
@@ -138,8 +139,11 @@ Deferred (ROADMAP), each for a reason:
 - **Trend views across runs** (a problem's frequency over weeks) and **automatic retirement** of
   rules that no longer fire.
 - **Other harnesses.** The digest reads sessions through a `Harness` protocol (transcripts,
-  events, subagents, memory folder); Claude Code is the only adapter. A second one plugs in there,
-  and `memory` proposals would then go to that harness's memory mechanism.
+  events, subagents, memory folder); Claude Code is the only adapter. Repo windows can run Codex
+  now ([harnesses.md](harnesses.md)), and their sessions are not read yet: the digest shows only
+  the Claude Code sessions in a window's folder. A `memory` proposal always writes a Claude Code
+  note. A Codex adapter plugs in there; where a `memory` proposal for a Codex window should go is
+  still open.
 
 ## Safety and privacy
 

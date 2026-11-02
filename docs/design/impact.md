@@ -1,8 +1,11 @@
 # Impact stats: what bosun changes
 
-Status: accepted 2026-10-26; Phase A built and merged (see the checklist at the end). Plan for the phase
-being built: [docs/plans/impact-phase-a.md](../plans/impact-phase-a.md). Roadmap entry:
-[ROADMAP.md](../../ROADMAP.md), "Impact (productivity) stats".
+Status: accepted 2026-10-26; Phase A, cost per task (B0), overhead and guardrails, and the page
+rework built and merged (see the checklist at the end). Their plans, all done but for measuring the
+overhead fixes: [impact-phase-a.md](../plans/impact-phase-a.md),
+[impact-cost-per-task.md](../plans/impact-cost-per-task.md) and
+[impact-overhead.md](../plans/impact-overhead.md). Phase B is next and has no plan yet. Roadmap
+entry: [ROADMAP.md](../../ROADMAP.md), "Impact (productivity) stats".
 
 ## Goal
 
@@ -37,12 +40,14 @@ fast reviews get done, what it costs, and later what the learning and the knowle
 |---|---|---|
 | GitHub (`gh`, read only) | my merged PRs per repo: created, merged, size, URL; reviews I gave on other people's PRs: PR created, my first review | `bosun impact collect`, a daily snapshot |
 | Claude Code transcripts (`lib/claude_state.py`) | per session and day: agent busy time, the prompts I typed, tokens by type and model | the same collector, cached per transcript (size, mtime) |
-| The ledger | the start date (its first item), my PRs and reviews as bosun saw them, approvals | read by the console as today |
+| The ledger | the start date (its first item), the default repos, the items turns are attributed to, guardrail counts | the same collector; the console reads its `learn:` items for the learning panel |
+| bosun's own state | guardrails: the events queue and its delivery record, the check-in logs | the same collector, through `lib/impact_guardrails.py` |
+| Learning's state and reports, the knowledge base | the learning panel: runs, findings, `learn:` proposals, the knowledge base's growth | read by the console when the page asks, not from the snapshot |
 | Deploys (Phase B) | when a merged change reached production | `bosun impact collect`, from the site's deploy announcements |
 | Learning and knowledge events (Phase C) | finding classes, recurrences, knowledge and memory use | new events, recorded from Phase C on |
 
 Repos come from `BOSUN_IMPACT_REPOS` (owner/name, comma-separated); empty: the repos of the
-ledger's `mypr:` and `review:` items. Nothing in the repo names a site's repos.
+ledger's `mypr:`, `review:` and `ghissue:` items. Nothing in the repo names a site's repos.
 
 ## Metric definitions (Phase A)
 
@@ -65,9 +70,9 @@ partial.
   under it), the timestamps of assistant entries and tool results in order; every gap of at most
   `BUSY_GAP_SECONDS` (300) between consecutive ones counts as busy time, a longer gap as idle.
   Summed per window and day; parallel sessions add up (agent-hours, not wall-clock hours).
-- **My prompts:** prompts delivered to those sessions that I typed (`claude_state.delivered_prompts`
-  filtered with `activity.is_mine`: not bosun's pasted check-ins, events or drain prompt, not
-  slash commands).
+- **My prompts:** prompts in those sessions' transcripts that I typed (the prompt entries of
+  `claude_state.transcript_activity`, read through `typed_prompt`, filtered with
+  `activity.is_mine`: not bosun's pasted check-ins, events or drain prompt, not slash commands).
 - **My touch time (estimate):** my prompts times `BOSUN_IMPACT_PROMPT_MINUTES` (2): reading
   what the session said and answering. A range of half to double that is shown.
 - **Leverage (estimate):** agent busy hours divided by my touch hours, per week.
@@ -83,8 +88,10 @@ partial.
 
 ## Collector
 
-`bosun impact collect [--since DATE] [--dry-run]` (`lib/impact_collect.py`, the only module
-with I/O for this; the metrics are pure in `lib/impact.py`):
+`bosun impact collect [--since DATE] [--dry-run]` (`lib/impact_collect.py`, with
+`lib/impact_guardrails.py` for the guardrails' reads of the events queue and the check-in logs;
+the metrics are pure in `lib/impact.py`). The learning panel is the one part not collected: the
+console reads it when the page asks. The collector:
 
 - writes `$BOSUN_STATE_DIR/impact/snapshot.json` (replaced atomically, idempotent): the
   window, the start, the repos, my PRs, my reviews, and per-session daily activity;
@@ -97,9 +104,9 @@ with I/O for this; the metrics are pure in `lib/impact.py`):
 
 ## The page (`#/impact`)
 
-- **Headline tiles:** PRs merged per week (since vs baseline, with the change), time to merge,
-  reviews given per week, leverage (estimate), cost per week (estimate). Each with its sample
-  size.
+- **Headline tiles:** PRs merged per week (since vs baseline, with the change), reviews given per
+  week, leverage (estimate), cost per week (estimate). Each with its sample size. Time to merge
+  and time to first review are median lines under the PR and review charts.
 - **Before and after:** weekly PRs merged as bars, the baseline band and mean as a shaded strip, a
   dashed line at the start; reviews given per week below it in the same layout.
 - **Your time and agent time** (2026-10-29): one headline per phase, "for every hour you spent
@@ -145,7 +152,7 @@ sends on a schedule. The rules carry a version (`RULES_VERSION`) in the cache ke
 | Class | Opening | Counts as |
 |---|---|---|
 | `work` | anything else I typed | work |
-| `handover` | `Ledger id`, `Ledger item`, `Update to ledger item`, `Run this task in a subagent` (`lib/activity.py`'s bosun prefixes) | work |
+| `handover` | `Ledger id`, `Ledger item`, `Update to ledger item`, `Run this task in a subagent` (`delegate.HANDOVER_OPENINGS`, next to the formats `delegate.py` renders) | work |
 | `subagent` | every call in a subagent's transcript (its prompt comes from its parent) | work |
 | `check-in` | `/bosun:chores` (check-in and morning runs) | overhead |
 | `events` | `[bosun` (the events summary) | overhead |
@@ -160,6 +167,7 @@ plus cache reads plus cache writes). The per-transcript cache records the classi
 changed prefix list re-reads every transcript once.
 
 **The panel:**
+
 - Overhead share and cost per day over the last 7 days against the 7 before (today counts).
 - Cost per turn of the overhead that fires most: check-in, notification, resume, events.
 - Cost per week, stacked by class (the last 8 weeks with turns).
@@ -213,7 +221,7 @@ turn uses its own start. The rules only read what bosun itself writes (hand-over
 ledger's histories), so a setup that does not use the ledger gets everything unattributed, per
 window, rather than a wrong guess.
 
-**Collected** (`lib/impact_collect.py`): the per-transcript cache (version 3) keeps each turn's
+**Collected** (`lib/impact_collect.py`): the per-transcript cache (version 4) keeps each turn's
 start, the ids its hand-over names and its tokens by model, so attribution re-runs against the
 current ledger without re-reading unchanged transcripts. The snapshot's `tasks` holds a row per
 item since the start (kind, task type, state, outcome, the PR it is or produced, turns, windows,
@@ -266,5 +274,6 @@ summary line.
 - [ ] Phase D: polish, a weekly summary for the Monday standup draft, maybe a monthly report.
 - [x] Overhead and guardrails: turn triggers, the Overhead panel, guardrails and the two watchdog
       checks (2026-10-27; plan: [docs/plans/impact-overhead.md](../plans/impact-overhead.md)).
-- [ ] Overhead fixes measured: set `BOSUN_IMPACT_OVERHEAD_FIXED_AT` when they roll out and read
-      the before/after table after a week.
+- [ ] Overhead fixes measured: the fixes merged 2026-10-27/28, so this is due now: set
+      `BOSUN_IMPACT_OVERHEAD_FIXED_AT` to the day they rolled out and read the before/after
+      table after a week.

@@ -5,9 +5,11 @@ Status: built (2026-10-21), off by default (`BOSUN_APPROVALS_ENABLED=0`). Tracke
 
 ## Why
 
-The orchestrator's settings have `ask` rules for every outward tool: Slack sends, reactions and
-canvases, Jira and Confluence writes, `gh pr merge|ready|edit|comment|review|close|update-branch`, `gh api`,
-`git push`. An `ask` rule beats auto mode, so each such call opens a Claude Code permission prompt.
+The orchestrator's settings have `ask` rules for Slack sends, reactions and canvases,
+`gh pr merge|ready|edit|comment|review|close|update-branch`, `gh api` and `git push`. Other MCP tools
+with a write verb in their name (Jira and Confluence writes, CI builds) get an `ask` from the settings
+file's own `bosun guard` hook. Either `ask` beats auto mode, so each such call opens a Claude Code
+permission prompt.
 In the first week of use that was over a hundred prompts, nearly all a second approval of something
 I had already approved in chat ("1 and 3 yes"). And a prompt waits forever: two approved re-review
 messages sat at their prompt overnight and kept the morning restart from running.
@@ -39,7 +41,9 @@ top of its settings file, whose own `bosun guard` hook stays):
 | PostToolUse, PostToolUseFailure | `bosun guard --post-tool-use` | nothing: settles the proposal the call used (section 4) |
 
 The gated calls are one table in `lib/guard.py` (`GATED_MCP`, `GATED_MCP_FAMILIES`,
-`GATED_COMMANDS`), the same list as the `ask` rules; a site adds its own command prefixes with
+`GATED_COMMANDS`). Its Slack tools and commands are the ones the `ask` rules name; its Jira,
+Confluence and CI build tools have no rule and get their prompt from the plain guard (`WRITE_VERBS`).
+A site adds its own command prefixes with
 `BOSUN_APPROVALS_GATED_COMMANDS` (and an `ask` rule for each). Bash commands are matched by
 their leading words anywhere in a compound command (`gh pr view 1 && gh pr comment ...` is gated).
 CI build tools (`restart_build`, `create_build`, `promote_build`, `stop_build`) are gated too, so
@@ -47,8 +51,9 @@ an approved re-run goes through the PermissionRequest hook instead of the plain 
 
 ### Flag off means no change
 
-With `BOSUN_APPROVALS_ENABLED=0` the launch command is byte for byte what it was (no extra
-settings), and both new hook modes check the flag again on every call and decide nothing, so
+With `BOSUN_APPROVALS_ENABLED=0` launch adds no approvals hooks. The compaction and signal hooks
+the orchestrator also gets have flags of their own (`BOSUN_COMPACT_CONTEXT`, `BOSUN_HOOK_SIGNALS`).
+Both new hook modes check the flag again on every call and decide nothing, so
 turning it off works at once. The plain `bosun guard` (the settings file's PreToolUse hook) is
 untouched. `ledger propose` without the new options and every other ledger command behave as
 before.
@@ -258,11 +263,14 @@ nothing.
 
 ## Repo sessions
 
-Repo sessions run with `BOSUN_CLAUDE_FLAGS` (by default `--permission-mode auto`). Auto mode prompts
-only after blocking several actions in a row, and bypass mode never does, so they rarely hang on these
-calls (a week of real transcripts in bypass mode had no permission prompt in a repo session other than
-questions; the watchdog's `waiting` check reports the rest). A site that runs them in a prompting
-mode could get the same pair of hooks through `repo_session_settings`, behind the same flag; the
+Repo sessions on Claude Code run with `BOSUN_CLAUDE_FLAGS` (by default `--permission-mode auto
+--chrome`). Auto mode prompts only after blocking several actions in a row, and bypass mode never does,
+so they rarely hang on these calls (a week of real transcripts in bypass mode had no permission prompt
+in a repo session other than questions; the watchdog's `waiting` check reports the rest). Repo sessions
+on Codex run with `BOSUN_CODEX_FLAGS`, whose automatic reviewer decides without a prompt
+([harnesses.md](harnesses.md#what-codex-needed)). A site that runs Claude Code sessions in a prompting
+mode could get the same pair of hooks through `repo_session_settings` (which only Claude Code windows
+get), behind the same flag; the
 quote check would then read the repo window's own transcript, and `pasted_hashes` for that window.
 Not wired.
 

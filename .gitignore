@@ -6,6 +6,8 @@ __pycache__/
 .mypy_cache/
 .pytest_cache/
 .complexipy_cache/
+# The docs site, built from docs/ by `mkdocs build` (mkdocs.yml)
+/site/
 
 # Runtime state and logs (live in ~/.local/state/bosun, but never commit strays)
 logs/

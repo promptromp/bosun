@@ -25,6 +25,12 @@ is missing.
 | `overhead-share` | the turns bosun started itself (check-ins, events summaries, notifications, resumes, messages between sessions, a site's scheduled prompts) cost more than `BOSUN_OVERHEAD_WARN_SHARE` (0.5) of the last 7 days, from the Impact snapshot (skipped without one, or when it is over 3 days old; `0` turns it off) | week |
 | `login-expired` | Claude Code is logged out (`claude auth status`), the last login check request got a login error, or any Claude window's latest replies are all login errors (see Claude Code login); alerts at once, but like every check only inside the awake window | outage (alerts again after it recovered) |
 
+Some checks cannot fire on a Codex window yet. Its session file records only busy or idle, so a
+question it waits on reads as busy (`waiting`) and a background command does not show
+(`long-shell`); `spend-limit` and `context-size` read Claude Code's transcripts; and
+`login-expired` does not see a revoked Codex login. See
+[what Codex windows do not have yet](design/harnesses.md#what-codex-windows-do-not-have-yet).
+
 How it avoids false alarms:
 
 - **Only in the awake window:** alerts go out on scheduled days (`BOSUN_DAYS`) between

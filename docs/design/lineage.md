@@ -46,8 +46,10 @@ work goes on under its own id.
 ## Shape
 
 **Tasks.** Fields: title, ask, requester, repo or area (optional), done_when (optional); `via` on
-a task with no source item. States: `proposed` -> `accepted` -> `delegated` -> `done`; `declined`
-(from proposed, and back to proposed if reconsidered); `dropped` from anywhere. Rules in code:
+a task with no source item. States: `proposed` -> `accepted` -> `delegated` -> `done`;
+`accepted` -> `done` too, and `delegated` back to `accepted` when the task is taken back from its
+window to hand over again; `declined` (from proposed, and back to proposed if reconsidered); `dropped` from
+anywhere. Rules in code:
 
 - `accepted` needs `--evidence 'user: <what I said>'`: someone else's message never accepts work.
   Entering it carries out the pending proposal (`proposal-done`); `declined` rejects it.

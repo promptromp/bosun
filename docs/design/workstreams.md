@@ -35,6 +35,7 @@ not:
 | Atlassian Goals | Goals with sub-goals | a sub-goal works like a goal | nesting | status does not roll up from sub-goals automatically (2024) | monthly updates |
 
 Sources:
+
 - Jira: [custom hierarchy levels](https://support.atlassian.com/jira-software-cloud/docs/configure-custom-hierarchy-levels-in-advanced-roadmaps/),
   [roll-up values](https://support.atlassian.com/jira-software-cloud/docs/roll-up-values-in-advanced-roadmaps/),
   [the parent field replacing Epic Link and Parent Link](https://community.developer.atlassian.com/t/deprecation-of-the-epic-link-parent-link-and-other-related-fields-in-rest-apis-and-webhooks/54048).
@@ -106,6 +107,7 @@ precise answer, and it lies within the other.
   The title is free to change, and the id never does. Every `<ws>` argument takes the id, the slug
   or an alias in any case. Aliases are unique across workstreams. A rules file may use any of
   these names, so a rename never breaks it.
+
 - **Relation `part_of`** (inverse `has_part`, family `workstream`). For a work item, it names its
   one workstream. For a workstream, it names its parent. A second `part_of` is refused unless
   `link --move` is given, which records leaving the old one. A workstream takes only `part_of` and

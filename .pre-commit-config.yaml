@@ -22,6 +22,7 @@ repos:
         types: [file]
         files: \.plist$
       - id: check-yaml
+        exclude: ^mkdocs\.yml$ # Python tags it cannot load; the docs-site hook below reads it
       - id: detect-aws-credentials
         args: [--allow-missing-credentials]
       - id: detect-private-key
@@ -137,6 +138,14 @@ repos:
         entry: uv run python tools/check_links.py
         language: system
         types: [markdown]
+      # The docs site as it would be published (mkdocs.yml): pages, nav, links and anchors, and
+      # Markdown the site would read differently from GitHub (tools/mkdocs_hooks.py).
+      - id: docs-site
+        name: docs site (mkdocs build --strict)
+        entry: env NO_MKDOCS_2_WARNING=1 uv run mkdocs build --strict --quiet
+        language: system
+        files: ^(docs/|[A-Z_]+\.md$|mkdocs\.yml$|tools/(mkdocs_hooks|check_links)\.py$)
+        pass_filenames: false
       - id: unit-tests
         name: unit tests
         entry: uv run pytest -q tests/unit

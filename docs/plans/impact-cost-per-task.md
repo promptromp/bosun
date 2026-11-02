@@ -3,6 +3,8 @@
 Design: [docs/design/impact.md](../design/impact.md), "Cost per task". This file is the build
 plan; tick items as they land so a later session can resume.
 
+Status: done. B0 was built 2026-10-28; every item of the checklist below is ticked.
+
 ## Scope
 
 Subagents carry about two thirds of all spend, so the overhead panel answers the smaller question.

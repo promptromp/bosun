@@ -658,8 +658,10 @@ build_model_effort_args() { # <model> <effort> [settings-file] [extra settings J
 
 # The settings the orchestrator gets on top of its settings file: with BOSUN_APPROVALS_ENABLED=1,
 # the approvals hooks (`bosun guard --approvals`, `--permission-request` and, after the call,
-# `--post-tool-use` for both PostToolUse and PostToolUseFailure; lib/guard.py); and the compaction
-# hook (compact_hook_settings). Nothing when neither is on, so its launch is unchanged.
+# `--post-tool-use` for both PostToolUse and PostToolUseFailure; lib/guard.py); with
+# BOSUN_COMPACT_CONTEXT=1 the compaction hook (compact_hook_settings); and with BOSUN_HOOK_SIGNALS=1
+# the signal hooks (signal_hook_settings). The last two are on by default. Nothing when all three
+# are off.
 orchestrator_extra_settings() {
   {
     approvals_hook_settings
@@ -680,9 +682,11 @@ approvals_hook_settings() {
     }}'
 }
 
-# The settings a repo session gets on top of its model and effort: with BOSUN_EVENTS_ENABLED=1,
-# the UserPromptSubmit hook that records what you type in <window> (`bosun hook`); and the
-# compaction hook (compact_hook_settings). Nothing when neither is on.
+# The settings a repo session on Claude Code gets on top of its model and effort: with
+# BOSUN_EVENTS_ENABLED=1, the UserPromptSubmit hook that records what you type in <window> (`bosun
+# hook`); with BOSUN_COMPACT_CONTEXT=1 the compaction hook (compact_hook_settings); and with
+# BOSUN_HOOK_SIGNALS=1 the signal hooks (signal_hook_settings). The last two are on by default.
+# Nothing when all three are off.
 repo_session_settings() { # <window>
   {
     if [ "$BOSUN_EVENTS_ENABLED" = "1" ]; then

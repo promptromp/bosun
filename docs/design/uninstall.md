@@ -77,9 +77,9 @@ since this runs from it: it is all in memory by then.
 
 ## What it refuses
 
-- **Inside bosun's tmux server,** which it would stop halfway through its own work. That also stops an agent in
-  one of bosun's windows, and the orchestrator's settings deny the command as well.
-- **With no terminal and no `--yes`:** it has nobody to ask.
+- **Inside bosun's tmux server** (but for `--dry-run`), which it would stop halfway through its own work. That
+  also stops an agent in one of bosun's windows, and the orchestrator's settings deny the command as well.
+- **With no terminal and neither `--yes` nor `--dry-run`:** it has nobody to ask.
 - **When `~/.local/bin/bosun` runs another checkout:** it says to uninstall with that one, rather than take the
   jobs from under it.
 

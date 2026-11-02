@@ -17,8 +17,9 @@ anything.
 | Terminal | `lib/init_terminal.py` | A key at a time, a screen at a time, and the terminal put back. |
 | Apply | `lib/init.py` | The CLI. Writes the config with backups, trusts the folders, runs `install.sh`. |
 
-`install.sh` stays the one place that knows launchd, `pmset` and `bosun doctor`, so `init` only
-writes what `install.sh` reads. Answers are JSON (`--print-answers`), and a file only needs what it
+`install.sh` is where installing meets launchd, `pmset` and `bosun doctor`, so `init` only writes
+what `install.sh` reads. `lib/uninstall_macos.py` undoes the launchd jobs and the wake
+([uninstall.md](uninstall.md)). Answers are JSON (`--print-answers`), and a file only needs what it
 changes: the wizard only fills those in, so `--answers` and the wizard cannot disagree.
 
 **Nothing changes until you accept the plan.** In a terminal `bosun init` asks its questions and then
@@ -49,7 +50,7 @@ On a first run your own history beats a generic default. A re-run starts from yo
 
 | Answer | From |
 |---|---|
-| Repos | The ones you typed the most prompts in over 30 days, in Claude Code and Codex (20 or more, at most 6). Worktrees count for their main checkout; scripted runs (`claude -p`) do not count. With no history, up to 3 git repos from the usual folders, newest first. |
+| Repos | The ones you typed the most prompts in over 30 days, in Claude Code and Codex (20 or more, at most 6). Worktrees count for their main checkout; scripted runs (`claude -p`) do not count. With none at 20, the 3 with the most prompts. With no history at all, up to 3 git repos from the usual folders, newest first. |
 | Days | Weekdays you worked on at least 60% of since your first prompt. |
 | Hours | Half an hour before your median first prompt, to after your median last one, at least 4 hours. Work before 04:00 belongs to the day before. With under 5 active days: 08:00 to 20:00, Monday to Friday. |
 | Features | Events, approvals and learning on. The Slack watcher only if the Slack plugin is installed. |
@@ -111,7 +112,7 @@ need Python wait until it is. `bosun init` and `bosun doctor` both start with it
 **To add an OS:** add `lib/platforms/<os>.sh` with the same functions as `macos.sh`, map its `uname -s`
 in `load_profiles`, and let `get.sh`'s `check_os` through. `tests/unit/test_preflight.py` checks that a
 profile has them all. That covers this check only. What else assumes macOS: `install.sh` and the
-launchd templates, `pmset` and the wake, `caffeinate` in the keep-awake, `osascript` for alerts, `dscl`, `date -j` and `lsof`'s flags.
+launchd templates, `lib/uninstall_macos.py`, `pmset` and the wake, `caffeinate` in the keep-awake, `osascript` for alerts, `dscl`, `date -j` and `lsof`'s flags.
 
 **To add an agent:** see [Agents](harnesses.md#adding-another). There are two so far, and a profile is
 only the first step.

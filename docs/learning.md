@@ -26,10 +26,11 @@ mishaps do not happen twice. Design and phasing: [docs/design/learning.md](desig
 3. **Proposals**, never applied on their own: each new finding with a change (at most
    `BOSUN_LEARN_MAX_PROPOSALS` a run) becomes a `learn:<YYYY-MM-DD>/<n>` ledger item whose
    pending proposal is the exact change, so the orchestrator lists it under *Needs your approval*.
-   On your yes it runs `bosun learn apply <id>`: a memory note for a window's folder, or a rule
-   appended to `$BOSUN_CONFIG_DIR/policy.md` or `tasks/_common.md` (the previous file is kept
-   in `learn/backups/`). Changes to this repo, `sessions.yml` or outreach you make yourself, then
-   `learn done <id>`; `learn reject <id>` declines one for good. Findings are remembered by key, so a
+   On your yes it runs `bosun learn apply <id>`: a Claude Code memory note for a window's folder
+   (a Codex window does not read it), or a rule appended to `$BOSUN_CONFIG_DIR/policy.md` or
+   `tasks/_common.md` (the previous file is kept in `learn/backups/`). Changes to this repo,
+   `sessions.yml` or `bosun.env`, outreach and ledger corrections you make yourself (or tell the
+   orchestrator), then `learn done <id>`; `learn reject <id>` declines one for good. Findings are remembered by key, so a
    later run counts a known problem again instead of proposing it twice.
 
 It runs by hand any time (`--dry-run` writes nothing but its report; `--collect-only` only the

@@ -120,12 +120,12 @@ as it was.
 | Your windows | Stopped, so any work in them stops. It says which are running first |
 | The launchd jobs (morning, watchdog, learning) | Unloaded and deleted, before the windows stop, so the watchdog cannot bring them back |
 | The repeating wake | Cancelled with `sudo pmset repeat cancel`, if it is the one bosun set. `pmset` can only cancel every repeating event at once, so another event, or a wake at another time, stays and it says so |
-| Folder trust | Taken back for the folders bosun marked, in Claude Code and Codex. A folder you had accepted yourself stays trusted |
+| Folder trust | Taken back for the folders bosun marked, in Claude Code and Codex. A folder you had accepted yourself stays trusted. It goes by bosun's record of what it changed (`agent-changes.json`), kept since `bosun uninstall` was added; trust or notes from an install before that are not on it and stay |
 | Memory notes from [`bosun learn`](learning.md#learning) | Deleted, with their line in `MEMORY.md`. Your own notes stay |
 | `~/.local/bin/bosun` and bosun's working files | Deleted |
 | The checkout in `~/.local/share/bosun` | Deleted, last. One you cloned yourself stays, and so does one with anything of yours in it: changes, a stash, commits not pushed, another worktree, a file git ignores |
 | Your ledger and learning history, your knowledge graph | It asks, and Enter keeps them |
-| `~/.config/bosun`: `bosun.env`, `sessions.yml`, `setup.sh`, `policy.md`, `tasks/` | Stay, and it says where. `--purge` deletes them too |
+| `~/.config/bosun`: `bosun.env`, `sessions.yml`, `setup.sh`, `policy.md`, `learn.md`, `tasks/`, `workstreams.json`, and the backups `bosun init` made (`*.pre-init-*`) | Stay, and it says where. `--purge` deletes them too |
 | Anything else in those folders | Stays, and it names it. It only deletes what it knows is bosun's, and if you pointed `BOSUN_STATE_DIR` or `BOSUN_LOG_DIR` at a folder that also holds other files, it leaves that folder whole |
 
 `/bosun:chores` and bosun's hooks need no removing: bosun passes them to each window it starts, so neither
@@ -152,13 +152,22 @@ All configuration lives in `~/.config/bosun/` (override with `BOSUN_CONFIG_DIR`)
 | `setup.sh` | Defines `setup_steps()`. Helpers: `ensure_claude_login` (see Claude Code login), `ensure_aws_sso <profile>`, `run_step "<desc>" cmd...`. |
 
 State and logs go to `~/.local/state/bosun/`:
+
 - `ledger.json` and its readable view `ledger.md`
 - `logs/`: `morning-YYYY-MM-DD.log`, `checkin-YYYY-MM-DD.log`, `learn-YYYY-MM-DD.log`,
-  `hook-YYYY-MM-DD.log` (the repo sessions' prompt hook), and what launchd captures from each job
-  (`launchd.{out,err}`, `watchdog.launchd.{out,err}`, `learn.launchd.{out,err}`)
+  `impact-YYYY-MM-DD.log`, `hook-YYYY-MM-DD.log` (the repo sessions' prompt hook), and what launchd
+  captures from each job (`launchd.{out,err}`, `watchdog.launchd.{out,err}`, `learn.launchd.{out,err}`)
 - `watchdog.json`: the watchdog's de-duplication state
 - `login.json`: the last Claude Code login check (see Claude Code login)
 - `codex-sessions.json`: which Codex session each window's name stands for
+- `agent-changes.json`: what bosun changed in Claude Code's and Codex's own files (folder trust, memory
+  notes), so that `bosun uninstall` takes back only that
+- `signals/`: what Claude Code's hooks reported per window ([Signals](design/signals.md))
+- `conversations/`: a repo window's current conversation, once refresh started a fresh one
+- `prompts/`: the first prompt of each window start, passed to its launch as a file
+- `console/token`: the console's access token
+- `impact/`: the Impact snapshot (`bosun impact collect`)
+- `alerts/`: the last Slack alert's result, with Slack alerts on
 - `events/`: the event queue (`queue.jsonl`) and what was delivered (`state.json`), with events on
 - `slack-watch/state.json`: the Slack watcher's last runs, with it on
 - `learn/`: the learning runs (`state.json`, and per run its digest and report, kept 14 days)
@@ -213,7 +222,7 @@ It runs `bosun refresh`, which handles each window on its own:
 | agent `busy` (mid-turn) | leave alone |
 | agent `waiting` (a permission prompt or a question to you) | leave alone: a pasted Enter could answer it |
 | window split into several panes | leave alone and report it (relaunching could kill the other pane's process) |
-| agent `idle`, on a different version than that agent's installed one (usually older), idle at least `BOSUN_RESTART_MIN_IDLE_SECONDS` | restart: SIGTERM (Claude exits cleanly in about 2s), then relaunch on the new version. Same session UUID, so the conversation is intact, plus, on Claude Code, a fresh Remote Control connection. |
+| agent `idle` at least `BOSUN_RESTART_MIN_IDLE_SECONDS`, and on a different version than that agent's installed one (usually older), or launched by bosun with a model or effort other than the configured one; for the orchestrator also when it is still on yesterday's conversation | restart: SIGTERM (Claude exits cleanly in about 2s), then relaunch on the installed version with the configured model and effort. Same session UUID, so the conversation is intact (the orchestrator's new-day restart starts today's conversation instead), plus, on Claude Code, a fresh Remote Control connection. |
 | anything else (idle and current, idle too briefly, or `shell`: turn over but a background shell still running) | send the drain prompt |
 
 The drain prompt, also the one a relaunch or restart sends, goes only to a window with something in
