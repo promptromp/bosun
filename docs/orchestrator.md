@@ -289,7 +289,8 @@ with open outreach or blockers as `transition` does (`--force-open-outreach`), a
 target unless `--force-closed-target` (the work already landed with it). If the target is with a
 repo window it prints, and does not run, the `bosun delegate --update` that carries the folded
 item's title and ask there. A drop note "merged into <id>" or "folded into <id>" records
-`folded_into` too. `prune` keeps a folded item while its target is open.
+`folded_into` too. `prune` keeps a folded item while its target is open, and with it what the
+folded item links to: prune never leaves a kept item with a link to a pruned one.
 
 Tell the orchestrator "go ahead and do it" about an outreach reply or a mention and it spawns the
 task with your words as `via`, accepts it and delegates it; a colleague's request ends up as a
@@ -349,7 +350,8 @@ epic (it may name one) and not a product area (it is part of one). Design, resea
 - `ledger list --ws <ws|unassigned>` filters; `ledger lint` flags evidence that disagrees, a child
   tagged differently from its parent, redundant tags and a growing unassigned count.
 - `ledger validate [--journal] [--json]` checks every rule (a state its kind does not have, a link
-  lineage would refuse, a second `part_of`, a link to an unknown item) and exits 1 on any finding;
+  lineage would refuse, a second `part_of`, a link to an unknown item, with the `ledger unlink` that
+  clears it, since only a prune from before it kept lineage whole leaves one) and exits 1 on any finding;
   `--journal` also rebuilds the journal and lists its conflicts and each item where the rebuild and
   `ledger.json` differ ([sync](design/sync.md)). A ledger from before journals is not a failure:
   it prints "no journal yet; the next write starts it" and exits 0.

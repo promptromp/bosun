@@ -391,15 +391,18 @@ class FoldTest(LineageTestCase):
     def test_prune_keeps_a_folded_item_while_its_target_is_open(self) -> None:
         self.fold()
         run("transition", MENTION, "done", "--note", "answered")
-        # The mention it came from goes; the folded task stays with its open target.
-        self.assertIn("pruned 1 item(s)", run("prune", "--days", "0"))
+        # The folded task stays with its open target, and so does the mention it came from: a kept
+        # item never links to a pruned one.
+        self.assertIn("pruned 0 item(s)", run("prune", "--days", "0"))
         self.assertEqual(self.item(made(TASKS, 2))["state"], "dropped")
         run("transition", made(TASKS), "done", "--note", "landed")
-        # The first task stays with its open source (the outreach's PR); the folded task goes.
-        self.assertIn("pruned 1 item(s)", run("prune", "--days", "0"))
+        # The first task stays with its open source (the outreach's PR); the folded task goes, and
+        # the mention with it.
+        self.assertIn("pruned 2 item(s)", run("prune", "--days", "0"))
         items = json.loads(ledger.STORE.ledger_file.read_text())["items"]
-        self.assertNotIn(made(TASKS, 2), items)
+        self.assertFalse({made(TASKS, 2), MENTION} & set(items))
         self.assertIn(made(TASKS), items)
+        self.assertEqual(run("validate"), ("ledger is valid", 0))
 
 
 class TreeAndListTest(LineageTestCase):
@@ -574,6 +577,45 @@ class PruneTest(LineageTestCase):
         # The task goes; the outreach stays with its open parent (the PR).
         self.assertIn("pruned 1 item(s)", run("prune", "--days", "0"))
         self.assertEqual(self.item(made(PR))["state"], "applied")
+
+    def cron_task(self) -> str:
+        """A finished task that tracks a closed ticket, and a task spawned from it (proposed)."""
+        via = ["--via", "user: retire the old cron"]
+        run("spawn", "--title", "Retire the nightly export cron", "--ask", "The queue replaced it", *via)
+        cron = made(TASKS)
+        run("link", cron, "tracks", "jira:ACME-9")
+        run("ticket-sync", "jira:ACME-9", "--status", "Done")
+        run("spawn", cron, "--title", "Tell support the cron is gone", "--ask", "Support still asks")
+        self.accept(cron)
+        run("transition", cron, "done", "--note", "the cron is gone")
+        return cron
+
+    def test_prune_keeps_what_a_kept_item_links_to(self) -> None:
+        cron = self.cron_task()
+        # The open task keeps the finished one it came from, and that one keeps the ticket it tracks.
+        self.assertIn("pruned 0 item(s)", run("prune", "--days", "0"))
+        self.assertEqual(self.item("jira:ACME-9")["state"], "done")
+        self.assertEqual([link["id"] for link in self.item(cron)["links"]], ["jira:ACME-9"])
+        self.assertEqual(run("validate", "--journal"), ("ledger is valid", 0))
+
+    def test_prune_drops_a_finished_chain_nothing_open_reaches(self) -> None:
+        cron = self.cron_task()
+        run("transition", made(TASKS, 2), "declined", "--note", "support already knows")
+        self.assertIn("pruned 3 item(s)", run("prune", "--days", "0"))
+        items = json.loads(ledger.STORE.ledger_file.read_text())["items"]
+        self.assertFalse({cron, made(TASKS, 2), "jira:ACME-9"} & set(items))
+        self.assertEqual(run("validate", "--journal"), ("ledger is valid", 0))
+
+    def test_a_link_an_older_prune_left_says_how_to_clear_it(self) -> None:
+        cron = self.cron_task()
+        with ledger.locked_ledger(write=True) as kept:
+            del kept["items"]["jira:ACME-9"]  # what prune did before it kept lineage whole
+        output, code = run("validate")
+        self.assertEqual(code, 1)
+        self.assertIn(f"link-target: {cron} links: no item 'jira:ACME-9'", output)
+        self.assertIn(f"bosun ledger unlink '{cron}' tracks 'jira:ACME-9'", output)
+        run("unlink", cron, "tracks", "jira:ACME-9")
+        self.assertEqual(run("validate", "--journal"), ("ledger is valid", 0))
 
 
 if __name__ == "__main__":

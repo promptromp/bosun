@@ -102,7 +102,10 @@ is a warning), `link`, `unlink`, `tree`, `migrate-links [--dry-run]`, `ticket-sy
 commands that record and link a PR a report names; dropping an item with "merged into <id>" or
 "folded into <id>" records `folded_into`, with "duplicate of <id>" `duplicate_of`; closing a
 replied outreach that no task carries, while no window holds its parent, prints the spawn command;
-`prune` keeps finished items linked to open ones.
+`prune` keeps finished items linked to open ones, and whatever a kept item links to (its stored
+links' targets and an outreach's parent, to a fixpoint), so no kept item is left with a link to a
+pruned one. A link to an item that is gone (an older prune left some) is a `link-target` finding of
+`ledger validate`, which names the `ledger unlink` that clears it.
 
 **Folding.** "Merged into" used to record `duplicate_of`, which lost the difference between the
 same item recorded twice and an item whose work went on inside another (a small task done in

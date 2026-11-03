@@ -78,7 +78,9 @@ Usage: bosun ledger <command> [args]
                                                remember that a source (e.g. a Slack permalink)
                                                was processed, so it is never classified twice
   kinds                                        print the state machines
-  prune [--days N]                             drop finished items and sources older than N days
+  prune [--days N]                             drop finished items and sources older than N days,
+                                               but not what open work links to, nor anything a
+                                               kept item links to: no kept link points nowhere
   diff <before.json>                           items added or changed since a copy of the ledger
   render                                       rewrite ledger.md
 
@@ -2815,6 +2817,27 @@ def linked_to_open(items: dict[str, Item]) -> set[str]:
     }
 
 
+def linked_from(item_id: str, item: Item) -> list[str]:
+    """The items <item> names in its own record: its stored links' targets, and an outreach's
+    parent (the computed link its parent field stands for)."""
+    return [link.source if link.computed else link.target for link in lineage.item_links(item_id, item)]
+
+
+def kept_by_prune(items: dict[str, Item], cutoff: datetime) -> set[str]:
+    """What prune keeps: what is not finished before <cutoff>, what is linked to or from an open
+    item, and, to a fixpoint, whatever a kept item names, so that no kept item is left holding a
+    link to a pruned one."""
+    kept = {item_id for item_id, item in items.items() if not prunable(item, cutoff)}
+    kept |= linked_to_open(items) & items.keys()
+    todo = list(kept)
+    while todo:
+        item_id = todo.pop()
+        named = {other for other in linked_from(item_id, items[item_id]) if other in items}
+        todo += named - kept
+        kept |= named
+    return kept
+
+
 def prune_said(ledger: Ledger, cutoff: datetime) -> None:
     if "said" in ledger:
         ledger["said"] = [entry for entry in ledger["said"] if parse_time(entry["at"]) >= cutoff]
@@ -2827,14 +2850,12 @@ def prunable(item: Item, cutoff: datetime) -> bool:
 
 
 def cmd_prune(args: argparse.Namespace) -> str:
+    """Drop what finished before the cutoff unless prune keeps it (kept_by_prune), the sources as
+    old whose item is gone, and the said entries as old."""
     cutoff = datetime.now(UTC) - timedelta(days=args.days)
     with locked_ledger(write=True) as ledger:
-        linked = linked_to_open(ledger["items"])
-        stale_items = [
-            item_id
-            for item_id, item in ledger["items"].items()
-            if prunable(item, cutoff) and item_id not in linked
-        ]
+        kept = kept_by_prune(ledger["items"], cutoff)
+        stale_items = [item_id for item_id in ledger["items"] if item_id not in kept]
         for item_id in stale_items:
             del ledger["items"][item_id]
         stale_sources = [
@@ -4099,7 +4120,16 @@ def link_finding(items: lineage.Items, item: Item, links: list[Link], link: Link
     problem = link_problem(trial, link)
     if not problem:
         return None
-    return finding("link" if link.target in items else "link-target", problem, link.source, "links")
+    if link.target in items:
+        return finding("link", problem, link.source, "links")
+    # A prune from before it kept lineage whole (kept_by_prune) left links like this.
+    unlink = f"bosun ledger unlink '{link.source}' {link.rel} '{link.target}'"
+    return finding(
+        "link-target",
+        f"{problem}. A link to an item that is gone: clear it with {unlink}",
+        link.source,
+        "links",
+    )
 
 
 def link_findings(items: lineage.Items, item_id: str, item: Item) -> list[Finding]:
