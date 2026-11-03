@@ -944,12 +944,28 @@ def commit_edits(transaction: Transaction, edits: Iterable[Edit]) -> None:
     transaction.commit()
 
 
+def links_ready(item_id: str, item: Item, source: str) -> None:
+    """<item>'s stored links, each one that is not a link (an object with a string rel and id,
+    written by hand) left out with a note on stderr: the diff and the rebuild read only links."""
+    entries = link_entries(item)
+    dropped = [entry for entry in entries if not is_stored_link(entry)]
+    if not dropped:
+        return
+    for entry in dropped:
+        print(
+            f"ledger: {item_id} links: {entry!r} in {source} is not a link (it needs a rel and an id), "
+            "which the journal cannot hold; left out",
+            file=sys.stderr,
+        )
+    item["links"] = [entry for entry in entries if is_stored_link(entry)]
+
+
 def journal_ready(ledger: Ledger, source: str) -> Ledger:
     """<ledger>, written outside the journal (genesis, adopt), as the journal can hold it: what the
     old ledger took and the journal cannot is converted once, a float to its text and a lone
-    surrogate to U+FFFD, each with a note on stderr. A write's own changes are refused instead
-    (refuse_unencodable). Converted, a tool call's argument no longer matches its approval: that
-    fails closed."""
+    surrogate to U+FFFD, and a stored link that is not one left out, each with a note on stderr
+    (<ledger> may be changed). A write's own changes are refused instead (refuse_unencodable).
+    Converted, a tool call's argument no longer matches its approval: that fails closed."""
     found = list(unencodable(ledger))
     for place, what, made in found:
         print(
@@ -958,6 +974,9 @@ def journal_ready(ledger: Ledger, source: str) -> Ledger:
             file=sys.stderr,
         )
     converted: Ledger = encodable(ledger) if found else ledger
+    for item_id, item in sorted(converted["items"].items()):
+        if isinstance(item, dict):
+            links_ready(item_id, item, source)
     return converted
 
 

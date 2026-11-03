@@ -802,6 +802,28 @@ class OutsideEditTest(ProtocolTestCase):
         self.assertEqual(run("validate", "--journal"), ("ledger is valid", 0))
         self.assert_the_journal_rebuilds_the_file()
 
+    def test_a_link_written_by_hand_that_is_not_one_is_left_out_with_a_note(self) -> None:
+        """A link that is not an object with a rel and an id (re-review probe q2): the next write
+        leaves it out, saying so once, instead of crashing or keeping a conflict; validate passes."""
+        for bad in ("nonsense", {"rel": "relates_to"}):
+            with self.subTest(link=bad):
+                self.tearDown()
+                self.setUp()
+                run("link", MYPR_ID, "relates_to", REVIEW_ID)
+                data = saved()
+                kept = list(data["items"][MYPR_ID]["links"])
+                data["items"][MYPR_ID]["links"].append(bad)
+                ledger.STORE.ledger_file.write_text(json.dumps(data, indent=2))
+                said = io.StringIO()
+                with contextlib.redirect_stderr(said):
+                    run("note", REVIEW_ID, "after")
+                self.assertEqual(said.getvalue().count("\n"), 1, said.getvalue())
+                self.assertIn(f"{MYPR_ID} links: {bad!r}", said.getvalue())
+                self.assertIn("left out", said.getvalue())
+                self.assertEqual(saved()["items"][MYPR_ID]["links"], kept)
+                self.assertEqual(run("validate", "--journal"), ("ledger is valid", 0))
+                self.assert_the_journal_rebuilds_the_file()
+
     def test_a_file_saved_before_digests_is_trusted_and_gets_one(self) -> None:
         data = saved()
         del data["journal"]["digest"]
