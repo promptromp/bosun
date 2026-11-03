@@ -1,8 +1,12 @@
 """Unit tests for the ledger's hand-over protocol (delegations, updates, reports) and its storage
-robustness (backups, corrupt files, history trimming, concurrent writers)."""
+robustness (backups, corrupt files, history trimming, concurrent writers), and the journal every
+write goes through (genesis, a crash between the journal and the file, a torn line)."""
 
 from __future__ import annotations
 
+import contextlib
+import copy
+import io
 import json
 import os
 import subprocess
@@ -11,13 +15,18 @@ import tempfile
 import unittest
 from pathlib import Path
 from typing import Any
+from unittest import mock
 
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "lib"))
 import ledger
+from change_log import Change, canonical
+from journal import Journal, replica_id
+from ledger_changes import diff, rebuild, trim_history
 
 
 LIB = Path(ledger.__file__).parent
+FIXTURE = Path(__file__).resolve().parents[1] / "fixtures" / "console" / "acme-ledger.json"
 MENTION_ID = "slack:C1/1.1"
 REVIEW_ID = "review:acme/api#7"
 MYPR_ID = "mypr:acme/api#8"
@@ -28,7 +37,44 @@ def run(*argv: str) -> Any:
     return args.func(args)
 
 
-class ProtocolTestCase(unittest.TestCase):
+def journal(state_dir: Path | None = None) -> Journal:
+    """The ledger's journal in <state_dir> (default: the configured one)."""
+    state = state_dir or ledger.STORE.state_dir
+    return Journal(state / "journal" / "ledger", "ledger", replica_id(state), ledger.RULES_VERSION)
+
+
+def saved(state_dir: Path | None = None) -> dict[str, Any]:
+    data: dict[str, Any] = json.loads(((state_dir or ledger.STORE.state_dir) / "ledger.json").read_text())
+    return data
+
+
+def without_journal(data: dict[str, Any]) -> dict[str, Any]:
+    return {key: value for key, value in data.items() if key != "journal"}
+
+
+def contiguous(changes: list[Change]) -> bool:
+    """Whether each file's changes are numbered 1..n, with no gap and none twice."""
+    by_file: dict[str, list[int]] = {}
+    for change in changes:
+        by_file.setdefault("local" if change.get("local") else change["replica"], []).append(change["seq"])
+    return all(sorted(seqs) == list(range(1, len(seqs) + 1)) for seqs in by_file.values())
+
+
+class JournalChecks(unittest.TestCase):
+    def assert_the_journal_rebuilds_the_file(self, state_dir: Path | None = None) -> None:
+        """ledger.json is the rebuild of the journal (as canonical bytes: every list in order),
+        with no conflict, at the journal's position; each file numbered with no gap."""
+        found = journal(state_dir)
+        changes = found.changes()
+        result = rebuild(changes, ledger.RULES)
+        self.assertEqual(result.conflicts, [])
+        self.assertTrue(contiguous(changes))
+        data = saved(state_dir)
+        self.assertEqual(data["journal"], found.position())
+        self.assertEqual(canonical(result.ledger).decode(), canonical(without_journal(data)).decode())
+
+
+class ProtocolTestCase(JournalChecks):
     def setUp(self) -> None:
         self.tmp = tempfile.TemporaryDirectory()
         ledger.configure(self.tmp.name)
@@ -45,6 +91,9 @@ class ProtocolTestCase(unittest.TestCase):
 
     def events(self, item_id: str) -> list[str]:
         return [entry["event"] for entry in self.item(item_id)["history"]]
+
+    def notes(self, item_id: str) -> list[str]:
+        return [entry.get("note", "") for entry in self.item(item_id)["history"]]
 
 
 class UpsertWithoutKindTest(ProtocolTestCase):
@@ -328,9 +377,249 @@ class StorageTest(ProtocolTestCase):
         self.assertEqual(history[-1]["note"], f"note {ledger.MAX_HISTORY + 49}")
         # created + the 250 notes, of which MAX_HISTORY - 2 are kept
         self.assertEqual(history[1]["count"], ledger.MAX_HISTORY + 50 - (ledger.MAX_HISTORY - 2))
+        self.assert_the_journal_rebuilds_the_file()  # the journal keeps all, the rebuild trims
 
 
-class ConcurrentWritersTest(unittest.TestCase):
+class JournalTest(ProtocolTestCase):
+    """Every write is one transaction in the journal, which ledger.json is the rebuild of."""
+
+    def test_the_journal_rebuilds_the_ledger_after_every_command(self) -> None:
+        self.assert_the_journal_rebuilds_the_file()  # the setUp's three upserts
+        for command in (
+            ["record-delegation", MENTION_ID, "--window", "exports", "--task", "new-work", "--ask", "do it"],
+            ["record-update", MENTION_ID, "--text", "match the fields"],
+            ["report", MENTION_ID, "--summary", "draft PR up", "--result", "https://x/pr/8"],
+            ["transition", MENTION_ID, "done", "--note", "answered"],
+            ["link", REVIEW_ID, "relates_to", MYPR_ID],
+            ["record-source", "https://slack/p1", "--class", "fyi"],
+            ["mark-run", "check-in"],
+            ["render"],
+        ):
+            run(*command)
+            with self.subTest(command=command[0]):
+                self.assert_the_journal_rebuilds_the_file()
+
+    def test_each_write_is_one_transaction_named_by_its_command(self) -> None:
+        before = len(journal().changes())
+        argv = ["ledger.py", "record-delegation", MENTION_ID, "--window", "w", "--task", "investigate"]
+        with (
+            mock.patch.object(sys, "argv", argv),
+            mock.patch.dict(os.environ, {"BOSUN_STATE_DIR": self.tmp.name}),
+            contextlib.redirect_stdout(io.StringIO()),
+        ):
+            self.assertEqual(ledger.main(), 0)
+        made = journal().changes()[before:]
+        self.assertGreater(len(made), 1)
+        named = {(c["cmd"], c["tx"], c["rules"]) for c in made}
+        self.assertEqual(named, {("ledger record-delegation", made[0]["tx"], ledger.RULES_VERSION)})
+        self.assertEqual(ledger.RULES_VERSION, 1)
+
+    def test_a_write_that_changes_nothing_adds_nothing(self) -> None:
+        before = journal().changes()
+        run("render")
+        run("upsert", MENTION_ID, "--kind", "mention", "--title", "warnings format")  # unchanged
+        self.assertEqual(journal().changes(), before)
+        self.assert_the_journal_rebuilds_the_file()
+
+    def test_a_crash_after_the_journal_is_repaired(self) -> None:
+        """A transaction in the journal that never reached ledger.json (committed by hand, without
+        saving): a reader sees it without writing; the next write has it once and saves it."""
+        before = saved()
+        after = copy.deepcopy(before)
+        ledger.record(after["items"][MENTION_ID], "note", "in the journal only")
+        transaction = journal().begin("test")
+        for edit in diff(before, after):
+            transaction.add(edit.op, edit.target, edit.body, local=edit.local)
+        transaction.commit()
+        file = ledger.STORE.ledger_file.read_text()
+        self.assertIn("in the journal only", run("show", MENTION_ID))
+        with ledger.locked_ledger(write=False) as data:
+            # the rebuild made the items in the order the setUp did; a command sees them by id, as
+            # ledger.json loads them (render, reach-out and others go by that order)
+            self.assertEqual(list(data["items"]), sorted([MENTION_ID, REVIEW_ID, MYPR_ID]))
+        self.assertEqual(ledger.STORE.ledger_file.read_text(), file)
+        run("note", MENTION_ID, "next")
+        self.assertEqual(self.notes(MENTION_ID)[-2:], ["in the journal only", "next"])
+        self.assertEqual(self.notes(MENTION_ID).count("in the journal only"), 1)
+        self.assertEqual(saved()["journal"], journal().position())
+        self.assert_the_journal_rebuilds_the_file()
+
+    def test_a_write_whose_save_failed_is_kept_once(self) -> None:
+        with mock.patch.object(ledger, "save", side_effect=OSError("disk full")), self.assertRaises(OSError):
+            run("note", MENTION_ID, "in the journal only")
+        self.assertNotIn("in the journal only", self.notes(MENTION_ID))
+        run("note", MENTION_ID, "next")
+        self.assertEqual(self.notes(MENTION_ID)[-2:], ["in the journal only", "next"])
+        self.assert_the_journal_rebuilds_the_file()
+
+    def test_a_command_that_fails_writes_nothing(self) -> None:
+        before = journal().changes()
+        with self.assertRaises(ledger.LedgerError):
+            run("transition", MENTION_ID, "posted", "--note", "x")
+        self.assertEqual(journal().changes(), before)
+
+    def test_a_torn_journal_tail_is_set_aside(self) -> None:
+        path = ledger.STORE.journal_dir / f"{replica_id(ledger.STORE.state_dir)}.jsonl"
+        with path.open("ab") as handle:
+            handle.write(b'{"v":1,"seq')
+        said = io.StringIO()
+        with contextlib.redirect_stderr(said):
+            run("note", MENTION_ID, "after the cut")
+        (aside,) = ledger.STORE.journal_dir.glob("*.torn-*")
+        self.assertEqual(aside.read_bytes(), b'{"v":1,"seq')
+        self.assertIn(aside.name, said.getvalue())
+        self.assertEqual(self.notes(MENTION_ID)[-1], "after the cut")
+        self.assert_the_journal_rebuilds_the_file()
+
+    def test_a_damaged_journal_line_stops_a_write_naming_it(self) -> None:
+        path = ledger.STORE.journal_dir / f"{replica_id(ledger.STORE.state_dir)}.jsonl"
+        lines = path.read_bytes().splitlines(keepends=True)
+        file = ledger.STORE.ledger_file.read_text()
+        for text, number, behind in (
+            (b"".join(lines) + b"nonsense\n", len(lines) + 1, False),  # a whole last line
+            (lines[0] + b"nonsense\n" + b"".join(lines[1:]), 2, True),  # found when it rebuilds
+        ):
+            path.write_bytes(text)
+            if behind:
+                data = saved()
+                data["journal"] = {}
+                ledger.STORE.ledger_file.write_text(json.dumps(data))
+            with (
+                self.subTest(line=number),
+                self.assertRaisesRegex(ledger.LedgerError, rf"{path.name}, line {number}"),
+            ):
+                run("note", MENTION_ID, "x")
+        self.assertNotIn("x", self.notes(MENTION_ID))
+        ledger.STORE.ledger_file.write_text(file)
+        path.write_bytes(b"".join(lines))
+        self.assertIn(MENTION_ID, run("list"))  # a reader is not stopped: the file is whole
+
+    def test_a_reader_does_not_rebuild_a_torn_journal(self) -> None:
+        path = ledger.STORE.journal_dir / f"{replica_id(ledger.STORE.state_dir)}.jsonl"
+        with path.open("ab") as handle:
+            handle.write(b'{"v":1,"seq')
+        self.assertIn(MENTION_ID, run("list"))
+        self.assertEqual(list(ledger.STORE.journal_dir.glob("*.torn-*")), [])
+
+    def test_the_transaction_is_there_only_while_writing(self) -> None:
+        with self.assertRaisesRegex(ledger.LedgerError, "no ledger write"):
+            ledger.current_transaction()
+        with ledger.locked_ledger(write=False), self.assertRaises(ledger.LedgerError):
+            ledger.current_transaction()
+        with ledger.locked_ledger(write=True):
+            first = ledger.current_transaction()
+        with ledger.locked_ledger(write=True):
+            self.assertIsNot(ledger.current_transaction(), first)
+        with self.assertRaises(RuntimeError), ledger.locked_ledger(write=True):
+            raise RuntimeError("the command failed")
+        with self.assertRaises(ledger.LedgerError):
+            ledger.current_transaction()
+
+
+class GenesisTest(JournalChecks):
+    """A ledger written before journals: its first write puts it in the journal whole (genesis),
+    and the rebuild is the file again. Augmented beyond the fixture, so that it holds what an old
+    ledger may: a numeric task id, a trimmed history, an approval with my words and the call's
+    context, and what I said."""
+
+    OLD_TASK = "task:2026-10-15/1"
+    LONG = "slack:C0000000001/1700000001.000001"
+    APPROVED = "mypr:acme/exporter#103"
+    QUOTE = "yes, export it"
+
+    def setUp(self) -> None:
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        ledger.configure(self.tmp.name)
+        self.data = self.old_ledger()
+        ledger.STORE.ledger_file.write_text(json.dumps(self.data, indent=2, sort_keys=True))
+
+    def old_ledger(self) -> dict[str, Any]:
+        data: dict[str, Any] = json.loads(FIXTURE.read_text())
+        items = data["items"]
+        old = copy.deepcopy(items["task:2026-10-20/1"])
+        items[self.OLD_TASK] = {**old, "id": self.OLD_TASK, "created_at": "2026-10-15T09:00:00+00:00"}
+        long = items[self.LONG]
+        long["history"] += [
+            {"at": f"2026-10-21T{n // 60:02d}:{n % 60:02d}:00+00:00", "event": "note", "note": f"n{n}"}
+            for n in range(ledger.MAX_HISTORY + 40)
+        ]
+        trim_history(long)
+        self.assertEqual(long["history"][1]["event"], "history-trimmed")
+        items[self.APPROVED].update(proposal=self.approved_proposal())
+        items[self.APPROVED]["history"] += [
+            {"at": "2026-10-21T10:00:00+00:00", "event": "approved", "note": self.QUOTE, "action": "Run"},
+            {"at": "2026-10-21T10:01:00+00:00", "event": "approval-used", "note": self.QUOTE, "tool": "Bash"},
+        ]
+        said = {"at": "2026-10-21T10:00:30+00:00", "window": "exporter", "text": "ship it", "items": []}
+        data["said"] += [{**said, "also_held": []}]
+        return data
+
+    def approved_proposal(self) -> dict[str, Any]:
+        return {
+            "action": "Run make export",
+            "proposed_at": "2026-10-21T09:59:00+00:00",
+            "spec": {"type": "run", "command": "make export"},
+            "approval": {
+                "at": "2026-10-21T10:00:00+00:00",
+                "quote": self.QUOTE,
+                "hash": "0" * 64,
+                "used_at": "2026-10-21T10:01:00+00:00",
+                "call": "1" * 64,
+                "session": "s-0002",
+                "tool_use_id": "toolu_0001",
+                "transcript": "/Users/me/.claude/projects/acme/s-0002.jsonl",
+            },
+        }
+
+    def test_genesis_reproduces_an_existing_ledger(self) -> None:
+        file = ledger.STORE.ledger_file.read_text()
+        run("list")
+        self.assertFalse(ledger.STORE.journal_dir.exists())  # a reader never writes
+        self.assertEqual(ledger.STORE.ledger_file.read_text(), file)
+        run("render")
+        changes = journal().changes()
+        self.assertEqual({(c["cmd"], c["tx"]) for c in changes}, {("genesis", changes[0]["tx"])})
+        creates = [c["target"] for c in changes if c["op"] == "item.create"]
+        self.assertEqual(creates, sorted(self.data["items"]))  # by id, not as the file had them
+        self.assert_the_journal_rebuilds_the_file()
+        self.assertEqual(canonical(without_journal(saved())), canonical(self.data))  # only "journal" is new
+        private = (ledger.STORE.journal_dir / f"{replica_id(ledger.STORE.state_dir)}.jsonl").read_text()
+        local = (ledger.STORE.journal_dir / "local.jsonl").read_text()
+        for mine in (self.QUOTE, "s-0002", "toolu_0001", "ship it"):
+            with self.subTest(mine=mine):
+                self.assertNotIn(mine, private)
+                self.assertIn(mine, local)
+
+    def test_a_stale_journal_position_in_the_file_is_rebuilt_from_genesis(self) -> None:
+        self.data["journal"] = {"f" * 32: 57, "local": 3}
+        ledger.STORE.ledger_file.write_text(json.dumps(self.data))
+        run("note", self.OLD_TASK, "first write")
+        self.assertEqual(saved()["items"][self.OLD_TASK]["history"][-1]["note"], "first write")
+        self.assert_the_journal_rebuilds_the_file()
+
+    def test_a_ledger_without_said_gains_an_empty_one(self) -> None:
+        del self.data["said"]
+        ledger.STORE.ledger_file.write_text(json.dumps(self.data))
+        run("render")
+        self.assertEqual(saved()["said"], [])
+        self.assert_the_journal_rebuilds_the_file()
+
+    def test_an_empty_ledger_needs_no_genesis(self) -> None:
+        ledger.STORE.ledger_file.unlink()
+        run("render")
+        self.assertFalse(ledger.STORE.journal_dir.exists())
+        self.assertEqual(saved()["journal"], {})
+
+    def test_a_ledger_the_journal_cannot_hold_is_refused_whole(self) -> None:
+        self.data["items"][self.OLD_TASK]["fields"]["estimate"] = 1.5  # written by hand: a float
+        ledger.STORE.ledger_file.write_text(json.dumps(self.data))
+        with self.assertRaisesRegex(ledger.LedgerError, "nothing was written: a change holds a float"):
+            run("note", self.OLD_TASK, "x")
+        self.assertEqual(journal().changes(), [])
+
+
+class ConcurrentWritersTest(JournalChecks):
     """Real processes against one state dir: the lock and the atomic rename lose nothing."""
 
     WRITERS = 40
@@ -380,6 +669,26 @@ class ConcurrentWritersTest(unittest.TestCase):
             self.assertEqual(item["fields"]["n"], str(number))
             got = item["state"] if number % 2 else item["delegation"]["window"]
             self.assertEqual(got, "surfaced" if number % 2 else f"w{number}")
+
+    def test_concurrent_writers_keep_contiguous_sequences(self) -> None:
+        """Twenty writers at once (as in the smoke suite): one transaction each, numbered 1..n in
+        <replica>.jsonl with no gap, and the rebuild is the file."""
+        self.run_wave([["upsert", MENTION_ID, "--kind", "mention"]])
+        mixed = [
+            ["upsert", "slack:C2/{n}", "--kind", "mention"],
+            ["note", MENTION_ID, "note {n}"],
+            ["report", MENTION_ID, "--summary", "report {n}"],
+            ["record-delegation", MENTION_ID, "--window", "w{n}", "--task", "investigate"],
+        ]
+        self.run_wave([[word.format(n=n) for word in mixed[n % 4]] for n in range(20)])
+        state = Path(self.state.name)
+        changes = journal(state).changes()
+        self.assertTrue(contiguous(changes))
+        self.assertEqual(len({c["tx"] for c in changes}), 21)
+        lines = (state / "journal" / "ledger" / f"{replica_id(state)}.jsonl").read_text().splitlines()
+        seqs = [json.loads(line)["seq"] for line in lines]
+        self.assertEqual(seqs, list(range(1, len(seqs) + 1)))
+        self.assert_the_journal_rebuilds_the_file(state)
 
 
 if __name__ == "__main__":

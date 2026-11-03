@@ -339,6 +339,37 @@ echo '{"items": [' >"$BOSUN_STATE_DIR/ledger.json"
 check "a corrupt ledger is refused and points at the backup" fails_with "restore it from $BOSUN_STATE_DIR/ledger.json.bak" "$BOSUN" ledger list
 cp "$WORK/ledger.good" "$BOSUN_STATE_DIR/ledger.json"
 check "prune drops finished items" contains "$(L prune --days 0)" "pruned 2 item(s)"
+# journal_rebuilds <state dir>: ledger.json is the rebuild of its journal (docs/design/sync.md),
+# with no conflict, at the journal's position, and each journal file is numbered 1..n with no gap.
+journal_rebuilds() {
+  python3 - "$ROOT/lib" "$1" <<'EOF'
+import fcntl, json, sys
+from pathlib import Path
+sys.path.insert(0, sys.argv[1])
+import ledger, ledger_changes
+from journal import Journal
+state = Path(sys.argv[2])
+with (state / "ledger.lock").open("w") as lock:
+    fcntl.flock(lock, fcntl.LOCK_SH)
+    saved = json.loads((state / "ledger.json").read_text())
+    found = Journal(state / "journal" / "ledger", "ledger", "", ledger.RULES_VERSION)
+    changes, position = found.changes(), found.position()
+result = ledger_changes.rebuild(changes, ledger.RULES)
+seqs = {}
+for change in changes:
+    seqs.setdefault("local" if change.get("local") else change["replica"], []).append(change["seq"])
+problems = [
+    *(["ledger.json is not at the journal's position"] if saved.get("journal") != position else []),
+    *(f"conflict: {conflict}" for conflict in result.conflicts),
+    *([] if ledger_changes.state_hash(result.ledger) == ledger_changes.state_hash(saved) else ["the rebuild differs from ledger.json"]),
+    *(f"{name}: seq {sorted(found)} has a gap" for name, found in seqs.items() if sorted(found) != list(range(1, len(found) + 1))),
+]
+print("\n".join(problems))
+sys.exit(1 if problems or not changes else 0)
+EOF
+}
+check "every write went through the journal" test -d "$BOSUN_STATE_DIR/journal/ledger"
+check "... and ledger.json is its rebuild, after 20 writers at once too" journal_rebuilds "$BOSUN_STATE_DIR"
 
 echo "outreach (waiting on other people)"
 L upsert 'slack:C5/1' --kind mention --title 'template question' >/dev/null
@@ -457,6 +488,7 @@ check "idle takes it out" bash -c '"$1" ledger idle "$2" >/dev/null && "$1" ledg
 out="$(cd "$REPO_A" && BOSUN_EVENTS_ENABLED=1 "$BOSUN" launch alpha 2>&1)"
 check "with events on, repo sessions launch with the prompt hook" contains "$out" 'hook\ user-prompt\ --window\ alpha'
 check "... and without, they do not" bash -c '! grep -q "user-prompt" <<<"$1"' _ "$(cd "$REPO_A" && "$BOSUN" launch alpha 2>&1)"
+check "ledger.json is still the journal's rebuild after outreach, tasks, workstreams and the hook" journal_rebuilds "$BOSUN_STATE_DIR"
 
 echo "repo mask"
 mask_check() { # <mask> <repo>

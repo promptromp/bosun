@@ -1,8 +1,10 @@
 """Unit tests for the journal (lib/journal.py): replica id, files and sequence numbers,
-transactions, order and torn lines. Fictional data."""
+transactions, order, torn lines and their repair. Fictional data."""
 
 from __future__ import annotations
 
+import contextlib
+import io
 import json
 import sys
 import tempfile
@@ -117,6 +119,91 @@ class Reading(JournalTestCase):
         with self.assertRaises(jr.JournalError):
             self.journal().position()
 
+    def test_a_line_that_is_not_a_change_is_reported(self) -> None:
+        self.root.mkdir(parents=True)
+        (self.root / f"{R1}.jsonl").write_bytes(b'{"a":1}\n')
+        for read in (self.journal().position, self.journal().changes):
+            with (
+                self.subTest(read=read.__name__),
+                self.assertRaisesRegex(jr.JournalError, rf"{R1}\.jsonl, line 1: not a change"),
+            ):
+                read()
+
+
+# What journal() stamps a file it moves aside with: 1_700_000_000_000 ms, in UTC.
+STAMP = "20231114T221320Z"
+TORN = b'{"v":1,"seq'
+
+
+class Repair(JournalTestCase):
+    def committed(self, count: int) -> Path:
+        """<count> transactions of one change each; R1's file."""
+        for _ in range(count):
+            tx = self.journal().begin("add")
+            tx.add("set", "item:1", {})
+            tx.commit()
+        return self.root / f"{R1}.jsonl"
+
+    def repaired(self) -> tuple[list[Path], str]:
+        """What repair_tail moved aside, and what it said on stderr."""
+        said = io.StringIO()
+        with contextlib.redirect_stderr(said):
+            moved = self.journal().repair_tail()
+        return moved, said.getvalue()
+
+    def test_a_torn_last_line_is_moved_aside_and_the_file_cut_to_its_last_whole_line(self) -> None:
+        path = self.committed(2)
+        whole = path.read_bytes()
+        with path.open("ab") as f:
+            f.write(TORN)
+        moved, said = self.repaired()
+        self.assertEqual(moved, [self.root / f"{R1}.jsonl.torn-{STAMP}"])
+        self.assertEqual((path.read_bytes(), moved[0].read_bytes()), (whole, TORN))
+        self.assertIn(moved[0].name, said)
+        self.assertEqual(self.journal().position(), {R1: 2})
+        self.assertEqual(len(self.committed(1).read_bytes().splitlines()), 3)  # seq 3 follows
+
+    def test_a_whole_line_without_its_newline_is_torn_too(self) -> None:
+        path = self.committed(2)
+        path.write_bytes(path.read_bytes()[:-1])
+        moved, _ = self.repaired()
+        self.assertEqual(len(moved), 1)
+        self.assertEqual(json.loads(moved[0].read_bytes())["seq"], 2)
+        self.assertEqual(self.journal().position(), {R1: 1})
+
+    def test_a_file_that_is_all_torn_is_left_empty(self) -> None:
+        self.root.mkdir(parents=True)
+        path = self.root / "local.jsonl"
+        path.write_bytes(TORN)
+        moved, _ = self.repaired()
+        self.assertEqual((len(moved), path.read_bytes()), (1, b""))
+        self.assertEqual(self.journal().position(), {})
+
+    def test_a_second_cut_in_the_same_second_keeps_the_first(self) -> None:
+        path = self.committed(1)
+        for _ in range(2):
+            with path.open("ab") as f:
+                f.write(TORN)
+            self.repaired()
+        self.assertEqual(len(list(self.root.glob(f"{R1}.jsonl.torn-*"))), 2)
+
+    def test_a_whole_journal_is_left_as_it_is(self) -> None:
+        self.assertEqual(self.repaired(), ([], ""))  # no folder yet
+        path = self.committed(2)
+        whole = path.read_bytes()
+        self.assertEqual(self.repaired(), ([], ""))
+        self.assertEqual(path.read_bytes(), whole)
+
+    def test_damage_other_than_a_torn_tail_still_raises(self) -> None:
+        path = self.committed(2)
+        first, second = path.read_bytes().splitlines(keepends=True)
+        for text, number in ((first + second + b"nonsense\n", 3), (first + b"nonsense\n" + second, 2)):
+            path.write_bytes(text)
+            with self.subTest(line=number):
+                self.assertEqual(self.repaired(), ([], ""))
+                with self.assertRaisesRegex(jr.JournalError, rf"{R1}\.jsonl, line {number}"):
+                    self.journal().changes()
+
 
 class Mint(JournalTestCase):
     def test_mint_is_unique_and_repeatable(self) -> None:
@@ -134,6 +221,22 @@ class Mint(JournalTestCase):
         tx.add("set", "item:1", {})
         tx.commit()
         self.assertNotEqual(j.begin("add").mint(), before)
+
+
+class OneUse(JournalTestCase):
+    def test_a_committed_transaction_is_not_used_again(self) -> None:
+        for edits in (1, 0):
+            tx = self.journal().begin("add")
+            for _ in range(edits):
+                tx.add("set", "item:1", {})
+            tx.commit()
+            with self.subTest(edits=edits):
+                with self.assertRaisesRegex(jr.JournalError, "committed"):
+                    tx.add("set", "item:1", {})
+                with self.assertRaisesRegex(jr.JournalError, "committed"):
+                    tx.commit()
+                with self.assertRaisesRegex(jr.JournalError, "committed"):
+                    tx.mint()
 
 
 if __name__ == "__main__":

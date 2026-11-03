@@ -1360,13 +1360,12 @@ class RealWritesTest(PostToolUseTestCase):
         run("link", PR, "part_of", WS_NEW, "--move")
         run("unlink", PR, "tracks", "jira:EXP-12")
         run("ticket-sync", "jira:EXP-12", "--status", "Done")
-        data = ledger.load()
-        data["items"]["jira:EXP-12"]["updated_at"] = T0
-        for source in data["sources"].values():
-            source["seen_at"] = T0
-        for entry in data["said"]:
-            entry["at"] = T0
-        ledger.save(data)
+        with ledger.locked_ledger(write=True) as data:  # all of it old enough to prune
+            data["items"]["jira:EXP-12"]["updated_at"] = T0
+            for source in data["sources"].values():
+                source["seen_at"] = T0
+            for entry in data["said"]:
+                entry["at"] = T0
         run("prune", "--days", "1")
         self.assertNotIn("jira:EXP-12", json.loads(self.ledger_text())["items"])
         run("link", OTHER_PR, "tracks", "jira:EXP-12")  # makes the pruned ticket again
@@ -1408,6 +1407,30 @@ class RealWritesTest(PostToolUseTestCase):
         every = {"item.create", "item.delete", "item.set", "item.state", "item.append", "item.drop"}
         every |= {"item.link", "item.unlink", "map.put", "map.delete", "said.append", "said.drop"}
         self.assertEqual(set(ops), every)  # the work reached every op
+
+    def test_the_real_journal_rebuilds_every_write(self) -> None:
+        """The journal the writes went through (the state dir's own, as locked_ledger keeps it):
+        after each write, its rebuild is the ledger saved, with no conflict; the guard's and the
+        prompt hook's writes carry their names."""
+        found = Journal(ledger.STORE.journal_dir, "ledger", "", ledger.RULES_VERSION)
+        save, checked = ledger.save, []
+
+        def checking(data: dict[str, Any]) -> None:
+            save(data)
+            result = rebuild(found.changes(), ledger.RULES)
+            checked.append((result.conflicts, state_hash(result.ledger) == state_hash(data)))
+
+        with mock.patch.object(ledger, "save", checking):
+            self.work()
+            self.more_work()
+        self.assertGreater(len(checked), 40)
+        self.assertEqual([check for check in checked if check != ([], True)], [])
+        named = {
+            change["body"]["entry"]["event"]: change["cmd"]
+            for change in found.changes()
+            if change["op"] == "item.append" and change["body"]["path"] == ["history"]
+        }
+        self.assertEqual((named[ledger.APPROVAL_USED], named["user-said"]), ("guard", "hook"))
 
     def test_no_edit_that_may_leave_holds_my_words_or_a_calls_context(self) -> None:
         self.work()

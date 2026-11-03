@@ -6,6 +6,10 @@ go to `local.jsonl`. Every line is one change in canonical bytes. Files are only
 clock order, so the last line of a file holds its highest `seq` and `hlc`: a transaction starts by
 reading those and nothing else.
 
+A line is only whole with its newline: a write cut short (a crash, a power cut) leaves a last line
+without one, which was never committed. `repair_tail` moves such a line aside, kept, before a
+write; any other damage raises `JournalError` where the line is read.
+
 The caller holds the store's lock (the ledger's flock, the knowledge base's lock); nothing here
 locks. The pure side (ids, clocks, order) is `lib/change_log.py`.
 """
@@ -15,9 +19,11 @@ from __future__ import annotations
 import json
 import os
 import secrets
+import sys
 import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -36,7 +42,11 @@ from change_log import (
 REPLICA_FILE = "replica.json"
 LOCAL = "local"
 SUFFIX = ".jsonl"
+TORN = ".torn-"  # <file>.torn-<UTC time>: a last line a write left cut short, moved aside
 _TAIL = 8192
+# What reading a change relies on (its position, its place in the order): a line without them is
+# not a change.
+_ENVELOPE_KEYS: tuple[tuple[str, type], ...] = (("seq", int), ("hlc", str), ("replica", str), ("id", str))
 
 
 class JournalError(Exception):
@@ -71,7 +81,9 @@ def _parse(line: bytes, path: Path, number: int) -> Change:
         record = json.loads(line)
     except ValueError as exc:
         raise JournalError(f"{path.name}, line {number}: not a change ({exc})") from exc
-    if not isinstance(record, dict):
+    if not isinstance(record, dict) or not all(
+        isinstance(record.get(key), kind) for key, kind in _ENVELOPE_KEYS
+    ):
         raise JournalError(f"{path.name}, line {number}: not a change")
     return record
 
@@ -110,6 +122,51 @@ def _read_all(path: Path) -> list[Change]:
     return found
 
 
+def _torn_at(path: Path) -> int | None:
+    """Where the last whole line of <path> ends when what follows has no newline (a write cut
+    short), else None."""
+    with path.open("rb") as handle:
+        size = handle.seek(0, os.SEEK_END)
+        if size == 0:
+            return None
+        handle.seek(size - 1)
+        if handle.read(1) == b"\n":
+            return None
+        want = _TAIL
+        while True:
+            start = max(0, size - want)
+            handle.seek(start)
+            newline = handle.read(size - start).rfind(b"\n")
+            if newline >= 0 or start == 0:
+                return start + newline + 1
+            want *= 2
+
+
+def _set_aside(path: Path, end: int, stamp: str) -> Path:
+    """Copy what follows byte <end> of <path> to a file of its own (never over another), then cut
+    <path> at <end>."""
+    with path.open("rb") as handle:
+        handle.seek(end)
+        torn = handle.read()
+    aside, n = path.with_name(f"{path.name}{TORN}{stamp}"), 1
+    while aside.exists():
+        n += 1
+        aside = path.with_name(f"{path.name}{TORN}{stamp}-{n}")
+    fd = os.open(aside, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    try:
+        os.write(fd, torn)
+        os.fsync(fd)
+    finally:
+        os.close(fd)
+    fd = os.open(path, os.O_WRONLY)
+    try:
+        os.ftruncate(fd, end)
+        os.fsync(fd)
+    finally:
+        os.close(fd)
+    return aside
+
+
 @dataclass
 class Journal:
     root: Path
@@ -137,6 +194,25 @@ class Journal:
         """The highest `seq` of each file, by file stem (replica ids and "local")."""
         return {stem: change["seq"] for stem, change in self._last_changes().items()}
 
+    def repair_tail(self) -> list[Path]:
+        """Before a write: a last line without its newline (a write cut short, so never committed)
+        is moved aside to `<file>.torn-<UTC time>`, kept, and its file cut to its last whole
+        line, with a warning on stderr. Returns the files moved aside. Other damage stays, and
+        raises where it is read."""
+        stamp = datetime.fromtimestamp(self.now_ms() // 1000, UTC).strftime("%Y%m%dT%H%M%SZ")
+        moved = []
+        for path in self._files():
+            end = _torn_at(path)
+            if end is None:
+                continue
+            aside = _set_aside(path, end, stamp)
+            print(
+                f"journal: {path} ended in a line a write left cut short; moved it aside to {aside.name}",
+                file=sys.stderr,
+            )
+            moved.append(aside)
+        return moved
+
     def begin(self, cmd: str) -> Transaction:
         last = self._last_changes()
         clock = max((c["hlc"] for c in last.values()), default=clock_text(0, 0))
@@ -152,11 +228,19 @@ class Transaction:
     seqs: dict[str, int]
     edits: list[tuple[str, str, dict[str, Any], bool]] = field(default_factory=list)
     n: int = 0
+    committed: bool = False
+
+    def _check_open(self) -> None:
+        """A committed transaction's sequence numbers and clock are spent: begin a new one."""
+        if self.committed:
+            raise JournalError("this transaction is committed; begin a new one")
 
     def add(self, op: str, target: str, body: dict[str, Any], *, local: bool = False) -> None:
+        self._check_open()
         self.edits.append((op, target, body, local))
 
     def mint(self) -> str:
+        self._check_open()
         private = self.seqs.get(self.journal.replica, 0) + 1
         local = self.seqs.get(LOCAL, 0) + 1
         suffix = mint_suffix(self.journal.replica, f"{private}/{local}", self.n)
@@ -203,6 +287,8 @@ class Transaction:
         return done, files
 
     def commit(self) -> list[Change]:
+        self._check_open()
+        self.committed = True
         if not self.edits:
             return []
         done, files = self._build()

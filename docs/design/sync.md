@@ -162,7 +162,11 @@ logs.
 first, then rewrites the files, which record the journal position they reflect (the highest `seq`
 per replica). A crash between the two leaves the files behind the journal; the next load sees the
 positions differ and rebuilds the files from the journal. Pulling another Mac's changes in phase 1
-is the same step.
+is the same step. For the ledger this is `locked_ledger`: a reader (shared lock) only rebuilds in
+memory and never writes; a writer saves the rebuild before the command runs. A crash in the middle
+of an append leaves a last line without its newline, which was never committed: the next write
+moves it aside (`<file>.torn-<time>`, kept) and says so. Any other damaged line stops writes with
+the file and line named, and readers keep the last whole `ledger.json`.
 
 ### Rebuilding, and what a merge cannot decide
 
@@ -211,7 +215,10 @@ on different schemas could no longer merge:
 
 **Existing data** enters the journal once, as a snapshot change per item, entity and fact, when a
 Mac first turns on the journal (phase 0). History before that is whatever the files still hold:
-trimmed history and pruned items are gone already.
+trimmed history and pruned items are gone already. For the ledger, the first write's genesis
+transaction (command `genesis`) is the diff from the empty ledger: a create per item, by id, with
+its local leaves split off as for any new item, a put per source and run, and what I said. Its
+rebuild is the file again, old numeric ids, trimmed histories and approvals included.
 
 ### Where the ledger's changes come from
 
@@ -639,8 +646,15 @@ from the journal, never what travels.
 
 ## Open questions
 
-- **Rebuild cost:** nobody has measured a rebuild over months of changes. Phase 0 measures one over
-  a synthetic year before deciding whether snapshots are needed.
+- **Rebuild cost (measured 2026-11-03, phase 0):** a synthetic year written through
+  `locked_ledger` (100 items, about 500 changes each: a note and a field per round, 52,436 changes,
+  a 20.7 MB journal for a 3.0 MB `ledger.json`) takes 0.18 s to read and order and 1.09 s to
+  rebuild on an Apple-silicon Mac (Python 3.15). An ordinary write never rebuilds: only the
+  commands after a crash until one writes, and in phase 1 each pull. That is over a second, so
+  phase 1 needs snapshots: a rebuilt state saved with the position it reflects, and only the
+  changes after it applied. The write itself costs more with the journal (the copy and the diff):
+  about 3 ms instead of 1 ms at the fixture's size, and 40 ms instead of 15 ms for a 3 MB ledger,
+  against about 80 ms to start the command.
 - **Causal context for a change after a delete:** an item that another Mac deleted and this one
   makes again stays deleted, because the rebuild cannot yet tell a Mac that saw the delete from one
   that made the item at the same time. Phase 1 adds what each transaction was built on (the

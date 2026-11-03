@@ -390,6 +390,7 @@ def item_activity(item: dict[str, Any], settings: Settings, trim: Trim) -> list[
 
 def render_ledger(settings: Settings, trim: Trim) -> list[str]:
     ledger.configure(settings.state_dir)
+    ledger.configure_command("learn")  # bosun learn's writes that follow keep their name
     try:
         items = list(ledger.load()["items"].values())
     except ledger.LedgerError as exc:

@@ -508,12 +508,18 @@ class ApprovalSettings:
         )
 
 
+def use_ledger(settings: ApprovalSettings) -> None:
+    """The ledger in <settings>' state dir, the guard's writes named so in its journal."""
+    ledger.configure(settings.state_dir)
+    ledger.configure_command("guard")
+
+
 def judge(
     event: dict[str, Any], call: approvals.Call, settings: ApprovalSettings, claim: bool
 ) -> approvals.Verdict:
     """The verdict on a gated call; with <claim>, an allowed call uses up its approval (recorded,
     with the call's hash, session and transcript for the PostToolUse hook)."""
-    ledger.configure(settings.state_dir)
+    use_ledger(settings)
     prompts = approvals.transcript_prompts(str(event.get("transcript_path") or ""))
     with ledger.locked_ledger(write=claim) as book:
         verdict = approvals.evaluate(book["items"], call, prompts, settings.speaker, settings.standing)
@@ -695,7 +701,7 @@ def command_words(command: str) -> list[str]:
 def approved_commands(event: dict[str, Any], settings: ApprovalSettings) -> list[tuple[str, str]]:
     """(item id, command) of each approved, unused run proposal whose approval would count now."""
     prompts = approvals.transcript_prompts(str(event.get("transcript_path") or ""))
-    ledger.configure(settings.state_dir)
+    use_ledger(settings)
     with ledger.locked_ledger(write=False) as book:
         return [
             (item["id"], proposal["spec"]["command"])
@@ -746,7 +752,7 @@ def after_call(event: dict[str, Any], settings: ApprovalSettings) -> str:
     if found is None or event.get("hook_event_name") not in POST_EVENTS:
         return ""
     call, context, moment = found[0], approvals.CallContext.of(event), datetime.now(UTC)
-    ledger.configure(settings.state_dir)
+    use_ledger(settings)
     with ledger.locked_ledger(write=False) as book:
         if approvals.carried_out_by(book["items"], call, context, moment) is None:
             return ""

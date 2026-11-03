@@ -154,6 +154,11 @@ All configuration lives in `~/.config/bosun/` (override with `BOSUN_CONFIG_DIR`)
 State and logs go to `~/.local/state/bosun/`:
 
 - `ledger.json` and its readable view `ledger.md`
+- `journal/ledger/`: every change to the ledger, which every write appends to before it saves
+  `ledger.json` (rebuilt from it when a write was cut short): `<replica>.jsonl` for this Mac's
+  changes, `local.jsonl` for what never leaves it, such as your own words
+  ([Sync and sharing](design/sync.md))
+- `replica.json`: this Mac's id in the journal
 - `logs/`: `morning-YYYY-MM-DD.log`, `checkin-YYYY-MM-DD.log`, `learn-YYYY-MM-DD.log`,
   `impact-YYYY-MM-DD.log`, `hook-YYYY-MM-DD.log` (the repo sessions' prompt hook), and what launchd
   captures from each job (`launchd.{out,err}`, `watchdog.launchd.{out,err}`, `learn.launchd.{out,err}`)

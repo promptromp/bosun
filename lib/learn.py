@@ -430,6 +430,12 @@ def known_findings(state: State) -> tuple[dict[str, Any], ...]:
     return tuple({"key": key, **info} for key, info in sorted(state.findings.items()))
 
 
+def use_ledger(config: Config) -> None:
+    """The ledger in <config>'s state dir, learning's writes named so in its journal."""
+    ledger.configure(config.state_dir)
+    ledger.configure_command("learn")
+
+
 def sync_statuses(state: State) -> None:
     """Take each proposal's outcome from the ledger (I may have answered it any way)."""
     try:
@@ -744,7 +750,7 @@ def collect_and_analyze(
     config: Config, options: RunOptions, windows: list[Window], run: dict[str, Any], run_dir: Path
 ) -> Outcome:
     state = State.load(config.learn_dir)
-    ledger.configure(config.state_dir)
+    use_ledger(config)
     sync_statuses(state)
     since, until = window_of_run(config, state, options)
     run.update(since=iso(since), until=iso(until), model=config.model, run_dir=str(run_dir))
@@ -987,7 +993,7 @@ def waiting_lines() -> list[str]:
 
 def cmd_status(config: Config, _args: argparse.Namespace) -> int:
     state = State.load(config.learn_dir)
-    ledger.configure(config.state_dir)
+    use_ledger(config)
     sync_statuses(state)
     schedule = f"daily at {config.at:%H:%M} on {config.days}, next {next_due(config, now())}"
     lines = [f"learn: {'enabled' if config.enabled else 'off (BOSUN_LEARN_ENABLED=0)'}; {schedule}"]
@@ -1037,7 +1043,7 @@ def main(argv: list[str]) -> int:
     args = build_parser().parse_args(argv)
     try:
         config = Config.from_env(os.environ)
-        ledger.configure(config.state_dir)
+        use_ledger(config)
         return COMMANDS[args.command](config, args)
     except (LearnError, ledger.LedgerError, OSError, json.JSONDecodeError) as exc:
         print(f"learn: {exc}", file=sys.stderr)

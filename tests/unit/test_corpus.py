@@ -7,7 +7,8 @@ fictional domain: acme's invoice exporter), from tests/fixtures/corpus/:
 - replay/*.json: interaction sequences (delegations, updates, reports, refusals) run against the
   real CLI in a scratch state dir with BOSUN_SEND_DRY_RUN=1, so nothing is delivered. Steps
   by the orchestrator go through the guard first (a denied step is not run, as in the hook);
-  steps by a repo session or by me do not. The ledger must end as each scenario expects.
+  steps by a repo session or by me do not. The ledger must end as each scenario expects, and be
+  the rebuild of the journal its writes went through.
 - interactions.json: the catalog of interaction patterns, with counts; every pattern points at
   the replay scenarios or guard commands that cover it.
 """
@@ -28,6 +29,10 @@ from typing import Any
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "lib"))
 import guard
+import ledger
+from change_log import canonical
+from journal import Journal
+from ledger_changes import rebuild
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -136,6 +141,18 @@ class ReplayTest(unittest.TestCase):
             self.replay_step(f"step {number} ({step.get('why', '')})", step, scratch)
         for item_id, expected in scenario["expect"].items():
             self.check_item(item_id, expected, scratch.item(item_id))
+        self.check_journal(Path(scratch.env["BOSUN_STATE_DIR"]))
+
+    def check_journal(self, state: Path) -> None:
+        """ledger.json is the rebuild of the journal, at its position, with no conflict."""
+        found = Journal(state / "journal" / "ledger", "ledger", "", ledger.RULES_VERSION)
+        result = rebuild(found.changes(), ledger.RULES)
+        saved = json.loads((state / "ledger.json").read_text())
+        self.assertTrue(found.position(), "the journal is empty")
+        self.assertEqual(saved.get("journal"), found.position(), "the journal position")
+        self.assertEqual(result.conflicts, [], "conflicts in the rebuild")
+        del saved["journal"]
+        self.assertEqual(canonical(result.ledger).decode(), canonical(saved).decode(), "the rebuild")
 
     def replay_step(self, label: str, step: dict[str, Any], scratch: Scratch) -> None:
         command = REAL_COMMANDS[step["command_id"]] if "command_id" in step else lines(step["run"])

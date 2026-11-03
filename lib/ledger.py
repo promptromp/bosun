@@ -214,7 +214,9 @@ stand-up summaries and stats (docs/design/workstreams.md):
   $BOSUN_CONFIG_DIR/workstreams.json and a workstream's channel > unassigned. `show` says
   which (derived.workstream).
 
-State lives in $BOSUN_STATE_DIR/ledger.json; ledger.md is a readable view of it.
+State lives in $BOSUN_STATE_DIR/ledger.json; ledger.md is a readable view of it. Every write
+appends its changes to the journal in $BOSUN_STATE_DIR/journal/ledger/ first, and ledger.json is
+the rebuild of that journal (docs/design/sync.md).
 review: and mypr: items are only created for repositories matching BOSUN_REPO_MASK.
 """
 
@@ -250,6 +252,8 @@ import repo_mask
 import tickets
 import workstreams
 import ws_summary
+from change_log import ChangeLogError, Edit
+from journal import Journal, JournalError, Transaction, replica_id
 from ledger_changes import MAX_HISTORY as MAX_HISTORY, trim_history as trim_history  # noqa: PLC0414 re-exported
 from lineage import Index, LineageError, Link
 from tickets import TicketError
@@ -317,6 +321,14 @@ TIME_FROM_SLACK = "slack ref"
 Item = dict[str, Any]
 Ledger = dict[str, Any]
 
+# The journal every write goes through (lib/journal.py, docs/design/sync.md): the ledger's stream;
+# the version of the rules its changes are checked against when rebuilt (RULES: KINDS' transitions
+# and lineage's link rules), bumped by hand when a change to them would rebuild old changes
+# differently; and the command of the transaction that puts a ledger from before journals in it.
+LEDGER_STREAM = "ledger"
+RULES_VERSION = 1
+GENESIS = "genesis"
+
 
 @dataclass(frozen=True)
 class ScanWindow:
@@ -348,6 +360,9 @@ class Store:
     owned_projects: frozenset[str] = frozenset()
     # BOSUN_ORCHESTRATOR_DIR: whose transcripts resolve-carried-out reads; unset: none.
     orchestrator_dir: str = ""
+    # What the journal records as the command of each write ("ledger transition", "guard"): set
+    # with configure_command by each command that configures the ledger; unset, unnamed.
+    command: str = ""
 
     @property
     def rules_file(self) -> Path | None:
@@ -356,6 +371,11 @@ class Store:
     @property
     def ledger_file(self) -> Path:
         return self.state_dir / "ledger.json"
+
+    @property
+    def journal_dir(self) -> Path:
+        """The journal every write goes through (lib/journal.py); ledger.json is its rebuild."""
+        return self.state_dir / "journal" / LEDGER_STREAM
 
     @property
     def view(self) -> Path:
@@ -386,10 +406,11 @@ def configure(
     caller_window: str = "",
 ) -> None:
     """Point the ledger at <state_dir> and set the repo mask, ticket and event settings, and the
-    default scan window and no site config dir (used by main and by tests)."""
+    default scan window, no site config dir and unnamed writes (used by main and by tests)."""
     STORE.config_dir = None
     STORE.owned_projects = frozenset()
     STORE.orchestrator_dir = ""
+    STORE.command = ""
     STORE.state_dir = Path(state_dir)
     STORE.mask = mask
     STORE.status_map = status_map
@@ -414,6 +435,11 @@ def configure_tickets(owned_projects: str, orchestrator_dir: str = "") -> None:
 def configure_scan(lookback_hours: float, max_lookback_hours: float) -> None:
     """Set the Slack scan window (BOSUN_SLACK_LOOKBACK_HOURS, ..._MAX_LOOKBACK_HOURS)."""
     STORE.scan = ScanWindow(lookback_hours, max_lookback_hours)
+
+
+def configure_command(command: str) -> None:
+    """Name this process's writes in the journal ("ledger transition", "guard", "hook")."""
+    STORE.command = command
 
 
 def emit(kind: str, item: str = "", window: str = "", summary: str = "", detail: str = "") -> None:
@@ -732,13 +758,119 @@ def parse_fields(pairs: list[str] | None) -> dict[str, str]:
 
 @contextlib.contextmanager
 def locked_ledger(write: bool) -> Iterator[Ledger]:
+    """The ledger, under its lock. A reader (shared lock) gets ledger.json, or the journal's
+    rebuild where the file is behind it, and writes nothing. A writer (exclusive lock) gets the
+    same, made whole first (see write_start); what it changes becomes one transaction, appended
+    to the journal before ledger.json and ledger.md are saved (saved even when nothing changed,
+    which `ledger render` relies on). A writer that raises writes nothing."""
     STORE.state_dir.mkdir(parents=True, exist_ok=True)
     with STORE.lock.open("w") as lock:
         fcntl.flock(lock, fcntl.LOCK_EX if write else fcntl.LOCK_SH)
-        ledger = load()
-        yield ledger
         if write:
-            save(ledger)
+            yield from for_writing()
+        else:
+            yield for_reading()
+
+
+# The transaction of the write in progress, while there is one (ids are minted from it).
+_WRITING: list[Transaction] = []
+
+
+def current_transaction() -> Transaction:
+    """The journal transaction of the write in progress: only inside locked_ledger(write=True)."""
+    if not _WRITING:
+        raise LedgerError("no ledger write in progress: this needs locked_ledger(write=True)")
+    return _WRITING[-1]
+
+
+def open_journal(replica: str = "") -> Journal:
+    """The ledger's journal; a reader needs no replica (it never begins a transaction)."""
+    return Journal(STORE.journal_dir, LEDGER_STREAM, replica, RULES_VERSION)
+
+
+@contextlib.contextmanager
+def journal_errors() -> Iterator[None]:
+    """A journal that cannot be read, or a change it refuses, as a LedgerError: nothing written."""
+    try:
+        yield
+    except JournalError as exc:
+        raise LedgerError(
+            f"the ledger's journal in {STORE.journal_dir} is damaged: {exc}. Nothing was written; "
+            "move that line aside (keep a copy) and run the command again"
+        ) from exc
+    except ChangeLogError as exc:
+        raise LedgerError(f"nothing was written: {exc}") from exc
+
+
+def has_records(ledger: Ledger) -> bool:
+    return any(ledger.get(key) for key in ("items", "sources", "runs", ledger_changes.SAID))
+
+
+def rebuilt(journal: Journal, position: dict[str, int]) -> Ledger:
+    """The journal's rebuild at <position>, its keys in order as a saved ledger.json loads them
+    (commands and `render` list items in that order)."""
+    found = ledger_changes.rebuild(journal.changes(), RULES).ledger
+    found[ledger_changes.JOURNAL] = position
+    ordered: Ledger = json.loads(json.dumps(found, sort_keys=True))
+    return ordered
+
+
+def caught_up(ledger: Ledger, journal: Journal) -> Ledger:
+    """<ledger>, or the journal's rebuild if <ledger> is not at the journal's position (a write
+    cut short between the journal and the file)."""
+    position = journal.position()
+    if not position or ledger.get(ledger_changes.JOURNAL) == position:
+        return ledger
+    return rebuilt(journal, position)
+
+
+def for_reading() -> Ledger:
+    """A reader's ledger. A journal that cannot be read leaves ledger.json as it is, always a
+    whole version: the next write repairs a torn line, or says what is wrong."""
+    ledger = load()
+    try:
+        return caught_up(ledger, open_journal())
+    except JournalError:
+        return ledger
+
+
+def commit_edits(transaction: Transaction, edits: Iterable[Edit]) -> None:
+    for edit in edits:
+        transaction.add(edit.op, edit.target, edit.body, local=edit.local)
+    transaction.commit()
+
+
+def write_start(journal: Journal) -> Ledger:
+    """The ledger a write starts from: a line a write left cut short set aside (repair_tail); a
+    ledger from before journals put in the journal whole (genesis: the diff from the empty ledger,
+    items by id); ledger.json rebuilt and saved if it is behind the journal."""
+    journal.repair_tail()
+    ledger = load()
+    if not journal.position() and has_records(ledger):
+        commit_edits(journal.begin(GENESIS), ledger_changes.diff(ledger_changes.EMPTY, ledger))
+    current = caught_up(ledger, journal)
+    if current is not ledger:
+        save(current)
+    return current
+
+
+def for_writing() -> Iterator[Ledger]:
+    """A write: the ledger it starts from, then what the command changed (diffed against a copy)
+    committed as one transaction under the command's name, then ledger.json at the new position."""
+    with journal_errors():
+        journal = open_journal(replica_id(STORE.state_dir))
+        ledger = write_start(journal)
+        transaction = journal.begin(STORE.command)
+    before = json.loads(json.dumps(ledger))  # a copy to diff against (plain JSON: faster than deepcopy)
+    _WRITING.append(transaction)
+    try:
+        yield ledger
+    finally:
+        _WRITING.remove(transaction)
+    with journal_errors():
+        commit_edits(transaction, ledger_changes.diff(before, ledger))
+        ledger[ledger_changes.JOURNAL] = journal.position()
+    save(ledger)
 
 
 def read_ledger_file() -> Any:
@@ -769,6 +901,7 @@ def load() -> Ledger:
     ledger.setdefault("items", {})
     ledger.setdefault("sources", {})
     ledger.setdefault("runs", {})
+    ledger.setdefault(ledger_changes.SAID, [])  # as the journal's rebuild always has it
     return ledger
 
 
@@ -4095,8 +4228,9 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def configure_from_environment() -> None:
-    """The settings `bosun ledger` passes (load_config does not export them)."""
+def configure_from_environment(command: str = "") -> None:
+    """The settings `bosun ledger` passes (load_config does not export them); <command> names
+    the writes in the journal."""
     configure(
         os.environ["BOSUN_STATE_DIR"],
         os.environ.get("BOSUN_REPO_MASK", ""),
@@ -4105,6 +4239,7 @@ def configure_from_environment() -> None:
         events_enabled=os.environ.get("BOSUN_EVENTS_ENABLED") == "1",
         caller_window=os.environ.get("BOSUN_CALLER_WINDOW", ""),
     )
+    configure_command(command)
     configure_site(os.environ.get("BOSUN_CONFIG_DIR") or None)
     configure_tickets(os.environ.get(tickets.OWNED_SETTING, ""), os.environ.get("BOSUN_ORCHESTRATOR_DIR", ""))
     configure_scan(
@@ -4128,7 +4263,7 @@ def main() -> int:
         return 2
     handler: Handler = args.func
     try:
-        configure_from_environment()
+        configure_from_environment(command=f"ledger {args.command}")
         result = handler(args)
     except (LedgerError, LineageError, TicketError, WorkstreamError) as exc:
         print(f"ledger: {exc}", file=sys.stderr)

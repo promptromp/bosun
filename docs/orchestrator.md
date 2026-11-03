@@ -177,8 +177,11 @@ last review: GitHub re-requesting you, or a new Slack message asking again. Nudg
 chores procedure (the prompt, not code): only for your non-draft PR in `awaiting-review`, never
 once it is `approved`.
 Writes take a file lock and replace `ledger.json` atomically, keeping the previous version as
-`ledger.json.bak`; `ledger.md` is regenerated after each one. Each item keeps its last 200
-history entries.
+`ledger.json.bak`; `ledger.md` is regenerated after each one. Each write first appends what it
+changed to the journal (`journal/ledger/` in the state folder), and `ledger.json` is the rebuild
+of that journal: a write cut short between the two is completed by the next command
+([Sync and sharing](design/sync.md#changes-not-files)). Each item keeps its last 200 history
+entries; the journal keeps all of them.
 
 ## Waiting on someone: outreach
 
