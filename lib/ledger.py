@@ -4474,8 +4474,8 @@ def cmd_validate(args: argparse.Namespace) -> tuple[str, int]:
         if args.journal:
             found += journal_findings(saved)
     code = 1 if any(f["kind"] != "note" for f in found) else 0
-    if args.json:
-        return json.dumps(found, indent=2), code
+    if args.json:  # with each finding's line as the text says it (bosun doctor prints it)
+        return json.dumps([{**f, "line": finding_line(f)} for f in found], indent=2), code
     lines = [finding_line(f) for f in found]
     return "\n".join(lines) or "ledger is valid", code
 

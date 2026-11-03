@@ -111,11 +111,11 @@ check_knowledge() {
 # writes refused or data at risk) fails; a warning (a broken rule, a conflict, an outside edit the
 # next write adopts) warns; a note (a ledger from before journals) is fine.
 LEDGER_LINES=10 # findings shown; validate lists them all
-# ledger_findings <severity> <validate's JSON>: a line per finding of that severity, as validate says it.
+# ledger_findings <severity> <validate's JSON>: the line of each finding of that severity, as
+# validate's text says it (its JSON carries it).
 ledger_findings() {
   # shellcheck disable=SC2016  # a jq program, not shell
-  jq -r --arg severity "$1" '.[] | select(.severity == $severity)
-    | "\(.kind): \(.item // "journal")\(if .path then " " + .path else "" end): \(.detail)"' <<<"$2"
+  jq -r --arg severity "$1" '.[] | select(.severity == $severity) | .line' <<<"$2"
 }
 # indented <lines>: at most LEDGER_LINES of them, indented under a doctor line.
 indented() {
@@ -143,7 +143,7 @@ check_ledger() {
   elif [ -n "$warnings" ]; then
     warn "the ledger breaks a rule, or holds what the next write takes care of (every finding: bosun ledger validate --journal):"$'\n'"$(indented "$warnings")"
   else
-    ok "the ledger and its journal: $(jq -r 'map(.detail) | join("; ") | if . == "" then "ledger is valid" else . end' <<<"$said")"
+    ok "the ledger and its journal: $(jq -r 'map(.line) | join("; ") | if . == "" then "ledger is valid" else . end' <<<"$said")"
   fi
 }
 
