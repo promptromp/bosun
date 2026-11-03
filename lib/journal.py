@@ -57,6 +57,8 @@ REPLICA_FILE = "replica.json"
 REPLICA_ID = re.compile(r"[0-9a-f]{32}")  # also a file's stem: never "local", never a path
 LOCAL = "local"
 SUFFIX = ".jsonl"
+# fcntl's full flush where the platform has one (macOS); None elsewhere.
+FULL_FSYNC: int | None = getattr(fcntl, "F_FULLFSYNC", None)
 TORN = ".torn-"  # <file>.torn-<UTC time>: an unfinished transaction, moved aside
 _TAIL = 8192
 # What reading a change relies on (its position, its place in the order, whether its transaction
@@ -83,10 +85,9 @@ def flush_to_disk(fd: int) -> None:
     """fsync <fd>, and where there is F_FULLFSYNC (macOS) that instead: plain fsync there leaves
     the data in the drive's cache, which may write it after what came later. A file system without
     it (some network mounts) gets fsync."""
-    full = getattr(fcntl, "F_FULLFSYNC", None)
-    if full is not None:
+    if FULL_FSYNC is not None:
         with contextlib.suppress(OSError):
-            fcntl.fcntl(fd, full)
+            fcntl.fcntl(fd, FULL_FSYNC)
             return
     os.fsync(fd)
 

@@ -347,6 +347,9 @@ The repo is meant to be shareable, so nothing in it may identify an organization
   break `"${a[@]}"` under `set -u`; an assignment with escaped quotes inside `"$(...)"` (`"$(X="{\"a\":
   1}" f)"`) is misparsed, so assign first. The smoke suite's `bash -c` checks run whichever `bash`
   comes first on PATH: Homebrew's 5.x on many Macs, 3.2 in CI.
+- CI's `lint` runs mypy on Linux, whose type stubs lack macOS-only names (`fcntl.F_FULLFSYNC`): reach
+  one through a module constant (`journal.FULL_FSYNC`, `None` elsewhere), and check with `uv run mypy
+  --platform linux`.
 - Never type long commands into a pane with `send-keys`: the terminal's line limit (1024 bytes on
   macOS) drops the rest and the Enter. Run commands as the pane's own command (`new-window` /
   `respawn-pane -- argv`, see `build_launch_command`); tmux refuses commands over about 16 KB, so

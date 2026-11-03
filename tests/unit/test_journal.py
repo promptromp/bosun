@@ -125,8 +125,10 @@ class Disk(JournalTestCase):
             (aside,), _ = self.repaired()
         self.assertEqual(aside.read_bytes(), TORN * 3)
 
-    @unittest.skipUnless(hasattr(fcntl, "F_FULLFSYNC"), "macOS only")
     def test_a_commit_flushes_each_file_to_the_disk_itself(self) -> None:
+        full = jr.FULL_FSYNC
+        if full is None:
+            self.skipTest("macOS only")
         calls: list[int] = []
         real = fcntl.fcntl
 
@@ -139,7 +141,7 @@ class Disk(JournalTestCase):
         tx.add("set", "item:1", {"quote": "mine"}, local=True)
         with mock.patch.object(fcntl, "fcntl", recording):
             tx.commit()
-        self.assertEqual(calls.count(fcntl.F_FULLFSYNC), 2)  # local.jsonl, then the replica's file
+        self.assertEqual(calls.count(full), 2)  # local.jsonl, then the replica's file
 
     def test_without_f_fullfsync_it_is_fsync(self) -> None:
         synced: list[int] = []
