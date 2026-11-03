@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import io
 import json
+import shutil
 import sys
 import tempfile
 import unittest
@@ -391,6 +392,60 @@ class ValidateTest(LedgerTestCase):
         output, code = run("validate", "--journal")
         self.assertEqual(code, 1)
         self.assertIn("damaged", output)
+
+    def test_validate_lists_each_conflict_of_one_change(self) -> None:
+        other = json.loads(json.dumps(self.item(REVIEW_ID)))
+        other["state"] = "closed"
+        other["title"] = "Another title"
+        other["links"] = [{"rel": "relates_to", "id": "slack:C9/9"}]
+        journal = ledger.open_journal(replica_id(ledger.STORE.state_dir))
+        transaction = journal.begin("test")
+        transaction.add("item.create", REVIEW_ID, {"item": other})
+        transaction.commit()
+        found = json.loads(run("validate", "--journal", "--json")[0])
+        conflicts = [f for f in found if f["kind"] == "conflict"]
+        self.assertEqual([f["detail"].split(":")[0] for f in conflicts], ["state", "link"])
+        self.assertEqual(len({f["detail"].rsplit("(change ", 1)[1] for f in conflicts}), 1)
+        self.assertEqual({f["item"] for f in conflicts}, {REVIEW_ID})
+
+    def test_validate_checks_every_part_of_link_when_there_are_several(self) -> None:
+        data = self.data()
+        data["items"][REVIEW_ID]["links"] = [
+            {"rel": "part_of", "id": "ws:a"},
+            {"rel": "part_of", "id": "ws:b"},
+        ]
+        ledger.STORE.ledger_file.write_text(json.dumps(data))
+        found = json.loads(run("validate", "--json")[0])
+        self.assertEqual(sorted(f["kind"] for f in found), ["link-target", "link-target", "part_of"])
+
+    def test_validate_journal_reports_a_journal_behind_the_file(self) -> None:
+        data = self.data()
+        stem = next(iter(data["journal"]))
+        data["journal"][stem] += 5
+        ledger.STORE.ledger_file.write_text(json.dumps(data))
+        found = json.loads(run("validate", "--journal", "--json")[0])
+        self.assertEqual([(f["kind"], f["path"]) for f in found], [("position", "journal")])
+        self.assertIn("behind", found[0]["detail"])
+        self.assertEqual(run("validate", "--journal")[1], 1)
+
+    def test_validate_journal_notes_a_ledger_from_before_journals(self) -> None:
+        data = self.data()
+        del data["journal"]
+        ledger.STORE.ledger_file.write_text(json.dumps(data))
+        shutil.rmtree(ledger.STORE.journal_dir)
+        self.assertEqual(run("validate", "--journal"), ("no journal yet; the next write starts it", 0))
+        output, code = run("validate", "--journal", "--json")
+        self.assertEqual(code, 0)
+        self.assertEqual([f["kind"] for f in json.loads(output)], ["note"])
+
+    def test_validate_journal_json_names_the_item_and_path(self) -> None:
+        def edit(items: dict[str, Any]) -> None:
+            items[REVIEW_ID]["history"][-1]["note"] = "edited after the fact"
+
+        self.edit_in_place(edit)
+        found = json.loads(run("validate", "--journal", "--json")[0])
+        self.assertEqual([(f["kind"], f["item"]) for f in found], [("differs", REVIEW_ID)])
+        self.assertTrue(found[0]["path"].startswith("history"))
 
 
 if __name__ == "__main__":

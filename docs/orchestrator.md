@@ -347,7 +347,8 @@ epic (it may name one) and not a product area (it is part of one). Design, resea
 - `ledger validate [--journal] [--json]` checks every rule (a state its kind does not have, a link
   lineage would refuse, a second `part_of`, a link to an unknown item) and exits 1 on any finding;
   `--journal` also rebuilds the journal and lists its conflicts and each item where the rebuild and
-  `ledger.json` differ ([sync](design/sync.md)).
+  `ledger.json` differ ([sync](design/sync.md)). A ledger from before journals is not a failure:
+  it prints "no journal yet; the next write starts it" and exits 0.
 
 ## Your own MCP servers: a site settings file
 

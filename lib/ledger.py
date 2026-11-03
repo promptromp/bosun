@@ -4055,7 +4055,9 @@ def stored_links(item_id: str, item: Item) -> list[Link]:
 def link_finding(items: lineage.Items, item: Item, links: list[Link], link: Link) -> Finding | None:
     """Why lineage would refuse <link> as if it were being added now (every entry for the same
     relation and target left out, so two Macs' copies count once), or None."""
-    rest = [entry for entry in links if (entry.rel, entry.target) != (link.rel, link.target)]
+    others = [entry for entry in links if (entry.rel, entry.target) != (link.rel, link.target)]
+    # another part_of is reported once, by link_findings, not as a refusal of each of them
+    rest = [entry for entry in others if not (link.rel == lineage.PART_OF and entry.rel == lineage.PART_OF)]
     trial = {**items, link.source: {**item, "links": [{"rel": e.rel, "id": e.target} for e in rest]}}
     problem = link_problem(trial, link)
     if not problem:
@@ -4070,9 +4072,7 @@ def link_findings(items: lineage.Items, item_id: str, item: Item) -> list[Findin
     parts = sorted({link.target for link in links if link.rel == lineage.PART_OF})
     many = len(parts) > 1
     found = [finding("part_of", f"part_of {', '.join(parts)}: an item has one workstream", item_id, "links")]
-    checked = (
-        link_finding(items, item, links, link) for link in links if not (many and link.rel == lineage.PART_OF)
-    )
+    checked = (link_finding(items, item, links, link) for link in links)
     return [*found[: int(many)], *(f for f in checked if f)]
 
 
@@ -4142,6 +4142,9 @@ def item_differences(left: lineage.Items, right: lineage.Items) -> list[Finding]
     return found
 
 
+NO_JOURNAL_YET = "no journal yet; the next write starts it"
+
+
 def position_finding(position: Mapping[str, int], saved: Mapping[str, int]) -> Finding:
     gaps = missing(position, saved)
     if gaps:
@@ -4167,18 +4170,19 @@ def journal_findings(saved: Ledger) -> list[Finding]:
         for c in result.conflicts
     ]
     file_position = saved_position(saved)
+    if not position and not file_position and has_records(saved):
+        return [*found, finding("note", NO_JOURNAL_YET, path="journal")]
     if position != file_position:
-        if not position and has_records(saved):
-            return [
-                *found,
-                finding(
-                    "position",
-                    "ledger.json is from before journals: the next write journals it",
-                    path="journal",
-                ),
-            ]
         return [*found, position_finding(position, file_position)]
     return [*found, *compare_findings(result.ledger, saved)]
+
+
+def finding_line(found: Finding) -> str:
+    if found["kind"] == "note":
+        return found["detail"]
+    where = found.get("item") or "journal"
+    path = f" {found['path']}" if found.get("path") else ""
+    return f"{found['kind']}: {where}{path}: {found['detail']}"
 
 
 def cmd_validate(args: argparse.Namespace) -> tuple[str, int]:
@@ -4190,13 +4194,10 @@ def cmd_validate(args: argparse.Namespace) -> tuple[str, int]:
         found = rule_findings(saved)
         if args.journal:
             found += journal_findings(saved)
-    code = 1 if found else 0
+    code = 1 if any(f["kind"] != "note" for f in found) else 0
     if args.json:
         return json.dumps(found, indent=2), code
-    lines = [
-        f"{f['kind']}: {f.get('item') or 'journal'}{' ' + f['path'] if f.get('path') else ''}: {f['detail']}"
-        for f in found
-    ]
+    lines = [finding_line(f) for f in found]
     return "\n".join(lines) or "ledger is valid", code
 
 
