@@ -105,23 +105,46 @@ check_knowledge() {
   if stats="$("$BOSUN" kg stats 2>&1)"; then ok "knowledge: $stats"; else fail "knowledge: $stats"; fi
 }
 
-# The ledger against its journal (docs/design/sync.md): `bosun ledger validate --journal`, which
-# only reads. Only once there is a ledger; one from before journals is a note, not a failure.
+# The ledger against its journal (docs/design/sync.md): `bosun ledger validate --journal --json`,
+# which only reads, once there is a ledger. Each finding carries its severity (SEVERITY in
+# lib/ledger.py): an error (journal damage, a position that does not match, a rebuild that differs:
+# writes refused or data at risk) fails; a warning (a broken rule, a conflict, an outside edit the
+# next write adopts) warns; a note (a ledger from before journals) is fine.
 LEDGER_LINES=10 # findings shown; validate lists them all
+# ledger_findings <severity> <validate's JSON>: a line per finding of that severity, as validate says it.
+ledger_findings() {
+  # shellcheck disable=SC2016  # a jq program, not shell
+  jq -r --arg severity "$1" '.[] | select(.severity == $severity)
+    | "\(.kind): \(.item // "journal")\(if .path then " " + .path else "" end): \(.detail)"' <<<"$2"
+}
+# indented <lines>: at most LEDGER_LINES of them, indented under a doctor line.
+indented() {
+  local shown more
+  shown="$(head -n "$LEDGER_LINES" <<<"$1")"
+  more=$(($(grep -c . <<<"$1") - $(grep -c . <<<"$shown")))
+  [ "$more" -gt 0 ] && shown+=$'\n'"... and $more more"
+  printf '          %s' "${shown//$'\n'/$'\n'          }"
+}
 check_ledger() {
-  local found shown more
+  local said errors warnings
   if [ ! -e "$BOSUN_STATE_DIR/ledger.json" ] && [ ! -e "$BOSUN_STATE_DIR/ledger.json.bak" ]; then
     ok "ledger: none yet (the first write starts it and its journal)"
     return
   fi
-  if found="$("$BOSUN" ledger validate --journal 2>&1)"; then
-    ok "the ledger and its journal: $found"
+  said="$("$BOSUN" ledger validate --journal --json 2>/dev/null)"
+  if ! jq -e 'type == "array"' <<<"$said" >/dev/null 2>&1; then
+    fail "the ledger cannot be read: $("$BOSUN" ledger validate --journal 2>&1 | head -n "$LEDGER_LINES")"
     return
   fi
-  shown="$(head -n "$LEDGER_LINES" <<<"$found")"
-  more=$(($(grep -c . <<<"$found") - $(grep -c . <<<"$shown")))
-  [ "$more" -gt 0 ] && shown+=$'\n'"... and $more more"
-  fail "the ledger and its journal disagree or break a rule (bosun ledger validate --journal):"$'\n'"          ${shown//$'\n'/$'\n'          }"
+  errors="$(ledger_findings error "$said")"
+  warnings="$(ledger_findings warning "$said")"
+  if [ -n "$errors" ]; then
+    fail "the ledger's journal refuses writes or a rebuild would lose data (every finding: bosun ledger validate --journal):"$'\n'"$(indented "$errors")"
+  elif [ -n "$warnings" ]; then
+    warn "the ledger breaks a rule, or holds what the next write takes care of (every finding: bosun ledger validate --journal):"$'\n'"$(indented "$warnings")"
+  else
+    ok "the ledger and its journal: $(jq -r 'map(.detail) | join("; ") | if . == "" then "ledger is valid" else . end' <<<"$said")"
+  fi
 }
 
 # A site settings file (BOSUN_ORCHESTRATOR_SETTINGS) replaces orchestrator/settings.json, so it

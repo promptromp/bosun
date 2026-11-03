@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import ast
 import io
 import json
 import shutil
@@ -562,6 +563,56 @@ class ValidateTest(LedgerTestCase):
         found = json.loads(run("validate", "--journal", "--json")[0])
         self.assertEqual([(f["kind"], f["item"]) for f in found], [("differs", REVIEW_ID)])
         self.assertTrue(found[0]["path"].startswith("history"))
+
+    def severities(self, *args: str) -> list[tuple[str, str]]:
+        return [(f["kind"], f["severity"]) for f in json.loads(run("validate", *args, "--json")[0])]
+
+    def test_validate_json_says_how_much_each_finding_matters(self) -> None:
+        """An error refuses writes or puts data at risk at a rebuild (bosun doctor fails on it); a
+        warning is a rule broken or a change the next write takes care of (doctor warns); a note
+        is information. The text and the exit code stay as they were."""
+        data = self.data()
+        data["items"][REVIEW_ID]["links"] = [{"rel": "relates_to", "id": "slack:C9/9", "at": "2026-11-01"}]
+        data["items"][REVIEW_ID]["state"] = "nonsense"
+        ledger.STORE.ledger_file.write_text(json.dumps(data))  # by hand: adopted by the next write
+        self.assertEqual(
+            sorted(self.severities("--journal")),
+            [("edited", "warning"), ("link-target", "warning"), ("state", "warning")],
+        )
+        self.assertEqual(run("validate", "--journal")[1], 1)
+        path = next(ledger.STORE.journal_dir.glob("*.jsonl"))
+        path.write_text(path.read_text() + "nonsense\n")
+        self.assertIn(("journal", "error"), self.severities("--journal"))
+        data["journal"] = {stem: seq + 5 for stem, seq in ledger.saved_position(data).items()}
+        path.write_text(path.read_text().removesuffix("nonsense\n"))
+        ledger.STORE.ledger_file.write_text(json.dumps(data))
+        self.assertIn(("position", "error"), self.severities("--journal"))
+
+    def test_validate_json_marks_a_note_as_a_note(self) -> None:
+        data = self.data()
+        del data["journal"]
+        ledger.STORE.ledger_file.write_text(json.dumps(data))
+        shutil.rmtree(ledger.STORE.journal_dir)
+        self.assertEqual(self.severities("--journal"), [("note", "note")])
+
+    def test_every_kind_of_finding_has_a_severity(self) -> None:
+        """Each kind `finding()` is called with has its row (a new kind cannot slip in without one),
+        and every row is a kind still found; a kind with no row would be a warning."""
+        tree = ast.parse(Path(ledger.__file__).read_text())
+        kinds = {
+            node.args[0].value
+            for node in ast.walk(tree)
+            if isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Name)
+            and node.func.id == "finding"
+            and node.args
+            and isinstance(node.args[0], ast.Constant)
+        }
+        self.assertEqual(kinds, set(ledger.SEVERITY))
+        self.assertEqual(
+            {severity for kind, severity in ledger.SEVERITY.items() if kind != "note"}, {"error", "warning"}
+        )
+        self.assertEqual(ledger.finding("a-kind-to-come", "x")["severity"], "warning")
 
 
 if __name__ == "__main__":

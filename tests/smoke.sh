@@ -1951,14 +1951,26 @@ if [ "$(bash -c 'source "$1/lib/common.sh"; command -v launchctl; command -v pms
   doctor_said="$(BOSUN_LEARN_ENABLED=1 "$BOSUN" doctor 2>&1)"
   check "doctor checks the learning agent once it is enabled" contains "$doctor_said" "ok    learning agent $BOSUN_LAUNCHD_LABEL.learn loaded"
   check "doctor checks the ledger against its journal" contains "$doctor_said" "ok    the ledger and its journal: ledger is valid"
-  # A damaged journal, which every write refuses too: the fake claude that doctor's login check
-  # calls writes to the ledger.
-  mkdir -p "$WORK/doctor-state/journal/ledger"
-  echo '{"items": {}}' >"$WORK/doctor-state/ledger.json"
-  echo 'nonsense' >"$WORK/doctor-state/journal/ledger/local.jsonl"
-  doctor_said="$(BOSUN_STATE_DIR="$WORK/doctor-state" "$BOSUN" doctor 2>&1)"
-  check "... and fails when they disagree" contains "$doctor_said" "FAIL  the ledger and its journal disagree or break a rule (bosun ledger validate --journal):"
-  check "... saying what validate found" contains "$doctor_said" "the journal is damaged: local.jsonl, line 1: not a change"
+  # A ledger of its own: a link to an item that is gone (an old prune) warns and adds no failure;
+  # a damaged journal fails. (Doctor's login check calls the fake claude, which writes the ledger.)
+  dstate="$WORK/doctor-state"
+  dl() { BOSUN_STATE_DIR="$dstate" "$BOSUN" ledger "$@" >/dev/null 2>&1; }
+  failed_checks() { grep -o '^[0-9]* check(s) failed' <<<"$1" || echo "none failed"; }
+  dl upsert 'mypr:acme/api#1' --kind my-pr
+  dl upsert 'review:acme/api#2' --kind review-request
+  dl link 'mypr:acme/api#1' relates_to 'review:acme/api#2'
+  clean="$(BOSUN_STATE_DIR="$dstate" "$BOSUN" doctor 2>&1)"
+  jq 'del(.items["review:acme/api#2"])' "$dstate/ledger.json" >"$WORK/pruned.json"
+  mv "$WORK/pruned.json" "$dstate/ledger.json"
+  dl render # adopts the item gone, as a prune from before prunes kept lineage whole left it
+  doctor_said="$(BOSUN_STATE_DIR="$dstate" "$BOSUN" doctor 2>&1)"
+  check "doctor warns about a link to an item that is gone" contains "$doctor_said" "warn  the ledger breaks a rule, or holds what the next write takes care of"
+  check "... naming it" contains "$doctor_said" "link-target: mypr:acme/api#1 links: "
+  check "... and that is no failure" test "$(failed_checks "$doctor_said")" = "$(failed_checks "$clean")"
+  echo 'nonsense' >>"$dstate/journal/ledger/$(jq -r .replica "$dstate/replica.json").jsonl"
+  doctor_said="$(BOSUN_STATE_DIR="$dstate" "$BOSUN" doctor 2>&1)"
+  check "a damaged journal fails doctor" contains "$doctor_said" "FAIL  the ledger's journal refuses writes or a rebuild would lose data"
+  check "... saying what validate found" contains "$doctor_said" "journal: journal: the journal is damaged: "
   BOSUN_CONFIG_DIR="$INSTALL_CFG" "$ROOT/install.sh" >/dev/null 2>&1
   check "... and removes it again once disabled" test ! -e "$LEARN_PLIST"
 

@@ -190,7 +190,7 @@ command's one save writes it, so `ledger.json.bak` always holds the ledger as it
 write; copying it (or any older `ledger.json`) back does not undo a write, because the journal
 brings it forward again. A write whose rebuild keeps changes it cannot apply says how many on
 stderr (with one Mac each is a bug or damage), and `bosun doctor` runs `bosun ledger validate
---journal`. A journal that is behind the file (a journal file deleted, a partial restore) is never
+--journal`, failing on what refuses writes or puts data at risk and warning on the rest. A journal that is behind the file (a journal file deleted, a partial restore) is never
 rebuilt from, because that would lose what it lost from the file too. A writer refuses then, and
 so does a write that meets other damage where it reads (every write reads the end of each file,
 and a rebuild reads all of it), with the file and line named. The way out is the same for both:

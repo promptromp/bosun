@@ -4178,9 +4178,28 @@ def cmd_lint(args: argparse.Namespace) -> tuple[str, int]:
 
 Finding = dict[str, str]
 
+# How much a kind of validate finding matters (`validate --json` carries it; bosun doctor fails on
+# an error and warns on a warning). An error means writes are refused, or a rebuild would not give
+# ledger.json back; a warning is a rule the ledger breaks, a change the rebuild keeps but cannot
+# apply, or an outside edit the next write adopts; a note is information. A kind with no row is a
+# warning (a unit test keeps every kind found here).
+ERROR, WARNING, NOTE = "error", "warning", "note"
+SEVERITY = {
+    "journal": ERROR,  # damaged: a write that reads it is refused
+    "position": ERROR,  # behind: every write is refused; ahead: a write cut short, not yet applied
+    "differs": ERROR,  # the journal's rebuild is not ledger.json: a rebuild would lose the difference
+    "state": WARNING,
+    "link": WARNING,
+    "link-target": WARNING,  # a link to an item gone, which a prune from before lineage was kept left
+    "part_of": WARNING,
+    "conflict": WARNING,
+    "edited": WARNING,  # the next write adopts it
+    "note": NOTE,
+}
+
 
 def finding(kind: str, detail: str, item: str = "", path: str = "") -> Finding:
-    found = {"kind": kind, "detail": detail}
+    found = {"kind": kind, "severity": SEVERITY.get(kind, WARNING), "detail": detail}
     if item:
         found["item"] = item
     if path:
@@ -4374,8 +4393,9 @@ def position_finding(position: Mapping[str, int], saved: Mapping[str, int]) -> F
 
 
 def journal_findings(saved: Ledger) -> list[Finding]:
-    """The journal against ledger.json as saved: its damage, the conflicts of its rebuild, and,
-    at the same position, each item that differs."""
+    """The journal against ledger.json as saved: its damage, the conflicts of its rebuild, an
+    outside edit, and, at the same position, each item that differs (unless ledger.json was edited
+    outside the journal: the next write adopts the difference)."""
     try:
         journal = open_journal()
         changes, position = journal.changes(), journal.position()
@@ -4389,11 +4409,12 @@ def journal_findings(saved: Ledger) -> list[Finding]:
     file_position = saved_position(saved)
     if not position and not file_position and has_records(saved):
         return [*found, finding("note", NO_JOURNAL_YET, path="journal")]
-    if edited_outside(saved):
+    edited = edited_outside(saved)
+    if edited:
         found.append(finding("edited", EDITED, path="journal"))
     if position != file_position:
         return [*found, position_finding(position, file_position)]
-    return [*found, *compare_findings(result.ledger, saved)]
+    return found if edited else [*found, *compare_findings(result.ledger, saved)]
 
 
 def finding_line(found: Finding) -> str:

@@ -360,7 +360,10 @@ epic (it may name one) and not a product area (it is part of one). Design, resea
   `--journal` also rebuilds the journal and lists its conflicts and each item where the rebuild and
   `ledger.json` differ ([sync](design/sync.md)), and says when `ledger.json` was changed outside
   the journal (the next write adopts it). A ledger from before journals is not a failure: it
-  prints "no journal yet; the next write starts it" and exits 0. `bosun doctor` runs it.
+  prints "no journal yet; the next write starts it" and exits 0. With `--json` each finding has a
+  `severity`: `error` where writes are refused or a rebuild would lose data (journal damage, a
+  position that does not match, a rebuild that differs), `warning` for the rest, `note`.
+  `bosun doctor` runs it, and fails on an error but only warns on a warning.
 
 ## Your own MCP servers: a site settings file
 
