@@ -654,6 +654,7 @@ def triage(
 def read_ledger(state_dir: Path) -> ledger.Ledger:
     """The ledger, read-only."""
     ledger.configure(state_dir)
+    ledger.configure_command("slack-watch")
     with ledger.locked_ledger(write=False) as book:
         return book
 

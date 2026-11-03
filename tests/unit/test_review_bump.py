@@ -22,7 +22,6 @@ from test_approvals import (
     PR,
     PR_URL,
     QUOTE,
-    REVIEW_REQUEST,
     SEND,
     TEXT,
     THREAD,
@@ -112,7 +111,7 @@ class ReviewBumpTest(StandingTestCase):
         self.assertIn("round 1: 2 threads, 1 awaiting", reason)
         self.assertIn(f"bosun pr-threads '{PR_URL}' --awaiting-author", reason)
         # the standing approval was not used up: once the thread is answered it goes out
-        self.assertNotEqual(self.item(REVIEW_REQUEST)["history"][-1]["event"], ledger.AUTO_APPROVED)
+        self.assertNotEqual(self.item(self.review_request_id)["history"][-1]["event"], ledger.AUTO_APPROVED)
         with self.with_pr(FakeFetch(ANSWERED)):
             self.assertTrue(self.allowed(call))
 
@@ -220,7 +219,7 @@ class ReviewBumpTest(StandingTestCase):
 
     def test_the_message_time_is_its_proposal(self) -> None:
         self.review_request()
-        proposal = self.item(REVIEW_REQUEST)["proposal"]
-        self.assertEqual(guard.proposed_at(self.item(REVIEW_REQUEST)), proposal["proposed_at"])
+        proposal = self.item(self.review_request_id)["proposal"]
+        self.assertEqual(guard.proposed_at(self.item(self.review_request_id)), proposal["proposed_at"])
         self.assertEqual(guard.proposed_at({"created_at": OLD}), OLD)
         self.assertIn(PR_URL, TEXT)

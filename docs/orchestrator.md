@@ -142,12 +142,16 @@ it. The [watchdog](watchdog.md#watchdog) alerts you when it, or any other Claude
 delegates to, record state. It keeps:
 
 - **items** with stable ids: `review:<owner>/<repo>#<n>`, `td:<page-id>`, `mypr:<owner>/<repo>#<n>`,
-  `slack:<channel>/<ts>`, outreach, `out:<parent-id>/<n>` (see below), learning proposals,
-  `learn:<YYYY-MM-DD>/<n>` (see [Learning](learning.md#learning)), tasks, `task:<YYYY-MM-DD>/<n>`, and
+  `slack:<channel>/<ts>`, outreach, `out:<parent-id>/<id>` (see below), learning proposals,
+  `learn:<YYYY-MM-DD>/<id>` (see [Learning](learning.md#learning)), tasks, `task:<YYYY-MM-DD>/<id>`, and
   external tickets, `jira:<KEY>-<n>` or `ghissue:<owner>/<repo>#<n>` (see
   [Tasks and links](#work-we-take-on-tasks-and-links)), and workstreams, `ws:<slug>` (see
   [Workstreams](#workstreams-what-an-item-is-for)). Each kind has a state machine
-  (`bosun ledger kinds`); invalid transitions are rejected.
+  (`bosun ledger kinds`); invalid transitions are rejected. The date in a task, outreach or
+  learning id is the UTC day it was made, and `<id>` is six characters such as `7k2m9q`, hashed
+  from this Mac's replica id and where the ledger's journal is (for learning, from the finding and
+  the run), so two Macs never make the same id and a pruned one never comes back. Copy ids from
+  what the command printed. Ids made before, ending in a number (`task:2026-10-15/1`), stay valid.
 - **links** between items (`spawned_from`, `produces`, `blocked_by`, `duplicate_of`, `folded_into`,
   `tracks`, `part_of`, `relates_to`), stored once and read both ways.
 - **sources**: every processed Slack message (by permalink). A message still in tomorrow's scan
@@ -177,8 +181,24 @@ last review: GitHub re-requesting you, or a new Slack message asking again. Nudg
 chores procedure (the prompt, not code): only for your non-draft PR in `awaiting-review`, never
 once it is `approved`.
 Writes take a file lock and replace `ledger.json` atomically, keeping the previous version as
-`ledger.json.bak`; `ledger.md` is regenerated after each one. Each item keeps its last 200
-history entries.
+`ledger.json.bak`; `ledger.md` is regenerated after each one. Each write first appends what it
+changed to the journal (`journal/ledger/` in the state folder), and `ledger.json` is the rebuild
+of that journal, recording the position it reflects and a digest of what it holds. A write cut
+short between the two is completed by the next write (a command that only reads shows it without
+saving), and one cut short inside the journal is set aside (`*.torn-<time>`, kept) and left out
+([Sync and sharing](design/sync.md#changes-not-files)). So copying `ledger.json.bak`, or any
+older `ledger.json`, back does not undo a write: the journal brings it forward again; undo a write
+with the command that reverses it. A change made to `ledger.json` by hand, or by an older bosun,
+is adopted by the next write: it goes into the journal as a transaction named `adopt`, with a line
+on stderr. What the journal cannot hold, such as removing a history entry (history only grows), is
+undone by that write, which says so and keeps the edited file as `ledger.json.bak` until the
+next write. Writes stop and say so when a journal file has gone missing or lost lines (the journal
+is behind `ledger.json`), or a line at the end of one, which every write reads, is damaged. Damage
+further up, or a gap in a file's numbering, stops only a write that has to rebuild (after a write
+cut short or a hand edit); until then `bosun ledger validate --journal` and `bosun doctor` report
+it. Either way, move `journal/ledger` and `replica.json` aside together, and the next write starts
+a new journal from `ledger.json`. Each item keeps its last 200 history entries; the journal keeps
+all of them.
 
 ## Waiting on someone: outreach
 
@@ -188,7 +208,7 @@ chat, a PR description or a Slack reply:
 
 | Field | |
 |---|---|
-| id | `out:<parent-id>/<n>` for the work item it blocks, or `out:<YYYY-MM-DD>/<n>` when it belongs to none (no item id looks like a date: each starts with its kind's prefix) |
+| id | `out:<parent-id>/<id>` for the work item it blocks, or `out:<YYYY-MM-DD>/<id>` (the UTC day) when it belongs to none (no item id looks like a date: each starts with its kind's prefix); `reach-out` prints it first. Older ids end in a number (`out:<parent-id>/1`) and stay valid |
 | `channel` | `slack`, `email`, `jira`, `github`, `confluence` or `other` (one table in `lib/ledger.py`) |
 | `purpose` | `question`, `decision`, `clarification`, `approval`, `review`, `info-ack` (they confirm they saw it) or `fyi` (one-way: no reply expected, so it is done once sent) |
 | `to`, `subject`, `options`, `details`, `expect_by` | whom, what (one line), the choices, context, and an optional date |
@@ -204,7 +224,7 @@ surfaced to me). `no-reply` gives up after the last nudge; `dropped` is the way 
 (`ledger fold <out-id> --into <other-id>` when its questions go into another message,
 `--note 'duplicate of <other-id>'` when it asks exactly what another asks).
 
-- **Parents show it and stay open.** `ledger list` shows `waiting on out:.../1 (slack to Dana, 2d)`
+- **Parents show it and stay open.** `ledger list` shows `waiting on out:.../7k2m9q (slack to Dana, 2d)`
   on the parent, and the ledger refuses to finish a parent (any terminal state, also through
   `report --state`) while its outreach is open, unless `--force-open-outreach` (the note says why).
   A PR that merged or closed is a fact, not a choice, so those states go through and the note
@@ -280,7 +300,8 @@ with open outreach or blockers as `transition` does (`--force-open-outreach`), a
 target unless `--force-closed-target` (the work already landed with it). If the target is with a
 repo window it prints, and does not run, the `bosun delegate --update` that carries the folded
 item's title and ask there. A drop note "merged into <id>" or "folded into <id>" records
-`folded_into` too. `prune` keeps a folded item while its target is open.
+`folded_into` too. `prune` keeps a folded item while its target is open, and with it what the
+folded item links to: prune never leaves a kept item with a link to a pruned one.
 
 Tell the orchestrator "go ahead and do it" about an outreach reply or a mention and it spawns the
 task with your words as `via`, accepts it and delegates it; a colleague's request ends up as a
@@ -339,6 +360,16 @@ epic (it may name one) and not a product area (it is part of one). Design, resea
   does it per workstream, then the unassigned. The default since is this Monday.
 - `ledger list --ws <ws|unassigned>` filters; `ledger lint` flags evidence that disagrees, a child
   tagged differently from its parent, redundant tags and a growing unassigned count.
+- `ledger validate [--journal] [--json]` checks every rule (a state its kind does not have, a link
+  lineage would refuse, a second `part_of`, a link to an unknown item, with the `ledger unlink` that
+  clears it, since only a prune from before it kept lineage whole leaves one) and exits 1 on any finding;
+  `--journal` also rebuilds the journal and lists its conflicts and each item where the rebuild and
+  `ledger.json` differ ([sync](design/sync.md)), and says when `ledger.json` was changed outside
+  the journal (the next write adopts it). A ledger from before journals is not a failure: it
+  prints "no journal yet; the next write starts it" and exits 0. With `--json` each finding has a
+  `severity`: `error` where writes are refused or a rebuild would lose data (journal damage, a
+  position that does not match, a rebuild that differs), `warning` for the rest, `note`.
+  `bosun doctor` runs it, and fails on an error but only warns on a warning.
 
 ## Your own MCP servers: a site settings file
 

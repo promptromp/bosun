@@ -21,6 +21,7 @@ import lineage
 import workstreams
 import ws_summary
 from lineage import LineageError
+from minted import TASKS, forget, made, run
 from workstreams import WorkstreamError
 
 
@@ -33,19 +34,14 @@ OTHER_PR = "mypr:acme/invoices#4"
 REVIEW = "review:acme/widgets#20"
 MENTION = "slack:C0000000042/1700000001.000001"
 OTHER_MENTION = "slack:C0000000099/1700000002.000002"
-OUT = f"out:{PR}/1"
 EPIC = "jira:WID-100"
 STORY = "jira:WID-101"
 SUBTASK = "jira:WID-102"
 TODAY = date.today().isoformat()
+# Tasks of the week() fixture, written by hand (ids from before they were minted stay valid).
 TASK = f"task:{TODAY}/1"
 TASK2 = f"task:{TODAY}/2"
 SLACK = "https://acme.slack.com/archives/C0000000042/p1700000041000041"
-
-
-def run(*argv: str) -> Any:
-    args = ledger.build_parser().parse_args(list(argv))
-    return args.func(args)
 
 
 def lint_text() -> str:
@@ -58,6 +54,7 @@ class WorkstreamTestCase(unittest.TestCase):
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
         ledger.configure(Path(self.tmp.name) / "state")
+        forget()
         self.config = Path(self.tmp.name) / "config"
         self.config.mkdir()
         ledger.configure_site(self.config)
@@ -150,8 +147,8 @@ class HierarchyTest(WorkstreamTestCase):
         run("link", PR, "part_of", WS)
         run("link", PR2, "part_of", UI)
         run("spawn", PR, "--title", "Fix both", "--ask", "fix it", "--via", "user: do it")
-        run("link", PR2, "spawned_from", TASK)
-        run("link", TASK, "relates_to", PR2)
+        run("link", PR2, "spawned_from", made(TASKS))
+        run("link", made(TASKS), "relates_to", PR2)
         items = self.items()
         resolver = workstreams.Resolver(items)
         combined = resolver.combine([(PR, resolver.resolve(PR)), (PR2, resolver.resolve(PR2))])
@@ -165,63 +162,63 @@ class InheritanceTest(WorkstreamTestCase):
 
     def test_outreach_inherits_from_its_parent(self) -> None:
         run("reach-out", PR, "--to", "Dana", "--subject", "Index refresh rate?")
-        found = self.resolve(OUT)
+        found = self.resolve(made(PR))
         self.assertEqual((found.ws, found.basis, found.via, found.origin), (WS, "inherited", PR, "explicit"))
         self.assertEqual(found.describe(), f"inherited from {PR} (explicit)")
 
     def test_spawned_tasks_and_their_prs_inherit(self) -> None:
         run("spawn", PR, "--title", "Same fix in the preview", "--ask", "port it", "--via", "user: go")
         run("upsert", PR2, "--kind", "my-pr", "--title", "Port the index")
-        run("link", TASK, "produces", PR2)
-        self.assertEqual((self.resolve(TASK).ws, self.resolve(TASK).via), (WS, PR))
+        run("link", made(TASKS), "produces", PR2)
+        self.assertEqual((self.resolve(made(TASKS)).ws, self.resolve(made(TASKS)).via), (WS, PR))
         found = self.resolve(PR2)
-        self.assertEqual((found.ws, found.via, found.origin), (WS, TASK, "explicit"))
+        self.assertEqual((found.ws, found.via, found.origin), (WS, made(TASKS), "explicit"))
 
     def test_a_folded_item_inherits_from_what_carries_it(self) -> None:
         run("spawn", "--title", "Tidy the index fields", "--ask", "tidy", "--via", "user: tidy")
-        self.assertEqual(self.resolve(TASK).basis, workstreams.UNASSIGNED)
-        run("fold", TASK, "--into", PR)
-        self.assertEqual((self.resolve(TASK).ws, self.resolve(TASK).via), (WS, PR))
+        self.assertEqual(self.resolve(made(TASKS)).basis, workstreams.UNASSIGNED)
+        run("fold", made(TASKS), "--into", PR)
+        self.assertEqual((self.resolve(made(TASKS)).ws, self.resolve(made(TASKS)).via), (WS, PR))
 
     def test_lineage_parents_come_before_what_carries_it(self) -> None:
         run("ws", "add", "billing", "--title", "Billing")
         run("upsert", OTHER_PR, "--kind", "my-pr", "--title", "Invoices")
         run("link", OTHER_PR, "part_of", OTHER)
         run("spawn", PR, "--title", "Follow-up", "--ask", "do it", "--via", "user: go")
-        run("link", TASK, "duplicate_of", OTHER_PR)
-        self.assertEqual(self.resolve(TASK).ws, WS)
+        run("link", made(TASKS), "duplicate_of", OTHER_PR)
+        self.assertEqual(self.resolve(made(TASKS)).ws, WS)
 
     def test_parents_in_different_workstreams_leave_it_unassigned_with_candidates(self) -> None:
         run("ws", "add", "billing", "--title", "Billing")
         run("upsert", OTHER_PR, "--kind", "my-pr", "--title", "Invoices")
         run("link", OTHER_PR, "part_of", OTHER)
         run("spawn", PR, "--title", "Shared fix", "--ask", "fix", "--via", "user: go")
-        run("link", TASK, "spawned_from", OTHER_PR)
-        found = self.resolve(TASK)
+        run("link", made(TASKS), "spawned_from", OTHER_PR)
+        found = self.resolve(made(TASKS))
         self.assertEqual((found.ws, found.basis, found.candidates), ("", "conflict", (OTHER, WS)))
         self.assertIn("pick one with part_of", found.describe())
         lint = lint_text()
         self.assertIn(
-            f"propose: ambiguous: {TASK}: evidence points at {OTHER}, {WS}", lint.replace("\n", " ")
+            f"propose: ambiguous: {made(TASKS)}: evidence points at {OTHER}, {WS}", lint.replace("\n", " ")
         )
 
     def test_explicit_beats_inherited_and_lint_flags_the_override(self) -> None:
         run("ws", "add", "billing", "--title", "Billing")
         run("reach-out", PR, "--to", "Dana", "--subject", "Index refresh rate?")
-        run("link", OUT, "part_of", OTHER)
-        self.assertEqual(self.resolve(OUT).ws, OTHER)
-        self.assertIn(f"warn: overrides-parent: {OUT}: is part_of {OTHER} while {PR}", lint_text())
+        run("link", made(PR), "part_of", OTHER)
+        self.assertEqual(self.resolve(made(PR)).ws, OTHER)
+        self.assertIn(f"warn: overrides-parent: {made(PR)}: is part_of {OTHER} while {PR}", lint_text())
 
     def test_a_tag_below_the_same_workstream_is_redundant(self) -> None:
         run("reach-out", PR, "--to", "Dana", "--subject", "Index refresh rate?")
-        output = run("link", OUT, "part_of", WS)
+        output = run("link", made(PR), "part_of", WS)
         self.assertIn("only roots need the tag", output)
-        self.assertIn(f"info: redundant: {OUT}", lint_text())
+        self.assertIn(f"info: redundant: {made(PR)}", lint_text())
 
     def test_a_child_workstream_below_the_parents_is_not_an_override(self) -> None:
         run("ws", "add", "widget-ui", "--title", "Widget UI", "--parent", WS)
         run("reach-out", PR, "--to", "Dana", "--subject", "Index refresh rate?")
-        run("link", OUT, "part_of", UI)
+        run("link", made(PR), "part_of", UI)
         self.assertEqual(lint_text(), "(no findings)")
 
 
@@ -255,9 +252,9 @@ class EpicTest(WorkstreamTestCase):
         run("upsert", OTHER_PR, "--kind", "my-pr", "--title", "Invoices")
         run("link", OTHER_PR, "part_of", OTHER)
         run("spawn", OTHER_PR, "--title", "Widget follow-up", "--ask", "do it", "--via", "user: go")
-        run("link", TASK, "tracks", EPIC)
-        self.assertEqual(self.resolve(TASK).ws, OTHER)
-        self.assertIn(f"warn: rule-vs-inherited: {TASK}: inherits {OTHER}", lint_text())
+        run("link", made(TASKS), "tracks", EPIC)
+        self.assertEqual(self.resolve(made(TASKS)).ws, OTHER)
+        self.assertIn(f"warn: rule-vs-inherited: {made(TASKS)}: inherits {OTHER}", lint_text())
 
     def test_an_epic_named_by_two_workstreams_is_flagged_and_ambiguous(self) -> None:
         run("ws", "add", "billing", "--title", "Billing", "--epic", EPIC)
@@ -284,8 +281,7 @@ class RulesTest(WorkstreamTestCase):
         self.rules({"ws": WS, "channel": "C0000000042", "kind": ["mention", "outreach"]})
         run("upsert", MENTION, "--kind", "mention", "--title", "Can widgets do SVG?")
         run("upsert", OTHER_MENTION, "--kind", "mention", "--title", "Lunch?")
-        run("reach-out", "--to", "Dana", "--subject", "Widget sizes?")
-        out = f"out:{TODAY}/1"
+        out = run("reach-out", "--to", "Dana", "--subject", "Widget sizes?").splitlines()[0]
         run("sent", out, "--ref", SLACK)
         self.assertEqual(self.resolve(MENTION).ws, WS)
         self.assertEqual(self.resolve(OTHER_MENTION).ws, "")
@@ -398,13 +394,13 @@ class AssignTest(WorkstreamTestCase):
         run("upsert", MENTION, "--kind", "mention", "--title", "Lunch?")
         dry = run("assign")
         self.assertIn(f"would assign: {PR} -> {WS} (rule: rule 1", dry)
-        self.assertNotIn(OUT, dry)  # it inherits from the PR
+        self.assertNotIn(made(PR), dry)  # it inherits from the PR
         self.assertIn("(1 change(s), 0 proposal(s); dry run", dry)
         self.assertEqual(lineage.stored_part_of(self.items()[PR]), [])
         applied = run("assign", "--apply")
         self.assertIn("1 link(s) recorded", applied)
         self.assertEqual(lineage.stored_part_of(self.items()[PR]), [WS])
-        self.assertEqual(self.resolve(OUT).describe(), f"inherited from {PR} (explicit)")
+        self.assertEqual(self.resolve(made(PR)).describe(), f"inherited from {PR} (explicit)")
         self.assertIn("(0 change(s)", run("assign", "--apply"))
 
     def test_uncertain_cases_are_proposals(self) -> None:

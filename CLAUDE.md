@@ -46,6 +46,11 @@ of truth, so don't copy rules into this file.
   the one repo-mask implementation. `lib/watchdog.py`: the watchdog's table of checks (`CHECKS`),
   awake window, de-dup state and alert sinks; `libexec/bosun-watchdog` only collects the live
   facts (tmux windows, the Claude in each, the check-in loop, launchd) for it.
+- Sync (design: `docs/design/sync.md`): every ledger write goes through `locked_ledger` into a
+  journal that `ledger.json` is the rebuild of. `lib/change_log.py` (pure: the envelope, ids, the
+  hybrid clock, the order), `lib/journal.py` (a store's journal files, the replica id,
+  transactions, an unfinished transaction set aside) and `lib/ledger_changes.py` (pure: the field table, `diff`,
+  `rebuild`).
 - Setup (design: `docs/design/init.md`): `get.sh` (what `curl | sh` runs: plain POSIX sh, everything in
   functions with `main` last, because people pipe it straight from `main`), `lib/preflight.sh` (what
   bosun needs and what to do about what is missing; plain sh, changes nothing, and `init` and `doctor`
@@ -116,7 +121,8 @@ of truth, so don't copy rules into this file.
   `tests/js_check.sh` checks `app.js` with node if it is installed (a fake DOM in
   `tests/js/app_check.js`, rendering views from `tests/js/api_models.py`; no npm packages).
   Its fixture ledger is `tests/fixtures/console/acme-ledger.json`, rebuilt with the real ledger
-  commands by `make-acme-ledger.sh` there (its build day is pinned, so the ids stay).
+  commands by `make-acme-ledger.sh` there (its build day, its replica and one write per second
+  are pinned, so the ids stay).
 - `orchestrator/policy.md` (appended to the orchestrator's system prompt),
   `orchestrator/plugin/commands/chores.md` (the chores procedure), `orchestrator/settings.json`
   (the orchestrator's own permissions, generic; a site replaces it with
@@ -157,8 +163,12 @@ of truth, so don't copy rules into this file.
 - **A watchdog check:** a row in `CHECKS` (`lib/watchdog.py`), a line in
   `libexec/bosun-watchdog`'s usage (smoke checks they match), and the table in `docs/watchdog.md`.
 - **A ledger kind:** an entry in `KINDS` (`lib/ledger.py`) and the list of item ids in `docs/orchestrator.md`.
+  A change to `KINDS`' transitions trips the rules-digest test (`TestRules` in
+  `tests/unit/test_ledger_changes.py`): bump `RULES_VERSION` (`lib/ledger.py`) and record the new
+  digest under it (the open question on rules versions in `docs/design/sync.md`).
 - **A link relation:** a row in `RELATIONS` (`lib/lineage.py`, with its inverse and the family in
   which cycles are refused), the lineage section of `docs/orchestrator.md` and the relation list in `policy.md`.
+  It trips the same rules-digest test: bump `RULES_VERSION` and record the new digest.
 - **A workstream rule criterion** (beyond repo, title, channel, kind): `RULE_KEYS`, a test in
   `RULE_TESTS` (`lib/workstreams.py`), the rules section of `docs/design/workstreams.md`, and
   `examples/generic/workstreams.json` if it helps. Sites' rules stay in their config dir.
@@ -276,6 +286,7 @@ you changed (the table and how to set them up: `docs/development.md`, "Which san
   Use it for `get.sh`, `install.sh`, launchd, `pmset` and whatever macOS does its own way. A clone costs
   no time or disk, so make one rather than be careful with one. It has already shown what Docker could
   not: a new Mac has no Apple tools, and launchd has no `gui/<uid>` domain until the auto-login is done.
+- `tests/sandbox.sh mac work [--base <ref>]`: in the same VM, a week of acme work (`tests/work_e2e.sh`, its days in `tests/sandbox/acme_week.sh`, what it shares with `install_e2e.sh` in `tests/sandbox/e2e_lib.sh`) on the release, upgraded to this checkout with `get.sh`, then the clock moved, writers racing, writes cut short.
 - `bosun wake-test` on real hardware: the only proof of a real wake, because a macOS guest cannot sleep and
   `tart suspend` does not make launchd catch up. Check a job's time in the VM by moving its clock.
 
@@ -336,6 +347,9 @@ The repo is meant to be shareable, so nothing in it may identify an organization
   break `"${a[@]}"` under `set -u`; an assignment with escaped quotes inside `"$(...)"` (`"$(X="{\"a\":
   1}" f)"`) is misparsed, so assign first. The smoke suite's `bash -c` checks run whichever `bash`
   comes first on PATH: Homebrew's 5.x on many Macs, 3.2 in CI.
+- CI's `lint` runs mypy on Linux, whose type stubs lack macOS-only names (`fcntl.F_FULLFSYNC`): reach
+  one through a module constant (`journal.FULL_FSYNC`, `None` elsewhere), and check with `uv run mypy
+  --platform linux`.
 - Never type long commands into a pane with `send-keys`: the terminal's line limit (1024 bytes on
   macOS) drops the rest and the Enter. Run commands as the pane's own command (`new-window` /
   `respawn-pane -- argv`, see `build_launch_command`); tmux refuses commands over about 16 KB, so

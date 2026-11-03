@@ -14,7 +14,7 @@
 # gaps, setup and outreach ideas, memory candidates.
 #
 # Nothing is applied on its own: each new proposal (at most BOSUN_LEARN_MAX_PROPOSALS) becomes a
-# learn:<YYYY-MM-DD>/<n> ledger item holding the exact change, which the orchestrator lists under
+# learn:<YYYY-MM-DD>/<id> ledger item holding the exact change, which the orchestrator lists under
 # "Needs your approval". The report is in $BOSUN_STATE_DIR/learn/runs/<time>/report.md.
 #   (no command)    a run: the window starts where the last run ended, at most BOSUN_LEARN_HOURS back
 #   --since/--until the window instead (48h, 3d, 90m back, or an ISO time)
@@ -25,7 +25,8 @@
 #                   BOSUN_LEARN_AT has not happened yet
 #   --status        schedule, last runs, remembered findings, proposals waiting for you (`status`
 #                   and `list` are the same)
-#   apply <id>      make an approved change: a memory note for a window's folder, or a rule appended to
+#   apply <id>      make the approved change its proposal shows: a memory note for a window's folder
+#                   (as `bosun sessions` shows it now), or a rule appended to
 #                   $BOSUN_CONFIG_DIR/policy.md or $BOSUN_CONFIG_DIR/tasks/_common.md
 #   done <id>       you made the change yourself (repo, sessions.yml, outreach)
 #   reject <id>     declined; the finding is never proposed again
@@ -62,8 +63,8 @@ for name in BOSUN_STATE_DIR BOSUN_LOG_DIR BOSUN_CONFIG_DIR BOSUN_ORCHESTRATOR \
   settings+=("$name=${!name}")
 done
 
-# A run reads the windows from `bosun sessions --json`.
-if [ "$1" = "run" ]; then
+# A run reads the windows from `bosun sessions --json`, and so does apply (a memory note's folder).
+if [ "$1" = "run" ] || [ "$1" = "apply" ]; then
   sessions_file="$(mktemp "${TMPDIR:-/tmp}/bosun-learn-sessions.XXXXXX")" || die "cannot create a temp file"
   trap 'rm -f "$sessions_file"' EXIT
   "$BOSUN" sessions --json >"$sessions_file" || die "bosun sessions --json failed"

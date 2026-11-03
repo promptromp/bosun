@@ -7,10 +7,11 @@ from __future__ import annotations
 
 import itertools
 import json
+import re
 import sys
 import tempfile
 import unittest
-from datetime import UTC, date, datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 from unittest import mock
@@ -28,8 +29,6 @@ MENTION = "slack:C0000000003/1700000065.000065"
 OTHER = "slack:C0000000001/1700000032.000032"
 WINDOW = "exporter"
 THREAD = "https://acme.slack.com/archives/C0000000003/p1700000066000066?thread_ts=1700000065.000065&cid=C0000000003"
-TASK = f"task:{date.today().isoformat()}/1"
-TASK2 = f"task:{date.today().isoformat()}/2"
 
 
 def run(*argv: str) -> Any:
@@ -224,30 +223,45 @@ class WorkingTest(ActivityTestCase):
 
 class SpawnDuplicateTest(ActivityTestCase):
     def test_a_task_from_the_same_source_or_thread_warns_naming_it(self) -> None:
-        run("spawn", MENTION, "--title", "Round currencies per customer", "--ask", "add rounding rules")
+        task = run("spawn", MENTION, "--title", "Round currencies per customer", "--ask", "add rules")
+        task = task.splitlines()[0]
         same_source = run(
             "spawn", MENTION, "--title", "Export credit notes as CSV", "--ask", "add credit notes"
         )
         self.assertIn(
-            f"warning: a task already comes from the same source or thread: {TASK} (proposed", same_source
+            f"warning: a task already comes from the same source or thread: {task} (proposed", same_source
         )
         run("upsert", OTHER, "--kind", "mention", "--title", "Priya: unrelated")
         same_thread = run(
             "spawn", OTHER, "--title", "Rotate the export key", "--ask", "rotate it", "--via", THREAD
         )
-        self.assertIn(TASK, same_thread)  # its via is in the thread the mention started
-        self.assertIn(TASK2, same_thread)
+        self.assertIn(task, same_thread)  # its via is in the thread the mention started
+        self.assertIn(same_source.splitlines()[0], same_thread)
+
+    def test_the_tasks_a_warning_names_come_oldest_first(self) -> None:
+        made = [
+            run("spawn", "--title", title, "--ask", "x", "--via", THREAD).splitlines()[0]
+            for title in ("Rotate the export key", "Rotate the import key")
+        ]
+        older, newer = sorted(made, reverse=True)  # the larger id is the older one
+        with ledger.locked_ledger(write=True) as data:
+            data["items"][older]["created_at"] = "2026-10-20T09:00:00+00:00"
+            data["items"][newer]["created_at"] = "2026-10-20T10:00:00+00:00"
+        output = run("spawn", "--title", "Something else", "--ask", "y", "--via", THREAD)
+        self.assertRegex(output, rf"same source or thread: {re.escape(older)} \(.*; {re.escape(newer)} \(")
 
     def test_a_recently_closed_one_counts_and_an_old_one_does_not(self) -> None:
-        run("spawn", "--title", "Rotate the export key", "--ask", "rotate it", "--via", THREAD)
-        run("transition", TASK, "dropped", "--note", "not needed")
-        self.assertIn("warning", run("spawn", "--title", "Something else", "--ask", "x", "--via", THREAD))
+        task = run("spawn", "--title", "Rotate the export key", "--ask", "rotate it", "--via", THREAD)
+        task = task.splitlines()[0]
+        run("transition", task, "dropped", "--note", "not needed")
+        second = run("spawn", "--title", "Something else", "--ask", "x", "--via", THREAD)
+        self.assertIn("warning", second)
         data = self.data()
-        data["items"][TASK]["updated_at"] = "2000-01-01T00:00:00+00:00"
+        data["items"][task]["updated_at"] = "2000-01-01T00:00:00+00:00"
         ledger.STORE.ledger_file.write_text(json.dumps(data))
         output = run("spawn", "--title", "A third thing", "--ask", "y", "--via", THREAD)
-        self.assertIn(TASK2, output)
-        self.assertNotIn(f"{TASK} (", output)
+        self.assertIn(second.splitlines()[0], output.split("warning", 1)[1])
+        self.assertNotIn(f"{task} (", output)
 
     def test_unrelated_sources_and_free_text_do_not_warn(self) -> None:
         run("spawn", "--title", "Rotate the export key", "--ask", "rotate it", "--via", "user: do it")

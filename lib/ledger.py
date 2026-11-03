@@ -78,12 +78,14 @@ Usage: bosun ledger <command> [args]
                                                remember that a source (e.g. a Slack permalink)
                                                was processed, so it is never classified twice
   kinds                                        print the state machines
-  prune [--days N]                             drop finished items and sources older than N days
+  prune [--days N]                             drop finished items and sources older than N days,
+                                               but not what open work links to, nor anything a
+                                               kept item links to: no kept link points nowhere
   diff <before.json>                           items added or changed since a copy of the ledger
   render                                       rewrite ledger.md
 
 Outreach: what we sent (or will send) to someone outside this machine and wait on (kind outreach;
-ids out:<parent-id>/<n>, or out:<YYYY-MM-DD>/<n> when it belongs to no item):
+ids out:<parent-id>/<id>, or out:<YYYY-MM-DD>/<id> (UTC) when it belongs to no item):
 
   reach-out [<parent-id>] --to WHO --subject TEXT [--channel C] [--purpose P] [--option O ...]
             [--details D | --details -] [--expect-by YYYY-MM-DD]
@@ -125,7 +127,9 @@ ids out:<parent-id>/<n>, or out:<YYYY-MM-DD>/<n> when it belongs to no item):
   <other-id>' (records duplicate_of).
 
 Tasks and links: work we decided to do that has no artifact of its own (kind task; ids
-task:<YYYY-MM-DD>/<n>), and typed links between items (stored once, the inverse computed):
+task:<YYYY-MM-DD>/<id>, the day in UTC), and typed links between items (stored once, the inverse
+computed). A task or outreach <id> is six base32 characters minted from this Mac's replica and the
+journal position, so two Macs never make the same one (older ids end in a number, and stay):
 
   spawn [<from-id>] --title T --ask A [--via V] [--requester R] [--repo R] [--area A]
         [--done-when D] [--blocks]
@@ -209,12 +213,18 @@ stand-up summaries and stats (docs/design/workstreams.md):
                                                child tagged differently from its parent, a
                                                growing unassigned count (--strict: exit 1)
   list --ws <ws|unassigned>                    only the items in that workstream (or under it)
+  validate [--journal] [--json]                check every rule: states, links, one part_of; with
+                                               --journal also the journal's rebuild against
+                                               ledger.json (conflicts, items that differ, a
+                                               position that does not match). Exit 1 on findings
   Resolution order: part_of > inherited (spawned_from, produced_by, outreach parent, then folded
   into) > a tracked ticket whose epic a workstream names > rules in
   $BOSUN_CONFIG_DIR/workstreams.json and a workstream's channel > unassigned. `show` says
   which (derived.workstream).
 
-State lives in $BOSUN_STATE_DIR/ledger.json; ledger.md is a readable view of it.
+State lives in $BOSUN_STATE_DIR/ledger.json; ledger.md is a readable view of it. Every write
+appends its changes to the journal in $BOSUN_STATE_DIR/journal/ledger/ first, and ledger.json is
+the rebuild of that journal (docs/design/sync.md).
 review: and mypr: items are only created for repositories matching BOSUN_REPO_MASK.
 """
 
@@ -222,6 +232,7 @@ from __future__ import annotations
 
 import argparse
 import contextlib
+import copy
 import fcntl
 import json
 import os
@@ -243,12 +254,16 @@ import claude_state
 import compact_context
 import event_model
 import events
+import ledger_changes
 import lineage
 import redact
 import repo_mask
 import tickets
 import workstreams
 import ws_summary
+from change_log import ChangeLogError, Edit, encodable, unencodable
+from journal import REPLICA_FILE, Journal, JournalError, Transaction, flush_to_disk, replica_id
+from ledger_changes import MAX_HISTORY as MAX_HISTORY, trim_history as trim_history  # noqa: PLC0414 re-exported
 from lineage import Index, LineageError, Link
 from tickets import TicketError
 from workstreams import WorkstreamError
@@ -261,8 +276,6 @@ CHECKIN_OVERLAP = timedelta(minutes=15)
 DEFAULT_LOOKBACK_HOURS = 24.0
 DEFAULT_MAX_LOOKBACK_HOURS = 96.0
 SCAN_RUNS = ("check-in", "morning")
-# History per item: the first entry, a trim marker and the newest entries beyond this.
-MAX_HISTORY = 200
 # Report fields are one line each; detail belongs in the PR, the review or a report file.
 MAX_SUMMARY_LENGTH = 500
 MAX_RESULT_LENGTH = 300
@@ -317,6 +330,18 @@ TIME_FROM_SLACK = "slack ref"
 Item = dict[str, Any]
 Ledger = dict[str, Any]
 
+# The journal every write goes through (lib/journal.py, docs/design/sync.md): the ledger's stream;
+# the version of the rules its changes are checked against when rebuilt (RULES: KINDS' transitions
+# and lineage's link rules), bumped by hand when a change to them would rebuild old changes
+# differently (a test pins their digest to it); the commands of the transactions that put a ledger
+# from before journals in it, and a change made to ledger.json outside the journal; and the key,
+# in ledger.json's journal key, of the digest of what the file holds.
+LEDGER_STREAM = "ledger"
+RULES_VERSION = 1
+GENESIS = "genesis"
+ADOPT = "adopt"
+DIGEST = "digest"
+
 
 @dataclass(frozen=True)
 class ScanWindow:
@@ -348,6 +373,9 @@ class Store:
     owned_projects: frozenset[str] = frozenset()
     # BOSUN_ORCHESTRATOR_DIR: whose transcripts resolve-carried-out reads; unset: none.
     orchestrator_dir: str = ""
+    # What the journal records as the command of each write ("ledger transition", "guard"): set
+    # with configure_command by each command that configures the ledger; unset, unnamed.
+    command: str = ""
 
     @property
     def rules_file(self) -> Path | None:
@@ -356,6 +384,11 @@ class Store:
     @property
     def ledger_file(self) -> Path:
         return self.state_dir / "ledger.json"
+
+    @property
+    def journal_dir(self) -> Path:
+        """The journal every write goes through (lib/journal.py); ledger.json is its rebuild."""
+        return self.state_dir / "journal" / LEDGER_STREAM
 
     @property
     def view(self) -> Path:
@@ -386,10 +419,11 @@ def configure(
     caller_window: str = "",
 ) -> None:
     """Point the ledger at <state_dir> and set the repo mask, ticket and event settings, and the
-    default scan window and no site config dir (used by main and by tests)."""
+    default scan window, no site config dir and unnamed writes (used by main and by tests)."""
     STORE.config_dir = None
     STORE.owned_projects = frozenset()
     STORE.orchestrator_dir = ""
+    STORE.command = ""
     STORE.state_dir = Path(state_dir)
     STORE.mask = mask
     STORE.status_map = status_map
@@ -414,6 +448,11 @@ def configure_tickets(owned_projects: str, orchestrator_dir: str = "") -> None:
 def configure_scan(lookback_hours: float, max_lookback_hours: float) -> None:
     """Set the Slack scan window (BOSUN_SLACK_LOOKBACK_HOURS, ..._MAX_LOOKBACK_HOURS)."""
     STORE.scan = ScanWindow(lookback_hours, max_lookback_hours)
+
+
+def configure_command(command: str) -> None:
+    """Name this process's writes in the journal ("ledger transition", "guard", "hook")."""
+    STORE.command = command
 
 
 def emit(kind: str, item: str = "", window: str = "", summary: str = "", detail: str = "") -> None:
@@ -527,7 +566,7 @@ KINDS: dict[str, dict[str, Any]] = {
             "each message with `ledger sent`, the reply with `ledger replied`. A one-way message "
             "(purpose fyi) waits on nobody: `ledger sent` moves it on to applied."
         ),
-        "id_format": "out:<parent-id>/<n>, or out:<YYYY-MM-DD>/<n> for outreach that belongs to no item",
+        "id_format": "out:<parent-id>/<id>, or out:<YYYY-MM-DD>/<id> for outreach that belongs to no item",
         "source_class": "outreach",
         "initial": "draft",
         "terminal": {"applied", "no-reply", "dropped"},
@@ -556,7 +595,7 @@ KINDS: dict[str, dict[str, Any]] = {
             "a rule, a setup change, outreach), with its evidence; created with the change as its "
             "pending proposal. Close it only with `bosun learn apply|done|reject <id>`."
         ),
-        "id_format": "learn:<YYYY-MM-DD>/<n>",
+        "id_format": "learn:<YYYY-MM-DD>/<id>",
         "source_class": "learning",
         "initial": "proposed",
         "terminal": {"applied", "rejected", "dismissed"},
@@ -573,7 +612,7 @@ KINDS: dict[str, dict[str, Any]] = {
             "linked with `ledger link <task> produces <mypr>`. Done when what it produced landed, or "
             "its report answered the ask."
         ),
-        "id_format": "task:<YYYY-MM-DD>/<n>",
+        "id_format": "task:<YYYY-MM-DD>/<id>",
         "source_class": "task",
         "initial": "proposed",
         "terminal": {"done", "declined", "dropped"},
@@ -641,7 +680,10 @@ WORKSTREAM_KIND = "workstream"
 LEARNING_KIND = "learning"
 TASK_KIND = "task"
 TICKET_KIND = "ticket"
-TASK_ID = re.compile(r"^task:\d{4}-\d{2}-\d{2}/[1-9]\d*$")
+# The end of a task or outreach id: a number (made before ids were minted) or six Crockford base32
+# characters (change_log.mint_suffix).
+ID_SUFFIX = r"([1-9]\d*|[0-9a-hjkmnp-tv-z]{6})"
+TASK_ID = re.compile(rf"^task:\d{{4}}-\d{{2}}-\d{{2}}/{ID_SUFFIX}$")
 # A report result that is a GitHub PR: the PR a task (or other work) produced.
 PR_URL = re.compile(r"https://github\.com/(?P<repo>[^/\s]+/[^/\s]+)/pull/(?P<number>\d+)(?:[/?#\s]|$)")
 # A drop note that names what took the item over, recorded as a link too: its work went on as part
@@ -656,9 +698,9 @@ NOTE_RELATIONS = {
 DELEGATE_PROPOSAL = "bosun delegate"
 # Kinds whose report results name their own PR or review, not new work.
 OWN_PR_KINDS = ("my-pr", "review-request")
-# out:<scope>/<n>: the scope is the parent's id, or the day it was created for outreach without one
-# (no item id looks like a date: every one starts with its kind's prefix and a colon).
-OUTREACH_ID = re.compile(r"^out:(?P<scope>.+)/(?P<number>[1-9]\d*)$")
+# out:<scope>/<id>: the scope is the parent's id, or the UTC day it was created for outreach without
+# one (no item id looks like a date: every one starts with its kind's prefix and a colon).
+OUTREACH_ID = re.compile(rf"^out:(?P<scope>.+)/(?P<suffix>{ID_SUFFIX})$")
 PROPOSAL_OUTCOMES = ("done", "rejected", "withdrawn")
 SOURCE_CLASSES = (*(spec["source_class"] for spec in KINDS.values()), FYI_CLASS)
 
@@ -731,14 +773,349 @@ def parse_fields(pairs: list[str] | None) -> dict[str, str]:
 
 
 @contextlib.contextmanager
-def locked_ledger(write: bool) -> Iterator[Ledger]:
+def store_lock(mode: int) -> Iterator[None]:
+    """The ledger's lock file, held in <mode> (fcntl.LOCK_SH or fcntl.LOCK_EX)."""
     STORE.state_dir.mkdir(parents=True, exist_ok=True)
     with STORE.lock.open("w") as lock:
-        fcntl.flock(lock, fcntl.LOCK_EX if write else fcntl.LOCK_SH)
-        ledger = load()
-        yield ledger
+        fcntl.flock(lock, mode)
+        yield
+
+
+@contextlib.contextmanager
+def locked_ledger(write: bool) -> Iterator[Ledger]:
+    """The ledger, under its lock. A reader (shared lock) gets ledger.json, or the journal's
+    rebuild where the file is behind it, and writes nothing (see for_reading). A writer (exclusive
+    lock) gets the same, made whole first (see write_start); what it changes becomes one
+    transaction, appended to the journal before ledger.json and ledger.md are saved once (even
+    when nothing changed, which `ledger render` relies on). A writer that raises saves nothing."""
+    with store_lock(fcntl.LOCK_EX if write else fcntl.LOCK_SH):
         if write:
-            save(ledger)
+            yield from for_writing()
+        else:
+            yield for_reading()
+
+
+# The transaction of the write in progress, while there is one (ids are minted from it).
+_WRITING: list[Transaction] = []
+
+
+def replica() -> str:
+    """This Mac's replica id, as the ledger's journal uses it: made under the ledger's lock when
+    there is none yet, so a first write running at the same time cannot make another. Never call
+    it under locked_ledger: it takes the lock on a descriptor of its own, and flock is per open
+    file, so it would wait for itself."""
+    with store_lock(fcntl.LOCK_EX), journal_errors():
+        return replica_id(STORE.state_dir)
+
+
+def current_transaction() -> Transaction:
+    """The journal transaction of the write in progress: only inside locked_ledger(write=True)."""
+    if not _WRITING:
+        raise LedgerError("no ledger write in progress: this needs locked_ledger(write=True)")
+    return _WRITING[-1]
+
+
+def open_journal(replica: str = "") -> Journal:
+    """The ledger's journal; a reader needs no replica (it never begins a transaction)."""
+    return Journal(STORE.journal_dir, LEDGER_STREAM, replica, RULES_VERSION)
+
+
+def start_again() -> str:
+    """How to go on when the journal cannot be used: ledger.json is whole, so a new journal can
+    start from it. Under a new replica, so that no id is minted twice from the same seq."""
+    replica_file = STORE.state_dir / REPLICA_FILE
+    return (
+        f"move the folder {STORE.journal_dir} and the file {replica_file} aside together (keep "
+        "them): the next write starts a new journal from ledger.json, as a new replica"
+    )
+
+
+@contextlib.contextmanager
+def journal_errors() -> Iterator[None]:
+    """A journal that cannot be read, or a change it refuses, as a LedgerError: nothing written."""
+    try:
+        yield
+    except JournalError as exc:
+        raise LedgerError(
+            f"the ledger's journal in {STORE.journal_dir} is damaged: {exc}. Nothing was written. "
+            f"To go on from ledger.json as it is, {start_again()}"
+        ) from exc
+    except ChangeLogError as exc:
+        raise LedgerError(f"nothing was written: {exc}") from exc
+
+
+def has_records(ledger: Ledger) -> bool:
+    return any(ledger.get(key) for key in ("items", "sources", "runs", ledger_changes.SAID))
+
+
+def saved_position(ledger: Ledger) -> dict[str, int]:
+    """The journal position ledger.json says it reflects; {} for one written before journals."""
+    value = ledger.get(ledger_changes.JOURNAL)
+    if not isinstance(value, dict):
+        return {}
+    return {str(stem): seq for stem, seq in value.items() if isinstance(seq, int)}
+
+
+def missing(journal_has: Mapping[str, int], file_has: Mapping[str, int]) -> list[str]:
+    """Each journal file that is behind the position ledger.json reflects (it lost changes the file
+    has): a rebuild from it would lose them too."""
+    return [
+        f"{stem}.jsonl ends at seq {journal_has.get(stem, 0)}, ledger.json reflects seq {seq}"
+        for stem, seq in sorted(file_has.items())
+        if journal_has.get(stem, 0) < seq
+    ]
+
+
+def refuse_if_behind(journal_has: Mapping[str, int], ledger: Ledger) -> None:
+    gaps = missing(journal_has, saved_position(ledger))
+    if gaps:
+        raise LedgerError(
+            f"the ledger's journal in {STORE.journal_dir} is behind ledger.json ({'; '.join(gaps)}), "
+            f"so it cannot rebuild it. Nothing was written. If journal files were lost, {start_again()}"
+        )
+
+
+def rebuilt(journal: Journal, position: dict[str, int], *, writing: bool = False) -> Ledger:
+    """The journal's rebuild at <position>, its keys in order as a saved ledger.json loads them
+    (commands and `render` list items in that order). A write that rebuilds, and so saves the
+    rebuild, says on stderr how many changes it kept but could not apply (with one Mac, each is a
+    bug or damage)."""
+    result = ledger_changes.rebuild(journal.changes(), RULES)
+    if writing and result.conflicts:
+        print(
+            f"ledger: the journal's rebuild has {len(result.conflicts)} conflict(s), changes it keeps but "
+            "cannot apply; bosun ledger validate --journal lists them",
+            file=sys.stderr,
+        )
+    found = result.ledger
+    found[ledger_changes.JOURNAL] = position
+    ordered: Ledger = json.loads(json.dumps(found, sort_keys=True))
+    return ordered
+
+
+def warn_reader(problem: str) -> None:
+    print(f"ledger: {problem}; reading ledger.json as it is", file=sys.stderr)
+
+
+def read_caught_up(ledger: Ledger, journal: Journal) -> Ledger:
+    """ledger.json, or the journal's rebuild where the file is behind it (a write cut short between
+    the two). A journal behind the file is never rebuilt from."""
+    position = journal.position()
+    saved = saved_position(ledger)
+    if not position or saved == position:
+        return ledger
+    gaps = missing(position, saved)
+    if gaps:
+        warn_reader(f"its journal in {STORE.journal_dir} is behind it ({'; '.join(gaps)})")
+        return ledger
+    return rebuilt(journal, position)
+
+
+def for_reading() -> Ledger:
+    """A reader's ledger, never written. An unfinished transaction at the end of the journal is
+    left out silently (it was never committed); a journal that cannot be read, or that is behind
+    the file, gets one warning on stderr and ledger.json as it is, always a whole version, so that
+    readers (the guard among them) keep working; the next write repairs it or says why not."""
+    ledger = load()
+    try:
+        return read_caught_up(ledger, open_journal())
+    except JournalError as exc:
+        warn_reader(f"its journal in {STORE.journal_dir} is damaged: {exc}")
+        return ledger
+
+
+def refuse_unencodable(edits: Iterable[Edit]) -> None:
+    """The write boundary: a change that holds what the journal cannot (a float, text that is not
+    valid Unicode) is refused before anything is journaled, naming the item and the field."""
+    found = next(ledger_changes.unencodable_edits(edits), None)
+    if found:
+        place, what = found
+        raise LedgerError(
+            f"nothing was written: {place} holds {what}, which the journal cannot hold "
+            "(it keeps whole numbers and text in UTF-8)"
+        )
+
+
+def commit_edits(transaction: Transaction, edits: Iterable[Edit]) -> None:
+    """<edits> as one transaction, refused whole if one holds what the journal cannot."""
+    edits = list(edits)
+    refuse_unencodable(edits)
+    for edit in edits:
+        transaction.add(edit.op, edit.target, edit.body, local=edit.local)
+    transaction.commit()
+
+
+def links_ready(item_id: str, item: Item, source: str) -> None:
+    """<item>'s stored links, each one that is not a link (an object with a string rel and id,
+    written by hand) left out with a note on stderr: the diff and the rebuild read only links."""
+    entries = link_entries(item)
+    dropped = [entry for entry in entries if not is_stored_link(entry)]
+    if not dropped:
+        return
+    for entry in dropped:
+        print(
+            f"ledger: {item_id} links: {entry!r} in {source} is not a link (it needs a rel and an id), "
+            "which the journal cannot hold; left out",
+            file=sys.stderr,
+        )
+    item["links"] = [entry for entry in entries if is_stored_link(entry)]
+
+
+def metadata_ready(ledger: Ledger) -> None:
+    """<ledger>'s own keys beside what the journal holds (`version`, a key from elsewhere): one
+    that canonical bytes cannot hold takes the value the rebuild gives (EMPTY's), or goes if the
+    rebuild has none, silently: it is the file's, not a record (R70)."""
+    for key in [key for key in ledger if key not in COMPARED and key != ledger_changes.JOURNAL]:
+        if next(unencodable(ledger[key]), None) is None:
+            continue
+        if key in ledger_changes.EMPTY:
+            ledger[key] = copy.deepcopy(ledger_changes.EMPTY[key])
+        else:
+            del ledger[key]
+
+
+def journal_ready(ledger: Ledger, source: str) -> Ledger:
+    """<ledger>, written outside the journal (genesis, adopt), as the journal can hold it: in what
+    the journal holds (items, sources, runs, said), what the old ledger took and the journal cannot
+    is converted once, a float to its text and a lone surrogate to U+FFFD, and a stored link that
+    is not one left out, each with a note on stderr; the file's own keys silently
+    (metadata_ready). <ledger> may be changed. A write's own changes are refused instead
+    (refuse_unencodable). Converted, a tool call's argument no longer matches its approval: that
+    fails closed."""
+    metadata_ready(ledger)
+    found = list(unencodable({key: ledger[key] for key in COMPARED if key in ledger}))
+    for place, what, made in found:
+        print(
+            f"ledger: {ledger_changes.ledger_place(place)}: {what} in {source}, which the journal "
+            f"cannot hold; taken in as {made!r}",
+            file=sys.stderr,
+        )
+    converted: Ledger = encodable(ledger) if found else ledger
+    for item_id, item in sorted(converted["items"].items()):
+        if isinstance(item, dict):
+            links_ready(item_id, item, source)
+    return converted
+
+
+def stamp(ledger: Ledger, position: Mapping[str, int]) -> None:
+    """Record in ledger.json the journal position it reflects and the digest of what it holds, so
+    that a change made to the file outside the journal shows (edited_outside)."""
+    ledger[ledger_changes.JOURNAL] = {**position, DIGEST: ledger_changes.state_hash(ledger)}
+
+
+def edited_outside(ledger: Ledger) -> bool:
+    """Whether ledger.json was changed since a write saved it (by hand, or by a bosun that does not
+    journal and writes the journal key back as it found it): what it holds no longer has the
+    digest that write recorded, or holds what the journal cannot. A file saved before digests is
+    trusted, and gets one when it is saved next."""
+    value = ledger.get(ledger_changes.JOURNAL)
+    recorded = value.get(DIGEST) if isinstance(value, dict) else None
+    try:
+        held = ledger_changes.state_hash(ledger)
+    except ChangeLogError:
+        return True
+    return isinstance(recorded, str) and held != recorded
+
+
+def adopted_base(journal: Journal, file: Ledger) -> Ledger:
+    """What ledger.json held when a write last saved it, as the journal has it: the rebuild at the
+    file's position, with what was adopted from the file since (by a write cut short after it)."""
+    adopted = [change for change in journal.changes() if change.get("cmd") == ADOPT]
+    return ledger_changes.rebuild([*journal.changes(saved_position(file)), *adopted], RULES).ledger
+
+
+def adopt(journal: Journal, file: Ledger) -> None:
+    """Put in the journal what was changed in ledger.json outside it, as one transaction ("adopt"):
+    the diff from what the file held when it was saved to what it holds now (<file>, as the journal
+    can hold it). Nothing when there is nothing to adopt (a write cut short may have adopted it
+    already, or the diff cannot express it: history only grows)."""
+    edits = ledger_changes.diff(adopted_base(journal, file), file)
+    if not edits:
+        return
+    commit_edits(journal.begin(ADOPT), edits)
+    print(
+        f"ledger: {STORE.ledger_file} was changed outside its journal (by hand, or by a bosun that "
+        f"does not journal); adopted {len(edits)} change(s) into the journal (transaction 'adopt')",
+        file=sys.stderr,
+    )
+
+
+def taken_in(journal: Journal, edited: Ledger) -> Ledger:
+    """A ledger.json changed outside the journal, taken in: what the diff can express is adopted,
+    and the write goes on from the journal's rebuild, so that ledger.json stays its rebuild. What
+    the journal could not hold (an entry removed or edited in place: history only grows) is what
+    the adopted base still lacks of the file, counted by validate's own comparison in one line on
+    stderr (not the journal's changes the file never had: a write cut short); this write's save
+    keeps the file as edited in ledger.json.bak, until the next write replaces it."""
+    file = journal_ready(edited, "ledger.json")
+    adopt(journal, file)
+    left_out = compare_findings(adopted_base(journal, file), file)
+    if left_out:
+        print(
+            f"ledger: {len(left_out)} part(s) of {STORE.ledger_file} as edited outside its journal "
+            "could not go into the journal and are as the journal has them (history only grows: an "
+            f"entry removed or edited in place comes back); {STORE.backup} keeps the file as it was "
+            "edited until the next write",
+            file=sys.stderr,
+        )
+    return rebuilt(journal, journal.position(), writing=True)
+
+
+def genesis(journal: Journal, ledger: Ledger) -> Ledger:
+    """Put a ledger from before journals in the journal whole: the diff from the empty ledger
+    (items by id, local leaves split off as for any new item); then save ledger.json as it is at
+    its new position, and return it. That save writes the file's own content (what the journal
+    cannot hold converted), and makes a position it brought from elsewhere (a copy) end here, even
+    if the command then fails."""
+    ledger = journal_ready(ledger, "ledger.json")
+    commit_edits(journal.begin(GENESIS), ledger_changes.diff(ledger_changes.EMPTY, ledger))
+    stamp(ledger, journal.position())
+    save(ledger)
+    return ledger
+
+
+def write_start(journal: Journal) -> Ledger:
+    """The ledger a write starts from, in memory: the command's one save writes it, so the backup
+    is always the ledger as it was before the write. Refused when the journal lost changes
+    ledger.json reflects (a file deleted, a partial restore); then an unfinished transaction is
+    set aside (repair_tail); a ledger from before journals is put in it (genesis); a change made to
+    ledger.json outside the journal is taken in (adopted where it can be, and the journal's rebuild
+    goes on); and where ledger.json is behind the journal (a write cut short between the two), the
+    journal's rebuild replaces it."""
+    ledger = load()
+    written = journal.written()
+    if written:
+        refuse_if_behind(written, ledger)
+    journal.repair_tail()
+    position = journal.position()
+    if not position:
+        return genesis(journal, ledger) if has_records(ledger) else ledger
+    refuse_if_behind(position, ledger)
+    if edited_outside(ledger):
+        return taken_in(journal, ledger)
+    if saved_position(ledger) == position:
+        return ledger
+    return rebuilt(journal, position, writing=True)
+
+
+def for_writing() -> Iterator[Ledger]:
+    """A write: the ledger it starts from, then what the command changed (diffed against a copy)
+    committed as one transaction under the command's name, then ledger.json at the new position,
+    with the digest of what it holds."""
+    with journal_errors():
+        journal = open_journal(replica_id(STORE.state_dir))
+        ledger = write_start(journal)
+        transaction = journal.begin(STORE.command)
+    before = json.loads(json.dumps(ledger))  # a copy to diff against (plain JSON: faster than deepcopy)
+    _WRITING.append(transaction)
+    try:
+        yield ledger
+    finally:
+        _WRITING.remove(transaction)
+    with journal_errors():
+        commit_edits(transaction, ledger_changes.diff(before, ledger))
+        stamp(ledger, journal.position())
+    save(ledger)
 
 
 def read_ledger_file() -> Any:
@@ -769,17 +1146,20 @@ def load() -> Ledger:
     ledger.setdefault("items", {})
     ledger.setdefault("sources", {})
     ledger.setdefault("runs", {})
+    ledger.setdefault(ledger_changes.SAID, [])  # as the journal's rebuild always has it
     return ledger
 
 
-def write_atomically(path: Path, text: str, backup: Path | None = None) -> None:
-    """Write <text> to a temporary file, flush it to disk, keep the current file as <backup> (a
-    hard link, so there is never a moment without <path>), then rename it into place."""
+def write_atomically(
+    path: Path, text: str, backup: Path | None = None, sync: Callable[[int], None] = os.fsync
+) -> None:
+    """Write <text> to a temporary file, flush it to disk (<sync>), keep the current file as
+    <backup> (a hard link, so there is never a moment without <path>), then rename it into place."""
     tmp = path.with_name(path.name + ".tmp")
     with tmp.open("w") as handle:
         handle.write(text)
         handle.flush()
-        os.fsync(handle.fileno())
+        sync(handle.fileno())
     if backup and path.exists():
         backup.unlink(missing_ok=True)
         os.link(path, backup)
@@ -787,7 +1167,9 @@ def write_atomically(path: Path, text: str, backup: Path | None = None) -> None:
 
 
 def save(ledger: Ledger) -> None:
-    write_atomically(STORE.ledger_file, json.dumps(ledger, indent=2, sort_keys=True), STORE.backup)
+    """ledger.json, flushed to the disk itself before its rename (flush_to_disk), and its view."""
+    text = json.dumps(ledger, indent=2, sort_keys=True)
+    write_atomically(STORE.ledger_file, text, STORE.backup, flush_to_disk)
     write_atomically(STORE.view, render(ledger))
 
 
@@ -821,18 +1203,6 @@ def record(item: Item, event: str, note: str = "", **extra: object) -> None:
     item["updated_at"] = entry["at"]
 
 
-def trim_history(item: Item) -> None:
-    """Keep at most MAX_HISTORY entries: the first ("created"), a marker counting what was
-    dropped, and the newest ones."""
-    history = item["history"]
-    if len(history) <= MAX_HISTORY:
-        return
-    marker = history[1] if history[1].get("event") == "history-trimmed" else None
-    keep = history[-(MAX_HISTORY - 2) :]
-    dropped = len(history) - 1 - (1 if marker else 0) - len(keep) + int(marker["count"] if marker else 0)
-    item["history"] = [history[0], {"at": keep[0]["at"], "event": "history-trimmed", "count": dropped}, *keep]
-
-
 def escape_state(kind: str) -> str:
     """The state reachable from every other state of <kind> (dismissed; dropped for outreach)."""
     return str(KINDS[kind].get("escape", "dismissed"))
@@ -846,6 +1216,23 @@ def allowed_targets(kind: str, state: str) -> set[str]:
     return targets
 
 
+def link_problem(items: lineage.Items, link: Link) -> str | None:
+    """Why lineage refuses <link> among <items>, or None (also when it exists already)."""
+    try:
+        lineage.check_link(items, link)
+    except LineageError as exc:
+        return str(exc)
+    return None
+
+
+# What the journal's rebuild checks again (ledger_changes.rebuild): the transitions of KINDS (an
+# unknown kind allows none) and lineage's link rules.
+RULES = ledger_changes.Rules(
+    allowed=lambda kind, was, to: kind in KINDS and to in allowed_targets(kind, was),
+    link_problem=link_problem,
+)
+
+
 def is_outreach(item: Item) -> bool:
     return bool(item["kind"] == OUTREACH_KIND)
 
@@ -855,10 +1242,20 @@ def open_outreach(ledger: Ledger, parent_id: str) -> list[Item]:
     return outreach_by_parent(ledger["items"].values()).get(parent_id, [])
 
 
+def creation_key(item: Item) -> tuple[str, str]:
+    """Items in the order they were made: by created_at, then (made in the same second) by id. A
+    minted id says nothing of when it was made, so a listing never sorts by id alone."""
+    return str(item.get("created_at") or ""), str(item["id"])
+
+
+def by_creation(items: Iterable[Item]) -> list[Item]:
+    return sorted(items, key=creation_key)
+
+
 def outreach_by_parent(items: Iterable[Item]) -> dict[str, list[Item]]:
     """Open outreach grouped by the item it belongs to, oldest first."""
     grouped: dict[str, list[Item]] = {}
-    for item in sorted(items, key=lambda i: str(i["created_at"])):
+    for item in by_creation(items):
         if is_outreach(item) and is_open(item) and item["fields"].get("parent"):
             grouped.setdefault(item["fields"]["parent"], []).append(item)
     return grouped
@@ -2071,14 +2468,24 @@ def check_outreach_parent(parent: Item, purpose: str) -> None:
         raise LedgerError(f"{parent['id']} is {parent['state']}; outreach belongs to open work items")
 
 
-def next_outreach_id(ledger: Ledger, scope: str) -> str:
-    """out:<scope>/<n>: the next number for a parent id, or for a day (outreach without a parent)."""
-    numbers = [
-        int(match["number"])
-        for item_id in ledger["items"]
-        if (match := OUTREACH_ID.match(item_id)) and match["scope"] == scope
-    ]
-    return f"out:{scope}/{max(numbers, default=0) + 1}"
+def utc_today() -> str:
+    return datetime.now(UTC).date().isoformat()
+
+
+def mint_id(items: Mapping[str, Item], prefix: str) -> str:
+    """<prefix> and a suffix minted by the write in progress (only inside locked_ledger(write=True)).
+    The suffix hashes this Mac's replica and the journal position, so no other Mac makes it and a
+    pruned id never comes back; one that names an item already (a hash collision) is minted again."""
+    transaction = current_transaction()
+    minted = f"{prefix}{transaction.mint()}"
+    while minted in items:
+        minted = f"{prefix}{transaction.mint()}"
+    return minted
+
+
+def next_outreach_id(items: Mapping[str, Item], scope: str) -> str:
+    """out:<scope>/<id>: <scope> is the parent's id, or the UTC day for outreach without a parent."""
+    return mint_id(items, f"{id_prefix(OUTREACH_KIND)}{scope}/")
 
 
 def new_outreach(outreach_id: str, args: argparse.Namespace, details: str) -> Item:
@@ -2149,7 +2556,7 @@ def cmd_reach_out(args: argparse.Namespace) -> str:
                 f"{existing['id']}\nunchanged: {existing['id']} already exists ({outreach_status(existing)})"
             )
         overlapping = overlapping_outreach(ledger, args)
-        outreach_id = next_outreach_id(ledger, args.parent or date.today().isoformat())
+        outreach_id = next_outreach_id(ledger["items"], args.parent or utc_today())
         ledger["items"][outreach_id] = new_outreach(outreach_id, args, details)
         if args.parent:
             record(parent, "outreach", f"{outreach_id}: {args.channel} to {args.to}: {args.subject}")
@@ -2356,16 +2763,18 @@ def cmd_in_flight(args: argparse.Namespace) -> str:
 
 
 def window_rows(items: dict[str, Item], window: str) -> list[str]:
-    """One list row per open item handed to <window>, the ones in flight first."""
+    """One list row per open item handed to <window>, the ones in flight first, oldest first."""
     view = View.of(items)
     flying = {item["id"] for item in in_flight(items, window)}
-    held = sorted(activity.held(items.values(), window, is_open), key=lambda item: item["id"] not in flying)
+    held = sorted(
+        by_creation(activity.held(items.values(), window, is_open)), key=lambda item: item["id"] not in flying
+    )
     return [shorten(item_row(item, view)) for item in held]
 
 
 def pending_approval_rows(items: dict[str, Item]) -> list[str]:
-    """One row per proposal waiting for my approval: the item and the proposed action."""
-    pending = [item for item in items.values() if approvals.needs_you(item.get("proposal"))]
+    """One row per proposal waiting for my approval, oldest item first: the item and the action."""
+    pending = by_creation(item for item in items.values() if approvals.needs_you(item.get("proposal")))
     return [shorten(f"{item['id']}: {item['proposal']['action']}") for item in pending]
 
 
@@ -2397,15 +2806,12 @@ def cmd_compact_context(args: argparse.Namespace) -> str:
 def cmd_outreach(args: argparse.Namespace) -> str:
     with locked_ledger(write=False) as ledger:
         items = ledger["items"]
-    chosen = sorted(
-        (
-            item
-            for item in items.values()
-            if is_outreach(item)
-            and (not args.open or is_open(item))
-            and (not args.parent or item["fields"].get("parent") == args.parent)
-        ),
-        key=lambda item: str(item["created_at"]),
+    chosen = by_creation(
+        item
+        for item in items.values()
+        if is_outreach(item)
+        and (not args.open or is_open(item))
+        and (not args.parent or item["fields"].get("parent") == args.parent)
     )
     return "\n".join(line for item in chosen for line in outreach_lines(item, items)) or "(no outreach)"
 
@@ -2447,7 +2853,7 @@ def outreach_for_message(ledger: Ledger, permalink: str) -> list[tuple[Item, str
         ]
         if times:
             found.append((item, max(times, key=parse_time)))
-    return sorted(found, key=lambda match: (-parse_time(match[1]).timestamp(), str(match[0]["created_at"])))
+    return sorted(found, key=lambda match: (-parse_time(match[1]).timestamp(), *creation_key(match[0])))
 
 
 def thread_hint(matches: list[tuple[Item, str]]) -> str:
@@ -2576,6 +2982,27 @@ def linked_to_open(items: dict[str, Item]) -> set[str]:
     }
 
 
+def linked_from(item_id: str, item: Item) -> list[str]:
+    """The items <item> names in its own record: its stored links' targets, and an outreach's
+    parent (the computed link its parent field stands for)."""
+    return [link.source if link.computed else link.target for link in lineage.item_links(item_id, item)]
+
+
+def kept_by_prune(items: dict[str, Item], cutoff: datetime) -> set[str]:
+    """What prune keeps: what is not finished before <cutoff>, what is linked to or from an open
+    item, and, to a fixpoint, whatever a kept item names, so that no kept item is left holding a
+    link to a pruned one."""
+    kept = {item_id for item_id, item in items.items() if not prunable(item, cutoff)}
+    kept |= linked_to_open(items) & items.keys()
+    todo = list(kept)
+    while todo:
+        item_id = todo.pop()
+        named = {other for other in linked_from(item_id, items[item_id]) if other in items}
+        todo += named - kept
+        kept |= named
+    return kept
+
+
 def prune_said(ledger: Ledger, cutoff: datetime) -> None:
     if "said" in ledger:
         ledger["said"] = [entry for entry in ledger["said"] if parse_time(entry["at"]) >= cutoff]
@@ -2588,14 +3015,12 @@ def prunable(item: Item, cutoff: datetime) -> bool:
 
 
 def cmd_prune(args: argparse.Namespace) -> str:
+    """Drop what finished before the cutoff unless prune keeps it (kept_by_prune), the sources as
+    old whose item is gone, and the said entries as old."""
     cutoff = datetime.now(UTC) - timedelta(days=args.days)
     with locked_ledger(write=True) as ledger:
-        linked = linked_to_open(ledger["items"])
-        stale_items = [
-            item_id
-            for item_id, item in ledger["items"].items()
-            if prunable(item, cutoff) and item_id not in linked
-        ]
+        kept = kept_by_prune(ledger["items"], cutoff)
+        stale_items = [item_id for item_id in ledger["items"] if item_id not in kept]
         for item_id in stale_items:
             del ledger["items"][item_id]
         stale_sources = [
@@ -2736,7 +3161,7 @@ def cmd_list(args: argparse.Namespace) -> str:
     with locked_ledger(write=False) as ledger:
         view = View.of(ledger["items"])
     in_ws = ws_filter(view.items, args.ws)
-    items = sorted(view.items.values(), key=lambda i: (i["kind"], i["created_at"]))
+    items = sorted(view.items.values(), key=lambda i: (i["kind"], *creation_key(i)))
     return "\n".join(item_row(i, view) for i in items if listed(i, args) and in_ws(i["id"])) or "(no items)"
 
 
@@ -2865,7 +3290,7 @@ def render_item(item: Item, view: View) -> str:
 def render_kinds(open_items: list[Item], view: View) -> list[str]:
     lines = []
     for kind in KINDS:
-        rows = sorted((i for i in open_items if i["kind"] == kind), key=lambda i: i["created_at"])
+        rows = by_creation(i for i in open_items if i["kind"] == kind)
         if rows:
             lines += ["", f"## {kind}", "", *(render_item(item, view) for item in rows)]
     return lines
@@ -2925,10 +3350,9 @@ def check_spawn(args: argparse.Namespace) -> None:
         raise LedgerError("--blocks says the task blocks the item it was spawned from; give that item")
 
 
-def next_task_id(items: dict[str, Item]) -> str:
-    prefix = f"{id_prefix(TASK_KIND)}{date.today().isoformat()}/"
-    numbers = [int(i[len(prefix) :]) for i in items if i.startswith(prefix) and i[len(prefix) :].isdigit()]
-    return f"{prefix}{max(numbers, default=0) + 1}"
+def next_task_id(items: Mapping[str, Item]) -> str:
+    """task:<UTC day>/<id>, minted by the write in progress."""
+    return mint_id(items, f"{id_prefix(TASK_KIND)}{utc_today()}/")
 
 
 def add_checked_link(items: dict[str, Item], new: Link, note: str = "") -> bool:
@@ -2949,7 +3373,7 @@ def cmd_spawn(args: argparse.Namespace) -> str:
     with locked_ledger(write=True) as ledger:
         items = ledger["items"]
         source = get_item(ledger, args.source) if args.source else None
-        similar = lineage.similar_tasks(items, Index.of(items), args.source, args.title, is_open)
+        similar = by_creation(lineage.similar_tasks(items, Index.of(items), args.source, args.title, is_open))
         same = next((t for t in similar if t["title"].strip().lower() == args.title.strip().lower()), None)
         if same:
             return f"{same['id']}\nunchanged: {same['id']} already exists ({same['state']}): {same['title']}"
@@ -3023,7 +3447,7 @@ def same_origin_tasks(items: dict[str, Item], args: argparse.Namespace, known: l
 def recent_tasks(items: dict[str, Item]) -> list[Item]:
     cutoff = datetime.now(UTC) - timedelta(days=RECENTLY_CLOSED_DAYS)
     tasks = (item for item in items.values() if item["kind"] == TASK_KIND)
-    return [task for task in tasks if is_open(task) or parse_time(task["updated_at"]) >= cutoff]
+    return by_creation(task for task in tasks if is_open(task) or parse_time(task["updated_at"]) >= cutoff)
 
 
 def same_origin_warning(task_id: str, cited: list[Item]) -> str:
@@ -3810,6 +4234,269 @@ def cmd_lint(args: argparse.Namespace) -> tuple[str, int]:
     return "\n".join(f.line() for f in findings) or "(no findings)", code
 
 
+Finding = dict[str, str]
+
+# How much a kind of validate finding matters (`validate --json` carries it; bosun doctor fails on
+# an error and warns on a warning). An error means writes are refused, or a rebuild would not give
+# ledger.json back; a warning is a rule the ledger breaks, a change the rebuild keeps but cannot
+# apply, or an outside edit the next write adopts; a note is information. A kind with no row is a
+# warning (a unit test keeps every kind found here).
+ERROR, WARNING, NOTE = "error", "warning", "note"
+SEVERITY = {
+    "journal": ERROR,  # damaged: a write that reads it is refused
+    "position": ERROR,  # behind: every write is refused; ahead: a write cut short, not yet applied
+    "differs": ERROR,  # the journal's rebuild is not ledger.json: a rebuild would lose the difference
+    "state": WARNING,
+    "link": WARNING,
+    "link-target": WARNING,  # a link to an item gone, which a prune from before lineage was kept left
+    "part_of": WARNING,
+    "conflict": WARNING,
+    "edited": WARNING,  # the next write adopts it
+    "note": NOTE,
+}
+
+
+def finding(kind: str, detail: str, item: str = "", path: str = "") -> Finding:
+    found = {"kind": kind, "severity": SEVERITY.get(kind, WARNING), "detail": detail}
+    if item:
+        found["item"] = item
+    if path:
+        found["path"] = path
+    return found
+
+
+def kind_states(kind: str) -> set[str]:
+    spec = KINDS[kind]
+    transitions = spec["transitions"]
+    return {
+        spec["initial"],
+        escape_state(kind),
+        *transitions,
+        *(target for targets in transitions.values() for target in targets),
+    }
+
+
+def state_findings(item_id: str, item: Item) -> list[Finding]:
+    kind, state = item.get("kind"), item.get("state")
+    if kind not in KINDS:
+        return [finding("state", f"its kind {kind!r} is not a kind of this version", item_id)]
+    if state not in kind_states(kind):
+        return [finding("state", f"state {state!r} is not a state of {kind}", item_id, "state")]
+    return []
+
+
+def link_entries(item: Item) -> list[Any]:
+    links = item.get("links")
+    if isinstance(links, list):
+        return links
+    return [links] if links else []
+
+
+def is_stored_link(entry: Any) -> bool:
+    return isinstance(entry, dict) and isinstance(entry.get("rel"), str) and isinstance(entry.get("id"), str)
+
+
+def stored_links(item_id: str, item: Item) -> list[Link]:
+    return [
+        Link(item_id, entry["rel"], entry["id"], str(entry.get("via", "")), str(entry.get("at", "")))
+        for entry in link_entries(item)
+        if is_stored_link(entry)
+    ]
+
+
+def malformed_link_findings(item_id: str, item: Item) -> list[Finding]:
+    """Each stored link without its relation or other end (written by hand, or damaged)."""
+    return [
+        finding(
+            "link",
+            f"a stored link that is not a link (it needs a rel and an id): {entry!r}",
+            item_id,
+            "links",
+        )
+        for entry in link_entries(item)
+        if not is_stored_link(entry)
+    ]
+
+
+def well_formed(items: lineage.Items) -> lineage.Items:
+    """<items> as the link rules can read them (they walk every item's links): each stored link
+    that is not one left out, as it is a finding of its own."""
+    return {
+        item_id: item
+        if all(map(is_stored_link, link_entries(item)))
+        else {**item, "links": [entry for entry in link_entries(item) if is_stored_link(entry)]}
+        for item_id, item in items.items()
+    }
+
+
+def link_finding(items: lineage.Items, item: Item, links: list[Link], link: Link) -> Finding | None:
+    """Why lineage would refuse <link> as if it were being added now (every entry for the same
+    relation and target left out, so two Macs' copies count once), or None."""
+    others = [entry for entry in links if (entry.rel, entry.target) != (link.rel, link.target)]
+    # another part_of is reported once, by link_findings, not as a refusal of each of them
+    rest = [entry for entry in others if not (link.rel == lineage.PART_OF and entry.rel == lineage.PART_OF)]
+    trial = {**items, link.source: {**item, "links": [{"rel": e.rel, "id": e.target} for e in rest]}}
+    problem = link_problem(trial, link)
+    if not problem:
+        return None
+    if link.target in items:
+        return finding("link", problem, link.source, "links")
+    # A prune from before it kept lineage whole (kept_by_prune) left links like this.
+    unlink = f"bosun ledger unlink '{link.source}' {link.rel} '{link.target}'"
+    return finding(
+        "link-target",
+        f"{problem}. A link to an item that is gone: clear it with {unlink}",
+        link.source,
+        "links",
+    )
+
+
+def link_findings(items: lineage.Items, item_id: str, item: Item) -> list[Finding]:
+    """What lineage would refuse about each link <item> stores. More than one part_of, counted by
+    distinct targets, is one finding."""
+    links = stored_links(item_id, item)
+    parts = sorted({link.target for link in links if link.rel == lineage.PART_OF})
+    many = len(parts) > 1
+    found = [finding("part_of", f"part_of {', '.join(parts)}: an item has one workstream", item_id, "links")]
+    checked = (link_finding(items, item, links, link) for link in links)
+    return [*found[: int(many)], *(f for f in checked if f)]
+
+
+def rule_findings(ledger: Ledger) -> list[Finding]:
+    items = well_formed(ledger["items"])
+    return [
+        found
+        for item_id, item in sorted(items.items())
+        for found in (
+            *state_findings(item_id, item),
+            *malformed_link_findings(item_id, ledger["items"][item_id]),
+            *link_findings(items, item_id, item),
+        )
+    ]
+
+
+COMPARED = ("items", "sources", "runs", ledger_changes.SAID)
+
+
+def first_difference(left: Any, right: Any) -> list[str] | None:
+    """The first path at which two JSON values differ (keys sorted; a list's first index that
+    differs, or where the shorter one ends), or None."""
+    if isinstance(left, dict) and isinstance(right, dict):
+        return dict_difference(left, right)
+    if isinstance(left, list) and isinstance(right, list):
+        return list_difference(left, right)
+    return None if left == right else []
+
+
+def dict_difference(left: dict[str, Any], right: dict[str, Any]) -> list[str] | None:
+    for key in sorted(set(left) | set(right)):
+        below = [] if key not in left or key not in right else first_difference(left[key], right[key])
+        if below is not None:
+            return [str(key), *below]
+    return None
+
+
+def list_difference(left: list[Any], right: list[Any]) -> list[str] | None:
+    for index, (one, other) in enumerate(zip(left, right, strict=False)):
+        below = first_difference(one, other)
+        if below is not None:
+            return [str(index), *below]
+    return [str(min(len(left), len(right)))] if len(left) != len(right) else None
+
+
+def compare_findings(rebuilt_ledger: Ledger, saved: Ledger) -> list[Finding]:
+    """Where the journal's rebuild and ledger.json (both at the same position) differ: each item
+    by its first differing path, the other sections as a whole."""
+    found: list[Finding] = []
+    for section in COMPARED:
+        left, right = rebuilt_ledger.get(section, {}), saved.get(section, {})
+        if section == "items":
+            found += item_differences(left, right)
+            continue
+        path = first_difference(left, right)
+        if path is not None:
+            detail = f"the rebuild and ledger.json differ in {section}"
+            found.append(finding("differs", detail, "", "/".join([section, *path])))
+    return found
+
+
+def item_differences(left: lineage.Items, right: lineage.Items) -> list[Finding]:
+    found: list[Finding] = []
+    for item_id in sorted(set(left) | set(right)):
+        path = first_difference(left.get(item_id), right.get(item_id))
+        if path is not None:
+            where = f"first at {'/'.join(path)}" if path else "in one of them only"
+            found.append(
+                finding("differs", f"the rebuild and ledger.json differ ({where})", item_id, "/".join(path))
+            )
+    return found
+
+
+NO_JOURNAL_YET = "no journal yet; the next write starts it"
+EDITED = (
+    "ledger.json was changed outside its journal (by hand, or by a bosun that does not journal); "
+    "the next write adopts it"
+)
+
+
+def position_finding(position: Mapping[str, int], saved: Mapping[str, int]) -> Finding:
+    gaps = missing(position, saved)
+    if gaps:
+        detail = (
+            f"the journal is behind ledger.json ({'; '.join(gaps)}): a write would refuse to rebuild from it"
+        )
+    else:
+        detail = f"the journal is ahead of ledger.json (at {dict(position)}): the next write applies it"
+    return finding("position", detail, path="journal")
+
+
+def journal_findings(saved: Ledger) -> list[Finding]:
+    """The journal against ledger.json as saved: its damage, the conflicts of its rebuild, an
+    outside edit, and, at the same position, each item that differs (unless ledger.json was edited
+    outside the journal: the next write adopts the difference)."""
+    try:
+        journal = open_journal()
+        changes, position = journal.changes(), journal.position()
+    except JournalError as exc:
+        return [finding("journal", f"the journal is damaged: {exc}")]
+    result = ledger_changes.rebuild(changes, RULES)
+    found = [
+        finding("conflict", f"{c.kind}: {c.detail} (change {str(c.change)[:8]})", c.target)
+        for c in result.conflicts
+    ]
+    file_position = saved_position(saved)
+    if not position and not file_position and has_records(saved):
+        return [*found, finding("note", NO_JOURNAL_YET, path="journal")]
+    edited = edited_outside(saved)
+    if edited:
+        found.append(finding("edited", EDITED, path="journal"))
+    if position != file_position:
+        return [*found, position_finding(position, file_position)]
+    return found if edited else [*found, *compare_findings(result.ledger, saved)]
+
+
+def finding_line(found: Finding) -> str:
+    if found["kind"] == "note":
+        return found["detail"]
+    where = found.get("item") or "journal"
+    path = f" {found['path']}" if found.get("path") else ""
+    return f"{found['kind']}: {where}{path}: {found['detail']}"
+
+
+def cmd_validate(args: argparse.Namespace) -> tuple[str, int]:
+    """Check the ledger against every rule; with --journal, the journal too. Exit 1 on findings."""
+    with store_lock(fcntl.LOCK_SH):
+        saved = load()
+        found = rule_findings(saved)
+        if args.journal:
+            found += journal_findings(saved)
+    code = 1 if any(f["kind"] != "note" for f in found) else 0
+    if args.json:  # with each finding's line as the text says it (bosun doctor prints it)
+        return json.dumps([{**f, "line": finding_line(f)} for f in found], indent=2), code
+    lines = [finding_line(f) for f in found]
+    return "\n".join(lines) or "ledger is valid", code
+
+
 Handler = Callable[[argparse.Namespace], "str | tuple[str, int]"]
 Arguments = list[tuple[tuple[str, ...], dict[str, Any]]]
 REACH_OUT_ARGUMENTS: Arguments = [
@@ -4070,6 +4757,10 @@ COMMANDS: dict[str, tuple[Handler, Arguments]] = {
         cmd_lint,
         [(("--json",), {"action": "store_true"}), (("--strict",), {"action": "store_true"})],
     ),
+    "validate": (
+        cmd_validate,
+        [(("--journal",), {"action": "store_true"}), (("--json",), {"action": "store_true"})],
+    ),
     "kinds": (cmd_kinds, []),
     "prune": (cmd_prune, [(("--days",), {"type": int, "default": DEFAULT_PRUNE_DAYS})]),
     "render": (cmd_render, []),
@@ -4090,8 +4781,9 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def configure_from_environment() -> None:
-    """The settings `bosun ledger` passes (load_config does not export them)."""
+def configure_from_environment(command: str = "") -> None:
+    """The settings `bosun ledger` passes (load_config does not export them); <command> names
+    the writes in the journal."""
     configure(
         os.environ["BOSUN_STATE_DIR"],
         os.environ.get("BOSUN_REPO_MASK", ""),
@@ -4100,6 +4792,7 @@ def configure_from_environment() -> None:
         events_enabled=os.environ.get("BOSUN_EVENTS_ENABLED") == "1",
         caller_window=os.environ.get("BOSUN_CALLER_WINDOW", ""),
     )
+    configure_command(command)
     configure_site(os.environ.get("BOSUN_CONFIG_DIR") or None)
     configure_tickets(os.environ.get(tickets.OWNED_SETTING, ""), os.environ.get("BOSUN_ORCHESTRATOR_DIR", ""))
     configure_scan(
@@ -4123,7 +4816,7 @@ def main() -> int:
         return 2
     handler: Handler = args.func
     try:
-        configure_from_environment()
+        configure_from_environment(command=f"ledger {args.command}")
         result = handler(args)
     except (LedgerError, LineageError, TicketError, WorkstreamError) as exc:
         print(f"ledger: {exc}", file=sys.stderr)

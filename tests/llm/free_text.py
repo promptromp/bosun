@@ -119,7 +119,7 @@ def orchestrator_command(world: World, case: Case, max_cost: float, with_mcp: bo
         "--no-session-persistence", "--output-format", "json", "--max-budget-usd", str(max_cost),
         "--plugin-dir", str(ROOT / "orchestrator" / "plugin"),
         "--disallowedTools", *ask, *OUTWARD_TOOLS, *mcp_flags(with_mcp),
-        "--append-system-prompt", policy, "--", case.say,
+        "--append-system-prompt", policy, "--", world.fill(case.say),
     ]  # fmt: skip
     return command, world.orchestrator_dir
 
@@ -131,7 +131,7 @@ def repo_prompt(world: World, case: Case) -> str:
         task = task.split("\n---\n", 1)[1].strip()
     return (
         f"{task}\n\n[Earlier in this session you received the task above and started on it; your work "
-        f"so far is on the current branch of this repository.]\n\n{case.say}"
+        f"so far is on the current branch of this repository.]\n\n{world.fill(case.say)}"
     )
 
 

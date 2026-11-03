@@ -61,7 +61,7 @@ def record_prompt(window: str, payload: Mapping[str, Any], env: Mapping[str, str
     pasted = events.pasted_hashes(state_dir, window, datetime.now(UTC))
     if not activity.is_mine(text, pasted, env.get("BOSUN_DRAIN_PROMPT", "")):
         return f"skipped in {window}: not typed by me ({activity.excerpt(text, 60)!r})"
-    ledger.configure_from_environment()
+    ledger.configure_from_environment(command="hook")
     ledger.STORE.caller_window = window
     entry = ledger.add_user_said(window, text, str(payload.get("session_id") or ""))
     on = ", ".join(entry["items"]) or "no item (the window holds none)"

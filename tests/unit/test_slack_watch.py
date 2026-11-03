@@ -376,9 +376,11 @@ class TriageTest(WatchTestCase):
         # The chores recorded the processed one under its plain permalink; the watcher's has a query.
         ledger_run("record-source", processed.permalink.split("?")[0], "--class", "fyi")
         ledger_run("upsert", "mypr:acme/exporter#7", "--kind", "my-pr")
-        ledger_run("reach-out", "mypr:acme/exporter#7", "--to", "Dana", "--subject", "Keep the header?")
+        asked = ledger_run(
+            "reach-out", "mypr:acme/exporter#7", "--to", "Dana", "--subject", "Keep the header?"
+        )
         sent = f"{SLACK}{DM}/p{ts_of(NOW - timedelta(minutes=30)).replace('.', '')}"
-        ledger_run("sent", "out:mypr:acme/exporter#7/1", "--ref", sent)
+        ledger_run("sent", asked.splitlines()[0], "--ref", sent)
         book = slack_watch.read_ledger(self.state_dir)
         sorted_out = slack_watch.triage(
             [processed, in_outreach, queued, fresh, fresh], book, {queued.key: "x"}

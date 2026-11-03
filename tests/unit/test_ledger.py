@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import ast
 import io
 import json
+import shutil
 import sys
 import tempfile
 import unittest
@@ -15,7 +17,9 @@ from typing import Any
 
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "lib"))
+import journal
 import ledger
+from journal import replica_id
 
 
 REVIEW_ID = "review:acme/api#1"
@@ -311,6 +315,320 @@ class MaintenanceTest(LedgerTestCase):
         for spec in ledger.KINDS.values():
             self.assertIn(spec["id_format"], output)
             self.assertIn(f"--class {spec['source_class']}", output)
+
+
+MINTED = "[0-9a-hjkmnp-tv-z]{6}"  # six Crockford base32 characters
+
+
+class MintedIdTest(LedgerTestCase):
+    """Task ids: the UTC day and six base32 characters hashed from the replica and the journal
+    position, so two Macs never make the same one and a pruned one never comes back; old numeric
+    ids stay valid."""
+
+    def spawn(self, title: str = "Footer totals") -> str:
+        output: str = run("spawn", "--title", title, "--ask", "add totals", "--via", "user: totals too")
+        return output.splitlines()[0]
+
+    def test_spawn_mints_a_hash_id(self) -> None:
+        task_id = self.spawn()
+        self.assertRegex(task_id, rf"^task:\d{{4}}-\d{{2}}-\d{{2}}/{MINTED}$")
+        self.assertTrue(task_id.startswith(f"task:{datetime.now(UTC).date().isoformat()}/"))
+        self.assertEqual(self.item(task_id)["kind"], "task")
+        self.assertNotEqual(self.spawn("Header totals"), task_id)
+
+    def test_old_task_ids_still_parse(self) -> None:
+        self.assertIn("created", run("upsert", "task:2026-10-15/1", "--kind", "task", "--title", "Old"))
+        self.assertIn("created", run("upsert", "task:2026-10-15/7k2m9q", "--kind", "task"))
+        for bad in ("task:2026-10-15/0", "task:2026-10-15/7k2m9", "task:2026-10-15/7k2m9i", "task:x/1"):
+            with self.subTest(bad), self.assertRaisesRegex(ledger.LedgerError, "task ids look like"):
+                run("upsert", bad, "--kind", "task")
+        for good in ("out:mypr:acme/api#2/3", "out:2026-10-15/1", f"out:{MYPR_ID}/7k2m9q"):
+            self.assertRegex(good, ledger.OUTREACH_ID)
+        self.assertIsNone(ledger.OUTREACH_ID.match("out:2026-10-15/7k2m9i"))
+
+    def test_two_replicas_mint_different_ids(self) -> None:
+        minted = []
+        for replica in ("a" * 32, "b" * 32):
+            with tempfile.TemporaryDirectory() as state:
+                (Path(state) / "replica.json").write_text(json.dumps({"replica": replica}))
+                ledger.configure(state)
+                minted.append(self.spawn())
+        self.assertNotEqual(minted[0], minted[1])
+
+    def test_a_pruned_id_is_never_minted_again(self) -> None:
+        first = self.spawn()
+        run("transition", first, "declined", "--note", "not now")
+        with ledger.locked_ledger(write=True) as data:
+            data["items"][first]["updated_at"] = (datetime.now(UTC) - timedelta(days=40)).isoformat()
+        self.assertIn("pruned 1 item(s)", run("prune", "--days", "30"))
+        self.assertNotEqual(self.spawn(), first)
+
+    def test_minting_needs_a_write(self) -> None:
+        with self.assertRaisesRegex(ledger.LedgerError, "no ledger write in progress"):
+            ledger.next_task_id({})
+        with ledger.locked_ledger(write=False), self.assertRaisesRegex(ledger.LedgerError, "no ledger write"):
+            ledger.next_outreach_id({}, MYPR_ID)
+
+    def test_an_id_that_names_an_item_already_is_minted_again(self) -> None:
+        today = datetime.now(UTC).date().isoformat()
+        run("upsert", f"task:{today}/aaaaaa", "--kind", "task", "--title", "Earlier")
+        with unittest.mock.patch.object(journal, "mint_suffix", side_effect=["aaaaaa", "bbbbbb"]) as minted:
+            self.assertEqual(self.spawn(), f"task:{today}/bbbbbb")
+        self.assertEqual([c.args[2] for c in minted.call_args_list], [0, 1])  # the same position, counted on
+        self.assertEqual(self.item(f"task:{today}/aaaaaa")["title"], "Earlier")
+
+    def test_compact_context_rows_come_oldest_first(self) -> None:
+        made = []
+        for number in (1, 2):
+            item_id = f"mypr:acme/api#{number}"
+            run("upsert", item_id, "--kind", "my-pr", "--title", f"PR {number}")
+            run("propose", item_id, f"merge {number}")
+            run("record-delegation", item_id, "--window", "w", "--task", "fix-my-pr")
+            made.append(item_id)
+        with ledger.locked_ledger(write=True) as data:  # the larger id is the older one
+            data["items"][made[1]]["created_at"] = "2026-10-20T09:00:00+00:00"
+            data["items"][made[0]]["created_at"] = "2026-10-20T10:00:00+00:00"
+        items = self.data()["items"]
+        self.assertEqual(
+            [row.split(":", 2)[:2] for row in ledger.pending_approval_rows(items)],
+            [["mypr", "acme/api#2"], ["mypr", "acme/api#1"]],
+        )
+        self.assertEqual([row.split()[0] for row in ledger.window_rows(items, "w")], [made[1], made[0]])
+
+    def test_the_replica_comes_from_the_store_made_under_its_lock(self) -> None:
+        self.assertFalse((ledger.STORE.state_dir / "replica.json").exists())
+        made = ledger.replica()
+        self.assertRegex(made, "^[0-9a-f]{32}$")
+        self.assertEqual(ledger.replica(), made)
+        run("upsert", REVIEW_ID, "--kind", "review-request")
+        self.assertTrue((ledger.STORE.journal_dir / f"{made}.jsonl").is_file())
+
+
+class ValidateTest(LedgerTestCase):
+    def setUp(self) -> None:
+        super().setUp()
+        run("upsert", REVIEW_ID, "--kind", "review-request", "--title", "T")
+        run("transition", REVIEW_ID, "delegated", "--note", "sent")
+
+    def edit_in_place(self, change: Any) -> None:
+        with ledger.locked_ledger(write=True) as data:
+            change(data["items"])
+
+    def test_validate_passes_a_clean_ledger(self) -> None:
+        self.assertEqual(run("validate", "--journal"), ("ledger is valid", 0))
+        self.assertEqual(run("validate"), ("ledger is valid", 0))
+
+    def test_validate_finds_a_bad_state(self) -> None:
+        data = self.data()
+        data["items"][REVIEW_ID]["state"] = "nonsense"
+        ledger.STORE.ledger_file.write_text(json.dumps(data))
+        output, code = run("validate")
+        self.assertEqual(code, 1)
+        self.assertIn(REVIEW_ID, output)
+        self.assertIn("nonsense", output)
+        found = json.loads(run("validate", "--json")[0])
+        self.assertEqual([f["kind"] for f in found], ["state"])
+        self.assertEqual(found[0]["item"], REVIEW_ID)
+
+    def test_validate_finds_links_that_break_a_rule(self) -> None:
+        run("upsert", MENTION_ID, "--kind", "mention")
+        data = self.data()
+        data["items"][MENTION_ID]["links"] = [
+            {"rel": "part_of", "id": "ws:a"},
+            {"rel": "part_of", "id": "ws:b"},
+        ]
+        data["items"][REVIEW_ID]["links"] = [{"rel": "relates_to", "id": "slack:C9/9"}]
+        ledger.STORE.ledger_file.write_text(json.dumps(data))
+        found = json.loads(run("validate", "--json")[0])
+        self.assertIn(("part_of", MENTION_ID), [(f["kind"], f["item"]) for f in found])
+        self.assertIn(("link-target", REVIEW_ID), [(f["kind"], f["item"]) for f in found])
+
+    def test_validate_counts_distinct_part_of_targets(self) -> None:
+        run("upsert", MENTION_ID, "--kind", "mention")
+        run("ws", "add", "ws-a", "--title", "A")
+        ws = next(i for i in self.data()["items"] if i not in (REVIEW_ID, MENTION_ID))
+        run("link", MENTION_ID, "part_of", ws)
+        data = self.data()
+        data["items"][MENTION_ID]["links"].append(dict(data["items"][MENTION_ID]["links"][0]))
+        ledger.STORE.ledger_file.write_text(json.dumps(data))
+        self.assertEqual(run("validate"), ("ledger is valid", 0))
+
+    def test_validate_journal_finds_an_in_place_edit(self) -> None:
+        def edit(items: dict[str, Any]) -> None:
+            items[REVIEW_ID]["history"][-1]["note"] = "edited after the fact"
+
+        self.edit_in_place(edit)
+        output, code = run("validate", "--journal")
+        self.assertEqual(code, 1)
+        self.assertIn(REVIEW_ID, output)
+        self.assertIn("history", output)
+        self.assertEqual(run("validate")[1], 0)
+
+    def test_validate_journal_lists_conflicts(self) -> None:
+        journal = ledger.open_journal(replica_id(ledger.STORE.state_dir))
+        transaction = journal.begin("test")
+        transaction.add("item.state", REVIEW_ID, {"from": "requested", "to": "closed"})
+        transaction.commit()
+        output, code = run("validate", "--journal")
+        self.assertEqual(code, 1)
+        self.assertIn("conflict", output)
+        self.assertIn(REVIEW_ID, output)
+        self.assertIn("ahead of ledger.json", output)
+
+    def test_validate_journal_reports_a_damaged_journal(self) -> None:
+        path = next(ledger.STORE.journal_dir.glob("*.jsonl"))
+        path.write_text(path.read_text() + "{not json}\n{}\n")
+        output, code = run("validate", "--journal")
+        self.assertEqual(code, 1)
+        self.assertIn("damaged", output)
+
+    def test_validate_lists_each_conflict_of_one_change(self) -> None:
+        other = json.loads(json.dumps(self.item(REVIEW_ID)))
+        other["state"] = "closed"
+        other["title"] = "Another title"
+        other["links"] = [{"rel": "relates_to", "id": "slack:C9/9"}]
+        journal = ledger.open_journal(replica_id(ledger.STORE.state_dir))
+        transaction = journal.begin("test")
+        transaction.add("item.create", REVIEW_ID, {"item": other})
+        transaction.commit()
+        found = json.loads(run("validate", "--journal", "--json")[0])
+        conflicts = [f for f in found if f["kind"] == "conflict"]
+        self.assertEqual([f["detail"].split(":")[0] for f in conflicts], ["state", "link"])
+        self.assertEqual(len({f["detail"].rsplit("(change ", 1)[1] for f in conflicts}), 1)
+        self.assertEqual({f["item"] for f in conflicts}, {REVIEW_ID})
+
+    def test_validate_checks_every_part_of_link_when_there_are_several(self) -> None:
+        data = self.data()
+        data["items"][REVIEW_ID]["links"] = [
+            {"rel": "part_of", "id": "ws:a"},
+            {"rel": "part_of", "id": "ws:b"},
+        ]
+        ledger.STORE.ledger_file.write_text(json.dumps(data))
+        found = json.loads(run("validate", "--json")[0])
+        self.assertEqual(sorted(f["kind"] for f in found), ["link-target", "link-target", "part_of"])
+
+    def test_validate_journal_reports_a_journal_behind_the_file(self) -> None:
+        data = self.data()
+        stem = next(iter(ledger.saved_position(data)))
+        data["journal"][stem] += 5
+        ledger.STORE.ledger_file.write_text(json.dumps(data))
+        found = json.loads(run("validate", "--journal", "--json")[0])
+        self.assertEqual([(f["kind"], f["path"]) for f in found], [("position", "journal")])
+        self.assertIn("behind", found[0]["detail"])
+        self.assertEqual(run("validate", "--journal")[1], 1)
+
+    def test_validate_journal_notes_a_ledger_from_before_journals(self) -> None:
+        data = self.data()
+        del data["journal"]
+        ledger.STORE.ledger_file.write_text(json.dumps(data))
+        shutil.rmtree(ledger.STORE.journal_dir)
+        self.assertEqual(run("validate", "--journal"), ("no journal yet; the next write starts it", 0))
+        output, code = run("validate", "--journal", "--json")
+        self.assertEqual(code, 0)
+        self.assertEqual([f["kind"] for f in json.loads(output)], ["note"])
+
+    def test_validate_reports_a_link_that_is_not_one_as_damage(self) -> None:
+        """A stored link without its relation or other end (written by hand): a finding of its
+        own, and the other items' links are still checked (a cycle check walks them all)."""
+        run("upsert", MENTION_ID, "--kind", "mention")
+        data = self.data()
+        data["items"][REVIEW_ID]["links"] = [{"rel": "relates_to"}, "nonsense"]
+        data["items"][MENTION_ID]["links"] = [{"rel": "blocked_by", "id": REVIEW_ID, "at": "2026-11-01"}]
+        ledger.STORE.ledger_file.write_text(json.dumps(data))
+        output, code = run("validate", "--json")
+        self.assertEqual(code, 1)
+        found = json.loads(output)
+        self.assertEqual(
+            [(f["kind"], f["item"], f["path"]) for f in found], [("link", REVIEW_ID, "links")] * 2
+        )
+        self.assertIn("not a link", found[0]["detail"])
+
+    def test_validate_journal_says_a_hand_edit_is_not_in_the_journal_yet(self) -> None:
+        data = self.data()
+        data["items"][REVIEW_ID]["title"] = "edited by hand"
+        ledger.STORE.ledger_file.write_text(json.dumps(data))
+        output, code = run("validate", "--journal")
+        self.assertEqual(code, 1)
+        self.assertIn("changed outside its journal", output)
+        self.assertIn("the next write adopts it", output)
+        with unittest.mock.patch("sys.stderr", io.StringIO()):
+            run("note", REVIEW_ID, "next")
+        self.assertEqual(run("validate", "--journal"), ("ledger is valid", 0))
+
+    def test_validate_journal_json_names_the_item_and_path(self) -> None:
+        def edit(items: dict[str, Any]) -> None:
+            items[REVIEW_ID]["history"][-1]["note"] = "edited after the fact"
+
+        self.edit_in_place(edit)
+        found = json.loads(run("validate", "--journal", "--json")[0])
+        self.assertEqual([(f["kind"], f["item"]) for f in found], [("differs", REVIEW_ID)])
+        self.assertTrue(found[0]["path"].startswith("history"))
+
+    def severities(self, *args: str) -> list[tuple[str, str]]:
+        return [(f["kind"], f["severity"]) for f in json.loads(run("validate", *args, "--json")[0])]
+
+    def test_validate_json_says_how_much_each_finding_matters(self) -> None:
+        """An error refuses writes or puts data at risk at a rebuild (bosun doctor fails on it); a
+        warning is a rule broken or a change the next write takes care of (doctor warns); a note
+        is information. The text and the exit code stay as they were."""
+        data = self.data()
+        data["items"][REVIEW_ID]["links"] = [{"rel": "relates_to", "id": "slack:C9/9", "at": "2026-11-01"}]
+        data["items"][REVIEW_ID]["state"] = "nonsense"
+        ledger.STORE.ledger_file.write_text(json.dumps(data))  # by hand: adopted by the next write
+        self.assertEqual(
+            sorted(self.severities("--journal")),
+            [("edited", "warning"), ("link-target", "warning"), ("state", "warning")],
+        )
+        self.assertEqual(run("validate", "--journal")[1], 1)
+        path = next(ledger.STORE.journal_dir.glob("*.jsonl"))
+        path.write_text(path.read_text() + "nonsense\n")
+        self.assertIn(("journal", "error"), self.severities("--journal"))
+        data["journal"] = {stem: seq + 5 for stem, seq in ledger.saved_position(data).items()}
+        path.write_text(path.read_text().removesuffix("nonsense\n"))
+        ledger.STORE.ledger_file.write_text(json.dumps(data))
+        self.assertIn(("position", "error"), self.severities("--journal"))
+
+    def test_validate_json_carries_each_findings_line_as_the_text_says_it(self) -> None:
+        """bosun doctor prints `line`, so the format is written once (finding_line)."""
+        data = self.data()
+        data["items"][REVIEW_ID]["links"] = [{"rel": "relates_to", "id": "slack:C9/9", "at": "2026-11-01"}]
+        data["items"][REVIEW_ID]["state"] = "nonsense"
+        ledger.STORE.ledger_file.write_text(json.dumps(data))
+        text, _ = run("validate", "--journal")
+        found = json.loads(run("validate", "--journal", "--json")[0])
+        self.assertEqual([f["line"] for f in found], text.splitlines())
+        self.assertEqual(len(found), 3)
+        del data["journal"]
+        ledger.STORE.ledger_file.write_text(json.dumps(data))
+        shutil.rmtree(ledger.STORE.journal_dir)
+        notes = [f for f in json.loads(run("validate", "--journal", "--json")[0]) if f["kind"] == "note"]
+        self.assertEqual([f["line"] for f in notes], [ledger.NO_JOURNAL_YET])
+
+    def test_validate_json_marks_a_note_as_a_note(self) -> None:
+        data = self.data()
+        del data["journal"]
+        ledger.STORE.ledger_file.write_text(json.dumps(data))
+        shutil.rmtree(ledger.STORE.journal_dir)
+        self.assertEqual(self.severities("--journal"), [("note", "note")])
+
+    def test_every_kind_of_finding_has_a_severity(self) -> None:
+        """Each kind `finding()` is called with has its row (a new kind cannot slip in without one),
+        and every row is a kind still found; a kind with no row would be a warning."""
+        tree = ast.parse(Path(ledger.__file__).read_text())
+        kinds = {
+            node.args[0].value
+            for node in ast.walk(tree)
+            if isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Name)
+            and node.func.id == "finding"
+            and node.args
+            and isinstance(node.args[0], ast.Constant)
+        }
+        self.assertEqual(kinds, set(ledger.SEVERITY))
+        self.assertEqual(
+            {severity for kind, severity in ledger.SEVERITY.items() if kind != "note"}, {"error", "warning"}
+        )
+        self.assertEqual(ledger.finding("a-kind-to-come", "x")["severity"], "warning")
 
 
 if __name__ == "__main__":

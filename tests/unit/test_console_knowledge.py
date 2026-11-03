@@ -167,7 +167,7 @@ class EntityPageTest(KnowledgeWorld):
         old = self.fact_id("environment/staging-2", "status")
         self.kg("confirm", old)
         self.now += timedelta(days=1)
-        self.kg("supersede", old, "--value", "running", "--source", "ledger:task:2026-10-20/1")
+        self.kg("supersede", old, "--value", "running", "--source", "ledger:task:2026-10-20/veembc")
         caveat = self.fact_id("repo/invoice-exporter", "caveat")
         self.kg("reject", caveat)
         env = self.page("environment/staging-2")
@@ -198,7 +198,7 @@ class EntityPageTest(KnowledgeWorld):
             "--source",
             "doc:javascript:alert(1)",
             "--source",
-            "ledger:task:2026-10-20/1",
+            "ledger:task:2026-10-20/veembc",
             "--source",
             "ledger:task:1999-01-01/1",
         )
@@ -211,7 +211,7 @@ class EntityPageTest(KnowledgeWorld):
         shown = {s["ref"]: (s["url"], s["item"]) for s in fact["sources"]}
         self.assertEqual(shown["https://example.com/acme/ci"], ("https://example.com/acme/ci", None))
         self.assertEqual(shown["javascript:alert(1)"], (None, None))
-        self.assertEqual(shown["task:2026-10-20/1"], (None, "task:2026-10-20/1"))
+        self.assertEqual(shown["task:2026-10-20/veembc"], (None, "task:2026-10-20/veembc"))
         self.assertEqual(shown["task:1999-01-01/1"], (None, None))
 
     def test_a_person_page_shows_only_whitelisted_facts_and_how_to_delete(self) -> None:
@@ -229,17 +229,18 @@ class EntityPageTest(KnowledgeWorld):
     def test_related_ledger_items_by_person_and_by_repo(self) -> None:
         dana = self.page("person/dana")["related"]
         self.assertEqual(
-            [(r["id"], r["how"]) for r in dana["items"]], [("out:task:2026-10-20/1/1", "recipient")]
+            [(r["id"], r["how"]) for r in dana["items"]], [("out:task:2026-10-20/veembc/q0kge7", "recipient")]
         )
         repo = self.page("repo/invoice-exporter")["related"]
         self.assertIn("mypr:acme/exporter#102", [r["id"] for r in repo["items"]])
-        self.assertIn("task:2026-10-20/1", [r["id"] for r in repo["items"]])  # by its repo field
+        self.assertIn("task:2026-10-20/veembc", [r["id"] for r in repo["items"]])  # by its repo field
         self.assertNotIn("review:acme/ledger-sync#57", [r["id"] for r in repo["items"]])
 
     def test_a_unique_first_name_matches(self) -> None:
-        self.kg("add-entity", "person/priya-s", "--name", "Priya Sample")  # task:2026-10-20/1's requester
+        # The fixture task's requester (task:2026-10-20/veembc).
+        self.kg("add-entity", "person/priya-s", "--name", "Priya Sample")
         related = self.page("person/priya-s")["related"]["items"]
-        self.assertEqual([(r["id"], r["how"]) for r in related], [("task:2026-10-20/1", "requester")])
+        self.assertEqual([(r["id"], r["how"]) for r in related], [("task:2026-10-20/veembc", "requester")])
 
     def test_a_shared_first_name_matches_by_name_or_slug_only(self) -> None:
         self.kg("add-entity", "person/dana-two", "--name", "Dana Other")
@@ -249,14 +250,14 @@ class EntityPageTest(KnowledgeWorld):
         for person in ("person/dana-two", "person/lena-one", "person/lena-two"):
             with self.subTest(person=person):
                 self.assertEqual(self.page(person)["related"]["items"], [])
-        self.kg("add-entity", "person/lena", "--name", "Lena Unique")  # out:2026-10-20/1 went to "Lena"
+        self.kg("add-entity", "person/lena", "--name", "Lena Unique")  # out:2026-10-20/kqz53j went to "Lena"
         self.assertEqual(len(self.page("person/lena")["related"]["items"]), 1)
 
 
 class FlowTest(KnowledgeWorld):
     def test_steps_in_order_with_actors_gates_and_systems(self) -> None:
         self.kg("add-entity", "step/review", "--name", "Code review")
-        source = ("--source", "ledger:task:2026-10-20/1")
+        source = ("--source", "ledger:task:2026-10-20/veembc")
         self.kg("propose", "process/release", "has_step", "step/review", "--order", "0", *source)
         self.kg("propose", "step/rollout", "gated_by", "gate/smoke-tests", *source)
         self.kg("propose", "step/merge", "uses", "repo/invoice-exporter", *source)

@@ -65,6 +65,8 @@ class FileTables(unittest.TestCase):
             ("ledger.json.bak", up.LEDGER),
             ("ledger.json.tmp", up.WORKING),
             ("learn", up.LEDGER),
+            ("journal", up.LEDGER),
+            ("replica.json", up.LEDGER),
             ("ledger.lock", up.WORKING),
             ("logs", up.WORKING),
             ("stopped-bosun", up.WORKING),

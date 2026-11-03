@@ -153,7 +153,17 @@ All configuration lives in `~/.config/bosun/` (override with `BOSUN_CONFIG_DIR`)
 
 State and logs go to `~/.local/state/bosun/`:
 
-- `ledger.json` and its readable view `ledger.md`
+- `ledger.json`, its readable view `ledger.md`, and `ledger.json.bak`, the version before the last
+  write. Copying that (or any older `ledger.json`) back does not undo a write: the journal brings it
+  forward again. A change you make to `ledger.json` by hand is adopted by the next write, into the
+  journal, with a line on stderr; one the journal cannot hold, such as removing a history entry, is
+  undone by that write, which says so (`ledger.json.bak` keeps the edited file until the next write)
+- `journal/ledger/`: every change to the ledger, which every write appends to before it saves
+  `ledger.json` (rebuilt from it when a write was cut short): `<replica>.jsonl` for this Mac's
+  changes, `local.jsonl` for what never leaves it, such as your own words, and
+  `<file>.torn-<time>` for a transaction a write left unfinished, moved aside and kept
+  ([Sync and sharing](design/sync.md))
+- `replica.json`: this Mac's id in the journal
 - `logs/`: `morning-YYYY-MM-DD.log`, `checkin-YYYY-MM-DD.log`, `learn-YYYY-MM-DD.log`,
   `impact-YYYY-MM-DD.log`, `hook-YYYY-MM-DD.log` (the repo sessions' prompt hook), and what launchd
   captures from each job (`launchd.{out,err}`, `watchdog.launchd.{out,err}`, `learn.launchd.{out,err}`)

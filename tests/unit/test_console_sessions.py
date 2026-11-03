@@ -28,7 +28,7 @@ FIXTURE = Path(__file__).resolve().parents[1] / "fixtures" / "console" / "acme-l
 DATA: dict[str, Any] = json.loads(FIXTURE.read_text())
 NOW = datetime(2026, 10, 20, 14, 0, tzinfo=UTC)
 TODAY = NOW.astimezone().date()
-TASK = "task:2026-10-20/1"
+TASK = "task:2026-10-20/veembc"
 REVIEW = "review:acme/ledger-sync#57"
 SETTINGS = Settings(
     state_dir=Path("/state"),

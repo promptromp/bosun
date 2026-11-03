@@ -347,8 +347,9 @@ report gets an opaque key only if its `report.md` is under the learn state folde
 resolved (a run made with `--out DIR` elsewhere is listed without one); `/api/learn/report/<key>`
 returns it and the page renders it as Markdown. Each `learn:` item shows its fields (finding key,
 category, target, run), the Change, Why and Evidence lines of its proposal (pending, or the last
-`proposed` history entry once settled), the exact change from the state's `proposals` (target,
-text, window), and its last move to applied or rejected (when, and the note `learn apply` wrote:
+`proposed` history entry once settled), the exact change from the item's fields (target,
+text, window; a pending item from before changes lived on the items shows it only after learn's
+next command moves it there), and its last move to applied or rejected (when, and the note `learn apply` wrote:
 where the change went). Findings remembered: key, title, category, status, times seen, first and
 last seen, with counts per status.
 
@@ -623,9 +624,13 @@ prompting time, cost, cost per task, overhead, and what learning has produced. P
   automation) confirms nothing executes.
 - **Fixture:** `tests/fixtures/console/acme-ledger.json` is built by `make-acme-ledger.sh` next to
   it, with the real `ledger` commands (and the hook for `said`): every kind, the outreach states,
-  each lineage relation, pending proposals, ticket mismatches and the XSS strings. Its task ids
-  carry the day they were made, so the script pins it: every date of the build day becomes
-  2026-10-20, the day the tests name, and a rebuild keeps the ids.
+  each lineage relation, pending proposals, ticket mismatches and the XSS strings. Its task and
+  outreach ids carry the day they were made and end in characters minted from the replica and the
+  journal position, so the script pins them: a fixed fictional replica, each write in a second of
+  its own (so each changes the same fields, and the positions repeat), the ids taken from the
+  commands' output, and every date of the build day written as 2026-10-20, the day the tests name.
+  A rebuild keeps the ids. It leaves out the journal position: the fixture stands for a ledger from
+  before journals.
 - **Dogfood:** run against a copy of the real ledger, read-only, and compare its counts with
   `ledger list` and `outreach`. Count item ids, not lines: a multi-line proposal continues on
   further lines of `ledger list`.

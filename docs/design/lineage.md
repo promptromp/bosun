@@ -34,7 +34,7 @@ item at all.
 | Asked of me | `review:`, `td:`, `slack:` (mention) | unchanged |
 | My own artifacts | `mypr:` | unchanged |
 | Waiting on others | `out:` with a `parent` field | unchanged; `parent` also reads as `blocked_by` |
-| Work we decided to do | a mention or outreach id, or nothing | `task:<YYYY-MM-DD>/<n>` |
+| Work we decided to do | a mention or outreach id, or nothing | `task:<YYYY-MM-DD>/<id>` |
 | Changes to bosun | `learn:` | unchanged (a finding with work behind it can spawn a task) |
 | External trackers | none | `ticket` (`jira:EXP-123`, `ghissue:acme/exporter#7`) |
 | Provenance, duplicates | notes, `origin` field, "merged into" | typed links |
@@ -86,7 +86,7 @@ too, because the tree shows it there.
 
 **Outreach `parent`.** Kept as a field and read as a computed `blocked_by`, rather than migrated
 to a stored link. It is the least risky path: the field also scopes the outreach id
-(`out:<parent>/<n>`), and `delegate --update <out-id>`, the open-outreach guard, the learning
+(`out:<parent>/<id>`), and `delegate --update <out-id>`, the open-outreach guard, the learning
 checks and the corpus fixtures all read it. Migrating would touch each of them for no change in
 behaviour. `unlink` refuses it and says how outreach stops blocking (applied or dropped).
 
@@ -102,7 +102,10 @@ is a warning), `link`, `unlink`, `tree`, `migrate-links [--dry-run]`, `ticket-sy
 commands that record and link a PR a report names; dropping an item with "merged into <id>" or
 "folded into <id>" records `folded_into`, with "duplicate of <id>" `duplicate_of`; closing a
 replied outreach that no task carries, while no window holds its parent, prints the spawn command;
-`prune` keeps finished items linked to open ones.
+`prune` keeps finished items linked to open ones, and whatever a kept item links to (its stored
+links' targets and an outreach's parent, to a fixpoint), so no kept item is left with a link to a
+pruned one. A link to an item that is gone (an older prune left some) is a `link-target` finding of
+`ledger validate`, which names the `ledger unlink` that clears it.
 
 **Folding.** "Merged into" used to record `duplicate_of`, which lost the difference between the
 same item recorded twice and an item whose work went on inside another (a small task done in

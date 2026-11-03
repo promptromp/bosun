@@ -211,7 +211,7 @@ def main(argv: list[str] | None = None) -> int:
         )
         return 2
     try:
-        ledger.configure_from_environment()
+        ledger.configure_from_environment(command="review-watch")
         reviewers = pr_threads.ReviewerBots.from_env(os.environ)
         lines = watch(args.id, args.dry_run, quiet=args.quiet, reviewers=reviewers)
     except (ledger.LedgerError, pr_threads.PrThreadsError) as exc:

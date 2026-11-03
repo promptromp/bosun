@@ -1,7 +1,9 @@
 # Design note: sync and sharing (ledger and knowledge)
 
-Status: accepted (2026-11-03); nothing built yet. Phase 0 is planned in
-[docs/plans/sync-phase-0.md](../plans/sync-phase-0.md). Tracked in
+Status: accepted (2026-11-03). Phase 0 is built for the ledger: every ledger write goes through
+a journal of changes per Mac that `ledger.json` is the rebuild of, with hash-based ids, the class
+table and `bosun ledger validate --journal` (also in `bosun doctor`); its knowledge part is next.
+Planned in [docs/plans/sync-phase-0.md](../plans/sync-phase-0.md). Tracked in
 [ROADMAP.md](../../ROADMAP.md#6-sync-and-sharing).
 
 ## Why
@@ -87,7 +89,7 @@ A review of the code and of current prior art (2026-11) found:
 | Shareable, machine-local and personal fields in the same records | Personal data would leak on sync | One table that classifies every field ([Which data goes where](#which-data-goes-where)) |
 | The knowledge base's local git repo pushes `identifiers.jsonl`; `kg forget` deletes `.git` | Pushing it leaks plaintext forever | A separate sync checkout that holds only what the gate lets out |
 | `forgotten.jsonl` keeps `sha256(entity id)`, reversible by guessing `person/<name>` | Leaks who was forgotten if it ever leaves | A keyed hash with a local secret |
-| `learn/state.json` holds the change behind each `learn:` item | A `learn:` item synced without it cannot be applied | Keep the change on the item |
+| `learn/state.json` holds the change behind each `learn:` item | A `learn:` item synced without it cannot show what it would change | Keep the change on the item; only the Mac whose learn proposed it applies it |
 | Pure models (`knowledge_model`, `lineage`); most access through the `bosun ledger` and `bosun kg` CLIs | Helps: few call sites change | Keep |
 
 Some readers open `ledger.json` directly (the console, the check-in gate, the impact collector,
@@ -137,6 +139,7 @@ never edits another replica's. Every change carries one envelope:
 | `seq` | Per replica and stream, from 1 with no gaps, so a missing change is noticed |
 | `hlc` | Hybrid logical clock: wall time in ms plus a counter, fixed width so it sorts as a string |
 | `tx` | The transaction: every change made under one write lock shares it |
+| `of` | How many lines the transaction has in this change's file, so a transaction cut short is noticed; a line in the `local` file also has `private_of`, how many it has in the replica's file (local lines never leave the Mac) |
 | `cmd` | The command that made it (`ledger transition`, `kg confirm`), so intent is not lost |
 | `rules` | Version of the rules it was checked against (`KINDS`, `RELATIONS`, the predicate list): a number bumped by hand when a change to them would rebuild old changes differently, as `orchestrator/learn.md` bumps its `version` |
 | `op`, `target`, `body` | What changed: an operation, the item, link, entity or fact, and its data |
@@ -144,7 +147,14 @@ never edits another replica's. Every change carries one envelope:
 
 **Canonical bytes:** `json.dumps(sort_keys=True, separators=(",", ":"), ensure_ascii=False)`,
 one record per line, LF endings. That matches RFC 8785 for strings and integers only, so a record
-may not hold floats; the writer refuses them.
+may hold no floats, and no text that is not valid Unicode (a lone surrogate, which is what Python
+makes of command-line bytes that are not UTF-8). A write that would journal one is refused before
+anything is written, naming the item and the field. Data that never went through the journal (a
+ledger from before it, or one changed outside it) has each such value converted once instead, a
+float to its text and a lone surrogate to U+FFFD, with a note on stderr; the file's own keys
+beside the records (`version`) silently take the value the rebuild gives. So a tool call whose
+arguments hold a decimal number cannot be proposed for approval
+([Approvals](../permissions.md#approvals-approve-once-in-chat)).
 
 **Order:** every replica sorts all changes by `(hlc, replica, id)`. A Lamport clock alone would sort
 yesterday's offline change after today's, which the stand-up summary should not do; wall time alone
@@ -158,11 +168,51 @@ current shape, now rebuilt from the logs. Commands, the guard, hooks, the consol
 the policy keep reading them. The property every test checks: the files equal the rebuild of the
 logs.
 
-**The journal is the commit point.** A write appends its changes to the journal (with `fsync`)
-first, then rewrites the files, which record the journal position they reflect (the highest `seq`
-per replica). A crash between the two leaves the files behind the journal; the next load sees the
-positions differ and rebuilds the files from the journal. Pulling another Mac's changes in phase 1
-is the same step.
+**The journal is the commit point.** A write appends its changes to the journal first, every byte
+of them (a short write is finished, or the write fails) and flushed to the disk itself (on macOS
+`F_FULLFSYNC`: a plain `fsync` there can leave the append in the drive's cache while a later
+rename reaches the disk). Then it rewrites the files, which record the journal position they
+reflect (the highest `seq` per file) and a digest of what they hold. A crash between the two
+leaves the files behind the journal; the next write sees the positions differ and rebuilds the
+files from the journal (a command that only reads uses the rebuild without saving it). Pulling
+another Mac's changes in phase 1 is the same step. A transaction counts once all its lines are
+present: a commit writes the `local` file first, then the replica's, and every line says how many
+its transaction has there (`of`, and from the `local` file `private_of`). A write cut short (a
+power cut mid-way, a signal between the two files, a line without its newline) leaves an
+unfinished transaction at the end of a file. Readers leave it out, as if it were not there, and
+the next write moves it aside (`<file>.torn-<time>`, kept) and says so. Each file is numbered
+from `seq` 1 with no gap; reading one with a gap or a repeat is damage, named by file, line and
+the missing `seq`.
+
+For the ledger this is `locked_ledger`. A reader (shared lock) never writes: it rebuilds in memory
+where the file is behind the journal, and on any other damage warns once on stderr and keeps the
+last whole `ledger.json`, so the guard keeps working. A writer uses the rebuild in memory, and the
+command's one save writes it, so `ledger.json.bak` always holds the ledger as it was before the
+write; copying it (or any older `ledger.json`) back does not undo a write, because the journal
+brings it forward again. A write whose rebuild keeps changes it cannot apply says how many on
+stderr (with one Mac each is a bug or damage), and `bosun doctor` runs `bosun ledger validate
+--journal`, failing on what refuses writes or puts data at risk and warning on the rest. A journal that is behind the file (a journal file deleted, a partial restore) is never
+rebuilt from, because that would lose what it lost from the file too. A writer refuses then, and
+so does a write that meets other damage where it reads (every write reads the end of each file,
+and a rebuild reads all of it), with the file and line named. The way out is the same for both:
+move the journal folder and `replica.json` aside together, and the next write starts a new
+journal from `ledger.json`, as a new replica, so that no id is minted twice from the same `seq`.
+
+**A change made outside the journal is adopted.** `ledger.json` can still be changed by something
+that does not journal: by hand, or by an older bosun (after a downgrade, or a checkout's bosun on
+the same state folder), which writes every top-level key back as it found it, the journal
+position included. So the file also records the digest of what it holds (`journal.digest`: the
+SHA-256 of its canonical bytes without the `journal` key). A write that finds what the file holds
+no longer matching its digest puts the difference in the journal first, as one transaction named
+`adopt` (the diff from what the file held when it was saved to what it holds now, with what a
+write cut short adopted already counted), says so on stderr, and always goes on from the
+journal's rebuild, so that `ledger.json` stays the rebuild. The file is what someone outside the
+journal meant, and refusing would stop every write. Adopted changes follow the same rules as any
+other: a field is set, an item made or deleted, a history entry added. What the journal cannot
+hold is undone by that write, which says so in one line (how many parts, and that
+`ledger.json.bak` keeps the file as edited until the next write): history only grows, so an entry removed by hand comes
+back, and one edited in place comes back beside its edited copy. A file saved before digests is
+trusted once and gets one at its next save.
 
 ### Rebuilding, and what a merge cannot decide
 
@@ -173,16 +223,23 @@ is kept in the log, has no effect, and becomes a **conflict record**:
 | Data | Merge rule | A conflict when |
 |---|---|---|
 | The changes themselves | Union by `id` | never |
-| Item fields (`title`, `url`, `fields.*`) | Last writer wins per field; losing values stay in the history | the field is marked important (a ticket key, an owner) |
-| Item state | A state change carries its `from`; the first valid one in order applies | a later one whose `from` no longer holds |
-| History entries, outreach messages, processed Slack sources | Grow-only set, shown in order | never |
+| Item creation | The same id made on two Macs (one PR, one Slack message) is merged: what the item lacks is added, histories are unioned by time; the state and important fields (a proposal whole, never blended) stay as the earlier one made them | the two differ in state or an important field, or the later one's link would break a lineage rule (checked once its write's items are all made) |
+| Item fields (`title`, `url`, `fields.*`) | Last writer wins per field; losing values stay in the journal | the field is marked important (a ticket's system, a learning finding's key) |
+| Item state | A state change carries its `from`; the first valid one in order applies | a later one whose `from` no longer holds, or a move its kind does not allow |
+| History entries | Grow-only, shown in order | never |
+| Outreach messages | Added at the end; a corrected time drops the message and adds it again; dropping one already gone does nothing | never |
+| Processed Slack sources, runs | Last writer wins per key; `prune` deletes old sources | never |
 | Lineage links | Add wins over a concurrent unlink; inverses computed as today | an add would close a cycle, or give an item a second `part_of` |
 | Proposals and approvals | One slot per item; an approval's `used_at` set once | two proposals in one slot; an approval used twice |
-| Item deletion (`prune`) | A tombstone; delete wins | a change arrives for a deleted item |
+| Item deletion (`prune`) | A tombstone; delete wins; the Mac that deleted it may make it again (a pruned ticket tracked again) | a change other than a delete arrives for a deleted item, or another Mac makes it again |
 | Fact assertions | One per source; a fact is the group sharing subject, predicate and object | never |
 | Single-valued predicates | Keep every confirmed value | more than one current confirmed value |
 | Review decisions | Last writer wins per fact and reviewer | confirm and reject by different reviewers at once |
 | Entities | Last writer wins per field; aliases unioned; delete wins | a proposed merge of two entities |
+
+A change this bosun cannot apply, an operation it does not know (from a newer version) or a body
+it cannot read, is kept the same way and shows as a conflict, as git-bug keeps operations it does
+not recognize; so is a change for an item that was never made (`missing`).
 
 Conflicts show where open work already shows: a "needs you" entry in the console and in chores,
 and `bosun ledger conflicts` and `bosun kg conflicts`. They are resolved with ordinary commands,
@@ -199,12 +256,18 @@ on different schemas could no longer merge:
 - **A newer rules version** than this bosun knows: it applies those changes without re-checking
   them, since the newer bosun already checked them under rules this one lacks (usually a new state
   or relation), and `bosun doctor` says to update. Once updated, it rebuilds the same as the
-  others. Changes checked under older rules are always re-checked under the current ones, so an
-  update never needs every Mac to move at once.
+  others. Today the rebuild re-checks every change under the current rules, which holds only while
+  no rules change removes a move: before one does, or phase 1, the rebuild must check each change
+  under the rules version it was recorded with ([Open questions](#open-questions)).
 
 **Existing data** enters the journal once, as a snapshot change per item, entity and fact, when a
 Mac first turns on the journal (phase 0). History before that is whatever the files still hold:
-trimmed history and pruned items are gone already.
+trimmed history and pruned items are gone already. For the ledger, the first write's genesis
+transaction (command `genesis`) is the diff from the empty ledger: a create per item, by id, with
+its local leaves split off as for any new item, a put per source and run, and what I said. Its
+rebuild is the file again, old numeric ids, trimmed histories and approvals included. The file is
+saved at its new position straight away, with its own content, so that a position it brought
+from elsewhere (a copy, such as the chores dry run's) ends there even if the command fails.
 
 ### Where the ledger's changes come from
 
@@ -213,9 +276,13 @@ document, hands it to the command and saves it. That function copies the documen
 compares afterwards, turning each write into one transaction of field-level changes. A table maps
 each field path to its merge rule and its class ([Which data goes where](#which-data-goes-where)),
 in the table style of `KINDS`, `RELATIONS` and `CHECKS`. A state change becomes a change with its
-`from`; added history entries, links and messages become additions; a removed link becomes an
-unlink. A write that changed nothing adds nothing to the journal (the files are still rewritten,
-since `ledger render` relies on that). The command name goes on the transaction.
+`from`, one per transition the write made (a one-way message is sent, then applied, in one
+write), so the rebuild checks each against its kind. Added history entries, links and messages
+become additions; a removed link becomes an unlink; a message whose time was corrected is dropped
+and added again; a pruned source is deleted from its map; a field that was removed travels as a
+set marked `unset`, so the rebuild removes the key rather than setting it to null. A write that
+changed nothing adds nothing to the journal (the files are still rewritten, since `ledger render`
+relies on that). The command name goes on the transaction.
 
 The alternative, an explicit change emitted by each command, keeps more intent but spreads sync
 across 29 places. The comparison keeps it in one, and the command name recovers most of the
@@ -228,7 +295,9 @@ Three ledger behaviours change meaning:
   everything.
 - **`prune`** writes tombstones, so a pruned item disappears from every machine.
 - **`learn:` items** keep their change on the item instead of in `learn/state.json`, so a synced
-  `learn:` item can still be applied.
+  `learn:` item shows what it would change. Only the Mac whose learn proposed it can apply it:
+  apply compares the item and its proposal with digests in that learn's own state
+  ([learning](learning.md)).
 
 ### Knowledge changes
 
@@ -263,9 +332,12 @@ change may retire it ([Open questions](#open-questions)).
 
 The short hash is six base32 characters of a hash of the replica id and the journal position the
 id is made at, so it is unique to its Mac by construction, never reused (not even after a `prune`),
-the same on every rebuild of a fixture, and short enough to type. Two Macs collide only by a hash
-collision, about one in a billion for a pair of ids. Existing ids stay as they are: only the first
-Mac has them.
+the same on every rebuild of a fixture whose writes change the same fields (the console fixture's
+build gives each write a second of its own, since a write in the same second leaves `updated_at`
+as it was), and short enough to type. Two Macs collide only by a hash collision, about one in a
+billion for a pair of ids; one that names an item already is minted again. A learning id hashes
+the replica, the finding's key and the run instead, so the same finding in the same run is the
+same item. Existing ids stay as they are: only the first Mac has them.
 
 A new Mac joins by restoring from the state repository and starting with no ledger of its own. A
 Mac that already has its own ledger cannot join in phase 1: merging two ledgers that grew apart
@@ -278,9 +350,9 @@ Every field belongs to one class. The class decides how far it may travel:
 
 | Class | Leaves this Mac | Examples |
 |---|---|---|
-| `local` | Never | `said` (my verbatim prompts); an approval's quote, session, transcript path and tool call; `identifiers.jsonl`; `forgotten.jsonl`; person entities and every fact naming a person; `batch.json` |
-| `sealed` | Only to my own scope, and only when the data is encrypted (by the codec, or by a store that declares encryption at rest) | free text (titles, notes, history notes, report summaries, outreach subjects and bodies); colleagues' names in `requester` and `to`; Slack permalinks |
-| `private` | To my own scope | item ids, kinds, states, links, history events, reports; the window in a delegation or report, tagged with its replica; process and product facts |
+| `local` | Never | `said` (my verbatim prompts); an approval's quote; a call's session, transcript path and tool call id, wherever an approval, a standing approval or the call's outcome (`failed`, `carried_out`) keeps them; the history entries that quote me (`approved`, `approval-used`, `user-said`) or keep a call's context; my words as a link's or a task's `via` or a transition's evidence (`user: ...`), with the link or history entry that holds them; `identifiers.jsonl`; `forgotten.jsonl`; person entities and every fact naming a person; `batch.json` |
+| `sealed` | Only to my own scope, and only when the data is encrypted (by the codec, or by a store that declares encryption at rest) | a learning finding's key (a slug the model wrote, which can name a colleague); free text: titles, URLs, notes, history notes, report summaries, open points and results, outreach subjects, details, options and answers, a task's ask, done-when and `via` (unless it quotes me), a delegation's ask, details and link, a proposal's action and its exact call (`spec`), a failed call's reason, a workstream's aliases; colleagues' names in `requester`, `to` and a ticket's `assignee`; Slack permalinks (a reply's or request's ref, processed sources) |
+| `private` | To my own scope | item ids, kinds, states, links, history events, a proposal's times, a report's time and CI status; repo, ticket and system names; the window in a delegation or report, tagged with its replica; process and product facts |
 | `team` | Also into a published projection | item id, kind, state and owner for the team board; confirmed, non-personal facts a share spec selects |
 
 The rules that keep this clean:
@@ -289,8 +361,10 @@ The rules that keep this clean:
   knowledge). Moving a field to another class is a change to one row.
 - **Unknown means `local`.** A new field that nobody classified stays on the Mac, so forgetting
   the table fails safe.
-- **The table is total.** A test walks every field of the fixture ledger and knowledge base and
-  fails if one is unclassified, so a new field forces a decision in the same pull request.
+- **The table is total.** Every key is named, with no wildcard below an item, so an unnamed key is
+  `local`. A test walks every field of the fixture ledger, of the ledgers that real commands write,
+  and of the knowledge base, and fails if one is unclassified, so a new field forces a decision in
+  the same pull request.
 - **The gate checks again** before anything is encoded, and what it checks depends on the scope:
   - every scope: the class filter, the values in `identifiers.jsonl` (people's ids),
     `lib/redact.py` (keys, tokens, emails) and gitleaks if it is installed;
@@ -317,6 +391,22 @@ Where we expect to iterate:
   team on GitHub) could be shared needs a closer look before any title goes into a team projection.
 - **Item ids can be sensitive.** `slack:<channel>/<ts>` names a channel; it is `private`, and Slack
   items stay out of the team board.
+- **Links and history notes can quote me.** A link's or a task's `via` and a transition's evidence
+  that quote me (`user: <what I said>`) are `local`, as the history entries that quote me are: the
+  link or history entry stays on the Mac whole, so another Mac misses that link, and a task's `via`
+  stays as a field of its own. Other history notes (a task's ask, a note) can still hold my words
+  and stay `sealed`, so phase 1's gate strips them when encryption is off.
+- **Learn's evidence quotes.** A `learn:` proposal's action holds evidence quoted from my prompts
+  or a session transcript, and so do its `proposed` and `proposal-*` history entries; they are
+  `sealed`. Moving the quote out of the action into a field of its own would let it stay `local`;
+  that needs my decision before phase 1.
+- **Nothing removes a history entry.** The ledger's journal keeps every change, so a note typed by
+  mistake (a colleague's name, something private) stays in the journal even after a hand edit
+  (which the next write undoes) or a `prune` (which deletes the item, not its earlier changes).
+  Today the only way out is to move the journal aside, which starts it again from `ledger.json`.
+  A ledger forget is open for phase 1, before any of it leaves the Mac: as planned for the
+  knowledge base's `kg forget`, a forgotten change would keep its place in the sequence and lose
+  its body.
 
 ### Scopes and the state repository
 
@@ -622,8 +712,32 @@ from the journal, never what travels.
 
 ## Open questions
 
-- **Rebuild cost:** nobody has measured a rebuild over months of changes. Phase 0 measures one over
-  a synthetic year before deciding whether snapshots are needed.
+- **Rebuild cost (measured 2026-11-03, phase 0):** a synthetic year written through
+  `locked_ledger` (100 items, about 500 changes each: a note and a field per round, 52,436 changes,
+  a 20.7 MB journal for a 3.0 MB `ledger.json`) takes 0.18 s to read and order and 1.09 s to
+  rebuild on an Apple-silicon Mac (Python 3.15). An ordinary write never rebuilds: only the
+  commands after a crash until one writes, and in phase 1 each pull. That is over a second, so
+  phase 1 needs snapshots: a rebuilt state saved with the position it reflects, and only the
+  changes after it applied. The write itself costs more with the journal (the copy and the diff):
+  about 3 ms instead of 1 ms at the fixture's size, and 40 ms instead of 15 ms for a 3 MB ledger,
+  against about 80 ms to start the command. Since 2026-11-03 each write also hashes the ledger twice
+  (to notice a change made outside the journal, and to record its digest), about 15 ms each for a
+  3 MB ledger and under 1 ms at the fixture's size, and flushes the journal and `ledger.json` to the
+  disk itself (`F_FULLFSYNC`, about 5 ms each on an Apple-silicon Mac).
+- **Rules versions in the rebuild:** every change records `rules`, but the rebuild checks each
+  one against today's `KINDS` and `RELATIONS`. A change to them that removes a move or tightens a
+  link rule would turn a Mac's own valid history into conflicts, and a write that rebuilds after a
+  crash would revert those states. Before the next such change, or phase 1, the rebuild must check
+  each change under the rules version it was recorded with (or not re-check a replica's own
+  contiguous sequence, which was checked against the very state it applies to). A unit test pins a
+  digest of the rule tables to `RULES_VERSION`, so such a change cannot land unnoticed.
+- **One replica id on two Macs:** a Migration Assistant or Time Machine restore onto a second Mac
+  copies `replica.json`, and both Macs then write as one replica. Phase 1 must notice it (two
+  journals with the same `seq` and different changes) rather than merge them.
+- **Causal context for a change after a delete:** an item that another Mac deleted and this one
+  makes again stays deleted, because the rebuild cannot yet tell a Mac that saw the delete from one
+  that made the item at the same time. Phase 1 adds what each transaction was built on (the
+  journal position it read) so that one that saw the delete can start the item again.
 - **Joining with an existing ledger:** a Mac that already has its own ledger cannot join in phase 1.
   If someone needs it: rename its clashing generated ids, and decide how two histories of the same
   `review:` item combine (one wins, both kept, or a conflict per item).

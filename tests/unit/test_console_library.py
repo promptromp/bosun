@@ -259,8 +259,10 @@ class CatalogTestCase(unittest.TestCase):
 
 
 def learn_item(
-    item_id: str, state: str, history: list[dict[str, Any]], proposal: str | None = None
+    item_id: str, state: str, history: list[dict[str, Any]], proposal: str | None = None, text: str = ""
 ) -> dict[str, Any]:
+    """A learn: item; with <text>, it holds its change (an item made before changes moved onto
+    the items has none)."""
     return {
         "id": item_id,
         "kind": "learning",
@@ -273,15 +275,17 @@ def learn_item(
             "category": "mishap",
             "target": "policy",
             "run": "2026-10-19T18:30:00+00:00",
+            **({"text": text} if text else {}),
         },
         "proposal": {"action": proposal, "proposed_at": history[0]["at"]} if proposal else None,
         "history": history,
     }
 
 
+RETRY = "Retry the paste once before reporting it failed."
 ACTION = (
     "[learn: policy] Retry a failed check-in paste\nChange: a rule appended to the site policy:\n"
-    "Retry the paste once before reporting it failed.\nWhy: two check-ins were lost\n"
+    f"{RETRY}\nWhy: two check-ins were lost\n"
     'Evidence: log checkin-2026-10-19.log 10:00: "paste failed"\n'
     "If yes: bosun learn apply 'learn:2026-10-19/1'"
 )
@@ -330,13 +334,6 @@ class LearnTestCase(unittest.TestCase):
                     "status": "reported",
                 },
             },
-            "proposals": {
-                "learn:2026-10-19/1": {
-                    "key": "checkin-paste-retry",
-                    "target": "policy",
-                    "text": "Retry the paste once before reporting it failed.",
-                }
-            },
         }
         write(self.learn_dir / "state.json", json.dumps(state))
 
@@ -372,7 +369,7 @@ class LearnTestCase(unittest.TestCase):
         ledger = {
             "items": {
                 "learn:2026-10-19/1": learn_item(
-                    "learn:2026-10-19/1", "applied", [created, proposed, applied]
+                    "learn:2026-10-19/1", "applied", [created, proposed, applied], text=RETRY
                 ),
                 "learn:2026-10-20/1": learn_item(
                     "learn:2026-10-20/1", "proposed", [{**created, "at": "2026-10-20T18:31:00+00:00"}], ACTION
@@ -389,7 +386,8 @@ class LearnTestCase(unittest.TestCase):
         self.assertIn("Retry the paste once", newest["change_text"])
         self.assertEqual(older["settled"]["state"], "applied")
         self.assertIn("policy.md", older["settled"]["note"])
-        self.assertEqual(older["change"]["target"], "policy")
+        self.assertEqual(older["change"], {"target": "policy", "text": RETRY, "window": ""})
+        self.assertIsNone(newest["change"])  # made before changes lived on the items: the action shows it
         self.assertEqual(older["evidence"], newest["evidence"])  # from the history once settled
 
     def test_findings_remembered(self) -> None:
