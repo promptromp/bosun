@@ -173,7 +173,7 @@ is kept in the log, has no effect, and becomes a **conflict record**:
 | Data | Merge rule | A conflict when |
 |---|---|---|
 | The changes themselves | Union by `id` | never |
-| Item creation | The same id made on two Macs (one PR, one Slack message) is merged: what the item lacks is added, histories are unioned by time | the other Mac's link would break a lineage rule |
+| Item creation | The same id made on two Macs (one PR, one Slack message) is merged: what the item lacks is added, histories are unioned by time; the state and important fields (a proposal whole, never blended) stay as the earlier one made them | the two differ in state or an important field, or the later one's link would break a lineage rule (checked once its write's items are all made) |
 | Item fields (`title`, `url`, `fields.*`) | Last writer wins per field; losing values stay in the journal | the field is marked important (a ticket key, an owner) |
 | Item state | A state change carries its `from`; the first valid one in order applies | a later one whose `from` no longer holds, or a move its kind does not allow |
 | History entries | Grow-only, shown in order | never |
@@ -181,7 +181,7 @@ is kept in the log, has no effect, and becomes a **conflict record**:
 | Processed Slack sources, runs | Last writer wins per key; `prune` deletes old sources | never |
 | Lineage links | Add wins over a concurrent unlink; inverses computed as today | an add would close a cycle, or give an item a second `part_of` |
 | Proposals and approvals | One slot per item; an approval's `used_at` set once | two proposals in one slot; an approval used twice |
-| Item deletion (`prune`) | A tombstone; delete wins | a change other than a delete arrives for a deleted item |
+| Item deletion (`prune`) | A tombstone; delete wins; the Mac that deleted it may make it again (a pruned ticket tracked again) | a change other than a delete arrives for a deleted item, or another Mac makes it again |
 | Fact assertions | One per source; a fact is the group sharing subject, predicate and object | never |
 | Single-valued predicates | Keep every confirmed value | more than one current confirmed value |
 | Review decisions | Last writer wins per fact and reviewer | confirm and reject by different reviewers at once |
@@ -641,6 +641,10 @@ from the journal, never what travels.
 
 - **Rebuild cost:** nobody has measured a rebuild over months of changes. Phase 0 measures one over
   a synthetic year before deciding whether snapshots are needed.
+- **Causal context for a change after a delete:** an item that another Mac deleted and this one
+  makes again stays deleted, because the rebuild cannot yet tell a Mac that saw the delete from one
+  that made the item at the same time. Phase 1 adds what each transaction was built on (the
+  journal position it read) so that one that saw the delete can start the item again.
 - **Joining with an existing ledger:** a Mac that already has its own ledger cannot join in phase 1.
   If someone needs it: rename its clashing generated ids, and decide how two histories of the same
   `review:` item combine (one wins, both kept, or a conflict per item).

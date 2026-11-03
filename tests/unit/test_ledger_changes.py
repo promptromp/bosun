@@ -26,7 +26,7 @@ import hook
 import ledger
 import ledger_changes
 import lineage
-from change_log import Change, Edit, canonical
+from change_log import Change, Edit, canonical, in_order
 from journal import Journal
 from ledger_changes import (
     EMPTY,
@@ -1046,7 +1046,6 @@ class TestRebuild(unittest.TestCase):
         mine = an_item(REVIEW_7, fields={"repo": "acme/api"})
         theirs = an_item(
             REVIEW_7,
-            state="delegated",
             fields={"repo": "acme/other", "area": "exports"},
             history=[
                 {"at": T1, "event": "created", "state": "requested"},
@@ -1066,6 +1065,96 @@ class TestRebuild(unittest.TestCase):
         kept = copy.deepcopy(changes)
         scribble(result.ledger)
         self.assertEqual(changes, kept)  # the merge shares nothing with the changes either
+
+    def test_a_merge_keeps_the_earlier_state_and_important_fields(self) -> None:
+        mine = an_item(REVIEW_7, fields={"repo": "acme/api", "key": "EXP-1"}, proposal=a_proposal())
+        approval = {"at": T1, "hash": "h1"}
+        theirs = an_item(
+            REVIEW_7,
+            state="delegated",
+            fields={"repo": "acme/api", "key": "EXP-2", "area": "exports"},
+            proposal=a_proposal(action="close the PR", approval=approval),
+        )
+        changes = Mac(self.root, REPLICA_A, EMPTY).write(1000, made(a_ledger(mine)))
+        later = Mac(self.root, REPLICA_B, EMPTY).write(2000, made(a_ledger(theirs)))
+        result = rebuild(changes + later, ledger.RULES)
+        merged = result.ledger["items"][REVIEW_7]
+        self.assertEqual(merged["state"], "requested")
+        self.assertEqual(merged["proposal"], a_proposal())  # whole, never blended with theirs
+        self.assertEqual(merged["fields"], {"repo": "acme/api", "key": "EXP-1", "area": "exports"})
+        self.assertEqual(
+            [(conflict.change, conflict.kind) for conflict in result.conflicts],
+            [(later[0]["id"], "state"), (later[0]["id"], "field"), (later[0]["id"], "field")],
+        )
+        self.assertEqual(
+            [conflict.detail.split(": ")[0] for conflict in result.conflicts],
+            [
+                "made on two Macs, delegated there and requested here",
+                "made on two Macs with another fields.key",
+                "made on two Macs with another proposal",
+            ],
+        )
+
+    def test_a_merge_fills_an_empty_proposal(self) -> None:
+        theirs = an_item(REVIEW_7, proposal=a_proposal())
+        changes = Mac(self.root, REPLICA_A, EMPTY).write(1000, made(a_ledger(an_item(REVIEW_7))))
+        changes += Mac(self.root, REPLICA_B, EMPTY).write(2000, made(a_ledger(theirs)))
+        result = rebuild(changes, ledger.RULES)
+        self.assertEqual(result.ledger["items"][REVIEW_7]["proposal"], a_proposal())
+        self.assertEqual(result.conflicts, [])
+
+    def test_a_merged_items_link_to_an_item_made_with_it_holds(self) -> None:
+        """The other Mac's links are checked once its transaction's items are all made: its
+        workstream sorts after the merged PR. Mac A's own transaction interleaves with it (the
+        same clock) and ends in between, which must not check them early."""
+        pr, ws = "mypr:acme/api#1", "ws:zz-exports"
+        a_pr = an_item(pr, kind="my-pr", state="open")
+        b_pr = {**a_pr, "links": [{"rel": "part_of", "id": ws, "at": T1}]}
+        a = Mac(self.root, REPLICA_A, EMPTY)
+        ours = a.write(1000, made(a_ledger(a_pr)))
+        ours += a.write(2000, made(a_ledger(a_pr, a_task(), a_mention())))
+        theirs = Mac(self.root, REPLICA_B, EMPTY).write(
+            2000, made(a_ledger(b_pr, an_item(ws, kind="workstream", state="active")))
+        )
+        order = [(change["replica"][0], change["target"]) for change in in_order(ours[1:] + theirs)]
+        self.assertEqual(order, [("a", MENTION), ("b", pr), ("a", TASK), ("b", ws)])
+        result = self.either_way(ours, theirs)
+        self.assertEqual(result.ledger["items"][pr]["links"], b_pr["links"])
+        self.assertEqual(result.conflicts, [])
+
+    def test_an_item_pruned_and_made_again_on_one_mac_is_back(self) -> None:
+        """The review's probe: a ticket pruned, then tracked again, which makes it again."""
+        ticket = an_item("jira:EXP-1", kind="ticket", state="done")
+        a = Mac(self.root, REPLICA_A, EMPTY)
+        changes = a.write(1000, made(a_ledger(a_task(), ticket)))
+        changes += a.write(2000, pruned("jira:EXP-1"))
+
+        def track(data: dict[str, Any]) -> None:
+            data["items"]["jira:EXP-1"] = an_item("jira:EXP-1", kind="ticket", state="unsynced")
+            linked(TASK, "tracks", "jira:EXP-1", T2)(data)
+
+        changes += a.write(3000, track)
+        result = rebuild(changes, ledger.RULES)
+        self.assertEqual(result.conflicts, [])
+        self.assertEqual(result.ledger, a.ledger)
+
+    def test_a_create_after_another_macs_delete_is_a_conflict(self) -> None:
+        base = a_ledger(an_item(REVIEW_7))
+        a = Mac(self.root, REPLICA_A, EMPTY)
+        shared = a.write(1000, made(base))
+        b = Mac(self.root, REPLICA_B, a.ledger)
+        gone = a.write(2000, pruned(REVIEW_7))
+        again = Mac(self.root, REPLICA_C, EMPTY).write(3000, made(base))  # it never saw the delete
+        result = rebuild(shared + gone + again, ledger.RULES)
+        self.assertNotIn(REVIEW_7, result.ledger["items"])
+        self.assertEqual(self.conflicts(result), [(again[0]["id"], "deleted")])
+        # deleted on both Macs: made again by one of them, it may not have seen the other's delete
+        b_gone = b.write(2500, pruned(REVIEW_7))
+        mine_again = a.write(4000, made(base))
+        result = rebuild(shared + gone + b_gone + mine_again, ledger.RULES)
+        self.assertNotIn(REVIEW_7, result.ledger["items"])
+        self.assertEqual(self.conflicts(result), [(mine_again[0]["id"], "deleted")])
+        self.assertIn("deleted on another Mac", result.conflicts[0].detail)
 
     def test_a_merged_history_keeps_both_in_time_order(self) -> None:
         def noted(*times: str) -> list[dict[str, Any]]:
@@ -1259,7 +1348,8 @@ class RealWritesTest(PostToolUseTestCase):
     def more_work(self) -> None:
         """The rest of what writes: a message's time corrected, a one-way message (sent, then
         applied, in one write), a move to another workstream, an unlink, a ticket done, then a
-        prune of it, of the sources and of what I said, once old."""
+        prune of it, of the sources and of what I said, once old; then a link that tracks the
+        pruned ticket, which makes it again."""
         run("sent", REVIEW_REQUEST, "--ref", SENT_REF, "--at", T2)
         run("reach-out", PR, "--to", "Dana", "--subject", "fixed", "--purpose", "fyi")
         (fyi,) = [key for key in json.loads(self.ledger_text())["items"] if key.endswith("/2")]
@@ -1278,6 +1368,9 @@ class RealWritesTest(PostToolUseTestCase):
             entry["at"] = T0
         ledger.save(data)
         run("prune", "--days", "1")
+        self.assertNotIn("jira:EXP-12", json.loads(self.ledger_text())["items"])
+        run("link", OTHER_PR, "tracks", "jira:EXP-12")  # makes the pruned ticket again
+        self.assertIn("jira:EXP-12", json.loads(self.ledger_text())["items"])
 
     def edits(self) -> list[Edit]:
         """The edits of every write, and of the genesis of the ledger they made."""

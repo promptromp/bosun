@@ -619,7 +619,7 @@ class Rebuilt:
 
 
 class _Refused(Exception):
-    """A change the rebuild keeps but does not apply (or not all of): its conflict."""
+    """A change the rebuild keeps but does not apply: its conflict."""
 
     def __init__(self, kind: str, detail: str) -> None:
         super().__init__(detail)
@@ -627,18 +627,39 @@ class _Refused(Exception):
         self.detail = detail
 
 
+Transaction = tuple[str, str]  # a change's (replica, tx)
+
+
+@dataclass
+class _Merged:
+    """A merged item's links from the other Mac, checked once its transaction's items are made."""
+
+    change: Change
+    item_id: str
+    links: list[Any]
+
+
 @dataclass
 class _Rebuild:
-    """The ledger as the changes so far make it, and the items deleted (delete wins)."""
+    """The ledger as the changes so far make it; the change being applied; the replicas that
+    deleted each deleted item (delete wins); and the links of merged items still to check."""
 
     ledger: Ledger
     rules: Rules
-    deleted: set[str] = field(default_factory=set)
+    current: Change = field(default_factory=dict)
+    conflicts: list[Conflict] = field(default_factory=list)
+    deleted: dict[str, set[str]] = field(default_factory=dict)
+    merged: dict[Transaction, list[_Merged]] = field(default_factory=dict)
 
     @property
     def items(self) -> dict[str, Item]:
         items: dict[str, Item] = self.ledger["items"]
         return items
+
+    def conflict(self, kind: str, detail: str, change: Change | None = None) -> None:
+        """A conflict for <change> (the one being applied, unless given)."""
+        of = self.current if change is None else change
+        self.conflicts.append(Conflict(str(of.get("id", "")), str(of.get("target", "")), kind, detail))
 
     def item(self, item_id: str) -> Item:
         """The item a change edits; a deleted one, or one never made, refuses the change."""
@@ -768,28 +789,80 @@ def _union_history(history: list[Any], other: list[Any]) -> list[Any]:
     return [*head, *heapq.merge(history[len(head) :], added, key=_entry_time)]
 
 
-def _add_missing(path: Path, into: dict[str, Any], other: Mapping[str, Any]) -> None:
-    """The fields of <other> that <into> lacks, into it, container by container; the history and
-    links are merged apart."""
+def _keep_earlier(state: _Rebuild, path: Path, mine: Any, theirs: Any) -> None:
+    """An important field (the state, a proposal, a ticket key) both Macs made: the earlier one's
+    stays, whole; another value from the later one is a conflict."""
+    if theirs is None or _same(strip_local(path, mine), strip_local(path, theirs)):
+        return
+    if classify(path).rule == STATE:
+        state.conflict(STATE_CONFLICT, f"made on two Macs, {theirs} there and {mine} here: the earlier stays")
+    else:
+        state.conflict(
+            FIELD_CONFLICT, f"made on two Macs with another {'.'.join(path[2:])}: the earlier stays"
+        )
+
+
+def _add_missing(state: _Rebuild, path: Path, into: dict[str, Any], other: Mapping[str, Any]) -> None:
+    """The fields of <other> that <into> lacks (an empty important one too), into it, container by
+    container. An important container (a proposal, its approval) is one value: never blended. The
+    history and links are merged apart."""
     for key, value in other.items():
         inner = (*path, key)
-        if classify(inner).rule in (HISTORY, LINKS):
+        rule = classify(inner)
+        if rule.rule in (HISTORY, LINKS):
             continue
-        if key not in into:
+        if key not in into or (rule.important and into[key] is None):
             into[key] = copy.deepcopy(value)
+        elif rule.important:
+            _keep_earlier(state, inner, into[key], value)
         elif is_container(inner, into[key]) and is_container(inner, value):
-            _add_missing(inner, into[key], value)
+            _add_missing(state, inner, into[key], value)
+
+
+def _transaction(change: Change) -> Transaction:
+    return (str(change.get("replica", "")), str(change.get("tx", "")))
 
 
 def _merge(state: _Rebuild, item_id: str, item: Item, other: Item) -> None:
-    """The same id made on two Macs (one PR, one Slack message): what the item lacks is added, its
-    state and fields stay, the histories are unioned and the other's links are checked."""
-    _add_missing(("items", item_id), item, other)
+    """The same id made on two Macs (one PR, one Slack message): what the item lacks is added, a
+    different state or important field is a conflict (the earlier stays), the histories are
+    unioned, and the other's links are checked once its transaction's items are all made (a link
+    may point at one made after this one)."""
+    _add_missing(state, ("items", item_id), item, other)
     item["history"] = _union_history(_as_list(item.get("history")), _as_list(other.get("history")))
-    refused = (_add_link(state, item_id, item, link) for link in _as_list(other.get("links")))
-    problems = [problem for problem in refused if problem]
-    if problems:
-        raise _Refused(LINK_CONFLICT, f"merged, but without its link(s): {'; '.join(problems)}")
+    links = _as_list(other.get("links"))
+    if links:
+        state.merged.setdefault(_transaction(state.current), []).append(
+            _Merged(state.current, item_id, links)
+        )
+
+
+def _check_merged_links(state: _Rebuild, transaction: Transaction) -> None:
+    """The links of the items <transaction> merged into: each one the rules refuse is left out,
+    and a conflict of the change that brought it."""
+    for merged in state.merged.pop(transaction, []):
+        item = state.items.get(merged.item_id)
+        if item is None:
+            problems = [f"{merged.item_id} is gone"]
+        else:
+            refused = (_add_link(state, merged.item_id, item, link) for link in merged.links)
+            problems = [problem for problem in refused if problem]
+        if problems:
+            detail = f"merged, but without its link(s): {'; '.join(problems)}"
+            state.conflict(LINK_CONFLICT, detail, merged.change)
+
+
+def _restart(state: _Rebuild, item_id: str) -> None:
+    """A deleted id made again. By the replica that deleted it, and no other, the item starts
+    again: later in that replica's own sequence, it was made after the delete was seen (`prune`,
+    then a link that tracks the ticket again). By another replica, delete wins: it may not have
+    seen the delete."""
+    deleters = state.deleted.get(item_id)
+    if deleters is None:
+        return
+    if deleters != {state.current.get("replica")}:
+        raise _Refused(DELETED, f"{item_id} was deleted on another Mac, and a delete wins")
+    del state.deleted[item_id]
 
 
 def _create(state: _Rebuild, item_id: str, body: dict[str, Any]) -> None:
@@ -798,8 +871,7 @@ def _create(state: _Rebuild, item_id: str, body: dict[str, Any]) -> None:
     made = body["item"]
     if not isinstance(made, dict):
         raise _Refused(UNKNOWN, "an item that is not an object")
-    if item_id in state.deleted:
-        raise _Refused(DELETED, f"{item_id} was deleted, and a delete wins")
+    _restart(state, item_id)
     if item_id in state.items:
         _merge(state, item_id, state.items[item_id], made)
     else:
@@ -807,9 +879,10 @@ def _create(state: _Rebuild, item_id: str, body: dict[str, Any]) -> None:
 
 
 def _delete(state: _Rebuild, item_id: str, _body: dict[str, Any]) -> None:
-    """A tombstone: the item goes, and every later change for it but a delete is a conflict."""
+    """A tombstone: the item goes, and every later change for it but a delete (or a create by the
+    replica that deleted it) is a conflict."""
     state.items.pop(item_id, None)
-    state.deleted.add(item_id)
+    state.deleted.setdefault(item_id, set()).add(str(state.current.get("replica", "")))
 
 
 def _map(state: _Rebuild, name: str) -> dict[str, Any]:
@@ -871,21 +944,28 @@ def rebuild(changes: Iterable[Change], rules: Rules) -> Rebuilt:
     then each item's history trimmed. A change that breaks a rule a merge cannot keep stays in
     the journal, has no effect and is a conflict: a state change whose `from` no longer holds or
     that the kind does not allow, an important field set from a value it no longer has, a link
-    the rules refuse, any change to a deleted item but a delete, and an op or body this bosun
-    cannot apply."""
+    the rules refuse, any change to a deleted item but a delete (or a create by the replica that
+    deleted it), and an op or body this bosun cannot apply. An item made on two Macs is merged,
+    with a conflict for each state, important field or link the two do not agree on."""
     state = _Rebuild(copy.deepcopy(EMPTY), rules)
-    conflicts = []
-    for change in in_order(changes):
+    ordered = in_order(changes)
+    last_creates = {
+        _transaction(change): index
+        for index, change in enumerate(ordered)
+        if change.get("op") == "item.create"
+    }
+    for index, change in enumerate(ordered):
+        state.current = change
         try:
             _apply(state, change)
         except _Refused as refused:
-            conflicts.append(
-                Conflict(change["id"], str(change.get("target", "")), refused.kind, refused.detail)
-            )
+            state.conflict(refused.kind, refused.detail)
+        if last_creates.get(_transaction(change)) == index:
+            _check_merged_links(state, _transaction(change))
     for item in state.items.values():
         if isinstance(item.get("history"), list):
             trim_history(item)
-    return Rebuilt(state.ledger, conflicts)
+    return Rebuilt(state.ledger, state.conflicts)
 
 
 def state_hash(ledger: Ledger) -> str:
