@@ -27,7 +27,6 @@ from console_state import LearnFiles
 
 
 KIND = learn.KIND
-SETTLED = ("applied", "rejected", "dismissed")
 OUTSIDE = "outside the learn state folder: not shown"
 RUN_KEYS = (
     "started",
@@ -79,9 +78,13 @@ def action_parts(text: str) -> dict[str, str]:
 
 
 def settled(item: Item) -> dict[str, Any] | None:
-    """When and how the item was applied or rejected: its last move into one of SETTLED."""
+    """When and how the item was applied or rejected: its last move into one of learn.SETTLED."""
     for entry in reversed(item.get("history") or []):
-        if isinstance(entry, dict) and entry.get("event") == "transition" and entry.get("to") in SETTLED:
+        if (
+            isinstance(entry, dict)
+            and entry.get("event") == "transition"
+            and entry.get("to") in learn.SETTLED
+        ):
             return {"state": entry.get("to"), "at": entry.get("at"), "note": entry.get("note", "")}
     return None
 

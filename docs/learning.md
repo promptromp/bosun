@@ -26,10 +26,12 @@ mishaps do not happen twice. Design and phasing: [docs/design/learning.md](desig
 3. **Proposals**, never applied on their own: each new finding with a change (at most
    `BOSUN_LEARN_MAX_PROPOSALS` a run) becomes a `learn:<YYYY-MM-DD>/<id>` ledger item (the id
    comes from the finding and the run, so one run never proposes a finding twice). The item holds
-   the exact change in its fields (`target`, `text` and, for a memory note, `window`), so it
-   travels with the ledger, and has it as its pending proposal, so the orchestrator lists it under
-   *Needs your approval*. On your yes it runs `bosun learn apply <id>`, which makes the change only
-   if it is still the one the proposal showed: a Claude Code memory note for the window's folder
+   the exact change in its fields (`target`, `text` and, for a memory note, `window`), so another
+   Mac sees it with the ledger, and has it as its pending proposal, so the orchestrator lists it
+   under *Needs your approval*. On your yes it runs `bosun learn apply <id>`, which makes the change
+   only if the item and its proposal are still exactly what learn proposed (learn keeps digests of
+   both in its own state, so only the Mac that proposed it can apply it; anywhere else, and after
+   an edit, apply refuses and you reject it): a Claude Code memory note for the window's folder
    as `bosun sessions` shows it now (a Codex window does not read it), or a rule appended to
    `$BOSUN_CONFIG_DIR/policy.md` or
    `tasks/_common.md` (the previous file is kept in `learn/backups/`). Changes to this repo,

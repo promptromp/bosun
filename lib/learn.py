@@ -21,14 +21,16 @@ Nothing is applied on its own. New proposals (at most BOSUN_LEARN_MAX_PROPOSALS 
 `learn:<YYYY-MM-DD>/<id>` ledger items (the UTC day; the id is hashed from the finding's key and
 the run, so the same finding in the same run is the same item). The item holds the change (its
 target, text and window, in its fields) and has it as its pending proposal, so the orchestrator
-lists it under "Needs your approval". On my yes, `apply` makes the change, if the item still
-renders as that proposal: a memory note for a window's folder (found from the window when
-applied), a rule appended to the site policy ($BOSUN_CONFIG_DIR/policy.md) or to the site's
-shared task rules ($BOSUN_CONFIG_DIR/tasks/_common.md). Other changes (to this repo, sessions.yml,
-outreach) you make yourself, then `done`. `reject` declines one; it is never proposed again. Every
-finding is remembered by key in $BOSUN_STATE_DIR/learn/state.json, with the item proposed for it,
-so a later run counts it again instead of proposing it twice, and apply, done and reject settle
-the finding learn proposed the item for, whatever the item's fields say.
+lists it under "Needs your approval". On my yes, `apply` makes the change, if the item and its
+proposal are still what learn proposed (their digests equal what learn's state recorded): a memory
+note for a window's folder (found from the window when applied), a rule appended to the site
+policy ($BOSUN_CONFIG_DIR/policy.md) or to the site's shared task rules
+($BOSUN_CONFIG_DIR/tasks/_common.md). Other changes (to this repo, sessions.yml, outreach) you
+make yourself, then `done`. `reject` declines one; it is never proposed again. Every finding is
+remembered by key in $BOSUN_STATE_DIR/learn/state.json, with the item proposed for it and those
+digests, so a later run counts it again instead of proposing it twice, and apply, done and reject
+settle the finding learn proposed the item for, whatever the item's fields say. That state is this
+Mac's, so only the Mac that proposed an item can apply it.
 """
 
 from __future__ import annotations
@@ -36,6 +38,7 @@ from __future__ import annotations
 import argparse
 import contextlib
 import fcntl
+import hashlib
 import json
 import os
 import re
@@ -54,7 +57,7 @@ import agent_changes
 import claude_state
 import learn_digest
 import ledger
-from change_log import mint_suffix
+from change_log import canonical, mint_suffix
 from learn_digest import Window
 
 
@@ -76,13 +79,17 @@ ID_PREFIX = "learn:"
 KIND = "learning"
 # The fields of a learn: item that hold its change, besides its target.
 CHANGE_FIELDS = ("text", "window")
-# A proposal's action (action_text): its head, the title line and the Change lines (what apply
-# makes, rendered by action_head), then the Why, Evidence and If yes lines.
+# A proposal's action (action_text): its head, the title line and the Change lines (rendered by
+# action_head), then the Why, Evidence and If yes lines. parse_action reads it back for the
+# console only; apply compares digests (RECORDED), never a parsed head.
 CHANGE_PREFIX = "Change: "
 WHY = "\nWhy: "
 EVIDENCE = "\nEvidence: "
-SEEN = re.compile(r" \(seen (\d+)x\)$")
 SETTLED = ("applied", "rejected", "dismissed")
+# What learn's state records per finding, beside its item, when it proposes it: digests of the
+# change (CHANGE_KEYS of the item) and of the proposal's action, as learn wrote them.
+RECORDED = ("change_sha256", "action_sha256")
+CHANGE_KEYS = ("key", "target", "title", "text", "window")
 SEVERITIES = ("high", "medium", "low")
 # The cost of a run, estimated before the call: Claude Code checks --max-budget-usd only after a
 # turn, so one large digest can cost far more than the budget (a 1.1 MB digest cost $4.05 against
@@ -500,14 +507,19 @@ def move_legacy_proposals(learn_dir: Path) -> None:
 
 
 def move_one(state: State, learn_id: str, change: Mapping[str, Any], item: dict[str, Any] | None) -> None:
+    """One legacy change: its finding records the item; a pending item gets the change, unless it
+    has it already, and the finding the digests of the change and of the item's action."""
     known = state.findings.get(str(change.get("key", "")))
     if known is not None:
         known.setdefault("item", learn_id)
-    if not is_pending(item) or "text" in (item or {})["fields"]:
+    if item is None or not is_pending(item):
         return
     moved = [f"{name}={change[name]}" for name in CHANGE_FIELDS if change.get(name)]
-    if moved:
+    if moved and "text" not in item["fields"]:
         ledger_call("upsert", learn_id, "--kind", KIND, *field_args(moved))
+    if known is not None:
+        legacy = {name: str(change.get(name, "")) for name in CHANGE_KEYS}
+        known.update(recorded(legacy, str(item["proposal"]["action"])))
 
 
 # ---- the analysis ------------------------------------------------------------------------------
@@ -642,29 +654,40 @@ def action_head(target: str, title: str, window: str, text: str, seen: int = 0) 
 
 @dataclass(frozen=True)
 class ActionParts:
-    head: str = ""  # the title line and the Change lines, up to Why:
-    seen: int = 0  # the title line's "(seen Nx)"
     change: str = ""  # where the change goes, then its text
     why: str = ""
     evidence: str = ""
 
 
 def parse_action(action: str) -> ActionParts:
-    """The parts of a proposal's action as action_text writes it (an action in another shape has
-    none). The one reading of an action: apply compares its head, the console shows the rest."""
+    """The parts of a proposal's action as action_text writes it, for the console to show (an
+    action in another shape has none). Display only: a text with a line starting "Why: " ends the
+    parsed change early, so nothing checks a change this way."""
     head, found, rest = action.partition(WHY)
-    title_line, _, change = head.partition("\n")
+    change = head.partition("\n")[2]
     if not found or not change.startswith(CHANGE_PREFIX):
         return ActionParts()
-    seen = SEEN.search(title_line)
     why, _, evidence = rest.partition(EVIDENCE)
     return ActionParts(
-        head=head,
-        seen=int(seen[1]) if seen else 0,
         change=change.removeprefix(CHANGE_PREFIX).replace(":\n", ": ", 1),
         why=why.split("\n", 1)[0],
         evidence=evidence.split("\n", 1)[0],
     )
+
+
+def sha256_of(record: Mapping[str, Any]) -> str:
+    return hashlib.sha256(canonical(record)).hexdigest()
+
+
+def recorded(change: Mapping[str, str], action: str) -> dict[str, str]:
+    """What learn's state records for a proposal: digests of its change and of its action."""
+    return dict(zip(RECORDED, (sha256_of(change), sha256_of({"action": action})), strict=True))
+
+
+def change_of(item: Mapping[str, Any]) -> dict[str, str]:
+    """The change a learn: item holds now (its fields can be edited)."""
+    fields = item["fields"]
+    return {name: str(item["title"] if name == "title" else fields.get(name, "")) for name in CHANGE_KEYS}
 
 
 def action_text(learn_id: str, finding: Finding, change: dict[str, Any]) -> str:
@@ -685,13 +708,19 @@ def action_text(learn_id: str, finding: Finding, change: dict[str, Any]) -> str:
     )
 
 
-def record_proposal(finding: Finding, windows: list[Window], config: Config, run: str) -> str:
+class IdTaken(LearnError):
+    """A learn id that already names another finding's item: a hash collision."""
+
+
+def record_proposal(
+    finding: Finding, windows: list[Window], config: Config, run: str
+) -> tuple[str, dict[str, str]]:
     """A learn: ledger item holding the exact change (target, text, window), with the change as its
-    pending proposal; returns its id."""
+    pending proposal; returns its id and what learn's state records for it."""
     learn_id = next_id(now().date(), finding.key, run, ledger.replica())
     taken = ledger.load()["items"].get(learn_id)
     if taken and taken["fields"].get("key") != finding.key:
-        raise LearnError(
+        raise IdTaken(
             f"{learn_id} already names the item of finding {taken['fields'].get('key')!r}, not "
             f"{finding.key!r} (a hash collision); not proposing it"
         )
@@ -702,8 +731,9 @@ def record_proposal(finding: Finding, windows: list[Window], config: Config, run
     fields = {"key": finding.key, "category": finding.category, "run": run, **change}
     pairs = [f"{name}={value}" for name, value in fields.items() if value]
     ledger_call("upsert", learn_id, "--kind", KIND, "--title", finding.title, *field_args(pairs))
-    ledger_call("propose", learn_id, action_text(learn_id, finding, change))
-    return learn_id
+    action = action_text(learn_id, finding, change)
+    ledger_call("propose", learn_id, action)
+    return learn_id, recorded({"key": finding.key, "title": finding.title, **change}, action)
 
 
 # ---- the report --------------------------------------------------------------------------------
@@ -745,7 +775,7 @@ def render_report(
     ]
     lines += category_sections(findings, proposed)
     if dropped:
-        lines += ["", "## Dropped (evidence not found in the digest)", "", *(f"- {d}" for d in dropped)]
+        lines += ["", "## Dropped", "", *(f"- {d}" for d in dropped)]
     return "\n".join(lines) + "\n"
 
 
@@ -861,10 +891,7 @@ def collect_and_analyze(
     remember(state, findings, run["started"])
     proposed: dict[str, str] = {}
     if not options.dry_run:
-        for finding in to_propose(findings, config.max_proposals):
-            learn_id = record_proposal(finding, windows, config, run["started"])
-            state.findings[finding.key].update(status="proposed", item=learn_id)
-            proposed[finding.key] = learn_id
+        proposed = propose(to_propose(findings, config.max_proposals), state, windows, config, run, dropped)
         state.runs.append(
             {**run, "outcome": "ok", "findings": len(findings), "proposals": list(proposed.values())}
         )
@@ -872,6 +899,29 @@ def collect_and_analyze(
         state.save(config.learn_dir)
     run.update(findings=len(findings), dropped=len(dropped), proposals=list(proposed.values()))
     return Outcome(run, render_report(run, summary, findings, dropped, proposed), proposed)
+
+
+def propose(
+    findings: list[Finding],
+    state: State,
+    windows: list[Window],
+    config: Config,
+    run: dict[str, Any],
+    dropped: list[str],
+) -> dict[str, str]:
+    """Record each finding's proposal, and in learn's state its item and digests; a finding whose
+    id names another finding's item is dropped (with why), and the run goes on. Returns finding
+    key -> learn id."""
+    proposed: dict[str, str] = {}
+    for finding in findings:
+        try:
+            learn_id, digests = record_proposal(finding, windows, config, run["started"])
+        except IdTaken as exc:
+            dropped.append(f"{finding.title}: {exc}")
+            continue
+        state.findings[finding.key].update(status="proposed", item=learn_id, **digests)
+        proposed[finding.key] = learn_id
+    return proposed
 
 
 def finish(config: Config, outcome: str, run: dict[str, Any], error: str = "") -> None:
@@ -958,37 +1008,20 @@ def pending_item(learn_id: str) -> dict[str, Any]:
     return item
 
 
-def approved(item: dict[str, Any], change: Mapping[str, str]) -> bool:
-    """Whether the item's title and <change> render exactly as the head of its pending proposal,
-    which is what I approved."""
-    if change["target"] not in TARGET_TEXT or not change["text"]:
-        return False
-    parts = parse_action(str(item["proposal"]["action"]))
-    rendered = (
-        action_head(change["target"], item["title"], change["window"], change["text"], seen)
-        for seen in {0, parts.seen}
-    )
-    return parts.head in rendered
-
-
 def pending_change(
-    learn_id: str, key: str | None, windows: list[Window], orchestrator: str
+    learn_id: str, known: Mapping[str, Any] | None, windows: list[Window], orchestrator: str
 ) -> dict[str, Any]:
-    """The change a pending learn: item holds, if it is what I approved: the item's fields can be
-    edited, so they must render as its proposal's head, and name <key>, the finding learn proposed
-    it for (from learn's own state). A memory note's folder is found from its window here, on this
-    Mac; a window that is gone leaves no folder."""
+    """The change a pending learn: item holds, if it is what learn proposed: the item's fields and
+    its proposal can be edited, so the digests of its change and of its action must equal what
+    learn's state recorded for the finding (<known>) when it proposed it. A memory note's folder
+    is found from its window here, on this Mac; a window that is gone leaves no folder."""
     item = pending_item(learn_id)
-    fields = item["fields"]
-    if key is None or fields.get("key") != key:
-        raise LearnError(f"{learn_id}: learn did not propose it for finding {fields.get('key')!r}; reject it")
-    change = {name: str(fields.get(name, "")) for name in ("target", *CHANGE_FIELDS)}
-    if not approved(item, change):
-        raise LearnError(
-            f"{learn_id}: the change on the item is not the change its proposal shows; reject it"
-        )
+    change = change_of(item)
+    now_holds = recorded(change, str(item["proposal"]["action"]))
+    if not known or any(known.get(name) != now_holds[name] for name in RECORDED):
+        raise LearnError(f"{learn_id}: the item or its proposal is not what learn proposed; reject it")
     name, folder = target_dir(change["window"], windows, orchestrator)
-    return {**change, "key": key, "title": item["title"], "dir": folder if name == change["window"] else ""}
+    return {**change, "dir": folder if name == change["window"] else ""}
 
 
 def backup(config: Config, learn_id: str, path: Path) -> None:
@@ -1058,8 +1091,9 @@ def cmd_apply(config: Config, args: argparse.Namespace) -> int:
     windows = Window.from_json(json.loads(Path(args.sessions).read_text())) if args.sessions else []
     with state_lock(config.learn_dir):
         move_legacy_proposals(config.learn_dir)
-        key = finding_of(State.load(config.learn_dir), args.id)
-        change = pending_change(args.id, key, windows, config.orchestrator)
+        state = State.load(config.learn_dir)
+        key = finding_of(state, args.id)
+        change = pending_change(args.id, state.findings.get(key or ""), windows, config.orchestrator)
         applier = APPLIERS.get(change["target"])
         if applier is None:
             raise LearnError(
@@ -1114,7 +1148,7 @@ def status_counts(state: State) -> str:
 
 
 def waiting_lines() -> list[str]:
-    items = ledger.load()["items"].values()
+    items = ledger.by_creation(ledger.load()["items"].values())
     waiting = [f"  {i['id']}: {i['title']}" for i in items if i["kind"] == KIND and i.get("proposal")]
     return ["waiting for your approval:", *waiting] if waiting else ["waiting for your approval: none"]
 

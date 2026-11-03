@@ -766,15 +766,22 @@ def parse_fields(pairs: list[str] | None) -> dict[str, str]:
 
 
 @contextlib.contextmanager
+def store_lock(mode: int) -> Iterator[None]:
+    """The ledger's lock file, held in <mode> (fcntl.LOCK_SH or fcntl.LOCK_EX)."""
+    STORE.state_dir.mkdir(parents=True, exist_ok=True)
+    with STORE.lock.open("w") as lock:
+        fcntl.flock(lock, mode)
+        yield
+
+
+@contextlib.contextmanager
 def locked_ledger(write: bool) -> Iterator[Ledger]:
     """The ledger, under its lock. A reader (shared lock) gets ledger.json, or the journal's
     rebuild where the file is behind it, and writes nothing (see for_reading). A writer (exclusive
     lock) gets the same, made whole first (see write_start); what it changes becomes one
     transaction, appended to the journal before ledger.json and ledger.md are saved once (even
     when nothing changed, which `ledger render` relies on). A writer that raises saves nothing."""
-    STORE.state_dir.mkdir(parents=True, exist_ok=True)
-    with STORE.lock.open("w") as lock:
-        fcntl.flock(lock, fcntl.LOCK_EX if write else fcntl.LOCK_SH)
+    with store_lock(fcntl.LOCK_EX if write else fcntl.LOCK_SH):
         if write:
             yield from for_writing()
         else:
@@ -788,9 +795,7 @@ _WRITING: list[Transaction] = []
 def replica() -> str:
     """This Mac's replica id, as the ledger's journal uses it: made under the ledger's lock when
     there is none yet, so a first write running at the same time cannot make another."""
-    STORE.state_dir.mkdir(parents=True, exist_ok=True)
-    with STORE.lock.open("w") as lock:
-        fcntl.flock(lock, fcntl.LOCK_EX)
+    with store_lock(fcntl.LOCK_EX):
         return replica_id(STORE.state_dir)
 
 
@@ -2591,16 +2596,18 @@ def cmd_in_flight(args: argparse.Namespace) -> str:
 
 
 def window_rows(items: dict[str, Item], window: str) -> list[str]:
-    """One list row per open item handed to <window>, the ones in flight first."""
+    """One list row per open item handed to <window>, the ones in flight first, oldest first."""
     view = View.of(items)
     flying = {item["id"] for item in in_flight(items, window)}
-    held = sorted(activity.held(items.values(), window, is_open), key=lambda item: item["id"] not in flying)
+    held = sorted(
+        by_creation(activity.held(items.values(), window, is_open)), key=lambda item: item["id"] not in flying
+    )
     return [shorten(item_row(item, view)) for item in held]
 
 
 def pending_approval_rows(items: dict[str, Item]) -> list[str]:
-    """One row per proposal waiting for my approval: the item and the proposed action."""
-    pending = [item for item in items.values() if approvals.needs_you(item.get("proposal"))]
+    """One row per proposal waiting for my approval, oldest item first: the item and the action."""
+    pending = by_creation(item for item in items.values() if approvals.needs_you(item.get("proposal")))
     return [shorten(f"{item['id']}: {item['proposal']['action']}") for item in pending]
 
 
@@ -4217,9 +4224,7 @@ def finding_line(found: Finding) -> str:
 
 def cmd_validate(args: argparse.Namespace) -> tuple[str, int]:
     """Check the ledger against every rule; with --journal, the journal too. Exit 1 on findings."""
-    STORE.state_dir.mkdir(parents=True, exist_ok=True)
-    with STORE.lock.open("w") as lock:
-        fcntl.flock(lock, fcntl.LOCK_SH)
+    with store_lock(fcntl.LOCK_SH):
         saved = load()
         found = rule_findings(saved)
         if args.journal:

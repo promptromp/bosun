@@ -376,6 +376,24 @@ class MintedIdTest(LedgerTestCase):
         self.assertEqual([c.args[2] for c in minted.call_args_list], [0, 1])  # the same position, counted on
         self.assertEqual(self.item(f"task:{today}/aaaaaa")["title"], "Earlier")
 
+    def test_compact_context_rows_come_oldest_first(self) -> None:
+        made = []
+        for number in (1, 2):
+            item_id = f"mypr:acme/api#{number}"
+            run("upsert", item_id, "--kind", "my-pr", "--title", f"PR {number}")
+            run("propose", item_id, f"merge {number}")
+            run("record-delegation", item_id, "--window", "w", "--task", "fix-my-pr")
+            made.append(item_id)
+        with ledger.locked_ledger(write=True) as data:  # the larger id is the older one
+            data["items"][made[1]]["created_at"] = "2026-10-20T09:00:00+00:00"
+            data["items"][made[0]]["created_at"] = "2026-10-20T10:00:00+00:00"
+        items = self.data()["items"]
+        self.assertEqual(
+            [row.split(":", 2)[:2] for row in ledger.pending_approval_rows(items)],
+            [["mypr", "acme/api#2"], ["mypr", "acme/api#1"]],
+        )
+        self.assertEqual([row.split()[0] for row in ledger.window_rows(items, "w")], [made[1], made[0]])
+
     def test_the_replica_comes_from_the_store_made_under_its_lock(self) -> None:
         self.assertFalse((ledger.STORE.state_dir / "replica.json").exists())
         made = ledger.replica()

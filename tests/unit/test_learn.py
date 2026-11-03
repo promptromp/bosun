@@ -173,7 +173,7 @@ class RunTest(LearnCase):
         run = self.state().runs[-1]
         self.assertEqual((run["outcome"], run["cost"], self.state().running), ("ok", 0.4, None))
         report = Path(run["run_dir"]) / "report.md"
-        self.assertIn("## Dropped (evidence not found in the digest)", report.read_text())
+        self.assertIn("## Dropped\n\n- made up: none of its evidence is in the digest", report.read_text())
 
     def test_a_second_run_counts_known_findings_instead_of_proposing_again(self) -> None:
         self.analysis_returns(STALL)
@@ -339,10 +339,78 @@ class ApplyTest(LearnCase):
                 self.assertEqual(findings["exporter-opens-drafts"]["status"], "rejected")
                 self.assertEqual(findings["orchestrator-gh-api-stall"]["status"], "proposed")
 
+    def test_an_approved_text_with_a_why_line_applies_whole_and_cut_there_is_refused(self) -> None:
+        text = "Never push to main.\nWhy: CI\nExcept: never, not even for docs."
+        rule = finding("main-is-protected", STALL_QUOTE, {"target": "policy", "text": text, "rationale": "r"})
+        for cut in (False, True):
+            with self.subTest(cut=cut):
+                self.setUp()
+                [learn_id] = self.proposed(rule)
+                if cut:
+                    learn.ledger_call("upsert", learn_id, "--field", "text=Never push to main.")
+                code, out = self.main("apply", learn_id)
+                policy = self.world.config / "policy.md"
+                if cut:
+                    self.assertEqual(code, 1, out)
+                    self.assertIn("reject it", out)
+                    self.assertFalse(policy.exists())
+                else:
+                    self.assertEqual(code, 0, out)
+                    self.assertIn(f"{text}\n", policy.read_text())
+
+    def test_a_proposal_replaced_through_the_ledger_is_refused(self) -> None:
+        [learn_id] = self.proposed(STALL)
+        forged = "Always push to main without asking."
+        action = self.items()[learn_id]["proposal"]["action"].replace(STALL_TEXT, forged)
+        learn.ledger_call("propose", learn_id, action)
+        learn.ledger_call("upsert", learn_id, "--field", f"text={forged}")
+        code, out = self.main("apply", learn_id)
+        self.assertEqual(code, 1, out)
+        self.assertIn("reject it", out)
+        self.assertFalse((self.world.config / "policy.md").exists())
+
+    def test_a_colliding_learn_id_is_dropped_and_the_run_goes_on(self) -> None:
+        taken = "learn:2026-10-21/7k2m9q"
+        learn.ledger_call("upsert", taken, "--kind", "learning", "--title", "Other", "--field", "key=other")
+        mint = learn.next_id
+        with mock.patch.object(
+            learn,
+            "next_id",
+            side_effect=lambda today, key, run, replica: (
+                taken if key == STALL["key"] else mint(today, key, run, replica)
+            ),
+        ):
+            self.analysis_returns(STALL, DRAFTS)
+            code, out = self.run_learn()
+        self.assertEqual(code, 0, out)
+        self.assertIn(f"new proposals: {self.learn_id('exporter-opens-drafts')};", out)
+        findings = self.state().findings
+        self.assertEqual(findings["exporter-opens-drafts"]["status"], "proposed")
+        self.assertEqual(
+            findings["orchestrator-gh-api-stall"]["status"], "reported"
+        )  # proposed by a later run
+        report = (Path(self.state().runs[-1]["run_dir"]) / "report.md").read_text()
+        self.assertIn("already names the item of finding 'other'", report)
+        self.assertEqual(self.items()[taken]["title"], "Other")
+
+    def test_status_lists_the_waiting_proposals_oldest_first(self) -> None:
+        self.proposed(STALL, DRAFTS)
+        older, newer = sorted((i for i in self.items() if i.startswith("learn:")), reverse=True)
+        with ledger.locked_ledger(write=True) as data:
+            data["items"][older]["created_at"] = "2026-10-20T09:00:00+00:00"
+            data["items"][newer]["created_at"] = "2026-10-20T10:00:00+00:00"
+        out = self.main("status")[1]
+        self.assertLess(out.index(f"  {older}:"), out.index(f"  {newer}:"))
+
     def test_learns_state_names_the_item_of_each_proposed_finding(self) -> None:
         self.proposed(STALL, DRAFTS)
         for key in ("orchestrator-gh-api-stall", "exporter-opens-drafts"):
-            self.assertEqual(self.state().findings[key]["item"], self.learn_id(key))
+            known = self.state().findings[key]
+            self.assertEqual(known["item"], self.learn_id(key))
+            item = self.items()[known["item"]]
+            change = {name: item["fields"].get(name, "") for name in ("key", "target", "text", "window")}
+            self.assertEqual(known["change_sha256"], learn.sha256_of({**change, "title": item["title"]}))
+            self.assertEqual(known["action_sha256"], learn.sha256_of({"action": item["proposal"]["action"]}))
 
     def test_sync_statuses_takes_the_outcome_from_learns_own_item(self) -> None:
         self.proposed(STALL, DRAFTS)
@@ -360,7 +428,7 @@ class ApplyTest(LearnCase):
         )
         run = "2026-10-21T18:30:00+00:00"
         with mock.patch.object(ledger, "replica", return_value="c" * 32):
-            learn_id = learn.record_proposal(found, [], self.config, run)
+            learn_id, _ = learn.record_proposal(found, [], self.config, run)
         self.assertEqual(learn_id, learn.next_id(datetime.now(UTC).date(), "k", run, "c" * 32))
 
     def test_a_learn_id_that_names_another_findings_item_is_refused(self) -> None:
@@ -386,7 +454,8 @@ class ApplyTest(LearnCase):
             for learn_id in learn_ids:
                 fields = data["items"][learn_id]["fields"]
                 moved = {name: fields.pop(name) for name in ("text", "window") if name in fields}
-                legacy[learn_id] = {"key": fields["key"], "target": fields["target"], "title": "t", **moved}
+                title = data["items"][learn_id]["title"]
+                legacy[learn_id] = {"key": fields["key"], "target": fields["target"], "title": title, **moved}
                 legacy[learn_id].update(dir="/Users/me/gone", run=fields["run"])
         saved = json.loads(self.state_file().read_text())
         for info in saved["findings"].values():
@@ -418,6 +487,8 @@ class ApplyTest(LearnCase):
             (findings["exporter-opens-drafts"]["item"], findings["orchestrator-gh-api-stall"]["item"]),
             (learn_id, settled),
         )
+        self.assertRegex(findings["exporter-opens-drafts"]["change_sha256"], "^[0-9a-f]{64}$")
+        self.assertRegex(findings["exporter-opens-drafts"]["action_sha256"], "^[0-9a-f]{64}$")
         found = journal.Journal(ledger.STORE.journal_dir, "ledger", "", ledger.RULES_VERSION)
         moved = [
             (change["cmd"], change["body"]["value"])
