@@ -210,6 +210,9 @@ docs/design/console.md, section 6. Its measures:
   the person (or the user) said.
 - **Every person fact is written so it could be shown to that person.** A person entity has no
   free-text summary.
+- **A forgotten person is kept as a keyed hash** (`secret.key`, never leaves the Mac), so nobody can
+  guess who was forgotten; records from before the key (no `hash_kind`) stay guessable, since their ids
+  are unknown.
 - **Machine-local storage**, within the user's account, never in the repo, with the retention and
   delete-on-request rules above. The design should be confirmed with the privacy or legal team
   before any team-shared version.
@@ -299,9 +302,14 @@ a stream of questions.
   `kg batch apply` answers the batch last printed (`batch.json`) and says how many facts it left
   proposed.
 - **Deletion:** `kg forget` and the retention purge rewrite `facts.jsonl` without the facts, keep
-  only a hash of the id and the counts in `forgotten.jsonl`, and restart the git history, since
+  only a keyed hash of the id and the counts in `forgotten.jsonl`, and restart the git history, since
   old commits would otherwise still hold the data. A forgotten id cannot be added again without
-  `--allow-forgotten`.
+  `--allow-forgotten`. The hash is an HMAC-SHA256 under `secret.key` (made on the first write,
+  mode 0600, ignored by the history, never leaves the Mac), so guessing `person/<name>` finds
+  nobody; records from before the key (no `hash_kind`) stay plain sha256 and guessable, since
+  their ids are unknown and cannot be re-keyed. With keyed records and no readable key, adding a
+  person is refused and names the key's path: restore it, a new key would make every record
+  unmatchable.
 - **Import** reads JSON or JSON lines (`{"type": "entity", ...}` and `{"type": "fact", ...}`), is
   a dry run unless `--apply`, records everything as proposals (`--auto-confirm`: apply the rules
   above), and reports refusals by reason (People whitelist, schema, unresolved) and how many

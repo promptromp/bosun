@@ -9,6 +9,7 @@ Fictional data: acme's invoice exporter (tests/fixtures/knowledge/acme-import.js
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import shutil
@@ -490,11 +491,57 @@ class RetentionAndForgetTest(KnowledgeTestCase):
             self.assertNotIn("dana", text.lower(), name)
             self.assertNotIn("U0000000002", text)
         record = json.loads((self.root / "forgotten.jsonl").read_text())
-        self.assertEqual(record["hash"], km.hash_id("person/dana"))
+        secret = bytes.fromhex((self.root / "secret.key").read_text().strip())
+        self.assertEqual(record["hash"], km.hash_id("person/dana", secret))
         self.assertEqual((record["facts"], record["identifiers"]), (1, 1))
         with self.assertRaisesRegex(KnowledgeError, "deleted on request"):
             self.run_kg("add-entity", "person/dana")
         self.run_kg("add-entity", "person/dana", "--allow-forgotten")
+
+    def forgotten_records(self) -> list[dict[str, Any]]:
+        text = (self.root / "forgotten.jsonl").read_text()
+        return [json.loads(line) for line in text.splitlines()]
+
+    def test_forget_records_a_keyed_hash(self) -> None:
+        self.seed()
+        self.run_kg("forget", "person/dana")
+        record = self.forgotten_records()[0]
+        guessable = hashlib.sha256(b"person/dana").hexdigest()[: km.HASH_LENGTH]
+        self.assertNotEqual(record["hash"], guessable)
+        self.assertEqual(record["hash_kind"], "hmac-sha256")
+
+    def test_a_forgotten_person_needs_allow_forgotten_again(self) -> None:
+        self.seed()
+        self.run_kg("forget", "person/dana")
+        with self.assertRaisesRegex(KnowledgeError, "deleted on request"):
+            self.run_kg("add-entity", "person/dana")
+        self.run_kg("add-entity", "person/dana", "--allow-forgotten")
+
+    def test_an_old_forgotten_record_still_blocks_re_adding(self) -> None:
+        self.seed()
+        old = hashlib.sha256(b"person/erin").hexdigest()[: km.HASH_LENGTH]
+        (self.root / "forgotten.jsonl").write_text(
+            json.dumps({"at": km.iso(self.now), "hash": old, "reason": "request", "facts": 0}) + "\n"
+        )
+        with self.assertRaisesRegex(KnowledgeError, "deleted on request"):
+            self.run_kg("add-entity", "person/erin")
+
+    def test_a_lost_key_refuses_people_and_never_makes_a_new_one(self) -> None:
+        self.seed()
+        self.run_kg("forget", "person/dana")
+        (self.root / "secret.key").unlink()
+        with self.assertRaisesRegex(KnowledgeError, "secret.key.*restore it"):
+            self.run_kg("add-entity", "person/dana")
+        with self.assertRaisesRegex(KnowledgeError, "restore it"):
+            self.run_kg("add-entity", "person/frank")
+        self.assertFalse((self.root / "secret.key").exists())
+        self.run_kg("add-entity", "repo/other", "--name", "other")
+
+    def test_the_key_is_private(self) -> None:
+        self.run_kg("add-entity", "person/dana")
+        key = self.root / "secret.key"
+        self.assertEqual(key.stat().st_mode & 0o777, 0o600)
+        self.assertEqual(len(bytes.fromhex(key.read_text().strip())), 32)
 
     def test_only_people_are_forgotten(self) -> None:
         self.seed()
@@ -777,6 +824,13 @@ class GitHistoryTest(KnowledgeTestCase):
 
     def commits(self) -> list[str]:
         return self.git_out(self.root, "log", "--format=%s").splitlines()
+
+    def test_the_key_is_private_and_not_in_git(self) -> None:
+        self.run_kg("add-entity", "person/dana")
+        self.assertTrue((self.root / "secret.key").exists())
+        tracked = self.git_out(self.root, "ls-files").split()
+        self.assertNotIn("secret.key", tracked)
+        self.assertIn("entities.jsonl", tracked)
 
     def test_one_commit_per_change_and_forget_restarts_history(self) -> None:
         self.seed()

@@ -152,6 +152,12 @@ def load(p: Paths) -> KB:
     kb.facts = km.fold_all(kb.records)
     kb.identifiers = store.read_jsonl(p.identifiers)
     kb.forgotten = store.read_jsonl(p.forgotten)
+    kb.secret = store.read_secret(p.secret)
+    if not kb.secret and km.has_keyed_records(kb):
+        kb.key_problem = (
+            f"the key of the forgotten people, {p.secret}, is missing or unreadable; restore it "
+            "(a new one would stop the deleted people being recognised)"
+        )
     return kb
 
 
@@ -182,6 +188,8 @@ def opened(write: bool, message: str = "", dry_run: bool = False) -> Iterator[KB
     p = paths()
     with store.locked(p, write and not dry_run):
         kb = load(p)
+        if write and not dry_run and not kb.secret and not kb.key_problem:
+            kb.secret = store.create_secret(p.secret)
         yield kb
         if write and not dry_run and kb.changed:
             save(p, kb, message)

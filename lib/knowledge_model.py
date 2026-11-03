@@ -12,6 +12,7 @@ from __future__ import annotations
 import copy
 import difflib
 import hashlib
+import hmac
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from typing import Any
@@ -33,6 +34,7 @@ STATUSES = (PROPOSED, CONFIRMED, REJECTED, EXPIRED)
 PROPOSAL_DAYS = 30
 RETENTION_DAYS = 365
 HASH_LENGTH = 16
+HASH_KEYED = "hmac-sha256"
 NEAR_MATCH_CUTOFF = 0.8
 MAX_SUGGESTIONS = 3
 
@@ -73,7 +75,14 @@ def norm(text: str) -> str:
     return " ".join(str(text).split()).casefold()
 
 
-def hash_id(entity_id: str) -> str:
+def hash_id(entity_id: str, secret: bytes) -> str:
+    """The keyed hash a new forgotten record keeps: guessing person/<name> gets nobody anywhere
+    without the key, which never leaves this Mac."""
+    return hmac.new(secret, entity_id.encode(), hashlib.sha256).hexdigest()[:HASH_LENGTH]
+
+
+def plain_hash_id(entity_id: str) -> str:
+    """How records without hash_kind were made; their ids are unknown, so they cannot be re-keyed."""
     return hashlib.sha256(entity_id.encode()).hexdigest()[:HASH_LENGTH]
 
 
@@ -91,6 +100,8 @@ class KB:
     facts: dict[str, Record] = field(default_factory=dict)
     identifiers: list[Record] = field(default_factory=list)
     forgotten: list[Record] = field(default_factory=list)
+    secret: bytes = b""  # the key of forgotten.jsonl's keyed hashes; empty until the first write makes it
+    key_problem: str = ""  # set when keyed records exist but their key cannot be read
     new_records: list[Record] = field(default_factory=list)
     new_forgotten: list[Record] = field(default_factory=list)
     entities_changed: bool = False
@@ -242,8 +253,24 @@ def resolve(kb: KB, ref: str) -> str:
     raise KnowledgeError(f"no entity {ref!r}{hint}")
 
 
-def forgotten_hashes(kb: KB) -> set[str]:
-    return {str(r["hash"]) for r in kb.forgotten + kb.new_forgotten if r.get("hash")}
+def forgotten_records(kb: KB) -> list[Record]:
+    return [r for r in kb.forgotten + kb.new_forgotten if r.get("hash")]
+
+
+def has_keyed_records(kb: KB) -> bool:
+    return any(r.get("hash_kind") == HASH_KEYED for r in forgotten_records(kb))
+
+
+def is_forgotten(kb: KB, entity_id: str) -> bool:
+    """Whether a record of a deletion on request matches <entity_id>: keyed records by the key,
+    older ones (no hash_kind) by the plain hash."""
+    plain = plain_hash_id(entity_id)
+    keyed = hash_id(entity_id, kb.secret) if kb.secret else None
+    for record in forgotten_records(kb):
+        wanted = keyed if record.get("hash_kind") == HASH_KEYED else plain
+        if wanted is not None and record["hash"] == wanted:
+            return True
+    return False
 
 
 def alias_collisions(kb: KB, entity: Record) -> list[str]:
@@ -261,7 +288,9 @@ def alias_collisions(kb: KB, entity: Record) -> list[str]:
 
 def check_new_entity(kb: KB, entity_id: str, summary: str, allow_forgotten: bool) -> None:
     entity_type, _ = ks.split_id(entity_id, kb.schema)
-    if hash_id(entity_id) in forgotten_hashes(kb) and not allow_forgotten:
+    if entity_type == ks.PERSON and kb.key_problem:
+        raise KnowledgeError(kb.key_problem)
+    if is_forgotten(kb, entity_id) and not allow_forgotten:
         raise KnowledgeError(
             f"{entity_id} was deleted on request; add it again only if they asked (--allow-forgotten)"
         )
@@ -659,6 +688,8 @@ def forget(kb: KB, ref: str) -> dict[str, int]:
     entity_id = ref.strip() if ref.strip() in kb.entities else resolve(kb, ref)
     if ks.entity_type(entity_id) != ks.PERSON:
         raise KnowledgeError(f"kg forget deletes a person on request; {entity_id} is not a person")
+    if kb.key_problem:
+        raise KnowledgeError(kb.key_problem)
     fact_ids = {i for i, f in kb.facts.items() if entity_id in (f["subject"], f.get("object"))}
     before = len(kb.identifiers)
     kb.identifiers = [i for i in kb.identifiers if i.get("entity") != entity_id]
@@ -667,7 +698,13 @@ def forget(kb: KB, ref: str) -> dict[str, int]:
     kb.entities.pop(entity_id, None)
     kb.entities_changed = kb.identifiers_changed = True
     kb.new_forgotten.append(
-        {"at": iso(kb.now), "hash": hash_id(entity_id), "reason": FORGET_REQUEST, **counts}
+        {
+            "at": iso(kb.now),
+            "hash": hash_id(entity_id, kb.secret),
+            "hash_kind": HASH_KEYED,
+            "reason": FORGET_REQUEST,
+            **counts,
+        }
     )
     return counts
 

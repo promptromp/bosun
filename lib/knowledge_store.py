@@ -7,6 +7,7 @@ optional local git history (one commit per change).
   delete on request (`kg forget`) or the retention purge rewrites it.
 - identifiers.jsonl: Slack, tracker and code-host ids of people (restricted: mode 0600).
 - forgotten.jsonl: what was deleted on request or by retention (hashed ids and counts, no content).
+- secret.key: the key of the forgotten hashes (mode 0600, ignored by the history, never leaves this Mac).
 - batch.json: the last review batch `kg batch` printed, so `kg batch apply` refers to its numbers.
 """
 
@@ -16,6 +17,7 @@ import contextlib
 import fcntl
 import json
 import os
+import secrets
 import shutil
 import subprocess
 from collections.abc import Iterator
@@ -26,7 +28,9 @@ from typing import Any
 
 Record = dict[str, Any]
 PRIVATE_MODE = 0o600
-GIT_IGNORE = "knowledge.lock\n*.tmp\nbatch.json\n"
+KEY_BYTES = 32
+KEY_FILE = "secret.key"
+GIT_IGNORE = f"knowledge.lock\n*.tmp\nbatch.json\n{KEY_FILE}\n"
 GIT_IDENTITY = (
     "-c",
     "user.name=bosun",
@@ -61,6 +65,10 @@ class Paths:
     @property
     def forgotten(self) -> Path:
         return self.root / "forgotten.jsonl"
+
+    @property
+    def secret(self) -> Path:
+        return self.root / KEY_FILE
 
     @property
     def batch(self) -> Path:
@@ -110,6 +118,24 @@ def append_records(path: Path, records: list[Record], mode: int | None = None) -
         os.fsync(fd)
     finally:
         os.close(fd)
+
+
+def read_secret(path: Path) -> bytes:
+    """The key as bytes; empty when the file is missing, unreadable or not a key."""
+    try:
+        key = bytes.fromhex(path.read_text().strip())
+    except (OSError, ValueError):
+        return b""
+    return key if len(key) == KEY_BYTES else b""
+
+
+def create_secret(path: Path) -> bytes:
+    """Make the key (32 random bytes as hex, mode 0600); never replaces a file that is there."""
+    key = secrets.token_bytes(KEY_BYTES)
+    descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, PRIVATE_MODE)
+    with os.fdopen(descriptor, "w") as handle:
+        handle.write(key.hex() + "\n")
+    return key
 
 
 def write_atomically(path: Path, text: str, mode: int | None = None) -> None:
@@ -173,6 +199,9 @@ def ensure_repository(root: Path) -> bool:
     ignore = root / ".gitignore"
     if not ignore.exists():
         ignore.write_text(GIT_IGNORE)
+    elif KEY_FILE not in ignore.read_text().splitlines():
+        with ignore.open("a") as handle:  # a repository made before the key existed
+            handle.write(f"{KEY_FILE}\n")
     return (root / ".git").is_dir()
 
 
