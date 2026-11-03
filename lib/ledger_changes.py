@@ -189,7 +189,8 @@ FIELDS: tuple[FieldRule, ...] = (
         f"{APPROVAL}.quote",
         *(f"{where}.{name}" for where in (APPROVAL, STANDING, *OUTCOMES) for name in CALL_CONTEXT),
     ),
-    # One proposal per item, an approval used once, one ticket per item.
+    # One proposal per item, an approval used once, one ticket per item, one finding per learn:
+    # item (its key is a slug the model wrote, which can carry a colleague's name: sealed).
     *_rows(
         SET,
         PRIVATE,
@@ -197,10 +198,10 @@ FIELDS: tuple[FieldRule, ...] = (
         "items.*.proposal.proposed_at",
         APPROVAL,
         f"{APPROVAL}.used_at",
-        "items.*.fields.key",
         "items.*.fields.system",
         important=True,
     ),
+    *_rows(SET, SEALED, "items.*.fields.key", important=True),
     # Ids, names, enums, times and counts; and the containers themselves.
     *_rows(
         SET,

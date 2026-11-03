@@ -785,6 +785,15 @@ def locked_ledger(write: bool) -> Iterator[Ledger]:
 _WRITING: list[Transaction] = []
 
 
+def replica() -> str:
+    """This Mac's replica id, as the ledger's journal uses it: made under the ledger's lock when
+    there is none yet, so a first write running at the same time cannot make another."""
+    STORE.state_dir.mkdir(parents=True, exist_ok=True)
+    with STORE.lock.open("w") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        return replica_id(STORE.state_dir)
+
+
 def current_transaction() -> Transaction:
     """The journal transaction of the write in progress: only inside locked_ledger(write=True)."""
     if not _WRITING:
@@ -1061,10 +1070,20 @@ def open_outreach(ledger: Ledger, parent_id: str) -> list[Item]:
     return outreach_by_parent(ledger["items"].values()).get(parent_id, [])
 
 
+def creation_key(item: Item) -> tuple[str, str]:
+    """Items in the order they were made: by created_at, then (made in the same second) by id. A
+    minted id says nothing of when it was made, so a listing never sorts by id alone."""
+    return str(item.get("created_at") or ""), str(item["id"])
+
+
+def by_creation(items: Iterable[Item]) -> list[Item]:
+    return sorted(items, key=creation_key)
+
+
 def outreach_by_parent(items: Iterable[Item]) -> dict[str, list[Item]]:
     """Open outreach grouped by the item it belongs to, oldest first."""
     grouped: dict[str, list[Item]] = {}
-    for item in sorted(items, key=lambda i: str(i["created_at"])):
+    for item in by_creation(items):
         if is_outreach(item) and is_open(item) and item["fields"].get("parent"):
             grouped.setdefault(item["fields"]["parent"], []).append(item)
     return grouped
@@ -2613,15 +2632,12 @@ def cmd_compact_context(args: argparse.Namespace) -> str:
 def cmd_outreach(args: argparse.Namespace) -> str:
     with locked_ledger(write=False) as ledger:
         items = ledger["items"]
-    chosen = sorted(
-        (
-            item
-            for item in items.values()
-            if is_outreach(item)
-            and (not args.open or is_open(item))
-            and (not args.parent or item["fields"].get("parent") == args.parent)
-        ),
-        key=lambda item: str(item["created_at"]),
+    chosen = by_creation(
+        item
+        for item in items.values()
+        if is_outreach(item)
+        and (not args.open or is_open(item))
+        and (not args.parent or item["fields"].get("parent") == args.parent)
     )
     return "\n".join(line for item in chosen for line in outreach_lines(item, items)) or "(no outreach)"
 
@@ -2663,7 +2679,7 @@ def outreach_for_message(ledger: Ledger, permalink: str) -> list[tuple[Item, str
         ]
         if times:
             found.append((item, max(times, key=parse_time)))
-    return sorted(found, key=lambda match: (-parse_time(match[1]).timestamp(), str(match[0]["created_at"])))
+    return sorted(found, key=lambda match: (-parse_time(match[1]).timestamp(), *creation_key(match[0])))
 
 
 def thread_hint(matches: list[tuple[Item, str]]) -> str:
@@ -2952,7 +2968,7 @@ def cmd_list(args: argparse.Namespace) -> str:
     with locked_ledger(write=False) as ledger:
         view = View.of(ledger["items"])
     in_ws = ws_filter(view.items, args.ws)
-    items = sorted(view.items.values(), key=lambda i: (i["kind"], i["created_at"]))
+    items = sorted(view.items.values(), key=lambda i: (i["kind"], *creation_key(i)))
     return "\n".join(item_row(i, view) for i in items if listed(i, args) and in_ws(i["id"])) or "(no items)"
 
 
@@ -3081,7 +3097,7 @@ def render_item(item: Item, view: View) -> str:
 def render_kinds(open_items: list[Item], view: View) -> list[str]:
     lines = []
     for kind in KINDS:
-        rows = sorted((i for i in open_items if i["kind"] == kind), key=lambda i: i["created_at"])
+        rows = by_creation(i for i in open_items if i["kind"] == kind)
         if rows:
             lines += ["", f"## {kind}", "", *(render_item(item, view) for item in rows)]
     return lines
@@ -3164,7 +3180,7 @@ def cmd_spawn(args: argparse.Namespace) -> str:
     with locked_ledger(write=True) as ledger:
         items = ledger["items"]
         source = get_item(ledger, args.source) if args.source else None
-        similar = lineage.similar_tasks(items, Index.of(items), args.source, args.title, is_open)
+        similar = by_creation(lineage.similar_tasks(items, Index.of(items), args.source, args.title, is_open))
         same = next((t for t in similar if t["title"].strip().lower() == args.title.strip().lower()), None)
         if same:
             return f"{same['id']}\nunchanged: {same['id']} already exists ({same['state']}): {same['title']}"
@@ -3238,7 +3254,7 @@ def same_origin_tasks(items: dict[str, Item], args: argparse.Namespace, known: l
 def recent_tasks(items: dict[str, Item]) -> list[Item]:
     cutoff = datetime.now(UTC) - timedelta(days=RECENTLY_CLOSED_DAYS)
     tasks = (item for item in items.values() if item["kind"] == TASK_KIND)
-    return [task for task in tasks if is_open(task) or parse_time(task["updated_at"]) >= cutoff]
+    return by_creation(task for task in tasks if is_open(task) or parse_time(task["updated_at"]) >= cutoff)
 
 
 def same_origin_warning(task_id: str, cited: list[Item]) -> str:

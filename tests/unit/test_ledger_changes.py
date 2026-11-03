@@ -156,6 +156,11 @@ class TestFieldTable(unittest.TestCase):
         self.assertGreater(len(list(ledger_paths(data))), 100)
         self.assertEqual(unclassified(data), [])
 
+    def test_a_findings_key_is_sealed(self) -> None:
+        """A learning finding's key is a slug the model wrote, which can carry a colleague's name."""
+        row = classify(("items", ITEM, "fields", "key"))
+        self.assertEqual((row.klass, row.important), (SEALED, True))
+
     def test_no_wildcard_below_an_item(self) -> None:
         wild = [row.pattern for row in ledger_changes.FIELDS if "*" in row.pattern[2:]]
         self.assertEqual(wild, [])
@@ -265,7 +270,6 @@ class TestFieldTable(unittest.TestCase):
             "created_at",
             "fields.repo",
             "fields.parent",
-            "fields.key",
             "fields.purpose",
             "fields.reviewed_sha",
             "fields.nudge_count",

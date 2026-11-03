@@ -16,6 +16,7 @@ from typing import Any
 
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "lib"))
+import journal
 import ledger
 from journal import replica_id
 
@@ -366,6 +367,22 @@ class MintedIdTest(LedgerTestCase):
             ledger.next_task_id({})
         with ledger.locked_ledger(write=False), self.assertRaisesRegex(ledger.LedgerError, "no ledger write"):
             ledger.next_outreach_id({}, MYPR_ID)
+
+    def test_an_id_that_names_an_item_already_is_minted_again(self) -> None:
+        today = datetime.now(UTC).date().isoformat()
+        run("upsert", f"task:{today}/aaaaaa", "--kind", "task", "--title", "Earlier")
+        with unittest.mock.patch.object(journal, "mint_suffix", side_effect=["aaaaaa", "bbbbbb"]) as minted:
+            self.assertEqual(self.spawn(), f"task:{today}/bbbbbb")
+        self.assertEqual([c.args[2] for c in minted.call_args_list], [0, 1])  # the same position, counted on
+        self.assertEqual(self.item(f"task:{today}/aaaaaa")["title"], "Earlier")
+
+    def test_the_replica_comes_from_the_store_made_under_its_lock(self) -> None:
+        self.assertFalse((ledger.STORE.state_dir / "replica.json").exists())
+        made = ledger.replica()
+        self.assertRegex(made, "^[0-9a-f]{32}$")
+        self.assertEqual(ledger.replica(), made)
+        run("upsert", REVIEW_ID, "--kind", "review-request")
+        self.assertTrue((ledger.STORE.journal_dir / f"{made}.jsonl").is_file())
 
 
 class ValidateTest(LedgerTestCase):

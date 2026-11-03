@@ -83,7 +83,8 @@ may join two parts of one line). Findings with no quote found are dropped and li
 report. This is the main guard against invented findings, and it is cheap.
 
 **De-duplication.** `learn/state.json` remembers every finding by key: first and last seen, times
-seen, and what happened to it (reported, proposed, applied, rejected, synced from the ledger). The
+seen, the `learn:` item proposed for it, and what happened to it (reported, proposed, applied,
+rejected, synced from that item). The
 digest lists them so the analysis reuses keys; a known key is counted, never proposed again once
 proposed, applied or rejected.
 
@@ -102,11 +103,16 @@ orchestrator lists it under *Needs your approval* at the next check-in (one sent
 | `repo-change`, `setup`, `outreach`, `ledger` | nothing: the user makes the change, then `learn done <id>` | repo changes must stay generic and go through review; `sessions.yml` and outreach are the user's call |
 
 `learn reject <id>` declines a proposal for good. The change lives on the item, in its fields
-(`target`, `text`, `window`), so that it travels with the ledger to another Mac (it lived in
-`learn/state.json` before; `learn` moves an old file's `proposals` onto the items once). Ledger
-fields can be edited by any session, so `apply` makes the change only if the item's change is still
-the one its pending proposal shows, the text I approved; otherwise it refuses, and the way out is
-`learn reject`. The path is computed by code from the target, never taken from the model: a memory note's
+(`target`, `text`, `window`), so that it travels with the ledger to another Mac. It lived in
+`learn/state.json` before: learn's next command (under its lock; never a reader such as the console
+or the watchdog) moves an old file's `proposals` once, writing the change onto each pending item,
+leaving settled ones as they are, and recording each finding's item. Ledger fields can be edited by
+any session, so `apply` makes the change only if the item still renders, by the same code, as the
+head of its pending proposal (the title line and the Change lines, exactly), and names the finding
+learn proposed it for; otherwise it refuses, and the way out is `learn reject`. Which finding
+`apply`, `done` and `reject` settle, and which names a memory note's file, comes from learn's own
+state, never from the item's editable `key`. The path is computed by code from the target, never
+taken from the model: a memory note's
 folder is the window's, as `bosun sessions` shows it when applying (a folder is this Mac's, so it
 is never stored). Before a file changes, its previous version goes to `learn/backups/`. Applying
 is idempotent (the marker is checked).

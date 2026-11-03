@@ -7,6 +7,7 @@ and the one-shot migration of ad hoc provenance. Fictional data: acme's invoice 
 from __future__ import annotations
 
 import json
+import re
 import sys
 import tempfile
 import unittest
@@ -124,6 +125,16 @@ class SpawnTest(LineageTestCase):
         self.assertIn(f"warning: similar open task(s) from the same source: {made(TASKS)}", similar)
         other_source = self.spawn(source=MENTION)
         self.assertNotIn("warning", other_source)
+
+    def test_similar_tasks_come_oldest_first(self) -> None:
+        title = "Fix the rounding bug in the PDF renderer"
+        made = [self.spawn(title=f"{title}{end}").splitlines()[0] for end in ("", ", now")]
+        older, newer = sorted(made, reverse=True)  # the larger id is the older one
+        with ledger.locked_ledger(write=True) as data:
+            data["items"][older]["created_at"] = "2026-10-20T09:00:00+00:00"
+            data["items"][newer]["created_at"] = "2026-10-20T10:00:00+00:00"
+        warning = self.spawn(title=f"{title}, again")
+        self.assertRegex(warning, rf"from the same source: {re.escape(older)} \(.*; {re.escape(newer)} \(")
 
     def test_without_a_source_it_needs_where_it_came_from(self) -> None:
         with self.assertRaisesRegex(ledger.LedgerError, "needs --via"):

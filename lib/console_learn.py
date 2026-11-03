@@ -27,7 +27,6 @@ from console_state import LearnFiles
 
 
 KIND = learn.KIND
-ACTION_LINES = {"Change:": "change_text", "Why:": "why", "Evidence:": "evidence"}
 SETTLED = ("applied", "rejected", "dismissed")
 OUTSIDE = "outside the learn state folder: not shown"
 RUN_KEYS = (
@@ -72,17 +71,11 @@ def action_text(item: Item) -> str:
 
 
 def action_parts(text: str) -> dict[str, str]:
-    """The Change, Why and Evidence lines of an action text (the line after "Change:" too: it is
-    the change itself)."""
-    parts: dict[str, str] = {}
-    lines = text.splitlines()
-    for index, line in enumerate(lines):
-        for prefix, name in ACTION_LINES.items():
-            if line.startswith(prefix):
-                rest = line.removeprefix(prefix).strip()
-                following = lines[index + 1] if name == "change_text" and index + 1 < len(lines) else ""
-                parts[name] = f"{rest} {following}".strip() if name == "change_text" else rest
-    return parts
+    """The Change (where it goes, then the change itself), Why and Evidence of an action text, as
+    learn.parse_action reads them (the one reading, which apply compares too)."""
+    parts = learn.parse_action(text)
+    found = {"change_text": parts.change, "why": parts.why, "evidence": parts.evidence}
+    return {name: value for name, value in found.items() if value}
 
 
 def settled(item: Item) -> dict[str, Any] | None:

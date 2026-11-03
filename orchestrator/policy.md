@@ -150,7 +150,7 @@ Recording outreach is tier 1; every message to another person is tier 2.
 
 ## Work we take on: tasks and links
 
-Work we decide to do that has no artifact of its own yet is a **task** (`task:<date>/<n>`): what a
+Work we decide to do that has no artifact of its own yet is a **task** (`task:<date>/<id>`): what a
 colleague asks of us in a reply or a mention, what I tell you to do, a follow-up a repo session
 found. It is spawned from the item it came from, so its origin is a link, not prose:
 

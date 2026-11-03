@@ -5,13 +5,14 @@
   "bosun ledger record-delegation 'mypr:acme/exporter#120' --window exporter-pdf --task fix-my-pr --ask 'address the review'",
   "bosun ledger reach-out 'mypr:acme/exporter#120' --to 'Marco Rossi' --purpose decision --subject 'Decision 6: round currencies per line or per invoice?'",
   "bosun ledger sent \"$OUT1\" --ref 'https://acme.slack.com/archives/C0000000003/p1700000061000061?thread_ts=1700000060.000060&cid=C0000000003'",
+  "sleep 1  # decisions 1 and 2 a second after decision 6: listings name the oldest first",
   "bosun ledger reach-out 'mypr:acme/exporter#120' --to 'Marco Rossi' --purpose decision --subject 'Decision 1: one currency column or one per currency?'",
   "bosun ledger reach-out 'mypr:acme/exporter#120' --to 'Marco Rossi' --purpose decision --subject 'Decision 2: keep the old column order?'",
   "bosun ledger sent \"$OUT2\" \"$OUT3\" --ref 'https://acme.slack.com/archives/C0000000003/p1700000063000063?thread_ts=1700000062.000062&cid=C0000000003'"
  ],
  "steps": [
   {"actor": "repo", "why": "an addition to decision 6, already sent: created, with a warning naming the open conversation", "run": "bosun ledger reach-out 'mypr:acme/exporter#120' --to 'Marco Rossi' --purpose info-ack --subject 'Addition to decision 6: the totals row rounds the same way'",
-   "out": ["${OUT4}\ncreated:", "warning: mypr:acme/exporter#120 already has open outreach to the same person: out:", "${OUT1} (decision, sent: Decision 6", "fold '${OUT4}' --into '<existing id>'"]},
+   "out": ["${OUT4}\ncreated:", "warning: mypr:acme/exporter#120 already has open outreach to the same person: ${OUT1} (decision, sent: Decision 6", "fold '${OUT4}' --into '<existing id>'"]},
   {"actor": "repo", "why": "two drafts to the QA lead that both carry the log-growth issue: the second is warned about the first", "run": [
    "bosun ledger reach-out 'mypr:acme/exporter#120' --to 'Lena Park' --purpose decision --subject 'Skip the flaky upload suite for now, and note that upload.log grows without bound on the export host?' --option 'a) skip' --option 'b) fix first' --option 'c) rotate the log daily'",
    "bosun ledger reach-out 'mypr:acme/exporter#120' --to 'Lena Park (QA)' --purpose review --subject 'upload.log grows without bound: rotate it daily and cap its size'"],

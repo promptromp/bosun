@@ -121,7 +121,8 @@ of truth, so don't copy rules into this file.
   `tests/js_check.sh` checks `app.js` with node if it is installed (a fake DOM in
   `tests/js/app_check.js`, rendering views from `tests/js/api_models.py`; no npm packages).
   Its fixture ledger is `tests/fixtures/console/acme-ledger.json`, rebuilt with the real ledger
-  commands by `make-acme-ledger.sh` there (its build day is pinned, so the ids stay).
+  commands by `make-acme-ledger.sh` there (its build day, its replica and one write per second
+  are pinned, so the ids stay).
 - `orchestrator/policy.md` (appended to the orchestrator's system prompt),
   `orchestrator/plugin/commands/chores.md` (the chores procedure), `orchestrator/settings.json`
   (the orchestrator's own permissions, generic; a site replaces it with

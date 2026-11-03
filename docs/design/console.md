@@ -348,7 +348,8 @@ resolved (a run made with `--out DIR` elsewhere is listed without one); `/api/le
 returns it and the page renders it as Markdown. Each `learn:` item shows its fields (finding key,
 category, target, run), the Change, Why and Evidence lines of its proposal (pending, or the last
 `proposed` history entry once settled), the exact change from the item's fields (target,
-text, window), and its last move to applied or rejected (when, and the note `learn apply` wrote:
+text, window; a pending item from before changes lived on the items shows it only after learn's
+next command moves it there), and its last move to applied or rejected (when, and the note `learn apply` wrote:
 where the change went). Findings remembered: key, title, category, status, times seen, first and
 last seen, with counts per status.
 

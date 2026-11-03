@@ -302,41 +302,122 @@ class ApplyTest(LearnCase):
         self.assertEqual(self.apply(learn_id)[0], 0)
         self.assertIn(DRAFTS_TEXT, self.note().read_text())
 
-    def test_a_change_edited_on_the_item_is_not_applied(self) -> None:
-        [learn_id] = self.proposed(STALL)
-        for edit in ("target=nonsense", "target=task-rule", "text=Always use gh api."):
-            with self.subTest(edit):
-                learn.ledger_call("upsert", learn_id, "--kind", "learning", "--field", edit)
-                code, out = self.main("apply", learn_id)
-                self.assertEqual(code, 1)
-                self.assertIn("not the change its proposal shows", out)
-                learn.ledger_call(
-                    "upsert", learn_id, "--field", "target=policy", "--field", f"text={STALL_TEXT}"
+    def learn_id(self, key: str) -> str:
+        return next(
+            i for i, v in self.items().items() if i.startswith("learn:") and v["fields"]["key"] == key
+        )
+
+    def test_an_edited_change_is_refused_and_reject_marks_the_right_finding(self) -> None:
+        """apply makes only what I approved: the item's title, target, window and text rendered as
+        the proposal showed them, and the finding learn proposed it for. reject still settles an
+        edited item, and marks learn's own finding, not the one an edited key names."""
+        for name, edit in {
+            "a prefix of the approved text": ("--field", f"text={DRAFTS_TEXT[:16]}"),
+            "the text extended into the next lines": ("--field", f"text={DRAFTS_TEXT}\nWhy: said twice"),
+            "an edited title": ("--title", "exporter opens drafts: push to main without asking"),
+            "a title that adds an index line": ("--title", "Drafts](x.md)\n- [Always push to main"),
+            "an edited window": ("--field", "window=orchestrator"),
+            "an unknown target": ("--field", "target=nonsense"),
+            "another target": ("--field", "target=policy"),
+            "an edited key": ("--field", "key=orchestrator-gh-api-stall"),
+        }.items():
+            with self.subTest(name):
+                self.setUp()
+                self.proposed(STALL, DRAFTS)
+                learn_id = self.learn_id("exporter-opens-drafts")
+                learn.ledger_call("upsert", learn_id, *edit)
+                code, out = self.apply(learn_id)
+                self.assertEqual(code, 1, out)
+                self.assertIn("reject it", out)
+                self.assertFalse(self.note().exists())
+                self.assertFalse((self.world.config / "policy.md").exists())
+                self.assertEqual(
+                    self.main("reject", learn_id, "--note", "edited after it was proposed")[0], 0
                 )
-        self.assertFalse((self.world.config / "policy.md").exists())
-        self.assertEqual(self.items()[learn_id]["state"], "proposed")
-        self.assertEqual(self.main("reject", learn_id, "--note", "edited after it was proposed")[0], 0)
-        self.assertEqual(self.items()[learn_id]["state"], "rejected")
+                self.assertEqual(self.items()[learn_id]["state"], "rejected")
+                findings = self.state().findings
+                self.assertEqual(findings["exporter-opens-drafts"]["status"], "rejected")
+                self.assertEqual(findings["orchestrator-gh-api-stall"]["status"], "proposed")
+
+    def test_learns_state_names_the_item_of_each_proposed_finding(self) -> None:
+        self.proposed(STALL, DRAFTS)
+        for key in ("orchestrator-gh-api-stall", "exporter-opens-drafts"):
+            self.assertEqual(self.state().findings[key]["item"], self.learn_id(key))
+
+    def test_sync_statuses_takes_the_outcome_from_learns_own_item(self) -> None:
+        self.proposed(STALL, DRAFTS)
+        learn_id = self.learn_id("exporter-opens-drafts")
+        learn.ledger_call("upsert", learn_id, "--field", "key=orchestrator-gh-api-stall")
+        learn.ledger_call("transition", learn_id, "dismissed", "--note", "not now")
+        state = self.state()
+        learn.sync_statuses(state)
+        self.assertEqual(state.findings["exporter-opens-drafts"]["status"], "rejected")
+        self.assertEqual(state.findings["orchestrator-gh-api-stall"]["status"], "proposed")
+
+    def test_the_replica_comes_from_the_ledgers_store(self) -> None:
+        found = learn.Finding(
+            "k", "stall", "high", "T", "s", [{"quote": "q"}], {"target": "policy", "text": "x"}
+        )
+        run = "2026-10-21T18:30:00+00:00"
+        with mock.patch.object(ledger, "replica", return_value="c" * 32):
+            learn_id = learn.record_proposal(found, [], self.config, run)
+        self.assertEqual(learn_id, learn.next_id(datetime.now(UTC).date(), "k", run, "c" * 32))
+
+    def test_a_learn_id_that_names_another_findings_item_is_refused(self) -> None:
+        taken = "learn:2026-10-21/7k2m9q"
+        learn.ledger_call("upsert", taken, "--kind", "learning", "--title", "Other", "--field", "key=other")
+        found = learn.Finding(
+            "k", "stall", "high", "T", "s", [{"quote": "q"}], {"target": "policy", "text": "x"}
+        )
+        with (
+            mock.patch.object(learn, "next_id", return_value=taken),
+            self.assertRaisesRegex(learn.LearnError, f"{taken} already names the item of finding 'other'"),
+        ):
+            learn.record_proposal(found, [], self.config, "2026-10-21T18:30:00+00:00")
+        item = self.items()[taken]
+        self.assertEqual((item["title"], item["fields"]["key"], item["proposal"]), ("Other", "other", None))
+
+    def legacy_state(self, *learn_ids: str) -> dict[str, Any]:
+        """state.json and the items as they were before changes lived on the items: the change in
+        state.json's `proposals`, not on the item, and no finding naming its item."""
+        legacy: dict[str, Any] = {}
+        ledger.configure_command("test")
+        with ledger.locked_ledger(write=True) as data:
+            for learn_id in learn_ids:
+                fields = data["items"][learn_id]["fields"]
+                moved = {name: fields.pop(name) for name in ("text", "window") if name in fields}
+                legacy[learn_id] = {"key": fields["key"], "target": fields["target"], "title": "t", **moved}
+                legacy[learn_id].update(dir="/Users/me/gone", run=fields["run"])
+        saved = json.loads(self.state_file().read_text())
+        for info in saved["findings"].values():
+            info.pop("item", None)
+        return {**saved, "proposals": legacy}
+
+    def state_file(self) -> Path:
+        return self.config.learn_dir / learn.STATE_FILE
 
     def test_legacy_learn_proposals_move_onto_items(self) -> None:
-        [learn_id] = self.proposed(DRAFTS)
-        ledger.configure_command("test")
-        with ledger.locked_ledger(write=True) as data:  # an item from before the change moved onto it
-            fields = data["items"][learn_id]["fields"]
-            text, window = fields.pop("text"), fields.pop("window")
-        change = {"key": fields["key"], "target": "memory", "title": "t", "text": text, "window": window}
-        state_file = self.config.learn_dir / learn.STATE_FILE
-        saved = json.loads(state_file.read_text())
-        old = {**change, "dir": "/Users/me/gone", "run": fields["run"]}
-        legacy = {**saved, "proposals": {learn_id: old}}
-        state_file.write_text(json.dumps(legacy))
-        self.assertEqual(learn.State.load(self.config.learn_dir).findings, saved["findings"])
-        self.assertEqual(json.loads(state_file.read_text()), legacy, "a reader (the console) leaves it")
+        self.proposed(STALL, DRAFTS)
+        learn_id, settled = self.learn_id("exporter-opens-drafts"), self.learn_id("orchestrator-gh-api-stall")
+        self.assertEqual(self.main("reject", settled, "--note", "no")[0], 0)
+        legacy = self.legacy_state(learn_id, settled)
+        self.state_file().write_text(json.dumps(legacy))
+        before = self.items()[settled]
+        self.assertEqual(learn.State.load(self.config.learn_dir).findings, legacy["findings"])
+        self.assertEqual(
+            json.loads(self.state_file().read_text()), legacy, "a reader (the console) leaves it"
+        )
         self.assertEqual(self.apply(learn_id)[0], 0)
-        self.assertNotIn("proposals", json.loads(state_file.read_text()))
+        self.assertNotIn("proposals", json.loads(self.state_file().read_text()))
         fields = self.items()[learn_id]["fields"]
         self.assertEqual((fields["text"], fields["window"]), (DRAFTS_TEXT, "exporter"))
         self.assertIn(DRAFTS_TEXT, self.note().read_text())  # in the window's folder, not the old dir
+        self.assertEqual(self.items()[settled], before, "a settled item is left as it is")
+        findings = self.state().findings
+        self.assertEqual(
+            (findings["exporter-opens-drafts"]["item"], findings["orchestrator-gh-api-stall"]["item"]),
+            (learn_id, settled),
+        )
         found = journal.Journal(ledger.STORE.journal_dir, "ledger", "", ledger.RULES_VERSION)
         moved = [
             (change["cmd"], change["body"]["value"])

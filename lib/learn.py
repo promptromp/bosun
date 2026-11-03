@@ -21,13 +21,14 @@ Nothing is applied on its own. New proposals (at most BOSUN_LEARN_MAX_PROPOSALS 
 `learn:<YYYY-MM-DD>/<id>` ledger items (the UTC day; the id is hashed from the finding's key and
 the run, so the same finding in the same run is the same item). The item holds the change (its
 target, text and window, in its fields) and has it as its pending proposal, so the orchestrator
-lists it under "Needs your approval"; `apply` makes only the change that proposal shows. `apply`
-makes an approved change: a memory note for a window's folder (found from the window when
+lists it under "Needs your approval". On my yes, `apply` makes the change, if the item still
+renders as that proposal: a memory note for a window's folder (found from the window when
 applied), a rule appended to the site policy ($BOSUN_CONFIG_DIR/policy.md) or to the site's
 shared task rules ($BOSUN_CONFIG_DIR/tasks/_common.md). Other changes (to this repo, sessions.yml,
 outreach) you make yourself, then `done`. `reject` declines one; it is never proposed again. Every
-finding is remembered by key in $BOSUN_STATE_DIR/learn/state.json, so a later run counts it again
-instead of proposing it twice.
+finding is remembered by key in $BOSUN_STATE_DIR/learn/state.json, with the item proposed for it,
+so a later run counts it again instead of proposing it twice, and apply, done and reject settle
+the finding learn proposed the item for, whatever the item's fields say.
 """
 
 from __future__ import annotations
@@ -54,7 +55,6 @@ import claude_state
 import learn_digest
 import ledger
 from change_log import mint_suffix
-from journal import replica_id
 from learn_digest import Window
 
 
@@ -76,6 +76,13 @@ ID_PREFIX = "learn:"
 KIND = "learning"
 # The fields of a learn: item that hold its change, besides its target.
 CHANGE_FIELDS = ("text", "window")
+# A proposal's action (action_text): its head, the title line and the Change lines (what apply
+# makes, rendered by action_head), then the Why, Evidence and If yes lines.
+CHANGE_PREFIX = "Change: "
+WHY = "\nWhy: "
+EVIDENCE = "\nEvidence: "
+SEEN = re.compile(r" \(seen (\d+)x\)$")
+SETTLED = ("applied", "rejected", "dismissed")
 SEVERITIES = ("high", "medium", "low")
 # The cost of a run, estimated before the call: Claude Code checks --max-budget-usd only after a
 # turn, so one large digest can cost far more than the budget (a 1.1 MB digest cost $4.05 against
@@ -274,26 +281,18 @@ class State:
     findings: dict[str, dict[str, Any]] = field(default_factory=dict)  # key -> what we know of it
 
     @classmethod
-    def load(cls, learn_dir: Path, *, move_proposals: bool = False) -> State:
-        """The state in <learn_dir>. Before a proposal's change lived on its learn: item, this
-        file kept it under `proposals`. With <move_proposals> (learn's own commands, under its
-        lock, with the ledger configured), that map is moved onto the items once and dropped from
-        the file; other readers (the console, the watchdog) leave the file as it is."""
-        try:
-            data = json.loads((learn_dir / STATE_FILE).read_text())
-        except FileNotFoundError:
-            return cls()
-        except (OSError, json.JSONDecodeError) as exc:
-            raise LearnError(f"{learn_dir / STATE_FILE} is unreadable ({exc}); move it aside") from exc
-        state = cls(
+    def load(cls, learn_dir: Path) -> State:
+        """The state in <learn_dir>, read only: a legacy `proposals` map stays in the file until
+        learn's next command moves it (move_legacy_proposals)."""
+        return cls.of(read_state(learn_dir))
+
+    @classmethod
+    def of(cls, data: Any) -> State:
+        return cls(
             runs=list(data.get("runs") or []),
             running=data.get("running"),
             findings=dict(data.get("findings") or {}),
         )
-        if move_proposals and data.get("proposals"):
-            move_onto_items(dict(data["proposals"]))
-            state.save(learn_dir)
-        return state
 
     def save(self, learn_dir: Path) -> None:
         learn_dir.mkdir(parents=True, exist_ok=True)
@@ -304,6 +303,20 @@ class State:
 
     def last_ok(self) -> dict[str, Any] | None:
         return next((r for r in reversed(self.runs) if r.get("outcome") == "ok"), None)
+
+
+def read_state(learn_dir: Path) -> Any:
+    try:
+        return json.loads((learn_dir / STATE_FILE).read_text())
+    except FileNotFoundError:
+        return {}
+    except (OSError, json.JSONDecodeError) as exc:
+        raise LearnError(f"{learn_dir / STATE_FILE} is unreadable ({exc}); move it aside") from exc
+
+
+def finding_of(state: State, learn_id: str) -> str | None:
+    """The key of the finding learn proposed <learn_id> for, from its own state."""
+    return next((key for key, info in state.findings.items() if info.get("item") == learn_id), None)
 
 
 @contextlib.contextmanager
@@ -319,7 +332,7 @@ def state_lock(learn_dir: Path) -> Iterator[None]:
 
 
 def update_state(learn_dir: Path, change: Callable[[State], None]) -> State:
-    state = State.load(learn_dir, move_proposals=True)
+    state = State.load(learn_dir)
     change(state)
     state.save(learn_dir)
     return state
@@ -450,29 +463,51 @@ def use_ledger(config: Config) -> None:
 
 
 def sync_statuses(state: State) -> None:
-    """Take each proposal's outcome from its learn: item (I may have answered it any way)."""
+    """Take each proposal's outcome from the learn: item learn proposed it as (I may have answered
+    it any way)."""
     try:
         items = ledger.load()["items"]
     except ledger.LedgerError:
         return
-    for item in items.values():
-        known = state.findings.get(item["fields"].get("key", "")) if item["kind"] == KIND else None
-        if known and item["state"] in ("applied", "rejected", "dismissed"):
-            known["status"] = "rejected" if item["state"] == "dismissed" else item["state"]
+    for info in state.findings.values():
+        item = items.get(str(info.get("item", "")))
+        if item and item["kind"] == KIND and item["state"] in SETTLED:
+            info["status"] = "rejected" if item["state"] == "dismissed" else item["state"]
 
 
-def move_onto_items(legacy: Mapping[str, Any]) -> None:
-    """Write each change state.json kept (before changes lived on their items) onto its learn:
-    item: its text and window. An item that has its text already is left alone, and a change whose
-    item is gone (pruned) goes with the map."""
+def is_pending(item: Mapping[str, Any] | None) -> bool:
+    """A learn: item whose proposal waits for my answer."""
+    if item is None:
+        return False
+    return item["kind"] == KIND and item["state"] == "proposed" and bool(item.get("proposal"))
+
+
+def move_legacy_proposals(learn_dir: Path) -> None:
+    """Before a proposal's change lived on its learn: item, state.json kept it under `proposals`.
+    Learn's commands call this first, under their lock, with the ledger configured: once, each
+    finding records its item, each pending item gets its text and window (a settled one is left
+    as it is), and the map leaves the file. Readers (the console, the watchdog) never call it."""
+    data = read_state(learn_dir)
+    legacy = data.get("proposals") if isinstance(data, dict) else None
+    if not legacy:
+        return
+    state = State.of(data)
     items = ledger.load()["items"]
-    for learn_id, change in legacy.items():
-        item = items.get(learn_id)
-        if not isinstance(change, dict) or not item or item["kind"] != KIND or "text" in item["fields"]:
-            continue
-        moved = [f"{name}={change[name]}" for name in CHANGE_FIELDS if change.get(name)]
-        if moved:
-            ledger_call("upsert", learn_id, "--kind", KIND, *field_args(moved))
+    for learn_id, change in dict(legacy).items():
+        if isinstance(change, dict):
+            move_one(state, learn_id, change, items.get(learn_id))
+    state.save(learn_dir)
+
+
+def move_one(state: State, learn_id: str, change: Mapping[str, Any], item: dict[str, Any] | None) -> None:
+    known = state.findings.get(str(change.get("key", "")))
+    if known is not None:
+        known.setdefault("item", learn_id)
+    if not is_pending(item) or "text" in (item or {})["fields"]:
+        return
+    moved = [f"{name}={change[name]}" for name in CHANGE_FIELDS if change.get(name)]
+    if moved:
+        ledger_call("upsert", learn_id, "--kind", KIND, *field_args(moved))
 
 
 # ---- the analysis ------------------------------------------------------------------------------
@@ -597,10 +632,39 @@ def evidence_line(evidence: dict[str, str]) -> str:
     return f'{evidence.get("source", "?")} {evidence.get("ref", "?")}{when}: "{evidence.get("quote", "")}"'
 
 
-def change_lines(change: Mapping[str, Any]) -> str:
-    """The lines of a proposal's action that show its change: where it goes, and its text."""
-    where = TARGET_TEXT[change["target"]].format(window=change.get("window") or "?", harness="Claude Code")
-    return f"Change: {where}:\n{change['text']}"
+def action_head(target: str, title: str, window: str, text: str, seen: int = 0) -> str:
+    """The head of a proposal's action, what I approve: the title line (with how often the finding
+    was seen) and the Change lines, where the change goes and its text."""
+    where = TARGET_TEXT[target].format(window=window or "?", harness="Claude Code")
+    times = f" (seen {seen}x)" if seen else ""
+    return f"[learn: {target}] {title}{times}\n{CHANGE_PREFIX}{where}:\n{text}"
+
+
+@dataclass(frozen=True)
+class ActionParts:
+    head: str = ""  # the title line and the Change lines, up to Why:
+    seen: int = 0  # the title line's "(seen Nx)"
+    change: str = ""  # where the change goes, then its text
+    why: str = ""
+    evidence: str = ""
+
+
+def parse_action(action: str) -> ActionParts:
+    """The parts of a proposal's action as action_text writes it (an action in another shape has
+    none). The one reading of an action: apply compares its head, the console shows the rest."""
+    head, found, rest = action.partition(WHY)
+    title_line, _, change = head.partition("\n")
+    if not found or not change.startswith(CHANGE_PREFIX):
+        return ActionParts()
+    seen = SEEN.search(title_line)
+    why, _, evidence = rest.partition(EVIDENCE)
+    return ActionParts(
+        head=head,
+        seen=int(seen[1]) if seen else 0,
+        change=change.removeprefix(CHANGE_PREFIX).replace(":\n", ": ", 1),
+        why=why.split("\n", 1)[0],
+        evidence=evidence.split("\n", 1)[0],
+    )
 
 
 def action_text(learn_id: str, finding: Finding, change: dict[str, Any]) -> str:
@@ -610,11 +674,10 @@ def action_text(learn_id: str, finding: Finding, change: dict[str, Any]) -> str:
         if change["target"] in APPLIED_BY_HAND
         else f"bosun learn apply '{learn_id}'"
     )
-    seen = f" (seen {finding.seen_before + 1}x)" if finding.seen_before else ""
+    seen = finding.seen_before + 1 if finding.seen_before else 0
     return "\n".join(
         [
-            f"[learn: {change['target']}] {finding.title}{seen}",
-            change_lines(change),
+            action_head(change["target"], finding.title, change["window"], change["text"], seen),
             f"Why: {proposal.get('rationale', '')}",
             f"Evidence: {evidence_line(finding.evidence[0])}",
             f"If yes: {how}. If no: bosun learn reject '{learn_id}' --note '<why>'",
@@ -625,7 +688,13 @@ def action_text(learn_id: str, finding: Finding, change: dict[str, Any]) -> str:
 def record_proposal(finding: Finding, windows: list[Window], config: Config, run: str) -> str:
     """A learn: ledger item holding the exact change (target, text, window), with the change as its
     pending proposal; returns its id."""
-    learn_id = next_id(now().date(), finding.key, run, replica_id(config.state_dir))
+    learn_id = next_id(now().date(), finding.key, run, ledger.replica())
+    taken = ledger.load()["items"].get(learn_id)
+    if taken and taken["fields"].get("key") != finding.key:
+        raise LearnError(
+            f"{learn_id} already names the item of finding {taken['fields'].get('key')!r}, not "
+            f"{finding.key!r} (a hash collision); not proposing it"
+        )
     proposal = finding.proposal or {}
     memory = proposal["target"] == "memory"
     window = target_dir(proposal.get("window", ""), windows, config.orchestrator)[0] if memory else ""
@@ -794,7 +863,7 @@ def collect_and_analyze(
     if not options.dry_run:
         for finding in to_propose(findings, config.max_proposals):
             learn_id = record_proposal(finding, windows, config, run["started"])
-            state.findings[finding.key]["status"] = "proposed"
+            state.findings[finding.key].update(status="proposed", item=learn_id)
             proposed[finding.key] = learn_id
         state.runs.append(
             {**run, "outcome": "ok", "findings": len(findings), "proposals": list(proposed.values())}
@@ -817,7 +886,8 @@ def finish(config: Config, outcome: str, run: dict[str, Any], error: str = "") -
 def run_tracked(config: Config, options: RunOptions, windows: list[Window]) -> Outcome:
     """A real run: locked, marked as running for the watchdog, recorded however it ends."""
     with state_lock(config.learn_dir):
-        state = State.load(config.learn_dir, move_proposals=True)
+        move_legacy_proposals(config.learn_dir)
+        state = State.load(config.learn_dir)
         if options.scheduled and not (config.enabled and due_today(config, state, now())):
             return Outcome({"outcome": "skipped"})
         started = now()
@@ -883,26 +953,42 @@ def pending_item(learn_id: str) -> dict[str, Any]:
     item = ledger.get_item(ledger.load(), learn_id)
     if item["kind"] != KIND:
         raise LearnError(f"{learn_id} is not a learning proposal")
-    if item["state"] != "proposed" or not item.get("proposal"):
+    if not is_pending(item):
         raise LearnError(f"{learn_id} is {item['state']}, with no pending proposal")
     return item
 
 
-def pending_change(learn_id: str, windows: list[Window], orchestrator: str) -> dict[str, Any]:
-    """The change a pending learn: item holds, which must be the one its proposal shows (the
-    item's fields can be edited; the proposal is what I approved). A memory note's folder is found
-    from its window here, on this Mac; a window that is gone leaves no folder."""
+def approved(item: dict[str, Any], change: Mapping[str, str]) -> bool:
+    """Whether the item's title and <change> render exactly as the head of its pending proposal,
+    which is what I approved."""
+    if change["target"] not in TARGET_TEXT or not change["text"]:
+        return False
+    parts = parse_action(str(item["proposal"]["action"]))
+    rendered = (
+        action_head(change["target"], item["title"], change["window"], change["text"], seen)
+        for seen in {0, parts.seen}
+    )
+    return parts.head in rendered
+
+
+def pending_change(
+    learn_id: str, key: str | None, windows: list[Window], orchestrator: str
+) -> dict[str, Any]:
+    """The change a pending learn: item holds, if it is what I approved: the item's fields can be
+    edited, so they must render as its proposal's head, and name <key>, the finding learn proposed
+    it for (from learn's own state). A memory note's folder is found from its window here, on this
+    Mac; a window that is gone leaves no folder."""
     item = pending_item(learn_id)
     fields = item["fields"]
-    if not fields.get("text"):
-        raise LearnError(f"{learn_id}: its change is not on the item; reject it")
-    change = {name: fields.get(name, "") for name in ("key", "target", *CHANGE_FIELDS)}
-    if change["target"] not in TARGET_TEXT or change_lines(change) not in item["proposal"]["action"]:
+    if key is None or fields.get("key") != key:
+        raise LearnError(f"{learn_id}: learn did not propose it for finding {fields.get('key')!r}; reject it")
+    change = {name: str(fields.get(name, "")) for name in ("target", *CHANGE_FIELDS)}
+    if not approved(item, change):
         raise LearnError(
             f"{learn_id}: the change on the item is not the change its proposal shows; reject it"
         )
     name, folder = target_dir(change["window"], windows, orchestrator)
-    return {**change, "title": item["title"], "dir": folder if name == change["window"] else ""}
+    return {**change, "key": key, "title": item["title"], "dir": folder if name == change["window"] else ""}
 
 
 def backup(config: Config, learn_id: str, path: Path) -> None:
@@ -959,10 +1045,10 @@ def close_item(config: Config, learn_id: str, state_to: str, note: str) -> None:
     except ledger.LedgerError as exc:
         raise LearnError(f"ledger: {exc}") from exc
     ledger_call("transition", learn_id, state_to, "--note", note)
-    key = ledger.get_item(ledger.load(), learn_id)["fields"].get("key", "")
 
     def change(state: State) -> None:
-        if key in state.findings:
+        key = finding_of(state, learn_id)
+        if key is not None:
             state.findings[key]["status"] = state_to
 
     update_state(config.learn_dir, change)
@@ -971,8 +1057,9 @@ def close_item(config: Config, learn_id: str, state_to: str, note: str) -> None:
 def cmd_apply(config: Config, args: argparse.Namespace) -> int:
     windows = Window.from_json(json.loads(Path(args.sessions).read_text())) if args.sessions else []
     with state_lock(config.learn_dir):
-        State.load(config.learn_dir, move_proposals=True)
-        change = pending_change(args.id, windows, config.orchestrator)
+        move_legacy_proposals(config.learn_dir)
+        key = finding_of(State.load(config.learn_dir), args.id)
+        change = pending_change(args.id, key, windows, config.orchestrator)
         applier = APPLIERS.get(change["target"])
         if applier is None:
             raise LearnError(
@@ -988,7 +1075,7 @@ def cmd_apply(config: Config, args: argparse.Namespace) -> int:
 def cmd_close(config: Config, args: argparse.Namespace) -> int:
     state_to = "applied" if args.command == "done" else "rejected"
     with state_lock(config.learn_dir):
-        State.load(config.learn_dir, move_proposals=True)
+        move_legacy_proposals(config.learn_dir)
         pending_item(args.id)
         default = "done by hand" if state_to == "applied" else "declined"
         close_item(config, args.id, state_to, args.note or default)

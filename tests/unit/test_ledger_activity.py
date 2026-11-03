@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import itertools
 import json
+import re
 import sys
 import tempfile
 import unittest
@@ -236,6 +237,18 @@ class SpawnDuplicateTest(ActivityTestCase):
         )
         self.assertIn(task, same_thread)  # its via is in the thread the mention started
         self.assertIn(same_source.splitlines()[0], same_thread)
+
+    def test_the_tasks_a_warning_names_come_oldest_first(self) -> None:
+        made = [
+            run("spawn", "--title", title, "--ask", "x", "--via", THREAD).splitlines()[0]
+            for title in ("Rotate the export key", "Rotate the import key")
+        ]
+        older, newer = sorted(made, reverse=True)  # the larger id is the older one
+        with ledger.locked_ledger(write=True) as data:
+            data["items"][older]["created_at"] = "2026-10-20T09:00:00+00:00"
+            data["items"][newer]["created_at"] = "2026-10-20T10:00:00+00:00"
+        output = run("spawn", "--title", "Something else", "--ask", "y", "--via", THREAD)
+        self.assertRegex(output, rf"same source or thread: {re.escape(older)} \(.*; {re.escape(newer)} \(")
 
     def test_a_recently_closed_one_counts_and_an_old_one_does_not(self) -> None:
         task = run("spawn", "--title", "Rotate the export key", "--ask", "rotate it", "--via", THREAD)
