@@ -789,14 +789,15 @@ class OutsideEditTest(ProtocolTestCase):
 
     def test_a_float_written_by_hand_where_diff_does_not_look_stops_nothing(self) -> None:
         """A float version (re-review probe q1): the next write succeeds from the journal's
-        rebuild, never says nothing was written after journaling its change, and validate passes."""
+        rebuild, never says nothing was written after journaling its change, and validate passes.
+        The version is the file's, not what the journal holds: no "taken in" note (R70)."""
         data = saved()
         data["version"] = 1.0
         ledger.STORE.ledger_file.write_text(json.dumps(data))
         said = io.StringIO()
         with contextlib.redirect_stderr(said):
             run("note", REVIEW_ID, "after a float version")
-        self.assertNotIn("nothing was written", said.getvalue())
+        self.assertEqual(said.getvalue(), "")
         self.assertEqual(self.notes(REVIEW_ID)[-1], "after a float version")
         self.assertEqual(saved()["version"], 1)
         self.assertEqual(run("validate", "--journal"), ("ledger is valid", 0))
@@ -991,6 +992,19 @@ class GenesisTest(JournalChecks):
             run("render")
         self.assert_the_ledger_is_whole()
         self.assertIn(self.QUOTE, (ledger.STORE.journal_dir / "local.jsonl").read_text())
+
+    def test_a_float_version_from_before_journals_is_the_rebuilds_with_no_note(self) -> None:
+        """File metadata is not what the journal holds: a float version is replaced, silently, by
+        the one the rebuild gives, so the file is the rebuild from genesis on (R70)."""
+        self.data["version"] = 1.0
+        ledger.STORE.ledger_file.write_text(json.dumps(self.data))
+        said = io.StringIO()
+        with contextlib.redirect_stderr(said):
+            run("note", self.OLD_TASK, "first write")
+        self.assertEqual(said.getvalue(), "")
+        self.assertEqual(saved()["version"], 1)
+        self.assertEqual(run("validate", "--journal"), ("ledger is valid", 0))
+        self.assert_the_journal_rebuilds_the_file()
 
     def test_a_ledger_without_said_gains_an_empty_one(self) -> None:
         del self.data["said"]

@@ -232,6 +232,7 @@ from __future__ import annotations
 
 import argparse
 import contextlib
+import copy
 import fcntl
 import json
 import os
@@ -960,13 +961,29 @@ def links_ready(item_id: str, item: Item, source: str) -> None:
     item["links"] = [entry for entry in entries if is_stored_link(entry)]
 
 
+def metadata_ready(ledger: Ledger) -> None:
+    """<ledger>'s own keys beside what the journal holds (`version`, a key from elsewhere): one
+    that canonical bytes cannot hold takes the value the rebuild gives (EMPTY's), or goes if the
+    rebuild has none, silently: it is the file's, not a record (R70)."""
+    for key in [key for key in ledger if key not in COMPARED and key != ledger_changes.JOURNAL]:
+        if next(unencodable(ledger[key]), None) is None:
+            continue
+        if key in ledger_changes.EMPTY:
+            ledger[key] = copy.deepcopy(ledger_changes.EMPTY[key])
+        else:
+            del ledger[key]
+
+
 def journal_ready(ledger: Ledger, source: str) -> Ledger:
-    """<ledger>, written outside the journal (genesis, adopt), as the journal can hold it: what the
-    old ledger took and the journal cannot is converted once, a float to its text and a lone
-    surrogate to U+FFFD, and a stored link that is not one left out, each with a note on stderr
-    (<ledger> may be changed). A write's own changes are refused instead (refuse_unencodable).
-    Converted, a tool call's argument no longer matches its approval: that fails closed."""
-    found = list(unencodable(ledger))
+    """<ledger>, written outside the journal (genesis, adopt), as the journal can hold it: in what
+    the journal holds (items, sources, runs, said), what the old ledger took and the journal cannot
+    is converted once, a float to its text and a lone surrogate to U+FFFD, and a stored link that
+    is not one left out, each with a note on stderr; the file's own keys silently
+    (metadata_ready). <ledger> may be changed. A write's own changes are refused instead
+    (refuse_unencodable). Converted, a tool call's argument no longer matches its approval: that
+    fails closed."""
+    metadata_ready(ledger)
+    found = list(unencodable({key: ledger[key] for key in COMPARED if key in ledger}))
     for place, what, made in found:
         print(
             f"ledger: {ledger_changes.ledger_place(place)}: {what} in {source}, which the journal "
@@ -1029,7 +1046,7 @@ def taken_in(journal: Journal, edited: Ledger) -> Ledger:
     the journal could not hold (an entry removed or edited in place: history only grows) is what
     the adopted base still lacks of the file, counted by validate's own comparison in one line on
     stderr (not the journal's changes the file never had: a write cut short); this write's save
-    keeps the file as edited in ledger.json.bak."""
+    keeps the file as edited in ledger.json.bak, until the next write replaces it."""
     file = journal_ready(edited, "ledger.json")
     adopt(journal, file)
     left_out = compare_findings(adopted_base(journal, file), file)
@@ -1038,7 +1055,7 @@ def taken_in(journal: Journal, edited: Ledger) -> Ledger:
             f"ledger: {len(left_out)} part(s) of {STORE.ledger_file} as edited outside its journal "
             "could not go into the journal and are as the journal has them (history only grows: an "
             f"entry removed or edited in place comes back); {STORE.backup} keeps the file as it was "
-            "edited",
+            "edited until the next write",
             file=sys.stderr,
         )
     return rebuilt(journal, journal.position(), writing=True)

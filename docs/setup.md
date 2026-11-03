@@ -157,7 +157,7 @@ State and logs go to `~/.local/state/bosun/`:
   write. Copying that (or any older `ledger.json`) back does not undo a write: the journal brings it
   forward again. A change you make to `ledger.json` by hand is adopted by the next write, into the
   journal, with a line on stderr; one the journal cannot hold, such as removing a history entry, is
-  undone by that write, which says so
+  undone by that write, which says so (`ledger.json.bak` keeps the edited file until the next write)
 - `journal/ledger/`: every change to the ledger, which every write appends to before it saves
   `ledger.json` (rebuilt from it when a write was cut short): `<replica>.jsonl` for this Mac's
   changes, `local.jsonl` for what never leaves it, such as your own words, and

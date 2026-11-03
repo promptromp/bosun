@@ -151,7 +151,8 @@ may hold no floats, and no text that is not valid Unicode (a lone surrogate, whi
 makes of command-line bytes that are not UTF-8). A write that would journal one is refused before
 anything is written, naming the item and the field. Data that never went through the journal (a
 ledger from before it, or one changed outside it) has each such value converted once instead, a
-float to its text and a lone surrogate to U+FFFD, with a note on stderr. So a tool call whose
+float to its text and a lone surrogate to U+FFFD, with a note on stderr; the file's own keys
+beside the records (`version`) silently take the value the rebuild gives. So a tool call whose
 arguments hold a decimal number cannot be proposed for approval
 ([Approvals](../permissions.md#approvals-approve-once-in-chat)).
 
@@ -209,7 +210,7 @@ journal's rebuild, so that `ledger.json` stays the rebuild. The file is what som
 journal meant, and refusing would stop every write. Adopted changes follow the same rules as any
 other: a field is set, an item made or deleted, a history entry added. What the journal cannot
 hold is undone by that write, which says so in one line (how many parts, and that
-`ledger.json.bak` keeps the file as edited): history only grows, so an entry removed by hand comes
+`ledger.json.bak` keeps the file as edited until the next write): history only grows, so an entry removed by hand comes
 back, and one edited in place comes back beside its edited copy. A file saved before digests is
 trusted once and gets one at its next save.
 
