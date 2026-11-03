@@ -209,6 +209,10 @@ stand-up summaries and stats (docs/design/workstreams.md):
                                                child tagged differently from its parent, a
                                                growing unassigned count (--strict: exit 1)
   list --ws <ws|unassigned>                    only the items in that workstream (or under it)
+  validate [--journal] [--json]                check every rule: states, links, one part_of; with
+                                               --journal also the journal's rebuild against
+                                               ledger.json (conflicts, items that differ, a
+                                               position that does not match). Exit 1 on findings
   Resolution order: part_of > inherited (spawned_from, produced_by, outreach parent, then folded
   into) > a tracked ticket whose epic a workstream names > rules in
   $BOSUN_CONFIG_DIR/workstreams.json and a workstream's channel > unassigned. `show` says
@@ -4007,6 +4011,195 @@ def cmd_lint(args: argparse.Namespace) -> tuple[str, int]:
     return "\n".join(f.line() for f in findings) or "(no findings)", code
 
 
+Finding = dict[str, str]
+
+
+def finding(kind: str, detail: str, item: str = "", path: str = "") -> Finding:
+    found = {"kind": kind, "detail": detail}
+    if item:
+        found["item"] = item
+    if path:
+        found["path"] = path
+    return found
+
+
+def kind_states(kind: str) -> set[str]:
+    spec = KINDS[kind]
+    transitions = spec["transitions"]
+    return {
+        spec["initial"],
+        escape_state(kind),
+        *transitions,
+        *(target for targets in transitions.values() for target in targets),
+    }
+
+
+def state_findings(item_id: str, item: Item) -> list[Finding]:
+    kind, state = item.get("kind"), item.get("state")
+    if kind not in KINDS:
+        return [finding("state", f"its kind {kind!r} is not a kind of this version", item_id)]
+    if state not in kind_states(kind):
+        return [finding("state", f"state {state!r} is not a state of {kind}", item_id, "state")]
+    return []
+
+
+def stored_links(item_id: str, item: Item) -> list[Link]:
+    return [
+        Link(
+            item_id, str(entry["rel"]), str(entry["id"]), str(entry.get("via", "")), str(entry.get("at", ""))
+        )
+        for entry in item.get("links") or []
+    ]
+
+
+def link_finding(items: lineage.Items, item: Item, links: list[Link], link: Link) -> Finding | None:
+    """Why lineage would refuse <link> as if it were being added now (every entry for the same
+    relation and target left out, so two Macs' copies count once), or None."""
+    rest = [entry for entry in links if (entry.rel, entry.target) != (link.rel, link.target)]
+    trial = {**items, link.source: {**item, "links": [{"rel": e.rel, "id": e.target} for e in rest]}}
+    problem = link_problem(trial, link)
+    if not problem:
+        return None
+    return finding("link" if link.target in items else "link-target", problem, link.source, "links")
+
+
+def link_findings(items: lineage.Items, item_id: str, item: Item) -> list[Finding]:
+    """What lineage would refuse about each link <item> stores. More than one part_of, counted by
+    distinct targets, is one finding."""
+    links = stored_links(item_id, item)
+    parts = sorted({link.target for link in links if link.rel == lineage.PART_OF})
+    many = len(parts) > 1
+    found = [finding("part_of", f"part_of {', '.join(parts)}: an item has one workstream", item_id, "links")]
+    checked = (
+        link_finding(items, item, links, link) for link in links if not (many and link.rel == lineage.PART_OF)
+    )
+    return [*found[: int(many)], *(f for f in checked if f)]
+
+
+def rule_findings(ledger: Ledger) -> list[Finding]:
+    items = ledger["items"]
+    return [
+        found
+        for item_id, item in sorted(items.items())
+        for found in (*state_findings(item_id, item), *link_findings(items, item_id, item))
+    ]
+
+
+COMPARED = ("items", "sources", "runs", ledger_changes.SAID)
+
+
+def first_difference(left: Any, right: Any) -> list[str] | None:
+    """The first path at which two JSON values differ (keys sorted; a list's first index that
+    differs, or where the shorter one ends), or None."""
+    if isinstance(left, dict) and isinstance(right, dict):
+        return dict_difference(left, right)
+    if isinstance(left, list) and isinstance(right, list):
+        return list_difference(left, right)
+    return None if left == right else []
+
+
+def dict_difference(left: dict[str, Any], right: dict[str, Any]) -> list[str] | None:
+    for key in sorted(set(left) | set(right)):
+        below = [] if key not in left or key not in right else first_difference(left[key], right[key])
+        if below is not None:
+            return [str(key), *below]
+    return None
+
+
+def list_difference(left: list[Any], right: list[Any]) -> list[str] | None:
+    for index, (one, other) in enumerate(zip(left, right, strict=False)):
+        below = first_difference(one, other)
+        if below is not None:
+            return [str(index), *below]
+    return [str(min(len(left), len(right)))] if len(left) != len(right) else None
+
+
+def compare_findings(rebuilt_ledger: Ledger, saved: Ledger) -> list[Finding]:
+    """Where the journal's rebuild and ledger.json (both at the same position) differ: each item
+    by its first differing path, the other sections as a whole."""
+    found: list[Finding] = []
+    for section in COMPARED:
+        left, right = rebuilt_ledger.get(section, {}), saved.get(section, {})
+        if section == "items":
+            found += item_differences(left, right)
+            continue
+        path = first_difference(left, right)
+        if path is not None:
+            detail = f"the rebuild and ledger.json differ in {section}"
+            found.append(finding("differs", detail, "", "/".join([section, *path])))
+    return found
+
+
+def item_differences(left: lineage.Items, right: lineage.Items) -> list[Finding]:
+    found: list[Finding] = []
+    for item_id in sorted(set(left) | set(right)):
+        path = first_difference(left.get(item_id), right.get(item_id))
+        if path is not None:
+            where = f"first at {'/'.join(path)}" if path else "in one of them only"
+            found.append(
+                finding("differs", f"the rebuild and ledger.json differ ({where})", item_id, "/".join(path))
+            )
+    return found
+
+
+def position_finding(position: Mapping[str, int], saved: Mapping[str, int]) -> Finding:
+    gaps = missing(position, saved)
+    if gaps:
+        detail = (
+            f"the journal is behind ledger.json ({'; '.join(gaps)}): a write would refuse to rebuild from it"
+        )
+    else:
+        detail = f"the journal is ahead of ledger.json (at {dict(position)}): the next write applies it"
+    return finding("position", detail, path="journal")
+
+
+def journal_findings(saved: Ledger) -> list[Finding]:
+    """The journal against ledger.json as saved: its damage, the conflicts of its rebuild, and,
+    at the same position, each item that differs."""
+    try:
+        journal = open_journal()
+        changes, position = journal.changes(), journal.position()
+    except JournalError as exc:
+        return [finding("journal", f"the journal is damaged: {exc}")]
+    result = ledger_changes.rebuild(changes, RULES)
+    found = [
+        finding("conflict", f"{c.kind}: {c.detail} (change {str(c.change)[:8]})", c.target)
+        for c in result.conflicts
+    ]
+    file_position = saved_position(saved)
+    if position != file_position:
+        if not position and has_records(saved):
+            return [
+                *found,
+                finding(
+                    "position",
+                    "ledger.json is from before journals: the next write journals it",
+                    path="journal",
+                ),
+            ]
+        return [*found, position_finding(position, file_position)]
+    return [*found, *compare_findings(result.ledger, saved)]
+
+
+def cmd_validate(args: argparse.Namespace) -> tuple[str, int]:
+    """Check the ledger against every rule; with --journal, the journal too. Exit 1 on findings."""
+    STORE.state_dir.mkdir(parents=True, exist_ok=True)
+    with STORE.lock.open("w") as lock:
+        fcntl.flock(lock, fcntl.LOCK_SH)
+        saved = load()
+        found = rule_findings(saved)
+        if args.journal:
+            found += journal_findings(saved)
+    code = 1 if found else 0
+    if args.json:
+        return json.dumps(found, indent=2), code
+    lines = [
+        f"{f['kind']}: {f.get('item') or 'journal'}{' ' + f['path'] if f.get('path') else ''}: {f['detail']}"
+        for f in found
+    ]
+    return "\n".join(lines) or "ledger is valid", code
+
+
 Handler = Callable[[argparse.Namespace], "str | tuple[str, int]"]
 Arguments = list[tuple[tuple[str, ...], dict[str, Any]]]
 REACH_OUT_ARGUMENTS: Arguments = [
@@ -4266,6 +4459,10 @@ COMMANDS: dict[str, tuple[Handler, Arguments]] = {
     "lint": (
         cmd_lint,
         [(("--json",), {"action": "store_true"}), (("--strict",), {"action": "store_true"})],
+    ),
+    "validate": (
+        cmd_validate,
+        [(("--journal",), {"action": "store_true"}), (("--json",), {"action": "store_true"})],
     ),
     "kinds": (cmd_kinds, []),
     "prune": (cmd_prune, [(("--days",), {"type": int, "default": DEFAULT_PRUNE_DAYS})]),

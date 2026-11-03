@@ -16,6 +16,7 @@ from typing import Any
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "lib"))
 import ledger
+from journal import replica_id
 
 
 REVIEW_ID = "review:acme/api#1"
@@ -311,6 +312,85 @@ class MaintenanceTest(LedgerTestCase):
         for spec in ledger.KINDS.values():
             self.assertIn(spec["id_format"], output)
             self.assertIn(f"--class {spec['source_class']}", output)
+
+
+class ValidateTest(LedgerTestCase):
+    def setUp(self) -> None:
+        super().setUp()
+        run("upsert", REVIEW_ID, "--kind", "review-request", "--title", "T")
+        run("transition", REVIEW_ID, "delegated", "--note", "sent")
+
+    def edit_in_place(self, change: Any) -> None:
+        with ledger.locked_ledger(write=True) as data:
+            change(data["items"])
+
+    def test_validate_passes_a_clean_ledger(self) -> None:
+        self.assertEqual(run("validate", "--journal"), ("ledger is valid", 0))
+        self.assertEqual(run("validate"), ("ledger is valid", 0))
+
+    def test_validate_finds_a_bad_state(self) -> None:
+        data = self.data()
+        data["items"][REVIEW_ID]["state"] = "nonsense"
+        ledger.STORE.ledger_file.write_text(json.dumps(data))
+        output, code = run("validate")
+        self.assertEqual(code, 1)
+        self.assertIn(REVIEW_ID, output)
+        self.assertIn("nonsense", output)
+        found = json.loads(run("validate", "--json")[0])
+        self.assertEqual([f["kind"] for f in found], ["state"])
+        self.assertEqual(found[0]["item"], REVIEW_ID)
+
+    def test_validate_finds_links_that_break_a_rule(self) -> None:
+        run("upsert", MENTION_ID, "--kind", "mention")
+        data = self.data()
+        data["items"][MENTION_ID]["links"] = [
+            {"rel": "part_of", "id": "ws:a"},
+            {"rel": "part_of", "id": "ws:b"},
+        ]
+        data["items"][REVIEW_ID]["links"] = [{"rel": "relates_to", "id": "slack:C9/9"}]
+        ledger.STORE.ledger_file.write_text(json.dumps(data))
+        found = json.loads(run("validate", "--json")[0])
+        self.assertIn(("part_of", MENTION_ID), [(f["kind"], f["item"]) for f in found])
+        self.assertIn(("link-target", REVIEW_ID), [(f["kind"], f["item"]) for f in found])
+
+    def test_validate_counts_distinct_part_of_targets(self) -> None:
+        run("upsert", MENTION_ID, "--kind", "mention")
+        run("ws", "add", "ws-a", "--title", "A")
+        ws = next(i for i in self.data()["items"] if i not in (REVIEW_ID, MENTION_ID))
+        run("link", MENTION_ID, "part_of", ws)
+        data = self.data()
+        data["items"][MENTION_ID]["links"].append(dict(data["items"][MENTION_ID]["links"][0]))
+        ledger.STORE.ledger_file.write_text(json.dumps(data))
+        self.assertEqual(run("validate"), ("ledger is valid", 0))
+
+    def test_validate_journal_finds_an_in_place_edit(self) -> None:
+        def edit(items: dict[str, Any]) -> None:
+            items[REVIEW_ID]["history"][-1]["note"] = "edited after the fact"
+
+        self.edit_in_place(edit)
+        output, code = run("validate", "--journal")
+        self.assertEqual(code, 1)
+        self.assertIn(REVIEW_ID, output)
+        self.assertIn("history", output)
+        self.assertEqual(run("validate")[1], 0)
+
+    def test_validate_journal_lists_conflicts(self) -> None:
+        journal = ledger.open_journal(replica_id(ledger.STORE.state_dir))
+        transaction = journal.begin("test")
+        transaction.add("item.state", REVIEW_ID, {"from": "requested", "to": "closed"})
+        transaction.commit()
+        output, code = run("validate", "--journal")
+        self.assertEqual(code, 1)
+        self.assertIn("conflict", output)
+        self.assertIn(REVIEW_ID, output)
+        self.assertIn("ahead of ledger.json", output)
+
+    def test_validate_journal_reports_a_damaged_journal(self) -> None:
+        path = next(ledger.STORE.journal_dir.glob("*.jsonl"))
+        path.write_text(path.read_text() + "{not json}\n{}\n")
+        output, code = run("validate", "--journal")
+        self.assertEqual(code, 1)
+        self.assertIn("damaged", output)
 
 
 if __name__ == "__main__":

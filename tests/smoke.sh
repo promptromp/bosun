@@ -370,6 +370,7 @@ EOF
 }
 check "every write went through the journal" test -d "$BOSUN_STATE_DIR/journal/ledger"
 check "... and ledger.json is its rebuild, after 20 writers at once too" journal_rebuilds "$BOSUN_STATE_DIR"
+check "ledger validate --journal agrees: the ledger is valid and its journal rebuilds it" L validate --journal
 
 echo "outreach (waiting on other people)"
 L upsert 'slack:C5/1' --kind mention --title 'template question' >/dev/null

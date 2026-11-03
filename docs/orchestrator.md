@@ -344,6 +344,10 @@ epic (it may name one) and not a product area (it is part of one). Design, resea
   does it per workstream, then the unassigned. The default since is this Monday.
 - `ledger list --ws <ws|unassigned>` filters; `ledger lint` flags evidence that disagrees, a child
   tagged differently from its parent, redundant tags and a growing unassigned count.
+- `ledger validate [--journal] [--json]` checks every rule (a state its kind does not have, a link
+  lineage would refuse, a second `part_of`, a link to an unknown item) and exits 1 on any finding;
+  `--journal` also rebuilds the journal and lists its conflicts and each item where the rebuild and
+  `ledger.json` differ ([sync](design/sync.md)).
 
 ## Your own MCP servers: a site settings file
 
