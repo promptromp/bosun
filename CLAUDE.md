@@ -163,8 +163,12 @@ of truth, so don't copy rules into this file.
 - **A watchdog check:** a row in `CHECKS` (`lib/watchdog.py`), a line in
   `libexec/bosun-watchdog`'s usage (smoke checks they match), and the table in `docs/watchdog.md`.
 - **A ledger kind:** an entry in `KINDS` (`lib/ledger.py`) and the list of item ids in `docs/orchestrator.md`.
+  A change to `KINDS`' transitions trips the rules-digest test (`TestRules` in
+  `tests/unit/test_ledger_changes.py`): bump `RULES_VERSION` (`lib/ledger.py`) and record the new
+  digest under it (the open question on rules versions in `docs/design/sync.md`).
 - **A link relation:** a row in `RELATIONS` (`lib/lineage.py`, with its inverse and the family in
   which cycles are refused), the lineage section of `docs/orchestrator.md` and the relation list in `policy.md`.
+  It trips the same rules-digest test: bump `RULES_VERSION` and record the new digest.
 - **A workstream rule criterion** (beyond repo, title, channel, kind): `RULE_KEYS`, a test in
   `RULE_TESTS` (`lib/workstreams.py`), the rules section of `docs/design/workstreams.md`, and
   `examples/generic/workstreams.json` if it helps. Sites' rules stay in their config dir.

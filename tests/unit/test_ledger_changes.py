@@ -1288,9 +1288,9 @@ class TestRules(unittest.TestCase):
     def test_the_rules_the_rebuild_checks_are_pinned_to_their_version(self) -> None:
         """Every change records the rules version it was checked under, and the rebuild checks a
         replica's past again under today's rules. A change to them (a transition, a relation, a
-        workstream rule) fails here: if it removes a move or tightens a rule, old changes would
-        rebuild differently, so bump ledger.RULES_VERSION (docs/design/sync.md, open questions);
-        either way record the new digest under that version."""
+        workstream rule) fails here: bump ledger.RULES_VERSION and record the new digest under it,
+        since one that removes a move or tightens a rule would rebuild old changes differently
+        (docs/design/sync.md, open questions; CLAUDE.md, "A ledger kind")."""
         self.assertEqual(RULES_DIGESTS.get(ledger.RULES_VERSION), rules_digest())
 
 
