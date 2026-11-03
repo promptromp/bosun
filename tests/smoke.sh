@@ -1948,7 +1948,17 @@ if [ "$(bash -c 'source "$1/lib/common.sh"; command -v launchctl; command -v pms
   check "install writes no learning agent by default" test ! -e "$LEARN_PLIST"
   BOSUN_LEARN_ENABLED=1 BOSUN_CONFIG_DIR="$INSTALL_CFG" "$ROOT/install.sh" >/dev/null 2>&1
   check "with BOSUN_LEARN_ENABLED=1 it writes and loads one" bash -c 'plutil -lint -s "$1" && grep -q "launchctl bootstrap gui/$(id -u) $1" "$2"' _ "$LEARN_PLIST" "$WORK/system.log"
-  check "doctor checks the learning agent once it is enabled" contains "$(BOSUN_LEARN_ENABLED=1 "$BOSUN" doctor 2>&1)" "ok    learning agent $BOSUN_LAUNCHD_LABEL.learn loaded"
+  doctor_said="$(BOSUN_LEARN_ENABLED=1 "$BOSUN" doctor 2>&1)"
+  check "doctor checks the learning agent once it is enabled" contains "$doctor_said" "ok    learning agent $BOSUN_LAUNCHD_LABEL.learn loaded"
+  check "doctor checks the ledger against its journal" contains "$doctor_said" "ok    the ledger and its journal: ledger is valid"
+  # A damaged journal, which every write refuses too: the fake claude that doctor's login check
+  # calls writes to the ledger.
+  mkdir -p "$WORK/doctor-state/journal/ledger"
+  echo '{"items": {}}' >"$WORK/doctor-state/ledger.json"
+  echo 'nonsense' >"$WORK/doctor-state/journal/ledger/local.jsonl"
+  doctor_said="$(BOSUN_STATE_DIR="$WORK/doctor-state" "$BOSUN" doctor 2>&1)"
+  check "... and fails when they disagree" contains "$doctor_said" "FAIL  the ledger and its journal disagree or break a rule (bosun ledger validate --journal):"
+  check "... saying what validate found" contains "$doctor_said" "the journal is damaged: local.jsonl, line 1: not a change"
   BOSUN_CONFIG_DIR="$INSTALL_CFG" "$ROOT/install.sh" >/dev/null 2>&1
   check "... and removes it again once disabled" test ! -e "$LEARN_PLIST"
 
