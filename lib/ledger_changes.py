@@ -1,11 +1,17 @@
-"""The ledger's changes (design: docs/design/sync.md, "Where the ledger's changes come from" and
-"Which data goes where").
+"""The ledger's changes (design: docs/design/sync.md, "Where the ledger's changes come from",
+"Rebuilding, and what a merge cannot decide" and "Which data goes where").
 
 A ledger write is compared, before and after, into field-level edits. The field table (`FIELDS`)
 gives each field path its merge rule and its class; `diff` turns two versions of the ledger into
-the edits that lead from one to the other, and the rebuild applies them: the two are exact
-inverses. Only `items`, `sources`, `runs` and `said` are compared; `version` and `journal` are the
-file's own.
+the edits that lead from one to the other, and `rebuild` applies a journal's changes, in the one
+order, to an empty ledger: the two are exact inverses. Only `items`, `sources`, `runs` and `said`
+are compared; `version` and `journal` are the file's own.
+
+The rebuild checks again what a merge of two Macs' changes cannot keep (the ledger's own rules
+come in as `Rules`), and keeps a change that breaks one as a conflict: a state change from a
+state the item is no longer in, an important field set from a value it no longer has, a link
+that closes a cycle or gives a second `part_of`, a change to a deleted item, an op it does not
+know. An item made on two Macs (one id) is merged.
 
 Ops and their bodies (paths relative to the item, as lists):
 
@@ -13,7 +19,8 @@ Ops and their bodies (paths relative to the item, as lists):
   item.delete              {}
   item.set                 {"path", "value", "prev"}: a missing leaf is null, and a leaf that was
                            removed also has "unset": true (a null value stays: a cleared proposal)
-  item.state               {"from", "to"}
+  item.state               {"from", "to"}: one per transition the write recorded in the history
+                           (a one-way message is sent, then applied, in one write)
   item.append              {"path", "entry"}: added at the end (HISTORY and LIST rules)
   item.drop                {"path", "entry"}: the first equal entry goes, see drop_entry (LIST)
   item.link / item.unlink  the link: {"rel", "id", "at", "via"?}
@@ -32,14 +39,17 @@ it never imports `ledger`.
 from __future__ import annotations
 
 import copy
+import hashlib
+import heapq
 import json
 from collections import Counter
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass, field
 from itertools import chain
 from typing import Any
 
-from change_log import Edit, canonical
+from change_log import Change, Conflict, Edit, canonical, in_order
+from lineage import Items, Link
 
 
 Ledger = dict[str, Any]
@@ -117,6 +127,9 @@ DELEGATION = ("window", "task", "at", "updates", "last_update_at", "moved_from")
 # as is an entry that keeps a call's context. The property test in tests/unit/test_ledger_changes.py
 # fails if a renamed event lets them out.
 LOCAL_HISTORY_EVENTS = ("approved", "approval-used", "user-said")
+# The history event of a state change (ledger.transition_item), with its "from" and "to": a write
+# that makes two (a one-way message sent, then applied) is two state changes.
+TRANSITION = "transition"
 
 
 @dataclass(frozen=True)
@@ -268,6 +281,10 @@ def is_local_entry(entry: Any) -> bool:
     return isinstance(entry, dict) and (
         entry.get("event") in LOCAL_HISTORY_EVENTS or any(name in entry for name in CALL_CONTEXT)
     )
+
+
+def _entry_event(entry: Any) -> Any:
+    return entry.get("event") if isinstance(entry, dict) else None
 
 
 def _split_history(history: list[Any]) -> tuple[list[Any], list[Any]]:
@@ -499,9 +516,26 @@ def _created(item_id: str, item: Item) -> list[Edit]:
     return [Edit("item.create", item_id, {"item": body}, False), *appends, *leaves]
 
 
+def _transitions(appends: list[Edit]) -> list[tuple[Any, Any]]:
+    """The (from, to) of each transition among the history entries a write added, in order."""
+    entries = [append.body["entry"] for append in appends]
+    return [(entry.get("from"), entry.get("to")) for entry in entries if _entry_event(entry) == TRANSITION]
+
+
+def _steps(edit: Edit, appends: list[Edit]) -> list[Edit]:
+    """A state change as the transitions the write recorded in the history, when they lead from
+    its `from` to its `to` (so the rebuild checks each against the kind); else as it is."""
+    steps = _transitions(appends)
+    states = [edit.body["from"], *(to for _, to in steps)]
+    if [was for was, _ in steps] != states[:-1] or states[-1] != edit.body["to"]:
+        return [edit]
+    return [Edit(edit.op, edit.target, {"from": was, "to": to}, edit.local) for was, to in steps]
+
+
 def _changed(item_id: str, before: Item, after: Item) -> _ItemEdits:
     out = _ItemEdits()
     _compare_dict(("items", item_id), before, after, out)
+    out.states = [step for edit in out.states for step in _steps(edit, out.appends)]
     return out
 
 
@@ -555,3 +589,308 @@ def diff(before: Ledger, after: Ledger) -> list[Edit]:
     for name in MAPS:
         edits += _map_edits(name, _section(before, name), _section(after, name))
     return edits + _said_edits(before.get(SAID), after.get(SAID))
+
+
+# ---- rebuilding -------------------------------------------------------------------------------
+
+# The empty ledger a rebuild starts from (never changed: the rebuild works on a copy). A first
+# write's genesis is diff(EMPTY, ledger).
+EMPTY: Ledger = {"version": 1, "items": {}, "sources": {}, "runs": {}, SAID: []}
+JOURNAL = "journal"  # the file's journal position: never compared, hashed or rebuilt
+# Conflict kinds (change_log.Conflict).
+STATE_CONFLICT, LINK_CONFLICT, FIELD_CONFLICT = "state", "link", "field"
+DELETED, MISSING, UNKNOWN = "deleted", "missing", "unknown"
+
+
+@dataclass(frozen=True)
+class Rules:
+    """The ledger's rules that a merge cannot keep, checked again in the rebuild: whether an item
+    of a kind may move from one state to another, and why a link may not be made (None: it may).
+    `ledger.RULES` is the real one; it is passed in because `ledger` imports this module."""
+
+    allowed: Callable[[str, str, str], bool]
+    link_problem: Callable[[Items, Link], str | None]
+
+
+@dataclass
+class Rebuilt:
+    ledger: Ledger
+    conflicts: list[Conflict]
+
+
+class _Refused(Exception):
+    """A change the rebuild keeps but does not apply (or not all of): its conflict."""
+
+    def __init__(self, kind: str, detail: str) -> None:
+        super().__init__(detail)
+        self.kind = kind
+        self.detail = detail
+
+
+@dataclass
+class _Rebuild:
+    """The ledger as the changes so far make it, and the items deleted (delete wins)."""
+
+    ledger: Ledger
+    rules: Rules
+    deleted: set[str] = field(default_factory=set)
+
+    @property
+    def items(self) -> dict[str, Item]:
+        items: dict[str, Item] = self.ledger["items"]
+        return items
+
+    def item(self, item_id: str) -> Item:
+        """The item a change edits; a deleted one, or one never made, refuses the change."""
+        if item_id in self.deleted:
+            raise _Refused(DELETED, f"{item_id} was deleted, and a delete wins")
+        found = self.items.get(item_id)
+        if not isinstance(found, dict):
+            raise _Refused(MISSING, f"no item {item_id}")
+        return found
+
+
+def _path(body: Mapping[str, Any]) -> Path:
+    path = tuple(body["path"])
+    if not path or not all(isinstance(key, str) for key in path):
+        raise _Refused(UNKNOWN, f"not a field path: {body['path']!r}")
+    return path
+
+
+def _value_at(node: Any, path: Path) -> Any:
+    """The value at <path> below <node>; _MISSING where a key (or a dict on the way) is not there."""
+    for key in path:
+        if not isinstance(node, dict) or key not in node:
+            return _MISSING
+        node = node[key]
+    return node
+
+
+def _parent(item: Item, path: Path) -> dict[str, Any]:
+    """The dict that holds <path>'s last key, making the missing dicts on the way. A value there
+    that is not a dict (a cleared proposal) refuses the change."""
+    node = item
+    for depth, key in enumerate(path[:-1]):
+        node = node.setdefault(key, {})
+        if not isinstance(node, dict):
+            raise _Refused(FIELD_CONFLICT, f"{'.'.join(path[: depth + 1])} holds no fields any more")
+    return node
+
+
+def _check_prev(item_id: str, path: Path, current: Any, prev: Any) -> None:
+    """An important field is set only from the value it had where the change was made (my local
+    leaves aside); else two Macs changed it at once."""
+    full = ("items", item_id, *path)
+    here = strip_local(full, None if current is _MISSING else current)
+    if not _same(here, prev):
+        raise _Refused(
+            FIELD_CONFLICT, f"{'.'.join(path)} changed elsewhere first: not set from what it is here"
+        )
+
+
+def _set(state: _Rebuild, item_id: str, body: dict[str, Any]) -> None:
+    item, path = state.item(item_id), _path(body)
+    current = _value_at(item, path)
+    if classify(("items", item_id, *path)).important:
+        _check_prev(item_id, path, current, body.get("prev"))
+    if not body.get("unset"):
+        _parent(item, path)[path[-1]] = copy.deepcopy(body["value"])
+    elif current is not _MISSING:
+        del _parent(item, path)[path[-1]]
+
+
+def _state(state: _Rebuild, item_id: str, body: dict[str, Any]) -> None:
+    item = state.item(item_id)
+    was, to, kind = body["from"], body["to"], item.get("kind")
+    if item.get("state") != was:
+        raise _Refused(STATE_CONFLICT, f"{was} -> {to}, but it is {item.get('state')} here")
+    if not state.rules.allowed(str(kind), str(was), str(to)):
+        raise _Refused(STATE_CONFLICT, f"{was} -> {to} is not a transition of a {kind}")
+    item["state"] = to
+
+
+def _append(state: _Rebuild, item_id: str, body: dict[str, Any]) -> None:
+    item, path = state.item(item_id), _path(body)
+    entries = _parent(item, path).setdefault(path[-1], [])
+    if not isinstance(entries, list):
+        raise _Refused(FIELD_CONFLICT, f"{'.'.join(path)} is not a list here")
+    entries.append(copy.deepcopy(body["entry"]))
+
+
+def _drop(state: _Rebuild, item_id: str, body: dict[str, Any]) -> None:
+    """The first equal entry goes; an entry that is not there is nothing to do."""
+    entries = _value_at(state.item(item_id), _path(body))
+    if isinstance(entries, list):
+        drop_entry(entries, body["entry"])
+
+
+def _as_link(source: str, entry: Mapping[str, Any]) -> Link:
+    return Link(
+        source, str(entry["rel"]), str(entry["id"]), str(entry.get("via", "")), str(entry.get("at", ""))
+    )
+
+
+def _add_link(state: _Rebuild, item_id: str, item: Item, entry: Mapping[str, Any]) -> str | None:
+    """Add a stored link unless the item has it (the same relation, other end and time) or the
+    rules refuse it; the refusal, else None. A link made again with a new time is another link,
+    so an unlink on another Mac of the old one leaves it (add wins)."""
+    if any(_link_key(link) == _link_key(entry) for link in item.get("links") or []):
+        return None
+    problem = state.rules.link_problem(state.items, _as_link(item_id, entry))
+    if problem is None:
+        item.setdefault("links", []).append(copy.deepcopy(entry))
+    return problem
+
+
+def _link(state: _Rebuild, item_id: str, body: dict[str, Any]) -> None:
+    problem = _add_link(state, item_id, state.item(item_id), body)
+    if problem:
+        raise _Refused(LINK_CONFLICT, problem)
+
+
+def _unlink(state: _Rebuild, item_id: str, body: dict[str, Any]) -> None:
+    """Only the link with this relation, other end and time goes."""
+    item = state.item(item_id)
+    if isinstance(item.get("links"), list):
+        item["links"] = [link for link in item["links"] if _link_key(link) != _link_key(body)]
+
+
+def _entry_time(entry: Any) -> str:
+    return str(entry.get("at", "")) if isinstance(entry, dict) else ""
+
+
+def _union_history(history: list[Any], other: list[Any]) -> list[Any]:
+    """Both Macs' entries, each once: <other>'s that <history> lacks merged in by time, each side
+    in its own order (an equal time keeps <history>'s first). The first entry and a trim marker
+    stay where they are; <other>'s markers are not entries."""
+    head = history[:2] if len(history) > 1 and _entry_event(history[1]) == TRIMMED else history[:1]
+    added = copy.deepcopy(_history_added(history, other))
+    return [*head, *heapq.merge(history[len(head) :], added, key=_entry_time)]
+
+
+def _add_missing(path: Path, into: dict[str, Any], other: Mapping[str, Any]) -> None:
+    """The fields of <other> that <into> lacks, into it, container by container; the history and
+    links are merged apart."""
+    for key, value in other.items():
+        inner = (*path, key)
+        if classify(inner).rule in (HISTORY, LINKS):
+            continue
+        if key not in into:
+            into[key] = copy.deepcopy(value)
+        elif is_container(inner, into[key]) and is_container(inner, value):
+            _add_missing(inner, into[key], value)
+
+
+def _merge(state: _Rebuild, item_id: str, item: Item, other: Item) -> None:
+    """The same id made on two Macs (one PR, one Slack message): what the item lacks is added, its
+    state and fields stay, the histories are unioned and the other's links are checked."""
+    _add_missing(("items", item_id), item, other)
+    item["history"] = _union_history(_as_list(item.get("history")), _as_list(other.get("history")))
+    refused = (_add_link(state, item_id, item, link) for link in _as_list(other.get("links")))
+    problems = [problem for problem in refused if problem]
+    if problems:
+        raise _Refused(LINK_CONFLICT, f"merged, but without its link(s): {'; '.join(problems)}")
+
+
+def _create(state: _Rebuild, item_id: str, body: dict[str, Any]) -> None:
+    """A new item as made, its links unchecked (they were checked where it was made); an id that
+    exists is merged into."""
+    made = body["item"]
+    if not isinstance(made, dict):
+        raise _Refused(UNKNOWN, "an item that is not an object")
+    if item_id in state.deleted:
+        raise _Refused(DELETED, f"{item_id} was deleted, and a delete wins")
+    if item_id in state.items:
+        _merge(state, item_id, state.items[item_id], made)
+    else:
+        state.items[item_id] = copy.deepcopy(made)
+
+
+def _delete(state: _Rebuild, item_id: str, _body: dict[str, Any]) -> None:
+    """A tombstone: the item goes, and every later change for it but a delete is a conflict."""
+    state.items.pop(item_id, None)
+    state.deleted.add(item_id)
+
+
+def _map(state: _Rebuild, name: str) -> dict[str, Any]:
+    if name not in MAPS:
+        raise _Refused(UNKNOWN, f"no map {name!r} in the ledger")
+    found: dict[str, Any] = state.ledger[name]
+    return found
+
+
+def _map_put(state: _Rebuild, name: str, body: dict[str, Any]) -> None:
+    _map(state, name)[body["key"]] = copy.deepcopy(body["value"])
+
+
+def _map_delete(state: _Rebuild, name: str, body: dict[str, Any]) -> None:
+    _map(state, name).pop(body["key"], None)
+
+
+def _said_append(state: _Rebuild, _target: str, body: dict[str, Any]) -> None:
+    state.ledger[SAID].append(copy.deepcopy(body["entry"]))
+
+
+def _said_drop(state: _Rebuild, _target: str, body: dict[str, Any]) -> None:
+    drop_entry(state.ledger[SAID], body["entry"])
+
+
+# Each op diff emits, and how the rebuild applies it.
+_Applier = Callable[[_Rebuild, str, dict[str, Any]], None]
+_APPLIERS: dict[str, _Applier] = {
+    "item.create": _create,
+    "item.delete": _delete,
+    "item.set": _set,
+    "item.state": _state,
+    "item.append": _append,
+    "item.drop": _drop,
+    "item.link": _link,
+    "item.unlink": _unlink,
+    "map.put": _map_put,
+    "map.delete": _map_delete,
+    "said.append": _said_append,
+    "said.drop": _said_drop,
+}
+
+
+def _apply(state: _Rebuild, change: Change) -> None:
+    """One change, by its op's applier. An op this bosun does not know is kept as a conflict, not
+    dropped (a newer bosun's change), and so is a body it cannot read."""
+    op = change.get("op")
+    applier = _APPLIERS.get(op) if isinstance(op, str) else None
+    if applier is None:
+        raise _Refused(UNKNOWN, f"an op this bosun does not know ({op!r}): update bosun")
+    try:
+        applier(state, change["target"], change["body"])
+    except (KeyError, TypeError, AttributeError) as exc:
+        raise _Refused(UNKNOWN, f"a body this bosun cannot apply ({type(exc).__name__}: {exc})") from exc
+
+
+def rebuild(changes: Iterable[Change], rules: Rules) -> Rebuilt:
+    """The ledger the changes make: applied in the one order (each id once) to an empty ledger,
+    then each item's history trimmed. A change that breaks a rule a merge cannot keep stays in
+    the journal, has no effect and is a conflict: a state change whose `from` no longer holds or
+    that the kind does not allow, an important field set from a value it no longer has, a link
+    the rules refuse, any change to a deleted item but a delete, and an op or body this bosun
+    cannot apply."""
+    state = _Rebuild(copy.deepcopy(EMPTY), rules)
+    conflicts = []
+    for change in in_order(changes):
+        try:
+            _apply(state, change)
+        except _Refused as refused:
+            conflicts.append(
+                Conflict(change["id"], str(change.get("target", "")), refused.kind, refused.detail)
+            )
+    for item in state.items.values():
+        if isinstance(item.get("history"), list):
+            trim_history(item)
+    return Rebuilt(state.ledger, conflicts)
+
+
+def state_hash(ledger: Ledger) -> str:
+    """SHA-256 (hex) of the ledger's canonical bytes without its journal position: two Macs that
+    read the same changes have the same."""
+    return hashlib.sha256(
+        canonical({key: value for key, value in ledger.items() if key != JOURNAL})
+    ).hexdigest()

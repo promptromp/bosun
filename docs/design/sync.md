@@ -173,16 +173,23 @@ is kept in the log, has no effect, and becomes a **conflict record**:
 | Data | Merge rule | A conflict when |
 |---|---|---|
 | The changes themselves | Union by `id` | never |
-| Item fields (`title`, `url`, `fields.*`) | Last writer wins per field; losing values stay in the history | the field is marked important (a ticket key, an owner) |
-| Item state | A state change carries its `from`; the first valid one in order applies | a later one whose `from` no longer holds |
-| History entries, outreach messages, processed Slack sources | Grow-only set, shown in order | never |
+| Item creation | The same id made on two Macs (one PR, one Slack message) is merged: what the item lacks is added, histories are unioned by time | the other Mac's link would break a lineage rule |
+| Item fields (`title`, `url`, `fields.*`) | Last writer wins per field; losing values stay in the journal | the field is marked important (a ticket key, an owner) |
+| Item state | A state change carries its `from`; the first valid one in order applies | a later one whose `from` no longer holds, or a move its kind does not allow |
+| History entries | Grow-only, shown in order | never |
+| Outreach messages | Added at the end; a corrected time drops the message and adds it again; dropping one already gone does nothing | never |
+| Processed Slack sources, runs | Last writer wins per key; `prune` deletes old sources | never |
 | Lineage links | Add wins over a concurrent unlink; inverses computed as today | an add would close a cycle, or give an item a second `part_of` |
 | Proposals and approvals | One slot per item; an approval's `used_at` set once | two proposals in one slot; an approval used twice |
-| Item deletion (`prune`) | A tombstone; delete wins | a change arrives for a deleted item |
+| Item deletion (`prune`) | A tombstone; delete wins | a change other than a delete arrives for a deleted item |
 | Fact assertions | One per source; a fact is the group sharing subject, predicate and object | never |
 | Single-valued predicates | Keep every confirmed value | more than one current confirmed value |
 | Review decisions | Last writer wins per fact and reviewer | confirm and reject by different reviewers at once |
 | Entities | Last writer wins per field; aliases unioned; delete wins | a proposed merge of two entities |
+
+A change this bosun cannot apply, an operation it does not know (from a newer version) or a body
+it cannot read, is kept the same way and shows as a conflict, as git-bug keeps operations it does
+not recognize.
 
 Conflicts show where open work already shows: a "needs you" entry in the console and in chores,
 and `bosun ledger conflicts` and `bosun kg conflicts`. They are resolved with ordinary commands,
@@ -213,9 +220,13 @@ document, hands it to the command and saves it. That function copies the documen
 compares afterwards, turning each write into one transaction of field-level changes. A table maps
 each field path to its merge rule and its class ([Which data goes where](#which-data-goes-where)),
 in the table style of `KINDS`, `RELATIONS` and `CHECKS`. A state change becomes a change with its
-`from`; added history entries, links and messages become additions; a removed link becomes an
-unlink. A write that changed nothing adds nothing to the journal (the files are still rewritten,
-since `ledger render` relies on that). The command name goes on the transaction.
+`from`, one per transition the write made (a one-way message is sent, then applied, in one
+write), so the rebuild checks each against its kind. Added history entries, links and messages
+become additions; a removed link becomes an unlink; a message whose time was corrected is dropped
+and added again; a pruned source is deleted from its map; a field that was removed travels as a
+set marked `unset`, so the rebuild removes the key rather than setting it to null. A write that
+changed nothing adds nothing to the journal (the files are still rewritten, since `ledger render`
+relies on that). The command name goes on the transaction.
 
 The alternative, an explicit change emitted by each command, keeps more intent but spreads sync
 across 29 places. The comparison keeps it in one, and the command name recovers most of the

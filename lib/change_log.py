@@ -46,7 +46,8 @@ class Edit:
 @dataclass(frozen=True)
 class Conflict:
     """A change the rebuild kept but did not apply. `kind` is one of "state", "link", "field",
-    "deleted"."""
+    "deleted", "missing" (a change for an item never made), "unknown" (an op or a body this
+    version cannot apply: kept, not dropped, for a newer version to apply)."""
 
     change: str
     target: str

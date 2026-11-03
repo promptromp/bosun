@@ -243,6 +243,7 @@ import claude_state
 import compact_context
 import event_model
 import events
+import ledger_changes
 import lineage
 import redact
 import repo_mask
@@ -831,6 +832,23 @@ def allowed_targets(kind: str, state: str) -> set[str]:
     if state != escape_state(kind):
         targets.add(escape_state(kind))
     return targets
+
+
+def link_problem(items: lineage.Items, link: Link) -> str | None:
+    """Why lineage refuses <link> among <items>, or None (also when it exists already)."""
+    try:
+        lineage.check_link(items, link)
+    except LineageError as exc:
+        return str(exc)
+    return None
+
+
+# What the journal's rebuild checks again (ledger_changes.rebuild): the transitions of KINDS (an
+# unknown kind allows none) and lineage's link rules.
+RULES = ledger_changes.Rules(
+    allowed=lambda kind, was, to: kind in KINDS and to in allowed_targets(kind, was),
+    link_problem=link_problem,
+)
 
 
 def is_outreach(item: Item) -> bool:
