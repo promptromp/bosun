@@ -9,15 +9,19 @@
 
 ACME_SLACK="https://acme.slack.com/archives"
 # The ids the days make. Tasks: the CSV export and the pagination it needs, a retired cron, docs, the
-# JSON export and the retry it needs, a backfill; outreach to finance and to support.
-T_CSV="" T_PAGE="" T_CRON="" T_DOCS="" T_JSON="" T_RETRY="" T_BACKFILL="" OUT_DANA="" OUT_RAVI=""
+# JSON export and the retry it needs, a timezone hotfix and its follow-up; outreach to finance and to
+# support.
+T_CSV="" T_PAGE="" T_CRON="" T_DOCS="" T_JSON="" T_RETRY="" T_HOTFIX="" T_TIMEZONE="" OUT_DANA="" OUT_RAVI=""
 REVIEW="review:acme/api#41"
 MENTION="slack:C00000000/1700000000.000200"
 MYPR="mypr:acme/invoice-exporter#7"
+LEDGER_FILE="$HOME/.local/state/bosun/ledger.json"
 OLD_TASK_ID='^task:[0-9]{4}-[0-9]{2}-[0-9]{2}/[1-9][0-9]*$'
+# Minted on the UTC day of the write: `made` puts the day from before and after the command in its
+# place, so the check holds across midnight UTC.
+NEW_TASK_ID='^task:@UTCDAY@/[0-9a-hjkmnp-tv-z]{6}$'
 OUTREACH_ID='^out:'
 
-new_task_id() { echo "^task:$(date -u +%F)/[0-9a-hjkmnp-tv-z]{6}\$"; } # minted, on today's UTC date
 now_utc() { date -u +%Y-%m-%dT%H:%M:%SZ; }
 
 step() { # <description> <ledger arguments...>
@@ -33,9 +37,11 @@ is_id() { # <pattern> <id> <what the command said>
 }
 
 made() { # <variable> <id pattern> <description> <ledger arguments...>: the id the command printed first
-  local name="$1" pattern="$2" what="$3" output
+  local name="$1" pattern="$2" what="$3" output before
   shift 3
+  before="$(date -u +%F)"
   output="$(bosun ledger "$@" 2>&1)"
+  pattern="${pattern//@UTCDAY@/($before|$(date -u +%F))}"
   printf -v "$name" '%s' "${output%%$'\n'*}"
   check "$what: ${!name}" is_id "$pattern" "${!name}" "$output"
 }
@@ -59,17 +65,20 @@ trimmed() { # <id> [<entries dropped>]: 200 entries, the second the marker count
     '(.history | length) == 200 and .history[1].event == "history-trimmed" and ($count == 0 or .history[1].count == $count)'
 }
 
-prune_drops() { # <days> <id...>: prune, then each id is gone
-  local days="$1" id
+item_ids() { jq -r '.items | keys[]' "$LEDGER_FILE" | sort; }
+prune_drops() { # <days> <id...>: an ordinary prune drops exactly these items, no more and no fewer
+  local days="$1" before dropped expected
   shift
+  before="$(item_ids)"
   bosun ledger prune --days "$days" || return 1
-  for id in "$@"; do
-    if bosun ledger show "$id" >/dev/null 2>&1; then
-      echo "$id is still there"
-      return 1
-    fi
-  done
+  dropped="$(comm -23 <(echo "$before") <(item_ids))"
+  expected="$(printf '%s\n' "$@" | sort)"
+  [ "$dropped" = "$expected" ] && return 0
+  printf 'dropped:\n%s\nexpected:\n%s\n' "$dropped" "$expected"
+  return 1
 }
+is_ticket() { bosun ledger show "$1" | jq -e '.kind == "ticket"'; }
+both_kept() { bosun ledger show "$1" >/dev/null && is_ticket "$2"; } # <item> <ticket>
 
 day_1() {
   echo "day 1: a review request, a CSV export and what it needs, a cron retired"
@@ -128,7 +137,7 @@ day_2() {
 
 day_3() {
   echo "day 3: a prune, a ticket, a proposal left waiting"
-  check "prune drops what finished before yesterday" prune_drops 1 "$MENTION" "$T_CRON" jira:ACME-9
+  check "prune drops what finished before yesterday, and only that" prune_drops 1 "$MENTION" "$T_CRON" jira:ACME-9
   check "... and keeps what open work holds" bosun ledger show "$T_PAGE"
   check "what I typed today is recorded" typed_in acme-api "keep the CSV header row in English"
   step "the CSV export tracks its ticket" link "$T_CSV" tracks jira:ACME-12
@@ -139,21 +148,20 @@ day_3() {
 }
 
 day_4() {
-  echo "day 4: the CSV export lands, a JSON export starts"
+  echo "day 4: the CSV export in review, a JSON export starts, a hotfix"
   step "the CSV export's report" report "$T_CSV" --summary "CSV export ready for review" \
     --result https://github.com/acme/api/pull/43 --ci pending
   step "... the approved PR, opened" resolve "$T_CSV" "done" --note "the PR is open"
   step "... my PR" upsert mypr:acme/api#43 --kind my-pr --title "Add a CSV export for invoices" \
     --url https://github.com/acme/api/pull/43
-  step "... which the task produced" link "$T_CSV" produces mypr:acme/api#43
-  step "... merged" transition mypr:acme/api#43 merged --note "merged after review"
-  step "... the task done" transition "$T_CSV" "done" --note "the CSV export is live"
+  step "... which the task produced, in review" link "$T_CSV" produces mypr:acme/api#43
+  step "... the task done" transition "$T_CSV" "done" --note "the CSV export is in review"
   step "... and its ticket" ticket-sync jira:ACME-12 --status Done
   step "the review request, closed" transition "$REVIEW" closed --note "merged upstream"
   step "a message to read, no more" record-source "$ACME_SLACK/C00000000/p1700000000000500" --class fyi
-  made T_JSON "$(new_task_id)" "a new task" spawn --title "Export invoices as JSON" --ask "The ERP import wants JSON" \
+  made T_JSON "$NEW_TASK_ID" "a new task" spawn --title "Export invoices as JSON" --ask "The ERP import wants JSON" \
     --via "user: add a JSON export too" --repo acme-web
-  made T_RETRY "$(new_task_id)" "... and one it needs first" spawn "$T_JSON" --title "Retry an export that timed out" \
+  made T_RETRY "$NEW_TASK_ID" "... and one it needs first" spawn "$T_JSON" --title "Retry an export that timed out" \
     --ask "Large JSON exports time out" --blocks
   step "... part of the workstream" link "$T_JSON" part_of invoice-exports
   step "I accept the JSON export" transition "$T_JSON" accepted --note "accepted in chat" --evidence "user: yes, the JSON export"
@@ -171,20 +179,34 @@ day_4() {
   step "... and approved in chat" approve "$T_JSON" --quote "yes, open the JSON PR"
   step "one more CI run on my PR" note "$MYPR" "CI run 206 on the streaming branch: green"
   check "... still 200 entries, one more counted" trimmed "$MYPR" 8
+  made T_HOTFIX "$NEW_TASK_ID" "a hotfix" spawn --title "Fix the export timezone" --ask "Exports show local time" \
+    --via "user: the exports must be in UTC"
+  step "... which tracks its ticket" link "$T_HOTFIX" tracks jira:ACME-14
+  step "... as the tracker shows it" ticket-sync jira:ACME-14 --status Done --title "Exports in UTC"
+  step "... accepted" transition "$T_HOTFIX" accepted --note "accepted in chat" --evidence "user: fix it now"
+  step "... and done" transition "$T_HOTFIX" "done" --note "exports are in UTC"
 }
 
 day_5() {
-  echo "day 5: a prune, and a pruned ticket tracked again"
-  check "prune drops what finished before yesterday" prune_drops 1 "$T_CSV" "$T_PAGE" "$OUT_DANA" jira:ACME-12 \
-    mypr:acme/api#43 "$REVIEW"
-  check "... and keeps what open work holds" bosun ledger show "$T_RETRY"
-  made T_BACKFILL "$(new_task_id)" "a task for a pruned ticket" spawn --title "Backfill the March CSV exports" \
-    --ask "March ran before the CSV export" --via "user: backfill March"
-  step "... tracks it again, so it is back" link "$T_BACKFILL" tracks jira:ACME-12
-  step "... as the tracker shows it now" ticket-sync jira:ACME-12 --status "In Progress" --title "CSV export for invoices"
-  step "... and the one pruned before the upgrade" link "$T_BACKFILL" tracks jira:ACME-9
+  echo "day 5: an ordinary prune, and a pruned ticket tracked again"
+  # The CSV task is done but its PR is still in review: prune keeps it, and what it links to (the
+  # pagination, its closed ticket), so no kept link points at a pruned item. Nothing open reaches the
+  # hotfix or its ticket: those go.
+  check "prune drops what finished before yesterday, and only that" prune_drops 1 "$REVIEW" "$OUT_DANA" \
+    "$T_HOTFIX" jira:ACME-14
+  check "... ledger validate --journal passes right after it" bosun ledger validate --journal
+  check "... the CSV task stays with its PR in review" bosun ledger show "$T_CSV"
+  check "... and with it the pagination and the closed ticket it links to" both_kept "$T_PAGE" jira:ACME-12
+  made T_TIMEZONE "$NEW_TASK_ID" "a task for a pruned ticket" spawn --title "Fix the timezone in the March exports too" \
+    --ask "March ran before the fix" --via "user: March is still in local time"
+  step "... tracks it again" link "$T_TIMEZONE" tracks jira:ACME-14
+  check "... so it is back" is_ticket jira:ACME-14
+  step "... as the tracker shows it now" ticket-sync jira:ACME-14 --status "In Progress" --title "Exports in UTC"
+  step "... and the one pruned before the upgrade" link "$T_TIMEZONE" tracks jira:ACME-9
+  check "... which is back too" is_ticket jira:ACME-9
   step "the JSON export's report" report "$T_JSON" --summary "JSON export ready for review" \
     --result https://github.com/acme/web/pull/12 --ci green
   step "... the approved PR, opened" resolve "$T_JSON" "done" --note "the PR is open"
   step "the docs task, done" transition "$T_DOCS" "done" --note "the columns are in the README"
+  step "the retry, accepted" transition "$T_RETRY" accepted --note "accepted in chat" --evidence "user: yes, retry them"
 }

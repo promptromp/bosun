@@ -13,8 +13,9 @@ set -uo pipefail
 # The guard (it refuses to run anywhere else), the checks and the steps tests/install_e2e.sh shares.
 source "$(dirname "$0")/sandbox/e2e_lib.sh" || exit 1
 source "$(dirname "$0")/sandbox/acme_week.sh" || exit 1
-[ -s "$HOME/repo-base.bundle" ] && [ -s "$HOME/repo-tree.bundle" ] || {
-  echo "$0 needs ~/repo-base.bundle and ~/repo-tree.bundle: run it with tests/sandbox.sh mac work" >&2
+# Not on a GitHub runner either: it needs the two bundles, and it sets the clock.
+[ -e /etc/bosun-sandbox ] && [ -s "$HOME/repo-base.bundle" ] && [ -s "$HOME/repo-tree.bundle" ] || {
+  echo "$0 only runs in tests/sandbox.sh mac work, which copies in ~/repo-base.bundle and ~/repo-tree.bundle" >&2
   exit 1
 }
 
@@ -44,6 +45,7 @@ start_clock() { # the real time from here on; it is put back however this ends
   CLOCK_START="$(python3 -c 'import time; print(time.time(), time.monotonic())')"
   trap 'set_clock 0' EXIT
   trap 'exit 1' INT TERM HUP
+  # Network time off, or timed may undo `sudo date`. It stays off: the clone is deleted after the run.
   sudo systemsetup -setusingnetworktime off </dev/null 2>&1 | sed 's/^/  note  /'
 }
 put_the_clock_back() {
@@ -83,8 +85,12 @@ print("\n".join(bad))
 sys.exit(1 if bad else 0)
 PY
 }
-in_the_ledger() { # <file of ids>: each one shows
+in_the_ledger() { # <file of ids>: each one shows (and there is at least one)
   local id gone=0
+  [ -s "$1" ] || {
+    echo "no ids to look for"
+    return 1
+  }
   while read -r id; do
     bosun ledger show "$id" >/dev/null 2>&1 || {
       echo "not in the ledger: $id"
@@ -142,7 +148,7 @@ the_first_write() {
   check "an id from the first day still works: $T_CSV" bosun ledger show "$T_CSV"
   check "... and lists" bash -c 'bosun ledger list | grep -qF "$1"' _ "$T_CSV"
   step "the morning's first chore" mark-run morning
-  made T_FIRST "$(new_task_id)" "a new task" spawn --title "Check the exports after the upgrade" \
+  made T_FIRST "$NEW_TASK_ID" "a new task" spawn --title "Check the exports after the upgrade" \
     --ask "Make sure last night's exports ran" --via "user: check the exports"
   valid
 }
@@ -187,44 +193,120 @@ clock_goes_back() {
   check "the clock is put right: $(date -u '+%a %F %R') UTC" clock_reads $((4 * DAY))
 }
 
-cut_short() { # <n> <milliseconds>: a spawn in a process group of its own, killed whole after that long
-  local out="$OUT/cut-$1.txt" pid stage
+CUT_STAGE=""  # where the last cut fell
+cut_after() { # <milliseconds> <output file> <command...>: run it in a process group of its own and
+  # kill the whole group after that long, like a power cut
+  local ms="$1" out="$2" pid stage
+  shift 2
   set -m
-  bosun ledger spawn --title "Power cut $1: an export check" --ask "Check export $1" \
-    --via "user: run the export checks" >"$out" 2>&1 &
+  "$@" >"$out" 2>&1 &
   pid=$!
   set +m
-  sleep "$(printf '%d.%03d' $(($2 / 1000)) $(($2 % 1000)))"
+  sleep "$(printf '%d.%03d' $((ms / 1000)) $((ms % 1000)))"
   stage="$(ps -o stat= -o command= -p "$pid" 2>/dev/null)"
   kill -9 -- "-$pid" 2>/dev/null
   wait "$pid" 2>/dev/null
-  case "$stage" in # where it was: the same process execs bin/bosun, then libexec, then python
-    "" | Z* | E*) stage="finished" ;;
-    *lib/ledger.py*) stage="python" ;;
-    *libexec/bosun-ledger*) stage="libexec" ;;
-    *bin/bosun\ ledger*) stage="bin/bosun" ;;
-    *) stage="other(${stage%% *})" ;;
+  case "${stage%% *}" in # its state: gone, a zombie or exiting
+    "" | *Z* | *E*) stage="finished" ;;
   esac
-  echo "$1 $2ms $stage $(head -1 "$out")" >>"$OUT/cuts.txt"
+  case "$stage" in # the same process is this script's fork, then bin/bosun, libexec, python
+    finished) CUT_STAGE="finished" ;;
+    *lib/ledger.py*) CUT_STAGE="python" ;;
+    *libexec/bosun-ledger*) CUT_STAGE="libexec" ;;
+    *bin/bosun\ ledger*) CUT_STAGE="bin/bosun" ;;
+    *"${0##*/}"*) CUT_STAGE="starting" ;;
+    *) CUT_STAGE="other(${stage:0:40})" ;;
+  esac
+}
+torn_files() { find "$JOURNAL" -name '*.torn-*' | wc -l | tr -d ' '; }
+the_write_after() { # <what>: one ordinary write; what it repaired goes to the output
+  check "the next write works, and repairs what it must" bash -c 'bosun ledger note "$1" "$2" 2>"$3"' _ \
+    "$T_JSON" "after $1" "$OUT/repair.txt"
+  sed 's/^/  note  /' "$OUT/repair.txt"
 }
 
 power_cuts() {
   echo "power cuts: fifty writes killed after 0 to 300 ms"
   local delays n
   read -r -a delays <<<"$(python3 -c 'import random; print(*(random.randint(0, 300) for _ in range(50)))')"
-  for n in $(seq 1 50); do cut_short "$n" "${delays[$((n - 1))]}"; done
+  for n in $(seq 1 50); do
+    cut_after "${delays[$((n - 1))]}" "$OUT/cut-$n.txt" bosun ledger spawn --title "Power cut $n: an export check" \
+      --ask "Check export $n" --via "user: run the export checks"
+    echo "$n ${delays[$((n - 1))]}ms $CUT_STAGE $(head -1 "$OUT/cut-$n.txt")" >>"$OUT/cuts.txt"
+  done
   sed 's/^/  cut   /' "$OUT/cuts.txt"
   awk '{ print $3 }' "$OUT/cuts.txt" | sort | uniq -c | sed 's/^ */  note  where the cuts fell: /'
   grep -oE 'task:[^ ]+$' "$OUT/cuts.txt" >"$OUT/cut.ids"
   echo "  note  $(wc -l <"$OUT/cut.ids" | tr -d ' ') of 50 printed an id before the cut"
+  check "some cuts fell while the Python writer ran" grep -q " python " "$OUT/cuts.txt"
+  check "some cut writes printed an id first" test -s "$OUT/cut.ids"
   bosun ledger validate --journal 2>&1 | sed 's/^/  note  before the next write: /'
-  check "the next write works, and repairs what it must" bash -c 'bosun ledger note "$1" "after the power cuts" 2>"$2"' _ "$T_JSON" "$OUT/repair.txt"
-  sed 's/^/  note  /' "$OUT/repair.txt"
-  echo "  note  set aside: $(find "$JOURNAL" -name '*.torn-*' | wc -l | tr -d ' ') unfinished transaction(s)"
-  find "$JOURNAL" -name '*.torn-*' -exec sh -c 'echo "  torn  $(basename "$1"): $(wc -l <"$1" | tr -d " ") line(s)"' _ {} \;
+  the_write_after "the power cuts"
+  echo "  note  set aside: $(torn_files) unfinished transaction(s)"
   echo "  note  $(jq '[.items[] | select(.title | startswith("Power cut"))] | length' "$STATE/ledger.json") of 50 are in the ledger"
   valid
   check "every id a cut write printed is in the ledger" in_the_ledger "$OUT/cut.ids"
+  check "the journal's seq still runs 1..n with no gap" journal_lines seq
+}
+
+# What a cut left behind: torn (an unfinished transaction at the end of a journal file), ahead (the
+# journal holds a write ledger.json does not have yet), or clean. It asks the installed bosun's journal.
+journal_state() {
+  python3 - "$DIR/lib" "$JOURNAL" "$STATE/ledger.json" <<'PY'
+import json, sys
+from pathlib import Path
+sys.path.insert(0, sys.argv[1])
+from journal import Journal
+journal, root = Journal(Path(sys.argv[2]), "ledger", "", 0), Path(sys.argv[2])
+cut_line = any(path.read_bytes()[-1:] not in (b"", b"\n") for path in root.glob("*.jsonl"))
+saved = json.loads(Path(sys.argv[3]).read_text()).get("journal") or {}
+if cut_line or journal.written() != journal.position():
+    print("torn")
+else:
+    print("ahead" if journal.position() != saved else "clean")
+PY
+}
+run_ms() { # <command...>: how long it takes, in milliseconds
+  python3 -c 'import subprocess, sys, time; t = time.monotonic(); subprocess.run(sys.argv[1:], capture_output=True); print(int((time.monotonic() - t) * 1000))' "$@"
+}
+approved_quotes() { bosun ledger show "$T_RETRY" | jq -r '.history[] | select(.event == "approved") | .note'; }
+all_approved() { # <file of quotes>: each one is in the item's history (and there is at least one)
+  local missing
+  [ -s "$1" ] || {
+    echo "no approval was printed before its cut"
+    return 1
+  }
+  approved_quotes >"$OUT/approved.txt" || return 1
+  missing="$(grep -vxF -f "$OUT/approved.txt" "$1")"
+  case $? in
+    1) return 0 ;; # grep found no quote missing
+    0) echo "printed, but not in the ledger: $missing" ;;
+  esac
+  return 1
+}
+
+swept_cuts() {
+  echo "power cuts, swept: an approval (it writes both journal files) killed at each point of its run"
+  local n ms took count=100 torn_before
+  step "a proposal to approve" propose "$T_RETRY" --run "gh pr create --repo acme/web --title 'Retry an export that timed out'"
+  took="$(for n in 1 2 3; do run_ms bosun ledger approve "$T_RETRY" --quote "yes, open the retry PR (timing $n)"; done |
+    sort -n | sed -n 2p)" # the median of three
+  echo "  note  an approval takes $took ms; $count cuts from 0 to $took ms"
+  torn_before="$(torn_files)"
+  for n in $(seq 0 $((count - 1))); do
+    ms=$((n * took / (count - 1)))
+    cut_after "$ms" "$OUT/approve-$n.txt" bosun ledger approve "$T_RETRY" --quote "yes, open the retry PR (cut $n)"
+    grep -q "approved (" "$OUT/approve-$n.txt" && echo "yes, open the retry PR (cut $n)" >>"$OUT/approve.quotes"
+    echo "$n ${ms}ms $CUT_STAGE $(journal_state)" >>"$OUT/approve-cuts.txt"
+  done
+  sed 's/^/  cut   /' "$OUT/approve-cuts.txt"
+  awk '{ print $3 }' "$OUT/approve-cuts.txt" | sort | uniq -c | sed 's/^ */  note  where the cuts fell: /'
+  awk '{ print $4 }' "$OUT/approve-cuts.txt" | sort | uniq -c | sed 's/^ */  note  what a cut left: /'
+  the_write_after "the swept cuts"
+  echo "  note  repairs: $(($(torn_files) - torn_before)) unfinished transaction(s) set aside"
+  echo "  note  $(wc -l <"$OUT/approve.quotes" | tr -d ' ') of $count printed their approval; $(approved_quotes | grep -c '(cut ') are in the ledger"
+  valid
+  check "every approval a cut command printed is in the ledger" all_approved "$OUT/approve.quotes"
   check "the journal's seq still runs 1..n with no gap" journal_lines seq
 }
 
@@ -271,6 +353,7 @@ the_new_days
 twenty_writers
 clock_goes_back
 power_cuts
+swept_cuts
 launchd_on_the_new_bosun
 uninstall_keeps_the_journal
 put_the_clock_back

@@ -118,14 +118,20 @@ tasks and their links, a workstream, outreach and its reply, proposals approved,
 window through the hook, tickets, a history long enough to be trimmed, prune), with the clock moved a
 day between them. Then it updates the way a user does, running `get.sh` again, and checks that the first
 write starts the journal from the ledger as it was. Two more days follow on the new bosun, then twenty
-writers at once, the clock going back an hour, fifty writes killed like a power cut, a morning by
-launchd, and an uninstall that keeps the ledger, its journal and this Mac's replica id. After each,
-`bosun ledger validate --journal` must pass.
+writers at once, the clock going back an hour, fifty writes killed like a power cut at random, a
+hundred approvals (they write both journal files) killed at points swept across their run, which it
+counts as torn tails, repairs and writes lost, a morning by launchd, and an uninstall that keeps the
+ledger, its journal and this Mac's replica id. After each, `bosun ledger validate --journal` must pass,
+and whatever a cut command printed before it died must be in the ledger.
 
 ```bash
 tests/sandbox.sh mac work                   # from origin/main to this checkout
 tests/sandbox.sh mac work --base <commit>   # from another starting point; it must be an ancestor
 ```
+
+The base must be a bosun from before the journal and the minted ids: the first days check that the
+release writes no journal and makes ids like `task:<date>/1`, and the upgrade that the journal starts
+with the first write after it.
 
 It sends two bundles of this repository: the release, and this checkout (also what is not committed)
 as its descendant, so that `get.sh`'s `git pull --ff-only` takes it. The scenario is `tests/work_e2e.sh`;

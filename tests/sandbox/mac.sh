@@ -167,10 +167,10 @@ run() { # [--from-nothing]
 # second a descendant of the first, so that get.sh's `git pull --ff-only` takes it.
 work() { # [--base <git ref>]
   local base="origin/main"
-  case "${1:-}" in
-    "") ;;
-    --base) base="${2:?--base takes a git ref}" ;;
-    *) die "unknown '$1' for work (see --help)" ;;
+  case "$#:${1:-}" in
+    0:) ;;
+    2:--base) base="$2" ;;
+    *) die "usage: tests/sandbox.sh mac work [--base <git ref>]" ;;
   esac
   git -C "$ROOT" merge-base --is-ancestor "$base" HEAD ||
     die "$base is not an ancestor of this checkout, so get.sh could not fast-forward to it"
