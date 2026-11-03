@@ -142,7 +142,8 @@ repos:
       # Markdown the site would read differently from GitHub (tools/mkdocs_hooks.py).
       - id: docs-site
         name: docs site (mkdocs build --strict)
-        entry: env NO_MKDOCS_2_WARNING=1 uv run mkdocs build --strict --quiet
+        # Not --quiet: it hides the warnings --strict counts, and the build then passes anyway.
+        entry: env NO_MKDOCS_2_WARNING=1 uv run mkdocs build --strict
         language: system
         files: ^(docs/|[A-Z_]+\.md$|mkdocs\.yml$|tools/(mkdocs_hooks|check_links)\.py$)
         pass_filenames: false

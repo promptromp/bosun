@@ -81,12 +81,14 @@ Part C (Tasks 8-11) is the knowledge base and can ship as a second.
 ### Task 1: Change log primitives
 
 **Files:**
+
 - Create: `lib/change_log.py`
 - Test: `tests/unit/test_change_log.py`
 
 (mypy and the complexity hooks already cover all of `lib/` and `tests/unit/`.)
 
 **Interfaces:**
+
 - Produces:
   - `ENVELOPE_VERSION = 1`; `Change = dict[str, Any]`; `class ChangeLogError(Exception)`
   - `@dataclass(frozen=True) class Edit(op: str, target: str, body: dict[str, Any], local: bool)`:
@@ -164,12 +166,14 @@ Part C (Tasks 8-11) is the knowledge base and can ship as a second.
 ### Task 2: Journals and transactions
 
 **Files:**
+
 - Create: `lib/journal.py`
 - Test: `tests/unit/test_journal.py`
 - Modify: `lib/uninstall_plan.py` (`("journal", LEDGER)`, `("replica.json", LEDGER)` in
   `STATE_FILES`), `tests/unit/test_uninstall_plan.py` if it counts rows
 
 **Interfaces:**
+
 - Consumes: Task 1's `canonical`, `change_id`, `tick`, `in_order`, `mint_suffix`, `ENVELOPE_VERSION`.
 - Produces:
   - `REPLICA_FILE = "replica.json"`, `LOCAL = "local"`, `class JournalError(Exception)`
@@ -233,12 +237,14 @@ Part C (Tasks 8-11) is the knowledge base and can ship as a second.
 ### Task 3: The field table and `diff`
 
 **Files:**
+
 - Create: `lib/ledger_changes.py`
 - Test: `tests/unit/test_ledger_changes.py`
 - Modify: `lib/ledger.py` (move `MAX_HISTORY` and `trim_history` into `ledger_changes`; `ledger`
   imports them)
 
 **Interfaces:**
+
 - Produces:
   - Classes `LOCAL, SEALED, PRIVATE, TEAM = "local", "sealed", "private", "team"`
   - Rules `SET, STATE, HISTORY, LIST, LINKS = "set", "state", "history", "list", "links"`
@@ -330,11 +336,13 @@ Part C (Tasks 8-11) is the knowledge base and can ship as a second.
 ### Task 4: Rebuilding the ledger, with conflicts
 
 **Files:**
+
 - Modify: `lib/ledger_changes.py`, `lib/ledger.py` (a `RULES` value built from `KINDS` and
   `lineage`)
 - Test: `tests/unit/test_ledger_changes.py`
 
 **Interfaces:**
+
 - Consumes: Task 1's `in_order` and `Conflict`; Task 3's ops and `trim_history`.
 - Produces:
   - `@dataclass(frozen=True) class Rules(allowed: Callable[[str, str, str], bool], link_problem:
@@ -394,12 +402,14 @@ Part C (Tasks 8-11) is the knowledge base and can ship as a second.
 ### Task 5: Every ledger write goes through the journal
 
 **Files:**
+
 - Modify: `lib/ledger.py` (`Store`, `locked_ledger`, `main`), `lib/guard.py`, `lib/hook.py`,
   `lib/review_watch.py` (their command names), `tests/smoke.sh`, `docs/setup.md` (the state folder
   list), `CLAUDE.md` (where things live)
 - Test: `tests/unit/test_ledger_protocol.py`, `tests/unit/test_corpus.py`
 
 **Interfaces:**
+
 - Consumes: Task 2's `Journal`, `replica_id`; Task 3's `diff`; Task 4's `rebuild`, `RULES`.
 - Produces:
   - `Store.journal_dir` (`state_dir / "journal" / "ledger"`), `Store.command: str` (set by `main`
@@ -409,6 +419,7 @@ Part C (Tasks 8-11) is the knowledge base and can ship as a second.
   - `current_transaction() -> journal.Transaction` (valid inside `locked_ledger(write=True)`)
 
   `locked_ledger(write)`, under the existing lock:
+
   1. Open the journal. If it is empty and `ledger.json` has items: commit a genesis transaction
      (`cmd` `"genesis"`) with an `item.create` per item (history included), a `map.put` per
      source and run, and a local `said.append` per entry.
@@ -462,11 +473,13 @@ Part C (Tasks 8-11) is the knowledge base and can ship as a second.
 ### Task 6: `bosun ledger validate`
 
 **Files:**
+
 - Modify: `lib/ledger.py` (`cmd_validate`, its line in the module's usage), `docs/orchestrator.md`
   (next to `ledger lint`)
 - Test: `tests/unit/test_ledger.py`, `tests/smoke.sh`
 
 **Interfaces:**
+
 - Consumes: Task 4's `rebuild`, `RULES`; Task 5's journal.
 - Produces: `cmd_validate(args) -> tuple[str, int]`; options `--journal`, `--json`.
 
@@ -508,6 +521,7 @@ Part C (Tasks 8-11) is the knowledge base and can ship as a second.
 ### Task 7: Ids two Macs never mint alike
 
 **Files:**
+
 - Modify: `lib/ledger.py` (`next_task_id`, `next_outreach_id`, `TASK_ID`, `OUTREACH_ID`, the
   `id_format` of task, outreach and learning kinds), `lib/learn.py` (`next_id`, `record_proposal`,
   `pending_change`, `sync_statuses`, `State`), `tests/fixtures/console/make-acme-ledger.sh` and
@@ -515,6 +529,7 @@ Part C (Tasks 8-11) is the knowledge base and can ship as a second.
 - Test: `tests/unit/test_ledger.py`, `tests/unit/test_outreach.py`, `tests/unit/test_learn.py`
 
 **Interfaces:**
+
 - Consumes: Task 1's `mint_suffix`; Task 5's `current_transaction()`; Task 2's `replica_id`.
 - Produces:
   - `next_task_id(items)` returns `f"task:{utc_date}/{current_transaction().mint()}"`
@@ -573,12 +588,14 @@ Part C (Tasks 8-11) is the knowledge base and can ship as a second.
 ### Task 8: A keyed hash for forgotten people
 
 **Files:**
+
 - Modify: `lib/knowledge_model.py` (`hash_id`, `forgotten_hashes`, `check_new_entity`, `forget`),
   `lib/knowledge.py` (load the key), `lib/knowledge_store.py` (`Paths.secret`, `GIT_IGNORE`),
   `docs/design/knowledge.md` (Privacy)
 - Test: `tests/unit/test_knowledge.py`
 
 **Interfaces:**
+
 - Produces:
   - `Paths.secret` = `root / "secret.key"`: 32 random bytes as hex, mode 0600, created on the first
     write, git-ignored
@@ -615,12 +632,14 @@ Part C (Tasks 8-11) is the knowledge base and can ship as a second.
 ### Task 9: The knowledge journal, minted fact ids, `prev` on updates
 
 **Files:**
+
 - Create: `lib/knowledge_changes.py`, `tests/unit/test_knowledge_changes.py`
 - Modify: `lib/knowledge.py` (`load`, `save`, `opened`, `Settings`), `lib/knowledge_model.py`
   (`KB.mint`, `next_fact_id`, one `update_record` builder used by every update),
   `docs/knowledge.md` (fact ids)
 
 **Interfaces:**
+
 - Consumes: Task 1's `Edit`; Task 2's `Journal`, `replica_id`.
 - Produces:
   - `KG_RULES_VERSION = 1` in `lib/knowledge.py`; the journal at `root / "journal"`, stream `"kg"`,
@@ -672,6 +691,7 @@ Part C (Tasks 8-11) is the knowledge base and can ship as a second.
 ### Task 10: Rebuilding the knowledge base, and `kg validate`
 
 **Files:**
+
 - Modify: `lib/knowledge_changes.py`, `lib/knowledge.py` (`opened` rebuilds when `view.json`
   differs from the journal position; `cmd_validate`), `lib/knowledge_model.py` (`fold_all` takes
   records in the given order and holds updates for a fact not seen yet), `docs/knowledge.md`
@@ -679,6 +699,7 @@ Part C (Tasks 8-11) is the knowledge base and can ship as a second.
 - Test: `tests/unit/test_knowledge_changes.py`, `tests/smoke.sh`
 
 **Interfaces:**
+
 - Consumes: Task 1's `in_order`; Task 9's journal and edits.
 - Produces:
   - `@dataclass class RebuiltKB(entities: dict[str, Record], records: list[Record], conflicts:
@@ -722,6 +743,7 @@ Part C (Tasks 8-11) is the knowledge base and can ship as a second.
 ### Task 11: The console reads through `knowledge.load`, and phase 0 is done
 
 **Files:**
+
 - Modify: `lib/console_kb.py` (`read_kb` calls `knowledge.load` with identifiers left out),
   `lib/knowledge.py` (`load(p, *, identifiers: bool = True)`), `docs/design/sync.md` (status:
   phase 0 built; the rebuild cost measured in Task 5), `ROADMAP.md` (section 6: phase 0 done),
@@ -729,6 +751,7 @@ Part C (Tasks 8-11) is the knowledge base and can ship as a second.
 - Test: `tests/unit/test_console_knowledge.py`, `tests/unit/test_console_kg_views.py`
 
 **Interfaces:**
+
 - Consumes: Task 9's `load`.
 - Produces: `knowledge.load(p, *, identifiers=True)`; the console passes `identifiers=False` and
   never reads `identifiers.jsonl` or `forgotten.jsonl`, as today.

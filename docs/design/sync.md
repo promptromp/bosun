@@ -461,6 +461,7 @@ and a store, so tests run it against two folders.
   orchestrator and its jobs simply do not run elsewhere; nothing else needs to enforce it.
   Approvals already bind to a local session's transcript, so one approval cannot be spent on two
   Macs.
+
 - **Keys:** two kinds, so that adding a Mac and restoring are the same step.
   - A **member key** (an SSH key) is my identity. It signs each Mac's device key; together with the
     `age` identity it makes up my recovery copy, kept outside bosun (a password manager) and in each
