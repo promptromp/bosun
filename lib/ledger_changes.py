@@ -92,6 +92,7 @@ SEALED_FIELDS = (
     "request_permalink",
     "review_thread",
     "review_url",
+    "text",
 )
 PRIVATE_FIELDS = (
     "repo",
@@ -107,6 +108,7 @@ PRIVATE_FIELDS = (
     "category",
     "target",
     "run",
+    "window",
     "external_status",
     "status_category",
     "synced_at",

@@ -294,9 +294,12 @@ change may retire it ([Open questions](#open-questions)).
 
 The short hash is six base32 characters of a hash of the replica id and the journal position the
 id is made at, so it is unique to its Mac by construction, never reused (not even after a `prune`),
-the same on every rebuild of a fixture, and short enough to type. Two Macs collide only by a hash
-collision, about one in a billion for a pair of ids. Existing ids stay as they are: only the first
-Mac has them.
+the same on every rebuild of a fixture whose writes change the same fields (the console fixture's
+build gives each write a second of its own, since a write in the same second leaves `updated_at`
+as it was), and short enough to type. Two Macs collide only by a hash collision, about one in a
+billion for a pair of ids; one that names an item already is minted again. A learning id hashes
+the replica, the finding's key and the run instead, so the same finding in the same run is the
+same item. Existing ids stay as they are: only the first Mac has them.
 
 A new Mac joins by restoring from the state repository and starting with no ledger of its own. A
 Mac that already has its own ledger cannot join in phase 1: merging two ledgers that grew apart

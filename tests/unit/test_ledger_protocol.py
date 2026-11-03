@@ -629,7 +629,7 @@ class GenesisTest(JournalChecks):
     def old_ledger(self) -> dict[str, Any]:
         data: dict[str, Any] = json.loads(FIXTURE.read_text())
         items = data["items"]
-        old = copy.deepcopy(items["task:2026-10-20/1"])
+        old = copy.deepcopy(items["task:2026-10-20/veembc"])
         items[self.OLD_TASK] = {**old, "id": self.OLD_TASK, "created_at": "2026-10-15T09:00:00+00:00"}
         long = items[self.LONG]
         long["history"] += [

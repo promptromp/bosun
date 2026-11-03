@@ -376,41 +376,47 @@ echo "outreach (waiting on other people)"
 L upsert 'slack:C5/1' --kind mention --title 'template question' >/dev/null
 L record-delegation 'slack:C5/1' --window exporter --task new-work >/dev/null
 out="$(L reach-out 'slack:C5/1' --to 'Dana (product)' --purpose decision --subject 'Keep the template unchanged?' --option a --option b)"
-check "reach-out prints the new id first" test "$(head -1 <<<"$out")" = 'out:slack:C5/1/1'
-check "ask is the same command, without a parent scoped by day" contains "$(L ask --channel email --to vendor --question 'Which format?')" "out:$(date +%F)/1"
+OUT1="${out%%$'\n'*}"
+MINTED='[0-9a-hjkmnp-tv-z]{6}' # six Crockford base32 characters, minted from the replica and the journal
+check "reach-out prints the new id first, minted" bash -c '[[ $1 =~ ^out:slack:C5/1/$2$ ]]' _ "$OUT1" "$MINTED"
+check "ask is the same command, without a parent scoped by the UTC day" bash -c '[[ $1 =~ ^out:$2/$3$ ]]' _ "$(L ask --channel email --to vendor --question 'Which format?' | head -1)" "$(date -u +%F)" "$MINTED"
 check "unknown channels are refused" fails_with "invalid choice: 'fax'" "$BOSUN" ledger reach-out --channel fax --to x --subject y
-check "proposing the message moves it to proposed" contains "$(L propose 'out:slack:C5/1/1' 'Slack DM to Dana: ...')" "draft -> proposed"
-check "resolve done points to sent" fails_with "record it with bosun ledger sent" "$BOSUN" ledger resolve 'out:slack:C5/1/1' 'done'
-check "sent refuses a message time that is not a time" fails_with "--at takes an ISO 8601 time" "$BOSUN" ledger sent 'out:slack:C5/1/1' --ref x --at yesterday
-check "sent refuses a message time in the future" fails_with "is in the future" "$BOSUN" ledger sent 'out:slack:C5/1/1' --ref x --at '2999-01-01 09:00'
-check "sent records the message ref, at the Slack message's own time" contains "$(L sent 'out:slack:C5/1/1' --ref 'https://acme.slack.com/archives/C0000000001/p1700000100000100')" "proposed -> sent; at 2023-11-14T22:15:00+00:00 (slack ref)"
-check "sent --at corrects the time of a message already recorded" contains "$(L sent 'out:slack:C5/1/1' --ref 'https://acme.slack.com/archives/C0000000001/p1700000100000100' --at '2023-11-14T23:00:00+01:00')" "now at 2023-11-14T22:00:00+00:00 (was 2023-11-14T22:15:00+00:00)"
-check "the parent lists what it waits on" contains "$(L list --open)" "| waiting on out:slack:C5/1/1 (slack to Dana (product), "
-check "a parent waiting on outreach is not finished" fails_with "is waiting on: out:slack:C5/1/1" "$BOSUN" ledger transition 'slack:C5/1' 'done' --note x
+check "proposing the message moves it to proposed" contains "$(L propose "$OUT1" 'Slack DM to Dana: ...')" "draft -> proposed"
+check "resolve done points to sent" fails_with "record it with bosun ledger sent" "$BOSUN" ledger resolve "$OUT1" 'done'
+check "sent refuses a message time that is not a time" fails_with "--at takes an ISO 8601 time" "$BOSUN" ledger sent "$OUT1" --ref x --at yesterday
+check "sent refuses a message time in the future" fails_with "is in the future" "$BOSUN" ledger sent "$OUT1" --ref x --at '2999-01-01 09:00'
+check "sent records the message ref, at the Slack message's own time" contains "$(L sent "$OUT1" --ref 'https://acme.slack.com/archives/C0000000001/p1700000100000100')" "proposed -> sent; at 2023-11-14T22:15:00+00:00 (slack ref)"
+check "sent --at corrects the time of a message already recorded" contains "$(L sent "$OUT1" --ref 'https://acme.slack.com/archives/C0000000001/p1700000100000100' --at '2023-11-14T23:00:00+01:00')" "now at 2023-11-14T22:00:00+00:00 (was 2023-11-14T22:15:00+00:00)"
+check "the parent lists what it waits on" contains "$(L list --open)" "| waiting on $OUT1 (slack to Dana (product), "
+check "a parent waiting on outreach is not finished" fails_with "is waiting on: $OUT1" "$BOSUN" ledger transition 'slack:C5/1' 'done' --note x
 check "seen names the outreach for a reply in its thread" bash -c '
   out="$("$1" ledger seen "https://acme.slack.com/archives/C0000000001/p1700000200000200?thread_ts=1700000100.000100&cid=C0000000001")"
-  [ $? = 1 ] && grep -q "in the conversation of out:slack:C5/1/1" <<<"$out"' _ "$BOSUN"
-check "a reply needs evidence" fails_with "needs --evidence" "$BOSUN" ledger transition 'out:slack:C5/1/1' replied --note x --field answer=b
-check "replied says which window holds the parent" contains "$(L replied 'out:slack:C5/1/1' --evidence 'user: Dana said b' --summary 'b')" "window exporter holds slack:C5/1"
-out="$(BOSUN_SEND_DRY_RUN=1 "$BOSUN" delegate --update 'out:slack:C5/1/1' 2>&1)"
+  [ $? = 1 ] && grep -qF "in the conversation of $2" <<<"$out"' _ "$BOSUN" "$OUT1"
+check "a reply needs evidence" fails_with "needs --evidence" "$BOSUN" ledger transition "$OUT1" replied --note x --field answer=b
+check "replied says which window holds the parent" contains "$(L replied "$OUT1" --evidence 'user: Dana said b' --summary 'b')" "window exporter holds slack:C5/1"
+out="$(BOSUN_SEND_DRY_RUN=1 "$BOSUN" delegate --update "$OUT1" 2>&1)"
 check "delegate --update <out-id> hands the reply to the parent's window" contains "$out" "would deliver to smoke:exporter: Update to ledger item slack:C5/1"
 check "... and marks the outreach applied" contains "$out" "replied -> applied"
 check "then the parent may finish" contains "$(L transition 'slack:C5/1' 'done' --note answered)" "new -> done"
-check "outreach --open lists what is still open" bash -c 'out="$("$1" ledger outreach --open)"; grep -q "draft, email to vendor; no parent item" <<<"$out" && ! grep -q "out:slack:C5/1/1" <<<"$out"' _ "$BOSUN"
+check "outreach --open lists what is still open" bash -c 'out="$("$1" ledger outreach --open)"; grep -q "draft, email to vendor; no parent item" <<<"$out" && ! grep -qF "$2" <<<"$out"' _ "$BOSUN" "$OUT1"
 L upsert 'slack:C5/2' --kind mention --title 'footer question' >/dev/null
-L reach-out 'slack:C5/2' --to 'Dana (product)' --purpose decision --subject 'Keep the footer?' >/dev/null
-check "reach-out warns about open outreach to the same person" contains "$(L reach-out 'slack:C5/2' --to dana --subject 'And the header?')" "warning: slack:C5/2 already has open outreach to the same person: out:slack:C5/2/1 (decision, draft: Keep the footer?)"
-check "sent records one message on several items" contains "$(L sent 'out:slack:C5/2/1' 'out:slack:C5/2/2' --ref 'https://acme.slack.com/archives/C0000000001/p1700000300000300')" "ok: out:slack:C5/2/2 draft -> sent"
+out="$(L reach-out 'slack:C5/2' --to 'Dana (product)' --purpose decision --subject 'Keep the footer?')"
+FOOTER="${out%%$'\n'*}"
+out="$(L reach-out 'slack:C5/2' --to dana --subject 'And the header?')"
+HEADER="${out%%$'\n'*}"
+check "reach-out warns about open outreach to the same person" contains "$out" "warning: slack:C5/2 already has open outreach to the same person: $FOOTER (decision, draft: Keep the footer?)"
+check "sent records one message on several items" contains "$(L sent "$FOOTER" "$HEADER" --ref 'https://acme.slack.com/archives/C0000000001/p1700000300000300')" "ok: $HEADER draft -> sent"
 check "seen names every open outreach sharing the thread" contains "$(L seen 'https://acme.slack.com/archives/C0000000001/p1700000400000400?thread_ts=1700000300.000300&cid=C0000000001' || true)" "in a conversation shared by 2 open outreach items"
-L reach-out 'slack:C5/2' --to Priya --purpose fyi --subject 'One more commit landed' >/dev/null
-check "a one-way (fyi) message is done once sent" contains "$(L sent 'out:slack:C5/2/3' --ref 'https://acme.example.com/fyi')" "draft -> sent -> applied (fyi: one-way, no reply expected)"
-check "upsert keeps an outreach's subject and title one" contains "$(L upsert 'out:slack:C5/2/2' --field 'subject=And the header row?' && L list --open)" "out:slack:C5/2/2  [outreach: sent] - And the header row?"
+out="$(L reach-out 'slack:C5/2' --to Priya --purpose fyi --subject 'One more commit landed')"
+check "a one-way (fyi) message is done once sent" contains "$(L sent "${out%%$'\n'*}" --ref 'https://acme.example.com/fyi')" "draft -> sent -> applied (fyi: one-way, no reply expected)"
+check "upsert keeps an outreach's subject and title one" contains "$(L upsert "$HEADER" --field 'subject=And the header row?' && L list --open)" "$HEADER  [outreach: sent] - And the header row?"
 
 echo "tasks, links and tickets"
-TASK="task:$(date +%F)/1"
-check "spawn prints the new task's id first" test "$(L spawn 'out:slack:C5/1/1' --title 'Fix the PDF renderer' --ask 'apply the fix there' --via 'user: go ahead' | head -1)" = "$TASK"
+out="$(L spawn "$OUT1" --title 'Fix the PDF renderer' --ask 'apply the fix there' --via 'user: go ahead')"
+TASK="${out%%$'\n'*}"
+check "spawn prints the new task's id first, minted on the UTC day" bash -c '[[ $1 =~ ^task:$2/$3$ ]]' _ "$TASK" "$(date -u +%F)" "$MINTED"
 check "a task is not handed over before I accept it" fails_with "only an accepted task is handed over" "$BOSUN" delegate new-work --id "$TASK" --ask x --window exporter
-check "outreach is never the work item of a delegation" fails_with "is outreach, not a work item" "$BOSUN" delegate new-work --id 'out:slack:C5/1/1' --ask x --print
+check "outreach is never the work item of a delegation" fails_with "is outreach, not a work item" "$BOSUN" delegate new-work --id "$OUT1" --ask x --print
 check "only my word accepts a task" fails_with "needs my approval" "$BOSUN" ledger transition "$TASK" accepted --note x --evidence 'Dana said so'
 L transition "$TASK" accepted --note 'I asked' --evidence 'user: go ahead' >/dev/null
 check "delegate moves an accepted task to delegated" contains "$(BOSUN_SEND_DRY_RUN=1 "$BOSUN" delegate new-work --id "$TASK" --ask 'fix the PDF renderer' --window exporter 2>&1)" "accepted -> delegated"
@@ -429,12 +435,13 @@ L report "$TASK" --summary 'marked ready at my request' >/dev/null
 check "reports --since lists every report in the window, not only the latest" bash -c '
   out="$("$1" ledger reports --since 2000-01-01T00:00:00Z)"
   grep -q "summary: draft PR open" <<<"$out" && grep -q "summary: marked ready at my request" <<<"$out"' _ "$BOSUN"
-check "spawn warns about a task that already comes from the same source" contains "$(L spawn 'out:slack:C5/1/1' --title 'Export credit notes' --ask 'add them')" "warning: a task already comes from the same source or thread: $TASK (delegated @exporter"
-FOLDED="task:$(date +%F)/2"
+out="$(L spawn "$OUT1" --title 'Export credit notes' --ask 'add them')"
+FOLDED="${out%%$'\n'*}"
+check "spawn warns about a task that already comes from the same source" contains "$out" "warning: a task already comes from the same source or thread: $TASK (delegated @exporter"
 check "fold closes the task and prints the update for the target's window" contains "$(L fold "$FOLDED" --into "$TASK" --note 'same PR')" "next: $TASK is with window exporter; carry the work there: bosun delegate --update '$TASK' --details"
 check "fold is idempotent" contains "$(L fold "$FOLDED" --into "$TASK")" "unchanged: $FOLDED already folded into $TASK (dropped)"
 check "list shows the fold from both ends" bash -c 'out="$("$1" ledger list)"; grep -q "| folded into $3" <<<"$out" && grep -q "| absorbs $2" <<<"$out"' _ "$BOSUN" "$FOLDED" "$TASK"
-check "fold refuses a finished target" fails_with "add --force-closed-target" "$BOSUN" ledger fold 'out:slack:C5/2/2' --into 'slack:C5/1'
+check "fold refuses a finished target" fails_with "add --force-closed-target" "$BOSUN" ledger fold "$HEADER" --into 'slack:C5/1'
 
 echo "workstreams"
 check "ws add creates a workstream with an alias" contains "$(L ws add widget-gen --title 'Automated widget generation' --epic WID-100 --alias widgets)" "created: ws:widget-gen [workstream: active]"
@@ -442,8 +449,8 @@ check "a workstream holds two levels at most" fails_with "at most 2" bash -c '"$
 L upsert 'mypr:acme/widgets#12' --kind my-pr --title 'Widget template cache' >/dev/null
 check "link part_of takes an alias" contains "$(L link 'mypr:acme/widgets#12' part_of widgets)" "ok: mypr:acme/widgets#12 part_of ws:widget-gen"
 check "an item belongs to one workstream" fails_with "belongs to one workstream" "$BOSUN" ledger link 'mypr:acme/widgets#12' part_of ws:widget-ui
-L reach-out 'mypr:acme/widgets#12' --to Dana --purpose decision --subject 'Cache TTL?' >/dev/null
-check "show says the outreach inherits it" contains "$(L show 'out:mypr:acme/widgets#12/1')" '"how": "inherited from mypr:acme/widgets#12 (explicit)"'
+out="$(L reach-out 'mypr:acme/widgets#12' --to Dana --purpose decision --subject 'Cache TTL?')"
+check "show says the outreach inherits it" contains "$(L show "${out%%$'\n'*}")" '"how": "inherited from mypr:acme/widgets#12 (explicit)"'
 L upsert 'mypr:acme/widgets#13' --kind my-pr --title 'Preview pane' >/dev/null
 L link 'mypr:acme/widgets#13' tracks 'jira:WID-101' >/dev/null
 L ticket-sync 'jira:WID-101' --status 'In Progress' --parent WID-100 >/dev/null
@@ -1215,12 +1222,15 @@ check "... and says what a run would cost" contains "$(BOSUN_CLAUDE_BIN=false "$
 check "a run estimated over the budget never calls Claude" contains "$(BOSUN_LEARN_MAX_BUDGET_USD=0.01 BOSUN_CLAUDE_BIN=false "$BOSUN" learn --dry-run --since 2h --out "$WORK/learn-digest" 2>&1)" "not calling Claude"
 BOSUN_LEARN_MAX_DIGEST_KB=1 BOSUN_CLAUDE_BIN=false "$BOSUN" learn --collect-only --out "$WORK/learn-capped" >/dev/null 2>&1
 check "a digest over its cap says at the top what it left out" grep -q "^## Trimmed to fit the digest cap (1 KB" "$WORK"/learn-capped/*/digest.md
-check "a run proposes its change in the ledger" contains "$(LEARN --since 2h)" "new proposals: learn:$TODAY/1"
-check "... as a pending proposal" contains "$("$BOSUN" ledger list --proposals)" "learn:$TODAY/1"
-check "status lists it as waiting for you" contains "$(LEARN --status)" "learn:$TODAY/1: Smoke rule"
+out="$(LEARN --since 2h)"
+LEARNED="$(grep -Eo "learn:$(date -u +%F)/$MINTED" <<<"$out" | head -1)"
+check "a run proposes its change in the ledger, under an id from the finding and the run" contains "$out" "new proposals: ${LEARNED:-none}"
+check "... with the change on the item" contains "$("$BOSUN" ledger show "$LEARNED")" '"text": "Smoke rule text."'
+check "... as a pending proposal" contains "$("$BOSUN" ledger list --proposals)" "$LEARNED"
+check "status lists it as waiting for you" contains "$(LEARN --status)" "$LEARNED: Smoke rule"
 check "... and so do learn status and learn list" bash -c '[ "$("$1" learn status 2>&1)" = "$("$1" learn --status 2>&1)" ] && [ "$("$1" learn list 2>&1)" = "$("$1" learn --status 2>&1)" ]' _ "$BOSUN"
-check "apply appends the rule to the site policy" bash -c '"$1" learn apply "learn:$2/1" >/dev/null 2>&1 && grep -q "Smoke rule text." "$3/policy.md"' _ "$BOSUN" "$TODAY" "$BOSUN_CONFIG_DIR"
-check "... and closes the item" contains "$("$BOSUN" ledger show "learn:$TODAY/1")" '"state": "applied"'
+check "apply appends the rule to the site policy" bash -c '"$1" learn apply "$2" >/dev/null 2>&1 && grep -q "Smoke rule text." "$3/policy.md"' _ "$BOSUN" "$LEARNED" "$BOSUN_CONFIG_DIR"
+check "... and closes the item" contains "$("$BOSUN" ledger show "$LEARNED")" '"state": "applied"'
 check "a second run does not propose it again" contains "$(LEARN --since 2h)" "new proposals: none"
 check "the watchdog checks the learning run once it is enabled" contains "$(BOSUN_LEARN_ENABLED=1 "$BOSUN" watchdog --status 2>&1)" "learn            "
 rm -f "$BOSUN_CONFIG_DIR/policy.md"
@@ -1731,7 +1741,7 @@ check "/api/items lists every item, and its open ones as ledger list --open does
   _ "$CONSOLE_BASE" "$CONSOLE_COOKIE" "$CONSOLE_STATE" "$BOSUN"
 check "/api/items filters and searches" bash -c '
   curl -sf -H "Cookie: $2" "$1/api/items?kind=outreach&group=all&person=dana&q=credit+notes" |
-    jq -e "[.rows[].id] == [\"out:task:2026-10-20/1/1\"]"' _ "$CONSOLE_BASE" "$CONSOLE_COOKIE"
+    jq -e "[.rows[].id] == [\"out:task:2026-10-20/veembc/q0kge7\"]"' _ "$CONSOLE_BASE" "$CONSOLE_COOKIE"
 check "/api/items/<id> takes the URL-encoded id" bash -c '
   curl -sf -H "Cookie: $2" "$1/api/items/mypr%3Aacme%2Fexporter%23102" |
     jq -e ".id == \"mypr:acme/exporter#102\" and (.links | map(.label) == [\"blocks\"])"' _ "$CONSOLE_BASE" "$CONSOLE_COOKIE"

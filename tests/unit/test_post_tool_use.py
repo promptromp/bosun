@@ -29,7 +29,6 @@ from test_approvals import (
     OTHER_PR,
     PR,
     QUOTE,
-    REVIEW_REQUEST,
     SEND,
     SENT_REF,
     TEXT,
@@ -250,14 +249,22 @@ class OutreachTest(PostToolUseTestCase):
         super().setUp()
         run("reach-out", PR, "--to", "Dana", "--subject", "re-review", "--purpose", "review")
         self.approve(
-            REVIEW_REQUEST, "--send", "slack", "--channel", CHANNEL, "--thread", THREAD, "--text", TEXT
+            self.review_request_id,
+            "--send",
+            "slack",
+            "--channel",
+            CHANNEL,
+            "--thread",
+            THREAD,
+            "--text",
+            TEXT,
         )
         self.call = self.event(SEND, channel_id=CHANNEL, thread_ts=THREAD, message=TEXT)
 
     def test_success_marks_it_carried_out_and_sent_closes_it_once(self) -> None:
         self.assertTrue(self.allowed(self.call))
         self.post(self.call)
-        item = self.item(REVIEW_REQUEST)
+        item = self.item(self.review_request_id)
         self.assertEqual(item["state"], "proposed")
         self.assertIn("carried_out", item["proposal"]["approval"])
         self.assertEqual(item["history"][-1]["event"], ledger.APPROVAL_CARRIED_OUT)
@@ -266,15 +273,15 @@ class OutreachTest(PostToolUseTestCase):
         before = self.ledger_text()
         self.post(self.call)
         self.assertEqual(self.ledger_text(), before)
-        run("sent", REVIEW_REQUEST, "--ref", SENT_REF)
-        item = self.item(REVIEW_REQUEST)
+        run("sent", self.review_request_id, "--ref", SENT_REF)
+        item = self.item(self.review_request_id)
         self.assertEqual((item["state"], item["proposal"]), ("sent", None))
-        self.assertEqual(self.history(REVIEW_REQUEST).count("proposal-done"), 1)
+        self.assertEqual(self.history(self.review_request_id).count("proposal-done"), 1)
 
     def test_a_failed_send_needs_me_again(self) -> None:
         self.assertTrue(self.allowed(self.call))
         self.post(self.call, approvals.POST_TOOL_USE_FAILURE, error="channel_not_found")
-        item = self.item(REVIEW_REQUEST)
+        item = self.item(self.review_request_id)
         self.assertEqual(approvals.proposal_status(item["proposal"]), approvals.NEEDS_YOU)
         self.assertEqual(item["history"][-1]["event"], ledger.APPROVAL_FAILED)
 
@@ -287,10 +294,12 @@ class StandingCallTest(StandingTestCase):
         self.report()
         call = {**self.review_request(), "session_id": SESSION}
         self.assertTrue(self.allowed(call))
-        grant = self.item(REVIEW_REQUEST)["proposal"]["auto_approved"]
-        self.assertEqual(approvals.proposal_status(self.item(REVIEW_REQUEST)["proposal"]), approvals.USED)
+        grant = self.item(self.review_request_id)["proposal"]["auto_approved"]
+        self.assertEqual(
+            approvals.proposal_status(self.item(self.review_request_id)["proposal"]), approvals.USED
+        )
         self.respond("--post-tool-use", {**call, "hook_event_name": "PostToolUse", "tool_response": MCP_OK})
-        self.assertIn("carried_out", self.item(REVIEW_REQUEST)["proposal"]["auto_approved"])
+        self.assertIn("carried_out", self.item(self.review_request_id)["proposal"]["auto_approved"])
         self.assertEqual(grant["class"], "pr-review-traffic")
 
 

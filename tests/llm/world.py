@@ -17,6 +17,7 @@ from __future__ import annotations
 import json
 import os
 import shutil
+import string
 import subprocess
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
@@ -75,6 +76,9 @@ class World:
     socket: str
     calls_seen: int = 0
     before: dict[str, Any] = field(default_factory=dict)
+    # Task and outreach ids are minted, so a seed names the ones it made: a check reads them here,
+    # and a case's words say $NAME where the id goes (fill).
+    named: dict[str, str] = field(default_factory=dict)
 
     @property
     def home(self) -> Path:
@@ -128,6 +132,18 @@ class World:
         if done.returncode != 0:
             raise RuntimeError(f"bosun {' '.join(argv)}: {done.stderr or done.stdout}")
         return done.stdout
+
+    def made(self, name: str, *argv: str) -> str:
+        """Run a ledger command that makes an item (spawn, reach-out); returns the id it printed
+        first, and keeps it under <name> unless that is empty."""
+        made_id = self.bosun("ledger", *argv).splitlines()[0]
+        if name:
+            self.named[name] = made_id
+        return made_id
+
+    def fill(self, text: str) -> str:
+        """<text> with $NAME replaced by the id a seed made under that name."""
+        return string.Template(text).safe_substitute(self.named)
 
     def ledger(self) -> dict[str, Any]:
         data: dict[str, Any] = json.loads((self.state / "ledger.json").read_text())

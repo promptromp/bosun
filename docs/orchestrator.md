@@ -142,12 +142,16 @@ it. The [watchdog](watchdog.md#watchdog) alerts you when it, or any other Claude
 delegates to, record state. It keeps:
 
 - **items** with stable ids: `review:<owner>/<repo>#<n>`, `td:<page-id>`, `mypr:<owner>/<repo>#<n>`,
-  `slack:<channel>/<ts>`, outreach, `out:<parent-id>/<n>` (see below), learning proposals,
-  `learn:<YYYY-MM-DD>/<n>` (see [Learning](learning.md#learning)), tasks, `task:<YYYY-MM-DD>/<n>`, and
+  `slack:<channel>/<ts>`, outreach, `out:<parent-id>/<id>` (see below), learning proposals,
+  `learn:<YYYY-MM-DD>/<id>` (see [Learning](learning.md#learning)), tasks, `task:<YYYY-MM-DD>/<id>`, and
   external tickets, `jira:<KEY>-<n>` or `ghissue:<owner>/<repo>#<n>` (see
   [Tasks and links](#work-we-take-on-tasks-and-links)), and workstreams, `ws:<slug>` (see
   [Workstreams](#workstreams-what-an-item-is-for)). Each kind has a state machine
-  (`bosun ledger kinds`); invalid transitions are rejected.
+  (`bosun ledger kinds`); invalid transitions are rejected. The date in a task, outreach or
+  learning id is the UTC day it was made, and `<id>` is six characters such as `7k2m9q`, hashed
+  from this Mac's replica id and where the ledger's journal is (for learning, from the finding and
+  the run), so two Macs never make the same id and a pruned one never comes back. Copy ids from
+  what the command printed. Ids made before, ending in a number (`task:2026-10-15/1`), stay valid.
 - **links** between items (`spawned_from`, `produces`, `blocked_by`, `duplicate_of`, `folded_into`,
   `tracks`, `part_of`, `relates_to`), stored once and read both ways.
 - **sources**: every processed Slack message (by permalink). A message still in tomorrow's scan
@@ -193,7 +197,7 @@ chat, a PR description or a Slack reply:
 
 | Field | |
 |---|---|
-| id | `out:<parent-id>/<n>` for the work item it blocks, or `out:<YYYY-MM-DD>/<n>` when it belongs to none (no item id looks like a date: each starts with its kind's prefix) |
+| id | `out:<parent-id>/<id>` for the work item it blocks, or `out:<YYYY-MM-DD>/<id>` (the UTC day) when it belongs to none (no item id looks like a date: each starts with its kind's prefix); `reach-out` prints it first. Older ids end in a number (`out:<parent-id>/1`) and stay valid |
 | `channel` | `slack`, `email`, `jira`, `github`, `confluence` or `other` (one table in `lib/ledger.py`) |
 | `purpose` | `question`, `decision`, `clarification`, `approval`, `review`, `info-ack` (they confirm they saw it) or `fyi` (one-way: no reply expected, so it is done once sent) |
 | `to`, `subject`, `options`, `details`, `expect_by` | whom, what (one line), the choices, context, and an optional date |
@@ -209,7 +213,7 @@ surfaced to me). `no-reply` gives up after the last nudge; `dropped` is the way 
 (`ledger fold <out-id> --into <other-id>` when its questions go into another message,
 `--note 'duplicate of <other-id>'` when it asks exactly what another asks).
 
-- **Parents show it and stay open.** `ledger list` shows `waiting on out:.../1 (slack to Dana, 2d)`
+- **Parents show it and stay open.** `ledger list` shows `waiting on out:.../7k2m9q (slack to Dana, 2d)`
   on the parent, and the ledger refuses to finish a parent (any terminal state, also through
   `report --state`) while its outreach is open, unless `--force-open-outreach` (the note says why).
   A PR that merged or closed is a fact, not a choice, so those states go through and the note

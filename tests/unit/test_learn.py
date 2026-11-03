@@ -11,7 +11,7 @@ import sys
 import tempfile
 import unittest
 from contextlib import redirect_stdout
-from datetime import UTC, datetime, time
+from datetime import UTC, date, datetime, time
 from pathlib import Path
 from typing import Any
 from unittest import mock
@@ -21,6 +21,7 @@ ROOT = Path(__file__).resolve().parents[2]
 sys.path[:0] = [str(ROOT / "lib"), str(ROOT / "tests" / "llm")]
 import agent_changes  # noqa: E402
 import claude_state  # noqa: E402
+import journal  # noqa: E402
 import learn  # noqa: E402
 import learn_world  # noqa: E402
 import ledger  # noqa: E402
@@ -34,6 +35,8 @@ sys.exit(int(os.environ.get("FAKE_LEARN_EXIT", "0")))
 """
 STALL_QUOTE = "PERMISSION PROMPT answered after 15h05m: Bash: gh api repos/acme/exporter"
 DRAFT_QUOTE = "you: Again a draft. I said normal PRs, not drafts."
+STALL_TEXT = "Never use gh api for reads."
+DRAFTS_TEXT = "Open normal PRs, never drafts."
 
 
 def finding(key: str, quote: str, proposal: dict[str, str] | None = None, **extra: Any) -> dict[str, Any]:
@@ -54,7 +57,7 @@ def finding(key: str, quote: str, proposal: dict[str, str] | None = None, **extr
 STALL = finding(
     "orchestrator-gh-api-stall",
     STALL_QUOTE,
-    {"target": "policy", "text": "Never use gh api for reads.", "rationale": "it prompts"},
+    {"target": "policy", "text": STALL_TEXT, "rationale": "it prompts"},
 )
 DRAFTS = finding(
     "exporter-opens-drafts",
@@ -62,7 +65,7 @@ DRAFTS = finding(
     {
         "target": "memory",
         "window": "exporter",
-        "text": "Open normal PRs, never drafts.",
+        "text": DRAFTS_TEXT,
         "rationale": "said twice",
     },
     category="repeated-correction",
@@ -153,10 +156,18 @@ class RunTest(LearnCase):
         code, out = self.run_learn()
         self.assertEqual(code, 0, out)
         self.assertIn("2 finding(s) (1 dropped)", out)
-        learn_items = {i: v for i, v in self.items().items() if i.startswith("learn:")}
+        learn_items = {v["fields"]["key"]: v for i, v in self.items().items() if i.startswith("learn:")}
         self.assertEqual(len(learn_items), 2)
-        item = learn_items["learn:" + datetime.now().strftime("%Y-%m-%d") + "/1"]
+        item = learn_items["orchestrator-gh-api-stall"]
+        replica = journal.replica_id(self.world.state)
+        expected = learn.next_id(
+            datetime.now(UTC).date(), item["fields"]["key"], item["fields"]["run"], replica
+        )
+        self.assertEqual(item["id"], expected)
         self.assertEqual((item["kind"], item["state"]), ("learning", "proposed"))
+        self.assertEqual(
+            {k: item["fields"][k] for k in ("target", "text")}, {"target": "policy", "text": STALL_TEXT}
+        )
         self.assertIn("Never use gh api for reads.", item["proposal"]["action"])
         self.assertIn(f"bosun learn apply '{item['id']}'", item["proposal"]["action"])
         run = self.state().runs[-1]
@@ -265,14 +276,74 @@ class ApplyTest(LearnCase):
         self.assertEqual(code, 1)
         self.assertIn("no pending proposal", out)
 
+    def apply(self, learn_id: str) -> tuple[int, str]:
+        return self.main("apply", learn_id, "--sessions", str(self.world.sessions_file))
+
+    def note(self) -> Path:
+        return claude_state.memory_dir(str(self.world.repos / "exporter")) / "bosun-exporter-opens-drafts.md"
+
     def test_apply_a_memory_note_for_the_window_named(self) -> None:
         [learn_id] = self.proposed(DRAFTS)
-        self.assertEqual(self.main("apply", learn_id)[0], 0)
-        memory = claude_state.memory_dir(str(self.world.repos / "exporter"))
-        note = memory / "bosun-exporter-opens-drafts.md"
-        self.assertIn("Open normal PRs, never drafts.", note.read_text())
-        self.assertIn("bosun-exporter-opens-drafts.md", (memory / "MEMORY.md").read_text())
-        self.assertEqual(agent_changes.notes(self.world.state), (str(note),), "so that uninstall can find it")
+        self.assertEqual(self.apply(learn_id)[0], 0)
+        self.assertIn(DRAFTS_TEXT, self.note().read_text())
+        self.assertIn("bosun-exporter-opens-drafts.md", (self.note().parent / "MEMORY.md").read_text())
+        uninstall_finds = agent_changes.notes(self.world.state)
+        self.assertEqual(uninstall_finds, (str(self.note()),), "so that uninstall can find it")
+
+    def test_learn_apply_reads_the_change_from_the_item(self) -> None:
+        [learn_id] = self.proposed(DRAFTS)
+        self.assertNotIn("proposals", json.loads((self.config.learn_dir / learn.STATE_FILE).read_text()))
+        fields = self.items()[learn_id]["fields"]
+        self.assertEqual((fields["text"], fields["window"]), (DRAFTS_TEXT, "exporter"))
+        self.assertNotIn("dir", fields)  # a folder is this Mac's: found from the window when applied
+        code, out = self.main("apply", learn_id)
+        self.assertEqual(code, 1)
+        self.assertIn("no folder for the memory note (window 'exporter' is unknown)", out)
+        self.assertEqual(self.apply(learn_id)[0], 0)
+        self.assertIn(DRAFTS_TEXT, self.note().read_text())
+
+    def test_a_change_edited_on_the_item_is_not_applied(self) -> None:
+        [learn_id] = self.proposed(STALL)
+        for edit in ("target=nonsense", "target=task-rule", "text=Always use gh api."):
+            with self.subTest(edit):
+                learn.ledger_call("upsert", learn_id, "--kind", "learning", "--field", edit)
+                code, out = self.main("apply", learn_id)
+                self.assertEqual(code, 1)
+                self.assertIn("not the change its proposal shows", out)
+                learn.ledger_call(
+                    "upsert", learn_id, "--field", "target=policy", "--field", f"text={STALL_TEXT}"
+                )
+        self.assertFalse((self.world.config / "policy.md").exists())
+        self.assertEqual(self.items()[learn_id]["state"], "proposed")
+        self.assertEqual(self.main("reject", learn_id, "--note", "edited after it was proposed")[0], 0)
+        self.assertEqual(self.items()[learn_id]["state"], "rejected")
+
+    def test_legacy_learn_proposals_move_onto_items(self) -> None:
+        [learn_id] = self.proposed(DRAFTS)
+        ledger.configure_command("test")
+        with ledger.locked_ledger(write=True) as data:  # an item from before the change moved onto it
+            fields = data["items"][learn_id]["fields"]
+            text, window = fields.pop("text"), fields.pop("window")
+        change = {"key": fields["key"], "target": "memory", "title": "t", "text": text, "window": window}
+        state_file = self.config.learn_dir / learn.STATE_FILE
+        saved = json.loads(state_file.read_text())
+        old = {**change, "dir": "/Users/me/gone", "run": fields["run"]}
+        legacy = {**saved, "proposals": {learn_id: old}}
+        state_file.write_text(json.dumps(legacy))
+        self.assertEqual(learn.State.load(self.config.learn_dir).findings, saved["findings"])
+        self.assertEqual(json.loads(state_file.read_text()), legacy, "a reader (the console) leaves it")
+        self.assertEqual(self.apply(learn_id)[0], 0)
+        self.assertNotIn("proposals", json.loads(state_file.read_text()))
+        fields = self.items()[learn_id]["fields"]
+        self.assertEqual((fields["text"], fields["window"]), (DRAFTS_TEXT, "exporter"))
+        self.assertIn(DRAFTS_TEXT, self.note().read_text())  # in the window's folder, not the old dir
+        found = journal.Journal(ledger.STORE.journal_dir, "ledger", "", ledger.RULES_VERSION)
+        moved = [
+            (change["cmd"], change["body"]["value"])
+            for change in found.changes()
+            if change["target"] == learn_id and change["body"].get("path") == ["fields", "text"]
+        ]
+        self.assertEqual(moved, [("test", None), ("learn", DRAFTS_TEXT)])  # taken off, then moved back on
 
     def test_apply_a_task_rule(self) -> None:
         rule = finding(
@@ -313,6 +384,17 @@ class ApplyTest(LearnCase):
         self.assertEqual(self.items()[learn_id]["state"], "rejected")
         self.assertEqual(self.proposed(STALL), [learn_id])
         self.assertEqual(self.state().findings["orchestrator-gh-api-stall"]["status"], "rejected")
+
+
+class LearnIdTest(unittest.TestCase):
+    def test_learn_id_comes_from_the_finding(self) -> None:
+        day, run, replica = date(2026, 10, 21), "2026-10-21T18:30:00+00:00", "c" * 32
+        first = learn.next_id(day, "gh-api-stall", run, replica)
+        self.assertRegex(first, r"^learn:2026-10-21/[0-9a-hjkmnp-tv-z]{6}$")
+        self.assertEqual(learn.next_id(day, "gh-api-stall", run, replica), first)
+        self.assertNotEqual(learn.next_id(day, "gh-api-stall", "2026-10-22T18:30:00+00:00", replica), first)
+        self.assertNotEqual(learn.next_id(day, "drafts", run, replica), first)
+        self.assertNotEqual(learn.next_id(day, "gh-api-stall", run, "d" * 32), first)
 
 
 class ScheduleStatusTest(LearnCase):

@@ -4,10 +4,10 @@ findings it remembers. Design: docs/design/console.md (section 4).
 Pure over what lib/console_state.py reads (learning's state and run folders), a loaded ledger and
 the keys of the run reports the server may show (only report.md files under the learn state
 directory get one). Where a proposal's change and evidence live (lib/learn.py):
-- the `learn:` item's fields: the finding's key, category, change target and run;
+- the `learn:` item's fields: the finding's key, category and run, and the exact change (its
+  target, text and window);
 - its proposal (while pending) or, once settled, the `proposed` history entry: the action text
   with "Change:", "Why:" and "Evidence:" lines;
-- the learn state's `proposals`: the exact change (target, text, window, folder);
 - the transition to applied or rejected: when, and its note (what apply did, or why not).
 """
 
@@ -93,8 +93,16 @@ def settled(item: Item) -> dict[str, Any] | None:
     return None
 
 
-def item_model(item: Item, change: Mapping[str, Any] | None) -> dict[str, Any]:
-    fields = item.get("fields") if isinstance(item.get("fields"), dict) else {}
+def item_change(fields: Mapping[str, Any]) -> dict[str, Any] | None:
+    """The exact change a learn: item holds (target, text, window), if it holds one."""
+    if not fields.get("text"):
+        return None
+    return {name: fields.get(name, "") for name in ("target", *learn.CHANGE_FIELDS)}
+
+
+def item_model(item: Item) -> dict[str, Any]:
+    found = item.get("fields")
+    fields: Mapping[str, Any] = found if isinstance(found, dict) else {}
     action = action_text(item)
     return {
         "id": item.get("id"),
@@ -103,10 +111,10 @@ def item_model(item: Item, change: Mapping[str, Any] | None) -> dict[str, Any]:
         "pending": bool(item.get("proposal")),
         "created": item.get("created_at"),
         "updated": item.get("updated_at"),
-        **{key: (fields or {}).get(key, "") for key in ("key", "category", "target", "run")},
+        **{key: fields.get(key, "") for key in ("key", "category", "target", "run")},
         **action_parts(action),
         "action": action,
-        "change": dict(change) if change else None,
+        "change": item_change(fields),
         "settled": settled(item),
     }
 
@@ -135,12 +143,11 @@ def learn_model(files: LearnFiles, data: Mapping[str, Any], reports: Mapping[str
     """/api/learn: the runs (newest first) with their report keys (<reports>: run_dir -> key), the
     `learn:` items (newest first), and the findings remembered (last seen first)."""
     remembered = findings(files)
-    proposals = files.state.proposals
     return {
         "error": files.error,
         "running": files.state.running,
         "runs": [run_model(r, reports.get(str(r.get("run_dir") or ""))) for r in files.runs],
-        "items": [item_model(i, proposals.get(str(i.get("id")))) for i in learn_items(data)],
+        "items": [item_model(i) for i in learn_items(data)],
         "findings": remembered,
         "statuses": dict(Counter(str(f["status"] or "?") for f in remembered)),
     }

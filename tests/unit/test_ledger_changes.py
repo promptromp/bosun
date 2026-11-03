@@ -23,9 +23,12 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "lib"))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import approvals
 import hook
+import learn
+import learn_digest
 import ledger
 import ledger_changes
 import lineage
+import minted
 from change_log import Change, Edit, canonical, in_order
 from journal import Journal
 from ledger_changes import (
@@ -49,7 +52,6 @@ from test_approvals import (
     PR,
     PR_URL,
     QUOTE as APPROVING_WORDS,
-    REVIEW_REQUEST,
     REVIEWER,
     SEND,
     SENT_REF,
@@ -162,7 +164,7 @@ class TestFieldTable(unittest.TestCase):
 
     def test_unknown_keys_in_a_container_are_local(self) -> None:
         paths = [
-            "fields.text",
+            "fields.scratch",
             "fields.vendor_contact",
             "delegation.context",
             "report.extra",
@@ -558,20 +560,23 @@ class TestDiff(unittest.TestCase):
 
     def test_an_unknown_key_in_a_container_is_a_local_set(self) -> None:
         before = a_ledger(an_item())
-        edits = changed(before, lambda data: data["items"][ITEM]["fields"].update(text="the new rule"))
-        self.assertEqual(edits, [a_set(["fields", "text"], "the new rule", None, local=True)])
-        edits = diff(a_ledger(), a_ledger(an_item(fields={"repo": "acme/exporter", "text": "the new rule"})))
+        edits = changed(before, lambda data: data["items"][ITEM]["fields"].update(scratch="the new rule"))
+        self.assertEqual(edits, [a_set(["fields", "scratch"], "the new rule", None, local=True)])
+        edits = diff(
+            a_ledger(), a_ledger(an_item(fields={"repo": "acme/exporter", "scratch": "the new rule"}))
+        )
         self.assertEqual(edits[0].body["item"]["fields"], {"repo": "acme/exporter"})
-        self.assertEqual(edits[1:], [a_set(["fields", "text"], "the new rule", None, local=True)])
+        self.assertEqual(edits[1:], [a_set(["fields", "scratch"], "the new rule", None, local=True)])
 
     def test_fields_that_appear_whole_are_private_with_their_local_keys_apart(self) -> None:
         item = an_item()
         del item["fields"]
         edits = changed(
-            a_ledger(item), lambda data: data["items"][ITEM].update(fields={"repo": "r", "text": "t"})
+            a_ledger(item), lambda data: data["items"][ITEM].update(fields={"repo": "r", "scratch": "t"})
         )
         self.assertEqual(
-            edits, [a_set(["fields"], {"repo": "r"}, None), a_set(["fields", "text"], "t", None, local=True)]
+            edits,
+            [a_set(["fields"], {"repo": "r"}, None), a_set(["fields", "scratch"], "t", None, local=True)],
         )
 
     def test_messages_keep_their_order(self) -> None:
@@ -1208,7 +1213,6 @@ class TestRules(unittest.TestCase):
 WINDOW = "exporter"
 SAID = "keep the zebra totals per customer"
 TOOL_USE_ID = "toolu_01"  # what PostToolUseTestCase.post gives the call
-QUESTION = f"out:{OTHER_PR}/1"
 QUESTION_TEXT = "Do credit notes reuse the invoice number sequence?"
 REVIEW = "review:acme/exporter#9"
 STANDING = {
@@ -1271,12 +1275,12 @@ class RealWritesTest(PostToolUseTestCase):
         """A re-review request under a standing class: let through, carried out, sent, answered."""
         run("reach-out", PR, "--to", "Dana", "--subject", "re-review", "--purpose", "review")
         spec = ["--send", "slack", "--channel", CHANNEL, "--thread", THREAD, "--text", TEXT]
-        run("propose", REVIEW_REQUEST, *spec)
+        run("propose", self.review_request_id, *spec)
         call = self.event(SEND, channel_id=CHANNEL, thread_ts=THREAD, message=TEXT)
         self.assertTrue(self.allowed(call))
         self.post(call)
-        run("sent", REVIEW_REQUEST, "--ref", SENT_REF)
-        run("replied", REVIEW_REQUEST, "--evidence", f"{SENT_REF}9", "--summary", "looks good now")
+        run("sent", self.review_request_id, "--ref", SENT_REF)
+        run("replied", self.review_request_id, "--evidence", f"{SENT_REF}9", "--summary", "looks good now")
 
     def question(self) -> None:
         """A question I approve in chat, carried out; then an approved command that fails."""
@@ -1284,7 +1288,7 @@ class RealWritesTest(PostToolUseTestCase):
         options = ["--option", "reuse", "--option", "own sequence", "--details", "the export needs one"]
         reach = ["--to", "Lena", "--subject", "credit notes?", "--purpose", "decision", *options]
         run("reach-out", OTHER_PR, *reach, "--expect-by", "2026-12-01")
-        self.approve(QUESTION, "--send", "slack", "--channel", CHANNEL, "--text", QUESTION_TEXT)
+        self.approve(minted.made(OTHER_PR), "--send", "slack", "--channel", CHANNEL, "--text", QUESTION_TEXT)
         call = self.event(SEND, channel_id=CHANNEL, message=QUESTION_TEXT)
         self.assertTrue(self.allowed(call))
         self.post(call)
@@ -1314,16 +1318,7 @@ class RealWritesTest(PostToolUseTestCase):
             "--target",
             "2026-12-01",
         )
-        learned = ["key=k1", "category=policy", "target=memory", "run=r1"]
-        run(
-            "upsert",
-            "learn:2026-10-21/1",
-            "--kind",
-            "learning",
-            "--title",
-            "T",
-            *[f"--field={f}" for f in learned],
-        )
+        self.learning()
         chores = [
             "requester=Dana",
             f"request_permalink={SENT_REF}",
@@ -1338,6 +1333,16 @@ class RealWritesTest(PostToolUseTestCase):
         run("working", OTHER_PR, "--window", "credit")
         run("record-move", PR, "--window", "exporter-2", "--text", "carry on there")
 
+    def learning(self) -> None:
+        """A learn: item as `bosun learn` records it: the change (target, text, window) on the item,
+        and as its pending proposal."""
+        proposal = {"target": "memory", "window": WINDOW, "text": "Open normal PRs.", "rationale": "twice"}
+        evidence = [{"source": "session", "ref": WINDOW, "quote": "not drafts"}]
+        found = learn.Finding("drafts", "repeated-correction", "high", "Drafts", "s", evidence, proposal)
+        config = learn.Config(self.state, self.state / "logs", self.state / "config")
+        windows = [learn_digest.Window(WINDOW, "session", "/Users/me/exporter")]
+        learn.record_proposal(found, windows, config, T1)
+
     def work(self) -> None:
         self.hand_over()
         self.review_request()
@@ -1350,9 +1355,9 @@ class RealWritesTest(PostToolUseTestCase):
         applied, in one write), a move to another workstream, an unlink, a ticket done, then a
         prune of it, of the sources and of what I said, once old; then a link that tracks the
         pruned ticket, which makes it again."""
-        run("sent", REVIEW_REQUEST, "--ref", SENT_REF, "--at", T2)
+        run("sent", self.review_request_id, "--ref", SENT_REF, "--at", T2)
         run("reach-out", PR, "--to", "Dana", "--subject", "fixed", "--purpose", "fyi")
-        (fyi,) = [key for key in json.loads(self.ledger_text())["items"] if key.endswith("/2")]
+        fyi = minted.made(PR, 2)
         run("sent", fyi, "--ref", f"{SENT_REF}7")
         self.assertEqual(json.loads(self.ledger_text())["items"][fyi]["state"], "applied")
         run("ws", "add", "exports", "--title", "Exports")

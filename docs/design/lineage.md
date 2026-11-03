@@ -34,7 +34,7 @@ item at all.
 | Asked of me | `review:`, `td:`, `slack:` (mention) | unchanged |
 | My own artifacts | `mypr:` | unchanged |
 | Waiting on others | `out:` with a `parent` field | unchanged; `parent` also reads as `blocked_by` |
-| Work we decided to do | a mention or outreach id, or nothing | `task:<YYYY-MM-DD>/<n>` |
+| Work we decided to do | a mention or outreach id, or nothing | `task:<YYYY-MM-DD>/<id>` |
 | Changes to bosun | `learn:` | unchanged (a finding with work behind it can spawn a task) |
 | External trackers | none | `ticket` (`jira:EXP-123`, `ghissue:acme/exporter#7`) |
 | Provenance, duplicates | notes, `origin` field, "merged into" | typed links |
@@ -86,7 +86,7 @@ too, because the tree shows it there.
 
 **Outreach `parent`.** Kept as a field and read as a computed `blocked_by`, rather than migrated
 to a stored link. It is the least risky path: the field also scopes the outreach id
-(`out:<parent>/<n>`), and `delegate --update <out-id>`, the open-outreach guard, the learning
+(`out:<parent>/<id>`), and `delegate --update <out-id>`, the open-outreach guard, the learning
 checks and the corpus fixtures all read it. Migrating would touch each of them for no change in
 behaviour. `unlink` refuses it and says how outreach stops blocking (applied or dropped).
 

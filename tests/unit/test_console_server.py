@@ -36,7 +36,7 @@ PORT = 8765
 POLL_SECONDS = 0.05  # shutdown() waits up to one poll
 TOKEN = "fixture-token-0000"  # noqa: S105  # a test value, not a secret
 CSRF = "fixture-csrf-0000"  # a test value, not a secret
-TASK = "task:2026-10-20/1"  # the fixture's delegated task
+TASK = "task:2026-10-20/veembc"  # the fixture's delegated task
 SETTINGS = console_live.Settings(state_dir=Path("/state"), log_dir=Path("/state/logs"), session="acme")
 WINDOWS = [
     {"name": "exporter", "kind": "session", "dir": "/Users/me/repos/exporter", "model": "opus", "effort": "-",
@@ -240,7 +240,7 @@ class ServerTestCase(RunningServer):
     def test_items(self) -> None:
         self.assertEqual(self.get_json("/api/items?group=all")["count"], 19)
         model = self.get_json("/api/items?kind=outreach&group=all&q=credit+notes")
-        self.assertEqual([row["id"] for row in model["rows"]], [f"out:{TASK}/1"])
+        self.assertEqual([row["id"] for row in model["rows"]], [f"out:{TASK}/q0kge7"])
         titles = {row["id"]: row["title"] for row in self.get_json("/api/items")["rows"]}
         self.assertEqual(titles["mypr:acme/exporter#103"], "Header fix <script>alert(1)</script>")
 
@@ -339,7 +339,7 @@ class ServerTestCase(RunningServer):
             TASK,
             "mypr:acme/exporter#102",
             "slack:C0000000001/1700000001.000001",
-            f"out:{TASK}/1",
+            f"out:{TASK}/q0kge7",
         ):
             with self.subTest(item=item_id):
                 self.assertEqual(self.get_json(f"/api/items/{quote(item_id, safe='')}")["id"], item_id)
@@ -360,7 +360,7 @@ class ServerTestCase(RunningServer):
     def test_needs_you(self) -> None:
         model = self.get_json("/api/needs-you")
         self.assertEqual(model["count"], 6 + len(model["windows"]))
-        self.assertEqual([o["id"] for o in model["outreach"]], ["out:mypr:acme/exporter#102/1"])
+        self.assertEqual([o["id"] for o in model["outreach"]], ["out:mypr:acme/exporter#102/3rgjxw"])
         self.assertEqual([w["name"] for w in model["windows"]], ["exporter"])
 
     def test_sessions(self) -> None:

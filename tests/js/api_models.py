@@ -140,8 +140,8 @@ def knowledge_base(root: Path) -> None:
     kg("import", str(KG_FIXTURE), "--apply", "--auto-confirm")
     kg("add-entity", "system/widget", "--name", "<img src=x onerror=alert(1)>")
     for argv in (
-        ("step/rollout", "gated_by", "gate/smoke-tests", "--source", "ledger:task:2026-10-20/1"),
-        ("step/merge", "uses", "repo/invoice-exporter", "--source", "ledger:task:2026-10-20/1"),
+        ("step/rollout", "gated_by", "gate/smoke-tests", "--source", "ledger:task:2026-10-20/veembc"),
+        ("step/merge", "uses", "repo/invoice-exporter", "--source", "ledger:task:2026-10-20/veembc"),
         ("process/release", "entry_point", "--value", "a merged PR", "--source", "doc:javascript:alert(1)"),
         (
             "channel/acme-prs",
@@ -151,13 +151,13 @@ def knowledge_base(root: Path) -> None:
             "--source",
             "doc:https://example.com/acme",
         ),
-        ("system/widget", "uses", "repo/invoice-exporter", "--source", "report:task:2026-10-20/1"),
+        ("system/widget", "uses", "repo/invoice-exporter", "--source", "report:task:2026-10-20/veembc"),
     ):
-        kg("propose", *argv, "--source", "report:task:2026-10-20/1")
+        kg("propose", *argv, "--source", "report:task:2026-10-20/veembc")
     status = next(
         f["id"] for f in knowledge.load(knowledge.paths()).facts.values() if f["predicate"] == "status"
     )
-    kg("supersede", status, "--value", "running", "--source", "ledger:task:2026-10-20/1")
+    kg("supersede", status, "--value", "running", "--source", "ledger:task:2026-10-20/veembc")
     kg("batch")
 
 

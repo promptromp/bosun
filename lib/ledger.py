@@ -83,7 +83,7 @@ Usage: bosun ledger <command> [args]
   render                                       rewrite ledger.md
 
 Outreach: what we sent (or will send) to someone outside this machine and wait on (kind outreach;
-ids out:<parent-id>/<n>, or out:<YYYY-MM-DD>/<n> when it belongs to no item):
+ids out:<parent-id>/<id>, or out:<YYYY-MM-DD>/<id> (UTC) when it belongs to no item):
 
   reach-out [<parent-id>] --to WHO --subject TEXT [--channel C] [--purpose P] [--option O ...]
             [--details D | --details -] [--expect-by YYYY-MM-DD]
@@ -125,7 +125,9 @@ ids out:<parent-id>/<n>, or out:<YYYY-MM-DD>/<n> when it belongs to no item):
   <other-id>' (records duplicate_of).
 
 Tasks and links: work we decided to do that has no artifact of its own (kind task; ids
-task:<YYYY-MM-DD>/<n>), and typed links between items (stored once, the inverse computed):
+task:<YYYY-MM-DD>/<id>, the day in UTC), and typed links between items (stored once, the inverse
+computed). A task or outreach <id> is six base32 characters minted from this Mac's replica and the
+journal position, so two Macs never make the same one (older ids end in a number, and stay):
 
   spawn [<from-id>] --title T --ask A [--via V] [--requester R] [--repo R] [--area A]
         [--done-when D] [--blocks]
@@ -557,7 +559,7 @@ KINDS: dict[str, dict[str, Any]] = {
             "each message with `ledger sent`, the reply with `ledger replied`. A one-way message "
             "(purpose fyi) waits on nobody: `ledger sent` moves it on to applied."
         ),
-        "id_format": "out:<parent-id>/<n>, or out:<YYYY-MM-DD>/<n> for outreach that belongs to no item",
+        "id_format": "out:<parent-id>/<id>, or out:<YYYY-MM-DD>/<id> for outreach that belongs to no item",
         "source_class": "outreach",
         "initial": "draft",
         "terminal": {"applied", "no-reply", "dropped"},
@@ -586,7 +588,7 @@ KINDS: dict[str, dict[str, Any]] = {
             "a rule, a setup change, outreach), with its evidence; created with the change as its "
             "pending proposal. Close it only with `bosun learn apply|done|reject <id>`."
         ),
-        "id_format": "learn:<YYYY-MM-DD>/<n>",
+        "id_format": "learn:<YYYY-MM-DD>/<id>",
         "source_class": "learning",
         "initial": "proposed",
         "terminal": {"applied", "rejected", "dismissed"},
@@ -603,7 +605,7 @@ KINDS: dict[str, dict[str, Any]] = {
             "linked with `ledger link <task> produces <mypr>`. Done when what it produced landed, or "
             "its report answered the ask."
         ),
-        "id_format": "task:<YYYY-MM-DD>/<n>",
+        "id_format": "task:<YYYY-MM-DD>/<id>",
         "source_class": "task",
         "initial": "proposed",
         "terminal": {"done", "declined", "dropped"},
@@ -671,7 +673,10 @@ WORKSTREAM_KIND = "workstream"
 LEARNING_KIND = "learning"
 TASK_KIND = "task"
 TICKET_KIND = "ticket"
-TASK_ID = re.compile(r"^task:\d{4}-\d{2}-\d{2}/[1-9]\d*$")
+# The end of a task or outreach id: a number (made before ids were minted) or six Crockford base32
+# characters (change_log.mint_suffix).
+ID_SUFFIX = r"([1-9]\d*|[0-9a-hjkmnp-tv-z]{6})"
+TASK_ID = re.compile(rf"^task:\d{{4}}-\d{{2}}-\d{{2}}/{ID_SUFFIX}$")
 # A report result that is a GitHub PR: the PR a task (or other work) produced.
 PR_URL = re.compile(r"https://github\.com/(?P<repo>[^/\s]+/[^/\s]+)/pull/(?P<number>\d+)(?:[/?#\s]|$)")
 # A drop note that names what took the item over, recorded as a link too: its work went on as part
@@ -686,9 +691,9 @@ NOTE_RELATIONS = {
 DELEGATE_PROPOSAL = "bosun delegate"
 # Kinds whose report results name their own PR or review, not new work.
 OWN_PR_KINDS = ("my-pr", "review-request")
-# out:<scope>/<n>: the scope is the parent's id, or the day it was created for outreach without one
-# (no item id looks like a date: every one starts with its kind's prefix and a colon).
-OUTREACH_ID = re.compile(r"^out:(?P<scope>.+)/(?P<number>[1-9]\d*)$")
+# out:<scope>/<id>: the scope is the parent's id, or the UTC day it was created for outreach without
+# one (no item id looks like a date: every one starts with its kind's prefix and a colon).
+OUTREACH_ID = re.compile(rf"^out:(?P<scope>.+)/(?P<suffix>{ID_SUFFIX})$")
 PROPOSAL_OUTCOMES = ("done", "rejected", "withdrawn")
 SOURCE_CLASSES = (*(spec["source_class"] for spec in KINDS.values()), FYI_CLASS)
 
@@ -2272,14 +2277,24 @@ def check_outreach_parent(parent: Item, purpose: str) -> None:
         raise LedgerError(f"{parent['id']} is {parent['state']}; outreach belongs to open work items")
 
 
-def next_outreach_id(ledger: Ledger, scope: str) -> str:
-    """out:<scope>/<n>: the next number for a parent id, or for a day (outreach without a parent)."""
-    numbers = [
-        int(match["number"])
-        for item_id in ledger["items"]
-        if (match := OUTREACH_ID.match(item_id)) and match["scope"] == scope
-    ]
-    return f"out:{scope}/{max(numbers, default=0) + 1}"
+def utc_today() -> str:
+    return datetime.now(UTC).date().isoformat()
+
+
+def mint_id(items: Mapping[str, Item], prefix: str) -> str:
+    """<prefix> and a suffix minted by the write in progress (only inside locked_ledger(write=True)).
+    The suffix hashes this Mac's replica and the journal position, so no other Mac makes it and a
+    pruned id never comes back; one that names an item already (a hash collision) is minted again."""
+    transaction = current_transaction()
+    minted = f"{prefix}{transaction.mint()}"
+    while minted in items:
+        minted = f"{prefix}{transaction.mint()}"
+    return minted
+
+
+def next_outreach_id(items: Mapping[str, Item], scope: str) -> str:
+    """out:<scope>/<id>: <scope> is the parent's id, or the UTC day for outreach without a parent."""
+    return mint_id(items, f"{id_prefix(OUTREACH_KIND)}{scope}/")
 
 
 def new_outreach(outreach_id: str, args: argparse.Namespace, details: str) -> Item:
@@ -2350,7 +2365,7 @@ def cmd_reach_out(args: argparse.Namespace) -> str:
                 f"{existing['id']}\nunchanged: {existing['id']} already exists ({outreach_status(existing)})"
             )
         overlapping = overlapping_outreach(ledger, args)
-        outreach_id = next_outreach_id(ledger, args.parent or date.today().isoformat())
+        outreach_id = next_outreach_id(ledger["items"], args.parent or utc_today())
         ledger["items"][outreach_id] = new_outreach(outreach_id, args, details)
         if args.parent:
             record(parent, "outreach", f"{outreach_id}: {args.channel} to {args.to}: {args.subject}")
@@ -3126,10 +3141,9 @@ def check_spawn(args: argparse.Namespace) -> None:
         raise LedgerError("--blocks says the task blocks the item it was spawned from; give that item")
 
 
-def next_task_id(items: dict[str, Item]) -> str:
-    prefix = f"{id_prefix(TASK_KIND)}{date.today().isoformat()}/"
-    numbers = [int(i[len(prefix) :]) for i in items if i.startswith(prefix) and i[len(prefix) :].isdigit()]
-    return f"{prefix}{max(numbers, default=0) + 1}"
+def next_task_id(items: Mapping[str, Item]) -> str:
+    """task:<UTC day>/<id>, minted by the write in progress."""
+    return mint_id(items, f"{id_prefix(TASK_KIND)}{utc_today()}/")
 
 
 def add_checked_link(items: dict[str, Item], new: Link, note: str = "") -> bool:

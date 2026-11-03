@@ -88,7 +88,9 @@ digest lists them so the analysis reuses keys; a known key is counted, never pro
 proposed, applied or rejected.
 
 **Proposals flow through the ledger.** A new ledger kind, `learning`, with ids
-`learn:<YYYY-MM-DD>/<n>`, starts in `proposed` with the exact change as its pending proposal, so the
+`learn:<YYYY-MM-DD>/<id>` (the UTC day; `<id>` hashed from the replica, the finding's key and the
+run, so the same finding in the same run is the same item), starts in `proposed` with the exact
+change as its pending proposal, so the
 orchestrator lists it under *Needs your approval* at the next check-in (one sentence in
 `chores.md`). The user answers there like for any other proposal. Then:
 
@@ -99,10 +101,15 @@ orchestrator lists it under *Needs your approval* at the next check-in (one sent
 | `task-rule` | appends it to `$BOSUN_CONFIG_DIR/tasks/_common.md` | every delegated task gets it; a site file named like a task type would replace that type, so only `_common.md` is appended to |
 | `repo-change`, `setup`, `outreach`, `ledger` | nothing: the user makes the change, then `learn done <id>` | repo changes must stay generic and go through review; `sessions.yml` and outreach are the user's call |
 
-`learn reject <id>` declines a proposal for good. The applied text comes from `learn/state.json`,
-written when the proposal was made, not from ledger fields that any session could edit; the path is
-computed by code from the target, never taken from the model. Before a file changes, its previous
-version goes to `learn/backups/`. Applying is idempotent (the marker is checked).
+`learn reject <id>` declines a proposal for good. The change lives on the item, in its fields
+(`target`, `text`, `window`), so that it travels with the ledger to another Mac (it lived in
+`learn/state.json` before; `learn` moves an old file's `proposals` onto the items once). Ledger
+fields can be edited by any session, so `apply` makes the change only if the item's change is still
+the one its pending proposal shows, the text I approved; otherwise it refuses, and the way out is
+`learn reject`. The path is computed by code from the target, never taken from the model: a memory note's
+folder is the window's, as `bosun sessions` shows it when applying (a folder is this Mac's, so it
+is never stored). Before a file changes, its previous version goes to `learn/backups/`. Applying
+is idempotent (the marker is checked).
 
 **Runtime.** `bosun learn` runs once: the window starts where the last successful run ended,
 at most `BOSUN_LEARN_HOURS` back (`--since`/`--until` override); `--dry-run` writes only its

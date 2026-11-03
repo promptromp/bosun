@@ -315,6 +315,59 @@ class MaintenanceTest(LedgerTestCase):
             self.assertIn(f"--class {spec['source_class']}", output)
 
 
+MINTED = "[0-9a-hjkmnp-tv-z]{6}"  # six Crockford base32 characters
+
+
+class MintedIdTest(LedgerTestCase):
+    """Task ids: the UTC day and six base32 characters hashed from the replica and the journal
+    position, so two Macs never make the same one and a pruned one never comes back; old numeric
+    ids stay valid."""
+
+    def spawn(self, title: str = "Footer totals") -> str:
+        output: str = run("spawn", "--title", title, "--ask", "add totals", "--via", "user: totals too")
+        return output.splitlines()[0]
+
+    def test_spawn_mints_a_hash_id(self) -> None:
+        task_id = self.spawn()
+        self.assertRegex(task_id, rf"^task:\d{{4}}-\d{{2}}-\d{{2}}/{MINTED}$")
+        self.assertTrue(task_id.startswith(f"task:{datetime.now(UTC).date().isoformat()}/"))
+        self.assertEqual(self.item(task_id)["kind"], "task")
+        self.assertNotEqual(self.spawn("Header totals"), task_id)
+
+    def test_old_task_ids_still_parse(self) -> None:
+        self.assertIn("created", run("upsert", "task:2026-10-15/1", "--kind", "task", "--title", "Old"))
+        self.assertIn("created", run("upsert", "task:2026-10-15/7k2m9q", "--kind", "task"))
+        for bad in ("task:2026-10-15/0", "task:2026-10-15/7k2m9", "task:2026-10-15/7k2m9i", "task:x/1"):
+            with self.subTest(bad), self.assertRaisesRegex(ledger.LedgerError, "task ids look like"):
+                run("upsert", bad, "--kind", "task")
+        for good in ("out:mypr:acme/api#2/3", "out:2026-10-15/1", f"out:{MYPR_ID}/7k2m9q"):
+            self.assertRegex(good, ledger.OUTREACH_ID)
+        self.assertIsNone(ledger.OUTREACH_ID.match("out:2026-10-15/7k2m9i"))
+
+    def test_two_replicas_mint_different_ids(self) -> None:
+        minted = []
+        for replica in ("a" * 32, "b" * 32):
+            with tempfile.TemporaryDirectory() as state:
+                (Path(state) / "replica.json").write_text(json.dumps({"replica": replica}))
+                ledger.configure(state)
+                minted.append(self.spawn())
+        self.assertNotEqual(minted[0], minted[1])
+
+    def test_a_pruned_id_is_never_minted_again(self) -> None:
+        first = self.spawn()
+        run("transition", first, "declined", "--note", "not now")
+        with ledger.locked_ledger(write=True) as data:
+            data["items"][first]["updated_at"] = (datetime.now(UTC) - timedelta(days=40)).isoformat()
+        self.assertIn("pruned 1 item(s)", run("prune", "--days", "30"))
+        self.assertNotEqual(self.spawn(), first)
+
+    def test_minting_needs_a_write(self) -> None:
+        with self.assertRaisesRegex(ledger.LedgerError, "no ledger write in progress"):
+            ledger.next_task_id({})
+        with ledger.locked_ledger(write=False), self.assertRaisesRegex(ledger.LedgerError, "no ledger write"):
+            ledger.next_outreach_id({}, MYPR_ID)
+
+
 class ValidateTest(LedgerTestCase):
     def setUp(self) -> None:
         super().setUp()

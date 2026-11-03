@@ -8,7 +8,9 @@ fictional domain: acme's invoice exporter), from tests/fixtures/corpus/:
   real CLI in a scratch state dir with BOSUN_SEND_DRY_RUN=1, so nothing is delivered. Steps
   by the orchestrator go through the guard first (a denied step is not run, as in the hook);
   steps by a repo session or by me do not. The ledger must end as each scenario expects, and be
-  the rebuild of the journal its writes went through.
+  the rebuild of the journal its writes went through. Task and outreach ids are minted, so a
+  scenario names them by the order they were made: $OUT1, $OUT2 ... and $TASK1 ..., set for the
+  commands after the one that made them, and filled in the expected output and items.
 - interactions.json: the catalog of interaction patterns, with counts; every pattern points at
   the replay scenarios or guard commands that cover it.
 """
@@ -18,6 +20,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import string
 import subprocess
 import sys
 import tempfile
@@ -47,6 +50,9 @@ def load(name: str) -> Any:
 REAL_COMMANDS = {row["id"]: row["command"] for row in load("orchestrator_commands.json")}
 # Replayed commands must not reach GitHub, tmux or Claude (send only logs, under dry run).
 OUTSIDE_WORLD = re.compile(r"(?m)(?:^|[;&|(]\s*|\bdo\s+)(?:gh|tmux|claude|git)\s")
+# What reach-out and spawn print when they make an item: its minted id.
+MADE = re.compile(r"(?m)^created: (?P<id>(?P<kind>out|task):\S+) \[")
+MADE_NAMES = {"out": "OUT", "task": "TASK"}
 
 
 def guard_decision(command: str) -> str:
@@ -93,9 +99,21 @@ class Scratch:
             "BOSUN_SEND_DRY_RUN": "1",
             "BOSUN_REPO_MASK": "acme/*",
         }
+        self.made: dict[str, str] = {}  # $OUT1, $TASK1 ...: the ids made, in order
+
+    def note_made(self, output: str) -> None:
+        """Each outreach or task <output> says was made, as $OUT<n> or $TASK<n>."""
+        for found in MADE.finditer(output):
+            name = MADE_NAMES[found["kind"]]
+            self.made[f"{name}{sum(key.startswith(name) for key in self.made) + 1}"] = found["id"]
+        self.env.update(self.made)
+
+    def fill(self, text: str) -> str:
+        """<text> with the ids it names as $OUT1, ${TASK1} ... filled in."""
+        return string.Template(text).safe_substitute(self.made)
 
     def run(self, command: str) -> subprocess.CompletedProcess[str]:
-        return subprocess.run(
+        done = subprocess.run(
             ["bash", "-c", command],
             env=self.env,
             capture_output=True,
@@ -104,6 +122,8 @@ class Scratch:
             check=False,
             stdin=subprocess.DEVNULL,
         )
+        self.note_made(done.stdout)
+        return done
 
     def item(self, item_id: str) -> dict[str, Any]:
         shown = self.run(f"bosun ledger show '{item_id}'")
@@ -140,7 +160,7 @@ class ReplayTest(unittest.TestCase):
         for number, step in enumerate(scenario["steps"], 1):
             self.replay_step(f"step {number} ({step.get('why', '')})", step, scratch)
         for item_id, expected in scenario["expect"].items():
-            self.check_item(item_id, expected, scratch.item(item_id))
+            self.check_item(scratch.fill(item_id), expected, scratch.item(scratch.fill(item_id)))
         self.check_journal(Path(scratch.env["BOSUN_STATE_DIR"]))
 
     def check_journal(self, state: Path) -> None:
@@ -166,9 +186,9 @@ class ReplayTest(unittest.TestCase):
         output = done.stdout + done.stderr
         self.assertEqual(done.returncode, step.get("rc", 0), f"{label}: exit status; output:\n{output}")
         for text in step.get("out", []):
-            self.assertIn(text, output, f"{label}: output")
+            self.assertIn(scratch.fill(text), output, f"{label}: output")
         for text in step.get("not_out", []):
-            self.assertNotIn(text, output, f"{label}: output")
+            self.assertNotIn(scratch.fill(text), output, f"{label}: output")
 
     def check_item(self, item_id: str, expected: dict[str, Any], item: dict[str, Any]) -> None:
         for key, value in expected.items():

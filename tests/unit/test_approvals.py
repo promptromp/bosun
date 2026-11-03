@@ -22,6 +22,7 @@ import approvals
 import claude_state
 import guard
 import ledger
+import minted
 
 
 PR = "mypr:acme/exporter#102"
@@ -37,13 +38,12 @@ SEND = "mcp__plugin_slack_slack__slack_send_message"
 TEXT = f"<@{REVIEWER}> could you take another look at {PR_URL}? Fixed the footer."
 TOUCH = "touch /tmp/acme-approved.txt"
 QUOTE = "1 and 3 yes"
-REVIEW_REQUEST = f"out:{PR}/1"
 SENT_REF = f"https://acme.slack.com/archives/{CHANNEL}/p1700000100000100"
 
 
 def run(*argv: str) -> Any:
-    args = ledger.build_parser().parse_args(list(argv))
-    return args.func(args)
+    """A ledger command; it remembers the outreach it made (minted.made)."""
+    return minted.run(*argv)
 
 
 def stamp(moment: datetime) -> str:
@@ -80,6 +80,7 @@ class ApprovalsTestCase(unittest.TestCase):
         self.addCleanup(self.tmp.cleanup)
         self.state = Path(self.tmp.name) / "state"
         ledger.configure(self.state)
+        minted.forget()
         self.transcript = Path(self.tmp.name) / "session.jsonl"
         self.transcript.write_text("")
         run("upsert", PR, "--kind", "my-pr", "--title", "VAT breakdown", "--url", PR_URL)
@@ -90,6 +91,11 @@ class ApprovalsTestCase(unittest.TestCase):
             # touch stands in for an outward command (the headless check does the same)
             "BOSUN_APPROVALS_GATED_COMMANDS": "touch, acme-deploy run",
         }
+
+    @property
+    def review_request_id(self) -> str:
+        """The first outreach this test made for PR (a review request, in the standing tests)."""
+        return minted.made(PR)
 
     def say(self, *entries: dict[str, Any]) -> None:
         with self.transcript.open("a") as fh:
@@ -430,7 +436,7 @@ class StandingTestCase(ApprovalsTestCase):
         run("reach-out", PR, "--to", "Dana", "--subject", "re-review", "--purpose", purpose)
         run(
             "propose",
-            REVIEW_REQUEST,
+            self.review_request_id,
             "--send",
             "slack",
             "--channel",
@@ -517,10 +523,10 @@ class PrReviewTrafficTest(StandingTestCase):
         call = self.review_request()
         self.assertIsNone(self.denial(call))
         self.assertTrue(self.allowed(call))
-        self.assertEqual(self.item(REVIEW_REQUEST)["history"][-1]["event"], ledger.AUTO_APPROVED)
+        self.assertEqual(self.item(self.review_request_id)["history"][-1]["event"], ledger.AUTO_APPROVED)
         self.assertIn("pr-review-traffic", run("approvals", "--auto"))
         self.assertFalse(self.allowed(call))  # once
-        run("sent", REVIEW_REQUEST, "--ref", SENT_REF)
+        run("sent", self.review_request_id, "--ref", SENT_REF)
 
     def test_a_re_review_after_a_reported_fix_is_allowed(self) -> None:
         self.hand_over_and_report()

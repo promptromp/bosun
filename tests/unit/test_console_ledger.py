@@ -27,10 +27,10 @@ from console_ledger import Query
 FIXTURE = Path(__file__).resolve().parents[1] / "fixtures" / "console" / "acme-ledger.json"
 DATA: dict[str, Any] = json.loads(FIXTURE.read_text())
 NOW = datetime(2026, 10, 20, 18, 0, tzinfo=UTC)
-TASK = "task:2026-10-20/1"
-DUPLICATE = "task:2026-10-20/2"
-FOLDED = "task:2026-10-20/3"
-RELEASE = "task:2026-10-20/4"
+TASK = "task:2026-10-20/veembc"
+DUPLICATE = "task:2026-10-20/exnxww"
+FOLDED = "task:2026-10-20/znde55"
+RELEASE = "task:2026-10-20/a3zm64"
 MENTION = "slack:C0000000001/1700000001.000001"
 DISMISSED = "slack:C0000000003/1700000003.000003"
 SCRIPT_URL = "slack:C0000000004/1700000004.000004"
@@ -42,10 +42,10 @@ TD = "td:000000001"
 LEARN = "learn:2026-10-20/1"
 JIRA = "jira:EXP-12"
 ISSUE = "ghissue:acme/exporter#7"
-ASKED_DANA = f"out:{TASK}/1"
-ASK_MARCO = f"out:{PR_102}/1"
-ASKED_LENA = "out:2026-10-20/1"
-FYI = "out:2026-10-20/2"
+ASKED_DANA = f"out:{TASK}/q0kge7"
+ASK_MARCO = f"out:{PR_102}/3rgjxw"
+ASKED_LENA = "out:2026-10-20/kqz53j"
+FYI = "out:2026-10-20/5dc2y3"
 T0 = "2026-10-01T09:00:00+00:00"
 
 
@@ -410,7 +410,7 @@ class ItemPageTestCase(unittest.TestCase):
         self.assertEqual((tree[0]["id"], tree[0]["missing"]), ("slack:C0/1.0", True))
 
     def test_hints(self) -> None:
-        self.assertTrue(any("propose closing task:2026-10-20/1" in hint for hint in item(TASK)["hints"]))
+        self.assertTrue(any("propose closing task:2026-10-20/veembc" in hint for hint in item(TASK)["hints"]))
         self.assertTrue(any("in-review" in hint for hint in item(ISSUE)["hints"]))
         self.assertEqual(item(TD)["hints"], [])
 
