@@ -249,6 +249,7 @@ import repo_mask
 import tickets
 import workstreams
 import ws_summary
+from ledger_changes import MAX_HISTORY as MAX_HISTORY, trim_history as trim_history  # noqa: PLC0414 re-exported
 from lineage import Index, LineageError, Link
 from tickets import TicketError
 from workstreams import WorkstreamError
@@ -261,8 +262,6 @@ CHECKIN_OVERLAP = timedelta(minutes=15)
 DEFAULT_LOOKBACK_HOURS = 24.0
 DEFAULT_MAX_LOOKBACK_HOURS = 96.0
 SCAN_RUNS = ("check-in", "morning")
-# History per item: the first entry, a trim marker and the newest entries beyond this.
-MAX_HISTORY = 200
 # Report fields are one line each; detail belongs in the PR, the review or a report file.
 MAX_SUMMARY_LENGTH = 500
 MAX_RESULT_LENGTH = 300
@@ -819,18 +818,6 @@ def record(item: Item, event: str, note: str = "", **extra: object) -> None:
     item["history"].append(entry)
     trim_history(item)
     item["updated_at"] = entry["at"]
-
-
-def trim_history(item: Item) -> None:
-    """Keep at most MAX_HISTORY entries: the first ("created"), a marker counting what was
-    dropped, and the newest ones."""
-    history = item["history"]
-    if len(history) <= MAX_HISTORY:
-        return
-    marker = history[1] if history[1].get("event") == "history-trimmed" else None
-    keep = history[-(MAX_HISTORY - 2) :]
-    dropped = len(history) - 1 - (1 if marker else 0) - len(keep) + int(marker["count"] if marker else 0)
-    item["history"] = [history[0], {"at": keep[0]["at"], "event": "history-trimmed", "count": dropped}, *keep]
 
 
 def escape_state(kind: str) -> str:
