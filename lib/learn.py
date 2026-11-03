@@ -1011,11 +1011,17 @@ def pending_item(learn_id: str) -> dict[str, Any]:
 def pending_change(
     learn_id: str, known: Mapping[str, Any] | None, windows: list[Window], orchestrator: str
 ) -> dict[str, Any]:
-    """The change a pending learn: item holds, if it is what learn proposed: the item's fields and
-    its proposal can be edited, so the digests of its change and of its action must equal what
-    learn's state recorded for the finding (<known>) when it proposed it. A memory note's folder
+    """The change a pending learn: item holds, if it is what learn proposed and still has open: the
+    item's fields and its proposal can be edited, and a closed item brought back through the
+    ledger, so the finding (<known>) must still be proposed, and the digests of the item's change
+    and of its action must equal what learn's state recorded when it proposed it. A memory note's folder
     is found from its window here, on this Mac; a window that is gone leaves no folder."""
     item = pending_item(learn_id)
+    status = (known or {}).get("status")
+    if status != "proposed":
+        raise LearnError(
+            f"{learn_id}: learn has no open proposal for it (its finding is {status}); reject it"
+        )
     change = change_of(item)
     now_holds = recorded(change, str(item["proposal"]["action"]))
     if not known or any(known.get(name) != now_holds[name] for name in RECORDED):

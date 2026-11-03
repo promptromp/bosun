@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import re
+import shutil
 import sys
 import tempfile
 import unittest
@@ -511,7 +512,15 @@ class MigrateTest(LineageTestCase):
         # An older drop, from before drops recorded links: only the note names the item.
         data = json.loads(ledger.STORE.ledger_file.read_text())
         data["items"][made(PR, 2)]["history"][-1]["note"] = f"merged into {made(PR)}"
+        self.as_before_journals(data)
+
+    def as_before_journals(self, data: dict[str, Any]) -> None:
+        """<data> as an older bosun left ledger.json, before journals: the next write puts it in
+        the journal whole. (An edit of a ledger already in the journal is adopted instead, and a
+        history entry edited in place is then added again: history only grows.)"""
+        data.pop("journal", None)
         ledger.STORE.ledger_file.write_text(json.dumps(data))
+        shutil.rmtree(ledger.STORE.journal_dir)
 
     def test_dry_run_changes_nothing(self) -> None:
         before = ledger.STORE.ledger_file.read_text()
@@ -545,7 +554,7 @@ class MigrateTest(LineageTestCase):
         data = json.loads(ledger.STORE.ledger_file.read_text())
         transition = next(h for h in data["items"][made(TASKS, 2)]["history"] if h["event"] == "transition")
         transition["note"] = f"merged into {made(TASKS)}"
-        ledger.STORE.ledger_file.write_text(json.dumps(data))
+        self.as_before_journals(data)
         before = ledger.STORE.ledger_file.read_text()
         self.assertIn(
             f"{made(TASKS, 2)}: 'merged into' note: duplicate_of {made(TASKS)} -> folded_into {made(TASKS)}",

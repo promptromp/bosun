@@ -340,7 +340,8 @@ check "a corrupt ledger is refused and points at the backup" fails_with "restore
 cp "$WORK/ledger.good" "$BOSUN_STATE_DIR/ledger.json"
 check "prune drops finished items" contains "$(L prune --days 0)" "pruned 2 item(s)"
 # journal_rebuilds <state dir>: ledger.json is the rebuild of its journal (docs/design/sync.md),
-# with no conflict, at the journal's position, and each journal file is numbered 1..n with no gap.
+# with no conflict, at the journal's position with the digest of what it holds, and each journal
+# file is numbered 1..n with no gap.
 journal_rebuilds() {
   python3 - "$ROOT/lib" "$1" <<'EOF'
 import fcntl, json, sys
@@ -359,7 +360,8 @@ seqs = {}
 for change in changes:
     seqs.setdefault("local" if change.get("local") else change["replica"], []).append(change["seq"])
 problems = [
-    *(["ledger.json is not at the journal's position"] if saved.get("journal") != position else []),
+    *(["ledger.json is not at the journal's position"] if ledger.saved_position(saved) != position else []),
+    *([] if saved["journal"].get(ledger.DIGEST) == ledger_changes.state_hash(saved) else ["ledger.json's digest is wrong"]),
     *(f"conflict: {conflict}" for conflict in result.conflicts),
     *([] if ledger_changes.state_hash(result.ledger) == ledger_changes.state_hash(saved) else ["the rebuild differs from ledger.json"]),
     *(f"{name}: seq {sorted(found)} has a gap" for name, found in seqs.items() if sorted(found) != list(range(1, len(found) + 1))),

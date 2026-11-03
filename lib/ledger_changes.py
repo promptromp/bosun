@@ -43,12 +43,12 @@ import hashlib
 import heapq
 import json
 from collections import Counter
-from collections.abc import Callable, Iterable, Mapping
+from collections.abc import Callable, Iterable, Iterator, Mapping
 from dataclasses import dataclass, field
 from itertools import chain
 from typing import Any
 
-from change_log import Change, Conflict, Edit, canonical, in_order
+from change_log import Change, Conflict, Edit, canonical, in_order, unencodable
 from lineage import Items, Link
 
 
@@ -296,13 +296,19 @@ def _split_history(history: list[Any]) -> tuple[list[Any], list[Any]]:
     return history[:first], history[first:]
 
 
+def _key(entry: Any) -> str:
+    """An entry as the text of its canonical bytes, to compare entries by: never refused, so that
+    diff names a value the journal cannot hold (a float) instead of failing on it."""
+    return _text(entry)
+
+
 def _history_added(before: list[Any], after: list[Any]) -> list[Any]:
-    """The entries of <after> that <before> lacks, in order (as canonical bytes, counting repeats).
+    """The entries of <after> that <before> lacks, in order (as canonical text, counting repeats).
     Entries that went (trimmed) do not count, and a trim marker is never an entry."""
-    left = Counter(canonical(entry) for entry in before)
+    left = Counter(_key(entry) for entry in before)
     added = []
     for entry in after:
-        key = canonical(entry)
+        key = _key(entry)
         if left[key]:
             left[key] -= 1
         elif not (isinstance(entry, dict) and entry.get("event") == TRIMMED):
@@ -314,16 +320,16 @@ def _history_added(before: list[Any], after: list[Any]) -> list[Any]:
 
 
 def drop_entry(entries: list[Any], entry: Any) -> bool:
-    """Remove the first entry equal to <entry> (as canonical bytes); False if there is none."""
-    key = canonical(entry)
+    """Remove the first entry equal to <entry> (as canonical text); False if there is none."""
+    key = _key(entry)
     for index, candidate in enumerate(entries):
-        if canonical(candidate) == key:
+        if _key(candidate) == key:
             del entries[index]
             return True
     return False
 
 
-def _kept_start(before: list[bytes], after: list[bytes]) -> set[int]:
+def _kept_start(before: list[str], after: list[str]) -> set[int]:
     """The positions in <before> of the longest start of <after> that <before> holds in order."""
     kept: set[int] = set()
     position = 0
@@ -341,7 +347,7 @@ def list_edits(before: list[Any], after: list[Any]) -> tuple[list[Any], list[Any
     """The entries to drop from <before>, one drop_entry each, then the entries to append, that
     give <after>. The longest start of <after> that <before> holds in order stays; where repeated
     entries would come back in another order, everything is dropped and appended again."""
-    old, new = [canonical(entry) for entry in before], [canonical(entry) for entry in after]
+    old, new = [_key(entry) for entry in before], [_key(entry) for entry in after]
     kept = _kept_start(old, new)
     remaining = list(old)
     for index in range(len(old)):
@@ -599,7 +605,9 @@ def diff(before: Ledger, after: Ledger) -> list[Edit]:
 # The empty ledger a rebuild starts from (never changed: the rebuild works on a copy). A first
 # write's genesis is diff(EMPTY, ledger).
 EMPTY: Ledger = {"version": 1, "items": {}, "sources": {}, "runs": {}, SAID: []}
-JOURNAL = "journal"  # the file's journal position: never compared, hashed or rebuilt
+# The file's own: the journal position it reflects, and the digest of the rest (ledger.stamp).
+# Never compared, hashed or rebuilt.
+JOURNAL = "journal"
 # Conflict kinds (change_log.Conflict).
 STATE_CONFLICT, LINK_CONFLICT, FIELD_CONFLICT = "state", "link", "field"
 DELETED, MISSING, UNKNOWN = "deleted", "missing", "unknown"
@@ -972,8 +980,50 @@ def rebuild(changes: Iterable[Change], rules: Rules) -> Rebuilt:
 
 
 def state_hash(ledger: Ledger) -> str:
-    """SHA-256 (hex) of the ledger's canonical bytes without its journal position: two Macs that
-    read the same changes have the same."""
+    """SHA-256 (hex) of the ledger's canonical bytes without its journal key: two Macs that read
+    the same changes have the same, and ledger.json records it as the digest of what it holds."""
     return hashlib.sha256(
         canonical({key: value for key, value in ledger.items() if key != JOURNAL})
     ).hexdigest()
+
+
+# ---- what the journal cannot hold -------------------------------------------------------------
+
+# The keys of an edit's body that hold the ledger's own values (an item, a field's value and the
+# value before, a list's entry); below them a place is the ledger's path. A link's or a state
+# change's body is the link or the move itself.
+_HELD = ("item", "value", "prev", "entry")
+_OWN_PLACE = {"item.link": "links", "item.unlink": "links", "item.state": "state"}
+
+
+def where(target: str, path: Iterable[str]) -> str:
+    """A place as a person finds it: the item (or sources, runs, said), then the field path."""
+    below = ".".join(path)
+    return f"{target} {below}" if below else target
+
+
+def ledger_place(path: Path) -> str:
+    """where() for a full path in the ledger (("items", <id>, "fields", "x"), ("sources", <key>))."""
+    head = path[:2] if path[:1] == ("items",) else path[:1]
+    return where(head[-1] if head else "", path[len(head) :])
+
+
+def place(edit: Edit, inner: Path) -> str:
+    """where() for <inner>, a place inside <edit>'s body."""
+    head, below = inner[0], list(inner[1:])
+    if head == "item":
+        path = below
+    elif head in _HELD:
+        start = edit.body.get("path") or ([edit.body["key"]] if "key" in edit.body else [])
+        path = [*map(str, start), *below]
+    else:
+        path = [*([_OWN_PLACE[edit.op]] if edit.op in _OWN_PLACE else []), *inner]
+    return where(edit.target, path)
+
+
+def unencodable_edits(edits: Iterable[Edit]) -> Iterator[tuple[str, str]]:
+    """Each value in <edits> that the journal cannot hold (change_log.unencodable: a float, text
+    that is not valid Unicode), with its place in the ledger."""
+    for edit in edits:
+        for found in unencodable(edit.body):
+            yield place(edit, found.place), found.what

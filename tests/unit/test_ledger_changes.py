@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import copy
 import dataclasses
+import hashlib
 import json
 import random
 import sys
@@ -1212,6 +1213,45 @@ class TestRules(unittest.TestCase):
         self.assertIn("no item", missing or "")
         itself = ledger.RULES.link_problem(items, lineage.Link(TASK, SPAWNED_FROM, TASK))
         self.assertIn("itself", itself or "")
+
+    def test_the_rules_the_rebuild_checks_are_pinned_to_their_version(self) -> None:
+        """Every change records the rules version it was checked under, and the rebuild checks a
+        replica's past again under today's rules. A change to them (a transition, a relation, a
+        workstream rule) fails here: if it removes a move or tightens a rule, old changes would
+        rebuild differently, so bump ledger.RULES_VERSION (docs/design/sync.md, open questions);
+        either way record the new digest under that version."""
+        self.assertEqual(RULES_DIGESTS.get(ledger.RULES_VERSION), rules_digest())
+
+
+# The digest of the rules the rebuild checks (rules_digest; a digest, not a secret), by ledger.RULES_VERSION.
+RULES_DIGESTS = {
+    1: "3c97e34ee9c09d45245e72df19f64b8bc3cb67b15af90a5ebad7abe9690f6256",  # pragma: allowlist secret
+}
+
+
+def rules_digest() -> str:
+    """SHA-256 of the rule tables the rebuild's checks read (ledger.RULES): each kind's moves and
+    escape state, and lineage's relations and the kinds and depth its link rules use."""
+    kinds = {
+        name: {
+            "escape": ledger.escape_state(name),
+            "transitions": {state: sorted(targets) for state, targets in spec["transitions"].items()},
+        }
+        for name, spec in ledger.KINDS.items()
+    }
+    relations = {
+        name: {"family": relation.family, "inverse": relation.inverse}
+        for name, relation in lineage.RELATIONS.items()
+    }
+    link_rules = {
+        "max_workstream_depth": lineage.MAX_WORKSTREAM_DEPTH,
+        "ticket_kind": lineage.TICKET_KIND,
+        "tracks": lineage.TRACKS,
+        "workstream_kind": lineage.WORKSTREAM_KIND,
+        "workstream_relations": list(lineage.WORKSTREAM_RELATIONS),
+    }
+    table = {"kinds": kinds, "link_rules": link_rules, "relations": relations}
+    return hashlib.sha256(canonical(table)).hexdigest()
 
 
 WINDOW = "exporter"

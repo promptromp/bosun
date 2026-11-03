@@ -42,9 +42,9 @@ class TestCanonical(unittest.TestCase):
         self.assertEqual(
             list(change_log.unencodable(record)),
             [
-                (("a", "1"), "a float (2.5)"),
-                (("a", "2", "b\udcff"), "a key that is not valid Unicode ('b\\udcff')"),
-                (("a", "2", "c"), "text that is not valid Unicode ('x\\ud800')"),
+                (("a", "1"), "a float (2.5)", "2.5"),
+                (("a", "2", "b\udcff"), "a key that is not valid Unicode ('b\\udcff')", "b\ufffd"),
+                (("a", "2", "c"), "text that is not valid Unicode ('x\\ud800')", "x\ufffd"),
             ],
         )
         self.assertEqual(list(change_log.unencodable({"a": [1, "é", None, {"b": False}]})), [])

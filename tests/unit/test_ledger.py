@@ -508,7 +508,7 @@ class ValidateTest(LedgerTestCase):
 
     def test_validate_journal_reports_a_journal_behind_the_file(self) -> None:
         data = self.data()
-        stem = next(iter(data["journal"]))
+        stem = next(iter(ledger.saved_position(data)))
         data["journal"][stem] += 5
         ledger.STORE.ledger_file.write_text(json.dumps(data))
         found = json.loads(run("validate", "--journal", "--json")[0])
@@ -525,6 +525,34 @@ class ValidateTest(LedgerTestCase):
         output, code = run("validate", "--journal", "--json")
         self.assertEqual(code, 0)
         self.assertEqual([f["kind"] for f in json.loads(output)], ["note"])
+
+    def test_validate_reports_a_link_that_is_not_one_as_damage(self) -> None:
+        """A stored link without its relation or other end (written by hand): a finding of its
+        own, and the other items' links are still checked (a cycle check walks them all)."""
+        run("upsert", MENTION_ID, "--kind", "mention")
+        data = self.data()
+        data["items"][REVIEW_ID]["links"] = [{"rel": "relates_to"}, "nonsense"]
+        data["items"][MENTION_ID]["links"] = [{"rel": "blocked_by", "id": REVIEW_ID, "at": "2026-11-01"}]
+        ledger.STORE.ledger_file.write_text(json.dumps(data))
+        output, code = run("validate", "--json")
+        self.assertEqual(code, 1)
+        found = json.loads(output)
+        self.assertEqual(
+            [(f["kind"], f["item"], f["path"]) for f in found], [("link", REVIEW_ID, "links")] * 2
+        )
+        self.assertIn("not a link", found[0]["detail"])
+
+    def test_validate_journal_says_a_hand_edit_is_not_in_the_journal_yet(self) -> None:
+        data = self.data()
+        data["items"][REVIEW_ID]["title"] = "edited by hand"
+        ledger.STORE.ledger_file.write_text(json.dumps(data))
+        output, code = run("validate", "--journal")
+        self.assertEqual(code, 1)
+        self.assertIn("changed outside its journal", output)
+        self.assertIn("the next write adopts it", output)
+        with unittest.mock.patch("sys.stderr", io.StringIO()):
+            run("note", REVIEW_ID, "next")
+        self.assertEqual(run("validate", "--journal"), ("ledger is valid", 0))
 
     def test_validate_journal_json_names_the_item_and_path(self) -> None:
         def edit(items: dict[str, Any]) -> None:

@@ -369,6 +369,19 @@ class ApplyTest(LearnCase):
         self.assertIn("reject it", out)
         self.assertFalse((self.world.config / "policy.md").exists())
 
+    def test_a_rejected_item_revived_through_the_ledger_is_refused(self) -> None:
+        """learn applies only a finding it has open: one I rejected, brought back to proposed with
+        its very proposal through the ledger, is not applied."""
+        [learn_id] = self.proposed(STALL)
+        action = self.items()[learn_id]["proposal"]["action"]
+        self.assertEqual(self.main("reject", learn_id, "--note", "not now")[0], 0)
+        learn.ledger_call("transition", learn_id, "proposed", "--note", "brought back")
+        learn.ledger_call("propose", learn_id, action)
+        code, out = self.main("apply", learn_id)
+        self.assertEqual(code, 1, out)
+        self.assertIn("rejected", out)
+        self.assertFalse((self.world.config / "policy.md").exists())
+
     def test_a_colliding_learn_id_is_dropped_and_the_run_goes_on(self) -> None:
         taken = "learn:2026-10-21/7k2m9q"
         learn.ledger_call("upsert", taken, "--kind", "learning", "--title", "Other", "--field", "key=other")

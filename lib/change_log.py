@@ -16,7 +16,7 @@ import json
 import re
 from collections.abc import Iterable, Iterator, Mapping
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, NamedTuple
 
 
 ENVELOPE_VERSION = 1
@@ -98,21 +98,31 @@ def canonical(record: Mapping[str, Any]) -> bytes:
         raise ChangeLogError(f"a change holds text that is not valid Unicode (near {around!r})") from exc
 
 
-def unencodable(value: Any, place: Place = ()) -> Iterator[tuple[Place, str]]:
-    """Each place in <value> that canonical bytes cannot hold, in order, with what is there: a
-    float, or text (a value or a key) with a lone surrogate."""
+class Unencodable(NamedTuple):
+    """A value canonical bytes cannot hold: where it is, what it is, and what encodable() makes
+    of it."""
+
+    place: Place
+    what: str
+    made: Any
+
+
+def unencodable(value: Any, place: Place = ()) -> Iterator[Unencodable]:
+    """Each value in <value> that canonical bytes cannot hold, in order: a float, or text (a value
+    or a key) with a lone surrogate."""
     if isinstance(value, Mapping):
         for key, item in value.items():
             if isinstance(key, str) and _SURROGATE.search(key):
-                yield (*place, key), f"a key that is not valid Unicode ({_shown(key)})"
+                made = encodable(key)
+                yield Unencodable((*place, key), f"a key that is not valid Unicode ({_shown(key)})", made)
             yield from unencodable(item, (*place, str(key)))
     elif isinstance(value, (list, tuple)):
         for index, item in enumerate(value):
             yield from unencodable(item, (*place, str(index)))
     elif isinstance(value, float):
-        yield place, f"a float ({value!r})"
+        yield Unencodable(place, f"a float ({value!r})", encodable(value))
     elif isinstance(value, str) and _SURROGATE.search(value):
-        yield place, f"text that is not valid Unicode ({_shown(value)})"
+        yield Unencodable(place, f"text that is not valid Unicode ({_shown(value)})", encodable(value))
 
 
 def encodable(value: Any) -> Any:

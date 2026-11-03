@@ -259,7 +259,8 @@ sys.path.insert(0, sys.argv[1])
 from journal import Journal
 journal, root = Journal(Path(sys.argv[2]), "ledger", "", 0), Path(sys.argv[2])
 cut_line = any(path.read_bytes()[-1:] not in (b"", b"\n") for path in root.glob("*.jsonl"))
-saved = json.loads(Path(sys.argv[3]).read_text()).get("journal") or {}
+journal_key = json.loads(Path(sys.argv[3]).read_text()).get("journal") or {}
+saved = {stem: seq for stem, seq in journal_key.items() if isinstance(seq, int)}  # the position, not the digest
 if cut_line or journal.written() != journal.position():
     print("torn")
 else:

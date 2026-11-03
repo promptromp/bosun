@@ -260,8 +260,8 @@ import repo_mask
 import tickets
 import workstreams
 import ws_summary
-from change_log import ChangeLogError, Edit
-from journal import Journal, JournalError, Transaction, replica_id
+from change_log import ChangeLogError, Edit, encodable, unencodable
+from journal import REPLICA_FILE, Journal, JournalError, Transaction, flush_to_disk, replica_id
 from ledger_changes import MAX_HISTORY as MAX_HISTORY, trim_history as trim_history  # noqa: PLC0414 re-exported
 from lineage import Index, LineageError, Link
 from tickets import TicketError
@@ -332,10 +332,14 @@ Ledger = dict[str, Any]
 # The journal every write goes through (lib/journal.py, docs/design/sync.md): the ledger's stream;
 # the version of the rules its changes are checked against when rebuilt (RULES: KINDS' transitions
 # and lineage's link rules), bumped by hand when a change to them would rebuild old changes
-# differently; and the command of the transaction that puts a ledger from before journals in it.
+# differently (a test pins their digest to it); the commands of the transactions that put a ledger
+# from before journals in it, and a change made to ledger.json outside the journal; and the key,
+# in ledger.json's journal key, of the digest of what the file holds.
 LEDGER_STREAM = "ledger"
 RULES_VERSION = 1
 GENESIS = "genesis"
+ADOPT = "adopt"
+DIGEST = "digest"
 
 
 @dataclass(frozen=True)
@@ -796,8 +800,10 @@ _WRITING: list[Transaction] = []
 
 def replica() -> str:
     """This Mac's replica id, as the ledger's journal uses it: made under the ledger's lock when
-    there is none yet, so a first write running at the same time cannot make another."""
-    with store_lock(fcntl.LOCK_EX):
+    there is none yet, so a first write running at the same time cannot make another. Never call
+    it under locked_ledger: it takes the lock on a descriptor of its own, and flock is per open
+    file, so it would wait for itself."""
+    with store_lock(fcntl.LOCK_EX), journal_errors():
         return replica_id(STORE.state_dir)
 
 
@@ -813,6 +819,16 @@ def open_journal(replica: str = "") -> Journal:
     return Journal(STORE.journal_dir, LEDGER_STREAM, replica, RULES_VERSION)
 
 
+def start_again() -> str:
+    """How to go on when the journal cannot be used: ledger.json is whole, so a new journal can
+    start from it. Under a new replica, so that no id is minted twice from the same seq."""
+    replica_file = STORE.state_dir / REPLICA_FILE
+    return (
+        f"move the folder {STORE.journal_dir} and the file {replica_file} aside together (keep "
+        "them): the next write starts a new journal from ledger.json, as a new replica"
+    )
+
+
 @contextlib.contextmanager
 def journal_errors() -> Iterator[None]:
     """A journal that cannot be read, or a change it refuses, as a LedgerError: nothing written."""
@@ -820,8 +836,8 @@ def journal_errors() -> Iterator[None]:
         yield
     except JournalError as exc:
         raise LedgerError(
-            f"the ledger's journal in {STORE.journal_dir} is damaged: {exc}. Nothing was written; "
-            "move that line aside (keep a copy) and run the command again"
+            f"the ledger's journal in {STORE.journal_dir} is damaged: {exc}. Nothing was written. "
+            f"To go on from ledger.json as it is, {start_again()}"
         ) from exc
     except ChangeLogError as exc:
         raise LedgerError(f"nothing was written: {exc}") from exc
@@ -854,15 +870,23 @@ def refuse_if_behind(journal_has: Mapping[str, int], ledger: Ledger) -> None:
     if gaps:
         raise LedgerError(
             f"the ledger's journal in {STORE.journal_dir} is behind ledger.json ({'; '.join(gaps)}), "
-            "so it cannot rebuild it. Nothing was written. If journal files were lost, move the "
-            f"folder {STORE.journal_dir} aside: the next write starts the journal again from ledger.json"
+            f"so it cannot rebuild it. Nothing was written. If journal files were lost, {start_again()}"
         )
 
 
-def rebuilt(journal: Journal, position: dict[str, int]) -> Ledger:
+def rebuilt(journal: Journal, position: dict[str, int], *, writing: bool = False) -> Ledger:
     """The journal's rebuild at <position>, its keys in order as a saved ledger.json loads them
-    (commands and `render` list items in that order)."""
-    found = ledger_changes.rebuild(journal.changes(), RULES).ledger
+    (commands and `render` list items in that order). A write that rebuilds, and so saves the
+    rebuild, says on stderr how many changes it kept but could not apply (with one Mac, each is a
+    bug or damage)."""
+    result = ledger_changes.rebuild(journal.changes(), RULES)
+    if writing and result.conflicts:
+        print(
+            f"ledger: the journal's rebuild has {len(result.conflicts)} conflict(s), changes it keeps but "
+            "cannot apply; bosun ledger validate --journal lists them",
+            file=sys.stderr,
+        )
+    found = result.ledger
     found[ledger_changes.JOURNAL] = position
     ordered: Ledger = json.loads(json.dumps(found, sort_keys=True))
     return ordered
@@ -899,29 +923,107 @@ def for_reading() -> Ledger:
         return ledger
 
 
+def refuse_unencodable(edits: Iterable[Edit]) -> None:
+    """The write boundary: a change that holds what the journal cannot (a float, text that is not
+    valid Unicode) is refused before anything is journaled, naming the item and the field."""
+    found = next(ledger_changes.unencodable_edits(edits), None)
+    if found:
+        place, what = found
+        raise LedgerError(
+            f"nothing was written: {place} holds {what}, which the journal cannot hold "
+            "(it keeps whole numbers and text in UTF-8)"
+        )
+
+
 def commit_edits(transaction: Transaction, edits: Iterable[Edit]) -> None:
+    """<edits> as one transaction, refused whole if one holds what the journal cannot."""
+    edits = list(edits)
+    refuse_unencodable(edits)
     for edit in edits:
         transaction.add(edit.op, edit.target, edit.body, local=edit.local)
     transaction.commit()
 
 
-def genesis(journal: Journal, ledger: Ledger) -> None:
+def journal_ready(ledger: Ledger, source: str) -> Ledger:
+    """<ledger>, written outside the journal (genesis, adopt), as the journal can hold it: what the
+    old ledger took and the journal cannot is converted once, a float to its text and a lone
+    surrogate to U+FFFD, each with a note on stderr. A write's own changes are refused instead
+    (refuse_unencodable). Converted, a tool call's argument no longer matches its approval: that
+    fails closed."""
+    found = list(unencodable(ledger))
+    for place, what, made in found:
+        print(
+            f"ledger: {ledger_changes.ledger_place(place)}: {what} in {source}, which the journal "
+            f"cannot hold; it is {made!r} from now on",
+            file=sys.stderr,
+        )
+    converted: Ledger = encodable(ledger) if found else ledger
+    return converted
+
+
+def stamp(ledger: Ledger, position: Mapping[str, int]) -> None:
+    """Record in ledger.json the journal position it reflects and the digest of what it holds, so
+    that a change made to the file outside the journal shows (edited_outside)."""
+    ledger[ledger_changes.JOURNAL] = {**position, DIGEST: ledger_changes.state_hash(ledger)}
+
+
+def edited_outside(ledger: Ledger) -> bool:
+    """Whether ledger.json was changed since a write saved it (by hand, or by a bosun that does not
+    journal and writes the journal key back as it found it): what it holds no longer has the
+    digest that write recorded, or holds what the journal cannot. A file saved before digests is
+    trusted, and gets one when it is saved next."""
+    value = ledger.get(ledger_changes.JOURNAL)
+    recorded = value.get(DIGEST) if isinstance(value, dict) else None
+    try:
+        held = ledger_changes.state_hash(ledger)
+    except ChangeLogError:
+        return True
+    return isinstance(recorded, str) and held != recorded
+
+
+def adopted_base(journal: Journal, file: Ledger) -> Ledger:
+    """What ledger.json held when a write last saved it, as the journal has it: the rebuild at the
+    file's position, with what was adopted from the file since (by a write cut short after it)."""
+    adopted = [change for change in journal.changes() if change.get("cmd") == ADOPT]
+    return ledger_changes.rebuild([*journal.changes(saved_position(file)), *adopted], RULES).ledger
+
+
+def adopt(journal: Journal, file: Ledger) -> bool:
+    """Put in the journal what was changed in ledger.json outside it, as one transaction ("adopt"):
+    the diff from what the file held when it was saved to what it holds now. Whether there was
+    anything to adopt (a write cut short may have adopted it already)."""
+    edits = ledger_changes.diff(adopted_base(journal, file), journal_ready(file, "ledger.json"))
+    if not edits:
+        return False
+    commit_edits(journal.begin(ADOPT), edits)
+    print(
+        f"ledger: {STORE.ledger_file} was changed outside its journal (by hand, or by a bosun that "
+        f"does not journal); adopted {len(edits)} change(s) into the journal (transaction 'adopt')",
+        file=sys.stderr,
+    )
+    return True
+
+
+def genesis(journal: Journal, ledger: Ledger) -> Ledger:
     """Put a ledger from before journals in the journal whole: the diff from the empty ledger
     (items by id, local leaves split off as for any new item); then save ledger.json as it is at
-    its new position. That save writes the file's own content, and makes a position it brought
-    from elsewhere (a copy) end here, even if the command then fails."""
+    its new position, and return it. That save writes the file's own content (what the journal
+    cannot hold converted), and makes a position it brought from elsewhere (a copy) end here, even
+    if the command then fails."""
+    ledger = journal_ready(ledger, "ledger.json")
     commit_edits(journal.begin(GENESIS), ledger_changes.diff(ledger_changes.EMPTY, ledger))
-    ledger[ledger_changes.JOURNAL] = journal.position()
+    stamp(ledger, journal.position())
     save(ledger)
+    return ledger
 
 
 def write_start(journal: Journal) -> Ledger:
     """The ledger a write starts from, in memory: the command's one save writes it, so the backup
     is always the ledger as it was before the write. Refused when the journal lost changes
     ledger.json reflects (a file deleted, a partial restore); then an unfinished transaction is
-    set aside (repair_tail); a ledger from before journals is put in it (genesis); and where
-    ledger.json is behind the journal (a write cut short between the two), the journal's rebuild
-    replaces it."""
+    set aside (repair_tail); a ledger from before journals is put in it (genesis); a change made to
+    ledger.json outside the journal is put in it (adopt); and where ledger.json is behind the
+    journal (a write cut short between the two, or an adopt), the journal's rebuild replaces it."""
     ledger = load()
     written = journal.written()
     if written:
@@ -929,18 +1031,19 @@ def write_start(journal: Journal) -> Ledger:
     journal.repair_tail()
     position = journal.position()
     if not position:
-        if has_records(ledger):
-            genesis(journal, ledger)
-        return ledger
-    if saved_position(ledger) == position:
-        return ledger
+        return genesis(journal, ledger) if has_records(ledger) else ledger
     refuse_if_behind(position, ledger)
-    return rebuilt(journal, position)
+    if edited_outside(ledger) and adopt(journal, ledger):
+        position = journal.position()
+    elif saved_position(ledger) == position:
+        return ledger
+    return rebuilt(journal, position, writing=True)
 
 
 def for_writing() -> Iterator[Ledger]:
     """A write: the ledger it starts from, then what the command changed (diffed against a copy)
-    committed as one transaction under the command's name, then ledger.json at the new position."""
+    committed as one transaction under the command's name, then ledger.json at the new position,
+    with the digest of what it holds."""
     with journal_errors():
         journal = open_journal(replica_id(STORE.state_dir))
         ledger = write_start(journal)
@@ -953,7 +1056,7 @@ def for_writing() -> Iterator[Ledger]:
         _WRITING.remove(transaction)
     with journal_errors():
         commit_edits(transaction, ledger_changes.diff(before, ledger))
-        ledger[ledger_changes.JOURNAL] = journal.position()
+        stamp(ledger, journal.position())
     save(ledger)
 
 
@@ -989,14 +1092,16 @@ def load() -> Ledger:
     return ledger
 
 
-def write_atomically(path: Path, text: str, backup: Path | None = None) -> None:
-    """Write <text> to a temporary file, flush it to disk, keep the current file as <backup> (a
-    hard link, so there is never a moment without <path>), then rename it into place."""
+def write_atomically(
+    path: Path, text: str, backup: Path | None = None, sync: Callable[[int], None] = os.fsync
+) -> None:
+    """Write <text> to a temporary file, flush it to disk (<sync>), keep the current file as
+    <backup> (a hard link, so there is never a moment without <path>), then rename it into place."""
     tmp = path.with_name(path.name + ".tmp")
     with tmp.open("w") as handle:
         handle.write(text)
         handle.flush()
-        os.fsync(handle.fileno())
+        sync(handle.fileno())
     if backup and path.exists():
         backup.unlink(missing_ok=True)
         os.link(path, backup)
@@ -1004,7 +1109,9 @@ def write_atomically(path: Path, text: str, backup: Path | None = None) -> None:
 
 
 def save(ledger: Ledger) -> None:
-    write_atomically(STORE.ledger_file, json.dumps(ledger, indent=2, sort_keys=True), STORE.backup)
+    """ledger.json, flushed to the disk itself before its rename (flush_to_disk), and its view."""
+    text = json.dumps(ledger, indent=2, sort_keys=True)
+    write_atomically(STORE.ledger_file, text, STORE.backup, flush_to_disk)
     write_atomically(STORE.view, render(ledger))
 
 
@@ -4101,13 +4208,48 @@ def state_findings(item_id: str, item: Item) -> list[Finding]:
     return []
 
 
+def link_entries(item: Item) -> list[Any]:
+    links = item.get("links")
+    if isinstance(links, list):
+        return links
+    return [links] if links else []
+
+
+def is_stored_link(entry: Any) -> bool:
+    return isinstance(entry, dict) and isinstance(entry.get("rel"), str) and isinstance(entry.get("id"), str)
+
+
 def stored_links(item_id: str, item: Item) -> list[Link]:
     return [
-        Link(
-            item_id, str(entry["rel"]), str(entry["id"]), str(entry.get("via", "")), str(entry.get("at", ""))
-        )
-        for entry in item.get("links") or []
+        Link(item_id, entry["rel"], entry["id"], str(entry.get("via", "")), str(entry.get("at", "")))
+        for entry in link_entries(item)
+        if is_stored_link(entry)
     ]
+
+
+def malformed_link_findings(item_id: str, item: Item) -> list[Finding]:
+    """Each stored link without its relation or other end (written by hand, or damaged)."""
+    return [
+        finding(
+            "link",
+            f"a stored link that is not a link (it needs a rel and an id): {entry!r}",
+            item_id,
+            "links",
+        )
+        for entry in link_entries(item)
+        if not is_stored_link(entry)
+    ]
+
+
+def well_formed(items: lineage.Items) -> lineage.Items:
+    """<items> as the link rules can read them (they walk every item's links): each stored link
+    that is not one left out, as it is a finding of its own."""
+    return {
+        item_id: item
+        if all(map(is_stored_link, link_entries(item)))
+        else {**item, "links": [entry for entry in link_entries(item) if is_stored_link(entry)]}
+        for item_id, item in items.items()
+    }
 
 
 def link_finding(items: lineage.Items, item: Item, links: list[Link], link: Link) -> Finding | None:
@@ -4144,11 +4286,15 @@ def link_findings(items: lineage.Items, item_id: str, item: Item) -> list[Findin
 
 
 def rule_findings(ledger: Ledger) -> list[Finding]:
-    items = ledger["items"]
+    items = well_formed(ledger["items"])
     return [
         found
         for item_id, item in sorted(items.items())
-        for found in (*state_findings(item_id, item), *link_findings(items, item_id, item))
+        for found in (
+            *state_findings(item_id, item),
+            *malformed_link_findings(item_id, ledger["items"][item_id]),
+            *link_findings(items, item_id, item),
+        )
     ]
 
 
@@ -4210,6 +4356,10 @@ def item_differences(left: lineage.Items, right: lineage.Items) -> list[Finding]
 
 
 NO_JOURNAL_YET = "no journal yet; the next write starts it"
+EDITED = (
+    "ledger.json was changed outside its journal (by hand, or by a bosun that does not journal); "
+    "the next write adopts it"
+)
 
 
 def position_finding(position: Mapping[str, int], saved: Mapping[str, int]) -> Finding:
@@ -4239,6 +4389,8 @@ def journal_findings(saved: Ledger) -> list[Finding]:
     file_position = saved_position(saved)
     if not position and not file_position and has_records(saved):
         return [*found, finding("note", NO_JOURNAL_YET, path="journal")]
+    if edited_outside(saved):
+        found.append(finding("edited", EDITED, path="journal"))
     if position != file_position:
         return [*found, position_finding(position, file_position)]
     return [*found, *compare_findings(result.ledger, saved)]

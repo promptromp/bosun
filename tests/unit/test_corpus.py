@@ -35,7 +35,7 @@ import guard
 import ledger
 from change_log import canonical
 from journal import Journal
-from ledger_changes import rebuild
+from ledger_changes import rebuild, state_hash
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -169,7 +169,8 @@ class ReplayTest(unittest.TestCase):
         result = rebuild(found.changes(), ledger.RULES)
         saved = json.loads((state / "ledger.json").read_text())
         self.assertTrue(found.position(), "the journal is empty")
-        self.assertEqual(saved.get("journal"), found.position(), "the journal position")
+        self.assertEqual(ledger.saved_position(saved), found.position(), "the journal position")
+        self.assertEqual(saved["journal"]["digest"], state_hash(saved), "the digest of what it holds")
         self.assertEqual(result.conflicts, [], "conflicts in the rebuild")
         del saved["journal"]
         self.assertEqual(canonical(result.ledger).decode(), canonical(saved).decode(), "the rebuild")
