@@ -71,7 +71,8 @@ def action_text(item: Item) -> str:
 
 def action_parts(text: str) -> dict[str, str]:
     """The Change (where it goes, then the change itself), Why and Evidence of an action text, as
-    learn.parse_action reads them (the one reading, which apply compares too)."""
+    learn.parse_action reads them: for display only. apply never reads it; it compares digests of
+    the change and of the action with what learn recorded when it proposed them."""
     parts = learn.parse_action(text)
     found = {"change_text": parts.change, "why": parts.why, "evidence": parts.evidence}
     return {name: value for name, value in found.items() if value}

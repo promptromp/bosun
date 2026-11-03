@@ -49,7 +49,7 @@ of truth, so don't copy rules into this file.
 - Sync (design: `docs/design/sync.md`): every ledger write goes through `locked_ledger` into a
   journal that `ledger.json` is the rebuild of. `lib/change_log.py` (pure: the envelope, ids, the
   hybrid clock, the order), `lib/journal.py` (a store's journal files, the replica id,
-  transactions, a torn line set aside) and `lib/ledger_changes.py` (pure: the field table, `diff`,
+  transactions, an unfinished transaction set aside) and `lib/ledger_changes.py` (pure: the field table, `diff`,
   `rebuild`).
 - Setup (design: `docs/design/init.md`): `get.sh` (what `curl | sh` runs: plain POSIX sh, everything in
   functions with `main` last, because people pipe it straight from `main`), `lib/preflight.sh` (what

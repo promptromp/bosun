@@ -183,10 +183,15 @@ once it is `approved`.
 Writes take a file lock and replace `ledger.json` atomically, keeping the previous version as
 `ledger.json.bak`; `ledger.md` is regenerated after each one. Each write first appends what it
 changed to the journal (`journal/ledger/` in the state folder), and `ledger.json` is the rebuild
-of that journal. A write cut short between the two is completed by the next command, and one
-cut short inside the journal is set aside (`*.torn-<time>`, kept) and left out
-([Sync and sharing](design/sync.md#changes-not-files)). If journal files go missing, writes stop
-and say so: move `journal/ledger` aside, and the next write starts the journal again from
+of that journal, recording the position it reflects and a digest of what it holds. A write cut
+short between the two is completed by the next write (a command that only reads shows it without
+saving), and one cut short inside the journal is set aside (`*.torn-<time>`, kept) and left out
+([Sync and sharing](design/sync.md#changes-not-files)). So copying `ledger.json.bak`, or any
+older `ledger.json`, back does not undo a write: the journal brings it forward again; undo a write
+with the command that reverses it. A change made to `ledger.json` by hand, or by an older bosun,
+is adopted by the next write: it goes into the journal as a transaction named `adopt`, with a line
+on stderr. If journal files go missing or a line in them is damaged, writes stop and say so: move
+`journal/ledger` and `replica.json` aside together, and the next write starts a new journal from
 `ledger.json`. Each item keeps its last 200 history entries; the journal keeps all of them.
 
 ## Waiting on someone: outreach
@@ -353,8 +358,9 @@ epic (it may name one) and not a product area (it is part of one). Design, resea
   lineage would refuse, a second `part_of`, a link to an unknown item, with the `ledger unlink` that
   clears it, since only a prune from before it kept lineage whole leaves one) and exits 1 on any finding;
   `--journal` also rebuilds the journal and lists its conflicts and each item where the rebuild and
-  `ledger.json` differ ([sync](design/sync.md)). A ledger from before journals is not a failure:
-  it prints "no journal yet; the next write starts it" and exits 0.
+  `ledger.json` differ ([sync](design/sync.md)), and says when `ledger.json` was changed outside
+  the journal (the next write adopts it). A ledger from before journals is not a failure: it
+  prints "no journal yet; the next write starts it" and exits 0. `bosun doctor` runs it.
 
 ## Your own MCP servers: a site settings file
 

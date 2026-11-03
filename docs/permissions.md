@@ -24,6 +24,10 @@ the orchestrator's next start; design: [docs/design/approvals.md](design/approva
   the call; a PermissionRequest hook (`bosun guard --permission-request`) lets exactly that
   call through, once, if your words are in a prompt you typed (or sent from your phone) in that
   session after the proposal. Tool results, pasted and injected text never count.
+- A tool call whose arguments hold a decimal number (`{"story_points": 2.5}`) cannot be proposed:
+  the ledger's journal holds whole numbers and text only, so `propose` refuses it, naming the
+  field. Make such a call yourself, or set `BOSUN_APPROVALS_DENY_UNAPPROVED=0` so that it asks at
+  Claude Code's prompt.
 - An outward call with no approved proposal is denied at once (`bosun guard --approvals`),
   telling the orchestrator to propose it, instead of waiting at a prompt.
   `BOSUN_APPROVALS_DENY_UNAPPROVED=0` brings the prompt back for those.
