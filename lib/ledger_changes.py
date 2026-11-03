@@ -21,6 +21,9 @@ Ops and their bodies (paths relative to the item, as lists):
   said.append / said.drop  {"entry"}
 
 A local leaf never goes in a body that is not local: it gets its own `item.set`, marked local.
+A history entry that quotes my words or a call's context (`LOCAL_HISTORY_EVENTS`, `CALL_CONTEXT`)
+is a local `item.append`. A new item's create holds its history up to the first such entry; the
+rest follows as appends in order, local or not, so that the rebuild keeps the order exactly.
 
 Pure functions over the ledger document: no file access. `lib/ledger.py` imports this module, so
 it never imports `ledger`.
@@ -51,7 +54,33 @@ MAX_HISTORY = 200
 TRIMMED = "history-trimmed"
 MAPS = ("sources", "runs")
 SAID = "said"
-APPROVAL_CONTEXT = ("quote", "session", "tool_use_id", "transcript")
+# Where and when a call ran: local wherever an approval, a standing approval or a call's outcome
+# keeps it.
+CALL_CONTEXT = ("session", "tool_use_id", "transcript")
+GRANTS = ("items.*.proposal.approval", "items.*.proposal.auto_approved")
+OUTCOMES = tuple(f"{grant}.{outcome}" for grant in GRANTS for outcome in ("failed", "carried_out"))
+# Free text and people's names in an item's fields and in a delegation's task header: sealed.
+SEALED_FIELDS = (
+    "subject",
+    "requester",
+    "to",
+    "assignee",
+    "answer",
+    "details",
+    "ask",
+    "done_when",
+    "via",
+    "origin",
+    "options",
+    "reply_ref",
+    "request_permalink",
+    "review_thread",
+)
+TASK_HEADER = ("ask", "requester", "details", "link")
+# History events whose note quotes my words (a prompt's excerpt, an approval's quote): local whole,
+# as is an entry that keeps a call's context. The property test in tests/unit/test_ledger_changes.py
+# fails if a renamed event lets them out.
+LOCAL_HISTORY_EVENTS = ("approved", "approval-used", "user-said")
 
 
 @dataclass(frozen=True)
@@ -78,40 +107,50 @@ def _rows(rule: str, klass: str, *patterns: str, important: bool = False) -> tup
 
 # Every field of the ledger, first match wins. A new field is a row here: an unknown one is local,
 # and the fixture test fails until it has a row. Important fields conflict when two Macs change
-# them at once. A container's own row is about its whole value, when it appears or goes.
+# them at once. A container's own row is about its whole value, when it appears or goes. Classes:
+# docs/design/sync.md, "Which data goes where" (free text and people's names are sealed).
 FIELDS: tuple[FieldRule, ...] = (
     *_rows(STATE, PRIVATE, "items.*.state", important=True),
     *_rows(HISTORY, SEALED, "items.*.history"),
     *_rows(LINKS, PRIVATE, "items.*.links"),
-    *_rows(SET, SEALED, "items.*.title", "items.*.fields.subject", "items.*.report.summary"),
     *_rows(LIST, SEALED, "items.*.fields.messages"),
     *_rows(
         SET,
         SEALED,
-        "items.*.fields.requester",
-        "items.*.fields.to",
-        "items.*.fields.answer",
-        "items.*.fields.details",
+        "items.*.title",
+        "items.*.url",
+        "items.*.proposal.spec",
+        "items.*.report.summary",
+        "items.*.report.open",
+        "items.*.report.results",
+        *(f"items.*.fields.{name}" for name in SEALED_FIELDS),
+        *(f"items.*.delegation.{name}" for name in TASK_HEADER),
+        *(f"{outcome}.reason" for outcome in OUTCOMES if outcome.endswith(".failed")),
     ),
     *_rows(SET, PRIVATE, "items.*.proposal.proposed_at", "items.*.proposal.approval.used_at", important=True),
-    *_rows(SET, LOCAL, *(f"items.*.proposal.approval.{leaf}" for leaf in APPROVAL_CONTEXT)),
+    *_rows(
+        SET,
+        LOCAL,
+        "items.*.proposal.approval.quote",
+        *(f"{where}.{name}" for where in (*GRANTS, *OUTCOMES) for name in CALL_CONTEXT),
+    ),
     *_rows(SET, PRIVATE, "items.*.proposal", "items.*.proposal.approval", important=True),
-    *_rows(SET, PRIVATE, "items.*.delegation", "items.*.report"),
-    *_rows(SET, PRIVATE, "items.*.proposal.*", "items.*.proposal.approval.*"),
+    *_rows(SET, PRIVATE, "items.*.delegation", "items.*.report", "items.*.proposal.auto_approved", *OUTCOMES),
+    *_rows(SET, PRIVATE, "items.*.proposal.*", *(f"{where}.*" for where in (*GRANTS, *OUTCOMES))),
     *_rows(SET, PRIVATE, "items.*.fields.key", "items.*.fields.system", important=True),
     *_rows(
         SET,
         PRIVATE,
         "items.*.id",
         "items.*.kind",
-        "items.*.url",
         "items.*.created_at",
         "items.*.updated_at",
         "items.*.fields.*",
         "items.*.delegation.*",
         "items.*.report.*",
+        "runs.*",
     ),
-    *_rows(SET, PRIVATE, "sources.*", "runs.*"),
+    *_rows(SET, SEALED, "sources.*"),
     *_rows(LIST, LOCAL, SAID),
 )
 
@@ -170,6 +209,19 @@ def trim_history(item: Item) -> None:
     keep = history[-(MAX_HISTORY - 2) :]
     dropped = len(history) - 1 - (1 if marker else 0) - len(keep) + int(marker["count"] if marker else 0)
     item["history"] = [history[0], {"at": keep[0]["at"], "event": TRIMMED, "count": dropped}, *keep]
+
+
+def is_local_entry(entry: Any) -> bool:
+    """A history entry that quotes my words, or keeps a call's context: it never leaves the Mac."""
+    return isinstance(entry, dict) and (
+        entry.get("event") in LOCAL_HISTORY_EVENTS or any(name in entry for name in CALL_CONTEXT)
+    )
+
+
+def _split_history(history: list[Any]) -> tuple[list[Any], list[Any]]:
+    """A new item's history: what its create holds (up to the first local entry), and the rest."""
+    first = next((index for index, entry in enumerate(history) if is_local_entry(entry)), len(history))
+    return history[:first], history[first:]
 
 
 def _history_added(before: list[Any], after: list[Any]) -> list[Any]:
@@ -294,6 +346,15 @@ def _entry_edit(op: str, path: Path, rule: FieldRule, entry: Any) -> Edit:
     return Edit(op, path[1], {"path": list(path[2:]), "entry": _plain(entry)}, rule.klass == LOCAL)
 
 
+def _is_history(path: Path) -> bool:
+    return classify(path).rule == HISTORY
+
+
+def _history_edit(path: Path, entry: Any) -> Edit:
+    local = classify(path).klass == LOCAL or is_local_entry(entry)
+    return Edit("item.append", path[1], {"path": list(path[2:]), "entry": _plain(entry)}, local)
+
+
 def _whole_set(path: Path, before: Any, after: Any) -> list[Edit]:
     """One set of the whole value at <path>; each local leaf inside it in a local set of its own."""
     if _is_local(path, after):
@@ -316,13 +377,11 @@ def _on_state(path: Path, rule: FieldRule, before: Any, after: Any, out: _ItemEd
     out.states.append(Edit("item.state", path[1], body, rule.klass == LOCAL))
 
 
-def _on_history(path: Path, rule: FieldRule, before: Any, after: Any, out: _ItemEdits) -> None:
+def _on_history(path: Path, _rule: FieldRule, before: Any, after: Any, out: _ItemEdits) -> None:
     if not _entrywise(before, after):
         out.sets += _whole_set(path, before, after)
         return
-    out.appends += [
-        _entry_edit("item.append", path, rule, e) for e in _history_added(_as_list(before), after)
-    ]
+    out.appends += [_history_edit(path, entry) for entry in _history_added(_as_list(before), after)]
 
 
 def _on_list(path: Path, rule: FieldRule, before: Any, after: Any, out: _ItemEdits) -> None:
@@ -376,13 +435,16 @@ def _compare_dict(path: Path, before: Mapping[str, Any], after: Mapping[str, Any
 
 
 def _created(item_id: str, item: Item) -> list[Edit]:
-    """A new item: its create without its local leaves, then each of them, by path."""
+    """A new item: its create without its local leaves, its history from the first local entry on
+    as appends in order, then each local leaf, by path."""
     path = ("items", item_id)
-    create = Edit("item.create", item_id, {"item": _plain(strip_local(path, item))}, False)
-    return [
-        create,
-        *(_set_edit(leaf, value, _MISSING, local=True) for leaf, value in _local_leaves(path, item)),
-    ]
+    body = _plain(strip_local(path, item))
+    appends = []
+    for key in [key for key, value in body.items() if isinstance(value, list) and _is_history((*path, key))]:
+        body[key], rest = _split_history(body[key])
+        appends += [_history_edit((*path, key), entry) for entry in rest]
+    leaves = [_set_edit(leaf, value, _MISSING, local=True) for leaf, value in _local_leaves(path, item)]
+    return [Edit("item.create", item_id, {"item": body}, False), *appends, *leaves]
 
 
 def _changed(item_id: str, before: Item, after: Item) -> _ItemEdits:

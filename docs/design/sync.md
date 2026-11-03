@@ -278,9 +278,9 @@ Every field belongs to one class. The class decides how far it may travel:
 
 | Class | Leaves this Mac | Examples |
 |---|---|---|
-| `local` | Never | `said` (my verbatim prompts); an approval's quote, session, transcript path and tool call; `identifiers.jsonl`; `forgotten.jsonl`; person entities and every fact naming a person; `batch.json` |
-| `sealed` | Only to my own scope, and only when the data is encrypted (by the codec, or by a store that declares encryption at rest) | free text (titles, notes, history notes, report summaries, outreach subjects and bodies); colleagues' names in `requester` and `to`; Slack permalinks |
-| `private` | To my own scope | item ids, kinds, states, links, history events, reports; the window in a delegation or report, tagged with its replica; process and product facts |
+| `local` | Never | `said` (my verbatim prompts); an approval's quote; a call's session, transcript path and tool call id, wherever an approval, a standing approval or the call's outcome (`failed`, `carried_out`) keeps them; the history entries that quote me (`approved`, `approval-used`, `user-said`) or keep a call's context; `identifiers.jsonl`; `forgotten.jsonl`; person entities and every fact naming a person; `batch.json` |
+| `sealed` | Only to my own scope, and only when the data is encrypted (by the codec, or by a store that declares encryption at rest) | free text: titles, URLs, notes, history notes, report summaries, open points and results, outreach subjects, details, options and answers, a task's ask, done-when and `via`, a delegation's ask, details and link, a proposal's exact call (`spec`), a failed call's reason; colleagues' names in `requester`, `to` and a ticket's `assignee`; Slack permalinks (a reply's or request's ref, processed sources) |
+| `private` | To my own scope | item ids, kinds, states, links, history events, a proposal's action and times, a report's time and CI status; repo, ticket and system names; the window in a delegation or report, tagged with its replica; process and product facts |
 | `team` | Also into a published projection | item id, kind, state and owner for the team board; confirmed, non-personal facts a share spec selects |
 
 The rules that keep this clean:
@@ -317,6 +317,10 @@ Where we expect to iterate:
   team on GitHub) could be shared needs a closer look before any title goes into a team projection.
 - **Item ids can be sensitive.** `slack:<channel>/<ts>` names a channel; it is `private`, and Slack
   items stay out of the team board.
+- **Links and history notes can quote me.** A link's `via` (`user: <what I said>`) and history
+  notes (a transition's evidence, a task's ask) can hold my words. Links stay `private` whole and
+  history entries `sealed`, apart from the events above that quote me, so phase 1's gate strips a
+  link's `via` and history notes when encryption is off.
 
 ### Scopes and the state repository
 
