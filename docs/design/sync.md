@@ -204,11 +204,14 @@ position included. So the file also records the digest of what it holds (`journa
 SHA-256 of its canonical bytes without the `journal` key). A write that finds what the file holds
 no longer matching its digest puts the difference in the journal first, as one transaction named
 `adopt` (the diff from what the file held when it was saved to what it holds now, with what a
-write cut short adopted already counted), says so on stderr, and goes on from the rebuild. The
-file is what someone outside the journal meant, and refusing would stop every write. Adopted
-changes follow the same rules as any other: a field is set, an item made or deleted, a history
-entry added, so a history entry edited in place comes back added again (history only grows). A
-file saved before digests is trusted once and gets one at its next save.
+write cut short adopted already counted), says so on stderr, and always goes on from the
+journal's rebuild, so that `ledger.json` stays the rebuild. The file is what someone outside the
+journal meant, and refusing would stop every write. Adopted changes follow the same rules as any
+other: a field is set, an item made or deleted, a history entry added. What the journal cannot
+hold is undone by that write, which says so in one line (how many parts, and that
+`ledger.json.bak` keeps the file as edited): history only grows, so an entry removed by hand comes
+back, and one edited in place comes back beside its edited copy. A file saved before digests is
+trusted once and gets one at its next save.
 
 ### Rebuilding, and what a merge cannot decide
 

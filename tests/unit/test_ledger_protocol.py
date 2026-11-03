@@ -765,6 +765,43 @@ class OutsideEditTest(ProtocolTestCase):
         self.assertNotIn("adopt", {c["cmd"] for c in journal().changes()})
         self.assert_the_journal_rebuilds_the_file()
 
+    def test_a_history_entry_removed_by_hand_comes_back_and_the_write_says_so(self) -> None:
+        """What the journal cannot hold (history only grows): the next write goes on from the
+        journal's rebuild, so the entry is back, says so once, and keeps the edited file as
+        ledger.json.bak; ledger.json stays the journal's rebuild (re-review probe q1)."""
+        run("note", REVIEW_ID, "a note I regret")
+        run("note", REVIEW_ID, "kept")
+        data = saved()
+        history = data["items"][REVIEW_ID]["history"]
+        data["items"][REVIEW_ID]["history"] = [h for h in history if h.get("note") != "a note I regret"]
+        edited = json.dumps(data, indent=2)
+        ledger.STORE.ledger_file.write_text(edited)
+        said = io.StringIO()
+        with contextlib.redirect_stderr(said):
+            run("note", REVIEW_ID, "after")
+        self.assertEqual(self.notes(REVIEW_ID)[-3:], ["a note I regret", "kept", "after"])
+        self.assertEqual(said.getvalue().count("\n"), 1, said.getvalue())
+        self.assertIn("history only grows", said.getvalue())
+        self.assertIn(str(ledger.STORE.backup), said.getvalue())
+        self.assertEqual(ledger.STORE.backup.read_text(), edited)
+        self.assertEqual(run("validate", "--journal"), ("ledger is valid", 0))
+        self.assert_the_journal_rebuilds_the_file()
+
+    def test_a_float_written_by_hand_where_diff_does_not_look_stops_nothing(self) -> None:
+        """A float version (re-review probe q1): the next write succeeds from the journal's
+        rebuild, never says nothing was written after journaling its change, and validate passes."""
+        data = saved()
+        data["version"] = 1.0
+        ledger.STORE.ledger_file.write_text(json.dumps(data))
+        said = io.StringIO()
+        with contextlib.redirect_stderr(said):
+            run("note", REVIEW_ID, "after a float version")
+        self.assertNotIn("nothing was written", said.getvalue())
+        self.assertEqual(self.notes(REVIEW_ID)[-1], "after a float version")
+        self.assertEqual(saved()["version"], 1)
+        self.assertEqual(run("validate", "--journal"), ("ledger is valid", 0))
+        self.assert_the_journal_rebuilds_the_file()
+
     def test_a_file_saved_before_digests_is_trusted_and_gets_one(self) -> None:
         data = saved()
         del data["journal"]["digest"]

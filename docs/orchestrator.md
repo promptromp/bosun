@@ -190,9 +190,11 @@ saving), and one cut short inside the journal is set aside (`*.torn-<time>`, kep
 older `ledger.json`, back does not undo a write: the journal brings it forward again; undo a write
 with the command that reverses it. A change made to `ledger.json` by hand, or by an older bosun,
 is adopted by the next write: it goes into the journal as a transaction named `adopt`, with a line
-on stderr. If journal files go missing or a line in them is damaged, writes stop and say so: move
-`journal/ledger` and `replica.json` aside together, and the next write starts a new journal from
-`ledger.json`. Each item keeps its last 200 history entries; the journal keeps all of them.
+on stderr. What the journal cannot hold, such as removing a history entry (history only grows), is
+undone by that write, which says so and keeps the edited file as `ledger.json.bak`. If journal
+files go missing or a line in them is damaged, writes stop and say so: move `journal/ledger` and
+`replica.json` aside together, and the next write starts a new journal from `ledger.json`. Each
+item keeps its last 200 history entries; the journal keeps all of them.
 
 ## Waiting on someone: outreach
 

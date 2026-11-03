@@ -954,7 +954,7 @@ def journal_ready(ledger: Ledger, source: str) -> Ledger:
     for place, what, made in found:
         print(
             f"ledger: {ledger_changes.ledger_place(place)}: {what} in {source}, which the journal "
-            f"cannot hold; it is {made!r} from now on",
+            f"cannot hold; taken in as {made!r}",
             file=sys.stderr,
         )
     converted: Ledger = encodable(ledger) if found else ledger
@@ -988,20 +988,41 @@ def adopted_base(journal: Journal, file: Ledger) -> Ledger:
     return ledger_changes.rebuild([*journal.changes(saved_position(file)), *adopted], RULES).ledger
 
 
-def adopt(journal: Journal, file: Ledger) -> bool:
+def adopt(journal: Journal, file: Ledger) -> None:
     """Put in the journal what was changed in ledger.json outside it, as one transaction ("adopt"):
-    the diff from what the file held when it was saved to what it holds now. Whether there was
-    anything to adopt (a write cut short may have adopted it already)."""
-    edits = ledger_changes.diff(adopted_base(journal, file), journal_ready(file, "ledger.json"))
+    the diff from what the file held when it was saved to what it holds now (<file>, as the journal
+    can hold it). Nothing when there is nothing to adopt (a write cut short may have adopted it
+    already, or the diff cannot express it: history only grows)."""
+    edits = ledger_changes.diff(adopted_base(journal, file), file)
     if not edits:
-        return False
+        return
     commit_edits(journal.begin(ADOPT), edits)
     print(
         f"ledger: {STORE.ledger_file} was changed outside its journal (by hand, or by a bosun that "
         f"does not journal); adopted {len(edits)} change(s) into the journal (transaction 'adopt')",
         file=sys.stderr,
     )
-    return True
+
+
+def taken_in(journal: Journal, edited: Ledger) -> Ledger:
+    """A ledger.json changed outside the journal, taken in: what the diff can express is adopted,
+    and the write goes on from the journal's rebuild, so that ledger.json stays its rebuild. What
+    the journal could not hold (an entry removed or edited in place: history only grows) is what
+    the adopted base still lacks of the file, counted by validate's own comparison in one line on
+    stderr (not the journal's changes the file never had: a write cut short); this write's save
+    keeps the file as edited in ledger.json.bak."""
+    file = journal_ready(edited, "ledger.json")
+    adopt(journal, file)
+    left_out = compare_findings(adopted_base(journal, file), file)
+    if left_out:
+        print(
+            f"ledger: {len(left_out)} part(s) of {STORE.ledger_file} as edited outside its journal "
+            "could not go into the journal and are as the journal has them (history only grows: an "
+            f"entry removed or edited in place comes back); {STORE.backup} keeps the file as it was "
+            "edited",
+            file=sys.stderr,
+        )
+    return rebuilt(journal, journal.position(), writing=True)
 
 
 def genesis(journal: Journal, ledger: Ledger) -> Ledger:
@@ -1022,8 +1043,9 @@ def write_start(journal: Journal) -> Ledger:
     is always the ledger as it was before the write. Refused when the journal lost changes
     ledger.json reflects (a file deleted, a partial restore); then an unfinished transaction is
     set aside (repair_tail); a ledger from before journals is put in it (genesis); a change made to
-    ledger.json outside the journal is put in it (adopt); and where ledger.json is behind the
-    journal (a write cut short between the two, or an adopt), the journal's rebuild replaces it."""
+    ledger.json outside the journal is taken in (adopted where it can be, and the journal's rebuild
+    goes on); and where ledger.json is behind the journal (a write cut short between the two), the
+    journal's rebuild replaces it."""
     ledger = load()
     written = journal.written()
     if written:
@@ -1033,9 +1055,9 @@ def write_start(journal: Journal) -> Ledger:
     if not position:
         return genesis(journal, ledger) if has_records(ledger) else ledger
     refuse_if_behind(position, ledger)
-    if edited_outside(ledger) and adopt(journal, ledger):
-        position = journal.position()
-    elif saved_position(ledger) == position:
+    if edited_outside(ledger):
+        return taken_in(journal, ledger)
+    if saved_position(ledger) == position:
         return ledger
     return rebuilt(journal, position, writing=True)
 
