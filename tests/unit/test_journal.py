@@ -4,6 +4,7 @@ transactions, order, torn lines and their repair. Fictional data."""
 from __future__ import annotations
 
 import contextlib
+import fcntl
 import io
 import json
 import os
@@ -53,6 +54,101 @@ class ReplicaId(JournalTestCase):
         self.assertEqual(jr.replica_id(state), first)
         self.assertEqual(json.loads((state / "replica.json").read_text()), {"replica": first})
         self.assertEqual((state / "replica.json").stat().st_mode & 0o777, 0o600)
+
+    def test_a_replica_file_that_holds_no_replica_id_is_refused_not_replaced(self) -> None:
+        state = Path(self.tmp.name) / "state"
+        state.mkdir()
+        path = state / "replica.json"
+        for text in (
+            "{not json",
+            '{"replica": "local"}',
+            '{"replica": "../x"}',
+            json.dumps({"replica": "A" * 32}),
+        ):
+            path.write_text(text)
+            with (
+                self.subTest(text=text),
+                self.assertRaisesRegex(jr.JournalError, rf"{path}.*32 hex characters"),
+            ):
+                jr.replica_id(state)
+            self.assertEqual(path.read_text(), text)  # kept as it was: never a silent new id
+
+    def test_a_new_replica_id_reaches_the_disk_before_it_is_used(self) -> None:
+        state = Path(self.tmp.name) / "state"
+        synced: list[int] = []
+        with mock.patch.object(jr, "flush_to_disk", side_effect=synced.append):
+            made = jr.replica_id(state)
+        self.assertEqual(len(synced), 1)
+        self.assertEqual(jr.replica_id(state), made)
+        self.assertEqual(list(state.glob(".replica.json*")), [])  # no temp file left
+
+
+def short_writes(limit: int) -> Callable[[int, bytes], int]:
+    """os.write as a nearly full disk does it: at most <limit> bytes a call (0: nothing)."""
+    write = os.write
+
+    def writing(fd: int, data: bytes) -> int:
+        return write(fd, bytes(data[:limit])) if limit else 0
+
+    return writing
+
+
+class Disk(JournalTestCase):
+    """Every byte reaches the file, or the write fails; and on macOS F_FULLFSYNC, so that a power
+    cut cannot keep ledger.json's rename and lose the journal's append before it."""
+
+    def test_a_short_write_is_finished_by_further_calls(self) -> None:
+        with mock.patch.object(os, "write", short_writes(7)):
+            tx = self.journal().begin("add")
+            tx.add("set", "item:1", {"text": "a line longer than seven bytes"})
+            tx.add("set", "item:1", {"quote": "mine"}, local=True)
+            tx.commit()
+        self.assertEqual(self.journal().position(), {R1: 1, "local": 1})
+        bodies = [c["body"] for c in self.journal().changes()]
+        self.assertEqual(bodies, [{"text": "a line longer than seven bytes"}, {"quote": "mine"}])
+
+    def test_a_write_that_makes_no_progress_fails_the_commit(self) -> None:
+        tx = self.journal().begin("add")
+        tx.add("set", "item:1", {"a": 1})
+        with mock.patch.object(os, "write", short_writes(0)), self.assertRaises(OSError):
+            tx.commit()
+        self.assertEqual(self.journal().position(), {})
+
+    def test_a_set_aside_writes_all_it_moves(self) -> None:
+        tx = self.journal().begin("add")
+        tx.add("set", "item:1", {})
+        tx.commit()
+        path = self.root / f"{R1}.jsonl"
+        with path.open("ab") as handle:
+            handle.write(TORN * 3)
+        with mock.patch.object(os, "write", short_writes(4)):
+            (aside,), _ = self.repaired()
+        self.assertEqual(aside.read_bytes(), TORN * 3)
+
+    @unittest.skipUnless(hasattr(fcntl, "F_FULLFSYNC"), "macOS only")
+    def test_a_commit_flushes_each_file_to_the_disk_itself(self) -> None:
+        calls: list[int] = []
+        real = fcntl.fcntl
+
+        def recording(fd: int, cmd: int, arg: int = 0) -> int:
+            calls.append(cmd)
+            return real(fd, cmd, arg)
+
+        tx = self.journal().begin("add")
+        tx.add("set", "item:1", {})
+        tx.add("set", "item:1", {"quote": "mine"}, local=True)
+        with mock.patch.object(fcntl, "fcntl", recording):
+            tx.commit()
+        self.assertEqual(calls.count(fcntl.F_FULLFSYNC), 2)  # local.jsonl, then the replica's file
+
+    def test_without_f_fullfsync_it_is_fsync(self) -> None:
+        synced: list[int] = []
+        with (
+            mock.patch.object(fcntl, "fcntl", side_effect=OSError("not supported here")),
+            mock.patch.object(os, "fsync", side_effect=synced.append),
+        ):
+            jr.flush_to_disk(7)
+        self.assertEqual(synced, [7])
 
 
 class Commit(JournalTestCase):
@@ -137,6 +233,37 @@ class Reading(JournalTestCase):
                 self.assertRaisesRegex(jr.JournalError, rf"{R1}\.jsonl, line 1: not a change"),
             ):
                 read()
+
+    def test_a_gap_in_the_sequence_is_damage_naming_the_file_and_the_missing_seq(self) -> None:
+        for _ in range(4):
+            tx = self.journal().begin("add")
+            tx.add("set", "item:1", {})
+            tx.commit()
+        path = self.root / f"{R1}.jsonl"
+        lines = path.read_bytes().splitlines(keepends=True)
+        for kept, said in (
+            (lines[:1] + lines[2:], rf"{R1}\.jsonl, line 2: seq 3 where seq 2 was due: seq 2 is missing"),
+            (
+                lines[:1] + lines[3:],
+                rf"{R1}\.jsonl, line 2: seq 4 where seq 2 was due: seqs 2 to 3 are missing",
+            ),
+            (lines[1:], rf"{R1}\.jsonl, line 1: seq 2 where seq 1 was due: seq 1 is missing"),
+            (lines[:2] + lines[1:], rf"{R1}\.jsonl, line 3: seq 2 where seq 3 was due: seq 2 again"),
+        ):
+            path.write_bytes(b"".join(kept))
+            with self.subTest(said=said), self.assertRaisesRegex(jr.JournalError, said):
+                self.journal().changes()
+
+    def test_changes_at_a_position_leave_out_what_came_after(self) -> None:
+        for n in range(3):
+            tx = self.journal().begin("add")
+            tx.add("set", "item:1", {"n": n})
+            tx.add("set", "item:1", {"quote": n}, local=True)
+            tx.commit()
+        found = self.journal().changes({R1: 2, "local": 2})
+        self.assertEqual([c["body"] for c in found], [{"n": 0}, {"quote": 0}, {"n": 1}, {"quote": 1}])
+        self.assertEqual(self.journal().changes({}), [])
+        self.assertEqual(len(self.journal().changes()), 6)
 
 
 # What journal() stamps a file it moves aside with: 1_700_000_000_000 ms, in UTC.

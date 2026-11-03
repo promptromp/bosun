@@ -14,7 +14,7 @@ from __future__ import annotations
 import hashlib
 import json
 import re
-from collections.abc import Iterable, Mapping
+from collections.abc import Iterable, Iterator, Mapping
 from dataclasses import dataclass
 from typing import Any
 
@@ -22,11 +22,18 @@ from typing import Any
 ENVELOPE_VERSION = 1
 
 Change = dict[str, Any]
+Place = tuple[str, ...]  # where a value sits in a record: its keys, and list positions as text
 
 CROCKFORD = "0123456789abcdefghjkmnpqrstvwxyz"  # pragma: allowlist secret (the base32 alphabet)
 SUFFIX_LENGTH = 6
 MAX_COUNTER = 9999
-_CLOCK = re.compile(r"(\d{13})\.(\d{4})")
+_CLOCK = re.compile(r"(\d{13})\.(\d{4})", re.ASCII)
+# A lone surrogate: what Python makes of bytes that are not UTF-8 (argv, surrogateescape). A str
+# never holds a valid pair as two code points, so each one is lone and has no UTF-8 bytes.
+_SURROGATE = re.compile("[\ud800-\udfff]")
+# What holds nothing further: most of what a record holds, so checked first.
+_SCALARS = (str, int, bool, type(None))
+_SHOWN = 60  # characters of a value an error shows
 
 
 class ChangeLogError(Exception):
@@ -55,22 +62,71 @@ class Conflict:
     detail: str
 
 
-def _refuse_floats(value: Any) -> None:
-    if isinstance(value, float):
-        raise ChangeLogError(f"a change holds a float ({value!r}); use integers or strings")
-    if isinstance(value, Mapping):
-        for item in value.values():
-            _refuse_floats(item)
-    elif isinstance(value, (list, tuple)):
-        for item in value:
-            _refuse_floats(item)
+def _a_float(value: Any) -> float | None:
+    """A float anywhere in <value> (in mappings, lists and tuples), or None. Iterative, and by
+    exact type first: every change and every write's digest goes through it."""
+    stack = [value]
+    while stack:
+        item = stack.pop()
+        kind = type(item)
+        if kind in _SCALARS:
+            continue
+        if kind is dict or isinstance(item, Mapping):
+            stack.extend(item.values())
+        elif kind is list or kind is tuple:
+            stack.extend(item)
+        elif isinstance(item, float):
+            return item
+    return None
+
+
+def _shown(text: str) -> str:
+    return repr(text if len(text) <= _SHOWN else f"{text[: _SHOWN - 3]}...")
 
 
 def canonical(record: Mapping[str, Any]) -> bytes:
-    """The bytes a record is hashed and stored as: sorted keys, no spaces, UTF-8, no floats."""
-    _refuse_floats(record)
+    """The bytes a record is hashed and stored as: sorted keys, no spaces, UTF-8. A float, or text
+    that is not valid Unicode, has none (`unencodable` says where they are)."""
+    found = _a_float(record)
+    if found is not None:
+        raise ChangeLogError(f"a change holds a float ({found!r}); use integers or strings")
     text = json.dumps(record, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
-    return text.encode("utf-8")
+    try:
+        return text.encode("utf-8")
+    except UnicodeEncodeError as exc:
+        around = text[max(0, exc.start - _SHOWN // 2) : exc.end + _SHOWN // 2]
+        raise ChangeLogError(f"a change holds text that is not valid Unicode (near {around!r})") from exc
+
+
+def unencodable(value: Any, place: Place = ()) -> Iterator[tuple[Place, str]]:
+    """Each place in <value> that canonical bytes cannot hold, in order, with what is there: a
+    float, or text (a value or a key) with a lone surrogate."""
+    if isinstance(value, Mapping):
+        for key, item in value.items():
+            if isinstance(key, str) and _SURROGATE.search(key):
+                yield (*place, key), f"a key that is not valid Unicode ({_shown(key)})"
+            yield from unencodable(item, (*place, str(key)))
+    elif isinstance(value, (list, tuple)):
+        for index, item in enumerate(value):
+            yield from unencodable(item, (*place, str(index)))
+    elif isinstance(value, float):
+        yield place, f"a float ({value!r})"
+    elif isinstance(value, str) and _SURROGATE.search(value):
+        yield place, f"text that is not valid Unicode ({_shown(value)})"
+
+
+def encodable(value: Any) -> Any:
+    """A copy of <value> that canonical bytes can hold: each float as its text ("2.5"), each lone
+    surrogate (in a value or a key) as U+FFFD."""
+    if isinstance(value, Mapping):
+        return {_SURROGATE.sub("\ufffd", str(key)): encodable(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [encodable(item) for item in value]
+    if isinstance(value, float):
+        return repr(value)
+    if isinstance(value, str):
+        return _SURROGATE.sub("\ufffd", value)
+    return value
 
 
 def change_id(record: Mapping[str, Any]) -> str:

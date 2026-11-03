@@ -26,6 +26,36 @@ class TestCanonical(unittest.TestCase):
         with self.assertRaises(ChangeLogError):
             change_log.canonical({"x": {"y": [1, {"z": 2.5}]}})
 
+    def test_canonical_refuses_text_that_is_not_valid_unicode(self) -> None:
+        """A lone surrogate (what Python makes of invalid UTF-8 in argv) has no UTF-8 bytes."""
+        for record in ({"x": "abc\udce9"}, {"x\ud800": 1}):
+            with self.subTest(record=record), self.assertRaisesRegex(ChangeLogError, "not valid Unicode"):
+                change_log.canonical(record)
+
+    def test_floats_in_tuples_and_deep_lists_are_refused_too(self) -> None:
+        for record in ({"x": (1, 2.5)}, {"x": [[[{"y": [0.5]}]]]}):
+            with self.subTest(record=record), self.assertRaisesRegex(ChangeLogError, "float"):
+                change_log.canonical(record)
+
+    def test_unencodable_names_each_place_and_what_is_there(self) -> None:
+        record = {"a": [1, 2.5, {"b\udcff": "ok", "c": "x\ud800"}], "d": "fine", "e": True}
+        self.assertEqual(
+            list(change_log.unencodable(record)),
+            [
+                (("a", "1"), "a float (2.5)"),
+                (("a", "2", "b\udcff"), "a key that is not valid Unicode ('b\\udcff')"),
+                (("a", "2", "c"), "text that is not valid Unicode ('x\\ud800')"),
+            ],
+        )
+        self.assertEqual(list(change_log.unencodable({"a": [1, "é", None, {"b": False}]})), [])
+
+    def test_encodable_turns_a_float_into_its_text_and_a_lone_surrogate_into_u_fffd(self) -> None:
+        record = {"a": [1, 2.5, {"b\udcff": "x\ud800y"}], "d": "fine"}
+        made = change_log.encodable(record)
+        self.assertEqual(made, {"a": [1, "2.5", {"b\ufffd": "x\ufffdy"}], "d": "fine"})
+        self.assertEqual(record["a"][1], 2.5)  # a copy
+        change_log.canonical(made)
+
     def test_change_id_ignores_its_own_id(self) -> None:
         a = change_log.change_id({"a": 1})
         self.assertEqual(a, change_log.change_id({"a": 1, "id": "x"}))
@@ -64,7 +94,8 @@ class TestClock(unittest.TestCase):
         self.assertEqual(change_log.parse_clock(change_log.clock_text(42, 7)), (42, 7))
 
     def test_parse_clock_refuses_malformed_text(self) -> None:
-        for bad in ("", "123", "0000000001000-0001", "abc.def"):
+        arabic_indic = "\u0661\u0667" + "\u0660" * 11  # digits to \\d without re.ASCII
+        for bad in ("", "123", "0000000001000-0001", "abc.def", f"{arabic_indic}.0000"):
             with self.assertRaises(ChangeLogError):
                 change_log.parse_clock(bad)
 

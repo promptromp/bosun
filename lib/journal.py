@@ -14,14 +14,24 @@ leaves an unfinished transaction at the end of a file: readers leave it out, as 
 there, and `repair_tail` moves it aside, kept, before the next write. Any other damage raises
 `JournalError` where the line is read.
 
+Every byte reaches the file or the write fails (a short write is finished, one that makes no
+progress raises), and each append is flushed to the disk itself before the next file is written
+(`flush_to_disk`: F_FULLFSYNC on macOS, whose fsync leaves data in the drive's cache, so that a
+power cut cannot keep a later write and lose an earlier one). Each file is numbered from seq 1
+with no gap; a gap is damage.
+
 The caller holds the store's lock (the ledger's flock, the knowledge base's lock); nothing here
 locks. The pure side (ids, clocks, order) is `lib/change_log.py`.
 """
 
 from __future__ import annotations
 
+import contextlib
+import errno
+import fcntl
 import json
 import os
+import re
 import secrets
 import sys
 import time
@@ -44,6 +54,7 @@ from change_log import (
 
 
 REPLICA_FILE = "replica.json"
+REPLICA_ID = re.compile(r"[0-9a-f]{32}")  # also a file's stem: never "local", never a path
 LOCAL = "local"
 SUFFIX = ".jsonl"
 TORN = ".torn-"  # <file>.torn-<UTC time>: an unfinished transaction, moved aside
@@ -68,21 +79,59 @@ def wall_ms() -> int:
     return time.time_ns() // 1_000_000
 
 
-def replica_id(state_dir: Path) -> str:
-    """This machine's id (32 hex characters), made once and kept in `replica.json`."""
-    path = state_dir / REPLICA_FILE
+def flush_to_disk(fd: int) -> None:
+    """fsync <fd>, and where there is F_FULLFSYNC (macOS) that instead: plain fsync there leaves
+    the data in the drive's cache, which may write it after what came later. A file system without
+    it (some network mounts) gets fsync."""
+    full = getattr(fcntl, "F_FULLFSYNC", None)
+    if full is not None:
+        with contextlib.suppress(OSError):
+            fcntl.fcntl(fd, full)
+            return
+    os.fsync(fd)
+
+
+def _write_all(fd: int, data: bytes) -> None:
+    """All of <data> to <fd>: a short write (a nearly full disk) is finished by more calls, and a
+    call that writes nothing raises, so that a transaction is never left unfinished unnoticed."""
+    view = memoryview(data)
+    while view:
+        written = os.write(fd, view)
+        if written <= 0:
+            raise OSError(errno.EIO, f"no progress writing {len(view)} more bytes")
+        view = view[written:]
+
+
+def _read_replica(path: Path) -> str:
+    """The id in <path>; anything else there is refused, never replaced: a Mac's id must not
+    change without anyone deciding it."""
     try:
-        found = json.loads(path.read_text(encoding="utf-8"))["replica"]
-        if isinstance(found, str) and found:
-            return found
-    except (OSError, ValueError, KeyError, TypeError):
-        pass
+        found = json.loads(path.read_text(encoding="utf-8")).get("replica")
+    except (OSError, ValueError, AttributeError) as exc:
+        found = exc
+    if isinstance(found, str) and REPLICA_ID.fullmatch(found):
+        return found
+    raise JournalError(
+        f"{path} holds no replica id (32 hex characters): {found!r}. Move it aside together with the "
+        "journal folder next to it; the next write starts both again"
+    )
+
+
+def replica_id(state_dir: Path) -> str:
+    """This machine's id (32 hex characters), made once and kept in `replica.json` (written whole
+    and flushed to the disk before it is used)."""
+    path = state_dir / REPLICA_FILE
+    if path.exists():
+        return _read_replica(path)
     state_dir.mkdir(parents=True, exist_ok=True)
     made = secrets.token_hex(16)
     tmp = state_dir / f".{REPLICA_FILE}.{os.getpid()}.tmp"
     fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-    with os.fdopen(fd, "w", encoding="utf-8") as handle:
-        handle.write(json.dumps({"replica": made}) + "\n")
+    try:
+        _write_all(fd, (json.dumps({"replica": made}) + "\n").encode())
+        flush_to_disk(fd)
+    finally:
+        os.close(fd)
     os.replace(tmp, path)
     return made
 
@@ -122,10 +171,28 @@ def _whole(data: bytes) -> bytes:
     return data[: data.rfind(b"\n") + 1]
 
 
+def _check_seq(change: Change, due: int, path: Path, number: int) -> None:
+    """A file is numbered from seq 1 with no gap: a change that is not <due> is damage."""
+    seq = change["seq"]
+    if seq == due:
+        return
+    if seq < due:
+        lost = f"seq {seq} again"
+    else:
+        lost = f"seq {due} is missing" if seq == due + 1 else f"seqs {due} to {seq - 1} are missing"
+    raise JournalError(f"{path.name}, line {number}: seq {seq} where seq {due} was due: {lost}")
+
+
 def _read_all(path: Path) -> list[Change]:
-    """Every whole line of <path>, in order (what follows the last newline is left out)."""
-    lines = _whole(path.read_bytes()).split(b"\n")
-    return [_parse(line, path, number) for number, line in enumerate(lines, 1) if line.strip()]
+    """Every whole line of <path>, in order (what follows the last newline is left out), each the
+    seq after the one before."""
+    found: list[Change] = []
+    for number, line in enumerate(_whole(path.read_bytes()).split(b"\n"), 1):
+        if line.strip():
+            change = _parse(line, path, number)
+            _check_seq(change, len(found) + 1, path, number)
+            found.append(change)
+    return found
 
 
 def _back(handle: BinaryIO, size: int, count: int) -> tuple[list[tuple[int, bytes]], int]:
@@ -222,14 +289,14 @@ def _set_aside(path: Path, end: int, stamp: str) -> Path:
         aside = path.with_name(f"{path.name}{TORN}{stamp}-{n}")
     fd = os.open(aside, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
     try:
-        os.write(fd, torn)
-        os.fsync(fd)
+        _write_all(fd, torn)
+        flush_to_disk(fd)
     finally:
         os.close(fd)
     fd = os.open(path, os.O_WRONLY)
     try:
         os.ftruncate(fd, end)
-        os.fsync(fd)
+        flush_to_disk(fd)
     finally:
         os.close(fd)
     return aside
@@ -249,8 +316,9 @@ class Journal:
     def _ends(self) -> dict[str, _End]:
         return {path.stem: _end(path) for path in self._files()}
 
-    def changes(self) -> list[Change]:
-        """Every change of a whole transaction in every file, in the one global order."""
+    def changes(self, at: Mapping[str, int] | None = None) -> list[Change]:
+        """Every change of a whole transaction in every file, in the one global order; with <at>
+        (a position), only those up to its seq in each file."""
         ends = self._ends()
         found: list[Change] = []
         for path in self._files():
@@ -258,6 +326,8 @@ class Journal:
             end = ends[path.stem]
             if not _whole_end(path.stem, end, ends):
                 del lines[len(lines) - len(end.trailing) :]
+            if at is not None:
+                lines = [change for change in lines if change["seq"] <= at.get(path.stem, 0)]
             found += lines
         return in_order(found)
 
@@ -381,8 +451,8 @@ class Transaction:
         return done, files
 
     def commit(self) -> list[Change]:
-        """Append the transaction: local.jsonl first, then the replica's file, each with fsync, so
-        a cut leaves local lines whose private lines are missing, which readers leave out."""
+        """Append the transaction: local.jsonl first, then the replica's file, each flushed to the
+        disk, so a cut leaves local lines whose private lines are missing, which readers leave out."""
         self._check_open()
         self.committed = True
         if not self.edits:
@@ -393,8 +463,8 @@ class Transaction:
             data = b"".join(canonical(c) + b"\n" for c in changes)
             fd = os.open(self.journal.root / f"{stem}{SUFFIX}", os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o600)
             try:
-                os.write(fd, data)
-                os.fsync(fd)
+                _write_all(fd, data)
+                flush_to_disk(fd)
             finally:
                 os.close(fd)
         self.edits = []
