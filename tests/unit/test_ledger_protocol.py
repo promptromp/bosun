@@ -15,7 +15,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
-from typing import Any
+from typing import IO, Any
 from unittest import mock
 
 
@@ -1050,13 +1050,18 @@ class ConcurrentWritersTest(JournalChecks):
         self.addCleanup(self.state.cleanup)
         self.env = {**os.environ, "BOSUN_STATE_DIR": self.state.name}
 
-    def cli(self, *argv: str) -> subprocess.Popen[bytes]:
-        return subprocess.Popen([sys.executable, str(LIB / "ledger.py"), *argv], env=self.env)
+    def cli(self, *argv: str, stderr: IO[bytes]) -> subprocess.Popen[bytes]:
+        return subprocess.Popen([sys.executable, str(LIB / "ledger.py"), *argv], env=self.env, stderr=stderr)
 
     def run_wave(self, commands: list[list[str]]) -> None:
-        """Start every command at once, then wait for all of them."""
-        writers = [self.cli(*command) for command in commands]
-        self.assertEqual([writer.wait() for writer in writers], [0] * len(writers))
+        """Start every command at once, then wait for all of them. A writer that fails is named
+        with what it printed, so a failure under load can be read afterwards."""
+        with tempfile.TemporaryFile() as errors:
+            writers = [(command, self.cli(*command, stderr=errors)) for command in commands]
+            failed = [(command, code) for command, writer in writers if (code := writer.wait())]
+            errors.seek(0)
+            printed = errors.read().decode(errors="replace")
+        self.assertEqual(failed, [], printed)
 
     def second_wave(self, number: int) -> list[list[str]]:
         """A transition or a delegation on item <number>, and a report on the shared item."""
