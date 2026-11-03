@@ -399,6 +399,13 @@ Where we expect to iterate:
   or a session transcript, and so do its `proposed` and `proposal-*` history entries; they are
   `sealed`. Moving the quote out of the action into a field of its own would let it stay `local`;
   that needs my decision before phase 1.
+- **Nothing removes a history entry.** The ledger's journal keeps every change, so a note typed by
+  mistake (a colleague's name, something private) stays in the journal even after a hand edit
+  (which the next write undoes) or a `prune` (which deletes the item, not its earlier changes).
+  Today the only way out is to move the journal aside, which starts it again from `ledger.json`.
+  A ledger forget is open for phase 1, before any of it leaves the Mac: as planned for the
+  knowledge base's `kg forget`, a forgotten change would keep its place in the sequence and lose
+  its body.
 
 ### Scopes and the state repository
 

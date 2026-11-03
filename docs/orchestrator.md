@@ -191,10 +191,13 @@ older `ledger.json`, back does not undo a write: the journal brings it forward a
 with the command that reverses it. A change made to `ledger.json` by hand, or by an older bosun,
 is adopted by the next write: it goes into the journal as a transaction named `adopt`, with a line
 on stderr. What the journal cannot hold, such as removing a history entry (history only grows), is
-undone by that write, which says so and keeps the edited file as `ledger.json.bak`. If journal
-files go missing or a line in them is damaged, writes stop and say so: move `journal/ledger` and
-`replica.json` aside together, and the next write starts a new journal from `ledger.json`. Each
-item keeps its last 200 history entries; the journal keeps all of them.
+undone by that write, which says so and keeps the edited file as `ledger.json.bak`. Writes stop
+and say so when a journal file has gone missing or lost lines (the journal is behind
+`ledger.json`), or a line at the end of one, which every write reads, is damaged. Damage further
+up, or a gap in a file's numbering, stops only a write that has to rebuild (after a write cut short
+or a hand edit); until then `bosun ledger validate --journal` and `bosun doctor` report it. Either
+way, move `journal/ledger` and `replica.json` aside together, and the next write starts a new
+journal from `ledger.json`. Each item keeps its last 200 history entries; the journal keeps all of them.
 
 ## Waiting on someone: outreach
 
