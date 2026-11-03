@@ -123,6 +123,13 @@ def a_set(path: list[str], value: Any, prev: Any, local: bool = False) -> Edit:
     return Edit("item.set", ITEM, {"path": path, "value": value, "prev": prev}, local)
 
 
+def _append(entry: dict[str, Any], local: bool = False) -> Edit:
+    return Edit("item.append", ITEM, {"path": ["history"], "entry": entry}, local)
+
+
+PERMALINK = "https://acme.slack.com/archives/C0000000001/p1700000001000001"
+
+
 def leaf_paths(path: tuple[str, ...], value: Any) -> Iterator[tuple[str, ...]]:
     """The paths diff compares as one value: it looks into a dict only where the table names its
     keys (a container), so a dict under a key nobody named is one unclassified value."""
@@ -407,10 +414,68 @@ class TestDiff(unittest.TestCase):
     def test_links_and_unlinks_are_their_own_edits(self) -> None:
         kept = {"rel": "tracks", "id": "jira:EXP-12", "at": T0}
         old = {"rel": "part_of", "id": WS_OLD, "at": T0}
-        new = {"rel": "part_of", "id": WS_NEW, "at": T1, "via": "user: move it"}
+        new = {"rel": "part_of", "id": WS_NEW, "at": T1, "via": "https://acme.slack.com/archives/C0/p1"}
         before = a_ledger(an_item(links=[kept, old]))
         edits = changed(before, lambda data: data["items"][ITEM].update(links=[kept, new]))
         self.assertEqual(edits, [Edit("item.unlink", ITEM, old, False), Edit("item.link", ITEM, new, False)])
+
+    def test_a_via_or_evidence_that_quotes_me_is_local_wherever_it_is(self) -> None:
+        """My words as a link's or a task's via, or a transition's evidence ('user: ...'): local,
+        as a history entry that quotes me is; a via that points at a message is not."""
+        mine = {"rel": "part_of", "id": WS_NEW, "at": T1, "via": "user: put it in exports"}
+        moved = {
+            "at": T1,
+            "event": "transition",
+            "from": "requested",
+            "to": "delegated",
+            "evidence": " User: yes",
+        }
+        cases = {
+            "a link": (
+                lambda d: d["items"][ITEM].update(links=[mine]),
+                [Edit("item.link", ITEM, mine, True)],
+            ),
+            "a history entry": (lambda d: add_note(d["items"][ITEM], moved), [_append(moved, local=True)]),
+            "a field": (
+                lambda d: d["items"][ITEM]["fields"].update(via="user: totals too"),
+                [a_set(["fields", "via"], "user: totals too", None, local=True)],
+            ),
+            "a message's permalink": (
+                lambda d: d["items"][ITEM]["fields"].update(via=PERMALINK),
+                [a_set(["fields", "via"], PERMALINK, None)],
+            ),
+        }
+        for name, (change, expected) in cases.items():
+            with self.subTest(name):
+                self.assertEqual(changed(a_ledger(an_item()), change), expected)
+
+    def test_a_field_that_quoted_me_stays_local_when_it_changes(self) -> None:
+        """Its earlier value would ride along as the set's prev."""
+        before = a_ledger(an_item(fields={"repo": "acme/exporter", "via": "user: totals too"}))
+        edits = changed(before, lambda d: d["items"][ITEM]["fields"].update(via=PERMALINK))
+        self.assertEqual(edits, [a_set(["fields", "via"], PERMALINK, "user: totals too", local=True)])
+
+    def test_a_new_items_links_from_the_first_that_quotes_me_follow_its_create(self) -> None:
+        """As with its history: the create holds the links before the first local one, the rest
+        follow in order (each local or not), so the rebuild keeps their order; links made with
+        the item are not checked again, so one to an item made later in the same write (genesis
+        goes by id) or to one that is gone (an old prune) still rebuilds."""
+        first = {"rel": "relates_to", "id": "jira:EXP-12", "at": T0}
+        mine = {"rel": "part_of", "id": WS_NEW, "at": T1, "via": "user: put it in exports"}
+        last = {"rel": "relates_to", "id": "slack:C0/1.2", "at": T2}  # gone: pruned long ago
+        item = an_item(links=[first, mine, last])
+        data = a_ledger(item, an_item(WS_NEW, kind="workstream", state="active", links=[]))
+        edits = diff(EMPTY, data)
+        create = next(e for e in edits if e.op == "item.create" and e.target == ITEM)
+        self.assertEqual(create.body["item"]["links"], [first])
+        links = [(e.body, e.local) for e in edits if e.op == "item.link"]
+        self.assertEqual(links, [(mine, True), (last, False)])
+        result = rebuild(journaled(edits), ledger.RULES)
+        self.assertEqual(result.conflicts, [])
+        self.assertEqual(result.ledger, as_rebuilt(data))
+
+    def test_quotes_me_is_the_ledgers_mark_of_my_words(self) -> None:
+        self.assertEqual(ledger_changes.QUOTES_ME, ledger.USER_EVIDENCE)
 
     def test_a_link_with_a_new_time_is_a_new_link(self) -> None:
         first = {"rel": "relates_to", "id": "jira:EXP-12", "at": T0}
@@ -663,7 +728,7 @@ class TestDiff(unittest.TestCase):
         self.assertEqual(ops.count("item.create"), len(data["items"]))
         self.assertEqual(ops.count("map.put"), len(data["sources"]) + len(data["runs"]))
         self.assertEqual(ops.count("said.append"), len(data["said"]))
-        self.assertEqual(set(ops), {"item.create", "item.append", "map.put", "said.append"})
+        self.assertEqual(set(ops), {"item.create", "item.append", "item.set", "map.put", "said.append"})
         self.assertEqual([edit.target for edit in edits if edit.op == "item.create"], sorted(data["items"]))
         # the fixture's user-said entry and what follows it in that history: appends after the create
         appended = [(edit.body["entry"]["event"], edit.local) for edit in edits if edit.op == "item.append"]
@@ -672,6 +737,12 @@ class TestDiff(unittest.TestCase):
             if edit.op == "item.create":
                 history = edit.body["item"]["history"]
                 self.assertFalse(any(ledger_changes.is_local_entry(entry) for entry in history))
+
+    def test_genesis_of_the_fixture_sets_a_via_that_quotes_me_apart(self) -> None:
+        """The fixture's one task whose via is my words: a local set of its own, after its create."""
+        edits = diff({}, json.loads(FIXTURE.read_text()))
+        sets = [(edit.body["path"], edit.local) for edit in edits if edit.op == "item.set"]
+        self.assertEqual(sets, [(["fields", "via"], True)])
 
     def test_edits_do_not_share_the_ledgers_objects(self) -> None:
         after = a_ledger(an_item(fields={"repo": "acme/exporter", "options": ["a"]}))
@@ -1256,6 +1327,9 @@ def rules_digest() -> str:
 
 WINDOW = "exporter"
 SAID = "keep the zebra totals per customer"
+MY_VIA = "credit notes in the export too"
+MY_EVIDENCE = "yes, do the credit notes"
+MY_LINK_VIA = "same customer as the footer"
 TOOL_USE_ID = "toolu_01"  # what PostToolUseTestCase.post gives the call
 QUESTION_TEXT = "Do credit notes reuse the invoice number sequence?"
 REVIEW = "review:acme/exporter#9"
@@ -1275,8 +1349,8 @@ class RealWritesTest(PostToolUseTestCase):
     """Real commands, the prompt hook and the guard on a scratch ledger, every write captured:
     every field they write has a row, and every edit that may leave the Mac (not local) is free of
     my words (an approval's quote, what I typed in a window) and of a call's context (session,
-    transcript, tool_use_id). A task's `via: user: ...` is sealed and a link's via private by
-    decision, so it is not checked here."""
+    transcript, tool_use_id), nor what I said as a link's or a task's via or a transition's
+    evidence ('user: ...')."""
 
     def setUp(self) -> None:
         super().setUp()
@@ -1345,6 +1419,10 @@ class RealWritesTest(PostToolUseTestCase):
         run(
             "spawn", PR, "--title", "Footer totals", "--ask", "add totals", "--via", "user: totals too", *task
         )
+        spawned = run("spawn", "--title", "Credit notes", "--ask", "export them", "--via", f"user: {MY_VIA}")
+        accept = ["--note", "go", "--evidence", f"user: {MY_EVIDENCE}"]
+        run("transition", spawned.splitlines()[0], "accepted", *accept)
+        run("link", OTHER_PR, "relates_to", PR, "--via", f"user: {MY_LINK_VIA}")
         run(
             "ticket-sync", "jira:EXP-12", "--status", "In Progress", "--assignee", "Lena", "--parent", "EXP-1"
         )
@@ -1484,7 +1562,8 @@ class RealWritesTest(PostToolUseTestCase):
     def test_no_edit_that_may_leave_holds_my_words_or_a_calls_context(self) -> None:
         self.work()
         edits = self.edits()
-        mine = [APPROVING_WORDS, SAID, SESSION, str(self.transcript), TOOL_USE_ID]
+        quoted = ["totals too", MY_VIA, MY_EVIDENCE, MY_LINK_VIA]  # as a via or evidence, 'user: ...'
+        mine = [APPROVING_WORDS, SAID, SESSION, str(self.transcript), TOOL_USE_ID, *quoted]
         kept = "".join(edit_text(edit) for edit in edits if edit.local)
         self.assertEqual([text for text in mine if text not in kept], [])  # the work reached them all
         leaving = [edit for edit in edits if not edit.local]

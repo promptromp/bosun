@@ -28,9 +28,11 @@ Ops and their bodies (paths relative to the item, as lists):
   said.append / said.drop  {"entry"}
 
 A local leaf never goes in a body that is not local: it gets its own `item.set`, marked local.
-A history entry that quotes my words or a call's context (`LOCAL_HISTORY_EVENTS`, `CALL_CONTEXT`)
-is a local `item.append`. A new item's create holds its history up to the first such entry; the
-rest follows as appends in order, local or not, so that the rebuild keeps the order exactly.
+A history entry or a link that quotes my words or keeps a call's context (`LOCAL_HISTORY_EVENTS`,
+`CALL_CONTEXT`, a `via` or evidence that quotes me, `QUOTES_ME`) is a local `item.append` or
+`item.link`; a field that quotes me is a local leaf. A new item's create holds its history and its
+links up to the first such entry; the rest follows as appends and links in order, local or not, so
+that the rebuild keeps the order exactly (and a link made with its item is not checked again).
 
 Pure functions over the ledger document: no file access. `lib/ledger.py` imports this module, so
 it never imports `ledger`.
@@ -129,6 +131,12 @@ DELEGATION = ("window", "task", "at", "updates", "last_update_at", "moved_from")
 # as is an entry that keeps a call's context. The property test in tests/unit/test_ledger_changes.py
 # fails if a renamed event lets them out.
 LOCAL_HISTORY_EVENTS = ("approved", "approval-used", "user-said")
+# My words where a command records what something came from or why it moved: a link's or a task's
+# `via`, a transition's `evidence`, as 'user: <what I said>' (ledger.USER_EVIDENCE). Local wherever
+# they are: a history entry or a link that holds one is local whole, a field that holds one a local
+# leaf (decision 3 in docs/design/sync.md: my verbatim words stay on the Mac).
+QUOTES_ME = "user:"
+QUOTE_KEYS = ("via", "evidence")
 # The history event of a state change (ledger.transition_item), with its "from" and "to": a write
 # that makes two (a one-way message sent, then applied) is two state changes.
 TRANSITION = "transition"
@@ -237,8 +245,16 @@ def is_container(path: Path, value: Any) -> bool:
     return isinstance(value, dict) and _has_rows_below(path)
 
 
+def quotes_me(value: Any) -> bool:
+    """Whether <value> is my words as a via or evidence records them ('user: ...')."""
+    return isinstance(value, str) and value.lstrip().lower().startswith(QUOTES_ME)
+
+
 def _is_local(path: Path, value: Any) -> bool:
-    return not is_container(path, value) and classify(path).klass == LOCAL
+    """A leaf that never leaves the Mac: by its row, or because it quotes me (a task's via)."""
+    if is_container(path, value):
+        return False
+    return classify(path).klass == LOCAL or (path[-1] in QUOTE_KEYS and quotes_me(value))
 
 
 def strip_local(path: Path, value: Any) -> Any:
@@ -280,9 +296,12 @@ def trim_history(item: Item) -> None:
 
 
 def is_local_entry(entry: Any) -> bool:
-    """A history entry that quotes my words, or keeps a call's context: it never leaves the Mac."""
+    """A history entry or a link that quotes my words (by its event, or a via or evidence that
+    quotes me), or keeps a call's context: it never leaves the Mac."""
     return isinstance(entry, dict) and (
-        entry.get("event") in LOCAL_HISTORY_EVENTS or any(name in entry for name in CALL_CONTEXT)
+        entry.get("event") in LOCAL_HISTORY_EVENTS
+        or any(name in entry for name in CALL_CONTEXT)
+        or any(quotes_me(entry.get(key)) for key in QUOTE_KEYS)
     )
 
 
@@ -290,10 +309,11 @@ def _entry_event(entry: Any) -> Any:
     return entry.get("event") if isinstance(entry, dict) else None
 
 
-def _split_history(history: list[Any]) -> tuple[list[Any], list[Any]]:
-    """A new item's history: what its create holds (up to the first local entry), and the rest."""
-    first = next((index for index, entry in enumerate(history) if is_local_entry(entry)), len(history))
-    return history[:first], history[first:]
+def _split_entries(entries: list[Any]) -> tuple[list[Any], list[Any]]:
+    """A new item's history or links: what its create holds (up to the first local entry), and the
+    rest."""
+    first = next((index for index, entry in enumerate(entries) if is_local_entry(entry)), len(entries))
+    return entries[:first], entries[first:]
 
 
 def _key(entry: Any) -> str:
@@ -424,18 +444,15 @@ def _entry_edit(op: str, path: Path, rule: FieldRule, entry: Any) -> Edit:
     return Edit(op, path[1], {"path": list(path[2:]), "entry": _plain(entry)}, rule.klass == LOCAL)
 
 
-def _is_history(path: Path) -> bool:
-    return classify(path).rule == HISTORY
-
-
 def _history_edit(path: Path, entry: Any) -> Edit:
     local = classify(path).klass == LOCAL or is_local_entry(entry)
     return Edit("item.append", path[1], {"path": list(path[2:]), "entry": _plain(entry)}, local)
 
 
 def _whole_set(path: Path, before: Any, after: Any) -> list[Edit]:
-    """One set of the whole value at <path>; each local leaf inside it in a local set of its own."""
-    if _is_local(path, after):
+    """One set of the whole value at <path>; each local leaf inside it in a local set of its own. A
+    leaf that was local before stays local (its old value rides along as the set's prev)."""
+    if _is_local(path, after) or _is_local(path, before):
         return [_set_edit(path, after, before, local=True)]
     edits = [_set_edit(path, strip_local(path, after), strip_local(path, before), local=False)]
     return edits + [
@@ -484,10 +501,14 @@ def _on_links(path: Path, rule: FieldRule, before: Any, after: Any, out: _ItemEd
     new = {_link_key(link): link for link in after}
     local = rule.klass == LOCAL
     out.unlinks += [
-        Edit("item.unlink", path[1], _plain(link), local) for key, link in old.items() if key not in new
+        Edit("item.unlink", path[1], _plain(link), local or is_local_entry(link))
+        for key, link in old.items()
+        if key not in new
     ]
     out.links += [
-        Edit("item.link", path[1], _plain(link), local) for key, link in new.items() if key not in old
+        Edit("item.link", path[1], _plain(link), local or is_local_entry(link))
+        for key, link in new.items()
+        if key not in old
     ]
 
 
@@ -512,17 +533,26 @@ def _compare_dict(path: Path, before: Mapping[str, Any], after: Mapping[str, Any
         _compare((*path, key), before.get(key, _MISSING), after.get(key, _MISSING), out)
 
 
+def _added_after(path: Path, rule: str, entry: Any) -> Edit:
+    """An entry of a new item's history or links that its create does not hold, as its own edit."""
+    if rule == LINKS:
+        return Edit("item.link", path[1], _plain(entry), is_local_entry(entry))
+    return _history_edit(path, entry)
+
+
 def _created(item_id: str, item: Item) -> list[Edit]:
-    """A new item: its create without its local leaves, its history from the first local entry on
-    as appends in order, then each local leaf, by path."""
+    """A new item: its create without its local leaves, its history and links from the first local
+    entry on as appends and links in order, then each local leaf, by path."""
     path = ("items", item_id)
     body = _plain(strip_local(path, item))
-    appends = []
-    for key in [key for key, value in body.items() if isinstance(value, list) and _is_history((*path, key))]:
-        body[key], rest = _split_history(body[key])
-        appends += [_history_edit((*path, key), entry) for entry in rest]
+    after = []
+    for key, value in list(body.items()):
+        rule = classify((*path, key)).rule
+        if isinstance(value, list) and rule in (HISTORY, LINKS):
+            body[key], rest = _split_entries(value)
+            after += [_added_after((*path, key), rule, entry) for entry in rest]
     leaves = [_set_edit(leaf, value, _MISSING, local=True) for leaf, value in _local_leaves(path, item)]
-    return [Edit("item.create", item_id, {"item": body}, False), *appends, *leaves]
+    return [Edit("item.create", item_id, {"item": body}, False), *after, *leaves]
 
 
 def _transitions(appends: list[Edit]) -> list[tuple[Any, Any]]:
@@ -653,7 +683,8 @@ class _Merged:
 @dataclass
 class _Rebuild:
     """The ledger as the changes so far make it; the change being applied; the replicas that
-    deleted each deleted item (delete wins); and the links of merged items still to check."""
+    deleted each deleted item (delete wins); the links of merged items still to check; and the
+    transaction that made each item new (not merged into), whose links to it are not checked."""
 
     ledger: Ledger
     rules: Rules
@@ -661,6 +692,7 @@ class _Rebuild:
     conflicts: list[Conflict] = field(default_factory=list)
     deleted: dict[str, set[str]] = field(default_factory=dict)
     merged: dict[Transaction, list[_Merged]] = field(default_factory=dict)
+    made_by: dict[str, Transaction] = field(default_factory=dict)
 
     @property
     def items(self) -> dict[str, Item]:
@@ -762,20 +794,26 @@ def _as_link(source: str, entry: Mapping[str, Any]) -> Link:
     )
 
 
-def _add_link(state: _Rebuild, item_id: str, item: Item, entry: Mapping[str, Any]) -> str | None:
+def _add_link(
+    state: _Rebuild, item_id: str, item: Item, entry: Mapping[str, Any], *, checked: bool = True
+) -> str | None:
     """Add a stored link unless the item has it (the same relation, other end and time) or the
-    rules refuse it; the refusal, else None. A link made again with a new time is another link,
-    so an unlink on another Mac of the old one leaves it (add wins)."""
+    rules refuse it (if <checked>); the refusal, else None. A link made again with a new time is
+    another link, so an unlink on another Mac of the old one leaves it (add wins)."""
     if any(_link_key(link) == _link_key(entry) for link in item.get("links") or []):
         return None
-    problem = state.rules.link_problem(state.items, _as_link(item_id, entry))
+    problem = state.rules.link_problem(state.items, _as_link(item_id, entry)) if checked else None
     if problem is None:
         item.setdefault("links", []).append(copy.deepcopy(entry))
     return problem
 
 
 def _link(state: _Rebuild, item_id: str, body: dict[str, Any]) -> None:
-    problem = _add_link(state, item_id, state.item(item_id), body)
+    """A link the rules allow. One the write that made the item adds (after its create, from the
+    first that quotes me) is not checked, as its create's links are not: no other Mac knows the
+    item yet, and its write checked them."""
+    with_its_item = state.made_by.get(item_id) == _transaction(state.current)
+    problem = _add_link(state, item_id, state.item(item_id), body, checked=not with_its_item)
     if problem:
         raise _Refused(LINK_CONFLICT, problem)
 
@@ -887,6 +925,7 @@ def _create(state: _Rebuild, item_id: str, body: dict[str, Any]) -> None:
         _merge(state, item_id, state.items[item_id], made)
     else:
         state.items[item_id] = copy.deepcopy(made)
+        state.made_by[item_id] = _transaction(state.current)
 
 
 def _delete(state: _Rebuild, item_id: str, _body: dict[str, Any]) -> None:
