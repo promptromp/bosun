@@ -1,5 +1,6 @@
 #!/bin/bash
-# Usage: tests/sandbox/mac.sh setup | run [--from-nothing] | live [claude|codex] | shell | clean
+# Usage: tests/sandbox/mac.sh setup | run [--from-nothing] | work [--base <git ref>] | live [claude|codex]
+#        | shell | clean
 #        (through tests/sandbox.sh mac)
 #
 # A real, throwaway Mac: macOS in a Tart VM on this machine, for what the Docker sandbox cannot show.
@@ -8,6 +9,9 @@
 #           Homebrew, no Apple tools), and bosun-mac-dev, a developer's Mac (the same with Homebrew)
 #   run     on a clone of the developer's Mac: this checkout's installer, real launchd, a real wake
 #           schedule and uninstall (tests/install_e2e.sh). --from-nothing: on the new Mac instead
+#   work    on a clone of the developer's Mac: a week of real work that installs the release (--base,
+#           default origin/main), upgrades to this checkout by running get.sh again, and keeps working
+#           with the clock moved, writers racing and writes cut short (tests/work_e2e.sh)
 #   live    the real agents from nothing, and a real task handed over (tests/sandbox/live.sh). It costs
 #           real money, about a dollar. It reads API keys from your Keychain, as BOSUN_SANDBOX_ANTHROPIC_ITEM
 #           and BOSUN_SANDBOX_OPENAI_ITEM name them; they never leave the clone, which is deleted.
@@ -131,10 +135,17 @@ prepare_clone() { # <base image>
   tart clone "$1" "$CLONE" || die "could not clone $1"
 }
 
-copy_checkout() {
+# <ref> as the branch a new Mac installs from, in a git bundle of its own.
+bundle_ref() { # <git ref> <file>
+  git -C "$ROOT" branch -q -f --no-track "$TREE_BRANCH" "$1" || return 1
+  git -C "$ROOT" bundle create -q "$2" "$TREE_BRANCH" 2>/dev/null
+}
+
+copy_checkout() { # [<name of the bundle in the VM>]
   bundle_checkout "$WORK/repo.bundle" || die "could not bundle this checkout"
-  to_vm "$CLONE" "$WORK/repo.bundle" repo.bundle || die "could not copy the checkout"
-  COPYFILE_DISABLE=1 tar -C "$ROOT" -czf "$WORK/e2e.tgz" get.sh tests/install_e2e.sh tests/sandbox/claude-stand-in \
+  to_vm "$CLONE" "$WORK/repo.bundle" "${1:-repo.bundle}" || die "could not copy the checkout"
+  COPYFILE_DISABLE=1 tar -C "$ROOT" -czf "$WORK/e2e.tgz" get.sh tests/install_e2e.sh tests/work_e2e.sh \
+    tests/sandbox/e2e_lib.sh tests/sandbox/acme_week.sh tests/sandbox/claude-stand-in \
     tests/sandbox/gh-stand-in tests/sandbox/drive.py tests/sandbox/live.sh tests/sandbox/live \
     tests/fixtures/knowledge/acme-import.jsonl
   to_vm "$CLONE" "$WORK/e2e.tgz" e2e.tgz || die "could not copy the test"
@@ -150,6 +161,27 @@ run() { # [--from-nothing]
   copy_checkout
   # shellcheck disable=SC2016 # expands in the VM
   in_vm "$CLONE" 'BOSUN_REPO="$HOME/repo.bundle" BOSUN_BRANCH='"$TREE_BRANCH"' e2e/tests/install_e2e.sh'
+}
+
+# The release (<ref>) installed, then this checkout as its upgrade: two bundles of the same branch, the
+# second a descendant of the first, so that get.sh's `git pull --ff-only` takes it.
+work() { # [--base <git ref>]
+  local base="origin/main"
+  case "${1:-}" in
+    "") ;;
+    --base) base="${2:?--base takes a git ref}" ;;
+    *) die "unknown '$1' for work (see --help)" ;;
+  esac
+  git -C "$ROOT" merge-base --is-ancestor "$base" HEAD ||
+    die "$base is not an ancestor of this checkout, so get.sh could not fast-forward to it"
+  prepare_clone "$DEV_MAC"
+  say "booting a clone of $DEV_MAC, for a week of work from $base to this checkout"
+  boot "$CLONE" --no-graphics
+  bundle_ref "$base" "$WORK/repo-base.bundle" || die "could not bundle $base"
+  to_vm "$CLONE" "$WORK/repo-base.bundle" repo-base.bundle || die "could not copy $base"
+  copy_checkout repo-tree.bundle
+  # shellcheck disable=SC2016 # expands in the VM
+  in_vm "$CLONE" 'BOSUN_REPO="$HOME/repo.bundle" BOSUN_BRANCH='"$TREE_BRANCH"' e2e/tests/work_e2e.sh'
 }
 
 need_key() { # <Keychain item>: without -w, this asks whether it is there and not for what it holds
@@ -225,6 +257,10 @@ case "${1:-}" in
   run)
     shift
     run "$@"
+    ;;
+  work)
+    shift
+    work "$@"
     ;;
   live)
     shift

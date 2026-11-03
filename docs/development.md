@@ -51,6 +51,7 @@ put a blank line before it.
 | Anything else in bosun | `tests/sandbox.sh all` | also the unit tests and the smoke suite | 3 minutes |
 | `get.sh`, `install.sh`, launchd, `pmset`, anything macOS does its own way | `tests/sandbox.sh mac run` | the real thing on real macOS, except sleep | 75 seconds |
 | What a new Mac lacks: Homebrew, Apple's tools | `tests/sandbox.sh mac run --from-nothing` | the same from a Mac with nothing on it | 4 minutes |
+| What an update does to a ledger in use, and what real use does to the ledger: its journal, ids, writes | `tests/sandbox.sh mac work` | a week of work through an update on real macOS: launchd, a moving clock, racing writers, writes cut short | 5 minutes |
 | How an agent behaves: launching it, its screens and files, a task handed to it | `tests/sandbox.sh mac live claude`, `... live codex` | the real agents from nothing, through setup and sessions | 10 minutes, about a dollar |
 | The wake itself | `bosun wake-test`, on real hardware | a real sleep and a real wake | 5 minutes |
 
@@ -84,6 +85,7 @@ brew install openai/tools/tart
 tests/sandbox.sh mac setup                # once: pulls the image (6 minutes) and prepares the bases (4)
 tests/sandbox.sh mac run                  # on a developer's Mac: Homebrew is already there
 tests/sandbox.sh mac run --from-nothing   # on a new Mac: no Homebrew, no Apple tools
+tests/sandbox.sh mac work                 # a week of work, through an upgrade: see below
 tests/sandbox.sh mac live codex           # the real agents: see below
 tests/sandbox.sh mac shell                # a window, to try the wizard as a new user would
 tests/sandbox.sh mac clean                # delete the base images (`tart prune` removes the pulled one)
@@ -106,6 +108,29 @@ If Homebrew refuses the tap, it wants to be told you trust it. These two are eno
 - **Wait for the login.** ssh answers before the auto-login finishes, and until then launchd has no
   `gui/<uid>` domain and `launchctl bootstrap` fails with error 125. `mac.sh` waits for it; do the same
   if you script a VM by hand.
+
+### A week of work: `tests/sandbox.sh mac work`
+
+`run` shows a new install. `work` shows what an update does to someone who already uses bosun, and what
+real use does to the ledger: on a clone of the developer's Mac it installs the release with the piped
+installer, works three days of the fictional acme week (`tests/sandbox/acme_week.sh`: review requests,
+tasks and their links, a workstream, outreach and its reply, proposals approved, what I typed in a
+window through the hook, tickets, a history long enough to be trimmed, prune), with the clock moved a
+day between them. Then it updates the way a user does, running `get.sh` again, and checks that the first
+write starts the journal from the ledger as it was. Two more days follow on the new bosun, then twenty
+writers at once, the clock going back an hour, fifty writes killed like a power cut, a morning by
+launchd, and an uninstall that keeps the ledger, its journal and this Mac's replica id. After each,
+`bosun ledger validate --journal` must pass.
+
+```bash
+tests/sandbox.sh mac work                   # from origin/main to this checkout
+tests/sandbox.sh mac work --base <commit>   # from another starting point; it must be an ancestor
+```
+
+It sends two bundles of this repository: the release, and this checkout (also what is not committed)
+as its descendant, so that `get.sh`'s `git pull --ff-only` takes it. The scenario is `tests/work_e2e.sh`;
+what it shares with `tests/install_e2e.sh` is in `tests/sandbox/e2e_lib.sh`. It sets the clock with
+`sudo date` and puts it back when it ends, also on failure.
 
 ### The real agents: `tests/sandbox.sh mac live`
 
