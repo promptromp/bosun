@@ -6,11 +6,13 @@ from __future__ import annotations
 import contextlib
 import io
 import json
+import os
 import sys
 import tempfile
 import unittest
 from collections.abc import Callable
 from pathlib import Path
+from unittest import mock
 
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "lib"))
@@ -35,6 +37,13 @@ class JournalTestCase(unittest.TestCase):
     def journal(self, replica: str = R1, ms: int = 1_700_000_000_000) -> jr.Journal:
         return jr.Journal(self.root, "ledger", replica, 3, fixed(ms))
 
+    def repaired(self) -> tuple[list[Path], str]:
+        """What repair_tail moved aside, and what it said on stderr."""
+        said = io.StringIO()
+        with contextlib.redirect_stderr(said):
+            moved = self.journal().repair_tail()
+        return moved, said.getvalue()
+
 
 class ReplicaId(JournalTestCase):
     def test_replica_id_is_made_once(self) -> None:
@@ -56,9 +65,12 @@ class Commit(JournalTestCase):
         self.assertEqual(self.journal().position(), {R1: 2, "local": 1})
         lines = [json.loads(x) for x in (self.root / f"{R1}.jsonl").read_text().splitlines()]
         self.assertEqual([x["seq"] for x in lines], [1, 2])
+        self.assertEqual([x["of"] for x in lines], [2, 2])  # the transaction's lines in this file
         self.assertNotIn("local", lines[0])
+        self.assertNotIn("private_of", lines[0])
         local = json.loads((self.root / "local.jsonl").read_text())
         self.assertEqual((local["seq"], local["local"]), (1, True))
+        self.assertEqual((local["of"], local["private_of"]), (1, 2))
 
     def test_an_empty_transaction_writes_nothing(self) -> None:
         self.assertEqual(self.journal().begin("noop").commit(), [])
@@ -105,19 +117,16 @@ class Reading(JournalTestCase):
         self.assertEqual([c["body"]["who"] for c in got], ["b", "a", "b"])
         self.assertEqual(got, cl.in_order(got))
 
-    def test_a_torn_last_line_is_reported(self) -> None:
+    def test_a_line_cut_short_is_left_out(self) -> None:
         tx = self.journal().begin("add")
         tx.add("set", "item:1", {})
         tx.commit()
         path = self.root / f"{R1}.jsonl"
         with path.open("ab") as f:
             f.write(b'{"v":1,"seq')
-        with self.assertRaises(jr.JournalError) as ctx:
-            self.journal().changes()
-        self.assertIn(path.name, str(ctx.exception))
-        self.assertIn("2", str(ctx.exception))
-        with self.assertRaises(jr.JournalError):
-            self.journal().position()
+        self.assertEqual([c["seq"] for c in self.journal().changes()], [1])
+        self.assertEqual(self.journal().position(), {R1: 1})
+        self.assertEqual(self.journal().written(), {R1: 1})
 
     def test_a_line_that_is_not_a_change_is_reported(self) -> None:
         self.root.mkdir(parents=True)
@@ -143,13 +152,6 @@ class Repair(JournalTestCase):
             tx.add("set", "item:1", {})
             tx.commit()
         return self.root / f"{R1}.jsonl"
-
-    def repaired(self) -> tuple[list[Path], str]:
-        """What repair_tail moved aside, and what it said on stderr."""
-        said = io.StringIO()
-        with contextlib.redirect_stderr(said):
-            moved = self.journal().repair_tail()
-        return moved, said.getvalue()
 
     def test_a_torn_last_line_is_moved_aside_and_the_file_cut_to_its_last_whole_line(self) -> None:
         path = self.committed(2)
@@ -194,15 +196,97 @@ class Repair(JournalTestCase):
         self.assertEqual(self.repaired(), ([], ""))
         self.assertEqual(path.read_bytes(), whole)
 
-    def test_damage_other_than_a_torn_tail_still_raises(self) -> None:
+    def test_damage_other_than_an_unfinished_transaction_still_raises(self) -> None:
         path = self.committed(2)
         first, second = path.read_bytes().splitlines(keepends=True)
-        for text, number in ((first + second + b"nonsense\n", 3), (first + b"nonsense\n" + second, 2)):
-            path.write_bytes(text)
-            with self.subTest(line=number):
-                self.assertEqual(self.repaired(), ([], ""))
-                with self.assertRaisesRegex(jr.JournalError, rf"{R1}\.jsonl, line {number}"):
-                    self.journal().changes()
+        path.write_bytes(first + second + b"nonsense\n")  # a whole last line: read by every write
+        with self.assertRaisesRegex(jr.JournalError, rf"{R1}\.jsonl, line 3"):
+            self.journal().repair_tail()
+        path.write_bytes(first + b"nonsense\n" + second)  # a line in the middle: read by changes()
+        self.assertEqual(self.repaired(), ([], ""))
+        with self.assertRaisesRegex(jr.JournalError, rf"{R1}\.jsonl, line 2"):
+            self.journal().changes()
+
+
+def lines_of(path: Path) -> list[bytes]:
+    return path.read_bytes().splitlines(keepends=True)
+
+
+class Whole(JournalTestCase):
+    """A transaction counts once all its lines are there (`of` per file, `private_of` from
+    local.jsonl into the replica's file); an unfinished one at the end of a file is left out by
+    readers and set aside, kept, by repair_tail."""
+
+    def commit(self, private: int, local: int = 0) -> None:
+        tx = self.journal().begin("add")
+        for n in range(private):
+            tx.add("set", f"item:{n}", {"n": n})
+        for n in range(local):
+            tx.add("set", f"item:{n}", {"quote": n}, local=True)
+        tx.commit()
+
+    def test_a_transaction_missing_lines_is_left_out_then_set_aside(self) -> None:
+        self.commit(2)
+        self.commit(3)
+        path = self.root / f"{R1}.jsonl"
+        kept = lines_of(path)
+        path.write_bytes(b"".join(kept[:4]))  # the second transaction lost its last line, whole
+        self.assertEqual(self.journal().position(), {R1: 2})
+        self.assertEqual(self.journal().written(), {R1: 4})
+        self.assertEqual([c["seq"] for c in self.journal().changes()], [1, 2])
+        said = io.StringIO()
+        with contextlib.redirect_stderr(said):
+            (aside,) = self.journal().repair_tail()
+        self.assertEqual(aside.read_bytes(), b"".join(kept[2:4]))
+        self.assertEqual(lines_of(path), kept[:2])
+        self.assertIn("unfinished", said.getvalue())
+
+    def test_local_lines_whose_private_lines_never_came_are_left_out(self) -> None:
+        self.commit(1, 1)
+        path = self.root / f"{R1}.jsonl"
+        kept = lines_of(path)
+        self.commit(2, 1)
+        path.write_bytes(b"".join(kept))  # cut between the files: local written, private not
+        self.assertEqual(self.journal().position(), {R1: 1, "local": 1})
+        self.assertEqual(self.journal().written(), {R1: 1, "local": 2})
+        with contextlib.redirect_stderr(io.StringIO()):
+            (aside,) = self.journal().repair_tail()
+        self.assertEqual(aside.name, f"local.jsonl.torn-{STAMP}")
+        self.assertEqual(len(lines_of(self.root / "local.jsonl")), 1)
+
+    def test_a_cut_mid_way_through_the_private_lines_leaves_out_both_files(self) -> None:
+        self.commit(3, 2)
+        path = self.root / f"{R1}.jsonl"
+        path.write_bytes(path.read_bytes()[: len(path.read_bytes()) // 2])
+        self.assertEqual(self.journal().position(), {})
+        self.assertEqual(self.journal().changes(), [])
+        with contextlib.redirect_stderr(io.StringIO()):
+            self.assertEqual(len(self.journal().repair_tail()), 2)
+        self.assertEqual((path.read_bytes(), (self.root / "local.jsonl").read_bytes()), (b"", b""))
+
+    def test_a_later_transaction_vouches_for_an_earlier_local_one(self) -> None:
+        self.commit(1, 1)
+        self.commit(2)
+        self.assertEqual(self.journal().position(), {R1: 3, "local": 1})
+        self.assertEqual(self.repaired(), ([], ""))
+
+    def test_a_commit_writes_local_lines_first(self) -> None:
+        write = os.write
+
+        def second_fails(fd: int, data: bytes) -> int:
+            if (self.root / "local.jsonl").exists() and (self.root / "local.jsonl").stat().st_size:
+                raise OSError("interrupted")
+            return write(fd, data)
+
+        with mock.patch.object(os, "write", second_fails), self.assertRaises(OSError):
+            self.commit(2, 1)
+        self.assertEqual(len(lines_of(self.root / "local.jsonl")), 1)
+        self.assertEqual((self.root / f"{R1}.jsonl").read_bytes(), b"")
+        self.assertEqual(self.journal().position(), {})  # left out until it is set aside
+        with contextlib.redirect_stderr(io.StringIO()):
+            self.assertEqual(len(self.journal().repair_tail()), 1)
+        self.commit(1)
+        self.assertEqual(self.journal().position(), {R1: 1})
 
 
 class Mint(JournalTestCase):

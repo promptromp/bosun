@@ -759,10 +759,10 @@ def parse_fields(pairs: list[str] | None) -> dict[str, str]:
 @contextlib.contextmanager
 def locked_ledger(write: bool) -> Iterator[Ledger]:
     """The ledger, under its lock. A reader (shared lock) gets ledger.json, or the journal's
-    rebuild where the file is behind it, and writes nothing. A writer (exclusive lock) gets the
-    same, made whole first (see write_start); what it changes becomes one transaction, appended
-    to the journal before ledger.json and ledger.md are saved (saved even when nothing changed,
-    which `ledger render` relies on). A writer that raises writes nothing."""
+    rebuild where the file is behind it, and writes nothing (see for_reading). A writer (exclusive
+    lock) gets the same, made whole first (see write_start); what it changes becomes one
+    transaction, appended to the journal before ledger.json and ledger.md are saved once (even
+    when nothing changed, which `ledger render` relies on). A writer that raises saves nothing."""
     STORE.state_dir.mkdir(parents=True, exist_ok=True)
     with STORE.lock.open("w") as lock:
         fcntl.flock(lock, fcntl.LOCK_EX if write else fcntl.LOCK_SH)
@@ -806,6 +806,34 @@ def has_records(ledger: Ledger) -> bool:
     return any(ledger.get(key) for key in ("items", "sources", "runs", ledger_changes.SAID))
 
 
+def saved_position(ledger: Ledger) -> dict[str, int]:
+    """The journal position ledger.json says it reflects; {} for one written before journals."""
+    value = ledger.get(ledger_changes.JOURNAL)
+    if not isinstance(value, dict):
+        return {}
+    return {str(stem): seq for stem, seq in value.items() if isinstance(seq, int)}
+
+
+def missing(journal_has: Mapping[str, int], file_has: Mapping[str, int]) -> list[str]:
+    """Each journal file that is behind the position ledger.json reflects (it lost changes the file
+    has): a rebuild from it would lose them too."""
+    return [
+        f"{stem}.jsonl ends at seq {journal_has.get(stem, 0)}, ledger.json reflects seq {seq}"
+        for stem, seq in sorted(file_has.items())
+        if journal_has.get(stem, 0) < seq
+    ]
+
+
+def refuse_if_behind(journal_has: Mapping[str, int], ledger: Ledger) -> None:
+    gaps = missing(journal_has, saved_position(ledger))
+    if gaps:
+        raise LedgerError(
+            f"the ledger's journal in {STORE.journal_dir} is behind ledger.json ({'; '.join(gaps)}), "
+            "so it cannot rebuild it. Nothing was written. If journal files were lost, move the "
+            f"folder {STORE.journal_dir} aside: the next write starts the journal again from ledger.json"
+        )
+
+
 def rebuilt(journal: Journal, position: dict[str, int]) -> Ledger:
     """The journal's rebuild at <position>, its keys in order as a saved ledger.json loads them
     (commands and `render` list items in that order)."""
@@ -815,22 +843,34 @@ def rebuilt(journal: Journal, position: dict[str, int]) -> Ledger:
     return ordered
 
 
-def caught_up(ledger: Ledger, journal: Journal) -> Ledger:
-    """<ledger>, or the journal's rebuild if <ledger> is not at the journal's position (a write
-    cut short between the journal and the file)."""
+def warn_reader(problem: str) -> None:
+    print(f"ledger: {problem}; reading ledger.json as it is", file=sys.stderr)
+
+
+def read_caught_up(ledger: Ledger, journal: Journal) -> Ledger:
+    """ledger.json, or the journal's rebuild where the file is behind it (a write cut short between
+    the two). A journal behind the file is never rebuilt from."""
     position = journal.position()
-    if not position or ledger.get(ledger_changes.JOURNAL) == position:
+    saved = saved_position(ledger)
+    if not position or saved == position:
+        return ledger
+    gaps = missing(position, saved)
+    if gaps:
+        warn_reader(f"its journal in {STORE.journal_dir} is behind it ({'; '.join(gaps)})")
         return ledger
     return rebuilt(journal, position)
 
 
 def for_reading() -> Ledger:
-    """A reader's ledger. A journal that cannot be read leaves ledger.json as it is, always a
-    whole version: the next write repairs a torn line, or says what is wrong."""
+    """A reader's ledger, never written. An unfinished transaction at the end of the journal is
+    left out silently (it was never committed); a journal that cannot be read, or that is behind
+    the file, gets one warning on stderr and ledger.json as it is, always a whole version, so that
+    readers (the guard among them) keep working; the next write repairs it or says why not."""
     ledger = load()
     try:
-        return caught_up(ledger, open_journal())
-    except JournalError:
+        return read_caught_up(ledger, open_journal())
+    except JournalError as exc:
+        warn_reader(f"its journal in {STORE.journal_dir} is damaged: {exc}")
         return ledger
 
 
@@ -840,18 +880,37 @@ def commit_edits(transaction: Transaction, edits: Iterable[Edit]) -> None:
     transaction.commit()
 
 
+def genesis(journal: Journal, ledger: Ledger) -> None:
+    """Put a ledger from before journals in the journal whole: the diff from the empty ledger
+    (items by id, local leaves split off as for any new item); then save ledger.json as it is at
+    its new position. That save writes the file's own content, and makes a position it brought
+    from elsewhere (a copy) end here, even if the command then fails."""
+    commit_edits(journal.begin(GENESIS), ledger_changes.diff(ledger_changes.EMPTY, ledger))
+    ledger[ledger_changes.JOURNAL] = journal.position()
+    save(ledger)
+
+
 def write_start(journal: Journal) -> Ledger:
-    """The ledger a write starts from: a line a write left cut short set aside (repair_tail); a
-    ledger from before journals put in the journal whole (genesis: the diff from the empty ledger,
-    items by id); ledger.json rebuilt and saved if it is behind the journal."""
-    journal.repair_tail()
+    """The ledger a write starts from, in memory: the command's one save writes it, so the backup
+    is always the ledger as it was before the write. Refused when the journal lost changes
+    ledger.json reflects (a file deleted, a partial restore); then an unfinished transaction is
+    set aside (repair_tail); a ledger from before journals is put in it (genesis); and where
+    ledger.json is behind the journal (a write cut short between the two), the journal's rebuild
+    replaces it."""
     ledger = load()
-    if not journal.position() and has_records(ledger):
-        commit_edits(journal.begin(GENESIS), ledger_changes.diff(ledger_changes.EMPTY, ledger))
-    current = caught_up(ledger, journal)
-    if current is not ledger:
-        save(current)
-    return current
+    written = journal.written()
+    if written:
+        refuse_if_behind(written, ledger)
+    journal.repair_tail()
+    position = journal.position()
+    if not position:
+        if has_records(ledger):
+            genesis(journal, ledger)
+        return ledger
+    if saved_position(ledger) == position:
+        return ledger
+    refuse_if_behind(position, ledger)
+    return rebuilt(journal, position)
 
 
 def for_writing() -> Iterator[Ledger]:

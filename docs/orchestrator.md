@@ -179,9 +179,11 @@ once it is `approved`.
 Writes take a file lock and replace `ledger.json` atomically, keeping the previous version as
 `ledger.json.bak`; `ledger.md` is regenerated after each one. Each write first appends what it
 changed to the journal (`journal/ledger/` in the state folder), and `ledger.json` is the rebuild
-of that journal: a write cut short between the two is completed by the next command
-([Sync and sharing](design/sync.md#changes-not-files)). Each item keeps its last 200 history
-entries; the journal keeps all of them.
+of that journal. A write cut short between the two is completed by the next command, and one
+cut short inside the journal is set aside (`*.torn-<time>`, kept) and left out
+([Sync and sharing](design/sync.md#changes-not-files)). If journal files go missing, writes stop
+and say so: move `journal/ledger` aside, and the next write starts the journal again from
+`ledger.json`. Each item keeps its last 200 history entries; the journal keeps all of them.
 
 ## Waiting on someone: outreach
 

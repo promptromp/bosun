@@ -137,6 +137,7 @@ never edits another replica's. Every change carries one envelope:
 | `seq` | Per replica and stream, from 1 with no gaps, so a missing change is noticed |
 | `hlc` | Hybrid logical clock: wall time in ms plus a counter, fixed width so it sorts as a string |
 | `tx` | The transaction: every change made under one write lock shares it |
+| `of` | How many lines the transaction has in this change's file, so a transaction cut short is noticed; a line in the `local` file also has `private_of`, how many it has in the replica's file (local lines never leave the Mac) |
 | `cmd` | The command that made it (`ledger transition`, `kg confirm`), so intent is not lost |
 | `rules` | Version of the rules it was checked against (`KINDS`, `RELATIONS`, the predicate list): a number bumped by hand when a change to them would rebuild old changes differently, as `orchestrator/learn.md` bumps its `version` |
 | `op`, `target`, `body` | What changed: an operation, the item, link, entity or fact, and its data |
@@ -162,11 +163,21 @@ logs.
 first, then rewrites the files, which record the journal position they reflect (the highest `seq`
 per replica). A crash between the two leaves the files behind the journal; the next load sees the
 positions differ and rebuilds the files from the journal. Pulling another Mac's changes in phase 1
-is the same step. For the ledger this is `locked_ledger`: a reader (shared lock) only rebuilds in
-memory and never writes; a writer saves the rebuild before the command runs. A crash in the middle
-of an append leaves a last line without its newline, which was never committed: the next write
-moves it aside (`<file>.torn-<time>`, kept) and says so. Any other damaged line stops writes with
-the file and line named, and readers keep the last whole `ledger.json`.
+is the same step. A transaction counts once all its lines are present: a commit writes the `local`
+file first, then the replica's, and every line says how many its transaction has there (`of`,
+and from the `local` file `private_of`). A write cut short (a power cut mid-way, a signal between
+the two files, a line without its newline) leaves an unfinished transaction at the end of a file.
+Readers leave it out, as if it were not there, and the next write moves it aside
+(`<file>.torn-<time>`, kept) and says so.
+
+For the ledger this is `locked_ledger`. A reader (shared lock) never writes: it rebuilds in memory
+where the file is behind the journal, and on any other damage warns once on stderr and keeps the
+last whole `ledger.json`, so the guard keeps working. A writer uses the rebuild in memory, and the
+command's one save writes it, so `ledger.json.bak` always holds the ledger as it was before the
+write. A journal that is behind the file (a journal file deleted, a partial restore) is never
+rebuilt from, because that would lose what it lost from the file too. A writer refuses then, and
+says to move the journal folder aside so that the next write starts it again from `ledger.json`.
+Any other damaged line stops writes, with the file and line named.
 
 ### Rebuilding, and what a merge cannot decide
 
@@ -218,7 +229,9 @@ Mac first turns on the journal (phase 0). History before that is whatever the fi
 trimmed history and pruned items are gone already. For the ledger, the first write's genesis
 transaction (command `genesis`) is the diff from the empty ledger: a create per item, by id, with
 its local leaves split off as for any new item, a put per source and run, and what I said. Its
-rebuild is the file again, old numeric ids, trimmed histories and approvals included.
+rebuild is the file again, old numeric ids, trimmed histories and approvals included. The file is
+saved at its new position straight away, with its own content, so that a position it brought
+from elsewhere (a copy, such as the chores dry run's) ends there even if the command fails.
 
 ### Where the ledger's changes come from
 

@@ -22,7 +22,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "lib"))
 import ledger
 from change_log import Change, canonical
 from journal import Journal, replica_id
-from ledger_changes import diff, rebuild, trim_history
+from ledger_changes import EMPTY, diff, rebuild, trim_history
 
 
 LIB = Path(ledger.__file__).parent
@@ -442,6 +442,7 @@ class JournalTest(ProtocolTestCase):
         self.assertEqual(self.notes(MENTION_ID)[-2:], ["in the journal only", "next"])
         self.assertEqual(self.notes(MENTION_ID).count("in the journal only"), 1)
         self.assertEqual(saved()["journal"], journal().position())
+        self.assertEqual(ledger.STORE.backup.read_text(), file)  # one save: the backup is the file before
         self.assert_the_journal_rebuilds_the_file()
 
     def test_a_write_whose_save_failed_is_kept_once(self) -> None:
@@ -494,12 +495,103 @@ class JournalTest(ProtocolTestCase):
         path.write_bytes(b"".join(lines))
         self.assertIn(MENTION_ID, run("list"))  # a reader is not stopped: the file is whole
 
-    def test_a_reader_does_not_rebuild_a_torn_journal(self) -> None:
+    def test_a_reader_leaves_out_an_unfinished_transaction_silently(self) -> None:
         path = ledger.STORE.journal_dir / f"{replica_id(ledger.STORE.state_dir)}.jsonl"
-        with path.open("ab") as handle:
-            handle.write(b'{"v":1,"seq')
-        self.assertIn(MENTION_ID, run("list"))
-        self.assertEqual(list(ledger.STORE.journal_dir.glob("*.torn-*")), [])
+        kept = path.read_bytes()
+        run("record-delegation", MENTION_ID, "--window", "w", "--task", "investigate", "--ask", "why?")
+        path.write_bytes(kept + b'{"v":1,"seq')  # cut short: its whole lines gone, a line torn
+        ledger.STORE.ledger_file.write_text(ledger.STORE.backup.read_text())  # not saved either
+        said = io.StringIO()
+        with contextlib.redirect_stderr(said):
+            self.assertNotIn("@w", run("list"))
+        self.assertEqual(said.getvalue(), "")
+        self.assertEqual(list(ledger.STORE.journal_dir.glob("*.torn-*")), [])  # readers never repair
+
+    def test_a_write_cut_between_the_files_is_set_aside(self) -> None:
+        """Interrupted after local.jsonl, before the replica's file (a signal between the two): the
+        local lines are left out, then set aside; the file is as it was."""
+        path = ledger.STORE.journal_dir / f"{replica_id(ledger.STORE.state_dir)}.jsonl"
+        kept, file = path.read_bytes(), ledger.STORE.ledger_file.read_text()
+        local = ledger.STORE.journal_dir / "local.jsonl"
+        self.assertFalse(local.exists())
+        before = saved()
+        after = copy.deepcopy(before)
+        ledger.record(after["items"][MENTION_ID], "user-said", "my own words")  # a local entry
+        ledger.record(after["items"][MENTION_ID], "note", "and a private one")
+        transaction = journal().begin("test")
+        for edit in diff(before, after):
+            transaction.add(edit.op, edit.target, edit.body, local=edit.local)
+        transaction.commit()
+        path.write_bytes(kept)  # the replica's file never got its lines
+        said = io.StringIO()
+        with contextlib.redirect_stderr(said):
+            self.assertNotIn("my own words", run("show", MENTION_ID))
+            self.assertEqual(said.getvalue(), "")
+            run("note", MENTION_ID, "next")
+        self.assertIn("unfinished", said.getvalue())
+        (aside,) = ledger.STORE.journal_dir.glob("local.jsonl.torn-*")
+        self.assertIn("my own words", aside.read_text())
+        self.assertNotIn("my own words", ledger.STORE.ledger_file.read_text())
+        self.assertEqual(ledger.STORE.backup.read_text(), file)
+        self.assert_the_journal_rebuilds_the_file()
+
+    def damaged_and_ahead(self) -> Path:
+        """A line in the middle of the replica's file damaged, and a transaction ledger.json never
+        got (so a reader must rebuild, and so read the whole file)."""
+        run("note", MENTION_ID, "one")
+        path = ledger.STORE.journal_dir / f"{replica_id(ledger.STORE.state_dir)}.jsonl"
+        lines = path.read_bytes().splitlines(keepends=True)
+        path.write_bytes(lines[0] + b"nonsense\n" + b"".join(lines[1:]))
+        data = saved()
+        data["journal"] = {}
+        ledger.STORE.ledger_file.write_text(json.dumps(data))
+        return path
+
+    def test_a_reader_warns_once_about_a_damaged_journal_and_reads_the_file(self) -> None:
+        path = self.damaged_and_ahead()
+        said = io.StringIO()
+        with contextlib.redirect_stderr(said):
+            self.assertIn(MENTION_ID, run("list"))
+        self.assertEqual(said.getvalue().count("\n"), 1)
+        self.assertIn(f"{path.name}, line 2", said.getvalue())
+        self.assertIn("reading ledger.json as it is", said.getvalue())
+        lines = path.read_bytes().splitlines(keepends=True)
+        path.write_bytes(b"".join(lines[:1] + lines[2:]) + b"nonsense too\n")  # a whole last line
+        said = io.StringIO()
+        with contextlib.redirect_stderr(said):
+            self.assertIn(MENTION_ID, run("list"))
+        self.assertIn(f"{path.name}, line {len(lines)}", said.getvalue())
+
+    def test_a_journal_that_lost_a_file_is_refused_and_nothing_is_written(self) -> None:
+        run("record-delegation", MENTION_ID, "--window", "w", "--task", "t")
+        hook_said = ledger.add_user_said("w", "my own words")  # a local line too
+        self.assertEqual(hook_said["items"], [MENTION_ID])
+        for name in (f"{replica_id(ledger.STORE.state_dir)}.jsonl", "local.jsonl"):
+            with self.subTest(lost=name):
+                lost = ledger.STORE.journal_dir / name
+                kept = lost.read_bytes()
+                lost.unlink()
+                file, backup = ledger.STORE.ledger_file.read_text(), ledger.STORE.backup.read_text()
+                refused = rf"behind ledger.json \({Path(name).stem}\.jsonl ends at seq 0"
+                with self.assertRaisesRegex(ledger.LedgerError, refused):
+                    run("note", MENTION_ID, "x")
+                self.assertEqual(ledger.STORE.ledger_file.read_text(), file)
+                self.assertEqual(ledger.STORE.backup.read_text(), backup)
+                said = io.StringIO()
+                with contextlib.redirect_stderr(said):
+                    self.assertIn("my own words", run("said"))  # a reader gets the file, warned
+                self.assertIn("is behind it", said.getvalue())
+                lost.write_bytes(kept)
+        self.assert_the_journal_rebuilds_the_file()
+
+    def test_moving_a_journal_that_lost_a_file_aside_starts_it_again(self) -> None:
+        (ledger.STORE.journal_dir / f"{replica_id(ledger.STORE.state_dir)}.jsonl").unlink()
+        file = saved()
+        ledger.STORE.journal_dir.rename(ledger.STORE.journal_dir.with_name("ledger.lost"))
+        run("note", MENTION_ID, "after")
+        self.assertEqual(saved()["items"][REVIEW_ID], file["items"][REVIEW_ID])
+        self.assertEqual({c["cmd"] for c in journal().changes()}, {"genesis", ""})
+        self.assert_the_journal_rebuilds_the_file()
 
     def test_the_transaction_is_there_only_while_writing(self) -> None:
         with self.assertRaisesRegex(ledger.LedgerError, "no ledger write"):
@@ -591,12 +683,50 @@ class GenesisTest(JournalChecks):
                 self.assertNotIn(mine, private)
                 self.assertIn(mine, local)
 
-    def test_a_stale_journal_position_in_the_file_is_rebuilt_from_genesis(self) -> None:
+    def test_a_journal_position_the_file_brought_from_elsewhere_ends_at_genesis(self) -> None:
+        """A copy (the chores dry run's scratch ledger, a restore) with no journal: genesis puts
+        it in a new one and saves its new position at once, so a command that then fails leaves
+        no stale position behind to refuse the next write."""
         self.data["journal"] = {"f" * 32: 57, "local": 3}
         ledger.STORE.ledger_file.write_text(json.dumps(self.data))
+        with self.assertRaises(ledger.LedgerError):
+            run("transition", self.OLD_TASK, "nonsense", "--note", "fails after genesis")
+        self.assertEqual(saved()["journal"], journal().position())
         run("note", self.OLD_TASK, "first write")
         self.assertEqual(saved()["items"][self.OLD_TASK]["history"][-1]["note"], "first write")
         self.assert_the_journal_rebuilds_the_file()
+
+    def genesis_by_hand(self) -> Path:
+        """A genesis committed but never saved, as a first write cut short leaves it; the
+        replica's file."""
+        ledger.commit_edits(journal().begin(ledger.GENESIS), diff(EMPTY, ledger.load()))
+        return ledger.STORE.journal_dir / f"{replica_id(ledger.STORE.state_dir)}.jsonl"
+
+    def assert_the_ledger_is_whole(self) -> None:
+        self.assertEqual(canonical(without_journal(saved())), canonical(self.data))
+        backup = json.loads(ledger.STORE.backup.read_text())
+        self.assertEqual(canonical(without_journal(backup)), canonical(self.data))
+        self.assert_the_journal_rebuilds_the_file()
+
+    def test_a_genesis_cut_short_is_set_aside_and_made_again(self) -> None:
+        """Power lost mid-way through the replica's file: its whole lines are fewer than the
+        transaction says, so it is set aside (with its local lines) and genesis runs again; the
+        items stay, in the file and its backup."""
+        path = self.genesis_by_hand()
+        path.write_bytes(path.read_bytes()[: len(path.read_bytes()) // 2])
+        with contextlib.redirect_stderr(io.StringIO()):
+            run("render")
+        self.assertEqual(len(list(ledger.STORE.journal_dir.glob("*.torn-*"))), 2)
+        self.assert_the_ledger_is_whole()
+
+    def test_a_genesis_stopped_between_the_files_keeps_my_words(self) -> None:
+        """A signal after local.jsonl and before the replica's file: what I said and the approval's
+        quote are kept, in the file and in the new genesis."""
+        self.genesis_by_hand().write_bytes(b"")
+        with contextlib.redirect_stderr(io.StringIO()):
+            run("render")
+        self.assert_the_ledger_is_whole()
+        self.assertIn(self.QUOTE, (ledger.STORE.journal_dir / "local.jsonl").read_text())
 
     def test_a_ledger_without_said_gains_an_empty_one(self) -> None:
         del self.data["said"]

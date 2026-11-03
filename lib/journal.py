@@ -3,12 +3,16 @@ point").
 
 Each machine (replica) appends to its own `<replica>.jsonl`; changes that never leave the machine
 go to `local.jsonl`. Every line is one change in canonical bytes. Files are only appended to, in
-clock order, so the last line of a file holds its highest `seq` and `hlc`: a transaction starts by
+clock order, so the end of a file holds its highest `seq` and `hlc`: a transaction starts by
 reading those and nothing else.
 
-A line is only whole with its newline: a write cut short (a crash, a power cut) leaves a last line
-without one, which was never committed. `repair_tail` moves such a line aside, kept, before a
-write; any other damage raises `JournalError` where the line is read.
+A transaction counts once it is whole. Each change carries `of`, how many lines its transaction
+has in that change's file, and a line in `local.jsonl` also `private_of`, how many it has in
+`<replica>.jsonl`; a commit writes `local.jsonl` first, then `<replica>.jsonl`. A line is only
+whole with its newline. So a write cut short (a crash, a power cut, a signal between the files)
+leaves an unfinished transaction at the end of a file: readers leave it out, as if it were not
+there, and `repair_tail` moves it aside, kept, before the next write. Any other damage raises
+`JournalError` where the line is read.
 
 The caller holds the store's lock (the ledger's flock, the knowledge base's lock); nothing here
 locks. The pure side (ids, clocks, order) is `lib/change_log.py`.
@@ -21,11 +25,11 @@ import os
 import secrets
 import sys
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, BinaryIO
 
 from change_log import (
     ENVELOPE_VERSION,
@@ -42,11 +46,18 @@ from change_log import (
 REPLICA_FILE = "replica.json"
 LOCAL = "local"
 SUFFIX = ".jsonl"
-TORN = ".torn-"  # <file>.torn-<UTC time>: a last line a write left cut short, moved aside
+TORN = ".torn-"  # <file>.torn-<UTC time>: an unfinished transaction, moved aside
 _TAIL = 8192
-# What reading a change relies on (its position, its place in the order): a line without them is
-# not a change.
-_ENVELOPE_KEYS: tuple[tuple[str, type], ...] = (("seq", int), ("hlc", str), ("replica", str), ("id", str))
+# What reading a change relies on (its position, its place in the order, whether its transaction
+# is whole): a line without them is not a change.
+_ENVELOPE_KEYS: tuple[tuple[str, type], ...] = (
+    ("seq", int),
+    ("hlc", str),
+    ("replica", str),
+    ("id", str),
+    ("tx", str),
+    ("of", int),
+)
 
 
 class JournalError(Exception):
@@ -76,70 +87,127 @@ def replica_id(state_dir: Path) -> str:
     return made
 
 
+def _is_change(record: Any) -> bool:
+    if not isinstance(record, dict) or not all(
+        isinstance(record.get(key), kind) for key, kind in _ENVELOPE_KEYS
+    ):
+        return False
+    return record["of"] >= 1 and (not record.get("local") or isinstance(record.get("private_of"), int))
+
+
 def _parse(line: bytes, path: Path, number: int) -> Change:
     try:
         record = json.loads(line)
     except ValueError as exc:
         raise JournalError(f"{path.name}, line {number}: not a change ({exc})") from exc
-    if not isinstance(record, dict) or not all(
-        isinstance(record.get(key), kind) for key, kind in _ENVELOPE_KEYS
-    ):
+    if not _is_change(record):
         raise JournalError(f"{path.name}, line {number}: not a change")
-    return record
-
-
-def _last_line(path: Path) -> bytes:
-    """The last non-empty line of a file, read from its end."""
-    with path.open("rb") as handle:
-        size = handle.seek(0, os.SEEK_END)
-        want = _TAIL
-        while True:
-            start = max(0, size - want)
-            handle.seek(start)
-            lines = handle.read(size - start).rstrip(b"\n").split(b"\n")
-            if start == 0 or len(lines) > 1:
-                return lines[-1]
-            want *= 2
-
-
-def _last_change(path: Path) -> Change | None:
-    line = _last_line(path)
-    if not line:
-        return None
-    try:
-        return _parse(line, path, 0)
-    except JournalError:
-        count = path.read_bytes().rstrip(b"\n").count(b"\n") + 1
-        return _parse(line, path, count)
-
-
-def _read_all(path: Path) -> list[Change]:
-    found = []
-    with path.open("rb") as handle:
-        for number, line in enumerate(handle, 1):
-            if line.strip():
-                found.append(_parse(line, path, number))
+    found: Change = record
     return found
 
 
-def _torn_at(path: Path) -> int | None:
-    """Where the last whole line of <path> ends when what follows has no newline (a write cut
-    short), else None."""
+def _parse_at(path: Path, offset: int, line: bytes) -> Change:
+    """The change in <line>, which starts at byte <offset> of <path> (its line number is counted
+    only for the error)."""
+    try:
+        return _parse(line, path, 0)
+    except JournalError:
+        with path.open("rb") as handle:
+            number = handle.read(offset).count(b"\n") + 1
+        return _parse(line, path, number)
+
+
+def _whole(data: bytes) -> bytes:
+    """<data> up to its last newline: a line is only whole with it."""
+    return data[: data.rfind(b"\n") + 1]
+
+
+def _read_all(path: Path) -> list[Change]:
+    """Every whole line of <path>, in order (what follows the last newline is left out)."""
+    lines = _whole(path.read_bytes()).split(b"\n")
+    return [_parse(line, path, number) for number, line in enumerate(lines, 1) if line.strip()]
+
+
+def _back(handle: BinaryIO, size: int, count: int) -> tuple[list[tuple[int, bytes]], int]:
+    """The last <count> non-blank whole lines of an open file (fewer if it has fewer), each with
+    the offset it starts at, and the offset where whole lines end."""
+    want = _TAIL
+    while True:
+        start = max(0, size - want)
+        handle.seek(start)
+        data = _whole(handle.read(size - start))
+        lines, offset = [], start
+        for line in data.split(b"\n")[:-1]:
+            lines.append((offset, line))
+            offset += len(line) + 1
+        whole = [(at, line) for at, line in lines[1 if start else 0 :] if line.strip()]
+        if start == 0 or len(whole) >= count:
+            return whole[-count:], start + len(data)
+        want *= 2
+
+
+@dataclass
+class _End:
+    """The end of a journal file: the whole lines its last transaction has there (`trailing`, in
+    order; fewer than their `of` when it is unfinished), the line before them (`prior`, read only
+    when it is needed), the offset they start at, and the offset where whole lines end (a line cut
+    short may follow, up to `size`)."""
+
+    path: Path
+    trailing: list[Change] = field(default_factory=list)
+    prior: tuple[int, bytes] | None = None
+    start: int = 0
+    cut: int = 0
+    size: int = 0
+
+    def last(self, whole: bool) -> Change | None:
+        """The file's last change, its trailing transaction counted only if <whole>."""
+        if self.trailing and whole:
+            return self.trailing[-1]
+        return _parse_at(self.path, *self.prior) if self.prior else None
+
+
+def _end(path: Path) -> _End:
     with path.open("rb") as handle:
         size = handle.seek(0, os.SEEK_END)
-        if size == 0:
-            return None
-        handle.seek(size - 1)
-        if handle.read(1) == b"\n":
-            return None
-        want = _TAIL
-        while True:
-            start = max(0, size - want)
-            handle.seek(start)
-            newline = handle.read(size - start).rfind(b"\n")
-            if newline >= 0 or start == 0:
-                return start + newline + 1
-            want *= 2
+        lines, cut = _back(handle, size, 1)
+        if not lines:
+            return _End(path, cut=cut, size=size)
+        last = _parse_at(path, *lines[0])
+        lines, _ = _back(handle, size, max(1, last["of"]) + 1)
+    end = _End(path, start=lines[-1][0], cut=cut, size=size)
+    for offset, line in reversed(lines):
+        change = None if len(end.trailing) == last["of"] else _parse_at(path, offset, line)
+        if change is None or change["tx"] != last["tx"]:
+            end.prior = (offset, line)
+            break
+        end.trailing.insert(0, change)
+        end.start = offset
+    return end
+
+
+def _private_part_there(local: Change, private: _End | None) -> bool:
+    """Whether the replica's file holds the `private_of` lines of <local>'s transaction, which a
+    commit writes after local.jsonl: they end it, or a later transaction does."""
+    if private is None or not private.trailing:
+        return False
+    tx = private.trailing[-1]["tx"]
+    if tx != local["tx"]:
+        return bool(tx > local["tx"])
+    return bool(len(private.trailing) == local["private_of"])
+
+
+def _whole_end(stem: str, end: _End, ends: Mapping[str, _End]) -> bool:
+    """Whether the transaction that ends a file is whole: all its `of` lines in that file, and for
+    local.jsonl, its `private_of` lines in the replica's file."""
+    if not end.trailing:
+        return True
+    last = end.trailing[-1]
+    if len(end.trailing) < last["of"]:
+        return False
+    if stem != LOCAL or not last.get("private_of"):
+        return True
+    return _private_part_there(last, ends.get(last["replica"]))
 
 
 def _set_aside(path: Path, end: int, stamp: str) -> Path:
@@ -178,36 +246,57 @@ class Journal:
     def _files(self) -> list[Path]:
         return sorted(self.root.glob(f"*{SUFFIX}")) if self.root.is_dir() else []
 
+    def _ends(self) -> dict[str, _End]:
+        return {path.stem: _end(path) for path in self._files()}
+
     def changes(self) -> list[Change]:
-        """Every change in every file, in the one global order."""
-        return in_order(c for path in self._files() for c in _read_all(path))
+        """Every change of a whole transaction in every file, in the one global order."""
+        ends = self._ends()
+        found: list[Change] = []
+        for path in self._files():
+            lines = _read_all(path)
+            end = ends[path.stem]
+            if not _whole_end(path.stem, end, ends):
+                del lines[len(lines) - len(end.trailing) :]
+            found += lines
+        return in_order(found)
 
     def _last_changes(self) -> dict[str, Change]:
+        """The last change of each file that belongs to a whole transaction."""
+        ends = self._ends()
         found = {}
-        for path in self._files():
-            last = _last_change(path)
+        for stem, end in ends.items():
+            last = end.last(_whole_end(stem, end, ends))
             if last is not None:
-                found[path.stem] = last
+                found[stem] = last
         return found
 
     def position(self) -> dict[str, int]:
-        """The highest `seq` of each file, by file stem (replica ids and "local")."""
+        """The highest `seq` of each file's whole transactions, by file stem (replica ids and
+        "local")."""
         return {stem: change["seq"] for stem, change in self._last_changes().items()}
 
+    def written(self) -> dict[str, int]:
+        """The highest `seq` of each file's whole lines, whether their transaction is whole or not."""
+        return {stem: end.trailing[-1]["seq"] for stem, end in self._ends().items() if end.trailing}
+
     def repair_tail(self) -> list[Path]:
-        """Before a write: a last line without its newline (a write cut short, so never committed)
-        is moved aside to `<file>.torn-<UTC time>`, kept, and its file cut to its last whole
-        line, with a warning on stderr. Returns the files moved aside. Other damage stays, and
-        raises where it is read."""
+        """Before a write: an unfinished transaction at the end of a file (fewer lines than it says,
+        a line without its newline, or local lines whose private lines never came) is moved aside
+        to `<file>.torn-<UTC time>`, kept, and its file cut where it began, with a warning on
+        stderr. Returns the files moved aside. Other damage stays, and raises where it is read."""
+        ends = self._ends()
         stamp = datetime.fromtimestamp(self.now_ms() // 1000, UTC).strftime("%Y%m%dT%H%M%SZ")
         moved = []
         for path in self._files():
-            end = _torn_at(path)
-            if end is None:
+            end = ends[path.stem]
+            at = end.cut if _whole_end(path.stem, end, ends) else end.start
+            if at == end.size:
                 continue
-            aside = _set_aside(path, end, stamp)
+            aside = _set_aside(path, at, stamp)
             print(
-                f"journal: {path} ended in a line a write left cut short; moved it aside to {aside.name}",
+                f"journal: {path} ended in a transaction a write left unfinished; moved it aside to "
+                f"{aside.name}",
                 file=sys.stderr,
             )
             moved.append(aside)
@@ -229,6 +318,7 @@ class Transaction:
     edits: list[tuple[str, str, dict[str, Any], bool]] = field(default_factory=list)
     n: int = 0
     committed: bool = False
+    _locals: int = 0  # how many of the edits are local, once commit counts them
 
     def _check_open(self) -> None:
         """A committed transaction's sequence numbers and clock are spent: begin a new one."""
@@ -250,6 +340,7 @@ class Transaction:
     def _envelope(self, edit: tuple[str, str, dict[str, Any], bool], hlc: str, tx: str, seq: int) -> Change:
         op, target, body, local = edit
         journal = self.journal
+        locals_ = self._locals
         change: Change = {
             "v": ENVELOPE_VERSION,
             "stream": journal.stream,
@@ -257,6 +348,7 @@ class Transaction:
             "seq": seq,
             "hlc": hlc,
             "tx": tx,
+            "of": locals_ if local else len(self.edits) - locals_,
             "cmd": self.cmd,
             "rules": journal.rules,
             "op": op,
@@ -265,6 +357,7 @@ class Transaction:
         }
         if local:
             change["local"] = True
+            change["private_of"] = len(self.edits) - locals_
         change["id"] = change_id(change)
         return change
 
@@ -276,6 +369,7 @@ class Transaction:
         done: list[Change] = []
         files: dict[str, list[Change]] = {}
         seqs = dict(self.seqs)
+        self._locals = sum(1 for edit in self.edits if edit[3])
         for index, edit in enumerate(self.edits):
             if index:
                 hlc = tick(hlc, journal.now_ms())
@@ -287,13 +381,15 @@ class Transaction:
         return done, files
 
     def commit(self) -> list[Change]:
+        """Append the transaction: local.jsonl first, then the replica's file, each with fsync, so
+        a cut leaves local lines whose private lines are missing, which readers leave out."""
         self._check_open()
         self.committed = True
         if not self.edits:
             return []
         done, files = self._build()
         self.journal.root.mkdir(parents=True, exist_ok=True)
-        for stem, changes in files.items():
+        for stem, changes in sorted(files.items(), key=lambda pair: pair[0] != LOCAL):
             data = b"".join(canonical(c) + b"\n" for c in changes)
             fd = os.open(self.journal.root / f"{stem}{SUFFIX}", os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o600)
             try:
