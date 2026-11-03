@@ -279,8 +279,8 @@ Every field belongs to one class. The class decides how far it may travel:
 | Class | Leaves this Mac | Examples |
 |---|---|---|
 | `local` | Never | `said` (my verbatim prompts); an approval's quote; a call's session, transcript path and tool call id, wherever an approval, a standing approval or the call's outcome (`failed`, `carried_out`) keeps them; the history entries that quote me (`approved`, `approval-used`, `user-said`) or keep a call's context; `identifiers.jsonl`; `forgotten.jsonl`; person entities and every fact naming a person; `batch.json` |
-| `sealed` | Only to my own scope, and only when the data is encrypted (by the codec, or by a store that declares encryption at rest) | free text: titles, URLs, notes, history notes, report summaries, open points and results, outreach subjects, details, options and answers, a task's ask, done-when and `via`, a delegation's ask, details and link, a proposal's exact call (`spec`), a failed call's reason; colleagues' names in `requester`, `to` and a ticket's `assignee`; Slack permalinks (a reply's or request's ref, processed sources) |
-| `private` | To my own scope | item ids, kinds, states, links, history events, a proposal's action and times, a report's time and CI status; repo, ticket and system names; the window in a delegation or report, tagged with its replica; process and product facts |
+| `sealed` | Only to my own scope, and only when the data is encrypted (by the codec, or by a store that declares encryption at rest) | free text: titles, URLs, notes, history notes, report summaries, open points and results, outreach subjects, details, options and answers, a task's ask, done-when and `via`, a delegation's ask, details and link, a proposal's action and its exact call (`spec`), a failed call's reason, a workstream's aliases; colleagues' names in `requester`, `to` and a ticket's `assignee`; Slack permalinks (a reply's or request's ref, processed sources) |
+| `private` | To my own scope | item ids, kinds, states, links, history events, a proposal's times, a report's time and CI status; repo, ticket and system names; the window in a delegation or report, tagged with its replica; process and product facts |
 | `team` | Also into a published projection | item id, kind, state and owner for the team board; confirmed, non-personal facts a share spec selects |
 
 The rules that keep this clean:
@@ -289,8 +289,10 @@ The rules that keep this clean:
   knowledge). Moving a field to another class is a change to one row.
 - **Unknown means `local`.** A new field that nobody classified stays on the Mac, so forgetting
   the table fails safe.
-- **The table is total.** A test walks every field of the fixture ledger and knowledge base and
-  fails if one is unclassified, so a new field forces a decision in the same pull request.
+- **The table is total.** Every key is named, with no wildcard below an item, so an unnamed key is
+  `local`. A test walks every field of the fixture ledger, of the ledgers that real commands write,
+  and of the knowledge base, and fails if one is unclassified, so a new field forces a decision in
+  the same pull request.
 - **The gate checks again** before anything is encoded, and what it checks depends on the scope:
   - every scope: the class filter, the values in `identifiers.jsonl` (people's ids),
     `lib/redact.py` (keys, tokens, emails) and gitleaks if it is installed;

@@ -5,6 +5,7 @@ nothing of mine (my words, a call's context) is in an edit that may leave the Ma
 from __future__ import annotations
 
 import copy
+import dataclasses
 import json
 import sys
 import unittest
@@ -32,7 +33,21 @@ from ledger_changes import (
     list_edits,
     strip_local,
 )
-from test_approvals import OTHER_PR, PR, QUOTE as APPROVING_WORDS, run
+from test_approvals import (
+    CHANNEL,
+    DM,
+    OTHER_PR,
+    PR,
+    PR_URL,
+    QUOTE as APPROVING_WORDS,
+    REVIEW_REQUEST,
+    REVIEWER,
+    SEND,
+    SENT_REF,
+    TEXT,
+    THREAD,
+    run,
+)
 from test_post_tool_use import OTHER_COMMAND, SESSION, PostToolUseTestCase
 
 
@@ -97,19 +112,18 @@ def a_set(path: list[str], value: Any, prev: Any, local: bool = False) -> Edit:
 
 
 def leaf_paths(path: tuple[str, ...], value: Any) -> Iterator[tuple[str, ...]]:
-    if isinstance(value, dict):
+    """The paths diff compares as one value: it looks into a dict only where the table names its
+    keys (a container), so a dict under a key nobody named is one unclassified value."""
+    if ledger_changes.is_container(path, value):
         for key, child in value.items():
             yield from leaf_paths((*path, key), child)
     else:
         yield path
 
 
-def fixture_paths(data: dict[str, Any]) -> Iterator[tuple[str, ...]]:
-    """Every leaf of the items; the entries of sources and runs (each a whole value); said."""
-    yield from leaf_paths(("items",), data["items"])
-    for name in ("sources", "runs"):
-        yield from ((name, key) for key in data[name])
-    yield ("said",)
+def ledger_paths(data: dict[str, Any]) -> Iterator[tuple[str, ...]]:
+    for name in ("items", "sources", "runs", "said"):
+        yield from leaf_paths((name,), data.get(name))
 
 
 def masked(path: tuple[str, ...]) -> str:
@@ -117,19 +131,66 @@ def masked(path: tuple[str, ...]) -> str:
     return ".".join(("*" if index == 1 and len(path) > 1 else part) for index, part in enumerate(path))
 
 
+def unclassified(data: dict[str, Any]) -> list[str]:
+    """The fields of <data> with no row of their own (they fall back to local)."""
+    rows = ledger_changes.FIELDS
+    return sorted(
+        {masked(path) for path in ledger_paths(data) if not any(row is classify(path) for row in rows)}
+    )
+
+
 class TestFieldTable(unittest.TestCase):
     def test_every_fixture_field_is_classified(self) -> None:
         data = json.loads(FIXTURE.read_text())
-        paths = list(fixture_paths(data))
-        self.assertGreater(len(paths), 100)
-        unclassified = sorted(
-            {
-                masked(path)
-                for path in paths
-                if not any(row is classify(path) for row in ledger_changes.FIELDS)
-            }
+        self.assertGreater(len(list(ledger_paths(data))), 100)
+        self.assertEqual(unclassified(data), [])
+
+    def test_no_wildcard_below_an_item(self) -> None:
+        wild = [row.pattern for row in ledger_changes.FIELDS if "*" in row.pattern[2:]]
+        self.assertEqual(wild, [])
+        patterns = [row.pattern for row in ledger_changes.FIELDS]
+        self.assertEqual(len(patterns), len(set(patterns)))  # each field has one row
+
+    def test_unknown_keys_in_a_container_are_local(self) -> None:
+        paths = [
+            "fields.text",
+            "fields.vendor_contact",
+            "delegation.context",
+            "report.extra",
+            "proposal.reason",
+            "proposal.approval.cwd",
+            "proposal.auto_approved.prompt",
+            "proposal.approval.failed.stderr",
+        ]
+        classes = {path: classify(("items", ITEM, *path.split("."))).klass for path in paths}
+        self.assertEqual({path for path, klass in classes.items() if klass != LOCAL}, set())
+
+    def test_a_container_is_classified_like_its_whole_value(self) -> None:
+        containers = [
+            (),
+            ("fields",),
+            ("delegation",),
+            ("report",),
+            ("proposal",),
+            ("proposal", "approval"),
+            ("proposal", "auto_approved"),
+            ("proposal", "approval", "failed"),
+            ("proposal", "auto_approved", "carried_out"),
+        ]
+        for inner in containers:
+            path = ("items", ITEM, *inner)
+            self.assertTrue(ledger_changes.is_container(path, {}), path)
+            self.assertEqual(classify(path).klass, PRIVATE, path)
+
+    def test_the_header_and_the_call_context_are_ledgers_and_approvals(self) -> None:
+        self.assertEqual(ledger_changes.TASK_HEADER, ledger.TASK_HEADER_FIELDS)
+        context = tuple(field.name for field in dataclasses.fields(approvals.CallContext))
+        self.assertEqual(ledger_changes.CALL_CONTEXT, context)
+        self.assertIn(ledger.APPROVAL_USED, ledger_changes.LOCAL_HISTORY_EVENTS)
+        task_fields = {name: classify(("items", TASK, "fields", name)) for name in ledger.TASK_FIELDS}
+        self.assertEqual(
+            {name for name, rule in task_fields.items() if rule not in ledger_changes.FIELDS}, set()
         )
-        self.assertEqual(unclassified, [])
 
     def test_unknown_paths_are_local(self) -> None:
         rule = classify(("items", ITEM, "mystery"))
@@ -158,13 +219,16 @@ class TestFieldTable(unittest.TestCase):
         self.assertEqual(classify(("items", ITEM, "proposal", "approval")).pattern[-1], "approval")
         self.assertEqual(classify(("items", ITEM, "proposal", "approval", "quote")).klass, LOCAL)
         self.assertEqual(classify(("items", ITEM, "proposal", "approval", "hash")).klass, PRIVATE)
-        self.assertEqual(classify(("items", ITEM, "proposal", "action")).pattern[-1], "*")
+        self.assertEqual(classify(("items", ITEM, "proposal", "action")).pattern[-1], "action")
 
     def test_free_text_and_names_are_sealed(self) -> None:
         paths = [
             "title",
             "url",
+            "proposal.action",
             "proposal.spec",
+            "fields.review_url",
+            "fields.aliases",
             "report.summary",
             "report.open",
             "report.results",
@@ -191,7 +255,10 @@ class TestFieldTable(unittest.TestCase):
             "fields.repo",
             "fields.parent",
             "fields.key",
-            "proposal.action",
+            "fields.purpose",
+            "fields.reviewed_sha",
+            "fields.nudge_count",
+            "proposal.proposed_at",
             "proposal.approval.hash",
             "proposal.approval.failed.at",
             "proposal.auto_approved.class",
@@ -455,9 +522,29 @@ class TestDiff(unittest.TestCase):
         self.assertEqual(edits, [a_set(["report", "results"], ["one", "two"], ["one"])])
 
     def test_a_dict_that_turns_into_a_value_is_one_set(self) -> None:
-        before = a_ledger(an_item(fields={"repo": "acme/exporter", "extra": {"a": 1}}))
-        edits = changed(before, lambda data: data["items"][ITEM]["fields"].update(extra="flat"))
-        self.assertEqual(edits, [a_set(["fields", "extra"], "flat", {"a": 1})])
+        delegation = {"window": "exporter", "task": "review", "at": T0, "updates": 0, "session": "s-1"}
+        before = a_ledger(an_item(delegation=delegation))
+        edits = changed(before, lambda data: data["items"][ITEM].update(delegation="gone"))
+        known = {key: value for key, value in delegation.items() if key != "session"}
+        self.assertEqual(edits, [a_set(["delegation"], "gone", known)])
+
+    def test_an_unknown_key_in_a_container_is_a_local_set(self) -> None:
+        before = a_ledger(an_item())
+        edits = changed(before, lambda data: data["items"][ITEM]["fields"].update(text="the new rule"))
+        self.assertEqual(edits, [a_set(["fields", "text"], "the new rule", None, local=True)])
+        edits = diff(a_ledger(), a_ledger(an_item(fields={"repo": "acme/exporter", "text": "the new rule"})))
+        self.assertEqual(edits[0].body["item"]["fields"], {"repo": "acme/exporter"})
+        self.assertEqual(edits[1:], [a_set(["fields", "text"], "the new rule", None, local=True)])
+
+    def test_fields_that_appear_whole_are_private_with_their_local_keys_apart(self) -> None:
+        item = an_item()
+        del item["fields"]
+        edits = changed(
+            a_ledger(item), lambda data: data["items"][ITEM].update(fields={"repo": "r", "text": "t"})
+        )
+        self.assertEqual(
+            edits, [a_set(["fields"], {"repo": "r"}, None), a_set(["fields", "text"], "t", None, local=True)]
+        )
 
     def test_messages_keep_their_order(self) -> None:
         messages = [{"ref": f"m{n}", "channel": "slack", "at": T0} for n in range(3)]
@@ -591,20 +678,31 @@ class TestListEdits(unittest.TestCase):
 WINDOW = "exporter"
 SAID = "keep the zebra totals per customer"
 TOOL_USE_ID = "toolu_01"  # what PostToolUseTestCase.post gives the call
+QUESTION = f"out:{OTHER_PR}/1"
+QUESTION_TEXT = "Do credit notes reuse the invoice number sequence?"
+REVIEW = "review:acme/exporter#9"
+STANDING = {
+    "BOSUN_STANDING_CLASSES": "pr-review-traffic pr-housekeeping",
+    "BOSUN_STANDING_SLACK_CHANNELS": f"{CHANNEL} {DM}",
+    "BOSUN_STANDING_SLACK_MENTIONS": REVIEWER,
+    "BOSUN_STANDING_GH_REVIEWERS": "dana-acme",
+}
 
 
 def edit_text(edit: Edit) -> str:
     return canonical({"op": edit.op, "target": edit.target, "body": edit.body}).decode()
 
 
-class NothingOfMineLeavesTest(PostToolUseTestCase):
-    """Real commands, the prompt hook and the guard on a scratch ledger: every edit that may leave
-    the Mac (not local) is free of my words (an approval's quote, what I typed in a window) and of
-    a call's context (session, transcript, tool_use_id). A task's `via: user: ...` is sealed and a
-    link's via private by decision, so it is not checked here."""
+class RealWritesTest(PostToolUseTestCase):
+    """Real commands, the prompt hook and the guard on a scratch ledger, every write captured:
+    every field they write has a row, and every edit that may leave the Mac (not local) is free of
+    my words (an approval's quote, what I typed in a window) and of a call's context (session,
+    transcript, tool_use_id). A task's `via: user: ...` is sealed and a link's via private by
+    decision, so it is not checked here."""
 
     def setUp(self) -> None:
         super().setUp()
+        self.env.update(STANDING)
         self.writes: list[tuple[dict[str, Any], dict[str, Any]]] = []
         loaded: list[dict[str, Any]] = []
         load, save = ledger.load, ledger.save
@@ -627,22 +725,106 @@ class NothingOfMineLeavesTest(PostToolUseTestCase):
             patcher.start()
             self.addCleanup(patcher.stop)
 
-    def work(self) -> None:
-        """A delegation, a prompt I typed in its window, a task from my words, an approved call
-        that succeeded and one that failed."""
-        run("record-delegation", PR, "--window", WINDOW, "--task", "fix-my-pr", "--ask", "fix the footer")
+    def hand_over(self) -> None:
+        """My PR back with a window: the task header, an update, a prompt I typed there, a report."""
+        run("transition", PR, "changes-requested", "--note", "comments")
+        run("transition", PR, "addressing", "--note", "fixing")
+        header = ["--ask", "fix the footer", "--link", PR_URL, "--requester", "Dana", "--details", "totals"]
+        run("record-delegation", PR, "--window", WINDOW, "--task", "fix-my-pr", *header)
+        run("record-update", PR, "--text", "also the VAT line")
         hook.record_prompt(
             WINDOW, {"prompt": SAID, "session_id": SESSION}, {"BOSUN_STATE_DIR": str(self.state)}
         )
-        run("spawn", PR, "--title", "Footer totals", "--ask", "add the totals", "--via", "user: totals too")
-        self.post(self.use())
+        run("report", PR, "--summary", "pushed the fix", "--result", PR_URL, "--ci", "green")
+
+    def review_request(self) -> None:
+        """A re-review request under a standing class: let through, carried out, sent, answered."""
+        run("reach-out", PR, "--to", "Dana", "--subject", "re-review", "--purpose", "review")
+        spec = ["--send", "slack", "--channel", CHANNEL, "--thread", THREAD, "--text", TEXT]
+        run("propose", REVIEW_REQUEST, *spec)
+        call = self.event(SEND, channel_id=CHANNEL, thread_ts=THREAD, message=TEXT)
+        self.assertTrue(self.allowed(call))
+        self.post(call)
+        run("sent", REVIEW_REQUEST, "--ref", SENT_REF)
+        run("replied", REVIEW_REQUEST, "--evidence", f"{SENT_REF}9", "--summary", "looks good now")
+
+    def question(self) -> None:
+        """A question I approve in chat, carried out; then an approved command that fails."""
         run("upsert", OTHER_PR, "--kind", "my-pr", "--title", "Credit notes")
+        options = ["--option", "reuse", "--option", "own sequence", "--details", "the export needs one"]
+        reach = ["--to", "Lena", "--subject", "credit notes?", "--purpose", "decision", *options]
+        run("reach-out", OTHER_PR, *reach, "--expect-by", "2026-12-01")
+        self.approve(QUESTION, "--send", "slack", "--channel", CHANNEL, "--text", QUESTION_TEXT)
+        call = self.event(SEND, channel_id=CHANNEL, message=QUESTION_TEXT)
+        self.assertTrue(self.allowed(call))
+        self.post(call)
         self.post(self.use(OTHER_PR, OTHER_COMMAND), approvals.POST_TOOL_USE_FAILURE)
+
+    def bookkeeping(self) -> None:
+        """A task from my words, a ticket, a workstream, a learning, what chores.md stores, a
+        source, a run, a window's own work and a move."""
+        task = ["--requester", "Dana", "--repo", "acme/exporter", "--area", "process/invoicing"]
+        run(
+            "spawn", PR, "--title", "Footer totals", "--ask", "add totals", "--via", "user: totals too", *task
+        )
+        run(
+            "ticket-sync", "jira:EXP-12", "--status", "In Progress", "--assignee", "Lena", "--parent", "EXP-1"
+        )
+        run("link", PR, "tracks", "jira:EXP-12")
+        ws = ["--epic", "EXP-1", "--channel", CHANNEL, "--repo", "acme/exporter", "--alias", "inv"]
+        run(
+            "ws",
+            "add",
+            "invoices",
+            "--title",
+            "Invoices",
+            *ws,
+            "--started",
+            "2026-10-01",
+            "--target",
+            "2026-12-01",
+        )
+        learned = ["key=k1", "category=policy", "target=memory", "run=r1"]
+        run(
+            "upsert",
+            "learn:2026-10-21/1",
+            "--kind",
+            "learning",
+            "--title",
+            "T",
+            *[f"--field={f}" for f in learned],
+        )
+        chores = [
+            "requester=Dana",
+            f"request_permalink={SENT_REF}",
+            "reviewed_sha=abc1",
+            f"reviewed_at={T1}",
+        ]
+        run("upsert", REVIEW, "--kind", "review-request", *[f"--field={f}" for f in chores])
+        mine = [f"review_thread={SENT_REF}", f"last_push_at={T1}", "nudge_count=1", f"last_nudged_at={T1}"]
+        run("upsert", PR, *[f"--field={f}" for f in [*mine, f"commented_at={T1}"]])
+        run("record-source", f"{SENT_REF}8", "--class", "fyi")
+        run("mark-run", "morning")
+        run("working", OTHER_PR, "--window", "credit")
+        run("record-move", PR, "--window", "exporter-2", "--text", "carry on there")
+
+    def work(self) -> None:
+        self.hand_over()
+        self.review_request()
+        self.question()
+        self.post(self.use())
+        self.bookkeeping()
 
     def edits(self) -> list[Edit]:
         """The edits of every write, and of the genesis of the ledger they made."""
         final = json.loads(ledger.STORE.ledger_file.read_text())
         return [edit for before, after in self.writes for edit in diff(before, after)] + diff({}, final)
+
+    def test_every_field_the_commands_write_has_a_row(self) -> None:
+        self.work()
+        self.assertGreater(len(self.writes), 30)
+        found = sorted({path for _, after in self.writes for path in unclassified(after)})
+        self.assertEqual(found, [])
 
     def test_no_edit_that_may_leave_holds_my_words_or_a_calls_context(self) -> None:
         self.work()

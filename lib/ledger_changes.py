@@ -54,12 +54,17 @@ MAX_HISTORY = 200
 TRIMMED = "history-trimmed"
 MAPS = ("sources", "runs")
 SAID = "said"
-# Where and when a call ran: local wherever an approval, a standing approval or a call's outcome
-# keeps it.
+# Where and when a call ran (approvals.CallContext): local wherever an approval, a standing
+# approval or a call's outcome keeps it.
 CALL_CONTEXT = ("session", "tool_use_id", "transcript")
-GRANTS = ("items.*.proposal.approval", "items.*.proposal.auto_approved")
-OUTCOMES = tuple(f"{grant}.{outcome}" for grant in GRANTS for outcome in ("failed", "carried_out"))
-# Free text and people's names in an item's fields and in a delegation's task header: sealed.
+APPROVAL = "items.*.proposal.approval"
+STANDING = "items.*.proposal.auto_approved"
+OUTCOMES = tuple(
+    f"{grant}.{outcome}" for grant in (APPROVAL, STANDING) for outcome in ("failed", "carried_out")
+)
+# The keys of an item's fields that the commands and the orchestrator's procedures write, by class
+# (a key not named is local until it has a row). Sealed: free text, people's names, URLs and
+# permalinks. Private: ids, repo, ticket and system names, enums, times and counts.
 SEALED_FIELDS = (
     "subject",
     "requester",
@@ -72,11 +77,42 @@ SEALED_FIELDS = (
     "via",
     "origin",
     "options",
+    "aliases",
     "reply_ref",
     "request_permalink",
     "review_thread",
+    "review_url",
 )
-TASK_HEADER = ("ask", "requester", "details", "link")
+PRIVATE_FIELDS = (
+    "repo",
+    "repos",
+    "area",
+    "parent",
+    "parent_ticket",
+    "epic",
+    "project",
+    "purpose",
+    "channel",
+    "channels",
+    "category",
+    "target",
+    "run",
+    "external_status",
+    "status_category",
+    "synced_at",
+    "replied_at",
+    "expect_by",
+    "started",
+    "ended",
+    "reviewed_sha",
+    "reviewed_at",
+    "last_push_at",
+    "commented_at",
+    "last_nudged_at",
+    "nudge_count",
+)
+TASK_HEADER = ("ask", "link", "requester", "details")  # ledger.TASK_HEADER_FIELDS: sealed
+DELEGATION = ("window", "task", "at", "updates", "last_update_at", "moved_from")
 # History events whose note quotes my words (a prompt's excerpt, an approval's quote): local whole,
 # as is an entry that keeps a call's context. The property test in tests/unit/test_ledger_changes.py
 # fails if a renamed event lets them out.
@@ -105,52 +141,67 @@ def _rows(rule: str, klass: str, *patterns: str, important: bool = False) -> tup
     return tuple(FieldRule(tuple(pattern.split(".")), rule, klass, important) for pattern in patterns)
 
 
-# Every field of the ledger, first match wins. A new field is a row here: an unknown one is local,
-# and the fixture test fails until it has a row. Important fields conflict when two Macs change
-# them at once. A container's own row is about its whole value, when it appears or goes. Classes:
-# docs/design/sync.md, "Which data goes where" (free text and people's names are sealed).
+def _under(container: str, *keys: str) -> tuple[str, ...]:
+    return tuple(f"{container}.{key}" for key in keys)
+
+
+# Every field of the ledger, each key named: no wildcard below an item, so a key nobody named is
+# local (fail closed) and the totality test fails until it has a row. Each container (the item, its
+# fields, delegation, report, proposal, the grants and their outcomes) has a row of its own, for
+# its whole value when it appears or goes. Important fields conflict when two Macs change them at
+# once. Classes: docs/design/sync.md, "Which data goes where".
 FIELDS: tuple[FieldRule, ...] = (
     *_rows(STATE, PRIVATE, "items.*.state", important=True),
     *_rows(HISTORY, SEALED, "items.*.history"),
     *_rows(LINKS, PRIVATE, "items.*.links"),
     *_rows(LIST, SEALED, "items.*.fields.messages"),
+    # Free text, people's names, URLs and permalinks.
     *_rows(
         SET,
         SEALED,
-        "items.*.title",
-        "items.*.url",
-        "items.*.proposal.spec",
-        "items.*.report.summary",
-        "items.*.report.open",
-        "items.*.report.results",
-        *(f"items.*.fields.{name}" for name in SEALED_FIELDS),
-        *(f"items.*.delegation.{name}" for name in TASK_HEADER),
+        *_under("items.*", "title", "url"),
+        *_under("items.*.fields", *SEALED_FIELDS),
+        *_under("items.*.delegation", *TASK_HEADER),
+        *_under("items.*.report", "summary", "open", "results"),
+        *_under("items.*.proposal", "action", "spec"),
         *(f"{outcome}.reason" for outcome in OUTCOMES if outcome.endswith(".failed")),
+        "sources.*",
     ),
-    *_rows(SET, PRIVATE, "items.*.proposal.proposed_at", "items.*.proposal.approval.used_at", important=True),
+    # My approving words, and where and when a call ran.
     *_rows(
         SET,
         LOCAL,
-        "items.*.proposal.approval.quote",
-        *(f"{where}.{name}" for where in (*GRANTS, *OUTCOMES) for name in CALL_CONTEXT),
+        f"{APPROVAL}.quote",
+        *(f"{where}.{name}" for where in (APPROVAL, STANDING, *OUTCOMES) for name in CALL_CONTEXT),
     ),
-    *_rows(SET, PRIVATE, "items.*.proposal", "items.*.proposal.approval", important=True),
-    *_rows(SET, PRIVATE, "items.*.delegation", "items.*.report", "items.*.proposal.auto_approved", *OUTCOMES),
-    *_rows(SET, PRIVATE, "items.*.proposal.*", *(f"{where}.*" for where in (*GRANTS, *OUTCOMES))),
-    *_rows(SET, PRIVATE, "items.*.fields.key", "items.*.fields.system", important=True),
+    # One proposal per item, an approval used once, one ticket per item.
     *_rows(
         SET,
         PRIVATE,
-        "items.*.id",
-        "items.*.kind",
-        "items.*.created_at",
-        "items.*.updated_at",
-        "items.*.fields.*",
-        "items.*.delegation.*",
-        "items.*.report.*",
+        "items.*.proposal",
+        "items.*.proposal.proposed_at",
+        APPROVAL,
+        f"{APPROVAL}.used_at",
+        "items.*.fields.key",
+        "items.*.fields.system",
+        important=True,
+    ),
+    # Ids, names, enums, times and counts; and the containers themselves.
+    *_rows(
+        SET,
+        PRIVATE,
+        "items.*",
+        *_under("items.*", "id", "kind", "created_at", "updated_at", "fields", "delegation", "report"),
+        *_under("items.*.fields", *PRIVATE_FIELDS),
+        *_under("items.*.delegation", *DELEGATION),
+        *_under("items.*.report", "at", "ci", "window"),
+        *_under(APPROVAL, "at", "hash", "call"),
+        STANDING,
+        *_under(STANDING, "at", "class", "call"),
+        *OUTCOMES,
+        *(f"{outcome}.{name}" for outcome in OUTCOMES for name in ("at", "tool")),
         "runs.*",
     ),
-    *_rows(SET, SEALED, "sources.*"),
     *_rows(LIST, LOCAL, SAID),
 )
 
@@ -164,19 +215,20 @@ def _has_rows_below(path: Path) -> bool:
     return any(len(row.pattern) > len(path) and _fits(row.pattern, path) for row in FIELDS)
 
 
-def _is_container(path: Path, value: Any) -> bool:
-    """A dict the table looks into field by field (an item, its fields, a proposal, an approval)."""
+def is_container(path: Path, value: Any) -> bool:
+    """A dict the table looks into key by key (an item, its fields, a proposal, an approval): diff
+    compares it that way, and any other value at a path as one."""
     return isinstance(value, dict) and _has_rows_below(path)
 
 
 def _is_local(path: Path, value: Any) -> bool:
-    return not _is_container(path, value) and classify(path).klass == LOCAL
+    return not is_container(path, value) and classify(path).klass == LOCAL
 
 
 def strip_local(path: Path, value: Any) -> Any:
     """<value>, found at the full <path>, without its local leaves (a container comes back as a
     new dict). The rebuild compares an important field's `prev` with the current value stripped so."""
-    if not _is_container(path, value):
+    if not is_container(path, value):
         return value
     return {
         key: strip_local((*path, key), child)
@@ -187,7 +239,7 @@ def strip_local(path: Path, value: Any) -> Any:
 
 def _local_leaves(path: Path, value: Any) -> list[tuple[Path, Any]]:
     """The local leaves inside <value> at <path>, in path order."""
-    if not _is_container(path, value):
+    if not is_container(path, value):
         return []
     found: list[tuple[Path, Any]] = []
     for key in sorted(value):
@@ -366,7 +418,7 @@ def _whole_set(path: Path, before: Any, after: Any) -> list[Edit]:
 
 
 def _on_set(path: Path, _rule: FieldRule, before: Any, after: Any, out: _ItemEdits) -> None:
-    if _is_container(path, before) and _is_container(path, after):
+    if is_container(path, before) and is_container(path, after):
         _compare_dict(path, before, after, out)
     else:
         out.sets += _whole_set(path, before, after)
