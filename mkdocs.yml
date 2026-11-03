@@ -108,6 +108,7 @@ nav:
           - Impact, phase A: plans/impact-phase-a.md
           - Impact, cost per task: plans/impact-cost-per-task.md
           - Impact, overhead: plans/impact-overhead.md
+          - Sync, phase 0: plans/sync-phase-0.md
   - Project:
       - Roadmap: roadmap.md
       - Development: development.md

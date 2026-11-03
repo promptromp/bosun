@@ -1,6 +1,7 @@
 # Design note: sync and sharing (ledger and knowledge)
 
-Status: proposed (2026-11-03); nothing built yet. Tracked in
+Status: accepted (2026-11-03); nothing built yet. Phase 0 is planned in
+[docs/plans/sync-phase-0.md](../plans/sync-phase-0.md). Tracked in
 [ROADMAP.md](../../ROADMAP.md#6-sync-and-sharing).
 
 ## Why
@@ -113,14 +114,12 @@ loader moves behind `knowledge.load` anyway.
 6. **MVP first, then the smallest collaboration.** Phase 1 is sync and restore for one person;
    phase 2 is the team board; knowledge sharing follows. (Order decided by the user; the board
    before knowledge is proposed.)
-7. **Plain text in my own scope, on a store that cannot delete** (GitHub). Open, the user's call.
-   Free text (titles, notes, report summaries) can name colleagues, and on GitHub it would stay
-   readable forever. Options:
-   - **(a)** free text is `sealed`: with encryption off, my scope carries ids, states, links and
-     times but no words (proposed);
-   - **(b)** allowed, after an explicit acknowledgment in config;
-   - **(c)** not allowed: plain text is for the team scope only, and my scope is encrypted by the
-     codec or by the store.
+7. **Free text is `sealed`.** Titles, notes, history notes, report summaries and outreach
+   subjects can name colleagues, and on a store that cannot delete (GitHub) plain text would stay
+   readable forever. So with encryption off, my scope carries ids, states, links and times but no
+   words; with encryption on (the default), everything in the class allows. Rejected: allowing
+   plain free text after an acknowledgment in config (set once, forgotten, permanent), and
+   allowing plain text only in the team scope (stricter than needed). (Decided by the user.)
 
 ## Shape
 
@@ -158,6 +157,12 @@ local clock forward, so a Mac whose clock says 2030 cannot win every contest.
 current shape, now rebuilt from the logs. Commands, the guard, hooks, the console, task files and
 the policy keep reading them. The property every test checks: the files equal the rebuild of the
 logs.
+
+**The journal is the commit point.** A write appends its changes to the journal (with `fsync`)
+first, then rewrites the files, which record the journal position they reflect (the highest `seq`
+per replica). A crash between the two leaves the files behind the journal; the next load sees the
+positions differ and rebuilds the files from the journal. Pulling another Mac's changes in phase 1
+is the same step.
 
 ### Rebuilding, and what a merge cannot decide
 
@@ -209,8 +214,8 @@ compares afterwards, turning each write into one transaction of field-level chan
 each field path to its merge rule and its class ([Which data goes where](#which-data-goes-where)),
 in the table style of `KINDS`, `RELATIONS` and `CHECKS`. A state change becomes a change with its
 `from`; added history entries, links and messages become additions; a removed link becomes an
-unlink. A write that changed nothing writes nothing, which also retires today's unconditional
-save. The command name goes on the transaction.
+unlink. A write that changed nothing adds nothing to the journal (the files are still rewritten,
+since `ledger render` relies on that). The command name goes on the transaction.
 
 The alternative, an explicit change emitted by each command, keeps more intent but spreads sync
 across 29 places. The comparison keeps it in one, and the command name recovers most of the
@@ -256,9 +261,11 @@ change may retire it ([Open questions](#open-questions)).
 | Facts | `f<max + 1>` | `f-<short hash>` |
 | Entities | `<type>/<slug>` | Unchanged within one person; across people, see [Knowledge sharing](#phase-3-knowledge-sharing) |
 
-The short hash is a prefix of the creating change's `id`, four characters to start, longer only if
-that prefix is taken (as Beads does), so ids stay short enough to type. Existing ids stay as they
-are: only the first Mac has them.
+The short hash is six base32 characters of a hash of the replica id and the journal position the
+id is made at, so it is unique to its Mac by construction, never reused (not even after a `prune`),
+the same on every rebuild of a fixture, and short enough to type. Two Macs collide only by a hash
+collision, about one in a billion for a pair of ids. Existing ids stay as they are: only the first
+Mac has them.
 
 A new Mac joins by restoring from the state repository and starting with no ledger of its own. A
 Mac that already has its own ledger cannot join in phase 1: merging two ledgers that grew apart
@@ -272,7 +279,7 @@ Every field belongs to one class. The class decides how far it may travel:
 | Class | Leaves this Mac | Examples |
 |---|---|---|
 | `local` | Never | `said` (my verbatim prompts); an approval's quote, session, transcript path and tool call; `identifiers.jsonl`; `forgotten.jsonl`; person entities and every fact naming a person; `batch.json` |
-| `sealed` | Only to my own scope, and only when the data is encrypted (by the codec, or by a store that declares encryption at rest) | colleagues' names in `requester` and `to`; outreach message bodies; Slack permalinks |
+| `sealed` | Only to my own scope, and only when the data is encrypted (by the codec, or by a store that declares encryption at rest) | free text (titles, notes, history notes, report summaries, outreach subjects and bodies); colleagues' names in `requester` and `to`; Slack permalinks |
 | `private` | To my own scope | item ids, kinds, states, links, history events, reports; the window in a delegation or report, tagged with its replica; process and product facts |
 | `team` | Also into a published projection | item id, kind, state and owner for the team board; confirmed, non-personal facts a share spec selects |
 
@@ -305,8 +312,9 @@ Where we expect to iterate:
 - **Restore loses `local` data.** A restored Mac has no prompts in `said`, no person facts and no
   identifiers. Person facts are the first candidate for `sealed`, once deletion can reach a remote
   (key epochs, phase 4 in [Phases](#phases)).
-- **Titles can hold names.** A PR title or a Slack excerpt can name a colleague; titles are
-  `private` and need a closer look before any title goes into a team projection.
+- **Titles can hold names.** A PR title or a Slack excerpt can name a colleague, so free text is
+  `sealed` and stays out of the team board. Whether some titles (a PR's, already visible to the
+  team on GitHub) could be shared needs a closer look before any title goes into a team projection.
 - **Item ids can be sensitive.** `slack:<channel>/<ts>` names a channel; it is `private`, and Slack
   items stay out of the team board.
 
@@ -579,14 +587,14 @@ checkout (uninstall never touches the remote, and says so), and the config keys 
 
 | Phase | Scope | Built | New dependencies | Done when |
 |---|---|---|---|---|
-| 0: Groundwork | one Mac, no remote | The envelope, hash-based ids, the clock, journals and rebuilt files, rebuild with conflicts, the class table, `ledger validate`, `learn:` changes on the item, the keyed hash in `forgotten.jsonl`, the folder store, the plain codec, the contract suite | none | Rebuilding the journals reproduces `ledger.json` and the knowledge base over the corpus; two folder replicas agree under shuffled and duplicated delivery |
-| 1: Sync and restore | one person, one or more Macs, the state repository | The git store, the `age` codec, the `ssh` signer with member and device keys, the gate, the lease, `bosun sync`, restore in `bosun init`, doctor lines | the `age` CLI | Two Macs work offline, sync and show the same ledger and knowledge; a new Mac restores; the host holds only `.age` files |
+| 0: Groundwork | one Mac, no remote | The envelope, hash-based ids, the clock, journals and rebuilt files, rebuild with conflicts, the class table, `ledger validate`, `learn:` changes on the item, the keyed hash in `forgotten.jsonl` | none | Rebuilding the journals reproduces `ledger.json` and the knowledge base over the corpus; the same changes delivered shuffled or duplicated rebuild the same |
+| 1: Sync and restore | one person, one or more Macs, the state repository | The three ports with the folder store, `plain` codec, `none` signer and their contract suite; the git store, the `age` codec, the `ssh` signer with member and device keys, the gate, the lease, `bosun sync`, restore in `bosun init`, doctor lines | the `age` CLI | Two Macs work offline, sync and show the same ledger and knowledge; a new Mac restores; the host holds only `.age` files |
 | 2: Team board | a small team, one shared repository | The roster, the team scope, the board projection and its reading, the orchestrator's wording | none | A teammate's agent sees my open review and says so before starting its own |
 | 3: Knowledge sharing | the same team | The share spec, signed fact bundles, peer partitions, the `peer` source kind, quarantine, the gate on actions, the export log, signed retractions | none | Privacy or legal sign-off; an imported fact cannot reach a context pack or an outward action without review |
 | 4: More backends, a server only if needed | any | S3-compatible and `exec:` stores; key epochs, so `sealed` can include person facts; a server with live push if a team outgrows a repository | the AWS CLI for S3 | The contract suite passes on every store; switching store is a config change plus a copy |
 
 Each phase stands on its own: stopping after any of them leaves a working bosun. The S3 store can
-come any time after phase 1, because the port exists from phase 0.
+come any time after phase 1, because the port exists from then on.
 
 The ROADMAP's SQLite ledger (P2) changes meaning: if it comes, it is a local query copy rebuilt
 from the journal, never what travels.

@@ -268,12 +268,13 @@ phone approvals are verified.
 base, and a second Mac starts from nothing. Next after that: teammates' agents that benefit from
 what mine has learned, and that see I am already on a review before starting the same one.
 
-**Proposed (2026-11-03):** each store becomes a log of changes per machine, rebuilt the same way
+**Accepted (2026-11-03), not built yet:** each store becomes a log of changes per machine, rebuilt the same way
 everywhere, with the rules a merge cannot keep shown as conflicts. The logs travel through
 pluggable ports for storage, encryption and signing; the first store is a dedicated state
 repository on GitHub, encrypted with `age` by default. Personal data stays on the Mac. Phases:
 groundwork, sync and restore for one person, a team board, knowledge sharing, more backends.
-Design note: [docs/design/sync.md](docs/design/sync.md).
+Design note: [docs/design/sync.md](docs/design/sync.md); phase 0 plan:
+[docs/plans/sync-phase-0.md](docs/plans/sync-phase-0.md).
 
 ## Features
 
