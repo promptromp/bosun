@@ -72,6 +72,7 @@ SOURCE_KINDS: dict[str, bool] = {
 }
 USER_SOURCE = "user"
 PROFILE_SOURCE = "profile"
+TRANSCRIPT_SOURCE = "transcript"
 
 INTERNAL = "internal"
 PERSONAL = "personal"

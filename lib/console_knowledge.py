@@ -396,7 +396,8 @@ def fact_sort(fact: Record) -> tuple[int, tuple[str, int, str]]:
 
 
 def grouped(kb: KB, facts: list[Record], ledger_ids: frozenset[str]) -> list[dict[str, Any]]:
-    """Facts grouped by predicate (in the schema's order), each group in step order, then by id."""
+    """Facts grouped by predicate (in the schema's order), each group in step order, then in the
+    order facts were made."""
     rank = predicate_rank(kb)
     names = sorted({f["predicate"] for f in facts}, key=lambda n: (rank.get(n, len(rank)), n))
     groups = []
@@ -476,7 +477,7 @@ PROCESS = "process"
 
 
 def linked_facts(kb: KB, entity_id: str, predicate: str) -> list[Record]:
-    """An entity's current <predicate> facts, in step order (unordered last), then by id."""
+    """An entity's current <predicate> facts, in step order (unordered last), then in the order made."""
     facts = [
         f
         for f in kb.facts.values()
@@ -501,8 +502,9 @@ def step_details(kb: KB, entity_id: str) -> dict[str, Any]:
 
 
 def flow_model(kb: KB, entity_id: str) -> dict[str, Any] | None:
-    """A process's steps in order (has_step's order, then the fact id), each with its actors,
-    gates, systems, channels and entry points; None unless the entity is a process with steps."""
+    """A process's steps in order (has_step's order, then the order facts were made), each with its
+    actors, gates, systems, channels and entry points; None unless the entity is a process with
+    steps."""
     if ks.entity_type(entity_id) != PROCESS:
         return None
     steps = [f for f in linked_facts(kb, entity_id, "has_step") if f.get("object")]

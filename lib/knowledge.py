@@ -240,7 +240,7 @@ def journaled(kb: KB, write: Write) -> dict[str, Any]:
     held = files_digest(kb)
     if kb.rewrite:
         edits = forget(write.journal, kc.removed(write.entities, kb), edits)
-    commit(write.transaction, edits)
+    write.transaction.commit_edits(edits)
     return change_log.stamped(write.journal.position(), held)
 
 
@@ -274,12 +274,6 @@ def forget(journal: Journal, targets: set[str], edits: list[Edit]) -> list[Edit]
         )
     journal.forget(targets)
     return [edit for edit in edits if edit.target not in targets]
-
-
-def commit(transaction: Transaction, edits: list[Edit]) -> None:
-    for edit in edits:
-        transaction.add(edit.op, edit.target, edit.body, local=edit.local)
-    transaction.commit()
 
 
 # ---- the journal --------------------------------------------------------------------------------
@@ -355,7 +349,7 @@ def genesis(p: Paths, journal: Journal, kb: KB) -> None:
     notes = kc.taken_in(kb, "the knowledge files")
     for note in notes:
         print(f"kg: {note}", file=sys.stderr)
-    commit(journal.begin(GENESIS), kc.snapshot(kb))
+    journal.begin(GENESIS).commit_edits(kc.snapshot(kb))
     if notes:
         store.write_atomically(p.entities, store.jsonl([kb.entities[i] for i in sorted(kb.entities)]))
         store.write_atomically(p.facts, store.jsonl(kb.records))

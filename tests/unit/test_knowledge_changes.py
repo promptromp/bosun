@@ -14,6 +14,7 @@ import re
 import shutil
 import sys
 import unittest
+from datetime import timedelta
 from pathlib import Path
 from typing import Any
 from unittest import mock
@@ -28,7 +29,7 @@ import knowledge_model as km
 import knowledge_store as store
 from change_log import Edit
 from knowledge_model import KnowledgeError
-from test_knowledge import FIXTURE, START, KnowledgeTestCase
+from test_knowledge import FIXTURE, QUOTE, START, KnowledgeTestCase, typed
 
 
 MINTED = re.compile(r"^f-[0-9a-hjkmnp-tv-z]{6}$")
@@ -234,6 +235,52 @@ class ClassesTest(JournalTestCase):
         self.assertEqual(self.private()[-1]["op"], "fact.update")
         self.assertEqual(self.local()[-1]["tx"], self.private()[-1]["tx"])  # one write, one transaction
 
+    def test_a_fact_i_stated_stays_on_this_mac_whole(self) -> None:
+        self.seed()
+        session = "0123456789abcdef-acme-session"
+        transcript = self.tmp / f"{session}.jsonl"
+        transcript.write_text(json.dumps(typed(f"note: {QUOTE}, always", START - timedelta(hours=1))) + "\n")
+        out = self.run_kg(
+            "propose", "release", "gated_by", "gate/smoke-tests",
+            "--from-user", "--quote", QUOTE, "--transcript", str(transcript),
+        )  # fmt: skip
+        self.assertIn("confirmed (your own words", out)
+        stated = self.fact_id("process/release", "gated_by")
+        self.run_kg("propose", "exporter", "caveat", "--value", "slow", "--source", f"transcript:{session}")
+        seen = self.fact_id("repo/invoice-exporter", "caveat")
+        private = (self.root / "journal" / f"{self.replica()}.jsonl").read_text()
+        for secret in (QUOTE, session, stated, seen):
+            self.assertNotIn(secret, private)
+        local = [(c["op"], c["target"]) for c in self.local()]
+        self.assertIn(("fact.add", stated), local)
+        self.assertIn(("fact.update", stated), local)  # its confirmation holds no quote: the fact is mine
+        self.assertIn(("fact.add", seen), local)
+        self.assertTrue(all(c["local"] for c in self.local()))
+
+    def test_my_words_added_later_keep_the_records_after_them_on_this_mac(self) -> None:
+        self.seed()
+        self.run_kg("propose", "release", "gated_by", "gate/smoke-tests", "--source", "ledger:a")
+        fact_id = self.fact_id("process/release", "gated_by")
+        session = "fedcba9876543210-acme-session"
+        self.run_kg("propose", "release", "gated_by", "gate/smoke-tests", "--source", f"user:{session}")
+        self.assertIn(("fact.add", fact_id), [(c["op"], c["target"]) for c in self.private()])
+        self.assertIn(("fact.update", fact_id), [(c["op"], c["target"]) for c in self.local()])
+        self.assertNotIn(session, (self.root / "journal" / f"{self.replica()}.jsonl").read_text())
+
+    def test_a_record_holding_my_words_is_local_whatever_its_fact(self) -> None:
+        mine = {"kind": "user", "ref": "0123", "quote": "smoke tests gate every release", "at": "x"}
+        fact: dict[str, Any] = {"id": "f-aaaaaa", "subject": "repo/x", "object": None}
+        fact["sources"] = [{"kind": "ledger", "ref": "a", "at": "x"}]
+        add: dict[str, Any] = {"op": "add", "at": "x", "fact": fact}
+        update: dict[str, Any] = {"op": "update", "id": "f-aaaaaa", "at": "x", "event": "observed"}
+        update.update(set={}, sources=[mine])
+        facts = {"f-aaaaaa": add["fact"]}
+        self.assertFalse(kc.record_edit(add, facts).local)
+        self.assertTrue(kc.record_edit(update, facts).local)
+        for kind in ("user", "transcript"):
+            stated = {**add, "fact": {**add["fact"], "sources": [{"kind": kind, "ref": "0123", "at": "x"}]}}
+            self.assertTrue(kc.record_edit(stated, facts).local, kind)
+
     def test_edits_compare_entities_and_take_the_new_records(self) -> None:
         self.seed()
         kb = self.kb()
@@ -312,6 +359,41 @@ class ForgetTest(JournalTestCase):
         self.assertIn("person/dana", {c.get("target") for c in self.local()})  # only the facts went
         self.assertNotIn("lisbon", self.git_log().lower())
 
+    def leftovers(self) -> dict[str, Path]:
+        """What writes cut short leave in the journal folder: a torn tail of each file, and a copy
+        of local.jsonl from a rewrite cut short, each naming the person."""
+        journal = self.root / "journal"
+        found = {
+            "local torn": journal / "local.jsonl.torn-20261021T090000Z",
+            "local torn 2": journal / "local.jsonl.torn-20261021T090000Z-2",
+            "rewrite copy": journal / ".local.jsonl.4242.tmp",
+            "private torn": journal / f"{self.replica()}.jsonl.torn-20261021T090000Z",
+        }
+        for path in found.values():
+            path.write_text('{"body":{"name":"Dana Example"},"op":"entity.put"')
+        return found
+
+    def test_forget_deletes_what_writes_cut_short_left_of_local_changes(self) -> None:
+        self.seed()
+        left = self.leftovers()
+        self.run_kg("add-entity", "repo/other")  # a commit with the leftovers on disk
+        self.assertNotIn("torn", store.git(self.root, "ls-files").stdout)  # never in the history
+        self.run_kg("forget", "person/dana")
+        for name in ("local torn", "local torn 2", "rewrite copy"):
+            self.assertFalse(left[name].exists(), name)
+        self.assertTrue(left["private torn"].exists())  # never local: it holds no person
+        self.assertNotIn("dana", self.git_log().lower())
+
+    def test_the_retention_purge_deletes_them_too(self) -> None:
+        self.seed()
+        self.run_kg(
+            "propose", "person/dana", "timezone", "--value", "Europe/Lisbon", "--source", "profile:dir"
+        )
+        left = self.leftovers()
+        self.later(km.RETENTION_DAYS + 1)
+        self.run_kg("expire")
+        self.assertEqual([name for name, path in left.items() if path.exists()], ["private torn"])
+
     def test_a_rewrite_never_removes_a_private_record(self) -> None:
         self.seed()
         self.run_kg("propose", "release", "has_step", "step/merge", "--source", "ledger:a")
@@ -347,11 +429,18 @@ class GenesisTest(JournalTestCase):
         self.assertEqual(len({c["tx"] for c in genesis}), 1)
         self.assertEqual(len(genesis), len(puts) + len(bodies) - 1)  # the write's own record follows
 
-    def test_genesis_keeps_what_names_a_person_on_this_mac(self) -> None:
+    def test_genesis_keeps_what_names_a_person_or_holds_my_words_on_this_mac(self) -> None:
         changes = self.imported_then_written()
-        personal = {i for i, f in self.kb().facts.items() if km.is_personal(f)}
+        mine = {
+            i
+            for i, f in self.kb().facts.items()
+            if km.is_personal(f) or {s["kind"] for s in f["sources"]} & {"user", "transcript"}
+        }
+        self.assertIn(self.fact_id("process/hotfix", "entry_point"), mine)  # a transcript names my session
         local = {c["target"] for c in changes if c["cmd"] == knowledge.GENESIS and c.get("local")}
-        self.assertEqual(local, {"person/dana", "person/lee", *personal})
+        self.assertEqual(local, {"person/dana", "person/lee", *mine})
+        private = (self.root / "journal" / f"{self.replica()}.jsonl").read_text()
+        self.assertNotIn("00000000-0000-0000-0000-00000000000", private)  # the fixture's sessions
 
     def test_genesis_keeps_counted_ids_and_takes_in_what_the_journal_cannot_hold(self) -> None:
         self.write_legacy(

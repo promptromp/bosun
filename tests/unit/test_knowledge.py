@@ -873,6 +873,8 @@ class GitHistoryTest(KnowledgeTestCase):
         lines = (self.root / ".gitignore").read_text().splitlines()
         self.assertIn("batch.json", lines)
         self.assertIn("secret.key", lines)
+        self.assertIn("*.torn-*", lines)  # what a write cut short left in the journal
+        self.assertEqual(len(lines), len(set(lines)))
         self.assertNotIn("secret.key", self.git_out(self.root, "ls-files").split())
 
     def test_the_key_is_private_and_not_in_git(self) -> None:

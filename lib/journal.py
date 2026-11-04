@@ -39,7 +39,7 @@ import re
 import secrets
 import sys
 import time
-from collections.abc import Callable, Collection, Mapping
+from collections.abc import Callable, Collection, Iterable, Mapping
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
@@ -48,6 +48,7 @@ from typing import Any, BinaryIO
 from change_log import (
     ENVELOPE_VERSION,
     Change,
+    Edit,
     canonical,
     change_id,
     clock_text,
@@ -65,6 +66,10 @@ SUFFIX = ".jsonl"
 # fcntl's full flush where the platform has one (macOS); None elsewhere.
 FULL_FSYNC: int | None = getattr(fcntl, "F_FULLFSYNC", None)
 TORN = ".torn-"  # <file>.torn-<UTC time>: an unfinished transaction, moved aside
+REWRITING = ".{name}.{writer}.tmp"  # a file's new text while a rewrite (forget) writes it
+# What writes cut short leave of local.jsonl, which a delete on request removes: its torn tails, and
+# the copy a rewrite was writing.
+LOCAL_LEFTOVERS = (f"{LOCAL}{SUFFIX}{TORN}*", REWRITING.format(name=f"{LOCAL}{SUFFIX}", writer="*"))
 _TAIL = 8192
 # What reading a change relies on (its position, its place in the order, whether its transaction
 # is whole): a line without them is not a change.
@@ -124,21 +129,29 @@ def _read_replica(path: Path) -> str:
 
 
 def replica_id(state_dir: Path) -> str:
-    """This machine's id (32 hex characters), made once and kept in `replica.json` (written whole
-    and flushed to the disk before it is used)."""
+    """This machine's id (32 hex characters), made once and kept in `replica.json`, which both
+    stores' journals (the ledger's, the knowledge base's) use. It is written whole to a file of its
+    own and flushed to the disk, then linked to its name, which never replaces a file already
+    there: two creators at once (a first ledger write and a first knowledge write) agree, as the
+    second reads the first one's id."""
     path = state_dir / REPLICA_FILE
     if path.exists():
         return _read_replica(path)
     state_dir.mkdir(parents=True, exist_ok=True)
     made = secrets.token_hex(16)
-    tmp = state_dir / f".{REPLICA_FILE}.{os.getpid()}.tmp"
-    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    tmp = state_dir / f".{REPLICA_FILE}.{os.getpid()}.{secrets.token_hex(4)}.tmp"
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
     try:
         _write_all(fd, (json.dumps({"replica": made}) + "\n").encode())
         flush_to_disk(fd)
     finally:
         os.close(fd)
-    os.replace(tmp, path)
+    try:
+        os.link(tmp, path)
+    except FileExistsError:
+        return _read_replica(path)
+    finally:
+        tmp.unlink(missing_ok=True)
     return made
 
 
@@ -308,6 +321,19 @@ def _set_aside(path: Path, end: int, stamp: str) -> Path:
     return aside
 
 
+def _replace_whole(path: Path, changes: list[Change]) -> None:
+    """<path> holding <changes> instead: written to a file of its own (REWRITING), flushed to the
+    disk, then renamed over it."""
+    tmp = path.with_name(REWRITING.format(name=path.name, writer=f"{os.getpid()}.{secrets.token_hex(4)}"))
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    try:
+        _write_all(fd, b"".join(canonical(c) + b"\n" for c in changes))
+        flush_to_disk(fd)
+    finally:
+        os.close(fd)
+    os.replace(tmp, path)
+
+
 @dataclass
 class Journal:
     root: Path
@@ -382,22 +408,21 @@ class Journal:
         """Delete on request: each change in local.jsonl whose target is one of <targets> becomes a
         placeholder in its place (change_log.placeholder), so the sequence, the mint seeds and its
         transaction stay as they were. The file is replaced whole (a temporary file flushed to the
-        disk, then renamed); the replica's file is never rewritten. Returns how many changes went."""
+        disk, then renamed); the replica's file is never rewritten. Then what writes cut short left
+        of local.jsonl goes, whatever it held (LOCAL_LEFTOVERS): a torn tail is a transaction never
+        committed, and cannot be read to pick one person out. Returns how many changes went."""
+        gone = self._placeholders(targets)
+        for leftover in [path for pattern in LOCAL_LEFTOVERS for path in self.root.glob(pattern)]:
+            leftover.unlink(missing_ok=True)
+        return gone
+
+    def _placeholders(self, targets: Collection[str]) -> int:
+        """local.jsonl with a placeholder for each change of <targets>; how many there were."""
         path = self.root / f"{LOCAL}{SUFFIX}"
-        if not path.exists():
-            return 0
-        changes = _read_all(path)
+        changes = _read_all(path) if path.exists() else []
         gone = sum(1 for c in changes if c.get("target") in targets)
-        kept = [placeholder(c) if c.get("target") in targets else c for c in changes]
         if gone:
-            tmp = path.with_name(f".{path.name}.{os.getpid()}.tmp")
-            fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-            try:
-                _write_all(fd, b"".join(canonical(c) + b"\n" for c in kept))
-                flush_to_disk(fd)
-            finally:
-                os.close(fd)
-            os.replace(tmp, path)
+            _replace_whole(path, [placeholder(c) if c.get("target") in targets else c for c in changes])
         return gone
 
     def begin(self, cmd: str) -> Transaction:
@@ -426,6 +451,13 @@ class Transaction:
     def add(self, op: str, target: str, body: dict[str, Any], *, local: bool = False) -> None:
         self._check_open()
         self.edits.append((op, target, body, local))
+
+    def commit_edits(self, edits: Iterable[Edit]) -> list[Change]:
+        """<edits> added in order, then committed (commit): what a store's write boundary does once
+        it has checked them."""
+        for edit in edits:
+            self.add(edit.op, edit.target, edit.body, local=edit.local)
+        return self.commit()
 
     def mint(self) -> str:
         self._check_open()

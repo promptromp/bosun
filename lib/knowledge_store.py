@@ -3,8 +3,9 @@ docs/design/knowledge.md): reading and appending JSON lines under a lock, atomic
 optional local git history (one commit per change).
 
 - journal/: every change, one transaction per write (lib/journal.py, docs/design/sync.md): this
-  Mac's changes in <replica>.jsonl, those naming a person in local.jsonl, which never leaves it.
-  A write appends there first, then writes the files below.
+  Mac's changes in <replica>.jsonl, those naming a person or holding my words in local.jsonl,
+  which never leaves it. A write appends there first, then writes the files below. What a write
+  cut short left there (<file>.torn-<time>) is ignored by the history.
 - view.json: the journal position the files reflect and a digest of what they hold.
 - entities.jsonl: one entity per line, rewritten atomically when an entity changes.
 - facts.jsonl: append-only log of fact records ({"op": "add"} and {"op": "update"}); only a
@@ -29,12 +30,17 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from journal import TORN
+
 
 Record = dict[str, Any]
 PRIVATE_MODE = 0o600
 KEY_BYTES = 32
 KEY_FILE = "secret.key"
-GIT_IGNORE = f"knowledge.lock\n*.tmp\nbatch.json\n{KEY_FILE}\n"
+# What the history never holds: the lock, temporary files, the last batch, the forgotten hashes'
+# key, and what a write cut short left in the journal (a torn tail can name someone kg forget
+# deletes; forget deletes the local ones).
+GIT_IGNORE = f"knowledge.lock\n*.tmp\nbatch.json\n{KEY_FILE}\n*{TORN}*\n"
 GIT_IDENTITY = (
     "-c",
     "user.name=bosun",
@@ -213,10 +219,12 @@ def ensure_repository(root: Path) -> bool:
         ignore.write_text(GIT_IGNORE)
     else:
         text = ignore.read_text()
-        if KEY_FILE not in text.splitlines():  # a repository made before the key existed
+        have = text.splitlines()
+        wanted = [line for line in GIT_IGNORE.splitlines() if line not in have]  # one made before them
+        if wanted:
             lead = "" if text.endswith("\n") or not text else "\n"
             with ignore.open("a") as handle:
-                handle.write(f"{lead}{KEY_FILE}\n")
+                handle.write(lead + "".join(f"{line}\n" for line in wanted))
     return (root / ".git").is_dir()
 
 

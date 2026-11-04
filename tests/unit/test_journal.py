@@ -10,6 +10,7 @@ import json
 import os
 import sys
 import tempfile
+import threading
 import unittest
 from collections.abc import Callable
 from pathlib import Path
@@ -81,6 +82,41 @@ class ReplicaId(JournalTestCase):
         self.assertEqual(len(synced), 1)
         self.assertEqual(jr.replica_id(state), made)
         self.assertEqual(list(state.glob(".replica.json*")), [])  # no temp file left
+
+    def test_a_creator_that_comes_second_takes_the_first_ones_id(self) -> None:
+        state = Path(self.tmp.name) / "state"
+        winner = "c" * 32
+        link = os.link
+
+        def first_there(source: Path, target: Path) -> None:
+            Path(target).write_text(json.dumps({"replica": winner}) + "\n")  # the other store, just before
+            link(source, target)
+
+        with mock.patch("os.link", side_effect=first_there):
+            self.assertEqual(jr.replica_id(state), winner)
+        self.assertEqual(json.loads((state / "replica.json").read_text()), {"replica": winner})
+        self.assertEqual(list(state.glob(".replica.json*")), [])
+
+    def test_creators_racing_agree_on_one_id(self) -> None:
+        for attempt in range(10):
+            state = Path(self.tmp.name) / f"state-{attempt}"
+            start = threading.Barrier(12)
+            found: list[str] = []
+
+            def create(
+                state: Path = state, start: threading.Barrier = start, found: list[str] = found
+            ) -> None:
+                start.wait()
+                found.append(jr.replica_id(state))
+
+            threads = [threading.Thread(target=create) for _ in range(12)]
+            for thread in threads:
+                thread.start()
+            for thread in threads:
+                thread.join()
+            kept = json.loads((state / "replica.json").read_text())["replica"]
+            self.assertEqual(set(found), {kept}, attempt)
+            self.assertEqual(list(state.glob(".replica.json*")), [])
 
 
 def short_writes(limit: int) -> Callable[[int, bytes], int]:
@@ -480,6 +516,36 @@ class Forget(JournalTestCase):
     def test_forgetting_what_is_not_there_writes_nothing(self) -> None:
         self.assertEqual(self.journal().forget({"person/dana"}), 0)
         self.assertFalse(self.root.exists())
+
+    def test_forgetting_deletes_what_writes_cut_short_left_of_local_changes(self) -> None:
+        self.write(("person/dana", True), ("repo/x", False))
+        left = [
+            self.root / "local.jsonl.torn-20261021T090000Z",
+            self.root / "local.jsonl.torn-20261021T090000Z-2",
+            self.root / ".local.jsonl.4242.tmp",
+        ]
+        kept = self.root / f"{R1}.jsonl.torn-20261021T090000Z"
+        for path in [*left, kept]:
+            path.write_text('{"body":{"name":"Dana Example"}')
+        self.journal().forget({"nobody"})  # whatever it forgets: a torn tail cannot be read to choose
+        self.assertEqual([p.name for p in left if p.exists()], [])
+        self.assertTrue(kept.exists())
+
+
+class CommitEdits(JournalTestCase):
+    def test_edits_are_added_in_order_then_committed(self) -> None:
+        edits = [
+            cl.Edit("put", "repo/x", {"name": "x"}, False),
+            cl.Edit("put", "person/dana", {"name": "Dana"}, True),
+        ]
+        tx = self.journal().begin("add")
+        done = tx.commit_edits(edits)
+        self.assertEqual([(c["op"], c["target"], c.get("local", False)) for c in done], [
+            ("put", "repo/x", False),
+            ("put", "person/dana", True),
+        ])  # fmt: skip
+        self.assertTrue(tx.committed)
+        self.assertEqual(self.journal().position(), {R1: 1, "local": 1})
 
 
 if __name__ == "__main__":

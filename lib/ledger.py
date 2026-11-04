@@ -800,10 +800,10 @@ _WRITING: list[Transaction] = []
 
 
 def replica() -> str:
-    """This Mac's replica id, as the ledger's journal uses it: made under the ledger's lock when
-    there is none yet, so a first write running at the same time cannot make another. Never call
-    it under locked_ledger: it takes the lock on a descriptor of its own, and flock is per open
-    file, so it would wait for itself."""
+    """This Mac's replica id, as the ledger's journal uses it (and the knowledge base's: one
+    replica.json, made once, replica_id). Taken under the ledger's lock, so a reader waits for a
+    write that is making it. Never call it under locked_ledger: it takes the lock on a descriptor
+    of its own, and flock is per open file, so it would wait for itself."""
     with store_lock(fcntl.LOCK_EX), journal_errors():
         return replica_id(STORE.state_dir)
 
@@ -928,9 +928,7 @@ def commit_edits(transaction: Transaction, edits: Iterable[Edit]) -> None:
     """<edits> as one transaction, refused whole if one holds what the journal cannot."""
     edits = list(edits)
     refuse_unencodable(edits)
-    for edit in edits:
-        transaction.add(edit.op, edit.target, edit.body, local=edit.local)
-    transaction.commit()
+    transaction.commit_edits(edits)
 
 
 def links_ready(item_id: str, item: Item, source: str) -> None:
