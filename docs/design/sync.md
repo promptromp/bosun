@@ -199,6 +199,10 @@ so does a write that meets other damage where it reads (every write reads the en
 and a rebuild reads all of it), with the file and line named. The way out is the same for both:
 move the journal folder and `replica.json` aside together, and the next write starts a new
 journal from `ledger.json`, as a new replica, so that no id is minted twice from the same `seq`.
+`replica.json` is this Mac's id in both stores' journals (the ledger's and the knowledge base's),
+so moving it aside gives the Mac a new id in both, which both carry on under: the other store's
+old replica file stays in its journal, and its next change goes to a file of the new id. The
+knowledge base's way out is the same, with `knowledge/journal/` ([Knowledge](../knowledge.md)).
 
 **A change made outside the journal is adopted.** `ledger.json` can still be changed by something
 that does not journal: by hand, or by an older bosun (after a downgrade, or a checkout's bosun on
@@ -323,7 +327,9 @@ it appended to the fact log, as it is (`fact.add`, `fact.update`), and each enti
 or removed (`entity.put` with the whole entity, `entity.delete`). An update record says what the
 fields it sets held before (`prev`), so the rebuild can tell when two updates crossed (a confirm and
 a reject of the same proposal). A change that names a person (a person entity, every record of a
-fact whose subject or object is one) is `local`; the rest is `private`. A new fact's id is minted
+fact whose subject or object is one) is `local`, and so is every record of a fact I stated, whole
+(one whose sources hold my quote or name one of my sessions: [Where we expect to
+iterate](#which-data-goes-where)); the rest is `private`. A new fact's id is minted
 from the transaction (`f-` and six characters); facts from before keep theirs (`f12`), and a
 minted id that already names a fact is minted again. The journal is written first, then the files,
 then `view.json`: the position the files reflect and the digest of what they hold (the entities
@@ -336,7 +342,10 @@ that names a person is: each of its changes becomes a placeholder that keeps its
 (`v`, `stream`, `replica`, `seq`, `hlc`, `tx`, `of`, `local`, `private_of`) with op `forgotten`, an id of its
 own and no target or body. So the local sequence and the ids minted from it never go back, and its
 transaction stays whole; the rebuild skips placeholders. The private journal is never rewritten:
-a deletion that would have to remove a change from it is refused.
+a deletion that would have to remove a change from it is refused. What writes cut short left of
+`local.jsonl` goes too, whatever it held (its `.torn-<time>` tails, never committed and not
+readable enough to pick one person out, and a rewrite's unfinished copy), and the git history
+never holds any torn file.
 
 The local git history of `knowledge/` stays as it is for now, and holds the journal and `view.json`
 like the other files. It is local, it never syncs, and `kg forget` keeps restarting it, which also
@@ -375,7 +384,7 @@ Every field belongs to one class. The class decides how far it may travel:
 
 | Class | Leaves this Mac | Examples |
 |---|---|---|
-| `local` | Never | `said` (my verbatim prompts); an approval's quote; a call's session, transcript path and tool call id, wherever an approval, a standing approval or the call's outcome (`failed`, `carried_out`) keeps them; the history entries that quote me (`approved`, `approval-used`, `user-said`) or keep a call's context; my words as a link's or a task's `via` or a transition's evidence (`user: ...`), with the link or history entry that holds them; `identifiers.jsonl`; `forgotten.jsonl` and `secret.key`, the key of its hashes; person entities and every fact naming a person; `batch.json` |
+| `local` | Never | `said` (my verbatim prompts); an approval's quote; a call's session, transcript path and tool call id, wherever an approval, a standing approval or the call's outcome (`failed`, `carried_out`) keeps them; the history entries that quote me (`approved`, `approval-used`, `user-said`) or keep a call's context; my words as a link's or a task's `via` or a transition's evidence (`user: ...`), with the link or history entry that holds them; `identifiers.jsonl`; `forgotten.jsonl` and `secret.key`, the key of its hashes; person entities and every fact naming a person; every record of a fact I stated (one whose sources hold my quote or name one of my sessions), whole; `batch.json` |
 | `sealed` | Only to my own scope, and only when the data is encrypted (by the codec, or by a store that declares encryption at rest) | a learning finding's key (a slug the model wrote, which can name a colleague); free text: titles, URLs, notes, history notes, report summaries, open points and results, outreach subjects, details, options and answers, a task's ask, done-when and `via` (unless it quotes me), a delegation's ask, details and link, a proposal's action and its exact call (`spec`), a failed call's reason, a workstream's aliases; colleagues' names in `requester`, `to` and a ticket's `assignee`; Slack permalinks (a reply's or request's ref, processed sources) |
 | `private` | To my own scope | item ids, kinds, states, links, history events, a proposal's times, a report's time and CI status; repo, ticket and system names; the window in a delegation or report, tagged with its replica; process and product facts |
 | `team` | Also into a published projection | item id, kind, state and owner for the team board; confirmed, non-personal facts a share spec selects |
@@ -425,6 +434,12 @@ Where we expect to iterate:
   or a session transcript, and so do its `proposed` and `proposal-*` history entries; they are
   `sealed`. Moving the quote out of the action into a field of its own would let it stay `local`;
   that needs my decision before phase 1.
+- **A fact I stated stays on the Mac.** A knowledge fact whose sources hold my words (a `user`
+  source carries my quote and the session it was checked in) or name one of my sessions (a
+  `transcript` source) is `local`, every record of it and whole, from the write that brings my
+  words on, as the ledger keeps a link whose `via` quotes me. So another Mac misses facts that
+  are often the most valuable, such as a rule I stated about a process. Splitting the quote and
+  the session off, so that the fact itself can travel, is for phase 1.
 - **Nothing removes a history entry.** The ledger's journal keeps every change, so a note typed by
   mistake (a colleague's name, something private) stays in the journal even after a hand edit
   (which the next write undoes) or a `prune` (which deletes the item, not its earlier changes).

@@ -89,7 +89,7 @@ of truth, so don't copy rules into this file.
   fact log folded, resolution, the write operations and the auto-confirm rules),
   `lib/knowledge_review.py` (pure: batch groups and decisions, lint), `lib/knowledge_query.py`
   (pure: lookup, search, neighbours, context packs), `lib/knowledge_changes.py` (pure: a write's
-  changes for the journal, local where they name a person), `lib/knowledge_store.py` (files, lock,
+  changes for the journal, local where they name a person or hold my words), `lib/knowledge_store.py` (files, lock,
   git), `lib/knowledge.py` + `libexec/bosun-kg` (the CLI and import, and the write boundary: the
   journal first, then the files and `view.json`). Quotes of my words are checked
   with `lib/approvals.py`'s genuine-prompt test. `tools/survey_to_kg.py` converts a survey into an
