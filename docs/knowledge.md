@@ -21,7 +21,9 @@ comes back, since the fact log only grows: a record removed by hand comes back, 
 place comes back beside its edited copy, which is adopted too; an edited `add` record takes the
 fact over (its status is the edited record's again, and the updates before it no longer show).
 Close a fact with `kg supersede` instead. That write says so in one line, and the knowledge
-folder's git history keeps the files as they were edited (unless `BOSUN_KNOWLEDGE_GIT=0`). If a
+folder's git history keeps the files as they were edited (unless `BOSUN_KNOWLEDGE_GIT=0`, or the
+write starts the history again because it deletes: then nothing keeps them, as that history holds
+what it deletes, and the line says so). If a
 write is cut short and the files are then edited by hand before the next write, that write's
 records are adopted a second time (a second `add` takes its fact over, as above). A person
 deleted on request is never taken back. Who is forgotten is `forgotten.jsonl` together with the
@@ -34,10 +36,17 @@ that drops or refuses a person, or finishes a `kg forget` cut short, deletes the
 its last step, and its commit starts a new one without them; with `BOSUN_KNOWLEDGE_GIT=0`, a history
 kept before is deleted all the same. While `secret.key` is missing over keyed records, no person is taken in from
 changed files at all, as adding one is refused then; the write says why, and they go from the
-files, so restore those again once the key is back. A command that only reads shows restored
+files, so restore those again once the key is back. A write that has to finish a `kg forget`
+cut short while that key is missing is refused whole, naming the key, and the first write once it
+is back finishes the forget. A command that only reads shows restored
 files as they are until the next write, since reads never write; and person facts an older
 bosun's retention purge took out come back from the journal until the next `kg expire` purges
-them again. Checking out an older commit of the whole folder takes the journal back
+them again, as do those of a `kg expire` cut short before it rewrote the journal. Two more rare
+double faults are known: a write cut short while it deletes the history after refusing a person an
+older bosun added back and committed can leave that commit in the history until the next
+`kg forget`; and restoring `view.json` with files from before a `kg forget`, or removing it,
+forgets again a person added back since with `--allow-forgotten` (add them again).
+Checking out an older commit of the whole folder takes the journal back
 with it, and what came after is gone ([Sync and sharing](design/sync.md#open-questions)).
 `kg validate` compares the files with the journal
 (`--json` for scripts; exit 1 on any finding), and `bosun doctor` runs it: damage, a position that

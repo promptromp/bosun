@@ -360,10 +360,15 @@ commits a local `deletion` marker (no target, skipped by the rebuild) with its t
 it rewrites what it removed into placeholders; the marker holds the write's `forgotten.jsonl`
 records (a keyed hash and counts, nothing of the person). So the position moves, and a deletion
 cut short anywhere is finished by the next write, which puts the placeholders in again for the
-marker's hashed ids. Who is forgotten is `forgotten.jsonl` together with the records every
-deletion marker carries, and a write first writes a marker's record that `forgotten.jsonl` lacks,
-before anything is taken in: a forget is whole through the journal, and the way out when the key
-is lost for good moves the journal folder aside with `forgotten.jsonl`. The identifiers and
+marker's hashed ids and deletes what writes cut short left of `local.jsonl`, as the deletion
+does. A keyed record takes the key to finish: while `secret.key` cannot be read, that write is
+refused whole, naming it, and the first write once it is back finishes the deletion. A retention
+purge's marker holds no hash, so one cut short between its marker and its placeholders is not
+finished: its facts come back until the next `kg expire`. Who is forgotten is `forgotten.jsonl`
+together with the records every deletion marker carries, and a write first writes a marker's
+record that `forgotten.jsonl` lacks, before anything is taken in: a forget is whole through the
+journal, and the way out when the key is lost for good moves the journal folder aside with
+`forgotten.jsonl` and `replica.json`. The identifiers and
 `forgotten.jsonl`, which the journal does not hold, are written before the data files, and a write
 that finishes a deletion drops the identifiers of entities gone. A history restart is a debt: a
 write that finishes a deletion cut short, applies one made outside the journal, or drops or
@@ -374,8 +379,14 @@ outside change cannot express (a record removed: the fact log only grows) comes 
 edited in place comes back beside its edited copy, which is adopted, so an edited `add` takes the
 fact over (as an edited history entry comes back in the ledger). That write says so in one line, and first commits the files as
 edited to the knowledge folder's git history, which keeps them (with the history off, nothing
-does). A write cut short and then a hand edit before the next write adopts that write's records a
-second time (a second `add` takes its fact over): accepted, as rare and visible. Adopt never brings
+does, nor when the write starts the history again, as it holds what the write deletes; the save
+says the line, as only it knows). A write cut short and then a hand edit before the next write adopts that write's records a
+second time (a second `add` takes its fact over): accepted, as rare and visible. So are two more
+double faults: a write cut short while it pays a restart owed for refusing a person (a debt with
+no marker) can leave an older bosun's commit of that person in the history until the next
+`kg forget`; and `view.json` restored with data files from before a forget, or removed, makes
+every marker after the saved position unfinished, so a later `--allow-forgotten` re-add is
+forgotten again (the safe direction). Adopt never brings
 in or keeps a person deleted on request: one gone from the files whom a forgotten record matches
 (a plain or a keyed hash: an older bosun's `kg forget`, or a hand removal) is forgotten in the
 journal too, as `kg forget` does it (its marker, then the placeholders, over the whole journal,

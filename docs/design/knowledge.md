@@ -92,7 +92,9 @@ repository so every change has history.
   goes on from the rebuild. A record removed cannot be adopted (the fact log only grows) and comes
   back; one edited in place comes back beside its adopted copy, and an edited add takes the fact
   over. The write says so, and first commits the files as edited to the git history when it is
-  on. A write cut short and then a hand edit before the next write adopts that write's records a
+  on and the write does not start it again (a history it restarts holds what it deletes, so then
+  nothing keeps them, and the line says so); the line is said by the save, which knows that. A
+  write cut short and then a hand edit before the next write adopts that write's records a
   second time (accepted: rare, visible). A person deleted on request is never adopted. Forgotten
   is `forgotten.jsonl` with the records the journal's deletion markers carry (a write first puts
   back one the file lacks), checked by a plain or keyed hash everywhere: adding, adopting, and the
@@ -103,11 +105,21 @@ repository so every change has history.
   them), the files as edited are not committed, and the rebuild drops them. While the key of the
   forgotten cannot be read, no person entity is adopted at all (one line saying why). A history
   restart is a debt: a write takes it on when it finishes a deletion cut short (its marker after
-  the saved position; the placeholders for the marker's hashed ids are put in again), applies a
+  the saved position; the placeholders for the marker's hashed ids are put in again, and what
+  writes cut short left of `local.jsonl` is deleted, as the deletion does), applies a
   forget made outside the journal, or drops or refuses a person. It pays it once, at the save,
   after the files and before `view.json`, by deleting `.git` whatever `BOSUN_KNOWLEDGE_GIT` says;
-  the save's commit starts a new history. A reader shows restored files until the next write; an
-  older bosun's retention purge is redone by the next `kg expire`.
+  the save's commit starts a new history. Finishing a `kg forget` cut short takes the key: while
+  it cannot be read, the write is refused whole, naming the key (fail closed, as adding a person),
+  and the first write once it is back finishes the forget. A reader shows restored files until the
+  next write; an older bosun's retention purge is redone by the next `kg expire`, as is a purge cut
+  short between its marker and its placeholders (its marker holds no hash to finish it by). Two
+  more double faults are accepted as rare: a write cut short while it pays a restart owed for
+  refusing a person can leave an older bosun's commit of that person in the history until the
+  next `kg forget` (that debt has no marker); and `view.json` restored together with data files
+  from before a forget, or removed, makes the next write treat every marker after the saved
+  position as unfinished, so a later `--allow-forgotten` re-add is forgotten again (the safe
+  direction).
   `kg validate` reports damage, a position that does not match, a rebuild that differs,
   conflicts, updates waiting for their fact and an outside edit; `bosun doctor` runs it
   (`lib/validation.py`, shared with the ledger's validate).
@@ -378,7 +390,8 @@ a stream of questions.
   nobody; records from before the key (no `hash_kind`) stay plain sha256 and guessable, since
   their ids are unknown and cannot be re-keyed. With keyed records and no readable key, adding a
   person is refused and names the key's path: restore it, a new key would make every record
-  unmatchable. `kg forget` is refused the same way. If the key is lost for good, move
+  unmatchable. `kg forget` is refused the same way, and so is a write that has to finish a
+  `kg forget` cut short (until the key is back). If the key is lost for good, move
   `forgotten.jsonl`, `journal/` (whose deletion markers hold the same records) and `replica.json`
   aside together: those people can then be added again (a choice made knowingly), and the next
   write makes a new key.
