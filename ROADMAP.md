@@ -273,7 +273,8 @@ a journal on this Mac first, and `ledger.json` is the rebuild of that journal, w
 never mint alike, one table that decides which fields may leave the Mac, and `bosun ledger
 validate --journal` (also run by `bosun doctor`). Every knowledge base write now goes through a
 journal of its own too, with minted fact ids, what names a person kept in a local file, and `kg
-forget` leaving placeholders there. Next: rebuilding the knowledge base from it, then logs
+forget` leaving placeholders there; its files are that journal's rebuild, with `bosun kg validate`
+(also run by `bosun doctor`). Next: logs
 that travel, rebuilt the same way everywhere, with the rules a merge cannot keep shown as
 conflicts, through pluggable ports for storage, encryption and signing; the first store is a
 dedicated state repository on GitHub, encrypted with `age` by default. Personal data stays on the

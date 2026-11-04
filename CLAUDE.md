@@ -52,8 +52,13 @@ of truth, so don't copy rules into this file.
   the hybrid clock, the order, and what both stores do alike at their write boundary: the refusal,
   the one-time conversion, the stamp their files record, a deletion's placeholder), `lib/journal.py`
   (a store's journal files, the replica id, transactions, an unfinished transaction set aside, a
-  deletion in `local.jsonl`), `lib/ledger_changes.py` (pure: the field table, `diff`, `rebuild`) and
-  `lib/knowledge_changes.py` (pure: a knowledge write's edits, genesis, the files' digest).
+  deletion in `local.jsonl`), `lib/ledger_changes.py` (pure: the field table, `diff`, `rebuild`),
+  `lib/knowledge_changes.py` (pure: a knowledge write's edits, genesis, the files' digest, `rebuild`,
+  what an outside edit adopts) and `lib/validation.py` (pure: what both stores' `validate` finds:
+  the finding, its severity and line, the journal against the files; `bosun doctor` prints each
+  line). A change to the knowledge rebuild's rules (`APPLIED`, `CHECKED`) trips the rules-digest
+  test in `tests/unit/test_knowledge_changes.py`: bump `KG_RULES_VERSION` (`lib/knowledge.py`) and
+  record the new digest under it.
 - Setup (design: `docs/design/init.md`): `get.sh` (what `curl | sh` runs: plain POSIX sh, everything in
   functions with `main` last, because people pipe it straight from `main`), `lib/preflight.sh` (what
   bosun needs and what to do about what is missing; plain sh, changes nothing, and `init` and `doctor`
@@ -89,9 +94,10 @@ of truth, so don't copy rules into this file.
   fact log folded, resolution, the write operations and the auto-confirm rules),
   `lib/knowledge_review.py` (pure: batch groups and decisions, lint), `lib/knowledge_query.py`
   (pure: lookup, search, neighbours, context packs), `lib/knowledge_changes.py` (pure: a write's
-  changes for the journal, local where they name a person or hold my words), `lib/knowledge_store.py` (files, lock,
-  git), `lib/knowledge.py` + `libexec/bosun-kg` (the CLI and import, and the write boundary: the
-  journal first, then the files and `view.json`). Quotes of my words are checked
+  changes for the journal, local where they name a person or hold my words, and the rebuild the
+  files are), `lib/knowledge_store.py` (files, lock, git), `lib/knowledge.py` + `libexec/bosun-kg`
+  (the CLI and import, and the write boundary: the journal first, then the files and `view.json`;
+  reads caught up with the journal; `kg validate`). Quotes of my words are checked
   with `lib/approvals.py`'s genuine-prompt test. `tools/survey_to_kg.py` converts a survey into an
   import file; the fixture knowledge base is `tests/fixtures/knowledge/acme-import.jsonl`.
 - Agents (design: `docs/design/harnesses.md`): an adapter per agent, `lib/claude_state.py` and

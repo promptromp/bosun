@@ -4,7 +4,8 @@ Status: accepted (2026-11-03). Phase 0 is built for the ledger: every ledger wri
 a journal of changes per Mac that `ledger.json` is the rebuild of, with hash-based ids, the class
 table and `bosun ledger validate --journal` (also in `bosun doctor`). For the knowledge base,
 every write goes through a journal of its own, with minted fact ids and updates that say what they
-replaced ([Knowledge changes](#knowledge-changes)); rebuilding the files from it is next.
+replaced, and its files are that journal's rebuild, with `bosun kg validate` (also in `bosun
+doctor`) ([Knowledge changes](#knowledge-changes)).
 Planned in [docs/plans/sync-phase-0.md](../plans/sync-phase-0.md). Tracked in
 [ROADMAP.md](../../ROADMAP.md#6-sync-and-sharing).
 
@@ -218,7 +219,8 @@ other: a field is set, an item made or deleted, a history entry added. What the 
 hold is undone by that write, which says so in one line (how many parts, and that
 `ledger.json.bak` keeps the file as edited until the next write): history only grows, so an entry removed by hand comes
 back, and one edited in place comes back beside its edited copy. A file saved before digests is
-trusted once and gets one at its next save.
+trusted once and gets one at its next save. The knowledge base does the same with the digest in
+`view.json` ([Knowledge changes](#knowledge-changes)).
 
 ### Rebuilding, and what a merge cannot decide
 
@@ -337,6 +339,29 @@ then `view.json`: the position the files reflect and the digest of what they hol
 and the fact log), as `ledger.json`'s `journal` key does. A knowledge base from before the journal
 enters it as one transaction (`genesis`) holding every entity and record, with what the journal
 cannot hold converted once, as for the ledger.
+
+The files are the journal's rebuild (`knowledge_changes.rebuild`), in the one order: an entity is
+put whole or deleted, and the fact log keeps its records in that order, folded as the files are
+read (`knowledge_model.Fold`), so an update that comes before its fact's add waits for it and one
+whose add never comes is listed as pending. An update whose `prev.status` is not the fact's status
+where it is applied (a confirm and a reject of one proposal at once) is a `field` conflict and not
+applied; an op or a body this bosun cannot apply is kept the same way. The write path does what the
+ledger's does, in the same order: it refuses a journal behind `view.json`, sets an unfinished
+transaction aside, puts a knowledge base from before the journal in it (genesis), adopts a change
+made to the files outside it (the digest in `view.json` no longer matching: by hand, a git checkout
+or revert of files in the knowledge folder, an older bosun) as one `adopt` transaction, and goes on
+from the journal's rebuild where the files are behind it or were changed outside it, saving the
+files whole. Files that already are the journal's rebuild are no outside change: `view.json` is
+written last, so a write cut short just before it leaves them so, and adopting them would hold that
+write's records twice. What an outside change cannot express (a record removed or edited in place:
+the fact log only grows) comes back; that write says so in one line, and first commits the files as
+edited to the knowledge folder's git history, which keeps them (with the history off, nothing
+does). A write that rebuilds with conflicts or
+pending updates says how many on stderr. A command that only reads uses the rebuild in memory and
+writes nothing. `bosun kg validate` compares the files as saved with the journal's rebuild, with
+the ledger's findings and severities (`lib/validation.py` holds what both stores share: the
+finding, its severity and line, and the decisions from the position, the digest and the
+comparison), and `bosun doctor` runs it.
 
 A delete on request (`kg forget`) and the retention purge rewrite only `local.jsonl`, where all
 that names a person is: each of its changes becomes a placeholder that keeps its envelope's place
@@ -685,6 +710,8 @@ Pure modules hold the logic; thin modules do the I/O.
 - `lib/ledger_changes.py` (pure): the field table, `diff(before, after)` into changes, and the
   rebuild with its conflict records.
 - `lib/knowledge_changes.py` (pure): the same for knowledge, sharing `knowledge_model`'s fold.
+- `lib/validation.py` (pure): what both stores' `validate` finds, alike: the finding, its
+  severity and line, and the journal against the files.
 - `lib/sync_plan.py` (pure): what to push and pull, from the journal and a store listing.
 - `lib/sync.py` and `libexec/bosun-sync`: the command.
 - `lib/remote_store.py`: the port, `BACKENDS` and the contract every adapter passes;
@@ -765,13 +792,16 @@ from the journal, never what travels.
   (to notice a change made outside the journal, and to record its digest), about 15 ms each for a
   3 MB ledger and under 1 ms at the fixture's size, and flushes the journal and `ledger.json` to the
   disk itself (`F_FULLFSYNC`, about 5 ms each on an Apple-silicon Mac).
-- **Rules versions in the rebuild:** every change records `rules`, but the rebuild checks each
-  one against today's `KINDS` and `RELATIONS`. A change to them that removes a move or tightens a
-  link rule would turn a Mac's own valid history into conflicts, and a write that rebuilds after a
-  crash would revert those states. Before the next such change, or phase 1, the rebuild must check
-  each change under the rules version it was recorded with (or not re-check a replica's own
-  contiguous sequence, which was checked against the very state it applies to). A unit test pins a
-  digest of the rule tables to `RULES_VERSION`, so such a change cannot land unnoticed.
+- **Rules versions in the rebuild (both stores):** every change records `rules`, but each store's
+  rebuild checks it against today's rules: the ledger's `KINDS` and `RELATIONS`, the knowledge
+  base's ops and the fields an update must find as it left them (`knowledge_changes.APPLIED` and
+  `CHECKED`). A change to them that removes a move, tightens a link rule or checks another field
+  would turn a Mac's own valid history into conflicts, and a write that rebuilds after a crash
+  would revert those states. Before the next such change, or phase 1, the rebuild must check each
+  change under the rules version it was recorded with (or not re-check a replica's own contiguous
+  sequence, which was checked against the very state it applies to). A unit test per store pins a
+  digest of its rule tables to its version (`RULES_VERSION` in `lib/ledger.py`, `KG_RULES_VERSION`
+  in `lib/knowledge.py`), so such a change cannot land unnoticed.
 - **One replica id on two Macs:** a Migration Assistant or Time Machine restore onto a second Mac
   copies `replica.json`, and both Macs then write as one replica. Phase 1 must notice it (two
   journals with the same `seq` and different changes) rather than merge them.

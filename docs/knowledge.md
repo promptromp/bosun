@@ -10,6 +10,22 @@ for this Mac's changes, and `journal/local.jsonl` for those that never leave thi
 names a person, and every fact you stated (one with your quote, `--from-user`, or a `transcript`
 source); `view.json` records how far the files reflect it ([Sync and sharing](design/sync.md)).
 
+The files are the journal's rebuild. A write cut short between the journal and the files is
+finished by the next write, and a command that only reads uses the rebuild without saving it. A
+change made to the files outside the journal (by hand, a `git checkout` or `git revert` of files
+in the knowledge folder, or a bosun from before the journal) is adopted by the next write: it goes
+into the journal as one transaction named `adopt`, with a line on stderr, and the write goes on
+from the journal's rebuild. What the journal cannot take comes back, since the fact log only
+grows: a record removed or edited in place by hand (close a fact with `kg supersede`, and delete a
+person with `kg forget`, run again if an older bosun did it). That write says so in one line, and
+the knowledge folder's git history keeps the files as they were edited (unless
+`BOSUN_KNOWLEDGE_GIT=0`). Checking out an older commit of the whole folder takes the journal back
+with it, and what came after is gone ([Sync and sharing](design/sync.md#open-questions)).
+`kg validate` compares the files with the journal
+(`--json` for scripts; exit 1 on any finding), and `bosun doctor` runs it: damage, a position that
+does not match or a rebuild that differs fails, since writes are refused or data is at risk; a
+conflict, an update waiting for its fact or an outside edit the next write adopts warns.
+
 If a command says the knowledge base's journal is damaged, or behind `view.json` (a journal file
 deleted, a partial restore), nothing was written, and the files are still whole. To go on from
 them, move `knowledge/journal/` and the state folder's `replica.json` aside together (keep them):
@@ -52,7 +68,8 @@ bosun kg context --for releases         # a small cited pack of confirmed facts
 - **Two timelines:** facts are never edited or deleted when they change: `kg supersede` closes
   one (`valid_to`, `superseded_by`), and `kg facts <entity> --as-of <date>` shows what held then.
 - **Maintenance:** `kg lint` reports contradictions, stale facts (`BOSUN_KNOWLEDGE_STALE_DAYS`),
-  orphans, alias collisions and expired proposals; person facts not re-observed for 12 months
+  orphans, alias collisions and expired proposals; `kg validate` checks the files against the
+  journal they are the rebuild of (above); person facts not re-observed for 12 months
   are deleted by `kg expire`, and `kg forget person/<slug>` deletes a person on request (with the
   git history, which restarts, and their changes in `journal/local.jsonl`, each left as a
   placeholder that keeps its place in the sequence and nothing of what it held; what writes cut
@@ -66,4 +83,4 @@ bosun kg context --for releases         # a small cited pack of confirmed facts
 - **Seeding:** `kg import <file>` reads entities and facts as JSON lines, records every fact as a
   proposal (`--auto-confirm` applies the rules above), is a dry run unless `--apply`, and says how
   many daily batches the review takes; `tools/survey_to_kg.py` converts a survey's markdown tables, with a mapping file kept
-  next to the survey, into such a file. `bosun doctor` shows the counts.
+  next to the survey, into such a file. `bosun doctor` shows the counts and runs `kg validate`.

@@ -72,6 +72,22 @@ repository so every change has history.
   `view.json` records the journal position the files reflect and a digest of what they hold. Both
   are in the local git history like the other files; what a write cut short left
   (`<file>.torn-<time>`) is not.
+- `entities.jsonl` and `facts.jsonl` are the journal's rebuild (`knowledge_changes.rebuild`): its
+  changes in the one order, an entity put whole or deleted, the fact log's records kept in that
+  order and folded as the files are (an update that comes before its fact's add waits for it).
+  An update that finds the fact's status no longer what it left (`prev`: a confirm and a reject of
+  one proposal at once) is a conflict and not applied. A write that finds the files behind the
+  journal (a write cut short) goes on from the rebuild and saves it; a reader uses it in memory and
+  writes nothing. A change made to the files outside the journal (by hand, a git checkout or
+  revert of files here, an older bosun), seen by `view.json`'s digest, is adopted by the next
+  write as one `adopt` transaction (entities made, changed or removed, and records the fact log
+  gained), which then goes on from the rebuild; files that already are the rebuild (a write cut
+  short before `view.json`, which is written last) are no outside change. A record removed or
+  edited in place cannot be adopted (the fact log only grows) and comes back; the write says so,
+  and first commits the files as edited to the git history when it is on. `kg validate` reports
+  damage, a position that does not match, a rebuild that differs, conflicts, updates waiting for
+  their fact and an outside edit; `bosun doctor` runs it (`lib/validation.py`, shared with the
+  ledger's validate).
 - When the journal is damaged, or behind `view.json` (a journal file lost), a write refuses and
   writes nothing. The way out, as for the ledger: move `journal/` and the state folder's
   `replica.json` aside together; the next write starts a new journal from the files (genesis) as a
@@ -302,8 +318,10 @@ a stream of questions.
   `lib/knowledge_review.py` (batch, decisions, lint), `lib/knowledge_query.py` (lookup, facts,
   search, neighbours, context packs), `lib/knowledge_changes.py` (a write's changes for the
   journal, local where they name a person or hold my words; a knowledge base from before as one genesis
-  transaction; the digest `view.json` records; pure), `lib/knowledge.py` + `libexec/bosun-kg`
-  (the CLI, and the write boundary: the journal first, then the files).
+  transaction; the digest `view.json` records; the rebuild, what an outside edit adopts, and where
+  the rebuild and the files differ; pure), `lib/knowledge.py` + `libexec/bosun-kg` (the CLI, and
+  the write boundary: the journal first, then the files; reads caught up with the journal;
+  `kg validate`).
 - **Source kinds:** trusted `user` (counts only once the quote is verified), `ledger`, `report`,
   `memory` (a Claude Code memory note), `transcript` (a session on this machine), `profile` (a
   structured directory field); untrusted `slack`, `pr`, `ticket`, `doc`. "Two independent
