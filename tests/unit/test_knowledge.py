@@ -9,7 +9,9 @@ Fictional data: acme's invoice exporter (tests/fixtures/knowledge/acme-import.js
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
+import io
 import json
 import os
 import shutil
@@ -911,6 +913,42 @@ class GitHistoryTest(KnowledgeTestCase):
         self.assertEqual(self.git_out(decoy, "log", "--format=%s"), "")
         self.assertEqual((decoy / ".git" / "config").read_text(), config)
         self.assertEqual(sorted(p.name for p in decoy.iterdir()), [".git"])
+
+    def a_git_lock(self, age_seconds: float) -> Path:
+        """The index lock a git command leaves while it runs, or for good when it is cut short (a
+        power cut during a write's commit), last touched <age_seconds> ago; the seeded history and
+        a change waiting to be committed."""
+        self.seed()
+        self.run_kg("add-entity", "gate/canary-checks", "--name", "Canary checks")
+        (self.root / "notes.txt").write_text("a change the next commit records\n")
+        lock = self.root / ".git" / "index.lock"
+        lock.write_text("")
+        moment = datetime.now(UTC).timestamp() - age_seconds
+        os.utime(lock, (moment, moment))
+        return lock
+
+    def test_a_git_lock_a_cut_left_long_ago_is_removed_and_the_history_records_again(self) -> None:
+        lock = self.a_git_lock(60)
+        said = io.StringIO()
+        with contextlib.redirect_stderr(said):
+            warning = store.commit(self.root, "kg propose after a power cut")
+        self.assertEqual(warning, "")
+        self.assertFalse(lock.exists())
+        self.assertEqual(self.commits()[0], "kg propose after a power cut")
+        self.assertIn("notes.txt", self.git_out(self.root, "ls-files").split())
+        self.assertEqual(len(said.getvalue().splitlines()), 1)  # one note, naming the lock
+        self.assertIn("index.lock", said.getvalue())
+
+    def test_a_git_lock_held_now_is_left_alone(self) -> None:
+        lock = self.a_git_lock(1)
+        before = self.commits()
+        said = io.StringIO()
+        with contextlib.redirect_stderr(said):
+            warning = store.commit(self.root, "kg propose while git runs")
+        self.assertIn("git commit failed", warning)
+        self.assertTrue(lock.exists())
+        self.assertEqual(self.commits(), before)
+        self.assertEqual(said.getvalue(), "")
 
     def test_without_git_on_the_path_it_still_works(self) -> None:
         path = os.environ["PATH"]

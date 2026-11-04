@@ -40,7 +40,9 @@ facts were stated once, in the user's own words, and then lost when the conversa
 ## Shape
 
 **Storage (site-specific, never in the repo):** `$BOSUN_CONFIG_DIR/knowledge/`, a local git
-repository so every change has history.
+repository so every change has history. A write commits under the knowledge base's exclusive lock, and
+git holds its index lock for one command, so an index lock older than 30 seconds found there was left
+by a commit cut short: the commit removes it with a note on stderr instead of failing from then on.
 
 - `entities.jsonl`: one entity per line, with these fields:
   - `id`, for example `person/dana`

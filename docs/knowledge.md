@@ -4,7 +4,9 @@
 only), processes and the product, as atomic facts with sources, so a fact stated once is not lost
 when the conversation ends (design: [docs/design/knowledge.md](design/knowledge.md)). It
 lives in `$BOSUN_CONFIG_DIR/knowledge/`, never in this repo, with its own git history (one
-commit per change; `BOSUN_KNOWLEDGE_GIT=0` turns it off, and it is skipped if git is missing).
+commit per change; `BOSUN_KNOWLEDGE_GIT=0` turns it off, and it is skipped if git is missing). A git
+lock that a write cut short left there (older than 30 seconds) is removed by the next write, with a
+note on stderr, so the history goes on recording.
 Every change goes first into a journal there, one transaction per command: `journal/<replica>.jsonl`
 for this Mac's changes, and `journal/local.jsonl` for those that never leave this Mac: whatever
 names a person, and every fact you stated (one with your quote, `--from-user`, or a `transcript`

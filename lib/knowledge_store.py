@@ -25,6 +25,8 @@ import os
 import secrets
 import shutil
 import subprocess
+import sys
+import time
 from collections.abc import Iterator
 from dataclasses import dataclass
 from pathlib import Path
@@ -50,6 +52,9 @@ GIT_IDENTITY = (
     "commit.gpgsign=false",
 )
 GIT_TIMEOUT_SECONDS = 30
+# A git index lock older than this, found under the knowledge base's exclusive lock, was left by a git
+# command cut short (git holds it for one command, and bosun commits only under that lock).
+STALE_GIT_LOCK_SECONDS = 30
 
 
 class StoreError(Exception):
@@ -228,13 +233,36 @@ def ensure_repository(root: Path) -> bool:
     return (root / ".git").is_dir()
 
 
+def clear_stale_git_lock(root: Path) -> None:
+    """Remove the history's index lock when a git command cut short left it (a power cut during a
+    write's commit), with one note on stderr; else every later commit fails and the history stops.
+    The caller holds the knowledge base's exclusive lock, under which alone bosun commits, and git
+    holds its lock for one command: so one older than STALE_GIT_LOCK_SECONDS is left over. A
+    younger one is left alone (the commit then fails, with a warning)."""
+    lock = root / ".git" / "index.lock"
+    try:
+        age = time.time() - lock.stat().st_mtime
+    except FileNotFoundError:
+        return
+    if age <= STALE_GIT_LOCK_SECONDS:
+        return
+    lock.unlink(missing_ok=True)
+    print(
+        f"kg: removed {lock}, which a git command cut short left {int(age)} s ago; the knowledge "
+        "history records again",
+        file=sys.stderr,
+    )
+
+
 def commit(root: Path, message: str) -> str:
-    """Commit every change in the knowledge directory; returns a warning, or "" (also when git is
-    not installed: history is optional)."""
+    """Commit every change in the knowledge directory, under the knowledge base's exclusive lock
+    (clear_stale_git_lock relies on it); returns a warning, or "" (also when git is not installed:
+    history is optional)."""
     if not git_available():
         return ""
     if not ensure_repository(root):
         return f"warning: could not create a git repository in {root}; no history recorded"
+    clear_stale_git_lock(root)
     git(root, "add", "-A")
     if not git(root, "status", "--porcelain").stdout.strip():
         return ""
