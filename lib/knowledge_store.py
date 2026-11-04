@@ -347,6 +347,6 @@ def drop_history(root: Path) -> None:
     if os.path.lexists(history):
         raise StoreError(
             f"{history}, the knowledge history, could not be deleted, and it holds what this write "
-            f"deletes; the write stopped there. Delete it (rm -rf {history}): the next write finishes "
-            "this one and starts a new history"
+            f"deletes; the write stopped there. Delete it (rm -rf {history}): fixing its permissions "
+            "instead keeps what it holds. Once it is gone, the next write starts a new history"
         )

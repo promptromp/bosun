@@ -145,7 +145,11 @@ then `bosun uninstall`.
 
 ## Configuration
 
-All configuration lives in `~/.config/bosun/` (override with `BOSUN_CONFIG_DIR`).
+All configuration lives in `~/.config/bosun/` (override with `BOSUN_CONFIG_DIR`). If you move it or
+the state folder (`BOSUN_STATE_DIR`), keep both on a disk that supports hard links, as the Mac's own
+disk does: bosun makes `replica.json` and the knowledge base's `secret.key` with one, so that a file
+is never half-made or made twice. On a disk without them (exFAT, some network shares) writes stop
+and say so.
 
 | File | Purpose |
 |---|---|

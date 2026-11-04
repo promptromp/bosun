@@ -853,7 +853,9 @@ from the journal, never what travels.
   against about 80 ms to start the command. Since 2026-11-03 each write also hashes the ledger twice
   (to notice a change made outside the journal, and to record its digest), about 15 ms each for a
   3 MB ledger and under 1 ms at the fixture's size, and flushes the journal and `ledger.json` to the
-  disk itself (`F_FULLFSYNC`, about 5 ms each on an Apple-silicon Mac).
+  disk itself (`F_FULLFSYNC`, about 5 ms each on an Apple-silicon Mac). Since 2026-11-04 each
+  replaced file (`ledger.json`, `ledger.md`) also flushes its folder, so that the rename itself
+  survives a power cut: about 9 ms each.
 - **Knowledge rebuild cost (measured 2026-11-04, phase 0):** 500 processes and 500 steps with
   20,000 `has_step` facts imported in one transaction (21,000 changes, a 12.2 MB journal for a 6.6
   MB `facts.jsonl`) take 0.36 s to read and order and 0.25 s to rebuild on an Apple-silicon Mac
