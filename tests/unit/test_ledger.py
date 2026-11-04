@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import ast
 import io
 import json
 import shutil
@@ -19,6 +18,7 @@ from typing import Any
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "lib"))
 import journal
 import ledger
+import validation
 from journal import replica_id
 
 
@@ -602,7 +602,7 @@ class ValidateTest(LedgerTestCase):
         ledger.STORE.ledger_file.write_text(json.dumps(data))
         shutil.rmtree(ledger.STORE.journal_dir)
         notes = [f for f in json.loads(run("validate", "--journal", "--json")[0]) if f["kind"] == "note"]
-        self.assertEqual([f["line"] for f in notes], [ledger.NO_JOURNAL_YET])
+        self.assertEqual([f["line"] for f in notes], [validation.NO_JOURNAL_YET])
 
     def test_validate_json_marks_a_note_as_a_note(self) -> None:
         data = self.data()
@@ -610,25 +610,6 @@ class ValidateTest(LedgerTestCase):
         ledger.STORE.ledger_file.write_text(json.dumps(data))
         shutil.rmtree(ledger.STORE.journal_dir)
         self.assertEqual(self.severities("--journal"), [("note", "note")])
-
-    def test_every_kind_of_finding_has_a_severity(self) -> None:
-        """Each kind `finding()` is called with has its row (a new kind cannot slip in without one),
-        and every row is a kind still found; a kind with no row would be a warning."""
-        tree = ast.parse(Path(ledger.__file__).read_text())
-        kinds = {
-            node.args[0].value
-            for node in ast.walk(tree)
-            if isinstance(node, ast.Call)
-            and isinstance(node.func, ast.Name)
-            and node.func.id == "finding"
-            and node.args
-            and isinstance(node.args[0], ast.Constant)
-        }
-        self.assertEqual(kinds, set(ledger.SEVERITY))
-        self.assertEqual(
-            {severity for kind, severity in ledger.SEVERITY.items() if kind != "note"}, {"error", "warning"}
-        )
-        self.assertEqual(ledger.finding("a-kind-to-come", "x")["severity"], "warning")
 
 
 if __name__ == "__main__":

@@ -260,13 +260,24 @@ import lineage
 import redact
 import repo_mask
 import tickets
+import validation
 import workstreams
 import ws_summary
-from change_log import DIGEST, ChangeLogError, Edit, behind, position_in, refusal, stamped, unencodable
+from change_log import (
+    ChangeLogError,
+    Edit,
+    behind,
+    changed_outside,
+    position_in,
+    refusal,
+    stamped,
+    unencodable,
+)
 from journal import REPLICA_FILE, Journal, JournalError, Transaction, flush_to_disk, replica_id
 from ledger_changes import MAX_HISTORY as MAX_HISTORY, trim_history as trim_history  # noqa: PLC0414 re-exported
 from lineage import Index, LineageError, Link
 from tickets import TicketError
+from validation import Finding, finding, first_difference, where_first
 from workstreams import WorkstreamError
 
 
@@ -873,12 +884,9 @@ def rebuilt(journal: Journal, position: dict[str, int], *, writing: bool = False
     rebuild, says on stderr how many changes it kept but could not apply (with one Mac, each is a
     bug or damage)."""
     result = ledger_changes.rebuild(journal.changes(), RULES)
-    if writing and result.conflicts:
-        print(
-            f"ledger: the journal's rebuild has {len(result.conflicts)} conflict(s), changes it keeps but "
-            "cannot apply; bosun ledger validate --journal lists them",
-            file=sys.stderr,
-        )
+    note = validation.unapplied_note(len(result.conflicts), 0, "bosun ledger validate --journal")
+    if writing and note:
+        print(f"ledger: {note}", file=sys.stderr)
     found = result.ledger
     found[ledger_changes.JOURNAL] = position
     ordered: Ledger = json.loads(json.dumps(found, sort_keys=True))
@@ -988,16 +996,8 @@ def stamp(ledger: Ledger, position: Mapping[str, int]) -> None:
 
 def edited_outside(ledger: Ledger) -> bool:
     """Whether ledger.json was changed since a write saved it (by hand, or by a bosun that does not
-    journal and writes the journal key back as it found it): what it holds no longer has the
-    digest that write recorded, or holds what the journal cannot. A file saved before digests is
-    trusted, and gets one when it is saved next."""
-    value = ledger.get(ledger_changes.JOURNAL)
-    recorded = value.get(DIGEST) if isinstance(value, dict) else None
-    try:
-        held = ledger_changes.state_hash(ledger)
-    except ChangeLogError:
-        return True
-    return isinstance(recorded, str) and held != recorded
+    journal and writes the journal key back as it found it): change_log.changed_outside."""
+    return changed_outside(ledger.get(ledger_changes.JOURNAL), lambda: ledger_changes.state_hash(ledger))
 
 
 def adopted_base(journal: Journal, file: Ledger) -> Ledger:
@@ -4217,35 +4217,8 @@ def cmd_lint(args: argparse.Namespace) -> tuple[str, int]:
     return "\n".join(f.line() for f in findings) or "(no findings)", code
 
 
-Finding = dict[str, str]
-
-# How much a kind of validate finding matters (`validate --json` carries it; bosun doctor fails on
-# an error and warns on a warning). An error means writes are refused, or a rebuild would not give
-# ledger.json back; a warning is a rule the ledger breaks, a change the rebuild keeps but cannot
-# apply, or an outside edit the next write adopts; a note is information. A kind with no row is a
-# warning (a unit test keeps every kind found here).
-ERROR, WARNING, NOTE = "error", "warning", "note"
-SEVERITY = {
-    "journal": ERROR,  # damaged: a write that reads it is refused
-    "position": ERROR,  # behind: every write is refused; ahead: a write cut short, not yet applied
-    "differs": ERROR,  # the journal's rebuild is not ledger.json: a rebuild would lose the difference
-    "state": WARNING,
-    "link": WARNING,
-    "link-target": WARNING,  # a link to an item gone, which a prune from before lineage was kept left
-    "part_of": WARNING,
-    "conflict": WARNING,
-    "edited": WARNING,  # the next write adopts it
-    "note": NOTE,
-}
-
-
-def finding(kind: str, detail: str, item: str = "", path: str = "") -> Finding:
-    found = {"kind": kind, "severity": SEVERITY.get(kind, WARNING), "detail": detail}
-    if item:
-        found["item"] = item
-    if path:
-        found["path"] = path
-    return found
+# validate's findings have one shape, severity and line for both stores (lib/validation.py); the
+# rule findings, and how the rebuild and ledger.json are compared, are the ledger's own.
 
 
 def kind_states(kind: str) -> set[str]:
@@ -4361,32 +4334,6 @@ def rule_findings(ledger: Ledger) -> list[Finding]:
 COMPARED = ("items", "sources", "runs", ledger_changes.SAID)
 
 
-def first_difference(left: Any, right: Any) -> list[str] | None:
-    """The first path at which two JSON values differ (keys sorted; a list's first index that
-    differs, or where the shorter one ends), or None."""
-    if isinstance(left, dict) and isinstance(right, dict):
-        return dict_difference(left, right)
-    if isinstance(left, list) and isinstance(right, list):
-        return list_difference(left, right)
-    return None if left == right else []
-
-
-def dict_difference(left: dict[str, Any], right: dict[str, Any]) -> list[str] | None:
-    for key in sorted(set(left) | set(right)):
-        below = [] if key not in left or key not in right else first_difference(left[key], right[key])
-        if below is not None:
-            return [str(key), *below]
-    return None
-
-
-def list_difference(left: list[Any], right: list[Any]) -> list[str] | None:
-    for index, (one, other) in enumerate(zip(left, right, strict=False)):
-        below = first_difference(one, other)
-        if below is not None:
-            return [str(index), *below]
-    return [str(min(len(left), len(right)))] if len(left) != len(right) else None
-
-
 def compare_findings(rebuilt_ledger: Ledger, saved: Ledger) -> list[Finding]:
     """Where the journal's rebuild and ledger.json (both at the same position) differ: each item
     by its first differing path, the other sections as a whole."""
@@ -4408,76 +4355,50 @@ def item_differences(left: lineage.Items, right: lineage.Items) -> list[Finding]
     for item_id in sorted(set(left) | set(right)):
         path = first_difference(left.get(item_id), right.get(item_id))
         if path is not None:
-            where = f"first at {'/'.join(path)}" if path else "in one of them only"
-            found.append(
-                finding("differs", f"the rebuild and ledger.json differ ({where})", item_id, "/".join(path))
-            )
+            detail = f"the rebuild and ledger.json differ ({where_first(path)})"
+            found.append(finding("differs", detail, item_id, "/".join(path)))
     return found
 
 
-NO_JOURNAL_YET = "no journal yet; the next write starts it"
 EDITED = (
     "ledger.json was changed outside its journal (by hand, or by a bosun that does not journal); "
     "the next write adopts it"
 )
 
 
-def position_finding(position: Mapping[str, int], saved: Mapping[str, int]) -> Finding:
-    gaps = missing(position, saved)
-    if gaps:
-        detail = (
-            f"the journal is behind ledger.json ({'; '.join(gaps)}): a write would refuse to rebuild from it"
-        )
-    else:
-        detail = f"the journal is ahead of ledger.json (at {dict(position)}): the next write applies it"
-    return finding("position", detail, path="journal")
-
-
 def journal_findings(saved: Ledger) -> list[Finding]:
-    """The journal against ledger.json as saved: its damage, the conflicts of its rebuild, an
-    outside edit, and, at the same position, each item that differs (unless ledger.json was edited
-    outside the journal: the next write adopts the difference)."""
+    """The journal against ledger.json as saved (validation.journal_findings): its damage, the
+    conflicts of its rebuild, an outside edit, and, at the same position, each item that differs
+    (unless ledger.json was edited outside the journal: the next write adopts the difference)."""
     try:
         journal = open_journal()
         changes, position = journal.changes(), journal.position()
     except JournalError as exc:
-        return [finding("journal", f"the journal is damaged: {exc}")]
+        return [validation.damage_finding(exc)]
     result = ledger_changes.rebuild(changes, RULES)
-    found = [
-        finding("conflict", f"{c.kind}: {c.detail} (change {str(c.change)[:8]})", c.target)
-        for c in result.conflicts
-    ]
-    file_position = saved_position(saved)
-    if not position and not file_position and has_records(saved):
-        return [*found, finding("note", NO_JOURNAL_YET, path="journal")]
-    edited = edited_outside(saved)
-    if edited:
-        found.append(finding("edited", EDITED, path="journal"))
-    if position != file_position:
-        return [*found, position_finding(position, file_position)]
-    return found if edited else [*found, *compare_findings(result.ledger, saved)]
-
-
-def finding_line(found: Finding) -> str:
-    if found["kind"] == "note":
-        return found["detail"]
-    where = found.get("item") or "journal"
-    path = f" {found['path']}" if found.get("path") else ""
-    return f"{found['kind']}: {where}{path}: {found['detail']}"
+    against = validation.Against(
+        file_name=STORE.ledger_file.name,
+        position=position,
+        saved=saved_position(saved),
+        conflicts=result.conflicts,
+        pending=[],
+        has_records=has_records(saved),
+        edited=edited_outside(saved),
+        edited_detail=EDITED,
+        differences=lambda: compare_findings(result.ledger, saved),
+    )
+    return validation.journal_findings(against)
 
 
 def cmd_validate(args: argparse.Namespace) -> tuple[str, int]:
-    """Check the ledger against every rule; with --journal, the journal too. Exit 1 on findings."""
+    """Check the ledger against every rule; with --journal, the journal too. Exit 1 on findings
+    (a note aside); --json carries each finding's severity and line (bosun doctor prints it)."""
     with store_lock(fcntl.LOCK_SH):
         saved = load()
         found = rule_findings(saved)
         if args.journal:
             found += journal_findings(saved)
-    code = 1 if any(f["kind"] != "note" for f in found) else 0
-    if args.json:  # with each finding's line as the text says it (bosun doctor prints it)
-        return json.dumps([{**f, "line": finding_line(f)} for f in found], indent=2), code
-    lines = [finding_line(f) for f in found]
-    return "\n".join(lines) or "ledger is valid", code
+    return validation.report(found, args.json, "ledger is valid")
 
 
 Handler = Callable[[argparse.Namespace], "str | tuple[str, int]"]

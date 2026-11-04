@@ -347,7 +347,7 @@ journal_rebuilds() {
 import fcntl, json, sys
 from pathlib import Path
 sys.path.insert(0, sys.argv[1])
-import ledger, ledger_changes
+import change_log, ledger, ledger_changes
 from journal import Journal
 state = Path(sys.argv[2])
 with (state / "ledger.lock").open("w") as lock:
@@ -361,7 +361,7 @@ for change in changes:
     seqs.setdefault("local" if change.get("local") else change["replica"], []).append(change["seq"])
 problems = [
     *(["ledger.json is not at the journal's position"] if ledger.saved_position(saved) != position else []),
-    *([] if saved["journal"].get(ledger.DIGEST) == ledger_changes.state_hash(saved) else ["ledger.json's digest is wrong"]),
+    *([] if saved["journal"].get(change_log.DIGEST) == ledger_changes.state_hash(saved) else ["ledger.json's digest is wrong"]),
     *(f"conflict: {conflict}" for conflict in result.conflicts),
     *([] if ledger_changes.state_hash(result.ledger) == ledger_changes.state_hash(saved) else ["the rebuild differs from ledger.json"]),
     *(f"{name}: seq {sorted(found)} has a gap" for name, found in seqs.items() if sorted(found) != list(range(1, len(found) + 1))),

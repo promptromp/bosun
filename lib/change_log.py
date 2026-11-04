@@ -6,8 +6,9 @@ changes from different machines get one global order, that order itself, and the
 suffixes minted for new items. Also what both stores (the ledger, the knowledge base) do alike at
 their write boundary: refuse a change the journal cannot hold, naming where it is; convert, once,
 data written before or outside the journal; the stamp a store's files record of the journal (the
-position they reflect and a digest of what they hold); and the placeholder a change deleted on
-request leaves in its place.
+position they reflect and a digest of what they hold), and whether they were changed outside it
+since; what a list that only grows gained; the kinds of conflict a rebuild keeps; and the
+placeholder a change deleted on request leaves in its place.
 
 Pure functions and small value types: no file access. The journal that stores changes is
 elsewhere.
@@ -18,6 +19,7 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+from collections import Counter
 from collections.abc import Callable, Iterable, Iterator, Mapping
 from dataclasses import dataclass
 from typing import Any, NamedTuple
@@ -60,6 +62,11 @@ class Edit:
     target: str
     body: dict[str, Any]
     local: bool
+
+
+# What kind of conflict a change is (Conflict.kind), in either store's rebuild.
+STATE_CONFLICT, LINK_CONFLICT, FIELD_CONFLICT = "state", "link", "field"
+DELETED, MISSING, UNKNOWN = "deleted", "missing", "unknown"
 
 
 @dataclass(frozen=True)
@@ -151,6 +158,26 @@ def encodable(value: Any) -> Any:
     return value
 
 
+def as_text(value: Any) -> str:
+    """<value> as the text of its canonical form, never refused (a float stays one): to compare
+    values by, so that what the journal cannot hold is named where it is, not failed on."""
+    return json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+
+
+def gained(before: Iterable[Any], after: Iterable[Any]) -> list[Any]:
+    """The entries of <after> that <before> lacks, in <after>'s order (compared as_text, counting
+    repeats): what a list that only grows gained. An entry <after> lost is not in it."""
+    left = Counter(as_text(entry) for entry in before)
+    found = []
+    for entry in after:
+        key = as_text(entry)
+        if left[key]:
+            left[key] -= 1
+        else:
+            found.append(entry)
+    return found
+
+
 def change_id(record: Mapping[str, Any]) -> str:
     """SHA-256 (hex) of the canonical record without its own `id`."""
     body = {key: value for key, value in record.items() if key != "id"}
@@ -222,6 +249,19 @@ def stamped(position: Mapping[str, int], held: str) -> dict[str, Any]:
     each journal file) and the digest of what they hold (DIGEST), so that a change made to them
     outside the journal shows."""
     return {**position, DIGEST: held}
+
+
+def changed_outside(stamp: Any, held: Callable[[], str]) -> bool:
+    """Whether a store's files were changed since a write saved them (by hand, a checkout of an
+    older version, or a bosun that does not journal and leaves the stamp as it found it): what
+    they hold now (<held>, their digest) is not what the stamp records, or holds what the journal
+    cannot. Files saved before digests are trusted, and get one when they are saved next."""
+    recorded = stamp.get(DIGEST) if isinstance(stamp, dict) else None
+    try:
+        now = held()
+    except ChangeLogError:
+        return True
+    return isinstance(recorded, str) and now != recorded
 
 
 def position_in(stamp: Any) -> dict[str, int]:

@@ -42,14 +42,27 @@ from __future__ import annotations
 
 import copy
 import heapq
-import json
-from collections import Counter
 from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass, field
 from itertools import chain
 from typing import Any
 
-from change_log import Change, Conflict, Edit, digest, in_order, where
+from change_log import (
+    DELETED,
+    FIELD_CONFLICT,
+    LINK_CONFLICT,
+    MISSING,
+    STATE_CONFLICT,
+    UNKNOWN,
+    Change,
+    Conflict,
+    Edit,
+    as_text,
+    digest,
+    gained,
+    in_order,
+    where,
+)
 from lineage import Items, Link
 
 
@@ -318,21 +331,13 @@ def _split_entries(entries: list[Any]) -> tuple[list[Any], list[Any]]:
 def _key(entry: Any) -> str:
     """An entry as the text of its canonical bytes, to compare entries by: never refused, so that
     diff names a value the journal cannot hold (a float) instead of failing on it."""
-    return _text(entry)
+    return as_text(entry)
 
 
 def _history_added(before: list[Any], after: list[Any]) -> list[Any]:
-    """The entries of <after> that <before> lacks, in order (as canonical text, counting repeats).
-    Entries that went (trimmed) do not count, and a trim marker is never an entry."""
-    left = Counter(_key(entry) for entry in before)
-    added = []
-    for entry in after:
-        key = _key(entry)
-        if left[key]:
-            left[key] -= 1
-        elif not (isinstance(entry, dict) and entry.get("event") == TRIMMED):
-            added.append(entry)
-    return added
+    """The entries of <after> that <before> lacks, in order (gained: as canonical text, counting
+    repeats). Entries that went (trimmed) do not count, and a trim marker is never an entry."""
+    return [entry for entry in gained(before, after) if _entry_event(entry) != TRIMMED]
 
 
 # ---- lists ------------------------------------------------------------------------------------
@@ -407,14 +412,10 @@ class _ItemEdits:
         return [*by_path, *self.lists, *self.states, *self.appends]
 
 
-def _text(value: Any) -> str:
-    return json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
-
-
 def _same(before: Any, after: Any) -> bool:
     if before is _MISSING or after is _MISSING:
         return before is after
-    return bool(before == after) and _text(before) == _text(after)
+    return bool(before == after) and as_text(before) == as_text(after)
 
 
 def _plain(value: Any) -> Any:
@@ -637,9 +638,6 @@ EMPTY: Ledger = {"version": 1, "items": {}, "sources": {}, "runs": {}, SAID: []}
 # The file's own: the journal position it reflects, and the digest of the rest (ledger.stamp).
 # Never compared, hashed or rebuilt.
 JOURNAL = "journal"
-# Conflict kinds (change_log.Conflict).
-STATE_CONFLICT, LINK_CONFLICT, FIELD_CONFLICT = "state", "link", "field"
-DELETED, MISSING, UNKNOWN = "deleted", "missing", "unknown"
 
 
 @dataclass(frozen=True)
