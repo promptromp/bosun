@@ -25,26 +25,44 @@ of it the private journal holds, which a deletion refuses.
 `state_hash` is the digest of what the knowledge files hold (entities.jsonl and facts.jsonl),
 which view.json records beside the journal position.
 
+`rebuild` is the other way: the files the journal's changes make, applied in the one order
+(change_log.in_order) whatever order they come in. An entity is put whole or deleted; the fact
+log's records stay in that order, and fold the way the files do (knowledge_model.Fold: an update
+that comes before its fact's add waits for it, and one whose add never comes is `pending`). An
+update that finds a CHECKED field no longer as it was where it was made (its `prev`: two Macs
+decided one proposal at once) is a conflict and not applied; so is an op or a body this bosun
+cannot apply. A deletion's placeholders are skipped. `outside` is what files changed outside the
+journal hold beyond what they held when a write last saved them, as edits to adopt, and
+`differences` where the rebuild and the files differ.
+
 Pure functions over a KB: no file access. lib/knowledge.py journals the edits under the knowledge
-base's lock.
+base's lock, and rebuilds the files where they are behind the journal.
 """
 
 from __future__ import annotations
 
-from collections.abc import Iterable, Mapping
+import copy
+from collections.abc import Callable, Iterable, Mapping
+from dataclasses import dataclass, field
 from typing import Any
 
 import change_log
 import knowledge_model as km
 import knowledge_schema as ks
-from change_log import Change, Edit, Place, digest, where
+from change_log import FIELD_CONFLICT, UNKNOWN, Change, Conflict, Edit, Place, digest, gained, in_order, where
 from knowledge_model import KB, Record
+from validation import Finding, finding, first_difference, where_first
 
 
 FACT_ADD = "fact.add"
 FACT_UPDATE = "fact.update"
 ENTITY_PUT = "entity.put"
 ENTITY_DELETE = "entity.delete"
+# The rebuild's rules (a unit test pins their digest to knowledge.KG_RULES_VERSION): the ops it
+# applies (any other, a newer bosun's, is kept as a conflict), and the fields an update must find
+# as it left them where it was made (its `prev`), or it is a conflict and not applied.
+APPLIED = (ENTITY_PUT, ENTITY_DELETE, FACT_ADD, FACT_UPDATE)
+CHECKED = ("status",)
 # Source kinds that hold my words or name my sessions: a fact with one is mine and stays on this Mac
 # whole (docs/design/sync.md, "Which data goes where"), as the ledger keeps a `via` that quotes me.
 MY_WORDS = frozenset({ks.USER_SOURCE, ks.TRANSCRIPT_SOURCE})
@@ -152,3 +170,196 @@ def state_hash(entities: Mapping[str, Record], records: list[Record]) -> str:
     """The digest of what the knowledge files hold (change_log.digest): view.json records it beside
     the journal position, so that a change made to the files outside the journal shows."""
     return digest({"entities": entities, "records": records})
+
+
+# ---- the rebuild --------------------------------------------------------------------------------
+
+
+@dataclass
+class RebuiltKB:
+    """The knowledge files the journal makes: the entities, the fact log's records in the one
+    order; and what it kept but did not apply (conflicts), and the facts whose updates wait for an
+    add the journal does not hold (pending)."""
+
+    entities: dict[str, Record]
+    records: list[Record]
+    conflicts: list[Conflict]
+    pending: list[str]
+
+
+class _Refused(Exception):
+    """A change the rebuild keeps but cannot apply."""
+
+
+def crossed(fact: Record, update: Record) -> str:
+    """Why <update> cannot apply to <fact> as it now is: a CHECKED field no longer holds what it
+    held where the update was made (its `prev`); "" when it can. A record from before `prev`
+    (no prev) is applied as written."""
+    prev, changes = update.get("prev"), update.get("set")
+    if not isinstance(prev, dict):
+        return ""
+    for key in CHECKED:
+        if key in prev and fact.get(key) != prev[key]:
+            to = changes.get(key) if isinstance(changes, dict) else None
+            return f"{key}: {prev[key]} -> {to}, but it is {fact.get(key)} here"
+    return ""
+
+
+@dataclass
+class _Rebuild:
+    """The rebuild so far: the entities, each fact-log change applied in order with its record (a
+    copy), and the fact log folded with the rebuild's check."""
+
+    entities: dict[str, Record] = field(default_factory=dict)
+    records: list[tuple[Change, Record]] = field(default_factory=list)
+    fold: km.Fold = field(default_factory=lambda: km.Fold(crossed))
+
+
+def _put(state: _Rebuild, change: Change) -> None:
+    if not isinstance(change["body"], dict):
+        raise _Refused("an entity that is not an object")
+    state.entities[change["target"]] = copy.deepcopy(change["body"])
+
+
+def _delete(state: _Rebuild, change: Change) -> None:
+    state.entities.pop(change["target"], None)
+
+
+def _readable_add(record: Record) -> bool:
+    fact = record.get("fact")
+    return (
+        isinstance(fact, dict) and isinstance(fact.get("id"), str) and isinstance(fact.get("sources"), list)
+    )
+
+
+def _readable_update(record: Record) -> bool:
+    sources = record.get("sources") or []
+    return (
+        isinstance(record.get("id"), str)
+        and isinstance(record.get("set") or {}, dict)
+        and isinstance(sources, list)
+        and all(isinstance(source, dict) for source in sources)
+    )
+
+
+def _readable(record: Any, op: str) -> bool:
+    """Whether <record> is a fact-log record of the kind <op> names, whole enough to fold: one
+    that is not would be applied in part, so it is kept as a conflict instead."""
+    added = op == FACT_ADD
+    if (
+        not isinstance(record, dict)
+        or "at" not in record
+        or record.get("op") != ("add" if added else "update")
+    ):
+        return False
+    return _readable_add(record) if added else _readable_update(record)
+
+
+def _record(state: _Rebuild, change: Change) -> None:
+    if not _readable(change["body"], change["op"]):
+        raise _Refused(f"a {change['op']} whose record this bosun cannot read")
+    record = copy.deepcopy(change["body"])
+    state.records.append((change, record))
+    state.fold.take(record)
+
+
+_APPLIERS: dict[str, Callable[[_Rebuild, Change], None]] = {
+    ENTITY_PUT: _put,
+    ENTITY_DELETE: _delete,
+    FACT_ADD: _record,
+    FACT_UPDATE: _record,
+}
+
+
+def _apply(state: _Rebuild, change: Change) -> None:
+    """One change, by its op's applier. An op this bosun does not know is kept as a conflict, not
+    dropped (a newer bosun's change), and so is a body it cannot apply."""
+    op = change.get("op")
+    applier = _APPLIERS.get(op) if isinstance(op, str) else None
+    if applier is None:
+        raise _Refused(f"an op this bosun does not know ({op!r}): update bosun")
+    try:
+        applier(state, change)
+    except (KeyError, TypeError, AttributeError) as exc:
+        raise _Refused(f"a body this bosun cannot apply ({type(exc).__name__}: {exc})") from exc
+
+
+def rebuild(changes: Iterable[Change]) -> RebuiltKB:
+    """The knowledge files <changes> make, applied in the one order (each id once), a deletion's
+    placeholders skipped. The fact log keeps that order, an update that comes before its fact's
+    add waits for it (pending if it never comes); an update CHECKED fields no longer allow
+    (crossed), and a change this bosun cannot apply, are conflicts and have no effect."""
+    state = _Rebuild()
+    order: dict[str, int] = {}
+    unknown: list[Conflict] = []
+    for index, change in enumerate(in_order(changes)):
+        order[change["id"]] = index
+        if change.get("op") == change_log.FORGOTTEN:
+            continue
+        try:
+            _apply(state, change)
+        except _Refused as exc:
+            unknown.append(Conflict(change["id"], str(change.get("target", "")), UNKNOWN, str(exc)))
+    refused = {id(record): why for record, why in state.fold.refused}
+    crossings = [
+        Conflict(change["id"], change["target"], FIELD_CONFLICT, refused[id(record)])
+        for change, record in state.records
+        if id(record) in refused
+    ]
+    return RebuiltKB(
+        state.entities,
+        [record for _, record in state.records if id(record) not in refused],
+        sorted([*unknown, *crossings], key=lambda conflict: order[conflict.change]),
+        list(state.fold.waiting),
+    )
+
+
+# ---- the files against the journal --------------------------------------------------------------
+
+
+def outside(base: RebuiltKB, kb: KB) -> list[Edit]:
+    """What the files (<kb>) hold that <base> lacks, as the edits that adopt it into the journal:
+    <base> is what they held when a write last saved them, as the journal has it. Each entity made,
+    changed or removed, and each record the fact log gained, in its order. A record it lost cannot
+    go in (the fact log only grows): it stays, and an edited one goes in beside it, as gained."""
+    puts, deletes = entity_edits(base.entities, kb.entities)
+    return [*puts, *(record_edit(r, kb.facts) for r in gained(base.records, kb.records)), *deletes]
+
+
+def is_rebuild(rebuilt: RebuiltKB, entities: Mapping[str, Record], records: list[Record]) -> bool:
+    """Whether the files hold exactly the journal's rebuild (by their digest; files that hold what
+    the journal cannot never do)."""
+    try:
+        return state_hash(entities, records) == state_hash(rebuilt.entities, rebuilt.records)
+    except change_log.ChangeLogError:
+        return False
+
+
+def _by_fact(records: list[Record]) -> dict[str, list[Record]]:
+    found: dict[str, list[Record]] = {}
+    for record in records:
+        found.setdefault(km.record_fact_id(record), []).append(record)
+    return found
+
+
+def _differing(left: Mapping[str, Any], right: Mapping[str, Any], file_name: str) -> list[Finding]:
+    """Each key whose value differs between the rebuild (<left>) and a file (<right>)."""
+    found = []
+    for key in sorted(set(left) | set(right)):
+        path = first_difference(left.get(key), right.get(key))
+        if path is not None:
+            detail = f"the rebuild and {file_name} differ ({where_first(path)})"
+            found.append(finding("differs", detail, key, "/".join(path)))
+    return found
+
+
+def differences(rebuilt: RebuiltKB, entities: Mapping[str, Record], records: list[Record]) -> list[Finding]:
+    """Where the journal's rebuild and the knowledge files (both at the same position) differ:
+    each entity, and each fact's records, by the first path that differs; the fact log's order,
+    when nothing else does."""
+    found = _differing(rebuilt.entities, entities, "entities.jsonl")
+    facts = _differing(_by_fact(rebuilt.records), _by_fact(records), "facts.jsonl")
+    if not facts and rebuilt.records != records:
+        detail = "the rebuild holds the same records in another order"
+        facts.append(finding("differs", detail, "facts.jsonl"))
+    return [*found, *facts]

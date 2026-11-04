@@ -3,13 +3,19 @@ lib/knowledge.py): each write is one transaction in `knowledge/journal/`, a fact
 person goes to the local file and never leaves this Mac, a new fact gets a minted id, an update
 carries what it replaced, a delete on request turns the person's changes into placeholders, and a
 knowledge base from before the journal enters it once (genesis). view.json records the journal
-position and a digest of what the files hold. Fictional data: acme's invoice exporter."""
+position and a digest of what the files hold. The files are the journal's rebuild: in the one
+order, an update waiting for its fact, two decisions on one proposal a conflict; a write cut short
+is repaired by the next, a change made to the files outside the journal is adopted, a reader never
+writes, and `kg validate` says how the files stand against the journal. Fictional data: acme's
+invoice exporter."""
 
 from __future__ import annotations
 
 import contextlib
+import hashlib
 import io
 import json
+import random
 import re
 import shutil
 import sys
@@ -115,6 +121,36 @@ class JournalTestCase(KnowledgeTestCase):
 
     def records(self) -> list[dict[str, Any]]:
         return [json.loads(line) for line in self.log_lines()]
+
+    def file_entities(self) -> dict[str, dict[str, Any]]:
+        return {e["id"]: e for e in store.read_jsonl(self.root / "entities.jsonl")}
+
+    def assert_the_journal_rebuilds_the_files(self) -> None:
+        """The files as saved are the journal's rebuild (entities, the fact log in order, and so the
+        folded facts), with nothing it could not apply, and view.json names the journal's position
+        and the digest of what they hold."""
+        rebuilt = kc.rebuild(self.journal().changes())
+        records = store.read_jsonl(self.root / "facts.jsonl")
+        self.assertEqual(rebuilt.entities, self.file_entities())
+        self.assertEqual(rebuilt.records, records)
+        self.assertEqual(km.fold_all(rebuilt.records), km.fold_all(records))
+        self.assertEqual((rebuilt.conflicts, rebuilt.pending), ([], []))
+        self.assertEqual(
+            self.view()["journal"],
+            {**self.journal().position(), "digest": kc.state_hash(rebuilt.entities, rebuilt.records)},
+        )
+
+    def validate(self, *args: str) -> tuple[str, int]:
+        parsed = knowledge.build_parser().parse_args(["validate", *args])
+        output, code = parsed.func(parsed)
+        return str(output), int(code)
+
+    def commit_by_hand(self, *edits: Edit) -> None:
+        """A transaction in the journal that never reached the files (a write cut short after it)."""
+        knowledge.open_journal(knowledge.paths(), self.replica()).begin("test").commit_edits(edits)
+
+    def saved_files(self) -> dict[str, bytes]:
+        return {p.name: p.read_bytes() for p in self.root.iterdir() if p.is_file()}
 
 
 class MintedIdsTest(JournalTestCase):
@@ -560,6 +596,514 @@ class BoundaryTest(JournalTestCase):
         self.assertNotEqual(held, kc.state_hash(entities, [*records, records[0]]))
         self.assertNotEqual(held, kc.state_hash({}, records))
         self.assertEqual(held, kc.state_hash(dict(reversed(list(entities.items()))), records))
+
+
+REPLICA_A, REPLICA_B = "a" * 32, "b" * 32
+FACT = "f-aaaaaa"
+
+
+def clock(n: int) -> str:
+    return change_log.clock_text(1_793_000_000_000 + n, 0)
+
+
+def envelope(op: str, target: str, body: dict[str, Any], n: int, replica: str = REPLICA_A) -> dict[str, Any]:
+    """A change as a Mac's journal holds it, made at clock(n)."""
+    made: dict[str, Any] = {
+        "v": 1,
+        "stream": "kg",
+        "replica": replica,
+        "seq": n,
+        "hlc": clock(n),
+        "tx": clock(n),
+        "of": 1,
+        "cmd": "test",
+        "rules": 1,
+        "op": op,
+        "target": target,
+        "body": body,
+    }
+    made["id"] = change_log.change_id(made)
+    return made
+
+
+def decided(fact_id: str, event: str, status: str, was: str = "proposed") -> dict[str, Any]:
+    """An update record that moves a fact from <was> to <status>, saying so in its prev."""
+    return {
+        "op": "update",
+        "id": fact_id,
+        "at": LEGACY_AT,
+        "event": event,
+        "set": {"status": status},
+        "prev": {"status": was},
+        "note": "",
+    }
+
+
+class RebuildTest(unittest.TestCase):
+    """kc.rebuild over changes made by hand: the one order, whatever order they come in."""
+
+    def add(self, n: int = 1, replica: str = REPLICA_A) -> dict[str, Any]:
+        body = legacy_fact(FACT, "repo/invoice-exporter", "caveat", value="retries are slow")
+        return envelope(kc.FACT_ADD, FACT, body, n, replica)
+
+    def test_an_early_update_waits_for_its_fact(self) -> None:
+        """An update ordered before its add (another Mac's clock behind) is applied after it; the
+        records keep the one order, and folding them gives the same."""
+        confirm = envelope(kc.FACT_UPDATE, FACT, decided(FACT, "confirmed", "confirmed"), 1, REPLICA_B)
+        add = self.add(2)
+        rebuilt = kc.rebuild([add, confirm])
+        self.assertEqual(rebuilt.records, [confirm["body"], add["body"]])
+        fact = km.fold_all(rebuilt.records)[FACT]
+        self.assertEqual(fact["status"], "confirmed")
+        self.assertEqual([h["event"] for h in fact["history"]], ["added", "confirmed"])
+        self.assertEqual((rebuilt.conflicts, rebuilt.pending), ([], []))
+        alone = kc.rebuild([confirm])  # its add never came: it waits, and is listed
+        self.assertEqual(alone.pending, [FACT])
+        self.assertEqual(km.fold_all(alone.records), {})
+
+    def test_confirm_and_reject_at_once_is_a_conflict(self) -> None:
+        """Two Macs decided one proposal: the later decision, made from `proposed` too, is a field
+        conflict and not applied, whichever it is."""
+        for first, second in (("rejected", "confirmed"), ("confirmed", "rejected")):
+            with self.subTest(first=first):
+                earlier = envelope(kc.FACT_UPDATE, FACT, decided(FACT, first, first), 2)
+                later = envelope(kc.FACT_UPDATE, FACT, decided(FACT, second, second), 3, REPLICA_B)
+                rebuilt = kc.rebuild([later, self.add(), earlier])
+                self.assertEqual(km.fold_all(rebuilt.records)[FACT]["status"], first)
+                self.assertNotIn(later["body"], rebuilt.records)
+                self.assertEqual(
+                    [(c.change, c.target, c.kind) for c in rebuilt.conflicts], [(later["id"], FACT, "field")]
+                )
+                self.assertIn(f"proposed -> {second}, but it is {first} here", rebuilt.conflicts[0].detail)
+
+    def test_an_update_without_prev_is_applied_as_written(self) -> None:
+        """A record from before updates said what they replaced (a knowledge base from before the
+        journal) is not checked."""
+        old = decided(FACT, "rejected", "rejected")
+        del old["prev"]
+        twice = [self.add(), envelope(kc.FACT_UPDATE, FACT, decided(FACT, "confirmed", "confirmed"), 2)]
+        rebuilt = kc.rebuild([*twice, envelope(kc.FACT_UPDATE, FACT, old, 3)])
+        self.assertEqual(km.fold_all(rebuilt.records)[FACT]["status"], "rejected")
+        self.assertEqual(rebuilt.conflicts, [])
+
+    def changes(self) -> list[dict[str, Any]]:
+        exporter = legacy_entity("repo/invoice-exporter", "invoice exporter")
+        renamed = {**exporter, "name": "the invoice exporter"}
+        dana = legacy_entity("person/dana", "Dana")
+        return [
+            envelope(kc.ENTITY_PUT, "repo/invoice-exporter", exporter, 1),
+            envelope(kc.ENTITY_PUT, "step/merge", legacy_entity("step/merge", "Merge"), 2),
+            envelope(kc.ENTITY_PUT, "repo/invoice-exporter", renamed, 3, REPLICA_B),
+            envelope(kc.ENTITY_DELETE, "step/merge", {}, 4),
+            change_log.placeholder(envelope(kc.ENTITY_PUT, "person/dana", dana, 5)),
+            envelope(kc.FACT_UPDATE, FACT, decided(FACT, "confirmed", "confirmed"), 6, REPLICA_B),
+            self.add(7),
+            envelope(kc.FACT_UPDATE, FACT, decided(FACT, "rejected", "rejected"), 8),
+            envelope(kc.FACT_UPDATE, "f-bbbbbb", decided("f-bbbbbb", "expired", "expired"), 9),
+        ]
+
+    def test_order_of_delivery_does_not_matter(self) -> None:
+        """The same changes, shuffled and some delivered twice, rebuild the same."""
+        changes = self.changes()
+        expected = kc.rebuild(changes)
+        self.assertEqual(expected.entities, {"repo/invoice-exporter": changes[2]["body"]})
+        self.assertEqual([c.kind for c in expected.conflicts], ["field"])
+        self.assertEqual(expected.pending, ["f-bbbbbb"])
+        shuffler = random.Random(7)  # noqa: S311  # a fixed shuffle, not cryptography
+        for round_ in range(8):
+            delivered = changes + shuffler.sample(changes, len(changes) // 2)
+            shuffler.shuffle(delivered)
+            with self.subTest(round=round_):
+                self.assertEqual(kc.rebuild(delivered), expected)
+
+    def test_a_forgotten_change_rebuilds_to_nothing(self) -> None:
+        dana = legacy_fact(FACT, "person/dana", "timezone", value="Europe/Lisbon")
+        forgotten = [
+            change_log.placeholder(
+                envelope(kc.ENTITY_PUT, "person/dana", legacy_entity("person/dana", "Dana"), 1)
+            ),
+            change_log.placeholder(envelope(kc.FACT_ADD, FACT, dana, 2)),
+        ]
+        self.assertEqual(kc.rebuild(forgotten), kc.RebuiltKB({}, [], [], []))
+
+    def test_what_this_bosun_cannot_apply_is_kept_as_a_conflict(self) -> None:
+        newer = envelope("fact.merge", FACT, {}, 2)
+        broken = envelope(kc.ENTITY_PUT, "repo/x", {}, 3)
+        broken["body"] = "not an entity"
+        rebuilt = kc.rebuild([self.add(), newer, broken])
+        self.assertEqual(
+            [(c.change, c.kind) for c in rebuilt.conflicts],
+            [(newer["id"], "unknown"), (broken["id"], "unknown")],
+        )
+        self.assertEqual(rebuilt.records, [self.add()["body"]])
+
+    def test_rebuilding_does_not_change_the_changes(self) -> None:
+        changes = self.changes()
+        before = json.dumps(changes, sort_keys=True)
+        rebuilt = kc.rebuild(changes)
+        km.fold_all(rebuilt.records)[FACT]["sources"].append({"kind": "ledger", "ref": "x"})
+        self.assertEqual(json.dumps(changes, sort_keys=True), before)
+
+
+class RulesTest(unittest.TestCase):
+    def test_the_rules_the_rebuild_checks_are_pinned_to_their_version(self) -> None:
+        """Every change records the rules version it was checked under, and the rebuild checks a
+        replica's past again under today's rules. A change to them (an op it applies, a field an
+        update must find as it left it) fails here: bump knowledge.KG_RULES_VERSION and record the
+        new digest under it, since it would rebuild old changes differently (docs/design/sync.md,
+        open questions)."""
+        self.assertEqual(KG_RULES_DIGESTS.get(knowledge.KG_RULES_VERSION), kg_rules_digest())
+
+
+# The digest of the rules the knowledge rebuild checks (kg_rules_digest; a digest, not a secret), by
+# knowledge.KG_RULES_VERSION.
+KG_RULES_DIGESTS = {
+    1: "12d1568e827bd857ecb4015621a2a7eb553b5e9a5bb2188fd027eedfc5b49184",  # pragma: allowlist secret
+}
+
+
+def kg_rules_digest() -> str:
+    """SHA-256 of the rebuild's rules: the ops it applies, the op it skips (a deletion's
+    placeholder), and the fields whose `prev` an update must match."""
+    table = {"applied": sorted(kc.APPLIED), "checked": list(kc.CHECKED), "skipped": [change_log.FORGOTTEN]}
+    return hashlib.sha256(change_log.canonical(table)).hexdigest()
+
+
+class RebuiltFilesTest(JournalTestCase):
+    """The files are the journal's rebuild after every command; a write cut short between the
+    journal and the files is repaired by the next write; a reader uses the rebuild and writes
+    nothing."""
+
+    def test_rebuild_reproduces_the_files_after_every_kg_command(self) -> None:
+        self.seed()
+        self.run_kg("add-entity", "person/lee", "--name", "Lee Example")
+        self.assert_the_journal_rebuilds_the_files()
+        steps: list[tuple[str, tuple[str, ...]]] = [
+            ("add-entity", ("add-entity", "repo/invoice-exporter", "--alias", "the exporter")),
+            ("propose", ("propose", "release", "has_step", "step/merge", "--source", "ledger:a")),
+            (
+                "propose a person fact",
+                ("propose", "person/dana", "reviews", "exporter", "--source", "ledger:a"),
+            ),
+            ("propose again", ("propose", "exporter", "caveat", "--value", "slow", "--source", "ledger:a")),
+            ("observe", ("propose", "exporter", "caveat", "--value", "slow", "--source", "pr:b")),
+            (
+                "propose lee",
+                ("propose", "person/lee", "timezone", "--value", "Europe/Lisbon", "--source", "ledger:a"),
+            ),
+            (
+                "propose staging",
+                ("propose", "staging 2", "caveat", "--value", "shared", "--source", "ledger:a"),
+            ),
+        ]
+        for name, argv in steps:
+            self.run_kg(*argv)
+            with self.subTest(command=name):
+                self.assert_the_journal_rebuilds_the_files()
+        later: list[tuple[str, Any]] = [
+            ("confirm", lambda: self.run_kg("confirm", self.fact_id("process/release", "has_step"))),
+            ("reject", lambda: self.run_kg("reject", self.fact_id("repo/invoice-exporter", "caveat"))),
+            (
+                "supersede",
+                lambda: self.run_kg("supersede", self.fact_id("process/release", "has_step"), "--close"),
+            ),
+            ("forget", lambda: self.run_kg("forget", "person/dana")),
+            ("expire", lambda: self.run_kg("expire")),
+        ]
+        for name, step in later:
+            if name == "expire":
+                self.later(km.RETENTION_DAYS + 1)
+            step()
+            with self.subTest(command=name):
+                self.assert_the_journal_rebuilds_the_files()
+        rebuilt = kc.rebuild(self.journal().changes())
+        self.assertNotIn("dana", json.dumps([rebuilt.entities, rebuilt.records]).lower())  # placeholders
+        self.assertNotIn("lisbon", json.dumps(rebuilt.records).lower())  # past retention
+        self.assertIn("expired", {r.get("event") for r in rebuilt.records})
+
+    def test_a_crash_before_the_files_is_repaired(self) -> None:
+        """A transaction in the journal that never reached the files: a reader sees it without
+        writing anything; the next write has it once and saves the files whole."""
+        self.seed()
+        self.run_kg("propose", "release", "has_step", "step/merge", "--source", "ledger:a")
+        fact_id = self.fact_id("process/release", "has_step")
+        self.commit_by_hand(kc.record_edit(decided(fact_id, "confirmed", "confirmed"), self.kb().facts))
+        files = self.saved_files()
+        said = io.StringIO()
+        with contextlib.redirect_stderr(said):
+            self.assertEqual(self.fact(fact_id)["status"], km.CONFIRMED)
+            self.assertIn(fact_id, self.run_kg("facts", "release"))
+        self.assertEqual(said.getvalue(), "")
+        self.assertEqual(self.saved_files(), files)  # a reader never writes
+        self.assertEqual(self.validate()[1], 1)  # the journal is ahead of the files
+        self.run_kg("add-entity", "repo/other")
+        self.assertEqual([r.get("event") for r in self.records()].count("confirmed"), 1)
+        self.assertIn("repo/other", self.file_entities())
+        self.assert_the_journal_rebuilds_the_files()
+        self.assertEqual(self.validate(), ("knowledge base is valid", 0))
+
+    def test_a_write_that_changes_nothing_still_saves_the_files_it_found_behind(self) -> None:
+        self.seed()
+        self.run_kg("propose", "release", "has_step", "step/merge", "--source", "ledger:a")
+        fact_id = self.fact_id("process/release", "has_step")
+        self.commit_by_hand(kc.record_edit(decided(fact_id, "confirmed", "confirmed"), self.kb().facts))
+        self.run_kg("add-entity", "process/release")  # unchanged
+        self.assert_the_journal_rebuilds_the_files()
+
+    def test_a_write_whose_rebuild_has_conflicts_says_so_once(self) -> None:
+        """A change the rebuild keeps but cannot apply, and an update whose fact never came: a write
+        that rebuilds says how many, and where to see them, once on stderr; a reader stays quiet."""
+        self.seed()
+        self.run_kg("propose", "release", "has_step", "step/merge", "--source", "ledger:a")
+        fact_id = self.fact_id("process/release", "has_step")
+        self.run_kg("confirm", fact_id)
+        facts = self.kb().facts
+        self.commit_by_hand(
+            kc.record_edit(decided(fact_id, "rejected", "rejected"), facts),  # from proposed: crossed
+            kc.record_edit(decided("f-zzzzzz", "rejected", "rejected"), facts),  # no such fact
+        )
+        said = io.StringIO()
+        with contextlib.redirect_stderr(said):
+            self.run_kg("stats")
+            self.assertEqual(said.getvalue(), "")
+            self.run_kg("add-entity", "repo/other")
+        self.assertEqual(said.getvalue().count("\n"), 1, said.getvalue())
+        self.assertIn("1 conflict", said.getvalue())
+        self.assertIn("1 update", said.getvalue())
+        self.assertIn("bosun kg validate", said.getvalue())
+        self.assertEqual(self.fact(fact_id)["status"], km.CONFIRMED)
+        output, code = self.validate("--json")
+        self.assertEqual(code, 1)
+        found = json.loads(output)
+        self.assertEqual(
+            sorted((f["kind"], f["severity"], f["item"]) for f in found),
+            [("conflict", "warning", fact_id), ("pending", "warning", "f-zzzzzz")],
+        )
+
+    def test_a_reader_of_a_damaged_journal_warns_once_and_reads_the_files(self) -> None:
+        self.seed()
+        path = self.root / "journal" / f"{self.replica()}.jsonl"
+        path.write_bytes(path.read_bytes() + b"nonsense\n")
+        files = self.saved_files()
+        said = io.StringIO()
+        with contextlib.redirect_stderr(said):
+            self.assertIn("6 entities", self.run_kg("stats"))
+        self.assertEqual(said.getvalue().count("\n"), 1, said.getvalue())
+        self.assertIn("damaged", said.getvalue())
+        self.assertEqual(self.saved_files(), files)
+
+
+class OutsideEditTest(JournalTestCase):
+    """The knowledge files changed outside the journal: by hand, a git checkout or revert in the
+    knowledge folder, or a bosun that does not journal (it leaves view.json as it was). The next
+    write puts what it can in the journal ("adopt") and goes on from the journal's rebuild."""
+
+    def edit_entity(self, entity_id: str, **fields: Any) -> None:
+        path = self.root / "entities.jsonl"
+        entities = [{**e, **fields} if e["id"] == entity_id else e for e in store.read_jsonl(path)]
+        path.write_text(store.jsonl(entities))
+
+    def test_a_hand_edit_is_adopted_by_the_next_write(self) -> None:
+        self.seed()
+        self.edit_entity("repo/invoice-exporter", summary="exports invoices nightly")
+        said = io.StringIO()
+        with contextlib.redirect_stderr(said):
+            self.run_kg("add-entity", "repo/other")
+        self.assertEqual(said.getvalue().count("\n"), 1, said.getvalue())
+        self.assertIn("adopted 1 change", said.getvalue())
+        adopted = [(c["op"], c["target"]) for c in self.journal().changes() if c["cmd"] == knowledge.ADOPT]
+        self.assertEqual(adopted, [("entity.put", "repo/invoice-exporter")])
+        self.assertEqual(self.file_entities()["repo/invoice-exporter"]["summary"], "exports invoices nightly")
+        self.assertEqual(self.validate(), ("knowledge base is valid", 0))
+        self.assert_the_journal_rebuilds_the_files()
+
+    def test_an_old_bosuns_write_is_adopted(self) -> None:
+        """What an older bosun's confirm does: append a record (with no prev) to the fact log, and
+        leave the journal and view.json as they were."""
+        self.seed()
+        self.run_kg("propose", "release", "has_step", "step/merge", "--source", "ledger:a")
+        fact_id = self.fact_id("process/release", "has_step")
+        record = decided(fact_id, "confirmed", "confirmed")
+        del record["prev"]
+        store.append_records(self.root / "facts.jsonl", [record])
+        with contextlib.redirect_stderr(io.StringIO()):
+            self.run_kg("add-entity", "repo/other")
+        adopted = [(c["op"], c["target"]) for c in self.journal().changes() if c["cmd"] == knowledge.ADOPT]
+        self.assertEqual(adopted, [("fact.update", fact_id)])
+        self.assertEqual(self.fact(fact_id)["status"], km.CONFIRMED)
+        self.assertEqual(self.validate(), ("knowledge base is valid", 0))
+        self.assert_the_journal_rebuilds_the_files()
+
+    def test_an_unchanged_file_adopts_nothing(self) -> None:
+        self.seed()
+        path = self.root / "entities.jsonl"
+        path.write_text("".join(json.dumps(e, indent=None) + "\n" for e in reversed(store.read_jsonl(path))))
+        said = io.StringIO()
+        with contextlib.redirect_stderr(said):
+            self.run_kg("add-entity", "repo/other")
+        self.assertEqual(said.getvalue(), "")
+        self.assertNotIn(knowledge.ADOPT, {c["cmd"] for c in self.journal().changes()})
+        self.assert_the_journal_rebuilds_the_files()
+
+    def test_an_edit_adopted_by_a_write_cut_short_is_adopted_once(self) -> None:
+        self.seed()
+        self.edit_entity("repo/invoice-exporter", summary="exports invoices nightly")
+        with (
+            mock.patch.object(knowledge, "write_files", side_effect=OSError("power cut")),
+            self.assertRaises(OSError),
+            contextlib.redirect_stderr(io.StringIO()),
+        ):
+            self.run_kg("add-entity", "repo/other")
+        said = io.StringIO()
+        with contextlib.redirect_stderr(said):
+            self.run_kg("add-entity", "repo/third")
+        self.assertEqual(said.getvalue(), "")
+        adopted = [c["target"] for c in self.journal().changes() if c["cmd"] == knowledge.ADOPT]
+        self.assertEqual(adopted, ["repo/invoice-exporter"])
+        self.assertEqual(
+            sorted(e for e in self.file_entities() if e.startswith("repo/")),
+            ["repo/invoice-exporter", "repo/other", "repo/third"],
+        )
+        self.assert_the_journal_rebuilds_the_files()
+
+    def test_a_write_cut_short_after_the_files_is_no_outside_edit(self) -> None:
+        """The files are written before view.json: cut between the two, they are already the
+        journal's rebuild, so nothing is adopted (it would hold the write's records twice)."""
+        self.seed()
+        self.run_kg("propose", "release", "has_step", "step/merge", "--source", "ledger:a")
+        fact_id = self.fact_id("process/release", "has_step")
+        with (
+            mock.patch.object(knowledge, "write_view", side_effect=OSError("power cut")),
+            self.assertRaises(OSError),
+        ):
+            self.run_kg("confirm", fact_id)
+        self.assertEqual([f["kind"] for f in json.loads(self.validate("--json")[0])], ["position"])
+        said = io.StringIO()
+        with contextlib.redirect_stderr(said):
+            self.run_kg("add-entity", "repo/other")
+        self.assertEqual(said.getvalue(), "")
+        self.assertNotIn(knowledge.ADOPT, {c["cmd"] for c in self.journal().changes()})
+        self.assertEqual([r.get("event") for r in self.records()].count("confirmed"), 1)
+        self.assert_the_journal_rebuilds_the_files()
+
+    def test_validate_says_an_outside_edit_once_not_per_entity(self) -> None:
+        self.seed()
+        self.edit_entity("repo/invoice-exporter", summary="exports invoices nightly")
+        self.edit_entity("step/merge", name="Merge to trunk")
+        output, code = self.validate("--json")
+        self.assertEqual(code, 1)
+        self.assertEqual([(f["kind"], f["severity"]) for f in json.loads(output)], [("edited", "warning")])
+        self.assertIn("the next write adopts it", self.validate()[0])
+
+    def test_what_a_float_written_by_hand_holds_is_taken_in(self) -> None:
+        self.seed()
+        self.run_kg("propose", "release", "has_step", "step/merge", "--order", "2", "--source", "ledger:a")
+        path = self.root / "facts.jsonl"
+        path.write_text(path.read_text().replace('"order": 2', '"order": 2.5'))
+        said = io.StringIO()
+        with contextlib.redirect_stderr(said):
+            self.run_kg("add-entity", "repo/other")
+        self.assertIn("a float (2.5)", said.getvalue())
+        self.assertEqual(self.validate(), ("knowledge base is valid", 0))
+        self.assert_the_journal_rebuilds_the_files()
+
+
+class OutsideEditHistoryTest(JournalTestCase):
+    git = True
+
+    def setUp(self) -> None:
+        if shutil.which("git") is None:
+            self.skipTest("git is not installed")
+        super().setUp()
+
+    def test_a_record_removed_by_hand_comes_back_and_the_history_keeps_the_edit(self) -> None:
+        """What the journal cannot hold (the fact log only grows): the record is back, the write
+        says so once, and the knowledge folder's git history holds the files as they were edited."""
+        self.seed()
+        self.run_kg("propose", "release", "has_step", "step/merge", "--source", "ledger:a")
+        fact_id = self.fact_id("process/release", "has_step")
+        self.run_kg("confirm", fact_id)
+        path = self.root / "facts.jsonl"
+        edited = "".join(line + "\n" for line in self.log_lines()[:-1])  # the confirmation removed
+        path.write_text(edited)
+        said = io.StringIO()
+        with contextlib.redirect_stderr(said):
+            self.run_kg("add-entity", "repo/other")
+        self.assertEqual(said.getvalue().count("\n"), 1, said.getvalue())
+        self.assertIn("only grows", said.getvalue())
+        self.assertIn("git history", said.getvalue())
+        self.assertEqual(self.fact(fact_id)["status"], km.CONFIRMED)
+        commits = store.git(self.root, "log", "--format=%H").stdout.split()
+        shown = [store.git(self.root, "show", f"{commit}:facts.jsonl").stdout for commit in commits]
+        self.assertIn(edited, shown)
+        self.assertEqual(self.validate(), ("knowledge base is valid", 0))
+        self.assert_the_journal_rebuilds_the_files()
+
+
+class ValidateTest(JournalTestCase):
+    """`kg validate`: the files as saved against the journal's rebuild. Exit 1 on anything that is
+    not a note; --json carries each finding's severity and its line, as the ledger's does."""
+
+    def test_a_clean_knowledge_base_is_valid(self) -> None:
+        self.seed()
+        self.run_kg("propose", "person/dana", "reviews", "exporter", "--source", "ledger:a")
+        self.assertEqual(self.validate(), ("knowledge base is valid", 0))
+        self.assertEqual(self.validate("--json"), ("[]", 0))
+
+    def test_no_knowledge_base_is_valid_and_validate_makes_none(self) -> None:
+        self.assertEqual(self.validate(), ("knowledge base is valid", 0))
+        self.assertFalse(self.root.exists())
+
+    def test_a_knowledge_base_from_before_the_journal_is_a_note(self) -> None:
+        self.write_legacy([legacy_entity("repo/invoice-exporter", "invoice exporter")], [])
+        self.assertEqual(self.validate(), ("no journal yet; the next write starts it", 0))
+        output, code = self.validate("--json")
+        self.assertEqual(
+            ([(f["kind"], f["severity"]) for f in json.loads(output)], code), ([("note", "note")], 0)
+        )
+
+    def test_a_damaged_journal_is_an_error(self) -> None:
+        self.seed()
+        path = self.root / "journal" / f"{self.replica()}.jsonl"
+        path.write_bytes(path.read_bytes() + b"nonsense\n")
+        output, code = self.validate("--json")
+        self.assertEqual(code, 1)
+        self.assertEqual([(f["kind"], f["severity"]) for f in json.loads(output)], [("journal", "error")])
+        self.assertIn("damaged", self.validate()[0])
+
+    def test_a_journal_behind_view_json_is_an_error(self) -> None:
+        self.seed()
+        view = self.view()
+        view["journal"][self.replica()] += 5
+        (self.root / "view.json").write_text(json.dumps(view))
+        output, code = self.validate("--json")
+        found = json.loads(output)
+        self.assertEqual(([(f["kind"], f["severity"]) for f in found], code), ([("position", "error")], 1))
+        self.assertIn("behind view.json", found[0]["detail"])
+
+    def test_a_rebuild_that_differs_from_the_files_is_an_error_naming_the_entity(self) -> None:
+        """A change edited in place in the journal (the files and their digest untouched)."""
+        self.seed()
+        path = self.root / "journal" / f"{self.replica()}.jsonl"
+        path.write_text(path.read_text().replace('"name":"Merge to main"', '"name":"Merge to trunk"'))
+        output, code = self.validate("--json")
+        found = json.loads(output)
+        self.assertEqual(code, 1)
+        self.assertEqual(
+            [(f["kind"], f["severity"], f["item"]) for f in found], [("differs", "error", "step/merge")]
+        )
+        self.assertEqual(found[0]["path"], "name")
+
+    def test_json_carries_each_findings_line_as_the_text_says_it(self) -> None:
+        self.seed()
+        self.run_kg("propose", "release", "has_step", "step/merge", "--source", "ledger:a")
+        fact_id = self.fact_id("process/release", "has_step")
+        self.run_kg("confirm", fact_id)
+        self.commit_by_hand(kc.record_edit(decided(fact_id, "rejected", "rejected"), self.kb().facts))
+        text, _ = self.validate()
+        found = json.loads(self.validate("--json")[0])
+        self.assertEqual([f["line"] for f in found], text.splitlines())
+        self.assertEqual([f["kind"] for f in found], ["conflict", "position"])
 
 
 class CreationOrderTest(unittest.TestCase):

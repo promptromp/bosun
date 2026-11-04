@@ -7,7 +7,8 @@ changed); lib/knowledge.py loads and saves a KB under the store's lock, so a dry
 operation whose KB is never saved. A new fact's id is minted (`f-` and six characters, from
 KB.mint: the write's journal transaction), so two Macs never make the same one; ids from before
 (`f12`) stay. Every update record says what it replaced (`prev`), so that a rebuild can tell when
-two updates crossed.
+two updates crossed. The fact log folds in the order its records come (`Fold`): an update that
+comes before its fact's add, as one from another Mac can, waits for it.
 """
 
 from __future__ import annotations
@@ -123,6 +124,9 @@ class KB:
     auto_confirm: bool = True  # kg import without --auto-confirm: everything waits for review
     restart_history: bool = False
     mint: Callable[[], str] = no_mint  # six characters for a new fact id, from the write's journal
+    # The entities and records are the journal's rebuild, which the files were behind (a write cut
+    # short, a change made outside the journal): a write saves them whole.
+    rebuilt: bool = False
 
     def add_record(self, record: Record) -> None:
         self.records.append(record)
@@ -137,6 +141,7 @@ class KB:
             or self.entities_changed
             or self.identifiers_changed
             or self.rewrite
+            or self.rebuilt
         )
 
 
@@ -163,11 +168,49 @@ def fold(facts: dict[str, Record], record: Record) -> None:
     )
 
 
+def admit_all(_fact: Record, _update: Record) -> str:
+    return ""
+
+
+@dataclass
+class Fold:
+    """The fact log folded in the order its records come. An update for a fact not seen yet waits
+    (another Mac's update can come before the add it follows) and is applied when that fact's add
+    comes; one whose add never comes stays waiting (a fact deleted on request, or not here yet).
+    <admits> says why an update cannot apply to the fact as it then is ("" when it can): the
+    rebuild's check (knowledge_changes); a refused update is not applied."""
+
+    admits: Callable[[Record, Record], str] = admit_all
+    facts: dict[str, Record] = field(default_factory=dict)
+    waiting: dict[str, list[Record]] = field(default_factory=dict)
+    refused: list[tuple[Record, str]] = field(default_factory=list)
+
+    def take(self, record: Record) -> None:
+        fact_id = record_fact_id(record)
+        if record.get("op") == "add":
+            fold(self.facts, record)
+            for update in self.waiting.pop(fact_id, []):
+                self.update(fact_id, update)
+        elif fact_id in self.facts:
+            self.update(fact_id, record)
+        else:
+            self.waiting.setdefault(fact_id, []).append(record)
+
+    def update(self, fact_id: str, record: Record) -> None:
+        why = self.admits(self.facts[fact_id], record)
+        if why:
+            self.refused.append((record, why))
+        else:
+            fold(self.facts, record)
+
+
 def fold_all(records: list[Record]) -> dict[str, Record]:
-    facts: dict[str, Record] = {}
+    """The facts the fact log makes, its records taken in the order given (Fold): an update that
+    comes before its fact's add follows it."""
+    folding = Fold()
     for record in records:
-        fold(facts, record)
-    return facts
+        folding.take(record)
+    return folding.facts
 
 
 def record_fact_id(record: Record) -> str:

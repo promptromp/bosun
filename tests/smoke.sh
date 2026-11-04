@@ -653,6 +653,12 @@ printf '{"type":"user","timestamp":"%s","origin":{"kind":"human"},"message":{"ro
 check "my own words confirm a fact when the quote is in the transcript" contains "$(kg propose repo/pdf-renderer status --value archived --from-user --quote 'the pdf renderer repo is archived' --transcript "$transcript")" "confirmed (your own words"
 check "... and not when it is not" contains "$(kg propose repo/pdf-renderer caveat --value slow --from-user --quote 'it is slow' --transcript "$transcript")" "stays proposed"
 check "lint runs over it" kg lint
+check "kg validate: the files are the journal's rebuild" test "$(kg validate)" = "knowledge base is valid"
+jq -c 'if .id == "repo/invoice-exporter" then .summary = "exports invoices nightly" else . end' "$KG_DIR/entities.jsonl" >"$WORK/kg-edited.jsonl"
+mv "$WORK/kg-edited.jsonl" "$KG_DIR/entities.jsonl"
+check "... and says a hand edit is not in the journal yet, as one finding" bash -c '[ "$(jq -r "[.[].kind] | join(\" \")" <<<"$1")" = edited ]' _ "$(kg validate --json)"
+check "the next write adopts the hand edit" contains "$(kg add-entity repo/pdf-renderer 2>&1)" "adopted 1 change(s) into the journal (transaction 'adopt')"
+check "... and kg validate is clean again, the edit kept" bash -c '[ "$(BOSUN_CONFIG_DIR="$2" "$1" kg validate)" = "knowledge base is valid" ] && grep -q "exports invoices nightly" "$3"' _ "$BOSUN" "$WORK/kg-config" "$KG_DIR/entities.jsonl"
 check "forget --dry-run says what it would delete" contains "$(kg forget person/lee --dry-run)" "would delete the person, 3 facts"
 check "... and deletes nothing" grep -q person/lee "$KG_DIR/entities.jsonl"
 check "kg usage errors exit 2" bash -c '
@@ -1975,6 +1981,23 @@ if [ "$(bash -c 'source "$1/lib/common.sh"; command -v launchctl; command -v pms
   echo 'nonsense' >>"$dstate/journal/ledger/$(jq -r .replica "$dstate/replica.json").jsonl"
   doctor_said="$(BOSUN_STATE_DIR="$dstate" "$BOSUN" doctor 2>&1)"
   check "a damaged journal fails doctor" contains "$doctor_said" "FAIL  the ledger's journal refuses writes or a rebuild would lose data"
+  check "... saying what validate found" contains "$doctor_said" "journal: journal: the journal is damaged: "
+  # The knowledge base against its journal, in a copy of the config with the suite's knowledge base:
+  # an edit by hand warns and adds no failure; a damaged journal fails.
+  dconfig="$WORK/doctor-config"
+  cp -R "$BOSUN_CONFIG_DIR" "$dconfig"
+  cp -R "$KG_DIR" "$dconfig/knowledge"
+  clean="$(BOSUN_CONFIG_DIR="$dconfig" "$BOSUN" doctor 2>&1)"
+  check "doctor checks the knowledge base against its journal" contains "$clean" "ok    the knowledge base and its journal: knowledge base is valid"
+  jq -c 'if .id == "step/merge" then .name = "Merge to trunk" else . end' "$dconfig/knowledge/entities.jsonl" >"$WORK/kg-edited.jsonl"
+  mv "$WORK/kg-edited.jsonl" "$dconfig/knowledge/entities.jsonl"
+  doctor_said="$(BOSUN_CONFIG_DIR="$dconfig" "$BOSUN" doctor 2>&1)"
+  check "doctor warns about an edit by hand the next write adopts" contains "$doctor_said" "warn  the knowledge base breaks a rule, or holds what the next write takes care of (every finding: bosun kg validate)"
+  check "... naming it" contains "$doctor_said" "edited: journal journal: the knowledge files were changed outside their journal"
+  check "... and that is no failure" test "$(failed_checks "$doctor_said")" = "$(failed_checks "$clean")"
+  echo 'nonsense' >>"$dconfig/knowledge/journal/$(jq -r .replica "$BOSUN_STATE_DIR/replica.json").jsonl"
+  doctor_said="$(BOSUN_CONFIG_DIR="$dconfig" "$BOSUN" doctor 2>&1)"
+  check "a damaged knowledge journal fails doctor" contains "$doctor_said" "FAIL  the knowledge base's journal refuses writes or a rebuild would lose data"
   check "... saying what validate found" contains "$doctor_said" "journal: journal: the journal is damaged: "
   BOSUN_CONFIG_DIR="$INSTALL_CFG" "$ROOT/install.sh" >/dev/null 2>&1
   check "... and removes it again once disabled" test ! -e "$LEARN_PLIST"
