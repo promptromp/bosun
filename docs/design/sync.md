@@ -127,6 +127,32 @@ knowledge loader now goes through `knowledge.load` (identifiers left out), as bu
    plain free text after an acknowledgment in config (set once, forgotten, permanent), and
    allowing plain text only in the team scope (stricter than needed). (Decided by the user.)
 
+## Decisions (2026-11-04)
+
+- **Going back to an older release is not supported yet.** Nobody else runs bosun, so a release
+  need not read what a later one wrote: the one before the knowledge journal stops on a minted
+  fact id. From here on, a change to a data format ships with its migration, and `bosun update`
+  (being designed) backs the data up before it changes anything, so that going back means
+  installing the older release and restoring that backup. (Decided by the user.)
+- **A fact I stated travels in phase 1, without my words.** Phase 1 splits my quote and my
+  session off such a fact: they stay `local`, and the fact is classed like any other (`private`
+  unless it names a person). A record that closes a product fact in favour of one I stated
+  (`superseded_by`) then names a fact the other Mac has. (Decided by the user.)
+- **Learning's evidence quotes stay `sealed`.** A `learn:` proposal's quotes of my prompts and
+  transcripts travel only to my own scope and only encrypted; with encryption off they stay on
+  the Mac. They do not get a field of their own. (Decided by the user.)
+- **The rebuild trusts what was checked when it was written.** The bosun that wrote a change
+  checked it, under its own rules, against the state it applied to. So the rebuild checks a change
+  again only where it lands on changes its writer had not seen (two Macs writing at once), and
+  there under today's rules: one they refuse is kept as a conflict, never lost. No release keeps
+  older rule tables; a rules change that alters what earlier changes mean (a state renamed or
+  dropped) ships with a migration, as a format change does. Telling the two cases apart needs
+  what each transaction was built on, which phase 1 adds anyway ([Open
+  questions](#open-questions)); until then all of one Mac's changes land where they were written.
+  Rejected: checking each change under the rules version it was recorded with, which keeps every
+  old rule table in every release and replays a rule's bugs after they are fixed. (Proposed; the
+  user asked for a recommendation.)
+
 ## Shape
 
 ### Changes, not files
@@ -270,8 +296,8 @@ on different schemas could no longer merge:
   them, since the newer bosun already checked them under rules this one lacks (usually a new state
   or relation), and `bosun doctor` says to update. Once updated, it rebuilds the same as the
   others. Today the rebuild re-checks every change under the current rules, which holds only while
-  no rules change removes a move: before one does, or phase 1, the rebuild must check each change
-  under the rules version it was recorded with ([Open questions](#open-questions)).
+  no rules change removes a move: before one does, or phase 1, it re-checks only a change that
+  lands on changes its writer had not seen ([Decisions (2026-11-04)](#decisions-2026-11-04)).
 
 **Existing data** enters the journal once, as a snapshot change per item, entity and fact, when a
 Mac first turns on the journal (phase 0). History before that is whatever the files still hold:
@@ -520,14 +546,15 @@ Where we expect to iterate:
   and stay `sealed`, so phase 1's gate strips them when encryption is off.
 - **Learn's evidence quotes.** A `learn:` proposal's action holds evidence quoted from my prompts
   or a session transcript, and so do its `proposed` and `proposal-*` history entries; they are
-  `sealed`. Moving the quote out of the action into a field of its own would let it stay `local`;
-  that needs my decision before phase 1.
+  `sealed`, and stay so ([Decisions (2026-11-04)](#decisions-2026-11-04)): with encryption off,
+  they stay on the Mac.
 - **A fact I stated stays on the Mac.** A knowledge fact whose sources hold my words (a `user`
   source carries my quote and the session it was checked in) or name one of my sessions (a
   `transcript` source) is `local`, every record of it and whole, from the write that brings my
   words on, as the ledger keeps a link whose `via` quotes me. So another Mac misses facts that
-  are often the most valuable, such as a rule I stated about a process. Splitting the quote and
-  the session off, so that the fact itself can travel, is for phase 1.
+  are often the most valuable, such as a rule I stated about a process. Phase 1 splits the quote
+  and the session off, so that the fact itself travels and my words stay here ([Decisions
+  (2026-11-04)](#decisions-2026-11-04)).
 - **Nothing removes a history entry.** The ledger's journal keeps every change, so a note typed by
   mistake (a colleague's name, something private) stays in the journal even after a hand edit
   (which the next write undoes) or a `prune` (which deletes the item, not its earlier changes).
@@ -874,9 +901,10 @@ from the journal, never what travels.
   must find as it left them (`knowledge_changes.APPLIED`, `SKIPPED` and `CHECKED`). A change to
   them that removes a move, tightens a link rule or checks another field
   would turn a Mac's own valid history into conflicts, and a write that rebuilds after a crash
-  would revert those states. Before the next such change, or phase 1, the rebuild must check each
-  change under the rules version it was recorded with (or not re-check a replica's own contiguous
-  sequence, which was checked against the very state it applies to). A unit test per store pins a
+  would revert those states. Before the next such change, or phase 1, the rebuild must re-check
+  only a change that lands on changes its writer had not seen ([Decisions
+  (2026-11-04)](#decisions-2026-11-04)), and a change that alters what earlier changes mean needs
+  its migration. A unit test per store pins a
   digest of its rule tables to its version (`RULES_VERSION` in `lib/ledger.py`, `KG_RULES_VERSION`
   in `lib/knowledge.py`), so such a change cannot land unnoticed.
 - **One replica id on two Macs:** a Migration Assistant or Time Machine restore onto a second Mac
@@ -885,7 +913,8 @@ from the journal, never what travels.
 - **Causal context for a change after a delete:** an item that another Mac deleted and this one
   makes again stays deleted, because the rebuild cannot yet tell a Mac that saw the delete from one
   that made the item at the same time. Phase 1 adds what each transaction was built on (the
-  journal position it read) so that one that saw the delete can start the item again.
+  journal position it read) so that one that saw the delete can start the item again, and so that
+  the rebuild knows which changes landed on changes their writer had not seen.
 - **Joining with an existing ledger:** a Mac that already has its own ledger cannot join in phase 1.
   If someone needs it: rename its clashing generated ids, and decide how two histories of the same
   `review:` item combine (one wins, both kept, or a conflict per item).
@@ -895,12 +924,6 @@ from the journal, never what travels.
   whether the Secure Enclave plugin (Touch ID on decrypt) suits an unattended check-in loop.
 - **The knowledge base's local git history:** keep it, or retire it once the journal holds the
   history.
-- **A private record can name a local fact (phase 1).** When a fact I stated replaces a product
-  fact (`kg supersede --from-user`, or my confirmed value closing another for a single-valued
-  predicate), the record that closes the product fact is `private` and carries `superseded_by:
-  <the local fact's id>` and the note `superseded by <id>`. Another Mac would see a replacement it
-  cannot find. Phase 1 decides whether such a close record follows the fact that replaces it, or
-  whether the quote is split off so that the stated fact can travel.
 - **A note on a product fact is `private` (phase 1).** A knowledge record's free-text `note`
   (`--note`, or an import's `note`) on a fact that names no person and holds none of my words is
   classed with the rest of the record, `private`, while the ledger keeps its notes `sealed`.

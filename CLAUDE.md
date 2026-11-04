@@ -178,7 +178,9 @@ of truth, so don't copy rules into this file.
 - **A ledger kind:** an entry in `KINDS` (`lib/ledger.py`) and the list of item ids in `docs/orchestrator.md`.
   A change to `KINDS`' transitions trips the rules-digest test (`TestRules` in
   `tests/unit/test_ledger_changes.py`): bump `RULES_VERSION` (`lib/ledger.py`) and record the new
-  digest under it (the open question on rules versions in `docs/design/sync.md`).
+  digest under it. One that removes a move or renames a state first needs the rebuild decision of
+  2026-11-04 in `docs/design/sync.md` built (the rebuild re-checking only a change that lands on
+  ones its writer had not seen), and a migration for earlier changes.
 - **A link relation:** a row in `RELATIONS` (`lib/lineage.py`, with its inverse and the family in
   which cycles are refused), the lineage section of `docs/orchestrator.md` and the relation list in `policy.md`.
   It trips the same rules-digest test: bump `RULES_VERSION` and record the new digest.
