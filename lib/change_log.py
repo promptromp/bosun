@@ -32,6 +32,9 @@ Place = tuple[str, ...]  # where a value sits in a record: its keys, and list po
 
 # Beside a store's journal position in its files: the key of the digest of what they hold.
 DIGEST = "digest"
+# The command of the transaction that puts in a store's journal what was changed in its files
+# outside it (by hand, an older bosun), in both stores.
+ADOPT = "adopt"
 # A change deleted on request (`kg forget`, the retention purge) leaves a placeholder in its file:
 # its place in the sequence, its clock and its transaction's counts, and nothing of what it held,
 # so the sequence and the ids minted from it never go back and its transaction stays whole.
@@ -244,11 +247,11 @@ def taken_in(value: Any, source: str, place_of: Callable[[Place], str]) -> tuple
 # ---- what a store's files record of the journal -------------------------------------------------
 
 
-def stamped(position: Mapping[str, int], held: str) -> dict[str, Any]:
+def stamped(position: Mapping[str, int], held: str | Mapping[str, str]) -> dict[str, Any]:
     """What a store's files record of the journal: the position they reflect (the highest seq of
-    each journal file) and the digest of what they hold (DIGEST), so that a change made to them
-    outside the journal shows."""
-    return {**position, DIGEST: held}
+    each journal file) and the digest of what they hold (DIGEST: one, or one per file for a store
+    of several files), so that a change made to them outside the journal shows."""
+    return {**position, DIGEST: held if isinstance(held, str) else dict(held)}
 
 
 def changed_outside(stamp: Any, held: Callable[[], str]) -> bool:
@@ -279,6 +282,19 @@ def behind(journal_has: Mapping[str, int], file_has: Mapping[str, int], file_nam
         for stem, seq in sorted(file_has.items())
         if journal_has.get(stem, 0) < seq
     ]
+
+
+def reader_rebuilds(
+    position: Mapping[str, int], saved: Mapping[str, int], file_name: str
+) -> tuple[bool, str]:
+    """Whether a reader takes the journal's rebuild (at <position>) instead of the files (at
+    <saved>, which <file_name> records): only where the files are behind the journal, a write cut
+    short between the two. A journal behind the files is never rebuilt from: the second value
+    says how (for a warning); "" otherwise."""
+    if not position or saved == position:
+        return False, ""
+    gaps = behind(position, saved, file_name)
+    return (False, "; ".join(gaps)) if gaps else (True, "")
 
 
 def clock_text(ms: int, counter: int) -> str:

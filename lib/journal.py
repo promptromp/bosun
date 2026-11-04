@@ -379,6 +379,12 @@ class Journal:
             found += lines
         return in_order(found)
 
+    def as_saved(self, at: Mapping[str, int], since: str) -> list[Change]:
+        """What a store's files held when a write last saved them, as changes: those up to the
+        position the files record (<at>), with every change of a transaction named <since> after
+        it (what a write cut short already adopted from them: change_log.ADOPT), in the one order."""
+        return in_order([*self.changes(at), *(c for c in self.changes() if c.get("cmd") == since)])
+
     def _last_changes(self) -> dict[str, Change]:
         """The last change of each file that belongs to a whole transaction."""
         ends = self._ends()

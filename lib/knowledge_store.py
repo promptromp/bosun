@@ -6,7 +6,7 @@ optional local git history (one commit per change).
   Mac's changes in <replica>.jsonl, those naming a person or holding my words in local.jsonl,
   which never leaves it. A write appends there first, then writes the files below. What a write
   cut short left there (<file>.torn-<time>) is ignored by the history.
-- view.json: the journal position the files reflect and a digest of what they hold.
+- view.json: the journal position the files reflect and a digest of what each data file holds.
 - entities.jsonl: one entity per line, rewritten atomically when an entity changes.
 - facts.jsonl: append-only log of fact records ({"op": "add"} and {"op": "update"}); only a
   delete on request (`kg forget`) or the retention purge rewrites it.

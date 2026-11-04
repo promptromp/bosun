@@ -172,6 +172,16 @@ class TestStamp(unittest.TestCase):
         )
         self.assertEqual(change_log.behind({"local": 4}, {"local": 3}, "view.json"), [])
 
+    def test_a_reader_rebuilds_only_where_the_files_are_behind_the_journal(self) -> None:
+        reader = change_log.reader_rebuilds
+        self.assertEqual(reader({}, {"local": 3}, "view.json"), (False, ""))  # no journal yet
+        self.assertEqual(reader({"local": 3}, {"local": 3}, "view.json"), (False, ""))
+        self.assertEqual(reader({"local": 4}, {"local": 3}, "view.json"), (True, ""))  # a write cut short
+        self.assertEqual(
+            reader({"local": 2}, {"local": 3}, "view.json"),
+            (False, "local.jsonl ends at seq 2, view.json reflects seq 3"),  # never rebuilt from
+        )
+
 
 class TestBoundary(unittest.TestCase):
     @staticmethod

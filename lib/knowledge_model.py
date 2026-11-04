@@ -127,6 +127,9 @@ class KB:
     # The entities and records are the journal's rebuild, which the files were behind (a write cut
     # short, a change made outside the journal): a write saves them whole.
     rebuilt: bool = False
+    # batch.json's numbers may point at facts that are gone (a rebuild took facts out): a write
+    # deletes it, as a deletion's does.
+    stale_batch: bool = False
 
     def add_record(self, record: Record) -> None:
         self.records.append(record)
@@ -791,6 +794,16 @@ def expire(kb: KB) -> tuple[list[str], int]:
 
 
 # ---- identifiers (restricted) -------------------------------------------------------------------
+
+
+def drop_orphan_identifiers(kb: KB) -> None:
+    """Identifiers of an entity the knowledge base no longer holds go (a person deleted on request
+    by a write cut short before it rewrote identifiers.jsonl, finished from the journal, which does
+    not hold identifiers): they are restricted, and name nobody here."""
+    kept = [i for i in kb.identifiers if i.get("entity") in kb.entities]
+    if len(kept) != len(kb.identifiers):
+        kb.identifiers = kept
+        kb.identifiers_changed = True
 
 
 def add_identifier(kb: KB, ref: str, system: str, value: str) -> str:

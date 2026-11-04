@@ -137,7 +137,7 @@ class JournalTestCase(KnowledgeTestCase):
         self.assertEqual((rebuilt.conflicts, rebuilt.pending), ([], []))
         self.assertEqual(
             self.view()["journal"],
-            {**self.journal().position(), "digest": kc.state_hash(rebuilt.entities, rebuilt.records)},
+            {**self.journal().position(), "digest": kc.file_digests(rebuilt.entities, rebuilt.records)},
         )
 
     def validate(self, *args: str) -> tuple[str, int]:
@@ -151,6 +151,24 @@ class JournalTestCase(KnowledgeTestCase):
 
     def saved_files(self) -> dict[str, bytes]:
         return {p.name: p.read_bytes() for p in self.root.iterdir() if p.is_file()}
+
+    def cut(self, name: str, writer: str = "write_atomically") -> Any:
+        """A write cut short (the power went) as it writes the file <name> with store.<writer>."""
+        real = getattr(store, writer)
+
+        def cut_at(path: Path, *args: Any, **kwargs: Any) -> Any:
+            if Path(path).name == name:
+                raise OSError("power cut")
+            return real(path, *args, **kwargs)
+
+        return mock.patch.object(store, writer, side_effect=cut_at)
+
+    def text(self, name: str) -> str:
+        path = self.root / name
+        return path.read_text().lower() if path.exists() else ""
+
+    def kinds(self) -> list[str]:
+        return [f["kind"] for f in json.loads(self.validate("--json")[0])]
 
 
 class MintedIdsTest(JournalTestCase):
@@ -362,10 +380,11 @@ class ForgetTest(JournalTestCase):
         position = self.journal().position()
         self.run_kg("forget", "person/dana")
         self.assertEqual(private_file.read_bytes(), private)  # the private journal is never rewritten
-        after = self.local()
+        after, marker = self.local()[:-1], self.local()[-1]
         self.assertNotIn("dana", (self.root / "journal" / "local.jsonl").read_text().lower())
         self.assertEqual([c["seq"] for c in after], [c["seq"] for c in local])  # the sequence never goes back
-        self.assertEqual(self.journal().position(), position)
+        self.assertEqual((marker["op"], marker["target"], marker["body"]), (kc.DELETION, "", {}))
+        self.assertEqual(self.journal().position(), {**position, "local": position["local"] + 1})
         for change in after:
             self.assertEqual(change["op"], "forgotten")
             self.assertNotIn("target", change)
@@ -518,7 +537,7 @@ class GenesisTest(JournalTestCase):
 
     def test_an_empty_knowledge_base_has_no_genesis(self) -> None:
         self.run_kg("add-entity", "repo/invoice-exporter")
-        self.assertEqual({c["cmd"] for c in self.journal().changes()}, {""})
+        self.assertEqual({c.get("cmd") for c in self.journal().changes()}, {""})
 
     def test_a_journal_behind_the_files_is_refused(self) -> None:
         self.seed()  # person/dana's changes in local.jsonl, the rest in the replica's file
@@ -543,14 +562,13 @@ class GenesisTest(JournalTestCase):
 
 
 class BoundaryTest(JournalTestCase):
-    def test_view_records_the_position_and_a_digest_of_the_files(self) -> None:
+    def test_view_records_the_position_and_a_digest_of_each_file(self) -> None:
         self.seed()
         self.run_kg("propose", "person/dana", "reviews", "exporter", "--source", "ledger:a")
         kb = self.kb()
-        self.assertEqual(
-            self.view(),
-            {"journal": {**self.journal().position(), "digest": kc.state_hash(kb.entities, kb.records)}},
-        )
+        digests = kc.file_digests(kb.entities, kb.records)
+        self.assertEqual(self.view(), {"journal": {**self.journal().position(), "digest": digests}})
+        self.assertEqual(sorted(digests), ["entities.jsonl", "facts.jsonl"])
         self.assertEqual(set(self.journal().position()), {self.replica(), "local"})
 
     def test_a_value_the_journal_cannot_hold_is_refused_and_nothing_is_written(self) -> None:
@@ -588,14 +606,23 @@ class BoundaryTest(JournalTestCase):
             self.run_kg("add-entity", "repo/invoice-exporter")
         self.assertFalse(self.root.exists())
 
-    def test_the_digest_leaves_out_nothing_the_files_hold(self) -> None:
+    def test_each_files_digest_leaves_out_nothing_it_holds(self) -> None:
         entities = {"repo/x": legacy_entity("repo/x", "x")}
         records = [legacy_fact("f1", "repo/x", "caveat", value="slow")]
-        held = kc.state_hash(entities, records)
-        self.assertRegex(held, "^[0-9a-f]{64}$")
-        self.assertNotEqual(held, kc.state_hash(entities, [*records, records[0]]))
-        self.assertNotEqual(held, kc.state_hash({}, records))
-        self.assertEqual(held, kc.state_hash(dict(reversed(list(entities.items()))), records))
+        held = kc.file_digests(entities, records)
+        self.assertTrue(all(re.fullmatch("[0-9a-f]{64}", digest) for digest in held.values()))
+        more = kc.file_digests(entities, [*records, records[0]])
+        self.assertEqual(
+            (more["entities.jsonl"], more["facts.jsonl"] != held["facts.jsonl"]),
+            (held["entities.jsonl"], True),
+        )
+        fewer = kc.file_digests({}, records)
+        self.assertEqual(
+            (fewer["facts.jsonl"], fewer["entities.jsonl"] != held["entities.jsonl"]),
+            (held["facts.jsonl"], True),
+        )
+        self.assertEqual(held, kc.file_digests(dict(reversed(list(entities.items()))), records))
+        self.assertEqual(kc.held_digests(entities, [{**records[0], "x": 1.5}])["facts.jsonl"], None)
 
 
 REPLICA_A, REPLICA_B = "a" * 32, "b" * 32
@@ -730,12 +757,18 @@ class RebuildTest(unittest.TestCase):
         newer = envelope("fact.merge", FACT, {}, 2)
         broken = envelope(kc.ENTITY_PUT, "repo/x", {}, 3)
         broken["body"] = "not an entity"
-        rebuilt = kc.rebuild([self.add(), newer, broken])
+        odd = legacy_fact("f-bbbbbb", "repo/x", "caveat", value="slow", sources=["ledger:a"])
+        unsourced = envelope(kc.FACT_ADD, "f-bbbbbb", odd, 4)  # a source that is not an object
+        rebuilt = kc.rebuild([self.add(), newer, broken, unsourced])
         self.assertEqual(
             [(c.change, c.kind) for c in rebuilt.conflicts],
-            [(newer["id"], "unknown"), (broken["id"], "unknown")],
+            [(newer["id"], "unknown"), (broken["id"], "unknown"), (unsourced["id"], "unknown")],
         )
         self.assertEqual(rebuilt.records, [self.add()["body"]])
+
+    def test_the_rules_are_the_table_the_rebuild_dispatches_on(self) -> None:
+        self.assertEqual(kc.APPLIED, tuple(sorted(kc._APPLIERS)))
+        self.assertEqual(set(kc.SKIPPED), {change_log.FORGOTTEN, kc.DELETION})
 
     def test_rebuilding_does_not_change_the_changes(self) -> None:
         changes = self.changes()
@@ -758,14 +791,15 @@ class RulesTest(unittest.TestCase):
 # The digest of the rules the knowledge rebuild checks (kg_rules_digest; a digest, not a secret), by
 # knowledge.KG_RULES_VERSION.
 KG_RULES_DIGESTS = {
-    1: "12d1568e827bd857ecb4015621a2a7eb553b5e9a5bb2188fd027eedfc5b49184",  # pragma: allowlist secret
+    1: "6184556462867f9fdf7397dc8823e1093b29ec23d645dd75032afe83150f3901",  # pragma: allowlist secret
 }
 
 
 def kg_rules_digest() -> str:
-    """SHA-256 of the rebuild's rules: the ops it applies, the op it skips (a deletion's
-    placeholder), and the fields whose `prev` an update must match."""
-    table = {"applied": sorted(kc.APPLIED), "checked": list(kc.CHECKED), "skipped": [change_log.FORGOTTEN]}
+    """SHA-256 of the rebuild's rules: the ops it applies (the keys of the table its dispatch
+    reads), the ops it skips (a deletion's placeholder and its marker), and the fields whose
+    `prev` an update must match."""
+    table = {"applied": sorted(kc.APPLIED), "checked": list(kc.CHECKED), "skipped": sorted(kc.SKIPPED)}
     return hashlib.sha256(change_log.canonical(table)).hexdigest()
 
 
@@ -842,6 +876,85 @@ class RebuiltFilesTest(JournalTestCase):
         self.assert_the_journal_rebuilds_the_files()
         self.assertEqual(self.validate(), ("knowledge base is valid", 0))
 
+    def test_a_forget_cut_between_the_two_files_is_finished_not_adopted(self) -> None:
+        """Cut after entities.jsonl and before facts.jsonl: each file is either as view.json
+        recorded it or as the journal's rebuild makes it, so this is a write cut short, never an
+        edit to adopt (which would bring the person's facts back into local.jsonl)."""
+        self.seed()
+        self.run_kg("propose", "person/dana", "timezone", "--value", "Europe/Lisbon", "--source", "ledger:a")
+        self.run_kg("identify", "person/dana", "slack", "U00000000DA")
+        with self.cut("facts.jsonl"), self.assertRaises(OSError):
+            self.run_kg("forget", "person/dana")
+        self.assertNotIn("person/dana", self.file_entities())
+        self.assertIn("lisbon", self.text("facts.jsonl"))
+        self.assertEqual(self.kinds(), ["position"])  # no edit to adopt: the next write finishes it
+        said = io.StringIO()
+        with contextlib.redirect_stderr(said):
+            self.run_kg("add-entity", "repo/other")
+        self.assertEqual(said.getvalue(), "")
+        for name in ("facts.jsonl", "entities.jsonl", "identifiers.jsonl", "journal/local.jsonl"):
+            self.assertNotIn("lisbon", self.text(name), name)
+            self.assertNotIn("dana", self.text(name), name)
+        self.assertNotIn("u00000000da", self.text("identifiers.jsonl"))
+        self.assertNotIn(change_log.ADOPT, {c.get("cmd") for c in self.journal().changes()})
+        self.assertEqual(self.validate(), ("knowledge base is valid", 0))
+        self.assert_the_journal_rebuilds_the_files()
+        with self.assertRaisesRegex(KnowledgeError, "deleted on request"):
+            self.run_kg("add-entity", "person/dana")
+
+    def test_a_write_cut_between_the_two_files_is_finished_not_adopted(self) -> None:
+        self.seed()
+        made = self.tmp / "more.jsonl"
+        made.write_text(
+            json.dumps({"type": "entity", "id": "repo/pdf-renderer", "name": "pdf renderer"})
+            + "\n"
+            + json.dumps(
+                {
+                    "type": "fact",
+                    "subject": "repo/pdf-renderer",
+                    "predicate": "caveat",
+                    "value": "fonts",
+                    "source": "ledger:a",
+                }
+            )
+            + "\n"
+        )
+        with self.cut("facts.jsonl", "append_records"), self.assertRaises(OSError):
+            self.run_kg("import", str(made), "--apply")
+        self.assertIn("repo/pdf-renderer", self.file_entities())
+        self.assertEqual(self.kinds(), ["position"])
+        said = io.StringIO()
+        with contextlib.redirect_stderr(said):
+            self.run_kg("add-entity", "repo/other")
+        self.assertEqual(said.getvalue(), "")
+        self.assertNotIn(change_log.ADOPT, {c.get("cmd") for c in self.journal().changes()})
+        self.assertEqual([r["fact"]["value"] for r in self.records() if r["op"] == "add"], ["fonts"])
+        self.assert_the_journal_rebuilds_the_files()
+
+    def test_a_forget_cut_before_the_files_is_finished_by_the_next_write(self) -> None:
+        """A deletion commits a local marker with no target (the rebuild skips it), so the journal's
+        position moves and the next write rebuilds the files without the person; their identifiers
+        go with them."""
+        self.seed()
+        self.run_kg("propose", "person/dana", "timezone", "--value", "Europe/Lisbon", "--source", "ledger:a")
+        self.run_kg("identify", "person/dana", "slack", "U00000000DA")
+        before = self.journal().position()
+        with (
+            mock.patch.object(knowledge, "write_files", side_effect=OSError("power cut")),
+            self.assertRaises(OSError),
+        ):
+            self.run_kg("forget", "person/dana")
+        self.assertEqual(self.journal().position()["local"], before["local"] + 1)
+        marker = self.local()[-1]
+        self.assertEqual((marker["op"], marker["target"], marker["body"]), (kc.DELETION, "", {}))
+        self.assertNotIn("person/dana", self.kb().entities)  # a reader sees the rebuild
+        self.run_kg("add-entity", "repo/other")
+        self.assertNotIn("person/dana", self.file_entities())
+        self.assertNotIn("lisbon", self.text("facts.jsonl"))
+        self.assertNotIn("u00000000da", self.text("identifiers.jsonl"))
+        self.assertEqual(self.validate(), ("knowledge base is valid", 0))
+        self.assert_the_journal_rebuilds_the_files()
+
     def test_a_write_that_changes_nothing_still_saves_the_files_it_found_behind(self) -> None:
         self.seed()
         self.run_kg("propose", "release", "has_step", "step/merge", "--source", "ledger:a")
@@ -911,7 +1024,7 @@ class OutsideEditTest(JournalTestCase):
             self.run_kg("add-entity", "repo/other")
         self.assertEqual(said.getvalue().count("\n"), 1, said.getvalue())
         self.assertIn("adopted 1 change", said.getvalue())
-        adopted = [(c["op"], c["target"]) for c in self.journal().changes() if c["cmd"] == knowledge.ADOPT]
+        adopted = [(c["op"], c["target"]) for c in self.journal().changes() if c["cmd"] == change_log.ADOPT]
         self.assertEqual(adopted, [("entity.put", "repo/invoice-exporter")])
         self.assertEqual(self.file_entities()["repo/invoice-exporter"]["summary"], "exports invoices nightly")
         self.assertEqual(self.validate(), ("knowledge base is valid", 0))
@@ -928,7 +1041,7 @@ class OutsideEditTest(JournalTestCase):
         store.append_records(self.root / "facts.jsonl", [record])
         with contextlib.redirect_stderr(io.StringIO()):
             self.run_kg("add-entity", "repo/other")
-        adopted = [(c["op"], c["target"]) for c in self.journal().changes() if c["cmd"] == knowledge.ADOPT]
+        adopted = [(c["op"], c["target"]) for c in self.journal().changes() if c["cmd"] == change_log.ADOPT]
         self.assertEqual(adopted, [("fact.update", fact_id)])
         self.assertEqual(self.fact(fact_id)["status"], km.CONFIRMED)
         self.assertEqual(self.validate(), ("knowledge base is valid", 0))
@@ -942,7 +1055,7 @@ class OutsideEditTest(JournalTestCase):
         with contextlib.redirect_stderr(said):
             self.run_kg("add-entity", "repo/other")
         self.assertEqual(said.getvalue(), "")
-        self.assertNotIn(knowledge.ADOPT, {c["cmd"] for c in self.journal().changes()})
+        self.assertNotIn(change_log.ADOPT, {c.get("cmd") for c in self.journal().changes()})
         self.assert_the_journal_rebuilds_the_files()
 
     def test_an_edit_adopted_by_a_write_cut_short_is_adopted_once(self) -> None:
@@ -958,7 +1071,7 @@ class OutsideEditTest(JournalTestCase):
         with contextlib.redirect_stderr(said):
             self.run_kg("add-entity", "repo/third")
         self.assertEqual(said.getvalue(), "")
-        adopted = [c["target"] for c in self.journal().changes() if c["cmd"] == knowledge.ADOPT]
+        adopted = [c["target"] for c in self.journal().changes() if c["cmd"] == change_log.ADOPT]
         self.assertEqual(adopted, ["repo/invoice-exporter"])
         self.assertEqual(
             sorted(e for e in self.file_entities() if e.startswith("repo/")),
@@ -982,7 +1095,7 @@ class OutsideEditTest(JournalTestCase):
         with contextlib.redirect_stderr(said):
             self.run_kg("add-entity", "repo/other")
         self.assertEqual(said.getvalue(), "")
-        self.assertNotIn(knowledge.ADOPT, {c["cmd"] for c in self.journal().changes()})
+        self.assertNotIn(change_log.ADOPT, {c.get("cmd") for c in self.journal().changes()})
         self.assertEqual([r.get("event") for r in self.records()].count("confirmed"), 1)
         self.assert_the_journal_rebuilds_the_files()
 
@@ -1036,6 +1149,98 @@ class OutsideEditHistoryTest(JournalTestCase):
         commits = store.git(self.root, "log", "--format=%H").stdout.split()
         shown = [store.git(self.root, "show", f"{commit}:facts.jsonl").stdout for commit in commits]
         self.assertIn(edited, shown)
+        self.assertEqual(self.validate(), ("knowledge base is valid", 0))
+        self.assert_the_journal_rebuilds_the_files()
+
+    def history(self) -> str:
+        return store.git(self.root, "log", "-p", "--all").stdout.lower()
+
+    def old_bosun_forgets(self, person: str) -> None:
+        """What a bosun from before the journal does for kg forget: the person's entity, facts and
+        identifiers out of the files, a plain sha256 record in forgotten.jsonl, the git history
+        restarted with every file in the folder; the journal and view.json as they were."""
+        facts = store.read_jsonl(self.root / "facts.jsonl")
+        gone = {i for i, f in km.fold_all(facts).items() if person in (f["subject"], f.get("object"))}
+        (self.root / "facts.jsonl").write_text(
+            store.jsonl([r for r in facts if km.record_fact_id(r) not in gone])
+        )
+        entities = [e for e in store.read_jsonl(self.root / "entities.jsonl") if e["id"] != person]
+        (self.root / "entities.jsonl").write_text(store.jsonl(entities))
+        identifiers = [i for i in store.read_jsonl(self.root / "identifiers.jsonl") if i["entity"] != person]
+        (self.root / "identifiers.jsonl").write_text(store.jsonl(identifiers))
+        forgotten = {
+            "at": LEGACY_AT,
+            "hash": km.plain_hash_id(person),
+            "reason": "request",
+            "facts": len(gone),
+        }
+        store.append_records(self.root / "forgotten.jsonl", [forgotten])
+        store.restart_history(self.root, "kg forget: a person deleted on request")
+
+    def write_saying(self) -> str:
+        said = io.StringIO()
+        with contextlib.redirect_stderr(said):
+            self.run_kg("add-entity", "repo/other")
+        return said.getvalue()
+
+    def test_a_forget_made_outside_the_journal_is_applied_to_it(self) -> None:
+        """An older bosun's kg forget: the next write forgets the person in the journal too (R12's
+        placeholders) and restarts the history, which held local.jsonl with them, never bringing
+        them back."""
+        self.seed()
+        self.run_kg("propose", "person/dana", "timezone", "--value", "Europe/Lisbon", "--source", "ledger:a")
+        self.run_kg("identify", "person/dana", "slack", "U00000000DA")
+        self.run_kg("propose", "release", "has_step", "step/merge", "--source", "ledger:a")
+        self.old_bosun_forgets("person/dana")
+        self.assertIn("lisbon", self.history())  # the old bosun's history holds the journal
+        said = self.write_saying()
+        self.assertIn("deleted on request", said)
+        self.assertNotIn("dana", said.lower())
+        for name in ("journal/local.jsonl", "facts.jsonl", "entities.jsonl"):
+            self.assertNotIn("lisbon", self.text(name), name)
+            self.assertNotIn("dana", self.text(name), name)
+        self.assertNotIn("lisbon", self.history())
+        self.assertNotIn("dana", self.history())
+        self.assertIn("process/release", self.file_entities())
+        self.assertEqual(self.validate(), ("knowledge base is valid", 0))
+        self.assert_the_journal_rebuilds_the_files()
+
+    def test_a_person_deleted_on_request_is_not_taken_back_from_restored_files(self) -> None:
+        """entities.jsonl and facts.jsonl restored from a backup made before kg forget: the person
+        forgotten.jsonl names is not adopted, the write says so without naming them, and they go
+        from the files; no history ever holds them."""
+        self.seed()
+        self.run_kg("propose", "person/dana", "timezone", "--value", "Europe/Lisbon", "--source", "ledger:a")
+        backup = {name: (self.root / name).read_bytes() for name in ("entities.jsonl", "facts.jsonl")}
+        self.run_kg("forget", "person/dana")
+        for name, data in backup.items():
+            (self.root / name).write_bytes(data)
+        said = self.write_saying()
+        self.assertIn("deleted on request", said)
+        self.assertNotIn("dana", said.lower())
+        self.assertNotIn("adopted", said)
+        for name in ("journal/local.jsonl", "facts.jsonl", "entities.jsonl"):
+            self.assertNotIn("lisbon", self.text(name), name)
+        self.assertNotIn("lisbon", self.history())
+        self.assertEqual(self.validate(), ("knowledge base is valid", 0))
+        self.assert_the_journal_rebuilds_the_files()
+
+    def test_a_person_added_again_on_request_is_kept(self) -> None:
+        """A deliberate re-add (--allow-forgotten) is in the journal, so an edit made outside it
+        afterwards leaves them alone."""
+        self.seed()
+        self.run_kg("forget", "person/dana")
+        self.run_kg("add-entity", "person/dana", "--name", "Dana Example", "--allow-forgotten")
+        path = self.root / "entities.jsonl"
+        edited = [
+            {**e, "summary": "exports"} if e["id"] == "repo/invoice-exporter" else e
+            for e in store.read_jsonl(path)
+        ]
+        path.write_text(store.jsonl(edited))
+        said = self.write_saying()
+        self.assertNotIn("deleted on request", said)
+        self.assertIn("adopted 1 change", said)
+        self.assertIn("person/dana", self.file_entities())
         self.assertEqual(self.validate(), ("knowledge base is valid", 0))
         self.assert_the_journal_rebuilds_the_files()
 

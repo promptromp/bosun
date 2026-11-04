@@ -131,6 +131,19 @@ class JournalFindingsTest(unittest.TestCase):
 
 
 class DifferenceTest(unittest.TestCase):
+    def test_each_key_that_differs_is_a_finding_naming_it_and_the_path(self) -> None:
+        rebuilt = {"repo/x": {"name": "x"}, "repo/y": {"name": "y"}}
+        files = {"repo/x": {"name": "the x"}, "repo/z": {"name": "z"}}
+        found = validation.differing(rebuilt, files, "entities.jsonl")
+        self.assertEqual(
+            [(f["kind"], f["item"], f.get("path", ""), f["detail"]) for f in found],
+            [
+                ("differs", "repo/x", "name", "the rebuild and entities.jsonl differ (first at name)"),
+                ("differs", "repo/y", "", "the rebuild and entities.jsonl differ (in one of them only)"),
+                ("differs", "repo/z", "", "the rebuild and entities.jsonl differ (in one of them only)"),
+            ],
+        )
+
     def test_the_first_path_where_two_values_differ(self) -> None:
         first = validation.first_difference
         self.assertIsNone(first({"a": [1, {"b": 2}]}, {"a": [1, {"b": 2}]}))

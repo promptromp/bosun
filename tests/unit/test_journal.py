@@ -571,5 +571,18 @@ class CommitEdits(JournalTestCase):
         self.assertEqual(self.journal().position(), {R1: 1, "local": 1})
 
 
+class AsSaved(JournalTestCase):
+    def test_what_the_files_held_when_saved_and_what_was_adopted_since(self) -> None:
+        """A store's files saved at a position, then a write cut short after adopting an outside
+        edit: the changes up to that position and the adopted ones, in the one order."""
+        journal = self.journal()
+        journal.begin("one").commit_edits([cl.Edit("put", "a", {}, False)])
+        saved = journal.position()
+        journal.begin(cl.ADOPT).commit_edits([cl.Edit("put", "b", {}, False)])
+        journal.begin("two").commit_edits([cl.Edit("put", "c", {}, False)])
+        self.assertEqual([c["target"] for c in journal.as_saved(saved, cl.ADOPT)], ["a", "b"])
+        self.assertEqual([c["target"] for c in journal.as_saved({}, cl.ADOPT)], ["b"])
+
+
 if __name__ == "__main__":
     unittest.main()

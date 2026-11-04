@@ -103,8 +103,9 @@ check_knowledge() {
     ok "knowledge: none yet (bosun kg add-entity or kg import starts $BOSUN_CONFIG_DIR/knowledge)"
     return
   fi
-  if ! stats="$("$BOSUN" kg stats 2>&1)"; then
-    fail "knowledge: $stats"
+  # Its stderr stays out of the ok line: a reader's warning about the journal is check_journal's.
+  if ! stats="$("$BOSUN" kg stats 2>/dev/null)"; then
+    fail "knowledge: $("$BOSUN" kg stats 2>&1 | tail -n 1)"
     return
   fi
   ok "knowledge: $stats"

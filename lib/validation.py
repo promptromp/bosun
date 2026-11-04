@@ -175,3 +175,15 @@ def list_difference(left: list[Any], right: list[Any]) -> list[str] | None:
 def where_first(path: list[str]) -> str:
     """How a difference reads: where it is first, or that it is in one of them only."""
     return f"first at {'/'.join(path)}" if path else "in one of them only"
+
+
+def differing(rebuilt: Mapping[str, Any], saved: Mapping[str, Any], file_name: str) -> list[Finding]:
+    """Each key (an item, an entity, a fact) whose value differs between the journal's rebuild and
+    the file that holds it (<file_name>), by the first path that differs."""
+    found = []
+    for key in sorted(set(rebuilt) | set(saved)):
+        path = first_difference(rebuilt.get(key), saved.get(key))
+        if path is not None:
+            detail = f"the rebuild and {file_name} differ ({where_first(path)})"
+            found.append(finding("differs", detail, key, "/".join(path)))
+    return found

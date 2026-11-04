@@ -264,11 +264,13 @@ import validation
 import workstreams
 import ws_summary
 from change_log import (
+    ADOPT,
     ChangeLogError,
     Edit,
     behind,
     changed_outside,
     position_in,
+    reader_rebuilds,
     refusal,
     stamped,
     unencodable,
@@ -277,7 +279,7 @@ from journal import REPLICA_FILE, Journal, JournalError, Transaction, flush_to_d
 from ledger_changes import MAX_HISTORY as MAX_HISTORY, trim_history as trim_history  # noqa: PLC0414 re-exported
 from lineage import Index, LineageError, Link
 from tickets import TicketError
-from validation import Finding, finding, first_difference, where_first
+from validation import Finding, differing, finding, first_difference
 from workstreams import WorkstreamError
 
 
@@ -345,13 +347,12 @@ Ledger = dict[str, Any]
 # The journal every write goes through (lib/journal.py, docs/design/sync.md): the ledger's stream;
 # the version of the rules its changes are checked against when rebuilt (RULES: KINDS' transitions
 # and lineage's link rules), bumped by hand when a change to them would rebuild old changes
-# differently (a test pins their digest to it); the commands of the transactions that put a ledger
-# from before journals in it, and a change made to ledger.json outside the journal; and the key,
-# in ledger.json's journal key, of the digest of what the file holds.
+# differently (a test pins their digest to it); and the command of the transaction that puts a
+# ledger from before journals in it (a change made to ledger.json outside the journal is
+# change_log.ADOPT, as in the knowledge base).
 LEDGER_STREAM = "ledger"
 RULES_VERSION = 1
 GENESIS = "genesis"
-ADOPT = "adopt"
 
 
 @dataclass(frozen=True)
@@ -899,16 +900,12 @@ def warn_reader(problem: str) -> None:
 
 def read_caught_up(ledger: Ledger, journal: Journal) -> Ledger:
     """ledger.json, or the journal's rebuild where the file is behind it (a write cut short between
-    the two). A journal behind the file is never rebuilt from."""
+    the two). A journal behind the file is never rebuilt from (change_log.reader_rebuilds)."""
     position = journal.position()
-    saved = saved_position(ledger)
-    if not position or saved == position:
-        return ledger
-    gaps = missing(position, saved)
+    rebuild, gaps = reader_rebuilds(position, saved_position(ledger), STORE.ledger_file.name)
     if gaps:
-        warn_reader(f"its journal in {STORE.journal_dir} is behind it ({'; '.join(gaps)})")
-        return ledger
-    return rebuilt(journal, position)
+        warn_reader(f"its journal in {STORE.journal_dir} is behind it ({gaps})")
+    return rebuilt(journal, position) if rebuild else ledger
 
 
 def for_reading() -> Ledger:
@@ -1003,8 +1000,7 @@ def edited_outside(ledger: Ledger) -> bool:
 def adopted_base(journal: Journal, file: Ledger) -> Ledger:
     """What ledger.json held when a write last saved it, as the journal has it: the rebuild at the
     file's position, with what was adopted from the file since (by a write cut short after it)."""
-    adopted = [change for change in journal.changes() if change.get("cmd") == ADOPT]
-    return ledger_changes.rebuild([*journal.changes(saved_position(file)), *adopted], RULES).ledger
+    return ledger_changes.rebuild(journal.as_saved(saved_position(file), ADOPT), RULES).ledger
 
 
 def adopt(journal: Journal, file: Ledger) -> None:
@@ -4341,22 +4337,12 @@ def compare_findings(rebuilt_ledger: Ledger, saved: Ledger) -> list[Finding]:
     for section in COMPARED:
         left, right = rebuilt_ledger.get(section, {}), saved.get(section, {})
         if section == "items":
-            found += item_differences(left, right)
+            found += differing(left, right, STORE.ledger_file.name)
             continue
         path = first_difference(left, right)
         if path is not None:
             detail = f"the rebuild and ledger.json differ in {section}"
             found.append(finding("differs", detail, "", "/".join([section, *path])))
-    return found
-
-
-def item_differences(left: lineage.Items, right: lineage.Items) -> list[Finding]:
-    found: list[Finding] = []
-    for item_id in sorted(set(left) | set(right)):
-        path = first_difference(left.get(item_id), right.get(item_id))
-        if path is not None:
-            detail = f"the rebuild and ledger.json differ ({where_first(path)})"
-            found.append(finding("differs", detail, item_id, "/".join(path)))
     return found
 
 
