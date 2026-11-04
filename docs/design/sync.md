@@ -2,7 +2,9 @@
 
 Status: accepted (2026-11-03). Phase 0 is built for the ledger: every ledger write goes through
 a journal of changes per Mac that `ledger.json` is the rebuild of, with hash-based ids, the class
-table and `bosun ledger validate --journal` (also in `bosun doctor`); its knowledge part is next.
+table and `bosun ledger validate --journal` (also in `bosun doctor`). For the knowledge base,
+every write goes through a journal of its own, with minted fact ids and updates that say what they
+replaced ([Knowledge changes](#knowledge-changes)); rebuilding the files from it is next.
 Planned in [docs/plans/sync-phase-0.md](../plans/sync-phase-0.md). Tracked in
 [ROADMAP.md](../../ROADMAP.md#6-sync-and-sharing).
 
@@ -314,9 +316,32 @@ The knowledge graph needs less:
 - Validity windows stay data, compared with "now" only when reading, so the rebuild depends only
   on the log.
 
-The local git history of `knowledge/` stays as it is for now. It is local, it never syncs, and
-`kg forget` can keep restarting it. Once the log exists it duplicates the log's history, so a later
-change may retire it ([Open questions](#open-questions)).
+Built so far: the journal sits in `knowledge/journal/`, under the knowledge base's own lock, and
+each write (`knowledge.opened`) is one transaction named by its command (`kg propose`, `kg batch
+apply`, `console review`). `lib/knowledge_changes.py` turns a write into its changes: each record
+it appended to the fact log, as it is (`fact.add`, `fact.update`), and each entity it made, changed
+or removed (`entity.put` with the whole entity, `entity.delete`). An update record says what the
+fields it sets held before (`prev`), so the rebuild can tell when two updates crossed (a confirm and
+a reject of the same proposal). A change that names a person (a person entity, every record of a
+fact whose subject or object is one) is `local`; the rest is `private`. A new fact's id is minted
+from the transaction (`f-` and six characters); facts from before keep theirs (`f12`), and a
+minted id that already names a fact is minted again. The journal is written first, then the files,
+then `view.json`: the position the files reflect and the digest of what they hold (the entities
+and the fact log), as `ledger.json`'s `journal` key does. A knowledge base from before the journal
+enters it as one transaction (`genesis`) holding every entity and record, with what the journal
+cannot hold converted once, as for the ledger.
+
+A delete on request (`kg forget`) and the retention purge rewrite only `local.jsonl`, where all
+that names a person is: each of its changes becomes a placeholder that keeps its envelope's place
+(`v`, `stream`, `replica`, `seq`, `hlc`, `tx`, `of`, `local`, `private_of`) with op `forgotten`, an id of its
+own and no target or body. So the local sequence and the ids minted from it never go back, and its
+transaction stays whole; the rebuild skips placeholders. The private journal is never rewritten:
+a deletion that would have to remove a change from it is refused.
+
+The local git history of `knowledge/` stays as it is for now, and holds the journal and `view.json`
+like the other files. It is local, it never syncs, and `kg forget` keeps restarting it, which also
+takes the person's changes out of earlier commits. Once the log exists it duplicates the log's
+history, so a later change may retire it ([Open questions](#open-questions)).
 
 ### Ids
 
@@ -747,6 +772,13 @@ from the journal, never what travels.
   whether the Secure Enclave plugin (Touch ID on decrypt) suits an unattended check-in loop.
 - **The knowledge base's local git history:** keep it, or retire it once the journal holds the
   history.
+- **A git checkout or revert in the knowledge folder moves the journal back:** the journal is in
+  that history, so a `git checkout` or `git revert` there takes it back with the files. The changes
+  made after that point are lost, and the local `seq` and the seeds of minted ids go back with it,
+  so a fact id could be minted again (one that names a fact still there is minted anew, but the id
+  of a fact deleted since can come back). In phase 0 nothing else holds those ids. Before phase 1
+  syncs facts, the journal needs a history that git cannot rewind, or a check that refuses a
+  journal that went back.
 - **When person facts become `sealed`:** after key epochs make deletion reach the remote.
 - **Several bosun versions in one team:** how long a replica keeps writing when a teammate runs a
   newer format.

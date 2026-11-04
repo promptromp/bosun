@@ -48,8 +48,11 @@ repository so every change has history.
   - `name`
   - `aliases`, split into strong (true synonyms) and weak (related terms), following SKOS
   - `summary` (never for a person)
-- `facts.jsonl`, append-only. Each fact has an id, a subject, a predicate, and either an object
-  (another entity) or a value. It also carries:
+- `facts.jsonl`, append-only: an `add` record per fact, then an `update` record per change, which
+  also says what the fields it sets held before (`prev`). Each fact has an id (`f-` and six
+  characters, minted from the journal so that two Macs never make the same one; `f12` for facts
+  from before), a subject, a predicate, and either an object (another entity) or a value. It also
+  carries:
   - `sources`: each a kind and a reference (see below)
   - `authority`: user said, stakeholder said, observed, or inferred
   - `observed_at`, `observations`
@@ -60,6 +63,12 @@ repository so every change has history.
   - `prevents_rework`: whether not knowing it caused rework
 - `identifiers.jsonl` (restricted, mode 0600): chat member ids, tracker account ids, code-host
   logins, needed for mentions and routing. Never shown in context packs.
+- `journal/`: every change to entities and facts, which each write appends to before it writes the
+  files above, one transaction per command ([Sync and sharing](sync.md#knowledge-changes)):
+  `<replica>.jsonl` for this Mac's changes, `local.jsonl` for those naming a person (a person
+  entity, a fact whose subject or object is one), which never leave this Mac. `view.json` records
+  the journal position the files reflect and a digest of what they hold. Both are in the local git
+  history like the other files.
 - Derived views (entity pages, indexes) are rebuilt from the log and never hand-edited.
 
 **Schema (generic, in the repo).** A closed set of types and predicates in
@@ -282,7 +291,10 @@ a stream of questions.
   `lib/knowledge_model.py` (the fact log folded into facts, resolution, every write operation and
   the auto-confirm rules; pure over a `KB` value, so a dry run is an operation never saved),
   `lib/knowledge_review.py` (batch, decisions, lint), `lib/knowledge_query.py` (lookup, facts,
-  search, neighbours, context packs), `lib/knowledge.py` + `libexec/bosun-kg` (the CLI).
+  search, neighbours, context packs), `lib/knowledge_changes.py` (a write's changes for the
+  journal, local where they name a person; a knowledge base from before as one genesis
+  transaction; the digest `view.json` records; pure), `lib/knowledge.py` + `libexec/bosun-kg`
+  (the CLI, and the write boundary: the journal first, then the files).
 - **Source kinds:** trusted `user` (counts only once the quote is verified), `ledger`, `report`,
   `memory` (a Claude Code memory note), `transcript` (a session on this machine), `profile` (a
   structured directory field); untrusted `slack`, `pr`, `ticket`, `doc`. "Two independent
@@ -304,7 +316,11 @@ a stream of questions.
   proposed.
 - **Deletion:** `kg forget` and the retention purge rewrite `facts.jsonl` without the facts, keep
   only a keyed hash of the id and the counts in `forgotten.jsonl`, and restart the git history, since
-  old commits would otherwise still hold the data. A forgotten id cannot be added again without
+  old commits would otherwise still hold the data. In the journal they rewrite only `local.jsonl`,
+  where everything naming a person is: each of its changes becomes a placeholder that keeps its
+  place (sequence number, clock, transaction) and nothing of what it held, so the sequence and the
+  ids minted from it never go back. The private journal is never rewritten, so a deletion that
+  would need it is refused. A forgotten id cannot be added again without
   `--allow-forgotten`. The hash is an HMAC-SHA256 under `secret.key` (made on the first write,
   mode 0600, ignored by the history, never leaves the Mac), so guessing `person/<name>` finds
   nobody; records from before the key (no `hash_kind`) stay plain sha256 and guessable, since

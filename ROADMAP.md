@@ -271,7 +271,9 @@ what mine has learned, and that see I am already on a review before starting the
 **Accepted (2026-11-03); phase 0 built for the ledger:** every ledger write appends its changes to
 a journal on this Mac first, and `ledger.json` is the rebuild of that journal, with ids two Macs
 never mint alike, one table that decides which fields may leave the Mac, and `bosun ledger
-validate --journal` (also run by `bosun doctor`). Next: the same for the knowledge base, then logs
+validate --journal` (also run by `bosun doctor`). Every knowledge base write now goes through a
+journal of its own too, with minted fact ids, what names a person kept in a local file, and `kg
+forget` leaving placeholders there. Next: rebuilding the knowledge base from it, then logs
 that travel, rebuilt the same way everywhere, with the rules a merge cannot keep shown as
 conflicts, through pluggable ports for storage, encryption and signing; the first store is a
 dedicated state repository on GitHub, encrypted with `age` by default. Personal data stays on the

@@ -163,7 +163,8 @@ State and logs go to `~/.local/state/bosun/`:
   changes, `local.jsonl` for what never leaves it, such as your own words, and
   `<file>.torn-<time>` for a transaction a write left unfinished, moved aside and kept
   ([Sync and sharing](design/sync.md))
-- `replica.json`: this Mac's id in the journal
+- `replica.json`: this Mac's id in the journals (the ledger's, and the knowledge base's in
+  `knowledge/journal/` of the config folder, see [Knowledge](knowledge.md#knowledge))
 - `logs/`: `morning-YYYY-MM-DD.log`, `checkin-YYYY-MM-DD.log`, `learn-YYYY-MM-DD.log`,
   `impact-YYYY-MM-DD.log`, `hook-YYYY-MM-DD.log` (the repo sessions' prompt hook), and what launchd
   captures from each job (`launchd.{out,err}`, `watchdog.launchd.{out,err}`, `learn.launchd.{out,err}`)

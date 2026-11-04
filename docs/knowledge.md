@@ -5,6 +5,9 @@ only), processes and the product, as atomic facts with sources, so a fact stated
 when the conversation ends (design: [docs/design/knowledge.md](design/knowledge.md)). It
 lives in `$BOSUN_CONFIG_DIR/knowledge/`, never in this repo, with its own git history (one
 commit per change; `BOSUN_KNOWLEDGE_GIT=0` turns it off, and it is skipped if git is missing).
+Every change goes first into a journal there, one transaction per command: `journal/<replica>.jsonl`
+for this Mac's changes and `journal/local.jsonl` for those naming a person, which never leave
+this Mac; `view.json` records how far the files reflect it ([Sync and sharing](design/sync.md)).
 
 ```sh
 bosun kg add-entity process/release --name "Release process" --alias releases
@@ -24,7 +27,9 @@ bosun kg context --for releases         # a small cited pack of confirmed facts
 - **Facts** use a closed set of predicates (`bosun kg schema`); a site adds its own in
   `knowledge/schema.json`. About a person only work facts are kept (role, team, title, timezone,
   stated working hours, preferred channels, what they review, own or approve, stated work
-  preferences); anything else is refused, as is anything inferred about a person.
+  preferences); anything else is refused, as is anything inferred about a person. A new fact's id
+  is `f-` and six characters (`f-3k9x2a`), minted from the journal so that two Macs never make the
+  same one; facts from before keep theirs (`f12`), and both work wherever a fact id is asked for.
 - **Confirmation without the spam:** a fact is confirmed at once when the quote of your words is
   in a prompt you typed in that session's transcript (tool results and pasted text never count),
   when two trusted sources of different kinds back a low-risk fact that names no person, or when a
@@ -40,7 +45,9 @@ bosun kg context --for releases         # a small cited pack of confirmed facts
 - **Maintenance:** `kg lint` reports contradictions, stale facts (`BOSUN_KNOWLEDGE_STALE_DAYS`),
   orphans, alias collisions and expired proposals; person facts not re-observed for 12 months
   are deleted by `kg expire`, and `kg forget person/<slug>` deletes a person on request (with the
-  git history, which restarts). What it keeps is a keyed hash of the id, under `secret.key` in the
+  git history, which restarts, and their changes in `journal/local.jsonl`, each left as a
+  placeholder that keeps its place in the sequence and nothing of what it held). What it keeps
+  is a keyed hash of the id, under `secret.key` in the
   knowledge folder (made on the first write, readable only by you, not in the history, never
   leaving this Mac). Once such records exist, `kg forget` and adding a person need that key; if
   it is missing the command refuses and names its path, so restore it from a backup. If it is
