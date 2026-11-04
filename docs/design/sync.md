@@ -356,21 +356,30 @@ checkout or revert of files in the knowledge folder, an older bosun); when each 
 other, a write was cut short somewhere between the journal and `view.json` (written last), and the
 rebuild finishes it, even at the same position. Adopting such files would hold that write's
 records twice, or bring back a person a `kg forget` cut short had already placeholdered. A deletion
-also commits a local `deletion` marker (no target, skipped by the rebuild), holding the write's
-`forgotten.jsonl` records (a keyed hash and counts, nothing of the person), so the position moves
-and a deletion cut short before the files is finished by the next write, which writes a record
-`forgotten.jsonl` lacks (only from a marker the files do not reflect yet, so moving
-`forgotten.jsonl` aside stays as chosen): a forget is whole through the journal. The
-identifiers and `forgotten.jsonl`, which the journal does not hold, are written before the data
-files, and a write that finishes a deletion drops the identifiers of entities gone. What an
+commits a local `deletion` marker (no target, skipped by the rebuild) with its transaction, before
+it rewrites what it removed into placeholders; the marker holds the write's `forgotten.jsonl`
+records (a keyed hash and counts, nothing of the person). So the position moves, and a deletion
+cut short anywhere is finished by the next write, which puts the placeholders in again for the
+marker's hashed ids. Who is forgotten is `forgotten.jsonl` together with the records every
+deletion marker carries, and a write first writes a marker's record that `forgotten.jsonl` lacks,
+before anything is taken in: a forget is whole through the journal, and the way out when the key
+is lost for good moves the journal folder aside with `forgotten.jsonl`. The identifiers and
+`forgotten.jsonl`, which the journal does not hold, are written before the data files, and a write
+that finishes a deletion drops the identifiers of entities gone. A history restart is a debt: a
+write that finishes a deletion cut short, applies one made outside the journal, or drops or
+refuses a person deletes the knowledge folder's `.git` once its files are final and before
+`view.json` (whatever `BOSUN_KNOWLEDGE_GIT` says), and its commit starts a new history, so that
+no cut leaves the person in it. What an
 outside change cannot express (a record removed: the fact log only grows) comes back; a record
 edited in place comes back beside its edited copy, which is adopted, so an edited `add` takes the
 fact over (as an edited history entry comes back in the ledger). That write says so in one line, and first commits the files as
 edited to the knowledge folder's git history, which keeps them (with the history off, nothing
-does). Adopt never brings in or keeps a person deleted on request: one an older bosun's `kg forget`
-took out of the files, whom `forgotten.jsonl` matches (a plain or a keyed hash), is forgotten in
-the journal too (the placeholders, a marker, and the git history started again, before anything
-else is committed to it), and one in files restored from before a forget, with no
+does). A write cut short and then a hand edit before the next write adopts that write's records a
+second time (a second `add` takes its fact over): accepted, as rare and visible. Adopt never brings
+in or keeps a person deleted on request: one gone from the files whom a forgotten record matches
+(a plain or a keyed hash: an older bosun's `kg forget`, or a hand removal) is forgotten in the
+journal too, as `kg forget` does it (its marker, then the placeholders, over the whole journal,
+and the history restart owed), and one in files restored from before a forget, with no
 `--allow-forgotten` add in the journal, is not adopted (one line, without naming them), the files
 as edited are not committed, and the rebuild drops them. While the key of the forgotten cannot be
 read (keyed records and no `secret.key`), the forgotten check cannot run, so adopt takes in no

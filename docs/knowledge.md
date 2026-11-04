@@ -21,12 +21,18 @@ comes back, since the fact log only grows: a record removed by hand comes back, 
 place comes back beside its edited copy, which is adopted too; an edited `add` record takes the
 fact over (its status is the edited record's again, and the updates before it no longer show).
 Close a fact with `kg supersede` instead. That write says so in one line, and the knowledge
-folder's git history keeps the files as they were edited (unless `BOSUN_KNOWLEDGE_GIT=0`). A person
-deleted on request is never taken back: one an older bosun's `kg forget` took out of the files is
-forgotten in the journal too (their changes become placeholders, and the git history starts again
-without them), and one found in files restored from before a `kg forget` is left out and goes from
-the files (the write says so without naming them; `kg add-entity <id> --allow-forgotten` adds them
-again if they asked). While `secret.key` is missing over keyed records, no person is taken in from
+folder's git history keeps the files as they were edited (unless `BOSUN_KNOWLEDGE_GIT=0`). If a
+write is cut short and the files are then edited by hand before the next write, that write's
+records are adopted a second time (a second `add` takes its fact over, as above). A person
+deleted on request is never taken back. Who is forgotten is `forgotten.jsonl` together with the
+records the journal's deletion markers carry, so a write first puts back a record that file lacks.
+One gone from the files whom a forgotten record matches (an older bosun's `kg forget`, or removed
+by hand) is forgotten in the journal too: their changes become placeholders. One found in files
+restored from before a `kg forget` is left out and goes from the files; the write says so without
+naming them, and `kg add-entity <id> --allow-forgotten` adds them again if they asked. Any write
+that drops or refuses a person, or finishes a `kg forget` cut short, deletes the git history before
+its last step, and its commit starts a new one without them; with `BOSUN_KNOWLEDGE_GIT=0`, a history
+kept before is deleted all the same. While `secret.key` is missing over keyed records, no person is taken in from
 changed files at all, as adding one is refused then; the write says why, and they go from the
 files, so restore those again once the key is back. A command that only reads shows restored
 files as they are until the next write, since reads never write; and person facts an older
@@ -90,8 +96,10 @@ bosun kg context --for releases         # a small cited pack of confirmed facts
   knowledge folder (made on the first write, readable only by you, not in the history, never
   leaving this Mac). Once such records exist, `kg forget` and adding a person need that key; if
   it is missing the command refuses and names its path, so restore it from a backup. If it is
-  gone for good, move `forgotten.jsonl` aside: the people in it can then be added again (your
-  choice, knowingly) and the next write makes a new key.
+  gone for good, move `forgotten.jsonl`, `knowledge/journal/` and the state folder's
+  `replica.json` aside, all together (the journal's deletion markers hold the same records, and
+  the next write starts a new journal from the files, as for a damaged one): the people in them
+  can then be added again (your choice, knowingly), and the next write makes a new key.
 - **Seeding:** `kg import <file>` reads entities and facts as JSON lines, records every fact as a
   proposal (`--auto-confirm` applies the rules above), is a dry run unless `--apply`, and says how
   many daily batches the review takes; `tools/survey_to_kg.py` converts a survey's markdown tables, with a mapping file kept
