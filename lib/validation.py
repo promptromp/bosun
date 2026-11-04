@@ -55,12 +55,14 @@ def finding(kind: str, detail: str, item: str = "", path: str = "") -> Finding:
 
 
 def finding_line(found: Mapping[str, str]) -> str:
-    """A finding as the text says it (and `--json` carries it, for bosun doctor)."""
+    """A finding as the text says it (and `--json` carries it, for bosun doctor): its kind, where
+    (the item, else the journal, then the path in it), and what. The journal is named once: as the
+    path of a finding about it, or as the kind of its damage."""
     if found["kind"] == "note":
         return found["detail"]
-    where = found.get("item") or "journal"
-    path = f" {found['path']}" if found.get("path") else ""
-    return f"{found['kind']}: {where}{path}: {found['detail']}"
+    places = (found.get("item") or ("" if found["kind"] == "journal" else "journal"), found.get("path", ""))
+    where = " ".join(dict.fromkeys(place for place in places if place))
+    return f"{found['kind']}: {f'{where}: ' if where else ''}{found['detail']}"
 
 
 def report(found: Sequence[Finding], as_json: bool, clean: str) -> tuple[str, int]:

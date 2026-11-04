@@ -1981,7 +1981,8 @@ if [ "$(bash -c 'source "$1/lib/common.sh"; command -v launchctl; command -v pms
   echo 'nonsense' >>"$dstate/journal/ledger/$(jq -r .replica "$dstate/replica.json").jsonl"
   doctor_said="$(BOSUN_STATE_DIR="$dstate" "$BOSUN" doctor 2>&1)"
   check "a damaged journal fails doctor" contains "$doctor_said" "FAIL  the ledger's journal refuses writes or a rebuild would lose data"
-  check "... saying what validate found" contains "$doctor_said" "journal: journal: the journal is damaged: "
+  check "... saying what validate found" contains "$doctor_said" "journal: the journal is damaged: "
+  check "... naming the journal once" not_contains "$doctor_said" "journal: journal:"
   # The knowledge base against its journal, in a copy of the config with the suite's knowledge base:
   # an edit by hand warns and adds no failure; a damaged journal fails.
   dconfig="$WORK/doctor-config"
@@ -1993,12 +1994,12 @@ if [ "$(bash -c 'source "$1/lib/common.sh"; command -v launchctl; command -v pms
   mv "$WORK/kg-edited.jsonl" "$dconfig/knowledge/entities.jsonl"
   doctor_said="$(BOSUN_CONFIG_DIR="$dconfig" "$BOSUN" doctor 2>&1)"
   check "doctor warns about an edit by hand the next write adopts" contains "$doctor_said" "warn  the knowledge base breaks a rule, or holds what the next write takes care of (every finding: bosun kg validate)"
-  check "... naming it" contains "$doctor_said" "edited: journal journal: the knowledge files were changed outside their journal"
+  check "... naming it" contains "$doctor_said" "edited: journal: the knowledge files were changed outside their journal"
   check "... and that is no failure" test "$(failed_checks "$doctor_said")" = "$(failed_checks "$clean")"
   echo 'nonsense' >>"$dconfig/knowledge/journal/$(jq -r .replica "$BOSUN_STATE_DIR/replica.json").jsonl"
   doctor_said="$(BOSUN_CONFIG_DIR="$dconfig" "$BOSUN" doctor 2>&1)"
   check "a damaged knowledge journal fails doctor" contains "$doctor_said" "FAIL  the knowledge base's journal refuses writes or a rebuild would lose data"
-  check "... saying what validate found" contains "$doctor_said" "journal: journal: the journal is damaged: "
+  check "... saying what validate found" contains "$doctor_said" "journal: the journal is damaged: "
   check "... with the reader's warning kept out of the counts' ok line" bash -c '! grep -q "ok    knowledge: .*damaged" <<<"$1"' _ "$doctor_said"
   BOSUN_CONFIG_DIR="$INSTALL_CFG" "$ROOT/install.sh" >/dev/null 2>&1
   check "... and removes it again once disabled" test ! -e "$LEARN_PLIST"

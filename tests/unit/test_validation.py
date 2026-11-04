@@ -68,12 +68,53 @@ class FindingTest(unittest.TestCase):
             "differs: f-aaaaaa 1/set: they differ",
         )
         self.assertEqual(
-            line(validation.finding("journal", "the journal is damaged: x")),
-            "journal: journal: the journal is damaged: x",
-        )
-        self.assertEqual(
             line(validation.finding("note", validation.NO_JOURNAL_YET)), validation.NO_JOURNAL_YET
         )
+
+    def test_a_line_never_says_a_word_twice(self) -> None:
+        """The journal's own findings name it once, and the ledger's lines stay as they were."""
+        cases = [
+            (validation.damage_finding("x"), "journal: the journal is damaged: x"),
+            (
+                validation.finding("edited", "changed by hand", path="journal"),
+                "edited: journal: changed by hand",
+            ),
+            (
+                validation.position_finding({"local": 4}, {"local": 3}, "view.json"),
+                (
+                    "position: journal: the journal is ahead of view.json (at {'local': 4}): the next "
+                    "write applies it"
+                ),
+            ),
+            # the ledger's, unchanged
+            (
+                validation.finding(
+                    "state", "its kind 'x' is not a kind of this version", "task:2026-10-15/1"
+                ),
+                "state: task:2026-10-15/1: its kind 'x' is not a kind of this version",
+            ),
+            (
+                validation.finding("state", "state 'x' is not a state of task", "task:2026-10-15/1", "state"),
+                "state: task:2026-10-15/1 state: state 'x' is not a state of task",
+            ),
+            (
+                validation.finding("link", "no such item", "task:2026-10-15/1", "links"),
+                "link: task:2026-10-15/1 links: no such item",
+            ),
+            (
+                validation.finding(
+                    "differs", "the rebuild and ledger.json differ in sources", "", "sources/a"
+                ),
+                "differs: journal sources/a: the rebuild and ledger.json differ in sources",
+            ),
+            (
+                validation.finding("pending", "an update waits", "f-bbbbbb"),
+                "pending: f-bbbbbb: an update waits",
+            ),
+        ]
+        for found, said in cases:
+            with self.subTest(said):
+                self.assertEqual(validation.finding_line(found), said)
 
     def test_a_conflict_names_its_kind_its_target_and_its_change(self) -> None:
         found = validation.conflict_finding(Conflict("0123456789abcdef", "f-aaaaaa", "field", "status: x"))

@@ -9,6 +9,7 @@ import fcntl
 import io
 import json
 import os
+import stat
 import sys
 import tempfile
 import threading
@@ -21,6 +22,7 @@ from unittest import mock
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "lib"))
 import change_log as cl
 import journal as jr
+import ledger
 
 
 R1 = "a" * 32
@@ -76,11 +78,14 @@ class ReplicaId(JournalTestCase):
             self.assertEqual(path.read_text(), text)  # kept as it was: never a silent new id
 
     def test_a_new_replica_id_reaches_the_disk_before_it_is_used(self) -> None:
+        """The file's data, then the folder that now names it."""
         state = Path(self.tmp.name) / "state"
-        synced: list[int] = []
-        with mock.patch.object(jr, "flush_to_disk", side_effect=synced.append):
+        synced: list[bool] = []
+        with mock.patch.object(
+            jr, "flush_to_disk", side_effect=lambda fd: synced.append(stat.S_ISDIR(os.fstat(fd).st_mode))
+        ):
             made = jr.replica_id(state)
-        self.assertEqual(len(synced), 1)
+        self.assertEqual(synced, [False, True])
         self.assertEqual(jr.replica_id(state), made)
         self.assertEqual(list(state.glob(".replica.json*")), [])  # no temp file left
 
@@ -103,7 +108,7 @@ class ReplicaId(JournalTestCase):
             raise OSError(errno.ENOSPC, "no space left on the device")
 
         for name, failing in (
-            ("write", mock.patch.object(jr, "_write_all", side_effect=full)),
+            ("write", mock.patch.object(jr, "write_all", side_effect=full)),
             ("flush", mock.patch.object(jr, "flush_to_disk", side_effect=OSError(errno.EIO, "io"))),
         ):
             state = Path(self.tmp.name) / f"state-{name}"
@@ -210,6 +215,37 @@ class Disk(JournalTestCase):
         ):
             jr.flush_to_disk(7)
         self.assertEqual(synced, [7])
+
+    def test_an_atomic_replace_flushes_the_folder_after_the_rename(self) -> None:
+        """A rename is an entry in its folder: flushed only with the folder, so that a power cut
+        cannot keep a later write and lose the rename (a forget's rewrite of local.jsonl)."""
+        self.root.mkdir()
+        path, tmp = self.root / "local.jsonl", self.root / ".local.jsonl.1.tmp"
+        path.write_text("old\n")
+        tmp.write_text("new\n")
+        flushed: list[tuple[bool, int, str]] = []
+
+        def flush(fd: int) -> None:
+            found = os.fstat(fd)
+            flushed.append((stat.S_ISDIR(found.st_mode), found.st_ino, path.read_text()))
+
+        with mock.patch.object(jr, "flush_to_disk", side_effect=flush):
+            jr.replace_durably(tmp, path)
+        self.assertEqual(flushed, [(True, self.root.stat().st_ino, "new\n")])  # the folder, after the rename
+        self.assertFalse(tmp.exists())
+
+    def test_both_stores_replace_through_it(self) -> None:
+        """journal.py's rewrite (a forget) and the ledger's files."""
+        tx = self.journal().begin("add")
+        tx.add("put", "person/dana", {"name": "Dana"}, local=True)
+        tx.commit()
+        other = Path(self.tmp.name) / "files"
+        other.mkdir()
+        flushed: list[Path] = []
+        with mock.patch.object(jr, "flush_folder", side_effect=flushed.append):
+            self.journal().forget({"person/dana"})
+            ledger.write_atomically(other / "ledger.json", "{}")
+        self.assertEqual(flushed, [self.root, other])
 
 
 class Commit(JournalTestCase):

@@ -275,7 +275,15 @@ from change_log import (
     stamped,
     unencodable,
 )
-from journal import REPLICA_FILE, Journal, JournalError, Transaction, flush_to_disk, replica_id
+from journal import (
+    REPLICA_FILE,
+    Journal,
+    JournalError,
+    Transaction,
+    flush_to_disk,
+    replace_durably,
+    replica_id,
+)
 from ledger_changes import MAX_HISTORY as MAX_HISTORY, trim_history as trim_history  # noqa: PLC0414 re-exported
 from lineage import Index, LineageError, Link
 from tickets import TicketError
@@ -1133,7 +1141,8 @@ def write_atomically(
     path: Path, text: str, backup: Path | None = None, sync: Callable[[int], None] = os.fsync
 ) -> None:
     """Write <text> to a temporary file, flush it to disk (<sync>), keep the current file as
-    <backup> (a hard link, so there is never a moment without <path>), then rename it into place."""
+    <backup> (a hard link, so there is never a moment without <path>), then rename it into place
+    and flush the folder (journal.replace_durably)."""
     tmp = path.with_name(path.name + ".tmp")
     with tmp.open("w") as handle:
         handle.write(text)
@@ -1142,7 +1151,7 @@ def write_atomically(
     if backup and path.exists():
         backup.unlink(missing_ok=True)
         os.link(path, backup)
-    tmp.replace(path)
+    replace_durably(tmp, path)
 
 
 def save(ledger: Ledger) -> None:
