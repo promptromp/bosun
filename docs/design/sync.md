@@ -348,15 +348,28 @@ where it is applied (a confirm and a reject of one proposal at once) is a `field
 applied; an op or a body this bosun cannot apply is kept the same way. The write path does what the
 ledger's does, in the same order: it refuses a journal behind `view.json`, sets an unfinished
 transaction aside, puts a knowledge base from before the journal in it (genesis), adopts a change
-made to the files outside it (the digest in `view.json` no longer matching: by hand, a git checkout
-or revert of files in the knowledge folder, an older bosun) as one `adopt` transaction, and goes on
-from the journal's rebuild where the files are behind it or were changed outside it, saving the
-files whole. Files that already are the journal's rebuild are no outside change: `view.json` is
-written last, so a write cut short just before it leaves them so, and adopting them would hold that
-write's records twice. What an outside change cannot express (a record removed or edited in place:
-the fact log only grows) comes back; that write says so in one line, and first commits the files as
+made to the files outside it as one `adopt` transaction, and goes on from the journal's rebuild
+where the files are behind it or were changed outside it, saving the files whole. `view.json`
+records a digest of each data file, which tells the two apart: a file holding neither what
+`view.json` recorded nor what the rebuild makes was changed outside the journal (by hand, a git
+checkout or revert of files in the knowledge folder, an older bosun); when each file is one or the
+other, a write was cut short somewhere between the journal and `view.json` (written last), and the
+rebuild finishes it, even at the same position. Adopting such files would hold that write's
+records twice, or bring back a person a `kg forget` cut short had already placeholdered. A deletion
+also commits a local `deletion` marker (no target, nothing in it, skipped by the rebuild), so the
+position moves and a deletion cut short before the files is finished by the next write; the
+identifiers and `forgotten.jsonl`, which the journal does not hold, are written before the data
+files, and a write that finishes a deletion drops the identifiers of entities gone. What an
+outside change cannot express (a record removed: the fact log only grows) comes back; a record
+edited in place comes back beside its edited copy, which is adopted, so an edited `add` takes the
+fact over (as an edited history entry comes back in the ledger). That write says so in one line, and first commits the files as
 edited to the knowledge folder's git history, which keeps them (with the history off, nothing
-does). A write that rebuilds with conflicts or
+does). Adopt never brings in or keeps a person deleted on request: one an older bosun's `kg forget`
+took out of the files, whom `forgotten.jsonl` matches (a plain or a keyed hash), is forgotten in
+the journal too (the placeholders, a marker, and the git history started again, before anything
+else is committed to it), and one in files restored from before a forget, with no
+`--allow-forgotten` add in the journal, is not adopted (one line, without naming them), the files
+as edited are not committed, and the rebuild drops them. A write that rebuilds with conflicts or
 pending updates says how many on stderr. A command that only reads uses the rebuild in memory and
 writes nothing. `bosun kg validate` compares the files as saved with the journal's rebuild, with
 the ledger's findings and severities (`lib/validation.py` holds what both stores share: the
@@ -794,8 +807,9 @@ from the journal, never what travels.
   disk itself (`F_FULLFSYNC`, about 5 ms each on an Apple-silicon Mac).
 - **Rules versions in the rebuild (both stores):** every change records `rules`, but each store's
   rebuild checks it against today's rules: the ledger's `KINDS` and `RELATIONS`, the knowledge
-  base's ops and the fields an update must find as it left them (`knowledge_changes.APPLIED` and
-  `CHECKED`). A change to them that removes a move, tightens a link rule or checks another field
+  base's ops (the ones its dispatch table applies and the ones it skips) and the fields an update
+  must find as it left them (`knowledge_changes.APPLIED`, `SKIPPED` and `CHECKED`). A change to
+  them that removes a move, tightens a link rule or checks another field
   would turn a Mac's own valid history into conflicts, and a write that rebuilds after a crash
   would revert those states. Before the next such change, or phase 1, the rebuild must check each
   change under the rules version it was recorded with (or not re-check a replica's own contiguous

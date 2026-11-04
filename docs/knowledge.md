@@ -10,16 +10,23 @@ for this Mac's changes, and `journal/local.jsonl` for those that never leave thi
 names a person, and every fact you stated (one with your quote, `--from-user`, or a `transcript`
 source); `view.json` records how far the files reflect it ([Sync and sharing](design/sync.md)).
 
-The files are the journal's rebuild. A write cut short between the journal and the files is
-finished by the next write, and a command that only reads uses the rebuild without saving it. A
-change made to the files outside the journal (by hand, a `git checkout` or `git revert` of files
-in the knowledge folder, or a bosun from before the journal) is adopted by the next write: it goes
-into the journal as one transaction named `adopt`, with a line on stderr, and the write goes on
-from the journal's rebuild. What the journal cannot take comes back, since the fact log only
-grows: a record removed or edited in place by hand (close a fact with `kg supersede`, and delete a
-person with `kg forget`, run again if an older bosun did it). That write says so in one line, and
-the knowledge folder's git history keeps the files as they were edited (unless
-`BOSUN_KNOWLEDGE_GIT=0`). Checking out an older commit of the whole folder takes the journal back
+The files are the journal's rebuild. A write cut short anywhere between the journal and
+`view.json` is finished by the next write (a `kg forget` too), and a command that only reads uses
+the rebuild without saving it. A change made to the files outside the journal (by hand, a
+`git checkout` or `git revert` of files in the knowledge folder, or a bosun from before the
+journal; `view.json` records a digest of each file, so this is told apart from a write cut short)
+is adopted by the next write: it goes into the journal as one transaction named `adopt`, with a
+line on stderr, and the write goes on from the journal's rebuild. What the journal cannot take
+comes back, since the fact log only grows: a record removed by hand comes back, and one edited in
+place comes back beside its edited copy, which is adopted too; an edited `add` record takes the
+fact over (its status is the edited record's again, and the updates before it no longer show).
+Close a fact with `kg supersede` instead. That write says so in one line, and the knowledge
+folder's git history keeps the files as they were edited (unless `BOSUN_KNOWLEDGE_GIT=0`). A person
+deleted on request is never taken back: one an older bosun's `kg forget` took out of the files is
+forgotten in the journal too (their changes become placeholders, and the git history starts again
+without them), and one found in files restored from before a `kg forget` is left out and goes from
+the files (the write says so without naming them; `kg add-entity <id> --allow-forgotten` adds them
+again if they asked). Checking out an older commit of the whole folder takes the journal back
 with it, and what came after is gone ([Sync and sharing](design/sync.md#open-questions)).
 `kg validate` compares the files with the journal
 (`--json` for scripts; exit 1 on any finding), and `bosun doctor` runs it: damage, a position that

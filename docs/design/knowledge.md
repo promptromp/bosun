@@ -78,16 +78,26 @@ repository so every change has history.
   An update that finds the fact's status no longer what it left (`prev`: a confirm and a reject of
   one proposal at once) is a conflict and not applied. A write that finds the files behind the
   journal (a write cut short) goes on from the rebuild and saves it; a reader uses it in memory and
-  writes nothing. A change made to the files outside the journal (by hand, a git checkout or
-  revert of files here, an older bosun), seen by `view.json`'s digest, is adopted by the next
-  write as one `adopt` transaction (entities made, changed or removed, and records the fact log
-  gained), which then goes on from the rebuild; files that already are the rebuild (a write cut
-  short before `view.json`, which is written last) are no outside change. A record removed or
-  edited in place cannot be adopted (the fact log only grows) and comes back; the write says so,
-  and first commits the files as edited to the git history when it is on. `kg validate` reports
-  damage, a position that does not match, a rebuild that differs, conflicts, updates waiting for
-  their fact and an outside edit; `bosun doctor` runs it (`lib/validation.py`, shared with the
-  ledger's validate).
+  writes nothing. `view.json` records a digest of each data file: when each file is either as
+  recorded or as the rebuild makes it, a write was cut short somewhere between the journal and
+  `view.json` (written last), and the rebuild finishes it even at the same position. A deletion
+  (`kg forget`, the retention purge) also commits a local `deletion` marker, so the position moves
+  and a deletion cut short before the files is finished too; a write writes `identifiers.jsonl`
+  and `forgotten.jsonl` before the data files, and one that finishes a deletion drops the
+  identifiers of entities gone. A file that is neither is a change made outside the journal (by
+  hand, a git checkout or revert of files here, an older bosun): the next write adopts it as one
+  `adopt` transaction (entities made, changed or removed, and records the fact log gained), then
+  goes on from the rebuild. A record removed cannot be adopted (the fact log only grows) and comes
+  back; one edited in place comes back beside its adopted copy, and an edited add takes the fact
+  over. The write says so, and first commits the files as edited to the git history when it is
+  on. A person deleted on request is never adopted: one an older bosun's `kg forget` took out of
+  the files (`forgotten.jsonl` matches them, by a plain or keyed hash) is forgotten in the journal
+  too, placeholders and a history restart before anything else is committed; one in files
+  restored from before a forget, with no `--allow-forgotten` add in the journal, is left out (one
+  line, not naming them), the files as edited are not committed, and the rebuild drops them.
+  `kg validate` reports damage, a position that does not match, a rebuild that differs,
+  conflicts, updates waiting for their fact and an outside edit; `bosun doctor` runs it
+  (`lib/validation.py`, shared with the ledger's validate).
 - When the journal is damaged, or behind `view.json` (a journal file lost), a write refuses and
   writes nothing. The way out, as for the ledger: move `journal/` and the state folder's
   `replica.json` aside together; the next write starts a new journal from the files (genesis) as a

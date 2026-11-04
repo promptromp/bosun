@@ -53,12 +53,13 @@ of truth, so don't copy rules into this file.
   the one-time conversion, the stamp their files record, a deletion's placeholder), `lib/journal.py`
   (a store's journal files, the replica id, transactions, an unfinished transaction set aside, a
   deletion in `local.jsonl`), `lib/ledger_changes.py` (pure: the field table, `diff`, `rebuild`),
-  `lib/knowledge_changes.py` (pure: a knowledge write's edits, genesis, the files' digest, `rebuild`,
-  what an outside edit adopts) and `lib/validation.py` (pure: what both stores' `validate` finds:
-  the finding, its severity and line, the journal against the files; `bosun doctor` prints each
-  line). A change to the knowledge rebuild's rules (`APPLIED`, `CHECKED`) trips the rules-digest
-  test in `tests/unit/test_knowledge_changes.py`: bump `KG_RULES_VERSION` (`lib/knowledge.py`) and
-  record the new digest under it.
+  `lib/knowledge_changes.py` (pure: a knowledge write's edits, genesis, each file's digest,
+  `rebuild`, what an outside edit adopts, never a person deleted on request) and
+  `lib/validation.py` (pure: what both stores' `validate` finds: the finding, its severity and
+  line, the journal against the files, where a rebuild and a file differ; `bosun doctor` prints
+  each line). A change to the knowledge rebuild's rules (`_APPLIERS`, the table its dispatch uses,
+  `SKIPPED` or `CHECKED`) trips the rules-digest test in `tests/unit/test_knowledge_changes.py`:
+  bump `KG_RULES_VERSION` (`lib/knowledge.py`) and record the new digest under it.
 - Setup (design: `docs/design/init.md`): `get.sh` (what `curl | sh` runs: plain POSIX sh, everything in
   functions with `main` last, because people pipe it straight from `main`), `lib/preflight.sh` (what
   bosun needs and what to do about what is missing; plain sh, changes nothing, and `init` and `doctor`
