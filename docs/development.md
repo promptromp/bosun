@@ -51,7 +51,7 @@ put a blank line before it.
 | Anything else in bosun | `tests/sandbox.sh all` | also the unit tests and the smoke suite | 3 minutes |
 | `get.sh`, `install.sh`, launchd, `pmset`, anything macOS does its own way | `tests/sandbox.sh mac run` | the real thing on real macOS, except sleep | 75 seconds |
 | What a new Mac lacks: Homebrew, Apple's tools | `tests/sandbox.sh mac run --from-nothing` | the same from a Mac with nothing on it | 4 minutes |
-| What an update does to a ledger in use, and what real use does to the ledger: its journal, ids, writes | `tests/sandbox.sh mac work` | a week of work through an update on real macOS: launchd, a moving clock, racing writers, writes cut short | 5 minutes |
+| What an update does to a ledger and a knowledge base in use, and what real use does to them: their journals, ids, writes, privacy | `tests/sandbox.sh mac work` | a week of work through an update on real macOS: launchd, a moving clock, racing writers, writes cut short, files changed outside the journal | 7 minutes |
 | How an agent behaves: launching it, its screens and files, a task handed to it | `tests/sandbox.sh mac live claude`, `... live codex` | the real agents from nothing, through setup and sessions | 10 minutes, about a dollar |
 | The wake itself | `bosun wake-test`, on real hardware | a real sleep and a real wake | 5 minutes |
 
@@ -112,26 +112,40 @@ If Homebrew refuses the tap, it wants to be told you trust it. These two are eno
 ### A week of work: `tests/sandbox.sh mac work`
 
 `run` shows a new install. `work` shows what an update does to someone who already uses bosun, and what
-real use does to the ledger: on a clone of the developer's Mac it installs the release with the piped
-installer, works three days of the fictional acme week (`tests/sandbox/acme_week.sh`: review requests,
-tasks and their links, a workstream, outreach and its reply, proposals approved, what I typed in a
-window through the hook, tickets, a history long enough to be trimmed, prune), with the clock moved a
-day between them. Then it updates the way a user does, running `get.sh` again, and checks that the first
-write starts the journal from the ledger as it was. Two more days follow on the new bosun, then twenty
-writers at once, the clock going back an hour, fifty writes killed like a power cut at random, a
-hundred approvals (they write both journal files) killed at points swept across their run, which it
-counts as torn tails, repairs and writes lost, a morning by launchd, and an uninstall that keeps the
-ledger, its journal and this Mac's replica id. After each, `bosun ledger validate --journal` must pass,
-and whatever a cut command printed before it died must be in the ledger.
+real use does to the ledger and the knowledge base: on a clone of the developer's Mac it installs the
+release with the piped installer, works three days of the fictional acme week
+(`tests/sandbox/acme_week.sh`: review requests, tasks and their links, a workstream, outreach and its
+reply, proposals approved, what I typed in a window through the hook, tickets, a history long enough to
+be trimmed, prune; in the knowledge base the acme fixture imported, facts added, confirmed, rejected and
+corrected, a fact I stated with my quote checked in a session's transcript, and a person deleted on
+request), with the clock moved a day between them. Then it updates the way a user does, running `get.sh`
+again, and checks that the first write starts each journal from what was there (or goes on with the
+ledger's, when the release journals it already): the same items, entities and facts, old ids working and
+new ones minted, the key of the forgotten made and kept out of the knowledge history, nothing naming a
+person and none of my words in the knowledge journal file that can leave the Mac. A person deleted on
+request then leaves nothing in `local.jsonl`, in a torn file (one is made as a power loss would leave
+it) or in the git history. Two more days follow on the new bosun, then writers at once (twenty in the
+ledger, ten in the knowledge base, then ten in each, under one replica id), the clock going back an
+hour, fifty writes of each store killed like a power cut at random, a hundred approvals (they write both
+journal files) killed at points swept across their run, which it counts as torn tails, repairs and writes
+lost, and the knowledge files changed outside their journal: by hand, by `git checkout` of the data
+files and then of the whole folder, and by the release, run from a checkout of its own, forgetting a
+person that the next write must not bring back. Then a morning by launchd, the console's knowledge view
+with the restricted files unreadable, an uninstall that keeps the ledger, the knowledge folder, their
+journals and this Mac's replica id, and a year on, when `kg expire` expires proposals and deletes person
+facts past retention. After each, `bosun ledger validate --journal` and `bosun kg validate` must pass, and
+whatever a cut command printed before it died must be there.
 
 ```bash
 tests/sandbox.sh mac work                   # from origin/main to this checkout
 tests/sandbox.sh mac work --base <commit>   # from another starting point; it must be an ancestor
 ```
 
-The base must be a bosun from before the journal and the minted ids: the first days check that the
-release writes no journal and makes ids like `task:<date>/1`, and the upgrade that the journal starts
-with the first write after it.
+The base must be a bosun from before the knowledge base's journal. Its ledger may be from before the
+journal too (then the first days check that the release writes no journal and makes ids like
+`task:<date>/1`, and the update that the journal starts with the first write after it), or journaled
+already, as on `origin/main` (then they check its journal and minted ids, and that the update goes on
+with them).
 
 It sends two bundles of this repository: the release, and this checkout (also what is not committed)
 as its descendant, so that `get.sh`'s `git pull --ff-only` takes it. The scenario is `tests/work_e2e.sh`;

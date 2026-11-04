@@ -1,9 +1,12 @@
 #!/bin/bash
 # A week of real work on a real Mac, through an upgrade: the last release installed by the piped
-# installer, three days of work on it (tests/sandbox/acme_week.sh), the upgrade the way a user does it
-# (get.sh again), then two more days on the bosun whose ledger writes go through its journal, with the
-# clock moved, twenty writers at once, the clock going back, writes cut short like a power cut, launchd
-# and uninstall. At each step the ledger and its journal must hold up (`ledger validate --journal`).
+# installer, three days of work on it (tests/sandbox/acme_week.sh: the ledger and the knowledge base),
+# the upgrade the way a user does it (get.sh again), then two more days on the bosun whose writes go
+# through the journals, with the clock moved, writers at once, the clock going back, writes cut short
+# like a power cut, the knowledge files changed outside their journal (by hand, by git, by the release),
+# launchd, the console, uninstall, and a year on. At each step the ledger, the knowledge base and their
+# journals must hold up (`ledger validate --journal`, `kg validate`), and nothing of a person deleted on
+# request may be left in the knowledge folder or its history.
 # Claude Code is a stand-in. It changes the machine it runs on (launchd, pmset, the clock), so it only
 # runs in the throwaway Mac of `tests/sandbox.sh mac work`, which copies in the two bundles it installs
 # from: ~/repo-base.bundle (the release) and ~/repo-tree.bundle (this checkout).
@@ -21,6 +24,8 @@ source "$(dirname "$0")/sandbox/acme_week.sh" || exit 1
 
 STATE="$HOME/.local/state/bosun"
 JOURNAL="$STATE/journal/ledger"
+KJOURNAL="$KNOWLEDGE/journal"
+T_FIRST="" # the first task the new bosun makes
 DAY=86400
 CLOCK_START="" # "<wall time> <monotonic time>" at the start: the real time, whatever `date` is set to later
 
@@ -67,8 +72,9 @@ next_day() { # <days after the first>: the clock moves on, and whatever launchd 
   morning_runs_above "$runs" && echo "  note  launchd ran the morning job when the clock moved"
 }
 
-journal_lines() { # seq|hlc: every journal file's seq runs 1..n, or every clock is above the one before
-  python3 - "$JOURNAL" "$1" <<'PY'
+journal_lines() { # seq|hlc [<journal folder>]: every journal file's seq runs 1..n, or every clock is
+  # above the one before (the ledger's journal, unless another folder is named)
+  python3 - "${2:-$JOURNAL}" "$1" <<'PY'
 import json, sys
 from pathlib import Path
 root, what = Path(sys.argv[1]), sys.argv[2]
@@ -100,6 +106,21 @@ in_the_ledger() { # <file of ids>: each one shows (and there is at least one)
   return "$gone"
 }
 valid() { check "${1:-ledger validate --journal passes}" bosun ledger validate --journal; }
+kg_valid() { check "${1:-kg validate passes}" bosun kg validate; }
+# The entities and the fact log, each record with its keys sorted: what the knowledge base holds.
+knowledge_files() { jq -cS . "$KNOWLEDGE/entities.jsonl" | sort && jq -cS . "$KNOWLEDGE/facts.jsonl"; }
+same_knowledge() { diff <(knowledge_files) "$OUT/knowledge.txt"; }
+no_knowledge_journal() { [ ! -e "$KJOURNAL" ] && [ ! -e "$KNOWLEDGE/view.json" ] && [ ! -e "$KNOWLEDGE/secret.key" ]; }
+
+# What the release does: from before every journal, or one that journals the ledger already (and mints
+# its ids); the knowledge base's journal is new in this checkout either way.
+RELEASE_JOURNALS=0
+what_the_release_does() {
+  [ -e "$DIR/lib/journal.py" ] || return 0
+  RELEASE_JOURNALS=1
+  RELEASE_TASK_ID="$NEW_TASK_ID"
+  echo "  note  the release journals the ledger already, and mints its ids; the knowledge base it does not"
+}
 
 the_old_week() {
   echo "a week on the last release: three days, the clock a day on between them"
@@ -111,7 +132,15 @@ the_old_week() {
   jq -S 'del(.journal) | .said //= []' "$STATE/ledger.json" >"$OUT/snapshot.json"
   ITEMS="$(jq '.items | length' "$STATE/ledger.json")"
   echo "  note  the ledger before the upgrade: $ITEMS items"
-  check "the release writes no journal" test ! -e "$STATE/journal"
+  if [ "$RELEASE_JOURNALS" = 1 ]; then
+    valid "the release journals the ledger: ledger validate --journal passes"
+  else
+    check "the release writes no journal" test ! -e "$STATE/journal"
+  fi
+  knowledge_files >"$OUT/knowledge.txt"
+  bosun kg stats >"$OUT/kg-stats.txt"
+  echo "  note  the knowledge base before the upgrade: $(cat "$OUT/kg-stats.txt")"
+  check "... nor one for the knowledge base" no_knowledge_journal
 }
 
 no_journal_yet() { { [ ! -e "$JOURNAL" ] || [ -z "$(ls -A "$JOURNAL")" ]; } && jq -e 'has("journal") | not' "$STATE/ledger.json"; }
@@ -126,7 +155,19 @@ the_upgrade() {
   cat "$OUT/upgrade.txt"
   check "it passes" test "$upgraded" = 0
   check "the checkout is the new bosun" test "$(git -C "$DIR" rev-parse HEAD)" = "$(tree_head)"
-  check "bosun doctor passes" bosun doctor
+  check "bosun doctor passes" bash -c 'bosun doctor >"$1" 2>&1 || { cat "$1"; exit 1; }' _ "$OUT/doctor.txt"
+  ledger_before_its_first_write
+  check "doctor names the knowledge base from before journals as a note" \
+    grep -E "^ +ok +the knowledge base and its journal: no journal yet" "$OUT/doctor.txt"
+  check "kg validate says so, and passes" bash -c 'bosun kg validate | grep -q "no journal yet"'
+  check "... and starts none, nor the key of the forgotten" no_knowledge_journal
+}
+
+ledger_before_its_first_write() {
+  if [ "$RELEASE_JOURNALS" = 1 ]; then
+    valid "the release's journal goes on: ledger validate --journal passes"
+    return
+  fi
   check "no journal yet: nothing has written since" no_journal_yet
   check "ledger validate --journal says so, and passes" bash -c 'bosun ledger validate --journal | grep -q "no journal yet"'
   check "... and starts none" no_journal_yet
@@ -135,13 +176,24 @@ the_upgrade() {
 same_as_before() { diff <(jq -S 'del(.journal) | .said //= []' "$STATE/ledger.json") "$OUT/snapshot.json"; }
 replica_made() { jq -e '.replica | test("^[0-9a-f]{32}$")' "$STATE/replica.json" && [ "$(stat -f %Lp "$STATE/replica.json")" = 600 ]; }
 starts_whole() { head -1 "$JOURNAL/$(jq -r .replica "$STATE/replica.json").jsonl" | jq -e '.seq == 1 and .cmd == "genesis"'; }
+KG_FIRST=1 # the knowledge base's first write, beside the ledger's: its exit code
 
 the_first_write() {
   echo "the first write on the new bosun"
+  # The knowledge base's first write runs at the same moment: the two stores make this Mac's replica id
+  # together (one id for both, R85), or take the one a release that journals the ledger made.
+  bosun kg expire >"$OUT/kg-first.txt" 2>&1 &
+  local kg=$!
   step "a write that changes nothing" render
-  check "the journal appears" bash -c 'ls "$1"/*.jsonl' _ "$JOURNAL"
+  wait "$kg"
+  KG_FIRST=$?
+  check "the journal is there" bash -c 'ls "$1"/*.jsonl' _ "$JOURNAL"
   check "... with this Mac's replica id, readable only by me" replica_made
-  check "... starting with the old ledger, whole" starts_whole
+  if [ "$RELEASE_JOURNALS" = 1 ]; then
+    check "... going on from the release's, its seq with no gap" journal_lines seq
+  else
+    check "... starting with the old ledger, whole" starts_whole
+  fi
   valid
   check "the ledger is as it was" same_as_before
   check "... $ITEMS items" test "$(jq '.items | length' "$STATE/ledger.json")" = "$ITEMS"
@@ -153,14 +205,117 @@ the_first_write() {
   valid
 }
 
+replica_files() { (cd "$1" && ls -1 -- *.jsonl) | grep -vx 'local.jsonl'; }
+one_replica() { # both stores write this Mac's changes under the one id in replica.json
+  local id
+  id="$(jq -r .replica "$STATE/replica.json")" || return 1
+  [ "$(replica_files "$JOURNAL")" = "$id.jsonl" ] && [ "$(replica_files "$KJOURNAL")" = "$id.jsonl" ] && return 0
+  echo "replica.json: $id; the ledger's: $(replica_files "$JOURNAL" | tr '\n' ' ')"
+  echo "the knowledge base's: $(replica_files "$KJOURNAL" | tr '\n' ' ')"
+  return 1
+}
+key_made() { [ -s "$KNOWLEDGE/secret.key" ] && [ "$(stat -f %Lp "$KNOWLEDGE/secret.key")" = 600 ]; }
+not_in_history() { ! git -C "$KNOWLEDGE" ls-files | grep -E 'secret\.key|torn'; }
+lists_fact() { bosun kg facts "$1" --status all --closed --json | jq -e --arg id "$2" 'any(.[]; .id == $id)'; }
+
+the_first_knowledge_write() {
+  echo "the knowledge base's first write on the new bosun, beside the ledger's"
+  check "it went through" said "$KG_FIRST" "$(cat "$OUT/kg-first.txt")" "recorded 0 expired proposals"
+  check "its journal appears" bash -c 'ls "$1"/*.jsonl' _ "$KJOURNAL"
+  check "... under this Mac's one replica id, the ledger's too" one_replica
+  kg_valid
+  check "the entities and facts are as they were" same_knowledge
+  check "... and so are its counts" bash -c 'bosun kg stats | diff - "$1"' _ "$OUT/kg-stats.txt"
+  check "the key of the forgotten is made, readable only by me" key_made
+  check "a fact id from the release still works: $K_CAVEAT" lists_fact feature/csv-export "$K_CAVEAT"
+  kg_says "... and an old proposal is confirmed by its id" "confirmed" confirm "$(fact_of environment/staging-2 status)"
+  kg_made K_FIRST "$NEW_FACT_ID" "a new fact gets a minted id" propose feature/csv-export caveat \
+    --value "The CSV header row stays in English" --source "ledger:$T_FIRST" --source "report:$T_FIRST"
+  check "the key is not in the knowledge history, nor any torn file" not_in_history
+  kg_valid
+}
+
+# What never leaves this Mac stays in local.jsonl: who a fact names, and my words.
+PEOPLE_WORDS=(person/ "Dana Example" "Lee Sample" Priya Marco)
+MY_WORDS=("$QUOTE_OLD" "last business day" "$SESSION_OLD" "00000000-0000-0000-0000-00000000000")
+in_file() { # <file> <text...>: each is in it (any case)
+  local file="$1" text missing=""
+  shift
+  for text in "$@"; do grep -qiF -- "$text" "$file" || missing="$missing, $text"; done
+  [ -z "$missing" ] && return 0
+  echo "not in ${file##*/}:${missing#,}"
+  return 1
+}
+not_in() { # <file> <text...>: none of them is in it (any case)
+  local file="$1" text found=""
+  shift
+  for text in "$@"; do grep -qiF -- "$text" "$file" && found="$found, $text"; done
+  [ -z "$found" ] && return 0
+  echo "in ${file##*/}:${found#,}"
+  return 1
+}
+replica_journal() { echo "$KJOURNAL/$(jq -r .replica "$STATE/replica.json").jsonl"; }
+# <text>: the torn files holding it
+torn_named() { grep -liF -- "$1" "$KJOURNAL"/*.torn-* 2>/dev/null; }
+not_in_git() { # <text...>: none of them in the knowledge folder's git history (any case)
+  local text log
+  log="$(git -C "$KNOWLEDGE" log -p --all 2>&1)" || {
+    echo "$log"
+    return 1
+  }
+  for text in "$@"; do
+    grep -qiF -- "$text" <<<"$log" || continue
+    echo "in the knowledge history: $text"
+    return 1
+  done
+}
+nowhere() { # <text...>: in no file of the knowledge folder (torn ones too), nor in its git history
+  local text found
+  for text in "$@"; do
+    found="$(grep -rliF -- "$text" "$KNOWLEDGE")" || continue
+    echo "$text, in: $found"
+    return 1
+  done
+  not_in_git "$@"
+}
+# Half of a change naming a person at the end of local.jsonl, as a power loss mid-append leaves it (a
+# kill cannot: a change is one write).
+a_torn_tail() { printf '{"body": {"id": "%s", "name": "%s"' "$1" "$2" >>"$KJOURNAL/local.jsonl"; }
+
+knowledge_privacy() {
+  echo "privacy, read from the knowledge journal's own files"
+  check "no person and none of my words in the journal that can leave this Mac" \
+    not_in "$(replica_journal)" "${PEOPLE_WORDS[@]}" "${MY_WORDS[@]}"
+  check "... they are in local.jsonl" in_file "$KJOURNAL/local.jsonl" person/dana person/lee person/priya "${MY_WORDS[@]}"
+  check "... but not Marco, forgotten on the release" not_in "$KJOURNAL/local.jsonl" person/marco Marco
+  check "he is not added again without --allow-forgotten" refuses "deleted on request" \
+    bosun kg add-entity person/marco --name "Marco Placeholder"
+  a_torn_tail person/priya "Priya Placeholder"
+  kg_says "a power loss left half a change naming Priya: the next write sets it aside" "moved it aside" \
+    propose feature/csv-export caveat --value "CSV exports end with a newline" --source "ledger:$T_FIRST"
+  check "... in a torn file" torn_named priya
+  kg_says "Priya asked to be forgotten" "deleted the person" forget person/priya
+  check "... kept as a keyed hash" last_forgotten '.hash_kind == "hmac-sha256"'
+  check "... nothing of her in local.jsonl" not_in "$KJOURNAL/local.jsonl" priya "export questions batched"
+  check "... nor in a torn file" bash -c '! ls "$1"/*.torn-* 2>/dev/null | grep -F local.jsonl' _ "$KJOURNAL"
+  check "... nor in the knowledge history" not_in_git priya
+  check "... nor anywhere in the knowledge folder" nowhere priya
+  kg_valid
+}
+
 the_new_days() {
   echo "two more days on the new bosun"
   next_day 3
   day_4
   valid
+  kg_valid
+  check "my words of today are not in the journal that can leave this Mac" not_in "$(replica_journal)" \
+    "$QUOTE_NEW" "$SESSION_NEW"
+  check "... they are in local.jsonl" in_file "$KJOURNAL/local.jsonl" "$QUOTE_NEW" "$SESSION_NEW"
   next_day 4
   day_5
   valid
+  kg_valid
 }
 
 twenty_writers() {
@@ -178,6 +333,57 @@ twenty_writers() {
   valid
 }
 
+csv_facts() { bosun kg facts feature/csv-export --status all --closed --json; }
+each_once() { # <value prefix> <count>: that many facts of the CSV export start with it, each once
+  csv_facts | jq -e --arg p "$1" --argjson n "$2" \
+    '[.[] | (.value // "") | select(startswith($p))] | length == $n and (unique | length) == $n'
+}
+all_facts_there() { # <file of fact ids>: each one is a fact of the CSV export (and there is at least one)
+  local missing
+  [ -s "$1" ] || {
+    echo "no ids to look for"
+    return 1
+  }
+  missing="$(comm -23 <(sort -u "$1") <(csv_facts | jq -r '.[].id' | sort -u))"
+  [ -z "$missing" ] && return 0
+  echo "not in the knowledge base: $missing"
+  return 1
+}
+kg_writer() { # <value> <output file>: one proposal, in the background
+  bosun kg propose feature/csv-export caveat --value "$1" --source "ledger:$T_JSON" >"$2" 2>&1 &
+}
+printed_facts() { cat "$@" | grep -oE 'f-[0-9a-hjkmnp-tv-z]{6}'; } # <output file...>
+
+knowledge_writers() {
+  echo "ten knowledge writers at once"
+  local n
+  for n in $(seq 1 10); do kg_writer "Writer $n: the export check passed" "$OUT/kg-writer-$n.txt"; done
+  wait
+  printed_facts "$OUT"/kg-writer-*.txt >"$OUT/kg-writers.ids"
+  check "ten facts, each once" each_once "Writer " 10
+  check "... each id it printed" all_facts_there "$OUT/kg-writers.ids"
+  check "each journal file's seq runs 1..n with no gap" journal_lines seq "$KJOURNAL"
+  kg_valid
+}
+
+both_stores_at_once() {
+  echo "ten knowledge and ten ledger writers at once"
+  local n
+  for n in $(seq 1 10); do
+    kg_writer "Both stores $n: the export check passed" "$OUT/kg-both-$n.txt"
+    bosun ledger spawn --title "Both stores $n: an export check" --ask "Run export check $n" \
+      --via "user: run the export checks" >"$OUT/both-$n.txt" 2>&1 &
+  done
+  wait
+  for n in $(seq 1 10); do head -1 "$OUT/both-$n.txt"; done >"$OUT/both.ids"
+  check "ten knowledge facts, each once" each_once "Both stores " 10
+  check "ten ledger tasks, each different" test "$(grep '^task:' "$OUT/both.ids" | sort -u | wc -l | tr -d ' ')" = 10
+  check "... each in the ledger" in_the_ledger "$OUT/both.ids"
+  kg_valid
+  valid
+  check "one replica id across both journals" one_replica
+}
+
 clock_goes_back() {
   echo "the clock goes back an hour"
   local n
@@ -189,6 +395,13 @@ clock_goes_back() {
   check "every clock in the journal is above the one before it" journal_lines hlc
   tail -6 "$JOURNAL/$(jq -r .replica "$STATE/replica.json").jsonl" | jq -r '"  note  seq \(.seq) hlc \(.hlc) \(.cmd)"'
   valid
+  for n in 1 2 3 4 5; do
+    kg_says "a knowledge write an hour back ($n)" "added" propose feature/csv-export caveat \
+      --value "Clock back $n: the export check passed" --source "ledger:$T_JSON"
+  done
+  check "every clock in the knowledge journal is above the one before it" journal_lines hlc "$KJOURNAL"
+  tail -5 "$(replica_journal)" | jq -r '"  note  seq \(.seq) hlc \(.hlc) \(.cmd)"'
+  kg_valid
   set_clock $((4 * DAY))
   check "the clock is put right: $(date -u '+%a %F %R') UTC" clock_reads $((4 * DAY))
 }
@@ -204,48 +417,65 @@ cut_after() { # <milliseconds> <output file> <command...>: run it in a process g
   set +m
   sleep "$(printf '%d.%03d' $((ms / 1000)) $((ms % 1000)))"
   stage="$(ps -o stat= -o command= -p "$pid" 2>/dev/null)"
+  pgrep -x -P "$pid" git >/dev/null && stage="R git" # the knowledge base commits to its history
   kill -9 -- "-$pid" 2>/dev/null
   wait "$pid" 2>/dev/null
-  case "${stage%% *}" in # its state: gone, a zombie or exiting
-    "" | *Z* | *E*) stage="finished" ;;
+  CUT_STAGE="$(stage_of "$stage")"
+}
+
+# <state and command of the cut process>: where the cut fell
+stage_of() {
+  case "${1%% *}" in # its state: gone, a zombie or exiting
+    "" | *Z* | *E*)
+      echo "finished"
+      return
+      ;;
   esac
-  case "$stage" in # the same process is this script's fork, then bin/bosun, libexec, python
-    finished) CUT_STAGE="finished" ;;
-    *lib/ledger.py*) CUT_STAGE="python" ;;
-    *libexec/bosun-ledger*) CUT_STAGE="libexec" ;;
-    *bin/bosun\ ledger*) CUT_STAGE="bin/bosun" ;;
-    *"${0##*/}"*) CUT_STAGE="starting" ;;
-    *) CUT_STAGE="other(${stage:0:40})" ;;
+  case "$1" in # the same process is this script's fork, then bin/bosun, libexec, python (and its git)
+    *\ git) echo "git" ;;
+    *lib/ledger.py* | *lib/knowledge.py*) echo "python" ;;
+    *libexec/bosun-ledger* | *libexec/bosun-kg*) echo "libexec" ;;
+    *bin/bosun\ ledger* | *bin/bosun\ kg*) echo "bin/bosun" ;;
+    *"${0##*/}"*) echo "starting" ;;
+    *) echo "other(${1:0:40})" ;;
   esac
 }
-torn_files() { find "$JOURNAL" -name '*.torn-*' | wc -l | tr -d ' '; }
+# [<journal folder>]: how many torn files it holds
+torn_files() { find "${1:-$JOURNAL}" -name '*.torn-*' | wc -l | tr -d ' '; }
 the_write_after() { # <what>: one ordinary write; what it repaired goes to the output
   check "the next write works, and repairs what it must" bash -c 'bosun ledger note "$1" "$2" 2>"$3"' _ \
     "$T_JSON" "after $1" "$OUT/repair.txt"
   sed 's/^/  note  /' "$OUT/repair.txt"
 }
 
-power_cuts() {
-  echo "power cuts: fifty writes killed after 0 to 300 ms"
-  local delays n
+# Fifty cuts at random points of 0 to 300 ms: each cut's line in $OUT/<name>.txt (number, delay, where
+# it fell, the id it printed) and the ids printed in $OUT/<name>.ids.
+cut_randomly() { # <name> <id pattern> <command...>: @N@ in the command is the cut's number
+  local name="$1" pattern="$2" delays n
+  shift 2
   read -r -a delays <<<"$(python3 -c 'import random; print(*(random.randint(0, 300) for _ in range(50)))')"
   for n in $(seq 1 50); do
-    cut_after "${delays[$((n - 1))]}" "$OUT/cut-$n.txt" bosun ledger spawn --title "Power cut $n: an export check" \
-      --ask "Check export $n" --via "user: run the export checks"
-    echo "$n ${delays[$((n - 1))]}ms $CUT_STAGE $(head -1 "$OUT/cut-$n.txt")" >>"$OUT/cuts.txt"
+    cut_after "${delays[$((n - 1))]}" "$OUT/$name-$n.txt" "${@//@N@/$n}"
+    echo "$n ${delays[$((n - 1))]}ms $CUT_STAGE $(grep -m 1 -oE "$pattern" "$OUT/$name-$n.txt")" >>"$OUT/$name.txt"
   done
-  sed 's/^/  cut   /' "$OUT/cuts.txt"
-  awk '{ print $3 }' "$OUT/cuts.txt" | sort | uniq -c | sed 's/^ */  note  where the cuts fell: /'
-  grep -oE 'task:[^ ]+$' "$OUT/cuts.txt" >"$OUT/cut.ids"
-  echo "  note  $(wc -l <"$OUT/cut.ids" | tr -d ' ') of 50 printed an id before the cut"
-  check "some cuts fell while the Python writer ran" grep -q " python " "$OUT/cuts.txt"
-  check "some cut writes printed an id first" test -s "$OUT/cut.ids"
+  sed 's/^/  cut   /' "$OUT/$name.txt"
+  awk '{ print $3 }' "$OUT/$name.txt" | sort | uniq -c | sed 's/^ */  note  where the cuts fell: /'
+  awk 'NF > 3 { print $4 }' "$OUT/$name.txt" >"$OUT/$name.ids"
+  echo "  note  $(wc -l <"$OUT/$name.ids" | tr -d ' ') of 50 printed an id before the cut"
+  check "some cuts fell while the Python writer ran" grep -qE " (python|git) " "$OUT/$name.txt"
+  check "some cut writes printed an id first" test -s "$OUT/$name.ids"
+}
+
+power_cuts() {
+  echo "power cuts: fifty writes killed after 0 to 300 ms"
+  cut_randomly cuts '^task:[^ ]+' bosun ledger spawn --title "Power cut @N@: an export check" \
+    --ask "Check export @N@" --via "user: run the export checks"
   bosun ledger validate --journal 2>&1 | sed 's/^/  note  before the next write: /'
   the_write_after "the power cuts"
   echo "  note  set aside: $(torn_files) unfinished transaction(s)"
   echo "  note  $(jq '[.items[] | select(.title | startswith("Power cut"))] | length' "$STATE/ledger.json") of 50 are in the ledger"
   valid
-  check "every id a cut write printed is in the ledger" in_the_ledger "$OUT/cut.ids"
+  check "every id a cut write printed is in the ledger" in_the_ledger "$OUT/cuts.ids"
   check "the journal's seq still runs 1..n with no gap" journal_lines seq
 }
 
@@ -311,6 +541,110 @@ swept_cuts() {
   check "the journal's seq still runs 1..n with no gap" journal_lines seq
 }
 
+knowledge_power_cuts() {
+  echo "power cuts in the knowledge base: fifty proposals killed after 0 to 300 ms"
+  cut_randomly kg-cuts 'f-[0-9a-hjkmnp-tv-z]{6}' bosun kg propose feature/csv-export caveat \
+    --value "Power cut @N@: an export check" --source "ledger:$T_JSON"
+  bosun kg validate 2>&1 | sed 's/^/  note  before the next write: /'
+  [ -e "$KNOWLEDGE/.git/index.lock" ] && echo "  note  a cut left the knowledge history's git lock: .git/index.lock"
+  kg_says "the next write works, and repairs what it must" "added" propose feature/csv-export caveat \
+    --value "After the power cuts: the export check passed" --source "ledger:$T_JSON"
+  as_notes "$KG_SAID"
+  echo "  note  set aside: $(torn_files "$KJOURNAL") unfinished transaction(s)"
+  echo "  note  $(csv_facts | jq '[.[] | (.value // "") | select(startswith("Power cut "))] | length') of 50 are in the knowledge base"
+  kg_valid
+  check "every id a cut write printed is in the knowledge base" all_facts_there "$OUT/kg-cuts.ids"
+  check "each journal file's seq still runs 1..n with no gap" journal_lines seq "$KJOURNAL"
+  check "the knowledge history still records each write" history_records
+  if [ -e "$KNOWLEDGE/.git/index.lock" ]; then # the rest of the week needs a history: git's message says to remove it
+    rm -f "$KNOWLEDGE/.git/index.lock"
+    echo "  note  removed the git lock a cut left, by hand, as git's message says"
+  fi
+}
+history_records() { # the knowledge history holds the files as they are now
+  local status
+  status="$(git -C "$KNOWLEDGE" status --porcelain 2>&1)" && [ -z "$status" ] && return 0
+  echo "${status:-git status failed}"
+  ls -l "$KNOWLEDGE/.git/index.lock" 2>&1
+  return 1
+}
+
+journal_fact_ids() { jq -r 'select(.op == "fact.add") | .target' "$KJOURNAL"/*.jsonl | sort -u; }
+none_lost() { # every fact the journal holds is in the fact log
+  local lost
+  lost="$(comm -23 <(journal_fact_ids) <(jq -r 'select(.op == "add") | .fact.id' "$KNOWLEDGE/facts.jsonl" | sort -u))"
+  [ -z "$lost" ] && return 0
+  echo "in the journal, not in the files: $lost"
+  return 1
+}
+after_it() { # <what>: an ordinary write after <what>, with what it said on stderr as notes
+  kg_says "the next write works" "added" propose feature/csv-export caveat --value "After $1: the export check passed" \
+    --source "ledger:$T_JSON"
+  as_notes "$KG_SAID"
+}
+validate_notes() { bosun kg validate 2>&1 | sed 's/^/  note  before the next write: /'; }
+as_notes() { # <text>: each line as a note
+  local line
+  while IFS= read -r line; do echo "  note  $line"; done <<<"$1"
+}
+
+edited_by_hand() {
+  echo "the knowledge files changed outside their journal"
+  echo "  a product fact's text, edited by hand"
+  sed -i '' 's/tests compare amounts to the cent/tests compare amounts to a tenth of a cent/' "$KNOWLEDGE/facts.jsonl"
+  validate_notes
+  kg_says "the next write adopts it, and says so" "adopted" propose feature/csv-export caveat \
+    --value "After the hand edit: the export check passed" --source "ledger:$T_JSON"
+  as_notes "$KG_SAID"
+  kg_valid
+  check "... the fact reads as edited" bash -c \
+    'bosun kg facts repo/invoice-exporter --predicate caveat --status all | grep -q "a tenth of a cent"'
+}
+
+files_two_commits_back() {
+  echo "  the data files as git had them two commits ago"
+  check "git checks them out" git -C "$KNOWLEDGE" checkout HEAD~2 -- entities.jsonl facts.jsonl
+  validate_notes
+  kg_says "the next write takes them as the rules say, and says so" "as changed outside their journal" \
+    propose feature/csv-export caveat --value "After the files went back: the export check passed" --source "ledger:$T_JSON"
+  as_notes "$KG_SAID"
+  kg_valid
+  check "no fact the journal holds is lost" none_lost
+}
+
+folder_two_commits_back() {
+  echo "  the whole knowledge folder, its journal too, as git had it two commits ago"
+  local minted
+  csv_facts | jq -r '.[].id' >"$OUT/ids-before-checkout"
+  check "git checks it out" git -C "$KNOWLEDGE" checkout HEAD~2 -- .
+  validate_notes
+  kg_made minted "$NEW_FACT_ID" "the next write" propose feature/csv-export caveat \
+    --value "After the folder went back: the export check passed" --source "ledger:$T_JSON"
+  as_notes "$KG_SAID"
+  grep -qx -- "$minted" "$OUT/ids-before-checkout" &&
+    echo "  note  $minted was minted again: it named a fact the checkout took away (docs/design/sync.md, open questions)"
+  kg_valid
+  check "no fact the journal holds is lost" none_lost
+}
+
+an_older_bosun_forgets() {
+  echo "  the release, from a checkout of its own, forgets Lee in the same knowledge folder"
+  check "the release, beside the installed bosun" git clone -q --branch sandbox-mac-tree "$HOME/repo-base.bundle" "$OUT/release"
+  check "Lee asked to be forgotten: the release deletes him" says "deleted the person" "$OUT/release/bin/bosun" kg forget person/lee
+  check "... kept as a plain hash, as the release keeps it" last_forgotten 'has("hash_kind") | not'
+  check "the installed bosun is as it was" test "$(git -C "$DIR" rev-parse HEAD)" = "$(tree_head)"
+  validate_notes
+  kg_says "the next write deletes him from the journal too, and says so" "deleted on request are gone" \
+    propose feature/csv-export caveat --value "After the release's forget: the export check passed" --source "ledger:$T_JSON"
+  as_notes "$KG_SAID"
+  kg_valid
+  check "nothing of Lee in local.jsonl" not_in "$KJOURNAL/local.jsonl" person/lee "Lee Sample" "questions as one table"
+  check "... nor in the knowledge history" not_in_git person/lee "Lee Sample"
+  check "... nor anywhere in the knowledge folder" nowhere person/lee "Lee Sample"
+  check "he is not added again without --allow-forgotten" refuses "deleted on request" \
+    bosun kg add-entity person/lee --name "Lee Sample"
+}
+
 launchd_on_the_new_bosun() {
   echo "launchd on the new bosun"
   local runs
@@ -322,20 +656,82 @@ launchd_on_the_new_bosun() {
   bosun stop >/dev/null 2>&1
 }
 
+console_url() { grep -m 1 -oE 'http://127\.0\.0\.1:[0-9]+/\?t=[A-Za-z0-9_-]+' "$OUT/console.txt"; }
+console_get() { # <path>: the console's answer, with the cookie its URL's token becomes
+  local url port
+  url="$(console_url)"
+  port="${url#http://127.0.0.1:}"
+  port="${port%%/*}"
+  curl -s -f -H "Cookie: bosun_console_$port=${url##*t=}" "http://127.0.0.1:$port$1"
+}
+console_counts() { # <what kg stats counts>: the console's knowledge view counts the same
+  local said
+  said="$(console_get /api/knowledge | jq -r 'select(.exists and .error == null) | "\(.totals.entities) entities, \(.totals.facts) facts"')"
+  [ "$said" = "$1" ] && return 0
+  echo "the console: ${said:-no knowledge view}; kg stats: $1"
+  return 1
+}
+console_briefing() { console_get /api/knowledge/briefing | jq -e '.exists and .error == null'; }
+RESTRICTED=(identifiers.jsonl forgotten.jsonl secret.key)
+
+console_reads_knowledge() {
+  echo "the console reads the knowledge base, with its restricted files unreadable"
+  local counts modes mode file console
+  counts="$(bosun kg stats | sed 's/ (.*//')"
+  modes="$(cd "$KNOWLEDGE" && stat -f '%Lp %N' "${RESTRICTED[@]}")"
+  (cd "$KNOWLEDGE" && chmod 000 "${RESTRICTED[@]}")
+  bosun console --port 0 >"$OUT/console.txt" 2>&1 &
+  console=$!
+  check "it starts" wait_for 30 console_url
+  check "its knowledge view answers, as kg stats counts: $counts" console_counts "$counts"
+  check "... and its briefing" console_briefing
+  kill "$console" 2>/dev/null
+  wait "$console" 2>/dev/null
+  while read -r mode file; do chmod "$mode" "$KNOWLEDGE/$file"; done <<<"$modes"
+  check "the restricted files are as they were" test "$(cd "$KNOWLEDGE" && stat -f '%Lp %N' "${RESTRICTED[@]}")" = "$modes"
+  kg_valid
+}
+
+knowledge_sum() { cat "$KJOURNAL"/*.jsonl "$KNOWLEDGE/secret.key" "$KNOWLEDGE/forgotten.jsonl" | cksum; }
+
 uninstall_keeps_the_journal() {
-  echo "uninstall keeps your records, journal and all"
-  local settings ledger journal
+  echo "uninstall keeps your records, journals and all"
+  local settings ledger journal knowledge
   bosun start >/dev/null 2>&1
-  bosun kg import "$ROOT/tests/fixtures/knowledge/acme-import.jsonl" --apply --auto-confirm >/dev/null 2>&1
   settings="$(settings_sum)"
   ledger="$(cksum <"$STATE/ledger.json")"
   journal="$(cat "$JOURNAL"/*.jsonl | cksum)"
+  knowledge="$(knowledge_sum)"
   uninstall_keeping_records "$settings" "$ledger"
   check "your journal is as you left it" test "$journal" = "$(cat "$JOURNAL"/*.jsonl | cksum)"
   check "... and this Mac's replica id is there" replica_made
+  check "the knowledge journal, the key of the forgotten and their records: as you left them" \
+    test "$knowledge" = "$(knowledge_sum)"
+  check "... the key still readable only by me" key_made
   install_again "$settings"
   valid "ledger validate --journal passes on what was kept"
   check "... the week is there" bosun ledger show "$T_JSON"
+  kg_valid "kg validate passes on what was kept"
+  check "... the knowledge is there" lists_fact feature/csv-export "$K_DAY4"
+}
+
+expired_and_purged() { # what kg expire said: some proposals expired, some person facts deleted
+  [[ "$KG_SAID" =~ recorded\ [1-9][0-9]*\ expired\ proposals\;\ [1-9][0-9]*\ person\ facts ]] && return 0
+  echo "$KG_SAID"
+  return 1
+}
+
+a_year_on() {
+  echo "a year on: proposals no one reviewed expire, and person facts not seen again go"
+  next_day 400
+  kg_says "kg expire" "past retention deleted" expire
+  echo "  note  $KG_SAID"
+  check "... it recorded expired proposals and deleted person facts" expired_and_purged
+  kg_valid
+  check "nothing of Dana's facts in local.jsonl" not_in "$KJOURNAL/local.jsonl" "Europe/Lisbon" "Finance lead"
+  check "... nor in the knowledge history" not_in_git Europe/Lisbon "Finance lead"
+  check "... nor anywhere in the knowledge folder" nowhere Europe/Lisbon "Finance lead"
+  valid "ledger validate --journal passes a year on"
 }
 
 start_clock
@@ -346,17 +742,29 @@ a_repo_by_hand invoice-exporter https://github.com/acme/invoice-exporter.git
 follow_what_it_says
 install
 check "... and the other two" bash -c 'grep -q "name: acme-web" "$1" && grep -q "name: invoice-exporter" "$1"' _ "$CONFIG/sessions.yml"
+what_the_release_does
 launchd_for_real
 the_old_week
 the_upgrade
 the_first_write
+the_first_knowledge_write
+knowledge_privacy
 the_new_days
 twenty_writers
+knowledge_writers
+both_stores_at_once
 clock_goes_back
 power_cuts
 swept_cuts
+knowledge_power_cuts
+edited_by_hand
+files_two_commits_back
+folder_two_commits_back
+an_older_bosun_forgets
 launchd_on_the_new_bosun
+console_reads_knowledge
 uninstall_keeps_the_journal
+a_year_on
 put_the_clock_back
 rm -rf "$OUT"
 echo
