@@ -170,6 +170,17 @@ class JournalTestCase(KnowledgeTestCase):
     def kinds(self) -> list[str]:
         return [f["kind"] for f in json.loads(self.validate("--json")[0])]
 
+    def assert_a_deletion_marker(self, marker: dict[str, Any], reason: str) -> None:
+        """A deletion's marker: local, no target, and the forgotten record of its write (a keyed
+        hash and counts), nothing of the person."""
+        self.assertEqual((marker["op"], marker["target"], marker["local"]), (kc.DELETION, "", True))
+        [record] = marker["body"]["forgotten"]
+        self.assertEqual(record["reason"], reason)
+        if reason == km.FORGET_REQUEST:
+            self.assertEqual(record["hash_kind"], km.HASH_KEYED)
+            self.assertRegex(record["hash"], "^[0-9a-f]{16}$")
+        self.assertNotIn("dana", json.dumps(marker).lower())
+
 
 class MintedIdsTest(JournalTestCase):
     def test_a_new_fact_gets_a_minted_id(self) -> None:
@@ -383,7 +394,8 @@ class ForgetTest(JournalTestCase):
         after, marker = self.local()[:-1], self.local()[-1]
         self.assertNotIn("dana", (self.root / "journal" / "local.jsonl").read_text().lower())
         self.assertEqual([c["seq"] for c in after], [c["seq"] for c in local])  # the sequence never goes back
-        self.assertEqual((marker["op"], marker["target"], marker["body"]), (kc.DELETION, "", {}))
+        self.assert_a_deletion_marker(marker, "request")
+        self.assertEqual(marker["body"]["forgotten"], store.read_jsonl(self.root / "forgotten.jsonl"))
         self.assertEqual(self.journal().position(), {**position, "local": position["local"] + 1})
         for change in after:
             self.assertEqual(change["op"], "forgotten")
@@ -411,6 +423,7 @@ class ForgetTest(JournalTestCase):
         self.run_kg("expire")
         self.assertNotIn("lisbon", (self.root / "journal" / "local.jsonl").read_text().lower())
         self.assertIn("forgotten", {c["op"] for c in self.local()})
+        self.assert_a_deletion_marker(self.local()[-1], km.FORGET_RETENTION)
         self.assertIn("person/dana", {c.get("target") for c in self.local()})  # only the facts went
         self.assertNotIn("lisbon", self.git_log().lower())
 
@@ -945,8 +958,8 @@ class RebuiltFilesTest(JournalTestCase):
         ):
             self.run_kg("forget", "person/dana")
         self.assertEqual(self.journal().position()["local"], before["local"] + 1)
-        marker = self.local()[-1]
-        self.assertEqual((marker["op"], marker["target"], marker["body"]), (kc.DELETION, "", {}))
+        self.assert_a_deletion_marker(self.local()[-1], "request")
+        self.assertFalse((self.root / "forgotten.jsonl").exists())
         self.assertNotIn("person/dana", self.kb().entities)  # a reader sees the rebuild
         self.run_kg("add-entity", "repo/other")
         self.assertNotIn("person/dana", self.file_entities())
@@ -954,6 +967,24 @@ class RebuiltFilesTest(JournalTestCase):
         self.assertNotIn("u00000000da", self.text("identifiers.jsonl"))
         self.assertEqual(self.validate(), ("knowledge base is valid", 0))
         self.assert_the_journal_rebuilds_the_files()
+        # the marker's record is in forgotten.jsonl now: the forget is whole through the journal
+        self.assertEqual(
+            store.read_jsonl(self.root / "forgotten.jsonl"), self.local()[-1]["body"]["forgotten"]
+        )
+        with self.assertRaisesRegex(KnowledgeError, "deleted on request"):
+            self.run_kg("add-entity", "person/dana")
+        self.run_kg("add-entity", "person/dana", "--allow-forgotten")
+
+    def test_forgotten_records_moved_aside_do_not_come_back_from_old_markers(self) -> None:
+        """Only a marker the files do not reflect yet (a write cut short) restores its record: moving
+        forgotten.jsonl aside (the way out when its key is lost for good) stays as chosen."""
+        self.seed()
+        self.run_kg("forget", "person/dana")
+        (self.root / "forgotten.jsonl").rename(self.tmp / "forgotten.aside")
+        (self.root / "secret.key").unlink()
+        self.run_kg("add-entity", "person/dana", "--name", "Dana Example")
+        self.assertEqual(store.read_jsonl(self.root / "forgotten.jsonl"), [])
+        self.assertIn("person/dana", self.file_entities())
 
     def test_a_write_that_changes_nothing_still_saves_the_files_it_found_behind(self) -> None:
         self.seed()
@@ -1224,6 +1255,27 @@ class OutsideEditHistoryTest(JournalTestCase):
         self.assertNotIn("lisbon", self.history())
         self.assertEqual(self.validate(), ("knowledge base is valid", 0))
         self.assert_the_journal_rebuilds_the_files()
+
+    def test_no_person_is_adopted_while_the_key_of_the_forgotten_is_missing(self) -> None:
+        """Keyed forgotten records and no secret.key: the forgotten check cannot run, so adopt takes
+        in no person (as adding one is refused) and says why; the rest is adopted."""
+        self.seed()
+        self.run_kg("propose", "person/dana", "timezone", "--value", "Europe/Lisbon", "--source", "ledger:a")
+        backup = {name: (self.root / name).read_bytes() for name in ("entities.jsonl", "facts.jsonl")}
+        self.run_kg("forget", "person/dana")
+        for name, data in backup.items():
+            (self.root / name).write_bytes(data)
+        (self.root / "secret.key").unlink()
+        said = self.write_saying()
+        self.assertIn("no person is taken in", said)
+        self.assertIn("secret.key", said)
+        self.assertNotIn("dana", said.lower())
+        self.assertNotIn("adopted", said)
+        for name in ("journal/local.jsonl", "facts.jsonl", "entities.jsonl"):
+            self.assertNotIn("lisbon", self.text(name), name)
+        self.assertNotIn("lisbon", self.history())
+        self.assertFalse((self.root / "secret.key").exists())  # never made anew over keyed records
+        self.assertEqual(self.validate(), ("knowledge base is valid", 0))
 
     def test_a_person_added_again_on_request_is_kept(self) -> None:
         """A deliberate re-add (--allow-forgotten) is in the journal, so an edit made outside it

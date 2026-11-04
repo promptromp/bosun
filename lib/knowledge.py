@@ -274,7 +274,10 @@ def journaled(kb: KB, write: Write) -> dict[str, Any]:
     refuse_unencodable(edits)
     held = files_digest(kb)
     if kb.rewrite:
-        edits = [*forget(write.journal, kc.removed(write.entities, kb), edits), kc.deletion_marker()]
+        edits = [
+            *forget(write.journal, kc.removed(write.entities, kb), edits),
+            kc.deletion_marker(kb.new_forgotten),
+        ]
     write.transaction.commit_edits(edits)
     return change_log.stamped(write.journal.position(), held)
 
@@ -441,7 +444,7 @@ def forget_outside(p: Paths, journal: Journal, base: kc.RebuiltKB, persons: set[
     local.jsonl (forget), a deletion's marker moves the position, and the knowledge history (which
     holds the journal) starts again without them, before anything else is committed to it."""
     forget(journal, kc.naming(persons, km.fold_all(base.records)), [])
-    journal.begin(ADOPT).commit_edits([kc.deletion_marker()])
+    journal.begin(ADOPT).commit_edits([kc.deletion_marker([])])
     restarted = ""
     if history_on():
         warning = store.restart_history(p.root, f"kg {ADOPT}: a deletion on request made outside the journal")
@@ -515,16 +518,39 @@ def taken_in(p: Paths, journal: Journal, edited: KB) -> KB:
     if forgotten:
         forget_outside(p, journal, adopted_base(journal, p), forgotten)
     refused = kc.returning(adopted_base(journal, p), edited)
-    if refused:
+    say_held_back(adopted_base(journal, p), edited, refused)
+    adopt(p, journal, edited, refused)
+    say_left_out(p, journal, edited, refused)
+    return rebuilt(journal, edited, writing=True)
+
+
+def say_held_back(base: kc.RebuiltKB, edited: KB, refused: set[str]) -> None:
+    """One line on stderr, naming nobody, when adopt leaves people out: while the key of the
+    forgotten cannot be read, every person entity the files hold otherwise than the journal (why,
+    and that the check fails closed); else the people deleted on request (kc.returning)."""
+    held = kc.held_back(base, edited, refused)
+    if edited.key_problem and held:
+        print(
+            f"kg: no person is taken in from the knowledge files as changed outside their journal "
+            f"({len(held)} left out, and they go from the files: restore those again once the key is "
+            f"back), as {edited.key_problem}",
+            file=sys.stderr,
+        )
+    elif refused:
         print(
             f"kg: the knowledge files as changed outside their journal name {len(refused)} person(s) "
             "deleted on request, who are not taken back into it and go from the files (kg add-entity "
             "<id> --allow-forgotten adds one again, if they asked)",
             file=sys.stderr,
         )
-    adopt(p, journal, edited, refused)
-    say_left_out(p, journal, edited, refused)
-    return rebuilt(journal, edited, writing=True)
+
+
+def unfinished_forgotten(p: Paths, journal: Journal, kb: KB) -> list[Record]:
+    """The forgotten records of a deletion cut short before its files: in its marker, which the
+    files do not reflect yet, and not in forgotten.jsonl (a marker the files reflect is never read
+    again, so moving forgotten.jsonl aside stays as chosen)."""
+    saved = {change["id"] for change in journal.changes(saved_position(p))}
+    return kc.unrecorded([c for c in journal.changes() if c["id"] not in saved], kb.forgotten)
 
 
 def refuse_if_behind(p: Paths, journal_has: Mapping[str, int]) -> None:
@@ -573,9 +599,12 @@ def write_start(p: Paths, journal: Journal) -> KB:
         return kb
     refuse_if_behind(p, position)
     found = standing(p, kb, position, lambda: kc.rebuild(journal.changes()))
-    if found == EDITED_OUTSIDE:
-        return taken_in(p, journal, kb)
-    return kb if found == SAVED else rebuilt(journal, kb, writing=True)
+    if found == SAVED:
+        return kb
+    unfinished = unfinished_forgotten(p, journal, kb)
+    kb = taken_in(p, journal, kb) if found == EDITED_OUTSIDE else rebuilt(journal, kb, writing=True)
+    kb.new_forgotten += unfinished  # a deletion cut short is whole once its record is in
+    return kb
 
 
 def trial_mint() -> Callable[[], str]:

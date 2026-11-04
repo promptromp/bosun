@@ -11,9 +11,10 @@ with what the journal cannot hold converted once (`taken_in`).
                            {"op", "id", "at", "event", "set", "prev", "sources"?, "note"?})
   entity.put               target: the entity id; body: the entity
   entity.delete            target: the entity id; body: {}
-  deletion                 target: "", body: {}, local: a delete on request or the retention
-                           purge happened in this transaction (it moves the position, so a
-                           write cut short after it is finished by the next; the rebuild skips it)
+  deletion                 target: "", body: {"forgotten": [the write's forgotten records]},
+                           local: a delete on request or the retention purge happened in this
+                           transaction (it moves the position, so a write cut short after it is
+                           finished by the next, which records them; the rebuild skips it)
 
 An edit is `local`, never leaving this Mac, when it names a person: a fact whose subject or object
 is a `person/` entity (every record of it, as the fact never changes its subject or object), or a
@@ -64,6 +65,7 @@ from change_log import (
     Conflict,
     Edit,
     Place,
+    as_text,
     digest,
     gained,
     in_order,
@@ -78,6 +80,7 @@ FACT_UPDATE = "fact.update"
 ENTITY_PUT = "entity.put"
 ENTITY_DELETE = "entity.delete"
 DELETION = "deletion"
+FORGOTTEN_KEY = "forgotten"  # a deletion marker's body: the forgotten records of its write
 ENTITIES_FILE, FACTS_FILE = "entities.jsonl", "facts.jsonl"
 # Part of the rebuild's rules (with APPLIED, the ops its dispatch table applies, and SKIPPED; a
 # unit test pins their digest to knowledge.KG_RULES_VERSION): the fields an update must find as
@@ -186,11 +189,23 @@ def taken_in(kb: KB, source: str) -> list[str]:
     return notes
 
 
-def deletion_marker() -> Edit:
+def deletion_marker(forgotten: list[Record]) -> Edit:
     """What a deletion's transaction (kg forget, the retention purge) also holds: a local change
-    with no target and nothing in it, so that the position moves even when the deletion's own
-    changes are placeholders (a write cut short after it is then finished by the next one)."""
-    return Edit(DELETION, "", {}, True)
+    with no target, so that the position moves even when the deletion's own changes are
+    placeholders (a write cut short after it is then finished by the next one), holding the
+    forgotten records of its write (<forgotten>: a keyed hash and counts, nothing of the person),
+    which the journal does not otherwise hold, so that the write that finishes it records them."""
+    return Edit(DELETION, "", {FORGOTTEN_KEY: copy.deepcopy(forgotten)}, True)
+
+
+def unrecorded(changes: Iterable[Change], recorded: list[Record]) -> list[Record]:
+    """The forgotten records the deletion markers in <changes> hold that forgotten.jsonl
+    (<recorded>) lacks: those of a deletion cut short before its files."""
+    have = {as_text(record) for record in recorded}
+    held = [
+        r for c in changes if c.get("op") == DELETION for r in (c.get("body") or {}).get(FORGOTTEN_KEY) or []
+    ]
+    return [record for record in held if isinstance(record, dict) and as_text(record) not in have]
 
 
 def held_digests(entities: Mapping[str, Record], records: list[Record]) -> dict[str, str | None]:
@@ -402,9 +417,21 @@ def forgotten_outside(base: RebuiltKB, kb: KB) -> set[str]:
 def returning(base: RebuiltKB, kb: KB) -> set[str]:
     """The people the files (<kb>) name and the journal (<base>) does not, whom forgotten.jsonl
     names: deleted on request and not added again (a re-add with --allow-forgotten is in the
-    journal), so never adopted (files restored from a backup made before kg forget)."""
+    journal), so never adopted (files restored from a backup made before kg forget). While the key
+    of the forgotten cannot be read (kb.key_problem), every one of them: the check cannot run, so it
+    fails closed, as adding a person does."""
     back = people(kb.entities, kb.facts) - people(base.entities, km.fold_all(base.records))
-    return {person for person in back if km.is_forgotten(kb, person)}
+    return back if kb.key_problem else {person for person in back if km.is_forgotten(kb, person)}
+
+
+def held_back(base: RebuiltKB, kb: KB, refused: set[str]) -> set[str]:
+    """The person entities adopt does not take in: <refused>, and while the key of the forgotten
+    cannot be read, any person entity the files hold otherwise than the journal (as a rename of a
+    person is refused then)."""
+    if not kb.key_problem:
+        return set(refused)
+    changed = {e for e, entity in kb.entities.items() if ks.is_person(e) and base.entities.get(e) != entity}
+    return set(refused) | changed
 
 
 def _names_any(record: Record, facts: Mapping[str, Record], persons: set[str]) -> bool:
@@ -416,11 +443,13 @@ def outside(base: RebuiltKB, kb: KB, refused: frozenset[str] | set[str] = frozen
     """What the files (<kb>) hold that <base> lacks, as the edits that adopt it into the journal:
     <base> is what they held when a write last saved them, as the journal has it. Each entity made,
     changed or removed, and each record the fact log gained, in its order; nothing of the people
-    <refused> (returning). A record it lost cannot go in (the fact log only grows): it stays, and
-    an edited one goes in beside it, as gained (an edited add takes the fact over)."""
+    <refused> (returning), and no person entity held back (held_back). A record it lost cannot go
+    in (the fact log only grows): it stays, and an edited one goes in beside it, as gained (an
+    edited add takes the fact over)."""
     puts, deletes = entity_edits(base.entities, kb.entities)
     records = [r for r in gained(base.records, kb.records) if not _names_any(r, kb.facts, set(refused))]
-    kept = [put for put in puts if put.target not in refused]
+    held = held_back(base, kb, set(refused))
+    kept = [put for put in puts if put.target not in held]
     return [*kept, *(record_edit(r, kb.facts) for r in records), *deletes]
 
 
