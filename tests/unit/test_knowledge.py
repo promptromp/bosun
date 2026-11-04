@@ -138,12 +138,15 @@ class StorageTest(KnowledgeTestCase):
         self.assertEqual(self.fact(self.f(1))["status"], km.CONFIRMED)
         self.assertIsNotNone(self.fact(self.f(1))["valid_to"])
 
-    def test_a_bad_line_is_named_not_skipped(self) -> None:
+    def test_a_bad_line_is_named_not_silently_skipped(self) -> None:
+        """The journal holds every record, so a reader reads its rebuild, and says which line."""
         self.seed()
         with (self.root / "facts.jsonl").open("a") as handle:
             handle.write("{not json\n")
-        with self.assertRaisesRegex(Exception, r"facts.jsonl:1 is not valid JSON"):
-            self.run_kg("stats")
+        said = io.StringIO()
+        with contextlib.redirect_stderr(said):
+            self.assertIn("6 entities, 0 facts", self.run_kg("stats"))
+        self.assertRegex(said.getvalue(), r"facts.jsonl:1 is not valid JSON")
 
     def test_entities_merge_aliases_and_suggest_near_matches(self) -> None:
         self.seed()
@@ -559,17 +562,20 @@ class RetentionAndForgetTest(KnowledgeTestCase):
         self.assertIn("person/erin", self.kb().entities)
         self.assertFalse((self.root / "secret.key").exists())
 
-    def test_a_corrupt_key_is_named_and_never_overwritten(self) -> None:
+    def test_a_corrupt_key_a_keyed_record_needs_is_named_and_never_overwritten(self) -> None:
+        """With no keyed record, one is kept aside and made again instead (test_knowledge_changes,
+        KeyTest)."""
+        self.run_kg("add-entity", "person/lee", "--name", "Lee Example")
+        self.run_kg("forget", "person/lee")  # a keyed record
+        key = self.root / "secret.key"
         for garbage in ("not hex\n", "abcd\n", ""):
             with self.subTest(garbage=garbage):
-                key = self.root / "secret.key"
-                self.root.mkdir(parents=True, exist_ok=True)
                 key.write_text(garbage)
                 with self.assertRaisesRegex(KnowledgeError, "secret.key.*restore it"):
                     self.run_kg("add-entity", "person/dana")
                 self.run_kg("add-entity", "repo/other", "--name", "other")
                 self.assertEqual(key.read_text(), garbage)
-                key.unlink()
+                self.assertEqual(list(self.root.glob("secret.key.aside-*")), [])
 
     def test_moving_forgotten_aside_lets_the_next_write_make_a_new_key(self) -> None:
         """With the journal's deletion markers (which hold the same records), and replica.json, as
@@ -901,6 +907,24 @@ class GitHistoryTest(KnowledgeTestCase):
         self.assertEqual(self.commits(), ["kg forget: a person deleted on request"])
         self.assertNotIn("Dana", self.git_out(self.root, "log", "-p", "--all"))
 
+    def test_a_history_that_cannot_be_deleted_fails_the_forget_and_the_next_write_finishes_it(self) -> None:
+        """Fail closed: a .git that is still there after the delete names it, view.json does not
+        move, and the next write that can delete it does (the restart is still owed)."""
+        if os.geteuid() == 0:
+            self.skipTest("root deletes whatever the modes say")
+        self.seed()
+        self.run_kg("propose", "person/dana", "reviews", "exporter", "--source", "ledger:a")
+        view = (self.root / "view.json").read_bytes()
+        objects = self.root / ".git" / "objects"
+        objects.chmod(0o500)  # what is in it cannot all be deleted
+        self.addCleanup(objects.chmod, 0o700)
+        with self.assertRaisesRegex(store.StoreError, f"{self.root / '.git'}.*could not be deleted"):
+            self.run_kg("forget", "person/dana")
+        self.assertEqual((self.root / "view.json").read_bytes(), view)
+        objects.chmod(0o700)
+        self.run_kg("add-entity", "repo/other")
+        self.assertNotIn("dana", self.git_out(self.root, "log", "-p", "--all").lower())
+
     def test_git_variables_of_the_caller_never_redirect_the_history(self) -> None:
         decoy = self.tmp / "decoy"
         decoy.mkdir()
@@ -938,6 +962,32 @@ class GitHistoryTest(KnowledgeTestCase):
         self.assertIn("notes.txt", self.git_out(self.root, "ls-files").split())
         self.assertEqual(len(said.getvalue().splitlines()), 1)  # one note, naming the lock
         self.assertIn("index.lock", said.getvalue())
+
+    def test_every_lock_git_leaves_long_ago_is_removed_with_a_note_each(self) -> None:
+        """HEAD's, a branch's and the packed refs' locks too (R119); a ref lock held now stays."""
+        git_dir = self.root / ".git"
+        old = [self.a_git_lock(60), git_dir / "HEAD.lock", git_dir / "packed-refs.lock"]
+        old.append(git_dir / f"{self.git_out(self.root, 'symbolic-ref', 'HEAD').strip()}.lock")
+        young = git_dir / "refs" / "tags" / "v1.lock"
+        young.parent.mkdir(parents=True, exist_ok=True)
+        for lock, age in [*((lock, 45) for lock in old[1:]), (young, 1)]:
+            lock.write_text("")
+            moment = datetime.now(UTC).timestamp() - age
+            os.utime(lock, (moment, moment))
+        said = io.StringIO()
+        with contextlib.redirect_stderr(said):
+            warning = store.commit(self.root, "kg propose after a power cut")
+        self.assertEqual(warning, "")
+        self.assertEqual([lock.name for lock in old if lock.exists()], [])
+        self.assertTrue(young.exists())
+        self.assertEqual(self.commits()[0], "kg propose after a power cut")
+        notes = said.getvalue().splitlines()
+        self.assertEqual(
+            sorted(notes), sorted(n for n in notes if "the knowledge history records again" in n)
+        )
+        self.assertEqual(
+            sorted(Path(n.split()[2].rstrip(",")).name for n in notes), sorted(lock.name for lock in old)
+        )
 
     def test_a_git_lock_held_now_is_left_alone(self) -> None:
         lock = self.a_git_lock(1)

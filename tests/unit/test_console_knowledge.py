@@ -8,6 +8,8 @@ tests/fixtures/console/acme-ledger.json)."""
 
 from __future__ import annotations
 
+import contextlib
+import io
 import json
 import random
 import shutil
@@ -150,6 +152,9 @@ class OverviewTest(KnowledgeWorld):
         self.assertIsNone(console_kb.growth(console_kb.Settings(root=self.tmp / "none"), self.now))
 
     def test_an_unreadable_knowledge_base_says_why(self) -> None:
+        """A file that does not parse with no journal to write it again (one from before journals)."""
+        shutil.rmtree(self.root / "journal")
+        (self.root / "view.json").unlink()
         (self.root / "facts.jsonl").write_text("{not json\n")
         model = console_kb.overview(self.settings, LEDGER, {}, self.now)
         self.assertFalse(model["exists"])
@@ -558,6 +563,23 @@ class StorageTest(KnowledgeWorld):
         self.assertEqual((kb.identifiers, kb.forgotten, kb.secret, kb.key_problem), ([], [], b"", ""))
         for name, data in before.items():
             self.assertEqual((self.root / name).read_bytes(), data)  # a reader writes nothing
+
+    def test_a_torn_fact_log_is_read_through_the_journal_and_a_decision_writes_it_again(self) -> None:
+        """facts.jsonl cut short during an append (view.json as the write left it): the console
+        shows the journal's rebuild, writes nothing on a read, and its one write saves the files
+        whole again."""
+        fact = self.made(ck.batch_fact_ids(self.review()))[0]
+        path = self.root / "facts.jsonl"
+        path.write_bytes(path.read_bytes()[:-60])
+        torn = path.read_bytes()
+        with contextlib.redirect_stderr(io.StringIO()):
+            overview = console_kb.overview(self.settings, LEDGER, {}, self.now)
+            self.assertTrue(overview["exists"])
+            self.assertEqual(self.kb().facts[fact]["status"], km.PROPOSED)
+            self.assertEqual(path.read_bytes(), torn)  # a reader writes nothing
+            self.decide("confirm", [fact])
+        self.assertEqual(self.kb().facts[fact]["status"], km.CONFIRMED)
+        self.assertIn("valid", self.kg("validate"))
 
     def test_a_console_decision_is_journaled_and_the_journal_validates(self) -> None:
         fact = self.made(ck.batch_fact_ids(self.review()))[0]

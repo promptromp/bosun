@@ -11,10 +11,12 @@ with what the journal cannot hold converted once (`taken_in`).
                            {"op", "id", "at", "event", "set", "prev", "sources"?, "note"?})
   entity.put               target: the entity id; body: the entity
   entity.delete            target: the entity id; body: {}
-  deletion                 target: "", body: {"forgotten": [the write's forgotten records]},
-                           local: a delete on request or the retention purge happened in this
-                           transaction (it moves the position, so a write cut short after it is
-                           finished by the next, which records them; the rebuild skips it)
+  deletion                 target: "", body: {"forgotten": [the write's forgotten records],
+                           "facts": [the ids of the facts it removed]}, local: a delete on
+                           request or the retention purge happened in this transaction (it moves
+                           the position, so a write cut short after it is finished by the next,
+                           which records them and makes those facts placeholders; the rebuild
+                           skips it)
 
 An edit is `local`, never leaving this Mac, when it names a person: a fact whose subject or object
 is a `person/` entity (every record of it, as the fact never changes its subject or object), or a
@@ -81,6 +83,7 @@ ENTITY_PUT = "entity.put"
 ENTITY_DELETE = "entity.delete"
 DELETION = "deletion"
 FORGOTTEN_KEY = "forgotten"  # a deletion marker's body: the forgotten records of its write
+FACTS_KEY = "facts"  # and the ids of the facts its write removed (ids only)
 ENTITIES_FILE, FACTS_FILE = "entities.jsonl", "facts.jsonl"
 # Part of the rebuild's rules (with APPLIED, the ops its dispatch table applies, and SKIPPED; a
 # unit test pins their digest to knowledge.KG_RULES_VERSION): the fields an update must find as
@@ -189,13 +192,15 @@ def taken_in(kb: KB, source: str) -> list[str]:
     return notes
 
 
-def deletion_marker(forgotten: list[Record]) -> Edit:
+def deletion_marker(forgotten: list[Record], facts: list[str]) -> Edit:
     """What a deletion's transaction (kg forget, the retention purge) also holds: a local change
     with no target, so that the position moves even when the deletion's own changes are
     placeholders (a write cut short after it is then finished by the next one), holding the
     forgotten records of its write (<forgotten>: a keyed hash and counts, nothing of the person),
-    which the journal does not otherwise hold, so that the write that finishes it records them."""
-    return Edit(DELETION, "", {FORGOTTEN_KEY: copy.deepcopy(forgotten)}, True)
+    which the journal does not otherwise hold, so that the write that finishes it records them,
+    and the ids of the facts it removed (<facts>), so that it makes them placeholders again (a
+    retention purge's record holds no hash to find them by)."""
+    return Edit(DELETION, "", {FORGOTTEN_KEY: copy.deepcopy(forgotten), FACTS_KEY: list(facts)}, True)
 
 
 def marker_records(changes: Iterable[Change]) -> list[Record]:
@@ -204,6 +209,12 @@ def marker_records(changes: Iterable[Change]) -> list[Record]:
         r for c in changes if c.get("op") == DELETION for r in (c.get("body") or {}).get(FORGOTTEN_KEY) or []
     ]
     return [record for record in held if isinstance(record, dict)]
+
+
+def marker_facts(changes: Iterable[Change]) -> set[str]:
+    """The ids of the facts the deletion markers in <changes> removed."""
+    bodies = [c.get("body") or {} for c in changes if c.get("op") == DELETION]
+    return {fact for body in bodies for fact in body.get(FACTS_KEY) or [] if isinstance(fact, str)}
 
 
 def unrecorded(changes: Iterable[Change], recorded: list[Record]) -> list[Record]:

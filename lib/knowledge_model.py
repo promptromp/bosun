@@ -130,6 +130,9 @@ class KB:
     # batch.json's numbers may point at facts that are gone (a rebuild took facts out): a write
     # deletes it, as a deletion's does.
     stale_batch: bool = False
+    # Why each knowledge file that holds a line that does not parse (a write cut short during its
+    # append) is not whole, by file name: the journal rebuilds it, and its other lines are here.
+    unreadable: dict[str, str] = field(default_factory=dict)
 
     def add_record(self, record: Record) -> None:
         self.records.append(record)

@@ -40,6 +40,7 @@ SEVERITY = {
     "conflict": WARNING,
     "pending": WARNING,  # an update of a fact the journal does not hold (yet)
     "edited": WARNING,  # the next write adopts it
+    "unreadable": WARNING,  # a knowledge file that does not parse: the next write writes it again
     "note": NOTE,
 }
 NO_JOURNAL_YET = "no journal yet; the next write starts it"

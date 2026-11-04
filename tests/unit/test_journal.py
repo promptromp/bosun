@@ -22,6 +22,7 @@ from unittest import mock
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "lib"))
 import change_log as cl
 import journal as jr
+import knowledge_store
 import ledger
 
 
@@ -235,7 +236,7 @@ class Disk(JournalTestCase):
         self.assertFalse(tmp.exists())
 
     def test_both_stores_replace_through_it(self) -> None:
-        """journal.py's rewrite (a forget) and the ledger's files."""
+        """journal.py's rewrite (a forget), the knowledge files and the ledger's files."""
         tx = self.journal().begin("add")
         tx.add("put", "person/dana", {"name": "Dana"}, local=True)
         tx.commit()
@@ -244,8 +245,9 @@ class Disk(JournalTestCase):
         flushed: list[Path] = []
         with mock.patch.object(jr, "flush_folder", side_effect=flushed.append):
             self.journal().forget({"person/dana"})
+            knowledge_store.write_atomically(other / "facts.jsonl", "{}\n")
             ledger.write_atomically(other / "ledger.json", "{}")
-        self.assertEqual(flushed, [self.root, other])
+        self.assertEqual(flushed, [self.root, other, other])
 
 
 class Commit(JournalTestCase):

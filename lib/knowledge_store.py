@@ -12,7 +12,8 @@ optional local git history (one commit per change).
   delete on request (`kg forget`) or the retention purge rewrites it.
 - identifiers.jsonl: Slack, tracker and code-host ids of people (restricted: mode 0600).
 - forgotten.jsonl: what was deleted on request or by retention (hashed ids and counts, no content).
-- secret.key: the key of the forgotten hashes (mode 0600, ignored by the history, never leaves this Mac).
+- secret.key: the key of the forgotten hashes (mode 0600, ignored by the history, never leaves this Mac);
+  a file there that was not a key, and that no keyed record needed, kept as secret.key.aside-<time>.
 - batch.json: the last review batch `kg batch` printed, so `kg batch apply` refers to its numbers.
 """
 
@@ -32,17 +33,18 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from journal import TORN
+from journal import TORN, JournalError, create_new, flush_to_disk, replace_durably, write_all
 
 
 Record = dict[str, Any]
 PRIVATE_MODE = 0o600
 KEY_BYTES = 32
 KEY_FILE = "secret.key"
+KEY_ASIDE = f"{KEY_FILE}.aside-"  # <KEY_FILE>.aside-<UTC time>: a key file that was not a key, kept
 # What the history never holds: the lock, temporary files, the last batch, the forgotten hashes'
-# key, and what a write cut short left in the journal (a torn tail can name someone kg forget
-# deletes; forget deletes the local ones).
-GIT_IGNORE = f"knowledge.lock\n*.tmp\nbatch.json\n{KEY_FILE}\n*{TORN}*\n"
+# key (and a file kept aside that was meant to be it), and what a write cut short left in the
+# journal (a torn tail can name someone kg forget deletes; forget deletes the local ones).
+GIT_IGNORE = f"knowledge.lock\n*.tmp\nbatch.json\n{KEY_FILE}\n{KEY_ASIDE}*\n*{TORN}*\n"
 GIT_IDENTITY = (
     "-c",
     "user.name=bosun",
@@ -52,8 +54,8 @@ GIT_IDENTITY = (
     "commit.gpgsign=false",
 )
 GIT_TIMEOUT_SECONDS = 30
-# A git index lock older than this, found under the knowledge base's exclusive lock, was left by a git
-# command cut short (git holds it for one command, and bosun commits only under that lock).
+# A git lock older than this, found under the knowledge base's exclusive lock, was left by a git
+# command cut short (git holds one for one command, and bosun commits only under that lock).
 STALE_GIT_LOCK_SECONDS = 30
 
 
@@ -106,39 +108,72 @@ class Paths:
         return self.root / "knowledge.lock"
 
 
-def read_jsonl(path: Path) -> list[Record]:
-    """The records of a JSON-lines file ([] if it does not exist); a bad line is an error that
-    names it, never silently skipped."""
+def _parsed(line: str, path: Path, number: int) -> tuple[Record | None, str]:
+    """The record on line <number> of <path>, or why it is not one."""
+    try:
+        record = json.loads(line)
+    except json.JSONDecodeError as exc:
+        return None, f"{path}:{number} is not valid JSON ({exc})"
+    if not isinstance(record, dict):
+        return None, f"{path}:{number} is not a JSON object"
+    return record, ""
+
+
+def read_lines(path: Path) -> tuple[list[Record], str]:
+    """The records of a JSON-lines file that parse ([] if it does not exist), and why the first
+    line that does not parse is not a record ("" when every line is): what a write cut short left
+    (a torn last line) is told, never silently skipped."""
     try:
         lines = path.read_text().splitlines()
     except FileNotFoundError:
-        return []
-    records = []
+        return [], ""
+    records, problem = [], ""
     for number, line in enumerate(lines, start=1):
         if not line.strip():
             continue
-        try:
-            record = json.loads(line)
-        except json.JSONDecodeError as exc:
-            raise StoreError(f"{path}:{number} is not valid JSON ({exc}); fix or remove that line") from exc
-        if not isinstance(record, dict):
-            raise StoreError(f"{path}:{number} is not a JSON object")
-        records.append(record)
+        record, why = _parsed(line, path, number)
+        if record is None:
+            problem = problem or why
+        else:
+            records.append(record)
+    return records, problem
+
+
+def read_jsonl(path: Path) -> list[Record]:
+    """The records of a JSON-lines file ([] if it does not exist); a bad line is an error that
+    names it (for a file that nothing else holds, such as identifiers.jsonl)."""
+    records, problem = read_lines(path)
+    if problem:
+        raise StoreError(unreadable(problem))
     return records
+
+
+def unreadable(problem: str) -> str:
+    """A file that does not parse and that nothing can rebuild: what to do."""
+    return f"{problem}; fix or remove that line"
 
 
 def jsonl(records: list[Record]) -> str:
     return "".join(json.dumps(r, sort_keys=True, ensure_ascii=False) + "\n" for r in records)
 
 
+def _ends_cut_short(fd: int) -> bool:
+    """Whether the file open on <fd> ends in a line without its newline (a write cut short)."""
+    size = os.fstat(fd).st_size
+    return size > 0 and os.pread(fd, 1, size - 1) != b"\n"
+
+
 def append_records(path: Path, records: list[Record], mode: int | None = None) -> None:
-    """Append whole lines in one write and flush them to disk (callers hold the lock)."""
+    """Append whole lines and flush them to the disk itself, as the journal does
+    (journal.write_all: a short write is finished; journal.flush_to_disk); never onto a last line
+    cut short before its newline, which would join two records (callers hold the lock)."""
     if not records:
         return
-    fd = os.open(path, os.O_WRONLY | os.O_APPEND | os.O_CREAT, mode if mode is not None else 0o644)
+    fd = os.open(path, os.O_RDWR | os.O_APPEND | os.O_CREAT, mode if mode is not None else 0o644)
     try:
-        os.write(fd, jsonl(records).encode())
-        os.fsync(fd)
+        lead = b"\n" if _ends_cut_short(fd) else b""
+        write_all(fd, lead + jsonl(records).encode())
+        flush_to_disk(fd)
     finally:
         os.close(fd)
 
@@ -153,24 +188,41 @@ def read_secret(path: Path) -> bytes:
 
 
 def create_secret(path: Path) -> bytes:
-    """Make the key (32 random bytes as hex, mode 0600); never replaces a file that is there."""
+    """Make the key (32 random bytes as hex, mode 0600) as replica.json is made
+    (journal.create_new: written whole and flushed, then linked to its name and the folder flushed),
+    so that it is on the disk before anything hashed with it is journaled, and a power cut never
+    leaves a key file that is not a key. Never replaces a file that is there (FileExistsError)."""
     key = secrets.token_bytes(KEY_BYTES)
-    descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, PRIVATE_MODE)
-    with os.fdopen(descriptor, "w") as handle:
-        handle.write(key.hex() + "\n")
+    try:
+        create_new(path, (key.hex() + "\n").encode(), PRIVATE_MODE)
+    except JournalError as exc:
+        raise StoreError(str(exc)) from exc
     return key
 
 
+def set_key_aside(path: Path) -> Path:
+    """<path>, a key file that is not a key, moved aside and kept (never over another file):
+    <path>.aside-<UTC time>, which the history ignores (KEY_ASIDE)."""
+    stamp = time.strftime("%Y%m%dT%H%M%SZ", time.gmtime())
+    aside, n = path.with_name(f"{KEY_ASIDE}{stamp}"), 1
+    while os.path.lexists(aside):
+        n += 1
+        aside = path.with_name(f"{KEY_ASIDE}{stamp}-{n}")
+    path.rename(aside)
+    return aside
+
+
 def write_atomically(path: Path, text: str, mode: int | None = None) -> None:
-    """Write a temporary file, flush it to disk, then rename it over <path>."""
+    """Write a temporary file, flush it to the disk itself (journal.flush_to_disk), then rename it
+    over <path> and flush the folder (journal.replace_durably)."""
     tmp = path.with_name(path.name + ".tmp")
     with tmp.open("w") as handle:
         handle.write(text)
         handle.flush()
-        os.fsync(handle.fileno())
+        flush_to_disk(handle.fileno())
     if mode is not None:
         tmp.chmod(mode)
-    tmp.replace(path)
+    replace_durably(tmp, path)
 
 
 @contextlib.contextmanager
@@ -233,36 +285,42 @@ def ensure_repository(root: Path) -> bool:
     return (root / ".git").is_dir()
 
 
-def clear_stale_git_lock(root: Path) -> None:
-    """Remove the history's index lock when a git command cut short left it (a power cut during a
-    write's commit), with one note on stderr; else every later commit fails and the history stops.
-    The caller holds the knowledge base's exclusive lock, under which alone bosun commits, and git
-    holds its lock for one command: so one older than STALE_GIT_LOCK_SECONDS is left over. A
-    younger one is left alone (the commit then fails, with a warning)."""
-    lock = root / ".git" / "index.lock"
-    try:
-        age = time.time() - lock.stat().st_mtime
-    except FileNotFoundError:
-        return
-    if age <= STALE_GIT_LOCK_SECONDS:
-        return
-    lock.unlink(missing_ok=True)
-    print(
-        f"kg: removed {lock}, which a git command cut short left {int(age)} s ago; the knowledge "
-        "history records again",
-        file=sys.stderr,
-    )
+def git_locks(git_dir: Path) -> list[Path]:
+    """The locks a git command takes in <git_dir> while it runs: the index's, HEAD's and the other
+    files' at its top (packed-refs, ORIG_HEAD), and each ref's under refs/."""
+    return sorted([*git_dir.glob("*.lock"), *(git_dir / "refs").rglob("*.lock")])
+
+
+def clear_stale_git_locks(root: Path) -> None:
+    """Remove each lock of the history's that a git command cut short left (a power cut during a
+    write's commit), with one note on stderr each; else every later commit fails and the history
+    stops. The caller holds the knowledge base's exclusive lock, under which alone bosun commits,
+    and git holds a lock for one command: so one older than STALE_GIT_LOCK_SECONDS is left over. A
+    younger one is left alone (the commit may then fail, with a warning)."""
+    for lock in git_locks(root / ".git"):
+        try:
+            age = time.time() - lock.stat().st_mtime
+        except FileNotFoundError:
+            continue
+        if age <= STALE_GIT_LOCK_SECONDS:
+            continue
+        lock.unlink(missing_ok=True)
+        print(
+            f"kg: removed {lock}, which a git command cut short left {int(age)} s ago; the knowledge "
+            "history records again",
+            file=sys.stderr,
+        )
 
 
 def commit(root: Path, message: str) -> str:
     """Commit every change in the knowledge directory, under the knowledge base's exclusive lock
-    (clear_stale_git_lock relies on it); returns a warning, or "" (also when git is not installed:
+    (clear_stale_git_locks relies on it); returns a warning, or "" (also when git is not installed:
     history is optional)."""
     if not git_available():
         return ""
     if not ensure_repository(root):
         return f"warning: could not create a git repository in {root}; no history recorded"
-    clear_stale_git_lock(root)
+    clear_stale_git_locks(root)
     git(root, "add", "-A")
     if not git(root, "status", "--porcelain").stdout.strip():
         return ""
@@ -270,8 +328,25 @@ def commit(root: Path, message: str) -> str:
     return "" if result.returncode == 0 else f"warning: git commit failed: {result.stderr.strip()}"
 
 
+def remove_temporaries(root: Path) -> None:
+    """Delete every temporary file in the knowledge folder (*.tmp: what a write cut short before its
+    rename left, such as batch.json.tmp, which names people by their groups and titles). The caller
+    holds the exclusive lock, under which alone they are written."""
+    for path in root.glob("*.tmp"):
+        path.unlink(missing_ok=True)
+
+
 def drop_history(root: Path) -> None:
     """Delete the git history: after a delete on request the old versions must not survive in
     earlier commits. The next commit starts a new one with the files as they are then (with the
-    history off, a history kept here before is deleted all the same)."""
-    shutil.rmtree(root / ".git", ignore_errors=True)
+    history off, a history kept here before is deleted all the same). Fails closed: a history
+    still there after the delete (a file in it that cannot be deleted) is a StoreError naming it,
+    so that the write stops before view.json and the next write owes the restart again."""
+    history = root / ".git"
+    shutil.rmtree(history, ignore_errors=True)
+    if os.path.lexists(history):
+        raise StoreError(
+            f"{history}, the knowledge history, could not be deleted, and it holds what this write "
+            f"deletes; the write stopped there. Delete it (rm -rf {history}): the next write finishes "
+            "this one and starts a new history"
+        )

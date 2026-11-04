@@ -15,9 +15,11 @@ import contextlib
 import hashlib
 import io
 import json
+import os
 import random
 import re
 import shutil
+import stat
 import sys
 import unittest
 from datetime import timedelta
@@ -35,6 +37,7 @@ import knowledge_model as km
 import knowledge_store as store
 from change_log import Edit
 from knowledge_model import KnowledgeError
+from test_journal import short_writes
 from test_knowledge import FIXTURE, QUOTE, START, KnowledgeTestCase, typed
 
 
@@ -1342,6 +1345,53 @@ class OutsideEditHistoryTest(JournalTestCase):
         self.write_saying()
         self.assert_dana_is_gone()
 
+    def left_in_the_folder(self) -> list[Path]:
+        """What writes cut short leave in the knowledge folder, naming her: a kg batch cut before
+        its rename (batch.json.tmp holds group keys and titles) and a data file's new text."""
+        left = [self.root / "batch.json.tmp", self.root / "entities.jsonl.tmp"]
+        left[0].write_text(json.dumps({"groups": [{"key": "person/dana", "title": "Dana Example"}]}))
+        left[1].write_text(json.dumps({"id": "person/dana", "name": "Dana Example"}) + "\n")
+        return left
+
+    def test_forget_deletes_what_writes_cut_short_left_in_the_knowledge_folder(self) -> None:
+        self.seed()
+        self.run_kg("propose", "person/dana", "timezone", "--value", "Europe/Lisbon", "--source", "ledger:a")
+        self.left_in_the_folder()
+        self.run_kg("forget", "person/dana")
+        self.assertEqual([p.name for p in self.root.glob("*.tmp")], [])
+
+    def test_the_write_that_finishes_a_forget_deletes_them_too(self) -> None:
+        self.seed()
+        self.run_kg("propose", "person/dana", "timezone", "--value", "Europe/Lisbon", "--source", "ledger:a")
+        with self.power_cut(knowledge, "write_files"), self.assertRaises(OSError):
+            self.run_kg("forget", "person/dana")
+        self.left_in_the_folder()
+        self.write_saying()
+        self.assertEqual([p.name for p in self.root.glob("*.tmp")], [])
+        self.assert_dana_is_gone()
+
+    def test_a_purge_cut_between_its_marker_and_its_placeholders_is_finished(self) -> None:
+        """The retention purge's marker carries the ids of the facts it removed, so the next write
+        makes them placeholders, as for a forget, instead of bringing them back until kg expire."""
+        self.seed()
+        self.run_kg(
+            "propose", "person/dana", "timezone", "--value", "Europe/Lisbon", "--source", "profile:dir"
+        )
+        fact_id = self.fact_id("person/dana", "timezone")
+        self.later(km.RETENTION_DAYS + 1)
+        with self.power_cut(jr.Journal, "forget"), self.assertRaises(OSError):
+            self.run_kg("expire")
+        [marker] = [c for c in self.local() if c.get("op") == kc.DELETION]
+        self.assertEqual(marker["body"]["facts"], [fact_id])  # ids only, nothing of the person
+        self.assertIn("lisbon", self.text("journal/local.jsonl"))  # what the cut left
+        self.write_saying()
+        for name in ("journal/local.jsonl", "facts.jsonl"):
+            self.assertNotIn("lisbon", self.text(name), name)
+        self.assertNotIn("lisbon", self.history())
+        self.assertIn("person/dana", self.file_entities())  # only the facts went
+        self.assertEqual(self.validate(), ("knowledge base is valid", 0))
+        self.assert_the_journal_rebuilds_the_files()
+
     def test_a_forget_cut_before_its_placeholders_waits_for_its_key(self) -> None:
         self.forget_cut_then_key_lost(self.power_cut(jr.Journal, "forget"))
 
@@ -1604,6 +1654,260 @@ class OutsideEditHistoryTest(JournalTestCase):
         self.assertIn("person/dana", self.file_entities())
         self.assertEqual(self.validate(), ("knowledge base is valid", 0))
         self.assert_the_journal_rebuilds_the_files()
+
+
+class JournalReadsTest(JournalTestCase):
+    """A write reads the journal once and passes that read on; it rebuilds only what it must: an
+    ordinary write nothing, one after a hand edit the journal before and after it adopts."""
+
+    def counted(self, *argv: str) -> tuple[int, int]:
+        """How many times <argv> reads the journal whole, and rebuilds from it."""
+        reads, rebuilds = [], []
+        read, rebuild = jr.Journal.changes, kc.rebuild
+
+        def reading(journal: jr.Journal, at: Any = None) -> list[dict[str, Any]]:
+            reads.append(at)
+            return read(journal, at)
+
+        def rebuilding(changes: Any) -> kc.RebuiltKB:
+            rebuilds.append(1)
+            return rebuild(changes)
+
+        with (
+            mock.patch.object(jr.Journal, "changes", reading),
+            mock.patch.object(kc, "rebuild", rebuilding),
+            contextlib.redirect_stderr(io.StringIO()),
+        ):
+            self.run_kg(*argv)
+        return len(reads), len(rebuilds)
+
+    def test_an_ordinary_write_reads_the_journal_once_and_rebuilds_nothing(self) -> None:
+        self.seed()
+        self.assertEqual(self.counted("add-entity", "repo/other"), (1, 0))
+        self.assertEqual(self.counted("forget", "person/dana"), (1, 0))
+
+    def test_a_write_after_a_hand_edit_reads_it_once(self) -> None:
+        self.seed()
+        path = self.root / "entities.jsonl"
+        path.write_text(path.read_text().replace('"Merge to main"', '"Merge to trunk"'))
+        self.assertEqual(self.counted("add-entity", "repo/other"), (1, 2))
+        self.assertEqual(self.file_entities()["step/merge"]["name"], "Merge to trunk")
+        self.assert_the_journal_rebuilds_the_files()
+
+    def test_a_write_that_finishes_a_cut_forget_reads_it_once(self) -> None:
+        self.seed()
+        with (
+            mock.patch.object(knowledge, "write_files", side_effect=OSError("power cut")),
+            self.assertRaises(OSError),
+        ):
+            self.run_kg("forget", "person/dana")
+        self.assertEqual(self.counted("add-entity", "repo/other")[0], 1)
+        self.assertNotIn("person/dana", self.file_entities())
+        self.assert_the_journal_rebuilds_the_files()
+
+
+class KeyTest(JournalTestCase):
+    """secret.key, the key of the forgotten hashes: made whole like replica.json; one that is not a
+    key is replaced when no keyed record needs it (kept aside, out of the history), and refused,
+    naming it, when one does."""
+
+    git = True
+
+    def setUp(self) -> None:
+        if shutil.which("git") is None:
+            self.skipTest("git is not installed")
+        super().setUp()
+
+    def key(self) -> Path:
+        return self.root / "secret.key"
+
+    def test_the_key_reaches_the_disk_whole_before_it_is_used(self) -> None:
+        """Written to a file of its own and flushed, then linked to its name and the folder
+        flushed: a power cut never leaves a key file that is not a key."""
+        flushed: list[bool] = []
+        real = jr.flush_to_disk
+
+        def flush(fd: int) -> None:
+            flushed.append(stat.S_ISDIR(os.fstat(fd).st_mode))
+            real(fd)
+
+        with mock.patch.object(jr, "flush_to_disk", side_effect=flush):
+            store.create_secret(self.tmp / "secret.key")
+        self.assertEqual(flushed, [False, True])
+        self.assertEqual(len(store.read_secret(self.tmp / "secret.key")), store.KEY_BYTES)
+        self.assertEqual((self.tmp / "secret.key").stat().st_mode & 0o777, store.PRIVATE_MODE)
+        self.assertEqual([p.name for p in self.tmp.iterdir()], ["secret.key"])  # no temp file left
+        with self.assertRaises(FileExistsError):
+            store.create_secret(self.tmp / "secret.key")  # never over a file that is there
+
+    def bad_keys(self) -> list[tuple[str, bytes, int]]:
+        return [("empty", b"", 0o600), ("the wrong length", b"abcd\n", 0o600), ("unreadable", b"0" * 64, 0)]
+
+    def test_a_bad_key_with_no_keyed_record_is_kept_aside_and_made_again(self) -> None:
+        for case, data, mode in self.bad_keys():
+            with self.subTest(case):
+                self.setUp()
+                self.seed()
+                self.key().write_bytes(data)
+                self.key().chmod(mode)
+                said = io.StringIO()
+                with contextlib.redirect_stderr(said):
+                    self.run_kg("forget", "person/dana")
+                [aside] = self.root.glob("secret.key.aside-*")
+                aside.chmod(0o600)
+                self.assertEqual(aside.read_bytes(), data)  # kept
+                self.assertEqual(len(store.read_secret(self.key())), store.KEY_BYTES)
+                self.assertIn(f"moved it aside to {aside.name}", said.getvalue())
+                self.assertNotIn("secret.key", store.git(self.root, "ls-files").stdout)
+                self.assertEqual(store.git(self.root, "status", "--porcelain").stdout, "")  # ignored
+                with self.assertRaisesRegex(KnowledgeError, "deleted on request"):
+                    self.run_kg("add-entity", "person/dana")  # the new key recognises them
+
+    def test_a_bad_key_with_keyed_records_is_refused_and_left_as_it_is(self) -> None:
+        self.seed()
+        self.run_kg("add-entity", "person/lee", "--name", "Lee Example")
+        self.run_kg("forget", "person/dana")
+        for case, data, mode in self.bad_keys():
+            with self.subTest(case):
+                self.key().chmod(0o600)
+                self.key().write_bytes(data)
+                self.key().chmod(mode)
+                for argv in (("forget", "person/lee"), ("add-entity", "person/sam")):
+                    with self.assertRaisesRegex(KnowledgeError, r"secret\.key, if it is there"):
+                        self.run_kg(*argv)
+                self.assertEqual(list(self.root.glob("secret.key.aside-*")), [])
+        self.key().chmod(0o600)
+
+    def test_the_way_out_moves_the_bad_key_aside_too(self) -> None:
+        """The review's probe: keyed records and a damaged key; with forgotten.jsonl, the journal
+        and replica.json moved aside, a person can be added again, and the next write makes a new
+        key, keeping the bad one aside."""
+        self.seed()
+        self.run_kg("forget", "person/dana")
+        self.key().write_text("")
+        for path in (self.root / "forgotten.jsonl", self.root / "journal", self.state / "replica.json"):
+            path.rename(self.tmp / f"{path.name}.aside")
+        with contextlib.redirect_stderr(io.StringIO()):
+            self.run_kg("add-entity", "person/dana", "--name", "Dana Example")
+        self.assertIn("person/dana", self.file_entities())
+        self.assertEqual(len(store.read_secret(self.key())), store.KEY_BYTES)
+        self.assertEqual(len(list(self.root.glob("secret.key.aside-*"))), 1)
+
+
+class TornFileTest(JournalTestCase):
+    """A knowledge file that does not parse (a power cut or a full disk during its append) is one
+    the journal rebuilds while the journal is whole: a reader uses the rebuild in memory and says
+    so once, validate says the next write rebuilds it, and the next write does. Never a hard stop."""
+
+    def proposed(self) -> str:
+        self.seed()
+        self.run_kg("propose", "release", "has_step", "step/merge", "--source", "ledger:a")
+        self.run_kg("propose", "person/dana", "reviews", "exporter", "--source", "ledger:a")
+        return self.fact_id("person/dana", "reviews")
+
+    def cut_short(self, name: str, size: int) -> None:
+        """<name> cut <size> bytes short, view.json as the write left it (the review's probe)."""
+        path = self.root / name
+        path.write_bytes(path.read_bytes()[:-size])
+
+    def said(self, *argv: str) -> tuple[str, str]:
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err):
+            out = self.run_kg(*argv)
+        return out, err.getvalue()
+
+    def test_a_torn_fact_log_is_read_past_validated_and_rebuilt_by_the_next_write(self) -> None:
+        fact_id = self.proposed()
+        self.cut_short("facts.jsonl", 60)
+        files = self.saved_files()
+        out, err = self.said("facts", "person/dana", "--status", "all")
+        self.assertIn(fact_id, out)  # the journal's rebuild, in memory
+        self.assertEqual(err.count("\n"), 1, err)
+        self.assertRegex(err, r"facts\.jsonl:\d+ is not valid JSON")
+        self.assertEqual(self.saved_files(), files)  # a reader never writes
+        output, code = self.validate("--json")
+        found = json.loads(output)
+        self.assertEqual(code, 1)
+        self.assertEqual(
+            [(f["kind"], f["severity"], f["item"]) for f in found], [("unreadable", "warning", "facts.jsonl")]
+        )
+        self.assertIn("the next write", found[0]["detail"])
+        out, err = self.said("add-entity", "repo/other")
+        self.assertRegex(err, r"facts\.jsonl:\d+ is not valid JSON.*saved again as the journal's rebuild")
+        self.assert_the_journal_rebuilds_the_files()
+        self.assertIn(fact_id, self.kb().facts)
+        self.assertEqual(self.validate(), ("knowledge base is valid", 0))
+
+    def test_a_write_cut_during_its_append_is_finished_by_the_next(self) -> None:
+        """The append to facts.jsonl cut short half way (a power cut): the journal holds the
+        transaction, view.json does not, and the fact log ends in half a record."""
+        self.seed()
+        real = store.append_records
+
+        def half(path: Path, records: list[dict[str, Any]], mode: int | None = None) -> None:
+            if path.name != "facts.jsonl":
+                return real(path, records, mode)
+            with path.open("ab") as handle:
+                handle.write(store.jsonl(records).encode()[:40])
+            raise OSError("power cut")
+
+        with mock.patch.object(store, "append_records", side_effect=half), self.assertRaises(OSError):
+            self.run_kg("propose", "release", "has_step", "step/merge", "--source", "ledger:a")
+        self.assertIs(store.append_records, real)
+        self.assertIn("has_step", self.run_kg("facts", "release", "--status", "all"))
+        self.assertEqual(self.kinds(), ["unreadable", "position"])
+        self.run_kg("add-entity", "repo/other")
+        self.assert_the_journal_rebuilds_the_files()
+        self.assertEqual(len(self.records()), 1)  # the fact once
+        self.assertEqual(self.validate(), ("knowledge base is valid", 0))
+
+    def test_a_torn_forgotten_jsonl_is_read_past_and_written_again_with_the_markers_records(self) -> None:
+        self.proposed()
+        self.run_kg("forget", "person/dana")
+        recorded = store.read_jsonl(self.root / "forgotten.jsonl")
+        self.cut_short("forgotten.jsonl", 20)
+        out, err = self.said("stats")
+        self.assertIn("entities", out)
+        self.assertRegex(err, r"forgotten\.jsonl:1 is not valid JSON")
+        output, code = self.validate("--json")
+        self.assertEqual(
+            ([(f["kind"], f["severity"], f["item"]) for f in json.loads(output)], code),
+            ([("unreadable", "warning", "forgotten.jsonl")], 1),
+        )
+        with (
+            contextlib.redirect_stderr(io.StringIO()),
+            self.assertRaisesRegex(KnowledgeError, "deleted on request"),
+        ):
+            self.run_kg("add-entity", "person/dana", "--name", "Dana Example")
+        self.assertEqual(store.read_jsonl(self.root / "forgotten.jsonl"), recorded)  # from the marker
+        self.assertEqual(self.validate(), ("knowledge base is valid", 0))
+
+    def test_without_a_journal_a_file_that_does_not_parse_still_stops_every_command(self) -> None:
+        """Nothing else holds what it held: the line is named, and nothing is written."""
+        self.write_legacy([legacy_entity("repo/invoice-exporter", "invoice exporter")], [])
+        with (self.root / "facts.jsonl").open("a") as handle:
+            handle.write('{"op": "add", "at": "2026')
+        files = self.saved_files()
+        for argv in (("stats",), ("validate",), ("add-entity", "repo/other")):
+            with (
+                self.subTest(argv),
+                self.assertRaisesRegex(store.StoreError, r"facts\.jsonl:1 is not valid JSON.*fix or remove"),
+            ):
+                self.run_kg(*argv)
+        self.assertEqual({n: d for n, d in self.saved_files().items() if n != "knowledge.lock"}, files)
+
+    def test_an_append_finishes_a_short_write_flushes_and_never_joins_a_line_cut_short(self) -> None:
+        path = self.tmp / "facts.jsonl"
+        path.write_text('{"a": 1}')  # whole, but its newline never came
+        flushed: list[int] = []
+        record = {"text": "a line longer than seven bytes"}
+        with (
+            mock.patch.object(os, "write", short_writes(7)),
+            mock.patch.object(store, "flush_to_disk", side_effect=flushed.append),
+        ):
+            store.append_records(path, [record])
+        self.assertEqual(store.read_jsonl(path), [{"a": 1}, record])
+        self.assertEqual(len(flushed), 1)
 
 
 class ValidateTest(JournalTestCase):
