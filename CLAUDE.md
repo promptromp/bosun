@@ -98,7 +98,7 @@ of truth, so don't copy rules into this file.
   changes for the journal, local where they name a person or hold my words, and the rebuild the
   files are), `lib/knowledge_store.py` (files, lock, git), `lib/knowledge.py` + `libexec/bosun-kg`
   (the CLI and import, and the write boundary: the journal first, then the files and `view.json`;
-  reads caught up with the journal; `kg validate`). Quotes of my words are checked
+  reads caught up with the journal, `knowledge.load` being the one reader, which the console calls with the identifiers, forgotten records and key left out; `kg validate`). Quotes of my words are checked
   with `lib/approvals.py`'s genuine-prompt test. `tools/survey_to_kg.py` converts a survey into an
   import file; the fixture knowledge base is `tests/fixtures/knowledge/acme-import.jsonl`.
 - Agents (design: `docs/design/harnesses.md`): an adapter per agent, `lib/claude_state.py` and

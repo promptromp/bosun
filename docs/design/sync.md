@@ -1,11 +1,12 @@
 # Design note: sync and sharing (ledger and knowledge)
 
-Status: accepted (2026-11-03). Phase 0 is built for the ledger: every ledger write goes through
+Status: accepted (2026-11-03). Phase 0 is built, for both stores. Every ledger write goes through
 a journal of changes per Mac that `ledger.json` is the rebuild of, with hash-based ids, the class
 table and `bosun ledger validate --journal` (also in `bosun doctor`). For the knowledge base,
 every write goes through a journal of its own, with minted fact ids and updates that say what they
 replaced, and its files are that journal's rebuild, with `bosun kg validate` (also in `bosun
-doctor`) ([Knowledge changes](#knowledge-changes)).
+doctor`) ([Knowledge changes](#knowledge-changes)). The console reads the knowledge base through
+the same `knowledge.load`, with the identifiers, the forgotten records and the key left out.
 Planned in [docs/plans/sync-phase-0.md](../plans/sync-phase-0.md). Tracked in
 [ROADMAP.md](../../ROADMAP.md#6-sync-and-sharing).
 
@@ -832,6 +833,11 @@ from the journal, never what travels.
   (to notice a change made outside the journal, and to record its digest), about 15 ms each for a
   3 MB ledger and under 1 ms at the fixture's size, and flushes the journal and `ledger.json` to the
   disk itself (`F_FULLFSYNC`, about 5 ms each on an Apple-silicon Mac).
+- **Knowledge rebuild cost (measured 2026-11-04, phase 0):** 500 processes and 500 steps with
+  20,000 `has_step` facts imported in one transaction (21,000 changes, a 12.2 MB journal for a 6.6
+  MB `facts.jsonl`) take 0.36 s to read and order and 0.25 s to rebuild on an Apple-silicon Mac
+  (Python 3.15). A reader pays it only where the files are behind the journal (a write cut short);
+  the same remark as for the ledger holds for phase 1.
 - **Rules versions in the rebuild (both stores):** every change records `rules`, but each store's
   rebuild checks it against today's rules: the ledger's `KINDS` and `RELATIONS`, the knowledge
   base's ops (the ones its dispatch table applies and the ones it skips) and the fields an update

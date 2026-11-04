@@ -179,13 +179,15 @@ def paths() -> Paths:
 # ---- loading and saving -------------------------------------------------------------------------
 
 
-def load(p: Paths) -> KB:
+def load(p: Paths, *, identifiers: bool = True, now: datetime | None = None) -> KB:
     """The knowledge base as a reader sees it, never written: the files, or the journal's rebuild
     in memory where they are behind it (a write cut short between the two). An unfinished
     transaction at the end of the journal is left out (it was never committed); a journal that
     cannot be read, or one behind the files, gets one warning on stderr and the files as they are,
-    so that readers keep working; the next write repairs it or says why not."""
-    kb = read_files(p)
+    so that readers keep working; the next write repairs it or says why not. identifiers=False
+    (the console) reads none of identifiers.jsonl, forgotten.jsonl and secret.key, and computes no
+    key_problem; <now> replaces the clock."""
+    kb = read_files(p, identifiers=identifiers, now=now)
     try:
         return read_caught_up(p, kb, open_journal(p))
     except JournalError as exc:
@@ -193,12 +195,15 @@ def load(p: Paths) -> KB:
         return kb
 
 
-def read_files(p: Paths) -> KB:
-    """The knowledge files as they are (a write starts from them; validate compares them)."""
-    kb = KB(ks.load_site_schema(p.schema), CLOCK())
+def read_files(p: Paths, *, identifiers: bool = True, now: datetime | None = None) -> KB:
+    """The knowledge files as they are (a write starts from them; validate compares them); without
+    <identifiers>, only the entities and the facts."""
+    kb = KB(ks.load_site_schema(p.schema), now or CLOCK())
     kb.entities = {e["id"]: e for e in store.read_jsonl(p.entities)}
     kb.records = store.read_jsonl(p.facts)
     kb.facts = km.fold_all(kb.records)
+    if not identifiers:
+        return kb
     kb.identifiers = store.read_jsonl(p.identifiers)
     kb.forgotten = store.read_jsonl(p.forgotten)
     kb.secret = store.read_secret(p.secret)
@@ -747,6 +752,13 @@ def writing(p: Paths, message: str, state: Path) -> Iterator[KB]:
     yield kb
     if kb.changed:
         save(p, kb, message, Write(journal, transaction, entities, left))
+
+
+def read_shared(p: Paths, now: datetime) -> KB:
+    """The entities and facts for a reader that must never see the restricted files (the console),
+    under the shared lock, as `load` makes them."""
+    with store.locked(p, False):
+        return load(p, identifiers=False, now=now)
 
 
 @contextlib.contextmanager

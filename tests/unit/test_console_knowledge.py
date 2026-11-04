@@ -514,6 +514,50 @@ class StorageTest(KnowledgeWorld):
         self.assertNotIn(SECRET_ID, json.dumps([overview, page, review]))
         self.assertEqual(self.kb().identifiers, [])
 
+    def unreadable(self, name: str) -> None:
+        path = self.root / name
+        path.touch(exist_ok=True)
+        path.chmod(0)
+        self.addCleanup(path.chmod, 0o600)
+
+    def test_console_reads_no_identifiers(self) -> None:
+        self.kg("identify", "person/dana", "slack", SECRET_ID)
+        self.unreadable("identifiers.jsonl")
+        self.assertIn("person/dana", self.kb().entities)
+        self.assertEqual(self.kb().identifiers, [])
+
+    def test_console_reads_no_forgotten_records(self) -> None:
+        self.unreadable("forgotten.jsonl")
+        self.assertIn("person/dana", self.kb().entities)
+        self.assertEqual(self.kb().forgotten, [])
+
+    def test_console_reads_no_key_and_computes_no_key_problem(self) -> None:
+        self.kg("identify", "person/dana", "slack", SECRET_ID)
+        self.unreadable("secret.key")
+        kb = self.kb()
+        self.assertIn("person/dana", kb.entities)
+        self.assertEqual((kb.secret, kb.key_problem), (b"", ""))
+
+    def test_console_reads_a_knowledge_base_from_before_journals(self) -> None:
+        shutil.rmtree(self.root / "journal")
+        (self.root / "view.json").unlink(missing_ok=True)
+        self.assertIn("person/dana", self.kb().entities)
+
+    def test_a_console_decision_is_journaled_and_the_journal_validates(self) -> None:
+        fact = self.made(ck.batch_fact_ids(self.review()))[0]
+        self.decide("confirm", [fact])
+        last = knowledge.open_journal(knowledge.paths()).changes()[-1]
+        self.assertEqual(last["cmd"], console_kb.REVIEW_COMMAND)
+        self.assertIn("valid", self.kg("validate"))
+
+    def test_load_without_identifiers_reads_none_of_the_restricted_files(self) -> None:
+        self.kg("identify", "person/dana", "slack", SECRET_ID)
+        for name in ("identifiers.jsonl", "forgotten.jsonl", "secret.key"):
+            self.unreadable(name)
+        kb = knowledge.load(knowledge.paths(), identifiers=False)
+        self.assertEqual((kb.identifiers, kb.forgotten, kb.secret, kb.key_problem), ([], [], b"", ""))
+        self.assertIn("person/dana", kb.entities)
+
     def test_an_unknown_key_is_none(self) -> None:
         self.assertIsNone(console_kb.entity(self.settings, "0123456789abcdef", LEDGER, self.now))
         self.assertIsNone(

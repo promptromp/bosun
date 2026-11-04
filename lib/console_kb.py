@@ -2,8 +2,10 @@
 base under $BOSUN_CONFIG_DIR/knowledge/ and the batch `kg batch` saved, and saving a review
 decision, the console's one write.
 
-- Reads take the knowledge base's shared lock, as `kg lookup` does, and read entities.jsonl,
-  facts.jsonl and schema.json only: never identifiers.jsonl (restricted) or forgotten.jsonl. A
+- Reads go through knowledge.load (shared lock, as `kg lookup` does; the journal's rebuild where
+  the files are behind it, in memory) with identifiers left out: they read entities.jsonl,
+  facts.jsonl and schema.json (and the journal), never identifiers.jsonl, forgotten.jsonl or
+  secret.key (restricted). A
   knowledge base that does not exist reads as none (nothing is created); one that cannot be read
   says why.
 - A decision goes through lib/knowledge.py's own `opened` (the exclusive lock, the save and the
@@ -84,14 +86,9 @@ class Settings:
 
 
 def read_kb(root: Path, now: datetime) -> KB:
-    """The entities and facts (no identifiers), under the shared lock."""
-    paths = store.Paths(root)
-    with store.locked(paths, write=False):
-        kb = KB(ks.load_site_schema(paths.schema), now)
-        kb.entities = {e["id"]: e for e in store.read_jsonl(paths.entities)}
-        kb.records = store.read_jsonl(paths.facts)
-        kb.facts = km.fold_all(kb.records)
-    return kb
+    """The entities and facts (no identifiers), under the shared lock, as `knowledge.load` makes
+    them: the journal's rebuild where the files are behind it."""
+    return knowledge.read_shared(store.Paths(root), now)
 
 
 def loaded(settings: Settings, now: datetime) -> tuple[KB | None, str | None]:

@@ -398,8 +398,9 @@ it with symlinks resolved; one that leads out is skipped. Files over 1 MB are li
 
 The knowledge base of `bosun kg` (docs/design/knowledge.md, its MVP 2), built 2026-10-21.
 `lib/console_kb.py` reads `$BOSUN_CONFIG_DIR/knowledge/` under the store's shared lock, as `kg
-lookup` does: `entities.jsonl`, `facts.jsonl` and `schema.json`, never `identifiers.jsonl`
-(restricted) or `forgotten.jsonl`. A knowledge base that does not exist reads as none and nothing
+lookup` does, through `knowledge.load` with the identifiers left out: `entities.jsonl`,
+`facts.jsonl` and `schema.json` (and the journal, where the files are behind it, rebuilt in memory
+and never saved), never `identifiers.jsonl`, `forgotten.jsonl` or `secret.key` (restricted). A knowledge base that does not exist reads as none and nothing
 is created; the views then say how to start one (`bosun kg import`, `kg propose`).
 `lib/console_knowledge.py` (pure, over a `KB` and the ledger) builds the models.
 
