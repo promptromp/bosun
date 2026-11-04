@@ -145,6 +145,7 @@ class KB:
             or self.identifiers_changed
             or self.rewrite
             or self.rebuilt
+            or self.restart_history
         )
 
 
@@ -342,13 +343,18 @@ def has_keyed_records(kb: KB) -> bool:
 
 
 def is_forgotten(kb: KB, entity_id: str) -> bool:
-    """Whether a record of a deletion on request matches <entity_id>: keyed records by the key,
-    older ones (no hash_kind) by the plain hash."""
+    """Whether a record of a deletion on request matches <entity_id> (matches_forgotten)."""
+    return matches_forgotten(entity_id, forgotten_records(kb), kb.secret)
+
+
+def matches_forgotten(entity_id: str, records: list[Record], secret: bytes) -> bool:
+    """Whether one of <records> (of a deletion on request) is of <entity_id>: keyed records by the
+    key (<secret>; none matches without it), older ones (no hash_kind) by the plain hash."""
     plain = plain_hash_id(entity_id)
-    keyed = hash_id(entity_id, kb.secret) if kb.secret else None
-    for record in forgotten_records(kb):
+    keyed = hash_id(entity_id, secret) if secret else None
+    for record in records:
         wanted = keyed if record.get("hash_kind") == HASH_KEYED else plain
-        if wanted is not None and record["hash"] == wanted:
+        if wanted is not None and record.get("hash") == wanted:
             return True
     return False
 

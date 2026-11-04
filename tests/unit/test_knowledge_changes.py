@@ -975,16 +975,48 @@ class RebuiltFilesTest(JournalTestCase):
             self.run_kg("add-entity", "person/dana")
         self.run_kg("add-entity", "person/dana", "--allow-forgotten")
 
-    def test_forgotten_records_moved_aside_do_not_come_back_from_old_markers(self) -> None:
-        """Only a marker the files do not reflect yet (a write cut short) restores its record: moving
-        forgotten.jsonl aside (the way out when its key is lost for good) stays as chosen."""
+    def test_a_forget_with_the_history_off_removes_a_history_left_from_before(self) -> None:
+        """BOSUN_KNOWLEDGE_GIT=0 now, but an older bosun (or this one, before) kept a history here:
+        it holds the person, so a forget removes it whatever the setting says."""
+        if shutil.which("git") is None:
+            self.skipTest("git is not installed")
+        self.seed()
+        self.run_kg("propose", "person/dana", "timezone", "--value", "Europe/Lisbon", "--source", "ledger:a")
+        store.commit(self.root, "kg: the history kept before it was turned off")
+        self.run_kg("forget", "person/dana")
+        self.assertFalse((self.root / ".git").exists())
+
+    def test_the_journals_markers_keep_a_person_forgotten_when_forgotten_jsonl_is_gone(self) -> None:
+        """Forgotten is forgotten.jsonl and the records the journal's deletion markers carry: a write
+        puts back a marker's record forgotten.jsonl lacks, first, so no check misses it."""
         self.seed()
         self.run_kg("forget", "person/dana")
-        (self.root / "forgotten.jsonl").rename(self.tmp / "forgotten.aside")
+        recorded = store.read_jsonl(self.root / "forgotten.jsonl")
+        (self.root / "forgotten.jsonl").unlink()
+        with self.assertRaisesRegex(KnowledgeError, "deleted on request"):
+            self.run_kg("add-entity", "person/dana", "--name", "Dana Example")
+        self.assertEqual(store.read_jsonl(self.root / "forgotten.jsonl"), recorded)
+        self.run_kg("add-entity", "repo/other")
+        self.assertEqual(store.read_jsonl(self.root / "forgotten.jsonl"), recorded)
+
+    def test_the_way_out_for_a_lost_key_moves_the_journal_aside_too(self) -> None:
+        """With the key gone for good, forgotten.jsonl alone is not enough (the markers hold the same
+        records): moved aside with the journal folder and replica.json, the next write starts again
+        from the files and makes a new key, and the people can be added again."""
+        self.seed()
+        self.run_kg("forget", "person/dana")
         (self.root / "secret.key").unlink()
+        (self.root / "forgotten.jsonl").rename(self.tmp / "forgotten.aside")
+        with self.assertRaisesRegex(KnowledgeError, "forgotten.jsonl and the journal folder"):
+            self.run_kg(
+                "add-entity", "person/dana", "--name", "Dana Example"
+            )  # the markers' records are back
+        for path in (self.root / "forgotten.jsonl", self.root / "journal", self.state / "replica.json"):
+            path.rename(self.tmp / f"{path.name}.aside-2")  # together
         self.run_kg("add-entity", "person/dana", "--name", "Dana Example")
-        self.assertEqual(store.read_jsonl(self.root / "forgotten.jsonl"), [])
         self.assertIn("person/dana", self.file_entities())
+        self.assertTrue((self.root / "secret.key").exists())
+        self.assertEqual(store.read_jsonl(self.root / "forgotten.jsonl"), [])
 
     def test_a_write_that_changes_nothing_still_saves_the_files_it_found_behind(self) -> None:
         self.seed()
@@ -1206,13 +1238,160 @@ class OutsideEditHistoryTest(JournalTestCase):
             "facts": len(gone),
         }
         store.append_records(self.root / "forgotten.jsonl", [forgotten])
-        store.restart_history(self.root, "kg forget: a person deleted on request")
+        store.drop_history(self.root)
+        store.commit(self.root, "kg forget: a person deleted on request")
 
-    def write_saying(self) -> str:
+    def write_saying(self, *argv: str) -> str:
         said = io.StringIO()
         with contextlib.redirect_stderr(said):
-            self.run_kg("add-entity", "repo/other")
+            self.run_kg(*(argv or ("add-entity", "repo/other")))
         return said.getvalue()
+
+    def forget_cut(self, cut: Any) -> None:
+        """dana proposed (in the history), then a kg forget cut short by <cut>, then a write: nothing
+        of her is left anywhere, the history included, and validate is clean."""
+        self.seed()
+        self.run_kg("propose", "person/dana", "timezone", "--value", "Europe/Lisbon", "--source", "ledger:a")
+        self.assertIn("lisbon", self.history())
+        with cut, self.assertRaises(OSError), contextlib.redirect_stderr(io.StringIO()):
+            self.run_kg("forget", "person/dana")
+        self.write_saying()
+        self.assert_dana_is_gone()
+
+    def assert_dana_is_gone(self, word: str = "lisbon") -> None:
+        for name in ("journal/local.jsonl", "facts.jsonl", "entities.jsonl", "identifiers.jsonl"):
+            self.assertNotIn(word, self.text(name), name)
+        self.assertNotIn(word, self.history())
+        self.assertNotIn("person/dana", self.file_entities())
+        self.assertEqual(self.validate(), ("knowledge base is valid", 0))
+        self.assert_the_journal_rebuilds_the_files()
+        with self.assertRaisesRegex(KnowledgeError, "deleted on request"):
+            self.run_kg("add-entity", "person/dana")
+
+    def power_cut(self, target: Any, name: str) -> Any:
+        return mock.patch.object(target, name, side_effect=OSError("power cut"))
+
+    def test_a_forget_cut_before_the_files_leaves_nothing_in_the_history(self) -> None:
+        self.forget_cut(self.power_cut(knowledge, "write_files"))
+
+    def test_a_forget_cut_between_the_files_leaves_nothing_in_the_history(self) -> None:
+        self.forget_cut(self.cut("facts.jsonl"))
+
+    def test_a_forget_cut_before_view_json_leaves_nothing_in_the_history(self) -> None:
+        self.forget_cut(self.power_cut(knowledge, "write_view"))
+
+    def test_a_forget_cut_at_the_history_restart_leaves_nothing_in_it(self) -> None:
+        self.forget_cut(self.power_cut(store, "drop_history"))
+
+    def test_a_forget_cut_after_view_json_leaves_nothing_in_the_history(self) -> None:
+        self.forget_cut(self.power_cut(knowledge, "record_history"))
+
+    def test_a_forget_cut_before_its_placeholders_is_finished(self) -> None:
+        """The marker is committed before the placeholder rewrite; cut between the two, the next
+        write puts the placeholders in for the marker's hashed id."""
+        self.forget_cut(self.power_cut(jr.Journal, "forget"))
+
+    def test_a_forget_outside_the_journal_cut_inside_is_finished(self) -> None:
+        self.seed()
+        self.run_kg("propose", "person/dana", "timezone", "--value", "Europe/Lisbon", "--source", "ledger:a")
+        self.old_bosun_forgets("person/dana")
+        with (
+            self.power_cut(jr.Journal, "forget"),
+            self.assertRaises(OSError),
+            contextlib.redirect_stderr(io.StringIO()),
+        ):
+            self.run_kg("add-entity", "repo/other")
+        self.write_saying("add-entity", "repo/third")
+        self.assertNotIn("lisbon", self.text("journal/local.jsonl"))
+        self.assertNotIn("lisbon", self.history())
+        self.assertNotIn("dana", self.history())
+        self.assertEqual(self.validate(), ("knowledge base is valid", 0))
+
+    def test_a_forget_outside_the_journal_with_a_refused_person_leaves_neither_in_the_history(self) -> None:
+        """Files restored from a backup made when bob was forgotten and alice not yet: bob, added
+        again since, is gone from them (as an older bosun's forget would leave it), and alice,
+        forgotten since, is in them. The restart is paid at the save, so no commit holds her."""
+        self.seed()
+        self.run_kg("add-entity", "person/bob", "--name", "Bob Example")
+        self.run_kg("forget", "person/bob")
+        self.run_kg("add-entity", "person/alice", "--name", "Alice Example")
+        self.run_kg("propose", "person/alice", "timezone", "--value", "Europe/Madrid", "--source", "ledger:a")
+        backup = {name: (self.root / name).read_bytes() for name in ("entities.jsonl", "facts.jsonl")}
+        self.run_kg("add-entity", "person/bob", "--name", "Bob Example", "--allow-forgotten")
+        self.run_kg("forget", "person/alice")
+        for name, data in backup.items():
+            (self.root / name).write_bytes(data)
+        self.write_saying()
+        self.assertNotIn("madrid", self.history())
+        self.assertNotIn("alice", self.history())
+        self.assertNotIn("person/alice", self.file_entities())
+        self.assertEqual(self.validate(), ("knowledge base is valid", 0))
+
+    def test_a_cut_forget_then_an_edit_by_hand_does_not_bring_the_person_back(self) -> None:
+        self.seed()
+        self.run_kg("propose", "person/dana", "timezone", "--value", "Europe/Lisbon", "--source", "ledger:a")
+        with self.power_cut(knowledge, "write_files"), self.assertRaises(OSError):
+            self.run_kg("forget", "person/dana")
+        path = self.root / "entities.jsonl"
+        edited = [
+            {**e, "summary": "exports"} if e["id"] == "repo/invoice-exporter" else e
+            for e in store.read_jsonl(path)
+        ]
+        path.write_text(store.jsonl(edited))
+        said = self.write_saying()
+        self.assertNotIn("dana", said.lower())
+        self.assertEqual(
+            self.file_entities()["repo/invoice-exporter"]["summary"], "exports"
+        )  # the edit is kept
+        self.assertNotIn(
+            "person/dana", {c.get("target") for c in self.local() if c.get("cmd") == change_log.ADOPT}
+        )
+        self.assertEqual(len(store.read_jsonl(self.root / "forgotten.jsonl")), 1)  # the record is kept
+        self.assert_dana_is_gone()
+
+    def restored_from_before_the_forget(self, view: bool) -> None:
+        """entities.jsonl, facts.jsonl and forgotten.jsonl as a backup made before kg forget holds
+        them (no forgotten.jsonl then); view.json as now, or gone too."""
+        self.seed()
+        self.run_kg("propose", "person/dana", "timezone", "--value", "Europe/Lisbon", "--source", "ledger:a")
+        backup = {name: (self.root / name).read_bytes() for name in ("entities.jsonl", "facts.jsonl")}
+        self.run_kg("forget", "person/dana")
+        for name, data in backup.items():
+            (self.root / name).write_bytes(data)
+        (self.root / "forgotten.jsonl").unlink()
+        if not view:
+            (self.root / "view.json").unlink()
+        said = self.write_saying()
+        self.assertNotIn("dana", said.lower())
+        self.assertEqual(len(store.read_jsonl(self.root / "forgotten.jsonl")), 1)  # the record is kept
+        self.assert_dana_is_gone()
+
+    def test_files_restored_from_before_a_forget_do_not_bring_the_person_back(self) -> None:
+        self.restored_from_before_the_forget(view=True)
+
+    def test_files_restored_from_before_a_forget_without_view_json_do_not_either(self) -> None:
+        self.restored_from_before_the_forget(view=False)
+
+    def test_an_older_bosuns_re_add_of_a_forgotten_person_is_dropped_and_its_commit_too(self) -> None:
+        """An older bosun knows only plain hashes, so it lets a person forgotten with a keyed record
+        be added again, and commits them: the next write drops them, history included."""
+        self.seed()
+        self.run_kg("propose", "person/dana", "timezone", "--value", "Europe/Lisbon", "--source", "ledger:a")
+        backup = {name: (self.root / name).read_bytes() for name in ("entities.jsonl", "facts.jsonl")}
+        self.run_kg("forget", "person/dana")
+        for name, data in backup.items():
+            (self.root / name).write_bytes(data)
+        store.commit(self.root, "kg add-entity person/dana (an older bosun)")
+        self.assertIn("lisbon", self.history())
+        self.write_saying()
+        self.assert_dana_is_gone()
+
+    def test_a_reason_for_files_not_kept_is_a_true_one(self) -> None:
+        refused = {"person/someone"}
+        self.assertIn("deleted on request", knowledge.kept_as_edited(knowledge.paths(), refused, ""))
+        unchecked = knowledge.kept_as_edited(knowledge.paths(), refused, "the key ... is missing")
+        self.assertIn("cannot be checked", unchecked)
+        self.assertNotIn("name a person deleted on request", unchecked)
 
     def test_a_forget_made_outside_the_journal_is_applied_to_it(self) -> None:
         """An older bosun's kg forget: the next write forgets the person in the journal too (R12's
@@ -1227,6 +1406,7 @@ class OutsideEditHistoryTest(JournalTestCase):
         said = self.write_saying()
         self.assertIn("deleted on request", said)
         self.assertNotIn("dana", said.lower())
+        self.assertNotIn("does not journal", said)  # no cause claimed: it may be a hand removal
         for name in ("journal/local.jsonl", "facts.jsonl", "entities.jsonl"):
             self.assertNotIn("lisbon", self.text(name), name)
             self.assertNotIn("dana", self.text(name), name)

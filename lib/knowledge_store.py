@@ -242,10 +242,8 @@ def commit(root: Path, message: str) -> str:
     return "" if result.returncode == 0 else f"warning: git commit failed: {result.stderr.strip()}"
 
 
-def restart_history(root: Path, message: str) -> str:
-    """Drop the git history and start a new one with the current files: after a delete on request
-    the old versions must not survive in earlier commits."""
-    if not git_available():
-        return ""
+def drop_history(root: Path) -> None:
+    """Delete the git history: after a delete on request the old versions must not survive in
+    earlier commits. The next commit starts a new one with the files as they are then (with the
+    history off, a history kept here before is deleted all the same)."""
     shutil.rmtree(root / ".git", ignore_errors=True)
-    return commit(root, message)

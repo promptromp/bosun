@@ -202,13 +202,23 @@ def read_files(p: Paths) -> KB:
     kb.identifiers = store.read_jsonl(p.identifiers)
     kb.forgotten = store.read_jsonl(p.forgotten)
     kb.secret = store.read_secret(p.secret)
-    if not kb.secret and (km.has_keyed_records(kb) or p.secret.exists()):
-        kb.key_problem = (
-            f"the key of the forgotten people, {p.secret}, is missing, unreadable or not a key; "
-            "restore it (a new one would stop the deleted people being recognised; if it is gone "
-            "for good, move forgotten.jsonl aside and the next write makes a new key)"
-        )
+    kb.key_problem = key_problem(p, kb)
     return kb
+
+
+def key_problem(p: Paths, kb: KB) -> str:
+    """Why the forgotten people cannot be recognised (keyed records, and no readable key), or "".
+    The journal's deletion markers hold the same records as forgotten.jsonl, so the way out when
+    the key is gone for good moves both aside (and replica.json, as for a damaged journal)."""
+    if kb.secret or not (km.has_keyed_records(kb) or p.secret.exists()):
+        return ""
+    replica_file = Path(SETTINGS.state_dir) / REPLICA_FILE
+    return (
+        f"the key of the forgotten people, {p.secret}, is missing, unreadable or not a key; restore "
+        "it (a new one would stop the deleted people being recognised; if it is gone for good, move "
+        f"forgotten.jsonl and the journal folder {p.journal} aside, with {replica_file}, all together: "
+        "the people in them can then be added again, and the next write makes a new key)"
+    )
 
 
 def write_files(p: Paths, kb: KB) -> None:
@@ -237,11 +247,19 @@ def write_view(p: Paths, stamp: Mapping[str, Any]) -> None:
     store.write_atomically(p.view, json.dumps({VIEW_KEY: stamp}, indent=2, sort_keys=True) + "\n")
 
 
-def record_history(p: Paths, kb: KB, message: str) -> None:
+def restart_history(p: Paths) -> None:
+    """The history restart a write owes (it deleted a person, finished a deletion cut short, or
+    dropped or refused a person), paid once its files are final and before view.json, so that a
+    write cut short before it owes it again: the history is deleted here, whatever
+    BOSUN_KNOWLEDGE_GIT says (one kept before may hold the person), and the save's commit after
+    view.json starts it again with the files as they are now, when the history is on."""
+    store.drop_history(p.root)
+
+
+def record_history(p: Paths, message: str) -> None:
     if not SETTINGS.git:
         return
-    restart = store.restart_history if kb.restart_history else store.commit
-    warning = restart(p.root, f"kg {message}")
+    warning = store.commit(p.root, f"kg {message}")
     if warning:
         SETTINGS.warnings.append(warning)
 
@@ -256,29 +274,34 @@ class Write:
 
 
 def save(p: Paths, kb: KB, message: str, write: Write) -> None:
-    """What the write changed: in the journal first, then the files, view.json and the history."""
+    """What the write changed: in the journal first, then the files, the history restart it owes
+    (if any), view.json, and the history."""
     with journal_errors(p):
         stamp = journaled(kb, write)
     write_files(p, kb)
+    if kb.restart_history:
+        restart_history(p)
     write_view(p, stamp)
-    record_history(p, kb, message)
+    record_history(p, message)
 
 
 def journaled(kb: KB, write: Write) -> dict[str, Any]:
     """Put what the write changed in the journal, as one transaction; refused whole, before
     anything is written, when it holds what the journal cannot or a deletion would have to remove
-    a change from the private journal. A deletion leaves placeholders in local.jsonl (forget), and
-    its marker (kc.deletion_marker), so that the position moves. Returns view.json's stamp: the
-    journal's new position and the digest of each file."""
+    a change from the private journal. A deletion commits its marker (kc.deletion_marker: the
+    position moves) with the transaction, then turns what it removed into placeholders in
+    local.jsonl, so a cut between the two is finished by the next write. Returns view.json's
+    stamp: the journal's new position and the digest of each file."""
     edits = kc.edits(write.entities, kb)
     refuse_unencodable(edits)
     held = files_digest(kb)
+    targets = kc.removed(write.entities, kb) if kb.rewrite else set()
     if kb.rewrite:
-        edits = [
-            *forget(write.journal, kc.removed(write.entities, kb), edits),
-            kc.deletion_marker(kb.new_forgotten),
-        ]
+        refuse_private(write.journal, targets)
+        edits = [*(e for e in edits if e.target not in targets), kc.deletion_marker(kb.new_forgotten)]
     write.transaction.commit_edits(edits)
+    if kb.rewrite:
+        write.journal.forget(targets)
     return change_log.stamped(write.journal.position(), held)
 
 
@@ -300,18 +323,16 @@ def files_digest(kb: KB) -> dict[str, str]:
         raise KnowledgeError(problem) from exc
 
 
-def forget(journal: Journal, targets: set[str], edits: list[Edit]) -> list[Edit]:
-    """A deletion (kg forget, the retention purge) in the journal: every change of what it removed
-    becomes a placeholder in local.jsonl (Journal.forget), and nothing new names it. Refused when
-    the private journal holds a change of it, as that file is never rewritten."""
+def refuse_private(journal: Journal, targets: set[str]) -> None:
+    """A deletion (kg forget, the retention purge, one made outside the journal) turns every change
+    of what it removed into a placeholder in local.jsonl (Journal.forget); refused, before anything
+    is written, when the private journal holds a change of it, as that file is never rewritten."""
     held = kc.held_privately(journal.changes(), targets)
     if held:
         raise KnowledgeError(
             f"nothing was written: {', '.join(held)} is in the private journal, which a deletion never "
             "rewrites: it removes only what names a person, which never leaves this Mac"
         )
-    journal.forget(targets)
-    return [edit for edit in edits if edit.target not in targets]
 
 
 # ---- the journal --------------------------------------------------------------------------------
@@ -438,20 +459,24 @@ def history_on() -> bool:
     return SETTINGS.git and store.git_available()
 
 
-def forget_outside(p: Paths, journal: Journal, base: kc.RebuiltKB, persons: set[str]) -> None:
-    """A deletion on request made outside the journal (<persons>, by an older bosun's kg forget),
-    made in it too: every change of them and of the facts naming them becomes a placeholder in
-    local.jsonl (forget), a deletion's marker moves the position, and the knowledge history (which
-    holds the journal) starts again without them, before anything else is committed to it."""
-    forget(journal, kc.naming(persons, km.fold_all(base.records)), [])
-    journal.begin(ADOPT).commit_edits([kc.deletion_marker([])])
-    restarted = ""
-    if history_on():
-        warning = store.restart_history(p.root, f"kg {ADOPT}: a deletion on request made outside the journal")
-        restarted = f"; {warning}" if warning else ", and the knowledge history started again without them"
+def forget_outside(journal: Journal, kb: KB, persons: set[str]) -> None:
+    """A deletion on request made outside the journal (<persons>: gone from the files, matched by a
+    forgotten record; an older bosun's kg forget, or a hand removal), made in it too, as kg forget
+    makes one: its marker first (holding their forgotten records, so that a cut after it is
+    finished by the next write), then every change of them and of the facts naming them (in the
+    whole journal) a placeholder in local.jsonl, and the history restart owed for the save (the
+    history holds the journal)."""
+    facts = km.fold_all(kc.rebuild(journal.changes()).records)
+    targets = kc.naming(persons, facts)
+    refuse_private(journal, targets)
+    records = kc.records_of(persons, km.forgotten_records(kb), kb.secret)
+    journal.begin(ADOPT).commit_edits([kc.deletion_marker(records)])
+    journal.forget(targets)
+    kb.restart_history = True
     print(
-        f"kg: {len(persons)} person(s) deleted on request outside the journal (by a bosun that does not "
-        f"journal) are deleted from it too: their changes in local.jsonl are placeholders now{restarted}",
+        f"kg: {len(persons)} person(s) deleted on request are gone from the knowledge files and deleted "
+        "from their journal too: their changes in local.jsonl are placeholders now, and the knowledge "
+        "history starts again without them",
         file=sys.stderr,
     )
 
@@ -474,10 +499,15 @@ def adopt(p: Paths, journal: Journal, kb: KB, refused: set[str]) -> None:
     )
 
 
-def kept_as_edited(p: Paths, refused: set[str]) -> str:
+def kept_as_edited(p: Paths, refused: set[str], key_problem: str) -> str:
     """Where the files as changed outside the journal are kept once the write saves the journal's
     rebuild over them: in the knowledge folder's git history (committed now), when it is on and
-    they name no person deleted on request (no history may hold one)."""
+    they name no person refused (no history may hold one deleted on request)."""
+    if refused and key_problem:
+        return (
+            "nothing keeps the files as they were edited, as they name a person whom the forgotten "
+            "records cannot be checked against without their key"
+        )
     if refused:
         return "nothing keeps the files as they were edited, as they name a person deleted on request"
     if not history_on():
@@ -500,23 +530,24 @@ def say_left_out(p: Paths, journal: Journal, edited: KB, refused: set[str]) -> N
             f"kg: {len(left_out)} part(s) of the knowledge files as changed outside their journal "
             "could not go into it and are as the journal has them (the fact log only grows: a record "
             "removed comes back, and one edited in place comes back beside its edited copy; close a "
-            f"fact with kg supersede, delete a person with kg forget); {kept_as_edited(p, refused)}",
+            "fact with kg supersede, delete a person with kg forget); "
+            f"{kept_as_edited(p, refused, edited.key_problem)}",
             file=sys.stderr,
         )
 
 
 def taken_in(p: Paths, journal: Journal, edited: KB) -> KB:
     """Files changed outside the journal, taken in: what the journal cannot hold of them is
-    converted once (kc.taken_in, a note each); a person deleted on request outside it is deleted
-    from it too (forget_outside); what they hold beyond what they held when a write last saved
-    them is adopted, never a person deleted on request (kc.returning, one line saying so, without
-    naming them); and the write goes on from the journal's rebuild, so that they stay its rebuild.
-    What the journal could not take is counted in one line (say_left_out)."""
+    converted once (kc.taken_in, a note each); a person deleted on request and gone from them is
+    deleted from the journal too (forget_outside); what they hold beyond what they held when a
+    write last saved them is adopted, never a person deleted on request (kc.returning, one line
+    saying so, without naming them); and the write goes on from the journal's rebuild, so that
+    they stay its rebuild. What the journal could not take is counted in one line (say_left_out)."""
     for note in kc.taken_in(edited, "the knowledge files"):
         print(f"kg: {note}", file=sys.stderr)
     forgotten = kc.forgotten_outside(adopted_base(journal, p), edited)
     if forgotten:
-        forget_outside(p, journal, adopted_base(journal, p), forgotten)
+        forget_outside(journal, edited, forgotten)
     refused = kc.returning(adopted_base(journal, p), edited)
     say_held_back(adopted_base(journal, p), edited, refused)
     adopt(p, journal, edited, refused)
@@ -545,12 +576,34 @@ def say_held_back(base: kc.RebuiltKB, edited: KB, refused: set[str]) -> None:
         )
 
 
-def unfinished_forgotten(p: Paths, journal: Journal, kb: KB) -> list[Record]:
-    """The forgotten records of a deletion cut short before its files: in its marker, which the
-    files do not reflect yet, and not in forgotten.jsonl (a marker the files reflect is never read
-    again, so moving forgotten.jsonl aside stays as chosen)."""
+def take_forgotten(p: Paths, journal: Journal, kb: KB) -> None:
+    """Forgotten is forgotten.jsonl and the records the journal's deletion markers carry: a record
+    forgotten.jsonl lacks (a deletion cut short before its files, a forgotten.jsonl restored from
+    before it) is written now, before anything is taken in, so that every check sees it."""
+    missing = kc.unrecorded(journal.changes(), kb.forgotten)
+    if missing:
+        store.append_records(p.forgotten, missing)
+        kb.forgotten += missing
+        kb.key_problem = key_problem(p, kb)
+
+
+def finish_deletions(p: Paths, journal: Journal, kb: KB) -> None:
+    """A deletion the files do not reflect yet (its marker after their saved position: cut short
+    somewhere between the journal and view.json) is finished: the placeholders for its forgotten
+    records' hashed ids are put in again (a cut between its marker and its rewrite leaves them
+    out), and the history restart it owed is owed by this write."""
     saved = {change["id"] for change in journal.changes(saved_position(p))}
-    return kc.unrecorded([c for c in journal.changes() if c["id"] not in saved], kb.forgotten)
+    later = [change for change in journal.changes() if change["id"] not in saved]
+    if not any(change.get("op") == kc.DELETION for change in later):
+        return
+    kb.restart_history = True
+    result = kc.rebuild(journal.changes())
+    facts = km.fold_all(result.records)
+    persons = kc.matched(kc.people(result.entities, facts), kc.marker_records(later), kb.secret)
+    if persons:
+        targets = kc.naming(persons, facts)
+        refuse_private(journal, targets)
+        journal.forget(targets)
 
 
 def refuse_if_behind(p: Paths, journal_has: Mapping[str, int]) -> None:
@@ -588,7 +641,10 @@ def write_start(p: Paths, journal: Journal) -> KB:
     aside (repair_tail); a knowledge base from before the journal is put in it (genesis); a change
     made to the files outside the journal is taken in (adopted where it can be, and the journal's
     rebuild goes on); and where the files are behind the journal (a write cut short anywhere
-    between the journal and view.json), the journal's rebuild replaces them (standing)."""
+    between the journal and view.json), the journal's rebuild replaces them (standing). Before
+    any of that, the forgotten records the journal's markers carry are in forgotten.jsonl
+    (take_forgotten), and a deletion cut short is finished (finish_deletions). A write that drops
+    a person the files held owes a history restart."""
     kb = read_files(p)
     refuse_if_behind(p, journal.written())
     journal.repair_tail()
@@ -598,12 +654,14 @@ def write_start(p: Paths, journal: Journal) -> KB:
             genesis(p, journal, kb)
         return kb
     refuse_if_behind(p, position)
+    take_forgotten(p, journal, kb)
+    finish_deletions(p, journal, kb)
     found = standing(p, kb, position, lambda: kc.rebuild(journal.changes()))
     if found == SAVED:
         return kb
-    unfinished = unfinished_forgotten(p, journal, kb)
+    held = kc.people(kb.entities, kb.facts)
     kb = taken_in(p, journal, kb) if found == EDITED_OUTSIDE else rebuilt(journal, kb, writing=True)
-    kb.new_forgotten += unfinished  # a deletion cut short is whole once its record is in
+    kb.restart_history = kb.restart_history or bool(held - kc.people(kb.entities, kb.facts))
     return kb
 
 

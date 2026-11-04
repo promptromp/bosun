@@ -198,14 +198,30 @@ def deletion_marker(forgotten: list[Record]) -> Edit:
     return Edit(DELETION, "", {FORGOTTEN_KEY: copy.deepcopy(forgotten)}, True)
 
 
-def unrecorded(changes: Iterable[Change], recorded: list[Record]) -> list[Record]:
-    """The forgotten records the deletion markers in <changes> hold that forgotten.jsonl
-    (<recorded>) lacks: those of a deletion cut short before its files."""
-    have = {as_text(record) for record in recorded}
+def marker_records(changes: Iterable[Change]) -> list[Record]:
+    """The forgotten records the deletion markers in <changes> carry, in order."""
     held = [
         r for c in changes if c.get("op") == DELETION for r in (c.get("body") or {}).get(FORGOTTEN_KEY) or []
     ]
-    return [record for record in held if isinstance(record, dict) and as_text(record) not in have]
+    return [record for record in held if isinstance(record, dict)]
+
+
+def unrecorded(changes: Iterable[Change], recorded: list[Record]) -> list[Record]:
+    """The forgotten records the deletion markers in <changes> carry that forgotten.jsonl
+    (<recorded>) lacks: a deletion cut short before its files, or a forgotten.jsonl restored from
+    before it. Forgotten is both."""
+    have = {as_text(record) for record in recorded}
+    return [record for record in marker_records(changes) if as_text(record) not in have]
+
+
+def records_of(persons: set[str], records: list[Record], secret: bytes) -> list[Record]:
+    """Which of <records> (of deletions on request) are of one of <persons>."""
+    return [r for r in records if any(km.matches_forgotten(person, [r], secret) for person in persons)]
+
+
+def matched(persons: set[str], records: list[Record], secret: bytes) -> set[str]:
+    """Which of <persons> one of <records> is of (by its hashed id)."""
+    return {person for person in persons if km.matches_forgotten(person, records, secret)}
 
 
 def held_digests(entities: Mapping[str, Record], records: list[Record]) -> dict[str, str | None]:
