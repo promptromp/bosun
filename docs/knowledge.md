@@ -26,7 +26,12 @@ deleted on request is never taken back: one an older bosun's `kg forget` took ou
 forgotten in the journal too (their changes become placeholders, and the git history starts again
 without them), and one found in files restored from before a `kg forget` is left out and goes from
 the files (the write says so without naming them; `kg add-entity <id> --allow-forgotten` adds them
-again if they asked). Checking out an older commit of the whole folder takes the journal back
+again if they asked). While `secret.key` is missing over keyed records, no person is taken in from
+changed files at all, as adding one is refused then; the write says why, and they go from the
+files, so restore those again once the key is back. A command that only reads shows restored
+files as they are until the next write, since reads never write; and person facts an older
+bosun's retention purge took out come back from the journal until the next `kg expire` purges
+them again. Checking out an older commit of the whole folder takes the journal back
 with it, and what came after is gone ([Sync and sharing](design/sync.md#open-questions)).
 `kg validate` compares the files with the journal
 (`--json` for scripts; exit 1 on any finding), and `bosun doctor` runs it: damage, a position that

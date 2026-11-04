@@ -81,10 +81,12 @@ repository so every change has history.
   writes nothing. `view.json` records a digest of each data file: when each file is either as
   recorded or as the rebuild makes it, a write was cut short somewhere between the journal and
   `view.json` (written last), and the rebuild finishes it even at the same position. A deletion
-  (`kg forget`, the retention purge) also commits a local `deletion` marker, so the position moves
-  and a deletion cut short before the files is finished too; a write writes `identifiers.jsonl`
-  and `forgotten.jsonl` before the data files, and one that finishes a deletion drops the
-  identifiers of entities gone. A file that is neither is a change made outside the journal (by
+  (`kg forget`, the retention purge) also commits a local `deletion` marker holding its
+  `forgotten.jsonl` record (the keyed hash and counts), so the position moves and a deletion cut
+  short before the files is finished too, its record written by the write that finishes it; a
+  write writes `identifiers.jsonl` and `forgotten.jsonl` before the data files, and one that
+  finishes a deletion drops the identifiers of entities gone. A file that is neither is a change
+  made outside the journal (by
   hand, a git checkout or revert of files here, an older bosun): the next write adopts it as one
   `adopt` transaction (entities made, changed or removed, and records the fact log gained), then
   goes on from the rebuild. A record removed cannot be adopted (the fact log only grows) and comes
@@ -94,7 +96,10 @@ repository so every change has history.
   the files (`forgotten.jsonl` matches them, by a plain or keyed hash) is forgotten in the journal
   too, placeholders and a history restart before anything else is committed; one in files
   restored from before a forget, with no `--allow-forgotten` add in the journal, is left out (one
-  line, not naming them), the files as edited are not committed, and the rebuild drops them.
+  line, not naming them), the files as edited are not committed, and the rebuild drops them;
+  while the key of the forgotten cannot be read, no person entity is adopted at all (one line
+  saying why). A reader shows such files until the next write; an older bosun's retention purge
+  is redone by the next `kg expire`.
   `kg validate` reports damage, a position that does not match, a rebuild that differs,
   conflicts, updates waiting for their fact and an outside edit; `bosun doctor` runs it
   (`lib/validation.py`, shared with the ledger's validate).

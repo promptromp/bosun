@@ -356,8 +356,11 @@ checkout or revert of files in the knowledge folder, an older bosun); when each 
 other, a write was cut short somewhere between the journal and `view.json` (written last), and the
 rebuild finishes it, even at the same position. Adopting such files would hold that write's
 records twice, or bring back a person a `kg forget` cut short had already placeholdered. A deletion
-also commits a local `deletion` marker (no target, nothing in it, skipped by the rebuild), so the
-position moves and a deletion cut short before the files is finished by the next write; the
+also commits a local `deletion` marker (no target, skipped by the rebuild), holding the write's
+`forgotten.jsonl` records (a keyed hash and counts, nothing of the person), so the position moves
+and a deletion cut short before the files is finished by the next write, which writes a record
+`forgotten.jsonl` lacks (only from a marker the files do not reflect yet, so moving
+`forgotten.jsonl` aside stays as chosen): a forget is whole through the journal. The
 identifiers and `forgotten.jsonl`, which the journal does not hold, are written before the data
 files, and a write that finishes a deletion drops the identifiers of entities gone. What an
 outside change cannot express (a record removed: the fact log only grows) comes back; a record
@@ -369,7 +372,11 @@ took out of the files, whom `forgotten.jsonl` matches (a plain or a keyed hash),
 the journal too (the placeholders, a marker, and the git history started again, before anything
 else is committed to it), and one in files restored from before a forget, with no
 `--allow-forgotten` add in the journal, is not adopted (one line, without naming them), the files
-as edited are not committed, and the rebuild drops them. A write that rebuilds with conflicts or
+as edited are not committed, and the rebuild drops them. While the key of the forgotten cannot be
+read (keyed records and no `secret.key`), the forgotten check cannot run, so adopt takes in no
+person entity at all, as adding one is refused then, and says why. A reader shows such files as
+they are until the next write (reads never write), and person facts an older bosun's retention
+purge took out come back from the journal until the next `kg expire`. A write that rebuilds with conflicts or
 pending updates says how many on stderr. A command that only reads uses the rebuild in memory and
 writes nothing. `bosun kg validate` compares the files as saved with the journal's rebuild, with
 the ledger's findings and severities (`lib/validation.py` holds what both stores share: the
