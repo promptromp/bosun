@@ -3,7 +3,11 @@
 A store is a journal of changes. This module is what every change shares: the envelope's
 canonical bytes and its content-addressed id, a hybrid logical clock (Kulkarni et al.) so that
 changes from different machines get one global order, that order itself, and the short id
-suffixes minted for new items.
+suffixes minted for new items. Also what both stores (the ledger, the knowledge base) do alike at
+their write boundary: refuse a change the journal cannot hold, naming where it is; convert, once,
+data written before or outside the journal; the stamp a store's files record of the journal (the
+position they reflect and a digest of what they hold); and the placeholder a change deleted on
+request leaves in its place.
 
 Pure functions and small value types: no file access. The journal that stores changes is
 elsewhere.
@@ -14,7 +18,7 @@ from __future__ import annotations
 import hashlib
 import json
 import re
-from collections.abc import Iterable, Iterator, Mapping
+from collections.abc import Callable, Iterable, Iterator, Mapping
 from dataclasses import dataclass
 from typing import Any, NamedTuple
 
@@ -23,6 +27,14 @@ ENVELOPE_VERSION = 1
 
 Change = dict[str, Any]
 Place = tuple[str, ...]  # where a value sits in a record: its keys, and list positions as text
+
+# Beside a store's journal position in its files: the key of the digest of what they hold.
+DIGEST = "digest"
+# A change deleted on request (`kg forget`, the retention purge) leaves a placeholder in its file:
+# its place in the sequence, its clock and its transaction's counts, and nothing of what it held,
+# so the sequence and the ids minted from it never go back and its transaction stays whole.
+FORGOTTEN = "forgotten"
+PLACEHOLDER_KEYS = ("v", "stream", "replica", "seq", "hlc", "tx", "of", "local", "private_of")
 
 CROCKFORD = "0123456789abcdefghjkmnpqrstvwxyz"  # pragma: allowlist secret (the base32 alphabet)
 SUFFIX_LENGTH = 6
@@ -143,6 +155,90 @@ def change_id(record: Mapping[str, Any]) -> str:
     """SHA-256 (hex) of the canonical record without its own `id`."""
     body = {key: value for key, value in record.items() if key != "id"}
     return hashlib.sha256(canonical(body)).hexdigest()
+
+
+def digest(value: Mapping[str, Any]) -> str:
+    """SHA-256 (hex) of <value>'s canonical bytes: two Macs that hold the same have the same."""
+    return hashlib.sha256(canonical(value)).hexdigest()
+
+
+def placeholder(change: Mapping[str, Any]) -> Change:
+    """What a change deleted on request leaves in its place: its envelope's place (seq, clock,
+    transaction, counts), op FORGOTTEN, no target and no body, and an id of its own."""
+    made: Change = {key: change[key] for key in PLACEHOLDER_KEYS if key in change}
+    made["op"] = FORGOTTEN
+    made["id"] = change_id(made)
+    return made
+
+
+# ---- the write boundary -------------------------------------------------------------------------
+
+
+def where(target: str, path: Iterable[str]) -> str:
+    """A place as a person finds it: the item, entity or fact, then the field path."""
+    below = ".".join(path)
+    return f"{target} {below}" if below else target
+
+
+def unencodable_edits(
+    edits: Iterable[Edit], place: Callable[[Edit, Place], str]
+) -> Iterator[tuple[str, str]]:
+    """Each value in <edits> that the journal cannot hold (unencodable: a float, text that is not
+    valid Unicode), with its place in the store (<place> of the edit and the place in its body)."""
+    for edit in edits:
+        for found in unencodable(edit.body):
+            yield place(edit, found.place), found.what
+
+
+def refusal(edits: Iterable[Edit], place: Callable[[Edit, Place], str]) -> str:
+    """Why a write is refused at the boundary, before anything is journaled: the first value it
+    would journal that the journal cannot hold, named by its place; "" when there is none."""
+    found = next(unencodable_edits(edits, place), None)
+    if found is None:
+        return ""
+    return (
+        f"nothing was written: {found[0]} holds {found[1]}, which the journal cannot hold "
+        "(it keeps whole numbers and text in UTF-8)"
+    )
+
+
+def taken_in(value: Any, source: str, place_of: Callable[[Place], str]) -> tuple[Any, list[str]]:
+    """<value>, written before or outside the journal (<source>), as the journal can hold it: each
+    value it cannot converted once (encodable), with a note naming its place (<place_of>); <value>
+    itself when there is nothing to convert."""
+    found = list(unencodable(value))
+    notes = [
+        f"{place_of(place)}: {what} in {source}, which the journal cannot hold; taken in as {made!r}"
+        for place, what, made in found
+    ]
+    return (encodable(value) if found else value), notes
+
+
+# ---- what a store's files record of the journal -------------------------------------------------
+
+
+def stamped(position: Mapping[str, int], held: str) -> dict[str, Any]:
+    """What a store's files record of the journal: the position they reflect (the highest seq of
+    each journal file) and the digest of what they hold (DIGEST), so that a change made to them
+    outside the journal shows."""
+    return {**position, DIGEST: held}
+
+
+def position_in(stamp: Any) -> dict[str, int]:
+    """The journal position a stamp records; {} for none (files from before the journal)."""
+    if not isinstance(stamp, dict):
+        return {}
+    return {str(stem): seq for stem, seq in stamp.items() if isinstance(seq, int)}
+
+
+def behind(journal_has: Mapping[str, int], file_has: Mapping[str, int], file_name: str) -> list[str]:
+    """Each journal file that is behind the position <file_name> reflects (it lost changes the file
+    has): a rebuild from it would lose them too."""
+    return [
+        f"{stem}.jsonl ends at seq {journal_has.get(stem, 0)}, {file_name} reflects seq {seq}"
+        for stem, seq in sorted(file_has.items())
+        if journal_has.get(stem, 0) < seq
+    ]
 
 
 def clock_text(ms: int, counter: int) -> str:

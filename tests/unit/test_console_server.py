@@ -462,10 +462,10 @@ class KnowledgeServerTestCase(RunningServer):
     def setUp(self) -> None:
         super().setUp()
         self.root = self.state / "config" / "knowledge"
-        knowledge.configure(self.root, git=False)
+        knowledge.configure(self.root, git=False, state_dir=str(self.state))
         args = knowledge.build_parser().parse_args(["import", str(KG_FIXTURE), "--apply", "--auto-confirm"])
         args.func(args)
-        self.app.knowledge = console_kb.Settings(root=self.root, git=False)
+        self.app.knowledge = console_kb.Settings(root=self.root, git=False, state_dir=str(self.state))
         self.app.csrf = CSRF
 
     def facts_log(self) -> str:
@@ -473,7 +473,8 @@ class KnowledgeServerTestCase(RunningServer):
 
     def waiting(self) -> list[str]:
         model = self.get_json(console_server.REVIEW_PATH)
-        return sorted(console_knowledge.batch_fact_ids(model), key=lambda i: int(i[1:]))
+        waiting = console_knowledge.batch_fact_ids(model)
+        return [i for i in knowledge.load(knowledge.paths()).facts if i in waiting]  # in the order made
 
     def post(self, body: Any, cookie: str | None = "", **headers: str) -> http.client.HTTPResponse:
         sent = {

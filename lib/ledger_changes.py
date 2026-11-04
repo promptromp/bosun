@@ -41,16 +41,15 @@ it never imports `ledger`.
 from __future__ import annotations
 
 import copy
-import hashlib
 import heapq
 import json
 from collections import Counter
-from collections.abc import Callable, Iterable, Iterator, Mapping
+from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass, field
 from itertools import chain
 from typing import Any
 
-from change_log import Change, Conflict, Edit, canonical, in_order, unencodable
+from change_log import Change, Conflict, Edit, digest, in_order, where
 from lineage import Items, Link
 
 
@@ -1019,11 +1018,9 @@ def rebuild(changes: Iterable[Change], rules: Rules) -> Rebuilt:
 
 
 def state_hash(ledger: Ledger) -> str:
-    """SHA-256 (hex) of the ledger's canonical bytes without its journal key: two Macs that read
+    """The digest of the ledger without its journal key (change_log.digest): two Macs that read
     the same changes have the same, and ledger.json records it as the digest of what it holds."""
-    return hashlib.sha256(
-        canonical({key: value for key, value in ledger.items() if key != JOURNAL})
-    ).hexdigest()
+    return digest({key: value for key, value in ledger.items() if key != JOURNAL})
 
 
 # ---- what the journal cannot hold -------------------------------------------------------------
@@ -1033,12 +1030,6 @@ def state_hash(ledger: Ledger) -> str:
 # change's body is the link or the move itself.
 _HELD = ("item", "value", "prev", "entry")
 _OWN_PLACE = {"item.link": "links", "item.unlink": "links", "item.state": "state"}
-
-
-def where(target: str, path: Iterable[str]) -> str:
-    """A place as a person finds it: the item (or sources, runs, said), then the field path."""
-    below = ".".join(path)
-    return f"{target} {below}" if below else target
 
 
 def ledger_place(path: Path) -> str:
@@ -1058,11 +1049,3 @@ def place(edit: Edit, inner: Path) -> str:
     else:
         path = [*([_OWN_PLACE[edit.op]] if edit.op in _OWN_PLACE else []), *inner]
     return where(edit.target, path)
-
-
-def unencodable_edits(edits: Iterable[Edit]) -> Iterator[tuple[str, str]]:
-    """Each value in <edits> that the journal cannot hold (change_log.unencodable: a float, text
-    that is not valid Unicode), with its place in the ledger."""
-    for edit in edits:
-        for found in unencodable(edit.body):
-            yield place(edit, found.place), found.what

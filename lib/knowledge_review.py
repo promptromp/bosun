@@ -61,7 +61,7 @@ def parents(kb: KB) -> dict[str, str]:
     """Each entity's parent, for grouping: the process a step belongs to, what a decision or
     lesson is about, the repo a feature lives in (current facts, reviewed or not)."""
     found: dict[str, str] = {}
-    for fact in sorted(kb.facts.values(), key=lambda f: int(f["id"][1:])):
+    for fact in sorted(kb.facts.values(), key=km.creation_key):
         if not fact.get("object") or not km.is_current(fact) or fact["status"] == km.REJECTED:
             continue
         if fact["predicate"] in CHILD_PREDICATES:
@@ -129,8 +129,8 @@ def waiting(kb: KB) -> list[Record]:
     ]
 
 
-def fact_order(fact: Record) -> tuple[bool, int, str, int]:
-    return (not fact.get("prevents_rework"), fact.get("order") or 0, fact["predicate"], int(fact["id"][1:]))
+def fact_order(fact: Record) -> tuple[bool, int, str, tuple[str, int, str]]:
+    return (not fact.get("prevents_rework"), fact.get("order") or 0, fact["predicate"], km.creation_key(fact))
 
 
 @dataclass(frozen=True)

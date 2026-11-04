@@ -72,7 +72,7 @@ def share(part: int, whole: int) -> float:
 
 
 def in_order(facts: Iterable[Record]) -> list[Record]:
-    return sorted(facts, key=ck.fact_number)
+    return sorted(facts, key=km.creation_key)
 
 
 def visible_facts(kb: KB) -> list[Record]:
@@ -254,7 +254,7 @@ def new_entities(kb: KB, zone: tzinfo) -> Counter[date | None]:
 
 
 def day_row(kb: KB, day: date, facts: list[Record], changes: list[Change], entities: int) -> dict[str, Any]:
-    ranked = sorted(facts, key=lambda f: (rank(f), ck.fact_number(f)))
+    ranked = sorted(facts, key=lambda f: (rank(f), km.creation_key(f)))
     return {
         "day": day.isoformat(),
         "changes": [c.model for c in changes],

@@ -136,7 +136,7 @@ def knowledge_base(root: Path) -> None:
     """The acme knowledge base: the fixture import, plus a gate, a confirmed link, a superseded
     fact, web and javascript: sources, an entity whose name is HTML, and a saved batch."""
     knowledge.CLOCK = lambda: KG_NOW
-    knowledge.configure(root, git=False)
+    knowledge.configure(root, git=False, state_dir=str(root.parent.parent / "kg-state"))
     kg("import", str(KG_FIXTURE), "--apply", "--auto-confirm")
     kg("add-entity", "system/widget", "--name", "<img src=x onerror=alert(1)>")
     for argv in (

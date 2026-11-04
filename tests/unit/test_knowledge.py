@@ -64,17 +64,18 @@ def tool_result(text: str, moment: datetime) -> dict[str, Any]:
 
 
 class KnowledgeTestCase(unittest.TestCase):
-    """A scratch knowledge directory (no git unless a test asks), a pinned clock, and a few
-    entities of the acme world."""
+    """A scratch knowledge directory (no git unless a test asks) and state folder (this Mac's
+    replica id, as the journal uses it), a pinned clock, and a few entities of the acme world."""
 
     git = False
 
     def setUp(self) -> None:
         self.tmp = Path(tempfile.mkdtemp())
         self.root = self.tmp / "knowledge"
+        self.state = self.tmp / "state"
         self.now = START
         knowledge.CLOCK = lambda: self.now
-        knowledge.configure(self.root, git=self.git)
+        knowledge.configure(self.root, git=self.git, state_dir=str(self.state))
         self.addCleanup(shutil.rmtree, self.tmp, ignore_errors=True)
         self.addCleanup(setattr, knowledge, "CLOCK", knowledge.clock)
 
@@ -102,6 +103,11 @@ class KnowledgeTestCase(unittest.TestCase):
     def fact(self, fact_id: str) -> dict[str, Any]:
         return self.kb().facts[fact_id]
 
+    def f(self, n: int) -> str:
+        """The id of the <n>th fact this test made (ids are minted, not counted: the fact log keeps
+        the order they were made in)."""
+        return list(self.kb().facts)[n - 1]
+
     def log_lines(self) -> list[str]:
         return (self.root / "facts.jsonl").read_text().splitlines()
 
@@ -122,13 +128,13 @@ class StorageTest(KnowledgeTestCase):
             "propose", "process/release", "has_step", "step/merge", "--source", "ledger:task:2026-10-01/1"
         )
         first = self.log_lines()
-        self.run_kg("confirm", "f1")
-        self.run_kg("supersede", "f1", "--close", "--note", "merged into another step")
+        self.run_kg("confirm", self.f(1))
+        self.run_kg("supersede", self.f(1), "--close", "--note", "merged into another step")
         lines = self.log_lines()
         self.assertEqual(lines[: len(first)], first)
         self.assertEqual([json.loads(line)["op"] for line in lines], ["add", "update", "update"])
-        self.assertEqual(self.fact("f1")["status"], km.CONFIRMED)
-        self.assertIsNotNone(self.fact("f1")["valid_to"])
+        self.assertEqual(self.fact(self.f(1))["status"], km.CONFIRMED)
+        self.assertIsNotNone(self.fact(self.f(1))["valid_to"])
 
     def test_a_bad_line_is_named_not_skipped(self) -> None:
         self.seed()
@@ -199,7 +205,7 @@ class AutoConfirmTest(KnowledgeTestCase):
             transcript,
         )
         self.assertIn("confirmed (your own words", out)
-        fact = self.fact("f1")
+        fact = self.fact(self.f(1))
         self.assertEqual(fact["authority"], "user_said")
         self.assertTrue(fact["sources"][0]["verified"])
 
@@ -231,12 +237,12 @@ class AutoConfirmTest(KnowledgeTestCase):
         self.run_kg(
             "propose", "process/release", "has_step", "step/merge", "--source", "ledger:task:2026-10-01/1"
         )
-        self.assertEqual(self.fact("f1")["status"], km.PROPOSED)
+        self.assertEqual(self.fact(self.f(1))["status"], km.PROPOSED)
         out = self.run_kg(
             "propose", "releases", "has_step", "merge to main", "--source", "report:task:2026-10-01/1"
         )
-        self.assertIn("f1 observed, confirmed (two independent trusted sources)", out)
-        self.assertEqual(len(self.fact("f1")["sources"]), 2)
+        self.assertIn(f"{self.f(1)} observed, confirmed (two independent trusted sources)", out)
+        self.assertEqual(len(self.fact(self.f(1))["sources"]), 2)
 
     def test_untrusted_text_never_confirms(self) -> None:
         self.seed()
@@ -254,25 +260,25 @@ class AutoConfirmTest(KnowledgeTestCase):
             "--source",
             "doc:wiki/release",
         )
-        self.assertEqual(self.fact("f1")["status"], km.PROPOSED)
+        self.assertEqual(self.fact(self.f(1))["status"], km.PROPOSED)
 
     def test_high_risk_and_person_facts_need_more_than_two_sources(self) -> None:
         self.seed()
         self.propose_smoke("ledger:x", "report:y")
-        self.assertEqual(self.fact("f1")["status"], km.PROPOSED)
+        self.assertEqual(self.fact(self.f(1))["status"], km.PROPOSED)
         self.run_kg(
             "propose", "person/dana", "reviews", "exporter", "--source", "ledger:x", "--source", "report:y"
         )
-        self.assertEqual(self.fact("f2")["status"], km.PROPOSED)
+        self.assertEqual(self.fact(self.f(2))["status"], km.PROPOSED)
 
     def test_a_profile_source_confirms_title_and_timezone_only(self) -> None:
         self.seed()
         self.run_kg(
             "propose", "person/dana", "timezone", "--value", "Europe/Lisbon", "--source", "profile:directory"
         )
-        self.assertEqual(self.fact("f1")["status"], km.CONFIRMED)
+        self.assertEqual(self.fact(self.f(1))["status"], km.CONFIRMED)
         self.run_kg("propose", "person/dana", "reviews", "exporter", "--source", "profile:directory")
-        self.assertEqual(self.fact("f2")["status"], km.PROPOSED)
+        self.assertEqual(self.fact(self.f(2))["status"], km.PROPOSED)
 
     def test_a_conflicting_single_value_waits_for_review(self) -> None:
         self.seed()
@@ -280,8 +286,8 @@ class AutoConfirmTest(KnowledgeTestCase):
             "propose", "person/dana", "timezone", "--value", "Europe/Lisbon", "--source", "profile:directory"
         )
         out = self.run_kg("propose", "person/dana", "timezone", "--value", "UTC", "--source", "profile:hr")
-        self.assertIn("contradicts f1", out)
-        self.assertEqual(self.fact("f2")["status"], km.PROPOSED)
+        self.assertIn(f"contradicts {self.f(1)}", out)
+        self.assertEqual(self.fact(self.f(2))["status"], km.PROPOSED)
 
     def test_refusals(self) -> None:
         self.seed()
@@ -308,7 +314,7 @@ class LifecycleTest(KnowledgeTestCase):
             "memory:ci.md",
         )
         self.later(km.PROPOSAL_DAYS + 1)
-        self.assertEqual(km.effective_status(self.fact("f1"), self.now), km.EXPIRED)
+        self.assertEqual(km.effective_status(self.fact(self.f(1)), self.now), km.EXPIRED)
         self.assertIn("Nothing to review", self.run_kg("batch"))
         out = self.run_kg(
             "propose",
@@ -319,8 +325,8 @@ class LifecycleTest(KnowledgeTestCase):
             "--source",
             "memory:ci.md",
         )
-        self.assertIn("f1 observed, proposed", out)
-        fact = self.fact("f1")
+        self.assertIn(f"{self.f(1)} observed, proposed", out)
+        fact = self.fact(self.f(1))
         self.assertEqual(fact["observations"], 2)
         self.assertEqual(km.parse_time(fact["observed_at"]), self.now)
         self.assertEqual(len(fact["sources"]), 1)  # the same source is not added twice
@@ -330,14 +336,14 @@ class LifecycleTest(KnowledgeTestCase):
         self.run_kg("propose", "repo/invoice-exporter", "caveat", "--value", "x", "--source", "memory:ci.md")
         self.later(km.PROPOSAL_DAYS + 1)
         self.assertIn("1 expired", self.run_kg("expire", "--dry-run"))
-        self.assertEqual(self.fact("f1")["status"], km.PROPOSED)
+        self.assertEqual(self.fact(self.f(1))["status"], km.PROPOSED)
         self.run_kg("expire")
-        self.assertEqual(self.fact("f1")["status"], km.EXPIRED)
+        self.assertEqual(self.fact(self.f(1))["status"], km.EXPIRED)
 
     def test_rejected_facts_stay_rejected_unless_I_say_so(self) -> None:
         self.seed()
         self.run_kg("propose", "process/release", "gated_by", "gate/smoke-tests", "--source", "memory:x")
-        self.run_kg("reject", "f1")
+        self.run_kg("reject", self.f(1))
         out = self.run_kg(
             "propose", "process/release", "gated_by", "gate/smoke-tests", "--source", "ledger:y"
         )
@@ -354,7 +360,7 @@ class LifecycleTest(KnowledgeTestCase):
             "--transcript",
             transcript,
         )
-        self.assertIn("f1 observed, confirmed", out)
+        self.assertIn(f"{self.f(1)} observed, confirmed", out)
 
 
 class TimelineTest(KnowledgeTestCase):
@@ -371,12 +377,14 @@ class TimelineTest(KnowledgeTestCase):
             "--valid-from",
             "2026-09-01",
         )
-        self.run_kg("confirm", "f1")
+        self.run_kg("confirm", self.f(1))
         self.later(10)
-        out = self.run_kg("supersede", "f1", "--value", "retired", "--source", "ledger:task:2026-10-02/3")
-        self.assertIn("f1 superseded by f2", out)
-        old, new = self.fact("f1"), self.fact("f2")
-        self.assertEqual(old["superseded_by"], "f2")
+        out = self.run_kg(
+            "supersede", self.f(1), "--value", "retired", "--source", "ledger:task:2026-10-02/3"
+        )
+        self.assertIn(f"{self.f(1)} superseded by {self.f(2)}", out)
+        old, new = self.fact(self.f(1)), self.fact(self.f(2))
+        self.assertEqual(old["superseded_by"], self.f(2))
         self.assertEqual(new["status"], km.CONFIRMED)
         now = self.run_kg("facts", "staging 2")
         self.assertIn("retired", now)
@@ -384,9 +392,9 @@ class TimelineTest(KnowledgeTestCase):
         before = self.run_kg("facts", "staging-2", "--as-of", "2026-10-25")
         self.assertIn("'active'", before)
         self.assertNotIn("retired", before)
-        self.assertIn("f1", self.run_kg("facts", "staging-2", "--closed"))
+        self.assertIn(self.f(1), self.run_kg("facts", "staging-2", "--closed"))
         with self.assertRaisesRegex(KnowledgeError, "already closed"):
-            self.run_kg("supersede", "f1", "--close")
+            self.run_kg("supersede", self.f(1), "--close")
 
     def test_confirming_a_single_valued_fact_supersedes_the_current_value(self) -> None:
         self.seed()
@@ -394,9 +402,9 @@ class TimelineTest(KnowledgeTestCase):
             "propose", "person/dana", "timezone", "--value", "Europe/Lisbon", "--source", "profile:directory"
         )
         self.run_kg("propose", "person/dana", "timezone", "--value", "UTC", "--source", "profile:hr")
-        out = self.run_kg("confirm", "f2")
-        self.assertIn("f1 superseded by f2", out)
-        self.assertEqual(self.fact("f1")["valid_to"], km.iso(self.now))
+        out = self.run_kg("confirm", self.f(2))
+        self.assertIn(f"{self.f(1)} superseded by {self.f(2)}", out)
+        self.assertEqual(self.fact(self.f(1))["valid_to"], km.iso(self.now))
 
     def test_a_correction_in_my_words_needs_the_quote(self) -> None:
         self.seed()
@@ -405,7 +413,7 @@ class TimelineTest(KnowledgeTestCase):
         with self.assertRaisesRegex(KnowledgeError, "not in anything you typed"):
             self.run_kg(
                 "supersede",
-                "f1",
+                self.f(1),
                 "--value",
                 "retired",
                 "--from-user",
@@ -421,11 +429,12 @@ class LintTest(KnowledgeTestCase):
         self.seed()
         self.run_kg("propose", "person/dana", "role", "--value", "reviewer", "--source", "ledger:a")
         self.run_kg("propose", "person/dana", "role", "--value", "release manager", "--source", "ledger:b")
-        self.run_kg("confirm", "f1", "f2")
+        self.run_kg("confirm", self.f(1), self.f(2))
         self.assertNotIn("contradiction", self.run_kg("lint"))
         (self.root / "schema.json").write_text(json.dumps({"single_valued": ["role"]}))
         out = self.run_kg("lint")
-        self.assertIn("contradiction: person/dana has 2 current values for role (f1, f2)", out)
+        both = ", ".join(sorted([self.f(1), self.f(2)]))
+        self.assertIn(f"contradiction: person/dana has 2 current values for role ({both})", out)
 
     def test_stale_orphans_collisions_and_merge_suggestions(self) -> None:
         self.seed()
@@ -444,12 +453,12 @@ class LintTest(KnowledgeTestCase):
         )
         self.later(kr.DEFAULT_STALE_DAYS + 1)
         out = self.run_kg("lint")
-        self.assertIn("stale: f1 not observed for over 180 days", out)
+        self.assertIn(f"stale: {self.f(1)} not observed for over 180 days", out)
         self.assertIn("orphan: environment/staging-2 has no facts", out)
         self.assertIn("person/robin-a, person/robin-b share the first name 'robin'", out)
         self.assertIn("merge-suggestion: repo/invoice-exporter and repo/invoice-exporters", out)
         self.run_kg("propose", "person/robin-a", "distinct_from", "person/robin-b", "--source", "user:x")
-        self.run_kg("confirm", "f2")
+        self.run_kg("confirm", self.f(2))
         self.assertNotIn("first name", self.run_kg("lint"))
 
     def test_strict_exits_1(self) -> None:
@@ -465,12 +474,13 @@ class RetentionAndForgetTest(KnowledgeTestCase):
             "propose", "person/dana", "timezone", "--value", "Europe/Lisbon", "--source", "profile:directory"
         )
         self.run_kg("propose", "repo/invoice-exporter", "caveat", "--value", "x", "--source", "memory:a")
-        self.run_kg("confirm", "f2")
+        kept = self.f(2)
+        self.run_kg("confirm", kept)
         self.later(km.RETENTION_DAYS + 1)
         self.assertIn("retention: 1 person facts unseen for 365 days", self.run_kg("lint"))
         out = self.run_kg("expire")
         self.assertIn("1 person facts past retention deleted", out)
-        self.assertEqual(sorted(self.kb().facts), ["f2"])
+        self.assertEqual(sorted(self.kb().facts), [kept])
         self.assertNotIn("Lisbon", (self.root / "facts.jsonl").read_text())
         forgotten = [json.loads(line) for line in (self.root / "forgotten.jsonl").read_text().splitlines()]
         self.assertEqual(forgotten, [{"at": km.iso(self.now), "reason": "retention", "facts": 1}])
@@ -604,7 +614,7 @@ class BatchTest(KnowledgeTestCase):
         )
         out = self.run_kg("batch")
         self.assertIn("1. Process: other facts: 5 facts [prevents rework]", out)
-        self.assertIn("   b. f3 Release process includes the step Gradual rollout (step 3)", out)
+        self.assertIn(f"   b. {self.f(3)} Release process includes the step Gradual rollout (step 3)", out)
 
     def test_entity_and_area_groups_and_the_cap(self) -> None:
         for number in range(kr.MIN_GROUP_FACTS):
@@ -658,7 +668,7 @@ class BatchTest(KnowledgeTestCase):
         self.run_kg("batch")
         out = self.run_kg("batch", "apply", "--confirm", "1,3", "--reject", "2a", "--dry-run")
         self.assertIn("(dry run)", out)
-        self.assertEqual(self.kb().facts["f3"]["status"], km.PROPOSED)
+        self.assertEqual(self.kb().facts[self.f(3)]["status"], km.PROPOSED)
         out = self.run_kg("batch", "apply", "confirm 1; reject 2a, skip 3")
         self.assertIn("rejected", out)
 
@@ -769,10 +779,10 @@ class ContextTest(KnowledgeTestCase):
 
     def test_a_pack_cites_confirmed_facts_only(self) -> None:
         self.assertNotIn("Gradual rollout", self.run_kg("context", "--for", "release"))
-        self.run_kg("confirm", "f3")  # release has_step rollout: now its neighbour counts
+        self.run_kg("confirm", self.f(3))  # release has_step rollout: now its neighbour counts
         pack = self.run_kg("context", "--for", "release")
         self.assertIn("Knowledge for Release process (process/release)", pack)
-        self.assertIn("- Release process has step Merge to main (step 1) [f1; ledger:", pack)
+        self.assertIn(f"- Release process has step Merge to main (step 1) [{self.f(1)}; ledger:", pack)
         self.assertIn("Gradual rollout actor Deploy bot", pack)  # a neighbour's fact
         self.assertNotIn("canary checks pass", pack)  # proposed: never in a pack
         self.assertNotIn("U0000000002", self.run_kg("context", "--for", "person/dana"))
@@ -800,7 +810,7 @@ class ContextTest(KnowledgeTestCase):
             self.assertLessEqual(len(pack), tokens * 4)
             self.assertIn("more: kg lookup repo/invoice-exporter", pack)
             for line in pack.splitlines()[1:-1]:
-                self.assertRegex(line, r"\[f\d+; \w+:")
+                self.assertRegex(line, r"\[f-\w{6}; \w+:")
 
 
 class QueryTest(KnowledgeTestCase):
@@ -817,11 +827,11 @@ class QueryTest(KnowledgeTestCase):
         self.assertIn("unconfirmed (2, not used in context packs)", out)
 
     def test_neighbors_and_hops(self) -> None:
-        self.run_kg("confirm", "f3")
+        self.run_kg("confirm", self.f(3))
         one = self.run_kg("neighbors", "release")
         self.assertNotIn("Deploy bot", one)
         two = self.run_kg("neighbors", "release", "--hops", "2")
-        self.assertIn("2 f5 Gradual rollout actor Deploy bot", two)
+        self.assertIn(f"2 {self.f(5)} Gradual rollout actor Deploy bot", two)
 
     def test_search_ranks_names_before_text(self) -> None:
         out = self.run_kg("search", "exporter").splitlines()
@@ -907,7 +917,12 @@ class GitHistoryTest(KnowledgeTestCase):
 class LockingTest(KnowledgeTestCase):
     def test_concurrent_writers_never_lose_or_reuse_a_fact(self) -> None:
         self.seed()
-        env = dict(os.environ, BOSUN_CONFIG_DIR=str(self.tmp), BOSUN_KNOWLEDGE_GIT="0")
+        env = dict(
+            os.environ,
+            BOSUN_CONFIG_DIR=str(self.tmp),
+            BOSUN_STATE_DIR=str(self.state),
+            BOSUN_KNOWLEDGE_GIT="0",
+        )
         script = str(ROOT / "lib" / "knowledge.py")
         writers = [
             subprocess.Popen(

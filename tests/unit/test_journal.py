@@ -452,5 +452,35 @@ class OneUse(JournalTestCase):
                     tx.mint()
 
 
+class Forget(JournalTestCase):
+    def write(self, *targets: tuple[str, bool]) -> None:
+        tx = self.journal().begin("add")
+        for target, local in targets:
+            tx.add("put", target, {"name": target}, local=local)
+        tx.commit()
+
+    def test_forgetting_leaves_a_placeholder_in_its_place_in_the_local_file(self) -> None:
+        self.write(("person/dana", True), ("repo/x", False), ("person/lee", True))
+        self.write(("person/dana", True))
+        private = (self.root / f"{R1}.jsonl").read_bytes()
+        position, mint = self.journal().position(), self.journal().begin("add").mint()
+        self.assertEqual(self.journal().forget({"person/dana"}), 2)
+        self.assertEqual((self.root / f"{R1}.jsonl").read_bytes(), private)
+        local = [json.loads(line) for line in (self.root / "local.jsonl").read_text().splitlines()]
+        self.assertEqual([c["op"] for c in local], ["forgotten", "put", "forgotten"])
+        self.assertNotIn("dana", (self.root / "local.jsonl").read_text())
+        self.assertEqual(self.journal().position(), position)  # the sequence and the mint seeds stay
+        self.assertEqual(self.journal().begin("add").mint(), mint)
+        self.assertEqual(
+            [(c["op"], c.get("target")) for c in self.journal().changes()],
+            [("forgotten", None), ("put", "repo/x"), ("put", "person/lee"), ("forgotten", None)],
+        )  # each transaction still whole, in its place
+        self.assertEqual(self.journal().forget({"person/dana"}), 0)
+
+    def test_forgetting_what_is_not_there_writes_nothing(self) -> None:
+        self.assertEqual(self.journal().forget({"person/dana"}), 0)
+        self.assertFalse(self.root.exists())
+
+
 if __name__ == "__main__":
     unittest.main()

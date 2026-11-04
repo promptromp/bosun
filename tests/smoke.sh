@@ -637,11 +637,16 @@ if command -v git >/dev/null; then
   check "every change is a commit in the knowledge directory's own history" test "$(env -u GIT_DIR -u GIT_INDEX_FILE -u GIT_WORK_TREE git -C "$KG_DIR" log --format=%s | head -1)" = "kg import acme-import.jsonl"
 fi
 check "a person is refused anything outside the whitelist" fails_with "people whitelist" kg propose person/lee mood --value calm --source ledger:x
-check "lookup resolves a strong alias and shows sources" contains "$(kg lookup releases)" "f1 Release process has_step Merge to main (step 1) [ledger:mypr:acme/invoice-exporter#102"
+check "every write goes through the journal first, and view.json says how far the files reflect it" bash -c '
+  journal="$1/journal" && [ -s "$journal/local.jsonl" ] && ls "$journal" | grep -Eq "^[0-9a-f]{32}\.jsonl$" &&
+    [ "$(jq -r .journal.local "$1/view.json")" = "$(wc -l <"$journal/local.jsonl" | tr -d " ")" ] &&
+    ! grep -qi dana "$journal"/[0-9a-f]*.jsonl' _ "$KG_DIR"
+check "lookup resolves a strong alias and shows sources, by minted fact ids" bash -c '
+  grep -Eq "^  f-[0-9a-hjkmnp-tv-z]{6} Release process has_step Merge to main \(step 1\) \[ledger:mypr:acme/invoice-exporter#102" <<<"$1"' _ "$(kg lookup releases)"
 out="$(kg batch --cap 2)"
 check "the batch lists capped groups, rework-preventing first" bash -c 'grep -q "^1\. Process: other facts: 5 facts \[prevents rework\]" <<<"$1" && grep -q "(1 more group waits for a later batch)" <<<"$1"' _ "$out"
 check "a one-line decision answers it" contains "$(kg batch apply 'confirm all except 1a')" "8 confirmed, 0 rejected, 1 left proposed"
-check "the context pack cites confirmed facts only" bash -c 'grep -q "\[f1; ledger:" <<<"$1" && ! grep -q "canary checks pass" <<<"$1"' _ "$(kg context --for release)"
+check "the context pack cites confirmed facts only" bash -c 'grep -Eq "\[f-[0-9a-z]{6}; ledger:" <<<"$1" && ! grep -q "canary checks pass" <<<"$1"' _ "$(kg context --for release)"
 transcript="$WORK/kg-transcript.jsonl"
 printf '{"type":"user","timestamp":"%s","origin":{"kind":"human"},"message":{"role":"user","content":"note: the pdf renderer repo is archived"}}\n' \
   "$(date -u +%Y-%m-%dT%H:%M:%SZ)" >"$transcript"

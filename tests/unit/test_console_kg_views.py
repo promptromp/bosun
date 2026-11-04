@@ -48,10 +48,11 @@ class WeekWorld(unittest.TestCase):
         self.now = IMPORTED
         knowledge.CLOCK = lambda: self.now
         self.addCleanup(setattr, knowledge, "CLOCK", knowledge.clock)
-        knowledge.configure(self.root, git=False)
+        self.state = str(self.tmp / "state")  # this Mac's replica id, for the journal
+        knowledge.configure(self.root, git=False, state_dir=self.state)
         self.kg("import", str(KG_FIXTURE), "--apply", "--auto-confirm")
         self.grow()
-        self.settings = console_kb.Settings(root=self.root, git=False)
+        self.settings = console_kb.Settings(root=self.root, git=False, state_dir=self.state)
 
     def kg(self, *argv: str) -> str:
         args = knowledge.build_parser().parse_args(list(argv))

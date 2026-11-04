@@ -14,6 +14,10 @@ leaves an unfinished transaction at the end of a file: readers leave it out, as 
 there, and `repair_tail` moves it aside, kept, before the next write. Any other damage raises
 `JournalError` where the line is read.
 
+Files are never edited, with one exception: a delete on request (`forget`) rewrites `local.jsonl`,
+each removed change becoming a placeholder in its place (change_log.placeholder), so that its
+sequence, the ids minted from it and its transaction stay as they were.
+
 Every byte reaches the file or the write fails (a short write is finished, one that makes no
 progress raises), and each append is flushed to the disk itself before the next file is written
 (`flush_to_disk`: F_FULLFSYNC on macOS, whose fsync leaves data in the drive's cache, so that a
@@ -35,7 +39,7 @@ import re
 import secrets
 import sys
 import time
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Collection, Mapping
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
@@ -49,6 +53,7 @@ from change_log import (
     clock_text,
     in_order,
     mint_suffix,
+    placeholder,
     tick,
 )
 
@@ -372,6 +377,28 @@ class Journal:
             )
             moved.append(aside)
         return moved
+
+    def forget(self, targets: Collection[str]) -> int:
+        """Delete on request: each change in local.jsonl whose target is one of <targets> becomes a
+        placeholder in its place (change_log.placeholder), so the sequence, the mint seeds and its
+        transaction stay as they were. The file is replaced whole (a temporary file flushed to the
+        disk, then renamed); the replica's file is never rewritten. Returns how many changes went."""
+        path = self.root / f"{LOCAL}{SUFFIX}"
+        if not path.exists():
+            return 0
+        changes = _read_all(path)
+        gone = sum(1 for c in changes if c.get("target") in targets)
+        kept = [placeholder(c) if c.get("target") in targets else c for c in changes]
+        if gone:
+            tmp = path.with_name(f".{path.name}.{os.getpid()}.tmp")
+            fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+            try:
+                _write_all(fd, b"".join(canonical(c) + b"\n" for c in kept))
+                flush_to_disk(fd)
+            finally:
+                os.close(fd)
+            os.replace(tmp, path)
+        return gone
 
     def begin(self, cmd: str) -> Transaction:
         last = self._last_changes()

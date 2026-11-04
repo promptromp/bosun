@@ -30,7 +30,7 @@ UNKNOWN = "unknown"  # not listed below: it always stays
 STATE_FILES = (
     ("ledger.json", LEDGER),
     ("journal", LEDGER),  # each machine's changes to the ledger: your records
-    ("replica.json", LEDGER),  # this machine's id in the journal
+    ("replica.json", LEDGER),  # this machine's id in the journals (the ledger's, the knowledge base's)
     ("ledger.json.bak", LEDGER),
     ("ledger.md", LEDGER),
     ("learn", LEDGER),  # what learning found and what you decided, which a later run goes by

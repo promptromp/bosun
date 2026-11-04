@@ -131,11 +131,6 @@ def shown_current(kb: KB, fact: Record) -> bool:
     return km.is_current(fact) and status(kb, fact) in SHOWN and visible(kb, fact)
 
 
-def fact_number(fact: Record) -> int:
-    digits = str(fact["id"])[1:]
-    return int(digits) if digits.isdigit() else 0
-
-
 def readable_times(text: str) -> str:
     """ISO minutes in a reference as a person writes them: 2026-10-18T18:56 -> Oct 18 18:56."""
 
@@ -289,7 +284,7 @@ def by_name(entities: Iterable[Record]) -> list[Record]:
 
 
 def recent_facts(kb: KB, facts: list[Record], ledger_ids: frozenset[str]) -> list[dict[str, Any]]:
-    newest = sorted(facts, key=lambda f: (changed_at(f), fact_number(f)), reverse=True)
+    newest = sorted(facts, key=lambda f: (changed_at(f), km.creation_key(f)), reverse=True)
     return [fact_view(kb, f, ledger_ids) for f in newest[:RECENT_FACTS]]
 
 
@@ -334,7 +329,7 @@ def matching_facts(kb: KB, search: Search) -> list[Record]:
         and wanted in km.norm(f.get("value") or "")
         and (not search.type or ks.entity_type(f["subject"]) == search.type)
     ]
-    return sorted(facts, key=fact_number)
+    return sorted(facts, key=km.creation_key)
 
 
 def search_model(
@@ -396,8 +391,8 @@ def predicate_rank(kb: KB) -> dict[str, int]:
     return {name: index for index, name in enumerate(kb.schema.predicates)}
 
 
-def fact_sort(fact: Record) -> tuple[int, int]:
-    return (int(fact.get("order") or 0), fact_number(fact))
+def fact_sort(fact: Record) -> tuple[int, tuple[str, int, str]]:
+    return (int(fact.get("order") or 0), km.creation_key(fact))
 
 
 def grouped(kb: KB, facts: list[Record], ledger_ids: frozenset[str]) -> list[dict[str, Any]]:
@@ -427,7 +422,7 @@ def history_facts(kb: KB, entity_id: str) -> list[Record]:
         for f in kb.facts.values()
         if f["subject"] == entity_id and visible(kb, f) and not shown_current(kb, f)
     ]
-    return sorted(facts, key=lambda f: (changed_at(f), fact_number(f)), reverse=True)
+    return sorted(facts, key=lambda f: (changed_at(f), km.creation_key(f)), reverse=True)
 
 
 def backlinks(kb: KB, entity_id: str, ledger_ids: frozenset[str]) -> list[dict[str, Any]]:
@@ -437,7 +432,7 @@ def backlinks(kb: KB, entity_id: str, ledger_ids: frozenset[str]) -> list[dict[s
         for f in kb.facts.values()
         if f.get("object") == entity_id and f["subject"] != entity_id and shown_current(kb, f)
     ]
-    return [fact_view(kb, f, ledger_ids) for f in sorted(facts, key=fact_number)]
+    return [fact_view(kb, f, ledger_ids) for f in sorted(facts, key=km.creation_key)]
 
 
 def header(kb: KB, entity: Record) -> dict[str, Any]:
@@ -487,7 +482,7 @@ def linked_facts(kb: KB, entity_id: str, predicate: str) -> list[Record]:
         for f in kb.facts.values()
         if f["subject"] == entity_id and f["predicate"] == predicate and shown_current(kb, f)
     ]
-    return sorted(facts, key=lambda f: (f.get("order") is None, int(f.get("order") or 0), fact_number(f)))
+    return sorted(facts, key=lambda f: (f.get("order") is None, int(f.get("order") or 0), km.creation_key(f)))
 
 
 def linked(kb: KB, entity_id: str, predicate: str) -> list[dict[str, Any]]:
@@ -536,7 +531,7 @@ def graph_links(kb: KB) -> list[graph.Link]:
     """Every current link between two entities (confirmed, or waiting for review), in fact order."""
     return [
         graph.Link(f["id"], f["subject"], f["object"], f["predicate"], status(kb, f) == km.CONFIRMED)
-        for f in sorted(kb.facts.values(), key=fact_number)
+        for f in sorted(kb.facts.values(), key=km.creation_key)
         if f.get("object") and shown_current(kb, f)
     ]
 
@@ -717,7 +712,7 @@ def context_facts(kb: KB, fact: Record) -> list[dict[str, Any]]:
         for f in kb.facts.values()
         if f["subject"] == fact["subject"] and f["id"] != fact["id"] and shown_current(kb, f)
     ]
-    others.sort(key=lambda f: (status(kb, f) != km.CONFIRMED, fact_number(f)))
+    others.sort(key=lambda f: (status(kb, f) != km.CONFIRMED, km.creation_key(f)))
     return [known_view(kb, f) for f in others[:CONTEXT_FACTS]]
 
 
@@ -738,7 +733,7 @@ def already_known(kb: KB, subject: str, shown: set[str]) -> list[dict[str, Any]]
         for f in kb.facts.values()
         if f["subject"] == subject and f["id"] not in shown and shown_current(kb, f)
     ]
-    others.sort(key=lambda f: (status(kb, f) != km.CONFIRMED, fact_number(f)))
+    others.sort(key=lambda f: (status(kb, f) != km.CONFIRMED, km.creation_key(f)))
     return [known_view(kb, f) for f in others[:CONTEXT_FACTS]]
 
 
@@ -855,7 +850,6 @@ def batch_fact_ids(model: Mapping[str, Any]) -> set[str]:
 # ---- decisions ----------------------------------------------------------------------------------
 
 ACTIONS = {"confirm": kr.CONFIRM, "reject": kr.REJECT, "defer": kr.SKIP}
-FACT_ID = re.compile(r"^f\d{1,9}$")
 MAX_DECISION_FACTS = 200
 
 
@@ -883,8 +877,8 @@ class Decision:
             raise QueryError(f"action must be one of {', '.join(ACTIONS)}")
         if not isinstance(facts, list) or not 1 <= len(facts) <= MAX_DECISION_FACTS:
             raise QueryError(f"facts must list 1 to {MAX_DECISION_FACTS} fact ids")
-        if not all(isinstance(f, str) and FACT_ID.match(f) for f in facts):
-            raise QueryError("fact ids look like f12")
+        if not all(isinstance(f, str) and km.FACT_ID.match(f) for f in facts):
+            raise QueryError("fact ids look like f-3k9x2a, or f12 from before")
         return cls(str(action), tuple(dict.fromkeys(facts)))
 
 

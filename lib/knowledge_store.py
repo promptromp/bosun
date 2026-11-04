@@ -2,6 +2,10 @@
 docs/design/knowledge.md): reading and appending JSON lines under a lock, atomic rewrites, and the
 optional local git history (one commit per change).
 
+- journal/: every change, one transaction per write (lib/journal.py, docs/design/sync.md): this
+  Mac's changes in <replica>.jsonl, those naming a person in local.jsonl, which never leaves it.
+  A write appends there first, then writes the files below.
+- view.json: the journal position the files reflect and a digest of what they hold.
 - entities.jsonl: one entity per line, rewritten atomically when an entity changes.
 - facts.jsonl: append-only log of fact records ({"op": "add"} and {"op": "update"}); only a
   delete on request (`kg forget`) or the retention purge rewrites it.
@@ -49,6 +53,14 @@ class StoreError(Exception):
 @dataclass(frozen=True)
 class Paths:
     root: Path
+
+    @property
+    def journal(self) -> Path:
+        return self.root / "journal"
+
+    @property
+    def view(self) -> Path:
+        return self.root / "view.json"
 
     @property
     def entities(self) -> Path:

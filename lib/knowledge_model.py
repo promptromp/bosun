@@ -4,7 +4,10 @@ reject, supersede, forget, expire) with the auto-confirm rules of "Curation with
 
 Pure over a KB value: operations append fact-log records to kb.new_records (and mark what else
 changed); lib/knowledge.py loads and saves a KB under the store's lock, so a dry run is simply an
-operation whose KB is never saved.
+operation whose KB is never saved. A new fact's id is minted (`f-` and six characters, from
+KB.mint: the write's journal transaction), so two Macs never make the same one; ids from before
+(`f12`) stay. Every update record says what it replaced (`prev`), so that a rebuild can tell when
+two updates crossed.
 """
 
 from __future__ import annotations
@@ -13,6 +16,8 @@ import copy
 import difflib
 import hashlib
 import hmac
+import re
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from typing import Any
@@ -49,6 +54,9 @@ CORRECTION = "a correction"
 FORGET_REQUEST = "request"
 FORGET_RETENTION = "retention"
 IDENTIFIER_SYSTEMS = ("slack", "github", "jira", "other")
+
+# A fact id: minted (f- and six Crockford base32 characters), or counted, from before minted ids.
+FACT_ID = re.compile(r"^f(?:-[0-9a-hjkmnp-tv-z]{6}|\d{1,9})$")
 
 
 class KnowledgeError(Exception):
@@ -89,6 +97,10 @@ def plain_hash_id(entity_id: str) -> str:
 # ---- the knowledge base ---------------------------------------------------------------------------
 
 
+def no_mint() -> str:
+    raise KnowledgeError("a fact id is minted only in a write (knowledge.opened(True)), from its journal")
+
+
 @dataclass
 class KB:
     """Everything loaded, plus what an operation changed (for the store to write)."""
@@ -107,8 +119,10 @@ class KB:
     entities_changed: bool = False
     identifiers_changed: bool = False
     rewrite: bool = False  # facts.jsonl is rewritten from records (a deletion)
+    removed: set[str] = field(default_factory=set)  # the facts a deletion removed, by id
     auto_confirm: bool = True  # kg import without --auto-confirm: everything waits for review
     restart_history: bool = False
+    mint: Callable[[], str] = no_mint  # six characters for a new fact id, from the write's journal
 
     def add_record(self, record: Record) -> None:
         self.records.append(record)
@@ -118,7 +132,11 @@ class KB:
     @property
     def changed(self) -> bool:
         return bool(
-            self.new_records or self.new_forgotten or self.entities_changed or self.identifiers_changed
+            self.new_records
+            or self.new_forgotten
+            or self.entities_changed
+            or self.identifiers_changed
+            or self.rewrite
         )
 
 
@@ -199,13 +217,29 @@ def confirmed_current(kb: KB, at: datetime | None = None) -> list[Record]:
 
 def get_fact(kb: KB, fact_id: str) -> Record:
     if fact_id not in kb.facts:
-        raise KnowledgeError(f"no fact {fact_id!r} (ids look like f12; see kg facts <entity> --status all)")
+        raise KnowledgeError(
+            f"no fact {fact_id!r} (ids look like f-3k9x2a, or f12 from before; "
+            "see kg facts <entity> --status all)"
+        )
     return kb.facts[fact_id]
 
 
 def next_fact_id(kb: KB) -> str:
-    numbers = [int(i[1:]) for i in kb.facts if i[1:].isdigit()]
-    return f"f{max(numbers, default=0) + 1}"
+    """A new fact's id, minted from the write's journal (unique to this Mac by construction); one
+    that already names a fact (a journal started again) is minted again."""
+    while True:
+        fact_id = f"f-{kb.mint()}"
+        if fact_id not in kb.facts:
+            return fact_id
+
+
+def creation_key(fact: Record) -> tuple[str, int, str]:
+    """A fact's place in the order facts were made, from the fact alone (never the order they were
+    loaded in): when it was recorded, then a counted id's number (f12, from before minted ids),
+    then the id."""
+    fact_id = str(fact["id"])
+    number = fact_id[1:]
+    return str(fact.get("recorded_at") or ""), int(number) if number.isdigit() else 0, fact_id
 
 
 # ---- entities and resolution --------------------------------------------------------------------
@@ -483,16 +517,7 @@ def observe(kb: KB, fact: Record, proposal: Proposal) -> Outcome:
     if stronger(proposal.authority, fact["authority"]):
         changes["authority"] = proposal.authority
     new_sources = [s for s in proposal.sources if source_key(s) not in known]
-    kb.add_record(
-        {
-            "op": "update",
-            "id": fact["id"],
-            "at": iso(kb.now),
-            "event": "observed",
-            "set": changes,
-            "sources": new_sources,
-        }
-    )
+    kb.add_record(update_record(kb, fact, "observed", changes, sources=new_sources))
     if not revive:
         return Outcome(
             fact["id"],
@@ -554,18 +579,24 @@ def settle(kb: KB, fact: Record, action: str) -> Outcome:
 # ---- reviewing ----------------------------------------------------------------------------------
 
 
+def update_record(kb: KB, fact: Record, event: str, changes: Record, **extra: Any) -> Record:
+    """The fact-log record of an update to <fact>: the fields it sets (<changes>), anything else it
+    carries (<extra>: new sources, a note), and what they held before (`prev`), so that a rebuild
+    can tell when another update came between."""
+    return {
+        "op": "update",
+        "id": fact["id"],
+        "at": iso(kb.now),
+        "event": event,
+        "set": changes,
+        **extra,
+        "prev": copy.deepcopy({key: fact.get(key) for key in changes}),
+    }
+
+
 def close(kb: KB, fact: Record, by: str | None, note: str) -> None:
     changes = {"valid_to": iso(kb.now), "superseded_by": by}
-    kb.add_record(
-        {
-            "op": "update",
-            "id": fact["id"],
-            "at": iso(kb.now),
-            "event": "superseded",
-            "set": changes,
-            "note": note,
-        }
-    )
+    kb.add_record(update_record(kb, fact, "superseded", changes, note=note))
 
 
 def decided_by(kb: KB, by: Record | None) -> Record:
@@ -586,30 +617,12 @@ def confirm_fact(kb: KB, fact: Record, reason: str, note: str = "", *, by: Recor
         "confirmed_by": reason,
         **decided_by(kb, by),
     }
-    kb.add_record(
-        {
-            "op": "update",
-            "id": fact["id"],
-            "at": iso(kb.now),
-            "event": "confirmed",
-            "set": changes,
-            "note": note,
-        }
-    )
+    kb.add_record(update_record(kb, fact, "confirmed", changes, note=note))
     return messages
 
 
 def reject_fact(kb: KB, fact: Record, note: str = "", *, by: Record | None = None) -> None:
-    kb.add_record(
-        {
-            "op": "update",
-            "id": fact["id"],
-            "at": iso(kb.now),
-            "event": "rejected",
-            "set": {"status": REJECTED, **decided_by(kb, by)},
-            "note": note,
-        }
-    )
+    kb.add_record(update_record(kb, fact, "rejected", {"status": REJECTED, **decided_by(kb, by)}, note=note))
 
 
 def reviewable(kb: KB, fact: Record) -> bool:
@@ -675,6 +688,7 @@ def supersede(kb: KB, old_id: str, replacement: Proposal | None, by: str | None,
 
 
 def remove_facts(kb: KB, fact_ids: set[str]) -> None:
+    kb.removed |= fact_ids
     kb.records = [r for r in kb.records if record_fact_id(r) not in fact_ids]
     kb.new_records = [r for r in kb.new_records if record_fact_id(r) not in fact_ids]
     kb.facts = fold_all(kb.records)
@@ -724,15 +738,7 @@ def expire(kb: KB) -> tuple[list[str], int]:
     """Record the expiry of stale proposals, and delete person facts past retention."""
     expired = []
     for fact in stale_proposals(kb):
-        kb.add_record(
-            {
-                "op": "update",
-                "id": fact["id"],
-                "at": iso(kb.now),
-                "event": "expired",
-                "set": {"status": EXPIRED},
-            }
-        )
+        kb.add_record(update_record(kb, fact, "expired", {"status": EXPIRED}))
         expired.append(fact["id"])
     purged = {f["id"] for f in past_retention(kb)}
     if purged:

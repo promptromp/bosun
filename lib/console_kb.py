@@ -35,6 +35,7 @@ from knowledge_model import KB
 
 
 KNOWLEDGE_SUBDIR = "knowledge"
+REVIEW_COMMAND = "console review"  # what the knowledge base's journal records as a decision's command
 READ_ERRORS = (store.StoreError, ks.SchemaError, km.KnowledgeError, OSError, KeyError, TypeError, ValueError)
 
 
@@ -48,13 +49,15 @@ def int_value(env: Mapping[str, str], name: str, default: int) -> int:
 
 @dataclass(frozen=True)
 class Settings:
-    """Where the knowledge base is and the batch limits (passed in by `bosun console`)."""
+    """Where the knowledge base is, the batch limits, and the state folder that keeps this Mac's
+    replica id for the journal (passed in by `bosun console`)."""
 
     root: Path | None = None
     git: bool = True
     batch_cap: int = kr.DEFAULT_BATCH_CAP
     batch_facts: int = kr.DEFAULT_BATCH_FACTS
     group_facts: int = kr.DEFAULT_GROUP_FACTS
+    state_dir: str = ""
 
     @classmethod
     def from_env(cls, env: Mapping[str, str]) -> Settings:
@@ -62,6 +65,7 @@ class Settings:
         config = env.get("BOSUN_CONFIG_DIR", "")
         settings = cls(
             root=Path(config).expanduser() / KNOWLEDGE_SUBDIR if config else None,
+            state_dir=env.get("BOSUN_STATE_DIR", ""),
             git=env.get("BOSUN_KNOWLEDGE_GIT", "1") == "1",
             batch_cap=int_value(env, "BOSUN_KNOWLEDGE_BATCH_CAP", kr.DEFAULT_BATCH_CAP),
             batch_facts=int_value(env, "BOSUN_KNOWLEDGE_BATCH_FACTS", kr.DEFAULT_BATCH_FACTS),
@@ -196,6 +200,8 @@ def decide(settings: Settings, body: bytes, ledger: Mapping[str, Any]) -> dict[s
         batch_cap=settings.batch_cap,
         batch_facts=settings.batch_facts,
         group_facts=settings.group_facts,
+        state_dir=settings.state_dir,
+        command=REVIEW_COMMAND,
     )
     message = f"console review: {decision.action} {' '.join(decision.facts)}"
     try:

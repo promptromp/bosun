@@ -250,6 +250,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import activity
 import agent_state
 import approvals
+import change_log
 import claude_state
 import compact_context
 import event_model
@@ -261,7 +262,7 @@ import repo_mask
 import tickets
 import workstreams
 import ws_summary
-from change_log import ChangeLogError, Edit, encodable, unencodable
+from change_log import DIGEST, ChangeLogError, Edit, behind, position_in, refusal, stamped, unencodable
 from journal import REPLICA_FILE, Journal, JournalError, Transaction, flush_to_disk, replica_id
 from ledger_changes import MAX_HISTORY as MAX_HISTORY, trim_history as trim_history  # noqa: PLC0414 re-exported
 from lineage import Index, LineageError, Link
@@ -340,7 +341,6 @@ LEDGER_STREAM = "ledger"
 RULES_VERSION = 1
 GENESIS = "genesis"
 ADOPT = "adopt"
-DIGEST = "digest"
 
 
 @dataclass(frozen=True)
@@ -850,20 +850,12 @@ def has_records(ledger: Ledger) -> bool:
 
 def saved_position(ledger: Ledger) -> dict[str, int]:
     """The journal position ledger.json says it reflects; {} for one written before journals."""
-    value = ledger.get(ledger_changes.JOURNAL)
-    if not isinstance(value, dict):
-        return {}
-    return {str(stem): seq for stem, seq in value.items() if isinstance(seq, int)}
+    return position_in(ledger.get(ledger_changes.JOURNAL))
 
 
 def missing(journal_has: Mapping[str, int], file_has: Mapping[str, int]) -> list[str]:
-    """Each journal file that is behind the position ledger.json reflects (it lost changes the file
-    has): a rebuild from it would lose them too."""
-    return [
-        f"{stem}.jsonl ends at seq {journal_has.get(stem, 0)}, ledger.json reflects seq {seq}"
-        for stem, seq in sorted(file_has.items())
-        if journal_has.get(stem, 0) < seq
-    ]
+    """Each journal file that is behind the position ledger.json reflects (change_log.behind)."""
+    return behind(journal_has, file_has, STORE.ledger_file.name)
 
 
 def refuse_if_behind(journal_has: Mapping[str, int], ledger: Ledger) -> None:
@@ -927,13 +919,9 @@ def for_reading() -> Ledger:
 def refuse_unencodable(edits: Iterable[Edit]) -> None:
     """The write boundary: a change that holds what the journal cannot (a float, text that is not
     valid Unicode) is refused before anything is journaled, naming the item and the field."""
-    found = next(ledger_changes.unencodable_edits(edits), None)
-    if found:
-        place, what = found
-        raise LedgerError(
-            f"nothing was written: {place} holds {what}, which the journal cannot hold "
-            "(it keeps whole numbers and text in UTF-8)"
-        )
+    problem = refusal(edits, ledger_changes.place)
+    if problem:
+        raise LedgerError(problem)
 
 
 def commit_edits(transaction: Transaction, edits: Iterable[Edit]) -> None:
@@ -983,14 +971,11 @@ def journal_ready(ledger: Ledger, source: str) -> Ledger:
     (refuse_unencodable). Converted, a tool call's argument no longer matches its approval: that
     fails closed."""
     metadata_ready(ledger)
-    found = list(unencodable({key: ledger[key] for key in COMPARED if key in ledger}))
-    for place, what, made in found:
-        print(
-            f"ledger: {ledger_changes.ledger_place(place)}: {what} in {source}, which the journal "
-            f"cannot hold; taken in as {made!r}",
-            file=sys.stderr,
-        )
-    converted: Ledger = encodable(ledger) if found else ledger
+    held = {key: ledger[key] for key in COMPARED if key in ledger}
+    made, notes = change_log.taken_in(held, source, ledger_changes.ledger_place)
+    for note in notes:
+        print(f"ledger: {note}", file=sys.stderr)
+    converted: Ledger = {**ledger, **made} if notes else ledger
     for item_id, item in sorted(converted["items"].items()):
         if isinstance(item, dict):
             links_ready(item_id, item, source)
@@ -1000,7 +985,7 @@ def journal_ready(ledger: Ledger, source: str) -> Ledger:
 def stamp(ledger: Ledger, position: Mapping[str, int]) -> None:
     """Record in ledger.json the journal position it reflects and the digest of what it holds, so
     that a change made to the file outside the journal shows (edited_outside)."""
-    ledger[ledger_changes.JOURNAL] = {**position, DIGEST: ledger_changes.state_hash(ledger)}
+    ledger[ledger_changes.JOURNAL] = stamped(position, ledger_changes.state_hash(ledger))
 
 
 def edited_outside(ledger: Ledger) -> bool:

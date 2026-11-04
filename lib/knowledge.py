@@ -3,7 +3,8 @@
 
 Usage: bosun kg <command> [args]
 
-Writing (every change is one commit in the knowledge directory's own git history):
+Writing (every change is one transaction in the knowledge directory's journal, then one commit in
+its own git history; a new fact's id is minted, f-3k9x2a, and older ones stay, f12):
   add-entity <type>/<slug> [--name N] [--alias A ...] [--weak-alias W ...] [--summary S]
              [--allow-forgotten]
                                      add an entity, or merge new aliases into it (strong alias: a
@@ -42,8 +43,9 @@ Writing (every change is one commit in the knowledge directory's own git history
                                      unless --apply: counts, refusals with reasons, batches
   identify <person|team> slack|github|jira|other <id>
                                      a restricted identifier for mentions (never in context packs)
-  forget person/<slug> [--dry-run]   delete a person on request: entity, facts, identifiers, and
-                                     the git history (restarted); only a hash and counts are kept
+  forget person/<slug> [--dry-run]   delete a person on request: entity, facts, identifiers, their
+                                     changes in the journal (placeholders) and the git history
+                                     (restarted); only a hash and counts are kept
   expire [--dry-run]                 record expired proposals (unreviewed for 30 days) and delete
                                      person facts not re-observed for 12 months
 
@@ -71,10 +73,12 @@ from __future__ import annotations
 
 import argparse
 import contextlib
+import copy
+import itertools
 import json
 import os
 import sys
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Iterator, Mapping
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
@@ -83,25 +87,41 @@ from typing import Any
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import approvals
+import change_log
 import claude_state
 import events
+import knowledge_changes as kc
 import knowledge_model as km
 import knowledge_query as kq
 import knowledge_review as kr
 import knowledge_schema as ks
 import knowledge_store as store
+from change_log import ChangeLogError, Edit
+from journal import REPLICA_FILE, Journal, JournalError, Transaction, replica_id
 from knowledge_model import KB, KnowledgeError, Proposal, Record
 from knowledge_schema import SchemaError
 from knowledge_store import Paths, StoreError
 
 
 MAX_QUOTE_LENGTH = 500
+# The journal every write goes through (lib/journal.py, docs/design/sync.md), next to the files:
+# the knowledge base's stream; the version of the rules its changes are checked against when
+# rebuilt, bumped by hand when a change to them would rebuild old changes differently (once the
+# rebuild checks rules, a test pins their digest to it, as test_ledger_changes does for the
+# ledger's RULES_VERSION); the command of the transaction that puts a knowledge base from before
+# the journal in it; and view.json's key, the journal position the files reflect and their digest.
+KG_STREAM = "kg"
+KG_RULES_VERSION = 1
+GENESIS = "genesis"
+VIEW_KEY = "journal"
 Handler = Callable[[argparse.Namespace], "str | tuple[str, int]"]
 
 
 @dataclass
 class Settings:
-    """What `bosun kg` passes (load_config does not export it); tests replace CLOCK."""
+    """What `bosun kg` passes (load_config does not export it); tests replace CLOCK. state_dir
+    keeps this Mac's replica id (a write needs it); command is what the journal records as each
+    write's command ("kg propose", "console review")."""
 
     root: Path = Path()
     git: bool = True
@@ -110,6 +130,7 @@ class Settings:
     group_facts: int = kr.DEFAULT_GROUP_FACTS
     stale_days: int = kr.DEFAULT_STALE_DAYS
     state_dir: str = ""
+    command: str = ""
     drain_prompt: str = ""
     caller_window: str = ""
     warnings: list[str] = field(default_factory=list)
@@ -162,7 +183,8 @@ def load(p: Paths) -> KB:
     return kb
 
 
-def save(p: Paths, kb: KB, message: str) -> None:
+def write_files(p: Paths, kb: KB) -> None:
+    """The files a write changed (after its changes are in the journal)."""
     if kb.entities_changed:
         entities = [kb.entities[i] for i in sorted(kb.entities)]
         store.write_atomically(p.entities, store.jsonl(entities))
@@ -174,6 +196,14 @@ def save(p: Paths, kb: KB, message: str) -> None:
     if kb.identifiers_changed:
         store.write_atomically(p.identifiers, store.jsonl(kb.identifiers), store.PRIVATE_MODE)
     store.append_records(p.forgotten, kb.new_forgotten)
+
+
+def write_view(p: Paths, stamp: Mapping[str, Any]) -> None:
+    """view.json: the journal position the files reflect and the digest of what they hold."""
+    store.write_atomically(p.view, json.dumps({VIEW_KEY: stamp}, indent=2, sort_keys=True) + "\n")
+
+
+def record_history(p: Paths, kb: KB, message: str) -> None:
     if not SETTINGS.git:
         return
     restart = store.restart_history if kb.restart_history else store.commit
@@ -182,18 +212,208 @@ def save(p: Paths, kb: KB, message: str) -> None:
         SETTINGS.warnings.append(warning)
 
 
+@dataclass
+class Write:
+    """A write in progress: its journal, its transaction, and the entities as it found them."""
+
+    journal: Journal
+    transaction: Transaction
+    entities: dict[str, Record]
+
+
+def save(p: Paths, kb: KB, message: str, write: Write) -> None:
+    """What the write changed: in the journal first, then the files, view.json and the history."""
+    with journal_errors(p):
+        stamp = journaled(kb, write)
+    write_files(p, kb)
+    write_view(p, stamp)
+    record_history(p, kb, message)
+
+
+def journaled(kb: KB, write: Write) -> dict[str, Any]:
+    """Put what the write changed in the journal, as one transaction; refused whole, before
+    anything is written, when it holds what the journal cannot or a deletion would have to remove
+    a change from the private journal. A deletion leaves placeholders in local.jsonl (forget).
+    Returns view.json's stamp: the journal's new position and the digest of the files."""
+    edits = kc.edits(write.entities, kb)
+    refuse_unencodable(edits)
+    held = files_digest(kb)
+    if kb.rewrite:
+        edits = forget(write.journal, kc.removed(write.entities, kb), edits)
+    commit(write.transaction, edits)
+    return change_log.stamped(write.journal.position(), held)
+
+
+def refuse_unencodable(edits: list[Edit]) -> None:
+    """The write boundary: a change the journal cannot hold (a float, text that is not valid
+    Unicode) is refused before anything is journaled, naming the fact or entity and the field."""
+    problem = change_log.refusal(edits, kc.place)
+    if problem:
+        raise KnowledgeError(problem)
+
+
+def files_digest(kb: KB) -> str:
+    """The digest of what the files will hold; refused, naming where, when they hold what the
+    journal cannot (written outside it, after it began)."""
+    try:
+        return kc.state_hash(kb.entities, kb.records)
+    except ChangeLogError as exc:
+        problem = change_log.refusal(kc.snapshot(kb), kc.place) or f"nothing was written: {exc}"
+        raise KnowledgeError(problem) from exc
+
+
+def forget(journal: Journal, targets: set[str], edits: list[Edit]) -> list[Edit]:
+    """A deletion (kg forget, the retention purge) in the journal: every change of what it removed
+    becomes a placeholder in local.jsonl (Journal.forget), and nothing new names it. Refused when
+    the private journal holds a change of it, as that file is never rewritten."""
+    held = kc.held_privately(journal.changes(), targets)
+    if held:
+        raise KnowledgeError(
+            f"nothing was written: {', '.join(held)} is in the private journal, which a deletion never "
+            "rewrites: it removes only what names a person, which never leaves this Mac"
+        )
+    journal.forget(targets)
+    return [edit for edit in edits if edit.target not in targets]
+
+
+def commit(transaction: Transaction, edits: list[Edit]) -> None:
+    for edit in edits:
+        transaction.add(edit.op, edit.target, edit.body, local=edit.local)
+    transaction.commit()
+
+
+# ---- the journal --------------------------------------------------------------------------------
+
+
+def open_journal(p: Paths, replica: str = "") -> Journal:
+    """The knowledge base's journal; a reader needs no replica (it never begins a transaction)."""
+    return Journal(p.journal, KG_STREAM, replica, KG_RULES_VERSION)
+
+
+def state_dir() -> Path:
+    """Where this Mac's replica id is kept: a write needs it, as its journal file is named by it."""
+    if not SETTINGS.state_dir:
+        raise KnowledgeError(
+            "a write needs the state folder, where this Mac's replica id is kept (BOSUN_STATE_DIR); "
+            "run it as `bosun kg`"
+        )
+    return Path(SETTINGS.state_dir)
+
+
+def start_again(p: Paths) -> str:
+    """How to go on when the journal cannot be used: the files are whole, so a new journal can
+    start from them. Under a new replica, so that no fact id is minted twice from the same seq (as
+    for the ledger, which then goes on as that replica too)."""
+    replica_file = Path(SETTINGS.state_dir) / REPLICA_FILE
+    return (
+        f"move the folder {p.journal} and the file {replica_file} aside together (keep them): the next "
+        "write starts a new journal from the files, as a new replica"
+    )
+
+
+@contextlib.contextmanager
+def journal_errors(p: Paths) -> Iterator[None]:
+    """A journal that cannot be read, or a change it refuses, as a KnowledgeError: nothing written."""
+    try:
+        yield
+    except JournalError as exc:
+        raise KnowledgeError(
+            f"the knowledge base's journal in {p.journal} is damaged: {exc}. Nothing was written. To "
+            f"go on from the files as they are, {start_again(p)}"
+        ) from exc
+    except ChangeLogError as exc:
+        raise KnowledgeError(f"nothing was written: {exc}") from exc
+
+
+def saved_position(p: Paths) -> dict[str, int]:
+    """The journal position view.json says the files reflect; {} without one."""
+    try:
+        view = json.loads(p.view.read_text())
+    except (OSError, ValueError):
+        return {}
+    return change_log.position_in(view.get(VIEW_KEY) if isinstance(view, dict) else None)
+
+
+def refuse_if_behind(p: Paths, journal_has: Mapping[str, int]) -> None:
+    """A journal that lost changes the files reflect (a journal file deleted, a partial restore)
+    is never written to: a rebuild from it would lose them too. An empty journal is not behind:
+    the next write starts it again from the files."""
+    gaps = change_log.behind(journal_has, saved_position(p), p.view.name) if journal_has else []
+    if gaps:
+        raise KnowledgeError(
+            f"the knowledge base's journal in {p.journal} is behind {p.view.name} ({'; '.join(gaps)}), "
+            "so it cannot rebuild the files. Nothing was written. If journal files were lost, "
+            f"{start_again(p)}"
+        )
+
+
+def genesis(p: Paths, journal: Journal, kb: KB) -> None:
+    """Put a knowledge base from before the journal in it whole (kc.snapshot), as one transaction
+    (GENESIS), what the journal cannot hold converted once with a note on stderr; then save the
+    files as they are now (rewritten only if something was converted) and view.json, at once, so
+    that a command that then fails leaves them at the journal's position."""
+    notes = kc.taken_in(kb, "the knowledge files")
+    for note in notes:
+        print(f"kg: {note}", file=sys.stderr)
+    commit(journal.begin(GENESIS), kc.snapshot(kb))
+    if notes:
+        store.write_atomically(p.entities, store.jsonl([kb.entities[i] for i in sorted(kb.entities)]))
+        store.write_atomically(p.facts, store.jsonl(kb.records))
+    write_view(p, change_log.stamped(journal.position(), kc.state_hash(kb.entities, kb.records)))
+
+
+def write_start(p: Paths, journal: Journal) -> KB:
+    """The knowledge base a write starts from. Refused when the journal lost changes the files
+    reflect; then an unfinished transaction at the end of the journal is set aside (repair_tail);
+    and a knowledge base from before the journal is put in it (genesis)."""
+    kb = load(p)
+    refuse_if_behind(p, journal.written())
+    journal.repair_tail()
+    position = journal.position()
+    refuse_if_behind(p, position)
+    if not position and (kb.entities or kb.records):
+        genesis(p, journal, kb)
+    return kb
+
+
+def trial_mint() -> Callable[[], str]:
+    """A dry run's fact ids: never stored, so minted from a count (no journal is read or made)."""
+    count = itertools.count()
+    return lambda: change_log.mint_suffix("dry-run", "", next(count))
+
+
+def writing(p: Paths, message: str, state: Path) -> Iterator[KB]:
+    """A write under the exclusive lock: the knowledge base it starts from (write_start), its fact
+    ids minted from its one journal transaction, named by its command; then, if it changed
+    anything, saved."""
+    with journal_errors(p):
+        journal = open_journal(p, replica_id(state))
+        kb = write_start(p, journal)
+        transaction = journal.begin(SETTINGS.command)
+    if not kb.secret and not kb.key_problem:
+        kb.secret = store.create_secret(p.secret)
+    kb.mint = transaction.mint
+    entities = copy.deepcopy(kb.entities)
+    yield kb
+    if kb.changed:
+        save(p, kb, message, Write(journal, transaction, entities))
+
+
 @contextlib.contextmanager
 def opened(write: bool, message: str = "", dry_run: bool = False) -> Iterator[KB]:
-    """The knowledge base under its lock; saved afterwards if <write>, it changed and this is not a
-    dry run."""
+    """The knowledge base under its lock. A write (not a dry run) goes through the journal
+    (writing); a reader or a dry run writes nothing, and a dry run's fact ids are never stored."""
     p = paths()
-    with store.locked(p, write and not dry_run):
+    if write and not dry_run:
+        state = state_dir()
+        with store.locked(p, True):
+            yield from writing(p, message, state)
+        return
+    with store.locked(p, False):
         kb = load(p)
-        if write and not dry_run and not kb.secret and not kb.key_problem:
-            kb.secret = store.create_secret(p.secret)
+        if dry_run:
+            kb.mint = trial_mint()
         yield kb
-        if write and not dry_run and kb.changed:
-            save(p, kb, message)
 
 
 # ---- my words ----------------------------------------------------------------------------------
@@ -783,7 +1003,16 @@ def int_setting(name: str, default: int) -> int:
         raise KnowledgeError(f"{name} must be a whole number, not {value!r}") from exc
 
 
-def configure_from_environment() -> None:
+def command_name(args: argparse.Namespace) -> str:
+    """What the journal records as a write's command: kg and its subcommand ("kg batch apply")."""
+    words = ["kg", args.command]
+    if args.command == "batch" and args.rest[:1] == ["apply"]:
+        words.append("apply")
+    return " ".join(words)
+
+
+def configure_from_environment(command: str = "") -> None:
+    """The settings `bosun kg` passes; <command> names the writes in the journal."""
     configure(
         Path(os.environ["BOSUN_CONFIG_DIR"]) / "knowledge",
         git=os.environ.get("BOSUN_KNOWLEDGE_GIT", "1") == "1",
@@ -794,6 +1023,7 @@ def configure_from_environment() -> None:
         state_dir=os.environ.get("BOSUN_STATE_DIR", ""),
         drain_prompt=os.environ.get("BOSUN_DRAIN_PROMPT", ""),
         caller_window=os.environ.get("BOSUN_CALLER_WINDOW", ""),
+        command=command,
     )
 
 
@@ -804,7 +1034,7 @@ def main() -> int:
         return 2
     handler: Handler = args.func
     try:
-        configure_from_environment()
+        configure_from_environment(command_name(args))
         result = handler(args)
     except (KnowledgeError, SchemaError, StoreError) as exc:
         print(f"kg: {exc}", file=sys.stderr)

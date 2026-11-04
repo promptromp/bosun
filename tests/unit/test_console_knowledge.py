@@ -15,6 +15,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from collections.abc import Iterable
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
@@ -48,9 +49,10 @@ class KnowledgeWorld(unittest.TestCase):
         self.now = START
         knowledge.CLOCK = lambda: self.now
         self.addCleanup(setattr, knowledge, "CLOCK", knowledge.clock)
-        knowledge.configure(self.root, git=False)
+        self.state = str(self.tmp / "state")  # this Mac's replica id, for the journal
+        knowledge.configure(self.root, git=False, state_dir=self.state)
         self.kg("import", str(KG_FIXTURE), "--apply", "--auto-confirm")
-        self.settings = console_kb.Settings(root=self.root, git=False)
+        self.settings = console_kb.Settings(root=self.root, git=False, state_dir=self.state)
 
     def kg(self, *argv: str) -> str:
         args = knowledge.build_parser().parse_args(list(argv))
@@ -66,6 +68,11 @@ class KnowledgeWorld(unittest.TestCase):
             for f in self.kb().facts.values()
             if (f["subject"], f["predicate"]) == (subject, predicate) and km.is_current(f)
         )
+
+    def made(self, ids: Iterable[str]) -> list[str]:
+        """<ids> in the order their facts were made (the fact log's order)."""
+        wanted = set(ids)
+        return [i for i in self.kb().facts if i in wanted]
 
     def page(self, entity_id: str) -> dict[str, Any]:
         return ck.entity_model(self.kb(), entity_id, LEDGER)
@@ -476,7 +483,7 @@ class DecisionTest(KnowledgeWorld):
     def test_confirm_reject_and_defer_go_through_the_review(self) -> None:
         kb = self.kb()
         ids = ck.batch_fact_ids(ck.review_model(kb, None, self.settings.limits, LEDGER, UTC))
-        one, two, three = sorted(ids, key=lambda i: int(i[1:]))[:3]
+        one, two, three = self.made(ids)[:3]
         result = ck.apply_decision(kb, ck.Decision("confirm", (one,)), ids)
         self.assertEqual((result["confirmed"], result["left_proposed"]), (1, 0))
         self.assertEqual(
@@ -514,12 +521,14 @@ class StorageTest(KnowledgeWorld):
         )
 
     def test_a_decision_is_saved_like_batch_apply(self) -> None:
-        fact = min(ck.batch_fact_ids(self.review()), key=lambda i: int(i[1:]))
+        fact = self.made(ck.batch_fact_ids(self.review()))[0]
         body = json.dumps({"action": "confirm", "facts": [fact]}).encode()
         result = console_kb.decide(self.settings, body, LEDGER)
         self.assertEqual(result["messages"], [f"ok: {fact} confirmed"])
         self.assertEqual(self.kb().facts[fact]["status"], km.CONFIRMED)
         self.assertEqual(self.kb().facts[fact]["history"][-1]["note"], "console")
+        last = knowledge.open_journal(knowledge.paths()).changes()[-1]
+        self.assertEqual((last["cmd"], last["op"], last["target"]), ("console review", "fact.update", fact))
 
     def decide(self, action: str, facts: list[str]) -> dict[str, Any]:
         body = json.dumps({"action": action, "facts": facts}).encode()
@@ -538,7 +547,7 @@ class StorageTest(KnowledgeWorld):
             self.kg("batch", "apply", "confirm all")  # the CLI agrees: that batch is done
 
     def test_a_computed_batch_marks_nothing(self) -> None:
-        facts = sorted(ck.batch_fact_ids(self.review()), key=lambda i: int(i[1:]))
+        facts = self.made(ck.batch_fact_ids(self.review()))
         self.assertFalse(self.decide("confirm", facts)["batch_answered"])
         self.assertIsNone(console_kb.saved_batch(self.settings))
 
@@ -547,7 +556,7 @@ class StorageTest(KnowledgeWorld):
         self.assertTrue(stamp["exists"])
         self.assertEqual(console_kb.version(self.settings), stamp)
         self.now += timedelta(seconds=1)
-        self.decide("confirm", [min(ck.batch_fact_ids(self.review()), key=lambda i: int(i[1:]))])
+        self.decide("confirm", [self.made(ck.batch_fact_ids(self.review()))[0]])
         self.assertNotEqual(console_kb.version(self.settings)["stamp"], stamp["stamp"])
         self.assertEqual(console_kb.version(console_kb.Settings())["exists"], False)
 
@@ -562,9 +571,14 @@ class StorageTest(KnowledgeWorld):
 
     def test_settings_come_from_the_environment(self) -> None:
         settings = console_kb.Settings.from_env(
-            {"BOSUN_CONFIG_DIR": str(self.tmp / "config"), "BOSUN_KNOWLEDGE_GIT": "0"}
+            {
+                "BOSUN_CONFIG_DIR": str(self.tmp / "config"),
+                "BOSUN_STATE_DIR": self.state,
+                "BOSUN_KNOWLEDGE_GIT": "0",
+            }
         )
         self.assertEqual((settings.root, settings.git, settings.limits.groups), (self.root, False, 10))
+        self.assertEqual(settings.state_dir, self.state)  # this Mac's replica id, for the journal
         with self.assertRaises(km.KnowledgeError):
             console_kb.Settings.from_env({"BOSUN_KNOWLEDGE_BATCH_CAP": "ten"})
         with self.assertRaises(km.KnowledgeError):
@@ -577,8 +591,8 @@ class HistoryTest(KnowledgeWorld):
     def test_a_decision_is_one_commit(self) -> None:
         if shutil.which("git") is None:
             self.skipTest("no git")
-        settings = console_kb.Settings(root=self.root, git=True)
-        fact = min(ck.batch_fact_ids(self.review()), key=lambda i: int(i[1:]))
+        settings = console_kb.Settings(root=self.root, git=True, state_dir=self.state)
+        fact = self.made(ck.batch_fact_ids(self.review()))[0]
         console_kb.decide(settings, json.dumps({"action": "reject", "facts": [fact]}).encode(), LEDGER)
         log = subprocess.run(
             ["git", "--git-dir", str(self.root / ".git"), "log", "--format=%s"],
