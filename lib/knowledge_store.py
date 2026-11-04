@@ -92,7 +92,7 @@ class Paths:
         return self.root / "forgotten.jsonl"
 
     @property
-    def secret(self) -> Path:
+    def key_file(self) -> Path:
         return self.root / KEY_FILE
 
     @property

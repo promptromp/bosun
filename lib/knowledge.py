@@ -213,7 +213,7 @@ def read_files(p: Paths, *, identifiers: bool = True, now: datetime | None = Non
         return kb
     kb.identifiers = store.read_jsonl(p.identifiers)
     kb.forgotten = rebuildable(kb, p.forgotten)
-    kb.secret = store.read_secret(p.secret)
+    kb.secret = store.read_secret(p.key_file)
     kb.key_problem = key_problem(p, kb)
     return kb
 
@@ -262,10 +262,10 @@ def key_missing(p: Paths) -> str:
     (and replica.json, as for a damaged journal), with the key file if one is there."""
     replica_file = Path(SETTINGS.state_dir) / REPLICA_FILE
     return (
-        f"the key of the forgotten people, {p.secret}, is missing, unreadable or not a key; restore "
+        f"the key of the forgotten people, {p.key_file}, is missing, unreadable or not a key; restore "
         "it (a new one would stop the deleted people being recognised; if it is gone for good, move "
         f"forgotten.jsonl and the journal folder {p.journal} aside, with {replica_file}, and "
-        f"{p.secret.name}, if it is there, all together: the people in them can then be added again, "
+        f"{p.key_file.name}, if it is there, all together: the people in them can then be added again, "
         "and the next write makes a new key)"
     )
 
@@ -274,15 +274,15 @@ def made_key(p: Paths) -> bytes:
     """The key of the forgotten, made by a write when it has none and no keyed record needs one. A
     file there that is not a key (empty, the wrong length, unreadable: cut short as it was made,
     edited, restored) is moved aside first, kept, and said on stderr."""
-    if os.path.lexists(p.secret):
-        aside = store.set_key_aside(p.secret)
+    if os.path.lexists(p.key_file):
+        aside = store.set_key_aside(p.key_file)
         print(
-            f"kg: {p.secret} was not a key (empty, the wrong length or unreadable), and no forgotten "
+            f"kg: {p.key_file} was not a key (empty, the wrong length or unreadable), and no forgotten "
             f"record needs it; moved it aside to {aside.name} (kept, not in the history) and made a "
             "new one",
             file=sys.stderr,
         )
-    return store.create_secret(p.secret)
+    return store.create_secret(p.key_file)
 
 
 def write_files(p: Paths, kb: KB) -> None:
