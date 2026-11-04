@@ -52,7 +52,8 @@ of truth, so don't copy rules into this file.
   the hybrid clock, the order, and what both stores do alike at their write boundary: the refusal,
   the one-time conversion, the stamp their files record, a deletion's placeholder), `lib/journal.py`
   (a store's journal files, the replica id, transactions, an unfinished transaction set aside, a
-  deletion in `local.jsonl`), `lib/ledger_changes.py` (pure: the field table, `diff`, `rebuild`),
+  deletion in `local.jsonl`, and the durable writes both stores' files use: every byte, flushed, a
+  replace or a new file with its folder flushed), `lib/ledger_changes.py` (pure: the field table, `diff`, `rebuild`),
   `lib/knowledge_changes.py` (pure: a knowledge write's edits, genesis, each file's digest,
   `rebuild`, what an outside edit adopts, never a person deleted on request) and
   `lib/validation.py` (pure: what both stores' `validate` finds: the finding, its severity and

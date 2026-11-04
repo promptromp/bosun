@@ -41,8 +41,9 @@ facts were stated once, in the user's own words, and then lost when the conversa
 
 **Storage (site-specific, never in the repo):** `$BOSUN_CONFIG_DIR/knowledge/`, a local git
 repository so every change has history. A write commits under the knowledge base's exclusive lock, and
-git holds its index lock for one command, so an index lock older than 30 seconds found there was left
-by a commit cut short: the commit removes it with a note on stderr instead of failing from then on.
+git holds a lock (the index's, `HEAD`'s, a ref's) for one command, so one older than 30 seconds found
+there was left by a git command cut short: the commit removes each with a note on stderr instead of
+failing from then on.
 
 - `entities.jsonl`: one entity per line, with these fields:
   - `id`, for example `person/dana`
@@ -77,54 +78,12 @@ by a commit cut short: the commit removes it with a note on stderr instead of fa
 - `entities.jsonl` and `facts.jsonl` are the journal's rebuild (`knowledge_changes.rebuild`): its
   changes in the one order, an entity put whole or deleted, the fact log's records kept in that
   order and folded as the files are (an update that comes before its fact's add waits for it).
-  An update that finds the fact's status no longer what it left (`prev`: a confirm and a reject of
-  one proposal at once) is a conflict and not applied. A write that finds the files behind the
-  journal (a write cut short) goes on from the rebuild and saves it; a reader uses it in memory and
-  writes nothing. `view.json` records a digest of each data file: when each file is either as
-  recorded or as the rebuild makes it, a write was cut short somewhere between the journal and
-  `view.json` (written last), and the rebuild finishes it even at the same position. A deletion
-  (`kg forget`, the retention purge) also commits a local `deletion` marker holding its
-  `forgotten.jsonl` record (the keyed hash and counts), so the position moves and a deletion cut
-  short before the files is finished too, its record written by the write that finishes it; a
-  write writes `identifiers.jsonl` and `forgotten.jsonl` before the data files, and one that
-  finishes a deletion drops the identifiers of entities gone. A file that is neither is a change
-  made outside the journal (by
-  hand, a git checkout or revert of files here, an older bosun): the next write adopts it as one
-  `adopt` transaction (entities made, changed or removed, and records the fact log gained), then
-  goes on from the rebuild. A record removed cannot be adopted (the fact log only grows) and comes
-  back; one edited in place comes back beside its adopted copy, and an edited add takes the fact
-  over. The write says so, and first commits the files as edited to the git history when it is
-  on and the write does not start it again (a history it restarts holds what it deletes, so then
-  nothing keeps them, and the line says so); the line is said by the save, which knows that. A
-  write cut short and then a hand edit before the next write adopts that write's records a
-  second time (accepted: rare, visible). A person deleted on request is never adopted. Forgotten
-  is `forgotten.jsonl` with the records the journal's deletion markers carry (a write first puts
-  back one the file lacks), checked by a plain or keyed hash everywhere: adding, adopting, and the
-  key check. One gone from the files whom a forgotten record matches (an older bosun's
-  `kg forget`, a hand removal) is forgotten in the journal too, as `kg forget` does it: its
-  marker first, then the placeholders, over the whole journal. One in files restored from before
-  a forget, with no `--allow-forgotten` add in the journal, is left out (one line, not naming
-  them), the files as edited are not committed, and the rebuild drops them. While the key of the
-  forgotten cannot be read, no person entity is adopted at all (one line saying why). A history
-  restart is a debt: a write takes it on when it finishes a deletion cut short (its marker after
-  the saved position; the placeholders for the marker's hashed ids are put in again, and what
-  writes cut short left of `local.jsonl` is deleted, as the deletion does), applies a
-  forget made outside the journal, or drops or refuses a person. It pays it once, at the save,
-  after the files and before `view.json`, by deleting `.git` whatever `BOSUN_KNOWLEDGE_GIT` says;
-  the save's commit starts a new history. Finishing a `kg forget` cut short takes the key: while
-  it cannot be read, the write is refused whole, naming the key (fail closed, as adding a person),
-  and the first write once it is back finishes the forget. A reader shows restored files until the
-  next write; an older bosun's retention purge is redone by the next `kg expire`, as is a purge cut
-  short between its marker and its placeholders (its marker holds no hash to finish it by). Two
-  more double faults are accepted as rare: a write cut short while it pays a restart owed for
-  refusing a person can leave an older bosun's commit of that person in the history until the
-  next `kg forget` (that debt has no marker); and `view.json` restored together with data files
-  from before a forget, or removed, makes the next write treat every marker after the saved
-  position as unfinished, so a later `--allow-forgotten` re-add is forgotten again (the safe
-  direction).
+  How a write cut short is finished, how a change made outside the journal is adopted, who is
+  forgotten, the history restart a write owes, and the double faults accepted, is told once, in
+  [Sync and sharing, Knowledge changes](sync.md#knowledge-changes).
   `kg validate` reports damage, a position that does not match, a rebuild that differs,
-  conflicts, updates waiting for their fact and an outside edit; `bosun doctor` runs it
-  (`lib/validation.py`, shared with the ledger's validate).
+  conflicts, updates waiting for their fact, an outside edit and a file that does not parse;
+  `bosun doctor` runs it (`lib/validation.py`, shared with the ledger's validate).
 - When the journal is damaged, or behind `view.json` (a journal file lost), a write refuses and
   writes nothing. The way out, as for the ledger: move `journal/` and the state folder's
   `replica.json` aside together; the next write starts a new journal from the files (genesis) as a
@@ -227,7 +186,9 @@ one card by decision of 2026-10-21. Security notes:
 
 - **What the console reads:** entities, facts and the site schema, under the shared lock, through
   `knowledge.load` (the journal's rebuild in memory where the files are behind it, never saved);
-  never `identifiers.jsonl` (restricted), `forgotten.jsonl` or `secret.key`. About a person it shows only whitelisted
+  never `identifiers.jsonl` (restricted), `forgotten.jsonl` or `secret.key`. Its one write (below)
+  goes through the write path, which reads all three (and may make the key, record a forgotten
+  record or rewrite the identifiers), and none of them reaches a response. About a person it shows only whitelisted
   predicates and never a summary, with the note "Work-operational facts only. Delete on request:
   bosun kg forget person/<slug>". Entities are addressed by opaque keys, never by id or path.
 - **What it writes:** only review decisions on facts waiting in today's batch (the batch `kg
@@ -285,8 +246,9 @@ docs/design/console.md, section 6. Its measures:
 - **A forgotten person is kept as a keyed hash** (`secret.key`, never leaves the Mac), so nobody can
   guess who was forgotten; records from before the key (no `hash_kind`) stay guessable, since their ids
   are unknown. If the key is lost for good, move `forgotten.jsonl`, `journal/` (whose deletion
-  markers hold the same records) and `replica.json` aside together: those people can then be
-  added again (a choice made knowingly) and the next write makes a new key.
+  markers hold the same records) and `replica.json` aside together, and `secret.key`, if it is
+  there: those people can then be added again (a choice made knowingly) and the next write makes
+  a new key.
 - **Machine-local storage**, within the user's account, never in the repo, with the retention and
   delete-on-request rules above. The design should be confirmed with the privacy or legal team
   before any team-shared version.
@@ -386,18 +348,22 @@ a stream of questions.
   where everything naming a person is: each of its changes becomes a placeholder that keeps its
   place (sequence number, clock, transaction) and nothing of what it held, so the sequence and the
   ids minted from it never go back. What writes cut short left of `local.jsonl` (its torn tails,
-  a rewrite's unfinished copy) is deleted too, whatever it held. The private journal is never
+  a rewrite's unfinished copy) is deleted too, whatever it held, and so is what they left in the
+  knowledge folder (`*.tmp`: a `kg batch` cut short leaves `batch.json.tmp`, which names people). The private journal is never
   rewritten, so a deletion that would need it is refused. A forgotten id cannot be added again without
-  `--allow-forgotten`. The hash is an HMAC-SHA256 under `secret.key` (made on the first write,
-  mode 0600, ignored by the history, never leaves the Mac), so guessing `person/<name>` finds
-  nobody; records from before the key (no `hash_kind`) stay plain sha256 and guessable, since
-  their ids are unknown and cannot be re-keyed. With keyed records and no readable key, adding a
-  person is refused and names the key's path: restore it, a new key would make every record
-  unmatchable. `kg forget` is refused the same way, and so is a write that has to finish a
-  `kg forget` cut short (until the key is back). If the key is lost for good, move
+  `--allow-forgotten`. The hash is an HMAC-SHA256 under `secret.key` (made on the first write as
+  `replica.json` is, whole and flushed before it is linked to its name; mode 0600, ignored by the
+  history, never leaves the Mac), so guessing `person/<name>` finds nobody; records from before
+  the key (no `hash_kind`) stay plain sha256 and guessable, since their ids are unknown and cannot
+  be re-keyed. With keyed records and no readable key, adding a person is refused and names the
+  key's path: restore it, a new key would make every record unmatchable. `kg forget` is refused
+  the same way, and so is a write that has to finish a `kg forget` cut short (until the key is
+  back). With no keyed record, a `secret.key` that is not a key (empty, the wrong length,
+  unreadable) is moved aside by the next write, kept as `secret.key.aside-<time>` (ignored by the
+  history), and made again, with a line on stderr. If the key is lost for good, move
   `forgotten.jsonl`, `journal/` (whose deletion markers hold the same records) and `replica.json`
-  aside together: those people can then be added again (a choice made knowingly), and the next
-  write makes a new key.
+  aside together, and `secret.key`, if it is there: those people can then be added again (a choice
+  made knowingly), and the next write makes a new key.
 - **Import** reads JSON or JSON lines (`{"type": "entity", ...}` and `{"type": "fact", ...}`), is
   a dry run unless `--apply`, records everything as proposals (`--auto-confirm`: apply the rules
   above), and reports refusals by reason (People whitelist, schema, unresolved) and how many

@@ -176,9 +176,13 @@ logs.
 of them (a short write is finished, or the write fails) and flushed to the disk itself (on macOS
 `F_FULLFSYNC`: a plain `fsync` there can leave the append in the drive's cache while a later
 rename reaches the disk). Then it rewrites the files, which record the journal position they
-reflect (the highest `seq` per file) and a digest of what they hold. A crash between the two
-leaves the files behind the journal; the next write sees the positions differ and rebuilds the
-files from the journal (a command that only reads uses the rebuild without saving it). Pulling
+reflect (the highest `seq` per file) and a digest of what they hold. A file replaced whole (in both
+stores, and `local.jsonl` when a delete on request rewrites it) is flushed, renamed into place,
+and then its folder is flushed too (`journal.replace_durably`): a rename is an entry in the folder,
+which a power cut could otherwise lose while keeping what was written after it. A crash between the
+journal and the files leaves the files behind the journal; the next write sees the positions differ
+and rebuilds the files from the journal (a command that only reads uses the rebuild without saving
+it). Pulling
 another Mac's changes in phase 1 is the same step. A transaction counts once all its lines are
 present: a commit writes the `local` file first, then the replica's, and every line says how many
 its transaction has there (`of`, and from the `local` file `private_of`). A write cut short (a
@@ -356,26 +360,41 @@ records a digest of each data file, which tells the two apart: a file holding ne
 checkout or revert of files in the knowledge folder, an older bosun); when each file is one or the
 other, a write was cut short somewhere between the journal and `view.json` (written last), and the
 rebuild finishes it, even at the same position. Adopting such files would hold that write's
-records twice, or bring back a person a `kg forget` cut short had already placeholdered. A deletion
+records twice, or bring back a person a `kg forget` cut short had already placeholdered. The fact
+log's append goes through the journal's own write and flush (`write_all`, `flush_to_disk`), and
+`forgotten.jsonl` is written whole, but a power cut or a full disk during an append can still leave
+a data file ending in a line that does not parse: the journal holds every record, so such a file is
+one the rebuild replaces (a write saves it, a reader uses it in memory and says so on stderr, and
+`kg validate` warns, `unreadable`), and a `forgotten.jsonl` that does not parse is written again
+from its other lines with the records the deletion markers carry. Only where no journal can rebuild
+it (none yet, one that cannot be read, or one behind `view.json`) does such a file stop every
+command, naming the line. A deletion
 commits a local `deletion` marker (no target, skipped by the rebuild) with its transaction, before
 it rewrites what it removed into placeholders; the marker holds the write's `forgotten.jsonl`
 records (a keyed hash and counts, nothing of the person). So the position moves, and a deletion
 cut short anywhere is finished by the next write, which puts the placeholders in again for the
 marker's hashed ids and deletes what writes cut short left of `local.jsonl`, as the deletion
-does. A keyed record takes the key to finish: while `secret.key` cannot be read, that write is
-refused whole, naming it, and the first write once it is back finishes the deletion. A retention
-purge's marker holds no hash, so one cut short between its marker and its placeholders is not
-finished: its facts come back until the next `kg expire`. Who is forgotten is `forgotten.jsonl`
+does, and the knowledge folder's `*.tmp` (a `kg batch` cut short before its rename leaves
+`batch.json.tmp`, which names people). A keyed record takes the key to finish: while `secret.key`
+cannot be read, that write is refused whole, naming it, and the first write once it is back
+finishes the deletion. The marker also holds the ids of the facts its write removed (ids only), so
+a retention purge cut short between its marker and its placeholders is finished the same way,
+although its record holds no hash. Who is forgotten is `forgotten.jsonl`
 together with the records every deletion marker carries, and a write first writes a marker's
 record that `forgotten.jsonl` lacks, before anything is taken in: a forget is whole through the
 journal, and the way out when the key is lost for good moves the journal folder aside with
-`forgotten.jsonl` and `replica.json`. The identifiers and
+`forgotten.jsonl` and `replica.json`, and `secret.key`, if it is there. The key is made as
+`replica.json` is (whole and flushed, then linked to its name), before anything hashed with it is
+journaled; with no keyed record anywhere, a `secret.key` that is not a key (empty, the wrong length,
+unreadable) is moved aside, kept and ignored by the history, and made again, with a line on stderr.
+The identifiers and
 `forgotten.jsonl`, which the journal does not hold, are written before the data files, and a write
 that finishes a deletion drops the identifiers of entities gone. A history restart is a debt: a
 write that finishes a deletion cut short, applies one made outside the journal, or drops or
 refuses a person deletes the knowledge folder's `.git` once its files are final and before
 `view.json` (whatever `BOSUN_KNOWLEDGE_GIT` says), and its commit starts a new history, so that
-no cut leaves the person in it. What an
+no cut leaves the person in it. A `.git` that is still there after the delete stops the write
+there, naming it (fail closed: a deletion cut short is then finished by the next write). What an
 outside change cannot express (a record removed: the fact log only grows) comes back; a record
 edited in place comes back beside its edited copy, which is adopted, so an edited `add` takes the
 fact over (as an edited history entry comes back in the ledger). That write says so in one line, and first commits the files as
@@ -387,7 +406,9 @@ double faults: a write cut short while it pays a restart owed for refusing a per
 no marker) can leave an older bosun's commit of that person in the history until the next
 `kg forget`; and `view.json` restored with data files from before a forget, or removed, makes
 every marker after the saved position unfinished, so a later `--allow-forgotten` re-add is
-forgotten again (the safe direction). Adopt never brings
+forgotten again (the safe direction). And when one data file does not parse, the other one edited
+by hand before the next write is replaced by the rebuild too, not adopted (the write names only the
+file that does not parse). Adopt never brings
 in or keeps a person deleted on request: one gone from the files whom a forgotten record matches
 (a plain or a keyed hash: an older bosun's `kg forget`, or a hand removal) is forgotten in the
 journal too, as `kg forget` does it (its marker, then the placeholders, over the whole journal,
@@ -411,8 +432,8 @@ own and no target or body. So the local sequence and the ids minted from it neve
 transaction stays whole; the rebuild skips placeholders. The private journal is never rewritten:
 a deletion that would have to remove a change from it is refused. What writes cut short left of
 `local.jsonl` goes too, whatever it held (its `.torn-<time>` tails, never committed and not
-readable enough to pick one person out, and a rewrite's unfinished copy), and the git history
-never holds any torn file.
+readable enough to pick one person out, and a rewrite's unfinished copy), as does what they left
+in the knowledge folder (`*.tmp`), and the git history never holds any torn file.
 
 The local git history of `knowledge/` stays as it is for now, and holds the journal and `view.json`
 like the other files. It is local, it never syncs, and `kg forget` keeps restarting it, which also
@@ -837,7 +858,14 @@ from the journal, never what travels.
   20,000 `has_step` facts imported in one transaction (21,000 changes, a 12.2 MB journal for a 6.6
   MB `facts.jsonl`) take 0.36 s to read and order and 0.25 s to rebuild on an Apple-silicon Mac
   (Python 3.15). A reader pays it only where the files are behind the journal (a write cut short);
-  the same remark as for the ledger holds for phase 1.
+  the same remark as for the ledger holds for phase 1. A write reads the journal once and passes
+  that read on, and skips looking for unfinished changes when `view.json` is at the journal's
+  position; it rebuilds only where the files are not as saved. Measured 2026-11-04 at 6,000 facts
+  (a 5.3 MB journal, a 3.6 MB `facts.jsonl`, the history off): an ordinary write read the journal
+  three times (0.12 s of 0.25 s) and now reads it once (0.04 s of 0.19 s); a write after a hand
+  edit read it 15 times and rebuilt 7 times (1.12 s of 1.66 s) and now reads it once and rebuilds
+  twice, the journal before and after it adopts (0.19 s of 0.69 s). Both still grow with the
+  journal, which phase 1's snapshots answer.
 - **Rules versions in the rebuild (both stores):** every change records `rules`, but each store's
   rebuild checks it against today's rules: the ledger's `KINDS` and `RELATIONS`, the knowledge
   base's ops (the ones its dispatch table applies and the ones it skips) and the fields an update
@@ -883,5 +911,23 @@ from the journal, never what travels.
   syncs facts, the journal needs a history that git cannot rewind, or a check that refuses a
   journal that went back.
 - **When person facts become `sealed`:** after key epochs make deletion reach the remote.
+- **A simpler forget, phase 1's starting point.** Phase 0's forget holds at every cut point tried,
+  but "nothing of a forgotten person survives" is spread over thirteen places in three modules, and
+  three of its decisions hang on `view.json`'s saved position and the adopted base, which is why
+  double faults remain (a restart owed for refusing a person, and `view.json` restored with older
+  files). Phase 1 has to rework forget anyway, so that it travels to other Macs; it starts from this
+  design (the final review of phase 0's knowledge journal), with the same guarantees and fewer gaps:
+  - **One ordered status per hashed id.** A forget marker and an allow marker (journaled by
+    `--allow-forgotten`) are both local, and the later one in journal order wins. Who is forgotten
+    then never depends on the saved position, which closes the restored-`view.json` case.
+  - **One idempotent scrub at write start.** For every person whose status is forgotten, their
+    changes become placeholders in `local.jsonl`, they are dropped from the files in memory, and
+    the leftovers are deleted. This replaces finishing a cut forget, applying one made outside the
+    journal, and the forgotten half of what adopt refuses and holds back. The retention purge's
+    marker lists its fact ids (as it now does), so the scrub finishes that too.
+  - **The history restart as a durable debt.** Recorded before anything else is touched (a local
+    marker, or an ignored `restart.owed` file), paid at the save, and cleared after the new
+    history's first commit. This closes the restart owed for refusing a person, and the gap a cut
+    between deleting `.git` and `view.json` leaves.
 - **Several bosun versions in one team:** how long a replica keeps writing when a teammate runs a
   newer format.

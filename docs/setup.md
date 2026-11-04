@@ -132,8 +132,10 @@ as it was.
 Claude Code nor Codex has them installed. Your repos, branches and pull requests are not touched, nor are
 your conversations.
 
-Install again with the same line, and bosun picks up what you kept. For scripts, `--yes` asks nothing and keeps
-your records; `--delete-ledger`, `--delete-knowledge` and `--purge` say otherwise. `--purge` leaves
+Install again with the same line, and bosun picks up what you kept. `replica.json`, this Mac's id in
+both journals, goes with the ledger: deleting the ledger while keeping the knowledge graph deletes
+it too, and the knowledge base's next write carries on under a new id. For scripts, `--yes` asks
+nothing and keeps your records; `--delete-ledger`, `--delete-knowledge` and `--purge` say otherwise. `--purge` leaves
 `forbidden-terms.txt`, which guards commits to this repo and is not part of running bosun. Run it from a
 terminal outside bosun's windows, since it stops them. If something could not be removed it says what to run,
 and running it again finishes the job.
