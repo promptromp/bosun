@@ -5,9 +5,8 @@ decision, the console's one write.
 - Reads go through knowledge.load (shared lock, as `kg lookup` does; the journal's rebuild where
   the files are behind it, in memory) with identifiers left out: they read entities.jsonl,
   facts.jsonl and schema.json (and the journal), never identifiers.jsonl, forgotten.jsonl or
-  secret.key (restricted). A
-  knowledge base that does not exist reads as none (nothing is created); one that cannot be read
-  says why.
+  secret.key (restricted). A knowledge base that does not exist reads as none (nothing is
+  created); one that cannot be read says why.
 - A decision goes through lib/knowledge.py's own `opened` (the exclusive lock, the save and the
   commit in the knowledge directory's git history) and km.review, as `kg batch apply` does. It is
   checked against today's batch under that same lock.

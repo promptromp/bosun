@@ -543,6 +543,22 @@ class StorageTest(KnowledgeWorld):
         (self.root / "view.json").unlink(missing_ok=True)
         self.assertIn("person/dana", self.kb().entities)
 
+    def test_console_reads_files_behind_the_journal_with_the_restricted_files_unreadable(self) -> None:
+        self.kg("identify", "person/dana", "slack", SECRET_ID)
+        names = ("entities.jsonl", "facts.jsonl", "view.json")
+        before = {n: (self.root / n).read_bytes() for n in names}
+        fact = self.made(ck.batch_fact_ids(self.review()))[0]
+        self.decide("confirm", [fact])
+        for name, data in before.items():  # a write cut between the journal and the files
+            (self.root / name).write_bytes(data)
+        for name in ("identifiers.jsonl", "forgotten.jsonl", "secret.key"):
+            self.unreadable(name)
+        kb = self.kb()
+        self.assertEqual(kb.facts[fact]["status"], km.CONFIRMED)  # the journal's rebuild, in memory
+        self.assertEqual((kb.identifiers, kb.forgotten, kb.secret, kb.key_problem), ([], [], b"", ""))
+        for name, data in before.items():
+            self.assertEqual((self.root / name).read_bytes(), data)  # a reader writes nothing
+
     def test_a_console_decision_is_journaled_and_the_journal_validates(self) -> None:
         fact = self.made(ck.batch_fact_ids(self.review()))[0]
         self.decide("confirm", [fact])

@@ -99,7 +99,7 @@ A review of the code and of current prior art (2026-11) found:
 Some readers open `ledger.json` directly (the console, the check-in gate, the impact collector,
 uninstall, the chores dry run) and the console has its own knowledge loader
 (`console_kb.read_kb`). They keep working because the rebuilt files keep their shape; the console's
-loader moves behind `knowledge.load` anyway.
+knowledge loader now goes through `knowledge.load` (identifiers left out), as built in phase 0.
 
 ## Decisions (2026-11-03)
 

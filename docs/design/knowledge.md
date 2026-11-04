@@ -223,8 +223,9 @@ reads and the one write). The cards are People, Process, Product and a fourth, S
 system, service and environment types (which the schema files under Process and Product), kept as
 one card by decision of 2026-10-21. Security notes:
 
-- **What the console reads:** entities, facts and the site schema, under the shared lock; never
-  `identifiers.jsonl` (restricted) or `forgotten.jsonl`. About a person it shows only whitelisted
+- **What the console reads:** entities, facts and the site schema, under the shared lock, through
+  `knowledge.load` (the journal's rebuild in memory where the files are behind it, never saved);
+  never `identifiers.jsonl` (restricted), `forgotten.jsonl` or `secret.key`. About a person it shows only whitelisted
   predicates and never a summary, with the note "Work-operational facts only. Delete on request:
   bosun kg forget person/<slug>". Entities are addressed by opaque keys, never by id or path.
 - **What it writes:** only review decisions on facts waiting in today's batch (the batch `kg
