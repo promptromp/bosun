@@ -339,7 +339,12 @@ def forgotten_records(kb: KB) -> list[Record]:
 
 
 def has_keyed_records(kb: KB) -> bool:
-    return any(r.get("hash_kind") == HASH_KEYED for r in forgotten_records(kb))
+    return any_keyed(forgotten_records(kb))
+
+
+def any_keyed(records: list[Record]) -> bool:
+    """Whether one of <records> (of deletions on request) is matched only by the key."""
+    return any(r.get("hash_kind") == HASH_KEYED for r in records)
 
 
 def is_forgotten(kb: KB, entity_id: str) -> bool:
