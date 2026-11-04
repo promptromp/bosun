@@ -4,6 +4,7 @@ transactions, order, torn lines and their repair. Fictional data."""
 from __future__ import annotations
 
 import contextlib
+import errno
 import fcntl
 import io
 import json
@@ -96,6 +97,28 @@ class ReplicaId(JournalTestCase):
             self.assertEqual(jr.replica_id(state), winner)
         self.assertEqual(json.loads((state / "replica.json").read_text()), {"replica": winner})
         self.assertEqual(list(state.glob(".replica.json*")), [])
+
+    def test_a_replica_id_that_cannot_be_written_leaves_no_temp_file(self) -> None:
+        def full(fd: int, data: bytes) -> None:
+            raise OSError(errno.ENOSPC, "no space left on the device")
+
+        for name, failing in (
+            ("write", mock.patch.object(jr, "_write_all", side_effect=full)),
+            ("flush", mock.patch.object(jr, "flush_to_disk", side_effect=OSError(errno.EIO, "io"))),
+        ):
+            state = Path(self.tmp.name) / f"state-{name}"
+            with self.subTest(name), failing, self.assertRaises(OSError):
+                jr.replica_id(state)
+            self.assertEqual(sorted(p.name for p in state.iterdir()), [], name)
+
+    def test_a_state_folder_without_hard_links_is_named(self) -> None:
+        state = Path(self.tmp.name) / "state"
+        with (
+            mock.patch("os.link", side_effect=OSError(errno.ENOTSUP, "Operation not supported")),
+            self.assertRaisesRegex(jr.JournalError, rf"{state / 'replica.json'}.*Operation not supported"),
+        ):
+            jr.replica_id(state)
+        self.assertEqual(sorted(p.name for p in state.iterdir()), [])
 
     def test_creators_racing_agree_on_one_id(self) -> None:
         for attempt in range(10):

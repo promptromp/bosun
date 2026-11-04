@@ -67,7 +67,8 @@ repository so every change has history.
   files above, one transaction per command ([Sync and sharing](sync.md#knowledge-changes)):
   `<replica>.jsonl` for this Mac's changes, `local.jsonl` for those that never leave this Mac:
   those naming a person (a person entity, a fact whose subject or object is one), and every record
-  of a fact I stated (one whose sources hold my quote or name one of my sessions), whole.
+  of a fact I stated (one whose sources hold my quote or name one of my sessions), whole, from the
+  write that brings my words on; its records written before then stay private.
   `view.json` records the journal position the files reflect and a digest of what they hold. Both
   are in the local git history like the other files; what a write cut short left
   (`<file>.torn-<time>`) is not.
@@ -75,8 +76,8 @@ repository so every change has history.
   writes nothing. The way out, as for the ledger: move `journal/` and the state folder's
   `replica.json` aside together; the next write starts a new journal from the files (genesis) as a
   new replica, so no mint seed repeats. `replica.json` is shared by the ledger and the knowledge
-  base, so this gives the Mac a new id in both journals, which both carry on under (each store's
-  old replica file stays in its journal).
+  base, so this gives the Mac a new id in both journals, which both carry on under (the other
+  store's old replica file stays in its journal).
 - Derived views (entity pages, indexes) are rebuilt from the log and never hand-edited.
 
 **Schema (generic, in the repo).** A closed set of types and predicates in

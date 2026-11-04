@@ -35,6 +35,7 @@ STATE_FILES = (
     ("ledger.md", LEDGER),
     ("learn", LEDGER),  # what learning found and what you decided, which a later run goes by
     ("ledger.json.tmp", WORKING),  # what a write cut short left
+    (".replica.json.*.tmp", WORKING),  # what making replica.json left when it was cut short
     ("ledger.lock", WORKING),
     ("agent-changes.json", WORKING),
     (".agent-changes.json.*", WORKING),

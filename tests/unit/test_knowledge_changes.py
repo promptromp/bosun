@@ -442,6 +442,23 @@ class GenesisTest(JournalTestCase):
         private = (self.root / "journal" / f"{self.replica()}.jsonl").read_text()
         self.assertNotIn("00000000-0000-0000-0000-00000000000", private)  # the fixture's sessions
 
+    def test_genesis_keeps_a_person_on_this_mac_when_two_adds_share_an_id(self) -> None:
+        self.write_legacy(
+            [
+                legacy_entity("repo/invoice-exporter", "invoice exporter"),
+                legacy_entity("person/dana", "Dana"),
+            ],
+            [
+                legacy_fact("f3", "person/dana", "reviews", object="repo/invoice-exporter"),
+                legacy_fact("f3", "repo/invoice-exporter", "caveat", value="retries are slow"),
+            ],  # a hand edit or a merge: the fold keeps the last add of an id
+        )
+        self.run_kg("add-entity", "repo/other")
+        private = (self.root / "journal" / f"{self.replica()}.jsonl").read_text()
+        self.assertNotIn("dana", private.lower())
+        adds = [c for c in self.journal().changes() if c["op"] == "fact.add"]
+        self.assertEqual([(c["target"], c.get("local", False)) for c in adds], [("f3", True), ("f3", False)])
+
     def test_genesis_keeps_counted_ids_and_takes_in_what_the_journal_cannot_hold(self) -> None:
         self.write_legacy(
             [

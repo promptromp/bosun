@@ -327,8 +327,9 @@ it appended to the fact log, as it is (`fact.add`, `fact.update`), and each enti
 or removed (`entity.put` with the whole entity, `entity.delete`). An update record says what the
 fields it sets held before (`prev`), so the rebuild can tell when two updates crossed (a confirm and
 a reject of the same proposal). A change that names a person (a person entity, every record of a
-fact whose subject or object is one) is `local`, and so is every record of a fact I stated, whole
-(one whose sources hold my quote or name one of my sessions: [Where we expect to
+fact whose subject or object is one) is `local`, and so is every record of a fact I stated, whole,
+from the write that brings my words on (one whose sources hold my quote or name one of my sessions;
+its records written before then stay `private`: [Where we expect to
 iterate](#which-data-goes-where)); the rest is `private`. A new fact's id is minted
 from the transaction (`f-` and six characters); facts from before keep theirs (`f12`), and a
 minted id that already names a fact is minted again. The journal is written first, then the files,
@@ -384,7 +385,7 @@ Every field belongs to one class. The class decides how far it may travel:
 
 | Class | Leaves this Mac | Examples |
 |---|---|---|
-| `local` | Never | `said` (my verbatim prompts); an approval's quote; a call's session, transcript path and tool call id, wherever an approval, a standing approval or the call's outcome (`failed`, `carried_out`) keeps them; the history entries that quote me (`approved`, `approval-used`, `user-said`) or keep a call's context; my words as a link's or a task's `via` or a transition's evidence (`user: ...`), with the link or history entry that holds them; `identifiers.jsonl`; `forgotten.jsonl` and `secret.key`, the key of its hashes; person entities and every fact naming a person; every record of a fact I stated (one whose sources hold my quote or name one of my sessions), whole; `batch.json` |
+| `local` | Never | `said` (my verbatim prompts); an approval's quote; a call's session, transcript path and tool call id, wherever an approval, a standing approval or the call's outcome (`failed`, `carried_out`) keeps them; the history entries that quote me (`approved`, `approval-used`, `user-said`) or keep a call's context; my words as a link's or a task's `via` or a transition's evidence (`user: ...`), with the link or history entry that holds them; `identifiers.jsonl`; `forgotten.jsonl` and `secret.key`, the key of its hashes; person entities and every fact naming a person; every record of a fact I stated (one whose sources hold my quote or name one of my sessions), whole, from the write that brings my words on (its records written before then stay `private`); `batch.json` |
 | `sealed` | Only to my own scope, and only when the data is encrypted (by the codec, or by a store that declares encryption at rest) | a learning finding's key (a slug the model wrote, which can name a colleague); free text: titles, URLs, notes, history notes, report summaries, open points and results, outreach subjects, details, options and answers, a task's ask, done-when and `via` (unless it quotes me), a delegation's ask, details and link, a proposal's action and its exact call (`spec`), a failed call's reason, a workstream's aliases; colleagues' names in `requester`, `to` and a ticket's `assignee`; Slack permalinks (a reply's or request's ref, processed sources) |
 | `private` | To my own scope | item ids, kinds, states, links, history events, a proposal's times, a report's time and CI status; repo, ticket and system names; the window in a delegation or report, tagged with its replica; process and product facts |
 | `team` | Also into a published projection | item id, kind, state and owner for the team board; confirmed, non-personal facts a share spec selects |
@@ -787,6 +788,16 @@ from the journal, never what travels.
   whether the Secure Enclave plugin (Touch ID on decrypt) suits an unattended check-in loop.
 - **The knowledge base's local git history:** keep it, or retire it once the journal holds the
   history.
+- **A private record can name a local fact (phase 1).** When a fact I stated replaces a product
+  fact (`kg supersede --from-user`, or my confirmed value closing another for a single-valued
+  predicate), the record that closes the product fact is `private` and carries `superseded_by:
+  <the local fact's id>` and the note `superseded by <id>`. Another Mac would see a replacement it
+  cannot find. Phase 1 decides whether such a close record follows the fact that replaces it, or
+  whether the quote is split off so that the stated fact can travel.
+- **A note on a product fact is `private` (phase 1).** A knowledge record's free-text `note`
+  (`--note`, or an import's `note`) on a fact that names no person and holds none of my words is
+  classed with the rest of the record, `private`, while the ledger keeps its notes `sealed`.
+  Phase 1 decides the knowledge base's class table at that level (fields, not whole records).
 - **A git checkout or revert in the knowledge folder moves the journal back:** the journal is in
   that history, so a `git checkout` or `git revert` there takes it back with the files. The changes
   made after that point are lost, and the local `seq` and the seeds of minted ids go back with it,

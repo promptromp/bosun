@@ -66,11 +66,15 @@ def is_local_fact(fact: Record | None) -> bool:
 
 def record_edit(record: Record, facts: Mapping[str, Record]) -> Edit:
     """The edit of one fact-log record: the record as its body, whole, local as its fact is as the
-    write leaves it (<facts>), or when the record itself brings my words."""
+    write leaves it (<facts>), or as an add's own fact is (two adds can share a counted id in a
+    file edited by hand, and the fold keeps only the last), or when an update brings my words."""
     fact_id = km.record_fact_id(record)
     added = record.get("op") == "add"
-    own = record["fact"].get("sources") if added else record.get("sources")
-    local = is_local_fact(facts.get(fact_id)) or holds_my_words(own)
+    local = (
+        is_local_fact(facts.get(fact_id))
+        or (added and is_local_fact(record["fact"]))
+        or holds_my_words(record.get("sources"))
+    )
     return Edit(FACT_ADD if added else FACT_UPDATE, fact_id, record, local)
 
 

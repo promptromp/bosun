@@ -60,6 +60,7 @@ from change_log import (
 
 
 REPLICA_FILE = "replica.json"
+REPLICA_TEMP = f".{REPLICA_FILE}.{{writer}}.tmp"  # replica.json while it is made (STATE_FILES knows it)
 REPLICA_ID = re.compile(r"[0-9a-f]{32}")  # also a file's stem: never "local", never a path
 LOCAL = "local"
 SUFFIX = ".jsonl"
@@ -133,26 +134,41 @@ def replica_id(state_dir: Path) -> str:
     stores' journals (the ledger's, the knowledge base's) use. It is written whole to a file of its
     own and flushed to the disk, then linked to its name, which never replaces a file already
     there: two creators at once (a first ledger write and a first knowledge write) agree, as the
-    second reads the first one's id."""
+    second reads the first one's id. The file of its own (REPLICA_TEMP) goes whatever happens."""
     path = state_dir / REPLICA_FILE
     if path.exists():
         return _read_replica(path)
     state_dir.mkdir(parents=True, exist_ok=True)
     made = secrets.token_hex(16)
-    tmp = state_dir / f".{REPLICA_FILE}.{os.getpid()}.{secrets.token_hex(4)}.tmp"
+    tmp = state_dir / REPLICA_TEMP.format(writer=f"{os.getpid()}.{secrets.token_hex(4)}")
     fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
     try:
-        _write_all(fd, (json.dumps({"replica": made}) + "\n").encode())
-        flush_to_disk(fd)
-    finally:
-        os.close(fd)
-    try:
-        os.link(tmp, path)
+        try:
+            _write_all(fd, (json.dumps({"replica": made}) + "\n").encode())
+            flush_to_disk(fd)
+        finally:
+            os.close(fd)
+        _link_new(tmp, path)
     except FileExistsError:
         return _read_replica(path)
     finally:
         tmp.unlink(missing_ok=True)
     return made
+
+
+def _link_new(tmp: Path, path: Path) -> None:
+    """<tmp> under the name <path>, which must not exist yet (FileExistsError if it does). A folder
+    without hard links (exFAT, some network shares) is a JournalError naming the path."""
+    try:
+        os.link(tmp, path)
+    except FileExistsError:
+        raise
+    except OSError as exc:
+        raise JournalError(
+            f"{path} cannot be made in its folder ({exc.strerror or exc}): this Mac's id is made with a "
+            "hard link, which that disk does not offer; keep the state folder (BOSUN_STATE_DIR) on the "
+            "Mac's own disk"
+        ) from exc
 
 
 def _is_change(record: Any) -> bool:
