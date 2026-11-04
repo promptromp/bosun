@@ -47,10 +47,20 @@ of truth, so don't copy rules into this file.
   awake window, de-dup state and alert sinks; `libexec/bosun-watchdog` only collects the live
   facts (tmux windows, the Claude in each, the check-in loop, launchd) for it.
 - Sync (design: `docs/design/sync.md`): every ledger write goes through `locked_ledger` into a
-  journal that `ledger.json` is the rebuild of. `lib/change_log.py` (pure: the envelope, ids, the
-  hybrid clock, the order), `lib/journal.py` (a store's journal files, the replica id,
-  transactions, an unfinished transaction set aside) and `lib/ledger_changes.py` (pure: the field table, `diff`,
-  `rebuild`).
+  journal that `ledger.json` is the rebuild of, and every knowledge write through
+  `knowledge.opened` into one in `knowledge/journal/`. `lib/change_log.py` (pure: the envelope, ids,
+  the hybrid clock, the order, and what both stores do alike at their write boundary: the refusal,
+  the one-time conversion, the stamp their files record, a deletion's placeholder), `lib/journal.py`
+  (a store's journal files, the replica id, transactions, an unfinished transaction set aside, a
+  deletion in `local.jsonl`, and the durable writes both stores' files use: every byte, flushed, a
+  replace or a new file with its folder flushed), `lib/ledger_changes.py` (pure: the field table, `diff`, `rebuild`),
+  `lib/knowledge_changes.py` (pure: a knowledge write's edits, genesis, each file's digest,
+  `rebuild`, what an outside edit adopts, never a person deleted on request) and
+  `lib/validation.py` (pure: what both stores' `validate` finds: the finding, its severity and
+  line, the journal against the files, where a rebuild and a file differ; `bosun doctor` prints
+  each line). A change to the knowledge rebuild's rules (`_APPLIERS`, the table its dispatch uses,
+  `SKIPPED` or `CHECKED`) trips the rules-digest test in `tests/unit/test_knowledge_changes.py`:
+  bump `KG_RULES_VERSION` (`lib/knowledge.py`) and record the new digest under it.
 - Setup (design: `docs/design/init.md`): `get.sh` (what `curl | sh` runs: plain POSIX sh, everything in
   functions with `main` last, because people pipe it straight from `main`), `lib/preflight.sh` (what
   bosun needs and what to do about what is missing; plain sh, changes nothing, and `init` and `doctor`
@@ -85,8 +95,11 @@ of truth, so don't copy rules into this file.
   kinds and their trust, a site's `schema.json`), `lib/knowledge_model.py` (pure over a `KB`: the
   fact log folded, resolution, the write operations and the auto-confirm rules),
   `lib/knowledge_review.py` (pure: batch groups and decisions, lint), `lib/knowledge_query.py`
-  (pure: lookup, search, neighbours, context packs), `lib/knowledge_store.py` (files, lock, git),
-  `lib/knowledge.py` + `libexec/bosun-kg` (the CLI and import). Quotes of my words are checked
+  (pure: lookup, search, neighbours, context packs), `lib/knowledge_changes.py` (pure: a write's
+  changes for the journal, local where they name a person or hold my words, and the rebuild the
+  files are), `lib/knowledge_store.py` (files, lock, git), `lib/knowledge.py` + `libexec/bosun-kg`
+  (the CLI and import, and the write boundary: the journal first, then the files and `view.json`;
+  reads caught up with the journal, `knowledge.load` being the one reader, which the console calls with the identifiers, forgotten records and key left out; `kg validate`). Quotes of my words are checked
   with `lib/approvals.py`'s genuine-prompt test. `tools/survey_to_kg.py` converts a survey into an
   import file; the fixture knowledge base is `tests/fixtures/knowledge/acme-import.jsonl`.
 - Agents (design: `docs/design/harnesses.md`): an adapter per agent, `lib/claude_state.py` and
@@ -286,7 +299,7 @@ you changed (the table and how to set them up: `docs/development.md`, "Which san
   Use it for `get.sh`, `install.sh`, launchd, `pmset` and whatever macOS does its own way. A clone costs
   no time or disk, so make one rather than be careful with one. It has already shown what Docker could
   not: a new Mac has no Apple tools, and launchd has no `gui/<uid>` domain until the auto-login is done.
-- `tests/sandbox.sh mac work [--base <ref>]`: in the same VM, a week of acme work (`tests/work_e2e.sh`, its days in `tests/sandbox/acme_week.sh`, what it shares with `install_e2e.sh` in `tests/sandbox/e2e_lib.sh`) on the release, upgraded to this checkout with `get.sh`, then the clock moved, writers racing, writes cut short.
+- `tests/sandbox.sh mac work [--base <ref>]`: in the same VM, a week of acme work in the ledger and the knowledge base (`tests/work_e2e.sh`, its days in `tests/sandbox/acme_week.sh`, what it shares with `install_e2e.sh` in `tests/sandbox/e2e_lib.sh`) on the release, upgraded to this checkout with `get.sh`, then the clock moved, writers racing, writes cut short, the knowledge files changed outside their journal, a person forgotten.
 - `bosun wake-test` on real hardware: the only proof of a real wake, because a macOS guest cannot sleep and
   `tart suspend` does not make launchd catch up. Check a job's time in the VM by moving its clock.
 

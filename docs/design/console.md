@@ -121,7 +121,7 @@ bosun console [--port N] [--open] [--new-token]
   different from the cookie's, compared in constant time, and handed out only in the JSON of
   `GET /api/knowledge/review`, which another origin cannot read (no CORS headers, and the cookie is
   `SameSite=Strict`). The body must be a small JSON decision (at most 64 KB, `{"action":
-  "confirm"|"reject"|"defer", "facts": ["f12", ...]}`; 413 when larger, 411 without a
+  "confirm"|"reject"|"defer", "facts": ["f-3k9x2a", ...]}`, or an older `f12`; 413 when larger, 411 without a
   Content-Length, 400 otherwise), and every fact must be
   waiting in today's batch (409), checked under the knowledge base's own lock.
 - `Content-Security-Policy: default-src 'self'; script-src 'self'; style-src 'self'; img-src
@@ -398,9 +398,13 @@ it with symlinks resolved; one that leads out is skipped. Files over 1 MB are li
 
 The knowledge base of `bosun kg` (docs/design/knowledge.md, its MVP 2), built 2026-10-21.
 `lib/console_kb.py` reads `$BOSUN_CONFIG_DIR/knowledge/` under the store's shared lock, as `kg
-lookup` does: `entities.jsonl`, `facts.jsonl` and `schema.json`, never `identifiers.jsonl`
-(restricted) or `forgotten.jsonl`. A knowledge base that does not exist reads as none and nothing
-is created; the views then say how to start one (`bosun kg import`, `kg propose`).
+lookup` does, through `knowledge.load` with the identifiers left out: `entities.jsonl`,
+`facts.jsonl` and `schema.json` (and the journal, where the files are behind it, rebuilt in memory
+and never saved), never `identifiers.jsonl`, `forgotten.jsonl` or `secret.key` (restricted). Its
+one write, a review decision, goes through the knowledge base's write path, which reads all three,
+and none of them reaches a response. A knowledge base that
+does not exist reads as none and nothing is created; the views then say how to start one (`bosun
+kg import`, `kg propose`).
 `lib/console_knowledge.py` (pure, over a `KB` and the ledger) builds the models.
 
 - **Tabs** (2026-10-21; the treatments were prototyped first, see
@@ -515,7 +519,7 @@ is created; the views then say how to start one (`bosun kg import`, `kg propose`
   and reject go through `km.review`, as `kg batch apply` does (a single-valued confirm closes the
   value it replaces), recorded with `reviewed_by: {"kind": "user", "ref": "console", "at": ...}` and
   the note `console`, and saved as one commit in the knowledge directory's git history
-  (`kg console review: confirm f3 f7`). Defer writes nothing (the facts stay proposed for a later
+  (`kg console review: confirm f-3k9x2a f-8m2qr0`). Defer writes nothing (the facts stay proposed for a later
   batch). When the decisions have answered every fact of the batch `kg batch` saved (none still
   waits; a deferred fact still does), the console marks `batch.json` answered exactly as `kg batch
   apply` does (`applied_at`, through its `mark_answered`), so the CLI then refuses to answer it

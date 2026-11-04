@@ -197,7 +197,9 @@ is behind `ledger.json`), or a line at the end of one, which every write reads, 
 further up, or a gap in a file's numbering, stops only a write that has to rebuild (after a write
 cut short or a hand edit); until then `bosun ledger validate --journal` and `bosun doctor` report
 it. Either way, move `journal/ledger` and `replica.json` aside together, and the next write starts
-a new journal from `ledger.json`. Each item keeps its last 200 history entries; the journal keeps
+a new journal from `ledger.json`. `replica.json` is this Mac's id in the knowledge base's journal
+too, so the Mac gets a new id in both, which the knowledge base carries on under as well (its old
+replica file stays in its journal). Each item keeps its last 200 history entries; the journal keeps
 all of them.
 
 ## Waiting on someone: outreach

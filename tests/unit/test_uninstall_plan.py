@@ -9,6 +9,7 @@ from pathlib import Path
 
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "lib"))
+import journal as jr
 import uninstall_plan as up
 from uninstall_plan import Checkout, Choices, Facts, Job, Step
 
@@ -67,6 +68,7 @@ class FileTables(unittest.TestCase):
             ("learn", up.LEDGER),
             ("journal", up.LEDGER),
             ("replica.json", up.LEDGER),
+            (jr.REPLICA_TEMP.format(writer="4242.1a2b3c4d"), up.WORKING),  # replica.json cut short
             ("ledger.lock", up.WORKING),
             ("logs", up.WORKING),
             ("stopped-bosun", up.WORKING),

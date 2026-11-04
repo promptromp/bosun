@@ -1,8 +1,12 @@
 # Design note: sync and sharing (ledger and knowledge)
 
-Status: accepted (2026-11-03). Phase 0 is built for the ledger: every ledger write goes through
+Status: accepted (2026-11-03). Phase 0 is built, for both stores. Every ledger write goes through
 a journal of changes per Mac that `ledger.json` is the rebuild of, with hash-based ids, the class
-table and `bosun ledger validate --journal` (also in `bosun doctor`); its knowledge part is next.
+table and `bosun ledger validate --journal` (also in `bosun doctor`). For the knowledge base,
+every write goes through a journal of its own, with minted fact ids and updates that say what they
+replaced, and its files are that journal's rebuild, with `bosun kg validate` (also in `bosun
+doctor`) ([Knowledge changes](#knowledge-changes)). The console reads the knowledge base through
+the same `knowledge.load`, with the identifiers, the forgotten records and the key left out.
 Planned in [docs/plans/sync-phase-0.md](../plans/sync-phase-0.md). Tracked in
 [ROADMAP.md](../../ROADMAP.md#6-sync-and-sharing).
 
@@ -95,7 +99,7 @@ A review of the code and of current prior art (2026-11) found:
 Some readers open `ledger.json` directly (the console, the check-in gate, the impact collector,
 uninstall, the chores dry run) and the console has its own knowledge loader
 (`console_kb.read_kb`). They keep working because the rebuilt files keep their shape; the console's
-loader moves behind `knowledge.load` anyway.
+knowledge loader now goes through `knowledge.load` (identifiers left out), as built in phase 0.
 
 ## Decisions (2026-11-03)
 
@@ -172,9 +176,13 @@ logs.
 of them (a short write is finished, or the write fails) and flushed to the disk itself (on macOS
 `F_FULLFSYNC`: a plain `fsync` there can leave the append in the drive's cache while a later
 rename reaches the disk). Then it rewrites the files, which record the journal position they
-reflect (the highest `seq` per file) and a digest of what they hold. A crash between the two
-leaves the files behind the journal; the next write sees the positions differ and rebuilds the
-files from the journal (a command that only reads uses the rebuild without saving it). Pulling
+reflect (the highest `seq` per file) and a digest of what they hold. A file replaced whole (in both
+stores, and `local.jsonl` when a delete on request rewrites it) is flushed, renamed into place,
+and then its folder is flushed too (`journal.replace_durably`): a rename is an entry in the folder,
+which a power cut could otherwise lose while keeping what was written after it. A crash between the
+journal and the files leaves the files behind the journal; the next write sees the positions differ
+and rebuilds the files from the journal (a command that only reads uses the rebuild without saving
+it). Pulling
 another Mac's changes in phase 1 is the same step. A transaction counts once all its lines are
 present: a commit writes the `local` file first, then the replica's, and every line says how many
 its transaction has there (`of`, and from the `local` file `private_of`). A write cut short (a
@@ -197,6 +205,10 @@ so does a write that meets other damage where it reads (every write reads the en
 and a rebuild reads all of it), with the file and line named. The way out is the same for both:
 move the journal folder and `replica.json` aside together, and the next write starts a new
 journal from `ledger.json`, as a new replica, so that no id is minted twice from the same `seq`.
+`replica.json` is this Mac's id in both stores' journals (the ledger's and the knowledge base's),
+so moving it aside gives the Mac a new id in both, which both carry on under: the other store's
+old replica file stays in its journal, and its next change goes to a file of the new id. The
+knowledge base's way out is the same, with `knowledge/journal/` ([Knowledge](../knowledge.md)).
 
 **A change made outside the journal is adopted.** `ledger.json` can still be changed by something
 that does not journal: by hand, or by an older bosun (after a downgrade, or a checkout's bosun on
@@ -212,7 +224,8 @@ other: a field is set, an item made or deleted, a history entry added. What the 
 hold is undone by that write, which says so in one line (how many parts, and that
 `ledger.json.bak` keeps the file as edited until the next write): history only grows, so an entry removed by hand comes
 back, and one edited in place comes back beside its edited copy. A file saved before digests is
-trusted once and gets one at its next save.
+trusted once and gets one at its next save. The knowledge base does the same with the digest in
+`view.json` ([Knowledge changes](#knowledge-changes)).
 
 ### Rebuilding, and what a merge cannot decide
 
@@ -314,9 +327,118 @@ The knowledge graph needs less:
 - Validity windows stay data, compared with "now" only when reading, so the rebuild depends only
   on the log.
 
-The local git history of `knowledge/` stays as it is for now. It is local, it never syncs, and
-`kg forget` can keep restarting it. Once the log exists it duplicates the log's history, so a later
-change may retire it ([Open questions](#open-questions)).
+Built so far: the journal sits in `knowledge/journal/`, under the knowledge base's own lock, and
+each write (`knowledge.opened`) is one transaction named by its command (`kg propose`, `kg batch
+apply`, `console review`). `lib/knowledge_changes.py` turns a write into its changes: each record
+it appended to the fact log, as it is (`fact.add`, `fact.update`), and each entity it made, changed
+or removed (`entity.put` with the whole entity, `entity.delete`). An update record says what the
+fields it sets held before (`prev`), so the rebuild can tell when two updates crossed (a confirm and
+a reject of the same proposal). A change that names a person (a person entity, every record of a
+fact whose subject or object is one) is `local`, and so is every record of a fact I stated, whole,
+from the write that brings my words on (one whose sources hold my quote or name one of my sessions;
+its records written before then stay `private`: [Where we expect to
+iterate](#which-data-goes-where)); the rest is `private`. A new fact's id is minted
+from the transaction (`f-` and six characters); facts from before keep theirs (`f12`), and a
+minted id that already names a fact is minted again. The journal is written first, then the files,
+then `view.json`: the position the files reflect and the digest of what they hold (the entities
+and the fact log), as `ledger.json`'s `journal` key does. A knowledge base from before the journal
+enters it as one transaction (`genesis`) holding every entity and record, with what the journal
+cannot hold converted once, as for the ledger.
+
+The files are the journal's rebuild (`knowledge_changes.rebuild`), in the one order: an entity is
+put whole or deleted, and the fact log keeps its records in that order, folded as the files are
+read (`knowledge_model.Fold`), so an update that comes before its fact's add waits for it and one
+whose add never comes is listed as pending. An update whose `prev.status` is not the fact's status
+where it is applied (a confirm and a reject of one proposal at once) is a `field` conflict and not
+applied; an op or a body this bosun cannot apply is kept the same way. The write path does what the
+ledger's does, in the same order: it refuses a journal behind `view.json`, sets an unfinished
+transaction aside, puts a knowledge base from before the journal in it (genesis), adopts a change
+made to the files outside it as one `adopt` transaction, and goes on from the journal's rebuild
+where the files are behind it or were changed outside it, saving the files whole. `view.json`
+records a digest of each data file, which tells the two apart: a file holding neither what
+`view.json` recorded nor what the rebuild makes was changed outside the journal (by hand, a git
+checkout or revert of files in the knowledge folder, an older bosun); when each file is one or the
+other, a write was cut short somewhere between the journal and `view.json` (written last), and the
+rebuild finishes it, even at the same position. Adopting such files would hold that write's
+records twice, or bring back a person a `kg forget` cut short had already placeholdered. The fact
+log's append goes through the journal's own write and flush (`write_all`, `flush_to_disk`), and
+`forgotten.jsonl` is written whole, but a power cut or a full disk during an append can still leave
+a data file ending in a line that does not parse: the journal holds every record, so such a file is
+one the rebuild replaces (a write saves it, a reader uses it in memory and says so on stderr, and
+`kg validate` warns, `unreadable`), and a `forgotten.jsonl` that does not parse is written again
+from its other lines with the records the deletion markers carry. Only where no journal can rebuild
+it (none yet, one that cannot be read, or one behind `view.json`) does such a file stop every
+command, naming the line. A deletion
+commits a local `deletion` marker (no target, skipped by the rebuild) with its transaction, before
+it rewrites what it removed into placeholders; the marker holds the write's `forgotten.jsonl`
+records (a keyed hash and counts, nothing of the person). So the position moves, and a deletion
+cut short anywhere is finished by the next write, which puts the placeholders in again for the
+marker's hashed ids and deletes what writes cut short left of `local.jsonl`, as the deletion
+does, and the knowledge folder's `*.tmp` (a `kg batch` cut short before its rename leaves
+`batch.json.tmp`, which names people). A keyed record takes the key to finish: while `secret.key`
+cannot be read, that write is refused whole, naming it, and the first write once it is back
+finishes the deletion. The marker also holds the ids of the facts its write removed (ids only), so
+a retention purge cut short between its marker and its placeholders is finished the same way,
+although its record holds no hash. Who is forgotten is `forgotten.jsonl`
+together with the records every deletion marker carries, and a write first writes a marker's
+record that `forgotten.jsonl` lacks, before anything is taken in: a forget is whole through the
+journal, and the way out when the key is lost for good moves the journal folder aside with
+`forgotten.jsonl` and `replica.json`, and `secret.key`, if it is there. The key is made as
+`replica.json` is (whole and flushed, then linked to its name), before anything hashed with it is
+journaled; with no keyed record anywhere, a `secret.key` that is not a key (empty, the wrong length,
+unreadable) is moved aside, kept and ignored by the history, and made again, with a line on stderr.
+The identifiers and
+`forgotten.jsonl`, which the journal does not hold, are written before the data files, and a write
+that finishes a deletion drops the identifiers of entities gone. A history restart is a debt: a
+write that finishes a deletion cut short, applies one made outside the journal, or drops or
+refuses a person deletes the knowledge folder's `.git` once its files are final and before
+`view.json` (whatever `BOSUN_KNOWLEDGE_GIT` says), and its commit starts a new history, so that
+no cut leaves the person in it. A `.git` that is still there after the delete stops the write
+there, naming it (fail closed: a deletion cut short is then finished by the next write). What an
+outside change cannot express (a record removed: the fact log only grows) comes back; a record
+edited in place comes back beside its edited copy, which is adopted, so an edited `add` takes the
+fact over (as an edited history entry comes back in the ledger). That write says so in one line, and first commits the files as
+edited to the knowledge folder's git history, which keeps them (with the history off, nothing
+does, nor when the write starts the history again, as it holds what the write deletes; the save
+says the line, as only it knows). A write cut short and then a hand edit before the next write adopts that write's records a
+second time (a second `add` takes its fact over): accepted, as rare and visible. So are two more
+double faults: a write cut short while it pays a restart owed for refusing a person (a debt with
+no marker) can leave an older bosun's commit of that person in the history until the next
+`kg forget`; and `view.json` restored with data files from before a forget, or removed, makes
+every marker after the saved position unfinished, so a later `--allow-forgotten` re-add is
+forgotten again (the safe direction). And when one data file does not parse, the other one edited
+by hand before the next write is replaced by the rebuild too, not adopted (the write names only the
+file that does not parse). Adopt never brings
+in or keeps a person deleted on request: one gone from the files whom a forgotten record matches
+(a plain or a keyed hash: an older bosun's `kg forget`, or a hand removal) is forgotten in the
+journal too, as `kg forget` does it (its marker, then the placeholders, over the whole journal,
+and the history restart owed), and one in files restored from before a forget, with no
+`--allow-forgotten` add in the journal, is not adopted (one line, without naming them), the files
+as edited are not committed, and the rebuild drops them. While the key of the forgotten cannot be
+read (keyed records and no `secret.key`), the forgotten check cannot run, so adopt takes in no
+person entity at all, as adding one is refused then, and says why. A reader shows such files as
+they are until the next write (reads never write), and person facts an older bosun's retention
+purge took out come back from the journal until the next `kg expire`. A write that rebuilds with conflicts or
+pending updates says how many on stderr. A command that only reads uses the rebuild in memory and
+writes nothing. `bosun kg validate` compares the files as saved with the journal's rebuild, with
+the ledger's findings and severities (`lib/validation.py` holds what both stores share: the
+finding, its severity and line, and the decisions from the position, the digest and the
+comparison), and `bosun doctor` runs it.
+
+A delete on request (`kg forget`) and the retention purge rewrite only `local.jsonl`, where all
+that names a person is: each of its changes becomes a placeholder that keeps its envelope's place
+(`v`, `stream`, `replica`, `seq`, `hlc`, `tx`, `of`, `local`, `private_of`) with op `forgotten`, an id of its
+own and no target or body. So the local sequence and the ids minted from it never go back, and its
+transaction stays whole; the rebuild skips placeholders. The private journal is never rewritten:
+a deletion that would have to remove a change from it is refused. What writes cut short left of
+`local.jsonl` goes too, whatever it held (its `.torn-<time>` tails, never committed and not
+readable enough to pick one person out, and a rewrite's unfinished copy), as does what they left
+in the knowledge folder (`*.tmp`), and the git history never holds any torn file.
+
+The local git history of `knowledge/` stays as it is for now, and holds the journal and `view.json`
+like the other files. It is local, it never syncs, and `kg forget` keeps restarting it, which also
+takes the person's changes out of earlier commits. Once the log exists it duplicates the log's
+history, so a later change may retire it ([Open questions](#open-questions)).
 
 ### Ids
 
@@ -350,7 +472,7 @@ Every field belongs to one class. The class decides how far it may travel:
 
 | Class | Leaves this Mac | Examples |
 |---|---|---|
-| `local` | Never | `said` (my verbatim prompts); an approval's quote; a call's session, transcript path and tool call id, wherever an approval, a standing approval or the call's outcome (`failed`, `carried_out`) keeps them; the history entries that quote me (`approved`, `approval-used`, `user-said`) or keep a call's context; my words as a link's or a task's `via` or a transition's evidence (`user: ...`), with the link or history entry that holds them; `identifiers.jsonl`; `forgotten.jsonl`; person entities and every fact naming a person; `batch.json` |
+| `local` | Never | `said` (my verbatim prompts); an approval's quote; a call's session, transcript path and tool call id, wherever an approval, a standing approval or the call's outcome (`failed`, `carried_out`) keeps them; the history entries that quote me (`approved`, `approval-used`, `user-said`) or keep a call's context; my words as a link's or a task's `via` or a transition's evidence (`user: ...`), with the link or history entry that holds them; `identifiers.jsonl`; `forgotten.jsonl` and `secret.key`, the key of its hashes; person entities and every fact naming a person; every record of a fact I stated (one whose sources hold my quote or name one of my sessions), whole, from the write that brings my words on (its records written before then stay `private`); `batch.json` |
 | `sealed` | Only to my own scope, and only when the data is encrypted (by the codec, or by a store that declares encryption at rest) | a learning finding's key (a slug the model wrote, which can name a colleague); free text: titles, URLs, notes, history notes, report summaries, open points and results, outreach subjects, details, options and answers, a task's ask, done-when and `via` (unless it quotes me), a delegation's ask, details and link, a proposal's action and its exact call (`spec`), a failed call's reason, a workstream's aliases; colleagues' names in `requester`, `to` and a ticket's `assignee`; Slack permalinks (a reply's or request's ref, processed sources) |
 | `private` | To my own scope | item ids, kinds, states, links, history events, a proposal's times, a report's time and CI status; repo, ticket and system names; the window in a delegation or report, tagged with its replica; process and product facts |
 | `team` | Also into a published projection | item id, kind, state and owner for the team board; confirmed, non-personal facts a share spec selects |
@@ -400,6 +522,12 @@ Where we expect to iterate:
   or a session transcript, and so do its `proposed` and `proposal-*` history entries; they are
   `sealed`. Moving the quote out of the action into a field of its own would let it stay `local`;
   that needs my decision before phase 1.
+- **A fact I stated stays on the Mac.** A knowledge fact whose sources hold my words (a `user`
+  source carries my quote and the session it was checked in) or name one of my sessions (a
+  `transcript` source) is `local`, every record of it and whole, from the write that brings my
+  words on, as the ledger keeps a link whose `via` quotes me. So another Mac misses facts that
+  are often the most valuable, such as a rule I stated about a process. Splitting the quote and
+  the session off, so that the fact itself can travel, is for phase 1.
 - **Nothing removes a history entry.** The ledger's journal keeps every change, so a note typed by
   mistake (a colleague's name, something private) stays in the journal even after a hand edit
   (which the next write undoes) or a `prune` (which deletes the item, not its earlier changes).
@@ -644,6 +772,8 @@ Pure modules hold the logic; thin modules do the I/O.
 - `lib/ledger_changes.py` (pure): the field table, `diff(before, after)` into changes, and the
   rebuild with its conflict records.
 - `lib/knowledge_changes.py` (pure): the same for knowledge, sharing `knowledge_model`'s fold.
+- `lib/validation.py` (pure): what both stores' `validate` finds, alike: the finding, its
+  severity and line, and the journal against the files.
 - `lib/sync_plan.py` (pure): what to push and pull, from the journal and a store listing.
 - `lib/sync.py` and `libexec/bosun-sync`: the command.
 - `lib/remote_store.py`: the port, `BACKENDS` and the contract every adapter passes;
@@ -723,14 +853,32 @@ from the journal, never what travels.
   against about 80 ms to start the command. Since 2026-11-03 each write also hashes the ledger twice
   (to notice a change made outside the journal, and to record its digest), about 15 ms each for a
   3 MB ledger and under 1 ms at the fixture's size, and flushes the journal and `ledger.json` to the
-  disk itself (`F_FULLFSYNC`, about 5 ms each on an Apple-silicon Mac).
-- **Rules versions in the rebuild:** every change records `rules`, but the rebuild checks each
-  one against today's `KINDS` and `RELATIONS`. A change to them that removes a move or tightens a
-  link rule would turn a Mac's own valid history into conflicts, and a write that rebuilds after a
-  crash would revert those states. Before the next such change, or phase 1, the rebuild must check
-  each change under the rules version it was recorded with (or not re-check a replica's own
-  contiguous sequence, which was checked against the very state it applies to). A unit test pins a
-  digest of the rule tables to `RULES_VERSION`, so such a change cannot land unnoticed.
+  disk itself (`F_FULLFSYNC`, about 5 ms each on an Apple-silicon Mac). Since 2026-11-04 each
+  replaced file (`ledger.json`, `ledger.md`) also flushes its folder, so that the rename itself
+  survives a power cut: about 9 ms each.
+- **Knowledge rebuild cost (measured 2026-11-04, phase 0):** 500 processes and 500 steps with
+  20,000 `has_step` facts imported in one transaction (21,000 changes, a 12.2 MB journal for a 6.6
+  MB `facts.jsonl`) take 0.36 s to read and order and 0.25 s to rebuild on an Apple-silicon Mac
+  (Python 3.15). A reader pays it only where the files are behind the journal (a write cut short);
+  the same remark as for the ledger holds for phase 1. A write reads the journal once and passes
+  that read on, and skips looking for unfinished changes when `view.json` is at the journal's
+  position; it rebuilds only where the files are not as saved. Measured 2026-11-04 at 6,000 facts
+  (a 5.3 MB journal, a 3.6 MB `facts.jsonl`, the history off): an ordinary write read the journal
+  three times (0.12 s of 0.25 s) and now reads it once (0.04 s of 0.19 s); a write after a hand
+  edit read it 15 times and rebuilt 7 times (1.12 s of 1.66 s) and now reads it once and rebuilds
+  twice, the journal before and after it adopts (0.19 s of 0.69 s). Both still grow with the
+  journal, which phase 1's snapshots answer.
+- **Rules versions in the rebuild (both stores):** every change records `rules`, but each store's
+  rebuild checks it against today's rules: the ledger's `KINDS` and `RELATIONS`, the knowledge
+  base's ops (the ones its dispatch table applies and the ones it skips) and the fields an update
+  must find as it left them (`knowledge_changes.APPLIED`, `SKIPPED` and `CHECKED`). A change to
+  them that removes a move, tightens a link rule or checks another field
+  would turn a Mac's own valid history into conflicts, and a write that rebuilds after a crash
+  would revert those states. Before the next such change, or phase 1, the rebuild must check each
+  change under the rules version it was recorded with (or not re-check a replica's own contiguous
+  sequence, which was checked against the very state it applies to). A unit test per store pins a
+  digest of its rule tables to its version (`RULES_VERSION` in `lib/ledger.py`, `KG_RULES_VERSION`
+  in `lib/knowledge.py`), so such a change cannot land unnoticed.
 - **One replica id on two Macs:** a Migration Assistant or Time Machine restore onto a second Mac
   copies `replica.json`, and both Macs then write as one replica. Phase 1 must notice it (two
   journals with the same `seq` and different changes) rather than merge them.
@@ -747,6 +895,41 @@ from the journal, never what travels.
   whether the Secure Enclave plugin (Touch ID on decrypt) suits an unattended check-in loop.
 - **The knowledge base's local git history:** keep it, or retire it once the journal holds the
   history.
+- **A private record can name a local fact (phase 1).** When a fact I stated replaces a product
+  fact (`kg supersede --from-user`, or my confirmed value closing another for a single-valued
+  predicate), the record that closes the product fact is `private` and carries `superseded_by:
+  <the local fact's id>` and the note `superseded by <id>`. Another Mac would see a replacement it
+  cannot find. Phase 1 decides whether such a close record follows the fact that replaces it, or
+  whether the quote is split off so that the stated fact can travel.
+- **A note on a product fact is `private` (phase 1).** A knowledge record's free-text `note`
+  (`--note`, or an import's `note`) on a fact that names no person and holds none of my words is
+  classed with the rest of the record, `private`, while the ledger keeps its notes `sealed`.
+  Phase 1 decides the knowledge base's class table at that level (fields, not whole records).
+- **A git checkout or revert in the knowledge folder moves the journal back:** the journal is in
+  that history, so a `git checkout` or `git revert` there takes it back with the files. The changes
+  made after that point are lost, and the local `seq` and the seeds of minted ids go back with it,
+  so a fact id could be minted again (one that names a fact still there is minted anew, but the id
+  of a fact deleted since can come back). In phase 0 nothing else holds those ids. Before phase 1
+  syncs facts, the journal needs a history that git cannot rewind, or a check that refuses a
+  journal that went back.
 - **When person facts become `sealed`:** after key epochs make deletion reach the remote.
+- **A simpler forget, phase 1's starting point.** Phase 0's forget holds at every cut point tried,
+  but "nothing of a forgotten person survives" is spread over thirteen places in three modules, and
+  three of its decisions hang on `view.json`'s saved position and the adopted base, which is why
+  double faults remain (a restart owed for refusing a person, and `view.json` restored with older
+  files). Phase 1 has to rework forget anyway, so that it travels to other Macs; it starts from this
+  design (the final review of phase 0's knowledge journal), with the same guarantees and fewer gaps:
+  - **One ordered status per hashed id.** A forget marker and an allow marker (journaled by
+    `--allow-forgotten`) are both local, and the later one in journal order wins. Who is forgotten
+    then never depends on the saved position, which closes the restored-`view.json` case.
+  - **One idempotent scrub at write start.** For every person whose status is forgotten, their
+    changes become placeholders in `local.jsonl`, they are dropped from the files in memory, and
+    the leftovers are deleted. This replaces finishing a cut forget, applying one made outside the
+    journal, and the forgotten half of what adopt refuses and holds back. The retention purge's
+    marker lists its fact ids (as it now does), so the scrub finishes that too.
+  - **The history restart as a durable debt.** Recorded before anything else is touched (a local
+    marker, or an ignored `restart.owed` file), paid at the save, and cleared after the new
+    history's first commit. This closes the restart owed for refusing a person, and the gap a cut
+    between deleting `.git` and `view.json` leaves.
 - **Several bosun versions in one team:** how long a replica keeps writing when a teammate runs a
   newer format.

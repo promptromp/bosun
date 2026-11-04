@@ -40,7 +40,10 @@ facts were stated once, in the user's own words, and then lost when the conversa
 ## Shape
 
 **Storage (site-specific, never in the repo):** `$BOSUN_CONFIG_DIR/knowledge/`, a local git
-repository so every change has history.
+repository so every change has history. A write commits under the knowledge base's exclusive lock, and
+git holds a lock (the index's, `HEAD`'s, a ref's) for one command, so one older than 30 seconds found
+there was left by a git command cut short: the commit removes each with a note on stderr instead of
+failing from then on.
 
 - `entities.jsonl`: one entity per line, with these fields:
   - `id`, for example `person/dana`
@@ -48,8 +51,11 @@ repository so every change has history.
   - `name`
   - `aliases`, split into strong (true synonyms) and weak (related terms), following SKOS
   - `summary` (never for a person)
-- `facts.jsonl`, append-only. Each fact has an id, a subject, a predicate, and either an object
-  (another entity) or a value. It also carries:
+- `facts.jsonl`, append-only: an `add` record per fact, then an `update` record per change, which
+  also says what the fields it sets held before (`prev`). Each fact has an id (`f-` and six
+  characters, minted from the journal so that two Macs never make the same one; `f12` for facts
+  from before), a subject, a predicate, and either an object (another entity) or a value. It also
+  carries:
   - `sources`: each a kind and a reference (see below)
   - `authority`: user said, stakeholder said, observed, or inferred
   - `observed_at`, `observations`
@@ -60,6 +66,30 @@ repository so every change has history.
   - `prevents_rework`: whether not knowing it caused rework
 - `identifiers.jsonl` (restricted, mode 0600): chat member ids, tracker account ids, code-host
   logins, needed for mentions and routing. Never shown in context packs.
+- `journal/`: every change to entities and facts, which each write appends to before it writes the
+  files above, one transaction per command ([Sync and sharing](sync.md#knowledge-changes)):
+  `<replica>.jsonl` for this Mac's changes, `local.jsonl` for those that never leave this Mac:
+  those naming a person (a person entity, a fact whose subject or object is one), and every record
+  of a fact I stated (one whose sources hold my quote or name one of my sessions), whole, from the
+  write that brings my words on; its records written before then stay private.
+  `view.json` records the journal position the files reflect and a digest of what they hold. Both
+  are in the local git history like the other files; what a write cut short left
+  (`<file>.torn-<time>`) is not.
+- `entities.jsonl` and `facts.jsonl` are the journal's rebuild (`knowledge_changes.rebuild`): its
+  changes in the one order, an entity put whole or deleted, the fact log's records kept in that
+  order and folded as the files are (an update that comes before its fact's add waits for it).
+  How a write cut short is finished, how a change made outside the journal is adopted, who is
+  forgotten, the history restart a write owes, and the double faults accepted, is told once, in
+  [Sync and sharing, Knowledge changes](sync.md#knowledge-changes).
+  `kg validate` reports damage, a position that does not match, a rebuild that differs,
+  conflicts, updates waiting for their fact, an outside edit and a file that does not parse;
+  `bosun doctor` runs it (`lib/validation.py`, shared with the ledger's validate).
+- When the journal is damaged, or behind `view.json` (a journal file lost), a write refuses and
+  writes nothing. The way out, as for the ledger: move `journal/` and the state folder's
+  `replica.json` aside together; the next write starts a new journal from the files (genesis) as a
+  new replica, so no mint seed repeats. `replica.json` is shared by the ledger and the knowledge
+  base, so this gives the Mac a new id in both journals, which both carry on under (the other
+  store's old replica file stays in its journal).
 - Derived views (entity pages, indexes) are rebuilt from the log and never hand-edited.
 
 **Schema (generic, in the repo).** A closed set of types and predicates in
@@ -154,8 +184,11 @@ reads and the one write). The cards are People, Process, Product and a fourth, S
 system, service and environment types (which the schema files under Process and Product), kept as
 one card by decision of 2026-10-21. Security notes:
 
-- **What the console reads:** entities, facts and the site schema, under the shared lock; never
-  `identifiers.jsonl` (restricted) or `forgotten.jsonl`. About a person it shows only whitelisted
+- **What the console reads:** entities, facts and the site schema, under the shared lock, through
+  `knowledge.load` (the journal's rebuild in memory where the files are behind it, never saved);
+  never `identifiers.jsonl` (restricted), `forgotten.jsonl` or `secret.key`. Its one write (below)
+  goes through the write path, which reads all three (and may make the key, record a forgotten
+  record or rewrite the identifiers), and none of them reaches a response. About a person it shows only whitelisted
   predicates and never a summary, with the note "Work-operational facts only. Delete on request:
   bosun kg forget person/<slug>". Entities are addressed by opaque keys, never by id or path.
 - **What it writes:** only review decisions on facts waiting in today's batch (the batch `kg
@@ -210,6 +243,12 @@ docs/design/console.md, section 6. Its measures:
   the person (or the user) said.
 - **Every person fact is written so it could be shown to that person.** A person entity has no
   free-text summary.
+- **A forgotten person is kept as a keyed hash** (`secret.key`, never leaves the Mac), so nobody can
+  guess who was forgotten; records from before the key (no `hash_kind`) stay guessable, since their ids
+  are unknown. If the key is lost for good, move `forgotten.jsonl`, `journal/` (whose deletion
+  markers hold the same records) and `replica.json` aside together, and `secret.key`, if it is
+  there: those people can then be added again (a choice made knowingly) and the next write makes
+  a new key.
 - **Machine-local storage**, within the user's account, never in the repo, with the retention and
   delete-on-request rules above. The design should be confirmed with the privacy or legal team
   before any team-shared version.
@@ -278,7 +317,12 @@ a stream of questions.
   `lib/knowledge_model.py` (the fact log folded into facts, resolution, every write operation and
   the auto-confirm rules; pure over a `KB` value, so a dry run is an operation never saved),
   `lib/knowledge_review.py` (batch, decisions, lint), `lib/knowledge_query.py` (lookup, facts,
-  search, neighbours, context packs), `lib/knowledge.py` + `libexec/bosun-kg` (the CLI).
+  search, neighbours, context packs), `lib/knowledge_changes.py` (a write's changes for the
+  journal, local where they name a person or hold my words; a knowledge base from before as one genesis
+  transaction; the digest `view.json` records; the rebuild, what an outside edit adopts, and where
+  the rebuild and the files differ; pure), `lib/knowledge.py` + `libexec/bosun-kg` (the CLI, and
+  the write boundary: the journal first, then the files; reads caught up with the journal;
+  `kg validate`).
 - **Source kinds:** trusted `user` (counts only once the quote is verified), `ledger`, `report`,
   `memory` (a Claude Code memory note), `transcript` (a session on this machine), `profile` (a
   structured directory field); untrusted `slack`, `pr`, `ticket`, `doc`. "Two independent
@@ -299,9 +343,27 @@ a stream of questions.
   `kg batch apply` answers the batch last printed (`batch.json`) and says how many facts it left
   proposed.
 - **Deletion:** `kg forget` and the retention purge rewrite `facts.jsonl` without the facts, keep
-  only a hash of the id and the counts in `forgotten.jsonl`, and restart the git history, since
-  old commits would otherwise still hold the data. A forgotten id cannot be added again without
-  `--allow-forgotten`.
+  only a keyed hash of the id and the counts in `forgotten.jsonl`, and restart the git history, since
+  old commits would otherwise still hold the data. In the journal they rewrite only `local.jsonl`,
+  where everything naming a person is: each of its changes becomes a placeholder that keeps its
+  place (sequence number, clock, transaction) and nothing of what it held, so the sequence and the
+  ids minted from it never go back. What writes cut short left of `local.jsonl` (its torn tails,
+  a rewrite's unfinished copy) is deleted too, whatever it held, and so is what they left in the
+  knowledge folder (`*.tmp`: a `kg batch` cut short leaves `batch.json.tmp`, which names people). The private journal is never
+  rewritten, so a deletion that would need it is refused. A forgotten id cannot be added again without
+  `--allow-forgotten`. The hash is an HMAC-SHA256 under `secret.key` (made on the first write as
+  `replica.json` is, whole and flushed before it is linked to its name; mode 0600, ignored by the
+  history, never leaves the Mac), so guessing `person/<name>` finds nobody; records from before
+  the key (no `hash_kind`) stay plain sha256 and guessable, since their ids are unknown and cannot
+  be re-keyed. With keyed records and no readable key, adding a person is refused and names the
+  key's path: restore it, a new key would make every record unmatchable. `kg forget` is refused
+  the same way, and so is a write that has to finish a `kg forget` cut short (until the key is
+  back). With no keyed record, a `secret.key` that is not a key (empty, the wrong length,
+  unreadable) is moved aside by the next write, kept as `secret.key.aside-<time>` (ignored by the
+  history), and made again, with a line on stderr. If the key is lost for good, move
+  `forgotten.jsonl`, `journal/` (whose deletion markers hold the same records) and `replica.json`
+  aside together, and `secret.key`, if it is there: those people can then be added again (a choice
+  made knowingly), and the next write makes a new key.
 - **Import** reads JSON or JSON lines (`{"type": "entity", ...}` and `{"type": "fact", ...}`), is
   a dry run unless `--apply`, records everything as proposals (`--auto-confirm`: apply the rules
   above), and reports refusals by reason (People whitelist, schema, unresolved) and how many

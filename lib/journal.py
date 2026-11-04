@@ -14,11 +14,17 @@ leaves an unfinished transaction at the end of a file: readers leave it out, as 
 there, and `repair_tail` moves it aside, kept, before the next write. Any other damage raises
 `JournalError` where the line is read.
 
+Files are never edited, with one exception: a delete on request (`forget`) rewrites `local.jsonl`,
+each removed change becoming a placeholder in its place (change_log.placeholder), so that its
+sequence, the ids minted from it and its transaction stay as they were.
+
 Every byte reaches the file or the write fails (a short write is finished, one that makes no
-progress raises), and each append is flushed to the disk itself before the next file is written
-(`flush_to_disk`: F_FULLFSYNC on macOS, whose fsync leaves data in the drive's cache, so that a
-power cut cannot keep a later write and lose an earlier one). Each file is numbered from seq 1
-with no gap; a gap is damage.
+progress raises: `write_all`), and each append is flushed to the disk itself before the next file
+is written (`flush_to_disk`: F_FULLFSYNC on macOS, whose fsync leaves data in the drive's cache, so
+that a power cut cannot keep a later write and lose an earlier one). A file replaced or made whole
+(`replace_durably`, `create_new`) has its folder flushed too, as a rename or a link is an entry
+there. Both stores' files go through these. Each file is numbered from seq 1 with no gap; a gap is
+damage.
 
 The caller holds the store's lock (the ledger's flock, the knowledge base's lock); nothing here
 locks. The pure side (ids, clocks, order) is `lib/change_log.py`.
@@ -35,7 +41,7 @@ import re
 import secrets
 import sys
 import time
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Collection, Iterable, Mapping
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
@@ -44,22 +50,31 @@ from typing import Any, BinaryIO
 from change_log import (
     ENVELOPE_VERSION,
     Change,
+    Edit,
     canonical,
     change_id,
     clock_text,
     in_order,
     mint_suffix,
+    placeholder,
     tick,
 )
 
 
 REPLICA_FILE = "replica.json"
+# A file's new text while it is written (a rewrite such as forget's, a file made whole such as
+# replica.json): a name of its own beside it, for one writer.
+WRITING = ".{name}.{writer}.tmp"
+REPLICA_TEMP = WRITING.format(name=REPLICA_FILE, writer="{writer}")  # STATE_FILES knows it
 REPLICA_ID = re.compile(r"[0-9a-f]{32}")  # also a file's stem: never "local", never a path
 LOCAL = "local"
 SUFFIX = ".jsonl"
 # fcntl's full flush where the platform has one (macOS); None elsewhere.
 FULL_FSYNC: int | None = getattr(fcntl, "F_FULLFSYNC", None)
 TORN = ".torn-"  # <file>.torn-<UTC time>: an unfinished transaction, moved aside
+# What writes cut short leave of local.jsonl, which a delete on request removes: its torn tails, and
+# the copy a rewrite was writing.
+LOCAL_LEFTOVERS = (f"{LOCAL}{SUFFIX}{TORN}*", WRITING.format(name=f"{LOCAL}{SUFFIX}", writer="*"))
 _TAIL = 8192
 # What reading a change relies on (its position, its place in the order, whether its transaction
 # is whole): a line without them is not a change.
@@ -92,7 +107,7 @@ def flush_to_disk(fd: int) -> None:
     os.fsync(fd)
 
 
-def _write_all(fd: int, data: bytes) -> None:
+def write_all(fd: int, data: bytes) -> None:
     """All of <data> to <fd>: a short write (a nearly full disk) is finished by more calls, and a
     call that writes nothing raises, so that a transaction is never left unfinished unnoticed."""
     view = memoryview(data)
@@ -101,6 +116,54 @@ def _write_all(fd: int, data: bytes) -> None:
         if written <= 0:
             raise OSError(errno.EIO, f"no progress writing {len(view)} more bytes")
         view = view[written:]
+
+
+def flush_folder(folder: Path) -> None:
+    """<folder>'s own entries (a rename, a link) flushed to the disk itself, as flush_to_disk does
+    a file's data: until then a power cut can lose them, and keep what was written after."""
+    fd = os.open(folder, os.O_RDONLY)
+    try:
+        flush_to_disk(fd)
+    finally:
+        os.close(fd)
+
+
+def replace_durably(tmp: Path, path: Path) -> None:
+    """<tmp>, written and flushed, renamed over <path>, then the folder flushed (flush_folder):
+    an atomic replace whose rename also survives a power cut, which could otherwise keep a later
+    file and lose this one (a forget's rewrite of local.jsonl, and the person with it). Both
+    stores' replaces go through it."""
+    os.replace(tmp, path)
+    flush_folder(path.parent)
+
+
+def _beside(path: Path) -> Path:
+    """A name of its own next to <path>, for this writer (WRITING)."""
+    return path.with_name(WRITING.format(name=path.name, writer=f"{os.getpid()}.{secrets.token_hex(4)}"))
+
+
+def _write_new(path: Path, data: bytes, mode: int) -> None:
+    """<data>, whole and flushed to the disk, in the new file <path> (FileExistsError if it is
+    there)."""
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, mode)
+    try:
+        write_all(fd, data)
+        flush_to_disk(fd)
+    finally:
+        os.close(fd)
+
+
+def create_new(path: Path, data: bytes, mode: int) -> None:
+    """<data> as the new file <path>, which is there whole or not at all: written to a file of its
+    own and flushed to the disk, then linked to its name and the folder flushed. The link never
+    replaces a file already there (FileExistsError: another writer's, which the caller reads). The
+    file of its own goes whatever happens."""
+    tmp = _beside(path)
+    try:
+        _write_new(tmp, data, mode)
+        _link_new(tmp, path)
+    finally:
+        tmp.unlink(missing_ok=True)
 
 
 def _read_replica(path: Path) -> str:
@@ -119,22 +182,37 @@ def _read_replica(path: Path) -> str:
 
 
 def replica_id(state_dir: Path) -> str:
-    """This machine's id (32 hex characters), made once and kept in `replica.json` (written whole
-    and flushed to the disk before it is used)."""
+    """This machine's id (32 hex characters), made once and kept in `replica.json`, which both
+    stores' journals (the ledger's, the knowledge base's) use. It is made whole (create_new), never
+    over a file already there: two creators at once (a first ledger write and a first knowledge
+    write) agree, as the second reads the first one's id."""
     path = state_dir / REPLICA_FILE
     if path.exists():
         return _read_replica(path)
     state_dir.mkdir(parents=True, exist_ok=True)
     made = secrets.token_hex(16)
-    tmp = state_dir / f".{REPLICA_FILE}.{os.getpid()}.tmp"
-    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
     try:
-        _write_all(fd, (json.dumps({"replica": made}) + "\n").encode())
-        flush_to_disk(fd)
-    finally:
-        os.close(fd)
-    os.replace(tmp, path)
+        create_new(path, (json.dumps({"replica": made}) + "\n").encode(), 0o600)
+    except FileExistsError:
+        return _read_replica(path)
     return made
+
+
+def _link_new(tmp: Path, path: Path) -> None:
+    """<tmp> under the name <path>, which must not exist yet (FileExistsError if it does), and the
+    folder flushed. A folder without hard links (exFAT, some network shares) is a JournalError
+    naming the path."""
+    try:
+        os.link(tmp, path)
+    except FileExistsError:
+        raise
+    except OSError as exc:
+        raise JournalError(
+            f"{path} cannot be made in its folder ({exc.strerror or exc}): bosun makes it with a hard "
+            "link, which that disk does not offer; keep bosun's folders (BOSUN_STATE_DIR, "
+            "BOSUN_CONFIG_DIR) on the Mac's own disk"
+        ) from exc
+    flush_folder(path.parent)
 
 
 def _is_change(record: Any) -> bool:
@@ -288,12 +366,7 @@ def _set_aside(path: Path, end: int, stamp: str) -> Path:
     while aside.exists():
         n += 1
         aside = path.with_name(f"{path.name}{TORN}{stamp}-{n}")
-    fd = os.open(aside, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-    try:
-        _write_all(fd, torn)
-        flush_to_disk(fd)
-    finally:
-        os.close(fd)
+    _write_new(aside, torn, 0o600)
     fd = os.open(path, os.O_WRONLY)
     try:
         os.ftruncate(fd, end)
@@ -301,6 +374,39 @@ def _set_aside(path: Path, end: int, stamp: str) -> Path:
     finally:
         os.close(fd)
     return aside
+
+
+def file_of(change: Change) -> str:
+    """The stem of the journal file that holds <change>: local.jsonl's, or its replica's."""
+    return LOCAL if change.get("local") else str(change["replica"])
+
+
+def up_to(changes: Iterable[Change], at: Mapping[str, int]) -> list[Change]:
+    """Those of <changes> at or before the position <at> (the highest seq of each file)."""
+    return [change for change in changes if change["seq"] <= at.get(file_of(change), 0)]
+
+
+def as_saved(changes: Iterable[Change], at: Mapping[str, int], since: str) -> list[Change]:
+    """What a store's files held when a write last saved them, as changes: those of <changes> (the
+    journal, read whole) up to the position the files record (<at>), with every change of a
+    transaction named <since> after it (what a write cut short already adopted from them:
+    change_log.ADOPT), in the one order."""
+    read = list(changes)
+    return in_order([*up_to(read, at), *(c for c in read if c.get("cmd") == since)])
+
+
+def forgotten(changes: Iterable[Change], targets: Collection[str]) -> list[Change]:
+    """<changes> as a delete on request of <targets> leaves them (Journal.forget): each local change
+    of one a placeholder in its place, the rest as they are."""
+    return [placeholder(c) if c.get("local") and c.get("target") in targets else c for c in changes]
+
+
+def _replace_whole(path: Path, changes: list[Change]) -> None:
+    """<path> holding <changes> instead: written to a file of its own (WRITING), flushed to the
+    disk, then renamed over it (replace_durably)."""
+    tmp = _beside(path)
+    _write_new(tmp, b"".join(canonical(c) + b"\n" for c in changes), 0o600)
+    replace_durably(tmp, path)
 
 
 @dataclass
@@ -327,10 +433,12 @@ class Journal:
             end = ends[path.stem]
             if not _whole_end(path.stem, end, ends):
                 del lines[len(lines) - len(end.trailing) :]
-            if at is not None:
-                lines = [change for change in lines if change["seq"] <= at.get(path.stem, 0)]
             found += lines
-        return in_order(found)
+        return in_order(found if at is None else up_to(found, at))
+
+    def as_saved(self, at: Mapping[str, int], since: str) -> list[Change]:
+        """What a store's files held when a write last saved them (as_saved), the journal read once."""
+        return as_saved(self.changes(), at, since)
 
     def _last_changes(self) -> dict[str, Change]:
         """The last change of each file that belongs to a whole transaction."""
@@ -373,6 +481,28 @@ class Journal:
             moved.append(aside)
         return moved
 
+    def forget(self, targets: Collection[str]) -> int:
+        """Delete on request: each change in local.jsonl whose target is one of <targets> becomes a
+        placeholder in its place (change_log.placeholder), so the sequence, the mint seeds and its
+        transaction stay as they were. The file is replaced whole (a temporary file flushed to the
+        disk, then renamed); the replica's file is never rewritten. Then what writes cut short left
+        of local.jsonl goes, whatever it held (LOCAL_LEFTOVERS): a torn tail is a transaction never
+        committed, and cannot be read to pick one person out. Returns how many changes went."""
+        gone = self._placeholders(targets)
+        for leftover in [path for pattern in LOCAL_LEFTOVERS for path in self.root.glob(pattern)]:
+            leftover.unlink(missing_ok=True)
+        return gone
+
+    def _placeholders(self, targets: Collection[str]) -> int:
+        """local.jsonl with a placeholder for each change of <targets> (forgotten); how many there
+        were."""
+        path = self.root / f"{LOCAL}{SUFFIX}"
+        changes = _read_all(path) if path.exists() else []
+        gone = sum(1 for c in changes if c.get("target") in targets)
+        if gone:
+            _replace_whole(path, forgotten(changes, targets))
+        return gone
+
     def begin(self, cmd: str) -> Transaction:
         last = self._last_changes()
         clock = max((c["hlc"] for c in last.values()), default=clock_text(0, 0))
@@ -399,6 +529,13 @@ class Transaction:
     def add(self, op: str, target: str, body: dict[str, Any], *, local: bool = False) -> None:
         self._check_open()
         self.edits.append((op, target, body, local))
+
+    def commit_edits(self, edits: Iterable[Edit]) -> list[Change]:
+        """<edits> added in order, then committed (commit): what a store's write boundary does once
+        it has checked them."""
+        for edit in edits:
+            self.add(edit.op, edit.target, edit.body, local=edit.local)
+        return self.commit()
 
     def mint(self) -> str:
         self._check_open()
@@ -464,7 +601,7 @@ class Transaction:
             data = b"".join(canonical(c) + b"\n" for c in changes)
             fd = os.open(self.journal.root / f"{stem}{SUFFIX}", os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o600)
             try:
-                _write_all(fd, data)
+                write_all(fd, data)
                 flush_to_disk(fd)
             finally:
                 os.close(fd)

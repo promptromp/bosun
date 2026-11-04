@@ -45,7 +45,9 @@ this note is why.
   counts as work, not as clean. A checkout you cloned to work on stays.
 - **Records are records whatever shape they are in.** A knowledge folder with anything in it, a ledger or a
   backup of one with items, or either of them unreadable, is something it asks about. A copy you made by
-  hand, like `ledger.json.before-my-edit`, is not a file it knows, so it stays.
+  hand, like `ledger.json.before-my-edit`, is not a file it knows, so it stays. `replica.json` serves both
+  stores' journals but goes with the ledger, so a knowledge base kept without it carries on under a new id
+  from its next write.
 - **`pmset` decides what is safe.** `pmset repeat cancel` cancels every repeating event, so it only runs when the one
   event there is bosun's wake: at bosun's time to the minute (`1:01AM` is not `11:01AM`), and on bosun's days
   where `pmset` has a word for them (every day, weekdays, weekends). Otherwise it says what it found and leaves

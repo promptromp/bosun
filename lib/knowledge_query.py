@@ -42,7 +42,7 @@ def fact_line(kb: KB, fact: Record, *, sources: bool = True, status: bool = Fals
 
 
 def by_order(facts: list[Record]) -> list[Record]:
-    return sorted(facts, key=lambda f: (f["predicate"], f.get("order") or 0, int(f["id"][1:])))
+    return sorted(facts, key=lambda f: (f["predicate"], f.get("order") or 0, km.creation_key(f)))
 
 
 def outgoing(kb: KB, entity_id: str, at: datetime | None = None) -> list[Record]:

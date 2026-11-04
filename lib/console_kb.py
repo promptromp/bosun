@@ -2,10 +2,11 @@
 base under $BOSUN_CONFIG_DIR/knowledge/ and the batch `kg batch` saved, and saving a review
 decision, the console's one write.
 
-- Reads take the knowledge base's shared lock, as `kg lookup` does, and read entities.jsonl,
-  facts.jsonl and schema.json only: never identifiers.jsonl (restricted) or forgotten.jsonl. A
-  knowledge base that does not exist reads as none (nothing is created); one that cannot be read
-  says why.
+- Reads go through knowledge.load (shared lock, as `kg lookup` does; the journal's rebuild where
+  the files are behind it, in memory) with identifiers left out: they read entities.jsonl,
+  facts.jsonl and schema.json (and the journal), never identifiers.jsonl, forgotten.jsonl or
+  secret.key (restricted). A knowledge base that does not exist reads as none (nothing is
+  created); one that cannot be read says why.
 - A decision goes through lib/knowledge.py's own `opened` (the exclusive lock, the save and the
   commit in the knowledge directory's git history) and km.review, as `kg batch apply` does. It is
   checked against today's batch under that same lock.
@@ -35,6 +36,7 @@ from knowledge_model import KB
 
 
 KNOWLEDGE_SUBDIR = "knowledge"
+REVIEW_COMMAND = "console review"  # what the knowledge base's journal records as a decision's command
 READ_ERRORS = (store.StoreError, ks.SchemaError, km.KnowledgeError, OSError, KeyError, TypeError, ValueError)
 
 
@@ -48,13 +50,15 @@ def int_value(env: Mapping[str, str], name: str, default: int) -> int:
 
 @dataclass(frozen=True)
 class Settings:
-    """Where the knowledge base is and the batch limits (passed in by `bosun console`)."""
+    """Where the knowledge base is, the batch limits, and the state folder that keeps this Mac's
+    replica id for the journal (passed in by `bosun console`)."""
 
     root: Path | None = None
     git: bool = True
     batch_cap: int = kr.DEFAULT_BATCH_CAP
     batch_facts: int = kr.DEFAULT_BATCH_FACTS
     group_facts: int = kr.DEFAULT_GROUP_FACTS
+    state_dir: str = ""
 
     @classmethod
     def from_env(cls, env: Mapping[str, str]) -> Settings:
@@ -62,6 +66,7 @@ class Settings:
         config = env.get("BOSUN_CONFIG_DIR", "")
         settings = cls(
             root=Path(config).expanduser() / KNOWLEDGE_SUBDIR if config else None,
+            state_dir=env.get("BOSUN_STATE_DIR", ""),
             git=env.get("BOSUN_KNOWLEDGE_GIT", "1") == "1",
             batch_cap=int_value(env, "BOSUN_KNOWLEDGE_BATCH_CAP", kr.DEFAULT_BATCH_CAP),
             batch_facts=int_value(env, "BOSUN_KNOWLEDGE_BATCH_FACTS", kr.DEFAULT_BATCH_FACTS),
@@ -80,14 +85,9 @@ class Settings:
 
 
 def read_kb(root: Path, now: datetime) -> KB:
-    """The entities and facts (no identifiers), under the shared lock."""
-    paths = store.Paths(root)
-    with store.locked(paths, write=False):
-        kb = KB(ks.load_site_schema(paths.schema), now)
-        kb.entities = {e["id"]: e for e in store.read_jsonl(paths.entities)}
-        kb.records = store.read_jsonl(paths.facts)
-        kb.facts = km.fold_all(kb.records)
-    return kb
+    """The entities and facts (no identifiers), under the shared lock, as `knowledge.load` makes
+    them: the journal's rebuild where the files are behind it."""
+    return knowledge.read_shared(store.Paths(root), now)
 
 
 def loaded(settings: Settings, now: datetime) -> tuple[KB | None, str | None]:
@@ -196,6 +196,8 @@ def decide(settings: Settings, body: bytes, ledger: Mapping[str, Any]) -> dict[s
         batch_cap=settings.batch_cap,
         batch_facts=settings.batch_facts,
         group_facts=settings.group_facts,
+        state_dir=settings.state_dir,
+        command=REVIEW_COMMAND,
     )
     message = f"console review: {decision.action} {' '.join(decision.facts)}"
     try:

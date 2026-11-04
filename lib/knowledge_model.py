@@ -4,7 +4,11 @@ reject, supersede, forget, expire) with the auto-confirm rules of "Curation with
 
 Pure over a KB value: operations append fact-log records to kb.new_records (and mark what else
 changed); lib/knowledge.py loads and saves a KB under the store's lock, so a dry run is simply an
-operation whose KB is never saved.
+operation whose KB is never saved. A new fact's id is minted (`f-` and six characters, from
+KB.mint: the write's journal transaction), so two Macs never make the same one; ids from before
+(`f12`) stay. Every update record says what it replaced (`prev`), so that a rebuild can tell when
+two updates crossed. The fact log folds in the order its records come (`Fold`): an update that
+comes before its fact's add, as one from another Mac can, waits for it.
 """
 
 from __future__ import annotations
@@ -12,6 +16,9 @@ from __future__ import annotations
 import copy
 import difflib
 import hashlib
+import hmac
+import re
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from typing import Any
@@ -33,6 +40,7 @@ STATUSES = (PROPOSED, CONFIRMED, REJECTED, EXPIRED)
 PROPOSAL_DAYS = 30
 RETENTION_DAYS = 365
 HASH_LENGTH = 16
+HASH_KEYED = "hmac-sha256"
 NEAR_MATCH_CUTOFF = 0.8
 MAX_SUGGESTIONS = 3
 
@@ -47,6 +55,9 @@ CORRECTION = "a correction"
 FORGET_REQUEST = "request"
 FORGET_RETENTION = "retention"
 IDENTIFIER_SYSTEMS = ("slack", "github", "jira", "other")
+
+# A fact id: minted (f- and six Crockford base32 characters), or counted, from before minted ids.
+FACT_ID = re.compile(r"^f(?:-[0-9a-hjkmnp-tv-z]{6}|\d{1,9})$")
 
 
 class KnowledgeError(Exception):
@@ -73,11 +84,22 @@ def norm(text: str) -> str:
     return " ".join(str(text).split()).casefold()
 
 
-def hash_id(entity_id: str) -> str:
+def hash_id(entity_id: str, secret: bytes) -> str:
+    """The keyed hash a new forgotten record keeps: guessing person/<name> gets nobody anywhere
+    without the key, which never leaves this Mac."""
+    return hmac.new(secret, entity_id.encode(), hashlib.sha256).hexdigest()[:HASH_LENGTH]
+
+
+def plain_hash_id(entity_id: str) -> str:
+    """How records without hash_kind were made; their ids are unknown, so they cannot be re-keyed."""
     return hashlib.sha256(entity_id.encode()).hexdigest()[:HASH_LENGTH]
 
 
 # ---- the knowledge base ---------------------------------------------------------------------------
+
+
+def no_mint() -> str:
+    raise KnowledgeError("a fact id is minted only in a write (knowledge.opened(True)), from its journal")
 
 
 @dataclass
@@ -91,13 +113,26 @@ class KB:
     facts: dict[str, Record] = field(default_factory=dict)
     identifiers: list[Record] = field(default_factory=list)
     forgotten: list[Record] = field(default_factory=list)
+    secret: bytes = b""  # the key of forgotten.jsonl's keyed hashes; empty until the first write makes it
+    key_problem: str = ""  # set when keyed records exist but their key cannot be read
     new_records: list[Record] = field(default_factory=list)
     new_forgotten: list[Record] = field(default_factory=list)
     entities_changed: bool = False
     identifiers_changed: bool = False
     rewrite: bool = False  # facts.jsonl is rewritten from records (a deletion)
+    removed: set[str] = field(default_factory=set)  # the facts a deletion removed, by id
     auto_confirm: bool = True  # kg import without --auto-confirm: everything waits for review
     restart_history: bool = False
+    mint: Callable[[], str] = no_mint  # six characters for a new fact id, from the write's journal
+    # The entities and records are the journal's rebuild, which the files were behind (a write cut
+    # short, a change made outside the journal): a write saves them whole.
+    rebuilt: bool = False
+    # batch.json's numbers may point at facts that are gone (a rebuild took facts out): a write
+    # deletes it, as a deletion's does.
+    stale_batch: bool = False
+    # Why each knowledge file that holds a line that does not parse (a write cut short during its
+    # append) is not whole, by file name: the journal rebuilds it, and its other lines are here.
+    unreadable: dict[str, str] = field(default_factory=dict)
 
     def add_record(self, record: Record) -> None:
         self.records.append(record)
@@ -107,7 +142,13 @@ class KB:
     @property
     def changed(self) -> bool:
         return bool(
-            self.new_records or self.new_forgotten or self.entities_changed or self.identifiers_changed
+            self.new_records
+            or self.new_forgotten
+            or self.entities_changed
+            or self.identifiers_changed
+            or self.rewrite
+            or self.rebuilt
+            or self.restart_history
         )
 
 
@@ -134,11 +175,49 @@ def fold(facts: dict[str, Record], record: Record) -> None:
     )
 
 
+def admit_all(_fact: Record, _update: Record) -> str:
+    return ""
+
+
+@dataclass
+class Fold:
+    """The fact log folded in the order its records come. An update for a fact not seen yet waits
+    (another Mac's update can come before the add it follows) and is applied when that fact's add
+    comes; one whose add never comes stays waiting (a fact deleted on request, or not here yet).
+    <admits> says why an update cannot apply to the fact as it then is ("" when it can): the
+    rebuild's check (knowledge_changes); a refused update is not applied."""
+
+    admits: Callable[[Record, Record], str] = admit_all
+    facts: dict[str, Record] = field(default_factory=dict)
+    waiting: dict[str, list[Record]] = field(default_factory=dict)
+    refused: list[tuple[Record, str]] = field(default_factory=list)
+
+    def take(self, record: Record) -> None:
+        fact_id = record_fact_id(record)
+        if record.get("op") == "add":
+            fold(self.facts, record)
+            for update in self.waiting.pop(fact_id, []):
+                self.update(fact_id, update)
+        elif fact_id in self.facts:
+            self.update(fact_id, record)
+        else:
+            self.waiting.setdefault(fact_id, []).append(record)
+
+    def update(self, fact_id: str, record: Record) -> None:
+        why = self.admits(self.facts[fact_id], record)
+        if why:
+            self.refused.append((record, why))
+        else:
+            fold(self.facts, record)
+
+
 def fold_all(records: list[Record]) -> dict[str, Record]:
-    facts: dict[str, Record] = {}
+    """The facts the fact log makes, its records taken in the order given (Fold): an update that
+    comes before its fact's add follows it."""
+    folding = Fold()
     for record in records:
-        fold(facts, record)
-    return facts
+        folding.take(record)
+    return folding.facts
 
 
 def record_fact_id(record: Record) -> str:
@@ -188,13 +267,29 @@ def confirmed_current(kb: KB, at: datetime | None = None) -> list[Record]:
 
 def get_fact(kb: KB, fact_id: str) -> Record:
     if fact_id not in kb.facts:
-        raise KnowledgeError(f"no fact {fact_id!r} (ids look like f12; see kg facts <entity> --status all)")
+        raise KnowledgeError(
+            f"no fact {fact_id!r} (ids look like f-3k9x2a, or f12 from before; "
+            "see kg facts <entity> --status all)"
+        )
     return kb.facts[fact_id]
 
 
 def next_fact_id(kb: KB) -> str:
-    numbers = [int(i[1:]) for i in kb.facts if i[1:].isdigit()]
-    return f"f{max(numbers, default=0) + 1}"
+    """A new fact's id, minted from the write's journal (unique to this Mac by construction); one
+    that already names a fact (a journal started again) is minted again."""
+    while True:
+        fact_id = f"f-{kb.mint()}"
+        if fact_id not in kb.facts:
+            return fact_id
+
+
+def creation_key(fact: Record) -> tuple[str, int, str]:
+    """A fact's place in the order facts were made, from the fact alone (never the order they were
+    loaded in): when it was recorded, then a counted id's number (f12, from before minted ids),
+    then the id."""
+    fact_id = str(fact["id"])
+    number = fact_id[1:]
+    return str(fact.get("recorded_at") or ""), int(number) if number.isdigit() else 0, fact_id
 
 
 # ---- entities and resolution --------------------------------------------------------------------
@@ -242,8 +337,34 @@ def resolve(kb: KB, ref: str) -> str:
     raise KnowledgeError(f"no entity {ref!r}{hint}")
 
 
-def forgotten_hashes(kb: KB) -> set[str]:
-    return {str(r["hash"]) for r in kb.forgotten + kb.new_forgotten if r.get("hash")}
+def forgotten_records(kb: KB) -> list[Record]:
+    return [r for r in kb.forgotten + kb.new_forgotten if r.get("hash")]
+
+
+def has_keyed_records(kb: KB) -> bool:
+    return any_keyed(forgotten_records(kb))
+
+
+def any_keyed(records: list[Record]) -> bool:
+    """Whether one of <records> (of deletions on request) is matched only by the key."""
+    return any(r.get("hash_kind") == HASH_KEYED for r in records)
+
+
+def is_forgotten(kb: KB, entity_id: str) -> bool:
+    """Whether a record of a deletion on request matches <entity_id> (matches_forgotten)."""
+    return matches_forgotten(entity_id, forgotten_records(kb), kb.secret)
+
+
+def matches_forgotten(entity_id: str, records: list[Record], secret: bytes) -> bool:
+    """Whether one of <records> (of a deletion on request) is of <entity_id>: keyed records by the
+    key (<secret>; none matches without it), older ones (no hash_kind) by the plain hash."""
+    plain = plain_hash_id(entity_id)
+    keyed = hash_id(entity_id, secret) if secret else None
+    for record in records:
+        wanted = keyed if record.get("hash_kind") == HASH_KEYED else plain
+        if wanted is not None and record.get("hash") == wanted:
+            return True
+    return False
 
 
 def alias_collisions(kb: KB, entity: Record) -> list[str]:
@@ -261,7 +382,9 @@ def alias_collisions(kb: KB, entity: Record) -> list[str]:
 
 def check_new_entity(kb: KB, entity_id: str, summary: str, allow_forgotten: bool) -> None:
     entity_type, _ = ks.split_id(entity_id, kb.schema)
-    if hash_id(entity_id) in forgotten_hashes(kb) and not allow_forgotten:
+    if entity_type == ks.PERSON and kb.key_problem:
+        raise KnowledgeError(kb.key_problem)
+    if is_forgotten(kb, entity_id) and not allow_forgotten:
         raise KnowledgeError(
             f"{entity_id} was deleted on request; add it again only if they asked (--allow-forgotten)"
         )
@@ -454,16 +577,7 @@ def observe(kb: KB, fact: Record, proposal: Proposal) -> Outcome:
     if stronger(proposal.authority, fact["authority"]):
         changes["authority"] = proposal.authority
     new_sources = [s for s in proposal.sources if source_key(s) not in known]
-    kb.add_record(
-        {
-            "op": "update",
-            "id": fact["id"],
-            "at": iso(kb.now),
-            "event": "observed",
-            "set": changes,
-            "sources": new_sources,
-        }
-    )
+    kb.add_record(update_record(kb, fact, "observed", changes, sources=new_sources))
     if not revive:
         return Outcome(
             fact["id"],
@@ -525,18 +639,24 @@ def settle(kb: KB, fact: Record, action: str) -> Outcome:
 # ---- reviewing ----------------------------------------------------------------------------------
 
 
+def update_record(kb: KB, fact: Record, event: str, changes: Record, **extra: Any) -> Record:
+    """The fact-log record of an update to <fact>: the fields it sets (<changes>), anything else it
+    carries (<extra>: new sources, a note), and what they held before (`prev`), so that a rebuild
+    can tell when another update came between."""
+    return {
+        "op": "update",
+        "id": fact["id"],
+        "at": iso(kb.now),
+        "event": event,
+        "set": changes,
+        **extra,
+        "prev": copy.deepcopy({key: fact.get(key) for key in changes}),
+    }
+
+
 def close(kb: KB, fact: Record, by: str | None, note: str) -> None:
     changes = {"valid_to": iso(kb.now), "superseded_by": by}
-    kb.add_record(
-        {
-            "op": "update",
-            "id": fact["id"],
-            "at": iso(kb.now),
-            "event": "superseded",
-            "set": changes,
-            "note": note,
-        }
-    )
+    kb.add_record(update_record(kb, fact, "superseded", changes, note=note))
 
 
 def decided_by(kb: KB, by: Record | None) -> Record:
@@ -557,30 +677,12 @@ def confirm_fact(kb: KB, fact: Record, reason: str, note: str = "", *, by: Recor
         "confirmed_by": reason,
         **decided_by(kb, by),
     }
-    kb.add_record(
-        {
-            "op": "update",
-            "id": fact["id"],
-            "at": iso(kb.now),
-            "event": "confirmed",
-            "set": changes,
-            "note": note,
-        }
-    )
+    kb.add_record(update_record(kb, fact, "confirmed", changes, note=note))
     return messages
 
 
 def reject_fact(kb: KB, fact: Record, note: str = "", *, by: Record | None = None) -> None:
-    kb.add_record(
-        {
-            "op": "update",
-            "id": fact["id"],
-            "at": iso(kb.now),
-            "event": "rejected",
-            "set": {"status": REJECTED, **decided_by(kb, by)},
-            "note": note,
-        }
-    )
+    kb.add_record(update_record(kb, fact, "rejected", {"status": REJECTED, **decided_by(kb, by)}, note=note))
 
 
 def reviewable(kb: KB, fact: Record) -> bool:
@@ -646,6 +748,7 @@ def supersede(kb: KB, old_id: str, replacement: Proposal | None, by: str | None,
 
 
 def remove_facts(kb: KB, fact_ids: set[str]) -> None:
+    kb.removed |= fact_ids
     kb.records = [r for r in kb.records if record_fact_id(r) not in fact_ids]
     kb.new_records = [r for r in kb.new_records if record_fact_id(r) not in fact_ids]
     kb.facts = fold_all(kb.records)
@@ -659,6 +762,8 @@ def forget(kb: KB, ref: str) -> dict[str, int]:
     entity_id = ref.strip() if ref.strip() in kb.entities else resolve(kb, ref)
     if ks.entity_type(entity_id) != ks.PERSON:
         raise KnowledgeError(f"kg forget deletes a person on request; {entity_id} is not a person")
+    if kb.key_problem:
+        raise KnowledgeError(kb.key_problem)
     fact_ids = {i for i, f in kb.facts.items() if entity_id in (f["subject"], f.get("object"))}
     before = len(kb.identifiers)
     kb.identifiers = [i for i in kb.identifiers if i.get("entity") != entity_id]
@@ -667,7 +772,13 @@ def forget(kb: KB, ref: str) -> dict[str, int]:
     kb.entities.pop(entity_id, None)
     kb.entities_changed = kb.identifiers_changed = True
     kb.new_forgotten.append(
-        {"at": iso(kb.now), "hash": hash_id(entity_id), "reason": FORGET_REQUEST, **counts}
+        {
+            "at": iso(kb.now),
+            "hash": hash_id(entity_id, kb.secret),
+            "hash_kind": HASH_KEYED,
+            "reason": FORGET_REQUEST,
+            **counts,
+        }
     )
     return counts
 
@@ -687,15 +798,7 @@ def expire(kb: KB) -> tuple[list[str], int]:
     """Record the expiry of stale proposals, and delete person facts past retention."""
     expired = []
     for fact in stale_proposals(kb):
-        kb.add_record(
-            {
-                "op": "update",
-                "id": fact["id"],
-                "at": iso(kb.now),
-                "event": "expired",
-                "set": {"status": EXPIRED},
-            }
-        )
+        kb.add_record(update_record(kb, fact, "expired", {"status": EXPIRED}))
         expired.append(fact["id"])
     purged = {f["id"] for f in past_retention(kb)}
     if purged:
@@ -705,6 +808,16 @@ def expire(kb: KB) -> tuple[list[str], int]:
 
 
 # ---- identifiers (restricted) -------------------------------------------------------------------
+
+
+def drop_orphan_identifiers(kb: KB) -> None:
+    """Identifiers of an entity the knowledge base no longer holds go (a person deleted on request
+    by a write cut short before it rewrote identifiers.jsonl, finished from the journal, which does
+    not hold identifiers): they are restricted, and name nobody here."""
+    kept = [i for i in kb.identifiers if i.get("entity") in kb.entities]
+    if len(kept) != len(kb.identifiers):
+        kb.identifiers = kept
+        kb.identifiers_changed = True
 
 
 def add_identifier(kb: KB, ref: str, system: str, value: str) -> str:

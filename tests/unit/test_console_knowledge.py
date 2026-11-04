@@ -8,6 +8,8 @@ tests/fixtures/console/acme-ledger.json)."""
 
 from __future__ import annotations
 
+import contextlib
+import io
 import json
 import random
 import shutil
@@ -15,6 +17,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from collections.abc import Iterable
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
@@ -48,9 +51,10 @@ class KnowledgeWorld(unittest.TestCase):
         self.now = START
         knowledge.CLOCK = lambda: self.now
         self.addCleanup(setattr, knowledge, "CLOCK", knowledge.clock)
-        knowledge.configure(self.root, git=False)
+        self.state = str(self.tmp / "state")  # this Mac's replica id, for the journal
+        knowledge.configure(self.root, git=False, state_dir=self.state)
         self.kg("import", str(KG_FIXTURE), "--apply", "--auto-confirm")
-        self.settings = console_kb.Settings(root=self.root, git=False)
+        self.settings = console_kb.Settings(root=self.root, git=False, state_dir=self.state)
 
     def kg(self, *argv: str) -> str:
         args = knowledge.build_parser().parse_args(list(argv))
@@ -66,6 +70,11 @@ class KnowledgeWorld(unittest.TestCase):
             for f in self.kb().facts.values()
             if (f["subject"], f["predicate"]) == (subject, predicate) and km.is_current(f)
         )
+
+    def made(self, ids: Iterable[str]) -> list[str]:
+        """<ids> in the order their facts were made (the fact log's order)."""
+        wanted = set(ids)
+        return [i for i in self.kb().facts if i in wanted]
 
     def page(self, entity_id: str) -> dict[str, Any]:
         return ck.entity_model(self.kb(), entity_id, LEDGER)
@@ -143,6 +152,9 @@ class OverviewTest(KnowledgeWorld):
         self.assertIsNone(console_kb.growth(console_kb.Settings(root=self.tmp / "none"), self.now))
 
     def test_an_unreadable_knowledge_base_says_why(self) -> None:
+        """A file that does not parse with no journal to write it again (one from before journals)."""
+        shutil.rmtree(self.root / "journal")
+        (self.root / "view.json").unlink()
         (self.root / "facts.jsonl").write_text("{not json\n")
         model = console_kb.overview(self.settings, LEDGER, {}, self.now)
         self.assertFalse(model["exists"])
@@ -476,7 +488,7 @@ class DecisionTest(KnowledgeWorld):
     def test_confirm_reject_and_defer_go_through_the_review(self) -> None:
         kb = self.kb()
         ids = ck.batch_fact_ids(ck.review_model(kb, None, self.settings.limits, LEDGER, UTC))
-        one, two, three = sorted(ids, key=lambda i: int(i[1:]))[:3]
+        one, two, three = self.made(ids)[:3]
         result = ck.apply_decision(kb, ck.Decision("confirm", (one,)), ids)
         self.assertEqual((result["confirmed"], result["left_proposed"]), (1, 0))
         self.assertEqual(
@@ -507,6 +519,83 @@ class StorageTest(KnowledgeWorld):
         self.assertNotIn(SECRET_ID, json.dumps([overview, page, review]))
         self.assertEqual(self.kb().identifiers, [])
 
+    def unreadable(self, name: str) -> None:
+        path = self.root / name
+        path.touch(exist_ok=True)
+        path.chmod(0)
+        self.addCleanup(path.chmod, 0o600)
+
+    def test_console_reads_no_identifiers(self) -> None:
+        self.kg("identify", "person/dana", "slack", SECRET_ID)
+        self.unreadable("identifiers.jsonl")
+        self.assertIn("person/dana", self.kb().entities)
+        self.assertEqual(self.kb().identifiers, [])
+
+    def test_console_reads_no_forgotten_records(self) -> None:
+        self.unreadable("forgotten.jsonl")
+        self.assertIn("person/dana", self.kb().entities)
+        self.assertEqual(self.kb().forgotten, [])
+
+    def test_console_reads_no_key_and_computes_no_key_problem(self) -> None:
+        self.kg("identify", "person/dana", "slack", SECRET_ID)
+        self.unreadable("secret.key")
+        kb = self.kb()
+        self.assertIn("person/dana", kb.entities)
+        self.assertEqual((kb.secret, kb.key_problem), (b"", ""))
+
+    def test_console_reads_a_knowledge_base_from_before_journals(self) -> None:
+        shutil.rmtree(self.root / "journal")
+        (self.root / "view.json").unlink(missing_ok=True)
+        self.assertIn("person/dana", self.kb().entities)
+
+    def test_console_reads_files_behind_the_journal_with_the_restricted_files_unreadable(self) -> None:
+        self.kg("identify", "person/dana", "slack", SECRET_ID)
+        names = ("entities.jsonl", "facts.jsonl", "view.json")
+        before = {n: (self.root / n).read_bytes() for n in names}
+        fact = self.made(ck.batch_fact_ids(self.review()))[0]
+        self.decide("confirm", [fact])
+        for name, data in before.items():  # a write cut between the journal and the files
+            (self.root / name).write_bytes(data)
+        for name in ("identifiers.jsonl", "forgotten.jsonl", "secret.key"):
+            self.unreadable(name)
+        kb = self.kb()
+        self.assertEqual(kb.facts[fact]["status"], km.CONFIRMED)  # the journal's rebuild, in memory
+        self.assertEqual((kb.identifiers, kb.forgotten, kb.secret, kb.key_problem), ([], [], b"", ""))
+        for name, data in before.items():
+            self.assertEqual((self.root / name).read_bytes(), data)  # a reader writes nothing
+
+    def test_a_torn_fact_log_is_read_through_the_journal_and_a_decision_writes_it_again(self) -> None:
+        """facts.jsonl cut short during an append (view.json as the write left it): the console
+        shows the journal's rebuild, writes nothing on a read, and its one write saves the files
+        whole again."""
+        fact = self.made(ck.batch_fact_ids(self.review()))[0]
+        path = self.root / "facts.jsonl"
+        path.write_bytes(path.read_bytes()[:-60])
+        torn = path.read_bytes()
+        with contextlib.redirect_stderr(io.StringIO()):
+            overview = console_kb.overview(self.settings, LEDGER, {}, self.now)
+            self.assertTrue(overview["exists"])
+            self.assertEqual(self.kb().facts[fact]["status"], km.PROPOSED)
+            self.assertEqual(path.read_bytes(), torn)  # a reader writes nothing
+            self.decide("confirm", [fact])
+        self.assertEqual(self.kb().facts[fact]["status"], km.CONFIRMED)
+        self.assertIn("valid", self.kg("validate"))
+
+    def test_a_console_decision_is_journaled_and_the_journal_validates(self) -> None:
+        fact = self.made(ck.batch_fact_ids(self.review()))[0]
+        self.decide("confirm", [fact])
+        last = knowledge.open_journal(knowledge.paths()).changes()[-1]
+        self.assertEqual(last["cmd"], console_kb.REVIEW_COMMAND)
+        self.assertIn("valid", self.kg("validate"))
+
+    def test_load_without_identifiers_reads_none_of_the_restricted_files(self) -> None:
+        self.kg("identify", "person/dana", "slack", SECRET_ID)
+        for name in ("identifiers.jsonl", "forgotten.jsonl", "secret.key"):
+            self.unreadable(name)
+        kb = knowledge.load(knowledge.paths(), identifiers=False)
+        self.assertEqual((kb.identifiers, kb.forgotten, kb.secret, kb.key_problem), ([], [], b"", ""))
+        self.assertIn("person/dana", kb.entities)
+
     def test_an_unknown_key_is_none(self) -> None:
         self.assertIsNone(console_kb.entity(self.settings, "0123456789abcdef", LEDGER, self.now))
         self.assertIsNone(
@@ -514,12 +603,14 @@ class StorageTest(KnowledgeWorld):
         )
 
     def test_a_decision_is_saved_like_batch_apply(self) -> None:
-        fact = min(ck.batch_fact_ids(self.review()), key=lambda i: int(i[1:]))
+        fact = self.made(ck.batch_fact_ids(self.review()))[0]
         body = json.dumps({"action": "confirm", "facts": [fact]}).encode()
         result = console_kb.decide(self.settings, body, LEDGER)
         self.assertEqual(result["messages"], [f"ok: {fact} confirmed"])
         self.assertEqual(self.kb().facts[fact]["status"], km.CONFIRMED)
         self.assertEqual(self.kb().facts[fact]["history"][-1]["note"], "console")
+        last = knowledge.open_journal(knowledge.paths()).changes()[-1]
+        self.assertEqual((last["cmd"], last["op"], last["target"]), ("console review", "fact.update", fact))
 
     def decide(self, action: str, facts: list[str]) -> dict[str, Any]:
         body = json.dumps({"action": action, "facts": facts}).encode()
@@ -538,7 +629,7 @@ class StorageTest(KnowledgeWorld):
             self.kg("batch", "apply", "confirm all")  # the CLI agrees: that batch is done
 
     def test_a_computed_batch_marks_nothing(self) -> None:
-        facts = sorted(ck.batch_fact_ids(self.review()), key=lambda i: int(i[1:]))
+        facts = self.made(ck.batch_fact_ids(self.review()))
         self.assertFalse(self.decide("confirm", facts)["batch_answered"])
         self.assertIsNone(console_kb.saved_batch(self.settings))
 
@@ -547,7 +638,7 @@ class StorageTest(KnowledgeWorld):
         self.assertTrue(stamp["exists"])
         self.assertEqual(console_kb.version(self.settings), stamp)
         self.now += timedelta(seconds=1)
-        self.decide("confirm", [min(ck.batch_fact_ids(self.review()), key=lambda i: int(i[1:]))])
+        self.decide("confirm", [self.made(ck.batch_fact_ids(self.review()))[0]])
         self.assertNotEqual(console_kb.version(self.settings)["stamp"], stamp["stamp"])
         self.assertEqual(console_kb.version(console_kb.Settings())["exists"], False)
 
@@ -562,9 +653,14 @@ class StorageTest(KnowledgeWorld):
 
     def test_settings_come_from_the_environment(self) -> None:
         settings = console_kb.Settings.from_env(
-            {"BOSUN_CONFIG_DIR": str(self.tmp / "config"), "BOSUN_KNOWLEDGE_GIT": "0"}
+            {
+                "BOSUN_CONFIG_DIR": str(self.tmp / "config"),
+                "BOSUN_STATE_DIR": self.state,
+                "BOSUN_KNOWLEDGE_GIT": "0",
+            }
         )
         self.assertEqual((settings.root, settings.git, settings.limits.groups), (self.root, False, 10))
+        self.assertEqual(settings.state_dir, self.state)  # this Mac's replica id, for the journal
         with self.assertRaises(km.KnowledgeError):
             console_kb.Settings.from_env({"BOSUN_KNOWLEDGE_BATCH_CAP": "ten"})
         with self.assertRaises(km.KnowledgeError):
@@ -577,8 +673,8 @@ class HistoryTest(KnowledgeWorld):
     def test_a_decision_is_one_commit(self) -> None:
         if shutil.which("git") is None:
             self.skipTest("no git")
-        settings = console_kb.Settings(root=self.root, git=True)
-        fact = min(ck.batch_fact_ids(self.review()), key=lambda i: int(i[1:]))
+        settings = console_kb.Settings(root=self.root, git=True, state_dir=self.state)
+        fact = self.made(ck.batch_fact_ids(self.review()))[0]
         console_kb.decide(settings, json.dumps({"action": "reject", "facts": [fact]}).encode(), LEDGER)
         log = subprocess.run(
             ["git", "--git-dir", str(self.root / ".git"), "log", "--format=%s"],

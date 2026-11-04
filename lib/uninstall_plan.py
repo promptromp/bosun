@@ -30,11 +30,15 @@ UNKNOWN = "unknown"  # not listed below: it always stays
 STATE_FILES = (
     ("ledger.json", LEDGER),
     ("journal", LEDGER),  # each machine's changes to the ledger: your records
-    ("replica.json", LEDGER),  # this machine's id in the journal
+    # This machine's id in both stores' journals (the ledger's, the knowledge base's), classed with the
+    # ledger: --delete-ledger deletes it even when the knowledge base stays, which then carries on as
+    # a new replica from its next write.
+    ("replica.json", LEDGER),
     ("ledger.json.bak", LEDGER),
     ("ledger.md", LEDGER),
     ("learn", LEDGER),  # what learning found and what you decided, which a later run goes by
     ("ledger.json.tmp", WORKING),  # what a write cut short left
+    (".replica.json.*.tmp", WORKING),  # what making replica.json left when it was cut short
     ("ledger.lock", WORKING),
     ("agent-changes.json", WORKING),
     (".agent-changes.json.*", WORKING),

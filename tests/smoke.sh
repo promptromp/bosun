@@ -347,7 +347,7 @@ journal_rebuilds() {
 import fcntl, json, sys
 from pathlib import Path
 sys.path.insert(0, sys.argv[1])
-import ledger, ledger_changes
+import change_log, ledger, ledger_changes
 from journal import Journal
 state = Path(sys.argv[2])
 with (state / "ledger.lock").open("w") as lock:
@@ -361,7 +361,7 @@ for change in changes:
     seqs.setdefault("local" if change.get("local") else change["replica"], []).append(change["seq"])
 problems = [
     *(["ledger.json is not at the journal's position"] if ledger.saved_position(saved) != position else []),
-    *([] if saved["journal"].get(ledger.DIGEST) == ledger_changes.state_hash(saved) else ["ledger.json's digest is wrong"]),
+    *([] if saved["journal"].get(change_log.DIGEST) == ledger_changes.state_hash(saved) else ["ledger.json's digest is wrong"]),
     *(f"conflict: {conflict}" for conflict in result.conflicts),
     *([] if ledger_changes.state_hash(result.ledger) == ledger_changes.state_hash(saved) else ["the rebuild differs from ledger.json"]),
     *(f"{name}: seq {sorted(found)} has a gap" for name, found in seqs.items() if sorted(found) != list(range(1, len(found) + 1))),
@@ -637,17 +637,28 @@ if command -v git >/dev/null; then
   check "every change is a commit in the knowledge directory's own history" test "$(env -u GIT_DIR -u GIT_INDEX_FILE -u GIT_WORK_TREE git -C "$KG_DIR" log --format=%s | head -1)" = "kg import acme-import.jsonl"
 fi
 check "a person is refused anything outside the whitelist" fails_with "people whitelist" kg propose person/lee mood --value calm --source ledger:x
-check "lookup resolves a strong alias and shows sources" contains "$(kg lookup releases)" "f1 Release process has_step Merge to main (step 1) [ledger:mypr:acme/invoice-exporter#102"
+check "every write goes through the journal first, and view.json says how far the files reflect it" bash -c '
+  journal="$1/journal" && [ -s "$journal/local.jsonl" ] && ls "$journal" | grep -Eq "^[0-9a-f]{32}\.jsonl$" &&
+    [ "$(jq -r .journal.local "$1/view.json")" = "$(wc -l <"$journal/local.jsonl" | tr -d " ")" ] &&
+    ! grep -qi dana "$journal"/[0-9a-f]*.jsonl' _ "$KG_DIR"
+check "lookup resolves a strong alias and shows sources, by minted fact ids" bash -c '
+  grep -Eq "^  f-[0-9a-hjkmnp-tv-z]{6} Release process has_step Merge to main \(step 1\) \[ledger:mypr:acme/invoice-exporter#102" <<<"$1"' _ "$(kg lookup releases)"
 out="$(kg batch --cap 2)"
 check "the batch lists capped groups, rework-preventing first" bash -c 'grep -q "^1\. Process: other facts: 5 facts \[prevents rework\]" <<<"$1" && grep -q "(1 more group waits for a later batch)" <<<"$1"' _ "$out"
 check "a one-line decision answers it" contains "$(kg batch apply 'confirm all except 1a')" "8 confirmed, 0 rejected, 1 left proposed"
-check "the context pack cites confirmed facts only" bash -c 'grep -q "\[f1; ledger:" <<<"$1" && ! grep -q "canary checks pass" <<<"$1"' _ "$(kg context --for release)"
+check "the context pack cites confirmed facts only" bash -c 'grep -Eq "\[f-[0-9a-z]{6}; ledger:" <<<"$1" && ! grep -q "canary checks pass" <<<"$1"' _ "$(kg context --for release)"
 transcript="$WORK/kg-transcript.jsonl"
 printf '{"type":"user","timestamp":"%s","origin":{"kind":"human"},"message":{"role":"user","content":"note: the pdf renderer repo is archived"}}\n' \
   "$(date -u +%Y-%m-%dT%H:%M:%SZ)" >"$transcript"
 check "my own words confirm a fact when the quote is in the transcript" contains "$(kg propose repo/pdf-renderer status --value archived --from-user --quote 'the pdf renderer repo is archived' --transcript "$transcript")" "confirmed (your own words"
 check "... and not when it is not" contains "$(kg propose repo/pdf-renderer caveat --value slow --from-user --quote 'it is slow' --transcript "$transcript")" "stays proposed"
 check "lint runs over it" kg lint
+check "kg validate: the files are the journal's rebuild" test "$(kg validate)" = "knowledge base is valid"
+jq -c 'if .id == "repo/invoice-exporter" then .summary = "exports invoices nightly" else . end' "$KG_DIR/entities.jsonl" >"$WORK/kg-edited.jsonl"
+mv "$WORK/kg-edited.jsonl" "$KG_DIR/entities.jsonl"
+check "... and says a hand edit is not in the journal yet, as one finding" bash -c '[ "$(jq -r "[.[].kind] | join(\" \")" <<<"$1")" = edited ]' _ "$(kg validate --json)"
+check "the next write adopts the hand edit" contains "$(kg add-entity repo/pdf-renderer 2>&1)" "adopted 1 change(s) into the journal (transaction 'adopt')"
+check "... and kg validate is clean again, the edit kept" bash -c '[ "$(BOSUN_CONFIG_DIR="$2" "$1" kg validate)" = "knowledge base is valid" ] && grep -q "exports invoices nightly" "$3"' _ "$BOSUN" "$WORK/kg-config" "$KG_DIR/entities.jsonl"
 check "forget --dry-run says what it would delete" contains "$(kg forget person/lee --dry-run)" "would delete the person, 3 facts"
 check "... and deletes nothing" grep -q person/lee "$KG_DIR/entities.jsonl"
 check "kg usage errors exit 2" bash -c '
@@ -1970,7 +1981,26 @@ if [ "$(bash -c 'source "$1/lib/common.sh"; command -v launchctl; command -v pms
   echo 'nonsense' >>"$dstate/journal/ledger/$(jq -r .replica "$dstate/replica.json").jsonl"
   doctor_said="$(BOSUN_STATE_DIR="$dstate" "$BOSUN" doctor 2>&1)"
   check "a damaged journal fails doctor" contains "$doctor_said" "FAIL  the ledger's journal refuses writes or a rebuild would lose data"
-  check "... saying what validate found" contains "$doctor_said" "journal: journal: the journal is damaged: "
+  check "... saying what validate found" contains "$doctor_said" "journal: the journal is damaged: "
+  check "... naming the journal once" not_contains "$doctor_said" "journal: journal:"
+  # The knowledge base against its journal, in a copy of the config with the suite's knowledge base:
+  # an edit by hand warns and adds no failure; a damaged journal fails.
+  dconfig="$WORK/doctor-config"
+  cp -R "$BOSUN_CONFIG_DIR" "$dconfig"
+  cp -R "$KG_DIR" "$dconfig/knowledge"
+  clean="$(BOSUN_CONFIG_DIR="$dconfig" "$BOSUN" doctor 2>&1)"
+  check "doctor checks the knowledge base against its journal" contains "$clean" "ok    the knowledge base and its journal: knowledge base is valid"
+  jq -c 'if .id == "step/merge" then .name = "Merge to trunk" else . end' "$dconfig/knowledge/entities.jsonl" >"$WORK/kg-edited.jsonl"
+  mv "$WORK/kg-edited.jsonl" "$dconfig/knowledge/entities.jsonl"
+  doctor_said="$(BOSUN_CONFIG_DIR="$dconfig" "$BOSUN" doctor 2>&1)"
+  check "doctor warns about an edit by hand the next write adopts" contains "$doctor_said" "warn  the knowledge base breaks a rule, or holds what the next write takes care of (every finding: bosun kg validate)"
+  check "... naming it" contains "$doctor_said" "edited: journal: the knowledge files were changed outside their journal"
+  check "... and that is no failure" test "$(failed_checks "$doctor_said")" = "$(failed_checks "$clean")"
+  echo 'nonsense' >>"$dconfig/knowledge/journal/$(jq -r .replica "$BOSUN_STATE_DIR/replica.json").jsonl"
+  doctor_said="$(BOSUN_CONFIG_DIR="$dconfig" "$BOSUN" doctor 2>&1)"
+  check "a damaged knowledge journal fails doctor" contains "$doctor_said" "FAIL  the knowledge base's journal refuses writes or a rebuild would lose data"
+  check "... saying what validate found" contains "$doctor_said" "journal: the journal is damaged: "
+  check "... with the reader's warning kept out of the counts' ok line" bash -c '! grep -q "ok    knowledge: .*damaged" <<<"$1"' _ "$doctor_said"
   BOSUN_CONFIG_DIR="$INSTALL_CFG" "$ROOT/install.sh" >/dev/null 2>&1
   check "... and removes it again once disabled" test ! -e "$LEARN_PLIST"
 

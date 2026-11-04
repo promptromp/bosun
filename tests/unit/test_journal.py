@@ -4,12 +4,15 @@ transactions, order, torn lines and their repair. Fictional data."""
 from __future__ import annotations
 
 import contextlib
+import errno
 import fcntl
 import io
 import json
 import os
+import stat
 import sys
 import tempfile
+import threading
 import unittest
 from collections.abc import Callable
 from pathlib import Path
@@ -19,6 +22,8 @@ from unittest import mock
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "lib"))
 import change_log as cl
 import journal as jr
+import knowledge_store
+import ledger
 
 
 R1 = "a" * 32
@@ -74,13 +79,73 @@ class ReplicaId(JournalTestCase):
             self.assertEqual(path.read_text(), text)  # kept as it was: never a silent new id
 
     def test_a_new_replica_id_reaches_the_disk_before_it_is_used(self) -> None:
+        """The file's data, then the folder that now names it."""
         state = Path(self.tmp.name) / "state"
-        synced: list[int] = []
-        with mock.patch.object(jr, "flush_to_disk", side_effect=synced.append):
+        synced: list[bool] = []
+        with mock.patch.object(
+            jr, "flush_to_disk", side_effect=lambda fd: synced.append(stat.S_ISDIR(os.fstat(fd).st_mode))
+        ):
             made = jr.replica_id(state)
-        self.assertEqual(len(synced), 1)
+        self.assertEqual(synced, [False, True])
         self.assertEqual(jr.replica_id(state), made)
         self.assertEqual(list(state.glob(".replica.json*")), [])  # no temp file left
+
+    def test_a_creator_that_comes_second_takes_the_first_ones_id(self) -> None:
+        state = Path(self.tmp.name) / "state"
+        winner = "c" * 32
+        link = os.link
+
+        def first_there(source: Path, target: Path) -> None:
+            Path(target).write_text(json.dumps({"replica": winner}) + "\n")  # the other store, just before
+            link(source, target)
+
+        with mock.patch("os.link", side_effect=first_there):
+            self.assertEqual(jr.replica_id(state), winner)
+        self.assertEqual(json.loads((state / "replica.json").read_text()), {"replica": winner})
+        self.assertEqual(list(state.glob(".replica.json*")), [])
+
+    def test_a_replica_id_that_cannot_be_written_leaves_no_temp_file(self) -> None:
+        def full(fd: int, data: bytes) -> None:
+            raise OSError(errno.ENOSPC, "no space left on the device")
+
+        for name, failing in (
+            ("write", mock.patch.object(jr, "write_all", side_effect=full)),
+            ("flush", mock.patch.object(jr, "flush_to_disk", side_effect=OSError(errno.EIO, "io"))),
+        ):
+            state = Path(self.tmp.name) / f"state-{name}"
+            with self.subTest(name), failing, self.assertRaises(OSError):
+                jr.replica_id(state)
+            self.assertEqual(sorted(p.name for p in state.iterdir()), [], name)
+
+    def test_a_state_folder_without_hard_links_is_named(self) -> None:
+        state = Path(self.tmp.name) / "state"
+        with (
+            mock.patch("os.link", side_effect=OSError(errno.ENOTSUP, "Operation not supported")),
+            self.assertRaisesRegex(jr.JournalError, rf"{state / 'replica.json'}.*Operation not supported"),
+        ):
+            jr.replica_id(state)
+        self.assertEqual(sorted(p.name for p in state.iterdir()), [])
+
+    def test_creators_racing_agree_on_one_id(self) -> None:
+        for attempt in range(10):
+            state = Path(self.tmp.name) / f"state-{attempt}"
+            start = threading.Barrier(12)
+            found: list[str] = []
+
+            def create(
+                state: Path = state, start: threading.Barrier = start, found: list[str] = found
+            ) -> None:
+                start.wait()
+                found.append(jr.replica_id(state))
+
+            threads = [threading.Thread(target=create) for _ in range(12)]
+            for thread in threads:
+                thread.start()
+            for thread in threads:
+                thread.join()
+            kept = json.loads((state / "replica.json").read_text())["replica"]
+            self.assertEqual(set(found), {kept}, attempt)
+            self.assertEqual(list(state.glob(".replica.json*")), [])
 
 
 def short_writes(limit: int) -> Callable[[int, bytes], int]:
@@ -151,6 +216,38 @@ class Disk(JournalTestCase):
         ):
             jr.flush_to_disk(7)
         self.assertEqual(synced, [7])
+
+    def test_an_atomic_replace_flushes_the_folder_after_the_rename(self) -> None:
+        """A rename is an entry in its folder: flushed only with the folder, so that a power cut
+        cannot keep a later write and lose the rename (a forget's rewrite of local.jsonl)."""
+        self.root.mkdir()
+        path, tmp = self.root / "local.jsonl", self.root / ".local.jsonl.1.tmp"
+        path.write_text("old\n")
+        tmp.write_text("new\n")
+        flushed: list[tuple[bool, int, str]] = []
+
+        def flush(fd: int) -> None:
+            found = os.fstat(fd)
+            flushed.append((stat.S_ISDIR(found.st_mode), found.st_ino, path.read_text()))
+
+        with mock.patch.object(jr, "flush_to_disk", side_effect=flush):
+            jr.replace_durably(tmp, path)
+        self.assertEqual(flushed, [(True, self.root.stat().st_ino, "new\n")])  # the folder, after the rename
+        self.assertFalse(tmp.exists())
+
+    def test_both_stores_replace_through_it(self) -> None:
+        """journal.py's rewrite (a forget), the knowledge files and the ledger's files."""
+        tx = self.journal().begin("add")
+        tx.add("put", "person/dana", {"name": "Dana"}, local=True)
+        tx.commit()
+        other = Path(self.tmp.name) / "files"
+        other.mkdir()
+        flushed: list[Path] = []
+        with mock.patch.object(jr, "flush_folder", side_effect=flushed.append):
+            self.journal().forget({"person/dana"})
+            knowledge_store.write_atomically(other / "facts.jsonl", "{}\n")
+            ledger.write_atomically(other / "ledger.json", "{}")
+        self.assertEqual(flushed, [self.root, other, other])
 
 
 class Commit(JournalTestCase):
@@ -450,6 +547,79 @@ class OneUse(JournalTestCase):
                     tx.commit()
                 with self.assertRaisesRegex(jr.JournalError, "committed"):
                     tx.mint()
+
+
+class Forget(JournalTestCase):
+    def write(self, *targets: tuple[str, bool]) -> None:
+        tx = self.journal().begin("add")
+        for target, local in targets:
+            tx.add("put", target, {"name": target}, local=local)
+        tx.commit()
+
+    def test_forgetting_leaves_a_placeholder_in_its_place_in_the_local_file(self) -> None:
+        self.write(("person/dana", True), ("repo/x", False), ("person/lee", True))
+        self.write(("person/dana", True))
+        private = (self.root / f"{R1}.jsonl").read_bytes()
+        position, mint = self.journal().position(), self.journal().begin("add").mint()
+        self.assertEqual(self.journal().forget({"person/dana"}), 2)
+        self.assertEqual((self.root / f"{R1}.jsonl").read_bytes(), private)
+        local = [json.loads(line) for line in (self.root / "local.jsonl").read_text().splitlines()]
+        self.assertEqual([c["op"] for c in local], ["forgotten", "put", "forgotten"])
+        self.assertNotIn("dana", (self.root / "local.jsonl").read_text())
+        self.assertEqual(self.journal().position(), position)  # the sequence and the mint seeds stay
+        self.assertEqual(self.journal().begin("add").mint(), mint)
+        self.assertEqual(
+            [(c["op"], c.get("target")) for c in self.journal().changes()],
+            [("forgotten", None), ("put", "repo/x"), ("put", "person/lee"), ("forgotten", None)],
+        )  # each transaction still whole, in its place
+        self.assertEqual(self.journal().forget({"person/dana"}), 0)
+
+    def test_forgetting_what_is_not_there_writes_nothing(self) -> None:
+        self.assertEqual(self.journal().forget({"person/dana"}), 0)
+        self.assertFalse(self.root.exists())
+
+    def test_forgetting_deletes_what_writes_cut_short_left_of_local_changes(self) -> None:
+        self.write(("person/dana", True), ("repo/x", False))
+        left = [
+            self.root / "local.jsonl.torn-20261021T090000Z",
+            self.root / "local.jsonl.torn-20261021T090000Z-2",
+            self.root / ".local.jsonl.4242.tmp",
+        ]
+        kept = self.root / f"{R1}.jsonl.torn-20261021T090000Z"
+        for path in [*left, kept]:
+            path.write_text('{"body":{"name":"Dana Example"}')
+        self.journal().forget({"nobody"})  # whatever it forgets: a torn tail cannot be read to choose
+        self.assertEqual([p.name for p in left if p.exists()], [])
+        self.assertTrue(kept.exists())
+
+
+class CommitEdits(JournalTestCase):
+    def test_edits_are_added_in_order_then_committed(self) -> None:
+        edits = [
+            cl.Edit("put", "repo/x", {"name": "x"}, False),
+            cl.Edit("put", "person/dana", {"name": "Dana"}, True),
+        ]
+        tx = self.journal().begin("add")
+        done = tx.commit_edits(edits)
+        self.assertEqual([(c["op"], c["target"], c.get("local", False)) for c in done], [
+            ("put", "repo/x", False),
+            ("put", "person/dana", True),
+        ])  # fmt: skip
+        self.assertTrue(tx.committed)
+        self.assertEqual(self.journal().position(), {R1: 1, "local": 1})
+
+
+class AsSaved(JournalTestCase):
+    def test_what_the_files_held_when_saved_and_what_was_adopted_since(self) -> None:
+        """A store's files saved at a position, then a write cut short after adopting an outside
+        edit: the changes up to that position and the adopted ones, in the one order."""
+        journal = self.journal()
+        journal.begin("one").commit_edits([cl.Edit("put", "a", {}, False)])
+        saved = journal.position()
+        journal.begin(cl.ADOPT).commit_edits([cl.Edit("put", "b", {}, False)])
+        journal.begin("two").commit_edits([cl.Edit("put", "c", {}, False)])
+        self.assertEqual([c["target"] for c in journal.as_saved(saved, cl.ADOPT)], ["a", "b"])
+        self.assertEqual([c["target"] for c in journal.as_saved({}, cl.ADOPT)], ["b"])
 
 
 if __name__ == "__main__":

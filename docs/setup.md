@@ -132,8 +132,10 @@ as it was.
 Claude Code nor Codex has them installed. Your repos, branches and pull requests are not touched, nor are
 your conversations.
 
-Install again with the same line, and bosun picks up what you kept. For scripts, `--yes` asks nothing and keeps
-your records; `--delete-ledger`, `--delete-knowledge` and `--purge` say otherwise. `--purge` leaves
+Install again with the same line, and bosun picks up what you kept. `replica.json`, this Mac's id in
+both journals, goes with the ledger: deleting the ledger while keeping the knowledge graph deletes
+it too, and the knowledge base's next write carries on under a new id. For scripts, `--yes` asks
+nothing and keeps your records; `--delete-ledger`, `--delete-knowledge` and `--purge` say otherwise. `--purge` leaves
 `forbidden-terms.txt`, which guards commits to this repo and is not part of running bosun. Run it from a
 terminal outside bosun's windows, since it stops them. If something could not be removed it says what to run,
 and running it again finishes the job.
@@ -143,7 +145,11 @@ then `bosun uninstall`.
 
 ## Configuration
 
-All configuration lives in `~/.config/bosun/` (override with `BOSUN_CONFIG_DIR`).
+All configuration lives in `~/.config/bosun/` (override with `BOSUN_CONFIG_DIR`). If you move it or
+the state folder (`BOSUN_STATE_DIR`), keep both on a disk that supports hard links, as the Mac's own
+disk does: bosun makes `replica.json` and the knowledge base's `secret.key` with one, so that a file
+is never half-made or made twice. On a disk without them (exFAT, some network shares) writes stop
+and say so.
 
 | File | Purpose |
 |---|---|
@@ -163,7 +169,9 @@ State and logs go to `~/.local/state/bosun/`:
   changes, `local.jsonl` for what never leaves it, such as your own words, and
   `<file>.torn-<time>` for a transaction a write left unfinished, moved aside and kept
   ([Sync and sharing](design/sync.md))
-- `replica.json`: this Mac's id in the journal
+- `replica.json`: this Mac's id in the journals (the ledger's, and the knowledge base's in
+  `knowledge/journal/` of the config folder, see [Knowledge](knowledge.md#knowledge)), made once;
+  moved aside, it gives the Mac a new id in both, which both carry on under
 - `logs/`: `morning-YYYY-MM-DD.log`, `checkin-YYYY-MM-DD.log`, `learn-YYYY-MM-DD.log`,
   `impact-YYYY-MM-DD.log`, `hook-YYYY-MM-DD.log` (the repo sessions' prompt hook), and what launchd
   captures from each job (`launchd.{out,err}`, `watchdog.launchd.{out,err}`, `learn.launchd.{out,err}`)

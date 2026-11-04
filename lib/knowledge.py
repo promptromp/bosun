@@ -3,7 +3,8 @@
 
 Usage: bosun kg <command> [args]
 
-Writing (every change is one commit in the knowledge directory's own git history):
+Writing (every change is one transaction in the knowledge directory's journal, then one commit in
+its own git history; a new fact's id is minted, f-3k9x2a, and older ones stay, f12):
   add-entity <type>/<slug> [--name N] [--alias A ...] [--weak-alias W ...] [--summary S]
              [--allow-forgotten]
                                      add an entity, or merge new aliases into it (strong alias: a
@@ -42,8 +43,9 @@ Writing (every change is one commit in the knowledge directory's own git history
                                      unless --apply: counts, refusals with reasons, batches
   identify <person|team> slack|github|jira|other <id>
                                      a restricted identifier for mentions (never in context packs)
-  forget person/<slug> [--dry-run]   delete a person on request: entity, facts, identifiers, and
-                                     the git history (restarted); only a hash and counts are kept
+  forget person/<slug> [--dry-run]   delete a person on request: entity, facts, identifiers, their
+                                     changes in the journal (placeholders) and the git history
+                                     (restarted); only a hash and counts are kept
   expire [--dry-run]                 record expired proposals (unreviewed for 30 days) and delete
                                      person facts not re-observed for 12 months
 
@@ -58,6 +60,10 @@ Reading:
   lint [--stale-days N] [--json] [--strict]
                                      contradictions, expired proposals, retention, stale facts, alias
                                      collisions, merge suggestions, orphans (--strict: exit 1 if any)
+  validate [--json]                  the files against the journal they are the rebuild of: damage,
+                                     a position that does not match, a rebuild that differs,
+                                     conflicts, updates waiting for their fact, a change made outside
+                                     the journal that the next write adopts (exit 1 if any)
   stats                              counts (what bosun doctor shows)
   schema [--json]                    entity types, predicates, the People whitelist
 
@@ -71,10 +77,13 @@ from __future__ import annotations
 
 import argparse
 import contextlib
+import copy
+import functools
+import itertools
 import json
 import os
 import sys
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Iterator, Mapping
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
@@ -83,25 +92,52 @@ from typing import Any
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import approvals
+import change_log
 import claude_state
 import events
+import knowledge_changes as kc
 import knowledge_model as km
 import knowledge_query as kq
 import knowledge_review as kr
 import knowledge_schema as ks
 import knowledge_store as store
+import validation
+from change_log import ADOPT, DIGEST, Change, ChangeLogError, Edit, reader_rebuilds
+from journal import REPLICA_FILE, Journal, JournalError, Transaction, as_saved, forgotten, replica_id, up_to
 from knowledge_model import KB, KnowledgeError, Proposal, Record
 from knowledge_schema import SchemaError
 from knowledge_store import Paths, StoreError
+from validation import Finding
 
 
 MAX_QUOTE_LENGTH = 500
+# The journal every write goes through (lib/journal.py, docs/design/sync.md), next to the files:
+# the knowledge base's stream; the version of the rules its changes are checked against when
+# rebuilt (knowledge_changes.APPLIED, SKIPPED and CHECKED), bumped by hand when a change to them
+# would rebuild old changes differently (a test in test_knowledge_changes pins their digest to it,
+# as test_ledger_changes does for the ledger's RULES_VERSION); the command of the transaction that
+# puts a knowledge base from before the journal in it (a change made to the files outside it is
+# change_log.ADOPT); view.json's key, the journal position the files reflect and the digest of
+# each; and how the files stand against the journal (standing).
+KG_STREAM = "kg"
+KG_RULES_VERSION = 1
+GENESIS = "genesis"
+VIEW_KEY = "journal"
+SAVED, BEHIND, EDITED_OUTSIDE = "saved", "behind", "edited"
+# The files the journal's rebuild makes (a write saves them whole when one does not parse).
+REBUILT_FILES = (kc.ENTITIES_FILE, kc.FACTS_FILE)
+EDITED = (
+    "the knowledge files were changed outside their journal (by hand, a git checkout or revert in "
+    "the knowledge folder, or a bosun that does not journal); the next write adopts it"
+)
 Handler = Callable[[argparse.Namespace], "str | tuple[str, int]"]
 
 
 @dataclass
 class Settings:
-    """What `bosun kg` passes (load_config does not export it); tests replace CLOCK."""
+    """What `bosun kg` passes (load_config does not export it); tests replace CLOCK. state_dir
+    keeps this Mac's replica id (a write needs it); command is what the journal records as each
+    write's command ("kg propose", "console review")."""
 
     root: Path = Path()
     git: bool = True
@@ -110,6 +146,7 @@ class Settings:
     group_facts: int = kr.DEFAULT_GROUP_FACTS
     stale_days: int = kr.DEFAULT_STALE_DAYS
     state_dir: str = ""
+    command: str = ""
     drain_prompt: str = ""
     caller_window: str = ""
     warnings: list[str] = field(default_factory=list)
@@ -145,46 +182,724 @@ def paths() -> Paths:
 # ---- loading and saving -------------------------------------------------------------------------
 
 
-def load(p: Paths) -> KB:
-    kb = KB(ks.load_site_schema(p.schema), CLOCK())
-    kb.entities = {e["id"]: e for e in store.read_jsonl(p.entities)}
-    kb.records = store.read_jsonl(p.facts)
+def load(p: Paths, *, identifiers: bool = True, now: datetime | None = None) -> KB:
+    """The knowledge base as a reader sees it, never written: the files, or the journal's rebuild
+    in memory where they are behind it (a write cut short between the two) or one does not parse
+    (cut short during its append). An unfinished transaction at the end of the journal is left out
+    (it was never committed); a journal that cannot be read, or one behind the files, gets one
+    warning on stderr and the files as they are, so that readers keep working (unless a file does
+    not parse: then nothing can read it, refuse_unreadable); the next write repairs it or says why
+    not. identifiers=False (the console) reads none of identifiers.jsonl, forgotten.jsonl and
+    secret.key, and computes no key_problem; <now> replaces the clock."""
+    kb = read_files(p, identifiers=identifiers, now=now)
+    try:
+        return read_caught_up(p, kb, open_journal(p))
+    except JournalError as exc:
+        refuse_unreadable(kb)
+        warn_reader(f"the knowledge base's journal in {p.journal} is damaged: {exc}")
+        return kb
+
+
+def read_files(p: Paths, *, identifiers: bool = True, now: datetime | None = None) -> KB:
+    """The knowledge files as they are (a write starts from them; validate compares them); without
+    <identifiers>, only the entities and the facts. Of a file the journal rebuilds or holds the
+    records of (forgotten.jsonl's, in its deletion markers), the lines that parse, and why one does
+    not in kb.unreadable; identifiers.jsonl, which nothing else holds, must parse."""
+    kb = KB(ks.load_site_schema(p.schema), now or CLOCK())
+    kb.entities = {e["id"]: e for e in rebuildable(kb, p.entities)}
+    kb.records = rebuildable(kb, p.facts)
     kb.facts = km.fold_all(kb.records)
+    if not identifiers:
+        return kb
     kb.identifiers = store.read_jsonl(p.identifiers)
-    kb.forgotten = store.read_jsonl(p.forgotten)
+    kb.forgotten = rebuildable(kb, p.forgotten)
+    kb.secret = store.read_secret(p.key_file)
+    kb.key_problem = key_problem(p, kb)
     return kb
 
 
-def save(p: Paths, kb: KB, message: str) -> None:
-    if kb.entities_changed:
-        entities = [kb.entities[i] for i in sorted(kb.entities)]
-        store.write_atomically(p.entities, store.jsonl(entities))
-    if kb.rewrite:
-        store.write_atomically(p.facts, store.jsonl(kb.records))
-        p.batch.unlink(missing_ok=True)  # its numbers may point at deleted facts
-    else:
-        store.append_records(p.facts, kb.new_records)
+def rebuildable(kb: KB, path: Path) -> list[Record]:
+    """The records of a file the journal can write again: the lines that parse, and why the first
+    one that does not is not a record in kb.unreadable (a write cut short during its append)."""
+    records, problem = store.read_lines(path)
+    if problem:
+        kb.unreadable[path.name] = problem
+    return records
+
+
+def refuse_unreadable(kb: KB) -> None:
+    """A knowledge file that does not parse, where no journal can write it again (none yet, one
+    that cannot be read, or one behind view.json): nothing else holds what it held, so every
+    command stops, naming the (first) line."""
+    if kb.unreadable:
+        raise StoreError(store.unreadable(next(iter(kb.unreadable.values()))))
+
+
+def rebuilds_files(kb: KB) -> bool:
+    """Whether a file the journal rebuilds does not parse, so that its rebuild takes its place."""
+    return any(name in kb.unreadable for name in REBUILT_FILES)
+
+
+def say_unreadable(kb: KB) -> None:
+    """A reader's line on stderr for each knowledge file that does not parse: what it reads."""
+    for name, problem in kb.unreadable.items():
+        what = "the journal's rebuild of it" if name in REBUILT_FILES else "its other lines"
+        print(f"kg: {problem}; reading {what} until the next write writes it again", file=sys.stderr)
+
+
+def key_problem(p: Paths, kb: KB) -> str:
+    """Why the forgotten people cannot be recognised (keyed records, and no readable key), or "".
+    A key file that is not a key, with no keyed record, is no problem: the next write replaces it
+    (made_key)."""
+    if kb.secret or not km.has_keyed_records(kb):
+        return ""
+    return key_missing(p)
+
+
+def key_missing(p: Paths) -> str:
+    """The key of the forgotten is missing, and what to do. The journal's deletion markers hold the
+    same records as forgotten.jsonl, so the way out when the key is gone for good moves both aside
+    (and replica.json, as for a damaged journal), with the key file if one is there."""
+    replica_file = Path(SETTINGS.state_dir) / REPLICA_FILE
+    return (
+        f"the key of the forgotten people, {p.key_file}, is missing, unreadable or not a key; restore "
+        "it (a new one would stop the deleted people being recognised; if it is gone for good, move "
+        f"forgotten.jsonl and the journal folder {p.journal} aside, with {replica_file}, and "
+        f"{p.key_file.name}, if it is there, all together: the people in them can then be added again, "
+        "and the next write makes a new key)"
+    )
+
+
+def made_key(p: Paths) -> bytes:
+    """The key of the forgotten, made by a write when it has none and no keyed record needs one. A
+    file there that is not a key (empty, the wrong length, unreadable: cut short as it was made,
+    edited, restored) is moved aside first, kept, and said on stderr."""
+    if os.path.lexists(p.key_file):
+        aside = store.set_key_aside(p.key_file)
+        print(
+            f"kg: {p.key_file} was not a key (empty, the wrong length or unreadable), and no forgotten "
+            f"record needs it; moved it aside to {aside.name} (kept, not in the history) and made a "
+            "new one",
+            file=sys.stderr,
+        )
+    return store.create_secret(p.key_file)
+
+
+def write_files(p: Paths, kb: KB) -> None:
+    """The files a write changed (after its changes are in the journal). The identifiers and
+    forgotten.jsonl first, each whole: the journal does not hold them, so a deletion cut short
+    between the data files (which the next write finishes from the journal) has already done its
+    part there. Then the entities and the fact log, both whole when the write found them behind the
+    journal (or not parsing) and goes on from its rebuild; else the fact log only gains lines."""
     if kb.identifiers_changed:
         store.write_atomically(p.identifiers, store.jsonl(kb.identifiers), store.PRIVATE_MODE)
-    store.append_records(p.forgotten, kb.new_forgotten)
+    if kb.new_forgotten:
+        store.write_atomically(p.forgotten, store.jsonl(kb.forgotten + kb.new_forgotten))
+    if kb.entities_changed or kb.rebuilt:
+        entities = [kb.entities[i] for i in sorted(kb.entities)]
+        store.write_atomically(p.entities, store.jsonl(entities))
+    if kb.rewrite or kb.rebuilt:
+        store.write_atomically(p.facts, store.jsonl(kb.records))
+    else:
+        store.append_records(p.facts, kb.new_records)
+    if kb.rewrite or kb.stale_batch:
+        p.batch.unlink(missing_ok=True)  # its numbers may point at deleted facts
+
+
+def write_view(p: Paths, stamp: Mapping[str, Any]) -> None:
+    """view.json, written last: the journal position the files reflect and the digest of what each
+    data file holds (so a write cut short is told apart from a change made outside the journal)."""
+    store.write_atomically(p.view, json.dumps({VIEW_KEY: stamp}, indent=2, sort_keys=True) + "\n")
+
+
+def restart_history(p: Paths) -> None:
+    """The history restart a write owes (it deleted a person, finished a deletion cut short, or
+    dropped or refused a person), paid once its files are final and before view.json, so that a
+    write cut short before it owes it again: the history is deleted here, whatever
+    BOSUN_KNOWLEDGE_GIT says (one kept before may hold the person), and the save's commit after
+    view.json starts it again with the files as they are now, when the history is on."""
+    store.drop_history(p.root)
+
+
+def record_history(p: Paths, message: str) -> None:
     if not SETTINGS.git:
         return
-    restart = store.restart_history if kb.restart_history else store.commit
-    warning = restart(p.root, f"kg {message}")
+    warning = store.commit(p.root, f"kg {message}")
     if warning:
         SETTINGS.warnings.append(warning)
 
 
+@dataclass
+class Write:
+    """A write in progress: its journal, as read once at its start and changed since (<changes>),
+    its transaction, the entities as it found them, and what of the files as changed outside the
+    journal it could not take."""
+
+    journal: Journal
+    changes: list[Change]
+    transaction: Transaction
+    entities: dict[str, Record]
+    left_out: LeftOut | None = None
+
+
+def save(p: Paths, kb: KB, message: str, write: Write) -> None:
+    """What the write changed: first what it could not take of files changed outside the journal
+    (said, and the files as edited kept, while they are still there: say_left_out); then in the
+    journal, the files, the history restart it owes (if any), view.json, and the history."""
+    say_left_out(p, kb, write.left_out)
+    with journal_errors(p):
+        stamp = journaled(p, kb, write)
+    write_files(p, kb)
+    if kb.restart_history:
+        restart_history(p)
+    write_view(p, stamp)
+    record_history(p, message)
+
+
+def journaled(p: Paths, kb: KB, write: Write) -> dict[str, Any]:
+    """Put what the write changed in the journal, as one transaction; refused whole, before
+    anything is written, when it holds what the journal cannot or a deletion would have to remove
+    a change from the private journal. A deletion commits its marker (kc.deletion_marker: the
+    position moves; it names the facts removed) with the transaction, then turns what it removed
+    into placeholders in local.jsonl (forget_in_journal), so a cut between the two is finished by
+    the next write. Returns view.json's stamp: the journal's new position and the digest of each
+    file."""
+    edits = kc.edits(write.entities, kb)
+    refuse_unencodable(edits)
+    held = files_digest(kb)
+    targets = kc.removed(write.entities, kb) if kb.rewrite else set()
+    if kb.rewrite:
+        refuse_private(write.changes, targets)
+        marker = kc.deletion_marker(kb.new_forgotten, sorted(kb.removed))
+        edits = [*(e for e in edits if e.target not in targets), marker]
+    write.transaction.commit_edits(edits)
+    if kb.rewrite:
+        forget_in_journal(p, write.journal, write.changes, targets)
+    return change_log.stamped(write.journal.position(), held)
+
+
+def forget_in_journal(p: Paths, journal: Journal, changes: list[Change], targets: set[str]) -> list[Change]:
+    """A deletion's last step (kg forget, the retention purge, one made outside the journal, one
+    cut short and finished): every change of <targets> a placeholder in local.jsonl, with what
+    writes cut short left of that file (Journal.forget), and what they left in the knowledge
+    folder (store.remove_temporaries: batch.json.tmp names people), under the exclusive lock.
+    Returns the journal as read (<changes>) as it is now."""
+    journal.forget(targets)
+    store.remove_temporaries(p.root)
+    return forgotten(changes, targets)
+
+
+def refuse_unencodable(edits: list[Edit]) -> None:
+    """The write boundary: a change the journal cannot hold (a float, text that is not valid
+    Unicode) is refused before anything is journaled, naming the fact or entity and the field."""
+    problem = change_log.refusal(edits, kc.place)
+    if problem:
+        raise KnowledgeError(problem)
+
+
+def files_digest(kb: KB) -> dict[str, str]:
+    """The digest of what each file will hold; refused, naming where, when they hold what the
+    journal cannot (written outside it, after it began)."""
+    try:
+        return kc.file_digests(kb.entities, kb.records)
+    except ChangeLogError as exc:
+        problem = change_log.refusal(kc.snapshot(kb), kc.place) or f"nothing was written: {exc}"
+        raise KnowledgeError(problem) from exc
+
+
+def refuse_private(changes: list[Change], targets: set[str]) -> None:
+    """A deletion (kg forget, the retention purge, one made outside the journal) turns every change
+    of what it removed into a placeholder in local.jsonl (Journal.forget); refused, before anything
+    is written, when the private journal (in <changes>, the journal as read) holds a change of it,
+    as that file is never rewritten."""
+    held = kc.held_privately(changes, targets)
+    if held:
+        raise KnowledgeError(
+            f"nothing was written: {', '.join(held)} is in the private journal, which a deletion never "
+            "rewrites: it removes only what names a person, which never leaves this Mac"
+        )
+
+
+# ---- the journal --------------------------------------------------------------------------------
+
+
+def open_journal(p: Paths, replica: str = "") -> Journal:
+    """The knowledge base's journal; a reader needs no replica (it never begins a transaction)."""
+    return Journal(p.journal, KG_STREAM, replica, KG_RULES_VERSION)
+
+
+def state_dir() -> Path:
+    """Where this Mac's replica id is kept: a write needs it, as its journal file is named by it."""
+    if not SETTINGS.state_dir:
+        raise KnowledgeError(
+            "a write needs the state folder, where this Mac's replica id is kept (BOSUN_STATE_DIR); "
+            "run it as `bosun kg`"
+        )
+    return Path(SETTINGS.state_dir)
+
+
+def start_again(p: Paths) -> str:
+    """How to go on when the journal cannot be used: the files are whole, so a new journal can
+    start from them. Under a new replica, so that no fact id is minted twice from the same seq (as
+    for the ledger, which then goes on as that replica too)."""
+    replica_file = Path(SETTINGS.state_dir) / REPLICA_FILE
+    return (
+        f"move the folder {p.journal} and the file {replica_file} aside together (keep them): the next "
+        "write starts a new journal from the files, as a new replica"
+    )
+
+
+@contextlib.contextmanager
+def journal_errors(p: Paths) -> Iterator[None]:
+    """A journal that cannot be read, or a change it refuses, as a KnowledgeError: nothing written."""
+    try:
+        yield
+    except JournalError as exc:
+        raise KnowledgeError(
+            f"the knowledge base's journal in {p.journal} is damaged: {exc}. Nothing was written. To "
+            f"go on from the files as they are, {start_again(p)}"
+        ) from exc
+    except ChangeLogError as exc:
+        raise KnowledgeError(f"nothing was written: {exc}") from exc
+
+
+def saved_stamp(p: Paths) -> Any:
+    """What view.json records of the journal (the position the files reflect, their digests); None
+    without one."""
+    try:
+        view = json.loads(p.view.read_text())
+    except (OSError, ValueError):
+        return None
+    return view.get(VIEW_KEY) if isinstance(view, dict) else None
+
+
+def saved_position(p: Paths) -> dict[str, int]:
+    """The journal position view.json says the files reflect; {} without one."""
+    return change_log.position_in(saved_stamp(p))
+
+
+def saved_digests(p: Paths) -> dict[str, str] | None:
+    """The digest of each file view.json records; None without them (files from before)."""
+    stamp = saved_stamp(p)
+    recorded = stamp.get(DIGEST) if isinstance(stamp, dict) else None
+    return recorded if isinstance(recorded, dict) else None
+
+
+def standing(p: Paths, kb: KB, position: Mapping[str, int], rebuild: Callable[[], kc.RebuiltKB]) -> str:
+    """How the files (<kb> as read) stand against the journal (at <position>): SAVED as a write
+    left them; EDITED_OUTSIDE, one holding neither what view.json recorded nor what the journal's
+    rebuild makes (by hand, a git checkout or revert in the knowledge folder, a bosun that does not
+    journal and leaves view.json as it was); else BEHIND, a write cut short somewhere between the
+    journal and view.json (each file as recorded or as the rebuild), which the rebuild finishes,
+    even at the same position; and BEHIND when one does not parse (cut short during its append), as
+    only the rebuild can be read whole. Files saved before a digest each are trusted."""
+    recorded = saved_digests(p)
+    if rebuilds_files(kb):
+        return BEHIND
+    held = kc.held_digests(kb.entities, kb.records)
+    at_position = saved_position(p) == position
+    if held == recorded or (recorded is None and None not in held.values()):
+        return SAVED if at_position else BEHIND
+    result = rebuild()
+    if kc.edited_files(recorded, held, kc.held_digests(result.entities, result.records)):
+        return EDITED_OUTSIDE
+    return BEHIND
+
+
+def warn_reader(problem: str) -> None:
+    print(f"kg: {problem}; reading the knowledge files as they are", file=sys.stderr)
+
+
+def read_caught_up(p: Paths, kb: KB, journal: Journal) -> KB:
+    """The files (<kb>), or the journal's rebuild where they are behind it or one does not parse
+    (said on stderr). A journal behind the files is never rebuilt from (change_log.reader_rebuilds),
+    nor an empty one: then a file that does not parse stops the reader (refuse_unreadable)."""
+    position = journal.position()
+    rebuild, gaps = reader_rebuilds(position, saved_position(p), p.view.name)
+    if gaps or not position:
+        refuse_unreadable(kb)
+    if gaps:
+        warn_reader(f"the knowledge base's journal in {p.journal} is behind {p.view.name} ({gaps})")
+    say_unreadable(kb)
+    return rebuilt(kc.rebuild(journal.changes()), kb) if rebuild or rebuilds_files(kb) else kb
+
+
+def rebuild_once(changes: list[Change]) -> Callable[[], kc.RebuiltKB]:
+    """The rebuild of <changes>, made the first time it is asked for, then kept."""
+    return functools.cache(lambda: kc.rebuild(changes))
+
+
+def rebuilt(result: kc.RebuiltKB, kb: KB, *, writing: bool = False) -> KB:
+    """<kb> with the journal's rebuild (<result>; the entities and the fact log; the identifiers,
+    the forgotten records and the key stay as the files have them). A write that
+    rebuilds, and so saves the rebuild, says on stderr what it keeps but could not apply and which
+    file that did not parse it replaces, drops the identifiers of entities gone, and deletes
+    batch.json if facts went."""
+    facts = km.fold_all(result.records)
+    kb.stale_batch = bool(set(kb.facts) - set(facts))
+    kb.entities, kb.records, kb.facts = result.entities, result.records, facts
+    kb.rebuilt = True
+    replaced = [kb.unreadable.pop(name) for name in REBUILT_FILES if name in kb.unreadable]
+    note = validation.unapplied_note(len(result.conflicts), len(result.pending), "bosun kg validate")
+    if writing:
+        km.drop_orphan_identifiers(kb)
+        for problem in replaced:
+            print(f"kg: {problem}; saved again as the journal's rebuild", file=sys.stderr)
+        if note:
+            print(f"kg: {note}", file=sys.stderr)
+    return kb
+
+
+def adopted_base(p: Paths, changes: list[Change], whole: kc.RebuiltKB | None = None) -> kc.RebuiltKB:
+    """What the files held when a write last saved them, as the journal (<changes>, as read) has
+    it: the rebuild at their position, with what was adopted from them since (by a write cut short
+    after it). When that is the whole journal (the files were saved at its position), the rebuild
+    of it all (<whole>), if the caller has it."""
+    saved = as_saved(changes, saved_position(p), ADOPT)
+    if whole is not None and len(saved) == len(changes):
+        return whole
+    return kc.rebuild(saved)
+
+
+def history_on() -> bool:
+    return SETTINGS.git and store.git_available()
+
+
+def forget_outside(
+    p: Paths, journal: Journal, changes: list[Change], kb: KB, persons: set[str], whole: kc.RebuiltKB
+) -> list[Change]:
+    """A deletion on request made outside the journal (<persons>: gone from the files, matched by a
+    forgotten record; an older bosun's kg forget, or a hand removal), made in it too, as kg forget
+    makes one: its marker first (holding their forgotten records and the facts naming them, so that
+    a cut after it is finished by the next write), then every change of them and of those facts (in
+    the whole journal: <changes>, rebuilt as <whole>) a placeholder in local.jsonl
+    (forget_in_journal), and the history restart owed for the save (the history holds the
+    journal). Returns the journal as read, as it is now."""
+    facts = km.fold_all(whole.records)
+    targets = kc.naming(persons, facts)
+    refuse_private(changes, targets)
+    records = kc.records_of(persons, km.forgotten_records(kb), kb.secret)
+    marker = kc.deletion_marker(records, sorted(targets - persons))
+    changes = [*changes, *journal.begin(ADOPT).commit_edits([marker])]
+    changes = forget_in_journal(p, journal, changes, targets)
+    kb.restart_history = True
+    print(
+        f"kg: {len(persons)} person(s) deleted on request are gone from the knowledge files and deleted "
+        "from their journal too: their changes in local.jsonl are placeholders now, and the knowledge "
+        "history starts again without them",
+        file=sys.stderr,
+    )
+    return changes
+
+
+def adopt(p: Paths, journal: Journal, base: kc.RebuiltKB, kb: KB, refused: set[str]) -> list[Change]:
+    """Put in the journal what was changed in the files outside it, as one transaction (ADOPT):
+    what they hold beyond what they held when a write last saved them (<base>; kc.outside), never
+    the people <refused>; returns its changes. Nothing when there is nothing to adopt (a write cut
+    short may have adopted it already, or the journal cannot hold it: the fact log only grows)."""
+    edits = kc.outside(base, kb, refused)
+    if not edits:
+        return []
+    refuse_unencodable(edits)
+    done = journal.begin(ADOPT).commit_edits(edits)
+    print(
+        f"kg: the knowledge files in {p.root} were changed outside their journal (by hand, a git "
+        "checkout or revert there, or a bosun that does not journal); adopted "
+        f"{len(edits)} change(s) into the journal (transaction '{ADOPT}')",
+        file=sys.stderr,
+    )
+    return done
+
+
+def kept_as_edited(p: Paths, refused: set[str], key_problem: str, *, restart: bool) -> str:
+    """Where the files as changed outside the journal are kept once the write saves the journal's
+    rebuild over them: in the knowledge folder's git history (committed now), when it is on, they
+    name no person refused (no history may hold one deleted on request), and the write does not
+    start the history again (<restart>: it would delete that commit, and keeping the history would
+    keep what the write deletes)."""
+    if refused and key_problem:
+        return (
+            "nothing keeps the files as they were edited, as they name a person whom the forgotten "
+            "records cannot be checked against without their key"
+        )
+    if refused:
+        return "nothing keeps the files as they were edited, as they name a person deleted on request"
+    if restart:
+        return (
+            "nothing keeps the files as they were edited: the knowledge history holds what this write "
+            "deletes, so it starts again without them"
+        )
+    if not history_on():
+        return "the knowledge history is off, so nothing keeps the files as they were edited"
+    warning = store.commit(p.root, f"kg {ADOPT}: the files as changed outside the journal")
+    if warning:
+        return f"keeping the files as they were edited in the knowledge history failed ({warning})"
+    return f"the knowledge folder's git history keeps the files as they were edited (git -C {p.root} log)"
+
+
+@dataclass
+class LeftOut:
+    """What of the files as changed outside their journal it could not take (<parts>: a record
+    removed or edited in place, as the fact log only grows), and the people refused from them."""
+
+    parts: int
+    refused: set[str]
+
+
+def left_out(base: kc.RebuiltKB, edited: KB, refused: set[str]) -> LeftOut | None:
+    """What of the files as edited the journal could not take (<base>: what it holds of them, what
+    it adopted included), the people refused aside; None for nothing."""
+    aside = kc.naming(refused, edited.facts)
+    found = kc.differences(base, edited.entities, edited.records)
+    parts = [f for f in found if f.get("item") not in aside]
+    return LeftOut(len(parts), refused) if parts else None
+
+
+def say_left_out(p: Paths, kb: KB, left: LeftOut | None) -> None:
+    """One line on stderr counting what of the files as edited the journal could not take, and
+    where the files as edited are kept (kept_as_edited). Said by the save, before the files are
+    replaced: only then is it known whether the write starts the history again (a deletion it
+    finishes or applies, or the command's own)."""
+    if left:
+        print(
+            f"kg: {left.parts} part(s) of the knowledge files as changed outside their journal "
+            "could not go into it and are as the journal has them (the fact log only grows: a record "
+            "removed comes back, and one edited in place comes back beside its edited copy; close a "
+            "fact with kg supersede, delete a person with kg forget); "
+            f"{kept_as_edited(p, left.refused, kb.key_problem, restart=kb.restart_history)}",
+            file=sys.stderr,
+        )
+
+
+def taken_in(
+    p: Paths, journal: Journal, changes: list[Change], edited: KB, whole: kc.RebuiltKB
+) -> tuple[KB, LeftOut | None, list[Change]]:
+    """Files changed outside the journal (<changes>, as read; <whole>, its rebuild), taken in: what
+    the journal cannot hold of them is converted once (kc.taken_in, a note each); a person deleted
+    on request and gone from them is deleted from the journal too (forget_outside); what they hold
+    beyond what they held when a write last saved them (adopted_base, made once) is adopted, never
+    a person deleted on request (kc.returning, one line saying so, without naming them); and the
+    write goes on from the journal's rebuild, so that they stay its rebuild. Also returns what the
+    journal could not take, which the save says (say_left_out), and the journal as it is now."""
+    for note in kc.taken_in(edited, "the knowledge files"):
+        print(f"kg: {note}", file=sys.stderr)
+    base = adopted_base(p, changes, whole)
+    gone = kc.forgotten_outside(base, edited)
+    if gone:
+        changes = forget_outside(p, journal, changes, edited, gone, whole)
+        base = adopted_base(p, changes)
+    refused = kc.returning(base, edited)
+    say_held_back(base, edited, refused)
+    changes = [*changes, *adopt(p, journal, base, edited, refused)]
+    result = kc.rebuild(changes)
+    left = left_out(adopted_base(p, changes, result), edited, refused)
+    return rebuilt(result, edited, writing=True), left, changes
+
+
+def say_held_back(base: kc.RebuiltKB, edited: KB, refused: set[str]) -> None:
+    """One line on stderr, naming nobody, when adopt leaves people out: while the key of the
+    forgotten cannot be read, every person entity the files hold otherwise than the journal (why,
+    and that the check fails closed); else the people deleted on request (kc.returning)."""
+    held = kc.held_back(base, edited, refused)
+    if edited.key_problem and held:
+        print(
+            f"kg: no person is taken in from the knowledge files as changed outside their journal "
+            f"({len(held)} left out, and they go from the files: restore those again once the key is "
+            f"back), as {edited.key_problem}",
+            file=sys.stderr,
+        )
+    elif refused:
+        print(
+            f"kg: the knowledge files as changed outside their journal name {len(refused)} person(s) "
+            "deleted on request, who are not taken back into it and go from the files (kg add-entity "
+            "<id> --allow-forgotten adds one again, if they asked)",
+            file=sys.stderr,
+        )
+
+
+def take_forgotten(p: Paths, changes: list[Change], kb: KB) -> None:
+    """Forgotten is forgotten.jsonl and the records the journal's deletion markers carry: a record
+    forgotten.jsonl lacks (a deletion cut short before its files, a forgotten.jsonl restored from
+    before it) is written now, before anything is taken in, so that every check sees it. A
+    forgotten.jsonl that does not parse is written again then too, from its other lines (said on
+    stderr)."""
+    missing = kc.unrecorded(changes, kb.forgotten)
+    problem = kb.unreadable.pop(p.forgotten.name, "")
+    if not (missing or problem):
+        return
+    kb.forgotten += missing
+    store.write_atomically(p.forgotten, store.jsonl(kb.forgotten))
+    if problem:
+        print(
+            f"kg: {problem}; written again from its other lines, with the records the journal's "
+            "deletion markers carry",
+            file=sys.stderr,
+        )
+    kb.key_problem = key_problem(p, kb)
+
+
+def unfinished(p: Paths, changes: list[Change], position: Mapping[str, int]) -> list[Change]:
+    """The journal's changes (<changes>, as read; at <position>) the files do not reflect yet:
+    those after their saved position (a write cut short somewhere between the journal and
+    view.json); none when the files are at the journal's position."""
+    saved = saved_position(p)
+    if saved == position:
+        return []
+    kept = {change["id"] for change in up_to(changes, saved)}
+    return [change for change in changes if change["id"] not in kept]
+
+
+def refuse_finishing_without_key(p: Paths, kb: KB, later: list[Change]) -> None:
+    """A deletion on request cut short (a keyed record in a deletion marker <later>) is finished
+    by matching the people in the journal against its record, which takes the key: without one
+    the write is refused whole, before anything is written (it would move view.json past the
+    deletion, which would then never be finished), naming the key, as adding a person is."""
+    if kb.secret or not km.any_keyed(kc.marker_records(later)):
+        return
+    raise KnowledgeError(
+        "nothing was written: a deletion on request was cut short, and the write that finishes it "
+        f"needs the key to tell whom it deleted: {key_missing(p)}. Once the key is back, the next "
+        "write finishes the deletion (with the journal moved aside instead, it is never finished: "
+        "run kg forget for them again)"
+    )
+
+
+def finish_deletions(
+    p: Paths, journal: Journal, changes: list[Change], kb: KB, later: list[Change]
+) -> list[Change]:
+    """A deletion the files do not reflect yet (its marker in <later>, unfinished) is finished:
+    the placeholders for its forgotten records' hashed ids, and for the facts it names (a
+    retention purge's), are put in again (a cut between its marker and its rewrite leaves them
+    out), what writes cut short left is deleted (a cut after the rewrite leaves it:
+    forget_in_journal does both), and the history restart it owed is owed by this write. Returns
+    the journal as read (<changes>), as it is now."""
+    if not any(change.get("op") == kc.DELETION for change in later):
+        return changes
+    kb.restart_history = True
+    result = kc.rebuild(changes)
+    facts = km.fold_all(result.records)
+    persons = kc.matched(kc.people(result.entities, facts), kc.marker_records(later), kb.secret)
+    targets = kc.naming(persons, facts) | kc.marker_facts(later)
+    refuse_private(changes, targets)
+    return forget_in_journal(p, journal, changes, targets)
+
+
+def refuse_if_behind(p: Paths, journal_has: Mapping[str, int]) -> None:
+    """A journal that lost changes the files reflect (a journal file deleted, a partial restore)
+    is never written to: a rebuild from it would lose them too. An empty journal is not behind:
+    the next write starts it again from the files."""
+    gaps = change_log.behind(journal_has, saved_position(p), p.view.name) if journal_has else []
+    if gaps:
+        raise KnowledgeError(
+            f"the knowledge base's journal in {p.journal} is behind {p.view.name} ({'; '.join(gaps)}), "
+            "so it cannot rebuild the files. Nothing was written. If journal files were lost, "
+            f"{start_again(p)}"
+        )
+
+
+def genesis(p: Paths, journal: Journal, kb: KB) -> list[Change]:
+    """Put a knowledge base from before the journal in it whole (kc.snapshot), as one transaction
+    (GENESIS), what the journal cannot hold converted once with a note on stderr; then save the
+    files as they are now (rewritten only if something was converted) and view.json, at once, so
+    that a command that then fails leaves them at the journal's position. Returns the journal: that
+    transaction."""
+    notes = kc.taken_in(kb, "the knowledge files")
+    for note in notes:
+        print(f"kg: {note}", file=sys.stderr)
+    done = journal.begin(GENESIS).commit_edits(kc.snapshot(kb))
+    if notes:
+        store.write_atomically(p.entities, store.jsonl([kb.entities[i] for i in sorted(kb.entities)]))
+        store.write_atomically(p.facts, store.jsonl(kb.records))
+    write_view(p, change_log.stamped(journal.position(), kc.file_digests(kb.entities, kb.records)))
+    return done
+
+
+def write_start(p: Paths, journal: Journal) -> tuple[KB, LeftOut | None, list[Change]]:
+    """The knowledge base a write starts from, in memory (the command's one save writes it), as
+    the ledger's write does. Refused when the journal lost changes the files reflect (a file
+    deleted, a partial restore); then an unfinished transaction at the end of the journal is set
+    aside (repair_tail); a knowledge base from before the journal is put in it (genesis); a change
+    made to the files outside the journal is taken in (adopted where it can be, and the journal's
+    rebuild goes on); and where the files are behind the journal (a write cut short anywhere
+    between the journal and view.json), the journal's rebuild replaces them (standing). Before
+    any of that, a deletion cut short that cannot be finished without the key is refused
+    (refuse_finishing_without_key), the forgotten records the journal's markers carry are in
+    forgotten.jsonl (take_forgotten), and a deletion cut short is finished (finish_deletions). A
+    write that drops a person the files held owes a history restart. The journal is read once and
+    that read passed on (rebuilt once, when it must be). Also returns what the journal could not
+    take of files changed outside it, for the save to say (taken_in), and the journal as read."""
+    kb = read_files(p)
+    refuse_if_behind(p, journal.written())
+    journal.repair_tail()
+    position = journal.position()
+    if not position:
+        refuse_unreadable(kb)
+        return kb, None, genesis(p, journal, kb) if kb.entities or kb.records else []
+    refuse_if_behind(p, position)
+    changes = journal.changes()
+    later = unfinished(p, changes, position)
+    refuse_finishing_without_key(p, kb, later)
+    take_forgotten(p, changes, kb)
+    changes = finish_deletions(p, journal, changes, kb, later)
+    whole = rebuild_once(changes)
+    found = standing(p, kb, position, whole)
+    if found == SAVED:
+        return kb, None, changes
+    held = kc.people(kb.entities, kb.facts)
+    left = None
+    if found == EDITED_OUTSIDE:
+        kb, left, changes = taken_in(p, journal, changes, kb, whole())
+    else:
+        kb = rebuilt(whole(), kb, writing=True)
+    kb.restart_history = kb.restart_history or bool(held - kc.people(kb.entities, kb.facts))
+    return kb, left, changes
+
+
+def trial_mint() -> Callable[[], str]:
+    """A dry run's fact ids: never stored, so minted from a count (no journal is read or made)."""
+    count = itertools.count()
+    return lambda: change_log.mint_suffix("dry-run", "", next(count))
+
+
+def writing(p: Paths, message: str, state: Path) -> Iterator[KB]:
+    """A write under the exclusive lock: the knowledge base it starts from (write_start), its fact
+    ids minted from its one journal transaction, named by its command; then, if it changed
+    anything, saved."""
+    with journal_errors(p):
+        journal = open_journal(p, replica_id(state))
+        kb, left, changes = write_start(p, journal)
+        transaction = journal.begin(SETTINGS.command)
+    if not kb.secret and not kb.key_problem:
+        kb.secret = made_key(p)
+    kb.mint = transaction.mint
+    entities = copy.deepcopy(kb.entities)
+    yield kb
+    if kb.changed:
+        save(p, kb, message, Write(journal, changes, transaction, entities, left))
+
+
+def read_shared(p: Paths, now: datetime) -> KB:
+    """The entities and facts for a reader that must never see the restricted files (the console),
+    under the shared lock, as `load` makes them."""
+    with store.locked(p, False):
+        return load(p, identifiers=False, now=now)
+
+
 @contextlib.contextmanager
 def opened(write: bool, message: str = "", dry_run: bool = False) -> Iterator[KB]:
-    """The knowledge base under its lock; saved afterwards if <write>, it changed and this is not a
-    dry run."""
+    """The knowledge base under its lock. A write (not a dry run) goes through the journal
+    (writing); a reader or a dry run writes nothing, and a dry run's fact ids are never stored."""
     p = paths()
-    with store.locked(p, write and not dry_run):
+    if write and not dry_run:
+        state = state_dir()
+        with store.locked(p, True):
+            yield from writing(p, message, state)
+        return
+    with store.locked(p, False):
         kb = load(p)
+        if dry_run:
+            kb.mint = trial_mint()
         yield kb
-        if write and not dry_run and kb.changed:
-            save(p, kb, message)
 
 
 # ---- my words ----------------------------------------------------------------------------------
@@ -607,6 +1322,62 @@ def cmd_lint(args: argparse.Namespace) -> str | tuple[str, int]:
     return ("\n".join(f"{f.kind}: {f.message}" for f in findings) or "ok: nothing to report"), code
 
 
+def journal_findings(p: Paths, kb: KB) -> list[Finding]:
+    """The journal against the files as saved (<kb>; validation.journal_findings): its damage, the
+    conflicts and waiting updates of its rebuild, an outside edit (as a write sees it: standing; a
+    write cut short is none), and, at the same position, each entity or fact that differs (unless
+    the files were edited outside the journal: the next write adopts the difference). First, each
+    file that does not parse, which the next write writes again (where no journal can:
+    refuse_unreadable, as for every command)."""
+    try:
+        journal = open_journal(p)
+        changes, position = journal.changes(), journal.position()
+    except JournalError as exc:
+        refuse_unreadable(kb)
+        return [validation.damage_finding(exc)]
+    if not position or change_log.behind(position, saved_position(p), p.view.name):
+        refuse_unreadable(kb)
+    result = kc.rebuild(changes)
+    against = validation.Against(
+        file_name=p.view.name,
+        position=position,
+        saved=saved_position(p),
+        conflicts=result.conflicts,
+        pending=result.pending,
+        has_records=bool(kb.entities or kb.records),
+        edited=standing(p, kb, position, lambda: result) == EDITED_OUTSIDE,
+        edited_detail=EDITED,
+        differences=lambda: [] if rebuilds_files(kb) else kc.differences(result, kb.entities, kb.records),
+    )
+    return [*unreadable_findings(kb), *validation.journal_findings(against)]
+
+
+def unreadable_findings(kb: KB) -> list[Finding]:
+    """Each knowledge file that does not parse, which the next write writes again."""
+    return [
+        validation.finding(
+            "unreadable",
+            f"{problem}; the next write writes it again "
+            + (
+                "as the journal's rebuild"
+                if name in REBUILT_FILES
+                else "from its other lines and the journal"
+            ),
+            name,
+        )
+        for name, problem in kb.unreadable.items()
+    ]
+
+
+def cmd_validate(args: argparse.Namespace) -> tuple[str, int]:
+    """The files as saved against the journal's rebuild, read under the shared lock: nothing is
+    written. Exit 1 on findings (a note aside); --json carries each one's severity and line."""
+    p = paths()
+    with store.locked(p, False):
+        found = journal_findings(p, read_files(p))
+    return validation.report(found, args.json, "knowledge base is valid")
+
+
 def cmd_stats(_args: argparse.Namespace) -> str:
     with opened(False) as kb:
         counts: dict[str, int] = {}
@@ -748,6 +1519,7 @@ COMMANDS: dict[str, tuple[Handler, Arguments]] = {
         cmd_lint,
         [(("--stale-days",), {"type": int}), (("--strict",), {"action": "store_true"}), *JSON],
     ),
+    "validate": (cmd_validate, JSON),
     "stats": (cmd_stats, []),
     "schema": (cmd_schema, JSON),
 }
@@ -774,7 +1546,16 @@ def int_setting(name: str, default: int) -> int:
         raise KnowledgeError(f"{name} must be a whole number, not {value!r}") from exc
 
 
-def configure_from_environment() -> None:
+def command_name(args: argparse.Namespace) -> str:
+    """What the journal records as a write's command: kg and its subcommand ("kg batch apply")."""
+    words = ["kg", args.command]
+    if args.command == "batch" and args.rest[:1] == ["apply"]:
+        words.append("apply")
+    return " ".join(words)
+
+
+def configure_from_environment(command: str = "") -> None:
+    """The settings `bosun kg` passes; <command> names the writes in the journal."""
     configure(
         Path(os.environ["BOSUN_CONFIG_DIR"]) / "knowledge",
         git=os.environ.get("BOSUN_KNOWLEDGE_GIT", "1") == "1",
@@ -785,6 +1566,7 @@ def configure_from_environment() -> None:
         state_dir=os.environ.get("BOSUN_STATE_DIR", ""),
         drain_prompt=os.environ.get("BOSUN_DRAIN_PROMPT", ""),
         caller_window=os.environ.get("BOSUN_CALLER_WINDOW", ""),
+        command=command,
     )
 
 
@@ -795,7 +1577,7 @@ def main() -> int:
         return 2
     handler: Handler = args.func
     try:
-        configure_from_environment()
+        configure_from_environment(command_name(args))
         result = handler(args)
     except (KnowledgeError, SchemaError, StoreError) as exc:
         print(f"kg: {exc}", file=sys.stderr)

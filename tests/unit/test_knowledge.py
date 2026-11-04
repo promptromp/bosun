@@ -9,6 +9,9 @@ Fictional data: acme's invoice exporter (tests/fixtures/knowledge/acme-import.js
 
 from __future__ import annotations
 
+import contextlib
+import hashlib
+import io
 import json
 import os
 import shutil
@@ -63,17 +66,18 @@ def tool_result(text: str, moment: datetime) -> dict[str, Any]:
 
 
 class KnowledgeTestCase(unittest.TestCase):
-    """A scratch knowledge directory (no git unless a test asks), a pinned clock, and a few
-    entities of the acme world."""
+    """A scratch knowledge directory (no git unless a test asks) and state folder (this Mac's
+    replica id, as the journal uses it), a pinned clock, and a few entities of the acme world."""
 
     git = False
 
     def setUp(self) -> None:
         self.tmp = Path(tempfile.mkdtemp())
         self.root = self.tmp / "knowledge"
+        self.state = self.tmp / "state"
         self.now = START
         knowledge.CLOCK = lambda: self.now
-        knowledge.configure(self.root, git=self.git)
+        knowledge.configure(self.root, git=self.git, state_dir=str(self.state))
         self.addCleanup(shutil.rmtree, self.tmp, ignore_errors=True)
         self.addCleanup(setattr, knowledge, "CLOCK", knowledge.clock)
 
@@ -101,6 +105,11 @@ class KnowledgeTestCase(unittest.TestCase):
     def fact(self, fact_id: str) -> dict[str, Any]:
         return self.kb().facts[fact_id]
 
+    def f(self, n: int) -> str:
+        """The id of the <n>th fact this test made (ids are minted, not counted: the fact log keeps
+        the order they were made in)."""
+        return list(self.kb().facts)[n - 1]
+
     def log_lines(self) -> list[str]:
         return (self.root / "facts.jsonl").read_text().splitlines()
 
@@ -121,20 +130,23 @@ class StorageTest(KnowledgeTestCase):
             "propose", "process/release", "has_step", "step/merge", "--source", "ledger:task:2026-10-01/1"
         )
         first = self.log_lines()
-        self.run_kg("confirm", "f1")
-        self.run_kg("supersede", "f1", "--close", "--note", "merged into another step")
+        self.run_kg("confirm", self.f(1))
+        self.run_kg("supersede", self.f(1), "--close", "--note", "merged into another step")
         lines = self.log_lines()
         self.assertEqual(lines[: len(first)], first)
         self.assertEqual([json.loads(line)["op"] for line in lines], ["add", "update", "update"])
-        self.assertEqual(self.fact("f1")["status"], km.CONFIRMED)
-        self.assertIsNotNone(self.fact("f1")["valid_to"])
+        self.assertEqual(self.fact(self.f(1))["status"], km.CONFIRMED)
+        self.assertIsNotNone(self.fact(self.f(1))["valid_to"])
 
-    def test_a_bad_line_is_named_not_skipped(self) -> None:
+    def test_a_bad_line_is_named_not_silently_skipped(self) -> None:
+        """The journal holds every record, so a reader reads its rebuild, and says which line."""
         self.seed()
         with (self.root / "facts.jsonl").open("a") as handle:
             handle.write("{not json\n")
-        with self.assertRaisesRegex(Exception, r"facts.jsonl:1 is not valid JSON"):
-            self.run_kg("stats")
+        said = io.StringIO()
+        with contextlib.redirect_stderr(said):
+            self.assertIn("6 entities, 0 facts", self.run_kg("stats"))
+        self.assertRegex(said.getvalue(), r"facts.jsonl:1 is not valid JSON")
 
     def test_entities_merge_aliases_and_suggest_near_matches(self) -> None:
         self.seed()
@@ -198,7 +210,7 @@ class AutoConfirmTest(KnowledgeTestCase):
             transcript,
         )
         self.assertIn("confirmed (your own words", out)
-        fact = self.fact("f1")
+        fact = self.fact(self.f(1))
         self.assertEqual(fact["authority"], "user_said")
         self.assertTrue(fact["sources"][0]["verified"])
 
@@ -230,12 +242,12 @@ class AutoConfirmTest(KnowledgeTestCase):
         self.run_kg(
             "propose", "process/release", "has_step", "step/merge", "--source", "ledger:task:2026-10-01/1"
         )
-        self.assertEqual(self.fact("f1")["status"], km.PROPOSED)
+        self.assertEqual(self.fact(self.f(1))["status"], km.PROPOSED)
         out = self.run_kg(
             "propose", "releases", "has_step", "merge to main", "--source", "report:task:2026-10-01/1"
         )
-        self.assertIn("f1 observed, confirmed (two independent trusted sources)", out)
-        self.assertEqual(len(self.fact("f1")["sources"]), 2)
+        self.assertIn(f"{self.f(1)} observed, confirmed (two independent trusted sources)", out)
+        self.assertEqual(len(self.fact(self.f(1))["sources"]), 2)
 
     def test_untrusted_text_never_confirms(self) -> None:
         self.seed()
@@ -253,25 +265,25 @@ class AutoConfirmTest(KnowledgeTestCase):
             "--source",
             "doc:wiki/release",
         )
-        self.assertEqual(self.fact("f1")["status"], km.PROPOSED)
+        self.assertEqual(self.fact(self.f(1))["status"], km.PROPOSED)
 
     def test_high_risk_and_person_facts_need_more_than_two_sources(self) -> None:
         self.seed()
         self.propose_smoke("ledger:x", "report:y")
-        self.assertEqual(self.fact("f1")["status"], km.PROPOSED)
+        self.assertEqual(self.fact(self.f(1))["status"], km.PROPOSED)
         self.run_kg(
             "propose", "person/dana", "reviews", "exporter", "--source", "ledger:x", "--source", "report:y"
         )
-        self.assertEqual(self.fact("f2")["status"], km.PROPOSED)
+        self.assertEqual(self.fact(self.f(2))["status"], km.PROPOSED)
 
     def test_a_profile_source_confirms_title_and_timezone_only(self) -> None:
         self.seed()
         self.run_kg(
             "propose", "person/dana", "timezone", "--value", "Europe/Lisbon", "--source", "profile:directory"
         )
-        self.assertEqual(self.fact("f1")["status"], km.CONFIRMED)
+        self.assertEqual(self.fact(self.f(1))["status"], km.CONFIRMED)
         self.run_kg("propose", "person/dana", "reviews", "exporter", "--source", "profile:directory")
-        self.assertEqual(self.fact("f2")["status"], km.PROPOSED)
+        self.assertEqual(self.fact(self.f(2))["status"], km.PROPOSED)
 
     def test_a_conflicting_single_value_waits_for_review(self) -> None:
         self.seed()
@@ -279,8 +291,8 @@ class AutoConfirmTest(KnowledgeTestCase):
             "propose", "person/dana", "timezone", "--value", "Europe/Lisbon", "--source", "profile:directory"
         )
         out = self.run_kg("propose", "person/dana", "timezone", "--value", "UTC", "--source", "profile:hr")
-        self.assertIn("contradicts f1", out)
-        self.assertEqual(self.fact("f2")["status"], km.PROPOSED)
+        self.assertIn(f"contradicts {self.f(1)}", out)
+        self.assertEqual(self.fact(self.f(2))["status"], km.PROPOSED)
 
     def test_refusals(self) -> None:
         self.seed()
@@ -307,7 +319,7 @@ class LifecycleTest(KnowledgeTestCase):
             "memory:ci.md",
         )
         self.later(km.PROPOSAL_DAYS + 1)
-        self.assertEqual(km.effective_status(self.fact("f1"), self.now), km.EXPIRED)
+        self.assertEqual(km.effective_status(self.fact(self.f(1)), self.now), km.EXPIRED)
         self.assertIn("Nothing to review", self.run_kg("batch"))
         out = self.run_kg(
             "propose",
@@ -318,8 +330,8 @@ class LifecycleTest(KnowledgeTestCase):
             "--source",
             "memory:ci.md",
         )
-        self.assertIn("f1 observed, proposed", out)
-        fact = self.fact("f1")
+        self.assertIn(f"{self.f(1)} observed, proposed", out)
+        fact = self.fact(self.f(1))
         self.assertEqual(fact["observations"], 2)
         self.assertEqual(km.parse_time(fact["observed_at"]), self.now)
         self.assertEqual(len(fact["sources"]), 1)  # the same source is not added twice
@@ -329,14 +341,14 @@ class LifecycleTest(KnowledgeTestCase):
         self.run_kg("propose", "repo/invoice-exporter", "caveat", "--value", "x", "--source", "memory:ci.md")
         self.later(km.PROPOSAL_DAYS + 1)
         self.assertIn("1 expired", self.run_kg("expire", "--dry-run"))
-        self.assertEqual(self.fact("f1")["status"], km.PROPOSED)
+        self.assertEqual(self.fact(self.f(1))["status"], km.PROPOSED)
         self.run_kg("expire")
-        self.assertEqual(self.fact("f1")["status"], km.EXPIRED)
+        self.assertEqual(self.fact(self.f(1))["status"], km.EXPIRED)
 
     def test_rejected_facts_stay_rejected_unless_I_say_so(self) -> None:
         self.seed()
         self.run_kg("propose", "process/release", "gated_by", "gate/smoke-tests", "--source", "memory:x")
-        self.run_kg("reject", "f1")
+        self.run_kg("reject", self.f(1))
         out = self.run_kg(
             "propose", "process/release", "gated_by", "gate/smoke-tests", "--source", "ledger:y"
         )
@@ -353,7 +365,7 @@ class LifecycleTest(KnowledgeTestCase):
             "--transcript",
             transcript,
         )
-        self.assertIn("f1 observed, confirmed", out)
+        self.assertIn(f"{self.f(1)} observed, confirmed", out)
 
 
 class TimelineTest(KnowledgeTestCase):
@@ -370,12 +382,14 @@ class TimelineTest(KnowledgeTestCase):
             "--valid-from",
             "2026-09-01",
         )
-        self.run_kg("confirm", "f1")
+        self.run_kg("confirm", self.f(1))
         self.later(10)
-        out = self.run_kg("supersede", "f1", "--value", "retired", "--source", "ledger:task:2026-10-02/3")
-        self.assertIn("f1 superseded by f2", out)
-        old, new = self.fact("f1"), self.fact("f2")
-        self.assertEqual(old["superseded_by"], "f2")
+        out = self.run_kg(
+            "supersede", self.f(1), "--value", "retired", "--source", "ledger:task:2026-10-02/3"
+        )
+        self.assertIn(f"{self.f(1)} superseded by {self.f(2)}", out)
+        old, new = self.fact(self.f(1)), self.fact(self.f(2))
+        self.assertEqual(old["superseded_by"], self.f(2))
         self.assertEqual(new["status"], km.CONFIRMED)
         now = self.run_kg("facts", "staging 2")
         self.assertIn("retired", now)
@@ -383,9 +397,9 @@ class TimelineTest(KnowledgeTestCase):
         before = self.run_kg("facts", "staging-2", "--as-of", "2026-10-25")
         self.assertIn("'active'", before)
         self.assertNotIn("retired", before)
-        self.assertIn("f1", self.run_kg("facts", "staging-2", "--closed"))
+        self.assertIn(self.f(1), self.run_kg("facts", "staging-2", "--closed"))
         with self.assertRaisesRegex(KnowledgeError, "already closed"):
-            self.run_kg("supersede", "f1", "--close")
+            self.run_kg("supersede", self.f(1), "--close")
 
     def test_confirming_a_single_valued_fact_supersedes_the_current_value(self) -> None:
         self.seed()
@@ -393,9 +407,9 @@ class TimelineTest(KnowledgeTestCase):
             "propose", "person/dana", "timezone", "--value", "Europe/Lisbon", "--source", "profile:directory"
         )
         self.run_kg("propose", "person/dana", "timezone", "--value", "UTC", "--source", "profile:hr")
-        out = self.run_kg("confirm", "f2")
-        self.assertIn("f1 superseded by f2", out)
-        self.assertEqual(self.fact("f1")["valid_to"], km.iso(self.now))
+        out = self.run_kg("confirm", self.f(2))
+        self.assertIn(f"{self.f(1)} superseded by {self.f(2)}", out)
+        self.assertEqual(self.fact(self.f(1))["valid_to"], km.iso(self.now))
 
     def test_a_correction_in_my_words_needs_the_quote(self) -> None:
         self.seed()
@@ -404,7 +418,7 @@ class TimelineTest(KnowledgeTestCase):
         with self.assertRaisesRegex(KnowledgeError, "not in anything you typed"):
             self.run_kg(
                 "supersede",
-                "f1",
+                self.f(1),
                 "--value",
                 "retired",
                 "--from-user",
@@ -420,11 +434,12 @@ class LintTest(KnowledgeTestCase):
         self.seed()
         self.run_kg("propose", "person/dana", "role", "--value", "reviewer", "--source", "ledger:a")
         self.run_kg("propose", "person/dana", "role", "--value", "release manager", "--source", "ledger:b")
-        self.run_kg("confirm", "f1", "f2")
+        self.run_kg("confirm", self.f(1), self.f(2))
         self.assertNotIn("contradiction", self.run_kg("lint"))
         (self.root / "schema.json").write_text(json.dumps({"single_valued": ["role"]}))
         out = self.run_kg("lint")
-        self.assertIn("contradiction: person/dana has 2 current values for role (f1, f2)", out)
+        both = ", ".join(sorted([self.f(1), self.f(2)]))
+        self.assertIn(f"contradiction: person/dana has 2 current values for role ({both})", out)
 
     def test_stale_orphans_collisions_and_merge_suggestions(self) -> None:
         self.seed()
@@ -443,12 +458,12 @@ class LintTest(KnowledgeTestCase):
         )
         self.later(kr.DEFAULT_STALE_DAYS + 1)
         out = self.run_kg("lint")
-        self.assertIn("stale: f1 not observed for over 180 days", out)
+        self.assertIn(f"stale: {self.f(1)} not observed for over 180 days", out)
         self.assertIn("orphan: environment/staging-2 has no facts", out)
         self.assertIn("person/robin-a, person/robin-b share the first name 'robin'", out)
         self.assertIn("merge-suggestion: repo/invoice-exporter and repo/invoice-exporters", out)
         self.run_kg("propose", "person/robin-a", "distinct_from", "person/robin-b", "--source", "user:x")
-        self.run_kg("confirm", "f2")
+        self.run_kg("confirm", self.f(2))
         self.assertNotIn("first name", self.run_kg("lint"))
 
     def test_strict_exits_1(self) -> None:
@@ -464,12 +479,13 @@ class RetentionAndForgetTest(KnowledgeTestCase):
             "propose", "person/dana", "timezone", "--value", "Europe/Lisbon", "--source", "profile:directory"
         )
         self.run_kg("propose", "repo/invoice-exporter", "caveat", "--value", "x", "--source", "memory:a")
-        self.run_kg("confirm", "f2")
+        kept = self.f(2)
+        self.run_kg("confirm", kept)
         self.later(km.RETENTION_DAYS + 1)
         self.assertIn("retention: 1 person facts unseen for 365 days", self.run_kg("lint"))
         out = self.run_kg("expire")
         self.assertIn("1 person facts past retention deleted", out)
-        self.assertEqual(sorted(self.kb().facts), ["f2"])
+        self.assertEqual(sorted(self.kb().facts), [kept])
         self.assertNotIn("Lisbon", (self.root / "facts.jsonl").read_text())
         forgotten = [json.loads(line) for line in (self.root / "forgotten.jsonl").read_text().splitlines()]
         self.assertEqual(forgotten, [{"at": km.iso(self.now), "reason": "retention", "facts": 1}])
@@ -490,11 +506,94 @@ class RetentionAndForgetTest(KnowledgeTestCase):
             self.assertNotIn("dana", text.lower(), name)
             self.assertNotIn("U0000000002", text)
         record = json.loads((self.root / "forgotten.jsonl").read_text())
-        self.assertEqual(record["hash"], km.hash_id("person/dana"))
+        secret = bytes.fromhex((self.root / "secret.key").read_text().strip())
+        self.assertEqual(record["hash"], km.hash_id("person/dana", secret))
         self.assertEqual((record["facts"], record["identifiers"]), (1, 1))
         with self.assertRaisesRegex(KnowledgeError, "deleted on request"):
             self.run_kg("add-entity", "person/dana")
         self.run_kg("add-entity", "person/dana", "--allow-forgotten")
+
+    def forgotten_records(self) -> list[dict[str, Any]]:
+        text = (self.root / "forgotten.jsonl").read_text()
+        return [json.loads(line) for line in text.splitlines()]
+
+    def test_forget_records_a_keyed_hash(self) -> None:
+        self.seed()
+        self.run_kg("forget", "person/dana")
+        record = self.forgotten_records()[0]
+        guessable = hashlib.sha256(b"person/dana").hexdigest()[: km.HASH_LENGTH]
+        self.assertNotEqual(record["hash"], guessable)
+        self.assertEqual(record["hash_kind"], "hmac-sha256")
+
+    def test_a_forgotten_person_needs_allow_forgotten_again(self) -> None:
+        self.seed()
+        self.run_kg("forget", "person/dana")
+        with self.assertRaisesRegex(KnowledgeError, "deleted on request"):
+            self.run_kg("add-entity", "person/dana")
+        self.run_kg("add-entity", "person/dana", "--allow-forgotten")
+
+    def test_an_old_forgotten_record_still_blocks_re_adding(self) -> None:
+        self.seed()
+        old = hashlib.sha256(b"person/erin").hexdigest()[: km.HASH_LENGTH]
+        (self.root / "forgotten.jsonl").write_text(
+            json.dumps({"at": km.iso(self.now), "hash": old, "reason": "request", "facts": 0}) + "\n"
+        )
+        with self.assertRaisesRegex(KnowledgeError, "deleted on request"):
+            self.run_kg("add-entity", "person/erin")
+
+    def test_a_lost_key_refuses_people_and_never_makes_a_new_one(self) -> None:
+        self.seed()
+        self.run_kg("forget", "person/dana")
+        (self.root / "secret.key").unlink()
+        with self.assertRaisesRegex(KnowledgeError, "secret.key.*restore it"):
+            self.run_kg("add-entity", "person/dana")
+        with self.assertRaisesRegex(KnowledgeError, "restore it"):
+            self.run_kg("add-entity", "person/frank")
+        self.assertFalse((self.root / "secret.key").exists())
+        self.run_kg("add-entity", "repo/other", "--name", "other")
+
+    def test_forget_is_refused_without_the_key_once_keyed_records_exist(self) -> None:
+        self.seed()
+        self.run_kg("add-entity", "person/erin")
+        self.run_kg("forget", "person/dana")
+        (self.root / "secret.key").unlink()
+        with self.assertRaisesRegex(KnowledgeError, "secret.key.*restore it"):
+            self.run_kg("forget", "person/erin")
+        self.assertIn("person/erin", self.kb().entities)
+        self.assertFalse((self.root / "secret.key").exists())
+
+    def test_a_corrupt_key_a_keyed_record_needs_is_named_and_never_overwritten(self) -> None:
+        """With no keyed record, one is kept aside and made again instead (test_knowledge_changes,
+        KeyTest)."""
+        self.run_kg("add-entity", "person/lee", "--name", "Lee Example")
+        self.run_kg("forget", "person/lee")  # a keyed record
+        key = self.root / "secret.key"
+        for garbage in ("not hex\n", "abcd\n", ""):
+            with self.subTest(garbage=garbage):
+                key.write_text(garbage)
+                with self.assertRaisesRegex(KnowledgeError, "secret.key.*restore it"):
+                    self.run_kg("add-entity", "person/dana")
+                self.run_kg("add-entity", "repo/other", "--name", "other")
+                self.assertEqual(key.read_text(), garbage)
+                self.assertEqual(list(self.root.glob("secret.key.aside-*")), [])
+
+    def test_moving_forgotten_aside_lets_the_next_write_make_a_new_key(self) -> None:
+        """With the journal's deletion markers (which hold the same records), and replica.json, as
+        the key's message says."""
+        self.seed()
+        self.run_kg("forget", "person/dana")
+        (self.root / "secret.key").unlink()
+        (self.root / "forgotten.jsonl").rename(self.root / "forgotten.jsonl.old")
+        (self.root / "journal").rename(self.root / "journal.old")
+        (self.state / "replica.json").rename(self.state / "replica.json.old")
+        self.run_kg("add-entity", "person/dana")
+        self.assertTrue((self.root / "secret.key").exists())
+
+    def test_the_key_is_private(self) -> None:
+        self.run_kg("add-entity", "person/dana")
+        key = self.root / "secret.key"
+        self.assertEqual(key.stat().st_mode & 0o777, 0o600)
+        self.assertEqual(len(bytes.fromhex(key.read_text().strip())), 32)
 
     def test_only_people_are_forgotten(self) -> None:
         self.seed()
@@ -527,7 +626,7 @@ class BatchTest(KnowledgeTestCase):
         )
         out = self.run_kg("batch")
         self.assertIn("1. Process: other facts: 5 facts [prevents rework]", out)
-        self.assertIn("   b. f3 Release process includes the step Gradual rollout (step 3)", out)
+        self.assertIn(f"   b. {self.f(3)} Release process includes the step Gradual rollout (step 3)", out)
 
     def test_entity_and_area_groups_and_the_cap(self) -> None:
         for number in range(kr.MIN_GROUP_FACTS):
@@ -581,7 +680,7 @@ class BatchTest(KnowledgeTestCase):
         self.run_kg("batch")
         out = self.run_kg("batch", "apply", "--confirm", "1,3", "--reject", "2a", "--dry-run")
         self.assertIn("(dry run)", out)
-        self.assertEqual(self.kb().facts["f3"]["status"], km.PROPOSED)
+        self.assertEqual(self.kb().facts[self.f(3)]["status"], km.PROPOSED)
         out = self.run_kg("batch", "apply", "confirm 1; reject 2a, skip 3")
         self.assertIn("rejected", out)
 
@@ -692,10 +791,10 @@ class ContextTest(KnowledgeTestCase):
 
     def test_a_pack_cites_confirmed_facts_only(self) -> None:
         self.assertNotIn("Gradual rollout", self.run_kg("context", "--for", "release"))
-        self.run_kg("confirm", "f3")  # release has_step rollout: now its neighbour counts
+        self.run_kg("confirm", self.f(3))  # release has_step rollout: now its neighbour counts
         pack = self.run_kg("context", "--for", "release")
         self.assertIn("Knowledge for Release process (process/release)", pack)
-        self.assertIn("- Release process has step Merge to main (step 1) [f1; ledger:", pack)
+        self.assertIn(f"- Release process has step Merge to main (step 1) [{self.f(1)}; ledger:", pack)
         self.assertIn("Gradual rollout actor Deploy bot", pack)  # a neighbour's fact
         self.assertNotIn("canary checks pass", pack)  # proposed: never in a pack
         self.assertNotIn("U0000000002", self.run_kg("context", "--for", "person/dana"))
@@ -723,7 +822,7 @@ class ContextTest(KnowledgeTestCase):
             self.assertLessEqual(len(pack), tokens * 4)
             self.assertIn("more: kg lookup repo/invoice-exporter", pack)
             for line in pack.splitlines()[1:-1]:
-                self.assertRegex(line, r"\[f\d+; \w+:")
+                self.assertRegex(line, r"\[f-\w{6}; \w+:")
 
 
 class QueryTest(KnowledgeTestCase):
@@ -740,11 +839,11 @@ class QueryTest(KnowledgeTestCase):
         self.assertIn("unconfirmed (2, not used in context packs)", out)
 
     def test_neighbors_and_hops(self) -> None:
-        self.run_kg("confirm", "f3")
+        self.run_kg("confirm", self.f(3))
         one = self.run_kg("neighbors", "release")
         self.assertNotIn("Deploy bot", one)
         two = self.run_kg("neighbors", "release", "--hops", "2")
-        self.assertIn("2 f5 Gradual rollout actor Deploy bot", two)
+        self.assertIn(f"2 {self.f(5)} Gradual rollout actor Deploy bot", two)
 
     def test_search_ranks_names_before_text(self) -> None:
         out = self.run_kg("search", "exporter").splitlines()
@@ -778,6 +877,25 @@ class GitHistoryTest(KnowledgeTestCase):
     def commits(self) -> list[str]:
         return self.git_out(self.root, "log", "--format=%s").splitlines()
 
+    def test_an_older_repository_gains_the_key_line_even_without_a_final_newline(self) -> None:
+        self.root.mkdir(parents=True, exist_ok=True)
+        store.ensure_repository(self.root)
+        (self.root / ".gitignore").write_text("knowledge.lock\n*.tmp\nbatch.json")
+        self.run_kg("add-entity", "person/dana")
+        lines = (self.root / ".gitignore").read_text().splitlines()
+        self.assertIn("batch.json", lines)
+        self.assertIn("secret.key", lines)
+        self.assertIn("*.torn-*", lines)  # what a write cut short left in the journal
+        self.assertEqual(len(lines), len(set(lines)))
+        self.assertNotIn("secret.key", self.git_out(self.root, "ls-files").split())
+
+    def test_the_key_is_private_and_not_in_git(self) -> None:
+        self.run_kg("add-entity", "person/dana")
+        self.assertTrue((self.root / "secret.key").exists())
+        tracked = self.git_out(self.root, "ls-files").split()
+        self.assertNotIn("secret.key", tracked)
+        self.assertIn("entities.jsonl", tracked)
+
     def test_one_commit_per_change_and_forget_restarts_history(self) -> None:
         self.seed()
         self.run_kg("propose", "person/dana", "reviews", "exporter", "--source", "ledger:a")
@@ -788,6 +906,24 @@ class GitHistoryTest(KnowledgeTestCase):
         self.run_kg("forget", "person/dana")
         self.assertEqual(self.commits(), ["kg forget: a person deleted on request"])
         self.assertNotIn("Dana", self.git_out(self.root, "log", "-p", "--all"))
+
+    def test_a_history_that_cannot_be_deleted_fails_the_forget_and_the_next_write_finishes_it(self) -> None:
+        """Fail closed: a .git that is still there after the delete names it, view.json does not
+        move, and the next write that can delete it does (the restart is still owed)."""
+        if os.geteuid() == 0:
+            self.skipTest("root deletes whatever the modes say")
+        self.seed()
+        self.run_kg("propose", "person/dana", "reviews", "exporter", "--source", "ledger:a")
+        view = (self.root / "view.json").read_bytes()
+        objects = self.root / ".git" / "objects"
+        objects.chmod(0o500)  # what is in it cannot all be deleted
+        self.addCleanup(objects.chmod, 0o700)
+        with self.assertRaisesRegex(store.StoreError, f"{self.root / '.git'}.*could not be deleted"):
+            self.run_kg("forget", "person/dana")
+        self.assertEqual((self.root / "view.json").read_bytes(), view)
+        objects.chmod(0o700)
+        self.run_kg("add-entity", "repo/other")
+        self.assertNotIn("dana", self.git_out(self.root, "log", "-p", "--all").lower())
 
     def test_git_variables_of_the_caller_never_redirect_the_history(self) -> None:
         decoy = self.tmp / "decoy"
@@ -802,6 +938,68 @@ class GitHistoryTest(KnowledgeTestCase):
         self.assertEqual((decoy / ".git" / "config").read_text(), config)
         self.assertEqual(sorted(p.name for p in decoy.iterdir()), [".git"])
 
+    def a_git_lock(self, age_seconds: float) -> Path:
+        """The index lock a git command leaves while it runs, or for good when it is cut short (a
+        power cut during a write's commit), last touched <age_seconds> ago; the seeded history and
+        a change waiting to be committed."""
+        self.seed()
+        self.run_kg("add-entity", "gate/canary-checks", "--name", "Canary checks")
+        (self.root / "notes.txt").write_text("a change the next commit records\n")
+        lock = self.root / ".git" / "index.lock"
+        lock.write_text("")
+        moment = datetime.now(UTC).timestamp() - age_seconds
+        os.utime(lock, (moment, moment))
+        return lock
+
+    def test_a_git_lock_a_cut_left_long_ago_is_removed_and_the_history_records_again(self) -> None:
+        lock = self.a_git_lock(60)
+        said = io.StringIO()
+        with contextlib.redirect_stderr(said):
+            warning = store.commit(self.root, "kg propose after a power cut")
+        self.assertEqual(warning, "")
+        self.assertFalse(lock.exists())
+        self.assertEqual(self.commits()[0], "kg propose after a power cut")
+        self.assertIn("notes.txt", self.git_out(self.root, "ls-files").split())
+        self.assertEqual(len(said.getvalue().splitlines()), 1)  # one note, naming the lock
+        self.assertIn("index.lock", said.getvalue())
+
+    def test_every_lock_git_leaves_long_ago_is_removed_with_a_note_each(self) -> None:
+        """HEAD's, a branch's and the packed refs' locks too (R119); a ref lock held now stays."""
+        git_dir = self.root / ".git"
+        old = [self.a_git_lock(60), git_dir / "HEAD.lock", git_dir / "packed-refs.lock"]
+        old.append(git_dir / f"{self.git_out(self.root, 'symbolic-ref', 'HEAD').strip()}.lock")
+        young = git_dir / "refs" / "tags" / "v1.lock"
+        young.parent.mkdir(parents=True, exist_ok=True)
+        for lock, age in [*((lock, 45) for lock in old[1:]), (young, 1)]:
+            lock.write_text("")
+            moment = datetime.now(UTC).timestamp() - age
+            os.utime(lock, (moment, moment))
+        said = io.StringIO()
+        with contextlib.redirect_stderr(said):
+            warning = store.commit(self.root, "kg propose after a power cut")
+        self.assertEqual(warning, "")
+        self.assertEqual([lock.name for lock in old if lock.exists()], [])
+        self.assertTrue(young.exists())
+        self.assertEqual(self.commits()[0], "kg propose after a power cut")
+        notes = said.getvalue().splitlines()
+        self.assertEqual(
+            sorted(notes), sorted(n for n in notes if "the knowledge history records again" in n)
+        )
+        self.assertEqual(
+            sorted(Path(n.split()[2].rstrip(",")).name for n in notes), sorted(lock.name for lock in old)
+        )
+
+    def test_a_git_lock_held_now_is_left_alone(self) -> None:
+        lock = self.a_git_lock(1)
+        before = self.commits()
+        said = io.StringIO()
+        with contextlib.redirect_stderr(said):
+            warning = store.commit(self.root, "kg propose while git runs")
+        self.assertIn("git commit failed", warning)
+        self.assertTrue(lock.exists())
+        self.assertEqual(self.commits(), before)
+        self.assertEqual(said.getvalue(), "")
+
     def test_without_git_on_the_path_it_still_works(self) -> None:
         path = os.environ["PATH"]
         os.environ["PATH"] = "/nonexistent"
@@ -813,7 +1011,12 @@ class GitHistoryTest(KnowledgeTestCase):
 class LockingTest(KnowledgeTestCase):
     def test_concurrent_writers_never_lose_or_reuse_a_fact(self) -> None:
         self.seed()
-        env = dict(os.environ, BOSUN_CONFIG_DIR=str(self.tmp), BOSUN_KNOWLEDGE_GIT="0")
+        env = dict(
+            os.environ,
+            BOSUN_CONFIG_DIR=str(self.tmp),
+            BOSUN_STATE_DIR=str(self.state),
+            BOSUN_KNOWLEDGE_GIT="0",
+        )
         script = str(ROOT / "lib" / "knowledge.py")
         writers = [
             subprocess.Popen(

@@ -590,14 +590,14 @@ Part C (Tasks 8-11) is the knowledge base and can ship as a second.
 **Files:**
 
 - Modify: `lib/knowledge_model.py` (`hash_id`, `forgotten_hashes`, `check_new_entity`, `forget`),
-  `lib/knowledge.py` (load the key), `lib/knowledge_store.py` (`Paths.secret`, `GIT_IGNORE`),
+  `lib/knowledge.py` (load the key), `lib/knowledge_store.py` (`Paths.key_file`, `GIT_IGNORE`),
   `docs/design/knowledge.md` (Privacy)
 - Test: `tests/unit/test_knowledge.py`
 
 **Interfaces:**
 
 - Produces:
-  - `Paths.secret` = `root / "secret.key"`: 32 random bytes as hex, mode 0600, created on the first
+  - `Paths.key_file` = `root / "secret.key"`: 32 random bytes as hex, mode 0600, created on the first
     write, git-ignored
   - `KB.secret: bytes` (empty when there is no key yet)
   - `hash_id(entity_id: str, secret: bytes) -> str`: HMAC-SHA256, first 16 hex characters
