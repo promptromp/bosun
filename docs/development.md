@@ -126,9 +126,10 @@ person and none of my words in the knowledge journal file that can leave the Mac
 request then leaves nothing in `local.jsonl`, in a torn file (one is made as a power loss would leave
 it) or in the git history. Two more days follow on the new bosun, then writers at once (twenty in the
 ledger, ten in the knowledge base, then ten in each, under one replica id), the clock going back an
-hour, fifty writes of each store killed like a power cut at random, a hundred approvals (they write both
-journal files) killed at points swept across their run, which it counts as torn tails, repairs and writes
-lost, and the knowledge files changed outside their journal: by hand, by `git checkout` of the data
+hour, fifty writes of each store killed like a power cut at random (the next knowledge write must also
+clear the git lock such a cut leaves, so that its history records again), a hundred approvals (they
+write both journal files) killed at points swept across their run, which it counts as torn tails,
+repairs and writes lost, and the knowledge files changed outside their journal: by hand, by `git checkout` of the data
 files and then of the whole folder, and by the release, run from a checkout of its own, forgetting a
 person that the next write must not bring back. Then a morning by launchd, the console's knowledge view
 with the restricted files unreadable, an uninstall that keeps the ledger, the knowledge folder, their

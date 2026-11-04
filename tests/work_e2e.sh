@@ -541,25 +541,45 @@ swept_cuts() {
   check "the journal's seq still runs 1..n with no gap" journal_lines seq
 }
 
+GIT_LOCK="" # the knowledge history's index lock
+
+# The git lock a cut during a write's commit leaves, as it looks a while after the crash (a minute old);
+# one is made as such a cut leaves it if none of this run's cuts fell there.
+a_stale_git_lock() {
+  if [ -e "$GIT_LOCK" ]; then
+    echo "  note  a cut left the knowledge history's git lock: .git/index.lock"
+  else
+    : >"$GIT_LOCK"
+    echo "  note  no cut left the knowledge history's git lock this time: one is made, as such a cut leaves it"
+  fi
+  touch -t "$(date -v-1M +%Y%m%d%H%M.%S)" "$GIT_LOCK"
+}
+last_commit_is() { # <subject>: the knowledge history's last commit
+  local subject
+  subject="$(git -C "$KNOWLEDGE" log -1 --format=%s)"
+  [ "$subject" = "$1" ] && return 0
+  echo "the last commit: $subject"
+  return 1
+}
+
 knowledge_power_cuts() {
   echo "power cuts in the knowledge base: fifty proposals killed after 0 to 300 ms"
+  GIT_LOCK="$KNOWLEDGE/.git/index.lock"
   cut_randomly kg-cuts 'f-[0-9a-hjkmnp-tv-z]{6}' bosun kg propose feature/csv-export caveat \
     --value "Power cut @N@: an export check" --source "ledger:$T_JSON"
   bosun kg validate 2>&1 | sed 's/^/  note  before the next write: /'
-  [ -e "$KNOWLEDGE/.git/index.lock" ] && echo "  note  a cut left the knowledge history's git lock: .git/index.lock"
+  a_stale_git_lock
   kg_says "the next write works, and repairs what it must" "added" propose feature/csv-export caveat \
     --value "After the power cuts: the export check passed" --source "ledger:$T_JSON"
   as_notes "$KG_SAID"
+  check "... it removes the stale git lock, and says so" said 0 "$KG_SAID" "the knowledge history records again"
+  check "... the knowledge history records that write" last_commit_is "kg propose feature/csv-export caveat"
+  check "... and holds the files as they are" history_records
   echo "  note  set aside: $(torn_files "$KJOURNAL") unfinished transaction(s)"
   echo "  note  $(csv_facts | jq '[.[] | (.value // "") | select(startswith("Power cut "))] | length') of 50 are in the knowledge base"
   kg_valid
   check "every id a cut write printed is in the knowledge base" all_facts_there "$OUT/kg-cuts.ids"
   check "each journal file's seq still runs 1..n with no gap" journal_lines seq "$KJOURNAL"
-  check "the knowledge history still records each write" history_records
-  if [ -e "$KNOWLEDGE/.git/index.lock" ]; then # the rest of the week needs a history: git's message says to remove it
-    rm -f "$KNOWLEDGE/.git/index.lock"
-    echo "  note  removed the git lock a cut left, by hand, as git's message says"
-  fi
 }
 history_records() { # the knowledge history holds the files as they are now
   local status
