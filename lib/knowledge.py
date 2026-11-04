@@ -153,10 +153,11 @@ def load(p: Paths) -> KB:
     kb.identifiers = store.read_jsonl(p.identifiers)
     kb.forgotten = store.read_jsonl(p.forgotten)
     kb.secret = store.read_secret(p.secret)
-    if not kb.secret and km.has_keyed_records(kb):
+    if not kb.secret and (km.has_keyed_records(kb) or p.secret.exists()):
         kb.key_problem = (
-            f"the key of the forgotten people, {p.secret}, is missing or unreadable; restore it "
-            "(a new one would stop the deleted people being recognised)"
+            f"the key of the forgotten people, {p.secret}, is missing, unreadable or not a key; "
+            "restore it (a new one would stop the deleted people being recognised; if it is gone "
+            "for good, move forgotten.jsonl aside and the next write makes a new key)"
         )
     return kb
 

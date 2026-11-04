@@ -40,7 +40,12 @@ bosun kg context --for releases         # a small cited pack of confirmed facts
 - **Maintenance:** `kg lint` reports contradictions, stale facts (`BOSUN_KNOWLEDGE_STALE_DAYS`),
   orphans, alias collisions and expired proposals; person facts not re-observed for 12 months
   are deleted by `kg expire`, and `kg forget person/<slug>` deletes a person on request (with the
-  git history, which restarts).
+  git history, which restarts). What it keeps is a keyed hash of the id, under `secret.key` in the
+  knowledge folder (made on the first write, readable only by you, not in the history, never
+  leaving this Mac). Once such records exist, `kg forget` and adding a person need that key; if
+  it is missing the command refuses and names its path, so restore it from a backup. If it is
+  gone for good, move `forgotten.jsonl` aside: the people in it can then be added again (your
+  choice, knowingly) and the next write makes a new key.
 - **Seeding:** `kg import <file>` reads entities and facts as JSON lines, records every fact as a
   proposal (`--auto-confirm` applies the rules above), is a dry run unless `--apply`, and says how
   many daily batches the review takes; `tools/survey_to_kg.py` converts a survey's markdown tables, with a mapping file kept

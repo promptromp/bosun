@@ -212,7 +212,8 @@ docs/design/console.md, section 6. Its measures:
   free-text summary.
 - **A forgotten person is kept as a keyed hash** (`secret.key`, never leaves the Mac), so nobody can
   guess who was forgotten; records from before the key (no `hash_kind`) stay guessable, since their ids
-  are unknown.
+  are unknown. If the key is lost for good, move `forgotten.jsonl` aside: those people can then be
+  added again (a choice made knowingly) and the next write makes a new key.
 - **Machine-local storage**, within the user's account, never in the repo, with the retention and
   delete-on-request rules above. The design should be confirmed with the privacy or legal team
   before any team-shared version.
@@ -309,7 +310,9 @@ a stream of questions.
   nobody; records from before the key (no `hash_kind`) stay plain sha256 and guessable, since
   their ids are unknown and cannot be re-keyed. With keyed records and no readable key, adding a
   person is refused and names the key's path: restore it, a new key would make every record
-  unmatchable.
+  unmatchable. `kg forget` is refused the same way. If the key is lost for good, move
+  `forgotten.jsonl` aside: those people can then be added again (a choice made knowingly), and the
+  next write makes a new key.
 - **Import** reads JSON or JSON lines (`{"type": "entity", ...}` and `{"type": "fact", ...}`), is
   a dry run unless `--apply`, records everything as proposals (`--auto-confirm`: apply the rules
   above), and reports refusals by reason (People whitelist, schema, unresolved) and how many

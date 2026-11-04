@@ -537,6 +537,36 @@ class RetentionAndForgetTest(KnowledgeTestCase):
         self.assertFalse((self.root / "secret.key").exists())
         self.run_kg("add-entity", "repo/other", "--name", "other")
 
+    def test_forget_is_refused_without_the_key_once_keyed_records_exist(self) -> None:
+        self.seed()
+        self.run_kg("add-entity", "person/erin")
+        self.run_kg("forget", "person/dana")
+        (self.root / "secret.key").unlink()
+        with self.assertRaisesRegex(KnowledgeError, "secret.key.*restore it"):
+            self.run_kg("forget", "person/erin")
+        self.assertIn("person/erin", self.kb().entities)
+        self.assertFalse((self.root / "secret.key").exists())
+
+    def test_a_corrupt_key_is_named_and_never_overwritten(self) -> None:
+        for garbage in ("not hex\n", "abcd\n", ""):
+            with self.subTest(garbage=garbage):
+                key = self.root / "secret.key"
+                self.root.mkdir(parents=True, exist_ok=True)
+                key.write_text(garbage)
+                with self.assertRaisesRegex(KnowledgeError, "secret.key.*restore it"):
+                    self.run_kg("add-entity", "person/dana")
+                self.run_kg("add-entity", "repo/other", "--name", "other")
+                self.assertEqual(key.read_text(), garbage)
+                key.unlink()
+
+    def test_moving_forgotten_aside_lets_the_next_write_make_a_new_key(self) -> None:
+        self.seed()
+        self.run_kg("forget", "person/dana")
+        (self.root / "secret.key").unlink()
+        (self.root / "forgotten.jsonl").rename(self.root / "forgotten.jsonl.old")
+        self.run_kg("add-entity", "person/dana")
+        self.assertTrue((self.root / "secret.key").exists())
+
     def test_the_key_is_private(self) -> None:
         self.run_kg("add-entity", "person/dana")
         key = self.root / "secret.key"
@@ -824,6 +854,16 @@ class GitHistoryTest(KnowledgeTestCase):
 
     def commits(self) -> list[str]:
         return self.git_out(self.root, "log", "--format=%s").splitlines()
+
+    def test_an_older_repository_gains_the_key_line_even_without_a_final_newline(self) -> None:
+        self.root.mkdir(parents=True, exist_ok=True)
+        store.ensure_repository(self.root)
+        (self.root / ".gitignore").write_text("knowledge.lock\n*.tmp\nbatch.json")
+        self.run_kg("add-entity", "person/dana")
+        lines = (self.root / ".gitignore").read_text().splitlines()
+        self.assertIn("batch.json", lines)
+        self.assertIn("secret.key", lines)
+        self.assertNotIn("secret.key", self.git_out(self.root, "ls-files").split())
 
     def test_the_key_is_private_and_not_in_git(self) -> None:
         self.run_kg("add-entity", "person/dana")

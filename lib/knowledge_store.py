@@ -199,9 +199,12 @@ def ensure_repository(root: Path) -> bool:
     ignore = root / ".gitignore"
     if not ignore.exists():
         ignore.write_text(GIT_IGNORE)
-    elif KEY_FILE not in ignore.read_text().splitlines():
-        with ignore.open("a") as handle:  # a repository made before the key existed
-            handle.write(f"{KEY_FILE}\n")
+    else:
+        text = ignore.read_text()
+        if KEY_FILE not in text.splitlines():  # a repository made before the key existed
+            lead = "" if text.endswith("\n") or not text else "\n"
+            with ignore.open("a") as handle:
+                handle.write(f"{lead}{KEY_FILE}\n")
     return (root / ".git").is_dir()
 
 
