@@ -48,8 +48,9 @@ A command that only reads shows restored files as they are until the next write,
 write; and person facts an older bosun's retention purge took out come back from the journal until
 the next `kg expire` purges them again. Checking out an older commit of the whole folder takes the
 journal back with it, and what came after is gone
-([Sync and sharing](design/sync.md#open-questions)). Going back to the release before the journal,
-once a fact has a minted id (`f-3k9x2a`), breaks its `kg batch` and `kg lookup`. How cut writes,
+([Sync and sharing](design/sync.md#open-questions)). Going back to the release before the journal
+is not supported: once a fact has a minted id (`f-3k9x2a`), that release's `kg batch` and `kg
+lookup` stop on it ([Sync and sharing](design/sync.md#decisions-2026-11-04)). How cut writes,
 outside edits, who is forgotten and the history restarts work, and the rare double faults accepted,
 is in [Sync and sharing](design/sync.md#knowledge-changes).
 
