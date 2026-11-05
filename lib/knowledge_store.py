@@ -45,6 +45,11 @@ KEY_ASIDE = f"{KEY_FILE}.aside-"  # <KEY_FILE>.aside-<UTC time>: a key file that
 # key (and a file kept aside that was meant to be it), and what a write cut short left in the
 # journal (a torn tail can name someone kg forget deletes; forget deletes the local ones).
 GIT_IGNORE = f"knowledge.lock\n*.tmp\nbatch.json\n{KEY_FILE}\n{KEY_ASIDE}*\n*{TORN}*\n"
+# Also: git's housekeeping after a commit (a repack, once it counts enough loose objects) runs
+# inside the commit, not detached, so that no git process is still writing in the history when a
+# command returns: a write that deletes the history (kg forget) would race it, and a repack could
+# make .git again after the delete, a folder that is no repository (maintenance.autoDetach; and
+# gc.autoDetach, its fallback and older gits' setting).
 GIT_IDENTITY = (
     "-c",
     "user.name=bosun",
@@ -52,6 +57,10 @@ GIT_IDENTITY = (
     "user.email=bosun@localhost",
     "-c",
     "commit.gpgsign=false",
+    "-c",
+    "maintenance.autoDetach=false",
+    "-c",
+    "gc.autoDetach=false",
 )
 GIT_TIMEOUT_SECONDS = 30
 # A git lock older than this, found under the knowledge base's exclusive lock, was left by a git
@@ -321,7 +330,9 @@ def commit(root: Path, message: str) -> str:
     if not ensure_repository(root):
         return f"warning: could not create a git repository in {root}; no history recorded"
     clear_stale_git_locks(root)
-    git(root, "add", "-A")
+    added = git(root, "add", "-A")
+    if added.returncode != 0:  # a .git that is no repository, a lock held now: never silent
+        return f"warning: git commit failed: {added.stderr.strip()}"
     if not git(root, "status", "--porcelain").stdout.strip():
         return ""
     result = git(root, "commit", "-q", "--no-verify", "-m", message)

@@ -19,6 +19,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+import zlib
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
@@ -924,6 +925,47 @@ class GitHistoryTest(KnowledgeTestCase):
         objects.chmod(0o700)
         self.run_kg("add-entity", "repo/other")
         self.assertNotIn("dana", self.git_out(self.root, "log", "-p", "--all").lower())
+
+    def loose_in_17(self, n: int) -> Path:
+        """A loose object (a blob) whose id starts with 17, written in the history as git would.
+        git estimates the loose objects from that one folder, and two there count as more than
+        its threshold: the next commit's housekeeping repacks."""
+        found = 0
+        for i in range(100_000):
+            body = f"planted {i}\n".encode()
+            raw = b"blob %d\0" % len(body) + body
+            oid = hashlib.sha1(raw).hexdigest()  # noqa: S324 - git's object id, not a secret
+            if oid.startswith("17"):
+                if found == n:
+                    path = self.root / ".git" / "objects" / oid[:2] / oid[2:]
+                    path.parent.mkdir(exist_ok=True)
+                    path.write_bytes(zlib.compress(raw))
+                    return path
+                found += 1
+        raise AssertionError("no object id starting with 17")
+
+    def test_git_housekeeping_is_done_when_the_write_returns(self) -> None:
+        """git's housekeeping after a commit (a repack, when it counts enough loose objects) runs
+        inside the commit, not detached: a repack still running after the write would write in a
+        history the next write deletes (kg forget), and could make .git again after the delete,
+        a folder that is no repository, where every later commit records nothing."""
+        self.seed()
+        planted = [self.loose_in_17(n) for n in range(2)]
+        self.run_kg("add-entity", "repo/other")
+        self.assertEqual([path.name for path in planted if path.exists()], [])  # packed already
+
+    def test_a_history_folder_that_is_no_repository_says_so_at_each_write(self) -> None:
+        """What a repack still running left of a history kg forget deleted (its refs and pack
+        lists, made again): a .git that is no repository. A write warns, not records nothing."""
+        self.seed()
+        shutil.rmtree(self.root / ".git")
+        (self.root / ".git" / "objects" / "info").mkdir(parents=True)
+        (self.root / ".git" / "objects" / "info" / "packs").write_text("P pack-0.pack\n")
+        (self.root / ".git" / "info").mkdir()
+        (self.root / ".git" / "info" / "refs").write_text("")
+        self.run_kg("add-entity", "repo/other")
+        [warning] = knowledge.SETTINGS.warnings
+        self.assertRegex(warning, r"^warning: git commit failed: .*not a git repository")
 
     def test_git_variables_of_the_caller_never_redirect_the_history(self) -> None:
         decoy = self.tmp / "decoy"
