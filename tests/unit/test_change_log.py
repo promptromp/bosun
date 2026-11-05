@@ -173,14 +173,29 @@ class TestStamp(unittest.TestCase):
         self.assertEqual(change_log.behind({"local": 4}, {"local": 3}, "view.json"), [])
 
     def test_a_reader_rebuilds_only_where_the_files_are_behind_the_journal(self) -> None:
-        reader = change_log.reader_rebuilds
-        self.assertEqual(reader({}, {"local": 3}, "view.json"), (False, ""))  # no journal yet
-        self.assertEqual(reader({"local": 3}, {"local": 3}, "view.json"), (False, ""))
-        self.assertEqual(reader({"local": 4}, {"local": 3}, "view.json"), (True, ""))  # a write cut short
+        def reader(position: dict[str, int], saved: dict[str, int]) -> tuple[bool, str]:
+            return change_log.reader_rebuilds(position, saved, "view.json", written=position)
+
+        self.assertEqual(reader({}, {"local": 3}), (False, ""))  # no journal yet, or moved aside
+        self.assertEqual(reader({"local": 3}, {"local": 3}), (False, ""))
+        self.assertEqual(reader({"local": 4}, {"local": 3}), (True, ""))  # a write cut short
         self.assertEqual(
-            reader({"local": 2}, {"local": 3}, "view.json"),
+            reader({"local": 2}, {"local": 3}),
             (False, "local.jsonl ends at seq 2, view.json reflects seq 3"),  # never rebuilt from
         )
+
+    def test_a_journal_that_lost_a_file_is_behind_even_with_no_whole_transaction_left(self) -> None:
+        """The replica's file lost, and with it the private lines of every transaction local.jsonl
+        holds: no whole transaction is left (no position), but its lines are, so the journal is
+        behind the files, as a writer judges it, not empty; and it names the file that was lost."""
+        found = change_log.reader_rebuilds({}, {"r": 5, "local": 2}, "view.json", written={"local": 2})
+        self.assertEqual(found, (False, "r.jsonl ends at seq 0, view.json reflects seq 5"))
+
+    def test_a_torn_tail_is_left_out_and_nothing_is_rebuilt(self) -> None:
+        """Lines past the files' position whose transaction is unfinished (a write cut short):
+        written, but not whole, so the journal is neither behind nor ahead."""
+        found = change_log.reader_rebuilds({"local": 3}, {"local": 3}, "view.json", written={"local": 5})
+        self.assertEqual(found, (False, ""))
 
 
 class TestBoundary(unittest.TestCase):

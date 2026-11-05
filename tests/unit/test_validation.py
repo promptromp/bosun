@@ -27,6 +27,7 @@ def against(**given: object) -> Against:
         "file_name": "view.json",
         "position": {"local": 3},
         "saved": {"local": 3},
+        "written": {"local": 3},
         "conflicts": [],
         "pending": [],
         "has_records": True,
@@ -80,7 +81,7 @@ class FindingTest(unittest.TestCase):
                 "edited: journal: changed by hand",
             ),
             (
-                validation.position_finding({"local": 4}, {"local": 3}, "view.json"),
+                validation.position_finding({"local": 4}, {"local": 3}, "view.json", written={"local": 4}),
                 (
                     "position: journal: the journal is ahead of view.json (at {'local': 4}): the next "
                     "write applies it"
@@ -158,11 +159,22 @@ class JournalFindingsTest(unittest.TestCase):
         self.assertEqual(self.kinds(edited=True), ["edited"])
 
     def test_a_position_that_does_not_match_says_which_way(self) -> None:
-        ahead = validation.journal_findings(against(position={"local": 4}))
-        behind = validation.journal_findings(against(position={"local": 2}))
+        ahead = validation.journal_findings(against(position={"local": 4}, written={"local": 4}))
+        behind = validation.journal_findings(against(position={"local": 2}, written={"local": 2}))
         self.assertEqual([f["kind"] for f in ahead + behind], ["position", "position"])
         self.assertIn("ahead of view.json", ahead[0]["detail"])
         self.assertIn("local.jsonl ends at seq 2, view.json reflects seq 3", behind[0]["detail"])
+
+    def test_a_journal_that_lost_a_file_names_only_that_file(self) -> None:
+        """The replica's file lost, and with it the private lines of every transaction local.jsonl
+        holds: no whole transaction is left, but local.jsonl lost nothing, so only the lost file is
+        named, as readers and writers name it."""
+        [found] = validation.journal_findings(
+            against(position={}, saved={"r": 5, "local": 2}, written={"local": 2})
+        )
+        self.assertEqual(found["kind"], "position")
+        self.assertIn("(r.jsonl ends at seq 0, view.json reflects seq 5)", found["detail"])
+        self.assertNotIn("local.jsonl", found["detail"])
 
     def test_conflicts_and_waiting_updates_come_first(self) -> None:
         conflict = Conflict("0123456789abcdef", "f-aaaaaa", "field", "status")

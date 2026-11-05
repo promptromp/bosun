@@ -25,6 +25,7 @@ import json
 import os
 import secrets
 import shutil
+import signal
 import subprocess
 import sys
 import time
@@ -45,6 +46,14 @@ KEY_ASIDE = f"{KEY_FILE}.aside-"  # <KEY_FILE>.aside-<UTC time>: a key file that
 # key (and a file kept aside that was meant to be it), and what a write cut short left in the
 # journal (a torn tail can name someone kg forget deletes; forget deletes the local ones).
 GIT_IGNORE = f"knowledge.lock\n*.tmp\nbatch.json\n{KEY_FILE}\n{KEY_ASIDE}*\n*{TORN}*\n"
+# Also: no git process stays in the history after a command returns, as a write that deletes it
+# (kg forget) would race it, and a repack could make .git again after the delete, a folder that is
+# no repository. So git's housekeeping after a commit (a repack, once it counts enough loose
+# objects) runs inside the commit, not detached (maintenance.autoDetach; and gc.autoDetach, its
+# fallback and older gits' setting); a core.fsmonitor=true in my own git config starts no
+# file-watching daemon here; and no hook runs (core.hooksPath, which also covers a template's
+# hooks; --no-verify skips only two): a hook could leave a process behind, and it sees the diffs,
+# which name the people a forget deletes. The history is made without a template (init).
 GIT_IDENTITY = (
     "-c",
     "user.name=bosun",
@@ -52,8 +61,20 @@ GIT_IDENTITY = (
     "user.email=bosun@localhost",
     "-c",
     "commit.gpgsign=false",
+    "-c",
+    "maintenance.autoDetach=false",
+    "-c",
+    "gc.autoDetach=false",
+    "-c",
+    "core.fsmonitor=false",
+    "-c",
+    f"core.hooksPath={os.devnull}",
 )
 GIT_TIMEOUT_SECONDS = 30
+# How long the processes of a git command killed on its timeout may take to be gone.
+GIT_TREE_GONE_SECONDS = 5
+# What every git repository has in its folder; a .git without one of them is no repository.
+GIT_ESSENTIALS = ("HEAD", "objects", "refs")
 # A git lock older than this, found under the knowledge base's exclusive lock, was left by a git
 # command cut short (git holds one for one command, and bosun commits only under that lock).
 STALE_GIT_LOCK_SECONDS = 30
@@ -61,6 +82,14 @@ STALE_GIT_LOCK_SECONDS = 30
 
 class StoreError(Exception):
     pass
+
+
+class HistoryProblem(Exception):
+    """Why a commit to the history could not be made, said as a warning: the write is saved."""
+
+
+class GitTimeout(HistoryProblem):
+    """A git command that ran past GIT_TIMEOUT_SECONDS, killed with every process it started."""
 
 
 @dataclass(frozen=True)
@@ -253,14 +282,111 @@ def git_environment(root: Path, *, pinned: bool = True) -> dict[str, str]:
 
 
 def git(root: Path, *args: str, pinned: bool = True) -> subprocess.CompletedProcess[str]:
-    return subprocess.run(
-        ["git", *GIT_IDENTITY, "-C", str(root), *args],
-        capture_output=True,
+    """git in <root>, in the command's own process group, so that a Ctrl-C, a closed terminal or a
+    stop sent to the command reaches git too. Past GIT_TIMEOUT_SECONDS, git and every process it
+    started are killed (kill_tree; GitTimeout): the housekeeping a commit runs (maintenance, repack,
+    pack-objects) is its children, which killing git alone would leave writing in .git."""
+    command = ["git", *GIT_IDENTITY, "-C", str(root), *args]
+    with subprocess.Popen(
+        command,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
         text=True,
-        check=False,
-        timeout=GIT_TIMEOUT_SECONDS,
         env=git_environment(root, pinned=pinned),
+    ) as process:
+        try:
+            out, err = process.communicate(timeout=GIT_TIMEOUT_SECONDS)
+        except subprocess.TimeoutExpired:
+            said = kill_tree(process)
+            raise GitTimeout(
+                f"git {args[0]} ran past {GIT_TIMEOUT_SECONDS} s and was stopped{said}"
+            ) from None
+    return subprocess.CompletedProcess(command, process.returncode, out, err)
+
+
+def children_of() -> dict[int, list[int]]:
+    """Each process's children now, from `ps -A -o pid=,ppid=` read as bytes: no command lines,
+    as one that is not UTF-8 anywhere on the Mac must not stop the listing. A ps that fails or
+    lists nothing is an OSError."""
+    done = subprocess.run(["ps", "-A", "-o", "pid=,ppid="], capture_output=True, check=False)
+    children: dict[int, list[int]] = {}
+    for line in done.stdout.splitlines():
+        match line.split():
+            case [pid, ppid] if pid.isdigit() and ppid.isdigit():
+                children.setdefault(int(ppid), []).append(int(pid))
+    if done.returncode != 0 or not children:
+        raise OSError(f"ps exited {done.returncode}: {done.stderr.decode(errors='replace').strip()}")
+    return children
+
+
+def process_tree(pid: int) -> tuple[set[int], str]:
+    """<pid> and every process descending from it now, and ""; where they cannot be listed, just
+    <pid> and why, to be said. (A descendant adopted by launchd before the first listing, a daemon
+    detaching, escapes this walk; the store's git starts none: no detached housekeeping, no hooks,
+    no fsmonitor.)"""
+    try:
+        children = children_of()
+    except Exception as exc:  # noqa: BLE001 - whatever stops the listing, git itself is still stopped
+        return {pid}, f"the processes it started could not be listed ({exc}), so only git itself was stopped"
+    found: set[int] = set()
+    todo = [pid]
+    while todo:
+        current = todo.pop()
+        if current not in found:
+            found.add(current)
+            todo += children.get(current, [])
+    return found, ""
+
+
+def signal_all(pids: set[int], sig: signal.Signals) -> None:
+    for pid in pids:
+        with contextlib.suppress(OSError):  # gone (ESRCH), or no longer one we may signal (EPERM)
+            os.kill(pid, sig)
+
+
+def stop_tree(leader: int, tree: set[int]) -> str:
+    """Stop (SIGSTOP) <leader> and every process descending from it, adding each to <tree>, until
+    a listing finds no new one, so that none starts another unseen or is adopted by launchd before
+    it is listed. Returns why they could not be listed, or ""."""
+    problem = ""
+    while True:
+        found, why = process_tree(leader)
+        problem = problem or why
+        new = found - tree
+        if not new:
+            return problem
+        tree |= new
+        signal_all(new, signal.SIGSTOP)
+
+
+def kill_tree(leader: subprocess.Popen[str]) -> str:
+    """Kill <leader> and every process descending from it: all stopped first (stop_tree), then
+    killed, whatever happens in between (a Ctrl-C would otherwise leave them stopped for good), the
+    leader reaped, and the others waited for (at most GIT_TREE_GONE_SECONDS; a process gone or no
+    longer ours counts as gone). Returns what the warning says of it ("" when all went)."""
+    tree: set[int] = set()
+    try:
+        problem = stop_tree(leader.pid, tree)
+    finally:
+        signal_all(tree | {leader.pid}, signal.SIGKILL)
+    leader.wait()
+    left = tree - {leader.pid}
+    deadline = time.monotonic() + GIT_TREE_GONE_SECONDS
+    while left and time.monotonic() < deadline:
+        left = {pid for pid in left if alive(pid)}
+        time.sleep(0.01)
+    still = (
+        f"{len(left)} process(es) it started were still there {GIT_TREE_GONE_SECONDS} s later" if left else ""
     )
+    return "".join(f"; {said}" for said in (problem, still) if said)
+
+
+def alive(pid: int) -> bool:
+    try:
+        os.kill(pid, 0)
+    except OSError:  # ESRCH: gone; EPERM: a zombie being reaped, or the pid someone else's now
+        return False
+    return True
 
 
 def git_available() -> bool:
@@ -268,9 +394,43 @@ def git_available() -> bool:
 
 
 def ensure_repository(root: Path) -> bool:
-    """Whether <root> has its own repository (created if missing)."""
-    if not (root / ".git").is_dir():
-        git(root, "init", "-q", str(root), pinned=False)
+    """Whether <root> has its own repository: made if missing, without a template (which could
+    bring hooks and files from my git config), and made again where .git is debris
+    (drop_broken_history). The caller holds the exclusive lock."""
+    history = root / ".git"
+    drop_broken_history(root)
+    if not history.is_dir():
+        git(root, "init", "-q", "--template=", str(root), pinned=False)
+    ensure_ignored(root)
+    return history.is_dir()
+
+
+def drop_broken_history(root: Path) -> None:
+    """A .git that is debris, not a repository: without one of what every repository has
+    (GIT_ESSENTIALS; what a process an outside writer left made again after a history restart
+    deleted it), deleted, with one line on stderr, so the next commit starts the history again. A
+    .git that has them all stays as it is, whatever git says of it (a typo in my git config, a
+    newer git's repository format, which this git does not know): a commit that fails then warns.
+    Deleting goes through drop_history, which fails closed: what cannot be deleted is a
+    HistoryProblem."""
+    history = root / ".git"
+    if not os.path.lexists(history) or all(os.path.lexists(history / name) for name in GIT_ESSENTIALS):
+        return
+    try:
+        drop_history(root)
+    except StoreError:
+        raise HistoryProblem(
+            f"{history} is no git repository and could not be deleted whole; the knowledge history "
+            f"records nothing until it is gone (rm -rf {history})"
+        ) from None
+    print(
+        f"kg: {history} was no git repository; deleted it, and the knowledge history starts again",
+        file=sys.stderr,
+    )
+
+
+def ensure_ignored(root: Path) -> None:
+    """.gitignore with every line of GIT_IGNORE (one made before some of them gains them)."""
     ignore = root / ".gitignore"
     if not ignore.exists():
         ignore.write_text(GIT_IGNORE)
@@ -282,7 +442,6 @@ def ensure_repository(root: Path) -> bool:
             lead = "" if text.endswith("\n") or not text else "\n"
             with ignore.open("a") as handle:
                 handle.write(lead + "".join(f"{line}\n" for line in wanted))
-    return (root / ".git").is_dir()
 
 
 def git_locks(git_dir: Path) -> list[Path]:
@@ -315,14 +474,27 @@ def clear_stale_git_locks(root: Path) -> None:
 def commit(root: Path, message: str) -> str:
     """Commit every change in the knowledge directory, under the knowledge base's exclusive lock
     (clear_stale_git_locks relies on it); returns a warning, or "" (also when git is not installed:
-    history is optional)."""
+    history is optional). It never raises: it runs after the write is saved (view.json), so a git
+    that fails or runs past its time (GitTimeout), a .git that cannot be made again
+    (HistoryProblem) or a file it cannot write is that warning."""
     if not git_available():
         return ""
+    try:
+        return record(root, message)
+    except (HistoryProblem, OSError) as exc:
+        return f"warning: git commit failed: {exc}"
+
+
+def record(root: Path, message: str) -> str:
+    """commit's steps; a git that fails is never silent (a lock held now, a .git gone wrong)."""
     if not ensure_repository(root):
         return f"warning: could not create a git repository in {root}; no history recorded"
     clear_stale_git_locks(root)
-    git(root, "add", "-A")
-    if not git(root, "status", "--porcelain").stdout.strip():
+    added = git(root, "add", "-A")
+    status = git(root, "status", "--porcelain") if added.returncode == 0 else added
+    if status.returncode != 0:
+        return f"warning: git commit failed: {status.stderr.strip()}"
+    if not status.stdout.strip():
         return ""
     result = git(root, "commit", "-q", "--no-verify", "-m", message)
     return "" if result.returncode == 0 else f"warning: git commit failed: {result.stderr.strip()}"

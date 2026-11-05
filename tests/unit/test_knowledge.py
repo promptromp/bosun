@@ -14,11 +14,15 @@ import hashlib
 import io
 import json
 import os
+import re
 import shutil
+import signal
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
+import zlib
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
@@ -924,6 +928,286 @@ class GitHistoryTest(KnowledgeTestCase):
         objects.chmod(0o700)
         self.run_kg("add-entity", "repo/other")
         self.assertNotIn("dana", self.git_out(self.root, "log", "-p", "--all").lower())
+
+    def loose_in_17(self, n: int) -> Path:
+        """A loose object (a blob) whose id starts with 17, written in the history as git would.
+        git estimates the loose objects from that one folder, and two there count as more than
+        its threshold: the next commit's housekeeping repacks."""
+        found = 0
+        for i in range(100_000):
+            body = f"planted {i}\n".encode()
+            raw = b"blob %d\0" % len(body) + body
+            oid = hashlib.sha1(raw).hexdigest()  # noqa: S324 - git's object id, not a secret
+            if oid.startswith("17"):
+                if found == n:
+                    path = self.root / ".git" / "objects" / oid[:2] / oid[2:]
+                    path.parent.mkdir(exist_ok=True)
+                    path.write_bytes(zlib.compress(raw))
+                    return path
+                found += 1
+        raise AssertionError("no object id starting with 17")
+
+    def test_git_housekeeping_is_done_when_the_write_returns(self) -> None:
+        """git's housekeeping after a commit (a repack, when it counts enough loose objects) runs
+        inside the commit, not detached: a repack still running after the write would write in a
+        history the next write deletes (kg forget), and could make .git again after the delete,
+        a folder that is no repository. Pinned in the history's own config, whatever the git and
+        my config: the housekeeping is a gc (a strategy name an older git does not know it
+        ignores), and two loose objects in objects/17 put git's estimate over gc.auto=1."""
+        self.seed()
+        pinned = {"maintenance.auto": "true", "maintenance.strategy": "gc", "maintenance.gc.enabled": "true"}
+        for key, value in {**pinned, "gc.auto": "1"}.items():
+            store.git(self.root, "config", key, value)
+        packs = self.root / ".git" / "objects" / "pack"
+        before = set(packs.glob("*.pack"))
+        for n in range(2):
+            self.loose_in_17(n)
+        self.run_kg("add-entity", "repo/other")
+        self.assertTrue(set(packs.glob("*.pack")) - before)  # the repack is done already
+
+    def broken_history(self) -> None:
+        """What a process left in a history a restart deleted (its refs and pack lists, made
+        again): a .git that is no repository."""
+        shutil.rmtree(self.root / ".git")
+        (self.root / ".git" / "objects" / "info").mkdir(parents=True)
+        (self.root / ".git" / "objects" / "info" / "packs").write_text("P pack-0.pack\n")
+        (self.root / ".git" / "info").mkdir()
+        (self.root / ".git" / "info" / "refs").write_text("")
+        (self.root / ".git" / "left-by-an-outside-writer").write_text("debris\n")  # no git makes it
+
+    def test_a_history_folder_that_is_no_repository_is_made_again(self) -> None:
+        """The next write deletes it and starts the history again, saying so in one line, and the
+        writes after it record as ever."""
+        self.seed()
+        self.broken_history()
+        said = io.StringIO()
+        with contextlib.redirect_stderr(said):
+            for entity in ("repo/other", "repo/third", "repo/fourth"):
+                self.run_kg("add-entity", entity)
+        [line] = said.getvalue().splitlines()
+        self.assertIn(f"{self.root / '.git'} was no git repository; deleted it", line)
+        self.assertEqual(knowledge.SETTINGS.warnings, [])
+        self.assertEqual(
+            self.commits(), [f"kg add-entity {e}" for e in ("repo/fourth", "repo/third", "repo/other")]
+        )
+        self.assertFalse((self.root / ".git" / "left-by-an-outside-writer").exists())  # the debris went
+
+    def test_a_history_git_cannot_read_now_is_kept(self) -> None:
+        """A .git with what every repository has is never deleted, whatever git says of it: a typo
+        in my git config, or a newer git's repository format, unknown here. The commit warns, and the
+        history is all there once git reads it again."""
+        self.seed()
+        before = self.commits()
+        home = self.tmp / "home"
+        home.mkdir()
+        (home / ".gitconfig").write_text("[user]\n\tname = me\n[alias\n")  # a section never closed
+        with mock.patch.dict(os.environ, {"HOME": str(home), "XDG_CONFIG_HOME": str(home / ".config")}):
+            self.run_kg("add-entity", "repo/other")
+        config = self.root / ".git" / "config"
+        store.git(self.root, "config", "core.repositoryformatversion", "1")
+        store.git(self.root, "config", "extensions.someNewerFeature", "true")
+        self.run_kg("add-entity", "repo/third")
+        self.assertEqual(len(knowledge.SETTINGS.warnings), 2)
+        for warning in knowledge.SETTINGS.warnings:
+            self.assertTrue(warning.startswith("warning: git commit failed: "), warning)
+        self.assertEqual(self.commits(), [])  # this git cannot read it now; it is there
+        text = re.sub(r"\[extensions\][^\[]*", "", config.read_text())
+        config.write_text(text.replace("repositoryformatversion = 1", "repositoryformatversion = 0"))
+        self.assertEqual(self.commits(), before)
+        self.run_kg("add-entity", "repo/fourth")
+        self.assertEqual(self.commits(), ["kg add-entity repo/fourth", *before])
+
+    def test_a_broken_history_that_cannot_be_deleted_warns_and_the_write_is_saved(self) -> None:
+        """After the write is saved (view.json), the history's step never fails the command."""
+        if os.geteuid() == 0:
+            self.skipTest("root deletes whatever the modes say")
+        self.seed()
+        self.broken_history()
+        locked = self.root / ".git" / "objects" / "info"
+        locked.chmod(0o500)
+        self.addCleanup(locked.chmod, 0o700)
+        self.run_kg("add-entity", "repo/other")
+        self.assertIn("repo/other", self.kb().entities)
+        [warning] = knowledge.SETTINGS.warnings
+        self.assertIn("is no git repository and could not be deleted whole", warning)
+
+    def test_a_git_that_fails_is_never_silent(self) -> None:
+        """A git status that fails (here: a .git made again between the check and the commit) is a
+        warning, as a failing add or commit is."""
+        self.seed()
+        real = store.git
+
+        def status_fails(root: Path, *args: str, pinned: bool = True) -> Any:
+            found = real(root, *args, pinned=pinned)
+            return found if args[0] != "status" else subprocess.CompletedProcess(args, 128, "", "fatal: x")
+
+        with mock.patch.object(store, "git", status_fails):
+            self.assertEqual(store.commit(self.root, "kg add-entity"), "warning: git commit failed: fatal: x")
+
+    def fake_git(self, script: str) -> dict[str, str]:
+        """A `git` that runs <script> (sh), first on the PATH: the environment to use it with."""
+        fake = self.tmp / "bin"
+        fake.mkdir(exist_ok=True)
+        (fake / "git").write_text(f"#!/bin/sh\n{script}\n")
+        (fake / "git").chmod(0o755)
+        return {"PATH": f"{fake}{os.pathsep}{os.environ['PATH']}"}
+
+    def processes_naming(self, token: str) -> list[str]:
+        listed = subprocess.run(["ps", "-A", "-o", "command="], capture_output=True, check=True)
+        return [line for line in listed.stdout.decode(errors="replace").splitlines() if token in line]
+
+    def test_a_git_past_its_time_is_stopped_with_all_it_started(self) -> None:
+        """git's housekeeping is its children, theirs too: on a timeout git and every process
+        under it are killed and waited for, so none stays writing in the history; the write is
+        saved, kg warns and exits 0."""
+        self.seed()
+        token = f"kg-test-tree-{os.getpid()}-{time.monotonic_ns()}"
+        mark = self.tmp / "written-after-the-timeout"
+        tree = f"sh -c '(sleep 1; : > \"{mark}\") & sleep 30' {token} &\nsleep 30"  # a child, a grandchild
+        environment = {
+            **self.fake_git(tree),
+            "BOSUN_CONFIG_DIR": str(self.tmp),
+            "BOSUN_STATE_DIR": str(self.state),
+        }
+        said = io.StringIO()
+        with (
+            mock.patch.dict(os.environ, environment),
+            mock.patch.object(sys, "argv", ["kg", "add-entity", "repo/other"]),
+            mock.patch.object(store, "GIT_TIMEOUT_SECONDS", 0.5),
+            contextlib.redirect_stdout(io.StringIO()),
+            contextlib.redirect_stderr(said),
+        ):
+            self.assertEqual(knowledge.main(), 0)
+        self.assertEqual(self.processes_naming(token), [])
+        self.assertIn("warning: git commit failed: git add ran past 0.5 s and was stopped\n", said.getvalue())
+        self.assertIn("repo/other", self.kb().entities)
+        time.sleep(1.5)
+        self.assertFalse(mark.exists())  # the grandchild went with git
+
+    def test_processes_still_there_after_the_kill_are_said(self) -> None:
+        """One of git's processes that would not go (here: one of ours, found in the tree and taken
+        for alive whatever happens to it) is counted in the warning."""
+        self.root.mkdir(parents=True)
+        stays = subprocess.Popen(["sleep", "30"])
+        self.addCleanup(stays.wait)
+        self.addCleanup(stays.kill)
+        listed = store.stop_tree
+
+        def with_it(leader: int, tree: set[int]) -> str:
+            tree.add(stays.pid)
+            return listed(leader, tree)
+
+        with (
+            mock.patch.dict(os.environ, self.fake_git("sleep 30")),
+            mock.patch.object(store, "GIT_TIMEOUT_SECONDS", 0.2),
+            mock.patch.object(store, "GIT_TREE_GONE_SECONDS", 0.1),
+            mock.patch.object(store, "stop_tree", with_it),
+            mock.patch.object(store, "alive", lambda pid: pid == stays.pid),
+        ):
+            warning = store.commit(self.root, "kg add-entity")
+        self.assertEqual(
+            warning,
+            "warning: git commit failed: git init ran past 0.2 s and was stopped; 1 process(es) it "
+            "started were still there 0.1 s later",
+        )
+
+    def test_a_command_line_that_is_not_utf8_never_stops_the_kill(self) -> None:
+        """Another process on the Mac with bytes in its command line that are not UTF-8: the
+        listing of what git started reads only pids, so all of it is still killed, with a warning."""
+        other = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(30)", b"not utf-8: \xff"])
+        self.addCleanup(other.wait)
+        self.addCleanup(other.kill)
+        token = f"kg-test-tree-{os.getpid()}-{time.monotonic_ns()}"
+        self.root.mkdir(parents=True)
+        with (
+            mock.patch.dict(os.environ, self.fake_git(f"sh -c 'sleep 30' {token} &\nsleep 30")),
+            mock.patch.object(store, "GIT_TIMEOUT_SECONDS", 0.3),
+        ):
+            warning = store.commit(self.root, "kg add-entity")
+        self.assertEqual(warning, "warning: git commit failed: git init ran past 0.3 s and was stopped")
+        self.assertEqual(self.processes_naming(token), [])
+
+    def test_a_ps_that_fails_is_said_and_git_is_still_stopped(self) -> None:
+        self.root.mkdir(parents=True)
+        environment = self.fake_git("sleep 30")
+        (self.tmp / "bin" / "ps").write_text("#!/bin/sh\necho 'ps: not here' >&2\nexit 1\n")
+        (self.tmp / "bin" / "ps").chmod(0o755)
+        with mock.patch.dict(os.environ, environment), mock.patch.object(store, "GIT_TIMEOUT_SECONDS", 0.2):
+            started = time.monotonic()
+            warning = store.commit(self.root, "kg add-entity")
+            self.assertLess(time.monotonic() - started, 3)
+        self.assertEqual(
+            warning,
+            "warning: git commit failed: git init ran past 0.2 s and was stopped; the processes it "
+            "started could not be listed (ps exited 1: ps: not here), so only git itself was stopped",
+        )
+
+    def test_a_ctrl_c_while_git_is_being_stopped_still_kills_what_was_stopped(self) -> None:
+        """Else what was stopped so far would stay stopped for good."""
+        leader = subprocess.Popen(["sleep", "30"], text=True)
+        stopped = subprocess.Popen(["sleep", "30"])
+        for process in (leader, stopped):
+            self.addCleanup(process.wait)
+            self.addCleanup(process.kill)
+
+        def interrupted(pid: int, tree: set[int]) -> str:
+            tree.add(stopped.pid)
+            os.kill(stopped.pid, signal.SIGSTOP)
+            raise KeyboardInterrupt
+
+        with mock.patch.object(store, "stop_tree", interrupted), self.assertRaises(KeyboardInterrupt):
+            store.kill_tree(leader)
+        self.assertEqual(stopped.wait(timeout=5), -signal.SIGKILL)
+        self.assertEqual(leader.wait(timeout=5), -signal.SIGKILL)
+
+    def test_git_runs_in_the_commands_own_process_group(self) -> None:
+        """So that a Ctrl-C, a closed terminal or a stop sent to the command reaches git too: a git
+        in a group of its own would go on writing in the history after the command ended."""
+        self.root.mkdir(parents=True)
+        with mock.patch.dict(os.environ, self.fake_git("ps -o pgid= -p $$")):
+            ran = store.git(self.root, "status")
+        self.assertEqual(ran.stdout.strip(), str(os.getpgrp()))
+
+    def test_a_write_whose_git_runs_past_its_time_is_saved_and_warns(self) -> None:
+        """Never a traceback after the files are saved: the history's step warns."""
+        self.seed()
+        with mock.patch.object(store, "GIT_TIMEOUT_SECONDS", 0.0001):
+            self.run_kg("add-entity", "repo/other")
+        self.assertIn("repo/other", self.kb().entities)
+        [warning] = knowledge.SETTINGS.warnings
+        self.assertRegex(warning, r"^warning: git commit failed: git \S+ ran past 0.0001 s and was stopped$")
+
+    def test_my_git_hooks_and_template_never_run_in_the_history(self) -> None:
+        """Hooks from my git config (core.hooksPath) or its template (init.templateDir, copied into
+        each new .git) would see the diffs that name the people a forget deletes, and could leave a
+        process in .git: none runs, and no template is copied, across a history restart too."""
+        home, mark = self.tmp / "home", self.tmp / "a-hook-ran"
+        hooks, template = home / "hooks", home / "template"
+        for folder in (hooks, template / "hooks"):
+            folder.mkdir(parents=True)
+            for name in ("post-commit", "prepare-commit-msg", "reference-transaction", "post-index-change"):
+                (folder / name).write_text(f'#!/bin/sh\necho {name} >> "{mark}"\n')
+                (folder / name).chmod(0o755)
+        config = f"[core]\n\thooksPath = {hooks}\n[init]\n\ttemplateDir = {template}\n"
+        (home / ".gitconfig").write_text(config)
+        with mock.patch.dict(os.environ, {"HOME": str(home), "XDG_CONFIG_HOME": str(home / ".config")}):
+            self.seed()
+            self.run_kg("forget", "person/dana")
+            self.run_kg("add-entity", "repo/other")
+        self.assertFalse(mark.exists())
+        self.assertFalse((self.root / ".git" / "hooks").exists())
+        self.assertEqual(len(self.commits()), 2)
+
+    def test_my_own_git_config_starts_no_daemon_in_the_history(self) -> None:
+        """A core.fsmonitor=true in my git config would leave a file-watching daemon in .git, which
+        a write that deletes the history would race: the store's git runs without it."""
+        home = self.tmp / "home"
+        home.mkdir()
+        (home / ".gitconfig").write_text("[core]\n\tfsmonitor = true\n")
+        with mock.patch.dict(os.environ, {"HOME": str(home), "XDG_CONFIG_HOME": str(home / ".config")}):
+            self.seed()
+            self.assertEqual(store.git(self.root, "config", "core.fsmonitor").stdout.strip(), "false")
+            self.assertEqual(self.git_out(self.root, "config", "core.fsmonitor").strip(), "true")  # mine
 
     def test_git_variables_of_the_caller_never_redirect_the_history(self) -> None:
         decoy = self.tmp / "decoy"

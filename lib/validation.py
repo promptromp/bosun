@@ -18,7 +18,7 @@ from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any
 
-from change_log import Conflict, behind
+from change_log import Conflict, lost
 
 
 Finding = dict[str, str]
@@ -87,10 +87,16 @@ def conflict_finding(conflict: Conflict) -> Finding:
     )
 
 
-def position_finding(position: Mapping[str, int], saved: Mapping[str, int], file_name: str) -> Finding:
-    """The journal's position is not the one the files record (<file_name> says it): behind, every
-    write is refused; ahead, the next write applies the rest."""
-    gaps = behind(position, saved, file_name)
+def position_finding(
+    position: Mapping[str, int], saved: Mapping[str, int], file_name: str, *, written: Mapping[str, int]
+) -> Finding:
+    """The journal's position is not the one the files record (<file_name> says it). Behind
+    (change_log.lost: by the lines each file has written, <written>, so that only a file that lost
+    lines is named; then by whole transactions): an error, saying a write would refuse to rebuild
+    from it. It says so of a journal with no line left at all too, which a reader takes for none
+    and the next write in fact starts again from the files (genesis). Ahead: the next write applies
+    the rest."""
+    gaps = lost(written, position, saved, file_name)
     if gaps:
         detail = (
             f"the journal is behind {file_name} ({'; '.join(gaps)}): a write would refuse to rebuild from it"
@@ -111,6 +117,7 @@ class Against:
     file_name: str  # what records the files' position ("ledger.json", "view.json")
     position: Mapping[str, int]
     saved: Mapping[str, int]
+    written: Mapping[str, int]  # each journal file's last whole line, its transaction whole or not
     conflicts: Sequence[Conflict]
     pending: Sequence[str]
     has_records: bool
@@ -134,7 +141,10 @@ def journal_findings(store: Against) -> list[Finding]:
     if store.edited:
         found.append(finding("edited", store.edited_detail, path="journal"))
     if store.position != store.saved:
-        return [*found, position_finding(store.position, store.saved, store.file_name)]
+        return [
+            *found,
+            position_finding(store.position, store.saved, store.file_name, written=store.written),
+        ]
     return found if store.edited else [*found, *store.differences()]
 
 

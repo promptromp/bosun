@@ -515,7 +515,7 @@ def read_caught_up(p: Paths, kb: KB, journal: Journal) -> KB:
     (said on stderr). A journal behind the files is never rebuilt from (change_log.reader_rebuilds),
     nor an empty one: then a file that does not parse stops the reader (refuse_unreadable)."""
     position = journal.position()
-    rebuild, gaps = reader_rebuilds(position, saved_position(p), p.view.name)
+    rebuild, gaps = reader_rebuilds(position, saved_position(p), p.view.name, written=journal.written())
     if gaps or not position:
         refuse_unreadable(kb)
     if gaps:
@@ -1331,7 +1331,7 @@ def journal_findings(p: Paths, kb: KB) -> list[Finding]:
     refuse_unreadable, as for every command)."""
     try:
         journal = open_journal(p)
-        changes, position = journal.changes(), journal.position()
+        changes, position, written = journal.changes(), journal.position(), journal.written()
     except JournalError as exc:
         refuse_unreadable(kb)
         return [validation.damage_finding(exc)]
@@ -1342,6 +1342,7 @@ def journal_findings(p: Paths, kb: KB) -> list[Finding]:
         file_name=p.view.name,
         position=position,
         saved=saved_position(p),
+        written=written,
         conflicts=result.conflicts,
         pending=result.pending,
         has_records=bool(kb.entities or kb.records),
