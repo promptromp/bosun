@@ -75,6 +75,9 @@ failing from then on.
   `view.json` records the journal position the files reflect and a digest of what they hold. Both
   are in the local git history like the other files; what a write cut short left
   (`<file>.torn-<time>`) is not.
+- `format.json` holds `{"format": n}`, the version of this folder's format (`KNOWLEDGE_FORMAT`; a
+  folder without it is format 1). It is in the local git history, and a new knowledge base gets it
+  with its first write.
 - `entities.jsonl` and `facts.jsonl` are the journal's rebuild (`knowledge_changes.rebuild`): its
   changes in the one order, an entity put whole or deleted, the fact log's records kept in that
   order and folded as the files are (an update that comes before its fact's add waits for it).

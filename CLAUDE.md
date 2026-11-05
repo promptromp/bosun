@@ -186,6 +186,12 @@ of truth, so don't copy rules into this file.
   digest under it. One that removes a move or renames a state first needs the rebuild decision of
   2026-11-04 in `docs/design/sync.md` built (the rebuild re-checking only a change that lands on
   ones its writer had not seen), and a migration for earlier changes.
+- **A data format change** (what a store holds on disk: the ledger's field table or maps, the
+  knowledge base's files or journal ops, the change envelope): `tests/unit/test_store_formats.py`
+  fails on the digest. Bump `ledger.LEDGER_FORMAT` or `knowledge_store.KNOWLEDGE_FORMAT`, add a
+  migration in `lib/migrations.py` with a fixture in the old format under
+  `tests/fixtures/migrations/`, and record the new digest under the new version. The knowledge
+  base's version is in `knowledge/format.json`, the ledger's in `ledger.json`'s `version`.
 - **A link relation:** a row in `RELATIONS` (`lib/lineage.py`, with its inverse and the family in
   which cycles are refused), the lineage section of `docs/orchestrator.md` and the relation list in `policy.md`.
   It trips the same rules-digest test: bump `RULES_VERSION` and record the new digest.

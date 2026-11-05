@@ -234,6 +234,7 @@ import argparse
 import contextlib
 import copy
 import fcntl
+import hashlib
 import json
 import os
 import re
@@ -352,6 +353,9 @@ TIME_FROM_SLACK = "slack ref"
 Item = dict[str, Any]
 Ledger = dict[str, Any]
 
+# The version of what ledger.json holds on disk, written to it as "version": bumped, with a
+# migration, when format_digest changes (tests/unit/test_store_formats.py; CLAUDE.md, "A data format change").
+LEDGER_FORMAT = 1
 # The journal every write goes through (lib/journal.py, docs/design/sync.md): the ledger's stream;
 # the version of the rules its changes are checked against when rebuilt (RULES: KINDS' transitions
 # and lineage's link rules), bumped by hand when a change to them would rebuild old changes
@@ -1123,6 +1127,25 @@ def read_ledger_file() -> Any:
         raise LedgerError(f"{STORE.ledger_file} is not valid JSON ({exc}); {restore}") from exc
 
 
+def store_format(state_dir: Path) -> int:
+    """The format version ledger.json records ("version"); 0 when there is no ledger.json."""
+    try:
+        return int(json.loads((state_dir / "ledger.json").read_text()).get("version", 1))
+    except FileNotFoundError:
+        return 0
+
+
+def format_digest() -> str:
+    """SHA-256 of what says how ledger.json is laid out: the change envelope, the field table the
+    journal's changes are classed by, and the maps it holds."""
+    table = {
+        "envelope": change_log.ENVELOPE_VERSION,
+        "fields": [[list(r.pattern), r.rule, r.klass] for r in ledger_changes.FIELDS],
+        "maps": list(ledger_changes.MAPS),
+    }
+    return hashlib.sha256(change_log.canonical(table)).hexdigest()
+
+
 def load() -> Ledger:
     ledger = read_ledger_file()
     if not isinstance(ledger, dict) or not all(
@@ -1158,6 +1181,7 @@ def write_atomically(
 
 def save(ledger: Ledger) -> None:
     """ledger.json, flushed to the disk itself before its rename (flush_to_disk), and its view."""
+    ledger["version"] = LEDGER_FORMAT
     text = json.dumps(ledger, indent=2, sort_keys=True)
     write_atomically(STORE.ledger_file, text, STORE.backup, flush_to_disk)
     write_atomically(STORE.view, render(ledger))

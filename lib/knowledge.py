@@ -349,6 +349,8 @@ def save(p: Paths, kb: KB, message: str, write: Write) -> None:
     say_left_out(p, kb, write.left_out)
     with journal_errors(p):
         stamp = journaled(p, kb, write)
+    if not p.format.exists():
+        store.write_format(p, store.KNOWLEDGE_FORMAT)
     write_files(p, kb)
     if kb.restart_history:
         restart_history(p)
