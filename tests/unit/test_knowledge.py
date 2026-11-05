@@ -14,6 +14,7 @@ import hashlib
 import io
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -989,6 +990,45 @@ class GitHistoryTest(KnowledgeTestCase):
         )
         self.assertFalse((self.root / ".git" / "info" / "refs").exists())
 
+    def test_a_history_git_cannot_read_now_is_kept(self) -> None:
+        """A .git with what every repository has is never deleted, whatever git says of it: a typo
+        in my git config, or a newer git's repository format, unknown here. The commit warns, and the
+        history is all there once git reads it again."""
+        self.seed()
+        before = self.commits()
+        home = self.tmp / "home"
+        home.mkdir()
+        (home / ".gitconfig").write_text("[user]\n\tname = me\n[alias\n")  # a section never closed
+        with mock.patch.dict(os.environ, {"HOME": str(home), "XDG_CONFIG_HOME": str(home / ".config")}):
+            self.run_kg("add-entity", "repo/other")
+        config = self.root / ".git" / "config"
+        store.git(self.root, "config", "core.repositoryformatversion", "1")
+        store.git(self.root, "config", "extensions.someNewerFeature", "true")
+        self.run_kg("add-entity", "repo/third")
+        self.assertEqual(len(knowledge.SETTINGS.warnings), 2)
+        for warning in knowledge.SETTINGS.warnings:
+            self.assertTrue(warning.startswith("warning: git commit failed: "), warning)
+        self.assertEqual(self.commits(), [])  # this git cannot read it now; it is there
+        text = re.sub(r"\[extensions\][^\[]*", "", config.read_text())
+        config.write_text(text.replace("repositoryformatversion = 1", "repositoryformatversion = 0"))
+        self.assertEqual(self.commits(), before)
+        self.run_kg("add-entity", "repo/fourth")
+        self.assertEqual(self.commits(), ["kg add-entity repo/fourth", *before])
+
+    def test_a_broken_history_that_cannot_be_deleted_warns_and_the_write_is_saved(self) -> None:
+        """After the write is saved (view.json), the history's step never fails the command."""
+        if os.geteuid() == 0:
+            self.skipTest("root deletes whatever the modes say")
+        self.seed()
+        self.broken_history()
+        locked = self.root / ".git" / "objects" / "info"
+        locked.chmod(0o500)
+        self.addCleanup(locked.chmod, 0o700)
+        self.run_kg("add-entity", "repo/other")
+        self.assertIn("repo/other", self.kb().entities)
+        [warning] = knowledge.SETTINGS.warnings
+        self.assertIn("is no git repository and could not be deleted whole", warning)
+
     def test_a_git_that_fails_is_never_silent(self) -> None:
         """A git status that fails (here: a .git made again between the check and the commit) is a
         warning, as a failing add or commit is."""
@@ -1002,23 +1042,65 @@ class GitHistoryTest(KnowledgeTestCase):
         with mock.patch.object(store, "git", status_fails):
             self.assertEqual(store.commit(self.root, "kg add-entity"), "warning: git commit failed: fatal: x")
 
-    def test_a_git_past_its_time_is_stopped_with_all_it_started(self) -> None:
-        """git's housekeeping is its children: on a timeout the whole process group is killed and
-        waited for, so none stays writing in the history, and the commit warns."""
+    def fake_git(self, script: str) -> dict[str, str]:
+        """A `git` that runs <script> (sh), first on the PATH: the environment to use it with."""
         fake = self.tmp / "bin"
-        fake.mkdir()
-        mark = self.tmp / "written-after-the-timeout"
-        (fake / "git").write_text('#!/bin/sh\n(sleep 0.5; : > "$KG_TEST_MARK") &\nsleep 5\n')
+        fake.mkdir(exist_ok=True)
+        (fake / "git").write_text(f"#!/bin/sh\n{script}\n")
         (fake / "git").chmod(0o755)
+        return {"PATH": f"{fake}{os.pathsep}{os.environ['PATH']}"}
+
+    def processes_naming(self, token: str) -> list[str]:
+        listed = subprocess.run(["ps", "-A", "-o", "command="], capture_output=True, text=True, check=True)
+        return [line for line in listed.stdout.splitlines() if token in line]
+
+    def test_a_git_past_its_time_is_stopped_with_all_it_started(self) -> None:
+        """git's housekeeping is its children, theirs too: on a timeout git and every process
+        under it are killed and waited for, so none stays writing in the history; the write is
+        saved, kg warns and exits 0."""
+        self.seed()
+        token = f"kg-test-tree-{os.getpid()}-{time.monotonic_ns()}"
+        mark = self.tmp / "written-after-the-timeout"
+        tree = f"sh -c '(sleep 1; : > \"{mark}\") & sleep 30' {token} &\nsleep 30"  # a child, a grandchild
+        environment = {
+            **self.fake_git(tree),
+            "BOSUN_CONFIG_DIR": str(self.tmp),
+            "BOSUN_STATE_DIR": str(self.state),
+        }
+        said = io.StringIO()
+        with (
+            mock.patch.dict(os.environ, environment),
+            mock.patch.object(sys, "argv", ["kg", "add-entity", "repo/other"]),
+            mock.patch.object(store, "GIT_TIMEOUT_SECONDS", 0.5),
+            contextlib.redirect_stdout(io.StringIO()),
+            contextlib.redirect_stderr(said),
+        ):
+            self.assertEqual(knowledge.main(), 0)
+        self.assertEqual(self.processes_naming(token), [])
+        self.assertIn("warning: git commit failed: git add ran past 0.5 s and was stopped\n", said.getvalue())
+        self.assertIn("repo/other", self.kb().entities)
+        time.sleep(1.5)
+        self.assertFalse(mark.exists())  # the grandchild went with git
+
+    def test_processes_still_there_after_the_kill_are_said(self) -> None:
         self.root.mkdir(parents=True)
-        env = {"PATH": f"{fake}{os.pathsep}{os.environ['PATH']}", "KG_TEST_MARK": str(mark)}
-        with mock.patch.dict(os.environ, env), mock.patch.object(store, "GIT_TIMEOUT_SECONDS", 0.1):
-            started = time.monotonic()
+        with (
+            mock.patch.dict(os.environ, self.fake_git("sh -c 'sleep 30' &\nsleep 30")),
+            mock.patch.object(store, "GIT_TIMEOUT_SECONDS", 0.2),
+            mock.patch.object(store, "GIT_TREE_GONE_SECONDS", 0.1),
+            mock.patch.object(store, "alive", lambda pid: True),
+        ):
             warning = store.commit(self.root, "kg add-entity")
-            self.assertLess(time.monotonic() - started, 3)
-        self.assertEqual(warning, "warning: git commit failed: git init ran past 0.1 s and was stopped")
-        time.sleep(1)
-        self.assertFalse(mark.exists())  # the child was stopped with git
+        still = r"ran past 0.2 s and was stopped; \d+ process\(es\) it started were still there 0.1 s later$"
+        self.assertRegex(warning, still)
+
+    def test_git_runs_in_the_commands_own_process_group(self) -> None:
+        """So that a Ctrl-C, a closed terminal or a stop sent to the command reaches git too: a git
+        in a group of its own would go on writing in the history after the command ended."""
+        self.root.mkdir(parents=True)
+        with mock.patch.dict(os.environ, self.fake_git("ps -o pgid= -p $$")):
+            ran = store.git(self.root, "status")
+        self.assertEqual(ran.stdout.strip(), str(os.getpgrp()))
 
     def test_a_write_whose_git_runs_past_its_time_is_saved_and_warns(self) -> None:
         """Never a traceback after the files are saved: the history's step warns."""

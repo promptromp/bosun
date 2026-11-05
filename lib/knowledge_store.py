@@ -34,6 +34,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+import orphans
 from journal import TORN, JournalError, create_new, flush_to_disk, replace_durably, write_all
 
 
@@ -71,8 +72,10 @@ GIT_IDENTITY = (
     f"core.hooksPath={os.devnull}",
 )
 GIT_TIMEOUT_SECONDS = 30
-# How long a git command's process group, killed on its timeout, may take to be gone.
-GIT_GROUP_GONE_SECONDS = 5
+# How long the processes of a git command killed on its timeout may take to be gone.
+GIT_TREE_GONE_SECONDS = 5
+# What every git repository has in its folder; a .git without one of them is no repository.
+GIT_ESSENTIALS = ("HEAD", "objects", "refs")
 # A git lock older than this, found under the knowledge base's exclusive lock, was left by a git
 # command cut short (git holds one for one command, and bosun commits only under that lock).
 STALE_GIT_LOCK_SECONDS = 30
@@ -82,8 +85,12 @@ class StoreError(Exception):
     pass
 
 
-class GitTimeout(Exception):
-    """A git command that ran past GIT_TIMEOUT_SECONDS, stopped with every process it started."""
+class HistoryProblem(Exception):
+    """Why a commit to the history could not be made, said as a warning: the write is saved."""
+
+
+class GitTimeout(HistoryProblem):
+    """A git command that ran past GIT_TIMEOUT_SECONDS, killed with every process it started."""
 
 
 @dataclass(frozen=True)
@@ -276,9 +283,10 @@ def git_environment(root: Path, *, pinned: bool = True) -> dict[str, str]:
 
 
 def git(root: Path, *args: str, pinned: bool = True) -> subprocess.CompletedProcess[str]:
-    """git in <root>, as the leader of a process group of its own. Past GIT_TIMEOUT_SECONDS the
-    whole group is killed and waited for (GitTimeout): the housekeeping a commit runs (maintenance,
-    repack, pack-objects) is its children, which killing git alone would leave writing in .git."""
+    """git in <root>, in the command's own process group, so that a Ctrl-C, a closed terminal or a
+    stop sent to the command reaches git too. Past GIT_TIMEOUT_SECONDS, git and every process it
+    started are killed (kill_tree; GitTimeout): the housekeeping a commit runs (maintenance, repack,
+    pack-objects) is its children, which killing git alone would leave writing in .git."""
     command = ["git", *GIT_IDENTITY, "-C", str(root), *args]
     with subprocess.Popen(
         command,
@@ -286,43 +294,83 @@ def git(root: Path, *args: str, pinned: bool = True) -> subprocess.CompletedProc
         stderr=subprocess.PIPE,
         text=True,
         env=git_environment(root, pinned=pinned),
-        start_new_session=True,
     ) as process:
         try:
             out, err = process.communicate(timeout=GIT_TIMEOUT_SECONDS)
         except subprocess.TimeoutExpired:
-            end_group(process)
-            raise GitTimeout(f"git {args[0]} ran past {GIT_TIMEOUT_SECONDS} s and was stopped") from None
+            left = kill_tree(process)
+            still = (
+                f"; {left} process(es) it started were still there {GIT_TREE_GONE_SECONDS} s later"
+                if left
+                else ""
+            )
+            raise GitTimeout(
+                f"git {args[0]} ran past {GIT_TIMEOUT_SECONDS} s and was stopped{still}"
+            ) from None
     return subprocess.CompletedProcess(command, process.returncode, out, err)
 
 
-def end_group(leader: subprocess.Popen[str]) -> None:
-    """Kill every process of <leader>'s group, reap the leader, and wait until none of the group is
-    left (at most GIT_GROUP_GONE_SECONDS: those whose parent died are reaped by the system)."""
-    group = leader.pid
-    with contextlib.suppress(ProcessLookupError):
-        os.killpg(group, signal.SIGKILL)
+def process_tree(pid: int) -> set[int]:
+    """<pid> and every process descending from it now (from `ps -A`: orphans.parse_ps); just <pid>
+    where ps cannot be run."""
+    try:
+        procs = orphans.parse_ps(orphans.read_ps("-A"))
+    except OSError:
+        return {pid}
+    children: dict[int, list[int]] = {}
+    for proc in procs:
+        children.setdefault(proc.ppid, []).append(proc.pid)
+    found: set[int] = set()
+    todo = [pid]
+    while todo:
+        current = todo.pop()
+        if current not in found:
+            found.add(current)
+            todo += children.get(current, [])
+    return found
+
+
+def signal_all(pids: set[int], sig: signal.Signals) -> None:
+    for pid in pids:
+        with contextlib.suppress(OSError):  # gone (ESRCH), or no longer one we may signal (EPERM)
+            os.kill(pid, sig)
+
+
+def kill_tree(leader: subprocess.Popen[str]) -> int:
+    """Kill <leader> and every process descending from it: each listed and stopped (SIGSTOP)
+    until a listing finds no new one, so that none starts another unseen or is adopted by launchd
+    before it is listed; then all killed, the leader reaped, and the others waited for (at most
+    GIT_TREE_GONE_SECONDS; a process gone or no longer ours counts as gone). Returns how many
+    were still there."""
+    tree: set[int] = set()
+    while found := process_tree(leader.pid) - tree:
+        tree |= found
+        signal_all(found, signal.SIGSTOP)
+    signal_all(tree, signal.SIGKILL)
     leader.wait()
-    deadline = time.monotonic() + GIT_GROUP_GONE_SECONDS
-    while time.monotonic() < deadline:
-        try:
-            os.killpg(group, 0)
-        except ProcessLookupError:
-            return
+    left = tree - {leader.pid}
+    deadline = time.monotonic() + GIT_TREE_GONE_SECONDS
+    while left and time.monotonic() < deadline:
+        left = {pid for pid in left if alive(pid)}
         time.sleep(0.01)
+    return len(left)
+
+
+def alive(pid: int) -> bool:
+    try:
+        os.kill(pid, 0)
+    except OSError:  # ESRCH: gone; EPERM: a zombie being reaped, or the pid someone else's now
+        return False
+    return True
 
 
 def git_available() -> bool:
     return shutil.which("git") is not None
 
 
-def is_repository(root: Path) -> bool:
-    return git(root, "rev-parse", "--git-dir").returncode == 0
-
-
 def ensure_repository(root: Path) -> bool:
     """Whether <root> has its own repository: made if missing, without a template (which could
-    bring hooks and files from my git config), and made again where .git is no repository
+    bring hooks and files from my git config), and made again where .git is debris
     (drop_broken_history). The caller holds the exclusive lock."""
     history = root / ".git"
     drop_broken_history(root)
@@ -333,16 +381,27 @@ def ensure_repository(root: Path) -> bool:
 
 
 def drop_broken_history(root: Path) -> None:
-    """A .git that is no repository (what a process an outside writer left made after a history
-    restart deleted it) deleted, through drop_history, which fails closed, with one line on
-    stderr: the next commit starts the history again."""
+    """A .git that is debris, not a repository: without one of what every repository has
+    (GIT_ESSENTIALS; what a process an outside writer left made again after a history restart
+    deleted it), deleted, with one line on stderr, so the next commit starts the history again. A
+    .git that has them all stays as it is, whatever git says of it (a typo in my git config, a
+    newer git's repository format, which this git does not know): a commit that fails then warns.
+    Deleting goes through drop_history, which fails closed: what cannot be deleted is a
+    HistoryProblem."""
     history = root / ".git"
-    if os.path.lexists(history) and not is_repository(root):
+    if not os.path.lexists(history) or all(os.path.lexists(history / name) for name in GIT_ESSENTIALS):
+        return
+    try:
         drop_history(root)
-        print(
-            f"kg: {history} was no git repository; deleted it, and the knowledge history starts again",
-            file=sys.stderr,
-        )
+    except StoreError:
+        raise HistoryProblem(
+            f"{history} is no git repository and could not be deleted whole; the knowledge history "
+            f"records nothing until it is gone (rm -rf {history})"
+        ) from None
+    print(
+        f"kg: {history} was no git repository; deleted it, and the knowledge history starts again",
+        file=sys.stderr,
+    )
 
 
 def ensure_ignored(root: Path) -> None:
@@ -390,12 +449,14 @@ def clear_stale_git_locks(root: Path) -> None:
 def commit(root: Path, message: str) -> str:
     """Commit every change in the knowledge directory, under the knowledge base's exclusive lock
     (clear_stale_git_locks relies on it); returns a warning, or "" (also when git is not installed:
-    history is optional). A git that fails, or runs past its time (GitTimeout), is that warning."""
+    history is optional). It never raises: it runs after the write is saved (view.json), so a git
+    that fails or runs past its time (GitTimeout), a .git that cannot be made again
+    (HistoryProblem) or a file it cannot write is that warning."""
     if not git_available():
         return ""
     try:
         return record(root, message)
-    except GitTimeout as exc:
+    except (HistoryProblem, OSError) as exc:
         return f"warning: git commit failed: {exc}"
 
 
