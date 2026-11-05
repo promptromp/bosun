@@ -1331,7 +1331,7 @@ def journal_findings(p: Paths, kb: KB) -> list[Finding]:
     refuse_unreadable, as for every command)."""
     try:
         journal = open_journal(p)
-        changes, position = journal.changes(), journal.position()
+        changes, position, written = journal.changes(), journal.position(), journal.written()
     except JournalError as exc:
         refuse_unreadable(kb)
         return [validation.damage_finding(exc)]
@@ -1342,6 +1342,7 @@ def journal_findings(p: Paths, kb: KB) -> list[Finding]:
         file_name=p.view.name,
         position=position,
         saved=saved_position(p),
+        written=written,
         conflicts=result.conflicts,
         pending=result.pending,
         has_records=bool(kb.entities or kb.records),

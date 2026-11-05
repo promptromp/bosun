@@ -570,8 +570,8 @@ class GenesisTest(JournalTestCase):
     def test_a_lost_file_that_leaves_no_whole_transaction_is_refused_and_warned(self) -> None:
         """A genesis with a person in it spans both files: with the replica's file lost, no line
         left in local.jsonl is a whole transaction. That journal is behind view.json, not empty: a
-        reader warns, naming the file (it once took it for none, without a word), and a write is
-        refused."""
+        reader warns, naming the file (it once took it for none, without a word), a write is
+        refused, and validate (bosun doctor) names that file only."""
         self.write_legacy(
             [legacy_entity("repo/invoice-exporter", "exporter"), legacy_entity("person/dana", "Dana")], []
         )
@@ -585,6 +585,10 @@ class GenesisTest(JournalTestCase):
         self.assertRegex(said.getvalue(), named)
         with self.assertRaisesRegex(KnowledgeError, named):
             self.run_kg("add-entity", "repo/other")
+        found, code = self.validate()
+        self.assertEqual(code, 1)
+        self.assertRegex(found, named)
+        self.assertNotIn("local.jsonl", found)
 
     def test_a_journal_moved_aside_starts_again_from_the_files(self) -> None:
         self.seed()

@@ -967,6 +967,17 @@ class GitHistoryTest(KnowledgeTestCase):
         [warning] = knowledge.SETTINGS.warnings
         self.assertRegex(warning, r"^warning: git commit failed: .*not a git repository")
 
+    def test_my_own_git_config_starts_no_daemon_in_the_history(self) -> None:
+        """A core.fsmonitor=true in my git config would leave a file-watching daemon in .git, which
+        a write that deletes the history would race: the store's git runs without it."""
+        home = self.tmp / "home"
+        home.mkdir()
+        (home / ".gitconfig").write_text("[core]\n\tfsmonitor = true\n")
+        with mock.patch.dict(os.environ, {"HOME": str(home), "XDG_CONFIG_HOME": str(home / ".config")}):
+            self.seed()
+            self.assertEqual(store.git(self.root, "config", "core.fsmonitor").stdout.strip(), "false")
+            self.assertEqual(self.git_out(self.root, "config", "core.fsmonitor").strip(), "true")  # mine
+
     def test_git_variables_of_the_caller_never_redirect_the_history(self) -> None:
         decoy = self.tmp / "decoy"
         decoy.mkdir()

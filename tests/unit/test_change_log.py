@@ -191,6 +191,12 @@ class TestStamp(unittest.TestCase):
         found = change_log.reader_rebuilds({}, {"r": 5, "local": 2}, "view.json", written={"local": 2})
         self.assertEqual(found, (False, "r.jsonl ends at seq 0, view.json reflects seq 5"))
 
+    def test_a_torn_tail_is_left_out_and_nothing_is_rebuilt(self) -> None:
+        """Lines past the files' position whose transaction is unfinished (a write cut short):
+        written, but not whole, so the journal is neither behind nor ahead."""
+        found = change_log.reader_rebuilds({"local": 3}, {"local": 3}, "view.json", written={"local": 5})
+        self.assertEqual(found, (False, ""))
+
 
 class TestBoundary(unittest.TestCase):
     @staticmethod

@@ -4369,7 +4369,7 @@ def journal_findings(saved: Ledger) -> list[Finding]:
     (unless ledger.json was edited outside the journal: the next write adopts the difference)."""
     try:
         journal = open_journal()
-        changes, position = journal.changes(), journal.position()
+        changes, position, written = journal.changes(), journal.position(), journal.written()
     except JournalError as exc:
         return [validation.damage_finding(exc)]
     result = ledger_changes.rebuild(changes, RULES)
@@ -4377,6 +4377,7 @@ def journal_findings(saved: Ledger) -> list[Finding]:
         file_name=STORE.ledger_file.name,
         position=position,
         saved=saved_position(saved),
+        written=written,
         conflicts=result.conflicts,
         pending=[],
         has_records=has_records(saved),

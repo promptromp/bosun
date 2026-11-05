@@ -45,11 +45,12 @@ KEY_ASIDE = f"{KEY_FILE}.aside-"  # <KEY_FILE>.aside-<UTC time>: a key file that
 # key (and a file kept aside that was meant to be it), and what a write cut short left in the
 # journal (a torn tail can name someone kg forget deletes; forget deletes the local ones).
 GIT_IGNORE = f"knowledge.lock\n*.tmp\nbatch.json\n{KEY_FILE}\n{KEY_ASIDE}*\n*{TORN}*\n"
-# Also: git's housekeeping after a commit (a repack, once it counts enough loose objects) runs
-# inside the commit, not detached, so that no git process is still writing in the history when a
-# command returns: a write that deletes the history (kg forget) would race it, and a repack could
-# make .git again after the delete, a folder that is no repository (maintenance.autoDetach; and
-# gc.autoDetach, its fallback and older gits' setting).
+# Also: no git process stays in the history after a command returns, as a write that deletes it
+# (kg forget) would race it, and a repack could make .git again after the delete, a folder that is
+# no repository. So git's housekeeping after a commit (a repack, once it counts enough loose
+# objects) runs inside the commit, not detached (maintenance.autoDetach; and gc.autoDetach, its
+# fallback and older gits' setting), and a core.fsmonitor=true in my own git config starts no
+# file-watching daemon here.
 GIT_IDENTITY = (
     "-c",
     "user.name=bosun",
@@ -61,6 +62,8 @@ GIT_IDENTITY = (
     "maintenance.autoDetach=false",
     "-c",
     "gc.autoDetach=false",
+    "-c",
+    "core.fsmonitor=false",
 )
 GIT_TIMEOUT_SECONDS = 30
 # A git lock older than this, found under the knowledge base's exclusive lock, was left by a git

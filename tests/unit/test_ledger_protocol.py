@@ -576,9 +576,10 @@ class JournalTest(ProtocolTestCase):
         self.lose_each_file(said_after=1)
 
     def lose_each_file(self, said_after: int) -> None:
-        """Each journal file lost in turn: a write is refused and changes nothing, and a reader gets
-        ledger.json, warned, naming the file. The prompt is said <said_after> seconds after the
-        delegation (the clock pinned: in the same second, its transaction is local lines only)."""
+        """Each journal file lost in turn: a write is refused and changes nothing, a reader gets
+        ledger.json, warned, and validate fails; each names that file only. The prompt is said
+        <said_after> seconds after the delegation (the clock pinned: in the same second, its
+        transaction is local lines only)."""
         at = datetime(2026, 1, 1, 10, tzinfo=UTC)
         with mock.patch.object(ledger, "now", return_value=at.isoformat()):
             run("record-delegation", MENTION_ID, "--window", "w", "--task", "t")
@@ -601,6 +602,9 @@ class JournalTest(ProtocolTestCase):
                 with contextlib.redirect_stderr(said):
                     self.assertIn("my own words", run("said"))  # a reader gets the file, warned
                 self.assertRegex(said.getvalue(), rf"is behind it \({named}")
+                found, code = run("validate", "--journal")  # what bosun doctor shows
+                self.assertEqual(code, 1)
+                self.assertEqual(re.findall(r"(\w+)\.jsonl ends at seq", found), [Path(name).stem])
             lost.write_bytes(kept)  # failed or not, so that the next file is lost alone
         self.assert_the_journal_rebuilds_the_file()
 
