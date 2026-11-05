@@ -93,6 +93,7 @@ nav:
   - Design:
       - Installing: design/init.md
       - Uninstalling: design/uninstall.md
+      - Updating: design/update.md
       - Agents: design/harnesses.md
       - Approvals: design/approvals.md
       - Events: design/events.md
@@ -109,6 +110,7 @@ nav:
           - Impact, cost per task: plans/impact-cost-per-task.md
           - Impact, overhead: plans/impact-overhead.md
           - Sync, phase 0: plans/sync-phase-0.md
+          - Updating: plans/update.md
   - Project:
       - Roadmap: roadmap.md
       - Development: development.md
