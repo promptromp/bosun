@@ -998,6 +998,20 @@ printf '{"pid":%d,"status":"idle","version":"2.0.0","statusUpdatedAt":%d,"name":
 check "checkin waits while you may be talking to it" bash -c 'grep -qE "skip: orchestrator is idle \(for [0-9]+s\)" <<<"$1"' _ "$("$BOSUN" checkin --dry-run 2>&1)"
 printf '{"pid":%d,"status":"busy","version":"2.0.0","statusUpdatedAt":%d,"name":"orch"}' "$orch_pid" $((($(date +%s) - 3600) * 1000)) >"$HOME/.claude/sessions/$orch_pid.json"
 check "checkin skips a busy orchestrator" contains "$("$BOSUN" checkin --dry-run 2>&1)" "skip: orchestrator is busy"
+
+# An update's record: its hold pauses the background work; a hold past its hour is a finding.
+update_record() { # <step> <hold_until>
+  printf '{"id":"u1","from_root":"/a","to_root":"/b","from_commit":"aaa","to_commit":"bbb","step":"%s","started_at":"2026-11-05T09:00:00","hold_until":%d}' "$1" "$2" >"$BOSUN_STATE_DIR/update.json"
+}
+update_record holding $(($(date +%s) + 600))
+check "checkin skips its tick while an update holds" contains "$("$BOSUN" checkin --dry-run 2>&1)" "update in progress: skipping this tick"
+check "the watchdog skips a run while an update holds" contains "$("$BOSUN" watchdog 2>&1)" "update in progress"
+check "learning skips a run while an update holds" contains "$("$BOSUN" learn 2>&1)" "update in progress"
+check "doctor is quiet about a live hold" bash -c '! "$1" doctor 2>&1 | grep -q "update:"' _ "$BOSUN"
+update_record holding $(($(date +%s) - 60))
+check "a hold past its hour is the update-stuck finding" contains "$("$BOSUN" watchdog --dry-run --only update-stuck 2>&1)" "update-stuck"
+check "doctor fails on a hold past its hour" contains "$("$BOSUN" doctor 2>&1)" "FAIL  update: an update's hold"
+rm -f "$BOSUN_STATE_DIR/update.json"
 orch_status() { # <status> <seconds in it> [name]
   printf '{"pid":%d,"status":"%s","version":"2.0.0","statusUpdatedAt":%d,"name":"%s"}' "$orch_pid" "$1" $((($(date +%s) - $2) * 1000)) "${3:-orch-$(date +%F)}" >"$HOME/.claude/sessions/$orch_pid.json"
 }

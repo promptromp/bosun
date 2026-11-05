@@ -95,6 +95,15 @@ check_config() {
   done <<<"$sessions"
 }
 
+# An update cut short (docs/design/update.md): its hold outlived its hour, or it stopped while
+# writes were paused. The watchdog's update-stuck check says the same.
+check_update() {
+  local why
+  if why="$(python3 "$BOSUN_ROOT/lib/update_state.py" stuck --state-dir "$BOSUN_STATE_DIR")"; then
+    fail "update: $why"
+  fi
+}
+
 # Knowledge (docs/design/knowledge.md): whether there is a knowledge base, what it holds, and the
 # knowledge base against its journal (`bosun kg validate`, as check_journal reads it).
 check_knowledge() {
@@ -388,6 +397,7 @@ check_claude_login
 check_bypass_warning
 section "Config ($BOSUN_CONFIG_DIR)"
 check_config
+check_update
 check_knowledge
 section "Ledger ($BOSUN_STATE_DIR)"
 check_ledger

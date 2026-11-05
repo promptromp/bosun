@@ -50,6 +50,7 @@ import lineage
 import login
 import signals
 import slack_watch
+import update_state
 
 
 BOSUN = Path(__file__).resolve().parent.parent / "bin" / "bosun"
@@ -1301,6 +1302,17 @@ def check_overhead_share(ctx: Context) -> Result:
     return Result(note, [Finding(f"{OVERHEAD_SHARE}:{year}-W{week:02d}", message)])
 
 
+def check_update_stuck(ctx: Context) -> Result:
+    """An update cut short: its hold outlived its hour, or it stopped while writes were paused."""
+    why = update_state.stuck(ctx.config.state_dir, ctx.now.timestamp())
+    record = update_state.read(ctx.config.state_dir)
+    if not why or record is None:
+        return Result("no update is stuck")
+    return Result(
+        findings=[Finding(f"update-stuck:{record.id}", f"{why[0].upper()}{why[1:]}.", confirm=True)]
+    )
+
+
 @dataclass(frozen=True)
 class Check:
     name: str
@@ -1425,6 +1437,12 @@ CHECKS: tuple[Check, ...] = (
         "with login errors; once per outage",
         check_login,
         rearms=True,
+    ),
+    Check(
+        "update-stuck",
+        "error",
+        "an update's hold outlived its hour, or an update stopped while writes were paused",
+        check_update_stuck,
     ),
 )
 

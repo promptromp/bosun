@@ -451,6 +451,13 @@ orchestrator_policy() {
 }
 
 # The keep-awake (caffeinate) pid file that `morning` writes and `stop` releases.
+# Whether `bosun update` holds bosun's own background work (docs/design/update.md): its record in
+# the state folder says a step before "released" within the hour. The agents keep working.
+update_hold_active() {
+  [ -f "$BOSUN_STATE_DIR/update.json" ] || return 1
+  python3 "$BOSUN_ROOT/lib/update_state.py" hold-active --state-dir "$BOSUN_STATE_DIR"
+}
+
 keep_awake_pidfile() { echo "$BOSUN_STATE_DIR/keep-awake-$BOSUN_SESSION_NAME.pid"; }
 
 # When you stopped the session (`stop` writes it, `start` removes it). The watchdog does not

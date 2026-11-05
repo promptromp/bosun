@@ -40,6 +40,10 @@ STATE_FILES = (
     ("ledger.json.tmp", WORKING),  # what a write cut short left
     (".replica.json.*.tmp", WORKING),  # what making replica.json left when it was cut short
     ("ledger.lock", WORKING),
+    ("update.json", WORKING),  # the update's record (docs/design/update.md)
+    ("update.json.tmp", WORKING),
+    ("update.lock", WORKING),
+    ("update", WORKING),
     ("agent-changes.json", WORKING),
     (".agent-changes.json.*", WORKING),
     ("alerted-*", WORKING),  # what the check-in loop left, before the watchdog

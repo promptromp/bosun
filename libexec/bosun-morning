@@ -79,10 +79,24 @@ wait_for_network() {
   log "network is up"
 }
 
+# An update's hold lifts within the hour: wait for it (its next run would be tomorrow).
+wait_for_update_hold() {
+  local logged=0
+  while update_hold_active; do
+    if [ "$logged" = "0" ]; then
+      logged=1
+      log "update in progress: waiting for its hold to lift"
+    fi
+    [ "$DRY_RUN" = "1" ] && return
+    sleep 10
+  done
+}
+
 log "=== morning run (trigger=${BOSUN_TRIGGER:-manual}, session=$BOSUN_SESSION_NAME, dry_run=$DRY_RUN) ==="
 pmset -g batt | head -1 | sed 's/^/power: /'
 
 problems=()
+wait_for_update_hold
 start_keep_awake
 wait_for_network || problems+=("network")
 
