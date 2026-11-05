@@ -35,6 +35,7 @@ import knowledge
 import knowledge_changes as kc
 import knowledge_model as km
 import knowledge_store as store
+import update_backups as ub
 from change_log import Edit
 from knowledge_model import KnowledgeError
 from test_journal import short_writes
@@ -1392,6 +1393,20 @@ class OutsideEditHistoryTest(JournalTestCase):
         self.write_saying()
         self.assertEqual([p.name for p in self.root.glob("*.tmp")], [])
         self.assert_dana_is_gone()
+
+    def test_a_deletion_cut_short_deletes_the_update_backups_when_finished(self) -> None:
+        self.seed()
+        self.run_kg("propose", "person/dana", "timezone", "--value", "Europe/Lisbon", "--source", "ledger:a")
+        with self.power_cut(jr.Journal, "forget"), self.assertRaises(OSError):
+            self.run_kg("forget", "person/dana")
+        backup = self.state / ub.BACKUPS_DIR / "20261105T090000Z-aaa-bbb"
+        backup.mkdir(parents=True)
+        (backup / ub.MANIFEST).write_text("{}\n")
+        said = io.StringIO()
+        with contextlib.redirect_stderr(said):
+            self.run_kg("add-entity", "repo/other")
+        self.assertFalse(backup.exists())
+        self.assertIn("kg: deleted 1 update backup taken before this;", said.getvalue())
 
     def test_a_purge_cut_between_its_marker_and_its_placeholders_is_finished(self) -> None:
         """The retention purge's marker carries the ids of the facts it removed, so the next write

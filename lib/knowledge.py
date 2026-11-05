@@ -101,6 +101,7 @@ import knowledge_query as kq
 import knowledge_review as kr
 import knowledge_schema as ks
 import knowledge_store as store
+import update_backups
 import validation
 from change_log import ADOPT, DIGEST, Change, ChangeLogError, Edit, reader_rebuilds
 from journal import REPLICA_FILE, Journal, JournalError, Transaction, as_saved, forgotten, replica_id, up_to
@@ -382,11 +383,27 @@ def forget_in_journal(p: Paths, journal: Journal, changes: list[Change], targets
     """A deletion's last step (kg forget, the retention purge, one made outside the journal, one
     cut short and finished): every change of <targets> a placeholder in local.jsonl, with what
     writes cut short left of that file (Journal.forget), and what they left in the knowledge
-    folder (store.remove_temporaries: batch.json.tmp names people), under the exclusive lock.
-    Returns the journal as read (<changes>) as it is now."""
+    folder (store.remove_temporaries: batch.json.tmp names people), under the exclusive lock;
+    then, when it removed anything, every update backup (delete_update_backups). Returns the
+    journal as read (<changes>) as it is now."""
     journal.forget(targets)
     store.remove_temporaries(p.root)
+    if targets:
+        delete_update_backups()
     return forgotten(changes, targets)
+
+
+def delete_update_backups() -> None:
+    """Every update backup deleted (update_backups.delete_all), as a deletion's last step: a backup
+    holds the whole knowledge base, so restoring one from before would bring the person back. Says
+    how many, never whom."""
+    count = update_backups.delete_all(state_dir())
+    if count:
+        noun = "backup" if count == 1 else "backups"
+        print(
+            f"kg: deleted {count} update {noun} taken before this; going back past it is no longer possible",
+            file=sys.stderr,
+        )
 
 
 def refuse_unencodable(edits: list[Edit]) -> None:

@@ -44,6 +44,13 @@ changes become placeholders. One found in files restored from before a `kg forge
 goes from the files; the write says so without naming them, and `kg add-entity <id> --allow-forgotten`
 adds them again if they asked.
 
+Every deletion of a person (`kg forget`, `kg expire` when it deletes a person fact, one made outside
+the journal) also deletes every backup `bosun update` took (`backups/` in the state folder). A backup
+holds the whole knowledge base, `forgotten.jsonl` and the journal included, so restoring one from
+before the deletion would bring the person back with no trace of it. The line says how many went
+("kg: deleted 2 update backups taken before this; going back past it is no longer possible"), never
+whom. A deletion cut short deletes them when the next write finishes it.
+
 If a write that deletes the git history (it holds what a person deleted on request named) cannot
 delete all of `.git`, it stops there and names it: delete it, and the next write finishes. While
 `secret.key` is missing over keyed records, no person is taken in from changed files at all, as

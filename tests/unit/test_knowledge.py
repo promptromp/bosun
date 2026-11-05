@@ -34,6 +34,7 @@ import knowledge
 import knowledge_model as km
 import knowledge_review as kr
 import knowledge_store as store
+import update_backups as ub
 from knowledge_model import KnowledgeError
 from knowledge_schema import SchemaError
 
@@ -516,6 +517,64 @@ class RetentionAndForgetTest(KnowledgeTestCase):
         with self.assertRaisesRegex(KnowledgeError, "deleted on request"):
             self.run_kg("add-entity", "person/dana")
         self.run_kg("add-entity", "person/dana", "--allow-forgotten")
+
+    def backups(self, count: int) -> list[Path]:
+        """<count> update backups in the state folder, as an update leaves them."""
+        folder = self.state / ub.BACKUPS_DIR
+        made = [folder / f"2026110{n + 1}T090000Z-aaa-bbb" for n in range(count)]
+        for backup in made:
+            (backup / "config" / "knowledge").mkdir(parents=True)
+            (backup / ub.MANIFEST).write_text("{}\n")
+        return made
+
+    def forget_saying(self, *argv: str) -> str:
+        said = io.StringIO()
+        with contextlib.redirect_stderr(said):
+            self.run_kg(*argv)
+        return said.getvalue()
+
+    def test_a_forget_deletes_the_update_backups(self) -> None:
+        self.seed()
+        self.run_kg("propose", "person/dana", "reviews", "exporter", "--source", "ledger:a")
+        made = self.backups(2)
+        said = self.forget_saying("forget", "person/dana")
+        self.assertEqual([p for p in made if p.exists()], [])
+        self.assertIn(
+            "kg: deleted 2 update backups taken before this; going back past it is no longer possible", said
+        )
+        self.assertNotIn("dana", said.lower())
+
+    def test_a_forget_says_backup_for_one(self) -> None:
+        self.seed()
+        self.run_kg("propose", "person/dana", "reviews", "exporter", "--source", "ledger:a")
+        self.backups(1)
+        self.assertIn(
+            "kg: deleted 1 update backup taken before this;", self.forget_saying("forget", "person/dana")
+        )
+
+    def test_a_forget_with_no_backups_says_nothing_of_them(self) -> None:
+        self.seed()
+        self.run_kg("propose", "person/dana", "reviews", "exporter", "--source", "ledger:a")
+        self.assertNotIn("update backup", self.forget_saying("forget", "person/dana"))
+
+    def test_expire_deletes_them_when_it_deletes_a_person_fact(self) -> None:
+        self.seed()
+        self.run_kg(
+            "propose", "person/dana", "timezone", "--value", "Europe/Lisbon", "--source", "profile:directory"
+        )
+        made = self.backups(2)
+        self.later(km.RETENTION_DAYS + 1)
+        said = self.forget_saying("expire")
+        self.assertEqual([p for p in made if p.exists()], [])
+        self.assertIn("kg: deleted 2 update backups", said)
+
+    def test_expire_keeps_them_when_it_deletes_none(self) -> None:
+        self.seed()
+        made = self.backups(2)
+        self.later(1)
+        said = self.forget_saying("expire")
+        self.assertTrue(all(p.exists() for p in made))
+        self.assertNotIn("update backup", said)
 
     def forgotten_records(self) -> list[dict[str, Any]]:
         text = (self.root / "forgotten.jsonl").read_text()

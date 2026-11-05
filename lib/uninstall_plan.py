@@ -37,6 +37,9 @@ STATE_FILES = (
     ("ledger.json.bak", LEDGER),
     ("ledger.md", LEDGER),
     ("learn", LEDGER),  # what learning found and what you decided, which a later run goes by
+    # The update's backups (lib/update_backups.py): each holds the whole ledger and knowledge base, so they
+    # are your records. A deletion of a person deletes them all.
+    ("backups", LEDGER),
     ("ledger.json.tmp", WORKING),  # what a write cut short left
     (".replica.json.*.tmp", WORKING),  # what making replica.json left when it was cut short
     ("ledger.lock", WORKING),
@@ -80,6 +83,7 @@ CONFIG_FILES = (
     ("tasks", SETTINGS),
     ("workstreams.json", SETTINGS),
     ("*.pre-init-*", SETTINGS),  # what `bosun init` backed up
+    ("bosun.env.pre-update-*", SETTINGS),  # what `bosun update` backed up
     ("forbidden-terms.txt", OURS_TO_LEAVE),  # guards commits to this repo; bosun runs without it
     (".DS_Store", WORKING),
 )
