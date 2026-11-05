@@ -648,7 +648,7 @@ Part C (Tasks 14-15) is the VM and the closing docs, a third.
     `files` covers the content of every file under each argument that is a path inside `install`
     (the plugin folder, the settings file). So `chores.md` counts as a launch input, and
     `policy.md` does not.
-  - `record(state_dir: Path, window: str, commit: str, harness: str, print_: Mapping[str, str]) ->
+  - `record(state_dir: Path, window: str, commit: str, harness: str, fp: Mapping[str, str]) ->
     None`; `recorded(state_dir: Path, window: str) -> dict[str, Any] | None`
   - CLI: `launch_record.py fingerprint --install <dir> -- <args...>` (JSON) and `record --window
     <w> --commit <c> --harness <h> -- <args...>`
@@ -748,7 +748,7 @@ Part C (Tasks 14-15) is the VM and the closing docs, a third.
 
 - [ ] **Step 1: Write the failing tests** in `tests/unit/test_update_plan.py`:
   - `test_every_pairing_has_one_treatment`: for each `kind`, each `status`, `launch_changed` and
-    `reread` both ways, `treatment` gives the table's value (parametrized over the table, 84
+    `reread` both ways, `treatment` gives the table's value (parametrized over the table, 72
     cases)
   - `test_only_the_orchestrator_rereads`: a repo window with `reread=True` and nothing changed:
     `LEAVE`
