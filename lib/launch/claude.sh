@@ -13,7 +13,7 @@ build_agent_args() { # <window> <session name> <model> <effort>
     build_model_effort_args "$3" "$4" "$BOSUN_ORCHESTRATOR_SETTINGS" "$(orchestrator_extra_settings)"
     # shellcheck disable=SC2206  # the flags are words, on purpose
     agent_args=($BOSUN_ORCHESTRATOR_FLAGS "${model_effort_args[@]}"
-      --plugin-dir "$BOSUN_ROOT/orchestrator/plugin"
+      --plugin-dir "$BOSUN_INSTALL/orchestrator/plugin"
       --append-system-prompt "$(orchestrator_policy)")
   else
     build_model_effort_args "$3" "$4" "" "$(repo_session_settings "$1")"

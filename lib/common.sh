@@ -5,6 +5,17 @@
 
 BOSUN_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 BOSUN="$BOSUN_ROOT/bin/bosun"
+# Two paths (lib/install_paths.py): this process runs its own folder, BOSUN_ROOT. What outlives it
+# (hook commands, the launch command, plists, the link in ~/.local/bin) names the install link,
+# BOSUN_INSTALL, which an update points at a newer version. In a checkout they are the same.
+case "$(dirname "$BOSUN_ROOT")" in
+  ?*-versions)
+    BOSUN_INSTALL="$(dirname "$BOSUN_ROOT")"
+    BOSUN_INSTALL="${BOSUN_INSTALL%-versions}"
+    ;;
+  *) BOSUN_INSTALL="$BOSUN_ROOT" ;;
+esac
+BOSUN_CMD="$BOSUN_INSTALL/bin/bosun"
 
 # launchd starts jobs with a bare PATH; make the usual tool locations visible.
 export PATH="$HOME/.local/bin:/opt/homebrew/bin:/usr/local/bin:$HOME/.rbenv/shims:$HOME/.rbenv/bin:/usr/bin:/bin:/usr/sbin:/sbin${PATH:+:$PATH}"
@@ -389,7 +400,7 @@ read_config() {
     i=$((i + 1))
   done
   : "${BOSUN_ORCHESTRATOR_DIR:=$BOSUN_REPOS_DIR}"
-  : "${BOSUN_ORCHESTRATOR_SETTINGS:=$BOSUN_ROOT/orchestrator/settings.json}"
+  : "${BOSUN_ORCHESTRATOR_SETTINGS:=$BOSUN_INSTALL/orchestrator/settings.json}"
 }
 
 load_config() {
@@ -473,14 +484,14 @@ BOSUN_PASSTHROUGH_VARS="BOSUN_CONFIG_DIR BOSUN_SESSION_NAME BOSUN_TMUX_SOCKET BO
 # would outlive it; launch stops them (reap_shell_helpers).
 build_launch_command() { # <window> [prompt] [kind] [model] [effort] [quiet]
   local window="$1" prompt="${2:-}" prompt_dir prompt_file shell var
-  local launch=("$BOSUN" launch)
+  local launch=("$BOSUN_CMD" launch)
   [ -n "${4:-}" ] && launch+=(--model "$4")
   [ -n "${5:-}" ] && launch+=(--effort "$5")
   # quiet: resume without the drain prompt (launch --no-prompt)
   [ "${6:-}" = "quiet" ] && launch+=(--no-prompt)
   launch+=("$window")
   # The checkin window runs the check-in loop instead of Claude.
-  [ "${3:-}" = "checkin" ] && launch=("$BOSUN" checkin --loop)
+  [ "${3:-}" = "checkin" ] && launch=("$BOSUN_CMD" checkin --loop)
   if [ -n "$prompt" ]; then
     prompt_dir="$BOSUN_STATE_DIR/prompts"
     mkdir -p "$prompt_dir"
@@ -546,7 +557,7 @@ orphans() { python3 "$BOSUN_ROOT/lib/orphans.py" "$@"; }
 # build_launch_command made starts, for each shell it may have used.
 set_wrapper_args() {
   local shell bosun
-  bosun="$(printf '%q' "$BOSUN")"
+  bosun="$(printf '%q' "$BOSUN_CMD")"
   wrapper_args=()
   while IFS= read -r shell; do
     [ -n "$shell" ] || continue
@@ -672,7 +683,7 @@ orchestrator_extra_settings() {
 
 approvals_hook_settings() {
   [ "$BOSUN_APPROVALS_ENABLED" = "1" ] || return 0
-  jq -cn --arg guard "$(printf '%q ' "$BOSUN" guard)" '
+  jq -cn --arg guard "$(printf '%q ' "$BOSUN_CMD" guard)" '
     def hook($mode; $timeout): [{matcher: "Bash|mcp__.*", hooks: [{type: "command", command: ($guard + $mode), timeout: $timeout}]}];
     {hooks: {
       PreToolUse: hook("--approvals"; 30),
@@ -690,7 +701,7 @@ approvals_hook_settings() {
 repo_session_settings() { # <window>
   {
     if [ "$BOSUN_EVENTS_ENABLED" = "1" ]; then
-      jq -cn --arg command "$(printf '%q ' "$BOSUN" hook user-prompt --window "$1")" \
+      jq -cn --arg command "$(printf '%q ' "$BOSUN_CMD" hook user-prompt --window "$1")" \
         '{hooks: {UserPromptSubmit: [{hooks: [{type: "command", command: $command, timeout: 10}]}]}}'
     fi
     compact_hook_settings --window "$1"
@@ -702,7 +713,7 @@ repo_session_settings() { # <window>
 # (`bosun hook signal`): they never block or change anything, so the session never waits on them.
 signal_hook_settings() { # <window>
   [ "$BOSUN_HOOK_SIGNALS" = "1" ] || return 0
-  jq -cn --arg command "$(printf '%q ' "$BOSUN" hook signal --window "$1")" '
+  jq -cn --arg command "$(printf '%q ' "$BOSUN_CMD" hook signal --window "$1")" '
     [{hooks: [{type: "command", command: $command, async: true, timeout: 10}]}] as $hook
     | {hooks: {Notification: $hook, PermissionRequest: $hook, Stop: $hook, StopFailure: $hook,
         SessionStart: $hook, SessionEnd: $hook}}'
@@ -712,7 +723,7 @@ signal_hook_settings() { # <window>
 # window holds once Claude Code compacts its conversation (`bosun hook compact-context`).
 compact_hook_settings() { # --window <window> | --orchestrator
   [ "$BOSUN_COMPACT_CONTEXT" = "1" ] || return 0
-  jq -cn --arg command "$(printf '%q ' "$BOSUN" hook compact-context "$@")" \
+  jq -cn --arg command "$(printf '%q ' "$BOSUN_CMD" hook compact-context "$@")" \
     '{hooks: {SessionStart: [{matcher: "compact", hooks: [{type: "command", command: $command, timeout: 15}]}]}}'
 }
 
@@ -924,7 +935,7 @@ settings_lines() { # <setting names...>
 }
 
 render_watchdog_plist() {
-  ENV_XML="$(launchd_env_xml)" LABEL="$(watchdog_label)" INTERVAL="$WATCHDOG_INTERVAL_SECONDS" ROOT="$BOSUN_ROOT" LOGS="$BOSUN_LOG_DIR" \
+  ENV_XML="$(launchd_env_xml)" LABEL="$(watchdog_label)" INTERVAL="$WATCHDOG_INTERVAL_SECONDS" ROOT="$BOSUN_INSTALL" LOGS="$BOSUN_LOG_DIR" \
     ruby -e 'print STDIN.read
       .gsub("__LABEL__", ENV["LABEL"]).gsub("__BOSUN_ROOT__", ENV["ROOT"]).gsub("__INTERVAL__", ENV["INTERVAL"])
       .gsub("__ENV__", ENV["ENV_XML"]).gsub("__LOG_DIR__", ENV["LOGS"])' \
@@ -944,7 +955,7 @@ job_labels() { echo "$BOSUN_LAUNCHD_LABEL $(watchdog_label) $(learn_label) $(wak
 
 render_learn_plist() {
   ENV_XML="$(launchd_env_xml)" CALENDAR="$(launchd_calendar_xml "$BOSUN_LEARN_AT" "$BOSUN_DAYS")" \
-  LABEL="$(learn_label)" ROOT="$BOSUN_ROOT" LOGS="$BOSUN_LOG_DIR" \
+  LABEL="$(learn_label)" ROOT="$BOSUN_INSTALL" LOGS="$BOSUN_LOG_DIR" \
     ruby -e 'print STDIN.read
       .gsub("__LABEL__", ENV["LABEL"]).gsub("__BOSUN_ROOT__", ENV["ROOT"]).gsub("__CALENDAR__", ENV["CALENDAR"])
       .gsub("__ENV__", ENV["ENV_XML"]).gsub("__LOG_DIR__", ENV["LOGS"])' \
@@ -957,7 +968,7 @@ render_launchd_plist() {
   shift 4
   env_xml="$(launchd_env_xml "$@")"
   calendar="$(launchd_calendar_xml "$time" "$days")"
-  ENV_XML="$env_xml" CALENDAR="$calendar" LABEL="$label" ARGS="$args" ROOT="$BOSUN_ROOT" LOGS="$BOSUN_LOG_DIR" \
+  ENV_XML="$env_xml" CALENDAR="$calendar" LABEL="$label" ARGS="$args" ROOT="$BOSUN_INSTALL" LOGS="$BOSUN_LOG_DIR" \
     ruby -e 'print STDIN.read
       .gsub("__LABEL__", ENV["LABEL"]).gsub("__BOSUN_ROOT__", ENV["ROOT"]).gsub("__ARGS__", ENV["ARGS"])
       .gsub("__ENV__", ENV["ENV_XML"]).gsub("__CALENDAR__", ENV["CALENDAR"]).gsub("__LOG_DIR__", ENV["LOGS"])' \

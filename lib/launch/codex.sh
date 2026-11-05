@@ -14,7 +14,7 @@ build_agent_args() { # <window> <session name> <model> <effort>
   git_dir="$(git rev-parse --path-format=absolute --git-common-dir 2>/dev/null)"
   roots="$(jq -cn --arg state "$BOSUN_STATE_DIR" --arg logs "$BOSUN_LOG_DIR" --arg git "$git_dir" \
     '[$state, $logs, $git] | map(select(. != ""))')"
-  notify="$(jq -cn --arg bosun "$BOSUN" --arg window "$1" --arg name "$2" \
+  notify="$(jq -cn --arg bosun "$BOSUN_CMD" --arg window "$1" --arg name "$2" \
     '[$bosun, "hook", "codex-turn-end", "--window", $window, "--conversation", $name]')"
   # shellcheck disable=SC2206  # the flags are words, on purpose
   agent_args=($BOSUN_CODEX_FLAGS

@@ -55,7 +55,7 @@ done
 load_config
 
 mkdir -p "$HOME/.local/bin"
-ln -sfn "$BOSUN" "$HOME/.local/bin/bosun"
+ln -sfn "$BOSUN_CMD" "$HOME/.local/bin/bosun"
 log "linked ~/.local/bin/bosun"
 
 # Earlier versions installed a tmuxinator project; `bosun start` no longer uses it.

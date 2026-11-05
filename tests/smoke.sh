@@ -68,6 +68,15 @@ fails_with() {
   contains "$output" "$text"
 }
 
+# version_folder <name>: a copy of the working tree (tracked files and untracked ones that are not
+# ignored) in $WORK/share/bosun-versions/<name>, shaped like an installed version. Prints its path.
+version_folder() {
+  local dest="$WORK/share/bosun-versions/$1"
+  mkdir -p "$dest"
+  git -C "$ROOT" ls-files -co --exclude-standard -z | tar -C "$ROOT" --null -T - -cf - | tar -C "$dest" -xf -
+  (cd "$dest" && pwd -P)
+}
+
 # wait_for <seconds> <command...>: poll until the command succeeds, instead of a fixed sleep.
 wait_for() {
   local deadline=$((SECONDS + $1))
@@ -251,7 +260,7 @@ check "run_with_timeout passes a fast command's status" bash -c 'source "$1/lib/
 
 echo "example configs"
 check "the generic example lists every setting with its default value" bash -c '
-  dump() { for v in $(compgen -v BOSUN_ | grep -vx "BOSUN_ROOT\|BOSUN_PASSTHROUGH_VARS\|BOSUN_CONFIG_DIR"); do printf "%s=%s\n" "$v" "${!v}"; done; }
+  dump() { for v in $(compgen -v BOSUN_ | grep -vx "BOSUN_ROOT\|BOSUN_INSTALL\|BOSUN_CMD\|BOSUN_PASSTHROUGH_VARS\|BOSUN_CONFIG_DIR"); do printf "%s=%s\n" "$v" "${!v}"; done; }
   defaults="$(env -i HOME="$HOME" bash -c "source \"\$1/lib/common.sh\"; set_defaults; $(declare -f dump); dump" _ "$1")"
   example="$(env -i HOME="$HOME" bash -c "BOSUN_CONFIG_DIR=\$HOME/.config/bosun; source \"\$1/examples/generic/bosun.env\"; $(declare -f dump); dump" _ "$1")"
   [ "$defaults" = "$example" ] || { diff <(echo "$defaults") <(echo "$example"); exit 1; }' _ "$ROOT"
@@ -272,6 +281,25 @@ check "... runs the watchdog every 5 minutes under its own label" bash -c 'grep 
 plist="$(bash -c "source '$ROOT/lib/common.sh'; load_config; render_learn_plist")"
 check "the learning agent's plist is valid" plutil -lint - <<<"$plist"
 check "... runs learn --scheduled daily at BOSUN_LEARN_AT under its own label" bash -c 'grep -q "<string>com.bosun.morning.learn</string>" <<<"$1" && grep -q "learn --scheduled" <<<"$1" && grep -q "<key>Hour</key><integer>18</integer><key>Minute</key><integer>30</integer>" <<<"$1"' _ "$plist"
+
+echo "two paths"
+V1="$(version_folder v1)"
+ln -s bosun-versions/v1 "$WORK/share/bosun" # the install link, as an update leaves it
+LINK="$(cd "$WORK/share" && pwd -P)/bosun"
+inst() { bash -c 'source "$1/lib/common.sh"; printf "%s %s" "$BOSUN_INSTALL" "$BOSUN_CMD"' _ "$1"; }
+check "a version folder writes out the link beside its versions folder" test "$(inst "$V1")" = "$LINK $LINK/bin/bosun"
+check "... and Python says the same" test "$(python3 -c 'import sys; sys.path.insert(0, sys.argv[1] + "/lib"); import install_paths, pathlib; print(install_paths.install_path(pathlib.Path(sys.argv[2])))' "$ROOT" "$V1")" = "$LINK"
+check "a checkout writes out itself" test "$(inst "$ROOT")" = "$ROOT $ROOT/bin/bosun"
+out="$(cd "$REPO_A" && BOSUN_ORCHESTRATOR=orch BOSUN_ORCHESTRATOR_DIR="$REPO_A" "$V1/bin/bosun" launch orch 2>&1)"
+check "a version's orchestrator launch names the link" contains "$out" "$LINK/orchestrator/plugin"
+check "... never its own folder" not_contains "$out" "bosun-versions/"
+out="$(cd "$REPO_A" && "$V1/bin/bosun" launch alpha 2>&1)"
+check "a version's repo window launch names the link in its hooks" contains "$out" "$LINK/bin/bosun"
+check "... never its own folder" not_contains "$out" "bosun-versions/"
+plists="$(bash -c 'source "$1/lib/common.sh"; load_config; render_launchd_plist com.example.test 08:00 MTWRF ""; render_watchdog_plist; render_learn_plist' _ "$V1")"
+check "a version's plists run the link" contains "$plists" "$LINK/"
+check "... never its own folder" not_contains "$plists" "bosun-versions/"
+check "a version's window command line names the link" contains "$(bash -c 'source "$1/lib/common.sh"; load_config; build_launch_command alpha; printf "%s\\n" "${launch_cmd[@]}"' _ "$V1")" "$LINK/bin/bosun"
 
 echo "window list"
 specs() { bash -c 'source "$1/lib/common.sh"; load_config; window_specs' _ "$ROOT"; }

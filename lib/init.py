@@ -29,6 +29,7 @@ import init_plan
 import init_terminal
 import init_wizard
 from init_plan import Answers, AnswersError, DirState, Facts, Plan, RepoUse
+from install_paths import install_bin
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -154,7 +155,7 @@ def path_note() -> str:
 
 
 def apply_hint() -> str:
-    command = "bosun init" if shutil.which("bosun", path=user_path()) else f"{ROOT / 'bin' / 'bosun'} init"
+    command = "bosun init" if shutil.which("bosun", path=user_path()) else f"{install_bin(ROOT)} init"
     return (
         f"\nTo carry it out: {command} --recommended"
         f"\nTo change something: {command} --print-answers > answers.json, edit it, then "

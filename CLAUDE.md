@@ -7,6 +7,11 @@ of truth, so don't copy rules into this file.
 
 - `bin/bosun` dispatches `bosun <cmd>` to `libexec/bosun-<cmd>`. Each command's
   `# Usage:` header is its `--help`.
+- Two paths (`lib/install_paths.py`, design: `docs/design/update.md`): a process runs the code of its own
+  folder (`BOSUN_ROOT`, `BOSUN`), and whatever outlives it (hook commands in launch settings, the launch
+  command, plists, the `~/.local/bin/bosun` link, `--plugin-dir`, Codex's notify, the orchestrator
+  settings default) names the install link (`BOSUN_INSTALL`, `BOSUN_CMD`), which an update points at a
+  newer version. In a checkout they are the same. A new place that writes a path out uses the second.
 - `lib/common.sh`: config defaults (`load_config`) and shared helpers: the window list
   (`window_specs`: orchestrator, sessions.yml entries, checkin), tmux, the one
   launch path (`build_launch_command`, used by `start`, `refresh` and `send`), and the launchd
