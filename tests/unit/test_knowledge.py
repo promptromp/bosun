@@ -16,6 +16,7 @@ import json
 import os
 import re
 import shutil
+import signal
 import subprocess
 import sys
 import tempfile
@@ -972,6 +973,7 @@ class GitHistoryTest(KnowledgeTestCase):
         (self.root / ".git" / "objects" / "info" / "packs").write_text("P pack-0.pack\n")
         (self.root / ".git" / "info").mkdir()
         (self.root / ".git" / "info" / "refs").write_text("")
+        (self.root / ".git" / "left-by-an-outside-writer").write_text("debris\n")  # no git makes it
 
     def test_a_history_folder_that_is_no_repository_is_made_again(self) -> None:
         """The next write deletes it and starts the history again, saying so in one line, and the
@@ -988,7 +990,7 @@ class GitHistoryTest(KnowledgeTestCase):
         self.assertEqual(
             self.commits(), [f"kg add-entity {e}" for e in ("repo/fourth", "repo/third", "repo/other")]
         )
-        self.assertFalse((self.root / ".git" / "info" / "refs").exists())
+        self.assertFalse((self.root / ".git" / "left-by-an-outside-writer").exists())  # the debris went
 
     def test_a_history_git_cannot_read_now_is_kept(self) -> None:
         """A .git with what every repository has is never deleted, whatever git says of it: a typo
@@ -1051,8 +1053,8 @@ class GitHistoryTest(KnowledgeTestCase):
         return {"PATH": f"{fake}{os.pathsep}{os.environ['PATH']}"}
 
     def processes_naming(self, token: str) -> list[str]:
-        listed = subprocess.run(["ps", "-A", "-o", "command="], capture_output=True, text=True, check=True)
-        return [line for line in listed.stdout.splitlines() if token in line]
+        listed = subprocess.run(["ps", "-A", "-o", "command="], capture_output=True, check=True)
+        return [line for line in listed.stdout.decode(errors="replace").splitlines() if token in line]
 
     def test_a_git_past_its_time_is_stopped_with_all_it_started(self) -> None:
         """git's housekeeping is its children, theirs too: on a timeout git and every process
@@ -1083,16 +1085,80 @@ class GitHistoryTest(KnowledgeTestCase):
         self.assertFalse(mark.exists())  # the grandchild went with git
 
     def test_processes_still_there_after_the_kill_are_said(self) -> None:
+        """One of git's processes that would not go (here: one of ours, found in the tree and taken
+        for alive whatever happens to it) is counted in the warning."""
         self.root.mkdir(parents=True)
+        stays = subprocess.Popen(["sleep", "30"])
+        self.addCleanup(stays.wait)
+        self.addCleanup(stays.kill)
+        listed = store.stop_tree
+
+        def with_it(leader: int, tree: set[int]) -> str:
+            tree.add(stays.pid)
+            return listed(leader, tree)
+
         with (
-            mock.patch.dict(os.environ, self.fake_git("sh -c 'sleep 30' &\nsleep 30")),
+            mock.patch.dict(os.environ, self.fake_git("sleep 30")),
             mock.patch.object(store, "GIT_TIMEOUT_SECONDS", 0.2),
             mock.patch.object(store, "GIT_TREE_GONE_SECONDS", 0.1),
-            mock.patch.object(store, "alive", lambda pid: True),
+            mock.patch.object(store, "stop_tree", with_it),
+            mock.patch.object(store, "alive", lambda pid: pid == stays.pid),
         ):
             warning = store.commit(self.root, "kg add-entity")
-        still = r"ran past 0.2 s and was stopped; \d+ process\(es\) it started were still there 0.1 s later$"
-        self.assertRegex(warning, still)
+        self.assertEqual(
+            warning,
+            "warning: git commit failed: git init ran past 0.2 s and was stopped; 1 process(es) it "
+            "started were still there 0.1 s later",
+        )
+
+    def test_a_command_line_that_is_not_utf8_never_stops_the_kill(self) -> None:
+        """Another process on the Mac with bytes in its command line that are not UTF-8: the
+        listing of what git started reads only pids, so all of it is still killed, with a warning."""
+        other = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(30)", b"not utf-8: \xff"])
+        self.addCleanup(other.wait)
+        self.addCleanup(other.kill)
+        token = f"kg-test-tree-{os.getpid()}-{time.monotonic_ns()}"
+        self.root.mkdir(parents=True)
+        with (
+            mock.patch.dict(os.environ, self.fake_git(f"sh -c 'sleep 30' {token} &\nsleep 30")),
+            mock.patch.object(store, "GIT_TIMEOUT_SECONDS", 0.3),
+        ):
+            warning = store.commit(self.root, "kg add-entity")
+        self.assertEqual(warning, "warning: git commit failed: git init ran past 0.3 s and was stopped")
+        self.assertEqual(self.processes_naming(token), [])
+
+    def test_a_ps_that_fails_is_said_and_git_is_still_stopped(self) -> None:
+        self.root.mkdir(parents=True)
+        environment = self.fake_git("sleep 30")
+        (self.tmp / "bin" / "ps").write_text("#!/bin/sh\necho 'ps: not here' >&2\nexit 1\n")
+        (self.tmp / "bin" / "ps").chmod(0o755)
+        with mock.patch.dict(os.environ, environment), mock.patch.object(store, "GIT_TIMEOUT_SECONDS", 0.2):
+            started = time.monotonic()
+            warning = store.commit(self.root, "kg add-entity")
+            self.assertLess(time.monotonic() - started, 3)
+        self.assertEqual(
+            warning,
+            "warning: git commit failed: git init ran past 0.2 s and was stopped; the processes it "
+            "started could not be listed (ps exited 1: ps: not here), so only git itself was stopped",
+        )
+
+    def test_a_ctrl_c_while_git_is_being_stopped_still_kills_what_was_stopped(self) -> None:
+        """Else what was stopped so far would stay stopped for good."""
+        leader = subprocess.Popen(["sleep", "30"], text=True)
+        stopped = subprocess.Popen(["sleep", "30"])
+        for process in (leader, stopped):
+            self.addCleanup(process.wait)
+            self.addCleanup(process.kill)
+
+        def interrupted(pid: int, tree: set[int]) -> str:
+            tree.add(stopped.pid)
+            os.kill(stopped.pid, signal.SIGSTOP)
+            raise KeyboardInterrupt
+
+        with mock.patch.object(store, "stop_tree", interrupted), self.assertRaises(KeyboardInterrupt):
+            store.kill_tree(leader)
+        self.assertEqual(stopped.wait(timeout=5), -signal.SIGKILL)
+        self.assertEqual(leader.wait(timeout=5), -signal.SIGKILL)
 
     def test_git_runs_in_the_commands_own_process_group(self) -> None:
         """So that a Ctrl-C, a closed terminal or a stop sent to the command reaches git too: a git

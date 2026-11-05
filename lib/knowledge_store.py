@@ -34,7 +34,6 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-import orphans
 from journal import TORN, JournalError, create_new, flush_to_disk, replace_durably, write_all
 
 
@@ -298,28 +297,37 @@ def git(root: Path, *args: str, pinned: bool = True) -> subprocess.CompletedProc
         try:
             out, err = process.communicate(timeout=GIT_TIMEOUT_SECONDS)
         except subprocess.TimeoutExpired:
-            left = kill_tree(process)
-            still = (
-                f"; {left} process(es) it started were still there {GIT_TREE_GONE_SECONDS} s later"
-                if left
-                else ""
-            )
+            said = kill_tree(process)
             raise GitTimeout(
-                f"git {args[0]} ran past {GIT_TIMEOUT_SECONDS} s and was stopped{still}"
+                f"git {args[0]} ran past {GIT_TIMEOUT_SECONDS} s and was stopped{said}"
             ) from None
     return subprocess.CompletedProcess(command, process.returncode, out, err)
 
 
-def process_tree(pid: int) -> set[int]:
-    """<pid> and every process descending from it now (from `ps -A`: orphans.parse_ps); just <pid>
-    where ps cannot be run."""
-    try:
-        procs = orphans.parse_ps(orphans.read_ps("-A"))
-    except OSError:
-        return {pid}
+def children_of() -> dict[int, list[int]]:
+    """Each process's children now, from `ps -A -o pid=,ppid=` read as bytes: no command lines,
+    as one that is not UTF-8 anywhere on the Mac must not stop the listing. A ps that fails or
+    lists nothing is an OSError."""
+    done = subprocess.run(["ps", "-A", "-o", "pid=,ppid="], capture_output=True, check=False)
     children: dict[int, list[int]] = {}
-    for proc in procs:
-        children.setdefault(proc.ppid, []).append(proc.pid)
+    for line in done.stdout.splitlines():
+        match line.split():
+            case [pid, ppid] if pid.isdigit() and ppid.isdigit():
+                children.setdefault(int(ppid), []).append(int(pid))
+    if done.returncode != 0 or not children:
+        raise OSError(f"ps exited {done.returncode}: {done.stderr.decode(errors='replace').strip()}")
+    return children
+
+
+def process_tree(pid: int) -> tuple[set[int], str]:
+    """<pid> and every process descending from it now, and ""; where they cannot be listed, just
+    <pid> and why, to be said. (A descendant adopted by launchd before the first listing, a daemon
+    detaching, escapes this walk; the store's git starts none: no detached housekeeping, no hooks,
+    no fsmonitor.)"""
+    try:
+        children = children_of()
+    except Exception as exc:  # noqa: BLE001 - whatever stops the listing, git itself is still stopped
+        return {pid}, f"the processes it started could not be listed ({exc}), so only git itself was stopped"
     found: set[int] = set()
     todo = [pid]
     while todo:
@@ -327,7 +335,7 @@ def process_tree(pid: int) -> set[int]:
         if current not in found:
             found.add(current)
             todo += children.get(current, [])
-    return found
+    return found, ""
 
 
 def signal_all(pids: set[int], sig: signal.Signals) -> None:
@@ -336,24 +344,41 @@ def signal_all(pids: set[int], sig: signal.Signals) -> None:
             os.kill(pid, sig)
 
 
-def kill_tree(leader: subprocess.Popen[str]) -> int:
-    """Kill <leader> and every process descending from it: each listed and stopped (SIGSTOP)
-    until a listing finds no new one, so that none starts another unseen or is adopted by launchd
-    before it is listed; then all killed, the leader reaped, and the others waited for (at most
-    GIT_TREE_GONE_SECONDS; a process gone or no longer ours counts as gone). Returns how many
-    were still there."""
+def stop_tree(leader: int, tree: set[int]) -> str:
+    """Stop (SIGSTOP) <leader> and every process descending from it, adding each to <tree>, until
+    a listing finds no new one, so that none starts another unseen or is adopted by launchd before
+    it is listed. Returns why they could not be listed, or ""."""
+    problem = ""
+    while True:
+        found, why = process_tree(leader)
+        problem = problem or why
+        new = found - tree
+        if not new:
+            return problem
+        tree |= new
+        signal_all(new, signal.SIGSTOP)
+
+
+def kill_tree(leader: subprocess.Popen[str]) -> str:
+    """Kill <leader> and every process descending from it: all stopped first (stop_tree), then
+    killed, whatever happens in between (a Ctrl-C would otherwise leave them stopped for good), the
+    leader reaped, and the others waited for (at most GIT_TREE_GONE_SECONDS; a process gone or no
+    longer ours counts as gone). Returns what the warning says of it ("" when all went)."""
     tree: set[int] = set()
-    while found := process_tree(leader.pid) - tree:
-        tree |= found
-        signal_all(found, signal.SIGSTOP)
-    signal_all(tree, signal.SIGKILL)
+    try:
+        problem = stop_tree(leader.pid, tree)
+    finally:
+        signal_all(tree | {leader.pid}, signal.SIGKILL)
     leader.wait()
     left = tree - {leader.pid}
     deadline = time.monotonic() + GIT_TREE_GONE_SECONDS
     while left and time.monotonic() < deadline:
         left = {pid for pid in left if alive(pid)}
         time.sleep(0.01)
-    return len(left)
+    still = (
+        f"{len(left)} process(es) it started were still there {GIT_TREE_GONE_SECONDS} s later" if left else ""
+    )
+    return "".join(f"; {said}" for said in (problem, still) if said)
 
 
 def alive(pid: int) -> bool:
