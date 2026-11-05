@@ -95,8 +95,8 @@ check_config() {
   done <<<"$sessions"
 }
 
-# An update cut short (docs/design/update.md): its hold outlived its hour, or it stopped while
-# writes were paused. The watchdog's update-stuck check says the same.
+# An update cut short (docs/design/update.md): it stopped and left its hold, or its hold outlived
+# its hour. The watchdog's update-stuck check says the same.
 check_update() {
   local why
   if why="$(python3 "$BOSUN_ROOT/lib/update_state.py" stuck --state-dir "$BOSUN_STATE_DIR")"; then

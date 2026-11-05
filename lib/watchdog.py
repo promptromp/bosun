@@ -1441,7 +1441,7 @@ CHECKS: tuple[Check, ...] = (
     Check(
         "update-stuck",
         "error",
-        "an update's hold outlived its hour, or an update stopped while writes were paused",
+        "an update stopped and left its hold (or paused writes), or its hold outlived its hour",
         check_update_stuck,
     ),
 )

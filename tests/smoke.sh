@@ -1004,13 +1004,29 @@ update_record() { # <step> <hold_until>
   printf '{"id":"u1","from_root":"/a","to_root":"/b","from_commit":"aaa","to_commit":"bbb","step":"%s","started_at":"2026-11-05T09:00:00","hold_until":%d}' "$1" "$2" >"$BOSUN_STATE_DIR/update.json"
 }
 update_record holding $(($(date +%s) + 600))
+check "a hold left by an update that died is no hold" bash -c '! "$1" checkin --dry-run 2>&1 | grep -q "update in progress"' _ "$BOSUN"
+check "... and is the update-stuck finding at once" contains "$("$BOSUN" watchdog --dry-run --only update-stuck 2>&1)" "left its hold"
+# A running update: a process holding update.lock exclusively.
+python3 -c '
+import sys, time
+from pathlib import Path
+sys.path.insert(0, sys.argv[1])
+import update_state
+with update_state.one_update(Path(sys.argv[2])):
+    print("held", flush=True)
+    time.sleep(600)
+' "$ROOT/lib" "$BOSUN_STATE_DIR" >"$WORK/update-holder.out" &
+update_holder=$!
+wait_for 10 grep -q held "$WORK/update-holder.out"
 check "checkin skips its tick while an update holds" contains "$("$BOSUN" checkin --dry-run 2>&1)" "update in progress: skipping this tick"
 check "the watchdog skips a run while an update holds" contains "$("$BOSUN" watchdog 2>&1)" "update in progress"
 check "learning skips a run while an update holds" contains "$("$BOSUN" learn 2>&1)" "update in progress"
 check "doctor is quiet about a live hold" bash -c '! "$1" doctor 2>&1 | grep -q "update:"' _ "$BOSUN"
 update_record holding $(($(date +%s) - 60))
-check "a hold past its hour is the update-stuck finding" contains "$("$BOSUN" watchdog --dry-run --only update-stuck 2>&1)" "update-stuck"
+check "a running update's hold past its hour is the update-stuck finding" contains "$("$BOSUN" watchdog --dry-run --only update-stuck 2>&1)" "update-stuck"
 check "doctor fails on a hold past its hour" contains "$("$BOSUN" doctor 2>&1)" "FAIL  update: an update's hold"
+kill "$update_holder"
+wait "$update_holder" 2>/dev/null
 rm -f "$BOSUN_STATE_DIR/update.json"
 orch_status() { # <status> <seconds in it> [name]
   printf '{"pid":%d,"status":"%s","version":"2.0.0","statusUpdatedAt":%d,"name":"%s"}' "$orch_pid" "$1" $((($(date +%s) - $2) * 1000)) "${3:-orch-$(date +%F)}" >"$HOME/.claude/sessions/$orch_pid.json"

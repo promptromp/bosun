@@ -82,15 +82,51 @@ class UpdateState:
 _TUPLES = ("restorable", "pending", "user_changes")
 
 
+_INTS = ("hold_until", "freeze_ms")
+_NAMES = tuple(f.name for f in dataclasses.fields(UpdateState))
+_REQUIRED = tuple(f.name for f in dataclasses.fields(UpdateState) if f.default is dataclasses.MISSING)
+
+
+def _is_int(value: Any) -> bool:
+    return isinstance(value, int) and not isinstance(value, bool)
+
+
+def _is_strings(value: Any) -> bool:
+    return isinstance(value, list) and all(isinstance(x, str) for x in value)
+
+
+def _right_types(data: dict[str, Any]) -> bool:
+    for name, value in data.items():
+        if name in _TUPLES:
+            ok = _is_strings(value)
+        elif name in _INTS:
+            ok = _is_int(value)
+        else:
+            ok = isinstance(value, str)
+        if not ok:
+            return False
+    return True
+
+
+def _valid(data: Any) -> bool:
+    """Whether <data> is a record this version can use: an object with the right fields and types
+    and a known step (a newer version's step, or a damaged file, is no record)."""
+    if not isinstance(data, dict) or not set(_REQUIRED) <= data.keys() <= set(_NAMES):
+        return False
+    return _right_types(data) and data["step"] in STEPS
+
+
 def read(state_dir: Path) -> UpdateState | None:
-    """The record, or None where there is none or it is unreadable (a .tmp left by a cut is not it)."""
+    """The record, or None where there is none or it is unusable (a .tmp left by a cut is not it)."""
     try:
         data = json.loads((state_dir / STATE_FILE).read_text())
-        for name in _TUPLES:
-            data[name] = tuple(data.get(name, ()))
-        return UpdateState(**data)
-    except (OSError, ValueError, TypeError):
+    except (OSError, ValueError):
         return None
+    if not _valid(data):
+        return None
+    for name in _TUPLES:
+        data[name] = tuple(data.get(name, ()))
+    return UpdateState(**data)
 
 
 def write(state_dir: Path, state: UpdateState) -> None:
@@ -157,16 +193,22 @@ def one_update(state_dir: Path) -> Iterator[None]:
         os.close(fd)
 
 
+def holding(state_dir: Path, now: float) -> bool:
+    """Whether the hold counts: an update is running (the lock) and its hold is within the hour. A
+    hold an update that died left lapses at once."""
+    return running(state_dir) and hold_active(read(state_dir), now)
+
+
 def stuck(state_dir: Path, now: float) -> str:
-    """Why an update was cut short and left things held, or "" (a hold past hold_until, or a
-    freeze step recorded with nothing running)."""
+    """Why an update was cut short and left its hold, or "": a record before `released` with
+    nothing running it, or a running one whose hold outlived its hour."""
     state = read(state_dir)
     if state is None or STEPS.index(state.step) >= _HOLD_ENDS:
         return ""
+    if not running(state_dir):
+        return f"an update stopped at step {state.step} and left its hold; run bosun update"
     if now >= state.hold_until:
         return f"an update's hold (step {state.step}) outlived its hour"
-    if in_freeze(state) and not running(state_dir):
-        return f"an update stopped at step {state.step} while writes were paused, and nothing is running it"
     return ""
 
 
@@ -176,7 +218,7 @@ def main(argv: list[str]) -> int:
     parser.add_argument("--state-dir", type=Path, required=True)
     args = parser.parse_args(argv)
     if args.command == "hold-active":
-        return 0 if hold_active(read(args.state_dir), time.time()) else 1
+        return 0 if holding(args.state_dir, time.time()) else 1
     why = stuck(args.state_dir, time.time())
     if why:
         print(why)
