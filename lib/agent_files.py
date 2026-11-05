@@ -31,7 +31,11 @@ class LaunchSettings(NamedTuple):
 
 def command_line(pid: int | str) -> str:
     result = subprocess.run(
-        ["ps", "-ww", "-o", "command=", "-p", str(pid)], check=False, capture_output=True, text=True
+        ["ps", "-ww", "-o", "command=", "-p", str(pid)],
+        check=False,
+        capture_output=True,
+        text=True,
+        errors="replace",
     )
     return result.stdout.strip()
 

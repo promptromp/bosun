@@ -131,6 +131,24 @@ class StopTest(unittest.TestCase):
         self.assertFalse(orphans.unchanged(Proc(live.pid, live.ppid, live.tty, "something else")))
 
 
+class ForeignCommandLineTest(unittest.TestCase):
+    def test_a_foreign_command_line_that_is_not_utf8_cannot_break_the_listing(self) -> None:
+        foreign = subprocess.Popen(
+            [sys.executable, "-c", "import time; time.sleep(30)", b"\xff\xfe"],
+        )
+        self.addCleanup(foreign.wait)
+        self.addCleanup(foreign.kill)
+        mine = start_sleeper(self)
+        by_pid: dict[int, Proc] = {}
+        deadline = time.monotonic() + 5
+        while foreign.pid not in by_pid and time.monotonic() < deadline:
+            by_pid = {proc.pid: proc for proc in orphans.parse_ps(orphans.read_ps("-A"))}
+            time.sleep(0.01)
+        self.assertIn(foreign.pid, by_pid)
+        self.assertEqual(by_pid[mine.pid].command, "sleep 30")
+        self.assertTrue(orphans.unchanged(by_pid[mine.pid]))
+
+
 class MainTest(unittest.TestCase):
     def run_main(self, *args: str) -> tuple[int, str]:
         with tempfile.NamedTemporaryFile("w", suffix=".ps") as listing:
