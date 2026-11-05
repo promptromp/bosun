@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import sys
+import unittest
 from pathlib import Path
 
 
@@ -14,28 +15,24 @@ from install_paths import install_bin, install_path, is_version_folder, versions
 VERSION = Path("/h/.local/share/bosun-versions/0123456789ab")
 
 
-def test_a_version_folder_writes_out_the_link() -> None:
-    assert install_path(VERSION) == Path("/h/.local/share/bosun")
+class InstallPathsTests(unittest.TestCase):
+    def test_a_version_folder_writes_out_the_link(self) -> None:
+        self.assertEqual(install_path(VERSION), Path("/h/.local/share/bosun"))
 
+    def test_a_checkout_writes_out_itself(self) -> None:
+        self.assertEqual(install_path(Path("/h/src/bosun")), Path("/h/src/bosun"))
 
-def test_a_checkout_writes_out_itself() -> None:
-    assert install_path(Path("/h/src/bosun")) == Path("/h/src/bosun")
+    def test_versions_dir_sits_beside_the_link(self) -> None:
+        self.assertEqual(versions_dir(Path("/h/.local/share/bosun")), Path("/h/.local/share/bosun-versions"))
 
+    def test_only_a_folder_inside_versions_is_one(self) -> None:
+        self.assertTrue(is_version_folder(VERSION))
+        self.assertFalse(is_version_folder(Path("/h/.local/share/bosun-versions")))
+        self.assertFalse(is_version_folder(Path("/h/src/bosun")))
 
-def test_versions_dir_sits_beside_the_link() -> None:
-    assert versions_dir(Path("/h/.local/share/bosun")) == Path("/h/.local/share/bosun-versions")
+    def test_the_command_is_the_links_bin(self) -> None:
+        self.assertEqual(install_bin(VERSION), Path("/h/.local/share/bosun/bin/bosun"))
 
-
-def test_only_a_folder_inside_versions_is_one() -> None:
-    assert is_version_folder(VERSION)
-    assert not is_version_folder(Path("/h/.local/share/bosun-versions"))
-    assert not is_version_folder(Path("/h/src/bosun"))
-
-
-def test_the_command_is_the_links_bin() -> None:
-    assert install_bin(VERSION) == Path("/h/.local/share/bosun/bin/bosun")
-
-
-def test_a_parent_named_only_versions_is_not_one() -> None:
-    assert not is_version_folder(Path("/h/-versions/x"))
-    assert install_path(Path("/h/-versions/x")) == Path("/h/-versions/x")
+    def test_a_parent_named_only_versions_is_not_one(self) -> None:
+        self.assertFalse(is_version_folder(Path("/h/-versions/x")))
+        self.assertEqual(install_path(Path("/h/-versions/x")), Path("/h/-versions/x"))
