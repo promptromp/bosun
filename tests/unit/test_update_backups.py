@@ -147,6 +147,54 @@ class BackupsTest(unittest.TestCase):
         self.assertFalse((self.state / "journal").exists())
         self.assertFalse((self.state / "ledger.md").exists())
 
+    def test_a_trailing_slash_means_the_same_prefix(self) -> None:
+        backup = self.take()
+        self.assertEqual(ub.restore(backup, self.state, self.config, ["config/knowledge/"]), [])
+        self.assertTrue((self.config / "knowledge" / "a.json").exists())
+        (self.config / "knowledge" / "a.json").write_text("changed\n")
+        self.assertEqual(
+            ub.restore(backup, self.state, self.config, ["config/knowledge//"]), ["config/knowledge/a.json"]
+        )
+
+    def test_a_bad_prefix_is_refused_before_anything_is_written(self) -> None:
+        backup = self.take()
+        (self.state / "ledger.json").write_text("changed\n")
+        bad_ones = (
+            "state",
+            "config/",
+            "",
+            "state/backups",
+            "state/update/x",
+            "config/../state",
+            "config/./a",
+            "other/x",
+        )
+        for bad in bad_ones:
+            with self.assertRaises(ub.BackupError, msg=bad):
+                ub.restore(backup, self.state, self.config, ["state/ledger.json", bad])
+        self.assertEqual((self.state / "ledger.json").read_text(), "changed\n")
+
+    def test_a_link_deeper_than_the_top_level_is_replaced_not_written_through(self) -> None:
+        backup = self.take()
+        outside = self.config.parent / "outside.txt"
+        outside.write_text("mine\n")
+        (self.config / "knowledge" / "a.json").unlink()
+        (self.config / "knowledge" / "a.json").symlink_to(outside)
+        ub.restore(backup, self.state, self.config, ["config/knowledge"])
+        self.assertEqual(outside.read_text(), "mine\n")
+        self.assertFalse((self.config / "knowledge" / "a.json").is_symlink())
+        self.assertEqual((self.config / "knowledge" / "a.json").read_text(), "knowledge\n")
+
+    def test_a_folder_that_became_a_file_is_put_back(self) -> None:
+        (self.config / "knowledge" / "sub").write_text("file\n")
+        backup = self.take()
+        (self.config / "knowledge" / "sub").unlink()
+        (self.config / "knowledge" / "sub").mkdir()
+        (self.config / "knowledge" / "sub" / "x").write_text("x\n")
+        done = ub.restore(backup, self.state, self.config, ["config/knowledge"])
+        self.assertEqual(done, ["config/knowledge/sub", "config/knowledge/sub/x"])
+        self.assertEqual((self.config / "knowledge" / "sub").read_text(), "file\n")
+
     def test_a_link_inside_is_recorded_and_restored_not_deleted(self) -> None:
         (self.config / "knowledge" / "current").symlink_to("a.json")
         backup = self.take()

@@ -51,6 +51,7 @@ FROZEN = (
 _KEPT_KINDS = (LEDGER, KNOWLEDGE, SETTINGS)
 _NEVER = (BACKUPS_DIR, "logs", "dry-runs", "update")
 _CHUNK = 1 << 20
+_SIDE_AND_NAME = 2  # a prefix names at least a side and an entry: state/<name>
 
 
 class BackupError(Exception):
@@ -228,9 +229,16 @@ def _flush_file(path: Path) -> None:
         os.close(fd)
 
 
-def _put_back(source: Path, target: Path, expected: str) -> None:
-    """<source> written beside <target> (through it when it is a link), flushed, checked, renamed over."""
-    if target.is_symlink() and not expected.startswith(LINK):
+def _is_top_level(relative: str) -> bool:
+    """A backup set's own entry (state/<name>, config/<name>): the one cp -H followed."""
+    return relative.count("/") == 1
+
+
+def _put_back(source: Path, target: Path, expected: str, follow: bool) -> None:
+    """<source> written beside <target>, flushed, checked, renamed over. A link at <target> is
+    written through only when <follow> (a top-level entry that is a link, as the backup followed
+    it); anywhere else it is replaced, never written through to what it points at."""
+    if follow and target.is_symlink() and not expected.startswith(LINK):
         target = target.resolve()
     target.parent.mkdir(parents=True, exist_ok=True)
     tmp = target.with_name(f".{target.name}.restoring")
@@ -252,6 +260,17 @@ def _same_now(target: Path, expected: str) -> bool:
     return target.is_file() and digest(target) == expected
 
 
+def _clear_inner_links(relative: str, target: Path) -> None:
+    """A link in place of a folder the manifest has below the top-level entry is removed, so
+    nothing is written through it."""
+    depth = relative.count("/") - 2  # the folders between the top-level entry and the file
+    folder = target.parent
+    for _ in range(depth):
+        if folder.is_symlink():
+            folder.unlink()
+        folder = folder.parent
+
+
 def _put_back_all(
     manifest: Manifest, backup: Path, state_dir: Path, config_dir: Path, only: Sequence[str]
 ) -> list[str]:
@@ -265,7 +284,8 @@ def _put_back_all(
         source = backup / relative
         if not expected.startswith(LINK) and (not source.is_file() or digest(source) != expected):
             raise BackupError(f"{source} is not as the manifest has it: nothing more was restored")
-        _put_back(source, target, expected)
+        _clear_inner_links(relative, target)
+        _put_back(source, target, expected, _is_top_level(relative))
         done.append(relative)
     return done
 
@@ -301,15 +321,31 @@ def _remove_empty_folders(root: Path, prefix: str, backup: Path) -> None:
             folder.rmdir()
 
 
+def _normalised(only: Sequence[str]) -> list[str]:
+    """Each prefix in one form (no trailing or doubled slash), refused when it is a bare side, has an
+    empty, `.` or `..` part, or lies in what a backup never holds."""
+    result = []
+    for prefix in only:
+        parts = prefix.rstrip("/").split("/")
+        if len(parts) < _SIDE_AND_NAME or any(part in ("", ".", "..") for part in parts):
+            raise BackupError(f"{prefix!r} is not a file or folder of the state or config folder")
+        if parts[0] not in ("state", "config") or (parts[0] == "state" and parts[1] in _NEVER):
+            raise BackupError(f"{prefix!r} is not something a backup holds")
+        result.append("/".join(parts))
+    return result
+
+
 def restore(backup: Path, state_dir: Path, config_dir: Path, only: Sequence[str]) -> list[str]:
     """Makes each <only> prefix as the manifest has it: each file or link whose content differs now
     is put back (checked against the manifest, before and after), and what is there and the manifest
     does not list is deleted (files, links and the folders the backup lacks; lock files stay: the
     freeze holds them). Under the freeze's locks only the update wrote there, so what is new came
     from the step that failed. Returns what it put back and what it deleted."""
+    prefixes = _normalised(only)  # all checked before anything is written
     manifest = read_manifest(backup)
-    done = _put_back_all(manifest, backup, state_dir, config_dir, only)
-    return sorted({*done, *_remove_extra(backup, state_dir, config_dir, manifest, only)})
+    removed = _remove_extra(backup, state_dir, config_dir, manifest, prefixes)  # first: a folder that
+    done = _put_back_all(manifest, backup, state_dir, config_dir, prefixes)  # became a file is gone
+    return sorted({*done, *removed})
 
 
 def _folders(state_dir: Path) -> list[Path]:
