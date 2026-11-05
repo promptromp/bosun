@@ -68,7 +68,11 @@ def parse_ps(text: str) -> list[Proc]:
 
 
 def read_ps(*args: str) -> str:
-    done = subprocess.run(["ps", *args, "-o", PS_FIELDS], capture_output=True, text=True, check=False)
+    # Any process on the Mac is listed, and a foreign command line may not be UTF-8: decode
+    # tolerantly. A replaced character can only stop a foreign line matching, never make it match.
+    done = subprocess.run(
+        ["ps", *args, "-o", PS_FIELDS], capture_output=True, text=True, errors="replace", check=False
+    )
     return done.stdout
 
 

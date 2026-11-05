@@ -175,7 +175,9 @@ def registered(pids: Iterable[str]) -> str | None:
 
 def running() -> Iterator[dict[str, Any]]:
     """The records of every Codex running on this machine."""
-    result = subprocess.run(["ps", "-Ao", "pid=,command="], check=False, capture_output=True, text=True)
+    result = subprocess.run(
+        ["ps", "-Ao", "pid=,command="], check=False, capture_output=True, text=True, errors="replace"
+    )
     pids = [line.split(None, 1)[0] for line in result.stdout.splitlines() if HARNESS in line]
     for pid, rollouts in held_rollouts(pids).items():
         rollout = main_rollout(rollouts)
