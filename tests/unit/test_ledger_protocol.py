@@ -14,6 +14,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import IO, Any
 from unittest import mock
@@ -566,25 +567,41 @@ class JournalTest(ProtocolTestCase):
         self.assertIn(f"{path.name}, line {len(lines)}", said.getvalue())
 
     def test_a_journal_that_lost_a_file_is_refused_and_nothing_is_written(self) -> None:
-        run("record-delegation", MENTION_ID, "--window", "w", "--task", "t")
-        hook_said = ledger.add_user_said("w", "my own words")  # a local line too
+        self.lose_each_file(said_after=0)
+
+    def test_a_lost_file_that_leaves_no_whole_transaction_is_refused_and_warned(self) -> None:
+        """A prompt said a second after the delegation also moves the item's updated_at, a private
+        line: with the replica's file lost, no line left in local.jsonl is a whole transaction. That
+        journal is behind ledger.json, not empty (a reader once took it for none, without a word)."""
+        self.lose_each_file(said_after=1)
+
+    def lose_each_file(self, said_after: int) -> None:
+        """Each journal file lost in turn: a write is refused and changes nothing, and a reader gets
+        ledger.json, warned, naming the file. The prompt is said <said_after> seconds after the
+        delegation (the clock pinned: in the same second, its transaction is local lines only)."""
+        at = datetime(2026, 1, 1, 10, tzinfo=UTC)
+        with mock.patch.object(ledger, "now", return_value=at.isoformat()):
+            run("record-delegation", MENTION_ID, "--window", "w", "--task", "t")
+        with mock.patch.object(ledger, "now", return_value=(at + timedelta(seconds=said_after)).isoformat()):
+            hook_said = ledger.add_user_said("w", "my own words")  # a local line too
         self.assertEqual(hook_said["items"], [MENTION_ID])
+        self.assertEqual({c["private_of"] for c in journal().changes() if c.get("local")}, {said_after})
         for name in (f"{replica_id(ledger.STORE.state_dir)}.jsonl", "local.jsonl"):
+            lost = ledger.STORE.journal_dir / name
+            kept = lost.read_bytes()
+            lost.unlink()
             with self.subTest(lost=name):
-                lost = ledger.STORE.journal_dir / name
-                kept = lost.read_bytes()
-                lost.unlink()
                 file, backup = ledger.STORE.ledger_file.read_text(), ledger.STORE.backup.read_text()
-                refused = rf"behind ledger.json \({Path(name).stem}\.jsonl ends at seq 0"
-                with self.assertRaisesRegex(ledger.LedgerError, refused):
+                named = rf"{Path(name).stem}\.jsonl ends at seq 0"
+                with self.assertRaisesRegex(ledger.LedgerError, rf"behind ledger.json \({named}"):
                     run("note", MENTION_ID, "x")
                 self.assertEqual(ledger.STORE.ledger_file.read_text(), file)
                 self.assertEqual(ledger.STORE.backup.read_text(), backup)
                 said = io.StringIO()
                 with contextlib.redirect_stderr(said):
                     self.assertIn("my own words", run("said"))  # a reader gets the file, warned
-                self.assertIn("is behind it", said.getvalue())
-                lost.write_bytes(kept)
+                self.assertRegex(said.getvalue(), rf"is behind it \({named}")
+            lost.write_bytes(kept)  # failed or not, so that the next file is lost alone
         self.assert_the_journal_rebuilds_the_file()
 
     def test_moving_a_journal_that_lost_a_file_aside_starts_it_again(self) -> None:

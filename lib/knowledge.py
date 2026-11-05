@@ -515,7 +515,7 @@ def read_caught_up(p: Paths, kb: KB, journal: Journal) -> KB:
     (said on stderr). A journal behind the files is never rebuilt from (change_log.reader_rebuilds),
     nor an empty one: then a file that does not parse stops the reader (refuse_unreadable)."""
     position = journal.position()
-    rebuild, gaps = reader_rebuilds(position, saved_position(p), p.view.name)
+    rebuild, gaps = reader_rebuilds(position, saved_position(p), p.view.name, written=journal.written())
     if gaps or not position:
         refuse_unreadable(kb)
     if gaps:

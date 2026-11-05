@@ -285,16 +285,22 @@ def behind(journal_has: Mapping[str, int], file_has: Mapping[str, int], file_nam
 
 
 def reader_rebuilds(
-    position: Mapping[str, int], saved: Mapping[str, int], file_name: str
+    position: Mapping[str, int], saved: Mapping[str, int], file_name: str, *, written: Mapping[str, int]
 ) -> tuple[bool, str]:
-    """Whether a reader takes the journal's rebuild (at <position>) instead of the files (at
-    <saved>, which <file_name> records): only where the files are behind the journal, a write cut
-    short between the two. A journal behind the files is never rebuilt from: the second value
-    says how (for a warning); "" otherwise."""
-    if not position or saved == position:
+    """Whether a reader takes the journal's rebuild (at <position>, its whole transactions) instead
+    of the files (at <saved>, which <file_name> records): only where the files are behind the
+    journal, a write cut short between the two. A journal behind the files is never rebuilt from:
+    the second value says how (for a warning); "" otherwise. Behind is judged first as a writer
+    judges it, by what each file has written (<written>, whole transactions or not): a lost file can
+    take with it the private lines of every transaction left in local.jsonl, leaving no position,
+    and that journal is behind, not empty. Only a journal with no line at all is none yet (or moved
+    aside), which the next write starts again."""
+    if not written:
         return False, ""
-    gaps = behind(position, saved, file_name)
-    return (False, "; ".join(gaps)) if gaps else (True, "")
+    gaps = behind(written, saved, file_name) or behind(position, saved, file_name)
+    if gaps:
+        return False, "; ".join(gaps)
+    return saved != position, ""
 
 
 def clock_text(ms: int, counter: int) -> str:
