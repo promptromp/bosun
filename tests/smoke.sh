@@ -288,8 +288,15 @@ ln -s bosun-versions/v1 "$WORK/share/bosun" # the install link, as an update lea
 LINK="$(cd "$WORK/share" && pwd -P)/bosun"
 inst() { bash -c 'source "$1/lib/common.sh"; printf "%s %s" "$BOSUN_INSTALL" "$BOSUN_CMD"' _ "$1"; }
 check "a version folder writes out the link beside its versions folder" test "$(inst "$V1")" = "$LINK $LINK/bin/bosun"
-check "... and Python says the same" test "$(python3 -c 'import sys; sys.path.insert(0, sys.argv[1] + "/lib"); import install_paths, pathlib; print(install_paths.install_path(pathlib.Path(sys.argv[2])))' "$ROOT" "$V1")" = "$LINK"
+py_install() { python3 -c 'import sys; sys.path.insert(0, sys.argv[1] + "/lib"); import install_paths, pathlib; print(install_paths.install_path(pathlib.Path(sys.argv[2])))' "$ROOT" "$1"; }
+check "... and Python says the same" test "$(py_install "$V1")" = "$LINK"
 check "a checkout writes out itself" test "$(inst "$ROOT")" = "$ROOT $ROOT/bin/bosun"
+check "bash and Python agree on a normal version folder" test "$(inst "$V1" | cut -d' ' -f1)" = "$(py_install "$V1")"
+ODD="$WORK/odd/-versions/x"
+mkdir -p "$ODD"
+cp -R "$V1/lib" "$V1/bin" "$ODD/"
+check "... and on a parent named only -versions, which is not a versions folder" test "$(inst "$ODD" | cut -d' ' -f1)" = "$ODD" -a "$(py_install "$ODD")" = "$ODD"
+check "a command run through the link stays on its own version" test "$(bash -c 'source "$(dirname "$(readlink -f "$1/bin/bosun")")/../lib/common.sh"; printf "%s %s" "$BOSUN_ROOT" "$BOSUN_INSTALL"' _ "$LINK")" = "$V1 $LINK"
 out="$(cd "$REPO_A" && BOSUN_ORCHESTRATOR=orch BOSUN_ORCHESTRATOR_DIR="$REPO_A" "$V1/bin/bosun" launch orch 2>&1)"
 check "a version's orchestrator launch names the link" contains "$out" "$LINK/orchestrator/plugin"
 check "... never its own folder" not_contains "$out" "bosun-versions/"

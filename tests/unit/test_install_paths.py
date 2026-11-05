@@ -34,3 +34,8 @@ def test_only_a_folder_inside_versions_is_one() -> None:
 
 def test_the_command_is_the_links_bin() -> None:
     assert install_bin(VERSION) == Path("/h/.local/share/bosun/bin/bosun")
+
+
+def test_a_parent_named_only_versions_is_not_one() -> None:
+    assert not is_version_folder(Path("/h/-versions/x"))
+    assert install_path(Path("/h/-versions/x")) == Path("/h/-versions/x")

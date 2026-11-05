@@ -8,13 +8,12 @@ BOSUN="$BOSUN_ROOT/bin/bosun"
 # Two paths (lib/install_paths.py): this process runs its own folder, BOSUN_ROOT. What outlives it
 # (hook commands, the launch command, plists, the link in ~/.local/bin) names the install link,
 # BOSUN_INSTALL, which an update points at a newer version. In a checkout they are the same.
-case "$(dirname "$BOSUN_ROOT")" in
-  ?*-versions)
-    BOSUN_INSTALL="$(dirname "$BOSUN_ROOT")"
-    BOSUN_INSTALL="${BOSUN_INSTALL%-versions}"
-    ;;
-  *) BOSUN_INSTALL="$BOSUN_ROOT" ;;
+BOSUN_INSTALL="$BOSUN_ROOT"
+bosun_versions="$(dirname "$BOSUN_ROOT")"
+case "${bosun_versions##*/}" in
+  ?*-versions) BOSUN_INSTALL="${bosun_versions%-versions}" ;;
 esac
+unset bosun_versions
 BOSUN_CMD="$BOSUN_INSTALL/bin/bosun"
 
 # launchd starts jobs with a bare PATH; make the usual tool locations visible.
