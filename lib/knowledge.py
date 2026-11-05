@@ -349,8 +349,6 @@ def save(p: Paths, kb: KB, message: str, write: Write) -> None:
     say_left_out(p, kb, write.left_out)
     with journal_errors(p):
         stamp = journaled(p, kb, write)
-    if not p.format.exists():
-        store.write_format(p, store.KNOWLEDGE_FORMAT)
     write_files(p, kb)
     if kb.restart_history:
         restart_history(p)
@@ -867,6 +865,7 @@ def writing(p: Paths, message: str, state: Path) -> Iterator[KB]:
     """A write under the exclusive lock: the knowledge base it starts from (write_start), its fact
     ids minted from its one journal transaction, named by its command; then, if it changed
     anything, saved."""
+    new = store.store_format(p) == 0
     with journal_errors(p):
         journal = open_journal(p, replica_id(state))
         kb, left, changes = write_start(p, journal)
@@ -877,6 +876,8 @@ def writing(p: Paths, message: str, state: Path) -> Iterator[KB]:
     entities = copy.deepcopy(kb.entities)
     yield kb
     if kb.changed:
+        if new:  # a store's version changes only when it is made, and by a migration
+            store.write_format(p, store.KNOWLEDGE_FORMAT)
         save(p, kb, message, Write(journal, changes, transaction, entities, left))
 
 

@@ -10,6 +10,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "lib"))
@@ -68,6 +69,20 @@ class TestKnowledgeFormat(unittest.TestCase):
         ).stdout.split()
         self.assertIn("format.json", tracked)
 
+    def test_a_new_knowledge_base_records_the_current_format(self) -> None:
+        with mock.patch.object(store, "KNOWLEDGE_FORMAT", 2):
+            self.run_kg("add-entity", "repo/invoice-exporter", "--name", "invoice exporter")
+        self.assertEqual(store.store_format(store.Paths(self.root)), 2)
+
+    def test_an_ordinary_write_does_not_stamp_a_knowledge_base_without_a_format(self) -> None:
+        self.run_kg("add-entity", "repo/invoice-exporter", "--name", "invoice exporter")
+        paths = store.Paths(self.root)
+        paths.format.unlink()
+        with mock.patch.object(store, "KNOWLEDGE_FORMAT", 2):
+            self.run_kg("add-entity", "gate/smoke-tests", "--name", "Smoke tests")
+        self.assertFalse(paths.format.exists())
+        self.assertEqual(store.store_format(paths), 1)
+
     def test_a_knowledge_base_from_before_formats_is_format_1(self) -> None:
         self.run_kg("add-entity", "repo/invoice-exporter", "--name", "invoice exporter")
         paths = store.Paths(self.root)
@@ -79,15 +94,33 @@ class TestKnowledgeFormat(unittest.TestCase):
 
 
 class TestLedgerFormat(unittest.TestCase):
-    def test_the_ledger_writes_its_format(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
-            ledger.configure(tmp)
-            self.assertEqual(ledger.store_format(Path(tmp)), 0)
-            args = ledger.build_parser().parse_args(
-                ["upsert", "review:acme/exporter#1", "--kind", "review-request", "--title", "T"]
-            )
-            args.func(args)
-            self.assertEqual(ledger.store_format(Path(tmp)), ledger.LEDGER_FORMAT)
+    def setUp(self) -> None:
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        ledger.configure(self.tmp.name)
+
+    def upsert(self, item_id: str) -> None:
+        args = ledger.build_parser().parse_args(
+            ["upsert", item_id, "--kind", "review-request", "--title", "T"]
+        )
+        args.func(args)
+
+    def raw_version(self) -> object:
+        return json.loads((Path(self.tmp.name) / "ledger.json").read_text())["version"]
+
+    def test_a_new_ledger_records_the_current_format(self) -> None:
+        self.assertEqual(ledger.store_format(Path(self.tmp.name)), 0)
+        with mock.patch.object(ledger, "LEDGER_FORMAT", 2):
+            self.upsert("review:acme/exporter#1")
+        self.assertEqual(self.raw_version(), 2)
+
+    def test_an_ordinary_write_keeps_the_version_it_loaded(self) -> None:
+        (Path(self.tmp.name) / "ledger.json").write_text(json.dumps({"version": 1, "items": {}}))
+        with mock.patch.object(ledger, "LEDGER_FORMAT", 2):
+            self.upsert("review:acme/exporter#1")
+            self.upsert("review:acme/exporter#2")
+        self.assertEqual(self.raw_version(), 1)
+        self.assertEqual(ledger.store_format(Path(self.tmp.name)), 1)
 
 
 if __name__ == "__main__":

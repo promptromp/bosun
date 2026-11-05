@@ -1154,7 +1154,9 @@ def load() -> Ledger:
         raise LedgerError(
             f"{STORE.ledger_file} is not a ledger (unexpected structure); restore it or move it aside"
         )
-    ledger.setdefault("version", 1)
+    # a new ledger is made in the current format; one from before versions is format 1; a save
+    # writes back what was loaded (only a migration changes a store's version)
+    ledger.setdefault("version", 1 if ledger else LEDGER_FORMAT)
     ledger.setdefault("items", {})
     ledger.setdefault("sources", {})
     ledger.setdefault("runs", {})
@@ -1181,7 +1183,6 @@ def write_atomically(
 
 def save(ledger: Ledger) -> None:
     """ledger.json, flushed to the disk itself before its rename (flush_to_disk), and its view."""
-    ledger["version"] = LEDGER_FORMAT
     text = json.dumps(ledger, indent=2, sort_keys=True)
     write_atomically(STORE.ledger_file, text, STORE.backup, flush_to_disk)
     write_atomically(STORE.view, render(ledger))
