@@ -95,29 +95,48 @@ _SWAPS: dict[str, Callable[[ctypes.CDLL, bytes, bytes], int]] = {
 }
 
 
+def _libc() -> ctypes.CDLL:
+    return ctypes.CDLL(None, use_errno=True)
+
+
 def _swap(first: Path, second: Path) -> None:
     """Exchange two paths in one call; raises OSError when it cannot."""
     swap = _SWAPS.get(sys.platform)
     if swap is None:
         raise OSError(errno.ENOSYS, f"no atomic swap of two paths on {sys.platform}")
-    libc = ctypes.CDLL(None, use_errno=True)
-    if swap(libc, os.fsencode(first), os.fsencode(second)) != 0:
+    libc = _libc()
+    try:
+        failed = swap(libc, os.fsencode(first), os.fsencode(second)) != 0
+    except AttributeError as exc:
+        raise OSError(errno.ENOSYS, f"this libc has no atomic swap of two paths ({exc})") from exc
+    if failed:
         code = ctypes.get_errno()
         raise OSError(code, f"cannot swap {first} and {second}: {os.strerror(code)}")
 
 
 def swap_in_link(install: Path, target: Path) -> Path:
     """Replace the checkout at `install` with a link to `target` in one step, and keep the checkout
-    as `legacy-<12>` beside `target`. Returns where the checkout went."""
+    as `legacy-<12>` beside `target`. Returns where the checkout went. Refuses, with nothing
+    changed, when that folder exists; if the checkout cannot be moved there after the swap, the
+    swap is undone."""
     commit = commit_of(install)
+    legacy = target.parent / f"{LEGACY_PREFIX}{commit[:12]}"
+    if os.path.lexists(legacy):
+        raise FileExistsError(errno.EEXIST, f"{legacy} is already there; not converting {install}")
     link = _temporary_link(install, target)
     try:
         _swap(link, install)
     except OSError:
         link.unlink(missing_ok=True)
         raise
-    legacy = target.parent / f"{LEGACY_PREFIX}{commit[:12]}"
-    os.rename(link, legacy)
+    try:
+        os.rename(link, legacy)
+    except OSError as exc:
+        _swap(link, install)
+        link.unlink(missing_ok=True)
+        raise OSError(
+            exc.errno, f"could not keep the checkout as {legacy}; {install} is the checkout again"
+        ) from exc
     journal.flush_folder(install.parent)
     journal.flush_folder(legacy.parent)
     return legacy

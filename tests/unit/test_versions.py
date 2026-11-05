@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+import errno
 import os
 import subprocess
 import sys
 import threading
 from pathlib import Path
+
+import pytest
 
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "lib"))
@@ -126,3 +129,52 @@ def test_prune_keeps_everything_without_lsof(tmp_path: Path, monkeypatch) -> Non
     monkeypatch.setenv("PATH", str(tmp_path / "nothing"))
     assert versions.prune(vdir, keep=set()) == []
     assert a.exists()
+
+
+def _conversion(tmp: Path) -> tuple[Path, Path, str]:
+    install = _source(tmp)
+    commit = versions.commit_of(install)
+    v = tmp / "bosun-versions" / "aaaaaaaaaaaa"
+    v.mkdir(parents=True)
+    return install, v, commit
+
+
+def _no_hidden(tmp: Path) -> bool:
+    return [p.name for p in tmp.iterdir() if p.name.startswith(".")] == []
+
+
+def test_a_leftover_legacy_folder_refuses_with_nothing_changed(tmp_path: Path) -> None:
+    install, v, commit = _conversion(tmp_path)
+    leftover = v.parent / f"{versions.LEGACY_PREFIX}{commit[:12]}"
+    leftover.mkdir()
+    (leftover / "x").write_text("x")
+    with pytest.raises(FileExistsError):
+        versions.swap_in_link(install, v)
+    assert not install.is_symlink() and (install / "f.txt").exists()
+    assert (leftover / "x").exists() and _no_hidden(tmp_path)
+
+
+def test_a_failed_rename_after_the_swap_swaps_back(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    install, v, _ = _conversion(tmp_path)
+
+    def refuse(src: object, dst: object) -> None:
+        raise OSError(errno.ENOTEMPTY, "no")
+
+    monkeypatch.setattr(os, "rename", refuse)
+    with pytest.raises(OSError, match="checkout again"):
+        versions.swap_in_link(install, v)
+    assert not install.is_symlink() and (install / "f.txt").read_text() == "one"
+    assert _no_hidden(tmp_path)
+
+
+def test_a_libc_without_the_call_is_an_oserror(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    install, v, _ = _conversion(tmp_path)
+
+    class Bare:
+        pass
+
+    monkeypatch.setattr(versions, "_libc", Bare)
+    with pytest.raises(OSError) as info:
+        versions.swap_in_link(install, v)
+    assert info.value.errno == errno.ENOSYS
+    assert not install.is_symlink() and (install / "f.txt").exists() and _no_hidden(tmp_path)
