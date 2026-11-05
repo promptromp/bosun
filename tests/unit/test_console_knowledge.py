@@ -17,6 +17,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+import unittest.mock
 from collections.abc import Iterable
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -31,6 +32,8 @@ import knowledge
 import knowledge_model as km
 import knowledge_review as kr
 import knowledge_schema as ks
+import knowledge_store
+import update_state
 from console_data import QueryError
 
 
@@ -507,6 +510,52 @@ class DecisionTest(KnowledgeWorld):
             ck.apply_decision(kb, ck.Decision("confirm", (confirmed,)), set())
         self.assertEqual(caught.exception.status, 409)
         self.assertEqual(kb.new_records, [])
+
+
+class UpdatedTest(KnowledgeWorld):
+    """A save the update gate refuses (lib/update_gate.py): a 409 saying to restart the console."""
+
+    def decide(self) -> ck.ReviewError:
+        fact = self.made(ck.batch_fact_ids(self.review()))[0]
+        body = json.dumps({"action": "confirm", "facts": [fact]}).encode()
+        with self.assertRaises(ck.ReviewError) as caught:
+            console_kb.decide(self.settings, body, LEDGER)
+        self.assertEqual(self.kb().facts[fact]["status"], km.PROPOSED)
+        return caught.exception
+
+    def test_a_newer_knowledge_base_asks_for_a_restart(self) -> None:
+        knowledge_store.write_format(knowledge_store.Paths(self.root), knowledge_store.KNOWLEDGE_FORMAT + 1)
+        refused = self.decide()
+        self.assertEqual(refused.status, 409)
+        self.assertIn("bosun was updated", str(refused))
+        self.assertIn("bosun console", str(refused))
+
+    def test_an_older_knowledge_base_asks_for_a_restart(self) -> None:
+        with unittest.mock.patch.object(
+            knowledge_store, "KNOWLEDGE_FORMAT", knowledge_store.KNOWLEDGE_FORMAT + 1
+        ):
+            refused = self.decide()
+        self.assertEqual(refused.status, 409)
+        self.assertIn("bosun console", str(refused))
+
+    def test_an_update_cut_short_says_so(self) -> None:
+        update_state.write(
+            Path(self.state),
+            update_state.UpdateState(
+                id="u1",
+                from_root="/Users/me/.local/share/bosun-versions/aaaaaaa11111",
+                to_root="/Users/me/.local/share/bosun-versions/bbbbbbb22222",
+                from_commit="aaaaaaa",
+                to_commit="bbbbbbb",
+                step="switched",
+                started_at="2026-11-05T09:00:00+00:00",
+                hold_until=10**12,
+            ),
+        )
+        refused = self.decide()
+        self.assertEqual(refused.status, 409)
+        self.assertIn("cut short", str(refused))
+        self.assertIn("bosun console", str(refused))
 
 
 class StorageTest(KnowledgeWorld):

@@ -30,6 +30,7 @@ STATE_FILE = "update.json"
 LOCK_FILE = "update.lock"
 UPDATE_DIR = "update"
 HOLD_SECONDS = 3600
+POLL_SECONDS = 0.05  # how often a wait for update.lock tries again
 
 STEPS = (
     "planned",
@@ -173,21 +174,35 @@ def running(state_dir: Path) -> bool:
     return False
 
 
-@contextlib.contextmanager
-def one_update(state_dir: Path) -> Iterator[None]:
-    """update.lock, exclusive, for the whole update; UpdateRunning if another holds it."""
-    state_dir.mkdir(parents=True, exist_ok=True)
-    fd = os.open(state_dir / LOCK_FILE, os.O_RDWR | os.O_CREAT, 0o644)
-    try:
+def _taken(fd: int, wait: float) -> bool:
+    """Whether <fd>'s exclusive lock was taken within <wait> seconds (tried at once, then every
+    POLL_SECONDS), never blocking past it."""
+    deadline = time.monotonic() + wait
+    while True:
         try:
             fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except OSError:
+            if time.monotonic() >= deadline:
+                return False
+            time.sleep(POLL_SECONDS)
+        else:
+            return True
+
+
+@contextlib.contextmanager
+def one_update(state_dir: Path, wait: float = 0.0) -> Iterator[None]:
+    """update.lock, exclusive, for the whole update; UpdateRunning if another still holds it after
+    <wait> seconds (a write putting back an update cut short waits a little for another doing it)."""
+    state_dir.mkdir(parents=True, exist_ok=True)
+    fd = os.open(state_dir / LOCK_FILE, os.O_RDWR | os.O_CREAT, 0o644)
+    try:
+        if not _taken(fd, wait):
             other = read(state_dir)
             raise UpdateRunning(
                 other.started_at if other else "",
                 other.from_commit if other else "",
                 other.to_commit if other else "",
-            ) from None
+            )
         yield
     finally:
         os.close(fd)

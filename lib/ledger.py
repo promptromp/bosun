@@ -261,6 +261,7 @@ import lineage
 import redact
 import repo_mask
 import tickets
+import update_gate
 import validation
 import workstreams
 import ws_summary
@@ -363,6 +364,7 @@ LEDGER_FORMAT = 1
 # ledger from before journals in it (a change made to ledger.json outside the journal is
 # change_log.ADOPT, as in the knowledge base).
 LEDGER_STREAM = "ledger"
+LOCK_FILE = "ledger.lock"
 RULES_VERSION = 1
 GENESIS = "genesis"
 
@@ -420,7 +422,7 @@ class Store:
 
     @property
     def lock(self) -> Path:
-        return self.state_dir / "ledger.lock"
+        return self.state_dir / LOCK_FILE
 
     @property
     def backup(self) -> Path:
@@ -797,11 +799,18 @@ def parse_fields(pairs: list[str] | None) -> dict[str, str]:
 
 
 @contextlib.contextmanager
+def lock_at(state_dir: Path, mode: int) -> Iterator[None]:
+    """The lock file of the ledger in <state_dir>, held in <mode> (fcntl.LOCK_SH or fcntl.LOCK_EX)."""
+    state_dir.mkdir(parents=True, exist_ok=True)
+    with (state_dir / LOCK_FILE).open("w") as lock:
+        fcntl.flock(lock, mode)
+        yield
+
+
+@contextlib.contextmanager
 def store_lock(mode: int) -> Iterator[None]:
     """The ledger's lock file, held in <mode> (fcntl.LOCK_SH or fcntl.LOCK_EX)."""
-    STORE.state_dir.mkdir(parents=True, exist_ok=True)
-    with STORE.lock.open("w") as lock:
-        fcntl.flock(lock, mode)
+    with lock_at(STORE.state_dir, mode):
         yield
 
 
@@ -1067,15 +1076,14 @@ def genesis(journal: Journal, ledger: Ledger) -> Ledger:
     return ledger
 
 
-def write_start(journal: Journal) -> Ledger:
-    """The ledger a write starts from, in memory: the command's one save writes it, so the backup
-    is always the ledger as it was before the write. Refused when the journal lost changes
-    ledger.json reflects (a file deleted, a partial restore); then an unfinished transaction is
-    set aside (repair_tail); a ledger from before journals is put in it (genesis); a change made to
-    ledger.json outside the journal is taken in (adopted where it can be, and the journal's rebuild
-    goes on); and where ledger.json is behind the journal (a write cut short between the two), the
-    journal's rebuild replaces it."""
-    ledger = load()
+def write_start(journal: Journal, ledger: Ledger) -> Ledger:
+    """The ledger a write starts from, in memory, from <ledger> as loaded: the command's one save
+    writes it, so the backup is always the ledger as it was before the write. Refused when the
+    journal lost changes ledger.json reflects (a file deleted, a partial restore); then an
+    unfinished transaction is set aside (repair_tail); a ledger from before journals is put in it
+    (genesis); a change made to ledger.json outside the journal is taken in (adopted where it can
+    be, and the journal's rebuild goes on); and where ledger.json is behind the journal (a write cut
+    short between the two), the journal's rebuild replaces it."""
     written = journal.written()
     if written:
         refuse_if_behind(written, ledger)
@@ -1092,12 +1100,17 @@ def write_start(journal: Journal) -> Ledger:
 
 
 def for_writing() -> Iterator[Ledger]:
-    """A write: the ledger it starts from, then what the command changed (diffed against a copy)
-    committed as one transaction under the command's name, then ledger.json at the new position,
-    with the digest of what it holds."""
+    """A write: first the store checked (update_gate.check_write: its format and an update's freeze;
+    refused, nothing is written), then the ledger it starts from, then what the command changed
+    (diffed against a copy) committed as one transaction under the command's name, then ledger.json
+    at the new position, with the digest of what it holds."""
+    ledger = load()
+    update_gate.check_write(
+        "ledger", recorded_format(ledger, STORE.ledger_file), LEDGER_FORMAT, STORE.state_dir
+    )
     with journal_errors():
         journal = open_journal(replica_id(STORE.state_dir))
-        ledger = write_start(journal)
+        ledger = write_start(journal, ledger)
         transaction = journal.begin(STORE.command)
     before = json.loads(json.dumps(ledger))  # a copy to diff against (plain JSON: faster than deepcopy)
     _WRITING.append(transaction)
@@ -1127,12 +1140,31 @@ def read_ledger_file() -> Any:
         raise LedgerError(f"{STORE.ledger_file} is not valid JSON ({exc}); {restore}") from exc
 
 
+def recorded_format(ledger: Mapping[str, Any], path: Path) -> int:
+    """The format version <ledger> records ("version"; 1 from before versions), read from <path>:
+    a positive whole number, else a LedgerError."""
+    version = change_log.format_version(ledger.get("version", 1))
+    if version is None:
+        raise LedgerError(
+            f"{path} records version {ledger.get('version')!r}, not a positive whole number; restore it "
+            f"from {path.with_name(path.name + '.bak')} or move it aside"
+        )
+    return version
+
+
 def store_format(state_dir: Path) -> int:
-    """The format version ledger.json records ("version"); 0 when there is no ledger.json."""
+    """The format version ledger.json records ("version"); 0 when there is no ledger.json. A file
+    that cannot be read, or records no format, is a LedgerError."""
+    path = state_dir / "ledger.json"
     try:
-        return int(json.loads((state_dir / "ledger.json").read_text()).get("version", 1))
+        data = json.loads(path.read_text())
     except FileNotFoundError:
         return 0
+    except (OSError, ValueError) as exc:  # ValueError: not JSON, or not UTF-8
+        raise LedgerError(f"{path} cannot be read for its format version ({exc})") from exc
+    if not isinstance(data, dict):
+        raise LedgerError(f"{path} is not a ledger (not a JSON object)")
+    return recorded_format(data, path)
 
 
 def format_digest() -> str:
@@ -4736,8 +4768,8 @@ def hours_setting(name: str, default: float) -> float:
         raise LedgerError(f"{name} must be a number of hours, not {value!r}") from exc
 
 
-def main() -> int:
-    args = build_parser().parse_args()
+def main(argv: list[str] | None = None) -> int:
+    args = build_parser().parse_args(argv)
     if not os.environ.get("BOSUN_STATE_DIR"):
         print("ledger: BOSUN_STATE_DIR is not set; run it as `bosun ledger`", file=sys.stderr)
         return 2
@@ -4755,4 +4787,4 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    sys.exit(update_gate.guarded("ledger", main, sys.argv[1:]))

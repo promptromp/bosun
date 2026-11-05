@@ -35,6 +35,8 @@ import knowledge_model as km
 import knowledge_review as kr
 import knowledge_store as store
 import update_backups as ub
+import update_gate
+import update_state
 from knowledge_model import KnowledgeError
 from knowledge_schema import SchemaError
 
@@ -1387,6 +1389,59 @@ class LockingTest(KnowledgeTestCase):
         self.assertEqual(len(facts), 12)
         self.assertEqual({f["value"] for f in facts.values()}, {f"gotcha {n}" for n in range(12)})
         self.assertEqual(len(self.log_lines()), 12)
+
+
+class UpdateGateTest(KnowledgeTestCase):
+    """Every write checks the store first (lib/update_gate.py), before anything is journaled."""
+
+    def setUp(self) -> None:
+        super().setUp()
+        self.run_kg("add-entity", "repo/invoice-exporter", "--name", "invoice exporter")
+
+    def files(self) -> dict[str, bytes]:
+        return {
+            path.relative_to(self.root).as_posix(): path.read_bytes()
+            for path in sorted(self.root.rglob("*"))
+            if path.is_file() and not path.name.endswith(".lock")
+        }
+
+    def test_a_write_in_a_freeze_no_update_runs_is_cut_short(self) -> None:
+        marked = update_state.UpdateState(
+            id="u1",
+            from_root="/Users/me/.local/share/bosun-versions/aaaaaaa11111",
+            to_root="/Users/me/.local/share/bosun-versions/bbbbbbb22222",
+            from_commit="aaaaaaa",
+            to_commit="bbbbbbb",
+            step="marked",
+            started_at="2026-11-05T09:00:00+00:00",
+            hold_until=10**12,
+        )
+        update_state.write(self.state, marked)
+        before = self.files()
+        with self.assertRaises(update_gate.UpdateCutShort):
+            self.run_kg("add-entity", "gate/smoke-tests", "--name", "Smoke tests")
+        self.assertEqual(self.files(), before)
+
+    def test_a_write_into_a_newer_store_is_refused(self) -> None:
+        store.write_format(store.Paths(self.root), store.KNOWLEDGE_FORMAT + 1)
+        before = self.files()
+        with self.assertRaises(update_gate.StoreNewer) as caught:
+            self.run_kg("add-entity", "gate/smoke-tests", "--name", "Smoke tests")
+        self.assertEqual(caught.exception.store, "knowledge base")
+        self.assertEqual(self.files(), before)
+
+    def test_a_write_into_an_older_store_is_refused(self) -> None:
+        before = self.files()
+        with (
+            mock.patch.object(store, "KNOWLEDGE_FORMAT", store.KNOWLEDGE_FORMAT + 1),
+            self.assertRaisesRegex(update_gate.StoreOlder, "run bosun update to migrate it"),
+        ):
+            self.run_kg("add-entity", "gate/smoke-tests", "--name", "Smoke tests")
+        self.assertEqual(self.files(), before)
+
+    def test_a_dry_run_is_no_write(self) -> None:
+        store.write_format(store.Paths(self.root), store.KNOWLEDGE_FORMAT + 1)
+        self.run_kg("expire", "--dry-run")
 
 
 if __name__ == "__main__":

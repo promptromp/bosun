@@ -151,14 +151,22 @@ class Paths:
 
 def store_format(paths: Paths) -> int:
     """The format version of the knowledge folder: 0 when there is no knowledge base, 1 for one
-    without format.json (every one from before formats was kept), else what format.json says."""
+    without format.json (every one from before formats was kept), else what format.json says: a
+    positive whole number. A format.json that cannot be read, or says none, is a StoreError."""
     try:
-        return int(json.loads(paths.format.read_text())["format"])
+        data = json.loads(paths.format.read_text())
     except FileNotFoundError:
         held = (paths.journal, paths.entities, paths.facts, paths.view)
         return 1 if any(path.exists() for path in held) else 0
-    except (ValueError, KeyError, TypeError) as exc:
-        raise StoreError(f"{paths.format} does not say a format version ({exc})") from exc
+    except (OSError, ValueError) as exc:  # ValueError: not JSON, or not UTF-8
+        raise StoreError(f"{paths.format} cannot be read for its format version ({exc})") from exc
+    version = change_log.format_version(data.get("format") if isinstance(data, dict) else None)
+    if version is None:
+        raise StoreError(
+            f'{paths.format} does not say a format version: it must be {{"format": n}}, n a positive '
+            f"whole number, not {json.dumps(data)}"
+        )
+    return version
 
 
 def write_format(paths: Paths, version: int) -> None:

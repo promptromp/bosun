@@ -102,6 +102,7 @@ import knowledge_review as kr
 import knowledge_schema as ks
 import knowledge_store as store
 import update_backups
+import update_gate
 import validation
 from change_log import ADOPT, DIGEST, Change, ChangeLogError, Edit, reader_rebuilds
 from journal import REPLICA_FILE, Journal, JournalError, Transaction, as_saved, forgotten, replica_id, up_to
@@ -882,10 +883,13 @@ def trial_mint() -> Callable[[], str]:
 
 
 def writing(p: Paths, message: str, state: Path) -> Iterator[KB]:
-    """A write under the exclusive lock: the knowledge base it starts from (write_start), its fact
-    ids minted from its one journal transaction, named by its command; then, if it changed
-    anything, saved."""
-    new = store.store_format(p) == 0
+    """A write under the exclusive lock: first the store checked (update_gate.check_write: its
+    format and an update's freeze; refused, nothing is written), then the knowledge base it starts
+    from (write_start), its fact ids minted from its one journal transaction, named by its command;
+    then, if it changed anything, saved."""
+    found = store.store_format(p)
+    update_gate.check_write("knowledge base", found, store.KNOWLEDGE_FORMAT, state)
+    new = found == 0
     with journal_errors(p):
         journal = open_journal(p, replica_id(state))
         kb, left, changes = write_start(p, journal)
@@ -1594,8 +1598,8 @@ def configure_from_environment(command: str = "") -> None:
     )
 
 
-def main() -> int:
-    args = build_parser().parse_args()
+def main(argv: list[str] | None = None) -> int:
+    args = build_parser().parse_args(argv)
     if not os.environ.get("BOSUN_CONFIG_DIR"):
         print("kg: BOSUN_CONFIG_DIR is not set; run it as `bosun kg`", file=sys.stderr)
         return 2
@@ -1615,4 +1619,4 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    sys.exit(update_gate.guarded("kg", main, sys.argv[1:]))

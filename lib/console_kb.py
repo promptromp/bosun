@@ -9,7 +9,9 @@ decision, the console's one write.
   created); one that cannot be read says why.
 - A decision goes through lib/knowledge.py's own `opened` (the exclusive lock, the save and the
   commit in the knowledge directory's git history) and km.review, as `kg batch apply` does. It is
-  checked against today's batch under that same lock.
+  checked against today's batch under that same lock. A save the update gate refuses
+  (lib/update_gate.py: bosun was updated since the console started, or an update was cut short) is
+  a 409 that asks for a restart (`bosun console`): the console runs the code it started with.
 """
 
 from __future__ import annotations
@@ -31,6 +33,7 @@ import knowledge_model as km
 import knowledge_review as kr
 import knowledge_schema as ks
 import knowledge_store as store
+import update_gate
 from console_data import MISSING_STAMP, Params, QueryError, file_stamp
 from knowledge_model import KB
 
@@ -208,9 +211,26 @@ def decide(settings: Settings, body: bytes, ledger: Mapping[str, Any]) -> dict[s
             answered = shown["summary"]["source"] == ck.SAVED and ck.batch_answered(kb, saved)
             if answered:
                 knowledge.mark_answered(saved, kb)  # as `kg batch apply` does: the CLI agrees
+    except update_gate.WriteRefused as exc:
+        raise ck.ReviewError(409, updated_refusal(exc)) from exc
     except (store.StoreError, ks.SchemaError, km.KnowledgeError, OSError) as exc:
         raise ck.ReviewError(500, f"the knowledge base could not be updated: {exc}") from exc
     return {**result, "batch_answered": answered, "warnings": list(knowledge.SETTINGS.warnings)}
+
+
+def updated_refusal(refused: update_gate.WriteRefused) -> str:
+    """What a decision the update gate refused says: nothing was saved, and what to do."""
+    if isinstance(refused, update_gate.UpdateBusy):
+        return f"not saved: {refused}; try again in a moment"
+    if isinstance(refused, update_gate.FormatRefused):
+        return (
+            f"not saved: the {refused.store} is format {refused.found} and this console writes format "
+            f"{refused.mine}, as bosun was updated since it started; restart it (bosun console)"
+        )
+    return (
+        f"not saved: {refused}. The next bosun command that writes puts it back; then restart the "
+        "console (bosun console)"
+    )
 
 
 # ---- the change stamp ---------------------------------------------------------------------------

@@ -18,6 +18,8 @@ from typing import Any
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "lib"))
 import journal
 import ledger
+import update_gate
+import update_state
 import validation
 from journal import replica_id
 
@@ -610,6 +612,69 @@ class ValidateTest(LedgerTestCase):
         ledger.STORE.ledger_file.write_text(json.dumps(data))
         shutil.rmtree(ledger.STORE.journal_dir)
         self.assertEqual(self.severities("--journal"), [("note", "note")])
+
+
+class UpdateGateTest(LedgerTestCase):
+    """Every write checks the store first (lib/update_gate.py), before anything is journaled."""
+
+    def setUp(self) -> None:
+        super().setUp()
+        run("upsert", REVIEW_ID, "--kind", "review-request", "--title", "T")
+
+    def files(self) -> dict[str, bytes]:
+        """ledger.json, its view and the journal, as they are on disk."""
+        state = ledger.STORE.state_dir
+        return {
+            path.relative_to(state).as_posix(): path.read_bytes()
+            for path in sorted(state.rglob("*"))
+            if path.is_file() and not path.name.endswith(".lock") and path.name != update_state.STATE_FILE
+        }
+
+    def test_a_write_in_a_freeze_no_update_runs_is_cut_short(self) -> None:
+        marked = update_state.UpdateState(
+            id="u1",
+            from_root="/Users/me/.local/share/bosun-versions/aaaaaaa11111",
+            to_root="/Users/me/.local/share/bosun-versions/bbbbbbb22222",
+            from_commit="aaaaaaa",
+            to_commit="bbbbbbb",
+            step="marked",
+            started_at="2026-11-05T09:00:00+00:00",
+            hold_until=10**12,
+        )
+        update_state.write(ledger.STORE.state_dir, marked)
+        before = self.files()
+        with self.assertRaises(update_gate.UpdateCutShort):
+            run("upsert", MYPR_ID, "--kind", "my-pr", "--title", "T")
+        self.assertEqual(self.files(), before)
+
+    def test_a_write_into_a_newer_store_is_refused(self) -> None:
+        data = self.data()
+        data["version"] = ledger.LEDGER_FORMAT + 1
+        ledger.STORE.ledger_file.write_text(json.dumps(data))
+        before = self.files()
+        with self.assertRaises(update_gate.StoreNewer) as caught:
+            run("upsert", MYPR_ID, "--kind", "my-pr", "--title", "T")
+        self.assertEqual(caught.exception.found, ledger.LEDGER_FORMAT + 1)
+        self.assertEqual(self.files(), before)
+
+    def test_a_write_into_an_older_store_is_refused(self) -> None:
+        before = self.files()
+        with (
+            unittest.mock.patch.object(ledger, "LEDGER_FORMAT", ledger.LEDGER_FORMAT + 1),
+            self.assertRaisesRegex(update_gate.StoreOlder, "run bosun update to migrate it"),
+        ):
+            run("upsert", MYPR_ID, "--kind", "my-pr", "--title", "T")
+        self.assertEqual(self.files(), before)
+
+    def test_a_first_write_makes_its_store_in_this_format(self) -> None:
+        with tempfile.TemporaryDirectory() as fresh:
+            ledger.configure(fresh)
+            with unittest.mock.patch.object(ledger, "LEDGER_FORMAT", ledger.LEDGER_FORMAT + 1):
+                run("upsert", MYPR_ID, "--kind", "my-pr", "--title", "T")
+            self.assertEqual(
+                json.loads(ledger.STORE.ledger_file.read_text())["version"], ledger.LEDGER_FORMAT + 1
+            )
+            ledger.configure(self.tmp.name)
 
 
 if __name__ == "__main__":

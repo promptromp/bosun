@@ -525,6 +525,13 @@ kg import`, `kg propose`).
   apply` does (`applied_at`, through its `mark_answered`), so the CLI then refuses to answer it
   again and the two agree; until then the CLI can answer the rest, and reports the facts the
   console decided as skipped. A computed batch has no file and marks nothing.
+- **After an update:** the console runs the code it started with, and every write checks the store
+  first (`lib/update_gate.py`; [update.md](update.md#old-code-that-writes-after-the-switch)). A
+  decision that finds the knowledge base in another format than the console's code (bosun was
+  updated since the console started) is refused with 409 and nothing saved: restart the console
+  (`bosun console`). So is one that finds an update cut short while writes were paused, which the
+  next bosun command that writes puts back before the restart; one that finds an update pausing
+  writes is a 409 to try again in a moment.
 - **Refresh:** `/api/version` carries the knowledge base's own stamp (`knowledge.stamp`: inode,
   mtime and size of `entities.jsonl`, `facts.jsonl` and `batch.json`; a stat each, no read, no
   lock). When it changes, the page reloads the open Knowledge view (and the entity page also when

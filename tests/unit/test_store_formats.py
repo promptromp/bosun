@@ -17,6 +17,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "lib"))
 import knowledge
 import knowledge_store as store
 import ledger
+import update_gate
 
 
 # The digest of each store's format (ledger.format_digest, knowledge_store.format_digest; digests, not
@@ -75,11 +76,15 @@ class TestKnowledgeFormat(unittest.TestCase):
         self.assertEqual(store.store_format(store.Paths(self.root)), 2)
 
     def test_an_ordinary_write_does_not_stamp_a_knowledge_base_without_a_format(self) -> None:
+        """Only a migration changes a store's version: an ordinary write keeps it, and code newer
+        than the store writes nothing to it (update_gate: run bosun update to migrate it)."""
         self.run_kg("add-entity", "repo/invoice-exporter", "--name", "invoice exporter")
         paths = store.Paths(self.root)
         paths.format.unlink()
-        with mock.patch.object(store, "KNOWLEDGE_FORMAT", 2):
-            self.run_kg("add-entity", "gate/smoke-tests", "--name", "Smoke tests")
+        self.run_kg("add-entity", "gate/smoke-tests", "--name", "Smoke tests")
+        self.assertFalse(paths.format.exists())
+        with mock.patch.object(store, "KNOWLEDGE_FORMAT", 2), self.assertRaises(update_gate.StoreOlder):
+            self.run_kg("add-entity", "step/merge", "--name", "Merge to main")
         self.assertFalse(paths.format.exists())
         self.assertEqual(store.store_format(paths), 1)
 
@@ -91,6 +96,40 @@ class TestKnowledgeFormat(unittest.TestCase):
         store.write_format(paths, 2)
         self.assertEqual(store.store_format(paths), 2)
         self.assertEqual(store.store_format(store.Paths(Path(self.tmp.name) / "none")), 0)
+
+    def test_a_format_file_that_says_no_positive_whole_number_is_refused(self) -> None:
+        paths = store.Paths(self.root)
+        paths.root.mkdir(parents=True)
+        for text in (
+            "[]",
+            "null",
+            "{}",
+            '{"format": true}',
+            '{"format": "2"}',
+            '{"format": 1.9}',
+            '{"format": 0}',
+            '{"format": -1}',
+            '{"format": null}',
+            "{nope",
+            "\udcff",
+        ):
+            with self.subTest(text=text):
+                paths.format.write_bytes(text.encode("utf-8", "surrogateescape"))
+                with self.assertRaisesRegex(store.StoreError, "format.json"):
+                    store.store_format(paths)
+        paths.format.write_text('{"format": 2.0}')  # a whole number written by hand
+        self.assertEqual(store.store_format(paths), 2)
+        paths.format.unlink()
+        paths.format.mkdir()
+        with self.assertRaisesRegex(store.StoreError, "format.json"):
+            store.store_format(paths)
+
+    def test_a_write_into_a_malformed_format_is_refused_with_a_message(self) -> None:
+        self.run_kg("add-entity", "repo/invoice-exporter", "--name", "invoice exporter")
+        paths = store.Paths(self.root)
+        paths.format.write_text('{"format": "2"}')
+        with self.assertRaisesRegex(store.StoreError, "positive whole number"):
+            self.run_kg("add-entity", "gate/smoke-tests", "--name", "Smoke tests")
 
 
 class TestLedgerFormat(unittest.TestCase):
@@ -115,12 +154,50 @@ class TestLedgerFormat(unittest.TestCase):
         self.assertEqual(self.raw_version(), 2)
 
     def test_an_ordinary_write_keeps_the_version_it_loaded(self) -> None:
+        """Only a migration changes a store's version: an ordinary write keeps it, and code newer
+        than the store writes nothing to it (update_gate: run bosun update to migrate it)."""
         (Path(self.tmp.name) / "ledger.json").write_text(json.dumps({"version": 1, "items": {}}))
-        with mock.patch.object(ledger, "LEDGER_FORMAT", 2):
-            self.upsert("review:acme/exporter#1")
+        self.upsert("review:acme/exporter#1")
+        self.assertEqual(self.raw_version(), 1)
+        with mock.patch.object(ledger, "LEDGER_FORMAT", 2), self.assertRaises(update_gate.StoreOlder):
             self.upsert("review:acme/exporter#2")
         self.assertEqual(self.raw_version(), 1)
         self.assertEqual(ledger.store_format(Path(self.tmp.name)), 1)
+
+    def test_a_ledger_that_says_no_positive_whole_number_is_refused(self) -> None:
+        path = Path(self.tmp.name) / "ledger.json"
+        for text in (
+            "[]",
+            "null",
+            '"text"',
+            '{"version": true}',
+            '{"version": "2"}',
+            '{"version": 1.9}',
+            '{"version": 0}',
+            '{"version": -1}',
+            '{"version": null}',
+            "{nope",
+            "\udcff",
+        ):
+            with self.subTest(text=text):
+                path.write_bytes(text.encode("utf-8", "surrogateescape"))
+                with self.assertRaisesRegex(ledger.LedgerError, "ledger.json"):
+                    ledger.store_format(Path(self.tmp.name))
+        path.write_text('{"version": 1.0}')  # a whole number written by hand
+        self.assertEqual(ledger.store_format(Path(self.tmp.name)), 1)
+        path.unlink()
+        path.mkdir()
+        with self.assertRaisesRegex(ledger.LedgerError, "ledger.json"):
+            ledger.store_format(Path(self.tmp.name))
+
+    def test_a_ledger_without_a_version_is_format_1(self) -> None:
+        (Path(self.tmp.name) / "ledger.json").write_text(json.dumps({"items": {}}))
+        self.assertEqual(ledger.store_format(Path(self.tmp.name)), 1)
+
+    def test_a_write_into_a_malformed_version_is_refused_with_a_message(self) -> None:
+        (Path(self.tmp.name) / "ledger.json").write_text(json.dumps({"version": "2", "items": {}}))
+        with self.assertRaisesRegex(ledger.LedgerError, "positive whole number"):
+            self.upsert("review:acme/exporter#1")
 
 
 if __name__ == "__main__":

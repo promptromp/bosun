@@ -14,16 +14,19 @@ injects (peer sessions, background tasks) are not mine and are skipped.
 
 It never blocks or changes the prompt: it reads the JSON, forks, and the parent exits 0 at once;
 the child does the work and logs what it did (errors as ERROR lines, which the watchdog reports)
-to $BOSUN_LOG_DIR/hook-YYYY-MM-DD.log. BOSUN_HOOK_SYNC=1 works in the foreground (tests).
+to $BOSUN_LOG_DIR/hook-YYYY-MM-DD.log. BOSUN_HOOK_SYNC=1 works in the foreground (tests). A write
+the update gate refuses (lib/update_gate.py: bosun was updated since this hook's code started, or an
+update was cut short) is run again by the child, in the foreground, through the install link.
 """
 
 from __future__ import annotations
 
 import argparse
+import contextlib
 import json
 import os
 import sys
-from collections.abc import Mapping
+from collections.abc import Iterator, Mapping
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -34,9 +37,11 @@ import activity
 import codex_state
 import events
 import ledger
+import update_gate
 
 
 USER_PROMPT_EVENT = "UserPromptSubmit"
+SYNC = "BOSUN_HOOK_SYNC"
 STAMP = "%Y-%m-%d %H:%M:%S"
 
 
@@ -75,17 +80,34 @@ def codex_turn_end(window: str, conversation: str, payload: Mapping[str, Any], e
         return f"ignored: {session_id or 'no id'} is one of Codex's helpers, not {conversation}"
     prompts = [str(text) for text in payload.get("input-messages") or []]
     new = codex_state.new_prompts(conversation, session_id, prompts)
-    codex_state.remember(conversation, session_id, str(payload.get("cwd") or ""), len(prompts))
-    done = [f"{conversation} is {session_id}"]
-    if env.get("BOSUN_EVENTS_ENABLED") == "1":
-        done += [record_prompt(window, {"prompt": text, "session_id": session_id}, env) for text in new]
-    return "; ".join(done)
+    said: list[str] = []
+    with counted(conversation, session_id, str(payload.get("cwd") or ""), len(prompts)):
+        if env.get("BOSUN_EVENTS_ENABLED") == "1":
+            said = [record_prompt(window, {"prompt": text, "session_id": session_id}, env) for text in new]
+    return "; ".join([f"{conversation} is {session_id}", *said])
+
+
+@contextlib.contextmanager
+def counted(conversation: str, session_id: str, workdir: str, prompts: int) -> Iterator[None]:
+    """Remembers <conversation> as <session_id> with <prompts> seen once the block ends, whatever
+    happened in it, but for a write the update gate refused: the run again on the installed version
+    then takes the same prompts as new."""
+    refused = False
+    try:
+        yield
+    except update_gate.WriteRefused:
+        refused = True
+        raise
+    finally:
+        if not refused:
+            codex_state.remember(conversation, session_id, workdir, prompts)
 
 
 def detach(env: Mapping[str, str]) -> bool:
     """Fork; True in the parent, which returns at once. The child leaves the hook's process group
-    and its pipes, so Claude Code neither waits for it nor kills it."""
-    if env.get("BOSUN_HOOK_SYNC") == "1":
+    and its pipes, so Claude Code neither waits for it nor kills it; what it runs again
+    (update_gate.guarded) stays in the foreground, as it is in the background already."""
+    if env.get(SYNC) == "1":
         return False
     if os.fork() > 0:
         return True
@@ -93,6 +115,7 @@ def detach(env: Mapping[str, str]) -> bool:
     devnull = os.open(os.devnull, os.O_RDWR)
     for fd in (0, 1, 2):
         os.dup2(devnull, fd)
+    os.environ[SYNC] = "1"
     return False
 
 
@@ -115,10 +138,15 @@ def main(argv: list[str], env: Mapping[str, str]) -> int:
             log(env, codex_turn_end(args.window, args.conversation or args.window, payload, env))
         else:
             log(env, record_prompt(args.window, payload, env))
+    except update_gate.StoreOlder as exc:
+        log(env, f"ERROR: could not record a prompt typed in {args.window}: {exc}")
+    except update_gate.WriteRefused as exc:
+        log(env, f"not recorded in {args.window} on this version: {exc}; running it again")
+        raise  # update_gate.guarded runs it again through the install link
     except Exception as exc:  # noqa: BLE001  (a hook never fails the prompt; the log has it)
         log(env, f"ERROR: could not record a prompt typed in {args.window}: {exc!r}")
     return 0
 
 
 if __name__ == "__main__":
-    sys.exit(main(sys.argv[1:], os.environ))
+    sys.exit(update_gate.guarded("hook", lambda argv: main(argv, os.environ), sys.argv[1:]))
