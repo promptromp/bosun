@@ -18,6 +18,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 import zlib
 from datetime import UTC, datetime, timedelta
@@ -948,24 +949,106 @@ class GitHistoryTest(KnowledgeTestCase):
         """git's housekeeping after a commit (a repack, when it counts enough loose objects) runs
         inside the commit, not detached: a repack still running after the write would write in a
         history the next write deletes (kg forget), and could make .git again after the delete,
-        a folder that is no repository, where every later commit records nothing."""
+        a folder that is no repository. Pinned in the history's own config, whatever the git and
+        my config: the housekeeping is a gc (a strategy name an older git does not know it
+        ignores), and two loose objects in objects/17 put git's estimate over gc.auto=1."""
         self.seed()
-        planted = [self.loose_in_17(n) for n in range(2)]
+        pinned = {"maintenance.auto": "true", "maintenance.strategy": "gc", "maintenance.gc.enabled": "true"}
+        for key, value in {**pinned, "gc.auto": "1"}.items():
+            store.git(self.root, "config", key, value)
+        packs = self.root / ".git" / "objects" / "pack"
+        before = set(packs.glob("*.pack"))
+        for n in range(2):
+            self.loose_in_17(n)
         self.run_kg("add-entity", "repo/other")
-        self.assertEqual([path.name for path in planted if path.exists()], [])  # packed already
+        self.assertTrue(set(packs.glob("*.pack")) - before)  # the repack is done already
 
-    def test_a_history_folder_that_is_no_repository_says_so_at_each_write(self) -> None:
-        """What a repack still running left of a history kg forget deleted (its refs and pack
-        lists, made again): a .git that is no repository. A write warns, not records nothing."""
-        self.seed()
+    def broken_history(self) -> None:
+        """What a process left in a history a restart deleted (its refs and pack lists, made
+        again): a .git that is no repository."""
         shutil.rmtree(self.root / ".git")
         (self.root / ".git" / "objects" / "info").mkdir(parents=True)
         (self.root / ".git" / "objects" / "info" / "packs").write_text("P pack-0.pack\n")
         (self.root / ".git" / "info").mkdir()
         (self.root / ".git" / "info" / "refs").write_text("")
-        self.run_kg("add-entity", "repo/other")
+
+    def test_a_history_folder_that_is_no_repository_is_made_again(self) -> None:
+        """The next write deletes it and starts the history again, saying so in one line, and the
+        writes after it record as ever."""
+        self.seed()
+        self.broken_history()
+        said = io.StringIO()
+        with contextlib.redirect_stderr(said):
+            for entity in ("repo/other", "repo/third", "repo/fourth"):
+                self.run_kg("add-entity", entity)
+        [line] = said.getvalue().splitlines()
+        self.assertIn(f"{self.root / '.git'} was no git repository; deleted it", line)
+        self.assertEqual(knowledge.SETTINGS.warnings, [])
+        self.assertEqual(
+            self.commits(), [f"kg add-entity {e}" for e in ("repo/fourth", "repo/third", "repo/other")]
+        )
+        self.assertFalse((self.root / ".git" / "info" / "refs").exists())
+
+    def test_a_git_that_fails_is_never_silent(self) -> None:
+        """A git status that fails (here: a .git made again between the check and the commit) is a
+        warning, as a failing add or commit is."""
+        self.seed()
+        real = store.git
+
+        def status_fails(root: Path, *args: str, pinned: bool = True) -> Any:
+            found = real(root, *args, pinned=pinned)
+            return found if args[0] != "status" else subprocess.CompletedProcess(args, 128, "", "fatal: x")
+
+        with mock.patch.object(store, "git", status_fails):
+            self.assertEqual(store.commit(self.root, "kg add-entity"), "warning: git commit failed: fatal: x")
+
+    def test_a_git_past_its_time_is_stopped_with_all_it_started(self) -> None:
+        """git's housekeeping is its children: on a timeout the whole process group is killed and
+        waited for, so none stays writing in the history, and the commit warns."""
+        fake = self.tmp / "bin"
+        fake.mkdir()
+        mark = self.tmp / "written-after-the-timeout"
+        (fake / "git").write_text('#!/bin/sh\n(sleep 0.5; : > "$KG_TEST_MARK") &\nsleep 5\n')
+        (fake / "git").chmod(0o755)
+        self.root.mkdir(parents=True)
+        env = {"PATH": f"{fake}{os.pathsep}{os.environ['PATH']}", "KG_TEST_MARK": str(mark)}
+        with mock.patch.dict(os.environ, env), mock.patch.object(store, "GIT_TIMEOUT_SECONDS", 0.1):
+            started = time.monotonic()
+            warning = store.commit(self.root, "kg add-entity")
+            self.assertLess(time.monotonic() - started, 3)
+        self.assertEqual(warning, "warning: git commit failed: git init ran past 0.1 s and was stopped")
+        time.sleep(1)
+        self.assertFalse(mark.exists())  # the child was stopped with git
+
+    def test_a_write_whose_git_runs_past_its_time_is_saved_and_warns(self) -> None:
+        """Never a traceback after the files are saved: the history's step warns."""
+        self.seed()
+        with mock.patch.object(store, "GIT_TIMEOUT_SECONDS", 0.0001):
+            self.run_kg("add-entity", "repo/other")
+        self.assertIn("repo/other", self.kb().entities)
         [warning] = knowledge.SETTINGS.warnings
-        self.assertRegex(warning, r"^warning: git commit failed: .*not a git repository")
+        self.assertRegex(warning, r"^warning: git commit failed: git \S+ ran past 0.0001 s and was stopped$")
+
+    def test_my_git_hooks_and_template_never_run_in_the_history(self) -> None:
+        """Hooks from my git config (core.hooksPath) or its template (init.templateDir, copied into
+        each new .git) would see the diffs that name the people a forget deletes, and could leave a
+        process in .git: none runs, and no template is copied, across a history restart too."""
+        home, mark = self.tmp / "home", self.tmp / "a-hook-ran"
+        hooks, template = home / "hooks", home / "template"
+        for folder in (hooks, template / "hooks"):
+            folder.mkdir(parents=True)
+            for name in ("post-commit", "prepare-commit-msg", "reference-transaction", "post-index-change"):
+                (folder / name).write_text(f'#!/bin/sh\necho {name} >> "{mark}"\n')
+                (folder / name).chmod(0o755)
+        config = f"[core]\n\thooksPath = {hooks}\n[init]\n\ttemplateDir = {template}\n"
+        (home / ".gitconfig").write_text(config)
+        with mock.patch.dict(os.environ, {"HOME": str(home), "XDG_CONFIG_HOME": str(home / ".config")}):
+            self.seed()
+            self.run_kg("forget", "person/dana")
+            self.run_kg("add-entity", "repo/other")
+        self.assertFalse(mark.exists())
+        self.assertFalse((self.root / ".git" / "hooks").exists())
+        self.assertEqual(len(self.commits()), 2)
 
     def test_my_own_git_config_starts_no_daemon_in_the_history(self) -> None:
         """A core.fsmonitor=true in my git config would leave a file-watching daemon in .git, which

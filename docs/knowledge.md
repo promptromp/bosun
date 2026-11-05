@@ -7,6 +7,10 @@ lives in `$BOSUN_CONFIG_DIR/knowledge/`, never in this repo, with its own git hi
 commit per change; `BOSUN_KNOWLEDGE_GIT=0` turns it off, and it is skipped if git is missing). A lock
 that a git command cut short left there (the index's, `HEAD`'s or a branch's, older than 30 seconds)
 is removed by the next write, with a note on stderr for each, so the history goes on recording.
+That git runs none of your own git hooks, templates or file watcher, and nothing of it is still
+running when a command returns (its housekeeping runs inside the commit; a git command past 30
+seconds is stopped with all it started, and the write warns). A `.git` there that is no repository
+is deleted by the next write, which starts the history again and says so in one line.
 Every change goes first into a journal there, one transaction per command: `journal/<replica>.jsonl`
 for this Mac's changes, and `journal/local.jsonl` for those that never leave this Mac: whatever
 names a person, and every fact you stated (one with your quote, `--from-user`, or a `transcript`
