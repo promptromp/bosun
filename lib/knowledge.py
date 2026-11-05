@@ -375,20 +375,23 @@ def journaled(p: Paths, kb: KB, write: Write) -> dict[str, Any]:
         edits = [*(e for e in edits if e.target not in targets), marker]
     write.transaction.commit_edits(edits)
     if kb.rewrite:
-        forget_in_journal(p, write.journal, write.changes, targets)
+        forget_in_journal(p, write.journal, write.changes, targets, bool(targets))
     return change_log.stamped(write.journal.position(), held)
 
 
-def forget_in_journal(p: Paths, journal: Journal, changes: list[Change], targets: set[str]) -> list[Change]:
+def forget_in_journal(
+    p: Paths, journal: Journal, changes: list[Change], targets: set[str], deleted: bool
+) -> list[Change]:
     """A deletion's last step (kg forget, the retention purge, one made outside the journal, one
     cut short and finished): every change of <targets> a placeholder in local.jsonl, with what
     writes cut short left of that file (Journal.forget), and what they left in the knowledge
     folder (store.remove_temporaries: batch.json.tmp names people), under the exclusive lock;
-    then, when it removed anything, every update backup (delete_update_backups). Returns the
-    journal as read (<changes>) as it is now."""
+    then, when <deleted> (it removed something: a marker is committed only then, so one found
+    unfinished says so even when <targets> is empty, a person with no facts), every update backup
+    (delete_update_backups). Returns the journal as read (<changes>) as it is now."""
     journal.forget(targets)
     store.remove_temporaries(p.root)
-    if targets:
+    if deleted:
         delete_update_backups()
     return forgotten(changes, targets)
 
@@ -598,7 +601,7 @@ def forget_outside(
     records = kc.records_of(persons, km.forgotten_records(kb), kb.secret)
     marker = kc.deletion_marker(records, sorted(targets - persons))
     changes = [*changes, *journal.begin(ADOPT).commit_edits([marker])]
-    changes = forget_in_journal(p, journal, changes, targets)
+    changes = forget_in_journal(p, journal, changes, targets, bool(targets))
     kb.restart_history = True
     print(
         f"kg: {len(persons)} person(s) deleted on request are gone from the knowledge files and deleted "
@@ -798,7 +801,7 @@ def finish_deletions(
     persons = kc.matched(kc.people(result.entities, facts), kc.marker_records(later), kb.secret)
     targets = kc.naming(persons, facts) | kc.marker_facts(later)
     refuse_private(changes, targets)
-    return forget_in_journal(p, journal, changes, targets)
+    return forget_in_journal(p, journal, changes, targets, True)
 
 
 def refuse_if_behind(p: Paths, journal_has: Mapping[str, int]) -> None:

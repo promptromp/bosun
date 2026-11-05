@@ -213,6 +213,17 @@ class Answers(unittest.TestCase):
         self.assertNotIn(f"{STATE}/ledger.json", targets(plan))
         self.assertIn(f"{CONFIG}/knowledge", targets(plan))
 
+    def test_the_update_backups_go_when_either_store_goes(self) -> None:
+        with_backups = facts(state_entries=("ledger.json", "backups", "logs"))
+        for choices, goes in (
+            (Choices(keep_ledger=True, keep_knowledge=True), False),
+            (Choices(keep_ledger=True, keep_knowledge=False), True),
+            (Choices(keep_ledger=False, keep_knowledge=True), True),
+            (Choices(keep_ledger=False, keep_knowledge=False), True),
+        ):
+            plan = up.build_plan(with_backups, choices)
+            self.assertEqual(f"{STATE}/backups" in targets(plan), goes, choices)
+
     def test_purge_takes_what_is_bosuns_and_no_more(self) -> None:
         plan = up.build_plan(facts(), Choices(keep_ledger=False, keep_knowledge=False, purge=True))
         for name in ("bosun.env", "sessions.yml", "setup.sh", "knowledge"):

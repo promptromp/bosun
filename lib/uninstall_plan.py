@@ -23,6 +23,9 @@ from init_plan import tilde
 WORKING = "working"  # bosun's own: it goes
 LEDGER = "ledger"  # your records: you decide
 KNOWLEDGE = "knowledge"  # your records: you decide
+BACKUPS = (
+    "backups"  # the update's backups: each holds the ledger and the knowledge base, so they go with either
+)
 SETTINGS = "settings"  # what you configured: it stays, unless --purge
 OURS_TO_LEAVE = "leave"  # in bosun's folder, but not part of running it: it always stays
 UNKNOWN = "unknown"  # not listed below: it always stays
@@ -38,8 +41,8 @@ STATE_FILES = (
     ("ledger.md", LEDGER),
     ("learn", LEDGER),  # what learning found and what you decided, which a later run goes by
     # The update's backups (lib/update_backups.py): each holds the whole ledger and knowledge base, so they
-    # are your records. A deletion of a person deletes them all.
-    ("backups", LEDGER),
+    # go when either is deleted (wanted_gone). A deletion of a person deletes them all.
+    ("backups", BACKUPS),
     ("ledger.json.tmp", WORKING),  # what a write cut short left
     (".replica.json.*.tmp", WORKING),  # what making replica.json left when it was cut short
     ("ledger.lock", WORKING),
@@ -304,10 +307,13 @@ def link_steps(facts: Facts) -> list[Step]:
 
 def wanted_gone(kind: str, facts: Facts, choices: Choices) -> bool:
     """Whether a file of this kind goes, on these answers."""
+    ledger_goes = not (choices.keep_ledger and has_ledger(facts))
+    knowledge_goes = not (choices.keep_knowledge and has_knowledge(facts))
     return {
         WORKING: True,
-        LEDGER: not (choices.keep_ledger and has_ledger(facts)),
-        KNOWLEDGE: not (choices.keep_knowledge and has_knowledge(facts)),
+        LEDGER: ledger_goes,
+        KNOWLEDGE: knowledge_goes,
+        BACKUPS: ledger_goes or knowledge_goes,
         SETTINGS: choices.purge,
     }.get(kind, False)
 

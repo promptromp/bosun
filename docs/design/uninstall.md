@@ -47,7 +47,8 @@ this note is why.
   backup of one with items, or either of them unreadable, is something it asks about. A copy you made by
   hand, like `ledger.json.before-my-edit`, is not a file it knows, so it stays. `replica.json` serves both
   stores' journals but goes with the ledger, so a knowledge base kept without it carries on under a new id
-  from its next write.
+  from its next write. The update's backups (`backups/`, class `BACKUPS`) each hold both stores, every
+  person and `secret.key` included, so they go when either store is deleted and stay only when both are kept.
 - **`pmset` decides what is safe.** `pmset repeat cancel` cancels every repeating event, so it only runs when the one
   event there is bosun's wake: at bosun's time to the minute (`1:01AM` is not `11:01AM`), and on bosun's days
   where `pmset` has a word for them (every day, weekdays, weekends). Otherwise it says what it found and leaves

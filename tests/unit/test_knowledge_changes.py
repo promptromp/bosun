@@ -1399,7 +1399,7 @@ class OutsideEditHistoryTest(JournalTestCase):
         self.run_kg("propose", "person/dana", "timezone", "--value", "Europe/Lisbon", "--source", "ledger:a")
         with self.power_cut(jr.Journal, "forget"), self.assertRaises(OSError):
             self.run_kg("forget", "person/dana")
-        backup = self.state / ub.BACKUPS_DIR / "20261105T090000Z-aaa-bbb"
+        backup = self.state / ub.BACKUPS_DIR / "20261105-090000-aaa1111-bbb2222"
         backup.mkdir(parents=True)
         (backup / ub.MANIFEST).write_text("{}\n")
         said = io.StringIO()
@@ -1407,6 +1407,22 @@ class OutsideEditHistoryTest(JournalTestCase):
             self.run_kg("add-entity", "repo/other")
         self.assertFalse(backup.exists())
         self.assertIn("kg: deleted 1 update backup taken before this;", said.getvalue())
+
+    def test_a_forget_of_a_person_with_no_facts_cut_late_still_deletes_the_backups(self) -> None:
+        """No fact names her, so the targets the next write derives are empty; the unfinished
+        marker alone says a deletion happened."""
+        self.seed()
+        self.run_kg("add-entity", "person/dana", "--name", "Dana Example")
+        for cut in (store, knowledge):
+            name = "remove_temporaries" if cut is store else "delete_update_backups"
+            with self.power_cut(cut, name), self.assertRaises(OSError):
+                self.run_kg("forget", "person/dana")
+            backup = self.state / ub.BACKUPS_DIR / "20261105-090000-aaa1111-bbb2222"
+            backup.mkdir(parents=True)
+            (backup / ub.MANIFEST).write_text("{}\n")
+            self.write_saying("add-entity", "repo/other-" + name.replace("_", "-"))
+            self.assertFalse(backup.exists(), name)
+            self.run_kg("add-entity", "person/dana", "--allow-forgotten", "--name", "Dana Example")
 
     def test_a_purge_cut_between_its_marker_and_its_placeholders_is_finished(self) -> None:
         """The retention purge's marker carries the ids of the facts it removed, so the next write

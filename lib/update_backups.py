@@ -100,8 +100,10 @@ def digest(path: Path) -> str:
 
 
 def _clone_flags() -> list[list[str]]:
-    """The ways `cp` clones: macOS's -c, GNU's --reflink=auto; a plain copy last (found by trying)."""
-    return [["cp", "-c", "-pR"], ["cp", "-pR", "--reflink=auto"], ["cp", "-pR"]]
+    """The ways `cp` clones: macOS's -c, GNU's --reflink=auto; a plain copy last (found by trying).
+    -H follows a link given as the entry itself (a stow- or chezmoi-linked folder), so the backup
+    holds the data, not a bare link; links inside it stay links."""
+    return [["cp", "-c", "-H", "-pR"], ["cp", "-H", "-pR", "--reflink=auto"], ["cp", "-H", "-pR"]]
 
 
 def _copy(source: Path, target: Path) -> None:
@@ -118,23 +120,33 @@ def _copy(source: Path, target: Path) -> None:
     raise BackupError(f"could not copy {source}: {last}")
 
 
-def _files_under(root: Path) -> Iterator[Path]:
-    if root.is_file() and not root.is_symlink():
-        yield root
+LINK = "link:"  # a link's manifest value: its target text (a digest is only hex, so no clash)
+
+
+def _entries_under(root: Path) -> Iterator[Path]:
+    """Every file and link under <root>, a folder or a link to one (a stow-linked folder is walked
+    through; links inside it are not followed); <root> itself when it is a file or a link to none."""
+    if not root.is_dir():
+        if root.is_symlink() or root.exists():
+            yield root
         return
-    for folder, _dirs, names in os.walk(root):
-        for name in names:
+    for folder, dirs, names in os.walk(root):
+        for name in (*dirs, *names):
             path = Path(folder) / name
-            if not path.is_symlink():
+            if path.is_symlink() or not path.is_dir():
                 yield path
+
+
+def _value(path: Path) -> str:
+    return LINK + os.readlink(path) if path.is_symlink() else digest(path)
 
 
 def _digests(backup: Path) -> dict[str, str]:
     return {
-        path.relative_to(backup).as_posix(): digest(path)
+        path.relative_to(backup).as_posix(): _value(path)
         for side in ("state", "config")
         if (backup / side).is_dir()
-        for path in sorted(_files_under(backup / side))
+        for path in sorted(_entries_under(backup / side))
     }
 
 
@@ -182,7 +194,7 @@ def take(
     """A backup of the backup set, as <state_dir>/backups/<time>-<from>-<to>/, its manifest last.
     A folder that cannot be finished is deleted, so there is never half of one with a manifest."""
     moment = now.astimezone(UTC)
-    backup = state_dir / BACKUPS_DIR / f"{moment:%Y%m%dT%H%M%SZ}-{from_commit}-{to_commit}"
+    backup = state_dir / BACKUPS_DIR / f"{moment:%Y%m%d-%H%M%S}-{from_commit[:7]}-{to_commit[:7]}"
     backup.mkdir(parents=True, mode=0o700)
     try:
         for relative, path in backup_set(state_dir, config_dir):
@@ -208,48 +220,117 @@ def _destination(relative: str, state_dir: Path, config_dir: Path) -> Path:
     return (state_dir if side == "state" else config_dir) / rest
 
 
+def _flush_file(path: Path) -> None:
+    fd = os.open(path, os.O_RDWR)
+    try:
+        journal.flush_to_disk(fd)
+    finally:
+        os.close(fd)
+
+
 def _put_back(source: Path, target: Path, expected: str) -> None:
+    """<source> written beside <target> (through it when it is a link), flushed, checked, renamed over."""
+    if target.is_symlink() and not expected.startswith(LINK):
+        target = target.resolve()
     target.parent.mkdir(parents=True, exist_ok=True)
     tmp = target.with_name(f".{target.name}.restoring")
-    shutil.copy2(source, tmp)
-    if digest(tmp) != expected:
-        tmp.unlink()
-        raise BackupError(f"{target} did not read back as the backup has it")
+    tmp.unlink(missing_ok=True)
+    if expected.startswith(LINK):
+        os.symlink(expected[len(LINK) :], tmp)
+    else:
+        shutil.copy2(source, tmp)
+        _flush_file(tmp)
+        if digest(tmp) != expected:
+            tmp.unlink()
+            raise BackupError(f"{target} did not read back as the backup has it")
     journal.replace_durably(tmp, target)
 
 
-def restore(backup: Path, state_dir: Path, config_dir: Path, only: Sequence[str]) -> list[str]:
-    """Puts back each manifest file under one of the <only> prefixes whose content differs now, each
-    checked against the manifest (the backup's copy before, the written file after). Files made
-    since are left. Returns what it put back."""
-    manifest = read_manifest(backup)
-    put_back: list[str] = []
+def _same_now(target: Path, expected: str) -> bool:
+    if expected.startswith(LINK):
+        return target.is_symlink() and LINK + os.readlink(target) == expected
+    return target.is_file() and digest(target) == expected
+
+
+def _put_back_all(
+    manifest: Manifest, backup: Path, state_dir: Path, config_dir: Path, only: Sequence[str]
+) -> list[str]:
+    done: list[str] = []
     for relative, expected in sorted(manifest.files.items()):
         if not _under(relative, only):
             continue
         target = _destination(relative, state_dir, config_dir)
-        if target.is_file() and not target.is_symlink() and digest(target) == expected:
+        if _same_now(target, expected):
             continue
         source = backup / relative
-        if not source.is_file() or digest(source) != expected:
+        if not expected.startswith(LINK) and (not source.is_file() or digest(source) != expected):
             raise BackupError(f"{source} is not as the manifest has it: nothing more was restored")
         _put_back(source, target, expected)
-        put_back.append(relative)
-    return put_back
+        done.append(relative)
+    return done
 
 
-def listed(state_dir: Path) -> list[Path]:
-    """The backups, oldest first (their names start with the time)."""
+def _key(root: Path, prefix: str, path: Path) -> str:
+    return prefix if path == root else f"{prefix}/{path.relative_to(root).as_posix()}"
+
+
+def _remove_extra(
+    backup: Path, state_dir: Path, config_dir: Path, manifest: Manifest, only: Sequence[str]
+) -> list[str]:
+    """What is under each prefix and the manifest does not list goes, lock files excepted: the
+    freeze holds them open."""
+    removed: list[str] = []
+    for prefix in only:
+        root = _destination(prefix, state_dir, config_dir)
+        for path in list(_entries_under(root)):
+            key = _key(root, prefix, path)
+            if key not in manifest.files and not path.name.endswith(".lock"):
+                path.unlink()
+                removed.append(key)
+        _remove_empty_folders(root, prefix, backup)
+    return removed
+
+
+def _remove_empty_folders(root: Path, prefix: str, backup: Path) -> None:
+    """The folders the backup does not have at all, left empty, go (deepest first)."""
+    if not root.is_dir():
+        return
+    for folder in [Path(f) for f, _dirs, _names in os.walk(root, topdown=False)]:
+        absent = not (backup / _key(root, prefix, folder)).is_dir()
+        if absent and not any(folder.iterdir()) and (folder != root or not root.is_symlink()):
+            folder.rmdir()
+
+
+def restore(backup: Path, state_dir: Path, config_dir: Path, only: Sequence[str]) -> list[str]:
+    """Makes each <only> prefix as the manifest has it: each file or link whose content differs now
+    is put back (checked against the manifest, before and after), and what is there and the manifest
+    does not list is deleted (files, links and the folders the backup lacks; lock files stay: the
+    freeze holds them). Under the freeze's locks only the update wrote there, so what is new came
+    from the step that failed. Returns what it put back and what it deleted."""
+    manifest = read_manifest(backup)
+    done = _put_back_all(manifest, backup, state_dir, config_dir, only)
+    return sorted({*done, *_remove_extra(backup, state_dir, config_dir, manifest, only)})
+
+
+def _folders(state_dir: Path) -> list[Path]:
     folder = state_dir / BACKUPS_DIR
     if not folder.is_dir():
         return []
     return sorted(p for p in folder.iterdir() if p.is_dir() and not p.name.startswith("."))
 
 
+def listed(state_dir: Path) -> list[Path]:
+    """The backups, oldest first (their names start with the time): the folders with a manifest,
+    which is written last, so one without is a backup cut short and none."""
+    return [p for p in _folders(state_dir) if (p / MANIFEST).is_file()]
+
+
 def prune(state_dir: Path, keep: int = KEEP) -> list[Path]:
-    """Deletes the oldest backups beyond <keep>; returns them."""
-    backups = listed(state_dir)
-    gone = backups[: max(len(backups) - keep, 0)]
+    """Deletes the oldest backups beyond <keep>, and the folders of backups cut short (they hold
+    copied records); returns them."""
+    good = listed(state_dir)
+    kept = good[-keep:] if keep > 0 else []
+    gone = [p for p in _folders(state_dir) if p not in kept]
     for backup in gone:
         shutil.rmtree(backup)
     return gone

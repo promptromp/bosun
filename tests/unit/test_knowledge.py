@@ -521,7 +521,7 @@ class RetentionAndForgetTest(KnowledgeTestCase):
     def backups(self, count: int) -> list[Path]:
         """<count> update backups in the state folder, as an update leaves them."""
         folder = self.state / ub.BACKUPS_DIR
-        made = [folder / f"2026110{n + 1}T090000Z-aaa-bbb" for n in range(count)]
+        made = [folder / f"2026110{n + 1}-090000-aaa1111-bbb2222" for n in range(count)]
         for backup in made:
             (backup / "config" / "knowledge").mkdir(parents=True)
             (backup / ub.MANIFEST).write_text("{}\n")
