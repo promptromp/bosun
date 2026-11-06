@@ -961,6 +961,30 @@ gamma_record idle 3600
 check "... and leaves one whose input box holds unsent text, as send would wait (exit 3)" bash -c '
   out="$("$1" refresh --update-restart "$2" gamma 2>&1)"
   [ $? -eq 3 ] && grep -q "its input line holds unsent text (half a prompt)" <<<"$out" && kill -0 "$3"' _ "$BOSUN" "$WORK/update-prompt" "$gamma_pid"
+# An update keeps a window on the agent it was launched on; the configured one takes over at the next
+# restart that is not for an update.
+pane_is_idle() { [ -z "$(pgrep -P "$(pane_of "$1")")" ]; } # <window>: its pane's shell runs nothing
+kill "$gamma_pid"
+wait_for 10 pane_is_idle gamma
+cp "$BOSUN_CONFIG_DIR/sessions.yml" "$WORK/sessions.yml.on-claude"
+echo "    harness: codex" >>"$BOSUN_CONFIG_DIR/sessions.yml" # gamma's entry is the last
+check "a window launched on Claude, its entry now on Codex, fingerprints the same (its agent is no change)" bash -c '
+  [ "$(cd / && "$1" launch --fingerprint gamma | jq -cS .)" = "$(jq -cS .fingerprint "$2/launches/smoke/gamma.json")" ]' _ "$BOSUN" "$BOSUN_STATE_DIR"
+gamma_pane="$(pane_of gamma)"
+check "... and --update-restart starts it again" update_restart gamma
+check "... with the update's prompt" wait_for 10 launched_with_update_prompt gamma "$gamma_pane"
+check "... on Claude, as it was launched" bash -c '
+  screen="$(tmux -L "$1" capture-pane -p -J -S -500 -t "=smoke:gamma")"
+  grep -q -- "--remote-control gamma" <<<"$screen" && ! grep -q codex-turn-end <<<"$screen"' _ "$SOCKET"
+printf '#!/bin/sh\necho "codex-cli 0.50.0"\n' >"$WORK/fake-codex"
+chmod +x "$WORK/fake-codex"
+wait_for 10 pane_is_idle gamma
+gamma_pane="$(pane_of gamma)"
+check "a plain refresh, not for an update" env BOSUN_CODEX_BIN="$WORK/fake-codex" "$BOSUN" refresh gamma
+check "... starts it on the agent configured now (Codex)" wait_for 10 bash -c '
+  [ "$(tmux -L "$1" display -p -t =smoke:gamma "#{pane_pid}")" != "$2" ] &&
+    tmux -L "$1" capture-pane -p -J -S -500 -t "=smoke:gamma" | grep -q codex-turn-end' _ "$SOCKET" "$gamma_pane"
+cp "$WORK/sessions.yml.on-claude" "$BOSUN_CONFIG_DIR/sessions.yml"
 "$BOSUN" stop >/dev/null 2>&1
 
 echo "restarts leave no shells behind (zsh with a prompt helper in its startup file)"
@@ -1483,6 +1507,20 @@ check "... and an update's restart of it" env BOSUN_LAUNCH_DRY_RUN=0 "$BOSUN" re
 check "... starts it again" wait_for 15 another_claude_in zeta "$zeta_pid"
 check "... keeping its --model and --effort, with the update's prompt" bash -c '
   grep -qx haiku "$1.args" && grep -q "\"effortLevel\":\"low\"" "$1.args" && [ "$(cat "$1.prompt")" = bosun-was-updated:check-in ]' _ "$WORK/live-claude.$(claude_in zeta)"
+zeta_pid="$(claude_in zeta)"
+kill "$zeta_pid"
+wait_for 10 bash -c '! pgrep -P "$(tmux -L "$1" display -p -t =smoke:zeta "#{pane_pid}")" >/dev/null' _ "$SOCKET"
+check "... and once its agent has exited, an update's restart" env BOSUN_LAUNCH_DRY_RUN=0 "$BOSUN" refresh --update-restart "$WORK/update-prompt" zeta
+check "... starts it again" wait_for 15 another_claude_in zeta "$zeta_pid"
+check "... keeping them too" bash -c 'grep -qx haiku "$1.args" && grep -q "\"effortLevel\":\"low\"" "$1.args"' _ "$WORK/live-claude.$(claude_in zeta)"
+echo "BOSUN_HARNESS=codex" >"$BOSUN_CONFIG_DIR/bosun.env"
+check "a send --new window launched on Claude, the default agent now Codex, fingerprints the same" bash -c '
+  [ "$(cd / && "$1" launch --fingerprint zeta | jq -cS .)" = "$(jq -cS .fingerprint "$2/launches/smoke/zeta.json")" ]' _ "$BOSUN" "$BOSUN_STATE_DIR"
+zeta_pid="$(claude_in zeta)"
+check "... and an update's restart of it" env BOSUN_LAUNCH_DRY_RUN=0 "$BOSUN" refresh --update-restart "$WORK/update-prompt" zeta
+check "... starts it again on Claude, as it was launched, with its --model" wait_for 15 another_claude_in zeta "$zeta_pid"
+check "... (its arguments are Claude's)" bash -c 'grep -qx -- --remote-control "$1.args" && grep -qx haiku "$1.args"' _ "$WORK/live-claude.$(claude_in zeta)"
+rm -f "$BOSUN_CONFIG_DIR/bosun.env"
 check "delegate --window delivers through send" contains "$("$BOSUN" delegate investigate --id slack:C8/1 --ask 'look into it' --window delta 2>&1)" "delivered to smoke:delta"
 check "the prompt file is removed once read" bash -c '[ -z "$(ls -A "$1")" ]' _ "$BOSUN_STATE_DIR/prompts"
 check "--new refuses an existing window" fails_with "already exists" live --new delta "$REPO_A" again

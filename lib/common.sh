@@ -491,11 +491,13 @@ BOSUN_PASSTHROUGH_VARS="BOSUN_CONFIG_DIR BOSUN_SESSION_NAME BOSUN_TMUX_SOCKET BO
 # environment, and that shell stays in the pane after Claude exits. Without a prompt, launch sends
 # the drain prompt. That launch shell never shows a prompt, so helpers your startup files fork off
 # would outlive it; launch stops them (reap_shell_helpers).
-build_launch_command() { # <window> [prompt] [kind] [model] [effort] [quiet]
+build_launch_command() { # <window> [prompt] [kind] [model] [effort] [quiet] [harness]
   local window="$1" prompt="${2:-}" prompt_dir prompt_file shell var
   local launch=("$BOSUN_CMD" launch)
   [ -n "${4:-}" ] && launch+=(--model "$4")
   [ -n "${5:-}" ] && launch+=(--effort "$5")
+  # harness: the agent an update keeps a window on, rather than the configured one (recorded_restart)
+  [ -n "${7:-}" ] && launch+=(--harness "$7")
   # quiet: resume without the drain prompt (launch --no-prompt)
   [ "${6:-}" = "quiet" ] && launch+=(--no-prompt)
   launch+=("$window")
@@ -527,10 +529,10 @@ login_shell() {
 RELAUNCH_SETTLE_SECONDS="${BOSUN_RELAUNCH_SETTLE_SECONDS:-8}" # the variable is for tests
 
 # Replace the process in a window's pane with a fresh `bosun launch`, in <dir> (default: the
-# pane's current directory), with [model] and [effort] if given; with kind "checkin", the check-in
-# loop (build_launch_command). Refuses split windows and panes that run anything besides their
-# shell, so it never kills your work.
-relaunch_in_window() { # <window_id> <window> [prompt] [dir] [quiet] [kind] [model] [effort]
+# pane's current directory), with [model], [effort] and [harness] if given; with kind "checkin", the
+# check-in loop (build_launch_command). Refuses split windows and panes that run anything besides
+# their shell, so it never kills your work.
+relaunch_in_window() { # <window_id> <window> [prompt] [dir] [quiet] [kind] [model] [effort] [harness]
   local window_id="$1" panes pane_id pane_pid children workdir
   panes="$(tmux_cmd list-panes -t "$window_id" -F '#{pane_id} #{pane_pid}')" || return 1
   if [ "$(grep -c . <<<"$panes")" -ne 1 ]; then
@@ -554,7 +556,7 @@ relaunch_in_window() { # <window_id> <window> [prompt] [dir] [quiet] [kind] [mod
     sleep 0.5
   done
   workdir="${4:-$(tmux_cmd display-message -p -t "$pane_id" '#{pane_current_path}')}"
-  build_launch_command "$2" "${3:-}" "${6:-}" "${7:-}" "${8:-}" "${5:-}"
+  build_launch_command "$2" "${3:-}" "${6:-}" "${7:-}" "${8:-}" "${5:-}" "${9:-}"
   log_reaped "$2" "$(reap_shell_helpers "$pane_pid")"
   tmux_cmd respawn-pane -k -t "$pane_id" -c "$workdir" "${launch_cmd[@]}"
 }
@@ -1018,6 +1020,31 @@ note_bosun_prompt() { # <window> <text>
 # directory, the --model / --effort it was given, the fingerprint); fails if nothing was recorded.
 launch_recorded() { # <window>
   python3 "$BOSUN_ROOT/lib/launch_record.py" show --state-dir "$BOSUN_STATE_DIR" --session "$BOSUN_SESSION_NAME" --window "$1"
+}
+
+record_field() { jq -r --arg key "$2" '.[$key] // ""' <<<"$1"; } # <record JSON> <key>
+
+# How an update starts window <name> again, from its last recorded launch; empty means as configured.
+# RESTART_HARNESS: the agent it was launched on, which it keeps (a restart onto another agent lands in
+# a blank conversation mid-work; the configured one takes over at the next restart not for an update).
+# RESTART_MODEL / RESTART_EFFORT: the model and effort it ran with when that agent is no longer the
+# configured one (the configured model is meant for the other), else for a window outside the window
+# list (<listed> 0, opened by `send --new`) the --model / --effort it was given. RESTART_DIR: such a
+# window's directory. Fails, all of them empty, if nothing was recorded.
+RESTART_HARNESS="" RESTART_MODEL="" RESTART_EFFORT="" RESTART_DIR=""
+recorded_restart() { # <name> <listed: 1 or 0>
+  local record
+  RESTART_HARNESS="" RESTART_MODEL="" RESTART_EFFORT="" RESTART_DIR=""
+  record="$(launch_recorded "$1")" || return 1
+  RESTART_HARNESS="$(record_field "$record" harness)"
+  if [ "$RESTART_HARNESS" != "$(window_harness "$1")" ]; then
+    RESTART_MODEL="$(record_field "$record" model)"
+    RESTART_EFFORT="$(record_field "$record" effort)"
+  elif [ "$2" = "0" ]; then
+    RESTART_MODEL="$(record_field "$record" model_override)"
+    RESTART_EFFORT="$(record_field "$record" effort_override)"
+  fi
+  [ "$2" = "1" ] || RESTART_DIR="$(record_field "$record" dir)"
 }
 
 INPUT_TYPED=3 # lib/pane_input.py typed: the input line holds text

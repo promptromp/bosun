@@ -305,8 +305,8 @@ Each window gets one of three treatments, decided from the plan and the window's
 
 **What a window was launched with.** `bosun launch` records it, per tmux session and window, in
 `launches/<session>/<window>.json` in the state folder (`lib/launch_record.py`): bosun's commit, the
-agent, the window's directory and any `--model` / `--effort` it was given, and a fingerprint in two
-parts:
+agent and the model and effort it runs with, the window's directory and any `--model` / `--effort` it
+was given, and a fingerprint in two parts:
 
 - the agent's arguments, built for a placeholder conversation name, with the policy's text left out:
   a new day's or a fresh conversation's name is no launch input, and the policy is re-read, not
@@ -315,9 +315,16 @@ parts:
   settings file), read through the install link, as the agent reads them.
 
 `bosun launch --fingerprint <window>` gives the fingerprint a launch would record now, and `bosun
-refresh --update-restart` restarts a window through refresh's path. A window outside the window list
-(opened by `send --new`) is fingerprinted and restarted with the directory and overrides its launch
-recorded, so it carries on as it was started. The two fingerprints are compared after the switch, in
+refresh --update-restart` restarts a window through refresh's path. Both start from the record:
+
+- every window keeps the agent it was launched on. A restart onto another agent would land in a blank
+  conversation mid-work, so if `harness:` in `sessions.yml` or `BOSUN_HARNESS` changed since, the
+  update restarts it on the recorded agent (`launch --harness`), with the model and effort it ran
+  with, since the configured ones are meant for the other agent, and the change does not count as one
+  in its fingerprint. The new agent takes over at the next restart that is not for an update
+  (`refresh`, `start`);
+- a window outside the window list (opened by `send --new`) keeps the directory and the `--model` /
+  `--effort` its launch recorded, so it carries on as it was started. The two fingerprints are compared after the switch, in
 this step, when the link leads to the new version's files. Before the switch it still leads to the
 old ones, so the plan's list of the windows that need a restart has to get the new files another
 way.
@@ -465,8 +472,11 @@ My calls, which the user can overturn:
 - agents left alone unless something they were launched with changed;
 - the update waits for busy windows, and Ctrl-C hands them to the check-in loop;
 - a window's launch inputs are its arguments (the conversation's name and the policy's text left out)
-  and the files under the install they name, read through the link; the commit, the directory and
-  the overrides are recorded with them, and they are compared after the switch;
+  and the files under the install they name, read through the link; the commit, the agent, the model
+  and effort, the directory and the overrides are recorded with them, and they are compared after the
+  switch;
+- an update restarts a window on the agent it was launched on; a changed agent takes over at the next
+  restart not for an update;
 - three backups kept, in the state folder;
 - a forget deletes each backup whole, not only its knowledge part, since a backup is restored as
   one moment;

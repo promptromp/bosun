@@ -124,6 +124,8 @@ def a_launch(commit: str = "0123abcd", harness: str = "claude", **options: str) 
         harness=harness,
         fingerprint={"args": "a" * 64, "files": "b" * 64},
         dir="/Users/me/src/invoice-exporter",
+        model="opus",
+        effort="medium",
         **options,
     )
 
@@ -145,6 +147,8 @@ class RecordTest(unittest.TestCase):
                 "harness": "claude",
                 "fingerprint": {"args": "a" * 64, "files": "b" * 64},
                 "dir": "/Users/me/src/invoice-exporter",
+                "model": "opus",
+                "effort": "medium",
                 "model_override": "sonnet",
                 "effort_override": "",
             },
@@ -204,7 +208,8 @@ class CliTest(unittest.TestCase):
             done = self.run_cli(
                 "record", "--state-dir", str(state), "--session", "acme", "--window", "orch",
                 "--commit", "0123abcd", "--harness", "claude", "--install", str(install),
-                "--dir", tmp, "--model-override=-", "--effort-override=", "--", *agent_args,
+                "--dir", tmp, "--model=opus", "--effort=-", "--model-override=-", "--effort-override=",
+                "--", *agent_args,
             )  # fmt: skip
             self.assertEqual(done.returncode, 0, done.stderr)
             record = launch_record.recorded(state, "acme", "orch")
@@ -214,6 +219,7 @@ class CliTest(unittest.TestCase):
             self.assertEqual(
                 (record["dir"], record["model_override"], record["effort_override"]), (tmp, "-", "")
             )
+            self.assertEqual((record["model"], record["effort"]), ("opus", "-"))
             shown = self.run_cli("show", "--state-dir", str(state), "--session", "acme", "--window", "orch")
             self.assertEqual(json.loads(shown.stdout), record)
             missing = self.run_cli("show", "--state-dir", str(state), "--session", "acme", "--window", "web")
@@ -264,6 +270,11 @@ class LaunchCommandTest(unittest.TestCase):
             timeout=60,
         )
 
+    def configure(self, *entries: str) -> None:
+        """sessions.yml with these entries, each its lines after `- name: `."""
+        listed = "".join(f"  - name: {entry}\n" for entry in entries)
+        (self.tmp / "config" / "sessions.yml").write_text(f"sessions:\n{listed}")
+
     def launched(self, window: str) -> dict[str, object]:
         record = launch_record.recorded(self.state, "acme", window)
         assert record is not None, f"no launch of {window} recorded"
@@ -294,6 +305,39 @@ class LaunchCommandTest(unittest.TestCase):
         )
         printed = self.bosun("launch", "--fingerprint", "scratch", cwd=self.tmp)
         self.assertEqual(json.loads(printed.stdout), record["fingerprint"], printed.stderr)
+
+    def test_a_listed_window_keeps_its_recorded_agent_when_the_config_changes(self) -> None:
+        self.configure(f"api\n    dir: {self.repo}")
+        done = self.bosun("launch", "api", cwd=self.repo)
+        self.assertEqual(done.returncode, 0, done.stderr)
+        before = self.launched("api")
+        self.assertEqual((before["harness"], before["model"], before["effort"]), ("claude", "opus", "medium"))
+        self.configure(f"api\n    dir: {self.repo}\n    harness: codex\n    model: gpt-test")
+        printed = self.bosun("launch", "--fingerprint", "api", cwd=self.tmp)
+        self.assertEqual(json.loads(printed.stdout), before["fingerprint"], printed.stderr)
+        plain = self.bosun(
+            "launch", "api", cwd=self.repo
+        )  # a launch not for an update: the agent configured now
+        self.assertIn("codex-turn-end", plain.stdout)
+        self.assertEqual(self.launched("api")["harness"], "codex")
+
+    def test_a_window_outside_the_list_keeps_its_recorded_agent(self) -> None:
+        done = self.bosun("launch", "--model", "sonnet", "scratch", cwd=self.repo)
+        self.assertEqual(done.returncode, 0, done.stderr)
+        before = self.launched("scratch")["fingerprint"]
+        self.env["BOSUN_HARNESS"] = "codex"
+        printed = self.bosun("launch", "--fingerprint", "scratch", cwd=self.tmp)
+        self.assertEqual(json.loads(printed.stdout), before, printed.stderr)
+
+    def test_launch_harness_starts_the_window_on_that_agent(self) -> None:
+        self.env["BOSUN_HARNESS"] = "codex"
+        done = self.bosun("launch", "--harness", "claude", "--model", "opus", "scratch", cwd=self.repo)
+        self.assertEqual(done.returncode, 0, done.stderr)
+        self.assertIn("--remote-control scratch", done.stdout)
+        self.assertEqual(self.launched("scratch")["harness"], "claude")
+        unknown = self.bosun("launch", "--harness", "nope", "scratch", cwd=self.repo)
+        self.assertNotEqual(unknown.returncode, 0)
+        self.assertIn("no way to run a window on 'nope'", unknown.stderr)
 
     def test_a_window_with_neither_a_list_entry_nor_a_record_is_refused(self) -> None:
         refused = self.bosun("launch", "--fingerprint", "elsewhere", cwd=self.repo)

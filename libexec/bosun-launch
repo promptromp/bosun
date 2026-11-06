@@ -1,6 +1,6 @@
 #!/bin/bash
-# Usage: bosun launch [--model <model>] [--effort <level>] [--no-prompt] <session-name> [initial-prompt | --prompt-file <file>]
-#        bosun launch [--model <model>] [--effort <level>] --fingerprint <session-name>
+# Usage: bosun launch [--model <model>] [--effort <level>] [--harness <agent>] [--no-prompt] <session-name> [initial-prompt | --prompt-file <file>]
+#        bosun launch [--model <model>] [--effort <level>] [--harness <agent>] --fingerprint <session-name>
 #
 # Run from the session's working directory (each tmux window's root). Resumes the most
 # recent session named exactly <session-name> by its id, so no picker opens, on Claude Code
@@ -12,6 +12,8 @@
 # uses it for a window with nothing in flight: every prompt re-reads the whole conversation).
 # Model and effort: --model / --effort, else the window's sessions.yml entry, else
 # BOSUN_MODEL / BOSUN_EFFORT (orchestrator: BOSUN_ORCHESTRATOR_MODEL / _EFFORT; Codex: BOSUN_CODEX_MODEL).
+# The agent: --harness, else the configured one; an update restarts a window on the agent it was
+# launched on, and the configured one takes over at the next restart not for an update.
 # What differs per agent (BOSUN_HARNESS, or a window's `harness:` in sessions.yml) is in lib/launch/<harness>.sh:
 # build_agent_args, first_prompt, run_new and run_resumed.
 #
@@ -22,19 +24,22 @@
 #
 # Before it hands over to the agent (also in a dry run), launch records what the window is launched
 # with in the state folder's launches/<session>/<window>.json (lib/launch_record.py): this bosun's
-# commit, the agent, the directory, the --model / --effort it was given, and a fingerprint of the
-# agent's arguments and of the files they name in the install, with the conversation's name and the
-# orchestrator's policy text left out. --fingerprint prints the fingerprint a launch would record
-# now, and launches nothing: in the window's directory from the window list, or for a window outside
-# it (`send --new`), with the directory and --model / --effort its last launch recorded; it refuses
-# a window with neither. Where the two differ, an update changed something the session was started
-# with, and only a restart gives it the new one.
+# commit, the agent and the model and effort it runs with, the directory, the --model / --effort it
+# was given, and a fingerprint of the agent's arguments and of the files they name in the install,
+# with the conversation's name and the orchestrator's policy text left out. --fingerprint prints the
+# fingerprint a launch would record now, and launches nothing: as an update would start the window
+# again (recorded_restart in lib/common.sh: on the agent it was launched on; for a window outside the
+# window list, opened by `send --new`, with its recorded directory and --model / --effort), in the
+# window's directory from the window list otherwise; it refuses a window with neither. Where the two
+# differ, an update changed something the session was started with, and only a restart gives it the
+# new one.
 set -uo pipefail
 source "$(dirname "$0")/../lib/common.sh"
 load_config
 
 model_override=""
 effort_override=""
+harness_override=""
 no_prompt=0
 fingerprint=0
 while [ $# -gt 0 ]; do
@@ -55,6 +60,10 @@ while [ $# -gt 0 ]; do
       effort_override="${2:?effort}"
       shift 2
       ;;
+    --harness)
+      harness_override="${2:?harness}"
+      shift 2
+      ;;
     *) break ;;
   esac
 done
@@ -70,19 +79,19 @@ case "${1:-}" in
   -*) die_usage "unknown option $1" ;;
 esac
 
-# Sets agent_args for window <name> (lib/launch/<harness>.sh's build_agent_args), and session_name and
-# harness: what it resumes, and which agent runs it. Also input_args, what the record and --fingerprint
-# go by: the same arguments for the conversation name <conversation>, since a new day's or a fresh
-# conversation's name is no launch input.
+# Sets agent_args for window <name> (lib/launch/<harness>.sh's build_agent_args), and session_name,
+# harness, model and effort: what it resumes, which agent runs it, and with what. Also input_args, what
+# the record and --fingerprint go by: the same arguments for the conversation name <conversation>,
+# since a new day's or a fresh conversation's name is no launch input.
 # shellcheck disable=SC2154  # build_agent_args, in the sourced lib/launch/<harness>.sh, sets agent_args
 set_agent_args() { # <name>
-  local model effort agent_module
+  local agent_module
   session_name="$(expected_session_name "$1")"
   IFS=$'\t' read -r model effort <<<"$(window_model_effort "$1")"
   model="${model_override:-$model}"
   effort="${effort_override:-$effort}"
   valid_effort "$effort" || die_usage "effort must be one of: $EFFORT_LEVELS (got '$effort')"
-  harness="$(window_harness "$1")"
+  harness="${harness_override:-$(window_harness "$1")}"
   agent_module="$BOSUN_ROOT/lib/launch/$harness.sh"
   [ -f "$agent_module" ] || die "no way to run a window on '$harness' (BOSUN_HARNESS, or harness: in sessions.yml)"
   # shellcheck disable=SC1090  # one module per agent, each with the same functions
@@ -92,18 +101,21 @@ set_agent_args() { # <name>
   build_agent_args "$1" "$session_name" "$model" "$effort"
 }
 
-# The fingerprint of what window <name> would be launched with, as JSON, as its pane would run it: in
-# its directory (Codex's arguments name the repository there) from the window list, or for a window
-# outside it, the directory and --model / --effort its last launch recorded. Never the caller's.
+# The fingerprint of what window <name> would be launched with, as JSON, as an update would start it
+# again (recorded_restart) and as its pane would run it: in its directory (Codex's arguments name the
+# repository there) from the window list, or the one recorded for a window outside it. Never the
+# caller's. --model / --effort / --harness given here still win.
 print_fingerprint() { # <name>
-  local dir record
+  local dir listed=1
   dir="$(window_specs 2>/dev/null | awk -F'\t' -v name="$1" '$1 == name { print $2; exit }')"
-  if [ -z "$dir" ]; then
-    record="$(launch_recorded "$1")" || die "no window '$1' in the window list, and no launch of it recorded"
-    dir="$(jq -r '.dir' <<<"$record")"
-    model_override="${model_override:-$(jq -r '.model_override' <<<"$record")}"
-    effort_override="${effort_override:-$(jq -r '.effort_override' <<<"$record")}"
+  [ -n "$dir" ] || listed=0
+  if recorded_restart "$1" "$listed"; then
+    harness_override="${harness_override:-$RESTART_HARNESS}"
+    model_override="${model_override:-$RESTART_MODEL}"
+    effort_override="${effort_override:-$RESTART_EFFORT}"
+    [ "$listed" = "1" ] || dir="$RESTART_DIR"
   fi
+  [ -n "$dir" ] || die "no window '$1' in the window list, and no launch of it recorded"
   cd "$dir" || die "cannot enter $1's directory '$dir'"
   set_agent_args "$1"
   python3 "$BOSUN_ROOT/lib/launch_record.py" fingerprint --install "$BOSUN_INSTALL" -- "${input_args[@]}"
@@ -117,6 +129,7 @@ record_launch() {
   commit="$(git -C "$BOSUN_ROOT" rev-parse HEAD 2>/dev/null)" || commit=unknown
   python3 "$BOSUN_ROOT/lib/launch_record.py" record --state-dir "$BOSUN_STATE_DIR" --session "$BOSUN_SESSION_NAME" \
     --window "$name" --commit "${commit:-unknown}" --harness "$harness" --dir "$PWD" \
+    --model="${model:--}" --effort="${effort:--}" \
     --model-override="$model_override" --effort-override="$effort_override" \
     --install "$BOSUN_INSTALL" -- "${input_args[@]}" ||
     log "warning: could not record what '$name' is launched with (lib/launch_record.py)"

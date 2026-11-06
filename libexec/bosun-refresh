@@ -45,7 +45,10 @@
 #                    orchestrator still on yesterday's starts today's as a new day does (the morning
 #                    chores), a repo window with a fresh conversation pending starts it with the
 #                    fresh conversation's prompt. A window whose agent is not running is relaunched
-#                    with the prompt, a missing one created. A window outside the window list (opened
+#                    with the prompt, a missing one created. Each starts on the agent its last launch
+#                    ran (if sessions.yml or BOSUN_HARNESS now names another, that one takes over at
+#                    the next restart not for an update), with the model and effort it ran with when
+#                    that is no longer the configured agent. A window outside the window list (opened
 #                    by `send --new`) restarts in the directory, and with the --model / --effort, its
 #                    last launch recorded (else in the pane's directory).
 #   --checkin-loop   restart the check-in loop in the checkin window (a long-running script keeps
@@ -70,10 +73,7 @@ CHECKIN_LOOP=0
 UPDATE_RESTART=0
 UPDATE_PROMPT_FILE=""
 UPDATE_PROMPT="" # --update-restart's prompt; empty for every other refresh
-UPDATE_DIR=""    # --update-restart of a window outside the window list: the directory, --model and
-UPDATE_MODEL=""  # --effort its last launch recorded, which its restart keeps
-UPDATE_EFFORT=""
-left_running=0 # set when a restart left an agent running: busy, or waiting for you
+left_running=0   # set when a restart left an agent running: busy, or waiting for you
 windows=()
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -129,8 +129,10 @@ act() { # <window> <action description> <command...>
   fi
 }
 
+# RESTART_MODEL, RESTART_EFFORT and RESTART_HARNESS (lib/common.sh's recorded_restart) are set only
+# for --update-restart; empty, every start goes by the config.
 create_and_launch() { # <name> <dir> [kind] [prompt]
-  build_launch_command "$1" "${4:-}" "${3:-}" "$UPDATE_MODEL" "$UPDATE_EFFORT"
+  build_launch_command "$1" "${4:-}" "${3:-}" "$RESTART_MODEL" "$RESTART_EFFORT" "" "$RESTART_HARNESS"
   tmux_cmd new-window -d -t "=$SESSION:" -n "$1" -c "$2" "${launch_cmd[@]}"
 }
 
@@ -180,9 +182,9 @@ restart_in() { # <window_id> <dir> <name> <agent_pid> [prompt]
   fi
   stop_process "$name" "$pid" "$(agent_name_of "$pid")" || return 1
   if [ -n "${5:-}" ]; then
-    relaunch_in_window "$window_id" "$name" "$5" "$2" "" "" "$UPDATE_MODEL" "$UPDATE_EFFORT"
+    relaunch_in_window "$window_id" "$name" "$5" "$2" "" "" "$RESTART_MODEL" "$RESTART_EFFORT" "$RESTART_HARNESS"
   else
-    relaunch_in_window "$window_id" "$name" "" "$2" "$(launch_mode "$name")" "" "$UPDATE_MODEL" "$UPDATE_EFFORT"
+    relaunch_in_window "$window_id" "$name" "" "$2" "$(launch_mode "$name")" "" "$RESTART_MODEL" "$RESTART_EFFORT" "$RESTART_HARNESS"
   fi
 }
 
@@ -339,7 +341,8 @@ refresh_window() { # <name> <dir> <kind> <model> <effort>
   fi
   [ "$kind" = "checkin" ] && return 0 # runs the check-in loop, not Claude
   if ! agent_pid="$(agent_pid_under "$pane_pid")"; then
-    act "$name" "relaunch Claude (not running)" relaunch_in_window "$window_id" "$name" "$UPDATE_PROMPT" "$dir" "$(launch_mode "$name")"
+    act "$name" "relaunch Claude (not running)" relaunch_in_window "$window_id" "$name" "$UPDATE_PROMPT" "$dir" "$(launch_mode "$name")" \
+      "" "$RESTART_MODEL" "$RESTART_EFFORT" "$RESTART_HARNESS"
     return
   fi
   if [ -n "$UPDATE_PROMPT" ]; then
@@ -349,29 +352,20 @@ refresh_window() { # <name> <dir> <kind> <model> <effort>
   fi
 }
 
-# A window outside the window list (opened by `send --new`): sets UPDATE_DIR, UPDATE_MODEL and
-# UPDATE_EFFORT to the directory (empty: the pane's), --model and --effort its last launch recorded.
-# Fails unless the window is open.
-use_recorded_launch() { # <name>
-  local window_id record
-  read -r _ window_id <<<"$(find_window "$1")"
-  [ -n "${window_id:-}" ] || return 1
-  record="$(launch_recorded "$1")" || return 0
-  UPDATE_DIR="$(jq -r '.dir' <<<"$record")"
-  UPDATE_MODEL="$(jq -r '.model_override' <<<"$record")"
-  UPDATE_EFFORT="$(jq -r '.effort_override' <<<"$record")"
-}
-
 # --update-restart <prompt-file> <name>: window <name> as refresh_window brings it along, with the
-# update's prompt. Returns LEFT_RUNNING when it left the agent running.
+# update's prompt, started again as its last launch recorded (recorded_restart): on the same agent, and
+# a window outside the window list, which must be open, in its directory (else the pane's) with its
+# --model / --effort. Returns LEFT_RUNNING when it left the agent running.
 update_restart() { # <name>
-  local name dir kind
+  local name dir kind window_id listed=1
   IFS=$'\t' read -r name dir kind _ <<<"$(window_specs | awk -F'\t' -v name="$1" '$1 == name')"
   if [ -z "$name" ]; then
-    use_recorded_launch "$1" || die "no window '$1' in the window list, nor open in the session"
-    name="$1" kind=session dir="$UPDATE_DIR"
+    read -r _ window_id <<<"$(find_window "$1")"
+    [ -n "${window_id:-}" ] || die "no window '$1' in the window list, nor open in the session"
+    name="$1" kind=session dir="" listed=0
   fi
   [ "$kind" != "checkin" ] || die_usage "the checkin window runs the check-in loop: use --checkin-loop"
+  if recorded_restart "$name" "$listed" && [ "$listed" = "0" ]; then dir="$RESTART_DIR"; fi
   refresh_window "$name" "$dir" "$kind" "" "" || return 1
   [ "$left_running" = "0" ] || return "$LEFT_RUNNING"
 }

@@ -1,14 +1,17 @@
 """What each window was launched with (docs/design/update.md, "Bringing the agents along").
 
 `bosun launch` records, in $BOSUN_STATE_DIR/launches/<session>/<window>.json (a tmux session of its
-own, such as wake-test's, keeps records of its own), the commit of the bosun it ran from, the agent,
-a fingerprint of what it handed the agent, and what starts the window the same way again: its
-directory, and the --model or --effort launch was given ("" for none; a window `send --new` opened
-keeps them). `bosun launch --fingerprint <window>` prints the fingerprint it would hand it now. Where
-the two differ, a session runs with launch inputs an update changed (its settings, its hooks, the
-launch command, the plugin), and only a restart gives it the new ones. Everything else it uses (a
-bosun command, a hook's code) runs from the install link, which an update switches; so the two are
-compared after the switch.
+own, such as wake-test's, keeps records of its own), the commit of the bosun it ran from, a
+fingerprint of what it handed the agent, and what starts the window the same way again: the agent,
+the model and effort it ran with, its directory, and the --model or --effort launch was given (""
+for none; a window `send --new` opened keeps them). An update restarts a window on the agent it was
+launched on, with that model and effort when the configured agent is another one.
+
+`bosun launch --fingerprint <window>` prints the fingerprint it would hand it now. Where the two
+differ, a session runs with launch inputs an update changed (its settings, its hooks, the launch
+command, the plugin), and only a restart gives it the new ones. Everything else it uses (a bosun
+command, a hook's code) runs from the install link, which an update switches; so the two are compared
+after the switch.
 
 The fingerprint has two parts:
 - `args`: the agent's arguments, as `build_agent_args` makes them for the conversation name
@@ -82,6 +85,8 @@ class Launch:
     harness: str
     fingerprint: dict[str, str]
     dir: str
+    model: str  # what it ran with; "-" for the agent's default
+    effort: str
     model_override: str = ""  # the --model launch was given; "" for none
     effort_override: str = ""
 
@@ -119,10 +124,10 @@ def recorded(state_dir: Path, session: str, window: str) -> dict[str, Any] | Non
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(prog="launch_record.py")
+    parser = argparse.ArgumentParser(prog="launch_record.py", allow_abbrev=False)
     commands = parser.add_subparsers(dest="command", required=True)
     print_it = commands.add_parser("fingerprint", help="print the fingerprint of <args> as JSON")
-    write_it = commands.add_parser("record", help="record a window's launch with <args>")
+    write_it = commands.add_parser("record", help="record a window's launch with <args>", allow_abbrev=False)
     show_it = commands.add_parser("show", help="print a window's record as JSON; exit 1 if it has none")
     for sub in (write_it, show_it):
         sub.add_argument("--state-dir", type=Path, required=True)
@@ -131,6 +136,8 @@ def build_parser() -> argparse.ArgumentParser:
     write_it.add_argument("--commit", required=True)
     write_it.add_argument("--harness", required=True)
     write_it.add_argument("--dir", required=True)
+    write_it.add_argument("--model", required=True)
+    write_it.add_argument("--effort", required=True)
     write_it.add_argument("--model-override", default="")
     write_it.add_argument("--effort-override", default="")
     for sub in (print_it, write_it):
@@ -151,7 +158,9 @@ def main(argv: list[str]) -> int:
     if args.command == "fingerprint":
         print(json.dumps(fp, sort_keys=True))
         return 0
-    launch = Launch(args.commit, args.harness, fp, args.dir, args.model_override, args.effort_override)
+    ran_with = {"model": args.model, "effort": args.effort}
+    overrides = {"model_override": args.model_override, "effort_override": args.effort_override}
+    launch = Launch(args.commit, args.harness, fp, args.dir, **ran_with, **overrides)
     record(args.state_dir, args.session, args.window, launch)
     return 0
 
