@@ -38,12 +38,18 @@ import knowledge_store as store
 import update_backups as ub
 from change_log import Edit
 from knowledge_model import KnowledgeError
+from knowledge_schema import SchemaError
 from test_journal import short_writes
 from test_knowledge import FIXTURE, QUOTE, START, KnowledgeTestCase, typed
 
 
 MINTED = re.compile(r"^f-[0-9a-hjkmnp-tv-z]{6}$")
 LEGACY_AT = "2026-10-01T09:00:00+00:00"
+
+
+def no_second_id() -> Any:
+    """knowledge.new_replica_id failing the test: a write that makes no new replica id."""
+    return mock.patch.object(knowledge, "new_replica_id", side_effect=AssertionError("a second id"))
 
 
 def legacy_entity(entity_id: str, name: str) -> dict[str, Any]:
@@ -562,7 +568,8 @@ class GenesisTest(JournalTestCase):
         entities = (self.root / "entities.jsonl").read_bytes()
         with self.assertRaisesRegex(
             KnowledgeError,
-            r"behind view\.json \(\w{32}\.jsonl ends at seq 0.*Nothing was written.*replica\.json aside",
+            r"behind view\.json \(\w{32}\.jsonl ends at seq 0.*Nothing was written"
+            r".*journal aside.*replica\.json may stay",
         ):
             self.run_kg("add-entity", "repo/other")
         self.assertEqual((self.root / "entities.jsonl").read_bytes(), entities)
@@ -599,6 +606,188 @@ class GenesisTest(JournalTestCase):
             sorted(c["target"] for c in self.journal().changes() if c["cmd"] == knowledge.GENESIS),
             sorted(e for e in self.kb().entities if e != "repo/other"),
         )
+
+    def test_an_emptied_journal_starts_again_as_a_new_replica(self) -> None:
+        """The journal folder emptied or removed by hand, replica.json left where it is: the next
+        write starts a new journal from the files as a new replica, recorded in replica.json, so
+        that no fact id is minted again from the old one's seqs (the files, and any copy of the old
+        journal kept aside, hold those). The write after it carries on under the new one."""
+        self.seed()
+        journal = self.root / "journal"
+        for how in ("emptied", "removed"):
+            old = self.replica()
+            if how == "emptied":
+                for path in journal.iterdir():
+                    path.unlink()
+            else:
+                shutil.rmtree(journal)
+            self.run_kg("add-entity", f"repo/{how}")
+            new = self.replica()
+            with self.subTest(how=how):
+                self.assertNotEqual(new, old)
+                self.assertEqual({c["replica"] for c in self.journal().changes()}, {new})
+                self.assert_the_journal_rebuilds_the_files()
+            self.run_kg("add-entity", f"repo/after-{how}")
+            self.assertEqual(self.replica(), new)  # a journal with files keeps its id
+
+    def test_a_new_knowledge_base_takes_the_replica_id_there(self) -> None:
+        """A knowledge base with no journal yet, new or from before the journal (its one-time
+        conversion, genesis), is no journal starting again (view.json records no position): it
+        starts it under the id replica.json holds (the ledger made it first), or makes one, once,
+        even when a write refused before it wrote nothing; the writes after it keep it."""
+        for name in ("new", "from before"):
+            for there in (True, False):
+                shutil.rmtree(self.root, ignore_errors=True)
+                (self.state / "replica.json").unlink(missing_ok=True)
+                made = self.replica() if there else ""
+                if name == "from before":
+                    self.write_legacy([legacy_entity("repo/invoice-exporter", "exporter")], [])
+                with no_second_id():
+                    with self.assertRaises(KnowledgeError):
+                        self.run_kg("forget", "person/nobody")  # refused: nothing written
+                    self.run_kg("add-entity", "step/merge")
+                    self.run_kg("add-entity", "step/review")
+                kept = self.replica()
+                with self.subTest(name, replica_there=there):
+                    self.assertEqual(kept, made or kept)
+                    self.assertEqual({c["replica"] for c in self.journal().changes()}, {kept})
+                    self.assert_the_journal_rebuilds_the_files()
+
+    def power_cut_after_the_journal(self) -> Any:
+        """view.json's write cut short (the power went) once the journal holds a line: a write cut
+        between the journal and view.json. One before that (nothing journaled yet) is made."""
+        real = knowledge.write_view
+
+        def write_view(p: store.Paths, stamp: Any) -> None:
+            if knowledge.open_journal(p).written():
+                raise OSError("power cut")
+            real(p, stamp)
+
+        return mock.patch.object(knowledge, "write_view", side_effect=write_view)
+
+    def move_the_journal_aside(self, *, replica_too: bool = False) -> str:
+        """The journal folder moved aside (the advice), and replica.json with it if <replica_too>
+        (the advice before it said it may stay); the replica id the journal had."""
+        old = self.replica()
+        aside = self.tmp / "aside"
+        aside.mkdir()
+        (self.root / "journal").rename(aside / "journal")
+        if replica_too:
+            (self.state / "replica.json").rename(aside / "replica.json")
+        return old
+
+    def cut_short_after_starting_again(self, *, replica_too: bool = False) -> str:
+        """The journal moved aside, then the first write cut short between its genesis and
+        view.json; the replica id the journal had."""
+        self.seed()
+        old = self.move_the_journal_aside(replica_too=replica_too)
+        with self.power_cut_after_the_journal(), self.assertRaisesRegex(OSError, "power cut"):
+            self.run_kg("add-entity", "repo/cut-short")
+        self.assertEqual({c["cmd"] for c in self.journal().changes()}, {knowledge.GENESIS})
+        return old
+
+    def assert_finished_under_one_new_id(self, old: str) -> None:
+        """The next write finishes what was cut short, as any write cut short between the journal
+        and view.json (never refused as a journal that lost lines: the new journal never had the
+        old one's), under the id the cut write made, without making another."""
+        made = self.replica()
+        self.assertNotEqual(made, old)
+        with no_second_id():
+            self.run_kg("add-entity", "repo/other")
+        self.assertIn("repo/other", self.file_entities())
+        self.assertNotIn("repo/cut-short", self.file_entities())
+        self.assertEqual(self.replica(), made)
+        self.assertEqual({c["replica"] for c in self.journal().changes()}, {made})
+        self.assert_the_journal_rebuilds_the_files()
+        self.assertEqual(self.validate(), ("knowledge base is valid", 0))
+
+    def test_a_write_cut_short_after_the_journal_starts_again_is_finished(self) -> None:
+        """The journal moved aside and replica.json left where it is, as the advice says."""
+        self.assert_finished_under_one_new_id(self.cut_short_after_starting_again())
+
+    def test_a_write_cut_short_after_moving_replica_json_aside_too_is_finished(self) -> None:
+        self.assert_finished_under_one_new_id(self.cut_short_after_starting_again(replica_too=True))
+
+    def test_a_reader_after_a_write_cut_short_after_starting_again_is_not_warned(self) -> None:
+        """Meanwhile a reader shows the journal's rebuild, without a word, and writes nothing."""
+        self.cut_short_after_starting_again()
+        files = self.saved_files()
+        said = io.StringIO()
+        with contextlib.redirect_stderr(said):
+            self.assertIn("person/dana", self.kb().entities)
+        self.assertEqual(said.getvalue(), "")
+        self.assertEqual(self.saved_files(), files)
+
+    def test_a_cut_between_the_new_id_and_the_unstamp_makes_one_more_id_never_the_old(self) -> None:
+        """Cut after the new id is made and before view.json is saved without the old position: the
+        next write starts again once more, under a third id, never the old one."""
+        self.seed()
+        old = self.move_the_journal_aside()
+        with (
+            mock.patch.object(knowledge, "unstamp", side_effect=OSError("power cut")),
+            self.assertRaises(OSError),
+        ):
+            self.run_kg("add-entity", "repo/cut-short")
+        made = self.replica()
+        self.assertNotEqual(made, old)
+        self.assertTrue(knowledge.saved_position(knowledge.paths()))  # the old position, still
+        self.run_kg("add-entity", "repo/other")
+        again = self.replica()
+        self.assertNotIn(again, (old, made))
+        self.assertEqual({c["replica"] for c in self.journal().changes()}, {again})
+        self.assertIn("repo/other", self.file_entities())
+        self.assert_the_journal_rebuilds_the_files()
+
+    def test_a_cut_between_the_unstamp_and_genesis_goes_on_under_that_id(self) -> None:
+        """Cut after view.json is saved without the old position and before genesis is journaled:
+        the next write puts the knowledge base in the journal under the id already made, making
+        none."""
+        self.seed()
+        old = self.move_the_journal_aside()
+        with (
+            mock.patch("journal.Transaction.commit", side_effect=OSError("power cut")),
+            self.assertRaises(OSError),
+        ):
+            self.run_kg("add-entity", "repo/cut-short")
+        made = self.replica()
+        self.assertNotEqual(made, old)
+        self.assertEqual(knowledge.saved_position(knowledge.paths()), {})
+        self.assertFalse(self.journal().written())
+        with no_second_id():
+            self.run_kg("add-entity", "repo/other")
+        self.assertEqual(self.replica(), made)
+        self.assertIn("person/dana", self.file_entities())
+        self.assert_the_journal_rebuilds_the_files()
+
+    def test_a_write_refused_before_the_journal_starts_again_makes_no_id(self) -> None:
+        """A write refused while it reads the files (a schema.json that does not parse), with the
+        journal moved aside: no id is made, however often it is refused; the first write that gets
+        past it makes one."""
+        self.seed()
+        old = self.move_the_journal_aside()
+        position = knowledge.saved_position(knowledge.paths())
+        schema = self.root / "schema.json"
+        schema.write_text("{not json")
+        for _ in range(3):
+            with self.assertRaisesRegex(SchemaError, r"schema\.json is not valid JSON"):
+                self.run_kg("add-entity", "repo/other")
+        self.assertEqual(self.replica(), old)
+        self.assertEqual(knowledge.saved_position(knowledge.paths()), position)  # untouched
+        schema.unlink()
+        self.run_kg("add-entity", "repo/other")
+        made = self.replica()
+        self.assertNotEqual(made, old)
+        self.assertEqual({c["replica"] for c in self.journal().changes()}, {made})
+
+    def test_a_journal_that_lost_a_file_after_starting_again_is_still_refused(self) -> None:
+        """Starting again weakens no refusal: once view.json records the new journal, losing one of
+        its files is refused as before."""
+        self.seed()  # person/dana's changes go to local.jsonl, the rest to the replica's file
+        (self.root / "journal").rename(self.tmp / "journal.aside")
+        self.run_kg("add-entity", "repo/other")
+        (self.root / "journal" / f"{self.replica()}.jsonl").unlink()
+        with self.assertRaisesRegex(KnowledgeError, r"behind view\.json \(\w{32}\.jsonl ends at seq 0"):
+            self.run_kg("add-entity", "repo/another")
 
 
 class BoundaryTest(JournalTestCase):
@@ -1028,19 +1217,24 @@ class RebuiltFilesTest(JournalTestCase):
 
     def test_the_way_out_for_a_lost_key_moves_the_journal_aside_too(self) -> None:
         """With the key gone for good, forgotten.jsonl alone is not enough (the markers hold the same
-        records): moved aside with the journal folder and replica.json, the next write starts again
-        from the files and makes a new key, and the people can be added again."""
+        records): moved aside with the journal folder (replica.json may stay), the next write starts
+        again from the files, as a new replica, and makes a new key, and the people can be added
+        again."""
         self.seed()
         self.run_kg("forget", "person/dana")
         (self.root / "secret.key").unlink()
         (self.root / "forgotten.jsonl").rename(self.tmp / "forgotten.aside")
-        with self.assertRaisesRegex(KnowledgeError, "forgotten.jsonl and the journal folder"):
+        old = self.replica()
+        with self.assertRaisesRegex(
+            KnowledgeError, r"forgotten.jsonl and the journal folder .*replica\.json may stay"
+        ):
             self.run_kg(
                 "add-entity", "person/dana", "--name", "Dana Example"
             )  # the markers' records are back
-        for path in (self.root / "forgotten.jsonl", self.root / "journal", self.state / "replica.json"):
+        for path in (self.root / "forgotten.jsonl", self.root / "journal"):
             path.rename(self.tmp / f"{path.name}.aside-2")  # together
         self.run_kg("add-entity", "person/dana", "--name", "Dana Example")
+        self.assertNotEqual(self.replica(), old)
         self.assertIn("person/dana", self.file_entities())
         self.assertTrue((self.root / "secret.key").exists())
         self.assertEqual(store.read_jsonl(self.root / "forgotten.jsonl"), [])
@@ -1852,13 +2046,13 @@ class KeyTest(JournalTestCase):
         self.key().chmod(0o600)
 
     def test_the_way_out_moves_the_bad_key_aside_too(self) -> None:
-        """The review's probe: keyed records and a damaged key; with forgotten.jsonl, the journal
-        and replica.json moved aside, a person can be added again, and the next write makes a new
-        key, keeping the bad one aside."""
+        """The review's probe: keyed records and a damaged key; with forgotten.jsonl and the journal
+        moved aside (replica.json may stay), a person can be added again, and the next write makes a
+        new key, keeping the bad one aside."""
         self.seed()
         self.run_kg("forget", "person/dana")
         self.key().write_text("")
-        for path in (self.root / "forgotten.jsonl", self.root / "journal", self.state / "replica.json"):
+        for path in (self.root / "forgotten.jsonl", self.root / "journal"):
             path.rename(self.tmp / f"{path.name}.aside")
         with contextlib.redirect_stderr(io.StringIO()):
             self.run_kg("add-entity", "person/dana", "--name", "Dana Example")

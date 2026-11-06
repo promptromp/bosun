@@ -105,7 +105,17 @@ import update_backups
 import update_gate
 import validation
 from change_log import ADOPT, DIGEST, Change, ChangeLogError, Edit, reader_rebuilds
-from journal import REPLICA_FILE, Journal, JournalError, Transaction, as_saved, forgotten, replica_id, up_to
+from journal import (
+    REPLICA_FILE,
+    Journal,
+    JournalError,
+    Transaction,
+    as_saved,
+    forgotten,
+    new_replica_id,
+    replica_id,
+    up_to,
+)
 from knowledge_model import KB, KnowledgeError, Proposal, Record
 from knowledge_schema import SchemaError
 from knowledge_store import Paths, StoreError
@@ -260,15 +270,15 @@ def key_problem(p: Paths, kb: KB) -> str:
 
 def key_missing(p: Paths) -> str:
     """The key of the forgotten is missing, and what to do. The journal's deletion markers hold the
-    same records as forgotten.jsonl, so the way out when the key is gone for good moves both aside
-    (and replica.json, as for a damaged journal), with the key file if one is there."""
+    same records as forgotten.jsonl, so the way out when the key is gone for good moves both aside,
+    with the key file if one is there (replica.json may stay, as for a damaged journal)."""
     replica_file = Path(SETTINGS.state_dir) / REPLICA_FILE
     return (
         f"the key of the forgotten people, {p.key_file}, is missing, unreadable or not a key; restore "
         "it (a new one would stop the deleted people being recognised; if it is gone for good, move "
-        f"forgotten.jsonl and the journal folder {p.journal} aside, with {replica_file}, and "
-        f"{p.key_file.name}, if it is there, all together: the people in them can then be added again, "
-        "and the next write makes a new key)"
+        f"forgotten.jsonl and the journal folder {p.journal} aside, and {p.key_file.name}, if it is "
+        "there, all together: the people in them can then be added again, and the next write makes a "
+        f"new key and starts a new journal as a new replica; {replica_file} may stay)"
     )
 
 
@@ -462,11 +472,12 @@ def state_dir() -> Path:
 def start_again(p: Paths) -> str:
     """How to go on when the journal cannot be used: the files are whole, so a new journal can
     start from them. Under a new replica, so that no fact id is minted twice from the same seq (as
-    for the ledger, which then goes on as that replica too)."""
+    for the ledger, which then goes on as that replica too): the write that starts it makes one
+    (change_log.starts_again), so replica.json may stay."""
     replica_file = Path(SETTINGS.state_dir) / REPLICA_FILE
     return (
-        f"move the folder {p.journal} and the file {replica_file} aside together (keep them): the next "
-        "write starts a new journal from the files, as a new replica"
+        f"move the folder {p.journal} aside (keep it): the next write starts a new journal from the "
+        f"files, as a new replica ({replica_file} may stay: a new id is made either way)"
     )
 
 
@@ -818,6 +829,16 @@ def refuse_if_behind(p: Paths, journal_has: Mapping[str, int]) -> None:
         )
 
 
+def unstamp(p: Paths) -> None:
+    """view.json saved without the position of a journal gone (nor the digests recorded with it),
+    as for files from before the journal, when the journal starts again (change_log.starts_again),
+    before anything is journaled: so a write cut short between the new journal's first transaction
+    (genesis) and view.json is finished by the next write, the files being behind the journal,
+    never refused as a journal that lost lines (the old position names seqs the new journal never
+    had)."""
+    write_view(p, {})
+
+
 def genesis(p: Paths, journal: Journal, kb: KB) -> list[Change]:
     """Put a knowledge base from before the journal in it whole (kc.snapshot), as one transaction
     (GENESIS), what the journal cannot hold converted once with a note on stderr; then save the
@@ -835,22 +856,39 @@ def genesis(p: Paths, journal: Journal, kb: KB) -> list[Change]:
     return done
 
 
-def write_start(p: Paths, journal: Journal) -> tuple[KB, LeftOut | None, list[Change]]:
+def take_replica(p: Paths, journal: Journal, state: Path, written: Mapping[str, int]) -> None:
+    """<journal>'s replica id for this write, decided once (change_log.starts_again, on what the
+    journal has <written>), after the files are read, so that a write refused before then makes
+    none: a journal that starts again gets a new one, made just before view.json is saved without
+    the old position (unstamp), so that a cut between the two makes one more id at the next write,
+    never the old one again; any other gets this Mac's (replica_id, made once). Both in <state>."""
+    if change_log.starts_again(written, saved_position(p)):
+        journal.replica = new_replica_id(state)
+        unstamp(p)
+    else:
+        journal.replica = replica_id(state)
+
+
+def write_start(p: Paths, journal: Journal, state: Path) -> tuple[KB, LeftOut | None, list[Change]]:
     """The knowledge base a write starts from, in memory (the command's one save writes it), as
     the ledger's write does. Refused when the journal lost changes the files reflect (a file
-    deleted, a partial restore); then an unfinished transaction at the end of the journal is set
-    aside (repair_tail); a knowledge base from before the journal is put in it (genesis); a change
-    made to the files outside the journal is taken in (adopted where it can be, and the journal's
-    rebuild goes on); and where the files are behind the journal (a write cut short anywhere
-    between the journal and view.json), the journal's rebuild replaces them (standing). Before
-    any of that, a deletion cut short that cannot be finished without the key is refused
+    deleted, a partial restore); then the journal takes its replica id, and one that starts again a
+    new id and view.json saved without the old position (take_replica); an unfinished transaction
+    at the end of the journal is set aside (repair_tail); a knowledge base from before the journal
+    is put in it (genesis); a change made to the files outside the journal is taken in (adopted
+    where it can be, and the journal's rebuild goes on); and where the files are behind the journal
+    (a write cut short anywhere between the journal and view.json), the journal's rebuild replaces
+    them (standing). Before any of that, a deletion cut short that cannot be finished without the
+    key is refused
     (refuse_finishing_without_key), the forgotten records the journal's markers carry are in
     forgotten.jsonl (take_forgotten), and a deletion cut short is finished (finish_deletions). A
     write that drops a person the files held owes a history restart. The journal is read once and
     that read passed on (rebuilt once, when it must be). Also returns what the journal could not
     take of files changed outside it, for the save to say (taken_in), and the journal as read."""
     kb = read_files(p)
-    refuse_if_behind(p, journal.written())
+    written = journal.written()
+    refuse_if_behind(p, written)
+    take_replica(p, journal, state, written)
     journal.repair_tail()
     position = journal.position()
     if not position:
@@ -893,8 +931,8 @@ def writing(p: Paths, message: str, state: Path) -> Iterator[KB]:
     update_gate.check_format("knowledge base", found, store.KNOWLEDGE_FORMAT)
     new = found == 0
     with journal_errors(p):
-        journal = open_journal(p, replica_id(state))
-        kb, left, changes = write_start(p, journal)
+        journal = open_journal(p)  # its replica id once write_start has read the files (take_replica)
+        kb, left, changes = write_start(p, journal, state)
         transaction = journal.begin(SETTINGS.command)
     if not kb.secret and not kb.key_problem:
         kb.secret = made_key(p)

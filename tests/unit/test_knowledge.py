@@ -643,14 +643,13 @@ class RetentionAndForgetTest(KnowledgeTestCase):
                 self.assertEqual(list(self.root.glob("secret.key.aside-*")), [])
 
     def test_moving_forgotten_aside_lets_the_next_write_make_a_new_key(self) -> None:
-        """With the journal's deletion markers (which hold the same records), and replica.json, as
-        the key's message says."""
+        """With the journal's deletion markers (which hold the same records), as the key's message
+        says (replica.json may stay: the new journal gets a new id either way)."""
         self.seed()
         self.run_kg("forget", "person/dana")
         (self.root / "secret.key").unlink()
         (self.root / "forgotten.jsonl").rename(self.root / "forgotten.jsonl.old")
         (self.root / "journal").rename(self.root / "journal.old")
-        (self.state / "replica.json").rename(self.state / "replica.json.old")
         self.run_kg("add-entity", "person/dana")
         self.assertTrue((self.root / "secret.key").exists())
 
