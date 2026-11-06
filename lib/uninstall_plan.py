@@ -87,7 +87,7 @@ CONFIG_FILES = (
     ("workstreams.json", SETTINGS),
     ("*.pre-init-*", SETTINGS),  # what `bosun init` backed up
     ("bosun.env.pre-update-*", SETTINGS),  # what `bosun update` backed up
-    (".bosun.env.update.tmp", WORKING),  # what `bosun update` writes as bosun.env, before its rename
+    (".bosun.env.*.tmp", WORKING),  # what `bosun update` was writing, cut short (bosun.env, its copy)
     ("forbidden-terms.txt", OURS_TO_LEAVE),  # guards commits to this repo; bosun runs without it
     (".DS_Store", WORKING),
 )

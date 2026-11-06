@@ -263,10 +263,10 @@ write to take in. Measure before building that.
   rewriting what was recorded, and rebuilds the files derived from the journal. So whatever a store
   rebuilds from its journal is in the code's format (a `ledger.json` made from the rebuild records it).
 - **Config.** A new key needs nothing written, since the defaults in `lib/common.sh` apply. A key
-  that is renamed or removed is edited in `bosun.env`, keeping a `bosun.env.pre-update-<time>` copy.
-  The update never edits my own files: `sessions.yml`, `setup.sh`, `policy.md`, `learn.md`,
-  `tasks/` and `workstreams.json`. If their format has to change, the summary says what to change
-  and `bosun doctor` points to it.
+  that is renamed or removed is edited in `bosun.env`, keeping a `bosun.env.pre-update-<time>` copy
+  (`YYYYmmdd-HHMMSS`, in UTC). The update never edits my own files: `sessions.yml`, `setup.sh`,
+  `policy.md`, `learn.md`, `tasks/` and `workstreams.json`. If their format has to change, the
+  summary says what to change and `bosun doctor` points to it.
 
 ### Bringing the agents along
 
@@ -317,7 +317,7 @@ Data
   ledger      format 1 -> 2 (412 items migrated); rules 1 -> 2
   knowledge   format 1, unchanged
 Config
-  bosun.env   BOSUN_OLD_KEY is now BOSUN_NEW_KEY (before: bosun.env.pre-update-20261104-1532)
+  bosun.env   BOSUN_OLD_KEY is now BOSUN_NEW_KEY (before: bosun.env.pre-update-20261104-153207)
   3 new keys, at their defaults (bosun doctor lists them)
 Prompts changed: 4 (policy.md, tasks/review.md, tasks/_common.md, learn.md)
 Jobs reloaded: watchdog
@@ -325,7 +325,7 @@ Agents
   orchestrator  re-read policy.md; checked in (2 events from the update)
   api           restarted when idle; resumed: waiting on CI for PR 12
   web           busy; kept running (nothing it was started with changed)
-Backup: ~/.local/state/bosun/backups/20261104-1532-95545b0-c41b186 (3.1 MB)
+Backup: ~/.local/state/bosun/backups/20261104-153207-95545b0-c41b186 (3.1 MB)
 Going back: docs/setup.md#going-back
 ```
 

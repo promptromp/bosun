@@ -48,6 +48,20 @@ def add_x(ctx: migrations.Context) -> int:
 ADD_X = migrations.Migration("ledger", 1, 2, add_x, "{n} items migrated")
 
 
+def rebuild_from_journal(ctx: migrations.Context) -> int:
+    """A test migration of a ledger that has a journal: ledger.json rebuilt from the journal (in the
+    code's format) and stamped, as a write saves it, never edited in place."""
+    journal = ledger.journal_at(ctx.state_dir / "journal" / ledger.LEDGER_STREAM)
+    position = journal.position()
+    made = ledger.rebuilt(journal, position)
+    ledger.stamp(made, position)
+    (ctx.state_dir / "ledger.json").write_text(json.dumps(made, indent=2, sort_keys=True))
+    return len(made["items"])
+
+
+REBUILD = migrations.Migration("ledger", 1, 2, rebuild_from_journal, "{n} items rebuilt")
+
+
 def within_a_second[T](call: Callable[[], T]) -> T:
     """<call>'s result, which must come within a second (on a thread of its own, so that a call
     that waits for ever fails the test rather than hanging it)."""
@@ -74,6 +88,15 @@ class MigrationTest(unittest.TestCase):
 
     def from_fixture(self) -> None:
         shutil.copy(FIXTURES / "ledger-1.json", self.ledger_file())
+
+    def make_journaled_ledger(self) -> None:
+        """A ledger with a journal, made by real writes."""
+        ledger.configure(self.ctx.state_dir)
+        for number in (12, 14):
+            args = ledger.build_parser().parse_args(
+                ["upsert", f"review:acme/exporter#{number}", "--kind", "review-request", "--title", "T"]
+            )
+            args.func(args)
 
     def make_knowledge(self) -> knowledge_store.Paths:
         paths = self.ctx.knowledge
@@ -119,6 +142,56 @@ class TestPath(MigrationTest):
         for registry in ([step("ledger", 1, 1)], [step("ledger", 1, 3)], [step("ledger", 1, 2)] * 2):
             with self.subTest(registry=registry), self.assertRaises(migrations.MigrationError):
                 migrations.path("ledger", 1, 2, registry)
+
+    def test_the_registry_holds_together(self) -> None:
+        """Every migration is of a store this bosun has, goes forward to its format at most, and has a
+        summary that takes {n}; FORMATS and the stores read and recorded are the same."""
+        migrations.check_registry()
+        for each in migrations.REGISTRY:
+            with self.subTest(migration=each):
+                self.assertIn(each.store, migrations.FORMATS)
+                self.assertLess(each.from_version, each.to_version)
+                self.assertLessEqual(each.to_version, migrations.FORMATS[each.store])
+                each.summary.format(n=1)
+
+    def test_a_registry_that_does_not_hold_together_is_refused(self) -> None:
+        def made(store: str, was: int, to: int, summary: str = "{n} moved") -> migrations.Migration:
+            return migrations.Migration(store, was, to, lambda _ctx: 0, summary)
+
+        with mock.patch.dict(migrations.FORMATS, {"ledger": 2}):
+            for bad, why in (
+                (made("tickets", 1, 2), "not a store"),
+                (made("ledger", 2, 3), "at most"),
+                (made("ledger", 0, 1), "forward"),
+                (made("ledger", 2, 2), "forward"),
+                (made("ledger", 1, 2, "{count} moved"), "summary"),
+                (made("ledger", 1, 2, "{n} moved {"), "summary"),
+                (made("ledger", 1, 2, "{0} moved"), "summary"),
+            ):
+                with self.subTest(why=why), self.assertRaisesRegex(migrations.MigrationError, why):
+                    migrations.check_registry([bad])
+        with (
+            mock.patch.dict(migrations.FORMATS, {"tickets": 1}),
+            self.assertRaisesRegex(migrations.MigrationError, "FORMATS"),
+        ):
+            migrations.check_registry()
+
+    def test_the_tables_are_read_when_called(self) -> None:
+        with (
+            mock.patch.object(migrations, "REGISTRY", (step("ledger", 1, 2),)),
+            mock.patch.dict(migrations.FORMATS, {"ledger": 2}),
+        ):
+            self.assertEqual(
+                [(s.from_version, s.to_version) for s in migrations.path("ledger", 1, 2)], [(1, 2)]
+            )
+        self.from_fixture()
+        with (
+            mock.patch.object(migrations, "REGISTRY", (ADD_X,)),
+            mock.patch.dict(migrations.FORMATS, {"ledger": 2}),
+        ):
+            self.assertEqual(
+                migrations.run(self.ctx), [migrations.Applied("ledger", 1, 2, "2 items migrated")]
+            )
 
 
 class TestRun(MigrationTest):
@@ -196,26 +269,110 @@ class TestRun(MigrationTest):
         self.assertEqual(self.ledger_file().read_text(), before)
         self.assertFalse(self.ctx.knowledge.root.exists())
 
+    def test_a_registry_that_does_not_hold_together_changes_nothing(self) -> None:
+        self.from_fixture()
+        before = self.ledger_file().read_text()
+        bad = migrations.Migration("ledger", 1, 2, add_x, "{count} items migrated")
+        with mock.patch.dict(migrations.FORMATS, {"ledger": 2}):
+            with self.assertRaisesRegex(migrations.MigrationError, "summary"):
+                migrations.run(self.ctx, [bad])
+            self.assertEqual(self.ledger_file().read_text(), before)
+            # applied anyway, its line is made before its store moves
+            with self.assertRaises(KeyError):
+                migrations._apply(self.ctx, bad)
+        self.assertEqual(ledger.store_format(self.ctx.state_dir), 1)
+
+    def test_a_store_with_a_journal_is_rebuilt_from_it_and_stays_valid(self) -> None:
+        self.make_journaled_ledger()
+        with (
+            mock.patch.object(ledger, "LEDGER_FORMAT", 2),
+            mock.patch.dict(migrations.FORMATS, {"ledger": 2}),
+        ):
+            applied = migrations.run(self.ctx, [REBUILD])
+            again = migrations.run(self.ctx, [REBUILD])
+        self.assertEqual((applied, again), ([migrations.Applied("ledger", 1, 2, "2 items rebuilt")], []))
+        self.assertEqual(ledger.store_format(self.ctx.state_dir), 2)
+        self.assertEqual(ledger.validate_unlocked(self.ctx.state_dir), [])
+
+    def test_a_store_with_a_journal_edited_in_place_is_changed_outside_it(self) -> None:
+        """Why a migration of a store with a journal rebuilds its files: the toy ADD_X, which edits
+        ledger.json in place, leaves a change validate reports (the next write would adopt it)."""
+        self.make_journaled_ledger()
+        with mock.patch.dict(migrations.FORMATS, {"ledger": 2}):
+            migrations.run(self.ctx, [ADD_X])
+        self.assertEqual([f["kind"] for f in ledger.validate_unlocked(self.ctx.state_dir)], ["edited"])
+
 
 class TestConfig(MigrationTest):
     def test_config_renames_keep_the_rest(self) -> None:
-        text, said = migrations.migrate_config("# note\nOLD=1\nKEEP=2\n", RENAMES)
-        self.assertEqual(text, "# note\nNEW=1\nKEEP=2\n")
-        self.assertEqual(len(said), 1)
-        self.assertIn("OLD", said[0])
-        self.assertIn("NEW", said[0])
-        text, said = migrations.migrate_config("# note\nOLD=1\nGONE=3\nKEEP=2\n", RENAMES)
-        self.assertEqual(text, "# note\nNEW=1\nKEEP=2\n")
-        self.assertEqual(len(said), 2)
-        self.assertIn("GONE", said[1])
+        self.assertEqual(
+            migrations.migrate_config("# note\nOLD=1\nKEEP=2\n", RENAMES),
+            ("# note\nNEW=1\nKEEP=2\n", ["OLD is now NEW"]),
+        )
+        self.assertEqual(
+            migrations.migrate_config("# note\nOLD=1\nGONE=3\nKEEP=2\n", RENAMES),
+            ("# note\nNEW=1\nKEEP=2\n", ["OLD is now NEW", "GONE removed: bosun no longer reads it"]),
+        )
 
     def test_only_an_assignment_is_renamed(self) -> None:
-        given = '# OLD=1 was here\nexport OLD="a b"  # mine\nKEEP_OLD=1\nOLDER=2\necho OLD=3\n'
+        given = '# OLD=1 was here\nexport OLD="a b"  # mine\nKEEP_OLD=1\nOLDER=2\necho OLD=3\nKEEP=$OLD\n'
         text, said = migrations.migrate_config(given, RENAMES)
         self.assertEqual(
-            text, '# OLD=1 was here\nexport NEW="a b"  # mine\nKEEP_OLD=1\nOLDER=2\necho OLD=3\n'
+            text, '# OLD=1 was here\nexport NEW="a b"  # mine\nKEEP_OLD=1\nOLDER=2\necho OLD=3\nKEEP=$OLD\n'
         )
-        self.assertEqual(len(said), 1)
+        self.assertEqual(said, ["OLD is now NEW"])
+
+    def test_a_key_renamed_twice_gets_its_current_name(self) -> None:
+        """A bosun.env from two versions back: A was renamed B, then B was renamed C (R19)."""
+        chain = (("A", "B"), ("B", "C"))
+        self.assertEqual(migrations.config_names(chain), {"A": "C", "B": "C"})
+        self.assertEqual(migrations.migrate_config("A=1\nK=2\n", chain), ("C=1\nK=2\n", ["A is now C"]))
+        self.assertEqual(migrations.migrate_config("B=1\n", chain), ("C=1\n", ["B is now C"]))
+
+    def test_a_chain_that_ends_in_a_removal_removes_the_key(self) -> None:
+        chain = (("A", "B"), ("B", ""))
+        self.assertEqual(migrations.config_names(chain), {"A": "", "B": ""})
+        self.assertEqual(
+            migrations.migrate_config("A=1\nK=2\n", chain), ("K=2\n", ["A removed: bosun no longer reads it"])
+        )
+
+    def test_renames_that_go_round_are_refused(self) -> None:
+        for table in ((("A", "B"), ("B", "A")), (("A", "A"),), (("A", "B"), ("B", "C"), ("C", "B"))):
+            with self.subTest(table=table), self.assertRaisesRegex(migrations.MigrationError, "go round"):
+                migrations.migrate_config("A=1\n", table)
+
+    def test_an_old_key_in_two_rows_is_refused(self) -> None:
+        with self.assertRaisesRegex(migrations.MigrationError, "renamed twice"):
+            migrations.config_names((("A", "B"), ("A", "C")))
+        for table in ((("", "B"),), (("A", "B C"),), (("A=", "B"),)):
+            with self.subTest(table=table), self.assertRaisesRegex(migrations.MigrationError, "name a key"):
+                migrations.config_names(table)
+
+    def test_the_config_renames_hold_together(self) -> None:
+        migrations.config_names()
+        self.assertEqual(
+            set(migrations.config_names(migrations.CONFIG_RENAMES)), {o for o, _ in migrations.CONFIG_RENAMES}
+        )
+
+    def test_a_name_the_file_sets_already_is_not_set_twice(self) -> None:
+        for given in ("OLD=1\nNEW=2\n", "NEW=2\nOLD=1\n"):
+            with self.subTest(given=given):
+                self.assertEqual(
+                    migrations.migrate_config(given, RENAMES),
+                    ("NEW=2\n", ["OLD dropped: NEW is already set"]),
+                )
+
+    def test_of_two_old_keys_the_one_renamed_fewer_times_is_kept(self) -> None:
+        """B is what the bosun before this one read; A, an older name of it, was already ignored."""
+        chain = (("A", "B"), ("B", "C"))
+        self.assertEqual(
+            migrations.migrate_config("A=1\nB=2\n", chain),
+            ("C=2\n", ["A dropped: C is already set", "B is now C"]),
+        )
+
+    def test_the_tables_are_read_when_called(self) -> None:
+        with mock.patch.object(migrations, "CONFIG_RENAMES", RENAMES):
+            self.assertEqual(migrations.migrate_config("OLD=1\n"), ("NEW=1\n", ["OLD is now NEW"]))
 
     def test_the_config_copy_is_kept_only_when_it_changed(self) -> None:
         env = self.ctx.config_dir / "bosun.env"
@@ -239,6 +396,24 @@ class TestConfig(MigrationTest):
         with mock.patch.object(migrations, "CONFIG_RENAMES", RENAMES):
             self.assertEqual(migrations.write_config(self.ctx.config_dir, NOW), [])
         self.assertEqual(list(self.ctx.config_dir.iterdir()), [])
+
+    def test_a_linked_config_stays_a_link(self) -> None:
+        """A bosun.env kept with my dotfiles: its target changes, the link stays, and the copy is kept
+        in the config folder."""
+        dotfiles = Path(self.tmp.name) / "dotfiles"
+        dotfiles.mkdir()
+        (dotfiles / "bosun.env").write_text("OLD=1\n")
+        env = self.ctx.config_dir / "bosun.env"
+        env.symlink_to(dotfiles / "bosun.env")
+        with mock.patch.object(migrations, "CONFIG_RENAMES", RENAMES):
+            self.assertEqual(migrations.write_config(self.ctx.config_dir, NOW), ["OLD is now NEW"])
+        self.assertTrue(env.is_symlink())
+        self.assertEqual((dotfiles / "bosun.env").read_text(), "NEW=1\n")
+        kept = migrations.config_copy(self.ctx.config_dir, NOW)
+        self.assertFalse(kept.is_symlink())
+        self.assertEqual(kept.read_text(), "OLD=1\n")
+        self.assertEqual(sorted(p.name for p in self.ctx.config_dir.iterdir()), ["bosun.env", kept.name])
+        self.assertEqual([p.name for p in dotfiles.iterdir()], ["bosun.env"])
 
 
 class TestValidateUnlocked(MigrationTest):

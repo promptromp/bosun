@@ -427,7 +427,7 @@ class Store:
     @property
     def backup(self) -> Path:
         """The previous version of ledger.json, kept by every write."""
-        return self.state_dir / "ledger.json.bak"
+        return self.state_dir / f"{LEDGER_FILE}.bak"
 
 
 STORE = Store()
