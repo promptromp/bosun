@@ -363,8 +363,10 @@ class StatesTest(WorkstreamTestCase):
         self.assertEqual(
             run("ws", "set-state", WS, "paused", "--note", "on hold"), f"ok: {WS} active -> paused"
         )
+        before = date.today().isoformat()
         run("ws", "set-state", WS, "done", "--note", "shipped")
-        self.assertEqual(self.items()[WS]["fields"]["ended"], TODAY)
+        # the day the command ran, which a run crossing midnight makes later than TODAY
+        self.assertIn(self.items()[WS]["fields"]["ended"], {before, date.today().isoformat()})
         self.assertIn(f"warn: done-with-open-items: {WS}: is done but 1 open item(s)", lint_text())
         self.assertNotIn(WS, run("ws", "list"))
         self.assertIn(WS, run("ws", "list", "--all"))
