@@ -1100,14 +1100,11 @@ def write_start(journal: Journal, ledger: Ledger) -> Ledger:
 
 
 def for_writing() -> Iterator[Ledger]:
-    """A write: first the store checked (update_gate.check_write: its format and an update's freeze;
-    refused, nothing is written), then the ledger it starts from, then what the command changed
+    """A write: first the store checked and read (writable; refused, nothing is written), then the
+    ledger it starts from, then what the command changed
     (diffed against a copy) committed as one transaction under the command's name, then ledger.json
     at the new position, with the digest of what it holds."""
-    ledger = load()
-    update_gate.check_write(
-        "ledger", recorded_format(ledger, STORE.ledger_file), LEDGER_FORMAT, STORE.state_dir
-    )
+    ledger = writable()
     with journal_errors():
         journal = open_journal(replica_id(STORE.state_dir))
         ledger = write_start(journal, ledger)
@@ -1140,13 +1137,19 @@ def read_ledger_file() -> Any:
         raise LedgerError(f"{STORE.ledger_file} is not valid JSON ({exc}); {restore}") from exc
 
 
-def recorded_format(ledger: Mapping[str, Any], path: Path) -> int:
-    """The format version <ledger> records ("version"; 1 from before versions), read from <path>:
-    a positive whole number, else a LedgerError."""
-    version = change_log.format_version(ledger.get("version", 1))
+def recorded_format(data: Any, path: Path) -> int:
+    """The format version <data>, parsed from <path>, records: 0 for none yet ({}), 1 from before
+    versions (no "version"), else its "version", a positive whole number; anything else (not a
+    JSON object, another version) is a LedgerError. Its shape is not looked at: a newer format may
+    have another one."""
+    if not isinstance(data, dict):
+        raise LedgerError(f"{path} is not a ledger (not a JSON object); restore it or move it aside")
+    if not data:
+        return 0
+    version = change_log.format_version(data.get("version", 1))
     if version is None:
         raise LedgerError(
-            f"{path} records version {ledger.get('version')!r}, not a positive whole number; restore it "
+            f"{path} records version {data.get('version')!r}, not a positive whole number; restore it "
             f"from {path.with_name(path.name + '.bak')} or move it aside"
         )
     return version
@@ -1162,9 +1165,24 @@ def store_format(state_dir: Path) -> int:
         return 0
     except (OSError, ValueError) as exc:  # ValueError: not JSON, or not UTF-8
         raise LedgerError(f"{path} cannot be read for its format version ({exc})") from exc
-    if not isinstance(data, dict):
-        raise LedgerError(f"{path} is not a ledger (not a JSON object)")
     return recorded_format(data, path)
+
+
+def writable() -> Ledger:
+    """The ledger a write starts from, read once, if the update gate lets the write through
+    (update_gate; under the exclusive lock): a freeze first, before anything of the ledger is read;
+    then the format ledger.json records, before its shape, which a newer format may change."""
+    update_gate.check_freeze(STORE.state_dir)
+    data = read_ledger_file()
+    update_gate.check_format("ledger", recorded_format(data, STORE.ledger_file), LEDGER_FORMAT)
+    return as_ledger(data)
+
+
+def check_writable() -> None:
+    """What a write checks first (writable), writing nothing: for a caller that must know before it
+    changes anything elsewhere (learn's apply)."""
+    with store_lock(fcntl.LOCK_SH):
+        writable()
 
 
 def format_digest() -> str:
@@ -1179,7 +1197,12 @@ def format_digest() -> str:
 
 
 def load() -> Ledger:
-    ledger = read_ledger_file()
+    return as_ledger(read_ledger_file())
+
+
+def as_ledger(ledger: Any) -> Ledger:
+    """<ledger>, as parsed from ledger.json, with its shape checked (LedgerError) and the parts every
+    ledger has filled in."""
     if not isinstance(ledger, dict) or not all(
         isinstance(ledger.get(key, {}), dict) for key in ("items", "sources", "runs")
     ):

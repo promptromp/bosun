@@ -657,6 +657,52 @@ class UpdateGateTest(LedgerTestCase):
         self.assertEqual(caught.exception.found, ledger.LEDGER_FORMAT + 1)
         self.assertEqual(self.files(), before)
 
+    def test_a_newer_store_in_another_shape_is_newer_not_malformed(self) -> None:
+        """The format is read before the shape: a newer format may have another one."""
+        ledger.STORE.ledger_file.write_text(json.dumps({"version": ledger.LEDGER_FORMAT + 1, "items": []}))
+        before = self.files()
+        with self.assertRaises(update_gate.StoreNewer):
+            run("upsert", MYPR_ID, "--kind", "my-pr", "--title", "T")
+        self.assertEqual(self.files(), before)
+
+    def test_a_freeze_comes_before_reading_the_ledger(self) -> None:
+        """A freeze cut short at migrated: what the ledger holds, reshaped or not a version at all,
+        is not looked at, as the backup is the truth."""
+        update_state.write(ledger.STORE.state_dir, self.record("migrated"))
+        reshaped: tuple[Any, ...] = (
+            {"version": ledger.LEDGER_FORMAT + 1, "items": []},
+            {"version": "two", "items": {}},
+            [],
+        )
+        for data in reshaped:
+            with self.subTest(data=data):
+                ledger.STORE.ledger_file.write_text(json.dumps(data))
+                with self.assertRaises(update_gate.UpdateCutShort):
+                    run("upsert", MYPR_ID, "--kind", "my-pr", "--title", "T")
+        ledger.STORE.ledger_file.write_text("{not json")
+        with self.assertRaises(update_gate.UpdateCutShort):
+            run("upsert", MYPR_ID, "--kind", "my-pr", "--title", "T")
+
+    def record(self, step: str) -> update_state.UpdateState:
+        return update_state.UpdateState(
+            id="u1",
+            from_root="/Users/me/.local/share/bosun-versions/aaaaaaa11111",
+            to_root="/Users/me/.local/share/bosun-versions/bbbbbbb22222",
+            from_commit="aaaaaaa",
+            to_commit="bbbbbbb",
+            step=step,
+            started_at="2026-11-05T09:00:00+00:00",
+            hold_until=10**12,
+        )
+
+    def test_check_writable_writes_nothing(self) -> None:
+        before = self.files()
+        ledger.check_writable()
+        self.assertEqual(self.files(), before)
+        update_state.write(ledger.STORE.state_dir, self.record("switched"))
+        with self.assertRaises(update_gate.UpdateCutShort):
+            ledger.check_writable()
+
     def test_a_write_into_an_older_store_is_refused(self) -> None:
         before = self.files()
         with (

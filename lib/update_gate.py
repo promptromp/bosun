@@ -4,20 +4,22 @@ the switch" and "Cut short").
 A process keeps the code of the version it started on, so after an update switched the install link
 and migrated the stores, a command, a hook's child or the console can still be old code writing to a
 newer store. And an update that dies inside its freeze leaves the stores changed part way, with its
-backup the truth. So each store's write calls check_write once it holds the store's exclusive lock,
-before anything is journaled, and nothing is written when:
+backup the truth. So each store's write, once it holds the store's exclusive lock and before
+anything is journaled, checks two things in this order, and nothing is written when:
 
-- a freeze is recorded (update.json at one of FREEZE_STEPS): UpdateBusy while its update runs
-  (holds update.lock), UpdateCutShort when it died;
-- the store is newer than this code: StoreNewer;
-- the store is older than this code (format 0 is no store yet, made in this code's format):
-  StoreOlder, which `bosun update` migrates.
+- check_freeze, before anything of the store is read (a store changed part way may not even
+  parse): a freeze is recorded (update.json at one of FREEZE_STEPS): UpdateBusy while its update
+  runs (holds update.lock), UpdateCutShort when it died;
+- check_format, on the format the store's file records, before its shape is checked: the store is
+  newer than this code (StoreNewer), or older (StoreOlder, which `bosun update` migrates; format 0
+  is no store yet, made in this code's format).
 
 The commands that write run under guarded, which does what each refusal calls for, outside every
 store lock: a newer store runs the command again through the install link, with the same arguments
 and stdin; a freeze cut short is put back first (recover), then the same; a busy freeze is waited
-out (WAIT_SECONDS), then the same; an older store is refused in one line. A run again is never run
-again (RERUN_ENV).
+out (WAIT_SECONDS; put back if its update stopped inside it), then the same; an older store is
+refused in one line. A run again is never run again (RERUN_ENV). Writers that are not commands
+(bosun's own background work) catch WriteRefused and report a failed run.
 
 Lock order everywhere: update.lock, the ledger's, the knowledge base's. No store is imported at module
 level, as the stores import this module; store_locks imports them when it runs.
@@ -55,7 +57,7 @@ SHORT = 7  # a commit as the messages name it
 
 
 class WriteRefused(Exception):
-    """A write check_write refused: nothing was written."""
+    """A write check_freeze or check_format refused: nothing was written."""
 
 
 class FormatRefused(WriteRefused):
@@ -108,19 +110,30 @@ class UpdateBusy(WriteRefused):
         self.state_dir = state_dir
 
 
-def check_write(store: str, found: int, mine: int, state_dir: Path) -> None:
-    """Refuses a write to <store> (WriteRefused) whose format on disk is <found> (0: none yet) where
-    this code writes <mine>. Called with the store's exclusive lock held, before anything is
-    written. A freeze comes first: the backup is then the truth, whatever the format says."""
+def check_freeze(state_dir: Path) -> None:
+    """Refuses a write (UpdateBusy, UpdateCutShort) while update.json in <state_dir> records a
+    freeze. Called with the store's exclusive lock held, before anything of the store is read: the
+    backup is then the truth, whatever the store holds."""
     state = update_state.read(state_dir)
     if state is not None and update_state.in_freeze(state):
         if update_state.running(state_dir):
             raise UpdateBusy(state, state_dir)
         raise UpdateCutShort(state, state_dir)
+
+
+def check_format(store: str, found: int, mine: int) -> None:
+    """Refuses a write to <store> (StoreNewer, StoreOlder) whose format on disk is <found> (0: none
+    yet) where this code writes <mine>."""
     if found > mine:
         raise StoreNewer(store, found, mine)
     if 0 < found < mine:
         raise StoreOlder(store, found, mine)
+
+
+def check_write(store: str, found: int, mine: int, state_dir: Path) -> None:
+    """Both checks, in their order, for a caller that has the format in hand."""
+    check_freeze(state_dir)
+    check_format(store, found, mine)
 
 
 # ---- putting back a freeze cut short ------------------------------------------------------------
@@ -283,22 +296,33 @@ def _again(refused: WriteRefused) -> str:
     return f"{refused}, and this already ran again on the installed bosun; nothing was written: run it again"
 
 
+def _settled(refused: WriteRefused) -> str:
+    """What the refusal found, put right before the one run again: a freeze cut short put back; a
+    busy one waited out, and put back if its update stopped inside it (a run again would only find
+    it cut short, and stop). Why it could not be, or ""."""
+    if isinstance(refused, UpdateBusy):
+        if not _waited_out(refused.state_dir, WAIT_SECONDS):
+            return f"{refused}; nothing was written: run it again once the update is done"
+        state = update_state.read(refused.state_dir)
+        if state is None or not update_state.in_freeze(state):
+            return ""
+        refused = UpdateCutShort(state, refused.state_dir)
+    return _put_back(refused) if isinstance(refused, UpdateCutShort) else ""
+
+
 def _refused(command: str, argv: list[str], refused: WriteRefused, stdin: _Recorder | None) -> int:
     if isinstance(refused, StoreOlder):
         return _say(command, str(refused))
-    if isinstance(refused, UpdateCutShort):
-        problem = _put_back(refused)
-        if problem:
-            return _say(command, problem)
-    if isinstance(refused, UpdateBusy) and not _waited_out(refused.state_dir, WAIT_SECONDS):
-        return _say(command, f"{refused}; nothing was written: run it again once the update is done")
+    problem = _settled(refused)
+    if problem:
+        return _say(command, problem)
     if os.environ.get(RERUN_ENV) == "1":
         return _say(command, _again(refused))
     return _rerun(command, argv, stdin)
 
 
 def guarded(command: str, run: Callable[[list[str]], int], argv: list[str]) -> int:
-    """<run>(<argv>), the main of `bosun <command>`, with what check_write refuses done right: run
+    """<run>(<argv>), the main of `bosun <command>`, with what the checks refuse done right: run
     again through the install link with the same arguments and stdin (a store newer than this code;
     a freeze cut short, once put back; a busy one, once waited out), or refused in one line (a store
     older than this code, or a run again refused too). Returns the exit code."""

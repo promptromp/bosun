@@ -246,7 +246,9 @@ def taken_in(value: Any, source: str, place_of: Callable[[Place], str]) -> tuple
 
 def format_version(value: Any) -> int | None:
     """A store's format version as its file records it: a positive whole number (2, or 2.0 written
-    by hand: JSON has one kind of number), else None (a bool, a string, 1.9, 0 or less)."""
+    by hand: JSON has one kind of number), else None (a bool, a string, 1.9, 0 or less). The one rule
+    for both stores (ledger.json's "version", the knowledge base's format.json); the ledger's tests
+    pin that a hand-written 1.0 stops no write (R70)."""
     if isinstance(value, bool):
         return None
     if isinstance(value, float) and value.is_integer():

@@ -16,7 +16,8 @@ It never blocks or changes the prompt: it reads the JSON, forks, and the parent 
 the child does the work and logs what it did (errors as ERROR lines, which the watchdog reports)
 to $BOSUN_LOG_DIR/hook-YYYY-MM-DD.log. BOSUN_HOOK_SYNC=1 works in the foreground (tests). A write
 the update gate refuses (lib/update_gate.py: bosun was updated since this hook's code started, or an
-update was cut short) is run again by the child, in the foreground, through the install link.
+update was cut short) is run again by the child, in the foreground, through the install link; one
+that still cannot be made is an ERROR line in the hook log, after the gate's own line saying why.
 """
 
 from __future__ import annotations
@@ -45,15 +46,23 @@ SYNC = "BOSUN_HOOK_SYNC"
 STAMP = "%Y-%m-%d %H:%M:%S"
 
 
+def log_file(env: Mapping[str, str]) -> Path | None:
+    """Today's hook log (its folder made), or None when there is no log dir."""
+    log_dir = env.get("BOSUN_LOG_DIR")
+    if not log_dir:
+        return None
+    Path(log_dir).mkdir(parents=True, exist_ok=True)
+    return Path(log_dir) / f"hook-{datetime.now():%Y-%m-%d}.log"
+
+
 def log(env: Mapping[str, str], message: str) -> None:
     """One line in the hook log (stdout when there is no log dir)."""
     line = f"{datetime.now():{STAMP}} [hook] {message}\n"
-    log_dir = env.get("BOSUN_LOG_DIR")
-    if not log_dir:
+    path = log_file(env)
+    if path is None:
         sys.stdout.write(line)
         return
-    Path(log_dir).mkdir(parents=True, exist_ok=True)
-    with (Path(log_dir) / f"hook-{datetime.now():%Y-%m-%d}.log").open("a") as handle:
+    with path.open("a") as handle:
         handle.write(line)
 
 
@@ -113,8 +122,10 @@ def detach(env: Mapping[str, str]) -> bool:
         return True
     os.setsid()
     devnull = os.open(os.devnull, os.O_RDWR)
-    for fd in (0, 1, 2):
-        os.dup2(devnull, fd)
+    path = log_file(env)
+    said = os.open(path, os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o644) if path else devnull
+    for fd, to in ((0, devnull), (1, devnull), (2, said)):  # what it says on stderr goes to the log
+        os.dup2(to, fd)
     os.environ[SYNC] = "1"
     return False
 
@@ -148,5 +159,16 @@ def main(argv: list[str], env: Mapping[str, str]) -> int:
     return 0
 
 
+def run(argv: list[str], env: Mapping[str, str]) -> int:
+    """main, under update_gate.guarded: a write the gate refused is run again on the installed
+    version, and one that still could not be made is an ERROR line in the hook log, for the
+    watchdog (the gate's own line, on stderr, says why)."""
+    code = update_gate.guarded("hook", lambda args: main(args, env), argv)
+    if code != 0:
+        what = " ".join(argv[:3])  # the event and the window, never a payload
+        log(env, f"ERROR: bosun hook {what} recorded nothing: the update gate refused its write")
+    return code
+
+
 if __name__ == "__main__":
-    sys.exit(update_gate.guarded("hook", lambda argv: main(argv, os.environ), sys.argv[1:]))
+    sys.exit(run(sys.argv[1:], os.environ))

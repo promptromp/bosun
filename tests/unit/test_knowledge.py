@@ -1422,6 +1422,26 @@ class UpdateGateTest(KnowledgeTestCase):
             self.run_kg("add-entity", "gate/smoke-tests", "--name", "Smoke tests")
         self.assertEqual(self.files(), before)
 
+    def test_a_freeze_comes_before_reading_the_format(self) -> None:
+        update_state.write(
+            self.state,
+            update_state.UpdateState(
+                id="u1",
+                from_root="/Users/me/.local/share/bosun-versions/aaaaaaa11111",
+                to_root="/Users/me/.local/share/bosun-versions/bbbbbbb22222",
+                from_commit="aaaaaaa",
+                to_commit="bbbbbbb",
+                step="migrated",
+                started_at="2026-11-05T09:00:00+00:00",
+                hold_until=10**12,
+            ),
+        )
+        store.Paths(self.root).format.write_text("{broken")
+        before = self.files()
+        with self.assertRaises(update_gate.UpdateCutShort):
+            self.run_kg("add-entity", "gate/smoke-tests", "--name", "Smoke tests")
+        self.assertEqual(self.files(), before)
+
     def test_a_write_into_a_newer_store_is_refused(self) -> None:
         store.write_format(store.Paths(self.root), store.KNOWLEDGE_FORMAT + 1)
         before = self.files()

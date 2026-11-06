@@ -883,12 +883,14 @@ def trial_mint() -> Callable[[], str]:
 
 
 def writing(p: Paths, message: str, state: Path) -> Iterator[KB]:
-    """A write under the exclusive lock: first the store checked (update_gate.check_write: its
-    format and an update's freeze; refused, nothing is written), then the knowledge base it starts
-    from (write_start), its fact ids minted from its one journal transaction, named by its command;
-    then, if it changed anything, saved."""
+    """A write under the exclusive lock: first the update gate (update_gate; refused, nothing is
+    written): a freeze, before anything of the knowledge base is read, then the format format.json
+    records, before the files; then the knowledge base it starts from (write_start), its fact ids
+    minted from its one journal transaction, named by its command; then, if it changed anything,
+    saved."""
+    update_gate.check_freeze(state)
     found = store.store_format(p)
-    update_gate.check_write("knowledge base", found, store.KNOWLEDGE_FORMAT, state)
+    update_gate.check_format("knowledge base", found, store.KNOWLEDGE_FORMAT)
     new = found == 0
     with journal_errors(p):
         journal = open_journal(p, replica_id(state))

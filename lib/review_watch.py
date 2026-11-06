@@ -15,7 +15,9 @@ change), and with BOSUN_EVENTS_ENABLED=1 queued as a `review` event, so the orch
 of it even while the item's window is still working. The output has one line per review still to
 act on (new or recorded before, until the next hand-over), with the next step: for `addressing`,
 forward the threads to the window with `bosun delegate --update`; otherwise chores step 4.
---dry-run records and queues nothing.
+--dry-run records and queues nothing. A write the update gate refuses (lib/update_gate.py: bosun was
+updated since this started, or an update was cut short) runs the whole watch again on the installed
+version: what it records is recorded once, so a second read changes nothing.
 """
 
 from __future__ import annotations
@@ -32,6 +34,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import approvals
 import ledger
 import pr_threads
+import update_gate
 
 
 ADDRESSING = "addressing"
@@ -223,4 +226,4 @@ def main(argv: list[str] | None = None) -> int:
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    sys.exit(update_gate.guarded("review-watch", main, sys.argv[1:]))

@@ -135,13 +135,24 @@ before the switch and write after it:
 - the approval hooks;
 - a running `bosun console`, which saves review decisions.
 
-So **every write checks the store before it changes it**, once it holds the lock. It checks two
-things: the store's format version, and an update marker saying a freeze is in progress. If the store
-is newer than the writer's code, or a freeze is on, nothing is written:
+So **every write checks the store before it changes it**, once it holds the lock
+(`lib/update_gate.py`). It checks two things, in this order: an update marker saying a freeze is in
+progress, before it reads anything of the store, since a store the freeze changed part way may not
+even read as one; then the store's format version, before the store's shape, which a newer format
+may change. If a freeze is on, or the store's format is not the writer's, nothing is written:
 
-- a command or a hook's child runs itself again through the install link, with the same arguments,
-  so an agent's call just works on the new version;
+- a command or a hook's child runs itself again through the install link, with the same arguments
+  and the same stdin, so an agent's call just works on the new version. It does so once: the run
+  again carries `BOSUN_RERUN=1`, and a refusal there is said in one line, never run again;
+- a freeze whose update still runs is waited out for a few seconds, then the same. If that update
+  died meanwhile, the freeze is put back first ([below](#cut-short)), so the run again can write;
+- a store older than the writer's code (a newer checkout run on data not yet migrated) is refused in
+  one line: run `bosun update` to migrate it;
 - the console refuses with a message to restart it, and the plan lists a running console;
+- bosun's own background writers handle a refusal too. `bosun review-watch` runs itself again like
+  a command, since what it records it records once. `bosun learn` fails the run, or the apply, in one
+  line and leaves it to the next one, and checks before it proposes or applies anything, so it never
+  leaves half a change behind;
 - the `checkin` window's loop is bosun's own, so the update restarts it when its code changed.
 
 With that check in place, a migration may rewrite the files derived from a journal. The journals

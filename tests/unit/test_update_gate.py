@@ -21,6 +21,7 @@ from unittest import mock
 
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "lib"))
+import ledger
 import update_backups as ub
 import update_gate
 import update_state
@@ -330,6 +331,57 @@ class CutShortTest(World):
         self.assertEqual(self.guarded(run, ["upsert"])[0], 3)
         self.assertIsNotNone(self.ran())
 
+    def test_a_busy_freeze_whose_update_stopped_is_put_back_then_run_again(self) -> None:
+        """R17: the update died while this write waited; its run again would only find the freeze
+        cut short and stop, so it is put back here first, and run again once."""
+        self.cut_short("migrated")
+
+        def run(argv: list[str]) -> int:
+            raise update_gate.UpdateBusy(update_state.read(self.state), self.state)  # type: ignore[arg-type]
+
+        code, err = self.guarded(run, ["upsert"])
+        self.assertIn("was cut short while writes were paused; putting back its backup", err)
+        self.assertEqual(code, 3)
+        self.assertEqual(json.loads((self.state / "ledger.json").read_text())["version"], 1)
+        self.assertEqual(versions.current(self.install), self.old)
+        self.assertEqual(update_state.read(self.state).step, "restored")  # type: ignore[union-attr]
+        ran = self.ran()
+        assert ran is not None
+        self.assertEqual((ran["version"], ran["rerun"]), (FROM[:12], "1"))
+
+
+class LedgerCommandTest(World):
+    """The real `bosun ledger` main under guarded, on a ledger a newer format reshaped."""
+
+    UPSERT = ("upsert", "mypr:acme/exporter#7", "--kind", "my-pr", "--title", "VAT")
+
+    def setUp(self) -> None:
+        super().setUp()
+        os.environ["BOSUN_STATE_DIR"] = str(self.state)  # restored by World's patch of os.environ
+        self.addCleanup(ledger.configure, self.state)
+
+    def test_a_reshaped_newer_ledger_is_run_again_not_refused_as_malformed(self) -> None:
+        self.ledger_json({"version": ledger.LEDGER_FORMAT + 1, "items": []})
+        code, err = self.guarded(ledger.main, list(self.UPSERT))
+        self.assertEqual((code, err), (3, ""))
+        ran = self.ran()
+        assert ran is not None
+        self.assertEqual((ran["args"], ran["version"]), (["ledger", *self.UPSERT], TO[:12]))
+
+    def test_a_reshaped_ledger_in_a_freeze_cut_short_is_put_back(self) -> None:
+        self.cut_short("migrated")
+        self.ledger_json({"version": ledger.LEDGER_FORMAT + 1, "items": []})  # what the migration left
+        code, err = self.guarded(ledger.main, list(self.UPSERT))
+        self.assertIn("was cut short while writes were paused", err)
+        self.assertEqual(code, 3)
+        restored = json.loads((self.state / "ledger.json").read_text())
+        self.assertEqual(
+            restored, {"version": 1, "items": {"review:acme/exporter#1": {"state": "requested"}}}
+        )
+        ran = self.ran()
+        assert ran is not None
+        self.assertEqual(ran["version"], FROM[:12])
+
 
 class RecoverTest(World):
     def test_recover_puts_back_the_backup_and_the_version(self) -> None:
@@ -482,6 +534,72 @@ class EntryPointTest(unittest.TestCase):
         self.assertEqual(self.run_old("hook.py", argv, prompt.encode(), BOSUN_EVENTS_ENABLED="1"), 0)
         self.assertEqual(self.ran(seconds=20), (["hook", *argv], prompt.encode(), "1"))
         self.assertEqual((self.out / "sync").read_text(), "1")
+
+    def hook_log(self, seconds: float, until: str) -> str:
+        deadline = time.monotonic() + seconds
+        text = ""
+        while until not in text and time.monotonic() < deadline:
+            time.sleep(0.05)
+            text = "".join(p.read_text() for p in Path(self.env["BOSUN_LOG_DIR"]).glob("hook-*.log"))
+        return text
+
+    def test_a_hook_child_that_cannot_write_says_so_in_the_log(self) -> None:
+        """Its stderr is the hook log, and giving up is an ERROR line for the watchdog."""
+        prompt = json.dumps(
+            {"hook_event_name": "UserPromptSubmit", "session_id": "s-1", "prompt": "go with b"}
+        )
+        argv = ["user-prompt", "--window", "exporter"]
+        code = self.run_old("hook.py", argv, prompt.encode(), BOSUN_EVENTS_ENABLED="1", BOSUN_RERUN="1")
+        self.assertEqual(code, 0)
+        log = self.hook_log(20, "ERROR")
+        self.assertIn("bosun hook: the ledger is format 99, newer than the installed bosun's 1 too", log)
+        self.assertIn("ERROR: bosun hook user-prompt --window exporter recorded nothing", log)
+        self.assertFalse((self.out / "done").exists())
+
+    def test_bosun_review_watch(self) -> None:
+        url = "https://github.com/acme/exporter/pull/102"
+        (self.state / "ledger.json").unlink()  # made here, as the old version's ledger
+        ledger.configure(self.state)
+        self.addCleanup(ledger.configure, self.state)
+        with mock.patch.object(ledger, "now", return_value="2026-01-05T08:00:00+00:00"):
+            for argv in (
+                ["upsert", "mypr:acme/exporter#102", "--kind", "my-pr", "--title", "footer", "--url", url],
+                ["transition", "mypr:acme/exporter#102", "changes-requested", "--note", "round 1"],
+                ["transition", "mypr:acme/exporter#102", "addressing", "--note", "fixing"],
+            ):
+                args = ledger.build_parser().parse_args(argv)
+                args.func(args)
+        with mock.patch.object(ledger, "now", return_value="2026-01-05T09:00:00+00:00"):
+            args = ledger.build_parser().parse_args(
+                ["record-delegation", "mypr:acme/exporter#102", "--window", "exporter", "--task", "fix-my-pr"]
+            )
+            args.func(args)
+        data = json.loads((self.state / "ledger.json").read_text())
+        data["version"] = 99
+        (self.state / "ledger.json").write_text(json.dumps(data))
+        review = {
+            "id": "R2",
+            "url": f"{url}#pullrequestreview-R2",
+            "author": {"login": "dana-acme"},
+            "state": "CHANGES_REQUESTED",
+            "submittedAt": "2026-01-05T10:00:00Z",
+            "body": "",
+        }
+        pull = {
+            "url": url,
+            "author": {"login": "me-acme"},
+            "reviews": {"nodes": [review]},
+            "reviewThreads": {"pageInfo": {"hasNextPage": False, "endCursor": None}, "nodes": []},
+        }
+        page = self.out.parent / "page.json"
+        page.write_text(json.dumps({"data": {"repository": {"pullRequest": pull}}}))
+        fake = self.out.parent / "bin"
+        fake.mkdir()
+        (fake / "gh").write_text('#!/bin/sh\ncat "$FAKE_GH_PAGE"\n')
+        (fake / "gh").chmod(0o755)
+        path = f"{fake}{os.pathsep}{os.environ['PATH']}"
+        self.assertEqual(self.run_old("review_watch.py", ["--quiet"], PATH=path, FAKE_GH_PAGE=str(page)), 3)
+        self.assertEqual(self.ran(), (["review-watch", "--quiet"], b"", "1"))
 
 
 if __name__ == "__main__":

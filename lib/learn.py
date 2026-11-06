@@ -31,6 +31,11 @@ remembered by key in $BOSUN_STATE_DIR/learn/state.json, with the item proposed f
 digests, so a later run counts it again instead of proposing it twice, and apply, done and reject
 settle the finding learn proposed the item for, whatever the item's fields say. That state is this
 Mac's, so only the Mac that proposed an item can apply it.
+
+A ledger write the update gate refuses (lib/update_gate.py: bosun was updated since this started,
+or an update was cut short or is pausing writes) fails the run or the command in one line, and is
+not run again: a run is the next scheduled one's to do. A run checks the gate before it proposes
+anything, and apply before it changes anything, so neither leaves half of itself behind.
 """
 
 from __future__ import annotations
@@ -57,6 +62,7 @@ import agent_changes
 import claude_state
 import learn_digest
 import ledger
+import update_gate
 from change_log import canonical, mint_suffix
 from learn_digest import Window
 
@@ -911,7 +917,10 @@ def propose(
 ) -> dict[str, str]:
     """Record each finding's proposal, and in learn's state its item and digests; a finding whose
     id names another finding's item is dropped (with why), and the run goes on. Returns finding
-    key -> learn id."""
+    key -> learn id. The update gate is checked first, so a refusal leaves no item behind that
+    learn's state does not know."""
+    if findings:
+        ledger.check_writable()
     proposed: dict[str, str] = {}
     for finding in findings:
         try:
@@ -950,7 +959,7 @@ def run_tracked(config: Config, options: RunOptions, windows: list[Window]) -> O
             result = collect_and_analyze(
                 config, options, windows, run, make_run_dir(config, options, started)
             )
-        except (LearnError, OSError, subprocess.SubprocessError) as exc:
+        except (LearnError, OSError, subprocess.SubprocessError, update_gate.WriteRefused) as exc:
             finish(config, "failed", run, str(exc))
             log(config, f"ERROR: {exc}")
             raise
@@ -1106,6 +1115,7 @@ def cmd_apply(config: Config, args: argparse.Namespace) -> int:
                 f"{args.id} is a change you make yourself ({TARGET_TEXT[change['target']]}); "
                 f"once done: bosun learn done '{args.id}'"
             )
+        ledger.check_writable()  # before the change: a refused close would have it applied twice
         what = applier(config, args.id, change)
         close_item(config, args.id, "applied", f"applied: {what}")
     log(config, f"{args.id}: {what}")
@@ -1215,7 +1225,7 @@ def main(argv: list[str]) -> int:
         config = Config.from_env(os.environ)
         use_ledger(config)
         return COMMANDS[args.command](config, args)
-    except (LearnError, ledger.LedgerError, OSError, json.JSONDecodeError) as exc:
+    except (LearnError, ledger.LedgerError, OSError, json.JSONDecodeError, update_gate.WriteRefused) as exc:
         print(f"learn: {exc}", file=sys.stderr)
         return 1
 

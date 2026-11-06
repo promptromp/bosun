@@ -193,6 +193,8 @@ class TestLedgerFormat(unittest.TestCase):
     def test_a_ledger_without_a_version_is_format_1(self) -> None:
         (Path(self.tmp.name) / "ledger.json").write_text(json.dumps({"items": {}}))
         self.assertEqual(ledger.store_format(Path(self.tmp.name)), 1)
+        (Path(self.tmp.name) / "ledger.json").write_text("{}")  # nothing in it: no ledger yet
+        self.assertEqual(ledger.store_format(Path(self.tmp.name)), 0)
 
     def test_a_write_into_a_malformed_version_is_refused_with_a_message(self) -> None:
         (Path(self.tmp.name) / "ledger.json").write_text(json.dumps({"version": "2", "items": {}}))
