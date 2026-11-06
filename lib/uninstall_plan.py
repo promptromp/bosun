@@ -50,6 +50,7 @@ STATE_FILES = (
     ("update.json.tmp", WORKING),
     ("update.lock", WORKING),
     ("update", WORKING),
+    (".*.restoring", WORKING),  # what an update's restore was writing, cut short (lib/update_backups.py)
     ("agent-changes.json", WORKING),
     (".agent-changes.json.*", WORKING),
     ("alerted-*", WORKING),  # what the check-in loop left, before the watchdog
@@ -88,6 +89,7 @@ CONFIG_FILES = (
     ("*.pre-init-*", SETTINGS),  # what `bosun init` backed up
     ("bosun.env.pre-update-*", SETTINGS),  # what `bosun update` backed up
     (".bosun.env.*.tmp", WORKING),  # what `bosun update` was writing, cut short (bosun.env, its copy)
+    (".*.restoring", WORKING),  # what an update's restore was writing, cut short (lib/update_backups.py)
     ("forbidden-terms.txt", OURS_TO_LEAVE),  # guards commits to this repo; bosun runs without it
     (".DS_Store", WORKING),
 )

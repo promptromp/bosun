@@ -4,6 +4,7 @@ writes after the switch" and "Cut short"). Fictional data."""
 from __future__ import annotations
 
 import contextlib
+import dataclasses
 import io
 import json
 import os
@@ -21,6 +22,7 @@ from unittest import mock
 
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "lib"))
+import install_paths
 import ledger
 import update_backups as ub
 import update_gate
@@ -68,6 +70,13 @@ def record(step: str, **fields: Any) -> update_state.UpdateState:
     )
 
 
+def newer_record(state_dir: Path, step: str, **extra: Any) -> None:
+    """update.json as a newer bosun writes it: this version's fields of record(<step>), and <extra>."""
+    data = dataclasses.asdict(record("migrated"))
+    data.update(step=step, **extra)
+    (state_dir / update_state.STATE_FILE).write_text(json.dumps(data))
+
+
 @contextlib.contextmanager
 def update_running(state_dir: Path) -> Iterator[None]:
     """update.lock held by another process for the block."""
@@ -106,6 +115,7 @@ class World(unittest.TestCase):
         self.install = share / "bosun"
         self.old = share / "bosun-versions" / FROM[:12]
         self.new = share / "bosun-versions" / TO[:12]
+        (share / "bosun-versions" / install_paths.REPO).mkdir(parents=True)  # what makes them versions
         for folder in (self.old, self.new):
             (folder / "bin").mkdir(parents=True)
             (folder / "bin" / "bosun").write_text(STUB)
@@ -201,6 +211,34 @@ class CheckTest(World):
             update_state.write(self.state, record(step))
             update_gate.check_write("ledger", 1, 1, self.state)  # no refusal
 
+    def test_a_newer_bosuns_record_in_its_freeze_is_still_cut_short(self) -> None:
+        """R21: fields this code does not know never make a freeze's record no record, or a write
+        would land on a store whose backup is the truth, and the next restore would delete it."""
+        newer_record(self.state, "migrated", verified_by="doctor", waves=[1, 2])
+        with self.assertRaises(update_gate.UpdateCutShort) as caught:
+            update_gate.check_write("ledger", 1, 1, self.state)
+        self.assertEqual(caught.exception.state.step, "migrated")
+
+    def test_a_step_this_bosun_does_not_know_is_refused_as_a_newer_bosuns(self) -> None:
+        newer_record(self.state, "verifying", verified_by="doctor")
+        with self.assertRaises(update_gate.UpdateNewer) as caught:
+            update_gate.check_write("ledger", 1, 1, self.state)
+        self.assertTrue(caught.exception.run_again)
+        self.assertIn("verifying", str(caught.exception))
+
+    def test_a_record_that_cannot_be_read_fails_closed(self) -> None:
+        path = self.state / update_state.STATE_FILE
+        known_field_wrong = json.dumps(dict(dataclasses.asdict(record("done")), hold_until="soon"))
+        for text in ("{nope", "", "[]", known_field_wrong):
+            path.write_text(text)
+            with self.assertRaises(update_gate.UpdateUnreadable, msg=text) as caught:
+                update_gate.check_write("ledger", 1, 1, self.state)
+            said = str(caught.exception)
+            self.assertFalse(caught.exception.run_again)
+            self.assertIn(str(path), said)
+            self.assertIn("bosun update", said)
+            self.assertIn("move it aside", said)
+
 
 class RerunTest(World):
     def test_a_newer_store_reruns_with_the_same_stdin(self) -> None:
@@ -253,6 +291,41 @@ class RerunTest(World):
         self.assertEqual(len(err.splitlines()), 1)
         self.assertIn("format 1", err)
         self.assertIn("run bosun update to migrate it", err)
+
+    def check_the_gate(self, argv: list[str]) -> int:
+        sys.stdin.read()
+        update_gate.check_write("ledger", 1, 1, self.state)
+        return 0
+
+    def test_a_newer_bosuns_step_runs_again_through_the_link(self) -> None:
+        newer_record(self.state, "verifying")
+        code, err = self.guarded(self.check_the_gate, ["upsert", "review:acme/exporter#3"], b"payload")
+        self.assertEqual((code, err), (3, ""))
+        ran = self.ran()
+        assert ran is not None
+        self.assertEqual((ran["version"], ran["rerun"], ran["stdin"]), (TO[:12], "1", b"payload"))
+        self.assertEqual(ran["args"], ["ledger", "upsert", "review:acme/exporter#3"])
+
+    def test_a_newer_bosuns_step_refused_again_says_so_in_one_line(self) -> None:
+        newer_record(self.state, "verifying")
+        with mock.patch.dict(os.environ, {update_gate.RERUN_ENV: "1"}):
+            code, err = self.guarded(self.check_the_gate, ["upsert"])
+        self.assertEqual(code, 1)
+        self.assertIsNone(self.ran())
+        self.assertEqual(len(err.splitlines()), 1, err)
+        self.assertIn("verifying", err)
+        self.assertIn("the installed bosun does not know it either", err)
+
+    def test_a_record_that_cannot_be_read_is_refused_in_one_line_never_run_again(self) -> None:
+        (self.state / update_state.STATE_FILE).write_text('{"id": "u1", "step": "migr')
+        for rerun in ("", "1"):
+            with mock.patch.dict(os.environ, {update_gate.RERUN_ENV: rerun}):
+                code, err = self.guarded(self.check_the_gate, ["upsert"])
+            self.assertEqual(code, 1)
+            self.assertIsNone(self.ran())
+            self.assertEqual(len(err.splitlines()), 1, err)
+            self.assertIn(str(self.state / update_state.STATE_FILE), err)
+            self.assertTrue(err.startswith("bosun ledger: "), err)
 
     def test_a_command_that_is_not_refused_runs_once(self) -> None:
         def run(argv: list[str]) -> int:
@@ -427,6 +500,46 @@ class RecoverTest(World):
         update_state.write(self.state, record("done"))
         self.assertFalse(update_gate.recover(self.state, self.config))
 
+    def test_putting_back_under_the_callers_locks_takes_none(self) -> None:
+        """R23: for a caller that holds update.lock and both stores' locks (an update resuming, or
+        its freeze failing): flock is per open file, so taking one again would conflict with itself."""
+        self.cut_short("switched")
+        (self.config / "knowledge").mkdir()
+        state = update_state.read(self.state)
+        assert state is not None
+        with (
+            update_state.one_update(self.state),
+            update_gate.store_locks(self.state, self.config),
+            mock.patch.object(update_state, "one_update", side_effect=AssertionError("took update.lock")),
+            mock.patch.object(
+                update_gate, "store_locks", side_effect=AssertionError("took the stores' locks")
+            ),
+            mock.patch.object(ledger, "lock_at", side_effect=AssertionError("took the ledger's lock")),
+        ):
+            done = update_gate.put_back_held(self.state, self.config, state)
+        self.assertEqual(done.step, "restored")
+        self.assertEqual(update_state.read(self.state), done)
+        ledger_json = json.loads((self.state / "ledger.json").read_text())
+        self.assertEqual(
+            ledger_json, {"version": 1, "items": {"review:acme/exporter#1": {"state": "requested"}}}
+        )
+        self.assertEqual(versions.current(self.install), self.old)
+
+    def test_a_record_past_its_backup_without_one_is_refused(self) -> None:
+        """#7: past `backed-up` the backup is the truth; without one nothing is put back, and the
+        record is not marked restored."""
+        self.ledger_json({"version": 2, "items": {}, "migrated": True})
+        for fields in (
+            {"backup": "", "restorable": ()},
+            {"backup": "/nowhere", "restorable": ()},
+            {"backup": "", "restorable": ("state/ledger.json",)},
+        ):
+            update_state.write(self.state, record("migrated", from_root=str(self.old), **fields))
+            with self.assertRaises(ub.BackupError, msg=str(fields)):
+                update_gate.recover(self.state, self.config)
+            self.assertEqual(update_state.read(self.state).step, "migrated")  # type: ignore[union-attr]
+            self.assertEqual(versions.current(self.install), self.new)  # not pointed back either
+
     def test_recover_waits_for_an_update_then_gives_up(self) -> None:
         self.cut_short("switched")
         with update_running(self.state), self.assertRaises(update_state.UpdateRunning):
@@ -448,6 +561,7 @@ class EntryPointTest(unittest.TestCase):
         share = cls.tmp / "share"
         cls.old = share / "bosun-versions" / FROM[:12]
         new = share / "bosun-versions" / TO[:12]
+        (share / "bosun-versions" / install_paths.REPO).mkdir(parents=True)
         shutil.copytree(LIB, cls.old / "lib", ignore=shutil.ignore_patterns("__pycache__"))
         (new / "bin").mkdir(parents=True)
         (new / "bin" / "bosun").write_text(STUB)

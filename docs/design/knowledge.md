@@ -350,16 +350,16 @@ a stream of questions.
   old commits would otherwise still hold the data. In the journal they rewrite only `local.jsonl`,
   where everything naming a person is: each of its changes becomes a placeholder that keeps its
   place (sequence number, clock, transaction) and nothing of what it held, so the sequence and the
-  ids minted from it never go back. What writes cut short left of `local.jsonl` (its torn tails,
-  a rewrite's unfinished copy) is deleted too, whatever it held, and so is what they left in the
-  knowledge folder (`*.tmp`: a `kg batch` cut short leaves `batch.json.tmp`, which names people). Then, as the last step of every
-  deletion that removed something (`forget_in_journal`, so one cut short is finished by the next
-  write too), every update backup is deleted (`update_backups.delete_all`; design:
-  [update.md](update.md#backups)): a backup holds the whole knowledge base, `forgotten.jsonl`, the
-  journal and `secret.key` included, so restoring one from before the deletion would undo it,
-  past the adopt check, which reads the very records the restore replaces. The line says how many
-  and never whom. The private journal is never
-  rewritten, so a deletion that would need it is refused. A forgotten id cannot be added again without
+  ids minted from it never go back. What writes cut short left of `local.jsonl` (its torn tails, a
+  rewrite's unfinished copy) is deleted too, whatever it held, and so is what they left in the
+  knowledge folder (`*.tmp`: a `kg batch` cut short leaves `batch.json.tmp`, which names people).
+  Then, as the last step of every deletion that removed something (`forget_in_journal`, so one cut
+  short is finished by the next write too), every update backup is deleted
+  (`update_backups.delete_all`; design: [update.md](update.md#backups)): a backup holds the whole
+  knowledge base, `forgotten.jsonl`, the journal and `secret.key` included, so restoring one from
+  before the deletion would undo it, past the adopt check, which reads the very records the restore
+  replaces. The line says how many and never whom. The private journal is never rewritten, so a
+  deletion that would need it is refused. A forgotten id cannot be added again without
   `--allow-forgotten`. The hash is an HMAC-SHA256 under `secret.key` (made on the first write as
   `replica.json` is, whole and flushed before it is linked to its name; mode 0600, ignored by the
   history, never leaves the Mac), so guessing `person/<name>` finds nobody; records from before

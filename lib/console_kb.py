@@ -227,6 +227,13 @@ def updated_refusal(refused: update_gate.WriteRefused) -> str:
             f"not saved: the {refused.store} is format {refused.found} and this console writes format "
             f"{refused.mine}, as bosun was updated since it started; restart it (bosun console)"
         )
+    if isinstance(refused, update_gate.UpdateNewer):
+        return (
+            f"not saved: {refused}, as bosun was updated since this console started; restart it "
+            "(bosun console)"
+        )
+    if isinstance(refused, update_gate.UpdateUnreadable):
+        return f"not saved: {refused}"
     return (
         f"not saved: {refused}. The next bosun command that writes puts it back; then restart the "
         "console (bosun console)"

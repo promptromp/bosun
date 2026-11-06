@@ -145,6 +145,14 @@ class HookTest(unittest.TestCase):
         self.assertIn("ERROR: could not record a prompt typed in exporter", self.log())
         self.assertIn("run bosun update to migrate it", self.log())
 
+    def test_an_update_record_that_cannot_be_read_is_an_error_in_the_log(self) -> None:
+        """Refused for good (never run again), so it is said as an error, not as running it again."""
+        (self.state_dir / "update.json").write_text("{nope")
+        self.assertEqual(self.run_hook(self.payload("go with option b")), 0)
+        self.assertIn("ERROR: could not record a prompt typed in exporter", self.log())
+        self.assertIn("update.json is not JSON", self.log())
+        self.assertNotIn("running it again", self.log())
+
     def test_a_codex_turn_the_gate_refuses_leaves_its_prompts_new(self) -> None:
         self.newer_ledger()
         with self.assertRaises(update_gate.StoreNewer):

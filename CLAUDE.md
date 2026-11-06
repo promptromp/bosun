@@ -245,6 +245,9 @@ of truth, so don't copy rules into this file.
 - **A command:** `libexec/bosun-<cmd>` with a `# Usage:` header (`usage` prints it for
   `--help`; `die_usage` reports usage errors with exit 2), a line in `bin/bosun`'s usage, the
   table in `docs/commands.md`, and smoke tests.
+- **A command or background job that writes a store** (the ledger, the knowledge base): it runs
+  under `update_gate.guarded` (`lib/update_gate.py`), or catches `WriteRefused` and fails its run in
+  one line.
 
 ## Tooling and checks
 

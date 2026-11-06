@@ -93,6 +93,24 @@ class BackupsTest(unittest.TestCase):
         with self.assertRaises(ub.BackupError):
             ub.restore(backup, self.state, self.config, only=["state"])
 
+    def test_a_corrupt_backup_changes_nothing(self) -> None:
+        """#4: every source under the prefixes is checked before anything is deleted or written, so
+        a backup found damaged leaves the folders as they were, and says so."""
+        backup = self.take()
+        (self.state / "ledger.json").write_text("changed\n")
+        (self.state / "journal" / "new.jsonl").write_text("{}\n")  # an extra, which a restore deletes
+        for damage in ("tampered", "missing"):
+            source = backup / "state" / "journal" / "a.json"
+            if damage == "missing":
+                source.unlink()
+            else:
+                source.write_text("tampered\n")
+            with self.assertRaises(ub.BackupError, msg=damage) as caught:
+                ub.restore(backup, self.state, self.config, only=["state/ledger.json", "state/journal"])
+            self.assertIn("nothing was restored", str(caught.exception))
+            self.assertEqual((self.state / "ledger.json").read_text(), "changed\n", damage)
+            self.assertTrue((self.state / "journal" / "new.jsonl").exists(), damage)
+
     def test_a_folder_without_a_manifest_is_no_backup(self) -> None:
         (self.state / "backups" / "cut-short").mkdir(parents=True)
         with self.assertRaises(ub.BackupError):
@@ -168,11 +186,25 @@ class BackupsTest(unittest.TestCase):
             "config/../state",
             "config/./a",
             "other/x",
+            "state/update.json",  # #5: outside the backup set, never deleted as an extra
+            "state/update.lock",
+            "state/ledger.lock",
+            "state/logs/x.log",
+            "state/anything-else",
+            "config/forbidden-terms.txt",
+            "config/my-notes.txt",
         )
+        (self.state / "update.json").write_text("{}\n")
         for bad in bad_ones:
             with self.assertRaises(ub.BackupError, msg=bad):
                 ub.restore(backup, self.state, self.config, ["state/ledger.json", bad])
         self.assertEqual((self.state / "ledger.json").read_text(), "changed\n")
+        self.assertTrue((self.state / "update.json").exists())
+
+    def test_every_prefix_the_backup_set_holds_is_taken(self) -> None:
+        backup = self.take()
+        held = [*ub.FROZEN, *(f"state/{name}" for name in ub.IN_FLIGHT), "config/bosun.env", "state/learn"]
+        self.assertEqual(ub.restore(backup, self.state, self.config, held), [])
 
     def test_a_link_deeper_than_the_top_level_is_replaced_not_written_through(self) -> None:
         backup = self.take()

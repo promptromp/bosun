@@ -557,6 +557,35 @@ class UpdatedTest(KnowledgeWorld):
         self.assertIn("cut short", str(refused))
         self.assertIn("bosun console", str(refused))
 
+    def test_a_newer_bosuns_update_record_asks_for_a_restart(self) -> None:
+        (Path(self.state) / update_state.STATE_FILE).write_text(
+            json.dumps(
+                {
+                    "id": "u2",
+                    "from_root": "/Users/me/.local/share/bosun-versions/aaaaaaa11111",
+                    "to_root": "/Users/me/.local/share/bosun-versions/bbbbbbb22222",
+                    "from_commit": "aaaaaaa",
+                    "to_commit": "bbbbbbb",
+                    "step": "verifying",
+                    "started_at": "2026-11-05T09:00:00+00:00",
+                    "hold_until": 10**12,
+                }
+            )
+        )
+        refused = self.decide()
+        self.assertEqual(refused.status, 409)
+        self.assertIn("bosun was updated", str(refused))
+        self.assertIn("bosun console", str(refused))
+        self.assertNotIn("puts it back", str(refused))
+
+    def test_an_update_record_that_cannot_be_read_says_what_to_do(self) -> None:
+        (Path(self.state) / update_state.STATE_FILE).write_text("{nope")
+        refused = self.decide()
+        self.assertEqual(refused.status, 409)
+        self.assertIn("update.json is not JSON", str(refused))
+        self.assertIn("move it aside", str(refused))
+        self.assertNotIn("puts it back", str(refused))
+
 
 class StorageTest(KnowledgeWorld):
     def test_identifiers_are_never_read(self) -> None:

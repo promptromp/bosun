@@ -1,6 +1,8 @@
 # Updating bosun
 
-Status: approved 2026-11-05; nothing here is built yet. The plan: [docs/plans/update.md](../plans/update.md).
+Status: approved 2026-11-05. Part A, the groundwork, is built: the two paths, the stores' formats, the
+update's record and hold, backups, version folders, the write gate and the migration registry. The
+`bosun update` command is not built yet. The plan: [docs/plans/update.md](../plans/update.md).
 
 ## Why
 
@@ -151,8 +153,9 @@ may change. If a freeze is on, or the store's format is not the writer's, nothin
 - the console refuses with a message to restart it, and the plan lists a running console;
 - bosun's own background writers handle a refusal too. `bosun review-watch` runs itself again like
   a command, since what it records it records once. `bosun learn` fails the run, or the apply, in one
-  line and leaves it to the next one, and checks before it proposes or applies anything, so it never
-  leaves half a change behind;
+  line and leaves it to the next one. It checks before it proposes or applies anything, so a refusal
+  normally changes nothing; a freeze that starts in between can still refuse a later write, and the
+  next run picks it up;
 - the `checkin` window's loop is bosun's own, so the update restarts it when its code changed.
 
 With that check in place, a migration may rewrite the files derived from a journal. The journals
@@ -363,9 +366,17 @@ between two versions that both have `update`.
     first;
   - after the checks passed: the update rolls forward. The next `bosun update` lifts the hold and
     brings the agents along.
-- **The hold expires** after an hour, so an update that died never stops the check-in loop for
-  good. The watchdog and `bosun doctor` report it.
+- **The hold lapses** at once when its update has died, as it counts only while the update holds its
+  lock, and after an hour in any case, so an update that died never stops the check-in loop. The
+  watchdog and `bosun doctor` report an update that stopped inside its hold.
 - **One update at a time:** a second one is refused while the first runs.
+- **The record only grows.** Old code reads a newer version's record: a hook or a command started
+  before the switch, the console. So its steps are only ever added, never renamed or removed, and a
+  new field is optional; a field old code does not know is ignored. A step it does not know is a
+  newer bosun's: the write is refused and runs again through the install link, whose code knows it,
+  and the hold counts as on. A record that is there but cannot be read refuses every write in one
+  line, since it may record a freeze: an update in progress may be resumed with `bosun update`, and
+  if none is running, the file is moved aside.
 
 ## Testing
 

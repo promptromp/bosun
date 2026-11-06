@@ -8,10 +8,12 @@ BOSUN="$BOSUN_ROOT/bin/bosun"
 # Two paths (lib/install_paths.py): this process runs its own folder, BOSUN_ROOT. What outlives it
 # (hook commands, the launch command, plists, the link in ~/.local/bin) names the install link,
 # BOSUN_INSTALL, which an update points at a newer version. In a checkout they are the same.
+# A version is a folder in <install>-versions, beside the bare repository (bosun.git) it is a
+# worktree of; a checkout in a folder that is only named so is none.
 BOSUN_INSTALL="$BOSUN_ROOT"
 bosun_versions="$(dirname "$BOSUN_ROOT")"
 case "${bosun_versions##*/}" in
-  ?*-versions) BOSUN_INSTALL="${bosun_versions%-versions}" ;;
+  ?*-versions) if [ -d "$bosun_versions/bosun.git" ]; then BOSUN_INSTALL="${bosun_versions%-versions}"; fi ;;
 esac
 unset bosun_versions
 BOSUN_CMD="$BOSUN_INSTALL/bin/bosun"

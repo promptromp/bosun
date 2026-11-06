@@ -1334,6 +1334,25 @@ class OutsideEditHistoryTest(JournalTestCase):
         self.assertNotIn("dana", self.history())
         self.assertEqual(self.validate(), ("knowledge base is valid", 0))
 
+    def test_a_forget_outside_the_journal_deletes_the_update_backups(self) -> None:
+        """An older bosun's kg forget, found by the next write (forget_outside, then
+        forget_in_journal with the facts it found): every update backup goes too, as the forget's
+        last step, and the line says how many, never whom."""
+        self.seed()
+        self.run_kg("propose", "person/dana", "timezone", "--value", "Europe/Lisbon", "--source", "ledger:a")
+        made = [self.state / ub.BACKUPS_DIR / f"2026110{n}-090000-aaa1111-bbb2222" for n in (4, 5)]
+        for backup in made:
+            (backup / "config" / "knowledge").mkdir(parents=True)
+            (backup / ub.MANIFEST).write_text("{}\n")
+        self.old_bosun_forgets("person/dana")
+        said = self.write_saying()
+        self.assertEqual([p for p in made if p.exists()], [])
+        self.assertIn(
+            "kg: deleted 2 update backups taken before this; going back past it is no longer possible",
+            said.splitlines(),
+        )
+        self.assertNotIn("dana", said.lower())
+
     def everything(self) -> tuple[dict[str, bytes], str]:
         """Every file in the knowledge folder but the git history's, and that history."""
         files = {

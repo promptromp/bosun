@@ -1,10 +1,17 @@
 """The update's record and its hold (design: docs/design/update.md, "The steps" and "Cut short").
 
 `bosun update` records its progress in $BOSUN_STATE_DIR/update.json, whole and flushed at every
-step, and holds update.lock exclusively for its whole run. While the hold is on (a step before
-`released`, within an hour of the start), bosun's own background work skips its runs; the agents
-keep working. Whether an update runs is judged by the lock, which the system drops when its holder
-dies, never by a pid, which can be anyone's later.
+step, and holds update.lock exclusively for its whole run. While the hold is on (HOLD_STEPS, within
+an hour of the start), bosun's own background work skips its runs; the agents keep working. Whether
+an update runs is judged by the lock, which the system drops when its holder dies, never by a pid,
+which can be anyone's later.
+
+Code of one version reads the record another wrote: a hook or a command started before the switch,
+the console. So the record only ever grows: STEPS and FREEZE_STEPS are only ever added to, never
+renamed or removed (and only a new step joins FREEZE_STEPS or HOLD_STEPS: old code takes a step it
+knows for what it knew it as), and a new field is optional. A field this code does not know is
+ignored; a step it does not know was written by a newer bosun (known() is False), which the write
+gate refuses and runs again on the installed version, and the hold counts as on.
 
 No store (ledger, knowledge) is imported here: the stores import modules that import this one."""
 
@@ -49,7 +56,17 @@ STEPS = (
 )
 # Writes are paused from the marker to the switch: the backup is the truth there.
 FREEZE_STEPS = ("marked", "backed-up", "migrated", "switched")
-_HOLD_ENDS = STEPS.index("released")
+# Bosun's own background work is held from `holding` up to `released`; never before it.
+HOLD_STEPS = STEPS[STEPS.index("holding") : STEPS.index("released")]
+
+
+class RecordUnreadable(Exception):
+    """update.json is there but no record: it cannot be read or parsed, or a field this code knows
+    is missing or of the wrong type."""
+
+    def __init__(self, path: Path, why: str) -> None:
+        super().__init__(f"{path} {why}")
+        self.path = path
 
 
 class UpdateRunning(Exception):
@@ -96,38 +113,56 @@ def _is_strings(value: Any) -> bool:
     return isinstance(value, list) and all(isinstance(x, str) for x in value)
 
 
-def _right_types(data: dict[str, Any]) -> bool:
-    for name, value in data.items():
-        if name in _TUPLES:
-            ok = _is_strings(value)
-        elif name in _INTS:
-            ok = _is_int(value)
-        else:
-            ok = isinstance(value, str)
-        if not ok:
-            return False
-    return True
+def _right_type(name: str, value: Any) -> bool:
+    if name in _TUPLES:
+        return _is_strings(value)
+    if name in _INTS:
+        return _is_int(value)
+    return isinstance(value, str)
 
 
-def _valid(data: Any) -> bool:
-    """Whether <data> is a record this version can use: an object with the right fields and types
-    and a known step (a newer version's step, or a damaged file, is no record)."""
-    if not isinstance(data, dict) or not set(_REQUIRED) <= data.keys() <= set(_NAMES):
-        return False
-    return _right_types(data) and data["step"] in STEPS
+def _known_fields(data: Any) -> dict[str, Any] | None:
+    """The fields of <data> this version knows, when it is an object holding every required one,
+    each of the right type; else None. Fields it does not know (a newer version's) are left out."""
+    if not isinstance(data, dict) or not set(_REQUIRED) <= data.keys():
+        return None
+    known = {name: value for name, value in data.items() if name in _NAMES}
+    if not all(_right_type(name, value) for name, value in known.items()):
+        return None
+    return known
+
+
+def load(state_dir: Path) -> UpdateState | None:
+    """The record (its step may be a newer bosun's: known()), None where there is none, and
+    RecordUnreadable where update.json is there but no record (a .tmp left by a cut is not it)."""
+    path = state_dir / STATE_FILE
+    try:
+        data = json.loads(path.read_bytes())
+    except FileNotFoundError:
+        return None
+    except OSError as exc:
+        raise RecordUnreadable(path, f"cannot be read ({exc.strerror or exc})") from exc
+    except ValueError as exc:
+        raise RecordUnreadable(path, "is not JSON") from exc
+    known = _known_fields(data)
+    if known is None:
+        raise RecordUnreadable(path, "is not an update record bosun can read")
+    for name in _TUPLES:
+        known[name] = tuple(known.get(name, ()))
+    return UpdateState(**known)
 
 
 def read(state_dir: Path) -> UpdateState | None:
-    """The record, or None where there is none or it is unusable (a .tmp left by a cut is not it)."""
+    """The record, or None where there is none or it is no record (load says which)."""
     try:
-        data = json.loads((state_dir / STATE_FILE).read_text())
-    except (OSError, ValueError):
+        return load(state_dir)
+    except RecordUnreadable:
         return None
-    if not _valid(data):
-        return None
-    for name in _TUPLES:
-        data[name] = tuple(data.get(name, ()))
-    return UpdateState(**data)
+
+
+def known(state: UpdateState) -> bool:
+    """Whether this code knows <state>'s step: one it does not was written by a newer bosun."""
+    return state.step in STEPS
 
 
 def write(state_dir: Path, state: UpdateState) -> None:
@@ -151,8 +186,14 @@ def advanced(state: UpdateState, step: str, **fields: Any) -> UpdateState:
     return dataclasses.replace(state, step=step, **fields)
 
 
+def _holds(state: UpdateState) -> bool:
+    """Whether <state>'s step is one the hold is on at: HOLD_STEPS, or a newer bosun's step (taken
+    for one, as this code cannot tell)."""
+    return state.step in HOLD_STEPS or not known(state)
+
+
 def hold_active(state: UpdateState | None, now: float) -> bool:
-    return state is not None and STEPS.index(state.step) < _HOLD_ENDS and now < state.hold_until
+    return state is not None and _holds(state) and now < state.hold_until
 
 
 def in_freeze(state: UpdateState | None) -> bool:
@@ -215,13 +256,14 @@ def holding(state_dir: Path, now: float) -> bool:
 
 
 def stuck(state_dir: Path, now: float) -> str:
-    """Why an update was cut short and left its hold, or "": a record before `released` with
-    nothing running it, or a running one whose hold outlived its hour."""
+    """Why an update was cut short and left its hold, or "": a record at a step the hold is on at
+    with nothing running it, or a running one whose hold outlived its hour."""
     state = read(state_dir)
-    if state is None or STEPS.index(state.step) >= _HOLD_ENDS:
+    if state is None or not _holds(state):
         return ""
     if not running(state_dir):
-        return f"an update stopped at step {state.step} and left its hold; run bosun update"
+        newer = "" if known(state) else " (a step of a newer bosun)"
+        return f"an update stopped at step {state.step}{newer} and left its hold; run bosun update"
     if now >= state.hold_until:
         return f"an update's hold (step {state.step}) outlived its hour"
     return ""

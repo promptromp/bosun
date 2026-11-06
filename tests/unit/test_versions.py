@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import contextlib
 import errno
+import io
 import os
 import subprocess
 import sys
@@ -16,6 +18,7 @@ from unittest import mock
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "lib"))
 
 import versions
+from install_paths import REPO
 
 
 GIT = ["git", "-c", "user.name=t", "-c", "user.email=t@example.com", "-c", "commit.gpgsign=false"]
@@ -42,15 +45,15 @@ def _worktrees(tmp: Path, count: int) -> tuple[Path, list[Path]]:
     src = _source(tmp)
     vdir = tmp / "bosun-versions"
     vdir.mkdir()
-    _git(tmp, "clone", "-q", "--bare", str(src), str(vdir / versions.REPO))
+    _git(tmp, "clone", "-q", "--bare", str(src), str(vdir / REPO))
     folders = []
     for i in range(count):
         (src / "f.txt").write_text(str(i))
         _git(src, "commit", "-q", "-am", f"c{i}")
-        _git(vdir / versions.REPO, "fetch", "-q", str(src), "HEAD")
-        commit = _git(vdir / versions.REPO, "rev-parse", "FETCH_HEAD")
+        _git(vdir / REPO, "fetch", "-q", str(src), "HEAD")
+        commit = _git(vdir / REPO, "rev-parse", "FETCH_HEAD")
         folder = versions.folder_for(vdir, commit)
-        _git(vdir / versions.REPO, "worktree", "add", "-q", "--detach", str(folder), commit)
+        _git(vdir / REPO, "worktree", "add", "-q", "--detach", str(folder), commit)
         folders.append(folder)
     return vdir, folders
 
@@ -126,7 +129,7 @@ class VersionsTests(unittest.TestCase):
         removed = versions.prune(vdir, keep={b, c})
         self.assertEqual(sorted(removed), sorted([a, legacy]))
         self.assertTrue(not a.exists() and not legacy.exists() and b.exists() and c.exists())
-        listing = _git(vdir / versions.REPO, "worktree", "list")
+        listing = _git(vdir / REPO, "worktree", "list")
         self.assertTrue(a.name not in listing and b.name in listing)
 
     def test_prune_skips_a_folder_in_use(self) -> None:
@@ -147,6 +150,37 @@ class VersionsTests(unittest.TestCase):
         with mock.patch.dict(os.environ, {"PATH": str(tmp_path / "nothing")}):
             self.assertEqual(versions.prune(vdir, keep=set()), [])
         self.assertTrue(a.exists())
+
+    def test_prune_reports_a_folder_it_cannot_remove_and_goes_on(self) -> None:
+        vdir, (a,) = _worktrees(self.tmp, 1)
+        stuck = vdir / f"{versions.LEGACY_PREFIX}000000000000"  # sorted before the next legacy one
+        (stuck / "sub").mkdir(parents=True)
+        (stuck / "sub" / "x").write_text("x")
+        (stuck / "sub").chmod(0o500)  # x cannot be deleted
+        self.addCleanup((stuck / "sub").chmod, 0o700)
+        later = vdir / f"{versions.LEGACY_PREFIX}ffffffffffff"
+        later.mkdir()
+        said = io.StringIO()
+        with contextlib.redirect_stderr(said):
+            removed = versions.prune(vdir, keep=set())
+        self.assertEqual(sorted(removed), sorted([a, later]))
+        self.assertTrue((stuck / "sub" / "x").exists())
+        self.assertIn(f"could not remove {stuck}", said.getvalue())
+        self.assertEqual(len(said.getvalue().splitlines()), 1)
+
+    def test_prune_never_follows_a_link(self) -> None:
+        vdir, (a,) = _worktrees(self.tmp, 1)
+        mine = self.tmp / "mine"
+        mine.mkdir()
+        (mine / "notes.txt").write_text("keep")
+        link = vdir / f"{versions.LEGACY_PREFIX}abcdef012345"
+        link.symlink_to(mine)
+        (vdir / "0123456789ab").symlink_to(a)  # a link named like a version, to one
+        removed = versions.prune(vdir, keep={a})
+        self.assertEqual(removed, [])
+        self.assertEqual((mine / "notes.txt").read_text(), "keep")
+        self.assertTrue(link.is_symlink() and a.is_dir())
+        self.assertIn(a.name, _git(vdir / REPO, "worktree", "list"))
 
     def test_a_leftover_legacy_folder_refuses_with_nothing_changed(self) -> None:
         tmp_path = self.tmp

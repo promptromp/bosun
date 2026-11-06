@@ -11,6 +11,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "lib"))
 import journal as jr
 import uninstall_plan as up
+import update_backups as ub
 from uninstall_plan import Checkout, Choices, Facts, Job, Step
 
 
@@ -73,6 +74,8 @@ class FileTables(unittest.TestCase):
             ("logs", up.WORKING),
             ("stopped-bosun", up.WORKING),
             ("keep-awake-bosun.pid", up.WORKING),
+            (".ledger.json.restoring", up.WORKING),  # what an update's restore was writing, cut short
+            (".replica.json.restoring", up.WORKING),
             ("anything-else", up.UNKNOWN),
         ):
             self.assertEqual(up.kind_of(name, up.STATE_FILES), kind, name)
@@ -86,11 +89,19 @@ class FileTables(unittest.TestCase):
                 up.WORKING,
             ),
             ("tasks", up.SETTINGS),
+            (".bosun.env.restoring", up.WORKING),  # what an update's restore was writing, cut short
+            (".sessions.yml.restoring", up.WORKING),
             ("knowledge", up.KNOWLEDGE),
             ("forbidden-terms.txt", up.OURS_TO_LEAVE),
             ("my-notes.txt", up.UNKNOWN),
         ):
             self.assertEqual(up.kind_of(name, up.CONFIG_FILES), kind, name)
+
+    def test_a_restores_temporary_file_is_working_in_both_tables(self) -> None:
+        """lib/update_backups.py writes each file it puts back as .<name>.restoring beside it first."""
+        for name, table in (("ledger.json", up.STATE_FILES), ("bosun.env", up.CONFIG_FILES)):
+            temporary = ub.RESTORING.format(name=name)
+            self.assertEqual(up.kind_of(temporary, table), up.WORKING, temporary)
 
     def test_no_table_lists_a_name_twice(self) -> None:
         for table in (up.STATE_FILES, up.CONFIG_FILES, up.LOG_FILES):

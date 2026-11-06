@@ -51,6 +51,8 @@ FROZEN = (
 _KEPT_KINDS = (LEDGER, KNOWLEDGE, SETTINGS)
 _NEVER = (BACKUPS_DIR, "logs", "dry-runs", "update")
 _CHUNK = 1 << 20
+# What a file put back is written as first, beside it (a row in both file tables of uninstall_plan).
+RESTORING = ".{name}.restoring"
 _SIDE_AND_NAME = 2  # a prefix names at least a side and an entry: state/<name>
 
 
@@ -67,27 +69,34 @@ class Manifest:
     files: Mapping[str, str]  # relative path ("state/ledger.json") to SHA-256
 
 
-def _entries(folder: Path, table: tuple[tuple[str, str], ...], extra: Sequence[str]) -> list[Path]:
+# Each side of a backup: the file table that classes its entries, and the working files it holds too.
+_SIDES: dict[str, tuple[tuple[tuple[str, str], ...], Sequence[str]]] = {
+    "state": (STATE_FILES, IN_FLIGHT),
+    "config": (CONFIG_FILES, ()),
+}
+
+
+def _held(side: str, name: str) -> bool:
+    """Whether a backup holds the entry <name> of <side> (state, config): classed ledger, knowledge or
+    settings, or work in flight; never the backups, logs, dry runs or the update's."""
+    table, extra = _SIDES[side]
+    if name in _NEVER:
+        return False
+    return kind_of(name, table) in _KEPT_KINDS or any(fnmatch.fnmatchcase(name, x) for x in extra)
+
+
+def _entries(folder: Path, side: str) -> list[Path]:
     if not folder.is_dir():
         return []
-    names = sorted(
-        entry.name
-        for entry in folder.iterdir()
-        if entry.name not in _NEVER
-        and (
-            kind_of(entry.name, table) in _KEPT_KINDS
-            or any(fnmatch.fnmatchcase(entry.name, x) for x in extra)
-        )
-    )
-    return [folder / name for name in names]
+    return [folder / name for name in sorted(e.name for e in folder.iterdir() if _held(side, e.name))]
 
 
 def backup_set(state_dir: Path, config_dir: Path) -> list[tuple[str, Path]]:
     """Each file or folder classed ledger, knowledge or settings, plus IN_FLIGHT, as
     ("state/<name>" | "config/<name>", path); never the backups, logs, dry runs or the update's."""
     return [
-        *((f"state/{p.name}", p) for p in _entries(state_dir, STATE_FILES, IN_FLIGHT)),
-        *((f"config/{p.name}", p) for p in _entries(config_dir, CONFIG_FILES, ())),
+        *((f"state/{p.name}", p) for p in _entries(state_dir, "state")),
+        *((f"config/{p.name}", p) for p in _entries(config_dir, "config")),
     ]
 
 
@@ -241,7 +250,7 @@ def _put_back(source: Path, target: Path, expected: str, follow: bool) -> None:
     if follow and target.is_symlink() and not expected.startswith(LINK):
         target = target.resolve()
     target.parent.mkdir(parents=True, exist_ok=True)
-    tmp = target.with_name(f".{target.name}.restoring")
+    tmp = target.with_name(RESTORING.format(name=target.name))
     tmp.unlink(missing_ok=True)
     if expected.startswith(LINK):
         os.symlink(expected[len(LINK) :], tmp)
@@ -271,9 +280,22 @@ def _clear_inner_links(relative: str, target: Path) -> None:
         folder = folder.parent
 
 
+def _verify(manifest: Manifest, backup: Path, only: Sequence[str]) -> None:
+    """Every file of <backup> under <only> there and as the manifest has it (a link's value is its
+    target, put back from the manifest); BackupError naming the first that is not."""
+    for relative, expected in sorted(manifest.files.items()):
+        if not _under(relative, only) or expected.startswith(LINK):
+            continue
+        source = backup / relative
+        if source.is_symlink() or not source.is_file() or digest(source) != expected:
+            raise BackupError(f"{source} is not as the manifest has it: nothing was restored")
+
+
 def _put_back_all(
     manifest: Manifest, backup: Path, state_dir: Path, config_dir: Path, only: Sequence[str]
 ) -> list[str]:
+    """Each file or link under <only> whose content differs now put back (its source checked by
+    _verify beforehand, and its copy read back by _put_back)."""
     done: list[str] = []
     for relative, expected in sorted(manifest.files.items()):
         if not _under(relative, only):
@@ -282,8 +304,6 @@ def _put_back_all(
         if _same_now(target, expected):
             continue
         source = backup / relative
-        if not expected.startswith(LINK) and (not source.is_file() or digest(source) != expected):
-            raise BackupError(f"{source} is not as the manifest has it: nothing more was restored")
         _clear_inner_links(relative, target)
         _put_back(source, target, expected, _is_top_level(relative))
         done.append(relative)
@@ -323,13 +343,14 @@ def _remove_empty_folders(root: Path, prefix: str, backup: Path) -> None:
 
 def _normalised(only: Sequence[str]) -> list[str]:
     """Each prefix in one form (no trailing or doubled slash), refused when it is a bare side, has an
-    empty, `.` or `..` part, or lies in what a backup never holds."""
+    empty, `.` or `..` part, or lies outside what a backup holds (its top-level entry not _held: the
+    update's record, a lock or a log is never deleted as an extra)."""
     result = []
     for prefix in only:
         parts = prefix.rstrip("/").split("/")
         if len(parts) < _SIDE_AND_NAME or any(part in ("", ".", "..") for part in parts):
             raise BackupError(f"{prefix!r} is not a file or folder of the state or config folder")
-        if parts[0] not in ("state", "config") or (parts[0] == "state" and parts[1] in _NEVER):
+        if parts[0] not in _SIDES or not _held(parts[0], parts[1]):
             raise BackupError(f"{prefix!r} is not something a backup holds")
         result.append("/".join(parts))
     return result
@@ -337,12 +358,15 @@ def _normalised(only: Sequence[str]) -> list[str]:
 
 def restore(backup: Path, state_dir: Path, config_dir: Path, only: Sequence[str]) -> list[str]:
     """Makes each <only> prefix as the manifest has it: each file or link whose content differs now
-    is put back (checked against the manifest, before and after), and what is there and the manifest
-    does not list is deleted (files, links and the folders the backup lacks; lock files stay: the
-    freeze holds them). Under the freeze's locks only the update wrote there, so what is new came
-    from the step that failed. Returns what it put back and what it deleted."""
-    prefixes = _normalised(only)  # all checked before anything is written
+    is put back, and what is there and the manifest does not list is deleted (files, links and the
+    folders the backup lacks; lock files stay: the freeze holds them). The prefixes, and every file
+    of the backup under them (against the manifest), are checked before anything is deleted or
+    written, so a backup found damaged changes nothing; each copy is read back too. Under the
+    freeze's locks only the update wrote there, so what is new came from the step that failed.
+    Returns what it put back and what it deleted."""
+    prefixes = _normalised(only)
     manifest = read_manifest(backup)
+    _verify(manifest, backup, prefixes)
     removed = _remove_extra(backup, state_dir, config_dir, manifest, prefixes)  # first: a folder that
     done = _put_back_all(manifest, backup, state_dir, config_dir, prefixes)  # became a file is gone
     return sorted({*done, *removed})

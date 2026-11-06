@@ -69,10 +69,11 @@ fails_with() {
 }
 
 # version_folder <name>: a copy of the working tree (tracked files and untracked ones that are not
-# ignored) in $WORK/share/bosun-versions/<name>, shaped like an installed version. Prints its path.
+# ignored) in $WORK/share/bosun-versions/<name>, shaped like an installed version: beside the bare
+# repository (bosun.git; empty is enough) that makes the folder a versions folder. Prints its path.
 version_folder() {
   local dest="$WORK/share/bosun-versions/$1"
-  mkdir -p "$dest"
+  mkdir -p "$dest" "$WORK/share/bosun-versions/bosun.git"
   git -C "$ROOT" ls-files -co --exclude-standard -z | tar -C "$ROOT" --null -T - -cf - | tar -C "$dest" -xf -
   (cd "$dest" && pwd -P)
 }
@@ -296,6 +297,10 @@ ODD="$WORK/odd/-versions/x"
 mkdir -p "$ODD"
 cp -R "$V1/lib" "$V1/bin" "$ODD/"
 check "... and on a parent named only -versions, which is not a versions folder" test "$(inst "$ODD" | cut -d' ' -f1)" = "$ODD" -a "$(py_install "$ODD")" = "$ODD"
+PR="$WORK/src/bosun-versions/pr-123"
+mkdir -p "$PR"
+cp -R "$V1/lib" "$V1/bin" "$PR/"
+check "... and on a checkout in a -versions folder without bosun.git, which writes out itself" test "$(inst "$PR")" = "$PR $PR/bin/bosun" -a "$(py_install "$PR")" = "$PR"
 check "a command run through the link stays on its own version" test "$(bash -c 'source "$(dirname "$(readlink -f "$1/bin/bosun")")/../lib/common.sh"; printf "%s %s" "$BOSUN_ROOT" "$BOSUN_INSTALL"' _ "$LINK")" = "$V1 $LINK"
 out="$(cd "$REPO_A" && BOSUN_ORCHESTRATOR=orch BOSUN_ORCHESTRATOR_DIR="$REPO_A" "$V1/bin/bosun" launch orch 2>&1)"
 check "a version's orchestrator launch names the link" contains "$out" "$LINK/orchestrator/plugin"

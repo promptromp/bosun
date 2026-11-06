@@ -19,10 +19,10 @@ import uuid
 from collections.abc import Callable, Collection
 from pathlib import Path
 
+import install_paths
 import journal
 
 
-REPO = "bosun.git"
 LEGACY_PREFIX = "legacy-"
 
 # Flags that exchange two paths atomically: macOS RENAME_SWAP, Linux RENAME_EXCHANGE.
@@ -157,19 +157,22 @@ def _remove(versions: Path, folder: Path) -> bool:
     if folder.name.startswith(LEGACY_PREFIX):
         shutil.rmtree(folder)
         return True
-    done = _git("-C", str(versions / REPO), "worktree", "remove", "--force", str(folder))
+    done = _git("-C", str(versions / install_paths.REPO), "worktree", "remove", "--force", str(folder))
     return done.returncode == 0 and not folder.exists()
 
 
 def _candidates(versions: Path, keep: Collection[Path]) -> list[Path]:
+    """The folders in `versions` not in `keep`, never the repository, a hidden one or a link (bosun
+    makes none there, and removing one could remove what it leads to)."""
     kept = {Path(os.path.abspath(p)) for p in keep}
     if not versions.is_dir():
         return []
     return [
         f
         for f in sorted(versions.iterdir())
-        if f.is_dir()
-        and f.name != REPO
+        if not f.is_symlink()
+        and f.is_dir()
+        and f.name != install_paths.REPO
         and not f.name.startswith(".")
         and Path(os.path.abspath(f)) not in kept
     ]
@@ -180,11 +183,21 @@ def _prune_one(versions: Path, folder: Path) -> bool:
     if busy is None:
         print(f"bosun: lsof is not usable, keeping {folder}", file=sys.stderr)
         return False
-    return not busy and _remove(versions, folder)
+    if busy:
+        return False
+    try:
+        return _remove(versions, folder)
+    except OSError as exc:
+        print(
+            f"bosun: could not remove {folder} ({exc.strerror or exc}); kept what is left of it",
+            file=sys.stderr,
+        )
+        return False
 
 
 def prune(versions: Path, keep: Collection[Path]) -> list[Path]:
     """Remove every version folder and legacy checkout not in `keep`; returns those removed.
     A folder a process has open stays, and so does every folder when lsof is missing or fails
-    (the safe direction; a line on stderr says so)."""
+    (the safe direction; a line on stderr says so). One that cannot be removed is said on stderr
+    and the rest go on; a link there is never followed."""
     return [f for f in _candidates(versions, keep) if _prune_one(versions, f)]

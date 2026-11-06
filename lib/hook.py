@@ -17,7 +17,8 @@ the child does the work and logs what it did (errors as ERROR lines, which the w
 to $BOSUN_LOG_DIR/hook-YYYY-MM-DD.log. BOSUN_HOOK_SYNC=1 works in the foreground (tests). A write
 the update gate refuses (lib/update_gate.py: bosun was updated since this hook's code started, or an
 update was cut short) is run again by the child, in the foreground, through the install link; one
-that still cannot be made is an ERROR line in the hook log, after the gate's own line saying why.
+that still cannot be made is an ERROR line in the hook log, after the gate's own line saying why,
+and so is one the gate never runs again (an older store, an update record that cannot be read).
 """
 
 from __future__ import annotations
@@ -149,9 +150,10 @@ def main(argv: list[str], env: Mapping[str, str]) -> int:
             log(env, codex_turn_end(args.window, args.conversation or args.window, payload, env))
         else:
             log(env, record_prompt(args.window, payload, env))
-    except update_gate.StoreOlder as exc:
-        log(env, f"ERROR: could not record a prompt typed in {args.window}: {exc}")
     except update_gate.WriteRefused as exc:
+        if not exc.run_again:  # an older store, an update record that cannot be read
+            log(env, f"ERROR: could not record a prompt typed in {args.window}: {exc}")
+            return 0
         log(env, f"not recorded in {args.window} on this version: {exc}; running it again")
         raise  # update_gate.guarded runs it again through the install link
     except Exception as exc:  # noqa: BLE001  (a hook never fails the prompt; the log has it)

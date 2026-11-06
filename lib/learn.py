@@ -35,7 +35,8 @@ Mac's, so only the Mac that proposed an item can apply it.
 A ledger write the update gate refuses (lib/update_gate.py: bosun was updated since this started,
 or an update was cut short or is pausing writes) fails the run or the command in one line, and is
 not run again: a run is the next scheduled one's to do. A run checks the gate before it proposes
-anything, and apply before it changes anything, so neither leaves half of itself behind.
+anything, and apply before it changes anything, so a refusal normally changes nothing; a freeze
+that starts in between can still refuse a later write, and the next run picks it up.
 """
 
 from __future__ import annotations

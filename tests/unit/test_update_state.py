@@ -48,6 +48,25 @@ class HoldTest(unittest.TestCase):
     def test_no_state_no_hold(self) -> None:
         self.assertFalse(update_state.hold_active(None, 0))
 
+    def test_only_the_steps_from_holding_to_released_hold(self) -> None:
+        """R24: planned and rehearsed never hold, whatever hold_until says."""
+        self.assertEqual(
+            update_state.HOLD_STEPS, ("holding", "marked", "backed-up", "migrated", "switched", "checked")
+        )
+        for step in update_state.STEPS:
+            self.assertEqual(
+                update_state.hold_active(state(step, hold_until=10**12), 0),
+                step in update_state.HOLD_STEPS,
+                step,
+            )
+
+    def test_a_newer_bosuns_step_holds_within_its_hour(self) -> None:
+        """A step this code does not know: a newer bosun wrote the record, and it is taken for a hold."""
+        self.assertTrue(update_state.hold_active(state("verifying", hold_until=1000), 999))
+        self.assertFalse(update_state.hold_active(state("verifying", hold_until=1000), 1000))
+        self.assertFalse(update_state.known(state("verifying")))
+        self.assertTrue(update_state.known(state("migrated")))
+
     def test_the_marker_is_the_freeze_steps(self) -> None:
         for step in update_state.STEPS:
             self.assertEqual(update_state.in_freeze(state(step)), step in update_state.FREEZE_STEPS, step)
@@ -77,6 +96,34 @@ class RecordTest(unittest.TestCase):
     def test_an_unknown_step_is_refused(self) -> None:
         with self.assertRaises(ValueError):
             update_state.advanced(state(), "sideways")
+
+    def newer(self, **over: Any) -> None:
+        """A record as a newer bosun writes it: this version's fields, and <over>."""
+        (self.dir / "update.json").write_text(json.dumps(dict(dataclasses.asdict(state()), **over)))
+
+    def test_a_newer_bosuns_fields_are_left_out(self) -> None:
+        """R21: a field this code does not know is ignored, never a reason to read no record."""
+        self.newer(verified_by="doctor", rollout={"waves": [1, 2]}, step="migrated")
+        self.assertEqual(update_state.read(self.dir), state("migrated"))
+
+    def test_a_newer_bosuns_step_is_read(self) -> None:
+        self.newer(step="verifying")
+        found = update_state.read(self.dir)
+        assert found is not None
+        self.assertEqual(found.step, "verifying")
+        self.assertFalse(update_state.known(found))
+
+    def test_a_record_there_but_unusable_is_unreadable_to_load(self) -> None:
+        """load says why a record that is there is none (read says only None), naming the file."""
+        for text in ("{nope", "[]", json.dumps(dict(dataclasses.asdict(state()), hold_until="soon"))):
+            (self.dir / "update.json").write_text(text)
+            with self.assertRaises(update_state.RecordUnreadable, msg=text) as caught:
+                update_state.load(self.dir)
+            self.assertIn(str(self.dir / "update.json"), str(caught.exception))
+            self.assertIsNone(update_state.read(self.dir), text)
+
+    def test_load_of_nothing_is_none(self) -> None:
+        self.assertIsNone(update_state.load(self.dir))
 
 
 class LockTest(unittest.TestCase):
@@ -147,6 +194,31 @@ class StuckTest(unittest.TestCase):
             update_state.write(self.dir, state(step, hold_until=1000))
             self.assertEqual(update_state.stuck(self.dir, 2000), "", step)
 
+    def test_an_update_stopped_before_its_hold_is_not_stuck(self) -> None:
+        """R24: planned and rehearsed changed nothing and held nothing."""
+        for step in ("planned", "rehearsed"):
+            update_state.write(self.dir, state(step, hold_until=10**12))
+            self.assertEqual(update_state.stuck(self.dir, 500), "", step)
+
+    def newer(self, **over: Any) -> None:
+        (self.dir / "update.json").write_text(json.dumps(dict(dataclasses.asdict(state()), **over)))
+
+    def test_a_newer_bosuns_record_with_nothing_running_is_stuck(self) -> None:
+        self.newer(step="verifying", hold_until=10**12, verified_by="doctor")
+        why = update_state.stuck(self.dir, 500)
+        self.assertIn("verifying", why)
+        self.assertIn("newer bosun", why)
+        self.newer(step="migrated", hold_until=10**12, verified_by="doctor")
+        self.assertIn("migrated", update_state.stuck(self.dir, 500))
+
+    def test_a_newer_bosuns_step_with_the_lock_held_is_a_hold(self) -> None:
+        self.newer(step="verifying", hold_until=1000, verified_by="doctor")
+        with update_state.one_update(self.dir):
+            self.assertTrue(update_state.holding(self.dir, 500))
+            self.assertEqual(update_state.stuck(self.dir, 500), "")
+            self.assertIn("outlived its hour", update_state.stuck(self.dir, 2000))
+        self.assertFalse(update_state.holding(self.dir, 500))
+
     def cli(self, command: str) -> subprocess.CompletedProcess[str]:
         argv = [sys.executable, str(LIB / "update_state.py"), command, "--state-dir", str(self.dir)]
         return subprocess.run(argv, capture_output=True, text=True, check=False)
@@ -198,7 +270,6 @@ class MalformedRecordTest(unittest.TestCase):
             "[]",
             "null",
             '"text"',
-            self.record(step="levitating"),
             self.record(hold_until="soon"),
             self.record(hold_until=True),
             self.record(pending="api"),
@@ -233,6 +304,10 @@ class WatchdogCheckTest(unittest.TestCase):
             self.assertEqual(len(watchdog.check_update_stuck(ctx).findings), 1)
             update_state.write(Path(tmp), state("done"))
             self.assertEqual(watchdog.check_update_stuck(ctx).findings, [])
+            newer = dict(dataclasses.asdict(state("verifying", hold_until=1)), verified_by="doctor")
+            (Path(tmp) / "update.json").write_text(json.dumps(newer))
+            [finding] = watchdog.check_update_stuck(ctx).findings
+            self.assertIn("verifying", finding.message)
         self.assertIn("update-stuck", [c.name for c in watchdog.CHECKS])
 
 
