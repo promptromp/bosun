@@ -527,9 +527,10 @@ login_shell() {
 RELAUNCH_SETTLE_SECONDS="${BOSUN_RELAUNCH_SETTLE_SECONDS:-8}" # the variable is for tests
 
 # Replace the process in a window's pane with a fresh `bosun launch`, in <dir> (default: the
-# pane's current directory); with kind "checkin", the check-in loop (build_launch_command). Refuses
-# split windows and panes that run anything besides their shell, so it never kills your work.
-relaunch_in_window() { # <window_id> <window> [prompt] [dir] [quiet] [kind]
+# pane's current directory), with [model] and [effort] if given; with kind "checkin", the check-in
+# loop (build_launch_command). Refuses split windows and panes that run anything besides their
+# shell, so it never kills your work.
+relaunch_in_window() { # <window_id> <window> [prompt] [dir] [quiet] [kind] [model] [effort]
   local window_id="$1" panes pane_id pane_pid children workdir
   panes="$(tmux_cmd list-panes -t "$window_id" -F '#{pane_id} #{pane_pid}')" || return 1
   if [ "$(grep -c . <<<"$panes")" -ne 1 ]; then
@@ -553,7 +554,7 @@ relaunch_in_window() { # <window_id> <window> [prompt] [dir] [quiet] [kind]
     sleep 0.5
   done
   workdir="${4:-$(tmux_cmd display-message -p -t "$pane_id" '#{pane_current_path}')}"
-  build_launch_command "$2" "${3:-}" "${6:-}" "" "" "${5:-}"
+  build_launch_command "$2" "${3:-}" "${6:-}" "${7:-}" "${8:-}" "${5:-}"
   log_reaped "$2" "$(reap_shell_helpers "$pane_pid")"
   tmux_cmd respawn-pane -k -t "$pane_id" -c "$workdir" "${launch_cmd[@]}"
 }
@@ -874,11 +875,11 @@ run_with_timeout() {
 # Whether the check-in loop (`bosun checkin --loop`) runs under tmux pane <pane_pid>.
 checkin_loop_running() { [ -n "$(checkin_loop_pid "$1")" ]; }
 
-# The pid of the check-in loop under tmux pane <pane_pid>, if one runs there: the outermost process
-# showing its command line (its subshells show the same one).
+# The pid of the check-in loop in tmux pane <pane_pid> (the pane's own process, or one under it), if
+# one runs there: the outermost process showing its command line (its subshells show the same one).
 checkin_loop_pid() {
   local pid
-  for pid in $(descendants "$1"); do
+  for pid in "$1" $(descendants "$1"); do
     ps -o command= -p "$pid" 2>/dev/null | grep -q "bosun-checkin --loop" || continue
     ps -o command= -p "$(ps -o ppid= -p "$pid")" 2>/dev/null | grep -q "bosun-checkin --loop" && continue
     echo "$pid"
@@ -1011,6 +1012,36 @@ note_bosun_prompt() { # <window> <text>
   [ "$BOSUN_EVENTS_ENABLED" = "1" ] && [ -n "$2" ] || return 0
   BOSUN_STATE_DIR="$BOSUN_STATE_DIR" python3 "$BOSUN_ROOT/lib/events.py" pasted "$1" <<<"$2" ||
     log "warning: could not note bosun's prompt for $1's prompt hook"
+}
+
+# What window <name> of this session was last launched with, as JSON (lib/launch_record.py: its
+# directory, the --model / --effort it was given, the fingerprint); fails if nothing was recorded.
+launch_recorded() { # <window>
+  python3 "$BOSUN_ROOT/lib/launch_record.py" show --state-dir "$BOSUN_STATE_DIR" --session "$BOSUN_SESSION_NAME" --window "$1"
+}
+
+INPUT_TYPED=3 # lib/pane_input.py typed: the input line holds text
+
+# The text in the agent's input line in window <id> (lib/pane_input.py); exit 0 empty, 3 text, 4 no
+# input line found (not a screen we can read: the checks are skipped).
+input_line() { tmux_cmd capture-pane -e -p -t "$1" 2>/dev/null | python3 "$BOSUN_ROOT/lib/pane_input.py" typed; }
+
+# Prints why nothing should be pasted into window <id> now, or fails if it may be: someone typed
+# there within BOSUN_SEND_TYPING_MINUTES (their text and our Enter would merge into one prompt), or
+# its input line holds unsent text. `send` waits on it; an update's restart leaves the window be.
+paste_blocker() { # <window_id>
+  local minutes typed
+  if [ "$BOSUN_SEND_TYPING_MINUTES" -gt 0 ] && minutes="$(minutes_since_client_input "$1")" &&
+    [ "$minutes" -lt "$BOSUN_SEND_TYPING_MINUTES" ]; then
+    echo "someone typed in it $minutes minute(s) ago"
+    return 0
+  fi
+  typed="$(input_line "$1")"
+  if [ $? -eq "$INPUT_TYPED" ]; then
+    echo "its input line holds unsent text ($(printf '%s' "$typed" | head -c 80 | tr '\n' ' '))"
+    return 0
+  fi
+  return 1
 }
 
 # Minutes since the last keystroke from any client attached to the session, or with a window id

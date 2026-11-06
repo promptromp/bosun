@@ -294,7 +294,33 @@ Each window gets one of three treatments, decided from the plan and the window's
   - *busy:* wait until it is idle. The update keeps waiting and shows which windows it is waiting
     for. Ctrl-C leaves them to the check-in loop, which restarts each one once it is idle. For that,
     `refresh` learns which bosun version each window was launched on;
-  - *waiting at a permission prompt or a question:* never restarted until it is answered.
+  - *waiting at a permission prompt or a question:* never restarted until it is answered;
+  - *someone typing in it* (within `BOSUN_SEND_TYPING_MINUTES`, or unsent text in its input box):
+    left until they are done, as `send` waits.
+
+  A window whose next launch takes up another conversation than the one it runs starts that one as it
+  would have, never with "continue what you were doing" in a blank conversation: the orchestrator
+  still on yesterday's starts today's with the morning chores, as on a new day, and a repo window
+  with a fresh conversation pending starts it with the fresh conversation's prompt.
+
+**What a window was launched with.** `bosun launch` records it, per tmux session and window, in
+`launches/<session>/<window>.json` in the state folder (`lib/launch_record.py`): bosun's commit, the
+agent, the window's directory and any `--model` / `--effort` it was given, and a fingerprint in two
+parts:
+
+- the agent's arguments, built for a placeholder conversation name, with the policy's text left out:
+  a new day's or a fresh conversation's name is no launch input, and the policy is re-read, not
+  restarted for;
+- the content of the files under each argument that is a path inside the install (the plugin, a
+  settings file), read through the install link, as the agent reads them.
+
+`bosun launch --fingerprint <window>` gives the fingerprint a launch would record now, and `bosun
+refresh --update-restart` restarts a window through refresh's path. A window outside the window list
+(opened by `send --new`) is fingerprinted and restarted with the directory and overrides its launch
+recorded, so it carries on as it was started. The two fingerprints are compared after the switch, in
+this step, when the link leads to the new version's files. Before the switch it still leads to the
+old ones, so the plan's list of the windows that need a restart has to get the new files another
+way.
 
 The **update prompt** says bosun was updated from one version to the other, and whether the session
 was restarted or kept running. It asks the session to check for anything missed from just before:
@@ -438,6 +464,9 @@ My calls, which the user can overturn:
 - a hold on bosun's own background work, plus a short freeze under the stores' locks;
 - agents left alone unless something they were launched with changed;
 - the update waits for busy windows, and Ctrl-C hands them to the check-in loop;
+- a window's launch inputs are its arguments (the conversation's name and the policy's text left out)
+  and the files under the install they name, read through the link; the commit, the directory and
+  the overrides are recorded with them, and they are compared after the switch;
 - three backups kept, in the state folder;
 - a forget deletes each backup whole, not only its knowledge part, since a backup is restored as
   one moment;
@@ -451,7 +480,6 @@ My calls, which the user can overturn:
 Left to the builder:
 
 - how the hold works;
-- how a window's launch inputs are fingerprinted;
 - upcasting or rewriting, case by case;
 - the update prompt's exact words, settled in the VM;
 - saving hooks' records to disk while a lock is busy, if the measured freeze needs it;

@@ -21,11 +21,14 @@
 # with /bosun:chores morning (BOSUN_ORCHESTRATOR_MORNING_CHORES=0: idle, no prompt).
 #
 # Before it hands over to the agent (also in a dry run), launch records what the window is launched
-# with in the state folder's launches/<window>.json: this bosun's commit and a fingerprint of the
-# agent's arguments and of the files they name in the install, the orchestrator's policy text left
-# out (lib/launch_record.py). --fingerprint prints the fingerprint it would record now, in the
-# window's directory from the window list, and launches nothing: where the two differ, an update
-# changed something the session was started with, and only a restart gives it the new one.
+# with in the state folder's launches/<session>/<window>.json (lib/launch_record.py): this bosun's
+# commit, the agent, the directory, the --model / --effort it was given, and a fingerprint of the
+# agent's arguments and of the files they name in the install, with the conversation's name and the
+# orchestrator's policy text left out. --fingerprint prints the fingerprint a launch would record
+# now, and launches nothing: in the window's directory from the window list, or for a window outside
+# it (`send --new`), with the directory and --model / --effort its last launch recorded; it refuses
+# a window with neither. Where the two differ, an update changed something the session was started
+# with, and only a restart gives it the new one.
 set -uo pipefail
 source "$(dirname "$0")/../lib/common.sh"
 load_config
@@ -68,7 +71,10 @@ case "${1:-}" in
 esac
 
 # Sets agent_args for window <name> (lib/launch/<harness>.sh's build_agent_args), and session_name and
-# harness: what it resumes, and which agent runs it.
+# harness: what it resumes, and which agent runs it. Also input_args, what the record and --fingerprint
+# go by: the same arguments for the conversation name <conversation>, since a new day's or a fresh
+# conversation's name is no launch input.
+# shellcheck disable=SC2154  # build_agent_args, in the sourced lib/launch/<harness>.sh, sets agent_args
 set_agent_args() { # <name>
   local model effort agent_module
   session_name="$(expected_session_name "$1")"
@@ -81,29 +87,38 @@ set_agent_args() { # <name>
   [ -f "$agent_module" ] || die "no way to run a window on '$harness' (BOSUN_HARNESS, or harness: in sessions.yml)"
   # shellcheck disable=SC1090  # one module per agent, each with the same functions
   source "$agent_module"
+  build_agent_args "$1" "<conversation>" "$model" "$effort"
+  input_args=("${agent_args[@]}")
   build_agent_args "$1" "$session_name" "$model" "$effort"
 }
 
-# The fingerprint of what window <name> would be launched with, as JSON, from the window's directory
-# (Codex's arguments name the repository there), as its pane would run it.
-# shellcheck disable=SC2154  # build_agent_args, in the sourced lib/launch/<harness>.sh, sets agent_args
+# The fingerprint of what window <name> would be launched with, as JSON, as its pane would run it: in
+# its directory (Codex's arguments name the repository there) from the window list, or for a window
+# outside it, the directory and --model / --effort its last launch recorded. Never the caller's.
 print_fingerprint() { # <name>
-  local dir
+  local dir record
   dir="$(window_specs 2>/dev/null | awk -F'\t' -v name="$1" '$1 == name { print $2; exit }')"
-  if [ -n "$dir" ]; then cd "$dir" || die "cannot enter $1's directory $dir"; fi
+  if [ -z "$dir" ]; then
+    record="$(launch_recorded "$1")" || die "no window '$1' in the window list, and no launch of it recorded"
+    dir="$(jq -r '.dir' <<<"$record")"
+    model_override="${model_override:-$(jq -r '.model_override' <<<"$record")}"
+    effort_override="${effort_override:-$(jq -r '.effort_override' <<<"$record")}"
+  fi
+  cd "$dir" || die "cannot enter $1's directory '$dir'"
   set_agent_args "$1"
-  python3 "$BOSUN_ROOT/lib/launch_record.py" fingerprint --install "$BOSUN_INSTALL" -- "${agent_args[@]}"
+  python3 "$BOSUN_ROOT/lib/launch_record.py" fingerprint --install "$BOSUN_INSTALL" -- "${input_args[@]}"
 }
 
-# Record what this window is launched with, for an update to compare (lib/launch_record.py). The
-# arguments name the install link (BOSUN_INSTALL), so its files are read through it. A failure to
-# record never stops the launch.
-# shellcheck disable=SC2154  # as print_fingerprint
+# Record what this window is launched with, for an update to compare and to start it again the same
+# way (lib/launch_record.py). The arguments name the install link (BOSUN_INSTALL), so its files are
+# read through it. A failure to record never stops the launch.
 record_launch() {
   local commit
   commit="$(git -C "$BOSUN_ROOT" rev-parse HEAD 2>/dev/null)" || commit=unknown
-  python3 "$BOSUN_ROOT/lib/launch_record.py" record --state-dir "$BOSUN_STATE_DIR" --install "$BOSUN_INSTALL" \
-    --window "$name" --commit "${commit:-unknown}" --harness "$harness" -- "${agent_args[@]}" ||
+  python3 "$BOSUN_ROOT/lib/launch_record.py" record --state-dir "$BOSUN_STATE_DIR" --session "$BOSUN_SESSION_NAME" \
+    --window "$name" --commit "${commit:-unknown}" --harness "$harness" --dir "$PWD" \
+    --model-override="$model_override" --effort-override="$effort_override" \
+    --install "$BOSUN_INSTALL" -- "${input_args[@]}" ||
     log "warning: could not record what '$name' is launched with (lib/launch_record.py)"
 }
 

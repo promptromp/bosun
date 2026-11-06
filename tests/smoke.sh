@@ -112,7 +112,7 @@ check "every command's --help prints its usage header and no code" bash -c '
     ! grep -qE "^(set -uo|source |import )" <<<"$out" || { echo "$cmd prints code"; exit 1; }
   done' _ "$ROOT"
 check "usage errors exit 2" bash -c '
-  for args in "send" "send --bogus" "send window-only" "send --id" "send --no-item window-only" "send --new w" "send --start" "start --bogus" "launch --bogus" "launch --fingerprint alpha extra" "refresh --bogus" "refresh --update-restart" "refresh --checkin-loop alpha" "trust --bogus" "watchdog --bogus" "watchdog --only" "sessions --bogus" "learn --bogus" "learn apply" "events --bogus" "slack-watch --bogus" "review-watch --bogus" "console --bogus" "orphans --bogus"; do
+  for args in "send" "send --bogus" "send window-only" "send --id" "send --no-item window-only" "send --new w" "send --start" "start --bogus" "launch --bogus" "launch --fingerprint alpha extra" "refresh --bogus" "refresh --update-restart" "refresh --update-restart prompt alpha --unless-active" "refresh --checkin-loop alpha" "refresh --checkin-loop --unless-active" "trust --bogus" "watchdog --bogus" "watchdog --only" "sessions --bogus" "learn --bogus" "learn apply" "events --bogus" "slack-watch --bogus" "review-watch --bogus" "console --bogus" "orphans --bogus"; do
     # shellcheck disable=SC2086  # split the argument list on purpose
     "$1" $args >/dev/null 2>&1
     [ $? -eq 2 ] || { echo "bosun $args did not exit 2"; exit 1; }
@@ -188,9 +188,13 @@ check "sessions start with the default model" contains "$out" "--model opus"
 check "... and the default effort, as a session setting /effort can still change" contains "$out" 'effortLevel\":\"medium'
 check "a dry-run launch records what the window was launched with: bosun's commit and a fingerprint" bash -c '
   jq -e --arg commit "$(git -C "$2" rev-parse HEAD)" ".window == \"alpha\" and .commit == \$commit and .harness == \"claude\"
-    and (.fingerprint.args | test(\"^[0-9a-f]{64}$\")) and (.fingerprint.files | test(\"^[0-9a-f]{64}$\"))" "$1/launches/alpha.json"' _ "$BOSUN_STATE_DIR" "$ROOT"
+    and (.fingerprint.args | test(\"^[0-9a-f]{64}$\")) and (.fingerprint.files | test(\"^[0-9a-f]{64}$\"))" "$1/launches/smoke/alpha.json"' _ "$BOSUN_STATE_DIR" "$ROOT"
 check "launch --fingerprint prints the same fingerprint, from any directory" bash -c '
-  [ "$(cd / && "$1" launch --fingerprint alpha | jq -cS .)" = "$(jq -cS .fingerprint "$2/launches/alpha.json")" ]' _ "$BOSUN" "$BOSUN_STATE_DIR"
+  [ "$(cd / && "$1" launch --fingerprint alpha | jq -cS .)" = "$(jq -cS .fingerprint "$2/launches/smoke/alpha.json")" ]' _ "$BOSUN" "$BOSUN_STATE_DIR"
+resumed_fingerprint="$(jq -cS .fingerprint "$BOSUN_STATE_DIR/launches/smoke/alpha.json")"
+out="$(cd "$REPO_B" && "$BOSUN" launch alpha 2>&1)" # no conversation named alpha there: a fresh one
+check "a fresh launch records the same fingerprint as a resumed one" bash -c '
+  grep -q "starting a new one" <<<"$1" && [ "$(jq -cS .fingerprint "$2/launches/smoke/alpha.json")" = "$3" ]' _ "$out" "$BOSUN_STATE_DIR" "$resumed_fingerprint"
 printf '#!/bin/sh\ntouch "%s"\n' "$WORK/fingerprint-started-claude" >"$WORK/marker-claude"
 chmod +x "$WORK/marker-claude"
 out="$(BOSUN_LAUNCH_DRY_RUN=0 BOSUN_CLAUDE_BIN="$WORK/marker-claude" BOSUN_STATE_DIR="$WORK/fingerprint-state" "$BOSUN" launch --fingerprint alpha 2>&1)"
@@ -618,6 +622,18 @@ check "orchestrator starts with the morning chores" contains "$out" "/bosun:chor
 out="$(cd "$REPO_A" && BOSUN_ORCHESTRATOR=orch BOSUN_ORCHESTRATOR_MORNING_CHORES=0 "$BOSUN" launch orch 2>&1)"
 check "with morning chores off, today's conversation starts idle" bash -c '! grep -qF "/bosun:chores\ morning" <<<"$1" && grep -q -- "--name orch-" <<<"$1"' _ "$out"
 check "orchestrator never skips permissions" bash -c '! grep -q dangerously <<<"$1"' _ "$out"
+# FAKE_TODAY moves `date +%F`, so the orchestrator's conversation name, to another day.
+mkdir -p "$HOME/.local/bin"
+cat >"$HOME/.local/bin/date" <<'SH'
+#!/bin/sh
+if [ -n "${FAKE_TODAY:-}" ] && [ "$1" = "+%F" ]; then echo "$FAKE_TODAY"; exit 0; fi
+exec /bin/date "$@"
+SH
+chmod +x "$HOME/.local/bin/date"
+orch_fingerprint_today() { (cd "$REPO_A" && BOSUN_ORCHESTRATOR=orch BOSUN_ORCHESTRATOR_DIR="$REPO_A" "$BOSUN" launch --fingerprint orch); }
+check "the orchestrator's next day is a conversation of its own" contains "$(cd "$REPO_A" && FAKE_TODAY=2026-01-02 BOSUN_ORCHESTRATOR=orch "$BOSUN" launch orch 2>&1)" "--name orch-2026-01-02 "
+check "... and no launch input: its fingerprint stays the same across the date change" bash -c '[ -n "$1" ] && [ "$1" = "$2" ]' _ "$(orch_fingerprint_today)" "$(FAKE_TODAY=2026-01-02 orch_fingerprint_today)"
+rm -f "$HOME/.local/bin/date"
 echo "Site rule: be brief." >"$BOSUN_CONFIG_DIR/policy.md"
 check "a site policy.md is appended to the orchestrator policy" contains "$(cd "$REPO_A" && BOSUN_ORCHESTRATOR=orch "$BOSUN" launch orch 2>&1)" "Site rule: be brief."
 rm "$BOSUN_CONFIG_DIR/policy.md"
@@ -919,6 +935,32 @@ check "... and starting it with the update's prompt instead of the drain prompt"
 gamma_pid="$(fake_claude gamma shell 2.0.0 5)"
 check "... and one in shell (only background work runs)" update_restart gamma
 check "... stopping it too" wait_for 10 bash -c '! kill -0 "$1" 2>/dev/null' _ "$gamma_pid"
+pane_of() { tmux -L "$SOCKET" display -p -t "=smoke:$1" '#{pane_pid}'; }
+# <window> [old pane pid]: a launch with the update's prompt ran in the window (in a new pane process;
+# respawn-pane starts the pane's screen and history afresh).
+launched_with_update_prompt() {
+  [ "$(pane_of "$1")" != "${2:-}" ] &&
+    tmux -L "$SOCKET" capture-pane -p -J -S -500 -t "=smoke:$1" | grep -qF -e '-- bosun-was-updated:check-in'
+}
+wait_for 10 launched_with_update_prompt gamma
+gamma_pane="$(pane_of gamma)"
+check "... relaunches one whose agent is not running, with the update's prompt" update_restart gamma
+check "... (it runs launch again)" wait_for 10 launched_with_update_prompt gamma "$gamma_pane"
+tmux -L "$SOCKET" kill-window -t "=smoke:gamma"
+check "... and creates a missing one, with that prompt" contains "$(update_restart gamma 2>&1)" "gamma: create the missing window"
+check "... (its launch has it)" wait_for 10 launched_with_update_prompt gamma
+cat >"$WORK/typing-claude.sh" <<'SH'
+printf '%s\n\342\235\257 half a prompt\n%s\n' "────────────────────" "────────────────────"
+exec sleep 600
+SH
+wait_for 10 bash -c '[ -z "$(pgrep -P "$(tmux -L "$1" display -p -t =smoke:gamma "#{pane_pid}")")" ]' _ "$SOCKET"
+tmux -L "$SOCKET" send-keys -t "=smoke:gamma" "bash $WORK/typing-claude.sh" Enter
+wait_for 5 pgrep -P "$(tmux -L "$SOCKET" display -p -t =smoke:gamma '#{pane_pid}')" -x sleep
+gamma_pid="$(pgrep -P "$(tmux -L "$SOCKET" display -p -t =smoke:gamma '#{pane_pid}')" -x sleep)"
+gamma_record idle 3600
+check "... and leaves one whose input box holds unsent text, as send would wait (exit 3)" bash -c '
+  out="$("$1" refresh --update-restart "$2" gamma 2>&1)"
+  [ $? -eq 3 ] && grep -q "its input line holds unsent text (half a prompt)" <<<"$out" && kill -0 "$3"' _ "$BOSUN" "$WORK/update-prompt" "$gamma_pid"
 "$BOSUN" stop >/dev/null 2>&1
 
 echo "restarts leave no shells behind (zsh with a prompt helper in its startup file)"
@@ -1029,11 +1071,28 @@ check "refresh --checkin-loop restarts the check-in loop" contains "$("$BOSUN" r
 check "... stopping the old one" wait_for 10 bash -c '[ -n "$1" ] && ! kill -0 "$1" 2>/dev/null' _ "$loop_before"
 check "... and running a new one in the same window" wait_for 10 new_checkin_loop "$loop_before"
 check "... and says so when there is no checkin window to restart" fails_with "no checkin window" env BOSUN_CHECKIN_MINUTES=0 "$BOSUN" refresh --checkin-loop
+tmux -L "$SOCKET" new-window -d -t "=smoke:" -n loop-itself -- perl -e '$0 = "/bin/bash /x/libexec/bosun-checkin --loop"; sleep 60'
+loop_pane="$(tmux -L "$SOCKET" display -p -t "=smoke:loop-itself" '#{pane_pid}')"
+check "a check-in loop that is the pane's own process is found too (the watchdog looks for it)" bash -c '
+  [ "$(source "$1/lib/common.sh"; checkin_loop_pid "$2")" = "$2" ]' _ "$ROOT" "$loop_pane"
+tmux -L "$SOCKET" kill-window -t "=smoke:loop-itself"
 orch_pid="$(fake_claude orch idle 2.0.0 3600 orch-2000-01-01)"
 out="$("$BOSUN" refresh --dry-run orch 2>&1)"
 check "orchestrator restarts on a new day" contains "$out" "orch: would restart (new day: orch-2000-01-01 -> orch-$(date +%F)"
 check "... even with --drain-only" contains "$("$BOSUN" refresh --dry-run --drain-only orch 2>&1)" "orch: would restart (new day"
 check "checkin starts today's conversation instead of checking in on yesterday's" contains "$("$BOSUN" checkin --dry-run 2>&1)" "would start today's conversation"
+launched_with_morning_chores() { # <old pane pid>: the orchestrator's window runs a new launch, of today's morning chores
+  local screen
+  [ "$(tmux -L "$SOCKET" display -p -t "=smoke:orch" '#{pane_pid}')" != "$1" ] || return 1
+  screen="$(tmux -L "$SOCKET" capture-pane -p -J -S -500 -t "=smoke:orch")"
+  grep -qF -e "--name orch-$(date +%F) " <<<"$screen" && grep -qF -e '-- /bosun:chores\ morning' <<<"$screen"
+}
+orch_pane="$(tmux -L "$SOCKET" display -p -t "=smoke:orch" '#{pane_pid}')"
+check "refresh --update-restart restarts an orchestrator still on yesterday's conversation as a new day does" contains "$(update_restart orch 2>&1)" "orch: restart for the update (idle), into orch-$(date +%F), as its next conversation starts"
+check "... starting today's with the morning chores" wait_for 10 launched_with_morning_chores "$orch_pane"
+check "... not with the update's prompt" bash -c '! tmux -L "$1" capture-pane -p -J -S -500 -t "=smoke:orch" | grep -q bosun-was-updated' _ "$SOCKET"
+wait_for 10 bash -c '[ -z "$(pgrep -P "$(tmux -L "$1" display -p -t =smoke:orch "#{pane_pid}")")" ]' _ "$SOCKET"
+orch_pid="$(fake_claude orch idle 2.0.0 3600 orch-2000-01-01)"
 printf '{"pid":%d,"status":"idle","version":"2.0.0","statusUpdatedAt":%d,"name":"orch-2000-01-01"}' "$orch_pid" $((($(date +%s) - 30) * 1000)) >"$HOME/.claude/sessions/$orch_pid.json"
 out="$("$BOSUN" refresh --dry-run orch 2>&1)"
 check "a deferred new-day restart sends no drain prompt into yesterday's conversation" bash -c 'grep -q "still on yesterday" <<<"$1" && ! grep -q "drain prompt" <<<"$1"' _ "$out"
@@ -1411,6 +1470,19 @@ check "... but keeps real environment overrides" grep -qx BOSUN_CONFIG_DIR "$WOR
 L upsert 'slack:C8/1' --kind mention >/dev/null
 out="$(live --new --model haiku --effort low zeta "$REPO_A" "start low" 2>&1)"
 check "send --new --model/--effort start the window with them" bash -c 'grep -qx -- "--model" "$1" && grep -qx haiku "$1" && grep -q "\"effortLevel\":\"low\"" "$1"' _ "$WORK/live-claude.$(claude_in zeta).args"
+check "... and its launch records them, with its directory (it is in no window list)" bash -c '
+  jq -e --arg dir "$2" ".dir == \$dir and .model_override == \"haiku\" and .effort_override == \"low\"" "$1/launches/smoke/zeta.json"' _ "$BOSUN_STATE_DIR" "$REPO_A"
+check "... so it fingerprints the same while nothing changed, from any directory" bash -c '
+  [ "$(cd / && "$1" launch --fingerprint zeta | jq -cS .)" = "$(jq -cS .fingerprint "$2/launches/smoke/zeta.json")" ]' _ "$BOSUN" "$BOSUN_STATE_DIR"
+zeta_pid="$(claude_in zeta)"
+another_claude_in() { # <window> <old pid>: a fake Claude other than that one runs in the window
+  local pid
+  pid="$(claude_in "$1")" && [ -n "$pid" ] && [ "$pid" != "$2" ]
+}
+check "... and an update's restart of it" env BOSUN_LAUNCH_DRY_RUN=0 "$BOSUN" refresh --update-restart "$WORK/update-prompt" zeta
+check "... starts it again" wait_for 15 another_claude_in zeta "$zeta_pid"
+check "... keeping its --model and --effort, with the update's prompt" bash -c '
+  grep -qx haiku "$1.args" && grep -q "\"effortLevel\":\"low\"" "$1.args" && [ "$(cat "$1.prompt")" = bosun-was-updated:check-in ]' _ "$WORK/live-claude.$(claude_in zeta)"
 check "delegate --window delivers through send" contains "$("$BOSUN" delegate investigate --id slack:C8/1 --ask 'look into it' --window delta 2>&1)" "delivered to smoke:delta"
 check "the prompt file is removed once read" bash -c '[ -z "$(ls -A "$1")" ]' _ "$BOSUN_STATE_DIR/prompts"
 check "--new refuses an existing window" fails_with "already exists" live --new delta "$REPO_A" again

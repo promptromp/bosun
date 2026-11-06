@@ -37,11 +37,22 @@
 #   --update-restart <prompt-file> <window>
 #                    restart <window> now, whatever its version, if its turn is over: idle, or
 #                    "shell" (only background work runs), resuming its conversation with the prompt
-#                    in <prompt-file> instead of the drain prompt. Never while it is busy or waiting
-#                    for you: it is left running and refresh exits 3, so the caller can try again.
-#                    A window whose agent is not running is relaunched with that prompt.
+#                    in <prompt-file> instead of the drain prompt. Never while it is busy, waiting
+#                    for you, or someone is typing there (send's check: typed within
+#                    BOSUN_SEND_TYPING_MINUTES, or unsent text in its input box): it is left running
+#                    and refresh exits 3, so the caller can try again. A window whose next launch
+#                    takes up another conversation starts that one as it would have: the
+#                    orchestrator still on yesterday's starts today's as a new day does (the morning
+#                    chores), a repo window with a fresh conversation pending starts it with the
+#                    fresh conversation's prompt. A window whose agent is not running is relaunched
+#                    with the prompt, a missing one created. A window outside the window list (opened
+#                    by `send --new`) restarts in the directory, and with the --model / --effort, its
+#                    last launch recorded (else in the pane's directory).
 #   --checkin-loop   restart the check-in loop in the checkin window (a long-running script keeps
-#                    the code it started with): stop it, and start it again in the same window
+#                    the code it started with): stop it, and start it again in the same window.
+#                    It stops the loop at once, even in the middle of a tick, so call it while an
+#                    update holds bosun's background work, and never from anything the loop runs.
+# Neither goes with another mode, --unless-active included (an update picks its own moment).
 set -uo pipefail
 source "$(dirname "$0")/../lib/common.sh"
 load_config
@@ -59,7 +70,10 @@ CHECKIN_LOOP=0
 UPDATE_RESTART=0
 UPDATE_PROMPT_FILE=""
 UPDATE_PROMPT="" # --update-restart's prompt; empty for every other refresh
-left_running=0   # set when a restart left an agent running: busy, or waiting for you
+UPDATE_DIR=""    # --update-restart of a window outside the window list: the directory, --model and
+UPDATE_MODEL=""  # --effort its last launch recorded, which its restart keeps
+UPDATE_EFFORT=""
+left_running=0 # set when a restart left an agent running: busy, or waiting for you
 windows=()
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -86,11 +100,11 @@ done
 # --update-restart and --checkin-loop each act on one window, alone; reads the update's prompt.
 check_update_modes() {
   if [ "$CHECKIN_LOOP" = "1" ]; then
-    [ "${#windows[@]}$UPDATE_RESTART$DRAIN_ONLY$RESTART_IDLE" = "0000" ] || die_usage "--checkin-loop takes no window and no other mode"
+    [ "${#windows[@]}$UPDATE_RESTART$DRAIN_ONLY$RESTART_IDLE$UNLESS_ACTIVE" = "00000" ] || die_usage "--checkin-loop takes no window and no other mode"
   fi
   [ "$UPDATE_RESTART" = "1" ] || return 0
   [ -n "$UPDATE_PROMPT_FILE" ] && [ "${#windows[@]}" -eq 1 ] || die_usage "--update-restart takes a prompt file and one window"
-  [ "$DRAIN_ONLY$RESTART_IDLE" = "00" ] || die_usage "--update-restart goes with no --drain-only or --restart-idle"
+  [ "$DRAIN_ONLY$RESTART_IDLE$UNLESS_ACTIVE" = "000" ] || die_usage "--update-restart goes with no other mode"
   [ -f "$UPDATE_PROMPT_FILE" ] || die "no prompt file $UPDATE_PROMPT_FILE"
   UPDATE_PROMPT="$(cat "$UPDATE_PROMPT_FILE")"
   [ -n "$UPDATE_PROMPT" ] || die "prompt file $UPDATE_PROMPT_FILE is empty"
@@ -116,7 +130,7 @@ act() { # <window> <action description> <command...>
 }
 
 create_and_launch() { # <name> <dir> [kind] [prompt]
-  build_launch_command "$1" "${4:-}" "${3:-}"
+  build_launch_command "$1" "${4:-}" "${3:-}" "$UPDATE_MODEL" "$UPDATE_EFFORT"
   tmux_cmd new-window -d -t "=$SESSION:" -n "$1" -c "$2" "${launch_cmd[@]}"
 }
 
@@ -151,8 +165,11 @@ stop_process() { # <name> <pid> <what it is>
 
 # Whether an agent in <status> may be stopped for a restart: idle; for an update also "shell".
 may_restart() { # <status>
-  [ "$1" = "idle" ] || { [ -n "$UPDATE_PROMPT" ] && [ "$1" = "shell" ]; }
+  [ "$1" = "idle" ] || { [ "$UPDATE_RESTART" = "1" ] && [ "$1" = "shell" ]; }
 }
+
+# The name of the agent running as <agent_pid>, for messages.
+agent_name_of() { agent_display_name "$(agent_session_field "$1" harness)" 2>/dev/null || echo "the agent"; }
 
 restart_in() { # <window_id> <dir> <name> <agent_pid> [prompt]
   local window_id="$1" name="$3" pid="$4"
@@ -161,11 +178,11 @@ restart_in() { # <window_id> <dir> <name> <agent_pid> [prompt]
     left_running=1
     return 0
   fi
-  stop_process "$name" "$pid" Claude || return 1
+  stop_process "$name" "$pid" "$(agent_name_of "$pid")" || return 1
   if [ -n "${5:-}" ]; then
-    relaunch_in_window "$window_id" "$name" "$5" "$2"
+    relaunch_in_window "$window_id" "$name" "$5" "$2" "" "" "$UPDATE_MODEL" "$UPDATE_EFFORT"
   else
-    relaunch_in_window "$window_id" "$name" "" "$2" "$(launch_mode "$name")"
+    relaunch_in_window "$window_id" "$name" "" "$2" "$(launch_mode "$name")" "" "$UPDATE_MODEL" "$UPDATE_EFFORT"
   fi
 }
 
@@ -200,6 +217,15 @@ maybe_fresh_conversation() { # <name> <dir> <window_id> <agent_pid> <status> <id
     return 1
   fi
   act "$1" "start a fresh conversation ($why)" start_fresh_conversation "$3" "$2" "$1" "$4"
+}
+
+# Whether the agent in window <name> runs another conversation than the one its next launch takes up:
+# the orchestrator's yesterday's, or a repo window's from before the fresh one refresh named for it.
+# An agent whose conversation's name is unknown runs the one it runs.
+on_another_conversation() { # <name> <agent_pid>
+  local running
+  running="$(agent_session_field "$2" name)"
+  [ -n "$running" ] && [ "$running" != "$(expected_session_name "$1")" ]
 }
 
 # Whether the orchestrator in window <name> is still on yesterday's conversation.
@@ -265,17 +291,41 @@ refresh_agent() { # <name> <dir> <window_id> <agent_pid> <want_model> <want_effo
   act "$name" "send the drain prompt (${status:-unknown status}, v$version)" "$BOSUN" send "$name" "$BOSUN_DRAIN_PROMPT"
 }
 
-# --update-restart: restart the agent in window <name> now, with the update's prompt, if its turn is
-# over (idle, or "shell"); otherwise leave it running, for the caller to try again.
+# Prints why an update must leave the agent in window <window_id>, in <status>, running for now, or
+# fails if it may restart it: its turn is not over (busy, or a prompt waits for you), or someone is
+# typing there (paste_blocker, the check `send` makes).
+update_blocker() { # <window_id> <status>
+  if ! agent_turn_over "$2"; then
+    echo "${2:-unknown status}"
+    return 0
+  fi
+  paste_blocker "$1"
+}
+
+# The prompt an update's restart starts window <name> with. When its next launch takes up another
+# conversation than the one running, that one starts as it would have: the orchestrator still on
+# yesterday's starts today's as a new day does (no prompt: launch starts the morning chores), a repo
+# window with a fresh conversation pending starts it with FRESH_PROMPT. Otherwise the update's prompt.
+update_restart_prompt() { # <name> <agent_pid>
+  if ! on_another_conversation "$1" "$2"; then
+    printf '%s' "$UPDATE_PROMPT"
+  elif ! is_orchestrator "$1"; then
+    printf '%s' "$FRESH_PROMPT"
+  fi
+}
+
+# --update-restart: restart the agent in window <name> now if nothing holds it (update_blocker),
+# otherwise leave it running, for the caller to try again.
 update_restart_agent() { # <name> <dir> <window_id> <agent_pid>
-  local status
+  local status why start="with the update's prompt"
   status="$(agent_session_field "$4" status)"
-  if ! agent_turn_over "$status"; then
-    log "$1: ${status:-unknown status}; left running (an update restarts it only when idle or in shell)"
+  if why="$(update_blocker "$3" "$status")"; then
+    log "$1: $why; left running (an update restarts a window only when idle or in shell, and nobody is typing there)"
     left_running=1
     return 0
   fi
-  act "$1" "restart for the update ($status)" restart_in "$3" "$2" "$1" "$4" "$UPDATE_PROMPT"
+  on_another_conversation "$1" "$4" && start="into $(expected_session_name "$1"), as its next conversation starts"
+  act "$1" "restart for the update ($status), $start" restart_in "$3" "$2" "$1" "$4" "$(update_restart_prompt "$1" "$4")"
 }
 
 # A window's start gets UPDATE_PROMPT: the update's prompt with --update-restart, else none (launch
@@ -299,18 +349,35 @@ refresh_window() { # <name> <dir> <kind> <model> <effort>
   fi
 }
 
+# A window outside the window list (opened by `send --new`): sets UPDATE_DIR, UPDATE_MODEL and
+# UPDATE_EFFORT to the directory (empty: the pane's), --model and --effort its last launch recorded.
+# Fails unless the window is open.
+use_recorded_launch() { # <name>
+  local window_id record
+  read -r _ window_id <<<"$(find_window "$1")"
+  [ -n "${window_id:-}" ] || return 1
+  record="$(launch_recorded "$1")" || return 0
+  UPDATE_DIR="$(jq -r '.dir' <<<"$record")"
+  UPDATE_MODEL="$(jq -r '.model_override' <<<"$record")"
+  UPDATE_EFFORT="$(jq -r '.effort_override' <<<"$record")"
+}
+
 # --update-restart <prompt-file> <name>: window <name> as refresh_window brings it along, with the
 # update's prompt. Returns LEFT_RUNNING when it left the agent running.
 update_restart() { # <name>
   local name dir kind
   IFS=$'\t' read -r name dir kind _ <<<"$(window_specs | awk -F'\t' -v name="$1" '$1 == name')"
-  [ -n "$name" ] || die "no window '$1' in the window list"
+  if [ -z "$name" ]; then
+    use_recorded_launch "$1" || die "no window '$1' in the window list, nor open in the session"
+    name="$1" kind=session dir="$UPDATE_DIR"
+  fi
   [ "$kind" != "checkin" ] || die_usage "the checkin window runs the check-in loop: use --checkin-loop"
   refresh_window "$name" "$dir" "$kind" "" "" || return 1
   [ "$left_running" = "0" ] || return "$LEFT_RUNNING"
 }
 
-# Stop the check-in loop in window <window_id>, if it runs, and start it again there.
+# Stop the check-in loop in window <window_id>, if it runs, and start it again there. It stops at once,
+# even in the middle of a tick, so only while an update holds bosun's background work.
 restart_loop_in() { # <window_id> <dir> <loop pid, or empty>
   if [ -n "$3" ]; then stop_process checkin "$3" "the check-in loop" || return 1; fi
   relaunch_in_window "$1" checkin "" "$2" "" checkin

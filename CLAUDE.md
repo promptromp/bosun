@@ -15,8 +15,11 @@ of truth, so don't copy rules into this file.
 - Updating (design: `docs/design/update.md`): `lib/versions.py` (version folders, the link switched in
   one rename, pruning), `lib/update_state.py` (the update's record and lock, the hold),
   `lib/update_backups.py` (backups, restore, pruning, deleted by a forget), `lib/update_gate.py` (the
-  write gate and `guarded`) and `lib/migrations.py` (the one registry of the stores' format
-  migrations, and the config's renamed keys).
+  write gate and `guarded`), `lib/migrations.py` (the one registry of the stores' format
+  migrations, and the config's renamed keys) and `lib/launch_record.py` (what each window was
+  launched with, per session: the fingerprint an update compares after the switch, and the directory
+  and overrides its restart keeps; `bosun launch` writes it, `launch --fingerprint` and `refresh
+  --update-restart` use it).
 - `lib/common.sh`: config defaults (`load_config`) and shared helpers: the window list
   (`window_specs`: orchestrator, sessions.yml entries, checkin), tmux, the one
   launch path (`build_launch_command`, used by `start`, `refresh` and `send`), and the launchd

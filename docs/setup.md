@@ -185,9 +185,10 @@ State and logs go to `~/.local/state/bosun/`:
 - `signals/`: what Claude Code's hooks reported per window ([Signals](design/signals.md))
 - `conversations/`: a repo window's current conversation, once refresh started a fresh one
 - `prompts/`: the first prompt of each window start, passed to its launch as a file
-- `launches/`: what each window was last launched with (`bosun launch`): bosun's commit and a
-  fingerprint of the agent's arguments and the files they name, so an update can tell which windows
-  need a restart
+- `launches/<session>/<window>.json`: what each window was last launched with (`bosun launch`):
+  bosun's commit, its directory and any `--model` / `--effort` it was given, and a fingerprint of the
+  agent's arguments and the files they name, so an update can tell which windows need a restart and
+  start them again the same way
 - `console/token`: the console's access token
 - `impact/`: the Impact snapshot (`bosun impact collect`)
 - `alerts/`: the last Slack alert's result, with Slack alerts on

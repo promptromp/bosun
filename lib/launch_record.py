@@ -1,15 +1,20 @@
 """What each window was launched with (docs/design/update.md, "Bringing the agents along").
 
-`bosun launch` records, in $BOSUN_STATE_DIR/launches/<window>.json, the commit of the bosun it ran
-from and a fingerprint of what it handed the agent; `bosun launch --fingerprint <window>` prints the
-fingerprint it would hand it now. Where the two differ, a session runs with launch inputs an update
-changed (its settings, its hooks, the launch command, the plugin), and only a restart gives it the
-new ones. Everything else it uses (a bosun command, a hook's code) runs from the install link, which
-an update switches.
+`bosun launch` records, in $BOSUN_STATE_DIR/launches/<session>/<window>.json (a tmux session of its
+own, such as wake-test's, keeps records of its own), the commit of the bosun it ran from, the agent,
+a fingerprint of what it handed the agent, and what starts the window the same way again: its
+directory, and the --model or --effort launch was given ("" for none; a window `send --new` opened
+keeps them). `bosun launch --fingerprint <window>` prints the fingerprint it would hand it now. Where
+the two differ, a session runs with launch inputs an update changed (its settings, its hooks, the
+launch command, the plugin), and only a restart gives it the new ones. Everything else it uses (a
+bosun command, a hook's code) runs from the install link, which an update switches; so the two are
+compared after the switch.
 
 The fingerprint has two parts:
-- `args`: the agent's arguments (`build_agent_args`), with the text after `--append-system-prompt`
-  left out: the orchestrator's policy, which a running session is asked to re-read instead;
+- `args`: the agent's arguments, as `build_agent_args` makes them for the conversation name
+  `<conversation>` (a new day's or a fresh conversation's name is no launch input), with the text
+  after `--append-system-prompt` left out: the orchestrator's policy, which a running session is
+  asked to re-read instead;
 - `files`: the content of every file under an argument that is a path inside the install (the
   plugin folder, a settings file), read through that path, as the agent reads it. So the plugin's
   `chores.md` is a launch input, and `policy.md`, whose text goes in as an argument, is not.
@@ -18,12 +23,14 @@ The fingerprint has two parts:
 from __future__ import annotations
 
 import argparse
+import dataclasses
 import hashlib
 import json
 import os
 import sys
 import tempfile
-from collections.abc import Mapping, Sequence
+from collections.abc import Sequence
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -67,15 +74,31 @@ def fingerprint(args: Sequence[str], install: Path) -> dict[str, str]:
     return {"args": _digest(launch_args(args)), "files": _digest(files)}
 
 
-def _record_path(state_dir: Path, window: str) -> Path:
-    return state_dir / LAUNCHES_DIR / f"{window.replace('/', '_')}.json"
+@dataclass(frozen=True)
+class Launch:
+    """What a window was launched with, and what starts it the same way again."""
+
+    commit: str  # bosun's, or "unknown"
+    harness: str
+    fingerprint: dict[str, str]
+    dir: str
+    model_override: str = ""  # the --model launch was given; "" for none
+    effort_override: str = ""
 
 
-def record(state_dir: Path, window: str, commit: str, harness: str, fp: Mapping[str, str]) -> None:
+def _file_name(name: str) -> str:
+    return name.replace("/", "_")
+
+
+def record_path(state_dir: Path, session: str, window: str) -> Path:
+    return state_dir / LAUNCHES_DIR / _file_name(session) / f"{_file_name(window)}.json"
+
+
+def record(state_dir: Path, session: str, window: str, launch: Launch) -> None:
     """Record <window>'s launch, replacing its last one: written beside, then renamed over it."""
-    path = _record_path(state_dir, window)
+    path = record_path(state_dir, session, window)
     path.parent.mkdir(parents=True, exist_ok=True)
-    data = {"window": window, "commit": commit, "harness": harness, "fingerprint": dict(fp)}
+    data = {"session": session, "window": window, **dataclasses.asdict(launch)}
     fd, tmp = tempfile.mkstemp(dir=path.parent, prefix=f".{path.name}.", suffix=".tmp")
     try:
         with os.fdopen(fd, "w") as fh:
@@ -86,10 +109,10 @@ def record(state_dir: Path, window: str, commit: str, harness: str, fp: Mapping[
         raise
 
 
-def recorded(state_dir: Path, window: str) -> dict[str, Any] | None:
+def recorded(state_dir: Path, session: str, window: str) -> dict[str, Any] | None:
     """<window>'s last launch as recorded; None if it has none, or none that can be read."""
     try:
-        data = json.loads(_record_path(state_dir, window).read_text())
+        data = json.loads(record_path(state_dir, session, window).read_text())
     except (OSError, ValueError):
         return None
     return data if isinstance(data, dict) else None
@@ -100,10 +123,16 @@ def build_parser() -> argparse.ArgumentParser:
     commands = parser.add_subparsers(dest="command", required=True)
     print_it = commands.add_parser("fingerprint", help="print the fingerprint of <args> as JSON")
     write_it = commands.add_parser("record", help="record a window's launch with <args>")
-    write_it.add_argument("--state-dir", type=Path, required=True)
-    write_it.add_argument("--window", required=True)
+    show_it = commands.add_parser("show", help="print a window's record as JSON; exit 1 if it has none")
+    for sub in (write_it, show_it):
+        sub.add_argument("--state-dir", type=Path, required=True)
+        sub.add_argument("--session", required=True)
+        sub.add_argument("--window", required=True)
     write_it.add_argument("--commit", required=True)
     write_it.add_argument("--harness", required=True)
+    write_it.add_argument("--dir", required=True)
+    write_it.add_argument("--model-override", default="")
+    write_it.add_argument("--effort-override", default="")
     for sub in (print_it, write_it):
         sub.add_argument("--install", type=Path, required=True)
         sub.add_argument("args", nargs="*", help="the agent's arguments, after --")
@@ -112,11 +141,18 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main(argv: list[str]) -> int:
     args = build_parser().parse_args(argv)
+    if args.command == "show":
+        shown = recorded(args.state_dir, args.session, args.window)
+        if shown is None:
+            return 1
+        print(json.dumps(shown, sort_keys=True))
+        return 0
     fp = fingerprint(args.args, args.install)
     if args.command == "fingerprint":
         print(json.dumps(fp, sort_keys=True))
-    else:
-        record(args.state_dir, args.window, args.commit, args.harness, fp)
+        return 0
+    launch = Launch(args.commit, args.harness, fp, args.dir, args.model_override, args.effort_override)
+    record(args.state_dir, args.session, args.window, launch)
     return 0
 
 
