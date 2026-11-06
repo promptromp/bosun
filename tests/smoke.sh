@@ -112,7 +112,7 @@ check "every command's --help prints its usage header and no code" bash -c '
     ! grep -qE "^(set -uo|source |import )" <<<"$out" || { echo "$cmd prints code"; exit 1; }
   done' _ "$ROOT"
 check "usage errors exit 2" bash -c '
-  for args in "send" "send --bogus" "send window-only" "send --id" "send --no-item window-only" "send --new w" "send --start" "start --bogus" "launch --bogus" "refresh --bogus" "trust --bogus" "watchdog --bogus" "watchdog --only" "sessions --bogus" "learn --bogus" "learn apply" "events --bogus" "slack-watch --bogus" "review-watch --bogus" "console --bogus" "orphans --bogus"; do
+  for args in "send" "send --bogus" "send window-only" "send --id" "send --no-item window-only" "send --new w" "send --start" "start --bogus" "launch --bogus" "launch --fingerprint alpha extra" "refresh --bogus" "refresh --update-restart" "refresh --checkin-loop alpha" "trust --bogus" "watchdog --bogus" "watchdog --only" "sessions --bogus" "learn --bogus" "learn apply" "events --bogus" "slack-watch --bogus" "review-watch --bogus" "console --bogus" "orphans --bogus"; do
     # shellcheck disable=SC2086  # split the argument list on purpose
     "$1" $args >/dev/null 2>&1
     [ $? -eq 2 ] || { echo "bosun $args did not exit 2"; exit 1; }
@@ -186,6 +186,15 @@ check "resumes by UUID with name, remote control and drain prompt" contains "$ou
 check "the prompt follows --, so a leading dash is not an option" contains "$out" "--resume 11111111-0000-0000-0000-000000000002 -- Bosun\\ resumed"
 check "sessions start with the default model" contains "$out" "--model opus"
 check "... and the default effort, as a session setting /effort can still change" contains "$out" 'effortLevel\":\"medium'
+check "a dry-run launch records what the window was launched with: bosun's commit and a fingerprint" bash -c '
+  jq -e --arg commit "$(git -C "$2" rev-parse HEAD)" ".window == \"alpha\" and .commit == \$commit and .harness == \"claude\"
+    and (.fingerprint.args | test(\"^[0-9a-f]{64}$\")) and (.fingerprint.files | test(\"^[0-9a-f]{64}$\"))" "$1/launches/alpha.json"' _ "$BOSUN_STATE_DIR" "$ROOT"
+check "launch --fingerprint prints the same fingerprint, from any directory" bash -c '
+  [ "$(cd / && "$1" launch --fingerprint alpha | jq -cS .)" = "$(jq -cS .fingerprint "$2/launches/alpha.json")" ]' _ "$BOSUN" "$BOSUN_STATE_DIR"
+printf '#!/bin/sh\ntouch "%s"\n' "$WORK/fingerprint-started-claude" >"$WORK/marker-claude"
+chmod +x "$WORK/marker-claude"
+out="$(BOSUN_LAUNCH_DRY_RUN=0 BOSUN_CLAUDE_BIN="$WORK/marker-claude" BOSUN_STATE_DIR="$WORK/fingerprint-state" "$BOSUN" launch --fingerprint alpha 2>&1)"
+check "... and starts nothing, records nothing" bash -c '[ ! -e "$1/fingerprint-started-claude" ] && [ ! -e "$1/fingerprint-state/launches" ] && jq -e .args <<<"$2"' _ "$WORK" "$out"
 out="$(cd "$REPO_B" && "$BOSUN" launch gamma 2>&1)"
 check "a sessions.yml entry overrides model and effort" bash -c 'grep -q -- "--model sonnet" <<<"$1" && grep -q "effortLevel\\\\\":\\\\\"high" <<<"$1"' _ "$out"
 out="$(cd "$REPO_B" && "$BOSUN" launch --model haiku --effort low gamma 2>&1)"
@@ -308,6 +317,12 @@ check "... never its own folder" not_contains "$out" "bosun-versions/"
 out="$(cd "$REPO_A" && "$V1/bin/bosun" launch alpha 2>&1)"
 check "a version's repo window launch names the link in its hooks" contains "$out" "$LINK/bin/bosun"
 check "... never its own folder" not_contains "$out" "bosun-versions/"
+orch_fingerprint() { (cd "$REPO_A" && BOSUN_ORCHESTRATOR=orch BOSUN_ORCHESTRATOR_DIR="$REPO_A" "$V1/bin/bosun" launch --fingerprint orch); }
+fingerprint_before="$(orch_fingerprint)"
+echo "A rule added to the policy." >>"$V1/orchestrator/policy.md"
+check "the orchestrator's policy text is no launch input (it is re-read, not restarted for)" bash -c '[ -n "$1" ] && [ "$1" = "$2" ]' _ "$fingerprint_before" "$(orch_fingerprint)"
+echo "A step added to the chores." >>"$V1/orchestrator/plugin/commands/chores.md"
+check "... its plugin's chores.md is, read through the link" bash -c '[ "$(jq -r .files <<<"$1")" != "$(jq -r .files <<<"$2")" ]' _ "$(orch_fingerprint)" "$fingerprint_before"
 plists="$(bash -c 'source "$1/lib/common.sh"; load_config; render_launchd_plist com.example.test 08:00 MTWRF ""; render_watchdog_plist; render_learn_plist' _ "$V1")"
 check "a version's plists run the link" contains "$plists" "$LINK/"
 check "... never its own folder" not_contains "$plists" "bosun-versions/"
@@ -889,6 +904,21 @@ tmux -L "$SOCKET" split-window -d -t "=smoke:alpha" "sleep 600"
 check "refresh refuses to relaunch into a split window and fails" bash -c '! "$1" refresh alpha >"$2" 2>&1 && grep -q "split into several panes" "$2"' _ "$BOSUN" "$WORK/split.out"
 check "... and the other pane keeps running" bash -c 'tmux -L "$1" list-panes -t =smoke:alpha -F "#{pane_current_command}" | grep -qx sleep' _ "$SOCKET"
 check "refresh fails without a manifest" bash -c '! BOSUN_SESSIONS_FILE=/nonexistent "$1" refresh 2>/dev/null' _ "$BOSUN"
+echo "bosun-was-updated:check-in" >"$WORK/update-prompt"
+update_restart() { "$BOSUN" refresh --update-restart "$WORK/update-prompt" "$@"; }
+check "refresh --update-restart refuses a window not in the window list" fails_with "no window 'nope' in the window list" update_restart nope
+check "... leaves a window waiting for you running, and exits 3" bash -c '"$1" refresh --update-restart "$2" gamma >/dev/null 2>&1; [ $? -eq 3 ] && kill -0 "$3"' _ "$BOSUN" "$WORK/update-prompt" "$gamma_pid"
+gamma_record busy 3600
+check "... and a busy one" bash -c '"$1" refresh --update-restart "$2" gamma >/dev/null 2>&1; [ $? -eq 3 ] && kill -0 "$3"' _ "$BOSUN" "$WORK/update-prompt" "$gamma_pid"
+gamma_record idle 5
+check "... restarts an idle one at once, however briefly idle" update_restart gamma
+check "... stopping the old process" wait_for 10 bash -c '! kill -0 "$1" 2>/dev/null' _ "$gamma_pid"
+check "... and starting it with the update's prompt instead of the drain prompt" wait_for 10 bash -c '
+  screen="$(tmux -L "$1" capture-pane -p -J -S -200 -t "=smoke:gamma")" &&
+    grep -q "dry-run: would run: .* -- bosun-was-updated:check-in" <<<"$screen" && ! grep -q "Bosun\\\\ resumed" <<<"$screen"' _ "$SOCKET"
+gamma_pid="$(fake_claude gamma shell 2.0.0 5)"
+check "... and one in shell (only background work runs)" update_restart gamma
+check "... stopping it too" wait_for 10 bash -c '! kill -0 "$1" 2>/dev/null' _ "$gamma_pid"
 "$BOSUN" stop >/dev/null 2>&1
 
 echo "restarts leave no shells behind (zsh with a prompt helper in its startup file)"
@@ -989,6 +1019,16 @@ check "the checkin window runs the check-in loop" wait_for 10 runs_checkin_loop
 tmux -L "$SOCKET" kill-window -t "=smoke:checkin"
 check "refresh recreates a missing checkin window" contains "$("$BOSUN" refresh 2>&1)" "checkin: create the missing window"
 check "... and it runs the check-in loop again" wait_for 10 runs_checkin_loop
+new_checkin_loop() { # <old pid>: the checkin window runs a loop, and not that one
+  local now
+  now="$(bash -c 'source "$1/lib/common.sh"; checkin_loop_pid "$(tmux -L "$2" list-panes -t "=smoke:checkin" -F "#{pane_pid}")"' _ "$ROOT" "$SOCKET")"
+  [ -n "$now" ] && [ "$now" != "$1" ]
+}
+loop_before="$(bash -c 'source "$1/lib/common.sh"; checkin_loop_pid "$(tmux -L "$2" list-panes -t "=smoke:checkin" -F "#{pane_pid}")"' _ "$ROOT" "$SOCKET")"
+check "refresh --checkin-loop restarts the check-in loop" contains "$("$BOSUN" refresh --checkin-loop 2>&1)" "checkin: restart the check-in loop"
+check "... stopping the old one" wait_for 10 bash -c '[ -n "$1" ] && ! kill -0 "$1" 2>/dev/null' _ "$loop_before"
+check "... and running a new one in the same window" wait_for 10 new_checkin_loop "$loop_before"
+check "... and says so when there is no checkin window to restart" fails_with "no checkin window" env BOSUN_CHECKIN_MINUTES=0 "$BOSUN" refresh --checkin-loop
 orch_pid="$(fake_claude orch idle 2.0.0 3600 orch-2000-01-01)"
 out="$("$BOSUN" refresh --dry-run orch 2>&1)"
 check "orchestrator restarts on a new day" contains "$out" "orch: would restart (new day: orch-2000-01-01 -> orch-$(date +%F)"

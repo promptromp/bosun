@@ -63,6 +63,7 @@ STATE_FILES = (
     ("events", WORKING),
     ("impact", WORKING),
     ("keep-awake-*.pid", WORKING),
+    ("launches", WORKING),  # what each window was launched with (lib/launch_record.py)
     ("logs", WORKING),
     ("login.json", WORKING),
     ("login.json.tmp", WORKING),

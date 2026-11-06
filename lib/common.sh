@@ -527,9 +527,9 @@ login_shell() {
 RELAUNCH_SETTLE_SECONDS="${BOSUN_RELAUNCH_SETTLE_SECONDS:-8}" # the variable is for tests
 
 # Replace the process in a window's pane with a fresh `bosun launch`, in <dir> (default: the
-# pane's current directory). Refuses split windows and panes that run anything besides their
-# shell, so it never kills your work.
-relaunch_in_window() { # <window_id> <window> [prompt] [dir] [quiet]
+# pane's current directory); with kind "checkin", the check-in loop (build_launch_command). Refuses
+# split windows and panes that run anything besides their shell, so it never kills your work.
+relaunch_in_window() { # <window_id> <window> [prompt] [dir] [quiet] [kind]
   local window_id="$1" panes pane_id pane_pid children workdir
   panes="$(tmux_cmd list-panes -t "$window_id" -F '#{pane_id} #{pane_pid}')" || return 1
   if [ "$(grep -c . <<<"$panes")" -ne 1 ]; then
@@ -553,7 +553,7 @@ relaunch_in_window() { # <window_id> <window> [prompt] [dir] [quiet]
     sleep 0.5
   done
   workdir="${4:-$(tmux_cmd display-message -p -t "$pane_id" '#{pane_current_path}')}"
-  build_launch_command "$2" "${3:-}" "" "" "" "${5:-}"
+  build_launch_command "$2" "${3:-}" "${6:-}" "" "" "${5:-}"
   log_reaped "$2" "$(reap_shell_helpers "$pane_pid")"
   tmux_cmd respawn-pane -k -t "$pane_id" -c "$workdir" "${launch_cmd[@]}"
 }
@@ -872,10 +872,17 @@ run_with_timeout() {
 }
 
 # Whether the check-in loop (`bosun checkin --loop`) runs under tmux pane <pane_pid>.
-checkin_loop_running() {
+checkin_loop_running() { [ -n "$(checkin_loop_pid "$1")" ]; }
+
+# The pid of the check-in loop under tmux pane <pane_pid>, if one runs there: the outermost process
+# showing its command line (its subshells show the same one).
+checkin_loop_pid() {
   local pid
   for pid in $(descendants "$1"); do
-    ps -o command= -p "$pid" 2>/dev/null | grep -q "bosun-checkin --loop" && return 0
+    ps -o command= -p "$pid" 2>/dev/null | grep -q "bosun-checkin --loop" || continue
+    ps -o command= -p "$(ps -o ppid= -p "$pid")" 2>/dev/null | grep -q "bosun-checkin --loop" && continue
+    echo "$pid"
+    return 0
   done
   return 1
 }

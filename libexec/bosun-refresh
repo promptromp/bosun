@@ -1,5 +1,7 @@
 #!/bin/bash
 # Usage: bosun refresh [--dry-run] [--drain-only] [--restart-idle] [--unless-active] [window...]
+#        bosun refresh [--dry-run] --update-restart <prompt-file> <window>
+#        bosun refresh [--dry-run] --checkin-loop
 #
 # Bring every Claude window in the tmux session up to date (default: all manifest sessions):
 #   window missing             -> create it and launch Claude
@@ -30,6 +32,16 @@
 #   --restart-idle   restart every idle window, even if it is up to date
 #   --unless-active  do nothing if someone typed in an attached tmux client in the last
 #                    BOSUN_ACTIVE_CLIENT_MINUTES (used by the scheduled morning run)
+#
+# What an update uses, once it switched to a new version (docs/design/update.md):
+#   --update-restart <prompt-file> <window>
+#                    restart <window> now, whatever its version, if its turn is over: idle, or
+#                    "shell" (only background work runs), resuming its conversation with the prompt
+#                    in <prompt-file> instead of the drain prompt. Never while it is busy or waiting
+#                    for you: it is left running and refresh exits 3, so the caller can try again.
+#                    A window whose agent is not running is relaunched with that prompt.
+#   --checkin-loop   restart the check-in loop in the checkin window (a long-running script keeps
+#                    the code it started with): stop it, and start it again in the same window
 set -uo pipefail
 source "$(dirname "$0")/../lib/common.sh"
 load_config
@@ -37,11 +49,17 @@ load_config
 SESSION="$BOSUN_SESSION_NAME"
 EXIT_WAIT_SECONDS=20
 EXIT_POLL_SECONDS=0.5
+LEFT_RUNNING=3 # --update-restart's status when it left the window running (busy, or waiting for you)
 
 DRY_RUN=0
 DRAIN_ONLY=0
 RESTART_IDLE=0
 UNLESS_ACTIVE=0
+CHECKIN_LOOP=0
+UPDATE_RESTART=0
+UPDATE_PROMPT_FILE=""
+UPDATE_PROMPT="" # --update-restart's prompt; empty for every other refresh
+left_running=0   # set when a restart left an agent running: busy, or waiting for you
 windows=()
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -49,6 +67,12 @@ while [ $# -gt 0 ]; do
     --drain-only) DRAIN_ONLY=1 ;;
     --restart-idle) RESTART_IDLE=1 ;;
     --unless-active) UNLESS_ACTIVE=1 ;;
+    --checkin-loop) CHECKIN_LOOP=1 ;;
+    --update-restart)
+      UPDATE_RESTART=1
+      UPDATE_PROMPT_FILE="${2:-}"
+      shift
+      ;;
     -h | --help)
       usage
       exit 0
@@ -59,17 +83,26 @@ while [ $# -gt 0 ]; do
   shift
 done
 
-session_exists || die "no tmux session '$SESSION'; use: bosun start"
+# --update-restart and --checkin-loop each act on one window, alone; reads the update's prompt.
+check_update_modes() {
+  if [ "$CHECKIN_LOOP" = "1" ]; then
+    [ "${#windows[@]}$UPDATE_RESTART$DRAIN_ONLY$RESTART_IDLE" = "0000" ] || die_usage "--checkin-loop takes no window and no other mode"
+  fi
+  [ "$UPDATE_RESTART" = "1" ] || return 0
+  [ -n "$UPDATE_PROMPT_FILE" ] && [ "${#windows[@]}" -eq 1 ] || die_usage "--update-restart takes a prompt file and one window"
+  [ "$DRAIN_ONLY$RESTART_IDLE" = "00" ] || die_usage "--update-restart goes with no --drain-only or --restart-idle"
+  [ -f "$UPDATE_PROMPT_FILE" ] || die "no prompt file $UPDATE_PROMPT_FILE"
+  UPDATE_PROMPT="$(cat "$UPDATE_PROMPT_FILE")"
+  [ -n "$UPDATE_PROMPT" ] || die "prompt file $UPDATE_PROMPT_FILE is empty"
+}
 
-if [ "$UNLESS_ACTIVE" = "1" ] && minutes="$(minutes_since_client_input)" &&
-  [ "$minutes" -lt "$BOSUN_ACTIVE_CLIENT_MINUTES" ]; then
-  log "someone typed in an attached client $minutes minute(s) ago; not touching windows (run 'bosun refresh' by hand)"
-  exit 0
-fi
-
-for harness in $(harnesses_in_use); do
-  [ -n "$(agent_installed_version "$harness")" ] || die "cannot determine the installed version of $(agent_display_name "$harness")"
-done
+# Refuse to go on when an agent's installed version is unknown: restart_reason compares with it.
+check_agents_installed() {
+  local harness
+  for harness in $(harnesses_in_use); do
+    [ -n "$(agent_installed_version "$harness")" ] || die "cannot determine the installed version of $(agent_display_name "$harness")"
+  done
+}
 
 act() { # <window> <action description> <command...>
   local window="$1" description="$2"
@@ -82,8 +115,8 @@ act() { # <window> <action description> <command...>
   fi
 }
 
-create_and_launch() { # <name> <dir> [kind]
-  build_launch_command "$1" "" "${3:-}"
+create_and_launch() { # <name> <dir> [kind] [prompt]
+  build_launch_command "$1" "${4:-}" "${3:-}"
   tmux_cmd new-window -d -t "=$SESSION:" -n "$1" -c "$2" "${launch_cmd[@]}"
 }
 
@@ -102,21 +135,33 @@ launch_mode() { # <name> [status]
 
 FRESH_PROMPT="Bosun started this fresh conversation for this window because the previous one grew large (every prompt re-reads all of it). Your memory notes carry what you learned before; bosun ledger list --open shows the items handed to this window. Reply with a one-line status and stay idle for my next command."
 
-restart_in() { # <window_id> <dir> <name> <agent_pid> [prompt]
-  local window_id="$1" name="$3" pid="$4" deadline
-  if [ "$(agent_session_field "$pid" status)" != "idle" ]; then
-    log "$name: no longer idle; not restarting"
-    return 0
-  fi
-  kill -TERM "$pid" 2>/dev/null
+# Stop process <pid> (SIGTERM) and wait for it to exit, up to EXIT_WAIT_SECONDS.
+stop_process() { # <name> <pid> <what it is>
+  local deadline
+  kill -TERM "$2" 2>/dev/null
   deadline=$((SECONDS + EXIT_WAIT_SECONDS))
-  while kill -0 "$pid" 2>/dev/null; do
+  while kill -0 "$2" 2>/dev/null; do
     if [ "$SECONDS" -ge "$deadline" ]; then
-      log "$name: Claude (pid $pid) did not exit within ${EXIT_WAIT_SECONDS}s; leaving it running"
+      log "$1: $3 (pid $2) did not exit within ${EXIT_WAIT_SECONDS}s; leaving it running"
       return 1
     fi
     sleep "$EXIT_POLL_SECONDS"
   done
+}
+
+# Whether an agent in <status> may be stopped for a restart: idle; for an update also "shell".
+may_restart() { # <status>
+  [ "$1" = "idle" ] || { [ -n "$UPDATE_PROMPT" ] && [ "$1" = "shell" ]; }
+}
+
+restart_in() { # <window_id> <dir> <name> <agent_pid> [prompt]
+  local window_id="$1" name="$3" pid="$4"
+  if ! may_restart "$(agent_session_field "$pid" status)"; then
+    log "$name: no longer idle; not restarting"
+    left_running=1
+    return 0
+  fi
+  stop_process "$name" "$pid" Claude || return 1
   if [ -n "${5:-}" ]; then
     relaunch_in_window "$window_id" "$name" "$5" "$2"
   else
@@ -220,20 +265,88 @@ refresh_agent() { # <name> <dir> <window_id> <agent_pid> <want_model> <want_effo
   act "$name" "send the drain prompt (${status:-unknown status}, v$version)" "$BOSUN" send "$name" "$BOSUN_DRAIN_PROMPT"
 }
 
+# --update-restart: restart the agent in window <name> now, with the update's prompt, if its turn is
+# over (idle, or "shell"); otherwise leave it running, for the caller to try again.
+update_restart_agent() { # <name> <dir> <window_id> <agent_pid>
+  local status
+  status="$(agent_session_field "$4" status)"
+  if ! agent_turn_over "$status"; then
+    log "$1: ${status:-unknown status}; left running (an update restarts it only when idle or in shell)"
+    left_running=1
+    return 0
+  fi
+  act "$1" "restart for the update ($status)" restart_in "$3" "$2" "$1" "$4" "$UPDATE_PROMPT"
+}
+
+# A window's start gets UPDATE_PROMPT: the update's prompt with --update-restart, else none (launch
+# then sends the drain prompt, or nothing when quiet).
 refresh_window() { # <name> <dir> <kind> <model> <effort>
   local name="$1" dir="$2" kind="$3" pane_pid window_id agent_pid
   read -r pane_pid window_id <<<"$(find_window "$name")"
   if [ -z "${window_id:-}" ]; then
-    act "$name" "create the missing window" create_and_launch "$name" "$dir" "$kind"
+    act "$name" "create the missing window" create_and_launch "$name" "$dir" "$kind" "$UPDATE_PROMPT"
     return
   fi
   [ "$kind" = "checkin" ] && return 0 # runs the check-in loop, not Claude
   if ! agent_pid="$(agent_pid_under "$pane_pid")"; then
-    act "$name" "relaunch Claude (not running)" relaunch_in_window "$window_id" "$name" "" "$dir" "$(launch_mode "$name")"
+    act "$name" "relaunch Claude (not running)" relaunch_in_window "$window_id" "$name" "$UPDATE_PROMPT" "$dir" "$(launch_mode "$name")"
     return
   fi
-  refresh_agent "$name" "$dir" "$window_id" "$agent_pid" "$4" "$5"
+  if [ -n "$UPDATE_PROMPT" ]; then
+    update_restart_agent "$name" "$dir" "$window_id" "$agent_pid"
+  else
+    refresh_agent "$name" "$dir" "$window_id" "$agent_pid" "$4" "$5"
+  fi
 }
+
+# --update-restart <prompt-file> <name>: window <name> as refresh_window brings it along, with the
+# update's prompt. Returns LEFT_RUNNING when it left the agent running.
+update_restart() { # <name>
+  local name dir kind
+  IFS=$'\t' read -r name dir kind _ <<<"$(window_specs | awk -F'\t' -v name="$1" '$1 == name')"
+  [ -n "$name" ] || die "no window '$1' in the window list"
+  [ "$kind" != "checkin" ] || die_usage "the checkin window runs the check-in loop: use --checkin-loop"
+  refresh_window "$name" "$dir" "$kind" "" "" || return 1
+  [ "$left_running" = "0" ] || return "$LEFT_RUNNING"
+}
+
+# Stop the check-in loop in window <window_id>, if it runs, and start it again there.
+restart_loop_in() { # <window_id> <dir> <loop pid, or empty>
+  if [ -n "$3" ]; then stop_process checkin "$3" "the check-in loop" || return 1; fi
+  relaunch_in_window "$1" checkin "" "$2" "" checkin
+}
+
+# --checkin-loop: the checkin window's loop again, from the installed version; a missing window is
+# created.
+restart_checkin_loop() {
+  local dir pane_pid window_id
+  dir="$(window_specs | awk -F'\t' '$3 == "checkin" { print $2; exit }')"
+  [ -n "$dir" ] || die "no checkin window: it runs only with an orchestrator, and check-ins (or events) on"
+  read -r pane_pid window_id <<<"$(find_window checkin)"
+  if [ -z "${window_id:-}" ]; then
+    act checkin "create the missing window" create_and_launch checkin "$dir" checkin
+    return
+  fi
+  act checkin "restart the check-in loop" restart_loop_in "$window_id" "$dir" "$(checkin_loop_pid "$pane_pid")"
+}
+
+check_update_modes
+session_exists || die "no tmux session '$SESSION'; use: bosun start"
+if [ "$CHECKIN_LOOP" = "1" ]; then
+  restart_checkin_loop
+  exit $?
+fi
+if [ "$UPDATE_RESTART" = "1" ]; then
+  update_restart "${windows[0]}"
+  exit $?
+fi
+
+if [ "$UNLESS_ACTIVE" = "1" ] && minutes="$(minutes_since_client_input)" &&
+  [ "$minutes" -lt "$BOSUN_ACTIVE_CLIENT_MINUTES" ]; then
+  log "someone typed in an attached client $minutes minute(s) ago; not touching windows (run 'bosun refresh' by hand)"
+  exit 0
+fi
+check_agents_installed
 
 [ -f "$BOSUN_SESSIONS_FILE" ] || die "sessions manifest not found: $BOSUN_SESSIONS_FILE"
 failures=0
