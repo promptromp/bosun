@@ -196,10 +196,13 @@ next write. Writes stop and say so when a journal file has gone missing or lost 
 is behind `ledger.json`), or a line at the end of one, which every write reads, is damaged. Damage
 further up, or a gap in a file's numbering, stops only a write that has to rebuild (after a write
 cut short or a hand edit); until then `bosun ledger validate --journal` and `bosun doctor` report
-it. Either way, move `journal/ledger` and `replica.json` aside together, and the next write starts
-a new journal from `ledger.json`. `replica.json` is this Mac's id in the knowledge base's journal
-too, so the Mac gets a new id in both, which the knowledge base carries on under as well (its old
-replica file stays in its journal). Each item keeps its last 200 history entries; the journal keeps
+it. Either way, move `journal/ledger` aside, and the next write starts a new journal from
+`ledger.json`, as a new replica. `replica.json` may stay: a journal that starts again (moved aside,
+emptied or removed) always gets a new id, made by that write in place of the old one, so that no
+id is minted twice. `replica.json` is this Mac's id in the knowledge base's journal too, so the Mac
+gets a new id in both, which the knowledge base carries on under as well (its old replica file
+stays in its journal). A write cut short as it starts the new journal is finished by the next
+write, as any other. Each item keeps its last 200 history entries; the journal keeps
 all of them.
 
 ## Waiting on someone: outreach

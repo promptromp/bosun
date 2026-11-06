@@ -10,6 +10,7 @@ import io
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -633,7 +634,7 @@ class JournalTest(ProtocolTestCase):
         self.assertIn("bosun ledger validate --journal", said.getvalue())
 
     def test_following_the_advice_for_a_damaged_journal_keeps_everything(self) -> None:
-        """Moving the journal folder and replica.json aside together: the next write starts a new
+        """Moving the journal folder aside (replica.json may stay): the next write starts a new
         journal from ledger.json, as a new replica (so no id is minted twice), and loses nothing."""
         run("note", MENTION_ID, "kept")
         old = replica_id(ledger.STORE.state_dir)
@@ -643,21 +644,92 @@ class JournalTest(ProtocolTestCase):
             run("note", MENTION_ID, "refused")
         advice = str(refused.exception)
         for named in (
-            str(ledger.STORE.journal_dir),
-            str(ledger.STORE.state_dir / "replica.json"),
-            "together",
+            f"move the folder {ledger.STORE.journal_dir} aside",
+            f"{ledger.STORE.state_dir / 'replica.json'} may stay",
         ):
             self.assertIn(named, advice)
         file = saved()
         aside = Path(self.enterContext(tempfile.TemporaryDirectory()))
         ledger.STORE.journal_dir.rename(aside / "ledger")
-        (ledger.STORE.state_dir / "replica.json").rename(aside / "replica.json")
         run("note", MENTION_ID, "after")
         self.assertNotEqual(replica_id(ledger.STORE.state_dir), old)
         self.assertEqual(saved()["items"][REVIEW_ID], file["items"][REVIEW_ID])
         self.assertEqual(self.notes(MENTION_ID)[-2:], ["kept", "after"])
         self.assertEqual(next(c["cmd"] for c in journal().changes()), "genesis")
         self.assert_the_journal_rebuilds_the_file()
+
+    def test_an_emptied_journal_starts_again_as_a_new_replica(self) -> None:
+        """The journal folder emptied or removed by hand, replica.json left where it is: the next
+        write starts a new journal from ledger.json as a new replica, recorded in replica.json, so
+        that no id is minted again from the old one's seqs (ledger.json, and any copy of the old
+        journal kept aside, hold those). The write after it carries on under the new one."""
+        state = ledger.STORE.state_dir
+        for how in ("emptied", "removed"):
+            old = replica_id(state)
+            if how == "emptied":
+                for path in ledger.STORE.journal_dir.iterdir():
+                    path.unlink()
+            else:
+                shutil.rmtree(ledger.STORE.journal_dir)
+            run("note", MENTION_ID, how)
+            new = replica_id(state)
+            with self.subTest(how=how):
+                self.assertNotEqual(new, old)
+                self.assertEqual({c["replica"] for c in journal().changes()}, {new})
+                self.assertEqual(self.notes(MENTION_ID)[-1], how)
+                self.assert_the_journal_rebuilds_the_file()
+            run("note", MENTION_ID, f"after it was {how}")
+            self.assertEqual(replica_id(state), new)  # a journal with files keeps its id
+
+    def power_cut_after_the_journal(self) -> Any:
+        """ledger.json's save cut short (the power went) once the journal holds a line: a write
+        cut between the journal and the file. A save before that (nothing journaled yet) is made."""
+        real = ledger.save
+
+        def save(data: dict[str, Any]) -> None:
+            if ledger.open_journal().written():
+                raise OSError("power cut")
+            real(data)
+
+        return mock.patch.object(ledger, "save", side_effect=save)
+
+    def cut_short_after_starting_again(self) -> None:
+        """The journal and replica.json moved aside (the way to start again), then the first write
+        cut short between its genesis and saving ledger.json, which still records the position of
+        the journal moved aside."""
+        run("note", MENTION_ID, "kept")
+        aside = Path(self.enterContext(tempfile.TemporaryDirectory()))
+        ledger.STORE.journal_dir.rename(aside / "ledger")
+        (ledger.STORE.state_dir / "replica.json").rename(aside / "replica.json")
+        with self.power_cut_after_the_journal(), self.assertRaisesRegex(OSError, "power cut"):
+            run("note", MENTION_ID, "cut short")
+        self.assertEqual({c["cmd"] for c in journal().changes()}, {"genesis"})
+
+    def test_a_write_cut_short_after_the_journal_starts_again_is_finished(self) -> None:
+        """The next write finishes it, as any write cut short between the journal and the file:
+        never refused as a journal that lost lines (the new journal never had the old one's)."""
+        self.cut_short_after_starting_again()
+        run("note", MENTION_ID, "after")
+        self.assertEqual(self.notes(MENTION_ID)[-2:], ["kept", "after"])
+        self.assert_the_journal_rebuilds_the_file()
+
+    def test_a_reader_after_a_write_cut_short_after_starting_again_is_not_warned(self) -> None:
+        """Meanwhile a reader shows the journal's rebuild, without a word, and writes nothing."""
+        self.cut_short_after_starting_again()
+        file = ledger.STORE.ledger_file.read_text()
+        said = io.StringIO()
+        with contextlib.redirect_stderr(said):
+            self.assertIn("kept", run("show", MENTION_ID))
+        self.assertEqual(said.getvalue(), "")
+        self.assertEqual(ledger.STORE.ledger_file.read_text(), file)
+
+    def test_a_journal_that_lost_a_file_after_starting_again_is_still_refused(self) -> None:
+        """Starting again weakens no refusal: once ledger.json records the new journal, losing one
+        of its files is refused as before."""
+        aside = Path(self.enterContext(tempfile.TemporaryDirectory()))
+        ledger.STORE.journal_dir.rename(aside / "ledger")
+        run("note", MENTION_ID, "started again")
+        self.lose_each_file(said_after=0)
 
     def test_a_gap_in_the_journal_names_the_missing_seq(self) -> None:
         """A line moved out of the middle (what the old advice said to do): validate reports it,
@@ -1033,6 +1105,25 @@ class GenesisTest(JournalChecks):
         run("render")
         self.assertEqual(saved()["said"], [])
         self.assert_the_journal_rebuilds_the_file()
+
+    def test_genesis_starts_the_journal_under_the_replica_id_there(self) -> None:
+        """The one-time conversion of a ledger from before journals is no journal starting again
+        (ledger.json records no position): it starts the journal under the id replica.json holds
+        (the knowledge base made it first), or makes one, once; the writes after it keep it."""
+        state = ledger.STORE.state_dir
+        for there in (True, False):
+            shutil.rmtree(ledger.STORE.journal_dir, ignore_errors=True)
+            (state / "replica.json").unlink(missing_ok=True)
+            ledger.STORE.ledger_file.write_text(json.dumps(self.data))
+            made = replica_id(state) if there else ""
+            with mock.patch("journal.new_replica_id", side_effect=AssertionError("a second id")):
+                run("note", self.OLD_TASK, "first write")
+                run("note", self.OLD_TASK, "second write")
+            kept = replica_id(state)
+            with self.subTest(replica_there=there):
+                self.assertEqual(kept, made or kept)
+                self.assertEqual({c["replica"] for c in journal().changes()}, {kept})
+                self.assert_the_journal_rebuilds_the_file()
 
     def test_an_empty_ledger_needs_no_genesis(self) -> None:
         ledger.STORE.ledger_file.unlink()

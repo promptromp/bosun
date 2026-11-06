@@ -4,7 +4,9 @@ point").
 Each machine (replica) appends to its own `<replica>.jsonl`; changes that never leave the machine
 go to `local.jsonl`. Every line is one change in canonical bytes. Files are only appended to, in
 clock order, so the end of a file holds its highest `seq` and `hlc`: a transaction starts by
-reading those and nothing else.
+reading those and nothing else. A journal that starts again (no line left in it, while its store's
+files record the position of one before it: change_log.starts_again) does so under a new replica
+id (Journal.as_writer), as the old one's seqs, and the ids minted from them, are spent.
 
 A transaction counts once it is whole. Each change carries `of`, how many lines its transaction
 has in that change's file, and a line in `local.jsonl` also `private_of`, how many it has in
@@ -42,7 +44,7 @@ import secrets
 import sys
 import time
 from collections.abc import Callable, Collection, Iterable, Mapping
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, BinaryIO
@@ -57,6 +59,7 @@ from change_log import (
     in_order,
     mint_suffix,
     placeholder,
+    starts_again,
     tick,
 )
 
@@ -181,20 +184,47 @@ def _read_replica(path: Path) -> str:
     )
 
 
-def replica_id(state_dir: Path) -> str:
-    """This machine's id (32 hex characters), made once and kept in `replica.json`, which both
-    stores' journals (the ledger's, the knowledge base's) use. It is made whole (create_new), never
-    over a file already there: two creators at once (a first ledger write and a first knowledge
-    write) agree, as the second reads the first one's id."""
+def _replica_bytes(made: str) -> bytes:
+    return (json.dumps({"replica": made}) + "\n").encode()
+
+
+def replica_id(state_dir: Path, *, again: bool = False) -> str:
+    """This machine's id (32 hex characters), kept in `replica.json`, which both stores' journals
+    (the ledger's, the knowledge base's) use. Made once, whole (create_new), never over a file
+    already there: two creators at once (a first ledger write and a first knowledge write) agree,
+    as the second reads the first one's id. Made again only for a journal that starts again
+    (<again>: change_log.starts_again), in place of the one there (new_replica_id)."""
+    if again:
+        return new_replica_id(state_dir)
     path = state_dir / REPLICA_FILE
     if path.exists():
         return _read_replica(path)
     state_dir.mkdir(parents=True, exist_ok=True)
     made = secrets.token_hex(16)
     try:
-        create_new(path, (json.dumps({"replica": made}) + "\n").encode(), 0o600)
+        create_new(path, _replica_bytes(made), 0o600)
     except FileExistsError:
         return _read_replica(path)
+    return made
+
+
+def new_replica_id(state_dir: Path) -> str:
+    """A new id for this machine, in `replica.json` in place of whatever it held: for a journal
+    that starts again (change_log.starts_again), whose old id's seqs, and the ids minted from them,
+    are spent. Written to a file of its own and flushed, then renamed over replica.json and the
+    folder flushed (replace_durably), so it is there whole before anything is minted from it. The
+    other store carries on under it too: its old replica file stays in its journal, and its next
+    change goes to a file of the new id. Two at once (both journals starting again) each start
+    under their own; both then carry on under the one renamed last."""
+    state_dir.mkdir(parents=True, exist_ok=True)
+    made = secrets.token_hex(16)
+    path = state_dir / REPLICA_FILE
+    tmp = _beside(path)
+    try:
+        _write_new(tmp, _replica_bytes(made), 0o600)
+        replace_durably(tmp, path)
+    finally:
+        tmp.unlink(missing_ok=True)
     return made
 
 
@@ -416,6 +446,14 @@ class Journal:
     replica: str
     rules: int
     now_ms: Callable[[], int] = wall_ms
+
+    def as_writer(self, state_dir: Path, saved: Mapping[str, int]) -> Journal:
+        """This journal, for a write, under this machine's id (replica_id, in <state_dir>): a new
+        one, made now, when it starts again (change_log.starts_again: no line in it while the
+        store's files record the position <saved> of a journal gone), so that no id is minted
+        twice from the same seq."""
+        again = starts_again(self.written(), saved)
+        return replace(self, replica=replica_id(state_dir, again=again))
 
     def _files(self) -> list[Path]:
         return sorted(self.root.glob(f"*{SUFFIX}")) if self.root.is_dir() else []

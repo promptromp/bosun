@@ -75,11 +75,13 @@ edit the next write adopts or a file that does not parse, which the next write w
 
 If a command says the knowledge base's journal is damaged, or behind `view.json` (a journal file
 deleted, a partial restore), nothing was written, and the files are still whole. To go on from
-them, move `knowledge/journal/` and the state folder's `replica.json` aside together (keep them):
-the next write starts a new journal from the files, as a new replica, so that no fact id is
-minted twice. `replica.json` is this Mac's id in the ledger's journal too, so this gives the Mac a
-new id in both journals, which both carry on under; the ledger's old replica file stays in its
-journal ([Setup](setup.md#configuration)).
+them, move `knowledge/journal/` aside (keep it): the next write starts a new journal from the
+files, as a new replica, so that no fact id is minted twice. The state folder's `replica.json` may
+stay: a journal that starts again (moved aside, emptied or removed) always gets a new id, made by
+that write in place of the old one. `replica.json` is this Mac's id in the ledger's journal too, so
+this gives the Mac a new id in both journals, which both carry on under; the ledger's old replica
+file stays in its journal ([Setup](setup.md#configuration)). A write cut short as it starts the new
+journal is finished by the next write, as any other.
 
 ```sh
 bosun kg add-entity process/release --name "Release process" --alias releases
@@ -126,11 +128,11 @@ bosun kg context --for releases         # a small cited pack of confirmed facts
   knowledge folder (made on the first write, readable only by you, not in the history, never
   leaving this Mac). Once such records exist, `kg forget` and adding a person need that key; if
   it is missing the command refuses and names its path, so restore it from a backup. If it is
-  gone for good, move `forgotten.jsonl`, `knowledge/journal/` and the state folder's
-  `replica.json` aside, and `secret.key`, if it is there, all together (the journal's deletion
-  markers hold the same records, and the next write starts a new journal from the files, as for a
-  damaged one): the people in them can then be added again (your choice, knowingly), and the next
-  write makes a new key. A `secret.key` that is not a key (empty, the wrong length, unreadable)
+  gone for good, move `forgotten.jsonl` and `knowledge/journal/` aside, and `secret.key`, if it is
+  there, all together (the journal's deletion markers hold the same records, and the next write
+  starts a new journal from the files, as a new replica, as for a damaged one; the state folder's
+  `replica.json` may stay): the people in them can then be added again (your choice, knowingly),
+  and the next write makes a new key. A `secret.key` that is not a key (empty, the wrong length, unreadable)
   while no such record needs it is moved aside by the next write, kept as
   `secret.key.aside-<time>` (not in the history), and made again, with a line on stderr.
 - **Seeding:** `kg import <file>` reads entities and facts as JSON lines, records every fact as a

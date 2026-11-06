@@ -274,6 +274,7 @@ from change_log import (
     reader_rebuilds,
     refusal,
     stamped,
+    starts_again,
     unencodable,
 )
 from journal import (
@@ -834,9 +835,10 @@ _WRITING: list[Transaction] = []
 
 def replica() -> str:
     """This Mac's replica id, as the ledger's journal uses it (and the knowledge base's: one
-    replica.json, made once, replica_id). Taken under the ledger's lock, so a reader waits for a
-    write that is making it. Never call it under locked_ledger: it takes the lock on a descriptor
-    of its own, and flock is per open file, so it would wait for itself."""
+    replica.json, made once, and anew when a journal starts again, replica_id). Taken under the
+    ledger's lock, so a reader waits for a write that is making it. Never call it under
+    locked_ledger: it takes the lock on a descriptor of its own, and flock is per open file, so it
+    would wait for itself."""
     with store_lock(fcntl.LOCK_EX), journal_errors():
         return replica_id(STORE.state_dir)
 
@@ -860,11 +862,12 @@ def journal_at(journal_dir: Path, replica: str = "") -> Journal:
 
 def start_again() -> str:
     """How to go on when the journal cannot be used: ledger.json is whole, so a new journal can
-    start from it. Under a new replica, so that no id is minted twice from the same seq."""
+    start from it. Under a new replica, so that no id is minted twice from the same seq: the write
+    that starts it makes one (change_log.starts_again), so replica.json may stay."""
     replica_file = STORE.state_dir / REPLICA_FILE
     return (
-        f"move the folder {STORE.journal_dir} and the file {replica_file} aside together (keep "
-        "them): the next write starts a new journal from ledger.json, as a new replica"
+        f"move the folder {STORE.journal_dir} aside (keep it): the next write starts a new journal "
+        f"from ledger.json, as a new replica ({replica_file} may stay: a new id is made either way)"
     )
 
 
@@ -1085,10 +1088,21 @@ def genesis(journal: Journal, ledger: Ledger) -> Ledger:
     return ledger
 
 
+def unstamp(ledger: Ledger) -> None:
+    """ledger.json saved without the position of a journal gone, as from before journals, when its
+    journal starts again (change_log.starts_again), before anything is journaled: so a write cut
+    short between the new journal's first transaction (genesis) and ledger.json is finished by the
+    next write, the file being behind the journal, never refused as a journal that lost lines (the
+    old position names seqs the new journal never had)."""
+    del ledger[ledger_changes.JOURNAL]
+    save(ledger)
+
+
 def write_start(journal: Journal, ledger: Ledger) -> Ledger:
     """The ledger a write starts from, in memory, from <ledger> as loaded: the command's one save
     writes it, so the backup is always the ledger as it was before the write. Refused when the
-    journal lost changes ledger.json reflects (a file deleted, a partial restore); then an
+    journal lost changes ledger.json reflects (a file deleted, a partial restore); then a journal
+    that starts again starts from ledger.json saved without the old position (unstamp); an
     unfinished transaction is set aside (repair_tail); a ledger from before journals is put in it
     (genesis); a change made to ledger.json outside the journal is taken in (adopted where it can
     be, and the journal's rebuild goes on); and where ledger.json is behind the journal (a write cut
@@ -1096,6 +1110,8 @@ def write_start(journal: Journal, ledger: Ledger) -> Ledger:
     written = journal.written()
     if written:
         refuse_if_behind(written, ledger)
+    if starts_again(written, saved_position(ledger)):
+        unstamp(ledger)
     journal.repair_tail()
     position = journal.position()
     if not position:
@@ -1115,7 +1131,7 @@ def for_writing() -> Iterator[Ledger]:
     at the new position, with the digest of what it holds."""
     ledger = writable()
     with journal_errors():
-        journal = open_journal(replica_id(STORE.state_dir))
+        journal = open_journal().as_writer(STORE.state_dir, saved_position(ledger))
         ledger = write_start(journal, ledger)
         transaction = journal.begin(STORE.command)
     before = json.loads(json.dumps(ledger))  # a copy to diff against (plain JSON: faster than deepcopy)

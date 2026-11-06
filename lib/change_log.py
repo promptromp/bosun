@@ -7,8 +7,9 @@ suffixes minted for new items. Also what both stores (the ledger, the knowledge 
 their write boundary: refuse a change the journal cannot hold, naming where it is; convert, once,
 data written before or outside the journal; the stamp a store's files record of the journal (the
 position they reflect and a digest of what they hold), and whether they were changed outside it
-since; what a list that only grows gained; the kinds of conflict a rebuild keeps; and the
-placeholder a change deleted on request leaves in its place.
+since, and whether a journal starts again from them; what a list that only grows gained; the
+kinds of conflict a rebuild keeps; and the placeholder a change deleted on request leaves in its
+place.
 
 Pure functions and small value types: no file access. The journal that stores changes is
 elsewhere.
@@ -307,6 +308,19 @@ def lost(
     # Even with no whole transaction left: stricter than a writer, which sets such lines aside and
     # starts again from the files (genesis), on purpose; past the first check only damage gets here.
     return behind(written, saved, file_name) or behind(position, saved, file_name)
+
+
+def starts_again(written: Mapping[str, int], saved: Mapping[str, int]) -> bool:
+    """Whether a store's journal starts again: it holds no line at all (<written>: moved aside,
+    emptied or removed) while the store's files record the position of the journal they were saved
+    from (<saved>), which is gone. Its replica id's seqs, and the ids minted from them, are spent
+    (the files and any copy of that journal kept aside hold them), so the write starts it under a
+    new id (journal.replica_id). And the files then record no position until that write saves them
+    at the new journal's, as files from before the journal do, so that a write cut short between
+    the two is finished by the next, never refused: the old position names seqs the new journal
+    never had, which reads as lines it lost (behind). A store with no position (new, or from before
+    the journal) is not starting again: its journal just starts."""
+    return not written and bool(saved)
 
 
 def reader_rebuilds(

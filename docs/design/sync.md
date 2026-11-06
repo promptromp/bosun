@@ -158,8 +158,9 @@ knowledge loader now goes through `knowledge.load` (identifiers left out), as bu
 ### Changes, not files
 
 Each store is a **stream** (`ledger`, `kg`). Each machine is a **replica** with a random 128-bit
-id, created once and kept in the state dir. A replica appends its own changes to its own log and
-never edits another replica's. Every change carries one envelope:
+id, created once and kept in the state dir, and made anew when a store's journal starts again
+(below). A replica appends its own changes to its own log and never edits another replica's. Every
+change carries one envelope:
 
 | Field | What it is |
 |---|---|
@@ -229,12 +230,28 @@ stderr (with one Mac each is a bug or damage), and `bosun doctor` runs `bosun le
 rebuilt from, because that would lose what it lost from the file too. A writer refuses then, and
 so does a write that meets other damage where it reads (every write reads the end of each file,
 and a rebuild reads all of it), with the file and line named. The way out is the same for both:
-move the journal folder and `replica.json` aside together, and the next write starts a new
-journal from `ledger.json`, as a new replica, so that no id is minted twice from the same `seq`.
-`replica.json` is this Mac's id in both stores' journals (the ledger's and the knowledge base's),
-so moving it aside gives the Mac a new id in both, which both carry on under: the other store's
-old replica file stays in its journal, and its next change goes to a file of the new id. The
-knowledge base's way out is the same, with `knowledge/journal/` ([Knowledge](../knowledge.md)).
+move the journal folder aside, and the next write starts a new journal from `ledger.json`.
+
+**A journal that starts again is a new replica.** A journal starts again when it holds no line at
+all while the store's files record the position of the journal they were saved from: moved aside,
+emptied or removed by hand (`change_log.starts_again`). The write that starts it makes a new id and
+records it in `replica.json` in place of the old one, whole and flushed before anything is minted
+from it (`journal.new_replica_id`), so that no id is minted twice from the same `seq`: the files,
+and any copy of the old journal kept aside, hold the ids minted from the old one. So `replica.json`
+may stay where it is; moving it aside as well comes to the same. A store whose files record no
+position (new, or from before the journal) is not starting again: its journal starts under the id
+`replica.json` holds, or one made then, once. `replica.json` is this Mac's id in both stores'
+journals (the ledger's and the knowledge base's), so a new id is new in both, which both carry on
+under: the other store's old replica file stays in its journal, and its next change goes to a file
+of the new id. Before anything is journaled, the same write saves the files without the old
+position, as files from before the journal (`ledger.json` without its `journal` key, `view.json`
+with an empty stamp). The old position names `seq`s the new journal never had, which reads as lines
+it lost: kept until the files record the new journal, it would make a write cut short between the
+new journal's first transaction (genesis) and the files refuse every write after it. Without it,
+that cut is finished by the next write like any other, the files being behind the journal. A cut
+between the new id and that save makes one more id at the next write, from which nothing was ever
+minted. The knowledge base's way out is the same, with `knowledge/journal/`
+([Knowledge](../knowledge.md)).
 
 **A change made outside the journal is adopted.** `ledger.json` can still be changed by something
 that does not journal: by hand, or by an older bosun (after a downgrade, or a checkout's bosun on
@@ -409,7 +426,8 @@ although its record holds no hash. Who is forgotten is `forgotten.jsonl`
 together with the records every deletion marker carries, and a write first writes a marker's
 record that `forgotten.jsonl` lacks, before anything is taken in: a forget is whole through the
 journal, and the way out when the key is lost for good moves the journal folder aside with
-`forgotten.jsonl` and `replica.json`, and `secret.key`, if it is there. The key is made as
+`forgotten.jsonl`, and `secret.key`, if it is there (`replica.json` may stay: the journal starts
+again as a new replica either way). The key is made as
 `replica.json` is (whole and flushed, then linked to its name), before anything hashed with it is
 journaled; with no keyed record anywhere, a `secret.key` that is not a key (empty, the wrong length,
 unreadable) is moved aside, kept and ignored by the history, and made again, with a line on stderr.

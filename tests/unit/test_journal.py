@@ -126,6 +126,62 @@ class ReplicaId(JournalTestCase):
             jr.replica_id(state)
         self.assertEqual(sorted(p.name for p in state.iterdir()), [])
 
+    def test_a_journal_starting_again_gets_a_new_id_in_place_of_the_old(self) -> None:
+        """Made again (again=True) whatever replica.json held: a new id, whole and 0600, its data
+        and then the folder flushed, no temp file left; kept from then on."""
+        state = Path(self.tmp.name) / "state"
+        path = state / "replica.json"
+        old = jr.replica_id(state)
+        synced: list[bool] = []
+        for before in ("an id", "no id", "none"):
+            if before == "no id":
+                path.write_text("{not json")
+            elif before == "none":
+                path.unlink()
+            synced.clear()
+            with mock.patch.object(
+                jr, "flush_to_disk", side_effect=lambda fd: synced.append(stat.S_ISDIR(os.fstat(fd).st_mode))
+            ):
+                made = jr.replica_id(state, again=True)
+            with self.subTest(before=before):
+                self.assertRegex(made, r"^[0-9a-f]{32}$")
+                self.assertNotEqual(made, old)
+                self.assertEqual(json.loads(path.read_text()), {"replica": made})
+                self.assertEqual(path.stat().st_mode & 0o777, 0o600)
+                self.assertEqual(synced, [False, True])
+                self.assertEqual(list(state.glob(".replica.json*")), [])
+                self.assertEqual(jr.replica_id(state), made)
+            old = made
+
+    def test_a_new_id_that_cannot_be_written_leaves_the_old_one(self) -> None:
+        state = Path(self.tmp.name) / "state"
+        old = jr.replica_id(state)
+        with (
+            mock.patch.object(jr, "flush_to_disk", side_effect=OSError(errno.EIO, "io")),
+            self.assertRaises(OSError),
+        ):
+            jr.replica_id(state, again=True)
+        self.assertEqual(jr.replica_id(state), old)
+        self.assertEqual(sorted(p.name for p in state.iterdir()), ["replica.json"])
+
+    def test_a_writer_starts_again_as_a_new_replica_only_when_its_journal_does(self) -> None:
+        """as_writer: replica.json's id for a journal with lines, and for one with none whose store
+        records no position (new, or from before the journal); a new id, recorded, for one with no
+        line while the store's files record a position (moved aside, emptied, removed)."""
+        state = Path(self.tmp.name) / "state"
+        kept = jr.replica_id(state)
+        self.assertEqual(self.journal("").as_writer(state, {}).replica, kept)  # no journal yet
+        tx = self.journal().begin("add")
+        tx.add("set", "item:1", {"text": "x"})
+        tx.commit()
+        self.assertEqual(self.journal("").as_writer(state, {R1: 1}).replica, kept)
+        for path in self.root.iterdir():
+            path.write_bytes(b"")  # emptied: files, but no line
+        found = self.journal("").as_writer(state, {R1: 1})
+        self.assertNotEqual(found.replica, kept)
+        self.assertEqual(jr.replica_id(state), found.replica)
+        self.assertEqual((found.root, found.stream, found.rules), (self.root, "ledger", 3))
+
     def test_creators_racing_agree_on_one_id(self) -> None:
         for attempt in range(10):
             state = Path(self.tmp.name) / f"state-{attempt}"

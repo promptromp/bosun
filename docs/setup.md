@@ -172,7 +172,9 @@ State and logs go to `~/.local/state/bosun/`:
   ([Sync and sharing](design/sync.md))
 - `replica.json`: this Mac's id in the journals (the ledger's, and the knowledge base's in
   `knowledge/journal/` of the config folder, see [Knowledge](knowledge.md#knowledge)), made once;
-  moved aside, it gives the Mac a new id in both, which both carry on under
+  moved aside, it gives the Mac a new id in both, which both carry on under. A journal moved aside,
+  emptied or removed starts again under a new id too, which its next write makes in place of this
+  one
 - `logs/`: `morning-YYYY-MM-DD.log`, `checkin-YYYY-MM-DD.log`, `learn-YYYY-MM-DD.log`,
   `impact-YYYY-MM-DD.log`, `hook-YYYY-MM-DD.log` (the repo sessions' prompt hook), and what launchd
   captures from each job (`launchd.{out,err}`, `watchdog.launchd.{out,err}`, `learn.launchd.{out,err}`)

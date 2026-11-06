@@ -88,11 +88,14 @@ failing from then on.
   conflicts, updates waiting for their fact, an outside edit and a file that does not parse;
   `bosun doctor` runs it (`lib/validation.py`, shared with the ledger's validate).
 - When the journal is damaged, or behind `view.json` (a journal file lost), a write refuses and
-  writes nothing. The way out, as for the ledger: move `journal/` and the state folder's
-  `replica.json` aside together; the next write starts a new journal from the files (genesis) as a
-  new replica, so no mint seed repeats. `replica.json` is shared by the ledger and the knowledge
-  base, so this gives the Mac a new id in both journals, which both carry on under (the other
-  store's old replica file stays in its journal).
+  writes nothing. The way out, as for the ledger: move `journal/` aside; the next write starts a
+  new journal from the files (genesis) as a new replica, so no mint seed repeats. A journal emptied
+  or removed by hand starts again the same way, and the state folder's `replica.json` may stay: the
+  write that starts it makes a new id in its place, and first saves `view.json` without the old
+  position, so a write cut short before `view.json` records the new journal is finished by the next
+  ([Sync and sharing](sync.md#changes-not-files)). `replica.json` is shared by the ledger and the
+  knowledge base, so this gives the Mac a new id in both journals, which both carry on under (the
+  other store's old replica file stays in its journal).
 - Derived views (entity pages, indexes) are rebuilt from the log and never hand-edited.
 
 **Schema (generic, in the repo).** A closed set of types and predicates in
@@ -248,10 +251,10 @@ docs/design/console.md, section 6. Its measures:
   free-text summary.
 - **A forgotten person is kept as a keyed hash** (`secret.key`, never leaves the Mac), so nobody can
   guess who was forgotten; records from before the key (no `hash_kind`) stay guessable, since their ids
-  are unknown. If the key is lost for good, move `forgotten.jsonl`, `journal/` (whose deletion
-  markers hold the same records) and `replica.json` aside together, and `secret.key`, if it is
-  there: those people can then be added again (a choice made knowingly) and the next write makes
-  a new key.
+  are unknown. If the key is lost for good, move `forgotten.jsonl` and `journal/` (whose deletion
+  markers hold the same records) aside together, and `secret.key`, if it is there (`replica.json`
+  may stay): those people can then be added again (a choice made knowingly) and the next write
+  makes a new key.
 - **Machine-local storage**, within the user's account, never in the repo, with the retention and
   delete-on-request rules above. The design should be confirmed with the privacy or legal team
   before any team-shared version.
@@ -370,9 +373,9 @@ a stream of questions.
   back). With no keyed record, a `secret.key` that is not a key (empty, the wrong length,
   unreadable) is moved aside by the next write, kept as `secret.key.aside-<time>` (ignored by the
   history), and made again, with a line on stderr. If the key is lost for good, move
-  `forgotten.jsonl`, `journal/` (whose deletion markers hold the same records) and `replica.json`
-  aside together, and `secret.key`, if it is there: those people can then be added again (a choice
-  made knowingly), and the next write makes a new key.
+  `forgotten.jsonl` and `journal/` (whose deletion markers hold the same records) aside together,
+  and `secret.key`, if it is there (`replica.json` may stay): those people can then be added again
+  (a choice made knowingly), and the next write makes a new key.
 - **Import** reads JSON or JSON lines (`{"type": "entity", ...}` and `{"type": "fact", ...}`), is
   a dry run unless `--apply`, records everything as proposals (`--auto-confirm`: apply the rules
   above), and reports refusals by reason (People whitelist, schema, unresolved) and how many

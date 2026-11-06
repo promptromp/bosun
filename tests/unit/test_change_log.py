@@ -197,6 +197,21 @@ class TestStamp(unittest.TestCase):
         found = change_log.reader_rebuilds({"local": 3}, {"local": 3}, "view.json", written={"local": 5})
         self.assertEqual(found, (False, ""))
 
+    def test_a_journal_starts_again_only_with_no_line_while_the_files_record_one_before_it(self) -> None:
+        """No line at all (moved aside, emptied, removed) while the files record a position: it
+        starts again. A store with no position (new, or from before the journal) just starts; one
+        with lines left goes on (or is refused, if they are behind the files)."""
+        r = "a" * 32
+        for written, saved, again in (
+            ({}, {r: 5, "local": 2}, True),
+            ({}, {"local": 2}, True),
+            ({}, {}, False),
+            ({"local": 2}, {r: 5, "local": 2}, False),  # lost a file: behind, refused
+            ({r: 5, "local": 2}, {r: 5, "local": 2}, False),
+        ):
+            with self.subTest(written=written, saved=saved):
+                self.assertIs(change_log.starts_again(written, saved), again)
+
 
 class TestBoundary(unittest.TestCase):
     @staticmethod
