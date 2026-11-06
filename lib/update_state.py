@@ -9,9 +9,12 @@ which can be anyone's later.
 Code of one version reads the record another wrote: a hook or a command started before the switch,
 the console. So the record only ever grows: STEPS and FREEZE_STEPS are only ever added to, never
 renamed or removed (and only a new step joins FREEZE_STEPS or HOLD_STEPS: old code takes a step it
-knows for what it knew it as), and a new field is optional. A field this code does not know is
-ignored; a step it does not know was written by a newer bosun (known() is False), which the write
-gate refuses and runs again on the installed version, and the hold counts as on.
+knows for what it knew it as), and a new field is optional. A new step is recorded only inside the
+freeze or after the switch, where the installed bosun knows it; progress before the switch goes in a
+field, or old code, still the installed bosun, would refuse every write while it is recorded. A
+field this code does not know is ignored; a step it does not know was written by a newer bosun
+(known() is False), which the write gate refuses and runs again on the installed version, and the
+hold counts as on.
 
 No store (ledger, knowledge) is imported here: the stores import modules that import this one."""
 

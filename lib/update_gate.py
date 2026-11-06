@@ -120,7 +120,10 @@ class UpdateBusy(WriteRefused):
 
 def _what_to_do(record: str) -> str:
     """What to do about an update record this code cannot act on (<record>: how to name the file)."""
-    return f"an update in progress may be resumed with bosun update; if none is running, move {record} aside"
+    return (
+        "run bosun update first: it resumes an update in progress and puts back one cut short; "
+        f"move {record} aside only if bosun update cannot read it either"
+    )
 
 
 class UpdateNewer(WriteRefused):

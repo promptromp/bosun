@@ -237,7 +237,8 @@ class CheckTest(World):
             self.assertFalse(caught.exception.run_again)
             self.assertIn(str(path), said)
             self.assertIn("bosun update", said)
-            self.assertIn("move it aside", said)
+            self.assertIn("run bosun update first", said)
+            self.assertIn("move it aside only if", said)
 
 
 class RerunTest(World):

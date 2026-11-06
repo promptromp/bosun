@@ -374,9 +374,10 @@ between two versions that both have `update`.
   before the switch, the console. So its steps are only ever added, never renamed or removed, and a
   new field is optional; a field old code does not know is ignored. A step it does not know is a
   newer bosun's: the write is refused and runs again through the install link, whose code knows it,
-  and the hold counts as on. A record that is there but cannot be read refuses every write in one
-  line, since it may record a freeze: an update in progress may be resumed with `bosun update`, and
-  if none is running, the file is moved aside.
+  and the hold counts as on. So a new step is recorded only inside the freeze or after the switch;
+  progress before the switch goes in a field, or the installed old code would refuse every write. A record that is there but cannot be read refuses every write in one
+  line, since it may record a freeze: `bosun update` comes first (it resumes an update in progress and
+  puts back one cut short), and the file is moved aside only if `bosun update` cannot read it either.
 
 ## Testing
 
