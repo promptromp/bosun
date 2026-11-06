@@ -19,7 +19,8 @@ of truth, so don't copy rules into this file.
   migrations, and the config's renamed keys) and `lib/launch_record.py` (what each window was
   launched with, per session: the fingerprint an update compares after the switch, and the agent,
   directory and overrides its restart keeps, through `recorded_restart` in `lib/common.sh`; `bosun
-  launch` writes it, `launch --fingerprint` and `refresh --update-restart` use it).
+  launch` writes it, `launch --fingerprint` and `refresh --update-restart` use it;
+  `lib/update_plan.py` (pure: the plan, what each window gets, its text).
 - `lib/common.sh`: config defaults (`load_config`) and shared helpers: the window list
   (`window_specs`: orchestrator, sessions.yml entries, checkin), tmux, the one
   launch path (`build_launch_command`, used by `start`, `refresh` and `send`), and the launchd
