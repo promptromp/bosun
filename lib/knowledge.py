@@ -1399,12 +1399,20 @@ def unreadable_findings(kb: KB) -> list[Finding]:
     ]
 
 
+def validate_unlocked(p: Paths) -> list[Finding]:
+    """What `kg validate` finds in the knowledge base at <p>: the files as saved against the
+    journal's rebuild. It takes no lock and writes nothing: the caller holds the lock, or the folder
+    is a copy no one else writes (an update's rehearsal). Under a lock its own process holds, a lock
+    of its own would wait for ever (flock is per open file)."""
+    return journal_findings(p, read_files(p))
+
+
 def cmd_validate(args: argparse.Namespace) -> tuple[str, int]:
     """The files as saved against the journal's rebuild, read under the shared lock: nothing is
     written. Exit 1 on findings (a note aside); --json carries each one's severity and line."""
     p = paths()
     with store.locked(p, False):
-        found = journal_findings(p, read_files(p))
+        found = validate_unlocked(p)
     return validation.report(found, args.json, "knowledge base is valid")
 
 

@@ -190,6 +190,39 @@ class TestLedgerFormat(unittest.TestCase):
         with self.assertRaisesRegex(ledger.LedgerError, "ledger.json"):
             ledger.store_format(Path(self.tmp.name))
 
+    def test_a_migration_records_the_format_and_keeps_the_stamp_true(self) -> None:
+        """write_format, what a migration records (only a migration changes a store's version):
+        ledger.json's version, and its stamp made again where a write saved it, so that the ledger
+        still passes its check. A file changed outside the journal stays so, for the next write to
+        adopt."""
+        state = Path(self.tmp.name)
+        self.upsert("review:acme/exporter#1")
+        ledger.write_format(state, 2)
+        self.assertEqual(self.raw_version(), 2)
+        self.assertEqual(ledger.validate_unlocked(state), [])
+        data = json.loads((state / "ledger.json").read_text())
+        data["items"]["review:acme/exporter#1"]["title"] = "Edited by hand"
+        (state / "ledger.json").write_text(json.dumps(data))
+        ledger.write_format(state, 3)
+        self.assertEqual(self.raw_version(), 3)
+        self.assertEqual([f["kind"] for f in ledger.validate_unlocked(state)], ["edited"])
+
+    def test_a_ledger_rebuilt_from_its_journal_records_the_current_format(self) -> None:
+        """A migration never rewrites the journal, and its reader reads what an older format recorded
+        as the current one, so a ledger.json made from its rebuild is in this code's format (R18):
+        not the empty ledger's 1, which a ledger at format 2 would then read as older, and refuse
+        every write."""
+        state = Path(self.tmp.name)
+        self.upsert("review:acme/exporter#1")
+        with mock.patch.object(ledger, "LEDGER_FORMAT", 2):
+            ledger.write_format(state, 2)  # as a migration to format 2 leaves it
+            data = json.loads((state / "ledger.json").read_text())
+            data["journal"] = {}  # behind its journal (a write cut short): read and written as its rebuild
+            (state / "ledger.json").write_text(json.dumps(data))
+            self.assertEqual(ledger.for_reading()["version"], 2)
+            self.upsert("review:acme/exporter#2")
+        self.assertEqual(self.raw_version(), 2)
+
     def test_a_ledger_without_a_version_is_format_1(self) -> None:
         (Path(self.tmp.name) / "ledger.json").write_text(json.dumps({"items": {}}))
         self.assertEqual(ledger.store_format(Path(self.tmp.name)), 1)

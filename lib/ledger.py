@@ -232,7 +232,6 @@ from __future__ import annotations
 
 import argparse
 import contextlib
-import copy
 import fcntl
 import hashlib
 import json
@@ -364,6 +363,7 @@ LEDGER_FORMAT = 1
 # ledger from before journals in it (a change made to ledger.json outside the journal is
 # change_log.ADOPT, as in the knowledge base).
 LEDGER_STREAM = "ledger"
+LEDGER_FILE = "ledger.json"
 LOCK_FILE = "ledger.lock"
 RULES_VERSION = 1
 GENESIS = "genesis"
@@ -409,7 +409,7 @@ class Store:
 
     @property
     def ledger_file(self) -> Path:
-        return self.state_dir / "ledger.json"
+        return self.state_dir / LEDGER_FILE
 
     @property
     def journal_dir(self) -> Path:
@@ -850,7 +850,12 @@ def current_transaction() -> Transaction:
 
 def open_journal(replica: str = "") -> Journal:
     """The ledger's journal; a reader needs no replica (it never begins a transaction)."""
-    return Journal(STORE.journal_dir, LEDGER_STREAM, replica, RULES_VERSION)
+    return journal_at(STORE.journal_dir, replica)
+
+
+def journal_at(journal_dir: Path, replica: str = "") -> Journal:
+    """The ledger's journal in <journal_dir>."""
+    return Journal(journal_dir, LEDGER_STREAM, replica, RULES_VERSION)
 
 
 def start_again() -> str:
@@ -902,14 +907,17 @@ def refuse_if_behind(journal_has: Mapping[str, int], ledger: Ledger) -> None:
 
 def rebuilt(journal: Journal, position: dict[str, int], *, writing: bool = False) -> Ledger:
     """The journal's rebuild at <position>, its keys in order as a saved ledger.json loads them
-    (commands and `render` list items in that order). A write that rebuilds, and so saves the
-    rebuild, says on stderr how many changes it kept but could not apply (with one Mac, each is a
-    bug or damage)."""
+    (commands and `render` list items in that order), with the file's own keys: the position, and
+    this code's format. A migration never rewrites the journal, and its reader reads what an older
+    format recorded as this one, so a rebuild is in this format (the empty ledger it starts from has
+    the first). A write that rebuilds, and so saves the rebuild, says on stderr how many changes it
+    kept but could not apply (with one Mac, each is a bug or damage)."""
     result = ledger_changes.rebuild(journal.changes(), RULES)
     note = validation.unapplied_note(len(result.conflicts), 0, "bosun ledger validate --journal")
     if writing and note:
         print(f"ledger: {note}", file=sys.stderr)
     found = result.ledger
+    found["version"] = LEDGER_FORMAT
     found[ledger_changes.JOURNAL] = position
     ordered: Ledger = json.loads(json.dumps(found, sort_keys=True))
     return ordered
@@ -977,13 +985,14 @@ def links_ready(item_id: str, item: Item, source: str) -> None:
 
 def metadata_ready(ledger: Ledger) -> None:
     """<ledger>'s own keys beside what the journal holds (`version`, a key from elsewhere): one
-    that canonical bytes cannot hold takes the value the rebuild gives (EMPTY's), or goes if the
-    rebuild has none, silently: it is the file's, not a record (R70)."""
+    that canonical bytes cannot hold takes the value a rebuild gives (rebuilt: this code's format,
+    which a version the write gate let through is), or goes if the rebuild has none, silently: it is
+    the file's, not a record (R70)."""
     for key in [key for key in ledger if key not in COMPARED and key != ledger_changes.JOURNAL]:
         if next(unencodable(ledger[key]), None) is None:
             continue
-        if key in ledger_changes.EMPTY:
-            ledger[key] = copy.deepcopy(ledger_changes.EMPTY[key])
+        if key == "version":
+            ledger[key] = LEDGER_FORMAT
         else:
             del ledger[key]
 
@@ -1121,20 +1130,20 @@ def for_writing() -> Iterator[Ledger]:
     save(ledger)
 
 
-def read_ledger_file() -> Any:
-    """The parsed ledger file, {} if there is none yet. A missing file next to a backup is an
-    error, not a fresh start, so a lost file never silently empties the ledger."""
-    restore = f"restore it from {STORE.backup} (the previous version) or move it aside"
+def read_ledger_file(files: Store) -> Any:
+    """The parsed ledger file of <files>, {} if there is none yet. A missing file next to a backup
+    is an error, not a fresh start, so a lost file never silently empties the ledger."""
+    restore = f"restore it from {files.backup} (the previous version) or move it aside"
     try:
-        return json.loads(STORE.ledger_file.read_text())
+        return json.loads(files.ledger_file.read_text())
     except FileNotFoundError:
-        if STORE.backup.exists():
+        if files.backup.exists():
             raise LedgerError(
-                f"{STORE.ledger_file} is missing but {STORE.backup} exists; restore it"
+                f"{files.ledger_file} is missing but {files.backup} exists; restore it"
             ) from None
         return {}
     except json.JSONDecodeError as exc:
-        raise LedgerError(f"{STORE.ledger_file} is not valid JSON ({exc}); {restore}") from exc
+        raise LedgerError(f"{files.ledger_file} is not valid JSON ({exc}); {restore}") from exc
 
 
 def recorded_format(data: Any, path: Path) -> int:
@@ -1158,7 +1167,7 @@ def recorded_format(data: Any, path: Path) -> int:
 def store_format(state_dir: Path) -> int:
     """The format version ledger.json records ("version"); 0 when there is no ledger.json. A file
     that cannot be read, or records no format, is a LedgerError."""
-    path = state_dir / "ledger.json"
+    path = state_dir / LEDGER_FILE
     try:
         data = json.loads(path.read_text())
     except FileNotFoundError:
@@ -1168,14 +1177,29 @@ def store_format(state_dir: Path) -> int:
     return recorded_format(data, path)
 
 
+def write_format(state_dir: Path, version: int) -> None:
+    """Record <version> as the format of the ledger in <state_dir> (ledger.json's "version"), whole
+    and flushed (write_atomically): what a migration does once it has moved the ledger there, as
+    nothing else changes a store's version. The caller holds the ledger's lock. A ledger.json that a
+    write saved stays so (stamp: its digest covers the version); one changed outside the journal
+    stays changed, for the next write to adopt."""
+    path = state_dir / LEDGER_FILE
+    ledger = json.loads(path.read_text())
+    saved = ledger_changes.JOURNAL in ledger and not edited_outside(ledger)
+    ledger["version"] = version
+    if saved:
+        stamp(ledger, saved_position(ledger))
+    write_atomically(path, json.dumps(ledger, indent=2, sort_keys=True), sync=flush_to_disk)
+
+
 def writable() -> Ledger:
     """The ledger a write starts from, read once, if the update gate lets the write through
     (update_gate; under the exclusive lock): a freeze first, before anything of the ledger is read;
     then the format ledger.json records, before its shape, which a newer format may change."""
     update_gate.check_freeze(STORE.state_dir)
-    data = read_ledger_file()
+    data = read_ledger_file(STORE)
     update_gate.check_format("ledger", recorded_format(data, STORE.ledger_file), LEDGER_FORMAT)
-    return as_ledger(data)
+    return as_ledger(data, STORE.ledger_file)
 
 
 def check_writable() -> None:
@@ -1197,18 +1221,23 @@ def format_digest() -> str:
 
 
 def load() -> Ledger:
-    return as_ledger(read_ledger_file())
+    return load_at(STORE.state_dir)
 
 
-def as_ledger(ledger: Any) -> Ledger:
-    """<ledger>, as parsed from ledger.json, with its shape checked (LedgerError) and the parts every
-    ledger has filled in."""
+def load_at(state_dir: Path) -> Ledger:
+    """The ledger in <state_dir>, as load reads the configured one (and the rehearsal of an update
+    its copy)."""
+    files = Store(state_dir=state_dir)
+    return as_ledger(read_ledger_file(files), files.ledger_file)
+
+
+def as_ledger(ledger: Any, path: Path) -> Ledger:
+    """<ledger>, as parsed from ledger.json at <path>, with its shape checked (LedgerError) and the
+    parts every ledger has filled in."""
     if not isinstance(ledger, dict) or not all(
         isinstance(ledger.get(key, {}), dict) for key in ("items", "sources", "runs")
     ):
-        raise LedgerError(
-            f"{STORE.ledger_file} is not a ledger (unexpected structure); restore it or move it aside"
-        )
+        raise LedgerError(f"{path} is not a ledger (unexpected structure); restore it or move it aside")
     # a new ledger is made in the current format; one from before versions is format 1; a save
     # writes back what was loaded (only a migration changes a store's version)
     ledger.setdefault("version", 1 if ledger else LEDGER_FORMAT)
@@ -4428,7 +4457,7 @@ def compare_findings(rebuilt_ledger: Ledger, saved: Ledger) -> list[Finding]:
     for section in COMPARED:
         left, right = rebuilt_ledger.get(section, {}), saved.get(section, {})
         if section == "items":
-            found += differing(left, right, STORE.ledger_file.name)
+            found += differing(left, right, LEDGER_FILE)
             continue
         path = first_difference(left, right)
         if path is not None:
@@ -4443,18 +4472,19 @@ EDITED = (
 )
 
 
-def journal_findings(saved: Ledger) -> list[Finding]:
-    """The journal against ledger.json as saved (validation.journal_findings): its damage, the
-    conflicts of its rebuild, an outside edit, and, at the same position, each item that differs
-    (unless ledger.json was edited outside the journal: the next write adopts the difference)."""
+def journal_findings(saved: Ledger, journal_dir: Path) -> list[Finding]:
+    """The journal in <journal_dir> against ledger.json as saved (validation.journal_findings): its
+    damage, the conflicts of its rebuild, an outside edit, and, at the same position, each item that
+    differs (unless ledger.json was edited outside the journal: the next write adopts the
+    difference)."""
     try:
-        journal = open_journal()
+        journal = journal_at(journal_dir)
         changes, position, written = journal.changes(), journal.position(), journal.written()
     except JournalError as exc:
         return [validation.damage_finding(exc)]
     result = ledger_changes.rebuild(changes, RULES)
     against = validation.Against(
-        file_name=STORE.ledger_file.name,
+        file_name=LEDGER_FILE,
         position=position,
         saved=saved_position(saved),
         written=written,
@@ -4468,14 +4498,26 @@ def journal_findings(saved: Ledger) -> list[Finding]:
     return validation.journal_findings(against)
 
 
+def validate_unlocked(state_dir: Path, *, journal: bool = True) -> list[Finding]:
+    """What `ledger validate --journal` finds in the ledger in <state_dir> (without <journal>, what
+    `ledger validate` finds): every rule, and the journal against ledger.json. It reads the folder
+    it is given, not the configured one, takes no lock and writes nothing: the caller holds the
+    lock, or the folder is a copy no one else writes (an update's rehearsal). Under a lock its own
+    process holds, a lock of its own would wait for ever (flock is per open file)."""
+    files = Store(state_dir=state_dir)
+    saved = load_at(state_dir)
+    found = rule_findings(saved)
+    if journal:
+        found += journal_findings(saved, files.journal_dir)
+    return found
+
+
 def cmd_validate(args: argparse.Namespace) -> tuple[str, int]:
-    """Check the ledger against every rule; with --journal, the journal too. Exit 1 on findings
-    (a note aside); --json carries each finding's severity and line (bosun doctor prints it)."""
+    """Check the ledger against every rule; with --journal, the journal too, under the shared lock.
+    Exit 1 on findings (a note aside); --json carries each finding's severity and line (bosun
+    doctor prints it)."""
     with store_lock(fcntl.LOCK_SH):
-        saved = load()
-        found = rule_findings(saved)
-        if args.journal:
-            found += journal_findings(saved)
+        found = validate_unlocked(STORE.state_dir, journal=args.journal)
     return validation.report(found, args.json, "ledger is valid")
 
 

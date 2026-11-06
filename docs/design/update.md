@@ -260,7 +260,8 @@ write to take in. Measure before building that.
   - is tested from a fixture in the old format;
   - leaves the store passing its own check.
 - **Journals are append-only.** A migration reads old envelopes as new ones (upcasting) rather than
-  rewriting what was recorded, and rebuilds the files derived from the journal.
+  rewriting what was recorded, and rebuilds the files derived from the journal. So whatever a store
+  rebuilds from its journal is in the code's format (a `ledger.json` made from the rebuild records it).
 - **Config.** A new key needs nothing written, since the defaults in `lib/common.sh` apply. A key
   that is renamed or removed is edited in `bosun.env`, keeping a `bosun.env.pre-update-<time>` copy.
   The update never edits my own files: `sessions.yml`, `setup.sh`, `policy.md`, `learn.md`,

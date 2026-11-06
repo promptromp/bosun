@@ -633,7 +633,8 @@ def diff(before: Ledger, after: Ledger) -> list[Edit]:
 # ---- rebuilding -------------------------------------------------------------------------------
 
 # The empty ledger a rebuild starts from (never changed: the rebuild works on a copy). A first
-# write's genesis is diff(EMPTY, ledger).
+# write's genesis is diff(EMPTY, ledger), which never compares the version: it is the first format,
+# and a ledger.json made from a rebuild records the code's own (ledger.rebuilt).
 EMPTY: Ledger = {"version": 1, "items": {}, "sources": {}, "runs": {}, SAID: []}
 # The file's own: the journal position it reflects, and the digest of the rest (ledger.stamp).
 # Never compared, hashed or rebuilt.

@@ -12,6 +12,11 @@ of truth, so don't copy rules into this file.
   command, plists, the `~/.local/bin/bosun` link, `--plugin-dir`, Codex's notify, the orchestrator
   settings default) names the install link (`BOSUN_INSTALL`, `BOSUN_CMD`), which an update points at a
   newer version. In a checkout they are the same. A new place that writes a path out uses the second.
+- Updating (design: `docs/design/update.md`): `lib/install_paths.py` (the install link vs. the running
+  version folder), `lib/versions.py` (version folders, the link switched in one rename, pruning),
+  `lib/update_state.py` (the update's record and lock, the hold), `lib/update_backups.py` (backups,
+  restore, pruning, deleted by a forget), `lib/update_gate.py` (the write gate and `guarded`) and
+  `lib/migrations.py` (the one registry of the stores' format migrations, and the config's renamed keys).
 - `lib/common.sh`: config defaults (`load_config`) and shared helpers: the window list
   (`window_specs`: orchestrator, sessions.yml entries, checkin), tmux, the one
   launch path (`build_launch_command`, used by `start`, `refresh` and `send`), and the launchd
@@ -212,7 +217,9 @@ of truth, so don't copy rules into this file.
   the commit. Site-specific predicates belong in `$BOSUN_CONFIG_DIR/knowledge/schema.json`.
 - **A config key:** default in `lib/common.sh` and the same value in
   `examples/generic/bosun.env` (tests check they match); any other example only lists
-  overrides. The guide in `docs/` if users should know.
+  overrides. The guide in `docs/` if users should know. Renamed or removed: a row in `CONFIG_RENAMES`
+  (`lib/migrations.py`), which `bosun update` applies to `bosun.env`. A change to one of my own files
+  (`sessions.yml`, `policy.md`, `tasks/`) is never made for me: a row in `USER_FILE_CHANGES` there.
 - **Any substantial change** (an agent or OS, install steps, what runs where, a default, a command): every doc
   it affects changes in the same pull request, not later. Grep for what it touches ("Claude Code", "macOS
   only", old flags, install lines) across the README, `docs/`, `ROADMAP.md`, `SECURITY.md`, `CONTRIBUTING.md`,
