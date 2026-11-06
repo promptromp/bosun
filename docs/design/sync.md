@@ -234,18 +234,20 @@ move the journal folder aside, and the next write starts a new journal from `led
 
 **A journal that starts again is a new replica.** A journal starts again when it holds no line at
 all while the store's files record the position of the journal they were saved from: moved aside,
-emptied or removed by hand (`change_log.starts_again`). The write that starts it makes a new id and
-records it in `replica.json` in place of the old one, whole and flushed before anything is minted
-from it (`journal.new_replica_id`), so that no id is minted twice from the same `seq`: the files,
-and any copy of the old journal kept aside, hold the ids minted from the old one. So `replica.json`
-may stay where it is; moving it aside as well comes to the same. A store whose files record no
-position (new, or from before the journal) is not starting again: its journal starts under the id
-`replica.json` holds, or one made then, once. `replica.json` is this Mac's id in both stores'
-journals (the ledger's and the knowledge base's), so a new id is new in both, which both carry on
-under: the other store's old replica file stays in its journal, and its next change goes to a file
-of the new id. Before anything is journaled, the same write saves the files without the old
-position, as files from before the journal (`ledger.json` without its `journal` key, `view.json`
-with an empty stamp). The old position names `seq`s the new journal never had, which reads as lines
+emptied or removed by hand (`change_log.starts_again`, decided once per write, once it has read the
+files: `take_replica` in each store). The write that starts it makes a new id and records it in
+`replica.json` in place of the old one, whole and flushed before anything is minted from it
+(`journal.new_replica_id`), so that no id is minted twice from the same `seq`: the files, and any
+copy of the old journal kept aside, hold the ids minted from the old one. A write refused before
+then (a file it cannot read) makes none. So `replica.json` may stay where it is; moving it aside as
+well comes to the same. A store whose files record no position (new, or from before the journal) is
+not starting again: its journal starts under the id `replica.json` holds, or one made then, once
+(a gap phase 1 must close: [Open questions](#open-questions)). `replica.json` is this Mac's id in
+both stores' journals (the ledger's and the knowledge base's), so a new id is new in both, which
+both carry on under: the other store's old replica file stays in its journal, and its next change
+goes to a file of the new id. Right after the new id, and before anything is journaled, the same
+write saves the files without the old position, as files from before the journal (`ledger.json`
+without its `journal` key, `view.json` with an empty stamp). The old position names `seq`s the new journal never had, which reads as lines
 it lost: kept until the files record the new journal, it would make a write cut short between the
 new journal's first transaction (genesis) and the files refuse every write after it. Without it,
 that cut is finished by the next write like any other, the files being behind the journal. A cut
@@ -452,7 +454,11 @@ no marker) can leave an older bosun's commit of that person in the history until
 every marker after the saved position unfinished, so a later `--allow-forgotten` re-add is
 forgotten again (the safe direction). And when one data file does not parse, the other one edited
 by hand before the next write is replaced by the rebuild too, not adopted (the write names only the
-file that does not parse). Adopt never brings
+file that does not parse). One more, in both stores: when a journal that starts again has its
+genesis cut short, the files record no position and no digest until the next write
+([Changes, not files](#changes-not-files)), so a hand edit made to them in that window is not seen
+as one: the rebuild replaces it without a word. The ledger keeps the edited file in
+`ledger.json.bak` until the write after that; the knowledge base does not keep it. Adopt never brings
 in or keeps a person deleted on request: one gone from the files whom a forgotten record matches
 (a plain or a keyed hash: an older bosun's `kg forget`, or a hand removal) is forgotten in the
 journal too, as `kg forget` does it (its marker, then the placeholders, over the whole journal,
@@ -928,6 +934,16 @@ from the journal, never what travels.
 - **One replica id on two Macs:** a Migration Assistant or Time Machine restore onto a second Mac
   copies `replica.json`, and both Macs then write as one replica. Phase 1 must notice it (two
   journals with the same `seq` and different changes) rather than merge them.
+- **A store started anew under the old replica id:** a journal starts again under a new id only
+  when the store's files still record a position ([Changes, not files](#changes-not-files)). A
+  store whose journal and files are both gone, while `replica.json` is kept, looks new: its next
+  write starts its journal under the old id at `seq` 1 in each file, and so mints the ids of the
+  store it replaces. A documented command gets there: `bosun uninstall --delete-knowledge` keeps
+  `replica.json`, which is classed with the ledger (`lib/uninstall_plan.py`, [Setup](../setup.md)),
+  so a knowledge base made again after it mints the deleted one's fact ids. Harmless in phase 0,
+  where nothing holds them any more. Phase 1 must handle it, as the old journal may already be in
+  the state repository: one way is for `replica.json` to record which streams have started under
+  its id, so that a stream starting under an id it used before gets a new one.
 - **Causal context for a change after a delete:** an item that another Mac deleted and this one
   makes again stays deleted, because the rebuild cannot yet tell a Mac that saw the delete from one
   that made the item at the same time. Phase 1 adds what each transaction was built on (the

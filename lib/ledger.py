@@ -283,6 +283,7 @@ from journal import (
     JournalError,
     Transaction,
     flush_to_disk,
+    new_replica_id,
     replace_durably,
     replica_id,
 )
@@ -1098,20 +1099,31 @@ def unstamp(ledger: Ledger) -> None:
     save(ledger)
 
 
+def take_replica(journal: Journal, ledger: Ledger, written: Mapping[str, int]) -> None:
+    """<journal>'s replica id for this write, decided once (change_log.starts_again, on what the
+    journal has <written>): a journal that starts again gets a new one, made just before ledger.json
+    is saved without the old position (unstamp), so that a cut between the two makes one more id at
+    the next write, never the old one again; any other gets this Mac's (replica_id, made once)."""
+    if starts_again(written, saved_position(ledger)):
+        journal.replica = new_replica_id(STORE.state_dir)
+        unstamp(ledger)
+    else:
+        journal.replica = replica_id(STORE.state_dir)
+
+
 def write_start(journal: Journal, ledger: Ledger) -> Ledger:
     """The ledger a write starts from, in memory, from <ledger> as loaded: the command's one save
     writes it, so the backup is always the ledger as it was before the write. Refused when the
-    journal lost changes ledger.json reflects (a file deleted, a partial restore); then a journal
-    that starts again starts from ledger.json saved without the old position (unstamp); an
-    unfinished transaction is set aside (repair_tail); a ledger from before journals is put in it
-    (genesis); a change made to ledger.json outside the journal is taken in (adopted where it can
-    be, and the journal's rebuild goes on); and where ledger.json is behind the journal (a write cut
-    short between the two), the journal's rebuild replaces it."""
+    journal lost changes ledger.json reflects (a file deleted, a partial restore); then the journal
+    takes its replica id, and one that starts again a new id and ledger.json saved without the old
+    position (take_replica); an unfinished transaction is set aside (repair_tail); a ledger from
+    before journals is put in it (genesis); a change made to ledger.json outside the journal is
+    taken in (adopted where it can be, and the journal's rebuild goes on); and where ledger.json is
+    behind the journal (a write cut short between the two), the journal's rebuild replaces it."""
     written = journal.written()
     if written:
         refuse_if_behind(written, ledger)
-    if starts_again(written, saved_position(ledger)):
-        unstamp(ledger)
+    take_replica(journal, ledger, written)
     journal.repair_tail()
     position = journal.position()
     if not position:
@@ -1131,7 +1143,7 @@ def for_writing() -> Iterator[Ledger]:
     at the new position, with the digest of what it holds."""
     ledger = writable()
     with journal_errors():
-        journal = open_journal().as_writer(STORE.state_dir, saved_position(ledger))
+        journal = open_journal()  # its replica id once write_start has read it (take_replica)
         ledger = write_start(journal, ledger)
         transaction = journal.begin(STORE.command)
     before = json.loads(json.dumps(ledger))  # a copy to diff against (plain JSON: faster than deepcopy)

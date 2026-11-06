@@ -315,7 +315,7 @@ def starts_again(written: Mapping[str, int], saved: Mapping[str, int]) -> bool:
     emptied or removed) while the store's files record the position of the journal they were saved
     from (<saved>), which is gone. Its replica id's seqs, and the ids minted from them, are spent
     (the files and any copy of that journal kept aside hold them), so the write starts it under a
-    new id (journal.replica_id). And the files then record no position until that write saves them
+    new id (journal.new_replica_id). And the files then record no position until that write saves them
     at the new journal's, as files from before the journal do, so that a write cut short between
     the two is finished by the next, never refused: the old position names seqs the new journal
     never had, which reads as lines it lost (behind). A store with no position (new, or from before

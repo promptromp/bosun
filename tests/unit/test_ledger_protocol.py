@@ -40,6 +40,11 @@ def run(*argv: str) -> Any:
     return args.func(args)
 
 
+def no_second_id() -> Any:
+    """ledger.new_replica_id failing the test: a write that makes no new replica id."""
+    return mock.patch.object(ledger, "new_replica_id", side_effect=AssertionError("a second id"))
+
+
 def journal(state_dir: Path | None = None) -> Journal:
     """The ledger's journal in <state_dir> (default: the configured one)."""
     state = state_dir or ledger.STORE.state_dir
@@ -693,25 +698,46 @@ class JournalTest(ProtocolTestCase):
 
         return mock.patch.object(ledger, "save", side_effect=save)
 
-    def cut_short_after_starting_again(self) -> None:
-        """The journal and replica.json moved aside (the way to start again), then the first write
-        cut short between its genesis and saving ledger.json, which still records the position of
-        the journal moved aside."""
-        run("note", MENTION_ID, "kept")
+    def move_the_journal_aside(self, *, replica_too: bool = False) -> str:
+        """The journal folder moved aside (the advice), and replica.json with it if <replica_too>
+        (the advice before it said it may stay); the replica id the journal had."""
+        old = replica_id(ledger.STORE.state_dir)
         aside = Path(self.enterContext(tempfile.TemporaryDirectory()))
         ledger.STORE.journal_dir.rename(aside / "ledger")
-        (ledger.STORE.state_dir / "replica.json").rename(aside / "replica.json")
+        if replica_too:
+            (ledger.STORE.state_dir / "replica.json").rename(aside / "replica.json")
+        return old
+
+    def cut_short_after_starting_again(self, *, replica_too: bool = False) -> str:
+        """The journal moved aside, then the first write cut short between its genesis and saving
+        ledger.json; the replica id the journal had."""
+        run("note", MENTION_ID, "kept")
+        old = self.move_the_journal_aside(replica_too=replica_too)
         with self.power_cut_after_the_journal(), self.assertRaisesRegex(OSError, "power cut"):
             run("note", MENTION_ID, "cut short")
         self.assertEqual({c["cmd"] for c in journal().changes()}, {"genesis"})
+        return old
+
+    def assert_finished_under_one_new_id(self, old: str) -> None:
+        """The next write finishes what was cut short, as any write cut short between the journal
+        and the file (never refused as a journal that lost lines: the new journal never had the old
+        one's), under the id the cut write made, without making another."""
+        made = replica_id(ledger.STORE.state_dir)
+        self.assertNotEqual(made, old)
+        with no_second_id():
+            run("note", MENTION_ID, "after")
+        self.assertEqual(self.notes(MENTION_ID)[-2:], ["kept", "after"])
+        self.assertEqual(replica_id(ledger.STORE.state_dir), made)
+        self.assertEqual({c["replica"] for c in journal().changes()}, {made})
+        self.assert_the_journal_rebuilds_the_file()
+        self.assertEqual(run("validate", "--journal"), ("ledger is valid", 0))
 
     def test_a_write_cut_short_after_the_journal_starts_again_is_finished(self) -> None:
-        """The next write finishes it, as any write cut short between the journal and the file:
-        never refused as a journal that lost lines (the new journal never had the old one's)."""
-        self.cut_short_after_starting_again()
-        run("note", MENTION_ID, "after")
-        self.assertEqual(self.notes(MENTION_ID)[-2:], ["kept", "after"])
-        self.assert_the_journal_rebuilds_the_file()
+        """The journal moved aside and replica.json left where it is, as the advice says."""
+        self.assert_finished_under_one_new_id(self.cut_short_after_starting_again())
+
+    def test_a_write_cut_short_after_moving_replica_json_aside_too_is_finished(self) -> None:
+        self.assert_finished_under_one_new_id(self.cut_short_after_starting_again(replica_too=True))
 
     def test_a_reader_after_a_write_cut_short_after_starting_again_is_not_warned(self) -> None:
         """Meanwhile a reader shows the journal's rebuild, without a word, and writes nothing."""
@@ -722,6 +748,63 @@ class JournalTest(ProtocolTestCase):
             self.assertIn("kept", run("show", MENTION_ID))
         self.assertEqual(said.getvalue(), "")
         self.assertEqual(ledger.STORE.ledger_file.read_text(), file)
+
+    def test_a_cut_between_the_new_id_and_the_unstamp_makes_one_more_id_never_the_old(self) -> None:
+        """Cut after the new id is made and before ledger.json is saved without the old position:
+        the next write starts again once more, under a third id, never the old one."""
+        run("note", MENTION_ID, "kept")
+        old = self.move_the_journal_aside()
+        with (
+            mock.patch.object(ledger, "unstamp", side_effect=OSError("power cut")),
+            self.assertRaises(OSError),
+        ):
+            run("note", MENTION_ID, "cut short")
+        made = replica_id(ledger.STORE.state_dir)
+        self.assertNotEqual(made, old)
+        self.assertTrue(ledger.saved_position(saved()))  # the old position, still
+        run("note", MENTION_ID, "after")
+        again = replica_id(ledger.STORE.state_dir)
+        self.assertNotIn(again, (old, made))
+        self.assertEqual({c["replica"] for c in journal().changes()}, {again})
+        self.assertEqual(self.notes(MENTION_ID)[-2:], ["kept", "after"])
+        self.assert_the_journal_rebuilds_the_file()
+
+    def test_a_cut_between_the_unstamp_and_genesis_goes_on_under_that_id(self) -> None:
+        """Cut after ledger.json is saved without the old position and before genesis is journaled:
+        the next write puts the ledger in the journal under the id already made, making none."""
+        run("note", MENTION_ID, "kept")
+        old = self.move_the_journal_aside()
+        with (
+            mock.patch("journal.Transaction.commit", side_effect=OSError("power cut")),
+            self.assertRaises(OSError),
+        ):
+            run("note", MENTION_ID, "cut short")
+        made = replica_id(ledger.STORE.state_dir)
+        self.assertNotEqual(made, old)
+        self.assertEqual(ledger.saved_position(saved()), {})
+        self.assertFalse(journal().written())
+        with no_second_id():
+            run("note", MENTION_ID, "after")
+        self.assertEqual(replica_id(ledger.STORE.state_dir), made)
+        self.assertEqual(self.notes(MENTION_ID)[-2:], ["kept", "after"])
+        self.assert_the_journal_rebuilds_the_file()
+
+    def test_moving_a_damaged_replica_json_aside_alone_goes_on_under_a_new_id(self) -> None:
+        """A replica.json that holds no id refuses every write, saying to move it aside; moved aside
+        alone (the journal stays), the next write makes a new id and the journal carries on under
+        it, its old file kept."""
+        old = replica_id(ledger.STORE.state_dir)
+        path = ledger.STORE.state_dir / "replica.json"
+        path.write_text("{not json")
+        with self.assertRaisesRegex(ledger.LedgerError, r"Move it aside \(keep it\): the next write makes"):
+            run("note", MENTION_ID, "refused")
+        path.rename(ledger.STORE.state_dir / "replica.json.damaged")
+        run("note", MENTION_ID, "after")
+        made = replica_id(ledger.STORE.state_dir)
+        self.assertNotEqual(made, old)
+        self.assertEqual({c["replica"] for c in journal().changes()}, {old, made})
+        self.assertEqual(self.notes(MENTION_ID)[-1], "after")
+        self.assert_the_journal_rebuilds_the_file()
 
     def test_a_journal_that_lost_a_file_after_starting_again_is_still_refused(self) -> None:
         """Starting again weakens no refusal: once ledger.json records the new journal, losing one
@@ -1116,7 +1199,7 @@ class GenesisTest(JournalChecks):
             (state / "replica.json").unlink(missing_ok=True)
             ledger.STORE.ledger_file.write_text(json.dumps(self.data))
             made = replica_id(state) if there else ""
-            with mock.patch("journal.new_replica_id", side_effect=AssertionError("a second id")):
+            with no_second_id():
                 run("note", self.OLD_TASK, "first write")
                 run("note", self.OLD_TASK, "second write")
             kept = replica_id(state)

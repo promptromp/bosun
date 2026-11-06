@@ -105,7 +105,17 @@ import update_backups
 import update_gate
 import validation
 from change_log import ADOPT, DIGEST, Change, ChangeLogError, Edit, reader_rebuilds
-from journal import REPLICA_FILE, Journal, JournalError, Transaction, as_saved, forgotten, up_to
+from journal import (
+    REPLICA_FILE,
+    Journal,
+    JournalError,
+    Transaction,
+    as_saved,
+    forgotten,
+    new_replica_id,
+    replica_id,
+    up_to,
+)
 from knowledge_model import KB, KnowledgeError, Proposal, Record
 from knowledge_schema import SchemaError
 from knowledge_store import Paths, StoreError
@@ -846,16 +856,30 @@ def genesis(p: Paths, journal: Journal, kb: KB) -> list[Change]:
     return done
 
 
-def write_start(p: Paths, journal: Journal) -> tuple[KB, LeftOut | None, list[Change]]:
+def take_replica(p: Paths, journal: Journal, state: Path, written: Mapping[str, int]) -> None:
+    """<journal>'s replica id for this write, decided once (change_log.starts_again, on what the
+    journal has <written>), after the files are read, so that a write refused before then makes
+    none: a journal that starts again gets a new one, made just before view.json is saved without
+    the old position (unstamp), so that a cut between the two makes one more id at the next write,
+    never the old one again; any other gets this Mac's (replica_id, made once). Both in <state>."""
+    if change_log.starts_again(written, saved_position(p)):
+        journal.replica = new_replica_id(state)
+        unstamp(p)
+    else:
+        journal.replica = replica_id(state)
+
+
+def write_start(p: Paths, journal: Journal, state: Path) -> tuple[KB, LeftOut | None, list[Change]]:
     """The knowledge base a write starts from, in memory (the command's one save writes it), as
     the ledger's write does. Refused when the journal lost changes the files reflect (a file
-    deleted, a partial restore); then a journal that starts again starts from view.json saved
-    without the old position (unstamp); an unfinished transaction at the end of the journal is set
-    aside (repair_tail); a knowledge base from before the journal is put in it (genesis); a change
-    made to the files outside the journal is taken in (adopted where it can be, and the journal's
-    rebuild goes on); and where the files are behind the journal (a write cut short anywhere
-    between the journal and view.json), the journal's rebuild replaces them (standing). Before
-    any of that, a deletion cut short that cannot be finished without the key is refused
+    deleted, a partial restore); then the journal takes its replica id, and one that starts again a
+    new id and view.json saved without the old position (take_replica); an unfinished transaction
+    at the end of the journal is set aside (repair_tail); a knowledge base from before the journal
+    is put in it (genesis); a change made to the files outside the journal is taken in (adopted
+    where it can be, and the journal's rebuild goes on); and where the files are behind the journal
+    (a write cut short anywhere between the journal and view.json), the journal's rebuild replaces
+    them (standing). Before any of that, a deletion cut short that cannot be finished without the
+    key is refused
     (refuse_finishing_without_key), the forgotten records the journal's markers carry are in
     forgotten.jsonl (take_forgotten), and a deletion cut short is finished (finish_deletions). A
     write that drops a person the files held owes a history restart. The journal is read once and
@@ -864,8 +888,7 @@ def write_start(p: Paths, journal: Journal) -> tuple[KB, LeftOut | None, list[Ch
     kb = read_files(p)
     written = journal.written()
     refuse_if_behind(p, written)
-    if change_log.starts_again(written, saved_position(p)):
-        unstamp(p)
+    take_replica(p, journal, state, written)
     journal.repair_tail()
     position = journal.position()
     if not position:
@@ -908,8 +931,8 @@ def writing(p: Paths, message: str, state: Path) -> Iterator[KB]:
     update_gate.check_format("knowledge base", found, store.KNOWLEDGE_FORMAT)
     new = found == 0
     with journal_errors(p):
-        journal = open_journal(p).as_writer(state, saved_position(p))
-        kb, left, changes = write_start(p, journal)
+        journal = open_journal(p)  # its replica id once write_start has read the files (take_replica)
+        kb, left, changes = write_start(p, journal, state)
         transaction = journal.begin(SETTINGS.command)
     if not kb.secret and not kb.key_problem:
         kb.secret = made_key(p)
