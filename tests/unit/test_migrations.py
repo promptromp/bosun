@@ -167,6 +167,8 @@ class TestPath(MigrationTest):
                 (made("ledger", 1, 2, "{count} moved"), "summary"),
                 (made("ledger", 1, 2, "{n} moved {"), "summary"),
                 (made("ledger", 1, 2, "{0} moved"), "summary"),
+                (made("ledger", 1, 2, "{n[0]} moved"), "summary"),
+                (made("ledger", 1, 2, "{n.x} moved"), "summary"),
             ):
                 with self.subTest(why=why), self.assertRaisesRegex(migrations.MigrationError, why):
                     migrations.check_registry([bad])
@@ -368,6 +370,17 @@ class TestConfig(MigrationTest):
         self.assertEqual(
             migrations.migrate_config("A=1\nB=2\n", chain),
             ("C=2\n", ["A dropped: C is already set", "B is now C"]),
+        )
+
+    def test_of_two_old_keys_renamed_as_often_the_first_in_the_file_is_kept(self) -> None:
+        both = (("A", "C"), ("B", "C"))
+        self.assertEqual(
+            migrations.migrate_config("A=1\nB=2\n", both),
+            ("C=1\n", ["A is now C", "B dropped: C is already set"]),
+        )
+        self.assertEqual(
+            migrations.migrate_config("B=2\nA=1\n", both),
+            ("C=2\n", ["B is now C", "A dropped: C is already set"]),
         )
 
     def test_the_tables_are_read_when_called(self) -> None:

@@ -138,7 +138,7 @@ def _registry_problem(migration: Migration) -> str:
         return f"it must go forward, to this bosun's format {FORMATS[migration.store]} at most"
     try:
         migration.summary.format(n=SUMMARY_COUNT)
-    except (KeyError, IndexError, ValueError) as exc:
+    except (KeyError, IndexError, ValueError, TypeError, AttributeError) as exc:  # {n[0]}, {n.x}
         return f"its summary {migration.summary!r} must take {{n}} and nothing else ({exc!r})"
     return ""
 
