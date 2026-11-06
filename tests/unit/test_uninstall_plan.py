@@ -11,6 +11,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "lib"))
 import journal as jr
 import uninstall_plan as up
+import update_backups as ub
 from uninstall_plan import Checkout, Choices, Facts, Job, Step
 
 
@@ -73,18 +74,34 @@ class FileTables(unittest.TestCase):
             ("logs", up.WORKING),
             ("stopped-bosun", up.WORKING),
             ("keep-awake-bosun.pid", up.WORKING),
+            (".ledger.json.restoring", up.WORKING),  # what an update's restore was writing, cut short
+            (".replica.json.restoring", up.WORKING),
             ("anything-else", up.UNKNOWN),
         ):
             self.assertEqual(up.kind_of(name, up.STATE_FILES), kind, name)
         for name, kind in (
             ("bosun.env", up.SETTINGS),
             ("bosun.env.pre-init-20261102-080000", up.SETTINGS),
+            ("bosun.env.pre-update-20261106-093005", up.SETTINGS),
+            (".bosun.env.update.tmp", up.WORKING),  # bosun update's bosun.env, cut short
+            (
+                jr.WRITING.format(name="bosun.env.pre-update-20261106-093005", writer="4242.1a2b3c4d"),
+                up.WORKING,
+            ),
             ("tasks", up.SETTINGS),
+            (".bosun.env.restoring", up.WORKING),  # what an update's restore was writing, cut short
+            (".sessions.yml.restoring", up.WORKING),
             ("knowledge", up.KNOWLEDGE),
             ("forbidden-terms.txt", up.OURS_TO_LEAVE),
             ("my-notes.txt", up.UNKNOWN),
         ):
             self.assertEqual(up.kind_of(name, up.CONFIG_FILES), kind, name)
+
+    def test_a_restores_temporary_file_is_working_in_both_tables(self) -> None:
+        """lib/update_backups.py writes each file it puts back as .<name>.restoring beside it first."""
+        for name, table in (("ledger.json", up.STATE_FILES), ("bosun.env", up.CONFIG_FILES)):
+            temporary = ub.RESTORING.format(name=name)
+            self.assertEqual(up.kind_of(temporary, table), up.WORKING, temporary)
 
     def test_no_table_lists_a_name_twice(self) -> None:
         for table in (up.STATE_FILES, up.CONFIG_FILES, up.LOG_FILES):
@@ -212,6 +229,17 @@ class Answers(unittest.TestCase):
         plan = up.build_plan(facts(), Choices(keep_ledger=True, keep_knowledge=False))
         self.assertNotIn(f"{STATE}/ledger.json", targets(plan))
         self.assertIn(f"{CONFIG}/knowledge", targets(plan))
+
+    def test_the_update_backups_go_when_either_store_goes(self) -> None:
+        with_backups = facts(state_entries=("ledger.json", "backups", "logs"))
+        for choices, goes in (
+            (Choices(keep_ledger=True, keep_knowledge=True), False),
+            (Choices(keep_ledger=True, keep_knowledge=False), True),
+            (Choices(keep_ledger=False, keep_knowledge=True), True),
+            (Choices(keep_ledger=False, keep_knowledge=False), True),
+        ):
+            plan = up.build_plan(with_backups, choices)
+            self.assertEqual(f"{STATE}/backups" in targets(plan), goes, choices)
 
     def test_purge_takes_what_is_bosuns_and_no_more(self) -> None:
         plan = up.build_plan(facts(), Choices(keep_ledger=False, keep_knowledge=False, purge=True))

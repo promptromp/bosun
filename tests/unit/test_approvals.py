@@ -23,6 +23,7 @@ import claude_state
 import guard
 import ledger
 import minted
+import update_gate
 
 
 PR = "mypr:acme/exporter#102"
@@ -289,6 +290,24 @@ class ChatApprovalTest(ApprovalsTestCase):
         self.assertIn("had its one approval used", self.denial(call) or "")
         with self.assertRaisesRegex(ledger.LedgerError, "already used"):
             run("approve", PR, "--quote", QUOTE)
+
+    def test_a_write_the_update_gate_refuses_is_not_no_decision(self) -> None:
+        """The guard swallows errors as no decision, but not the gate's refusal: update_gate.guarded
+        runs the hook again on the installed version, which prints the decision."""
+        self.approve_touch(typed(QUOTE, self.now()))
+        data = json.loads(ledger.STORE.ledger_file.read_text())
+        data["version"] = ledger.LEDGER_FORMAT + 1
+        ledger.STORE.ledger_file.write_text(json.dumps(data))
+        event = json.dumps({**self.event("Bash", command=TOUCH), "hook_event_name": "PermissionRequest"})
+        out = io.StringIO()
+        with (
+            mock.patch("sys.stdin", io.StringIO(event)),
+            contextlib.redirect_stdout(out),
+            self.assertRaises(update_gate.StoreNewer),
+        ):
+            guard.main(["--permission-request"], self.env)
+        self.assertEqual(out.getvalue(), "")
+        self.assertNotIn("used_at", self.item(PR)["proposal"]["approval"])
 
     def test_a_different_call_is_not_allowed(self) -> None:
         self.approve_touch(typed(QUOTE, self.now()))

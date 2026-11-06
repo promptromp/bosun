@@ -6,6 +6,8 @@ optional local git history (one commit per change).
   Mac's changes in <replica>.jsonl, those naming a person or holding my words in local.jsonl,
   which never leaves it. A write appends there first, then writes the files below. What a write
   cut short left there (<file>.torn-<time>) is ignored by the history.
+- format.json: the version of this folder's format ({"format": n}, KNOWLEDGE_FORMAT; a folder from
+  before it is format 1), which bosun update's migrations move forward.
 - view.json: the journal position the files reflect and a digest of what each data file holds.
 - entities.jsonl: one entity per line, rewritten atomically when an entity changes.
 - facts.jsonl: append-only log of fact records ({"op": "add"} and {"op": "update"}); only a
@@ -21,6 +23,7 @@ from __future__ import annotations
 
 import contextlib
 import fcntl
+import hashlib
 import json
 import os
 import secrets
@@ -34,6 +37,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+import change_log
+import knowledge_changes
 from journal import TORN, JournalError, create_new, flush_to_disk, replace_durably, write_all
 
 
@@ -41,6 +46,9 @@ Record = dict[str, Any]
 PRIVATE_MODE = 0o600
 KEY_BYTES = 32
 KEY_FILE = "secret.key"
+# The version of what the knowledge folder holds on disk: bumped, with a migration, when
+# format_digest changes (tests/unit/test_store_formats.py pins it; CLAUDE.md, "A data format change").
+KNOWLEDGE_FORMAT = 1
 KEY_ASIDE = f"{KEY_FILE}.aside-"  # <KEY_FILE>.aside-<UTC time>: a key file that was not a key, kept
 # What the history never holds: the lock, temporary files, the last batch, the forgotten hashes'
 # key (and a file kept aside that was meant to be it), and what a write cut short left in the
@@ -101,6 +109,10 @@ class Paths:
         return self.root / "journal"
 
     @property
+    def format(self) -> Path:
+        return self.root / "format.json"
+
+    @property
     def view(self) -> Path:
         return self.root / "view.json"
 
@@ -135,6 +147,48 @@ class Paths:
     @property
     def lock(self) -> Path:
         return self.root / "knowledge.lock"
+
+
+def store_format(paths: Paths) -> int:
+    """The format version of the knowledge folder: 0 when there is no knowledge base, 1 for one
+    without format.json (every one from before formats was kept), else what format.json says: a
+    positive whole number. A format.json that cannot be read, or says none, is a StoreError."""
+    try:
+        data = json.loads(paths.format.read_text())
+    except FileNotFoundError:
+        held = (paths.journal, paths.entities, paths.facts, paths.view)
+        return 1 if any(path.exists() for path in held) else 0
+    except (OSError, ValueError) as exc:  # ValueError: not JSON, or not UTF-8
+        raise StoreError(f"{paths.format} cannot be read for its format version ({exc})") from exc
+    version = change_log.format_version(data.get("format") if isinstance(data, dict) else None)
+    if version is None:
+        raise StoreError(
+            f'{paths.format} does not say a format version: it must be {{"format": n}}, n a positive '
+            f"whole number, not {json.dumps(data)}"
+        )
+    return version
+
+
+def write_format(paths: Paths, version: int) -> None:
+    """format.json, whole and flushed (write_atomically)."""
+    paths.root.mkdir(parents=True, exist_ok=True)
+    write_atomically(paths.format, json.dumps({"format": version}) + "\n")
+
+
+def format_digest() -> str:
+    """SHA-256 of what says how the folder is laid out: the change envelope, the ops the journal's
+    rebuild applies or skips, and the names of the files and folders of Paths."""
+    names = sorted(
+        getattr(Paths(Path("knowledge")), name).name
+        for name, member in vars(Paths).items()
+        if isinstance(member, property)
+    )
+    table = {
+        "envelope": change_log.ENVELOPE_VERSION,
+        "ops": sorted([*knowledge_changes.APPLIED, *knowledge_changes.SKIPPED]),
+        "files": names,
+    }
+    return hashlib.sha256(change_log.canonical(table)).hexdigest()
 
 
 def _parsed(line: str, path: Path, number: int) -> tuple[Record | None, str]:

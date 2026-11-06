@@ -63,6 +63,12 @@ for name in BOSUN_STATE_DIR BOSUN_LOG_DIR BOSUN_CONFIG_DIR BOSUN_ORCHESTRATOR \
   settings+=("$name=${!name}")
 done
 
+# The update holds bosun's own background work; the next scheduled run (or a manual one) goes on.
+if [ "$1" = "run" ] && update_hold_active; then
+  echo "update in progress: skipping this learning run"
+  exit 0
+fi
+
 # A run reads the windows from `bosun sessions --json`, and so does apply (a memory note's folder).
 if [ "$1" = "run" ] || [ "$1" = "apply" ]; then
   sessions_file="$(mktemp "${TMPDIR:-/tmp}/bosun-learn-sessions.XXXXXX")" || die "cannot create a temp file"

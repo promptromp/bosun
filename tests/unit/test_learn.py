@@ -25,6 +25,7 @@ import journal  # noqa: E402
 import learn  # noqa: E402
 import learn_world  # noqa: E402
 import ledger  # noqa: E402
+import update_gate  # noqa: E402
 
 
 FAKE_CLAUDE = """#!/usr/bin/env python3
@@ -256,6 +257,56 @@ class RunTest(LearnCase):
             joined = " ".join(command)
             self.assertIn(" ".join(flags), joined)
         self.assertIn("--json-schema", command)
+
+
+class UpdateGateTest(LearnCase):
+    """A ledger write the update gate refuses (lib/update_gate.py) fails learn in one line, is not
+    run again, and leaves nothing half done."""
+
+    def newer_ledger(self, version: int) -> None:
+        data = json.loads(ledger.STORE.ledger_file.read_text())
+        data["version"] = version
+        ledger.STORE.ledger_file.write_text(json.dumps(data))
+
+    def test_a_refused_run_is_a_failed_run_with_no_items(self) -> None:
+        self.analysis_returns(STALL, DRAFTS)
+        self.newer_ledger(ledger.LEDGER_FORMAT + 1)
+        code, out = self.run_learn()
+        self.assertEqual(code, 1)
+        refused = str(update_gate.StoreNewer("ledger", 2, 1))
+        self.assertEqual(out.strip().splitlines()[-1], f"learn: {refused}")  # one line, no run again
+        self.assertIn(f"ERROR: {refused}", out)  # the run's log line, as for any failed run
+        run = self.state().runs[-1]
+        self.assertEqual(run["outcome"], "failed")
+        self.assertIn("newer than this bosun", run["error"])
+        self.assertIsNone(self.state().running)
+        self.newer_ledger(ledger.LEDGER_FORMAT)
+        self.assertFalse(any(i.startswith("learn:") for i in self.items()))
+
+    def apply(self, learn_id: str) -> tuple[int, str]:
+        return self.main("apply", learn_id, "--sessions", str(self.world.sessions_file))
+
+    def test_a_refused_apply_changes_nothing_and_a_later_one_applies_once(self) -> None:
+        self.analysis_returns(STALL, DRAFTS)
+        self.run_learn()
+        ids = {v["fields"]["key"]: i for i, v in self.items().items() if i.startswith("learn:")}
+        note = claude_state.memory_dir(str(self.world.repos / "exporter")) / "bosun-exporter-opens-drafts.md"
+        policy = self.world.config / "policy.md"
+        policy_before = policy.read_text() if policy.exists() else ""
+        self.newer_ledger(ledger.LEDGER_FORMAT + 1)
+        for learn_id in ids.values():
+            code, out = self.apply(learn_id)
+            self.assertEqual(code, 1)
+            self.assertIn("newer than this bosun", out)
+        self.assertFalse(note.exists())
+        self.assertEqual(policy.read_text() if policy.exists() else "", policy_before)
+        self.newer_ledger(ledger.LEDGER_FORMAT)
+        for learn_id in ids.values():
+            self.assertEqual(self.apply(learn_id)[0], 0)
+        self.assertEqual(
+            sorted(p.name for p in note.parent.glob("bosun-exporter-opens-drafts*.md")), [note.name]
+        )
+        self.assertEqual(policy.read_text().count(STALL_TEXT), 1)
 
 
 class ApplyTest(LearnCase):

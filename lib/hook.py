@@ -14,16 +14,21 @@ injects (peer sessions, background tasks) are not mine and are skipped.
 
 It never blocks or changes the prompt: it reads the JSON, forks, and the parent exits 0 at once;
 the child does the work and logs what it did (errors as ERROR lines, which the watchdog reports)
-to $BOSUN_LOG_DIR/hook-YYYY-MM-DD.log. BOSUN_HOOK_SYNC=1 works in the foreground (tests).
+to $BOSUN_LOG_DIR/hook-YYYY-MM-DD.log. BOSUN_HOOK_SYNC=1 works in the foreground (tests). A write
+the update gate refuses (lib/update_gate.py: bosun was updated since this hook's code started, or an
+update was cut short) is run again by the child, in the foreground, through the install link; one
+that still cannot be made is an ERROR line in the hook log, after the gate's own line saying why,
+and so is one the gate never runs again (an older store, an update record that cannot be read).
 """
 
 from __future__ import annotations
 
 import argparse
+import contextlib
 import json
 import os
 import sys
-from collections.abc import Mapping
+from collections.abc import Iterator, Mapping
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -34,21 +39,31 @@ import activity
 import codex_state
 import events
 import ledger
+import update_gate
 
 
 USER_PROMPT_EVENT = "UserPromptSubmit"
+SYNC = "BOSUN_HOOK_SYNC"
 STAMP = "%Y-%m-%d %H:%M:%S"
+
+
+def log_file(env: Mapping[str, str]) -> Path | None:
+    """Today's hook log (its folder made), or None when there is no log dir."""
+    log_dir = env.get("BOSUN_LOG_DIR")
+    if not log_dir:
+        return None
+    Path(log_dir).mkdir(parents=True, exist_ok=True)
+    return Path(log_dir) / f"hook-{datetime.now():%Y-%m-%d}.log"
 
 
 def log(env: Mapping[str, str], message: str) -> None:
     """One line in the hook log (stdout when there is no log dir)."""
     line = f"{datetime.now():{STAMP}} [hook] {message}\n"
-    log_dir = env.get("BOSUN_LOG_DIR")
-    if not log_dir:
+    path = log_file(env)
+    if path is None:
         sys.stdout.write(line)
         return
-    Path(log_dir).mkdir(parents=True, exist_ok=True)
-    with (Path(log_dir) / f"hook-{datetime.now():%Y-%m-%d}.log").open("a") as handle:
+    with path.open("a") as handle:
         handle.write(line)
 
 
@@ -75,24 +90,44 @@ def codex_turn_end(window: str, conversation: str, payload: Mapping[str, Any], e
         return f"ignored: {session_id or 'no id'} is one of Codex's helpers, not {conversation}"
     prompts = [str(text) for text in payload.get("input-messages") or []]
     new = codex_state.new_prompts(conversation, session_id, prompts)
-    codex_state.remember(conversation, session_id, str(payload.get("cwd") or ""), len(prompts))
-    done = [f"{conversation} is {session_id}"]
-    if env.get("BOSUN_EVENTS_ENABLED") == "1":
-        done += [record_prompt(window, {"prompt": text, "session_id": session_id}, env) for text in new]
-    return "; ".join(done)
+    said: list[str] = []
+    with counted(conversation, session_id, str(payload.get("cwd") or ""), len(prompts)):
+        if env.get("BOSUN_EVENTS_ENABLED") == "1":
+            said = [record_prompt(window, {"prompt": text, "session_id": session_id}, env) for text in new]
+    return "; ".join([f"{conversation} is {session_id}", *said])
+
+
+@contextlib.contextmanager
+def counted(conversation: str, session_id: str, workdir: str, prompts: int) -> Iterator[None]:
+    """Remembers <conversation> as <session_id> with <prompts> seen once the block ends, whatever
+    happened in it, but for a write the update gate refused: the run again on the installed version
+    then takes the same prompts as new."""
+    refused = False
+    try:
+        yield
+    except update_gate.WriteRefused:
+        refused = True
+        raise
+    finally:
+        if not refused:
+            codex_state.remember(conversation, session_id, workdir, prompts)
 
 
 def detach(env: Mapping[str, str]) -> bool:
     """Fork; True in the parent, which returns at once. The child leaves the hook's process group
-    and its pipes, so Claude Code neither waits for it nor kills it."""
-    if env.get("BOSUN_HOOK_SYNC") == "1":
+    and its pipes, so Claude Code neither waits for it nor kills it; what it runs again
+    (update_gate.guarded) stays in the foreground, as it is in the background already."""
+    if env.get(SYNC) == "1":
         return False
     if os.fork() > 0:
         return True
     os.setsid()
     devnull = os.open(os.devnull, os.O_RDWR)
-    for fd in (0, 1, 2):
-        os.dup2(devnull, fd)
+    path = log_file(env)
+    said = os.open(path, os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o644) if path else devnull
+    for fd, to in ((0, devnull), (1, devnull), (2, said)):  # what it says on stderr goes to the log
+        os.dup2(to, fd)
+    os.environ[SYNC] = "1"
     return False
 
 
@@ -115,10 +150,27 @@ def main(argv: list[str], env: Mapping[str, str]) -> int:
             log(env, codex_turn_end(args.window, args.conversation or args.window, payload, env))
         else:
             log(env, record_prompt(args.window, payload, env))
+    except update_gate.WriteRefused as exc:
+        if not exc.run_again:  # an older store, an update record that cannot be read
+            log(env, f"ERROR: could not record a prompt typed in {args.window}: {exc}")
+            return 0
+        log(env, f"not recorded in {args.window} on this version: {exc}; running it again")
+        raise  # update_gate.guarded runs it again through the install link
     except Exception as exc:  # noqa: BLE001  (a hook never fails the prompt; the log has it)
         log(env, f"ERROR: could not record a prompt typed in {args.window}: {exc!r}")
     return 0
 
 
+def run(argv: list[str], env: Mapping[str, str]) -> int:
+    """main, under update_gate.guarded: a write the gate refused is run again on the installed
+    version, and one that still could not be made is an ERROR line in the hook log, for the
+    watchdog (the gate's own line, on stderr, says why)."""
+    code = update_gate.guarded("hook", lambda args: main(args, env), argv)
+    if code != 0:
+        what = " ".join(argv[:3])  # the event and the window, never a payload
+        log(env, f"ERROR: bosun hook {what} recorded nothing: the update gate refused its write")
+    return code
+
+
 if __name__ == "__main__":
-    sys.exit(main(sys.argv[1:], os.environ))
+    sys.exit(run(sys.argv[1:], os.environ))

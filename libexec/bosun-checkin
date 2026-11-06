@@ -291,6 +291,7 @@ since_checkin=0
 since_review=0
 checkin_deferred=0
 checkin_status=0
+update_logged=0
 while true; do
   if [ "$LOOP" = "1" ]; then
     sleep "$tick"
@@ -298,6 +299,17 @@ while true; do
     since_checkin=$((since_checkin + tick))
     since_review=$((since_review + tick))
   fi
+  # While an update holds bosun's own background work, skip the tick (the timers keep counting, so
+  # the next one catches up); say so once per hold.
+  if update_hold_active; then
+    if [ "$update_logged" = "0" ]; then
+      update_logged=1
+      echo "$(date '+%F %T') update in progress: skipping this tick; the next one catches up" | tee -a "$(checkin_log)"
+    fi
+    [ "$LOOP" = "1" ] || break
+    continue
+  fi
+  update_logged=0
   if [ "$LOOP" = "0" ] || [ "$since_alert" -ge "$alert_every" ]; then
     since_alert=0
     alert_if_stuck 2>&1 | tee -a "$(checkin_log)"

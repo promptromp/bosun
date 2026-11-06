@@ -40,7 +40,9 @@ BUMP_CHECK_SECONDS), `--approvals` asks and `--permission-request` decides nothi
 asks me: the call is neither sent unchecked nor blocked.
 
 Reads the hook event (JSON) on stdin; prints a decision (JSON) or nothing, and always exits 0 so
-a malformed event never blocks the session.
+a malformed event never blocks the session. A ledger write the update gate refuses
+(lib/update_gate.py: bosun was updated since this hook's code started, or an update was cut short)
+is run again through the install link with the same event, which prints the decision.
 """
 
 from __future__ import annotations
@@ -62,6 +64,7 @@ import approvals
 import events
 import ledger
 import pr_threads
+import update_gate
 
 
 # Matched against the tool part of mcp__<server>__<tool>, split on "_".
@@ -797,6 +800,8 @@ def main(argv: list[str] | None = None, env: Mapping[str, str] | None = None) ->
         return 0
     try:
         output = respond(mode, event, os.environ if env is None else env)
+    except update_gate.WriteRefused:
+        raise  # update_gate.guarded runs it again on the installed version, which decides
     except Exception as exc:  # noqa: BLE001  (a hook never blocks the session: Claude Code then asks)
         print(f"bosun guard {mode}: {exc!r}; no decision", file=sys.stderr)
         return 0
@@ -806,4 +811,5 @@ def main(argv: list[str] | None = None, env: Mapping[str, str] | None = None) ->
 
 
 if __name__ == "__main__":
-    sys.exit(main(sys.argv[1:], os.environ))
+    update_gate.guarded("guard", lambda argv: main(argv, os.environ), sys.argv[1:])
+    sys.exit(0)  # always: a hook never blocks the session, and a refusal was said on stderr

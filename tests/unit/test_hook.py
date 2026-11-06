@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import io
 import json
+import os
 import sys
 import tempfile
 import unittest
@@ -19,6 +20,7 @@ import codex_state
 import events
 import hook
 import ledger
+import update_gate
 import watchdog
 from watchdog import Config, Facts, Inputs, State
 
@@ -123,6 +125,66 @@ class HookTest(unittest.TestCase):
             self.run_hook(self.payload(prompt))
         self.assertEqual(self.said(), [])
         self.assertEqual(self.log().count("skipped in exporter: not typed by me"), 4)
+
+    def newer_ledger(self) -> None:
+        data = json.loads(ledger.STORE.ledger_file.read_text())
+        data["version"] = ledger.LEDGER_FORMAT + 1
+        ledger.STORE.ledger_file.write_text(json.dumps(data))
+
+    def test_a_write_the_gate_refuses_goes_to_the_rerun(self) -> None:
+        """Not swallowed as an error: update_gate.guarded runs it again on the installed version."""
+        self.newer_ledger()
+        with self.assertRaises(update_gate.StoreNewer):
+            self.run_hook(self.payload("go with option b"))
+        self.assertIn("newer than this bosun", self.log())
+        self.assertNotIn("ERROR", self.log())
+
+    def test_an_older_ledger_is_an_error_in_the_log(self) -> None:
+        with mock.patch.object(ledger, "LEDGER_FORMAT", ledger.LEDGER_FORMAT + 1):
+            self.assertEqual(self.run_hook(self.payload("go with option b")), 0)
+        self.assertIn("ERROR: could not record a prompt typed in exporter", self.log())
+        self.assertIn("run bosun update to migrate it", self.log())
+
+    def test_an_update_record_that_cannot_be_read_is_an_error_in_the_log(self) -> None:
+        """Refused for good (never run again), so it is said as an error, not as running it again."""
+        (self.state_dir / "update.json").write_text("{nope")
+        self.assertEqual(self.run_hook(self.payload("go with option b")), 0)
+        self.assertIn("ERROR: could not record a prompt typed in exporter", self.log())
+        self.assertIn("update.json is not JSON", self.log())
+        self.assertNotIn("running it again", self.log())
+
+    def test_a_codex_turn_the_gate_refuses_leaves_its_prompts_new(self) -> None:
+        self.newer_ledger()
+        with self.assertRaises(update_gate.StoreNewer):
+            self.codex_turn("go with option b")
+        data = json.loads(ledger.STORE.ledger_file.read_text())
+        data["version"] = ledger.LEDGER_FORMAT
+        ledger.STORE.ledger_file.write_text(json.dumps(data))
+        self.codex_turn("go with option b")  # the re-run, on a version that can write
+        self.assertEqual([e["text"] for e in self.said()], ["go with option b"])
+
+    def test_a_detached_child_reruns_in_the_foreground_and_says_why_in_the_log(self) -> None:
+        env = {**self.env, "BOSUN_HOOK_SYNC": "0"}
+        opened = {os.devnull: 7, str(hook.log_file(env)): 8}
+        with (
+            mock.patch.dict("os.environ", {"BOSUN_HOOK_SYNC": "0"}),
+            mock.patch("os.fork", return_value=0),
+            mock.patch("os.setsid"),
+            mock.patch("os.open", side_effect=lambda path, *_: opened[str(path)]),
+            mock.patch("os.dup2") as dup2,
+        ):
+            self.assertFalse(hook.detach(env))
+            self.assertEqual(os.environ["BOSUN_HOOK_SYNC"], "1")
+        self.assertEqual([c.args for c in dup2.call_args_list], [(7, 0), (7, 1), (8, 2)])
+
+    def test_a_write_the_gate_still_refuses_is_an_error_in_the_log(self) -> None:
+        argv = ["user-prompt", "--window", WINDOW]
+        with mock.patch.object(update_gate, "guarded", return_value=1):
+            self.assertEqual(hook.run(argv, self.env), 1)
+        self.assertIn(f"ERROR: bosun hook user-prompt --window {WINDOW} recorded nothing", self.log())
+        with mock.patch.object(update_gate, "guarded", return_value=0):
+            self.assertEqual(hook.run(argv, self.env), 0)
+        self.assertEqual(self.log().count("ERROR"), 1)
 
     def test_it_never_fails_the_prompt(self) -> None:
         self.assertEqual(self.run_hook("{not json"), 0)

@@ -26,6 +26,7 @@ import events
 import ledger
 import pr_threads
 import review_watch
+import update_gate
 
 
 RENDER = event_summary.Render(inline_chars=600, max_lines=10)
@@ -207,6 +208,25 @@ class ReviewWatchTest(unittest.TestCase):
         self.assertEqual(
             self.watch(pull(comment, threads=(thread("R6", AUTHOR),))), ["no new reviews on 1 PR(s)"]
         )
+
+    def test_a_write_the_update_gate_refuses_is_left_to_the_run_again(self) -> None:
+        """Not swallowed as an error: `bosun review-watch` runs under update_gate.guarded, which runs
+        it again on the installed version; nothing was recorded or queued here."""
+        data = json.loads(ledger.STORE.ledger_file.read_text())
+        data["version"] = ledger.LEDGER_FORMAT + 1
+        ledger.STORE.ledger_file.write_text(json.dumps(data))
+        with self.assertRaises(update_gate.StoreNewer):
+            self.watch(pull(ROUND_2))
+        self.assertEqual(self.queued(), [])
+        data["version"] = ledger.LEDGER_FORMAT
+        ledger.STORE.ledger_file.write_text(json.dumps(data))
+        self.assertEqual(self.arrived(), [])
+        with (
+            mock.patch.object(review_watch, "watch", side_effect=update_gate.StoreNewer("ledger", 2, 1)),
+            mock.patch.dict("os.environ", {"BOSUN_STATE_DIR": str(self.state)}),
+            self.assertRaises(update_gate.StoreNewer),
+        ):
+            review_watch.main([])
 
     def test_dry_run_writes_nothing(self) -> None:
         before = ledger.STORE.ledger_file.read_text()

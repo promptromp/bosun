@@ -7,6 +7,16 @@ of truth, so don't copy rules into this file.
 
 - `bin/bosun` dispatches `bosun <cmd>` to `libexec/bosun-<cmd>`. Each command's
   `# Usage:` header is its `--help`.
+- Two paths (`lib/install_paths.py`, design: `docs/design/update.md`): a process runs the code of its own
+  folder (`BOSUN_ROOT`, `BOSUN`), and whatever outlives it (hook commands in launch settings, the launch
+  command, plists, the `~/.local/bin/bosun` link, `--plugin-dir`, Codex's notify, the orchestrator
+  settings default) names the install link (`BOSUN_INSTALL`, `BOSUN_CMD`), which an update points at a
+  newer version. In a checkout they are the same. A new place that writes a path out uses the second.
+- Updating (design: `docs/design/update.md`): `lib/versions.py` (version folders, the link switched in
+  one rename, pruning), `lib/update_state.py` (the update's record and lock, the hold),
+  `lib/update_backups.py` (backups, restore, pruning, deleted by a forget), `lib/update_gate.py` (the
+  write gate and `guarded`) and `lib/migrations.py` (the one registry of the stores' format
+  migrations, and the config's renamed keys).
 - `lib/common.sh`: config defaults (`load_config`) and shared helpers: the window list
   (`window_specs`: orchestrator, sessions.yml entries, checkin), tmux, the one
   launch path (`build_launch_command`, used by `start`, `refresh` and `send`), and the launchd
@@ -181,6 +191,12 @@ of truth, so don't copy rules into this file.
   digest under it. One that removes a move or renames a state first needs the rebuild decision of
   2026-11-04 in `docs/design/sync.md` built (the rebuild re-checking only a change that lands on
   ones its writer had not seen), and a migration for earlier changes.
+- **A data format change** (what a store holds on disk: the ledger's field table or maps, the
+  knowledge base's files or journal ops, the change envelope): `tests/unit/test_store_formats.py`
+  fails on the digest. Bump `ledger.LEDGER_FORMAT` or `knowledge_store.KNOWLEDGE_FORMAT`, add a
+  migration in `lib/migrations.py` with a fixture in the old format under
+  `tests/fixtures/migrations/`, and record the new digest under the new version. The knowledge
+  base's version is in `knowledge/format.json`, the ledger's in `ledger.json`'s `version`.
 - **A link relation:** a row in `RELATIONS` (`lib/lineage.py`, with its inverse and the family in
   which cycles are refused), the lineage section of `docs/orchestrator.md` and the relation list in `policy.md`.
   It trips the same rules-digest test: bump `RULES_VERSION` and record the new digest.
@@ -201,7 +217,9 @@ of truth, so don't copy rules into this file.
   the commit. Site-specific predicates belong in `$BOSUN_CONFIG_DIR/knowledge/schema.json`.
 - **A config key:** default in `lib/common.sh` and the same value in
   `examples/generic/bosun.env` (tests check they match); any other example only lists
-  overrides. The guide in `docs/` if users should know.
+  overrides. The guide in `docs/` if users should know. Renamed or removed: a row in `CONFIG_RENAMES`
+  (`lib/migrations.py`), which `bosun update` applies to `bosun.env`. A change to one of my own files
+  (`sessions.yml`, `policy.md`, `tasks/`) is never made for me: a row in `USER_FILE_CHANGES` there.
 - **Any substantial change** (an agent or OS, install steps, what runs where, a default, a command): every doc
   it affects changes in the same pull request, not later. Grep for what it touches ("Claude Code", "macOS
   only", old flags, install lines) across the README, `docs/`, `ROADMAP.md`, `SECURITY.md`, `CONTRIBUTING.md`,
@@ -227,6 +245,9 @@ of truth, so don't copy rules into this file.
 - **A command:** `libexec/bosun-<cmd>` with a `# Usage:` header (`usage` prints it for
   `--help`; `die_usage` reports usage errors with exit 2), a line in `bin/bosun`'s usage, the
   table in `docs/commands.md`, and smoke tests.
+- **A command or background job that writes a store** (the ledger, the knowledge base): it runs
+  under `update_gate.guarded` (`lib/update_gate.py`), or catches `WriteRefused` and fails its run in
+  one line.
 
 ## Tooling and checks
 

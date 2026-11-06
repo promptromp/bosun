@@ -29,6 +29,8 @@
 #                    to the orchestrator, or a delivery failed
 #   slack-watch      with BOSUN_SLACK_WATCH_ENABLED=1 and events on: no Slack watch for two
 #                    intervals in the awake window, 3 failed runs in a row, or the daily budget spent
+#   update-stuck     an update stopped and left its hold (or paused writes), or its hold
+#                    outlived its hour (the watchdog skips its runs while an update holds)
 #   login-expired    Claude Code is logged out, the last login check failed, or a Claude window
 #                    answers every prompt with a login error (once per outage; held, like every
 #                    alert, until the awake window opens)
@@ -113,4 +115,13 @@ fi
 if [ "${args[*]-}" = "--list" ]; then
   exec python3 "$BOSUN_ROOT/lib/watchdog.py" --list
 fi
+# A run that records or alerts waits out an update's hold; reading and dry runs do not.
+case "${args[*]-}" in
+  "" | "--once" | "--only "* | "--once --only "*)
+    if update_hold_active; then
+      echo "update in progress: skipping this watchdog run"
+      exit 0
+    fi
+    ;;
+esac
 collect_facts | env "${settings[@]}" python3 "$BOSUN_ROOT/lib/watchdog.py" ${args[@]+"${args[@]}"}

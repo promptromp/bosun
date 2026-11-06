@@ -125,6 +125,7 @@ as it was.
 | `~/.local/bin/bosun` and bosun's working files | Deleted |
 | The checkout in `~/.local/share/bosun` | Deleted, last. One you cloned yourself stays, and so does one with anything of yours in it: changes, a stash, commits not pushed, another worktree, a file git ignores |
 | Your ledger and learning history, your knowledge graph | It asks, and Enter keeps them |
+| The backups `bosun update` took (`backups/` in the state folder) | Deleted when either the ledger or the knowledge graph is, as each holds both (every person in it included). Kept only when you keep both |
 | `~/.config/bosun`: `bosun.env`, `sessions.yml`, `setup.sh`, `policy.md`, `learn.md`, `tasks/`, `workstreams.json`, and the backups `bosun init` made (`*.pre-init-*`) | Stay, and it says where. `--purge` deletes them too |
 | Anything else in those folders | Stays, and it names it. It only deletes what it knows is bosun's, and if you pointed `BOSUN_STATE_DIR` or `BOSUN_LOG_DIR` at a folder that also holds other files, it leaves that folder whole |
 

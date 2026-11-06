@@ -23,6 +23,9 @@ from init_plan import tilde
 WORKING = "working"  # bosun's own: it goes
 LEDGER = "ledger"  # your records: you decide
 KNOWLEDGE = "knowledge"  # your records: you decide
+BACKUPS = (
+    "backups"  # the update's backups: each holds the ledger and the knowledge base, so they go with either
+)
 SETTINGS = "settings"  # what you configured: it stays, unless --purge
 OURS_TO_LEAVE = "leave"  # in bosun's folder, but not part of running it: it always stays
 UNKNOWN = "unknown"  # not listed below: it always stays
@@ -37,9 +40,17 @@ STATE_FILES = (
     ("ledger.json.bak", LEDGER),
     ("ledger.md", LEDGER),
     ("learn", LEDGER),  # what learning found and what you decided, which a later run goes by
+    # The update's backups (lib/update_backups.py): each holds the whole ledger and knowledge base, so they
+    # go when either is deleted (wanted_gone). A deletion of a person deletes them all.
+    ("backups", BACKUPS),
     ("ledger.json.tmp", WORKING),  # what a write cut short left
     (".replica.json.*.tmp", WORKING),  # what making replica.json left when it was cut short
     ("ledger.lock", WORKING),
+    ("update.json", WORKING),  # the update's record (docs/design/update.md)
+    ("update.json.tmp", WORKING),
+    ("update.lock", WORKING),
+    ("update", WORKING),
+    (".*.restoring", WORKING),  # what an update's restore was writing, cut short (lib/update_backups.py)
     ("agent-changes.json", WORKING),
     (".agent-changes.json.*", WORKING),
     ("alerted-*", WORKING),  # what the check-in loop left, before the watchdog
@@ -76,6 +87,9 @@ CONFIG_FILES = (
     ("tasks", SETTINGS),
     ("workstreams.json", SETTINGS),
     ("*.pre-init-*", SETTINGS),  # what `bosun init` backed up
+    ("bosun.env.pre-update-*", SETTINGS),  # what `bosun update` backed up
+    (".bosun.env.*.tmp", WORKING),  # what `bosun update` was writing, cut short (bosun.env, its copy)
+    (".*.restoring", WORKING),  # what an update's restore was writing, cut short (lib/update_backups.py)
     ("forbidden-terms.txt", OURS_TO_LEAVE),  # guards commits to this repo; bosun runs without it
     (".DS_Store", WORKING),
 )
@@ -296,10 +310,13 @@ def link_steps(facts: Facts) -> list[Step]:
 
 def wanted_gone(kind: str, facts: Facts, choices: Choices) -> bool:
     """Whether a file of this kind goes, on these answers."""
+    ledger_goes = not (choices.keep_ledger and has_ledger(facts))
+    knowledge_goes = not (choices.keep_knowledge and has_knowledge(facts))
     return {
         WORKING: True,
-        LEDGER: not (choices.keep_ledger and has_ledger(facts)),
-        KNOWLEDGE: not (choices.keep_knowledge and has_knowledge(facts)),
+        LEDGER: ledger_goes,
+        KNOWLEDGE: knowledge_goes,
+        BACKUPS: ledger_goes or knowledge_goes,
         SETTINGS: choices.purge,
     }.get(kind, False)
 

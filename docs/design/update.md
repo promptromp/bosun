@@ -1,6 +1,8 @@
 # Updating bosun
 
-Status: approved 2026-11-05; nothing here is built yet. The plan: [docs/plans/update.md](../plans/update.md).
+Status: approved 2026-11-05. Part A, the groundwork, is built: the two paths, the stores' formats, the
+update's record and hold, backups, version folders, the write gate and the migration registry. The
+`bosun update` command is not built yet. The plan: [docs/plans/update.md](../plans/update.md).
 
 ## Why
 
@@ -135,13 +137,25 @@ before the switch and write after it:
 - the approval hooks;
 - a running `bosun console`, which saves review decisions.
 
-So **every write checks the store before it changes it**, once it holds the lock. It checks two
-things: the store's format version, and an update marker saying a freeze is in progress. If the store
-is newer than the writer's code, or a freeze is on, nothing is written:
+So **every write checks the store before it changes it**, once it holds the lock
+(`lib/update_gate.py`). It checks two things, in this order: an update marker saying a freeze is in
+progress, before it reads anything of the store, since a store the freeze changed part way may not
+even read as one; then the store's format version, before the store's shape, which a newer format
+may change. If a freeze is on, or the store's format is not the writer's, nothing is written:
 
-- a command or a hook's child runs itself again through the install link, with the same arguments,
-  so an agent's call just works on the new version;
+- a command or a hook's child runs itself again through the install link, with the same arguments
+  and the same stdin, so an agent's call just works on the new version. It does so once: the run
+  again carries `BOSUN_RERUN=1`, and a refusal there is said in one line, never run again;
+- a freeze whose update still runs is waited out for a few seconds, then the same. If that update
+  died meanwhile, the freeze is put back first ([below](#cut-short)), so the run again can write;
+- a store older than the writer's code (a newer checkout run on data not yet migrated) is refused in
+  one line: run `bosun update` to migrate it;
 - the console refuses with a message to restart it, and the plan lists a running console;
+- bosun's own background writers handle a refusal too. `bosun review-watch` runs itself again like
+  a command, since what it records it records once. `bosun learn` fails the run, or the apply, in one
+  line and leaves it to the next one. It checks before it proposes or applies anything, so a refusal
+  normally changes nothing; a freeze that starts in between can still refuse a later write, and the
+  next run picks it up;
 - the `checkin` window's loop is bosun's own, so the update restarts it when its code changed.
 
 With that check in place, a migration may rewrite the files derived from a journal. The journals
@@ -249,12 +263,13 @@ write to take in. Measure before building that.
   - is tested from a fixture in the old format;
   - leaves the store passing its own check.
 - **Journals are append-only.** A migration reads old envelopes as new ones (upcasting) rather than
-  rewriting what was recorded, and rebuilds the files derived from the journal.
+  rewriting what was recorded, and rebuilds the files derived from the journal. So whatever a store
+  rebuilds from its journal is in the code's format (a `ledger.json` made from the rebuild records it).
 - **Config.** A new key needs nothing written, since the defaults in `lib/common.sh` apply. A key
-  that is renamed or removed is edited in `bosun.env`, keeping a `bosun.env.pre-update-<time>` copy.
-  The update never edits my own files: `sessions.yml`, `setup.sh`, `policy.md`, `learn.md`,
-  `tasks/` and `workstreams.json`. If their format has to change, the summary says what to change
-  and `bosun doctor` points to it.
+  that is renamed or removed is edited in `bosun.env`, keeping a `bosun.env.pre-update-<time>` copy
+  (`YYYYmmdd-HHMMSS`, in UTC). The update never edits my own files: `sessions.yml`, `setup.sh`,
+  `policy.md`, `learn.md`, `tasks/` and `workstreams.json`. If their format has to change, the
+  summary says what to change and `bosun doctor` points to it.
 
 ### Bringing the agents along
 
@@ -305,7 +320,7 @@ Data
   ledger      format 1 -> 2 (412 items migrated); rules 1 -> 2
   knowledge   format 1, unchanged
 Config
-  bosun.env   BOSUN_OLD_KEY is now BOSUN_NEW_KEY (before: bosun.env.pre-update-20261104-1532)
+  bosun.env   BOSUN_OLD_KEY is now BOSUN_NEW_KEY (before: bosun.env.pre-update-20261104-153207)
   3 new keys, at their defaults (bosun doctor lists them)
 Prompts changed: 4 (policy.md, tasks/review.md, tasks/_common.md, learn.md)
 Jobs reloaded: watchdog
@@ -313,7 +328,7 @@ Agents
   orchestrator  re-read policy.md; checked in (2 events from the update)
   api           restarted when idle; resumed: waiting on CI for PR 12
   web           busy; kept running (nothing it was started with changed)
-Backup: ~/.local/state/bosun/backups/20261104-1532-95545b0-c41b186 (3.1 MB)
+Backup: ~/.local/state/bosun/backups/20261104-153207-95545b0-c41b186 (3.1 MB)
 Going back: docs/setup.md#going-back
 ```
 
@@ -351,9 +366,18 @@ between two versions that both have `update`.
     first;
   - after the checks passed: the update rolls forward. The next `bosun update` lifts the hold and
     brings the agents along.
-- **The hold expires** after an hour, so an update that died never stops the check-in loop for
-  good. The watchdog and `bosun doctor` report it.
+- **The hold lapses** at once when its update has died, as it counts only while the update holds its
+  lock, and after an hour in any case, so an update that died never stops the check-in loop. The
+  watchdog and `bosun doctor` report an update that stopped inside its hold.
 - **One update at a time:** a second one is refused while the first runs.
+- **The record only grows.** Old code reads a newer version's record: a hook or a command started
+  before the switch, the console. So its steps are only ever added, never renamed or removed, and a
+  new field is optional; a field old code does not know is ignored. A step it does not know is a
+  newer bosun's: the write is refused and runs again through the install link, whose code knows it,
+  and the hold counts as on. So a new step is recorded only inside the freeze or after the switch;
+  progress before the switch goes in a field, or the installed old code would refuse every write. A record that is there but cannot be read refuses every write in one
+  line, since it may record a freeze: `bosun update` comes first (it resumes an update in progress and
+  puts back one cut short), and the file is moved aside only if `bosun update` cannot read it either.
 
 ## Testing
 

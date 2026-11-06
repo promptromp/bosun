@@ -35,6 +35,7 @@ import knowledge
 import knowledge_changes as kc
 import knowledge_model as km
 import knowledge_store as store
+import update_backups as ub
 from change_log import Edit
 from knowledge_model import KnowledgeError
 from test_journal import short_writes
@@ -1333,6 +1334,25 @@ class OutsideEditHistoryTest(JournalTestCase):
         self.assertNotIn("dana", self.history())
         self.assertEqual(self.validate(), ("knowledge base is valid", 0))
 
+    def test_a_forget_outside_the_journal_deletes_the_update_backups(self) -> None:
+        """An older bosun's kg forget, found by the next write (forget_outside, then
+        forget_in_journal with the facts it found): every update backup goes too, as the forget's
+        last step, and the line says how many, never whom."""
+        self.seed()
+        self.run_kg("propose", "person/dana", "timezone", "--value", "Europe/Lisbon", "--source", "ledger:a")
+        made = [self.state / ub.BACKUPS_DIR / f"2026110{n}-090000-aaa1111-bbb2222" for n in (4, 5)]
+        for backup in made:
+            (backup / "config" / "knowledge").mkdir(parents=True)
+            (backup / ub.MANIFEST).write_text("{}\n")
+        self.old_bosun_forgets("person/dana")
+        said = self.write_saying()
+        self.assertEqual([p for p in made if p.exists()], [])
+        self.assertIn(
+            "kg: deleted 2 update backups taken before this; going back past it is no longer possible",
+            said.splitlines(),
+        )
+        self.assertNotIn("dana", said.lower())
+
     def everything(self) -> tuple[dict[str, bytes], str]:
         """Every file in the knowledge folder but the git history's, and that history."""
         files = {
@@ -1392,6 +1412,36 @@ class OutsideEditHistoryTest(JournalTestCase):
         self.write_saying()
         self.assertEqual([p.name for p in self.root.glob("*.tmp")], [])
         self.assert_dana_is_gone()
+
+    def test_a_deletion_cut_short_deletes_the_update_backups_when_finished(self) -> None:
+        self.seed()
+        self.run_kg("propose", "person/dana", "timezone", "--value", "Europe/Lisbon", "--source", "ledger:a")
+        with self.power_cut(jr.Journal, "forget"), self.assertRaises(OSError):
+            self.run_kg("forget", "person/dana")
+        backup = self.state / ub.BACKUPS_DIR / "20261105-090000-aaa1111-bbb2222"
+        backup.mkdir(parents=True)
+        (backup / ub.MANIFEST).write_text("{}\n")
+        said = io.StringIO()
+        with contextlib.redirect_stderr(said):
+            self.run_kg("add-entity", "repo/other")
+        self.assertFalse(backup.exists())
+        self.assertIn("kg: deleted 1 update backup taken before this;", said.getvalue())
+
+    def test_a_forget_of_a_person_with_no_facts_cut_late_still_deletes_the_backups(self) -> None:
+        """No fact names her, so the targets the next write derives are empty; the unfinished
+        marker alone says a deletion happened."""
+        self.seed()
+        self.run_kg("add-entity", "person/dana", "--name", "Dana Example")
+        for cut in (store, knowledge):
+            name = "remove_temporaries" if cut is store else "delete_update_backups"
+            with self.power_cut(cut, name), self.assertRaises(OSError):
+                self.run_kg("forget", "person/dana")
+            backup = self.state / ub.BACKUPS_DIR / "20261105-090000-aaa1111-bbb2222"
+            backup.mkdir(parents=True)
+            (backup / ub.MANIFEST).write_text("{}\n")
+            self.write_saying("add-entity", "repo/other-" + name.replace("_", "-"))
+            self.assertFalse(backup.exists(), name)
+            self.run_kg("add-entity", "person/dana", "--allow-forgotten", "--name", "Dana Example")
 
     def test_a_purge_cut_between_its_marker_and_its_placeholders_is_finished(self) -> None:
         """The retention purge's marker carries the ids of the facts it removed, so the next write

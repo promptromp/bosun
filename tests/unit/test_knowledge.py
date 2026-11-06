@@ -34,6 +34,9 @@ import knowledge
 import knowledge_model as km
 import knowledge_review as kr
 import knowledge_store as store
+import update_backups as ub
+import update_gate
+import update_state
 from knowledge_model import KnowledgeError
 from knowledge_schema import SchemaError
 
@@ -516,6 +519,64 @@ class RetentionAndForgetTest(KnowledgeTestCase):
         with self.assertRaisesRegex(KnowledgeError, "deleted on request"):
             self.run_kg("add-entity", "person/dana")
         self.run_kg("add-entity", "person/dana", "--allow-forgotten")
+
+    def backups(self, count: int) -> list[Path]:
+        """<count> update backups in the state folder, as an update leaves them."""
+        folder = self.state / ub.BACKUPS_DIR
+        made = [folder / f"2026110{n + 1}-090000-aaa1111-bbb2222" for n in range(count)]
+        for backup in made:
+            (backup / "config" / "knowledge").mkdir(parents=True)
+            (backup / ub.MANIFEST).write_text("{}\n")
+        return made
+
+    def forget_saying(self, *argv: str) -> str:
+        said = io.StringIO()
+        with contextlib.redirect_stderr(said):
+            self.run_kg(*argv)
+        return said.getvalue()
+
+    def test_a_forget_deletes_the_update_backups(self) -> None:
+        self.seed()
+        self.run_kg("propose", "person/dana", "reviews", "exporter", "--source", "ledger:a")
+        made = self.backups(2)
+        said = self.forget_saying("forget", "person/dana")
+        self.assertEqual([p for p in made if p.exists()], [])
+        self.assertIn(
+            "kg: deleted 2 update backups taken before this; going back past it is no longer possible", said
+        )
+        self.assertNotIn("dana", said.lower())
+
+    def test_a_forget_says_backup_for_one(self) -> None:
+        self.seed()
+        self.run_kg("propose", "person/dana", "reviews", "exporter", "--source", "ledger:a")
+        self.backups(1)
+        self.assertIn(
+            "kg: deleted 1 update backup taken before this;", self.forget_saying("forget", "person/dana")
+        )
+
+    def test_a_forget_with_no_backups_says_nothing_of_them(self) -> None:
+        self.seed()
+        self.run_kg("propose", "person/dana", "reviews", "exporter", "--source", "ledger:a")
+        self.assertNotIn("update backup", self.forget_saying("forget", "person/dana"))
+
+    def test_expire_deletes_them_when_it_deletes_a_person_fact(self) -> None:
+        self.seed()
+        self.run_kg(
+            "propose", "person/dana", "timezone", "--value", "Europe/Lisbon", "--source", "profile:directory"
+        )
+        made = self.backups(2)
+        self.later(km.RETENTION_DAYS + 1)
+        said = self.forget_saying("expire")
+        self.assertEqual([p for p in made if p.exists()], [])
+        self.assertIn("kg: deleted 2 update backups", said)
+
+    def test_expire_keeps_them_when_it_deletes_none(self) -> None:
+        self.seed()
+        made = self.backups(2)
+        self.later(1)
+        said = self.forget_saying("expire")
+        self.assertTrue(all(p.exists() for p in made))
+        self.assertNotIn("update backup", said)
 
     def forgotten_records(self) -> list[dict[str, Any]]:
         text = (self.root / "forgotten.jsonl").read_text()
@@ -1328,6 +1389,79 @@ class LockingTest(KnowledgeTestCase):
         self.assertEqual(len(facts), 12)
         self.assertEqual({f["value"] for f in facts.values()}, {f"gotcha {n}" for n in range(12)})
         self.assertEqual(len(self.log_lines()), 12)
+
+
+class UpdateGateTest(KnowledgeTestCase):
+    """Every write checks the store first (lib/update_gate.py), before anything is journaled."""
+
+    def setUp(self) -> None:
+        super().setUp()
+        self.run_kg("add-entity", "repo/invoice-exporter", "--name", "invoice exporter")
+
+    def files(self) -> dict[str, bytes]:
+        return {
+            path.relative_to(self.root).as_posix(): path.read_bytes()
+            for path in sorted(self.root.rglob("*"))
+            if path.is_file() and not path.name.endswith(".lock")
+        }
+
+    def test_a_write_in_a_freeze_no_update_runs_is_cut_short(self) -> None:
+        marked = update_state.UpdateState(
+            id="u1",
+            from_root="/Users/me/.local/share/bosun-versions/aaaaaaa11111",
+            to_root="/Users/me/.local/share/bosun-versions/bbbbbbb22222",
+            from_commit="aaaaaaa",
+            to_commit="bbbbbbb",
+            step="marked",
+            started_at="2026-11-05T09:00:00+00:00",
+            hold_until=10**12,
+        )
+        update_state.write(self.state, marked)
+        before = self.files()
+        with self.assertRaises(update_gate.UpdateCutShort):
+            self.run_kg("add-entity", "gate/smoke-tests", "--name", "Smoke tests")
+        self.assertEqual(self.files(), before)
+
+    def test_a_freeze_comes_before_reading_the_format(self) -> None:
+        update_state.write(
+            self.state,
+            update_state.UpdateState(
+                id="u1",
+                from_root="/Users/me/.local/share/bosun-versions/aaaaaaa11111",
+                to_root="/Users/me/.local/share/bosun-versions/bbbbbbb22222",
+                from_commit="aaaaaaa",
+                to_commit="bbbbbbb",
+                step="migrated",
+                started_at="2026-11-05T09:00:00+00:00",
+                hold_until=10**12,
+            ),
+        )
+        store.Paths(self.root).format.write_text("{broken")
+        before = self.files()
+        with self.assertRaises(update_gate.UpdateCutShort):
+            self.run_kg("add-entity", "gate/smoke-tests", "--name", "Smoke tests")
+        self.assertEqual(self.files(), before)
+
+    def test_a_write_into_a_newer_store_is_refused(self) -> None:
+        store.write_format(store.Paths(self.root), store.KNOWLEDGE_FORMAT + 1)
+        before = self.files()
+        with self.assertRaises(update_gate.StoreNewer) as caught:
+            self.run_kg("add-entity", "gate/smoke-tests", "--name", "Smoke tests")
+        self.assertEqual(caught.exception.store, "knowledge base")
+        self.assertEqual(self.files(), before)
+
+    def test_a_write_into_an_older_store_is_refused(self) -> None:
+        before = self.files()
+        with (
+            mock.patch.object(store, "KNOWLEDGE_FORMAT", store.KNOWLEDGE_FORMAT + 1),
+            self.assertRaisesRegex(update_gate.StoreOlder, "run bosun update to migrate it"),
+        ):
+            self.run_kg("add-entity", "gate/smoke-tests", "--name", "Smoke tests")
+        self.assertEqual(self.files(), before)
+
+    def test_a_dry_run_is_no_write(self) -> None:
+        store.write_format(store.Paths(self.root), store.KNOWLEDGE_FORMAT + 1)
+        self.run_kg("expire", "--dry-run")
 
 
 if __name__ == "__main__":

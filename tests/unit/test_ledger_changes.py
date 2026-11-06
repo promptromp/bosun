@@ -1357,10 +1357,10 @@ class RealWritesTest(PostToolUseTestCase):
         self.env.update(STANDING)
         self.writes: list[tuple[dict[str, Any], dict[str, Any]]] = []
         loaded: list[dict[str, Any]] = []
-        load, save = ledger.load, ledger.save
+        start, save = ledger.writable, ledger.save
 
-        def loading() -> dict[str, Any]:
-            data = load()
+        def loading() -> dict[str, Any]:  # what a write starts from
+            data = start()
             loaded.append(copy.deepcopy(data))
             return data
 
@@ -1370,7 +1370,7 @@ class RealWritesTest(PostToolUseTestCase):
 
         environment = {"BOSUN_STATE_DIR": str(self.state), "BOSUN_CONFIG_DIR": str(self.state / "config")}
         for patcher in (
-            mock.patch.object(ledger, "load", loading),
+            mock.patch.object(ledger, "writable", loading),
             mock.patch.object(ledger, "save", saving),
             mock.patch.dict("os.environ", environment),
         ):

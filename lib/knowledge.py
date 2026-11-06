@@ -101,6 +101,8 @@ import knowledge_query as kq
 import knowledge_review as kr
 import knowledge_schema as ks
 import knowledge_store as store
+import update_backups
+import update_gate
 import validation
 from change_log import ADOPT, DIGEST, Change, ChangeLogError, Edit, reader_rebuilds
 from journal import REPLICA_FILE, Journal, JournalError, Transaction, as_saved, forgotten, replica_id, up_to
@@ -374,19 +376,38 @@ def journaled(p: Paths, kb: KB, write: Write) -> dict[str, Any]:
         edits = [*(e for e in edits if e.target not in targets), marker]
     write.transaction.commit_edits(edits)
     if kb.rewrite:
-        forget_in_journal(p, write.journal, write.changes, targets)
+        forget_in_journal(p, write.journal, write.changes, targets, bool(targets))
     return change_log.stamped(write.journal.position(), held)
 
 
-def forget_in_journal(p: Paths, journal: Journal, changes: list[Change], targets: set[str]) -> list[Change]:
+def forget_in_journal(
+    p: Paths, journal: Journal, changes: list[Change], targets: set[str], deleted: bool
+) -> list[Change]:
     """A deletion's last step (kg forget, the retention purge, one made outside the journal, one
     cut short and finished): every change of <targets> a placeholder in local.jsonl, with what
     writes cut short left of that file (Journal.forget), and what they left in the knowledge
-    folder (store.remove_temporaries: batch.json.tmp names people), under the exclusive lock.
-    Returns the journal as read (<changes>) as it is now."""
+    folder (store.remove_temporaries: batch.json.tmp names people), under the exclusive lock;
+    then, when <deleted> (it removed something: a marker is committed only then, so one found
+    unfinished says so even when <targets> is empty, a person with no facts), every update backup
+    (delete_update_backups). Returns the journal as read (<changes>) as it is now."""
     journal.forget(targets)
     store.remove_temporaries(p.root)
+    if deleted:
+        delete_update_backups()
     return forgotten(changes, targets)
+
+
+def delete_update_backups() -> None:
+    """Every update backup deleted (update_backups.delete_all), as a deletion's last step: a backup
+    holds the whole knowledge base, so restoring one from before would bring the person back. Says
+    how many, never whom."""
+    count = update_backups.delete_all(state_dir())
+    if count:
+        noun = "backup" if count == 1 else "backups"
+        print(
+            f"kg: deleted {count} update {noun} taken before this; going back past it is no longer possible",
+            file=sys.stderr,
+        )
 
 
 def refuse_unencodable(edits: list[Edit]) -> None:
@@ -581,7 +602,7 @@ def forget_outside(
     records = kc.records_of(persons, km.forgotten_records(kb), kb.secret)
     marker = kc.deletion_marker(records, sorted(targets - persons))
     changes = [*changes, *journal.begin(ADOPT).commit_edits([marker])]
-    changes = forget_in_journal(p, journal, changes, targets)
+    changes = forget_in_journal(p, journal, changes, targets, bool(targets))
     kb.restart_history = True
     print(
         f"kg: {len(persons)} person(s) deleted on request are gone from the knowledge files and deleted "
@@ -781,7 +802,7 @@ def finish_deletions(
     persons = kc.matched(kc.people(result.entities, facts), kc.marker_records(later), kb.secret)
     targets = kc.naming(persons, facts) | kc.marker_facts(later)
     refuse_private(changes, targets)
-    return forget_in_journal(p, journal, changes, targets)
+    return forget_in_journal(p, journal, changes, targets, True)
 
 
 def refuse_if_behind(p: Paths, journal_has: Mapping[str, int]) -> None:
@@ -862,9 +883,15 @@ def trial_mint() -> Callable[[], str]:
 
 
 def writing(p: Paths, message: str, state: Path) -> Iterator[KB]:
-    """A write under the exclusive lock: the knowledge base it starts from (write_start), its fact
-    ids minted from its one journal transaction, named by its command; then, if it changed
-    anything, saved."""
+    """A write under the exclusive lock: first the update gate (update_gate; refused, nothing is
+    written): a freeze, before anything of the knowledge base is read, then the format format.json
+    records, before the files; then the knowledge base it starts from (write_start), its fact ids
+    minted from its one journal transaction, named by its command; then, if it changed anything,
+    saved."""
+    update_gate.check_freeze(state)
+    found = store.store_format(p)
+    update_gate.check_format("knowledge base", found, store.KNOWLEDGE_FORMAT)
+    new = found == 0
     with journal_errors(p):
         journal = open_journal(p, replica_id(state))
         kb, left, changes = write_start(p, journal)
@@ -875,6 +902,8 @@ def writing(p: Paths, message: str, state: Path) -> Iterator[KB]:
     entities = copy.deepcopy(kb.entities)
     yield kb
     if kb.changed:
+        if new:  # a store's version changes only when it is made, and by a migration
+            store.write_format(p, store.KNOWLEDGE_FORMAT)
         save(p, kb, message, Write(journal, changes, transaction, entities, left))
 
 
@@ -1370,12 +1399,20 @@ def unreadable_findings(kb: KB) -> list[Finding]:
     ]
 
 
+def validate_unlocked(p: Paths) -> list[Finding]:
+    """What `kg validate` finds in the knowledge base at <p>: the files as saved against the
+    journal's rebuild. It takes no lock and writes nothing: the caller holds the lock, or the folder
+    is a copy no one else writes (an update's rehearsal). Under a lock its own process holds, a lock
+    of its own would wait for ever (flock is per open file)."""
+    return journal_findings(p, read_files(p))
+
+
 def cmd_validate(args: argparse.Namespace) -> tuple[str, int]:
     """The files as saved against the journal's rebuild, read under the shared lock: nothing is
     written. Exit 1 on findings (a note aside); --json carries each one's severity and line."""
     p = paths()
     with store.locked(p, False):
-        found = journal_findings(p, read_files(p))
+        found = validate_unlocked(p)
     return validation.report(found, args.json, "knowledge base is valid")
 
 
@@ -1571,8 +1608,8 @@ def configure_from_environment(command: str = "") -> None:
     )
 
 
-def main() -> int:
-    args = build_parser().parse_args()
+def main(argv: list[str] | None = None) -> int:
+    args = build_parser().parse_args(argv)
     if not os.environ.get("BOSUN_CONFIG_DIR"):
         print("kg: BOSUN_CONFIG_DIR is not set; run it as `bosun kg`", file=sys.stderr)
         return 2
@@ -1592,4 +1629,4 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    sys.exit(update_gate.guarded("kg", main, sys.argv[1:]))
