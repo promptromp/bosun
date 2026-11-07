@@ -26,6 +26,7 @@ import knowledge_store
 import launch_record
 import ledger
 import migrations
+import signals
 import update_backups
 import update_gate
 import update_plan
@@ -67,19 +68,32 @@ def folders() -> Folders:
         raise UpdateRefused(f"{exc.args[0]} is not set: run it as bosun update") from exc
 
 
-def command(argv: list[str]) -> subprocess.CompletedProcess[str]:
-    """<argv> run, its output kept; one that outlasts COMMAND_SECONDS stopped, as a failure."""
+def command(
+    argv: list[str], *, stdin: str | None = None, detached: bool = False
+) -> subprocess.CompletedProcess[str]:
+    """<argv> run, its output kept, with <stdin> as its input (else this process's); one that outlasts
+    COMMAND_SECONDS stopped, as a failure. <detached>: in a session of its own, so a Ctrl-C at the
+    terminal never stops it half way (a restart that stopped an agent and never started it again)."""
     try:
         return subprocess.run(
-            argv, capture_output=True, text=True, errors="replace", check=False, timeout=COMMAND_SECONDS
+            argv,
+            input=stdin,
+            capture_output=True,
+            text=True,
+            errors="replace",
+            check=False,
+            timeout=COMMAND_SECONDS,
+            start_new_session=detached,
         )
     except subprocess.TimeoutExpired:
         return subprocess.CompletedProcess(argv, 1, "", f"{' '.join(argv[:3])} took over {COMMAND_SECONDS} s")
 
 
-def bosun(root: Path, *args: str) -> subprocess.CompletedProcess[str]:
-    """`bosun <args>` of the version in <root>."""
-    return command([str(root / "bin" / "bosun"), *args])
+def bosun(
+    root: Path, *args: str, stdin: str | None = None, detached: bool = False
+) -> subprocess.CompletedProcess[str]:
+    """`bosun <args>` of the version in <root> (command's <stdin> and <detached>)."""
+    return command([str(root / "bin" / "bosun"), *args], stdin=stdin, detached=detached)
 
 
 def shell(root: Path, script: str) -> subprocess.CompletedProcess[str]:
@@ -180,13 +194,21 @@ def launch_changed(root: Path, name: str, state_dir: Path, session: str) -> bool
     return bool(recorded.get("fingerprint") != now)
 
 
+def _kind(window: dict[str, Any]) -> str:
+    return WINDOW_KINDS.get(str(window.get("kind")), "repo")
+
+
+def _status(window: dict[str, Any]) -> str:
+    """The status of the agent in <window> (as `bosun sessions --json` lists it): exited when none runs."""
+    agent = window.get("agent")
+    return str(agent.get("status") or "unknown") if isinstance(agent, dict) else "exited"
+
+
 def _window(root: Path, window: dict[str, Any], state_dir: Path, session: str) -> WindowFacts:
     name = str(window.get("name"))
-    kind = WINDOW_KINDS.get(str(window.get("kind")), "repo")
-    agent = window.get("agent")
-    status = str(agent.get("status") or "unknown") if isinstance(agent, dict) else "exited"
+    kind = _kind(window)
     changed = kind != "checkin" and launch_changed(root, name, state_dir, session)
-    return WindowFacts(name, kind, status, changed)
+    return WindowFacts(name, kind, _status(window), changed)
 
 
 def open_windows(root: Path) -> list[dict[str, Any]]:
@@ -196,6 +218,26 @@ def open_windows(root: Path) -> list[dict[str, Any]]:
     except ValueError:
         return []
     return [w for w in listed if isinstance(w, dict) and w.get("window")] if isinstance(listed, list) else []
+
+
+def statuses(root: Path) -> dict[str, str]:
+    """The status of the agent in each window open in the session, by name (exited: none runs); empty
+    when the session's windows cannot be listed."""
+    return {str(w.get("name")): _status(w) for w in open_windows(root)}
+
+
+def window_kinds(root: Path) -> dict[str, str]:
+    """The kind of each window open in the session (orchestrator, repo or checkin), by name."""
+    return {str(w.get("name")): _kind(w) for w in open_windows(root)}
+
+
+def left_running(state_dir: Path, window: str) -> str:
+    """What the last turn that ended in <window> left running, as the Stop hook recorded it
+    (lib/signals.py): "shell `sleep 900`; subagent `...`", or "" when nothing is recorded."""
+    for entry in signals.lines_last_first(signals.signals_path(state_dir, window)):
+        if entry.get("event") == signals.STOP:
+            return signals.describe(list(entry.get("running") or []))
+    return ""
 
 
 def window_facts(root: Path) -> list[WindowFacts]:

@@ -16,7 +16,14 @@
 #      migrates it, switches the install link to the new version, and checks each store. Any failure
 #      puts everything back as it was;
 #   5. releases: reloads the launchd jobs whose plist changed, restarts the check-in loop, lifts the
-#      hold, and keeps what `bosun doctor` finds.
+#      hold, and keeps what `bosun doctor` finds;
+#   6. brings the agents along, each as the plan says, deciding again from what it is doing now: the
+#      orchestrator re-reads its prompts when only they changed; a window something it was launched
+#      with changed for restarts on the new version once idle, after listing its background work if
+#      only that runs (a restart ends it); a busy one is waited for, one waiting for you is never
+#      touched. Each gets a prompt to check for anything it missed and carry on, and answers with its
+#      status; the update waits for every answer, saying which windows it waits for. Ctrl-C leaves
+#      them to the check-in loop, which restarts each once its turn is over.
 # An update cut short (Ctrl-C, a crash, a power cut) is carried on by the next `bosun update`: put back
 # if it stopped while writes were paused (the next write to a store does that too), finished if its
 # checks had passed. With nothing new on the branch it says bosun is up to date.
@@ -26,13 +33,30 @@
 #              and the update's record as it stands; what it says goes to stderr
 #
 # What the agents and the check-in loop run while it brings the windows along:
-#   bosun update note ...   a window's status, after the update's prompt
-#   bosun update advance    the check-in loop's turn at windows still to bring along
+#   bosun update note --window <w> --stock|--status
+#                           a window's note, the text on stdin: the background work it listed
+#                           before its restart (--stock), or its one-line status once it carried on
+#                           after the update's prompt (--status)
+#   bosun update advance    the check-in loop's turn at the windows still to bring along (nothing
+#                           while the update itself still runs)
 # Exit status: 0 updated, up to date, or only planned; 1 it stopped (blocked, refused, or failed and
 # put back), saying why; 2 bad usage.
 set -uo pipefail
 source "$(dirname "$0")/../lib/common.sh"
 load_config
+
+# lib/update.py of this version, with the config's folders and session (load_config exports none).
+run_update() {
+  python3 -c 'import sys; sys.exit(sys.version_info < (3, 13))' 2>/dev/null ||
+    die "bosun needs Python 3.13 or newer as python3: bosun preflight says how to get it"
+  BOSUN_CONFIG_DIR="$BOSUN_CONFIG_DIR" BOSUN_STATE_DIR="$BOSUN_STATE_DIR" BOSUN_LOG_DIR="$BOSUN_LOG_DIR" \
+    BOSUN_SESSION_NAME="$BOSUN_SESSION_NAME" exec python3 "$BOSUN_ROOT/lib/update.py" "$@"
+}
+
+# What the agents and the check-in loop run, on the version installed now.
+case "${1:-}" in
+  note | advance) run_update "$@" ;;
+esac
 
 FROM=""
 args=()
@@ -48,19 +72,13 @@ while [ $# -gt 0 ]; do
       [ -n "$FROM" ] || die_usage "--from takes the version folder that handed over"
       shift
       ;;
-    note | advance) die_usage "bosun update $1 comes with bringing the windows along, which this version does not do yet" ;;
     *) die_usage "unknown argument $1" ;;
   esac
   shift
 done
 
 # The new version, handed over to: the update itself (lib/update.py).
-if [ -n "$FROM" ]; then
-  python3 -c 'import sys; sys.exit(sys.version_info < (3, 13))' 2>/dev/null ||
-    die "bosun needs Python 3.13 or newer as python3: bosun preflight says how to get it"
-  BOSUN_CONFIG_DIR="$BOSUN_CONFIG_DIR" BOSUN_STATE_DIR="$BOSUN_STATE_DIR" BOSUN_LOG_DIR="$BOSUN_LOG_DIR" \
-    BOSUN_SESSION_NAME="$BOSUN_SESSION_NAME" exec python3 "$BOSUN_ROOT/lib/update.py" --from "$FROM" ${args[@]+"${args[@]}"}
-fi
+[ -z "$FROM" ] || run_update --from "$FROM" ${args[@]+"${args[@]}"}
 
 # git for the versions' repository, with none of the user's hooks. No GIT_* variable from the caller
 # (a git hook, another repository's tooling) may send it elsewhere.

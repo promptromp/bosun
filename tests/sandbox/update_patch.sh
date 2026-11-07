@@ -3,8 +3,10 @@
 #
 # Makes "the next version" of bosun out of a copy of it, for the update's tests (tests/smoke.sh,
 # "bosun update"): the ledger's format goes to 2, with the migration that takes it there, one line
-# of the orchestrator's policy changes, and the format's digest is recorded under 2
-# (tests/unit/test_store_formats.py). Only the copy changes; commit it to have the new version.
+# of the orchestrator's policy changes, the repo sessions' hook settings change (their Stop hook's
+# timeout, so each repo window's launch changed and the update restarts it), and the format's digest
+# is recorded under 2 (tests/unit/test_store_formats.py). Only the copy changes; commit it to have the
+# new version.
 #
 # The migration records the field `update_patch` in ledger.json, stamped as a write saves it, so the
 # ledger still passes its own check. On the real data, never on a rehearsal's copy, it first sleeps
@@ -79,6 +81,12 @@ migration = f'''def _update_patch(ctx: Context) -> int:
 
 REGISTRY: tuple[Migration, ...] = (Migration("ledger", 1, 2, _update_patch, "{{n}} items migrated"),)'''
 replace_once(tree / "lib" / "migrations.py", "REGISTRY: tuple[Migration, ...] = ()", migration)
+
+replace_once(
+    tree / "lib" / "common.sh",
+    '    signal_hook_settings "$1"\n  } | merge_settings\n',
+    '    signal_hook_settings "$1" | jq -c \'.hooks.Stop[0].hooks[0].timeout = 11\'\n  } | merge_settings\n',
+)
 
 policy = tree / "orchestrator" / "policy.md"
 lines = policy.read_text().splitlines(keepends=True)

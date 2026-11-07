@@ -9,7 +9,9 @@ Checks that what I say in my own words ("ask Dana whether ...", "ping Priya agai
 answered, go ahead with b") becomes the right outreach steps in the ledger, both for the
 orchestrator (its real policy, plugin, settings, model and effort, as `bosun chores --dry-run`
 runs it) and for a repo session holding a delegated item (its real task text from `bosun
-delegate --print`, in a scratch git repo). Each run gets a scratch world (tests/llm/world.py):
+delegate --print`, in a scratch git repo). A case can say things earlier in the same session first
+(`before`, each its own turn, so a background task one turn starts still runs at the next). Each run
+gets a scratch world (tests/llm/world.py):
 scratch ledger, sends only logged, its own tmux server with fake windows, and outward tools
 denied, so nothing reaches Slack, GitHub, Jira, Confluence or the live session. Claude runs with no
 MCP servers (--strict-mcp-config), so runs cannot read real Slack or other connected systems and
@@ -24,11 +26,15 @@ results.json to the work dir. Exit 1 if any run failed.
 from __future__ import annotations
 
 import argparse
+import contextlib
 import json
 import os
+import signal
 import subprocess
 import sys
 import tempfile
+import threading
+from collections.abc import Iterable
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any
@@ -71,6 +77,8 @@ OUTWARD_TOOLS = [
 REPO_ALLOWED = [
     "Bash(bosun ledger:*)",
     "Bash(bosun delegate --list:*)",
+    "Bash(bosun update note:*)",
+    "Bash(sleep:*)",
     "Bash(git status:*)",
     "Bash(git log:*)",
     "Bash(git diff:*)",
@@ -111,41 +119,53 @@ def mcp_flags(with_mcp: bool) -> list[str]:
     return [] if with_mcp else ["--strict-mcp-config"]
 
 
-def orchestrator_command(world: World, case: Case, max_cost: float, with_mcp: bool) -> tuple[list[str], Path]:
+def turns_of(world: World, case: Case) -> list[str]:
+    """What I say in the session, in order: what comes before the case's words, then them."""
+    return [world.fill(text) for text in (*case.before, case.say)]
+
+
+def orchestrator_command(
+    world: World, case: Case, max_cost: float, with_mcp: bool
+) -> tuple[list[str], Path, list[str]]:
+    """The orchestrator's command (without its output format or prompt), its folder, and the turns."""
     settings, ask = orchestrator_settings(world)
     policy = (ROOT / "orchestrator" / "policy.md").read_text() + NOTICE
     command = [
         "claude", "-p", "--permission-mode", "auto", "--model", MODEL, "--settings", str(settings),
-        "--no-session-persistence", "--output-format", "json", "--max-budget-usd", str(max_cost),
+        "--no-session-persistence", "--max-budget-usd", str(max_cost),
         "--plugin-dir", str(ROOT / "orchestrator" / "plugin"),
         "--disallowedTools", *ask, *OUTWARD_TOOLS, *mcp_flags(with_mcp),
-        "--append-system-prompt", policy, "--", world.fill(case.say),
+        "--append-system-prompt", policy,
     ]  # fmt: skip
-    return command, world.orchestrator_dir
+    return command, world.orchestrator_dir, turns_of(world, case)
 
 
-def repo_prompt(world: World, case: Case) -> str:
-    """The real task text for the held item, then my message, as if typed later in the session."""
+def repo_prompt(world: World, case: Case, said: str) -> str:
+    """The real task text for the held item, then <said>, as if typed later in the session."""
     task = world.bosun("delegate", case.task, "--id", case.holder, "--ask", case.ask, "--print").strip()
     if task.startswith(SUBAGENT_PREAMBLE):
         task = task.split("\n---\n", 1)[1].strip()
     return (
         f"{task}\n\n[Earlier in this session you received the task above and started on it; your work "
-        f"so far is on the current branch of this repository.]\n\n{world.fill(case.say)}"
+        f"so far is on the current branch of this repository.]\n\n{said}"
     )
 
 
-def repo_command(world: World, case: Case, max_cost: float, with_mcp: bool) -> tuple[list[str], Path]:
+def repo_command(
+    world: World, case: Case, max_cost: float, with_mcp: bool
+) -> tuple[list[str], Path, list[str]]:
+    """The repo session's command (without its output format or prompt), its folder, and the turns:
+    the first carries the task text."""
     _, ask = orchestrator_settings(world)
     command = [
         "claude", "-p", "--permission-mode", "default", "--model", MODEL,
         "--settings", json.dumps({"effortLevel": EFFORT}),
-        "--no-session-persistence", "--output-format", "json", "--max-budget-usd", str(max_cost),
+        "--no-session-persistence", "--max-budget-usd", str(max_cost),
         "--allowedTools", *REPO_ALLOWED,
         "--disallowedTools", *ask, *OUTWARD_TOOLS, *mcp_flags(with_mcp),
-        "--", repo_prompt(world, case),
     ]  # fmt: skip
-    return command, world.repo
+    turns = turns_of(world, case)
+    return command, world.repo, [repo_prompt(world, case, turns[0]), *turns[1:]]
 
 
 def claude_result(done: subprocess.CompletedProcess[str]) -> dict[str, Any]:
@@ -156,6 +176,64 @@ def claude_result(done: subprocess.CompletedProcess[str]) -> dict[str, Any]:
     return result
 
 
+def next_result(lines: Iterable[str]) -> dict[str, Any]:
+    """The result event that ends a turn of a stream-json session."""
+    for line in lines:
+        try:
+            event = json.loads(line)
+        except ValueError:
+            continue
+        if isinstance(event, dict) and event.get("type") == "result":
+            return event
+    return {"result": "(the session ended before its turn did)"}
+
+
+def run_turns(command: list[str], turns: list[str], cwd: Path, env: dict[str, str]) -> dict[str, Any]:
+    """Several turns of one session (stream-json in and out), so what one turn starts in the
+    background still runs at the next: the last turn's result, with every turn's denials. The session
+    and what it left running are stopped at the end."""
+    argv = [*command, "--input-format", "stream-json", "--output-format", "stream-json", "--verbose"]
+    child = subprocess.Popen(
+        argv, cwd=cwd, env=env, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+        text=True, start_new_session=True,
+    )  # fmt: skip
+    timer = threading.Timer(RUN_TIMEOUT_SECONDS, lambda: os.killpg(child.pid, signal.SIGKILL))
+    timer.start()
+    result: dict[str, Any] = {}
+    denials: list[Any] = []
+    try:
+        assert child.stdin is not None and child.stdout is not None
+        for text in turns:
+            child.stdin.write(
+                json.dumps({"type": "user", "message": {"role": "user", "content": text}}) + "\n"
+            )
+            child.stdin.flush()
+            result = next_result(child.stdout)
+            denials += result.get("permission_denials") or []
+    finally:
+        timer.cancel()
+        with contextlib.suppress(ProcessLookupError):
+            os.killpg(child.pid, signal.SIGTERM)
+        child.wait()
+    return {**result, "permission_denials": denials}
+
+
+def run_claude(command: list[str], turns: list[str], cwd: Path, env: dict[str, str]) -> dict[str, Any]:
+    """One turn as one headless call (json out), several as one session (run_turns)."""
+    if len(turns) > 1:
+        return run_turns(command, turns, cwd, env)
+    done = subprocess.run(
+        [*command, "--output-format", "json", "--", turns[0]],
+        cwd=cwd,
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=RUN_TIMEOUT_SECONDS,
+        check=False,
+    )
+    return claude_result(done)
+
+
 def run_case(case: Case, run: int, work: Path, max_cost: float, keep: bool, with_mcp: bool) -> dict[str, Any]:
     world = build_world(work / f"{case.id}-run{run}", f"bosun-llm-{os.getpid()}-{case.id}-{run}")
     try:
@@ -163,17 +241,8 @@ def run_case(case: Case, run: int, work: Path, max_cost: float, keep: bool, with
             seed(world)
         world.snapshot()
         build = orchestrator_command if case.actor == "orchestrator" else repo_command
-        command, cwd = build(world, case, max_cost, with_mcp)
-        done = subprocess.run(
-            command,
-            cwd=cwd,
-            env=world.env(),
-            capture_output=True,
-            text=True,
-            timeout=RUN_TIMEOUT_SECONDS,
-            check=False,
-        )
-        result = claude_result(done)
+        command, cwd, turns = build(world, case, max_cost, with_mcp)
+        result = run_claude(command, turns, cwd, world.env())
         outcome = Outcome(world, result, case.actor)
         failures = case.check(outcome) + [f"tried an outward action: {d}" for d in outcome.outward_denials()]
         return {

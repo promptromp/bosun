@@ -108,6 +108,16 @@ class RecordTest(unittest.TestCase):
         self.newer(verified_by="doctor", rollout={"waves": [1, 2]}, step="migrated")
         self.assertEqual(update_state.read(self.dir), state("migrated"))
 
+    def test_an_earlier_bosuns_record_is_read_with_the_fields_added_since_at_their_defaults(self) -> None:
+        """A record written before `windows` and `reread` existed: every field added since is optional."""
+        earlier = {
+            k: v for k, v in dataclasses.asdict(state("agents")).items() if k not in ("windows", "reread")
+        }
+        (self.dir / "update.json").write_text(json.dumps(earlier))
+        found = update_state.load(self.dir)
+        assert found is not None
+        self.assertEqual((found.windows, found.reread), ({}, ()))
+
     def test_a_newer_bosuns_step_is_read(self) -> None:
         self.newer(step="verifying")
         found = update_state.read(self.dir)
@@ -126,6 +136,16 @@ class RecordTest(unittest.TestCase):
 
     def test_load_of_nothing_is_none(self) -> None:
         self.assertIsNone(update_state.load(self.dir))
+
+    def test_windows_are_pending_only_while_an_update_brings_them_along(self) -> None:
+        self.assertFalse(update_state.windows_pending(self.dir))
+        for step, pending, expected in (
+            ("agents", ("api",), True),
+            ("agents", (), False),
+            ("done", ("api",), False),
+        ):
+            update_state.write(self.dir, update_state.advanced(state(), step, pending=pending))
+            self.assertEqual(update_state.windows_pending(self.dir), expected, (step, pending))
 
 
 class LockTest(unittest.TestCase):
@@ -285,7 +305,7 @@ class MalformedRecordTest(unittest.TestCase):
             self.assertIsNone(update_state.read(self.dir), text)
             self.assertFalse(update_state.hold_active(update_state.read(self.dir), 0))
             self.assertEqual(update_state.stuck(self.dir, 0), "", text)
-            for command in ("hold-active", "stuck"):
+            for command in ("hold-active", "stuck", "windows-pending"):
                 argv = [sys.executable, str(LIB / "update_state.py"), command, "--state-dir", str(self.dir)]
                 done = subprocess.run(argv, capture_output=True, text=True, check=False)
                 self.assertEqual(done.returncode, 1, (text, command, done.stderr))

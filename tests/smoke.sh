@@ -30,7 +30,8 @@ CONSOLE_PID="" # the console test's server, while it runs
 cleanup() {
   [ -n "$CONSOLE_PID" ] && kill "$CONSOLE_PID" 2>/dev/null
   tmux -L "$SOCKET" kill-server 2>/dev/null
-  rm -f "${TMUX_TMPDIR:-/tmp}/tmux-$(id -u)/${SOCKET:?}"
+  tmux -L "$SOCKET-update" kill-server 2>/dev/null # the update's windows (bosun update)
+  rm -f "${TMUX_TMPDIR:-/tmp}/tmux-$(id -u)/${SOCKET:?}" "${TMUX_TMPDIR:-/tmp}/tmux-$(id -u)/${SOCKET:?}-update"
   rm -rf "${WORK:?}"
 }
 trap cleanup EXIT
@@ -119,7 +120,7 @@ check "every command's --help prints its usage header and no code" bash -c '
     ! grep -qE "^(set -uo|source |import )" <<<"$out" || { echo "$cmd prints code"; exit 1; }
   done' _ "$ROOT"
 check "usage errors exit 2" bash -c '
-  for args in "send" "send --bogus" "send window-only" "send --id" "send --no-item window-only" "send --new w" "send --start" "start --bogus" "launch --bogus" "launch --fingerprint alpha extra" "refresh --bogus" "refresh --update-restart" "refresh --update-restart prompt alpha --unless-active" "refresh --checkin-loop alpha" "refresh --checkin-loop --unless-active" "trust --bogus" "watchdog --bogus" "watchdog --only" "sessions --bogus" "learn --bogus" "learn apply" "events --bogus" "slack-watch --bogus" "review-watch --bogus" "console --bogus" "orphans --bogus" "update --bogus" "update note"; do
+  for args in "send" "send --bogus" "send window-only" "send --id" "send --no-item window-only" "send --new w" "send --start" "start --bogus" "launch --bogus" "launch --fingerprint alpha extra" "refresh --bogus" "refresh --update-restart" "refresh --update-restart prompt alpha --unless-active" "refresh --checkin-loop alpha" "refresh --checkin-loop --unless-active" "trust --bogus" "watchdog --bogus" "watchdog --only" "sessions --bogus" "learn --bogus" "learn apply" "events --bogus" "slack-watch --bogus" "review-watch --bogus" "console --bogus" "orphans --bogus" "update --bogus" "update note" "update note --window w --mood" "update advance --bogus"; do
     # shellcheck disable=SC2086  # split the argument list on purpose
     "$1" $args >/dev/null 2>&1
     [ $? -eq 2 ] || { echo "bosun $args did not exit 2"; exit 1; }
@@ -1129,7 +1130,9 @@ launched_with_morning_chores() { # <old pane pid>: the orchestrator's window run
   grep -qF -e "--name orch-$(date +%F) " <<<"$screen" && grep -qF -e '-- /bosun:chores\ morning' <<<"$screen"
 }
 orch_pane="$(tmux -L "$SOCKET" display -p -t "=smoke:orch" '#{pane_pid}')"
-check "refresh --update-restart restarts an orchestrator still on yesterday's conversation as a new day does" contains "$(update_restart orch 2>&1)" "orch: restart for the update (idle), into orch-$(date +%F), as its next conversation starts"
+check "refresh --update-restart restarts an orchestrator still on yesterday's conversation as a new day does, and exits 4" bash -c '
+  out="$("$1" refresh --update-restart "$2" orch 2>&1)"
+  [ $? -eq 4 ] && grep -qF "orch: restart for the update (idle), into orch-$(date +%F), as its next conversation starts" <<<"$out"' _ "$BOSUN" "$WORK/update-prompt"
 check "... starting today's with the morning chores" wait_for 10 launched_with_morning_chores "$orch_pane"
 check "... not with the update's prompt" bash -c '! tmux -L "$1" capture-pane -p -J -S -500 -t "=smoke:orch" | grep -q bosun-was-updated' _ "$SOCKET"
 wait_for 10 bash -c '[ -z "$(pgrep -P "$(tmux -L "$1" display -p -t =smoke:orch "#{pane_pid}")")" ]' _ "$SOCKET"
@@ -2554,6 +2557,117 @@ migrations.run(migrations.Context(pathlib.Path(sys.argv[2]), pathlib.Path(sys.ar
   }
   check "each hook command of v1's launch settings runs on v2 and exits 0 ($(grep -c . <<<"$u_hooks") of them)" u_run_hooks
   check "... each through the install link, never v1's own folder" bash -c '[ -n "$1" ] && ! grep -q "bosun-versions/" <<<"$1"' _ "$u_hooks"
+
+  # Bringing the agents along. In a tmux server of their own, on v1: the orchestrator, which only
+  # re-reads (v2 changes its policy, nothing it was launched with), and three repo windows whose hook
+  # settings v2 changes: an idle one, one where only background work runs (shell) and a busy one. No
+  # checkin window (check-ins off), so only the ticks below take the loop's turn. Each fake Claude
+  # registers with the status in $U/status.<window>, keeps the prompt it was started with in
+  # $U/prompt.<window>.<pid> and what is pasted into it in $U/pasted.<window>, and answers bosun's update
+  # prompt (as its first prompt or pasted in) with `bosun update note --status`, and a take-stock prompt
+  # with `--stock`.
+  u_reset
+  U_TMUX="$SOCKET-update"
+  U_REPO="$U/repos/exporter"
+  mkdir -p "$U_REPO/.git"
+  printf 'sessions:\n' >"$U_CONFIG/sessions.yml"
+  for status in idle shell busy; do
+    printf '  - name: u-%s\n    dir: %s\n' "$status" "$U_REPO" >>"$U_CONFIG/sessions.yml"
+    echo "$status" >"$U/status.u-$status"
+  done
+  echo idle >"$U/status.orch"
+  u_note_env="env BOSUN_STATE_DIR=$U_STATE BOSUN_LOG_DIR=$U_STATE/logs BOSUN_CONFIG_DIR=$U_CONFIG $U_LINK/bin/bosun"
+  cat >"$U/fake-claude" <<FAKE
+#!/bin/bash
+if [ "\$1" = "--version" ]; then echo "2.0.0 (Claude Code)"; exit 0; fi
+window=""
+name=""
+previous=""
+for arg in "\$@"; do
+  if [ "\$previous" = "--remote-control" ]; then window="\$arg"; fi
+  if [ "\$previous" = "--name" ]; then name="\$arg"; fi
+  previous="\$arg"
+done
+prompt="\${!#}"
+printf '%s' "\$prompt" >"$U/prompt.\$window.\$\$"
+printf '{"pid":%d,"status":"%s","version":"2.0.0","statusUpdatedAt":%d,"name":"%s"}' \$\$ "\$(cat "$U/status.\$window")" "\$(date +%s)000" "\$name" >"\$HOME/.claude/sessions/\$\$.json"
+note() { $u_note_env update note --window "\$window" "\$1" <<<"\$2"; }
+case "\$prompt" in *"--window \$window --status"*) note --status "resumed after the update" ;; esac
+while IFS= read -r line; do
+  printf '%s\n' "\$line" >>"$U/pasted.\$window"
+  case "\$line" in
+    *"--window \$window --stock"*) note --stock "sleep 600: the wait for CI; when it ends, report CI" ;;
+    *"--window \$window --status"*) note --status "re-read, checked in, carrying on" ;;
+  esac
+done
+FAKE
+  chmod +x "$U/fake-claude"
+  U_LIVE=(BOSUN_TMUX_SOCKET="$U_TMUX" BOSUN_LAUNCH_DRY_RUN=0 BOSUN_CLAUDE_BIN="$U/fake-claude" BOSUN_ORCHESTRATOR=orch
+    BOSUN_ORCHESTRATOR_DIR="$U_REPO" BOSUN_CHECKIN_MINUTES=0)
+  ul() { "${U_ENV[@]}" "${U_LIVE[@]}" "$U_LINK/bin/bosun" "$@"; }
+  u_claude() { # <window>: the pid of the fake Claude running in it
+    local pane_pid
+    pane_pid="$(tmux -L "$U_TMUX" list-windows -t "=update-test" -F '#{window_name} #{pane_pid}' 2>/dev/null | awk -v w="$1" '$1 == w { print $2 }')"
+    [ -n "$pane_pid" ] && bash -c 'source "$1/lib/common.sh"; agent_pid_under "$2"' _ "$ROOT" "$pane_pid"
+  }
+  u_claudes() { for w in orch u-idle u-shell u-busy; do u_claude "$w" >/dev/null || return 1; done; }
+  u_windows() { jq -c --arg w "$1" '.windows[$w]' "$U_STATE/update.json"; }
+  ul start >/dev/null 2>&1
+  check "bringing the agents along: four fake Claude windows run on v1" wait_for 20 u_claudes
+  orch_pid="$(u_claude orch)"
+  idle_pid="$(u_claude u-idle)"
+  shell_pid="$(u_claude u-shell)"
+  busy_pid="$(u_claude u-busy)"
+  out="$(ul update --dry-run 2>&1)"
+  check "... the plan: the orchestrator re-reads; v2 changed what the repo windows were launched with, so the idle one restarts, the shell one takes stock first, the busy one is waited for" bash -c '
+    grep -q "orch: re-read" <<<"$1" && grep -q "u-idle: restart$" <<<"$1" && grep -q "u-shell: take stock, then restart" <<<"$1" &&
+      grep -q "u-busy: wait until idle" <<<"$1"' _ "$out"
+  # Run so that Ctrl-C reaches it (a job a script starts in the background ignores SIGINT).
+  python3 -c 'import os, signal, sys; signal.signal(signal.SIGINT, signal.SIG_DFL); os.execvp(sys.argv[1], sys.argv[1:])' \
+    "${U_ENV[@]}" "${U_LIVE[@]}" "$U_LINK/bin/bosun" update --yes >"$U/agents.out" 2>&1 &
+  updating=$!
+  u_pending_is() { [ "$(jq -c .pending "$U_STATE/update.json" 2>/dev/null)" = "$1" ]; }
+  u_waits_for_busy() { # the update brought every window along but the busy one; if not, where it is
+    wait_for 180 u_pending_is '["u-busy"]' || {
+      jq -c '{step, pending, windows}' "$U_STATE/update.json"
+      tail -5 "$U/agents.out"
+      return 1
+    }
+  }
+  check "... the update brings the orchestrator, the idle and the shell window along, and waits for the busy one" u_waits_for_busy
+  check "... the orchestrator kept running, got the update prompt pasted in, naming policy.md, and its answer ended its wait" bash -c '
+    jq -e ".windows.orch == [\"orchestrator\", \"re-read\", \"asked to re-read\", \"answered\"]" "$1/update.json" >/dev/null && kill -0 "$2" &&
+      grep -q "this session was kept running. Re-read .*/orchestrator/policy.md" "$3/pasted.orch"' _ "$U_STATE" "$orch_pid" "$U"
+  check "... the idle one restarted on v2 with the update prompt, and its answer ended its wait" bash -c '
+    jq -e ".windows[\"u-idle\"] == [\"repo\", \"restart\", \"restarted\", \"answered\"]" "$1/update.json" >/dev/null &&
+      ! kill -0 "$2" 2>/dev/null && grep -q "bosun was updated from .* this session was restarted on the new version" "$3"/prompt.u-idle.* &&
+      grep -qx "resumed after the update" "$1/update/notes/u-idle.status"' _ "$U_STATE" "$idle_pid" "$U"
+  check "... the shell one listed its background work first, then restarted with that list in its prompt" bash -c '
+    jq -e ".windows[\"u-shell\"] == [\"repo\", \"take stock, then restart\", \"asked to take stock\", \"restarted\", \"answered\"]" "$1/update.json" >/dev/null &&
+      ! kill -0 "$2" 2>/dev/null && grep -l "this session was restarted" "$3"/prompt.u-shell.* | xargs grep -q "sleep 600: the wait for CI"' _ "$U_STATE" "$shell_pid" "$U"
+  check "... the busy one is left running, never restarted" bash -c 'kill -0 "$1" && [ "$(jq -c ".windows[\"u-busy\"]" "$2/update.json")" = "[\"repo\",\"wait until idle\"]" ]' _ "$busy_pid" "$U_STATE"
+  check "... and the update says it waits for it" wait_for 10 grep -q "Waiting for u-busy" "$U/agents.out"
+  kill -INT "$updating"
+  wait "$updating"
+  rc=$?
+  check "Ctrl-C stops the wait (exit 0), leaving the busy window to the check-in loop, the record at agents" bash -c '
+    [ "$1" = 0 ] && grep -q "Stopped waiting: the check-in loop brings along u-busy" "$2" && jq -e ".step == \"agents\" and .pending == [\"u-busy\"]" "$3/update.json" >/dev/null' \
+    _ "$rc" "$U/agents.out" "$U_STATE"
+  check "... with the link at v2" u_at "$U_V2"
+  uc() { "${U_ENV[@]}" "${U_LIVE[@]}" BOSUN_CHECKIN_MINUTES=60 "$U_LINK/bin/bosun" checkin 2>&1; } # one tick of the loop
+  out="$(uc)"
+  check "a check-in tick leaves the busy window alone while it is busy" bash -c 'kill -0 "$1" && ! grep -q "u-busy: restarted" <<<"$2"' _ "$busy_pid" "$out"
+  echo idle >"$U/status.u-busy"
+  printf '{"pid":%d,"status":"idle","version":"2.0.0","statusUpdatedAt":%d,"name":"u-busy"}' "$busy_pid" "$(date +%s)000" >"$HOME/.claude/sessions/$busy_pid.json"
+  out="$(uc)"
+  check "... and restarts it once it is idle" contains "$out" "bosun update: u-busy: restarted"
+  check "... with the update prompt, which it answers" wait_for 15 test -s "$U_STATE/update/notes/u-busy.status"
+  out="$(uc)"
+  check "... and the next tick takes its answer: the update is done" bash -c '
+    grep -q "u-busy: answered: resumed after the update" <<<"$1" && jq -e ".step == \"done\" and .pending == []" "$2/update.json" >/dev/null' _ "$out" "$U_STATE"
+  check "... after which a tick has nothing to do" bash -c '! grep -q "bosun update" <<<"$1"' _ "$(uc)"
+  tmux -L "$U_TMUX" kill-server 2>/dev/null
+  rm -f "$U_CONFIG/sessions.yml"
 
   # A next version whose launchd templates are broken: the morning job's fails to render, the
   # watchdog's renders XML that is not valid. Nothing installed is unloaded or removed.

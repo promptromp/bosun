@@ -2,9 +2,10 @@
 
 Status: approved 2026-11-05. Part A, the groundwork, is built: the two paths, the stores' formats, the
 update's record and hold, backups, version folders, the write gate and the migration registry.
-`bosun update` plans, rehearses, holds, freezes and releases (`lib/update_facts.py` gathers the plan's
-facts, `lib/update.py` carries it out, behind the wrapper `libexec/bosun-update`); bringing the agents
-along and the summary are still to come. The plan:
+`bosun update` plans, rehearses, holds, freezes, releases and brings the agents along
+(`lib/update_facts.py` gathers the plan's facts, `lib/update.py` carries it out, behind the wrapper
+`libexec/bosun-update`; `lib/update_agents.py` brings the windows along); the summary is still to come.
+The plan:
 [docs/plans/update.md](../plans/update.md).
 
 ## Why
@@ -511,6 +512,31 @@ Decided while building it:
   for the clones.
 - **A store's check** after the migrations fails the update on an error (writes refused, or a
   rebuild that would lose data); a warning is no reason to put the data back.
+- **Bringing the agents along** (`lib/update_agents.py`) is the record's step `agents`, after
+  `released`. Every window the plan gives something to do is pending (not those left alone, and not the
+  `checkin` window, whose loop the release restarted), until it answers with `bosun update note --window
+  <w> --status`. A turn decides again from each window's status then, by the table above, and does each
+  thing once: the record keeps each window's kind, the plan's treatment and what was done to it
+  (`windows`), and the files the orchestrator re-reads (`reread`), written as each is done. So the
+  update's own wait (a turn every 5 s) and, after Ctrl-C, the check-in loop's turn (`bosun update
+  advance`, each tick while windows are pending), which take `update.lock` in turn, never repeat one; the
+  loop's turn does nothing while the update itself still runs.
+- **The turn's cases.** A restart that refresh leaves running (busy again, someone typing: exit 3) or that
+  fails is tried at the next turn; a prompt `bosun send` could not deliver is sent again. A window
+  restarted into its next conversation (exit 4) never sees the update prompt, so the turn notes its status
+  itself ("started its next conversation"), and the background work it listed stays in its note, which
+  the window's outcome names. One whose agent exited is started again with the update prompt. A window
+  closed during the wait is no longer waited for; a listing of the session that names no window changes
+  nothing. A window asked to take stock is restarted only once its list is there.
+- **What is passed back** with a restart after taking stock: the window's own list, and what the Stop
+  hook saw still running at the end of that turn ([signals](signals.md)).
+- **The notes** are files, `update/notes/<window>.<kind>` in the state folder (`stock` or `status`); an
+  update clears the ones the previous update left before it starts bringing windows along.
+- **Ctrl-C while the update waits** is noted, not raised, so it never cuts a restart short; the commands
+  that act on the windows run in a session of their own, so the terminal's Ctrl-C never reaches them.
+- **An update cut short** after its release (at `checked` or `released`) brings the windows along from a
+  plan made again from its two versions; one cut short at `agents` leaves the windows still waited for
+  to the check-in loop.
 
 Left to the builder:
 

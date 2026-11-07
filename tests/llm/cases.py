@@ -1,5 +1,6 @@
-"""Free-text cases: what I say to the orchestrator or to a repo session, the fictional ledger it
-starts from (seeds), and what the scratch ledger must show afterwards."""
+"""Free-text cases: what I say to the orchestrator or to a repo session (or what bosun says to it, as
+during an update), the fictional ledger it starts from (seeds), and what the scratch ledger or state
+must show afterwards."""
 
 from __future__ import annotations
 
@@ -10,7 +11,7 @@ import sys
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
-from typing import Any
+from typing import Any, TypedDict
 
 from world import ROOT, World
 
@@ -18,6 +19,8 @@ from world import ROOT, World
 sys.path.insert(0, str(ROOT / "lib"))
 import approvals
 import guard
+import update_agents
+from update_state import UpdateState
 
 
 SFTP_ITEM = "slack:C0000000001/1700000032.000032"
@@ -864,6 +867,57 @@ class Case:
     holder: str = ""  # repo: the ledger id its task is about, its task type and ask
     task: str = ""
     ask: str = ""
+    before: tuple[str, ...] = ()  # what is said earlier in the same session, each its own turn
+
+
+# ---- bosun's update prompts (lib/update_agents.py), with fictional versions -------------------------
+
+UPDATE = UpdateState(
+    id="20261107-140000-95545b0-c41b186",
+    from_root="/Users/me/.local/share/bosun-versions/95545b0aaaaa",
+    to_root="/Users/me/.local/share/bosun-versions/c41b186bbbbb",
+    from_commit="95545b0aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    to_commit="c41b186bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    step="agents",
+    started_at="2026-11-07T14:00:00+00:00",
+    hold_until=0,
+)
+CI_WAIT = (
+    "CI is running on this branch: wait for it in the background. Start `sleep 600` as a background "
+    "command (it stands in for the CI wait), say when it has started, and do nothing else for now."
+)
+STOCK = "sleep 600 (the wait for CI on this branch): when it ends, check CI on the branch and report it"
+
+
+def update_note(outcome: Outcome, window: str, kind: str) -> str | None:
+    """The <kind> note <window> saved with `bosun update note`, if it ran that."""
+    ran = any(
+        call[:5] == ["update", "note", "--window", window, f"--{kind}"] for call in outcome.world.new_calls()
+    )
+    return update_agents.read_note(outcome.world.state, window, kind) if ran else None
+
+
+def took_stock(outcome: Outcome) -> list[str]:
+    """It listed its background work (the sleep) in a stock note, and stopped there: no status yet."""
+    stock = update_note(outcome, "exporter", "stock")
+    if stock is None:
+        return ["no `bosun update note --window exporter --stock` with a note"]
+    problems = contains(r"sleep|CI", stock, "the stock note")
+    if update_note(outcome, "exporter", "status") is not None:
+        problems.append("it also sent its status, before any restart")
+    return problems
+
+
+def caught_up_and_answered(outcome: Outcome) -> list[str]:
+    """It looked in the ledger for what it holds, and answered with a status note."""
+    problems = (
+        []
+        if update_note(outcome, "exporter", "status")
+        else ["no `bosun update note --window exporter --status`"]
+    )
+    if not any(call[:1] == ["ledger"] for call in outcome.world.new_calls()):
+        problems.append("it did not check the ledger for anything missed")
+    return problems
 
 
 def orchestrator_cases() -> list[Case]:
@@ -1077,18 +1131,30 @@ def orchestrator_cases() -> list[Case]:
     ]
 
 
-SFTP_TASK = {
+class Task(TypedDict):
+    """A repo case's task: the ledger id it is about, its task type and ask."""
+
+    holder: str
+    task: str
+    ask: str
+
+
+SFTP_TASK: Task = {
     "holder": SFTP_ITEM,
     "task": "new-work",
     "ask": "replace the shared SFTP password with per-customer keys",
 }
-VAT_TASK = {
+VAT_TASK: Task = {
     "holder": VAT_PR,
     "task": "fix-my-pr",
     "ask": "address Lena's review threads on the VAT breakdown PR",
 }
-TICKET_TASK = {"holder": TICKET, "task": "investigate", "ask": "find why EXP-42 exports fail intermittently"}
-DISCOUNTS_TASK = {
+TICKET_TASK: Task = {
+    "holder": TICKET,
+    "task": "investigate",
+    "ask": "find why EXP-42 exports fail intermittently",
+}
+DISCOUNTS_TASK: Task = {
     "holder": DISCOUNTS,
     "task": "new-work",
     "ask": DISCOUNTS_ASK,
@@ -1154,6 +1220,23 @@ def repo_cases() -> list[Case]:
             (seed_vat_review,),
             no_outreach,
             **VAT_TASK,
+        ),
+        Case(
+            "U1-take-stock",
+            "repo",
+            update_agents.take_stock_prompt("exporter", UPDATE),
+            (seed_sftp,),
+            took_stock,
+            before=(CI_WAIT,),
+            **SFTP_TASK,
+        ),
+        Case(
+            "U2-after-restart",
+            "repo",
+            update_agents.prompt_for("exporter", "repo", UPDATE, update_agents.HOW_RESTARTED, (), STOCK),
+            (seed_sftp,),
+            caught_up_and_answered,
+            **SFTP_TASK,
         ),
     ]
 

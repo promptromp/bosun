@@ -31,6 +31,11 @@
 # and BOSUN_EVENTS_WITHOUT_CHECKINS=1, --loop still does all of that and the waiting alerts, and
 # never sends a check-in.
 #
+# While `bosun update` brings the windows along and some are still waited for (its own wait was
+# stopped with Ctrl-C), each tick takes a turn at them (`bosun update advance`): each is restarted,
+# or asked first, once its turn is over, as the update would have. It does nothing while the update
+# itself still runs, and never restarts this loop.
+#
 # When the orchestrator answers only with login errors (an expired or revoked Claude Code login),
 # it logs "<window> needs /login" once and sends it no check-ins or events until it works again: a
 # normal reply (after you run /login and talk to it), or a login check request that succeeds. The
@@ -266,6 +271,16 @@ checkin_log() {
   echo "$BOSUN_LOG_DIR/checkin-$(date +%F).log"
 }
 
+# A turn at the windows an update still brings along, if it waits for any (see the header).
+update_windows_once() {
+  update_windows_pending || return 0
+  if [ "$DRY_RUN" = "1" ]; then
+    log "dry-run: would take a turn at the windows the update still brings along (bosun update advance)" | tee -a "$(checkin_log)"
+    return 0
+  fi
+  "$BOSUN" update advance 2>&1 | while IFS= read -r line; do log "$line"; done | tee -a "$(checkin_log)"
+}
+
 # The loop starts alongside the orchestrator, which runs the morning chores first, so the first
 # check-in comes one interval later. In between it looks for a stuck orchestrator every
 # ALERT_CHECK_MINUTES (or every interval, if that is shorter), and with events on it dispatches
@@ -310,6 +325,7 @@ while true; do
     continue
   fi
   update_logged=0
+  update_windows_once
   if [ "$LOOP" = "0" ] || [ "$since_alert" -ge "$alert_every" ]; then
     since_alert=0
     alert_if_stuck 2>&1 | tee -a "$(checkin_log)"

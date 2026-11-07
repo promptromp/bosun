@@ -21,7 +21,10 @@ update.json (lib/update_state.py) before it starts it:
   taken to their release, is freeze_ms.
 - checked: writes go on. released: the jobs reloaded, the check-in loop restarted while the hold is
   still on (R36), then the hold lifted; what went wrong after the switch and what bosun doctor finds
-  are kept as findings (reported, never rolled back); old backups and version folders pruned. done.
+  are kept as findings (reported, never rolled back); old backups and version folders pruned.
+- agents: each window the plan gives something to do is brought along (lib/update_agents.py) until it
+  answers with `bosun update note`; Ctrl-C leaves those still waited for to the check-in loop, whose
+  `bosun update advance` carries on. done once none is left.
 
 While it holds update.lock, this process never writes a store through the stores' write path (their
 gate would see this very lock and refuse): the migrations write the files directly, and what the
@@ -50,6 +53,7 @@ import knowledge
 import knowledge_store
 import ledger
 import migrations
+import update_agents
 import update_backups
 import update_facts
 import update_gate
@@ -67,6 +71,8 @@ SHORT = update_gate.SHORT
 FINISHED = ("done", "failed", "restored")
 BEFORE_FREEZE = ("planned", "rehearsed", "holding")
 BLOCKED = 1
+USAGE = 2
+AGENT_COMMANDS = ("note", "advance")  # what the agents and the check-in loop run (lib/update_agents.py)
 DOCTOR_LINE = re.compile(r"^  (FAIL|warn)  (.*)$", re.MULTILINE)
 
 
@@ -269,9 +275,22 @@ def release(state: UpdateState) -> UpdateState:
 # ---- an update cut short ------------------------------------------------------------------------
 
 
+def _brought_along(state: UpdateState) -> UpdateState:
+    """An update cut short after its release: its windows brought along by a plan made again from its
+    two versions (the link already leads to the new one, which the plan compares each window's launch
+    with, as before the switch)."""
+    where = folders()
+    plan = update_facts.plan_for(
+        Path(state.from_root), Path(state.to_root), where.state_dir, where.config_dir
+    )
+    return update_agents.bring_along(state, plan, say=Output.say)
+
+
 def _carry_on(state_dir: Path) -> UpdateState | None:
     """Under update.lock: the record read again, then an update cut short before the freeze recorded
-    as failed (only the hold had changed, and it lapsed), one past its checks rolled forward."""
+    as failed (only the hold had changed, and it lapsed), one past its checks rolled forward: released,
+    then its windows brought along. Windows still waited for at `agents` are the check-in loop's (R6),
+    and are left to it."""
     state = update_state.read(state_dir)
     if state is None or state.step in FINISHED:
         return state
@@ -279,6 +298,10 @@ def _carry_on(state_dir: Path) -> UpdateState | None:
         return _step(state_dir, state, "failed", error=f"cut short at step {state.step}; nothing had changed")
     if state.step == "checked":
         state = release(state)
+    if state.step == "released":
+        return _brought_along(state)
+    if state.step == "agents" and state.pending:
+        return state
     return _step(state_dir, state, "done")
 
 
@@ -378,14 +401,18 @@ def _carried_out(plan: Plan, old_root: Path, new_root: Path, where: Folders) -> 
     if state.step != "checked":
         return state
     Output.say(f"Writes went on after {state.freeze_ms} ms. Releasing...")
-    return _step(where.state_dir, release(state), "done")
+    state = release(state)
+    Output.say("Bringing the agents along...")
+    return update_agents.bring_along(state, plan, say=Output.say)
 
 
-def _said_done(state: UpdateState) -> int:
+def _said_done(state: UpdateState, state_dir: Path) -> int:
     Output.say(f"bosun updated: {_short(state.from_commit)} -> {_short(state.to_commit)}")
     Output.say(f"  writes paused for {state.freeze_ms} ms; the backup: {state.backup}")
     for finding in state.findings:
         Output.say(f"  {finding}")
+    for window, outcome in update_agents.outcomes(state_dir, state):
+        Output.say(f"  {window}: {outcome}")
     return 0
 
 
@@ -403,7 +430,7 @@ def _update(old_root: Path, where: Folders, args: argparse.Namespace, said: Said
     if plan.blockers or not _go_ahead(args.yes):
         return BLOCKED if plan.blockers else 0
     state = _carried_out(plan, old_root, ROOT, where)
-    return _said_done(state) if state.step == "done" else _failed(state)
+    return _said_done(state, where.state_dir) if state.step in ("done", "agents") else _failed(state)
 
 
 def _who(state: UpdateState | None) -> tuple[str, str, str]:
@@ -427,7 +454,12 @@ def _say_up_to_date() -> None:
 
 
 def _resumed_line(state: UpdateState) -> str:
-    what = {"restored": "put back", "failed": "ended (it was cut short before anything changed)"}
+    what = {
+        "restored": "put back",
+        "failed": "ended (it was cut short before anything changed)",
+        "agents": f"carried on; the check-in loop brings along {', '.join(state.pending)}, each once "
+        "its turn is over",
+    }
     return (
         f"An update from {_short(state.from_commit)} to {_short(state.to_commit)} that was cut short: "
         f"{what.get(state.step, 'carried on to the end')}."
@@ -440,11 +472,15 @@ def _dry_run(where: Folders, args: argparse.Namespace, said: Said) -> int:
     recorded = update_state.read(where.state_dir)
     if update_state.running(where.state_dir):
         raise update_state.UpdateRunning(*_who(recorded))
-    stopped = recorded is not None and recorded.step not in FINISHED
+    stopped = recorded is not None and recorded.step not in (*FINISHED, "agents")
     if recorded is not None and stopped:
         Output.say(
             f"(an update stopped at step {recorded.step}: bosun update without --dry-run carries it on, "
             "or puts it back)"
+        )
+    elif recorded is not None and recorded.pending:
+        Output.say(
+            f"(an update is still bringing along {', '.join(recorded.pending)}: the check-in loop carries on)"
         )
     old_root = installed(Path(args.from_root))
     code = 0
@@ -504,9 +540,72 @@ def _record_now() -> dict[str, Any] | None:
     return dataclasses.asdict(state) if state else None
 
 
+# ---- what the agents and the check-in loop run -------------------------------------------------
+
+
+def agents_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(prog="bosun update", allow_abbrev=False)
+    commands = parser.add_subparsers(dest="command", required=True)
+    note = commands.add_parser("note", allow_abbrev=False, help="a window's note, the text on stdin")
+    note.add_argument("--window", required=True)
+    kind = note.add_mutually_exclusive_group(required=True)
+    kind.add_argument("--stock", action="store_true", help="its background work, before its restart")
+    kind.add_argument("--status", action="store_true", help="its one-line status, once it carried on")
+    commands.add_parser("advance", allow_abbrev=False, help="the check-in loop's turn at the windows")
+    return parser
+
+
+def _note(state_dir: Path, window: str, kind: str) -> int:
+    """`bosun update note`: <window>'s <kind> note, read from stdin."""
+    if sys.stdin.isatty():
+        print(
+            "bosun update note: the note is read from stdin; pass it in a quoted heredoc (<<'EOF')",
+            file=sys.stderr,
+        )
+        return USAGE
+    text = sys.stdin.read()
+    if not text.strip():
+        print("bosun update note: the note on stdin is empty; nothing saved", file=sys.stderr)
+        return 1
+    try:
+        update_agents.note(state_dir, window, kind, text)
+    except update_agents.NoteRefused as exc:
+        print(f"bosun update note: {exc}", file=sys.stderr)
+        return USAGE
+    print(f"bosun update: noted the {kind} of {window}")
+    return 0
+
+
+def _advance(state_dir: Path) -> int:
+    """`bosun update advance`, each tick of the check-in loop while windows are pending: a turn at
+    them, under update.lock; quietly nothing while the update itself still runs (and holds it)."""
+    try:
+        with update_state.one_update(state_dir):
+            if update_state.windows_pending(state_dir):
+                update_agents.turn(state_dir, lambda line: print(f"bosun update: {line.strip()}", flush=True))
+    except update_state.UpdateRunning:
+        pass  # the update brings them along itself
+    return 0
+
+
+def agents_command(argv: Sequence[str]) -> int:
+    args = agents_parser().parse_args(list(argv))
+    try:
+        state_dir = folders().state_dir
+    except UpdateRefused as exc:
+        print(f"bosun update: {exc}", file=sys.stderr)
+        return 1
+    if args.command == "note":
+        return _note(state_dir, args.window, "stock" if args.stock else "status")
+    return _advance(state_dir) if update_state.windows_pending(state_dir) else 0
+
+
 def main(argv: Sequence[str]) -> int:
     """The command, and with --json one object on stdout on every path: the plan (null when none was
-    made: up to date, refused, a failure before it) and the update's record as it stands."""
+    made: up to date, refused, a failure before it) and the update's record as it stands. `note` and
+    `advance` are what the agents and the check-in loop run (agents_command)."""
+    if argv and argv[0] in AGENT_COMMANDS:
+        return agents_command(argv)
     args = build_parser().parse_args(list(argv))
     Output.to_stderr = args.json
     said = Said()

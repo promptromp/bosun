@@ -461,6 +461,13 @@ update_hold_active() {
   python3 "$BOSUN_ROOT/lib/update_state.py" hold-active --state-dir "$BOSUN_STATE_DIR"
 }
 
+# Whether an update is bringing windows along and some are still waited for (`bosun update advance`
+# takes a turn at them).
+update_windows_pending() {
+  [ -f "$BOSUN_STATE_DIR/update.json" ] || return 1
+  python3 "$BOSUN_ROOT/lib/update_state.py" windows-pending --state-dir "$BOSUN_STATE_DIR"
+}
+
 keep_awake_pidfile() { echo "$BOSUN_STATE_DIR/keep-awake-$BOSUN_SESSION_NAME.pid"; }
 
 # When you stopped the session (`stop` writes it, `start` removes it). The watchdog does not

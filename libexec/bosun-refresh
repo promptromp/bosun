@@ -44,7 +44,8 @@
 #                    takes up another conversation starts that one as it would have: the
 #                    orchestrator still on yesterday's starts today's as a new day does (the morning
 #                    chores), a repo window with a fresh conversation pending starts it with the
-#                    fresh conversation's prompt. A window whose agent is not running is relaunched
+#                    fresh conversation's prompt. Either never sees the update's prompt, so refresh
+#                    then exits 4. A window whose agent is not running is relaunched
 #                    with the prompt, a missing one created. Each starts on the agent its last launch
 #                    ran (if sessions.yml or BOSUN_HARNESS now names another, that one takes over at
 #                    the next restart not for an update), with the model and effort it ran with when
@@ -63,7 +64,8 @@ load_config
 SESSION="$BOSUN_SESSION_NAME"
 EXIT_WAIT_SECONDS=20
 EXIT_POLL_SECONDS=0.5
-LEFT_RUNNING=3 # --update-restart's status when it left the window running (busy, or waiting for you)
+LEFT_RUNNING=3      # --update-restart's status when it left the window running (busy, or waiting for you)
+NEXT_CONVERSATION=4 # ... when it restarted the window into its next conversation, not with the update's prompt
 
 DRY_RUN=0
 DRAIN_ONLY=0
@@ -72,8 +74,9 @@ UNLESS_ACTIVE=0
 CHECKIN_LOOP=0
 UPDATE_RESTART=0
 UPDATE_PROMPT_FILE=""
-UPDATE_PROMPT="" # --update-restart's prompt; empty for every other refresh
-left_running=0   # set when a restart left an agent running: busy, or waiting for you
+UPDATE_PROMPT=""    # --update-restart's prompt; empty for every other refresh
+left_running=0      # set when a restart left an agent running: busy, or waiting for you
+next_conversation=0 # set when an update's restart started the window's next conversation
 windows=()
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -326,7 +329,10 @@ update_restart_agent() { # <name> <dir> <window_id> <agent_pid>
     left_running=1
     return 0
   fi
-  on_another_conversation "$1" "$4" && start="into $(expected_session_name "$1"), as its next conversation starts"
+  if on_another_conversation "$1" "$4"; then
+    start="into $(expected_session_name "$1"), as its next conversation starts"
+    next_conversation=1
+  fi
   act "$1" "restart for the update ($status), $start" restart_in "$3" "$2" "$1" "$4" "$(update_restart_prompt "$1" "$4")"
 }
 
@@ -355,7 +361,8 @@ refresh_window() { # <name> <dir> <kind> <model> <effort>
 # --update-restart <prompt-file> <name>: window <name> as refresh_window brings it along, with the
 # update's prompt, started again as its last launch recorded (recorded_restart): on the same agent, and
 # a window outside the window list, which must be open, in its directory (else the pane's) with its
-# --model / --effort. Returns LEFT_RUNNING when it left the agent running.
+# --model / --effort. Returns LEFT_RUNNING when it left the agent running, NEXT_CONVERSATION when it
+# started the window's next conversation (whose own prompt it got, not the update's).
 update_restart() { # <name>
   local name dir kind window_id listed=1
   IFS=$'\t' read -r name dir kind _ <<<"$(window_specs | awk -F'\t' -v name="$1" '$1 == name')"
@@ -368,6 +375,7 @@ update_restart() { # <name>
   if recorded_restart "$name" "$listed" && [ "$listed" = "0" ]; then dir="$RESTART_DIR"; fi
   refresh_window "$name" "$dir" "$kind" "" "" || return 1
   [ "$left_running" = "0" ] || return "$LEFT_RUNNING"
+  [ "$next_conversation" = "0" ] || return "$NEXT_CONVERSATION"
 }
 
 # Stop the check-in loop in window <window_id>, if it runs, and start it again there. It stops at once,

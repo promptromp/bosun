@@ -27,6 +27,7 @@ import knowledge_store
 import ledger
 import migrations
 import update
+import update_agents
 import update_backups
 import update_facts
 import update_gate
@@ -361,24 +362,61 @@ class ResumeTest(World):
             update.resume(self.state)
         recover.assert_called_once_with(self.state, self.config)
 
+    @contextlib.contextmanager
+    def brought_along(self) -> Iterator[mock.MagicMock]:
+        """bring_along, recording done, over a plan made again from the two versions."""
+
+        def bring_along(state: UpdateState, plan: update_plan.Plan, say: Any) -> UpdateState:
+            done = update_state.advanced(state, "done")
+            update_state.write(self.state, done)
+            return done
+
+        with (
+            mock.patch.object(update_facts, "plan_for", return_value=a_plan()) as plan_for,
+            mock.patch.object(update_agents, "bring_along", side_effect=bring_along) as bring,
+        ):
+            yield bring
+        plan_for.assert_called_once_with(self.old, self.new, self.state, self.config)
+
     def test_one_past_its_checks_rolls_forward(self) -> None:
         self.record("checked")
 
         def released(state: UpdateState) -> UpdateState:
             return update_state.advanced(state, "released")
 
-        with mock.patch.object(update, "release", side_effect=released) as release:
+        with (
+            mock.patch.object(update, "release", side_effect=released) as release,
+            self.brought_along() as bring,
+        ):
             done = update.resume(self.state)
         release.assert_called_once()
+        bring.assert_called_once()
         assert done is not None
         self.assertEqual(done.step, "done")
         self.assertEqual(update_state.read(self.state), done)
 
-    def test_one_already_released_is_only_finished(self) -> None:
+    def test_one_released_brings_the_agents_along(self) -> None:
         self.record("released")
-        with mock.patch.object(update, "release") as release:
+        with mock.patch.object(update, "release") as release, self.brought_along() as bring:
             done = update.resume(self.state)
         release.assert_not_called()
+        bring.assert_called_once()
+        assert done is not None
+        self.assertEqual(done.step, "done")
+
+    def test_one_cut_short_while_bringing_the_windows_along_is_left_to_the_loop(self) -> None:
+        """R6: the windows still waited for are the check-in loop's; resume does not run them again."""
+        self.record("agents", pending=("api",), windows={"api": ("repo", "restart", "restarted")})
+        with mock.patch.object(update_agents, "bring_along") as bring:
+            left = update.resume(self.state)
+        bring.assert_not_called()
+        assert left is not None
+        self.assertEqual((left.step, left.pending), ("agents", ("api",)))
+        self.assertIn("the check-in loop", update._resumed_line(left))
+
+    def test_one_at_agents_with_nothing_left_is_finished(self) -> None:
+        self.record("agents")
+        done = update.resume(self.state)
         assert done is not None
         self.assertEqual(done.step, "done")
 
@@ -448,6 +486,71 @@ class RunTest(World):
         said = json.loads(out)
         self.assertEqual((code, said["plan"], said["update"]["step"]), (1, None, "released"))
         self.assertIn("an update is running", err)
+
+
+class AgentsCommandTest(World):
+    """What the agents and the check-in loop run while an update brings the windows along: `bosun
+    update note` and `bosun update advance`."""
+
+    def main(self, *argv: str, stdin: str = "") -> tuple[int, str, str]:
+        out, err = io.StringIO(), io.StringIO()
+        with (
+            mock.patch("sys.stdin", io.StringIO(stdin)),
+            contextlib.redirect_stdout(out),
+            contextlib.redirect_stderr(err),
+        ):
+            code = update.main(list(argv))
+        return code, out.getvalue(), err.getvalue()
+
+    def test_a_note_is_read_from_stdin(self) -> None:
+        code, out, _ = self.main("note", "--window", "api", "--status", stdin="resumed: waiting on CI\n")
+        self.assertEqual(code, 0)
+        self.assertIn("api", out)
+        self.assertEqual(update_agents.read_note(self.state, "api", "status"), "resumed: waiting on CI")
+        code, _, _ = self.main("note", "--window", "api", "--stock", stdin="sleep 900: the CI wait")
+        self.assertEqual(
+            (code, update_agents.read_note(self.state, "api", "stock")), (0, "sleep 900: the CI wait")
+        )
+
+    def test_a_note_refuses_an_unknown_kind_a_path_and_nothing_to_say(self) -> None:
+        for argv in (
+            ("note", "--window", "api", "--mood"),
+            ("note", "--window", "api"),
+            ("note", "--status"),
+        ):
+            with (
+                self.assertRaises(SystemExit, msg=str(argv)) as caught,
+                contextlib.redirect_stderr(io.StringIO()),
+            ):
+                self.main(*argv, stdin="x")
+            self.assertEqual(caught.exception.code, 2)
+        code, _, err = self.main("note", "--window", "../api", "--status", stdin="x")
+        self.assertEqual(code, 2)
+        self.assertIn("plain window name", err)
+        code, _, err = self.main("note", "--window", "api", "--status", stdin=" \n")
+        self.assertEqual(code, 1)
+        self.assertIn("empty", err)
+        self.assertFalse((self.state / "update" / "notes").exists())
+
+    def test_advance_skips_quietly_while_the_update_itself_runs(self) -> None:
+        self.record("agents", pending=("api",), windows={"api": ("repo", "restart")})
+        with update_state.one_update(self.state), mock.patch.object(update_agents, "turn") as turn:
+            self.assertEqual(self.main("advance"), (0, "", ""))
+        turn.assert_not_called()
+
+    def test_advance_takes_a_turn_while_windows_are_pending(self) -> None:
+        self.record("agents", pending=("api",), windows={"api": ("repo", "restart")})
+        with mock.patch.object(update_agents, "turn", return_value=["api"]) as turn:
+            self.assertEqual(self.main("advance")[0], 0)
+        turn.assert_called_once()
+        self.assertEqual(turn.call_args.args[0], self.state)
+
+    def test_advance_with_nothing_pending_does_nothing(self) -> None:
+        for step in ("done", "released"):
+            self.record(step)
+            with mock.patch.object(update_agents, "turn") as turn:
+                self.assertEqual(self.main("advance"), (0, "", ""))
+            turn.assert_not_called()
 
 
 class GoAheadTest(unittest.TestCase):
