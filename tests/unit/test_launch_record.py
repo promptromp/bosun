@@ -348,5 +348,26 @@ class LaunchCommandTest(unittest.TestCase):
         )
 
 
+class NewVersionTest(unittest.TestCase):
+    """Before an update switches the link, the new version's fingerprint reads its own files (R35)."""
+
+    def test_a_changed_plugin_file_in_the_new_version_shows_before_the_switch(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            old, new, link = base / "versions" / "old", base / "versions" / "new", base / "bosun"
+            for version in (old, new):
+                (version / "orchestrator" / "plugin" / "commands").mkdir(parents=True)
+                (version / "orchestrator" / "plugin" / "commands" / "chores.md").write_text("# Chores\n")
+            link.symlink_to(old)
+            args = ["--plugin-dir", str(link / "orchestrator" / "plugin"), "--name", "orch"]
+            recorded = launch_record.fingerprint(args, link)  # what the running window was launched with
+            self.assertEqual(launch_record.fingerprint(args, link, new), recorded)
+            (new / "orchestrator" / "plugin" / "commands" / "chores.md").write_text(
+                "# Chores\n\nThen report.\n"
+            )
+            self.assertNotEqual(launch_record.fingerprint(args, link, new)["files"], recorded["files"])
+            self.assertEqual(launch_record.fingerprint(args, link), recorded)  # through the link: the old one
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -664,7 +664,8 @@ def main(argv: list[str]) -> int:
     except ConsoleError as exc:
         print(f"bosun console: {exc}", file=sys.stderr)
         return 1
-    serve(server, f"http://{BIND_HOST}:{app.port}/?{QUERY_KEY}={app.token}", args.open)
+    with console_token.serving(state_dir()):  # so that bosun update knows a console runs
+        serve(server, f"http://{BIND_HOST}:{app.port}/?{QUERY_KEY}={app.token}", args.open)
     return 0
 
 

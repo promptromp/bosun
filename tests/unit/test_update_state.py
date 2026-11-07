@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 import dataclasses
+import fcntl
 import json
 import os
 import signal
 import subprocess
 import sys
 import tempfile
+import threading
 import unittest
 from datetime import datetime
 from pathlib import Path
@@ -309,6 +311,32 @@ class WatchdogCheckTest(unittest.TestCase):
             [finding] = watchdog.check_update_stuck(ctx).findings
             self.assertIn("verifying", finding.message)
         self.assertIn("update-stuck", [c.name for c in watchdog.CHECKS])
+
+
+class ProbeTest(unittest.TestCase):
+    """A writer's running() takes update.lock shared for an instant: an update waits that out."""
+
+    def test_one_update_waits_out_a_writers_probe(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            folder = Path(tmp)
+            held, release = threading.Event(), threading.Event()
+
+            def probe() -> None:
+                fd = os.open(folder / update_state.LOCK_FILE, os.O_RDWR | os.O_CREAT, 0o644)
+                fcntl.flock(fd, fcntl.LOCK_SH)
+                held.set()
+                release.wait(0.1)
+                os.close(fd)
+
+            thread = threading.Thread(target=probe)
+            thread.start()
+            held.wait(5)
+            try:
+                with update_state.one_update(folder, wait=0):
+                    taken = True
+            finally:
+                thread.join()
+            self.assertTrue(taken)
 
 
 if __name__ == "__main__":

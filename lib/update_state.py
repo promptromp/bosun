@@ -41,6 +41,9 @@ LOCK_FILE = "update.lock"
 UPDATE_DIR = "update"
 HOLD_SECONDS = 3600
 POLL_SECONDS = 0.05  # how often a wait for update.lock tries again
+# What one_update waits at the least: a writer's running() takes update.lock shared for an instant,
+# and an update must never be refused for that.
+PROBE_SECONDS = 0.5
 
 STEPS = (
     "planned",
@@ -98,9 +101,10 @@ class UpdateState:
     user_changes: tuple[str, ...] = ()  # what to change in my own files, from the plan
     freeze_ms: int = 0
     error: str = ""
+    findings: tuple[str, ...] = ()  # what went wrong after the switch, and what bosun doctor found then
 
 
-_TUPLES = ("restorable", "pending", "user_changes")
+_TUPLES = ("restorable", "pending", "user_changes", "findings")
 
 
 _INTS = ("hold_until", "freeze_ms")
@@ -236,11 +240,12 @@ def _taken(fd: int, wait: float) -> bool:
 @contextlib.contextmanager
 def one_update(state_dir: Path, wait: float = 0.0) -> Iterator[None]:
     """update.lock, exclusive, for the whole update; UpdateRunning if another still holds it after
-    <wait> seconds (a write putting back an update cut short waits a little for another doing it)."""
+    <wait> seconds (a write putting back an update cut short waits a little for another doing it),
+    and never less than PROBE_SECONDS, which a writer's running() probe does not outlast."""
     state_dir.mkdir(parents=True, exist_ok=True)
     fd = os.open(state_dir / LOCK_FILE, os.O_RDWR | os.O_CREAT, 0o644)
     try:
-        if not _taken(fd, wait):
+        if not _taken(fd, max(wait, PROBE_SECONDS)):
             other = read(state_dir)
             raise UpdateRunning(
                 other.started_at if other else "",

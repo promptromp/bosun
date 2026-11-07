@@ -216,3 +216,35 @@ class VersionsTests(unittest.TestCase):
             versions.swap_in_link(install, v)
         self.assertEqual(info.exception.errno, errno.ENOSYS)
         self.assertTrue(not install.is_symlink() and (install / "f.txt").exists() and _no_hidden(tmp_path))
+
+
+class InUseTest(unittest.TestCase):
+    def test_prune_keeps_a_folder_a_process_names_but_has_not_open(self) -> None:
+        """lsof misses a Python process whose modules are closed and whose working folder is
+        elsewhere (a long-running console); its command line still names the folder."""
+        with tempfile.TemporaryDirectory() as tmp:
+            vdir, (a, b) = _worktrees(Path(tmp), 2)
+            sleeper = (
+                "import time; time.sleep(30)"  # its command line names the folder, nothing is open there
+            )
+            child = subprocess.Popen(
+                [sys.executable, "-c", sleeper, str(a / "lib" / "console_server.py")], cwd="/"
+            )
+            try:
+                removed = versions.prune(vdir, keep=set())
+            finally:
+                child.kill()
+                child.wait()
+            self.assertTrue(a.exists() and a not in removed)
+            self.assertFalse(b.exists())
+
+    def test_lsof_that_takes_too_long_keeps_the_folder(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            vdir, (a,) = _worktrees(Path(tmp), 1)
+            slow = subprocess.TimeoutExpired(["lsof"], versions.LOOK_SECONDS)
+            with (
+                mock.patch("subprocess.run", side_effect=slow),
+                contextlib.redirect_stderr(io.StringIO()),
+            ):
+                self.assertEqual(versions.prune(vdir, keep=set()), [])
+            self.assertTrue(a.exists())

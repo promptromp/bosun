@@ -1,8 +1,10 @@
 # Updating bosun
 
 Status: approved 2026-11-05. Part A, the groundwork, is built: the two paths, the stores' formats, the
-update's record and hold, backups, version folders, the write gate and the migration registry. The
-`bosun update` command is not built yet. The plan: [docs/plans/update.md](../plans/update.md).
+update's record and hold, backups, version folders, the write gate and the migration registry.
+`bosun update` plans, rehearses, holds, freezes and releases (`lib/update.py`, behind the wrapper
+`libexec/bosun-update`); bringing the agents along and the summary are still to come. The plan:
+[docs/plans/update.md](../plans/update.md).
 
 ## Why
 
@@ -199,9 +201,10 @@ check gets no protection from it, which is why the first update converts at a qu
 
    If any of these fails, restore the backup, switch the link back, release the locks, and report
    what failed.
-5. **Release.** Reload the launchd jobs whose plist changed, lift the hold, and run the new
-   version's `bosun doctor`. A finding at this point is reported, not rolled back, since writes may
-   have landed since the freeze.
+5. **Release.** Reload the launchd jobs whose plist changed, restart the check-in loop while the hold
+   is still on (it stops at once, even mid-tick, and the hold keeps a tick from starting meanwhile),
+   lift the hold, and run the new version's `bosun doctor`. A finding at this point is reported, not
+   rolled back, since writes may have landed since the freeze.
 6. **Bring the agents along** (below).
 7. **Summarize** (below).
 
@@ -326,8 +329,8 @@ refresh --update-restart` restarts a window through refresh's path. Both start f
 - a window outside the window list (opened by `send --new`) keeps the directory and the `--model` /
   `--effort` its launch recorded, so it carries on as it was started. The two fingerprints are compared after the switch, in
 this step, when the link leads to the new version's files. Before the switch it still leads to the
-old ones, so the plan's list of the windows that need a restart has to get the new files another
-way.
+old ones, so for the plan's list of the windows that need a restart the new version's `launch
+--fingerprint` reads the files under the install from its own folder.
 
 The **update prompt** says bosun was updated from one version to the other, and whether the session
 was restarted or kept running. It asks the session to check for anything missed from just before:
@@ -487,13 +490,29 @@ My calls, which the user can overturn:
 - updating to the head of the tracked branch;
 - the summary also saved next to the backup.
 
+Decided while building it:
+
+- **The hold** is the record's step: from `holding` up to `released`, and only while the update holds
+  `update.lock` and within the hour. bosun's own background work asks before each run and skips it; a
+  run already going finishes, its writes waiting on the freeze like any other's.
+- **The update's record**, `update.json`: the update's id, both versions' folders and commits, its
+  step, when it started, when its hold ends, the backup and what of it a put-back restores, the
+  windows still to bring along, the changes to my own files, how long writes were paused
+  (`freeze_ms`), the error, and the findings after the switch (`bosun doctor`'s, and a job that
+  could not be reloaded). Each step is recorded before it starts, and the backup once it is taken, so
+  no step past `backed-up` is recorded without it.
+- **The plan before the switch** asks the new version: its `launch --fingerprint` reads the files
+  under the install from its own folder. A window with no launch record counts as changed.
+- **The rehearsal's copy** is taken under both stores' shared locks, so it is whole; writes wait only
+  for the clones.
+- **A store's check** after the migrations fails the update on an error (writes refused, or a
+  rebuild that would lose data); a warning is no reason to put the data back.
+
 Left to the builder:
 
-- how the hold works;
 - upcasting or rewriting, case by case;
 - the update prompt's exact words, settled in the VM;
-- saving hooks' records to disk while a lock is busy, if the measured freeze needs it;
-- the update state file's format.
+- saving hooks' records to disk while a lock is busy, if the measured freeze needs it.
 
 ## Docs to change when it is built
 

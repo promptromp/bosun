@@ -12,6 +12,8 @@ Getting started
   preflight   Check what bosun needs on this machine, and say exactly what to do about anything missing
   init        Set bosun up from what this Mac shows (repos, hours, logins): a few questions in a
               terminal, then a plan to accept; --recommended or --answers to skip the questions
+  update      Update bosun to the head of its branch while the agents keep working: a plan to
+              accept, a rehearsal on a copy, then the data backed up, migrated and checked
 
 Daily flow
   morning     Scheduled entry point: keep awake, run setup steps, start or refresh sessions

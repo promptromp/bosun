@@ -30,9 +30,11 @@ to say.
 
 from __future__ import annotations
 
+import argparse
 import os
 import re
 import stat
+import sys
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -124,10 +126,15 @@ _STORES: Mapping[str, _Store] = {
 }
 
 
+def store_format(ctx: Context, store: str) -> int:
+    """<store>'s format on disk in <ctx> (0: no store yet). A store whose format cannot be read is
+    the store's own error (ledger.LedgerError, knowledge_store.StoreError)."""
+    return _STORES[store].read(ctx)
+
+
 def store_formats(ctx: Context) -> dict[str, int]:
-    """Each store's format on disk in <ctx> (0: no store yet). A store whose format cannot be read
-    is the store's own error (ledger.LedgerError, knowledge_store.StoreError)."""
-    return {store: _STORES[store].read(ctx) for store in FORMATS}
+    """Each store's format on disk in <ctx> (store_format)."""
+    return {store: store_format(ctx, store) for store in FORMATS}
 
 
 def _registry_problem(migration: Migration) -> str:
@@ -333,3 +340,18 @@ def write_config(config_dir: Path, now: datetime) -> list[str]:
     journal.create_new(config_copy(config_dir, now), was, mode)
     _replace(target, changed.encode("utf-8", "surrogateescape"), mode)
     return said
+
+
+def main(argv: Sequence[str]) -> int:
+    """`user-changes`: a line per change to make in one of my own files (USER_FILE_CHANGES), which
+    `bosun doctor` lists; nothing when there is none."""
+    parser = argparse.ArgumentParser(prog="migrations.py")
+    parser.add_argument("command", choices=("user-changes",))
+    parser.parse_args(list(argv))
+    for file, change in USER_FILE_CHANGES:
+        print(f"{file}: {change}")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))

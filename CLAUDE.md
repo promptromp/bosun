@@ -20,7 +20,11 @@ of truth, so don't copy rules into this file.
   launched with, per session: the fingerprint an update compares after the switch, and the agent,
   directory and overrides its restart keeps, through `recorded_restart` in `lib/common.sh`; `bosun
   launch` writes it, `launch --fingerprint` and `refresh --update-restart` use it) and
-  `lib/update_plan.py` (pure: the plan, what each window gets, its text).
+  `lib/update_plan.py` (pure: the plan, what each window gets, its text). `libexec/bosun-update` (the
+  wrapper: fetch the branch into its own version folder, hand over to that version) and
+  `lib/update.py` (the command: the facts for the plan, the rehearsal, the hold, the freeze and its
+  put-back, the release, an update cut short carried on); `reload_changed_jobs` in `lib/common.sh`
+  (also install.sh's); its smoke section's next version is `tests/sandbox/update_patch.sh`.
 - `lib/common.sh`: config defaults (`load_config`) and shared helpers: the window list
   (`window_specs`: orchestrator, sessions.yml entries, checkin), tmux, the one
   launch path (`build_launch_command`, used by `start`, `refresh` and `send`), and the launchd

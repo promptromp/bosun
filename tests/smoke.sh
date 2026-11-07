@@ -68,13 +68,20 @@ fails_with() {
   contains "$output" "$text"
 }
 
-# version_folder <name>: a copy of the working tree (tracked files and untracked ones that are not
-# ignored) in $WORK/share/bosun-versions/<name>, shaped like an installed version: beside the bare
-# repository (bosun.git; empty is enough) that makes the folder a versions folder. Prints its path.
+# copy_tree <dest>: a copy of the working tree (tracked files and untracked ones that are not ignored)
+# in <dest>.
+copy_tree() {
+  mkdir -p "$1"
+  git -C "$ROOT" ls-files -co --exclude-standard -z | tar -C "$ROOT" --null -T - -cf - | tar -C "$1" -xf -
+}
+
+# version_folder <name>: a copy of the working tree in $WORK/share/bosun-versions/<name>, shaped like
+# an installed version: beside the bare repository (bosun.git; empty is enough) that makes the folder
+# a versions folder. Prints its path.
 version_folder() {
   local dest="$WORK/share/bosun-versions/$1"
-  mkdir -p "$dest" "$WORK/share/bosun-versions/bosun.git"
-  git -C "$ROOT" ls-files -co --exclude-standard -z | tar -C "$ROOT" --null -T - -cf - | tar -C "$dest" -xf -
+  mkdir -p "$WORK/share/bosun-versions/bosun.git"
+  copy_tree "$dest"
   (cd "$dest" && pwd -P)
 }
 
@@ -112,7 +119,7 @@ check "every command's --help prints its usage header and no code" bash -c '
     ! grep -qE "^(set -uo|source |import )" <<<"$out" || { echo "$cmd prints code"; exit 1; }
   done' _ "$ROOT"
 check "usage errors exit 2" bash -c '
-  for args in "send" "send --bogus" "send window-only" "send --id" "send --no-item window-only" "send --new w" "send --start" "start --bogus" "launch --bogus" "launch --fingerprint alpha extra" "refresh --bogus" "refresh --update-restart" "refresh --update-restart prompt alpha --unless-active" "refresh --checkin-loop alpha" "refresh --checkin-loop --unless-active" "trust --bogus" "watchdog --bogus" "watchdog --only" "sessions --bogus" "learn --bogus" "learn apply" "events --bogus" "slack-watch --bogus" "review-watch --bogus" "console --bogus" "orphans --bogus"; do
+  for args in "send" "send --bogus" "send window-only" "send --id" "send --no-item window-only" "send --new w" "send --start" "start --bogus" "launch --bogus" "launch --fingerprint alpha extra" "refresh --bogus" "refresh --update-restart" "refresh --update-restart prompt alpha --unless-active" "refresh --checkin-loop alpha" "refresh --checkin-loop --unless-active" "trust --bogus" "watchdog --bogus" "watchdog --only" "sessions --bogus" "learn --bogus" "learn apply" "events --bogus" "slack-watch --bogus" "review-watch --bogus" "console --bogus" "orphans --bogus" "update --bogus" "update note"; do
     # shellcheck disable=SC2086  # split the argument list on purpose
     "$1" $args >/dev/null 2>&1
     [ $? -eq 2 ] || { echo "bosun $args did not exit 2"; exit 1; }
@@ -327,6 +334,15 @@ echo "A rule added to the policy." >>"$V1/orchestrator/policy.md"
 check "the orchestrator's policy text is no launch input (it is re-read, not restarted for)" bash -c '[ -n "$1" ] && [ "$1" = "$2" ]' _ "$fingerprint_before" "$(orch_fingerprint)"
 echo "A step added to the chores." >>"$V1/orchestrator/plugin/commands/chores.md"
 check "... its plugin's chores.md is, read through the link" bash -c '[ "$(jq -r .files <<<"$1")" != "$(jq -r .files <<<"$2")" ]' _ "$(orch_fingerprint)" "$fingerprint_before"
+# Before an update switches the link, the next version's fingerprint reads that version's own files.
+(cd "$REPO_A" && BOSUN_ORCHESTRATOR=orch BOSUN_ORCHESTRATOR_DIR="$REPO_A" "$V1/bin/bosun" launch orch >/dev/null 2>&1)
+cp -R "$V1" "$WORK/share/bosun-versions/v2"
+V2="$(cd "$WORK/share/bosun-versions/v2" && pwd -P)"
+v2_fingerprint() { (cd "$REPO_A" && BOSUN_ORCHESTRATOR=orch BOSUN_ORCHESTRATOR_DIR="$REPO_A" "$V2/bin/bosun" launch --fingerprint orch | jq -r .files); }
+recorded_files="$(jq -r .fingerprint.files "$BOSUN_STATE_DIR/launches/smoke/orch.json")"
+check "the next version, the same as the running one, fingerprints as its launch recorded" test "$(v2_fingerprint)" = "$recorded_files"
+echo "A step the next version adds to the chores." >>"$V2/orchestrator/plugin/commands/chores.md"
+check "... and with a changed chores.md, it reads its own before the switch (the link still at v1)" bash -c '[ "$1" != "$2" ] && [ "$(readlink "$3")" = bosun-versions/v1 ]' _ "$(v2_fingerprint)" "$recorded_files" "$WORK/share/bosun"
 plists="$(bash -c 'source "$1/lib/common.sh"; load_config; render_launchd_plist com.example.test 08:00 MTWRF ""; render_watchdog_plist; render_learn_plist' _ "$V1")"
 check "a version's plists run the link" contains "$plists" "$LINK/"
 check "... never its own folder" not_contains "$plists" "bosun-versions/"
@@ -905,9 +921,10 @@ check "/api/sessions and /api/health need the cookie: 401" bash -c '
   for path in /api/sessions /api/health; do
     [ "$(curl -s -o /dev/null -w "%{http_code}" "$1$path")" = 401 ] || exit 1
   done' _ "$LIVE_BASE"
-# The console's own access token (console/token, written at start) is its only file there.
+# The console's own files (console/token, written at start, and console/running.lock, held while it
+# serves) are its only ones there.
 check "... and reading them started no Claude, wrote no state and left the panes alone" bash -c '
-  [ ! -e "$1/claude-was-started" ] && [ -z "$(find "$2" -type f -newer "$1/before-console" ! -path "$2/console/token")" ] &&
+  [ ! -e "$1/claude-was-started" ] && [ -z "$(find "$2" -type f -newer "$1/before-console" ! -path "$2/console/token" ! -path "$2/console/running.lock")" ] &&
     [ "$(tmux -L "$3" capture-pane -p -t "=smoke:gamma")" = "$4" ]' _ "$WORK" "$BOSUN_STATE_DIR" "$SOCKET" "$gamma_screen"
 kill "$CONSOLE_PID" 2>/dev/null
 check "... and it stops" wait_for 10 bash -c '! kill -0 "$1" 2>/dev/null' _ "$CONSOLE_PID"
@@ -2333,6 +2350,207 @@ if [ "$(bash -c 'source "$1/lib/common.sh"; command -v launchctl; command -v pms
   check "a dry run says what it would do" bash -c 'BOSUN_DIR="$2" sh "$1/get.sh" --dry-run | grep -q "git clone"' _ "$ROOT" "$WORK/get-bosun"
   check "... and does none of it" test ! -e "$WORK/get-bosun"
   check "everything in it is in functions, so a download cut short does nothing" bash -c '[ "$(tail -1 "$1/get.sh")" = "main \"\$@\"" ]' _ "$ROOT"
+
+  echo "bosun update (two local commits, fake launchctl)"
+  # An install of its own, with its own state and config. Upstream holds v1 (this working tree) and
+  # v2 (tests/sandbox/update_patch.sh: the ledger's format 2, with a migration that sleeps
+  # UPDATE_PATCH_SLEEP seconds while writes are paused, and a changed line of policy.md); the
+  # install's bosun.git is a clone of it at v1, with v1's folder and the link to it.
+  U="$WORK/u"
+  U_LINK="$U/share/bosun"
+  U_VERSIONS="$U/share/bosun-versions"
+  U_UP="$U/upstream"
+  U_STATE="$U/state"
+  U_CONFIG="$U/config"
+  mkdir -p "$U_VERSIONS" "$U_STATE" "$U_CONFIG"
+  copy_tree "$U_UP"
+  ug() { git -C "$U_UP" -c core.hooksPath=/dev/null -c commit.gpgsign=false -c user.name=acme -c user.email=dev@example.com "$@"; }
+  ug init -q -b main
+  ug add -A
+  ug commit -qm v1
+  U_V1_COMMIT="$(ug rev-parse HEAD)"
+  git clone -q --bare "$U_UP" "$U_VERSIONS/bosun.git"
+  git --git-dir="$U_VERSIONS/bosun.git" worktree add -q --detach "$U_VERSIONS/${U_V1_COMMIT:0:12}" "$U_V1_COMMIT"
+  ln -s "bosun-versions/${U_V1_COMMIT:0:12}" "$U_LINK"
+  U_V1="$(cd "$U_VERSIONS/${U_V1_COMMIT:0:12}" && pwd -P)"
+  "$ROOT/tests/sandbox/update_patch.sh" --failing "$U_UP"
+  ug commit -qam "v2, whose migration fails while writes are paused"
+  U_FAILING_COMMIT="$(ug rev-parse HEAD)"
+  U_ENV=(env BOSUN_STATE_DIR="$U_STATE" BOSUN_LOG_DIR="$U_STATE/logs" BOSUN_CONFIG_DIR="$U_CONFIG"
+    BOSUN_SESSION_NAME=update-test BOSUN_LAUNCHD_LABEL=com.bosun.update-test BOSUN_SKIP_PREFLIGHT=1 BOSUN_KNOWLEDGE_GIT=0)
+  ub() { "${U_ENV[@]}" "$U_LINK/bin/bosun" "$@"; }
+  ub ledger upsert 'review:acme/api#1' --kind review-request --title "Exporter retries" >/dev/null
+  ub ledger upsert 'mypr:acme/api#2' --kind my-pr --title "Nightly export" >/dev/null
+  ub kg import "$KG_FIXTURE" --apply --auto-confirm >/dev/null 2>&1
+  # Everything in the state and config folders (locks aside: taking one creates its file); and the data
+  # alone (not the update's own record, folder, backups or logs).
+  u_files() { (cd "$U" && find state config -type f ! -name '*.lock' "$@" -print0 | LC_ALL=C sort -z | xargs -0 shasum | shasum); }
+  u_data() { u_files ! -path 'state/update*' ! -path 'state/backups/*' ! -path 'state/logs/*'; }
+  u_at() { [ "$(cd "$U_LINK" && pwd -P)" = "$1" ]; }
+  u_step_is() { [ "$(jq -r .step "$U_STATE/update.json" 2>/dev/null)" = "$1" ]; }
+  u_ended_well() { [ "$1" = 0 ] || { tail -15 "$2" && return 1; }; }
+
+  before="$(u_files)"
+  out="$(ub update --dry-run 2>&1)"
+  check "update --dry-run fetches the branch and shows the plan: the ledger's migration" contains "$out" "ledger: format 1 -> 2"
+  check "... and the one prompt that changed" bash -c 'grep -q "Prompts changed (1):" <<<"$1" && grep -q "orchestrator/policy.md" <<<"$1"' _ "$out"
+  check "... and changes nothing in the state or the config" test "$(u_files)" = "$before"
+  check "... nor the link" u_at "$U_V1"
+  out="$(ub update </dev/null 2>&1)"
+  check "without --yes and no terminal, it shows the plan and stops" bash -c 'grep -q "ledger: format 1 -> 2" <<<"$1" && grep -q "Nothing has changed" <<<"$1"' _ "$out"
+  check "... changing nothing" bash -c '[ "$1" = "$2" ]' _ "$(u_files)" "$before"
+
+  data_before="$(u_data)"
+  out="$(ub update --yes 2>&1)"
+  rc=$?
+  check "a migration that fails while writes are paused fails the update (exit 1), which says it put everything back" bash -c '[ "$1" = 1 ] && grep -q "Everything is as it was" <<<"$2"' _ "$rc" "$out"
+  check "... the link still at v1" u_at "$U_V1"
+  check "... the data as it was" test "$(u_data)" = "$data_before"
+  check "... and the record says failed, with the error" jq -e '.step == "failed" and (.error | contains("failed on purpose"))' "$U_STATE/update.json"
+
+  # Upstream's v2 now migrates well.
+  ug reset -q --hard "$U_V1_COMMIT"
+  "$ROOT/tests/sandbox/update_patch.sh" "$U_UP"
+  ug commit -qam v2
+  U_V2_COMMIT="$(ug rev-parse HEAD)"
+  U_V2="$(cd "$U_VERSIONS" && pwd -P)/${U_V2_COMMIT:0:12}"
+  cp -Rp "$U_STATE" "$U/state-v1" # as it was before the update, for laying out below where one was cut short
+  cp -Rp "$U_CONFIG" "$U/config-v1"
+  : >"$U/transcript.jsonl"
+  guard_event="$(jq -nc --arg t "$U/transcript.jsonl" --arg c "touch $U/approved" '{tool_name: "Bash", tool_input: {command: $c}, transcript_path: $t}')"
+  u_guard() { "${U_ENV[@]}" BOSUN_APPROVALS_ENABLED=1 BOSUN_APPROVALS_GATED_COMMANDS=touch "$U_LINK/bin/bosun" guard --approvals <<<"$guard_event"; }
+  guard_before="$(u_guard 2>&1)"
+  "${U_ENV[@]}" UPDATE_PATCH_SLEEP=8 "$U_LINK/bin/bosun" update --yes >"$U/update.out" 2>&1 &
+  updating=$!
+  check "--yes: it rehearses, holds, then pauses writes for the migration (the patch's sleep)" wait_for 60 u_step_is migrated
+  "${U_ENV[@]}" "$U_V1/bin/bosun" ledger upsert 'review:acme/api#3' --kind review-request --title "Written while paused" >"$U/writer.out" 2>&1 &
+  writer=$!
+  u_guard >"$U/guard.out" 2>&1 &
+  guarding=$!
+  out="$(ub update --yes 2>&1)"
+  check "a second update while one runs is refused, naming when the first started" contains "$out" "an update is running (started $(jq -r .started_at "$U_STATE/update.json")"
+  check "a ledger write started on v1 while writes are paused waits" bash -c 'kill -0 "$1" && [ "$(jq -r .step "$2/update.json")" = migrated ]' _ "$writer" "$U_STATE"
+  wait "$updating"
+  check "the update ends well" u_ended_well $? "$U/update.out"
+  wait "$writer"
+  writer_rc=$?
+  wait "$guarding"
+  check "... the link leads to v2" u_at "$U_V2"
+  check "... the ledger is in format 2, migrated" test "$(jq -r '"\(.version) \(.update_patch)"' "$U_STATE/ledger.json")" = "2 migrated"
+  check "... and passes its check against its journal" test "$(ub ledger validate --journal 2>&1)" = "ledger is valid"
+  check "... a backup from v1 to v2 with its manifest" bash -c 'grep -lq "\"to\": \"$2\"" "$1"/backups/*/manifest.json' _ "$U_STATE" "$U_V2_COMMIT"
+  check "... the record says done, with how long writes were paused ($(jq .freeze_ms "$U_STATE/update.json") ms, 8 s of them the patch's sleep)" jq -e '.step == "done" and .freeze_ms > 0' "$U_STATE/update.json"
+  check "... and what bosun doctor found then (here: no bosun.env)" jq -e '.findings | any(contains("no bosun.env"))' "$U_STATE/update.json"
+  check "... it reloaded the launchd jobs, which run the link" bash -c 'grep -qF "$2/bin/bosun" "$1/Library/LaunchAgents/com.bosun.update-test.plist"' _ "$HOME" "$(cd "$U/share" && pwd -P)/bosun"
+  check "... and deleted the folder of the version that failed, keeping v1's and v2's" bash -c '[ ! -e "$1/${2:0:12}" ] && [ -d "$3" ] && [ -d "$4" ]' _ "$U_VERSIONS" "$U_FAILING_COMMIT" "$U_V1" "$U_V2"
+  check "the write that waited ran again on v2, and landed" bash -c '[ "$1" = 0 ] && [ "$(jq -r ".items[\"review:acme/api#3\"].title" "$2/ledger.json")" = "Written while paused" ]' _ "$writer_rc" "$U_STATE"
+  check "... once" test "$(grep -h -c 'Written while paused' "$U_STATE"/journal/ledger/*.jsonl | paste -sd+ - | bc)" = 1
+  check "a PreToolUse approval hook while writes are paused decides as without them" bash -c '[ -n "$1" ] && [ "$(cat "$2")" = "$1" ]' _ "$guard_before" "$U/guard.out"
+
+  # An update cut short at each step of the freeze, laid out by hand: the record at the step, the
+  # backup from backed-up on, the migrated ledger from migrated on, the link at v2 at switched, and
+  # no update running. The next ledger write puts it back.
+  u_reset() {
+    rm -rf "$U_STATE" "$U_CONFIG"
+    cp -Rp "$U/state-v1" "$U_STATE"
+    cp -Rp "$U/config-v1" "$U_CONFIG"
+    rm -f "$U_STATE/update.json"
+    ln -sfn "bosun-versions/${U_V1_COMMIT:0:12}" "$U_LINK"
+  }
+  u_backup() {
+    python3 -c 'import datetime, pathlib, sys; sys.path.insert(0, sys.argv[1] + "/lib"); import update_backups
+print(update_backups.take(pathlib.Path(sys.argv[2]), pathlib.Path(sys.argv[3]), sys.argv[4], sys.argv[5], {"ledger": 1, "knowledge": 1}, datetime.datetime.now(datetime.UTC)))' \
+      "$U_V1" "$U_STATE" "$U_CONFIG" "$U_V1_COMMIT" "$U_V2_COMMIT"
+  }
+  u_migrate() {
+    UPDATE_PATCH_SLEEP=0 python3 -c 'import pathlib, sys; sys.path.insert(0, sys.argv[1] + "/lib"); import migrations
+migrations.run(migrations.Context(pathlib.Path(sys.argv[2]), pathlib.Path(sys.argv[3])))' "$U_V2" "$U_STATE" "$U_CONFIG"
+  }
+  u_record() { # <step> [backup]
+    jq -n --arg step "$1" --arg backup "${2:-}" --arg from "$U_V1" --arg to "$U_V2" --arg fc "$U_V1_COMMIT" --arg tc "$U_V2_COMMIT" '
+      {id: "laid-out", from_root: $from, to_root: $to, from_commit: $fc, to_commit: $tc, step: $step,
+       started_at: "2026-11-07T12:00:00+00:00", hold_until: 0, backup: $backup,
+       restorable: (if $backup == "" then [] else ["state/ledger.json", "state/ledger.json.bak", "state/ledger.md",
+         "state/journal", "state/replica.json", "config/knowledge"] end)}' >"$U_STATE/update.json"
+  }
+  u_cut_at() { # <step>: what an update that died at <step> leaves
+    local backup=""
+    u_reset
+    case "$1" in backed-up | migrated | switched | checked) backup="$(u_backup)" ;; esac
+    case "$1" in migrated | switched | checked) u_migrate ;; esac
+    case "$1" in switched | checked) ln -sfn "bosun-versions/${U_V2_COMMIT:0:12}" "$U_LINK" ;; esac
+    u_record "$1" "$backup"
+  }
+  u_as_before() { # <item written since>: the ledger as before the update but for it, in format 1, and it there
+    [ "$(jq -cS --arg id "$1" 'del(.items[$id]) | .items' "$U_STATE/ledger.json")" = "$(jq -cS .items "$U/state-v1/ledger.json")" ] &&
+      [ "$(jq .version "$U_STATE/ledger.json")" = 1 ] && jq -e --arg id "$1" '.items[$id]' "$U_STATE/ledger.json" >/dev/null
+  }
+  n=10
+  for step in marked backed-up migrated switched; do
+    n=$((n + 1))
+    u_cut_at "$step"
+    out="$(ub ledger upsert "review:acme/api#$n" --kind review-request --title "after a cut at $step" 2>&1)"
+    check "an update cut short at $step: the next ledger write says so and puts it back" contains "$out" "was cut short while writes were paused; putting back its backup and ${U_V1_COMMIT:0:7}"
+    check "... the link at v1 again" u_at "$U_V1"
+    check "... the ledger as it was, in format 1, and the write landed" u_as_before "review:acme/api#$n"
+  done
+
+  u_reset
+  "${U_ENV[@]}" UPDATE_PATCH_SLEEP=60 "$U_LINK/bin/bosun" update --yes >"$U/killed.out" 2>&1 &
+  updating=$!
+  check "an update killed (kill -9) while writes are paused..." wait_for 60 u_step_is migrated
+  {
+    kill -9 "$updating"
+    wait "$updating"
+  } 2>/dev/null
+  out="$(ub ledger upsert 'review:acme/api#20' --kind review-request --title "after a kill" 2>&1)"
+  check "... is put back by the next ledger write, which says so" contains "$out" "was cut short while writes were paused"
+  check "... the link at v1 again" u_at "$U_V1"
+  check "... the ledger as it was, in format 1, and the write landed" u_as_before 'review:acme/api#20'
+
+  # A kg forget cut short before view.json was saved: the next kg write finishes it, so no backup or
+  # rehearsal copy may hold the person until then.
+  cp -Rp "$U_STATE" "$U/forget-state"
+  cp -Rp "$U_CONFIG" "$U/forget-config"
+  uf() { "${U_ENV[@]}" BOSUN_STATE_DIR="$U/forget-state" BOSUN_CONFIG_DIR="$U/forget-config" "$U_LINK/bin/bosun" "$@"; }
+  cp "$U/forget-config/knowledge/view.json" "$U/view-before-forget.json"
+  uf kg forget person/lee >/dev/null 2>&1
+  cp "$U/view-before-forget.json" "$U/forget-config/knowledge/view.json"
+  out="$(uf update --yes 2>&1)"
+  rc=$?
+  check "a kg forget cut short stops the update at its plan (exit 1), saying so" bash -c '[ "$1" = 1 ] && grep -q "a kg forget was cut short" <<<"$2" && ! grep -q Rehearsing <<<"$2"' _ "$rc" "$out"
+
+  u_cut_at checked
+  out="$(ub update --yes 2>&1)"
+  check "an update that stopped after its checks passed: the next bosun update carries it on" contains "$out" "carried on to the end"
+  check "... then says bosun is up to date" contains "$out" "bosun is up to date (${U_V2_COMMIT:0:7})"
+  check "... the record says done, the link at v2" bash -c 'jq -e ".step == \"done\"" "$1/update.json" >/dev/null && [ "$(cd "$2" && pwd -P)" = "$3" ]' _ "$U_STATE" "$U_LINK" "$U_V2"
+  u_up_to_date() {
+    local out
+    out="$(ub update --yes 2>&1)" && [ "$out" = "bosun is up to date (${U_V2_COMMIT:0:7})." ] || {
+      echo "$out"
+      return 1
+    }
+  }
+  check "with nothing new on the branch and nothing to carry on, bosun is up to date" u_up_to_date
+  check "a checkout is updated with git, not bosun update" fails_with "is a checkout: update it with git" "${U_ENV[@]}" "$BOSUN" update --dry-run
+
+  # A running session keeps the hook commands it was launched with: each of v1's runs on v2.
+  mkdir -p "$U/home/.local/bin"
+  ln -sfn "$U_LINK/bin/bosun" "$U/home/.local/bin/bosun"
+  u_hooks="$("${U_ENV[@]}" BOSUN_APPROVALS_ENABLED=1 BOSUN_EVENTS_ENABLED=1 BOSUN_ORCHESTRATOR=orch bash -c '
+    source "$1/lib/common.sh"; load_config; orchestrator_extra_settings; repo_session_settings alpha; cat "$1/orchestrator/settings.json"' _ "$U_V1" |
+    jq -r '.hooks // {} | .[][] | .hooks[] | .command' | sort -u)"
+  hook_payload='{"session_id":"00000000-0000-0000-0000-000000000000","transcript_path":"/dev/null","cwd":"/","hook_event_name":"Stop","tool_name":"Bash","tool_input":{"command":"ls"},"tool_use_id":"toolu_0","tool_response":{"stdout":""},"prompt":"how are the exports?"}'
+  u_run_hooks() {
+    local command
+    while IFS= read -r command; do
+      "${U_ENV[@]}" HOME="$U/home" BOSUN_APPROVALS_ENABLED=1 BOSUN_EVENTS_ENABLED=1 bash -c "$command" <<<"$hook_payload" >/dev/null 2>"$U/hook.err" ||
+        { echo "$command: exit $?: $(tail -2 "$U/hook.err")" && return 1; }
+    done <<<"$u_hooks"
+  }
+  check "each hook command of v1's launch settings runs on v2 and exits 0 ($(grep -c . <<<"$u_hooks") of them)" u_run_hooks
+  check "... each through the install link, never v1's own folder" bash -c '[ -n "$1" ] && ! grep -q "bosun-versions/" <<<"$1"' _ "$u_hooks"
 else
   failed=$((failed + 1))
   echo "  FAIL  fake launchctl/pmset are not first on PATH; skipped install tests"
@@ -2355,6 +2573,9 @@ for state in "$WORK/state" "$WORK/approvals-state"; do
   check "what a run left in $(basename "$state")" knows_all_of "$state" "$WORK/config"
 done
 check "what it left in the knowledge base's config" knows_all_of "$WORK/state" "$WORK/kg-config"
+if [ -d "$WORK/u/state" ]; then
+  check "what bosun update left in its state and config" knows_all_of "$WORK/u/state" "$WORK/u/config"
+fi
 
 echo "the repository this ran from"
 repo_unchanged() {

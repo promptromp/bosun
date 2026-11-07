@@ -21,6 +21,10 @@ The fingerprint has two parts:
 - `files`: the content of every file under an argument that is a path inside the install (the
   plugin folder, a settings file), read through that path, as the agent reads it. So the plugin's
   `chores.md` is a launch input, and `policy.md`, whose text goes in as an argument, is not.
+
+`launch --fingerprint` reads those files from its own version's folder instead (`root`): the new
+version's, before an update switches the link to it, so that the plan says which windows need a
+restart before anything changes (R35). The paths in the fingerprint are still the install's.
 """
 
 from __future__ import annotations
@@ -61,6 +65,12 @@ def _file_digest(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
+def _read_from(arg: str, install: Path, root: Path | None) -> Path:
+    """Where the file or folder <arg> names under <install> is read: through it, or from <root>."""
+    path = Path(arg)
+    return path if root is None else root / path.relative_to(install)
+
+
 def _files_under(path: Path) -> list[list[str]]:
     """[relative path, content digest] for <path> itself (a file) or each file below it (a folder)."""
     if path.is_file():
@@ -69,11 +79,17 @@ def _files_under(path: Path) -> list[list[str]]:
     return [[p.relative_to(path).as_posix(), _file_digest(p)] for p in found]
 
 
-def fingerprint(args: Sequence[str], install: Path) -> dict[str, str]:
+def fingerprint(args: Sequence[str], install: Path, root: Path | None = None) -> dict[str, str]:
     """{"args": <digest>, "files": <digest>} of what an agent launched with <args> starts from, for
-    the install at <install> (the path the arguments name). A path that is not there counts as one
-    with no files."""
-    files = [[arg, *entry] for arg in args if _in_install(arg, install) for entry in _files_under(Path(arg))]
+    the install at <install> (the path the arguments name), its files read through it, or from the
+    version folder <root> when given (what a launch from <root> would hand over once the link leads
+    there). A path that is not there counts as one with no files."""
+    files = [
+        [arg, *entry]
+        for arg in args
+        if _in_install(arg, install)
+        for entry in _files_under(_read_from(arg, install, root))
+    ]
     return {"args": _digest(launch_args(args)), "files": _digest(files)}
 
 
@@ -140,6 +156,7 @@ def build_parser() -> argparse.ArgumentParser:
     write_it.add_argument("--effort", required=True)
     write_it.add_argument("--model-override", default="")
     write_it.add_argument("--effort-override", default="")
+    print_it.add_argument("--root", type=Path, help="read the files under --install from this folder")
     for sub in (print_it, write_it):
         sub.add_argument("--install", type=Path, required=True)
         sub.add_argument("args", nargs="*", help="the agent's arguments, after --")
@@ -154,7 +171,7 @@ def main(argv: list[str]) -> int:
             return 1
         print(json.dumps(shown, sort_keys=True))
         return 0
-    fp = fingerprint(args.args, args.install)
+    fp = fingerprint(args.args, args.install, getattr(args, "root", None))
     if args.command == "fingerprint":
         print(json.dumps(fp, sort_keys=True))
         return 0

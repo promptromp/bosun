@@ -189,7 +189,8 @@ State and logs go to `~/.local/state/bosun/`:
   bosun's commit, the agent and the model and effort it ran with, its directory and any `--model` /
   `--effort` it was given, and a fingerprint of the agent's arguments and the files they name, so an
   update can tell which windows need a restart and start them again the same way
-- `console/token`: the console's access token
+- `console/token`: the console's access token; `console/running.lock`, held while a console runs, so
+  that `bosun update` can say to restart it
 - `impact/`: the Impact snapshot (`bosun impact collect`)
 - `alerts/`: the last Slack alert's result, with Slack alerts on
 - `events/`: the event queue (`queue.jsonl`) and what was delivered (`state.json`), with events on

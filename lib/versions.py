@@ -25,6 +25,7 @@ import journal
 
 LEGACY_PREFIX = "legacy-"
 
+LOOK_SECONDS = 30  # the most lsof or ps may take to say whether a folder is in use
 # Flags that exchange two paths atomically: macOS RENAME_SWAP, Linux RENAME_EXCHANGE.
 _RENAME_SWAP = 0x00000002
 _RENAME_EXCHANGE = 2
@@ -142,15 +143,47 @@ def swap_in_link(install: Path, target: Path) -> Path:
     return legacy
 
 
-def _in_use(folder: Path) -> bool | None:
-    """Whether a running process has `folder` open; None when lsof cannot say."""
+def _open_in(folder: Path) -> bool | None:
+    """Whether a running process has `folder` open; None when lsof cannot say (in time)."""
     try:
-        done = subprocess.run(["lsof", "-t", "+D", str(folder)], capture_output=True, text=True, check=False)
-    except OSError:
+        done = subprocess.run(
+            ["lsof", "-t", "+D", str(folder)],
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=LOOK_SECONDS,
+        )
+    except (OSError, subprocess.TimeoutExpired):
         return None
     if done.returncode not in (0, 1):
         return None
     return bool(done.stdout.strip())
+
+
+def _named_by_a_process(folder: Path) -> bool | None:
+    """Whether a running process's command line names `folder`, as the path or anything under it;
+    None when ps cannot say. lsof misses a Python process whose modules are closed and whose working
+    folder is elsewhere, such as a long-running `bosun console`."""
+    try:
+        done = subprocess.run(
+            ["ps", "-axww", "-o", "command="], capture_output=True, check=False, timeout=LOOK_SECONDS
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    if done.returncode != 0:
+        return None
+    lines = done.stdout.decode(errors="replace").splitlines()
+    names = {str(folder), os.path.realpath(folder)}
+    return any(
+        f"{name}/" in line or line.endswith(name) or f"{name} " in line for name in names for line in lines
+    )
+
+
+def _in_use(folder: Path) -> bool | None:
+    """Whether a running process uses `folder`: has it open, or names it; None when that cannot be
+    told."""
+    found = [_open_in(folder), _named_by_a_process(folder)]
+    return None if None in found else any(found)
 
 
 def _remove(versions: Path, folder: Path) -> bool:
@@ -181,7 +214,7 @@ def _candidates(versions: Path, keep: Collection[Path]) -> list[Path]:
 def _prune_one(versions: Path, folder: Path) -> bool:
     busy = _in_use(folder)
     if busy is None:
-        print(f"bosun: lsof is not usable, keeping {folder}", file=sys.stderr)
+        print(f"bosun: lsof or ps is not usable, keeping {folder}", file=sys.stderr)
         return False
     if busy:
         return False
@@ -197,7 +230,8 @@ def _prune_one(versions: Path, folder: Path) -> bool:
 
 def prune(versions: Path, keep: Collection[Path]) -> list[Path]:
     """Remove every version folder and legacy checkout not in `keep`; returns those removed.
-    A folder a process has open stays, and so does every folder when lsof is missing or fails
-    (the safe direction; a line on stderr says so). One that cannot be removed is said on stderr
-    and the rest go on; a link there is never followed."""
+    A folder a process has open or names in its command line stays, and so does every folder when
+    lsof or ps is missing, fails or takes too long (the safe direction; a line on stderr says so).
+    One that cannot be removed is said on stderr and the rest go on; a link there is never
+    followed."""
     return [f for f in _candidates(versions, keep) if _prune_one(versions, f)]

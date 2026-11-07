@@ -657,7 +657,10 @@ window_model_effort() {
 # Sets model_effort_args to the Claude flags for <model> and <effort> ("-": Claude Code's default).
 # Effort goes in as a session-level setting (--settings), not --effort: that way /effort inside
 # the session can still change it, while your saved defaults (from /model and /effort, which
-# write ~/.claude/settings.json) no longer decide it. [settings-file] is merged in (orchestrator).
+# write ~/.claude/settings.json) no longer decide it. [settings-file] is merged in (orchestrator): a
+# file under the install is read from this version's own folder, whose code runs (as `launch
+# --fingerprint` reads the files the arguments name), which is where the install link leads but
+# before an update switches it.
 build_model_effort_args() { # <model> <effort> [settings-file] [extra settings JSON]
   local model="$1" effort="$2" settings_file="${3:-}" extra="${4:-}" settings='{}'
   model_effort_args=()
@@ -668,7 +671,7 @@ build_model_effort_args() { # <model> <effort> [settings-file] [extra settings J
     return 0
   fi
   if [ -n "$settings_file" ]; then
-    settings="$(jq -c . "$settings_file")" || die "could not read $settings_file"
+    settings="$(jq -c . "${settings_file/#"$BOSUN_INSTALL"\//$BOSUN_ROOT/}")" || die "could not read $settings_file"
   fi
   [ -n "$effort" ] && settings="$(jq -c --arg effort "$effort" '. + {effortLevel: $effort}' <<<"$settings")"
   # The extra hooks are added to the file's own (for the same event too), never replace them.
@@ -979,6 +982,58 @@ render_learn_plist() {
       .gsub("__LABEL__", ENV["LABEL"]).gsub("__BOSUN_ROOT__", ENV["ROOT"]).gsub("__CALENDAR__", ENV["CALENDAR"])
       .gsub("__ENV__", ENV["ENV_XML"]).gsub("__LOG_DIR__", ENV["LOGS"])' \
     <"$BOSUN_ROOT/templates/launchd-learn.plist"
+}
+
+# The plist of the launchd job <label> as this version renders it from the config: the morning job,
+# the watchdog, and learning with BOSUN_LEARN_ENABLED=1; nothing for a job not wanted.
+render_job() { # <label>
+  case "$1" in
+    "$BOSUN_LAUNCHD_LABEL") render_launchd_plist "$1" "$BOSUN_START_TIME" "$BOSUN_DAYS" "" BOSUN_TRIGGER=launchd ;;
+    "$(watchdog_label)") render_watchdog_plist ;;
+    "$(learn_label)") if [ "$BOSUN_LEARN_ENABLED" = "1" ]; then render_learn_plist; fi ;;
+  esac
+}
+
+job_loaded() { launchctl print "gui/$(id -u)/$1" >/dev/null 2>&1; } # <label>
+
+# Job <label> unloaded, then, from the plist <rendered> (empty: the job is not wanted), written as
+# <installed> and loaded again; or its plist removed.
+reload_job() { # <label> <rendered> <installed>
+  launchctl bootout "gui/$(id -u)/$1" 2>/dev/null
+  if [ ! -s "$2" ]; then
+    rm -f "$3"
+    return 0
+  fi
+  plutil -lint -s "$2" || {
+    log "ERROR: the rendered plist of $1 is invalid" >&2
+    return 1
+  }
+  mkdir -p "$(dirname "$3")" # a new macOS account may not have it yet
+  if cp "$2" "$3" && launchctl bootstrap "gui/$(id -u)" "$3"; then return 0; fi
+  log "ERROR: launchctl bootstrap failed for $3" >&2
+  return 1
+}
+
+# Each launchd job (render_job) written and reloaded where its plist differs from the installed one,
+# or it is not loaded; one no longer wanted unloaded and its plist removed. Prints the label of each
+# it changes; with --dry-run, only prints them. install.sh and `bosun update` (its plan, then its
+# release, from the new version's templates) use it.
+reload_changed_jobs() { # [--dry-run]
+  local label installed rendered status=0
+  rendered="$(mktemp)" || return 1
+  for label in "$BOSUN_LAUNCHD_LABEL" "$(watchdog_label)" "$(learn_label)"; do
+    installed="$HOME/Library/LaunchAgents/$label.plist"
+    render_job "$label" >"$rendered" || status=1
+    if [ -s "$rendered" ]; then
+      cmp -s "$rendered" "$installed" && job_loaded "$label" && continue
+    elif [ ! -e "$installed" ]; then
+      continue
+    fi
+    echo "$label"
+    [ "${1:-}" = "--dry-run" ] || reload_job "$label" "$rendered" "$installed" || status=1
+  done
+  rm -f "$rendered"
+  return "$status"
 }
 
 # render_launchd_plist <label> <HH:MM> <days> <morning-args> [KEY=VALUE ...]

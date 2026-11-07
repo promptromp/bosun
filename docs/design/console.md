@@ -95,7 +95,8 @@ bosun console [--port N] [--open] [--new-token]
   The cookie's name carries the port, since cookies are not kept apart by port. Every API call
   needs it (other local processes and browser tabs cannot read the ledger by guessing the port).
 - The token is kept across restarts (before, every restart after a merge signed the open tab
-  out with 401s). `lib/console_token.py` stores it in `$BOSUN_STATE_DIR/console/token`,
+  out with 401s). `lib/console_token.py` stores it in `$BOSUN_STATE_DIR/console/token`
+  (beside `running.lock`, which a running console holds, so that `bosun update` can tell it runs),
   written atomically, the file 0600 in a 0700 folder, and reuses it on start. A file that is
   missing, unreadable, malformed or readable by group or others is replaced by a new token
   rather than reused or fixed in place, since a token others could read may already be known.

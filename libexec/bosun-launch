@@ -27,7 +27,9 @@
 # commit, the agent and the model and effort it runs with, the directory, the --model / --effort it
 # was given, and a fingerprint of the agent's arguments and of the files they name in the install,
 # with the conversation's name and the orchestrator's policy text left out. --fingerprint prints the
-# fingerprint a launch would record now, and launches nothing: as an update would start the window
+# fingerprint a launch of this version would record now, the files read from this version's own
+# folder (so an update can ask the new version before it switches the link), and launches nothing:
+# as an update would start the window
 # again (recorded_restart in lib/common.sh: on the agent it was launched on; for a window outside the
 # window list, opened by `send --new`, with its recorded directory and --model / --effort), in the
 # window's directory from the window list otherwise; it refuses a window with neither. Where the two
@@ -118,7 +120,7 @@ print_fingerprint() { # <name>
   [ -n "$dir" ] || die "no window '$1' in the window list, and no launch of it recorded"
   cd "$dir" || die "cannot enter $1's directory '$dir'"
   set_agent_args "$1"
-  python3 "$BOSUN_ROOT/lib/launch_record.py" fingerprint --install "$BOSUN_INSTALL" -- "${input_args[@]}"
+  python3 "$BOSUN_ROOT/lib/launch_record.py" fingerprint --install "$BOSUN_INSTALL" --root "$BOSUN_ROOT" -- "${input_args[@]}"
 }
 
 # Record what this window is launched with, for an update to compare and to start it again the same

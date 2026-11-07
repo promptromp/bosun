@@ -104,6 +104,20 @@ check_update() {
   fi
 }
 
+# What to change in your own files for this version (USER_FILE_CHANGES in lib/migrations.py): an
+# update never edits sessions.yml, setup.sh, policy.md, learn.md, tasks/ or workstreams.json, and says
+# in its summary what to change. A section only when there is something to change.
+check_user_files() {
+  local changes line
+  if ! changes="$(python3 "$BOSUN_ROOT/lib/migrations.py" user-changes 2>&1)"; then
+    section "Your own files"
+    warn "could not list what to change in them: $changes"
+  elif [ -n "$changes" ]; then
+    section "Your own files (bosun update never changes them)"
+    while IFS= read -r line; do warn "change $line"; done <<<"$changes"
+  fi
+}
+
 # Knowledge (docs/design/knowledge.md): whether there is a knowledge base, what it holds, and the
 # knowledge base against its journal (`bosun kg validate`, as check_journal reads it).
 check_knowledge() {
@@ -412,6 +426,7 @@ section "Schedule"
 check_schedule
 section "Power and session"
 check_power
+check_user_files
 section "Setup steps (dry run)"
 "$BOSUN" setup --dry-run 2>&1 | sed 's/^/  /'
 

@@ -193,6 +193,15 @@ def read_manifest(backup: Path) -> Manifest:
         raise BackupError(f"{backup} has no readable manifest: {exc}") from exc
 
 
+def copy_set(state_dir: Path, config_dir: Path, dest: Path) -> None:
+    """The backup set (backup_set) copied into <dest>, as state/<name> and config/<name>, with APFS
+    clones where there are any: what a backup holds, and what an update's rehearsal migrates."""
+    for relative, path in backup_set(state_dir, config_dir):
+        target = dest / relative
+        target.parent.mkdir(parents=True, exist_ok=True)
+        _copy(path, target)
+
+
 def take(
     state_dir: Path,
     config_dir: Path,
@@ -207,10 +216,7 @@ def take(
     backup = state_dir / BACKUPS_DIR / f"{moment:%Y%m%d-%H%M%S}-{from_commit[:7]}-{to_commit[:7]}"
     backup.mkdir(parents=True, mode=0o700)
     try:
-        for relative, path in backup_set(state_dir, config_dir):
-            target = backup / relative
-            target.parent.mkdir(parents=True, exist_ok=True)
-            _copy(path, target)
+        copy_set(state_dir, config_dir, backup)
         manifest = Manifest(from_commit, to_commit, moment.isoformat(), dict(formats), _digests(backup))
         _write_manifest(backup, manifest)
     except BaseException:

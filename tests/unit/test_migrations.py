@@ -3,7 +3,9 @@ format to the code's (docs/design/update.md, "Migrations"). Fictional data."""
 
 from __future__ import annotations
 
+import contextlib
 import fcntl
+import io
 import json
 import shutil
 import sys
@@ -451,6 +453,25 @@ class TestValidateUnlocked(MigrationTest):
         self.assertIn("state", [f["kind"] for f in found])
         self.assertEqual(ledger.validate_unlocked(Path(self.tmp.name) / "elsewhere"), [])
         self.assertFalse((Path(self.tmp.name) / "elsewhere").exists())  # it writes nothing
+
+
+class TestUserChanges(unittest.TestCase):
+    """bosun doctor lists what to change in my own files (USER_FILE_CHANGES), never applied."""
+
+    def test_each_change_is_a_line(self) -> None:
+        changes = (("sessions.yml", "rename model: to agent_model:"), ("tasks/", "add a status: line"))
+        out = io.StringIO()
+        with mock.patch.object(migrations, "USER_FILE_CHANGES", changes), contextlib.redirect_stdout(out):
+            self.assertEqual(migrations.main(["user-changes"]), 0)
+        self.assertEqual(
+            out.getvalue(), "sessions.yml: rename model: to agent_model:\ntasks/: add a status: line\n"
+        )
+
+    def test_none_is_nothing(self) -> None:
+        out = io.StringIO()
+        with mock.patch.object(migrations, "USER_FILE_CHANGES", ()), contextlib.redirect_stdout(out):
+            migrations.main(["user-changes"])
+        self.assertEqual(out.getvalue(), "")
 
 
 if __name__ == "__main__":

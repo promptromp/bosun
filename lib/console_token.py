@@ -1,4 +1,5 @@
-"""The console's access token, kept across restarts (`bosun console`, docs/design/console.md).
+"""The console's access token, kept across restarts (`bosun console`, docs/design/console.md), and
+the lock a running console holds in the same folder, so that `bosun update` can tell it runs.
 
 The token lives in $BOSUN_STATE_DIR/console/token: the file 0600, its folder 0700, written
 atomically. A start reuses it, so an open browser tab stays signed in when the console restarts.
@@ -9,16 +10,20 @@ a new one and leaves the file alone. The token itself is never logged here.
 
 from __future__ import annotations
 
+import contextlib
+import fcntl
 import os
 import re
 import secrets
 import stat
+from collections.abc import Iterator
 from pathlib import Path
 
 
 TOKEN_BYTES = 32
 TOKEN_DIR = "console"  # noqa: S105 - a folder name, not a secret
 TOKEN_FILE = "token"  # noqa: S105 - a file name, not a secret
+RUNNING_LOCK = "running.lock"  # held, shared, by each console while it serves
 DIR_MODE = 0o700
 FILE_MODE = 0o600
 # What secrets.token_urlsafe(TOKEN_BYTES) produces: 43 URL-safe characters, unpadded.
@@ -84,3 +89,31 @@ def console_token(state_dir: Path, persist: bool, rotate: bool = False) -> str:
 def persist_setting(value: str | None) -> bool:
     """BOSUN_CONSOLE_PERSIST_TOKEN: on unless "0" (default on)."""
     return (value or "1").strip() != "0"
+
+
+@contextlib.contextmanager
+def serving(state_dir: Path) -> Iterator[None]:
+    """The console's running lock, held (shared) for the block: while the server runs."""
+    private_dir(state_dir / TOKEN_DIR)
+    fd = os.open(state_dir / TOKEN_DIR / RUNNING_LOCK, os.O_RDWR | os.O_CREAT, FILE_MODE)
+    try:
+        fcntl.flock(fd, fcntl.LOCK_SH)
+        yield
+    finally:
+        os.close(fd)
+
+
+def running(state_dir: Path) -> bool:
+    """Whether a console serves from <state_dir>: its running lock is held. The lock goes with the
+    process, so a console that died is not running."""
+    try:
+        fd = os.open(state_dir / TOKEN_DIR / RUNNING_LOCK, os.O_RDONLY)
+    except OSError:
+        return False
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError:
+        return True
+    finally:
+        os.close(fd)
+    return False

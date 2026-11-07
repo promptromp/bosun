@@ -1,0 +1,86 @@
+#!/bin/bash
+# Usage: bosun update [--dry-run] [--yes] [--json]
+#
+# Update bosun to the head of the branch it tracks, while the agents keep working, without losing a
+# write (docs/design/update.md). It fetches the branch (`git config bosun.branch` in the versions
+# folder's bosun.git, default main) into a version folder of its own, beside the one running, and hands
+# over to that version, which:
+#   1. shows the plan: the commits, the migrations, the rules versions, config keys added or renamed,
+#      the prompts that changed, what each window gets, the launchd jobs to reload, a running console
+#      to restart, and what stops the update (something the new version needs and this Mac lacks, a
+#      store it cannot read, a `kg forget` cut short). In a terminal it asks before it changes
+#      anything; without one it stops at the plan;
+#   2. rehearses: runs the migrations and the stores' checks on a copy of the data, and stops if they fail;
+#   3. holds bosun's own background work (the check-in loop, the watchdog, learning, the morning job);
+#   4. pauses writes, briefly: backs the data up (backups/ in the state folder, the last 3 kept),
+#      migrates it, switches the install link to the new version, and checks each store. Any failure
+#      puts everything back as it was;
+#   5. releases: reloads the launchd jobs whose plist changed, restarts the check-in loop, lifts the
+#      hold, and keeps what `bosun doctor` finds.
+# An update cut short (Ctrl-C, a crash, a power cut) is carried on by the next `bosun update`: put back
+# if it stopped while writes were paused (the next write to a store does that too), finished if its
+# checks had passed. With nothing new on the branch it says bosun is up to date.
+#   --dry-run  show the plan, and change nothing
+#   --yes      go ahead without asking
+#   --json     the plan and the update's record as one JSON object (what it says goes to stderr)
+#
+# What the agents and the check-in loop run while it brings the windows along:
+#   bosun update note ...   a window's status, after the update's prompt
+#   bosun update advance    the check-in loop's turn at windows still to bring along
+# Exit status: 0 updated, up to date, or only planned; 1 it stopped (blocked, refused, or failed and
+# put back), saying why; 2 bad usage.
+set -uo pipefail
+source "$(dirname "$0")/../lib/common.sh"
+load_config
+
+FROM=""
+args=()
+while [ $# -gt 0 ]; do
+  case "$1" in
+    -h | --help)
+      usage
+      exit 0
+      ;;
+    --dry-run | --yes | --json) args+=("$1") ;;
+    --from)
+      FROM="${2:-}"
+      [ -n "$FROM" ] || die_usage "--from takes the version folder that handed over"
+      shift
+      ;;
+    note | advance) die_usage "bosun update $1 comes with bringing the windows along, which this version does not do yet" ;;
+    *) die_usage "unknown argument $1" ;;
+  esac
+  shift
+done
+
+# The new version, handed over to: the update itself (lib/update.py).
+if [ -n "$FROM" ]; then
+  python3 -c 'import sys; sys.exit(sys.version_info < (3, 13))' 2>/dev/null ||
+    die "bosun needs Python 3.13 or newer as python3: bosun preflight says how to get it"
+  BOSUN_CONFIG_DIR="$BOSUN_CONFIG_DIR" BOSUN_STATE_DIR="$BOSUN_STATE_DIR" BOSUN_LOG_DIR="$BOSUN_LOG_DIR" \
+    BOSUN_SESSION_NAME="$BOSUN_SESSION_NAME" exec python3 "$BOSUN_ROOT/lib/update.py" --from "$FROM" ${args[@]+"${args[@]}"}
+fi
+
+# git for the versions' repository, with none of the user's hooks. No GIT_* variable from the caller
+# (a git hook, another repository's tooling) may send it elsewhere.
+for git_var in $(compgen -e | grep '^GIT_'); do unset "$git_var"; done
+repo_git() { git -c core.hooksPath=/dev/null --git-dir="$REPO" "$@"; }
+
+VERSIONS="$(dirname "$BOSUN_ROOT")"
+REPO="$VERSIONS/bosun.git"
+if [ "$BOSUN_INSTALL" = "$BOSUN_ROOT" ]; then
+  die "bosun update moves an install made by get.sh, with its versions side by side in <install>-versions; $BOSUN_ROOT is a checkout: update it with git"
+fi
+branch="$(repo_git config bosun.branch)" || branch=main
+repo_git fetch --quiet origin "+refs/heads/$branch:refs/remotes/origin/$branch" ||
+  die "could not fetch $branch from $(repo_git config remote.origin.url)"
+commit="$(repo_git rev-parse --verify --quiet "refs/remotes/origin/$branch^{commit}")" ||
+  die "no commit at the head of $branch"
+folder="$VERSIONS/${commit:0:12}"
+if [ ! -d "$folder" ]; then
+  repo_git worktree add --quiet --detach "$folder" "$commit" >/dev/null ||
+    die "could not check out $commit as $folder"
+fi
+[ "$(git -C "$folder" rev-parse HEAD 2>/dev/null)" = "$commit" ] ||
+  die "$folder is not a checkout of $commit; move it aside and run bosun update again"
+exec "$folder/bin/bosun" update --from "$BOSUN_ROOT" ${args[@]+"${args[@]}"}
