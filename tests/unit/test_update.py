@@ -404,7 +404,7 @@ class ReleaseTest(World):
         self.assertEqual(update_state.read(self.state), done)
 
     def test_a_checkout_from_before_versions_with_work_in_it_is_kept_and_said(self) -> None:
-        """R43 carry 3: the release's prune checks it as bosun uninstall checks a checkout, and the
+        """The release's prune checks it as bosun uninstall checks a checkout, and the
         summary says once what it kept."""
         origin = self.new.parent.parent / "origin.git"
         versions.git("init", "-q", "--bare", str(origin))
@@ -449,7 +449,7 @@ class ReleaseTest(World):
         )
 
     def test_an_older_version_with_work_in_it_is_kept_and_said(self) -> None:
-        """R46: as a kept checkout from before versions is."""
+        """As a kept checkout from before versions is."""
         (self.old / ".git").write_text(
             f"gitdir: {self.old.parent / 'bosun.git' / 'worktrees' / self.old.name}\n"
         )
@@ -563,7 +563,7 @@ class ResumeTest(World):
         self.assertEqual(done.step, "done")
 
     def test_one_cut_short_while_bringing_the_windows_along_is_left_to_the_loop(self) -> None:
-        """R6: the windows still waited for are the check-in loop's; resume does not run them again."""
+        """The windows still waited for are the check-in loop's; resume does not run them again."""
         self.record("agents", pending=("api",), windows={"api": ("repo", "restart", "restarted")})
         with mock.patch.object(update_windows, "bring_along") as bring:
             left = update.resume(self.state)
@@ -720,7 +720,7 @@ class StartTest(World):
         self.assertEqual((recorded.step, recorded.doctor_before), ("planned", before))
 
     def test_doctor_runs_while_planning_before_anything_is_held_and_its_fails_are_kept(self) -> None:
-        """R45: outside the hold and the freeze, and recorded, so an update carried on compares the same."""
+        """Outside the hold and the freeze, and recorded, so an update carried on compares the same."""
         seen: list[str | None] = []
 
         def fails(root: Path) -> tuple[str, ...]:
@@ -1085,9 +1085,9 @@ class ConvertTest(World):
         return self.state / update.OWN_WORK
 
     def assert_own_work_back(self, loop: bool = False) -> None:
-        """What the conversion stopped runs again as it was, once (R51): the jobs it stopped loaded from
+        """What the conversion stopped runs again as it was, once: the jobs it stopped loaded from
         their plists on disk and no other (no render, and so never the morning job), the check-in loop
-        restarted when it stopped it; and its mark gone (R50)."""
+        restarted when it stopped it; and its mark gone."""
         starts = [args for script, args in self.shell.ran if script == 'start_jobs "$@"']
         self.assertEqual(starts, [OWN_LABELS])
         self.assertNotIn("reload_changed_jobs", self.shell.scripts())
@@ -1230,7 +1230,7 @@ class ConvertTest(World):
         self.assertTrue(self.loop_runs())
 
     def test_the_mark_names_what_runs_before_anything_stops(self) -> None:
-        """R50: written before the first stop, so a crash at any point of it is covered."""
+        """Written before the first stop, so a crash at any point of it is covered."""
         self.a_loop()
         seen: list[Any] = []
         real = self.shell.__call__
@@ -1246,7 +1246,7 @@ class ConvertTest(World):
         self.assertFalse(self.mark().exists())  # the release brought it all back
 
     def test_the_next_update_starts_again_what_a_conversion_cut_short_left_stopped(self) -> None:
-        """R50: the mark says what was stopped, whatever wrote the record since: a crash while stopping
+        """The mark says what was stopped, whatever wrote the record since: a crash while stopping
         (rehearsed), in the hold, in the freeze, or after an older version's write put the freeze back
         (restored, its record rewritten with only the fields it knows). Once, whatever runs next."""
         for step in ("rehearsed", "holding", "marked", "restored"):
@@ -1290,7 +1290,7 @@ class ConvertTest(World):
         self.assertEqual((self.shell.ran, self.bosun_ran), ([], []))
 
     def test_the_loop_a_put_back_restarts_runs_the_old_code(self) -> None:
-        """R51: refresh --checkin-loop of the new version respawns the pane with the install path's bosun,
+        """`refresh --checkin-loop` of the new version respawns the pane with the install path's bosun,
         which a put back leads to the old checkout again (kept as legacy-* after the swap)."""
         shutil.copytree(Path(__file__).resolve().parents[2] / "lib", self.new / "lib")
         shutil.move(self.install, self.legacy)
@@ -1311,7 +1311,7 @@ class ConvertTest(World):
         )
 
     def test_a_window_busy_past_the_bound_brings_its_own_work_back_and_waits_again(self) -> None:
-        """R52: after the stop it waits QUIET_AFTER_STOP_SECONDS at the most; then bosun's own work runs
+        """After the stop it waits QUIET_AFTER_STOP_SECONDS at the most; then bosun's own work runs
         again while it waits for a quiet moment, and it plans again, as after the first wait."""
         counts = {"stops": 0, "starts": 0, "readings": 0}
         real = self.shell.__call__
@@ -1392,7 +1392,7 @@ class ConvertTest(World):
         self.assertTrue(self.install.is_dir() and not self.install.is_symlink())
 
     def test_a_conversion_failing_after_the_switch_leads_the_install_to_the_old_code_again(self) -> None:
-        """R43 carry 4: the checkout is legacy-* by then, and the record names it from the switch on."""
+        """The checkout is legacy-* by then, and the record names it from the switch on."""
         ledger_before = (self.state / "ledger.json").read_bytes()
 
         def damaged(state_dir: Path, config_dir: Path) -> list[str]:
@@ -1438,7 +1438,7 @@ class ConvertTest(World):
 
 
 class StartJobsTest(unittest.TestCase):
-    """R51: a put back loads the jobs a conversion stopped from their plists as they are on disk
+    """A put back loads the jobs a conversion stopped from their plists as they are on disk
     (lib/common.sh's start_jobs), against a stand-in launchctl in a scratch home: the shell refuses to
     go on if any other launchctl would answer."""
 

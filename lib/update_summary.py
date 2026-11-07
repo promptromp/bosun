@@ -181,7 +181,7 @@ def _counted(count: int, one: str, many: str) -> list[str]:
 
 
 def found_after(findings: Sequence[str], before: Sequence[str]) -> tuple[str, ...]:
-    """What the update found after the switch, as the summary says it (R45): the release's own
+    """What the update found after the switch, as the summary says it: the release's own
     findings (a job not reloaded, the check-in loop not restarted); each FAIL of bosun doctor's that
     its run while planning (<before>) did not show, by its text; how many it did show, which already
     failed before the update; and how many warnings doctor gave, which `bosun doctor` lists."""

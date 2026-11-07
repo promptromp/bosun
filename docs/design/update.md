@@ -117,9 +117,9 @@ The switch replaces the link in one rename, so a command sees either the old ver
 never a mix. A version's folder is never changed once in use, so whatever runs from it finishes on
 the code it started with. The previous version's folder stays until the next update; older ones are
 deleted, unless one holds something of yours (a change in its files, a commit made in it), which the
-summary says (R46). One a running process still uses (it has the folder open, or names it in its
+summary says. One a running process still uses (it has the folder open, or names it in its
 command line, as a long-running `bosun console` does) is left to a later update, and with no `lsof` or
-`ps` to tell, every one stays (R4, R37).
+`ps` to tell, every one stays.
 
 **Two paths, kept apart.** A process loads its code from the version folder it started in. Bash and
 Python alike resolve that folder once, at the start, so a command that runs across the switch stays
@@ -307,7 +307,7 @@ Each window gets one of three treatments, decided from the plan and the window's
   each item handed a task type whose file changed (`delegate review,fix` hands both; a type the site
   replaces in its own `tasks/` is the site's text, which an update never changes), and every item
   handed out when `orchestrator/tasks/_common.md` changed, as every task gets it (a site's
-  `_common.md` only adds to it) (R56).
+  `_common.md` only adds to it).
   `chores.md` is the orchestrator's plugin. Whether a running session picks up a changed command
   file is still to be checked in the VM; until then, a change to it counts as a launch input.
 - **Something it was launched with changed:** its settings, its hooks, the launch command or the
@@ -610,7 +610,7 @@ Decided while building it:
   invalid, blocks the plan, and in the release it is a finding while the installed job stays loaded.
 - **The plan before the switch** asks the new version: its `launch --fingerprint` reads the files
   under the install from its own folder. One of bosun's windows with no launch record counts as changed.
-- **A window bosun did not start** (R55): one `bosun sessions` lists outside the window list (`extra`)
+- **A window bosun did not start**: one `bosun sessions` lists outside the window list (`extra`)
   with no launch recorded, as a shell or a Claude opened by hand in bosun's tmux session, is left as it
   is, whatever it does, and the plan says so ("not started by bosun: left as it is", the summary "left
   as it is (bosun did not start it)"). Restarting one would replace your terminal, or your own Claude,
@@ -656,7 +656,7 @@ Decided while building it:
   none), and refresh exits 4, never "continue what you were doing" in a blank conversation.
 - **What is passed back** with a restart after taking stock: the window's own list, and what the Stop
   hook saw still running at the end of that turn ([signals](signals.md)).
-- **What an update's prompts may ask** (R42): `policy.md` and `orchestrator/tasks/_common.md` name them
+- **What an update's prompts may ask**: `policy.md` and `orchestrator/tasks/_common.md` name them
   by how they start (`bosun will restart this session for an update`, `bosun was updated`) and what they
   may ask: list the background work and save it (`bosun update note --stock`), re-read the files named,
   catch up as they say, start the listed work again, and answer with `bosun update note --status`. A

@@ -96,8 +96,9 @@ of truth, so don't copy rules into this file.
   (read-only: what the Mac shows, Claude Code's files through `lib/claude_state.py`), `lib/init_plan.py`
   (pure: recommended answers, the config files' text, the plan), `lib/init_wizard.py` (pure over a `Ui`:
   the questions), `lib/init_terminal.py` (the keys and screens) and `lib/init.py` (the CLI: writes the
-  config with backups, trusts the folders, then runs `install.sh`, the one place that knows launchd and
-  `pmset`). `lib/uninstall_detect.py` (read-only: what of bosun is here), `lib/uninstall_plan.py` (pure: the
+  config with backups, trusts the folders, then runs `install.sh`, the one place that sets `pmset`; the
+  launchd jobs are rendered and loaded by `lib/common.sh`, which `install.sh` and `bosun update` share).
+  `lib/uninstall_detect.py` (read-only: what of bosun is here), `lib/uninstall_plan.py` (pure: the
   tables of what bosun's files are, what goes, what stays, how it reads), `lib/uninstall_macos.py` (launchd
   and `pmset`) and `lib/uninstall.py` (the CLI) take it off again; `lib/agent_changes.py` records what bosun
   changed in the agents' own files, so that only that is undone. Design: `docs/design/uninstall.md`.
@@ -328,7 +329,8 @@ osascript) are faked in the temp HOME's `~/.local/bin`, and the install test use
 label and refuses to run unless the fakes come first on PATH.
 
 **Never test an install on the machine you are running on: `install.sh`, `bosun init --recommended`,
-`get.sh` and `bosun uninstall` change launchd, `pmset` and the config for real.** Use the cheapest sandbox that can show what
+`get.sh`, `bosun update` and `bosun uninstall` change launchd, `pmset`, the install and the config for
+real.** Use the cheapest sandbox that can show what
 you changed (the table and how to set them up: `docs/development.md`, "Which sandbox for what"):
 
 - `tests/sandbox.sh [init|unit|smoke|all|shell]`: a throwaway Linux container with a read-only copy of the
@@ -383,6 +385,10 @@ The repo is meant to be shareable, so nothing in it may identify an organization
   To check the whole tree: `git ls-files | xargs uv run python tools/forbidden_terms.py`.
 
 ## Rolling a change out to running sessions
+
+On an install `get.sh` made, `bosun update` does all of this itself (the re-reads, the restarts, and
+the handed tasks it lists for `bosun delegate --update`; `docs/design/update.md`). The steps below are
+for a checkout of your own, or a change made by hand:
 
 - The orchestrator reads `policy.md` once per conversation, and starts a new one each morning. For
   a same-day change: `bosun send orchestrator "re-read <file>: <what changed>"`.

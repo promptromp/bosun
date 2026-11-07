@@ -8,7 +8,7 @@ update holds update.lock for its whole run, so one runs at a time, and records e
 update.json (lib/update_state.py) before it starts it:
 
 - planned, rehearsed: the plan accepted, then its migrations and checks passed on a copy of the data
-  (update/rehearsal in the state folder, deleted whatever happens). Neither holds anything (R24).
+  (update/rehearsal in the state folder, deleted whatever happens). Neither holds anything.
 - holding: the hold. bosun's own background work (the check-in loop, the watchdog, learning, the
   Slack watcher, the events dispatcher, the morning job) asks update_state.holding before each run
   and skips it while the hold is on; a run already going finishes, its writes waiting on the freeze
@@ -20,7 +20,7 @@ update.json (lib/update_state.py) before it starts it:
   locks are held) and records failed with the error. How long writes were paused, from the locks
   taken to their release, is freeze_ms.
 - checked: writes go on. released: the jobs reloaded, the check-in loop restarted while the hold is
-  still on (R36), then the hold lifted; what went wrong after the switch and what bosun doctor finds
+  still on, then the hold lifted; what went wrong after the switch and what bosun doctor finds
   are kept as findings (reported, never rolled back); old backups and version folders pruned.
 - agents: each window the plan gives something to do is brought along (lib/update_agents.py decides,
   lib/update_windows.py carries it out) until it answers with `bosun update note`; Ctrl-C leaves those
@@ -323,7 +323,7 @@ def _prune(state_dir: Path, state: UpdateState) -> list[str]:
 
 def release(state: UpdateState) -> UpdateState:
     """After the freeze: the launchd jobs whose plist changed reloaded, the check-in loop restarted
-    while the hold is still on (R36), then the hold lifted (`released`); old backups and version
+    while the hold is still on, then the hold lifted (`released`); old backups and version
     folders pruned; what went wrong there, a checkout from before versions kept for what it holds, and
     what the new version's `bosun doctor` finds kept as findings, reported, never rolled back (writes
     may have landed since)."""
@@ -371,7 +371,7 @@ def _brought_along(state: UpdateState) -> UpdateState:
 def _carry_on(state_dir: Path) -> UpdateState | None:
     """Under update.lock: the record read again, then an update cut short before the freeze recorded
     as failed (only the hold had changed, and it lapsed), one past its checks rolled forward: released,
-    then its windows brought along. Windows still waited for at `agents` are the check-in loop's (R6),
+    then its windows brought along. Windows still waited for at `agents` are the check-in loop's,
     and are left to it."""
     state = update_state.read(state_dir)
     if state is None or state.step in FINISHED:
@@ -390,7 +390,7 @@ def _carry_on(state_dir: Path) -> UpdateState | None:
 def _settled(state_dir: Path, state: UpdateState) -> UpdateState:
     """An update cut short while it brought windows along: those that answered since (their own note,
     or one written by hand) no longer waited for, and `done` once none is; the rest are the check-in
-    loop's (R6), never acted on here."""
+    loop's, never acted on here."""
     after = update_agents.settled(state, update_notes.Files(state_dir))
     return _record(state_dir, after) if after != state else after
 
@@ -633,12 +633,12 @@ def _update(old_root: Path, where: Folders, args: argparse.Namespace, said: Said
 
 QUIET_STATUSES = ("idle", "exited")  # an agent with nothing running, or no agent at all
 QUIET_POLL_SECONDS = 5
-# R52: the most it waits for a quiet moment with bosun's own work stopped, before it starts that work
+# The most it waits for a quiet moment with bosun's own work stopped, before it starts that work
 # again and waits with everything running.
 QUIET_AFTER_STOP_SECONDS = 120
 QUIET, STOPPED, LATE = "quiet", "stopped", "late"  # how a wait for a quiet moment ends
 NOT_QUIET = "it was not quiet soon enough after bosun's own work stopped; nothing had changed"
-# R50: what a conversion stopped of bosun's own work, in the state folder (STATE_FILES' `update` row):
+# What a conversion stopped of bosun's own work, in the state folder (STATE_FILES' `update` row):
 # a file of its own, as an older version's write gate rewrites update.json with only the fields it knows.
 OWN_WORK = Path(update_state.UPDATE_DIR) / "own-work.json"
 LOOP_STOP_SECONDS = 20  # the most the check-in loop may take to stop
@@ -765,7 +765,7 @@ def _start_own(root: Path, own: OwnWork) -> None:
 
 
 def _own_work_back(state_dir: Path) -> None:
-    """bosun's own background work a conversion stopped (its mark), started again as it was (R51), once:
+    """bosun's own background work a conversion stopped (its mark), started again as it was, once:
     where the conversion left everything as it was (no record, or one at NOTHING_CHANGED, whoever wrote
     it); past the switch the release brings it back. Then the mark goes. The caller holds update.lock."""
     own = _marked(state_dir)
@@ -789,10 +789,10 @@ def _own_work_left(state_dir: Path) -> None:
 def _stopped_then_through(state: UpdateState, plan: Plan, new_root: Path, where: Folders) -> UpdateState:
     """bosun's own work stopped; a quiet moment again, as the doctor run and the rehearsal took a while
     and the old check-in loop could have prompted a window meanwhile (with it stopped, that settles
-    soon), but for QUIET_AFTER_STOP_SECONDS at the most (R52), as a busy window would otherwise keep that
+    soon), but for QUIET_AFTER_STOP_SECONDS at the most, as a busy window would otherwise keep that
     work off for as long as its turn runs; then the hold, the freeze, the release and the windows
     brought along (_through)."""
-    Output.say("Stopping bosun's own background work, which the version it converts from does not hold...")
+    Output.say("Stopping bosun's own background work, which the version it converts from may not hold...")
     problem = _stopped(new_root, where.state_dir)
     if problem:
         return _step(where.state_dir, state, "failed", error=problem)

@@ -277,7 +277,7 @@ class SwitchTest(unittest.TestCase):
 
 
 class LegacyTest(unittest.TestCase):
-    """R43 carry 3: the checkout from before versions is yours, and stays while it holds anything."""
+    """The checkout from before versions is yours, and stays while it holds anything."""
 
     def setUp(self) -> None:
         self.tmp = Path(self.enterContext(tempfile.TemporaryDirectory()))
@@ -311,7 +311,7 @@ class LegacyTest(unittest.TestCase):
         versions.prune(self.vdir, keep=set(), work=work)
         self.assertEqual(sorted(asked), sorted([self.a, self.mine, self.clean]))
 
-    def test_r46_a_version_with_work_in_it_is_kept_too(self) -> None:
+    def test_a_version_with_work_in_it_is_kept_too(self) -> None:
         def work(folder: Path) -> str:
             return "it has uncommitted changes" if folder == self.a else ""
 
@@ -338,7 +338,7 @@ class LegacyTest(unittest.TestCase):
 
 
 class SweepTest(unittest.TestCase):
-    """R43 carry 5: the temporary links a switch cut short left beside the install."""
+    """The temporary links a switch cut short left beside the install."""
 
     def test_only_stale_links_go(self) -> None:
         tmp = Path(self.enterContext(tempfile.TemporaryDirectory()))

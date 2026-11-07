@@ -349,7 +349,7 @@ class LaunchCommandTest(unittest.TestCase):
 
 
 class NewVersionTest(unittest.TestCase):
-    """Before an update switches the link, the new version's fingerprint reads its own files (R35)."""
+    """Before an update switches the link, the new version's fingerprint reads its own files."""
 
     def test_a_changed_plugin_file_in_the_new_version_shows_before_the_switch(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

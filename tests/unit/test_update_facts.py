@@ -132,7 +132,7 @@ class FactsTest(World):
         )
 
     def test_an_item_handed_several_types_is_in_flight_with_each_built_in_one(self) -> None:
-        """R56: `bosun delegate review,fix` records "review,fix"; only a type the site replaces is
+        """`bosun delegate review,fix` records "review,fix"; only a type the site replaces is
         dropped, and the item stays, as the rules every task gets reached it."""
         self.ledger("record-delegation", "review:acme/exporter#12", "--window", "api", "--task", "review,fix")
         self.assertEqual(
@@ -142,6 +142,17 @@ class FactsTest(World):
         (self.config / "tasks" / "fix.md").write_text("Our own fix rules.\n")
         self.assertEqual(
             update_facts.in_flight(self.state, self.config), [("review:acme/exporter#12", ("review",))]
+        )
+
+    def test_an_item_a_window_took_on_directly_carries_no_task_text(self) -> None:
+        """Work I asked for in a window (`ledger working`) records the task "direct": no task text was
+        ever handed with it, so it is not in flight, and a change to `_common.md` leaves it out too."""
+        self.ledger("record-delegation", "review:acme/exporter#12", "--window", "api", "--task", "direct")
+        self.ledger(
+            "record-delegation", "review:acme/exporter#14", "--window", "web", "--task", "review,direct"
+        )
+        self.assertEqual(
+            update_facts.in_flight(self.state, self.config), [("review:acme/exporter#14", ("review",))]
         )
 
     def test_prompts_keys_and_rules_come_from_the_version_folder(self) -> None:
@@ -203,7 +214,7 @@ class WindowFactsTest(World):
         self.assertFalse(update_facts.on_another_conversation({**api, "agent": {"status": "idle"}}))
 
     def test_a_window_outside_the_list_with_no_launch_recorded_was_not_started_by_bosun(self) -> None:
-        """R55: a shell (prefix-c) or a Claude started by hand in bosun's session is left as it is, never
+        """A shell (prefix-c) or a Claude started by hand in bosun's session is left as it is, never
         fingerprinted; one `bosun send --new` opened has a launch recorded, and is compared as bosun's."""
         listed = [
             *self.listed(),

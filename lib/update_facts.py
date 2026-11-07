@@ -190,7 +190,7 @@ def new_facts(root: Path) -> VersionFacts:
 def launch_changed(root: Path, name: str, state_dir: Path, session: str) -> bool:
     """Whether window <name> would be launched now, by the version in <root>, with anything other
     than what its last launch recorded. `launch --fingerprint` of that version reads the files under
-    the install from <root> itself, so this holds before the switch too (R35). One of bosun's windows
+    the install from <root> itself, so this holds before the switch too. One of bosun's windows
     with no record, or one the fingerprint refuses, counts as changed: what it runs with is unknown
     (a window bosun did not start never gets here: _window)."""
     recorded = launch_record.recorded(state_dir, session, name)
@@ -226,7 +226,7 @@ def on_another_conversation(window: dict[str, Any]) -> bool:
 def _window(root: Path, window: dict[str, Any], state_dir: Path, session: str) -> WindowFacts:
     """What the plan knows of <window>. One outside the window list with no launch recorded (a shell,
     a Claude started by hand; in a conversion also one an older version's `send --new` opened, whose
-    hooks take the older command lines) was not started by bosun, and is left as it is (R55)."""
+    hooks take the older command lines) was not started by bosun, and is left as it is."""
     name = str(window.get("name"))
     kind = _kind(window)
     status = status_of(window)
@@ -371,11 +371,13 @@ def in_flight(state_dir: Path, config_dir: Path) -> list[tuple[str, tuple[str, .
 
 def _task_types(item: dict[str, Any]) -> list[str]:
     """The task types <item> was handed to a repo session with, while its work is not done; none for
-    an item not handed out, done, or reported on."""
+    an item not handed out, done, or reported on, nor for work a window took on directly
+    (ledger.DIRECT_TASK), which no task text came with."""
     delegation = item.get("delegation")
     if not isinstance(delegation, dict) or not ledger.is_open(item) or not ledger.awaiting_report(item):
         return []
-    return [kind.strip() for kind in str(delegation.get("task") or "").split(",") if kind.strip()]
+    kinds = (kind.strip() for kind in str(delegation.get("task") or "").split(","))
+    return [kind for kind in kinds if kind and kind != ledger.DIRECT_TASK]
 
 
 def deletion_cut_short(state_dir: Path, config_dir: Path) -> tuple[bool, list[str]]:

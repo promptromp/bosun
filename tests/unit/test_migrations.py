@@ -131,7 +131,7 @@ class TestPath(MigrationTest):
             migrations.path("ledger", 3, 2)
 
     def test_a_refusal_is_a_value_error(self) -> None:
-        """What bosun update's plan catches (R1)."""
+        """What bosun update's plan catches."""
         self.assertTrue(issubclass(migrations.MigrationError, ValueError))
 
     def test_a_store_not_made_yet_needs_no_migration(self) -> None:
@@ -325,7 +325,7 @@ class TestConfig(MigrationTest):
         self.assertEqual(said, ["OLD is now NEW"])
 
     def test_a_key_renamed_twice_gets_its_current_name(self) -> None:
-        """A bosun.env from two versions back: A was renamed B, then B was renamed C (R19)."""
+        """A bosun.env from two versions back: A was renamed B, then B was renamed C."""
         chain = (("A", "B"), ("B", "C"))
         self.assertEqual(migrations.config_names(chain), {"A": "C", "B": "C"})
         self.assertEqual(migrations.migrate_config("A=1\nK=2\n", chain), ("C=1\nK=2\n", ["A is now C"]))

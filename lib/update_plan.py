@@ -46,7 +46,7 @@ class WindowFacts:
     status: str  # idle, shell, busy, waiting, exited or unknown
     launch_changed: bool
     # False for a window outside the window list with no launch recorded (a shell, a Claude started by
-    # hand): bosun never started it, so an update leaves it as it is (R55).
+    # hand): bosun never started it, so an update leaves it as it is.
     started_by_bosun: bool = True
 
 

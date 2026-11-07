@@ -247,7 +247,7 @@ def _candidates(versions: Path, keep: Collection[Path]) -> list[Path]:
 def kept(folder: Path) -> str:
     """Why prune keeps <folder> though it is neither version of the update, or "": a checkout from before
     versions with anything of yours in it, or that the installer did not make (as bosun uninstall
-    decides for a checkout); an older version with a change or a commit of its own (R46)."""
+    decides for a checkout); an older version with a change or a commit of its own."""
     if folder.name.startswith(LEGACY_PREFIX):
         return checkout_work.kept(folder)
     return checkout_work.version_kept(folder)

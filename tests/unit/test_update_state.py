@@ -51,7 +51,7 @@ class HoldTest(unittest.TestCase):
         self.assertFalse(update_state.hold_active(None, 0))
 
     def test_only_the_steps_from_holding_to_released_hold(self) -> None:
-        """R24: planned and rehearsed never hold, whatever hold_until says."""
+        """Planned and rehearsed never hold, whatever hold_until says."""
         self.assertEqual(
             update_state.HOLD_STEPS, ("holding", "marked", "backed-up", "migrated", "switched", "checked")
         )
@@ -104,7 +104,7 @@ class RecordTest(unittest.TestCase):
         (self.dir / "update.json").write_text(json.dumps(dict(dataclasses.asdict(state()), **over)))
 
     def test_a_newer_bosuns_fields_are_left_out(self) -> None:
-        """R21: a field this code does not know is ignored, never a reason to read no record."""
+        """A field this code does not know is ignored, never a reason to read no record."""
         self.newer(verified_by="doctor", rollout={"waves": [1, 2]}, step="migrated")
         self.assertEqual(update_state.read(self.dir), state("migrated"))
 
@@ -267,7 +267,7 @@ class StuckTest(unittest.TestCase):
             self.assertEqual(update_state.stuck(self.dir, 2000), "", step)
 
     def test_an_update_stopped_before_its_hold_is_not_stuck(self) -> None:
-        """R24: planned and rehearsed changed nothing and held nothing."""
+        """Planned and rehearsed changed nothing and held nothing."""
         for step in ("planned", "rehearsed"):
             update_state.write(self.dir, state(step, hold_until=10**12))
             self.assertEqual(update_state.stuck(self.dir, 500), "", step)

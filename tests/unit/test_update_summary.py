@@ -384,7 +384,7 @@ class TextTest(unittest.TestCase):
 
 
 class FoundTest(unittest.TestCase):
-    """R45: what the update found after the switch, for the summary: what bosun doctor fails at that
+    """What the update found after the switch, for the summary: what bosun doctor fails at that
     it did not before the update (each FAIL with its detail), how many already failed, and how many
     warnings; and the release's own findings."""
 

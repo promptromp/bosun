@@ -737,7 +737,7 @@ class SideBySide(World):
         self.assert_kept("not made by the installer")
 
     def test_jobs_that_run_the_link_a_version_or_the_checkout_before_them_go(self) -> None:
-        """R43 carry 2: a plist names the install link now; an older one may name a version's folder or the
+        """A plist names the install link now; an older one may name a version's folder or the
         checkout from before versions. Still only as install.sh renders it, to the letter."""
         renamed = {
             "com.mine.morning": self.root,

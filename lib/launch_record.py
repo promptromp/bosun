@@ -24,7 +24,7 @@ The fingerprint has two parts:
 
 `launch --fingerprint` reads those files from its own version's folder instead (`root`): the new
 version's, before an update switches the link to it, so that the plan says which windows need a
-restart before anything changes (R35). The paths in the fingerprint are still the install's.
+restart before anything changes. The paths in the fingerprint are still the install's.
 """
 
 from __future__ import annotations

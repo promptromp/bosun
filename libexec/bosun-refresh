@@ -398,7 +398,7 @@ refresh_window() { # <name> <dir> <kind> <model> <effort>
 # --update-restart <prompt-file> <name>: window <name> as refresh_window brings it along, with the
 # update's prompt, started again as its last launch recorded (recorded_restart): on the same agent, and
 # a window outside the window list, which must be open and have a launch recorded (else bosun did not
-# start it: R55), in its directory with its --model / --effort. Returns LEFT_RUNNING when it left the
+# start it), in its directory with its --model / --effort. Returns LEFT_RUNNING when it left the
 # agent running, NEXT_CONVERSATION when it started the window's next conversation (whose own prompt it
 # got, not the update's).
 update_restart() { # <name>

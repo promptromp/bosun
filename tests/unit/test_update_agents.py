@@ -300,7 +300,7 @@ class AdvanceTest(Agents):
         self.assertEqual(len(self.act.made("send")), 2)
 
     def test_a_window_restarted_into_its_next_conversation_counts_as_answered(self) -> None:
-        """R38: it starts that conversation's own prompt, never the update prompt, so it never
+        """It starts that conversation's own prompt, never the update prompt, so it never
         answers; the update notes its status itself, and names where its list of background work is
         kept. Without a list, its outcome says so once."""
         self.bring(

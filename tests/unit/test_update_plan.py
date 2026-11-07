@@ -99,7 +99,7 @@ class TestTreatment(unittest.TestCase):
         self.assertEqual(up.treatment(window, True), T.LEAVE)
 
     def test_a_window_bosun_did_not_start_is_left_as_it_is_whatever_it_does(self) -> None:
-        """R55: a shell or a Claude started by hand in bosun's session, outside the window list and
+        """A shell or a Claude started by hand in bosun's session, outside the window list and
         with no launch recorded: never relaunched or restarted, and the plan says why."""
         for status in STATUSES:
             for reread in (False, True):
@@ -134,13 +134,13 @@ class TestMakePlan(unittest.TestCase):
         self.assertEqual(got.handed, ("task:1",))
 
     def test_an_item_handed_several_types_is_handed_when_any_of_them_changed(self) -> None:
-        """R56: `bosun delegate review,fix` hands both types' text."""
+        """`bosun delegate review,fix` hands both types' text."""
         in_flight = [("task:1", ("review", "fix")), ("task:3", ("review",))]
         self.assertEqual(up._handed(in_flight, ("orchestrator/tasks/fix.md",)), ("task:1",))
         self.assertEqual(up._handed(in_flight, (REVIEW,)), ("task:1", "task:3"))
 
     def test_a_change_to_the_rules_every_task_gets_touches_every_item_handed_out(self) -> None:
-        """R56: orchestrator/tasks/_common.md is in every task, also one of the site's own types only
+        """`orchestrator/tasks/_common.md` is in every task, also one of the site's own types only
         (a site's _common.md adds to it, never replaces it)."""
         in_flight = [("task:1", ("review", "fix")), ("task:3", ("review",)), ("task:4", ())]
         self.assertEqual(up._handed(in_flight, (up.COMMON, REVIEW)), ("task:1", "task:3", "task:4"))

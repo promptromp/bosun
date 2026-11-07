@@ -54,7 +54,7 @@ class InstallPathsTests(unittest.TestCase):
         self.assertEqual(install_path(odd), odd)
 
     def test_a_versions_folder_without_the_repository_holds_checkouts(self) -> None:
-        """R22: a checkout of a pull request in ~/src/bosun-versions/pr-123 is a checkout, not a
+        """A checkout of a pull request in ~/src/bosun-versions/pr-123 is a checkout, not a
         version of an install at ~/src/bosun."""
         checkout = self.home / "src" / "bosun-versions" / "pr-123"
         checkout.mkdir(parents=True)
