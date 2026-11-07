@@ -378,8 +378,14 @@ class SettledTest(Agents):
 
 class PlanWindowsTest(unittest.TestCase):
     def test_the_windows_to_bring_along_take_their_kind_from_the_plan(self) -> None:
-        windows = (("orch", Treatment.REREAD), ("api", Treatment.WAIT), ("web", Treatment.LEAVE))
-        kinds = {"orch": "orchestrator", "api": "repo", "web": "repo"}
+        """A window left alone, or one bosun did not start, is never pending."""
+        windows = (
+            ("orch", Treatment.REREAD),
+            ("api", Treatment.WAIT),
+            ("web", Treatment.LEAVE),
+            ("mine", Treatment.NOT_STARTED_BY_BOSUN),
+        )
+        kinds = {"orch": "orchestrator", "api": "repo", "web": "repo", "mine": "repo"}
         self.assertEqual(
             update_agents.to_bring_along(windows, kinds),
             {"orch": ("orchestrator", "re-read"), "api": ("repo", "wait until idle")},

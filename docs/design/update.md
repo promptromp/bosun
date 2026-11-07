@@ -287,7 +287,11 @@ Each window gets one of three treatments, decided from the plan and the window's
   next bosun command or hook it runs uses the new version.
 - **Only the orchestrator's prompts changed** (`policy.md`, the task files). Once it is idle, it gets
   the update prompt, which asks it to re-read those files. Tasks already handed to repo sessions keep
-  their text, as today; the summary lists them, so I can send `delegate --update` if a rule matters.
+  their text, as today; the summary lists them, so I can send `delegate --update` if a rule matters:
+  each item handed a task type whose file changed (`delegate review,fix` hands both; a type the site
+  replaces in its own `tasks/` is the site's text, which an update never changes), and every item
+  handed out when `orchestrator/tasks/_common.md` changed, as every task gets it (a site's
+  `_common.md` only adds to it) (R56).
   `chores.md` is the orchestrator's plugin. Whether a running session picks up a changed command
   file is still to be checked in the VM; until then, a change to it counts as a launch input.
 - **Something it was launched with changed:** its settings, its hooks, the launch command or the
@@ -451,9 +455,13 @@ Settled while building it:
   nothing rendered, so the old code runs under the plists it had, and the morning job, or one you unloaded,
   is left alone), and the loop restarted by the new version's `refresh --checkin-loop`, whose pane runs the
   install path's `bosun`, which leads to the old code again by then (the checkout, or `legacy-*` after the
-  swap). After a crash, the next `bosun update` does it, once it has put the freeze back, whoever wrote
-  the record since. Past the switch, the release reloads the jobs and restarts the loop, and removes the
-  mark.
+  swap); a loop that runs by then (one never stopped, or started since by `bosun start` or the morning
+  job) is left to its tick, as a restart would stop it mid-tick. After a crash, the next update does it,
+  once it has put the freeze back, whoever wrote the record since, and also with no record at all (moved
+  aside, or deleted). That next update comes from running the install line again, as the bosun installed
+  then is the old checkout, which has no `bosun update`; what the update says on a failure or a Ctrl-C
+  names the install line wherever the installed bosun is a checkout from before versions. Past the
+  switch, the release reloads the jobs and restarts the loop, and removes the mark.
 - **The swap is one call:** the link is made at the legacy folder's name and exchanged with the checkout
   (Linux's `renameat2` with `RENAME_EXCHANGE` does the same), so the checkout is never under another name,
   nor the install path missing. A link a swap cut short left there is replaced.
@@ -583,7 +591,15 @@ Decided while building it:
   and each rendered plist is checked before the job is touched. One that cannot be rendered, or renders
   invalid, blocks the plan, and in the release it is a finding while the installed job stays loaded.
 - **The plan before the switch** asks the new version: its `launch --fingerprint` reads the files
-  under the install from its own folder. A window with no launch record counts as changed.
+  under the install from its own folder. One of bosun's windows with no launch record counts as changed.
+- **A window bosun did not start** (R55): one `bosun sessions` lists outside the window list (`extra`)
+  with no launch recorded, as a shell or a Claude opened by hand in bosun's tmux session, is left as it
+  is, whatever it does, and the plan says so ("not started by bosun: left as it is", the summary "left
+  as it is (bosun did not start it)"). Restarting one would replace your terminal, or your own Claude,
+  with a bosun launch in a conversation it never had. `refresh --update-restart` refuses one, as `launch
+  --fingerprint` does. A window `send --new` opened has a launch recorded, and is compared as bosun's;
+  in a conversion, one an older version opened has none, so it is left running too, which is safe: its
+  hooks take the older command lines.
 - **The rehearsal's copy** is taken under both stores' shared locks, so it is whole; writes wait only
   for the clones.
 - **A store's check** after the migrations fails the update on an error (writes refused, or a
@@ -624,7 +640,9 @@ Decided while building it:
   hook saw still running at the end of that turn ([signals](signals.md)).
 - **The notes** are files, `update/notes/<window>.<kind>` in the state folder (`stock` or `status`), the
   window's name percent-encoded into the file's name, so any name (a space, a slash) is a note of its own
-  there and every window can answer; an update clears the ones the previous update left before it starts
+  there and every window can answer (an encoding past 200 bytes is cut short and the whole name's digest
+  added, so the file's name fits, and two names never share a note; the prompt file a restart reads is
+  named for no window); an update clears the ones the previous update left before it starts
   bringing windows along. A status note written by hand ends a window's wait: the next turn, or the next
   `bosun update` (which settles answered windows before it plans, acting on none), takes it.
 - **Ctrl-C while the update waits** is noted, not raised, so it never cuts a restart short; the commands

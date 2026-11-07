@@ -113,19 +113,35 @@ class ConversionFactsTest(World):
 
 
 class FactsTest(World):
-    def test_a_handed_item_of_a_type_the_site_replaces_is_not_in_flight(self) -> None:
+    def test_a_handed_item_s_type_the_site_replaces_is_left_out(self) -> None:
+        """The session got the site's text of it, which an update never changes; the item stays, with
+        no type, as the rules every task gets (orchestrator/tasks/_common.md) reached it too."""
         self.ledger("record-delegation", "review:acme/exporter#12", "--window", "api", "--task", "review")
         self.ledger(
             "record-delegation", "review:acme/exporter#14", "--window", "web", "--task", "acme-review"
         )
         self.assertEqual(
             update_facts.in_flight(self.state, self.config),
-            [("review:acme/exporter#12", "review"), ("review:acme/exporter#14", "acme-review")],
+            [("review:acme/exporter#12", ("review",)), ("review:acme/exporter#14", ("acme-review",))],
         )
         (self.config / "tasks").mkdir()
         (self.config / "tasks" / "acme-review.md").write_text("Our own review rules.\n")
         self.assertEqual(
-            update_facts.in_flight(self.state, self.config), [("review:acme/exporter#12", "review")]
+            update_facts.in_flight(self.state, self.config),
+            [("review:acme/exporter#12", ("review",)), ("review:acme/exporter#14", ())],
+        )
+
+    def test_an_item_handed_several_types_is_in_flight_with_each_built_in_one(self) -> None:
+        """R56: `bosun delegate review,fix` records "review,fix"; only a type the site replaces is
+        dropped, and the item stays, as the rules every task gets reached it."""
+        self.ledger("record-delegation", "review:acme/exporter#12", "--window", "api", "--task", "review,fix")
+        self.assertEqual(
+            update_facts.in_flight(self.state, self.config), [("review:acme/exporter#12", ("review", "fix"))]
+        )
+        (self.config / "tasks").mkdir()
+        (self.config / "tasks" / "fix.md").write_text("Our own fix rules.\n")
+        self.assertEqual(
+            update_facts.in_flight(self.state, self.config), [("review:acme/exporter#12", ("review",))]
         )
 
     def test_prompts_keys_and_rules_come_from_the_version_folder(self) -> None:
@@ -185,6 +201,28 @@ class WindowFactsTest(World):
         self.assertFalse(update_facts.on_another_conversation(api))
         self.assertFalse(update_facts.on_another_conversation(plain))
         self.assertFalse(update_facts.on_another_conversation({**api, "agent": {"status": "idle"}}))
+
+    def test_a_window_outside_the_list_with_no_launch_recorded_was_not_started_by_bosun(self) -> None:
+        """R55: a shell (prefix-c) or a Claude started by hand in bosun's session is left as it is, never
+        fingerprinted; one `bosun send --new` opened has a launch recorded, and is compared as bosun's."""
+        listed = [
+            *self.listed(),
+            {"name": "by-hand", "kind": "extra", "window": True, "agent": {"status": "idle", "name": ""}},
+            {"name": "sent", "kind": "extra", "window": True, "agent": {"status": "idle", "name": "sent"}},
+        ]
+        records: dict[str, dict[str, Any]] = {"api": {"fingerprint": {}}, "sent": {"fingerprint": {}}}
+        with (
+            mock.patch.object(update_facts, "open_windows", return_value=listed),
+            mock.patch("launch_record.recorded", side_effect=lambda state, session, name: records.get(name)),
+            mock.patch.object(update_facts, "launch_changed", return_value=True) as changed,
+        ):
+            facts = update_facts.window_facts(self.new)
+        self.assertEqual(
+            [(w.name, w.launch_changed, w.started_by_bosun) for w in facts],
+            [("orch", True, True), ("api", True, True), ("plain", False, False), ("by-hand", False, False),
+             ("sent", True, True)],
+        )  # fmt: skip
+        self.assertEqual([call.args[1] for call in changed.call_args_list], ["orch", "api", "sent"])
 
     def test_a_check_in_loop_runs_while_its_window_is_open(self) -> None:
         with mock.patch.object(update_facts, "open_windows", return_value=self.listed()):

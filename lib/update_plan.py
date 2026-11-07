@@ -22,6 +22,9 @@ PROMPTS = (
     "orchestrator/slack-watch.md",
 )
 REREAD = ("orchestrator/policy.md", "orchestrator/tasks/*.md")
+TASK = "orchestrator/tasks/{}.md"  # a task type's built-in text
+# The rules every task gets, whatever its types: a site's own _common.md only adds to them.
+COMMON = TASK.format("_common")
 
 CUT_SHORT = "a kg forget was cut short: the next kg write finishes it, then run bosun update again"
 GOING_BACK = "going back is not supported: the {store} store is at format {found}, newer than {target}"
@@ -42,6 +45,9 @@ class WindowFacts:
     kind: str  # orchestrator, repo or checkin
     status: str  # idle, shell, busy, waiting, exited or unknown
     launch_changed: bool
+    # False for a window outside the window list with no launch recorded (a shell, a Claude started by
+    # hand): bosun never started it, so an update leaves it as it is (R55).
+    started_by_bosun: bool = True
 
 
 class Treatment(StrEnum):
@@ -53,6 +59,7 @@ class Treatment(StrEnum):
     ASK_FIRST = "ask first"
     RELAUNCH = "relaunch"
     RESTART_LOOP = "restart the loop"
+    NOT_STARTED_BY_BOSUN = "not started by bosun: left as it is"
 
 
 _BY_STATUS = {
@@ -67,6 +74,8 @@ def treatment(window: WindowFacts, reread: bool) -> Treatment:
     """What a window gets: the table in the design note, first matching row."""
     if window.kind == "checkin":
         return Treatment.RESTART_LOOP
+    if not window.started_by_bosun:
+        return Treatment.NOT_STARTED_BY_BOSUN
     if not window.launch_changed:
         return Treatment.REREAD if reread and window.kind == "orchestrator" else Treatment.LEAVE
     return _BY_STATUS.get(window.status, Treatment.ASK_FIRST)
@@ -74,6 +83,9 @@ def treatment(window: WindowFacts, reread: bool) -> Treatment:
 
 @dataclass(frozen=True)
 class Plan:
+    """What an update would do (make_plan). <renames>: each config key bosun.env sets that the new
+    version renamed, and its name now; an empty name means the key was removed."""
+
     from_commit: str
     to_commit: str
     commits: tuple[str, ...]
@@ -130,8 +142,14 @@ def _migrations(
     return found_steps, blockers
 
 
-def _handed(in_flight: Sequence[tuple[str, str]], changed: Sequence[str]) -> tuple[str, ...]:
-    return tuple(item for item, kind in in_flight if f"orchestrator/tasks/{kind}.md" in changed)
+def _handed(in_flight: Sequence[tuple[str, Sequence[str]]], changed: Sequence[str]) -> tuple[str, ...]:
+    """The items handed out (<in_flight>: each with the task types whose built-in text its session got)
+    whose text a changed prompt is part of: a changed type of theirs, or the rules every task gets
+    (COMMON), which touch them all."""
+    every = COMMON in changed
+    return tuple(
+        item for item, kinds in in_flight if every or any(TASK.format(kind) in changed for kind in kinds)
+    )
 
 
 def make_plan(  # noqa: PLR0913 - the facts the caller gathers, all keyword-only
@@ -143,7 +161,7 @@ def make_plan(  # noqa: PLR0913 - the facts the caller gathers, all keyword-only
     jobs: Sequence[str],
     renames: Sequence[tuple[str, str]],
     user_changes: Sequence[tuple[str, str]],
-    in_flight: Sequence[tuple[str, str]],
+    in_flight: Sequence[tuple[str, Sequence[str]]],
     missing: Sequence[str],
     deletion_cut_short: bool,
     console: bool,

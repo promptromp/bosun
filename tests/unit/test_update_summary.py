@@ -287,6 +287,7 @@ class TextTest(unittest.TestCase):
                 ("checkin", Treatment.RESTART_LOOP),
                 ("web", Treatment.LEAVE),
                 ("api", Treatment.RESTART),
+                ("mine", Treatment.NOT_STARTED_BY_BOSUN),
             )
         )
         said = (("api", "restarted; resumed: waiting on CI for PR 12"), ("orchestrator", "asked to re-read"))
@@ -297,6 +298,7 @@ class TextTest(unittest.TestCase):
                 ("orchestrator", "asked to re-read"),
                 ("web", "kept running (nothing it was started with changed)"),
                 ("api", "restarted; resumed: waiting on CI for PR 12"),
+                ("mine", "left as it is (bosun did not start it)"),
             ),
         )
         self.assertIn(
@@ -517,6 +519,33 @@ class RecordTest(unittest.TestCase):
         summary = built(a_record(backup=""), exists=False)
         self.assertFalse(summary.backup_gone)
         self.assertNotIn("Backup:", rendered(summary))
+
+
+class LeftToMeTest(unittest.TestCase):
+    """What the last update left to me, which bosun doctor lists: the changes to make in my own files
+    (never applied), and the config keys it added that bosun.env does not set."""
+
+    def record(self, step: str = "done", keys: tuple[str, ...] = ()) -> UpdateState:
+        return a_record(
+            step=step,
+            user_changes=("sessions.yml: rename model: to agent_model:",),
+            plan={"keys_added": list(keys)},
+        )
+
+    def test_my_file_changes_and_the_new_keys_bosun_env_does_not_set(self) -> None:
+        record = self.record(keys=("BOSUN_EXPORT_RETRIES", "BOSUN_EXPORT_TIMEOUT", "not a key; rm -rf"))
+        self.assertEqual(
+            update_summary.left_to_me(record, {"BOSUN_EXPORT_TIMEOUT"}),
+            [("change", "sessions.yml: rename model: to agent_model:"), ("key", "BOSUN_EXPORT_RETRIES")],
+        )
+
+    def test_nothing_without_a_record_or_before_the_update_brought_the_windows_along(self) -> None:
+        """Before then the update says them itself (doctor in its release would say them twice), and an
+        update put back or failed left nothing to change."""
+        self.assertEqual(update_summary.left_to_me(None, set()), [])
+        for step in ("planned", "migrated", "checked", "released", "failed", "restored"):
+            self.assertEqual(update_summary.left_to_me(self.record(step, ("BOSUN_X",)), set()), [], step)
+        self.assertEqual(len(update_summary.left_to_me(self.record("agents", ("BOSUN_X",)), set())), 2)
 
 
 if __name__ == "__main__":

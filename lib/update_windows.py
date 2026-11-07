@@ -86,7 +86,7 @@ class Commands:
     def restart(self, window: str, prompt: str) -> Started:
         folder = self.state_dir / update_state.UPDATE_DIR
         folder.mkdir(parents=True, exist_ok=True)
-        fd, path = tempfile.mkstemp(dir=folder, prefix=f"prompt-{window}.")
+        fd, path = tempfile.mkstemp(dir=folder, prefix="prompt.")  # named for no window: any name restarts
         with os.fdopen(fd, "w") as out:
             out.write(prompt)
         try:
@@ -161,7 +161,7 @@ class _CtrlC:
             time.sleep(CTRL_C_POLL_SECONDS)
 
 
-def _rereads(plan: Plan, root: Path) -> tuple[str, ...]:
+def _reread_files(plan: Plan, root: Path) -> tuple[str, ...]:
     """The changed files the orchestrator re-reads, through the install link."""
     install = install_paths.install_path(root)
     return tuple(
@@ -208,7 +208,7 @@ def bring_along(state: UpdateState, plan: Plan, say: Callable[[str], None] = pri
     windows = update_agents.to_bring_along(plan.windows, dict(plan.kinds))
     update_notes.clear_notes(state_dir)
     state = update_state.advanced(
-        state, "agents", pending=tuple(windows), windows=windows, reread=_rereads(plan, root)
+        state, "agents", pending=tuple(windows), windows=windows, reread=_reread_files(plan, root)
     )
     update_state.write(state_dir, state)
     waiting = _waited(state_dir, list(state.pending), say)

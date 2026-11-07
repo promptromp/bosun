@@ -11,7 +11,8 @@ of_record reads them back, so an update carried on by a later run, or finished b
 says the same as one that ran in one go), and what the caller found: what came of each window
 (update_agents.outcomes), whether the backup is still there and its size, and how long it took.
 lib/update.py prints the text, saves it as summary.md in the backup folder once the update is done,
-and with --json gives as_json. doctor_found reads bosun doctor's output for the record.
+and with --json gives as_json. doctor_found reads bosun doctor's output for the record; left_to_me is
+what the last update left me, which bosun doctor lists (through lib/update.py's after-update).
 """
 
 from __future__ import annotations
@@ -19,10 +20,11 @@ from __future__ import annotations
 import dataclasses
 import re
 import shlex
-from collections.abc import Sequence
+from collections.abc import Collection, Sequence
 from dataclasses import dataclass
 from typing import Any
 
+import migrations
 import update_gate
 import update_plan
 from migrations import Applied
@@ -35,6 +37,9 @@ GAP = 2  # the least space between a name and its line
 GOING_BACK = "docs/setup.md#going-back"
 PROMPTS = "orchestrator/"  # what a prompt's path starts with, left out of its name
 LEFT_ALONE = "kept running (nothing it was started with changed)"
+NOT_BOSUNS = "left as it is (bosun did not start it)"
+# What came of a window the plan left as it is, which nothing answers for.
+LEFT = {Treatment.LEAVE: LEFT_ALONE, Treatment.NOT_STARTED_BY_BOSUN: NOT_BOSUNS}
 BACKUP_GONE = "deleted by a kg forget since; going back past it is no longer possible"
 BY_HAND = "change by hand: "
 FILE_LINE = re.compile(r"(?P<file>\S+): (?P<what>.*)", re.DOTALL)  # "bosun.env: ..." under Config
@@ -49,6 +54,9 @@ WARN = "warn: "
 ALREADY = "{n} already failing before the update"
 WARNING = "{n} warning: run bosun doctor"
 WARNINGS = "{n} warnings: run bosun doctor"
+# The steps at which the last update left me what left_to_me lists: it has brought the windows along or
+# does, and said so in its summary (doctor in its release would say it twice).
+LEFT_TO_ME = ("agents", "done")
 SIZE_UNITS = ("KB", "MB", "GB", "TB")
 SIZE_STEP = 1000
 MINUTE = 60
@@ -110,15 +118,16 @@ def _new_keys(keys: Sequence[str]) -> tuple[str, ...]:
 
 def _agents(plan: Plan, said: Sequence[tuple[str, str]]) -> tuple[tuple[str, str], ...]:
     """What came of each window, in the plan's order: what the caller says of it, else, for one the
-    plan left alone, that it kept running. The checkin window, whose loop the release restarted, is
-    not listed; a window the caller names that the plan does not comes last."""
+    plan left alone, that it kept running, or was left as it is as bosun did not start it (LEFT). The
+    checkin window, whose loop the release restarted, is not listed; a window the caller names that
+    the plan does not comes last."""
     lines = dict(said)
     found: list[tuple[str, str]] = []
     for name, how in plan.windows:
         if name in lines:
             found.append((name, lines.pop(name)))
-        elif how == Treatment.LEAVE:
-            found.append((name, LEFT_ALONE))
+        elif how in LEFT:
+            found.append((name, LEFT[how]))
     return (*found, *lines.items())
 
 
@@ -235,6 +244,21 @@ def doctor_found(said: str) -> list[str]:
         else:
             current = None
     return [_doctor_line(kind, parts) for kind, parts in found]
+
+
+def left_to_me(state: UpdateState | None, assigned: Collection[str]) -> list[tuple[str, str]]:
+    """What the last update (<state>, its record) left me once it brings the windows along (LEFT_TO_ME):
+    each change to make in one of my own files ("change", from migrations.USER_FILE_CHANGES when it
+    planned), and each config key it added that bosun.env does not set (<assigned>: the keys it does),
+    so is at its default ("key"), a shell name only. Nothing for an update that failed or was put back:
+    the version it came from runs."""
+    if state is None or state.step not in LEFT_TO_ME:
+        return []
+    keys = update_plan.from_record(state.plan).keys_added
+    return [
+        *(("change", change) for change in state.user_changes),
+        *(("key", key) for key in keys if migrations.KEY.fullmatch(key) and key not in assigned),
+    ]
 
 
 # ---- the text ---------------------------------------------------------------------------------

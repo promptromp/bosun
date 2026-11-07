@@ -63,6 +63,15 @@ class CommandsTest(Folder):
             self.assertFalse(Path(args[3]).exists())  # the prompt file is gone once refresh read it
         self.assertEqual(self.said, [])
 
+    def test_any_window_name_can_be_restarted(self) -> None:
+        """Minor 5: the prompt's file is named for no window, so a name with a slash, or one longer than
+        a file name may be, still gets its restart."""
+        for window in ("acme/api", "acme-" + "x" * 295):
+            with self.ran(0) as bosun:
+                self.assertEqual(self.commands.restart(window, "bosun was updated"), Started.YES)
+            self.assertEqual(bosun.call_args.args[4], window)
+            self.assertEqual(Path(bosun.call_args.args[3]).parent, self.state_dir / update_state.UPDATE_DIR)
+
     def test_a_failure_is_said_once(self) -> None:
         for _ in range(2):
             with self.ran(1, "refresh: the window is split into several panes\n"):
@@ -104,6 +113,26 @@ class CommandsTest(Folder):
         signals.write_text(json.dumps(stop) + "\n")
         self.assertEqual(self.commands.left_running("web"), "shell `sleep 900`")
         self.assertEqual(self.commands.left_running("api"), "")
+
+
+class TurnTest(Folder):
+    def test_no_window_s_name_stops_the_turn_for_the_windows_after_it(self) -> None:
+        """Minor 5: a name longer than a file name may be, or with a slash, is restarted like any."""
+        names = ("acme-" + "x" * 295, "acme/api", "api")
+        record = bringing(dict.fromkeys(names, ("repo", Treatment.RESTART)))
+        update_state.write(self.state_dir, record)
+        listed = [{"name": n, "kind": "extra", "window": True, "agent": {"status": "idle"}} for n in names]
+        done = subprocess.CompletedProcess([], 0, "", "")
+        with (
+            mock.patch.object(update_facts, "open_windows", return_value=listed),
+            mock.patch.object(update_facts, "bosun", return_value=done) as bosun,
+        ):
+            waiting = update_windows.turn(self.state_dir, lambda line: None)
+        self.assertEqual([call.args[4] for call in bosun.call_args_list], list(names))
+        self.assertEqual(waiting, list(names))  # restarted, each now to answer
+        after = update_state.read(self.state_dir)
+        assert after is not None
+        self.assertEqual([after.windows[n][-1] for n in names], ["restarted"] * 3)
 
 
 class BringAlongTest(Folder):

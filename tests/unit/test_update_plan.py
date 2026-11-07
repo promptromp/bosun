@@ -98,6 +98,16 @@ class TestTreatment(unittest.TestCase):
         window = up.WindowFacts("acme-api", "repo", "idle", False)
         self.assertEqual(up.treatment(window, True), T.LEAVE)
 
+    def test_a_window_bosun_did_not_start_is_left_as_it_is_whatever_it_does(self) -> None:
+        """R55: a shell or a Claude started by hand in bosun's session, outside the window list and
+        with no launch recorded: never relaunched or restarted, and the plan says why."""
+        for status in STATUSES:
+            for reread in (False, True):
+                window = up.WindowFacts("mine", "repo", status, False, started_by_bosun=False)
+                self.assertEqual(up.treatment(window, reread), T.NOT_STARTED_BY_BOSUN, (status, reread))
+        windows = [up.WindowFacts("mine", "repo", "exited", False, started_by_bosun=False)]
+        self.assertIn("  mine: not started by bosun: left as it is\n", up.render_plan(plan(windows=windows)))
+
 
 class TestMakePlan(unittest.TestCase):
     def test_prompts_changed_are_named_and_counted(self) -> None:
@@ -120,8 +130,53 @@ class TestMakePlan(unittest.TestCase):
 
     def test_handed_items_of_a_changed_task_type(self) -> None:
         new = facts("bbb", prompts={**BASE_PROMPTS, REVIEW: "b2"})
-        got = plan(new=new, in_flight=[("task:1", "review"), ("task:2", "fix")])
+        got = plan(new=new, in_flight=[("task:1", ("review",)), ("task:2", ("fix",))])
         self.assertEqual(got.handed, ("task:1",))
+
+    def test_an_item_handed_several_types_is_handed_when_any_of_them_changed(self) -> None:
+        """R56: `bosun delegate review,fix` hands both types' text."""
+        in_flight = [("task:1", ("review", "fix")), ("task:3", ("review",))]
+        self.assertEqual(up._handed(in_flight, ("orchestrator/tasks/fix.md",)), ("task:1",))
+        self.assertEqual(up._handed(in_flight, (REVIEW,)), ("task:1", "task:3"))
+
+    def test_a_change_to_the_rules_every_task_gets_touches_every_item_handed_out(self) -> None:
+        """R56: orchestrator/tasks/_common.md is in every task, also one of the site's own types only
+        (a site's _common.md adds to it, never replaces it)."""
+        in_flight = [("task:1", ("review", "fix")), ("task:3", ("review",)), ("task:4", ())]
+        self.assertEqual(up._handed(in_flight, (up.COMMON, REVIEW)), ("task:1", "task:3", "task:4"))
+        self.assertEqual(up._handed(in_flight, (POLICY,)), ())
+
+    def test_a_prompt_file_only_one_version_has_counts_as_changed(self) -> None:
+        added = {**BASE_PROMPTS, "orchestrator/tasks/triage.md": "e1"}
+        self.assertEqual(plan(new=facts("bbb", prompts=added)).prompts, ("orchestrator/tasks/triage.md",))
+        removed = {path: digest for path, digest in BASE_PROMPTS.items() if path != REVIEW}
+        got = plan(
+            new=facts("bbb", prompts=removed), windows=[up.WindowFacts("o", "orchestrator", "idle", False)]
+        )
+        self.assertEqual(got.prompts, (REVIEW,))
+        self.assertEqual(got.windows, (("o", T.REREAD),))
+
+    def test_a_store_only_one_version_has(self) -> None:
+        """One the new version adds is made in its format: no migration, no blocker. One only the old
+        version had is the new version's no longer: nothing is done to it."""
+        got = plan(old=facts(formats={"ledger": 1}), new=facts("bbb", formats={"ledger": 1, "outbox": 2}))
+        self.assertEqual((got.migrations, got.blockers), ((), ()))
+        self.assertEqual(got.formats, (("ledger", 1), ("outbox", 2)))
+        got = plan(old=facts(formats={"ledger": 1, "outbox": 2}), new=facts("bbb", formats={"ledger": 1}))
+        self.assertEqual((got.migrations, got.blockers, got.formats), ((), (), (("ledger", 1),)))
+
+    def test_a_rules_stream_only_one_version_has(self) -> None:
+        """One the new version adds goes from 0; one only the old version had is not listed."""
+        got = plan(old=facts(rules={"ledger": 1}), new=facts("bbb", rules={"ledger": 1, "knowledge": 2}))
+        self.assertEqual(got.rules, (("knowledge", 0, 2),))
+        got = plan(old=facts(rules={"ledger": 1, "knowledge": 2}), new=facts("bbb", rules={"ledger": 1}))
+        self.assertEqual(got.rules, ())
+
+    def test_a_lower_rules_version_is_listed_and_blocks_nothing(self) -> None:
+        """Changes recorded under a higher rules version are applied without being checked again
+        (docs/design/sync.md), so a version with a lower one is listed; only a newer format blocks."""
+        got = plan(old=facts(rules={"ledger": 3}), new=facts("bbb", rules={"ledger": 2}))
+        self.assertEqual((got.rules, got.blockers), ((("ledger", 3, 2),), ()))
 
     def test_a_newer_store_blocks(self) -> None:
         got = plan(old=facts(formats={"ledger": 3}), new=facts("bbb", formats={"ledger": 2}))

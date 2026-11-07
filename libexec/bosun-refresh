@@ -54,7 +54,8 @@
 #                    the next restart not for an update), with the model and effort it ran with when
 #                    that is no longer the configured agent. A window outside the window list (opened
 #                    by `send --new`) restarts in the directory, and with the --model / --effort, its
-#                    last launch recorded (else in the pane's directory).
+#                    last launch recorded; one with no launch recorded (a shell, a Claude started by
+#                    hand) was not started by bosun, and is refused: an update leaves it as it is.
 #   --checkin-loop   restart the check-in loop in the checkin window (a long-running script keeps
 #                    the code it started with): stop it, and start it again in the same window.
 #                    It stops the loop at once, even in the middle of a tick, so call it while an
@@ -396,9 +397,10 @@ refresh_window() { # <name> <dir> <kind> <model> <effort>
 
 # --update-restart <prompt-file> <name>: window <name> as refresh_window brings it along, with the
 # update's prompt, started again as its last launch recorded (recorded_restart): on the same agent, and
-# a window outside the window list, which must be open, in its directory (else the pane's) with its
-# --model / --effort. Returns LEFT_RUNNING when it left the agent running, NEXT_CONVERSATION when it
-# started the window's next conversation (whose own prompt it got, not the update's).
+# a window outside the window list, which must be open and have a launch recorded (else bosun did not
+# start it: R55), in its directory with its --model / --effort. Returns LEFT_RUNNING when it left the
+# agent running, NEXT_CONVERSATION when it started the window's next conversation (whose own prompt it
+# got, not the update's).
 update_restart() { # <name>
   local name dir kind window_id listed=1
   IFS=$'\t' read -r name dir kind _ <<<"$(window_specs | awk -F'\t' -v name="$1" '$1 == name')"
@@ -408,7 +410,11 @@ update_restart() { # <name>
     name="$1" kind=session dir="" listed=0
   fi
   [ "$kind" != "checkin" ] || die_usage "the checkin window runs the check-in loop: use --checkin-loop"
-  if recorded_restart "$name" "$listed" && [ "$listed" = "0" ]; then dir="$RESTART_DIR"; fi
+  if recorded_restart "$name" "$listed"; then
+    [ "$listed" = "1" ] || dir="$RESTART_DIR"
+  elif [ "$listed" = "0" ]; then
+    die "'$1' is not in the window list and has no launch recorded: bosun did not start it, so an update leaves it as it is"
+  fi
   refresh_window "$name" "$dir" "$kind" "" "" || return 1
   [ "$left_running" = "0" ] || return "$LEFT_RUNNING"
   [ "$next_conversation" = "0" ] || return "$NEXT_CONVERSATION"

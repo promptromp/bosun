@@ -138,6 +138,7 @@ What it does to the windows that are running:
 | Only the orchestrator's prompts changed (`policy.md`, the task files) | Asks the orchestrator to re-read them once it is idle |
 | Something it was started with changed (its settings, hooks, plugin) | Restarts it on the new version once it is idle, in the same conversation. If only background work runs there, it first asks the window to list that work, and passes the list back after the restart, as a restart ends it |
 | Busy, waiting for your answer, or someone typing in it | Waits, and never restarts one that waits for you |
+| One bosun did not start (a shell or a Claude you opened in its tmux session, outside `sessions.yml`) | Leaves it as it is, and says so in the plan |
 
 Each window gets a prompt to check for anything it missed and carry on, and answers with its status. The
 update waits for every answer and says which windows it is waiting for; Ctrl-C stops that wait, and the
@@ -161,10 +162,12 @@ there changes nothing. Then it stops the watchdog, learning and the check-in loo
 has no hold to keep them waiting, checks again that every window is still quiet, and updates as above. If
 a window is still busy two minutes after that stop, it starts that work again and waits for a quiet
 moment with everything running, as before. The checkout is swapped for the link in one step and kept as
-`~/.local/share/bosun-versions/legacy-<its commit>`, and every window is restarted on the new version. If
-anything fails, the old checkout is what runs again, with the jobs and the loop it stopped started again
-as they were; after a crash, the next `bosun update` starts them, going by what it noted in
-`update/own-work.json` in the state folder before it stopped anything.
+`~/.local/share/bosun-versions/legacy-<its commit>`, and each of bosun's own windows (the orchestrator,
+those in `sessions.yml`) is restarted on the new version; any other is left as it is, as the old version
+recorded no launch of it. If anything fails, the old checkout is what runs again, with the jobs and the
+loop it stopped started again as they were. That old checkout has no `bosun update`, so after a crash
+run the install line again: it starts them, going by what it noted in `update/own-work.json` in the
+state folder before it stopped anything, and leaves a check-in loop that runs by then as it is.
 
 It will not convert a checkout with anything of yours in it: changes, a stash, commits not pushed,
 another worktree, a file git ignores. Take that out first. The update after it deletes the kept checkout,

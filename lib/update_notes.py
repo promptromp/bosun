@@ -4,11 +4,14 @@ by `bosun update note` and read by the update's turns, its plan and its summary.
 
 The window's name is percent-encoded into the file's name (letters, digits and `_.-~` stay as they
 are), so every name a window can have is a note of its own in that folder, never a path elsewhere: a
-window bosun brings along can always answer, and be answered for by hand.
+window bosun brings along can always answer, and be answered for by hand. An encoding longer than
+NAME_BYTES is cut short and the whole name's digest added (_file_name), so the file's name fits what a
+file name may hold, and two names never share a note.
 """
 
 from __future__ import annotations
 
+import hashlib
 import os
 import shutil
 import tempfile
@@ -20,10 +23,23 @@ import update_state
 
 
 NOTES = Path(update_state.UPDATE_DIR) / "notes"
+NAME_BYTES = 200  # the most of a note's file name the window's name takes (255 at the most in all)
+DIGEST = 64  # hex digits of a SHA-256
 
 
 class NoteRefused(ValueError):
     """A note for a kind there is none of, or for no window (an empty name)."""
+
+
+def _file_name(window: str) -> str:
+    """<window>'s name as its notes' file names start: percent-encoded (ASCII only), as it is up to
+    NAME_BYTES; past that, its first characters and the digest of the whole name, NAME_BYTES + 1 in
+    all, so it never equals one left as it is, and two names share it only if their digests do."""
+    encoded = quote(window, safe="")
+    if len(encoded) <= NAME_BYTES:
+        return encoded
+    digest = hashlib.sha256(window.encode("utf-8", "surrogatepass")).hexdigest()
+    return f"{encoded[: NAME_BYTES - DIGEST]}~{digest}"
 
 
 def note_path(state_dir: Path, window: str, kind: str) -> Path:
@@ -33,7 +49,7 @@ def note_path(state_dir: Path, window: str, kind: str) -> Path:
         )
     if not window:
         raise NoteRefused("a note needs the window's name")
-    return state_dir / NOTES / f"{quote(window, safe='')}.{kind}"
+    return state_dir / NOTES / f"{_file_name(window)}.{kind}"
 
 
 def note(state_dir: Path, window: str, kind: str, text: str) -> None:

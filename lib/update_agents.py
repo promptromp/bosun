@@ -57,13 +57,14 @@ ASKED_STOCK = "asked to take stock"
 ASKED_REREAD = "asked to re-read"
 RESTARTED = "restarted"
 RELAUNCHED = "relaunched"
-NEXT_CONVERSATION = "started its next conversation"
+NEXT_CONVERSATION = "started its next conversation"  # also its status note: it never sees the prompt
 ANSWERED = "answered"
 CLOSED = "closed"
 # After any of these a window only has to answer.
 STARTED = (ASKED_REREAD, RESTARTED, RELAUNCHED, NEXT_CONVERSATION)
 FINISHED = (ANSWERED, CLOSED)
-NOT_PENDING = (Treatment.LEAVE, Treatment.RESTART_LOOP)  # the checkin window's loop is the release's
+# Left as they are (one bosun did not start among them), and the checkin window, whose loop is the release's.
+NOT_PENDING = (Treatment.LEAVE, Treatment.NOT_STARTED_BY_BOSUN, Treatment.RESTART_LOOP)
 PROMPTS_DIR = "orchestrator"  # the folder of bosun's prompts, left out of their names
 
 TAKE_STOCK_PROMPT = (
@@ -99,7 +100,6 @@ SEEN_LINE = (
     "doing: {running}.\n"
 )
 SEEN_RUNNING = "(What bosun saw still running then: {running}.)"
-NEXT_STATUS = "started its next conversation"
 
 
 class Started(StrEnum):
@@ -264,7 +264,7 @@ def _started(win: _Window, started: Started, what: str) -> UpdateState:
     if started is Started.YES:
         return win.did(what)
     if started is Started.NEXT_CONVERSATION:
-        win.act.notes.save(win.name, STATUS, NEXT_STATUS)
+        win.act.notes.save(win.name, STATUS, NEXT_CONVERSATION)
         return win.did(NEXT_CONVERSATION)
     return win.state  # left running, or it failed: the next turn decides again
 

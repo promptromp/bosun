@@ -44,6 +44,7 @@ from update_plan import Plan, VersionFacts, WindowFacts
 # A key in lib/common.sh's defaults: an assignment indented by two (as the example configs' check reads them).
 CONFIG_KEY = re.compile(r"^  (BOSUN_[A-Z0-9_]+)=", re.MULTILINE)
 WINDOW_KINDS = {"orchestrator": "orchestrator", "checkin": "checkin"}  # any other is a repo session's
+EXTRA = "extra"  # `bosun sessions`' kind of a window outside the window list
 COMMAND_SECONDS = 600  # the most a bosun command the update runs may take
 PREFLIGHT_NEXT = "\nWhat to do next:"
 STORE_ERRORS = (ledger.LedgerError, knowledge_store.StoreError, KnowledgeError, JournalError)
@@ -189,8 +190,9 @@ def new_facts(root: Path) -> VersionFacts:
 def launch_changed(root: Path, name: str, state_dir: Path, session: str) -> bool:
     """Whether window <name> would be launched now, by the version in <root>, with anything other
     than what its last launch recorded. `launch --fingerprint` of that version reads the files under
-    the install from <root> itself, so this holds before the switch too (R35). A window with no
-    record, or one the fingerprint refuses, counts as changed: what it runs with is unknown."""
+    the install from <root> itself, so this holds before the switch too (R35). One of bosun's windows
+    with no record, or one the fingerprint refuses, counts as changed: what it runs with is unknown
+    (a window bosun did not start never gets here: _window)."""
     recorded = launch_record.recorded(state_dir, session, name)
     done = bosun(root, "launch", "--fingerprint", name)
     if recorded is None or done.returncode != 0:
@@ -222,10 +224,16 @@ def on_another_conversation(window: dict[str, Any]) -> bool:
 
 
 def _window(root: Path, window: dict[str, Any], state_dir: Path, session: str) -> WindowFacts:
+    """What the plan knows of <window>. One outside the window list with no launch recorded (a shell,
+    a Claude started by hand; in a conversion also one an older version's `send --new` opened, whose
+    hooks take the older command lines) was not started by bosun, and is left as it is (R55)."""
     name = str(window.get("name"))
     kind = _kind(window)
+    status = status_of(window)
+    if window.get("kind") == EXTRA and launch_record.recorded(state_dir, session, name) is None:
+        return WindowFacts(name, kind, status, launch_changed=False, started_by_bosun=False)
     changed = kind != "checkin" and launch_changed(root, name, state_dir, session)
-    return WindowFacts(name, kind, status_of(window), changed)
+    return WindowFacts(name, kind, status, changed)
 
 
 def open_windows(root: Path) -> list[dict[str, Any]]:
@@ -242,7 +250,7 @@ def loop_runs(root: Path) -> bool:
     return any(_kind(w) == "checkin" for w in open_windows(root))
 
 
-def windows_pending(state_dir: Path) -> list[str]:
+def pending_windows_blocker(state_dir: Path) -> list[str]:
     """A blocker while the last update still brings windows along: a new update would bring along its
     own, and the windows still waited for would lose what was done to them, and their notes. A window
     with a status note (its own, or one written by hand) is answered: `bosun update` settles it first."""
@@ -343,23 +351,31 @@ def console_running(state_dir: Path) -> bool:
     return console_token.running(state_dir)
 
 
-def in_flight(state_dir: Path, config_dir: Path) -> list[tuple[str, str]]:
-    """Each item handed to a repo session whose work is not done, and its task type, where the
-    session got the type's built-in text: a type the site replaces in $BOSUN_CONFIG_DIR/tasks/ is
-    left out, since an update never changes the site's file."""
+def in_flight(state_dir: Path, config_dir: Path) -> list[tuple[str, tuple[str, ...]]]:
+    """Each item handed to a repo session whose work is not done, with the task types whose built-in
+    text its session got: those its task names ("review,fix" for `bosun delegate review,fix`) but a
+    type the site replaces in $BOSUN_CONFIG_DIR/tasks/, as an update never changes the site's file. An
+    item whose every type is the site's stays, with none: the rules every task gets reached it too."""
     try:
         items = ledger.load_at(state_dir)["items"]
     except ledger.LedgerError:
         return []  # store_formats names it
     found = []
     for item_id, item in items.items():
-        delegation = item.get("delegation")
-        if not isinstance(delegation, dict) or not ledger.is_open(item) or not ledger.awaiting_report(item):
-            continue
-        task = str(delegation.get("task") or "")
-        if task and not (config_dir / "tasks" / f"{task}.md").is_file():
-            found.append((item_id, task))
+        named = _task_types(item)
+        if named:
+            built_in = tuple(kind for kind in named if not (config_dir / "tasks" / f"{kind}.md").is_file())
+            found.append((item_id, built_in))
     return sorted(found)
+
+
+def _task_types(item: dict[str, Any]) -> list[str]:
+    """The task types <item> was handed to a repo session with, while its work is not done; none for
+    an item not handed out, done, or reported on."""
+    delegation = item.get("delegation")
+    if not isinstance(delegation, dict) or not ledger.is_open(item) or not ledger.awaiting_report(item):
+        return []
+    return [kind.strip() for kind in str(delegation.get("task") or "").split(",") if kind.strip()]
 
 
 def deletion_cut_short(state_dir: Path, config_dir: Path) -> tuple[bool, list[str]]:
@@ -460,6 +476,6 @@ def plan_for(old_root: Path, new_root: Path, state_dir: Path, config_dir: Path) 
         *unrenderable,
         *dangling_links(state_dir, config_dir),
         *install_problem(old_root, new_root),
-        *windows_pending(state_dir),
+        *pending_windows_blocker(state_dir),
     ]
     return dataclasses.replace(plan, blockers=(*plan.blockers, *extra))

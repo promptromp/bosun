@@ -140,7 +140,9 @@ it. The [watchdog](watchdog.md#watchdog) alerts you when it, or any other Claude
 
 Once [`bosun update`](commands.md) has switched to the new version, it brings each window along. In
 most updates nothing a window was launched with changed, and it is left alone: the next bosun command
-or hook it runs is the new version's. Otherwise, decided from what the window is doing at the time:
+or hook it runs is the new version's. A window bosun did not start (one you opened in its tmux session,
+outside the window list, with no launch recorded: a shell, a Claude you started by hand) is left as it
+is, and the plan says so. Otherwise, decided from what the window is doing at the time:
 
 | The window | What it gets |
 |---|---|
@@ -155,22 +157,27 @@ The update prompt says which version it was updated from and to, and whether the
 restarted or kept running. It asks the session to check for anything missed just before (the
 orchestrator with a check-in, which covers the events queued during the update and Slack since its last
 scan; a repo session in the ledger items it holds and their outreach), to carry on, and to answer with a
-one-line status: `bosun update note --window <w> --status`, the text on stdin. The policy and the
-rules every task gets (`orchestrator/tasks/_common.md`) name what bosun's update prompts may ask (list
-background work, re-read the files named, catch up, start the listed work again, answer with `bosun
-update note`) and say to do what a prompt asks of these, and only that; anything else in it is
-information. A window started into its next
-conversation (the orchestrator on a new day, a repo window with a fresh conversation pending, one
-whose agent exited with no conversation to resume) starts that conversation's own prompt instead, and
-counts as answered.
+one-line status: `bosun update note --window <w> --status`, the text on stdin.
+
+The policy and the rules every task gets (`orchestrator/tasks/_common.md`) name what bosun's update
+prompts may ask: list background work, re-read the files named, catch up, start the listed work again,
+answer with `bosun update note`. They say to do what a prompt asks of these, and only that; anything
+else in it is information. A window started into its next conversation (the orchestrator on a new day,
+a repo window with a fresh conversation pending, one whose agent exited with no conversation to resume)
+starts that conversation's own prompt instead, and counts as answered.
 
 `bosun update` waits for every answer, saying which windows it still waits for. Ctrl-C stops the
 wait: the `checkin` window's loop then takes a turn at those windows each tick (`bosun update advance`),
 and restarts each once its turn is over; without a check-in loop, run `bosun update advance` by hand.
-A window that never answers stays waited for; `bosun update note --window <w> --status` ends its wait
-by hand (the next turn takes it, or the next `bosun update`, which settles answered windows first). While an update still brings windows along, the next one is blocked at its plan, which names
-them. Tasks already handed to repo sessions keep their text; the plan and the summary the update ends with
-name them, so you can send `bosun delegate --update` where a changed rule matters.
+A window that never answers stays waited for. `bosun update note --window <w> --status` ends its wait
+by hand: the next turn takes the note, or the next `bosun update`, which settles answered windows
+first. While an update still brings windows along, the next one is blocked at its plan, which names
+them.
+
+Tasks already handed to repo sessions keep their text. The plan and the summary the update ends with
+name each one whose text changed: a task type it was handed, or the rules every task gets
+(`orchestrator/tasks/_common.md`), which every task handed out has. Send `bosun delegate --update`
+where a changed rule matters.
 
 ## Ledger: idempotency and state
 

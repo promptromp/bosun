@@ -353,6 +353,27 @@ class ReleaseTest(World):
         self.assertEqual(calls, [(("refresh", "--checkin-loop"), "checked")])
         self.assertEqual((done.step, done.findings), ("released", ("warn: on battery",)))
 
+    def test_the_doctor_run_after_the_switch_is_said_before_it_starts(self) -> None:
+        """Minor 6: it can take a while (600 s at the most), so it is never silent."""
+        out = io.StringIO()
+        said_before: list[str] = []
+
+        def doctor(root: Path) -> list[str]:
+            said_before.append(out.getvalue())
+            return []
+
+        with (
+            contextlib.redirect_stdout(out),
+            mock.patch.object(update, "_reload_jobs", return_value=([], [])),
+            mock.patch.object(update_facts, "open_windows", return_value=[]),
+            mock.patch.object(update, "_doctor", side_effect=doctor),
+            mock.patch.object(update, "_prune", return_value=[]),
+        ):
+            update.release(self.record("checked"))
+        [before] = said_before
+        self.assertTrue(before.endswith("Asking bosun doctor what fails after the switch...\n"), before)
+        self.assertEqual(update_facts.COMMAND_SECONDS, 600)
+
     def test_what_fails_after_the_switch_is_a_finding_not_a_rollback(self) -> None:
         with (
             mock.patch.object(
@@ -807,6 +828,47 @@ class SummaryTest(World):
             update._failed(self.record("failed", error="the rehearsal failed"))
         self.assertNotIn("backup", out.getvalue())
 
+    def failed_says(self, state: UpdateState) -> str:
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out), mock.patch.object(update, "ROOT", self.new):
+            update._failed(state)
+        return out.getvalue()
+
+    def test_a_failure_left_in_the_freeze_says_what_carries_it_on(self) -> None:
+        """Minor 7: bosun update where the installed bosun has it; the install line where it is a
+        checkout from before versions (a conversion cut before its swap, or put back to legacy-*)."""
+        self.assertIn("run bosun update again", self.failed_says(self.record("migrated", error="x")))
+        self.install.unlink()
+        self.install.mkdir()  # a conversion that failed before its swap: the checkout is installed
+        cut = dataclasses.replace(self.record("migrated", error="x"), from_root=str(self.install))
+        said = self.failed_says(cut)
+        self.assertIn("Writes stay paused until it is put back: run the install line again.", said)
+        self.install.rmdir()
+        legacy = versions.legacy_folder(self.new.parent, FROM)
+        legacy.mkdir()
+        versions.point(self.install, legacy)  # put back after its swap
+        said = self.failed_says(
+            dataclasses.replace(self.record("switched", error="x"), from_root=str(legacy))
+        )
+        self.assertIn("run the install line again", said)
+
+    def test_ctrl_c_says_what_carries_the_update_on(self) -> None:
+        """Minor 7: as a failure does, from where the install leads now."""
+        args = ["--from", str(self.old), "--yes"]
+        for installed, again in ((self.old, "bosun update"), (self.install, "the install line")):
+            if installed == self.install:
+                self.install.unlink()
+                self.install.mkdir()
+                args = ["--from", str(self.install), "--yes"]
+            err = io.StringIO()
+            with (
+                contextlib.redirect_stderr(err),
+                mock.patch.object(update, "ROOT", self.new),
+                mock.patch.object(update, "run", side_effect=KeyboardInterrupt),
+            ):
+                self.assertEqual(update.main(args), 1)
+            self.assertIn(f"stopped; run {again} again: it carries on, or puts back", err.getvalue())
+
 
 class AgentsCommandTest(World):
     """What the agents and the check-in loop run while an update brings the windows along: `bosun
@@ -886,6 +948,22 @@ class AgentsCommandTest(World):
         self.assertIn("bosun updated:", (backup / "summary.md").read_text())
         self.assertIn(f"bosun update: done; its summary is in {backup / 'summary.md'}", out)
 
+    def test_after_update_says_what_the_last_update_left_me_for_bosun_doctor(self) -> None:
+        """A line each, its kind and a tab first, from the record and bosun.env (left_to_me)."""
+        self.record("done", user_changes=("sessions.yml: rename model:\nto agent_model:",))
+        state = update_state.read(self.state)
+        assert state is not None
+        plan = {"keys_added": ["BOSUN_EXPORT_RETRIES", "BOSUN_EXPORT_TIMEOUT"]}
+        update_state.write(self.state, dataclasses.replace(state, plan=plan))
+        (self.config / "bosun.env").write_text("export BOSUN_EXPORT_TIMEOUT=30\n")
+        argv = ("after-update", "--state-dir", str(self.state), "--config-dir", str(self.config))
+        self.assertEqual(
+            self.main(*argv),
+            (0, "change\tsessions.yml: rename model: to agent_model:\nkey\tBOSUN_EXPORT_RETRIES\n", ""),
+        )
+        (self.state / update_state.STATE_FILE).unlink()
+        self.assertEqual(self.main(*argv), (0, "", ""))
+
     def test_advance_with_nothing_pending_does_nothing(self) -> None:
         for step in ("done", "released"):
             self.record(step)
@@ -954,7 +1032,7 @@ class ConvertTest(World):
             ("bosun", self.bosun),
             ("open_windows", lambda root: [{"kind": "checkin", "name": "checkin", "window": True}]),
             ("quiet_facts", lambda root: self.quiet.pop(0) if len(self.quiet) > 1 else self.quiet[0]),
-            ("checkin_loop_pid", lambda root: self.loop),
+            ("checkin_loop_pid", lambda root: self.loop if self.loop_runs() else None),
         ):
             stack.enter_context(mock.patch.object(update_facts, name, side_effect=fake))
         stack.enter_context(mock.patch.object(update, "_doctor", return_value=[]))
@@ -1140,14 +1218,16 @@ class ConvertTest(World):
         self.assert_own_work_back()
 
     def test_a_ctrl_c_while_its_own_work_stops_starts_it_again(self) -> None:
-        """Minor 1: part of it may be stopped by then (here the jobs, as the loop was stopping)."""
+        """Minor 1: part of it may be stopped by then (here the jobs, as the loop was about to stop); the
+        loop, which never stopped, is left running, not restarted mid-tick (final review, Minor 4)."""
         self.a_loop()
         with (
             mock.patch.object(update, "_stop_loop", side_effect=KeyboardInterrupt),
             self.assertRaises(KeyboardInterrupt),
         ):
             self.convert()
-        self.assert_own_work_back(loop=True)
+        self.assert_own_work_back(loop=False)
+        self.assertTrue(self.loop_runs())
 
     def test_the_mark_names_what_runs_before_anything_stops(self) -> None:
         """R50: written before the first stop, so a crash at any point of it is covered."""
@@ -1181,6 +1261,26 @@ class ConvertTest(World):
                 recorded = update_state.read(self.state)
                 assert recorded is not None
                 self.assertIn(recorded.step, ("failed", "restored"))
+
+    def test_a_mark_with_no_record_is_acted_on(self) -> None:
+        """Minor 3: the record moved aside (as an unreadable one is), or deleted: what the mark names
+        still runs again, once."""
+        self.cut_short("holding")
+        (self.state / update_state.STATE_FILE).unlink()
+        with contextlib.redirect_stdout(io.StringIO()):
+            self.assertIsNone(update.resume(self.state))
+            update.resume(self.state)
+        self.assert_own_work_back(loop=True)
+
+    def test_a_check_in_loop_that_runs_is_not_restarted(self) -> None:
+        """Minor 4: one started since (bosun start, the morning job), or one never stopped (a Ctrl-C
+        before the stop, stop_own_jobs failing first): refresh --checkin-loop would stop it mid-tick."""
+        self.cut_short("holding")
+        self.a_loop()
+        with contextlib.redirect_stdout(io.StringIO()):
+            update.resume(self.state)
+        self.assert_own_work_back(loop=False)
+        self.assertTrue(self.loop_runs())
 
     def test_an_update_that_stopped_nothing_starts_nothing(self) -> None:
         self.cut_short("holding")

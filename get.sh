@@ -21,7 +21,8 @@
 #   curl ... | BOSUN_HARNESS=codex sh  run repo sessions on Codex, and check that it is ready
 #
 # BOSUN_DIR (where it goes), BOSUN_REPO and BOSUN_BRANCH (what it gets) override the defaults. On an
-# existing install the defaults are what it came from: bosun.git's origin, and its bosun.branch.
+# existing install the defaults are what it came from: bosun.git's origin, and its bosun.branch; for a
+# checkout from before versions, its own origin. What it says never shows a URL's user and password.
 #
 # Plain POSIX sh, because this runs before anything else is known to be there. Everything is in
 # functions and main runs last, so a download cut short does nothing. What bosun needs, per OS and per
@@ -54,8 +55,23 @@ die() {
   printf 'bosun: %s\n' "$*" >&2
   exit 1
 }
+# <arg> as this says it: a URL without its user and password (a token in https://<token>@host/...).
+shown() {
+  case "$1" in
+    *://*) ;;
+    *)
+      printf '%s' "$1"
+      return 0
+      ;;
+  esac
+  url_rest="${1#*://}"
+  url_host="${url_rest%%/*}"
+  printf '%s://%s%s' "${1%%://*}" "${url_host##*@}" "${url_rest#"$url_host"}"
+}
 run() {
-  printf '  $ %s\n' "$*"
+  printf '  $'
+  for run_arg in "$@"; do printf ' %s' "$(shown "$run_arg")"; done
+  printf '\n'
   [ "$DRY_RUN" = 1 ] || "$@"
 }
 has_terminal() { [ "$UNATTENDED" = 0 ] && (: </dev/tty) 2>/dev/null; }
@@ -125,6 +141,14 @@ look() {
   esac
 }
 
+# Where a first bosun.git is cloned from: BOSUN_REPO, else for a checkout from before versions where it
+# came from (its origin, as an older get.sh pulled from it), else the default.
+pick_repo() {
+  [ -z "${BOSUN_REPO:-}" ] && [ "$KIND" = checkout ] || return 0
+  origin="$(git -C "$DIR" config remote.origin.url 2>/dev/null)" || origin=""
+  [ -z "$origin" ] || REPO="$origin"
+}
+
 # The branch: BOSUN_BRANCH, else the one the install follows (bosun.git's bosun.branch), else main.
 pick_branch() {
   [ -n "$BRANCH" ] || [ ! -d "$BARE" ] || BRANCH="$(git --git-dir="$BARE" config bosun.branch 2>/dev/null)" || BRANCH=""
@@ -149,7 +173,7 @@ use_repo() {
 # beside the others, made if it is not there: NEW.
 add_version() {
   run git -c core.hooksPath=/dev/null --git-dir="$BARE" fetch --quiet origin "+refs/heads/$BRANCH:refs/remotes/origin/$BRANCH" ||
-    die "could not fetch $BRANCH from $(git --git-dir="$BARE" config remote.origin.url)"
+    die "could not fetch $BRANCH from $(shown "$(git --git-dir="$BARE" config remote.origin.url)")"
   commit="<commit>"
   if [ "$DRY_RUN" = 0 ]; then
     commit="$(git --git-dir="$BARE" rev-parse --verify --quiet "refs/remotes/origin/$BRANCH^{commit}")" ||
@@ -162,6 +186,7 @@ add_version() {
 }
 
 get_bosun() {
+  pick_repo
   pick_branch
   case "$KIND" in
     new) say "Getting bosun into $VERSIONS, with $DIR a link to the version in use" ;;

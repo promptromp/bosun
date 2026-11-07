@@ -21,9 +21,10 @@
 #      orchestrator re-reads its prompts when only they changed; a window something it was launched
 #      with changed for restarts on the new version once idle, after listing its background work if
 #      only that runs (a restart ends it); a busy one is waited for, one waiting for you is never
-#      touched. Each gets a prompt to check for anything it missed and carry on, and answers with its
-#      status; the update waits for every answer, saying which windows it waits for. Ctrl-C leaves
-#      them to the check-in loop, which restarts each once its turn is over;
+#      touched, and one bosun did not start (outside the window list, no launch recorded: a shell or a
+#      Claude you opened there) is left as it is. Each gets a prompt to check for anything it missed and
+#      carry on, and answers with its status; the update waits for every answer, saying which windows
+#      it waits for. Ctrl-C leaves them to the check-in loop, which restarts each once its turn is over;
 #   7. ends with a summary of what it did: the migrations and version bumps, the config it changed and
 #      its new keys, what to change by hand in your own files, the prompts that changed, the jobs
 #      reloaded, what came of each window, what fails after the switch that did not before, and where
@@ -37,8 +38,9 @@
 # (update/own-work.json in the state folder); checks the quiet moment again, for two minutes at the most
 # (past that it starts that work again and waits with everything running); then updates as above,
 # swapping the checkout for the link in one step and keeping it as <install>-versions/legacy-<commit>,
-# and restarts every window on the new version. Stopped short of the switch, or put back, it starts
-# again what it stopped, as it was (after a crash, the next bosun update does).
+# and restarts each of bosun's own windows on the new version. Stopped short of the switch, or put
+# back, it starts again what it stopped, as it was (after a crash, the install line run again does: the
+# old checkout has no bosun update).
 # An update cut short (Ctrl-C, a crash, a power cut) is carried on by the next `bosun update`: put back
 # if it stopped while writes were paused (the next write to a store does that too), finished if its
 # checks had passed. With nothing new on the branch it says bosun is up to date.

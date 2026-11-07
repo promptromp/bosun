@@ -29,7 +29,8 @@ of truth, so don't copy rules into this file.
   what came of each), `lib/update_windows.py` (carrying them out: bosun's commands, the update's wait
   and its Ctrl-C, which the check-in loop carries on), `lib/update_notes.py` (the windows' note
   files) and `lib/update_summary.py` (pure: the summary it ends with, from what each step kept in the
-  record, its text and `--json`); `reload_changed_jobs` in `lib/common.sh`
+  record, its text and `--json`, and what the last update left me, which `bosun doctor` lists through
+  `lib/update.py after-update`); `reload_changed_jobs` in `lib/common.sh`
   (also install.sh's); its smoke section's next version is `tests/sandbox/update_patch.sh`.
 - `lib/common.sh`: config defaults (`load_config`) and shared helpers: the window list
   (`window_specs`: orchestrator, sessions.yml entries, checkin), tmux, the one

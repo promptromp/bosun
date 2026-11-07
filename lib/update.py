@@ -85,6 +85,7 @@ BEFORE_FREEZE = ("planned", "rehearsed", "holding")
 BLOCKED = 1
 USAGE = 2
 AGENT_COMMANDS = ("note", "advance")  # what the agents and the check-in loop run (lib/update_windows.py)
+AFTER_UPDATE = "after-update"  # what bosun doctor runs: what the last update left me
 
 
 class Output:
@@ -266,7 +267,7 @@ def _reload_jobs(root: Path) -> tuple[list[str], list[str]]:
 def _restart_checkin_loop(root: Path) -> list[str]:
     """The check-in loop restarted on the version in <root>, if a checkin window is open; a finding
     if that fails."""
-    if not any(w.get("kind") == "checkin" for w in update_facts.open_windows(root)):
+    if not update_facts.loop_runs(root):
         return []
     done = update_facts.bosun(root, "refresh", "--checkin-loop")
     if done.returncode == 0:
@@ -337,7 +338,9 @@ def release(state: UpdateState) -> UpdateState:
     state = _step(where.state_dir, state, "released")
     Output.say("  lifted the hold on bosun's background work")
     kept = _prune(where.state_dir, state)
-    return _record(where.state_dir, dataclasses.replace(state, findings=(*found, *kept, *_doctor(to_root))))
+    Output.say("Asking bosun doctor what fails after the switch...")
+    doctor = _doctor(to_root)
+    return _record(where.state_dir, dataclasses.replace(state, findings=(*found, *kept, *doctor)))
 
 
 # ---- an update cut short ------------------------------------------------------------------------
@@ -399,7 +402,10 @@ def resume(state_dir: Path) -> UpdateState | None:
     back once it is put back (_own_work_back). Returns where it ended; None when there was nothing to
     carry on (no record, one finished, or one still running, which one_update refuses next)."""
     state = update_state.load(state_dir)
-    if state is None or update_state.running(state_dir):
+    if update_state.running(state_dir):
+        return None
+    if state is None:  # a mark left with no record (moved aside, or deleted) is still acted on
+        _own_work_left(state_dir)
         return None
     if not update_state.known(state):
         raise UpdateRefused(
@@ -469,6 +475,13 @@ def _started(plan: Plan, old_root: Path, new_root: Path, doctor_before: Sequence
     )
 
 
+def _again(from_root: Path) -> str:
+    """What carries on, or puts back, an update stopped short: `bosun update`; or the install line,
+    which hands over to the new version's, where the bosun installed now is a checkout from before
+    versions, which has no `bosun update` (a conversion stopped before its swap, or put back)."""
+    return "the install line" if versions.before_versions(installed(from_root)) else "bosun update"
+
+
 def _failed(state: UpdateState) -> int:
     """The failure said, naming the backup if the update took one (in case I need it)."""
     backup = (
@@ -479,7 +492,7 @@ def _failed(state: UpdateState) -> int:
     if state.step in update_state.FREEZE_STEPS:
         Output.say(
             f"bosun update failed and could not put everything back: {state.error}. Writes stay "
-            f"paused until bosun update puts it back; run it again.{backup}"
+            f"paused until it is put back: run {_again(Path(state.from_root))} again.{backup}"
         )
     else:
         Output.say(
@@ -738,15 +751,17 @@ EVERY_OWN_JOB = 'start_jobs "$(watchdog_label)" "$(learn_label)"'  # for a mark 
 def _start_own(root: Path, own: OwnWork) -> None:
     """What <own> names started again as it was, each said: its launchd jobs loaded from their plists as
     they are on disk (start_jobs: nothing rendered, no other job, one loaded already left), and the
-    check-in loop, if it was stopped, restarted by refresh --checkin-loop, which runs the install path's
-    bosun: the old code again, once a put back has led the install path there."""
+    check-in loop, if it was stopped and none runs now (one started since, or never stopped, is left to
+    its tick), restarted by refresh --checkin-loop, which runs the install path's bosun: the old code
+    again, once a put back has led the install path there."""
     if own.jobs != ():
         script = EVERY_OWN_JOB if own.jobs is None else 'start_jobs "$@"'
         done = update_facts.shell(root, script, *(own.jobs or ()))
         said = "loaded again" if done.returncode == 0 else done.stderr.strip()
         Output.say(f"  the launchd jobs it stopped: {said}")
-    for line in _restart_checkin_loop(root) if own.loop else []:
-        Output.say(f"  {line}")
+    if own.loop and update_facts.checkin_loop_pid(root) is None:
+        for line in _restart_checkin_loop(root):
+            Output.say(f"  {line}")
 
 
 def _own_work_back(state_dir: Path) -> None:
@@ -827,8 +842,8 @@ def _converts(old_checkout: Path, new_root: Path, commit: str) -> str:
         f"This first update converts {install}, a checkout from before versions: once every window is "
         "idle with nothing running and nobody has typed for a while, it stops bosun's own background "
         f"work (the watchdog, learning and the check-in loop), then switches {install} to a link to "
-        f"{new_root} in one step, keeping the checkout as {kept}, and restarts every window on the new "
-        "version."
+        f"{new_root} in one step, keeping the checkout as {kept}, and restarts each of bosun's own windows "
+        "(the orchestrator, those in sessions.yml) on the new version."
     )
 
 
@@ -863,8 +878,9 @@ def convert(old_checkout: Path, new_root: Path, args: argparse.Namespace, said: 
     the plan and what converting adds; otherwise, under update.lock (the caller holds it), the plan is
     said yes to, it waits for a quiet moment (Ctrl-C there changes nothing), then carries the update
     out (_converted): the checkout swapped for the link in one call and kept as legacy-<its commit>,
-    and every window brought along as one whose launch changed, as the version converted from recorded
-    no launches. <said> keeps the plan and the summary for --json."""
+    and every window of bosun's brought along as one whose launch changed, as the version converted
+    from recorded no launches (one outside the window list is left as it is: update_facts._window).
+    <said> keeps the plan and the summary for --json."""
     said = said if said is not None else Said()
     _refuse_work(old_checkout)
     where = folders()
@@ -1082,13 +1098,29 @@ def agents_command(argv: Sequence[str]) -> int:
     return _advance(state_dir) if update_state.windows_pending(state_dir) else 0
 
 
+def after_update_command(argv: Sequence[str]) -> int:
+    """`after-update --state-dir <dir> --config-dir <dir>`, which bosun doctor runs: what the last update
+    left me (update_summary.left_to_me, from its record and bosun.env), a line each, its kind and a tab
+    first; nothing when there is none."""
+    parser = argparse.ArgumentParser(prog=f"update.py {AFTER_UPDATE}", allow_abbrev=False)
+    parser.add_argument("--state-dir", type=Path, required=True)
+    parser.add_argument("--config-dir", type=Path, required=True)
+    args = parser.parse_args(list(argv))
+    state = update_state.read(args.state_dir)
+    for kind, what in update_summary.left_to_me(state, migrations.assigned_keys(args.config_dir)):
+        print(f"{kind}\t{' '.join(what.split())}")
+    return 0
+
+
 def main(argv: Sequence[str]) -> int:
     """The command, and with --json one object on stdout on every path: the plan (null when none was
     made: up to date, refused, a failure before it), the update's record as it stands, and the summary
     (null unless an update ended in this run). `note` and `advance` are what the agents and the
-    check-in loop run (agents_command)."""
+    check-in loop run (agents_command); `after-update` is bosun doctor's (after_update_command)."""
     if argv and argv[0] in AGENT_COMMANDS:
         return agents_command(argv)
+    if argv and argv[0] == AFTER_UPDATE:
+        return after_update_command(argv[1:])
     args = build_parser().parse_args(list(argv))
     Output.to_stderr = args.json
     said = Said()
@@ -1111,8 +1143,9 @@ def _said(args: argparse.Namespace, said: Said) -> int:
     except update_backups.BackupError as exc:
         print(f"bosun update: an update cut short could not be put back: {exc}", file=sys.stderr)
     except (KeyboardInterrupt, EOFError):
+        again = _again(Path(args.from_root))
         print(
-            "\nbosun update: stopped; bosun update again carries on, or puts back, what it started",
+            f"\nbosun update: stopped; run {again} again: it carries on, or puts back, what it started",
             file=sys.stderr,
         )
     return 1

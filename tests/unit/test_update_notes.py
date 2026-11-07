@@ -51,6 +51,21 @@ class NoteTest(unittest.TestCase):
         self.assertEqual(update_notes.note_path(self.state_dir, "web app", "status").name, "web%20app.status")
         self.assertEqual(sorted(p.parent for p in self.state_dir.rglob("*.status")), [self.notes] * 5)
 
+    def test_a_long_name_is_a_note_of_its_own_whose_file_name_fits(self) -> None:
+        """Minor 5: a name whose encoding passes what a file name may hold (255 bytes) is cut short, the
+        whole name's digest added: the same name always finds its note, and two never share one."""
+        long = "acme-" + "x" * 295
+        other = "acme-" + "x" * 294 + "y"  # the same first 299 bytes
+        for window in (long, other, "é" * 150):
+            update_notes.note(self.state_dir, window, "status", f"answered {window[-1]}")
+            name = update_notes.note_path(self.state_dir, window, "status").name
+            self.assertLessEqual(len(name.encode()), 255, window[:10])
+        self.assertEqual(update_notes.read_note(self.state_dir, long, "status"), "answered x")
+        self.assertEqual(update_notes.read_note(self.state_dir, other, "status"), "answered y")
+        self.assertEqual(update_notes.Files(self.state_dir).read("é" * 150, "status"), "answered é")
+        self.assertEqual(len(list(self.notes.iterdir())), 3)
+        self.assertEqual(update_notes.note_path(self.state_dir, "api", "status").name, "api.status")
+
     def test_an_unknown_kind_or_no_window_is_refused(self) -> None:
         for window, kind in (("api", "mood"), ("", "stock")):
             with self.assertRaises(update_notes.NoteRefused, msg=(window, kind)):

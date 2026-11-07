@@ -941,6 +941,12 @@ check "refresh fails without a manifest" bash -c '! BOSUN_SESSIONS_FILE=/nonexis
 echo "bosun-was-updated:check-in" >"$WORK/update-prompt"
 update_restart() { "$BOSUN" refresh --update-restart "$WORK/update-prompt" "$@"; }
 check "refresh --update-restart refuses a window not in the window list" fails_with "no window 'nope' in the window list" update_restart nope
+# A window opened by hand in bosun's session (prefix-c), outside the window list, with no launch recorded.
+tmux -L "$SOCKET" new-window -d -t "=smoke:" -n by-hand "sleep 600"
+by_hand_pane="$(tmux -L "$SOCKET" display -p -t "=smoke:by-hand" '#{pane_pid}')"
+check "... and one open outside it with no launch recorded, as bosun did not start it" fails_with "bosun did not start it, so an update leaves it as it is" update_restart by-hand
+check "... leaving its pane as it is" bash -c '[ "$(tmux -L "$1" display -p -t "=smoke:by-hand" "#{pane_pid}")" = "$2" ] && kill -0 "$2"' _ "$SOCKET" "$by_hand_pane"
+tmux -L "$SOCKET" kill-window -t "=smoke:by-hand"
 check "... leaves a window waiting for you running, and exits 3" bash -c '"$1" refresh --update-restart "$2" gamma >/dev/null 2>&1; [ $? -eq 3 ] && kill -0 "$3"' _ "$BOSUN" "$WORK/update-prompt" "$gamma_pid"
 gamma_record busy 3600
 check "... and a busy one" bash -c '"$1" refresh --update-restart "$2" gamma >/dev/null 2>&1; [ $? -eq 3 ] && kill -0 "$3"' _ "$BOSUN" "$WORK/update-prompt" "$gamma_pid"
@@ -2430,6 +2436,17 @@ if [ "$(bash -c 'source "$1/lib/common.sh"; command -v launchctl; command -v pms
     "Then it would run: $G_VERSIONS/<commit>/bin/bosun update --from $G_DIR" \
     "which converts the checkout at a quiet moment: it keeps it as $G_VERSIONS/legacy-<its commit>, and $G_DIR becomes a link to the new version"
   check "... and changes nothing" test "$(g_tree)" = "$g_before"
+  # Without BOSUN_REPO, from where the checkout came: its origin (a fork, a mirror).
+  get_dry_from_origin() { HOME="$G/home" BOSUN_DIR="$G_DIR" env -u BOSUN_REPO sh "$ROOT/get.sh" --dry-run 2>&1; }
+  git -C "$G_DIR" remote add origin "$G/fork"
+  check "... cloning bosun.git from the checkout's own origin, without BOSUN_REPO" says_lines "$(get_dry_from_origin)" \
+    "  \$ git -c core.hooksPath=/dev/null clone --quiet --bare --single-branch --branch main $G/fork $G_VERSIONS/bosun.git"
+  git -C "$G_DIR" remote set-url origin "https://0000placeholder-token@example.com/acme/bosun.git" # gitleaks:allow
+  out="$(get_dry_from_origin)"
+  check "... and never saying the token in its URL" bash -c '
+    grep -qxF "  \$ git -c core.hooksPath=/dev/null clone --quiet --bare --single-branch --branch main https://example.com/acme/bosun.git $2/bosun.git" <<<"$1" &&
+      ! grep -q 0000placeholder-token <<<"$1"' _ "$out" "$G_VERSIONS"
+  git -C "$G_DIR" remote remove origin
   mv "$G_DIR" "$G/a-checkout"
   mkdir -p "$G_VERSIONS/bosun.git" "$G_VERSIONS/0123456789ab/bin"
   printf '#!/bin/sh\n' >"$G_VERSIONS/0123456789ab/bin/bosun"
@@ -2758,10 +2775,27 @@ FAKE
   idle_pid="$(u_claude u-idle)"
   shell_pid="$(u_claude u-shell)"
   busy_pid="$(u_claude u-busy)"
+  # Two windows bosun did not start, outside the window list with no launch recorded: a plain shell
+  # opened in its session (prefix-c), and a Claude started there by hand (no --name), idle.
+  cat >"$U/hand-claude" <<HAND
+#!/bin/bash
+printf '{"pid":%d,"status":"idle","version":"2.0.0","statusUpdatedAt":%d,"name":""}' \$\$ "\$(date +%s)000" >"\$HOME/.claude/sessions/\$\$.json"
+while IFS= read -r line; do printf '%s\n' "\$line" >>"$U/pasted.u-hand"; done
+HAND
+  chmod +x "$U/hand-claude"
+  tmux -L "$U_TMUX" new-window -d -t "=update-test:" -n u-mine -- /bin/sh
+  tmux -L "$U_TMUX" new-window -d -t "=update-test:" -n u-hand -- bash -c '"$1"; exec sleep 600' _ "$U/hand-claude"
+  u_pane() { tmux -L "$U_TMUX" display -p -t "=update-test:$1" '#{pane_pid}'; }
+  check "... with a plain shell and a Claude started by hand beside them" wait_for 10 u_claude u-hand
+  mine_pane="$(u_pane u-mine)"
+  hand_pane="$(u_pane u-hand)"
+  hand_pid="$(u_claude u-hand)"
   out="$(ul update --dry-run 2>&1)"
   check "... the plan: the orchestrator re-reads; v2 changed what the repo windows were launched with, so the idle one restarts, the shell one takes stock first, the busy one is waited for" bash -c '
     grep -q "orch: re-read" <<<"$1" && grep -q "u-idle: restart$" <<<"$1" && grep -q "u-shell: take stock, then restart" <<<"$1" &&
       grep -q "u-busy: wait until idle" <<<"$1"' _ "$out"
+  check "... and the two windows bosun did not start are left as they are" bash -c '
+    grep -q "u-mine: not started by bosun: left as it is$" <<<"$1" && grep -q "u-hand: not started by bosun: left as it is$" <<<"$1"' _ "$out"
   # Run so that Ctrl-C reaches it (a job a script starts in the background ignores SIGINT).
   python3 -c 'import os, signal, sys; signal.signal(signal.SIGINT, signal.SIG_DFL); os.execvp(sys.argv[1], sys.argv[1:])' \
     "${U_ENV[@]}" "${U_LIVE[@]}" "$U_LINK/bin/bosun" update --yes >"$U/agents.out" 2>&1 &
@@ -2797,6 +2831,13 @@ FAKE
     grep -qE "^  u-busy +nothing yet; still waited for$" "$1" && grep -qE "^  u-shell +asked to take stock, restarted; resumed after the update$" "$1" &&
       [ "$(tail -1 "$1")" = "Going back: docs/setup.md#going-back" ] && [ ! -e "$(jq -r .backup "$2/update.json")/summary.md" ]' _ "$U/agents.out" "$U_STATE"
   check "... with the link at v2" u_at "$U_V2"
+  check "the windows bosun did not start were left as they are: their panes, the Claude in one, nothing pasted, no bosun launch" bash -c '
+    [ "$1" = "$2" ] && kill -0 "$3" && [ ! -e "$4/pasted.u-hand" ] &&
+      ! tmux -L "$5" capture-pane -p -J -S -500 -t "=update-test:u-mine" | grep -q "launch" &&
+      jq -e ".windows | has(\"u-mine\") or has(\"u-hand\") | not" "$6/update.json" >/dev/null' \
+    _ "$mine_pane $hand_pane" "$(u_pane u-mine) $(u_pane u-hand)" "$hand_pid" "$U" "$U_TMUX" "$U_STATE"
+  check "... and the summary says so" bash -c '
+    grep -qE "^  u-mine +left as it is \(bosun did not start it\)$" "$1" && grep -qE "^  u-hand +left as it is \(bosun did not start it\)$" "$1"' _ "$U/agents.out"
   uc() { "${U_ENV[@]}" "${U_LIVE[@]}" BOSUN_CHECKIN_MINUTES=60 "$U_LINK/bin/bosun" checkin 2>&1; } # one tick of the loop
   out="$(uc)"
   check "a check-in tick leaves the busy window alone while it is busy" bash -c 'kill -0 "$1" && ! grep -q "u-busy: restarted" <<<"$2"' _ "$busy_pid" "$out"
