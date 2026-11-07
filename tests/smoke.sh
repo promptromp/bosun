@@ -1195,7 +1195,17 @@ check "a running update's hold past its hour is the update-stuck finding" contai
 check "doctor fails on a hold past its hour" contains "$("$BOSUN" doctor 2>&1)" "FAIL  update: an update's hold"
 kill "$update_holder"
 wait "$update_holder" 2>/dev/null
-rm -f "$BOSUN_STATE_DIR/update.json"
+# What the last update left to you, from its record: a change to make in your own files, and the
+# config keys it added that bosun.env does not set.
+jq -n '{id: "u1", from_root: "/a", to_root: "/b", from_commit: "aaa", to_commit: "bbb", step: "done",
+  started_at: "2026-11-05T09:00:00+00:00", hold_until: 0, user_changes: ["sessions.yml: rename `model:` to `agent_model:`"],
+  plan: {keys_added: ["BOSUN_WAKE_DELAY_MINUTES", "BOSUN_DRAIN_PROMPT"]}}' >"$BOSUN_STATE_DIR/update.json"
+echo 'BOSUN_DRAIN_PROMPT="acme: carry on"' >"$BOSUN_CONFIG_DIR/bosun.env"
+out="$("$BOSUN" doctor 2>&1)"
+check "doctor lists what the last update left to you: a change to make by hand in your own files" contains "$out" "warn  change by hand: sessions.yml: rename \`model:\` to \`agent_model:\`"
+check "... and each new key bosun.env does not set, at its default" contains "$out" "ok    new key, at its default: BOSUN_WAKE_DELAY_MINUTES=1"
+check "... but not one it sets" not_contains "$out" "BOSUN_DRAIN_PROMPT="
+rm -f "$BOSUN_STATE_DIR/update.json" "$BOSUN_CONFIG_DIR/bosun.env"
 orch_status() { # <status> <seconds in it> [name]
   printf '{"pid":%d,"status":"%s","version":"2.0.0","statusUpdatedAt":%d,"name":"%s"}' "$orch_pid" "$1" $((($(date +%s) - $2) * 1000)) "${3:-orch-$(date +%F)}" >"$HOME/.claude/sessions/$orch_pid.json"
 }
@@ -2460,6 +2470,19 @@ if [ "$(bash -c 'source "$1/lib/common.sh"; command -v launchctl; command -v pms
   check "a ledger write and an approval hook started on v1 while writes are paused wait" bash -c 'kill -0 "$1" && kill -0 "$2" && [ "$(jq -r .step "$3/update.json")" = migrated ]' _ "$writer" "$guarding" "$U_STATE"
   wait "$updating"
   check "the update ends well" u_ended_well $? "$U/update.out"
+  u_backup_now="$(jq -r .backup "$U_STATE/update.json")"
+  sed -n '/^bosun updated: /,$p' "$U/update.out" >"$U/summary.txt"
+  u_summary_is() { # the summary the update ended with, as the design lays it out
+    grep -qE "^bosun updated: ${U_V1_COMMIT:0:7} -> ${U_V2_COMMIT:0:7} \(1 commit\) in [0-9]+(m [0-9]+)?s$" "$1" &&
+      grep -qE "^  ledger      format 1 -> 2 \([0-9]+ items migrated\)$" "$1" && grep -qx "  knowledge   format 1, unchanged" "$1" &&
+      grep -qx "Prompts changed: 1 (policy.md)" "$1" && grep -q "^Jobs reloaded: update-test" "$1" &&
+      grep -qxE "Backup: $2 \([0-9.]+ (bytes|KB|MB|GB)\)" "$1" && [ "$(tail -1 "$1")" = "Going back: docs/setup.md#going-back" ] || {
+      cat "$1"
+      return 1
+    }
+  }
+  check "... and its output ends with the summary: the commit, the ledger's migration, the prompt changed, the jobs reloaded, the backup" u_summary_is "$U/summary.txt" "$u_backup_now"
+  check "... saved as summary.md next to the backup" bash -c '[ "$(sed "1d;\$d" "$1/summary.md")" = "$(cat "$2")" ]' _ "$u_backup_now" "$U/summary.txt"
   wait "$writer"
   writer_rc=$?
   wait "$guarding"
@@ -2549,8 +2572,13 @@ migrations.run(migrations.Context(pathlib.Path(sys.argv[2]), pathlib.Path(sys.ar
   check "a kg forget cut short stops the update at its plan (exit 1), saying so" bash -c '[ "$1" = 1 ] && grep -q "a kg forget was cut short" <<<"$2" && ! grep -q Rehearsing <<<"$2"' _ "$rc" "$out"
 
   u_cut_at checked
-  out="$(ub update --yes 2>&1)"
+  json="$(ub update --yes --json 2>"$U/carried.err")"
+  out="$(cat "$U/carried.err")"
   check "an update that stopped after its checks passed: the next bosun update carries it on" contains "$out" "carried on to the end"
+  check "... says its summary, from a record laid out as an earlier bosun kept it (no plan: no Data), and in --json's object the backup's path whole" bash -c '
+    grep -qx "Going back: docs/setup.md#going-back" <<<"$1" &&
+      jq -e --arg to "$3" --arg backup "$(jq -r .backup "$4/update.json")" ".summary.to_commit == \$to and .summary.backup == \$backup and .summary.data == {} and (\$backup | startswith(\"/\"))" <<<"$2" >/dev/null' \
+    _ "$out" "$json" "$U_V2_COMMIT" "$U_STATE"
   check "... then says bosun is up to date" contains "$out" "bosun is up to date (${U_V2_COMMIT:0:7})"
   check "... the record says done, the link at v2" bash -c 'jq -e ".step == \"done\"" "$1/update.json" >/dev/null && [ "$(cd "$2" && pwd -P)" = "$3" ]' _ "$U_STATE" "$U_LINK" "$U_V2"
   u_up_to_date() {
@@ -2561,7 +2589,7 @@ migrations.run(migrations.Context(pathlib.Path(sys.argv[2]), pathlib.Path(sys.ar
     }
   }
   check "with nothing new on the branch and nothing to carry on, bosun is up to date" u_up_to_date
-  check "... and with --json, stdout is the same object: no plan, the record as it stands" jq -e '.plan == null and .update.step == "done"' <<<"$(ub update --yes --json 2>/dev/null)"
+  check "... and with --json, stdout is the same object: no plan, the record as it stands, no summary" jq -e '.plan == null and .update.step == "done" and .summary == null' <<<"$(ub update --yes --json 2>/dev/null)"
   check "a checkout is updated with git, not bosun update" fails_with "is a checkout: update it with git" "${U_ENV[@]}" "$BOSUN" update --dry-run
 
   # A running session keeps the hook commands it was launched with: each of v1's runs on v2.
@@ -2676,6 +2704,9 @@ FAKE
   check "Ctrl-C stops the wait (exit 0), the record at agents; with no check-in loop running, it says bosun update advance finishes the busy window" bash -c '
     [ "$1" = 0 ] && grep -q "Stopped waiting: no check-in loop runs here: bosun update advance, run by hand, takes a turn at u-busy" "$2" &&
       jq -e ".step == \"agents\" and .pending == [\"u-busy\"]" "$3/update.json" >/dev/null' _ "$rc" "$U/agents.out" "$U_STATE"
+  check "... then the summary, the busy window still waited for, the shell one's restart after taking stock" bash -c '
+    grep -qE "^  u-busy +nothing yet; still waited for$" "$1" && grep -qE "^  u-shell +asked to take stock, restarted; resumed after the update$" "$1" &&
+      [ "$(tail -1 "$1")" = "Going back: docs/setup.md#going-back" ] && [ ! -e "$(jq -r .backup "$2/update.json")/summary.md" ]' _ "$U/agents.out" "$U_STATE"
   check "... with the link at v2" u_at "$U_V2"
   uc() { "${U_ENV[@]}" "${U_LIVE[@]}" BOSUN_CHECKIN_MINUTES=60 "$U_LINK/bin/bosun" checkin 2>&1; } # one tick of the loop
   out="$(uc)"
@@ -2688,6 +2719,9 @@ FAKE
   out="$(uc)"
   check "... and the next tick takes its answer: the update is done" bash -c '
     grep -q "u-busy: answered: resumed after the update" <<<"$1" && jq -e ".step == \"done\" and .pending == []" "$2/update.json" >/dev/null' _ "$out" "$U_STATE"
+  check "... and saves its summary next to the backup, with every window's outcome" bash -c '
+    backup="$(jq -r .backup "$2/update.json")" && grep -qF "bosun update: done; its summary is in $backup/summary.md" <<<"$1" &&
+      grep -qE "^  u-busy +restarted; resumed after the update$" "$backup/summary.md" && grep -qE "^  orch +asked to re-read; re-read, checked in, carrying on$" "$backup/summary.md"' _ "$out" "$U_STATE"
   check "... after which a tick has nothing to do" bash -c '! grep -q "bosun update" <<<"$1"' _ "$(uc)"
   tmux -L "$U_TMUX" kill-server 2>/dev/null
   rm -f "$U_CONFIG/sessions.yml"

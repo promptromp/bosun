@@ -26,6 +26,11 @@ update.json (lib/update_state.py) before it starts it:
   lib/update_windows.py carries it out) until it answers with `bosun update note`; Ctrl-C leaves those
   still waited for to the check-in loop, whose `bosun update advance` carries on. done once none is
   left.
+- the summary (lib/update_summary.py): what the update did, built from its record, where each step
+  kept what it learnt (the plan when it starts, the migrations' lines and bosun.env's change at the
+  switch, the jobs reloaded in the release), so an update carried on says the same. It is said when
+  the update ends (also when Ctrl-C stops its wait), and saved as summary.md in the backup folder once
+  it is done, by whichever run finishes it: this one, the next `bosun update`, or the check-in loop.
 
 While it holds update.lock, this process never writes a store through the stores' write path (their
 gate would see this very lock and refuse): the migrations write the files directly, and what the
@@ -39,6 +44,7 @@ import contextlib
 import dataclasses
 import fcntl
 import json
+import os
 import re
 import shutil
 import sys
@@ -61,6 +67,7 @@ import update_gate
 import update_notes
 import update_plan
 import update_state
+import update_summary
 import update_windows
 import validation
 import versions
@@ -72,6 +79,7 @@ from update_state import UpdateState
 ROOT = Path(__file__).resolve().parents[1]  # the version this updates to
 SHORT = update_gate.SHORT
 FINISHED = ("done", "failed", "restored")
+ENDED = ("done", "agents")  # past its release: done, or its windows left to the check-in loop
 BEFORE_FREEZE = ("planned", "rehearsed", "holding")
 BLOCKED = 1
 USAGE = 2
@@ -115,11 +123,17 @@ def check_stores(state_dir: Path, config_dir: Path) -> list[str]:
     ]
 
 
-def _migrate(ctx: migrations.Context, plan: Plan) -> None:
-    """The migrations, and the config's renamed keys when the plan has any."""
-    migrations.run(ctx)
-    if plan.renames:
-        migrations.write_config(ctx.config_dir, datetime.now(UTC))
+def _migrate(
+    ctx: migrations.Context, plan: Plan, now: datetime
+) -> tuple[list[migrations.Applied], list[str]]:
+    """The migrations, and the config's renamed keys when the plan has any (the copy of bosun.env
+    kept as it was named for <now>): each migration that ran, and bosun.env's line for the summary."""
+    applied = migrations.run(ctx)
+    changed = migrations.write_config(ctx.config_dir, now) if plan.renames else []
+    if not changed:
+        return applied, []
+    kept = migrations.config_copy(ctx.config_dir, now).name
+    return applied, [f"{migrations.CONFIG_FILE}: {'; '.join(changed)} (before: {kept})"]
 
 
 def rehearse(state_dir: Path, config_dir: Path, plan: Plan) -> list[str]:
@@ -132,7 +146,7 @@ def rehearse(state_dir: Path, config_dir: Path, plan: Plan) -> list[str]:
         with _read_locks(state_dir, config_dir):
             update_backups.copy_set(state_dir, config_dir, copy)
         ctx = migrations.Context(copy / "state", copy / "config")
-        _migrate(ctx, plan)
+        _migrate(ctx, plan, datetime.now(UTC))
         return check_stores(ctx.state_dir, ctx.config_dir)
     except Exception as exc:  # noqa: BLE001 - whatever a migration raises stops the update, nothing changed
         return [f"{type(exc).__name__}: {exc}"]
@@ -163,18 +177,19 @@ def restorable(plan: Plan) -> tuple[str, ...]:
 
 def _frozen(state: UpdateState, plan: Plan, state_dir: Path, config_dir: Path) -> UpdateState:
     """The steps under the locks, each recorded before it starts; `backup` and `restorable` once
-    the backup is taken, so no step past backed-up is ever recorded without them."""
+    the backup is taken, so no step past backed-up is ever recorded without them; what the
+    migrations did with the switch. The backup and the copy of bosun.env have the same time."""
     ctx = migrations.Context(state_dir, config_dir)
+    now = datetime.now(UTC)
     state = _step(state_dir, state, "marked")
     state = _step(state_dir, state, "backed-up")
     formats = migrations.store_formats(ctx)
-    backup = update_backups.take(
-        state_dir, config_dir, state.from_commit, state.to_commit, formats, datetime.now(UTC)
-    )
+    backup = update_backups.take(state_dir, config_dir, state.from_commit, state.to_commit, formats, now)
     state = _record(state_dir, dataclasses.replace(state, backup=str(backup), restorable=restorable(plan)))
     state = _step(state_dir, state, "migrated")
-    _migrate(ctx, plan)
-    state = _step(state_dir, state, "switched")
+    applied, config = _migrate(ctx, plan, now)
+    migrated = tuple(step.as_record() for step in applied)
+    state = _step(state_dir, state, "switched", migrated=migrated, config_changed=tuple(config))
     to_root = Path(state.to_root)
     versions.point(install_paths.install_path(to_root), to_root)
     problems = check_stores(state_dir, config_dir)
@@ -224,14 +239,17 @@ def freeze(state: UpdateState, plan: Plan, state_dir: Path, config_dir: Path) ->
 # ---- the release --------------------------------------------------------------------------------
 
 
-def _reload_jobs(root: Path) -> list[str]:
-    """The launchd jobs whose plist the version in <root> changes, reloaded; a finding if not."""
+def _reload_jobs(root: Path) -> tuple[list[str], list[str]]:
+    """The launchd jobs whose plist the version in <root> changes, reloaded: their labels, and a
+    finding if one could not be."""
     done = update_facts.shell(root, "reload_changed_jobs")
-    for label in done.stdout.split():
+    labels = done.stdout.split()
+    for label in labels:
         Output.say(f"  reloaded the launchd job {label}")
-    return (
+    found = (
         [] if done.returncode == 0 else [f"launchd: {done.stderr.strip() or 'a job could not be reloaded'}"]
     )
+    return labels, found
 
 
 def _restart_checkin_loop(root: Path) -> list[str]:
@@ -267,7 +285,11 @@ def release(state: UpdateState) -> UpdateState:
     may have landed since); old backups and version folders pruned."""
     where = folders()
     to_root = Path(state.to_root)
-    found = [*_reload_jobs(to_root), *_restart_checkin_loop(to_root)]
+    labels, found = _reload_jobs(to_root)
+    if labels:  # kept at once, with those of a release before this one (carried on)
+        reloaded = tuple(dict.fromkeys((*state.reloaded, *labels)))
+        state = _record(where.state_dir, dataclasses.replace(state, reloaded=reloaded))
+    found += _restart_checkin_loop(to_root)
     state = _step(where.state_dir, state, "released")
     Output.say("  lifted the hold on bosun's background work")
     state = _record(where.state_dir, dataclasses.replace(state, findings=(*found, *_doctor(to_root))))
@@ -386,18 +408,22 @@ def _started(plan: Plan, old_root: Path, new_root: Path) -> UpdateState:
         started_at=now.isoformat(timespec="seconds"),
         hold_until=0,
         user_changes=plan.user_changes,
+        plan=update_plan.as_record(plan),
     )
 
 
 def _failed(state: UpdateState) -> int:
+    """The failure said, naming the backup if the update took one (in case I need it)."""
+    backup = f" The backup it took: {update_summary.tilde(state.backup)}." if state.backup else ""
     if state.step in update_state.FREEZE_STEPS:
         Output.say(
             f"bosun update failed and could not put everything back: {state.error}. Writes stay "
-            "paused until bosun update puts it back; run it again."
+            f"paused until bosun update puts it back; run it again.{backup}"
         )
     else:
         Output.say(
             f"bosun update failed: {state.error}. Everything is as it was ({_short(state.from_commit)})."
+            + backup
         )
     return 1
 
@@ -428,25 +454,74 @@ def _carried_out(plan: Plan, old_root: Path, new_root: Path, where: Folders) -> 
     return update_windows.bring_along(state, plan, say=Output.say)
 
 
-def _say_outcomes(state_dir: Path, state: UpdateState) -> None:
-    for window, outcome in update_agents.outcomes(state, update_notes.Files(state_dir)):
-        Output.say(f"  {window}: {outcome}")
+# ---- the summary --------------------------------------------------------------------------------
 
 
-def _said_done(state: UpdateState, state_dir: Path) -> int:
-    Output.say(f"bosun updated: {_short(state.from_commit)} -> {_short(state.to_commit)}")
-    Output.say(f"  writes paused for {state.freeze_ms} ms; the backup: {state.backup}")
-    for finding in state.findings:
-        Output.say(f"  {finding}")
-    _say_outcomes(state_dir, state)
-    return 0
+def _seconds(state: UpdateState) -> int:
+    """From the update's start (a carried-on one's first) to now, the end of its wait."""
+    try:
+        started = datetime.fromisoformat(state.started_at)
+    except ValueError:
+        return 0
+    started = started if started.tzinfo else started.replace(tzinfo=UTC)
+    return max(0, round((datetime.now(UTC) - started).total_seconds()))
+
+
+def _bytes(folder: Path) -> int:
+    """The size of the files under <folder>, links not followed."""
+    total = 0
+    for parent, _dirs, names in os.walk(folder):
+        for name in names:
+            with contextlib.suppress(OSError):
+                total += (Path(parent) / name).lstat().st_size
+    return total
+
+
+def summary_of(state_dir: Path, state: UpdateState) -> update_summary.Summary:
+    """The summary of the update <state> records (update_summary.of_record), with what is on disk
+    now: what came of each window (their notes), and whether the backup is still there and its size."""
+    backup = Path(state.backup) if state.backup else None
+    there = backup is not None and backup.is_dir()
+    return update_summary.of_record(
+        state,
+        update_agents.outcomes(state, update_notes.Files(state_dir)),
+        there,
+        _bytes(backup) if backup is not None and there else 0,
+        _seconds(state),
+    )
+
+
+def _saved(state: UpdateState, text: str) -> Path | None:
+    """<text> as summary.md in the update's backup folder, once the update is done and if the folder
+    is still there (a kg forget deletes every backup, and may do so meanwhile); where, or None."""
+    folder = Path(state.backup) if state.backup else None
+    if state.step != "done" or folder is None or not folder.is_dir():
+        return None
+    path = folder / update_backups.SUMMARY
+    tmp = folder / f".{update_backups.SUMMARY}.tmp"
+    try:
+        tmp.write_text(f"```text\n{text}```\n")
+        tmp.replace(path)
+    except OSError:
+        return None
+    return path
+
+
+def _say_summary(state_dir: Path, state: UpdateState, said: Said) -> None:
+    """The summary of the update <state> records, said, kept for --json, and saved once it is done."""
+    said.summary = summary_of(state_dir, state)
+    text = update_summary.render(said.summary)
+    Output.say(text.rstrip("\n"))
+    _saved(state, text)
 
 
 @dataclass
 class Said:
-    """What --json prints besides the update's record: the plan, once one is made."""
+    """What --json prints besides the update's record: the plan, once one is made, and the summary,
+    once an update ends."""
 
     plan: Plan | None = None
+    summary: update_summary.Summary | None = None
 
 
 def _update(old_root: Path, where: Folders, args: argparse.Namespace, said: Said) -> int:
@@ -456,7 +531,10 @@ def _update(old_root: Path, where: Folders, args: argparse.Namespace, said: Said
     if plan.blockers or not _go_ahead(args.yes):
         return BLOCKED if plan.blockers else 0
     state = _carried_out(plan, old_root, ROOT, where)
-    return _said_done(state, where.state_dir) if state.step in ("done", "agents") else _failed(state)
+    if state.step not in ENDED:
+        return _failed(state)
+    _say_summary(where.state_dir, state, said)
+    return 0
 
 
 def _who(state: UpdateState | None) -> tuple[str, str, str]:
@@ -518,25 +596,25 @@ def _dry_run(where: Folders, args: argparse.Namespace, said: Said) -> int:
     return code
 
 
-def _carried_on(state_dir: Path) -> bool:
-    """An update cut short carried on first (resume), and what became of it said, with each window's
-    outcome once it brought them along; False when Ctrl-C stopped that wait, which ends the command."""
+def _carried_on(state_dir: Path, said: Said) -> bool:
+    """An update cut short carried on first (resume), and what became of it said, with its summary once
+    it brought the windows along; False when Ctrl-C stopped that wait, which ends the command."""
     try:
         resumed = resume(state_dir)
     except WaitStopped as stopped:
-        _say_outcomes(state_dir, stopped.state)
+        _say_summary(state_dir, stopped.state, said)
         return False
     if resumed is not None:
         Output.say(_resumed_line(resumed))
-        if resumed.step in ("done", "agents"):
-            _say_outcomes(state_dir, resumed)
+        if resumed.step in ENDED:
+            _say_summary(state_dir, resumed, said)
     return True
 
 
 def _for_real(where: Folders, args: argparse.Namespace, said: Said) -> int:
     """An update cut short carried on first; then, under update.lock (an update running is refused
     here, whatever its step, before anything is called up to date), up to date or the update."""
-    if not _carried_on(where.state_dir):
+    if not _carried_on(where.state_dir, said):
         return 0
     with update_state.one_update(where.state_dir):
         old_root = installed(Path(args.from_root))
@@ -614,18 +692,29 @@ def _note(state_dir: Path, window: str, kind: str) -> int:
     return 0
 
 
+def _say_advance(line: str) -> None:
+    print(f"bosun update: {line.strip()}", flush=True)
+
+
 def _advance(state_dir: Path) -> int:
     """`bosun update advance`, each tick of the check-in loop while windows are pending: a turn at
-    them, under update.lock; quietly nothing while the update itself still runs (and holds it)."""
+    them, under update.lock; quietly nothing while the update itself still runs (and holds it). The
+    turn that takes the last answer ends the update: its summary is saved next to the backup."""
     try:
         with update_state.one_update(state_dir):
             if update_state.windows_pending(state_dir):
-                update_windows.turn(
-                    state_dir, lambda line: print(f"bosun update: {line.strip()}", flush=True)
-                )
+                update_windows.turn(state_dir, _say_advance)
+                _finished_by_the_loop(state_dir)
     except update_state.UpdateRunning:
         pass  # the update brings them along itself
     return 0
+
+
+def _finished_by_the_loop(state_dir: Path) -> None:
+    state = update_state.read(state_dir)
+    if state is not None and state.step == "done":
+        saved = _saved(state, update_summary.render(summary_of(state_dir, state)))
+        _say_advance(f"done; its summary is in {saved}" if saved else "done")
 
 
 def agents_command(argv: Sequence[str]) -> int:
@@ -642,8 +731,9 @@ def agents_command(argv: Sequence[str]) -> int:
 
 def main(argv: Sequence[str]) -> int:
     """The command, and with --json one object on stdout on every path: the plan (null when none was
-    made: up to date, refused, a failure before it) and the update's record as it stands. `note` and
-    `advance` are what the agents and the check-in loop run (agents_command)."""
+    made: up to date, refused, a failure before it), the update's record as it stands, and the summary
+    (null unless an update ended in this run). `note` and `advance` are what the agents and the
+    check-in loop run (agents_command)."""
     if argv and argv[0] in AGENT_COMMANDS:
         return agents_command(argv)
     args = build_parser().parse_args(list(argv))
@@ -652,7 +742,8 @@ def main(argv: Sequence[str]) -> int:
     code = _said(args, said)
     if args.json:
         plan = dataclasses.asdict(said.plan) if said.plan else None
-        print(json.dumps({"plan": plan, "update": _record_now()}, indent=2))
+        summary = update_summary.as_json(said.summary) if said.summary else None
+        print(json.dumps({"plan": plan, "update": _record_now(), "summary": summary}, indent=2))
     return code
 
 

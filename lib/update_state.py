@@ -106,10 +106,28 @@ class UpdateState:
     # what was done to it, in order.
     windows: Mapping[str, tuple[str, ...]] = dataclasses.field(default_factory=dict)
     reread: tuple[str, ...] = ()  # the files this update changed that the orchestrator re-reads
+    # What the summary says (lib/update_summary.py), kept as each step learns it, so an update carried
+    # on by a later run, or finished by the check-in loop, says the same as one that ran in one go: the
+    # plan said yes to (update_plan.as_record), each migration that ran (migrations.Applied.as_record),
+    # what changed in bosun.env and the copy kept of it, and the launchd jobs reloaded.
+    plan: Mapping[str, Any] = dataclasses.field(default_factory=dict)
+    migrated: tuple[str, ...] = ()
+    config_changed: tuple[str, ...] = ()
+    reloaded: tuple[str, ...] = ()
 
 
-_TUPLES = ("restorable", "pending", "user_changes", "findings", "reread")
+_TUPLES = (
+    "restorable",
+    "pending",
+    "user_changes",
+    "findings",
+    "reread",
+    "migrated",
+    "config_changed",
+    "reloaded",
+)
 _MAPPINGS = ("windows",)  # of window names to lists of strings
+_OBJECTS = ("plan",)  # JSON objects, read as they are (their reader checks their parts)
 
 
 _INTS = ("hold_until", "freeze_ms")
@@ -138,6 +156,8 @@ def _right_type(name: str, value: Any) -> bool:
         return _is_strings(value)
     if name in _MAPPINGS:
         return _is_mapping_of_strings(value)
+    if name in _OBJECTS:
+        return isinstance(value, dict)
     if name in _INTS:
         return _is_int(value)
     return isinstance(value, str)

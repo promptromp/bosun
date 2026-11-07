@@ -5,8 +5,8 @@ update's record and hold, backups, version folders, the write gate and the migra
 `bosun update` plans, rehearses, holds, freezes, releases and brings the agents along
 (`lib/update_facts.py` gathers the plan's facts, `lib/update.py` carries it out, behind the wrapper
 `libexec/bosun-update`; `lib/update_agents.py` decides what each window gets, `lib/update_windows.py`
-carries it out, `lib/update_notes.py` keeps the windows' notes); the summary is still to come.
-The plan:
+carries it out, `lib/update_notes.py` keeps the windows' notes) and ends with its summary
+(`lib/update_summary.py`). The plan:
 [docs/plans/update.md](../plans/update.md).
 
 ## Why
@@ -351,7 +351,8 @@ update` ends there, with the summary.
 ### The summary
 
 The update prints the summary when it ends and saves it as `summary.md` next to the backup; `--json`
-prints it as JSON instead. For example (fictional windows):
+prints it as JSON instead (as `summary` in its one object, beside the plan and the record). For
+example (fictional windows):
 
 ```text
 bosun updated: 95545b0 -> c41b186 (23 commits) in 2m 41s
@@ -370,6 +371,25 @@ Agents
 Backup: ~/.local/state/bosun/backups/20261104-153207-95545b0-c41b186 (3.1 MB)
 Going back: docs/setup.md#going-back
 ```
+
+Settled while building it:
+
+- **The same however it ends.** Each step keeps in the update's record what the summary needs as it
+  learns it: the plan said yes to when it starts, each migration's line and what changed in
+  `bosun.env` at the switch, the jobs reloaded in the release. So an update carried on by the next
+  `bosun update`, or finished by the check-in loop, says what one that ran in one go would; a record
+  an older bosun wrote, which kept none of it, says less, never something false.
+- **When.** It is said when the update ends, also when Ctrl-C stops the wait (the windows still
+  waited for say so), and saved as `summary.md` once the update is done, by whichever run finishes it:
+  the update itself, the next `bosun update`, or the check-in loop's last turn.
+- **What else it can say,** each only when there is something: what to change by hand in my own
+  files, under Config; the tasks handed out that keep their old text, with the `bosun delegate
+  --update` for each; and what was found after the switch (`bosun doctor`'s warnings, a job that
+  could not be reloaded). A window left alone says it kept running; the `checkin` window is not
+  listed. A backup that a `kg forget` has deleted since says so instead of its path ("deleted by a kg
+  forget since; going back past it is no longer possible"). A failed update names the backup it took.
+- **`bosun doctor`** lists what the last update left to me, from its record: the changes to make in my
+  own files, and the keys it added that `bosun.env` does not set, each with its default.
 
 ### `get.sh` on an existing install
 
@@ -502,7 +522,8 @@ Decided while building it:
   step, when it started, when its hold ends, the backup and what of it a put-back restores, the
   windows still to bring along, the changes to my own files, how long writes were paused
   (`freeze_ms`, from the stores' locks taken to their release), the error, and the findings after the switch (`bosun doctor`'s, and a job that
-  could not be reloaded). Each step is recorded before it starts, and the backup once it is taken, so
+  could not be reloaded); and for the summary, the plan, the migrations that ran, what changed in
+  `bosun.env` and the jobs reloaded. Each step is recorded before it starts, and the backup once it is taken, so
   no step past `backed-up` is recorded without it.
 - **The launchd jobs:** a job is reloaded only where its rendered plist differs or it is not loaded,
   and each rendered plist is checked before the job is touched. One that cannot be rendered, or renders

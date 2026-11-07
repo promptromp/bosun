@@ -349,11 +349,7 @@ def install_problem(old_root: Path, new_root: Path) -> list[str]:
 def config_renames(config_dir: Path) -> list[tuple[str, str]]:
     """Each config key bosun.env sets that this version renamed or removed, and its name now ("":
     removed)."""
-    try:
-        text = (config_dir / migrations.CONFIG_FILE).read_bytes().decode("utf-8", "surrogateescape")
-    except FileNotFoundError:
-        return []
-    assigned = {m["key"] for line in text.splitlines() if (m := migrations.ASSIGNMENT.match(line))}
+    assigned = migrations.assigned_keys(config_dir)
     return sorted((old, new) for old, new in migrations.config_names().items() if old in assigned)
 
 

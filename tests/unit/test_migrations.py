@@ -23,6 +23,7 @@ import knowledge
 import knowledge_store
 import ledger
 import migrations
+import update_state
 import validation
 
 
@@ -455,23 +456,74 @@ class TestValidateUnlocked(MigrationTest):
         self.assertFalse((Path(self.tmp.name) / "elsewhere").exists())  # it writes nothing
 
 
-class TestUserChanges(unittest.TestCase):
-    """bosun doctor lists what to change in my own files (USER_FILE_CHANGES), never applied."""
+class TestApplied(unittest.TestCase):
+    def test_a_migration_that_ran_reads_back_from_the_update_s_record(self) -> None:
+        applied = migrations.Applied("ledger", 1, 2, "412 items migrated: 3 kept: as they were")
+        self.assertEqual(applied.as_record(), "ledger 1 -> 2: 412 items migrated: 3 kept: as they were")
+        self.assertEqual(migrations.Applied.from_record(applied.as_record()), applied)
 
-    def test_each_change_is_a_line(self) -> None:
-        changes = (("sessions.yml", "rename model: to agent_model:"), ("tasks/", "add a status: line"))
-        out = io.StringIO()
-        with mock.patch.object(migrations, "USER_FILE_CHANGES", changes), contextlib.redirect_stdout(out):
-            self.assertEqual(migrations.main(["user-changes"]), 0)
+    def test_a_line_of_another_shape_is_none(self) -> None:
+        for text in ("", "ledger: 412 items migrated", "ledger one -> 2: x"):
+            self.assertIsNone(migrations.Applied.from_record(text), text)
+
+
+class TestAfterUpdate(unittest.TestCase):
+    """What the last update left to me, which bosun doctor lists: the changes to make in my own files
+    (never applied), and the config keys it added that bosun.env does not set."""
+
+    def setUp(self) -> None:
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.state = Path(tmp.name) / "state"
+        self.config = Path(tmp.name) / "config"
+        self.config.mkdir()
+
+    def record(self, step: str = "done", keys: tuple[str, ...] = ()) -> None:
+        state = update_state.UpdateState(
+            id="u1",
+            from_root="/Users/me/bosun-old",
+            to_root="/Users/me/bosun-new",
+            from_commit="aaa",
+            to_commit="bbb",
+            step=step,
+            started_at="2026-11-07T12:00:00+00:00",
+            hold_until=0,
+            user_changes=("sessions.yml: rename model: to agent_model:",),
+            plan={"keys_added": list(keys)},
+        )
+        update_state.write(self.state, state)
+
+    def test_my_file_changes_and_the_new_keys_bosun_env_does_not_set(self) -> None:
+        self.record(keys=("BOSUN_EXPORT_RETRIES", "BOSUN_EXPORT_TIMEOUT", "not a key; rm -rf"))
+        (self.config / "bosun.env").write_text("export BOSUN_EXPORT_TIMEOUT=30\n# BOSUN_EXPORT_RETRIES=2\n")
         self.assertEqual(
-            out.getvalue(), "sessions.yml: rename model: to agent_model:\ntasks/: add a status: line\n"
+            migrations.after_update(self.state, self.config),
+            [("change", "sessions.yml: rename model: to agent_model:"), ("key", "BOSUN_EXPORT_RETRIES")],
+        )
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            code = migrations.main(
+                ["after-update", "--state-dir", str(self.state), "--config-dir", str(self.config)]
+            )
+        self.assertEqual(code, 0)
+        self.assertEqual(
+            out.getvalue(), "change\tsessions.yml: rename model: to agent_model:\nkey\tBOSUN_EXPORT_RETRIES\n"
         )
 
-    def test_none_is_nothing(self) -> None:
-        out = io.StringIO()
-        with mock.patch.object(migrations, "USER_FILE_CHANGES", ()), contextlib.redirect_stdout(out):
-            migrations.main(["user-changes"])
-        self.assertEqual(out.getvalue(), "")
+    def test_nothing_without_a_record_or_before_the_update_brought_the_windows_along(self) -> None:
+        """Before then the update says them itself (doctor in its release would say them twice), and an
+        update put back or failed left nothing to change."""
+        self.assertEqual(migrations.after_update(self.state, self.config), [])
+        for step in ("planned", "migrated", "checked", "released", "failed", "restored"):
+            self.record(step, keys=("BOSUN_EXPORT_RETRIES",))
+            self.assertEqual(migrations.after_update(self.state, self.config), [], step)
+        self.record("agents", keys=("BOSUN_EXPORT_RETRIES",))
+        self.assertEqual(len(migrations.after_update(self.state, self.config)), 2)
+
+    def test_the_keys_bosun_env_sets(self) -> None:
+        self.assertEqual(migrations.assigned_keys(self.config), set())
+        (self.config / "bosun.env").write_text("A=1\n  export B=2\n#C=3\nD 4\n")
+        self.assertEqual(migrations.assigned_keys(self.config), {"A", "B"})
 
 
 if __name__ == "__main__":

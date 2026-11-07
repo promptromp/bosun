@@ -1,13 +1,17 @@
 """lib/update_plan.py: what an update would do, worked out from facts about the running version and
 the new one (docs/design/update.md, step 1, "the plan"). Pure: no file, process or git I/O. The
-caller gathers the facts and passes in `steps`, the migration path."""
+caller gathers the facts and passes in `steps`, the migration path. The update's record keeps the
+plan it carries out (as_record, from_record), for its summary."""
 
 from __future__ import annotations
 
+import dataclasses
 import fnmatch
+import json
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from enum import StrEnum
+from typing import Any
 
 
 PROMPTS = (
@@ -85,6 +89,8 @@ class Plan:
     user_changes: tuple[str, ...]
     blockers: tuple[str, ...]
     kinds: tuple[tuple[str, str], ...] = ()  # each window's kind (orchestrator, repo, checkin), as listed
+    # Each store's format on disk (0: none yet), in the new version's order of its stores.
+    formats: tuple[tuple[str, int], ...] = ()
 
 
 def _matches(path: str, patterns: Sequence[str]) -> bool:
@@ -163,7 +169,70 @@ def make_plan(  # noqa: PLR0913 - the facts the caller gathers, all keyword-only
         user_changes=tuple(f"{file}: {change}" for file, change in user_changes),
         blockers=tuple(blockers),
         kinds=tuple((w.name, w.kind) for w in windows),
+        formats=tuple((store, old.formats.get(store, target)) for store, target in new.formats.items()),
     )
+
+
+# ---- the plan in the update's record --------------------------------------------------------------
+
+
+def as_record(plan: Plan) -> dict[str, Any]:
+    """<plan> as the update's record keeps it: JSON's types only, so a record read back is equal."""
+    return dict(json.loads(json.dumps(dataclasses.asdict(plan))))
+
+
+def _listed(value: Any) -> list[Any]:
+    if not isinstance(value, list):
+        raise TypeError("not a list")
+    return value
+
+
+def _strings(value: Any) -> tuple[str, ...]:
+    return tuple(str(item) for item in _listed(value))
+
+
+def _pairs(value: Any) -> tuple[tuple[str, str], ...]:
+    return tuple((str(a), str(b)) for a, b in _listed(value))
+
+
+def _versions(value: Any) -> tuple[tuple[str, int, int], ...]:
+    return tuple((str(name), int(a), int(b)) for name, a, b in _listed(value))
+
+
+# How each part of a plan reads back from the record, and what it is without one (an older bosun's
+# record kept no plan) or when it is of another shape: that part is left empty, the rest read.
+_READ: dict[str, tuple[Callable[[Any], Any], Any]] = {
+    "from_commit": (str, ""),
+    "to_commit": (str, ""),
+    "commits": (_strings, ()),
+    "migrations": (_versions, ()),
+    "rules": (_versions, ()),
+    "keys_added": (_strings, ()),
+    "renames": (_pairs, ()),
+    "prompts": (_strings, ()),
+    "windows": (lambda value: tuple((str(n), Treatment(how)) for n, how in _listed(value)), ()),
+    "jobs": (_strings, ()),
+    "console": (lambda value: value is True, False),
+    "handed": (_strings, ()),
+    "user_changes": (_strings, ()),
+    "blockers": (_strings, ()),
+    "kinds": (_pairs, ()),
+    "formats": (lambda value: tuple((str(store), int(n)) for store, n in _listed(value)), ()),
+}
+
+
+def _part(data: Mapping[str, Any], name: str) -> Any:
+    read, empty = _READ[name]
+    try:
+        return read(data[name]) if name in data else empty
+    except (TypeError, ValueError):
+        return empty
+
+
+def from_record(data: Mapping[str, Any]) -> Plan:
+    """The plan an update's record keeps (as_record): a part it lacks, or holds in a shape this code
+    cannot read, is empty, so the summary says less, never something false."""
+    return Plan(**{name: _part(data, name) for name in _READ})
 
 
 def _section(title: str, lines: Sequence[str]) -> list[str]:

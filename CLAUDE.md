@@ -27,8 +27,9 @@ of truth, so don't copy rules into this file.
   short carried on; `update note` and `update advance`), `lib/update_agents.py` (the decisions, its
   only file the update's record: what each window gets turn by turn, the take-stock and update prompts,
   what came of each), `lib/update_windows.py` (carrying them out: bosun's commands, the update's wait
-  and its Ctrl-C, which the check-in loop carries on) and `lib/update_notes.py` (the windows' note
-  files); `reload_changed_jobs` in `lib/common.sh`
+  and its Ctrl-C, which the check-in loop carries on), `lib/update_notes.py` (the windows' note
+  files) and `lib/update_summary.py` (pure: the summary it ends with, from what each step kept in the
+  record, its text and `--json`); `reload_changed_jobs` in `lib/common.sh`
   (also install.sh's); its smoke section's next version is `tests/sandbox/update_patch.sh`.
 - `lib/common.sh`: config defaults (`load_config`) and shared helpers: the window list
   (`window_specs`: orchestrator, sessions.yml entries, checkin), tmux, the one

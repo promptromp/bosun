@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import sys
 import unittest
 from collections.abc import Mapping, Sequence
@@ -148,6 +149,64 @@ class TestMakePlan(unittest.TestCase):
     def test_nothing_changed_gives_an_empty_plan(self) -> None:
         got = plan(new=facts("bbb"))
         self.assertEqual((got.migrations, got.rules, got.prompts, got.blockers), ((), (), (), ()))
+
+    def test_each_store_s_format_on_disk_is_kept_in_the_new_version_s_order(self) -> None:
+        """For the summary's Data lines: a store not made yet is 0, one the new version adds is at its
+        format (it is made in it)."""
+        got = plan(
+            old=facts(formats={"knowledge": 0, "ledger": 1}),
+            new=facts("bbb", formats={"ledger": 2, "knowledge": 1, "outbox": 1}),
+            steps=lambda s, a, b: [(1, 2)],
+        )
+        self.assertEqual(got.formats, (("ledger", 1), ("knowledge", 0), ("outbox", 1)))
+
+
+class TestRecord(unittest.TestCase):
+    """The plan as the update's record keeps it (`plan` in update.json), for the summary of an update
+    carried on by a later run, or finished by the check-in loop."""
+
+    def full(self) -> up.Plan:
+        return plan(
+            new=facts(
+                "bbb",
+                formats={"ledger": 2},
+                rules={"ledger": 2},
+                keys=("A", "B"),
+                prompts={**BASE_PROMPTS, POLICY: "a2"},
+            ),
+            commits=["c1 first"],
+            windows=[
+                up.WindowFacts("acme-api", "repo", "busy", True),
+                up.WindowFacts("o", "orchestrator", "idle", False),
+            ],
+            jobs=["com.acme.bosun.watchdog"],
+            renames=[("OLD", "NEW")],
+            user_changes=[("sessions.yml", "rename the key")],
+            in_flight=[("task:1", "review")],
+            steps=lambda s, a, b: [(1, 2)],
+        )
+
+    def test_a_plan_reads_back_as_it_was(self) -> None:
+        full = self.full()
+        kept = json.loads(json.dumps(up.as_record(full)))
+        self.assertEqual(up.as_record(full), kept)  # JSON's types only, so a record read back is equal
+        self.assertEqual(up.from_record(kept), full)
+
+    def test_a_record_with_no_plan_reads_as_one_with_nothing_in_it(self) -> None:
+        empty = up.from_record({})
+        self.assertEqual((empty.commits, empty.formats, empty.windows, empty.console), ((), (), (), False))
+
+    def test_a_part_of_another_shape_is_left_empty_the_rest_read(self) -> None:
+        """A newer bosun's shape of one part, or one this code cannot read, costs only that part."""
+        kept = {
+            **up.as_record(self.full()),
+            "prompts": "orchestrator/policy.md",
+            "windows": [["o", "sideways"]],
+        }
+        got = up.from_record(kept)
+        self.assertEqual((got.prompts, got.windows), ((), ()))
+        self.assertEqual(got.keys_added, ("B",))
+        self.assertEqual(got.migrations, (("ledger", 1, 2),))
 
 
 class TestRender(unittest.TestCase):

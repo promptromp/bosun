@@ -104,18 +104,25 @@ check_update() {
   fi
 }
 
-# What to change in your own files for this version (USER_FILE_CHANGES in lib/migrations.py): an
-# update never edits sessions.yml, setup.sh, policy.md, learn.md, tasks/ or workstreams.json, and says
-# in its summary what to change. A section only when there is something to change.
-check_user_files() {
-  local changes line
-  if ! changes="$(python3 "$BOSUN_ROOT/lib/migrations.py" user-changes 2>&1)"; then
-    section "Your own files"
-    warn "could not list what to change in them: $changes"
-  elif [ -n "$changes" ]; then
-    section "Your own files (bosun update never changes them)"
-    while IFS= read -r line; do warn "change $line"; done <<<"$changes"
+# What the last update left to you (its record, update.json; docs/design/update.md), as its summary
+# said: what to change by hand in your own files, which an update never edits (sessions.yml, setup.sh,
+# policy.md, learn.md, tasks/, workstreams.json), and the config keys it added that bosun.env does not
+# set, so are at their defaults. A section only when there is something.
+check_after_update() {
+  local said kind what
+  if ! said="$(python3 "$BOSUN_ROOT/lib/migrations.py" after-update --state-dir "$BOSUN_STATE_DIR" --config-dir "$BOSUN_CONFIG_DIR" 2>&1)"; then
+    section "After the last update"
+    warn "could not read what it left to you: $said"
+    return
   fi
+  [ -n "$said" ] || return 0
+  section "After the last update"
+  while IFS=$'\t' read -r kind what; do
+    case "$kind" in
+      change) warn "change by hand: $what (bosun update never changes your own files)" ;;
+      key) ok "new key, at its default: $what=${!what:-}" ;; # a shell name: after-update checks it
+    esac
+  done <<<"$said"
 }
 
 # Knowledge (docs/design/knowledge.md): whether there is a knowledge base, what it holds, and the
@@ -426,7 +433,7 @@ section "Schedule"
 check_schedule
 section "Power and session"
 check_power
-check_user_files
+check_after_update
 section "Setup steps (dry run)"
 "$BOSUN" setup --dry-run 2>&1 | sed 's/^/  /'
 

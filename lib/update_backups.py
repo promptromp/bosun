@@ -5,7 +5,9 @@ A backup is a folder `$BOSUN_STATE_DIR/backups/<time>-<from>-<to>/` holding `sta
 `config/<name>` for everything the file tables class as ledger, knowledge or settings, plus the
 working files that carry work in flight (IN_FLIGHT). It is made with APFS clones where there are
 any, and ends with its manifest (every file with its SHA-256, both versions, the format versions),
-so a folder without one was cut short and is no backup. The last KEEP are kept.
+so a folder without one was cut short and is no backup. The last KEEP are kept. Once its update is
+done, the folder also holds that update's summary (SUMMARY, saved by lib/update.py), which no
+restore reads.
 
 A deletion of a person deletes every backup (delete_all, called as the last step of the knowledge
 base's forget_in_journal): a backup holds the whole knowledge base, so restoring one from before

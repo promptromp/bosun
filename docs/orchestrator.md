@@ -169,8 +169,8 @@ wait: the `checkin` window's loop then takes a turn at those windows each tick (
 and restarts each once its turn is over; without a check-in loop, run `bosun update advance` by hand.
 A window that never answers stays waited for; `bosun update note --window <w> --status` ends its wait
 by hand (the next turn takes it, or the next `bosun update`, which settles answered windows first). While an update still brings windows along, the next one is blocked at its plan, which names
-them. Tasks already handed to repo sessions keep their text; the plan names them, so you can send
-`bosun delegate --update` where a changed rule matters.
+them. Tasks already handed to repo sessions keep their text; the plan and the summary the update ends with
+name them, so you can send `bosun delegate --update` where a changed rule matters.
 
 ## Ledger: idempotency and state
 

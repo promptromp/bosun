@@ -5,10 +5,12 @@ The end to end is the smoke suite's "bosun update" section. Fictional data."""
 from __future__ import annotations
 
 import contextlib
+import dataclasses
 import fcntl
 import io
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -16,6 +18,7 @@ import tempfile
 import threading
 import unittest
 from collections.abc import Callable, Iterator
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 from unittest import mock
@@ -33,6 +36,7 @@ import update_gate
 import update_notes
 import update_plan
 import update_state
+import update_summary
 import update_windows
 import versions
 from update_state import UpdateState
@@ -111,6 +115,14 @@ class World(unittest.TestCase):
         update_state.write(self.state, state)
         return state
 
+    def backup(self, size: int = 2000) -> Path:
+        """A backup folder as update_backups.take leaves one: its files, and the manifest."""
+        folder = self.state / update_backups.BACKUPS_DIR / f"20261107-120000-{FROM[:7]}-{TO[:7]}"
+        (folder / "state").mkdir(parents=True)
+        (folder / "state" / "ledger.json").write_bytes(b"x" * (size - 2))
+        (folder / update_backups.MANIFEST).write_text("{}")
+        return folder
+
     def link(self) -> Path:
         current = versions.current(self.install)
         assert current is not None
@@ -169,6 +181,30 @@ class FreezeTest(World):
         self.assertEqual(self.link().resolve(), self.new.resolve())
         self.assertGreaterEqual(done.freeze_ms, 0)
         self.assertEqual(update_state.read(self.state), done)
+
+    def test_what_the_migrations_did_is_recorded_with_bosun_env_s_copy_named(self) -> None:
+        """For the summary, also of an update carried on by a later run: each migration's line, and
+        bosun.env's change with the copy kept of it, which has the backup's time in its name."""
+        (self.config / "bosun.env").write_text("BOSUN_OLD_KEY=7\n")
+        ran = [migrations.Applied("ledger", 1, 2, "2 items migrated")]
+        with (
+            mock.patch.object(migrations, "run", return_value=ran),
+            mock.patch.object(migrations, "CONFIG_RENAMES", (("BOSUN_OLD_KEY", "BOSUN_NEW_KEY"),)),
+        ):
+            done = update.freeze(
+                self.record("holding"),
+                a_plan(renames=(("BOSUN_OLD_KEY", "BOSUN_NEW_KEY"),)),
+                self.state,
+                self.config,
+            )
+        self.assertEqual(done.step, "checked")
+        self.assertEqual(done.migrated, ("ledger 1 -> 2: 2 items migrated",))
+        stamp = Path(done.backup).name[: len("20261107-120000")]
+        copy = f"bosun.env.pre-update-{stamp}"
+        self.assertEqual(
+            done.config_changed, (f"bosun.env: BOSUN_OLD_KEY is now BOSUN_NEW_KEY (before: {copy})",)
+        )
+        self.assertEqual((self.config / copy).read_text(), "BOSUN_OLD_KEY=7\n")
 
     def test_freeze_ms_counts_from_the_locks_taken_not_the_wait_for_them(self) -> None:
         """A writer holding the ledger's lock when the freeze starts delays it; writes were not
@@ -303,7 +339,7 @@ class ReleaseTest(World):
             return subprocess.CompletedProcess(args, 0, "", "")
 
         with (
-            mock.patch.object(update, "_reload_jobs", return_value=[]),
+            mock.patch.object(update, "_reload_jobs", return_value=([], [])),
             mock.patch.object(
                 update_facts, "open_windows", return_value=[{"kind": "checkin", "window": True}]
             ),
@@ -327,6 +363,22 @@ class ReleaseTest(World):
             done = update.release(self.record("checked"))
         self.assertEqual((done.step, done.findings), ("released", ("launchd: bootstrap failed",)))
         self.assertEqual(self.link().resolve(), self.old.resolve())  # nothing pointed anywhere
+
+    def test_the_jobs_reloaded_are_recorded_with_those_of_a_release_before(self) -> None:
+        """A release carried on (cut short after the reload) keeps the jobs the first one reloaded."""
+        with (
+            mock.patch.object(
+                update_facts,
+                "shell",
+                return_value=subprocess.CompletedProcess([], 0, "com.bosun.morning.watchdog\n", ""),
+            ),
+            mock.patch.object(update_facts, "open_windows", return_value=[]),
+            mock.patch.object(update, "_doctor", return_value=[]),
+            mock.patch.object(update, "_prune"),
+        ):
+            done = update.release(self.record("checked", reloaded=("com.bosun.morning",)))
+        self.assertEqual(done.reloaded, ("com.bosun.morning", "com.bosun.morning.watchdog"))
+        self.assertEqual(update_state.read(self.state), done)
 
     def test_what_doctor_fails_or_warns_about_is_kept(self) -> None:
         said = "Tools\n  ok    tmux\n  warn  on battery\n  FAIL  login keychain locks on sleep\nall\n"
@@ -517,20 +569,96 @@ class RunTest(World):
             code, out, _ = self.main("--yes")
         self.assertEqual(code, 0)
         self.assertIn("carried on to the end", out)
-        self.assertIn("api: restarted; resumed: waiting on CI for PR 12", out)
+        self.assertRegex(
+            out, re.compile(r"^Agents\n  api +restarted; resumed: waiting on CI for PR 12$", re.MULTILINE)
+        )
+        self.assertIn("Going back: docs/setup.md#going-back\nbosun is up to date (bbbbbbb).\n", out)
+
+    def test_json_carries_the_summary_of_an_update_that_ended(self) -> None:
+        windows = {"api": ("repo", "restart", "restarted", "answered")}
+        done = update_state.advanced(self.record("released"), "done", windows=windows)
+        update_notes.note(self.state, "api", "status", "resumed: waiting on CI for PR 12")
+        with self.resumed_wait(done):
+            code, out, err = self.main("--yes", "--json")
+        said = json.loads(out)
+        self.assertEqual(code, 0)
+        self.assertEqual(said["summary"]["agents"], {"api": "restarted; resumed: waiting on CI for PR 12"})
+        self.assertEqual(said["summary"]["to_commit"], TO)
+        self.assertIn("bosun updated:", err)  # the text goes to stderr
 
     def test_json_keeps_plan_and_update_on_every_path(self) -> None:
         self.record("done")
         code, out, _ = self.main("--yes", "--json")
         self.assertEqual(code, 0)
         said = json.loads(out)
-        self.assertEqual((said["plan"], said["update"]["step"]), (None, "done"))
+        self.assertEqual((said["plan"], said["update"]["step"], said["summary"]), (None, "done", None))
         self.record("released")
         with update_state.one_update(self.state):
             code, out, err = self.main("--yes", "--json")
         said = json.loads(out)
         self.assertEqual((code, said["plan"], said["update"]["step"]), (1, None, "released"))
         self.assertIn("an update is running", err)
+
+
+class SummaryTest(World):
+    """What the update says when it ends: the summary, built from its record, and saved as summary.md
+    in the backup folder once the update is done."""
+
+    def ended(self, step: str = "done", **fields: Any) -> UpdateState:
+        started = (datetime.now(UTC) - timedelta(seconds=161)).isoformat(timespec="seconds")
+        plan = update_plan.as_record(dataclasses.replace(a_plan(), formats=(("ledger", 1), ("knowledge", 1))))
+        return dataclasses.replace(
+            self.record(step, **fields),
+            started_at=started,
+            plan=plan,
+            migrated=("ledger 1 -> 2: 2 items migrated",),
+        )
+
+    def said(self, state: UpdateState) -> tuple[str, update.Said]:
+        said, out = update.Said(), io.StringIO()
+        with contextlib.redirect_stdout(out):
+            update._say_summary(self.state, state, said)
+        return out.getvalue(), said
+
+    def test_an_update_that_ended_says_its_summary_and_saves_it_next_to_the_backup(self) -> None:
+        backup = self.backup(size=2000)
+        out, said = self.said(self.ended(backup=str(backup)))
+        assert said.summary is not None
+        self.assertEqual(out, update_summary.render(said.summary))
+        self.assertIn("  ledger      format 1 -> 2 (2 items migrated)\n", out)
+        self.assertIn(f"Backup: {backup} (2.0 KB)", out)
+        self.assertIn(said.summary.seconds, (161, 162))
+        self.assertEqual(said.summary.backup_bytes, 2000)  # what the files hold, the summary not counted
+        self.assertEqual((backup / "summary.md").read_text(), f"```text\n{out}```\n")
+
+    def test_one_whose_wait_was_stopped_is_said_but_saved_only_once_done(self) -> None:
+        backup = self.backup()
+        state = self.ended(
+            "agents", backup=str(backup), pending=("api",), windows={"api": ("repo", "restart")}
+        )
+        out, said = self.said(state)
+        self.assertRegex(out, re.compile(r"^  api +nothing yet; still waited for$", re.MULTILINE))
+        self.assertIsNotNone(said.summary)
+        self.assertFalse((backup / "summary.md").exists())
+
+    def test_a_backup_a_forget_deleted_is_said_so_and_never_made_again(self) -> None:
+        gone = self.state / update_backups.BACKUPS_DIR / "20261107-120000-aaaaaaa-bbbbbbb"
+        out, _ = self.said(self.ended(backup=str(gone)))
+        self.assertIn("Backup: deleted by a kg forget since; going back past it is no longer possible", out)
+        self.assertFalse(gone.exists())
+
+    def test_a_failed_update_names_the_backup_it_took(self) -> None:
+        """So that it is there in case I need it."""
+        backup = self.backup()
+        for step in ("failed", "migrated"):
+            out = io.StringIO()
+            with contextlib.redirect_stdout(out):
+                update._failed(self.record(step, backup=str(backup), error="the ledger's check failed"))
+            self.assertIn(f"The backup it took: {backup}.", out.getvalue(), step)
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            update._failed(self.record("failed", error="the rehearsal failed"))
+        self.assertNotIn("backup", out.getvalue())
 
 
 class AgentsCommandTest(World):
@@ -593,6 +721,23 @@ class AgentsCommandTest(World):
             self.assertEqual(self.main("advance")[0], 0)
         turn.assert_called_once()
         self.assertEqual(turn.call_args.args[0], self.state)
+
+    def test_advance_that_finishes_the_update_saves_its_summary(self) -> None:
+        """The check-in loop's turn that takes the last answer ends the update: its summary is saved."""
+        backup = self.backup()
+        self.record("agents", backup=str(backup), pending=("api",), windows={"api": ("repo", "restart")})
+
+        def last_answer(state_dir: Path, say: Any) -> list[str]:
+            state = update_state.read(state_dir)
+            assert state is not None
+            update_state.write(state_dir, update_state.advanced(state, "done", pending=()))
+            return []
+
+        with mock.patch.object(update_windows, "turn", side_effect=last_answer):
+            code, out, _ = self.main("advance")
+        self.assertEqual(code, 0)
+        self.assertIn("bosun updated:", (backup / "summary.md").read_text())
+        self.assertIn(f"bosun update: done; its summary is in {backup / 'summary.md'}", out)
 
     def test_advance_with_nothing_pending_does_nothing(self) -> None:
         for step in ("done", "released"):

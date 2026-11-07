@@ -25,7 +25,8 @@ The config: a new key needs nothing, as the defaults in lib/common.sh apply; a k
 removed (CONFIG_RENAMES) is edited in bosun.env, which is kept first as bosun.env.pre-update-<time>.
 My own files (sessions.yml, setup.sh, policy.md, learn.md, tasks/, workstreams.json) are never
 edited: what to change in one is in USER_FILE_CHANGES, for the plan, the summary and bosun doctor
-to say.
+to say. Doctor reads it from the last update's record (after_update), with the config keys that
+update added and bosun.env does not set.
 """
 
 from __future__ import annotations
@@ -44,6 +45,8 @@ import journal
 import knowledge_store
 import ledger
 import update_gate
+import update_plan
+import update_state
 
 
 CONFIG_FILE = "bosun.env"
@@ -51,6 +54,11 @@ CONFIG_FILE = "bosun.env"
 ASSIGNMENT = re.compile(r"^(?P<lead>\s*(?:export\s+)?)(?P<key>[A-Za-z_][A-Za-z0-9_]*)=")
 KEY = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")  # a config key: a shell name
 SUMMARY_COUNT = 1  # what check_registry formats each summary with
+# A migration that ran, as the update's record keeps it (Applied.as_record).
+APPLIED = re.compile(r"(?P<store>[a-z_]+) (?P<from>\d+) -> (?P<to>\d+): (?P<line>.*)", re.DOTALL)
+# The steps at which the last update left me what after_update lists: it has brought the windows along
+# or does, and said so in its summary (doctor in its release would say it twice).
+LEFT_TO_ME = ("agents", "done")
 
 
 class MigrationError(ValueError):
@@ -92,6 +100,18 @@ class Applied:
     from_version: int
     to_version: int
     line: str
+
+    def as_record(self) -> str:
+        """As the update's record keeps it: "ledger 1 -> 2: 412 items migrated"."""
+        return f"{self.store} {self.from_version} -> {self.to_version}: {self.line}"
+
+    @classmethod
+    def from_record(cls, text: str) -> Applied | None:
+        """The migration <text> records (as_record); None for a line of another shape."""
+        found = APPLIED.fullmatch(text)
+        if found is None:
+            return None
+        return cls(found["store"], int(found["from"]), int(found["to"]), found["line"])
 
 
 # Every migration, in order (see the module's docstring for what each must do). None yet.
@@ -321,6 +341,15 @@ def _replace(path: Path, data: bytes, mode: int) -> None:
     journal.replace_durably(tmp, path)
 
 
+def assigned_keys(config_dir: Path) -> set[str]:
+    """The keys <config_dir>'s bosun.env assigns (NAME=..., export NAME=...); none without one."""
+    try:
+        text = (config_dir / CONFIG_FILE).read_bytes().decode("utf-8", "surrogateescape")
+    except FileNotFoundError:
+        return set()
+    return {found["key"] for line in text.splitlines() if (found := ASSIGNMENT.match(line))}
+
+
 def write_config(config_dir: Path, now: datetime) -> list[str]:
     """CONFIG_RENAMES applied to <config_dir>'s bosun.env (migrate_config), and a line per key
     changed. When anything changed, the file as it was is kept first, in <config_dir>
@@ -342,14 +371,33 @@ def write_config(config_dir: Path, now: datetime) -> list[str]:
     return said
 
 
+def after_update(state_dir: Path, config_dir: Path) -> list[tuple[str, str]]:
+    """What the last update left me, from its record once it brings the windows along (LEFT_TO_ME):
+    each change to make in one of my own files ("change", from USER_FILE_CHANGES when it planned), and
+    each config key it added that bosun.env does not set, so is at its default ("key"). Nothing for an
+    update that failed or was put back: the version it came from runs."""
+    state = update_state.read(state_dir)
+    if state is None or state.step not in LEFT_TO_ME:
+        return []
+    assigned = assigned_keys(config_dir)
+    keys = update_plan.from_record(state.plan).keys_added
+    return [
+        *(("change", change) for change in state.user_changes),
+        *(("key", key) for key in keys if KEY.fullmatch(key) and key not in assigned),
+    ]
+
+
 def main(argv: Sequence[str]) -> int:
-    """`user-changes`: a line per change to make in one of my own files (USER_FILE_CHANGES), which
-    `bosun doctor` lists; nothing when there is none."""
+    """`after-update --state-dir <dir> --config-dir <dir>`: what the last update left me
+    (after_update), a line each, its kind and a tab first, which `bosun doctor` lists; nothing when
+    there is none."""
     parser = argparse.ArgumentParser(prog="migrations.py")
-    parser.add_argument("command", choices=("user-changes",))
-    parser.parse_args(list(argv))
-    for file, change in USER_FILE_CHANGES:
-        print(f"{file}: {change}")
+    parser.add_argument("command", choices=("after-update",))
+    parser.add_argument("--state-dir", type=Path, required=True)
+    parser.add_argument("--config-dir", type=Path, required=True)
+    args = parser.parse_args(list(argv))
+    for kind, what in after_update(args.state_dir, args.config_dir):
+        print(f"{kind}\t{' '.join(what.split())}")
     return 0
 
 
