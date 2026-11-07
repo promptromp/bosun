@@ -120,12 +120,15 @@ class RecordTest(unittest.TestCase):
 
     def test_a_record_written_before_the_summary_s_parts_reads_with_them_empty(self) -> None:
         """A record of an update cut short by a bosun that kept no summary parts, carried on by this one."""
-        added = ("plan", "migrated", "config_changed", "reloaded")
+        added = ("plan", "migrated", "config_changed", "reloaded", "doctor_before")
         earlier = {k: v for k, v in dataclasses.asdict(state("released")).items() if k not in added}
         (self.dir / "update.json").write_text(json.dumps(earlier))
         found = update_state.load(self.dir)
         assert found is not None
-        self.assertEqual((found.plan, found.migrated, found.config_changed, found.reloaded), ({}, (), (), ()))
+        self.assertEqual(
+            (found.plan, found.migrated, found.config_changed, found.reloaded, found.doctor_before),
+            ({}, (), (), (), ()),
+        )
 
     def test_the_summary_s_parts_are_read_back(self) -> None:
         full = update_state.advanced(
@@ -135,6 +138,7 @@ class RecordTest(unittest.TestCase):
             migrated=("ledger 1 -> 2: 412 items migrated",),
             config_changed=("bosun.env: BOSUN_OLD is now BOSUN_NEW (before: bosun.env.pre-update-x)",),
             reloaded=("com.bosun.morning.watchdog",),
+            doctor_before=("FAIL: gh is not logged in: run 'gh auth login'",),
         )
         update_state.write(self.dir, full)
         self.assertEqual(update_state.read(self.dir), full)

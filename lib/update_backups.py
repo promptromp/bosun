@@ -17,6 +17,7 @@ No store (ledger, knowledge) is imported here: the stores import this module."""
 
 from __future__ import annotations
 
+import errno
 import fnmatch
 import hashlib
 import json
@@ -56,6 +57,7 @@ _CHUNK = 1 << 20
 # What a file put back is written as first, beside it (a row in both file tables of uninstall_plan).
 RESTORING = ".{name}.restoring"
 _SIDE_AND_NAME = 2  # a prefix names at least a side and an entry: state/<name>
+REMOVE_TRIES = 5  # how often a deletion tries a folder that gained a file meanwhile
 
 
 class BackupError(Exception):
@@ -404,14 +406,27 @@ def prune(state_dir: Path, keep: int = KEEP) -> list[Path]:
     return gone
 
 
+def _removed(folder: Path) -> None:
+    """<folder>, whole, if it is there. A file written into it meanwhile (an update saving its
+    summary.md, which takes no lock a kg forget holds) leaves a folder that is not empty when its turn
+    comes: that is tried again, REMOVE_TRIES times, so the deletion is never cut short by it. Anything
+    else raises."""
+    for attempt in range(REMOVE_TRIES):
+        if not folder.is_dir():
+            return
+        try:
+            shutil.rmtree(folder)
+        except OSError as exc:
+            if exc.errno not in (errno.ENOTEMPTY, errno.ENOENT) or attempt == REMOVE_TRIES - 1:
+                raise
+        else:
+            return
+
+
 def delete_all(state_dir: Path) -> int:
     """Every backup, whole, and a rehearsal copy left in update/rehearsal; returns how many backups.
     A failure raises, so a deletion that could not finish is not taken for done."""
     count = len(listed(state_dir))
-    folder = state_dir / BACKUPS_DIR
-    if folder.is_dir():
-        shutil.rmtree(folder)
-    rehearsal = state_dir / REHEARSAL
-    if rehearsal.is_dir():
-        shutil.rmtree(rehearsal)
+    _removed(state_dir / BACKUPS_DIR)
+    _removed(state_dir / REHEARSAL)
     return count

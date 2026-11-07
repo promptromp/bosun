@@ -64,6 +64,7 @@ CLOSED = "closed"
 STARTED = (ASKED_REREAD, RESTARTED, RELAUNCHED, NEXT_CONVERSATION)
 FINISHED = (ANSWERED, CLOSED)
 NOT_PENDING = (Treatment.LEAVE, Treatment.RESTART_LOOP)  # the checkin window's loop is the release's
+PROMPTS_DIR = "orchestrator"  # the folder of bosun's prompts, left out of their names
 
 TAKE_STOCK_PROMPT = (
     "bosun will restart this session for an update ({from_} -> {to}), which ends your background "
@@ -365,21 +366,34 @@ def to_bring_along(
     return {name: (kinds[name], how.value) for name, how in windows if how not in NOT_PENDING}
 
 
+def _prompt_name(path: str) -> str:
+    """A prompt file the orchestrator re-reads, as bosun names it (orchestrator/tasks/review.md:
+    tasks/review.md), from its path through the install link."""
+    return path.rsplit(f"/{PROMPTS_DIR}/", 1)[-1]
+
+
+def _what_came(window: str, entry: Sequence[str], notes: Notes, asked: str) -> str:
+    """What came of <window>, whose record is <entry>: what was done (<asked> for its re-read), then
+    its answer, or where the background work it listed is kept when it started its next conversation."""
+    done = [asked if what == ASKED_REREAD else what for what in entry[2:] if what != ANSWERED]
+    line = ", ".join(done) or "nothing yet"
+    if NEXT_CONVERSATION in done:
+        listed = notes.read(window, STOCK) is not None
+        return line + (f" (the background work it listed: {notes.where(window, STOCK)})" if listed else "")
+    answer = notes.read(window, STATUS)
+    return line + (f"; {answer.splitlines()[0]}" if answer and ANSWERED in entry else "")
+
+
 def outcomes(state: UpdateState, notes: Notes) -> list[tuple[str, str]]:
-    """Each window brought along, and what came of it in a line: what was done, its answer, where the
-    background work it listed is kept when it never got it back (it started its next conversation),
-    or that it is still waited for."""
-    found = []
-    for window, entry in state.windows.items():
-        done = [what for what in entry[2:] if what != ANSWERED]
-        line = ", ".join(done) or "nothing yet"
-        answer = notes.read(window, STATUS)
-        if NEXT_CONVERSATION in done:
-            if notes.read(window, STOCK) is not None:
-                line += f" (the background work it listed: {notes.where(window, STOCK)})"
-        elif answer and ANSWERED in entry:
-            line += f"; {answer.splitlines()[0]}"
-        if window in state.pending:
-            line += "; still waited for"
-        found.append((window, line))
-    return found
+    """Each window brought along, and what came of it in a line: what was done (the files it was asked
+    to re-read named), its answer, where the background work it listed is kept when it never got it
+    back (it started its next conversation), or that it is still waited for."""
+    asked = f"{ASKED_REREAD} {', '.join(map(_prompt_name, state.reread))}" if state.reread else ASKED_REREAD
+    return [
+        (
+            window,
+            _what_came(window, entry, notes, asked)
+            + ("; still waited for" if window in state.pending else ""),
+        )
+        for window, entry in state.windows.items()
+    ]

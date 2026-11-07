@@ -23,14 +23,19 @@
 #      only that runs (a restart ends it); a busy one is waited for, one waiting for you is never
 #      touched. Each gets a prompt to check for anything it missed and carry on, and answers with its
 #      status; the update waits for every answer, saying which windows it waits for. Ctrl-C leaves
-#      them to the check-in loop, which restarts each once its turn is over.
+#      them to the check-in loop, which restarts each once its turn is over;
+#   7. ends with a summary of what it did: the migrations and version bumps, the config it changed and
+#      its new keys, what to change by hand in your own files, the prompts that changed, the jobs
+#      reloaded, what came of each window, what fails after the switch that did not before, and where
+#      the backup is. Once the update is done, it is saved as summary.md in the backup's folder.
 # An update cut short (Ctrl-C, a crash, a power cut) is carried on by the next `bosun update`: put back
 # if it stopped while writes were paused (the next write to a store does that too), finished if its
 # checks had passed. With nothing new on the branch it says bosun is up to date.
 #   --dry-run  show the plan, and change nothing
 #   --yes      go ahead without asking
-#   --json     one JSON object on every path: the plan (null when none was made: up to date, refused)
-#              and the update's record as it stands; what it says goes to stderr
+#   --json     one JSON object on every path: the plan (null when none was made: up to date, refused),
+#              the update's record as it stands, and the summary (null unless an update ended in
+#              this run); what it says goes to stderr
 #
 # What the agents and the check-in loop run while it brings the windows along:
 #   bosun update note --window <w> --stock|--status

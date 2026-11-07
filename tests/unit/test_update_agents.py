@@ -414,5 +414,41 @@ class PromptTest(unittest.TestCase):
         self.assertIn('if nothing runs any more, save "nothing running"', prompt)
 
 
+class OutcomesTest(unittest.TestCase):
+    """What came of each window, in a line, for the summary."""
+
+    def record(self, reread: tuple[str, ...]) -> UpdateState:
+        return UpdateState(
+            id="u1",
+            from_root="/Users/me/.local/share/bosun-versions/aaaaaaa11111",
+            to_root="/Users/me/.local/share/bosun-versions/bbbbbbb22222",
+            from_commit=FROM,
+            to_commit=TO,
+            step="done",
+            started_at="2026-11-07T12:00:00+00:00",
+            hold_until=0,
+            windows={"orchestrator": ("orchestrator", "re-read", "asked to re-read", "answered")},
+            reread=reread,
+        )
+
+    def test_the_orchestrator_s_line_names_the_files_it_was_asked_to_re_read(self) -> None:
+        notes = MemoryNotes()
+        notes.save("orchestrator", "status", "checked in (2 events from the update)")
+        reread = (POLICY, "/Users/me/.local/share/bosun/orchestrator/tasks/review.md")
+        self.assertEqual(
+            update_agents.outcomes(self.record(reread), notes),
+            [
+                (
+                    "orchestrator",
+                    "asked to re-read policy.md, tasks/review.md; checked in (2 events from the update)",
+                )
+            ],
+        )
+        self.assertEqual(
+            update_agents.outcomes(self.record(()), notes),
+            [("orchestrator", "asked to re-read; checked in (2 events from the update)")],
+        )
+
+
 if __name__ == "__main__":
     unittest.main()

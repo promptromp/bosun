@@ -1,22 +1,22 @@
 """What `bosun update` says when it ends (docs/design/update.md, "The summary"): the commits and how
 long it took; each store's migrations and version bumps; the config files it changed, the new keys
 and what to change by hand in my own files; how many prompts changed; the launchd jobs reloaded; the
-handed tasks that keep their old text; what came of each window; what was found after the switch;
-and where the backup is.
+handed tasks that keep their old text; what came of each window; what fails after the switch that
+did not before; and where the backup is.
 
-Pure: build, render and as_json take values and read no file (render reads $HOME, to show the
-backup's path with ~). build takes the update's record, the
-plan it carried out, what its steps learnt (each kept in the record as it is learnt: of_record reads
-them back, so an update carried on by a later run, or finished by the check-in loop, says the same as
-one that ran in one go), and what the caller found: what came of each window (update_agents.outcomes),
-whether the backup is still there and its size, and how long it took. lib/update.py prints the text,
-saves it as summary.md in the backup folder once the update is done, and with --json gives as_json.
+Pure: build, render and as_json take values and read no file nor the environment (render is given the
+home folder, for ~, and the configured launchd label, for the jobs' names). build takes the update's
+record, the plan it carried out, what its steps learnt (each kept in the record as it is learnt:
+of_record reads them back, so an update carried on by a later run, or finished by the check-in loop,
+says the same as one that ran in one go), and what the caller found: what came of each window
+(update_agents.outcomes), whether the backup is still there and its size, and how long it took.
+lib/update.py prints the text, saves it as summary.md in the backup folder once the update is done,
+and with --json gives as_json. doctor_found reads bosun doctor's output for the record.
 """
 
 from __future__ import annotations
 
 import dataclasses
-import os
 import re
 import shlex
 from collections.abc import Sequence
@@ -38,6 +38,17 @@ LEFT_ALONE = "kept running (nothing it was started with changed)"
 BACKUP_GONE = "deleted by a kg forget since; going back past it is no longer possible"
 BY_HAND = "change by hand: "
 FILE_LINE = re.compile(r"(?P<file>\S+): (?P<what>.*)", re.DOTALL)  # "bosun.env: ..." under Config
+MORNING = "morning"  # the job whose label is BOSUN_LAUNCHD_LABEL itself; the others add .<name> to it
+# bosun doctor's output: a FAIL or warn line (an ok one ends what went before), the detail indented
+# below one, and the time and tag a log line carries ("2026-11-07 08:12:39 [doctor] ").
+DOCTOR_ITEM = re.compile(r"  (?P<kind>ok|warn|FAIL)  (?P<what>.*)")
+DOCTOR_DETAIL = re.compile(r"    +(?P<what>\S.*)")
+LOGGED = re.compile(r"\d{4}-\d\d-\d\d \d\d:\d\d:\d\d \[[^\]]*\] ")
+FAIL = "FAIL: "  # a doctor finding, as the record keeps it
+WARN = "warn: "
+ALREADY = "{n} already failing before the update"
+WARNING = "{n} warning: run bosun doctor"
+WARNINGS = "{n} warnings: run bosun doctor"
 SIZE_UNITS = ("KB", "MB", "GB", "TB")
 SIZE_STEP = 1000
 MINUTE = 60
@@ -57,7 +68,7 @@ class Summary:
     handed: tuple[str, ...]  # the items whose task text is the old one
     user_changes: tuple[str, ...]  # what to change in my own files ("sessions.yml: ...")
     backup: str  # its absolute path ("" when it took none)
-    backup_bytes: int
+    backup_size: int  # the size of its files, in bytes
     backup_gone: bool  # a kg forget deleted it since
     findings: tuple[str, ...]
 
@@ -119,7 +130,7 @@ def build(  # noqa: PLR0913, PLR0917 - the parts, each from the step that learnt
     jobs: Sequence[str],
     findings: Sequence[str],
     backup_exists: bool,
-    backup_bytes: int,
+    backup_size: int,
     seconds: int,
     *,
     agents: Sequence[tuple[str, str]] = (),
@@ -142,22 +153,48 @@ def build(  # noqa: PLR0913, PLR0917 - the parts, each from the step that learnt
         handed=plan.handed,
         user_changes=state.user_changes,
         backup=state.backup,
-        backup_bytes=backup_bytes if backup_exists else 0,
+        backup_size=backup_size if backup_exists else 0,
         backup_gone=bool(state.backup) and not backup_exists,
         findings=tuple(findings),
     )
+
+
+def _grouped(findings: Sequence[str]) -> dict[str, list[str]]:
+    """<findings> by kind: doctor's FAIL and warn lines, and the release's own ("")."""
+    groups: dict[str, list[str]] = {FAIL: [], WARN: [], "": []}
+    for line in findings:
+        groups[next((kind for kind in (FAIL, WARN) if line.startswith(kind)), "")].append(line)
+    return groups
+
+
+def _counted(count: int, one: str, many: str) -> list[str]:
+    return [(one if count == 1 else many).format(n=count)] if count else []
+
+
+def found_after(findings: Sequence[str], before: Sequence[str]) -> tuple[str, ...]:
+    """What the update found after the switch, as the summary says it (R45): the release's own
+    findings (a job not reloaded, the check-in loop not restarted); each FAIL of bosun doctor's that
+    its run while planning (<before>) did not show, by its text; how many it did show, which already
+    failed before the update; and how many warnings doctor gave, which `bosun doctor` lists."""
+    groups = _grouped(findings)
+    shown = set(before)
+    new = [line for line in groups[FAIL] if line not in shown]
+    already = _counted(len(groups[FAIL]) - len(new), ALREADY, ALREADY)
+    warnings = _counted(len(groups[WARN]), WARNING, WARNINGS)
+    return (*groups[""], *new, *already, *warnings)
 
 
 def of_record(
     state: UpdateState,
     agents: Sequence[tuple[str, str]],
     backup_exists: bool,
-    backup_bytes: int,
+    backup_size: int,
     seconds: int,
 ) -> Summary:
     """build, with each part from the record of <state>, where every step kept what it learnt: the
-    plan, the migrations that ran, bosun.env's change, the jobs reloaded and what was found after the
-    switch. A part an older bosun's record lacks is left out."""
+    plan, the migrations that ran, bosun.env's change, the jobs reloaded, and what bosun doctor found
+    after the switch and while planning (found_after). A part an older bosun's record lacks is left
+    out."""
     applied = [found for line in state.migrated if (found := Applied.from_record(line))]
     plan = update_plan.from_record(state.plan)
     return build(
@@ -166,23 +203,58 @@ def of_record(
         applied,
         state.config_changed,
         state.reloaded,
-        state.findings,
+        found_after(state.findings, state.doctor_before),
         backup_exists,
-        backup_bytes,
+        backup_size,
         seconds,
         agents=agents,
     )
 
 
+def _doctor_line(kind: str, parts: Sequence[str]) -> str:
+    head, *detail = (" ".join(part.split()) for part in parts)
+    return f"{kind}: {' '.join([LOGGED.sub('', head, count=1), '; '.join(detail)]).rstrip()}"
+
+
+def doctor_found(said: str) -> list[str]:
+    """Each FAIL and warn line of bosun doctor's output <said>, as "FAIL: ..." or "warn: ...", with
+    the detail indented below it joined onto it ("; " between its lines) and a log line's time and
+    tag left out, so that two runs compare by what they say. An ok line, a section's title or a blank
+    line ends a detail."""
+    found: list[tuple[str, list[str]]] = []
+    current: list[str] | None = None
+    for line in said.splitlines():
+        item = DOCTOR_ITEM.fullmatch(line)
+        detail = DOCTOR_DETAIL.fullmatch(line)
+        if item:
+            current = None if item["kind"] == "ok" else [item["what"]]
+            if current is not None:
+                found.append((item["kind"], current))
+        elif detail and current is not None:
+            current.append(detail["what"])
+        else:
+            current = None
+    return [_doctor_line(kind, parts) for kind, parts in found]
+
+
 # ---- the text ---------------------------------------------------------------------------------
 
 
-def tilde(path: str) -> str:
-    """<path> with ~ for the home folder at its start."""
-    home = os.path.expanduser("~").rstrip("/")
-    if home and home != "~" and (path == home or path.startswith(home + "/")):
+def tilde(path: str, home: str) -> str:
+    """<path> with ~ for the home folder <home> at its start ("": as it is)."""
+    home = home.rstrip("/")
+    if home and (path == home or path.startswith(home + "/")):
         return "~" + path[len(home) :]
     return path
+
+
+def job_name(label: str, base: str) -> str:
+    """A launchd job's name, from its label and the configured one (BOSUN_LAUNCHD_LABEL): the morning
+    job's is the label itself, the others' add .<name> to it; a label of no such shape, or with no
+    configured label to go by, is its own name."""
+    if base and label == base:
+        return MORNING
+    return label.removeprefix(base + ".") if base and label.startswith(base + ".") else label
 
 
 def duration(seconds: int) -> str:
@@ -250,15 +322,18 @@ def _prompts(prompts: Sequence[str]) -> list[str]:
     return [f"Prompts changed: {len(names)} ({', '.join(names)})"] if names else []
 
 
-def _backup(summary: Summary) -> list[str]:
+def _backup(summary: Summary, home: str) -> list[str]:
     if summary.backup_gone:
         return [f"Backup: {BACKUP_GONE}"]
-    return [f"Backup: {tilde(summary.backup)} ({size(summary.backup_bytes)})"] if summary.backup else []
+    if not summary.backup:
+        return []
+    return [f"Backup: {tilde(summary.backup, home)} ({size(summary.backup_size)})"]
 
 
-def render(summary: Summary) -> str:
-    """The summary as the update prints it, and saves it (the design's example), a line each."""
-    jobs = [label.rsplit(".", 1)[-1] for label in summary.jobs]  # com.bosun.morning.watchdog: watchdog
+def render(summary: Summary, *, home: str = "", launchd_label: str = "") -> str:
+    """The summary as the update prints it, and saves it (the design's example), a line each: the
+    backup's path with ~ for <home>, the jobs named after <launchd_label> (BOSUN_LAUNCHD_LABEL)."""
+    jobs = [job_name(label, launchd_label) for label in summary.jobs]
     handed = [f"bosun delegate --update {shlex.quote(item)}" for item in summary.handed]
     lines = [
         _headline(summary),
@@ -269,7 +344,7 @@ def render(summary: Summary) -> str:
         *_named("Handed tasks keep their old text", handed),
         *_section("Agents", _rows(summary.agents)),
         *_section("Found after the switch", summary.findings),
-        *_backup(summary),
+        *_backup(summary, home),
         f"Going back: {GOING_BACK}",
     ]
     return "\n".join(lines) + "\n"

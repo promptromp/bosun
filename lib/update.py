@@ -45,11 +45,10 @@ import dataclasses
 import fcntl
 import json
 import os
-import re
 import shutil
 import sys
 import time
-from collections.abc import Iterator, Sequence
+from collections.abc import Callable, Iterator, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -84,7 +83,6 @@ BEFORE_FREEZE = ("planned", "rehearsed", "holding")
 BLOCKED = 1
 USAGE = 2
 AGENT_COMMANDS = ("note", "advance")  # what the agents and the check-in loop run (lib/update_windows.py)
-DOCTOR_LINE = re.compile(r"^  (FAIL|warn)  (.*)$", re.MULTILINE)
 
 
 class Output:
@@ -265,9 +263,15 @@ def _restart_checkin_loop(root: Path) -> list[str]:
 
 
 def _doctor(root: Path) -> list[str]:
-    """What `bosun doctor` of the version in <root> fails or warns about, a line each."""
-    done = update_facts.bosun(root, "doctor")
-    return [f"{kind}: {what}" for kind, what in DOCTOR_LINE.findall(done.stdout)]
+    """What `bosun doctor` of the version in <root> fails or warns about, a line each, its detail
+    joined onto it (update_summary.doctor_found)."""
+    return update_summary.doctor_found(update_facts.bosun(root, "doctor").stdout)
+
+
+def _doctor_fails(root: Path) -> tuple[str, ...]:
+    """What `bosun doctor` of the version in <root> fails at (_doctor): run while planning, before the
+    hold, so the summary lists only what fails after the switch that did not before."""
+    return tuple(line for line in _doctor(root) if line.startswith(update_summary.FAIL))
 
 
 def _prune(state_dir: Path, from_root: Path, to_root: Path) -> None:
@@ -396,7 +400,9 @@ def _go_ahead(yes: bool) -> bool:
     return False
 
 
-def _started(plan: Plan, old_root: Path, new_root: Path) -> UpdateState:
+def _started(plan: Plan, old_root: Path, new_root: Path, doctor_before: Sequence[str]) -> UpdateState:
+    """The record of an update starting to carry out <plan>, with what bosun doctor failed at while
+    planning."""
     now = datetime.now(UTC)
     return UpdateState(
         id=f"{now:%Y%m%d-%H%M%S}-{_short(plan.from_commit)}-{_short(plan.to_commit)}",
@@ -409,12 +415,17 @@ def _started(plan: Plan, old_root: Path, new_root: Path) -> UpdateState:
         hold_until=0,
         user_changes=plan.user_changes,
         plan=update_plan.as_record(plan),
+        doctor_before=tuple(doctor_before),
     )
 
 
 def _failed(state: UpdateState) -> int:
     """The failure said, naming the backup if the update took one (in case I need it)."""
-    backup = f" The backup it took: {update_summary.tilde(state.backup)}." if state.backup else ""
+    backup = (
+        f" The backup it took: {update_summary.tilde(state.backup, str(Path.home()))}."
+        if state.backup
+        else ""
+    )
     if state.step in update_state.FREEZE_STEPS:
         Output.say(
             f"bosun update failed and could not put everything back: {state.error}. Writes stay "
@@ -438,8 +449,11 @@ def _rehearsed(state: UpdateState, plan: Plan, where: Folders) -> UpdateState:
 
 
 def _carried_out(plan: Plan, old_root: Path, new_root: Path, where: Folders) -> UpdateState:
-    """Recorded from `planned` on: rehearsal, hold, freeze, release, done (or where it stopped)."""
-    state = _rehearsed(_record(where.state_dir, _started(plan, old_root, new_root)), plan, where)
+    """Recorded from `planned` on: rehearsal, hold, freeze, release, done (or where it stopped). First
+    what bosun doctor fails at before anything changes, outside the hold and the freeze."""
+    Output.say("Asking bosun doctor what fails before the update...")
+    before = _doctor_fails(new_root)
+    state = _rehearsed(_record(where.state_dir, _started(plan, old_root, new_root, before)), plan, where)
     if state.step == "failed":
         return state
     hold_until = int(time.time()) + update_state.HOLD_SECONDS
@@ -467,8 +481,8 @@ def _seconds(state: UpdateState) -> int:
     return max(0, round((datetime.now(UTC) - started).total_seconds()))
 
 
-def _bytes(folder: Path) -> int:
-    """The size of the files under <folder>, links not followed."""
+def _size(folder: Path) -> int:
+    """The size of the files under <folder>, in bytes (their st_size), links not followed."""
     total = 0
     for parent, _dirs, names in os.walk(folder):
         for name in names:
@@ -478,31 +492,41 @@ def _bytes(folder: Path) -> int:
 
 
 def summary_of(state_dir: Path, state: UpdateState) -> update_summary.Summary:
-    """The summary of the update <state> records (update_summary.of_record), with what is on disk
-    now: what came of each window (their notes), and whether the backup is still there and its size."""
+    """The summary of the update <state> records (update_summary.of_record), with what is there now:
+    what came of each window (their notes), and whether the backup is still there and its size."""
     backup = Path(state.backup) if state.backup else None
     there = backup is not None and backup.is_dir()
     return update_summary.of_record(
         state,
         update_agents.outcomes(state, update_notes.Files(state_dir)),
         there,
-        _bytes(backup) if backup is not None and there else 0,
+        _size(backup) if backup is not None and there else 0,
         _seconds(state),
     )
 
 
-def _saved(state: UpdateState, text: str) -> Path | None:
+def _text(state: UpdateState, summary: update_summary.Summary) -> str:
+    """<summary> as text: the backup's path with ~ for the home folder, the jobs named after the
+    launchd label the new version's config has."""
+    label = update_facts.launchd_label(Path(state.to_root))
+    return update_summary.render(summary, home=str(Path.home()), launchd_label=label)
+
+
+def _saved(state: UpdateState, text: str, say: Callable[[str], None]) -> Path | None:
     """<text> as summary.md in the update's backup folder, once the update is done and if the folder
-    is still there (a kg forget deletes every backup, and may do so meanwhile); where, or None."""
+    is still there (a kg forget deletes every backup, and may do so meanwhile: its deletion tries a
+    folder this wrote into again); where, or None. One that cannot be written is said."""
     folder = Path(state.backup) if state.backup else None
     if state.step != "done" or folder is None or not folder.is_dir():
         return None
     path = folder / update_backups.SUMMARY
     tmp = folder / f".{update_backups.SUMMARY}.tmp"
     try:
-        tmp.write_text(f"```text\n{text}```\n")
+        tmp.write_text(f"```text\n{text}```\n", encoding="utf-8", errors="replace")
         tmp.replace(path)
-    except OSError:
+    except OSError as exc:
+        if folder.is_dir():  # not a forget deleting it meanwhile
+            say(f"could not save the summary as {path}: {exc}")
         return None
     return path
 
@@ -510,9 +534,9 @@ def _saved(state: UpdateState, text: str) -> Path | None:
 def _say_summary(state_dir: Path, state: UpdateState, said: Said) -> None:
     """The summary of the update <state> records, said, kept for --json, and saved once it is done."""
     said.summary = summary_of(state_dir, state)
-    text = update_summary.render(said.summary)
+    text = _text(state, said.summary)
     Output.say(text.rstrip("\n"))
-    _saved(state, text)
+    _saved(state, text, Output.say)
 
 
 @dataclass
@@ -713,7 +737,7 @@ def _advance(state_dir: Path) -> int:
 def _finished_by_the_loop(state_dir: Path) -> None:
     state = update_state.read(state_dir)
     if state is not None and state.step == "done":
-        saved = _saved(state, update_summary.render(summary_of(state_dir, state)))
+        saved = _saved(state, _text(state, summary_of(state_dir, state)), _say_advance)
         _say_advance(f"done; its summary is in {saved}" if saved else "done")
 
 

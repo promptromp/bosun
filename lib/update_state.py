@@ -114,6 +114,9 @@ class UpdateState:
     migrated: tuple[str, ...] = ()
     config_changed: tuple[str, ...] = ()
     reloaded: tuple[str, ...] = ()
+    # What bosun doctor failed at in a run while planning, before the hold: the summary lists only the
+    # FAIL lines after the switch that this does not hold.
+    doctor_before: tuple[str, ...] = ()
 
 
 _TUPLES = (
@@ -125,6 +128,7 @@ _TUPLES = (
     "migrated",
     "config_changed",
     "reloaded",
+    "doctor_before",
 )
 _MAPPINGS = ("windows",)  # of window names to lists of strings
 _OBJECTS = ("plan",)  # JSON objects, read as they are (their reader checks their parts)

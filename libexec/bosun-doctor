@@ -107,7 +107,8 @@ check_update() {
 # What the last update left to you (its record, update.json; docs/design/update.md), as its summary
 # said: what to change by hand in your own files, which an update never edits (sessions.yml, setup.sh,
 # policy.md, learn.md, tasks/, workstreams.json), and the config keys it added that bosun.env does not
-# set, so are at their defaults. A section only when there is something.
+# set, with the value each has now (its default, or what the environment gives it). A section only
+# when there is something.
 check_after_update() {
   local said kind what
   if ! said="$(python3 "$BOSUN_ROOT/lib/migrations.py" after-update --state-dir "$BOSUN_STATE_DIR" --config-dir "$BOSUN_CONFIG_DIR" 2>&1)"; then
@@ -120,7 +121,7 @@ check_after_update() {
   while IFS=$'\t' read -r kind what; do
     case "$kind" in
       change) warn "change by hand: $what (bosun update never changes your own files)" ;;
-      key) ok "new key, at its default: $what=${!what:-}" ;; # a shell name: after-update checks it
+      key) ok "new key, not set in bosun.env: $what (now '${!what:-}')" ;; # a shell name: after-update checks it
     esac
   done <<<"$said"
 }

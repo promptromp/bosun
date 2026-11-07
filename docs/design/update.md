@@ -362,12 +362,12 @@ Data
 Config
   bosun.env   BOSUN_OLD_KEY is now BOSUN_NEW_KEY (before: bosun.env.pre-update-20261104-153207)
   3 new keys, at their defaults (bosun doctor lists them)
-Prompts changed: 4 (policy.md, tasks/review.md, tasks/_common.md, learn.md)
+Prompts changed: 4 (learn.md, policy.md, tasks/_common.md, tasks/review.md)
 Jobs reloaded: watchdog
 Agents
-  orchestrator  re-read policy.md; checked in (2 events from the update)
-  api           restarted when idle; resumed: waiting on CI for PR 12
-  web           busy; kept running (nothing it was started with changed)
+  orchestrator  asked to re-read policy.md, tasks/_common.md, tasks/review.md; checked in (2 events from the update)
+  api           restarted; resumed: waiting on CI for PR 12
+  web           kept running (nothing it was started with changed)
 Backup: ~/.local/state/bosun/backups/20261104-153207-95545b0-c41b186 (3.1 MB)
 Going back: docs/setup.md#going-back
 ```
@@ -382,14 +382,21 @@ Settled while building it:
 - **When.** It is said when the update ends, also when Ctrl-C stops the wait (the windows still
   waited for say so), and saved as `summary.md` once the update is done, by whichever run finishes it:
   the update itself, the next `bosun update`, or the check-in loop's last turn.
+- **Each window's line** is what was done to it, as the record keeps it (the orchestrator's re-read
+  naming the files it was asked to re-read), then its own answer; a window left alone says it kept
+  running, and the `checkin` window is not listed. The prompts are named in the plan's order.
 - **What else it can say,** each only when there is something: what to change by hand in my own
   files, under Config; the tasks handed out that keep their old text, with the `bosun delegate
-  --update` for each; and what was found after the switch (`bosun doctor`'s warnings, a job that
-  could not be reloaded). A window left alone says it kept running; the `checkin` window is not
-  listed. A backup that a `kg forget` has deleted since says so instead of its path ("deleted by a kg
-  forget since; going back past it is no longer possible"). A failed update names the backup it took.
+  --update` for each; and, under "Found after the switch", what the update itself found (a job not
+  reloaded, the check-in loop not restarted) and each `bosun doctor` FAIL, with its detail, that a
+  doctor run while planning (before the hold, its FAIL lines kept in the record) did not show. Those
+  it did show are counted ("2 already failing before the update"), and so are doctor's warnings ("3
+  warnings: run bosun doctor"): they are no news of the update. A backup that a `kg forget` has
+  deleted since says so instead of its path ("deleted by a kg forget since; going back past it is no
+  longer possible"); a forget deletes a backup whole even when a summary is being saved into it. A
+  failed update names the backup it took. The backup's size is that of its files.
 - **`bosun doctor`** lists what the last update left to me, from its record: the changes to make in my
-  own files, and the keys it added that `bosun.env` does not set, each with its default.
+  own files, and the keys it added that `bosun.env` does not set, with the value each has now.
 
 ### `get.sh` on an existing install
 
@@ -523,7 +530,7 @@ Decided while building it:
   windows still to bring along, the changes to my own files, how long writes were paused
   (`freeze_ms`, from the stores' locks taken to their release), the error, and the findings after the switch (`bosun doctor`'s, and a job that
   could not be reloaded); and for the summary, the plan, the migrations that ran, what changed in
-  `bosun.env` and the jobs reloaded. Each step is recorded before it starts, and the backup once it is taken, so
+  `bosun.env`, the jobs reloaded and what `bosun doctor` failed at while planning. Each step is recorded before it starts, and the backup once it is taken, so
   no step past `backed-up` is recorded without it.
 - **The launchd jobs:** a job is reloaded only where its rendered plist differs or it is not loaded,
   and each rendered plist is checked before the job is touched. One that cannot be rendered, or renders

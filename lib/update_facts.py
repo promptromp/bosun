@@ -363,6 +363,13 @@ def jobs(root: Path) -> tuple[list[str], list[str]]:
     return done.stdout.split(), []
 
 
+def launchd_label(root: Path) -> str:
+    """The morning job's launchd label as the version in <root> reads the config (BOSUN_LAUNCHD_LABEL;
+    the other jobs' labels add .watchdog and .learn to it); "" if it cannot be read."""
+    done = shell(root, 'printf "%s" "$BOSUN_LAUNCHD_LABEL"')
+    return done.stdout.strip() if done.returncode == 0 else ""
+
+
 def commits(root: Path, old: str, new: str) -> list[str]:
     """The commits from <old> to <new>, newest first, as "<short> <subject>"."""
     done = versions.git("-C", str(root), "log", "--format=%h %s", f"{old}..{new}")

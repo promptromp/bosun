@@ -381,12 +381,16 @@ class ReleaseTest(World):
         self.assertEqual(update_state.read(self.state), done)
 
     def test_what_doctor_fails_or_warns_about_is_kept(self) -> None:
-        said = "Tools\n  ok    tmux\n  warn  on battery\n  FAIL  login keychain locks on sleep\nall\n"
+        said = (
+            "Tools\n  ok    tmux\n  warn  on battery\n  FAIL  something is missing or not done yet:\n"
+            "    tmux   not found\nall\n"
+        )
         with mock.patch.object(
             update_facts, "bosun", return_value=subprocess.CompletedProcess([], 1, said, "")
         ):
             self.assertEqual(
-                update._doctor(self.new), ["warn: on battery", "FAIL: login keychain locks on sleep"]
+                update._doctor(self.new),
+                ["warn: on battery", "FAIL: something is missing or not done yet: tmux not found"],
             )
 
 
@@ -600,6 +604,49 @@ class RunTest(World):
         self.assertIn("an update is running", err)
 
 
+class StartTest(World):
+    def test_the_start_records_the_plan_and_what_doctor_failed_at_before(self) -> None:
+        """For the summary of an update carried on later: the plan said yes to, and the FAIL lines of
+        a bosun doctor run while planning, before the hold."""
+        plan = dataclasses.replace(
+            a_plan(), keys_added=("BOSUN_EXPORT_RETRIES",), prompts=("orchestrator/policy.md",)
+        )
+        before = ("FAIL: gh is not logged in: run 'gh auth login'",)
+        update_state.write(self.state, update._started(plan, self.old, self.new, before))
+        recorded = update_state.read(self.state)
+        assert recorded is not None
+        self.assertEqual(update_plan.from_record(recorded.plan), plan)
+        self.assertEqual((recorded.step, recorded.doctor_before), ("planned", before))
+
+    def test_doctor_runs_while_planning_before_anything_is_held_and_its_fails_are_kept(self) -> None:
+        """R45: outside the hold and the freeze, and recorded, so an update carried on compares the same."""
+        seen: list[str | None] = []
+
+        def fails(root: Path) -> tuple[str, ...]:
+            recorded = update_state.read(self.state)
+            seen.append(recorded.step if recorded else None)
+            return ("FAIL: gh is not logged in: run 'gh auth login'",)
+
+        where = update_facts.Folders(self.state, self.config, "update-test")
+        with (
+            mock.patch.object(update, "_doctor_fails", side_effect=fails),
+            mock.patch.object(update, "rehearse", return_value=["the rehearsal stops it here"]),
+        ):
+            state = update._carried_out(a_plan(), self.old, self.new, where)
+        self.assertEqual(seen, [None])  # before the update's record is written, so long before its hold
+        self.assertEqual(state.step, "failed")
+        self.assertEqual(state.doctor_before, ("FAIL: gh is not logged in: run 'gh auth login'",))
+
+    def test_doctor_while_planning_keeps_its_fails_only(self) -> None:
+        said = "Tools\n  ok    tmux\n  warn  on battery\n  FAIL  gh is not logged in: run 'gh auth login'\n"
+        with mock.patch.object(
+            update_facts, "bosun", return_value=subprocess.CompletedProcess([], 1, said, "")
+        ):
+            self.assertEqual(
+                update._doctor_fails(self.new), ("FAIL: gh is not logged in: run 'gh auth login'",)
+            )
+
+
 class SummaryTest(World):
     """What the update says when it ends: the summary, built from its record, and saved as summary.md
     in the backup folder once the update is done."""
@@ -628,7 +675,7 @@ class SummaryTest(World):
         self.assertIn("  ledger      format 1 -> 2 (2 items migrated)\n", out)
         self.assertIn(f"Backup: {backup} (2.0 KB)", out)
         self.assertIn(said.summary.seconds, (161, 162))
-        self.assertEqual(said.summary.backup_bytes, 2000)  # what the files hold, the summary not counted
+        self.assertEqual(said.summary.backup_size, 2000)  # what the files hold, the summary not counted
         self.assertEqual((backup / "summary.md").read_text(), f"```text\n{out}```\n")
 
     def test_one_whose_wait_was_stopped_is_said_but_saved_only_once_done(self) -> None:
@@ -646,6 +693,26 @@ class SummaryTest(World):
         out, _ = self.said(self.ended(backup=str(gone)))
         self.assertIn("Backup: deleted by a kg forget since; going back past it is no longer possible", out)
         self.assertFalse(gone.exists())
+
+    def test_a_summary_that_cannot_be_saved_says_so_once(self) -> None:
+        """A backup folder that is there but cannot be written (its permissions, a full disk)."""
+        backup = self.backup()
+        state = self.ended(backup=str(backup))
+        with mock.patch.object(Path, "write_text", side_effect=PermissionError(13, "Permission denied")):
+            out, said = self.said(state)
+        self.assertIsNotNone(said.summary)
+        self.assertIn(
+            f"could not save the summary as {backup / 'summary.md'}: [Errno 13] Permission denied", out
+        )
+        self.assertFalse((backup / "summary.md").exists())
+
+    def test_a_summary_is_saved_as_utf_8_whatever_the_locale(self) -> None:
+        backup = self.backup()
+        state = self.ended(
+            backup=str(backup), user_changes=("sessions.yml: rename \u201cmodel\u201d \udcff",)
+        )
+        self.said(state)
+        self.assertIn("\u201cmodel\u201d", (backup / "summary.md").read_text(encoding="utf-8"))
 
     def test_a_failed_update_names_the_backup_it_took(self) -> None:
         """So that it is there in case I need it."""
@@ -745,6 +812,31 @@ class AgentsCommandTest(World):
             with mock.patch.object(update_windows, "turn") as turn:
                 self.assertEqual(self.main("advance"), (0, "", ""))
             turn.assert_not_called()
+
+
+class UsageTest(unittest.TestCase):
+    def test_the_usage_says_the_update_ends_with_its_summary_and_json_carries_it(self) -> None:
+        """`bosun update --help` (libexec/bosun-update's header) and docs/commands.md say the same."""
+        root = Path(__file__).resolve().parents[2]
+        header = " ".join(
+            line.lstrip("#").strip()
+            for line in (root / "libexec" / "bosun-update").read_text().splitlines()
+            if line.startswith("#")
+        )
+        self.assertIn("ends with a summary of what it did", header)
+        self.assertIn("it is saved as summary.md in the backup's folder", header)
+        self.assertIn("and the summary (null unless an update ended in this run)", header)
+        row = next(
+            line
+            for line in (root / "docs" / "commands.md").read_text().splitlines()
+            if "`bosun update [" in line
+        )
+        for said in (
+            "It ends with a short summary",
+            "`summary.md`",
+            "and the summary (`null` unless an update ended",
+        ):
+            self.assertIn(said, row)
 
 
 class GoAheadTest(unittest.TestCase):

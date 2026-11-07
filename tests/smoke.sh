@@ -1203,8 +1203,8 @@ jq -n '{id: "u1", from_root: "/a", to_root: "/b", from_commit: "aaa", to_commit:
 echo 'BOSUN_DRAIN_PROMPT="acme: carry on"' >"$BOSUN_CONFIG_DIR/bosun.env"
 out="$("$BOSUN" doctor 2>&1)"
 check "doctor lists what the last update left to you: a change to make by hand in your own files" contains "$out" "warn  change by hand: sessions.yml: rename \`model:\` to \`agent_model:\`"
-check "... and each new key bosun.env does not set, at its default" contains "$out" "ok    new key, at its default: BOSUN_WAKE_DELAY_MINUTES=1"
-check "... but not one it sets" not_contains "$out" "BOSUN_DRAIN_PROMPT="
+check "... and each new key bosun.env does not set, with the value it has now" contains "$out" "ok    new key, not set in bosun.env: BOSUN_WAKE_DELAY_MINUTES (now '1')"
+check "... but not one it sets" not_contains "$out" "bosun.env: BOSUN_DRAIN_PROMPT"
 rm -f "$BOSUN_STATE_DIR/update.json" "$BOSUN_CONFIG_DIR/bosun.env"
 orch_status() { # <status> <seconds in it> [name]
   printf '{"pid":%d,"status":"%s","version":"2.0.0","statusUpdatedAt":%d,"name":"%s"}' "$orch_pid" "$1" $((($(date +%s) - $2) * 1000)) "${3:-orch-$(date +%F)}" >"$HOME/.claude/sessions/$orch_pid.json"
@@ -2412,16 +2412,31 @@ if [ "$(bash -c 'source "$1/lib/common.sh"; command -v launchctl; command -v pms
   "$ROOT/tests/sandbox/update_patch.sh" --failing "$U_UP"
   ug commit -qam "v2, whose migration fails while writes are paused"
   U_FAILING_COMMIT="$(ug rev-parse HEAD)"
+  # A Claude of its own that answers and writes nothing: the suite's $WORK/fake-claude (the chores dry
+  # run's) writes a ledger item wherever it runs, and bosun doctor, which the update runs while it plans,
+  # asks Claude for its login.
+  printf '#!/bin/sh\n[ "$1" = --version ] && echo "2.0.0 (Claude Code)"\nexit 0\n' >"$U/quiet-claude"
+  chmod +x "$U/quiet-claude"
   U_ENV=(env BOSUN_STATE_DIR="$U_STATE" BOSUN_LOG_DIR="$U_STATE/logs" BOSUN_CONFIG_DIR="$U_CONFIG"
-    BOSUN_SESSION_NAME=update-test BOSUN_LAUNCHD_LABEL=com.bosun.update-test BOSUN_SKIP_PREFLIGHT=1 BOSUN_KNOWLEDGE_GIT=0)
+    BOSUN_SESSION_NAME=update-test BOSUN_LAUNCHD_LABEL=com.bosun.update-test BOSUN_SKIP_PREFLIGHT=1 BOSUN_KNOWLEDGE_GIT=0
+    BOSUN_CLAUDE_BIN="$U/quiet-claude")
   ub() { "${U_ENV[@]}" "$U_LINK/bin/bosun" "$@"; }
   ub ledger upsert 'review:acme/api#1' --kind review-request --title "Exporter retries" >/dev/null
   ub ledger upsert 'mypr:acme/api#2' --kind my-pr --title "Nightly export" >/dev/null
   ub kg import "$KG_FIXTURE" --apply --auto-confirm >/dev/null 2>&1
   # Everything in the state and config folders (locks aside: taking one creates its file); and the data
-  # alone (not the update's own record, folder, backups or logs).
-  u_files() { (cd "$U" && find state config -type f ! -name '*.lock' "$@" -print0 | LC_ALL=C sort -z | xargs -0 shasum | shasum); }
-  u_data() { u_files ! -path 'state/update*' ! -path 'state/backups/*' ! -path 'state/logs/*'; }
+  # alone, a line per file (not the update's own record, folder, backups or logs).
+  u_listed() { (cd "$U" && find state config -type f ! -name '*.lock' "$@" -print0 | LC_ALL=C sort -z | xargs -0 shasum); }
+  u_files() { u_listed | shasum; }
+  u_data_list() { u_listed ! -path 'state/update*' ! -path 'state/backups/*' ! -path 'state/logs/*'; }
+  u_data_is() { # <list before>: the data as it was then; if not, which files differ
+    local now
+    now="$(u_data_list)"
+    [ "$now" = "$1" ] || {
+      diff <(echo "$1") <(echo "$now")
+      return 1
+    }
+  }
   u_at() { [ "$(cd "$U_LINK" && pwd -P)" = "$1" ]; }
   u_step_is() { [ "$(jq -r .step "$U_STATE/update.json" 2>/dev/null)" = "$1" ]; }
   u_ended_well() { [ "$1" = 0 ] || { tail -15 "$2" && return 1; }; }
@@ -2436,14 +2451,14 @@ if [ "$(bash -c 'source "$1/lib/common.sh"; command -v launchctl; command -v pms
   check "without --yes and no terminal, it shows the plan and stops" bash -c 'grep -q "ledger: format 1 -> 2" <<<"$1" && grep -q "Nothing has changed" <<<"$1"' _ "$out"
   check "... changing nothing" bash -c '[ "$1" = "$2" ]' _ "$(u_files)" "$before"
 
-  data_before="$(u_data)"
+  data_before="$(u_data_list)"
   json="$(ub update --yes --json 2>"$U/failing.err")"
   rc=$?
   out="$(cat "$U/failing.err")"
   check "a migration that fails while writes are paused fails the update (exit 1), which says it put everything back" bash -c '[ "$1" = 1 ] && grep -q "Everything is as it was" <<<"$2"' _ "$rc" "$out"
   check "... with --json, what it says goes to stderr and stdout is one object: the plan and the record" jq -e '.plan.migrations == [["ledger", 1, 2]] and .update.step == "failed"' <<<"$json"
   check "... the link still at v1" u_at "$U_V1"
-  check "... the data as it was" test "$(u_data)" = "$data_before"
+  check "... the data as it was" u_data_is "$data_before"
   check "... and the record says failed, with the error" jq -e '.step == "failed" and (.error | contains("failed on purpose"))' "$U_STATE/update.json"
 
   # Upstream's v2 now migrates well.
@@ -2475,13 +2490,15 @@ if [ "$(bash -c 'source "$1/lib/common.sh"; command -v launchctl; command -v pms
   u_summary_is() { # the summary the update ended with, as the design lays it out
     grep -qE "^bosun updated: ${U_V1_COMMIT:0:7} -> ${U_V2_COMMIT:0:7} \(1 commit\) in [0-9]+(m [0-9]+)?s$" "$1" &&
       grep -qE "^  ledger      format 1 -> 2 \([0-9]+ items migrated\)$" "$1" && grep -qx "  knowledge   format 1, unchanged" "$1" &&
-      grep -qx "Prompts changed: 1 (policy.md)" "$1" && grep -q "^Jobs reloaded: update-test" "$1" &&
+      grep -qx "Prompts changed: 1 (policy.md)" "$1" && grep -qx "Jobs reloaded: morning, watchdog" "$1" &&
+      ! grep -q "^  FAIL: " "$1" && grep -qE "^  [0-9]+ already failing before the update$" "$1" &&
+      grep -qE "^  [0-9]+ warnings?: run bosun doctor$" "$1" &&
       grep -qxE "Backup: $2 \([0-9.]+ (bytes|KB|MB|GB)\)" "$1" && [ "$(tail -1 "$1")" = "Going back: docs/setup.md#going-back" ] || {
       cat "$1"
       return 1
     }
   }
-  check "... and its output ends with the summary: the commit, the ledger's migration, the prompt changed, the jobs reloaded, the backup" u_summary_is "$U/summary.txt" "$u_backup_now"
+  check "... and its output ends with the summary: the commit, the ledger's migration, the prompt changed, the jobs reloaded, only counts of what doctor already failed at before the update and of its warnings, the backup" u_summary_is "$U/summary.txt" "$u_backup_now"
   check "... saved as summary.md next to the backup" bash -c '[ "$(sed "1d;\$d" "$1/summary.md")" = "$(cat "$2")" ]' _ "$u_backup_now" "$U/summary.txt"
   wait "$writer"
   writer_rc=$?
@@ -2721,7 +2738,7 @@ FAKE
     grep -q "u-busy: answered: resumed after the update" <<<"$1" && jq -e ".step == \"done\" and .pending == []" "$2/update.json" >/dev/null' _ "$out" "$U_STATE"
   check "... and saves its summary next to the backup, with every window's outcome" bash -c '
     backup="$(jq -r .backup "$2/update.json")" && grep -qF "bosun update: done; its summary is in $backup/summary.md" <<<"$1" &&
-      grep -qE "^  u-busy +restarted; resumed after the update$" "$backup/summary.md" && grep -qE "^  orch +asked to re-read; re-read, checked in, carrying on$" "$backup/summary.md"' _ "$out" "$U_STATE"
+      grep -qE "^  u-busy +restarted; resumed after the update$" "$backup/summary.md" && grep -qE "^  orch +asked to re-read policy.md; re-read, checked in, carrying on$" "$backup/summary.md"' _ "$out" "$U_STATE"
   check "... after which a tick has nothing to do" bash -c '! grep -q "bosun update" <<<"$1"' _ "$(uc)"
   tmux -L "$U_TMUX" kill-server 2>/dev/null
   rm -f "$U_CONFIG/sessions.yml"
