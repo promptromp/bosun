@@ -114,7 +114,8 @@ that link.
 The switch replaces the link in one rename, so a command sees either the old version or the new one,
 never a mix. A version's folder is never changed once in use, so whatever runs from it finishes on
 the code it started with. The previous version's folder stays until the next update; older ones are
-deleted.
+deleted, unless one holds something of yours (a change in its files, a commit made in it), which the
+summary says.
 
 **Two paths, kept apart.** A process loads its code from the version folder it started in. Bash and
 Python alike resolve that folder once, at the start, so a command that runs across the switch stays
@@ -434,20 +435,27 @@ Settled while building it:
 - **The quiet moment:** every window's agent idle, or none running (the `checkin` window aside, whose
   loop it stops), and nobody typing in a client of the session within `BOSUN_ACTIVE_CLIENT_MINUTES`. It
   waits once you said yes, saying what it waits for each time that changes, and plans again when it is
-  quiet. Ctrl-C there changes nothing.
+  quiet. Ctrl-C there changes nothing. The doctor run and the rehearsal take a while after it, and the old
+  check-in loop could prompt a window meanwhile, so once bosun's own work is stopped it checks again, and
+  waits again if it has to (with the loop stopped, that settles soon), before anything is frozen.
 - **bosun's own work** is stopped after the rehearsal, where the hold begins: the watchdog's and
   learning's launchd jobs unloaded, and the check-in loop's process ended. The morning job is left, as it
-  runs once a morning. A conversion that stops short of the switch, or puts it back, starts them again as
-  they were, on whatever the install path then leads to; after the switch, the release reloads the jobs
-  on the link and restarts the loop.
+  runs once a morning. The record says it is stopped (`own_work_stopped`) before anything stops. However
+  the conversion ends short of the switch, a put back included, it brings that work back the way the
+  release does: the jobs the new version wants reloaded (`reload_changed_jobs` counts one that is not
+  loaded as changed) and the check-in loop restarted, on whatever the install path then leads to. After a
+  crash, the next `bosun update` does it, once it has put the freeze back; a field rather than the step
+  tells it, as a write may have put a conversion's freeze back first (`restored`), and the old checkout's
+  code would never bring anything back.
 - **The swap is one call:** the link is made at the legacy folder's name and exchanged with the checkout
   (Linux's `renameat2` with `RENAME_EXCHANGE` does the same), so the checkout is never under another name,
   nor the install path missing. A link a swap cut short left there is replaced.
 - **From the switch on, the record names the legacy folder** as the version updated from, in the record
   write of `switched`, so a put back leads the link there; before the swap, a checkout is never made a
   link. The update after the conversion is an ordinary one, from a version folder. Its prune deletes the
-  legacy checkout unless something of yours is in it, or the installer did not make it, which its
-  summary says.
+  legacy checkout unless something of yours is in it, or the installer did not make it, and an older
+  version unless a change or a commit of its own is in it (lib/checkout_work.py, shared with uninstall),
+  which its summary says. The record names the legacy folder once, and the swap puts the checkout there.
 - **Temporary links** that a switch cut short leaves beside the install (`.bosun.link-*`, links only) are
   swept with the prune, once older than the update that sweeps them.
 

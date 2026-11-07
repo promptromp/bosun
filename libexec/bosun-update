@@ -28,6 +28,15 @@
 #      its new keys, what to change by hand in your own files, the prompts that changed, the jobs
 #      reloaded, what came of each window, what fails after the switch that did not before, and where
 #      the backup is. Once the update is done, it is saved as summary.md in the backup's folder.
+# The first update of an install from before versions, a checkout an older get.sh made (get.sh hands it
+# over), converts it, once. It refuses while the checkout holds anything of yours (changes, a stash,
+# commits not pushed, another worktree, a file git ignores). Once you said yes it waits for a quiet
+# moment (every window idle with nothing running, nobody typing for BOSUN_ACTIVE_CLIENT_MINUTES),
+# saying what it waits for; stops bosun's own background work (the watchdog's and learning's launchd
+# jobs, the check-in loop), which the old version holds for no update; checks the quiet moment again;
+# then updates as above, swapping the checkout for the link in one step and keeping it as
+# <install>-versions/legacy-<commit>, and restarts every window on the new version. Stopped short of
+# the switch, or put back, it starts that work again (after a crash, the next bosun update does).
 # An update cut short (Ctrl-C, a crash, a power cut) is carried on by the next `bosun update`: put back
 # if it stopped while writes were paused (the next write to a store does that too), finished if its
 # checks had passed. With nothing new on the branch it says bosun is up to date.

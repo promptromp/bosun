@@ -21,6 +21,7 @@ import shlex
 from dataclasses import dataclass
 from pathlib import Path
 
+from checkout_work import Checkout, why_kept
 from init_plan import tilde
 
 
@@ -130,7 +131,6 @@ CHECKOUT = "checkout"
 CANCEL_WAKE = "sudo pmset repeat cancel"
 INSTALL_LINE = "curl -fsSL https://raw.githubusercontent.com/promptromp/bosun/main/get.sh | sh"
 UNREADABLE = -1  # records that are there but cannot be read, so they may hold anything
-NOT_THE_INSTALLERS = "it was not made by the installer, so it is yours"
 AT_HOME = "it is where your home folder is, so it is not touched"
 # How `pmset -g sched` says the days, for the sets it has a word for.
 PMSET_DAYS = {"MTWRFSU": "every day", "MTWRF": "weekdays", "SU": "weekends"}
@@ -142,13 +142,6 @@ class Job:
     label: str
     plist: str  # "" if it has none on disk
     loaded: bool
-
-
-@dataclass(frozen=True)
-class Checkout:
-    root: str
-    managed: bool  # get.sh made it, and marked it so
-    work: str = ""  # what deleting it would lose, or that it could not be checked
 
 
 @dataclass(frozen=True)
@@ -353,14 +346,6 @@ def file_steps(facts: Facts, choices: Choices) -> list[Step]:
         for name in names
         if goes(kind_of(name, table), name, facts, choices)
     ]
-
-
-def why_kept(piece: Checkout) -> str:
-    """Why deleting <piece> is not bosun's to do, or "" when it may go: the installer did not make it, or
-    something of yours is in it. The update's prune keeps a checkout from before versions by it too."""
-    if not piece.managed:
-        return NOT_THE_INSTALLERS
-    return f"it has {piece.work}; delete it once you have what you need" if piece.work else ""
 
 
 def kept_because(piece: Checkout, facts: Facts) -> str:

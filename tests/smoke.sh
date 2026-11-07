@@ -2415,12 +2415,14 @@ if [ "$(bash -c 'source "$1/lib/common.sh"; command -v launchctl; command -v pms
   git -C "$G_DIR" -c user.name=acme -c user.email=dev@example.com -c commit.gpgsign=false commit -qm "a release"
   g_before="$(g_tree)"
   G_UNFINISHED="$(get_dry)"
+  G_UNFINISHED_LINE="$G_DIR is there, but ~/.local/bin/bosun does not lead into it, as bosun init leaves it: starting bosun init again"
   check "with an install bosun init has not set up yet (it stopped at what bosun needs), it starts bosun init again, as it is" says_lines "$G_UNFINISHED" \
-    "$G_DIR is there, but bosun init has not set it up yet: starting it again" \
-    "Then it would start: $G_DIR/bin/bosun init"
+    "$G_UNFINISHED_LINE" "Then it would start: $G_DIR/bin/bosun init"
   check "... getting nothing" not_contains "$G_UNFINISHED" "  \$ git"
   mkdir -p "$G/home/.local/bin"
-  ln -s "$G_DIR/bin/bosun" "$G/home/.local/bin/bosun" # what install.sh links, once bosun init set it up
+  ln -s "$G/gone/bin/bosun" "$G/home/.local/bin/bosun"
+  check "... and so with a ~/.local/bin/bosun that leads nowhere" says_lines "$(get_dry)" "$G_UNFINISHED_LINE"
+  ln -sfn "$G_DIR/bin/bosun" "$G/home/.local/bin/bosun" # what install.sh links, once bosun init set it up
   g_before="$(g_tree)"
   G_CHECKOUT="$(get_dry)"
   check "with a checkout from before versions, it would convert: get the head into a folder beside it, then hand over to that version's bosun update --from the checkout" says_lines "$G_CHECKOUT" \
@@ -2429,7 +2431,8 @@ if [ "$(bash -c 'source "$1/lib/common.sh"; command -v launchctl; command -v pms
     "which converts the checkout at a quiet moment: it keeps it as $G_VERSIONS/legacy-<its commit>, and $G_DIR becomes a link to the new version"
   check "... and changes nothing" test "$(g_tree)" = "$g_before"
   mv "$G_DIR" "$G/a-checkout"
-  mkdir -p "$G_VERSIONS/bosun.git" "$G_VERSIONS/0123456789ab"
+  mkdir -p "$G_VERSIONS/bosun.git" "$G_VERSIONS/0123456789ab/bin"
+  printf '#!/bin/sh\n' >"$G_VERSIONS/0123456789ab/bin/bosun"
   ln -s "$G_VERSIONS/0123456789ab" "$G_DIR"
   g_before="$(g_tree)"
   G_LINK="$(get_dry)"
@@ -2441,6 +2444,11 @@ if [ "$(bash -c 'source "$1/lib/common.sh"; command -v launchctl; command -v pms
   rm "$G_DIR"
   ln -s "$G/a-checkout" "$G_DIR"
   check "a link to anything but a version beside bosun.git is refused, not guessed at" fails_with "is a link to $G/a-checkout, which is not a version in $G_VERSIONS" get_dry
+  for g_beside in "$G_VERSIONS/bosun.git" "$G_VERSIONS/not-a-version"; do
+    mkdir -p "$g_beside"
+    ln -sfn "$g_beside" "$G_DIR"
+    check "... nor one to a folder beside bosun.git with no bin/bosun ($(basename "$g_beside"))" fails_with "is a link to $g_beside, which is not a version in $G_VERSIONS" get_dry
+  done
   rm "$G_DIR"
   mkdir -p "$G_DIR"
   echo mine >"$G_DIR/notes.txt"

@@ -8,6 +8,7 @@ import io
 import json
 import os
 import plistlib
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -753,6 +754,23 @@ class SideBySide(World):
             self.assertFalse((self.agents / f"{label}.plist").exists(), label)
             self.assertNotIn(label, self.mac.loaded)
         self.assertTrue(yours.exists())
+
+    def test_the_link_stays_while_a_folder_could_not_be_removed(self) -> None:
+        """Minor 5: the line to run again goes through the link, so the link goes only once every folder
+        has."""
+        real = shutil.rmtree
+
+        def refuse(path: Any, *args: Any, **kwargs: Any) -> None:
+            if Path(path) == self.versions:
+                raise PermissionError("not allowed")
+            real(path, *args, **kwargs)
+
+        with mock.patch.object(shutil, "rmtree", side_effect=refuse):
+            status, output = self.run_it("--yes")
+        self.assertEqual(status, uninstall.EXIT_LEFT)
+        self.assertTrue(self.root.is_symlink())
+        self.assertNotIn("removed ~/.local/share/bosun\n", output)
+        self.assertIn("To try again: ~/.local/share/bosun/bin/bosun uninstall", output)
 
     def test_what_to_run_again_goes_through_the_link(self) -> None:
         self.mac.stuck_jobs.add(LABEL)

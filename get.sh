@@ -89,7 +89,7 @@ check_os() {
   esac
 }
 
-# The link at $DIR, if it leads to a version: a folder in $VERSIONS, beside bosun.git.
+# The link at $DIR, if it leads to a version: a folder in $VERSIONS, beside bosun.git, with bosun in it.
 look_at_link() {
   target="$(readlink "$DIR")"
   case "$target" in
@@ -98,7 +98,7 @@ look_at_link() {
   esac
   parent="$(cd "$(dirname "$target")" 2>/dev/null && pwd -P)" || parent=""
   versions="$(cd "$VERSIONS" 2>/dev/null && pwd -P)" || versions=""
-  [ -d "$target" ] && [ -d "$BARE" ] && [ -n "$parent" ] && [ "$parent" = "$versions" ] ||
+  [ -f "$target/bin/bosun" ] && [ -d "$BARE" ] && [ -n "$parent" ] && [ "$parent" = "$versions" ] ||
     die "$DIR is a link to $target, which is not a version in $VERSIONS. Move it, or set BOSUN_DIR."
   KIND="link"
   FROM="$target"
@@ -205,7 +205,9 @@ start_update() {
 # install it never finished (stopped at what bosun needs, or at a question) is not set up yet.
 set_up() {
   target="$(readlink "$HOME/.local/bin/bosun" 2>/dev/null)" || return 1
-  [ "$(cd "$(dirname "$target")" 2>/dev/null && pwd -P)" = "$(cd "$DIR/bin" 2>/dev/null && pwd -P)" ]
+  linked="$(cd "$(dirname "$target")" 2>/dev/null && pwd -P)" || return 1
+  ours="$(cd "$DIR/bin" 2>/dev/null && pwd -P)" || return 1
+  [ "$linked" = "$ours" ]
 }
 
 intro() {
@@ -236,9 +238,10 @@ main() {
       start_init
       ;;
     unfinished)
-      # Nothing of it runs yet, and it may never have got further than this line: bosun init again,
-      # from the version there, which `bosun update` takes forward once it is set up.
-      say "$DIR is there, but bosun init has not set it up yet: starting it again"
+      # Most likely it never got further than this line, and nothing of it runs yet: bosun init again,
+      # from the version there, which `bosun update` takes forward once it is set up. Only `bosun
+      # update` switches versions, so this never does, whatever made the link go.
+      say "$DIR is there, but ~/.local/bin/bosun does not lead into it, as bosun init leaves it: starting bosun init again"
       start_init
       ;;
     *)

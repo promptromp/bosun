@@ -12,7 +12,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "lib"))
 import journal as jr
 import uninstall_plan as up
 import update_backups as ub
-from uninstall_plan import Checkout, Choices, Facts, Job, Step
+from checkout_work import Checkout
+from uninstall_plan import Choices, Facts, Job, Step
 
 
 HOME = "/Users/me"

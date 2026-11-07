@@ -1061,8 +1061,9 @@ reload_changed_jobs() { # [--dry-run]
 
 # The launchd jobs that run bosun's own background work (the watchdog and learning) unloaded, where
 # loaded; prints the label of each it unloaded. `bosun update` stops them while it converts a checkout
-# from before versions, whose jobs know of no update to hold their work for. One that is still loaded
-# after a few tries fails it (exit 1, said on stderr); the others are still unloaded.
+# from before versions, whose jobs know of no update to hold their work for, and reload_changed_jobs
+# brings them back. One that is still loaded after a few tries fails it (exit 1, said on stderr); the
+# others are still unloaded.
 stop_own_jobs() {
   local label tries status=0
   for label in "$(watchdog_label)" "$(learn_label)"; do
@@ -1079,17 +1080,6 @@ stop_own_jobs() {
     else
       echo "$label"
     fi
-  done
-  return "$status"
-}
-
-# Each launchd job <label> loaded again from its installed plist, as stop_own_jobs left it.
-start_jobs() { # <label...>
-  local label status=0
-  for label in "$@"; do
-    launchctl bootstrap "gui/$(id -u)" "$HOME/Library/LaunchAgents/$label.plist" && continue
-    log "ERROR: launchctl bootstrap failed for $label" >&2
-    status=1
   done
   return "$status"
 }

@@ -183,10 +183,13 @@ def remove_empty_folders(facts: Facts) -> None:
 
 def remove_install(facts: Facts, plan: Plan, *, can_ask: bool) -> tuple[Step, ...]:
     """Last of all, once nothing more can need it: the checkout, or the versions folder with the checkouts
-    from before versions in it and the link that led into it; what is left of it, if anything."""
-    if not plan.install:
-        return ()
-    Carrying(facts, can_ask=can_ask).run(plan.install)
+    from before versions in it, then the link that led into it, only once every folder has gone, as the
+    line to run again goes through it; what is left of it, if anything."""
+    folders = tuple(step for step in plan.install if step.kind != up.LINK)
+    links = tuple(step for step in plan.install if step.kind == up.LINK)
+    Carrying(facts, can_ask=can_ask).run(folders)
+    if not any(os.path.lexists(step.target) for step in folders):
+        Carrying(facts, can_ask=can_ask).run(links)
     return tuple(step for step in plan.install if os.path.lexists(step.target))
 
 

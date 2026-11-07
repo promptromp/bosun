@@ -51,8 +51,9 @@ this note is why.
   commit on no remote or a worktree outside the folder, anything in the folder that bosun does not put there,
   and the old checkout on its own (its mark, and its work). Anything of yours in any of them keeps all of it,
   the link too, and the plan says which folder holds what. They go last, the link after the folders, and a
-  temporary link a switch cut short left beside the install goes with the links. The update's prune keeps a
-  checkout from before versions by the same check.
+  temporary link a switch cut short left beside the install goes with the links, and only once every folder
+  has gone. The update's prune keeps a checkout from before versions, or an older version, by the same check
+  (`lib/checkout_work.py`).
 - **Records are records whatever shape they are in.** A knowledge folder with anything in it, a ledger or a
   backup of one with items, or either of them unreadable, is something it asks about. A copy you made by
   hand, like `ledger.json.before-my-edit`, is not a file it knows, so it stays. `replica.json` serves both

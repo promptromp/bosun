@@ -153,15 +153,16 @@ is put back, or finished, by the next `bosun update`. How it works: [design note
 
 ### The first update of an older install
 
-An install from before versions side by side is a checkout in `~/.local/share/bosun`, and the bosun in
-it has no `bosun update`. Running the install line again converts it, once. The new version's `bosun
-update` shows its plan and asks, then waits for a quiet moment: every window idle with nothing running,
-and nobody typing in the session for `BOSUN_ACTIVE_CLIENT_MINUTES`. It says what it waits for, and
-Ctrl-C there changes nothing. Then it stops the watchdog, learning and the check-in loop, since the old
-version has no hold to keep them waiting, and updates as above. The checkout is swapped for the link in
-one step and kept as `~/.local/share/bosun-versions/legacy-<its commit>`, and every window is restarted
-on the new version. If anything fails, the old checkout is what runs again, with its jobs and loop as
-they were.
+An install from before versions side by side is a checkout in `~/.local/share/bosun`, and the bosun in it
+has no `bosun update`. Running the install line again converts it, once. The new version's `bosun update`
+shows its plan and asks, then waits for a quiet moment: every window idle with nothing running, and
+nobody typing in the session for `BOSUN_ACTIVE_CLIENT_MINUTES`. It says what it waits for, and Ctrl-C
+there changes nothing. Then it stops the watchdog, learning and the check-in loop, since the old version
+has no hold to keep them waiting, checks again that every window is still quiet (waiting again if not),
+and updates as above. The checkout is swapped for the link in one step and kept as
+`~/.local/share/bosun-versions/legacy-<its commit>`, and every window is restarted on the new version. If
+anything fails, the old checkout is what runs again, and its jobs and loop are started again; after a
+crash, the next `bosun update` starts them.
 
 It will not convert a checkout with anything of yours in it: changes, a stash, commits not pushed,
 another worktree, a file git ignores. Take that out first. The update after it deletes the kept checkout,
@@ -176,10 +177,12 @@ hand. You need the version the update came from and the backup it took, both nam
    (`launchctl bootout gui/$(id -u)/com.bosun.morning.watchdog`, and `.learn`, with your
    `BOSUN_LAUNCHD_LABEL` if you set one).
 2. Find the older version's folder in `~/.local/share/bosun-versions`: an update keeps the one it came
-   from until the next update. If it is gone, add it again from its commit (the summary's first line):
+   from until the next update. If it is gone, add it again from its commit, whole: the backup's
+   `manifest.json` names it as `from` (the summary's first line shows only 7 characters, which
+   `git --git-dir ~/.local/share/bosun-versions/bosun.git rev-parse <those 7>` turns into the whole one):
    `git --git-dir ~/.local/share/bosun-versions/bosun.git worktree add --detach
-   ~/.local/share/bosun-versions/<first 12 characters> <commit>`. After the first update, the version
-   before it is the checkout it kept, `legacy-<its commit>`.
+   ~/.local/share/bosun-versions/<its first 12 characters> <commit>`. After the first update, the version
+   before it is the checkout it kept, `legacy-<its first 12 characters>`.
 3. Put the backup back: each entry in its `state/` folder over the one in `~/.local/state/bosun`, and
    each in its `config/` folder over the one in `~/.config/bosun`, replacing the newer one whole (its
    `manifest.json` lists every file). Anything written since the update is not in it.
@@ -231,6 +234,11 @@ and running it again finishes the job.
 
 If you deleted bosun's folders by hand, the jobs and the wake are still there. Run the install line again,
 and then `bosun uninstall`.
+
+A first update of an older install that you declined, or that failed before the switch, leaves
+`~/.local/share/bosun-versions` beside the checkout, which the checkout's own `bosun uninstall` does not know
+about: it is only what `get.sh` fetched (`bosun.git` and the new version's folder). Delete it by hand once
+nothing of yours is in it: `rm -rf ~/.local/share/bosun-versions`.
 
 ## Configuration
 

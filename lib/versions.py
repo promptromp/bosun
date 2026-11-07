@@ -6,7 +6,8 @@ the first 12 characters of its commit. A checkout from before versions existed i
 `legacy-<12>` after the first update swaps it for the link. The install path is never missing:
 `point` renames a new link over it, `swap_in_link` exchanges link and checkout in one call; `switch`
 does whichever the install needs. `prune` deletes what an update no longer needs, but never a legacy
-checkout that holds anything of yours, and `sweep_links` the temporary links a switch cut short left.
+checkout or an older version that holds anything of yours (lib/checkout_work.py), and `sweep_links` the
+temporary links a switch cut short left.
 """
 
 from __future__ import annotations
@@ -21,6 +22,7 @@ import uuid
 from collections.abc import Callable, Collection
 from pathlib import Path
 
+import checkout_work
 import install_paths
 import journal
 
@@ -134,13 +136,13 @@ def _swap(first: Path, second: Path) -> None:
         raise OSError(code, f"cannot swap {first} and {second}: {os.strerror(code)}")
 
 
-def swap_in_link(install: Path, target: Path) -> Path:
+def swap_in_link(install: Path, target: Path, legacy: Path) -> Path:
     """Replace the checkout at `install` with a link to `target` in one step, and keep the checkout
-    as `legacy-<12>` beside `target`: the link is made there, then the two exchanged in one call, so
-    the checkout is never anywhere else, nor the install path missing. Returns where the checkout went.
-    Refuses, with nothing changed, when that folder exists; a link there is one a swap cut short left
-    (none other is ever made in the versions folder), and is replaced."""
-    legacy = legacy_folder(target.parent, commit_of(install))
+    as `legacy` (its legacy_folder beside `target`, as the update's record names it): the link is made
+    there, then the two exchanged in one call, so the checkout is never anywhere else, nor the install
+    path missing. Returns where the checkout went. Refuses, with nothing changed, when that folder exists;
+    a link there is one a swap cut short left (none other is ever made in the versions folder), and is
+    replaced."""
     if legacy.is_symlink():
         legacy.unlink()
     if os.path.lexists(legacy):
@@ -156,14 +158,14 @@ def swap_in_link(install: Path, target: Path) -> Path:
     return legacy
 
 
-def switch(install: Path, target: Path) -> Path | None:
+def switch(install: Path, target: Path, kept: Path) -> Path | None:
     """`install` made to lead to `target` in one step: the link pointed there (point), or the checkout
-    from before versions swapped for that link (swap_in_link). Returns where the checkout went; None
-    when the install was a link already."""
+    from before versions swapped for that link and kept as `kept` (switched_from, which the update
+    records first). Returns where the checkout went; None when the install was a link already."""
     if install.is_symlink():
         point(install, target)
         return None
-    return swap_in_link(install, target)
+    return swap_in_link(install, target, kept)
 
 
 def switched_from(install: Path, target: Path, root: Path, commit: str) -> Path:
@@ -242,16 +244,25 @@ def _candidates(versions: Path, keep: Collection[Path]) -> list[Path]:
     ]
 
 
-def held_back(versions: Path, keep: Collection[Path], work: Callable[[Path], str]) -> list[tuple[Path, str]]:
-    """Each legacy checkout prune keeps although `keep` does not name it, and why: what `work`
-    finds in it (anything of yours, or that the installer did not make it), as bosun uninstall
-    decides for a checkout."""
-    found = ((f, work(f)) for f in _candidates(versions, keep) if f.name.startswith(LEGACY_PREFIX))
+def kept(folder: Path) -> str:
+    """Why prune keeps <folder> though it is neither version of the update, or "": a checkout from before
+    versions with anything of yours in it, or that the installer did not make (as bosun uninstall
+    decides for a checkout); an older version with a change or a commit of its own (R46)."""
+    if folder.name.startswith(LEGACY_PREFIX):
+        return checkout_work.kept(folder)
+    return checkout_work.version_kept(folder)
+
+
+def held_back(
+    versions: Path, keep: Collection[Path], work: Callable[[Path], str] = kept
+) -> list[tuple[Path, str]]:
+    """Each folder prune keeps for what <work> finds in it although `keep` does not name it, and why."""
+    found = ((folder, work(folder)) for folder in _candidates(versions, keep))
     return [(folder, why) for folder, why in found if why]
 
 
 def _prune_one(versions: Path, folder: Path, work: Callable[[Path], str]) -> bool:
-    if folder.name.startswith(LEGACY_PREFIX) and work(folder):
+    if work(folder):
         return False
     busy = _in_use(folder)
     if busy is None:
@@ -269,19 +280,18 @@ def _prune_one(versions: Path, folder: Path, work: Callable[[Path], str]) -> boo
         return False
 
 
-def prune(versions: Path, keep: Collection[Path], *, work: Callable[[Path], str]) -> list[Path]:
-    """Remove every version folder and legacy checkout not in `keep`; returns those removed.
-    A legacy checkout is the checkout of yours from before versions, so it stays while `work` finds
-    anything in it (held_back says why). A folder a process has open or names in its command line
-    stays, and so does every folder when lsof or ps is missing, fails or takes too long (the safe
-    direction; a line on stderr says so). One that cannot be removed is said on stderr and the rest go
-    on; a link there is never followed."""
+def prune(versions: Path, keep: Collection[Path], *, work: Callable[[Path], str] = kept) -> list[Path]:
+    """Remove every version folder and legacy checkout not in `keep`; returns those removed. One that
+    `work` (kept, by default) finds anything of yours in stays, and held_back says why. A folder a
+    process has open or names in its command line stays, and so does every folder when lsof or ps is
+    missing, fails or takes too long (the safe direction; a line on stderr says so). One that cannot be
+    removed is said on stderr and the rest go on; a link there is never followed."""
     return [f for f in _candidates(versions, keep) if _prune_one(versions, f, work)]
 
 
 def temporary_links(install: Path) -> list[Path]:
-    """The temporary links beside `install` that point and swap_in_link make (links only: never a
-    folder, nor anything else, whatever its name)."""
+    """The temporary links beside `install` that point makes (links only: never a folder, nor anything
+    else, whatever its name)."""
     return [path for path in sorted(install.parent.glob(f"{_link_name(install)}*")) if path.is_symlink()]
 
 

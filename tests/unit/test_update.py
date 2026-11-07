@@ -411,6 +411,36 @@ class ReleaseTest(World):
         said = f"kept {mine}, the checkout from before versions: it has uncommitted changes; delete it"
         self.assertEqual(done.findings, (f"{said} once you have what you need",))
 
+    def test_an_older_version_with_work_in_it_is_kept_and_said(self) -> None:
+        """R46: as a kept checkout from before versions is."""
+        why = "it has uncommitted changes; delete it once you have what you need"
+        with (
+            mock.patch.object(update, "_reload_jobs", return_value=([], [])),
+            mock.patch.object(update_facts, "open_windows", return_value=[]),
+            mock.patch.object(update, "_doctor", return_value=[]),
+            mock.patch.object(versions, "prune", return_value=[]),
+            mock.patch.object(versions, "held_back", return_value=[(self.old, why)]),
+        ):
+            done = update.release(self.record("checked"))
+        self.assertEqual(done.findings, (f"kept {self.old}, an older version: {why}",))
+
+    def test_the_release_sweeps_the_links_a_switch_cut_short_left_before_it_started(self) -> None:
+        """Minor 12: older than the update's start, as its record has it; a newer one stays."""
+        stale = self.install.with_name(".bosun.link-0000aaaa")
+        newer = self.install.with_name(".bosun.link-1111bbbb")
+        for link, moment in ((stale, "2026-11-07T11:59:00+00:00"), (newer, "2026-11-07T12:01:00+00:00")):
+            link.symlink_to(self.new)
+            seconds = datetime.fromisoformat(moment).timestamp()
+            os.utime(link, (seconds, seconds), follow_symlinks=False)
+        with (
+            mock.patch.object(update, "_reload_jobs", return_value=([], [])),
+            mock.patch.object(update_facts, "open_windows", return_value=[]),
+            mock.patch.object(update, "_doctor", return_value=[]),
+        ):
+            update.release(self.record("checked"))  # started at 12:00
+        self.assertFalse(os.path.lexists(stale))
+        self.assertTrue(newer.is_symlink())
+
     def test_what_doctor_fails_or_warns_about_is_kept(self) -> None:
         said = (
             "Tools\n  ok    tmux\n  warn  on battery\n  FAIL  something is missing or not done yet:\n"
@@ -951,6 +981,31 @@ class ConvertTest(World):
             return False
         return True
 
+    def assert_own_work_back(self) -> None:
+        """What the conversion stopped came back as the release brings it back (R49): the jobs reloaded,
+        the check-in loop restarted, and the record no longer says it is stopped."""
+        self.assertIn("reload_changed_jobs", self.shell.scripts())
+        self.assertIn(("refresh", "--checkin-loop"), self.bosun_ran)
+        recorded = update_state.read(self.state)
+        assert recorded is not None
+        self.assertFalse(recorded.own_work_stopped)
+
+    def cut_short(self, step: str) -> UpdateState:
+        """A conversion's record as a crash at <step> leaves it, its own work stopped."""
+        state = UpdateState(
+            id="c1",
+            from_root=str(self.install),
+            to_root=str(self.new),
+            from_commit=self.commit,
+            to_commit=TO,
+            step=step,
+            started_at="2026-11-07T12:00:00+00:00",
+            hold_until=0,
+            own_work_stopped=True,
+        )
+        update_state.write(self.state, state)
+        return state
+
     def convert(self, *flags: str) -> tuple[int, str]:
         args = update.build_parser().parse_args(["--from", str(self.install), "--yes", *flags])
         out = io.StringIO()
@@ -1019,10 +1074,86 @@ class ConvertTest(World):
         assert recorded is not None
         self.assertEqual((recorded.step, recorded.from_root), ("done", str(self.legacy)))
         self.assertIn("reload_changed_jobs", self.shell.scripts())  # the release, on the link
-        self.assertNotIn('start_jobs "$@"', self.shell.scripts())
         self.assertIn(("refresh", "--checkin-loop"), self.bosun_ran)
+        self.assertFalse(recorded.own_work_stopped)
         self.assertIn(f"The checkout is kept as {self.legacy}", out)
         self.assertIn("bosun updated: ", out)
+
+    def test_a_window_busy_again_by_the_stop_is_waited_for_before_anything_is_frozen(self) -> None:
+        """Important 1: the doctor run and the rehearsal take a while after the first wait, and the old
+        loop could prompt a window meanwhile; once bosun's own work is stopped it waits again."""
+        quiet = update_facts.Quiet((("api", "idle"),), None, 10)
+        busy = update_facts.Quiet((("api", "busy"),), None, 10)
+        self.quiet = [quiet, busy, busy, quiet]
+        left_at_backup: list[int] = []
+        real_take = update_backups.take
+
+        def take(*args: Any) -> Path:
+            left_at_backup.append(len(self.quiet))
+            return real_take(*args)
+
+        with mock.patch.object(update_backups, "take", side_effect=take):
+            code, out = self.convert()
+        self.assertEqual(code, 0, out)
+        self.assertEqual(left_at_backup, [1])  # every reading taken, the last one quiet, before the freeze
+        self.assertEqual(out.count("Waiting for a quiet moment to convert: api (busy)"), 1)
+        self.assertLess(out.index("stopped the launchd job"), out.index("Waiting for a quiet moment"))
+
+    def test_ctrl_c_in_the_wait_after_the_stop_starts_its_own_work_again(self) -> None:
+        self.quiet = [update_facts.Quiet((), None, 10), update_facts.Quiet((("api", "busy"),), None, 10)]
+        with mock.patch.object(time, "sleep", side_effect=KeyboardInterrupt):
+            code, out = self.convert()
+        self.assertEqual(code, 1, out)
+        recorded = update_state.read(self.state)
+        assert recorded is not None
+        self.assertEqual(recorded.step, "failed")
+        self.assertIn("quiet moment", recorded.error)
+        self.assertTrue(self.install.is_dir() and not self.install.is_symlink())
+        self.assert_own_work_back()
+
+    def test_a_ctrl_c_while_its_own_work_stops_starts_it_again(self) -> None:
+        """Minor 1: part of it may be stopped by then."""
+        with (
+            mock.patch.object(update_facts, "checkin_loop_pid", side_effect=KeyboardInterrupt),
+            self.assertRaises(KeyboardInterrupt),
+        ):
+            self.convert()
+        self.assert_own_work_back()
+
+    def test_the_next_update_starts_again_what_a_conversion_cut_short_left_stopped(self) -> None:
+        """Minor 1, R49: a crash leaves only the record, which says the work is stopped: while stopping it
+        (rehearsed), in the hold, in the freeze, or after a write put the freeze back (restored)."""
+        for step in ("rehearsed", "holding", "marked", "restored"):
+            with self.subTest(step=step):
+                self.shell.ran.clear()
+                self.bosun_ran.clear()
+                self.cut_short(step)
+                with contextlib.redirect_stdout(io.StringIO()):
+                    update.resume(self.state)
+                self.assert_own_work_back()
+                recorded = update_state.read(self.state)
+                assert recorded is not None
+                self.assertIn(recorded.step, ("failed", "restored"))
+
+    def test_an_update_that_stopped_nothing_starts_nothing(self) -> None:
+        state = dataclasses.replace(self.cut_short("holding"), own_work_stopped=False)
+        update_state.write(self.state, state)
+        with contextlib.redirect_stdout(io.StringIO()):
+            update.resume(self.state)
+        self.assertEqual((self.shell.ran, self.bosun_ran), ([], []))
+
+    def test_the_checkout_lands_where_the_record_says(self) -> None:
+        """Minor 4: one derivation of the legacy folder, so a HEAD that moved since the plan cannot leave
+        the record naming a folder that is not there."""
+        named = versions.legacy_folder(self.new.parent, "c" * 40)
+        plan = dataclasses.replace(a_plan(), from_commit="c" * 40)
+        with mock.patch.object(update_facts, "plan_for", return_value=plan):
+            code, out = self.convert()
+        self.assertEqual(code, 0, out)
+        recorded = update_state.read(self.state)
+        assert recorded is not None
+        self.assertEqual(recorded.from_root, str(named))
+        self.assertEqual((named / "bin" / "bosun").read_text(), "#!/bin/sh\n# the release before versions\n")
 
     def test_a_failure_before_the_switch_starts_its_own_work_again_as_it_was(self) -> None:
         self.a_loop()
@@ -1036,11 +1167,7 @@ class ConvertTest(World):
         self.assertIn("no way from 1", out)
         self.assertTrue(self.install.is_dir() and not self.install.is_symlink())
         self.assertFalse(os.path.lexists(self.legacy))
-        self.assertIn(
-            ('start_jobs "$@"', ("com.bosun.morning.watchdog", "com.bosun.morning.learn")), self.shell.ran
-        )
-        self.assertIn(("refresh", "--checkin-loop"), self.bosun_ran)
-        self.assertNotIn("reload_changed_jobs", self.shell.scripts())
+        self.assert_own_work_back()
 
     def test_a_job_that_will_not_stop_stops_it_before_anything_changed(self) -> None:
         self.shell.stop_fails = True
@@ -1051,7 +1178,7 @@ class ConvertTest(World):
         assert recorded is not None
         self.assertEqual(recorded.step, "failed")
         self.assertFalse(recorded.backup)
-        self.assertIn('start_jobs "$@"', self.shell.scripts())
+        self.assert_own_work_back()
         self.assertTrue(self.install.is_dir() and not self.install.is_symlink())
 
     def test_a_conversion_failing_after_the_switch_leads_the_install_to_the_old_code_again(self) -> None:
@@ -1074,7 +1201,7 @@ class ConvertTest(World):
         recorded = update_state.read(self.state)
         assert recorded is not None
         self.assertEqual((recorded.step, recorded.from_root), ("failed", str(self.legacy)))
-        self.assertIn('start_jobs "$@"', self.shell.scripts())
+        self.assert_own_work_back()
 
     def test_a_dry_run_says_what_converting_adds_and_changes_nothing(self) -> None:
         code, out = self.convert("--dry-run")

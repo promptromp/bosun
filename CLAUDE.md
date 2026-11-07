@@ -88,7 +88,8 @@ of truth, so don't copy rules into this file.
 - Setup (design: `docs/design/init.md`): `get.sh` (what `curl | sh` runs: plain POSIX sh, everything in
   functions with `main` last, because people pipe it straight from `main`; a first install's versions side
   by side, and on an install `init` set up the hand-over to the new version's `bosun update`, whose first
-  run converts an older checkout: `convert` in `lib/update.py`), `lib/preflight.sh` (what
+  run converts an older checkout: `convert` in `lib/update.py`; `lib/checkout_work.py` is what deleting a
+  checkout or a version would lose, which uninstall, the conversion and the update's prune go by), `lib/preflight.sh` (what
   bosun needs and what to do about what is missing; plain sh, changes nothing, and `init` and `doctor`
   start with it) with its profiles `lib/platforms/<os>.sh` and `lib/harnesses/<harness>.sh`, `lib/init_detect.py`
   (read-only: what the Mac shows, Claude Code's files through `lib/claude_state.py`), `lib/init_plan.py`
