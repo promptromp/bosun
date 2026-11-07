@@ -437,16 +437,23 @@ Settled while building it:
   waits once you said yes, saying what it waits for each time that changes, and plans again when it is
   quiet. Ctrl-C there changes nothing. The doctor run and the rehearsal take a while after it, and the old
   check-in loop could prompt a window meanwhile, so once bosun's own work is stopped it checks again, and
-  waits again if it has to (with the loop stopped, that settles soon), before anything is frozen.
+  waits again if it has to (with the loop stopped, that settles soon), before anything is frozen. That
+  wait lasts two minutes at the most (`QUIET_AFTER_STOP_SECONDS`), as a busy window would otherwise keep
+  bosun's own work off for as long as its turn runs: past it, it says so, starts that work again, waits
+  for a quiet moment with everything running, and plans again, as after the first wait.
 - **bosun's own work** is stopped after the rehearsal, where the hold begins: the watchdog's and
   learning's launchd jobs unloaded, and the check-in loop's process ended. The morning job is left, as it
-  runs once a morning. The record says it is stopped (`own_work_stopped`) before anything stops. However
-  the conversion ends short of the switch, a put back included, it brings that work back the way the
-  release does: the jobs the new version wants reloaded (`reload_changed_jobs` counts one that is not
-  loaded as changed) and the check-in loop restarted, on whatever the install path then leads to. After a
-  crash, the next `bosun update` does it, once it has put the freeze back; a field rather than the step
-  tells it, as a write may have put a conversion's freeze back first (`restored`), and the old checkout's
-  code would never bring anything back.
+  runs once a morning. Before anything stops, a mark of what runs (the jobs loaded, and whether the loop)
+  goes into a file of its own, `update/own-work.json` in the state folder, not into `update.json`: an
+  older version's write gate, putting a freeze back, rewrites the record with only the fields it knows.
+  However the conversion ends short of the switch, a put back included, the work the mark names starts
+  again as it was, once, and the mark goes: each job loaded from its plist as it is on disk (`start_jobs`:
+  nothing rendered, so the old code runs under the plists it had, and the morning job, or one you unloaded,
+  is left alone), and the loop restarted by the new version's `refresh --checkin-loop`, whose pane runs the
+  install path's `bosun`, which leads to the old code again by then (the checkout, or `legacy-*` after the
+  swap). After a crash, the next `bosun update` does it, once it has put the freeze back, whoever wrote
+  the record since. Past the switch, the release reloads the jobs and restarts the loop, and removes the
+  mark.
 - **The swap is one call:** the link is made at the legacy folder's name and exchanged with the checkout
   (Linux's `renameat2` with `RENAME_EXCHANGE` does the same), so the checkout is never under another name,
   nor the install path missing. A link a swap cut short left there is replaced.

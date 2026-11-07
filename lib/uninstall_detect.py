@@ -20,18 +20,11 @@ import uninstall_macos
 import versions
 from agent_files import read_object
 from agent_state import AGENTS
-from checkout_work import Checkout
+from checkout_work import Checkout, entries
 from uninstall_plan import UNREADABLE, Facts
 
 
 TMUXINATOR_MARK = "bosun tmuxinator project"
-
-
-def entries(folder: Path) -> tuple[str, ...]:
-    try:
-        return tuple(sorted(entry.name for entry in folder.iterdir()))
-    except OSError:
-        return ()
 
 
 def tmux_command(env: Mapping[str, str]) -> list[str]:

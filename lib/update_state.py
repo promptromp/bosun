@@ -117,11 +117,6 @@ class UpdateState:
     # What bosun doctor failed at in a run while planning, before the hold: the summary lists only the
     # FAIL lines after the switch that this does not hold.
     doctor_before: tuple[str, ...] = ()
-    # The first update, converting a checkout from before versions, stops bosun's own background work
-    # (the watchdog, learning, the check-in loop), which that version holds for no update: true from just
-    # before it stops it until the release, or a put back, brings it back. A crash leaves only this to
-    # say so, also when a write put the freeze back meanwhile.
-    own_work_stopped: bool = False
 
 
 _TUPLES = (
@@ -140,7 +135,6 @@ _OBJECTS = ("plan",)  # JSON objects, read as they are (their reader checks thei
 
 
 _INTS = ("hold_until", "freeze_ms")
-_BOOLS = ("own_work_stopped",)
 _NAMES = tuple(f.name for f in dataclasses.fields(UpdateState))
 _REQUIRED = tuple(
     f.name
@@ -170,8 +164,6 @@ def _right_type(name: str, value: Any) -> bool:
         return isinstance(value, dict)
     if name in _INTS:
         return _is_int(value)
-    if name in _BOOLS:
-        return isinstance(value, bool)
     return isinstance(value, str)
 
 

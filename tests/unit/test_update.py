@@ -411,8 +411,27 @@ class ReleaseTest(World):
         said = f"kept {mine}, the checkout from before versions: it has uncommitted changes; delete it"
         self.assertEqual(done.findings, (f"{said} once you have what you need",))
 
+    def test_a_folder_that_is_not_a_version_is_said_as_such(self) -> None:
+        """Round 2: a plain folder in the versions folder is kept, and said for what it is, once."""
+        plain = self.new.parent / "notes"
+        plain.mkdir()
+        (plain / "mine.txt").write_text("mine\n")
+        with (
+            mock.patch.object(update, "_reload_jobs", return_value=([], [])),
+            mock.patch.object(update_facts, "open_windows", return_value=[]),
+            mock.patch.object(update, "_doctor", return_value=[]),
+            mock.patch.object(versions, "prune", return_value=[]),
+        ):
+            done = update.release(self.record("checked"))
+        self.assertEqual(
+            done.findings, (f"kept {plain}, a folder that is not a version: bosun did not put it there",)
+        )
+
     def test_an_older_version_with_work_in_it_is_kept_and_said(self) -> None:
         """R46: as a kept checkout from before versions is."""
+        (self.old / ".git").write_text(
+            f"gitdir: {self.old.parent / 'bosun.git' / 'worktrees' / self.old.name}\n"
+        )
         why = "it has uncommitted changes; delete it once you have what you need"
         with (
             mock.patch.object(update, "_reload_jobs", return_value=([], [])),
@@ -875,6 +894,9 @@ class AgentsCommandTest(World):
             turn.assert_not_called()
 
 
+OWN_LABELS = ("com.bosun.morning.watchdog", "com.bosun.morning.learn")  # the jobs a conversion stops
+
+
 class FakeShell:
     """update_facts.shell for a conversion: bosun's own jobs, two of them loaded, and what each script
     the update ran was, in order."""
@@ -885,10 +907,10 @@ class FakeShell:
 
     def __call__(self, root: Path, script: str, *args: str) -> subprocess.CompletedProcess[str]:
         self.ran.append((script, args))
-        out = {
-            "stop_own_jobs": "com.bosun.morning.watchdog\ncom.bosun.morning.learn\n",
-            "reload_changed_jobs": "com.bosun.morning.watchdog\ncom.bosun.morning.learn\n",
-        }.get(script, "")
+        labels = "".join(f"{label}\n" for label in OWN_LABELS)
+        out = {"loaded_own_jobs": labels, "stop_own_jobs": labels, "reload_changed_jobs": labels}.get(
+            script, ""
+        )
         code = 1 if script == "stop_own_jobs" and self.stop_fails else 0
         return subprocess.CompletedProcess([script], code, out, "could not unload it" if code else "")
 
@@ -981,30 +1003,35 @@ class ConvertTest(World):
             return False
         return True
 
-    def assert_own_work_back(self) -> None:
-        """What the conversion stopped came back as the release brings it back (R49): the jobs reloaded,
-        the check-in loop restarted, and the record no longer says it is stopped."""
-        self.assertIn("reload_changed_jobs", self.shell.scripts())
-        self.assertIn(("refresh", "--checkin-loop"), self.bosun_ran)
-        recorded = update_state.read(self.state)
-        assert recorded is not None
-        self.assertFalse(recorded.own_work_stopped)
+    def mark(self) -> Path:
+        return self.state / update.OWN_WORK
 
-    def cut_short(self, step: str) -> UpdateState:
-        """A conversion's record as a crash at <step> leaves it, its own work stopped."""
-        state = UpdateState(
-            id="c1",
-            from_root=str(self.install),
-            to_root=str(self.new),
-            from_commit=self.commit,
-            to_commit=TO,
-            step=step,
-            started_at="2026-11-07T12:00:00+00:00",
-            hold_until=0,
-            own_work_stopped=True,
-        )
-        update_state.write(self.state, state)
-        return state
+    def assert_own_work_back(self, loop: bool = False) -> None:
+        """What the conversion stopped runs again as it was, once (R51): the jobs it stopped loaded from
+        their plists on disk and no other (no render, and so never the morning job), the check-in loop
+        restarted when it stopped it; and its mark gone (R50)."""
+        starts = [args for script, args in self.shell.ran if script == 'start_jobs "$@"']
+        self.assertEqual(starts, [OWN_LABELS])
+        self.assertNotIn("reload_changed_jobs", self.shell.scripts())
+        self.assertEqual(("refresh", "--checkin-loop") in self.bosun_ran, loop)
+        self.assertFalse(self.mark().exists())
+
+    def cut_short(self, step: str) -> None:
+        """What a crash at <step> leaves of a conversion that stopped bosun's own work: the record, as an
+        older bosun's write gate rewrites it (only the fields it knows), and the mark of what was stopped."""
+        record = {
+            "id": "c1",
+            "from_root": str(self.install),
+            "to_root": str(self.new),
+            "from_commit": self.commit,
+            "to_commit": TO,
+            "step": step,
+            "started_at": "2026-11-07T12:00:00+00:00",
+            "hold_until": 0,
+        }
+        (self.state / update_state.STATE_FILE).write_text(json.dumps(record))
+        self.mark().parent.mkdir(parents=True, exist_ok=True)
+        self.mark().write_text(json.dumps({"jobs": list(OWN_LABELS), "loop": True}))
 
     def convert(self, *flags: str) -> tuple[int, str]:
         args = update.build_parser().parse_args(["--from", str(self.install), "--yes", *flags])
@@ -1065,7 +1092,7 @@ class ConvertTest(World):
         with mock.patch.object(update_backups, "take", side_effect=take):
             code, out = self.convert()
         self.assertEqual(code, 0, out)
-        self.assertEqual(before_backup, [(["stop_own_jobs"], False)])
+        self.assertEqual(before_backup, [(["loaded_own_jobs", "stop_own_jobs"], False)])
         self.assertEqual(versions.current(self.install), self.new)
         self.assertEqual(
             (self.legacy / "bin" / "bosun").read_text(), "#!/bin/sh\n# the release before versions\n"
@@ -1075,7 +1102,8 @@ class ConvertTest(World):
         self.assertEqual((recorded.step, recorded.from_root), ("done", str(self.legacy)))
         self.assertIn("reload_changed_jobs", self.shell.scripts())  # the release, on the link
         self.assertIn(("refresh", "--checkin-loop"), self.bosun_ran)
-        self.assertFalse(recorded.own_work_stopped)
+        self.assertNotIn('start_jobs "$@"', self.shell.scripts())
+        self.assertFalse(self.mark().exists())
         self.assertIn(f"The checkout is kept as {self.legacy}", out)
         self.assertIn("bosun updated: ", out)
 
@@ -1112,17 +1140,35 @@ class ConvertTest(World):
         self.assert_own_work_back()
 
     def test_a_ctrl_c_while_its_own_work_stops_starts_it_again(self) -> None:
-        """Minor 1: part of it may be stopped by then."""
+        """Minor 1: part of it may be stopped by then (here the jobs, as the loop was stopping)."""
+        self.a_loop()
         with (
-            mock.patch.object(update_facts, "checkin_loop_pid", side_effect=KeyboardInterrupt),
+            mock.patch.object(update, "_stop_loop", side_effect=KeyboardInterrupt),
             self.assertRaises(KeyboardInterrupt),
         ):
             self.convert()
-        self.assert_own_work_back()
+        self.assert_own_work_back(loop=True)
+
+    def test_the_mark_names_what_runs_before_anything_stops(self) -> None:
+        """R50: written before the first stop, so a crash at any point of it is covered."""
+        self.a_loop()
+        seen: list[Any] = []
+        real = self.shell.__call__
+
+        def shell(root: Path, script: str, *args: str) -> subprocess.CompletedProcess[str]:
+            if script == "stop_own_jobs":
+                seen.append(json.loads(self.mark().read_text()))
+            return real(root, script, *args)
+
+        with mock.patch.object(update_facts, "shell", side_effect=shell):
+            self.assertEqual(self.convert()[0], 0)
+        self.assertEqual(seen, [{"jobs": list(OWN_LABELS), "loop": True}])
+        self.assertFalse(self.mark().exists())  # the release brought it all back
 
     def test_the_next_update_starts_again_what_a_conversion_cut_short_left_stopped(self) -> None:
-        """Minor 1, R49: a crash leaves only the record, which says the work is stopped: while stopping it
-        (rehearsed), in the hold, in the freeze, or after a write put the freeze back (restored)."""
+        """R50: the mark says what was stopped, whatever wrote the record since: a crash while stopping
+        (rehearsed), in the hold, in the freeze, or after an older version's write put the freeze back
+        (restored, its record rewritten with only the fields it knows). Once, whatever runs next."""
         for step in ("rehearsed", "holding", "marked", "restored"):
             with self.subTest(step=step):
                 self.shell.ran.clear()
@@ -1130,17 +1176,81 @@ class ConvertTest(World):
                 self.cut_short(step)
                 with contextlib.redirect_stdout(io.StringIO()):
                     update.resume(self.state)
-                self.assert_own_work_back()
+                    update.resume(self.state)
+                self.assert_own_work_back(loop=True)
                 recorded = update_state.read(self.state)
                 assert recorded is not None
                 self.assertIn(recorded.step, ("failed", "restored"))
 
     def test_an_update_that_stopped_nothing_starts_nothing(self) -> None:
-        state = dataclasses.replace(self.cut_short("holding"), own_work_stopped=False)
-        update_state.write(self.state, state)
+        self.cut_short("holding")
+        self.mark().unlink()
         with contextlib.redirect_stdout(io.StringIO()):
             update.resume(self.state)
         self.assertEqual((self.shell.ran, self.bosun_ran), ([], []))
+
+    def test_the_loop_a_put_back_restarts_runs_the_old_code(self) -> None:
+        """R51: refresh --checkin-loop of the new version respawns the pane with the install path's bosun,
+        which a put back leads to the old checkout again (kept as legacy-* after the swap)."""
+        shutil.copytree(Path(__file__).resolve().parents[2] / "lib", self.new / "lib")
+        shutil.move(self.install, self.legacy)
+        versions.point(self.install, self.legacy)  # as a put back after the swap leaves it
+        script = (
+            'source "$1/lib/common.sh"; build_launch_command checkin "" checkin; '
+            'printf "%s\\n" "${launch_cmd[@]}"'
+        )
+        env = {"HOME": str(self.state.parent), "PATH": os.environ["PATH"], "SHELL": "/bin/sh"}
+        env["BOSUN_TMUX_SOCKET"] = f"bosun-unit-{os.getpid()}"  # a server that is not there
+        done = subprocess.run(
+            ["bash", "-c", script, "_", str(self.new)], env=env, capture_output=True, text=True, check=False
+        )
+        self.assertEqual(done.returncode, 0, done.stderr)
+        self.assertIn(f"{self.install}/bin/bosun checkin --loop", done.stdout)
+        self.assertEqual(
+            os.path.realpath(self.install / "bin" / "bosun"), os.path.realpath(self.legacy / "bin" / "bosun")
+        )
+
+    def test_a_window_busy_past_the_bound_brings_its_own_work_back_and_waits_again(self) -> None:
+        """R52: after the stop it waits QUIET_AFTER_STOP_SECONDS at the most; then bosun's own work runs
+        again while it waits for a quiet moment, and it plans again, as after the first wait."""
+        counts = {"stops": 0, "starts": 0, "readings": 0}
+        real = self.shell.__call__
+
+        def shell(root: Path, script: str, *args: str) -> subprocess.CompletedProcess[str]:
+            counts["stops"] += script == "stop_own_jobs"
+            counts["starts"] += script == 'start_jobs "$@"'
+            return real(root, script, *args)
+
+        def quiet(root: Path) -> update_facts.Quiet:
+            counts["readings"] += 1
+            busy = counts["stops"] == 1 and (counts["starts"] == 0 or counts["readings"] % 3)
+            return update_facts.Quiet((("api", "busy" if busy else "idle"),), None, 10)
+
+        plans = [
+            dataclasses.replace(a_plan(), from_commit=self.commit, commits=(f"plan {n}",)) for n in range(3)
+        ]
+        frozen_at: list[int] = []
+        real_take = update_backups.take
+
+        def take(*args: Any) -> Path:
+            frozen_at.append(counts["stops"])
+            return real_take(*args)
+
+        with (
+            mock.patch.object(update_facts, "shell", side_effect=shell),
+            mock.patch.object(update_facts, "quiet_facts", side_effect=quiet),
+            mock.patch.object(update_facts, "plan_for", side_effect=plans),
+            mock.patch.object(update_backups, "take", side_effect=take),
+            mock.patch.object(update, "QUIET_AFTER_STOP_SECONDS", 0.05),
+        ):
+            code, out = self.convert()
+        self.assertEqual(code, 0, out)
+        self.assertIn("starting it again, and waiting for a quiet moment with everything running", out)
+        self.assertEqual(counts["starts"], 1)  # brought back once, at the bound
+        self.assertEqual(frozen_at, [2])  # nothing frozen before the second stop
+        recorded = update_state.read(self.state)
+        assert recorded is not None
+        self.assertEqual(recorded.plan, update_plan.as_record(plans[2]))  # the plan after the last wait
 
     def test_the_checkout_lands_where_the_record_says(self) -> None:
         """Minor 4: one derivation of the legacy folder, so a HEAD that moved since the plan cannot leave
@@ -1167,7 +1277,7 @@ class ConvertTest(World):
         self.assertIn("no way from 1", out)
         self.assertTrue(self.install.is_dir() and not self.install.is_symlink())
         self.assertFalse(os.path.lexists(self.legacy))
-        self.assert_own_work_back()
+        self.assert_own_work_back(loop=True)
 
     def test_a_job_that_will_not_stop_stops_it_before_anything_changed(self) -> None:
         self.shell.stop_fails = True
@@ -1225,6 +1335,56 @@ class ConvertTest(World):
             [call.args[:2] for call in converting.call_args_list],
             [(checkout, self.new), (self.legacy.resolve(), self.new)],
         )
+
+
+class StartJobsTest(unittest.TestCase):
+    """R51: a put back loads the jobs a conversion stopped from their plists as they are on disk
+    (lib/common.sh's start_jobs), against a stand-in launchctl in a scratch home: the shell refuses to
+    go on if any other launchctl would answer."""
+
+    def test_only_the_named_jobs_that_are_not_loaded_from_their_plists_as_they_are(self) -> None:
+        home = Path(self.enterContext(tempfile.TemporaryDirectory())).resolve()
+        agents, tools = home / "Library" / "LaunchAgents", home / ".local" / "bin"
+        agents.mkdir(parents=True)
+        tools.mkdir(parents=True)
+        (home / "loaded").write_text("com.acme.morning.learn\n")  # a stop cut short left it loaded
+        launchctl = tools / "launchctl"
+        launchctl.write_text(
+            '#!/bin/sh\necho "$*" >>"$HOME/launchctl.log"\n'
+            '[ "$1" != print ] || grep -qx "${2##*/}" "$HOME/loaded"\n'
+        )
+        launchctl.chmod(0o755)
+        plists = {
+            label: agents / f"{label}.plist"
+            for label in ("com.acme.morning", "com.acme.morning.watchdog", "com.acme.morning.learn")
+        }
+        for label, path in plists.items():
+            path.write_text(f"<plist>{label}, as install.sh rendered it</plist>\n")
+        before = {label: path.read_bytes() for label, path in plists.items()}
+        script = (
+            'source "$1/lib/common.sh"; '
+            '[ "$(command -v launchctl)" = "$HOME/.local/bin/launchctl" ] || exit 99; '
+            "start_jobs com.acme.morning.watchdog com.acme.morning.learn"
+        )
+        root = Path(__file__).resolve().parents[2]
+        done = subprocess.run(
+            ["bash", "-c", script, "_", str(root)],
+            env={"HOME": str(home), "PATH": os.environ["PATH"]},
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        self.assertEqual(done.returncode, 0, done.stderr)
+        uid = os.getuid()
+        self.assertEqual(
+            (home / "launchctl.log").read_text().splitlines(),
+            [
+                f"print gui/{uid}/com.acme.morning.watchdog",
+                f"bootstrap gui/{uid} {plists['com.acme.morning.watchdog']}",
+                f"print gui/{uid}/com.acme.morning.learn",
+            ],
+        )
+        self.assertEqual({label: path.read_bytes() for label, path in plists.items()}, before)
 
 
 class QuietTest(unittest.TestCase):

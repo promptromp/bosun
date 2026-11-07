@@ -24,7 +24,16 @@ GIT_CONFIG_MARK = "bosun.managed"  # what get.sh sets on what it made
 CACHES = frozenset({"__pycache__", ".pytest_cache", ".mypy_cache", ".ruff_cache", ".venv", ".DS_Store"})
 UNCHECKED = "a git repository that could not be checked"
 NOT_THE_INSTALLERS = "it was not made by the installer, so it is yours"
+NOT_BOSUNS = "bosun did not put it there"  # a folder in the versions folder that is no version
 GIT_SECONDS = 15  # the most one git command may take
+
+
+def entries(folder: Path) -> tuple[str, ...]:
+    """The names directly in <folder>, sorted; none if it cannot be read."""
+    try:
+        return tuple(sorted(entry.name for entry in folder.iterdir()))
+    except OSError:
+        return ()
 
 
 @dataclass(frozen=True)
@@ -148,6 +157,12 @@ def _head_work(folder: Path) -> dict[str, bool] | None:
     return None if unpushed is None else {"commits not pushed": bool(unpushed.strip())}
 
 
+def is_version(folder: Path) -> bool:
+    """Whether <folder> is a version: a worktree (of the versions folder's bosun.git, which its .git file
+    names), not a plain folder."""
+    return (folder / ".git").is_file()
+
+
 def version_work(folder: Path) -> str:
     """What deleting the version in <folder> would lose of its own: its files changed, a commit made in it.
     The repository it shares with the others is versions_work's."""
@@ -155,8 +170,11 @@ def version_work(folder: Path) -> str:
 
 
 def version_kept(folder: Path) -> str:
-    """Why an update's prune keeps the older version in <folder>, or "": something of yours in it. Whether
-    the installer made it is its repository's to say, which only uninstall asks."""
+    """Why an update's prune keeps <folder>, in the versions folder, or "": an older version with
+    something of yours in it (whether the installer made it is its repository's to say, which only
+    uninstall asks), or a folder that is no version at all, which bosun did not put there."""
+    if not is_version(folder):
+        return NOT_BOSUNS
     return why_kept(Checkout(str(folder), True, version_work(folder)))
 
 
@@ -167,13 +185,6 @@ def version_folders(folder: Path) -> list[Path]:
     listed = (Path(path) for path in worktree_paths(git(repo, "worktree", "list", "--porcelain") or ""))
     names = {path.name for path in listed if os.path.dirname(os.path.realpath(path)) == inside}
     return sorted(folder / name for name in names - {install_paths.REPO} if (folder / name).is_dir())
-
-
-def _entries(folder: Path) -> list[str]:
-    try:
-        return sorted(entry.name for entry in folder.iterdir())
-    except OSError:
-        return []
 
 
 def versions_work(folder: Path, found: Collection[Path], others: Collection[str] = ()) -> str:
@@ -187,5 +198,5 @@ def versions_work(folder: Path, found: Collection[Path], others: Collection[str]
     refs = (f"--exclude={branch}", "--branches", "--tags")
     work = first_work(repo_work(repo, (repo, *found), refs))
     known = {install_paths.REPO, ".DS_Store", *(path.name for path in found), *others}
-    unknown = [name for name in _entries(folder) if name not in known]
+    unknown = [name for name in entries(folder) if name not in known]
     return work or (f"what bosun does not know ({', '.join(unknown[:3])})" if unknown else "")

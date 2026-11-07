@@ -1059,11 +1059,19 @@ reload_changed_jobs() { # [--dry-run]
   return "$status"
 }
 
-# The launchd jobs that run bosun's own background work (the watchdog and learning) unloaded, where
-# loaded; prints the label of each it unloaded. `bosun update` stops them while it converts a checkout
-# from before versions, whose jobs know of no update to hold their work for, and reload_changed_jobs
-# brings them back. One that is still loaded after a few tries fails it (exit 1, said on stderr); the
-# others are still unloaded.
+# The labels of the launchd jobs that run bosun's own background work (the watchdog and learning) that
+# are loaded now: what `bosun update`, converting a checkout from before versions, is about to stop.
+loaded_own_jobs() {
+  local label
+  for label in "$(watchdog_label)" "$(learn_label)"; do
+    if job_loaded "$label"; then echo "$label"; fi
+  done
+}
+
+# The launchd jobs that run bosun's own background work unloaded, where loaded; prints the label of each
+# it unloaded. `bosun update` stops them while it converts a checkout from before versions, whose jobs
+# know of no update to hold their work for. One that is still loaded after a few tries fails it (exit 1,
+# said on stderr); the others are still unloaded.
 stop_own_jobs() {
   local label tries status=0
   for label in "$(watchdog_label)" "$(learn_label)"; do
@@ -1080,6 +1088,21 @@ stop_own_jobs() {
     else
       echo "$label"
     fi
+  done
+  return "$status"
+}
+
+# Each launchd job <label> that is not loaded, loaded again from its plist as it is on disk: what a
+# conversion put back loads of what it stopped (nothing rendered, so the code the install path leads to
+# runs under the plists it had). One already loaded is left as it is.
+start_jobs() { # <label...>
+  local label plist status=0
+  for label in "$@"; do
+    job_loaded "$label" && continue
+    plist="$HOME/Library/LaunchAgents/$label.plist"
+    launchctl bootstrap "gui/$(id -u)" "$plist" && continue
+    log "ERROR: launchctl bootstrap failed for $plist" >&2
+    status=1
   done
   return "$status"
 }

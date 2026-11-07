@@ -307,6 +307,12 @@ def quiet_facts(root: Path) -> Quiet:
     return Quiet(statuses, _whole(typed), ACTIVE_MINUTES if active is None else active)
 
 
+def own_jobs_loaded(root: Path) -> list[str]:
+    """The launchd jobs of bosun's own background work (the watchdog, learning) loaded now, as the
+    version in <root> names them (lib/common.sh's loaded_own_jobs)."""
+    return shell(root, "loaded_own_jobs").stdout.split()
+
+
 def checkin_loop_pid(root: Path) -> int | None:
     """The pid of the check-in loop in the checkin window, if one runs there (lib/common.sh's
     checkin_loop_pid, as the version in <root> finds it)."""

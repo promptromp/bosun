@@ -158,11 +158,13 @@ has no `bosun update`. Running the install line again converts it, once. The new
 shows its plan and asks, then waits for a quiet moment: every window idle with nothing running, and
 nobody typing in the session for `BOSUN_ACTIVE_CLIENT_MINUTES`. It says what it waits for, and Ctrl-C
 there changes nothing. Then it stops the watchdog, learning and the check-in loop, since the old version
-has no hold to keep them waiting, checks again that every window is still quiet (waiting again if not),
-and updates as above. The checkout is swapped for the link in one step and kept as
+has no hold to keep them waiting, checks again that every window is still quiet, and updates as above. If
+a window is still busy two minutes after that stop, it starts that work again and waits for a quiet
+moment with everything running, as before. The checkout is swapped for the link in one step and kept as
 `~/.local/share/bosun-versions/legacy-<its commit>`, and every window is restarted on the new version. If
-anything fails, the old checkout is what runs again, and its jobs and loop are started again; after a
-crash, the next `bosun update` starts them.
+anything fails, the old checkout is what runs again, with the jobs and the loop it stopped started again
+as they were; after a crash, the next `bosun update` starts them, going by what it noted in
+`update/own-work.json` in the state folder before it stopped anything.
 
 It will not convert a checkout with anything of yours in it: changes, a stash, commits not pushed,
 another worktree, a file git ignores. Take that out first. The update after it deletes the kept checkout,

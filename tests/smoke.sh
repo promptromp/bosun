@@ -2878,6 +2878,7 @@ FAKE
   check "... the ledger v1 wrote migrated to format 2" test "$(jq -r '"\(.version) \(.items["review:acme/api#7"].title)"' "$C/state/ledger.json")" = "2 Written on v1"
   check "... and valid against its journal" test "$(c_bosun ledger validate --journal)" = "ledger is valid"
   check "... the record says done, from the legacy folder" jq -e --arg legacy "$C_LEGACY" '.step == "done" and .from_root == $legacy' "$C/state/update.json"
+  check "... and the mark of what it stopped of bosun's own work is gone: the release brought that back" test ! -e "$C/state/update/own-work.json"
   check "... its jobs loaded on the link" bash -c 'grep -qF "exec \"$2/bin/bosun\" " "$1/Library/LaunchAgents/com.bosun.convert-test.watchdog.plist"' _ "$HOME" "$C_LINK"
   check "... and it ends with where the checkout is, and the summary" bash -c '
     grep -qF "The checkout is kept as $2 until the next update" "$1" && grep -q "^bosun updated: ${3:0:7} -> ${4:0:7}" "$1" &&

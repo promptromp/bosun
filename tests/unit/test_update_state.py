@@ -160,16 +160,6 @@ class RecordTest(unittest.TestCase):
         update_state.write(self.dir, full)
         self.assertEqual(update_state.read(self.dir), full)
 
-    def test_a_conversion_s_own_work_stopped_is_read_back_and_only_as_a_bool(self) -> None:
-        """Minor 1 (R49): what tells the next update to start bosun's own work again after a crash."""
-        full = update_state.advanced(state(), "holding", own_work_stopped=True)
-        update_state.write(self.dir, full)
-        self.assertEqual(update_state.read(self.dir), full)
-        for value in ("yes", 1):
-            self.newer(own_work_stopped=value)
-            with self.assertRaises(update_state.RecordUnreadable, msg=str(value)):
-                update_state.load(self.dir)
-
     def test_a_windows_field_of_the_wrong_shape_is_no_record(self) -> None:
         for windows in (["api"], {"api": "restart"}, {"api": [1]}):
             (self.dir / "update.json").write_text(

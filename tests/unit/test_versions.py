@@ -17,6 +17,7 @@ from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "lib"))
 
+import checkout_work
 import versions
 from install_paths import REPO
 
@@ -317,6 +318,15 @@ class LegacyTest(unittest.TestCase):
         self.assertEqual(versions.prune(self.vdir, keep=set(), work=work), [self.mine, self.clean])
         self.assertTrue(self.a.is_dir())
         self.assertEqual(versions.held_back(self.vdir, set(), work), [(self.a, "it has uncommitted changes")])
+
+    def test_a_folder_that_is_not_a_version_is_said_for_what_it_is(self) -> None:
+        """Round 2: neither a worktree of bosun.git nor a checkout from before versions; kept, and not said
+        to be a repository that could not be checked."""
+        plain = self.vdir / "notes"
+        plain.mkdir()
+        self.assertEqual(versions.kept(plain), "bosun did not put it there")
+        self.assertFalse(checkout_work.is_version(plain))
+        self.assertTrue(checkout_work.is_version(self.a))
 
     def test_by_default_it_goes_by_the_shared_check(self) -> None:
         """No caller can forget it: a version with a change in it stays without a check passed in."""
