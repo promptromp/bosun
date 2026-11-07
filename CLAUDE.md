@@ -86,7 +86,9 @@ of truth, so don't copy rules into this file.
   `SKIPPED` or `CHECKED`) trips the rules-digest test in `tests/unit/test_knowledge_changes.py`:
   bump `KG_RULES_VERSION` (`lib/knowledge.py`) and record the new digest under it.
 - Setup (design: `docs/design/init.md`): `get.sh` (what `curl | sh` runs: plain POSIX sh, everything in
-  functions with `main` last, because people pipe it straight from `main`), `lib/preflight.sh` (what
+  functions with `main` last, because people pipe it straight from `main`; a first install's versions side
+  by side, and on an install `init` set up the hand-over to the new version's `bosun update`, whose first
+  run converts an older checkout: `convert` in `lib/update.py`), `lib/preflight.sh` (what
   bosun needs and what to do about what is missing; plain sh, changes nothing, and `init` and `doctor`
   start with it) with its profiles `lib/platforms/<os>.sh` and `lib/harnesses/<harness>.sh`, `lib/init_detect.py`
   (read-only: what the Mac shows, Claude Code's files through `lib/claude_state.py`), `lib/init_plan.py`

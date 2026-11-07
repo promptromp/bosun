@@ -93,7 +93,7 @@ repo_git() { git -c core.hooksPath=/dev/null --git-dir="$REPO" "$@"; }
 VERSIONS="$(dirname "$BOSUN_ROOT")"
 REPO="$VERSIONS/bosun.git"
 if [ "$BOSUN_INSTALL" = "$BOSUN_ROOT" ]; then
-  die "bosun update moves an install made by get.sh, with its versions side by side in <install>-versions; $BOSUN_ROOT is a checkout: update it with git"
+  die "bosun update moves an install made by get.sh, with its versions side by side in <install>-versions; $BOSUN_ROOT is a checkout: update it with git (one an earlier get.sh made, at ~/.local/share/bosun: run get.sh again, which converts it)"
 fi
 branch="$(repo_git config bosun.branch)" || branch=main
 repo_git fetch --quiet origin "+refs/heads/$branch:refs/remotes/origin/$branch" ||

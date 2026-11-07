@@ -208,10 +208,12 @@ def store_locks(state_dir: Path, config_dir: Path) -> Iterator[None]:
 
 
 def _point_back(from_root: Path) -> None:
-    """The install link at <from_root> again, where the update came from a version folder and the
-    link is there (a checkout from before versions is never made a link)."""
+    """The install link at <from_root> again, where the update came from a folder beside it and the
+    link is there: a version, or the checkout from before versions that the first update swapped for
+    the link and keeps as legacy-* (its record names that folder from the switch on). A checkout still
+    at the install path is never made a link, and the link never leads to a folder that is not there."""
     install = install_paths.install_path(from_root)
-    if install != from_root and install.is_symlink():
+    if install != from_root and install.is_symlink() and from_root.is_dir():
         versions.point(install, from_root)
 
 

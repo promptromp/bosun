@@ -12,10 +12,12 @@ import json
 import os
 import re
 import shutil
+import signal
 import subprocess
 import sys
 import tempfile
 import threading
+import time
 import unittest
 from collections.abc import Callable, Iterator
 from datetime import UTC, datetime, timedelta
@@ -379,6 +381,35 @@ class ReleaseTest(World):
             done = update.release(self.record("checked", reloaded=("com.bosun.morning",)))
         self.assertEqual(done.reloaded, ("com.bosun.morning", "com.bosun.morning.watchdog"))
         self.assertEqual(update_state.read(self.state), done)
+
+    def test_a_checkout_from_before_versions_with_work_in_it_is_kept_and_said(self) -> None:
+        """R43 carry 3: the release's prune checks it as bosun uninstall checks a checkout, and the
+        summary says once what it kept."""
+        origin = self.new.parent.parent / "origin.git"
+        versions.git("init", "-q", "--bare", str(origin))
+        identity = ("-c", "user.name=acme", "-c", "user.email=dev@example.com", "-c", "commit.gpgsign=false")
+        made = []
+        for commit in ("a" * 40, "b" * 40):
+            folder = versions.legacy_folder(self.new.parent, commit)
+            versions.git("clone", "-q", str(origin), str(folder))
+            versions.git("-C", str(folder), *identity, "commit", "-q", "--allow-empty", "-m", "a release")
+            versions.git("-C", str(folder), "push", "-q", "origin", "HEAD:main")
+            versions.git("-C", str(folder), "fetch", "-q", "origin")
+            versions.git("-C", str(folder), "config", "bosun.managed", "true")
+            made.append(folder)
+        mine, clean = made
+        (mine / "notes.txt").write_text("mine\n")
+        with (
+            mock.patch.object(update, "_reload_jobs", return_value=([], [])),
+            mock.patch.object(update_facts, "open_windows", return_value=[]),
+            mock.patch.object(update, "_doctor", return_value=[]),
+            mock.patch.object(update_backups, "prune", return_value=[]),
+        ):
+            done = update.release(self.record("checked"))
+        self.assertTrue(mine.is_dir())
+        self.assertFalse(clean.exists())
+        said = f"kept {mine}, the checkout from before versions: it has uncommitted changes; delete it"
+        self.assertEqual(done.findings, (f"{said} once you have what you need",))
 
     def test_what_doctor_fails_or_warns_about_is_kept(self) -> None:
         said = (
@@ -812,6 +843,282 @@ class AgentsCommandTest(World):
             with mock.patch.object(update_windows, "turn") as turn:
                 self.assertEqual(self.main("advance"), (0, "", ""))
             turn.assert_not_called()
+
+
+class FakeShell:
+    """update_facts.shell for a conversion: bosun's own jobs, two of them loaded, and what each script
+    the update ran was, in order."""
+
+    def __init__(self) -> None:
+        self.ran: list[tuple[str, tuple[str, ...]]] = []
+        self.stop_fails = False
+
+    def __call__(self, root: Path, script: str, *args: str) -> subprocess.CompletedProcess[str]:
+        self.ran.append((script, args))
+        out = {
+            "stop_own_jobs": "com.bosun.morning.watchdog\ncom.bosun.morning.learn\n",
+            "reload_changed_jobs": "com.bosun.morning.watchdog\ncom.bosun.morning.learn\n",
+        }.get(script, "")
+        code = 1 if script == "stop_own_jobs" and self.stop_fails else 0
+        return subprocess.CompletedProcess([script], code, out, "could not unload it" if code else "")
+
+    def scripts(self) -> list[str]:
+        return [script for script, _ in self.ran]
+
+
+class ConvertTest(World):
+    """The first update, from a checkout of bosun at the install path (docs/design/update.md, "The first
+    update converts, at a quiet moment"): the stores real, the swap real, bosun's commands faked."""
+
+    def setUp(self) -> None:
+        super().setUp()
+        self.install.unlink()
+        self.install.mkdir()
+        (self.install / "bin").mkdir()
+        (self.install / "bin" / "bosun").write_text("#!/bin/sh\n# the release before versions\n")
+        identity = ["-c", "user.name=acme", "-c", "user.email=dev@example.com", "-c", "commit.gpgsign=false"]
+        origin = self.install.parent / "origin.git"
+        versions.git("init", "-q", "--bare", str(origin))
+        for argv in (
+            ["init", "-q", "-b", "main"],
+            ["add", "-A"],
+            [*identity, "commit", "-qm", "a release"],
+            ["remote", "add", "origin", str(origin)],
+            ["push", "-q", "origin", "main"],
+            ["fetch", "-q", "origin"],
+        ):
+            versions.git("-C", str(self.install), *argv)
+        self.commit = versions.commit_of(self.install)
+        self.legacy = versions.legacy_folder(self.new.parent, self.commit)
+        self.shell = FakeShell()
+        self.bosun_ran: list[tuple[str, ...]] = []
+        self.loop: int | None = None
+        self.quiet = [update_facts.Quiet((("orch", "idle"), ("api", "exited")), None, 10)]
+        stack = contextlib.ExitStack()
+        self.addCleanup(stack.close)
+        for name, fake in (
+            ("plan_for", lambda *args: dataclasses.replace(a_plan(), from_commit=self.commit)),
+            ("shell", self.shell),
+            ("bosun", self.bosun),
+            ("open_windows", lambda root: [{"kind": "checkin", "name": "checkin", "window": True}]),
+            ("quiet_facts", lambda root: self.quiet.pop(0) if len(self.quiet) > 1 else self.quiet[0]),
+            ("checkin_loop_pid", lambda root: self.loop),
+        ):
+            stack.enter_context(mock.patch.object(update_facts, name, side_effect=fake))
+        stack.enter_context(mock.patch.object(update, "_doctor", return_value=[]))
+        stack.enter_context(mock.patch.object(update, "QUIET_POLL_SECONDS", 0))
+        stack.enter_context(mock.patch.object(update, "ROOT", self.new))
+        stack.enter_context(mock.patch.object(update_windows, "bring_along", side_effect=self.brought_along))
+        self.addCleanup(setattr, update.Output, "to_stderr", False)
+
+    def brought_along(self, state: UpdateState, plan: update_plan.Plan, say: Any) -> UpdateState:
+        return update._step(self.state, state, "done")
+
+    def on_the_real_stores(self, fake: Callable[..., Any], real: Callable[..., Any]) -> Callable[..., Any]:
+        """<fake> where the freeze calls it, on the real state folder; <real> on the rehearsal's copy."""
+
+        def call(first: Any, *args: Any) -> Any:
+            where = first.state_dir if isinstance(first, migrations.Context) else first
+            return (fake if where == self.state else real)(first, *args)
+
+        return call
+
+    def bosun(self, root: Path, *args: str, **_: Any) -> subprocess.CompletedProcess[str]:
+        self.bosun_ran.append(args)
+        return subprocess.CompletedProcess(args, 0, "", "")
+
+    def a_loop(self) -> int:
+        """A stand-in for the check-in loop: a process to stop, whose parent is not this one (as the
+        loop's is its pane's shell, which reaps it once it stops)."""
+        started = subprocess.run(
+            ["sh", "-c", "sleep 60 >/dev/null 2>&1 & echo $!"], capture_output=True, text=True, check=True
+        )
+        self.loop = int(started.stdout)
+        self.addCleanup(self.kill_loop)
+        return self.loop
+
+    def kill_loop(self) -> None:
+        if self.loop:
+            with contextlib.suppress(ProcessLookupError):
+                os.kill(self.loop, signal.SIGKILL)
+
+    def loop_runs(self) -> bool:
+        if not self.loop:
+            return False
+        try:
+            os.kill(self.loop, 0)
+        except ProcessLookupError:
+            return False
+        return True
+
+    def convert(self, *flags: str) -> tuple[int, str]:
+        args = update.build_parser().parse_args(["--from", str(self.install), "--yes", *flags])
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(out):
+            code = update.convert(self.install, self.new, args)
+        return code, out.getvalue()
+
+    def test_a_checkout_with_anything_of_yours_in_it_is_refused_with_nothing_changed(self) -> None:
+        (self.install / "notes.txt").write_text("mine\n")
+        with self.assertRaises(update_facts.UpdateRefused) as refused:
+            self.convert()
+        self.assertIn(f"{self.install} has uncommitted changes", str(refused.exception))
+        self.assertIn("run get.sh again", str(refused.exception))
+        self.assertTrue(self.install.is_dir() and not self.install.is_symlink())
+        self.assertIsNone(update_state.read(self.state))
+        self.assertEqual(self.shell.ran, [])
+
+    def test_it_waits_for_a_quiet_moment_saying_what_it_waits_for_once_each(self) -> None:
+        busy = update_facts.Quiet((("orch", "idle"), ("api", "busy"), ("web", "shell")), None, 10)
+        typed = update_facts.Quiet((("orch", "idle"), ("api", "idle")), 3, 10)
+        self.quiet = [busy, busy, typed, update_facts.Quiet((("api", "idle"),), 10, 10)]
+        code, out = self.convert()
+        self.assertEqual(code, 0, out)
+        waits = [line for line in out.splitlines() if line.startswith("Waiting for a quiet moment")]
+        self.assertEqual(
+            waits,
+            [
+                "Waiting for a quiet moment to convert: api (busy); web (shell)",
+                (
+                    "Waiting for a quiet moment to convert: someone typed in the session 3 min ago"
+                    " (quiet after 10)"
+                ),
+            ],
+        )
+
+    def test_ctrl_c_while_it_waits_changes_nothing(self) -> None:
+        self.a_loop()
+        self.quiet = [update_facts.Quiet((("api", "busy"),), None, 10)]
+        with mock.patch.object(time, "sleep", side_effect=KeyboardInterrupt):
+            code, out = self.convert()
+        self.assertEqual(code, update.BLOCKED)
+        self.assertIn("Nothing has changed: run get.sh again at a quieter moment", out)
+        self.assertTrue(self.install.is_dir() and not self.install.is_symlink())
+        self.assertIsNone(update_state.read(self.state))
+        self.assertEqual(self.shell.ran, [])
+        self.assertTrue(self.loop_runs())  # the check-in loop still runs
+
+    def test_its_own_work_stops_before_the_backup_and_the_checkout_is_swapped_for_the_link(self) -> None:
+        self.a_loop()
+        before_backup: list[tuple[list[str], bool]] = []
+        real_take = update_backups.take
+
+        def take(*args: Any) -> Path:
+            before_backup.append((self.shell.scripts(), self.loop_runs()))
+            return real_take(*args)
+
+        with mock.patch.object(update_backups, "take", side_effect=take):
+            code, out = self.convert()
+        self.assertEqual(code, 0, out)
+        self.assertEqual(before_backup, [(["stop_own_jobs"], False)])
+        self.assertEqual(versions.current(self.install), self.new)
+        self.assertEqual(
+            (self.legacy / "bin" / "bosun").read_text(), "#!/bin/sh\n# the release before versions\n"
+        )
+        recorded = update_state.read(self.state)
+        assert recorded is not None
+        self.assertEqual((recorded.step, recorded.from_root), ("done", str(self.legacy)))
+        self.assertIn("reload_changed_jobs", self.shell.scripts())  # the release, on the link
+        self.assertNotIn('start_jobs "$@"', self.shell.scripts())
+        self.assertIn(("refresh", "--checkin-loop"), self.bosun_ran)
+        self.assertIn(f"The checkout is kept as {self.legacy}", out)
+        self.assertIn("bosun updated: ", out)
+
+    def test_a_failure_before_the_switch_starts_its_own_work_again_as_it_was(self) -> None:
+        self.a_loop()
+
+        def fails(ctx: migrations.Context) -> list[migrations.Applied]:
+            raise migrations.MigrationError("no way from 1")
+
+        with mock.patch.object(migrations, "run", side_effect=self.on_the_real_stores(fails, migrations.run)):
+            code, out = self.convert()
+        self.assertEqual(code, 1)
+        self.assertIn("no way from 1", out)
+        self.assertTrue(self.install.is_dir() and not self.install.is_symlink())
+        self.assertFalse(os.path.lexists(self.legacy))
+        self.assertIn(
+            ('start_jobs "$@"', ("com.bosun.morning.watchdog", "com.bosun.morning.learn")), self.shell.ran
+        )
+        self.assertIn(("refresh", "--checkin-loop"), self.bosun_ran)
+        self.assertNotIn("reload_changed_jobs", self.shell.scripts())
+
+    def test_a_job_that_will_not_stop_stops_it_before_anything_changed(self) -> None:
+        self.shell.stop_fails = True
+        code, out = self.convert()
+        self.assertEqual(code, 1)
+        self.assertIn("launchd: could not unload it", out)
+        recorded = update_state.read(self.state)
+        assert recorded is not None
+        self.assertEqual(recorded.step, "failed")
+        self.assertFalse(recorded.backup)
+        self.assertIn('start_jobs "$@"', self.shell.scripts())
+        self.assertTrue(self.install.is_dir() and not self.install.is_symlink())
+
+    def test_a_conversion_failing_after_the_switch_leads_the_install_to_the_old_code_again(self) -> None:
+        """R43 carry 4: the checkout is legacy-* by then, and the record names it from the switch on."""
+        ledger_before = (self.state / "ledger.json").read_bytes()
+
+        def damaged(state_dir: Path, config_dir: Path) -> list[str]:
+            (state_dir / "ledger.json").write_text('{"version": 2, "items": {}}')
+            return ["the ledger: journal: damaged"]
+
+        checks = self.on_the_real_stores(damaged, update.check_stores)
+        with mock.patch.object(update, "check_stores", side_effect=checks):
+            code, out = self.convert()
+        self.assertEqual(code, 1, out)
+        self.assertEqual(versions.current(self.install), self.legacy)
+        self.assertEqual(
+            (self.install / "bin" / "bosun").read_text(), "#!/bin/sh\n# the release before versions\n"
+        )
+        self.assertEqual((self.state / "ledger.json").read_bytes(), ledger_before)
+        recorded = update_state.read(self.state)
+        assert recorded is not None
+        self.assertEqual((recorded.step, recorded.from_root), ("failed", str(self.legacy)))
+        self.assertIn('start_jobs "$@"', self.shell.scripts())
+
+    def test_a_dry_run_says_what_converting_adds_and_changes_nothing(self) -> None:
+        code, out = self.convert("--dry-run")
+        self.assertEqual(code, 0)
+        self.assertIn(f"This first update converts {self.install}, a checkout from before versions", out)
+        self.assertIn(f"keeping the checkout as {self.legacy}", out)
+        self.assertTrue(self.install.is_dir() and not self.install.is_symlink())
+        self.assertEqual(self.shell.ran, [])
+        self.assertIsNone(update_state.read(self.state))
+
+    def test_bosun_update_from_a_checkout_or_its_legacy_folder_converts(self) -> None:
+        """The dispatch, after an update cut short is carried on: from the checkout, or from the legacy
+        folder a conversion put back leads the link to."""
+        checkout = self.install.resolve()
+        with mock.patch.object(update, "convert", return_value=0) as converting:
+            update.main(["--from", str(self.install), "--yes"])
+            shutil.move(self.install, self.legacy)  # as a conversion put back leaves it
+            versions.point(self.install, self.legacy)
+            update.main(["--from", str(self.legacy), "--dry-run"])
+        self.assertEqual(
+            [call.args[:2] for call in converting.call_args_list],
+            [(checkout, self.new), (self.legacy.resolve(), self.new)],
+        )
+
+
+class QuietTest(unittest.TestCase):
+    def test_idle_or_no_agent_is_quiet_and_anything_else_is_waited_for(self) -> None:
+        statuses = (
+            ("a", "idle"),
+            ("b", "exited"),
+            ("c", "busy"),
+            ("d", "shell"),
+            ("e", "waiting"),
+            ("f", "unknown"),
+        )
+        self.assertEqual(
+            update.waiting_for(update_facts.Quiet(statuses, None, 10)),
+            ["c (busy)", "d (shell)", "e (waiting)", "f (unknown)"],
+        )
+
+    def test_typing_counts_within_the_active_minutes(self) -> None:
+        for typed, waits in ((None, False), (0, True), (9, True), (10, False), (25, False)):
+            self.assertEqual(bool(update.waiting_for(update_facts.Quiet((), typed, 10))), waits, typed)
+        self.assertEqual(update.waiting_for(update_facts.Quiet((), 0, 0)), [])
 
 
 class UsageTest(unittest.TestCase):

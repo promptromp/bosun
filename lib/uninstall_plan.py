@@ -5,6 +5,11 @@ docs/design/uninstall.md.
 A file goes only if it is listed here as bosun's, and only from a folder that is bosun's own: its name says
 bosun, or everything in it is listed here. A state or config folder can be set to anywhere, so "everything in
 it" is not safe to delete, and neither is a folder that holds someone else's files under bosun's names.
+
+The install goes last, and whole or not at all: the checkout, or with versions side by side the versions
+folder (its repository and every version in it, a worktree each), the checkouts from before versions kept
+there, and the link that led to the version in use. Each is checked as a checkout is, and anything of yours
+in any of them keeps the lot.
 """
 
 from __future__ import annotations
@@ -125,6 +130,8 @@ CHECKOUT = "checkout"
 CANCEL_WAKE = "sudo pmset repeat cancel"
 INSTALL_LINE = "curl -fsSL https://raw.githubusercontent.com/promptromp/bosun/main/get.sh | sh"
 UNREADABLE = -1  # records that are there but cannot be read, so they may hold anything
+NOT_THE_INSTALLERS = "it was not made by the installer, so it is yours"
+AT_HOME = "it is where your home folder is, so it is not touched"
 # How `pmset -g sched` says the days, for the sets it has a word for.
 PMSET_DAYS = {"MTWRFSU": "every day", "MTWRF": "weekdays", "SU": "weekends"}
 NAMES_SHOWN = 5  # of the files a folder holds that bosun does not know
@@ -147,10 +154,13 @@ class Checkout:
 @dataclass(frozen=True)
 class Facts:
     home: str
+    # What holds the code: the checkout, or with versions side by side the versions folder (managed: its
+    # repository has bosun.managed; work: what the repository holds that is nowhere else).
     checkout: Checkout
     config_dir: str
     state_dir: str
     log_dir: str
+    bosun: str  # the bosun to run again: through the install link, or this checkout's
     session: str = "bosun"
     windows: tuple[str, ...] = ()
     keep_awake: bool = False
@@ -169,6 +179,10 @@ class Facts:
     knowledge_records: int = 0
     knowledge_files: int = 0  # what the knowledge folder holds at all
     unsafe: tuple[str, ...] = ()  # folders that hold your home folder or bosun's checkout
+    install_link: str = ""  # versions side by side: the install path, the link to the version in use
+    versions: tuple[Checkout, ...] = ()  # each version's folder in the versions folder, and its own work
+    legacy: tuple[Checkout, ...] = ()  # the checkouts from before versions kept there (legacy-*)
+    leftover_links: tuple[str, ...] = ()  # temporary links beside the install a switch cut short left
 
 
 @dataclass(frozen=True)
@@ -196,12 +210,12 @@ class Stay:
 @dataclass(frozen=True)
 class Plan:
     steps: tuple[Step, ...]
-    checkout: Step | None  # last of all: what is carrying this out runs from it
+    install: tuple[Step, ...]  # last of all: what is carrying this out runs from it
     stays: tuple[Stay, ...]
 
     @property
     def empty(self) -> bool:
-        return not self.steps and self.checkout is None
+        return not self.steps and not self.install
 
 
 @dataclass(frozen=True)
@@ -295,7 +309,7 @@ def job_steps(facts: Facts) -> list[Step]:
 def stop_steps(facts: Facts) -> list[Step]:
     if not facts.windows and not facts.keep_awake:
         return []
-    stop = f"{quoted(facts.checkout.root + '/bin/bosun')} stop"
+    stop = f"{quoted(facts.bosun)} stop"
     return [Step(STOP, ", ".join(facts.windows), by_hand=stop)]
 
 
@@ -306,7 +320,8 @@ def agent_steps(facts: Facts) -> list[Step]:
 
 def link_steps(facts: Facts) -> list[Step]:
     links = [facts.link] if facts.link else []
-    return [Step(LINK, path, by_hand=f"rm {quoted(path)}") for path in (*links, *facts.old_files)]
+    paths = (*links, *facts.old_files, *facts.leftover_links)
+    return [Step(LINK, path, by_hand=f"rm {quoted(path)}") for path in paths]
 
 
 def wanted_gone(kind: str, facts: Facts, choices: Choices) -> bool:
@@ -340,22 +355,52 @@ def file_steps(facts: Facts, choices: Choices) -> list[Step]:
     ]
 
 
-def checkout_step(facts: Facts) -> Step | None:
-    checkout = facts.checkout
-    if not checkout.managed or checkout.work or not safe_folder(checkout.root, facts):
-        return None
-    return Step(CHECKOUT, checkout.root, by_hand=f"rm -rf {quoted(checkout.root)}")
+def why_kept(piece: Checkout) -> str:
+    """Why deleting <piece> is not bosun's to do, or "" when it may go: the installer did not make it, or
+    something of yours is in it. The update's prune keeps a checkout from before versions by it too."""
+    if not piece.managed:
+        return NOT_THE_INSTALLERS
+    return f"it has {piece.work}; delete it once you have what you need" if piece.work else ""
 
 
-def checkout_stays(facts: Facts) -> list[Stay]:
-    checkout = facts.checkout
-    if checkout_step(facts) is not None:
+def kept_because(piece: Checkout, facts: Facts) -> str:
+    return why_kept(piece) or ("" if safe_folder(piece.root, facts) else AT_HOME)
+
+
+def pieces(facts: Facts) -> tuple[Checkout, ...]:
+    """What the install is made of, each checked as a checkout: the checkouts from before versions, the
+    versions, and what holds them (or the checkout alone)."""
+    return (*facts.legacy, *facts.versions, facts.checkout)
+
+
+def install_steps(facts: Facts) -> tuple[Step, ...]:
+    """The install, last of all and all of it or none: the checkouts from before versions, the folder
+    that holds the code (the checkout, or the versions folder with every version in it), then the link
+    that led into it."""
+    if any(kept_because(piece, facts) for piece in pieces(facts)):
+        return ()
+    folders = (*(piece.root for piece in facts.legacy), facts.checkout.root)
+    links = (facts.install_link,) if facts.install_link else ()
+    return (
+        *(Step(CHECKOUT, folder, by_hand=f"rm -rf {quoted(folder)}") for folder in folders),
+        *(Step(LINK, link, by_hand=f"rm {quoted(link)}") for link in links),
+    )
+
+
+def install_stays(facts: Facts) -> list[Stay]:
+    """Why the install stays, when it does: each piece with a reason of its own, the folder that holds them,
+    and the link that leads into it."""
+    held = [Stay(piece.root, why) for piece in pieces(facts) if (why := kept_because(piece, facts))]
+    if not held:
         return []
-    if checkout.managed and checkout.work:
-        return [Stay(checkout.root, f"it has {checkout.work}; delete it once you have what you need")]
-    if checkout.managed:
-        return [Stay(checkout.root, "it is where your home folder is, so it is not touched")]
-    return [Stay(checkout.root, "this checkout was not made by the installer, so it is yours")]
+    if facts.checkout.root not in {stay.path for stay in held}:
+        names = ", ".join(Path(stay.path).name for stay in held)
+        which = "stays" if len(held) == 1 else "stay"
+        held.append(Stay(facts.checkout.root, f"it holds {names}, which {which}"))
+    if facts.install_link:
+        why = f"it leads into {tilde(facts.checkout.root, facts.home)}, which stays"
+        held.append(Stay(facts.install_link, why))
+    return held
 
 
 def settings_stay(facts: Facts, choices: Choices) -> list[Stay]:
@@ -421,12 +466,12 @@ def build_plan(facts: Facts, choices: Choices) -> Plan:
             *link_steps(facts),
             *file_steps(facts, choices),
         ),
-        checkout_step(facts),
+        install_steps(facts),
         (
             *settings_stay(facts, choices),
             *records_stay(facts, choices),
             *folder_stays(facts),
-            *checkout_stays(facts),
+            *install_stays(facts),
             *wake_stays(facts),
         ),
     )
@@ -496,7 +541,7 @@ def stay_lines(stays: tuple[Stay, ...], home: str) -> list[str]:
 
 
 def plan_sections(plan: Plan, facts: Facts, *, asking: bool) -> list[str]:
-    steps = (*plan.steps, *((plan.checkout,) if plan.checkout else ()))
+    steps = (*plan.steps, *plan.install)
     lines = ["It removes:", *(f"  {line}" for line in collapsed(steps, facts.home))]
     asked = [stay for stay in plan.stays if stay.record] if asking else []
     stays = tuple(stay for stay in plan.stays if stay not in asked)
@@ -546,7 +591,7 @@ def delete_hint(facts: Facts) -> str:
 
 
 def render_left(left: tuple[Step, ...], facts: Facts) -> list[str]:
-    again = f"{shell_path(facts.checkout.root + '/bin/bosun', facts.home)} uninstall"
+    again = f"{shell_path(facts.bosun, facts.home)} uninstall"
     lines = [f"Some of it could not be removed. To try again: {again}", "Or by hand:"]
     for step in left:
         lines.append(f"  {describe(step, facts.home)}")

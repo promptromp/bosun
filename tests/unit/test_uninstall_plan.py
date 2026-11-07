@@ -19,6 +19,8 @@ HOME = "/Users/me"
 STATE = f"{HOME}/.local/state/bosun"
 CONFIG = f"{HOME}/.config/bosun"
 ROOT = f"{HOME}/.local/share/bosun"
+VERSIONS = f"{HOME}/.local/share/bosun-versions"
+LEGACY = f"{VERSIONS}/legacy-0123456789ab"
 WAKE_LINE = "wakepoweron at 9:01AM every day"
 
 
@@ -29,6 +31,7 @@ def facts(**changes: object) -> Facts:
         config_dir=CONFIG,
         state_dir=STATE,
         log_dir=f"{STATE}/logs",
+        bosun=f"{ROOT}/bin/bosun",
         windows=("orchestrator", "api"),
         jobs=(Job("com.bosun.morning", f"{HOME}/Library/LaunchAgents/com.bosun.morning.plist", True),),
         repeating=(WAKE_LINE,),
@@ -48,6 +51,21 @@ def facts(**changes: object) -> Facts:
         ledger_items=3,
         knowledge_records=5,
         knowledge_files=3,
+    )
+    return replace(base, **changes)  # type: ignore[arg-type]
+
+
+def side_by_side(**changes: object) -> Facts:
+    """Versions side by side: the link at ROOT, the versions folder with two versions of bosun (each a
+    worktree of its repository there) and the checkout from before versions, kept as legacy-*."""
+    base = facts(
+        checkout=Checkout(VERSIONS, managed=True),
+        versions=(
+            Checkout(f"{VERSIONS}/0123456789ab", managed=True),
+            Checkout(f"{VERSIONS}/0f1e2d3c4b5a", managed=True),
+        ),
+        legacy=(Checkout(LEGACY, managed=True),),
+        install_link=ROOT,
     )
     return replace(base, **changes)  # type: ignore[arg-type]
 
@@ -201,7 +219,7 @@ class Order(unittest.TestCase):
     def test_the_checkout_is_not_among_the_steps(self) -> None:
         plan = up.build_plan(facts(), Choices())
         self.assertFalse(targets(plan, up.CHECKOUT))
-        self.assertEqual(plan.checkout, Step(up.CHECKOUT, ROOT, by_hand=f"rm -rf {ROOT}"))
+        self.assertEqual(plan.install, (Step(up.CHECKOUT, ROOT, by_hand=f"rm -rf {ROOT}"),))
 
     def test_no_windows_nothing_to_stop(self) -> None:
         self.assertFalse(targets(up.build_plan(facts(windows=()), Choices()), up.STOP))
@@ -314,11 +332,76 @@ class CheckoutRules(unittest.TestCase):
             (Checkout(ROOT, managed=True, work="commits not pushed"), "commits not pushed"),
         ):
             plan = up.build_plan(facts(checkout=checkout), Choices())
-            self.assertIsNone(plan.checkout)
+            self.assertEqual(plan.install, ())
             self.assertIn(why, next(s.why for s in plan.stays if s.path == ROOT))
 
     def test_never_a_checkout_at_home(self) -> None:
-        self.assertIsNone(up.build_plan(facts(checkout=Checkout(HOME, managed=True)), Choices()).checkout)
+        self.assertEqual(up.build_plan(facts(checkout=Checkout(HOME, managed=True)), Choices()).install, ())
+
+
+class TheNewLayout(unittest.TestCase):
+    def test_the_new_layout_goes_whole(self) -> None:
+        """The checkout from before versions, the versions folder and the link: each checked as the
+        checkout is, and all of it last, after every other step."""
+        plan = up.build_plan(side_by_side(), Choices())
+        self.assertEqual(
+            plan.install,
+            (
+                Step(up.CHECKOUT, LEGACY, by_hand=f"rm -rf {LEGACY}"),
+                Step(up.CHECKOUT, VERSIONS, by_hand=f"rm -rf {VERSIONS}"),
+                Step(up.LINK, ROOT, by_hand=f"rm {ROOT}"),
+            ),
+        )
+        self.assertFalse({LEGACY, VERSIONS, ROOT} & {step.target for step in plan.steps})
+        self.assertFalse({LEGACY, VERSIONS, ROOT} & stays(plan))
+        text = up.render_plan(plan, side_by_side())
+        for line in ("~/.local/share/bosun-versions/legacy-0123456789ab", "~/.local/share/bosun-versions\n"):
+            self.assertIn(line, text)
+        self.assertTrue(text.index("~/.local/share/bosun-versions\n") < text.index("~/.local/share/bosun\n"))
+
+    def test_work_in_a_version_folder_keeps_it(self) -> None:
+        """Whole: the versions folder, the link that leads into it, and the checkout from before versions
+        in it, with the version that holds the work named."""
+        busy = f"{VERSIONS}/0f1e2d3c4b5a"
+        layout = side_by_side(
+            versions=(
+                Checkout(f"{VERSIONS}/0123456789ab", managed=True),
+                Checkout(busy, managed=True, work="uncommitted changes"),
+            )
+        )
+        plan = up.build_plan(layout, Choices())
+        self.assertEqual(plan.install, ())
+        self.assertIn("uncommitted changes", next(s.why for s in plan.stays if s.path == busy))
+        self.assertTrue({VERSIONS, ROOT} <= stays(plan))
+        self.assertIn(busy.rsplit("/", 1)[1], next(s.why for s in plan.stays if s.path == VERSIONS))
+
+    def test_a_checkout_from_before_versions_with_work_keeps_the_folder_it_is_in(self) -> None:
+        for legacy, why in (
+            (Checkout(LEGACY, managed=True, work="files git ignores (.env)"), ".env"),
+            (Checkout(LEGACY, managed=False), "not made by the installer"),
+        ):
+            plan = up.build_plan(side_by_side(legacy=(legacy,)), Choices())
+            self.assertEqual(plan.install, ())
+            self.assertIn(why, next(s.why for s in plan.stays if s.path == LEGACY))
+            self.assertTrue({VERSIONS, ROOT} <= stays(plan))
+
+    def test_a_repository_the_installer_did_not_make_is_yours(self) -> None:
+        plan = up.build_plan(side_by_side(checkout=Checkout(VERSIONS, managed=False)), Choices())
+        self.assertEqual(plan.install, ())
+        self.assertIn("not made by the installer", next(s.why for s in plan.stays if s.path == VERSIONS))
+
+    def test_what_to_run_names_the_link(self) -> None:
+        layout = side_by_side()
+        stop = next(step for step in up.build_plan(layout, Choices()).steps if step.kind == up.STOP)
+        self.assertEqual(stop.by_hand, f"{ROOT}/bin/bosun stop")
+        left = (Step(up.WAKE, WAKE_LINE, by_hand=up.CANCEL_WAKE),)
+        text = up.render_done(up.build_plan(layout, Choices()), left, layout, inside_checkout=False)
+        self.assertIn("~/.local/share/bosun/bin/bosun uninstall", text)
+
+    def test_a_link_a_switch_left_behind_goes_with_the_links(self) -> None:
+        leftover = f"{HOME}/.local/share/.bosun.link-1a2b3c4d"
+        plan = up.build_plan(side_by_side(leftover_links=(leftover,)), Choices())
+        self.assertIn(leftover, targets(plan, up.LINK))
 
 
 class Reading(unittest.TestCase):

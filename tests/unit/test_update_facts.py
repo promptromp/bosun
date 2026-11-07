@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import subprocess
 import sys
 from pathlib import Path
 from typing import Any
@@ -76,6 +77,39 @@ class BlockerTest(World):
         self.assertEqual(update_facts.install_problem(self.old, self.new), [])
         checkout = self.state.parent / "checkout"
         self.assertTrue(update_facts.install_problem(checkout, self.new))
+
+    def test_the_checkout_at_the_install_path_is_what_the_first_update_converts(self) -> None:
+        self.install.unlink()
+        self.install.mkdir()
+        self.assertEqual(update_facts.install_problem(self.install, self.new), [])
+        self.assertTrue(update_facts.install_problem(self.install, self.install))
+
+
+class ConversionFactsTest(World):
+    def ran(self, out: str, code: int = 0) -> Any:
+        return mock.patch.object(
+            update_facts, "shell", return_value=subprocess.CompletedProcess([], code, out, "")
+        )
+
+    def test_the_quiet_moment_reads_each_window_but_the_checkin_one_and_who_typed(self) -> None:
+        listed = [
+            {"name": "orch", "kind": "orchestrator", "window": True, "agent": {"status": "idle"}},
+            {"name": "checkin", "kind": "checkin", "window": True, "agent": None},
+            {"name": "api", "kind": "session", "window": True, "agent": {"status": "busy"}},
+        ]
+        with mock.patch.object(update_facts, "open_windows", return_value=listed), self.ran("10 3"):
+            quiet = update_facts.quiet_facts(self.new)
+        self.assertEqual(quiet, update_facts.Quiet((("orch", "idle"), ("api", "busy")), 3, 10))
+        with mock.patch.object(update_facts, "open_windows", return_value=[]), self.ran("0 "):
+            self.assertEqual(update_facts.quiet_facts(self.new), update_facts.Quiet((), None, 0))
+        with mock.patch.object(update_facts, "open_windows", return_value=[]), self.ran(""):
+            self.assertEqual(update_facts.quiet_facts(self.new).minutes, update_facts.ACTIVE_MINUTES)
+
+    def test_the_check_in_loop_s_pid(self) -> None:
+        with self.ran("4242\n"):
+            self.assertEqual(update_facts.checkin_loop_pid(self.new), 4242)
+        with self.ran("", code=1):
+            self.assertIsNone(update_facts.checkin_loop_pid(self.new))
 
 
 class FactsTest(World):

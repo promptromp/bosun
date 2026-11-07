@@ -25,10 +25,12 @@ missing at once, with what to do about each. `bosun init` and `bosun doctor` sta
 curl -fsSL https://raw.githubusercontent.com/promptromp/bosun/main/get.sh | sh
 ```
 
-[`get.sh`](../get.sh) puts bosun in `~/.local/share/bosun` and starts `bosun init`. It installs nothing
-else: if something is missing, it says what, gives you the lines to run and the pages to go to, and
-stops. Do those, and run the same line again. It takes a few minutes the first time, most of it
-Homebrew's, and once everything is there the questions take about a minute.
+[`get.sh`](../get.sh) puts bosun in `~/.local/share/bosun-versions`, a folder for each version beside the
+one repository they come from (`bosun.git`), makes `~/.local/share/bosun` a link to the version in use,
+and starts `bosun init`. It installs nothing else: if something is missing, it says what, gives you the
+lines to run and the pages to go to, and stops. Do those, and run the same line again. It takes a few
+minutes the first time, most of it Homebrew's, and once everything is there the questions take about a
+minute.
 
 To run the repo sessions on Codex, ask for it after the pipe, so that it checks Codex is ready too:
 
@@ -36,9 +38,11 @@ To run the repo sessions on Codex, ask for it after the pipe, so that it checks 
 curl -fsSL https://raw.githubusercontent.com/promptromp/bosun/main/get.sh | BOSUN_HARNESS=codex sh
 ```
 
-Run it again to update. After the pipe, `sh -s -- --dry-run` says what it would do and does nothing,
-and `sh -s -- --unattended` asks nothing and takes the recommended setup. `BOSUN_DIR`, `BOSUN_REPO` and
-`BOSUN_BRANCH` override where it goes and what it gets.
+Run it again to update: it hands over to the newest version's `bosun update` (see
+[Updating](#updating)). After the pipe, `sh -s -- --dry-run` says what it would do and does nothing, and
+`sh -s -- --unattended` asks nothing: it takes the recommended setup, or goes ahead with the update.
+`BOSUN_DIR`, `BOSUN_REPO` and `BOSUN_BRANCH` override where it goes and what it gets; on an install that
+is already there, the defaults are what it came from.
 
 `bosun init` reads what this Mac already shows: the repos you use your agents in, your usual hours,
 your logins. In a terminal it asks a few questions, one key each: Return takes the recommended
@@ -102,7 +106,90 @@ Waking *before* the job would leave a gap in which an unattended Mac can doze of
 `~/.local/bin` and loads the launchd jobs: the morning run, the [watchdog](watchdog.md#watchdog) and, with
 `BOSUN_LEARN_ENABLED=1`, the daily [learning](learning.md#learning) run
 (`<BOSUN_LAUNCHD_LABEL>.learn`).
-[`bosun uninstall`](#uninstall) reverses it.
+[`bosun uninstall`](#uninstall) reverses it. A checkout of your own like this one updates with git, not
+with `bosun update`.
+
+## Updating
+
+```bash
+bosun update             # shows the plan, and asks
+bosun update --dry-run   # only shows the plan
+bosun update --yes       # goes ahead without asking
+```
+
+It updates bosun to the head of the branch the install follows (`main`, or the `BOSUN_BRANCH` it was
+installed with), while the agents keep working. It gets the new version into a folder of its own, beside
+the one you run, and that version shows its plan: the commits, the migrations your data needs, the
+prompts that changed, what each window gets, the launchd jobs to reload, and anything that stops it. In a
+terminal it asks first; without one it stops at the plan. Running the install line again does the same,
+so it also works from a bosun that has no `bosun update` yet.
+
+Then it rehearses the migrations on a copy of your data, holds bosun's own background work (the check-in
+loop, the watchdog, learning, the morning job), and pauses writes for a moment: it backs up your ledger,
+knowledge base and settings (`backups/` in the state folder, the last 3 kept), migrates them, switches
+`~/.local/share/bosun` to the new version and checks each store. If any of that fails, it puts everything
+back as it was and says what failed. Writes that arrive meanwhile wait, and land on the new version.
+
+What it does to the windows that are running:
+
+| The window | What the update does |
+|---|---|
+| Nothing it was started with changed (most updates) | Leaves it alone: its next `bosun` command runs the new version |
+| Only the orchestrator's prompts changed (`policy.md`, the task files) | Asks the orchestrator to re-read them once it is idle |
+| Something it was started with changed (its settings, hooks, plugin) | Restarts it on the new version once it is idle, in the same conversation. If only background work runs there, it first asks the window to list that work, and passes the list back after the restart, as a restart ends it |
+| Busy, waiting for your answer, or someone typing in it | Waits, and never restarts one that waits for you |
+
+Each window gets a prompt to check for anything it missed and carry on, and answers with its status. The
+update waits for every answer and says which windows it is waiting for; Ctrl-C stops that wait, and the
+check-in loop brings the rest along once each is idle. A window left alone, or a task already handed to a
+repo session, keeps the text it has; the summary lists the tasks, for a `bosun delegate --update`.
+
+It ends with a summary: the commits, the migrations and version bumps, the config it changed and its new
+keys, anything you have to change by hand in your own files, the prompts that changed, the jobs reloaded,
+what came of each window, anything that fails now that did not before, and where the backup is. It is
+saved as `summary.md` in the backup's folder, and its last line points to [Going back](#going-back).
+`bosun doctor` lists what the last update left to you. An update cut short (Ctrl-C, a crash, a power cut)
+is put back, or finished, by the next `bosun update`. How it works: [design note](design/update.md).
+
+### The first update of an older install
+
+An install from before versions side by side is a checkout in `~/.local/share/bosun`, and the bosun in
+it has no `bosun update`. Running the install line again converts it, once. The new version's `bosun
+update` shows its plan and asks, then waits for a quiet moment: every window idle with nothing running,
+and nobody typing in the session for `BOSUN_ACTIVE_CLIENT_MINUTES`. It says what it waits for, and
+Ctrl-C there changes nothing. Then it stops the watchdog, learning and the check-in loop, since the old
+version has no hold to keep them waiting, and updates as above. The checkout is swapped for the link in
+one step and kept as `~/.local/share/bosun-versions/legacy-<its commit>`, and every window is restarted
+on the new version. If anything fails, the old checkout is what runs again, with its jobs and loop as
+they were.
+
+It will not convert a checkout with anything of yours in it: changes, a stash, commits not pushed,
+another worktree, a file git ignores. Take that out first. The update after it deletes the kept checkout,
+unless something of yours is in it by then, which its summary says.
+
+## Going back
+
+There is no command for it yet: a failed update puts everything back by itself, and going back later is by
+hand. You need the version the update came from and the backup it took, both named in its summary:
+
+1. Stop what writes: `bosun stop`, and unload the watchdog and learning jobs
+   (`launchctl bootout gui/$(id -u)/com.bosun.morning.watchdog`, and `.learn`, with your
+   `BOSUN_LAUNCHD_LABEL` if you set one).
+2. Find the older version's folder in `~/.local/share/bosun-versions`: an update keeps the one it came
+   from until the next update. If it is gone, add it again from its commit (the summary's first line):
+   `git --git-dir ~/.local/share/bosun-versions/bosun.git worktree add --detach
+   ~/.local/share/bosun-versions/<first 12 characters> <commit>`. After the first update, the version
+   before it is the checkout it kept, `legacy-<its commit>`.
+3. Put the backup back: each entry in its `state/` folder over the one in `~/.local/state/bosun`, and
+   each in its `config/` folder over the one in `~/.config/bosun`, replacing the newer one whole (its
+   `manifest.json` lists every file). Anything written since the update is not in it.
+4. Lead the link to the older version (`ln -sfn ~/.local/share/bosun-versions/<folder>
+   ~/.local/share/bosun`), run its `~/.local/share/bosun/install.sh` to load its jobs again, and
+   `bosun start`. `bosun update` would take you forward again, to the head of the branch.
+
+Going back is only to the version the update came from, and never past a `kg forget`: a deletion of a
+person deletes every update backup there is, as restoring one would bring the person back, and says so in
+its line. A summary whose backup a forget deleted says that going back past it is no longer possible.
 
 ## Uninstall
 
@@ -123,7 +210,8 @@ as it was.
 | Folder trust | Taken back for the folders bosun marked, in Claude Code and Codex. A folder you had accepted yourself stays trusted. It goes by bosun's record of what it changed (`agent-changes.json`), kept since `bosun uninstall` was added; trust or notes from an install before that are not on it and stay |
 | Memory notes from [`bosun learn`](learning.md#learning) | Deleted, with their line in `MEMORY.md`. Your own notes stay |
 | `~/.local/bin/bosun` and bosun's working files | Deleted |
-| The checkout in `~/.local/share/bosun` | Deleted, last. One you cloned yourself stays, and so does one with anything of yours in it: changes, a stash, commits not pushed, another worktree, a file git ignores |
+| What `get.sh` installed: `~/.local/share/bosun-versions` (its `bosun.git` and every version), the checkout from before versions kept there, and the link `~/.local/share/bosun` | Deleted, last. Each folder is checked as a checkout is, and anything of yours in any of them keeps them all, link included: changes, a stash, commits not pushed, a worktree elsewhere, a file git ignores. Versions you made yourself, without the installer's mark on `bosun.git`, stay |
+| A checkout of your own you run bosun from | Stays. One `get.sh` made before versions side by side is deleted, last, unless it has anything of yours in it |
 | Your ledger and learning history, your knowledge graph | It asks, and Enter keeps them |
 | The backups `bosun update` took (`backups/` in the state folder) | Deleted when either the ledger or the knowledge graph is, as each holds both (every person in it included). Kept only when you keep both |
 | `~/.config/bosun`: `bosun.env`, `sessions.yml`, `setup.sh`, `policy.md`, `learn.md`, `tasks/`, `workstreams.json`, and the backups `bosun init` made (`*.pre-init-*`) | Stay, and it says where. `--purge` deletes them too |
@@ -141,8 +229,8 @@ nothing and keeps your records; `--delete-ledger`, `--delete-knowledge` and `--p
 terminal outside bosun's windows, since it stops them. If something could not be removed it says what to run,
 and running it again finishes the job.
 
-If you deleted the checkout by hand, the jobs and the wake are still there. Run the install line again, and
-then `bosun uninstall`.
+If you deleted bosun's folders by hand, the jobs and the wake are still there. Run the install line again,
+and then `bosun uninstall`.
 
 ## Configuration
 

@@ -24,6 +24,11 @@ from install_paths import REPO
 GIT = ["git", "-c", "user.name=t", "-c", "user.email=t@example.com", "-c", "commit.gpgsign=false"]
 
 
+def no_work(_folder: Path) -> str:
+    """What a legacy checkout these tests make holds of anyone's: nothing."""
+    return ""
+
+
 def _git(cwd: Path, *args: str) -> str:
     env = {k: v for k, v in os.environ.items() if not k.startswith("GIT_")}
     out = subprocess.run([*GIT, *args], cwd=cwd, env=env, check=True, capture_output=True, text=True)
@@ -126,7 +131,7 @@ class VersionsTests(unittest.TestCase):
         legacy = vdir / f"{versions.LEGACY_PREFIX}abcdef012345"
         legacy.mkdir()
         (legacy / "x").write_text("x")
-        removed = versions.prune(vdir, keep={b, c})
+        removed = versions.prune(vdir, keep={b, c}, work=no_work)
         self.assertEqual(sorted(removed), sorted([a, legacy]))
         self.assertTrue(not a.exists() and not legacy.exists() and b.exists() and c.exists())
         listing = _git(vdir / REPO, "worktree", "list")
@@ -137,7 +142,7 @@ class VersionsTests(unittest.TestCase):
         vdir, (a, b) = _worktrees(tmp_path, 2)
         child = subprocess.Popen(["sleep", "30"], cwd=a)
         try:
-            removed = versions.prune(vdir, keep=set())
+            removed = versions.prune(vdir, keep=set(), work=no_work)
         finally:
             child.kill()
             child.wait()
@@ -148,7 +153,7 @@ class VersionsTests(unittest.TestCase):
         tmp_path = self.tmp
         vdir, (a,) = _worktrees(tmp_path, 1)
         with mock.patch.dict(os.environ, {"PATH": str(tmp_path / "nothing")}):
-            self.assertEqual(versions.prune(vdir, keep=set()), [])
+            self.assertEqual(versions.prune(vdir, keep=set(), work=no_work), [])
         self.assertTrue(a.exists())
 
     def test_prune_reports_a_folder_it_cannot_remove_and_goes_on(self) -> None:
@@ -162,7 +167,7 @@ class VersionsTests(unittest.TestCase):
         later.mkdir()
         said = io.StringIO()
         with contextlib.redirect_stderr(said):
-            removed = versions.prune(vdir, keep=set())
+            removed = versions.prune(vdir, keep=set(), work=no_work)
         self.assertEqual(sorted(removed), sorted([a, later]))
         self.assertTrue((stuck / "sub" / "x").exists())
         self.assertIn(f"could not remove {stuck}", said.getvalue())
@@ -176,7 +181,7 @@ class VersionsTests(unittest.TestCase):
         link = vdir / f"{versions.LEGACY_PREFIX}abcdef012345"
         link.symlink_to(mine)
         (vdir / "0123456789ab").symlink_to(a)  # a link named like a version, to one
-        removed = versions.prune(vdir, keep={a})
+        removed = versions.prune(vdir, keep={a}, work=no_work)
         self.assertEqual(removed, [])
         self.assertEqual((mine / "notes.txt").read_text(), "keep")
         self.assertTrue(link.is_symlink() and a.is_dir())
@@ -193,17 +198,32 @@ class VersionsTests(unittest.TestCase):
         self.assertTrue(not install.is_symlink() and (install / "f.txt").exists())
         self.assertTrue((leftover / "x").exists() and _no_hidden(tmp_path))
 
-    def test_a_failed_rename_after_the_swap_swaps_back(self) -> None:
-        tmp_path = self.tmp
-        install, v, _ = _conversion(tmp_path)
+    def test_the_checkout_goes_straight_to_its_legacy_folder_in_one_call(self) -> None:
+        """The link is made at the legacy folder's name and the two exchanged: no rename after the
+        swap, so a cut there can never leave the checkout under a hidden name."""
+        install, v, commit = _conversion(self.tmp)
+        with mock.patch.object(os, "rename", side_effect=AssertionError("a second step")):
+            legacy = versions.swap_in_link(install, v)
+        self.assertEqual(legacy, versions.legacy_folder(v.parent, commit))
+        self.assertTrue((legacy / "f.txt").is_file() and not legacy.is_symlink())
 
-        def refuse(src: object, dst: object) -> None:
-            raise OSError(errno.ENOTEMPTY, "no")
+    def test_a_link_a_swap_cut_short_left_is_replaced(self) -> None:
+        install, v, commit = _conversion(self.tmp)
+        versions.legacy_folder(v.parent, commit).symlink_to(v)  # made, and then the process died
+        legacy = versions.swap_in_link(install, v)
+        self.assertEqual((legacy / "f.txt").read_text(), "one")
+        self.assertEqual(versions.current(install), v)
 
-        with mock.patch.object(os, "rename", refuse), self.assertRaisesRegex(OSError, "checkout again"):
+    def test_a_swap_that_fails_leaves_the_checkout_and_no_link(self) -> None:
+        install, v, commit = _conversion(self.tmp)
+        with (
+            mock.patch.object(versions, "_swap", side_effect=OSError(errno.EXDEV, "no")),
+            self.assertRaises(OSError),
+        ):
             versions.swap_in_link(install, v)
         self.assertTrue(not install.is_symlink() and (install / "f.txt").read_text() == "one")
-        self.assertTrue(_no_hidden(tmp_path))
+        self.assertFalse(os.path.lexists(versions.legacy_folder(v.parent, commit)))
+        self.assertTrue(_no_hidden(self.tmp))
 
     def test_a_libc_without_the_call_is_an_oserror(self) -> None:
         tmp_path = self.tmp
@@ -216,6 +236,89 @@ class VersionsTests(unittest.TestCase):
             versions.swap_in_link(install, v)
         self.assertEqual(info.exception.errno, errno.ENOSYS)
         self.assertTrue(not install.is_symlink() and (install / "f.txt").exists() and _no_hidden(tmp_path))
+
+
+class SwitchTest(unittest.TestCase):
+    def setUp(self) -> None:
+        self.tmp = Path(self.enterContext(tempfile.TemporaryDirectory()))
+
+    def test_a_link_is_pointed_and_a_checkout_swapped(self) -> None:
+        install, v, commit = _conversion(self.tmp)
+        legacy = v.parent / f"legacy-{commit[:12]}"
+        self.assertEqual(versions.switched_from(install, v, install, commit), legacy)
+        self.assertEqual(versions.switch(install, v), legacy)
+        self.assertEqual(versions.current(install), v)
+        other = v.parent / "bbbbbbbbbbbb"
+        other.mkdir()
+        self.assertEqual(versions.switched_from(install, other, v, "c" * 40), v)
+        self.assertIsNone(versions.switch(install, other))
+        self.assertEqual(versions.current(install), other)
+
+    def test_a_checkout_from_before_versions_is_any_folder_but_a_version(self) -> None:
+        vdir, (a,) = _worktrees(self.tmp, 1)
+        self.assertFalse(versions.before_versions(a))
+        self.assertTrue(versions.before_versions(versions.legacy_folder(vdir, "0123456789abcdef")))
+        self.assertTrue(versions.before_versions(self.tmp / "src"))
+
+
+class LegacyTest(unittest.TestCase):
+    """R43 carry 3: the checkout from before versions is yours, and stays while it holds anything."""
+
+    def setUp(self) -> None:
+        self.tmp = Path(self.enterContext(tempfile.TemporaryDirectory()))
+        self.vdir, (self.a,) = _worktrees(self.tmp, 1)
+        self.mine = versions.legacy_folder(self.vdir, "0123456789abcdef")
+        self.clean = versions.legacy_folder(self.vdir, "fedcba9876543210")
+        for folder in (self.mine, self.clean):
+            folder.mkdir()
+
+    def work(self, folder: Path) -> str:
+        return "uncommitted changes" if folder == self.mine else ""
+
+    def test_prune_keeps_a_legacy_checkout_with_work_in_it(self) -> None:
+        removed = versions.prune(self.vdir, keep={self.a}, work=self.work)
+        self.assertEqual(removed, [self.clean])
+        self.assertTrue(self.mine.is_dir())
+
+    def test_held_back_says_which_and_why(self) -> None:
+        self.assertEqual(
+            versions.held_back(self.vdir, {self.a}, self.work), [(self.mine, "uncommitted changes")]
+        )
+        self.assertEqual(versions.held_back(self.vdir, {self.a, self.mine}, self.work), [])
+
+    def test_a_version_folder_is_never_asked_about(self) -> None:
+        asked: list[Path] = []
+
+        def work(folder: Path) -> str:
+            asked.append(folder)
+            return ""
+
+        versions.prune(self.vdir, keep=set(), work=work)
+        self.assertEqual(sorted(asked), sorted([self.mine, self.clean]))
+
+
+class SweepTest(unittest.TestCase):
+    """R43 carry 5: the temporary links a switch cut short left beside the install."""
+
+    def test_only_stale_links_go(self) -> None:
+        tmp = Path(self.enterContext(tempfile.TemporaryDirectory()))
+        install = tmp / "bosun"
+        target = tmp / "bosun-versions" / "aaaaaaaaaaaa"
+        target.mkdir(parents=True)
+        stale = tmp / ".bosun.link-0000aaaa"
+        stale.symlink_to(target)
+        os.utime(stale, (1000, 1000), follow_symlinks=False)
+        fresh = tmp / ".bosun.link-1111bbbb"
+        fresh.symlink_to(target)
+        folder = tmp / ".bosun.link-2222cccc"  # never a folder, whatever its name
+        folder.mkdir()
+        os.utime(folder, (1000, 1000))
+        other = tmp / ".other.link-3333dddd"
+        other.symlink_to(target)
+        os.utime(other, (1000, 1000), follow_symlinks=False)
+        swept = versions.sweep_links(install, before=fresh.lstat().st_mtime - 1)
+        self.assertEqual(swept, [stale])
+        self.assertTrue(fresh.is_symlink() and folder.is_dir() and other.is_symlink() and target.is_dir())
 
 
 class InUseTest(unittest.TestCase):
@@ -231,7 +334,7 @@ class InUseTest(unittest.TestCase):
                 [sys.executable, "-c", sleeper, str(a / "lib" / "console_server.py")], cwd="/"
             )
             try:
-                removed = versions.prune(vdir, keep=set())
+                removed = versions.prune(vdir, keep=set(), work=no_work)
             finally:
                 child.kill()
                 child.wait()
@@ -246,5 +349,5 @@ class InUseTest(unittest.TestCase):
                 mock.patch("subprocess.run", side_effect=slow),
                 contextlib.redirect_stderr(io.StringIO()),
             ):
-                self.assertEqual(versions.prune(vdir, keep=set()), [])
+                self.assertEqual(versions.prune(vdir, keep=set(), work=no_work), [])
             self.assertTrue(a.exists())

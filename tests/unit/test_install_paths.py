@@ -25,6 +25,12 @@ class InstallPathsTests(unittest.TestCase):
     def test_a_version_folder_writes_out_the_link(self) -> None:
         self.assertEqual(install_path(self.version), self.home / ".local" / "share" / "bosun")
 
+    def test_the_checkout_kept_from_before_versions_writes_out_the_link(self) -> None:
+        """A conversion put back leads the link to it again (lib/update_gate.py's _point_back)."""
+        legacy = self.version.parent / "legacy-0123456789ab"
+        legacy.mkdir()
+        self.assertEqual(install_path(legacy), self.home / ".local" / "share" / "bosun")
+
     def test_a_checkout_writes_out_itself(self) -> None:
         self.assertEqual(install_path(self.home / "src" / "bosun"), self.home / "src" / "bosun")
 

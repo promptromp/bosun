@@ -1059,6 +1059,41 @@ reload_changed_jobs() { # [--dry-run]
   return "$status"
 }
 
+# The launchd jobs that run bosun's own background work (the watchdog and learning) unloaded, where
+# loaded; prints the label of each it unloaded. `bosun update` stops them while it converts a checkout
+# from before versions, whose jobs know of no update to hold their work for. One that is still loaded
+# after a few tries fails it (exit 1, said on stderr); the others are still unloaded.
+stop_own_jobs() {
+  local label tries status=0
+  for label in "$(watchdog_label)" "$(learn_label)"; do
+    job_loaded "$label" || continue
+    launchctl bootout "gui/$(id -u)/$label" 2>/dev/null
+    tries=10
+    while job_loaded "$label" && [ "$tries" -gt 0 ]; do
+      sleep 0.5
+      tries=$((tries - 1))
+    done
+    if job_loaded "$label"; then
+      log "ERROR: could not unload $label" >&2
+      status=1
+    else
+      echo "$label"
+    fi
+  done
+  return "$status"
+}
+
+# Each launchd job <label> loaded again from its installed plist, as stop_own_jobs left it.
+start_jobs() { # <label...>
+  local label status=0
+  for label in "$@"; do
+    launchctl bootstrap "gui/$(id -u)" "$HOME/Library/LaunchAgents/$label.plist" && continue
+    log "ERROR: launchctl bootstrap failed for $label" >&2
+    status=1
+  done
+  return "$status"
+}
+
 # render_launchd_plist <label> <HH:MM> <days> <morning-args> [KEY=VALUE ...]
 render_launchd_plist() {
   local label="$1" time="$2" days="$3" args="$4" env_xml calendar

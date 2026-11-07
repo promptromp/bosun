@@ -6,7 +6,8 @@ update's record and hold, backups, version folders, the write gate and the migra
 (`lib/update_facts.py` gathers the plan's facts, `lib/update.py` carries it out, behind the wrapper
 `libexec/bosun-update`; `lib/update_agents.py` decides what each window gets, `lib/update_windows.py`
 carries it out, `lib/update_notes.py` keeps the windows' notes) and ends with its summary
-(`lib/update_summary.py`). The plan:
+(`lib/update_summary.py`). `get.sh` installs versions side by side and hands an existing install over to
+it, and its first run converts a checkout an older `get.sh` made (`convert` in `lib/update.py`). The plan:
 [docs/plans/update.md](../plans/update.md).
 
 ## Why
@@ -418,6 +419,37 @@ bosun's own jobs and swaps the checkout for the link in one step: macOS's `renam
 `RENAME_SWAP`, so the path never goes missing. Finally it restarts the `checkin` window and brings the
 agents along as below. The VM tests this conversion on its own, and tests the mid-afternoon update
 between two versions that both have `update`.
+
+Settled while building it:
+
+- **`get.sh`** looks at the install path first, and refuses what it does not know. On an install `init`
+  has set up, it fetches the branch into `bosun.git` (cloned bare beside a checkout first), adds the new
+  version's folder and runs that version's `bosun update --from` the version in use. An install `init`
+  never finished gets `init` again, as it is, since only `bosun update` switches versions. The cases:
+  [init.md](init.md#the-wizard).
+- **Which update converts** is decided by the version updated from, once an update cut short is carried
+  on: a checkout from before versions, at the install path or kept as `legacy-*` (where a conversion put
+  back leads the link). `convert` refuses one with anything of yours in it, as `bosun uninstall` checks a
+  checkout, since the update after it deletes the checkout.
+- **The quiet moment:** every window's agent idle, or none running (the `checkin` window aside, whose
+  loop it stops), and nobody typing in a client of the session within `BOSUN_ACTIVE_CLIENT_MINUTES`. It
+  waits once you said yes, saying what it waits for each time that changes, and plans again when it is
+  quiet. Ctrl-C there changes nothing.
+- **bosun's own work** is stopped after the rehearsal, where the hold begins: the watchdog's and
+  learning's launchd jobs unloaded, and the check-in loop's process ended. The morning job is left, as it
+  runs once a morning. A conversion that stops short of the switch, or puts it back, starts them again as
+  they were, on whatever the install path then leads to; after the switch, the release reloads the jobs
+  on the link and restarts the loop.
+- **The swap is one call:** the link is made at the legacy folder's name and exchanged with the checkout
+  (Linux's `renameat2` with `RENAME_EXCHANGE` does the same), so the checkout is never under another name,
+  nor the install path missing. A link a swap cut short left there is replaced.
+- **From the switch on, the record names the legacy folder** as the version updated from, in the record
+  write of `switched`, so a put back leads the link there; before the swap, a checkout is never made a
+  link. The update after the conversion is an ordinary one, from a version folder. Its prune deletes the
+  legacy checkout unless something of yours is in it, or the installer did not make it, which its
+  summary says.
+- **Temporary links** that a switch cut short leaves beside the install (`.bosun.link-*`, links only) are
+  swept with the prune, once older than the update that sweeps them.
 
 ### Cut short
 

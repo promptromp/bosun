@@ -35,9 +35,11 @@ def is_loaded(label: str) -> bool:
     return init_detect.output_of("launchctl", "print", f"{domain()}/{label}") is not None
 
 
-def plist_job(path: Path, labels: Sequence[str], root: str) -> str:
+def plist_job(path: Path, labels: Sequence[str], roots: Sequence[str]) -> str:
     """The label of the job in <path> if it is bosun's: one of <labels>, or one install.sh rendered to run
-    this checkout (its label may have changed in bosun.env since). Otherwise nothing."""
+    the bosun of one of <roots> (its label may have changed in bosun.env since): the checkout, or with
+    versions side by side the install link, a version's folder or the checkout from before versions, which
+    an older plist may name. Otherwise nothing."""
     try:
         job = plistlib.loads(path.read_bytes())
         label = str(job.get("Label", ""))
@@ -52,15 +54,17 @@ def plist_job(path: Path, labels: Sequence[str], root: str) -> str:
         return ""
     # As templates/launchd*.plist render it, to the letter: your own job that runs bosun is not bosun's.
     runs_this_bosun = arguments[:2] == RENDERED_SHELL and arguments[2:] == [arguments[-1]]
-    runs_this_bosun = runs_this_bosun and arguments[-1].startswith(f'exec "{root}/bin/bosun" ')
+    runs_this_bosun = runs_this_bosun and any(
+        arguments[-1].startswith(f'exec "{root}/bin/bosun" ') for root in roots
+    )
     return label if label in labels or runs_this_bosun else ""
 
 
-def jobs(labels: Sequence[str], root: str) -> tuple[Job, ...]:
+def jobs(labels: Sequence[str], roots: Sequence[str]) -> tuple[Job, ...]:
     """Each job of bosun's with a plist or loaded in launchd, which can be one without the other."""
     plists = {}
     for path in sorted(agents_folder().glob("*.plist")):
-        label = plist_job(path, labels, root)
+        label = plist_job(path, labels, roots)
         if label:
             plists[label] = str(path)
     known = dict.fromkeys([*labels, *plists])

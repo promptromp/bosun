@@ -135,7 +135,7 @@ class World(unittest.TestCase):
         for patcher in (
             mock.patch.dict(os.environ, self.env),
             mock.patch.object(Path, "home", return_value=self.home),
-            mock.patch.object(uninstall, "ROOT", self.root),
+            mock.patch.object(uninstall, "ROOT", self.running),
             mock.patch.object(subprocess, "run", self.mac.run),
             mock.patch.object(claude_state, "CONFIG_FILE", self.home / ".claude.json"),
             mock.patch.object(claude_state, "PROJECTS_DIR", self.home / ".claude" / "projects"),
@@ -147,20 +147,36 @@ class World(unittest.TestCase):
             self.addCleanup(patcher.stop)
         os.environ.pop("TMUX", None)
 
-    def make_checkout(self) -> None:
+    def make_origin(self, commits: int = 1) -> tuple[Path, list[str]]:
+        """bosun's upstream, with <commits> commits on main; and those commits, oldest first."""
         origin = self.home.parent / "origin.git"
         source = self.home.parent / "source"
-        identity = ["-c", "user.name=test", "-c", "user.email=test@example.com"]
+        identity = ["-c", "user.name=test", "-c", "user.email=test@example.com", "-c", "commit.gpgsign=false"]
         real_run(["git", "init", "-q", "--bare", str(origin)], check=True)
         real_run(["git", "init", "-q", "-b", "main", str(source)], check=True)
         (source / "bin").mkdir()
-        (source / "bin" / "bosun").write_text("#!/bin/sh\n")
-        real_run(["git", "-C", str(source), "add", "."], check=True)
-        real_run(["git", "-C", str(source), *identity, "commit", "-qm", "first"], check=True)
+        made = []
+        for number in range(commits):
+            (source / "bin" / "bosun").write_text(f"#!/bin/sh\n# release {number}\n")
+            real_run(["git", "-C", str(source), "add", "."], check=True)
+            real_run(["git", "-C", str(source), *identity, "commit", "-qm", f"release {number}"], check=True)
+            made.append(
+                real_run(
+                    ["git", "-C", str(source), "rev-parse", "HEAD"],
+                    check=True,
+                    capture_output=True,
+                    text=True,
+                ).stdout.strip()
+            )
         real_run(["git", "-C", str(source), "push", "-q", str(origin), "main"], check=True)
+        return origin, made
+
+    def make_checkout(self) -> None:
+        origin, _ = self.make_origin()
         self.root.parent.mkdir(parents=True)
         real_run(["git", "clone", "-q", "-b", "main", str(origin), str(self.root)], check=True)
         real_run(["git", "-C", str(self.root), "config", "bosun.managed", "true"], check=True)
+        self.running = self.root
 
     def make_config(self) -> None:
         (self.config / "knowledge").mkdir(parents=True)
@@ -609,6 +625,151 @@ class TheCheckout(World):
         self.assertIn("commits not pushed", output)
 
 
+class SideBySide(World):
+    """An install get.sh makes now: bosun.git and two versions of it in ~/.local/share/bosun-versions, the
+    checkout from before versions the first update kept there, and ~/.local/share/bosun the link to the
+    version in use, which this runs from."""
+
+    git_identity = ("-c", "user.name=test", "-c", "user.email=test@example.com", "-c", "commit.gpgsign=false")
+
+    def make_checkout(self) -> None:
+        origin, (old, new) = self.make_origin(2)
+        self.versions = self.home / ".local" / "share" / "bosun-versions"
+        self.versions.mkdir(parents=True)
+        repo = self.versions / "bosun.git"
+        clone = [
+            "git",
+            "clone",
+            "-q",
+            "--bare",
+            "--single-branch",
+            "--branch",
+            "main",
+            str(origin),
+            str(repo),
+        ]
+        real_run(clone, check=True)
+        real_run(["git", "--git-dir", str(repo), "config", "bosun.managed", "true"], check=True)
+        fetch = [
+            "git",
+            "--git-dir",
+            str(repo),
+            "fetch",
+            "-q",
+            "origin",
+            "+refs/heads/main:refs/remotes/origin/main",
+        ]
+        real_run(fetch, check=True)
+        self.older, self.running = self.versions / old[:12], self.versions / new[:12]
+        for commit, folder in ((old, self.older), (new, self.running)):
+            add = ["git", "--git-dir", str(repo), "worktree", "add", "-q", "--detach", str(folder), commit]
+            real_run(add, check=True, capture_output=True)
+        self.legacy = self.versions / f"legacy-{old[:12]}"
+        real_run(["git", "clone", "-q", "-b", "main", str(origin), str(self.legacy)], check=True)
+        real_run(["git", "-C", str(self.legacy), "reset", "-q", "--hard", old], check=True)
+        real_run(["git", "-C", str(self.legacy), "config", "bosun.managed", "true"], check=True)
+        self.root.symlink_to(self.running)
+
+    def assert_kept(self, why: str) -> str:
+        status, output = self.run_it("--yes")
+        self.assertEqual(status, 0)
+        self.assertTrue(self.root.is_symlink() and (self.root / "bin" / "bosun").exists())
+        self.assertTrue(self.versions.is_dir() and self.legacy.is_dir())
+        self.assertIn(why, output)
+        return output
+
+    def test_it_all_goes_the_link_last(self) -> None:
+        status, output = self.run_it("--yes")
+        self.assertEqual(status, 0, output)
+        self.assertFalse(os.path.lexists(self.root))
+        self.assertFalse(self.versions.exists())
+        self.assertFalse((self.home / ".local" / "bin" / "bosun").is_symlink())
+        self.assertEqual(list(self.agents.glob("*.plist")), [])
+        self.assertIn("bosun is uninstalled", output)
+        removed = [line for line in output.splitlines() if line.startswith("removed ~/.local/share/")]
+        self.assertEqual(
+            removed,
+            [
+                f"removed ~/.local/share/bosun-versions/{self.legacy.name}",
+                "removed ~/.local/share/bosun-versions",
+                "removed ~/.local/share/bosun",
+            ],
+        )
+
+    def test_work_in_a_version_keeps_the_versions_and_the_link(self) -> None:
+        (self.older / "bin" / "bosun").write_text("#!/bin/sh\n# mine\n")
+        output = self.assert_kept("uncommitted changes")
+        self.assertIn(f"~/.local/share/bosun-versions/{self.older.name}", output)
+
+    def test_a_commit_made_in_a_version_keeps_them(self) -> None:
+        real_run(
+            ["git", "-C", str(self.older), *self.git_identity, "commit", "-q", "--allow-empty", "-m", "mine"],
+            check=True,
+        )
+        self.assert_kept("commits not pushed")
+
+    def test_a_worktree_of_its_repository_elsewhere_keeps_them(self) -> None:
+        elsewhere = self.home / "Development" / "bosun-fix"
+        add = [
+            "git",
+            "--git-dir",
+            str(self.versions / "bosun.git"),
+            "worktree",
+            "add",
+            "-q",
+            "--detach",
+            str(elsewhere),
+        ]
+        real_run(add, check=True, capture_output=True)
+        self.assert_kept("other worktrees")
+
+    def test_the_checkout_from_before_versions_with_work_keeps_them(self) -> None:
+        (self.legacy / "notes.txt").write_text("mine\n")
+        output = self.assert_kept("uncommitted changes")
+        self.assertIn(f"~/.local/share/bosun-versions/{self.legacy.name}", output)
+
+    def test_versions_the_installer_did_not_make_are_yours(self) -> None:
+        real_run(
+            ["git", "--git-dir", str(self.versions / "bosun.git"), "config", "--unset", "bosun.managed"],
+            check=True,
+        )
+        self.assert_kept("not made by the installer")
+
+    def test_jobs_that_run_the_link_a_version_or_the_checkout_before_them_go(self) -> None:
+        """R43 carry 2: a plist names the install link now; an older one may name a version's folder or the
+        checkout from before versions. Still only as install.sh renders it, to the letter."""
+        renamed = {
+            "com.mine.morning": self.root,
+            "com.mine.watchdog": self.older,
+            "com.mine.learn": self.legacy,
+        }
+        for label, root in renamed.items():
+            self.write_plist(label, f'exec "{root}/bin/bosun" morning')
+            self.mac.loaded.add(label)
+        yours = self.write_plist("com.me.report", f"{self.root}/bin/bosun status | mail me")
+        self.mac.loaded.add("com.me.report")
+        self.run_it("--yes")
+        for label in renamed:
+            self.assertFalse((self.agents / f"{label}.plist").exists(), label)
+            self.assertNotIn(label, self.mac.loaded)
+        self.assertTrue(yours.exists())
+
+    def test_what_to_run_again_goes_through_the_link(self) -> None:
+        self.mac.stuck_jobs.add(LABEL)
+        _, output = self.run_it("--yes")
+        self.assertIn("~/.local/share/bosun/bin/bosun uninstall", output)
+        self.assertTrue(self.root.is_symlink() and self.versions.is_dir())
+
+    def test_a_link_a_switch_cut_short_left_goes_and_a_folder_of_that_name_stays(self) -> None:
+        leftover = self.root.with_name(".bosun.link-1a2b3c4d")
+        leftover.symlink_to(self.running)
+        folder = self.root.with_name(".bosun.link-5e6f7a8b")
+        folder.mkdir()
+        self.run_it("--yes")
+        self.assertFalse(os.path.lexists(leftover))
+        self.assertTrue(folder.is_dir())
+
+
 class WhenItCannot(World):
     def test_a_job_that_will_not_go_is_reported_and_the_rest_done(self) -> None:
         self.mac.stuck_jobs.add(LABEL)
@@ -889,7 +1050,7 @@ class Detect(World):
         link.unlink()
         link.symlink_to(self.home / "no-such" / "bosun")
         self.assertEqual(self.facts().link, str(link))
-        self.assertEqual(uninstall_detect.other_install(self.root), "")
+        self.assertEqual(uninstall_detect.other_install(uninstall_detect.install_roots(self.root)), "")
 
     def test_an_old_tmuxinator_project_goes(self) -> None:
         project = self.home / ".config" / "tmuxinator" / "bosun.yml"
