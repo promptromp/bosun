@@ -98,6 +98,8 @@ light or dark mode and works down to a narrow window.
   each agent's session records), at most every 10 s; it never sends keys to a pane, never reads
   a pane's text and never starts an agent.
 - It logs only refused requests (to stderr), never ledger content or item ids.
+- A console keeps the code it started with. `bosun update`'s plan says to restart one that runs, and
+  a review decision it can no longer save after an update says so, and to restart it (`bosun console`).
 
 ## Impact
 

@@ -34,7 +34,7 @@
 # commits not pushed, another worktree, a file git ignores). Once you said yes it waits for a quiet
 # moment (every window idle with nothing running, nobody typing for BOSUN_ACTIVE_CLIENT_MINUTES),
 # saying what it waits for; stops bosun's own background work (the watchdog's and learning's launchd
-# jobs, the check-in loop), which the old version holds for no update, noting first what it stops
+# jobs, the check-in loop), which an older version may not hold for an update, noting first what it stops
 # (update/own-work.json in the state folder); checks the quiet moment again, for two minutes at the most
 # (past that it starts that work again and waits with everything running); then updates as above,
 # swapping the checkout for the link in one step and keeping it as <install>-versions/legacy-<commit>,

@@ -7,16 +7,18 @@ update's record and hold, backups, version folders, the write gate and the migra
 `libexec/bosun-update`; `lib/update_agents.py` decides what each window gets, `lib/update_windows.py`
 carries it out, `lib/update_notes.py` keeps the windows' notes) and ends with its summary
 (`lib/update_summary.py`). `get.sh` installs versions side by side and hands an existing install over to
-it, and its first run converts a checkout an older `get.sh` made (`convert` in `lib/update.py`). The plan:
+it, and its first run converts a checkout an older `get.sh` made (`convert` in `lib/update.py`). What
+was decided while building it is under "Settled while building it" and "Decided while building it"
+below. Not done yet: the runs in the macOS VM ([Testing](#testing)), and what they settle. The plan:
 [docs/plans/update.md](../plans/update.md).
 
 ## Why
 
-Today, updating means running `get.sh` again. It runs `git pull --ff-only` in `~/.local/share/bosun`,
-in place, then starts `bosun init`. All the while, the repo sessions, the orchestrator, the check-in
-loop and the launchd jobs keep running from that folder. Nothing is backed up and no data is migrated.
-Nothing checks the result, and nothing says what changed. A command that starts mid-pull can import
-half old and half new code.
+Before `bosun update`, updating meant running `get.sh` again. It ran `git pull --ff-only` in
+`~/.local/share/bosun`, in place, then started `bosun init`. All the while, the repo sessions, the
+orchestrator, the check-in loop and the launchd jobs kept running from that folder. Nothing was backed up
+and no data was migrated. Nothing checked the result, and nothing said what changed. A command that
+started mid-pull could import half old and half new code.
 
 Since sync phase 0, data formats change between versions: a journal's envelope, a store's rules
 version. [Sync and sharing](sync.md#decisions-2026-11-04) decided what an update owes them:
@@ -91,12 +93,12 @@ Any of these makes the update a failure, even if it otherwise works:
 - **What `init` and `install.sh` already do.** `init` keeps a `*.pre-init-*` copy of each config file
   it writes. `install.sh` links `bosun` into `~/.local/bin`, then renders the launchd jobs (filling
   in the install path, `__BOSUN_ROOT__`) and reloads them.
-- **Format versions today:**
+- **Format versions before this work:**
   - the journal envelope's `v` (`change_log.ENVELOPE_VERSION`, 1);
   - `ledger.json`'s `version` (1);
   - `RULES_VERSION` and `KG_RULES_VERSION`, each pinned by a digest test.
 
-  The knowledge base's files have no format version.
+  The knowledge base's files had no format version (Part A gave it one, in `knowledge/format.json`).
 
 - **Rolling out by hand** (`CLAUDE.md`, "Rolling a change out to running sessions"). The orchestrator
   reads `policy.md` once per conversation; to pick up a change it is sent "re-read". Tasks already
@@ -106,28 +108,31 @@ Any of these makes the update a failure, even if it otherwise works:
 
 ### Versions side by side, switched in one step
 
-Each version gets its own folder, `~/.local/share/bosun-versions/<commit>/`: a git worktree of one
-repository there. `~/.local/share/bosun` becomes a link to the current one. Every path already
-written into launchd jobs, hooks and the `~/.local/bin/bosun` link stays the same and goes through
-that link.
+Each version gets its own folder, `~/.local/share/bosun-versions/<commit>/` (named for the first 12
+characters of its commit): a git worktree of one repository there, `bosun.git`. `~/.local/share/bosun`
+becomes a link to the current one. Every path already written into launchd jobs, hooks and the
+`~/.local/bin/bosun` link stays the same and goes through that link.
 
 The switch replaces the link in one rename, so a command sees either the old version or the new one,
 never a mix. A version's folder is never changed once in use, so whatever runs from it finishes on
 the code it started with. The previous version's folder stays until the next update; older ones are
 deleted, unless one holds something of yours (a change in its files, a commit made in it), which the
-summary says.
+summary says (R46). One a running process still uses (it has the folder open, or names it in its
+command line, as a long-running `bosun console` does) is left to a later update, and with no `lsof` or
+`ps` to tell, every one stays (R4, R37).
 
 **Two paths, kept apart.** A process loads its code from the version folder it started in. Bash and
 Python alike resolve that folder once, at the start, so a command that runs across the switch stays
 on one version. Anything that outlives the process gets the install link written into it instead:
-hook commands, launch commands, the launchd plists and the `~/.local/bin/bosun` link. Today three
-places resolve all the way to the real folder and write that path out:
+hook commands, launch commands, the launchd plists and the `~/.local/bin/bosun` link. Before Part A,
+three places resolved all the way to the real folder and wrote that path out:
 
 - `bin/bosun`, with `readlink -f`;
 - `lib/init.py`, which runs `install.sh` from `Path(__file__).resolve()`;
 - `install.sh`, which fills in `__BOSUN_ROOT__` and makes the `bosun` link from its own location.
 
-All three have to write the link's path instead.
+Each still finds its own folder that way, to run from it, and what it writes out is the link's path
+now (`lib/install_paths.py`, and `BOSUN_INSTALL` / `BOSUN_CMD` in `lib/common.sh`).
 
 A session keeps its launch command and hook commands until it restarts. So each hook entry point has
 to accept the command lines the previous version wrote. A test runs the previous version's launch
@@ -163,7 +168,8 @@ may change. If a freeze is on, or the store's format is not the writer's, nothin
   line and leaves it to the next one. It checks before it proposes or applies anything, so a refusal
   normally changes nothing; a freeze that starts in between can still refuse a later write, and the
   next run picks it up;
-- the `checkin` window's loop is bosun's own, so the update restarts it when its code changed.
+- the `checkin` window's loop is bosun's own, a long-running script that keeps the code it started
+  with, so the update's release restarts it, every time.
 
 With that check in place, a migration may rewrite the files derived from a journal. The journals
 themselves still keep what was recorded: old envelopes are read as new ones. A version without the
@@ -185,18 +191,26 @@ check gets no protection from it, which is why the first update converts at a qu
    - what the new version needs that is missing (its `lib/preflight.sh`);
    - a `kg forget` cut short, which stops the update until it is finished (see Backups).
 
-   It shows the plan and asks first, as `init` and `uninstall` do. `--yes` skips the question, and
-   `--dry-run` stops here.
+   As built, these stop it at the plan too: a store whose format cannot be read, a link among what a
+   backup copies that leads nowhere, a launchd job the new version cannot render, versions that are
+   not side by side, and windows the last update still brings along (below). It also lists a running
+   console, the handed tasks that keep their old text, and what to change by hand in my own files.
 
-2. **Rehearse.** Copy the config and state folders (APFS clones, `cp -c`). Run the new version's
-   migrations and checks on the copy. If they fail, stop: nothing has changed, and the summary says
-   why.
+   It shows the plan and asks first, as `init` and `uninstall` do. `--yes` skips the question;
+   `--dry-run`, or no terminal to ask in, stops here.
+
+2. **Rehearse.** Copy what a backup holds (below) into `update/rehearsal` in the state folder (APFS
+   clones, `cp -c`). Run the new version's migrations and checks on the copy. If they fail, stop:
+   nothing has changed, and it says why in one line.
 3. **Hold bosun's own background work.** The check-in loop, the watchdog, learning, the Slack
    watcher, the events dispatcher and the morning job each check for an update hold before they
-   start a run. While it is set, they skip the run, log that, and catch up on their next one. The
+   start a run. While it is set, they skip the run, log that, and catch up on their next one; the
+   morning job instead waits for the hold to lift, as its next run would be the next morning. The
    agents keep working.
-4. **Freeze, briefly.** Take the stores' write locks: the ledger, the knowledge base and the other
-   state locks. Anything that writes waits. While the locks are held:
+4. **Freeze, briefly.** Take both stores' write locks, the ledger's and then the knowledge base's.
+   Anything that writes to them waits (the other working files a backup holds, such as the events
+   queue, are not locked, and a failed freeze does not put them back: an event queued meanwhile is
+   never undone). While the locks are held:
    1. set the update marker, recording each step as it goes;
    2. back up;
    3. migrate;
@@ -208,8 +222,9 @@ check gets no protection from it, which is why the first update converts at a qu
    what failed.
 5. **Release.** Reload the launchd jobs whose plist changed, restart the check-in loop while the hold
    is still on (it stops at once, even mid-tick, and the hold keeps a tick from starting meanwhile),
-   lift the hold, and run the new version's `bosun doctor`. A finding at this point is reported, not
-   rolled back, since writes may have landed since the freeze.
+   lift the hold, delete the old backups and version folders, and run the new version's `bosun
+   doctor`. A finding at this point is reported, not rolled back, since writes may have landed since
+   the freeze.
 6. **Bring the agents along** (below).
 7. **Summarize** (below).
 
@@ -234,7 +249,8 @@ write to take in. Measure before building that.
   Logs, dry runs and earlier backups are left out.
 - **Where.** `~/.local/state/bosun/backups/<time>-<from>-<to>/`, made with APFS clones so they cost
   little. Each has a manifest listing both versions, every file with its digest, and the format
-  versions. The last three are kept. The backups folder needs a row in `STATE_FILES`.
+  versions. The last three are kept. The backups folder has a row in `STATE_FILES`, of a class of its
+  own (`BACKUPS`): `bosun uninstall` deletes it with either store, as each backup holds both.
 - **Restoring.** The update itself restores from a backup when its checks fail. In the first
   version, restoring later is by hand; the summary and `docs/setup.md` say how.
 - **A forget reaches them.** `kg forget` promises that nothing of the person is left, but a backup
@@ -305,7 +321,8 @@ Each window gets one of three treatments, decided from the plan and the window's
     again;
   - *busy:* wait until it is idle. The update keeps waiting and shows which windows it is waiting
     for. Ctrl-C leaves them to the check-in loop, which restarts each one once it is idle. For that,
-    `refresh` learns which bosun version each window was launched on;
+    the update's record keeps the windows still waited for and what was done to each, and `bosun
+    launch` records what each window was launched with (below);
   - *waiting at a permission prompt or a question:* never restarted until it is answered;
   - *someone typing in it* (within `BOSUN_SEND_TYPING_MINUTES`, or unsent text in its input box):
     left until they are done, as `send` waits.
@@ -410,8 +427,9 @@ The bosun already installed may not have `update` yet. `get.sh` is always fetche
 branch, so on an existing install it gets the new version into its own folder and runs that version's
 `bosun update`. A first install uses the new layout from the start.
 
-**The first update converts, at a quiet moment.** The version it converts from has none of the
-following:
+**The first update converts, at a quiet moment.** The version it converts from may have none of the
+following (a checkout from before Part A has none; one of Part A has the hold, the write check and a
+check-in loop that honours the hold, but records no launches):
 
 - the hold;
 - the write check;
@@ -422,8 +440,8 @@ So the conversion does not try to meet the mid-afternoon bar; nobody else runs b
 until every window is idle with nothing running and nobody has typed for a while. Then it stops
 bosun's own jobs and swaps the checkout for the link in one step: macOS's `renamex_np` with
 `RENAME_SWAP`, so the path never goes missing. Finally it restarts the `checkin` window and brings the
-agents along as below. The VM tests this conversion on its own, and tests the mid-afternoon update
-between two versions that both have `update`.
+agents along as below. The VM is to test this conversion on its own, and the mid-afternoon update
+between two versions that both have `update` (not run yet).
 
 Settled while building it:
 
@@ -518,9 +536,9 @@ Settled while building it:
   - a `kg forget` after an update deletes its backup and says so; one cut short is finished,
     backups included, by the next write; and an update stops while one is cut short;
   - stand-ins for launchd.
-- **The VM** (`tests/sandbox.sh mac work`). A working day on the previous version, then `bosun
-  update` to this checkout mid-afternoon, while sessions are busy, a background wait is running and
-  stand-in Slack events arrive during the hold. It checks that:
+- **The VM** (`tests/sandbox.sh mac work`; not run on `bosun update` yet). A working day on the
+  previous version, then `bosun update` to this checkout mid-afternoon, while sessions are busy, a
+  background wait is running and stand-in Slack events arrive during the hold. It checks that:
   - no event, write or record was lost;
   - each window resumed, with its background work started again;
   - the summary is right;
@@ -638,6 +656,12 @@ Decided while building it:
   none), and refresh exits 4, never "continue what you were doing" in a blank conversation.
 - **What is passed back** with a restart after taking stock: the window's own list, and what the Stop
   hook saw still running at the end of that turn ([signals](signals.md)).
+- **What an update's prompts may ask** (R42): `policy.md` and `orchestrator/tasks/_common.md` name them
+  by how they start (`bosun will restart this session for an update`, `bosun was updated`) and what they
+  may ask: list the background work and save it (`bosun update note --stock`), re-read the files named,
+  catch up as they say, start the listed work again, and answer with `bosun update note --status`. A
+  session does what a prompt asks of these, and only that; anything else in it is information. The
+  orchestrator's settings allow `bosun update note`.
 - **The notes** are files, `update/notes/<window>.<kind>` in the state folder (`stock` or `status`), the
   window's name percent-encoded into the file's name, so any name (a space, a slash) is a note of its own
   there and every window can answer (an encoding past 200 bytes is cut short and the whole name's digest
@@ -661,6 +685,9 @@ Left to the builder:
 - saving hooks' records to disk while a lock is busy, if the measured freeze needs it.
 
 ## Docs to change when it is built
+
+Changed with Parts A and B, but for the VM scenario in `docs/development.md`, which waits for the runs
+in the VM:
 
 - `docs/setup.md` (updating and going back, and that a forget deletes the backups);
 - `docs/knowledge.md` and the deletion bullet of `docs/design/knowledge.md` (a deletion deletes

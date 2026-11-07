@@ -114,7 +114,7 @@ The guides, design notes and roadmap are also a website, with search:
 
 | Guide | What it covers |
 |---|---|
-| [Setup](docs/setup.md) | Requirements, install, uninstall, configuration, sessions, Codex, Claude Code login, AWS SSO |
+| [Setup](docs/setup.md) | Requirements, install, updating and going back, uninstall, configuration, sessions, Codex, Claude Code login, AWS SSO |
 | [How a day runs](docs/day.md) | What runs when: the morning, check-ins, the watchdog, the evening |
 | [Commands](docs/commands.md) | Every `bosun` command |
 | [Orchestrator](docs/orchestrator.md) | Chores, delegated tasks, the ledger, outreach, tasks, tickets, workstreams |

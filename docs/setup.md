@@ -42,7 +42,8 @@ Run it again to update: it hands over to the newest version's `bosun update` (se
 [Updating](#updating)). After the pipe, `sh -s -- --dry-run` says what it would do and does nothing, and
 `sh -s -- --unattended` asks nothing: it takes the recommended setup, or goes ahead with the update.
 `BOSUN_DIR`, `BOSUN_REPO` and `BOSUN_BRANCH` override where it goes and what it gets; on an install that
-is already there, the defaults are what it came from.
+is already there, the defaults are what it came from, and a `BOSUN_REPO` or `BOSUN_BRANCH` given then is
+kept for the updates after it.
 
 `bosun init` reads what this Mac already shows: the repos you use your agents in, your usual hours,
 your logins. In a terminal it asks a few questions, one key each: Return takes the recommended
@@ -158,8 +159,8 @@ An install from before versions side by side is a checkout in `~/.local/share/bo
 has no `bosun update`. Running the install line again converts it, once. The new version's `bosun update`
 shows its plan and asks, then waits for a quiet moment: every window idle with nothing running, and
 nobody typing in the session for `BOSUN_ACTIVE_CLIENT_MINUTES`. It says what it waits for, and Ctrl-C
-there changes nothing. Then it stops the watchdog, learning and the check-in loop, since the old version
-has no hold to keep them waiting, checks again that every window is still quiet, and updates as above. If
+there changes nothing. Then it stops the watchdog, learning and the check-in loop, since an older version
+may not hold them for an update, checks again that every window is still quiet, and updates as above. If
 a window is still busy two minutes after that stop, it starts that work again and waits for a quiet
 moment with everything running, as before. The checkout is swapped for the link in one step and kept as
 `~/.local/share/bosun-versions/legacy-<its commit>`, and each of bosun's own windows (the orchestrator,
@@ -171,7 +172,7 @@ state folder before it stopped anything, and leaves a check-in loop that runs by
 
 It will not convert a checkout with anything of yours in it: changes, a stash, commits not pushed,
 another worktree, a file git ignores. Take that out first. The update after it deletes the kept checkout,
-unless something of yours is in it by then, which its summary says.
+unless something of yours is in it by then, or the installer did not make it, which its summary says.
 
 ## Going back
 
@@ -193,7 +194,8 @@ hand. You need the version the update came from and the backup it took, both nam
    `manifest.json` lists every file). Anything written since the update is not in it.
 4. Lead the link to the older version (`ln -sfn ~/.local/share/bosun-versions/<folder>
    ~/.local/share/bosun`), run its `~/.local/share/bosun/install.sh` to load its jobs again, and
-   `bosun start`. `bosun update` would take you forward again, to the head of the branch.
+   `bosun start`. `bosun update` would take you forward again, to the head of the branch (from the
+   checkout kept from before versions, which has no `bosun update`, the install line does).
 
 Going back is only to the version the update came from, and never past a `kg forget`: a deletion of a
 person deletes every update backup there is, as restoring one would bring the person back, and says so in
@@ -222,7 +224,7 @@ as it was.
 | A checkout of your own you run bosun from | Stays. One `get.sh` made before versions side by side is deleted, last, unless it has anything of yours in it |
 | Your ledger and learning history, your knowledge graph | It asks, and Enter keeps them |
 | The backups `bosun update` took (`backups/` in the state folder) | Deleted when either the ledger or the knowledge graph is, as each holds both (every person in it included). Kept only when you keep both |
-| `~/.config/bosun`: `bosun.env`, `sessions.yml`, `setup.sh`, `policy.md`, `learn.md`, `tasks/`, `workstreams.json`, and the backups `bosun init` made (`*.pre-init-*`) | Stay, and it says where. `--purge` deletes them too |
+| `~/.config/bosun`: `bosun.env`, `sessions.yml`, `setup.sh`, `policy.md`, `learn.md`, `tasks/`, `workstreams.json`, the backups `bosun init` made (`*.pre-init-*`), and the copies of `bosun.env` that `bosun update` kept (`bosun.env.pre-update-*`) | Stay, and it says where. `--purge` deletes them too |
 | Anything else in those folders | Stays, and it names it. It only deletes what it knows is bosun's, and if you pointed `BOSUN_STATE_DIR` or `BOSUN_LOG_DIR` at a folder that also holds other files, it leaves that folder whole |
 
 `/bosun:chores` and bosun's hooks need no removing: bosun passes them to each window it starts, so neither
@@ -292,6 +294,12 @@ State and logs go to `~/.local/state/bosun/`:
   update can tell which windows need a restart and start them again the same way
 - `console/token`: the console's access token; `console/running.lock`, held while a console runs, so
   that `bosun update` can say to restart it
+- `update.json` and `update.lock`: the last `bosun update`'s record (what it did, step by step) and the
+  lock it holds while it runs; `update/`: the windows' notes (`update/notes/`), what a first update
+  stopped of bosun's own work (`update/own-work.json`) and, while one runs, its rehearsal's copy
+- `backups/<time>-<from>-<to>/`: what `bosun update` backed up before it changed anything, with its
+  `manifest.json` and the update's `summary.md`, the last 3 kept (see [Updating](#updating) and
+  [Going back](#going-back))
 - `impact/`: the Impact snapshot (`bosun impact collect`)
 - `alerts/`: the last Slack alert's result, with Slack alerts on
 - `events/`: the event queue (`queue.jsonl`) and what was delivered (`state.json`), with events on

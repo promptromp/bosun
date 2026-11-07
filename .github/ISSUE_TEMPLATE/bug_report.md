@@ -29,7 +29,7 @@ Security problems: report them privately as SECURITY.md describes, not here.
 ```
 
 **Versions**
-- bosun: `git -C <your checkout> rev-parse --short HEAD`
+- bosun: `git -C ~/.local/share/bosun rev-parse --short HEAD` (or your own checkout, if you run bosun from one)
 - Claude Code: `claude --version`
 - Codex, if a window runs it: `codex --version`
 - macOS: `sw_vers -productVersion`
