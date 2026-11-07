@@ -461,6 +461,13 @@ update_hold_active() {
   python3 "$BOSUN_ROOT/lib/update_state.py" hold-active --state-dir "$BOSUN_STATE_DIR"
 }
 
+# Whether an update is bringing windows along and some are still waited for (`bosun update advance`
+# takes a turn at them).
+update_windows_pending() {
+  [ -f "$BOSUN_STATE_DIR/update.json" ] || return 1
+  python3 "$BOSUN_ROOT/lib/update_state.py" windows-pending --state-dir "$BOSUN_STATE_DIR"
+}
+
 keep_awake_pidfile() { echo "$BOSUN_STATE_DIR/keep-awake-$BOSUN_SESSION_NAME.pid"; }
 
 # When you stopped the session (`stop` writes it, `start` removes it). The watchdog does not
@@ -491,11 +498,13 @@ BOSUN_PASSTHROUGH_VARS="BOSUN_CONFIG_DIR BOSUN_SESSION_NAME BOSUN_TMUX_SOCKET BO
 # environment, and that shell stays in the pane after Claude exits. Without a prompt, launch sends
 # the drain prompt. That launch shell never shows a prompt, so helpers your startup files fork off
 # would outlive it; launch stops them (reap_shell_helpers).
-build_launch_command() { # <window> [prompt] [kind] [model] [effort] [quiet]
+build_launch_command() { # <window> [prompt] [kind] [model] [effort] [quiet] [harness]
   local window="$1" prompt="${2:-}" prompt_dir prompt_file shell var
   local launch=("$BOSUN_CMD" launch)
   [ -n "${4:-}" ] && launch+=(--model "$4")
   [ -n "${5:-}" ] && launch+=(--effort "$5")
+  # harness: the agent an update keeps a window on, rather than the configured one (recorded_restart)
+  [ -n "${7:-}" ] && launch+=(--harness "$7")
   # quiet: resume without the drain prompt (launch --no-prompt)
   [ "${6:-}" = "quiet" ] && launch+=(--no-prompt)
   launch+=("$window")
@@ -527,9 +536,10 @@ login_shell() {
 RELAUNCH_SETTLE_SECONDS="${BOSUN_RELAUNCH_SETTLE_SECONDS:-8}" # the variable is for tests
 
 # Replace the process in a window's pane with a fresh `bosun launch`, in <dir> (default: the
-# pane's current directory). Refuses split windows and panes that run anything besides their
-# shell, so it never kills your work.
-relaunch_in_window() { # <window_id> <window> [prompt] [dir] [quiet]
+# pane's current directory), with [model], [effort] and [harness] if given; with kind "checkin", the
+# check-in loop (build_launch_command). Refuses split windows and panes that run anything besides
+# their shell, so it never kills your work.
+relaunch_in_window() { # <window_id> <window> [prompt] [dir] [quiet] [kind] [model] [effort] [harness]
   local window_id="$1" panes pane_id pane_pid children workdir
   panes="$(tmux_cmd list-panes -t "$window_id" -F '#{pane_id} #{pane_pid}')" || return 1
   if [ "$(grep -c . <<<"$panes")" -ne 1 ]; then
@@ -553,7 +563,7 @@ relaunch_in_window() { # <window_id> <window> [prompt] [dir] [quiet]
     sleep 0.5
   done
   workdir="${4:-$(tmux_cmd display-message -p -t "$pane_id" '#{pane_current_path}')}"
-  build_launch_command "$2" "${3:-}" "" "" "" "${5:-}"
+  build_launch_command "$2" "${3:-}" "${6:-}" "${7:-}" "${8:-}" "${5:-}" "${9:-}"
   log_reaped "$2" "$(reap_shell_helpers "$pane_pid")"
   tmux_cmd respawn-pane -k -t "$pane_id" -c "$workdir" "${launch_cmd[@]}"
 }
@@ -654,7 +664,10 @@ window_model_effort() {
 # Sets model_effort_args to the Claude flags for <model> and <effort> ("-": Claude Code's default).
 # Effort goes in as a session-level setting (--settings), not --effort: that way /effort inside
 # the session can still change it, while your saved defaults (from /model and /effort, which
-# write ~/.claude/settings.json) no longer decide it. [settings-file] is merged in (orchestrator).
+# write ~/.claude/settings.json) no longer decide it. [settings-file] is merged in (orchestrator): a
+# file under the install is read from this version's own folder, whose code runs (as `launch
+# --fingerprint` reads the files the arguments name), which is where the install link leads but
+# before an update switches it.
 build_model_effort_args() { # <model> <effort> [settings-file] [extra settings JSON]
   local model="$1" effort="$2" settings_file="${3:-}" extra="${4:-}" settings='{}'
   model_effort_args=()
@@ -665,7 +678,7 @@ build_model_effort_args() { # <model> <effort> [settings-file] [extra settings J
     return 0
   fi
   if [ -n "$settings_file" ]; then
-    settings="$(jq -c . "$settings_file")" || die "could not read $settings_file"
+    settings="$(jq -c . "${settings_file/#"$BOSUN_INSTALL"\//$BOSUN_ROOT/}")" || die "could not read $settings_file"
   fi
   [ -n "$effort" ] && settings="$(jq -c --arg effort "$effort" '. + {effortLevel: $effort}' <<<"$settings")"
   # The extra hooks are added to the file's own (for the same event too), never replace them.
@@ -872,10 +885,17 @@ run_with_timeout() {
 }
 
 # Whether the check-in loop (`bosun checkin --loop`) runs under tmux pane <pane_pid>.
-checkin_loop_running() {
+checkin_loop_running() { [ -n "$(checkin_loop_pid "$1")" ]; }
+
+# The pid of the check-in loop in tmux pane <pane_pid> (the pane's own process, or one under it), if
+# one runs there: the outermost process showing its command line (its subshells show the same one).
+checkin_loop_pid() {
   local pid
-  for pid in $(descendants "$1"); do
-    ps -o command= -p "$pid" 2>/dev/null | grep -q "bosun-checkin --loop" && return 0
+  for pid in "$1" $(descendants "$1"); do
+    ps -o command= -p "$pid" 2>/dev/null | grep -q "bosun-checkin --loop" || continue
+    ps -o command= -p "$(ps -o ppid= -p "$pid")" 2>/dev/null | grep -q "bosun-checkin --loop" && continue
+    echo "$pid"
+    return 0
   done
   return 1
 }
@@ -971,6 +991,122 @@ render_learn_plist() {
     <"$BOSUN_ROOT/templates/launchd-learn.plist"
 }
 
+# The plist of the launchd job <label> as this version renders it from the config: the morning job,
+# the watchdog, and learning with BOSUN_LEARN_ENABLED=1; nothing for a job not wanted.
+render_job() { # <label>
+  case "$1" in
+    "$BOSUN_LAUNCHD_LABEL") render_launchd_plist "$1" "$BOSUN_START_TIME" "$BOSUN_DAYS" "" BOSUN_TRIGGER=launchd ;;
+    "$(watchdog_label)") render_watchdog_plist ;;
+    "$(learn_label)") if [ "$BOSUN_LEARN_ENABLED" = "1" ]; then render_learn_plist; fi ;;
+  esac
+}
+
+job_loaded() { launchctl print "gui/$(id -u)/$1" >/dev/null 2>&1; } # <label>
+
+# Job <label> unloaded, then, from the plist <rendered> (checked already; empty: the job is no longer
+# wanted), written as <installed> and loaded again; or its plist removed.
+reload_job() { # <label> <rendered> <installed>
+  launchctl bootout "gui/$(id -u)/$1" 2>/dev/null
+  if [ ! -s "$2" ]; then
+    rm -f "$3"
+    return 0
+  fi
+  mkdir -p "$(dirname "$3")" # a new macOS account may not have it yet
+  if cp "$2" "$3" && launchctl bootstrap "gui/$(id -u)" "$3"; then return 0; fi
+  log "ERROR: launchctl bootstrap failed for $3" >&2
+  return 1
+}
+
+# Whether job <label> must be reloaded from <rendered>: it differs from <installed> or is not loaded,
+# or it is no longer wanted (<rendered> empty) and still installed. A rendered plist is checked
+# (plutil) before anything else happens to the job: one that is not valid is an error (exit 2), and the
+# job stays as it is.
+job_changed() { # <label> <rendered> <installed>
+  if [ ! -s "$2" ]; then
+    [ -e "$3" ]
+    return
+  fi
+  cmp -s "$2" "$3" && job_loaded "$1" && return 1
+  plutil -lint -s "$2" >&2 && return 0
+  log "ERROR: the rendered plist of $1 is invalid" >&2
+  return 2
+}
+
+# Each launchd job (render_job) written and reloaded where its plist differs from the installed one,
+# or it is not loaded; one no longer wanted unloaded and its plist removed. Prints the label of each
+# it changes; with --dry-run, only prints them. A job whose plist cannot be rendered, or renders
+# invalid, fails it (exit 1, said on stderr) and is left as it is, never unloaded or removed; the
+# others go on. install.sh and `bosun update` (its plan, then its release, from the new version's
+# templates) use it.
+reload_changed_jobs() { # [--dry-run]
+  local label installed rendered status=0 changed
+  rendered="$(mktemp)" || return 1
+  for label in "$BOSUN_LAUNCHD_LABEL" "$(watchdog_label)" "$(learn_label)"; do
+    installed="$HOME/Library/LaunchAgents/$label.plist"
+    if ! render_job "$label" >"$rendered"; then
+      log "ERROR: could not render the plist of $label" >&2
+      status=1
+      continue
+    fi
+    job_changed "$label" "$rendered" "$installed"
+    changed=$?
+    [ "$changed" = 2 ] && status=1
+    [ "$changed" = 0 ] || continue
+    echo "$label"
+    [ "${1:-}" = "--dry-run" ] || reload_job "$label" "$rendered" "$installed" || status=1
+  done
+  rm -f "$rendered"
+  return "$status"
+}
+
+# The labels of the launchd jobs that run bosun's own background work (the watchdog and learning) that
+# are loaded now: what `bosun update`, converting a checkout from before versions, is about to stop.
+loaded_own_jobs() {
+  local label
+  for label in "$(watchdog_label)" "$(learn_label)"; do
+    if job_loaded "$label"; then echo "$label"; fi
+  done
+}
+
+# The launchd jobs that run bosun's own background work unloaded, where loaded; prints the label of each
+# it unloaded. `bosun update` stops them while it converts a checkout from before versions, whose jobs
+# know of no update to hold their work for. One that is still loaded after a few tries fails it (exit 1,
+# said on stderr); the others are still unloaded.
+stop_own_jobs() {
+  local label tries status=0
+  for label in "$(watchdog_label)" "$(learn_label)"; do
+    job_loaded "$label" || continue
+    launchctl bootout "gui/$(id -u)/$label" 2>/dev/null
+    tries=10
+    while job_loaded "$label" && [ "$tries" -gt 0 ]; do
+      sleep 0.5
+      tries=$((tries - 1))
+    done
+    if job_loaded "$label"; then
+      log "ERROR: could not unload $label" >&2
+      status=1
+    else
+      echo "$label"
+    fi
+  done
+  return "$status"
+}
+
+# Each launchd job <label> that is not loaded, loaded again from its plist as it is on disk: what a
+# conversion put back loads of what it stopped (nothing rendered, so the code the install path leads to
+# runs under the plists it had). One already loaded is left as it is.
+start_jobs() { # <label...>
+  local label plist status=0
+  for label in "$@"; do
+    job_loaded "$label" && continue
+    plist="$HOME/Library/LaunchAgents/$label.plist"
+    launchctl bootstrap "gui/$(id -u)" "$plist" && continue
+    log "ERROR: launchctl bootstrap failed for $plist" >&2
+    status=1
+  done
+  return "$status"
+}
+
 # render_launchd_plist <label> <HH:MM> <days> <morning-args> [KEY=VALUE ...]
 render_launchd_plist() {
   local label="$1" time="$2" days="$3" args="$4" env_xml calendar
@@ -1004,6 +1140,61 @@ note_bosun_prompt() { # <window> <text>
   [ "$BOSUN_EVENTS_ENABLED" = "1" ] && [ -n "$2" ] || return 0
   BOSUN_STATE_DIR="$BOSUN_STATE_DIR" python3 "$BOSUN_ROOT/lib/events.py" pasted "$1" <<<"$2" ||
     log "warning: could not note bosun's prompt for $1's prompt hook"
+}
+
+# What window <name> of this session was last launched with, as JSON (lib/launch_record.py: its
+# directory, the --model / --effort it was given, the fingerprint); fails if nothing was recorded.
+launch_recorded() { # <window>
+  python3 "$BOSUN_ROOT/lib/launch_record.py" show --state-dir "$BOSUN_STATE_DIR" --session "$BOSUN_SESSION_NAME" --window "$1"
+}
+
+record_field() { jq -r --arg key "$2" '.[$key] // ""' <<<"$1"; } # <record JSON> <key>
+
+# How an update starts window <name> again, from its last recorded launch; empty means as configured.
+# RESTART_HARNESS: the agent it was launched on, which it keeps (a restart onto another agent lands in
+# a blank conversation mid-work; the configured one takes over at the next restart not for an update).
+# RESTART_MODEL / RESTART_EFFORT: the model and effort it ran with when that agent is no longer the
+# configured one (the configured model is meant for the other), else for a window outside the window
+# list (<listed> 0, opened by `send --new`) the --model / --effort it was given. RESTART_DIR: such a
+# window's directory. Fails, all of them empty, if nothing was recorded.
+RESTART_HARNESS="" RESTART_MODEL="" RESTART_EFFORT="" RESTART_DIR=""
+recorded_restart() { # <name> <listed: 1 or 0>
+  local record
+  RESTART_HARNESS="" RESTART_MODEL="" RESTART_EFFORT="" RESTART_DIR=""
+  record="$(launch_recorded "$1")" || return 1
+  RESTART_HARNESS="$(record_field "$record" harness)"
+  if [ "$RESTART_HARNESS" != "$(window_harness "$1")" ]; then
+    RESTART_MODEL="$(record_field "$record" model)"
+    RESTART_EFFORT="$(record_field "$record" effort)"
+  elif [ "$2" = "0" ]; then
+    RESTART_MODEL="$(record_field "$record" model_override)"
+    RESTART_EFFORT="$(record_field "$record" effort_override)"
+  fi
+  [ "$2" = "1" ] || RESTART_DIR="$(record_field "$record" dir)"
+}
+
+INPUT_TYPED=3 # lib/pane_input.py typed: the input line holds text
+
+# The text in the agent's input line in window <id> (lib/pane_input.py); exit 0 empty, 3 text, 4 no
+# input line found (not a screen we can read: the checks are skipped).
+input_line() { tmux_cmd capture-pane -e -p -t "$1" 2>/dev/null | python3 "$BOSUN_ROOT/lib/pane_input.py" typed; }
+
+# Prints why nothing should be pasted into window <id> now, or fails if it may be: someone typed
+# there within BOSUN_SEND_TYPING_MINUTES (their text and our Enter would merge into one prompt), or
+# its input line holds unsent text. `send` waits on it; an update's restart leaves the window be.
+paste_blocker() { # <window_id>
+  local minutes typed
+  if [ "$BOSUN_SEND_TYPING_MINUTES" -gt 0 ] && minutes="$(minutes_since_client_input "$1")" &&
+    [ "$minutes" -lt "$BOSUN_SEND_TYPING_MINUTES" ]; then
+    echo "someone typed in it $minutes minute(s) ago"
+    return 0
+  fi
+  typed="$(input_line "$1")"
+  if [ $? -eq "$INPUT_TYPED" ]; then
+    echo "its input line holds unsent text ($(printf '%s' "$typed" | head -c 80 | tr '\n' ' '))"
+    return 0
+  fi
+  return 1
 }
 
 # Minutes since the last keystroke from any client attached to the session, or with a window id

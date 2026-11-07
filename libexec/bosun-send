@@ -32,7 +32,6 @@ SESSION="$BOSUN_SESSION_NAME"
 PASTE_SETTLE_SECONDS=0.5
 START_POLL_SECONDS=1
 FAILED_START_OUTPUT_LINES=8
-INPUT_TYPED=3 # lib/pane_input.py typed: the input line holds text
 
 list_windows() {
   local name path pane_pid agent_pid state version model_effort
@@ -80,29 +79,8 @@ send_message() {
   log "delivered to $SESSION:$window"
 }
 
-# The text in the Claude input line of window <id> (lib/pane_input.py); exit 0 empty, 3 text, 4
-# no input line found (not a Claude screen we can read: the checks are skipped).
-input_line() { tmux_cmd capture-pane -e -p -t "$1" 2>/dev/null | python3 "$BOSUN_ROOT/lib/pane_input.py" typed; }
-
 rejected_count() { # <window_id>: Claude's "Unknown command" replies on screen
   tmux_cmd capture-pane -p -S -200 -t "$1" 2>/dev/null | python3 "$BOSUN_ROOT/lib/pane_input.py" rejected | grep -c .
-}
-
-# Prints why a paste into window <id> must wait, or fails if it need not: someone typing there
-# (their text and our Enter would merge into one prompt) or unsent text in its input line.
-paste_blocker() { # <window_id>
-  local minutes typed
-  if [ "$BOSUN_SEND_TYPING_MINUTES" -gt 0 ] && minutes="$(minutes_since_client_input "$1")" &&
-    [ "$minutes" -lt "$BOSUN_SEND_TYPING_MINUTES" ]; then
-    echo "someone typed in it $minutes minute(s) ago"
-    return 0
-  fi
-  typed="$(input_line "$1")"
-  if [ $? -eq "$INPUT_TYPED" ]; then
-    echo "its input line holds unsent text ($(printf '%s' "$typed" | head -c 80 | tr '\n' ' '))"
-    return 0
-  fi
-  return 1
 }
 
 wait_until_pasteable() { # <window> <window_id>

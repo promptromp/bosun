@@ -28,7 +28,7 @@ import json
 import os
 import sys
 import time
-from collections.abc import Iterator
+from collections.abc import Iterator, Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -41,6 +41,9 @@ LOCK_FILE = "update.lock"
 UPDATE_DIR = "update"
 HOLD_SECONDS = 3600
 POLL_SECONDS = 0.05  # how often a wait for update.lock tries again
+# What one_update waits at the least: a writer's running() takes update.lock shared for an instant,
+# and an update must never be refused for that.
+PROBE_SECONDS = 0.5
 
 STEPS = (
     "planned",
@@ -98,14 +101,46 @@ class UpdateState:
     user_changes: tuple[str, ...] = ()  # what to change in my own files, from the plan
     freeze_ms: int = 0
     error: str = ""
+    findings: tuple[str, ...] = ()  # what went wrong after the switch, and what bosun doctor found then
+    # Each window brought along (lib/update_agents.py): its kind and the plan's treatment for it, then
+    # what was done to it, in order.
+    windows: Mapping[str, tuple[str, ...]] = dataclasses.field(default_factory=dict)
+    reread: tuple[str, ...] = ()  # the files this update changed that the orchestrator re-reads
+    # What the summary says (lib/update_summary.py), kept as each step learns it, so an update carried
+    # on by a later run, or finished by the check-in loop, says the same as one that ran in one go: the
+    # plan said yes to (update_plan.as_record), each migration that ran (migrations.Applied.as_record),
+    # what changed in bosun.env and the copy kept of it, and the launchd jobs reloaded.
+    plan: Mapping[str, Any] = dataclasses.field(default_factory=dict)
+    migrated: tuple[str, ...] = ()
+    config_changed: tuple[str, ...] = ()
+    reloaded: tuple[str, ...] = ()
+    # What bosun doctor failed at in a run while planning, before the hold: the summary lists only the
+    # FAIL lines after the switch that this does not hold.
+    doctor_before: tuple[str, ...] = ()
 
 
-_TUPLES = ("restorable", "pending", "user_changes")
+_TUPLES = (
+    "restorable",
+    "pending",
+    "user_changes",
+    "findings",
+    "reread",
+    "migrated",
+    "config_changed",
+    "reloaded",
+    "doctor_before",
+)
+_MAPPINGS = ("windows",)  # of window names to lists of strings
+_OBJECTS = ("plan",)  # JSON objects, read as they are (their reader checks their parts)
 
 
 _INTS = ("hold_until", "freeze_ms")
 _NAMES = tuple(f.name for f in dataclasses.fields(UpdateState))
-_REQUIRED = tuple(f.name for f in dataclasses.fields(UpdateState) if f.default is dataclasses.MISSING)
+_REQUIRED = tuple(
+    f.name
+    for f in dataclasses.fields(UpdateState)
+    if f.default is dataclasses.MISSING and f.default_factory is dataclasses.MISSING
+)
 
 
 def _is_int(value: Any) -> bool:
@@ -116,9 +151,17 @@ def _is_strings(value: Any) -> bool:
     return isinstance(value, list) and all(isinstance(x, str) for x in value)
 
 
+def _is_mapping_of_strings(value: Any) -> bool:
+    return isinstance(value, dict) and all(isinstance(k, str) and _is_strings(v) for k, v in value.items())
+
+
 def _right_type(name: str, value: Any) -> bool:
     if name in _TUPLES:
         return _is_strings(value)
+    if name in _MAPPINGS:
+        return _is_mapping_of_strings(value)
+    if name in _OBJECTS:
+        return isinstance(value, dict)
     if name in _INTS:
         return _is_int(value)
     return isinstance(value, str)
@@ -152,6 +195,8 @@ def load(state_dir: Path) -> UpdateState | None:
         raise RecordUnreadable(path, "is not an update record bosun can read")
     for name in _TUPLES:
         known[name] = tuple(known.get(name, ()))
+    for name in _MAPPINGS:
+        known[name] = {key: tuple(values) for key, values in known.get(name, {}).items()}
     return UpdateState(**known)
 
 
@@ -236,11 +281,12 @@ def _taken(fd: int, wait: float) -> bool:
 @contextlib.contextmanager
 def one_update(state_dir: Path, wait: float = 0.0) -> Iterator[None]:
     """update.lock, exclusive, for the whole update; UpdateRunning if another still holds it after
-    <wait> seconds (a write putting back an update cut short waits a little for another doing it)."""
+    <wait> seconds (a write putting back an update cut short waits a little for another doing it),
+    and never less than PROBE_SECONDS, which a writer's running() probe does not outlast."""
     state_dir.mkdir(parents=True, exist_ok=True)
     fd = os.open(state_dir / LOCK_FILE, os.O_RDWR | os.O_CREAT, 0o644)
     try:
-        if not _taken(fd, wait):
+        if not _taken(fd, max(wait, PROBE_SECONDS)):
             other = read(state_dir)
             raise UpdateRunning(
                 other.started_at if other else "",
@@ -272,13 +318,22 @@ def stuck(state_dir: Path, now: float) -> str:
     return ""
 
 
+def windows_pending(state_dir: Path) -> bool:
+    """Whether an update is bringing windows along and some are still waited for: the check-in
+    loop then takes a turn at them (`bosun update advance`)."""
+    state = read(state_dir)
+    return state is not None and state.step == "agents" and bool(state.pending)
+
+
 def main(argv: list[str]) -> int:
     parser = argparse.ArgumentParser(prog="update_state.py")
-    parser.add_argument("command", choices=("hold-active", "stuck"))
+    parser.add_argument("command", choices=("hold-active", "stuck", "windows-pending"))
     parser.add_argument("--state-dir", type=Path, required=True)
     args = parser.parse_args(argv)
     if args.command == "hold-active":
         return 0 if holding(args.state_dir, time.time()) else 1
+    if args.command == "windows-pending":
+        return 0 if windows_pending(args.state_dir) else 1
     why = stuck(args.state_dir, time.time())
     if why:
         print(why)

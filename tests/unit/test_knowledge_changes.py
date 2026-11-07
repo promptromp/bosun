@@ -390,6 +390,30 @@ class ForgetTest(JournalTestCase):
             self.skipTest("git is not installed")
         super().setUp()
 
+    def test_a_forget_cut_short_is_found_until_the_next_write_finishes_it(self) -> None:
+        """What `bosun update` stops at: a deletion marker the files do not reflect yet."""
+        self.assertFalse(knowledge.deletion_cut_short())  # no knowledge base
+        self.seed()
+        self.run_kg("propose", "person/dana", "timezone", "--value", "Europe/Lisbon", "--source", "ledger:a")
+        self.assertFalse(knowledge.deletion_cut_short())
+        with (
+            mock.patch.object(knowledge, "write_files", side_effect=OSError("power cut")),
+            self.assertRaises(OSError),
+        ):
+            self.run_kg("forget", "person/dana")
+        self.assertTrue(knowledge.deletion_cut_short())
+        self.run_kg("add-entity", "repo/other")
+        self.assertFalse(knowledge.deletion_cut_short())
+
+    def test_a_write_cut_short_is_no_deletion_cut_short(self) -> None:
+        self.seed()
+        with (
+            mock.patch.object(knowledge, "write_files", side_effect=OSError("power cut")),
+            self.assertRaises(OSError),
+        ):
+            self.run_kg("add-entity", "repo/other")
+        self.assertFalse(knowledge.deletion_cut_short())
+
     def test_forget_rewrites_only_the_local_journal(self) -> None:
         self.seed()
         self.run_kg("propose", "person/dana", "reviews", "exporter", "--source", "ledger:a")

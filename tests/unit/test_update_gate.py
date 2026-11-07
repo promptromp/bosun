@@ -212,7 +212,7 @@ class CheckTest(World):
             update_gate.check_write("ledger", 1, 1, self.state)  # no refusal
 
     def test_a_newer_bosuns_record_in_its_freeze_is_still_cut_short(self) -> None:
-        """R21: fields this code does not know never make a freeze's record no record, or a write
+        """Fields this code does not know never make a freeze's record no record, or a write
         would land on a store whose backup is the truth, and the next restore would delete it."""
         newer_record(self.state, "migrated", verified_by="doctor", waves=[1, 2])
         with self.assertRaises(update_gate.UpdateCutShort) as caught:
@@ -406,7 +406,7 @@ class CutShortTest(World):
         self.assertIsNotNone(self.ran())
 
     def test_a_busy_freeze_whose_update_stopped_is_put_back_then_run_again(self) -> None:
-        """R17: the update died while this write waited; its run again would only find the freeze
+        """The update died while this write waited; its run again would only find the freeze
         cut short and stop, so it is put back here first, and run again once."""
         self.cut_short("migrated")
 
@@ -502,7 +502,7 @@ class RecoverTest(World):
         self.assertFalse(update_gate.recover(self.state, self.config))
 
     def test_putting_back_under_the_callers_locks_takes_none(self) -> None:
-        """R23: for a caller that holds update.lock and both stores' locks (an update resuming, or
+        """For a caller that holds update.lock and both stores' locks (an update resuming, or
         its freeze failing): flock is per open file, so taking one again would conflict with itself."""
         self.cut_short("switched")
         (self.config / "knowledge").mkdir()

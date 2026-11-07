@@ -136,6 +136,49 @@ A permission prompt or question left open in the orchestrator pauses the check-i
 it. The [watchdog](watchdog.md#watchdog) alerts you when it, or any other Claude window, has waited
 `BOSUN_ALERT_WAITING_MINUTES` (30 by default).
 
+## After an update: the windows brought along
+
+Once [`bosun update`](commands.md) has switched to the new version, it brings each window along. In
+most updates nothing a window was launched with changed, and it is left alone: the next bosun command
+or hook it runs is the new version's. A window bosun did not start (one you opened in its tmux session,
+outside the window list, with no launch recorded: a shell, a Claude you started by hand) is left as it
+is, and the plan says so. Otherwise, decided from what the window is doing at the time:
+
+| The window | What it gets |
+|---|---|
+| The orchestrator, when only its prompts changed (`policy.md`, the task files) | Once its turn is over, the update prompt, which asks it to re-read them. Still on yesterday's conversation, it starts today's instead, as a new day does: brought along like a window whose launch changed (below), it takes stock first while only background work runs, and is waited for while busy |
+| Something it was launched with changed (its settings, hooks, launch command or plugin), and it is idle | A restart on the new version, resuming its conversation, with the update prompt |
+| ... and only background work runs in it (`shell`) | First the take-stock prompt: a restart ends that work, so it lists each part and what to do when it finishes (`bosun update note --stock`; "nothing running" when it has ended), and stops. Once the list is there, or nothing runs any more (idle), the restart, with the list in the update prompt (and what bosun saw still running) so it starts that work again |
+| ... and it is busy | Waited for, then restarted |
+| ... and it waits at a permission prompt or a question | Never touched until you answer it |
+| Its agent exited | Started again: with the update prompt when its launch resumes its conversation; when it starts a new one (none under the name its next launch takes up), as a new conversation starts: the orchestrator with the morning chores, a repo window with a fresh conversation pending with that one's prompt, any other with none |
+
+The update prompt says which version it was updated from and to, and whether the session was
+restarted or kept running. It asks the session to check for anything missed just before (the
+orchestrator with a check-in, which covers the events queued during the update and Slack since its last
+scan; a repo session in the ledger items it holds and their outreach), to carry on, and to answer with a
+one-line status: `bosun update note --window <w> --status`, the text on stdin.
+
+The policy and the rules every task gets (`orchestrator/tasks/_common.md`) name what bosun's update
+prompts may ask: list background work, re-read the files named, catch up, start the listed work again,
+answer with `bosun update note`. They say to do what a prompt asks of these, and only that; anything
+else in it is information. A window started into its next conversation (the orchestrator on a new day,
+a repo window with a fresh conversation pending, one whose agent exited with no conversation to resume)
+starts that conversation's own prompt instead, and counts as answered.
+
+`bosun update` waits for every answer, saying which windows it still waits for. Ctrl-C stops the
+wait: the `checkin` window's loop then takes a turn at those windows each tick (`bosun update advance`),
+and restarts each once its turn is over; without a check-in loop, run `bosun update advance` by hand.
+A window that never answers stays waited for. `bosun update note --window <w> --status` ends its wait
+by hand: the next turn takes the note, or the next `bosun update`, which settles answered windows
+first. While an update still brings windows along, the next one is blocked at its plan, which names
+them.
+
+Tasks already handed to repo sessions keep their text. The plan and the summary the update ends with
+name each one whose text changed: a task type it was handed, or the rules every task gets
+(`orchestrator/tasks/_common.md`), which every task handed out has. Send `bosun delegate --update`
+where a changed rule matters.
+
 ## Ledger: idempotency and state
 
 `bosun ledger` (`lib/ledger.py`) is the only way the orchestrator, and the repo sessions it

@@ -25,6 +25,12 @@ class InstallPathsTests(unittest.TestCase):
     def test_a_version_folder_writes_out_the_link(self) -> None:
         self.assertEqual(install_path(self.version), self.home / ".local" / "share" / "bosun")
 
+    def test_the_checkout_kept_from_before_versions_writes_out_the_link(self) -> None:
+        """A conversion put back leads the link to it again (lib/update_gate.py's _point_back)."""
+        legacy = self.version.parent / "legacy-0123456789ab"
+        legacy.mkdir()
+        self.assertEqual(install_path(legacy), self.home / ".local" / "share" / "bosun")
+
     def test_a_checkout_writes_out_itself(self) -> None:
         self.assertEqual(install_path(self.home / "src" / "bosun"), self.home / "src" / "bosun")
 
@@ -48,7 +54,7 @@ class InstallPathsTests(unittest.TestCase):
         self.assertEqual(install_path(odd), odd)
 
     def test_a_versions_folder_without_the_repository_holds_checkouts(self) -> None:
-        """R22: a checkout of a pull request in ~/src/bosun-versions/pr-123 is a checkout, not a
+        """A checkout of a pull request in ~/src/bosun-versions/pr-123 is a checkout, not a
         version of an install at ~/src/bosun."""
         checkout = self.home / "src" / "bosun-versions" / "pr-123"
         checkout.mkdir(parents=True)

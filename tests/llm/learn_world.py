@@ -780,6 +780,7 @@ def window(
         "model": "opus",
         "effort": "medium",
         "harness": "claude",
+        "conversation": name,
         "window": True,
         "agent": agent,
     }

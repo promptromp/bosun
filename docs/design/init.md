@@ -9,7 +9,7 @@ anything.
 
 | Part | File | What it does |
 |---|---|---|
-| Bootstrap | `get.sh` | Plain `sh`, because it runs before anything is known to be there: only gets bosun and starts `init`. |
+| Bootstrap | `get.sh` | Plain `sh`, because it runs before anything is known to be there: only gets bosun, its versions side by side, and starts `init`; on an install `init` has set up, it hands over to the newest version's `bosun update` instead. |
 | Preflight | `lib/preflight.sh`, `lib/platforms/`, `lib/harnesses/` | Plain `sh`: what bosun needs, and what to do about anything missing. Changes nothing. |
 | Detect | `lib/init_detect.py` | Read-only: the facts. Each agent's files are read through its adapter, by way of `AGENTS` in `lib/agent_state.py`. |
 | Plan | `lib/init_plan.py` | Pure: facts to recommended answers, answers to file contents and a plan. |
@@ -43,6 +43,22 @@ Taken from what makes oh-my-zsh and Powerlevel10k pleasant, with what they lack 
 `get.sh` follows oh-my-zsh: one line, an unattended mode, plain `sh`. Behind a pipe its standard input is
 the script, so it hands `bosun init` the terminal from `/dev/tty`. All of it is in functions with `main`
 last, so a download cut short does nothing.
+
+What it does depends on what is at the install path, `~/.local/share/bosun`, and it refuses anything else
+rather than guess (a folder that is not bosun's, a link to anything but a version, a versions folder
+without `bosun.git`):
+
+- **Nothing:** a first install. It clones `bosun.git` bare into `~/.local/share/bosun-versions`, one
+  branch, and marks it the installer's (`bosun.managed`, which [uninstall](uninstall.md) goes by) with
+  the branch it follows (`bosun.branch`). It adds the head's folder, links the install path to it
+  ([versions side by side](update.md#versions-side-by-side-switched-in-one-step)) and starts `init`.
+- **An install `init` has set up** (its `install.sh` linked `~/.local/bin/bosun` to it): a link to a
+  version, or a checkout an older `get.sh` made. It fetches the branch into `bosun.git` (made beside a
+  checkout first), adds the new version's folder, and runs that version's `bosun update --from` the one in
+  use, with `--yes` when unattended. That version's update converts a checkout, once
+  ([update.md](update.md#getsh-on-an-existing-install)).
+- **An install `init` never finished** (it stopped at what bosun needs, or at a question): `init` again,
+  from the version there, as before. Nothing of it runs yet, and only `bosun update` switches versions.
 
 ## What it recommends
 
@@ -112,7 +128,9 @@ need Python wait until it is. `bosun init` and `bosun doctor` both start with it
 **To add an OS:** add `lib/platforms/<os>.sh` with the same functions as `macos.sh`, map its `uname -s`
 in `load_profiles`, and let `get.sh`'s `check_os` through. `tests/unit/test_preflight.py` checks that a
 profile has them all. That covers this check only. What else assumes macOS: `install.sh` and the
-launchd templates, `lib/uninstall_macos.py`, `pmset` and the wake, `caffeinate` in the keep-awake, `osascript` for alerts, `dscl`, `date -j` and `lsof`'s flags.
+launchd templates, the jobs `bosun update` reloads, stops and starts (`reload_changed_jobs`,
+`stop_own_jobs` and `start_jobs` in `lib/common.sh`), `lib/uninstall_macos.py`, `pmset` and the wake,
+`caffeinate` in the keep-awake, `osascript` for alerts, `dscl`, `date -j` and `lsof`'s flags.
 
 **To add an agent:** see [Agents](harnesses.md#adding-another). There are two so far, and a profile is
 only the first step.

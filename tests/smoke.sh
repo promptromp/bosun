@@ -30,7 +30,8 @@ CONSOLE_PID="" # the console test's server, while it runs
 cleanup() {
   [ -n "$CONSOLE_PID" ] && kill "$CONSOLE_PID" 2>/dev/null
   tmux -L "$SOCKET" kill-server 2>/dev/null
-  rm -f "${TMUX_TMPDIR:-/tmp}/tmux-$(id -u)/${SOCKET:?}"
+  tmux -L "$SOCKET-update" kill-server 2>/dev/null # the update's windows (bosun update)
+  rm -f "${TMUX_TMPDIR:-/tmp}/tmux-$(id -u)/${SOCKET:?}" "${TMUX_TMPDIR:-/tmp}/tmux-$(id -u)/${SOCKET:?}-update"
   rm -rf "${WORK:?}"
 }
 trap cleanup EXIT
@@ -68,13 +69,20 @@ fails_with() {
   contains "$output" "$text"
 }
 
-# version_folder <name>: a copy of the working tree (tracked files and untracked ones that are not
-# ignored) in $WORK/share/bosun-versions/<name>, shaped like an installed version: beside the bare
-# repository (bosun.git; empty is enough) that makes the folder a versions folder. Prints its path.
+# copy_tree <dest>: a copy of the working tree (tracked files and untracked ones that are not ignored)
+# in <dest>.
+copy_tree() {
+  mkdir -p "$1"
+  git -C "$ROOT" ls-files -co --exclude-standard -z | tar -C "$ROOT" --null -T - -cf - | tar -C "$1" -xf -
+}
+
+# version_folder <name>: a copy of the working tree in $WORK/share/bosun-versions/<name>, shaped like
+# an installed version: beside the bare repository (bosun.git; empty is enough) that makes the folder
+# a versions folder. Prints its path.
 version_folder() {
   local dest="$WORK/share/bosun-versions/$1"
-  mkdir -p "$dest" "$WORK/share/bosun-versions/bosun.git"
-  git -C "$ROOT" ls-files -co --exclude-standard -z | tar -C "$ROOT" --null -T - -cf - | tar -C "$dest" -xf -
+  mkdir -p "$WORK/share/bosun-versions/bosun.git"
+  copy_tree "$dest"
   (cd "$dest" && pwd -P)
 }
 
@@ -112,7 +120,7 @@ check "every command's --help prints its usage header and no code" bash -c '
     ! grep -qE "^(set -uo|source |import )" <<<"$out" || { echo "$cmd prints code"; exit 1; }
   done' _ "$ROOT"
 check "usage errors exit 2" bash -c '
-  for args in "send" "send --bogus" "send window-only" "send --id" "send --no-item window-only" "send --new w" "send --start" "start --bogus" "launch --bogus" "refresh --bogus" "trust --bogus" "watchdog --bogus" "watchdog --only" "sessions --bogus" "learn --bogus" "learn apply" "events --bogus" "slack-watch --bogus" "review-watch --bogus" "console --bogus" "orphans --bogus"; do
+  for args in "send" "send --bogus" "send window-only" "send --id" "send --no-item window-only" "send --new w" "send --start" "start --bogus" "launch --bogus" "launch --fingerprint alpha extra" "refresh --bogus" "refresh --update-restart" "refresh --update-restart prompt alpha --unless-active" "refresh --checkin-loop alpha" "refresh --checkin-loop --unless-active" "trust --bogus" "watchdog --bogus" "watchdog --only" "sessions --bogus" "learn --bogus" "learn apply" "events --bogus" "slack-watch --bogus" "review-watch --bogus" "console --bogus" "orphans --bogus" "update --bogus" "update note" "update note --window w --mood" "update advance --bogus"; do
     # shellcheck disable=SC2086  # split the argument list on purpose
     "$1" $args >/dev/null 2>&1
     [ $? -eq 2 ] || { echo "bosun $args did not exit 2"; exit 1; }
@@ -186,6 +194,19 @@ check "resumes by UUID with name, remote control and drain prompt" contains "$ou
 check "the prompt follows --, so a leading dash is not an option" contains "$out" "--resume 11111111-0000-0000-0000-000000000002 -- Bosun\\ resumed"
 check "sessions start with the default model" contains "$out" "--model opus"
 check "... and the default effort, as a session setting /effort can still change" contains "$out" 'effortLevel\":\"medium'
+check "a dry-run launch records what the window was launched with: bosun's commit and a fingerprint" bash -c '
+  jq -e --arg commit "$(git -C "$2" rev-parse HEAD)" ".window == \"alpha\" and .commit == \$commit and .harness == \"claude\"
+    and (.fingerprint.args | test(\"^[0-9a-f]{64}$\")) and (.fingerprint.files | test(\"^[0-9a-f]{64}$\"))" "$1/launches/smoke/alpha.json"' _ "$BOSUN_STATE_DIR" "$ROOT"
+check "launch --fingerprint prints the same fingerprint, from any directory" bash -c '
+  [ "$(cd / && "$1" launch --fingerprint alpha | jq -cS .)" = "$(jq -cS .fingerprint "$2/launches/smoke/alpha.json")" ]' _ "$BOSUN" "$BOSUN_STATE_DIR"
+resumed_fingerprint="$(jq -cS .fingerprint "$BOSUN_STATE_DIR/launches/smoke/alpha.json")"
+out="$(cd "$REPO_B" && "$BOSUN" launch alpha 2>&1)" # no conversation named alpha there: a fresh one
+check "a fresh launch records the same fingerprint as a resumed one" bash -c '
+  grep -q "starting a new one" <<<"$1" && [ "$(jq -cS .fingerprint "$2/launches/smoke/alpha.json")" = "$3" ]' _ "$out" "$BOSUN_STATE_DIR" "$resumed_fingerprint"
+printf '#!/bin/sh\ntouch "%s"\n' "$WORK/fingerprint-started-claude" >"$WORK/marker-claude"
+chmod +x "$WORK/marker-claude"
+out="$(BOSUN_LAUNCH_DRY_RUN=0 BOSUN_CLAUDE_BIN="$WORK/marker-claude" BOSUN_STATE_DIR="$WORK/fingerprint-state" "$BOSUN" launch --fingerprint alpha 2>&1)"
+check "... and starts nothing, records nothing" bash -c '[ ! -e "$1/fingerprint-started-claude" ] && [ ! -e "$1/fingerprint-state/launches" ] && jq -e .args <<<"$2"' _ "$WORK" "$out"
 out="$(cd "$REPO_B" && "$BOSUN" launch gamma 2>&1)"
 check "a sessions.yml entry overrides model and effort" bash -c 'grep -q -- "--model sonnet" <<<"$1" && grep -q "effortLevel\\\\\":\\\\\"high" <<<"$1"' _ "$out"
 out="$(cd "$REPO_B" && "$BOSUN" launch --model haiku --effort low gamma 2>&1)"
@@ -308,6 +329,21 @@ check "... never its own folder" not_contains "$out" "bosun-versions/"
 out="$(cd "$REPO_A" && "$V1/bin/bosun" launch alpha 2>&1)"
 check "a version's repo window launch names the link in its hooks" contains "$out" "$LINK/bin/bosun"
 check "... never its own folder" not_contains "$out" "bosun-versions/"
+orch_fingerprint() { (cd "$REPO_A" && BOSUN_ORCHESTRATOR=orch BOSUN_ORCHESTRATOR_DIR="$REPO_A" "$V1/bin/bosun" launch --fingerprint orch); }
+fingerprint_before="$(orch_fingerprint)"
+echo "A rule added to the policy." >>"$V1/orchestrator/policy.md"
+check "the orchestrator's policy text is no launch input (it is re-read, not restarted for)" bash -c '[ -n "$1" ] && [ "$1" = "$2" ]' _ "$fingerprint_before" "$(orch_fingerprint)"
+echo "A step added to the chores." >>"$V1/orchestrator/plugin/commands/chores.md"
+check "... its plugin's chores.md is, read through the link" bash -c '[ "$(jq -r .files <<<"$1")" != "$(jq -r .files <<<"$2")" ]' _ "$(orch_fingerprint)" "$fingerprint_before"
+# Before an update switches the link, the next version's fingerprint reads that version's own files.
+(cd "$REPO_A" && BOSUN_ORCHESTRATOR=orch BOSUN_ORCHESTRATOR_DIR="$REPO_A" "$V1/bin/bosun" launch orch >/dev/null 2>&1)
+cp -R "$V1" "$WORK/share/bosun-versions/v2"
+V2="$(cd "$WORK/share/bosun-versions/v2" && pwd -P)"
+v2_fingerprint() { (cd "$REPO_A" && BOSUN_ORCHESTRATOR=orch BOSUN_ORCHESTRATOR_DIR="$REPO_A" "$V2/bin/bosun" launch --fingerprint orch | jq -r .files); }
+recorded_files="$(jq -r .fingerprint.files "$BOSUN_STATE_DIR/launches/smoke/orch.json")"
+check "the next version, the same as the running one, fingerprints as its launch recorded" test "$(v2_fingerprint)" = "$recorded_files"
+echo "A step the next version adds to the chores." >>"$V2/orchestrator/plugin/commands/chores.md"
+check "... and with a changed chores.md, it reads its own before the switch (the link still at v1)" bash -c '[ "$1" != "$2" ] && [ "$(readlink "$3")" = bosun-versions/v1 ]' _ "$(v2_fingerprint)" "$recorded_files" "$WORK/share/bosun"
 plists="$(bash -c 'source "$1/lib/common.sh"; load_config; render_launchd_plist com.example.test 08:00 MTWRF ""; render_watchdog_plist; render_learn_plist' _ "$V1")"
 check "a version's plists run the link" contains "$plists" "$LINK/"
 check "... never its own folder" not_contains "$plists" "bosun-versions/"
@@ -603,6 +639,18 @@ check "orchestrator starts with the morning chores" contains "$out" "/bosun:chor
 out="$(cd "$REPO_A" && BOSUN_ORCHESTRATOR=orch BOSUN_ORCHESTRATOR_MORNING_CHORES=0 "$BOSUN" launch orch 2>&1)"
 check "with morning chores off, today's conversation starts idle" bash -c '! grep -qF "/bosun:chores\ morning" <<<"$1" && grep -q -- "--name orch-" <<<"$1"' _ "$out"
 check "orchestrator never skips permissions" bash -c '! grep -q dangerously <<<"$1"' _ "$out"
+# FAKE_TODAY moves `date +%F`, so the orchestrator's conversation name, to another day.
+mkdir -p "$HOME/.local/bin"
+cat >"$HOME/.local/bin/date" <<'SH'
+#!/bin/sh
+if [ -n "${FAKE_TODAY:-}" ] && [ "$1" = "+%F" ]; then echo "$FAKE_TODAY"; exit 0; fi
+exec /bin/date "$@"
+SH
+chmod +x "$HOME/.local/bin/date"
+orch_fingerprint_today() { (cd "$REPO_A" && BOSUN_ORCHESTRATOR=orch BOSUN_ORCHESTRATOR_DIR="$REPO_A" "$BOSUN" launch --fingerprint orch); }
+check "the orchestrator's next day is a conversation of its own" contains "$(cd "$REPO_A" && FAKE_TODAY=2026-01-02 BOSUN_ORCHESTRATOR=orch "$BOSUN" launch orch 2>&1)" "--name orch-2026-01-02 "
+check "... and no launch input: its fingerprint stays the same across the date change" bash -c '[ -n "$1" ] && [ "$1" = "$2" ]' _ "$(orch_fingerprint_today)" "$(FAKE_TODAY=2026-01-02 orch_fingerprint_today)"
+rm -f "$HOME/.local/bin/date"
 echo "Site rule: be brief." >"$BOSUN_CONFIG_DIR/policy.md"
 check "a site policy.md is appended to the orchestrator policy" contains "$(cd "$REPO_A" && BOSUN_ORCHESTRATOR=orch "$BOSUN" launch orch 2>&1)" "Site rule: be brief."
 rm "$BOSUN_CONFIG_DIR/policy.md"
@@ -874,9 +922,10 @@ check "/api/sessions and /api/health need the cookie: 401" bash -c '
   for path in /api/sessions /api/health; do
     [ "$(curl -s -o /dev/null -w "%{http_code}" "$1$path")" = 401 ] || exit 1
   done' _ "$LIVE_BASE"
-# The console's own access token (console/token, written at start) is its only file there.
+# The console's own files (console/token, written at start, and console/running.lock, held while it
+# serves) are its only ones there.
 check "... and reading them started no Claude, wrote no state and left the panes alone" bash -c '
-  [ ! -e "$1/claude-was-started" ] && [ -z "$(find "$2" -type f -newer "$1/before-console" ! -path "$2/console/token")" ] &&
+  [ ! -e "$1/claude-was-started" ] && [ -z "$(find "$2" -type f -newer "$1/before-console" ! -path "$2/console/token" ! -path "$2/console/running.lock")" ] &&
     [ "$(tmux -L "$3" capture-pane -p -t "=smoke:gamma")" = "$4" ]' _ "$WORK" "$BOSUN_STATE_DIR" "$SOCKET" "$gamma_screen"
 kill "$CONSOLE_PID" 2>/dev/null
 check "... and it stops" wait_for 10 bash -c '! kill -0 "$1" 2>/dev/null' _ "$CONSOLE_PID"
@@ -889,6 +938,90 @@ tmux -L "$SOCKET" split-window -d -t "=smoke:alpha" "sleep 600"
 check "refresh refuses to relaunch into a split window and fails" bash -c '! "$1" refresh alpha >"$2" 2>&1 && grep -q "split into several panes" "$2"' _ "$BOSUN" "$WORK/split.out"
 check "... and the other pane keeps running" bash -c 'tmux -L "$1" list-panes -t =smoke:alpha -F "#{pane_current_command}" | grep -qx sleep' _ "$SOCKET"
 check "refresh fails without a manifest" bash -c '! BOSUN_SESSIONS_FILE=/nonexistent "$1" refresh 2>/dev/null' _ "$BOSUN"
+echo "bosun-was-updated:check-in" >"$WORK/update-prompt"
+update_restart() { "$BOSUN" refresh --update-restart "$WORK/update-prompt" "$@"; }
+check "refresh --update-restart refuses a window not in the window list" fails_with "no window 'nope' in the window list" update_restart nope
+# A window opened by hand in bosun's session (prefix-c), outside the window list, with no launch recorded.
+tmux -L "$SOCKET" new-window -d -t "=smoke:" -n by-hand "sleep 600"
+by_hand_pane="$(tmux -L "$SOCKET" display -p -t "=smoke:by-hand" '#{pane_pid}')"
+check "... and one open outside it with no launch recorded, as bosun did not start it" fails_with "bosun did not start it, so an update leaves it as it is" update_restart by-hand
+check "... leaving its pane as it is" bash -c '[ "$(tmux -L "$1" display -p -t "=smoke:by-hand" "#{pane_pid}")" = "$2" ] && kill -0 "$2"' _ "$SOCKET" "$by_hand_pane"
+tmux -L "$SOCKET" kill-window -t "=smoke:by-hand"
+check "... leaves a window waiting for you running, and exits 3" bash -c '"$1" refresh --update-restart "$2" gamma >/dev/null 2>&1; [ $? -eq 3 ] && kill -0 "$3"' _ "$BOSUN" "$WORK/update-prompt" "$gamma_pid"
+gamma_record busy 3600
+check "... and a busy one" bash -c '"$1" refresh --update-restart "$2" gamma >/dev/null 2>&1; [ $? -eq 3 ] && kill -0 "$3"' _ "$BOSUN" "$WORK/update-prompt" "$gamma_pid"
+gamma_record idle 5
+check "... restarts an idle one at once, however briefly idle" update_restart gamma
+check "... stopping the old process" wait_for 10 bash -c '! kill -0 "$1" 2>/dev/null' _ "$gamma_pid"
+check "... and starting it with the update's prompt instead of the drain prompt" wait_for 10 bash -c '
+  screen="$(tmux -L "$1" capture-pane -p -J -S -200 -t "=smoke:gamma")" &&
+    grep -q "dry-run: would run: .* -- bosun-was-updated:check-in" <<<"$screen" && ! grep -q "Bosun\\\\ resumed" <<<"$screen"' _ "$SOCKET"
+gamma_pid="$(fake_claude gamma shell 2.0.0 5)"
+check "... and one in shell (only background work runs)" update_restart gamma
+check "... stopping it too" wait_for 10 bash -c '! kill -0 "$1" 2>/dev/null' _ "$gamma_pid"
+pane_of() { tmux -L "$SOCKET" display -p -t "=smoke:$1" '#{pane_pid}'; }
+# <window> [old pane pid]: a launch with the update's prompt ran in the window (in a new pane process;
+# respawn-pane starts the pane's screen and history afresh).
+launched_with_update_prompt() {
+  [ "$(pane_of "$1")" != "${2:-}" ] &&
+    tmux -L "$SOCKET" capture-pane -p -J -S -500 -t "=smoke:$1" | grep -qF -e '-- bosun-was-updated:check-in'
+}
+wait_for 10 launched_with_update_prompt gamma
+gamma_pane="$(pane_of gamma)"
+# gamma has a conversation of its own to resume, so its relaunch is a resume, with the update's prompt.
+make_session "$REPO_B" 22222222-0000-0000-0000-000000000002 gamma 202601020000
+check "... relaunches one whose agent is not running, with the update's prompt" update_restart gamma
+check "... (it runs launch again)" wait_for 10 launched_with_update_prompt gamma "$gamma_pane"
+tmux -L "$SOCKET" kill-window -t "=smoke:gamma"
+check "... and creates a missing one, with that prompt" contains "$(update_restart gamma 2>&1)" "gamma: create the missing window"
+check "... (its launch has it)" wait_for 10 launched_with_update_prompt gamma
+wait_for 10 bash -c '[ -z "$(pgrep -P "$(tmux -L "$1" display -p -t =smoke:gamma "#{pane_pid}")")" ]' _ "$SOCKET"
+gamma_pane="$(pane_of gamma)"
+echo "gamma-$(date +%F)-1" >"$BOSUN_STATE_DIR/conversations/gamma"
+check "... and with a fresh conversation pending, one whose agent is not running starts that one, not with the update's prompt, and exits 4" bash -c '
+  out="$("$1" refresh --update-restart "$2" gamma 2>&1)"
+  [ $? -eq 4 ] && grep -qF "gamma: its launch starts a new conversation (gamma-$(date +%F)-1)" <<<"$out"' _ "$BOSUN" "$WORK/update-prompt"
+check "... (its launch has the fresh conversation's prompt)" wait_for 10 bash -c '
+  [ "$(tmux -L "$1" display -p -t =smoke:gamma "#{pane_pid}")" != "$2" ] && screen="$(tmux -L "$1" capture-pane -p -J -S -500 -t =smoke:gamma)" &&
+    grep -qF -e "--name gamma-$3-1 " <<<"$screen" && grep -q "fresh.*conversation" <<<"$screen" && ! grep -q bosun-was-updated <<<"$screen"' \
+  _ "$SOCKET" "$gamma_pane" "$(date +%F)"
+rm -f "$BOSUN_STATE_DIR/conversations/gamma"
+cat >"$WORK/typing-claude.sh" <<'SH'
+printf '%s\n\342\235\257 half a prompt\n%s\n' "────────────────────" "────────────────────"
+exec sleep 600
+SH
+wait_for 10 bash -c '[ -z "$(pgrep -P "$(tmux -L "$1" display -p -t =smoke:gamma "#{pane_pid}")")" ]' _ "$SOCKET"
+tmux -L "$SOCKET" send-keys -t "=smoke:gamma" "bash $WORK/typing-claude.sh" Enter
+wait_for 5 pgrep -P "$(tmux -L "$SOCKET" display -p -t =smoke:gamma '#{pane_pid}')" -x sleep
+gamma_pid="$(pgrep -P "$(tmux -L "$SOCKET" display -p -t =smoke:gamma '#{pane_pid}')" -x sleep)"
+gamma_record idle 3600
+check "... and leaves one whose input box holds unsent text, as send would wait (exit 3)" bash -c '
+  out="$("$1" refresh --update-restart "$2" gamma 2>&1)"
+  [ $? -eq 3 ] && grep -q "its input line holds unsent text (half a prompt)" <<<"$out" && kill -0 "$3"' _ "$BOSUN" "$WORK/update-prompt" "$gamma_pid"
+# An update keeps a window on the agent it was launched on; the configured one takes over at the next
+# restart that is not for an update.
+pane_is_idle() { [ -z "$(pgrep -P "$(pane_of "$1")")" ]; } # <window>: its pane's shell runs nothing
+kill "$gamma_pid"
+wait_for 10 pane_is_idle gamma
+cp "$BOSUN_CONFIG_DIR/sessions.yml" "$WORK/sessions.yml.on-claude"
+echo "    harness: codex" >>"$BOSUN_CONFIG_DIR/sessions.yml" # gamma's entry is the last
+check "a window launched on Claude, its entry now on Codex, fingerprints the same (its agent is no change)" bash -c '
+  [ "$(cd / && "$1" launch --fingerprint gamma | jq -cS .)" = "$(jq -cS .fingerprint "$2/launches/smoke/gamma.json")" ]' _ "$BOSUN" "$BOSUN_STATE_DIR"
+gamma_pane="$(pane_of gamma)"
+check "... and --update-restart starts it again" update_restart gamma
+check "... with the update's prompt" wait_for 10 launched_with_update_prompt gamma "$gamma_pane"
+check "... on Claude, as it was launched" bash -c '
+  screen="$(tmux -L "$1" capture-pane -p -J -S -500 -t "=smoke:gamma")"
+  grep -q -- "--remote-control gamma" <<<"$screen" && ! grep -q codex-turn-end <<<"$screen"' _ "$SOCKET"
+printf '#!/bin/sh\necho "codex-cli 0.50.0"\n' >"$WORK/fake-codex"
+chmod +x "$WORK/fake-codex"
+wait_for 10 pane_is_idle gamma
+gamma_pane="$(pane_of gamma)"
+check "a plain refresh, not for an update" env BOSUN_CODEX_BIN="$WORK/fake-codex" "$BOSUN" refresh gamma
+check "... starts it on the agent configured now (Codex)" wait_for 10 bash -c '
+  [ "$(tmux -L "$1" display -p -t =smoke:gamma "#{pane_pid}")" != "$2" ] &&
+    tmux -L "$1" capture-pane -p -J -S -500 -t "=smoke:gamma" | grep -q codex-turn-end' _ "$SOCKET" "$gamma_pane"
+cp "$WORK/sessions.yml.on-claude" "$BOSUN_CONFIG_DIR/sessions.yml"
 "$BOSUN" stop >/dev/null 2>&1
 
 echo "restarts leave no shells behind (zsh with a prompt helper in its startup file)"
@@ -989,11 +1122,47 @@ check "the checkin window runs the check-in loop" wait_for 10 runs_checkin_loop
 tmux -L "$SOCKET" kill-window -t "=smoke:checkin"
 check "refresh recreates a missing checkin window" contains "$("$BOSUN" refresh 2>&1)" "checkin: create the missing window"
 check "... and it runs the check-in loop again" wait_for 10 runs_checkin_loop
+new_checkin_loop() { # <old pid>: the checkin window runs a loop, and not that one
+  local now
+  now="$(bash -c 'source "$1/lib/common.sh"; checkin_loop_pid "$(tmux -L "$2" list-panes -t "=smoke:checkin" -F "#{pane_pid}")"' _ "$ROOT" "$SOCKET")"
+  [ -n "$now" ] && [ "$now" != "$1" ]
+}
+loop_before="$(bash -c 'source "$1/lib/common.sh"; checkin_loop_pid "$(tmux -L "$2" list-panes -t "=smoke:checkin" -F "#{pane_pid}")"' _ "$ROOT" "$SOCKET")"
+check "refresh --checkin-loop restarts the check-in loop" contains "$("$BOSUN" refresh --checkin-loop 2>&1)" "checkin: restart the check-in loop"
+check "... stopping the old one" wait_for 10 bash -c '[ -n "$1" ] && ! kill -0 "$1" 2>/dev/null' _ "$loop_before"
+check "... and running a new one in the same window" wait_for 10 new_checkin_loop "$loop_before"
+check "... and says so when there is no checkin window to restart" fails_with "no checkin window" env BOSUN_CHECKIN_MINUTES=0 "$BOSUN" refresh --checkin-loop
+tmux -L "$SOCKET" new-window -d -t "=smoke:" -n loop-itself -- perl -e '$0 = "/bin/bash /x/libexec/bosun-checkin --loop"; sleep 60'
+loop_pane="$(tmux -L "$SOCKET" display -p -t "=smoke:loop-itself" '#{pane_pid}')"
+check "a check-in loop that is the pane's own process is found too (the watchdog looks for it)" bash -c '
+  [ "$(source "$1/lib/common.sh"; checkin_loop_pid "$2")" = "$2" ]' _ "$ROOT" "$loop_pane"
+tmux -L "$SOCKET" kill-window -t "=smoke:loop-itself"
 orch_pid="$(fake_claude orch idle 2.0.0 3600 orch-2000-01-01)"
 out="$("$BOSUN" refresh --dry-run orch 2>&1)"
 check "orchestrator restarts on a new day" contains "$out" "orch: would restart (new day: orch-2000-01-01 -> orch-$(date +%F)"
 check "... even with --drain-only" contains "$("$BOSUN" refresh --dry-run --drain-only orch 2>&1)" "orch: would restart (new day"
 check "checkin starts today's conversation instead of checking in on yesterday's" contains "$("$BOSUN" checkin --dry-run 2>&1)" "would start today's conversation"
+launched_with_morning_chores() { # <old pane pid>: the orchestrator's window runs a new launch, of today's morning chores
+  local screen
+  [ "$(tmux -L "$SOCKET" display -p -t "=smoke:orch" '#{pane_pid}')" != "$1" ] || return 1
+  screen="$(tmux -L "$SOCKET" capture-pane -p -J -S -500 -t "=smoke:orch")"
+  grep -qF -e "--name orch-$(date +%F) " <<<"$screen" && grep -qF -e '-- /bosun:chores\ morning' <<<"$screen"
+}
+orch_pane="$(tmux -L "$SOCKET" display -p -t "=smoke:orch" '#{pane_pid}')"
+check "refresh --update-restart restarts an orchestrator still on yesterday's conversation as a new day does, and exits 4" bash -c '
+  out="$("$1" refresh --update-restart "$2" orch 2>&1)"
+  [ $? -eq 4 ] && grep -qF "orch: restart for the update (idle), into orch-$(date +%F), as its next conversation starts" <<<"$out"' _ "$BOSUN" "$WORK/update-prompt"
+check "... starting today's with the morning chores" wait_for 10 launched_with_morning_chores "$orch_pane"
+check "... not with the update's prompt" bash -c '! tmux -L "$1" capture-pane -p -J -S -500 -t "=smoke:orch" | grep -q bosun-was-updated' _ "$SOCKET"
+wait_for 10 bash -c '[ -z "$(pgrep -P "$(tmux -L "$1" display -p -t =smoke:orch "#{pane_pid}")")" ]' _ "$SOCKET"
+orch_pane="$(tmux -L "$SOCKET" display -p -t "=smoke:orch" '#{pane_pid}')"
+check "... and one whose agent exited, today's conversation not there yet, is relaunched as a new day starts, and exits 4" bash -c '
+  out="$("$1" refresh --update-restart "$2" orch 2>&1)"
+  [ $? -eq 4 ] && grep -qF "orch: its launch starts a new conversation (orch-$(date +%F))" <<<"$out"' _ "$BOSUN" "$WORK/update-prompt"
+check "... with the morning chores" wait_for 10 launched_with_morning_chores "$orch_pane"
+check "... never the update's prompt in a blank conversation" bash -c '! tmux -L "$1" capture-pane -p -J -S -500 -t "=smoke:orch" | grep -q bosun-was-updated' _ "$SOCKET"
+wait_for 10 bash -c '[ -z "$(pgrep -P "$(tmux -L "$1" display -p -t =smoke:orch "#{pane_pid}")")" ]' _ "$SOCKET"
+orch_pid="$(fake_claude orch idle 2.0.0 3600 orch-2000-01-01)"
 printf '{"pid":%d,"status":"idle","version":"2.0.0","statusUpdatedAt":%d,"name":"orch-2000-01-01"}' "$orch_pid" $((($(date +%s) - 30) * 1000)) >"$HOME/.claude/sessions/$orch_pid.json"
 out="$("$BOSUN" refresh --dry-run orch 2>&1)"
 check "a deferred new-day restart sends no drain prompt into yesterday's conversation" bash -c 'grep -q "still on yesterday" <<<"$1" && ! grep -q "drain prompt" <<<"$1"' _ "$out"
@@ -1032,7 +1201,17 @@ check "a running update's hold past its hour is the update-stuck finding" contai
 check "doctor fails on a hold past its hour" contains "$("$BOSUN" doctor 2>&1)" "FAIL  update: an update's hold"
 kill "$update_holder"
 wait "$update_holder" 2>/dev/null
-rm -f "$BOSUN_STATE_DIR/update.json"
+# What the last update left to you, from its record: a change to make in your own files, and the
+# config keys it added that bosun.env does not set.
+jq -n '{id: "u1", from_root: "/a", to_root: "/b", from_commit: "aaa", to_commit: "bbb", step: "done",
+  started_at: "2026-11-05T09:00:00+00:00", hold_until: 0, user_changes: ["sessions.yml: rename `model:` to `agent_model:`"],
+  plan: {keys_added: ["BOSUN_WAKE_DELAY_MINUTES", "BOSUN_DRAIN_PROMPT"]}}' >"$BOSUN_STATE_DIR/update.json"
+echo 'BOSUN_DRAIN_PROMPT="acme: carry on"' >"$BOSUN_CONFIG_DIR/bosun.env"
+out="$("$BOSUN" doctor 2>&1)"
+check "doctor lists what the last update left to you: a change to make by hand in your own files" contains "$out" "warn  change by hand: sessions.yml: rename \`model:\` to \`agent_model:\`"
+check "... and each new key bosun.env does not set, with the value it has now" contains "$out" "ok    new key, not set in bosun.env: BOSUN_WAKE_DELAY_MINUTES (now '1')"
+check "... but not one it sets" not_contains "$out" "bosun.env: BOSUN_DRAIN_PROMPT"
+rm -f "$BOSUN_STATE_DIR/update.json" "$BOSUN_CONFIG_DIR/bosun.env"
 orch_status() { # <status> <seconds in it> [name]
   printf '{"pid":%d,"status":"%s","version":"2.0.0","statusUpdatedAt":%d,"name":"%s"}' "$orch_pid" "$1" $((($(date +%s) - $2) * 1000)) "${3:-orch-$(date +%F)}" >"$HOME/.claude/sessions/$orch_pid.json"
 }
@@ -1371,6 +1550,36 @@ check "... but keeps real environment overrides" grep -qx BOSUN_CONFIG_DIR "$WOR
 L upsert 'slack:C8/1' --kind mention >/dev/null
 out="$(live --new --model haiku --effort low zeta "$REPO_A" "start low" 2>&1)"
 check "send --new --model/--effort start the window with them" bash -c 'grep -qx -- "--model" "$1" && grep -qx haiku "$1" && grep -q "\"effortLevel\":\"low\"" "$1"' _ "$WORK/live-claude.$(claude_in zeta).args"
+check "... and its launch records them, with its directory (it is in no window list)" bash -c '
+  jq -e --arg dir "$2" ".dir == \$dir and .model_override == \"haiku\" and .effort_override == \"low\"" "$1/launches/smoke/zeta.json"' _ "$BOSUN_STATE_DIR" "$REPO_A"
+check "... so it fingerprints the same while nothing changed, from any directory" bash -c '
+  [ "$(cd / && "$1" launch --fingerprint zeta | jq -cS .)" = "$(jq -cS .fingerprint "$2/launches/smoke/zeta.json")" ]' _ "$BOSUN" "$BOSUN_STATE_DIR"
+zeta_pid="$(claude_in zeta)"
+another_claude_in() { # <window> <old pid>: a fake Claude other than that one runs in the window
+  local pid
+  pid="$(claude_in "$1")" && [ -n "$pid" ] && [ "$pid" != "$2" ]
+}
+check "... and an update's restart of it" env BOSUN_LAUNCH_DRY_RUN=0 "$BOSUN" refresh --update-restart "$WORK/update-prompt" zeta
+check "... starts it again" wait_for 15 another_claude_in zeta "$zeta_pid"
+check "... keeping its --model and --effort, with the update's prompt" bash -c '
+  grep -qx haiku "$1.args" && grep -q "\"effortLevel\":\"low\"" "$1.args" && [ "$(cat "$1.prompt")" = bosun-was-updated:check-in ]' _ "$WORK/live-claude.$(claude_in zeta)"
+zeta_pid="$(claude_in zeta)"
+kill "$zeta_pid"
+wait_for 10 bash -c '! pgrep -P "$(tmux -L "$1" display -p -t =smoke:zeta "#{pane_pid}")" >/dev/null' _ "$SOCKET"
+# A real Claude leaves its conversation to resume; this fake writes none, so zeta is given one.
+make_session "$REPO_A" 44444444-0000-0000-0000-000000000001 zeta 202601040000
+check "... and once its agent has exited, an update's restart" env BOSUN_LAUNCH_DRY_RUN=0 "$BOSUN" refresh --update-restart "$WORK/update-prompt" zeta
+check "... starts it again" wait_for 15 another_claude_in zeta "$zeta_pid"
+check "... keeping them too, resuming its conversation with the update's prompt" bash -c '
+  grep -qx haiku "$1.args" && grep -q "\"effortLevel\":\"low\"" "$1.args" && [ "$(cat "$1.prompt")" = bosun-was-updated:check-in ]' _ "$WORK/live-claude.$(claude_in zeta)"
+echo "BOSUN_HARNESS=codex" >"$BOSUN_CONFIG_DIR/bosun.env"
+check "a send --new window launched on Claude, the default agent now Codex, fingerprints the same" bash -c '
+  [ "$(cd / && "$1" launch --fingerprint zeta | jq -cS .)" = "$(jq -cS .fingerprint "$2/launches/smoke/zeta.json")" ]' _ "$BOSUN" "$BOSUN_STATE_DIR"
+zeta_pid="$(claude_in zeta)"
+check "... and an update's restart of it" env BOSUN_LAUNCH_DRY_RUN=0 "$BOSUN" refresh --update-restart "$WORK/update-prompt" zeta
+check "... starts it again on Claude, as it was launched, with its --model" wait_for 15 another_claude_in zeta "$zeta_pid"
+check "... (its arguments are Claude's)" bash -c 'grep -qx -- --remote-control "$1.args" && grep -qx haiku "$1.args"' _ "$WORK/live-claude.$(claude_in zeta)"
+rm -f "$BOSUN_CONFIG_DIR/bosun.env"
 check "delegate --window delivers through send" contains "$("$BOSUN" delegate investigate --id slack:C8/1 --ask 'look into it' --window delta 2>&1)" "delivered to smoke:delta"
 check "the prompt file is removed once read" bash -c '[ -z "$(ls -A "$1")" ]' _ "$BOSUN_STATE_DIR/prompts"
 check "--new refuses an existing window" fails_with "already exists" live --new delta "$REPO_A" again
@@ -2180,9 +2389,542 @@ if [ "$(bash -c 'source "$1/lib/common.sh"; command -v launchctl; command -v pms
   check "it is plain sh" sh -n "$ROOT/get.sh"
   check "it says how to use it" bash -c 'sh "$1/get.sh" --help | grep -q "Usage: get.sh"' _ "$ROOT"
   check "it refuses what it does not know" fails_with "unknown option" sh "$ROOT/get.sh" --typo
-  check "a dry run says what it would do" bash -c 'BOSUN_DIR="$2" sh "$1/get.sh" --dry-run | grep -q "git clone"' _ "$ROOT" "$WORK/get-bosun"
-  check "... and does none of it" test ! -e "$WORK/get-bosun"
+  # In a home of its own, where the install is each of the three things get.sh finds there: nothing,
+  # a checkout from before versions, and a link to a version folder beside bosun.git.
+  G="$WORK/get"
+  G_DIR="$G/share/bosun"
+  G_VERSIONS="$G/share/bosun-versions"
+  mkdir -p "$G/home"
+  get_dry() { HOME="$G/home" BOSUN_DIR="$G_DIR" BOSUN_REPO="$G/upstream" sh "$ROOT/get.sh" --dry-run 2>&1; }
+  g_tree() { (cd "$G" && find . -print | LC_ALL=C sort && find . -type f -print0 | LC_ALL=C sort -z | xargs -0 cat | shasum); }
+  says_lines() { # <output> <line...>: each line, whole, in the output
+    local out="$1" line
+    shift
+    for line in "$@"; do grep -qxF -- "$line" <<<"$out" || {
+      echo "expected the line: $line"
+      echo "in: $out"
+      return 1
+    }; done
+  }
+  G_NOTHING="$(get_dry)"
+  check "with nothing installed, a dry run would clone bosun.git bare beside the install, add the head's folder, link the install to it and start bosun init" says_lines "$G_NOTHING" \
+    "  \$ git -c core.hooksPath=/dev/null clone --quiet --bare --single-branch --branch main $G/upstream $G_VERSIONS/bosun.git" \
+    "  \$ git --git-dir=$G_VERSIONS/bosun.git config bosun.managed true" \
+    "  \$ git --git-dir=$G_VERSIONS/bosun.git config bosun.branch main" \
+    "  \$ ln -s $G_VERSIONS/<commit> $G_DIR" \
+    "Then it would start: $G_DIR/bin/bosun init"
+  check "... and does none of it" test ! -e "$G/share"
+  mkdir -p "$G_DIR/bin"
+  printf '#!/bin/sh\n' >"$G_DIR/bin/bosun"
+  git -C "$G_DIR" init -q
+  git -C "$G_DIR" add -A
+  git -C "$G_DIR" -c user.name=acme -c user.email=dev@example.com -c commit.gpgsign=false commit -qm "a release"
+  g_before="$(g_tree)"
+  G_UNFINISHED="$(get_dry)"
+  G_UNFINISHED_LINE="$G_DIR is there, but ~/.local/bin/bosun does not lead into it, as bosun init leaves it: starting bosun init again"
+  check "with an install bosun init has not set up yet (it stopped at what bosun needs), it starts bosun init again, as it is" says_lines "$G_UNFINISHED" \
+    "$G_UNFINISHED_LINE" "Then it would start: $G_DIR/bin/bosun init"
+  check "... getting nothing" not_contains "$G_UNFINISHED" "  \$ git"
+  mkdir -p "$G/home/.local/bin"
+  ln -s "$G/gone/bin/bosun" "$G/home/.local/bin/bosun"
+  check "... and so with a ~/.local/bin/bosun that leads nowhere" says_lines "$(get_dry)" "$G_UNFINISHED_LINE"
+  ln -sfn "$G_DIR/bin/bosun" "$G/home/.local/bin/bosun" # what install.sh links, once bosun init set it up
+  g_before="$(g_tree)"
+  G_CHECKOUT="$(get_dry)"
+  check "with a checkout from before versions, it would convert: get the head into a folder beside it, then hand over to that version's bosun update --from the checkout" says_lines "$G_CHECKOUT" \
+    "  \$ git -c core.hooksPath=/dev/null clone --quiet --bare --single-branch --branch main $G/upstream $G_VERSIONS/bosun.git" \
+    "Then it would run: $G_VERSIONS/<commit>/bin/bosun update --from $G_DIR" \
+    "which converts the checkout at a quiet moment: it keeps it as $G_VERSIONS/legacy-<its commit>, and $G_DIR becomes a link to the new version"
+  check "... and changes nothing" test "$(g_tree)" = "$g_before"
+  # Without BOSUN_REPO, from where the checkout came: its origin (a fork, a mirror).
+  get_dry_from_origin() { HOME="$G/home" BOSUN_DIR="$G_DIR" env -u BOSUN_REPO sh "$ROOT/get.sh" --dry-run 2>&1; }
+  git -C "$G_DIR" remote add origin "$G/fork"
+  check "... cloning bosun.git from the checkout's own origin, without BOSUN_REPO" says_lines "$(get_dry_from_origin)" \
+    "  \$ git -c core.hooksPath=/dev/null clone --quiet --bare --single-branch --branch main $G/fork $G_VERSIONS/bosun.git"
+  git -C "$G_DIR" remote set-url origin "https://0000placeholder-token@example.com/acme/bosun.git" # gitleaks:allow
+  out="$(get_dry_from_origin)"
+  check "... and never saying the token in its URL" bash -c '
+    grep -qxF "  \$ git -c core.hooksPath=/dev/null clone --quiet --bare --single-branch --branch main https://example.com/acme/bosun.git $2/bosun.git" <<<"$1" &&
+      ! grep -q 0000placeholder-token <<<"$1"' _ "$out" "$G_VERSIONS"
+  git -C "$G_DIR" remote remove origin
+  mv "$G_DIR" "$G/a-checkout"
+  mkdir -p "$G_VERSIONS/bosun.git" "$G_VERSIONS/0123456789ab/bin"
+  printf '#!/bin/sh\n' >"$G_VERSIONS/0123456789ab/bin/bosun"
+  ln -s "$G_VERSIONS/0123456789ab" "$G_DIR"
+  g_before="$(g_tree)"
+  G_LINK="$(get_dry)"
+  check "with versions side by side, it would update: get the head into a folder of its own, then hand over to its bosun update --from the version in use" says_lines "$G_LINK" \
+    "  \$ git -c core.hooksPath=/dev/null --git-dir=$G_VERSIONS/bosun.git fetch --quiet origin +refs/heads/main:refs/remotes/origin/main" \
+    "Then it would run: $G_VERSIONS/<commit>/bin/bosun update --from $G_VERSIONS/0123456789ab"
+  check "... and changes nothing" test "$(g_tree)" = "$g_before"
+  check "... and clones nothing" not_contains "$G_LINK" "git clone"
+  rm "$G_DIR"
+  ln -s "$G/a-checkout" "$G_DIR"
+  check "a link to anything but a version beside bosun.git is refused, not guessed at" fails_with "is a link to $G/a-checkout, which is not a version in $G_VERSIONS" get_dry
+  for g_beside in "$G_VERSIONS/bosun.git" "$G_VERSIONS/not-a-version"; do
+    mkdir -p "$g_beside"
+    ln -sfn "$g_beside" "$G_DIR"
+    check "... nor one to a folder beside bosun.git with no bin/bosun ($(basename "$g_beside"))" fails_with "is a link to $g_beside, which is not a version in $G_VERSIONS" get_dry
+  done
+  rm "$G_DIR"
+  mkdir -p "$G_DIR"
+  echo mine >"$G_DIR/notes.txt"
+  check "... and so is a folder that is not a checkout of bosun" fails_with "$G_DIR is not bosun's" get_dry
+  rm -rf "$G_DIR" "$G_VERSIONS"
+  mkdir -p "$G_VERSIONS"
+  echo mine >"$G_VERSIONS/notes.txt"
+  check "... and a versions folder that is someone else's" fails_with "$G_VERSIONS is there, without bosun.git" get_dry
   check "everything in it is in functions, so a download cut short does nothing" bash -c '[ "$(tail -1 "$1/get.sh")" = "main \"\$@\"" ]' _ "$ROOT"
+
+  echo "bosun update (two local commits, fake launchctl)"
+  # An install of its own, with its own state and config. Upstream holds v1 (this working tree) and
+  # v2 (tests/sandbox/update_patch.sh: the ledger's format 2, with a migration that sleeps
+  # UPDATE_PATCH_SLEEP seconds while writes are paused, and a changed line of policy.md); the
+  # install's bosun.git is a clone of it at v1, with v1's folder and the link to it.
+  U="$WORK/u"
+  U_LINK="$U/share/bosun"
+  U_VERSIONS="$U/share/bosun-versions"
+  U_UP="$U/upstream"
+  U_STATE="$U/state"
+  U_CONFIG="$U/config"
+  mkdir -p "$U_VERSIONS" "$U_STATE" "$U_CONFIG"
+  copy_tree "$U_UP"
+  ug() { git -C "$U_UP" -c core.hooksPath=/dev/null -c commit.gpgsign=false -c user.name=acme -c user.email=dev@example.com "$@"; }
+  ug init -q -b main
+  ug add -A
+  ug commit -qm v1
+  U_V1_COMMIT="$(ug rev-parse HEAD)"
+  git clone -q --bare "$U_UP" "$U_VERSIONS/bosun.git"
+  git --git-dir="$U_VERSIONS/bosun.git" worktree add -q --detach "$U_VERSIONS/${U_V1_COMMIT:0:12}" "$U_V1_COMMIT"
+  ln -s "bosun-versions/${U_V1_COMMIT:0:12}" "$U_LINK"
+  U_V1="$(cd "$U_VERSIONS/${U_V1_COMMIT:0:12}" && pwd -P)"
+  "$ROOT/tests/sandbox/update_patch.sh" --failing "$U_UP"
+  ug commit -qam "v2, whose migration fails while writes are paused"
+  U_FAILING_COMMIT="$(ug rev-parse HEAD)"
+  # A Claude of its own that answers and writes nothing: the suite's $WORK/fake-claude (the chores dry
+  # run's) writes a ledger item wherever it runs, and bosun doctor, which the update runs while it plans,
+  # asks Claude for its login.
+  printf '#!/bin/sh\n[ "$1" = --version ] && echo "2.0.0 (Claude Code)"\nexit 0\n' >"$U/quiet-claude"
+  chmod +x "$U/quiet-claude"
+  U_ENV=(env BOSUN_STATE_DIR="$U_STATE" BOSUN_LOG_DIR="$U_STATE/logs" BOSUN_CONFIG_DIR="$U_CONFIG"
+    BOSUN_SESSION_NAME=update-test BOSUN_LAUNCHD_LABEL=com.bosun.update-test BOSUN_SKIP_PREFLIGHT=1 BOSUN_KNOWLEDGE_GIT=0
+    BOSUN_CLAUDE_BIN="$U/quiet-claude")
+  ub() { "${U_ENV[@]}" "$U_LINK/bin/bosun" "$@"; }
+  ub ledger upsert 'review:acme/api#1' --kind review-request --title "Exporter retries" >/dev/null
+  ub ledger upsert 'mypr:acme/api#2' --kind my-pr --title "Nightly export" >/dev/null
+  ub kg import "$KG_FIXTURE" --apply --auto-confirm >/dev/null 2>&1
+  # Everything in the state and config folders (locks aside: taking one creates its file); and the data
+  # alone, a line per file (not the update's own record, folder, backups or logs).
+  u_listed() { (cd "$U" && find state config -type f ! -name '*.lock' "$@" -print0 | LC_ALL=C sort -z | xargs -0 shasum); }
+  u_files() { u_listed | shasum; }
+  u_data_list() { u_listed ! -path 'state/update*' ! -path 'state/backups/*' ! -path 'state/logs/*'; }
+  u_data_is() { # <list before>: the data as it was then; if not, which files differ
+    local now
+    now="$(u_data_list)"
+    [ "$now" = "$1" ] || {
+      diff <(echo "$1") <(echo "$now")
+      return 1
+    }
+  }
+  u_at() { [ "$(cd "$U_LINK" && pwd -P)" = "$1" ]; }
+  u_step_is() { [ "$(jq -r .step "$U_STATE/update.json" 2>/dev/null)" = "$1" ]; }
+  u_ended_well() { [ "$1" = 0 ] || { tail -15 "$2" && return 1; }; }
+
+  before="$(u_files)"
+  out="$(ub update --dry-run 2>&1)"
+  check "update --dry-run fetches the branch and shows the plan: the ledger's migration" contains "$out" "ledger: format 1 -> 2"
+  check "... and the one prompt that changed" bash -c 'grep -q "Prompts changed (1):" <<<"$1" && grep -q "orchestrator/policy.md" <<<"$1"' _ "$out"
+  check "... and changes nothing in the state or the config" test "$(u_files)" = "$before"
+  check "... nor the link" u_at "$U_V1"
+  out="$(ub update </dev/null 2>&1)"
+  check "without --yes and no terminal, it shows the plan and stops" bash -c 'grep -q "ledger: format 1 -> 2" <<<"$1" && grep -q "Nothing has changed" <<<"$1"' _ "$out"
+  check "... changing nothing" bash -c '[ "$1" = "$2" ]' _ "$(u_files)" "$before"
+
+  data_before="$(u_data_list)"
+  json="$(ub update --yes --json 2>"$U/failing.err")"
+  rc=$?
+  out="$(cat "$U/failing.err")"
+  check "a migration that fails while writes are paused fails the update (exit 1), which says it put everything back" bash -c '[ "$1" = 1 ] && grep -q "Everything is as it was" <<<"$2"' _ "$rc" "$out"
+  check "... with --json, what it says goes to stderr and stdout is one object: the plan and the record" jq -e '.plan.migrations == [["ledger", 1, 2]] and .update.step == "failed"' <<<"$json"
+  check "... the link still at v1" u_at "$U_V1"
+  check "... the data as it was" u_data_is "$data_before"
+  check "... and the record says failed, with the error" jq -e '.step == "failed" and (.error | contains("failed on purpose"))' "$U_STATE/update.json"
+
+  # Upstream's v2 now migrates well.
+  ug reset -q --hard "$U_V1_COMMIT"
+  "$ROOT/tests/sandbox/update_patch.sh" "$U_UP"
+  ug commit -qam v2
+  U_V2_COMMIT="$(ug rev-parse HEAD)"
+  U_V2="$(cd "$U_VERSIONS" && pwd -P)/${U_V2_COMMIT:0:12}"
+  cp -Rp "$U_STATE" "$U/state-v1" # as it was before the update, for laying out below where one was cut short
+  cp -Rp "$U_CONFIG" "$U/config-v1"
+  : >"$U/transcript.jsonl"
+  guard_event="$(jq -nc --arg t "$U/transcript.jsonl" --arg c "touch $U/approved" '{tool_name: "Bash", tool_input: {command: $c}, transcript_path: $t}')"
+  u_guard() { "${U_ENV[@]}" BOSUN_APPROVALS_ENABLED=1 BOSUN_APPROVALS_GATED_COMMANDS=touch "$U_LINK/bin/bosun" guard --approvals <<<"$guard_event"; }
+  guard_before="$(u_guard 2>&1)"
+  "${U_ENV[@]}" UPDATE_PATCH_SLEEP=8 "$U_LINK/bin/bosun" update --yes >"$U/update.out" 2>&1 &
+  updating=$!
+  check "--yes: it rehearses, holds, then pauses writes for the migration (the patch's sleep)" wait_for 60 u_step_is migrated
+  "${U_ENV[@]}" "$U_V1/bin/bosun" ledger upsert 'review:acme/api#3' --kind review-request --title "Written while paused" >"$U/writer.out" 2>&1 &
+  writer=$!
+  u_guard >"$U/guard.out" 2>&1 &
+  guarding=$!
+  out="$(ub update --yes 2>&1)"
+  check "a second update while one runs is refused, naming when the first started" contains "$out" "an update is running (started $(jq -r .started_at "$U_STATE/update.json")"
+  check "a ledger write and an approval hook started on v1 while writes are paused wait" bash -c 'kill -0 "$1" && kill -0 "$2" && [ "$(jq -r .step "$3/update.json")" = migrated ]' _ "$writer" "$guarding" "$U_STATE"
+  wait "$updating"
+  check "the update ends well" u_ended_well $? "$U/update.out"
+  u_backup_now="$(jq -r .backup "$U_STATE/update.json")"
+  sed -n '/^bosun updated: /,$p' "$U/update.out" >"$U/summary.txt"
+  u_summary_is() { # the summary the update ended with, as the design lays it out
+    grep -qE "^bosun updated: ${U_V1_COMMIT:0:7} -> ${U_V2_COMMIT:0:7} \(1 commit\) in [0-9]+(m [0-9]+)?s$" "$1" &&
+      grep -qE "^  ledger      format 1 -> 2 \([0-9]+ items migrated\)$" "$1" && grep -qx "  knowledge   format 1, unchanged" "$1" &&
+      grep -qx "Prompts changed: 1 (policy.md)" "$1" && grep -qx "Jobs reloaded: morning, watchdog" "$1" &&
+      ! grep -q "^  FAIL: " "$1" && grep -qE "^  [0-9]+ already failing before the update$" "$1" &&
+      grep -qE "^  [0-9]+ warnings?: run bosun doctor$" "$1" &&
+      grep -qxE "Backup: $2 \([0-9.]+ (bytes|KB|MB|GB)\)" "$1" && [ "$(tail -1 "$1")" = "Going back: docs/setup.md#going-back" ] || {
+      cat "$1"
+      return 1
+    }
+  }
+  check "... and its output ends with the summary: the commit, the ledger's migration, the prompt changed, the jobs reloaded, only counts of what doctor already failed at before the update and of its warnings, the backup" u_summary_is "$U/summary.txt" "$u_backup_now"
+  check "... saved as summary.md next to the backup" bash -c '[ "$(sed "1d;\$d" "$1/summary.md")" = "$(cat "$2")" ]' _ "$u_backup_now" "$U/summary.txt"
+  wait "$writer"
+  writer_rc=$?
+  wait "$guarding"
+  check "... the link leads to v2" u_at "$U_V2"
+  check "... the ledger is in format 2, migrated" test "$(jq -r '"\(.version) \(.update_patch)"' "$U_STATE/ledger.json")" = "2 migrated"
+  check "... and passes its check against its journal" test "$(ub ledger validate --journal 2>&1)" = "ledger is valid"
+  check "... a backup from v1 to v2 with its manifest" bash -c 'grep -lq "\"to\": \"$2\"" "$1"/backups/*/manifest.json' _ "$U_STATE" "$U_V2_COMMIT"
+  check "... the record says done, with how long writes were paused ($(jq .freeze_ms "$U_STATE/update.json") ms, 8 s of them the patch's sleep)" jq -e '.step == "done" and .freeze_ms > 0' "$U_STATE/update.json"
+  check "... and what bosun doctor found then (here: no bosun.env)" jq -e '.findings | any(contains("no bosun.env"))' "$U_STATE/update.json"
+  check "... it reloaded the launchd jobs, which run the link" bash -c 'grep -qF "$2/bin/bosun" "$1/Library/LaunchAgents/com.bosun.update-test.plist"' _ "$HOME" "$(cd "$U/share" && pwd -P)/bosun"
+  check "... and deleted the folder of the version that failed, keeping v1's and v2's" bash -c '[ ! -e "$1/${2:0:12}" ] && [ -d "$3" ] && [ -d "$4" ]' _ "$U_VERSIONS" "$U_FAILING_COMMIT" "$U_V1" "$U_V2"
+  check "the write that waited ran again on v2, and landed" bash -c '[ "$1" = 0 ] && [ "$(jq -r ".items[\"review:acme/api#3\"].title" "$2/ledger.json")" = "Written while paused" ]' _ "$writer_rc" "$U_STATE"
+  check "... once" test "$(cat "$U_STATE"/journal/ledger/*.jsonl | grep -c 'Written while paused')" = 1
+  check "a PreToolUse approval hook while writes are paused decides as without them" bash -c '[ -n "$1" ] && [ "$(cat "$2")" = "$1" ]' _ "$guard_before" "$U/guard.out"
+
+  # An update cut short at each step of the freeze, laid out by hand: the record at the step, the
+  # backup from backed-up on, the migrated ledger from migrated on, the link at v2 at switched, and
+  # no update running. The next ledger write puts it back.
+  u_reset() {
+    rm -rf "$U_STATE" "$U_CONFIG"
+    cp -Rp "$U/state-v1" "$U_STATE"
+    cp -Rp "$U/config-v1" "$U_CONFIG"
+    rm -f "$U_STATE/update.json"
+    ln -sfn "bosun-versions/${U_V1_COMMIT:0:12}" "$U_LINK"
+  }
+  u_backup() {
+    python3 -c 'import datetime, pathlib, sys; sys.path.insert(0, sys.argv[1] + "/lib"); import update_backups
+print(update_backups.take(pathlib.Path(sys.argv[2]), pathlib.Path(sys.argv[3]), sys.argv[4], sys.argv[5], {"ledger": 1, "knowledge": 1}, datetime.datetime.now(datetime.UTC)))' \
+      "$U_V1" "$U_STATE" "$U_CONFIG" "$U_V1_COMMIT" "$U_V2_COMMIT"
+  }
+  u_migrate() {
+    UPDATE_PATCH_SLEEP=0 python3 -c 'import pathlib, sys; sys.path.insert(0, sys.argv[1] + "/lib"); import migrations
+migrations.run(migrations.Context(pathlib.Path(sys.argv[2]), pathlib.Path(sys.argv[3])))' "$U_V2" "$U_STATE" "$U_CONFIG"
+  }
+  u_record() { # <step> [backup]
+    jq -n --arg step "$1" --arg backup "${2:-}" --arg from "$U_V1" --arg to "$U_V2" --arg fc "$U_V1_COMMIT" --arg tc "$U_V2_COMMIT" '
+      {id: "laid-out", from_root: $from, to_root: $to, from_commit: $fc, to_commit: $tc, step: $step,
+       started_at: "2026-11-07T12:00:00+00:00", hold_until: 0, backup: $backup,
+       restorable: (if $backup == "" then [] else ["state/ledger.json", "state/ledger.json.bak", "state/ledger.md",
+         "state/journal", "state/replica.json", "config/knowledge"] end)}' >"$U_STATE/update.json"
+  }
+  u_cut_at() { # <step>: what an update that died at <step> leaves
+    local backup=""
+    u_reset
+    case "$1" in backed-up | migrated | switched | checked) backup="$(u_backup)" ;; esac
+    case "$1" in migrated | switched | checked) u_migrate ;; esac
+    case "$1" in switched | checked) ln -sfn "bosun-versions/${U_V2_COMMIT:0:12}" "$U_LINK" ;; esac
+    u_record "$1" "$backup"
+  }
+  u_as_before() { # <item written since>: the ledger as before the update but for it, in format 1, and it there
+    [ "$(jq -cS --arg id "$1" 'del(.items[$id]) | .items' "$U_STATE/ledger.json")" = "$(jq -cS .items "$U/state-v1/ledger.json")" ] &&
+      [ "$(jq .version "$U_STATE/ledger.json")" = 1 ] && jq -e --arg id "$1" '.items[$id]' "$U_STATE/ledger.json" >/dev/null
+  }
+  n=10
+  for step in marked backed-up migrated switched; do
+    n=$((n + 1))
+    u_cut_at "$step"
+    out="$(ub ledger upsert "review:acme/api#$n" --kind review-request --title "after a cut at $step" 2>&1)"
+    check "an update cut short at $step: the next ledger write says so and puts it back" contains "$out" "was cut short while writes were paused; putting back its backup and ${U_V1_COMMIT:0:7}"
+    check "... the link at v1 again" u_at "$U_V1"
+    check "... the ledger as it was, in format 1, and the write landed" u_as_before "review:acme/api#$n"
+  done
+
+  u_reset
+  "${U_ENV[@]}" UPDATE_PATCH_SLEEP=60 "$U_LINK/bin/bosun" update --yes >"$U/killed.out" 2>&1 &
+  updating=$!
+  check "an update killed (kill -9) while writes are paused..." wait_for 60 u_step_is migrated
+  {
+    kill -9 "$updating"
+    wait "$updating"
+  } 2>/dev/null
+  out="$(ub ledger upsert 'review:acme/api#20' --kind review-request --title "after a kill" 2>&1)"
+  check "... is put back by the next ledger write, which says so" contains "$out" "was cut short while writes were paused"
+  check "... the link at v1 again" u_at "$U_V1"
+  check "... the ledger as it was, in format 1, and the write landed" u_as_before 'review:acme/api#20'
+
+  # A kg forget cut short before view.json was saved: the next kg write finishes it, so no backup or
+  # rehearsal copy may hold the person until then.
+  cp -Rp "$U_STATE" "$U/forget-state"
+  cp -Rp "$U_CONFIG" "$U/forget-config"
+  uf() { "${U_ENV[@]}" BOSUN_STATE_DIR="$U/forget-state" BOSUN_CONFIG_DIR="$U/forget-config" "$U_LINK/bin/bosun" "$@"; }
+  cp "$U/forget-config/knowledge/view.json" "$U/view-before-forget.json"
+  uf kg forget person/lee >/dev/null 2>&1
+  cp "$U/view-before-forget.json" "$U/forget-config/knowledge/view.json"
+  out="$(uf update --yes 2>&1)"
+  rc=$?
+  check "a kg forget cut short stops the update at its plan (exit 1), saying so" bash -c '[ "$1" = 1 ] && grep -q "a kg forget was cut short" <<<"$2" && ! grep -q Rehearsing <<<"$2"' _ "$rc" "$out"
+
+  u_cut_at checked
+  json="$(ub update --yes --json 2>"$U/carried.err")"
+  out="$(cat "$U/carried.err")"
+  check "an update that stopped after its checks passed: the next bosun update carries it on" contains "$out" "carried on to the end"
+  check "... says its summary, from a record laid out as an earlier bosun kept it (no plan: no Data), and in --json's object the backup's path whole" bash -c '
+    grep -qx "Going back: docs/setup.md#going-back" <<<"$1" &&
+      jq -e --arg to "$3" --arg backup "$(jq -r .backup "$4/update.json")" ".summary.to_commit == \$to and .summary.backup == \$backup and .summary.data == {} and (\$backup | startswith(\"/\"))" <<<"$2" >/dev/null' \
+    _ "$out" "$json" "$U_V2_COMMIT" "$U_STATE"
+  check "... then says bosun is up to date" contains "$out" "bosun is up to date (${U_V2_COMMIT:0:7})"
+  check "... the record says done, the link at v2" bash -c 'jq -e ".step == \"done\"" "$1/update.json" >/dev/null && [ "$(cd "$2" && pwd -P)" = "$3" ]' _ "$U_STATE" "$U_LINK" "$U_V2"
+  u_up_to_date() {
+    local out
+    out="$(ub update --yes 2>&1)" && [ "$out" = "bosun is up to date (${U_V2_COMMIT:0:7})." ] || {
+      echo "$out"
+      return 1
+    }
+  }
+  check "with nothing new on the branch and nothing to carry on, bosun is up to date" u_up_to_date
+  check "... and with --json, stdout is the same object: no plan, the record as it stands, no summary" jq -e '.plan == null and .update.step == "done" and .summary == null' <<<"$(ub update --yes --json 2>/dev/null)"
+  check "a checkout is updated with git, not bosun update" fails_with "is a checkout: update it with git" "${U_ENV[@]}" "$BOSUN" update --dry-run
+
+  # A running session keeps the hook commands it was launched with: each of v1's runs on v2.
+  mkdir -p "$U/home/.local/bin"
+  ln -sfn "$U_LINK/bin/bosun" "$U/home/.local/bin/bosun"
+  u_hooks="$("${U_ENV[@]}" BOSUN_APPROVALS_ENABLED=1 BOSUN_EVENTS_ENABLED=1 BOSUN_ORCHESTRATOR=orch bash -c '
+    source "$1/lib/common.sh"; load_config; orchestrator_extra_settings; repo_session_settings alpha; cat "$1/orchestrator/settings.json"' _ "$U_V1" |
+    jq -r '.hooks // {} | .[][] | .hooks[] | .command' | sort -u)"
+  hook_payload='{"session_id":"00000000-0000-0000-0000-000000000000","transcript_path":"/dev/null","cwd":"/","hook_event_name":"Stop","tool_name":"Bash","tool_input":{"command":"ls"},"tool_use_id":"toolu_0","tool_response":{"stdout":""},"prompt":"how are the exports?"}'
+  u_run_hooks() {
+    local command
+    while IFS= read -r command; do
+      "${U_ENV[@]}" HOME="$U/home" BOSUN_APPROVALS_ENABLED=1 BOSUN_EVENTS_ENABLED=1 bash -c "$command" <<<"$hook_payload" >/dev/null 2>"$U/hook.err" ||
+        { echo "$command: exit $?: $(tail -2 "$U/hook.err")" && return 1; }
+    done <<<"$u_hooks"
+  }
+  check "each hook command of v1's launch settings runs on v2 and exits 0 ($(grep -c . <<<"$u_hooks") of them)" u_run_hooks
+  check "... each through the install link, never v1's own folder" bash -c '[ -n "$1" ] && ! grep -q "bosun-versions/" <<<"$1"' _ "$u_hooks"
+
+  # Bringing the agents along. In a tmux server of their own, on v1: the orchestrator, which only
+  # re-reads (v2 changes its policy, nothing it was launched with), and three repo windows whose hook
+  # settings v2 changes: an idle one, one where only background work runs (shell) and a busy one. No
+  # checkin window (check-ins off), so only the ticks below take the loop's turn. Each fake Claude
+  # registers with the status in $U/status.<window>, keeps the prompt it was started with in
+  # $U/prompt.<window>.<pid> and what is pasted into it in $U/pasted.<window>, and answers bosun's update
+  # prompt (as its first prompt or pasted in) with `bosun update note --status`, and a take-stock prompt
+  # with `--stock`.
+  u_reset
+  U_TMUX="$SOCKET-update"
+  U_REPO="$U/repos/exporter"
+  mkdir -p "$U_REPO/.git"
+  printf 'sessions:\n' >"$U_CONFIG/sessions.yml"
+  for status in idle shell busy; do
+    printf '  - name: u-%s\n    dir: %s\n' "$status" "$U_REPO" >>"$U_CONFIG/sessions.yml"
+    echo "$status" >"$U/status.u-$status"
+  done
+  echo idle >"$U/status.orch"
+  u_note_env="env BOSUN_STATE_DIR=$U_STATE BOSUN_LOG_DIR=$U_STATE/logs BOSUN_CONFIG_DIR=$U_CONFIG $U_LINK/bin/bosun"
+  cat >"$U/fake-claude" <<FAKE
+#!/bin/bash
+if [ "\$1" = "--version" ]; then echo "2.0.0 (Claude Code)"; exit 0; fi
+window=""
+name=""
+previous=""
+for arg in "\$@"; do
+  if [ "\$previous" = "--remote-control" ]; then window="\$arg"; fi
+  if [ "\$previous" = "--name" ]; then name="\$arg"; fi
+  previous="\$arg"
+done
+prompt="\${!#}"
+printf '%s' "\$prompt" >"$U/prompt.\$window.\$\$"
+printf '{"pid":%d,"status":"%s","version":"2.0.0","statusUpdatedAt":%d,"name":"%s"}' \$\$ "\$(cat "$U/status.\$window")" "\$(date +%s)000" "\$name" >"\$HOME/.claude/sessions/\$\$.json"
+note() { $u_note_env update note --window "\$window" "\$1" <<<"\$2"; }
+case "\$prompt" in *"--window \$window --status"*) note --status "resumed after the update" ;; esac
+while IFS= read -r line; do
+  printf '%s\n' "\$line" >>"$U/pasted.\$window"
+  case "\$line" in
+    *"--window \$window --stock"*) note --stock "sleep 600: the wait for CI; when it ends, report CI" ;;
+    *"--window \$window --status"*) note --status "re-read, checked in, carrying on" ;;
+  esac
+done
+FAKE
+  chmod +x "$U/fake-claude"
+  U_LIVE=(BOSUN_TMUX_SOCKET="$U_TMUX" BOSUN_LAUNCH_DRY_RUN=0 BOSUN_CLAUDE_BIN="$U/fake-claude" BOSUN_ORCHESTRATOR=orch
+    BOSUN_ORCHESTRATOR_DIR="$U_REPO" BOSUN_CHECKIN_MINUTES=0)
+  ul() { "${U_ENV[@]}" "${U_LIVE[@]}" "$U_LINK/bin/bosun" "$@"; }
+  u_claude() { # <window>: the pid of the fake Claude running in it
+    local pane_pid
+    pane_pid="$(tmux -L "$U_TMUX" list-windows -t "=update-test" -F '#{window_name} #{pane_pid}' 2>/dev/null | awk -v w="$1" '$1 == w { print $2 }')"
+    [ -n "$pane_pid" ] && bash -c 'source "$1/lib/common.sh"; agent_pid_under "$2"' _ "$ROOT" "$pane_pid"
+  }
+  u_claudes() { for w in orch u-idle u-shell u-busy; do u_claude "$w" >/dev/null || return 1; done; }
+  u_windows() { jq -c --arg w "$1" '.windows[$w]' "$U_STATE/update.json"; }
+  ul start >/dev/null 2>&1
+  check "bringing the agents along: four fake Claude windows run on v1" wait_for 20 u_claudes
+  orch_pid="$(u_claude orch)"
+  idle_pid="$(u_claude u-idle)"
+  shell_pid="$(u_claude u-shell)"
+  busy_pid="$(u_claude u-busy)"
+  # Two windows bosun did not start, outside the window list with no launch recorded: a plain shell
+  # opened in its session (prefix-c), and a Claude started there by hand (no --name), idle.
+  cat >"$U/hand-claude" <<HAND
+#!/bin/bash
+printf '{"pid":%d,"status":"idle","version":"2.0.0","statusUpdatedAt":%d,"name":""}' \$\$ "\$(date +%s)000" >"\$HOME/.claude/sessions/\$\$.json"
+while IFS= read -r line; do printf '%s\n' "\$line" >>"$U/pasted.u-hand"; done
+HAND
+  chmod +x "$U/hand-claude"
+  tmux -L "$U_TMUX" new-window -d -t "=update-test:" -n u-mine -- /bin/sh
+  tmux -L "$U_TMUX" new-window -d -t "=update-test:" -n u-hand -- bash -c '"$1"; exec sleep 600' _ "$U/hand-claude"
+  u_pane() { tmux -L "$U_TMUX" display -p -t "=update-test:$1" '#{pane_pid}'; }
+  check "... with a plain shell and a Claude started by hand beside them" wait_for 10 u_claude u-hand
+  mine_pane="$(u_pane u-mine)"
+  hand_pane="$(u_pane u-hand)"
+  hand_pid="$(u_claude u-hand)"
+  out="$(ul update --dry-run 2>&1)"
+  check "... the plan: the orchestrator re-reads; v2 changed what the repo windows were launched with, so the idle one restarts, the shell one takes stock first, the busy one is waited for" bash -c '
+    grep -q "orch: re-read" <<<"$1" && grep -q "u-idle: restart$" <<<"$1" && grep -q "u-shell: take stock, then restart" <<<"$1" &&
+      grep -q "u-busy: wait until idle" <<<"$1"' _ "$out"
+  check "... and the two windows bosun did not start are left as they are" bash -c '
+    grep -q "u-mine: not started by bosun: left as it is$" <<<"$1" && grep -q "u-hand: not started by bosun: left as it is$" <<<"$1"' _ "$out"
+  # Run so that Ctrl-C reaches it (a job a script starts in the background ignores SIGINT).
+  python3 -c 'import os, signal, sys; signal.signal(signal.SIGINT, signal.SIG_DFL); os.execvp(sys.argv[1], sys.argv[1:])' \
+    "${U_ENV[@]}" "${U_LIVE[@]}" "$U_LINK/bin/bosun" update --yes >"$U/agents.out" 2>&1 &
+  updating=$!
+  u_pending_is() { [ "$(jq -c .pending "$U_STATE/update.json" 2>/dev/null)" = "$1" ]; }
+  u_waits_for_busy() { # the update brought every window along but the busy one; if not, where it is
+    wait_for 180 u_pending_is '["u-busy"]' || {
+      jq -c '{step, pending, windows}' "$U_STATE/update.json"
+      tail -5 "$U/agents.out"
+      return 1
+    }
+  }
+  check "... the update brings the orchestrator, the idle and the shell window along, and waits for the busy one" u_waits_for_busy
+  check "... the orchestrator kept running, got the update prompt pasted in, naming policy.md, and its answer ended its wait" bash -c '
+    jq -e ".windows.orch == [\"orchestrator\", \"re-read\", \"asked to re-read\", \"answered\"]" "$1/update.json" >/dev/null && kill -0 "$2" &&
+      grep -q "this session was kept running. Re-read .*/orchestrator/policy.md" "$3/pasted.orch"' _ "$U_STATE" "$orch_pid" "$U"
+  check "... the idle one restarted on v2 with the update prompt, and its answer ended its wait" bash -c '
+    jq -e ".windows[\"u-idle\"] == [\"repo\", \"restart\", \"restarted\", \"answered\"]" "$1/update.json" >/dev/null &&
+      ! kill -0 "$2" 2>/dev/null && grep -q "bosun was updated from .* this session was restarted on the new version" "$3"/prompt.u-idle.* &&
+      grep -qx "resumed after the update" "$1/update/notes/u-idle.status"' _ "$U_STATE" "$idle_pid" "$U"
+  check "... the shell one listed its background work first, then restarted with that list in its prompt" bash -c '
+    jq -e ".windows[\"u-shell\"] == [\"repo\", \"take stock, then restart\", \"asked to take stock\", \"restarted\", \"answered\"]" "$1/update.json" >/dev/null &&
+      ! kill -0 "$2" 2>/dev/null && grep -l "this session was restarted" "$3"/prompt.u-shell.* | xargs grep -q "sleep 600: the wait for CI"' _ "$U_STATE" "$shell_pid" "$U"
+  check "... the busy one is left running, never restarted" bash -c 'kill -0 "$1" && [ "$(jq -c ".windows[\"u-busy\"]" "$2/update.json")" = "[\"repo\",\"wait until idle\"]" ]' _ "$busy_pid" "$U_STATE"
+  check "... and the update says it waits for it" wait_for 10 grep -q "Waiting for u-busy" "$U/agents.out"
+  kill -INT "$updating"
+  wait "$updating"
+  rc=$?
+  check "Ctrl-C stops the wait (exit 0), the record at agents; with no check-in loop running, it says bosun update advance finishes the busy window" bash -c '
+    [ "$1" = 0 ] && grep -q "Stopped waiting: no check-in loop runs here: bosun update advance, run by hand, takes a turn at u-busy" "$2" &&
+      jq -e ".step == \"agents\" and .pending == [\"u-busy\"]" "$3/update.json" >/dev/null' _ "$rc" "$U/agents.out" "$U_STATE"
+  check "... then the summary, the busy window still waited for, the shell one's restart after taking stock" bash -c '
+    grep -qE "^  u-busy +nothing yet; still waited for$" "$1" && grep -qE "^  u-shell +asked to take stock, restarted; resumed after the update$" "$1" &&
+      [ "$(tail -1 "$1")" = "Going back: docs/setup.md#going-back" ] && [ ! -e "$(jq -r .backup "$2/update.json")/summary.md" ]' _ "$U/agents.out" "$U_STATE"
+  check "... with the link at v2" u_at "$U_V2"
+  check "the windows bosun did not start were left as they are: their panes, the Claude in one, nothing pasted, no bosun launch" bash -c '
+    [ "$1" = "$2" ] && kill -0 "$3" && [ ! -e "$4/pasted.u-hand" ] &&
+      ! tmux -L "$5" capture-pane -p -J -S -500 -t "=update-test:u-mine" | grep -q "launch" &&
+      jq -e ".windows | has(\"u-mine\") or has(\"u-hand\") | not" "$6/update.json" >/dev/null' \
+    _ "$mine_pane $hand_pane" "$(u_pane u-mine) $(u_pane u-hand)" "$hand_pid" "$U" "$U_TMUX" "$U_STATE"
+  check "... and the summary says so" bash -c '
+    grep -qE "^  u-mine +left as it is \(bosun did not start it\)$" "$1" && grep -qE "^  u-hand +left as it is \(bosun did not start it\)$" "$1"' _ "$U/agents.out"
+  uc() { "${U_ENV[@]}" "${U_LIVE[@]}" BOSUN_CHECKIN_MINUTES=60 "$U_LINK/bin/bosun" checkin 2>&1; } # one tick of the loop
+  out="$(uc)"
+  check "a check-in tick leaves the busy window alone while it is busy" bash -c 'kill -0 "$1" && ! grep -q "u-busy: restarted" <<<"$2"' _ "$busy_pid" "$out"
+  echo idle >"$U/status.u-busy"
+  printf '{"pid":%d,"status":"idle","version":"2.0.0","statusUpdatedAt":%d,"name":"u-busy"}' "$busy_pid" "$(date +%s)000" >"$HOME/.claude/sessions/$busy_pid.json"
+  out="$(uc)"
+  check "... and restarts it once it is idle" contains "$out" "bosun update: u-busy: restarted"
+  check "... with the update prompt, which it answers" wait_for 15 test -s "$U_STATE/update/notes/u-busy.status"
+  out="$(uc)"
+  check "... and the next tick takes its answer: the update is done" bash -c '
+    grep -q "u-busy: answered: resumed after the update" <<<"$1" && jq -e ".step == \"done\" and .pending == []" "$2/update.json" >/dev/null' _ "$out" "$U_STATE"
+  check "... and saves its summary next to the backup, with every window's outcome" bash -c '
+    backup="$(jq -r .backup "$2/update.json")" && grep -qF "bosun update: done; its summary is in $backup/summary.md" <<<"$1" &&
+      grep -qE "^  u-busy +restarted; resumed after the update$" "$backup/summary.md" && grep -qE "^  orch +asked to re-read policy.md; re-read, checked in, carrying on$" "$backup/summary.md"' _ "$out" "$U_STATE"
+  check "... after which a tick has nothing to do" bash -c '! grep -q "bosun update" <<<"$1"' _ "$(uc)"
+  tmux -L "$U_TMUX" kill-server 2>/dev/null
+  rm -f "$U_CONFIG/sessions.yml"
+
+  # A next version whose launchd templates are broken: the morning job's fails to render, the
+  # watchdog's renders XML that is not valid. Nothing installed is unloaded or removed.
+  ug rm -q templates/launchd.plist
+  printf '<plist><dict><string>__LABEL__</string>\n' >"$U_UP/templates/launchd-watchdog.plist"
+  ug commit -qam "v3, its launchd templates broken"
+  U_V3_COMMIT="$(ug rev-parse HEAD)"
+  ub update --dry-run >"$U/broken-plan.out" 2>&1
+  check "a next version whose launchd templates are broken: its plan is blocked, naming each job" bash -c '
+    grep -q "The update is blocked." "$1" && grep -q "could not render the plist of com.bosun.update-test;" "$1" &&
+      grep -q "the rendered plist of com.bosun.update-test.watchdog is invalid" "$1"' _ "$U/broken-plan.out"
+  u_jobs="$HOME/Library/LaunchAgents/com.bosun.update-test"
+  cp "$u_jobs.plist" "$U/morning.plist"
+  cp "$u_jobs.watchdog.plist" "$U/watchdog.plist"
+  u_bootouts() { grep -c "launchctl bootout gui/$(id -u)/com.bosun.update-test" "$WORK/system.log"; }
+  bootouts="$(u_bootouts)"
+  "${U_ENV[@]}" bash -c 'source "$1/lib/common.sh"; load_config; reload_changed_jobs' _ "$U_VERSIONS/${U_V3_COMMIT:0:12}" >/dev/null 2>&1
+  rc=$?
+  check "... and reloading its jobs fails (exit 1), leaving each installed plist as it was, and loaded" bash -c '
+    [ "$1" = 1 ] && cmp -s "$2.plist" "$3/morning.plist" && cmp -s "$2.watchdog.plist" "$3/watchdog.plist" && [ "$4" = "$5" ]' \
+    _ "$rc" "$u_jobs" "$U" "$bootouts" "$(u_bootouts)"
+
+  echo "the first update converts a checkout from before versions (fake launchctl)"
+  # An install an earlier get.sh made: a checkout of upstream at v1 in the install path, with a ledger
+  # v1 wrote. get.sh adds bosun.git beside it and v2's folder, then runs v2's bosun update --from the
+  # checkout, as here. No tmux session runs, so it is a quiet moment at once.
+  mkdir -p "$WORK/c/share" "$WORK/c/state" "$WORK/c/config"
+  C="$(cd "$WORK/c" && pwd -P)" # as the update names its folders
+  C_LINK="$C/share/bosun"
+  C_VERSIONS="$C/share/bosun-versions"
+  git clone -q "$U_UP" "$C_LINK"
+  git -C "$C_LINK" -c core.hooksPath=/dev/null reset -q --hard "$U_V1_COMMIT"
+  git -C "$C_LINK" config bosun.managed true
+  git -c core.hooksPath=/dev/null clone -q --bare --single-branch --branch main "$U_UP" "$C_VERSIONS/bosun.git"
+  git --git-dir="$C_VERSIONS/bosun.git" config bosun.managed true
+  git --git-dir="$C_VERSIONS/bosun.git" -c core.hooksPath=/dev/null fetch -q origin +refs/heads/main:refs/remotes/origin/main
+  git --git-dir="$C_VERSIONS/bosun.git" -c core.hooksPath=/dev/null worktree add -q --detach "$C_VERSIONS/${U_V2_COMMIT:0:12}" "$U_V2_COMMIT"
+  C_V2="$(cd "$C_VERSIONS/${U_V2_COMMIT:0:12}" && pwd -P)"
+  C_LEGACY="$C_VERSIONS/legacy-${U_V1_COMMIT:0:12}"
+  C_ENV=(env BOSUN_STATE_DIR="$C/state" BOSUN_LOG_DIR="$C/state/logs" BOSUN_CONFIG_DIR="$C/config"
+    BOSUN_SESSION_NAME=convert-test BOSUN_LAUNCHD_LABEL=com.bosun.convert-test BOSUN_SKIP_PREFLIGHT=1
+    BOSUN_KNOWLEDGE_GIT=0 BOSUN_CLAUDE_BIN="$U/quiet-claude")
+  "${C_ENV[@]}" "$C_LINK/bin/bosun" ledger upsert 'review:acme/api#7' --kind review-request --title "Written on v1" >/dev/null
+  c_update() { "${C_ENV[@]}" "$C_V2/bin/bosun" update --from "$C_LINK" "$@" 2>&1; }
+  echo "a stray note" >"$C_LINK/notes.txt"
+  check "a checkout with anything of yours in it is not converted (exit 1), saying what" fails_with "$C_LINK has uncommitted changes" c_update --yes
+  rm "$C_LINK/notes.txt"
+  c_before="$(cd "$C" && find state config -type f ! -name '*.lock' -print0 | LC_ALL=C sort -z | xargs -0 shasum)"
+  out="$(c_update --dry-run)"
+  check "a dry run shows the plan and what converting adds: the quiet moment, its own work stopped, the checkout kept" bash -c '
+    grep -q "ledger: format 1 -> 2" <<<"$1" && grep -q "This first update converts $2, a checkout from before versions" <<<"$1" &&
+      grep -q "keeping the checkout as $3" <<<"$1" && grep -q "A dry run: nothing has changed." <<<"$1"' _ "$out" "$C_LINK" "$C_LEGACY"
+  check "... and changes nothing" bash -c '[ ! -L "$1" ] && [ ! -e "$2" ] && [ "$(cd "$3" && find state config -type f ! -name "*.lock" -print0 | LC_ALL=C sort -z | xargs -0 shasum)" = "$4" ]' \
+    _ "$C_LINK" "$C_LEGACY" "$C" "$c_before"
+  c_update --yes >"$C/convert.out"
+  rc=$?
+  check "--yes converts (exit 0)" u_ended_well "$rc" "$C/convert.out"
+  check "... the install path a link to v2, the checkout swapped out in one step and kept as legacy-<v1>" bash -c '
+    [ -L "$1" ] && [ "$(cd "$1" && pwd -P)" = "$2" ] && [ "$(git -C "$3" rev-parse HEAD)" = "$4" ] && [ -z "$(ls -A "$(dirname "$1")" | grep "^\.bosun\.link-")" ]' \
+    _ "$C_LINK" "$C_V2" "$C_LEGACY" "$U_V1_COMMIT"
+  c_bosun() { "${C_ENV[@]}" "$C_LINK/bin/bosun" "$@" 2>&1; }
+  check "... the ledger v1 wrote migrated to format 2" test "$(jq -r '"\(.version) \(.items["review:acme/api#7"].title)"' "$C/state/ledger.json")" = "2 Written on v1"
+  check "... and valid against its journal" test "$(c_bosun ledger validate --journal)" = "ledger is valid"
+  check "... the record says done, from the legacy folder" jq -e --arg legacy "$C_LEGACY" '.step == "done" and .from_root == $legacy' "$C/state/update.json"
+  check "... and the mark of what it stopped of bosun's own work is gone: the release brought that back" test ! -e "$C/state/update/own-work.json"
+  check "... its jobs loaded on the link" bash -c 'grep -qF "exec \"$2/bin/bosun\" " "$1/Library/LaunchAgents/com.bosun.convert-test.watchdog.plist"' _ "$HOME" "$C_LINK"
+  check "... and it ends with where the checkout is, and the summary" bash -c '
+    grep -qF "The checkout is kept as $2 until the next update" "$1" && grep -q "^bosun updated: ${3:0:7} -> ${4:0:7}" "$1" &&
+      [ "$(tail -1 "$1")" = "Going back: docs/setup.md#going-back" ]' _ "$C/convert.out" "$C_LEGACY" "$U_V1_COMMIT" "$U_V2_COMMIT"
+  check "an update after it is one between versions: from v2, up to date" contains "$("${C_ENV[@]}" "$C_V2/bin/bosun" update --from "$C_V2" --dry-run 2>&1)" "bosun is up to date (${U_V2_COMMIT:0:7})"
 else
   failed=$((failed + 1))
   echo "  FAIL  fake launchctl/pmset are not first on PATH; skipped install tests"
@@ -2205,6 +2947,12 @@ for state in "$WORK/state" "$WORK/approvals-state"; do
   check "what a run left in $(basename "$state")" knows_all_of "$state" "$WORK/config"
 done
 check "what it left in the knowledge base's config" knows_all_of "$WORK/state" "$WORK/kg-config"
+if [ -d "$WORK/u/state" ]; then
+  check "what bosun update left in its state and config" knows_all_of "$WORK/u/state" "$WORK/u/config"
+fi
+if [ -d "$WORK/c/state" ]; then
+  check "what the first update, converting, left in its state and config" knows_all_of "$WORK/c/state" "$WORK/c/config"
+fi
 
 echo "the repository this ran from"
 repo_unchanged() {

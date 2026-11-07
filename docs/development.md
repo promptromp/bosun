@@ -42,8 +42,9 @@ put a blank line before it.
 
 ## Which sandbox for what
 
-**Never test an install on your own Mac.** `install.sh`, `bosun init --recommended`, `get.sh` and
-`bosun uninstall` change launchd, `pmset` and your config for real. Use the cheapest of these that can show what you changed:
+**Never test an install on your own Mac.** `install.sh`, `bosun init --recommended`, `get.sh`,
+`bosun update` and `bosun uninstall` change launchd, `pmset`, the install and your config for real. Use
+the cheapest of these that can show what you changed:
 
 | What you changed | Run | What it can prove | Time |
 |---|---|---|---|
@@ -149,8 +150,8 @@ already, as on `origin/main` (then they check its journal and minted ids, and th
 with them).
 
 It sends two bundles of this repository: the release, and this checkout (also what is not committed)
-as its descendant, so that `get.sh`'s `git pull --ff-only` takes it. The scenario is `tests/work_e2e.sh`;
-what it shares with `tests/install_e2e.sh` is in `tests/sandbox/e2e_lib.sh`. It sets the clock with
+as its descendant, the head of the branch that `get.sh`, run again, updates to. The scenario is
+`tests/work_e2e.sh`; what it shares with `tests/install_e2e.sh` is in `tests/sandbox/e2e_lib.sh`. It sets the clock with
 `sudo date` and puts it back when it ends, also on failure.
 
 ### The real agents: `tests/sandbox.sh mac live`
@@ -201,8 +202,10 @@ Work up the levels; each one exercises more of the real chain.
    checks with an injected clock, learning's digest, ledger checks and proposals, and replays of
    orchestrator and repo-session interactions, rewritten as fiction in the acme domain,
    from `tests/fixtures/corpus/`) and then end-to-end checks,
-   including setup with a fake `aws`, the morning dry run, and install/uninstall with fake
-   `launchctl` and `pmset` under a test label. Hermetic: temp HOME, fixture sessions, fake Claude
+   including setup with a fake `aws`, the morning dry run, install/uninstall with fake
+   `launchctl` and `pmset` under a test label, and `bosun update` between two local commits (the next
+   version made by `tests/sandbox/update_patch.sh`), with fake windows brought along, and the first
+   update converting a checkout. Hermetic: temp HOME, fixture sessions, fake Claude
    processes with fake status records for the refresh, orchestrator and check-in rules, ledger
    state machines and concurrency, a fake `claude` that registers itself for `send --new` and
    `--start` (long, multi-line prompts arrive intact; failures are reported), and a fake `claude`

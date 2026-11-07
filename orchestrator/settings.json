@@ -8,6 +8,7 @@
       "Bash(bosun pr-threads:*)",
       "Bash(bosun review-watch:*)",
       "Bash(bosun my-prs:*)",
+      "Bash(bosun update note:*)",
       "Bash(gh pr list:*)",
       "Bash(gh pr view:*)",
       "Bash(gh pr checks:*)",

@@ -781,6 +781,22 @@ def unfinished(p: Paths, changes: list[Change], position: Mapping[str, int]) -> 
     return [change for change in changes if change["id"] not in kept]
 
 
+def deletion_cut_short() -> bool:
+    """Whether a deletion of a person (kg forget, the retention purge, one made outside the
+    journal) was cut short: its marker among the journal's changes the files do not reflect yet
+    (unfinished), which the next write finishes. Until then the person is in the files, so `bosun
+    update` stops at its plan rather than copy them into a backup. Read under the shared lock; a
+    knowledge base that does not exist has none. A journal that cannot be read is a JournalError."""
+    p = paths()
+    with store.locked(p, False):
+        journal = open_journal(p)
+        position = journal.position()
+        if not position:
+            return False
+        later = unfinished(p, journal.changes(), position)
+    return any(change.get("op") == kc.DELETION for change in later)
+
+
 def refuse_finishing_without_key(p: Paths, kb: KB, later: list[Change]) -> None:
     """A deletion on request cut short (a keyed record in a deletion marker <later>) is finished
     by matching the people in the journal against its record, which takes the key: without one

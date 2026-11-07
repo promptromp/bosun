@@ -131,7 +131,7 @@ class TestPath(MigrationTest):
             migrations.path("ledger", 3, 2)
 
     def test_a_refusal_is_a_value_error(self) -> None:
-        """What bosun update's plan catches (R1)."""
+        """What bosun update's plan catches."""
         self.assertTrue(issubclass(migrations.MigrationError, ValueError))
 
     def test_a_store_not_made_yet_needs_no_migration(self) -> None:
@@ -325,7 +325,7 @@ class TestConfig(MigrationTest):
         self.assertEqual(said, ["OLD is now NEW"])
 
     def test_a_key_renamed_twice_gets_its_current_name(self) -> None:
-        """A bosun.env from two versions back: A was renamed B, then B was renamed C (R19)."""
+        """A bosun.env from two versions back: A was renamed B, then B was renamed C."""
         chain = (("A", "B"), ("B", "C"))
         self.assertEqual(migrations.config_names(chain), {"A": "C", "B": "C"})
         self.assertEqual(migrations.migrate_config("A=1\nK=2\n", chain), ("C=1\nK=2\n", ["A is now C"]))
@@ -451,6 +451,40 @@ class TestValidateUnlocked(MigrationTest):
         self.assertIn("state", [f["kind"] for f in found])
         self.assertEqual(ledger.validate_unlocked(Path(self.tmp.name) / "elsewhere"), [])
         self.assertFalse((Path(self.tmp.name) / "elsewhere").exists())  # it writes nothing
+
+
+class TestApplied(unittest.TestCase):
+    def test_a_migration_that_ran_reads_back_from_the_update_s_record(self) -> None:
+        applied = migrations.Applied("ledger", 1, 2, "412 items migrated: 3 kept: as they were")
+        self.assertEqual(applied.as_record(), "ledger 1 -> 2: 412 items migrated: 3 kept: as they were")
+        self.assertEqual(migrations.Applied.from_record(applied.as_record()), applied)
+
+    def test_a_line_of_another_shape_is_none(self) -> None:
+        for text in ("", "ledger: 412 items migrated", "ledger one -> 2: x"):
+            self.assertIsNone(migrations.Applied.from_record(text), text)
+
+
+class TestAssignedKeys(unittest.TestCase):
+    def test_the_keys_bosun_env_sets(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            config = Path(tmp)
+            self.assertEqual(migrations.assigned_keys(config), set())
+            (config / "bosun.env").write_text("A=1\n  export B=2\n#C=3\nD 4\n")
+            self.assertEqual(migrations.assigned_keys(config), {"A", "B"})
+
+
+class TestUserFileChanges(unittest.TestCase):
+    def test_a_change_to_my_own_files_carries_the_version_it_came_in(self) -> None:
+        """Its entries carry no version yet, so the plan and bosun doctor would list every entry at every
+        update, forever after: the first entry needs that version first."""
+        unversioned = [entry for entry in migrations.USER_FILE_CHANGES if len(entry) < 3]
+        self.assertEqual(
+            unversioned,
+            [],
+            "USER_FILE_CHANGES gained an entry, but its entries carry no version: give each entry the "
+            "version it came in, and have the plan (update_facts.plan_for) and bosun doctor "
+            "(update_summary.left_to_me) list only those after the version updated from",
+        )
 
 
 if __name__ == "__main__":

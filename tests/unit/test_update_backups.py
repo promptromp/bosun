@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import errno
 import fnmatch
 import shutil
 import sys
@@ -9,6 +10,7 @@ import tempfile
 import unittest
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from unittest import mock
 
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "lib"))
@@ -290,6 +292,32 @@ class BackupsTest(unittest.TestCase):
         self.assertFalse((self.state / "backups").exists())
         self.assertFalse(rehearsal.exists())
         self.assertEqual(ub.delete_all(self.state), 0)
+
+    def test_a_deletion_that_meets_a_file_written_meanwhile_tries_again(self) -> None:
+        """An update saving its summary.md into a backup while a kg forget deletes them: the folder
+        is no longer empty when the deletion comes to remove it (ENOTEMPTY). It goes all the same, so
+        the forget is never cut short by it."""
+        backup = self.take()
+        real = shutil.rmtree
+        calls: list[Path] = []
+
+        def racing(path: Path, *args: object, **kwargs: object) -> None:
+            calls.append(Path(path))
+            if len(calls) == 1:
+                (backup / "summary.md").write_text("bosun updated: aaa1111 -> bbb2222\n")
+                raise OSError(errno.ENOTEMPTY, "Directory not empty", str(backup))
+            real(path)
+
+        with mock.patch.object(shutil, "rmtree", side_effect=racing):
+            self.assertEqual(ub.delete_all(self.state), 1)
+        self.assertFalse((self.state / "backups").exists())
+        self.assertEqual(len(calls), 2)
+
+    def test_a_deletion_that_cannot_be_done_still_fails(self) -> None:
+        self.take()
+        denied = OSError(errno.EACCES, "Permission denied")
+        with mock.patch.object(shutil, "rmtree", side_effect=denied), self.assertRaises(OSError):
+            ub.delete_all(self.state)
 
 
 if __name__ == "__main__":

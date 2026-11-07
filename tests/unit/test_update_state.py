@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 import dataclasses
+import fcntl
 import json
 import os
 import signal
 import subprocess
 import sys
 import tempfile
+import threading
 import unittest
 from datetime import datetime
 from pathlib import Path
@@ -49,7 +51,7 @@ class HoldTest(unittest.TestCase):
         self.assertFalse(update_state.hold_active(None, 0))
 
     def test_only_the_steps_from_holding_to_released_hold(self) -> None:
-        """R24: planned and rehearsed never hold, whatever hold_until says."""
+        """Planned and rehearsed never hold, whatever hold_until says."""
         self.assertEqual(
             update_state.HOLD_STEPS, ("holding", "marked", "backed-up", "migrated", "switched", "checked")
         )
@@ -102,9 +104,69 @@ class RecordTest(unittest.TestCase):
         (self.dir / "update.json").write_text(json.dumps(dict(dataclasses.asdict(state()), **over)))
 
     def test_a_newer_bosuns_fields_are_left_out(self) -> None:
-        """R21: a field this code does not know is ignored, never a reason to read no record."""
+        """A field this code does not know is ignored, never a reason to read no record."""
         self.newer(verified_by="doctor", rollout={"waves": [1, 2]}, step="migrated")
         self.assertEqual(update_state.read(self.dir), state("migrated"))
+
+    def test_an_earlier_bosuns_record_is_read_with_the_fields_added_since_at_their_defaults(self) -> None:
+        """A record written before `windows` and `reread` existed: every field added since is optional."""
+        earlier = {
+            k: v for k, v in dataclasses.asdict(state("agents")).items() if k not in ("windows", "reread")
+        }
+        (self.dir / "update.json").write_text(json.dumps(earlier))
+        found = update_state.load(self.dir)
+        assert found is not None
+        self.assertEqual((found.windows, found.reread), ({}, ()))
+
+    def test_a_record_written_before_the_summary_s_parts_reads_with_them_empty(self) -> None:
+        """A record of an update cut short by a bosun that kept no summary parts, carried on by this one."""
+        added = ("plan", "migrated", "config_changed", "reloaded", "doctor_before")
+        earlier = {k: v for k, v in dataclasses.asdict(state("released")).items() if k not in added}
+        (self.dir / "update.json").write_text(json.dumps(earlier))
+        found = update_state.load(self.dir)
+        assert found is not None
+        self.assertEqual(
+            (found.plan, found.migrated, found.config_changed, found.reloaded, found.doctor_before),
+            ({}, (), (), (), ()),
+        )
+
+    def test_the_summary_s_parts_are_read_back(self) -> None:
+        full = update_state.advanced(
+            state(),
+            "done",
+            plan={"commits": ["c1 acme: retry the export"], "windows": [["api", "restart"]]},
+            migrated=("ledger 1 -> 2: 412 items migrated",),
+            config_changed=("bosun.env: BOSUN_OLD is now BOSUN_NEW (before: bosun.env.pre-update-x)",),
+            reloaded=("com.bosun.morning.watchdog",),
+            doctor_before=("FAIL: gh is not logged in: run 'gh auth login'",),
+        )
+        update_state.write(self.dir, full)
+        self.assertEqual(update_state.read(self.dir), full)
+
+    def test_a_plan_that_is_no_object_is_no_record(self) -> None:
+        for plan in (["c1"], "c1", 1):
+            (self.dir / "update.json").write_text(json.dumps({**dataclasses.asdict(state()), "plan": plan}))
+            with self.assertRaises(update_state.RecordUnreadable, msg=str(plan)):
+                update_state.load(self.dir)
+
+    def test_what_was_done_to_each_window_is_read_back(self) -> None:
+        full = update_state.advanced(
+            state(),
+            "agents",
+            pending=("api",),
+            windows={"api": ("repo", "restart", "restarted")},
+            reread=("/p",),
+        )
+        update_state.write(self.dir, full)
+        self.assertEqual(update_state.read(self.dir), full)
+
+    def test_a_windows_field_of_the_wrong_shape_is_no_record(self) -> None:
+        for windows in (["api"], {"api": "restart"}, {"api": [1]}):
+            (self.dir / "update.json").write_text(
+                json.dumps({**dataclasses.asdict(state()), "windows": windows})
+            )
+            with self.assertRaises(update_state.RecordUnreadable, msg=str(windows)):
+                update_state.load(self.dir)
 
     def test_a_newer_bosuns_step_is_read(self) -> None:
         self.newer(step="verifying")
@@ -124,6 +186,16 @@ class RecordTest(unittest.TestCase):
 
     def test_load_of_nothing_is_none(self) -> None:
         self.assertIsNone(update_state.load(self.dir))
+
+    def test_windows_are_pending_only_while_an_update_brings_them_along(self) -> None:
+        self.assertFalse(update_state.windows_pending(self.dir))
+        for step, pending, expected in (
+            ("agents", ("api",), True),
+            ("agents", (), False),
+            ("done", ("api",), False),
+        ):
+            update_state.write(self.dir, update_state.advanced(state(), step, pending=pending))
+            self.assertEqual(update_state.windows_pending(self.dir), expected, (step, pending))
 
 
 class LockTest(unittest.TestCase):
@@ -195,7 +267,7 @@ class StuckTest(unittest.TestCase):
             self.assertEqual(update_state.stuck(self.dir, 2000), "", step)
 
     def test_an_update_stopped_before_its_hold_is_not_stuck(self) -> None:
-        """R24: planned and rehearsed changed nothing and held nothing."""
+        """Planned and rehearsed changed nothing and held nothing."""
         for step in ("planned", "rehearsed"):
             update_state.write(self.dir, state(step, hold_until=10**12))
             self.assertEqual(update_state.stuck(self.dir, 500), "", step)
@@ -283,7 +355,7 @@ class MalformedRecordTest(unittest.TestCase):
             self.assertIsNone(update_state.read(self.dir), text)
             self.assertFalse(update_state.hold_active(update_state.read(self.dir), 0))
             self.assertEqual(update_state.stuck(self.dir, 0), "", text)
-            for command in ("hold-active", "stuck"):
+            for command in ("hold-active", "stuck", "windows-pending"):
                 argv = [sys.executable, str(LIB / "update_state.py"), command, "--state-dir", str(self.dir)]
                 done = subprocess.run(argv, capture_output=True, text=True, check=False)
                 self.assertEqual(done.returncode, 1, (text, command, done.stderr))
@@ -309,6 +381,32 @@ class WatchdogCheckTest(unittest.TestCase):
             [finding] = watchdog.check_update_stuck(ctx).findings
             self.assertIn("verifying", finding.message)
         self.assertIn("update-stuck", [c.name for c in watchdog.CHECKS])
+
+
+class ProbeTest(unittest.TestCase):
+    """A writer's running() takes update.lock shared for an instant: an update waits that out."""
+
+    def test_one_update_waits_out_a_writers_probe(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            folder = Path(tmp)
+            held, release = threading.Event(), threading.Event()
+
+            def probe() -> None:
+                fd = os.open(folder / update_state.LOCK_FILE, os.O_RDWR | os.O_CREAT, 0o644)
+                fcntl.flock(fd, fcntl.LOCK_SH)
+                held.set()
+                release.wait(0.1)
+                os.close(fd)
+
+            thread = threading.Thread(target=probe)
+            thread.start()
+            held.wait(5)
+            try:
+                with update_state.one_update(folder, wait=0):
+                    taken = True
+            finally:
+                thread.join()
+            self.assertTrue(taken)
 
 
 if __name__ == "__main__":

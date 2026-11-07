@@ -88,7 +88,9 @@ Claude Code, end the line with `| BOSUN_HARNESS=codex sh`, or pick it in the que
 installed and logged in. See [Running repo sessions on Codex](docs/setup.md#running-repo-sessions-on-codex).
 
 Prefer to look first? [`get.sh`](get.sh) is short, and `sh -s -- --dry-run` after the pipe says what it
-would do. [Setup](docs/setup.md) covers the details: other ways to install, configuration and logins.
+would do. To update later, run `bosun update`, or the same line again: it shows its plan and asks first,
+and brings the running agents along ([Updating](docs/setup.md#updating)). [Setup](docs/setup.md) covers
+the details: other ways to install, configuration and logins.
 [`bosun uninstall`](docs/setup.md#uninstall) takes it all off again: it says what goes and what stays, and
 asks first.
 
@@ -112,7 +114,7 @@ The guides, design notes and roadmap are also a website, with search:
 
 | Guide | What it covers |
 |---|---|
-| [Setup](docs/setup.md) | Requirements, install, uninstall, configuration, sessions, Codex, Claude Code login, AWS SSO |
+| [Setup](docs/setup.md) | Requirements, install, updating and going back, uninstall, configuration, sessions, Codex, Claude Code login, AWS SSO |
 | [How a day runs](docs/day.md) | What runs when: the morning, check-ins, the watchdog, the evening |
 | [Commands](docs/commands.md) | Every `bosun` command |
 | [Orchestrator](docs/orchestrator.md) | Chores, delegated tasks, the ledger, outreach, tasks, tickets, workstreams |

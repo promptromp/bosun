@@ -122,5 +122,16 @@ class ConsoleStartTest(unittest.TestCase):
         self.assertTrue(console_server.build_parser().parse_args(["--new-token"]).new_token)
 
 
+class RunningTest(unittest.TestCase):
+    def test_a_console_is_running_while_it_serves(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            state = Path(tmp)
+            self.assertFalse(console_token.running(state))
+            with console_token.serving(state), console_token.serving(state):  # two consoles
+                self.assertTrue(console_token.running(state))
+            self.assertFalse(console_token.running(state))
+            self.assertEqual(mode(state / console_token.TOKEN_DIR), console_token.DIR_MODE)
+
+
 if __name__ == "__main__":
     unittest.main()

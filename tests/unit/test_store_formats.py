@@ -209,7 +209,7 @@ class TestLedgerFormat(unittest.TestCase):
 
     def test_a_ledger_rebuilt_from_its_journal_records_the_current_format(self) -> None:
         """A migration never rewrites the journal, and its reader reads what an older format recorded
-        as the current one, so a ledger.json made from its rebuild is in this code's format (R18):
+        as the current one, so a ledger.json made from its rebuild is in this code's format:
         not the empty ledger's 1, which a ledger at format 2 would then read as older, and refuse
         every write."""
         state = Path(self.tmp.name)

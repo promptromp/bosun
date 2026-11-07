@@ -313,6 +313,19 @@ it deletes only files it lists as bosun's, takes back only the folder trust and 
 added (`lib/agent_changes.py`), cancels the wake only when it is bosun's alone, and reports what is
 left at the end. Design note: [docs/design/uninstall.md](docs/design/uninstall.md).
 
+**Built (2026-11-07), not yet run in the VM: `bosun update`.** Running `get.sh` again pulled the new code
+into the folder everything ran from, backed nothing up and said nothing. Now each version has a folder of
+its own beside the others (`~/.local/share/bosun-versions`), and `~/.local/share/bosun` is a link that an
+update switches in one step. `bosun update` (also what the install line runs on an existing install)
+shows its plan, rehearses the migrations on a copy, holds bosun's own background work, pauses writes
+briefly to back up, migrate, switch and check (putting everything back on a failure), then brings each
+window along: left alone, asked to re-read, or restarted once its turn is over (after listing its
+background work, when only that runs). It ends with a summary, and its first run converts a checkout an older `get.sh` made, at
+a quiet moment. Next: the runs in the macOS VM (a working day updated mid-afternoon, the freeze measured
+on a year of data, the conversion) and the update prompts with the real agents in their windows (so far
+only the headless Claude of `tests/llm/` has tried them). Design note:
+[docs/design/update.md](docs/design/update.md).
+
 ### Docs site
 
 **Done (2026-11-02):** a docs site, <https://promptromp.github.io/bosun/>, built with MkDocs
@@ -335,7 +348,7 @@ login inside a session, which so far has only been run with a stand-in `gh`; per
 session; running without Claude Code at all (`bosun init`, `install.sh` and `bosun doctor` still need it).
 
 **Next OS: Linux.** `lib/platforms/linux.sh` is the easy part. What else assumes macOS: `install.sh` and the
-launchd templates, `pmset` and the wake, `caffeinate`, `osascript` alerts, `dscl`, `date -j` and `lsof`'s flags.
+launchd templates (and the jobs `bosun update` reloads), `pmset` and the wake, `caffeinate`, `osascript` alerts, `dscl`, `date -j` and `lsof`'s flags.
 
 ### Impact (productivity) stats
 

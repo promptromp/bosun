@@ -6,7 +6,7 @@
 #   2. link `bosun` into ~/.local/bin
 #   3. install and load the launchd jobs that run `bosun morning` on schedule and
 #      `bosun watchdog` every 5 minutes (and `bosun learn` daily, with
-#      BOSUN_LEARN_ENABLED=1)
+#      BOSUN_LEARN_ENABLED=1), each only where its plist changed or it is not loaded
 #   4. print (or with --with-wake, run via sudo) the pmset repeating-wake command
 #   5. run `bosun doctor`
 set -uo pipefail
@@ -65,34 +65,19 @@ if grep -q "bosun tmuxinator project" "$old_tmuxinator_file" 2>/dev/null; then
   log "removed the old tmuxinator project $old_tmuxinator_file"
 fi
 
-plist="$HOME/Library/LaunchAgents/$BOSUN_LAUNCHD_LABEL.plist"
-mkdir -p "$(dirname "$plist")" # a new macOS account may not have it yet
-render_launchd_plist "$BOSUN_LAUNCHD_LABEL" "$BOSUN_START_TIME" "$BOSUN_DAYS" "" BOSUN_TRIGGER=launchd >"$plist"
-plutil -lint -s "$plist" || die "rendered plist is invalid: $plist"
-launchctl bootout "gui/$(id -u)/$BOSUN_LAUNCHD_LABEL" 2>/dev/null
-launchctl bootstrap "gui/$(id -u)" "$plist" || die "launchctl bootstrap failed for $plist"
-log "loaded launchd job $BOSUN_LAUNCHD_LABEL ($BOSUN_START_TIME on $BOSUN_DAYS)"
-
-# The watchdog runs on its own, outside the tmux session, so it notices when that is gone too.
-watchdog_file="$(watchdog_plist)"
-render_watchdog_plist >"$watchdog_file"
-plutil -lint -s "$watchdog_file" || die "rendered plist is invalid: $watchdog_file"
-launchctl bootout "gui/$(id -u)/$(watchdog_label)" 2>/dev/null
-launchctl bootstrap "gui/$(id -u)" "$watchdog_file" || die "launchctl bootstrap failed for $watchdog_file"
-log "loaded launchd job $(watchdog_label) (bosun watchdog every $((WATCHDOG_INTERVAL_SECONDS / 60)) minutes)"
-
-# The learning agent only when enabled; otherwise make sure an earlier one is gone.
-learn_file="$(learn_plist)"
-launchctl bootout "gui/$(id -u)/$(learn_label)" 2>/dev/null
-if [ "$BOSUN_LEARN_ENABLED" = "1" ]; then
-  render_learn_plist >"$learn_file"
-  plutil -lint -s "$learn_file" || die "rendered plist is invalid: $learn_file"
-  launchctl bootstrap "gui/$(id -u)" "$learn_file" || die "launchctl bootstrap failed for $learn_file"
-  log "loaded launchd job $(learn_label) (bosun learn at $BOSUN_LEARN_AT on $BOSUN_DAYS)"
-elif [ -f "$learn_file" ]; then
-  rm -f "$learn_file"
-  log "removed launchd job $(learn_label) (BOSUN_LEARN_ENABLED is not 1)"
-fi
+# The morning job and the watchdog, which runs on its own, outside the tmux session, so it notices when
+# that is gone too; learning only when enabled (an earlier one is removed otherwise). Each is written
+# and reloaded only where its plist changed or it is not loaded.
+reloaded="$(reload_changed_jobs)" || die "could not load the launchd jobs; see above"
+for label in $reloaded; do
+  if [ -e "$HOME/Library/LaunchAgents/$label.plist" ]; then
+    log "loaded launchd job $label"
+  else
+    log "removed launchd job $label (no longer wanted: BOSUN_LEARN_ENABLED is not 1)"
+  fi
+done
+[ -n "$reloaded" ] || log "the launchd jobs are loaded and up to date"
+log "the morning run at $BOSUN_START_TIME on $BOSUN_DAYS; bosun watchdog every $((WATCHDOG_INTERVAL_SECONDS / 60)) minutes"
 
 # Wake just after the job time: launchd runs a calendar job missed during sleep as soon as the Mac
 # wakes, so the job starts within seconds of the wake and the Mac has no chance to doze off first.

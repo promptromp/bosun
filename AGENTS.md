@@ -6,7 +6,7 @@ file only points at it.
 
 The two rules that matter most before you run anything:
 
-- **Never test an install or an uninstall on the machine you are running on.** Use `tests/sandbox.sh`
+- **Never test an install, an update or an uninstall on the machine you are running on.** Use `tests/sandbox.sh`
   (Docker, about a minute), `tests/sandbox.sh mac` (a real throwaway Mac) or `tests/sandbox.sh mac live claude|codex` (the real
   agents on one). See
   [docs/development.md](docs/development.md#which-sandbox-for-what).

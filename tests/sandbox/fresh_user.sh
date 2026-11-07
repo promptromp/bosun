@@ -11,6 +11,8 @@ set -uo pipefail
 
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 BOSUN="$ROOT/bin/bosun"
+INSTALL="$HOME/.local/share/bosun"           # what get.sh installs: a link to the version in use,
+VERSIONS="$HOME/.local/share/bosun-versions" # each version a folder here, beside bosun.git
 CONFIG="$HOME/.config/bosun"
 AGENTS="$HOME/Library/LaunchAgents"
 LOG="$HOME/.sandbox/system.log"
@@ -191,7 +193,7 @@ the_uninstall() { # <what the machine held before it was installed>
   check "the windows have stopped" bash -c '! tmux -L bosun has-session -t "=bosun"'
   check "the jobs are gone" bash -c '[ -z "$(ls -A "$HOME/.sandbox/launchd" 2>/dev/null)" ]'
   check "the wake is gone" test ! -e "$HOME/.sandbox/pmset-repeat"
-  check "the checkout it made is gone" test ! -e "$HOME/.local/share/bosun"
+  check "the install it made is gone: the link and every version" bash -c '[ ! -e "$1" ] && [ ! -L "$1" ] && [ ! -e "$2" ]' _ "$INSTALL" "$VERSIONS"
   check "the link is gone" test ! -e "$bosun"
   check "it said sudo first, and used it for the wake" bash -c 'grep -q "sudo.*pmset repeat cancel" "$1"' _ "$LOG"
   check "your settings are as you left them" test "$settings" = "$(cat "$CONFIG"/bosun.env "$CONFIG"/sessions.yml "$CONFIG"/setup.sh | cksum)"
@@ -268,8 +270,10 @@ the_installer() {
   export BOSUN_REPO="$ROOT" BOSUN_BRANCH="$branch"
   mv "$HOME/.local/bin/gh" "$HOME/.sandbox/packages/gh"
   before_install="$(other_files)" # bosun's own folders are not new here: earlier steps ran bosun too
-  check "a dry run says what it would do" bash -c 'sh "$1/get.sh" --dry-run >"$2" && grep -q "git clone" "$2"' _ "$ROOT" "$out"
-  check "... and does none of it" test ! -e "$HOME/.local/share/bosun"
+  check "a dry run says what it would do: clone bosun.git bare, and link the install to its version" bash -c '
+    sh "$1/get.sh" --dry-run >"$2" && grep -q "clone --quiet --bare --single-branch --branch $3 $1 $4/bosun.git" "$2" &&
+      grep -q "ln -s $4/<commit> $5" "$2"' _ "$ROOT" "$out" "$branch" "$VERSIONS" "$INSTALL"
+  check "... and does none of it" bash -c '[ ! -e "$1" ] && [ ! -e "$2" ]' _ "$INSTALL" "$VERSIONS"
   check "it is plain sh" sh -n "$ROOT/get.sh"
   check "with something missing it gets bosun, says what to do and stops" bash -c '! cat "$1/get.sh" | sh >"$2" 2>&1 && grep -q "brew install gh" "$2"' _ "$ROOT" "$out"
   check "... and says to run the same line again" says "Then run this again: curl -fsSL" "$out"
@@ -285,8 +289,14 @@ the_installer() {
     "Start the windows now?" "y" \
     "The windows are up" "" \
     -- sh -c "cat '$ROOT/get.sh' | sh"
-  check "it put bosun where it said" test -x "$HOME/.local/share/bosun/bin/bosun"
-  check "it linked that one" bash -c '[ "$(readlink "$HOME/.local/bin/bosun")" = "$HOME/.local/share/bosun/bin/bosun" ]'
+  check "it put bosun where it said" test -x "$INSTALL/bin/bosun"
+  check "... the install a link to the version in use, a folder of its own beside bosun.git" bash -c '
+    [ -L "$1" ] && [ "$(dirname "$(readlink "$1")")" = "$2" ] && [ -d "$2/bosun.git" ] &&
+      [ "$(git -C "$(readlink "$1")" rev-parse HEAD)" = "$(git -C "$3" rev-parse HEAD)" ]' _ "$INSTALL" "$VERSIONS" "$ROOT"
+  check "... bosun.git marked as made by the installer, following the branch it was asked for" bash -c '
+    [ "$(git --git-dir="$1/bosun.git" config bosun.managed)" = true ] && [ "$(git --git-dir="$1/bosun.git" config bosun.branch)" = "$2" ]' _ "$VERSIONS" "$branch"
+  check "it linked that one, through the install link" bash -c '[ "$(readlink "$HOME/.local/bin/bosun")" = "$1/bin/bosun" ]' _ "$INSTALL"
+  check "... and its jobs run it through the link too" grep -qF "exec \"$INSTALL/bin/bosun\" " "$AGENTS/com.bosun.morning.plist"
   check "the toggled-off repo has no window" absent "name: web" "$CONFIG/sessions.yml"
   check "... and the chosen one does" says "name: api" "$CONFIG/sessions.yml"
   check "the schedule it was given" says 'BOSUN_DAYS="MTWRF"' "$CONFIG/bosun.env"
@@ -294,7 +304,9 @@ the_installer() {
   check "repo sessions are in auto mode" says "--permission-mode auto" "$CONFIG/bosun.env"
   check "the windows it started" bash -c '[ "$1" = "api checkin orchestrator " ] || { echo "windows: $1"; exit 1; }' _ "$(windows)"
   "$HOME/.local/bin/bosun" stop >/dev/null 2>&1
-  check "running it again updates, then asks again" python3 "$DRIVE" "$out" "Updating" "" "Which repos" "q" -- sh -c "cat '$ROOT/get.sh' | sh"
+  check "running it again hands over to the newest version's bosun update: up to date" python3 "$DRIVE" "$out" \
+    "Getting the newest bosun into $VERSIONS" "" "bosun is up to date" "" -- sh -c "cat '$ROOT/get.sh' | sh"
+  check "... the link where it was, and no other version" bash -c '[ "$(ls "$1" | grep -vc "^bosun.git$")" = 1 ] && [ -L "$2" ]' _ "$VERSIONS" "$INSTALL"
   check "a download cut short does nothing" bash -c 'head -c 900 "$1/get.sh" | BOSUN_DIR="$HOME/cut-short" sh; [ ! -e "$HOME/cut-short" ]' _ "$ROOT"
   the_uninstall "$before_install"
   unset BOSUN_REPO BOSUN_BRANCH

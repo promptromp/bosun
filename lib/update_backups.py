@@ -5,7 +5,9 @@ A backup is a folder `$BOSUN_STATE_DIR/backups/<time>-<from>-<to>/` holding `sta
 `config/<name>` for everything the file tables class as ledger, knowledge or settings, plus the
 working files that carry work in flight (IN_FLIGHT). It is made with APFS clones where there are
 any, and ends with its manifest (every file with its SHA-256, both versions, the format versions),
-so a folder without one was cut short and is no backup. The last KEEP are kept.
+so a folder without one was cut short and is no backup. The last KEEP are kept. Once its update is
+done, the folder also holds that update's summary (SUMMARY, saved by lib/update.py), which no
+restore reads.
 
 A deletion of a person deletes every backup (delete_all, called as the last step of the knowledge
 base's forget_in_journal): a backup holds the whole knowledge base, so restoring one from before
@@ -15,6 +17,7 @@ No store (ledger, knowledge) is imported here: the stores import this module."""
 
 from __future__ import annotations
 
+import errno
 import fnmatch
 import hashlib
 import json
@@ -54,6 +57,7 @@ _CHUNK = 1 << 20
 # What a file put back is written as first, beside it (a row in both file tables of uninstall_plan).
 RESTORING = ".{name}.restoring"
 _SIDE_AND_NAME = 2  # a prefix names at least a side and an entry: state/<name>
+REMOVE_TRIES = 5  # how often a deletion tries a folder that gained a file meanwhile
 
 
 class BackupError(Exception):
@@ -193,6 +197,15 @@ def read_manifest(backup: Path) -> Manifest:
         raise BackupError(f"{backup} has no readable manifest: {exc}") from exc
 
 
+def copy_set(state_dir: Path, config_dir: Path, dest: Path) -> None:
+    """The backup set (backup_set) copied into <dest>, as state/<name> and config/<name>, with APFS
+    clones where there are any: what a backup holds, and what an update's rehearsal migrates."""
+    for relative, path in backup_set(state_dir, config_dir):
+        target = dest / relative
+        target.parent.mkdir(parents=True, exist_ok=True)
+        _copy(path, target)
+
+
 def take(
     state_dir: Path,
     config_dir: Path,
@@ -207,10 +220,7 @@ def take(
     backup = state_dir / BACKUPS_DIR / f"{moment:%Y%m%d-%H%M%S}-{from_commit[:7]}-{to_commit[:7]}"
     backup.mkdir(parents=True, mode=0o700)
     try:
-        for relative, path in backup_set(state_dir, config_dir):
-            target = backup / relative
-            target.parent.mkdir(parents=True, exist_ok=True)
-            _copy(path, target)
+        copy_set(state_dir, config_dir, backup)
         manifest = Manifest(from_commit, to_commit, moment.isoformat(), dict(formats), _digests(backup))
         _write_manifest(backup, manifest)
     except BaseException:
@@ -396,14 +406,27 @@ def prune(state_dir: Path, keep: int = KEEP) -> list[Path]:
     return gone
 
 
+def _removed(folder: Path) -> None:
+    """<folder>, whole, if it is there. A file written into it meanwhile (an update saving its
+    summary.md, which takes no lock a kg forget holds) leaves a folder that is not empty when its turn
+    comes: that is tried again, REMOVE_TRIES times, so the deletion is never cut short by it. Anything
+    else raises."""
+    for attempt in range(REMOVE_TRIES):
+        if not folder.is_dir():
+            return
+        try:
+            shutil.rmtree(folder)
+        except OSError as exc:
+            if exc.errno not in (errno.ENOTEMPTY, errno.ENOENT) or attempt == REMOVE_TRIES - 1:
+                raise
+        else:
+            return
+
+
 def delete_all(state_dir: Path) -> int:
     """Every backup, whole, and a rehearsal copy left in update/rehearsal; returns how many backups.
     A failure raises, so a deletion that could not finish is not taken for done."""
     count = len(listed(state_dir))
-    folder = state_dir / BACKUPS_DIR
-    if folder.is_dir():
-        shutil.rmtree(folder)
-    rehearsal = state_dir / REHEARSAL
-    if rehearsal.is_dir():
-        shutil.rmtree(rehearsal)
+    _removed(state_dir / BACKUPS_DIR)
+    _removed(state_dir / REHEARSAL)
     return count

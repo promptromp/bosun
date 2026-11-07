@@ -15,8 +15,23 @@ of truth, so don't copy rules into this file.
 - Updating (design: `docs/design/update.md`): `lib/versions.py` (version folders, the link switched in
   one rename, pruning), `lib/update_state.py` (the update's record and lock, the hold),
   `lib/update_backups.py` (backups, restore, pruning, deleted by a forget), `lib/update_gate.py` (the
-  write gate and `guarded`) and `lib/migrations.py` (the one registry of the stores' format
-  migrations, and the config's renamed keys).
+  write gate and `guarded`), `lib/migrations.py` (the one registry of the stores' format
+  migrations, and the config's renamed keys), `lib/launch_record.py` (what each window was
+  launched with, per session: the fingerprint an update compares after the switch, and the agent,
+  directory and overrides its restart keeps, through `recorded_restart` in `lib/common.sh`; `bosun
+  launch` writes it, `launch --fingerprint` and `refresh --update-restart` use it) and
+  `lib/update_plan.py` (pure: the plan, what each window gets, its text). `libexec/bosun-update` (the
+  wrapper: fetch the branch into its own version folder, hand over to that version) and
+  `lib/update_facts.py` (the facts the plan is made from, and what stops it there) and `lib/update.py`
+  (the command: the rehearsal, the hold, the freeze and its put-back, the release, an update cut
+  short carried on; `update note` and `update advance`), `lib/update_agents.py` (the decisions, its
+  only file the update's record: what each window gets turn by turn, the take-stock and update prompts,
+  what came of each), `lib/update_windows.py` (carrying them out: bosun's commands, the update's wait
+  and its Ctrl-C, which the check-in loop carries on), `lib/update_notes.py` (the windows' note
+  files) and `lib/update_summary.py` (pure: the summary it ends with, from what each step kept in the
+  record, its text and `--json`, and what the last update left me, which `bosun doctor` lists through
+  `lib/update.py after-update`); `reload_changed_jobs` in `lib/common.sh`
+  (also install.sh's); its smoke section's next version is `tests/sandbox/update_patch.sh`.
 - `lib/common.sh`: config defaults (`load_config`) and shared helpers: the window list
   (`window_specs`: orchestrator, sessions.yml entries, checkin), tmux, the one
   launch path (`build_launch_command`, used by `start`, `refresh` and `send`), and the launchd
@@ -72,14 +87,18 @@ of truth, so don't copy rules into this file.
   `SKIPPED` or `CHECKED`) trips the rules-digest test in `tests/unit/test_knowledge_changes.py`:
   bump `KG_RULES_VERSION` (`lib/knowledge.py`) and record the new digest under it.
 - Setup (design: `docs/design/init.md`): `get.sh` (what `curl | sh` runs: plain POSIX sh, everything in
-  functions with `main` last, because people pipe it straight from `main`), `lib/preflight.sh` (what
+  functions with `main` last, because people pipe it straight from `main`; a first install's versions side
+  by side, and on an install `init` set up the hand-over to the new version's `bosun update`, whose first
+  run converts an older checkout: `convert` in `lib/update.py`; `lib/checkout_work.py` is what deleting a
+  checkout or a version would lose, which uninstall, the conversion and the update's prune go by), `lib/preflight.sh` (what
   bosun needs and what to do about what is missing; plain sh, changes nothing, and `init` and `doctor`
   start with it) with its profiles `lib/platforms/<os>.sh` and `lib/harnesses/<harness>.sh`, `lib/init_detect.py`
   (read-only: what the Mac shows, Claude Code's files through `lib/claude_state.py`), `lib/init_plan.py`
   (pure: recommended answers, the config files' text, the plan), `lib/init_wizard.py` (pure over a `Ui`:
   the questions), `lib/init_terminal.py` (the keys and screens) and `lib/init.py` (the CLI: writes the
-  config with backups, trusts the folders, then runs `install.sh`, the one place that knows launchd and
-  `pmset`). `lib/uninstall_detect.py` (read-only: what of bosun is here), `lib/uninstall_plan.py` (pure: the
+  config with backups, trusts the folders, then runs `install.sh`, the one place that sets `pmset`; the
+  launchd jobs are rendered and loaded by `lib/common.sh`, which `install.sh` and `bosun update` share).
+  `lib/uninstall_detect.py` (read-only: what of bosun is here), `lib/uninstall_plan.py` (pure: the
   tables of what bosun's files are, what goes, what stays, how it reads), `lib/uninstall_macos.py` (launchd
   and `pmset`) and `lib/uninstall.py` (the CLI) take it off again; `lib/agent_changes.py` records what bosun
   changed in the agents' own files, so that only that is undone. Design: `docs/design/uninstall.md`.
@@ -310,7 +329,8 @@ osascript) are faked in the temp HOME's `~/.local/bin`, and the install test use
 label and refuses to run unless the fakes come first on PATH.
 
 **Never test an install on the machine you are running on: `install.sh`, `bosun init --recommended`,
-`get.sh` and `bosun uninstall` change launchd, `pmset` and the config for real.** Use the cheapest sandbox that can show what
+`get.sh`, `bosun update` and `bosun uninstall` change launchd, `pmset`, the install and the config for
+real.** Use the cheapest sandbox that can show what
 you changed (the table and how to set them up: `docs/development.md`, "Which sandbox for what"):
 
 - `tests/sandbox.sh [init|unit|smoke|all|shell]`: a throwaway Linux container with a read-only copy of the
@@ -365,6 +385,10 @@ The repo is meant to be shareable, so nothing in it may identify an organization
   To check the whole tree: `git ls-files | xargs uv run python tools/forbidden_terms.py`.
 
 ## Rolling a change out to running sessions
+
+On an install `get.sh` made, `bosun update` does all of this itself (the re-reads, the restarts, and
+the handed tasks it lists for `bosun delegate --update`; `docs/design/update.md`). The steps below are
+for a checkout of your own, or a change made by hand:
 
 - The orchestrator reads `policy.md` once per conversation, and starts a new one each morning. For
   a same-day change: `bosun send orchestrator "re-read <file>: <what changed>"`.

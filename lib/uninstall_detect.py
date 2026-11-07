@@ -1,31 +1,30 @@
 """What of bosun is on this machine, for `bosun uninstall`. It only reads. lib/uninstall_plan.py decides what
-to do about it. Design: docs/design/uninstall.md."""
+to do about it. Design: docs/design/uninstall.md.
+
+What deleting a checkout or a version would lose is lib/checkout_work.py's, which `bosun update` goes by
+too."""
 
 from __future__ import annotations
 
 import os
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
 from pathlib import Path
 
 import agent_changes
+import checkout_work
 import init_detect
 import init_plan
+import install_paths
 import uninstall_macos
+import versions
 from agent_files import read_object
 from agent_state import AGENTS
-from uninstall_plan import UNREADABLE, Checkout, Facts
+from checkout_work import Checkout, entries
+from uninstall_plan import UNREADABLE, Facts
 
 
 TMUXINATOR_MARK = "bosun tmuxinator project"
-GIT_CONFIG_MARK = "bosun.managed"
-CACHES = frozenset({"__pycache__", ".pytest_cache", ".mypy_cache", ".ruff_cache", ".venv", ".DS_Store"})
-
-
-def entries(folder: Path) -> tuple[str, ...]:
-    try:
-        return tuple(sorted(entry.name for entry in folder.iterdir()))
-    except OSError:
-        return ()
 
 
 def tmux_command(env: Mapping[str, str]) -> list[str]:
@@ -40,59 +39,90 @@ def windows(env: Mapping[str, str]) -> tuple[str, ...]:
     return tuple((init_detect.output_of(*command) or "").splitlines())
 
 
-def git(root: Path, *args: str) -> str | None:
-    return init_detect.output_of("git", "-C", str(root), *args)
+# ---- versions side by side ------------------------------------------------------------------------------
 
 
-def ignored_work(status: str) -> list[str]:
-    """What git ignores in the checkout that is not a cache running bosun makes: a .env, a key, a state
-    folder someone pointed inside it."""
-    ignored = (line[3:] for line in status.splitlines() if line.startswith("!! "))
-    return [
-        path
-        for path in ignored
-        if not path.endswith(".pyc") and not CACHES.intersection(Path(path.rstrip("/")).parts)
-    ]
+def legacy_folders(folder: Path) -> list[Path]:
+    """The checkouts from before versions the first update kept in <folder>."""
+    names = (name for name in entries(folder) if name.startswith(versions.LEGACY_PREFIX))
+    return [folder / name for name in names if (folder / name).is_dir() and not (folder / name).is_symlink()]
 
 
-def checkout_work(root: Path) -> str:
-    """What deleting the checkout would lose, or "" if nothing. git that cannot answer counts as work."""
-    status = git(root, "status", "--porcelain", "--ignored", "--untracked-files=all")
-    stashes = git(root, "stash", "list")
-    unpushed = git(root, "log", "--all", "--not", "--remotes", "--oneline", "-1")
-    worktrees = git(root, "worktree", "list", "--porcelain")
-    if status is None or stashes is None or unpushed is None or worktrees is None:
-        return "a git repository that could not be checked"
-    ignored = ignored_work(status)
-    found = {
-        "uncommitted changes": any(not line.startswith("!! ") for line in status.splitlines()),
-        f"files git ignores ({', '.join(ignored[:3])})": bool(ignored),
-        "stashed changes": bool(stashes.strip()),
-        "commits not pushed": bool(unpushed.strip()),
-        "other worktrees": worktrees.count("worktree ") > 1,
-    }
-    return next((what for what, there in found.items() if there), "")
+@dataclass(frozen=True)
+class Install:
+    """Where this bosun is installed, for the plan: what holds the code (the checkout, or the versions
+    folder), each version and checkout from before versions in that folder, the install link, the bosun to
+    run again, and the temporary links a switch cut short left beside the install."""
+
+    code: Checkout
+    bosun: str
+    versions: tuple[Checkout, ...] = ()
+    legacy: tuple[Checkout, ...] = ()
+    link: str = ""
+    leftover_links: tuple[str, ...] = ()
 
 
-def checkout(root: Path) -> Checkout:
-    managed = (git(root, "config", "--get", GIT_CONFIG_MARK) or "").strip() == "true"
-    return Checkout(str(root), managed, checkout_work(root) if managed else "")
+def install_roots(root: Path) -> tuple[str, ...]:
+    """Every folder whose bin/bosun is this install's: the checkout <root>, or with versions side by side the
+    install link, <root> and every folder beside it (its versions, and checkouts from before versions)."""
+    install = install_paths.install_path(root)
+    if install == root:
+        return (str(root),)
+    folder = install_paths.versions_dir(install)
+    beside = [folder / name for name in entries(folder) if name != install_paths.REPO]
+    return tuple(
+        dict.fromkeys(str(path) for path in (install, root, *beside) if path == install or path.is_dir())
+    )
 
 
-def own_link(root: Path) -> str:
-    """~/.local/bin/bosun, if it points at this checkout, or at nothing any more."""
+def side_by_side(root: Path, install: Path) -> Install:
+    """The install of the version in <root>, a folder beside the install path <install>."""
+    folder = install_paths.versions_dir(install)
+    mark = checkout_work.git(folder / install_paths.REPO, "config", "--get", checkout_work.GIT_CONFIG_MARK)
+    managed = (mark or "").strip() == "true"
+    found = checkout_work.version_folders(folder)
+    legacy = legacy_folders(folder)
+    # A version is the repository's: whether the installer made them is the versions folder's to say, once.
+    each = tuple(
+        Checkout(str(path), True, checkout_work.version_work(path) if managed else "") for path in found
+    )
+    work = checkout_work.versions_work(folder, found, [path.name for path in legacy]) if managed else ""
+    linked = install.is_symlink()
+    return Install(
+        code=Checkout(str(folder), managed, work),
+        bosun=str(install_paths.install_bin(root) if linked else root / "bin" / "bosun"),
+        versions=each,
+        legacy=tuple(checkout_work.checkout(path) for path in legacy),
+        link=str(install) if linked else "",
+        leftover_links=tuple(str(path) for path in versions.temporary_links(install)),
+    )
+
+
+def installed(root: Path) -> Install:
+    """Where the bosun in <root> is installed: a checkout, or versions side by side."""
+    install = install_paths.install_path(root)
+    if install == root:
+        return Install(code=checkout_work.checkout(root), bosun=str(root / "bin" / "bosun"))
+    return side_by_side(root, install)
+
+
+def own_link(roots: Sequence[str]) -> str:
+    """~/.local/bin/bosun, if it runs one of this install's folders (<roots>, install_roots), or nothing any
+    more."""
     link = Path.home() / ".local" / "bin" / "bosun"
     if not link.is_symlink():
         return ""
     target = os.path.realpath(link)
-    ours = target == os.path.realpath(root / "bin" / "bosun") or not os.path.exists(target)
+    ours = not os.path.exists(target) or any(
+        target == os.path.realpath(Path(root) / "bin" / "bosun") for root in roots
+    )
     return str(link) if ours else ""
 
 
-def other_install(root: Path) -> str:
-    """The `bosun` that ~/.local/bin/bosun runs, if that is not this checkout."""
+def other_install(roots: Sequence[str]) -> str:
+    """The `bosun` that ~/.local/bin/bosun runs, if that is not this install's."""
     link = Path.home() / ".local" / "bin" / "bosun"
-    if not link.is_symlink() or own_link(root):
+    if not link.is_symlink() or own_link(roots):
         return ""
     return os.path.realpath(link)
 
@@ -158,8 +188,8 @@ def holds(folder: Path, inner: Path) -> bool:
 
 
 def unsafe_folders(folders: list[Path], root: Path) -> tuple[str, ...]:
-    """Bosun's folders that hold your home folder, and those that hold bosun's checkout (except the checkout
-    itself, which holds only itself)."""
+    """Bosun's folders that hold your home folder, and those that hold bosun's code, <root> (except that
+    folder itself, which holds only itself)."""
     home = Path.home()
     unsafe = [folder for folder in folders if holds(folder, home) or (folder != root and holds(folder, root))]
     return tuple(str(folder) for folder in unsafe)
@@ -179,20 +209,23 @@ def detect(env: Mapping[str, str], root: Path) -> Facts:
     state_dir = Path(env.get("BOSUN_STATE_DIR") or Path.home() / ".local" / "state" / "bosun")
     log_dir = Path(env.get("BOSUN_LOG_DIR") or state_dir / "logs")
     session = env.get("BOSUN_SESSION_NAME", "bosun")
+    found, roots = installed(root), install_roots(root)
+    code = Path(found.code.root)
     return Facts(
         home=str(Path.home()),
-        checkout=checkout(root),
+        checkout=found.code,
         config_dir=str(config_dir),
         state_dir=str(state_dir),
         log_dir=str(log_dir),
+        bosun=found.bosun,
         session=session,
         windows=windows(env),
         keep_awake=(state_dir / f"keep-awake-{session}.pid").exists(),
-        jobs=uninstall_macos.jobs(env.get("BOSUN_JOB_LABELS", "").split(), str(root)),
+        jobs=uninstall_macos.jobs(env.get("BOSUN_JOB_LABELS", "").split(), roots),
         repeating=uninstall_macos.repeating_events(),
         wake_at=wake_at(env),
         days=env.get("BOSUN_DAYS", ""),
-        link=own_link(root),
+        link=own_link(roots),
         old_files=old_files(env),
         trust=trust_still_given(state_dir),
         notes=tuple(note for note in agent_changes.notes(state_dir) if Path(note).exists()),
@@ -202,5 +235,9 @@ def detect(env: Mapping[str, str], root: Path) -> Facts:
         ledger_items=ledger_items(state_dir),
         knowledge_records=knowledge_records(config_dir),
         knowledge_files=len(entries(config_dir / "knowledge")),
-        unsafe=unsafe_folders([state_dir, config_dir, log_dir, root], root),
+        unsafe=unsafe_folders([state_dir, config_dir, log_dir, code], code),
+        install_link=found.link,
+        versions=found.versions,
+        legacy=found.legacy,
+        leftover_links=found.leftover_links,
     )

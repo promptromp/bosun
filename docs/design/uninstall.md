@@ -42,7 +42,19 @@ this note is why.
   the checkout's git config) and git shows nothing in it of yours: no uncommitted changes, no stash, no commit
   that is not on a remote (on any branch, or none), no other worktree, and nothing git ignores but the caches
   running bosun makes (a `.env`, a key, a state folder someone pointed inside it). A git command that fails
-  counts as work, not as clean. A checkout you cloned to work on stays.
+  counts as work, not as clean, and git is never let look in a folder above the one it checks. A checkout you
+  cloned to work on stays.
+- **Versions side by side go whole, or not at all.** What `get.sh` installs now is `~/.local/share/bosun-versions`
+  (`bosun.git`, which it marks with `bosun.managed`, and a folder per version, each a worktree of it), the
+  checkout from before versions that the first update kept there (`legacy-*`), and the link
+  `~/.local/share/bosun`. Each is checked as a checkout is: every version's files and a commit made in it,
+  the repository for a stash, a branch or tag on no remote (but the branch it follows, which is bosun's) or a
+  worktree outside the folder, anything in the folder that bosun does not put there, and the old checkout on
+  its own (its mark, and its work). Anything of yours in any of them keeps all of it, the link too, and the
+  plan says which folder holds what. They go last, and the link only once every folder has gone. A
+  temporary link a switch cut short left beside the install (`.bosun.link-*`) is no part of that: it goes
+  earlier, with `~/.local/bin/bosun`, whether the install stays or not. The update's prune keeps a
+  checkout from before versions, or an older version, by the same check (`lib/checkout_work.py`).
 - **Records are records whatever shape they are in.** A knowledge folder with anything in it, a ledger or a
   backup of one with items, or either of them unreadable, is something it asks about. A copy you made by
   hand, like `ledger.json.before-my-edit`, is not a file it knows, so it stays. `replica.json` serves both
@@ -59,8 +71,9 @@ this note is why.
   again finishes the job. The checkout goes last and only if nothing else is left, because that is what a second
   run needs. An agent's config it cannot read counts as still holding the trust, and the record of a change is
   only forgotten once the agent no longer shows it.
-- **A launchd job is bosun's by its label, or by being exactly what install.sh renders.** Your own job that runs
-  `bosun status` is not.
+- **A launchd job is bosun's by its label, or by being exactly what install.sh renders.** That is a job that
+  runs the install's own `bin/bosun`: the checkout's, or with versions side by side the link's, a version
+  folder's or the old checkout's, which older plists name. Your own job that runs `bosun status` is not.
 
 ## What a review found
 
@@ -76,7 +89,8 @@ above has a deliberately broken copy that the unit tests must fail.
 The wake first, as the one step that may ask for something; the rest then runs unattended. The jobs before the
 windows, because the watchdog would bring those back. Then the agents' files, the link and the working files.
 Stopping the windows writes a file of its own, so it looks again before deleting anything. The checkout last,
-since this runs from it: it is all in memory by then.
+since this runs from it: it is all in memory by then. With versions side by side that is the checkout kept from
+before versions, the versions folder, then the link, so that the line it gives to run again works until the end.
 
 ## What it refuses
 

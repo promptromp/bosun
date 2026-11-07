@@ -63,7 +63,7 @@ def inside_bosun(env: Mapping[str, str]) -> bool:
 def refusal(args: argparse.Namespace, env: Mapping[str, str]) -> str:
     if inside_bosun(env) and not args.dry_run:
         return "this runs inside bosun's tmux session, which it would stop. Run it from another terminal."
-    other = uninstall_detect.other_install(ROOT)
+    other = uninstall_detect.other_install(uninstall_detect.install_roots(ROOT))
     if other:
         return f"~/.local/bin/bosun runs another checkout. Uninstall with that one: {other} uninstall"
     if not (args.yes or args.dry_run or sys.stdin.isatty()):
@@ -181,12 +181,23 @@ def remove_empty_folders(facts: Facts) -> None:
                 continue
 
 
-def remove_checkout(facts: Facts, plan: Plan, *, can_ask: bool) -> tuple[Step, ...]:
-    """Last of all, once nothing more can need it; what is left of it, if anything."""
-    if plan.checkout is None:
-        return ()
-    Carrying(facts, can_ask=can_ask).run((plan.checkout,))
-    return (plan.checkout,) if Path(plan.checkout.target).exists() else ()
+def remove_install(facts: Facts, plan: Plan, *, can_ask: bool) -> tuple[Step, ...]:
+    """Last of all, once nothing more can need it: the checkout, or the versions folder with the checkouts
+    from before versions in it, then the link that led into it, only once every folder has gone, as the
+    line to run again goes through it; what is left of it, if anything."""
+    folders = tuple(step for step in plan.install if step.kind != up.LINK)
+    links = tuple(step for step in plan.install if step.kind == up.LINK)
+    Carrying(facts, can_ask=can_ask).run(folders)
+    if not any(os.path.lexists(step.target) for step in folders):
+        Carrying(facts, can_ask=can_ask).run(links)
+    return tuple(step for step in plan.install if os.path.lexists(step.target))
+
+
+def inside_install(facts: Facts) -> bool:
+    """Whether your shell is in a folder of the install that is gone now."""
+    places = [ROOT, Path(facts.checkout.root), *([Path(facts.install_link)] if facts.install_link else [])]
+    here = Path(os.environ.get("PWD", "/"))
+    return any(here.is_relative_to(place) for place in places) and not ROOT.exists()
 
 
 def carry_out(env: Mapping[str, str], choices: Choices, *, can_ask: bool) -> int:
@@ -203,10 +214,9 @@ def carry_out(env: Mapping[str, str], choices: Choices, *, can_ask: bool) -> int
     Carrying(facts, can_ask=can_ask).run(tuple(step for step in plan.steps if step.kind == up.FILE))
     remove_empty_folders(facts)
     facts, plan = plan_now()
-    left = plan.steps or remove_checkout(facts, plan, can_ask=can_ask)
-    inside = Path(os.environ.get("PWD", "/")).is_relative_to(ROOT) and not ROOT.exists()
+    left = plan.steps or remove_install(facts, plan, can_ask=can_ask)
     print()
-    print(up.render_done(plan, left, facts, inside_checkout=inside), end="")
+    print(up.render_done(plan, left, facts, inside_checkout=inside_install(facts)), end="")
     return EXIT_LEFT if left else 0
 
 
