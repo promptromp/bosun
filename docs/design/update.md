@@ -5,7 +5,7 @@ update's record and hold, backups, version folders, the write gate and the migra
 `bosun update` plans, rehearses, holds, freezes, releases and brings the agents along
 (`lib/update_facts.py` gathers the plan's facts, `lib/update.py` carries it out, behind the wrapper
 `libexec/bosun-update`; `lib/update_agents.py` decides what each window gets, `lib/update_windows.py`
-carries it out); the summary is still to come.
+carries it out, `lib/update_notes.py` keeps the windows' notes); the summary is still to come.
 The plan:
 [docs/plans/update.md](../plans/update.md).
 
@@ -514,8 +514,9 @@ Decided while building it:
 - **A store's check** after the migrations fails the update on an error (writes refused, or a
   rebuild that would lose data); a warning is no reason to put the data back.
 - **Bringing the agents along** is the record's step `agents`, after `released`: `lib/update_agents.py`
-  decides, pure over the record, the windows' statuses and an Actions interface; `lib/update_windows.py`
-  carries it out (bosun's commands, the note files, the wait and Ctrl-C). Every window the plan gives
+  decides, over the windows' statuses and an Actions interface, its only file the update's record (each
+  thing done recorded as it is done); `lib/update_windows.py` carries it out (bosun's commands, the wait
+  and Ctrl-C), and `lib/update_notes.py` keeps the notes. Every window the plan gives
   something to do is pending (not those left alone, and not the `checkin` window, whose loop the release
   restarted), with the kind the plan lists for it (never guessed from a later listing), until it answers
   with `bosun update note --window <w> --status`. A turn decides again from each window's status then, by
@@ -535,17 +536,22 @@ Decided while building it:
   (its background work ended, often before it read the prompt: a restart ends nothing); the prompt asks
   for "nothing running" when nothing runs any more, which passes nothing back.
 - **An orchestrator still on yesterday's conversation** is not sent the re-read (its check-in would be
-  refused there, and the loop would restart it anyway): it is restarted through refresh, which starts
-  today's as a new day does, and counts as answered (`bosun sessions --json` names the conversation each
-  window's next launch takes up, `conversation`).
+  refused there, and the loop would restart it anyway): it is brought along as a window whose launch
+  changed (taking stock first while only background work runs, waited for while busy), and restarted
+  through refresh, which starts today's as a new day does; that counts as answered, its outcome naming
+  any list of background work it saved (`bosun sessions --json` names the conversation each window's next
+  launch takes up, `conversation`).
 - **A relaunch, or a missing window created,** for an update gets the update prompt only when its launch
   resumes a conversation (launch's own lookup, on the agent it starts). When it starts a new one, it
   starts as a new conversation does (the orchestrator's morning chores, a fresh conversation's prompt, or
   none), and refresh exits 4, never "continue what you were doing" in a blank conversation.
 - **What is passed back** with a restart after taking stock: the window's own list, and what the Stop
   hook saw still running at the end of that turn ([signals](signals.md)).
-- **The notes** are files, `update/notes/<window>.<kind>` in the state folder (`stock` or `status`); an
-  update clears the ones the previous update left before it starts bringing windows along.
+- **The notes** are files, `update/notes/<window>.<kind>` in the state folder (`stock` or `status`), the
+  window's name percent-encoded into the file's name, so any name (a space, a slash) is a note of its own
+  there and every window can answer; an update clears the ones the previous update left before it starts
+  bringing windows along. A status note written by hand ends a window's wait: the next turn, or the next
+  `bosun update` (which settles answered windows before it plans, acting on none), takes it.
 - **Ctrl-C while the update waits** is noted, not raised, so it never cuts a restart short; the commands
   that act on the windows run in a session of their own, so the terminal's Ctrl-C never reaches them.
 - **An update cut short** after its release (at `checked` or `released`) brings the windows along from a

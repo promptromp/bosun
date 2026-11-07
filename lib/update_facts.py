@@ -27,8 +27,10 @@ import launch_record
 import ledger
 import migrations
 import signals
+import update_agents
 import update_backups
 import update_gate
+import update_notes
 import update_plan
 import update_state
 import versions
@@ -230,12 +232,6 @@ def open_windows(root: Path) -> list[dict[str, Any]]:
     return [w for w in listed if isinstance(w, dict) and w.get("window")] if isinstance(listed, list) else []
 
 
-def statuses(root: Path) -> dict[str, str]:
-    """The status of the agent in each window open in the session, by name (exited: none runs); empty
-    when the session's windows cannot be listed."""
-    return {str(w.get("name")): status_of(w) for w in open_windows(root)}
-
-
 def loop_runs(root: Path) -> bool:
     """Whether the checkin window, which runs the check-in loop, is open in the session."""
     return any(_kind(w) == "checkin" for w in open_windows(root))
@@ -243,9 +239,13 @@ def loop_runs(root: Path) -> bool:
 
 def windows_pending(state_dir: Path) -> list[str]:
     """A blocker while the last update still brings windows along: a new update would bring along its
-    own, and the windows still waited for would lose what was done to them, and their notes."""
+    own, and the windows still waited for would lose what was done to them, and their notes. A window
+    with a status note (its own, or one written by hand) is answered: `bosun update` settles it first."""
     state = update_state.read(state_dir)
-    if state is None or state.step != "agents" or not state.pending:
+    if state is None or state.step != "agents":
+        return []
+    state = update_agents.settled(state, update_notes.Files(state_dir))
+    if not state.pending:
         return []
     short = update_gate.SHORT
     blocker = (

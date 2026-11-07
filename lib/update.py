@@ -58,6 +58,7 @@ import update_agents
 import update_backups
 import update_facts
 import update_gate
+import update_notes
 import update_plan
 import update_state
 import update_windows
@@ -313,9 +314,17 @@ def _carry_on(state_dir: Path) -> UpdateState | None:
         state = release(state)
     if state.step == "released":
         return _brought_along(state)
-    if state.step == "agents" and state.pending:
-        return state
+    if state.step == "agents":
+        return _settled(state_dir, state)
     return _step(state_dir, state, "done")
+
+
+def _settled(state_dir: Path, state: UpdateState) -> UpdateState:
+    """An update cut short while it brought windows along: those that answered since (their own note,
+    or one written by hand) no longer waited for, and `done` once none is; the rest are the check-in
+    loop's (R6), never acted on here."""
+    after = update_agents.settled(state, update_notes.Files(state_dir))
+    return _record(state_dir, after) if after != state else after
 
 
 def resume(state_dir: Path) -> UpdateState | None:
@@ -420,7 +429,7 @@ def _carried_out(plan: Plan, old_root: Path, new_root: Path, where: Folders) -> 
 
 
 def _say_outcomes(state_dir: Path, state: UpdateState) -> None:
-    for window, outcome in update_agents.outcomes(state, update_windows.Files(state_dir)):
+    for window, outcome in update_agents.outcomes(state, update_notes.Files(state_dir)):
         Output.say(f"  {window}: {outcome}")
 
 
@@ -597,8 +606,8 @@ def _note(state_dir: Path, window: str, kind: str) -> int:
         print("bosun update note: the note on stdin is empty; nothing saved", file=sys.stderr)
         return 1
     try:
-        update_windows.note(state_dir, window, kind, text)
-    except update_windows.NoteRefused as exc:
+        update_notes.note(state_dir, window, kind, text)
+    except update_notes.NoteRefused as exc:
         print(f"bosun update note: {exc}", file=sys.stderr)
         return USAGE
     print(f"bosun update: noted the {kind} of {window}")

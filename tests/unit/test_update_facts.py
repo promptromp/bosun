@@ -13,6 +13,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "lib"))
 import knowledge_store
 import update_facts
 import update_gate
+import update_notes
 import update_plan
 import versions
 from test_update import FROM, TO, World
@@ -51,6 +52,15 @@ class BlockerTest(World):
         [blocker] = self.plan().blockers
         self.assertIn(str(self.config / "policy.md"), blocker)
         self.assertIn("no backup can copy it", blocker)
+
+    def test_a_window_answered_by_hand_does_not_block(self) -> None:
+        """No check-in loop took its answer yet: the plan counts it as answered, as bosun update does."""
+        self.record("agents", pending=("api", "web app"), windows={"api": ("repo", "wait until idle")})
+        update_notes.note(self.state, "web app", "status", "carried on by hand")
+        [blocker] = self.plan().blockers
+        self.assertIn("still brings along api:", blocker)
+        update_notes.note(self.state, "api", "status", "carried on by hand")
+        self.assertEqual(self.plan().blockers, ())
 
     def test_windows_an_update_still_brings_along_block_the_next_one(self) -> None:
         """A new update would bring along its own windows and clear the notes of these."""
@@ -132,11 +142,8 @@ class WindowFactsTest(World):
             {"name": "plain", "kind": "extra", "window": True, "conversation": "plain", "agent": None},
         ]  # fmt: skip
 
-    def test_each_open_windows_status(self) -> None:
-        with mock.patch.object(update_facts, "open_windows", return_value=self.listed()):
-            self.assertEqual(
-                update_facts.statuses(self.new), {"orch": "idle", "api": "busy", "plain": "exited"}
-            )
+    def test_each_windows_status(self) -> None:
+        self.assertEqual([update_facts.status_of(w) for w in self.listed()], ["idle", "busy", "exited"])
 
     def test_an_agent_on_another_conversation_than_its_next_launch_takes_up(self) -> None:
         orch, api, plain = self.listed()

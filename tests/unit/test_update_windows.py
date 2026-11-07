@@ -1,5 +1,5 @@
-"""lib/update_windows.py: the windows brought along for real: the note files, the turn's commands
-(bosun commands of the new version), and the update's wait with its Ctrl-C (docs/design/update.md,
+"""lib/update_windows.py: the windows brought along for real: the turn's commands (bosun commands of
+the new version), and the update's wait with its Ctrl-C (docs/design/update.md,
 "Bringing the agents along"). The decisions are tests/unit/test_update_agents.py. Fictional windows."""
 
 from __future__ import annotations
@@ -23,6 +23,7 @@ from unittest import mock
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "lib"))
 import install_paths
 import update_facts
+import update_notes
 import update_plan
 import update_state
 import update_windows
@@ -38,37 +39,6 @@ class Folder(unittest.TestCase):
         self.addCleanup(shutil.rmtree, tmp, ignore_errors=True)
         self.tmp = tmp
         self.state_dir = tmp / "state"
-
-
-class NoteTest(Folder):
-    def test_a_note_is_kept_by_window_and_kind(self) -> None:
-        update_windows.note(self.state_dir, "api", "stock", "sleep 900")
-        update_windows.note(self.state_dir, "api", "status", "waiting on CI")
-        notes = self.state_dir / "update" / "notes"
-        self.assertEqual(sorted(p.name for p in notes.iterdir()), ["api.status", "api.stock"])
-        self.assertEqual(update_windows.read_note(self.state_dir, "api", "stock"), "sleep 900")
-        self.assertIsNone(update_windows.read_note(self.state_dir, "web", "status"))
-        files = update_windows.Files(self.state_dir)
-        self.assertEqual(
-            (files.read("api", "status"), files.where("api", "stock")),
-            ("waiting on CI", str(notes / "api.stock")),
-        )
-
-    def test_nothing_running_is_a_stock_note(self) -> None:
-        update_windows.note(self.state_dir, "api", "stock", "nothing running")
-        self.assertEqual(update_windows.read_note(self.state_dir, "api", "stock"), "nothing running")
-
-    def test_an_unknown_kind_or_a_name_that_is_a_path_is_refused(self) -> None:
-        for window, kind in (
-            ("api", "mood"),
-            ("../api", "status"),
-            ("a/b", "status"),
-            ("..", "stock"),
-            ("", "stock"),
-        ):
-            with self.assertRaises(update_windows.NoteRefused, msg=(window, kind)):
-                update_windows.note(self.state_dir, window, kind, "x")
-        self.assertFalse((self.state_dir / "update").exists())
 
 
 class CommandsTest(Folder):
@@ -243,10 +213,10 @@ class BringAlongTest(Folder):
         self.assertNotIn("the check-in loop brings", self.said[-1])
 
     def test_notes_an_earlier_update_left_are_not_this_ones(self) -> None:
-        update_windows.note(self.state_dir, "api", "status", "from the update before")
+        update_notes.note(self.state_dir, "api", "status", "from the update before")
         with self.turns([]):
             self.bring_along()
-        self.assertIsNone(update_windows.read_note(self.state_dir, "api", "status"))
+        self.assertIsNone(update_notes.read_note(self.state_dir, "api", "status"))
 
 
 if __name__ == "__main__":

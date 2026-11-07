@@ -1,8 +1,7 @@
 """Bringing the windows along, for real (docs/design/update.md, "Bringing the agents along"): the
-decisions of lib/update_agents.py carried out by bosun's own commands, the notes the windows answer
-with, and the update's wait.
+decisions of lib/update_agents.py carried out by bosun's own commands, and the update's wait. The notes
+the windows answer with are lib/update_notes.py's files.
 
-- The notes are files in the state folder, update/notes/<window>.<kind> (`bosun update note`).
 - Commands are the turn's Actions: `bosun send` and `bosun refresh --update-restart` of the new
   version, each in a session of its own, so a Ctrl-C at the terminal never stops one half way (a
   restart that stopped an agent and never started it again), and the facts a turn asks for, from one
@@ -17,8 +16,6 @@ from __future__ import annotations
 import contextlib
 import fnmatch
 import os
-import re
-import shutil
 import signal
 import tempfile
 import time
@@ -29,6 +26,7 @@ from typing import Any
 import install_paths
 import update_agents
 import update_facts
+import update_notes
 import update_plan
 import update_state
 from update_agents import STATUS, Started
@@ -36,67 +34,10 @@ from update_plan import Plan
 from update_state import UpdateState
 
 
-NOTES = Path(update_state.UPDATE_DIR) / "notes"
-PLAIN_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
 POLL_SECONDS = 5
 CTRL_C_POLL_SECONDS = 0.2
 LEFT_RUNNING_STATUS = 3  # bosun refresh --update-restart's status when it left the agent running
 NEXT_CONVERSATION_STATUS = 4  # ... and when it started the window's next conversation
-
-
-class NoteRefused(ValueError):
-    """A note for a kind there is none of, or under a window name that is no plain name."""
-
-
-# ---- the notes ---------------------------------------------------------------------------------
-
-
-def note_path(state_dir: Path, window: str, kind: str) -> Path:
-    if kind not in update_agents.KINDS:
-        raise NoteRefused(
-            f"there is no {kind!r} note: a note is the window's {' or '.join(update_agents.KINDS)}"
-        )
-    if not PLAIN_NAME.match(window) or ".." in window:
-        raise NoteRefused(f"{window!r} is not a plain window name")
-    return state_dir / NOTES / f"{window}.{kind}"
-
-
-def note(state_dir: Path, window: str, kind: str, text: str) -> None:
-    """<window>'s <kind> note: <text>, written whole (update/notes/<window>.<kind>)."""
-    path = note_path(state_dir, window, kind)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    fd, tmp = tempfile.mkstemp(dir=path.parent, prefix=f".{path.name}.")
-    with os.fdopen(fd, "w") as out:
-        out.write(text.strip() + "\n")
-    Path(tmp).replace(path)
-
-
-def read_note(state_dir: Path, window: str, kind: str) -> str | None:
-    try:
-        return note_path(state_dir, window, kind).read_text().strip()
-    except FileNotFoundError:
-        return None
-
-
-def clear_notes(state_dir: Path) -> None:
-    """The notes an earlier update left: none of them answers this one."""
-    shutil.rmtree(state_dir / NOTES, ignore_errors=True)
-
-
-class Files:
-    """update_agents.Notes as the note files in <state_dir>."""
-
-    def __init__(self, state_dir: Path) -> None:
-        self.state_dir = state_dir
-
-    def read(self, window: str, kind: str) -> str | None:
-        return read_note(self.state_dir, window, kind)
-
-    def save(self, window: str, kind: str, text: str) -> None:
-        note(self.state_dir, window, kind, text)
-
-    def where(self, window: str, kind: str) -> str:
-        return str(note_path(self.state_dir, window, kind))
 
 
 # ---- the turn's actions ------------------------------------------------------------------------
@@ -110,7 +51,7 @@ class Commands:
         self.root = root
         self.state_dir = state_dir
         self.say = say
-        self.notes = Files(state_dir)
+        self.notes = update_notes.Files(state_dir)
         self.said: dict[str, str] = {}
         self.listed: list[dict[str, Any]] | None = None
 
@@ -170,7 +111,9 @@ def _news(before: UpdateState, after: UpdateState, state_dir: Path) -> list[str]
     lines = []
     for window, entry in after.windows.items():
         for what in entry[2 + len(before.windows.get(window, ())[2:]) :]:
-            said = read_note(state_dir, window, STATUS) if what == update_agents.ANSWERED else None
+            said = (
+                update_notes.read_note(state_dir, window, STATUS) if what == update_agents.ANSWERED else None
+            )
             lines.append(f"  {window}: {what}" + (f": {said.splitlines()[0]}" if said else ""))
     return lines
 
@@ -263,7 +206,7 @@ def bring_along(state: UpdateState, plan: Plan, say: Callable[[str], None] = pri
     state_dir = update_facts.folders().state_dir
     root = Path(state.to_root)
     windows = update_agents.to_bring_along(plan.windows, dict(plan.kinds))
-    clear_notes(state_dir)
+    update_notes.clear_notes(state_dir)
     state = update_state.advanced(
         state, "agents", pending=tuple(windows), windows=windows, reread=_rereads(plan, root)
     )

@@ -20,7 +20,7 @@ sys.path.insert(0, str(ROOT / "lib"))
 import approvals
 import guard
 import update_agents
-import update_windows
+import update_notes
 from update_state import UpdateState
 from world import git
 
@@ -909,7 +909,7 @@ def update_note(outcome: Outcome, window: str, kind: str) -> str | None:
     ran = any(
         call[:5] == ["update", "note", "--window", window, f"--{kind}"] for call in outcome.world.new_calls()
     )
-    return update_windows.read_note(outcome.world.state, window, kind) if ran else None
+    return update_notes.read_note(outcome.world.state, window, kind) if ran else None
 
 
 def took_stock(outcome: Outcome) -> list[str]:

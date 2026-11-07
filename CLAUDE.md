@@ -24,10 +24,11 @@ of truth, so don't copy rules into this file.
   wrapper: fetch the branch into its own version folder, hand over to that version) and
   `lib/update_facts.py` (the facts the plan is made from, and what stops it there) and `lib/update.py`
   (the command: the rehearsal, the hold, the freeze and its put-back, the release, an update cut
-  short carried on; `update note` and `update advance`), `lib/update_agents.py` (pure: what each
-  window gets turn by turn, the take-stock and update prompts, what came of each) and
-  `lib/update_windows.py` (carrying it out: bosun's commands, the windows' note files, the update's
-  wait and its Ctrl-C, which the check-in loop carries on); `reload_changed_jobs` in `lib/common.sh`
+  short carried on; `update note` and `update advance`), `lib/update_agents.py` (the decisions, its
+  only file the update's record: what each window gets turn by turn, the take-stock and update prompts,
+  what came of each), `lib/update_windows.py` (carrying them out: bosun's commands, the update's wait
+  and its Ctrl-C, which the check-in loop carries on) and `lib/update_notes.py` (the windows' note
+  files); `reload_changed_jobs` in `lib/common.sh`
   (also install.sh's); its smoke section's next version is `tests/sandbox/update_patch.sh`.
 - `lib/common.sh`: config defaults (`load_config`) and shared helpers: the window list
   (`window_specs`: orchestrator, sessions.yml entries, checkin), tmux, the one

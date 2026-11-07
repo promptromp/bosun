@@ -225,6 +225,31 @@ class AdvanceTest(Agents):
         self.assertEqual([what for what, _, _ in self.act.calls], ["restart"])
         self.assertIn("started its next conversation", self.record().windows["orchestrator"])
 
+    def test_an_orchestrator_in_shell_on_yesterdays_conversation_takes_stock_first(self) -> None:
+        """Only background work runs in it: a restart would end that, so it is asked to list it first,
+        as any window whose launch changed; its restart then starts today's (exit 4), and its outcome
+        names its list."""
+        self.bring({"orchestrator": ("orchestrator", Treatment.REREAD)}, orchestrator="shell")
+        self.act.elsewhere.add("orchestrator")
+        self.advance()
+        [(what, _, asked)] = self.act.calls
+        self.assertEqual(what, "send")
+        self.assertIn("bosun will restart this session for an update", asked)
+        self.advance()  # no list yet, and its background work runs: nothing more
+        self.assertEqual(len(self.act.calls), 1)
+        self.stock("orchestrator", "the wait for the export review to settle")
+        self.act.started["orchestrator"] = Started.NEXT_CONVERSATION
+        self.assertEqual(self.advance(), [])
+        self.assertEqual([what for what, _, _ in self.act.calls], ["send", "restart"])
+        [(_, outcome)] = update_agents.outcomes(self.record(), self.act.notes)
+        self.assertIn(self.act.notes.where("orchestrator", "stock"), outcome)
+
+    def test_an_orchestrator_busy_on_yesterdays_conversation_waits(self) -> None:
+        self.bring({"orchestrator": ("orchestrator", Treatment.REREAD)}, orchestrator="busy")
+        self.act.elsewhere.add("orchestrator")
+        self.assertEqual(self.advance(), ["orchestrator"])
+        self.assertEqual(self.act.calls, [])
+
     def test_done_when_every_window_answered(self) -> None:
         self.bring(
             {"api": ("repo", Treatment.RESTART), "orchestrator": ("orchestrator", Treatment.REREAD)},
@@ -329,6 +354,26 @@ class AdvanceTest(Agents):
         self.advance()
         [(_, prompt)] = self.act.made("restart")
         self.assertIn("the CI wait\n(What bosun saw still running then: shell `sleep 900`.)", prompt)
+
+
+class SettledTest(Agents):
+    def test_windows_answered_by_hand_are_settled_without_acting_or_writing(self) -> None:
+        """settled() is what an update carried on runs before it plans: the windows that answered (here
+        by hand) no longer pending, done once none is, and nothing acted on or written."""
+        self.bring({"api": ("repo", Treatment.WAIT), "web": ("repo", Treatment.WAIT)})
+        before = self.record()
+        self.answer("api", "done by hand")
+        after = update_agents.settled(before, self.act.notes)
+        self.assertEqual(
+            (after.step, after.pending, after.windows["api"][-1]), ("agents", ("web",), "answered")
+        )
+        self.answer("web", "done by hand")
+        self.assertEqual(update_agents.settled(after, self.act.notes).step, "done")
+        self.assertEqual((self.record(), self.act.calls), (before, []))
+
+    def test_a_record_with_nothing_pending_is_done(self) -> None:
+        self.assertEqual(update_agents.settled(bringing({}), self.act.notes).step, "done")
+        self.assertEqual(update_agents.settled(bringing({}), self.act.notes).pending, ())
 
 
 class PlanWindowsTest(unittest.TestCase):

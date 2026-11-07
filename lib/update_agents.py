@@ -1,7 +1,8 @@
 """What each window gets once an update has switched, decided turn by turn (docs/design/update.md,
-"Bringing the agents along"). The decisions, over the update's record: no tmux, process or note
-file is touched here. lib/update_windows.py carries them out (its Commands are the Actions here, the
-note files, the update's wait and Ctrl-C).
+"Bringing the agents along"). The decisions: the only file read or written here is the update's own
+record (lib/update_state.py), which records each thing done as it is done; no tmux, process or note
+file is touched. lib/update_windows.py carries them out (its Commands are the Actions here, the
+update's wait and Ctrl-C), lib/update_notes.py keeps the notes.
 
 After its release, `bosun update` records step `agents` with each window the plan gave something to
 do pending: every window but those left alone and the checkin window, whose loop the release
@@ -11,7 +12,8 @@ status now, what the window gets, and does it once:
 
 - re-read: the orchestrator, when only its prompts changed, gets the update prompt (re-read them,
   then check in) once its turn is over. One still on another conversation than its next launch takes
-  up (yesterday's) is restarted into that one instead, as a new day does;
+  up (yesterday's) is brought along as one whose launch changed instead (taking stock first while
+  only background work runs), and its restart starts that conversation, as a new day does;
 - restart: a window something it was launched with changed for, once idle, restarts on the new
   version with the update prompt;
 - take stock first: one where only background work runs (shell) is asked to list that work, which a
@@ -196,10 +198,7 @@ def _entry(state: UpdateState, window: str) -> tuple[str, str, tuple[str, ...]]:
 
 def _did(state_dir: Path, state: UpdateState, window: str, what: str) -> UpdateState:
     """<what> recorded as done to <window>, at once, so no later turn does it again."""
-    kind, planned, done = _entry(state, window)
-    state = update_state.advanced(
-        state, state.step, windows={**state.windows, window: (kind, planned, *done, what)}
-    )
+    state = _with(state, window, what)
     update_state.write(state_dir, state)
     return state
 
@@ -239,15 +238,24 @@ class _Window:
         return stock_lines(self.note(STOCK), self.act.left_running(self.name))
 
 
+def _rereads(win: _Window, status: str) -> bool:
+    """Whether the window only re-reads: the orchestrator whose prompts alone changed, its agent running
+    the conversation its next launch takes up. One still on another (yesterday's) re-reading there would
+    be wasted (its check-in is refused there, and the loop restarts it anyway)."""
+    return (
+        win.planned == Treatment.REREAD.value
+        and status != "exited"
+        and not win.act.on_another_conversation(win.name)
+    )
+
+
 def _decide(win: _Window, status: str) -> Treatment:
-    """What the window gets, from its status now. The orchestrator, only its prompts changed, re-reads
-    once its turn is over, unless it is still on another conversation than its next launch takes up:
-    that one starts as a new day does (a restart, which refresh starts as its next conversation).
-    One whose launch changed: as the plan's table says, by status."""
-    if win.planned == Treatment.REREAD.value and status != "exited":
-        if status not in TURN_OVER:
-            return Treatment.WAIT
-        return Treatment.RESTART if win.act.on_another_conversation(win.name) else Treatment.REREAD
+    """What the window gets, from its status now. The orchestrator that only re-reads (_rereads) does so
+    once its turn is over. Any other, as the plan's table says for one whose launch changed, by status:
+    an orchestrator on yesterday's conversation too, so it takes stock first while only background work
+    runs, and refresh starts its restart as its next conversation does (a new day)."""
+    if _rereads(win, status):
+        return Treatment.REREAD if status in TURN_OVER else Treatment.WAIT
     return update_plan.treatment(WindowFacts(win.name, win.kind, status, launch_changed=True), reread=False)
 
 
@@ -304,18 +312,24 @@ def _bring(win: _Window, status: str) -> UpdateState:
     return action(win) if action else win.state
 
 
-def _settled(state_dir: Path, state: UpdateState, notes: Notes) -> UpdateState:
-    """The windows that answered (or closed) no longer pending, each answer recorded; `done` once
-    none is left. Written only when that changes anything."""
+def _with(state: UpdateState, window: str, what: str) -> UpdateState:
+    kind, planned, done = _entry(state, window)
+    return update_state.advanced(
+        state, state.step, windows={**state.windows, window: (kind, planned, *done, what)}
+    )
+
+
+def settled(state: UpdateState, notes: Notes) -> UpdateState:
+    """<state> with the windows that answered (a status note, theirs or one written by hand) or closed
+    no longer pending, each answer recorded, and `done` once none is left; <state> itself when nothing
+    changes. It acts on no window: an update carried on uses it before it plans."""
     for window in state.pending:
         if notes.read(window, STATUS) is not None and ANSWERED not in _entry(state, window)[2]:
-            state = _did(state_dir, state, window, ANSWERED)
+            state = _with(state, window, ANSWERED)
     pending = tuple(w for w in state.pending if not set(_entry(state, w)[2]) & set(FINISHED))
-    if pending == state.pending:
+    if pending and pending == state.pending:
         return state
-    state = update_state.advanced(state, state.step if pending else "done", pending=pending)
-    update_state.write(state_dir, state)
-    return state
+    return update_state.advanced(state, "done" if not pending else state.step, pending=pending)
 
 
 def advance(state_dir: Path, statuses: Callable[[], Mapping[str, str]], act: Actions) -> list[str]:
@@ -331,7 +345,10 @@ def advance(state_dir: Path, statuses: Callable[[], Mapping[str, str]], act: Act
     if now:
         for window in state.pending:
             state = _bring(_Window(state_dir, state, window, act), now.get(window, GONE))
-    return list(_settled(state_dir, state, act.notes).pending)
+    after = settled(state, act.notes)
+    if after != state:
+        update_state.write(state_dir, after)
+    return list(after.pending)
 
 
 # ---- what came of each window ------------------------------------------------------------------

@@ -30,6 +30,7 @@ import update
 import update_backups
 import update_facts
 import update_gate
+import update_notes
 import update_plan
 import update_state
 import update_windows
@@ -423,6 +424,18 @@ class ResumeTest(World):
         assert done is not None
         self.assertEqual(done.step, "done")
 
+    def test_a_window_answered_by_hand_no_longer_holds_the_next_update(self) -> None:
+        """With no check-in loop, a status note written by hand ends the window's wait: an update carried
+        on settles it before it plans (acting on no window), and finishes the record."""
+        self.record("agents", pending=("web app",), windows={"web app": ("repo", "wait until idle")})
+        update_notes.note(self.state, "web app", "status", "carried on by hand")
+        with mock.patch.object(update_windows, "turn") as turn:
+            done = update.resume(self.state)
+        turn.assert_not_called()
+        assert done is not None
+        self.assertEqual((done.step, done.pending, done.windows["web app"][-1]), ("done", (), "answered"))
+        self.assertEqual(update_state.read(self.state), done)
+
     def test_a_newer_bosuns_step_is_refused(self) -> None:
         state = self.record("checked")
         data = {**json.loads((self.state / update_state.STATE_FILE).read_text()), "step": "re-checked"}
@@ -499,7 +512,7 @@ class RunTest(World):
     def test_a_resumed_wait_says_what_came_of_each_window(self) -> None:
         windows = {"api": ("repo", "restart", "restarted", "answered")}
         done = update_state.advanced(self.record("released"), "done", windows=windows)
-        update_windows.note(self.state, "api", "status", "resumed: waiting on CI for PR 12")
+        update_notes.note(self.state, "api", "status", "resumed: waiting on CI for PR 12")
         with self.resumed_wait(done):
             code, out, _ = self.main("--yes")
         self.assertEqual(code, 0)
@@ -534,17 +547,21 @@ class AgentsCommandTest(World):
             code = update.main(list(argv))
         return code, out.getvalue(), err.getvalue()
 
+    def test_a_window_whose_name_holds_a_space_can_answer(self) -> None:
+        code, _, _ = self.main("note", "--window", "web app", "--status", stdin="carried on")
+        self.assertEqual((code, update_notes.read_note(self.state, "web app", "status")), (0, "carried on"))
+
     def test_a_note_is_read_from_stdin(self) -> None:
         code, out, _ = self.main("note", "--window", "api", "--status", stdin="resumed: waiting on CI\n")
         self.assertEqual(code, 0)
         self.assertIn("api", out)
-        self.assertEqual(update_windows.read_note(self.state, "api", "status"), "resumed: waiting on CI")
+        self.assertEqual(update_notes.read_note(self.state, "api", "status"), "resumed: waiting on CI")
         code, _, _ = self.main("note", "--window", "api", "--stock", stdin="sleep 900: the CI wait")
         self.assertEqual(
-            (code, update_windows.read_note(self.state, "api", "stock")), (0, "sleep 900: the CI wait")
+            (code, update_notes.read_note(self.state, "api", "stock")), (0, "sleep 900: the CI wait")
         )
 
-    def test_a_note_refuses_an_unknown_kind_a_path_and_nothing_to_say(self) -> None:
+    def test_a_note_refuses_an_unknown_kind_no_window_and_nothing_to_say(self) -> None:
         for argv in (
             ("note", "--window", "api", "--mood"),
             ("note", "--window", "api"),
@@ -556,9 +573,9 @@ class AgentsCommandTest(World):
             ):
                 self.main(*argv, stdin="x")
             self.assertEqual(caught.exception.code, 2)
-        code, _, err = self.main("note", "--window", "../api", "--status", stdin="x")
+        code, _, err = self.main("note", "--window", "", "--status", stdin="x")
         self.assertEqual(code, 2)
-        self.assertIn("plain window name", err)
+        self.assertIn("needs the window's name", err)
         code, _, err = self.main("note", "--window", "api", "--status", stdin=" \n")
         self.assertEqual(code, 1)
         self.assertIn("empty", err)
