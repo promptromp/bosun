@@ -13,6 +13,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import threading
 import unittest
 from collections.abc import Callable, Iterator
 from pathlib import Path
@@ -27,6 +28,7 @@ import ledger
 import migrations
 import update
 import update_backups
+import update_facts
 import update_gate
 import update_plan
 import update_state
@@ -166,6 +168,26 @@ class FreezeTest(World):
         self.assertGreaterEqual(done.freeze_ms, 0)
         self.assertEqual(update_state.read(self.state), done)
 
+    def test_freeze_ms_counts_from_the_locks_taken_not_the_wait_for_them(self) -> None:
+        """A writer holding the ledger's lock when the freeze starts delays it; writes were not
+        paused by the update meanwhile, so that wait is not in freeze_ms."""
+        held, done = threading.Event(), threading.Event()
+
+        def writer() -> None:
+            with ledger.lock_at(self.state, fcntl.LOCK_EX):
+                held.set()
+                done.wait(1.0)
+
+        thread = threading.Thread(target=writer)
+        thread.start()
+        held.wait(5)
+        try:
+            state = update.freeze(self.record("holding"), a_plan(), self.state, self.config)
+        finally:
+            thread.join()
+        self.assertEqual(state.step, "checked")
+        self.assertLess(state.freeze_ms, 800)
+
     def test_a_plan_that_renames_config_keys_restores_bosun_env_too(self) -> None:
         self.assertEqual(
             update.restorable(a_plan(renames=(("BOSUN_OLD", "BOSUN_NEW"),)))[-1], "config/bosun.env"
@@ -269,96 +291,6 @@ class RehearseTest(World):
         self.assertTrue(all(line.startswith("the ledger: ") for line in found), found)
 
 
-class BlockerTest(World):
-    def plan(self) -> update_plan.Plan:
-        with (
-            mock.patch.object(
-                versions, "commit_of", side_effect=lambda root: FROM if root == self.old else TO
-            ),
-            mock.patch.object(update, "window_facts", return_value=[]),
-            mock.patch.object(update, "jobs", return_value=([], [])),
-            mock.patch.object(update, "missing", return_value=[]),
-            mock.patch.object(update, "commits", return_value=["bbbbbbb the next version"]),
-        ):
-            return update.plan_for(self.old, self.new, self.state, self.config)
-
-    def test_nothing_stops_an_update_of_readable_stores(self) -> None:
-        self.assertEqual(self.plan().blockers, ())
-
-    def test_a_ledger_whose_format_cannot_be_read_is_a_blocker(self) -> None:
-        (self.state / "ledger.json").write_text("{not json")
-        [blocker] = self.plan().blockers
-        self.assertIn("the ledger's format cannot be read", blocker)
-        self.assertIn("ledger.json", blocker)
-
-    def test_a_knowledge_base_whose_format_cannot_be_read_is_a_blocker(self) -> None:
-        kb = knowledge_store.Paths(self.config / update_gate.KNOWLEDGE_DIR)
-        kb.root.mkdir()
-        kb.format.write_text('{"format": "two"}')
-        self.assertTrue(any("the knowledge's format cannot be read" in b for b in self.plan().blockers))
-
-    def test_a_link_a_backup_cannot_copy_is_a_blocker_naming_it(self) -> None:
-        (self.config / "policy.md").symlink_to(self.config / "dotfiles" / "policy.md")
-        [blocker] = self.plan().blockers
-        self.assertIn(str(self.config / "policy.md"), blocker)
-        self.assertIn("no backup can copy it", blocker)
-
-    def test_versions_not_side_by_side_are_a_blocker(self) -> None:
-        self.assertEqual(update.install_problem(self.old, self.new), [])
-        checkout = self.state.parent / "checkout"
-        self.assertTrue(update.install_problem(checkout, self.new))
-
-
-class FactsTest(World):
-    def test_a_handed_item_of_a_type_the_site_replaces_is_not_in_flight(self) -> None:
-        self.ledger("record-delegation", "review:acme/exporter#12", "--window", "api", "--task", "review")
-        self.ledger(
-            "record-delegation", "review:acme/exporter#14", "--window", "web", "--task", "acme-review"
-        )
-        self.assertEqual(
-            update.in_flight(self.state, self.config),
-            [("review:acme/exporter#12", "review"), ("review:acme/exporter#14", "acme-review")],
-        )
-        (self.config / "tasks").mkdir()
-        (self.config / "tasks" / "acme-review.md").write_text("Our own review rules.\n")
-        self.assertEqual(update.in_flight(self.state, self.config), [("review:acme/exporter#12", "review")])
-
-    def test_prompts_keys_and_rules_come_from_the_version_folder(self) -> None:
-        (self.old / "orchestrator" / "tasks").mkdir(parents=True)
-        (self.old / "orchestrator" / "policy.md").write_text("Be brief.\n")
-        (self.old / "orchestrator" / "tasks" / "review.md").write_text("Review it.\n")
-        (self.old / "orchestrator" / "notes.md").write_text("Not a prompt.\n")
-        (self.old / "lib").mkdir()
-        (self.old / "lib" / "common.sh").write_text(
-            'set_defaults() {\n  BOSUN_DAYS="MTWRF"\n  local x=1\n}\n'
-        )
-        (self.old / "lib" / "ledger.py").write_text("RULES_VERSION = 3\n")
-        self.assertEqual(
-            sorted(update.prompts(self.old)), ["orchestrator/policy.md", "orchestrator/tasks/review.md"]
-        )
-        self.assertEqual(update.config_keys(self.old), frozenset({"BOSUN_DAYS"}))
-        self.assertEqual(update.rules(self.old), {"ledger": 3, "knowledge": 0})
-
-    def test_a_window_launched_otherwise_than_the_new_version_would_is_changed(self) -> None:
-        """The new version's `launch --fingerprint` against the window's record; no record, or a
-        fingerprint refused, counts as changed."""
-        root = self.new
-        (root / "bin").mkdir()
-        stub = root / "bin" / "bosun"
-        stub.write_text(
-            '#!/bin/sh\n[ "$3" = known ] && echo \'{"args": "a", "files": "f"}\' && exit 0\nexit 1\n'
-        )
-        stub.chmod(0o755)
-        record = {"fingerprint": {"args": "a", "files": "f"}}
-        with mock.patch("launch_record.recorded", return_value=record):
-            self.assertFalse(update.launch_changed(root, "known", self.state, "s"))
-            self.assertTrue(update.launch_changed(root, "refused", self.state, "s"))
-        with mock.patch("launch_record.recorded", return_value={"fingerprint": {"args": "a", "files": "g"}}):
-            self.assertTrue(update.launch_changed(root, "known", self.state, "s"))
-        with mock.patch("launch_record.recorded", return_value=None):
-            self.assertTrue(update.launch_changed(root, "known", self.state, "s"))
-
-
 class ReleaseTest(World):
     def test_the_check_in_loop_restarts_before_the_hold_is_lifted(self) -> None:
         calls: list[tuple[tuple[str, ...], str]] = []
@@ -370,8 +302,10 @@ class ReleaseTest(World):
 
         with (
             mock.patch.object(update, "_reload_jobs", return_value=[]),
-            mock.patch.object(update, "_open_windows", return_value=[{"kind": "checkin", "window": True}]),
-            mock.patch.object(update, "_bosun", side_effect=bosun),
+            mock.patch.object(
+                update_facts, "open_windows", return_value=[{"kind": "checkin", "window": True}]
+            ),
+            mock.patch.object(update_facts, "bosun", side_effect=bosun),
             mock.patch.object(update, "_doctor", return_value=["warn: on battery"]),
             mock.patch.object(update, "_prune"),
         ):
@@ -382,9 +316,9 @@ class ReleaseTest(World):
     def test_what_fails_after_the_switch_is_a_finding_not_a_rollback(self) -> None:
         with (
             mock.patch.object(
-                update, "_shell", return_value=subprocess.CompletedProcess([], 1, "", "bootstrap failed")
+                update_facts, "shell", return_value=subprocess.CompletedProcess([], 1, "", "bootstrap failed")
             ),
-            mock.patch.object(update, "_open_windows", return_value=[]),
+            mock.patch.object(update_facts, "open_windows", return_value=[]),
             mock.patch.object(update, "_doctor", return_value=[]),
             mock.patch.object(update, "_prune"),
         ):
@@ -394,7 +328,9 @@ class ReleaseTest(World):
 
     def test_what_doctor_fails_or_warns_about_is_kept(self) -> None:
         said = "Tools\n  ok    tmux\n  warn  on battery\n  FAIL  login keychain locks on sleep\nall\n"
-        with mock.patch.object(update, "_bosun", return_value=subprocess.CompletedProcess([], 1, said, "")):
+        with mock.patch.object(
+            update_facts, "bosun", return_value=subprocess.CompletedProcess([], 1, said, "")
+        ):
             self.assertEqual(
                 update._doctor(self.new), ["warn: on battery", "FAIL: login keychain locks on sleep"]
             )
@@ -450,9 +386,68 @@ class ResumeTest(World):
         state = self.record("checked")
         data = {**json.loads((self.state / update_state.STATE_FILE).read_text()), "step": "re-checked"}
         (self.state / update_state.STATE_FILE).write_text(json.dumps(data))
-        with self.assertRaisesRegex(update.UpdateRefused, "a newer bosun wrote"):
+        with self.assertRaisesRegex(update_facts.UpdateRefused, "a newer bosun wrote"):
             update.resume(self.state)
         self.assertEqual(state.step, "checked")
+
+
+class RunTest(World):
+    """`bosun update` as the wrapper hands over to it, with the install link already at this version
+    (the new one): what it says on each path, and --json's one object."""
+
+    def setUp(self) -> None:
+        super().setUp()
+        versions.point(self.install, self.new)
+        stack = contextlib.ExitStack()
+        self.addCleanup(stack.close)
+        stack.enter_context(mock.patch.object(update, "ROOT", self.new))
+        stack.enter_context(
+            mock.patch.object(
+                versions, "commit_of", side_effect=lambda root: FROM if root == self.old else TO
+            )
+        )
+        self.addCleanup(setattr, update.Output, "to_stderr", False)
+
+    def main(self, *flags: str) -> tuple[int, str, str]:
+        out, err = io.StringIO(), io.StringIO()
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+            code = update.main(["--from", str(self.new), *flags])
+        return code, out.getvalue(), err.getvalue()
+
+    def test_nothing_new_and_nothing_recorded_is_up_to_date(self) -> None:
+        self.assertEqual(self.main("--yes"), (0, "bosun is up to date (bbbbbbb).\n", ""))
+
+    def test_a_dry_run_after_a_cut_at_switched_says_so_and_is_not_up_to_date(self) -> None:
+        self.record("switched")
+        code, out, _ = self.main("--dry-run")
+        self.assertEqual(code, 0)
+        self.assertIn("an update stopped at step switched", out)
+        self.assertNotIn("up to date", out)
+        recorded = update_state.read(self.state)
+        assert recorded is not None
+        self.assertEqual(recorded.step, "switched")  # a dry run changes nothing
+
+    def test_an_update_running_is_refused_whatever_its_step(self) -> None:
+        """A second update while the first is in its release (the link already switched) is refused,
+        naming when the first started, never told it is up to date."""
+        self.record("released")
+        with update_state.one_update(self.state):
+            code, out, err = self.main("--yes")
+        self.assertEqual((code, out), (1, ""))
+        self.assertIn("an update is running (started 2026-11-07T12:00:00+00:00", err)
+
+    def test_json_keeps_plan_and_update_on_every_path(self) -> None:
+        self.record("done")
+        code, out, _ = self.main("--yes", "--json")
+        self.assertEqual(code, 0)
+        said = json.loads(out)
+        self.assertEqual((said["plan"], said["update"]["step"]), (None, "done"))
+        self.record("released")
+        with update_state.one_update(self.state):
+            code, out, err = self.main("--yes", "--json")
+        said = json.loads(out)
+        self.assertEqual((code, said["plan"], said["update"]["step"]), (1, None, "released"))
+        self.assertIn("an update is running", err)
 
 
 class GoAheadTest(unittest.TestCase):

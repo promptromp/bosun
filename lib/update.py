@@ -3,6 +3,7 @@ update cut short carried on or put back (design: docs/design/update.md, "The ste
 
 This runs in the version updated to, ROOT: the wrapper (libexec/bosun-update) fetched it into its own
 version folder and handed over. The version updated from is the one the install link leads to. The
+facts its plan is made from are gathered by lib/update_facts.py. The
 update holds update.lock for its whole run, so one runs at a time, and records each step in
 update.json (lib/update_state.py) before it starts it:
 
@@ -16,7 +17,8 @@ update.json (lib/update_state.py) before it starts it:
   then the knowledge base's) every write waits: the marker; the backup, named in the record with
   what it restores once it is taken; the migrations; the switch of the install link; then each
   store's own check. Any failure puts back the backup and the link (update_gate.put_back_held: the
-  locks are held) and records failed with the error. How long writes waited is freeze_ms.
+  locks are held) and records failed with the error. How long writes were paused, from the locks
+  taken to their release, is freeze_ms.
 - checked: writes go on. released: the jobs reloaded, the check-in loop restarted while the hold is
   still on (R36), then the hold lifted; what went wrong after the switch and what bosun doctor finds
   are kept as findings (reported, never rolled back); old backups and version folders pruned. done.
@@ -32,12 +34,9 @@ import argparse
 import contextlib
 import dataclasses
 import fcntl
-import hashlib
 import json
-import os
 import re
 import shutil
-import subprocess
 import sys
 import time
 from collections.abc import Iterator, Sequence
@@ -46,22 +45,20 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-import console_token
 import install_paths
 import knowledge
 import knowledge_store
-import launch_record
 import ledger
 import migrations
 import update_backups
+import update_facts
 import update_gate
 import update_plan
 import update_state
 import validation
 import versions
-from journal import JournalError
-from knowledge_model import KnowledgeError
-from update_plan import Plan, VersionFacts, WindowFacts
+from update_facts import Folders, UpdateRefused, folders
+from update_plan import Plan
 from update_state import UpdateState
 
 
@@ -70,37 +67,7 @@ SHORT = update_gate.SHORT
 FINISHED = ("done", "failed", "restored")
 BEFORE_FREEZE = ("planned", "rehearsed", "holding")
 BLOCKED = 1
-# A key in lib/common.sh's defaults: an assignment indented by two (as the example configs' check reads them).
-CONFIG_KEY = re.compile(r"^  (BOSUN_[A-Z0-9_]+)=", re.MULTILINE)
-WINDOW_KINDS = {"orchestrator": "orchestrator", "checkin": "checkin"}  # any other is a repo session's
-COMMAND_SECONDS = 600  # the most a bosun command the update runs may take
 DOCTOR_LINE = re.compile(r"^  (FAIL|warn)  (.*)$", re.MULTILINE)
-PREFLIGHT_NEXT = "\nWhat to do next:"
-STORE_ERRORS = (ledger.LedgerError, knowledge_store.StoreError, KnowledgeError, JournalError)
-
-
-class UpdateRefused(Exception):
-    """What stops an update before it changes anything, said in one line."""
-
-
-@dataclass(frozen=True)
-class Folders:
-    """The state and config folders, and the tmux session, as `bosun update` passes them."""
-
-    state_dir: Path
-    config_dir: Path
-    session: str
-
-
-def folders() -> Folders:
-    try:
-        return Folders(
-            Path(os.environ["BOSUN_STATE_DIR"]),
-            Path(os.environ["BOSUN_CONFIG_DIR"]),
-            os.environ.get("BOSUN_SESSION_NAME") or "bosun",
-        )
-    except KeyError as exc:
-        raise UpdateRefused(f"{exc.args[0]} is not set: run it as bosun update") from exc
 
 
 class Output:
@@ -111,292 +78,6 @@ class Output:
     @classmethod
     def say(cls, line: str) -> None:
         print(line, file=sys.stderr if cls.to_stderr else sys.stdout, flush=True)
-
-
-def _command(argv: list[str]) -> subprocess.CompletedProcess[str]:
-    """<argv> run, its output kept; one that outlasts COMMAND_SECONDS stopped, as a failure."""
-    try:
-        return subprocess.run(
-            argv, capture_output=True, text=True, errors="replace", check=False, timeout=COMMAND_SECONDS
-        )
-    except subprocess.TimeoutExpired:
-        return subprocess.CompletedProcess(argv, 1, "", f"{' '.join(argv[:3])} took over {COMMAND_SECONDS} s")
-
-
-def _bosun(root: Path, *args: str) -> subprocess.CompletedProcess[str]:
-    """`bosun <args>` of the version in <root>."""
-    return _command([str(root / "bin" / "bosun"), *args])
-
-
-def _shell(root: Path, script: str) -> subprocess.CompletedProcess[str]:
-    """<script> run by bash with the config loaded by the version in <root> (lib/common.sh)."""
-    return _command(["bash", "-c", f'source "$1/lib/common.sh"; load_config; {script}', "_", str(root)])
-
-
-def _git(root: Path, *args: str) -> str:
-    """git in <root>, with no inherited GIT_* variables and none of the user's hooks; its output."""
-    env = {k: v for k, v in os.environ.items() if not k.startswith("GIT_")}
-    done = subprocess.run(
-        ["git", "-c", "core.hooksPath=/dev/null", "-C", str(root), *args],
-        capture_output=True,
-        text=True,
-        errors="replace",
-        env=env,
-        check=False,
-    )
-    return done.stdout if done.returncode == 0 else ""
-
-
-# ---- the facts each version gives the plan ------------------------------------------------------
-
-
-def prompts(root: Path) -> dict[str, str]:
-    """Each prompt file of the version in <root> (update_plan.PROMPTS), by its path there, and the
-    SHA-256 of its content."""
-    found: dict[str, str] = {}
-    for pattern in update_plan.PROMPTS:
-        for path in sorted(root.glob(pattern)):
-            if path.is_file():
-                found[path.relative_to(root).as_posix()] = hashlib.sha256(path.read_bytes()).hexdigest()
-    return found
-
-
-def config_keys(root: Path) -> frozenset[str]:
-    """The config keys the version in <root> has a default for (lib/common.sh)."""
-    try:
-        return frozenset(CONFIG_KEY.findall((root / "lib" / "common.sh").read_text()))
-    except OSError:
-        return frozenset()
-
-
-def _source_int(path: Path, name: str) -> int:
-    """The whole number <name> is set to at the top level of the Python file <path>; 0 if it is not.
-    Read from the source, so that no other version's code runs in this process."""
-    try:
-        found = re.search(rf"^{name} = (\d+)$", path.read_text(), re.MULTILINE)
-    except OSError:
-        return 0
-    return int(found.group(1)) if found else 0
-
-
-def rules(root: Path) -> dict[str, int]:
-    """The rules version of each store's journal in the version in <root>."""
-    return {
-        "ledger": _source_int(root / "lib" / "ledger.py", "RULES_VERSION"),
-        "knowledge": _source_int(root / "lib" / "knowledge.py", "KG_RULES_VERSION"),
-    }
-
-
-def store_formats(state_dir: Path, config_dir: Path) -> tuple[dict[str, int], list[str]]:
-    """Each store's format on disk (0: none yet), and a blocker for each one whose format cannot be
-    read: a store this code cannot tell the format of is never migrated, nor backed up and put back."""
-    ctx = migrations.Context(state_dir, config_dir)
-    found: dict[str, int] = {}
-    problems: list[str] = []
-    for store in migrations.FORMATS:
-        try:
-            found[store] = migrations.store_format(ctx, store)
-        except STORE_ERRORS as exc:
-            problems.append(f"the {store}'s format cannot be read: {exc}")
-    return found, problems
-
-
-def live_facts(state_dir: Path, config_dir: Path, old_root: Path) -> VersionFacts:
-    """The running version's facts: its code in <old_root>, its stores' formats on disk (a store
-    whose format cannot be read left out: store_formats says why)."""
-    return VersionFacts(
-        commit=versions.commit_of(old_root),
-        formats=store_formats(state_dir, config_dir)[0],
-        rules=rules(old_root),
-        keys=config_keys(old_root),
-        prompts=prompts(old_root),
-    )
-
-
-def new_facts(root: Path) -> VersionFacts:
-    """The new version's facts: <root> is this code's folder, whose formats are migrations.FORMATS."""
-    return VersionFacts(
-        commit=versions.commit_of(root),
-        formats=dict(migrations.FORMATS),
-        rules=rules(root),
-        keys=config_keys(root),
-        prompts=prompts(root),
-    )
-
-
-def launch_changed(root: Path, name: str, state_dir: Path, session: str) -> bool:
-    """Whether window <name> would be launched now, by the version in <root>, with anything other
-    than what its last launch recorded. `launch --fingerprint` of that version reads the files under
-    the install from <root> itself, so this holds before the switch too (R35). A window with no
-    record, or one the fingerprint refuses, counts as changed: what it runs with is unknown."""
-    recorded = launch_record.recorded(state_dir, session, name)
-    done = _bosun(root, "launch", "--fingerprint", name)
-    if recorded is None or done.returncode != 0:
-        return True
-    try:
-        now = json.loads(done.stdout)
-    except ValueError:
-        return True
-    return bool(recorded.get("fingerprint") != now)
-
-
-def _window(root: Path, window: dict[str, Any], state_dir: Path, session: str) -> WindowFacts:
-    name = str(window.get("name"))
-    kind = WINDOW_KINDS.get(str(window.get("kind")), "repo")
-    agent = window.get("agent")
-    status = str(agent.get("status") or "unknown") if isinstance(agent, dict) else "exited"
-    changed = kind != "checkin" and launch_changed(root, name, state_dir, session)
-    return WindowFacts(name, kind, status, changed)
-
-
-def _open_windows(root: Path) -> list[dict[str, Any]]:
-    """The windows open in the session (`bosun sessions --json` of the version in <root>)."""
-    try:
-        listed = json.loads(_bosun(root, "sessions", "--json").stdout or "[]")
-    except ValueError:
-        return []
-    return [w for w in listed if isinstance(w, dict) and w.get("window")] if isinstance(listed, list) else []
-
-
-def window_facts(root: Path) -> list[WindowFacts]:
-    """Each window open in the session: its kind, its agent's status, and whether what the version in
-    <root> would launch it with differs from what it was launched with (launch_changed)."""
-    where = folders()
-    return [_window(root, w, where.state_dir, where.session) for w in _open_windows(root)]
-
-
-def missing(root: Path) -> list[str]:
-    """What the version in <root> needs and this Mac lacks (its `bosun preflight`), as blockers;
-    nothing with BOSUN_SKIP_PREFLIGHT=1, as for `bosun init`."""
-    if os.environ.get("BOSUN_SKIP_PREFLIGHT") == "1":
-        return []
-    done = _bosun(root, "preflight", "--quiet")
-    if done.returncode == 0:
-        return []
-    said = done.stdout.split(PREFLIGHT_NEXT, 1)[0]
-    lines = [" ".join(line.split()) for line in said.splitlines() if line.startswith("  ")]
-    if not lines:
-        last = (done.stdout + done.stderr).strip().splitlines()[-1:] or ["it failed"]
-        return [f"the new version's preflight: {last[0]}"]
-    return [f"the new version needs what this Mac lacks: {line} (bosun preflight says how)" for line in lines]
-
-
-def console_running(state_dir: Path) -> bool:
-    """Whether a console runs on the stores in <state_dir> (it holds a lock in its state folder)."""
-    return console_token.running(state_dir)
-
-
-def in_flight(state_dir: Path, config_dir: Path) -> list[tuple[str, str]]:
-    """Each item handed to a repo session whose work is not done, and its task type, where the
-    session got the type's built-in text: a type the site replaces in $BOSUN_CONFIG_DIR/tasks/ is
-    left out, since an update never changes the site's file."""
-    try:
-        items = ledger.load_at(state_dir)["items"]
-    except ledger.LedgerError:
-        return []  # store_formats names it
-    found = []
-    for item_id, item in items.items():
-        delegation = item.get("delegation")
-        if not isinstance(delegation, dict) or not ledger.is_open(item) or not ledger.awaiting_report(item):
-            continue
-        task = str(delegation.get("task") or "")
-        if task and not (config_dir / "tasks" / f"{task}.md").is_file():
-            found.append((item_id, task))
-    return sorted(found)
-
-
-def deletion_cut_short(state_dir: Path, config_dir: Path) -> tuple[bool, list[str]]:
-    """Whether a deletion of a person in the knowledge base was cut short (knowledge.
-    deletion_cut_short), and a blocker if the knowledge base cannot be read to tell."""
-    knowledge.configure(config_dir / update_gate.KNOWLEDGE_DIR, git=False, state_dir=str(state_dir))
-    try:
-        return knowledge.deletion_cut_short(), []
-    except (*STORE_ERRORS, OSError) as exc:
-        return False, [f"the knowledge base cannot be read to check for a deletion cut short: {exc}"]
-
-
-def dangling_links(state_dir: Path, config_dir: Path) -> list[str]:
-    """A blocker for each link among what a backup copies (update_backups.backup_set) that leads
-    nowhere: the backup could not copy it, and would fail inside the freeze."""
-    return [
-        f"{path} is a link to {os.readlink(path)}, which is not there, so no backup can copy it: "
-        "remove the link, or put back what it leads to"
-        for _relative, path in update_backups.backup_set(state_dir, config_dir)
-        if path.is_symlink() and not path.exists()
-    ]
-
-
-def install_problem(old_root: Path, new_root: Path) -> list[str]:
-    """A blocker unless both versions are folders beside the one install link."""
-    install = install_paths.install_path(new_root)
-    if install == new_root or install_paths.install_path(old_root) != install or not install.is_symlink():
-        problem = (
-            f"bosun update moves an install with its versions side by side ({install} a link to one of "
-            f"them); {old_root} and {new_root} are not that"
-        )
-        return [problem]
-    return []
-
-
-def config_renames(config_dir: Path) -> list[tuple[str, str]]:
-    """Each config key bosun.env sets that this version renamed or removed, and its name now ("":
-    removed)."""
-    try:
-        text = (config_dir / migrations.CONFIG_FILE).read_bytes().decode("utf-8", "surrogateescape")
-    except FileNotFoundError:
-        return []
-    assigned = {m["key"] for line in text.splitlines() if (m := migrations.ASSIGNMENT.match(line))}
-    return sorted((old, new) for old, new in migrations.config_names().items() if old in assigned)
-
-
-def jobs(root: Path) -> tuple[list[str], list[str]]:
-    """The launchd jobs the version in <root> would reload (reload_changed_jobs --dry-run), and a
-    blocker if it cannot render them."""
-    done = _shell(root, "reload_changed_jobs --dry-run")
-    if done.returncode != 0:
-        return [], [f"the new version cannot render its launchd jobs: {done.stderr.strip() or 'it failed'}"]
-    return done.stdout.split(), []
-
-
-def commits(root: Path, old: str, new: str) -> list[str]:
-    """The commits from <old> to <new>, newest first, as "<short> <subject>"."""
-    return _git(root, "log", "--format=%h %s", f"{old}..{new}").splitlines()
-
-
-def _steps(store: str, found: int, target: int) -> list[tuple[int, int]]:
-    return [(m.from_version, m.to_version) for m in migrations.path(store, found, target)]
-
-
-def plan_for(old_root: Path, new_root: Path, state_dir: Path, config_dir: Path) -> Plan:
-    """The plan from the version in <old_root> to the one in <new_root> (this code), for the data in
-    <state_dir> and <config_dir>: update_plan.make_plan over the facts gathered here, with what else
-    stops an update (a store whose format cannot be read, a link a backup cannot copy, versions not
-    side by side) among its blockers."""
-    old, new = live_facts(state_dir, config_dir, old_root), new_facts(new_root)
-    cut_short, unreadable_kb = deletion_cut_short(state_dir, config_dir)
-    reloads, unrenderable = jobs(new_root)
-    plan = update_plan.make_plan(
-        old,
-        new,
-        commits=commits(new_root, old.commit, new.commit),
-        windows=window_facts(new_root),
-        jobs=reloads,
-        renames=config_renames(config_dir),
-        user_changes=migrations.USER_FILE_CHANGES,
-        in_flight=in_flight(state_dir, config_dir),
-        missing=missing(new_root),
-        deletion_cut_short=cut_short,
-        console=console_running(state_dir),
-        steps=_steps,
-    )
-    extra = [
-        *store_formats(state_dir, config_dir)[1],
-        *unreadable_kb,
-        *unrenderable,
-        *dangling_links(state_dir, config_dir),
-        *install_problem(old_root, new_root),
-    ]
-    return dataclasses.replace(plan, blockers=(*plan.blockers, *extra))
 
 
 # ---- the rehearsal -----------------------------------------------------------------------------
@@ -519,9 +200,10 @@ def freeze(state: UpdateState, plan: Plan, state_dir: Path, config_dir: Path) ->
     """Back up, migrate, switch and check under both stores' write locks (update_gate.store_locks:
     the ledger's, then the knowledge base's), each step recorded before it starts. Any failure,
     Ctrl-C included, puts it all back and records `failed` with the error. Records how long writes
-    waited, freeze_ms."""
-    started = time.monotonic()
+    were paused, freeze_ms: from the locks taken to their release (a writer that held a lock when the
+    freeze began delays it, but paused nothing meanwhile)."""
     with update_gate.store_locks(state_dir, config_dir):
+        started = time.monotonic()
         try:
             state = _frozen(state, plan, state_dir, config_dir)
         except BaseException as exc:  # noqa: BLE001 - every failure inside the freeze is put back
@@ -535,7 +217,7 @@ def freeze(state: UpdateState, plan: Plan, state_dir: Path, config_dir: Path) ->
 
 def _reload_jobs(root: Path) -> list[str]:
     """The launchd jobs whose plist the version in <root> changes, reloaded; a finding if not."""
-    done = _shell(root, "reload_changed_jobs")
+    done = update_facts.shell(root, "reload_changed_jobs")
     for label in done.stdout.split():
         Output.say(f"  reloaded the launchd job {label}")
     return (
@@ -546,9 +228,9 @@ def _reload_jobs(root: Path) -> list[str]:
 def _restart_checkin_loop(root: Path) -> list[str]:
     """The check-in loop restarted on the version in <root>, if a checkin window is open; a finding
     if that fails."""
-    if not any(w.get("kind") == "checkin" for w in _open_windows(root)):
+    if not any(w.get("kind") == "checkin" for w in update_facts.open_windows(root)):
         return []
-    done = _bosun(root, "refresh", "--checkin-loop")
+    done = update_facts.bosun(root, "refresh", "--checkin-loop")
     if done.returncode == 0:
         Output.say("  restarted the check-in loop")
         return []
@@ -557,7 +239,7 @@ def _restart_checkin_loop(root: Path) -> list[str]:
 
 def _doctor(root: Path) -> list[str]:
     """What `bosun doctor` of the version in <root> fails or warns about, a line each."""
-    done = _bosun(root, "doctor")
+    done = update_facts.bosun(root, "doctor")
     return [f"{kind}: {what}" for kind, what in DOCTOR_LINE.findall(done.stdout)]
 
 
@@ -707,30 +389,21 @@ def _said_done(state: UpdateState) -> int:
     return 0
 
 
-def _update(
-    old_root: Path, new_root: Path, where: Folders, args: argparse.Namespace
-) -> tuple[int, Plan, UpdateState | None]:
+@dataclass
+class Said:
+    """What --json prints besides the update's record: the plan, once one is made."""
+
+    plan: Plan | None = None
+
+
+def _update(old_root: Path, where: Folders, args: argparse.Namespace, said: Said) -> int:
     """Under update.lock: the plan, shown; then, said yes to, carried out."""
-    plan = plan_for(old_root, new_root, where.state_dir, where.config_dir)
+    plan = said.plan = update_facts.plan_for(old_root, ROOT, where.state_dir, where.config_dir)
     _show(plan, args.json)
     if plan.blockers or not _go_ahead(args.yes):
-        return (BLOCKED if plan.blockers else 0), plan, None
-    state = _carried_out(plan, old_root, new_root, where)
-    return (_said_done(state) if state.step == "done" else _failed(state)), plan, state
-
-
-def _dry_run(old_root: Path, new_root: Path, where: Folders, args: argparse.Namespace) -> tuple[int, Plan]:
-    running = update_state.read(where.state_dir)
-    if update_state.running(where.state_dir):
-        raise update_state.UpdateRunning(*_who(running))
-    if running is not None and running.step not in FINISHED:
-        Output.say(
-            f"(an update stopped at step {running.step}: bosun update without --dry-run carries it on)"
-        )
-    plan = plan_for(old_root, new_root, where.state_dir, where.config_dir)
-    _show(plan, args.json)
-    Output.say("A dry run: nothing has changed.")
-    return (BLOCKED if plan.blockers else 0), plan
+        return BLOCKED if plan.blockers else 0
+    state = _carried_out(plan, old_root, ROOT, where)
+    return _said_done(state) if state.step == "done" else _failed(state)
 
 
 def _who(state: UpdateState | None) -> tuple[str, str, str]:
@@ -744,6 +417,15 @@ def installed(from_root: Path) -> Path:
     return current.resolve() if current is not None else from_root.resolve()
 
 
+def _is_this_one(old_root: Path) -> bool:
+    """Whether the version the link leads to is this one (nothing new on the branch)."""
+    return versions.commit_of(old_root) == versions.commit_of(ROOT)
+
+
+def _say_up_to_date() -> None:
+    Output.say(f"bosun is up to date ({_short(versions.commit_of(ROOT))}).")
+
+
 def _resumed_line(state: UpdateState) -> str:
     what = {"restored": "put back", "failed": "ended (it was cut short before anything changed)"}
     return (
@@ -752,27 +434,48 @@ def _resumed_line(state: UpdateState) -> str:
     )
 
 
-def run(args: argparse.Namespace) -> int:
-    """`bosun update`, handed over by the wrapper: an update cut short carried on first (not in a dry
-    run), then up to date, or the plan and, said yes to, the update."""
-    where = folders()
-    Output.to_stderr = args.json
-    if not args.dry_run and (resumed := resume(where.state_dir)) is not None:
-        Output.say(_resumed_line(resumed))
-    old_root, new_root = installed(Path(args.from_root)), ROOT
-    if versions.commit_of(old_root) == versions.commit_of(new_root):
-        Output.say(f"bosun is up to date ({_short(versions.commit_of(new_root))}).")
-        return 0
-    state: UpdateState | None = None
-    if args.dry_run:
-        code, plan = _dry_run(old_root, new_root, where, args)
-    else:
-        with update_state.one_update(where.state_dir):
-            code, plan, state = _update(old_root, new_root, where, args)
-    if args.json:
-        update = dataclasses.asdict(state) if state else None
-        print(json.dumps({"plan": dataclasses.asdict(plan), "update": update}, indent=2))
+def _dry_run(where: Folders, args: argparse.Namespace, said: Said) -> int:
+    """The plan alone. An update cut short is never carried on or put back here (that changes
+    things): it is said first, and while it is there bosun is not called up to date."""
+    recorded = update_state.read(where.state_dir)
+    if update_state.running(where.state_dir):
+        raise update_state.UpdateRunning(*_who(recorded))
+    stopped = recorded is not None and recorded.step not in FINISHED
+    if recorded is not None and stopped:
+        Output.say(
+            f"(an update stopped at step {recorded.step}: bosun update without --dry-run carries it on, "
+            "or puts it back)"
+        )
+    old_root = installed(Path(args.from_root))
+    code = 0
+    if not _is_this_one(old_root):
+        said.plan = update_facts.plan_for(old_root, ROOT, where.state_dir, where.config_dir)
+        _show(said.plan, args.json)
+        code = BLOCKED if said.plan.blockers else 0
+    elif not stopped:
+        _say_up_to_date()
+    Output.say("A dry run: nothing has changed.")
     return code
+
+
+def _for_real(where: Folders, args: argparse.Namespace, said: Said) -> int:
+    """An update cut short carried on first; then, under update.lock (an update running is refused
+    here, whatever its step, before anything is called up to date), up to date or the update."""
+    resumed = resume(where.state_dir)
+    if resumed is not None:
+        Output.say(_resumed_line(resumed))
+    with update_state.one_update(where.state_dir):
+        old_root = installed(Path(args.from_root))
+        if _is_this_one(old_root):
+            _say_up_to_date()
+            return 0
+        return _update(old_root, where, args, said)
+
+
+def run(args: argparse.Namespace, said: Said) -> int:
+    """`bosun update`, handed over by the wrapper: a dry run, or the update itself."""
+    where = folders()
+    return _dry_run(where, args, said) if args.dry_run else _for_real(where, args, said)
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -792,10 +495,32 @@ def _unreadable(exc: update_state.RecordUnreadable) -> str:
     )
 
 
-def main(argv: Sequence[str]) -> int:
-    args = build_parser().parse_args(list(argv))
+def _record_now() -> dict[str, Any] | None:
+    """The update's record as it stands, for --json; None without one (or one that cannot be read)."""
     try:
-        return run(args)
+        state = update_state.load(folders().state_dir)
+    except (UpdateRefused, update_state.RecordUnreadable):
+        return None
+    return dataclasses.asdict(state) if state else None
+
+
+def main(argv: Sequence[str]) -> int:
+    """The command, and with --json one object on stdout on every path: the plan (null when none was
+    made: up to date, refused, a failure before it) and the update's record as it stands."""
+    args = build_parser().parse_args(list(argv))
+    Output.to_stderr = args.json
+    said = Said()
+    code = _said(args, said)
+    if args.json:
+        plan = dataclasses.asdict(said.plan) if said.plan else None
+        print(json.dumps({"plan": plan, "update": _record_now()}, indent=2))
+    return code
+
+
+def _said(args: argparse.Namespace, said: Said) -> int:
+    """run, with what stops it said in one line (exit 1)."""
+    try:
+        return run(args, said)
     except update_state.RecordUnreadable as exc:
         print(f"bosun update: {_unreadable(exc)}", file=sys.stderr)
     except (UpdateRefused, update_state.UpdateRunning) as exc:

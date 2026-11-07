@@ -996,39 +996,55 @@ render_job() { # <label>
 
 job_loaded() { launchctl print "gui/$(id -u)/$1" >/dev/null 2>&1; } # <label>
 
-# Job <label> unloaded, then, from the plist <rendered> (empty: the job is not wanted), written as
-# <installed> and loaded again; or its plist removed.
+# Job <label> unloaded, then, from the plist <rendered> (checked already; empty: the job is no longer
+# wanted), written as <installed> and loaded again; or its plist removed.
 reload_job() { # <label> <rendered> <installed>
   launchctl bootout "gui/$(id -u)/$1" 2>/dev/null
   if [ ! -s "$2" ]; then
     rm -f "$3"
     return 0
   fi
-  plutil -lint -s "$2" || {
-    log "ERROR: the rendered plist of $1 is invalid" >&2
-    return 1
-  }
   mkdir -p "$(dirname "$3")" # a new macOS account may not have it yet
   if cp "$2" "$3" && launchctl bootstrap "gui/$(id -u)" "$3"; then return 0; fi
   log "ERROR: launchctl bootstrap failed for $3" >&2
   return 1
 }
 
+# Whether job <label> must be reloaded from <rendered>: it differs from <installed> or is not loaded,
+# or it is no longer wanted (<rendered> empty) and still installed. A rendered plist is checked
+# (plutil) before anything else happens to the job: one that is not valid is an error (exit 2), and the
+# job stays as it is.
+job_changed() { # <label> <rendered> <installed>
+  if [ ! -s "$2" ]; then
+    [ -e "$3" ]
+    return
+  fi
+  cmp -s "$2" "$3" && job_loaded "$1" && return 1
+  plutil -lint -s "$2" >&2 && return 0
+  log "ERROR: the rendered plist of $1 is invalid" >&2
+  return 2
+}
+
 # Each launchd job (render_job) written and reloaded where its plist differs from the installed one,
 # or it is not loaded; one no longer wanted unloaded and its plist removed. Prints the label of each
-# it changes; with --dry-run, only prints them. install.sh and `bosun update` (its plan, then its
-# release, from the new version's templates) use it.
+# it changes; with --dry-run, only prints them. A job whose plist cannot be rendered, or renders
+# invalid, fails it (exit 1, said on stderr) and is left as it is, never unloaded or removed; the
+# others go on. install.sh and `bosun update` (its plan, then its release, from the new version's
+# templates) use it.
 reload_changed_jobs() { # [--dry-run]
-  local label installed rendered status=0
+  local label installed rendered status=0 changed
   rendered="$(mktemp)" || return 1
   for label in "$BOSUN_LAUNCHD_LABEL" "$(watchdog_label)" "$(learn_label)"; do
     installed="$HOME/Library/LaunchAgents/$label.plist"
-    render_job "$label" >"$rendered" || status=1
-    if [ -s "$rendered" ]; then
-      cmp -s "$rendered" "$installed" && job_loaded "$label" && continue
-    elif [ ! -e "$installed" ]; then
+    if ! render_job "$label" >"$rendered"; then
+      log "ERROR: could not render the plist of $label" >&2
+      status=1
       continue
     fi
+    job_changed "$label" "$rendered" "$installed"
+    changed=$?
+    [ "$changed" = 2 ] && status=1
+    [ "$changed" = 0 ] || continue
     echo "$label"
     [ "${1:-}" = "--dry-run" ] || reload_job "$label" "$rendered" "$installed" || status=1
   done

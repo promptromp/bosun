@@ -2401,9 +2401,11 @@ if [ "$(bash -c 'source "$1/lib/common.sh"; command -v launchctl; command -v pms
   check "... changing nothing" bash -c '[ "$1" = "$2" ]' _ "$(u_files)" "$before"
 
   data_before="$(u_data)"
-  out="$(ub update --yes 2>&1)"
+  json="$(ub update --yes --json 2>"$U/failing.err")"
   rc=$?
+  out="$(cat "$U/failing.err")"
   check "a migration that fails while writes are paused fails the update (exit 1), which says it put everything back" bash -c '[ "$1" = 1 ] && grep -q "Everything is as it was" <<<"$2"' _ "$rc" "$out"
+  check "... with --json, what it says goes to stderr and stdout is one object: the plan and the record" jq -e '.plan.migrations == [["ledger", 1, 2]] and .update.step == "failed"' <<<"$json"
   check "... the link still at v1" u_at "$U_V1"
   check "... the data as it was" test "$(u_data)" = "$data_before"
   check "... and the record says failed, with the error" jq -e '.step == "failed" and (.error | contains("failed on purpose"))' "$U_STATE/update.json"
@@ -2429,7 +2431,7 @@ if [ "$(bash -c 'source "$1/lib/common.sh"; command -v launchctl; command -v pms
   guarding=$!
   out="$(ub update --yes 2>&1)"
   check "a second update while one runs is refused, naming when the first started" contains "$out" "an update is running (started $(jq -r .started_at "$U_STATE/update.json")"
-  check "a ledger write started on v1 while writes are paused waits" bash -c 'kill -0 "$1" && [ "$(jq -r .step "$2/update.json")" = migrated ]' _ "$writer" "$U_STATE"
+  check "a ledger write and an approval hook started on v1 while writes are paused wait" bash -c 'kill -0 "$1" && kill -0 "$2" && [ "$(jq -r .step "$3/update.json")" = migrated ]' _ "$writer" "$guarding" "$U_STATE"
   wait "$updating"
   check "the update ends well" u_ended_well $? "$U/update.out"
   wait "$writer"
@@ -2444,7 +2446,7 @@ if [ "$(bash -c 'source "$1/lib/common.sh"; command -v launchctl; command -v pms
   check "... it reloaded the launchd jobs, which run the link" bash -c 'grep -qF "$2/bin/bosun" "$1/Library/LaunchAgents/com.bosun.update-test.plist"' _ "$HOME" "$(cd "$U/share" && pwd -P)/bosun"
   check "... and deleted the folder of the version that failed, keeping v1's and v2's" bash -c '[ ! -e "$1/${2:0:12}" ] && [ -d "$3" ] && [ -d "$4" ]' _ "$U_VERSIONS" "$U_FAILING_COMMIT" "$U_V1" "$U_V2"
   check "the write that waited ran again on v2, and landed" bash -c '[ "$1" = 0 ] && [ "$(jq -r ".items[\"review:acme/api#3\"].title" "$2/ledger.json")" = "Written while paused" ]' _ "$writer_rc" "$U_STATE"
-  check "... once" test "$(grep -h -c 'Written while paused' "$U_STATE"/journal/ledger/*.jsonl | paste -sd+ - | bc)" = 1
+  check "... once" test "$(cat "$U_STATE"/journal/ledger/*.jsonl | grep -c 'Written while paused')" = 1
   check "a PreToolUse approval hook while writes are paused decides as without them" bash -c '[ -n "$1" ] && [ "$(cat "$2")" = "$1" ]' _ "$guard_before" "$U/guard.out"
 
   # An update cut short at each step of the freeze, laid out by hand: the record at the step, the
@@ -2533,6 +2535,7 @@ migrations.run(migrations.Context(pathlib.Path(sys.argv[2]), pathlib.Path(sys.ar
     }
   }
   check "with nothing new on the branch and nothing to carry on, bosun is up to date" u_up_to_date
+  check "... and with --json, stdout is the same object: no plan, the record as it stands" jq -e '.plan == null and .update.step == "done"' <<<"$(ub update --yes --json 2>/dev/null)"
   check "a checkout is updated with git, not bosun update" fails_with "is a checkout: update it with git" "${U_ENV[@]}" "$BOSUN" update --dry-run
 
   # A running session keeps the hook commands it was launched with: each of v1's runs on v2.
@@ -2551,6 +2554,27 @@ migrations.run(migrations.Context(pathlib.Path(sys.argv[2]), pathlib.Path(sys.ar
   }
   check "each hook command of v1's launch settings runs on v2 and exits 0 ($(grep -c . <<<"$u_hooks") of them)" u_run_hooks
   check "... each through the install link, never v1's own folder" bash -c '[ -n "$1" ] && ! grep -q "bosun-versions/" <<<"$1"' _ "$u_hooks"
+
+  # A next version whose launchd templates are broken: the morning job's fails to render, the
+  # watchdog's renders XML that is not valid. Nothing installed is unloaded or removed.
+  ug rm -q templates/launchd.plist
+  printf '<plist><dict><string>__LABEL__</string>\n' >"$U_UP/templates/launchd-watchdog.plist"
+  ug commit -qam "v3, its launchd templates broken"
+  U_V3_COMMIT="$(ug rev-parse HEAD)"
+  ub update --dry-run >"$U/broken-plan.out" 2>&1
+  check "a next version whose launchd templates are broken: its plan is blocked, naming each job" bash -c '
+    grep -q "The update is blocked." "$1" && grep -q "could not render the plist of com.bosun.update-test;" "$1" &&
+      grep -q "the rendered plist of com.bosun.update-test.watchdog is invalid" "$1"' _ "$U/broken-plan.out"
+  u_jobs="$HOME/Library/LaunchAgents/com.bosun.update-test"
+  cp "$u_jobs.plist" "$U/morning.plist"
+  cp "$u_jobs.watchdog.plist" "$U/watchdog.plist"
+  u_bootouts() { grep -c "launchctl bootout gui/$(id -u)/com.bosun.update-test" "$WORK/system.log"; }
+  bootouts="$(u_bootouts)"
+  "${U_ENV[@]}" bash -c 'source "$1/lib/common.sh"; load_config; reload_changed_jobs' _ "$U_VERSIONS/${U_V3_COMMIT:0:12}" >/dev/null 2>&1
+  rc=$?
+  check "... and reloading its jobs fails (exit 1), leaving each installed plist as it was, and loaded" bash -c '
+    [ "$1" = 1 ] && cmp -s "$2.plist" "$3/morning.plist" && cmp -s "$2.watchdog.plist" "$3/watchdog.plist" && [ "$4" = "$5" ]' \
+    _ "$rc" "$u_jobs" "$U" "$bootouts" "$(u_bootouts)"
 else
   failed=$((failed + 1))
   echo "  FAIL  fake launchctl/pmset are not first on PATH; skipped install tests"

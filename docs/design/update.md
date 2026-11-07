@@ -2,8 +2,9 @@
 
 Status: approved 2026-11-05. Part A, the groundwork, is built: the two paths, the stores' formats, the
 update's record and hold, backups, version folders, the write gate and the migration registry.
-`bosun update` plans, rehearses, holds, freezes and releases (`lib/update.py`, behind the wrapper
-`libexec/bosun-update`); bringing the agents along and the summary are still to come. The plan:
+`bosun update` plans, rehearses, holds, freezes and releases (`lib/update_facts.py` gathers the plan's
+facts, `lib/update.py` carries it out, behind the wrapper `libexec/bosun-update`); bringing the agents
+along and the summary are still to come. The plan:
 [docs/plans/update.md](../plans/update.md).
 
 ## Why
@@ -498,9 +499,12 @@ Decided while building it:
 - **The update's record**, `update.json`: the update's id, both versions' folders and commits, its
   step, when it started, when its hold ends, the backup and what of it a put-back restores, the
   windows still to bring along, the changes to my own files, how long writes were paused
-  (`freeze_ms`), the error, and the findings after the switch (`bosun doctor`'s, and a job that
+  (`freeze_ms`, from the stores' locks taken to their release), the error, and the findings after the switch (`bosun doctor`'s, and a job that
   could not be reloaded). Each step is recorded before it starts, and the backup once it is taken, so
   no step past `backed-up` is recorded without it.
+- **The launchd jobs:** a job is reloaded only where its rendered plist differs or it is not loaded,
+  and each rendered plist is checked before the job is touched. One that cannot be rendered, or renders
+  invalid, blocks the plan, and in the release it is a finding while the installed job stays loaded.
 - **The plan before the switch** asks the new version: its `launch --fingerprint` reads the files
   under the install from its own folder. A window with no launch record counts as changed.
 - **The rehearsal's copy** is taken under both stores' shared locks, so it is whole; writes wait only

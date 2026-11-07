@@ -32,8 +32,9 @@ _RENAME_EXCHANGE = 2
 _AT_FDCWD = -100
 
 
-def _git(*args: str, cwd: Path | None = None) -> subprocess.CompletedProcess[str]:
-    """git with no inherited GIT_* variables and none of the user's hooks."""
+def git(*args: str, cwd: Path | None = None) -> subprocess.CompletedProcess[str]:
+    """git with no inherited GIT_* variables (a git hook's, another repository's tooling) and none of
+    the user's hooks; its output kept, decoded tolerantly. bosun update's git goes through it too."""
     env = {k: v for k, v in os.environ.items() if not k.startswith("GIT_")}
     return subprocess.run(
         ["git", "-c", "core.hooksPath=/dev/null", *args],
@@ -41,13 +42,14 @@ def _git(*args: str, cwd: Path | None = None) -> subprocess.CompletedProcess[str
         env=env,
         capture_output=True,
         text=True,
+        errors="replace",
         check=False,
     )
 
 
 def commit_of(root: Path) -> str:
     """The commit checked out in `root`."""
-    done = _git("-C", str(root), "rev-parse", "HEAD")
+    done = git("-C", str(root), "rev-parse", "HEAD")
     if done.returncode != 0:
         raise RuntimeError(f"cannot read the commit of {root}: {done.stderr.strip()}")
     return done.stdout.strip()
@@ -190,7 +192,7 @@ def _remove(versions: Path, folder: Path) -> bool:
     if folder.name.startswith(LEGACY_PREFIX):
         shutil.rmtree(folder)
         return True
-    done = _git("-C", str(versions / install_paths.REPO), "worktree", "remove", "--force", str(folder))
+    done = git("-C", str(versions / install_paths.REPO), "worktree", "remove", "--force", str(folder))
     return done.returncode == 0 and not folder.exists()
 
 

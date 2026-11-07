@@ -22,7 +22,8 @@
 # checks had passed. With nothing new on the branch it says bosun is up to date.
 #   --dry-run  show the plan, and change nothing
 #   --yes      go ahead without asking
-#   --json     the plan and the update's record as one JSON object (what it says goes to stderr)
+#   --json     one JSON object on every path: the plan (null when none was made: up to date, refused)
+#              and the update's record as it stands; what it says goes to stderr
 #
 # What the agents and the check-in loop run while it brings the windows along:
 #   bosun update note ...   a window's status, after the update's prompt
