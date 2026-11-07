@@ -22,9 +22,10 @@ update.json (lib/update_state.py) before it starts it:
 - checked: writes go on. released: the jobs reloaded, the check-in loop restarted while the hold is
   still on (R36), then the hold lifted; what went wrong after the switch and what bosun doctor finds
   are kept as findings (reported, never rolled back); old backups and version folders pruned.
-- agents: each window the plan gives something to do is brought along (lib/update_agents.py) until it
-  answers with `bosun update note`; Ctrl-C leaves those still waited for to the check-in loop, whose
-  `bosun update advance` carries on. done once none is left.
+- agents: each window the plan gives something to do is brought along (lib/update_agents.py decides,
+  lib/update_windows.py carries it out) until it answers with `bosun update note`; Ctrl-C leaves those
+  still waited for to the check-in loop, whose `bosun update advance` carries on. done once none is
+  left.
 
 While it holds update.lock, this process never writes a store through the stores' write path (their
 gate would see this very lock and refuse): the migrations write the files directly, and what the
@@ -59,6 +60,7 @@ import update_facts
 import update_gate
 import update_plan
 import update_state
+import update_windows
 import validation
 import versions
 from update_facts import Folders, UpdateRefused, folders
@@ -72,7 +74,7 @@ FINISHED = ("done", "failed", "restored")
 BEFORE_FREEZE = ("planned", "rehearsed", "holding")
 BLOCKED = 1
 USAGE = 2
-AGENT_COMMANDS = ("note", "advance")  # what the agents and the check-in loop run (lib/update_agents.py)
+AGENT_COMMANDS = ("note", "advance")  # what the agents and the check-in loop run (lib/update_windows.py)
 DOCTOR_LINE = re.compile(r"^  (FAIL|warn)  (.*)$", re.MULTILINE)
 
 
@@ -275,15 +277,26 @@ def release(state: UpdateState) -> UpdateState:
 # ---- an update cut short ------------------------------------------------------------------------
 
 
+class WaitStopped(Exception):
+    """Ctrl-C stopped the wait of an update carried on: the command ends there."""
+
+    def __init__(self, state: UpdateState) -> None:
+        super().__init__("stopped waiting")
+        self.state = state
+
+
 def _brought_along(state: UpdateState) -> UpdateState:
     """An update cut short after its release: its windows brought along by a plan made again from its
     two versions (the link already leads to the new one, which the plan compares each window's launch
-    with, as before the switch)."""
+    with, as before the switch). WaitStopped when Ctrl-C stopped that wait."""
     where = folders()
     plan = update_facts.plan_for(
         Path(state.from_root), Path(state.to_root), where.state_dir, where.config_dir
     )
-    return update_agents.bring_along(state, plan, say=Output.say)
+    state = update_windows.bring_along(state, plan, say=Output.say)
+    if state.pending:
+        raise WaitStopped(state)
+    return state
 
 
 def _carry_on(state_dir: Path) -> UpdateState | None:
@@ -403,7 +416,12 @@ def _carried_out(plan: Plan, old_root: Path, new_root: Path, where: Folders) -> 
     Output.say(f"Writes went on after {state.freeze_ms} ms. Releasing...")
     state = release(state)
     Output.say("Bringing the agents along...")
-    return update_agents.bring_along(state, plan, say=Output.say)
+    return update_windows.bring_along(state, plan, say=Output.say)
+
+
+def _say_outcomes(state_dir: Path, state: UpdateState) -> None:
+    for window, outcome in update_agents.outcomes(state, update_windows.Files(state_dir)):
+        Output.say(f"  {window}: {outcome}")
 
 
 def _said_done(state: UpdateState, state_dir: Path) -> int:
@@ -411,8 +429,7 @@ def _said_done(state: UpdateState, state_dir: Path) -> int:
     Output.say(f"  writes paused for {state.freeze_ms} ms; the backup: {state.backup}")
     for finding in state.findings:
         Output.say(f"  {finding}")
-    for window, outcome in update_agents.outcomes(state_dir, state):
-        Output.say(f"  {window}: {outcome}")
+    _say_outcomes(state_dir, state)
     return 0
 
 
@@ -454,16 +471,14 @@ def _say_up_to_date() -> None:
 
 
 def _resumed_line(state: UpdateState) -> str:
-    what = {
-        "restored": "put back",
-        "failed": "ended (it was cut short before anything changed)",
-        "agents": f"carried on; the check-in loop brings along {', '.join(state.pending)}, each once "
-        "its turn is over",
-    }
-    return (
-        f"An update from {_short(state.from_commit)} to {_short(state.to_commit)} that was cut short: "
-        f"{what.get(state.step, 'carried on to the end')}."
-    )
+    """What became of an update found cut short (resume): put back, ended, carried on to the end, or,
+    at `agents`, nothing: its windows are still brought along, and who finishes them."""
+    versions_ = f"An update from {_short(state.from_commit)} to {_short(state.to_commit)}"
+    if state.step == "agents":
+        finishes = update_windows.who_finishes(Path(state.to_root), state.pending)
+        return f"{versions_} still brings windows along: {finishes}."
+    what = {"restored": "put back", "failed": "ended (it was cut short before anything changed)"}
+    return f"{versions_} that was cut short: {what.get(state.step, 'carried on to the end')}."
 
 
 def _dry_run(where: Folders, args: argparse.Namespace, said: Said) -> int:
@@ -494,12 +509,26 @@ def _dry_run(where: Folders, args: argparse.Namespace, said: Said) -> int:
     return code
 
 
+def _carried_on(state_dir: Path) -> bool:
+    """An update cut short carried on first (resume), and what became of it said, with each window's
+    outcome once it brought them along; False when Ctrl-C stopped that wait, which ends the command."""
+    try:
+        resumed = resume(state_dir)
+    except WaitStopped as stopped:
+        _say_outcomes(state_dir, stopped.state)
+        return False
+    if resumed is not None:
+        Output.say(_resumed_line(resumed))
+        if resumed.step in ("done", "agents"):
+            _say_outcomes(state_dir, resumed)
+    return True
+
+
 def _for_real(where: Folders, args: argparse.Namespace, said: Said) -> int:
     """An update cut short carried on first; then, under update.lock (an update running is refused
     here, whatever its step, before anything is called up to date), up to date or the update."""
-    resumed = resume(where.state_dir)
-    if resumed is not None:
-        Output.say(_resumed_line(resumed))
+    if not _carried_on(where.state_dir):
+        return 0
     with update_state.one_update(where.state_dir):
         old_root = installed(Path(args.from_root))
         if _is_this_one(old_root):
@@ -568,8 +597,8 @@ def _note(state_dir: Path, window: str, kind: str) -> int:
         print("bosun update note: the note on stdin is empty; nothing saved", file=sys.stderr)
         return 1
     try:
-        update_agents.note(state_dir, window, kind, text)
-    except update_agents.NoteRefused as exc:
+        update_windows.note(state_dir, window, kind, text)
+    except update_windows.NoteRefused as exc:
         print(f"bosun update note: {exc}", file=sys.stderr)
         return USAGE
     print(f"bosun update: noted the {kind} of {window}")
@@ -582,7 +611,9 @@ def _advance(state_dir: Path) -> int:
     try:
         with update_state.one_update(state_dir):
             if update_state.windows_pending(state_dir):
-                update_agents.turn(state_dir, lambda line: print(f"bosun update: {line.strip()}", flush=True))
+                update_windows.turn(
+                    state_dir, lambda line: print(f"bosun update: {line.strip()}", flush=True)
+                )
     except update_state.UpdateRunning:
         pass  # the update brings them along itself
     return 0

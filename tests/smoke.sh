@@ -962,11 +962,24 @@ launched_with_update_prompt() {
 }
 wait_for 10 launched_with_update_prompt gamma
 gamma_pane="$(pane_of gamma)"
+# gamma has a conversation of its own to resume, so its relaunch is a resume, with the update's prompt.
+make_session "$REPO_B" 22222222-0000-0000-0000-000000000002 gamma 202601020000
 check "... relaunches one whose agent is not running, with the update's prompt" update_restart gamma
 check "... (it runs launch again)" wait_for 10 launched_with_update_prompt gamma "$gamma_pane"
 tmux -L "$SOCKET" kill-window -t "=smoke:gamma"
 check "... and creates a missing one, with that prompt" contains "$(update_restart gamma 2>&1)" "gamma: create the missing window"
 check "... (its launch has it)" wait_for 10 launched_with_update_prompt gamma
+wait_for 10 bash -c '[ -z "$(pgrep -P "$(tmux -L "$1" display -p -t =smoke:gamma "#{pane_pid}")")" ]' _ "$SOCKET"
+gamma_pane="$(pane_of gamma)"
+echo "gamma-$(date +%F)-1" >"$BOSUN_STATE_DIR/conversations/gamma"
+check "... and with a fresh conversation pending, one whose agent is not running starts that one, not with the update's prompt, and exits 4" bash -c '
+  out="$("$1" refresh --update-restart "$2" gamma 2>&1)"
+  [ $? -eq 4 ] && grep -qF "gamma: its launch starts a new conversation (gamma-$(date +%F)-1)" <<<"$out"' _ "$BOSUN" "$WORK/update-prompt"
+check "... (its launch has the fresh conversation's prompt)" wait_for 10 bash -c '
+  [ "$(tmux -L "$1" display -p -t =smoke:gamma "#{pane_pid}")" != "$2" ] && screen="$(tmux -L "$1" capture-pane -p -J -S -500 -t =smoke:gamma)" &&
+    grep -qF -e "--name gamma-$3-1 " <<<"$screen" && grep -q "fresh.*conversation" <<<"$screen" && ! grep -q bosun-was-updated <<<"$screen"' \
+  _ "$SOCKET" "$gamma_pane" "$(date +%F)"
+rm -f "$BOSUN_STATE_DIR/conversations/gamma"
 cat >"$WORK/typing-claude.sh" <<'SH'
 printf '%s\n\342\235\257 half a prompt\n%s\n' "────────────────────" "────────────────────"
 exec sleep 600
@@ -1135,6 +1148,13 @@ check "refresh --update-restart restarts an orchestrator still on yesterday's co
   [ $? -eq 4 ] && grep -qF "orch: restart for the update (idle), into orch-$(date +%F), as its next conversation starts" <<<"$out"' _ "$BOSUN" "$WORK/update-prompt"
 check "... starting today's with the morning chores" wait_for 10 launched_with_morning_chores "$orch_pane"
 check "... not with the update's prompt" bash -c '! tmux -L "$1" capture-pane -p -J -S -500 -t "=smoke:orch" | grep -q bosun-was-updated' _ "$SOCKET"
+wait_for 10 bash -c '[ -z "$(pgrep -P "$(tmux -L "$1" display -p -t =smoke:orch "#{pane_pid}")")" ]' _ "$SOCKET"
+orch_pane="$(tmux -L "$SOCKET" display -p -t "=smoke:orch" '#{pane_pid}')"
+check "... and one whose agent exited, today's conversation not there yet, is relaunched as a new day starts, and exits 4" bash -c '
+  out="$("$1" refresh --update-restart "$2" orch 2>&1)"
+  [ $? -eq 4 ] && grep -qF "orch: its launch starts a new conversation (orch-$(date +%F))" <<<"$out"' _ "$BOSUN" "$WORK/update-prompt"
+check "... with the morning chores" wait_for 10 launched_with_morning_chores "$orch_pane"
+check "... never the update's prompt in a blank conversation" bash -c '! tmux -L "$1" capture-pane -p -J -S -500 -t "=smoke:orch" | grep -q bosun-was-updated' _ "$SOCKET"
 wait_for 10 bash -c '[ -z "$(pgrep -P "$(tmux -L "$1" display -p -t =smoke:orch "#{pane_pid}")")" ]' _ "$SOCKET"
 orch_pid="$(fake_claude orch idle 2.0.0 3600 orch-2000-01-01)"
 printf '{"pid":%d,"status":"idle","version":"2.0.0","statusUpdatedAt":%d,"name":"orch-2000-01-01"}' "$orch_pid" $((($(date +%s) - 30) * 1000)) >"$HOME/.claude/sessions/$orch_pid.json"
@@ -1530,9 +1550,12 @@ check "... keeping its --model and --effort, with the update's prompt" bash -c '
 zeta_pid="$(claude_in zeta)"
 kill "$zeta_pid"
 wait_for 10 bash -c '! pgrep -P "$(tmux -L "$1" display -p -t =smoke:zeta "#{pane_pid}")" >/dev/null' _ "$SOCKET"
+# A real Claude leaves its conversation to resume; this fake writes none, so zeta is given one.
+make_session "$REPO_A" 44444444-0000-0000-0000-000000000001 zeta 202601040000
 check "... and once its agent has exited, an update's restart" env BOSUN_LAUNCH_DRY_RUN=0 "$BOSUN" refresh --update-restart "$WORK/update-prompt" zeta
 check "... starts it again" wait_for 15 another_claude_in zeta "$zeta_pid"
-check "... keeping them too" bash -c 'grep -qx haiku "$1.args" && grep -q "\"effortLevel\":\"low\"" "$1.args"' _ "$WORK/live-claude.$(claude_in zeta)"
+check "... keeping them too, resuming its conversation with the update's prompt" bash -c '
+  grep -qx haiku "$1.args" && grep -q "\"effortLevel\":\"low\"" "$1.args" && [ "$(cat "$1.prompt")" = bosun-was-updated:check-in ]' _ "$WORK/live-claude.$(claude_in zeta)"
 echo "BOSUN_HARNESS=codex" >"$BOSUN_CONFIG_DIR/bosun.env"
 check "a send --new window launched on Claude, the default agent now Codex, fingerprints the same" bash -c '
   [ "$(cd / && "$1" launch --fingerprint zeta | jq -cS .)" = "$(jq -cS .fingerprint "$2/launches/smoke/zeta.json")" ]' _ "$BOSUN" "$BOSUN_STATE_DIR"
@@ -2650,9 +2673,9 @@ FAKE
   kill -INT "$updating"
   wait "$updating"
   rc=$?
-  check "Ctrl-C stops the wait (exit 0), leaving the busy window to the check-in loop, the record at agents" bash -c '
-    [ "$1" = 0 ] && grep -q "Stopped waiting: the check-in loop brings along u-busy" "$2" && jq -e ".step == \"agents\" and .pending == [\"u-busy\"]" "$3/update.json" >/dev/null' \
-    _ "$rc" "$U/agents.out" "$U_STATE"
+  check "Ctrl-C stops the wait (exit 0), the record at agents; with no check-in loop running, it says bosun update advance finishes the busy window" bash -c '
+    [ "$1" = 0 ] && grep -q "Stopped waiting: no check-in loop runs here: bosun update advance, run by hand, takes a turn at u-busy" "$2" &&
+      jq -e ".step == \"agents\" and .pending == [\"u-busy\"]" "$3/update.json" >/dev/null' _ "$rc" "$U/agents.out" "$U_STATE"
   check "... with the link at v2" u_at "$U_V2"
   uc() { "${U_ENV[@]}" "${U_LIVE[@]}" BOSUN_CHECKIN_MINUTES=60 "$U_LINK/bin/bosun" checkin 2>&1; } # one tick of the loop
   out="$(uc)"

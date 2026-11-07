@@ -118,6 +118,25 @@ class RecordTest(unittest.TestCase):
         assert found is not None
         self.assertEqual((found.windows, found.reread), ({}, ()))
 
+    def test_what_was_done_to_each_window_is_read_back(self) -> None:
+        full = update_state.advanced(
+            state(),
+            "agents",
+            pending=("api",),
+            windows={"api": ("repo", "restart", "restarted")},
+            reread=("/p",),
+        )
+        update_state.write(self.dir, full)
+        self.assertEqual(update_state.read(self.dir), full)
+
+    def test_a_windows_field_of_the_wrong_shape_is_no_record(self) -> None:
+        for windows in (["api"], {"api": "restart"}, {"api": [1]}):
+            (self.dir / "update.json").write_text(
+                json.dumps({**dataclasses.asdict(state()), "windows": windows})
+            )
+            with self.assertRaises(update_state.RecordUnreadable, msg=str(windows)):
+                update_state.load(self.dir)
+
     def test_a_newer_bosuns_step_is_read(self) -> None:
         self.newer(step="verifying")
         found = update_state.read(self.dir)

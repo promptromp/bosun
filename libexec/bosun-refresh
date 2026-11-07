@@ -44,9 +44,12 @@
 #                    takes up another conversation starts that one as it would have: the
 #                    orchestrator still on yesterday's starts today's as a new day does (the morning
 #                    chores), a repo window with a fresh conversation pending starts it with the
-#                    fresh conversation's prompt. Either never sees the update's prompt, so refresh
-#                    then exits 4. A window whose agent is not running is relaunched
-#                    with the prompt, a missing one created. Each starts on the agent its last launch
+#                    fresh conversation's prompt. A window whose agent is not running is relaunched,
+#                    a missing one created: with the update's prompt when its launch resumes a
+#                    conversation, else as a new conversation starts (the orchestrator's morning
+#                    chores, a fresh conversation's prompt, or none). A window started into its next
+#                    conversation never sees the update's prompt, so refresh then exits 4. Each starts
+#                    on the agent its last launch
 #                    ran (if sessions.yml or BOSUN_HARNESS now names another, that one takes over at
 #                    the next restart not for an update), with the model and effort it ran with when
 #                    that is no longer the configured agent. A window outside the window list (opened
@@ -77,6 +80,8 @@ UPDATE_PROMPT_FILE=""
 UPDATE_PROMPT=""    # --update-restart's prompt; empty for every other refresh
 left_running=0      # set when a restart left an agent running: busy, or waiting for you
 next_conversation=0 # set when an update's restart started the window's next conversation
+start_prompt=""     # what an update's start of a window whose agent is not running gives it (choose_start_prompt)
+RESOLVE_NOT_FOUND=3 # agent_state resolve: no conversation of that name
 windows=()
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -307,15 +312,43 @@ update_blocker() { # <window_id> <status>
   paste_blocker "$1"
 }
 
-# The prompt an update's restart starts window <name> with. When its next launch takes up another
-# conversation than the one running, that one starts as it would have: the orchestrator still on
-# yesterday's starts today's as a new day does (no prompt: launch starts the morning chores), a repo
-# window with a fresh conversation pending starts it with FRESH_PROMPT. Otherwise the update's prompt.
-update_restart_prompt() { # <name> <agent_pid>
-  if ! on_another_conversation "$1" "$2"; then
-    printf '%s' "$UPDATE_PROMPT"
-  elif ! is_orchestrator "$1"; then
+# What window <name>'s next conversation starts with, as its launch would start it: nothing for the
+# orchestrator (launch starts today's with the morning chores), FRESH_PROMPT for a repo window with a
+# fresh conversation pending, nothing for any other.
+next_conversation_prompt() { # <name>
+  if ! is_orchestrator "$1" && [ "$(expected_session_name "$1")" != "$1" ]; then
     printf '%s' "$FRESH_PROMPT"
+  fi
+}
+
+# The prompt an update's restart starts window <name> with. When its next launch takes up another
+# conversation than the one running, that one starts as it would have (next_conversation_prompt).
+# Otherwise the update's prompt.
+update_restart_prompt() { # <name> <agent_pid>
+  if on_another_conversation "$1" "$2"; then
+    next_conversation_prompt "$1"
+  else
+    printf '%s' "$UPDATE_PROMPT"
+  fi
+}
+
+# Whether window <name>'s launch in <dir> starts a new conversation: there is none there under the
+# name its next launch takes up (launch's own lookup, on the agent it starts).
+starts_new_conversation() { # <name> <dir>
+  agent_state resolve "${RESTART_HARNESS:-$(window_harness "$1")}" "$2" "$(expected_session_name "$1")" >/dev/null 2>&1
+  [ $? -eq "$RESOLVE_NOT_FOUND" ]
+}
+
+# Sets start_prompt for a start of window <name>, in <dir>, whose agent is not running: UPDATE_PROMPT
+# (none outside an update), except for an update whose start begins a new conversation, which starts
+# as a new conversation does (next_conversation_prompt), never with "continue what you were doing" in
+# a blank one; that one sets next_conversation.
+choose_start_prompt() { # <name> <dir>
+  start_prompt="$UPDATE_PROMPT"
+  if [ -n "$UPDATE_PROMPT" ] && starts_new_conversation "$1" "$2"; then
+    start_prompt="$(next_conversation_prompt "$1")"
+    next_conversation=1
+    log "$1: its launch starts a new conversation ($(expected_session_name "$1")), as a new one starts, not with the update's prompt"
   fi
 }
 
@@ -336,18 +369,21 @@ update_restart_agent() { # <name> <dir> <window_id> <agent_pid>
   act "$1" "restart for the update ($status), $start" restart_in "$3" "$2" "$1" "$4" "$(update_restart_prompt "$1" "$4")"
 }
 
-# A window's start gets UPDATE_PROMPT: the update's prompt with --update-restart, else none (launch
-# then sends the drain prompt, or nothing when quiet).
+# A window's start gets UPDATE_PROMPT: the update's prompt with --update-restart (unless the start
+# begins a new conversation: choose_start_prompt), else none (launch then sends the drain prompt, or
+# nothing when quiet).
 refresh_window() { # <name> <dir> <kind> <model> <effort>
   local name="$1" dir="$2" kind="$3" pane_pid window_id agent_pid
   read -r pane_pid window_id <<<"$(find_window "$name")"
   if [ -z "${window_id:-}" ]; then
-    act "$name" "create the missing window" create_and_launch "$name" "$dir" "$kind" "$UPDATE_PROMPT"
+    choose_start_prompt "$name" "$dir"
+    act "$name" "create the missing window" create_and_launch "$name" "$dir" "$kind" "$start_prompt"
     return
   fi
   [ "$kind" = "checkin" ] && return 0 # runs the check-in loop, not Claude
   if ! agent_pid="$(agent_pid_under "$pane_pid")"; then
-    act "$name" "relaunch Claude (not running)" relaunch_in_window "$window_id" "$name" "$UPDATE_PROMPT" "$dir" "$(launch_mode "$name")" \
+    choose_start_prompt "$name" "${dir:-$(tmux_cmd display-message -p -t "$window_id" '#{pane_current_path}')}"
+    act "$name" "relaunch Claude (not running)" relaunch_in_window "$window_id" "$name" "$start_prompt" "$dir" "$(launch_mode "$name")" \
       "" "$RESTART_MODEL" "$RESTART_EFFORT" "$RESTART_HARNESS"
     return
   fi

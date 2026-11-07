@@ -30,6 +30,7 @@ import signals
 import update_backups
 import update_gate
 import update_plan
+import update_state
 import versions
 from journal import JournalError
 from knowledge_model import KnowledgeError
@@ -198,17 +199,26 @@ def _kind(window: dict[str, Any]) -> str:
     return WINDOW_KINDS.get(str(window.get("kind")), "repo")
 
 
-def _status(window: dict[str, Any]) -> str:
+def status_of(window: dict[str, Any]) -> str:
     """The status of the agent in <window> (as `bosun sessions --json` lists it): exited when none runs."""
     agent = window.get("agent")
     return str(agent.get("status") or "unknown") if isinstance(agent, dict) else "exited"
+
+
+def on_another_conversation(window: dict[str, Any]) -> bool:
+    """Whether the agent in <window> (as `bosun sessions --json` lists it) runs another conversation
+    than the one its next launch takes up (`conversation`): an orchestrator still on yesterday's, a
+    repo window with a fresh one pending. One whose conversation's name is unknown runs its own."""
+    agent = window.get("agent")
+    running = str(agent.get("name") or "") if isinstance(agent, dict) else ""
+    return bool(running) and running != str(window.get("conversation") or running)
 
 
 def _window(root: Path, window: dict[str, Any], state_dir: Path, session: str) -> WindowFacts:
     name = str(window.get("name"))
     kind = _kind(window)
     changed = kind != "checkin" and launch_changed(root, name, state_dir, session)
-    return WindowFacts(name, kind, _status(window), changed)
+    return WindowFacts(name, kind, status_of(window), changed)
 
 
 def open_windows(root: Path) -> list[dict[str, Any]]:
@@ -223,12 +233,28 @@ def open_windows(root: Path) -> list[dict[str, Any]]:
 def statuses(root: Path) -> dict[str, str]:
     """The status of the agent in each window open in the session, by name (exited: none runs); empty
     when the session's windows cannot be listed."""
-    return {str(w.get("name")): _status(w) for w in open_windows(root)}
+    return {str(w.get("name")): status_of(w) for w in open_windows(root)}
 
 
-def window_kinds(root: Path) -> dict[str, str]:
-    """The kind of each window open in the session (orchestrator, repo or checkin), by name."""
-    return {str(w.get("name")): _kind(w) for w in open_windows(root)}
+def loop_runs(root: Path) -> bool:
+    """Whether the checkin window, which runs the check-in loop, is open in the session."""
+    return any(_kind(w) == "checkin" for w in open_windows(root))
+
+
+def windows_pending(state_dir: Path) -> list[str]:
+    """A blocker while the last update still brings windows along: a new update would bring along its
+    own, and the windows still waited for would lose what was done to them, and their notes."""
+    state = update_state.read(state_dir)
+    if state is None or state.step != "agents" or not state.pending:
+        return []
+    short = update_gate.SHORT
+    blocker = (
+        f"the last update ({state.from_commit[:short]} -> {state.to_commit[:short]}) still brings along "
+        f"{', '.join(state.pending)}: let each answer its update prompt, end a wait by hand with bosun "
+        "update note --window <w> --status, or take a turn at them with bosun update advance; then run "
+        "bosun update again"
+    )
+    return [blocker]
 
 
 def left_running(state_dir: Path, window: str) -> str:
@@ -379,5 +405,6 @@ def plan_for(old_root: Path, new_root: Path, state_dir: Path, config_dir: Path) 
         *unrenderable,
         *dangling_links(state_dir, config_dir),
         *install_problem(old_root, new_root),
+        *windows_pending(state_dir),
     ]
     return dataclasses.replace(plan, blockers=(*plan.blockers, *extra))

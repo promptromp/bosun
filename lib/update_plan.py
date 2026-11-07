@@ -84,6 +84,7 @@ class Plan:
     handed: tuple[str, ...]
     user_changes: tuple[str, ...]
     blockers: tuple[str, ...]
+    kinds: tuple[tuple[str, str], ...] = ()  # each window's kind (orchestrator, repo, checkin), as listed
 
 
 def _matches(path: str, patterns: Sequence[str]) -> bool:
@@ -161,6 +162,7 @@ def make_plan(  # noqa: PLR0913 - the facts the caller gathers, all keyword-only
         handed=_handed(in_flight, changed),
         user_changes=tuple(f"{file}: {change}" for file, change in user_changes),
         blockers=tuple(blockers),
+        kinds=tuple((w.name, w.kind) for w in windows),
     )
 
 

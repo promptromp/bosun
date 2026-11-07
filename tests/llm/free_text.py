@@ -190,11 +190,12 @@ def next_result(lines: Iterable[str]) -> dict[str, Any]:
 
 def run_turns(command: list[str], turns: list[str], cwd: Path, env: dict[str, str]) -> dict[str, Any]:
     """Several turns of one session (stream-json in and out), so what one turn starts in the
-    background still runs at the next: the last turn's result, with every turn's denials. The session
-    and what it left running are stopped at the end."""
+    background still runs at the next: the last turn's result, with every turn's denials and the end of
+    what the session said on stderr. The session and what it left running are stopped at the end."""
     argv = [*command, "--input-format", "stream-json", "--output-format", "stream-json", "--verbose"]
+    errors = tempfile.TemporaryFile(mode="w+")  # noqa: SIM115 - read back once the session is stopped
     child = subprocess.Popen(
-        argv, cwd=cwd, env=env, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+        argv, cwd=cwd, env=env, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=errors,
         text=True, start_new_session=True,
     )  # fmt: skip
     timer = threading.Timer(RUN_TIMEOUT_SECONDS, lambda: os.killpg(child.pid, signal.SIGKILL))
@@ -215,7 +216,10 @@ def run_turns(command: list[str], turns: list[str], cwd: Path, env: dict[str, st
         with contextlib.suppress(ProcessLookupError):
             os.killpg(child.pid, signal.SIGTERM)
         child.wait()
-    return {**result, "permission_denials": denials}
+        errors.seek(0)
+        stderr = errors.read()[-RESULT_PREVIEW:]
+        errors.close()
+    return {**result, "permission_denials": denials, "stderr": stderr}
 
 
 def run_claude(command: list[str], turns: list[str], cwd: Path, env: dict[str, str]) -> dict[str, Any]:
@@ -231,7 +235,7 @@ def run_claude(command: list[str], turns: list[str], cwd: Path, env: dict[str, s
         timeout=RUN_TIMEOUT_SECONDS,
         check=False,
     )
-    return claude_result(done)
+    return {**claude_result(done), "stderr": done.stderr[-RESULT_PREVIEW:]}
 
 
 def run_case(case: Case, run: int, work: Path, max_cost: float, keep: bool, with_mcp: bool) -> dict[str, Any]:
@@ -255,6 +259,7 @@ def run_case(case: Case, run: int, work: Path, max_cost: float, keep: bool, with
             "reply": str(result.get("result", ""))[:RESULT_PREVIEW],
             "bosun_calls": [" ".join(call) for call in world.new_calls()],
             "denials": result.get("permission_denials", []),
+            "stderr": str(result.get("stderr") or "") if failures else "",
         }
     except (RuntimeError, OSError, subprocess.SubprocessError, KeyError, IndexError) as error:
         return {
@@ -276,6 +281,8 @@ def report(results: list[dict[str, Any]]) -> None:
         )
         for failure in row["failures"]:
             print(f"        - {failure}")
+        if row.get("stderr"):
+            print(f"        stderr: {row['stderr'].strip()}")
     passed = sum(1 for row in results if row["passed"])
     print(f"\n{passed}/{len(results)} runs passed; total cost ${sum(row['cost'] for row in results):.2f}")
 

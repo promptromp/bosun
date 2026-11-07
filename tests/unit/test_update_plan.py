@@ -107,6 +107,7 @@ class TestMakePlan(unittest.TestCase):
         new = facts("bbb", prompts={**BASE_PROMPTS, POLICY: "a2"})
         windows = [up.WindowFacts("orchestrator", "orchestrator", "idle", False)]
         self.assertEqual(plan(new=new, windows=windows).windows, (("orchestrator", T.REREAD),))
+        self.assertEqual(plan(new=new, windows=windows).kinds, (("orchestrator", "orchestrator"),))
 
     def test_migrations_between_the_formats(self) -> None:
         got = plan(new=facts("bbb", formats={"ledger": 2}), steps=lambda s, a, b: [(1, 2)])

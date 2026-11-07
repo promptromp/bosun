@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import sys
 from pathlib import Path
+from typing import Any
 from unittest import mock
 
 
@@ -50,6 +51,16 @@ class BlockerTest(World):
         [blocker] = self.plan().blockers
         self.assertIn(str(self.config / "policy.md"), blocker)
         self.assertIn("no backup can copy it", blocker)
+
+    def test_windows_an_update_still_brings_along_block_the_next_one(self) -> None:
+        """A new update would bring along its own windows and clear the notes of these."""
+        self.record("agents", pending=("api", "web"), windows={"api": ("repo", "wait until idle")})
+        [blocker] = self.plan().blockers
+        self.assertIn("still brings along api, web", blocker)
+        self.assertIn("bosun update note --window <w> --status", blocker)
+        self.assertIn("bosun update advance", blocker)
+        self.record("agents")
+        self.assertEqual(self.plan().blockers, ())
 
     def test_versions_not_side_by_side_are_a_blocker(self) -> None:
         self.assertEqual(update_facts.install_problem(self.old, self.new), [])
@@ -107,6 +118,40 @@ class FactsTest(World):
             self.assertTrue(update_facts.launch_changed(root, "known", self.state, "s"))
         with mock.patch("launch_record.recorded", return_value=None):
             self.assertTrue(update_facts.launch_changed(root, "known", self.state, "s"))
+
+
+class WindowFactsTest(World):
+    """What a turn knows of the windows, from `bosun sessions --json`."""
+
+    def listed(self) -> list[dict[str, Any]]:
+        return [
+            {"name": "orch", "kind": "orchestrator", "window": True, "conversation": "orch-2026-11-07",
+             "agent": {"status": "idle", "name": "orch-2026-11-06"}},
+            {"name": "api", "kind": "session", "window": True, "conversation": "api",
+             "agent": {"status": "busy", "name": "api"}},
+            {"name": "plain", "kind": "extra", "window": True, "conversation": "plain", "agent": None},
+        ]  # fmt: skip
+
+    def test_each_open_windows_status(self) -> None:
+        with mock.patch.object(update_facts, "open_windows", return_value=self.listed()):
+            self.assertEqual(
+                update_facts.statuses(self.new), {"orch": "idle", "api": "busy", "plain": "exited"}
+            )
+
+    def test_an_agent_on_another_conversation_than_its_next_launch_takes_up(self) -> None:
+        orch, api, plain = self.listed()
+        self.assertTrue(update_facts.on_another_conversation(orch))
+        self.assertFalse(update_facts.on_another_conversation(api))
+        self.assertFalse(update_facts.on_another_conversation(plain))
+        self.assertFalse(update_facts.on_another_conversation({**api, "agent": {"status": "idle"}}))
+
+    def test_a_check_in_loop_runs_while_its_window_is_open(self) -> None:
+        with mock.patch.object(update_facts, "open_windows", return_value=self.listed()):
+            self.assertFalse(update_facts.loop_runs(self.new))
+        with mock.patch.object(
+            update_facts, "open_windows", return_value=[{"name": "checkin", "kind": "checkin"}]
+        ):
+            self.assertTrue(update_facts.loop_runs(self.new))
 
 
 if __name__ == "__main__":

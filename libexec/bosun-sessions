@@ -4,7 +4,9 @@
 # Every window bosun knows: the orchestrator, the sessions.yml entries and checkin (whether or
 # not they run now), then any other window of the tmux session (for example one that
 # `bosun send --new` opened). For each: its kind (orchestrator, session, checkin, extra), folder,
-# configured model, effort and agent, whether the window exists, and, when an agent runs in it, under
+# configured model, effort and agent, the conversation its next launch takes up (`conversation`:
+# today's for the orchestrator, a fresh one refresh named, else the window's), whether the window
+# exists, and, when an agent runs in it, under
 # `agent`: which one (`harness`), its pid, status (and when it last changed), version, session id, name
 # and transcript path.
 #   --json  one JSON array instead of the table (what `bosun learn` and `console` read)
@@ -39,8 +41,9 @@ window_json() { # <name> <dir> <kind> <model> <effort> <harness>
     agent_pid="$(agent_pid_under "$pane_pid")" && described="$(agent_state describe "$agent_pid")" || described="null"
   fi
   jq -cn --arg name "$1" --arg dir "$2" --arg kind "$3" --arg model "$4" --arg effort "$5" --arg harness "$6" \
-    --argjson exists "$exists" --argjson agent "${described:-null}" \
-    '{name: $name, kind: $kind, dir: $dir, model: $model, effort: $effort, harness: $harness, window: $exists, agent: $agent}'
+    --arg conversation "$(expected_session_name "$1")" --argjson exists "$exists" --argjson agent "${described:-null}" \
+    '{name: $name, kind: $kind, dir: $dir, model: $model, effort: $effort, harness: $harness,
+      conversation: $conversation, window: $exists, agent: $agent}'
 }
 
 windows_json() {

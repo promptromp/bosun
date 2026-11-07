@@ -1,33 +1,21 @@
-"""lib/update_agents.py: bringing the agents along once an update has switched (docs/design/update.md,
-"Bringing the agents along"): what each window gets from its status now, each window acted on once,
-the notes the windows answer with, the prompts, and the update's wait. A fake Actions records what
-would be done, and a statuses mapping the test changes stands in for the windows. The end to end is
-the smoke suite's "bosun update" section. Fictional windows."""
+"""lib/update_agents.py: what each window gets once an update has switched (docs/design/update.md,
+"Bringing the agents along"): decided from its status now, each window acted on once, the prompts,
+and what came of each. A fake Actions records what would be done and keeps the notes in memory, and
+a statuses mapping the test changes stands in for the windows; only the record is a file. The I/O
+is tests/unit/test_update_windows.py, the end to end the smoke suite's "bosun update" section.
+Fictional windows."""
 
 from __future__ import annotations
 
-import contextlib
-import dataclasses
-import json
-import os
 import shutil
-import signal
-import subprocess
 import sys
 import tempfile
-import time
 import unittest
-from collections.abc import Iterator
 from pathlib import Path
-from typing import Any
-from unittest import mock
 
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "lib"))
-import install_paths
 import update_agents
-import update_facts
-import update_plan
 import update_state
 from update_agents import Started
 from update_plan import Treatment
@@ -39,14 +27,35 @@ TO = "bbbbbbb2222222222222222222222222222222222"
 POLICY = "/Users/me/.local/share/bosun/orchestrator/policy.md"
 
 
+class MemoryNotes:
+    """The windows' notes, in memory."""
+
+    def __init__(self) -> None:
+        self.kept: dict[tuple[str, str], str] = {}
+
+    def read(self, window: str, kind: str) -> str | None:
+        return self.kept.get((window, kind))
+
+    def save(self, window: str, kind: str, text: str) -> None:
+        self.kept[(window, kind)] = text
+
+    def where(self, window: str, kind: str) -> str:
+        return f"/Users/me/.local/state/bosun/update/notes/{window}.{kind}"
+
+
 class FakeActions:
     """What advance asks for, in order. send delivers unless <refused>; restart and relaunch answer
-    with <started> for the window (Started.YES unless a test says otherwise)."""
+    with <started> for the window (Started.YES unless a test says otherwise); <running> is what the
+    Stop hook saw each window's last turn leave running; <elsewhere>, the windows on another
+    conversation than their next launch takes up."""
 
     def __init__(self) -> None:
         self.calls: list[tuple[str, str, str]] = []
         self.refused: set[str] = set()
         self.started: dict[str, Started] = {}
+        self.running: dict[str, str] = {}
+        self.elsewhere: set[str] = set()
+        self.notes = MemoryNotes()
 
     def send(self, window: str, text: str) -> bool:
         self.calls.append(("send", window, text))
@@ -59,6 +68,12 @@ class FakeActions:
     def relaunch(self, window: str, prompt: str) -> Started:
         self.calls.append(("relaunch", window, prompt))
         return self.started.get(window, Started.YES)
+
+    def left_running(self, window: str) -> str:
+        return self.running.get(window, "")
+
+    def on_another_conversation(self, window: str) -> bool:
+        return window in self.elsewhere
 
     def made(self, kind: str) -> list[tuple[str, str]]:
         return [(window, text) for what, window, text in self.calls if what == kind]
@@ -102,7 +117,10 @@ class Agents(unittest.TestCase):
         return state
 
     def answer(self, window: str, text: str = "on it again") -> None:
-        update_agents.note(self.state_dir, window, "status", text)
+        self.act.notes.save(window, "status", text)
+
+    def stock(self, window: str, text: str) -> None:
+        self.act.notes.save(window, "stock", text)
 
 
 class AdvanceTest(Agents):
@@ -114,6 +132,7 @@ class AdvanceTest(Agents):
         self.assertIn("bosun was updated from aaaaaaa to bbbbbbb; this session was restarted", prompt)
         self.assertIn("bosun ledger in-flight api", prompt)
         self.assertIn("`bosun update note --window api --status`", prompt)
+        self.assertNotIn("background work", prompt)
         self.assertEqual(self.act.made("send"), [])
         self.assertEqual(self.record().windows["api"], ("repo", "restart", "restarted"))
 
@@ -125,17 +144,41 @@ class AdvanceTest(Agents):
         self.assertIn("bosun will restart this session for an update (aaaaaaa -> bbbbbbb)", asked)
         self.assertIn("`bosun update note --window web --stock`", asked)
         self.assertEqual(self.act.made("restart"), [])
-        self.advance()  # its list is not there yet: still only asked
+        self.advance()  # its list is not there yet, and its background work runs: still only asked
         self.assertEqual(len(self.act.calls), 1)
-        update_agents.note(self.state_dir, "web", "stock", "sleep 900: the CI wait; report CI when it ends")
+        self.stock("web", "sleep 900: the CI wait; report CI when it ends")
         self.assertEqual(self.advance(), ["web"])
         [(window, prompt)] = self.act.made("restart")
         self.assertEqual(window, "web")
+        self.assertIn("Before the restart you listed this background work", prompt)
         self.assertIn("sleep 900: the CI wait; report CI when it ends", prompt)
         self.assertEqual(
             self.record().windows["web"],
             ("repo", "take stock, then restart", "asked to take stock", "restarted"),
         )
+
+    def test_an_idle_window_asked_to_take_stock_is_restarted_without_its_list(self) -> None:
+        """Its background work ended before it read the prompt: nothing runs, so a restart ends nothing
+        and it is not waited for; what the Stop hook saw running goes with the restart."""
+        self.bring({"web": ("repo", Treatment.TAKE_STOCK)}, web="shell")
+        self.advance()
+        self.statuses["web"] = "idle"
+        self.act.running["web"] = "shell `sleep 900`"
+        self.advance()
+        [(_, prompt)] = self.act.made("restart")
+        self.assertIn("bosun saw this background work still running", prompt)
+        self.assertIn("shell `sleep 900`", prompt)
+        self.advance()
+        self.assertEqual(len(self.act.calls), 2)  # asked once, restarted once
+
+    def test_nothing_running_is_no_work_to_start_again(self) -> None:
+        self.bring({"web": ("repo", Treatment.TAKE_STOCK)}, web="shell")
+        self.advance()
+        self.stock("web", "Nothing running.")
+        self.advance()
+        [(_, prompt)] = self.act.made("restart")
+        self.assertNotIn("background work", prompt)
+        self.assertNotIn("Nothing running", prompt)
 
     def test_a_busy_window_waits(self) -> None:
         self.bring({"api": ("repo", Treatment.WAIT)}, api="busy")
@@ -171,6 +214,16 @@ class AdvanceTest(Agents):
         self.assertIn(f"Re-read {POLICY}", prompt)
         self.assertIn("/bosun:chores check-in", prompt)
         self.assertEqual(len(self.act.calls), 1)
+
+    def test_an_orchestrator_on_yesterdays_conversation_starts_todays_instead(self) -> None:
+        """A re-read into yesterday's conversation is wasted (its check-in is refused there, and the
+        next tick restarts it anyway): refresh restarts it as a new day does, which counts as answered."""
+        self.bring({"orchestrator": ("orchestrator", Treatment.REREAD)}, orchestrator="idle")
+        self.act.elsewhere.add("orchestrator")
+        self.act.started["orchestrator"] = Started.NEXT_CONVERSATION
+        self.assertEqual(self.advance(), [])
+        self.assertEqual([what for what, _, _ in self.act.calls], ["restart"])
+        self.assertIn("started its next conversation", self.record().windows["orchestrator"])
 
     def test_done_when_every_window_answered(self) -> None:
         self.bring(
@@ -223,20 +276,25 @@ class AdvanceTest(Agents):
 
     def test_a_window_restarted_into_its_next_conversation_counts_as_answered(self) -> None:
         """R38: it starts that conversation's own prompt, never the update prompt, so it never
-        answers; the update notes its status itself, and its list of background work stays."""
-        self.bring({"web": ("repo", Treatment.TAKE_STOCK)}, web="shell")
+        answers; the update notes its status itself, and names where its list of background work is
+        kept. Without a list, its outcome says so once."""
+        self.bring(
+            {"web": ("repo", Treatment.TAKE_STOCK), "api": ("repo", Treatment.RESTART)},
+            web="shell",
+            api="idle",
+        )
+        self.act.started["api"] = Started.NEXT_CONVERSATION
         self.advance()
-        update_agents.note(self.state_dir, "web", "stock", "sleep 900: the CI wait")
+        self.stock("web", "sleep 900: the CI wait")
         self.act.started["web"] = Started.NEXT_CONVERSATION
         self.assertEqual(self.advance(), [])
-        self.assertEqual(
-            update_agents.read_note(self.state_dir, "web", "status"), "started its next conversation"
-        )
+        self.assertEqual(self.act.notes.read("web", "status"), "started its next conversation")
         state = self.record()
         self.assertEqual(state.step, "done")
         self.assertIn("started its next conversation", state.windows["web"])
-        [(_, outcome)] = update_agents.outcomes(self.state_dir, state)
-        self.assertIn(str(update_agents.note_path(self.state_dir, "web", "stock")), outcome)
+        outcome = dict(update_agents.outcomes(state, self.act.notes))
+        self.assertIn(self.act.notes.where("web", "stock"), outcome["web"])
+        self.assertEqual(outcome["api"], "started its next conversation")
 
     def test_a_window_whose_agent_exited_is_relaunched(self) -> None:
         self.bring({"api": ("repo", Treatment.RESTART), "orchestrator": ("orchestrator", Treatment.REREAD)})
@@ -266,99 +324,25 @@ class AdvanceTest(Agents):
         """The Stop hook's list of what the take-stock turn left running is passed back too."""
         self.bring({"web": ("repo", Treatment.TAKE_STOCK)}, web="shell")
         self.advance()
-        update_agents.note(self.state_dir, "web", "stock", "the CI wait")
-        signals = self.state_dir / "signals" / "web.jsonl"
-        signals.parent.mkdir(parents=True)
-        stop = {
-            "at": "2026-11-07T14:01:00",
-            "event": "Stop",
-            "running": [{"type": "shell", "what": "sleep 900"}],
-        }
-        signals.write_text(json.dumps(stop) + "\n")
+        self.stock("web", "the CI wait")
+        self.act.running["web"] = "shell `sleep 900`"
         self.advance()
         [(_, prompt)] = self.act.made("restart")
-        self.assertIn("shell `sleep 900`", prompt)
+        self.assertIn("the CI wait\n(What bosun saw still running then: shell `sleep 900`.)", prompt)
 
 
-class CommandsTest(unittest.TestCase):
-    """The real actions: bosun commands of the new version, each in a session of its own."""
-
-    def setUp(self) -> None:
-        tmp = Path(tempfile.mkdtemp())
-        self.addCleanup(shutil.rmtree, tmp, ignore_errors=True)
-        self.state_dir = tmp / "state"
-        self.said: list[str] = []
-        self.commands = update_agents.Commands(tmp / "bbbbbbb22222", self.state_dir, self.said.append)
-
-    def ran(self, code: int, stderr: str = "") -> contextlib.AbstractContextManager[mock.MagicMock]:
-        done = subprocess.CompletedProcess([], code, "", stderr)
-        return mock.patch.object(update_facts, "bosun", return_value=done)
-
-    def test_the_refresh_exit_status_says_what_the_restart_did(self) -> None:
-        for code, started in ((0, Started.YES), (3, Started.LEFT_RUNNING), (4, Started.NEXT_CONVERSATION)):
-            with self.ran(code) as bosun:
-                self.assertEqual(self.commands.restart("api", "bosun was updated"), started)
-            args, kwargs = bosun.call_args
-            self.assertEqual(args[1:4], ("refresh", "--update-restart", args[3]))
-            self.assertEqual((args[4], kwargs["detached"]), ("api", True))
-            self.assertFalse(Path(args[3]).exists())  # the prompt file is gone once refresh read it
-        self.assertEqual(self.said, [])
-
-    def test_a_failure_is_said_once(self) -> None:
-        for _ in range(2):
-            with self.ran(1, "refresh: the window is split into several panes\n"):
-                self.assertEqual(self.commands.relaunch("api", "bosun was updated"), Started.FAILED)
+class PlanWindowsTest(unittest.TestCase):
+    def test_the_windows_to_bring_along_take_their_kind_from_the_plan(self) -> None:
+        windows = (("orch", Treatment.REREAD), ("api", Treatment.WAIT), ("web", Treatment.LEAVE))
+        kinds = {"orch": "orchestrator", "api": "repo", "web": "repo"}
         self.assertEqual(
-            self.said, ["  api: not restarted yet: refresh: the window is split into several panes"]
+            update_agents.to_bring_along(windows, kinds),
+            {"orch": ("orchestrator", "re-read"), "api": ("repo", "wait until idle")},
         )
 
-    def test_a_prompt_goes_through_bosun_send_on_stdin(self) -> None:
-        with self.ran(0) as bosun:
-            self.assertTrue(self.commands.send("orchestrator", "bosun was updated"))
-        args, kwargs = bosun.call_args
-        self.assertEqual(args[1:], ("send", "--no-item", "orchestrator", "-"))
-        self.assertEqual((kwargs["stdin"], kwargs["detached"]), ("bosun was updated", True))
-        with self.ran(1, "window 'orchestrator' is waiting (a permission prompt)"):
-            self.assertFalse(self.commands.send("orchestrator", "bosun was updated"))
-
-
-class FactsTest(unittest.TestCase):
-    def test_statuses_and_kinds_of_the_open_windows(self) -> None:
-        listed = [
-            {"name": "orchestrator", "kind": "orchestrator", "window": True, "agent": {"status": "idle"}},
-            {"name": "api", "kind": "session", "window": True, "agent": {"status": "busy"}},
-            {"name": "plain", "kind": "extra", "window": True, "agent": None},
-        ]
-        with mock.patch.object(update_facts, "open_windows", return_value=listed):
-            self.assertEqual(
-                update_facts.statuses(Path("/b")), {"orchestrator": "idle", "api": "busy", "plain": "exited"}
-            )
-            self.assertEqual(
-                update_facts.window_kinds(Path("/b")),
-                {"orchestrator": "orchestrator", "api": "repo", "plain": "repo"},
-            )
-
-
-class NoteTest(Agents):
-    def test_a_note_is_kept_by_window_and_kind(self) -> None:
-        update_agents.note(self.state_dir, "api", "stock", "sleep 900")
-        update_agents.note(self.state_dir, "api", "status", "waiting on CI")
-        notes = self.state_dir / "update" / "notes"
-        self.assertEqual(sorted(p.name for p in notes.iterdir()), ["api.status", "api.stock"])
-        self.assertEqual(update_agents.read_note(self.state_dir, "api", "stock"), "sleep 900")
-        self.assertIsNone(update_agents.read_note(self.state_dir, "web", "status"))
-
-    def test_an_unknown_kind_or_a_name_that_is_a_path_is_refused(self) -> None:
-        for window, kind in (
-            ("api", "mood"),
-            ("../api", "status"),
-            ("a/b", "status"),
-            ("..", "stock"),
-            ("", "stock"),
-        ):
-            with self.assertRaises(update_agents.NoteRefused, msg=(window, kind)):
-                update_agents.note(self.state_dir, window, kind, "x")
-        self.assertFalse((self.state_dir / "update").exists())
+    def test_a_kind_the_plan_does_not_name_is_never_guessed(self) -> None:
+        with self.assertRaisesRegex(ValueError, "names no kind for orch"):
+            update_agents.to_bring_along((("orch", Treatment.REREAD),), {})
 
 
 class PromptTest(unittest.TestCase):
@@ -375,137 +359,14 @@ class PromptTest(unittest.TestCase):
         self.assertIn("`bosun update note --window orch --status`", prompt)
 
     def test_the_stock_is_passed_back(self) -> None:
-        prompt = update_agents.prompt_for("api", "repo", bringing({}), "restarted", (), "sleep 900")
+        stock = update_agents.stock_lines("sleep 900", "")
+        prompt = update_agents.prompt_for("api", "repo", bringing({}), "restarted", (), stock)
         self.assertIn("sleep 900", prompt)
         self.assertLess(prompt.index("sleep 900"), prompt.index("Then continue what you were doing"))
 
-
-class BringAlongTest(unittest.TestCase):
-    """The update's own wait: the record at agents first, a turn every 5 s, the windows waited for
-    said when they change, done once none is left; Ctrl-C leaves them to the check-in loop."""
-
-    def setUp(self) -> None:
-        tmp = Path(tempfile.mkdtemp())
-        self.addCleanup(shutil.rmtree, tmp, ignore_errors=True)
-        self.state_dir = tmp / "state"
-        stack = contextlib.ExitStack()
-        self.addCleanup(stack.close)
-        stack.enter_context(
-            mock.patch.dict(
-                os.environ, {"BOSUN_STATE_DIR": str(self.state_dir), "BOSUN_CONFIG_DIR": str(tmp)}
-            )
-        )
-        stack.enter_context(
-            mock.patch.object(
-                update_facts,
-                "window_kinds",
-                return_value={
-                    "orchestrator": "orchestrator",
-                    "api": "repo",
-                    "web": "repo",
-                    "checkin": "checkin",
-                },
-            )
-        )
-        self.said: list[str] = []
-        self.at_turns: list[tuple[str, tuple[str, ...]]] = []
-        update_state.write(self.state_dir, update_state.advanced(bringing({}), "released", pending=()))
-
-    def plan(self) -> update_plan.Plan:
-        return update_plan.Plan(
-            from_commit=FROM,
-            to_commit=TO,
-            commits=(),
-            migrations=(),
-            rules=(),
-            keys_added=(),
-            renames=(),
-            prompts=("orchestrator/policy.md", "orchestrator/learn.md"),
-            windows=(
-                ("orchestrator", Treatment.REREAD),
-                ("api", Treatment.WAIT),
-                ("web", Treatment.LEAVE),
-                ("checkin", Treatment.RESTART_LOOP),
-            ),
-            jobs=(),
-            console=False,
-            handed=(),
-            user_changes=(),
-            blockers=(),
-        )
-
-    @contextlib.contextmanager
-    def turns(self, *waits: list[str]) -> Iterator[mock.MagicMock]:
-        """Each turn waits for the next of <waits>, dropping the others from the record."""
-        left = list(waits)
-
-        def turn(state_dir: Path, say: Any) -> list[str]:
-            state = update_state.read(state_dir)
-            assert state is not None
-            self.at_turns.append((state.step, state.pending))
-            waiting = left.pop(0)
-            update_state.write(state_dir, update_state.advanced(state, "agents", pending=tuple(waiting)))
-            return waiting
-
-        with (
-            mock.patch.object(update_agents, "turn", side_effect=turn) as turned,
-            mock.patch.object(time, "sleep") as slept,
-        ):
-            yield slept
-            self.turned = turned
-
-    def bring_along(self) -> UpdateState:
-        state = update_state.read(self.state_dir)
-        assert state is not None
-        return update_agents.bring_along(state, self.plan(), say=self.said.append)
-
-    def test_the_windows_to_bring_along_are_pending_from_the_start(self) -> None:
-        with self.turns(["orchestrator", "api"], ["api"], ["api"], []):
-            done = self.bring_along()
-        self.assertEqual(self.at_turns[0], ("agents", ("orchestrator", "api")))
-        self.assertEqual(done.step, "done")
-        self.assertEqual(
-            done.windows,
-            {"orchestrator": ("orchestrator", "re-read"), "api": ("repo", "wait until idle")},
-        )
-        install = install_paths.install_path(Path(done.to_root))
-        self.assertEqual(done.reread, (str(install / "orchestrator" / "policy.md"),))
-        waited = [line for line in self.said if line.startswith("Waiting for")]
-        self.assertEqual(len(waited), 2)  # said when the list changed, not every turn
-        self.assertIn("orchestrator, api", waited[0])
-
-    def test_ctrl_c_leaves_the_windows_to_the_check_in_loop(self) -> None:
-        before = signal.getsignal(signal.SIGINT)
-        with self.turns(["api"], ["api"]) as slept:
-            slept.side_effect = lambda _: os.kill(os.getpid(), signal.SIGINT)
-            stopped = self.bring_along()
-        self.assertEqual((stopped.step, stopped.pending), ("agents", ("api",)))
-        self.assertEqual(self.turned.call_count, 1)
-        self.assertTrue(any("check-in loop" in line for line in self.said))
-        self.assertIs(signal.getsignal(signal.SIGINT), before)
-
-    def test_notes_an_earlier_update_left_are_not_this_ones(self) -> None:
-        update_agents.note(self.state_dir, "api", "status", "from the update before")
-        with self.turns([]):
-            self.bring_along()
-        self.assertIsNone(update_agents.read_note(self.state_dir, "api", "status"))
-
-
-class StateFieldsTest(unittest.TestCase):
-    def test_what_was_done_to_each_window_is_read_back(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
-            state = bringing({"api": ("repo", Treatment.RESTART)}, reread=(POLICY,))
-            state = update_state.advanced(state, "agents", windows={"api": ("repo", "restart", "restarted")})
-            update_state.write(Path(tmp), state)
-            self.assertEqual(update_state.read(Path(tmp)), state)
-
-    def test_a_windows_field_of_the_wrong_shape_is_no_record(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
-            for windows in (["api"], {"api": "restart"}, {"api": [1]}):
-                data = {**dataclasses.asdict(bringing({})), "windows": windows}
-                (Path(tmp) / "update.json").write_text(json.dumps(data))
-                with self.assertRaises(update_state.RecordUnreadable, msg=str(windows)):
-                    update_state.load(Path(tmp))
+    def test_the_take_stock_prompt_says_what_to_save_when_nothing_runs(self) -> None:
+        prompt = update_agents.take_stock_prompt("web", bringing({}))
+        self.assertIn('if nothing runs any more, save "nothing running"', prompt)
 
 
 if __name__ == "__main__":

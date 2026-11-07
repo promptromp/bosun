@@ -27,12 +27,12 @@ import knowledge_store
 import ledger
 import migrations
 import update
-import update_agents
 import update_backups
 import update_facts
 import update_gate
 import update_plan
 import update_state
+import update_windows
 import versions
 from update_state import UpdateState
 
@@ -373,7 +373,7 @@ class ResumeTest(World):
 
         with (
             mock.patch.object(update_facts, "plan_for", return_value=a_plan()) as plan_for,
-            mock.patch.object(update_agents, "bring_along", side_effect=bring_along) as bring,
+            mock.patch.object(update_windows, "bring_along", side_effect=bring_along) as bring,
         ):
             yield bring
         plan_for.assert_called_once_with(self.old, self.new, self.state, self.config)
@@ -407,12 +407,15 @@ class ResumeTest(World):
     def test_one_cut_short_while_bringing_the_windows_along_is_left_to_the_loop(self) -> None:
         """R6: the windows still waited for are the check-in loop's; resume does not run them again."""
         self.record("agents", pending=("api",), windows={"api": ("repo", "restart", "restarted")})
-        with mock.patch.object(update_agents, "bring_along") as bring:
+        with mock.patch.object(update_windows, "bring_along") as bring:
             left = update.resume(self.state)
         bring.assert_not_called()
         assert left is not None
         self.assertEqual((left.step, left.pending), ("agents", ("api",)))
-        self.assertIn("the check-in loop", update._resumed_line(left))
+        with mock.patch.object(update_facts, "loop_runs", return_value=True):
+            line = update._resumed_line(left)
+        self.assertIn("still brings windows along: the check-in loop brings along api", line)
+        self.assertNotIn("carried on", line)
 
     def test_one_at_agents_with_nothing_left_is_finished(self) -> None:
         self.record("agents")
@@ -474,6 +477,35 @@ class RunTest(World):
         self.assertEqual((code, out), (1, ""))
         self.assertIn("an update is running (started 2026-11-07T12:00:00+00:00", err)
 
+    @contextlib.contextmanager
+    def resumed_wait(self, ends: UpdateState) -> Iterator[mock.MagicMock]:
+        """An update cut short after its release, carried on: its wait ends at <ends>."""
+        self.record("released")
+        with (
+            mock.patch.object(update_facts, "plan_for", return_value=a_plan()) as plan_for,
+            mock.patch.object(update_windows, "bring_along", return_value=ends),
+            mock.patch.object(update, "_update") as new_update,
+        ):
+            yield new_update
+        plan_for.assert_called_once()  # the plan made again for the windows, and no other
+
+    def test_ctrl_c_in_a_resumed_wait_ends_the_command(self) -> None:
+        stopped = update_state.advanced(self.record("released"), "agents", pending=("api",))
+        with self.resumed_wait(stopped) as new_update:
+            code, _, _ = self.main("--yes")
+        self.assertEqual(code, 0)
+        new_update.assert_not_called()
+
+    def test_a_resumed_wait_says_what_came_of_each_window(self) -> None:
+        windows = {"api": ("repo", "restart", "restarted", "answered")}
+        done = update_state.advanced(self.record("released"), "done", windows=windows)
+        update_windows.note(self.state, "api", "status", "resumed: waiting on CI for PR 12")
+        with self.resumed_wait(done):
+            code, out, _ = self.main("--yes")
+        self.assertEqual(code, 0)
+        self.assertIn("carried on to the end", out)
+        self.assertIn("api: restarted; resumed: waiting on CI for PR 12", out)
+
     def test_json_keeps_plan_and_update_on_every_path(self) -> None:
         self.record("done")
         code, out, _ = self.main("--yes", "--json")
@@ -506,10 +538,10 @@ class AgentsCommandTest(World):
         code, out, _ = self.main("note", "--window", "api", "--status", stdin="resumed: waiting on CI\n")
         self.assertEqual(code, 0)
         self.assertIn("api", out)
-        self.assertEqual(update_agents.read_note(self.state, "api", "status"), "resumed: waiting on CI")
+        self.assertEqual(update_windows.read_note(self.state, "api", "status"), "resumed: waiting on CI")
         code, _, _ = self.main("note", "--window", "api", "--stock", stdin="sleep 900: the CI wait")
         self.assertEqual(
-            (code, update_agents.read_note(self.state, "api", "stock")), (0, "sleep 900: the CI wait")
+            (code, update_windows.read_note(self.state, "api", "stock")), (0, "sleep 900: the CI wait")
         )
 
     def test_a_note_refuses_an_unknown_kind_a_path_and_nothing_to_say(self) -> None:
@@ -534,13 +566,13 @@ class AgentsCommandTest(World):
 
     def test_advance_skips_quietly_while_the_update_itself_runs(self) -> None:
         self.record("agents", pending=("api",), windows={"api": ("repo", "restart")})
-        with update_state.one_update(self.state), mock.patch.object(update_agents, "turn") as turn:
+        with update_state.one_update(self.state), mock.patch.object(update_windows, "turn") as turn:
             self.assertEqual(self.main("advance"), (0, "", ""))
         turn.assert_not_called()
 
     def test_advance_takes_a_turn_while_windows_are_pending(self) -> None:
         self.record("agents", pending=("api",), windows={"api": ("repo", "restart")})
-        with mock.patch.object(update_agents, "turn", return_value=["api"]) as turn:
+        with mock.patch.object(update_windows, "turn", return_value=["api"]) as turn:
             self.assertEqual(self.main("advance")[0], 0)
         turn.assert_called_once()
         self.assertEqual(turn.call_args.args[0], self.state)
@@ -548,7 +580,7 @@ class AgentsCommandTest(World):
     def test_advance_with_nothing_pending_does_nothing(self) -> None:
         for step in ("done", "released"):
             self.record(step)
-            with mock.patch.object(update_agents, "turn") as turn:
+            with mock.patch.object(update_windows, "turn") as turn:
                 self.assertEqual(self.main("advance"), (0, "", ""))
             turn.assert_not_called()
 

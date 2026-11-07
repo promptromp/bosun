@@ -20,7 +20,9 @@ sys.path.insert(0, str(ROOT / "lib"))
 import approvals
 import guard
 import update_agents
+import update_windows
 from update_state import UpdateState
+from world import git
 
 
 SFTP_ITEM = "slack:C0000000001/1700000032.000032"
@@ -887,6 +889,19 @@ CI_WAIT = (
     "command (it stands in for the CI wait), say when it has started, and do nothing else for now."
 )
 STOCK = "sleep 600 (the wait for CI on this branch): when it ends, check CI on the branch and report it"
+SFTP_WORK = (
+    '"""Upload exported invoices to the bank SFTP server."""\n\n'
+    "import os\n\n\n"
+    "def key_for(customer: str) -> str:\n"
+    '    """Each customer\'s upload logs in with its own key: EXPORT_SFTP_KEY_DIR/<customer>.pem."""\n'
+    '    return os.path.join(os.environ["EXPORT_SFTP_KEY_DIR"], f"{customer}.pem")\n'
+)
+
+
+def seed_sftp_work(world: World) -> None:
+    """The task's work so far, committed on the session's branch: per-customer keys."""
+    (world.repo / "exporter" / "sftp.py").write_text(SFTP_WORK)
+    git(world.repo, "commit", "-qam", "Per-customer SFTP keys instead of the shared password")
 
 
 def update_note(outcome: Outcome, window: str, kind: str) -> str | None:
@@ -894,7 +909,7 @@ def update_note(outcome: Outcome, window: str, kind: str) -> str | None:
     ran = any(
         call[:5] == ["update", "note", "--window", window, f"--{kind}"] for call in outcome.world.new_calls()
     )
-    return update_agents.read_note(outcome.world.state, window, kind) if ran else None
+    return update_windows.read_note(outcome.world.state, window, kind) if ran else None
 
 
 def took_stock(outcome: Outcome) -> list[str]:
@@ -909,14 +924,36 @@ def took_stock(outcome: Outcome) -> list[str]:
 
 
 def caught_up_and_answered(outcome: Outcome) -> list[str]:
-    """It looked in the ledger for what it holds, and answered with a status note."""
+    """It caught up as the update prompt asks (the items it holds, their outreach), and answered with a
+    status note."""
+    calls = outcome.world.new_calls()
     problems = (
         []
         if update_note(outcome, "exporter", "status")
         else ["no `bosun update note --window exporter --status`"]
     )
-    if not any(call[:1] == ["ledger"] for call in outcome.world.new_calls()):
-        problems.append("it did not check the ledger for anything missed")
+    if ["ledger", "in-flight", "exporter"] not in calls:
+        problems.append("it did not look up the items it holds (bosun ledger in-flight exporter)")
+    if ["ledger", "outreach", "--parent", SFTP_ITEM] not in calls:
+        problems.append(
+            f"it did not look for replies to its outreach (bosun ledger outreach --parent {SFTP_ITEM})"
+        )
+    return problems
+
+
+def checked_in_and_answered(outcome: Outcome) -> list[str]:
+    """The orchestrator, kept running, checked in as the update prompt asks, and answered, doing
+    nothing else the update prompts can ask for (no stock list: it was not asked to take stock)."""
+    calls = outcome.world.new_calls()
+    problems = (
+        []
+        if ["ledger", "mark-run", "check-in"] in calls
+        else ["no check-in (bosun ledger mark-run check-in)"]
+    )
+    if update_note(outcome, "orchestrator", "status") is None:
+        problems.append("no `bosun update note --window orchestrator --status`")
+    if any(call[:2] == ["update", "note"] and "--stock" in call for call in calls):
+        problems.append("it saved a list of background work it was not asked for")
     return problems
 
 
@@ -1121,6 +1158,20 @@ def orchestrator_cases() -> list[Case]:
             no_outreach,
         ),
         Case(
+            "U3-orchestrator-reread",
+            "orchestrator",
+            update_agents.prompt_for(
+                "orchestrator",
+                "orchestrator",
+                UPDATE,
+                update_agents.HOW_KEPT,
+                (str(ROOT / "orchestrator" / "policy.md"),),
+                "",
+            ),
+            (seed_sftp,),
+            checked_in_and_answered,
+        ),
+        Case(
             "O11-for-me",
             "orchestrator",
             "should #102 address the bot comments now or wait for Lena's review? "
@@ -1233,8 +1284,15 @@ def repo_cases() -> list[Case]:
         Case(
             "U2-after-restart",
             "repo",
-            update_agents.prompt_for("exporter", "repo", UPDATE, update_agents.HOW_RESTARTED, (), STOCK),
-            (seed_sftp,),
+            update_agents.prompt_for(
+                "exporter",
+                "repo",
+                UPDATE,
+                update_agents.HOW_RESTARTED,
+                (),
+                update_agents.stock_lines(STOCK, ""),
+            ),
+            (seed_sftp, seed_sftp_work),
             caught_up_and_answered,
             **SFTP_TASK,
         ),
