@@ -2335,7 +2335,34 @@ if [ "$(bash -c 'source "$1/lib/common.sh"; command -v launchctl; command -v pms
   printf 'Repeating power events:\n  wakepoweron at 9:01AM every day\n' >"$WORK/pmset-sched"
   BOSUN_STATE_DIR="$WORK/un-state" "$BOSUN" trust --any "$UN_REPO" >/dev/null
   echo "# mine" >"$WORK/un-state/a-file-of-mine"
+  # A window whose agent, stopped, starts a hook in a session of its own that writes a signal two seconds
+  # later, as Claude Code starts its async SessionEnd hook, and a helper in its window's session that
+  # outlives it, as Claude Code's caffeinate does; it ends a second later. Uninstall must wait for the hook
+  # before it removes bosun's files, and not for the helper.
+  cat >"$WORK/late-hook.py" <<'LATE'
+import os, sys, time
+os.setsid()
+time.sleep(2)
+os.makedirs(os.path.join(sys.argv[1], "signals"), exist_ok=True)
+with open(os.path.join(sys.argv[1], "signals", "w.jsonl"), "w") as signal:
+    signal.write("{}\n")
+open(sys.argv[2], "w").close()
+LATE
+  cat >"$WORK/late-agent" <<'LATE'
+#!/bin/bash
+trap 'python3 "$1/late-hook.py" "$2" "$3" & (trap "" HUP TERM; exec sleep 60) & echo $! >"$4"; sleep 1; exit 0' HUP TERM
+while :; do sleep 1; done
+LATE
+  chmod +x "$WORK/late-agent"
+  tmux -L "$SOCKET" new-session -d -s un-test -n w -- "$WORK/late-agent" "$WORK" "$WORK/un-state" "$WORK/late-written" "$WORK/late-helper"
   UN_OUT="$(un --yes 2>&1)"
+  # This state folder holds a file of mine, so uninstall leaves it whole: what shows the wait is that the
+  # late write was done before uninstall was (tests/unit/test_uninstall.py: its files go only after it).
+  check "uninstall waits for what a window it stopped left running: its late write was done before uninstall was" \
+    test -e "$WORK/late-written"
+  check "... but not for a helper it left in its window's session" bash -c '
+    kill -0 "$(cat "$2")" && ! grep -q "still runs" <<<"$1"' _ "$UN_OUT" "$WORK/late-helper"
+  kill "$(cat "$WORK/late-helper")" 2>/dev/null
   check "uninstall takes back the trust it gave" bash -c '! python3 "$1/lib/claude_state.py" trusted "$2"' _ "$ROOT" "$UN_REPO"
   check "... cancels its wake, through sudo" grep -q "sudo .*pmset repeat cancel" "$WORK/system.log"
   check "... says it is done" contains "$UN_OUT" "bosun is uninstalled"

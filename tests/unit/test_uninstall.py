@@ -48,6 +48,13 @@ class FakeMac:
         self.calls: list[str] = []
         self.stuck_jobs: set[str] = set()
         self.sudo_works = True
+        # What runs in the windows: `ps` rows (pid, parent), each process's session, and after the stop the
+        # ones a stopped agent left behind, for that many looks (None: for good).
+        self.panes: list[int] = []
+        self.sessions: dict[int, int] = {}
+        self.running: list[tuple[int, int]] = []
+        self.left: list[tuple[int, int]] = []
+        self.left_for: int | None = 0
 
     def done(self, code: int = 0, out: str = "") -> subprocess.CompletedProcess[str]:
         return subprocess.CompletedProcess([], code, out, "")
@@ -77,9 +84,24 @@ class FakeMac:
         return self.done()
 
     def tmux(self, command: Sequence[str]) -> subprocess.CompletedProcess[str]:
+        if "list-panes" in command:
+            return self.done(0 if self.windows else 1, "".join(f"{pid}\n" for pid in self.panes))
         if "list-windows" not in command:
             raise AssertionError(f"unexpected tmux: {command}")
         return self.done(0 if self.windows else 1, "".join(f"{name}\n" for name in self.windows))
+
+    def ps(self, command: Sequence[str]) -> subprocess.CompletedProcess[str]:
+        """Every process: those of the windows until the stop, then what they left, for as long as told."""
+        self.calls.append("ps")
+        rows = self.running
+        if "bosun stop" in self.calls:
+            rows = self.left if self.left_for is None or self.left_for > 0 else []
+            if self.left_for:
+                self.left_for -= 1
+                if self.left_for == 0:  # the hook writes its signal as it ends
+                    (self.state_dir / "signals").mkdir(parents=True, exist_ok=True)
+                    (self.state_dir / "signals" / "api.jsonl").write_text("{}\n")
+        return self.done(out="".join(f"{pid} {ppid} ?? a hook\n" for pid, ppid in rows))
 
     def stop(self) -> subprocess.CompletedProcess[str]:
         """What `bosun stop` does: ends the session, and leaves a file saying so."""
@@ -95,7 +117,13 @@ class FakeMac:
             return real_run(command, **kwargs)
         if tool == "bosun":
             return self.stop()
-        handlers = {"launchctl": self.launchctl, "pmset": self.pmset, "sudo": self.sudo, "tmux": self.tmux}
+        handlers = {
+            "launchctl": self.launchctl,
+            "pmset": self.pmset,
+            "sudo": self.sudo,
+            "tmux": self.tmux,
+            "ps": self.ps,
+        }
         if tool not in handlers:
             raise AssertionError(f"a test reached a real tool: {command}")
         return handlers[tool](command)
@@ -138,6 +166,7 @@ class World(unittest.TestCase):
             mock.patch.object(Path, "home", return_value=self.home),
             mock.patch.object(uninstall, "ROOT", self.running),
             mock.patch.object(subprocess, "run", self.mac.run),
+            mock.patch.object(uninstall, "session_id", self.mac.sessions.get),
             mock.patch.object(claude_state, "CONFIG_FILE", self.home / ".claude.json"),
             mock.patch.object(claude_state, "PROJECTS_DIR", self.home / ".claude" / "projects"),
             mock.patch.object(codex_state, "CONFIG_FILE", self.home / ".codex" / "config.toml"),
@@ -391,6 +420,48 @@ class Uninstalls(World):
         calls = self.mac.calls
         self.assertIn("pmset repeat cancel", calls[0])
         self.assertLess(calls.index(f"bootout {LABEL}.watchdog"), calls.index("bosun stop"))
+
+    def test_it_waits_for_what_the_stopped_windows_left_running(self) -> None:
+        """An agent's async hook outlives its window by a moment, and writes in the state folder: nothing
+        is deleted until it ends."""
+        self.mac.windows, self.mac.panes = ["api"], [4100]
+        self.mac.sessions.update({4100: 4100, 4110: 4100, 4120: 4120})
+        # The agent (4110) started a hook in a session of its own (4120); once it has ended, the hook is
+        # launchd's.
+        self.mac.running = [(4100, 1), (4110, 4100), (4120, 4110)]
+        self.mac.left, self.mac.left_for = [(4120, 1)], 3
+        status, said = self.run_it("--yes")
+        self.assertEqual(status, 0, said)
+        calls = self.mac.calls
+        self.assertGreaterEqual(calls[calls.index("bosun stop") :].count("ps"), 4)
+        self.assertNotIn("could not remove", said)
+        self.assertFalse(
+            (self.state / "signals").exists(), "the hook's signal, written as it ended, is gone too"
+        )
+
+    def test_what_still_runs_when_it_stops_waiting_is_said(self) -> None:
+        self.mac.windows, self.mac.panes = ["api"], [4100]
+        self.mac.sessions.update({4100: 4100, 4110: 4100})
+        self.mac.running = [(4100, 1), (4110, 4100)]
+        self.mac.left, self.mac.left_for = [(4110, 1)], None
+        with mock.patch.object(uninstall, "STOPPED_SECONDS", 0.2):
+            _status, said = self.run_it("--yes")
+        self.assertIn(
+            "could not remove the running windows: api: what they ran still runs after 0.2 s: 4110 a hook",
+            said,
+        )
+
+    def test_a_helper_left_in_a_windows_session_is_not_waited_for(self) -> None:
+        """Claude Code starts `caffeinate -i -t 300` as it ends, in its window's session, and it outlives
+        it: none of bosun's writers stays there, so uninstall neither waits five minutes nor fails."""
+        self.mac.windows, self.mac.panes = ["api"], [4100]
+        self.mac.sessions.update({4100: 4100, 4110: 4100, 4130: 4100})
+        self.mac.running = [(4100, 1), (4110, 4100)]
+        self.mac.left, self.mac.left_for = [(4130, 1)], None
+        with mock.patch.object(uninstall, "STOPPED_SECONDS", 0.2):
+            status, said = self.run_it("--yes")
+        self.assertEqual(status, 0, said)
+        self.assertIn("removed the running windows: api", said)
 
     def test_what_stopping_writes_goes_too(self) -> None:
         self.mac.windows = ["api"]

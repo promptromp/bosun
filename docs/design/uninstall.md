@@ -88,7 +88,17 @@ above has a deliberately broken copy that the unit tests must fail.
 
 The wake first, as the one step that may ask for something; the rest then runs unattended. The jobs before the
 windows, because the watchdog would bring those back. Then the agents' files, the link and the working files.
-Stopping the windows writes a file of its own, so it looks again before deleting anything. The checkout last,
+Stopping the windows writes a file of its own, so it looks again before deleting anything. It also waits for
+what the windows ran to end: an agent ending as its window stops may start an async hook (Claude Code's
+SessionEnd), which writes in the state folder (`logs/`, `signals/`) a moment later, so those folders came back
+after their deletion and the install was kept. Before the stop it notes what runs in the windows (the
+processes in their panes' sessions, and all the panes started), then waits until none of it is left, nor
+anything it started apart from the windows, in a session of its own: Claude Code starts its async hooks so,
+and bosun's hooks put their work in one. What an agent starts in its own window's session as it ends is not
+waited for: Claude Code's `caffeinate -i -t 300` outlives it by five minutes, and none of bosun's writers
+stays there. A hook is found through the agent that starts it, which Claude Code does while it still runs, a
+second or so after its window stopped. It waits 15 seconds at the most, never matching processes by their
+command line, and names what still runs then, as a step it could not finish. The checkout last,
 since this runs from it: it is all in memory by then. With versions side by side that is the checkout kept from
 before versions, the versions folder, then the link, so that the line it gives to run again works until the end.
 

@@ -18,6 +18,7 @@ import fnmatch
 import os
 import re
 import shlex
+from collections.abc import Collection, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -223,6 +224,37 @@ def kind_of(name: str, table: tuple[tuple[str, str], ...]) -> str:
 
 def quoted(path: str) -> str:
     return shlex.quote(path)
+
+
+Processes = Sequence[tuple[int, int, int | None]]  # pid, parent, session id (None: unknown)
+
+
+def _with_descendants(table: Processes, roots: Collection[int]) -> set[int]:
+    parents = {pid: ppid for pid, ppid, _ in table}
+    found = set(roots) & parents.keys()
+    while more := {pid for pid, ppid in parents.items() if ppid in found} - found:
+        found |= more
+    return found
+
+
+def ran_in_windows(table: Processes, sessions: Collection[int], panes: Collection[int]) -> frozenset[int]:
+    """What runs in the windows bosun is about to stop, from a process table: each process in one of their
+    tmux panes' sessions, and whatever the panes started, however deep, in any session (a background command
+    an agent runs in a session of its own)."""
+    in_sessions = {pid for pid, _, sid in table if sid is not None and sid in sessions}
+    return frozenset(_with_descendants(table, in_sessions | set(panes)))
+
+
+def still_running(table: Processes, sessions: Collection[int], watched: Collection[int]) -> frozenset[int]:
+    """What of the windows bosun stopped still runs: each of <watched> (what ran in them at the stop, and
+    what this found since) still there, and what those start apart from the windows, in a session of its
+    own, with whatever that starts. An agent ending as its window stops may start an async hook (Claude
+    Code's SessionEnd, which it starts in a session of its own, as bosun's hooks put their work in one) that
+    writes in bosun's state folder a moment later. What it starts in its window's own session as it ends is
+    not waited for: none of bosun's writers stays there, and Claude Code's `caffeinate -i -t 300`, started
+    as it ends, outlives it by five minutes."""
+    apart = {pid for pid, _, sid in table if sid is None or sid not in sessions}
+    return frozenset(pid for pid in _with_descendants(table, watched) if pid in watched or pid in apart)
 
 
 def safe_folder(path: str, facts: Facts) -> bool:

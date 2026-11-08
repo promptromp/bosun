@@ -16,11 +16,13 @@ import os
 import shutil
 import subprocess
 import sys
-from collections.abc import Callable, Mapping
+import time
+from collections.abc import Callable, Collection, Mapping
 from pathlib import Path
 
 import agent_changes
 import claude_state
+import orphans
 import uninstall_detect
 import uninstall_macos
 import uninstall_plan as up
@@ -32,6 +34,8 @@ ROOT = Path(__file__).resolve().parents[1]
 EXIT_LEFT = 1
 EXIT_REFUSED = 2
 COMMAND_TIMEOUT_SECONDS = 120
+STOPPED_SECONDS = 15  # the most it waits for what the stopped windows left running
+STOPPED_POLL_SECONDS = 0.05
 
 
 class StepFailed(Exception):
@@ -115,25 +119,63 @@ def remove_path(path: Path) -> None:
         path.unlink(missing_ok=True)
 
 
-def stop_windows(_step: Step) -> None:
+def session_id(pid: int) -> int | None:
+    try:
+        return os.getsid(pid)
+    except OSError:  # gone, or not ours to ask
+        return None
+
+
+def processes() -> tuple[list[orphans.Proc], list[tuple[int, int, int | None]]]:
+    """Every process now, and as up.still_running reads them: pid, parent, session."""
+    procs = orphans.parse_ps(orphans.read_ps("-A"))
+    return procs, [(p.pid, p.ppid, session_id(p.pid)) for p in procs]
+
+
+def left_running(sessions: Collection[int], watched: Collection[int]) -> list[orphans.Proc]:
+    """What the stopped windows left running (up.still_running), waited for until it ends, for
+    STOPPED_SECONDS at the most: an agent ending as its window stops may start an async hook (Claude
+    Code's SessionEnd) that writes bosun's state a moment later, after its files would be deleted. A hook
+    is found through the agent that starts it, which Claude Code does a second or so after its window
+    stopped, while it still runs. What is still there then."""
+    deadline = time.monotonic() + STOPPED_SECONDS
+    while True:
+        procs, table = processes()
+        watched = up.still_running(table, sessions, watched)
+        if not watched or time.monotonic() >= deadline:
+            return [p for p in procs if p.pid in watched]
+        time.sleep(STOPPED_POLL_SECONDS)
+
+
+def stop_windows(env: Mapping[str, str]) -> None:
+    """`bosun stop`, then a wait for what its windows ran (up.ran_in_windows, before the stop) and what
+    that started apart from them to end, so nothing of theirs writes after bosun's files are gone."""
+    panes = uninstall_detect.pane_pids(env)
+    sessions = frozenset(sid for sid in map(session_id, panes) if sid is not None)
+    watched = up.ran_in_windows(processes()[1], sessions, panes)
     command = [str(ROOT / "bin" / "bosun"), "stop"]
     done = subprocess.run(command, check=False, capture_output=True, timeout=COMMAND_TIMEOUT_SECONDS)
     if done.returncode != 0:
         raise StepFailed("bosun stop failed")
+    left = left_running(sessions, watched)
+    if left:
+        named = "; ".join(f"{p.pid} {p.command[:60]}" for p in left)
+        raise StepFailed(f"what they ran still runs after {STOPPED_SECONDS} s: {named}")
 
 
 class Carrying:
     """One run of the steps: what they need, and what failed."""
 
-    def __init__(self, facts: Facts, *, can_ask: bool) -> None:
+    def __init__(self, facts: Facts, *, can_ask: bool, env: Mapping[str, str] = os.environ) -> None:
         self.facts = facts
         self.can_ask = can_ask
+        self.env = env
         self.state_dir = Path(facts.state_dir)
         self.jobs = {job.label: job for job in facts.jobs}
         self.actions: dict[str, Callable[[Step], None]] = {
             up.WAKE: self.cancel_wake,
             up.JOB: self.remove_job,
-            up.STOP: stop_windows,
+            up.STOP: lambda _step: stop_windows(self.env),
             up.TRUST: self.revoke_trust,
             up.NOTE: self.remove_note,
             up.LINK: lambda step: remove_path(Path(step.target)),
@@ -209,7 +251,7 @@ def carry_out(env: Mapping[str, str], choices: Choices, *, can_ask: bool) -> int
         return facts, up.build_plan(facts, choices)
 
     facts, plan = plan_now()
-    Carrying(facts, can_ask=can_ask).run(tuple(step for step in plan.steps if step.kind != up.FILE))
+    Carrying(facts, can_ask=can_ask, env=env).run(tuple(step for step in plan.steps if step.kind != up.FILE))
     facts, plan = plan_now()
     Carrying(facts, can_ask=can_ask).run(tuple(step for step in plan.steps if step.kind == up.FILE))
     remove_empty_folders(facts)

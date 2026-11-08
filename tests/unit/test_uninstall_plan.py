@@ -496,3 +496,58 @@ class Reading(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class StillRunning(unittest.TestCase):
+    """What ran in the windows bosun stops, and what of it still runs after: what was there at the stop,
+    and what it starts apart from the windows (a stopped agent's async hook, which writes a signal after
+    the windows are gone), never a helper it starts in its window's own session as it ends."""
+
+    # (pid, ppid, session): pane 100 ran an agent (110) that started a hook (120), which started its
+    # python (130), and a background command in a session of its own (140); 200 is another tool's, in a
+    # session of its own; 1 is launchd.
+    TABLE = (
+        (1, 0, 1),
+        (100, 1, 100),
+        (110, 100, 100),
+        (120, 110, 100),
+        (130, 120, 100),
+        (140, 110, 140),
+        (200, 1, 200),
+    )
+
+    def test_what_ran_in_the_windows_their_sessions_and_all_the_panes_started(self) -> None:
+        self.assertEqual(up.ran_in_windows(self.TABLE, {100}, [100]), frozenset({100, 110, 120, 130, 140}))
+
+    def test_a_process_in_a_panes_session_counts_without_its_pane(self) -> None:
+        self.assertEqual(up.ran_in_windows(((1, 0, 1), (110, 1, 100)), {100}, [100]), frozenset({110}))
+
+    def test_what_was_there_at_the_stop_and_still_runs(self) -> None:
+        watched = up.ran_in_windows(self.TABLE, {100}, [100])
+        table = ((1, 0, 1), (110, 1, 100), (140, 110, 140), (200, 1, 200))
+        self.assertEqual(up.still_running(table, {100}, watched), frozenset({110, 140}))
+
+    def test_a_hook_an_agent_starts_apart_as_it_ends_counts_with_what_it_starts(self) -> None:
+        # The agent (110) starts a hook in a session of its own (150, as Claude Code starts its async
+        # hooks), which starts its python (151).
+        table = ((1, 0, 1), (110, 1, 100), (150, 110, 150), (151, 150, 150))
+        self.assertEqual(up.still_running(table, {100}, {100, 110}), frozenset({110, 150, 151}))
+
+    def test_a_hook_left_by_an_agent_that_exited_still_counts(self) -> None:
+        # The agent is gone, and its hook, reparented to launchd, was seen before: still waited for, and
+        # so is what it starts.
+        table = ((1, 0, 1), (150, 1, 150), (151, 150, 150), (200, 1, 200))
+        self.assertEqual(up.still_running(table, {100}, {110, 150}), frozenset({150, 151}))
+
+    def test_a_helper_an_agent_starts_in_its_windows_session_as_it_ends_does_not(self) -> None:
+        # Claude Code's `caffeinate -i -t 300`, started as it ends, outlives it by five minutes.
+        table = ((1, 0, 1), (110, 1, 100), (160, 110, 100))
+        self.assertEqual(up.still_running(table, {100}, {110}), frozenset({110}))
+        self.assertEqual(up.still_running(((1, 0, 1), (160, 1, 100)), {100}, {110}), frozenset())
+
+    def test_nothing_once_they_are_gone(self) -> None:
+        self.assertEqual(up.still_running(((1, 0, 1), (200, 1, 200)), {100}, {110, 120}), frozenset())
+
+    def test_a_session_unknown_counts_for_nothing_it_did_not_start(self) -> None:
+        self.assertEqual(up.ran_in_windows(((1, 0, 1), (300, 1, None)), {100}, [100]), frozenset())
+        self.assertEqual(up.still_running(((1, 0, 1), (300, 1, None)), {100}, {110}), frozenset())
