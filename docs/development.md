@@ -162,8 +162,9 @@ the backup costs on that data (a recovering approval hook has 8 s). Then it goes
 that must leave nothing in any backup or rehearsal copy (`grep -r`).
 
 Then writers at once (twenty in the ledger, ten in the knowledge base, then ten in each, under one replica
-id), the clock going back an hour, fifty writes of each store killed like a power cut at random (the next
-knowledge write must also clear the git lock such a cut leaves, so that its history records again), a
+id), the clock going back an hour, fifty writes of each store killed like a power cut at random, from
+their start to past a write's time and a rebuild's, which it measures first (the next knowledge write
+must also clear the git lock such a cut leaves, so that its history records again), a
 hundred approvals (they write both journal files) killed at points swept across their run and the rebuild
 from the journal that a write starts with once a cut has left `ledger.json` behind it, which it counts as
 torn tails, repairs and writes lost, and the knowledge files changed outside their journal: by hand, by
@@ -189,7 +190,8 @@ makes ids like `task:<date>/1`, and the update that the journal starts with the 
 
 It sends two bundles of this repository: the release, and this checkout (also what is not committed) as
 its descendant, the head of the branch that `get.sh`, run again, fetches into the install's `bosun.git`
-from the checkout's origin (`~/repo.bundle`). Each later head (the failing one, the next version) is
+from the checkout's origin (`~/repo.bundle`). It also sends the release's own `get.sh` (`~/release-get.sh`),
+which installs the release as it did then, a checkout; the scenario refuses to run without it. Each later head (the failing one, the next version) is
 this checkout patched in the VM and bundled over `~/repo.bundle`. The scenario is `tests/work_e2e.sh`; what
 it shares with `tests/install_e2e.sh` is in `tests/sandbox/e2e_lib.sh`. It sets the clock with `sudo date`
 and puts it back when it ends, also on failure.

@@ -152,13 +152,14 @@ jobs_are_gone() {
 settings_sum() { cat "$CONFIG"/bosun.env "$CONFIG"/sessions.yml "$CONFIG"/setup.sh | cksum; }
 # <settings_sum before>: your settings as they were, or with only the keys a newer `bosun init` adds to
 # bosun.env (an install from an older release has none of them: an update never writes a new key, its
-# default applies), the file as it was kept beside it as a .pre-init-* copy. Else what changed.
+# default applies), the file as it was kept beside it as a .pre-init-* copy: lines only added, each a
+# BOSUN_* key, a comment or blank. Else what changed.
 settings_as() {
   local copy kept=""
   [ "$1" = "$(settings_sum)" ] && return 0
   for copy in "$CONFIG"/bosun.env.pre-init-*; do [ -e "$copy" ] && kept="$copy"; done
   if [ -n "$kept" ] && [ "$1" = "$(cat "$kept" "$CONFIG"/sessions.yml "$CONFIG"/setup.sh | cksum)" ] &&
-    ! diff "$kept" "$CONFIG/bosun.env" | grep -q '^<'; then
+    ! diff "$kept" "$CONFIG/bosun.env" | grep '^[<>]' | grep -qvE '^>( (BOSUN_[A-Z0-9_]+=.*|#.*))?[[:space:]]*$'; then
     diff "$kept" "$CONFIG/bosun.env" | sed -n 's/^> \(BOSUN_[A-Z_]*=.*\)/  note  added by the newer init: \1/p' >&2
     return 0
   fi

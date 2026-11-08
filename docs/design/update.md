@@ -561,23 +561,33 @@ installed that day.
 - **The freeze is short.** A year of acme work (`tests/sandbox/acme_year.py`, through bosun's own
   commands) leaves 6 907 ledger writes in a journal of 14 375 changes (6.3 MB), `ledger.json` at 308 KB,
   1 259 knowledge writes (1 824 changes, `facts.jsonl` 831 KB) and its git history. On that, the
-  mid-afternoon update paused writes for 845 ms (`freeze_ms`; 1 043 ms in an earlier run), far under the
-  10 s that the post-call approval hooks allow, so their fallback (saving their record for the next write)
-  is not built. The conversion of the release, with little data, paused them for 154 ms. The update took
-  41 s from its start to its last window's answer, the conversion 18 s.
-- **Restoring costs well under a hook's budget.** On that year's backup (389 files, 24 MB): restore's own
-  check of every file against its manifest (`_verify`) takes 288 ms, flushing each file of the backup to
-  disk 29 ms (taking a backup does not flush its clones; this is what it would cost), and a whole restore
-  into a copy of the stores (257 files put back) 603 ms, against the 8 s of a recovering approval hook.
+  mid-afternoon update paused writes for 845 to 1 267 ms in four runs (`freeze_ms`; the most with the smoke
+  suite running on the host beside the VM), far under the 10 s that the post-call approval hooks allow, so
+  their fallback (saving their record for the next write) is not built. The conversion of the release, with
+  little data, paused them for 154 ms. From its start to its last window's answer, the mid-afternoon update
+  took 40 to 48 s and the conversion 18 to 23 s in those runs, as the first line of each summary says
+  ("bosun updated: … in 43s"); with the real agents (`mac live`), 27 and 33 s on Claude Code and 24 s on
+  Codex by their summaries (40 to 41 s by the scenario's own clock, which looks every 10 s).
+- **Restoring fits a hook's budget only on a quiet disk.** On that year's backup (290 to 434 files, 20 to
+  26 MB): restore's own check of every file against its manifest (`_verify`) takes 34 to 288 ms, flushing
+  each file of the backup to disk 24 to 29 ms (taking a backup does not flush its clones; this is what it
+  would cost), and a whole restore into a copy of the stores 603 ms (257 files put back), 2 899 ms (314) and,
+  with the host busy, 7 531 ms (413), against the 8 s of a recovering approval hook. Nearly all of it is the
+  drive flush (`F_FULLFSYNC`) after each file put back, about 10 ms a file on the host too, with
+  `copyfile` and `copystat` as with `copy2`; one drive flush after them all is under Later.
 - **A read-only file is put back as one.** The first measurement failed: git keeps its objects and
   commit-graph files read-only, and `restore` opened its copy for writing to flush it. It now copies the
-  content, flushes it, then gives it the backup's mode and times (`_put_back`, with a unit test). git's
+  file with its mode and times (`copy2`), then flushes it through a read-only descriptor, so they are on
+  disk with its content (`_put_back`, with a unit test). git's
   maintenance can rewrite such a file after a knowledge write let go of the lock, so a put back can meet
   one.
 - **A write after a cut short rebuilds the whole journal.** Once a cut leaves `ledger.json` behind its
-  journal, the next write rebuilds it from every change (343 ms on that year), as `ledger validate
-  --journal` does; nothing is lost (every approval the journal held was in the ledger after the next
-  write). A long-lived install pays this once per crash.
+  journal, the next write rebuilds it from every change (214 to 455 ms on that year), as `ledger validate
+  --journal` does; nothing is lost. Fifty writes of each store were cut at random from their start to past
+  a write and that rebuild (0 to 657 ms): 27 of the ledger's and 26 of the knowledge base's printed their
+  id first, and each of those was in its store after the next write, as was every approval the journal
+  held. A long-lived install pays the rebuild once per crash. (A first run cut only in the first 300 ms,
+  which on a year of data is before any write prints its id.)
 - **launchd for real.** During the conversion the watchdog's and learning's jobs are really unloaded and
   loaded again afterwards (`launchctl print` all along). A conversion whose migration fails while writes
   are paused loads them again from their plists as they were on disk, byte for byte.
@@ -615,13 +625,15 @@ installed that day.
   `https://0000tok@example.invalid/...` without the user and password, and so does `get.sh`, which shows
   URLs the same way; `get.sh` needs no filter.
 - **A running Claude does not pick up a changed command file.** A Claude started with `--plugin-dir`
-  through a link answered its command from the first file after the link was moved to another folder,
-  and again after that folder's file was changed in place (in each of four runs, Claude Code 2.1.308). It reads its
-  plugin's commands once, at start; so a change to `chores.md` stays a launch input, which restarts the
-  orchestrator. Its writes there are none: a version folder, while Claude runs with its plugin from it,
-  reads clean as an update's prune (`version_work`) and `bosun uninstall` (`versions_work`) read it, and
-  uninstall then deletes every version. (`checkout_work`, for a checkout from before versions, names the
-  shared `bosun.git` as another worktree of a version, so it is not what a version is checked with.)
+  through a link answered its command from the first file after the link was moved to another folder (in
+  each of five runs, Claude Code 2.1.308), and again after the file in the folder it started from was
+  changed in place (in the last of them; the earlier ones changed the other folder's file, which shows
+  nothing). It reads its plugin's commands once, at start; so a change to `chores.md` stays a launch
+  input, which restarts the orchestrator. Its writes there are none: a version folder, while Claude runs
+  with its plugin from it, reads clean as an update's prune (`version_work`) and `bosun uninstall`
+  (`versions_work`) read it, and uninstall deleted every version once it waited for the windows' last
+  hooks (below). (`checkout_work`, for a checkout from before versions, names the shared `bosun.git` as
+  another worktree of a version, so it is not what a version is checked with.)
 - **The prompts' words work with a real Claude.** The take-stock prompt (`TAKE_STOCK_PROMPT` in
   `lib/update_agents.py`: "bosun will restart this session for an update (… -> …), which ends your
   background work. List each background task still running and what you would do when it finishes, and
@@ -640,13 +652,30 @@ installed that day.
   it was launched with changed, as here, but one whose launch changed would be restarted at once, ending
   that work without taking stock. Asked by hand in the update's own words, Codex listed the command with
   `--stock` and, restarted with the update prompt, started it again and answered with `--status`.
-- **The orchestrator re-reads through its working directories.** The re-read prompt names the changed
+- **The orchestrator may read the install.** The re-read prompt names the changed
   files in the install (`~/.local/share/bosun/orchestrator/policy.md`), and Claude Code asks "Allow this
   read outside the working directories?" before it reads there, even in auto mode: the orchestrator stopped
-  at that question and the update waited for it (it never answers for me). The orchestrator's settings now
-  name the install and its versions folder as working directories (`permissions.additionalDirectories`,
-  `install_dirs_settings` in `lib/common.sh`), not `--add-dir`, whose path inside the install would put
-  every file of it in the launch's fingerprint.
+  at that question and the update waited for it (it never answers for me). The orchestrator may now read
+  the install and its versions folder, and only read them: `Read(//<path>/**)` rules added to its settings'
+  own allow list (`install_read_settings` in `lib/common.sh`; the merge adds to a settings file's
+  permission lists and never replaces them). Not working directories (`--add-dir` or
+  `additionalDirectories`), which would let it edit there, and whose path inside the install would put
+  every file of it in the launch's fingerprint. With the rules alone, the next run's orchestrator re-read
+  `policy.md` through the link and answered, with no question, and the update took 27 s.
+- **Uninstall waits for the windows' last hooks.** In three of four runs, `bosun uninstall` kept the
+  install and said to run it again: after it stopped the windows, `logs/` and `signals/` came back in the
+  state folder once deleted. A run listing the processes and the files while it stopped them showed the
+  writer: each Claude Code, ending, starts its async hooks in a session of their own about 1.3 s after its
+  window stopped, `bosun hook signal --window <w>` and its python, which append the window's
+  `signals/<w>.jsonl` (`lib/signals.py`) and log to `logs/hook-<date>.log` (the folder made again by
+  `load_config`). Uninstall now waits for them ([uninstall](uninstall.md#the-order)); with the real Claude
+  it removed the install and every version, and nothing came back after the deletion. That run also showed
+  Claude Code starting `caffeinate -i -t 300` as it ends, in its window's session, and leaving it running:
+  waited for, it held uninstall 15 s and was named as a step not done, so a process an agent starts in its
+  window's session as it ends is not waited for (changed after that run; the smoke suite's stand-in agent
+  leaves such a helper, and the next run's Claude started none). In the run with a Codex repo window, uninstall waited
+  out the 15 s for that window's background `sleep 300`, which Codex had started in a session of its own
+  and which outlived the window, and named it; then it removed the install and every version.
 - **A reinstall's `init` adds its newer keys.** An update never writes a new key (its default applies),
   so an install from an older release lacks the keys a newer `init` writes; `bosun uninstall` then the
   install line adds them to `bosun.env` (at their defaults, under "Added by `bosun init`", the file as it
@@ -785,10 +814,14 @@ Left to the builder:
 - upcasting or rewriting, case by case;
 - the update prompt's exact words, settled in the VM ([above](#settled-in-the-vm));
 - saving hooks' records to disk while a lock is busy, if the measured freeze needs it: it does not
-  (845 ms on a year of data).
+  (845 to 1 267 ms on a year of data).
 
 Later, each a pull request of its own:
 
+- **One drive flush for a restore.** Restore flushes each file it puts back with `F_FULLFSYNC` before
+  renaming it over, which empties the drive's whole cache each time. Writing every copy first, then one
+  `F_FULLFSYNC`, then the renames, would still put each rename on disk after its content, for a fraction
+  of the time (above: 2.9 to 7.5 s on a year of data).
 - **Kept stores on a fresh install.** `bosun uninstall` keeps the ledger and the knowledge base; an
   install of a newer version over them refuses their writes until they are migrated, and `bosun update`
   there finds nothing to update. `init` should run the migrations of kept stores, with a backup, before

@@ -175,6 +175,7 @@ agents_now() { # each window and the Claude in it, a line each
   local window
   for window in orchestrator "${REPO_WINDOWS[@]}"; do echo "$window $(agent_of "$window")"; done
 }
+resumes_of() { grep -c "resume, session" "$STAND_IN/$1.log" 2>/dev/null; } # <window>: its stand-in's resumes so far
 status_of() { bosun sessions --json | jq -r --arg w "$1" '.[] | select(.name == $w) | .agent.status // empty'; }
 pane_of() { tmux -L bosun list-windows -t "=bosun" -F '#{window_name} #{pane_pid}' | awk -v w="$1" '$1 == w { print $2 }'; }
 loop_pid() { # the check-in loop's process (not a subshell of it, which has its command line)
@@ -186,10 +187,10 @@ loop_pid() { # the check-in loop's process (not a subshell of it, which has its 
   done
   return 1
 }
-# <the loop's pid before>: another loop runs now
+# <the loop's pid before>: that process is gone and another loop runs now
 loop_restarted() {
   local now
-  now="$(loop_pid)" && [ "$now" != "$1" ]
+  ! kill -0 "$1" 2>/dev/null && now="$(loop_pid)" && [ "$now" != "$1" ]
 }
 loop_runs_from() { # <folder>: the loop's command line runs bosun-checkin from there
   local command
@@ -299,7 +300,9 @@ a_conversion_put_back() {
   check "... the watchdog's and learning's jobs were unloaded while it ran" jobs_were_unloaded "$OUT/put-back-watch.txt"
   check "... and are loaded again" jobs_loaded
   check "... from their plists as they were on disk, unchanged" test "$(plists_sum)" = "$plists"
-  check "... the check-in loop stopped, and started again" wait_for 60 loop_restarted "$loop"
+  check "... the check-in loop ended at the update's SIGTERM (it says so; that process is gone), and another runs" \
+    bash -c 'grep -q "stopped the check-in loop" "$1"' _ "$out"
+  check "... started again" wait_for 60 loop_restarted "$loop"
   check "... on the old code: the checkout's own bosun-checkin" loop_runs_from "$DIR"
   check "... the install path is the release's checkout still" bash -c '
     [ ! -L "$1" ] && [ "$(git -C "$1" rev-parse HEAD)" = "$2" ]' _ "$DIR" "$RELEASE_COMMIT"
@@ -311,13 +314,13 @@ a_conversion_put_back() {
 
 # Each of bosun's windows restarted on the new version as one whose launch changed (the release
 # recorded no launch), in the same conversation, and answered the update's prompt.
-restarted_and_answered() { # <file of "<window> <pid before>" lines>
-  local window before
-  while read -r window before; do
+restarted_and_answered() { # <file of "<window> <pid before> <resumes before>" lines>
+  local window before resumes
+  while read -r window before resumes; do
     jq -e --arg w "$window" '.windows[$w][2:] == ["restarted", "answered"]' "$STATE/update.json" >/dev/null &&
-      [ "$(agent_of "$window")" != "$before" ] && grep -q "resume, session" "$STAND_IN/$window.log" &&
+      [ "$(agent_of "$window")" != "$before" ] && [ "$(resumes_of "$window")" -gt "${resumes:-0}" ] &&
       [ -s "$STATE/update/notes/$window.status" ] || {
-      echo "$window: $(jq -c --arg w "$window" '.windows[$w]' "$STATE/update.json"), pid $(agent_of "$window") (was $before)"
+      echo "$window: $(jq -c --arg w "$window" '.windows[$w]' "$STATE/update.json"), pid $(agent_of "$window") (was $before), resumes $(resumes_of "$window") (were $resumes)"
       return 1
     }
   done <"$1"
@@ -347,7 +350,7 @@ the_upgrade() {
   cp "$HOME/repo-tree.bundle" "$HOME/repo.bundle"
   loop="$(loop_pid)"
   inode="$(stat -f %i "$DIR")"
-  agents_now >"$OUT/release-agents.txt"
+  agents_now | while read -r window pid; do echo "$window $pid $(resumes_of "$window")"; done >"$OUT/release-agents.txt"
   watch_the_install "$OUT/upgrade-watch.txt"
   watching=$!
   # shellcheck disable=SC2002 # the pipe is the point: this is how people run it
@@ -365,9 +368,11 @@ the_upgrade() {
   check "... and no temporary link left beside it" no_temporary_links
   check "the watchdog's and learning's jobs were unloaded while it converted" jobs_were_unloaded "$OUT/upgrade-watch.txt"
   check "... and are loaded again, on the install path" jobs_loaded_on_the_link
-  check "the check-in loop was stopped, and started again" wait_for 60 loop_restarted "$loop"
+  check "the check-in loop ended at the update's SIGTERM (it says so; that process is gone)" \
+    bash -c 'grep -q "stopped the check-in loop" "$1"' _ "$out"
+  check "... and another runs" wait_for 60 loop_restarted "$loop"
   check "... on the new code" loop_runs_from "$A_ROOT"
-  check "each of bosun's windows restarted on the new version, in its conversation, and answered" \
+  check "each of bosun's windows restarted on the new version, resuming its conversation, and answered" \
     restarted_and_answered "$OUT/release-agents.txt"
   check "... my own shell left as it is" mine_untouched
   check "it ends with where the checkout is kept, and the summary" bash -c '
@@ -829,7 +834,7 @@ the_backup_and_the_hooks() {
   restored=$?
   echo "  note  $(tail -1 <<<"$costs")"
   check "restoring it, as a recovering approval hook does, takes less than the hook's 8 s" test "$restored" = 0
-  check "each hook command of the version before's launch settings runs on the next version ($(grep -c . "$OUT/base-hooks.txt") of them)" hooks_run
+  check "each hook of the version before's launch settings, given its own event, runs on the next version ($(grep -c . "$OUT/base-hooks.txt") of them)" hooks_run
   check "... each through the install link, never a version's own folder" bash -c '! grep -q "bosun-versions/" "$1"' _ "$OUT/base-hooks.txt"
   check "the Slack watcher's next run catches up on the two messages that came during the hold (at $(cat "$OUT/slack-posted-at" 2>/dev/null))" \
     says " 2 new" bosun slack-watch --once
@@ -850,22 +855,35 @@ backup_valid_before() { # <backup>
   cp -Rp "$1/state/." "$OUT/scratch/state/" && cp -Rp "$1/config/." "$OUT/scratch/config/" &&
     [ "$(jq .version "$OUT/scratch/state/ledger.json")" = 1 ] && [ "$(scratch_bosun "$OUT/scratch" ledger validate --journal)" = "ledger is valid" ]
 }
-base_hooks() { # each hook command of the launch settings of the version updated from (A), approvals on
+base_hooks() { # each hook of the launch settings of the version updated from (A), approvals on: its event and command
   BOSUN_APPROVALS_ENABLED=1 BOSUN_EVENTS_ENABLED=1 bash -c 'source "$1/lib/common.sh"
     load_config
     orchestrator_extra_settings
     repo_session_settings acme-api
-    cat "$1/orchestrator/settings.json"' _ "$A_ROOT" | jq -r '.hooks // {} | .[][] | .hooks[] | .command' | sort -u
+    cat "$1/orchestrator/settings.json"' _ "$A_ROOT" |
+    jq -r '.hooks // {} | to_entries[] | .key as $event | .value[] | (.matcher // "") as $m | .hooks[]
+      | "\($event)\t\($m)\t\(.command)"' | sort -u
+}
+hook_payload() { # <event> <matcher>: what Claude Code passes a hook of <event>
+  jq -cn --arg event "$1" --arg matcher "$2" --arg cwd "$HOME/Development/acme-api" '
+    {session_id: "00000000-0000-4000-8000-0000000000ad", transcript_path: "/dev/null", cwd: $cwd, hook_event_name: $event}
+    + ({PreToolUse: {tool_name: "Bash", tool_input: {command: "ls"}, tool_use_id: "toolu_0"},
+        PermissionRequest: {tool_name: "Bash", tool_input: {command: "ls"}},
+        PostToolUse: {tool_name: "Bash", tool_input: {command: "ls"}, tool_use_id: "toolu_0", tool_response: {stdout: ""}},
+        PostToolUseFailure: {tool_name: "Bash", tool_input: {command: "ls"}, tool_use_id: "toolu_0", error: "exit 1"},
+        UserPromptSubmit: {prompt: "how are the exports?"},
+        Stop: {background_tasks: []},
+        StopFailure: {error: "server_error", last_assistant_message: "API Error: 500"},
+        SessionStart: {source: (if $matcher == "compact" then "compact" else "startup" end)},
+        SessionEnd: {reason: "other"},
+        Notification: {notification_type: "idle_prompt", message: "Claude is waiting for your input"}}[$event] // {})'
 }
 hooks_run() {
-  local command payload
-  payload="$(jq -cn --arg cwd "$HOME/Development/acme-api" '{session_id: "00000000-0000-4000-8000-0000000000ad",
-    transcript_path: "/dev/null", cwd: $cwd, hook_event_name: "Stop", tool_name: "Bash", tool_input: {command: "ls"},
-    tool_use_id: "toolu_0", tool_response: {stdout: ""}, prompt: "how are the exports?"}')"
+  local event matcher command
   [ -s "$OUT/base-hooks.txt" ] || return 1
-  while IFS= read -r command; do
-    BOSUN_APPROVALS_ENABLED=1 BOSUN_EVENTS_ENABLED=1 bash -c "$command" <<<"$payload" >/dev/null 2>"$OUT/hook.err" ||
-      { echo "$command: exit $?: $(tail -2 "$OUT/hook.err")" && return 1; }
+  while IFS=$'\t' read -r event matcher command; do
+    BOSUN_APPROVALS_ENABLED=1 BOSUN_EVENTS_ENABLED=1 bash -c "$command" <<<"$(hook_payload "$event" "$matcher")" \
+    >/dev/null 2>"$OUT/hook.err" || { echo "$event: $command: exit $?: $(tail -2 "$OUT/hook.err")" && return 1; }
   done <"$OUT/base-hooks.txt"
 }
 
@@ -1105,12 +1123,12 @@ the_write_after() { # <what>: one ordinary write; what it repaired goes to the o
   sed 's/^/  note  /' "$OUT/repair.txt"
 }
 
-# Fifty cuts at random points of 0 to 300 ms: each cut's line in $OUT/<name>.txt (number, delay, where
+# Fifty cuts at random points of 0 to CUT_MS: each cut's line in $OUT/<name>.txt (number, delay, where
 # it fell, the id it printed) and the ids printed in $OUT/<name>.ids.
 cut_randomly() { # <name> <id pattern> <command...>: @N@ in the command is the cut's number
   local name="$1" pattern="$2" delays n
   shift 2
-  read -r -a delays <<<"$(python3 -c 'import random; print(*(random.randint(0, 300) for _ in range(50)))')"
+  read -r -a delays <<<"$(python3 -c 'import random, sys; print(*(random.randint(0, int(sys.argv[1])) for _ in range(50)))' "$CUT_MS")"
   for n in $(seq 1 50); do
     cut_after "${delays[$((n - 1))]}" "$OUT/$name-$n.txt" "${@//@N@/$n}"
     echo "$n ${delays[$((n - 1))]}ms $CUT_STAGE $(grep -m 1 -oE "$pattern" "$OUT/$name-$n.txt")" >>"$OUT/$name.txt"
@@ -1123,8 +1141,22 @@ cut_randomly() { # <name> <id pattern> <command...>: @N@ in the command is the c
   check "some cut writes printed an id first" test -s "$OUT/$name.ids"
 }
 
+# How far into a write the random cuts reach: a write's time, measured, and the rebuild from the whole
+# journal that a write starts with once a cut has left the file behind it (on a year of data most of its
+# time), so that some cuts fall after a write printed its id.
+CUT_MS=300
+cut_range() { # ledger|kg <a write of that store, as a command...>
+  local store="$1" write check
+  shift
+  write="$(run_ms "$@")"
+  if [ "$store" = ledger ]; then check="$(run_ms bosun ledger validate --journal)"; else check="$(run_ms bosun kg validate)"; fi
+  CUT_MS=$((write + check))
+  echo "  note  a write takes $write ms, and a rebuild from the journal $check ms: cuts from 0 to $CUT_MS ms"
+}
+
 power_cuts() {
-  echo "power cuts: fifty writes killed after 0 to 300 ms"
+  echo "power cuts: fifty writes killed at random, from their start to past a write and a rebuild"
+  cut_range ledger bosun ledger spawn --title "Timing an export check" --ask "Time it" --via "user: time the writes"
   cut_randomly cuts '^task:[^ ]+' bosun ledger spawn --title "Power cut @N@: an export check" \
     --ask "Check export @N@" --via "user: run the export checks"
   bosun ledger validate --journal 2>&1 | sed 's/^/  note  before the next write: /'
@@ -1227,7 +1259,9 @@ last_commit_is() { # <subject>: the knowledge history's last commit
 }
 
 knowledge_power_cuts() {
-  echo "power cuts in the knowledge base: fifty proposals killed after 0 to 300 ms"
+  echo "power cuts in the knowledge base: fifty proposals killed at random, from their start to past a write and a rebuild"
+  cut_range kg bosun kg propose feature/csv-export caveat --value "Timing: the export check passed" \
+    --source "ledger:$T_JSON"
   GIT_LOCK="$KNOWLEDGE/.git/index.lock"
   cut_randomly kg-cuts 'f-[0-9a-hjkmnp-tv-z]{6}' bosun kg propose feature/csv-export caveat \
     --value "Power cut @N@: an export check" --source "ledger:$T_JSON"

@@ -267,9 +267,11 @@ picks_up_commands() {
   ln -s v2 "$PLUGINS/.current.new" && mv -h "$PLUGINS/.current.new" "$PLUGINS/current"
   said="$(asked_for_word)"
   echo "  note  after the link moved to another folder, the running Claude said: $said ($(claude --version))"
-  printf -- '---\ndescription: Say the marker word\n---\nReply with exactly the word CHARLIE and nothing else. Use no tools.\n' >"$PLUGINS/v2/plugin/commands/word.md"
+  # The file of the folder it started from, changed in place: CHARLIE if it reads that file again each time,
+  # BRAVO if it follows the link each time, ALPHA if it read its commands once, at start.
+  printf -- '---\ndescription: Say the marker word\n---\nReply with exactly the word CHARLIE and nothing else. Use no tools.\n' >"$PLUGINS/v1/plugin/commands/word.md"
   said="$(asked_for_word)"
-  echo "  note  after the file changed in place, it said: $said"
+  echo "  note  after the file of the folder it started from changed in place, it said: $said"
   check "... it went on answering" test "$said" != "no answer"
   tmux -L person capture-pane -p -t marker 2>/dev/null | grep -v '^[[:space:]]*$' | tail -12 | cut -c1-100 | sed 's/^/  screen  /'
   tmux -L person kill-server 2>/dev/null
@@ -397,6 +399,48 @@ update_with_agents_at_work() {
   check "each version folder reads clean after it, the old one too" every_version_clean
 }
 
+# While bosun uninstall runs, until $OUT/recorded is there: each process in the sessions of bosun's panes
+# (as they were when it started) or started by one of them, and each file written in the state folder's
+# logs and signals, when first seen and what it ends with: what the stopped windows leave running and
+# writing. It only looks, every 20 ms, and the summary goes to $OUT/stopping.txt.
+record_what_stops() {
+  python3 - "$STATE" "$OUT/recorded" >"$OUT/stopping.txt" 2>&1 <<'PY'
+import os, subprocess, sys, time
+from pathlib import Path
+state, stop = Path(sys.argv[1]), Path(sys.argv[2])
+panes = subprocess.run(["tmux", "-L", "bosun", "list-panes", "-s", "-t", "=bosun", "-F", "#{pane_pid}"],
+                       capture_output=True, text=True).stdout.split()
+def sid(pid):
+    try:
+        return os.getsid(pid)
+    except OSError:
+        return None
+sessions = {s for s in (sid(int(p)) for p in panes) if s}
+start, seen, present, watched = time.monotonic(), {}, set(), set()
+while not stop.exists():
+    now = round(time.monotonic() - start, 2)
+    rows = subprocess.run(["ps", "-A", "-o", "pid=,ppid=,command="], capture_output=True, text=True, errors="replace").stdout
+    for line in rows.splitlines():
+        pid, ppid, command = (line.split(None, 2) + [""])[:3]
+        pid, ppid = int(pid), int(ppid)
+        if pid in seen or not (sid(pid) in sessions or ppid in watched):
+            continue
+        watched.add(pid)
+        seen[pid] = f"{now}s pid {pid} ppid {ppid} session {sid(pid)}: {command[:110]}"
+    now_there = {path for folder in (state / "logs", state / "signals") if folder.is_dir() for path in folder.glob("*")}
+    for path in sorted(now_there - present):  # each time a file appears: when, and the line it ends with
+        last = path.read_text(errors="replace").strip().splitlines()[-1:] if path.is_file() else []
+        print(f"{now}s {path.relative_to(state)} appears: {last[0][:150] if last else ''}")
+    for path in sorted(present - now_there):
+        print(f"{now}s {path.relative_to(state)} is gone")
+    present = now_there
+    time.sleep(0.02)
+print(f"the panes' sessions: {sorted(sessions)}; processes in them or started by them:")
+print("\n".join(seen.values()))
+print(f"there at the end: {', '.join(str(p.relative_to(state)) for p in sorted(present)) or 'nothing'}")
+PY
+}
+
 # What a plain Claude Code offers here, from its first message: about a cent, on the smallest model. Read to
 # the end, so that no Claude is left running when this returns.
 claude_offers() { # [flags...]
@@ -420,7 +464,12 @@ off_again() {
   local checkout="$HOME/.local/share/bosun" out="$OUT/uninstall.txt"
   echo "off again"
   check "with its plugin, Claude Code offers /bosun:chores, so the next check can see one" offers_chores --plugin-dir "$checkout/orchestrator/plugin"
+  record_what_stops &
+  recording=$!
   check "uninstall passes" bash -c 'bosun uninstall --yes >"$1" 2>&1 || { tail -20 "$1"; exit 1; }' _ "$out"
+  touch "$OUT/recorded"
+  wait "$recording"
+  sed 's/^/  note  while it stopped the windows: /' "$OUT/stopping.txt"
   cat "$out"
   check "the windows have stopped" bash -c '! tmux -L bosun has-session -t "=bosun"'
   check "no process runs from the install or a version" wait_for 30 nothing_runs_from_bosun
