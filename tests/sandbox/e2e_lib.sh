@@ -15,9 +15,13 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 UID_NOW="$(id -u)"
 DOMAIN="gui/$UID_NOW"
 LABEL="com.bosun.morning"
-DIR="$HOME/.local/share/bosun"
+DIR="$HOME/.local/share/bosun" # the install path: a link to the version in use
+VERSIONS="$DIR-versions"       # each version's folder, beside bosun.git, and a checkout from before them
 CONFIG="$HOME/.config/bosun"
 OUT="$(mktemp -d)"
+# The installer a first install pipes: this checkout's, or (tests/work_e2e.sh) the release's own, as the
+# one a user ran then.
+GET_SH="$ROOT/get.sh"
 passed=0
 failed=0
 
@@ -65,22 +69,22 @@ a_new_machine() {
     git -C "$ROOT" checkout -q -B install-test
     export BOSUN_REPO="$ROOT" BOSUN_BRANCH="install-test"
   fi
-  check "nothing of bosun is here" bash -c '[ ! -e "$1" ] && [ ! -e "$2" ]' _ "$DIR" "$CONFIG"
+  check "nothing of bosun is here" bash -c '[ ! -e "$1" ] && [ ! -e "$2" ] && [ ! -e "$3" ]' _ "$DIR" "$VERSIONS" "$CONFIG"
   command -v tmux >/dev/null && echo "  note  tmux is already on this runner"
 }
 
 # What someone on a new Mac is told, followed to the letter. get.sh installs nothing itself.
 follow_what_it_says() {
   echo "what bosun needs: it says what to do, and stops"
-  check "a dry run changes nothing" bash -c 'sh "$1/get.sh" --dry-run; [ ! -e "$2" ]' _ "$ROOT" "$DIR"
+  check "a dry run changes nothing" bash -c 'sh "$1" --dry-run; [ ! -e "$2" ]' _ "$GET_SH" "$DIR"
   if ! command -v brew >/dev/null; then
     # shellcheck disable=SC2002 # the pipe is the point: this is how people run it
-    cat "$ROOT/get.sh" | sh >"$OUT/first.txt" 2>&1
+    cat "$GET_SH" | sh >"$OUT/first.txt" 2>&1
     check "on a new Mac it stops and points at Homebrew" grep -q "https://brew.sh" "$OUT/first.txt"
     NONINTERACTIVE=1 /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)" </dev/null >/dev/null
   fi
   # shellcheck disable=SC2002
-  cat "$ROOT/get.sh" | sh >"$OUT/second.txt" 2>&1
+  cat "$GET_SH" | sh >"$OUT/second.txt" 2>&1
   cat "$OUT/second.txt"
   local line
   line="$(grep -oE "brew install [a-z0-9 ]+" "$OUT/second.txt" | head -1)"
@@ -92,7 +96,7 @@ follow_what_it_says() {
 install() {
   echo "the piped installer, unattended"
   # shellcheck disable=SC2002
-  cat "$ROOT/get.sh" | sh -s -- --unattended >"$OUT/install.txt" 2>&1
+  cat "$GET_SH" | sh -s -- --unattended >"$OUT/install.txt" 2>&1
   local installed=$?
   cat "$OUT/install.txt"
   check "it finishes with bosun doctor passing" test "$installed" = 0
@@ -101,6 +105,24 @@ install() {
   check "it found the repo in the usual folder" grep -q "name: acme-api" "$CONFIG/sessions.yml"
   check "repo sessions are in auto mode" grep -q -- "--permission-mode auto" "$CONFIG/bosun.env"
   check "bosun is linked" test -L "$HOME/.local/bin/bosun"
+}
+
+# <folder> is a version: a folder of bosun-versions, a worktree of its bosun.git at the commit it is
+# named for.
+a_version() {
+  [ "$(dirname "$1")" = "$(cd "$VERSIONS" && pwd -P)" ] && [ -f "$1/.git" ] &&
+    [[ "$(git -C "$1" rev-parse HEAD)" == "$(basename "$1")"* ]]
+}
+# What a first install of this checkout's get.sh makes: the versions side by side, the install path a
+# link to the one in use, and ~/.local/bin/bosun through it.
+side_by_side() {
+  local version
+  version="$(cd "$DIR" 2>/dev/null && pwd -P)" || return 1
+  [ -L "$DIR" ] && [ -d "$VERSIONS/bosun.git" ] && a_version "$version" &&
+    [ "$(readlink "$HOME/.local/bin/bosun")" = "$DIR/bin/bosun" ] || {
+    ls -la "$DIR" "$VERSIONS" "$HOME/.local/bin/bosun" 2>&1
+    return 1
+  }
 }
 
 launchd_for_real() {
@@ -128,6 +150,21 @@ jobs_are_gone() {
   done
 }
 settings_sum() { cat "$CONFIG"/bosun.env "$CONFIG"/sessions.yml "$CONFIG"/setup.sh | cksum; }
+# <settings_sum before>: your settings as they were, or with only the keys a newer `bosun init` adds to
+# bosun.env (an install from an older release has none of them: an update never writes a new key, its
+# default applies), the file as it was kept beside it as a .pre-init-* copy. Else what changed.
+settings_as() {
+  local copy kept=""
+  [ "$1" = "$(settings_sum)" ] && return 0
+  for copy in "$CONFIG"/bosun.env.pre-init-*; do [ -e "$copy" ] && kept="$copy"; done
+  if [ -n "$kept" ] && [ "$1" = "$(cat "$kept" "$CONFIG"/sessions.yml "$CONFIG"/setup.sh | cksum)" ] &&
+    ! diff "$kept" "$CONFIG/bosun.env" | grep -q '^<'; then
+    diff "$kept" "$CONFIG/bosun.env" | sed -n 's/^> \(BOSUN_[A-Z_]*=.*\)/  note  added by the newer init: \1/p' >&2
+    return 0
+  fi
+  [ -n "$kept" ] && diff "$kept" "$CONFIG/bosun.env"
+  return 1
+}
 trusted() { jq -e --arg dir "$1" '.projects[$dir].hasTrustDialogAccepted == true' "$HOME/.claude.json"; }
 # Anything of bosun's anywhere in this home folder, by name. Not the agents' own folders, nor this test's.
 named_bosun() {
@@ -149,7 +186,8 @@ uninstall_keeping_records() { # <settings> <ledger>
   jobs_are_gone
   check "the wake is gone" bash -c '! pmset -g sched | grep -i -A3 "repeating" | grep -iq wake'
   check "the windows have stopped" bash -c '! tmux -L bosun has-session -t "=bosun"'
-  check "the checkout it made is gone" test ! -e "$DIR"
+  check "what get.sh installed is gone: the link, and bosun-versions with every version" \
+    bash -c '[ ! -e "$1" ] && [ ! -L "$1" ] && [ ! -e "$2" ]' _ "$DIR" "$VERSIONS"
   check "the link is gone" test ! -e "$bosun"
   check "your settings are as you left them" test "$1" = "$(settings_sum)"
   check "your ledger is as you left it" test "$2" = "$(cksum <"$state/ledger.json")"
@@ -162,5 +200,6 @@ install_again() { # <settings>: the piped installer once more, on what uninstall
   # shellcheck disable=SC2002 # the pipe is the point: this is how people run it
   cat "$ROOT/get.sh" | sh -s -- --unattended >"$OUT/back.txt" 2>&1
   check "installing again passes" test "$?" = 0
-  check "... with your settings" test "$1" = "$(settings_sum)"
+  check "... versions side by side, the install path a link" side_by_side
+  check "... with your settings" settings_as "$1"
 }

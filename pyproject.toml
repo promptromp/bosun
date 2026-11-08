@@ -68,5 +68,5 @@ lines-after-imports = 2
 [tool.mypy]
 python_version = "3.13"
 strict = true
-files = ["lib", "libexec/bosun-resolve", "tests/unit", "tests/llm", "tests/sandbox/drive.py", "tools"]
+files = ["lib", "libexec/bosun-resolve", "tests/unit", "tests/llm", "tests/sandbox/drive.py", "tests/sandbox/acme_year.py", "tools"]
 mypy_path = "lib:tools:tests/llm"

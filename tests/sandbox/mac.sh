@@ -10,9 +10,12 @@
 #   run     on a clone of the developer's Mac: this checkout's installer, real launchd, a real wake
 #           schedule and uninstall (tests/install_e2e.sh). --from-nothing: on the new Mac instead
 #   work    on a clone of the developer's Mac: a week of real work that installs the release (--base,
-#           default origin/main), upgrades to this checkout by running get.sh again, and keeps working
-#           with the clock moved, writers racing and writes cut short (tests/work_e2e.sh)
-#   live    the real agents from nothing, and a real task handed over (tests/sandbox/live.sh). It costs
+#           default the last bosun from before versions and the knowledge base's journal), converts it to
+#           this checkout by running get.sh again, updates mid-afternoon to the next version on a year of
+#           data, goes back and forward again, and keeps working with the clock moved, writers racing and
+#           writes cut short (tests/work_e2e.sh)
+#   live    the real agents from nothing, a real task handed over, and an update with them at work: the
+#           take-stock and update prompts (tests/sandbox/live.sh). It costs
 #           real money, about a dollar. It reads API keys from your Keychain, as BOSUN_SANDBOX_ANTHROPIC_ITEM
 #           and BOSUN_SANDBOX_OPENAI_ITEM name them; they never leave the clone, which is deleted.
 #           BOSUN_SANDBOX_CODEX_MODEL picks a cheaper model than Codex's default
@@ -30,6 +33,10 @@ TREE_BRANCH="sandbox-mac-tree"
 HOMEBREW_INSTALLER="https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh"
 BOOT_SECONDS=240
 WORK="$(mktemp -d)"
+# The release `work` starts from: the last bosun from before versions side by side and the knowledge
+# base's journal (#17), so its first update converts its checkout, and its knowledge base starts a journal.
+# (A commit id, not a secret.)
+RELEASE="95545b0ba6a0e3729e980aa9468876e1228c1874" # pragma: allowlist secret
 VM_PID=""
 ANTHROPIC_ITEM="${BOSUN_SANDBOX_ANTHROPIC_ITEM:-bosun-sandbox-anthropic}"
 OPENAI_ITEM="${BOSUN_SANDBOX_OPENAI_ITEM:-bosun-sandbox-openai}"
@@ -147,7 +154,7 @@ copy_checkout() { # [<name of the bundle in the VM>]
   COPYFILE_DISABLE=1 tar -C "$ROOT" -czf "$WORK/e2e.tgz" get.sh tests/install_e2e.sh tests/work_e2e.sh \
     tests/sandbox/e2e_lib.sh tests/sandbox/acme_week.sh tests/sandbox/claude-stand-in \
     tests/sandbox/gh-stand-in tests/sandbox/drive.py tests/sandbox/live.sh tests/sandbox/live \
-    tests/fixtures/knowledge/acme-import.jsonl
+    tests/sandbox/acme_year.py tests/fixtures/knowledge/acme-import.jsonl
   to_vm "$CLONE" "$WORK/e2e.tgz" e2e.tgz || die "could not copy the test"
   in_vm "$CLONE" 'mkdir -p e2e && tar -xzf e2e.tgz -C e2e' || die "could not unpack the test"
 }
@@ -163,22 +170,26 @@ run() { # [--from-nothing]
   in_vm "$CLONE" 'BOSUN_REPO="$HOME/repo.bundle" BOSUN_BRANCH='"$TREE_BRANCH"' e2e/tests/install_e2e.sh'
 }
 
-# The release (<ref>) installed, then this checkout as its upgrade: two bundles of the same branch, the
-# second a descendant of the first, so that get.sh's `git pull --ff-only` takes it.
+# The release (<ref>) installed by its own get.sh, then this checkout as its upgrade: two bundles of the
+# same branch, the second a descendant of the first, as a branch's next head is. This checkout's get.sh,
+# run then, converts the release's checkout, fetching the head from its origin (~/repo.bundle).
 work() { # [--base <git ref>]
-  local base="origin/main"
+  local base="$RELEASE"
   case "$#:${1:-}" in
     0:) ;;
     2:--base) base="$2" ;;
     *) die "usage: tests/sandbox.sh mac work [--base <git ref>]" ;;
   esac
   git -C "$ROOT" merge-base --is-ancestor "$base" HEAD ||
-    die "$base is not an ancestor of this checkout, so get.sh could not fast-forward to it"
+    die "$base is not an ancestor of this checkout, as a release is of the branch's next head"
   prepare_clone "$DEV_MAC"
   say "booting a clone of $DEV_MAC, for a week of work from $base to this checkout"
   boot "$CLONE" --no-graphics
   bundle_ref "$base" "$WORK/repo-base.bundle" || die "could not bundle $base"
   to_vm "$CLONE" "$WORK/repo-base.bundle" repo-base.bundle || die "could not copy $base"
+  # The release's own installer, as a user ran it then: it installs the release as that release did.
+  git -C "$ROOT" show "$base:get.sh" >"$WORK/release-get.sh" || die "$base has no get.sh"
+  to_vm "$CLONE" "$WORK/release-get.sh" release-get.sh || die "could not copy the release's get.sh"
   copy_checkout repo-tree.bundle
   # shellcheck disable=SC2016 # expands in the VM
   in_vm "$CLONE" 'BOSUN_REPO="$HOME/repo.bundle" BOSUN_BRANCH='"$TREE_BRANCH"' e2e/tests/work_e2e.sh'

@@ -61,6 +61,7 @@ uninstall() {
 a_new_machine
 follow_what_it_says
 install
+check "... versions side by side, the install path a link to the version in use" side_by_side
 launchd_for_real
 run_again
 uninstall

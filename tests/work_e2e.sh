@@ -1,32 +1,44 @@
 #!/bin/bash
-# A week of real work on a real Mac, through an upgrade: the last release installed by the piped
+# A week of real work on a real Mac, through two updates: the last release installed by the piped
 # installer, three days of work on it (tests/sandbox/acme_week.sh: the ledger and the knowledge base),
-# the upgrade the way a user does it (get.sh again), then two more days on the bosun whose writes go
-# through the journals, with the clock moved, writers at once, the clock going back, writes cut short
+# its windows at work, then the upgrade the way a user does it (get.sh again), which converts the
+# release's checkout to versions side by side at a quiet moment (once with a migration that fails while
+# writes are paused, which is put back, then for real). Two more days on the bosun whose writes go
+# through the journals, then a mid-afternoon update to the next version (this checkout and
+# tests/sandbox/update_patch.sh) on a year of data, with windows idle, busy and waiting on a background
+# sleep, writes and hooks arriving all along and Slack messages during the hold; going back by hand,
+# as docs/setup.md says, and forward again. Then writers at once, the clock going back, writes cut short
 # like a power cut, the knowledge files changed outside their journal (by hand, by git, by the release),
 # launchd, the console, uninstall, and a year on. At each step the ledger, the knowledge base and their
 # journals must hold up (`ledger validate --journal`, `kg validate`), and nothing of a person deleted on
-# request may be left in the knowledge folder or its history.
-# Claude Code is a stand-in. It changes the machine it runs on (launchd, pmset, the clock), so it only
-# runs in the throwaway Mac of `tests/sandbox.sh mac work`, which copies in the two bundles it installs
-# from: ~/repo-base.bundle (the release) and ~/repo-tree.bundle (this checkout).
+# request may be left in the knowledge folder, its history or an update's backup.
+# Claude Code is a stand-in (tests/sandbox/claude-stand-in). It changes the machine it runs on (launchd,
+# pmset, the clock), so it only runs in the throwaway Mac of `tests/sandbox.sh mac work`, which copies in
+# the two bundles it installs from, ~/repo-base.bundle (the release) and ~/repo-tree.bundle (this
+# checkout), and the release's own get.sh (~/release-get.sh), which installs the release as a user did
+# then. The install's origin is ~/repo.bundle, which each head of the branch replaces.
 # Checks pass shell snippets to `bash -c '...' _ args`; their $ must not expand here.
 # shellcheck disable=SC2016
 set -uo pipefail
 # The guard (it refuses to run anywhere else), the checks and the steps tests/install_e2e.sh shares.
 source "$(dirname "$0")/sandbox/e2e_lib.sh" || exit 1
 source "$(dirname "$0")/sandbox/acme_week.sh" || exit 1
-# Not on a GitHub runner either: it needs the two bundles, and it sets the clock.
-[ -e /etc/bosun-sandbox ] && [ -s "$HOME/repo-base.bundle" ] && [ -s "$HOME/repo-tree.bundle" ] || {
-  echo "$0 only runs in tests/sandbox.sh mac work, which copies in ~/repo-base.bundle and ~/repo-tree.bundle" >&2
+# Not on a GitHub runner either: it needs the two bundles and the release's get.sh, and it sets the clock.
+copied_in() {
+  [ -e /etc/bosun-sandbox ] && [ -s "$HOME/repo-base.bundle" ] && [ -s "$HOME/repo-tree.bundle" ] && [ -s "$HOME/release-get.sh" ]
+}
+copied_in || {
+  echo "$0 only runs in tests/sandbox.sh mac work, which copies in ~/repo-base.bundle, ~/repo-tree.bundle and ~/release-get.sh" >&2
   exit 1
 }
+GET_SH="$HOME/release-get.sh"
 
 STATE="$HOME/.local/state/bosun"
 JOURNAL="$STATE/journal/ledger"
 KJOURNAL="$KNOWLEDGE/journal"
 T_FIRST="" # the first task the new bosun makes
 DAY=86400
+TODAY=0        # the day the clock is on: days after the first
 CLOCK_START="" # "<wall time> <monotonic time>" at the start: the real time, whatever `date` is set to later
 
 real_time() {
@@ -65,6 +77,7 @@ jobs_quiet() { ! pgrep -f 'libexec/bosun-(morning|learn)' >/dev/null; }
 next_day() { # <days after the first>: the clock moves on, and whatever launchd does about it settles
   local runs
   runs="$(morning_runs)"
+  TODAY="$1"
   set_clock $(($1 * DAY))
   check "the clock moves on to day $(($1 + 1)): $(date -u '+%a %F %R') UTC" clock_reads $(($1 * DAY))
   sleep 5
@@ -145,22 +158,232 @@ the_old_week() {
 
 no_journal_yet() { { [ ! -e "$JOURNAL" ] || [ -z "$(ls -A "$JOURNAL")" ]; } && jq -e 'has("journal") | not' "$STATE/ledger.json"; }
 tree_head() { git bundle list-heads "$HOME/repo-tree.bundle" | awk '{ print $1; exit }'; }
+# The release, as its checkout holds it; this checkout (A) once the conversion made it a version, and
+# its folder; the next version (B: this checkout and tests/sandbox/update_patch.sh), and its folder; the
+# pane of the shell I opened in bosun's tmux session by hand.
+RELEASE_COMMIT="" A_COMMIT="" A_ROOT="" B_COMMIT="" B_ROOT="" MINE_PANE=""
+
+# ---- windows, the check-in loop and launchd, as they are while an update runs ----------------------
+
+REPO_WINDOWS=(acme-api acme-web invoice-exporter)
+agent_of() { pgrep -f "remote-control $1( |\$)" | head -1; } # <window>: the Claude stand-in running in it
+windows_up() {
+  local window
+  for window in orchestrator "${REPO_WINDOWS[@]}"; do [ -n "$(agent_of "$window")" ] || return 1; done
+}
+agents_now() { # each window and the Claude in it, a line each
+  local window
+  for window in orchestrator "${REPO_WINDOWS[@]}"; do echo "$window $(agent_of "$window")"; done
+}
+status_of() { bosun sessions --json | jq -r --arg w "$1" '.[] | select(.name == $w) | .agent.status // empty'; }
+pane_of() { tmux -L bosun list-windows -t "=bosun" -F '#{window_name} #{pane_pid}' | awk -v w="$1" '$1 == w { print $2 }'; }
+loop_pid() { # the check-in loop's process (not a subshell of it, which has its command line)
+  local pid
+  for pid in $(pgrep -f "bosun-checkin --loop"); do
+    ps -o command= -p "$(ps -o ppid= -p "$pid")" 2>/dev/null | grep -q "bosun-checkin --loop" && continue
+    echo "$pid"
+    return 0
+  done
+  return 1
+}
+# <the loop's pid before>: another loop runs now
+loop_restarted() {
+  local now
+  now="$(loop_pid)" && [ "$now" != "$1" ]
+}
+loop_runs_from() { # <folder>: the loop's command line runs bosun-checkin from there
+  local command
+  command="$(ps -o command= -p "$(loop_pid)")"
+  [[ "$command" == *"$1/libexec/bosun-checkin --loop"* ]] && return 0
+  echo "the loop runs: $command"
+  return 1
+}
+my_own_shell() { # a plain shell I open in bosun's tmux session, as prefix-c does
+  tmux -L bosun new-window -d -t "=bosun:" -n mine -- /bin/zsh -l
+  MINE_PANE="$(pane_of mine)"
+  [ -n "$MINE_PANE" ]
+}
+mine_untouched() { # the same pane, no bosun launch in it, and not in the update's record
+  [ "$(pane_of mine)" = "$MINE_PANE" ] && ! tmux -L bosun capture-pane -p -J -S -500 -t "=bosun:mine" | grep -q "launch" &&
+    ! jq -e '.windows | has("mine")' "$STATE/update.json" >/dev/null 2>&1 && return 0
+  echo "the pane now: $(pane_of mine) (was $MINE_PANE)"
+  return 1
+}
+JOBS=("$LABEL.watchdog" "$LABEL.learn")
+jobs_loaded() { launchctl print "$DOMAIN/${JOBS[0]}" >/dev/null && launchctl print "$DOMAIN/${JOBS[1]}" >/dev/null; }
+plists_sum() { cat "$HOME/Library/LaunchAgents/$LABEL".*plist | cksum; }
+
+# In the background until $OUT/watch.stop is there: how often the install path was looked at and found
+# missing, and how often launchd said each of the watchdog's and learning's jobs was not loaded.
+watch_the_install() { # <file it writes>
+  rm -f "$OUT/watch.stop"
+  python3 - "$DIR/bin/bosun" "$DOMAIN/${JOBS[0]}" "$DOMAIN/${JOBS[1]}" "$OUT/watch.stop" >"$1" <<'PY' &
+import os, subprocess, sys, time
+path, jobs, stop = sys.argv[1], sys.argv[2:4], sys.argv[4]
+looks = missing = 0
+unloaded = dict.fromkeys(jobs, 0)
+asked = 0.0
+while not os.path.exists(stop):
+    looks += 1
+    missing += not os.path.exists(path)
+    if time.monotonic() - asked > 0.25:
+        asked = time.monotonic()
+        for job in jobs:
+            unloaded[job] += subprocess.run(["launchctl", "print", job], capture_output=True).returncode != 0
+print(f"looked {looks} times, missing {missing}")
+for job, count in unloaded.items():
+    print(f"{job} unloaded {count}")
+PY
+}
+watched() { # <pid of watch_the_install>: stopped, and what it saw as notes
+  touch "$OUT/watch.stop"
+  wait "$1"
+}
+jobs_were_unloaded() {
+  ! grep -q "unloaded 0$" "$1" && [ "$(grep -c " unloaded " "$1")" = 2 ] && return 0
+  cat "$1"
+  return 1
+}
+never_missing() { grep -qE "^looked [1-9][0-9]* times, missing 0$" "$1" || { cat "$1" && return 1; }; }
+
+# ---- the next head of the branch -----------------------------------------------------------------
+
+# This checkout patched by its own tests/sandbox/update_patch.sh (with <flags>), committed, as the head
+# of the branch in the install's origin (~/repo.bundle).
+a_head() { # <name> [update_patch.sh flags...]
+  local tree="$OUT/$1"
+  shift
+  rm -rf "$tree"
+  git clone -q --branch sandbox-mac-tree "$HOME/repo-tree.bundle" "$tree" &&
+    "$tree/tests/sandbox/update_patch.sh" "$@" "$tree" &&
+    git -C "$tree" -c user.name=sandbox -c user.email=sandbox@example.com commit -qam "the next version" &&
+    git -C "$tree" bundle create -q "$HOME/repo.bundle.new" sandbox-mac-tree &&
+    mv "$HOME/repo.bundle.new" "$HOME/repo.bundle"
+}
+
+# ---- the release at work, and its first update -------------------------------------------------------
+
+the_release_at_work() {
+  echo "the release at work: its windows, its check-in loop, and a shell I opened by hand"
+  RELEASE_COMMIT="$(git -C "$DIR" rev-parse HEAD)"
+  check "the release is a checkout from before versions" bash -c '[ -d "$1/.git" ] && [ ! -L "$1" ] && [ ! -e "$2" ]' _ "$DIR" "$VERSIONS"
+  check "... set up: its install.sh linked ~/.local/bin/bosun into it" test "$(readlink "$HOME/.local/bin/bosun")" = "$DIR/bin/bosun"
+  bosun stop >/dev/null 2>&1
+  bosun start >/dev/null 2>&1
+  check "its windows come up: the orchestrator and the three repos" wait_for 120 windows_up
+  check "... and the check-in loop in its checkin window" wait_for 60 loop_pid
+  my_own_shell
+  check "... and my own shell beside them" test -n "$MINE_PANE"
+}
+
+# A first update whose migration fails while writes are paused: everything as it was, and what it
+# stopped of bosun's own work started again as it was (the jobs from their plists, the loop on the old
+# code). Nothing past the switch ran, so no window was touched.
+a_conversion_put_back() {
+  echo "the first update converts the release, but its migration fails while writes are paused: all put back"
+  local out="$OUT/put-back.txt" loop plists ledger agents watching rc
+  check "a head whose ledger migration fails (update_patch.sh --failing)" a_head failing --failing
+  loop="$(loop_pid)"
+  plists="$(plists_sum)"
+  ledger="$(cksum <"$STATE/ledger.json")"
+  agents="$(agents_now)"
+  watch_the_install "$OUT/put-back-watch.txt"
+  watching=$!
+  # shellcheck disable=SC2002 # the pipe is the point: this is how people run it
+  cat "$ROOT/get.sh" | sh -s -- --unattended >"$out" 2>&1
+  rc=$?
+  watched "$watching"
+  cat "$out"
+  check "it fails (exit 1), saying what failed and that everything is as it was" bash -c '
+    [ "$1" = 1 ] && grep -q "failed on purpose" "$2" && grep -q "Everything is as it was" "$2"' _ "$rc" "$out"
+  check "... the watchdog's and learning's jobs were unloaded while it ran" jobs_were_unloaded "$OUT/put-back-watch.txt"
+  check "... and are loaded again" jobs_loaded
+  check "... from their plists as they were on disk, unchanged" test "$(plists_sum)" = "$plists"
+  check "... the check-in loop stopped, and started again" wait_for 60 loop_restarted "$loop"
+  check "... on the old code: the checkout's own bosun-checkin" loop_runs_from "$DIR"
+  check "... the install path is the release's checkout still" bash -c '
+    [ ! -L "$1" ] && [ "$(git -C "$1" rev-parse HEAD)" = "$2" ]' _ "$DIR" "$RELEASE_COMMIT"
+  check "... the ledger as it was, byte for byte" test "$(cksum <"$STATE/ledger.json")" = "$ledger"
+  check "... the windows as they were" test "$(agents_now)" = "$agents"
+  check "... my shell as it was" mine_untouched
+  check "... and the mark of what it stopped is gone" test ! -e "$STATE/update/own-work.json"
+}
+
+# Each of bosun's windows restarted on the new version as one whose launch changed (the release
+# recorded no launch), in the same conversation, and answered the update's prompt.
+restarted_and_answered() { # <file of "<window> <pid before>" lines>
+  local window before
+  while read -r window before; do
+    jq -e --arg w "$window" '.windows[$w][2:] == ["restarted", "answered"]' "$STATE/update.json" >/dev/null &&
+      [ "$(agent_of "$window")" != "$before" ] && grep -q "resume, session" "$STAND_IN/$window.log" &&
+      [ -s "$STATE/update/notes/$window.status" ] || {
+      echo "$window: $(jq -c --arg w "$window" '.windows[$w]' "$STATE/update.json"), pid $(agent_of "$window") (was $before)"
+      return 1
+    }
+  done <"$1"
+}
+summary_says() { # <output> <from commit> <to commit>: it ends with the summary, from one to the other
+  sed -n '/^bosun updated: /,$p' "$1" >"$1.summary"
+  grep -qE "^bosun updated: ${2:0:7} -> ${3:0:7} \([0-9]+ commits?\) in " "$1.summary" &&
+    grep -qE "^Backup: ~/.local/state/bosun/backups/[^ ]+ \([0-9.]+ (bytes|KB|MB|GB)\)$" "$1.summary" &&
+    [ "$(tail -1 "$1.summary")" = "Going back: docs/setup.md#going-back" ] || {
+    cat "$1.summary"
+    return 1
+  }
+}
+the_swap() { # <the checkout's inode before>: the checkout moved whole to legacy-<its commit>, the link in its place
+  local legacy="$VERSIONS/legacy-${RELEASE_COMMIT:0:12}"
+  [ -L "$DIR" ] && a_version "$A_ROOT" && [ "$(git -C "$legacy" rev-parse HEAD)" = "$RELEASE_COMMIT" ] &&
+    [ "$(stat -f %i "$legacy")" = "$1" ] || {
+    ls -la "$VERSIONS" "$DIR"
+    return 1
+  }
+}
+no_temporary_links() { [ -z "$(find "$(dirname "$DIR")" -maxdepth 1 -name '.bosun.link-*')" ]; }
 
 the_upgrade() {
-  echo "the upgrade: the piped installer again, which pulls the new bosun"
+  echo "the upgrade: the piped installer again, which converts the release's checkout at a quiet moment"
+  local out="$OUT/upgrade.txt" loop inode watching upgraded
   cp "$HOME/repo-tree.bundle" "$HOME/repo.bundle"
+  loop="$(loop_pid)"
+  inode="$(stat -f %i "$DIR")"
+  agents_now >"$OUT/release-agents.txt"
+  watch_the_install "$OUT/upgrade-watch.txt"
+  watching=$!
   # shellcheck disable=SC2002 # the pipe is the point: this is how people run it
-  cat "$ROOT/get.sh" | sh -s -- --unattended >"$OUT/upgrade.txt" 2>&1
-  local upgraded=$?
-  cat "$OUT/upgrade.txt"
+  cat "$ROOT/get.sh" | sh -s -- --unattended >"$out" 2>&1
+  upgraded=$?
+  watched "$watching"
+  cat "$out"
+  A_ROOT="$(cd "$DIR" && pwd -P)"
+  A_COMMIT="$(git -C "$DIR" rev-parse HEAD)"
   check "it passes" test "$upgraded" = 0
-  check "the checkout is the new bosun" test "$(git -C "$DIR" rev-parse HEAD)" = "$(tree_head)"
+  check "the checkout is the new bosun" test "$A_COMMIT" = "$(tree_head)"
+  check "... versions side by side, the install path a link to the new one" side_by_side
+  check "the release's checkout is set aside whole as legacy-<its commit>, swapped for the link in one step" the_swap "$inode"
+  check "... the install path never missing meanwhile ($(head -1 "$OUT/upgrade-watch.txt"))" never_missing "$OUT/upgrade-watch.txt"
+  check "... and no temporary link left beside it" no_temporary_links
+  check "the watchdog's and learning's jobs were unloaded while it converted" jobs_were_unloaded "$OUT/upgrade-watch.txt"
+  check "... and are loaded again, on the install path" jobs_loaded_on_the_link
+  check "the check-in loop was stopped, and started again" wait_for 60 loop_restarted "$loop"
+  check "... on the new code" loop_runs_from "$A_ROOT"
+  check "each of bosun's windows restarted on the new version, in its conversation, and answered" \
+    restarted_and_answered "$OUT/release-agents.txt"
+  check "... my own shell left as it is" mine_untouched
+  check "it ends with where the checkout is kept, and the summary" bash -c '
+    grep -qF "The checkout is kept as $2 until the next update" "$1"' _ "$out" "$VERSIONS/legacy-${RELEASE_COMMIT:0:12}"
+  check "... from the release to this checkout, with its backup" summary_says "$out" "$RELEASE_COMMIT" "$A_COMMIT"
+  check "... and the mark of bosun's own work it stopped is gone" test ! -e "$STATE/update/own-work.json"
   check "bosun doctor passes" bash -c 'bosun doctor >"$1" 2>&1 || { cat "$1"; exit 1; }' _ "$OUT/doctor.txt"
   ledger_before_its_first_write
   check "doctor names the knowledge base from before journals as a note" \
     grep -E "^ +ok +the knowledge base and its journal: no journal yet" "$OUT/doctor.txt"
   check "kg validate says so, and passes" bash -c 'bosun kg validate | grep -q "no journal yet"'
   check "... and starts none, nor the key of the forgotten" no_knowledge_journal
+  bosun stop >/dev/null 2>&1
+}
+jobs_loaded_on_the_link() {
+  jobs_loaded && grep -qF "$DIR/bin/bosun" "$HOME/Library/LaunchAgents/${JOBS[0]}.plist"
 }
 
 ledger_before_its_first_write() {
@@ -255,6 +478,14 @@ not_in() { # <file> <text...>: none of them is in it (any case)
   return 1
 }
 replica_journal() { echo "$KJOURNAL/$(jq -r .replica "$STATE/replica.json").jsonl"; }
+no_copy_holds() { # <text...>: no update backup or rehearsal copy holds any of them (any case)
+  local text found
+  for text in "$@"; do
+    found="$(grep -rliF -- "$text" "$STATE/backups" "$STATE/update/rehearsal" 2>/dev/null)" || continue
+    echo "$text, in: $found"
+    return 1
+  done
+}
 # <text>: the torn files holding it
 torn_named() { grep -liF -- "$1" "$KJOURNAL"/*.torn-* 2>/dev/null; }
 not_in_git() { # <text...>: none of them in the knowledge folder's git history (any case)
@@ -295,6 +526,9 @@ knowledge_privacy() {
     propose feature/csv-export caveat --value "CSV exports end with a newline" --source "ledger:$T_FIRST"
   check "... in a torn file" torn_named priya
   kg_says "Priya asked to be forgotten" "deleted the person" forget person/priya
+  check "... and the update backups, which held her, saying so ($(grep -o 'deleted [0-9]* update backups*' <<<"$KG_SAID"))" \
+    said 0 "$KG_SAID" "taken before this; going back past it is no longer possible"
+  check "... no backup or rehearsal copy holds her" no_copy_holds person/priya "Priya Placeholder"
   check "... kept as a keyed hash" last_forgotten '.hash_kind == "hmac-sha256"'
   check "... nothing of her in local.jsonl" not_in "$KJOURNAL/local.jsonl" priya "export questions batched"
   check "... nor in a torn file" bash -c '! ls "$1"/*.torn-* 2>/dev/null | grep -F local.jsonl' _ "$KJOURNAL"
@@ -316,6 +550,429 @@ the_new_days() {
   day_5
   valid
   kg_valid
+}
+
+# ---- a mid-afternoon update ----------------------------------------------------------------------
+
+# How the update ended, how long it paused writes, its steps while it holds bosun's own work (from
+# marked to checked, writes are paused too), and a temporary link a switch cut short left before it.
+UPDATE_RC="" FREEZE_MS="" LEFT_LINK=""
+HOLD_STEPS="holding marked backed-up migrated switched checked"
+
+year_made() {
+  a_year_of_work >"$OUT/year.txt" 2>&1 && return 0
+  cat "$OUT/year.txt"
+  return 1
+}
+a_year_of_data() {
+  echo "  a year of work in the ledger and the knowledge base"
+  check "$YEAR_DAYS days of acme work, through the installed bosun's own commands" year_made
+  sed 's/^/  note  /' "$OUT/year.txt"
+  valid "... ledger validate --journal passes on it"
+  kg_valid "... kg validate passes on it"
+}
+afternoon_statuses() {
+  [ "$(status_of acme-api)" = idle ] && [ "$(status_of acme-web)" = shell ] &&
+    [ "$(status_of invoice-exporter)" = busy ] && [ "$(status_of orchestrator)" = idle ]
+}
+the_afternoon() {
+  echo "  the afternoon: the windows at work, one waiting on a background sleep, one in a long turn"
+  bosun stop >/dev/null 2>&1
+  afternoon_settings
+  afternoon_windows
+  afternoon_work
+  bosun start >/dev/null 2>&1
+  check "the windows come up on this checkout's version" wait_for 120 windows_up
+  check "... acme-web waits on $BACKGROUND_SLEEP (shell), invoice-exporter is busy, the others idle" wait_for 30 afternoon_statuses
+  check "... the check-in loop runs" wait_for 60 loop_pid
+  my_own_shell
+  check "... and my own shell beside them" test -n "$MINE_PANE"
+  check "the Slack watcher looks before the update: nothing new" says " 0 new" bosun slack-watch --once
+  LEFT_LINK="$(dirname "$DIR")/.bosun.link-0000dead"
+  ln -s "bosun-versions/gone" "$LEFT_LINK" && touch -h -t "$(date -v-1H +%Y%m%d%H%M)" "$LEFT_LINK"
+}
+
+# What is there before the update, which must all be there after it: the ledger's items, both journals
+# and the fact log (append-only, so each must begin as it was), the events queued, what I said in the
+# windows, and the signal hooks' records.
+afternoon_before() {
+  mkdir -p "$OUT/before"
+  jq -r '.items | keys[]' "$STATE/ledger.json" | sort >"$OUT/before/items"
+  jq -c '.said[]?' "$STATE/ledger.json" >"$OUT/before/said"
+  jq -r '.id' "$STATE/events/queue.jsonl" 2>/dev/null | sort >"$OUT/before/events"
+  cp -R "$JOURNAL" "$OUT/before/journal"
+  cp -R "$KJOURNAL" "$OUT/before/kjournal"
+  cp "$KNOWLEDGE/facts.jsonl" "$OUT/before/facts.jsonl"
+  cp -R "$STATE/signals" "$OUT/before/signals"
+  afternoon_counts | sed 's/^/  note  before the update: /'
+}
+afternoon_counts() {
+  echo "$(jq '.items | length' "$STATE/ledger.json") items, $(cat "$JOURNAL"/*.jsonl | wc -l | tr -d ' ') ledger changes," \
+    "$(wc -l <"$KNOWLEDGE/facts.jsonl" | tr -d ' ') fact log lines, $(cat "$KJOURNAL"/*.jsonl | wc -l | tr -d ' ') knowledge changes," \
+    "$(wc -l <"$STATE/events/queue.jsonl" | tr -d ' ') events, $(jq '.said | length' "$STATE/ledger.json") said," \
+    "$(cat "$STATE"/signals/*.jsonl | wc -l | tr -d ' ') signals"
+}
+begins_as() { # <file before> <file now>: now begins with all of before
+  cmp -s "$1" <(head -c "$(wc -c <"$1")" "$2") || {
+    echo "$2 does not begin as $1 did"
+    return 1
+  }
+}
+all_kept() { # what was there before the update is there after it
+  local file missing
+  missing="$(comm -23 "$OUT/before/items" <(jq -r '.items | keys[]' "$STATE/ledger.json" | sort))"
+  [ -z "$missing" ] || { echo "items gone: $missing" && return 1; }
+  missing="$(comm -23 "$OUT/before/events" <(jq -r '.id' "$STATE/events/queue.jsonl" | sort))"
+  [ -z "$missing" ] || { echo "events gone: $missing" && return 1; }
+  if grep -vxF -f <(jq -c '.said[]?' "$STATE/ledger.json") "$OUT/before/said" | grep -q .; then
+    echo "said entries gone"
+    return 1
+  fi
+  for file in "$OUT"/before/journal/*.jsonl; do begins_as "$file" "$JOURNAL/${file##*/}" || return 1; done
+  for file in "$OUT"/before/kjournal/*.jsonl; do begins_as "$file" "$KJOURNAL/${file##*/}" || return 1; done
+  for file in "$OUT"/before/signals/*.jsonl; do begins_as "$file" "$STATE/signals/${file##*/}" || return 1; done
+  begins_as "$OUT/before/facts.jsonl" "$KNOWLEDGE/facts.jsonl"
+}
+
+# In the background while the update runs: the steps it records ($OUT/steps.txt), two Slack messages
+# once it holds bosun's own work, a write of each kind as soon as it pauses writes, and the busy window's
+# long turn ending once the update waits only for it.
+FREEZE_STEPS="marked backed-up migrated switched"
+watch_the_update() { # <the update's pid>
+  local step seen="" posted=0 paused=0 freed=0 kind
+  while kill -0 "$1" 2>/dev/null; do
+    step="$(jq -r '.step // empty' "$STATE/update.json" 2>/dev/null)"
+    if [ -n "$step" ] && [ "$step" != "$seen" ]; then
+      echo "$step" >>"$OUT/steps.txt"
+      seen="$step"
+    fi
+    if [ "$posted" = 0 ] && [[ " $HOLD_STEPS " == *" $step "* ]]; then
+      a_slack_message 1 && a_slack_message 2 && posted=1
+      echo "$step" >"$OUT/slack-posted-at"
+    fi
+    if [ "$paused" = 0 ] && [[ " $FREEZE_STEPS " == *" $step "* ]]; then
+      for kind in "${AFTERNOON_KINDS[@]}"; do afternoon_write "$kind" 901 & done
+      paused=1
+    fi
+    if [ "$freed" = 0 ] && [ "$(jq -c '.pending // empty' "$STATE/update.json" 2>/dev/null)" = '["invoice-exporter"]' ]; then
+      echo idle >"$STAND_IN/invoice-exporter.mode"
+      freed=1
+    fi
+    sleep 0.2
+  done
+  wait
+}
+
+the_update_runs() {
+  local writers watcher updating
+  rm -f "$OUT/writers.stop" "$OUT/steps.txt"
+  the_afternoon_writes &
+  writers=$!
+  sleep 3
+  bosun update --yes >"$OUT/afternoon-update.txt" 2>&1 &
+  updating=$!
+  watch_the_update "$updating" &
+  watcher=$!
+  wait "$updating"
+  UPDATE_RC=$?
+  touch "$OUT/writers.stop"
+  wait "$writers" "$watcher"
+  cat "$OUT/afternoon-update.txt"
+}
+
+numbers_once() { # <kind> <the numbers found, one a line>: each write of <kind> that went through, once
+  diff <(awk '{ print $1 }' "$OUT/afternoon-$1.ok" | sort -n) <(sort -n <<<"$2") >/dev/null && return 0
+  echo "$1: went through $(wc -l <"$OUT/afternoon-$1.ok" | tr -d ' '), found $(grep -c . <<<"$2") ($(sort -n <<<"$2" | uniq -d | head -3 | tr '\n' ' ')twice)"
+  return 1
+}
+found_notes() { bosun ledger show "$T_AFTERNOON" | jq -r '.history[] | .note // "" | capture("^Afternoon note (?<n>[0-9]+)$").n'; }
+found_facts() { csv_facts | jq -r '.[] | .value // "" | capture("^Afternoon fact (?<n>[0-9]+):").n'; }
+found_prompts() { jq -r '.said[]? | .text | capture("^afternoon prompt (?<n>[0-9]+)$").n' "$STATE/ledger.json"; }
+found_prompt_events() { jq -r '.summary // "" | capture("^afternoon prompt (?<n>[0-9]+)$").n' "$STATE/events/queue.jsonl"; }
+found_signals() {
+  jq -r --arg id "$AFTERNOON_SESSION" 'select(.session == $id) | .running[0].what // "" | capture("^afternoon check (?<n>[0-9]+)$").n' \
+    "$STATE/signals/acme-api.jsonl"
+}
+some_while_paused() { # <kind>: some of its writes began while writes were paused, and none failed
+  [ ! -s "$OUT/afternoon-$1.failed" ] && grep -qE " (${FREEZE_STEPS// /|})$" "$OUT/afternoon-$1.ok" && return 0
+  cat "$OUT/afternoon-$1.failed" 2>/dev/null
+  awk '{ print $2 }' "$OUT/afternoon-$1.ok" | sort | uniq -c
+  return 1
+}
+
+nothing_lost() {
+  echo "  nothing lost: what was there, and every write and hook that arrived during the update"
+  afternoon_counts | sed 's/^/  note  after the update: /'
+  local kind
+  for kind in "${AFTERNOON_KINDS[@]}"; do
+    echo "  note  $kind: $(wc -l <"$OUT/afternoon-$kind.ok" | tr -d ' ') went through, by the update's step when they began: $(awk '{ print $2 }' "$OUT/afternoon-$kind.ok" | sort | uniq -c | tr -s ' ' | tr '\n' ',')"
+    check "... $kind: none failed, and some began while writes were paused" some_while_paused "$kind"
+  done
+  check "everything there before the update is there after it, both journals and the fact log as they began" all_kept
+  check "each ledger write that went through is in the ledger, once" numbers_once note "$(found_notes)"
+  check "each knowledge write, once" numbers_once fact "$(found_facts)"
+  check "each prompt I typed (the UserPromptSubmit hook), once in the ledger" numbers_once prompt "$(found_prompts)"
+  check "... and once as an event for the orchestrator" numbers_once prompt "$(found_prompt_events)"
+  check "each Stop hook's record, once" numbers_once signal "$(found_signals)"
+  check "nothing bosun said to a window is recorded as mine" bash -c '! jq -e "[.said[]? | select(.text | test(\"^bosun (was updated|will restart)\"))] | length > 0" "$1"' _ \
+    "$STATE/ledger.json"
+}
+
+brought_along() { # each window as the update's table says, by what it was doing
+  jq -e '.windows.orchestrator == ["orchestrator", "re-read", "asked to re-read", "answered"]
+    and .windows["acme-api"] == ["repo", "restart", "restarted", "answered"]
+    and .windows["acme-web"] == ["repo", "take stock, then restart", "asked to take stock", "restarted", "answered"]
+    and .windows["invoice-exporter"] == ["repo", "wait until idle", "restarted", "answered"]
+    and (.windows | has("checkin") | not) and .pending == []' "$STATE/update.json" >/dev/null || {
+    jq -c '{step, pending, windows}' "$STATE/update.json"
+    return 1
+  }
+}
+sleep_again() { # acme-web's background sleep: in its stock note, and running again under its new Claude
+  local agent
+  agent="$(agent_of acme-web)"
+  grep -qF "$BACKGROUND_SLEEP" "$STATE/update/notes/acme-web.stock" && pgrep -P "$agent" -f "^$BACKGROUND_SLEEP\$" >/dev/null &&
+    grep -qF "started again: $BACKGROUND_SLEEP" "$STATE/update/notes/acme-web.status" && return 0
+  cat "$STATE/update/notes/acme-web."* 2>&1
+  pgrep -fl "$BACKGROUND_SLEEP"
+  return 1
+}
+on_the_next_version() { [ "$(git -C "$DIR" rev-parse HEAD)" = "$B_COMMIT" ] && a_version "$B_ROOT"; }
+kept_running_and_reread() {
+  [ "$(agent_of orchestrator)" = "$(awk '$1 == "orchestrator" { print $2 }' "$OUT/afternoon-agents.txt")" ] &&
+    grep -q "Re-read .*orchestrator/policy.md" "$STAND_IN/orchestrator.log"
+}
+afternoon_summary() { # the summary names the versions, the migration, the prompt changed and the backup
+  local summary="$OUT/afternoon-update.txt.summary"
+  summary_says "$OUT/afternoon-update.txt" "$A_COMMIT" "$B_COMMIT" &&
+    grep -qE "^  ledger +format 1 -> 2 \([0-9]+ items migrated\)$" "$summary" && grep -qx "Prompts changed: 1 (policy.md)" "$summary" &&
+    grep -qF "Backup: ~/.local/state/bosun/backups/$(basename "$(jq -r .backup "$STATE/update.json")")" "$summary" && return 0
+  cat "$summary"
+  return 1
+}
+steps_in_order() { # the steps seen, from its plan on, each later than the one before, through the freeze to its windows
+  awk -v order="planned rehearsed holding marked backed-up migrated switched checked released agents done" '
+    BEGIN { n = split(order, steps, " "); for (i = 1; i <= n; i++) at[steps[i]] = i }
+    $1 == "planned" { started = 1 }
+    !started { next }
+    { if (!($1 in at) || at[$1] <= last) bad = 1; last = at[$1]; seen[$1] = 1 }
+    END { exit bad || !seen["agents"] || !(seen["marked"] || seen["backed-up"] || seen["migrated"] || seen["switched"] || seen["checked"]) }' \
+    "$OUT/steps.txt"
+}
+
+the_update_itself() {
+  echo "  the update"
+  B_ROOT="$(cd "$DIR" && pwd -P)"
+  FREEZE_MS="$(jq -r '.freeze_ms // empty' "$STATE/update.json")"
+  check "it ends well (exit 0)" test "$UPDATE_RC" = 0
+  check "... through the plan, the rehearsal, the hold, the freeze, the release and the windows ($(tr '\n' ' ' <"$OUT/steps.txt"))" steps_in_order
+  check "the install path leads to the next version" on_the_next_version
+  check "... the ledger in format 2, migrated" test "$(jq -r '"\(.version) \(.update_patch)"' "$STATE/ledger.json")" = "2 migrated"
+  valid
+  kg_valid
+  echo "  note  writes were paused for $FREEZE_MS ms (freeze_ms), on a year of data"
+  check "the freeze, on a year of data, is under 10 000 ms: $FREEZE_MS ms" test "${FREEZE_MS:-99999}" -lt 10000
+  check "each window brought along by the table: the orchestrator re-read, acme-api restarted, acme-web took stock first, invoice-exporter was waited for" brought_along
+  check "... the orchestrator kept running, asked to re-read policy.md" kept_running_and_reread
+  check "... acme-web's $BACKGROUND_SLEEP listed before its restart, and started again from its stock note" sleep_again
+  check "... the check-in loop restarted on the next version" loop_runs_from "$B_ROOT"
+  check "... my own shell left as it is" mine_untouched
+  check "the summary: the versions, the migration, policy.md, the backup" afternoon_summary
+  check "the temporary link a switch cut short before it is swept" test ! -L "$LEFT_LINK"
+}
+
+# What restoring the backup costs on a year of data, for a recovering approval hook (8 s): restore's own
+# check of the backup's files against its manifest (_verify), flushing each file of the backup to disk
+# (what taking it skips), and a whole restore into a copy of the stores. As notes, and one check.
+restore_costs() {
+  python3 - "$B_ROOT/lib" "$(jq -r .backup "$STATE/update.json")" "$STATE" "$CONFIG" "$OUT/restore-copy" <<'PY'
+import os, shutil, subprocess, sys, time
+from pathlib import Path
+sys.path.insert(0, sys.argv[1])
+import journal, update_backups
+backup, state, config, copy = (Path(p) for p in sys.argv[2:6])
+def took(start): return round((time.monotonic() - start) * 1000)
+manifest = update_backups.read_manifest(backup)
+files = [p for p in backup.rglob("*") if p.is_file() and not p.is_symlink()]
+started = time.monotonic()
+update_backups._verify(manifest, backup, update_backups.FROZEN)
+verify = took(started)
+started = time.monotonic()
+for path in files:
+    fd = os.open(path, os.O_RDONLY)
+    try:
+        journal.flush_to_disk(fd)
+    finally:
+        os.close(fd)
+flush = took(started)
+copy.mkdir(parents=True)
+for side, folder in (("state", state), ("config", config)):
+    subprocess.run(["cp", "-c", "-R", str(folder), str(copy / side)], check=True)
+started = time.monotonic()
+restored = update_backups.restore(backup, copy / "state", copy / "config", update_backups.FROZEN)
+whole = took(started)
+size = sum(p.stat().st_size for p in files) // 1024
+print(f"the backup: {len(files)} files, {size} KB; verify {verify} ms, flush {flush} ms, restore {whole} ms ({len(restored)} put back)")
+shutil.rmtree(copy)
+sys.exit(0 if whole < 8000 else 1)
+PY
+}
+
+the_backup_and_the_hooks() {
+  echo "  the backup, and what runs from before the update"
+  local backup costs restored
+  backup="$(jq -r .backup "$STATE/update.json")"
+  check "the backup, put in a scratch state and config folder, passes the version before's ledger validate --journal" \
+    backup_valid_before "$backup"
+  check "... and its kg validate" scratch_bosun "$OUT/scratch" kg validate
+  costs="$(restore_costs 2>&1)"
+  restored=$?
+  echo "  note  $(tail -1 <<<"$costs")"
+  check "restoring it, as a recovering approval hook does, takes less than the hook's 8 s" test "$restored" = 0
+  check "each hook command of the version before's launch settings runs on the next version ($(grep -c . "$OUT/base-hooks.txt") of them)" hooks_run
+  check "... each through the install link, never a version's own folder" bash -c '! grep -q "bosun-versions/" "$1"' _ "$OUT/base-hooks.txt"
+  check "the Slack watcher's next run catches up on the two messages that came during the hold (at $(cat "$OUT/slack-posted-at" 2>/dev/null))" \
+    says " 2 new" bosun slack-watch --once
+  check "... queued as two slack events, each once" slack_events_once
+  grep -h "update in progress" "$STATE"/logs/checkin-*.log 2>/dev/null | tail -2 | sed 's/^/  note  the check-in loop: /'
+}
+slack_events_once() { # each Slack message, one slack event
+  diff <(jq -r .permalink "$SLACK_STAND_IN/messages.jsonl" | sort) <(jq -r 'select(.type == "slack") | .ref' "$STATE/events/queue.jsonl" | sort)
+}
+scratch_bosun() { # <scratch folder> <bosun arguments...>: the version before's bosun, on the scratch folders
+  local scratch="$1"
+  shift
+  BOSUN_STATE_DIR="$scratch/state" BOSUN_LOG_DIR="$scratch/state/logs" BOSUN_CONFIG_DIR="$scratch/config" "$A_ROOT/bin/bosun" "$@"
+}
+backup_valid_before() { # <backup>
+  rm -rf "$OUT/scratch"
+  mkdir -p "$OUT/scratch/state" "$OUT/scratch/config"
+  cp -Rp "$1/state/." "$OUT/scratch/state/" && cp -Rp "$1/config/." "$OUT/scratch/config/" &&
+    [ "$(jq .version "$OUT/scratch/state/ledger.json")" = 1 ] && [ "$(scratch_bosun "$OUT/scratch" ledger validate --journal)" = "ledger is valid" ]
+}
+base_hooks() { # each hook command of the launch settings of the version updated from (A), approvals on
+  BOSUN_APPROVALS_ENABLED=1 BOSUN_EVENTS_ENABLED=1 bash -c 'source "$1/lib/common.sh"
+    load_config
+    orchestrator_extra_settings
+    repo_session_settings acme-api
+    cat "$1/orchestrator/settings.json"' _ "$A_ROOT" | jq -r '.hooks // {} | .[][] | .hooks[] | .command' | sort -u
+}
+hooks_run() {
+  local command payload
+  payload="$(jq -cn --arg cwd "$HOME/Development/acme-api" '{session_id: "00000000-0000-4000-8000-0000000000ad",
+    transcript_path: "/dev/null", cwd: $cwd, hook_event_name: "Stop", tool_name: "Bash", tool_input: {command: "ls"},
+    tool_use_id: "toolu_0", tool_response: {stdout: ""}, prompt: "how are the exports?"}')"
+  [ -s "$OUT/base-hooks.txt" ] || return 1
+  while IFS= read -r command; do
+    BOSUN_APPROVALS_ENABLED=1 BOSUN_EVENTS_ENABLED=1 bash -c "$command" <<<"$payload" >/dev/null 2>"$OUT/hook.err" ||
+      { echo "$command: exit $?: $(tail -2 "$OUT/hook.err")" && return 1; }
+  done <"$OUT/base-hooks.txt"
+}
+
+a_mid_afternoon_update() {
+  echo "a new day, and a mid-afternoon update to the next version, on a year of data"
+  next_day 5
+  a_year_of_data
+  the_afternoon
+  check "the next version: this checkout and update_patch.sh (the ledger's format 2 and its migration, a line of policy.md, the repo windows' hooks), at the head of the branch" \
+    a_head next
+  B_COMMIT="$(git -C "$OUT/next" rev-parse HEAD)"
+  base_hooks >"$OUT/base-hooks.txt"
+  agents_now >"$OUT/afternoon-agents.txt"
+  afternoon_before
+  the_update_runs
+  the_update_itself
+  nothing_lost
+  the_backup_and_the_hooks
+}
+
+# ---- going back, by hand, and forward again ----------------------------------------------------------
+
+all_stopped() { ! tmux -L bosun has-session -t "=bosun" 2>/dev/null && ! launchctl print "$DOMAIN/${JOBS[0]}" >/dev/null 2>&1 &&
+  ! launchctl print "$DOMAIN/${JOBS[1]}" >/dev/null 2>&1; }
+put_the_backup_back() { # <backup>: each entry of its state/ and config/ over the one in use, replacing it whole
+  local side entry target
+  for side in state config; do
+    target="$STATE"
+    [ "$side" = config ] && target="$CONFIG"
+    for entry in "$1/$side"/* "$1/$side"/.[!.]*; do
+      [ -e "$entry" ] || [ -L "$entry" ] || continue
+      rm -rf "${target:?}/${entry##*/}" && cp -Rp "$entry" "$target/" || return 1
+    done
+  done
+}
+added_again() { # <commit>: its folder added again, whole, as the guide says when it is gone, then removed
+  local folder="$OUT/added-again"
+  git --git-dir "$VERSIONS/bosun.git" worktree add --detach "$folder" "$1" >/dev/null 2>&1 &&
+    [ "$(git -C "$folder" rev-parse HEAD)" = "$1" ] && git --git-dir "$VERSIONS/bosun.git" worktree remove "$folder"
+}
+
+going_back() {
+  echo "going back to the version before, by hand, as docs/setup.md#going-back says"
+  local backup from
+  backup="$(jq -r .backup "$STATE/update.json")"
+  from="$(jq -r .from "$backup/manifest.json")"
+  bosun stop >/dev/null 2>&1
+  launchctl bootout "$DOMAIN/${JOBS[0]}" 2>/dev/null
+  launchctl bootout "$DOMAIN/${JOBS[1]}" 2>/dev/null
+  check "1. bosun stop, and the watchdog's and learning's jobs unloaded" all_stopped
+  check "2. the version it came from is in bosun-versions, as the backup's manifest names it" a_version "$VERSIONS/${from:0:12}"
+  check "... the summary's 7 characters turn into its whole commit" test "$(git --git-dir "$VERSIONS/bosun.git" rev-parse "${from:0:7}")" = "$from"
+  check "... and were it gone, the guide's worktree add brings it back whole" added_again "$from"
+  check "3. the backup put back: each entry of its state/ and config/ over the one in use" put_the_backup_back "$backup"
+  check "4. the link led to the older version" ln -sfn "$VERSIONS/${from:0:12}" "$DIR"
+  check "... its install.sh loads its jobs again" bash -c '"$1/install.sh" >"$2" 2>&1 || { tail -15 "$2"; exit 1; }' _ "$DIR" "$OUT/back-install.txt"
+  check "... and bosun start" bosun start
+  check "the version before runs again" test "$(git -C "$DIR" rev-parse HEAD)" = "$A_COMMIT"
+  check "... its jobs loaded" jobs_loaded
+  check "... the ledger as the backup has it, in format 1, valid" bash -c '[ "$(jq -r ".version" "$1/ledger.json")" = 1 ] && bosun ledger validate --journal' _ "$STATE"
+  kg_valid
+  check "... its windows up" wait_for 120 windows_up
+  check "bosun update would take it forward again" says "ledger: format 1 -> 2" bosun update --dry-run
+}
+
+forward_again() {
+  echo "forward again: bosun update, as the guide says"
+  check "bosun update --yes takes it to the next version again" bash -c 'bosun update --yes >"$1" 2>&1 || { tail -20 "$1"; exit 1; }' _ "$OUT/forward.txt"
+  check "... the ledger migrated to format 2 again" test "$(jq -r '"\(.version) \(.update_patch)"' "$STATE/ledger.json")" = "2 migrated"
+  check "... on the next version" test "$(git -C "$DIR" rev-parse HEAD)" = "$B_COMMIT"
+  valid
+  kg_valid
+  bosun stop >/dev/null 2>&1
+  afternoon_settings_off
+}
+
+forgotten_after_the_update() {
+  echo "Sam asks to be forgotten after the updates: no backup or rehearsal copy may hold him"
+  check "the update backups hold Sam now" bash -c 'grep -rqF "$1" "$2"' _ "$K_SAM" "$STATE/backups"
+  kg_says "Sam asked to be forgotten" "deleted the person" forget person/sam
+  check "... which deletes every update backup, saying so ($(grep -o 'deleted [0-9]* update backups*' <<<"$KG_SAID"))" \
+    said 0 "$KG_SAID" "taken before this; going back past it is no longer possible"
+  check "... no backup or rehearsal copy holds his id, name or fact" no_copy_holds person/sam "Sam Placeholder" "$K_SAM"
+  check "... nor the knowledge folder or its history" nowhere person/sam "Sam Placeholder"
+  kg_valid
+}
+
+# ---- a token in a repository's URL -----------------------------------------------------------------
+
+TOKEN_URL="https://0000tok@example.invalid/acme/bosun.git" # fictional and unreachable; gitleaks:allow
+git_keeps_tokens_out() {
+  echo "a repository URL with a token in it, which cannot be reached: what git and get.sh say"
+  local scratch="$OUT/token" what
+  mkdir -p "$scratch"
+  GIT_TERMINAL_PROMPT=0 git clone --quiet --bare "$TOKEN_URL" "$scratch/clone.git" >"$scratch/clone.txt" 2>&1
+  git init -q --bare "$scratch/fetch.git"
+  # A made-up token at a host that cannot be reached: pragma: allowlist secret, gitleaks:allow
+  git --git-dir="$scratch/fetch.git" remote add origin "https://user:0000tok@example.invalid/acme/bosun.git" # pragma: allowlist secret gitleaks:allow
+  GIT_TERMINAL_PROMPT=0 git --git-dir="$scratch/fetch.git" fetch --quiet origin "+refs/heads/main:refs/remotes/origin/main" \
+    >"$scratch/fetch.txt" 2>&1
+  BOSUN_DIR="$scratch/share/bosun" BOSUN_REPO="$TOKEN_URL" BOSUN_BRANCH=main GIT_TERMINAL_PROMPT=0 \
+    sh "$ROOT/get.sh" --unattended >"$scratch/get.txt" 2>&1
+  echo "  note  $(git --version)"
+  for what in clone fetch get; do
+    sed "s/0000tok/[THE TOKEN]/g; s/^/  note  $what: /" "$scratch/$what.txt" | tail -3
+    check "... what $what printed holds no token" bash -c '[ -s "$1" ] && ! grep -q 0000tok "$1"' _ "$scratch/$what.txt"
+  done
 }
 
 twenty_writers() {
@@ -387,8 +1044,8 @@ both_stores_at_once() {
 clock_goes_back() {
   echo "the clock goes back an hour"
   local n
-  set_clock $((4 * DAY - 3600))
-  check "the clock reads an hour earlier: $(date -u '+%a %F %R') UTC" clock_reads $((4 * DAY - 3600))
+  set_clock $((TODAY * DAY - 3600))
+  check "the clock reads an hour earlier: $(date -u '+%a %F %R') UTC" clock_reads $((TODAY * DAY - 3600))
   for n in 1 2 3 4 5; do
     step "a write an hour back ($n)" note "$T_JSON" "export check $n after the clock went back"
   done
@@ -402,8 +1059,8 @@ clock_goes_back() {
   check "every clock in the knowledge journal is above the one before it" journal_lines hlc "$KJOURNAL"
   tail -5 "$(replica_journal)" | jq -r '"  note  seq \(.seq) hlc \(.hlc) \(.cmd)"'
   kg_valid
-  set_clock $((4 * DAY))
-  check "the clock is put right: $(date -u '+%a %F %R') UTC" clock_reads $((4 * DAY))
+  set_clock $((TODAY * DAY))
+  check "the clock is put right: $(date -u '+%a %F %R') UTC" clock_reads $((TODAY * DAY))
 }
 
 CUT_STAGE=""  # where the last cut fell
@@ -500,6 +1157,7 @@ PY
 run_ms() { # <command...>: how long it takes, in milliseconds
   python3 -c 'import subprocess, sys, time; t = time.monotonic(); subprocess.run(sys.argv[1:], capture_output=True); print(int((time.monotonic() - t) * 1000))' "$@"
 }
+journaled_quotes() { cat "$JOURNAL"/*.jsonl | grep -oE 'yes, open the retry PR \(cut [0-9]+\)' | sort -u; }
 approved_quotes() { bosun ledger show "$T_RETRY" | jq -r '.history[] | select(.event == "approved") | .note'; }
 all_approved() { # <file of quotes>: each one is in the item's history (and there is at least one)
   local missing
@@ -516,16 +1174,19 @@ all_approved() { # <file of quotes>: each one is in the item's history (and ther
   return 1
 }
 
+# A write that finds ledger.json behind its journal (a cut left it so) first rebuilds it from the whole
+# journal, as `ledger validate --journal` does: on a year of data that is most of a write's time.
 swept_cuts() {
   echo "power cuts, swept: an approval (it writes both journal files) killed at each point of its run"
-  local n ms took count=100 torn_before
+  local n ms took catch_up count=100 torn_before
   step "a proposal to approve" propose "$T_RETRY" --run "gh pr create --repo acme/web --title 'Retry an export that timed out'"
   took="$(for n in 1 2 3; do run_ms bosun ledger approve "$T_RETRY" --quote "yes, open the retry PR (timing $n)"; done |
     sort -n | sed -n 2p)" # the median of three
-  echo "  note  an approval takes $took ms; $count cuts from 0 to $took ms"
+  catch_up="$(run_ms bosun ledger validate --journal)"
+  echo "  note  an approval takes $took ms, and a rebuild from the journal $catch_up ms; $count cuts from 0 to $((took + catch_up)) ms"
   torn_before="$(torn_files)"
   for n in $(seq 0 $((count - 1))); do
-    ms=$((n * took / (count - 1)))
+    ms=$((n * (took + catch_up) / (count - 1)))
     cut_after "$ms" "$OUT/approve-$n.txt" bosun ledger approve "$T_RETRY" --quote "yes, open the retry PR (cut $n)"
     grep -q "approved (" "$OUT/approve-$n.txt" && echo "yes, open the retry PR (cut $n)" >>"$OUT/approve.quotes"
     echo "$n ${ms}ms $CUT_STAGE $(journal_state)" >>"$OUT/approve-cuts.txt"
@@ -538,6 +1199,9 @@ swept_cuts() {
   echo "  note  $(wc -l <"$OUT/approve.quotes" | tr -d ' ') of $count printed their approval; $(approved_quotes | grep -c '(cut ') are in the ledger"
   valid
   check "every approval a cut command printed is in the ledger" all_approved "$OUT/approve.quotes"
+  journaled_quotes >"$OUT/journaled.quotes"
+  echo "  note  $(wc -l <"$OUT/journaled.quotes" | tr -d ' ') of them reached the journal"
+  check "... and every one the journal holds" all_approved "$OUT/journaled.quotes"
   check "the journal's seq still runs 1..n with no gap" journal_lines seq
 }
 
@@ -652,7 +1316,7 @@ an_older_bosun_forgets() {
   check "the release, beside the installed bosun" git clone -q --branch sandbox-mac-tree "$HOME/repo-base.bundle" "$OUT/release"
   check "Lee asked to be forgotten: the release deletes him" says "deleted the person" "$OUT/release/bin/bosun" kg forget person/lee
   check "... kept as a plain hash, as the release keeps it" last_forgotten 'has("hash_kind") | not'
-  check "the installed bosun is as it was" test "$(git -C "$DIR" rev-parse HEAD)" = "$(tree_head)"
+  check "the installed bosun is as it was" test "$(git -C "$DIR" rev-parse HEAD)" = "$B_COMMIT"
   validate_notes
   kg_says "the next write deletes him from the journal too, and says so" "deleted on request are gone" \
     propose feature/csv-export caveat --value "After the release's forget: the export check passed" --source "ledger:$T_JSON"
@@ -763,13 +1427,20 @@ follow_what_it_says
 install
 check "... and the other two" bash -c 'grep -q "name: acme-web" "$1" && grep -q "name: invoice-exporter" "$1"' _ "$CONFIG/sessions.yml"
 what_the_release_does
+git_keeps_tokens_out
 launchd_for_real
 the_old_week
+the_release_at_work
+a_conversion_put_back
 the_upgrade
 the_first_write
 the_first_knowledge_write
 knowledge_privacy
 the_new_days
+a_mid_afternoon_update
+going_back
+forward_again
+forgotten_after_the_update
 twenty_writers
 knowledge_writers
 both_stores_at_once

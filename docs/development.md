@@ -52,8 +52,8 @@ the cheapest of these that can show what you changed:
 | Anything else in bosun | `tests/sandbox.sh all` | also the unit tests and the smoke suite | 3 minutes |
 | `get.sh`, `install.sh`, launchd, `pmset`, anything macOS does its own way | `tests/sandbox.sh mac run` | the real thing on real macOS, except sleep | 75 seconds |
 | What a new Mac lacks: Homebrew, Apple's tools | `tests/sandbox.sh mac run --from-nothing` | the same from a Mac with nothing on it | 4 minutes |
-| What an update does to a ledger and a knowledge base in use, and what real use does to them: their journals, ids, writes, privacy | `tests/sandbox.sh mac work` | a week of work through an update on real macOS: launchd, a moving clock, racing writers, writes cut short, files changed outside the journal | 7 minutes |
-| How an agent behaves: launching it, its screens and files, a task handed to it | `tests/sandbox.sh mac live claude`, `... live codex` | the real agents from nothing, through setup and sessions | 10 minutes, about a dollar |
+| What an update does to an install in use, its windows, its ledger and knowledge base, and what real use does to them: their journals, ids, writes, privacy | `tests/sandbox.sh mac work` | a week of work through the first update's conversion and a mid-afternoon update on a year of data, on real macOS: launchd, a moving clock, racing writers, writes cut short, files changed outside the journal, going back | 13 minutes |
+| How an agent behaves: launching it, its screens and files, a task handed to it, an update's prompts | `tests/sandbox.sh mac live claude`, `... live codex` | the real agents from nothing, through setup, sessions and an update | 12 minutes, about a dollar |
 | The wake itself | `bosun wake-test`, on real hardware | a real sleep and a real wake | 5 minutes |
 
 The first also runs in CI (the second's unit and smoke suites run there natively), and so does the third on
@@ -86,7 +86,7 @@ brew install openai/tools/tart
 tests/sandbox.sh mac setup                # once: pulls the image (6 minutes) and prepares the bases (4)
 tests/sandbox.sh mac run                  # on a developer's Mac: Homebrew is already there
 tests/sandbox.sh mac run --from-nothing   # on a new Mac: no Homebrew, no Apple tools
-tests/sandbox.sh mac work                 # a week of work, through an upgrade: see below
+tests/sandbox.sh mac work                 # a week of work, through two updates: see below
 tests/sandbox.sh mac live codex           # the real agents: see below
 tests/sandbox.sh mac shell                # a window, to try the wizard as a new user would
 tests/sandbox.sh mac clean                # delete the base images (`tart prune` removes the pulled one)
@@ -119,40 +119,80 @@ release with the piped installer, works three days of the fictional acme week
 reply, proposals approved, what I typed in a window through the hook, tickets, a history long enough to
 be trimmed, prune; in the knowledge base the acme fixture imported, facts added, confirmed, rejected and
 corrected, a fact I stated with my quote checked in a session's transcript, and a person deleted on
-request), with the clock moved a day between them. Then it updates the way a user does, running `get.sh`
-again, and checks that the first write starts each journal from what was there (or goes on with the
-ledger's, when the release journals it already): the same items, entities and facts, old ids working and
-new ones minted, the key of the forgotten made and kept out of the knowledge history, nothing naming a
-person and none of my words in the knowledge journal file that can leave the Mac. A person deleted on
-request then leaves nothing in `local.jsonl`, in a torn file (one is made as a power loss would leave
-it) or in the git history. Two more days follow on the new bosun, then writers at once (twenty in the
-ledger, ten in the knowledge base, then ten in each, under one replica id), the clock going back an
-hour, fifty writes of each store killed like a power cut at random (the next knowledge write must also
-clear the git lock such a cut leaves, so that its history records again), a hundred approvals (they
-write both journal files) killed at points swept across their run, which it counts as torn tails,
-repairs and writes lost, and the knowledge files changed outside their journal: by hand, by `git checkout` of the data
-files and then of the whole folder, and by the release, run from a checkout of its own, forgetting a
-person that the next write must not bring back. Then a morning by launchd, the console's knowledge view
-with the restricted files unreadable, an uninstall that keeps the ledger, the knowledge folder, their
-journals and this Mac's replica id, and a year on, when `kg expire` expires proposals and deletes person
-facts past retention. After each, `bosun ledger validate --journal` and `bosun kg validate` must pass, and
-whatever a cut command printed before it died must be there.
+request), with the clock moved a day between them.
+
+Then the release's windows come up (the orchestrator, three repos, the check-in loop in its checkin
+window), with a plain shell opened beside them by hand, and it updates the way a user does, running
+`get.sh` again. The release is a checkout from before versions side by side, so that first update converts
+it, at a quiet moment. It is tried twice: first to a head whose ledger migration fails while writes are
+paused (`tests/sandbox/update_patch.sh --failing`), which must put everything back (the watchdog's and
+learning's launchd jobs, really unloaded meanwhile, loaded again from their plists, which stay as they
+were; the check-in loop started again on the old code; the ledger byte for byte; no window touched), then
+to this checkout for real. That one must swap the checkout for the link in one step on the real APFS disk
+(the checkout moved whole to `bosun-versions/legacy-<its commit>`, the install path never missing while a
+watcher looks at it, no temporary link left), stop and reload the jobs, end the check-in loop with a real
+SIGTERM and start it again on the new code, restart each of bosun's windows in its own conversation as one
+whose launch changed (the release recorded none), leave the shell I opened alone, and end with its summary.
+Then the first write starts each journal from what was there (or goes on with the ledger's, when the
+release journals it already): the same items, entities and facts, old ids working and new ones minted, the
+key of the forgotten made and kept out of the knowledge history, nothing naming a person and none of my
+words in the knowledge journal file that can leave the Mac. A person deleted on request then leaves
+nothing in `local.jsonl`, in a torn file (one is made as a power loss would leave it), in the git history
+or in an update's backup.
+
+Two more days follow on the new bosun, then a mid-afternoon update to the next version (this checkout and
+`tests/sandbox/update_patch.sh`: the ledger's format 2 with its migration, a line of `policy.md`, the repo
+windows' hook settings), pushed to the install's origin, on a year of data that
+`tests/sandbox/acme_year.py` writes through the installed bosun's own commands. The Claude stand-in
+(`tests/sandbox/claude-stand-in`) behaves where bosun can see it as Claude Code does: its session record,
+a transcript a restart resumes, its hooks, and the update's prompts answered with `bosun update note`.
+One window is idle, one waits on a background `sleep` (`shell`), one is in a long turn (busy), and a shell
+I opened sits beside them. While the update runs, a ledger write, a knowledge write, a prompt I type (the
+UserPromptSubmit hook) and a Stop hook arrive every second, one of each the moment writes are paused, and
+two Slack messages come in through the watcher's stand-in while bosun's own work is held. It checks that
+nothing is lost (what was there, both journals and the fact log as they began, and each write and hook
+record once, the typed prompts as events too), that each window is brought along as the update's table
+says (the `shell` one's `sleep` started again from its stock note, the busy one waited for), that the
+summary names the migration, `policy.md` and the backup, that the backup, put in a scratch folder, passes
+the version before's `ledger validate --journal`, that each hook command of that version's launch settings
+runs on the next, that the Slack watcher's next run catches up, and that a temporary link a switch cut
+short is swept. It measures the freeze (`freeze_ms` in the update's record, under 10 s) and what restoring
+the backup costs on that data (a recovering approval hook has 8 s). Then it goes back by hand, exactly as
+[Going back](setup.md#going-back) says, forward again with `bosun update`, and a person forgotten after
+that must leave nothing in any backup or rehearsal copy (`grep -r`).
+
+Then writers at once (twenty in the ledger, ten in the knowledge base, then ten in each, under one replica
+id), the clock going back an hour, fifty writes of each store killed like a power cut at random (the next
+knowledge write must also clear the git lock such a cut leaves, so that its history records again), a
+hundred approvals (they write both journal files) killed at points swept across their run and the rebuild
+from the journal that a write starts with once a cut has left `ledger.json` behind it, which it counts as
+torn tails, repairs and writes lost, and the knowledge files changed outside their journal: by hand, by
+`git checkout` of the data files and then of the whole folder, and by the release, run from a checkout of
+its own, forgetting a person that the next write must not bring back. Then a morning by launchd, the
+console's knowledge view with the restricted files unreadable, an uninstall that keeps the ledger, the
+knowledge folder, their journals and this Mac's replica id, and a year on, when `kg expire` expires
+proposals and deletes person facts past retention. After each, `bosun ledger validate --journal` and
+`bosun kg validate` must pass, and whatever a cut command printed before it died, or the journal holds,
+must be there. Right after the install, it checks what git and `get.sh` print for a repository URL with a
+token in it that cannot be reached: never the token.
 
 ```bash
-tests/sandbox.sh mac work                   # from origin/main to this checkout
+tests/sandbox.sh mac work                   # from the release to this checkout
 tests/sandbox.sh mac work --base <commit>   # from another starting point; it must be an ancestor
 ```
 
-The base must be a bosun from before the knowledge base's journal. Its ledger may be from before the
-journal too (then the first days check that the release writes no journal and makes ids like
-`task:<date>/1`, and the update that the journal starts with the first write after it), or journaled
-already, as on `origin/main` (then they check its journal and minted ids, and that the update goes on
-with them).
+The default release is the last bosun from before versions side by side and the knowledge base's journal
+(`95545b0`), installed by its own `get.sh` as a user did then: a checkout, whose ledger journals already (the first days check its journal and minted ids,
+and the update that it goes on with them). Another base must be from before both too. One whose ledger
+is from before the journal as well makes the first days check that the release writes no journal and
+makes ids like `task:<date>/1`, and the update that the journal starts with the first write after it.
 
-It sends two bundles of this repository: the release, and this checkout (also what is not committed)
-as its descendant, the head of the branch that `get.sh`, run again, updates to. The scenario is
-`tests/work_e2e.sh`; what it shares with `tests/install_e2e.sh` is in `tests/sandbox/e2e_lib.sh`. It sets the clock with
-`sudo date` and puts it back when it ends, also on failure.
+It sends two bundles of this repository: the release, and this checkout (also what is not committed) as
+its descendant, the head of the branch that `get.sh`, run again, fetches into the install's `bosun.git`
+from the checkout's origin (`~/repo.bundle`). Each later head (the failing one, the next version) is
+this checkout patched in the VM and bundled over `~/repo.bundle`. The scenario is `tests/work_e2e.sh`; what
+it shares with `tests/install_e2e.sh` is in `tests/sandbox/e2e_lib.sh`. It sets the clock with `sudo date`
+and puts it back when it ends, also on failure.
 
 ### The real agents: `tests/sandbox.sh mac live`
 
@@ -173,6 +213,18 @@ orchestrator hands a fix to the real repo session, which must report to the ledg
 tests pass and open a pull request, and the orchestrator must link it. `live codex` runs the repo window on
 Codex and the orchestrator on Claude Code. GitHub is a stand-in and the remote a local bare repo, so nothing
 leaves the Mac but requests to the agents' APIs. It is not in CI, because it costs money and needs keys.
+
+Then an update with the agents at work. First, whether a running Claude picks up a changed command file of
+its plugin: a Claude on the smallest model runs with `--plugin-dir` through a link, as the orchestrator does
+through the install link, and its one command is asked for before and after the link is switched to another
+folder, and after that folder's file changes in place. Then the repo window is given a background command
+(`sleep 300`), and `bosun update` goes to the next version (this checkout and `tests/sandbox/update_patch.sh`,
+bundled in the VM as the head of the install's branch). The orchestrator only re-reads `policy.md`; on Claude
+Code the repo window, waiting on its background command, takes stock first, is restarted, and must start the
+command again and answer with `bosun update note --status`. Codex records no background work, so the update
+leaves a Codex window running, and its take-stock and update prompts are sent by hand, in the update's own
+words. Each version folder must read clean while Claude runs with its plugin from it, as an update's prune and
+`bosun uninstall` read one.
 
 **The keys.** It reads two API keys from your Keychain, one for Anthropic, and for `live codex` one for OpenAI.
 Use keys made for this, with a spend limit. Copy each to the clipboard and store it like this, because
