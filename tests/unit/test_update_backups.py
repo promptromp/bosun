@@ -162,38 +162,41 @@ class BackupsTest(unittest.TestCase):
         self.assertEqual(seen[-1], ("full", "folder"), "the drive's flush comes after every file's")
 
     def test_each_drive_a_restore_wrote_to_is_flushed_once(self) -> None:
-        """A restore can write on more than one drive (a linked folder, the config folder elsewhere): each
-        drive it wrote to, put back or deleted on, gets its one full flush, and a drive it did not write
-        to none."""
+        """A restore can write on more than one drive (a linked folder, the config folder elsewhere): the
+        state and config folders' drives get their one full flush each, and so does any other drive it put
+        back or deleted on. A restore redone after one cut short before its flush finds nothing to write,
+        and still flushes, as what the first one wrote may not be on the drive yet."""
         backup = self.take()
         (self.state / "ledger.json").write_text("changed\n")
         (self.state / "journal" / "new.jsonl").write_text("{}\n")  # an extra, deleted
         (self.config / "bosun.env").write_text("changed\n")
-        config = self.config.resolve()
+        config, journal_folder = self.config.resolve(), (self.state / "journal").resolve()
 
-        def device(folder: Path) -> int:  # the config folder on a drive of its own
-            return 2 if folder.resolve().is_relative_to(config) else 1
+        def device(folder: Path) -> int:  # the config folder and the journal each on a drive of their own
+            real = folder.resolve()
+            return 2 if real.is_relative_to(config) else 3 if real.is_relative_to(journal_folder) else 1
 
         flushed: list[int] = []
-        with (
-            mock.patch.object(ub, "_device", side_effect=device),
-            mock.patch("journal.flush_folder", side_effect=lambda folder: flushed.append(device(folder))),
-        ):
-            ub.restore(
-                backup,
-                self.state,
-                self.config,
-                only=["state/ledger.json", "state/journal", "config/bosun.env"],
-            )
-        self.assertEqual(sorted(flushed), [1, 2])
-        flushed.clear()
+
+        def restore(only: list[str]) -> list[int]:
+            flushed.clear()
+            with (
+                mock.patch.object(ub, "_device", side_effect=device),
+                mock.patch("journal.flush_folder", side_effect=lambda folder: flushed.append(device(folder))),
+            ):
+                ub.restore(backup, self.state, self.config, only=only)
+            return sorted(flushed)
+
+        self.assertEqual(restore(["state/ledger.json", "state/journal", "config/bosun.env"]), [1, 2, 3])
         (self.state / "ledger.json").write_text("changed again\n")
-        with (
-            mock.patch.object(ub, "_device", side_effect=device),
-            mock.patch("journal.flush_folder", side_effect=lambda folder: flushed.append(device(folder))),
-        ):
-            ub.restore(backup, self.state, self.config, only=["state/ledger.json", "config/bosun.env"])
-        self.assertEqual(flushed, [1], "the config drive was not written to")
+        self.assertEqual(
+            restore(["state/ledger.json", "state/journal"]), [1, 2], "the journal's drive unwritten"
+        )
+        self.assertEqual(
+            restore(["state/ledger.json", "state/journal", "config/bosun.env"]),
+            [1, 2],
+            "a redo writes nothing",
+        )
 
     def test_restore_refuses_a_backup_file_that_differs_from_its_manifest(self) -> None:
         backup = self.take()

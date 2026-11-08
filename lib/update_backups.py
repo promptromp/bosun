@@ -256,11 +256,15 @@ def _device(folder: Path) -> int:
 
 
 class _Drives:
-    """The drives a restore wrote to, each with a folder on it, for its one full flush: a linked folder
-    or a config folder elsewhere can put what it writes on another drive than the state folder's."""
+    """The drives a restore flushes, each with a folder on it, for its one full flush: the state and
+    config folders' always, since a restore redone after one cut short before its flush writes nothing
+    and what the first wrote may not be on the drive yet; and any other a linked folder put what it
+    wrote on."""
 
-    def __init__(self) -> None:
+    def __init__(self, *always: Path) -> None:
         self.folders: dict[int, Path] = {}
+        for folder in always:
+            self.wrote_in(folder)
 
     def wrote_in(self, folder: Path) -> None:
         """<folder>, just written in, by its real path: one deleted later is replaced by its nearest
@@ -410,14 +414,15 @@ def restore(backup: Path, state_dir: Path, config_dir: Path, only: Sequence[str]
     folders the backup lacks; lock files stay: the freeze holds them). The prefixes, and every file
     of the backup under them (against the manifest), are checked before anything is deleted or
     written, so a backup found damaged changes nothing; each copy is read back too. Under the
-    freeze's locks only the update wrote there, so what is new came from the step that failed. Each
-    drive it wrote to is flushed once, at the end, before the caller records the restore: one cut
-    short before is redone by the next, which puts back whatever does not read as the backup has it.
+    freeze's locks only the update wrote there, so what is new came from the step that failed. The
+    state and config folders' drives, and any other it wrote to, are flushed once each, at the end,
+    before the caller records the restore: one cut short before is redone by the next, which puts back
+    whatever does not read as the backup has it, and flushes even when that is nothing.
     Returns what it put back and what it deleted (a key the manifest has, or not)."""
     prefixes = _normalised(only)
     manifest = read_manifest(backup)
     _verify(manifest, backup, prefixes)
-    drives = _Drives()
+    drives = _Drives(state_dir, config_dir)
     # The extras first: a folder that became a file is gone before the file is put back.
     removed = _remove_extra(backup, state_dir, config_dir, manifest, prefixes, drives)
     done = _put_back_all(manifest, backup, state_dir, config_dir, prefixes, drives)

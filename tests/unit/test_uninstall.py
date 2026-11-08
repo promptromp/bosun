@@ -55,7 +55,8 @@ class FakeMac:
         self.running: list[tuple[int, int]] = []
         self.left: list[tuple[int, int]] = []
         self.left_for: int | None = 0
-        self.stop_fails = False  # `bosun stop` ends the session, then fails (its 120 s timeout)
+        # How `bosun stop` fails once it has ended the session: "timeout" (its 120 s) or "exit".
+        self.stop_fails: str | None = None
 
     def done(self, code: int = 0, out: str = "") -> subprocess.CompletedProcess[str]:
         return subprocess.CompletedProcess([], code, out, "")
@@ -111,7 +112,9 @@ class FakeMac:
         self.windows.clear()
         self.state_dir.mkdir(parents=True, exist_ok=True)
         (self.state_dir / "stopped-bosun").write_text("today")
-        return self.done(1 if self.stop_fails else 0)
+        if self.stop_fails == "timeout":  # as subprocess.run raises it
+            raise subprocess.TimeoutExpired(["bosun", "stop"], 120)
+        return self.done(1 if self.stop_fails == "exit" else 0)
 
     def run(self, command: Sequence[str], **kwargs: Any) -> subprocess.CompletedProcess[str]:
         tool = Path(command[0]).name
@@ -458,19 +461,25 @@ class Uninstalls(World):
         self.assertNotIn("could not remove", said)
         self.assertIn("bosun is uninstalled.", said)
 
-    def test_a_stop_that_fails_is_still_waited_after_and_ends_the_uninstall_unfinished(self) -> None:
-        """`bosun stop` ended the session but failed (its timeout): what the windows left is still waited
+    def test_a_stop_that_times_out_is_still_waited_after_and_ends_the_uninstall_unfinished(self) -> None:
+        """`bosun stop` ended the session, then ran past its timeout: what the windows left is still waited
         for before anything is deleted, and the stop is said as left to do, with the install kept for the
         run again, so the uninstall ends non-zero, as one with a file it could not remove does."""
+        self.fails_and_is_waited_after("timeout", "bosun stop did not end in 120 s")
+
+    def test_a_stop_that_exits_non_zero_is_still_waited_after(self) -> None:
+        self.fails_and_is_waited_after("exit", "bosun stop failed")
+
+    def fails_and_is_waited_after(self, how: str, said_as: str) -> None:
         self.mac.windows, self.mac.panes = ["api"], {4100: "api"}
         self.mac.sessions.update({4100: 4100, 4110: 4100, 4120: 4120})
         self.mac.running = [(4100, 1), (4110, 4100), (4120, 4110)]
         self.mac.left, self.mac.left_for = [(4120, 1)], 3
-        self.mac.stop_fails = True
+        self.mac.stop_fails = how
         status, said = self.run_it("--yes")
         calls = self.mac.calls
         self.assertGreaterEqual(calls[calls.index("bosun stop") :].count("ps"), 4, "it waited")
-        self.assertIn("could not remove the running windows: api: bosun stop failed", said)
+        self.assertIn(f"could not remove the running windows: api: {said_as}", said)
         self.assertFalse(
             (self.state / "signals").exists(), "the hook's signal, written as it ended, is gone too"
         )

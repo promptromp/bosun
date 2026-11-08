@@ -570,9 +570,10 @@ installed that day.
   stores, flushing the drive (`F_FULLFSYNC`) after each file it put back, took 603 ms, 2 899 ms and, with
   the host busy, 7 531 ms (257, 314 and 413 files put back or deleted), against the 8 s of a recovering
   approval hook: nearly all of it those flushes, about 10 ms a file on the host too. Restore now hands
-  each file and its folder to the drive (`fsync`) and flushes each drive it wrote to once, at its end,
-  before the restore is recorded (one cut short before that is redone by the next, which puts back
-  whatever does not read as the backup has it): 443 ms for 623 files put back or deleted, and 198 ms for
+  each file and its folder to the drive (`fsync`) and flushes the state and config folders' drives, and
+  any other it wrote to, once each at its end, before the restore is recorded (one cut short before that
+  is redone by the next, which puts back whatever does not read as the backup has it, and flushes even
+  when that is nothing): 443 ms for 623 files put back or deleted, and 198 ms for
   28 put back and 124 deleted, counted apart in the last run.
 - **A read-only file is put back as one.** The first measurement failed: git keeps its objects and
   commit-graph files read-only, and `restore` opened its copy for writing to flush it. It now copies the

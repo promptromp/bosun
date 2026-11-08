@@ -153,15 +153,20 @@ def stop_windows(env: Mapping[str, str]) -> list[str]:
     """`bosun stop`, then a wait for what its windows ran (up.ran_in_windows, before the stop) and what
     that started apart from them to end, so nothing of theirs writes after bosun's files are gone. The
     windows are gone then; what they started and still runs is said, not stopped. A stop that fails is
-    waited after too (it may have ended the session first: its timeout), then StepFailed."""
+    waited after too (it may have ended the session first, then run past its timeout), then StepFailed."""
     panes = uninstall_detect.panes(env)
     sessions = {sid: window for pid, window in panes.items() if (sid := session_id(pid)) is not None}
     watched = up.ran_in_windows(processes()[1], sessions, panes)
     command = [str(ROOT / "bin" / "bosun"), "stop"]
-    done = subprocess.run(command, check=False, capture_output=True, timeout=COMMAND_TIMEOUT_SECONDS)
+    try:
+        done = subprocess.run(command, check=False, capture_output=True, timeout=COMMAND_TIMEOUT_SECONDS)
+    except subprocess.TimeoutExpired:
+        failed = f"bosun stop did not end in {COMMAND_TIMEOUT_SECONDS} s"
+    else:
+        failed = "bosun stop failed" if done.returncode != 0 else ""
     notes = left_running(sessions, watched)
-    if done.returncode != 0:
-        raise StepFailed("; ".join(["bosun stop failed", *notes]))
+    if failed:
+        raise StepFailed("; ".join([failed, *notes]))
     return notes
 
 
