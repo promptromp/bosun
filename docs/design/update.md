@@ -1,16 +1,11 @@
 # Updating bosun
 
-Status: approved 2026-11-05. Part A, the groundwork, is built: the two paths, the stores' formats, the
-update's record and hold, backups, version folders, the write gate and the migration registry.
-`bosun update` plans, rehearses, holds, freezes, releases and brings the agents along
-(`lib/update_facts.py` gathers the plan's facts, `lib/update.py` carries it out, behind the wrapper
-`libexec/bosun-update`; `lib/update_agents.py` decides what each window gets, `lib/update_windows.py`
-carries it out, `lib/update_notes.py` keeps the windows' notes) and ends with its summary
-(`lib/update_summary.py`). `get.sh` installs versions side by side and hands an existing install over to
-it, and its first run converts a checkout an older `get.sh` made (`convert` in `lib/update.py`). What
-was decided while building it is under "Settled while building it" and "Decided while building it"
-below, and what the runs in the macOS VM settled under [Settled in the VM](#settled-in-the-vm). The plan:
-[docs/plans/update.md](../plans/update.md).
+Status: built and run in the macOS VM. The design is in `bosun update` (`lib/update*.py`, behind
+`libexec/bosun-update`), in `get.sh`'s side-by-side versions and its first-run conversion of a checkout an
+older `get.sh` made (`convert` in `lib/update.py`), and in the summary (`lib/update_summary.py`). What the
+runs on a real Mac showed, and what they changed, is under [Settled in the VM](#settled-in-the-vm); what
+was decided while building it, under "Settled while building it" and "Decided while building it". The
+plan: [docs/plans/update.md](../plans/update.md).
 
 ## Why
 
@@ -811,6 +806,12 @@ Decided while building it:
   `bosun update` (which settles answered windows before it plans, acting on none), takes it.
 - **Ctrl-C while the update waits** is noted, not raised, so it never cuts a restart short; the commands
   that act on the windows run in a session of their own, so the terminal's Ctrl-C never reaches them.
+- **A window opened between the plan and the switch** is not in the plan, so the update does nothing to
+  it: `bring_along` works from the plan's windows (`to_bring_along`), and `agents` records only those, so
+  neither the update nor `bosun update advance` takes a turn at it. It is left as if nothing about it
+  changed: its next `bosun` command runs the new version, and one started before the switch keeps what the
+  old version launched it with. The exception is an update cut short after its release: the next
+  `bosun update` makes the plan again (`_brought_along`), and a window open by then is in it.
 - **An update cut short** after its release (at `checked` or `released`) brings the windows along from a
   plan made again from its two versions, saying what came of each; Ctrl-C there ends the command. One
   cut short at `agents` leaves the windows still waited for to the check-in loop (or to `bosun update
@@ -831,11 +832,13 @@ Later, each a pull request of its own:
   install of a newer version over them refuses their writes until they are migrated, and `bosun update`
   there finds nothing to update. `init` should run the migrations of kept stores, with a backup, before
   the first start.
+- **Codex background work.** Bosun cannot see a Codex window's background commands, so a Codex window
+  whose launch changed is restarted without taking stock (see [Settled in the VM](#settled-in-the-vm)).
+  It needs Codex to say what runs.
 
 ## Docs to change when it is built
 
-Changed with Parts A and B, but for the VM scenario in `docs/development.md`, which waits for the runs
-in the VM:
+Changed with the build and the runs in the VM:
 
 - `docs/setup.md` (updating and going back, and that a forget deletes the backups);
 - `docs/knowledge.md` and the deletion bullet of `docs/design/knowledge.md` (a deletion deletes

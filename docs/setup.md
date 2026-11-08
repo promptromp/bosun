@@ -141,6 +141,9 @@ What it does to the windows that are running:
 | Busy, waiting for your answer, or someone typing in it | Waits, and never restarts one that waits for you |
 | One bosun did not start (a shell or a Claude you opened in its tmux session, outside `sessions.yml`) | Leaves it as it is, and says so in the plan |
 
+A window opened after the plan was shown is not in it, and the update does nothing to it: it runs the new
+version from its next `bosun` command on, and keeps what it was started with.
+
 Each window gets a prompt to check for anything it missed and carry on, and answers with its status. The
 update waits for every answer and says which windows it is waiting for; Ctrl-C stops that wait, and the
 check-in loop brings the rest along once each is idle. A window left alone, or a task already handed to a

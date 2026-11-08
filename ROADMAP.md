@@ -313,17 +313,20 @@ it deletes only files it lists as bosun's, takes back only the folder trust and 
 added (`lib/agent_changes.py`), cancels the wake only when it is bosun's alone, and reports what is
 left at the end. Design note: [docs/design/uninstall.md](docs/design/uninstall.md).
 
-**Built (2026-11-07), not yet run in the VM: `bosun update`.** Running `get.sh` again pulled the new code
-into the folder everything ran from, backed nothing up and said nothing. Now each version has a folder of
-its own beside the others (`~/.local/share/bosun-versions`), and `~/.local/share/bosun` is a link that an
-update switches in one step. `bosun update` (also what the install line runs on an existing install)
-shows its plan, rehearses the migrations on a copy, holds bosun's own background work, pauses writes
-briefly to back up, migrate, switch and check (putting everything back on a failure), then brings each
-window along: left alone, asked to re-read, or restarted once its turn is over (after listing its
-background work, when only that runs). It ends with a summary, and its first run converts a checkout an older `get.sh` made, at
-a quiet moment. Next: the runs in the macOS VM (a working day updated mid-afternoon, the freeze measured
-on a year of data, the conversion) and the update prompts with the real agents in their windows (so far
-only the headless Claude of `tests/llm/` has tried them). Design note:
+**Done (2026-11-08): `bosun update`.** Running `get.sh` again pulled the new code into the folder
+everything ran from, backed nothing up and said nothing. Now each version has a folder of its own beside
+the others (`~/.local/share/bosun-versions`), and `~/.local/share/bosun` is a link that an update switches
+in one step. `bosun update` (also what the install line runs on an existing install) shows its plan,
+rehearses the migrations on a copy, holds bosun's own background work, pauses writes briefly to back up,
+migrate, switch and check (putting everything back on a failure), then brings each window along: left
+alone, asked to re-read, or restarted once its turn is over (after listing its background work, when only
+that runs). It ends with a summary, and its first run converts a checkout an older `get.sh` made, at a
+quiet moment. Run in the macOS VM: the conversion of a release, then a mid-afternoon update with nothing
+lost, and the real Claude Code and Codex answering the update's prompts. Writes paused for 927 ms on a
+year of data, and a restore put back 623 files in 443 ms. The runs changed the restore, the orchestrator's
+read access to the install and uninstall's wait for what its stopped windows started. Next: the migrations
+of kept stores on a fresh install (`init`, with a backup), and a Codex window's background work, which
+bosun cannot see, so one whose launch changed is restarted without taking stock. Design note:
 [docs/design/update.md](docs/design/update.md).
 
 ### Docs site
