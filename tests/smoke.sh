@@ -2361,7 +2361,7 @@ LATE
   check "uninstall waits for what a window it stopped left running: its late write was done before uninstall was" \
     test -e "$WORK/late-written"
   check "... but not for a helper it left in its window's session" bash -c '
-    kill -0 "$(cat "$2")" && ! grep -q "still runs" <<<"$1"' _ "$UN_OUT" "$WORK/late-helper"
+    kill -0 "$(cat "$2")" && ! grep -q "still running" <<<"$1"' _ "$UN_OUT" "$WORK/late-helper"
   kill "$(cat "$WORK/late-helper")" 2>/dev/null
   check "uninstall takes back the trust it gave" bash -c '! python3 "$1/lib/claude_state.py" trusted "$2"' _ "$ROOT" "$UN_REPO"
   check "... cancels its wake, through sudo" grep -q "sudo .*pmset repeat cancel" "$WORK/system.log"

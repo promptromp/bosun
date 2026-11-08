@@ -132,39 +132,39 @@ def processes() -> tuple[list[orphans.Proc], list[tuple[int, int, int | None]]]:
     return procs, [(p.pid, p.ppid, session_id(p.pid)) for p in procs]
 
 
-def left_running(sessions: Collection[int], watched: Collection[int]) -> list[orphans.Proc]:
+def left_running(sessions: Collection[int], watched: Mapping[int, str]) -> list[str]:
     """What the stopped windows left running (up.still_running), waited for until it ends, for
     STOPPED_SECONDS at the most: an agent ending as its window stops may start an async hook (Claude
     Code's SessionEnd) that writes bosun's state a moment later, after its files would be deleted. A hook
     is found through the agent that starts it, which Claude Code does a second or so after its window
-    stopped, while it still runs. What is still there then."""
+    stopped, while it still runs. What is still there then, said with its window (up.still_running_note)."""
     deadline = time.monotonic() + STOPPED_SECONDS
     while True:
         procs, table = processes()
         watched = up.still_running(table, sessions, watched)
         if not watched or time.monotonic() >= deadline:
-            return [p for p in procs if p.pid in watched]
+            return [
+                up.still_running_note(watched[p.pid], p.pid, p.command) for p in procs if p.pid in watched
+            ]
         time.sleep(STOPPED_POLL_SECONDS)
 
 
-def stop_windows(env: Mapping[str, str]) -> None:
+def stop_windows(env: Mapping[str, str]) -> list[str]:
     """`bosun stop`, then a wait for what its windows ran (up.ran_in_windows, before the stop) and what
-    that started apart from them to end, so nothing of theirs writes after bosun's files are gone."""
-    panes = uninstall_detect.pane_pids(env)
-    sessions = frozenset(sid for sid in map(session_id, panes) if sid is not None)
+    that started apart from them to end, so nothing of theirs writes after bosun's files are gone. The
+    windows are gone then; what they started and still runs is said, not stopped."""
+    panes = uninstall_detect.panes(env)
+    sessions = {sid: window for pid, window in panes.items() if (sid := session_id(pid)) is not None}
     watched = up.ran_in_windows(processes()[1], sessions, panes)
     command = [str(ROOT / "bin" / "bosun"), "stop"]
     done = subprocess.run(command, check=False, capture_output=True, timeout=COMMAND_TIMEOUT_SECONDS)
     if done.returncode != 0:
         raise StepFailed("bosun stop failed")
-    left = left_running(sessions, watched)
-    if left:
-        named = "; ".join(f"{p.pid} {p.command[:60]}" for p in left)
-        raise StepFailed(f"what they ran still runs after {STOPPED_SECONDS} s: {named}")
+    return left_running(sessions, watched)
 
 
 class Carrying:
-    """One run of the steps: what they need, and what failed."""
+    """One run of the steps: what they need, what failed, and what a step leaves to say after it."""
 
     def __init__(self, facts: Facts, *, can_ask: bool, env: Mapping[str, str] = os.environ) -> None:
         self.facts = facts
@@ -172,16 +172,20 @@ class Carrying:
         self.env = env
         self.state_dir = Path(facts.state_dir)
         self.jobs = {job.label: job for job in facts.jobs}
+        self.notes: list[str] = []
         self.actions: dict[str, Callable[[Step], None]] = {
             up.WAKE: self.cancel_wake,
             up.JOB: self.remove_job,
-            up.STOP: lambda _step: stop_windows(self.env),
+            up.STOP: self.stop,
             up.TRUST: self.revoke_trust,
             up.NOTE: self.remove_note,
             up.LINK: lambda step: remove_path(Path(step.target)),
             up.FILE: lambda step: remove_path(Path(step.target)),
             up.CHECKOUT: lambda step: shutil.rmtree(step.target),
         }
+
+    def stop(self, _step: Step) -> None:
+        self.notes = stop_windows(self.env)
 
     def cancel_wake(self, _step: Step) -> None:
         sys.stdout.flush()  # sudo may ask for your password next
@@ -211,6 +215,9 @@ class Carrying:
                 print(f"could not remove {up.describe(step, self.facts.home)}: {error}")
             else:
                 print(f"removed {up.describe(step, self.facts.home)}")
+                for note in self.notes:
+                    print(note)
+            self.notes = []
 
 
 def remove_empty_folders(facts: Facts) -> None:

@@ -214,7 +214,7 @@ as it was.
 
 | What | What happens |
 |---|---|
-| Your windows | Stopped, so any work in them stops. It says which are running first, and waits up to 15 seconds for what they started to end (an agent's last hooks), so nothing writes after it; what still runs then it names, such as a background command a Codex window started |
+| Your windows | Stopped, so any work in them stops. It says which are running first, and waits up to 15 seconds for what they started to end (an agent's last hooks), so nothing writes after it; what still runs then it names and leaves running, such as a background command a Codex window started |
 | The launchd jobs (morning, watchdog, learning) | Unloaded and deleted, before the windows stop, so the watchdog cannot bring them back |
 | The repeating wake | Cancelled with `sudo pmset repeat cancel`, if it is the one bosun set. `pmset` can only cancel every repeating event at once, so another event, or a wake at another time, stays and it says so |
 | Folder trust | Taken back for the folders bosun marked, in Claude Code and Codex. A folder you had accepted yourself stays trusted. It goes by bosun's record of what it changed (`agent-changes.json`), kept since `bosun uninstall` was added; trust or notes from an install before that are not on it and stay |

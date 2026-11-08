@@ -6,6 +6,7 @@ import sys
 import unittest
 from dataclasses import replace
 from pathlib import Path
+from typing import ClassVar
 
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "lib"))
@@ -494,18 +495,15 @@ class Reading(unittest.TestCase):
         self.assertIn(up.INSTALL_LINE, get_sh.read_text())
 
 
-if __name__ == "__main__":
-    unittest.main()
-
-
 class StillRunning(unittest.TestCase):
-    """What ran in the windows bosun stops, and what of it still runs after: what was there at the stop,
-    and what it starts apart from the windows (a stopped agent's async hook, which writes a signal after
-    the windows are gone), never a helper it starts in its window's own session as it ends."""
+    """What ran in the windows bosun stops, each with the window it came from, and what of it still runs
+    after: what was there at the stop, and what it starts apart from the windows (a stopped agent's async
+    hook, which writes a signal after the windows are gone), never a helper it starts in its window's own
+    session as it ends."""
 
-    # (pid, ppid, session): pane 100 ran an agent (110) that started a hook (120), which started its
-    # python (130), and a background command in a session of its own (140); 200 is another tool's, in a
-    # session of its own; 1 is launchd.
+    # (pid, ppid, session): pane 100 (window api) ran an agent (110) that started a hook (120), which
+    # started its python (130), and a background command in a session of its own (140); pane 300 (window
+    # web) runs a shell (310); 200 is another tool's, in a session of its own; 1 is launchd.
     TABLE = (
         (1, 0, 1),
         (100, 1, 100),
@@ -514,40 +512,70 @@ class StillRunning(unittest.TestCase):
         (130, 120, 100),
         (140, 110, 140),
         (200, 1, 200),
+        (300, 1, 300),
+        (310, 300, 300),
     )
+    PANES: ClassVar[dict[int, str]] = {100: "api", 300: "web"}
+    SESSIONS: ClassVar[dict[int, str]] = {100: "api", 300: "web"}
 
     def test_what_ran_in_the_windows_their_sessions_and_all_the_panes_started(self) -> None:
-        self.assertEqual(up.ran_in_windows(self.TABLE, {100}, [100]), frozenset({100, 110, 120, 130, 140}))
+        self.assertEqual(
+            up.ran_in_windows(self.TABLE, self.SESSIONS, self.PANES),
+            {100: "api", 110: "api", 120: "api", 130: "api", 140: "api", 300: "web", 310: "web"},
+        )
 
     def test_a_process_in_a_panes_session_counts_without_its_pane(self) -> None:
-        self.assertEqual(up.ran_in_windows(((1, 0, 1), (110, 1, 100)), {100}, [100]), frozenset({110}))
+        table = ((1, 0, 1), (110, 1, 100))
+        self.assertEqual(up.ran_in_windows(table, self.SESSIONS, self.PANES), {110: "api"})
 
     def test_what_was_there_at_the_stop_and_still_runs(self) -> None:
-        watched = up.ran_in_windows(self.TABLE, {100}, [100])
+        watched = up.ran_in_windows(self.TABLE, self.SESSIONS, self.PANES)
         table = ((1, 0, 1), (110, 1, 100), (140, 110, 140), (200, 1, 200))
-        self.assertEqual(up.still_running(table, {100}, watched), frozenset({110, 140}))
+        self.assertEqual(up.still_running(table, self.SESSIONS, watched), {110: "api", 140: "api"})
 
     def test_a_hook_an_agent_starts_apart_as_it_ends_counts_with_what_it_starts(self) -> None:
         # The agent (110) starts a hook in a session of its own (150, as Claude Code starts its async
-        # hooks), which starts its python (151).
+        # hooks), which starts its python (151): both of the agent's window.
         table = ((1, 0, 1), (110, 1, 100), (150, 110, 150), (151, 150, 150))
-        self.assertEqual(up.still_running(table, {100}, {100, 110}), frozenset({110, 150, 151}))
+        self.assertEqual(
+            up.still_running(table, self.SESSIONS, {100: "api", 110: "api"}),
+            {110: "api", 150: "api", 151: "api"},
+        )
 
     def test_a_hook_left_by_an_agent_that_exited_still_counts(self) -> None:
         # The agent is gone, and its hook, reparented to launchd, was seen before: still waited for, and
         # so is what it starts.
         table = ((1, 0, 1), (150, 1, 150), (151, 150, 150), (200, 1, 200))
-        self.assertEqual(up.still_running(table, {100}, {110, 150}), frozenset({150, 151}))
+        self.assertEqual(
+            up.still_running(table, self.SESSIONS, {110: "api", 150: "api"}), {150: "api", 151: "api"}
+        )
 
     def test_a_helper_an_agent_starts_in_its_windows_session_as_it_ends_does_not(self) -> None:
         # Claude Code's `caffeinate -i -t 300`, started as it ends, outlives it by five minutes.
         table = ((1, 0, 1), (110, 1, 100), (160, 110, 100))
-        self.assertEqual(up.still_running(table, {100}, {110}), frozenset({110}))
-        self.assertEqual(up.still_running(((1, 0, 1), (160, 1, 100)), {100}, {110}), frozenset())
+        self.assertEqual(up.still_running(table, self.SESSIONS, {110: "api"}), {110: "api"})
+        self.assertEqual(up.still_running(((1, 0, 1), (160, 1, 100)), self.SESSIONS, {110: "api"}), {})
 
     def test_nothing_once_they_are_gone(self) -> None:
-        self.assertEqual(up.still_running(((1, 0, 1), (200, 1, 200)), {100}, {110, 120}), frozenset())
+        table = ((1, 0, 1), (200, 1, 200))
+        self.assertEqual(up.still_running(table, self.SESSIONS, {110: "api", 120: "api"}), {})
 
     def test_a_session_unknown_counts_for_nothing_it_did_not_start(self) -> None:
-        self.assertEqual(up.ran_in_windows(((1, 0, 1), (300, 1, None)), {100}, [100]), frozenset())
-        self.assertEqual(up.still_running(((1, 0, 1), (300, 1, None)), {100}, {110}), frozenset())
+        table = ((1, 0, 1), (300, 1, None))
+        self.assertEqual(up.ran_in_windows(table, {100: "api"}, {100: "api"}), {})
+        self.assertEqual(up.still_running(table, {100: "api"}, {110: "api"}), {})
+
+    def test_what_still_runs_is_said_with_its_window(self) -> None:
+        self.assertEqual(
+            up.still_running_note("exporter", 16856, "sleep 300"),
+            "still running, started in the exporter window: sleep 300 (pid 16856); bosun did not stop it.",
+        )
+
+    def test_a_long_command_is_cut_short_in_the_note(self) -> None:
+        note = up.still_running_note("orchestrator", 8211, "claude --settings " + "x" * 300)
+        self.assertIn("claude --settings xxx", note)
+        self.assertLess(len(note), 200)
+
+
+if __name__ == "__main__":
+    unittest.main()

@@ -93,12 +93,15 @@ what the windows ran to end: an agent ending as its window stops may start an as
 SessionEnd), which writes in the state folder (`logs/`, `signals/`) a moment later, so those folders came back
 after their deletion and the install was kept. Before the stop it notes what runs in the windows (the
 processes in their panes' sessions, and all the panes started), then waits until none of it is left, nor
-anything it started apart from the windows, in a session of its own: Claude Code starts its async hooks so,
-and bosun's hooks put their work in one. What an agent starts in its own window's session as it ends is not
-waited for: Claude Code's `caffeinate -i -t 300` outlives it by five minutes, and none of bosun's writers
-stays there. A hook is found through the agent that starts it, which Claude Code does while it still runs, a
-second or so after its window stopped. It waits 15 seconds at the most, never matching processes by their
-command line, and names what still runs then, as a step it could not finish. The checkout last,
+anything it started apart from the windows, in a session of its own. It sees only what it finds through a
+process it watches: Claude Code starts its async hooks in a session of their own a second or so after its
+window stopped, while it still runs, so the signal hook behind the race is found and waited for; a worker
+bosun's own hooks detach (`codex-turn-end`'s, should Codex end a turn as it is stopped) is launchd's within
+milliseconds and is not. What an agent starts in its own window's session as it ends is not waited for:
+Claude Code's `caffeinate -i -t 300` outlives it by five minutes. It waits 15 seconds at the most, never
+matching processes by their command line. The windows are gone by then, so what they started and still runs
+is said, with its window ("still running, started in the exporter window: sleep 300 (pid 16856); bosun did
+not stop it."), and the uninstall goes on. The checkout last,
 since this runs from it: it is all in memory by then. With versions side by side that is the checkout kept from
 before versions, the versions folder, then the link, so that the line it gives to run again works until the end.
 

@@ -39,12 +39,25 @@ def windows(env: Mapping[str, str]) -> tuple[str, ...]:
     return tuple((init_detect.output_of(*command) or "").splitlines())
 
 
-def pane_pids(env: Mapping[str, str]) -> list[int]:
-    """The process of each pane of bosun's tmux session (none when it does not run): what runs in its windows
-    descends from these, in their sessions."""
+def panes(env: Mapping[str, str]) -> dict[int, str]:
+    """The process of each pane of bosun's tmux session, with its window's name (none when it does not
+    run): what runs in its windows descends from these, in their sessions."""
     session = env.get("BOSUN_SESSION_NAME", "bosun")
-    command = [*tmux_command(env), "list-panes", "-s", "-t", f"={session}", "-F", "#{pane_pid}"]
-    return [int(pid) for pid in (init_detect.output_of(*command) or "").split() if pid.isdigit()]
+    command = [
+        *tmux_command(env),
+        "list-panes",
+        "-s",
+        "-t",
+        f"={session}",
+        "-F",
+        "#{pane_pid}\t#{window_name}",
+    ]
+    found = {}
+    for line in (init_detect.output_of(*command) or "").splitlines():
+        pid, _, window = line.partition("\t")
+        if pid.isdigit():
+            found[int(pid)] = window
+    return found
 
 
 # ---- versions side by side ------------------------------------------------------------------------------
