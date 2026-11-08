@@ -2346,7 +2346,8 @@ time.sleep(2)
 os.makedirs(os.path.join(sys.argv[1], "signals"), exist_ok=True)
 with open(os.path.join(sys.argv[1], "signals", "w.jsonl"), "w") as signal:
     signal.write("{}\n")
-open(sys.argv[2], "w").close()
+with open(sys.argv[2], "w") as done:  # when it wrote, for the order below
+    done.write(f"{time.time_ns()}\n")
 LATE
   cat >"$WORK/late-agent" <<'LATE'
 #!/bin/bash
@@ -2355,11 +2356,18 @@ while :; do sleep 1; done
 LATE
   chmod +x "$WORK/late-agent"
   tmux -L "$SOCKET" new-session -d -s un-test -n w -- "$WORK/late-agent" "$WORK" "$WORK/un-state" "$WORK/late-written" "$WORK/late-helper"
-  UN_OUT="$(un --yes 2>&1)"
-  # This state folder holds a file of mine, so uninstall leaves it whole: what shows the wait is that the
-  # late write was done before uninstall was (tests/unit/test_uninstall.py: its files go only after it).
-  check "uninstall waits for what a window it stopped left running: its late write was done before uninstall was" \
-    test -e "$WORK/late-written"
+  # Each line uninstall says, with when it said it.
+  PYTHONUNBUFFERED=1 un --yes 2>&1 |
+    python3 -u -c 'import sys, time
+for line in sys.stdin:
+    print(time.time_ns(), line, end="")' >"$WORK/un-timed.txt"
+  UN_OUT="$(sed 's/^[0-9]* //' "$WORK/un-timed.txt")"
+  # This state folder holds a file of mine, so uninstall leaves it whole: what shows the wait is the order,
+  # the late write before uninstall says the windows are removed, which it says once it stopped waiting
+  # (tests/unit/test_uninstall.py: the files go only after it).
+  check "uninstall waits for what a window it stopped left running: its late write came before it said the windows were removed" \
+    bash -c 'wrote="$(cat "$1")" && said="$(grep -m1 "^[0-9]* removed the running windows" "$2" | cut -d" " -f1)" &&
+      [ -n "$said" ] && [ "$wrote" -lt "$said" ]' _ "$WORK/late-written" "$WORK/un-timed.txt"
   check "... but not for a helper it left in its window's session" bash -c '
     kill -0 "$(cat "$2")" && ! grep -q "still running" <<<"$1"' _ "$UN_OUT" "$WORK/late-helper"
   kill "$(cat "$WORK/late-helper")" 2>/dev/null

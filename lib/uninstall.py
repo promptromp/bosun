@@ -152,15 +152,17 @@ def left_running(sessions: Collection[int], watched: Mapping[int, str]) -> list[
 def stop_windows(env: Mapping[str, str]) -> list[str]:
     """`bosun stop`, then a wait for what its windows ran (up.ran_in_windows, before the stop) and what
     that started apart from them to end, so nothing of theirs writes after bosun's files are gone. The
-    windows are gone then; what they started and still runs is said, not stopped."""
+    windows are gone then; what they started and still runs is said, not stopped. A stop that fails is
+    waited after too (it may have ended the session first: its timeout), then StepFailed."""
     panes = uninstall_detect.panes(env)
     sessions = {sid: window for pid, window in panes.items() if (sid := session_id(pid)) is not None}
     watched = up.ran_in_windows(processes()[1], sessions, panes)
     command = [str(ROOT / "bin" / "bosun"), "stop"]
     done = subprocess.run(command, check=False, capture_output=True, timeout=COMMAND_TIMEOUT_SECONDS)
+    notes = left_running(sessions, watched)
     if done.returncode != 0:
-        raise StepFailed("bosun stop failed")
-    return left_running(sessions, watched)
+        raise StepFailed("; ".join(["bosun stop failed", *notes]))
+    return notes
 
 
 class Carrying:
@@ -173,6 +175,7 @@ class Carrying:
         self.state_dir = Path(facts.state_dir)
         self.jobs = {job.label: job for job in facts.jobs}
         self.notes: list[str] = []
+        self.failed: list[Step] = []
         self.actions: dict[str, Callable[[Step], None]] = {
             up.WAKE: self.cancel_wake,
             up.JOB: self.remove_job,
@@ -213,6 +216,7 @@ class Carrying:
                 self.actions[step.kind](step)
             except Exception as error:  # noqa: BLE001 (one step's trouble must not stop the others)
                 print(f"could not remove {up.describe(step, self.facts.home)}: {error}")
+                self.failed.append(step)
             else:
                 print(f"removed {up.describe(step, self.facts.home)}")
                 for note in self.notes:
@@ -258,12 +262,16 @@ def carry_out(env: Mapping[str, str], choices: Choices, *, can_ask: bool) -> int
         return facts, up.build_plan(facts, choices)
 
     facts, plan = plan_now()
-    Carrying(facts, can_ask=can_ask, env=env).run(tuple(step for step in plan.steps if step.kind != up.FILE))
+    first = Carrying(facts, can_ask=can_ask, env=env)
+    first.run(tuple(step for step in plan.steps if step.kind != up.FILE))
     facts, plan = plan_now()
     Carrying(facts, can_ask=can_ask).run(tuple(step for step in plan.steps if step.kind == up.FILE))
     remove_empty_folders(facts)
     facts, plan = plan_now()
-    left = plan.steps or remove_install(facts, plan, can_ask=can_ask)
+    # A failed stop is left to do though the final look finds no window: the session may be gone while
+    # what failed is not (bosun stop's timeout). The install stays, for the run again it names.
+    stopped_not = tuple(step for step in first.failed if step.kind == up.STOP)
+    left = plan.steps or stopped_not or remove_install(facts, plan, can_ask=can_ask)
     print()
     print(up.render_done(plan, left, facts, inside_checkout=inside_install(facts)), end="")
     return EXIT_LEFT if left else 0
