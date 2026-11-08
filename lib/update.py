@@ -354,15 +354,22 @@ class WaitStopped(Exception):
         self.state = state
 
 
-def _brought_along(state: UpdateState) -> UpdateState:
-    """An update cut short after its release: its windows brought along by a plan made again from its
-    two versions (the link already leads to the new one, which the plan compares each window's launch
-    with, as before the switch). WaitStopped when Ctrl-C stopped that wait."""
+def _windows_brought_along(state: UpdateState) -> UpdateState:
+    """A released update's windows brought along by a plan made again from its two versions: the link
+    already leads to the new one, which the plan compares each window's launch with, as before the
+    switch, and a window opened since the plan the go-ahead was given on (the orchestrator delegating
+    during the prompt or the hold) is in it."""
     where = folders()
     plan = update_facts.plan_for(
         Path(state.from_root), Path(state.to_root), where.state_dir, where.config_dir
     )
-    state = update_windows.bring_along(state, plan, say=Output.say)
+    return update_windows.bring_along(state, plan, say=Output.say)
+
+
+def _brought_along(state: UpdateState) -> UpdateState:
+    """An update cut short after its release: its windows brought along (_windows_brought_along).
+    WaitStopped when Ctrl-C stopped that wait."""
+    state = _windows_brought_along(state)
     if state.pending:
         raise WaitStopped(state)
     return state
@@ -526,8 +533,9 @@ def _carried_out(plan: Plan, old_root: Path, new_root: Path, where: Folders) -> 
 
 
 def _through(state: UpdateState, plan: Plan, where: Folders) -> UpdateState:
-    """From a rehearsal that passed: the hold, the freeze, the release and the windows brought along,
-    or where it stopped."""
+    """From a rehearsal that passed: the hold, the freeze, the release and the windows brought along
+    (by a plan made again then, _windows_brought_along: <plan>, the one the go-ahead was given on, may
+    lack a window opened since), or where it stopped."""
     hold_until = int(time.time()) + update_state.HOLD_SECONDS
     state = _step(where.state_dir, state, "holding", hold_until=hold_until)
     Output.say("Holding bosun's background work; pausing writes to back up, migrate, switch and check...")
@@ -537,7 +545,7 @@ def _through(state: UpdateState, plan: Plan, where: Folders) -> UpdateState:
     Output.say(f"Writes went on after {state.freeze_ms} ms. Releasing...")
     state = release(state)
     Output.say("Bringing the agents along...")
-    return update_windows.bring_along(state, plan, say=Output.say)
+    return _windows_brought_along(state)
 
 
 # ---- the summary --------------------------------------------------------------------------------

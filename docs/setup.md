@@ -141,7 +141,8 @@ What it does to the windows that are running:
 | Busy, waiting for your answer, or someone typing in it | Waits, and never restarts one that waits for you |
 | One bosun did not start (a shell or a Claude you opened in its tmux session, outside `sessions.yml`) | Leaves it as it is, and says so in the plan |
 
-A window opened after the plan was shown is not in it, and the update does nothing to it: it runs the new
+A window opened after the plan was shown, while you answer or during the update, is brought along too:
+once the new version runs, the update looks at the windows again. One opened after that runs the new
 version from its next `bosun` command on, and keeps what it was started with.
 
 Each window gets a prompt to check for anything it missed and carry on, and answers with its status. The

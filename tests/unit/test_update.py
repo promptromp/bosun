@@ -495,6 +495,37 @@ class ReleaseTest(World):
             )
 
 
+class ThroughTest(World):
+    def test_a_window_opened_after_the_go_ahead_s_plan_is_brought_along(self) -> None:
+        """R68: once released, the windows are brought along by a plan made again from the two versions,
+        so one opened between the plan the go-ahead was given on and the switch (the orchestrator
+        delegating during the prompt or the hold) is brought along by the table too, as an update cut
+        short has its windows brought along (_brought_along)."""
+        approved = a_plan()
+        again = dataclasses.replace(
+            a_plan(), windows=(("acme-api", update_plan.Treatment.RESTART),), kinds=(("acme-api", "repo"),)
+        )
+        given: list[update_plan.Plan] = []
+
+        def bring_along(state: UpdateState, plan: update_plan.Plan, say: Any) -> UpdateState:
+            given.append(plan)
+            return update_state.advanced(state, "done")
+
+        def checked(state: UpdateState, *_args: Any) -> UpdateState:
+            return update_state.advanced(state, "checked")
+
+        with (
+            mock.patch.object(update, "freeze", side_effect=checked),
+            mock.patch.object(update, "release", side_effect=lambda s: update_state.advanced(s, "released")),
+            mock.patch.object(update_facts, "plan_for", return_value=again) as plan_for,
+            mock.patch.object(update_windows, "bring_along", side_effect=bring_along),
+        ):
+            done = update._through(self.record("rehearsed"), approved, update_facts.folders())
+        plan_for.assert_called_once_with(self.old, self.new, self.state, self.config)
+        self.assertEqual(given, [again])
+        self.assertEqual(done.step, "done")
+
+
 class ResumeTest(World):
     def test_nothing_recorded_or_finished_is_nothing_to_carry_on(self) -> None:
         self.assertIsNone(update.resume(self.state))
@@ -1326,8 +1357,9 @@ class ConvertTest(World):
             busy = counts["stops"] == 1 and (counts["starts"] == 0 or counts["readings"] % 3)
             return update_facts.Quiet((("api", "busy" if busy else "idle"),), None, 10)
 
+        # Three plans, one after each wait; the fourth, made again once released, brings the windows along.
         plans = [
-            dataclasses.replace(a_plan(), from_commit=self.commit, commits=(f"plan {n}",)) for n in range(3)
+            dataclasses.replace(a_plan(), from_commit=self.commit, commits=(f"plan {n}",)) for n in range(4)
         ]
         frozen_at: list[int] = []
         real_take = update_backups.take

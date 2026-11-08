@@ -806,12 +806,14 @@ Decided while building it:
   `bosun update` (which settles answered windows before it plans, acting on none), takes it.
 - **Ctrl-C while the update waits** is noted, not raised, so it never cuts a restart short; the commands
   that act on the windows run in a session of their own, so the terminal's Ctrl-C never reaches them.
-- **A window opened between the plan and the switch** is not in the plan, so the update does nothing to
-  it: `bring_along` works from the plan's windows (`to_bring_along`), and `agents` records only those, so
-  neither the update nor `bosun update advance` takes a turn at it. It is left as if nothing about it
-  changed: its next `bosun` command runs the new version, and one started before the switch keeps what the
-  old version launched it with. The exception is an update cut short after its release: the next
-  `bosun update` makes the plan again (`_brought_along`), and a window open by then is in it.
+- **A window opened between the plan and the switch** (the orchestrator delegating while I read the
+  prompt, or during the hold) is brought along like the others: once released, the update makes the plan
+  again from its two versions (`_windows_brought_along`, the path an update cut short after its release
+  takes too) and brings the windows along from that one, so a window open by then is in it and in
+  `agents`. The plan the go-ahead was given on stays what I approved and what `--dry-run` shows; the
+  windows' treatments are decided at run time anyway. A window opened after the windows were brought
+  along is not in it: its next `bosun` command runs the new version, and it keeps what it was started
+  with.
 - **An update cut short** after its release (at `checked` or `released`) brings the windows along from a
   plan made again from its two versions, saying what came of each; Ctrl-C there ends the command. One
   cut short at `agents` leaves the windows still waited for to the check-in loop (or to `bosun update
