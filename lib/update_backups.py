@@ -256,7 +256,9 @@ def _is_top_level(relative: str) -> bool:
 def _put_back(source: Path, target: Path, expected: str, follow: bool) -> None:
     """<source> written beside <target>, flushed, checked, renamed over. A link at <target> is
     written through only when <follow> (a top-level entry that is a link, as the backup followed
-    it); anywhere else it is replaced, never written through to what it points at."""
+    it); anywhere else it is replaced, never written through to what it points at. The copy gets
+    <source>'s mode and times once it is flushed, so a read-only file (git's objects) is put back
+    as one."""
     if follow and target.is_symlink() and not expected.startswith(LINK):
         target = target.resolve()
     target.parent.mkdir(parents=True, exist_ok=True)
@@ -265,8 +267,9 @@ def _put_back(source: Path, target: Path, expected: str, follow: bool) -> None:
     if expected.startswith(LINK):
         os.symlink(expected[len(LINK) :], tmp)
     else:
-        shutil.copy2(source, tmp)
+        shutil.copyfile(source, tmp)
         _flush_file(tmp)
+        shutil.copystat(source, tmp)
         if digest(tmp) != expected:
             tmp.unlink()
             raise BackupError(f"{target} did not read back as the backup has it")

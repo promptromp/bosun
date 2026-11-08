@@ -88,6 +88,25 @@ class BackupsTest(unittest.TestCase):
         self.assertEqual((self.state / "ledger.json").read_text(), "ledger.json\n")
         self.assertEqual((self.state / "events" / "a.json").read_text(), "changed\n")
 
+    def test_restore_puts_back_a_read_only_file_with_its_mode(self) -> None:
+        """git keeps its objects and commit-graph files read-only (0444), and its maintenance may rewrite
+        them after a knowledge write has let go of the lock: a restore puts such a file back, flushed,
+        with the mode the backup has (the VM found the copy opened for writing to flush it refused)."""
+        chain = (
+            self.config / "knowledge" / ".git" / "objects" / "info" / "commit-graphs" / "commit-graph-chain"
+        )
+        chain.parent.mkdir(parents=True)
+        chain.write_text("graph-1\n")
+        chain.chmod(0o444)
+        backup = self.take()
+        chain.chmod(0o644)
+        chain.write_text("graph-2\n")
+        chain.chmod(0o444)
+        done = ub.restore(backup, self.state, self.config, only=["config/knowledge"])
+        self.assertEqual(done, ["config/knowledge/.git/objects/info/commit-graphs/commit-graph-chain"])
+        self.assertEqual(chain.read_text(), "graph-1\n")
+        self.assertEqual(chain.stat().st_mode & 0o777, 0o444)
+
     def test_restore_refuses_a_backup_file_that_differs_from_its_manifest(self) -> None:
         backup = self.take()
         (backup / "state" / "ledger.json").write_text("tampered\n")
