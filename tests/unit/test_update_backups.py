@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import errno
 import fnmatch
+import os
 import shutil
+import stat
 import sys
 import tempfile
 import unittest
@@ -106,6 +108,26 @@ class BackupsTest(unittest.TestCase):
         self.assertEqual(done, ["config/knowledge/.git/objects/info/commit-graphs/commit-graph-chain"])
         self.assertEqual(chain.read_text(), "graph-1\n")
         self.assertEqual(chain.stat().st_mode & 0o777, 0o444)
+
+    def test_a_put_back_file_is_flushed_with_its_mode_and_times(self) -> None:
+        """The copy gets the backup's mode and times before it is flushed, so they are durable with its
+        content (a flush through a read-only descriptor, which a read-only file allows)."""
+        ledger = self.state / "ledger.json"
+        ledger.chmod(0o440)
+        backup = self.take()
+        ledger.chmod(0o644)
+        ledger.write_text("changed\n")
+        flushed: list[int] = []
+
+        def flush(fd: int) -> None:  # the file's flush (the folder's follows the rename)
+            status = os.fstat(fd)
+            if stat.S_ISREG(status.st_mode):
+                flushed.append(status.st_mode & 0o777)
+
+        with mock.patch("journal.flush_to_disk", side_effect=flush):
+            ub.restore(backup, self.state, self.config, only=["state/ledger.json"])
+        self.assertEqual(flushed, [0o440])
+        self.assertEqual(ledger.stat().st_mode & 0o777, 0o440)
 
     def test_restore_refuses_a_backup_file_that_differs_from_its_manifest(self) -> None:
         backup = self.take()

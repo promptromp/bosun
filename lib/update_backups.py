@@ -241,7 +241,9 @@ def _destination(relative: str, state_dir: Path, config_dir: Path) -> Path:
 
 
 def _flush_file(path: Path) -> None:
-    fd = os.open(path, os.O_RDWR)
+    """<path>'s content and metadata to disk, through a read-only descriptor, which a read-only file
+    (git's objects) allows."""
+    fd = os.open(path, os.O_RDONLY)
     try:
         journal.flush_to_disk(fd)
     finally:
@@ -256,9 +258,9 @@ def _is_top_level(relative: str) -> bool:
 def _put_back(source: Path, target: Path, expected: str, follow: bool) -> None:
     """<source> written beside <target>, flushed, checked, renamed over. A link at <target> is
     written through only when <follow> (a top-level entry that is a link, as the backup followed
-    it); anywhere else it is replaced, never written through to what it points at. The copy gets
-    <source>'s mode and times once it is flushed, so a read-only file (git's objects) is put back
-    as one."""
+    it); anywhere else it is replaced, never written through to what it points at. The copy has
+    <source>'s mode and times before it is flushed, so they are durable with its content, and a
+    read-only file (git's objects) is put back as one."""
     if follow and target.is_symlink() and not expected.startswith(LINK):
         target = target.resolve()
     target.parent.mkdir(parents=True, exist_ok=True)
@@ -267,9 +269,8 @@ def _put_back(source: Path, target: Path, expected: str, follow: bool) -> None:
     if expected.startswith(LINK):
         os.symlink(expected[len(LINK) :], tmp)
     else:
-        shutil.copyfile(source, tmp)
+        shutil.copy2(source, tmp)
         _flush_file(tmp)
-        shutil.copystat(source, tmp)
         if digest(tmp) != expected:
             tmp.unlink()
             raise BackupError(f"{target} did not read back as the backup has it")
