@@ -155,13 +155,17 @@ settings_sum() { cat "$CONFIG"/bosun.env "$CONFIG"/sessions.yml "$CONFIG"/setup.
 # default applies), the file as it was kept beside it as a .pre-init-* copy: lines only added, each a
 # BOSUN_* key, a comment or blank. Else what changed.
 settings_as() {
-  local copy kept=""
+  local copy kept="" stray
   [ "$1" = "$(settings_sum)" ] && return 0
   for copy in "$CONFIG"/bosun.env.pre-init-*; do [ -e "$copy" ] && kept="$copy"; done
-  if [ -n "$kept" ] && [ "$1" = "$(cat "$kept" "$CONFIG"/sessions.yml "$CONFIG"/setup.sh | cksum)" ] &&
-    ! diff "$kept" "$CONFIG/bosun.env" | grep '^[<>]' | grep -qvE '^>( (BOSUN_[A-Z0-9_]+=.*|#.*))?[[:space:]]*$'; then
-    diff "$kept" "$CONFIG/bosun.env" | sed -n 's/^> \(BOSUN_[A-Z_]*=.*\)/  note  added by the newer init: \1/p' >&2
-    return 0
+  if [ -n "$kept" ] && [ "$1" = "$(cat "$kept" "$CONFIG"/sessions.yml "$CONFIG"/setup.sh | cksum)" ]; then
+    # The lines that differ and are not an added key, comment or blank, collected first: under pipefail,
+    # a test of the pipeline's status would be diff's (1 whenever the files differ).
+    stray="$(diff "$kept" "$CONFIG/bosun.env" | grep '^[<>]' | grep -vE '^>( (BOSUN_[A-Z0-9_]+=.*|#.*))?[[:space:]]*$')"
+    if [ -z "$stray" ]; then
+      diff "$kept" "$CONFIG/bosun.env" | sed -n 's/^> \(BOSUN_[A-Z_]*=.*\)/  note  added by the newer init: \1/p' >&2
+      return 0
+    fi
   fi
   [ -n "$kept" ] && diff "$kept" "$CONFIG/bosun.env"
   return 1

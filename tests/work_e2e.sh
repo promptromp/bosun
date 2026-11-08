@@ -834,7 +834,8 @@ the_backup_and_the_hooks() {
   restored=$?
   echo "  note  $(tail -1 <<<"$costs")"
   check "restoring it, as a recovering approval hook does, takes less than the hook's 8 s" test "$restored" = 0
-  check "each hook of the version before's launch settings, given its own event, runs on the next version ($(grep -c . "$OUT/base-hooks.txt") of them)" hooks_run
+  check "each hook of the version before's launch settings, given its own event, runs on the next version" hooks_run
+  echo "  note  $(cat "$OUT/hooks-ran.txt" 2>/dev/null || echo 0) of the $(grep -c . "$OUT/base-hooks.txt") hooks ran"
   check "... each through the install link, never a version's own folder" bash -c '! grep -q "bosun-versions/" "$1"' _ "$OUT/base-hooks.txt"
   check "the Slack watcher's next run catches up on the two messages that came during the hold (at $(cat "$OUT/slack-posted-at" 2>/dev/null))" \
     says " 2 new" bosun slack-watch --once
@@ -855,14 +856,16 @@ backup_valid_before() { # <backup>
   cp -Rp "$1/state/." "$OUT/scratch/state/" && cp -Rp "$1/config/." "$OUT/scratch/config/" &&
     [ "$(jq .version "$OUT/scratch/state/ledger.json")" = 1 ] && [ "$(scratch_bosun "$OUT/scratch" ledger validate --journal)" = "ledger is valid" ]
 }
-base_hooks() { # each hook of the launch settings of the version updated from (A), approvals on: its event and command
+# Each hook of the launch settings of the version updated from (A), approvals on: its event, matcher and
+# command, apart by the unit separator (a tab is whitespace to read, which merges an empty matcher away).
+base_hooks() {
   BOSUN_APPROVALS_ENABLED=1 BOSUN_EVENTS_ENABLED=1 bash -c 'source "$1/lib/common.sh"
     load_config
     orchestrator_extra_settings
     repo_session_settings acme-api
     cat "$1/orchestrator/settings.json"' _ "$A_ROOT" |
     jq -r '.hooks // {} | to_entries[] | .key as $event | .value[] | (.matcher // "") as $m | .hooks[]
-      | "\($event)\t\($m)\t\(.command)"' | sort -u
+      | "\($event)\u001f\($m)\u001f\(.command)"' | sort -u
 }
 hook_payload() { # <event> <matcher>: what Claude Code passes a hook of <event>
   jq -cn --arg event "$1" --arg matcher "$2" --arg cwd "$HOME/Development/acme-api" '
@@ -878,13 +881,19 @@ hook_payload() { # <event> <matcher>: what Claude Code passes a hook of <event>
         SessionEnd: {reason: "other"},
         Notification: {notification_type: "idle_prompt", message: "Claude is waiting for your input"}}[$event] // {})'
 }
+# Each of base_hooks run on the next version with its own event's payload; how many ran, in
+# $OUT/hooks-ran.txt. Fails on a hook that fails, or that has no command.
 hooks_run() {
-  local event matcher command
+  local event matcher command ran=0
   [ -s "$OUT/base-hooks.txt" ] || return 1
-  while IFS=$'\t' read -r event matcher command; do
+  while IFS=$'\x1f' read -r event matcher command; do
+    [ -n "$command" ] || { echo "$event ($matcher): no command" && return 1; }
     BOSUN_APPROVALS_ENABLED=1 BOSUN_EVENTS_ENABLED=1 bash -c "$command" <<<"$(hook_payload "$event" "$matcher")" \
     >/dev/null 2>"$OUT/hook.err" || { echo "$event: $command: exit $?: $(tail -2 "$OUT/hook.err")" && return 1; }
+    ran=$((ran + 1))
   done <"$OUT/base-hooks.txt"
+  echo "$ran" >"$OUT/hooks-ran.txt"
+  [ "$ran" -eq "$(grep -c . "$OUT/base-hooks.txt")" ]
 }
 
 a_mid_afternoon_update() {
