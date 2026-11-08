@@ -141,6 +141,10 @@ What it does to the windows that are running:
 | Busy, waiting for your answer, or someone typing in it | Waits, and never restarts one that waits for you |
 | One bosun did not start (a shell or a Claude you opened in its tmux session, outside `sessions.yml`) | Leaves it as it is, and says so in the plan |
 
+A window opened after the plan was shown, while you answer or during the update, is brought along too:
+once the new version runs, the update looks at the windows again. One opened after that runs the new
+version from its next `bosun` command on, and keeps what it was started with.
+
 Each window gets a prompt to check for anything it missed and carry on, and answers with its status. The
 update waits for every answer and says which windows it is waiting for; Ctrl-C stops that wait, and the
 check-in loop brings the rest along once each is idle. A window left alone, or a task already handed to a
@@ -214,7 +218,7 @@ as it was.
 
 | What | What happens |
 |---|---|
-| Your windows | Stopped, so any work in them stops. It says which are running first |
+| Your windows | Stopped, so any work in them stops. It says which are running first, and waits up to 15 seconds for what they started to end, so their last hooks finish first; what still runs then it names and leaves running, such as a background command a Codex window started |
 | The launchd jobs (morning, watchdog, learning) | Unloaded and deleted, before the windows stop, so the watchdog cannot bring them back |
 | The repeating wake | Cancelled with `sudo pmset repeat cancel`, if it is the one bosun set. `pmset` can only cancel every repeating event at once, so another event, or a wake at another time, stays and it says so |
 | Folder trust | Taken back for the folders bosun marked, in Claude Code and Codex. A folder you had accepted yourself stays trusted. It goes by bosun's record of what it changed (`agent-changes.json`), kept since `bosun uninstall` was added; trust or notes from an install before that are not on it and stay |

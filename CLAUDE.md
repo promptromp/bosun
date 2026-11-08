@@ -342,7 +342,7 @@ you changed (the table and how to set them up: `docs/development.md`, "Which san
   Use it for `get.sh`, `install.sh`, launchd, `pmset` and whatever macOS does its own way. A clone costs
   no time or disk, so make one rather than be careful with one. It has already shown what Docker could
   not: a new Mac has no Apple tools, and launchd has no `gui/<uid>` domain until the auto-login is done.
-- `tests/sandbox.sh mac work [--base <ref>]`: in the same VM, a week of acme work in the ledger and the knowledge base (`tests/work_e2e.sh`, its days in `tests/sandbox/acme_week.sh`, what it shares with `install_e2e.sh` in `tests/sandbox/e2e_lib.sh`) on the release, upgraded to this checkout with `get.sh`, then the clock moved, writers racing, writes cut short, the knowledge files changed outside their journal, a person forgotten.
+- `tests/sandbox.sh mac work [--base <ref>]`: in the same VM, a week of acme work in the ledger and the knowledge base (`tests/work_e2e.sh`, its days in `tests/sandbox/acme_week.sh`, what it shares with `install_e2e.sh` in `tests/sandbox/e2e_lib.sh`) on the release (a checkout from before versions), converted to this checkout by `get.sh`, a mid-afternoon `bosun update` to the next version (`tests/sandbox/update_patch.sh`) on a year of data (`tests/sandbox/acme_year.py`), going back and forward again, then the clock moved, writers racing, writes cut short, the knowledge files changed outside their journal, a person forgotten.
 - `bosun wake-test` on real hardware: the only proof of a real wake, because a macOS guest cannot sleep and
   `tart suspend` does not make launchd catch up. Check a job's time in the VM by moving its clock.
 

@@ -1,16 +1,11 @@
 # Updating bosun
 
-Status: approved 2026-11-05. Part A, the groundwork, is built: the two paths, the stores' formats, the
-update's record and hold, backups, version folders, the write gate and the migration registry.
-`bosun update` plans, rehearses, holds, freezes, releases and brings the agents along
-(`lib/update_facts.py` gathers the plan's facts, `lib/update.py` carries it out, behind the wrapper
-`libexec/bosun-update`; `lib/update_agents.py` decides what each window gets, `lib/update_windows.py`
-carries it out, `lib/update_notes.py` keeps the windows' notes) and ends with its summary
-(`lib/update_summary.py`). `get.sh` installs versions side by side and hands an existing install over to
-it, and its first run converts a checkout an older `get.sh` made (`convert` in `lib/update.py`). What
-was decided while building it is under "Settled while building it" and "Decided while building it"
-below. Not done yet: the runs in the macOS VM ([Testing](#testing)), and what they settle. The plan:
-[docs/plans/update.md](../plans/update.md).
+Status: built and run in the macOS VM. The design is in `bosun update` (`lib/update*.py`, behind
+`libexec/bosun-update`), in `get.sh`'s side-by-side versions and its first-run conversion of a checkout an
+older `get.sh` made (`convert` in `lib/update.py`), and in the summary (`lib/update_summary.py`). What the
+runs on a real Mac showed, and what they changed, is under [Settled in the VM](#settled-in-the-vm); what
+was decided while building it, under "Settled while building it" and "Decided while building it". The
+plan: [docs/plans/update.md](../plans/update.md).
 
 ## Why
 
@@ -308,8 +303,8 @@ Each window gets one of three treatments, decided from the plan and the window's
   replaces in its own `tasks/` is the site's text, which an update never changes), and every item
   handed out when `orchestrator/tasks/_common.md` changed, as every task gets it (a site's
   `_common.md` only adds to it).
-  `chores.md` is the orchestrator's plugin. Whether a running session picks up a changed command
-  file is still to be checked in the VM; until then, a change to it counts as a launch input.
+  `chores.md` is the orchestrator's plugin. A running Claude does not pick up a changed command file
+  (the VM showed it, [below](#settled-in-the-vm)), so a change to it is a launch input.
 - **Something it was launched with changed:** its settings, its hooks, the launch command or the
   plugin. It is restarted on the new version through refresh's path, and what happens depends on
   what it is doing:
@@ -536,9 +531,10 @@ Settled while building it:
   - a `kg forget` after an update deletes its backup and says so; one cut short is finished,
     backups included, by the next write; and an update stops while one is cut short;
   - stand-ins for launchd.
-- **The VM** (`tests/sandbox.sh mac work`; not run on `bosun update` yet). A working day on the
-  previous version, then `bosun update` to this checkout mid-afternoon, while sessions are busy, a
-  background wait is running and stand-in Slack events arrive during the hold. It checks that:
+- **The VM** (`tests/sandbox.sh mac work`; what it settled: [Settled in the VM](#settled-in-the-vm)).
+  The release converted to this checkout, then a working day and `bosun update` to the next version
+  mid-afternoon, while sessions are busy, a background wait is running and stand-in Slack events arrive
+  during the hold. It checks that:
   - no event, write or record was lost;
   - each window resumed, with its background work started again;
   - the summary is right;
@@ -548,7 +544,148 @@ Settled while building it:
   It also measures the freeze on a year of data.
 
 - **`tests/sandbox.sh mac live claude|codex`** tries the take-stock and update prompts with the real
-  agents (about a dollar a run), with free-text cases for them in `tests/llm/`.
+  agents (about a dollar a run), and whether a running Claude picks up a changed command file, with
+  free-text cases for the prompts in `tests/llm/`.
+
+### Settled in the VM
+
+What the runs on a real Mac showed (`tests/sandbox.sh mac work`, `mac live claude|codex`; docs/development.md
+says what each does). Run on 2026-11-08, on macOS in Tart, with Claude Code 2.1.308 and the Codex Homebrew
+installed that day.
+
+- **The freeze is short.** A year of acme work (`tests/sandbox/acme_year.py`, through bosun's own
+  commands) leaves 6 907 ledger writes in a journal of 14 375 changes (6.3 MB), `ledger.json` at 308 KB,
+  1 259 knowledge writes (1 824 changes, `facts.jsonl` 831 KB) and its git history. On that, the
+  mid-afternoon update paused writes for 612 to 1 267 ms in six runs (`freeze_ms`; the most with the smoke
+  suite running on the host beside the VM), far under the 10 s that the post-call approval hooks allow, so
+  their fallback (saving their record for the next write) is not built. The conversion of the release, with
+  little data, paused them for 154 ms. From its start to its last window's answer, the mid-afternoon update
+  took 39 to 48 s and the conversion 18 to 24 s in those runs, as the first line of each summary says
+  ("bosun updated: … in 43s"); with the real agents (`mac live`), 27 and 33 s on Claude Code and 24 s on
+  Codex by their summaries (40 to 41 s by the scenario's own clock, which looks every 10 s).
+- **Restoring fits a hook's budget.** On that year's backup, restore's own check of every file against its
+  manifest (`_verify`) takes 288 ms (389 files, 24 MB), 214 ms (290 files, 20 MB), 339 ms (521 files,
+  29 MB) and 127 ms (62 files, 12 MB), and flushing each file of the backup to disk 22 to 29 ms (taking a
+  backup does not flush its clones; this is what it would cost). A whole restore into a copy of the
+  stores, flushing the drive (`F_FULLFSYNC`) after each file it put back, took 603 ms, 2 899 ms and, with
+  the host busy, 7 531 ms (257, 314 and 413 files put back or deleted), against the 8 s of a recovering
+  approval hook: nearly all of it those flushes, about 10 ms a file on the host too. Restore now hands
+  each file and its folder to the drive (`fsync`) and flushes the state and config folders' drives, and
+  any other it wrote to, once each at its end, before the restore is recorded (one cut short before that
+  is redone by the next, which puts back whatever does not read as the backup has it, and flushes even
+  when that is nothing): 443 ms for 623 files put back or deleted, and 198 ms for
+  28 put back and 124 deleted, counted apart in the last run.
+- **A read-only file is put back as one.** The first measurement failed: git keeps its objects and
+  commit-graph files read-only, and `restore` opened its copy for writing to flush it. It now copies the
+  file with its mode and times (`copy2`), then hands it to the drive through a read-only descriptor, so
+  they are on disk with its content once restore flushes the drive (`_put_back`, with a unit test). git's
+  maintenance can rewrite such a file after a knowledge write let go of the lock, so a put back can meet
+  one.
+- **A write after a cut short rebuilds the whole journal.** Once a cut leaves `ledger.json` behind its
+  journal, the next write rebuilds it from every change (214 to 455 ms on that year), as `ledger validate
+  --journal` does; nothing is lost. Fifty writes of each store were cut at random from their start to past
+  a write and that rebuild (0 to 657 ms): 27 of the ledger's and 26 of the knowledge base's printed their
+  id first, and each of those was in its store after the next write, as was every approval the journal
+  held. A long-lived install pays the rebuild once per crash. (A first run cut only in the first 300 ms,
+  which on a year of data is before any write prints its id.)
+- **launchd for real.** During the conversion the watchdog's and learning's jobs are really unloaded and
+  loaded again afterwards (`launchctl print` all along). A conversion whose migration fails while writes
+  are paused loads them again from their plists as they were on disk, byte for byte.
+- **The check-in loop.** The conversion ends the loop in its real `checkin` window with SIGTERM and the
+  release starts it again on the new version (`ps` shows the version folder's `bosun-checkin --loop`).
+  After a failed conversion is put back, the loop started again runs the old code: the checkout's own
+  `bosun-checkin`.
+- **The swap.** `RENAME_SWAP` exchanges the checkout and the link in one call on APFS: the checkout is the
+  same folder (inode) as `legacy-<12>`, the install path was never missing in 8.6 million looks while it ran,
+  and no `.bosun.link-*` is left; one planted an hour before the next update is swept by its prune.
+- **The upgrade from the release converts.** A release installed by its own `get.sh` is a checkout, set
+  up by its `install.sh` link; this checkout's `get.sh` run again takes the conversion path, and each of
+  bosun's windows on the release (no launch records) is restarted as one whose launch changed, in its own
+  conversation, and answers. Its summary names the release, the backup and where the checkout is kept.
+- **A window opened by hand** (a plain shell in bosun's tmux session) is left alone by the conversion and
+  by the mid-afternoon update: the same pane, no `bosun launch` in it, not in the record, and the
+  summary says so.
+- **Nothing is lost mid-afternoon.** With a ledger write, a knowledge write, a typed prompt (the
+  UserPromptSubmit hook) and a Stop hook arriving every second, and one of each the moment writes are
+  paused (54 of each in all, some beginning at `backed-up`, `switched` and `checked`): each is there once,
+  the typed prompts as events too; both journals and the fact log begin as they did; nothing bosun said
+  to a window is recorded as mine. Each hook command of the previous version's launch settings (20, with
+  the approval hooks on), given its own event's payload, runs on the new one. Slack messages that came during the hold are queued by the watcher's next run, each once.
+- **The table holds.** The orchestrator kept running and re-read `policy.md`; the idle window was
+  restarted; the window waiting on a background `sleep` took stock, was restarted and started the `sleep`
+  again from its note; the busy one was waited for and restarted once its turn ended.
+- **Going back works as [the guide](../setup.md#going-back) says**, its commands unchanged: the older
+  version's folder (or `worktree add` of its whole commit, from the summary's 7 characters), the backup
+  put back entry by entry, the link led back, `install.sh`, `bosun start`; the backup, put in a scratch
+  folder, also passes the previous version's `ledger validate --journal`. `bosun update` then takes it
+  forward again, migrating again.
+- **A forget reaches the backups.** After the updates, a person forgotten leaves nothing in any backup or
+  rehearsal copy (`grep -r` for their id, name and fact), and the forget says how many backups it deleted.
+- **git keeps tokens out of its errors.** git 2.54 (Apple Git-157) prints a failed clone or fetch of
+  `https://0000tok@example.invalid/...` without the user and password, and so does `get.sh`, which shows
+  URLs the same way; `get.sh` needs no filter.
+- **A running Claude does not pick up a changed command file.** A Claude started with `--plugin-dir`
+  through a link answered its command from the first file after the link was moved to another folder (in
+  each of seven live runs, Claude Code 2.1.308), and again after the file in the folder it started from
+  (`v1`) was changed in place (in the last three: fix round 1's `mac live claude` and `mac live codex` and
+  fix round 2's `mac live claude`; the four before changed the other folder's file, which shows
+  nothing). It reads its plugin's commands once, at start; so a change to `chores.md` stays a launch
+  input, which restarts the orchestrator. Its writes there are none: a version folder, while Claude runs
+  with its plugin from it, reads clean as an update's prune (`version_work`) and `bosun uninstall`
+  (`versions_work`) read it, and uninstall deleted every version once it waited for the windows' last
+  hooks (below). (`checkout_work`, for a checkout from before versions, names the shared `bosun.git` as
+  another worktree of a version, so it is not what a version is checked with.)
+- **The prompts' words work with a real Claude.** The take-stock prompt (`TAKE_STOCK_PROMPT` in
+  `lib/update_agents.py`: "bosun will restart this session for an update (… -> …), which ends your
+  background work. List each background task still running and what you would do when it finishes, and
+  save the list with `bosun update note --window <w> --stock` (the list on stdin; if nothing runs any more,
+  save "nothing running"). Then stop and wait; start nothing new.") led a repo session waiting on a
+  background command to save a list naming it and what to do when it ends. After the restart, the update
+  prompt (`UPDATE_PROMPT`: "bosun was updated from … to …; this session was restarted on the new version.
+  Check for anything missed just before: … Before the restart you listed this background work; start
+  again what still needs doing: … Then continue what you were doing, and send a one-line status with
+  `bosun update note --window <w> --status` (on stdin).") led it to check its ledger item, start the
+  command again and say so in its status. The words are left as they are. A session judges what still
+  needs doing: a command it was told was only a placeholder it listed as such and did not start again.
+- **Codex keeps background work its session file does not show.** A Codex repo window asked for a
+  background command kept it running after its turn while its status read idle (its session file records
+  only idle or busy, [harnesses](harnesses.md)). So an update leaves a Codex window running when nothing
+  it was launched with changed, as here, but one whose launch changed would be restarted at once, ending
+  that work without taking stock. Asked by hand in the update's own words, Codex listed the command with
+  `--stock` and, restarted with the update prompt, started it again and answered with `--status`.
+- **The orchestrator may read the install.** The re-read prompt names the changed
+  files in the install (`~/.local/share/bosun/orchestrator/policy.md`), and Claude Code asks "Allow this
+  read outside the working directories?" before it reads there, even in auto mode: the orchestrator stopped
+  at that question and the update waited for it (it never answers for me). The orchestrator may now read
+  the install and its versions folder, and only read them: `Read(//<path>/**)` rules added to its settings'
+  own allow list (`install_read_settings` in `lib/common.sh`; the merge adds to a settings file's
+  permission lists and never replaces them). Not working directories (`--add-dir` or
+  `additionalDirectories`), which would let it edit there, and whose path inside the install would put
+  every file of it in the launch's fingerprint. With the rules alone, the next run's orchestrator re-read
+  `policy.md` through the link and answered, with no question, and the update took 27 s.
+- **Uninstall waits for the windows' last hooks.** In three of four runs, `bosun uninstall` kept the
+  install and said to run it again: after it stopped the windows, `logs/` and `signals/` came back in the
+  state folder once deleted. A run listing the processes and the files while it stopped them showed the
+  writer: each Claude Code, ending, starts its async hooks in a session of their own about 1.3 s after its
+  window stopped, `bosun hook signal --window <w>` and its python, which append the window's
+  `signals/<w>.jsonl` (`lib/signals.py`) and log to `logs/hook-<date>.log` (the folder made again by
+  `load_config`). Uninstall now waits for them ([uninstall](uninstall.md#the-order)); with the real Claude
+  it removed the install and every version, and nothing came back after the deletion. That run also showed
+  Claude Code starting `caffeinate -i -t 300` as it ends, in its window's session, and leaving it running:
+  waited for, it held uninstall 15 s and was named as a step not done, so a process an agent starts in its
+  window's session as it ends is not waited for. The next `mac live claude` showed it with a real Claude:
+  as the windows stopped, the exporter's Claude started `caffeinate -i -t 300` in its window's session
+  after 1.3 s, which was not waited for, and each Claude its `bosun hook signal` in a session of its own
+  after 1.5 s, which were; the files went at 2.2 s and none came back, with nothing said but "removed".
+  In the run with a Codex repo window, uninstall waited out the 15 s for that window's background `sleep
+  300`, which Codex had started in a session of its own and which outlived the window, and named it as a
+  step not done; then it removed the install and every version. What a window started and still runs at
+  the bound is now said as a note instead ("still running, started in the exporter window: sleep 300 (pid
+  16856); bosun did not stop it."), and the uninstall ends as it does.
+- **A reinstall's `init` adds its newer keys.** An update never writes a new key (its default applies),
+  so an install from an older release lacks the keys a newer `init` writes; `bosun uninstall` then the
+  install line adds them to `bosun.env` (at their defaults, under "Added by `bosun init`", the file as it
+  was kept as `.pre-init-*`). Nothing else of the settings changes.
 
 ## Decided, my calls, and what is left to the builder
 
@@ -671,6 +808,14 @@ Decided while building it:
   `bosun update` (which settles answered windows before it plans, acting on none), takes it.
 - **Ctrl-C while the update waits** is noted, not raised, so it never cuts a restart short; the commands
   that act on the windows run in a session of their own, so the terminal's Ctrl-C never reaches them.
+- **A window opened between the plan and the switch** (the orchestrator delegating while I read the
+  prompt, or during the hold) is brought along like the others: once released, the update makes the plan
+  again from its two versions (`_windows_brought_along`, the path an update cut short after its release
+  takes too) and brings the windows along from that one, so a window open by then is in it and in
+  `agents`. The plan the go-ahead was given on stays what I approved and what `--dry-run` shows; the
+  windows' treatments are decided at run time anyway. A window opened after the windows were brought
+  along is not in it: its next `bosun` command runs the new version, and it keeps what it was started
+  with.
 - **An update cut short** after its release (at `checked` or `released`) brings the windows along from a
   plan made again from its two versions, saying what came of each; Ctrl-C there ends the command. One
   cut short at `agents` leaves the windows still waited for to the check-in loop (or to `bosun update
@@ -681,13 +826,35 @@ Decided while building it:
 Left to the builder:
 
 - upcasting or rewriting, case by case;
-- the update prompt's exact words, settled in the VM;
-- saving hooks' records to disk while a lock is busy, if the measured freeze needs it.
+- the update prompt's exact words, settled in the VM ([above](#settled-in-the-vm));
+- saving hooks' records to disk while a lock is busy, if the measured freeze needs it: it does not
+  (612 to 1 267 ms on a year of data).
+
+Later, each a pull request of its own:
+
+- **Readers during a freeze.** Writes check the store before they change it (`lib/update_gate.py`), but
+  readers do not (`locked_ledger(write=False)`, then `load()`): old code still running after the switch,
+  `review-watch`'s targets, the guard's read for `--approvals` or a running console, reading a ledger a
+  migration reshaped, fails with an error instead of running again through the install link as a refused
+  write does. Gate them too, at the first migration that reshapes a store.
+- **A conversion restart under a changed `BOSUN_HARNESS`.** A release's windows have no launch records,
+  so a conversion restarts each with the agent the config names now; if `BOSUN_HARNESS` changed since the
+  window started, it lands in a blank conversation of the other agent, with the update prompt. Take the
+  running agent's (`agent_session_field <pid> harness`) when nothing is recorded (`libexec/bosun-refresh`).
+- **`lib/update.py` in its steps and its conversion.** Over 1 100 lines; split into `update_steps`,
+  `update_convert` and `update`, in a pull request of its own after this one, with no change in what
+  they do.
+- **Kept stores on a fresh install.** `bosun uninstall` keeps the ledger and the knowledge base; an
+  install of a newer version over them refuses their writes until they are migrated, and `bosun update`
+  there finds nothing to update. `init` should run the migrations of kept stores, with a backup, before
+  the first start.
+- **Codex background work.** Bosun cannot see a Codex window's background commands, so a Codex window
+  whose launch changed is restarted without taking stock (see [Settled in the VM](#settled-in-the-vm)).
+  It needs Codex to say what runs.
 
 ## Docs to change when it is built
 
-Changed with Parts A and B, but for the VM scenario in `docs/development.md`, which waits for the runs
-in the VM:
+Changed with the build and the runs in the VM:
 
 - `docs/setup.md` (updating and going back, and that a forget deletes the backups);
 - `docs/knowledge.md` and the deletion bullet of `docs/design/knowledge.md` (a deletion deletes

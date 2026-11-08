@@ -681,26 +681,41 @@ build_model_effort_args() { # <model> <effort> [settings-file] [extra settings J
     settings="$(jq -c . "${settings_file/#"$BOSUN_INSTALL"\//$BOSUN_ROOT/}")" || die "could not read $settings_file"
   fi
   [ -n "$effort" ] && settings="$(jq -c --arg effort "$effort" '. + {effortLevel: $effort}' <<<"$settings")"
-  # The extra hooks are added to the file's own (for the same event too), never replace them.
+  # The extra hooks are added to the file's own (for the same event too), and its permission rules to the
+  # file's lists, never in their place.
   # shellcheck disable=SC2016  # a jq program, not shell
-  [ -n "$extra" ] && settings="$(jq -c --argjson extra "$extra" '
-    reduce (($extra.hooks // {}) | to_entries[]) as $hook (. * ($extra | del(.hooks));
-      .hooks[$hook.key] = ((.hooks[$hook.key] // []) + $hook.value))' <<<"$settings")"
+  [ -n "$extra" ] && settings="$(jq -c --argjson extra "$extra" "$PERMISSION_LISTS_JQ"'
+    . as $file | reduce (($extra.hooks // {}) | to_entries[]) as $hook (. * ($extra | del(.hooks));
+      .hooks[$hook.key] = ((.hooks[$hook.key] // []) + $hook.value)) | lists_kept($file; $extra)' <<<"$settings")"
   model_effort_args+=(--settings "$settings")
 }
 
 # The settings the orchestrator gets on top of its settings file: with BOSUN_APPROVALS_ENABLED=1,
 # the approvals hooks (`bosun guard --approvals`, `--permission-request` and, after the call,
 # `--post-tool-use` for both PostToolUse and PostToolUseFailure; lib/guard.py); with
-# BOSUN_COMPACT_CONTEXT=1 the compaction hook (compact_hook_settings); and with BOSUN_HOOK_SIGNALS=1
-# the signal hooks (signal_hook_settings). The last two are on by default. Nothing when all three
-# are off.
+# BOSUN_COMPACT_CONTEXT=1 the compaction hook (compact_hook_settings); with BOSUN_HOOK_SIGNALS=1
+# the signal hooks (signal_hook_settings), the last two on by default; and rules that let it read the
+# install's folders (install_read_settings).
 orchestrator_extra_settings() {
   {
     approvals_hook_settings
     compact_hook_settings --orchestrator
     signal_hook_settings "$BOSUN_ORCHESTRATOR"
+    install_read_settings
   } | merge_settings
+}
+
+# The orchestrator may read the install, and the versions folder beside it where there is one (a read
+# through the link is of the folder it leads to): an update's prompt asks it to re-read files there
+# (policy.md, the task files), and Claude Code asks first before it reads outside its working directories,
+# which would keep the update waiting at that question. Read rules only, added to its settings' own allow
+# list: it may read there, nothing more. Not --add-dir, which would let it edit there as in its working
+# directory, and whose path inside the install would put every file of it in the launch's fingerprint.
+install_read_settings() {
+  local dirs=("$BOSUN_INSTALL")
+  [ -d "$BOSUN_INSTALL-versions" ] && dirs+=("$BOSUN_INSTALL-versions")
+  # An absolute path is written //<path> in a permission rule.
+  jq -cn '{permissions: {allow: [$ARGS.positional[] | "Read(/\(.)/**)"]}}' --args "${dirs[@]}"
 }
 
 approvals_hook_settings() {
@@ -752,13 +767,22 @@ compact_hook_settings() { # --window <window> | --orchestrator
 # Settings objects on stdin (one per line) merged into one: keys from later ones win, hooks for the
 # same event are concatenated. Prints nothing when there is nothing to merge.
 merge_settings() {
-  jq -cs '
-    reduce .[] as $s ({}; (. * ($s | del(.hooks))) as $merged
+  # shellcheck disable=SC2016  # a jq program, not shell
+  jq -cs "$PERMISSION_LISTS_JQ"'
+    reduce .[] as $s ({}; . as $before | (. * ($s | del(.hooks))) as $merged
       | $merged | .hooks = (reduce (($s.hooks // {}) | to_entries[]) as $e ($merged.hooks // {};
-          .[$e.key] = ((.[$e.key] // []) + $e.value))))
+          .[$e.key] = ((.[$e.key] // []) + $e.value))) | lists_kept($before; $s))
     | if .hooks == {} then del(.hooks) else . end
     | select(. != {})'
 }
+
+# jq's `*` replaces a list: a settings object's permission lists (allow, deny, ask, additionalDirectories)
+# are made the first one's, then the second one's added, each rule once, in that order.
+# shellcheck disable=SC2016  # a jq program, not shell
+PERMISSION_LISTS_JQ='def lists_kept($first; $second): reduce ("allow", "deny", "ask", "additionalDirectories") as $k (.;
+  if ($first.permissions[$k] // $second.permissions[$k]) == null then .
+  else .permissions[$k] = reduce ((($first.permissions[$k] // []) + ($second.permissions[$k] // []))[]) as $rule
+    ([]; if any(.[]; . == $rule) then . else . + [$rule] end) end);'
 
 # Sets autocompact_flag to `--autocompact <n>` for window <name>: the orchestrator's setting, else
 # its sessions.yml `autocompact`, else BOSUN_AUTOCOMPACT_TOKENS; empty when that is empty or 0.

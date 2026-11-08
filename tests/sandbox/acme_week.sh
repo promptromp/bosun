@@ -358,3 +358,97 @@ knowledge_day_5() {
   kg_says "a context pack for the release process" "Knowledge for Release process" context --for releases
   check "kg lint reads it all" bosun kg lint
 }
+
+# ---- a year of work, and a busy afternoon (tests/work_e2e.sh, "a mid-afternoon update") -------------
+
+YEAR_DAYS=365
+STAND_IN="$HOME/.sandbox/claude" # what steers the Claude stand-in in each window (tests/sandbox/claude-stand-in)
+SLACK_STAND_IN="$HOME/.sandbox/slack"
+BACKGROUND_SLEEP="sleep 3333" # the background command a shell window waits on
+T_AFTERNOON=""
+AFTERNOON_SESSION="00000000-0000-4000-8000-0000000000af"
+# shellcheck disable=SC2034 # tests/work_e2e.sh looks for it once Sam is forgotten
+K_SAM=""
+
+# A year of acme work in both stores (tests/sandbox/acme_year.py), through the installed bosun's own
+# commands with the settings `bosun ledger` and `bosun kg` pass them; what it made, and how long it took.
+a_year_of_work() { # [<days>]
+  bash -c 'source "$1/lib/common.sh"
+    load_config
+    BOSUN_STATE_DIR="$BOSUN_STATE_DIR" BOSUN_CONFIG_DIR="$BOSUN_CONFIG_DIR" BOSUN_REPO_MASK="$BOSUN_REPO_MASK" \
+      BOSUN_ORCHESTRATOR_DIR="$BOSUN_ORCHESTRATOR_DIR" BOSUN_KNOWLEDGE_GIT="$BOSUN_KNOWLEDGE_GIT" \
+      BOSUN_EVENTS_ENABLED=0 python3 "$2" "$1/lib" "$3"' _ "$HOME/.local/share/bosun" "$ROOT/tests/sandbox/acme_year.py" "${1:-$YEAR_DAYS}"
+}
+
+# What the afternoon's windows do when the update comes, for the Claude stand-in: acme-web waits on a
+# background sleep (shell), invoice-exporter is in a long turn (busy), acme-api and the orchestrator are idle.
+afternoon_windows() {
+  mkdir -p "$STAND_IN"
+  echo "$BACKGROUND_SLEEP" >"$STAND_IN/acme-web.start"
+  echo busy >"$STAND_IN/invoice-exporter.mode"
+}
+
+# Slack, as the watcher's call lists it through the stand-in (one MCP server, Slack's), with events on:
+# the watcher queues each new message for the orchestrator.
+afternoon_settings() {
+  mkdir -p "$SLACK_STAND_IN"
+  : >"$SLACK_STAND_IN/messages.jsonl"
+  echo '{"mcpServers": {"slack": {"command": "true"}}}' >"$SLACK_STAND_IN/mcp.json"
+  printf 'BOSUN_EVENTS_ENABLED="1"\nBOSUN_SLACK_WATCH_MCP_CONFIG="%s"\n' "$SLACK_STAND_IN/mcp.json" >>"$HOME/.config/bosun/bosun.env"
+}
+
+afternoon_settings_off() { sed -i '' '/^BOSUN_EVENTS_ENABLED="1"$/d; /^BOSUN_SLACK_WATCH_MCP_CONFIG=/d' "$HOME/.config/bosun/bosun.env"; }
+
+a_slack_message() { # <n>: someone writes to me in Slack, now
+  local ts
+  ts="$(date +%s).$(printf '%06d' "$1")"
+  jq -cn --arg ts "$ts" --arg n "$1" '{permalink: ("https://acme.slack.com/archives/C00000000/p" + ($ts | sub("[.]"; ""))),
+    channel: "C00000000", ts: $ts, thread_ts: "", author: "Dana (finance)", kind: "mention",
+    excerpt: "Afternoon question \($n): did the March export finish?"}' >>"$SLACK_STAND_IN/messages.jsonl"
+}
+
+# The afternoon's own work in the ledger and the knowledge base: a task, and a person whose facts the
+# update's backup will hold.
+afternoon_work() {
+  echo "  the afternoon's work"
+  made T_AFTERNOON "$NEW_TASK_ID" "a task for the afternoon" spawn --title "Watch the afternoon exports" \
+    --ask "Note each export as it lands" --via "user: watch the exports this afternoon"
+  kg_says "a reviewer for the afternoon" "ok: added" add-entity person/sam --name "Sam Placeholder"
+  kg_made K_SAM "$NEW_FACT_ID" "... who reviews the exporter" propose person/sam reviews repo/invoice-exporter \
+    --source "ledger:$T_AFTERNOON"
+}
+
+# One write of the busy afternoon, of <kind>: its number and the update's step when it began, in
+# $OUT/afternoon-<kind>.ok when it went through, else .failed.
+afternoon_note() { bosun ledger note "$T_AFTERNOON" "Afternoon note $1"; }
+afternoon_fact() {
+  bosun kg propose feature/csv-export caveat --value "Afternoon fact $1: the export check passed" --source "ledger:$T_AFTERNOON"
+}
+afternoon_prompt() { typed_in acme-api "afternoon prompt $1"; }
+afternoon_signal() { # the Stop hook's record, as the window's signal hook takes it
+  jq -cn --arg id "$AFTERNOON_SESSION" --arg n "$1" '{hook_event_name: "Stop", session_id: $id,
+    background_tasks: [{id: "a\($n)", type: "shell", status: "running", command: "afternoon check \($n)"}]}' |
+    bosun hook signal --window acme-api
+}
+afternoon_write() { # <kind> <n>
+  local step
+  step="$(jq -r '.step // "-"' "$HOME/.local/state/bosun/update.json" 2>/dev/null)" || step="-"
+  if "afternoon_$1" "$2" >>"$OUT/afternoon-$1.out" 2>&1; then
+    echo "$2 ${step:--}" >>"$OUT/afternoon-$1.ok"
+  else
+    echo "$2 ${step:--}" >>"$OUT/afternoon-$1.failed"
+  fi
+}
+AFTERNOON_KINDS=(note fact prompt signal)
+
+# Until $OUT/writers.stop is there: each kind of write once a second, each in the background, so that
+# some begin while the update holds bosun's own work and pauses writes.
+the_afternoon_writes() {
+  local n=0 kind
+  while [ ! -e "$OUT/writers.stop" ] && [ "$n" -lt 150 ]; do
+    n=$((n + 1))
+    for kind in "${AFTERNOON_KINDS[@]}"; do afternoon_write "$kind" "$n" & done
+    sleep 1
+  done
+  wait
+}

@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import errno
 import fnmatch
+import os
 import shutil
+import stat
 import sys
 import tempfile
 import unittest
@@ -87,6 +89,114 @@ class BackupsTest(unittest.TestCase):
         self.assertEqual(done, ["state/ledger.json"])
         self.assertEqual((self.state / "ledger.json").read_text(), "ledger.json\n")
         self.assertEqual((self.state / "events" / "a.json").read_text(), "changed\n")
+
+    def test_restore_puts_back_a_read_only_file_with_its_mode(self) -> None:
+        """git keeps its objects and commit-graph files read-only (0444), and its maintenance may rewrite
+        them after a knowledge write has let go of the lock: a restore puts such a file back, flushed,
+        with the mode the backup has (the VM found the copy opened for writing to flush it refused)."""
+        chain = (
+            self.config / "knowledge" / ".git" / "objects" / "info" / "commit-graphs" / "commit-graph-chain"
+        )
+        chain.parent.mkdir(parents=True)
+        chain.write_text("graph-1\n")
+        chain.chmod(0o444)
+        backup = self.take()
+        chain.chmod(0o644)
+        chain.write_text("graph-2\n")
+        chain.chmod(0o444)
+        done = ub.restore(backup, self.state, self.config, only=["config/knowledge"])
+        self.assertEqual(done, ["config/knowledge/.git/objects/info/commit-graphs/commit-graph-chain"])
+        self.assertEqual(chain.read_text(), "graph-1\n")
+        self.assertEqual(chain.stat().st_mode & 0o777, 0o444)
+
+    def test_a_put_back_file_is_flushed_with_its_mode_and_times(self) -> None:
+        """The copy gets the backup's mode and times before it is flushed, so they are durable with its
+        content (a flush through a read-only descriptor, which a read-only file allows)."""
+        ledger = self.state / "ledger.json"
+        ledger.chmod(0o440)
+        backup = self.take()
+        ledger.chmod(0o644)
+        ledger.write_text("changed\n")
+        flushed: list[int] = []
+
+        def fsync(fd: int) -> None:  # the file's flush (the folder's follows the rename)
+            status = os.fstat(fd)
+            if stat.S_ISREG(status.st_mode):
+                flushed.append(status.st_mode & 0o777)
+
+        with mock.patch("update_backups.os.fsync", side_effect=fsync):
+            ub.restore(backup, self.state, self.config, only=["state/ledger.json"])
+        self.assertEqual(flushed, [0o440])
+        self.assertEqual(ledger.stat().st_mode & 0o777, 0o440)
+
+    def test_a_restore_flushes_the_drive_once_after_every_file(self) -> None:
+        """Each file put back, and its folder, is handed to the drive (fsync); then one full flush of the
+        drive (F_FULLFSYNC) makes all of it durable, at the end, before the restore is recorded: a flush
+        of the drive per file cost about 10 ms each. A restore cut short before it is redone."""
+        backup = self.take()
+        (self.state / "ledger.json").write_text("changed\n")
+        (self.state / "journal" / "a.json").write_text("changed\n")
+        (self.config / "bosun.env").write_text("changed\n")
+        seen: list[tuple[str, str]] = []
+
+        def fsync(fd: int) -> None:
+            seen.append(("fsync", "file" if stat.S_ISREG(os.fstat(fd).st_mode) else "folder"))
+
+        def full(fd: int) -> None:
+            seen.append(("full", "file" if stat.S_ISREG(os.fstat(fd).st_mode) else "folder"))
+
+        with (
+            mock.patch("update_backups.os.fsync", side_effect=fsync),
+            mock.patch("journal.flush_to_disk", side_effect=full),
+        ):
+            done = ub.restore(
+                backup,
+                self.state,
+                self.config,
+                only=["state/ledger.json", "state/journal", "config/bosun.env"],
+            )
+        self.assertEqual(len(done), 3, done)
+        self.assertEqual(seen.count(("fsync", "file")), 3, seen)
+        self.assertEqual(seen.count(("fsync", "folder")), 3, seen)
+        self.assertEqual([kind for kind in seen if kind[0] == "full"], [("full", "folder")], seen)
+        self.assertEqual(seen[-1], ("full", "folder"), "the drive's flush comes after every file's")
+
+    def test_each_drive_a_restore_wrote_to_is_flushed_once(self) -> None:
+        """A restore can write on more than one drive (a linked folder, the config folder elsewhere): the
+        state and config folders' drives get their one full flush each, and so does any other drive it put
+        back or deleted on. A restore redone after one cut short before its flush finds nothing to write,
+        and still flushes, as what the first one wrote may not be on the drive yet."""
+        backup = self.take()
+        (self.state / "ledger.json").write_text("changed\n")
+        (self.state / "journal" / "new.jsonl").write_text("{}\n")  # an extra, deleted
+        (self.config / "bosun.env").write_text("changed\n")
+        config, journal_folder = self.config.resolve(), (self.state / "journal").resolve()
+
+        def device(folder: Path) -> int:  # the config folder and the journal each on a drive of their own
+            real = folder.resolve()
+            return 2 if real.is_relative_to(config) else 3 if real.is_relative_to(journal_folder) else 1
+
+        flushed: list[int] = []
+
+        def restore(only: list[str]) -> list[int]:
+            flushed.clear()
+            with (
+                mock.patch.object(ub, "_device", side_effect=device),
+                mock.patch("journal.flush_folder", side_effect=lambda folder: flushed.append(device(folder))),
+            ):
+                ub.restore(backup, self.state, self.config, only=only)
+            return sorted(flushed)
+
+        self.assertEqual(restore(["state/ledger.json", "state/journal", "config/bosun.env"]), [1, 2, 3])
+        (self.state / "ledger.json").write_text("changed again\n")
+        self.assertEqual(
+            restore(["state/ledger.json", "state/journal"]), [1, 2], "the journal's drive unwritten"
+        )
+        self.assertEqual(
+            restore(["state/ledger.json", "state/journal", "config/bosun.env"]),
+            [1, 2],
+            "a redo writes nothing",
+        )
 
     def test_restore_refuses_a_backup_file_that_differs_from_its_manifest(self) -> None:
         backup = self.take()

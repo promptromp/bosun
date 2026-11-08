@@ -240,12 +240,47 @@ def _destination(relative: str, state_dir: Path, config_dir: Path) -> Path:
     return (state_dir if side == "state" else config_dir) / rest
 
 
-def _flush_file(path: Path) -> None:
-    fd = os.open(path, os.O_RDWR)
+def _hand_to_drive(path: Path) -> None:
+    """<path>'s content and metadata (a file) or entries (a folder) handed to the drive (fsync), through
+    a read-only descriptor, which a read-only file (git's objects) allows. On macOS the drive may keep
+    them in its cache: restore's one full flush at its end (_flush_drives) makes them durable."""
+    fd = os.open(path, os.O_RDONLY)
     try:
-        journal.flush_to_disk(fd)
+        os.fsync(fd)
     finally:
         os.close(fd)
+
+
+def _device(folder: Path) -> int:
+    return folder.stat().st_dev
+
+
+class _Drives:
+    """The drives a restore flushes, each with a folder on it, for its one full flush: the state and
+    config folders' always, since a restore redone after one cut short before its flush writes nothing
+    and what the first wrote may not be on the drive yet; and any other a linked folder put what it
+    wrote on."""
+
+    def __init__(self, *always: Path) -> None:
+        self.folders: dict[int, Path] = {}
+        for folder in always:
+            self.wrote_in(folder)
+
+    def wrote_in(self, folder: Path) -> None:
+        """<folder>, just written in, by its real path: one deleted later is replaced by its nearest
+        parent, on the same drive."""
+        real = folder.resolve()
+        self.folders.setdefault(_device(real), real)
+
+    def flush(self) -> None:
+        """One full flush (journal.flush_folder: F_FULLFSYNC on macOS) of each, which writes everything
+        handed to that drive before: every file and folder the restore put back or deleted there. A full
+        flush per file cost about 10 ms each, seconds for a year of data."""
+        for written in self.folders.values():
+            folder = written
+            while not folder.is_dir():
+                folder = folder.parent
+            journal.flush_folder(folder)
 
 
 def _is_top_level(relative: str) -> bool:
@@ -253,10 +288,13 @@ def _is_top_level(relative: str) -> bool:
     return relative.count("/") == 1
 
 
-def _put_back(source: Path, target: Path, expected: str, follow: bool) -> None:
-    """<source> written beside <target>, flushed, checked, renamed over. A link at <target> is
-    written through only when <follow> (a top-level entry that is a link, as the backup followed
-    it); anywhere else it is replaced, never written through to what it points at."""
+def _put_back(source: Path, target: Path, expected: str, follow: bool) -> Path:
+    """<source> written beside <target>, handed to the drive, checked, renamed over, its folder handed
+    to the drive too (restore flushes the drive once, at its end). A link at <target> is written through
+    only when <follow> (a top-level entry that is a link, as the backup followed it); anywhere else it is
+    replaced, never written through to what it points at. The copy has <source>'s mode and times before
+    it is flushed, so they are durable with its content, and a read-only file (git's objects) is put
+    back as one. The path written."""
     if follow and target.is_symlink() and not expected.startswith(LINK):
         target = target.resolve()
     target.parent.mkdir(parents=True, exist_ok=True)
@@ -266,11 +304,13 @@ def _put_back(source: Path, target: Path, expected: str, follow: bool) -> None:
         os.symlink(expected[len(LINK) :], tmp)
     else:
         shutil.copy2(source, tmp)
-        _flush_file(tmp)
+        _hand_to_drive(tmp)
         if digest(tmp) != expected:
             tmp.unlink()
             raise BackupError(f"{target} did not read back as the backup has it")
-    journal.replace_durably(tmp, target)
+    os.replace(tmp, target)
+    _hand_to_drive(target.parent)
+    return target
 
 
 def _same_now(target: Path, expected: str) -> bool:
@@ -302,10 +342,10 @@ def _verify(manifest: Manifest, backup: Path, only: Sequence[str]) -> None:
 
 
 def _put_back_all(
-    manifest: Manifest, backup: Path, state_dir: Path, config_dir: Path, only: Sequence[str]
+    manifest: Manifest, backup: Path, state_dir: Path, config_dir: Path, only: Sequence[str], drives: _Drives
 ) -> list[str]:
     """Each file or link under <only> whose content differs now put back (its source checked by
-    _verify beforehand, and its copy read back by _put_back)."""
+    _verify beforehand, and its copy read back by _put_back), its folder kept in <drives>."""
     done: list[str] = []
     for relative, expected in sorted(manifest.files.items()):
         if not _under(relative, only):
@@ -315,7 +355,7 @@ def _put_back_all(
             continue
         source = backup / relative
         _clear_inner_links(relative, target)
-        _put_back(source, target, expected, _is_top_level(relative))
+        drives.wrote_in(_put_back(source, target, expected, _is_top_level(relative)).parent)
         done.append(relative)
     return done
 
@@ -325,10 +365,10 @@ def _key(root: Path, prefix: str, path: Path) -> str:
 
 
 def _remove_extra(
-    backup: Path, state_dir: Path, config_dir: Path, manifest: Manifest, only: Sequence[str]
+    backup: Path, state_dir: Path, config_dir: Path, manifest: Manifest, only: Sequence[str], drives: _Drives
 ) -> list[str]:
     """What is under each prefix and the manifest does not list goes, lock files excepted: the
-    freeze holds them open."""
+    freeze holds them open. Each folder deleted in kept in <drives>."""
     removed: list[str] = []
     for prefix in only:
         root = _destination(prefix, state_dir, config_dir)
@@ -336,12 +376,13 @@ def _remove_extra(
             key = _key(root, prefix, path)
             if key not in manifest.files and not path.name.endswith(".lock"):
                 path.unlink()
+                drives.wrote_in(path.parent)
                 removed.append(key)
-        _remove_empty_folders(root, prefix, backup)
+        _remove_empty_folders(root, prefix, backup, drives)
     return removed
 
 
-def _remove_empty_folders(root: Path, prefix: str, backup: Path) -> None:
+def _remove_empty_folders(root: Path, prefix: str, backup: Path, drives: _Drives) -> None:
     """The folders the backup does not have at all, left empty, go (deepest first)."""
     if not root.is_dir():
         return
@@ -349,6 +390,7 @@ def _remove_empty_folders(root: Path, prefix: str, backup: Path) -> None:
         absent = not (backup / _key(root, prefix, folder)).is_dir()
         if absent and not any(folder.iterdir()) and (folder != root or not root.is_symlink()):
             folder.rmdir()
+            drives.wrote_in(folder.parent)
 
 
 def _normalised(only: Sequence[str]) -> list[str]:
@@ -372,13 +414,19 @@ def restore(backup: Path, state_dir: Path, config_dir: Path, only: Sequence[str]
     folders the backup lacks; lock files stay: the freeze holds them). The prefixes, and every file
     of the backup under them (against the manifest), are checked before anything is deleted or
     written, so a backup found damaged changes nothing; each copy is read back too. Under the
-    freeze's locks only the update wrote there, so what is new came from the step that failed.
-    Returns what it put back and what it deleted."""
+    freeze's locks only the update wrote there, so what is new came from the step that failed. The
+    state and config folders' drives, and any other it wrote to, are flushed once each, at the end,
+    before the caller records the restore: one cut short before is redone by the next, which puts back
+    whatever does not read as the backup has it, and flushes even when that is nothing.
+    Returns what it put back and what it deleted (a key the manifest has, or not)."""
     prefixes = _normalised(only)
     manifest = read_manifest(backup)
     _verify(manifest, backup, prefixes)
-    removed = _remove_extra(backup, state_dir, config_dir, manifest, prefixes)  # first: a folder that
-    done = _put_back_all(manifest, backup, state_dir, config_dir, prefixes)  # became a file is gone
+    drives = _Drives(state_dir, config_dir)
+    # The extras first: a folder that became a file is gone before the file is put back.
+    removed = _remove_extra(backup, state_dir, config_dir, manifest, prefixes, drives)
+    done = _put_back_all(manifest, backup, state_dir, config_dir, prefixes, drives)
+    drives.flush()
     return sorted({*done, *removed})
 
 

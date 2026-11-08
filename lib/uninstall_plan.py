@@ -18,6 +18,7 @@ import fnmatch
 import os
 import re
 import shlex
+from collections.abc import Collection, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -223,6 +224,48 @@ def kind_of(name: str, table: tuple[tuple[str, str], ...]) -> str:
 
 def quoted(path: str) -> str:
     return shlex.quote(path)
+
+
+Processes = Sequence[tuple[int, int, int | None]]  # pid, parent, session id (None: unknown)
+NOTE_COMMAND_CHARS = 80
+
+
+def _with_descendants(table: Processes, roots: Mapping[int, str]) -> dict[int, str]:
+    """<roots> still in <table>, and whatever they started, however deep, each with its root's window."""
+    parents = {pid: ppid for pid, ppid, _ in table}
+    found = {pid: window for pid, window in roots.items() if pid in parents}
+    while more := {pid: found[ppid] for pid, ppid in parents.items() if ppid in found and pid not in found}:
+        found.update(more)
+    return found
+
+
+def ran_in_windows(table: Processes, sessions: Mapping[int, str], panes: Mapping[int, str]) -> dict[int, str]:
+    """What runs in the windows bosun is about to stop, from a process table, each with the window it runs
+    in: each process in one of their tmux panes' sessions (<sessions>: session id to window), and whatever
+    the panes (<panes>: pid to window) started, however deep, in any session (a background command an agent
+    runs in a session of its own)."""
+    in_sessions = {pid: sessions[sid] for pid, _, sid in table if sid is not None and sid in sessions}
+    return _with_descendants(table, {**in_sessions, **panes})
+
+
+def still_running(table: Processes, sessions: Collection[int], watched: Mapping[int, str]) -> dict[int, str]:
+    """What of the windows bosun stopped still runs, each with its window: each of <watched> (what ran in
+    them at the stop, and what this found since) still there, and what those start apart from the windows,
+    in a session of its own, with whatever that starts. It sees only what it finds through a process it
+    watches: Claude Code, ending as its window stops, starts its async hooks (SessionEnd's `bosun hook
+    signal`, which wrote in the state folder after its deletion) in a session of their own while it still
+    runs, so they are found and waited for; a worker bosun's own hooks detach (`codex-turn-end`'s) is
+    launchd's within milliseconds and is not. What an agent starts in its window's own session as it ends
+    is not waited for: Claude Code's `caffeinate -i -t 300` outlives it by five minutes."""
+    apart = {pid for pid, _, sid in table if sid is None or sid not in sessions}
+    reached = _with_descendants(table, watched)
+    return {pid: window for pid, window in reached.items() if pid in watched or pid in apart}
+
+
+def still_running_note(window: str, pid: int, command: str) -> str:
+    """What uninstall says of a process a stopped window started that still runs once it stops waiting."""
+    shown = command if len(command) <= NOTE_COMMAND_CHARS else command[: NOTE_COMMAND_CHARS - 1] + "…"
+    return f"still running, started in the {window} window: {shown} (pid {pid}); bosun did not stop it."
 
 
 def safe_folder(path: str, facts: Facts) -> bool:

@@ -2,5 +2,11 @@
 # The GitHub CLI's stand-in, for the sandboxes: logged in, and nothing is open.
 case "$*" in
 "auth status") echo "Logged in to github.com" ;;
+"api graphql"*)
+	# GitHub answers a query with an object, here its error for a pull request there is not (gh exits 1).
+	echo '{"data":{"repository":{"pullRequest":null}},"errors":[{"type":"NOT_FOUND","message":"Could not resolve to a PullRequest."}]}'
+	echo "gh: Could not resolve to a PullRequest." >&2
+	exit 1
+	;;
 *) echo "[]" ;;
 esac

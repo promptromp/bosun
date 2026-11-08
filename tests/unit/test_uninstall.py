@@ -48,6 +48,15 @@ class FakeMac:
         self.calls: list[str] = []
         self.stuck_jobs: set[str] = set()
         self.sudo_works = True
+        # What runs in the windows: `ps` rows (pid, parent), each process's session, and after the stop the
+        # ones a stopped agent left behind, for that many looks (None: for good).
+        self.panes: dict[int, str] = {}
+        self.sessions: dict[int, int] = {}
+        self.running: list[tuple[int, int]] = []
+        self.left: list[tuple[int, int]] = []
+        self.left_for: int | None = 0
+        # How `bosun stop` fails once it has ended the session: "timeout" (its 120 s) or "exit".
+        self.stop_fails: str | None = None
 
     def done(self, code: int = 0, out: str = "") -> subprocess.CompletedProcess[str]:
         return subprocess.CompletedProcess([], code, out, "")
@@ -77,9 +86,25 @@ class FakeMac:
         return self.done()
 
     def tmux(self, command: Sequence[str]) -> subprocess.CompletedProcess[str]:
+        if "list-panes" in command:
+            out = "".join(f"{pid}\t{window}\n" for pid, window in self.panes.items())
+            return self.done(0 if self.windows else 1, out)
         if "list-windows" not in command:
             raise AssertionError(f"unexpected tmux: {command}")
         return self.done(0 if self.windows else 1, "".join(f"{name}\n" for name in self.windows))
+
+    def ps(self, command: Sequence[str]) -> subprocess.CompletedProcess[str]:
+        """Every process: those of the windows until the stop, then what they left, for as long as told."""
+        self.calls.append("ps")
+        rows = self.running
+        if "bosun stop" in self.calls:
+            rows = self.left if self.left_for is None or self.left_for > 0 else []
+            if self.left_for:
+                self.left_for -= 1
+                if self.left_for == 0:  # the hook writes its signal as it ends
+                    (self.state_dir / "signals").mkdir(parents=True, exist_ok=True)
+                    (self.state_dir / "signals" / "api.jsonl").write_text("{}\n")
+        return self.done(out="".join(f"{pid} {ppid} ?? a hook\n" for pid, ppid in rows))
 
     def stop(self) -> subprocess.CompletedProcess[str]:
         """What `bosun stop` does: ends the session, and leaves a file saying so."""
@@ -87,7 +112,9 @@ class FakeMac:
         self.windows.clear()
         self.state_dir.mkdir(parents=True, exist_ok=True)
         (self.state_dir / "stopped-bosun").write_text("today")
-        return self.done()
+        if self.stop_fails == "timeout":  # as subprocess.run raises it
+            raise subprocess.TimeoutExpired(["bosun", "stop"], 120)
+        return self.done(1 if self.stop_fails == "exit" else 0)
 
     def run(self, command: Sequence[str], **kwargs: Any) -> subprocess.CompletedProcess[str]:
         tool = Path(command[0]).name
@@ -95,7 +122,13 @@ class FakeMac:
             return real_run(command, **kwargs)
         if tool == "bosun":
             return self.stop()
-        handlers = {"launchctl": self.launchctl, "pmset": self.pmset, "sudo": self.sudo, "tmux": self.tmux}
+        handlers = {
+            "launchctl": self.launchctl,
+            "pmset": self.pmset,
+            "sudo": self.sudo,
+            "tmux": self.tmux,
+            "ps": self.ps,
+        }
         if tool not in handlers:
             raise AssertionError(f"a test reached a real tool: {command}")
         return handlers[tool](command)
@@ -138,6 +171,7 @@ class World(unittest.TestCase):
             mock.patch.object(Path, "home", return_value=self.home),
             mock.patch.object(uninstall, "ROOT", self.running),
             mock.patch.object(subprocess, "run", self.mac.run),
+            mock.patch.object(uninstall, "session_id", self.mac.sessions.get),
             mock.patch.object(claude_state, "CONFIG_FILE", self.home / ".claude.json"),
             mock.patch.object(claude_state, "PROJECTS_DIR", self.home / ".claude" / "projects"),
             mock.patch.object(codex_state, "CONFIG_FILE", self.home / ".codex" / "config.toml"),
@@ -391,6 +425,80 @@ class Uninstalls(World):
         calls = self.mac.calls
         self.assertIn("pmset repeat cancel", calls[0])
         self.assertLess(calls.index(f"bootout {LABEL}.watchdog"), calls.index("bosun stop"))
+
+    def test_it_waits_for_what_the_stopped_windows_left_running(self) -> None:
+        """An agent's async hook outlives its window by a moment, and writes in the state folder: nothing
+        is deleted until it ends."""
+        self.mac.windows, self.mac.panes = ["api"], {4100: "api"}
+        self.mac.sessions.update({4100: 4100, 4110: 4100, 4120: 4120})
+        # The agent (4110) started a hook in a session of its own (4120); once it has ended, the hook is
+        # launchd's.
+        self.mac.running = [(4100, 1), (4110, 4100), (4120, 4110)]
+        self.mac.left, self.mac.left_for = [(4120, 1)], 3
+        status, said = self.run_it("--yes")
+        self.assertEqual(status, 0, said)
+        calls = self.mac.calls
+        self.assertGreaterEqual(calls[calls.index("bosun stop") :].count("ps"), 4)
+        self.assertNotIn("could not remove", said)
+        self.assertFalse(
+            (self.state / "signals").exists(), "the hook's signal, written as it ended, is gone too"
+        )
+
+    def test_what_still_runs_when_it_stops_waiting_is_said(self) -> None:
+        self.mac.windows, self.mac.panes = ["api"], {4100: "api"}
+        self.mac.sessions.update({4100: 4100, 4110: 4100})
+        self.mac.running = [(4100, 1), (4110, 4100)]
+        self.mac.left, self.mac.left_for = [(4110, 1)], None
+        with mock.patch.object(uninstall, "STOPPED_SECONDS", 0.2):
+            status, said = self.run_it("--yes")
+        # The windows are gone: what one started and still runs is said, and the uninstall still ends.
+        self.assertEqual(status, 0, said)
+        self.assertIn(
+            "removed the running windows: api\n"
+            "still running, started in the api window: a hook (pid 4110); bosun did not stop it.\n",
+            said,
+        )
+        self.assertNotIn("could not remove", said)
+        self.assertIn("bosun is uninstalled.", said)
+
+    def test_a_stop_that_times_out_is_still_waited_after_and_ends_the_uninstall_unfinished(self) -> None:
+        """`bosun stop` ended the session, then ran past its timeout: what the windows left is still waited
+        for before anything is deleted, and the stop is said as left to do, with the install kept for the
+        run again, so the uninstall ends non-zero, as one with a file it could not remove does."""
+        self.fails_and_is_waited_after("timeout", "bosun stop did not end in 120 s")
+
+    def test_a_stop_that_exits_non_zero_is_still_waited_after(self) -> None:
+        self.fails_and_is_waited_after("exit", "bosun stop failed")
+
+    def fails_and_is_waited_after(self, how: str, said_as: str) -> None:
+        self.mac.windows, self.mac.panes = ["api"], {4100: "api"}
+        self.mac.sessions.update({4100: 4100, 4110: 4100, 4120: 4120})
+        self.mac.running = [(4100, 1), (4110, 4100), (4120, 4110)]
+        self.mac.left, self.mac.left_for = [(4120, 1)], 3
+        self.mac.stop_fails = how
+        status, said = self.run_it("--yes")
+        calls = self.mac.calls
+        self.assertGreaterEqual(calls[calls.index("bosun stop") :].count("ps"), 4, "it waited")
+        self.assertIn(f"could not remove the running windows: api: {said_as}", said)
+        self.assertFalse(
+            (self.state / "signals").exists(), "the hook's signal, written as it ended, is gone too"
+        )
+        self.assertEqual(status, uninstall.EXIT_LEFT, said)
+        self.assertIn("Some of it could not be removed", said)
+        self.assertNotIn("bosun is uninstalled.", said)
+        self.assertTrue(self.running.exists(), "the install stays, for the run again")
+
+    def test_a_helper_left_in_a_windows_session_is_not_waited_for(self) -> None:
+        """Claude Code starts `caffeinate -i -t 300` as it ends, in its window's session, and it outlives
+        it: none of bosun's writers stays there, so uninstall neither waits five minutes nor fails."""
+        self.mac.windows, self.mac.panes = ["api"], {4100: "api"}
+        self.mac.sessions.update({4100: 4100, 4110: 4100, 4130: 4100})
+        self.mac.running = [(4100, 1), (4110, 4100)]
+        self.mac.left, self.mac.left_for = [(4130, 1)], None
+        with mock.patch.object(uninstall, "STOPPED_SECONDS", 0.2):
+            status, said = self.run_it("--yes")
+        self.assertEqual(status, 0, said)
+        self.assertIn("removed the running windows: api", said)
 
     def test_what_stopping_writes_goes_too(self) -> None:
         self.mac.windows = ["api"]

@@ -325,7 +325,9 @@ check "... and on a checkout in a -versions folder without bosun.git, which writ
 check "a command run through the link stays on its own version" test "$(bash -c 'source "$(dirname "$(readlink -f "$1/bin/bosun")")/../lib/common.sh"; printf "%s %s" "$BOSUN_ROOT" "$BOSUN_INSTALL"' _ "$LINK")" = "$V1 $LINK"
 out="$(cd "$REPO_A" && BOSUN_ORCHESTRATOR=orch BOSUN_ORCHESTRATOR_DIR="$REPO_A" "$V1/bin/bosun" launch orch 2>&1)"
 check "a version's orchestrator launch names the link" contains "$out" "$LINK/orchestrator/plugin"
-check "... never its own folder" not_contains "$out" "bosun-versions/"
+check "... never its own folder" not_contains "$out" "$V1"
+check "... the versions folder only in the rule that lets it read there, which every version names alike" bash -c '
+  grep -q "bosun-versions/" <<<"$1" && ! grep -qE "bosun-versions/[^*\\]" <<<"$1"' _ "$out"
 out="$(cd "$REPO_A" && "$V1/bin/bosun" launch alpha 2>&1)"
 check "a version's repo window launch names the link in its hooks" contains "$out" "$LINK/bin/bosun"
 check "... never its own folder" not_contains "$out" "bosun-versions/"
@@ -633,6 +635,34 @@ check "orchestrator starts a dated conversation" contains "$out" "--name orch-$(
 check "orchestrator runs in auto mode, with its model and effort before the long policy" contains "$out" "--permission-mode auto --model opus --settings"
 check "its settings keep the permission rules and guard, plus the effort" bash -c 'grep -q "PreToolUse" <<<"$1" && grep -q "effortLevel" <<<"$1"' _ "$out"
 check "orchestrator loads the plugin" contains "$out" "--plugin-dir $ROOT/orchestrator/plugin"
+# An update's prompt asks the orchestrator to re-read files of the install (policy.md), and Claude Code asks
+# before a read outside its working directories, which would stop the update's wait at a prompt. So it may
+# read the install, and only read it: rules added to a settings file's own lists, never in their place.
+orchestrator_settings() { # <settings file>: the --settings JSON the orchestrator would be launched with
+  BOSUN_ORCHESTRATOR=orch bash -c 'source "$1/lib/common.sh"
+    load_config
+    build_model_effort_args opus high "$2" "$(orchestrator_extra_settings)"
+    for ((i = 0; i < ${#model_effort_args[@]}; i++)); do
+      [ "${model_effort_args[$i]}" = --settings ] && printf "%s\n" "${model_effort_args[$((i + 1))]}"
+    done' _ "$ROOT" "$1"
+}
+reads_install_only() { # <settings JSON> <site allow rule> <site deny rule>: as the description says
+  jq -e --arg read "Read(/$ROOT/**)" --arg allow "$2" --arg deny "$3" '
+    ([.permissions.allow[] | select(. == $read)] | length == 1) and any(.permissions.allow[]; . == $allow)
+    and any(.permissions.deny[]; . == $deny) and (.permissions | has("additionalDirectories") | not)' \
+    <<<"$1" >/dev/null || {
+    echo "$1" | jq -c .permissions
+    return 1
+  }
+}
+check "... and may read the install, whose files an update asks it to re-read, and nothing more" \
+  reads_install_only "$(orchestrator_settings "$ROOT/orchestrator/settings.json")" "Bash(bosun update note:*)" "Edit"
+check "... its stock settings' denies of Edit, Write and NotebookEdit kept" bash -c '
+  [ "$(jq -c "[.permissions.deny[] | select(test(\"^(Edit|Write|NotebookEdit)$\"))] | sort" <<<"$1")" = "[\"Edit\",\"NotebookEdit\",\"Write\"]" ]' \
+  _ "$(orchestrator_settings "$ROOT/orchestrator/settings.json")"
+jq '.permissions.allow += ["Bash(acme-tool:*)"] | .permissions.deny += ["Bash(rm -rf:*)"]' "$ROOT/orchestrator/settings.json" >"$WORK/site-settings.json"
+check "... a site's settings keep their own allow and deny rules, the read rule added once" \
+  reads_install_only "$(orchestrator_settings "$WORK/site-settings.json")" "Bash(acme-tool:*)" "Bash(rm -rf:*)"
 check "orchestrator launches with its auto-compact window and the compaction hook" bash -c 'grep -q -- "--autocompact 300000" <<<"$1" && grep -qE "compact-context.{0,2} --orchestrator" <<<"$1"' _ "$out"
 check "orchestrator gets the async signal hooks next to the guard" bash -c 'grep -qE "hook.{0,2} signal.{0,2} --window.{0,2} orch" <<<"$1" && grep -q "PermissionRequest" <<<"$1"' _ "$out"
 check "orchestrator starts with the morning chores" contains "$out" "/bosun:chores\ morning"
@@ -2305,7 +2335,42 @@ if [ "$(bash -c 'source "$1/lib/common.sh"; command -v launchctl; command -v pms
   printf 'Repeating power events:\n  wakepoweron at 9:01AM every day\n' >"$WORK/pmset-sched"
   BOSUN_STATE_DIR="$WORK/un-state" "$BOSUN" trust --any "$UN_REPO" >/dev/null
   echo "# mine" >"$WORK/un-state/a-file-of-mine"
-  UN_OUT="$(un --yes 2>&1)"
+  # A window whose agent, stopped, starts a hook in a session of its own that writes a signal two seconds
+  # later, as Claude Code starts its async SessionEnd hook, and a helper in its window's session that
+  # outlives it, as Claude Code's caffeinate does; it ends a second later. Uninstall must wait for the hook
+  # before it removes bosun's files, and not for the helper.
+  cat >"$WORK/late-hook.py" <<'LATE'
+import os, sys, time
+os.setsid()
+time.sleep(2)
+os.makedirs(os.path.join(sys.argv[1], "signals"), exist_ok=True)
+with open(os.path.join(sys.argv[1], "signals", "w.jsonl"), "w") as signal:
+    signal.write("{}\n")
+with open(sys.argv[2], "w") as done:  # when it wrote, for the order below
+    done.write(f"{time.time_ns()}\n")
+LATE
+  cat >"$WORK/late-agent" <<'LATE'
+#!/bin/bash
+trap 'python3 "$1/late-hook.py" "$2" "$3" & (trap "" HUP TERM; exec sleep 60) & echo $! >"$4"; sleep 1; exit 0' HUP TERM
+while :; do sleep 1; done
+LATE
+  chmod +x "$WORK/late-agent"
+  tmux -L "$SOCKET" new-session -d -s un-test -n w -- "$WORK/late-agent" "$WORK" "$WORK/un-state" "$WORK/late-written" "$WORK/late-helper"
+  # Each line uninstall says, with when it said it.
+  PYTHONUNBUFFERED=1 un --yes 2>&1 |
+    python3 -u -c 'import sys, time
+for line in sys.stdin:
+    print(time.time_ns(), line, end="")' >"$WORK/un-timed.txt"
+  UN_OUT="$(sed 's/^[0-9]* //' "$WORK/un-timed.txt")"
+  # This state folder holds a file of mine, so uninstall leaves it whole: what shows the wait is the order,
+  # the late write before uninstall says the windows are removed, which it says once it stopped waiting
+  # (tests/unit/test_uninstall.py: the files go only after it).
+  check "uninstall waits for what a window it stopped left running: its late write came before it said the windows were removed" \
+    bash -c 'wrote="$(cat "$1")" && said="$(grep -m1 "^[0-9]* removed the running windows" "$2" | cut -d" " -f1)" &&
+      [ -n "$said" ] && [ "$wrote" -lt "$said" ]' _ "$WORK/late-written" "$WORK/un-timed.txt"
+  check "... but not for a helper it left in its window's session" bash -c '
+    kill -0 "$(cat "$2")" && ! grep -q "still running" <<<"$1"' _ "$UN_OUT" "$WORK/late-helper"
+  kill "$(cat "$WORK/late-helper")" 2>/dev/null
   check "uninstall takes back the trust it gave" bash -c '! python3 "$1/lib/claude_state.py" trusted "$2"' _ "$ROOT" "$UN_REPO"
   check "... cancels its wake, through sudo" grep -q "sudo .*pmset repeat cancel" "$WORK/system.log"
   check "... says it is done" contains "$UN_OUT" "bosun is uninstalled"
