@@ -240,14 +240,26 @@ def _destination(relative: str, state_dir: Path, config_dir: Path) -> Path:
     return (state_dir if side == "state" else config_dir) / rest
 
 
-def _flush_file(path: Path) -> None:
-    """<path>'s content and metadata to disk, through a read-only descriptor, which a read-only file
-    (git's objects) allows."""
+def _hand_to_drive(path: Path) -> None:
+    """<path>'s content and metadata (a file) or entries (a folder) handed to the drive (fsync), through
+    a read-only descriptor, which a read-only file (git's objects) allows. On macOS the drive may keep
+    them in its cache: restore's one full flush at its end (_flush_drives) makes them durable."""
     fd = os.open(path, os.O_RDONLY)
     try:
-        journal.flush_to_disk(fd)
+        os.fsync(fd)
     finally:
         os.close(fd)
+
+
+def _flush_drives(*folders: Path) -> None:
+    """One full flush (journal.flush_to_disk: F_FULLFSYNC on macOS) of each drive <folders> are on, which
+    writes everything handed to it before: every file and folder a restore put back. A full flush per
+    file cost about 10 ms each, seconds for a year of data."""
+    drives: set[int] = set()
+    for folder in folders:
+        if folder.is_dir() and (drive := folder.stat().st_dev) not in drives:
+            drives.add(drive)
+            journal.flush_folder(folder)
 
 
 def _is_top_level(relative: str) -> bool:
@@ -256,11 +268,12 @@ def _is_top_level(relative: str) -> bool:
 
 
 def _put_back(source: Path, target: Path, expected: str, follow: bool) -> None:
-    """<source> written beside <target>, flushed, checked, renamed over. A link at <target> is
-    written through only when <follow> (a top-level entry that is a link, as the backup followed
-    it); anywhere else it is replaced, never written through to what it points at. The copy has
-    <source>'s mode and times before it is flushed, so they are durable with its content, and a
-    read-only file (git's objects) is put back as one."""
+    """<source> written beside <target>, handed to the drive, checked, renamed over, its folder handed
+    to the drive too (restore flushes the drive once, at its end). A link at <target> is written through
+    only when <follow> (a top-level entry that is a link, as the backup followed it); anywhere else it is
+    replaced, never written through to what it points at. The copy has <source>'s mode and times before
+    it is flushed, so they are durable with its content, and a read-only file (git's objects) is put
+    back as one."""
     if follow and target.is_symlink() and not expected.startswith(LINK):
         target = target.resolve()
     target.parent.mkdir(parents=True, exist_ok=True)
@@ -270,11 +283,12 @@ def _put_back(source: Path, target: Path, expected: str, follow: bool) -> None:
         os.symlink(expected[len(LINK) :], tmp)
     else:
         shutil.copy2(source, tmp)
-        _flush_file(tmp)
+        _hand_to_drive(tmp)
         if digest(tmp) != expected:
             tmp.unlink()
             raise BackupError(f"{target} did not read back as the backup has it")
-    journal.replace_durably(tmp, target)
+    os.replace(tmp, target)
+    _hand_to_drive(target.parent)
 
 
 def _same_now(target: Path, expected: str) -> bool:
@@ -376,13 +390,16 @@ def restore(backup: Path, state_dir: Path, config_dir: Path, only: Sequence[str]
     folders the backup lacks; lock files stay: the freeze holds them). The prefixes, and every file
     of the backup under them (against the manifest), are checked before anything is deleted or
     written, so a backup found damaged changes nothing; each copy is read back too. Under the
-    freeze's locks only the update wrote there, so what is new came from the step that failed.
+    freeze's locks only the update wrote there, so what is new came from the step that failed. The
+    drive is flushed once, at the end, before the caller records the restore: one cut short before is
+    redone by the next, which puts back whatever does not read as the backup has it.
     Returns what it put back and what it deleted."""
     prefixes = _normalised(only)
     manifest = read_manifest(backup)
     _verify(manifest, backup, prefixes)
     removed = _remove_extra(backup, state_dir, config_dir, manifest, prefixes)  # first: a folder that
     done = _put_back_all(manifest, backup, state_dir, config_dir, prefixes)  # became a file is gone
+    _flush_drives(state_dir, config_dir)
     return sorted({*done, *removed})
 
 

@@ -119,15 +119,47 @@ class BackupsTest(unittest.TestCase):
         ledger.write_text("changed\n")
         flushed: list[int] = []
 
-        def flush(fd: int) -> None:  # the file's flush (the folder's follows the rename)
+        def fsync(fd: int) -> None:  # the file's flush (the folder's follows the rename)
             status = os.fstat(fd)
             if stat.S_ISREG(status.st_mode):
                 flushed.append(status.st_mode & 0o777)
 
-        with mock.patch("journal.flush_to_disk", side_effect=flush):
+        with mock.patch("update_backups.os.fsync", side_effect=fsync):
             ub.restore(backup, self.state, self.config, only=["state/ledger.json"])
         self.assertEqual(flushed, [0o440])
         self.assertEqual(ledger.stat().st_mode & 0o777, 0o440)
+
+    def test_a_restore_flushes_the_drive_once_after_every_file(self) -> None:
+        """Each file put back, and its folder, is handed to the drive (fsync); then one full flush of the
+        drive (F_FULLFSYNC) makes all of it durable, at the end, before the restore is recorded: a flush
+        of the drive per file cost about 10 ms each. A restore cut short before it is redone."""
+        backup = self.take()
+        (self.state / "ledger.json").write_text("changed\n")
+        (self.state / "journal" / "a.json").write_text("changed\n")
+        (self.config / "bosun.env").write_text("changed\n")
+        seen: list[tuple[str, str]] = []
+
+        def fsync(fd: int) -> None:
+            seen.append(("fsync", "file" if stat.S_ISREG(os.fstat(fd).st_mode) else "folder"))
+
+        def full(fd: int) -> None:
+            seen.append(("full", "file" if stat.S_ISREG(os.fstat(fd).st_mode) else "folder"))
+
+        with (
+            mock.patch("update_backups.os.fsync", side_effect=fsync),
+            mock.patch("journal.flush_to_disk", side_effect=full),
+        ):
+            done = ub.restore(
+                backup,
+                self.state,
+                self.config,
+                only=["state/ledger.json", "state/journal", "config/bosun.env"],
+            )
+        self.assertEqual(len(done), 3, done)
+        self.assertEqual(seen.count(("fsync", "file")), 3, seen)
+        self.assertEqual(seen.count(("fsync", "folder")), 3, seen)
+        self.assertEqual([kind for kind in seen if kind[0] == "full"], [("full", "folder")], seen)
+        self.assertEqual(seen[-1], ("full", "folder"), "the drive's flush comes after every file's")
 
     def test_restore_refuses_a_backup_file_that_differs_from_its_manifest(self) -> None:
         backup = self.take()
