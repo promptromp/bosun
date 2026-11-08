@@ -101,7 +101,9 @@ milliseconds and is not. What an agent starts in its own window's session as it 
 Claude Code's `caffeinate -i -t 300` outlives it by five minutes. It waits 15 seconds at the most, never
 matching processes by their command line. The windows are gone by then, so what they started and still runs
 is said, with its window ("still running, started in the exporter window: sleep 300 (pid 16856); bosun did
-not stop it."), and the uninstall goes on. The checkout last,
+not stop it."), and the uninstall goes on. A stop that fails, or runs past its two minutes, is waited after
+too, as it may have ended the windows first; it is then left to do, so the install stays for the run again
+it names and the uninstall ends non-zero. The checkout last,
 since this runs from it: it is all in memory by then. With versions side by side that is the checkout kept from
 before versions, the versions folder, then the link, so that the line it gives to run again works until the end.
 
