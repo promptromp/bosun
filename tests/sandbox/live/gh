@@ -1,6 +1,7 @@
 #!/bin/bash
 # GitHub's stand-in for tests/sandbox/live.sh: logged in as acme-dev, and it remembers pull requests in
-# ~/.sandbox/gh. Writing there goes past Codex's sandbox, as reading a real login from the Keychain does.
+# ~/.sandbox/gh, which `gh api graphql` answers about in GitHub's shape. Writing there goes past Codex's
+# sandbox, as reading a real login from the Keychain does.
 state="$HOME/.sandbox/gh"
 mkdir -p "$state"
 echo "gh $*" >>"$state/calls.log"
@@ -18,6 +19,20 @@ case "$*" in
 	printf '{"number":%d,"url":"%s","state":"OPEN","isDraft":true,"title":"A pull request"}\n' "$number" "$url" \
 		>"$state/pr-$number.json"
 	echo "$url"
+	;;
+"api graphql"*)
+	# As GitHub answers bosun's query of a pull request (lib/pr_threads.py): an object, never a list; the PR
+	# with no review yet, or GitHub's error for one there is not, with gh's exit status 1.
+	number="$(printf '%s\n' "$@" | sed -n 's/^number=//p')"
+	if [ -s "$state/pr-$number.json" ]; then
+		jq -c '{data: {repository: {pullRequest: {url, author: {login: "acme-dev", __typename: "User"},
+			baseRepository: {autoMergeAllowed: false}, reviews: {nodes: []},
+			reviewThreads: {pageInfo: {hasNextPage: false, endCursor: null}, nodes: []}}}}}' "$state/pr-$number.json"
+	else
+		printf '{"data":{"repository":{"pullRequest":null}},"errors":[{"type":"NOT_FOUND","message":"Could not resolve to a PullRequest with the number of %s."}]}\n' "$number"
+		echo "gh: Could not resolve to a PullRequest with the number of $number." >&2
+		exit 1
+	fi
 	;;
 "pr view"*)
 	newest="$(find "$state" -name 'pr-*.json' | sort | tail -1)"
