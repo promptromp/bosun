@@ -692,15 +692,27 @@ build_model_effort_args() { # <model> <effort> [settings-file] [extra settings J
 # The settings the orchestrator gets on top of its settings file: with BOSUN_APPROVALS_ENABLED=1,
 # the approvals hooks (`bosun guard --approvals`, `--permission-request` and, after the call,
 # `--post-tool-use` for both PostToolUse and PostToolUseFailure; lib/guard.py); with
-# BOSUN_COMPACT_CONTEXT=1 the compaction hook (compact_hook_settings); and with BOSUN_HOOK_SIGNALS=1
-# the signal hooks (signal_hook_settings). The last two are on by default. Nothing when all three
-# are off.
+# BOSUN_COMPACT_CONTEXT=1 the compaction hook (compact_hook_settings); with BOSUN_HOOK_SIGNALS=1
+# the signal hooks (signal_hook_settings), the last two on by default; and the install's folders as
+# working directories (install_dirs_settings).
 orchestrator_extra_settings() {
   {
     approvals_hook_settings
     compact_hook_settings --orchestrator
     signal_hook_settings "$BOSUN_ORCHESTRATOR"
+    install_dirs_settings
   } | merge_settings
+}
+
+# The install, and the versions folder beside it where there is one (the link may be read as the folder it
+# leads to), as working directories of the orchestrator's: an update's prompt asks it to re-read files there
+# (policy.md, the task files), and Claude Code asks first before it reads outside its working directories,
+# which would keep the update waiting at that question. Settings, not --add-dir: a path argument inside the
+# install would put every file of it in the launch's fingerprint.
+install_dirs_settings() {
+  local dirs=("$BOSUN_INSTALL")
+  [ -d "$BOSUN_INSTALL-versions" ] && dirs+=("$BOSUN_INSTALL-versions")
+  jq -cn '{permissions: {additionalDirectories: $ARGS.positional}}' --args "${dirs[@]}"
 }
 
 approvals_hook_settings() {

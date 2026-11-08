@@ -633,6 +633,10 @@ check "orchestrator starts a dated conversation" contains "$out" "--name orch-$(
 check "orchestrator runs in auto mode, with its model and effort before the long policy" contains "$out" "--permission-mode auto --model opus --settings"
 check "its settings keep the permission rules and guard, plus the effort" bash -c 'grep -q "PreToolUse" <<<"$1" && grep -q "effortLevel" <<<"$1"' _ "$out"
 check "orchestrator loads the plugin" contains "$out" "--plugin-dir $ROOT/orchestrator/plugin"
+# An update's prompt asks the orchestrator to re-read files of the install (policy.md), and Claude Code asks
+# before a read outside its working directories, which would stop the update's wait at a prompt.
+check "... and may read the install, whose files an update asks it to re-read" bash -c '
+  grep -oE "additionalDirectories[^]]*" <<<"$1" | grep -qF "$2"' _ "$out" "$ROOT"
 check "orchestrator launches with its auto-compact window and the compaction hook" bash -c 'grep -q -- "--autocompact 300000" <<<"$1" && grep -qE "compact-context.{0,2} --orchestrator" <<<"$1"' _ "$out"
 check "orchestrator gets the async signal hooks next to the guard" bash -c 'grep -qE "hook.{0,2} signal.{0,2} --window.{0,2} orch" <<<"$1" && grep -q "PermissionRequest" <<<"$1"' _ "$out"
 check "orchestrator starts with the morning chores" contains "$out" "/bosun:chores\ morning"
