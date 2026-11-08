@@ -50,10 +50,10 @@ the cheapest of these that can show what you changed:
 |---|---|---|---|
 | Logic, config, the wizard | `tests/sandbox.sh` | bosun's logic, on a machine with nothing installed, through a real terminal | 1 minute |
 | Anything else in bosun | `tests/sandbox.sh all` | also the unit tests and the smoke suite | 3 minutes |
-| `get.sh`, `install.sh`, launchd, `pmset`, anything macOS does its own way | `tests/sandbox.sh mac run` | the real thing on real macOS, except sleep | 75 seconds |
+| `get.sh`, `install.sh`, launchd, `pmset`, anything macOS does its own way | `tests/sandbox.sh mac run` | the real thing on real macOS, except sleep | 2 minutes |
 | What a new Mac lacks: Homebrew, Apple's tools | `tests/sandbox.sh mac run --from-nothing` | the same from a Mac with nothing on it | 4 minutes |
-| What an update does to an install in use, its windows, its ledger and knowledge base, and what real use does to them: their journals, ids, writes, privacy | `tests/sandbox.sh mac work` | a week of work through the first update's conversion and a mid-afternoon update on a year of data, on real macOS: launchd, a moving clock, racing writers, writes cut short, files changed outside the journal, going back | 13 minutes |
-| How an agent behaves: launching it, its screens and files, a task handed to it, an update's prompts | `tests/sandbox.sh mac live claude`, `... live codex` | the real agents from nothing, through setup, sessions and an update | 12 minutes, about a dollar |
+| What an update does to an install in use, its windows, its ledger and knowledge base, and what real use does to them: their journals, ids, writes, privacy | `tests/sandbox.sh mac work` | a week of work through the first update's conversion and a mid-afternoon update on a year of data, on real macOS: launchd, a moving clock, racing writers, writes cut short, files changed outside the journal, going back | 16 minutes |
+| How an agent behaves: launching it, its screens and files, a task handed to it, an update's prompts | `tests/sandbox.sh mac live claude`, `... live codex` | the real agents from nothing, through setup, sessions and an update | about a dollar |
 | The wake itself | `bosun wake-test`, on real hardware | a real sleep and a real wake | 5 minutes |
 
 The first also runs in CI (the second's unit and smoke suites run there natively), and so does the third on
@@ -219,7 +219,7 @@ leaves the Mac but requests to the agents' APIs. It is not in CI, because it cos
 Then an update with the agents at work. First, whether a running Claude picks up a changed command file of
 its plugin: a Claude on the smallest model runs with `--plugin-dir` through a link, as the orchestrator does
 through the install link, and its one command is asked for before and after the link is switched to another
-folder, and after that folder's file changes in place. Then the repo window is given a background command
+folder, and after the file in the folder it started from changes in place. Then the repo window is given a background command
 (`sleep 300`), and `bosun update` goes to the next version (this checkout and `tests/sandbox/update_patch.sh`,
 bundled in the VM as the head of the install's branch). The orchestrator only re-reads `policy.md`; on Claude
 Code the repo window, waiting on its background command, takes stock first, is restarted, and must start the

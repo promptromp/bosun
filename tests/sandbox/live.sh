@@ -224,8 +224,8 @@ the_next_version() {
 
 # A real Claude runs with a plugin folder reached through a link, as the orchestrator runs with
 # --plugin-dir through the install link: its command asked for, the link switched to another folder (as
-# an update switches the install link), the command asked for again; then that folder's file changed in
-# place, and asked for once more. Whether each reply is the new text says whether a running Claude picks
+# an update switches the install link), the command asked for again; then the file in the folder it
+# started from changed in place, and asked for once more. Whether each reply is the new text says whether a running Claude picks
 # up a changed command file. A turn each on the smallest model.
 PLUGINS="$HOME/plugin-test"
 a_plugin() { # <folder> <word>: a plugin `marker` whose command `word` asks for <word>

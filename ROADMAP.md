@@ -322,8 +322,8 @@ migrate, switch and check (putting everything back on a failure), then brings ea
 alone, asked to re-read, or restarted once its turn is over (after listing its background work, when only
 that runs). It ends with a summary, and its first run converts a checkout an older `get.sh` made, at a
 quiet moment. Run in the macOS VM: the conversion of a release, then a mid-afternoon update with nothing
-lost, and the real Claude Code and Codex answering the update's prompts. Writes paused for 927 ms on a
-year of data, and a restore put back 623 files in 443 ms. The runs changed the restore, the orchestrator's
+lost, and the real Claude Code and Codex answering the update's prompts. Writes paused for 612 ms on a
+year of data, and a restore put back 28 files and deleted 124 in 198 ms. The runs changed the restore, the orchestrator's
 read access to the install and uninstall's wait for what its stopped windows started. Next: the migrations
 of kept stores on a fresh install (`init`, with a backup), and a Codex window's background work, which
 bosun cannot see, so one whose launch changed is restarted without taking stock. Design note:

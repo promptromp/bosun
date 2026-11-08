@@ -594,7 +594,8 @@ the_afternoon() {
   check "... and my own shell beside them" test -n "$MINE_PANE"
   check "the Slack watcher looks before the update: nothing new" says " 0 new" bosun slack-watch --once
   LEFT_LINK="$(dirname "$DIR")/.bosun.link-0000dead"
-  ln -s "bosun-versions/gone" "$LEFT_LINK" && touch -h -t "$(date -v-1H +%Y%m%d%H%M)" "$LEFT_LINK"
+  check "a temporary link a switch cut short is planted beside the install, an hour old" \
+    bash -c 'ln -s "bosun-versions/gone" "$1" && touch -h -t "$(date -v-1H +%Y%m%d%H%M)" "$1" && [ -L "$1" ]' _ "$LEFT_LINK"
 }
 
 # What is there before the update, which must all be there after it: the ledger's items, both journals
@@ -817,7 +818,8 @@ started = time.monotonic()
 restored = update_backups.restore(backup, copy / "state", copy / "config", update_backups.FROZEN)
 whole = took(started)
 size = sum(p.stat().st_size for p in files) // 1024
-print(f"the backup: {len(files)} files, {size} KB; verify {verify} ms, flush {flush} ms, restore {whole} ms ({len(restored)} put back)")
+put = sum(key in manifest.files for key in restored)  # the rest, what the manifest lacks, deleted
+print(f"the backup: {len(files)} files, {size} KB; verify {verify} ms, flush {flush} ms, restore {whole} ms ({put} put back, {len(restored) - put} deleted)")
 shutil.rmtree(copy)
 sys.exit(0 if whole < 8000 else 1)
 PY
@@ -834,8 +836,11 @@ the_backup_and_the_hooks() {
   restored=$?
   echo "  note  $(tail -1 <<<"$costs")"
   check "restoring it, as a recovering approval hook does, takes less than the hook's 8 s" test "$restored" = 0
-  check "each hook of the version before's launch settings, given its own event, runs on the next version" hooks_run
-  echo "  note  $(cat "$OUT/hooks-ran.txt" 2>/dev/null || echo 0) of the $(grep -c . "$OUT/base-hooks.txt") hooks ran"
+  check "each hook of the version before's launch settings, given its own event, does its job on the next version" \
+    hooks_run "$OUT/base-hooks.txt"
+  echo "  note  $(cat "$OUT/base-hooks.txt.ran" 2>/dev/null || echo 0) of the $(grep -c . "$OUT/base-hooks.txt") hooks did"
+  check "... and the check fails a hook that does not: a signal hook that records nothing, a guard mode the next version does not know" \
+    hooks_fail_their_controls
   check "... each through the install link, never a version's own folder" bash -c '! grep -q "bosun-versions/" "$1"' _ "$OUT/base-hooks.txt"
   check "the Slack watcher's next run catches up on the two messages that came during the hold (at $(cat "$OUT/slack-posted-at" 2>/dev/null))" \
     says " 2 new" bosun slack-watch --once
@@ -867,9 +872,10 @@ base_hooks() {
     jq -r '.hooks // {} | to_entries[] | .key as $event | .value[] | (.matcher // "") as $m | .hooks[]
       | "\($event)\u001f\($m)\u001f\(.command)"' | sort -u
 }
-hook_payload() { # <event> <matcher>: what Claude Code passes a hook of <event>
-  jq -cn --arg event "$1" --arg matcher "$2" --arg cwd "$HOME/Development/acme-api" '
-    {session_id: "00000000-0000-4000-8000-0000000000ad", transcript_path: "/dev/null", cwd: $cwd, hook_event_name: $event}
+hook_payload() { # <event> <matcher> [session id]: what Claude Code passes a hook of <event>
+  jq -cn --arg event "$1" --arg matcher "$2" --arg session "${3:-00000000-0000-4000-8000-0000000000ad}" \
+    --arg cwd "$HOME/Development/acme-api" '
+    {session_id: $session, transcript_path: "/dev/null", cwd: $cwd, hook_event_name: $event}
     + ({PreToolUse: {tool_name: "Bash", tool_input: {command: "ls"}, tool_use_id: "toolu_0"},
         PermissionRequest: {tool_name: "Bash", tool_input: {command: "ls"}},
         PostToolUse: {tool_name: "Bash", tool_input: {command: "ls"}, tool_use_id: "toolu_0", tool_response: {stdout: ""}},
@@ -881,19 +887,48 @@ hook_payload() { # <event> <matcher>: what Claude Code passes a hook of <event>
         SessionEnd: {reason: "other"},
         Notification: {notification_type: "idle_prompt", message: "Claude is waiting for your input"}}[$event] // {})'
 }
-# Each of base_hooks run on the next version with its own event's payload; how many ran, in
-# $OUT/hooks-ran.txt. Fails on a hook that fails, or that has no command.
+# Each hook of <file> (base_hooks' lines) run on the next version as Claude Code runs it, with its own
+# event's payload under a session id of its own, and BOSUN_HOOK_SYNC=1, so what a hook records in the
+# background is recorded before it returns. How many did their job, in <file>.ran.
 hooks_run() {
-  local event matcher command ran=0
-  [ -s "$OUT/base-hooks.txt" ] || return 1
+  local file="$1" event matcher command n=0
+  [ -s "$file" ] || return 1
   while IFS=$'\x1f' read -r event matcher command; do
-    [ -n "$command" ] || { echo "$event ($matcher): no command" && return 1; }
-    BOSUN_APPROVALS_ENABLED=1 BOSUN_EVENTS_ENABLED=1 bash -c "$command" <<<"$(hook_payload "$event" "$matcher")" \
-    >/dev/null 2>"$OUT/hook.err" || { echo "$event: $command: exit $?: $(tail -2 "$OUT/hook.err")" && return 1; }
-    ran=$((ran + 1))
-  done <"$OUT/base-hooks.txt"
-  echo "$ran" >"$OUT/hooks-ran.txt"
-  [ "$ran" -eq "$(grep -c . "$OUT/base-hooks.txt")" ]
+    n=$((n + 1))
+    hook_did "$n" "$event" "$matcher" "$command" || return 1
+  done <"$file"
+  echo "$n" >"$file.ran"
+  [ "$n" -eq "$(grep -c . "$file")" ]
+}
+# <n> <event> <matcher> <command>: the hook did its job. Every hook bosun installs exits 0 by design, so
+# that is not enough: it says nothing on stderr (the guard's "unknown mode", "no decision"), adds no error
+# line to the hook log (where the signal and prompt hooks put theirs), and a signal hook adds its event's
+# line, under its session id, to signals/<window>.jsonl.
+hook_did() {
+  local session logged errors window
+  [ -n "$4" ] || { echo "$2 ($3): no command" && return 1; }
+  session="$(printf '00000000-0000-4000-8000-%012d' "$1")"
+  logged="$(hook_log | wc -l)"
+  BOSUN_APPROVALS_ENABLED=1 BOSUN_EVENTS_ENABLED=1 BOSUN_HOOK_SYNC=1 bash -c "$4" \
+    <<<"$(hook_payload "$2" "$3" "$session")" >/dev/null 2>"$OUT/hook.err" ||
+    { echo "$2: $4: exit $?: $(tail -2 "$OUT/hook.err")" && return 1; }
+  [ ! -s "$OUT/hook.err" ] || { echo "$2: $4: said on stderr: $(tail -2 "$OUT/hook.err")" && return 1; }
+  errors="$(hook_log | tail -n +$((logged + 1)) | grep -E 'ERROR|Traceback|usage:|error:|unknown mode|no decision')"
+  [ -z "$errors" ] || { echo "$2: $4: in the hook log: $errors" && return 1; }
+  window="$(sed -n 's/.* hook signal --window \([^ ]*\).*/\1/p' <<<"$4")"
+  [ -z "$window" ] || grep -q "\"event\":\"$2\".*\"session\":\"$session\"" "$STATE/signals/${window//\//_}.jsonl" ||
+    { echo "$2: $4: no $2 line for its session in signals/$window.jsonl" && return 1; }
+}
+hook_log() { cat "$STATE"/logs/hook-*.log 2>/dev/null; }
+# The check above fails a hook that does not do its job: a signal hook whose recording is off (it exits 0
+# and says nothing), and a guard mode the next version does not know (exit 0, "unknown mode").
+hooks_fail_their_controls() {
+  local sep=$'\x1f' line
+  line="$(grep -m1 "^Stop$sep$sep.* hook signal --window " "$OUT/base-hooks.txt")" || return 1
+  printf 'Stop%s%sBOSUN_HOOK_SIGNALS=0 %s\n' "$sep" "$sep" "${line#Stop"$sep$sep"}" >"$OUT/control-signal.txt"
+  printf 'PreToolUse%sBash%spython3 %q --renamed-mode\n' "$sep" "$sep" "$HOME/.local/share/bosun/lib/guard.py" \
+    >"$OUT/control-guard.txt"
+  ! hooks_run "$OUT/control-signal.txt" && ! hooks_run "$OUT/control-guard.txt"
 }
 
 a_mid_afternoon_update() {

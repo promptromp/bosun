@@ -556,23 +556,24 @@ installed that day.
 - **The freeze is short.** A year of acme work (`tests/sandbox/acme_year.py`, through bosun's own
   commands) leaves 6 907 ledger writes in a journal of 14 375 changes (6.3 MB), `ledger.json` at 308 KB,
   1 259 knowledge writes (1 824 changes, `facts.jsonl` 831 KB) and its git history. On that, the
-  mid-afternoon update paused writes for 845 to 1 267 ms in five runs (`freeze_ms`; the most with the smoke
+  mid-afternoon update paused writes for 612 to 1 267 ms in six runs (`freeze_ms`; the most with the smoke
   suite running on the host beside the VM), far under the 10 s that the post-call approval hooks allow, so
   their fallback (saving their record for the next write) is not built. The conversion of the release, with
   little data, paused them for 154 ms. From its start to its last window's answer, the mid-afternoon update
-  took 39 to 48 s and the conversion 18 to 23 s in those runs, as the first line of each summary says
+  took 39 to 48 s and the conversion 18 to 24 s in those runs, as the first line of each summary says
   ("bosun updated: … in 43s"); with the real agents (`mac live`), 27 and 33 s on Claude Code and 24 s on
   Codex by their summaries (40 to 41 s by the scenario's own clock, which looks every 10 s).
 - **Restoring fits a hook's budget.** On that year's backup, restore's own check of every file against its
-  manifest (`_verify`) takes 288 ms (389 files, 24 MB), 214 ms (290 files, 20 MB) and 339 ms (521 files,
-  29 MB), and flushing each file of the backup to disk 24 to 29 ms (taking a backup does not flush its
-  clones; this is what it would cost). A whole restore into a copy of the stores, flushing the drive
-  (`F_FULLFSYNC`) after each file it put back, took 603 ms (257 files put back), 2 899 ms (314) and, with
-  the host busy, 7 531 ms (413), against the 8 s of a recovering approval hook: nearly all of it those
-  flushes, about 10 ms a file on the host too. Restore now hands each file and its folder to the drive
-  (`fsync`) and flushes the drive once, at its end, before the restore is recorded (one cut short before
-  that is redone by the next, which puts back whatever does not read as the backup has it): 443 ms for
-  623 files put back.
+  manifest (`_verify`) takes 288 ms (389 files, 24 MB), 214 ms (290 files, 20 MB), 339 ms (521 files,
+  29 MB) and 127 ms (62 files, 12 MB), and flushing each file of the backup to disk 22 to 29 ms (taking a
+  backup does not flush its clones; this is what it would cost). A whole restore into a copy of the
+  stores, flushing the drive (`F_FULLFSYNC`) after each file it put back, took 603 ms, 2 899 ms and, with
+  the host busy, 7 531 ms (257, 314 and 413 files put back or deleted), against the 8 s of a recovering
+  approval hook: nearly all of it those flushes, about 10 ms a file on the host too. Restore now hands
+  each file and its folder to the drive (`fsync`) and flushes each drive it wrote to once, at its end,
+  before the restore is recorded (one cut short before that is redone by the next, which puts back
+  whatever does not read as the backup has it): 443 ms for 623 files put back or deleted, and 198 ms for
+  28 put back and 124 deleted, counted apart in the last run.
 - **A read-only file is put back as one.** The first measurement failed: git keeps its objects and
   commit-graph files read-only, and `restore` opened its copy for writing to flush it. It now copies the
   file with its mode and times (`copy2`), then hands it to the drive through a read-only descriptor, so
@@ -826,10 +827,22 @@ Left to the builder:
 - upcasting or rewriting, case by case;
 - the update prompt's exact words, settled in the VM ([above](#settled-in-the-vm));
 - saving hooks' records to disk while a lock is busy, if the measured freeze needs it: it does not
-  (845 to 1 267 ms on a year of data).
+  (612 to 1 267 ms on a year of data).
 
 Later, each a pull request of its own:
 
+- **Readers during a freeze.** Writes check the store before they change it (`lib/update_gate.py`), but
+  readers do not (`locked_ledger(write=False)`, then `load()`): old code still running after the switch,
+  `review-watch`'s targets, the guard's read for `--approvals` or a running console, reading a ledger a
+  migration reshaped, fails with an error instead of running again through the install link as a refused
+  write does. Gate them too, at the first migration that reshapes a store.
+- **A conversion restart under a changed `BOSUN_HARNESS`.** A release's windows have no launch records,
+  so a conversion restarts each with the agent the config names now; if `BOSUN_HARNESS` changed since the
+  window started, it lands in a blank conversation of the other agent, with the update prompt. Take the
+  running agent's (`agent_session_field <pid> harness`) when nothing is recorded (`libexec/bosun-refresh`).
+- **`lib/update.py` in its steps and its conversion.** Over 1 100 lines; split into `update_steps`,
+  `update_convert` and `update`, in a pull request of its own after this one, with no change in what
+  they do.
 - **Kept stores on a fresh install.** `bosun uninstall` keeps the ledger and the knowledge base; an
   install of a newer version over them refuses their writes until they are migrated, and `bosun update`
   there finds nothing to update. `init` should run the migrations of kept stores, with a backup, before
