@@ -4,7 +4,8 @@
 > (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use
 > checkbox (`- [ ]`) syntax for tracking.
 
-Status: planned (2026-11-05).
+Status: done. Part A merged 2026-11-06 (#23), Part B 2026-11-07 (#26) and Part C, the macOS VM runs
+and the docs, 2026-11-08 (#27). What comes next is in the design note's Later list.
 
 **Goal:** `bosun update` moves a running install to the head of its branch mid-afternoon: it
 backs the data up, migrates it, switches versions in one step, checks the result, puts everything

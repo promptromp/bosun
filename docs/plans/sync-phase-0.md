@@ -4,7 +4,8 @@
 > (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use
 > checkbox (`- [ ]`) syntax for tracking.
 
-Status: planned (2026-11-03).
+Status: done. The ledger's part merged 2026-11-03 (#17), the knowledge base's 2026-11-04 (#18). What
+comes next is in the design note.
 
 **Goal:** Both stores keep a per-machine journal of changes that rebuilds `ledger.json` and the
 knowledge base exactly, with ids two Macs can never mint alike, so phase 1 only has to move
