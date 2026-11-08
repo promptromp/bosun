@@ -8,9 +8,10 @@ answer it from your phone. It hands tasks to repo windows whichever agent runs i
   it is idle the next morning. Continuity lives in the ledger, not the chat history.
 - runs in its **own permission setup**: `BOSUN_ORCHESTRATOR_FLAGS` (default
   `--chrome --permission-mode auto`) plus `orchestrator/settings.json`, never
-  `--dangerously-skip-permissions`. bosun's install folder, and its versions folder, are working
-  directories of it, as `bosun update` asks it to re-read files there and Claude Code asks first
-  before a read outside them.
+  `--dangerously-skip-permissions`. It may read bosun's install folder and its versions folder, and
+  only read them: `Read(...)` rules are added to its settings' own `allow` list (a site's settings
+  file keeps its rules), as `bosun update` asks it to re-read files there and Claude Code asks first
+  before a read outside its working directories.
 - loads `orchestrator/policy.md` as an appended system prompt and the `orchestrator/plugin`
   commands. The main one is `/bosun:chores morning|check-in`.
 - must run in a folder Claude Code **already trusts** (`BOSUN_ORCHESTRATOR_DIR`, default your

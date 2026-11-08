@@ -325,7 +325,9 @@ check "... and on a checkout in a -versions folder without bosun.git, which writ
 check "a command run through the link stays on its own version" test "$(bash -c 'source "$(dirname "$(readlink -f "$1/bin/bosun")")/../lib/common.sh"; printf "%s %s" "$BOSUN_ROOT" "$BOSUN_INSTALL"' _ "$LINK")" = "$V1 $LINK"
 out="$(cd "$REPO_A" && BOSUN_ORCHESTRATOR=orch BOSUN_ORCHESTRATOR_DIR="$REPO_A" "$V1/bin/bosun" launch orch 2>&1)"
 check "a version's orchestrator launch names the link" contains "$out" "$LINK/orchestrator/plugin"
-check "... never its own folder" not_contains "$out" "bosun-versions/"
+check "... never its own folder" not_contains "$out" "$V1"
+check "... the versions folder only in the rule that lets it read there, which every version names alike" bash -c '
+  grep -q "bosun-versions/" <<<"$1" && ! grep -qE "bosun-versions/[^*\\]" <<<"$1"' _ "$out"
 out="$(cd "$REPO_A" && "$V1/bin/bosun" launch alpha 2>&1)"
 check "a version's repo window launch names the link in its hooks" contains "$out" "$LINK/bin/bosun"
 check "... never its own folder" not_contains "$out" "bosun-versions/"
@@ -634,9 +636,33 @@ check "orchestrator runs in auto mode, with its model and effort before the long
 check "its settings keep the permission rules and guard, plus the effort" bash -c 'grep -q "PreToolUse" <<<"$1" && grep -q "effortLevel" <<<"$1"' _ "$out"
 check "orchestrator loads the plugin" contains "$out" "--plugin-dir $ROOT/orchestrator/plugin"
 # An update's prompt asks the orchestrator to re-read files of the install (policy.md), and Claude Code asks
-# before a read outside its working directories, which would stop the update's wait at a prompt.
-check "... and may read the install, whose files an update asks it to re-read" bash -c '
-  grep -oE "additionalDirectories[^]]*" <<<"$1" | grep -qF "$2"' _ "$out" "$ROOT"
+# before a read outside its working directories, which would stop the update's wait at a prompt. So it may
+# read the install, and only read it: rules added to a settings file's own lists, never in their place.
+orchestrator_settings() { # <settings file>: the --settings JSON the orchestrator would be launched with
+  BOSUN_ORCHESTRATOR=orch bash -c 'source "$1/lib/common.sh"
+    load_config
+    build_model_effort_args opus high "$2" "$(orchestrator_extra_settings)"
+    for ((i = 0; i < ${#model_effort_args[@]}; i++)); do
+      [ "${model_effort_args[$i]}" = --settings ] && printf "%s\n" "${model_effort_args[$((i + 1))]}"
+    done' _ "$ROOT" "$1"
+}
+reads_install_only() { # <settings JSON> <site allow rule> <site deny rule>: as the description says
+  jq -e --arg read "Read(/$ROOT/**)" --arg allow "$2" --arg deny "$3" '
+    ([.permissions.allow[] | select(. == $read)] | length == 1) and any(.permissions.allow[]; . == $allow)
+    and any(.permissions.deny[]; . == $deny) and (.permissions | has("additionalDirectories") | not)' \
+    <<<"$1" >/dev/null || {
+    echo "$1" | jq -c .permissions
+    return 1
+  }
+}
+check "... and may read the install, whose files an update asks it to re-read, and nothing more" \
+  reads_install_only "$(orchestrator_settings "$ROOT/orchestrator/settings.json")" "Bash(bosun update note:*)" "Edit"
+check "... its stock settings' denies of Edit, Write and NotebookEdit kept" bash -c '
+  [ "$(jq -c "[.permissions.deny[] | select(test(\"^(Edit|Write|NotebookEdit)$\"))] | sort" <<<"$1")" = "[\"Edit\",\"NotebookEdit\",\"Write\"]" ]' \
+  _ "$(orchestrator_settings "$ROOT/orchestrator/settings.json")"
+jq '.permissions.allow += ["Bash(acme-tool:*)"] | .permissions.deny += ["Bash(rm -rf:*)"]' "$ROOT/orchestrator/settings.json" >"$WORK/site-settings.json"
+check "... a site's settings keep their own allow and deny rules, the read rule added once" \
+  reads_install_only "$(orchestrator_settings "$WORK/site-settings.json")" "Bash(acme-tool:*)" "Bash(rm -rf:*)"
 check "orchestrator launches with its auto-compact window and the compaction hook" bash -c 'grep -q -- "--autocompact 300000" <<<"$1" && grep -qE "compact-context.{0,2} --orchestrator" <<<"$1"' _ "$out"
 check "orchestrator gets the async signal hooks next to the guard" bash -c 'grep -qE "hook.{0,2} signal.{0,2} --window.{0,2} orch" <<<"$1" && grep -q "PermissionRequest" <<<"$1"' _ "$out"
 check "orchestrator starts with the morning chores" contains "$out" "/bosun:chores\ morning"
