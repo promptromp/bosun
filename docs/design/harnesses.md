@@ -60,7 +60,9 @@ it is not a bare one, and `--disable apps` to switch ChatGPT's connectors off, u
 Both the `-c` form and `--disable apps` are from Codex's docs and source and wait for the Mac VM run
 (`tests/sandbox.sh mac live codex`) to be confirmed. A listing that fails, or arguments that are not whole
 `-c` pairs and `--disable apps`, keep the window from starting: bosun cannot tell which servers to switch off,
-and it would rather not start the window than start it with all of them. The listing runs once per launch.
+and it would rather not start the window than start it with all of them. A launch lists once, however many times it builds its arguments. `launch --fingerprint` lists too, since the
+fingerprint holds these arguments; when that fails during an update, the window reads as changed and its
+restart refuses to start it.
 
 **A first prompt, always.** Codex writes no session file until its first prompt. A Codex with no file looks
 just like one stopped at a screen, so `bosun launch` gives a new session a short prompt if it has nothing

@@ -107,7 +107,10 @@ set_agent_args() { # <name>
 # again (recorded_restart) and as its pane would run it: in its directory (Codex's arguments name the
 # repository there) from the window list, or the one recorded for a window outside it. Never the
 # caller's. --model / --effort / --harness given here still win. It runs no `claude mcp list` (an update
-# takes a fingerprint of every window): the connectors resolve from what the last lookups kept.
+# takes a fingerprint of every window): a Claude Code window's connectors resolve from what the last
+# lookups kept. A Codex window's arguments come from `codex mcp list --json` (lib/launch/codex.sh), so its
+# fingerprint runs it; when that fails, no fingerprint is printed (exit 1), an update reads the window as
+# changed, and its restart then refuses to start it.
 print_fingerprint() { # <name>
   local dir listed=1
   CONNECTOR_LOOKUP=0

@@ -51,7 +51,6 @@ check() {
 }
 
 not_contains() { ! grep -qF -- "$2" <<<"$1"; }
-not() { ! "$@"; } # not <command...>: the command fails
 contains() { grep -qF -- "$2" <<<"$1" || {
   echo "expected to find: $2"
   echo "in: $(tail -3 <<<"$1")"
@@ -1186,10 +1185,13 @@ printf '#!/bin/sh\n[ "$1" = mcp ] && echo "[]" && exit 0\necho "codex-cli 0.50.0
 chmod +x "$WORK/fake-codex"
 wait_for 10 pane_is_idle gamma
 gamma_pane="$(pane_of gamma)"
-check "a plain refresh, not for an update" env BOSUN_CODEX_BIN="$WORK/fake-codex" "$BOSUN" refresh gamma
+# The window's own launch (in a tmux pane, which does not inherit this shell's variables) reads the fake from the config.
+echo "BOSUN_CODEX_BIN=\"$WORK/fake-codex\"" >"$BOSUN_CONFIG_DIR/bosun.env"
+check "a plain refresh, not for an update" "$BOSUN" refresh gamma
 check "... starts it on the agent configured now (Codex)" wait_for 10 bash -c '
   [ "$(tmux -L "$1" display -p -t =smoke:gamma "#{pane_pid}")" != "$2" ] &&
     tmux -L "$1" capture-pane -p -J -S -500 -t "=smoke:gamma" | grep -q codex-turn-end' _ "$SOCKET" "$gamma_pane"
+rm -f "$BOSUN_CONFIG_DIR/bosun.env"
 cp "$WORK/sessions.yml.on-claude" "$BOSUN_CONFIG_DIR/sessions.yml"
 "$BOSUN" stop >/dev/null 2>&1
 
@@ -2596,7 +2598,7 @@ for line in sys.stdin:
   printf '{"type":"session_meta","payload":{"id":"cx-1","cwd":"%s","source":"cli"}}\n' "$(cd "$CX_REPO" && pwd -P)" >"$CX_HOME/sessions/2026/10/30/rollout-2026-10-30T00-00-00-cx-1.jsonl"
   CX hook codex-turn-end --window cx --conversation cx "{\"thread-id\":\"cx-1\",\"cwd\":\"$CX_REPO\"}" >/dev/null
   CX hook codex-turn-end --window cx --conversation cx "{\"thread-id\":\"a-helper\",\"cwd\":\"$CX_REPO\"}" >/dev/null
-  check "once a turn has ended it resumes that session" wait_for 5 bash -c 'cd "$1" && CODEX_HOME="$2" BOSUN_SESSIONS_FILE="$3" BOSUN_LAUNCH_DRY_RUN=1 "$4" launch cx 2>&1 | grep -q "resume .* cx-1"' _ "$CX_REPO" "$CX_HOME" "$WORK/cx-sessions.yml" "$BOSUN"
+  check "once a turn has ended it resumes that session" wait_for 5 bash -c 'cd "$1" && BOSUN_CODEX_BIN="$5" CODEX_HOME="$2" BOSUN_SESSIONS_FILE="$3" BOSUN_LAUNCH_DRY_RUN=1 "$4" launch cx 2>&1 | grep -q "resume .* cx-1"' _ "$CX_REPO" "$CX_HOME" "$WORK/cx-sessions.yml" "$BOSUN" "$ROOT/tests/sandbox/codex-stand-in"
   check "bosun trust covers each agent in use" bash -c 'cd "$1" && CODEX_HOME="$2" BOSUN_SESSIONS_FILE="$3" "$4" trust --any "$1" >/dev/null 2>&1 && grep -q "trust_level = \"trusted\"" "$2/config.toml"' _ "$CX_REPO" "$CX_HOME" "$WORK/cx-sessions.yml" "$BOSUN"
   check "... and can take it back" bash -c 'cd "$1" && CODEX_HOME="$2" BOSUN_SESSIONS_FILE="$3" "$4" trust --revoke "$1" >/dev/null 2>&1 && ! grep -q trust_level "$2/config.toml"' _ "$CX_REPO" "$CX_HOME" "$WORK/cx-sessions.yml" "$BOSUN"
   check "preflight checks each agent in use" contains "$(CX preflight)" "Codex"
@@ -2628,17 +2630,31 @@ for line in sys.stdin:
   check "a listing that fails keeps the window from starting" fails_with "codex mcp list failed" env CODEX_STAND_IN_MCP_LIST="$WORK/no-such-listing" bash -c 'cd "$1" && BOSUN_CODEX_BIN="$2" CODEX_HOME="$3" BOSUN_SESSIONS_FILE="$4" BOSUN_LAUNCH_DRY_RUN=1 BOSUN_EVENTS_ENABLED=0 "$5" launch cx' _ "$CX_REPO" "$ROOT/tests/sandbox/codex-stand-in" "$CX_HOME" "$WORK/cx-sessions.yml" "$BOSUN"
   out="$(CODEX_STAND_IN_MCP_LIST="$WORK/no-such-listing" CX launch cx || true)"
   check "... and says why, without starting Codex" bash -c 'grep -q "so bosun cannot tell which servers to switch off" <<<"$1" && ! grep -q "dry-run: would run" <<<"$1"' _ "$out"
-  codex_args_valid() { # <list> <lines...>: whether lib/launch/codex.sh takes what connectors.py would print
-    bash -c 'set -u; BOSUN_CODEX_BIN=codex; source "$1/lib/launch/codex.sh"; list="$2"; shift 2; codex_connector_args=("$@"); codex_connector_args_valid "$list"' _ "$ROOT" "$@"
+  broken_listing_cx() { CODEX_STAND_IN_MCP_LIST="$WORK/no-such-listing" CX "$@"; }
+  check "... and so does its fingerprint, which an update reads as the window changed" fails_with "codex mcp list failed" broken_listing_cx launch --fingerprint cx
+  out="$(CX launch --fingerprint cx)"
+  check "... while a listing that works gives one" bash -c 'jq -e ".args | length > 0" <<<"$1" >/dev/null' _ "$out"
+  # codex_args_valid <list> <lines...>: "valid" or "refused", as lib/launch/codex.sh judges what
+  # connectors.py would print for <list>. A crash prints neither, so it is no answer to either check.
+  codex_args_valid() {
+    bash -c 'set -u; BOSUN_CODEX_BIN=codex; source "$1/lib/launch/codex.sh" || exit 3; list="$2"; shift 2; codex_connector_args=("$@")
+      if codex_connector_args_valid "$list"; then echo valid; else echo refused; fi' _ "$ROOT" "$@"
   }
-  check "arguments of whole pairs and --disable apps are taken" codex_args_valid "" -c 'mcp_servers.acme-docs.enabled=false' -c 'mcp_servers."acme.mail".enabled=false' --disable apps
-  check "... and --disable apps alone" codex_args_valid "acme-docs" --disable apps
-  check "... and nothing for all" codex_args_valid " all "
-  check "... but nothing for any other list is no answer" not codex_args_valid "acme-docs"
-  check "... nor a pair cut short" not codex_args_valid "" -c 'mcp_servers.acme-docs.enabled=false' -c
-  check "... nor a pair of anything but a server switched off" not codex_args_valid "" -c 'mcp_servers.acme-docs.enabled=true' --disable apps
-  check "... nor a missing --disable apps" not codex_args_valid "" -c 'mcp_servers.acme-docs.enabled=false'
-  check "... nor more after it" not codex_args_valid "" --disable apps -c 'mcp_servers.acme-docs.enabled=false'
+  outputs() { # <want> <command...>: the command prints exactly <want>
+    local got
+    got="$("${@:2}" 2>&1)" && [ "$got" = "$1" ] || {
+      echo "wanted: $1; got: $got"
+      return 1
+    }
+  }
+  check "arguments of whole pairs and --disable apps are taken" outputs valid codex_args_valid "" -c 'mcp_servers.acme-docs.enabled=false' -c 'mcp_servers."acme.mail".enabled=false' --disable apps
+  check "... and --disable apps alone" outputs valid codex_args_valid "acme-docs" --disable apps
+  check "... and nothing for all" outputs valid codex_args_valid " all "
+  check "... but nothing for any other list is no answer" outputs refused codex_args_valid "acme-docs"
+  check "... nor a pair cut short" outputs refused codex_args_valid "" -c 'mcp_servers.acme-docs.enabled=false' -c
+  check "... nor a pair of anything but a server switched off" outputs refused codex_args_valid "" -c 'mcp_servers.acme-docs.enabled=true' --disable apps
+  check "... nor a missing --disable apps" outputs refused codex_args_valid "" -c 'mcp_servers.acme-docs.enabled=false'
+  check "... nor more after it" outputs refused codex_args_valid "" --disable apps -c 'mcp_servers.acme-docs.enabled=false'
 
   echo "get.sh (a dry run: it changes nothing)"
   check "it is plain sh" sh -n "$ROOT/get.sh"

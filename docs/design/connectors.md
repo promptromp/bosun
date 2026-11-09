@@ -119,9 +119,12 @@ the orchestrator. A connector's URL rarely changes, so what was kept is almost a
 
 **The fingerprint.** `refresh` and `bosun update` compare a window's launch fingerprint, a digest of its
 arguments, with the one recorded at its launch. The resolved `allowedMcpServers` is part of the arguments,
-so a list that changes, or a server that moves, counts as a launch change. `launch --fingerprint` never runs
-the lookup (an update takes one for every window): it resolves from what was kept. A launch looks up once,
-however many times it builds its arguments.
+so a list that changes, or a server that moves, counts as a launch change. `launch --fingerprint` of a
+Claude Code window never runs the lookup (an update takes one for every window): it resolves from what was
+kept. A Codex window has nothing kept: its arguments come from `codex mcp list --json`, so its fingerprint
+runs that (it reads Codex's configuration; it starts no server). When it fails during an update, no
+fingerprint is printed, the window reads as changed, and its restart refuses to start it (fail closed). A
+launch looks up once, however many times it builds its arguments.
 
 `bosun chores --dry-run` builds the orchestrator's list the same way, and runs with
 `ENABLE_CLAUDEAI_MCP_SERVERS=true` when that list names a claude.ai connector or is `all`, so that the
