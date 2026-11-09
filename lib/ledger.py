@@ -241,7 +241,7 @@ import shlex
 import sys
 from collections.abc import Callable, Iterable, Iterator, Mapping
 from dataclasses import dataclass
-from datetime import UTC, date, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta, tzinfo
 from pathlib import Path
 from typing import Any
 
@@ -1397,9 +1397,12 @@ def age(since: str) -> str:
     return f"{seconds // SECONDS_PER_MINUTE}m"
 
 
-def business_days_since(since: str, today: date | None = None) -> int:
-    """Weekdays after <since>'s date up to and including today (sent on Friday: 1 on Monday)."""
-    start, end = parse_time(since).date(), today or datetime.now(UTC).date()
+def business_days_since(since: str, today: date | None = None, zone: tzinfo | None = None) -> int:
+    """Weekdays after <since>'s local date up to and including today (sent on Friday: 1 on Monday).
+
+    Dates are in <zone> (None: this Mac's zone); <today> None is today there."""
+    start = parse_time(since).astimezone(zone).date()
+    end = today or datetime.now(zone).astimezone(zone).date()
     days = (start + timedelta(days=offset) for offset in range(1, (end - start).days + 1))
     return sum(1 for day in days if day.weekday() < WEEKEND_START)
 

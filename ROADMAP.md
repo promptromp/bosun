@@ -515,8 +515,6 @@ by procedure, not code.
   messages posted by a repo session or by me recorded at the next check-in. They only live in the
   note today, and nothing computes on them; a `transition --at` (kept as `happened_at` in the
   history entry) is worth it once a report or a rule reads state times.
-- **Business days by local date.** `business_days_since` counts UTC dates, so a message sent just
-  after local midnight east of UTC (or just before it, west) is counted on the neighbouring day.
 
 ### Unattended AWS SSO browser approval
 
