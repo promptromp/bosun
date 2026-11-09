@@ -92,8 +92,8 @@ pull request #27 list item no longer apply.
 **Interfaces:** Produces `usage_of <script>` in `lib/common.sh`: the script's leading comment block (the
 awk that `usage` runs today); `usage` becomes `usage_of "$0"`. `bin/bosun <cmd> -h|--help` (exactly two
 arguments) prints `usage_of libexec/bosun-<cmd>` and exits 0 without running the command, so nothing reads
-the config. Only commands whose `--help` today prints that block are answered this way; any other
-(one that hands `--help` to Python's argparse) runs as before.
+the config. Every command is answered this way: those that handed `--help` to Python (`ledger`, `kg`,
+`delegate`, `resolve`) keep their full text in the header instead.
 
 - [ ] **Step 1: Write the failing smoke check** "every command's --help reads no config": for each
   `libexec/bosun-*`, `bosun <cmd> --help` output with `BOSUN_CONFIG_DIR` pointing at a folder whose

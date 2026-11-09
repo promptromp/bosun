@@ -209,9 +209,12 @@ not find. It warns when my own Claude Code settings hold an `allowedMcpServers` 
 - **Business days by local date.** `ledger.business_days_since` counts UTC dates, so a message sent just
   after local midnight east of UTC is counted on the day before. It counts dates in the local zone (and
   takes the zone, for its tests).
-- **`--help` before the config.** `bosun <cmd> --help` (or `-h`) prints the command's `# Usage:` header
-  without reading the config, so it works with no config, a broken one, or one I would rather it did not
-  read.
+- **`--help` before the config.** `bosun <cmd> --help` (or `-h`, and nothing else after the command) is
+  answered by `bin/bosun` from the command's `# Usage:` header (`usage_of`, `lib/common.sh`) without running
+  the command, for every command, so it works with no config, a broken one, or one I would rather it did
+  not read. The commands whose `--help` was Python's (`ledger`, `kg`, `delegate`, and `resolve`, whose
+  help was a docstring) keep the full text in the header; their Python modules no longer carry a copy.
+  `bosun ledger list --help` and the like are still argparse's.
 
 ## Testing
 
