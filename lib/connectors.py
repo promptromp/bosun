@@ -9,23 +9,24 @@ means none; `all` means no limit. A name that resolves to nothing is left out: a
 less than its list, never more.
 
 Usage: connectors.py claude --list <value> --cwd <dir> --state-dir <dir> --agent-bin <claude> [--kept-only]
-           Claude Code's settings, {"allowedMcpServers": [...]} (nothing for `all`), and a line on
-           stderr per name not found. Runs `claude mcp list` in <dir> only for a name it cannot resolve
-           otherwise (never with --kept-only), and keeps what it found in <state-dir>/connectors.json
-           for when the listing fails.
+           Claude Code's settings, always a JSON object: {"allowedMcpServers": [...]}, or {} for `all`;
+           a line on stderr per name not found. Runs `claude mcp list` in <dir> only for a name it
+           cannot resolve otherwise (never with --kept-only), and keeps what it found in
+           <state-dir>/connectors.json for when the listing fails. Whatever else goes wrong, it prints
+           {"allowedMcpServers": []} and exits 1: a window starts with less, never with more.
        connectors.py codex --list <value> --agent-bin <codex>
            Codex's launch arguments, one per line: each listed server the list does not name switched
            off, and ChatGPT's connectors unless the list is `all`.
 
-Exit codes: 0 done, 1 a name not found (claude) or the servers could not be listed (codex), 2 a list
-or command line that cannot be read.
+Exit codes: 0 done, 1 a name not found or something else went wrong (claude: the settings printed are
+still the ones to use), or the servers could not be listed (codex), 2 a list or command line that cannot
+be read. So a caller takes empty output or an exit of 2 or more as fatal.
 """
 
 from __future__ import annotations
 
 import argparse
 import json
-import os
 import string
 import sys
 from collections.abc import Mapping, Sequence
@@ -37,7 +38,7 @@ from typing import Any
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import claude_state
 import codex_state
-from agent_files import read_object
+from agent_files import read_object, write_atomically
 
 
 EVERYTHING = "all"
@@ -46,6 +47,10 @@ LOOKUP_TIMEOUT_SECONDS = 30.0
 URL_SCHEMES = ("http://", "https://")
 # Claude Code's rule for a serverName in an allow list, and TOML's for a bare key: the same characters.
 PLAIN = frozenset(string.ascii_letters + string.digits + "-_")
+
+
+def say(line: str) -> None:
+    print(f"connectors: {line}", file=sys.stderr)
 
 
 class ConnectorsError(ValueError):
@@ -149,11 +154,14 @@ def load_kept(state_dir: Path) -> dict[str, str]:
 
 
 def save_kept(state_dir: Path, found: Mapping[str, str]) -> None:
+    """Merge <found> into what was kept. Best-effort: a launch uses what it found even when it cannot
+    keep it, so a write that fails is said on stderr and nothing more. Each writer has a temp file of
+    its own, so launches saving at once never break one another (the last one's merge wins)."""
     kept = {**load_kept(state_dir), **found}
-    state_dir.mkdir(parents=True, exist_ok=True)
-    temp = state_dir / f"{KEPT_FILE}.tmp"
-    temp.write_text(json.dumps(kept, indent=2, sort_keys=True) + "\n")
-    os.replace(temp, state_dir / KEPT_FILE)
+    try:
+        write_atomically(state_dir / KEPT_FILE, json.dumps(kept, indent=2, sort_keys=True) + "\n")
+    except OSError as exc:
+        say(f"could not keep the addresses found in {state_dir / KEPT_FILE} ({exc.strerror or exc})")
 
 
 # ---- Codex ----------------------------------------------------------------------------------------
@@ -179,10 +187,6 @@ def codex_args(allowed: Allowed, servers: Sequence[str]) -> list[str]:
 # ---- the command line ------------------------------------------------------------------------------
 
 
-def say(line: str) -> None:
-    print(f"connectors: {line}", file=sys.stderr)
-
-
 def looked_up_urls(allowed: Allowed, plugins: Mapping[str, Any], args: argparse.Namespace) -> dict[str, str]:
     """The URLs of the names only `claude mcp list` resolves: looked up (and kept), or, when the
     lookup fails or is not wanted, those the last lookups kept."""
@@ -205,16 +209,29 @@ def looked_up_urls(allowed: Allowed, plugins: Mapping[str, Any], args: argparse.
     return found
 
 
-def cmd_claude(args: argparse.Namespace) -> int:
+def claude_settings(args: argparse.Namespace) -> tuple[dict[str, Any], int]:
     allowed = parse(args.list)
     if allowed.everything:
-        return 0
+        return {}, 0
     plugins = claude_state.plugin_mcp_servers()
     resolution = claude_entries(allowed, plugins, looked_up_urls(allowed, plugins, args))
     for name in resolution.missing:
         say(f"{name} not found, so this window starts without it")
-    print(json.dumps({"allowedMcpServers": list(resolution.entries or ())}, separators=(",", ":")))
-    return 1 if resolution.missing else 0
+    return {"allowedMcpServers": list(resolution.entries or ())}, 1 if resolution.missing else 0
+
+
+def cmd_claude(args: argparse.Namespace) -> int:
+    """Always a JSON object on stdout, so the launch never reads a failure as `all` (no limit)."""
+    try:
+        settings, code = claude_settings(args)
+    except ConnectorsError:
+        raise
+    except Exception as exc:  # noqa: BLE001 - whatever goes wrong, the window starts with no server
+        why = " ".join(f"{type(exc).__name__}: {exc}".split())  # one line, whatever the exception says
+        say(f"could not resolve the list ({why}), so this window starts without servers")
+        settings, code = {"allowedMcpServers": []}, 1
+    print(json.dumps(settings, separators=(",", ":")))
+    return code
 
 
 def cmd_codex(args: argparse.Namespace) -> int:

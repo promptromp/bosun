@@ -157,6 +157,37 @@ class KeptTest(unittest.TestCase):
         )
         self.assertEqual(sorted(p.name for p in self.state.iterdir()), ["connectors.json"])
 
+    def test_a_save_whose_rename_finds_its_temp_gone_never_crashes(self) -> None:
+        with (
+            mock.patch("os.replace", side_effect=FileNotFoundError(2, "No such file or directory")),
+            mock.patch("sys.stderr", io.StringIO()) as err,
+        ):
+            connectors.save_kept(self.state, {MAIL: MAIL_URL})
+        self.assertTrue(err.getvalue().startswith("connectors: could not keep the addresses found"))
+        self.assertEqual(connectors.load_kept(self.state), {})
+
+    def test_concurrent_saves_never_crash_and_leave_valid_json(self) -> None:
+        """Launches starting at once (the morning start) each save what they found."""
+        script = (
+            "import sys; from pathlib import Path; sys.path.insert(0, sys.argv[1]); import connectors\n"
+            "for i in range(40): connectors.save_kept(Path(sys.argv[2]), {f'claude.ai {sys.argv[3]} {i}': 'https://x'})"
+        )
+        writers = [
+            subprocess.Popen(
+                [sys.executable, "-c", script, str(ROOT / "lib"), str(self.state), f"Acme{n}"],
+                stdin=subprocess.DEVNULL,
+                stderr=subprocess.PIPE,
+                text=True,
+            )
+            for n in range(4)
+        ]
+        for writer in writers:
+            _, err = writer.communicate(timeout=60)
+            self.assertEqual((writer.returncode, err), (0, ""))
+        kept = json.loads((self.state / "connectors.json").read_text())
+        self.assertTrue(kept and all(isinstance(url, str) for url in kept.values()))
+        self.assertEqual([p.name for p in self.state.iterdir()], ["connectors.json"])
+
 
 class CommandTest(unittest.TestCase):
     def setUp(self) -> None:
@@ -186,7 +217,23 @@ class CommandTest(unittest.TestCase):
         self.assertEqual((code, self.settings(out), err), (0, [], ""))
 
     def test_all_has_no_allow_list(self) -> None:
-        self.assertEqual(self.claude("all", self.root / "no-claude"), (0, "", ""))
+        self.assertEqual(self.claude("all", self.root / "no-claude"), (0, "{}\n", ""))
+
+    def test_an_unexpected_failure_allows_nothing(self) -> None:
+        boom = mock.patch.object(claude_state, "mcp_server_targets", side_effect=RuntimeError("boom"))
+        with boom:
+            code, out, err = self.claude(f"{MAIL}, acme-local", self.root / "no-claude")
+        self.assertEqual((code, out), (1, '{"allowedMcpServers":[]}\n'))
+        self.assertEqual(len(err.splitlines()), 1)
+        self.assertTrue(err.startswith("connectors: ") and "boom" in err)
+
+    def test_a_state_folder_that_cannot_be_written_still_gives_the_settings(self) -> None:
+        self.state.write_text("a file where the state folder should be")
+        code, out, err = self.claude(f"{MAIL}, claude.ai Acme Gone", printing(self.root, MCP_LIST))
+        self.assertEqual(code, 1)
+        self.assertEqual(self.settings(out), [{"serverUrl": MAIL_URL}])
+        self.assertIn("connectors: could not keep the addresses found", err)
+        self.assertIn("claude.ai Acme Gone not found", err)
 
     def test_all_with_names_is_refused(self) -> None:
         code, out, err = self.claude("all, acme-local", self.root / "no-claude")

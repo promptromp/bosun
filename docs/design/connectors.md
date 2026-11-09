@@ -107,7 +107,9 @@ server to Claude Code (it loads one of them), so allowing either lets that one i
 **When a name is not found.** An entry that resolves to nothing is left out, and the launch logs one line
 naming it: the window starts with less, never with more. `claude mcp list` is read only through
 `lib/claude_state.py`, like every other Claude Code internal; its parsing is pinned by a unit test on its
-text, and a run that fails or times out (30 s) is told apart from a name it does not show.
+text, and a run that fails or times out (30 s) is told apart from a name it does not show. The resolver
+always prints a JSON object (`{}` for `all`); one that fails in any other way prints an empty allow list,
+so a launch never takes a failure for `all`.
 
 **When the lookup fails.** At the morning wake the network may not be up yet, and an orchestrator started
 without `claude.ai Slack` would miss Slack all day. So each lookup keeps what it resolved in the state
