@@ -17,6 +17,7 @@ import json
 import os
 import re
 import subprocess
+from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -75,15 +76,21 @@ def folders() -> Folders:
 
 
 def command(
-    argv: list[str], *, stdin: str | None = None, detached: bool = False
+    argv: list[str],
+    *,
+    stdin: str | None = None,
+    detached: bool = False,
+    env: Mapping[str, str] | None = None,
 ) -> subprocess.CompletedProcess[str]:
     """<argv> run, its output kept, with <stdin> as its input (else this process's); one that outlasts
     COMMAND_SECONDS stopped, as a failure. <detached>: in a session of its own, so a Ctrl-C at the
-    terminal never stops it half way (a restart that stopped an agent and never started it again)."""
+    terminal never stops it half way (a restart that stopped an agent and never started it again).
+    <env>: variables set for it on top of this process's."""
     try:
         return subprocess.run(
             argv,
             input=stdin,
+            env={**os.environ, **env} if env else None,
             capture_output=True,
             text=True,
             errors="replace",
@@ -96,10 +103,14 @@ def command(
 
 
 def bosun(
-    root: Path, *args: str, stdin: str | None = None, detached: bool = False
+    root: Path,
+    *args: str,
+    stdin: str | None = None,
+    detached: bool = False,
+    env: Mapping[str, str] | None = None,
 ) -> subprocess.CompletedProcess[str]:
-    """`bosun <args>` of the version in <root> (command's <stdin> and <detached>)."""
-    return command([str(root / "bin" / "bosun"), *args], stdin=stdin, detached=detached)
+    """`bosun <args>` of the version in <root> (command's <stdin>, <detached> and <env>)."""
+    return command([str(root / "bin" / "bosun"), *args], stdin=stdin, detached=detached, env=env)
 
 
 def shell(root: Path, script: str, *args: str) -> subprocess.CompletedProcess[str]:
@@ -187,14 +198,17 @@ def new_facts(root: Path) -> VersionFacts:
     )
 
 
-def launch_changed(root: Path, name: str, state_dir: Path, session: str) -> bool:
+def launch_changed(
+    root: Path, name: str, state_dir: Path, session: str, kept: Mapping[str, str] | None = None
+) -> bool:
     """Whether window <name> would be launched now, by the version in <root>, with anything other
     than what its last launch recorded. `launch --fingerprint` of that version reads the files under
-    the install from <root> itself, so this holds before the switch too. One of bosun's windows
-    with no record, or one the fingerprint refuses, counts as changed: what it runs with is unknown
-    (a window bosun did not start never gets here: _window)."""
+    the install from <root> itself, so this holds before the switch too, and gets the config values
+    the update will write to bosun.env (<kept>, migrations.keys_to_keep) as it will have them. One of
+    bosun's windows with no record, or one the fingerprint refuses, counts as changed: what it runs
+    with is unknown (a window bosun did not start never gets here: _window)."""
     recorded = launch_record.recorded(state_dir, session, name)
-    done = bosun(root, "launch", "--fingerprint", name)
+    done = bosun(root, "launch", "--fingerprint", name, env=kept)
     if recorded is None or done.returncode != 0:
         return True
     try:
@@ -223,7 +237,9 @@ def on_another_conversation(window: dict[str, Any]) -> bool:
     return bool(running) and running != str(window.get("conversation") or running)
 
 
-def _window(root: Path, window: dict[str, Any], state_dir: Path, session: str) -> WindowFacts:
+def _window(
+    root: Path, window: dict[str, Any], state_dir: Path, session: str, kept: Mapping[str, str]
+) -> WindowFacts:
     """What the plan knows of <window>. One outside the window list with no launch recorded (a shell,
     a Claude started by hand; in a conversion also one an older version's `send --new` opened, whose
     hooks take the older command lines) was not started by bosun, and is left as it is."""
@@ -232,7 +248,7 @@ def _window(root: Path, window: dict[str, Any], state_dir: Path, session: str) -
     status = status_of(window)
     if window.get("kind") == EXTRA and launch_record.recorded(state_dir, session, name) is None:
         return WindowFacts(name, kind, status, launch_changed=False, started_by_bosun=False)
-    changed = kind != "checkin" and launch_changed(root, name, state_dir, session)
+    changed = kind != "checkin" and launch_changed(root, name, state_dir, session, kept)
     return WindowFacts(name, kind, status, changed)
 
 
@@ -279,11 +295,12 @@ def left_running(state_dir: Path, window: str) -> str:
     return ""
 
 
-def window_facts(root: Path) -> list[WindowFacts]:
+def window_facts(root: Path, kept: Mapping[str, str] | None = None) -> list[WindowFacts]:
     """Each window open in the session: its kind, its agent's status, and whether what the version in
-    <root> would launch it with differs from what it was launched with (launch_changed)."""
+    <root> would launch it with, once the update wrote <kept> to bosun.env, differs from what it was
+    launched with (launch_changed)."""
     where = folders()
-    return [_window(root, w, where.state_dir, where.session) for w in open_windows(root)]
+    return [_window(root, w, where.state_dir, where.session, kept or {}) for w in open_windows(root)]
 
 
 @dataclass(frozen=True)
@@ -456,13 +473,16 @@ def plan_for(old_root: Path, new_root: Path, state_dir: Path, config_dir: Path) 
     stops an update (a store whose format cannot be read, a link a backup cannot copy, versions not
     side by side) among its blockers."""
     old, new = live_facts(state_dir, config_dir, old_root), new_facts(new_root)
+    # What the update writes to bosun.env, which each window's launch is compared with: an older
+    # install's orchestrator that keeps every connector is no launch change.
+    kept = migrations.keys_to_keep(config_dir, new.keys - old.keys)
     cut_short, unreadable_kb = deletion_cut_short(state_dir, config_dir)
     reloads, unrenderable = jobs(new_root)
     plan = update_plan.make_plan(
         old,
         new,
         commits=commits(new_root, old.commit, new.commit),
-        windows=window_facts(new_root),
+        windows=window_facts(new_root, kept),
         jobs=reloads,
         renames=config_renames(config_dir),
         user_changes=migrations.USER_FILE_CHANGES,
@@ -480,4 +500,4 @@ def plan_for(old_root: Path, new_root: Path, state_dir: Path, config_dir: Path) 
         *install_problem(old_root, new_root),
         *pending_windows_blocker(state_dir),
     ]
-    return dataclasses.replace(plan, blockers=(*plan.blockers, *extra))
+    return dataclasses.replace(plan, blockers=(*plan.blockers, *extra), kept=tuple(kept.items()))

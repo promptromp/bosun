@@ -154,12 +154,18 @@ backup a rename gets, and its summary says it in a line with what to do: name th
 `bosun doctor` warns while the orchestrator's list is `all`. The summary also says, in a line of its own,
 that repo windows now start without connectors (a repo's own `.mcp.json` servers included), and how to
 give one back (`BOSUN_CONNECTORS`, or `connectors:` in its `sessions.yml` entry). Each added key with
-something to say carries its line in the registry, beside the kept value.
+something to say carries its line in the registry, beside the kept value. The plan shows the kept value,
+and compares each window's launch with it given (`launch --fingerprint` with it in the environment), so an
+older orchestrator, launched with every server, is no launch change and is not restarted for it.
 
 ### Seeing it
 
 `bosun doctor` prints a line per window: the list, what it resolved to, and every allowed name it could
 not find. It warns when my own Claude Code settings hold an `allowedMcpServers` (it widens every window's).
+A Claude Code window's line resolves as `--kept-only` does: `claude mcp list` connects to every server,
+so a claude.ai name no launch has looked up yet reads as not among those kept, and the line says so. A
+Codex window's comes from `codex mcp list --json` in its folder, names only, and notes URL patterns and
+claude.ai names as meaning nothing there.
 
 ### Setup
 

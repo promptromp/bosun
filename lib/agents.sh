@@ -35,6 +35,14 @@ harness_default_model() { # <harness>
   esac
 }
 
+# The command that runs <harness>, as the config names it.
+harness_bin() { # <harness>
+  case "$1" in
+    codex) echo "$BOSUN_CODEX_BIN" ;;
+    *) echo "$BOSUN_CLAUDE_BIN" ;;
+  esac
+}
+
 # Every agent this setup uses, as one line of words: what preflight and `bosun trust` go through.
 harnesses_in_use() {
   {

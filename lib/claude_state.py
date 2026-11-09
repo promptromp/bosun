@@ -27,7 +27,10 @@ None of these are public APIs. If a Claude Code update changes them, this is the
 - ~/.claude/plugins/installed_plugins.json (`plugins`: per plugin, its installs and `installPath`)
   and each plugin's .mcp.json (`mcpServers`, `${CLAUDE_PLUGIN_ROOT}` standing for that folder)
 - `claude mcp list`: a line per MCP server a session in that folder gets, `<name>: <URL or command>
-  - <health>`, claude.ai's connectors only with ENABLE_CLAUDEAI_MCP_SERVERS=true
+  - <health>`, claude.ai's connectors (named `claude.ai <Name>`) only with
+  ENABLE_CLAUDEAI_MCP_SERVERS=true
+- ~/.claude/settings.json: `skipDangerousModePermissionPrompt` (the bypass warning accepted), and
+  whether it holds `allowedMcpServers`, which Claude Code merges with a window's own and so widens it
 
 Usage: claude_state.py resolve <workdir> <name>    the most recent session named exactly <name>
        claude_state.py list <workdir>              named sessions, newest first
@@ -38,6 +41,7 @@ Usage: claude_state.py resolve <workdir> <name>    the most recent session named
        claude_state.py trusted <dir>               exit 0 if Claude Code trusts <dir>
        claude_state.py onboarded                   exit 0 if its first-run screens are done
        claude_state.py bypass-accepted             exit 0 if its bypass-mode warning was accepted
+       claude_state.py sets-allowed-mcp-servers    exit 0 if my own settings hold allowedMcpServers
        claude_state.py logged-in                   exit 0 if `claude auth status` says so
        claude_state.py set-trust <dir> true|false  record (or remove) folder trust
        claude_state.py prompts <transcript> [<ISO time>]
@@ -92,6 +96,7 @@ LIVE_SESSIONS_DIR = HOME / ".claude" / "sessions"
 CONFIG_FILE = HOME / ".claude.json"
 SETTINGS_FILE = HOME / ".claude" / "settings.json"
 INSTALLED_PLUGINS = HOME / ".claude" / "plugins" / "installed_plugins.json"
+CLAUDE_AI_PREFIX = "claude.ai "  # how `claude mcp list` names claude.ai's connectors: claude.ai Acme Mail
 SLACK_PLUGIN = "slack"
 PLUGIN_ROOT = "${CLAUDE_PLUGIN_ROOT}"  # in a plugin's .mcp.json: the folder it is installed in
 TITLE_MARKER = '"custom-title"'
@@ -359,6 +364,17 @@ def bypass_accepted() -> bool:
     """Whether someone accepted the warning that --dangerously-skip-permissions shows once per machine:
     its cursor starts on "No, exit", so an unattended window never gets past it."""
     return (read_object(SETTINGS_FILE) or {}).get("skipDangerousModePermissionPrompt") is True
+
+
+def sets_allowed_mcp_servers() -> bool:
+    """Whether my own settings hold an `allowedMcpServers`: Claude Code adds it to the one a window is
+    launched with, so it widens every window's list (docs/design/connectors.md)."""
+    return "allowedMcpServers" in (read_object(SETTINGS_FILE) or {})
+
+
+def is_claude_ai_connector(name: str) -> bool:
+    """Whether <name> is how `claude mcp list` names one of claude.ai's connectors."""
+    return name.startswith(CLAUDE_AI_PREFIX)
 
 
 def set_trust(directory: str, trust: bool) -> None:
@@ -1469,6 +1485,7 @@ COMMANDS: dict[str, Command] = {
     "trusted": (1, lambda args: 0 if trusted(args[0]) else NOT_FOUND),
     "onboarded": (0, lambda _args: 0 if onboarded() else NOT_FOUND),
     "bypass-accepted": (0, lambda _args: 0 if bypass_accepted() else NOT_FOUND),
+    "sets-allowed-mcp-servers": (0, lambda _args: 0 if sets_allowed_mcp_servers() else NOT_FOUND),
     "logged-in": (0, cmd_logged_in),
     "set-trust": (2, cmd_set_trust),
     "prompts": (None, cmd_prompts),

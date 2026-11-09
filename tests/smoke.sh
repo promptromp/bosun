@@ -878,6 +878,24 @@ check "... and in an alert" wait_for 10 bash -c 'grep -qF "notification only; BO
 jq '. + {allowedMcpServers: [{serverName: "site-wide"}]}' "$ROOT/orchestrator/settings.json" >"$WORK/site-mcp-settings.json"
 check "a site settings file's own allowedMcpServers is replaced by the window's list" \
   allows "$(cd "$REPO_A" && "${ORCH[@]}" BOSUN_ORCHESTRATOR_SETTINGS="$WORK/site-mcp-settings.json" BOSUN_ORCHESTRATOR_CONNECTORS=acme-local "$BOSUN" launch orch 2>&1)" '$a == [{"serverName": "acme-local"}]'
+# bosun doctor: a line per window, resolved from what earlier starts kept (claude.ai Acme Chat), looking
+# nothing up; and a warning when my own Claude Code settings hold an allow list, which widens every window's.
+: >"$WORK/mcp-claude.calls"
+out="$("${SN[@]}" BOSUN_ORCHESTRATOR=orch BOSUN_ORCHESTRATOR_DIR="$REPO_A" BOSUN_ORCHESTRATOR_CONNECTORS=all "$BOSUN" doctor 2>&1)"
+check "doctor says what each window reaches: a few" contains "$out" "ok    alpha: reaches acme-local, https://mcp.example.com/*"
+check "... none" contains "$out" "ok    gamma: none (no MCP server or connector)"
+check "... and warns while the orchestrator keeps every connector" contains "$out" \
+  "warn  orch: all (every MCP server and connector): name the ones it needs in BOSUN_ORCHESTRATOR_CONNECTORS and drop all"
+out="$("${ORCH[@]}" BOSUN_ORCHESTRATOR_CONNECTORS="claude.ai Acme Chat, claude.ai Acme Gone" "$BOSUN" doctor 2>&1)"
+check "... names what it cannot find" contains "$out" "warn  orch: reaches claude.ai Acme Chat; not among the addresses earlier starts looked up: claude.ai Acme Gone"
+check "... and looks nothing up" test ! -s "$WORK/mcp-claude.calls"
+check "... nor warns about my own settings while they hold no allow list" not_contains "$out" "allowedMcpServers"
+mkdir -p "$HOME/.claude"
+echo '{"allowedMcpServers": [{"serverName": "acme-local"}]}' >"$HOME/.claude/settings.json"
+check "doctor warns once when my own Claude Code settings hold an allow list" bash -c '
+  [ "$(grep -c "warn  your own Claude Code settings (~/.claude/settings.json) hold allowedMcpServers, which widens every window" <<<"$1")" = 1 ]' \
+  _ "$("${ORCH[@]}" "$BOSUN" doctor 2>&1)"
+rm -f "$HOME/.claude/settings.json"
 rm -f "$WORK/mcp-claude.calls" "$BOSUN_STATE_DIR/connectors.json" "$LAUNCH_LOG"
 
 echo "knowledge (kg, fixture acme knowledge base)"
@@ -2627,6 +2645,11 @@ for line in sys.stdin:
     ! grep -qF "acme-docs.enabled" <<<"$1" && grep -qF " -c mcp_servers.\"acme.mail\".enabled=false " <<<"$1" && grep -qF " --disable apps" <<<"$1"' _ "$out"
   out="$(codex_launch_args "$(CX launch cx-all)")"
   check "with connectors: all, nothing is switched off" bash -c '! grep -qF mcp_servers <<<"$1" && ! grep -qF -- --disable <<<"$1"' _ "$out"
+  out="$(BOSUN_CONNECTORS="acme-docs, https://mcp.example.com/*" CX doctor)"
+  check "doctor says what a Codex window reaches, from its server names" contains "$out" \
+    "ok    cx-docs: reaches acme-docs (switches off acme.mail and ChatGPT's connectors)"
+  check "... and that a URL means nothing to Codex" contains "$out" \
+    "warn  cx: reaches acme-docs (switches off acme.mail and ChatGPT's connectors); mean nothing to Codex: https://mcp.example.com/*"
   check "a listing that fails keeps the window from starting" fails_with "codex mcp list failed" env CODEX_STAND_IN_MCP_LIST="$WORK/no-such-listing" bash -c 'cd "$1" && BOSUN_CODEX_BIN="$2" CODEX_HOME="$3" BOSUN_SESSIONS_FILE="$4" BOSUN_LAUNCH_DRY_RUN=1 BOSUN_EVENTS_ENABLED=0 "$5" launch cx' _ "$CX_REPO" "$ROOT/tests/sandbox/codex-stand-in" "$CX_HOME" "$WORK/cx-sessions.yml" "$BOSUN"
   out="$(CODEX_STAND_IN_MCP_LIST="$WORK/no-such-listing" CX launch cx || true)"
   check "... and says why, without starting Codex" bash -c 'grep -q "so bosun cannot tell which servers to switch off" <<<"$1" && ! grep -q "dry-run: would run" <<<"$1"' _ "$out"
@@ -2760,6 +2783,29 @@ for line in sys.stdin:
   U_CONFIG="$U/config"
   mkdir -p "$U_VERSIONS" "$U_STATE" "$U_CONFIG"
   copy_tree "$U_UP"
+  # v1 stands for an install from before the connector keys: its lib/common.sh has no default line for
+  # them (what the plan reads a version's keys from), though it still sets them, to every connector as
+  # such an install had, so that v1 runs. Each v2 gets them back (u_next), so the update adds both and
+  # writes the orchestrator's kept value to bosun.env (migrations.CONFIG_ADDED).
+  cp "$U_UP/lib/common.sh" "$U/common.sh.with-connectors"
+  python3 - "$U_UP/lib/common.sh" <<'PY'
+import sys
+from pathlib import Path
+
+path = Path(sys.argv[1])
+text = path.read_text()
+for key in ("BOSUN_CONNECTORS", "BOSUN_ORCHESTRATOR_CONNECTORS"):
+    line = f'  {key}=""\n'
+    if text.count(line) != 1:
+        raise SystemExit(f"{path} does not hold {line!r} once")
+    text = text.replace(line, f'  : "${{{key}=all}}"\n')
+path.write_text(text)
+PY
+  u_next() { # [--failing]: v2 made from v1 in upstream's tree, its connector keys' defaults back
+    cp "$U/common.sh.with-connectors" "$U_UP/lib/common.sh"
+    "$ROOT/tests/sandbox/update_patch.sh" "$@" "$U_UP"
+  }
+  printf '# acme: an install from before connectors\n' >"$U_CONFIG/bosun.env"
   ug() { git -C "$U_UP" -c core.hooksPath=/dev/null -c commit.gpgsign=false -c user.name=acme -c user.email=dev@example.com "$@"; }
   ug init -q -b main
   ug add -A
@@ -2769,7 +2815,7 @@ for line in sys.stdin:
   git --git-dir="$U_VERSIONS/bosun.git" worktree add -q --detach "$U_VERSIONS/${U_V1_COMMIT:0:12}" "$U_V1_COMMIT"
   ln -s "bosun-versions/${U_V1_COMMIT:0:12}" "$U_LINK"
   U_V1="$(cd "$U_VERSIONS/${U_V1_COMMIT:0:12}" && pwd -P)"
-  "$ROOT/tests/sandbox/update_patch.sh" --failing "$U_UP"
+  u_next --failing
   ug commit -qam "v2, whose migration fails while writes are paused"
   U_FAILING_COMMIT="$(ug rev-parse HEAD)"
   # A Claude of its own that answers and writes nothing: the suite's $WORK/fake-claude (the chores dry
@@ -2806,6 +2852,8 @@ for line in sys.stdin:
   check "update --dry-run fetches the branch and shows the plan: the ledger's migration" contains "$out" "ledger: format 1 -> 2"
   check "... and the one prompt that changed" bash -c 'grep -q "Prompts changed (1):" <<<"$1" && grep -q "orchestrator/policy.md" <<<"$1"' _ "$out"
   check "... and changes nothing in the state or the config" test "$(u_files)" = "$before"
+  check "... and that the update writes to bosun.env the value that keeps what this install did" bash -c '
+    grep -q "^Written to bosun.env, to keep what this install did:" <<<"$1" && grep -qx "  BOSUN_ORCHESTRATOR_CONNECTORS=\"all\"" <<<"$1"' _ "$out"
   check "... nor the link" u_at "$U_V1"
   out="$(ub update </dev/null 2>&1)"
   check "without --yes and no terminal, it shows the plan and stops" bash -c 'grep -q "ledger: format 1 -> 2" <<<"$1" && grep -q "Nothing has changed" <<<"$1"' _ "$out"
@@ -2823,7 +2871,7 @@ for line in sys.stdin:
 
   # Upstream's v2 now migrates well.
   ug reset -q --hard "$U_V1_COMMIT"
-  "$ROOT/tests/sandbox/update_patch.sh" "$U_UP"
+  u_next
   ug commit -qam v2
   U_V2_COMMIT="$(ug rev-parse HEAD)"
   U_V2="$(cd "$U_VERSIONS" && pwd -P)/${U_V2_COMMIT:0:12}"
@@ -2868,7 +2916,14 @@ for line in sys.stdin:
   check "... and passes its check against its journal" test "$(ub ledger validate --journal 2>&1)" = "ledger is valid"
   check "... a backup from v1 to v2 with its manifest" bash -c 'grep -lq "\"to\": \"$2\"" "$1"/backups/*/manifest.json' _ "$U_STATE" "$U_V2_COMMIT"
   check "... the record says done, with how long writes were paused ($(jq .freeze_ms "$U_STATE/update.json") ms, 8 s of them the patch's sleep)" jq -e '.step == "done" and .freeze_ms > 0' "$U_STATE/update.json"
-  check "... and what bosun doctor found then (here: no bosun.env)" jq -e '.findings | any(contains("no bosun.env"))' "$U_STATE/update.json"
+  check "... and what bosun doctor found then (here: no sessions.yml)" jq -e '.findings | any(contains("sessions manifest not found"))' "$U_STATE/update.json"
+  check "... it wrote the value that keeps what the install did to bosun.env, keeping a copy as it was" bash -c '
+    grep -qx "BOSUN_ORCHESTRATOR_CONNECTORS=\"all\"" "$1/bosun.env" && ! grep -q "^BOSUN_CONNECTORS=" "$1/bosun.env" &&
+      [ "$(cat "$1"/bosun.env.pre-update-*)" = "# acme: an install from before connectors" ]' _ "$U_CONFIG"
+  check "... and its summary says so, with what each added key means" bash -c '
+    grep -q "^  bosun\.env  *BOSUN_ORCHESTRATOR_CONNECTORS=\"all\" added (before: bosun\.env\.pre-update-" "$1" &&
+      grep -q "^  BOSUN_ORCHESTRATOR_CONNECTORS  *the orchestrator keeps every connector, as before" "$1" &&
+      grep -q "^  BOSUN_CONNECTORS  *repo windows now start without connectors" "$1"' _ "$U/summary.txt"
   check "... it reloaded the launchd jobs, which run the link" bash -c 'grep -qF "$2/bin/bosun" "$1/Library/LaunchAgents/com.bosun.update-test.plist"' _ "$HOME" "$(cd "$U/share" && pwd -P)/bosun"
   check "... and deleted the folder of the version that failed, keeping v1's and v2's" bash -c '[ ! -e "$1/${2:0:12}" ] && [ -d "$3" ] && [ -d "$4" ]' _ "$U_VERSIONS" "$U_FAILING_COMMIT" "$U_V1" "$U_V2"
   check "the write that waited ran again on v2, and landed" bash -c '[ "$1" = 0 ] && [ "$(jq -r ".items[\"review:acme/api#3\"].title" "$2/ledger.json")" = "Written while paused" ]' _ "$writer_rc" "$U_STATE"

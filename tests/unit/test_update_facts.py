@@ -73,6 +73,22 @@ class BlockerTest(World):
         self.record("agents")
         self.assertEqual(self.plan().blockers, ())
 
+    def test_the_plan_says_which_kept_values_it_writes_to_bosun_env(self) -> None:
+        """A key the update adds with a kept value (migrations.CONFIG_ADDED), that bosun.env does not
+        set: the plan shows it, so the person saying yes sees bosun.env change."""
+        old_keys = frozenset({"BOSUN_DAYS"})
+        new_keys = old_keys | {"BOSUN_CONNECTORS", "BOSUN_ORCHESTRATOR_CONNECTORS"}
+        keys = mock.patch.object(
+            update_facts, "config_keys", side_effect=lambda r: old_keys if r == self.old else new_keys
+        )
+        (self.config / "bosun.env").write_text("BOSUN_DAYS=MTWRF\n")
+        with keys:
+            self.assertEqual(self.plan().kept, (("BOSUN_ORCHESTRATOR_CONNECTORS", "all"),))
+            (self.config / "bosun.env").write_text('BOSUN_ORCHESTRATOR_CONNECTORS="claude.ai Acme Chat"\n')
+            self.assertEqual(self.plan().kept, ())
+            (self.config / "bosun.env").unlink()
+            self.assertEqual(self.plan().kept, ())
+
     def test_versions_not_side_by_side_are_a_blocker(self) -> None:
         self.assertEqual(update_facts.install_problem(self.old, self.new), [])
         checkout = self.state.parent / "checkout"
@@ -190,6 +206,19 @@ class FactsTest(World):
         with mock.patch("launch_record.recorded", return_value=None):
             self.assertTrue(update_facts.launch_changed(root, "known", self.state, "s"))
 
+    def test_a_launch_is_compared_with_the_values_the_update_writes(self) -> None:
+        """An older install's orchestrator, launched with every connector: the update writes
+        BOSUN_ORCHESTRATOR_CONNECTORS="all", so its launch is unchanged and it is not restarted."""
+        root = self.state.parent / "version"
+        (root / "bin").mkdir(parents=True)
+        stub = root / "bin" / "bosun"
+        stub.write_text('#!/bin/sh\necho "{\\"args\\": \\"${BOSUN_ORCHESTRATOR_CONNECTORS:-none}\\"}"\n')
+        stub.chmod(0o755)
+        with mock.patch("launch_record.recorded", return_value={"fingerprint": {"args": "all"}}):
+            self.assertTrue(update_facts.launch_changed(root, "orch", self.state, "s"))
+            kept = {"BOSUN_ORCHESTRATOR_CONNECTORS": "all"}
+            self.assertFalse(update_facts.launch_changed(root, "orch", self.state, "s", kept))
+
 
 class WindowFactsTest(World):
     """What a turn knows of the windows, from `bosun sessions --json`."""
@@ -234,6 +263,12 @@ class WindowFactsTest(World):
              ("sent", True, True)],
         )  # fmt: skip
         self.assertEqual([call.args[1] for call in changed.call_args_list], ["orch", "api", "sent"])
+        with (
+            mock.patch.object(update_facts, "open_windows", return_value=listed[:1]),
+            mock.patch.object(update_facts, "launch_changed", return_value=False) as changed,
+        ):
+            update_facts.window_facts(self.new, {"BOSUN_ORCHESTRATOR_CONNECTORS": "all"})
+        self.assertEqual(changed.call_args.args[4], {"BOSUN_ORCHESTRATOR_CONNECTORS": "all"})
 
     def test_a_check_in_loop_runs_while_its_window_is_open(self) -> None:
         with mock.patch.object(update_facts, "open_windows", return_value=self.listed()):

@@ -192,7 +192,9 @@ class KeptTest(unittest.TestCase):
         self.assertEqual([p.name for p in self.state.iterdir()], ["connectors.json"])
 
 
-class CommandTest(unittest.TestCase):
+class CommandCase(unittest.TestCase):
+    """connectors.py's command line, with the installed plugins read from a scratch file."""
+
     def setUp(self) -> None:
         temp = tempfile.TemporaryDirectory()
         self.addCleanup(temp.cleanup)
@@ -208,6 +210,8 @@ class CommandTest(unittest.TestCase):
             code = connectors.main(list(argv))
         return code, out.getvalue(), err.getvalue()
 
+
+class CommandTest(CommandCase):
     def claude(self, value: str, agent: Path, *extra: str) -> tuple[int, str, str]:
         common = ["--cwd", str(self.root), "--state-dir", str(self.state), "--agent-bin", str(agent)]
         return self.run_main("claude", "--list", value, *common, *extra)
@@ -406,6 +410,126 @@ class CommandTest(unittest.TestCase):
         self.assertEqual(
             self.run_main("codex", "--list", "all", "--agent-bin", str(self.root / "none")), (0, "", "")
         )
+
+
+class DoctorTest(CommandCase):
+    """`connectors.py doctor`: bosun doctor's line for a window, its level and a tab first."""
+
+    def doctor(
+        self, window: str, value: str, agent: Path, kind: str = "session", harness: str = "claude"
+    ) -> str:
+        code, out, err = self.run_main(
+            *("doctor", "--window", window, "--kind", kind, "--harness", harness, "--list", value),
+            *("--cwd", str(self.root), "--state-dir", str(self.state), "--agent-bin", str(agent)),
+        )
+        self.assertEqual((code, err), (0, ""))
+        self.assertEqual(len(out.splitlines()), 1, out)
+        return out.rstrip("\n")
+
+    def test_doctor_lines(self) -> None:
+        connectors.save_kept(self.state, [MAIL], {MAIL: MAIL_URL})
+        never = fake_agent(self.root, f'echo called >> "{self.root}/calls"; exit 1')  # claude: never run
+        self.assertEqual(self.doctor("alpha", "", never), "ok\talpha: none (no MCP server or connector)")
+        self.assertEqual(
+            self.doctor("alpha", f"acme-local, {MAIL}, https://mcp.example.com/*", never),
+            f"ok\talpha: reaches acme-local, {MAIL}, https://mcp.example.com/*",
+        )
+        self.assertEqual(
+            self.doctor("alpha", f"acme-local, {MAIL}, claude.ai Acme Gone", never),
+            "warn\talpha: reaches acme-local, claude.ai Acme Mail; not among the addresses earlier starts "
+            "looked up: claude.ai Acme Gone (bosun doctor looks nothing up: the window's next start does)",
+        )
+        self.assertEqual(
+            self.doctor("alpha", "all", never), "ok\talpha: all (every MCP server and connector)"
+        )
+        self.assertEqual(
+            self.doctor("orchestrator", "all", never, kind="orchestrator"),
+            "warn\torchestrator: all (every MCP server and connector): name the ones it needs in "
+            "BOSUN_ORCHESTRATOR_CONNECTORS and drop all",
+        )
+        self.assertFalse((self.root / "calls").exists())
+        self.assertEqual(
+            self.doctor("alpha", "all, acme-local", never),
+            "warn\talpha: does not start: `all` means every server, so it stands alone, but the list also "
+            "names acme-local",
+        )
+
+    def test_doctor_names_a_plugin_server_not_found(self) -> None:
+        self.installed.write_text(json.dumps({"plugins": {}}))
+        self.assertEqual(
+            self.doctor("alpha", "acme-local, plugin:acme-tools:gone", self.root / "no-claude"),
+            "warn\talpha: reaches acme-local; not among the addresses earlier starts looked up: "
+            "plugin:acme-tools:gone (bosun doctor looks nothing up: the window's next start does)",
+        )
+        plugin = self.root / "plugins" / "acme-tools"
+        plugin.mkdir(parents=True)
+        (plugin / ".mcp.json").write_text(json.dumps({"mcpServers": {"broken": {"type": "http"}}}))
+        self.installed.write_text(
+            json.dumps({"plugins": {"acme-tools@market": [{"installPath": str(plugin)}]}})
+        )
+        self.assertEqual(
+            self.doctor("alpha", "plugin:acme-tools:broken", self.root / "no-claude"),
+            "warn\talpha: reaches nothing; not found, so it starts without: plugin:acme-tools:broken",
+        )
+
+    def test_doctor_lines_for_a_codex_window(self) -> None:
+        """From `codex mcp list --json`, names only (a stdio server's entry holds its environment); a URL
+        or a claude.ai name means nothing to Codex."""
+        agent = printing(
+            self.root, json.dumps([{"name": "acme-docs"}, {"name": "acme.mail", "env": {"TOKEN": "x"}}])
+        )
+        line = self.doctor(
+            "cx", f"acme-docs, https://mcp.example.com/*, {MAIL}, acme-gone", agent, harness="codex"
+        )
+        self.assertEqual(
+            line,
+            "warn\tcx: reaches acme-docs (switches off acme.mail and ChatGPT's connectors); not found, so it "
+            f"starts without: acme-gone; mean nothing to Codex: https://mcp.example.com/*, {MAIL}",
+        )
+        self.assertEqual(
+            self.doctor("cx", "", agent, harness="codex"),
+            "ok\tcx: none (switches off acme-docs, acme.mail and ChatGPT's connectors)",
+        )
+        self.assertEqual(
+            self.doctor("cx", "acme-docs", agent, harness="codex"),
+            "ok\tcx: reaches acme-docs (switches off acme.mail and ChatGPT's connectors)",
+        )
+        self.assertEqual(
+            self.doctor("cx", "all", self.root / "no-codex", harness="codex"),
+            "ok\tcx: all (every MCP server and connector)",
+        )
+        self.assertEqual(
+            self.doctor("cx", "acme-docs", fake_agent(self.root, "exit 3"), harness="codex"),
+            "warn\tcx: does not start: codex mcp list failed (exited 3), so bosun cannot tell which servers "
+            "to switch off",
+        )
+
+    def test_doctor_lists_codex_servers_in_the_window_s_folder(self) -> None:
+        folder = self.root / "repo"
+        folder.mkdir()
+        agent = fake_agent(self.root, f'pwd > "{self.root}/where"; echo "[]"')
+        code, _, _ = self.run_main(
+            *("doctor", "--window", "cx", "--kind", "session", "--harness", "codex", "--list", ""),
+            *("--cwd", str(folder), "--state-dir", str(self.state), "--agent-bin", str(agent)),
+        )
+        self.assertEqual(code, 0)
+        self.assertEqual(Path((self.root / "where").read_text().strip()).resolve(), folder.resolve())
+
+
+class ClaudeSettingsTest(unittest.TestCase):
+    def test_whether_my_own_settings_hold_an_allow_list(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            settings = Path(temp) / "settings.json"
+            with mock.patch.object(claude_state, "SETTINGS_FILE", settings):
+                self.assertFalse(claude_state.sets_allowed_mcp_servers())
+                settings.write_text(json.dumps({"skipDangerousModePermissionPrompt": True}))
+                self.assertFalse(claude_state.sets_allowed_mcp_servers())
+                settings.write_text(json.dumps({"allowedMcpServers": []}))
+                self.assertTrue(claude_state.sets_allowed_mcp_servers())
+                self.assertEqual(claude_state.main(["sets-allowed-mcp-servers"]), 0)
+                settings.write_text("{not json")
+                self.assertFalse(claude_state.sets_allowed_mcp_servers())
+                self.assertEqual(claude_state.main(["sets-allowed-mcp-servers"]), 3)
 
 
 if __name__ == "__main__":

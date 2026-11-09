@@ -178,7 +178,8 @@ check gets no protection from it, which is why the first update converts at a qu
    - the commits;
    - each store's format before and after, and the migrations in between;
    - the rules versions;
-   - config keys added, renamed or removed;
+   - config keys added, renamed or removed, with what each added one means, and the value written to
+     `bosun.env` for a key whose default would change what the install did;
    - the prompts that changed: `policy.md`, `chores.md`, the task files, `learn.md` and
      `slack-watch.md`, counted and named;
    - which windows need a restart and which only need to re-read something (see below);
@@ -284,11 +285,25 @@ write to take in. Measure before building that.
 - **Journals are append-only.** A migration reads old envelopes as new ones (upcasting) rather than
   rewriting what was recorded, and rebuilds the files derived from the journal. So whatever a store
   rebuilds from its journal is in the code's format (a `ledger.json` made from the rebuild records it).
-- **Config.** A new key needs nothing written, since the defaults in `lib/common.sh` apply. A key
-  that is renamed or removed is edited in `bosun.env`, keeping a `bosun.env.pre-update-<time>` copy
-  (`YYYYmmdd-HHMMSS`, in UTC). The update never edits my own files: `sessions.yml`, `setup.sh`,
-  `policy.md`, `learn.md`, `tasks/` and `workstreams.json`. If their format has to change, the
-  summary says what to change and `bosun doctor` points to it.
+- **Config.** A new key needs nothing written, since the defaults in `lib/common.sh` apply. Two kinds
+  of change are written to `bosun.env`, keeping one `bosun.env.pre-update-<time>` copy for both
+  (`YYYYmmdd-HHMMSS`, in UTC); a `bosun.env` that is a link stays one, and its target changes:
+  - a key renamed or removed (`CONFIG_RENAMES` in `lib/migrations.py`) is renamed, or its line removed;
+  - a key the update adds whose default would change what an older install did (`CONFIG_ADDED`, an
+    entry with a kept value) is appended with that value, under a comment with its note, when the
+    plan's `keys_added` holds it and the file does not set it. The first is
+    `BOSUN_ORCHESTRATOR_CONNECTORS="all"` ([connectors](connectors.md#existing-installs)).
+
+  Each `CONFIG_ADDED` entry carries a note: what the plan shows beside the key, a line of its own in
+  the summary under Config, and what `bosun doctor` adds to the key while `bosun.env` does not set it. A
+  kept key's note says the install keeps what it did, so it is said only where its value was written.
+  The plan lists the kept values it will write (`kept` in its record; an older record has none), and
+  compares each window's launch with them given, so a window that keeps what it had is no launch
+  change. Whether an update may change `bosun.env` (keys renamed, or a kept key among those added) is
+  one condition for writing it and for putting it back after a failed freeze. Without a `bosun.env`
+  nothing is written. The update never edits my own files: `sessions.yml`, `setup.sh`, `policy.md`,
+  `learn.md`, `tasks/` and `workstreams.json`. If their format has to change, the summary says what to
+  change and `bosun doctor` points to it.
 
 ### Bringing the agents along
 
@@ -414,7 +429,8 @@ Settled while building it:
   longer possible"); a forget deletes a backup whole even when a summary is being saved into it. A
   failed update names the backup it took. The backup's size is that of its files.
 - **`bosun doctor`** lists what the last update left to me, from its record: the changes to make in my
-  own files, and the keys it added that `bosun.env` does not set, with the value each has now.
+  own files, and the keys it added that `bosun.env` does not set, with the value each has now and its
+  note (a kept key's only where it holds: written).
 
 ### `get.sh` on an existing install
 

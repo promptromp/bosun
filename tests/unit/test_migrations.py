@@ -429,6 +429,136 @@ class TestConfig(MigrationTest):
         self.assertEqual([p.name for p in dotfiles.iterdir()], ["bosun.env"])
 
 
+ADDED = (
+    migrations.AddedKey("BOSUN_KEEPS", "all", "keeps what it did; name what it needs"),
+    migrations.AddedKey("BOSUN_FRESH", None, "starts at its default now"),
+)
+
+
+class TestAddedKeys(MigrationTest):
+    """A key an update adds with the value that keeps what an older install did (CONFIG_ADDED): written
+    to bosun.env when the update adds it and the file does not set it, with the backup a rename gets."""
+
+    def setUp(self) -> None:
+        super().setUp()
+        self.env = self.ctx.config_dir / "bosun.env"
+        for table, value in (("CONFIG_ADDED", ADDED), ("CONFIG_RENAMES", RENAMES)):
+            patch = mock.patch.object(migrations, table, value)
+            patch.start()
+            self.addCleanup(patch.stop)
+
+    def test_kept_key_written_when_the_update_adds_it(self) -> None:
+        self.env.write_text("# mine\nKEEP=2")  # no newline at its end
+        said = migrations.write_config(self.ctx.config_dir, NOW, ("BOSUN_FRESH", "BOSUN_KEEPS"))
+        self.assertEqual(said, ['BOSUN_KEEPS="all" added'])
+        self.assertEqual(
+            self.env.read_text(),
+            "# mine\nKEEP=2\n# Added by bosun update: keeps what it did; name what it needs\n"
+            'BOSUN_KEEPS="all"\n',
+        )
+        self.assertEqual(migrations.assigned_keys(self.ctx.config_dir), {"KEEP", "BOSUN_KEEPS"})
+        self.assertEqual(migrations.write_config(self.ctx.config_dir, NOW, ("BOSUN_KEEPS",)), [])
+
+    def test_kept_key_not_written_when_already_set(self) -> None:
+        for given in ('export BOSUN_KEEPS=""\n', "OLD=1\n"):
+            with (
+                self.subTest(given=given),
+                mock.patch.object(migrations, "CONFIG_RENAMES", (("OLD", "BOSUN_KEEPS"),)),
+            ):
+                self.env.write_text(given)
+                said = migrations.write_config(self.ctx.config_dir, NOW, ("BOSUN_KEEPS",))
+                self.assertNotIn('BOSUN_KEEPS="all"', self.env.read_text())
+                self.assertFalse(any("added" in line for line in said), said)
+
+    def test_kept_key_not_written_when_not_added(self) -> None:
+        """An install that already had the key (its default is what it ran with), or a key without a
+        kept value: nothing written, no copy kept."""
+        self.env.write_text("KEEP=2\n")
+        self.assertEqual(
+            migrations.write_config(self.ctx.config_dir, NOW, ("BOSUN_FRESH", "BOSUN_OTHER")), []
+        )
+        self.assertEqual(migrations.write_config(self.ctx.config_dir, NOW), [])
+        self.assertEqual(self.env.read_text(), "KEEP=2\n")
+        self.assertEqual([p.name for p in self.ctx.config_dir.iterdir()], ["bosun.env"])
+
+    def test_no_bosun_env_is_nothing_written(self) -> None:
+        """As for renames: an install without one runs on the defaults, and doctor says so."""
+        self.assertEqual(migrations.write_config(self.ctx.config_dir, NOW, ("BOSUN_KEEPS",)), [])
+        self.assertEqual(list(self.ctx.config_dir.iterdir()), [])
+        self.assertEqual(migrations.kept_values(("BOSUN_KEEPS",)), {"BOSUN_KEEPS": "all"})
+        self.assertEqual(migrations.keys_to_keep(self.ctx.config_dir, ("BOSUN_KEEPS",)), {})
+
+    def test_one_backup_for_renames_and_added_keys(self) -> None:
+        self.env.write_text("OLD=1\n")
+        self.env.chmod(0o600)
+        said = migrations.write_config(self.ctx.config_dir, NOW, ("BOSUN_KEEPS",))
+        self.assertEqual(said, ["OLD is now NEW", 'BOSUN_KEEPS="all" added'])
+        copy = migrations.config_copy(self.ctx.config_dir, NOW)
+        self.assertEqual(sorted(p.name for p in self.ctx.config_dir.iterdir()), ["bosun.env", copy.name])
+        self.assertEqual(copy.read_text(), "OLD=1\n")
+        self.assertTrue(self.env.read_text().startswith("NEW=1\n# Added by bosun update: "))
+        self.assertEqual(self.env.stat().st_mode & 0o777, 0o600)
+
+    def test_bosun_env_link_target_changes(self) -> None:
+        dotfiles = Path(self.tmp.name) / "dotfiles"
+        dotfiles.mkdir()
+        (dotfiles / "bosun.env").write_text("KEEP=2\n")
+        self.env.symlink_to(dotfiles / "bosun.env")
+        said = migrations.write_config(self.ctx.config_dir, NOW, ("BOSUN_KEEPS",))
+        self.assertEqual(said, ['BOSUN_KEEPS="all" added'])
+        self.assertTrue(self.env.is_symlink())
+        self.assertTrue((dotfiles / "bosun.env").read_text().endswith('BOSUN_KEEPS="all"\n'))
+        copy = migrations.config_copy(self.ctx.config_dir, NOW)
+        self.assertFalse(copy.is_symlink())
+        self.assertEqual(copy.read_text(), "KEEP=2\n")
+        self.assertEqual([p.name for p in dotfiles.iterdir()], ["bosun.env"])
+
+    def test_what_the_plan_says_is_written(self) -> None:
+        """keys_to_keep, for the plan: the same keys write_config writes."""
+        self.env.write_text("KEEP=2\n")
+        self.assertEqual(
+            migrations.keys_to_keep(self.ctx.config_dir, ("BOSUN_KEEPS", "BOSUN_FRESH")),
+            {"BOSUN_KEEPS": "all"},
+        )
+        self.env.write_text("BOSUN_KEEPS=x\n")
+        self.assertEqual(migrations.keys_to_keep(self.ctx.config_dir, ("BOSUN_KEEPS",)), {})
+
+    def test_a_note_is_said_only_where_it_holds(self) -> None:
+        """A kept key's note ("keeps what it did") holds only once the update wrote its value; a key whose
+        default applies always has its note."""
+        added = ("BOSUN_KEEPS", "BOSUN_FRESH", "BOSUN_OTHER")
+        self.assertEqual(
+            migrations.added_notes(added, ("BOSUN_KEEPS",)),
+            [
+                ("BOSUN_KEEPS", "keeps what it did; name what it needs"),
+                ("BOSUN_FRESH", "starts at its default now"),
+            ],
+        )
+        self.assertEqual(migrations.added_notes(added, ()), [("BOSUN_FRESH", "starts at its default now")])
+        self.assertEqual(migrations.added_notes(("BOSUN_OTHER",), ("BOSUN_OTHER",)), [])
+
+
+class TestConfigAdded(unittest.TestCase):
+    def test_the_registry(self) -> None:
+        """Each entry a key with a default in lib/common.sh (a key an update adds), and each kept value
+        one that stays as it is between double quotes in bosun.env."""
+        common = (Path(__file__).resolve().parents[2] / "lib" / "common.sh").read_text()
+        keys = [entry.key for entry in migrations.CONFIG_ADDED]
+        self.assertEqual(len(keys), len(set(keys)))
+        for entry in migrations.CONFIG_ADDED:
+            with self.subTest(key=entry.key):
+                self.assertIn(f"\n  {entry.key}=", common)
+                self.assertTrue(entry.note and "\n" not in entry.note)
+                if entry.kept is not None:
+                    self.assertFalse(set(entry.kept) & set('"$`\\\n'), entry.kept)
+
+    def test_an_older_install_s_orchestrator_keeps_its_connectors(self) -> None:
+        self.assertEqual(
+            migrations.kept_values(("BOSUN_CONNECTORS", "BOSUN_ORCHESTRATOR_CONNECTORS")),
+            {"BOSUN_ORCHESTRATOR_CONNECTORS": "all"},
+        )
+
+
 class TestValidateUnlocked(MigrationTest):
     def test_validate_unlocked_runs_under_a_held_lock(self) -> None:
         """The freeze holds both stores' exclusive locks while it checks them. flock is per open

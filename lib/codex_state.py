@@ -296,13 +296,16 @@ class CodexListError(RuntimeError):
 MCP_LIST_TIMEOUT_SECONDS = 30.0
 
 
-def mcp_server_names(codex_bin: str, timeout: float = MCP_LIST_TIMEOUT_SECONDS) -> list[str]:
-    """The name of each MCP server Codex would start in this folder (configured or a plugin's; not
-    `codex_apps`, ChatGPT's connectors). Nothing else of the listing is kept: a stdio server's entry
-    holds its environment, secrets included."""
+def mcp_server_names(
+    codex_bin: str, timeout: float = MCP_LIST_TIMEOUT_SECONDS, cwd: Path | None = None
+) -> list[str]:
+    """The name of each MCP server Codex would start in <cwd> (default: this folder; configured or a
+    plugin's; not `codex_apps`, ChatGPT's connectors). Nothing else of the listing is kept: a stdio
+    server's entry holds its environment, secrets included."""
     try:
         result = subprocess.run(
             [codex_bin, "mcp", "list", "--json"],
+            cwd=cwd,
             stdin=subprocess.DEVNULL,
             capture_output=True,
             text=True,

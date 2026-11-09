@@ -233,6 +233,33 @@ class FreezeTest(World):
             update.restorable(a_plan(renames=(("BOSUN_OLD", "BOSUN_NEW"),)))[-1], "config/bosun.env"
         )
 
+    def test_a_plan_that_adds_a_kept_key_writes_and_restores_bosun_env(self) -> None:
+        """One condition for both: the update may change bosun.env (renames, or a key it adds with the
+        value that keeps what the install did), so it writes it and a failed freeze puts it back."""
+        kept = dataclasses.replace(a_plan(), keys_added=("BOSUN_ORCHESTRATOR_CONNECTORS",))
+        fresh = dataclasses.replace(a_plan(), keys_added=("BOSUN_CONNECTORS",))
+        self.assertTrue(update.changes_config(kept))
+        self.assertTrue(update.changes_config(a_plan(renames=(("BOSUN_OLD", "BOSUN_NEW"),))))
+        self.assertFalse(update.changes_config(fresh))
+        self.assertEqual(update.restorable(kept)[-1], "config/bosun.env")
+        self.assertNotIn("config/bosun.env", update.restorable(fresh))
+
+    def test_a_failed_freeze_puts_bosun_env_back_when_only_a_kept_key_was_written(self) -> None:
+        env = self.config / "bosun.env"
+        env.write_text("BOSUN_DAYS=MTWRF\n")
+        plan = dataclasses.replace(a_plan(), keys_added=("BOSUN_ORCHESTRATOR_CONNECTORS",))
+        written: list[str] = []
+
+        def failing(state_dir: Path, config_dir: Path) -> list[str]:
+            written.append(env.read_text())
+            return ["the ledger: journal: damaged"]
+
+        with mock.patch.object(update, "check_stores", side_effect=failing):
+            done = update.freeze(self.record("holding"), plan, self.state, self.config)
+        self.assertEqual(done.step, "failed")
+        self.assertIn('BOSUN_ORCHESTRATOR_CONNECTORS="all"', written[0])
+        self.assertEqual(env.read_text(), "BOSUN_DAYS=MTWRF\n")
+
     def test_a_failed_migration_is_put_back_under_the_locks_it_holds(self) -> None:
         before = (self.state / "ledger.json").read_bytes()
 
@@ -994,6 +1021,21 @@ class AgentsCommandTest(World):
         )
         (self.state / update_state.STATE_FILE).unlink()
         self.assertEqual(self.main(*argv), (0, "", ""))
+
+    def test_after_update_gives_a_new_key_s_note_where_it_holds(self) -> None:
+        """A third column: the note of a key at its default. A kept key bosun.env does not set (no
+        bosun.env to write it to) is at its default too, so its note ("keeps every connector") would be
+        false: none."""
+        self.record("done")
+        state = update_state.read(self.state)
+        assert state is not None
+        plan = {"keys_added": ["BOSUN_CONNECTORS", "BOSUN_ORCHESTRATOR_CONNECTORS"]}
+        update_state.write(self.state, dataclasses.replace(state, plan=plan))
+        note = next(entry.note for entry in migrations.CONFIG_ADDED if entry.key == "BOSUN_CONNECTORS")
+        argv = ("after-update", "--state-dir", str(self.state), "--config-dir", str(self.config))
+        self.assertEqual(
+            self.main(*argv), (0, f"key\tBOSUN_CONNECTORS\t{note}\nkey\tBOSUN_ORCHESTRATOR_CONNECTORS\n", "")
+        )
 
     def test_advance_with_nothing_pending_does_nothing(self) -> None:
         for step in ("done", "released"):

@@ -23,6 +23,10 @@ journal yet) is converted in place.
 
 The config: a new key needs nothing, as the defaults in lib/common.sh apply; a key renamed or
 removed (CONFIG_RENAMES) is edited in bosun.env, which is kept first as bosun.env.pre-update-<time>.
+A key whose default would change what an older install did (CONFIG_ADDED, with a kept value) is
+written to bosun.env with that value, when the update adds it and the file does not set it, with the
+same copy kept; each added key with something to say carries its note there, for the plan, the
+summary and bosun doctor (added_notes).
 My own files (sessions.yml, setup.sh, policy.md, learn.md, tasks/, workstreams.json) are never
 edited: what to change in one is in USER_FILE_CHANGES, for the plan, the summary and bosun doctor
 to say. Doctor reads it from the last update's record (update_summary.left_to_me), with the config
@@ -34,7 +38,7 @@ from __future__ import annotations
 import os
 import re
 import stat
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Collection, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -116,6 +120,35 @@ FORMATS: Mapping[str, int] = {"ledger": ledger.LEDGER_FORMAT, "knowledge": knowl
 CONFIG_RENAMES: tuple[tuple[str, str], ...] = ()
 # What to change in one of my own files (the file, what to change in it): never applied.
 USER_FILE_CHANGES: tuple[tuple[str, str], ...] = ()
+
+
+@dataclass(frozen=True)
+class AddedKey:
+    """A config key an update adds that has something to say: <kept>, the value written to bosun.env
+    so that an install from before the key keeps doing what it did (None: its default is right for
+    it too); <note>, what the plan, the summary and bosun doctor say of it."""
+
+    key: str
+    kept: str | None
+    note: str
+
+
+# The keys an update adds with a kept value or a note (the others need nothing: their defaults apply).
+# A kept value goes between double quotes in bosun.env, so it holds none of " $ ` \.
+CONFIG_ADDED: tuple[AddedKey, ...] = (
+    AddedKey(
+        "BOSUN_ORCHESTRATOR_CONNECTORS",
+        "all",
+        "the orchestrator keeps every connector, as before; name the ones it needs and drop all "
+        "(bosun doctor lists them)",
+    ),
+    AddedKey(
+        "BOSUN_CONNECTORS",
+        None,
+        "repo windows now start without connectors, a repo's own .mcp.json servers included; give one "
+        "back with BOSUN_CONNECTORS or connectors: in sessions.yml",
+    ),
+)
 
 
 @dataclass(frozen=True)
@@ -334,27 +367,86 @@ def _replace(path: Path, data: bytes, mode: int) -> None:
     journal.replace_durably(tmp, path)
 
 
-def assigned_keys(config_dir: Path) -> set[str]:
-    """The keys <config_dir>'s bosun.env assigns (NAME=..., export NAME=...); none without one."""
+def _read_config(config_dir: Path) -> str | None:
+    """<config_dir>'s bosun.env, its bytes that are not UTF-8 kept as they were (the shell reads
+    bytes); None without one."""
     try:
-        text = (config_dir / CONFIG_FILE).read_bytes().decode("utf-8", "surrogateescape")
+        return (config_dir / CONFIG_FILE).read_bytes().decode("utf-8", "surrogateescape")
     except FileNotFoundError:
-        return set()
+        return None
+
+
+def _assigned(text: str) -> set[str]:
     return {found["key"] for line in text.splitlines() if (found := ASSIGNMENT.match(line))}
 
 
-def write_config(config_dir: Path, now: datetime) -> list[str]:
-    """CONFIG_RENAMES applied to <config_dir>'s bosun.env (migrate_config), and a line per key
-    changed. When anything changed, the file as it was is kept first, in <config_dir>
-    (config_copy), with its mode; a bosun.env that is a link (to my dotfiles) stays one, and its
-    target is what changes. Nothing else is written."""
+def assigned_keys(config_dir: Path) -> set[str]:
+    """The keys <config_dir>'s bosun.env assigns (NAME=..., export NAME=...); none without one."""
+    text = _read_config(config_dir)
+    return set() if text is None else _assigned(text)
+
+
+def kept_values(added: Collection[str], assigned: Collection[str] = ()) -> dict[str, str]:
+    """Each key of <added> (an update's keys_added) that CONFIG_ADDED gives a kept value, and not among
+    <assigned> (what bosun.env sets), and that value: what the update writes to bosun.env."""
+    return {
+        entry.key: entry.kept
+        for entry in CONFIG_ADDED
+        if entry.kept is not None and entry.key in added and entry.key not in assigned
+    }
+
+
+def keys_to_keep(config_dir: Path, added: Collection[str]) -> dict[str, str]:
+    """kept_values for <config_dir>'s bosun.env, as write_config would write them: none without one."""
+    text = _read_config(config_dir)
+    return {} if text is None else kept_values(added, _assigned(text))
+
+
+def added_notes(added: Collection[str], written: Collection[str]) -> list[tuple[str, str]]:
+    """Each key of <added> with a note that holds, and the note, in CONFIG_ADDED's order: a key whose
+    default applies, and one with a kept value only where the update wrote it (<written>), since its
+    note says the install keeps what it did."""
+    return [
+        (entry.key, entry.note)
+        for entry in CONFIG_ADDED
+        if entry.key in added and (entry.kept is None or entry.key in written)
+    ]
+
+
+def assignment(key: str, value: str) -> str:
+    """How bosun.env sets <key> to a kept <value>, and how the plan shows it."""
+    return f'{key}="{value}"'
+
+
+def _with_kept(text: str, added: Collection[str]) -> tuple[str, list[str]]:
+    """<text> with each kept value of <added> it does not set appended (kept_values), each under a
+    comment with its note, and a line per key."""
+    kept = kept_values(added, _assigned(text))
+    if not kept:
+        return text, []
+    notes = {entry.key: entry.note for entry in CONFIG_ADDED}
+    lines = [
+        f"# Added by bosun update: {notes[key]}\n{assignment(key, value)}\n" for key, value in kept.items()
+    ]
+    lead = text if not text or text.endswith("\n") else text + "\n"
+    return lead + "".join(lines), [f"{assignment(key, value)} added" for key, value in kept.items()]
+
+
+def write_config(config_dir: Path, now: datetime, added: Collection[str] = ()) -> list[str]:
+    """CONFIG_RENAMES applied to <config_dir>'s bosun.env (migrate_config), then each key of <added>
+    (the update's keys_added) with a kept value that it does not set appended (CONFIG_ADDED), and a
+    line per key changed. When anything changed, the file as it was is kept first, once, in
+    <config_dir> (config_copy), with its mode; a bosun.env that is a link (to my dotfiles) stays one,
+    and its target is what changes. Without a bosun.env nothing is written: the defaults apply."""
     env = config_dir / CONFIG_FILE
     try:
         was = env.read_bytes()
     except FileNotFoundError:
         return []
     # bytes that are not UTF-8 go through as they were (the shell reads bytes)
-    changed, said = migrate_config(was.decode("utf-8", "surrogateescape"))
+    renamed, said = migrate_config(was.decode("utf-8", "surrogateescape"))
+    changed, added_said = _with_kept(renamed, added)
+    said += added_said
     if not said:
         return []
     target = env.resolve()

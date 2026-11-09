@@ -22,6 +22,13 @@ Usage: connectors.py claude --list <value> --cwd <dir> --state-dir <dir> --agent
        connectors.py codex --list <value> --agent-bin <codex>
            Codex's launch arguments, one per line: each listed server the list does not name switched
            off, and ChatGPT's connectors unless the list is `all`.
+       connectors.py doctor --window <name> --kind <kind> --harness claude|codex --list <value>
+                            --cwd <dir> --state-dir <dir> --agent-bin <agent>
+           bosun doctor's line for a window: `ok` or `warn`, a tab, then what it reaches (names only),
+           each name not found, and, for the orchestrator with `all`, to name its connectors. Claude
+           Code's from what earlier lookups kept (never `claude mcp list`, which connects to every
+           server); Codex's from `codex mcp list --json` in <dir>, which starts none. Always exit 0
+           with one line, but for a command line that cannot be read (2).
 
 Exit codes: 0 done, 1 a name not found or something else went wrong (claude: the settings printed are
 still the ones to use), or the servers could not be listed (codex), 2 a list or command line that cannot
@@ -192,6 +199,119 @@ def codex_args(allowed: Allowed, servers: Sequence[str]) -> list[str]:
     return [*args, "--disable", "apps"]
 
 
+# ---- bosun doctor ---------------------------------------------------------------------------------
+
+OK, WARN = "ok", "warn"
+ORCHESTRATOR = "orchestrator"  # its kind in the window list
+EVERYTHING_LINE = "all (every MCP server and connector)"
+NAME_THEM = "name the ones it needs in BOSUN_ORCHESTRATOR_CONNECTORS and drop all"
+NOT_FOUND = "not found, so it starts without: {}"
+NOT_KEPT = (
+    "not among the addresses earlier starts looked up: {} "
+    "(bosun doctor looks nothing up: the window's next start does)"
+)
+CODEX_OFF = "switches off {}ChatGPT's connectors"
+MEANINGLESS = "mean nothing to Codex: {}"
+
+
+def _report(window: str, reach: str, problems: Sequence[str]) -> tuple[str, str]:
+    """A window's line: what it reaches, then each problem (a part only when it names something)."""
+    parts = [part for part in problems if part]
+    return (WARN if parts else OK), "; ".join([f"{window}: {reach}", *parts])
+
+
+def _part(text: str, names: Sequence[str]) -> str:
+    return text.format(", ".join(names)) if names else ""
+
+
+def _everything(window: str, kind: str) -> tuple[str, str]:
+    """All: no limit, which the orchestrator should not keep (it reaches every connector of mine)."""
+    if kind == ORCHESTRATOR:
+        return WARN, f"{window}: {EVERYTHING_LINE}: {NAME_THEM}"
+    return OK, f"{window}: {EVERYTHING_LINE}"
+
+
+def claude_report(
+    window: str, kind: str, allowed: Allowed, plugins: Mapping[str, Any], kept: Mapping[str, str]
+) -> tuple[str, str]:
+    """A Claude Code window's line, resolved as `--kept-only` does: a name only `claude mcp list` could
+    resolve (claude.ai's) from what earlier lookups kept."""
+    if allowed.everything:
+        return _everything(window, kind)
+    if not allowed.names:
+        return OK, f"{window}: none (no MCP server or connector)"
+    missing = claude_entries(allowed, plugins, kept).missing
+    reached = [name for name in allowed.names if name not in missing]
+    not_kept = [name for name in missing if needs_url(name, plugins)]
+    not_found = [name for name in missing if name not in not_kept]
+    reach = f"reaches {', '.join(reached) or 'nothing'}"
+    return _report(window, reach, [_part(NOT_FOUND, not_found), _part(NOT_KEPT, not_kept)])
+
+
+def means_nothing_to_codex(name: str) -> bool:
+    """A URL pattern or a claude.ai connector: Claude Code's ways to name a server, which Codex has
+    no server by, so cannot switch on."""
+    return is_url(name) or claude_state.is_claude_ai_connector(name)
+
+
+def _codex_off(allowed: Allowed, servers: Sequence[str]) -> str:
+    """What a Codex window's launch switches off: each server its list does not name, and ChatGPT's."""
+    off = [server for server in servers if server not in allowed.names]
+    return CODEX_OFF.format(f"{', '.join(off)} and " if off else "")
+
+
+def _codex_names(allowed: Allowed, servers: Sequence[str]) -> tuple[list[str], list[str], list[str]]:
+    """The names of a Codex window's list it has a server by, those it has none by, and those that
+    mean nothing to Codex."""
+    unknown = [name for name in allowed.names if name not in servers]
+    meaningless = [name for name in unknown if means_nothing_to_codex(name)]
+    reached = [name for name in allowed.names if name in servers]
+    return reached, [name for name in unknown if name not in meaningless], meaningless
+
+
+def codex_report(window: str, kind: str, allowed: Allowed, servers: Sequence[str]) -> tuple[str, str]:
+    """A Codex window's line, from the names of its servers (<servers>): what it keeps, what it
+    switches off, and the names it has no server by."""
+    if allowed.everything:
+        return _everything(window, kind)
+    if not allowed.names:
+        return OK, f"{window}: none ({_codex_off(allowed, servers)})"
+    reached, not_found, meaningless = _codex_names(allowed, servers)
+    reach = f"reaches {', '.join(reached) or 'nothing'} ({_codex_off(allowed, servers)})"
+    return _report(window, reach, [_part(NOT_FOUND, not_found), _part(MEANINGLESS, meaningless)])
+
+
+def _claude_line(args: argparse.Namespace, allowed: Allowed) -> tuple[str, str]:
+    plugins = claude_state.plugin_mcp_servers() if allowed.names else {}
+    return claude_report(args.window, args.kind, allowed, plugins, load_kept(args.state_dir))
+
+
+def _codex_line(args: argparse.Namespace, allowed: Allowed) -> tuple[str, str]:
+    if allowed.everything:
+        return _everything(args.window, args.kind)
+    try:
+        servers = codex_state.mcp_server_names(args.agent_bin, LOOKUP_TIMEOUT_SECONDS, args.cwd)
+    except codex_state.CodexListError as exc:
+        why = f"codex mcp list failed ({exc}), so bosun cannot tell which servers to switch off"
+        return WARN, f"{args.window}: does not start: {why}"
+    return codex_report(args.window, args.kind, allowed, servers)
+
+
+DOCTOR_LINES = {"claude": _claude_line, "codex": _codex_line}
+
+
+def cmd_doctor(args: argparse.Namespace) -> int:
+    """One line, whatever goes wrong: a list that cannot be read is a window that does not start."""
+    try:
+        level, line = DOCTOR_LINES[args.harness](args, parse(args.list))
+    except ConnectorsError as exc:
+        level, line = WARN, f"{args.window}: does not start: {exc}"
+    except Exception as exc:  # noqa: BLE001 - doctor says it could not check, and goes on
+        level, line = WARN, f"{args.window}: could not check its connectors ({type(exc).__name__}: {exc})"
+    print(f"{level}\t{' '.join(line.split())}")
+    return 0
+
+
 # ---- the command line ------------------------------------------------------------------------------
 
 
@@ -279,6 +399,15 @@ def parser() -> argparse.ArgumentParser:
     codex.add_argument("--list", required=True)
     codex.add_argument("--agent-bin", required=True)
     codex.set_defaults(run=cmd_codex)
+    doctor = commands.add_parser("doctor", help="bosun doctor's line for a window")
+    doctor.add_argument("--window", required=True)
+    doctor.add_argument("--kind", required=True)
+    doctor.add_argument("--harness", required=True, choices=sorted(DOCTOR_LINES))
+    doctor.add_argument("--list", required=True)
+    doctor.add_argument("--cwd", required=True, type=Path)
+    doctor.add_argument("--state-dir", required=True, type=Path)
+    doctor.add_argument("--agent-bin", required=True)
+    doctor.set_defaults(run=cmd_doctor)
     return top
 
 

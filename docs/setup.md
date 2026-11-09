@@ -151,11 +151,22 @@ check-in loop brings the rest along once each is idle. A window left alone, or a
 repo session, keeps the text it has; the summary lists the tasks, for a `bosun delegate --update`.
 
 It ends with a summary: the commits, the migrations and version bumps, the config it changed and its new
-keys, anything you have to change by hand in your own files, the prompts that changed, the jobs reloaded,
+keys (with what each one means, when it says something), anything you have to change by hand in your own files, the prompts that changed, the jobs reloaded,
 what came of each window, anything that fails now that did not before, and where the backup is. It is
 saved as `summary.md` in the backup's folder, and its last line points to [Going back](#going-back).
 `bosun doctor` lists what the last update left to you. An update cut short (Ctrl-C, a crash, a power cut)
 is put back, or finished, by the next `bosun update`. How it works: [design note](design/update.md).
+
+**Your config.** A new key needs nothing: its default applies. A key that is renamed or removed is
+changed in `bosun.env`, and so is a key whose default would change what your install did: the update
+writes it with the value that keeps that, under a comment saying why. Either way it first keeps the file
+as it was, as `bosun.env.pre-update-<time>`, and the plan shows the change before you say yes. The first
+such key is `BOSUN_ORCHESTRATOR_CONNECTORS="all"`: an install from before
+[connectors](#connectors-what-each-window-may-reach) keeps every connector for its orchestrator, and
+`bosun doctor` warns until you name the ones it needs and drop `all`. Repo windows start without
+connectors from then on, a repo's own `.mcp.json` servers included, which the plan and the summary say:
+give one back with `BOSUN_CONNECTORS`, or `connectors:` in its `sessions.yml` entry. Without a `bosun.env`
+nothing is written, and the defaults apply.
 
 ### The first update of an older install
 
@@ -373,6 +384,13 @@ morning wake, before the network is up), the launch uses what was kept. A name i
 out, never let in as more: the launch logs a line, and for the orchestrator it also alerts you (`bosun
 alert`, whose output goes to `launch-YYYY-MM-DD.log`). The list is read at launch, so a change applies
 once the window starts again.
+
+`bosun doctor` has a line for each window: what it reaches, by name, and each name it cannot find. It
+looks nothing up (`claude mcp list` connects to every server), so a claude.ai connector no start has
+looked up yet shows as not found until the window's next start does. For a Codex window it asks `codex
+mcp list --json` for the servers' names, and says which names mean nothing to Codex (a URL pattern, a
+claude.ai connector). It warns while the orchestrator's list is `all`, and when your own
+`~/.claude/settings.json` holds an `allowedMcpServers`: Claude Code adds that to every window's list.
 
 ### How sessions are resumed
 

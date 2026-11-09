@@ -124,13 +124,21 @@ def check_stores(state_dir: Path, config_dir: Path) -> list[str]:
     ]
 
 
+def changes_config(plan: Plan) -> bool:
+    """Whether the update may change bosun.env: it renames keys bosun.env sets, or adds one with the
+    value that keeps what an older install did (migrations.kept_values). The one condition for both
+    writing it (_migrate) and putting it back after a failed freeze (restorable)."""
+    return bool(plan.renames) or bool(migrations.kept_values(plan.keys_added))
+
+
 def _migrate(
     ctx: migrations.Context, plan: Plan, now: datetime
 ) -> tuple[list[migrations.Applied], list[str]]:
-    """The migrations, and the config's renamed keys when the plan has any (the copy of bosun.env
-    kept as it was named for <now>): each migration that ran, and bosun.env's line for the summary."""
+    """The migrations, and the config's renamed and kept keys when the plan may change it
+    (changes_config; the copy of bosun.env kept as it was named for <now>): each migration that ran,
+    and bosun.env's line for the summary."""
     applied = migrations.run(ctx)
-    changed = migrations.write_config(ctx.config_dir, now) if plan.renames else []
+    changed = migrations.write_config(ctx.config_dir, now, plan.keys_added) if changes_config(plan) else []
     if not changed:
         return applied, []
     kept = migrations.config_copy(ctx.config_dir, now).name
@@ -172,8 +180,9 @@ def _step(state_dir: Path, state: UpdateState, step: str, **fields: Any) -> Upda
 
 
 def restorable(plan: Plan) -> tuple[str, ...]:
-    """What a failed freeze puts back: what its locks cover, and bosun.env when it renames keys."""
-    return (*update_backups.FROZEN, *(("config/" + migrations.CONFIG_FILE,) if plan.renames else ()))
+    """What a failed freeze puts back: what its locks cover, and bosun.env when the update may change
+    it (changes_config)."""
+    return (*update_backups.FROZEN, *(("config/" + migrations.CONFIG_FILE,) if changes_config(plan) else ()))
 
 
 def _frozen(state: UpdateState, plan: Plan, state_dir: Path, config_dir: Path) -> UpdateState:
@@ -1109,14 +1118,16 @@ def agents_command(argv: Sequence[str]) -> int:
 def after_update_command(argv: Sequence[str]) -> int:
     """`after-update --state-dir <dir> --config-dir <dir>`, which bosun doctor runs: what the last update
     left me (update_summary.left_to_me, from its record and bosun.env), a line each, its kind and a tab
-    first; nothing when there is none."""
+    first, and for a key its note after another tab when it has one (update_summary.key_note); nothing
+    when there is none."""
     parser = argparse.ArgumentParser(prog=f"update.py {AFTER_UPDATE}", allow_abbrev=False)
     parser.add_argument("--state-dir", type=Path, required=True)
     parser.add_argument("--config-dir", type=Path, required=True)
     args = parser.parse_args(list(argv))
     state = update_state.read(args.state_dir)
     for kind, what in update_summary.left_to_me(state, migrations.assigned_keys(args.config_dir)):
-        print(f"{kind}\t{' '.join(what.split())}")
+        note = update_summary.key_note(what) if kind == "key" else ""
+        print("\t".join(" ".join(part.split()) for part in (kind, what, note) if part))
     return 0
 
 
