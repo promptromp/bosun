@@ -507,8 +507,6 @@ by procedure, not code.
   nudge once it passes, whatever the business-day rule says.
 - **More free-text cases:** ambiguous parents (several items fit), the last nudge turning into a
   proposal to give up (`no-reply`), and replies that answer only part of the question.
-- **The dry run's guard** comes from the installed `bosun` (the settings' hook names
-  `$HOME/.local/bin/bosun`), not from the checkout being rehearsed.
 - **When things happened, beyond outreach.** `ledger sent` and `replied` take `--at` (and a
   Slack ref's own time). Other facts are recorded hours late too: two days of real sessions had
   PR merges, approvals and change requests recorded 1 to 16 hours after GitHub's time, and

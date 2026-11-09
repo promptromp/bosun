@@ -7,8 +7,8 @@ Status: built (2026-10-21), off by default (`BOSUN_APPROVALS_ENABLED=0`). Tracke
 
 The orchestrator's settings have `ask` rules for Slack sends, reactions and canvases,
 `gh pr merge|ready|edit|comment|review|close|update-branch`, `gh api` and `git push`. Other MCP tools
-with a write verb in their name (Jira and Confluence writes, CI builds) get an `ask` from the settings
-file's own `bosun guard` hook. Either `ask` beats auto mode, so each such call opens a Claude Code
+with a write verb in their name (Jira and Confluence writes, CI builds) get an `ask` from the plain
+`bosun guard` hook, which the launch adds (`guard_hook_settings`, `lib/common.sh`). Either `ask` beats auto mode, so each such call opens a Claude Code
 permission prompt.
 In the first week of use that was over a hundred prompts, nearly all a second approval of something
 I had already approved in chat ("1 and 3 yes"). And a prompt waits forever: two approved re-review
@@ -32,7 +32,7 @@ messages sat at their prompt overnight and kept the morning restart from running
 
 The `ask` rules stay, as the backstop: if a hook fails, times out or gives no decision, the prompt
 appears as before. With the flag on, `bosun launch` adds these hooks to the orchestrator (on
-top of its settings file, whose own `bosun guard` hook stays):
+top of its settings file, and after the plain `bosun guard` hook the launch always adds):
 
 | Hook | Mode | Decides |
 |---|---|---|
@@ -43,6 +43,9 @@ top of its settings file, whose own `bosun guard` hook stays):
 The gated calls are one table in `lib/guard.py` (`GATED_MCP`, `GATED_MCP_FAMILIES`,
 `GATED_COMMANDS`). Its Slack tools and commands are the ones the `ask` rules name; its Jira,
 Confluence and CI build tools have no rule and get their prompt from the plain guard (`WRITE_VERBS`).
+A tracker or wiki tool is in a family when `jira` or `confluence` is a word of its name and so is a
+write verb: the name splits on `_`, `-` and lower-to-upper case changes (`name_words`), so
+`jira_add_comment`, `editJiraIssue` and `createConfluencePage` are gated, and `getJiraIssue` is not.
 A site adds its own command prefixes with
 `BOSUN_APPROVALS_GATED_COMMANDS` (and an `ask` rule for each). Bash commands are matched by
 their leading words anywhere in a compound command (`gh pr view 1 && gh pr comment ...` is gated).
@@ -54,7 +57,7 @@ an approved re-run goes through the PermissionRequest hook instead of the plain 
 With `BOSUN_APPROVALS_ENABLED=0` launch adds no approvals hooks. The compaction and signal hooks
 the orchestrator also gets have flags of their own (`BOSUN_COMPACT_CONTEXT`, `BOSUN_HOOK_SIGNALS`).
 Both new hook modes check the flag again on every call and decide nothing, so
-turning it off works at once. The plain `bosun guard` (the settings file's PreToolUse hook) is
+turning it off works at once. The plain `bosun guard` (the PreToolUse hook the launch adds) is
 untouched. `ledger propose` without the new options and every other ledger command behave as
 before.
 

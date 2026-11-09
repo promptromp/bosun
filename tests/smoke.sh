@@ -670,6 +670,16 @@ reads_install_only() { # <settings JSON> <site allow rule> <site deny rule>: as 
 }
 check "... and may read the install, whose files an update asks it to re-read, and nothing more" \
   reads_install_only "$(orchestrator_settings "$ROOT/orchestrator/settings.json")" "Bash(bosun update note:*)" "Edit"
+# The guard comes from the launch, naming the bosun that launched the window: this checkout's, never the
+# installed one in ~/.local/bin, and not from the settings file.
+runs_this_guard() { # <settings JSON>: its PreToolUse hooks run this checkout's `bosun guard`, and no other bosun's
+  jq -e --arg guard "$(printf '%q' "$ROOT/bin/bosun") guard" '[.hooks.PreToolUse[].hooks[].command] as $c
+    | ($c | index($guard)) and ($c | map(select(test("local/bin/bosun"))) | length == 0)' <<<"$1" >/dev/null ||
+    { echo "$1" | jq -c .hooks.PreToolUse && return 1; }
+}
+check "... and its launch settings run this checkout's bosun guard as a PreToolUse hook" runs_this_guard "$(orchestrator_settings "$ROOT/orchestrator/settings.json")"
+check "... which orchestrator/settings.json no longer carries" jq -e 'has("hooks") | not' "$ROOT/orchestrator/settings.json"
+check "... and asks for Chrome's scripting and form filling by Claude Code's own rules" jq -e '.permissions.ask | index("mcp__claude-in-chrome__javascript_tool") and index("mcp__claude-in-chrome__form_input")' "$ROOT/orchestrator/settings.json"
 check "... its stock settings' denies of Edit, Write and NotebookEdit kept" bash -c '
   [ "$(jq -c "[.permissions.deny[] | select(test(\"^(Edit|Write|NotebookEdit)$\"))] | sort" <<<"$1")" = "[\"Edit\",\"NotebookEdit\",\"Write\"]" ]' \
   _ "$(orchestrator_settings "$ROOT/orchestrator/settings.json")"
@@ -1826,6 +1836,7 @@ check "dry run puts this checkout's bosun first on PATH" grep -q "^PATH=$ROOT/bi
 check "dry run loads orchestrator settings and plugin" bash -c 'grep -qx -- --settings "$1" && grep -qx -- --plugin-dir "$1"' _ "$WORK/fake-claude.args"
 check "dry run uses the orchestrator's model and effort" bash -c 'grep -qx opus "$1" && grep -q "\"effortLevel\":\"medium\"" "$1" && grep -q PreToolUse "$1"' _ "$WORK/fake-claude.args"
 check "dry run invokes the morning chores" grep -qx "/bosun:chores morning" "$WORK/fake-claude.args"
+check "dry run runs this checkout's guard, as the orchestrator's launch does" runs_this_guard "$(grep -A1 -x -- --settings "$WORK/fake-claude.args" | tail -1)"
 check "dry run denies the settings' ask list by name" bash -c 'grep -qx -- --disallowedTools "$1" && grep -qx "mcp__plugin_slack_slack__slack_send_message" "$1" && grep -qx "Bash(git push:\*)" "$1"' _ "$WORK/fake-claude.args"
 check "dry run leaves the real ledger alone" bash -c '! "$1" ledger show "review:o/r#9" >/dev/null 2>&1' _ "$BOSUN"
 sleep 1

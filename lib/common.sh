@@ -695,14 +695,15 @@ build_model_effort_args() { # <model> <effort> [settings-file] [extra settings J
   model_effort_args+=(--settings "$settings")
 }
 
-# The settings the orchestrator gets on top of its settings file: with BOSUN_APPROVALS_ENABLED=1,
-# the approvals hooks (`bosun guard --approvals`, `--permission-request` and, after the call,
-# `--post-tool-use` for both PostToolUse and PostToolUseFailure; lib/guard.py); with
+# The settings the orchestrator gets on top of its settings file: the guard (guard_hook_settings), first;
+# with BOSUN_APPROVALS_ENABLED=1, the approvals hooks (`bosun guard --approvals`, `--permission-request`
+# and, after the call, `--post-tool-use` for both PostToolUse and PostToolUseFailure; lib/guard.py); with
 # BOSUN_COMPACT_CONTEXT=1 the compaction hook (compact_hook_settings); with BOSUN_HOOK_SIGNALS=1
 # the signal hooks (signal_hook_settings), the last two on by default; and rules that let it read the
 # install's folders (install_read_settings).
 orchestrator_extra_settings() {
   {
+    guard_hook_settings
     approvals_hook_settings
     compact_hook_settings --orchestrator
     signal_hook_settings "$BOSUN_ORCHESTRATOR"
@@ -721,6 +722,15 @@ install_read_settings() {
   [ -d "$BOSUN_INSTALL-versions" ] && dirs+=("$BOSUN_INSTALL-versions")
   # An absolute path is written //<path> in a permission rule.
   jq -cn '{permissions: {allow: [$ARGS.positional[] | "Read(/\(.)/**)"]}}' --args "${dirs[@]}"
+}
+
+# The orchestrator's PreToolUse guard (`bosun guard`, lib/guard.py), from the bosun that launches the window
+# (BOSUN_CMD: a checkout's own, the install link's for an install), for the orchestrator and `bosun chores
+# --dry-run` alike. Not in orchestrator/settings.json, whose hook named the installed bosun's, so a checkout's
+# rehearsal ran another version's guard, and a site's own settings file dropped it unless it copied the hook.
+guard_hook_settings() {
+  jq -cn --arg command "$(printf '%q' "$BOSUN_CMD") guard" \
+    '{hooks: {PreToolUse: [{matcher: "Bash|mcp__.*", hooks: [{type: "command", command: $command}]}]}}'
 }
 
 approvals_hook_settings() {
