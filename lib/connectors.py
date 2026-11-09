@@ -9,11 +9,16 @@ means none; `all` means no limit. A name that resolves to nothing is left out: a
 less than its list, never more.
 
 Usage: connectors.py claude --list <value> --cwd <dir> --state-dir <dir> --agent-bin <claude> [--kept-only]
+                            [--missing-to <file>]
            Claude Code's settings, always a JSON object: {"allowedMcpServers": [...]}, or {} for `all`;
            a line on stderr per name not found. Runs `claude mcp list` in <dir> only for a name it
-           cannot resolve otherwise (never with --kept-only), and keeps what it found in
-           <state-dir>/connectors.json for when the listing fails. Whatever else goes wrong, it prints
+           cannot resolve otherwise (never with --kept-only), and keeps in <state-dir>/connectors.json
+           what that lookup found for the names it was asked about (a name it no longer shows is
+           dropped), for when the listing fails. Whatever else goes wrong, it prints
            {"allowedMcpServers": []} and exits 1: a window starts with less, never with more.
+           --missing-to writes the names left out to <file>, on every exit 0 or 1, as a JSON array
+           (after an unexpected error, every name of the list): what a caller tells me, never parsed
+           from stderr.
        connectors.py codex --list <value> --agent-bin <codex>
            Codex's launch arguments, one per line: each listed server the list does not name switched
            off, and ChatGPT's connectors unless the list is `all`.
@@ -29,7 +34,7 @@ import argparse
 import json
 import string
 import sys
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -153,11 +158,14 @@ def load_kept(state_dir: Path) -> dict[str, str]:
     return {str(name): str(url) for name, url in kept.items()}
 
 
-def save_kept(state_dir: Path, found: Mapping[str, str]) -> None:
-    """Merge <found> into what was kept. Best-effort: a launch uses what it found even when it cannot
-    keep it, so a write that fails is said on stderr and nothing more. Each writer has a temp file of
-    its own, so launches saving at once never break one another (the last one's merge wins)."""
-    kept = {**load_kept(state_dir), **found}
+def save_kept(state_dir: Path, asked: Iterable[str], found: Mapping[str, str]) -> None:
+    """A lookup's answer for the names it was <asked> about: their kept URLs become <found> (a name
+    asked about and not found is dropped, so `--kept-only` agrees with the launch), and the other names
+    kept stay. Best-effort: a launch uses what it found even when it cannot keep it, so a write that
+    fails is said on stderr and nothing more. Each writer has a temp file of its own, so launches saving
+    at once never break one another (the last one's write wins)."""
+    asked = set(asked)
+    kept = {**{name: url for name, url in load_kept(state_dir).items() if name not in asked}, **found}
     try:
         write_atomically(state_dir / KEPT_FILE, json.dumps(kept, indent=2, sort_keys=True) + "\n")
     except OSError as exc:
@@ -199,37 +207,45 @@ def looked_up_urls(allowed: Allowed, plugins: Mapping[str, Any], args: argparse.
     except claude_state.McpListError as exc:
         say(f"claude mcp list failed ({exc}); using the addresses kept from the last launch")
         return load_kept(args.state_dir)
-    found = {
-        name: targets[name]
-        for name in allowed.names
-        if needs_url(name, plugins) and is_url(targets.get(name, ""))
-    }
-    if found:
-        save_kept(args.state_dir, found)
+    asked = [name for name in allowed.names if needs_url(name, plugins)]
+    found = {name: targets[name] for name in asked if is_url(targets.get(name, ""))}
+    save_kept(args.state_dir, asked, found)
     return found
 
 
-def claude_settings(args: argparse.Namespace) -> tuple[dict[str, Any], int]:
+def claude_settings(args: argparse.Namespace) -> tuple[dict[str, Any], tuple[str, ...]]:
+    """The settings for the list, and the names left out of them."""
     allowed = parse(args.list)
     if allowed.everything:
-        return {}, 0
+        return {}, ()
     plugins = claude_state.plugin_mcp_servers()
     resolution = claude_entries(allowed, plugins, looked_up_urls(allowed, plugins, args))
     for name in resolution.missing:
         say(f"{name} not found, so this window starts without it")
-    return {"allowedMcpServers": list(resolution.entries or ())}, 1 if resolution.missing else 0
+    return {"allowedMcpServers": list(resolution.entries or ())}, resolution.missing
+
+
+def write_missing(path: Path, missing: Sequence[str]) -> None:
+    """The names left out, as a JSON array, for the caller. A write that fails is said on stderr."""
+    try:
+        path.write_text(json.dumps(list(missing), ensure_ascii=False) + "\n")
+    except OSError as exc:
+        say(f"could not write the names left out to {path} ({exc.strerror or exc})")
 
 
 def cmd_claude(args: argparse.Namespace) -> int:
     """Always a JSON object on stdout, so the launch never reads a failure as `all` (no limit)."""
     try:
-        settings, code = claude_settings(args)
+        settings, missing = claude_settings(args)
+        code = 1 if missing else 0
     except ConnectorsError:
         raise
     except Exception as exc:  # noqa: BLE001 - whatever goes wrong, the window starts with no server
         why = " ".join(f"{type(exc).__name__}: {exc}".split())  # one line, whatever the exception says
         say(f"could not resolve the list ({why}), so this window starts without servers")
-        settings, code = {"allowedMcpServers": []}, 1
+        settings, missing, code = {"allowedMcpServers": []}, parse(args.list).names, 1
+    if args.missing_to is not None:
+        write_missing(args.missing_to, missing)
     print(json.dumps(settings, separators=(",", ":")))
     return code
 
@@ -257,6 +273,7 @@ def parser() -> argparse.ArgumentParser:
     claude.add_argument("--state-dir", required=True, type=Path)
     claude.add_argument("--agent-bin", required=True)
     claude.add_argument("--kept-only", action="store_true")
+    claude.add_argument("--missing-to", type=Path)
     claude.set_defaults(run=cmd_claude)
     codex = commands.add_parser("codex", help="Codex's launch arguments")
     codex.add_argument("--list", required=True)

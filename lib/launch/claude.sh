@@ -10,7 +10,8 @@ AGENT_BIN="$BOSUN_CLAUDE_BIN"
 # Both get the connectors their list names (connector_settings), in place of any the settings file names.
 # shellcheck disable=SC2154  # build_model_effort_args and set_autocompact_flag (lib/common.sh) set their arrays
 build_agent_args() { # <window> <session name> <model> <effort>
-  # Here, in the launch's own shell: the lookup runs once, and a failure stops the launch.
+  # Here, in the launch's own shell: the lookup runs once, and a failure stops the launch. The settings
+  # built below must still hold the limit (require_connector_limit).
   set_connector_settings "$1"
   if is_orchestrator "$1"; then
     build_model_effort_args "$3" "$4" "$BOSUN_ORCHESTRATOR_SETTINGS" \
@@ -18,6 +19,7 @@ build_agent_args() { # <window> <session name> <model> <effort>
         orchestrator_extra_settings
         connector_settings "$1"
       } | merge_settings)"
+    require_connector_limit "$1" "$connector_settings_json"
     # shellcheck disable=SC2206  # the flags are words, on purpose
     agent_args=($BOSUN_ORCHESTRATOR_FLAGS "${model_effort_args[@]}"
       --plugin-dir "$BOSUN_INSTALL/orchestrator/plugin"
@@ -27,6 +29,7 @@ build_agent_args() { # <window> <session name> <model> <effort>
       repo_session_settings "$1"
       connector_settings "$1"
     } | merge_settings)"
+    require_connector_limit "$1" "$connector_settings_json"
     # shellcheck disable=SC2206  # the flags are words, on purpose
     agent_args=($BOSUN_CLAUDE_FLAGS ${model_effort_args[@]+"${model_effort_args[@]}"})
   fi

@@ -80,6 +80,7 @@ set_rehearsal_args() {
     die "could not tell which connectors the orchestrator may reach (lib/connectors.py)"
   build_model_effort_args "$BOSUN_ORCHESTRATOR_MODEL" "$BOSUN_ORCHESTRATOR_EFFORT" "$BOSUN_ORCHESTRATOR_SETTINGS" \
     "$(printf '%s\n' "$(guard_hook_settings)" "$connectors" | merge_settings)"
+  require_connector_limit "$BOSUN_ORCHESTRATOR" "$connectors"
   [ -z "$BOSUN_ORCHESTRATOR_CONNECTORS" ] || export ENABLE_CLAUDEAI_MCP_SERVERS=true
 }
 set_rehearsal_args

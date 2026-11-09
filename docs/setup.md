@@ -282,7 +282,8 @@ State and logs go to `~/.local/state/bosun/`:
   and anew when a journal starts again (moved aside, emptied or removed); moved aside itself, it
   gives the Mac a new id too. Either way, both journals carry on under the new id
 - `logs/`: `morning-YYYY-MM-DD.log`, `checkin-YYYY-MM-DD.log`, `learn-YYYY-MM-DD.log`,
-  `impact-YYYY-MM-DD.log`, `hook-YYYY-MM-DD.log` (the repo sessions' prompt hook), and what launchd
+  `impact-YYYY-MM-DD.log`, `hook-YYYY-MM-DD.log` (the repo sessions' prompt hook), `launch-YYYY-MM-DD.log`
+  (the alerts a window's launch sent, such as connectors it started without), and what launchd
   captures from each job (`launchd.{out,err}`, `watchdog.launchd.{out,err}`, `learn.launchd.{out,err}`)
 - `watchdog.json`: the watchdog's de-duplication state
 - `login.json`: the last Claude Code login check (see Claude Code login)
@@ -367,9 +368,10 @@ At launch bosun turns the list into Claude Code's `allowedMcpServers`, in the wi
 place of any a site settings file names. A server you added yourself goes by its name, a plugin's by its
 URL or command, and a claude.ai connector by the URL `claude mcp list` shows for it. bosun runs that
 listing (a few seconds) only when the list names a claude.ai connector, once per launch, and keeps what it
-found in `connectors.json`; if the listing fails (at a morning wake, before the network is up), the launch
-uses what was kept. A name it cannot find is left out, never let in as more: the launch logs a line, and
-for the orchestrator it also alerts you (`bosun alert`). The list is read at launch, so a change applies
+found in `connectors.json` (a name it no longer shows is dropped there); if the listing fails (at a
+morning wake, before the network is up), the launch uses what was kept. A name it cannot find is left
+out, never let in as more: the launch logs a line, and for the orchestrator it also alerts you (`bosun
+alert`, whose output goes to `launch-YYYY-MM-DD.log`). The list is read at launch, so a change applies
 once the window starts again.
 
 ### How sessions are resumed

@@ -144,17 +144,18 @@ class KeptTest(unittest.TestCase):
         for text in ("{not json", "[1, 2]", json.dumps({MAIL: 3}), "\x00\xff"):
             kept.write_text(text)
             self.assertEqual(connectors.load_kept(self.state), {}, text)
-        connectors.save_kept(self.state, {MAIL: MAIL_URL})
+        connectors.save_kept(self.state, [MAIL], {MAIL: MAIL_URL})
         self.assertEqual(connectors.load_kept(self.state), {MAIL: MAIL_URL})
 
-    def test_saving_merges_into_what_was_kept(self) -> None:
+    def test_a_save_replaces_only_the_names_asked_about(self) -> None:
+        chat, gone = "claude.ai Acme Chat", "claude.ai Acme Gone"
         connectors.save_kept(
-            self.state, {MAIL: "https://old.example.com/mcp", "claude.ai Acme Chat": "https://c"}
+            self.state,
+            [MAIL, chat, gone],
+            {MAIL: "https://old.example.com/mcp", chat: "https://c", gone: "https://g"},
         )
-        connectors.save_kept(self.state, {MAIL: MAIL_URL})
-        self.assertEqual(
-            connectors.load_kept(self.state), {MAIL: MAIL_URL, "claude.ai Acme Chat": "https://c"}
-        )
+        connectors.save_kept(self.state, [MAIL, gone], {MAIL: MAIL_URL})
+        self.assertEqual(connectors.load_kept(self.state), {MAIL: MAIL_URL, chat: "https://c"})
         self.assertEqual(sorted(p.name for p in self.state.iterdir()), ["connectors.json"])
 
     def test_a_save_whose_rename_finds_its_temp_gone_never_crashes(self) -> None:
@@ -162,7 +163,7 @@ class KeptTest(unittest.TestCase):
             mock.patch("os.replace", side_effect=FileNotFoundError(2, "No such file or directory")),
             mock.patch("sys.stderr", io.StringIO()) as err,
         ):
-            connectors.save_kept(self.state, {MAIL: MAIL_URL})
+            connectors.save_kept(self.state, [MAIL], {MAIL: MAIL_URL})
         self.assertTrue(err.getvalue().startswith("connectors: could not keep the addresses found"))
         self.assertEqual(connectors.load_kept(self.state), {})
 
@@ -170,7 +171,9 @@ class KeptTest(unittest.TestCase):
         """Launches starting at once (the morning start) each save what they found."""
         script = (
             "import sys; from pathlib import Path; sys.path.insert(0, sys.argv[1]); import connectors\n"
-            "for i in range(40): connectors.save_kept(Path(sys.argv[2]), {f'claude.ai {sys.argv[3]} {i}': 'https://x'})"
+            "for i in range(40):\n"
+            "    n = f'claude.ai {sys.argv[3]} {i}'\n"
+            "    connectors.save_kept(Path(sys.argv[2]), [n], {n: 'https://x'})"
         )
         writers = [
             subprocess.Popen(
@@ -248,6 +251,48 @@ class CommandTest(unittest.TestCase):
         self.assertEqual(self.settings(out), [{"serverUrl": MAIL_URL}, {"serverName": "acme-local"}])
         self.assertEqual(connectors.load_kept(self.state), {MAIL: MAIL_URL})
 
+    def test_a_kept_name_a_later_lookup_no_longer_shows_is_dropped(self) -> None:
+        """So that `--kept-only` (the fingerprint) agrees with the launch that looked it up."""
+        gone = "claude.ai Acme Gone"
+        connectors.save_kept(
+            self.state,
+            [gone, "claude.ai Acme Other"],
+            {gone: "https://g", "claude.ai Acme Other": "https://o"},
+        )
+        code, out, _ = self.claude(f"{MAIL}, {gone}", printing(self.root, MCP_LIST))
+        self.assertEqual((code, self.settings(out)), (1, [{"serverUrl": MAIL_URL}]))
+        self.assertEqual(
+            connectors.load_kept(self.state), {MAIL: MAIL_URL, "claude.ai Acme Other": "https://o"}
+        )
+        kept_only = self.claude(f"{MAIL}, {gone}", printing(self.root, MCP_LIST), "--kept-only")
+        self.assertEqual(kept_only[:2], (code, out))
+
+    def test_missing_to_holds_the_names_left_out(self) -> None:
+        missing = self.root / "missing.json"
+        code, _, _ = self.claude(
+            f"{MAIL}, {ODD_NAME}, acme-local", printing(self.root, MCP_LIST), "--missing-to", str(missing)
+        )
+        self.assertEqual((code, json.loads(missing.read_text())), (1, [ODD_NAME]))
+        for value in ("acme-local", "all", ""):
+            code, _, _ = self.claude(value, self.root / "no-claude", "--missing-to", str(missing))
+            self.assertEqual((code, json.loads(missing.read_text())), (0, []), value)
+
+    def test_missing_to_after_an_unexpected_failure_holds_every_name(self) -> None:
+        missing = self.root / "missing.json"
+        with mock.patch.object(claude_state, "plugin_mcp_servers", side_effect=RuntimeError("boom")):
+            code, out, _ = self.claude(
+                f"{MAIL}, acme-local", self.root / "no-claude", "--missing-to", str(missing)
+            )
+        self.assertEqual((code, out), (1, '{"allowedMcpServers":[]}\n'))
+        self.assertEqual(json.loads(missing.read_text()), [MAIL, "acme-local"])
+
+    def test_missing_to_that_cannot_be_written_still_gives_the_settings(self) -> None:
+        code, out, err = self.claude(
+            "acme-local", self.root / "no-claude", "--missing-to", str(self.root / "no" / "such")
+        )
+        self.assertEqual((code, self.settings(out)), (0, [{"serverName": "acme-local"}]))
+        self.assertIn("connectors: could not write the names left out", err)
+
     def test_no_lookup_without_a_name_that_needs_one(self) -> None:
         agent = printing(self.root, MCP_LIST)
         code, out, _ = self.claude("acme-local, https://mcp.example.com/*", agent)
@@ -256,7 +301,7 @@ class CommandTest(unittest.TestCase):
         self.assertFalse((self.root / "calls").exists())
 
     def test_kept_only_never_looks_up(self) -> None:
-        connectors.save_kept(self.state, {MAIL: MAIL_URL})
+        connectors.save_kept(self.state, [MAIL], {MAIL: MAIL_URL})
         agent = printing(self.root, MCP_LIST)
         code, out, err = self.claude(f"{MAIL}, claude.ai Acme Gone", agent, "--kept-only")
         self.assertEqual(code, 1)
@@ -265,7 +310,7 @@ class CommandTest(unittest.TestCase):
         self.assertFalse((self.root / "calls").exists())
 
     def test_failed_lookup_uses_kept(self) -> None:
-        connectors.save_kept(self.state, {MAIL: MAIL_URL})
+        connectors.save_kept(self.state, [MAIL], {MAIL: MAIL_URL})
         code, out, err = self.claude(MAIL, fake_agent(self.root, "exit 1"))
         self.assertEqual(code, 0)
         self.assertEqual(self.settings(out), [{"serverUrl": MAIL_URL}])
@@ -273,7 +318,7 @@ class CommandTest(unittest.TestCase):
         self.assertIn("); using the addresses kept from the last launch", err)
 
     def test_lookup_timeout_uses_kept(self) -> None:
-        connectors.save_kept(self.state, {MAIL: MAIL_URL})
+        connectors.save_kept(self.state, [MAIL], {MAIL: MAIL_URL})
         started = time.monotonic()
         with mock.patch.object(connectors, "LOOKUP_TIMEOUT_SECONDS", 0.5):
             code, out, err = self.claude(MAIL, fake_agent(self.root, "exec sleep 20"))

@@ -817,13 +817,39 @@ printf 'claude.ai Acme Chat: https://chat.example.com/mcp - ✔ Connected\n' >"$
 out="$(cd "$REPO_A" && "${ORCH[@]}" BOSUN_ORCHESTRATOR_CONNECTORS="claude.ai Acme Chat, claude.ai Acme Gone" "$BOSUN" launch orch 2>&1)"
 check "a name not found is left out" allows "$out" '$a == [{"serverUrl": "https://chat.example.com/mcp"}]'
 check "... logged" contains "$out" "connectors: claude.ai Acme Gone not found, so this window starts without it"
-check "... and the orchestrator's launch alerts me" contains "$out" "alert (notification only; BOSUN_ALERT_SLACK_USER is empty): orch: started without connector(s) it may use: claude.ai Acme Gone"
+LAUNCH_LOG="$BOSUN_LOG_DIR/launch-$(date +%F).log"
+check "... and the orchestrator's launch alerts me, the alert's output in the launch log" wait_for 10 grep -qF \
+  "alert (notification only; BOSUN_ALERT_SLACK_USER is empty): orch: started without connector(s) it may use: claude.ai Acme Gone" "$LAUNCH_LOG"
+check "... never on the window's screen" bash -c 'grep -q "alerting you that it started without connector(s) it may use: claude.ai Acme Gone" <<<"$1" && ! grep -q "notification only" <<<"$1"' _ "$out"
 out="$(cd "$REPO_A" && "${CN[@]}" BOSUN_CONNECTORS="claude.ai Acme Gone" "$BOSUN" launch alpha 2>&1)"
 check "a repo window's missing name is logged, without an alert" bash -c 'grep -q "claude.ai Acme Gone not found" <<<"$1" && ! grep -q "started without connector" <<<"$1"' _ "$out"
 : >"$WORK/mcp-claude.calls"
 out="$(cd / && "${ORCH[@]}" BOSUN_ORCHESTRATOR_CONNECTORS="claude.ai Acme Chat, claude.ai Acme Gone" "$BOSUN" launch --fingerprint orch 2>/dev/null)"
 check "launch --fingerprint looks nothing up" bash -c '[ ! -s "$1" ] && jq -e .args <<<"$2" >/dev/null' _ "$WORK/mcp-claude.calls" "$out"
 check "... and agrees with the launch, from what was kept" bash -c '[ "$(jq -cS .fingerprint "$1")" = "$(jq -cS . <<<"$2")" ]' _ "$BOSUN_STATE_DIR/launches/smoke/orch.json" "$out"
+# A connector once kept that a later lookup no longer shows: the launch leaves it out, so must the fingerprint.
+printf 'claude.ai Acme Chat: https://chat.example.com/mcp - ✔ Connected\nclaude.ai Acme Old: https://old.example.com/mcp - ✔ Connected\n' >"$WORK/mcp-list.out"
+(cd "$REPO_A" && "${ORCH[@]}" BOSUN_ORCHESTRATOR_CONNECTORS="claude.ai Acme Chat, claude.ai Acme Old" "$BOSUN" launch orch >/dev/null 2>&1)
+printf 'claude.ai Acme Chat: https://chat.example.com/mcp - ✔ Connected\n' >"$WORK/mcp-list.out"
+out="$(cd "$REPO_A" && "${ORCH[@]}" BOSUN_ORCHESTRATOR_CONNECTORS="claude.ai Acme Chat, claude.ai Acme Old" "$BOSUN" launch orch 2>&1)"
+check "a kept connector the lookup no longer shows is left out, and dropped from what was kept" bash -c '
+  jq -e "has(\"claude.ai Acme Old\") | not" "$2" >/dev/null && grep -q "claude.ai Acme Old not found" <<<"$1"' _ "$out" "$BOSUN_STATE_DIR/connectors.json"
+check "... so the fingerprint agrees with that launch" bash -c '[ "$(jq -cS .fingerprint "$1")" = "$(cd / && "${@:2}" launch --fingerprint orch 2>/dev/null | jq -cS .)" ]' \
+  _ "$BOSUN_STATE_DIR/launches/smoke/orch.json" "${ORCH[@]}" BOSUN_ORCHESTRATOR_CONNECTORS="claude.ai Acme Chat, claude.ai Acme Old" "$BOSUN"
+# Fail closed in the shell too: a resolver answer that is not one JSON object, settings built without the
+# window's limit, or settings asked for before the lookup ran, each stop the launch.
+check "a resolver answer that is not one JSON object stops the launch" bash -c '
+  source "$1/lib/common.sh"; load_config
+  for answer in "not json" "{}{}" "[]"; do
+    python3() { printf "%s\n" "$answer"; }
+    ! resolve_connectors alpha acme-local "$PWD" 0 >/dev/null 2>&1 || { echo "took: $answer"; exit 1; }
+  done' _ "$ROOT"
+check "settings that lost the window's limit are refused" fails_with "lost its connector limit" bash -c '
+  source "$1/lib/common.sh"; load_config
+  model_effort_args=(--model opus --settings "{\"effortLevel\":\"medium\"}")
+  require_connector_limit alpha "{\"allowedMcpServers\":[]}"' _ "$ROOT"
+check "... and settings asked for before the lookup ran" fails_with "were not resolved before" bash -c '
+  source "$1/lib/common.sh"; load_config; connector_settings alpha' _ "$ROOT"
 check "a list naming all and more is refused" fails_with "stands alone" "${ORCH[@]}" BOSUN_ORCHESTRATOR_CONNECTORS="all, claude.ai Acme Chat" "$BOSUN" launch orch
 cat >"$WORK/connectors-sessions.yml" <<YAML
 sessions:
@@ -848,11 +874,11 @@ out="$(cd "$REPO_A" && "${ORCH[@]}" BOSUN_ORCHESTRATOR_CONNECTORS="$TRICKY" "$BO
 check "the same name in BOSUN_ORCHESTRATOR_CONNECTORS" allows "$out" "\$a == [{\"serverUrl\": $(jq -n --arg t "$TRICKY" '$t')}]"
 check "... never run" test ! -e "$WORK/pwned"
 out="$(cd "$REPO_A" && "${ORCH[@]}" BOSUN_ORCHESTRATOR_CONNECTORS="claude.ai Acme \"Mail\" \$(touch $WORK/pwned)" "$BOSUN" launch orch 2>&1)"
-check "... and in an alert" bash -c 'grep -qF "started without connector(s) it may use: claude.ai Acme \"Mail\" \$(touch $2/pwned)" <<<"$1" && [ ! -e "$2/pwned" ]' _ "$out" "$WORK"
+check "... and in an alert" wait_for 10 bash -c 'grep -qF "notification only; BOSUN_ALERT_SLACK_USER is empty): orch: started without connector(s) it may use: claude.ai Acme \"Mail\" \$(touch $2/pwned)" "$1" && [ ! -e "$2/pwned" ]' _ "$LAUNCH_LOG" "$WORK"
 jq '. + {allowedMcpServers: [{serverName: "site-wide"}]}' "$ROOT/orchestrator/settings.json" >"$WORK/site-mcp-settings.json"
 check "a site settings file's own allowedMcpServers is replaced by the window's list" \
   allows "$(cd "$REPO_A" && "${ORCH[@]}" BOSUN_ORCHESTRATOR_SETTINGS="$WORK/site-mcp-settings.json" BOSUN_ORCHESTRATOR_CONNECTORS=acme-local "$BOSUN" launch orch 2>&1)" '$a == [{"serverName": "acme-local"}]'
-rm -f "$WORK/mcp-claude.calls" "$BOSUN_STATE_DIR/connectors.json"
+rm -f "$WORK/mcp-claude.calls" "$BOSUN_STATE_DIR/connectors.json" "$LAUNCH_LOG"
 
 echo "knowledge (kg, fixture acme knowledge base)"
 # A config dir of its own, so doctor and the rest of the suite see no knowledge base.

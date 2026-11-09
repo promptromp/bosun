@@ -875,40 +875,60 @@ set_connector_settings() { # <name>
   connector_settings_window="$1"
 }
 
-# Window <name>'s settings from set_connector_settings, printed. In $(...), only after
-# set_connector_settings ran for <name> in the shell itself.
+# Window <name>'s settings from set_connector_settings, printed. It never resolves them itself: in $(...),
+# where it runs, a die would be lost and the window started without its limit, so a window that
+# set_connector_settings did not resolve in the shell itself is refused.
 connector_settings() { # <name>
-  set_connector_settings "$1"
+  [ "${connector_settings_window-}" = "$1" ] ||
+    die "the connectors of '$1' were not resolved before its settings were built (set_connector_settings)"
   printf '%s\n' "$connector_settings_json"
 }
-
-# lib/connectors.py's line for a name it left out, after the name.
-CONNECTOR_NOT_FOUND=" not found, so this window starts without it"
 
 # The Claude Code settings that limit <window> to <list>, as lib/connectors.py resolves them in <dir>: it
 # runs `claude mcp list` there only for a name nothing else resolves, never with CONNECTOR_LOOKUP=0 (then
 # from what earlier lookups kept). Its lines go to the log, on stderr. A name not found is left out; with
-# <alert> 1, `bosun alert` says so, in the background. Prints nothing and fails on a list it cannot read
-# or no answer (R7: empty output is never taken for `all`).
+# <alert> 1, `bosun alert` says which (alert_missing_connectors). Prints nothing and fails on a list it
+# cannot read or on anything but one JSON object (R7: a failure is never taken for `all`).
 resolve_connectors() { # <window> <list> <dir> <alert: 0|1>
-  local errors json code=0 line name missing=""
+  local work json code=0 line
   local -a kept_only=()
   [ "${CONNECTOR_LOOKUP:-1}" = 0 ] && kept_only=(--kept-only)
-  errors="$(mktemp "${TMPDIR:-/tmp}/bosun-connectors.XXXXXX")" || return 1
+  work="$(mktemp -d "${TMPDIR:-/tmp}/bosun-connectors.XXXXXX")" || return 1
   json="$(python3 "$BOSUN_ROOT/lib/connectors.py" claude --agent-bin "$BOSUN_CLAUDE_BIN" --list="$2" \
-    --cwd "$3" --state-dir "$BOSUN_STATE_DIR" ${kept_only[@]+"${kept_only[@]}"} 2>"$errors")" || code=$?
-  while IFS= read -r line; do
-    log "$1: $line" >&2
-    name="${line#connectors: }"
-    [ "${name%"$CONNECTOR_NOT_FOUND"}" = "$name" ] || missing="${missing:+$missing, }${name%"$CONNECTOR_NOT_FOUND"}"
-  done <"$errors"
-  rm -f "$errors"
-  [ -n "$json" ] && [ "$code" -lt 2 ] || return 1
-  if [ "$code" = 1 ] && [ "$4" = 1 ]; then
-    # Without a name, the resolver failed as a whole: the window starts with none of its list.
-    "$BOSUN" alert "$1: started without connector(s) it may use: ${missing:-$2}" >&2 &
+    --cwd "$3" --state-dir "$BOSUN_STATE_DIR" --missing-to "$work/missing.json" \
+    ${kept_only[@]+"${kept_only[@]}"} 2>"$work/errors")" || code=$?
+  while IFS= read -r line; do log "$1: $line" >&2; done <"$work/errors"
+  if [ "$code" -lt 2 ] && jq -se 'length == 1 and (.[0] | type == "object")' <<<"$json" >/dev/null 2>&1; then
+    [ "$code" = 1 ] && [ "$4" = 1 ] && alert_missing_connectors "$1" "$work/missing.json" "$2"
+    rm -rf "$work"
+    printf '%s\n' "$json"
+    return 0
   fi
-  printf '%s\n' "$json"
+  rm -rf "$work"
+  return 1
+}
+
+# `bosun alert` that <window> started without the names lib/connectors.py left out (<missing file>, a JSON
+# array; all of <list> if it cannot be read). Detached, its output in the day's launch log: never on the
+# window's screen, never a child of the agent the launch becomes, never holding a $(...) open.
+alert_missing_connectors() { # <window> <missing file> <list>
+  local names log_file
+  names="$(jq -er 'if type == "array" and length > 0 then join(", ") else error end' "$2" 2>/dev/null)" || names="$3"
+  log_file="$BOSUN_LOG_DIR/launch-$(date +%F).log"
+  log "$1: alerting you that it started without connector(s) it may use: $names (see $log_file)" >&2
+  ("$BOSUN" alert "$1: started without connector(s) it may use: $names" </dev/null >>"$log_file" 2>&1 &)
+}
+
+# Dies unless the launch settings in model_effort_args (build_model_effort_args) hold <connector JSON>'s
+# allowedMcpServers when it has one: a merge that failed must never start a window with every server.
+require_connector_limit() { # <window> <connector JSON>
+  local i settings='{}'
+  jq -e 'has("allowedMcpServers")' <<<"$2" >/dev/null || return 0
+  for ((i = 0; i < ${#model_effort_args[@]}; i++)); do
+    [ "${model_effort_args[$i]}" != --settings ] || settings="${model_effort_args[$((i + 1))]}"
+  done
+  jq -e --argjson want "$2" '.allowedMcpServers == $want.allowedMcpServers' <<<"$settings" >/dev/null 2>&1 ||
+    die "the launch settings of '$1' lost its connector limit; not starting it with every server"
 }
 
 # The bosun window this command runs in (from tmux's TMUX_PANE, when the pane belongs to the

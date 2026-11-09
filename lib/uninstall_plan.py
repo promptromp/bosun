@@ -112,6 +112,7 @@ LOG_FILES = tuple(
         "learn-*.log",
         "hook-*.log*",
         "impact-*.log",
+        "launch-*.log",
         "launchd.out",
         "launchd.err",
         "*.launchd.out",
