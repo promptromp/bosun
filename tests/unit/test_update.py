@@ -450,18 +450,13 @@ class ReleaseTest(World):
         origin = self.new.parent.parent / "origin.git"
         versions.git("init", "-q", "--bare", str(origin))
         identity = ("-c", "user.name=acme", "-c", "user.email=dev@example.com", "-c", "commit.gpgsign=false")
-        # A commit, a push or a fetch starts git's auto maintenance detached, in the folder; the prune
-        # keeps a folder a running process has open, so none may still run when it looks.
-        quiet = ("-c", "maintenance.auto=false")
         made = []
         for commit in ("a" * 40, "b" * 40):
             folder = versions.legacy_folder(self.new.parent, commit)
             versions.git("clone", "-q", str(origin), str(folder))
-            versions.git(
-                "-C", str(folder), *identity, *quiet, "commit", "-q", "--allow-empty", "-m", "a release"
-            )
-            versions.git("-C", str(folder), *quiet, "push", "-q", "origin", "HEAD:main")
-            versions.git("-C", str(folder), *quiet, "fetch", "-q", "origin")
+            versions.git("-C", str(folder), *identity, "commit", "-q", "--allow-empty", "-m", "a release")
+            versions.git("-C", str(folder), "push", "-q", "origin", "HEAD:main")
+            versions.git("-C", str(folder), "fetch", "-q", "origin")
             versions.git("-C", str(folder), "config", "bosun.managed", "true")
             made.append(folder)
         mine, clean = made
@@ -471,6 +466,9 @@ class ReleaseTest(World):
             mock.patch.object(update_facts, "open_windows", return_value=[]),
             mock.patch.object(update, "_doctor", return_value=[]),
             mock.patch.object(update_backups, "prune", return_value=[]),
+            # Whether a process uses a folder is test_versions' (lsof and ps for real); on a busy
+            # machine they may not answer in time, and the prune then rightly keeps every folder.
+            mock.patch.object(versions, "_in_use", return_value=False),
         ):
             done = update.release(self.record("checked"))
         self.assertTrue(mine.is_dir())
