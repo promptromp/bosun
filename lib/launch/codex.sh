@@ -6,6 +6,46 @@
 # shellcheck disable=SC2034  # for run_agent, in the script that sources this
 AGENT_BIN="$BOSUN_CODEX_BIN"
 
+# Sets codex_connector_args to the launch arguments that limit window <name>, launched in this folder, to
+# its list (window_connectors; docs/design/connectors.md): `-c mcp_servers.<key>.enabled=false` for each
+# server it does not name, and `--disable apps`, as lib/connectors.py prints them. None for `all`. Once
+# per process: a launch builds its arguments twice, and the second time reuses the first lookup. A
+# listing that fails, or arguments that are not what it prints, stop the launch: the window never starts
+# with a server its list does not name. Call it in the shell itself, not in $(...), which would lose both
+# the result and the die.
+set_codex_connector_args() { # <name>
+  [ "${codex_connector_window-}" = "$1" ] && return 0
+  local list output line
+  list="$(window_connectors "$1")" || die "could not read the connectors of '$1' in $BOSUN_SESSIONS_FILE"
+  # Its reason for a failure goes to the log on stderr; the list is its own argument, so one that
+  # starts with "-" is no flag.
+  output="$(python3 "$BOSUN_ROOT/lib/connectors.py" codex --agent-bin "$BOSUN_CODEX_BIN" --list="$list")" ||
+    die "'$1' does not start: could not tell which servers its connectors switch off (lib/connectors.py, above)"
+  codex_connector_args=()
+  if [ -n "$output" ]; then
+    while IFS= read -r line; do codex_connector_args+=("$line"); done <<<"$output"
+  fi
+  codex_connector_args_valid "$list" ||
+    die "'$1' does not start: lib/connectors.py gave arguments that switch off the wrong servers"
+  codex_connector_window="$1"
+}
+
+# Whether codex_connector_args are what lib/connectors.py codex prints for <list>: whole `-c`
+# `mcp_servers.<key>.enabled=false` pairs, then `--disable apps`; or nothing, for `all`. Anything else is
+# no answer, never taken for "no limit".
+codex_connector_args_valid() { # <list>
+  local i=0 n=${#codex_connector_args[@]} list="${1//[[:space:]]/}"
+  [ "$n" -gt 0 ] || [ "$list" = all ] || return 1
+  [ "$n" -gt 0 ] || return 0
+  while [ "$((n - i))" -ge 2 ] && [ "${codex_connector_args[$i]}" = -c ]; do
+    case "${codex_connector_args[$((i + 1))]}" in
+      mcp_servers.*.enabled=false) i=$((i + 2)) ;;
+      *) return 1 ;;
+    esac
+  done
+  [ "$((n - i))" = 2 ] && [ "${codex_connector_args[$i]}" = --disable ] && [ "${codex_connector_args[$((i + 1))]}" = apps ]
+}
+
 # What Codex's sandbox must let a session reach. It keeps a repo's .git read-only by default, so nothing
 # could be committed; a task also goes through bosun's state, and the network for git and gh.
 # What needs more than that (a login in the Keychain) goes past the sandbox through the reviewer.
@@ -23,6 +63,9 @@ build_agent_args() { # <window> <session name> <model> <effort>
     -c "notify=$notify")
   [ -n "$3" ] && [ "$3" != "-" ] && agent_args+=(--model "$3")
   [ -n "$4" ] && [ "$4" != "-" ] && agent_args+=(-c "model_reasoning_effort=\"$4\"")
+  # Here, in the launch's own shell: the listing runs once, and a failure stops the launch.
+  set_codex_connector_args "$1"
+  agent_args+=(${codex_connector_args[@]+"${codex_connector_args[@]}"})
   return 0
 }
 

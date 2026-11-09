@@ -217,8 +217,10 @@ class McpServersTest(unittest.TestCase):
             "echo 'No MCP servers configured.'": "no server",
         }
         for body, why in cases.items():
+            # Short only for the one that hangs: on a busy machine a script needs longer than 0.5s to start.
+            timeout = 0.5 if "sleep" in body else 30.0
             with self.subTest(body=body), self.assertRaisesRegex(resolve.McpListError, why):
-                resolve.mcp_server_targets(str(fake_claude(self.root, body)), self.root, timeout=0.5)
+                resolve.mcp_server_targets(str(fake_claude(self.root, body)), self.root, timeout=timeout)
         with self.assertRaisesRegex(resolve.McpListError, "could not run"):
             resolve.mcp_server_targets(str(self.root / "no-claude"), self.root)
 

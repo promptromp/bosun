@@ -51,6 +51,7 @@ check() {
 }
 
 not_contains() { ! grep -qF -- "$2" <<<"$1"; }
+not() { ! "$@"; } # not <command...>: the command fails
 contains() { grep -qF -- "$2" <<<"$1" || {
   echo "expected to find: $2"
   echo "in: $(tail -3 <<<"$1")"
@@ -1181,7 +1182,7 @@ check "... with the update's prompt" wait_for 10 launched_with_update_prompt gam
 check "... on Claude, as it was launched" bash -c '
   screen="$(tmux -L "$1" capture-pane -p -J -S -500 -t "=smoke:gamma")"
   grep -q -- "--remote-control gamma" <<<"$screen" && ! grep -q codex-turn-end <<<"$screen"' _ "$SOCKET"
-printf '#!/bin/sh\necho "codex-cli 0.50.0"\n' >"$WORK/fake-codex"
+printf '#!/bin/sh\n[ "$1" = mcp ] && echo "[]" && exit 0\necho "codex-cli 0.50.0"\n' >"$WORK/fake-codex"
 chmod +x "$WORK/fake-codex"
 wait_for 10 pane_is_idle gamma
 gamma_pane="$(pane_of gamma)"
@@ -2572,7 +2573,10 @@ for line in sys.stdin:
   mkdir -p "$CX_HOME/sessions/2026/10/30" "$CX_REPO"
   git -C "$CX_REPO" init -q
   printf 'sessions:\n  - name: cx\n    dir: %s\n    harness: codex\n  - name: cl\n    dir: %s\n' "$CX_REPO" "$CX_REPO" >"$WORK/cx-sessions.yml"
-  CX() { (cd "$CX_REPO" && CODEX_HOME="$CX_HOME" BOSUN_SESSIONS_FILE="$WORK/cx-sessions.yml" BOSUN_LAUNCH_DRY_RUN=1 BOSUN_EVENTS_ENABLED=0 "$BOSUN" "$@" 2>&1); }
+  # Codex's stand-in lists the servers in $WORK/cx-servers.json (`codex mcp list --json`); its listing
+  # fails when CODEX_STAND_IN_MCP_LIST names a file that is not there.
+  printf '[{"name":"acme-docs"},{"name":"acme.mail"}]' >"$WORK/cx-servers.json"
+  CX() { (cd "$CX_REPO" && BOSUN_CODEX_BIN="$ROOT/tests/sandbox/codex-stand-in" CODEX_STAND_IN_MCP_LIST="${CODEX_STAND_IN_MCP_LIST:-$WORK/cx-servers.json}" CODEX_HOME="$CX_HOME" BOSUN_SESSIONS_FILE="$WORK/cx-sessions.yml" BOSUN_LAUNCH_DRY_RUN=1 BOSUN_EVENTS_ENABLED=0 "$BOSUN" "$@" 2>&1); }
   out="$(CX launch cx)"
   check "a new Codex session starts with what keeps it unattended" contains "$out" "--no-daemon --approve-for-me"
   check "... can reach git and bosun's state" contains "$out" "sandbox_workspace_write.writable_roots"
@@ -2596,6 +2600,45 @@ for line in sys.stdin:
   check "bosun trust covers each agent in use" bash -c 'cd "$1" && CODEX_HOME="$2" BOSUN_SESSIONS_FILE="$3" "$4" trust --any "$1" >/dev/null 2>&1 && grep -q "trust_level = \"trusted\"" "$2/config.toml"' _ "$CX_REPO" "$CX_HOME" "$WORK/cx-sessions.yml" "$BOSUN"
   check "... and can take it back" bash -c 'cd "$1" && CODEX_HOME="$2" BOSUN_SESSIONS_FILE="$3" "$4" trust --revoke "$1" >/dev/null 2>&1 && ! grep -q trust_level "$2/config.toml"' _ "$CX_REPO" "$CX_HOME" "$WORK/cx-sessions.yml" "$BOSUN"
   check "preflight checks each agent in use" contains "$(CX preflight)" "Codex"
+
+  echo "a window on Codex reaches only the servers its config names"
+  printf '  - name: cx-docs\n    dir: %s\n    harness: codex\n    connectors: [acme-docs]\n  - name: cx-all\n    dir: %s\n    harness: codex\n    connectors: all\n' "$CX_REPO" "$CX_REPO" >>"$WORK/cx-sessions.yml"
+  # codex_launch_args <launch output>: the arguments its dry-run line hands Codex, on one line.
+  codex_launch_args() {
+    local line
+    local -a args
+    line="$(grep '^dry-run: would run:' <<<"$1" | tail -1)"
+    [ -n "$line" ] || {
+      echo "no dry-run line in: $(tail -3 <<<"$1")"
+      return 1
+    }
+    eval "args=(${line#dry-run: would run:})" # printf %q's own quoting, read back
+    printf ' %s' "${args[@]}"
+    echo
+  }
+  out="$(codex_launch_args "$(CX launch cx)")"
+  check "with no list, a server is switched off by name" contains "$out" ' -c mcp_servers.acme-docs.enabled=false '
+  check "... a name that is not a bare TOML key, quoted" contains "$out" ' -c mcp_servers."acme.mail".enabled=false '
+  check "... and ChatGPT's connectors off" contains "$out" ' --disable apps'
+  out="$(codex_launch_args "$(CX launch cx-docs)")"
+  check "with connectors: [acme-docs], only the other server is switched off" bash -c '
+    ! grep -qF "acme-docs.enabled" <<<"$1" && grep -qF " -c mcp_servers.\"acme.mail\".enabled=false " <<<"$1" && grep -qF " --disable apps" <<<"$1"' _ "$out"
+  out="$(codex_launch_args "$(CX launch cx-all)")"
+  check "with connectors: all, nothing is switched off" bash -c '! grep -qF mcp_servers <<<"$1" && ! grep -qF -- --disable <<<"$1"' _ "$out"
+  check "a listing that fails keeps the window from starting" fails_with "codex mcp list failed" env CODEX_STAND_IN_MCP_LIST="$WORK/no-such-listing" bash -c 'cd "$1" && BOSUN_CODEX_BIN="$2" CODEX_HOME="$3" BOSUN_SESSIONS_FILE="$4" BOSUN_LAUNCH_DRY_RUN=1 BOSUN_EVENTS_ENABLED=0 "$5" launch cx' _ "$CX_REPO" "$ROOT/tests/sandbox/codex-stand-in" "$CX_HOME" "$WORK/cx-sessions.yml" "$BOSUN"
+  out="$(CODEX_STAND_IN_MCP_LIST="$WORK/no-such-listing" CX launch cx || true)"
+  check "... and says why, without starting Codex" bash -c 'grep -q "so bosun cannot tell which servers to switch off" <<<"$1" && ! grep -q "dry-run: would run" <<<"$1"' _ "$out"
+  codex_args_valid() { # <list> <lines...>: whether lib/launch/codex.sh takes what connectors.py would print
+    bash -c 'set -u; BOSUN_CODEX_BIN=codex; source "$1/lib/launch/codex.sh"; list="$2"; shift 2; codex_connector_args=("$@"); codex_connector_args_valid "$list"' _ "$ROOT" "$@"
+  }
+  check "arguments of whole pairs and --disable apps are taken" codex_args_valid "" -c 'mcp_servers.acme-docs.enabled=false' -c 'mcp_servers."acme.mail".enabled=false' --disable apps
+  check "... and --disable apps alone" codex_args_valid "acme-docs" --disable apps
+  check "... and nothing for all" codex_args_valid " all "
+  check "... but nothing for any other list is no answer" not codex_args_valid "acme-docs"
+  check "... nor a pair cut short" not codex_args_valid "" -c 'mcp_servers.acme-docs.enabled=false' -c
+  check "... nor a pair of anything but a server switched off" not codex_args_valid "" -c 'mcp_servers.acme-docs.enabled=true' --disable apps
+  check "... nor a missing --disable apps" not codex_args_valid "" -c 'mcp_servers.acme-docs.enabled=false'
+  check "... nor more after it" not codex_args_valid "" --disable apps -c 'mcp_servers.acme-docs.enabled=false'
 
   echo "get.sh (a dry run: it changes nothing)"
   check "it is plain sh" sh -n "$ROOT/get.sh"

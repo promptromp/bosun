@@ -22,6 +22,12 @@ goes by, seen in Codex 0.166.0 and not a public API:
   - A turn is `task_started` to `task_complete` or `turn_aborted`. With the default flags nothing asks
     a person; in a mode that asks, a turn waiting for you still reads as busy, because
     the file does not record it (lib/pane_input.py reads that from the screen).
+  - What servers a window reaches: `codex mcp list --json` lists the MCP servers Codex would start in a
+    folder (configured and plugin ones, not ChatGPT's connectors, the built-in `codex_apps`), each with its
+    name and, for a stdio server, its environment in plain text, so `mcp_server_names` keeps the names
+    only. A launch switches one off with `-c mcp_servers.<name>.enabled=false` (a name that is not a bare
+    TOML key is quoted) and the connectors with `--disable apps` (lib/connectors.py). From Codex's docs and
+    source, not yet confirmed on a real Mac: `tests/sandbox.sh mac live codex` checks it.
   - Codex has no way to name a session from outside, so bosun keeps its own table of names, filled in by
     the program Codex runs when a turn ends (`bosun hook codex-turn-end`). That program also runs for
     Codex's hidden helpers, each with an id of its own (is_terminal_session).

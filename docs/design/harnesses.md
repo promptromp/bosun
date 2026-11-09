@@ -51,6 +51,17 @@ auto mode. On top of that, `lib/launch/codex.sh` adds what a task always needs:
 - bosun's state and log folders as writable roots, for `bosun ledger report`
 - network access, for `git` and `gh`
 
+**What a window reaches.** A Codex window starts with the MCP servers its connectors list names, as a
+Claude Code window does ([connectors](connectors.md)). At launch `lib/launch/codex.sh` has
+`lib/connectors.py codex` list the servers Codex would start in that folder (`codex mcp list --json`, names
+only: a stdio server's entry holds its environment in plain text) and add `-c
+mcp_servers.<name>.enabled=false` for each one the list does not name, the name quoted as a TOML key when
+it is not a bare one, and `--disable apps` to switch ChatGPT's connectors off, unless the list is `all`.
+Both the `-c` form and `--disable apps` are from Codex's docs and source and wait for the Mac VM run
+(`tests/sandbox.sh mac live codex`) to be confirmed. A listing that fails, or arguments that are not whole
+`-c` pairs and `--disable apps`, keep the window from starting: bosun cannot tell which servers to switch off,
+and it would rather not start the window than start it with all of them. The listing runs once per launch.
+
 **A first prompt, always.** Codex writes no session file until its first prompt. A Codex with no file looks
 just like one stopped at a screen, so `bosun launch` gives a new session a short prompt if it has nothing
 to do yet. That costs one small request, once per session.
