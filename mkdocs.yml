@@ -95,6 +95,7 @@ nav:
       - Uninstalling: design/uninstall.md
       - Updating: design/update.md
       - Agents: design/harnesses.md
+      - Connectors: design/connectors.md
       - Approvals: design/approvals.md
       - Events: design/events.md
       - Signals: design/signals.md
@@ -111,6 +112,7 @@ nav:
           - Impact, overhead: plans/impact-overhead.md
           - Sync, phase 0: plans/sync-phase-0.md
           - Updating: plans/update.md
+          - Connectors: plans/connectors.md
   - Project:
       - Roadmap: roadmap.md
       - Development: development.md
