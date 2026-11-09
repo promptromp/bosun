@@ -419,8 +419,13 @@ die() {
   exit 1
 }
 
-# Print the calling script's leading comment block (its `# Usage:` header) for --help.
-usage() { awk 'NR == 1 { next } /^#/ { sub(/^# ?/, ""); print; next } { exit }' "$0"; }
+# Print a script's leading comment block (its `# Usage:` header): what --help shows. Reads one file and
+# nothing else: `bin/bosun` answers `bosun <command> --help` with it before any command runs, so
+# --help works with a config that does not load.
+usage_of() { awk 'NR == 1 { next } /^#/ { sub(/^# ?/, ""); print; next } { exit }' "$1"; }
+
+# Print the calling script's header for --help.
+usage() { usage_of "$0"; }
 
 # A usage error: exit 2, pointing at --help.
 die_usage() {
