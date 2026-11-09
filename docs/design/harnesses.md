@@ -51,6 +51,35 @@ auto mode. On top of that, `lib/launch/codex.sh` adds what a task always needs:
 - bosun's state and log folders as writable roots, for `bosun ledger report`
 - network access, for `git` and `gh`
 
+**What a window reaches.** A Codex window starts with the MCP servers its connectors list names, as a
+Claude Code window does ([connectors](connectors.md)). At launch `lib/launch/codex.sh` has
+`lib/connectors.py codex` list the servers Codex would start in that folder (`codex mcp list --json`, names
+only: a stdio server's entry holds its environment in plain text), once with plugins and once with
+`--disable plugins`, so a server only in the first is a plugin's. It adds one `-c
+mcp_servers={<name>={enabled=false},...}` for every configured server the list does not name, each name a
+bare TOML key or a TOML basic string; `--disable plugins` when the list does not name one of the plugins'
+servers, since a plugin's server is not an `mcp_servers` table (naming one there stops Codex) and nothing
+Codex prints says which plugin it is from, so every plugin goes, a plugin server the list names too; and
+`--disable apps` to switch ChatGPT's connectors off; nothing for `all`. One inline table, because Codex splits a `-c` path at every dot, quotes included (`config/src/overrides.rs`), so
+`-c mcp_servers."a.b".enabled=false` names a server `"a` and Codex exits at start (`invalid transport`); a
+table in the value is read as TOML and merges into the configuration. The Mac VM (`tests/sandbox.sh mac live
+codex`, Codex 0.166.0) showed it for a user's server, a project's and one named with a dot, new and after
+`codex resume` (`/mcp` shows each `disabled (0 tools)`), and that `--disable apps` is taken
+([connectors](connectors.md#what-the-vm-showed)). Codex's built-in servers (`codex_worktrees`, and
+`codex_apps` without `--disable apps`) are not in the listing and stay on, as Claude Code's Chrome and
+computer-use do: they are local, and a list cannot name them. A listing that fails, or arguments of any other
+shape than `[-c mcp_servers={...}] [--disable plugins] --disable apps`, keep the window from starting: bosun cannot tell which servers to
+switch off, and it would rather not start the window than start it with all of them. A launch looks up
+once, however many times it builds its arguments: one lookup of two listings (with plugins, and with
+`--disable plugins`). `launch --fingerprint` lists too, since the fingerprint holds
+these arguments; when that fails during an update, the window reads as changed and its restart refuses to
+start it.
+
+**No update screen.** Once Codex has seen a newer version of itself, a start shows "Update available" and
+waits for a key (seen in the Mac VM on 0.166.0), which stalls an unattended start, and the Enter that `bosun
+send` presses would answer it. The launch passes `-c check_for_update_on_startup=false`, the key Codex
+documents for centrally managed updates; Codex is updated the way it was installed (`brew upgrade`).
+
 **A first prompt, always.** Codex writes no session file until its first prompt. A Codex with no file looks
 just like one stopped at a screen, so `bosun launch` gives a new session a short prompt if it has nothing
 to do yet. That costs one small request, once per session.

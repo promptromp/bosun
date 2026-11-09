@@ -26,9 +26,20 @@ export LANG="${LANG:-en_US.UTF-8}"
 # and an BOSUN_* variable already set in the environment beats both.
 set_harness_defaults() {
   BOSUN_HARNESS="claude"
+  BOSUN_CLAUDE_BIN="claude"
   BOSUN_CODEX_BIN="codex"
   BOSUN_CODEX_FLAGS="--no-daemon --approve-for-me"
   BOSUN_CODEX_MODEL=""
+}
+
+# What each window may reach (docs/setup.md, "Connectors"): a comma-separated list of MCP servers and
+# connectors, by the name `claude mcp list` shows (claude.ai Acme Mail, plugin:acme-tracker:tracker,
+# acme-local) or a URL pattern (https://mcp.example.com/*). Empty: none; all: no limit. Read at launch.
+set_connector_defaults() {
+  # Every repo window's; a sessions.yml entry's `connectors` wins for its window.
+  BOSUN_CONNECTORS=""
+  # The orchestrator's (and `bosun chores --dry-run`'s): the work ones it needs, such as Slack and a tracker.
+  BOSUN_ORCHESTRATOR_CONNECTORS=""
 }
 
 set_defaults() {
@@ -79,8 +90,8 @@ set_defaults() {
   # items the window holds (the orchestrator: what waits for my approval). 0: no hook.
   BOSUN_COMPACT_CONTEXT="1"
   BOSUN_COMPACT_CONTEXT_MAX_CHARS="1500"
-  BOSUN_CLAUDE_BIN="claude"
   set_harness_defaults
+  set_connector_defaults
   BOSUN_CLAUDE_FLAGS="--permission-mode auto --chrome"
   # Model and effort for the repo sessions; sessions.yml entries can override them per window.
   # Model: an alias (opus, sonnet, haiku, fable) or a full model name. Effort: low, medium, high,
@@ -827,6 +838,136 @@ window_autocompact() { # <name>
     puts entry.key?("autocompact") ? entry["autocompact"].to_s : ARGV[2]' \
     "$BOSUN_SESSIONS_FILE" "$1" "$BOSUN_AUTOCOMPACT_TOKENS" 2>/dev/null ||
     printf '%s\n' "$BOSUN_AUTOCOMPACT_TOKENS"
+}
+
+# Window <name>'s list of the MCP servers and connectors it may reach (docs/design/connectors.md): the
+# orchestrator's BOSUN_ORCHESTRATOR_CONNECTORS; else its sessions.yml `connectors` (a string as written, a
+# list joined with ", ", [] for none); else BOSUN_CONNECTORS. Fails when sessions.yml cannot be read, so a
+# window never gets the default its entry narrowed, and on a `connectors` that is neither a string nor a
+# list of strings (`connectors: no` is YAML's false) or a list entry that holds a comma, which the list's
+# reader would split into two names: it says which, on stderr.
+window_connectors() { # <name>
+  if is_orchestrator "$1"; then
+    printf '%s\n' "$BOSUN_ORCHESTRATOR_CONNECTORS"
+    return 0
+  fi
+  [ -f "$BOSUN_SESSIONS_FILE" ] || {
+    printf '%s\n' "$BOSUN_CONNECTORS"
+    return 0
+  }
+  ruby -ryaml -e '
+    entry = (YAML.safe_load(File.read(ARGV[0])) || {}).fetch("sessions", []).find { |s| s["name"] == ARGV[1] } || {}
+    value = entry.fetch("connectors", ARGV[2])
+    names = value.is_a?(Array) ? value : [value]
+    unless names.all? { |name| name.is_a?(String) } && !(value.is_a?(Array) && names.any? { |name| name.include?(",") })
+      abort "#{ARGV[0]}: the connectors of #{ARGV[1]} must be a comma-separated string or a list of names, " \
+        "none holding a comma (it is #{value.inspect}): [] for none, " \
+        "or leave the key out for BOSUN_CONNECTORS"
+    end
+    puts names.join(", ")' \
+    "$BOSUN_SESSIONS_FILE" "$1" "$BOSUN_CONNECTORS"
+}
+
+# Sets connector_settings_json to the Claude Code settings that limit window <name>, launched in this
+# folder, to its list (window_connectors): {"allowedMcpServers": [...]}, or {} for `all`. Once per
+# process: a launch builds its arguments twice, and the second time reuses the first lookup. Call it in
+# the shell itself, not in $(...), which would lose both the result and a die. With CONNECTOR_LOOKUP=0
+# (`launch --fingerprint`) it runs no lookup and alerts nobody.
+set_connector_settings() { # <name>
+  [ "${connector_settings_window-}" = "$1" ] && return 0
+  local list alert=0
+  list="$(window_connectors "$1")" || die "could not read the connectors of '$1' in $BOSUN_SESSIONS_FILE"
+  is_orchestrator "$1" && [ "${CONNECTOR_LOOKUP:-1}" != 0 ] && alert=1
+  connector_settings_json="$(resolve_connectors "$1" "$list" "$PWD" "$alert")" ||
+    die "'$1' does not start: its connectors were refused or could not be resolved (lib/connectors.py, above)"
+  connector_settings_window="$1"
+}
+
+# Window <name>'s settings from set_connector_settings, printed. It never resolves them itself: in $(...),
+# where it runs, a die would be lost and the window started without its limit, so a window that
+# set_connector_settings did not resolve in the shell itself is refused.
+connector_settings() { # <name>
+  [ "${connector_settings_window-}" = "$1" ] ||
+    die "the connectors of '$1' were not resolved before its settings were built (set_connector_settings)"
+  printf '%s\n' "$connector_settings_json"
+}
+
+# The Claude Code settings that limit <window> to <list>, as lib/connectors.py resolves them in <dir>: it
+# runs `claude mcp list` there only for a name nothing else resolves, never with CONNECTOR_LOOKUP=0 (then
+# from what earlier lookups kept). Its lines are logged (log_connector_lines). A name not found is left out;
+# with <alert> 1, `bosun alert` says which (alert_missing_connectors). Prints nothing and fails on a list it
+# cannot read, on one that another settings scope of <dir> would widen (lib/connectors.py says which), and
+# on anything but a JSON object with an allowedMcpServers list, which only `all` may lack (R7: a failure
+# is never taken for `all`).
+resolve_connectors() { # <window> <list> <dir> <alert: 0|1>
+  local work json code=0
+  local -a kept_only=()
+  [ "${CONNECTOR_LOOKUP:-1}" = 0 ] && kept_only=(--kept-only)
+  work="$(mktemp -d "${TMPDIR:-/tmp}/bosun-connectors.XXXXXX")" || return 1
+  json="$(python3 "$BOSUN_ROOT/lib/connectors.py" claude --agent-bin "$BOSUN_CLAUDE_BIN" --list="$2" \
+    --cwd "$3" --state-dir "$BOSUN_STATE_DIR" --missing-to "$work/missing.json" \
+    ${kept_only[@]+"${kept_only[@]}"} 2>"$work/errors")" || code=$?
+  log_connector_lines "$1" "$work/errors"
+  if [ "$code" -lt 2 ] && connector_settings_valid "$2" "$json"; then
+    [ "$code" = 1 ] && [ "$4" = 1 ] && alert_missing_connectors "$1" "$work/missing.json" "$2"
+    rm -rf "$work"
+    printf '%s\n' "$json"
+    return 0
+  fi
+  rm -rf "$work"
+  return 1
+}
+
+# Whether <resolver output> is what lib/connectors.py claude prints for <list>: one JSON object, holding an
+# allowedMcpServers list unless <list> is `all` (lists_everything), the only list that may have no limit.
+connector_settings_valid() { # <list> <resolver output>
+  jq -se 'length == 1 and (.[0] | type == "object")' <<<"$2" >/dev/null 2>&1 || return 1
+  lists_everything "$1" || jq -e '.allowedMcpServers | type == "array"' <<<"$2" >/dev/null 2>&1
+}
+
+# Whether a window's <list> is `all`, which lifts its limit (spaces aside). A resolver's answer of no limit
+# is taken for that list only, so another spelling of it is refused, never taken for no limit.
+lists_everything() { [ "${1//[[:space:]]/}" = all ]; } # <list>
+
+# The day's launch log: what a window's launch says beyond its screen (connectors' lines, alerts' output).
+launch_log() { echo "$BOSUN_LOG_DIR/launch-$(date +%F).log"; }
+
+# <window>'s lines from lib/connectors.py (<file>, its stderr: a name not found, a lookup that failed, a
+# list refused) logged where the launch's own go (stderr, the window's screen), and, for a real launch (not
+# CONNECTOR_LOOKUP=0, a fingerprint, which starts nothing), in the day's launch log too.
+log_connector_lines() { # <window> <file>
+  local line log_file=/dev/null
+  [ "${CONNECTOR_LOOKUP:-1}" = 0 ] || log_file="$(launch_log)"
+  while IFS= read -r line; do log "$1: $line"; done <"$2" | tee -a "$log_file" >&2
+}
+
+# `bosun alert` that <window> started without the names lib/connectors.py left out (<missing file>, a JSON
+# array; all of <list> if it cannot be read). Detached, its output in the day's launch log: never on the
+# window's screen, never a child of the agent the launch becomes, never holding a $(...) open.
+alert_missing_connectors() { # <window> <missing file> <list>
+  local names log_file
+  names="$(jq -er 'if type == "array" and length > 0 then join(", ") else error end' "$2" 2>/dev/null)" || names="$3"
+  log_file="$(launch_log)"
+  log "$1: alerting you that it started without connector(s) it may use: $names (see $log_file)" >&2
+  ("$BOSUN" alert "$1: started without connector(s) it may use: $names" </dev/null >>"$log_file" 2>&1 &)
+}
+
+# Dies unless the launch settings in model_effort_args (build_model_effort_args) hold <connector JSON>'s
+# allowedMcpServers when it has one: a merge that failed must never start a window with every server. A
+# <connector JSON> jq cannot read is refused too, never taken for one with no limit to check.
+require_connector_limit() { # <window> <connector JSON>
+  local i settings='{}' has=0
+  jq -e 'has("allowedMcpServers")' <<<"$2" >/dev/null 2>&1 || has=$?
+  case "$has" in
+    0) ;;
+    1) return 0 ;;
+    *) die "the connector settings of '$1' cannot be read; not starting it with every server" ;;
+  esac
+  for ((i = 0; i < ${#model_effort_args[@]}; i++)); do
+    [ "${model_effort_args[$i]}" != --settings ] || settings="${model_effort_args[$((i + 1))]}"
+  done
+  jq -e --argjson want "$2" '.allowedMcpServers == $want.allowedMcpServers' <<<"$settings" >/dev/null 2>&1 ||
+    die "the launch settings of '$1' lost its connector limit; not starting it with every server"
 }
 
 # The bosun window this command runs in (from tmux's TMUX_PANE, when the pane belongs to the

@@ -14,6 +14,7 @@ from dataclasses import dataclass, field, replace
 from typing import Any, Protocol
 
 import awake
+import connectors
 import init_plan
 from init_plan import Answers, Facts, Plan, Repo, RepoUse
 
@@ -189,13 +190,90 @@ def ask_repos(ui: Ui, facts: Facts, answers: Answers, machine: Machine, top: Seq
             continue
         chosen.symmetric_difference_update({choices[int(key) - 1].directory})
     repos = chosen_repos(choices, chosen)
-    uses = [c.use for c in choices if c.directory in chosen and c.use]
+    uses = init_plan.in_scope(facts, [c.use for c in choices if c.directory in chosen and c.use])
     return replace(
         answers,
         repos=repos,
         repos_dir=init_plan.recommended_repos_dir(facts, uses),
         repo_mask=init_plan.recommended_mask(facts, uses),
     )
+
+
+# ---- the orchestrator's connectors ---------------------------------------------------------------
+
+EVERY_SERVER = connectors.EVERYTHING
+CONNECTORS_INTRO = tuple(
+    textwrap.wrap(
+        "The orchestrator reads Slack, your tracker and the like through these: tick the ones it needs. "
+        "Repo windows get none (BOSUN_CONNECTORS in bosun.env, or connectors: in sessions.yml, gives them "
+        "some).",
+        init_plan.LINE_WIDTH,
+    )
+)
+
+
+@dataclass(frozen=True)
+class ConnectorChoice:
+    name: str
+    note: str = ""  # why it is listed, if not because `claude mcp list` shows it
+
+
+def connector_choices(facts: Facts, answers: Answers) -> list[ConnectorChoice]:
+    """`all` if the answer is, then each server found, then each name of the answer not found (a URL
+    pattern, which `claude mcp list` never shows, marked as one)."""
+    allowed = connectors.parse(answers.orchestrator_connectors)
+    choices = [ConnectorChoice(EVERY_SERVER, "every server, as before")] if allowed.everything else []
+    choices += [ConnectorChoice(name) for name in facts.connectors]
+    choices += [
+        ConnectorChoice(name, "a pattern" if connectors.is_url(name) else "not found")
+        for name in allowed.names
+        if name not in facts.connectors
+    ]
+    return choices
+
+
+def chosen_connectors(answers: Answers) -> set[str]:
+    allowed = connectors.parse(answers.orchestrator_connectors)
+    return {EVERY_SERVER} if allowed.everything else set(allowed.names)
+
+
+def switch_connector(chosen: set[str], name: str) -> None:
+    """`all` stands alone: switching it on switches every server off, and a server on switches it off."""
+    if name in chosen:
+        chosen.discard(name)
+        return
+    chosen.difference_update(chosen if name == EVERY_SERVER else {EVERY_SERVER})
+    chosen.add(name)
+
+
+def connector_screen(top: Sequence[str], choices: Sequence[ConnectorChoice], chosen: set[str]) -> str:
+    shown = choices[:MAX_TOGGLES]
+    width = max((len(choice.name) for choice in shown), default=0)
+    lines = [*top]
+    for number, choice in enumerate(shown, 1):
+        mark = "x" if choice.name in chosen else " "
+        note = f"  {dim(choice.note)}" if choice.note else ""
+        lines.append(f"  [{mark}] ({number})  {choice.name:<{width}}{note}".rstrip())
+    if len(choices) > len(shown):
+        hidden = len(choices) - len(shown)
+        lines.append(dim(f"  {hidden} more, kept as they are: BOSUN_ORCHESTRATOR_CONNECTORS in bosun.env"))
+    lines.append("")
+    return "\n".join([*lines, *footer("(1-9) switch", "(enter) next")])
+
+
+def ask_connectors(ui: Ui, facts: Facts, answers: Answers, top: Sequence[str]) -> Answers:
+    """Which MCP servers and connectors the orchestrator may reach. Nothing is ticked by its name."""
+    choices = connector_choices(facts, answers)
+    chosen = chosen_connectors(answers)
+    while True:
+        ui.show(connector_screen(top, choices, chosen))
+        key = pressed(ui, [*(str(n) for n in range(1, min(len(choices), MAX_TOGGLES) + 1)), ENTER])
+        if key == ENTER:
+            break
+        switch_connector(chosen, choices[int(key) - 1].name)
+    names = [choice.name for choice in choices if choice.name in chosen]
+    value = EVERY_SERVER if EVERY_SERVER in chosen else ", ".join(names)
+    return replace(answers, orchestrator_connectors=value)
 
 
 # ---- the schedule --------------------------------------------------------------------------------
@@ -425,9 +503,10 @@ def ask_harness(ui: Ui, facts: Facts, answers: Answers, top: Sequence[str]) -> A
     return replace(answers, **choose(ui, top, harness_options(facts, answers)).changes)
 
 
-def total_steps(facts: Facts, answers: Answers) -> int:
+def total_steps(facts: Facts, answers: Answers, asks_connectors: bool) -> int:
     return (
         ALWAYS_ASKED
+        + asks_connectors
         + has_a_choice_of_agents(facts)
         + (answers.harness == init_plan.CLAUDE)
         + bool(facts.aws_sso_profiles)
@@ -436,14 +515,19 @@ def total_steps(facts: Facts, answers: Answers) -> int:
 
 def ask_all(ui: Ui, facts: Facts, answers: Answers, machine: Machine) -> Answers:
     step = 0
+    # Asked when there is something to tick: a server found, or one the answer names.
+    asks_connectors = bool(connector_choices(facts, answers))
 
     def top(title: str, intro: Sequence[str] = ()) -> Sequence[str]:
         nonlocal step
         step += 1
-        return header(step, total_steps(facts, answers), title, intro)
+        return header(step, total_steps(facts, answers, asks_connectors), title, intro)
 
     windows_intro = ("Each gets a window: one session that keeps running in that repo.",)
     answers = ask_repos(ui, facts, answers, machine, top("Which repos should get a window?", windows_intro))
+    if asks_connectors:
+        title = "Which connectors may the orchestrator use?"
+        answers = ask_connectors(ui, facts, answers, top(title, CONNECTORS_INTRO))
     answers = ask_schedule(ui, facts, answers, top("When should bosun run?"))
     answers = ask_features(ui, facts, answers, top("How proactive should it be?"))
     if has_a_choice_of_agents(facts):

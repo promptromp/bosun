@@ -233,6 +233,33 @@ class FreezeTest(World):
             update.restorable(a_plan(renames=(("BOSUN_OLD", "BOSUN_NEW"),)))[-1], "config/bosun.env"
         )
 
+    def test_a_plan_that_adds_a_kept_key_writes_and_restores_bosun_env(self) -> None:
+        """One condition for both: the update may change bosun.env (renames, or a key it adds with the
+        value that keeps what the install did), so it writes it and a failed freeze puts it back."""
+        kept = dataclasses.replace(a_plan(), keys_added=("BOSUN_ORCHESTRATOR_CONNECTORS",))
+        fresh = dataclasses.replace(a_plan(), keys_added=("BOSUN_CONNECTORS",))
+        self.assertTrue(update.changes_config(kept))
+        self.assertTrue(update.changes_config(a_plan(renames=(("BOSUN_OLD", "BOSUN_NEW"),))))
+        self.assertFalse(update.changes_config(fresh))
+        self.assertEqual(update.restorable(kept)[-1], "config/bosun.env")
+        self.assertNotIn("config/bosun.env", update.restorable(fresh))
+
+    def test_a_failed_freeze_puts_bosun_env_back_when_only_a_kept_key_was_written(self) -> None:
+        env = self.config / "bosun.env"
+        env.write_text("BOSUN_DAYS=MTWRF\n")
+        plan = dataclasses.replace(a_plan(), keys_added=("BOSUN_ORCHESTRATOR_CONNECTORS",))
+        written: list[str] = []
+
+        def failing(state_dir: Path, config_dir: Path) -> list[str]:
+            written.append(env.read_text())
+            return ["the ledger: journal: damaged"]
+
+        with mock.patch.object(update, "check_stores", side_effect=failing):
+            done = update.freeze(self.record("holding"), plan, self.state, self.config)
+        self.assertEqual(done.step, "failed")
+        self.assertIn('BOSUN_ORCHESTRATOR_CONNECTORS="all"', written[0])
+        self.assertEqual(env.read_text(), "BOSUN_DAYS=MTWRF\n")
+
     def test_a_failed_migration_is_put_back_under_the_locks_it_holds(self) -> None:
         before = (self.state / "ledger.json").read_bytes()
 
@@ -331,6 +358,20 @@ class RehearseTest(World):
         self.assertTrue(all(line.startswith("the ledger: ") for line in found), found)
 
 
+def ctrl_c_in_the_quiet_wait() -> Any:
+    """time.sleep raising Ctrl-C in the wait for a quiet moment (its poll, update.QUIET_POLL_SECONDS),
+    and sleeping as usual elsewhere: stopping the check-in loop polls too, and on a slow machine it
+    sleeps first."""
+    real_sleep = time.sleep
+
+    def sleep(seconds: float) -> None:
+        if seconds == update.QUIET_POLL_SECONDS:
+            raise KeyboardInterrupt
+        real_sleep(seconds)
+
+    return mock.patch.object(time, "sleep", side_effect=sleep)
+
+
 class ReleaseTest(World):
     def test_the_check_in_loop_restarts_before_the_hold_is_lifted(self) -> None:
         calls: list[tuple[tuple[str, ...], str]] = []
@@ -409,13 +450,18 @@ class ReleaseTest(World):
         origin = self.new.parent.parent / "origin.git"
         versions.git("init", "-q", "--bare", str(origin))
         identity = ("-c", "user.name=acme", "-c", "user.email=dev@example.com", "-c", "commit.gpgsign=false")
+        # A commit, a push or a fetch starts git's auto maintenance detached, in the folder; the prune
+        # keeps a folder a running process has open, so none may still run when it looks.
+        quiet = ("-c", "maintenance.auto=false")
         made = []
         for commit in ("a" * 40, "b" * 40):
             folder = versions.legacy_folder(self.new.parent, commit)
             versions.git("clone", "-q", str(origin), str(folder))
-            versions.git("-C", str(folder), *identity, "commit", "-q", "--allow-empty", "-m", "a release")
-            versions.git("-C", str(folder), "push", "-q", "origin", "HEAD:main")
-            versions.git("-C", str(folder), "fetch", "-q", "origin")
+            versions.git(
+                "-C", str(folder), *identity, *quiet, "commit", "-q", "--allow-empty", "-m", "a release"
+            )
+            versions.git("-C", str(folder), *quiet, "push", "-q", "origin", "HEAD:main")
+            versions.git("-C", str(folder), *quiet, "fetch", "-q", "origin")
             versions.git("-C", str(folder), "config", "bosun.managed", "true")
             made.append(folder)
         mine, clean = made
@@ -995,6 +1041,23 @@ class AgentsCommandTest(World):
         (self.state / update_state.STATE_FILE).unlink()
         self.assertEqual(self.main(*argv), (0, "", ""))
 
+    def test_after_update_gives_a_new_key_s_note_where_it_holds(self) -> None:
+        """A third column: the note of a key at its default. A kept key bosun.env does not set (no
+        bosun.env to write it to) is at its default too, so its note ("keeps every connector") would be
+        false: its unset note instead ("now it starts with none")."""
+        self.record("done")
+        state = update_state.read(self.state)
+        assert state is not None
+        plan = {"keys_added": ["BOSUN_CONNECTORS", "BOSUN_ORCHESTRATOR_CONNECTORS"]}
+        update_state.write(self.state, dataclasses.replace(state, plan=plan))
+        notes = {entry.key: entry for entry in migrations.CONFIG_ADDED}
+        note, unset = notes["BOSUN_CONNECTORS"].note, notes["BOSUN_ORCHESTRATOR_CONNECTORS"].unset
+        argv = ("after-update", "--state-dir", str(self.state), "--config-dir", str(self.config))
+        self.assertEqual(
+            self.main(*argv),
+            (0, f"key\tBOSUN_CONNECTORS\t{note}\nkey\tBOSUN_ORCHESTRATOR_CONNECTORS\t{unset}\n", ""),
+        )
+
     def test_advance_with_nothing_pending_does_nothing(self) -> None:
         for step in ("done", "released"):
             self.record(step)
@@ -1180,7 +1243,7 @@ class ConvertTest(World):
     def test_ctrl_c_while_it_waits_changes_nothing(self) -> None:
         self.a_loop()
         self.quiet = [update_facts.Quiet((("api", "busy"),), None, 10)]
-        with mock.patch.object(time, "sleep", side_effect=KeyboardInterrupt):
+        with ctrl_c_in_the_quiet_wait():
             code, out = self.convert()
         self.assertEqual(code, update.BLOCKED)
         self.assertIn("Nothing has changed: run get.sh again at a quieter moment", out)
@@ -1238,7 +1301,7 @@ class ConvertTest(World):
 
     def test_ctrl_c_in_the_wait_after_the_stop_starts_its_own_work_again(self) -> None:
         self.quiet = [update_facts.Quiet((), None, 10), update_facts.Quiet((("api", "busy"),), None, 10)]
-        with mock.patch.object(time, "sleep", side_effect=KeyboardInterrupt):
+        with ctrl_c_in_the_quiet_wait():
             code, out = self.convert()
         self.assertEqual(code, 1, out)
         recorded = update_state.read(self.state)

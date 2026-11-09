@@ -113,7 +113,7 @@ class FlowTest(unittest.TestCase):
     def test_r_starts_again_and_forgets_the_answers(self) -> None:
         answers, ui = run(["2", ENTER, "r", *ALL_RECOMMENDED])
         assert answers is not None
-        self.assertEqual([r.name for r in answers.repos], ["api", "web"])
+        self.assertEqual([r.name for r in answers.repos], ["api"])
         self.assertEqual(sum("step 1 of 6" in screen for screen in ui.screens), 3)
 
     def test_r_on_the_plan_starts_again(self) -> None:
@@ -153,24 +153,24 @@ class FlowTest(unittest.TestCase):
 
 
 class ReposTest(unittest.TestCase):
-    def test_what_is_recommended_is_on_and_the_rest_listed(self) -> None:
+    def test_the_most_used_is_on_and_the_rest_listed(self) -> None:
         _, ui = run("q")
         self.assertIn("[x] (1)  ~/d/api", ui.screens[0])
         self.assertIn("400 prompts", ui.screens[0])
-        self.assertIn("[x] (2)  ~/d/web", ui.screens[0])
+        self.assertIn("[ ] (2)  ~/d/web", ui.screens[0])
         self.assertIn("[ ] (3)  ~/d/toy", ui.screens[0])
 
     def test_a_digit_switches_a_repo(self) -> None:
-        answers, ui = run(["2", "3", *ALL_RECOMMENDED])
+        answers, ui = run(["1", "3", *ALL_RECOMMENDED])
         assert answers is not None
-        self.assertEqual([r.name for r in answers.repos], ["api", "toy"])
-        self.assertIn("[ ] (2)", ui.screens[1])
+        self.assertEqual([r.name for r in answers.repos], ["toy"])
+        self.assertIn("[ ] (1)", ui.screens[1])
         self.assertIn("[x] (3)", ui.screens[2])
 
     def test_a_digit_that_is_not_listed_means_nothing(self) -> None:
         answers, _ = run(["7", *ALL_RECOMMENDED])
         assert answers is not None
-        self.assertEqual(len(answers.repos), 2)
+        self.assertEqual(len(answers.repos), 1)
 
     def test_the_mask_and_the_folder_follow_the_choice(self) -> None:
         answers, _ = run(["3", *ALL_RECOMMENDED])
@@ -179,7 +179,7 @@ class ReposTest(unittest.TestCase):
         self.assertEqual(answers.repos_dir, "~/d")
 
     def test_all_off_is_allowed(self) -> None:
-        answers, _ = run(["1", "2", *ALL_RECOMMENDED])
+        answers, _ = run(["1", *ALL_RECOMMENDED])
         assert answers is not None
         self.assertEqual(answers.repos, ())
 
@@ -194,7 +194,29 @@ class ReposTest(unittest.TestCase):
     def test_a_folder_that_is_not_one_is_not_added(self) -> None:
         answers, _ = run(["a", *ALL_RECOMMENDED], lines=("nope",))
         assert answers is not None
-        self.assertEqual(len(answers.repos), 2)
+        self.assertEqual(len(answers.repos), 1)
+
+    def test_the_scope_follows_the_ticked_repos(self) -> None:
+        the_facts = facts(
+            repos=(RepoUse(f"{HOME}/d/api", 400, "acme"), RepoUse(f"{HOME}/w/web", 50, "my-org"))
+        )
+        answers, _ = run(ALL_RECOMMENDED, the_facts)
+        assert answers is not None
+        self.assertEqual([r.name for r in answers.repos], ["api"])
+        self.assertEqual((answers.repo_mask, answers.repos_dir), ("acme", "~/d"))
+        self.assertEqual(answers, init_plan.recommend(the_facts))
+        answers, _ = run(["1", "2", *ALL_RECOMMENDED], the_facts)
+        assert answers is not None
+        self.assertEqual((answers.repo_mask, answers.repos_dir), ("my-org", "~/w"))  # narrowed
+
+    def test_with_nothing_ticked_the_scope_is_the_repos_you_use_never_every_repo(self) -> None:
+        the_facts = facts(
+            repos=(RepoUse(f"{HOME}/d/api", 400, "acme"), RepoUse(f"{HOME}/w/web", 50, "my-org"))
+        )
+        answers, _ = run(["1", *ALL_RECOMMENDED], the_facts)
+        assert answers is not None
+        self.assertEqual(answers.repos, ())
+        self.assertEqual(answers.repo_mask, "acme my-org")
 
     def test_at_most_nine_are_listed(self) -> None:
         many = tuple(RepoUse(f"{HOME}/d/r{n}", 100 - n) for n in range(15))
@@ -208,12 +230,112 @@ class ReposTest(unittest.TestCase):
 
     def test_a_rerun_keeps_a_windows_options_and_its_scope(self) -> None:
         listed = ({"name": "api", "dir": f"{HOME}/d/api", "model": "haiku"},)
-        env = {"BOSUN_REPO_MASK": "my-org", "BOSUN_REPOS_DIR": "$HOME/elsewhere", "BOSUN_DAYS": "MTWRF"}
+        env = {
+            "BOSUN_REPO_MASK": "my-org",
+            "BOSUN_REPOS_DIR": "$HOME/elsewhere",
+            "BOSUN_DAYS": "MTWRF",
+            "BOSUN_ORCHESTRATOR_CONNECTORS": "",  # set: a config from before the key would ask about all
+        }
         the_facts = facts(files={"sessions.yml": "...", "bosun.env": "..."}, sessions=listed, env=env)
         answers, _ = run(ALL_RECOMMENDED, the_facts)
         assert answers is not None
         self.assertEqual(answers.repos, (Repo("api", "~/d/api", {"model": "haiku"}),))
         self.assertEqual((answers.repo_mask, answers.repos_dir), ("my-org", "~/elsewhere"))
+
+
+FOUND = ("claude.ai Acme Mail", "plugin:acme-tracker:tracker", "acme-local")
+WITH_CONNECTORS = [ENTER, ENTER, *[ENTER] * 5, "y"]  # repos, connectors, then the five others
+
+
+def rerun_facts(value: str, found: tuple[str, ...] = FOUND) -> Facts:
+    """A re-run whose bosun.env gives the orchestrator <value>."""
+    env = {"BOSUN_DAYS": "MTWRF", "BOSUN_ORCHESTRATOR_CONNECTORS": value}
+    return facts(files={"bosun.env": "..."}, env=env, connectors=found)
+
+
+class ConnectorsTest(unittest.TestCase):
+    def test_none_found_and_none_kept_asks_nothing(self) -> None:
+        _, ui = run(ALL_RECOMMENDED)
+        self.assertFalse(any("connectors" in screen.lower() for screen in ui.screens[:-1]))
+
+    def test_connectors_screen_toggles(self) -> None:
+        answers, ui = run([ENTER, "1", "3", "1", "2", *WITH_CONNECTORS[1:]], facts(connectors=FOUND))
+        assert answers is not None
+        screen = ui.screens[1]
+        self.assertIn("step 2 of 7", screen)
+        self.assertIn("Which connectors may the orchestrator use?", screen)
+        for number, name in enumerate(FOUND, 1):
+            self.assertIn(f"[ ] ({number})  {name}", screen)  # nothing ticked by its name
+        self.assertIn("Slack", screen)
+        self.assertIn("BOSUN_CONNECTORS", screen)
+        self.assertIn("(enter) next", screen)
+        self.assertTrue(all(len(line) <= 90 and line == line.rstrip() for line in screen.splitlines()))
+        self.assertIn("[x] (1)  claude.ai Acme Mail", ui.screens[2])
+        self.assertEqual(answers.orchestrator_connectors, "plugin:acme-tracker:tracker, acme-local")
+        self.assertIn("step 7 of 7", ui.screens[-2])
+
+    def test_return_keeps_none(self) -> None:
+        answers, _ = run(WITH_CONNECTORS, facts(connectors=FOUND))
+        assert answers is not None
+        self.assertEqual(answers.orchestrator_connectors, "")
+
+    def test_a_rerun_starts_from_what_the_config_says(self) -> None:
+        answers, ui = run(WITH_CONNECTORS, rerun_facts("acme-local, claude.ai Acme Mail"))
+        assert answers is not None
+        self.assertIn("[x] (1)  claude.ai Acme Mail", ui.screens[1])
+        self.assertIn("[ ] (2)  plugin:acme-tracker:tracker", ui.screens[1])
+        self.assertIn("[x] (3)  acme-local", ui.screens[1])
+        self.assertEqual(answers.orchestrator_connectors, "claude.ai Acme Mail, acme-local")
+
+    def test_all_line_switches_off_when_a_server_is_ticked(self) -> None:
+        _, ui = run([ENTER, "q"], rerun_facts("all"))
+        self.assertIn("[x] (1)  all", ui.screens[1])
+        self.assertIn("[ ] (2)  claude.ai Acme Mail", ui.screens[1])
+        answers, ui = run(WITH_CONNECTORS, rerun_facts("all"))
+        assert answers is not None
+        self.assertEqual(answers.orchestrator_connectors, "all")
+        answers, ui = run([ENTER, "3", *WITH_CONNECTORS[1:]], rerun_facts("all"))
+        assert answers is not None
+        self.assertIn("[ ] (1)  all", ui.screens[2])
+        self.assertIn("[x] (3)  plugin:acme-tracker:tracker", ui.screens[2])
+        self.assertEqual(answers.orchestrator_connectors, "plugin:acme-tracker:tracker")
+        answers, _ = run([ENTER, "3", "1", *WITH_CONNECTORS[1:]], rerun_facts("all"))
+        assert answers is not None
+        self.assertEqual(answers.orchestrator_connectors, "all")  # all again stands alone
+
+    def test_unfound_names_are_kept_and_marked(self) -> None:
+        the_facts = rerun_facts("acme-gone, acme-local", found=("acme-local",))
+        answers, ui = run(WITH_CONNECTORS, the_facts)
+        assert answers is not None
+        self.assertIn("[x] (1)  acme-local", ui.screens[1])
+        self.assertRegex(ui.screens[1], r"\[x\] \(2\)  acme-gone +not found")
+        self.assertEqual(answers.orchestrator_connectors, "acme-local, acme-gone")
+        answers, _ = run([ENTER, "2", *WITH_CONNECTORS[1:]], the_facts)
+        assert answers is not None
+        self.assertEqual(answers.orchestrator_connectors, "acme-local")
+
+    def test_a_url_pattern_is_marked_as_one_not_as_not_found(self) -> None:
+        """A pattern names no one server, so `claude mcp list` never shows it."""
+        _, ui = run(
+            WITH_CONNECTORS, rerun_facts("https://mcp.example.com/*, acme-gone", found=("acme-local",))
+        )
+        self.assertRegex(ui.screens[1], r"\[x\] \(2\)  https://mcp\.example\.com/\* +a pattern")
+        self.assertRegex(ui.screens[1], r"\[x\] \(3\)  acme-gone +not found")
+
+    def test_a_kept_name_is_asked_about_though_nothing_is_found(self) -> None:
+        answers, ui = run([ENTER, "1", *WITH_CONNECTORS[1:]], rerun_facts("acme-gone", found=()))
+        assert answers is not None
+        self.assertIn("step 2 of 7", ui.screens[1])
+        self.assertEqual(answers.orchestrator_connectors, "")
+        self.assertIn("step 7 of 7", ui.screens[-2])  # the count stays, though the answer is now none
+
+    def test_names_past_the_ninth_stay_as_they_are(self) -> None:
+        many = tuple(f"acme-{n}" for n in range(12))
+        answers, ui = run(WITH_CONNECTORS, rerun_facts("acme-10, acme-1", found=many))
+        assert answers is not None
+        self.assertNotIn("(10)", ui.screens[1])
+        self.assertIn("3 more", ui.screens[1])
+        self.assertEqual(answers.orchestrator_connectors, "acme-1, acme-10")
 
 
 class ScheduleTest(unittest.TestCase):

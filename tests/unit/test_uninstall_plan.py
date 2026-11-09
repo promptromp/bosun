@@ -160,7 +160,12 @@ class Folders(unittest.TestCase):
         self.assertEqual(targets(up.build_plan(own, Choices())), {"/srv/state/logs", "/srv/state/events"})
 
     def test_a_log_folder_of_its_own_matches_bosun_s_names_only(self) -> None:
-        for name in ("morning-2026-11-02.log", "watchdog.launchd.err", "hook-2026-11-02.log.1"):
+        for name in (
+            "morning-2026-11-02.log",
+            "watchdog.launchd.err",
+            "hook-2026-11-02.log.1",
+            "launch-2026-11-02.log",
+        ):
             self.assertEqual(up.kind_of(name, up.LOG_FILES), up.WORKING, name)
         for name in ("Zoom.log", "vpn-client.log"):
             self.assertEqual(up.kind_of(name, up.LOG_FILES), up.UNKNOWN, name)

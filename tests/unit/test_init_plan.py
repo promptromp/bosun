@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import posixpath
 import subprocess
 import sys
 import unittest
@@ -100,19 +101,56 @@ class RecommendTest(unittest.TestCase):
         self.assertFalse(answers.learning or answers.events)
         self.assertEqual(answers.model, "haiku")
 
-    def test_repos_are_the_busy_ones_most_used_first(self) -> None:
+    def test_first_run_ticks_the_most_used_repo_only(self) -> None:
         answers = init_plan.recommend(facts(repos=(use("web", 30), use("api", 400), use("toy", 3))))
-        self.assertEqual([r.name for r in answers.repos], ["api", "web"])
-        self.assertEqual(answers.repos[0].dir, "~/Development/api")
+        self.assertEqual(answers.repos, (Repo("api", "~/Development/api"),))
 
-    def test_at_most_six_windows(self) -> None:
+    def test_the_busy_ones_are_ranked_most_used_first_at_most_six(self) -> None:
+        ranked = init_plan.recommended_uses((use("web", 30), use("api", 400), use("toy", 3)))
+        self.assertEqual([posixpath.basename(u.dir) for u in ranked], ["api", "web"])
         many = tuple(use(f"r{n}", 100 - n) for n in range(9))
-        self.assertEqual(len(init_plan.recommend(facts(repos=many)).repos), init_plan.MAX_REPOS)
+        self.assertEqual(len(init_plan.recommended_uses(many)), init_plan.MAX_REPOS)
 
-    def test_without_history_a_few_found_repos_newest_first(self) -> None:
+    def test_without_history_the_newest_found_repo(self) -> None:
         found = tuple(use(name, 0) for name in ("new", "older", "old", "oldest"))
-        self.assertEqual(
-            [r.name for r in init_plan.recommend(facts(repos=found)).repos], ["new", "older", "old"]
+        self.assertEqual([r.name for r in init_plan.recommend(facts(repos=found)).repos], ["new"])
+        self.assertEqual(len(init_plan.recommended_uses(found)), init_plan.MAX_UNUSED_REPOS)
+
+    def test_nothing_found_ticks_nothing(self) -> None:
+        self.assertEqual(init_plan.recommend(facts()).repos, ())
+
+    def test_first_run_ticks_no_connectors(self) -> None:
+        found = ("claude.ai Acme Mail", "plugin:acme-tracker:tracker", "acme-local")
+        self.assertEqual(init_plan.recommend(facts(connectors=found)).orchestrator_connectors, "")
+
+    def test_rerun_keeps_the_configs_connectors(self) -> None:
+        for value in ("claude.ai Acme Mail, plugin:acme-tracker:tracker", "all", ""):
+            with self.subTest(value=value):
+                env = {"BOSUN_DAYS": "MTWRF", "BOSUN_ORCHESTRATOR_CONNECTORS": value}
+                answers = init_plan.recommend(facts(env=env, connectors=("acme-local",)))
+                self.assertEqual(answers.orchestrator_connectors, value)
+
+    def test_rerun_on_a_config_from_before_the_key_keeps_every_connector(self) -> None:
+        """bosun.env from before BOSUN_ORCHESTRATOR_CONNECTORS: that orchestrator had every connector, so
+        the recommendation is `all`, what bosun update writes, and the plan says why. A first run (no
+        bosun.env) still recommends none."""
+        older = facts(
+            env={"BOSUN_DAYS": "MTWRF"}, files={"bosun.env": "BOSUN_DAYS=MTWRF\n"}, connectors=("acme-local",)
+        )
+        rerun = init_plan.recommend(older)
+        self.assertEqual(rerun.orchestrator_connectors, "all")
+        notes = " ".join(init_plan.build_plan(older, rerun, DirState()).notes)
+        self.assertIn("bosun.env does not set BOSUN_ORCHESTRATOR_CONNECTORS", notes)
+        self.assertIn("keeps all, as bosun update does", notes)
+        chosen = replace(rerun, orchestrator_connectors="acme-local")
+        self.assertNotIn(
+            "BOSUN_ORCHESTRATOR_CONNECTORS", " ".join(init_plan.build_plan(older, chosen, DirState()).notes)
+        )
+        first = facts(connectors=("acme-local",))
+        self.assertEqual(init_plan.recommend(first).orchestrator_connectors, "")
+        self.assertNotIn(
+            "BOSUN_ORCHESTRATOR_CONNECTORS",
+            " ".join(init_plan.build_plan(first, init_plan.recommend(first), DirState()).notes),
         )
 
     def test_window_names_are_usable_and_unique(self) -> None:
@@ -141,7 +179,16 @@ class RecommendTest(unittest.TestCase):
             use("toy", 30, "my-org"),
             use("mine", 30, ""),
         )
-        self.assertEqual(init_plan.recommend(facts(repos=repos)).repo_mask, "acme my-org")
+        self.assertEqual(init_plan.recommend(facts(repos=repos)).repo_mask, "acme")  # the ticked repo's
+
+    def test_with_nothing_ticked_the_scope_is_the_repos_you_use(self) -> None:
+        repos = (use("api", 90, "acme"), RepoUse(f"{HOME}/work/toy", 30, "my-org"))
+        the_facts = facts(repos=repos)
+        recommended = init_plan.recommend(the_facts)
+        self.assertEqual((recommended.repo_mask, recommended.repos_dir), ("acme", "~/Development"))
+        unattended = init_plan.unattended(the_facts, recommended)
+        self.assertEqual(unattended.repos, ())
+        self.assertEqual((unattended.repo_mask, unattended.repos_dir), ("acme my-org", "~/Development"))
 
     def test_the_model_follows_the_plan(self) -> None:
         self.assertEqual(init_plan.recommend(facts(claude_plan="max")).model, "opus")
@@ -196,6 +243,7 @@ class AnswersTest(unittest.TestCase):
             ({"repos": [{"name": "api"}]}, "dir"),
             ({"repos": [{"dir": "~/a", "name": 3}]}, "name"),
             ({"aws_sso_profiles": "dev"}, "aws_sso_profiles"),
+            ({"orchestrator_connectors": ["acme-local"]}, "orchestrator_connectors"),
         ):
             with self.subTest(data=data), self.assertRaisesRegex(AnswersError, text):
                 init_plan.answers_from_json(data, Answers())
@@ -224,6 +272,17 @@ class AnswersTest(unittest.TestCase):
     def test_good_answers_have_no_problems(self) -> None:
         self.assertEqual(init_plan.validate(init_plan.recommend(facts(repos=(use("api", 50),)))), [])
 
+    def test_bad_connectors_answer_is_a_problem(self) -> None:
+        for value, text in (
+            ("all, claude.ai Acme Mail", "orchestrator_connectors: `all` means every server"),
+            ("acme-local\nBOSUN_X=1", "control character"),
+        ):
+            with self.subTest(value=value):
+                self.assertIn(text, " ".join(init_plan.validate(Answers(orchestrator_connectors=value))))
+        for value in ("", "all", "claude.ai Acme Mail, https://mcp.example.com/*"):
+            with self.subTest(value=value):
+                self.assertEqual(init_plan.validate(Answers(orchestrator_connectors=value)), [])
+
 
 def shell_value_of(text: str, key: str) -> str:
     """What bash makes of <key> in this env file, the real test of the quoting."""
@@ -238,6 +297,22 @@ class EnvFileTest(unittest.TestCase):
         self.assertIn('BOSUN_REPOS_DIR="$HOME/work"\n', text)
         self.assertIn('BOSUN_LEARN_ENABLED="0"\n', text)
         self.assertEqual(shell_value_of(text, "BOSUN_REPOS_DIR"), "/Users/me/work")
+
+    def test_env_groups_write_the_orchestrators_connectors(self) -> None:
+        answers = Answers(orchestrator_connectors="claude.ai Acme Mail, plugin:acme-tracker:tracker")
+        settings = dict(setting for _, group in init_plan.env_groups(answers) for setting in group)
+        self.assertEqual(
+            settings["BOSUN_ORCHESTRATOR_CONNECTORS"], "claude.ai Acme Mail, plugin:acme-tracker:tracker"
+        )
+        text = init_plan.render_env(answers)
+        self.assertEqual(
+            shell_value_of(text, "BOSUN_ORCHESTRATOR_CONNECTORS"),
+            "claude.ai Acme Mail, plugin:acme-tracker:tracker",
+        )
+        self.assertEqual(
+            init_plan.parse_env(text)["BOSUN_ORCHESTRATOR_CONNECTORS"], answers.orchestrator_connectors
+        )
+        self.assertIn('BOSUN_ORCHESTRATOR_CONNECTORS=""\n', init_plan.render_env(Answers()))
 
     def test_every_setting_it_writes_is_a_known_one(self) -> None:
         example = (ROOT / "examples" / "generic" / "bosun.env").read_text()
@@ -374,6 +449,52 @@ class PlanTest(unittest.TestCase):
         forced = self.plan(the_facts, other, force=True)
         self.assertEqual(self.actions(forced)["sessions.yml"], "replace")
         self.assertEqual(forced.blockers, ())
+
+    def test_a_sessions_file_with_no_windows_needs_no_force(self) -> None:
+        the_facts = self.configured(Answers())
+        wanted = replace(init_plan.recommend(the_facts), repos=(Repo("web", "~/d/web"),))
+        plan = self.plan(the_facts, wanted)
+        self.assertEqual(self.actions(plan)["sessions.yml"], "replace")
+        self.assertEqual(plan.blockers, ())
+
+    def test_unattended_first_run_takes_no_windows_or_connectors(self) -> None:
+        the_facts = facts(repos=(use("api", 400),), connectors=("acme-local",))
+        recommended = replace(init_plan.recommend(the_facts), orchestrator_connectors="acme-local")
+        unattended = init_plan.unattended(the_facts, recommended)
+        self.assertEqual((unattended.repos, unattended.orchestrator_connectors), ((), ""))
+        self.assertEqual(
+            replace(unattended, repos=recommended.repos, orchestrator_connectors="acme-local"), recommended
+        )
+        self.assertEqual(init_plan.unattended_note(the_facts, unattended), init_plan.UNATTENDED_NOTE)
+
+    def test_unattended_keeps_windows_a_sessions_file_already_lists(self) -> None:
+        listed = ({"name": "api", "dir": f"{HOME}/d/api"},)
+        the_facts = facts(files={"sessions.yml": "..."}, sessions=listed)
+        unattended = init_plan.unattended(the_facts, init_plan.recommend(the_facts))
+        self.assertEqual(unattended.repos, (Repo("api", "~/d/api"),))
+
+    def test_the_unattended_note_names_the_windows_it_kept(self) -> None:
+        listed = ({"name": "api", "dir": f"{HOME}/d/api"}, {"name": "web", "dir": f"{HOME}/d/web"})
+        the_facts = facts(files={"sessions.yml": "..."}, sessions=listed)
+        note = init_plan.unattended_note(
+            the_facts, init_plan.unattended(the_facts, init_plan.recommend(the_facts))
+        )
+        self.assertNotIn("No repo windows", note)
+        self.assertIn("No connectors were set up", note)
+        self.assertIn("the windows sessions.yml lists stay: api, web", note)
+
+    def test_a_sessions_file_that_cannot_be_read_needs_force(self) -> None:
+        the_facts = facts(files={"sessions.yml": "sessions: [unclosed"}, sessions_unreadable=True)
+        wanted = replace(init_plan.recommend(the_facts), repos=(Repo("web", "~/d/web"),))
+        self.assertEqual(self.actions(self.plan(the_facts, wanted))["sessions.yml"], "refuse")
+        self.assertEqual(self.actions(self.plan(the_facts, wanted, force=True))["sessions.yml"], "replace")
+
+    def test_unattended_rerun_is_the_recommendation(self) -> None:
+        the_facts = self.configured(Answers(repos=(Repo("api", "~/d/api"),), orchestrator_connectors="all"))
+        recommended = init_plan.recommend(the_facts)
+        self.assertEqual(init_plan.unattended(the_facts, recommended), recommended)
+        self.assertEqual(recommended.orchestrator_connectors, "all")
+        self.assertEqual(init_plan.unattended_note(the_facts, recommended), "")
 
     def test_setup_stays_yours_even_with_force(self) -> None:
         answers = Answers()
@@ -551,7 +672,8 @@ class PlanTest(unittest.TestCase):
         )
         for expected in (
             "Nothing has changed yet",
-            "Windows   api",
+            "Windows    api",
+            "Connectors none, for the orchestrator",
             "Mon-Fri, 09:00 to 21:30",
             "events, approvals, learning on; Slack watcher off",
             "Files in ~/.config/bosun",

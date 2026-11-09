@@ -379,13 +379,28 @@ the_upgrade() {
     grep -qF "The checkout is kept as $2 until the next update" "$1"' _ "$out" "$VERSIONS/legacy-${RELEASE_COMMIT:0:12}"
   check "... from the release to this checkout, with its backup" summary_says "$out" "$RELEASE_COMMIT" "$A_COMMIT"
   check "... and the mark of bosun's own work it stopped is gone" test ! -e "$STATE/update/own-work.json"
+  the_orchestrator_keeps_its_connectors "$out.summary"
   check "bosun doctor passes" bash -c 'bosun doctor >"$1" 2>&1 || { cat "$1"; exit 1; }' _ "$OUT/doctor.txt"
+  check "... and warns while the orchestrator keeps every connector" \
+    grep -qE "^ +warn +orchestrator: all \(every MCP server and connector\): name the ones it needs" "$OUT/doctor.txt"
   ledger_before_its_first_write
   check "doctor names the knowledge base from before journals as a note" \
     grep -E "^ +ok +the knowledge base and its journal: no journal yet" "$OUT/doctor.txt"
   check "kg validate says so, and passes" bash -c 'bosun kg validate | grep -q "no journal yet"'
   check "... and starts none, nor the key of the forgotten" no_knowledge_journal
   bosun stop >/dev/null 2>&1
+}
+# The release had no connector lists, so its orchestrator reached every server: the update keeps that,
+# writing the value to bosun.env (with a copy as it was), and its summary says so, and that repo windows
+# now start without any. <summary>: the summary's lines.
+the_orchestrator_keeps_its_connectors() {
+  check "the update wrote BOSUN_ORCHESTRATOR_CONNECTORS=\"all\" to bosun.env, keeping a copy as it was" bash -c '
+    grep -qx "BOSUN_ORCHESTRATOR_CONNECTORS=\"all\"" "$1/bosun.env" && ! grep -q "^BOSUN_CONNECTORS=" "$1/bosun.env" &&
+      ls "$1"/bosun.env.pre-update-* >/dev/null' _ "$CONFIG"
+  check "... its summary says so, with what each added key means" bash -c '
+    grep -q "^  bosun\.env  *BOSUN_ORCHESTRATOR_CONNECTORS=\"all\" added (before: bosun\.env\.pre-update-" "$1" &&
+      grep -q "^  BOSUN_ORCHESTRATOR_CONNECTORS  *the orchestrator keeps every connector, as before" "$1" &&
+      grep -q "^  BOSUN_CONNECTORS  *repo windows now start without connectors" "$1" || { cat "$1"; exit 1; }' _ "$1"
 }
 jobs_loaded_on_the_link() {
   jobs_loaded && grep -qF "$DIR/bin/bosun" "$HOME/Library/LaunchAgents/${JOBS[0]}.plist"
@@ -1503,7 +1518,7 @@ a_repo_by_hand acme-web https://github.com/acme/web.git
 a_repo_by_hand invoice-exporter https://github.com/acme/invoice-exporter.git
 follow_what_it_says
 install
-check "... and the other two" bash -c 'grep -q "name: acme-web" "$1" && grep -q "name: invoice-exporter" "$1"' _ "$CONFIG/sessions.yml"
+windows_by_answers acme-api acme-web invoice-exporter
 what_the_release_does
 git_keeps_tokens_out
 launchd_for_real

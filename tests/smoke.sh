@@ -765,6 +765,195 @@ check "resolve-carried-out finds nothing left to settle" contains "$(ap ledger r
 unset BOSUN_APPROVALS_ENABLED
 check "with approvals off the post hook does nothing" test -z "$(ap guard --post-tool-use <<<"$post")"
 
+echo "connectors (fake claude mcp list)"
+# `claude mcp list` prints $WORK/mcp-list.out, or fails while there is none; each call is recorded.
+cat >"$WORK/mcp-claude" <<FAKE
+#!/bin/bash
+[ "\$1 \$2" = "mcp list" ] || exit 0
+echo "\$PWD" >>"$WORK/mcp-claude.calls"
+[ "\${ENABLE_CLAUDEAI_MCP_SERVERS:-}" = true ] && [ -f "$WORK/mcp-list.out" ] || exit 1
+cat "$WORK/mcp-list.out"
+FAKE
+chmod +x "$WORK/mcp-claude"
+printf 'Checking MCP server health...\n\nclaude.ai Acme Chat: https://chat.example.com/mcp - ✔ Connected\n' >"$WORK/mcp-list.out"
+# launch_settings <launch output>: the --settings JSON its dry-run line hands Claude Code.
+launch_settings() {
+  local line i
+  local -a args
+  line="$(grep '^dry-run: would run:' <<<"$1" | tail -1)"
+  [ -n "$line" ] || {
+    echo "no dry-run line in: $(tail -3 <<<"$1")"
+    return 1
+  }
+  eval "args=(${line#dry-run: would run:})" # printf %q's own quoting, read back
+  for ((i = 0; i < ${#args[@]}; i++)); do
+    if [ "${args[$i]}" = --settings ]; then printf '%s\n' "${args[$((i + 1))]}"; fi
+  done
+}
+# allows <launch output> <jq test of its allowedMcpServers, as $a>: the test holds, or say what it got.
+allows() {
+  local settings
+  settings="$(launch_settings "$1")" || return 1
+  jq -e "(.allowedMcpServers // \"no key\") as \$a | $2" <<<"$settings" >/dev/null || {
+    echo "allowedMcpServers: $(jq -c '.allowedMcpServers // "no key"' <<<"$settings")"
+    return 1
+  }
+}
+CN=(env BOSUN_CLAUDE_BIN="$WORK/mcp-claude" BOSUN_ALERT_SLACK_USER="")
+ORCH=("${CN[@]}" BOSUN_ORCHESTRATOR=orch BOSUN_ORCHESTRATOR_DIR="$REPO_A")
+check "a repo window reaches no connector by default" allows "$(cd "$REPO_A" && "${CN[@]}" "$BOSUN" launch alpha 2>&1)" '$a == []'
+check "... and every one with BOSUN_CONNECTORS=all" allows "$(cd "$REPO_A" && "${CN[@]}" BOSUN_CONNECTORS=all "$BOSUN" launch alpha 2>&1)" '$a == "no key"'
+check "... and looked up none of them" test ! -e "$WORK/mcp-claude.calls"
+out="$(cd "$REPO_A" && "${ORCH[@]}" BOSUN_ORCHESTRATOR_CONNECTORS="claude.ai Acme Chat" "$BOSUN" launch orch 2>&1)"
+check "the orchestrator reaches a claude.ai connector by the URL claude mcp list shows" allows "$out" '$a == [{"serverUrl": "https://chat.example.com/mcp"}]'
+check "... looked up once per launch, in the window's folder" test "$(cat "$WORK/mcp-claude.calls")" = "$REPO_A"
+check "... and kept for when the lookup fails" jq -e '."claude.ai Acme Chat" == "https://chat.example.com/mcp"' "$BOSUN_STATE_DIR/connectors.json"
+check "... and nothing was missing, so no alert" not_contains "$out" "started without connector"
+rm "$WORK/mcp-list.out"
+out="$(cd "$REPO_A" && "${ORCH[@]}" BOSUN_ORCHESTRATOR_CONNECTORS="claude.ai Acme Chat" "$BOSUN" launch orch 2>&1)"
+check "a failed lookup uses the URL kept" allows "$out" '$a == [{"serverUrl": "https://chat.example.com/mcp"}]'
+check "... and says so" contains "$out" "claude mcp list failed"
+printf 'claude.ai Acme Chat: https://chat.example.com/mcp - ✔ Connected\n' >"$WORK/mcp-list.out"
+out="$(cd "$REPO_A" && "${ORCH[@]}" BOSUN_ORCHESTRATOR_CONNECTORS="claude.ai Acme Chat, claude.ai Acme Gone" "$BOSUN" launch orch 2>&1)"
+check "a name not found is left out" allows "$out" '$a == [{"serverUrl": "https://chat.example.com/mcp"}]'
+check "... logged" contains "$out" "connectors: claude.ai Acme Gone not found, so this window starts without it"
+LAUNCH_LOG="$BOSUN_LOG_DIR/launch-$(date +%F).log"
+check "... in the launch log too, as is a failed lookup" bash -c '
+  grep -qF "orch: connectors: claude.ai Acme Gone not found, so this window starts without it" "$1" && grep -qF "orch: connectors: claude mcp list failed" "$1"' _ "$LAUNCH_LOG"
+check "... and the orchestrator's launch alerts me, the alert's output in the launch log" wait_for 10 grep -qF \
+  "alert (notification only; BOSUN_ALERT_SLACK_USER is empty): orch: started without connector(s) it may use: claude.ai Acme Gone" "$LAUNCH_LOG"
+check "... never on the window's screen" bash -c 'grep -q "alerting you that it started without connector(s) it may use: claude.ai Acme Gone" <<<"$1" && ! grep -q "notification only" <<<"$1"' _ "$out"
+out="$(cd "$REPO_A" && "${CN[@]}" BOSUN_CONNECTORS="claude.ai Acme Gone" "$BOSUN" launch alpha 2>&1)"
+check "a repo window's missing name is logged, without an alert" bash -c 'grep -q "claude.ai Acme Gone not found" <<<"$1" && ! grep -q "started without connector" <<<"$1"' _ "$out"
+: >"$WORK/mcp-claude.calls"
+out="$(cd / && "${ORCH[@]}" BOSUN_ORCHESTRATOR_CONNECTORS="claude.ai Acme Chat, claude.ai Acme Gone" "$BOSUN" launch --fingerprint orch 2>/dev/null)"
+check "launch --fingerprint looks nothing up" bash -c '[ ! -s "$1" ] && jq -e .args <<<"$2" >/dev/null' _ "$WORK/mcp-claude.calls" "$out"
+check "... and agrees with the launch, from what was kept" bash -c '[ "$(jq -cS .fingerprint "$1")" = "$(jq -cS . <<<"$2")" ]' _ "$BOSUN_STATE_DIR/launches/smoke/orch.json" "$out"
+# A connector once kept that a later lookup no longer shows: the launch leaves it out, so must the fingerprint.
+printf 'claude.ai Acme Chat: https://chat.example.com/mcp - ✔ Connected\nclaude.ai Acme Old: https://old.example.com/mcp - ✔ Connected\n' >"$WORK/mcp-list.out"
+(cd "$REPO_A" && "${ORCH[@]}" BOSUN_ORCHESTRATOR_CONNECTORS="claude.ai Acme Chat, claude.ai Acme Old" "$BOSUN" launch orch >/dev/null 2>&1)
+printf 'claude.ai Acme Chat: https://chat.example.com/mcp - ✔ Connected\n' >"$WORK/mcp-list.out"
+out="$(cd "$REPO_A" && "${ORCH[@]}" BOSUN_ORCHESTRATOR_CONNECTORS="claude.ai Acme Chat, claude.ai Acme Old" "$BOSUN" launch orch 2>&1)"
+check "a kept connector the lookup no longer shows is left out, and dropped from what was kept" bash -c '
+  jq -e "has(\"claude.ai Acme Old\") | not" "$2" >/dev/null && grep -q "claude.ai Acme Old not found" <<<"$1"' _ "$out" "$BOSUN_STATE_DIR/connectors.json"
+check "... so the fingerprint agrees with that launch" bash -c '[ "$(jq -cS .fingerprint "$1")" = "$(cd / && "${@:2}" launch --fingerprint orch 2>/dev/null | jq -cS .)" ]' \
+  _ "$BOSUN_STATE_DIR/launches/smoke/orch.json" "${ORCH[@]}" BOSUN_ORCHESTRATOR_CONNECTORS="claude.ai Acme Chat, claude.ai Acme Old" "$BOSUN"
+# A plugin's server `installed_plugins.json` does not list (synced, --plugin-dir, managed) resolves to what the listing shows.
+printf 'plugin:acme-pdf:pdf: /Users/me/bin/acme-pdf --stdio  - ✔ Connected\n' >"$WORK/mcp-list.out"
+out="$(cd "$REPO_A" && "${ORCH[@]}" BOSUN_ORCHESTRATOR_CONNECTORS="plugin:acme-pdf:pdf" "$BOSUN" launch orch 2>&1)"
+check "a plugin: name only claude mcp list shows gets its command from the listing" allows "$out" '$a == [{"serverCommand": ["/Users/me/bin/acme-pdf", "--stdio"]}]'
+# Fail closed in the shell too: a resolver answer that is not one JSON object, settings built without the
+# window's limit, or settings asked for before the lookup ran, each stop the launch.
+check "a resolver answer that is not one JSON object stops the launch" bash -c '
+  source "$1/lib/common.sh"; load_config
+  for answer in "not json" "{}{}" "[]" "{}" "{\"allowedMcpServers\": {}}"; do
+    python3() { printf "%s\n" "$answer"; }
+    ! resolve_connectors alpha acme-local "$PWD" 0 >/dev/null 2>&1 || { echo "took: $answer"; exit 1; }
+  done' _ "$ROOT"
+check "... but {} (no limit) for the list all" bash -c '
+  source "$1/lib/common.sh"; load_config
+  python3() { echo "{}"; }
+  [ "$(resolve_connectors alpha " all " "$PWD" 0)" = "{}" ]' _ "$ROOT"
+check "settings that lost the window's limit are refused" fails_with "lost its connector limit" bash -c '
+  source "$1/lib/common.sh"; load_config
+  model_effort_args=(--model opus --settings "{\"effortLevel\":\"medium\"}")
+  require_connector_limit alpha "{\"allowedMcpServers\":[]}"' _ "$ROOT"
+check "... as is connector JSON that cannot be read, never taken for no limit" fails_with "cannot be read; not starting it with every server" bash -c '
+  source "$1/lib/common.sh"; load_config
+  model_effort_args=(--model opus)
+  require_connector_limit alpha "not json"' _ "$ROOT"
+check "... and settings asked for before the lookup ran" fails_with "were not resolved before" bash -c '
+  source "$1/lib/common.sh"; load_config; connector_settings alpha' _ "$ROOT"
+check "a list naming all and more is refused" fails_with "stands alone" "${ORCH[@]}" BOSUN_ORCHESTRATOR_CONNECTORS="all, claude.ai Acme Chat" "$BOSUN" launch orch
+cat >"$WORK/connectors-sessions.yml" <<YAML
+sessions:
+  - name: alpha
+    dir: $REPO_A
+    connectors: acme-local, https://mcp.example.com/*
+  - name: beta
+    dir: $REPO_A
+    connectors: [acme-local, 'https://mcp.example.com/a"b\$(touch $WORK/pwned)*']
+  - name: gamma
+    dir: $REPO_A
+    connectors: []
+YAML
+SN=("${CN[@]}" BOSUN_SESSIONS_FILE="$WORK/connectors-sessions.yml" BOSUN_CONNECTORS=acme-default)
+TRICKY="https://mcp.example.com/a\"b\$(touch $WORK/pwned)*"
+check "connectors: in sessions.yml as a string" allows "$(cd "$REPO_A" && "${SN[@]}" "$BOSUN" launch alpha 2>&1)" '$a == [{"serverName": "acme-local"}, {"serverUrl": "https://mcp.example.com/*"}]'
+check "... as a list, a name with \" and \$( reaching the JSON as data" allows "$(cd "$REPO_A" && "${SN[@]}" "$BOSUN" launch beta 2>&1)" "\$a == [{\"serverName\": \"acme-local\"}, {\"serverUrl\": $(jq -n --arg t "$TRICKY" '$t')}]"
+check "... never run" test ! -e "$WORK/pwned"
+cat >"$WORK/connectors-odd-sessions.yml" <<YAML
+sessions:
+  - name: delta
+    dir: $REPO_A
+    connectors: ["claude.ai Acme, Inc"]
+  - name: epsilon
+    dir: $REPO_A
+    connectors: no
+YAML
+ODD=("${CN[@]}" BOSUN_SESSIONS_FILE="$WORK/connectors-odd-sessions.yml")
+check "... a list entry holding a comma is refused, never split into two names" fails_with \
+  "the connectors of delta must be a comma-separated string or a list of names, none holding a comma" bash -c 'cd "$1" && "${@:2}" launch delta' _ "$REPO_A" "${ODD[@]}" "$BOSUN"
+check "... as is a value that is no string, such as connectors: no (YAML's false)" fails_with \
+  "the connectors of epsilon must be a comma-separated string or a list of names" bash -c 'cd "$1" && "${@:2}" launch epsilon' _ "$REPO_A" "${ODD[@]}" "$BOSUN"
+check "... and doctor says why" contains "$("${ODD[@]}" "$BOSUN" doctor 2>&1)" "FAIL  epsilon: could not read its connectors: $WORK/connectors-odd-sessions.yml: the connectors of epsilon must be"
+check "... as [] (none), over BOSUN_CONNECTORS" allows "$(cd "$REPO_A" && "${SN[@]}" "$BOSUN" launch gamma 2>&1)" '$a == []'
+check "... and BOSUN_CONNECTORS for a window without the key" allows "$(cd "$REPO_A" && "${SN[@]}" BOSUN_SESSIONS_FILE="$BOSUN_CONFIG_DIR/sessions.yml" "$BOSUN" launch alpha 2>&1)" '$a == [{"serverName": "acme-default"}]'
+out="$(cd "$REPO_A" && "${ORCH[@]}" BOSUN_ORCHESTRATOR_CONNECTORS="$TRICKY" "$BOSUN" launch orch 2>&1)"
+check "the same name in BOSUN_ORCHESTRATOR_CONNECTORS" allows "$out" "\$a == [{\"serverUrl\": $(jq -n --arg t "$TRICKY" '$t')}]"
+check "... never run" test ! -e "$WORK/pwned"
+out="$(cd "$REPO_A" && "${ORCH[@]}" BOSUN_ORCHESTRATOR_CONNECTORS="claude.ai Acme \"Mail\" \$(touch $WORK/pwned)" "$BOSUN" launch orch 2>&1)"
+check "... and in an alert" wait_for 10 bash -c 'grep -qF "notification only; BOSUN_ALERT_SLACK_USER is empty): orch: started without connector(s) it may use: claude.ai Acme \"Mail\" \$(touch $2/pwned)" "$1" && [ ! -e "$2/pwned" ]' _ "$LAUNCH_LOG" "$WORK"
+jq '. + {allowedMcpServers: [{serverName: "site-wide"}]}' "$ROOT/orchestrator/settings.json" >"$WORK/site-mcp-settings.json"
+check "a site settings file's own allowedMcpServers is replaced by the window's list" \
+  allows "$(cd "$REPO_A" && "${ORCH[@]}" BOSUN_ORCHESTRATOR_SETTINGS="$WORK/site-mcp-settings.json" BOSUN_ORCHESTRATOR_CONNECTORS=acme-local "$BOSUN" launch orch 2>&1)" '$a == [{"serverName": "acme-local"}]'
+check "... and left as it is with all" \
+  allows "$(cd "$REPO_A" && "${ORCH[@]}" BOSUN_ORCHESTRATOR_SETTINGS="$WORK/site-mcp-settings.json" BOSUN_ORCHESTRATOR_CONNECTORS=all "$BOSUN" launch orch 2>&1)" '$a == [{"serverName": "site-wide"}]'
+check "doctor says which applies" contains "$("${ORCH[@]}" BOSUN_ORCHESTRATOR_SETTINGS="$WORK/site-mcp-settings.json" BOSUN_ORCHESTRATOR_CONNECTORS=acme-local "$BOSUN" doctor 2>&1)" \
+  "ok    orch: allowed by name: acme-local; its settings file ($WORK/site-mcp-settings.json) holds an allowedMcpServers, which this list replaces"
+# Allow lists in other settings scopes add to a window's (Claude Code), so a launch with a list refuses one
+# that allows more than the list names, and starts once the list names it; a window with all is not checked.
+mkdir -p "$REPO_A/.claude"
+echo '{"allowedMcpServers": [{"serverName": "acme-repo"}]}' >"$REPO_A/.claude/settings.json"
+check "a repo whose own settings allow a server its window's list does not name does not start" fails_with \
+  "connectors: $REPO_A/.claude/settings.json allows [{\"serverName\": \"acme-repo\"}], beyond this window's list, and Claude Code adds it to it: name it in the window's list, use all, or remove it from that file" \
+  bash -c 'cd "$1" && "${@:2}" launch alpha' _ "$REPO_A" "${CN[@]}" "$BOSUN"
+check "... and starts once its list names it" allows "$(cd "$REPO_A" && "${CN[@]}" BOSUN_CONNECTORS=acme-repo "$BOSUN" launch alpha 2>&1)" '$a == [{"serverName": "acme-repo"}]'
+check "... or with all" allows "$(cd "$REPO_A" && "${CN[@]}" BOSUN_CONNECTORS=all "$BOSUN" launch alpha 2>&1)" '$a == "no key"'
+check "... and doctor says it does not start" contains "$("${CN[@]}" "$BOSUN" doctor 2>&1)" \
+  "warn  alpha: none (no MCP server or connector); does not start: $REPO_A/.claude/settings.json allows"
+rm -rf "$REPO_A/.claude/settings.json"
+# bosun doctor: a line per window, resolved from what earlier starts kept (claude.ai Acme Chat), looking
+# nothing up; and a warning when my own Claude Code settings hold an allow list, which widens every window's.
+: >"$WORK/mcp-claude.calls"
+out="$("${SN[@]}" BOSUN_ORCHESTRATOR=orch BOSUN_ORCHESTRATOR_DIR="$REPO_A" BOSUN_ORCHESTRATOR_CONNECTORS=all "$BOSUN" doctor 2>&1)"
+check "doctor says what each window reaches: a few" contains "$out" "ok    alpha: allowed by name: acme-local; allowed by pattern: https://mcp.example.com/*"
+check "... none" contains "$out" "ok    gamma: none (no MCP server or connector)"
+check "... and warns while the orchestrator keeps every connector" contains "$out" \
+  "warn  orch: all (every MCP server and connector): name the ones it needs in BOSUN_ORCHESTRATOR_CONNECTORS and drop all"
+out="$("${ORCH[@]}" BOSUN_ORCHESTRATOR_CONNECTORS="claude.ai Acme Chat, claude.ai Acme Gone" "$BOSUN" doctor 2>&1)"
+check "... names what it cannot find" contains "$out" "warn  orch: reaches claude.ai Acme Chat; not among the servers earlier starts looked up: claude.ai Acme Gone"
+check "... and looks nothing up" test ! -s "$WORK/mcp-claude.calls"
+# An orchestrator whose bosun.env does not set its list (none there, or no bosun.env) had every connector
+# before the key: doctor says it now has none, until the key is set, to nothing too.
+UNSET_LINE="warn  BOSUN_ORCHESTRATOR_CONNECTORS is not set in bosun.env: before this version the orchestrator had every connector, and now it starts with none"
+check "doctor warns while there is no bosun.env to set the orchestrator's list" contains "$("${ORCH[@]}" "$BOSUN" doctor 2>&1)" "$UNSET_LINE"
+echo 'BOSUN_DRAIN_PROMPT="carry on"' >"$BOSUN_CONFIG_DIR/bosun.env"
+check "... and while bosun.env does not set it" contains "$("${ORCH[@]}" "$BOSUN" doctor 2>&1)" "$UNSET_LINE"
+echo 'BOSUN_ORCHESTRATOR_CONNECTORS=""' >"$BOSUN_CONFIG_DIR/bosun.env"
+check "... but not once it is set, to nothing too" bash -c '! grep -qF "$2" <<<"$1" && grep -qF "ok    orch: none (no MCP server or connector)" <<<"$1"' \
+  _ "$("${ORCH[@]}" "$BOSUN" doctor 2>&1)" "$UNSET_LINE"
+rm -f "$BOSUN_CONFIG_DIR/bosun.env"
+mkdir -p "$HOME/.claude"
+echo '{"allowedMcpServers": [{"serverName": "acme-local"}]}' >"$HOME/.claude/settings.json"
+out="$("${ORCH[@]}" BOSUN_ORCHESTRATOR_CONNECTORS="claude.ai Acme Chat" "$BOSUN" doctor 2>&1)"
+check "doctor says a window that my own Claude Code settings would widen does not start" contains "$out" \
+  "warn  orch: reaches claude.ai Acme Chat; does not start: $HOME/.claude/settings.json allows [{\"serverName\": \"acme-local\"}]"
+check "... and so does its launch" fails_with "$HOME/.claude/settings.json allows" \
+  bash -c 'cd "$1" && "${@:2}" launch orch' _ "$REPO_A" "${ORCH[@]}" BOSUN_ORCHESTRATOR_CONNECTORS="claude.ai Acme Chat" "$BOSUN"
+rm -f "$HOME/.claude/settings.json"
+rm -f "$WORK/mcp-claude.calls" "$BOSUN_STATE_DIR/connectors.json" "$LAUNCH_LOG"
+
 echo "knowledge (kg, fixture acme knowledge base)"
 # A config dir of its own, so doctor and the rest of the suite see no knowledge base.
 kg() { BOSUN_CONFIG_DIR="$WORK/kg-config" "$BOSUN" kg "$@"; }
@@ -1066,14 +1255,17 @@ check "... with the update's prompt" wait_for 10 launched_with_update_prompt gam
 check "... on Claude, as it was launched" bash -c '
   screen="$(tmux -L "$1" capture-pane -p -J -S -500 -t "=smoke:gamma")"
   grep -q -- "--remote-control gamma" <<<"$screen" && ! grep -q codex-turn-end <<<"$screen"' _ "$SOCKET"
-printf '#!/bin/sh\necho "codex-cli 0.50.0"\n' >"$WORK/fake-codex"
+printf '#!/bin/sh\ncase "$*" in *"mcp list --json") echo "[]" && exit 0 ;; esac\necho "codex-cli 0.50.0"\n' >"$WORK/fake-codex"
 chmod +x "$WORK/fake-codex"
 wait_for 10 pane_is_idle gamma
 gamma_pane="$(pane_of gamma)"
-check "a plain refresh, not for an update" env BOSUN_CODEX_BIN="$WORK/fake-codex" "$BOSUN" refresh gamma
+# The window's own launch (in a tmux pane, which does not inherit this shell's variables) reads the fake from the config.
+echo "BOSUN_CODEX_BIN=\"$WORK/fake-codex\"" >"$BOSUN_CONFIG_DIR/bosun.env"
+check "a plain refresh, not for an update" "$BOSUN" refresh gamma
 check "... starts it on the agent configured now (Codex)" wait_for 10 bash -c '
   [ "$(tmux -L "$1" display -p -t =smoke:gamma "#{pane_pid}")" != "$2" ] &&
     tmux -L "$1" capture-pane -p -J -S -500 -t "=smoke:gamma" | grep -q codex-turn-end' _ "$SOCKET" "$gamma_pane"
+rm -f "$BOSUN_CONFIG_DIR/bosun.env"
 cp "$WORK/sessions.yml.on-claude" "$BOSUN_CONFIG_DIR/sessions.yml"
 "$BOSUN" stop >/dev/null 2>&1
 
@@ -1822,7 +2014,7 @@ cat >"$WORK/fake-claude" <<FAKE
 #!/bin/bash
 if [ "\$1" = "--version" ]; then echo "2.0.0 (Claude Code)"; exit 0; fi
 printf '%s\n' "\$@" >"$WORK/fake-claude.args"
-env | grep -E '^(BOSUN_|PATH=)' >"$WORK/fake-claude.env"
+env | grep -E '^(BOSUN_|PATH=|ENABLE_CLAUDEAI_MCP_SERVERS=)' >"$WORK/fake-claude.env"
 "$BOSUN" ledger upsert 'review:o/r#9' --kind review-request --title 'From dry run' >/dev/null
 echo '{"result":"fake plan","total_cost_usd":0.01,"num_turns":1,"permission_denials":[{"tool_name":"Bash","tool_input":{"command":"gh pr merge x"}}]}'
 FAKE
@@ -1839,6 +2031,14 @@ check "dry run invokes the morning chores" grep -qx "/bosun:chores morning" "$WO
 check "dry run runs this checkout's guard, as the orchestrator's launch does" runs_this_guard "$(grep -A1 -x -- --settings "$WORK/fake-claude.args" | tail -1)"
 check "dry run denies the settings' ask list by name" bash -c 'grep -qx -- --disallowedTools "$1" && grep -qx "mcp__plugin_slack_slack__slack_send_message" "$1" && grep -qx "Bash(git push:\*)" "$1"' _ "$WORK/fake-claude.args"
 check "dry run leaves the real ledger alone" bash -c '! "$1" ledger show "review:o/r#9" >/dev/null 2>&1' _ "$BOSUN"
+check "dry run limits the connectors as the orchestrator's launch does" bash -c '
+  [ "$(grep -A1 -x -- --settings "$1" | tail -1 | jq -c .allowedMcpServers)" = "[]" ] && ! grep -q ENABLE_CLAUDEAI "$2"' _ "$WORK/fake-claude.args" "$WORK/fake-claude.env"
+sleep 1
+env -u ENABLE_CLAUDEAI_MCP_SERVERS BOSUN_ORCHESTRATOR_CONNECTORS=acme-local "$BOSUN" chores morning --dry-run >/dev/null 2>&1
+check "... with the orchestrator's list, and claude.ai's connectors on when it names any" bash -c '
+  settings="$(grep -A1 -x -- --settings "$1" | tail -1)"
+  [ "$(jq -c .allowedMcpServers <<<"$settings")" = "[{\"serverName\":\"acme-local\"}]" ] && grep -q PreToolUse <<<"$settings" &&
+    grep -qx ENABLE_CLAUDEAI_MCP_SERVERS=true "$2"' _ "$WORK/fake-claude.args" "$WORK/fake-claude.env"
 sleep 1
 out="$("$BOSUN" chores morning --dry-run --continue 2>&1)"
 check "--continue starts from the previous rehearsal" contains "$out" "seeded from $BOSUN_STATE_DIR/dry-runs/"
@@ -2449,7 +2649,10 @@ for line in sys.stdin:
   mkdir -p "$CX_HOME/sessions/2026/10/30" "$CX_REPO"
   git -C "$CX_REPO" init -q
   printf 'sessions:\n  - name: cx\n    dir: %s\n    harness: codex\n  - name: cl\n    dir: %s\n' "$CX_REPO" "$CX_REPO" >"$WORK/cx-sessions.yml"
-  CX() { (cd "$CX_REPO" && CODEX_HOME="$CX_HOME" BOSUN_SESSIONS_FILE="$WORK/cx-sessions.yml" BOSUN_LAUNCH_DRY_RUN=1 BOSUN_EVENTS_ENABLED=0 "$BOSUN" "$@" 2>&1); }
+  # Codex's stand-in lists the servers in $WORK/cx-servers.json (`codex mcp list --json`); its listing
+  # fails when CODEX_STAND_IN_MCP_LIST names a file that is not there.
+  printf '[{"name":"acme-docs"},{"name":"acme.mail"}]' >"$WORK/cx-servers.json"
+  CX() { (cd "$CX_REPO" && BOSUN_CODEX_BIN="$ROOT/tests/sandbox/codex-stand-in" CODEX_STAND_IN_MCP_LIST="${CODEX_STAND_IN_MCP_LIST:-$WORK/cx-servers.json}" CODEX_HOME="$CX_HOME" BOSUN_SESSIONS_FILE="$WORK/cx-sessions.yml" BOSUN_LAUNCH_DRY_RUN=1 BOSUN_EVENTS_ENABLED=0 "$BOSUN" "$@" 2>&1); }
   out="$(CX launch cx)"
   check "a new Codex session starts with what keeps it unattended" contains "$out" "--no-daemon --approve-for-me"
   check "... can reach git and bosun's state" contains "$out" "sandbox_workspace_write.writable_roots"
@@ -2469,10 +2672,93 @@ for line in sys.stdin:
   printf '{"type":"session_meta","payload":{"id":"cx-1","cwd":"%s","source":"cli"}}\n' "$(cd "$CX_REPO" && pwd -P)" >"$CX_HOME/sessions/2026/10/30/rollout-2026-10-30T00-00-00-cx-1.jsonl"
   CX hook codex-turn-end --window cx --conversation cx "{\"thread-id\":\"cx-1\",\"cwd\":\"$CX_REPO\"}" >/dev/null
   CX hook codex-turn-end --window cx --conversation cx "{\"thread-id\":\"a-helper\",\"cwd\":\"$CX_REPO\"}" >/dev/null
-  check "once a turn has ended it resumes that session" wait_for 5 bash -c 'cd "$1" && CODEX_HOME="$2" BOSUN_SESSIONS_FILE="$3" BOSUN_LAUNCH_DRY_RUN=1 "$4" launch cx 2>&1 | grep -q "resume .* cx-1"' _ "$CX_REPO" "$CX_HOME" "$WORK/cx-sessions.yml" "$BOSUN"
+  check "once a turn has ended it resumes that session" wait_for 5 bash -c 'cd "$1" && BOSUN_CODEX_BIN="$5" CODEX_HOME="$2" BOSUN_SESSIONS_FILE="$3" BOSUN_LAUNCH_DRY_RUN=1 "$4" launch cx 2>&1 | grep -q "resume .* cx-1"' _ "$CX_REPO" "$CX_HOME" "$WORK/cx-sessions.yml" "$BOSUN" "$ROOT/tests/sandbox/codex-stand-in"
   check "bosun trust covers each agent in use" bash -c 'cd "$1" && CODEX_HOME="$2" BOSUN_SESSIONS_FILE="$3" "$4" trust --any "$1" >/dev/null 2>&1 && grep -q "trust_level = \"trusted\"" "$2/config.toml"' _ "$CX_REPO" "$CX_HOME" "$WORK/cx-sessions.yml" "$BOSUN"
   check "... and can take it back" bash -c 'cd "$1" && CODEX_HOME="$2" BOSUN_SESSIONS_FILE="$3" "$4" trust --revoke "$1" >/dev/null 2>&1 && ! grep -q trust_level "$2/config.toml"' _ "$CX_REPO" "$CX_HOME" "$WORK/cx-sessions.yml" "$BOSUN"
   check "preflight checks each agent in use" contains "$(CX preflight)" "Codex"
+
+  echo "a window on Codex reaches only the servers its config names"
+  printf '  - name: cx-docs\n    dir: %s\n    harness: codex\n    connectors: [acme-docs]\n  - name: cx-all\n    dir: %s\n    harness: codex\n    connectors: all\n' "$CX_REPO" "$CX_REPO" >>"$WORK/cx-sessions.yml"
+  # codex_launch_args <launch output>: the arguments its dry-run line hands Codex, on one line.
+  codex_launch_args() {
+    local line
+    local -a args
+    line="$(grep '^dry-run: would run:' <<<"$1" | tail -1)"
+    [ -n "$line" ] || {
+      echo "no dry-run line in: $(tail -3 <<<"$1")"
+      return 1
+    }
+    eval "args=(${line#dry-run: would run:})" # printf %q's own quoting, read back
+    printf ' %s' "${args[@]}"
+    echo
+  }
+  out="$(codex_launch_args "$(CX launch cx)")"
+  check "with no list, every server is switched off by name, in one inline table, a name that is not a bare TOML key quoted" \
+    contains "$out" ' -c mcp_servers={acme-docs={enabled=false},"acme.mail"={enabled=false}} '
+  check "... and ChatGPT's connectors off" contains "$out" ' --disable apps'
+  check "... and no update screen to stall at" contains "$out" ' -c check_for_update_on_startup=false '
+  out="$(codex_launch_args "$(CX launch cx-docs)")"
+  check "with connectors: [acme-docs], only the other server is switched off" bash -c '
+    grep -qF " -c mcp_servers={\"acme.mail\"={enabled=false}} --disable apps" <<<"$1"' _ "$out"
+  out="$(codex_launch_args "$(CX launch cx-all)")"
+  check "with connectors: all, nothing is switched off" bash -c '! grep -qF mcp_servers <<<"$1" && ! grep -qF -- --disable <<<"$1"' _ "$out"
+  check "... and there is still no update screen" contains "$out" ' -c check_for_update_on_startup=false '
+  # A plugin's server: in the listing, but not in the one with --disable plugins.
+  printf '[{"name":"acme-docs"},{"name":"acme.mail"},{"name":"acme-kit"}]' >"$WORK/cx-servers-plugins.json"
+  CXP() { CODEX_STAND_IN_MCP_LIST="$WORK/cx-servers-plugins.json" CODEX_STAND_IN_MCP_LIST_NO_PLUGINS="$WORK/cx-servers.json" CX "$@"; }
+  out="$(codex_launch_args "$(CXP launch cx-docs)")"
+  check "a plugin's server the list does not name switches every plugin off, and is not in the table" bash -c '
+    grep -qF " -c mcp_servers={\"acme.mail\"={enabled=false}} --disable plugins --disable apps" <<<"$1" && ! grep -qF acme-kit <<<"$1"' _ "$out"
+  out="$(codex_launch_args "$(BOSUN_CONNECTORS=acme-kit CXP launch cx)")"
+  check "... and a list that names it keeps plugins on" bash -c '
+    grep -qF " -c mcp_servers={acme-docs={enabled=false},\"acme.mail\"={enabled=false}} --disable apps" <<<"$1" && ! grep -qF -- "--disable plugins" <<<"$1"' _ "$out"
+  out="$(BOSUN_CONNECTORS=acme-docs CXP doctor)"
+  check "... and doctor says every plugin goes" contains "$out" \
+    "cx: reaches acme-docs (switches off acme.mail, every plugin (with acme-kit) and ChatGPT's connectors)"
+  out="$(BOSUN_CONNECTORS="acme-docs, https://mcp.example.com/*" CX doctor)"
+  check "doctor says what a Codex window reaches, from its server names" contains "$out" \
+    "ok    cx-docs: reaches acme-docs (switches off acme.mail and ChatGPT's connectors)"
+  check "... and that a URL means nothing to Codex" contains "$out" \
+    "warn  cx: reaches acme-docs (switches off acme.mail and ChatGPT's connectors); mean nothing to Codex: https://mcp.example.com/*"
+  out="$(BOSUN_CONNECTORS="acme-docs, acme-gone" CX launch cx)"
+  check "a Codex launch says which names of its list it has no server by" contains "$out" "cx: connectors: acme-gone not found, so this window starts without it"
+  check "... in the launch log too" grep -qF "cx: connectors: acme-gone not found, so this window starts without it" "$BOSUN_LOG_DIR/launch-$(date +%F).log"
+  check "a listing that fails keeps the window from starting" fails_with "codex mcp list failed" env CODEX_STAND_IN_MCP_LIST="$WORK/no-such-listing" bash -c 'cd "$1" && BOSUN_CODEX_BIN="$2" CODEX_HOME="$3" BOSUN_SESSIONS_FILE="$4" BOSUN_LAUNCH_DRY_RUN=1 BOSUN_EVENTS_ENABLED=0 "$5" launch cx' _ "$CX_REPO" "$ROOT/tests/sandbox/codex-stand-in" "$CX_HOME" "$WORK/cx-sessions.yml" "$BOSUN"
+  out="$(CODEX_STAND_IN_MCP_LIST="$WORK/no-such-listing" CX launch cx || true)"
+  check "... and says why, without starting Codex" bash -c 'grep -q "so bosun cannot tell which servers to switch off" <<<"$1" && ! grep -q "dry-run: would run" <<<"$1"' _ "$out"
+  broken_listing_cx() { CODEX_STAND_IN_MCP_LIST="$WORK/no-such-listing" CX "$@"; }
+  check "... and so does its fingerprint, which an update reads as the window changed" fails_with "codex mcp list failed" broken_listing_cx launch --fingerprint cx
+  out="$(CX launch --fingerprint cx)"
+  check "... while a listing that works gives one" bash -c 'jq -e ".args | length > 0" <<<"$1" >/dev/null' _ "$out"
+  # codex_args_valid <list> <lines...>: "valid" or "refused", as lib/launch/codex.sh judges what
+  # connectors.py would print for <list>. A crash prints neither, so it is no answer to either check.
+  codex_args_valid() {
+    bash -c 'set -u; BOSUN_CODEX_BIN=codex; source "$1/lib/common.sh" && source "$1/lib/launch/codex.sh" || exit 3; list="$2"; shift 2; codex_connector_args=("$@")
+      if codex_connector_args_valid "$list"; then echo valid; else echo refused; fi' _ "$ROOT" "$@"
+  }
+  outputs() { # <want> <command...>: the command prints exactly <want>
+    local got
+    got="$("${@:2}" 2>&1)" && [ "$got" = "$1" ] || {
+      echo "wanted: $1; got: $got"
+      return 1
+    }
+  }
+  # The shape only: nothing for all, else an optional -c mcp_servers={...}, an optional --disable plugins,
+  # then --disable apps. What the table holds is connectors.py's (its unit tests read it back as TOML).
+  check "the shape -c mcp_servers={...}, --disable plugins, --disable apps is taken" outputs valid codex_args_valid "" -c 'mcp_servers={acme-docs={enabled=false},"acme.mail"={enabled=false}}' --disable plugins --disable apps
+  check "... and without --disable plugins" outputs valid codex_args_valid "" -c 'mcp_servers={acme-docs={enabled=false}}' --disable apps
+  check "... and without the table" outputs valid codex_args_valid "acme-docs" --disable plugins --disable apps
+  check "... and --disable apps alone" outputs valid codex_args_valid "acme-docs" --disable apps
+  check "... and nothing for all" outputs valid codex_args_valid " all "
+  check "... but nothing for any other list is no answer" outputs refused codex_args_valid "acme-docs"
+  check "... nor -c cut short" outputs refused codex_args_valid "" -c --disable apps
+  check "... nor -c with anything but an mcp_servers table, such as the form Codex splits at every dot" outputs refused codex_args_valid "" -c 'mcp_servers."acme.mail".enabled=false' --disable apps
+  check "... nor two tables" outputs refused codex_args_valid "" -c 'mcp_servers={a={enabled=false}}' -c 'mcp_servers={b={enabled=false}}' --disable apps
+  check "... nor a missing --disable apps" outputs refused codex_args_valid "" -c 'mcp_servers={acme-docs={enabled=false}}' --disable plugins
+  check "... nor the two --disable pairs the other way round" outputs refused codex_args_valid "" --disable apps --disable plugins
+  check "... nor more after --disable apps" outputs refused codex_args_valid "" --disable apps -c 'mcp_servers={acme-docs={enabled=false}}'
+  check "... nor extra text after it" outputs refused codex_args_valid "" --disable apps extra
+  check "... nor an unknown flag" outputs refused codex_args_valid "" --frob --disable apps
 
   echo "get.sh (a dry run: it changes nothing)"
   check "it is plain sh" sh -n "$ROOT/get.sh"
@@ -2514,6 +2800,17 @@ for line in sys.stdin:
   check "with an install bosun init has not set up yet (it stopped at what bosun needs), it starts bosun init again, as it is" says_lines "$G_UNFINISHED" \
     "$G_UNFINISHED_LINE" "Then it would start: $G_DIR/bin/bosun init"
   check "... getting nothing" not_contains "$G_UNFINISHED" "  \$ git"
+  check "... unattended, it would hand that over as a variable, which an older bosun ignores" says_lines \
+    "$(HOME="$G/home" BOSUN_DIR="$G_DIR" BOSUN_REPO="$G/upstream" sh "$ROOT/get.sh" --dry-run --unattended 2>&1)" \
+    "Then it would start: BOSUN_INIT_UNATTENDED=1 $G_DIR/bin/bosun init --recommended"
+  # The version there is older than this get.sh: a bosun that knows no --unattended, which says what it got.
+  printf '#!/bin/sh\necho "init got: $*, BOSUN_INIT_UNATTENDED=${BOSUN_INIT_UNATTENDED:-}"\n' >"$G_DIR/bin/bosun"
+  chmod +x "$G_DIR/bin/bosun"
+  check "... and does: init --recommended, with BOSUN_INIT_UNATTENDED=1" says_lines \
+    "$(HOME="$G/home" BOSUN_DIR="$G_DIR" BOSUN_REPO="$G/upstream" sh "$ROOT/get.sh" --unattended </dev/null 2>&1)" \
+    "init got: init --recommended, BOSUN_INIT_UNATTENDED=1"
+  printf '#!/bin/sh\n' >"$G_DIR/bin/bosun"
+  chmod -x "$G_DIR/bin/bosun" # as it was
   mkdir -p "$G/home/.local/bin"
   ln -s "$G/gone/bin/bosun" "$G/home/.local/bin/bosun"
   check "... and so with a ~/.local/bin/bosun that leads nowhere" says_lines "$(get_dry)" "$G_UNFINISHED_LINE"
@@ -2578,6 +2875,29 @@ for line in sys.stdin:
   U_CONFIG="$U/config"
   mkdir -p "$U_VERSIONS" "$U_STATE" "$U_CONFIG"
   copy_tree "$U_UP"
+  # v1 stands for an install from before the connector keys: its lib/common.sh has no default line for
+  # them (what the plan reads a version's keys from), though it still sets them, to every connector as
+  # such an install had, so that v1 runs. Each v2 gets them back (u_next), so the update adds both and
+  # writes the orchestrator's kept value to bosun.env (migrations.CONFIG_ADDED).
+  cp "$U_UP/lib/common.sh" "$U/common.sh.with-connectors"
+  python3 - "$U_UP/lib/common.sh" <<'PY'
+import sys
+from pathlib import Path
+
+path = Path(sys.argv[1])
+text = path.read_text()
+for key in ("BOSUN_CONNECTORS", "BOSUN_ORCHESTRATOR_CONNECTORS"):
+    line = f'  {key}=""\n'
+    if text.count(line) != 1:
+        raise SystemExit(f"{path} does not hold {line!r} once")
+    text = text.replace(line, f'  : "${{{key}=all}}"\n')
+path.write_text(text)
+PY
+  u_next() { # [--failing]: v2 made from v1 in upstream's tree, its connector keys' defaults back
+    cp "$U/common.sh.with-connectors" "$U_UP/lib/common.sh"
+    "$ROOT/tests/sandbox/update_patch.sh" "$@" "$U_UP"
+  }
+  printf '# acme: an install from before connectors\n' >"$U_CONFIG/bosun.env"
   ug() { git -C "$U_UP" -c core.hooksPath=/dev/null -c commit.gpgsign=false -c user.name=acme -c user.email=dev@example.com "$@"; }
   ug init -q -b main
   ug add -A
@@ -2587,7 +2907,7 @@ for line in sys.stdin:
   git --git-dir="$U_VERSIONS/bosun.git" worktree add -q --detach "$U_VERSIONS/${U_V1_COMMIT:0:12}" "$U_V1_COMMIT"
   ln -s "bosun-versions/${U_V1_COMMIT:0:12}" "$U_LINK"
   U_V1="$(cd "$U_VERSIONS/${U_V1_COMMIT:0:12}" && pwd -P)"
-  "$ROOT/tests/sandbox/update_patch.sh" --failing "$U_UP"
+  u_next --failing
   ug commit -qam "v2, whose migration fails while writes are paused"
   U_FAILING_COMMIT="$(ug rev-parse HEAD)"
   # A Claude of its own that answers and writes nothing: the suite's $WORK/fake-claude (the chores dry
@@ -2624,6 +2944,8 @@ for line in sys.stdin:
   check "update --dry-run fetches the branch and shows the plan: the ledger's migration" contains "$out" "ledger: format 1 -> 2"
   check "... and the one prompt that changed" bash -c 'grep -q "Prompts changed (1):" <<<"$1" && grep -q "orchestrator/policy.md" <<<"$1"' _ "$out"
   check "... and changes nothing in the state or the config" test "$(u_files)" = "$before"
+  check "... and that the update writes to bosun.env the value that keeps what this install did" bash -c '
+    grep -q "^Written to bosun.env, to keep what this install did:" <<<"$1" && grep -qx "  BOSUN_ORCHESTRATOR_CONNECTORS=\"all\"" <<<"$1"' _ "$out"
   check "... nor the link" u_at "$U_V1"
   out="$(ub update </dev/null 2>&1)"
   check "without --yes and no terminal, it shows the plan and stops" bash -c 'grep -q "ledger: format 1 -> 2" <<<"$1" && grep -q "Nothing has changed" <<<"$1"' _ "$out"
@@ -2641,7 +2963,7 @@ for line in sys.stdin:
 
   # Upstream's v2 now migrates well.
   ug reset -q --hard "$U_V1_COMMIT"
-  "$ROOT/tests/sandbox/update_patch.sh" "$U_UP"
+  u_next
   ug commit -qam v2
   U_V2_COMMIT="$(ug rev-parse HEAD)"
   U_V2="$(cd "$U_VERSIONS" && pwd -P)/${U_V2_COMMIT:0:12}"
@@ -2686,7 +3008,14 @@ for line in sys.stdin:
   check "... and passes its check against its journal" test "$(ub ledger validate --journal 2>&1)" = "ledger is valid"
   check "... a backup from v1 to v2 with its manifest" bash -c 'grep -lq "\"to\": \"$2\"" "$1"/backups/*/manifest.json' _ "$U_STATE" "$U_V2_COMMIT"
   check "... the record says done, with how long writes were paused ($(jq .freeze_ms "$U_STATE/update.json") ms, 8 s of them the patch's sleep)" jq -e '.step == "done" and .freeze_ms > 0' "$U_STATE/update.json"
-  check "... and what bosun doctor found then (here: no bosun.env)" jq -e '.findings | any(contains("no bosun.env"))' "$U_STATE/update.json"
+  check "... and what bosun doctor found then (here: no sessions.yml)" jq -e '.findings | any(contains("sessions manifest not found"))' "$U_STATE/update.json"
+  check "... it wrote the value that keeps what the install did to bosun.env, keeping a copy as it was" bash -c '
+    grep -qx "BOSUN_ORCHESTRATOR_CONNECTORS=\"all\"" "$1/bosun.env" && ! grep -q "^BOSUN_CONNECTORS=" "$1/bosun.env" &&
+      [ "$(cat "$1"/bosun.env.pre-update-*)" = "# acme: an install from before connectors" ]' _ "$U_CONFIG"
+  check "... and its summary says so, with what each added key means" bash -c '
+    grep -q "^  bosun\.env  *BOSUN_ORCHESTRATOR_CONNECTORS=\"all\" added (before: bosun\.env\.pre-update-" "$1" &&
+      grep -q "^  BOSUN_ORCHESTRATOR_CONNECTORS  *the orchestrator keeps every connector, as before" "$1" &&
+      grep -q "^  BOSUN_CONNECTORS  *repo windows now start without connectors" "$1"' _ "$U/summary.txt"
   check "... it reloaded the launchd jobs, which run the link" bash -c 'grep -qF "$2/bin/bosun" "$1/Library/LaunchAgents/com.bosun.update-test.plist"' _ "$HOME" "$(cd "$U/share" && pwd -P)/bosun"
   check "... and deleted the folder of the version that failed, keeping v1's and v2's" bash -c '[ ! -e "$1/${2:0:12}" ] && [ -d "$3" ] && [ -d "$4" ]' _ "$U_VERSIONS" "$U_FAILING_COMMIT" "$U_V1" "$U_V2"
   check "the write that waited ran again on v2, and landed" bash -c '[ "$1" = 0 ] && [ "$(jq -r ".items[\"review:acme/api#3\"].title" "$2/ledger.json")" = "Written while paused" ]' _ "$writer_rc" "$U_STATE"

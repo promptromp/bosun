@@ -342,5 +342,78 @@ class AgentStateTest(unittest.TestCase):
             self.assertEqual(agent.HARNESS, name)
 
 
+class McpNamesTest(unittest.TestCase):
+    def setUp(self) -> None:
+        temp = tempfile.TemporaryDirectory()
+        self.addCleanup(temp.cleanup)
+        self.root = Path(temp.name).resolve()
+
+    def fake_codex(self, body: str) -> str:
+        path = self.root / f"fake-codex-{len(list(self.root.iterdir()))}"
+        path.write_text(f"#!/bin/sh\n{body}\n")
+        path.chmod(0o755)
+        return str(path)
+
+    def listing(self, value: object) -> str:
+        listing = self.root / f"listing-{len(list(self.root.iterdir()))}.json"
+        listing.write_text(json.dumps(value))
+        return self.fake_codex(f'[ "$*" = "mcp list --json" ] || exit 9\ncat "{listing}"')
+
+    def test_mcp_names_only(self) -> None:
+        servers = [
+            {
+                "name": "acme-docs",
+                "enabled": True,
+                "transport": {"type": "streamable_http", "url": "https://d"},
+            },
+            {"name": "acme.mail", "transport": {"type": "stdio", "command": "m", "env": {"ACME_TOKEN": "x"}}},
+        ]
+        self.assertEqual(codex_state.mcp_server_names(self.listing(servers)), ["acme-docs", "acme.mail"])
+        self.assertEqual(codex_state.mcp_server_names(self.listing([])), [])
+
+    def test_mcp_names_each_once(self) -> None:
+        listing = [{"name": "acme-docs"}, {"name": "acme.mail"}, {"name": "acme-docs"}]
+        self.assertEqual(codex_state.mcp_server_names(self.listing(listing)), ["acme-docs", "acme.mail"])
+
+    def test_mcp_servers_a_plugins_are_those_only_with_plugins_on(self) -> None:
+        every = self.root / "every.json"
+        configured = self.root / "configured.json"
+        every.write_text(
+            json.dumps([{"name": n} for n in ("acme-docs", "acme-kit", "acme.mail", "acme-kit")])
+        )
+        configured.write_text(json.dumps([{"name": n} for n in ("acme-docs", "acme.mail")]))
+        codex = self.fake_codex(
+            f'case "$*" in\n  "mcp list --json") cat "{every}" ;;\n'
+            f'  "--disable plugins mcp list --json") cat "{configured}" ;;\n  *) exit 9 ;;\nesac'
+        )
+        self.assertEqual(
+            codex_state.mcp_servers(codex), codex_state.McpServers(("acme-docs", "acme.mail"), ("acme-kit",))
+        )
+        self.assertEqual(codex_state.mcp_server_names(codex, plugins=False), ["acme-docs", "acme.mail"])
+
+    def test_mcp_list_failure_raises(self) -> None:
+        """Whatever fails, the reason never holds what the listing printed: a stdio server's entry holds
+        its environment, secrets included."""
+        server_env = {"ACME_TOKEN": "acme-env-value"}
+        for codex in (
+            self.fake_codex("exit 1"),
+            self.fake_codex("exec sleep 20"),
+            self.fake_codex("echo 'ACME_TOKEN=acme-env-value is not json'"),
+            self.listing({"name": "acme-docs", "env": server_env}),
+            self.listing([{"name": "acme-docs", "env": server_env}, {"transport": {"env": server_env}}]),
+            self.listing([{"name": "", "env": server_env}]),
+            str(self.root / "no-codex"),
+        ):
+            with self.subTest(codex=codex), self.assertRaises(codex_state.CodexListError) as raised:
+                codex_state.mcp_server_names(codex, timeout=0.5)
+            self.assertNotIn("acme-env-value", str(raised.exception))
+
+    def test_mcp_names_keep_no_environment(self) -> None:
+        listed = [
+            {"name": "acme.mail", "transport": {"type": "stdio", "env": {"ACME_TOKEN": "acme-env-value"}}}
+        ]
+        self.assertEqual(codex_state.mcp_server_names(self.listing(listed)), ["acme.mail"])
+
+
 if __name__ == "__main__":
     unittest.main()

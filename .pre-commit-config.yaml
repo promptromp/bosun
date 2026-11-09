@@ -76,13 +76,13 @@ repos:
         pass_filenames: false
       - id: complexipy
         name: complexipy (cognitive complexity <= 15)
-        entry: uv run complexipy --max-complexity-allowed 15 --quiet --failed lib libexec/bosun-resolve tools tests/sandbox/drive.py
+        entry: uv run complexipy --max-complexity-allowed 15 --quiet --failed lib libexec/bosun-resolve tools tests/sandbox/drive.py tests/sandbox/mcp_probe_server.py
         language: system
         types: [python]
         pass_filenames: false
       - id: lizard
         name: lizard (cyclomatic complexity <= 10, functions <= 60 lines)
-        entry: uv run lizard -l python -C 10 -L 60 -w lib libexec/bosun-resolve tools tests/unit tests/sandbox/drive.py
+        entry: uv run lizard -l python -C 10 -L 60 -w lib libexec/bosun-resolve tools tests/unit tests/sandbox/drive.py tests/sandbox/mcp_probe_server.py
         language: system
         types: [python]
         pass_filenames: false

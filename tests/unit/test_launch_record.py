@@ -244,6 +244,11 @@ class LaunchCommandTest(unittest.TestCase):
             f"  - name: web\n    dir: {self.repo}\n    harness: codex\n"
         )
         self.state = tmp / "state"
+        # A Codex that lists no MCP servers, which is what a launch asks it, and does no more.
+        self.codex = tmp / "codex"
+        # Its servers, with plugins and without (`--disable plugins`): none.
+        self.codex.write_text("#!/bin/sh\ncase \"$*\" in *'mcp list --json') echo '[]' ;; esac\n")
+        self.codex.chmod(0o755)
         self.env = {
             "PATH": os.environ["PATH"],
             "HOME": str(tmp / "home"),
@@ -255,7 +260,7 @@ class LaunchCommandTest(unittest.TestCase):
             "BOSUN_ORCHESTRATOR": "",
             "BOSUN_EVENTS_ENABLED": "0",
             "BOSUN_CLAUDE_BIN": str(tmp / "no-claude"),
-            "BOSUN_CODEX_BIN": str(tmp / "no-codex"),
+            "BOSUN_CODEX_BIN": str(self.codex),
             "CODEX_HOME": str(tmp / "codex-home"),
         }
 
@@ -320,6 +325,13 @@ class LaunchCommandTest(unittest.TestCase):
         )  # a launch not for an update: the agent configured now
         self.assertIn("codex-turn-end", plain.stdout)
         self.assertEqual(self.launched("api")["harness"], "codex")
+
+    def test_a_codex_window_whose_servers_cannot_be_listed_does_not_start(self) -> None:
+        self.env["BOSUN_CODEX_BIN"] = str(self.tmp / "no-codex")
+        done = self.bosun("launch", "web", cwd=self.repo)
+        self.assertEqual(done.returncode, 1)
+        self.assertIn("codex mcp list failed", done.stderr)
+        self.assertNotIn("dry-run: would run", done.stdout)
 
     def test_a_window_outside_the_list_keeps_its_recorded_agent(self) -> None:
         done = self.bosun("launch", "--model", "sonnet", "scratch", cwd=self.repo)

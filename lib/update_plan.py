@@ -1,7 +1,9 @@
 """lib/update_plan.py: what an update would do, worked out from facts about the running version and
 the new one (docs/design/update.md, step 1, "the plan"). Pure: no file, process or git I/O. The
-caller gathers the facts and passes in `steps`, the migration path. The update's record keeps the
-plan it carries out (as_record, from_record), for its summary."""
+caller gathers the facts and passes in `steps`, the migration path, and sets `kept` (what the update
+writes to bosun.env, which depends on the file). The update's record keeps the plan it carries out
+(as_record, from_record), for its summary. The added keys' notes and how a kept value is written come
+from lib/migrations.py, which holds them."""
 
 from __future__ import annotations
 
@@ -12,6 +14,8 @@ from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from enum import StrEnum
 from typing import Any
+
+import migrations
 
 
 PROMPTS = (
@@ -84,7 +88,10 @@ def treatment(window: WindowFacts, reread: bool) -> Treatment:
 @dataclass(frozen=True)
 class Plan:
     """What an update would do (make_plan). <renames>: each config key bosun.env sets that the new
-    version renamed, and its name now; an empty name means the key was removed."""
+    version renamed, and its name now; an empty name means the key was removed. <kept>: each key the
+    update adds that it writes to bosun.env, and the value that keeps what this install did
+    (migrations.keys_to_keep, which update_facts.plan_for sets); <unwritten>: each key it would have
+    written there, but there is no bosun.env, so it starts at its default (migrations.keys_unwritten)."""
 
     from_commit: str
     to_commit: str
@@ -103,6 +110,8 @@ class Plan:
     kinds: tuple[tuple[str, str], ...] = ()  # each window's kind (orchestrator, repo, checkin), as listed
     # Each store's format on disk (0: none yet), in the new version's order of its stores.
     formats: tuple[tuple[str, int], ...] = ()
+    kept: tuple[tuple[str, str], ...] = ()  # an older record has none: nothing written, as it ran then
+    unwritten: tuple[str, ...] = ()  # an older record has none: nothing said of them, as it ran then
 
 
 def _matches(path: str, patterns: Sequence[str]) -> bool:
@@ -236,6 +245,8 @@ _READ: dict[str, tuple[Callable[[Any], Any], Any]] = {
     "blockers": (_strings, ()),
     "kinds": (_pairs, ()),
     "formats": (lambda value: tuple((str(store), int(n)) for store, n in _listed(value)), ()),
+    "kept": (_pairs, ()),
+    "unwritten": (_strings, ()),
 }
 
 
@@ -261,6 +272,12 @@ def _rename_line(old: str, new: str) -> str:
     return f"{old} is removed" if not new else f"{old} is now {new}"
 
 
+def _key_lines(plan: Plan) -> list[str]:
+    """Each key the update adds, with its note when it has one that holds (migrations.added_notes)."""
+    notes = dict(migrations.added_notes(plan.keys_added, dict(plan.kept), plan.unwritten))
+    return [f"{key}: {notes[key]}" if key in notes else key for key in plan.keys_added]
+
+
 def _window_line(name: str, how: Treatment) -> str:
     return f"{name}: {how.value}"
 
@@ -271,7 +288,9 @@ def render_plan(plan: Plan) -> str:
     out += _section(f"Commits ({len(plan.commits)}):", plan.commits)
     out += _section("Migrations:", [f"{s}: format {a} -> {b}" for s, a, b in plan.migrations])
     out += _section("Rules changes:", [f"{s}: version {a} -> {b}" for s, a, b in plan.rules])
-    out += _section("New config keys:", plan.keys_added)
+    out += _section("New config keys:", _key_lines(plan))
+    kept = [migrations.assignment(key, value) for key, value in plan.kept]
+    out += _section("Written to bosun.env, to keep what this install did:", kept)
     out += _section("Config keys renamed or removed:", [_rename_line(a, b) for a, b in plan.renames])
     out += _section(f"Prompts changed ({len(plan.prompts)}):", plan.prompts)
     out += _section("Windows:", [_window_line(n, t) for n, t in plan.windows])

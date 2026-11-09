@@ -2,15 +2,18 @@
 
 from __future__ import annotations
 
+import dataclasses
 import json
 import sys
 import unittest
+import unittest.mock
 from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "lib"))
+import migrations
 import update_plan as up
 from update_plan import Treatment as T
 
@@ -242,7 +245,9 @@ class TestRecord(unittest.TestCase):
         )
 
     def test_a_plan_reads_back_as_it_was(self) -> None:
-        full = self.full()
+        full = dataclasses.replace(
+            self.full(), kept=(("BOSUN_ORCHESTRATOR_CONNECTORS", "all"),), unwritten=("BOSUN_X",)
+        )
         kept = json.loads(json.dumps(up.as_record(full)))
         self.assertEqual(up.as_record(full), kept)  # JSON's types only, so a record read back is equal
         self.assertEqual(up.from_record(kept), full)
@@ -250,6 +255,13 @@ class TestRecord(unittest.TestCase):
     def test_a_record_with_no_plan_reads_as_one_with_nothing_in_it(self) -> None:
         empty = up.from_record({})
         self.assertEqual((empty.commits, empty.formats, empty.windows, empty.console), ((), (), (), False))
+
+    def test_a_record_from_before_kept_keys_reads_as_none_written(self) -> None:
+        older = {
+            key: value for key, value in up.as_record(self.full()).items() if key not in ("kept", "unwritten")
+        }
+        self.assertEqual(up.from_record(older), self.full())
+        self.assertEqual((up.from_record(older).kept, up.from_record(older).unwritten), ((), ()))
 
     def test_a_part_of_another_shape_is_left_empty_the_rest_read(self) -> None:
         """A newer bosun's shape of one part, or one this code cannot read, costs only that part."""
@@ -301,6 +313,31 @@ class TestRender(unittest.TestCase):
         ):
             self.assertIn(part, text)
         self.assertTrue(text.rstrip().endswith("Nothing changes until you say yes."))
+
+    def test_a_kept_value_and_the_added_keys_notes_are_shown(self) -> None:
+        """So the person saying yes sees that bosun.env changes, and what each added key means. A kept
+        key's note only where its value is written (plan.kept)."""
+        added = (
+            migrations.AddedKey("BOSUN_KEEPS", "all", "keeps what it did", "had all, now none"),
+            migrations.AddedKey("BOSUN_FRESH", None, "starts at its default"),
+        )
+        got = dataclasses.replace(
+            plan(new=facts("bbb", keys=("A", "BOSUN_KEEPS", "BOSUN_FRESH", "BOSUN_OTHER"))),
+            kept=(("BOSUN_KEEPS", "all"),),
+        )
+        with unittest.mock.patch.object(migrations, "CONFIG_ADDED", added):
+            text = up.render_plan(got)
+            unwritten = up.render_plan(dataclasses.replace(got, kept=()))
+            no_env = up.render_plan(dataclasses.replace(got, kept=(), unwritten=("BOSUN_KEEPS",)))
+        self.assertIn(
+            "New config keys:\n  BOSUN_FRESH: starts at its default\n  BOSUN_KEEPS: keeps what it did\n"
+            '  BOSUN_OTHER\n\nWritten to bosun.env, to keep what this install did:\n  BOSUN_KEEPS="all"\n',
+            text,
+        )
+        self.assertIn("\n  BOSUN_KEEPS\n", unwritten)
+        self.assertNotIn("Written to bosun.env", unwritten)
+        self.assertIn("\n  BOSUN_KEEPS: had all, now none\n", no_env)  # no bosun.env to write it to
+        self.assertNotIn("Written to bosun.env", no_env)
 
     def test_a_blocked_plan_does_not_promise(self) -> None:
         text = up.render_plan(plan(deletion_cut_short=True))

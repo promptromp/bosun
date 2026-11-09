@@ -90,9 +90,19 @@ class WorldTest(unittest.TestCase):
             mock.patch.object(
                 claude_state, "auth_status", return_value=claude_state.AuthStatus(True, "x", "max")
             ),
+            mock.patch.object(claude_state, "mcp_server_targets", self.mcp_list),
         ):
             tool.start()
             self.addCleanup(tool.stop)
+
+    servers: dict[str, str] | None = None  # what `claude mcp list` shows; None: it fails
+
+    def mcp_list(self, claude_bin: str, cwd: Path, timeout: float = 30.0) -> dict[str, str]:
+        """`claude mcp list`, never the real one: what self.servers says, each call recorded."""
+        self.mcp_calls = [*getattr(self, "mcp_calls", []), (claude_bin, cwd)]
+        if self.servers is None:
+            raise claude_state.McpListError("no server in its output")
+        return dict(self.servers)
 
     def repo(self, relative: str, remote: str = "") -> Path:
         path = self.home / relative
@@ -260,6 +270,26 @@ class DetectTest(WorldTest):
         self.assertEqual(len(facts.days), 2)
         self.assertEqual(facts.files, {})
 
+    def test_connectors_are_the_servers_claude_mcp_list_shows(self) -> None:
+        self.servers = {"claude.ai Acme Mail": "https://mail.example.com/mcp", "acme-local": "acme-mcp"}
+        with mock.patch.dict(os.environ, {"BOSUN_CLAUDE_BIN": "/opt/acme/claude"}):
+            facts = init_detect.detect(self.config, NOW)
+        self.assertEqual(facts.connectors, ("claude.ai Acme Mail", "acme-local"))
+        self.assertEqual(self.mcp_calls, [("/opt/acme/claude", self.home)])
+
+    def test_a_failed_listing_is_no_connectors(self) -> None:
+        self.assertEqual(init_detect.detect(self.config, NOW).connectors, ())
+
+    def test_a_sessions_file_that_cannot_be_read_is_not_one_with_no_windows(self) -> None:
+        self.config.mkdir(parents=True)
+        for text in ("sessions: [unclosed\n", "- just a list\n", "sessions: api\n"):
+            with self.subTest(text=text):
+                (self.config / "sessions.yml").write_text(text)
+                facts = init_detect.detect(self.config, NOW)
+                self.assertEqual((facts.sessions, facts.sessions_unreadable), ((), True))
+        (self.config / "sessions.yml").write_text("sessions: []\n")
+        self.assertFalse(init_detect.detect(self.config, NOW).sessions_unreadable)
+
     def test_a_rerun_sees_the_config(self) -> None:
         self.config.mkdir(parents=True)
         (self.config / "bosun.env").write_text('BOSUN_DAYS="MWF"\n')
@@ -355,6 +385,64 @@ class CommandTest(WorldTest):
         self.assertIn("name: api", (self.config / "sessions.yml").read_text())
         self.assertIn("ensure_claude_login", (self.config / "setup.sh").read_text())
         self.assertIn("bosun is set up", out)
+
+    def test_claude_mcp_list_runs_once_per_init(self) -> None:
+        self.servers = {"acme-local": "acme-mcp"}
+        self.bosun_init("--recommended")
+        self.assertEqual(len(self.mcp_calls), 1)
+
+    def test_unattended_first_run_sets_up_no_windows_or_connectors(self) -> None:
+        self.servers = {"claude.ai Acme Mail": "https://mail.example.com/mcp"}
+        status, out, _ = self.bosun_init("--recommended", "--unattended")
+        self.assertEqual(status, 0)
+        self.assertIn("sessions: []", (self.config / "sessions.yml").read_text())
+        env = (self.config / "bosun.env").read_text()
+        self.assertIn('BOSUN_ORCHESTRATOR_CONNECTORS=""', env)
+        self.assertIn('BOSUN_REPO_MASK="acme"', env)  # the rest of the recommendation stays
+        self.assertNotIn(str(self.api), [arg for call in self.calls for arg in call])  # nor trusted
+        self.assertEqual(out.rstrip().splitlines()[-1], init_plan.UNATTENDED_NOTE)
+        self.assertEqual(
+            init_plan.UNATTENDED_NOTE,
+            "No repo windows or connectors were set up, since nobody chose them: run bosun init to add them.",
+        )
+
+    def test_unattended_rerun_is_recommended(self) -> None:
+        self.bosun_init("--recommended")
+        env = self.config / "bosun.env"
+        env.write_text(env.read_text().replace('CONNECTORS=""', 'CONNECTORS="claude.ai Acme Mail"'))
+        before = {p.name: p.read_text() for p in self.config.iterdir()}
+        status, out, _ = self.bosun_init("--recommended", "--unattended")
+        self.assertEqual(status, 0)
+        self.assertEqual({p.name: p.read_text() for p in self.config.iterdir()}, before)
+        self.assertNotIn(init_plan.UNATTENDED_NOTE, out)
+
+    def test_get_sh_hands_unattended_over_as_a_variable(self) -> None:
+        with mock.patch.dict(os.environ, {"BOSUN_INIT_UNATTENDED": "1"}):
+            status, out, _ = self.bosun_init("--recommended")
+            self.assertFalse(init.parse_args([]).unattended)  # only with --recommended
+        self.assertEqual(status, 0)
+        self.assertIn("sessions: []", (self.config / "sessions.yml").read_text())
+        self.assertEqual(out.rstrip().splitlines()[-1], init_plan.UNATTENDED_NOTE)
+
+    def test_unattended_keeps_and_names_the_windows_sessions_yml_lists(self) -> None:
+        self.config.mkdir(parents=True)
+        (self.config / "sessions.yml").write_text(f"sessions:\n  - name: api\n    dir: {self.api}\n")
+        status, out, _ = self.bosun_init("--recommended", "--unattended")
+        self.assertEqual(status, 0)
+        self.assertIn("name: api", (self.config / "sessions.yml").read_text())
+        self.assertIn("the windows sessions.yml lists stay: api", out.rstrip().splitlines()[-1])
+        self.assertNotIn(init_plan.UNATTENDED_NOTE, out)
+
+    def test_unattended_only_goes_with_recommended(self) -> None:
+        with contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit) as raised:
+            init.parse_args(["--unattended"])
+        self.assertEqual(raised.exception.code, init.EXIT_USAGE)
+
+    def test_a_bad_connectors_answer_is_a_usage_error(self) -> None:
+        status, _, err = self.bosun_init("--answers", self.answers_file(orchestrator_connectors="all, x"))
+        self.assertEqual(status, init.EXIT_USAGE)
+        self.assertIn("orchestrator_connectors", err)
+        self.assertFalse(self.config.exists())
 
     def test_the_files_are_readable_by_you_and_no_temp_file_is_left(self) -> None:
         self.bosun_init("--recommended")
@@ -509,6 +597,21 @@ class CommandTest(WorldTest):
         self.assertEqual(status, 0)
         self.assertIn("name: web", (self.config / "sessions.yml").read_text())
         self.assertTrue(any(name.startswith("sessions.yml.pre-init-") for name in self.backups()))
+
+    def test_the_wizard_asks_for_the_orchestrators_connectors(self) -> None:
+        self.servers = {"claude.ai Acme Mail": "https://mail.example.com/mcp", "acme-local": "acme-mcp"}
+        status, _ = self.wizard([init_wizard.ENTER, "2", *[init_wizard.ENTER] * 6, "y", "n"])
+        self.assertEqual(status, 0)
+        self.assertIn('BOSUN_ORCHESTRATOR_CONNECTORS="acme-local"', (self.config / "bosun.env").read_text())
+
+    def test_a_config_whose_connectors_cannot_be_read_stops_the_wizard(self) -> None:
+        self.config.mkdir(parents=True)
+        (self.config / "bosun.env").write_text('BOSUN_ORCHESTRATOR_CONNECTORS="all, acme-local"\n')
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err):
+            status, _ = self.wizard([init_wizard.ENTER])
+        self.assertEqual(status, init.EXIT_USAGE)
+        self.assertIn("BOSUN_ORCHESTRATOR_CONNECTORS in bosun.env", err.getvalue())
 
     def test_ctrl_c_in_the_wizard_changes_nothing(self) -> None:
         status, out = self.wizard([KeyboardInterrupt])  # type: ignore[list-item]

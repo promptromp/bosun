@@ -24,6 +24,14 @@ None of these are public APIs. If a Claude Code update changes them, this is the
   message and `is_error` / `api_error_status` on its result
 - `claude auth status --json`: `loggedIn` and `authMethod`, from the stored credentials only (it
   makes no request, so a token the server revoked still shows as logged in)
+- ~/.claude/plugins/installed_plugins.json (`plugins`: per plugin, its installs and `installPath`)
+  and each plugin's .mcp.json (`mcpServers`, `${CLAUDE_PLUGIN_ROOT}` standing for that folder)
+- `claude mcp list`: a line per MCP server a session in that folder gets, `<name>: <URL or command>
+  - <health>`, claude.ai's connectors (named `claude.ai <Name>`) only with
+  ENABLE_CLAUDEAI_MCP_SERVERS=true
+- ~/.claude/settings.json: `skipDangerousModePermissionPrompt` (the bypass warning accepted); it, and a
+  folder's `.claude/settings.json` and `.claude/settings.local.json`: `allowedMcpServers`, which Claude
+  Code adds to the list a window is launched with (every scope's lists add up), so each widens it
 
 Usage: claude_state.py resolve <workdir> <name>    the most recent session named exactly <name>
        claude_state.py list <workdir>              named sessions, newest first
@@ -49,9 +57,11 @@ Exit codes: 0 found / done, 3 not found, 2 usage.
 
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 import re
+import signal
 import subprocess
 import sys
 import tempfile
@@ -87,8 +97,11 @@ PROJECTS_DIR = HOME / ".claude" / "projects"
 LIVE_SESSIONS_DIR = HOME / ".claude" / "sessions"
 CONFIG_FILE = HOME / ".claude.json"
 SETTINGS_FILE = HOME / ".claude" / "settings.json"
+ALLOW_LIST = "allowedMcpServers"  # in a settings file: the MCP servers a session may reach
 INSTALLED_PLUGINS = HOME / ".claude" / "plugins" / "installed_plugins.json"
+CLAUDE_AI_PREFIX = "claude.ai "  # how `claude mcp list` names claude.ai's connectors: claude.ai Acme Mail
 SLACK_PLUGIN = "slack"
+PLUGIN_ROOT = "${CLAUDE_PLUGIN_ROOT}"  # in a plugin's .mcp.json: the folder it is installed in
 TITLE_MARKER = '"custom-title"'
 SESSION_PREFIX = re.compile(r"^[0-9a-f]{8,36}$")  # a session id or its start, as references quote it
 START_TIME_TOLERANCE_SECONDS = 2
@@ -176,28 +189,139 @@ def subagent_transcripts(transcript: Path) -> list[Path]:
 
 def slack_plugin_mcp_config(installed: Path | None = None) -> dict[str, Any] | None:
     """The Slack plugin's MCP server as an --mcp-config document, or None if the plugin is not
-    installed. The server keeps the name Claude Code gives a plugin's server
-    (plugin:<plugin>:<server>), so a headless Claude with --strict-mcp-config finds the login it
-    stored for it (the plugin's .mcp.json under the server's name alone has no login)."""
+    installed or has more than one server. The server keeps the name Claude Code gives a plugin's
+    server (plugin:<plugin>:<server>), so a headless Claude with --strict-mcp-config finds the login
+    it stored for it (the plugin's .mcp.json under the server's name alone has no login)."""
+    prefix = f"plugin:{SLACK_PLUGIN}:"
+    servers = {
+        name: config for name, config in plugin_mcp_servers(installed).items() if name.startswith(prefix)
+    }
+    return {"mcpServers": servers} if len(servers) == 1 else None
+
+
+def plugin_mcp_servers(installed: Path | None = None) -> dict[str, dict[str, Any]]:
+    """Every installed plugin's MCP servers, keyed as Claude Code names them (plugin:<plugin>:<server>),
+    with ${CLAUDE_PLUGIN_ROOT} in `command`, `args` and `url` replaced by the plugin's folder. A plugin's
+    .mcp.json may hold several servers; where a plugin is installed more than once, the first wins."""
     plugins = (read_object(installed or INSTALLED_PLUGINS) or {}).get("plugins")
-    for key, installs in (plugins or {}).items():
-        if str(key).split("@")[0] != SLACK_PLUGIN or not isinstance(installs, list):
-            continue
-        for install in installs:
-            server = plugin_server(install)
-            if server:
-                return {"mcpServers": {f"plugin:{SLACK_PLUGIN}:{server[0]}": server[1]}}
-    return None
+    found: dict[str, dict[str, Any]] = {}
+    for key, installs in (plugins if isinstance(plugins, dict) else {}).items():
+        plugin = str(key).split("@")[0]
+        for install in installs if isinstance(installs, list) else []:
+            for server, config in install_servers(install).items():
+                found.setdefault(f"plugin:{plugin}:{server}", config)
+    return found
 
 
-def plugin_server(install: object) -> tuple[str, Any] | None:
-    """The one MCP server (name, config) in an installed plugin's .mcp.json, if it has exactly one."""
+def install_servers(install: object) -> dict[str, dict[str, Any]]:
+    """The servers in one installed plugin's .mcp.json, its root expanded; none for an install without
+    an absolute path, whose .mcp.json would be read in this process's folder (a window's own)."""
     if not isinstance(install, dict):
-        return None
-    servers = (read_object(Path(str(install.get("installPath", ""))) / ".mcp.json") or {}).get("mcpServers")
-    if not isinstance(servers, dict) or len(servers) != 1:
-        return None
-    return next(iter(servers.items()))
+        return {}
+    root = str(install.get("installPath") or "")
+    if not Path(root).is_absolute():
+        return {}
+    servers = (read_object(Path(root) / ".mcp.json") or {}).get("mcpServers")
+    if not isinstance(servers, dict):
+        return {}
+    return {
+        str(name): expand_root(config, root) for name, config in servers.items() if isinstance(config, dict)
+    }
+
+
+def expand_root(config: dict[str, Any], root: str) -> dict[str, Any]:
+    def expanded(value: object) -> object:
+        return value.replace(PLUGIN_ROOT, root) if isinstance(value, str) else value
+
+    result = dict(config)
+    for key in ("command", "url"):
+        if key in result:
+            result[key] = expanded(result[key])
+    if isinstance(result.get("args"), list):
+        result["args"] = [expanded(arg) for arg in result["args"]]
+    return result
+
+
+def unexpanded(config: dict[str, Any]) -> bool:
+    """Whether a plugin server's `command`, `args` or `url` still holds a `${...}` after expand_root: a
+    variable Claude Code expands from its own environment, which bosun cannot know."""
+    args = config.get("args")
+    values = [config.get("command"), config.get("url"), *(args if isinstance(args, list) else [])]
+    return any(isinstance(value, str) and "${" in value for value in values)
+
+
+# ---- the MCP servers a window would get ------------------------------------------------------------
+
+
+class McpListError(RuntimeError):
+    """`claude mcp list` gave no answer to read: it failed, timed out or listed no server."""
+
+
+MCP_LIST_TIMEOUT_SECONDS = 30.0
+URL_SCHEMES = ("http://", "https://")
+
+
+def mcp_server_targets(
+    claude_bin: str, cwd: Path, timeout: float = MCP_LIST_TIMEOUT_SECONDS
+) -> dict[str, str]:
+    """Each MCP server a Claude Code started in <cwd> would get, and its URL or command line, from
+    `claude mcp list` (which connects to each to check it, a few seconds). claude.ai's connectors are
+    listed only with ENABLE_CLAUDEAI_MCP_SERVERS=true."""
+    try:
+        result = run_in_own_group(
+            [claude_bin, "mcp", "list"], cwd, {**os.environ, "ENABLE_CLAUDEAI_MCP_SERVERS": "true"}, timeout
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise McpListError(f"timed out after {timeout:g}s") from exc
+    except OSError as exc:
+        raise McpListError(f"could not run {claude_bin}: {exc.strerror or exc}") from exc
+    if result.returncode != 0:
+        raise McpListError(f"exited {result.returncode}")
+    targets = parse_mcp_list(result.stdout)
+    if not targets:
+        raise McpListError("no server in its output")
+    return targets
+
+
+def run_in_own_group(
+    argv: list[str], cwd: Path, env: dict[str, str], timeout: float
+) -> subprocess.CompletedProcess[str]:
+    """<argv> run in a process group of its own, its output kept. One that outlasts <timeout> is killed
+    with its whole group, every stdio server `claude mcp list` started to check it included, so none is
+    left behind, and TimeoutExpired raised."""
+    with subprocess.Popen(
+        argv,
+        cwd=cwd,
+        env=env,
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        start_new_session=True,
+    ) as process:
+        try:
+            out, err = process.communicate(timeout=timeout)
+        except subprocess.TimeoutExpired:
+            with contextlib.suppress(ProcessLookupError, PermissionError):
+                os.killpg(process.pid, signal.SIGKILL)
+            process.wait()  # not communicate(): a server that left the group may hold the pipes open
+            raise
+    return subprocess.CompletedProcess(argv, process.returncode, out, err)
+
+
+def parse_mcp_list(text: str) -> dict[str, str]:
+    """The one reader of `claude mcp list`'s text (Claude Code 2.1.319): a line per server,
+    `<name>: <target> - <status>`, after a line saying it is checking. The target is a URL (then
+    followed by its transport, ` (HTTP)`) or a command line; the status may itself hold ` - `."""
+    targets: dict[str, str] = {}
+    for line in text.splitlines():
+        name, colon, rest = line.partition(": ")
+        target, dash, _status = rest.partition(" - ")
+        target = target.strip()
+        if not (colon and dash and name.strip() and target):
+            continue
+        targets[name.strip()] = target.split()[0] if target.startswith(URL_SCHEMES) else target
+    return targets
 
 
 def record(pid: int | str) -> dict[str, Any] | None:
@@ -273,6 +397,35 @@ def bypass_accepted() -> bool:
     """Whether someone accepted the warning that --dangerously-skip-permissions shows once per machine:
     its cursor starts on "No, exit", so an unattended window never gets past it."""
     return (read_object(SETTINGS_FILE) or {}).get("skipDangerousModePermissionPrompt") is True
+
+
+def settings_allow_list(path: Path) -> list[Any] | None:
+    """The `allowedMcpServers` a settings file holds; None when the file is missing or unreadable, or
+    holds no such list."""
+    entries = (read_object(path) or {}).get(ALLOW_LIST)
+    return entries if isinstance(entries, list) else None
+
+
+def allow_list_scopes(cwd: Path) -> tuple[Path, ...]:
+    """The settings files whose `allowedMcpServers` Claude Code adds to the one a window started in <cwd> is
+    launched with: mine, and the folder's shared and local project settings. Each once, as a folder that is
+    my home folder has my settings as its project's."""
+    project = Path(cwd) / ".claude"
+    files: dict[Path, Path] = {}
+    for path in (SETTINGS_FILE, project / "settings.json", project / "settings.local.json"):
+        files.setdefault(path.resolve(), path)
+    return tuple(files.values())
+
+
+def settings_allow_lists(cwd: Path) -> list[tuple[Path, list[Any]]]:
+    """Each of allow_list_scopes(<cwd>) that holds `allowedMcpServers` entries, and those entries. Claude
+    Code adds them up, so each widens a window's own list (docs/design/connectors.md)."""
+    return [(path, entries) for path in allow_list_scopes(cwd) if (entries := settings_allow_list(path))]
+
+
+def is_claude_ai_connector(name: str) -> bool:
+    """Whether <name> is how `claude mcp list` names one of claude.ai's connectors."""
+    return name.startswith(CLAUDE_AI_PREFIX)
 
 
 def set_trust(directory: str, trust: bool) -> None:

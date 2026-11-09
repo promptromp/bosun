@@ -1,7 +1,11 @@
 #!/usr/bin/env python3
 """Codex's stand-in, for the sandbox: logged in unless ~/.sandbox/codex-logged-out exists, stops at its trust
 screen in a folder its config does not trust, and a window's session holds a session file open the way the
-real one does, with a turn for each prompt, and runs what notify= says when a turn ends."""
+real one does, with a turn for each prompt, and runs what notify= says when a turn ends. `mcp list --json`
+prints the file CODEX_STAND_IN_MCP_LIST names (a JSON list of {"name": ...}; no servers if the variable is
+not set) and fails if the file is not there, as a listing that fails does. `--disable plugins mcp list
+--json` prints CODEX_STAND_IN_MCP_LIST_NO_PLUGINS's instead, the listing without plugins' servers (the same
+file when it is not set: no plugins)."""
 
 import json
 import os
@@ -98,6 +102,21 @@ def turn(session: str, file: object, prompt: str, notify: list[str]) -> None:
     print(f"• ok\n\n{MARK} ", end="", flush=True)
 
 
+def list_servers(plugins: bool = True) -> int:
+    listing = os.environ.get("CODEX_STAND_IN_MCP_LIST")
+    if not plugins:
+        listing = os.environ.get("CODEX_STAND_IN_MCP_LIST_NO_PLUGINS") or listing
+    if not listing:
+        print("[]")
+        return 0
+    try:
+        print(Path(listing).read_text())
+    except OSError as exc:
+        print(f"Error: cannot read the servers: {exc.strerror}", file=sys.stderr)
+        return 1
+    return 0
+
+
 def main(argv: list[str]) -> int:
     if argv == ["--version"]:
         print("codex-cli 0.166.0")
@@ -106,6 +125,10 @@ def main(argv: list[str]) -> int:
         logged_out = (Path.home() / ".sandbox" / "codex-logged-out").exists()
         print("Not logged in" if logged_out else "Logged in using an API key")
         return 1 if logged_out else 0
+    if argv[:3] == ["mcp", "list", "--json"]:
+        return list_servers()
+    if argv[:5] == ["--disable", "plugins", "mcp", "list", "--json"]:
+        return list_servers(plugins=False)
     session, prompt, notify = parse(argv)
     if not trusted():
         at_a_trust_screen()

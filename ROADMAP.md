@@ -329,6 +329,27 @@ of kept stores on a fresh install (`init`, with a backup), and a Codex window's 
 bosun cannot see, so one whose launch changed is restarted without taking stock. Design note:
 [docs/design/update.md](docs/design/update.md).
 
+**Done (2026-11-09): what a window may reach, and what setup grants.** Every window bosun started got
+every MCP server and connector the agent had on the Mac (mail, files, calendars), the recommended setup
+ticked up to six repos, and `get.sh --unattended` carried that out with nobody looking: what kept me from
+running bosun on my own Mac. Now a window reaches only what its config names: `BOSUN_CONNECTORS` for repo
+windows (none by default), `BOSUN_ORCHESTRATOR_CONNECTORS` for the orchestrator (`bosun init` asks), or
+`connectors:` per window; Claude Code gets an allow list at launch, and Codex has every other server
+switched off. `bosun doctor` shows each window's, and an update keeps an older orchestrator's `all` and
+says how to narrow it. The recommendation ticks the one repo I use most, and an unattended first install
+sets up no repo windows or connectors. Run in the macOS VM with real Claude Code and Codex windows and local
+test servers: the allow lists hold, new and resumed, a repo's own servers included. The runs changed how a
+Codex window switches servers off (one inline table, since Codex splits a `-c` key at every dot, so a server
+named with a dot stopped every Codex window; a plugin's server only by switching every plugin off, since
+Codex says nowhere which plugin a server is from) and turned off Codex's update screen, which stalled a
+restart. Codex's built-in servers stay on, as Claude Code's Chrome does. A plugin's server that `installed_plugins.json`
+does not list (synced from the account, `--plugin-dir`, managed) is allowed by what `claude mcp list` shows for it.
+Claude Code adds up every scope's allow list, so a window whose repo (or my own settings) allows a server its
+list does not name refuses to start, saying which file and what to do. Next: a window whose restart in an
+update dies at its launch (that refusal, a failed Codex listing) is reported as restarted and still waited
+for; the summary should say it did not start, and why. Design note:
+[docs/design/connectors.md](docs/design/connectors.md).
+
 ### Docs site
 
 **Done (2026-11-02):** a docs site, <https://promptromp.github.io/bosun/>, built with MkDocs

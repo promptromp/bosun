@@ -84,7 +84,29 @@ class McpTest(unittest.TestCase):
             with self.subTest(tool=tool):
                 self.assertEqual(decision(tool), "ask")
 
+    def test_more_write_verbs_ask(self) -> None:
+        for tool in [
+            "mcp__x__insert_rows",
+            "mcp__x__append_block",
+            "mcp__x__modify_event",
+            "mcp__x__apply_label",
+            "mcp__x__invoke_function",
+            "mcp__x__duplicate_page",
+            "mcp__x__kill_job",
+            "mcp__x__save_draft",
+            "mcp__x__saveDraft",
+        ]:
+            with self.subTest(tool=tool):
+                self.assertEqual(decision(tool), "ask")
+
+    def test_a_name_breaks_after_a_digit_too(self) -> None:
+        self.assertEqual(guard.name_words("mcp__acme-cloud__s3Upload"), ["s3", "upload"])
+        self.assertEqual(guard.name_words("mcp__acme-cloud__ec2RunInstances"), ["ec2", "run", "instances"])
+        self.assertEqual(decision("mcp__acme-cloud__s3Upload"), "ask")
+        self.assertIsNone(decision("mcp__acme-cloud__s3ListBuckets"))
+
     def test_noun_like_words_do_not_ask(self) -> None:
+        """Nor words that are also nouns or adjectives in reads' names: patch, put, clear, drop."""
         for tool in [
             "mcp__x__get_pull_request",
             "mcp__x__pull_request_read",
@@ -92,6 +114,10 @@ class McpTest(unittest.TestCase):
             "mcp__x__list_comments",
             "mcp__x__get_order",
             "mcp__x__list_pins",
+            "mcp__x__get_patch",
+            "mcp__x__list_drops",
+            "mcp__x__get_put_options",
+            "mcp__x__is_clear",
         ]:
             with self.subTest(tool=tool):
                 self.assertIsNone(decision(tool))

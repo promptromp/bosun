@@ -5,8 +5,12 @@
 # medium, high, xhigh, max); defaults: BOSUN_MODEL / BOSUN_EFFORT in bosun.env.
 # Optional per window: `harness` (claude or codex), to run this one on another agent than BOSUN_HARNESS.
 # On Codex `model` is one of its models, and the default is BOSUN_CODEX_MODEL.
+# Optional per window: `connectors`, the MCP servers and connectors it may reach, by the names `claude mcp
+# list` (or `codex mcp list`) shows, or URL patterns: a list, [] for none, `all` for every one; default:
+# BOSUN_CONNECTORS in bosun.env (empty: none). See docs/setup.md, "Connectors".
 sessions:
   - name: my-service
     dir: ~/Development/my-service
+    connectors: [acme-local]
   - name: my-frontend
     dir: ~/Development/my-frontend

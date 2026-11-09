@@ -30,6 +30,7 @@ start from what the organization already knows, instead of finding it out again.
   quoting its evidence. You approve what it learns.
 - **You stay in command.** Nothing goes out under your name, whether a Slack reply, a merge or a
   ticket change, until you have approved that exact action. Approve in one line, from your phone.
+  Each session reaches only the connectors you name for it: none for a repo session, unless you say.
 - **Built to be shared.** The waste that costs most sits between people: context explained again,
   hand-offs dropped, a lesson one team learned that another has to learn again. Bosun's ledger and
   knowledge graph are records a whole organization can build on, so every engineer and every agent

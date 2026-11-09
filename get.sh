@@ -17,7 +17,9 @@
 # `bosun init` again instead. `bosun uninstall` takes it all off again.
 #
 #   curl ... | sh -s -- --dry-run      say what it would do, and do nothing
-#   curl ... | sh -s -- --unattended   ask nothing: take the recommended setup, or go ahead with the update
+#   curl ... | sh -s -- --unattended   ask nothing: take the recommended setup (on a first install without
+#                                      repo windows or connectors, since nobody chose them), or go ahead
+#                                      with the update
 #   curl ... | BOSUN_HARNESS=codex sh  run repo sessions on Codex, and check that it is ready
 #
 # BOSUN_DIR (where it goes), BOSUN_REPO and BOSUN_BRANCH (what it gets) override the defaults. On an
@@ -201,13 +203,24 @@ get_bosun() {
 start_init() {
   command="$DIR/bin/bosun"
   if [ "$DRY_RUN" = 1 ]; then
-    say "Then it would start: $command init"
+    if [ "$UNATTENDED" = 1 ]; then
+      say "Then it would start: BOSUN_INIT_UNATTENDED=1 $command init --recommended"
+    else
+      say "Then it would start: $command init"
+    fi
     return 0
   fi
   BOSUN_USER_PATH="$USER_PATH"
   BOSUN_RERUN="$THIS_LINE"
   export BOSUN_USER_PATH BOSUN_RERUN
-  [ "$UNATTENDED" = 0 ] || exec "$command" init --recommended
+  # Unattended is handed over as a variable, as the two above: an older version on disk (an install it
+  # never finished) ignores it and takes the recommended setup as it always did, where a flag it does not
+  # know would stop it.
+  if [ "$UNATTENDED" = 1 ]; then
+    BOSUN_INIT_UNATTENDED=1
+    export BOSUN_INIT_UNATTENDED
+    exec "$command" init --recommended
+  fi
   has_terminal && exec "$command" init </dev/tty
   exec "$command" init # no terminal to ask on: it prints the plan
 }

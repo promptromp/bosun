@@ -165,6 +165,151 @@ class TrustTest(ResolveTestCase):
         return str(path)
 
 
+MCP_LIST = """Checking MCP server health…
+
+claude.ai Acme Mail: https://mail.example.com/mcp - ✔ Connected
+plugin:acme-tracker:tracker: https://tracker.example.com/mcp (HTTP) - ! Needs authentication
+plugin:pdf-tools:pdf: npx -y @acme/pdf-server --stdio - ✔ Connected
+acme-local: /Users/me/.local/bin/acme-mcp  - ✔ Connected
+claude.ai Acme Metrics: https://metrics.example.com/mcp - ✘ Failed to connect — HTTP 502: bad - try later
+"""
+
+
+def fake_claude(folder: Path, body: str) -> Path:
+    path = folder / "fake-claude"
+    path.write_text(f"#!/bin/sh\n{body}\n")
+    path.chmod(0o755)
+    return path
+
+
+class McpServersTest(unittest.TestCase):
+    def setUp(self) -> None:
+        temp = tempfile.TemporaryDirectory()
+        self.addCleanup(temp.cleanup)
+        self.root = Path(temp.name).resolve()
+
+    def test_mcp_list_text_parsed(self) -> None:
+        (self.root / "listing.txt").write_text(MCP_LIST)
+        claude = fake_claude(
+            self.root,
+            f'[ "$*" = "mcp list" ] || exit 9\npwd -P > "{self.root}/cwd"\n'
+            f'[ "$ENABLE_CLAUDEAI_MCP_SERVERS" = true ] || exit 8\ncat "{self.root}/listing.txt"',
+        )
+        workdir = self.root / "repo"
+        workdir.mkdir()
+        self.assertEqual(
+            resolve.mcp_server_targets(str(claude), workdir),
+            {
+                "claude.ai Acme Mail": "https://mail.example.com/mcp",
+                "plugin:acme-tracker:tracker": "https://tracker.example.com/mcp",
+                "plugin:pdf-tools:pdf": "npx -y @acme/pdf-server --stdio",
+                "acme-local": "/Users/me/.local/bin/acme-mcp",
+                "claude.ai Acme Metrics": "https://metrics.example.com/mcp",
+            },
+        )
+        self.assertEqual((self.root / "cwd").read_text().strip(), str(workdir))
+
+    def test_mcp_list_failure_raises(self) -> None:
+        cases = {
+            "exit 1": "exited 1",
+            "exec sleep 20": "timed out",
+            "echo 'Checking MCP server health…'; echo": "no server",
+            "echo 'No MCP servers configured.'": "no server",
+        }
+        for body, why in cases.items():
+            # Short only for the one that hangs: on a busy machine a script needs longer than 0.5s to start.
+            timeout = 0.5 if "sleep" in body else 30.0
+            with self.subTest(body=body), self.assertRaisesRegex(resolve.McpListError, why):
+                resolve.mcp_server_targets(str(fake_claude(self.root, body)), self.root, timeout=timeout)
+        with self.assertRaisesRegex(resolve.McpListError, "could not run"):
+            resolve.mcp_server_targets(str(self.root / "no-claude"), self.root)
+
+    def test_plugin_servers_expand_the_plugin_root(self) -> None:
+        tracker = self.root / "plugins" / "acme-tracker"
+        pdf = self.root / "plugins" / "pdf-tools"
+        for folder, servers in (
+            (tracker, {"tracker": {"type": "http", "url": "${CLAUDE_PLUGIN_ROOT}/../t"}}),
+            (
+                pdf,
+                {
+                    "pdf": {
+                        "command": "${CLAUDE_PLUGIN_ROOT}/bin/pdf",
+                        "args": ["--root", "${CLAUDE_PLUGIN_ROOT}/d"],
+                    },
+                    "preview": {"type": "http", "url": "https://pdf.example.com/mcp"},
+                },
+            ),
+        ):
+            folder.mkdir(parents=True)
+            (folder / ".mcp.json").write_text(json.dumps({"mcpServers": servers}))
+        installed = self.root / "installed_plugins.json"
+        plugins = {
+            "acme-tracker@market": [{"installPath": str(tracker)}],
+            "pdf-tools@market": [{"installPath": str(pdf)}, "not an install"],
+            "empty@market": [{"installPath": str(self.root / "nothing")}],
+            "odd@market": "not a list",
+        }
+        installed.write_text(json.dumps({"plugins": plugins}))
+        self.assertEqual(
+            resolve.plugin_mcp_servers(installed),
+            {
+                "plugin:acme-tracker:tracker": {"type": "http", "url": f"{tracker}/../t"},
+                "plugin:pdf-tools:pdf": {"command": f"{pdf}/bin/pdf", "args": ["--root", f"{pdf}/d"]},
+                "plugin:pdf-tools:preview": {"type": "http", "url": "https://pdf.example.com/mcp"},
+            },
+        )
+        self.assertEqual(resolve.plugin_mcp_servers(self.root / "missing.json"), {})
+        self.assertIsNone(resolve.slack_plugin_mcp_config(installed))
+
+    def test_an_install_without_an_absolute_path_is_skipped(self) -> None:
+        """Path("") / ".mcp.json" would be the window folder's own .mcp.json, read as a plugin's."""
+        repo = self.root / "repo"
+        repo.mkdir()
+        (repo / ".mcp.json").write_text(json.dumps({"mcpServers": {"own": {"command": "repo-server"}}}))
+        installed = self.root / "installed_plugins.json"
+        installs = {"blank@market": [{"installPath": ""}], "relative@market": [{"installPath": "."}]}
+        installed.write_text(json.dumps({"plugins": {**installs, "none@market": [{}]}}))
+        cwd = Path.cwd()
+        os.chdir(repo)
+        self.addCleanup(os.chdir, cwd)
+        self.assertEqual(resolve.plugin_mcp_servers(installed), {})
+
+    def test_a_variable_left_after_the_plugin_root_is_unexpanded(self) -> None:
+        """Claude Code expands other ${VARIABLES} from its own environment, which bosun cannot know."""
+        self.assertFalse(resolve.unexpanded({"command": "/opt/pdf", "args": ["--stdio"], "url": None}))
+        self.assertFalse(resolve.unexpanded({"command": "x", "args": "not a list"}))
+        for config in (
+            {"command": "${ACME_HOME}/bin/pdf"},
+            {"command": "pdf", "args": ["--token", "${ACME_TOKEN}"]},
+            {"type": "http", "url": "https://${ACME_HOST}/mcp"},
+        ):
+            with self.subTest(config=config):
+                self.assertTrue(resolve.unexpanded(config))
+
+    def test_a_listing_that_times_out_leaves_no_server_it_started_behind(self) -> None:
+        """`claude mcp list` starts each stdio server to check it; on a timeout its whole process group
+        goes, not only the claude process."""
+        pid_file = self.root / "server.pid"
+        claude = fake_claude(self.root, f'sleep 60 &\necho $! > "{pid_file}"\nexec sleep 60')
+        with self.assertRaisesRegex(resolve.McpListError, "timed out"):
+            resolve.mcp_server_targets(str(claude), self.root, timeout=1.0)
+        server = int(pid_file.read_text())
+        deadline = time.monotonic() + 10
+        while time.monotonic() < deadline and alive(server):
+            time.sleep(0.1)
+        self.assertFalse(alive(server))
+
+
+def alive(pid: int) -> bool:
+    """Whether <pid> runs (a zombie its new parent has not reaped yet counts as gone)."""
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    state = os.popen(f"ps -o stat= -p {pid}").read().strip()  # noqa: S605 - a fixed command, a number
+    return bool(state) and not state.startswith("Z")
+
+
 if __name__ == "__main__":
     unittest.main()
 

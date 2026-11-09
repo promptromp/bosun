@@ -63,7 +63,8 @@ first_look() {
   echo "first look: the plan changes nothing"
   check "nothing of bosun is here yet" bash -c '[ ! -e "$1" ] && [ ! -e "$2" ]' _ "$HOME/.local/bin/bosun" "$CONFIG"
   check "bosun init prints a plan" bash -c '"$1" init >"$2"' _ "$BOSUN" "$out"
-  check "... the busy repos, not the idle one" says "Windows   api, web (plus" "$out"
+  check "... the most used repo, and no other" says "Windows    api (plus" "$out"
+  check "... no connectors for the orchestrator" says "Connectors none, for the orchestrator" "$out"
   check "... the schedule from the history" says "Mon-Fri, 08:30 to 19:00" "$out"
   check "... the recommended features" says "events, approvals, learning on; Slack watcher off" "$out"
   check "... says why" says "your usual first prompt is 09:10" "$out"
@@ -81,7 +82,9 @@ set_up() {
   check "the mask is the repos' owner" says 'BOSUN_REPO_MASK="acme"' "$CONFIG/bosun.env"
   check "learning runs before the window ends" says 'BOSUN_LEARN_AT="17:30"' "$CONFIG/bosun.env"
   check "bosun.env is short: only what differs" bash -c '[ "$(grep -c "^BOSUN_" "$1")" -lt 20 ]' _ "$CONFIG/bosun.env"
-  check "the windows are in sessions.yml" says "dir: ~/Development/web" "$CONFIG/sessions.yml"
+  check "the window is in sessions.yml" says "dir: ~/Development/api" "$CONFIG/sessions.yml"
+  check "... and only that one" absent "web" "$CONFIG/sessions.yml"
+  check "the orchestrator gets no connectors" says 'BOSUN_ORCHESTRATOR_CONNECTORS=""' "$CONFIG/bosun.env"
   check "the folders are trusted" bash -c 'jq -e --arg d "$HOME/Development/api" ".projects[\$d].hasTrustDialogAccepted" "$HOME/.claude.json"'
   check "the morning job is loaded" says "launchctl bootstrap gui/$(id -u) $AGENTS/com.bosun.morning.plist" "$LOG"
   check "the watchdog is loaded" says "com.bosun.morning.watchdog.plist" "$LOG"
@@ -94,8 +97,8 @@ a_morning() {
   local out="$HOME/morning.txt"
   echo "a morning: the windows come up"
   check "the morning run succeeds" bash -c '"$HOME/.local/bin/bosun" morning --awake-minutes 1 >"$1" 2>&1 || { tail -8 "$1"; exit 1; }' _ "$out"
-  check "the windows are up" bash -c '[ "$1" = "api checkin orchestrator web " ] || { echo "windows: $1"; exit 1; }' _ "$(windows)"
-  check "a morning is idempotent" bash -c '"$HOME/.local/bin/bosun" morning --awake-minutes 1 >/dev/null 2>&1 && [ "$1" = "api checkin orchestrator web " ]' _ "$(windows)"
+  check "the windows are up" bash -c '[ "$1" = "api checkin orchestrator " ] || { echo "windows: $1"; exit 1; }' _ "$(windows)"
+  check "a morning is idempotent" bash -c '"$HOME/.local/bin/bosun" morning --awake-minutes 1 >/dev/null 2>&1 && [ "$1" = "api checkin orchestrator " ]' _ "$(windows)"
   check "bosun stop ends the session" bash -c '"$HOME/.local/bin/bosun" stop >/dev/null 2>&1; ! tmux -L bosun has-session -t "=bosun" 2>/dev/null'
 }
 
@@ -279,7 +282,7 @@ the_installer() {
   check "... and says to run the same line again" says "Then run this again: curl -fsSL" "$out"
   brew install gh
   check "the piped installer hands over to the wizard" python3 "$DRIVE" "$out" \
-    "Which repos" "2<enter>" \
+    "Which repos" "<enter>" \
     "When should" "2" \
     "How proactive" "<enter>" \
     "Which model" "2" \
@@ -297,8 +300,8 @@ the_installer() {
     [ "$(git --git-dir="$1/bosun.git" config bosun.managed)" = true ] && [ "$(git --git-dir="$1/bosun.git" config bosun.branch)" = "$2" ]' _ "$VERSIONS" "$branch"
   check "it linked that one, through the install link" bash -c '[ "$(readlink "$HOME/.local/bin/bosun")" = "$1/bin/bosun" ]' _ "$INSTALL"
   check "... and its jobs run it through the link too" grep -qF "exec \"$INSTALL/bin/bosun\" " "$AGENTS/com.bosun.morning.plist"
-  check "the toggled-off repo has no window" absent "name: web" "$CONFIG/sessions.yml"
-  check "... and the chosen one does" says "name: api" "$CONFIG/sessions.yml"
+  check "the repo not ticked has no window" absent "name: web" "$CONFIG/sessions.yml"
+  check "... and the ticked one does" says "name: api" "$CONFIG/sessions.yml"
   check "the schedule it was given" says 'BOSUN_DAYS="MTWRF"' "$CONFIG/bosun.env"
   check "the model it was given" says 'BOSUN_MODEL="sonnet"' "$CONFIG/bosun.env"
   check "repo sessions are in auto mode" says "--permission-mode auto" "$CONFIG/bosun.env"
@@ -309,11 +312,30 @@ the_installer() {
   check "... the link where it was, and no other version" bash -c '[ "$(ls "$1" | grep -vc "^bosun.git$")" = 1 ] && [ -L "$2" ]' _ "$VERSIONS" "$INSTALL"
   check "a download cut short does nothing" bash -c 'head -c 900 "$1/get.sh" | BOSUN_DIR="$HOME/cut-short" sh; [ ! -e "$HOME/cut-short" ]' _ "$ROOT"
   the_uninstall "$before_install"
+  the_installer_unattended
   unset BOSUN_REPO BOSUN_BRANCH
 }
 
+# On a first install, unattended: the recommendation, but nothing nobody chose, and it says so.
+the_installer_unattended() {
+  local out="$HOME/unattended.txt"
+  echo "the installer, unattended: no repo windows or connectors, since nobody chose them"
+  # shellcheck disable=SC2002 # the pipe is the point: this is how people run it
+  check "it sets bosun up" bash -c 'cat "$1/get.sh" | sh -s -- --unattended >"$2" 2>&1 || { tail -5 "$2"; exit 1; }' _ "$ROOT" "$out"
+  check "... with no repo window" says "sessions: []" "$CONFIG/sessions.yml"
+  check "... no connectors for the orchestrator" says 'BOSUN_ORCHESTRATOR_CONNECTORS=""' "$CONFIG/bosun.env"
+  check "... the rest as recommended" says 'BOSUN_REPO_MASK="acme"' "$CONFIG/bosun.env"
+  check "... and it says so, last" bash -c '[ "$(tail -1 "$1")" = "No repo windows or connectors were set up, since nobody chose them: run bosun init to add them." ]' _ "$out"
+  check "the repo it did not choose is not trusted" bash -c '! jq -e --arg d "$HOME/Development/api" ".projects[\$d].hasTrustDialogAccepted" "$HOME/.claude.json"'
+  check "a window named with --answers needs no --force" bash -c 'echo "{\"repos\": [{\"dir\": \"~/Development/api\"}]}" >"$2" && "$1" init --answers "$2" >/dev/null 2>&1' _ "$HOME/.local/bin/bosun" "$HOME/answers.json"
+  check "... and is in sessions.yml" says "name: api" "$CONFIG/sessions.yml"
+  check "uninstall takes it off again" bash -c '"$1" uninstall --yes --purge >"$2" 2>&1 && [ ! -e "$1" ] && [ ! -e "$3" ]' _ "$HOME/.local/bin/bosun" "$out" "$CONFIG"
+}
+
+codex_turns() { cat "$HOME"/.codex/sessions/*/*/*/*.jsonl | grep -c task_started; }
+
 the_first_day_on_codex() {
-  local out="$HOME/codex.txt" sessions_before state="$HOME/.local/state/bosun"
+  local out="$HOME/codex.txt" sessions_before turns state="$HOME/.local/state/bosun"
   local bosun="$HOME/.local/bin/bosun"
   echo "the first day on Codex: the same steps, then real windows on the stand-in"
   rm -rf "$CONFIG"
@@ -337,10 +359,11 @@ the_first_day_on_codex() {
   check "the repo window runs Codex" wait_for 20 bash -c '"$1" sessions --json | jq -e ".[] | select(.name == \"api\") | .agent.harness == \"codex\" and .agent.status == \"idle\"" >/dev/null' _ "$bosun"
   check "the orchestrator stays on Claude Code" wait_for 20 bash -c '"$1" sessions --json | jq -e ".[] | select(.name == \"orchestrator\") | .agent.harness == \"claude\"" >/dev/null' _ "$bosun"
   check "lists say which agent" bash -c '"$1" sessions | grep -q "codex:idle"' _ "$bosun"
-  check "bosun knows each session by its window" wait_for 10 jq -e '.api.id and .web.id' "$state/codex-sessions.json"
+  check "bosun knows the session by its window" wait_for 10 jq -e '.api.id' "$state/codex-sessions.json"
   sessions_before="$(find "$HOME/.codex/sessions" -name '*.jsonl' | wc -l)"
+  turns="$(codex_turns)"
   check "a message reaches it" "$bosun" send --no-item api "please look at the failing test"
-  check "... as a turn of its own" wait_for 10 bash -c '[ "$(cat "$HOME"/.codex/sessions/*/*/*/*.jsonl | grep -c task_started)" -ge 3 ]'
+  check "... as a turn of its own" wait_for 10 bash -c '[ "$(cat "$HOME"/.codex/sessions/*/*/*/*.jsonl | grep -c task_started)" -gt "$1" ]' _ "$turns"
   tmux -L bosun send-keys -t "=bosun:=api" "go with option b" Enter
   check "what you type there is recorded" wait_for 10 jq -e '[.said[]? | select(.text == "go with option b")] | length == 1' "$state/ledger.json"
   tmux -L bosun send-keys -t "=bosun:=api" "and keep the tests" Enter

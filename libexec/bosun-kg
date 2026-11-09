@@ -4,7 +4,8 @@
 # Organizational knowledge for bosun: People, Process, Product (design: docs/design/knowledge.md).
 #
 # Writing (every change is one transaction in the knowledge directory's journal, then one commit in
-# its own git history; a new fact's id is minted, f-3k9x2a, and older ones stay, f12):
+# its own git history, BOSUN_KNOWLEDGE_GIT=1, the default; 0 makes no commits; a new fact's id is
+# minted, f-3k9x2a, and older ones stay, f12):
 #   add-entity <type>/<slug> [--name N] [--alias A ...] [--weak-alias W ...] [--summary S]
 #              [--allow-forgotten]
 #                                      add an entity, or merge new aliases into it (strong alias: a

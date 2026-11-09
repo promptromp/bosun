@@ -38,25 +38,34 @@ To run the repo sessions on Codex, ask for it after the pipe, so that it checks 
 curl -fsSL https://raw.githubusercontent.com/promptromp/bosun/main/get.sh | BOSUN_HARNESS=codex sh
 ```
 
-Run it again to update: it hands over to the newest version's `bosun update` (see
-[Updating](#updating)). After the pipe, `sh -s -- --dry-run` says what it would do and does nothing, and
-`sh -s -- --unattended` asks nothing: it takes the recommended setup, or goes ahead with the update.
-`BOSUN_DIR`, `BOSUN_REPO` and `BOSUN_BRANCH` override where it goes and what it gets; on an install that
-is already there, the defaults are what it came from, and a `BOSUN_REPO` or `BOSUN_BRANCH` given then is
-kept for the updates after it.
+Run it again to update: it hands over to the newest version's `bosun update` (see [Updating](#updating)).
+After the pipe, `sh -s -- --dry-run` says what it would do and does nothing, and `sh -s -- --unattended`
+asks nothing: it takes the recommended setup, or goes ahead with the update. On a first install that
+setup has no repo windows and gives the orchestrator no connectors, since nobody chose them, and its last
+line says so: run `bosun init` to add them, or name them in a file with `bosun init --answers` (below).
+Run again, it keeps what your config says. `BOSUN_DIR`, `BOSUN_REPO` and `BOSUN_BRANCH` override where it
+goes and what it gets; on an install that is already there, the defaults are what it came from, and a
+`BOSUN_REPO` or `BOSUN_BRANCH` given then is kept for the updates after it.
 
-`bosun init` reads what this Mac already shows: the repos you use your agents in, your usual hours,
-your logins. In a terminal it asks a few questions, one key each: Return takes the recommended
-answer, `r` starts again and `q` leaves with nothing changed. It says why it recommends what it does,
-and lists every file and command for you to accept before it touches anything. Then it writes the
-config, trusts the folders, and runs `install.sh`.
+`bosun init` reads what this Mac already shows: the repos you use your agents in, the MCP servers and
+connectors `claude mcp list` shows, your usual hours, your logins. In a terminal it asks a few questions,
+one key each: Return takes the recommended answer, `r` starts again and `q` leaves with nothing changed.
+It says why it recommends what it does, and lists every file and command for you to accept before it
+touches anything. Then it writes the config, trusts the folders, and runs `install.sh`.
+
+Two of the questions are lists to tick. Which repos get a window: the one you use most is ticked, and the
+others it found are listed for you to add. Which connectors the orchestrator may use (asked when
+`claude mcp list` shows any): nothing is ticked, because only you know which are work tools; tick the ones
+it needs, such as Slack and your tracker. It writes them to `BOSUN_ORCHESTRATOR_CONNECTORS`. Repo windows
+get none: `BOSUN_CONNECTORS`, or `connectors:` in a `sessions.yml` entry, gives them some (see
+[Connectors](#connectors-what-each-window-may-reach)).
 
 Without a terminal, or with `--dry-run`, it only prints the plan. To use answers from a file instead,
 which only needs what it changes:
 
 ```bash
 bosun init --print-answers > answers.json
-$EDITOR answers.json           # repos, days, start, until, events, approvals, learning, ...
+$EDITOR answers.json           # repos, orchestrator_connectors, days, start, until, events, ...
 bosun init --answers answers.json
 bosun init --recommended       # or just take what it recommends
 ```
@@ -151,11 +160,32 @@ check-in loop brings the rest along once each is idle. A window left alone, or a
 repo session, keeps the text it has; the summary lists the tasks, for a `bosun delegate --update`.
 
 It ends with a summary: the commits, the migrations and version bumps, the config it changed and its new
-keys, anything you have to change by hand in your own files, the prompts that changed, the jobs reloaded,
+keys (with what each one means, when it says something), anything you have to change by hand in your own files, the prompts that changed, the jobs reloaded,
 what came of each window, anything that fails now that did not before, and where the backup is. It is
 saved as `summary.md` in the backup's folder, and its last line points to [Going back](#going-back).
 `bosun doctor` lists what the last update left to you. An update cut short (Ctrl-C, a crash, a power cut)
 is put back, or finished, by the next `bosun update`. How it works: [design note](design/update.md).
+
+**Your config.** A new key needs nothing: its default applies. A key that is renamed or removed is
+changed in `bosun.env`, and so is a key whose default would change what your install did: the update
+writes it with the value that keeps that, under a comment saying why. Either way it first keeps the file
+as it was, as `bosun.env.pre-update-<time>`, and the plan shows the change before you say yes. The first
+such key is `BOSUN_ORCHESTRATOR_CONNECTORS="all"`: an install from before
+[connectors](#connectors-what-each-window-may-reach) keeps every connector for its orchestrator, and
+`bosun doctor` warns until you name the ones it needs and drop `all`. Repo windows start without
+connectors from then on, a repo's own `.mcp.json` servers included, which the plan and the summary say:
+give one back with `BOSUN_CONNECTORS`, or `connectors:` in its `sessions.yml` entry. Without a `bosun.env`
+nothing is written, and the defaults apply: the orchestrator then starts with no connectors, which the
+plan, the summary and `bosun doctor` say. A checkout of your own that you update with `git pull` gets no
+such change: set `BOSUN_ORCHESTRATOR_CONNECTORS` in `bosun.env` to the connectors the orchestrator needs,
+or to `all`, or it starts with none, which `bosun doctor` warns about until the key is set.
+
+A Claude Code window that a repo's own `.claude/settings.json` (or `settings.local.json`, or your
+`~/.claude/settings.json`) would give servers its list does not name does not start on the new version
+([Connectors](#connectors-what-each-window-may-reach)). The update restarts it, the launch refuses in its
+pane, and the summary says it was restarted and is still waited for; its pane, the day's launch log and
+`bosun doctor` say why. Name those servers in its list, or remove them from that file. Until the window
+answers, the next `bosun update` names it and how to finish it.
 
 ### The first update of an older install
 
@@ -262,7 +292,7 @@ and say so.
 | File | Purpose |
 |---|---|
 | `bosun.env` | Schedule, session name, Claude flags, drain prompt, orchestrator and chores settings. Every `BOSUN_*` value can also be overridden from the environment. Commands read the file each time they run, so edits apply at once, also inside running sessions. See `examples/generic/bosun.env` for all keys. |
-| `sessions.yml` | One entry per repo window: `name` (the session name) and `dir`, optionally `harness` (`claude` or `codex`), `model` and `effort`, and on Claude Code `autocompact`, for that window. The orchestrator is configured in `bosun.env`, not here. |
+| `sessions.yml` | One entry per repo window: `name` (the session name) and `dir`, optionally `harness` (`claude` or `codex`), `model`, `effort` and `connectors` (see [Connectors](#connectors-what-each-window-may-reach)), and on Claude Code `autocompact`, for that window. The orchestrator is configured in `bosun.env`, not here. |
 | `setup.sh` | Defines `setup_steps()`. Helpers: `ensure_claude_login` (see Claude Code login), `ensure_aws_sso <profile>`, `run_step "<desc>" cmd...`. |
 
 State and logs go to `~/.local/state/bosun/`:
@@ -282,11 +312,15 @@ State and logs go to `~/.local/state/bosun/`:
   and anew when a journal starts again (moved aside, emptied or removed); moved aside itself, it
   gives the Mac a new id too. Either way, both journals carry on under the new id
 - `logs/`: `morning-YYYY-MM-DD.log`, `checkin-YYYY-MM-DD.log`, `learn-YYYY-MM-DD.log`,
-  `impact-YYYY-MM-DD.log`, `hook-YYYY-MM-DD.log` (the repo sessions' prompt hook), and what launchd
+  `impact-YYYY-MM-DD.log`, `hook-YYYY-MM-DD.log` (the repo sessions' prompt hook), `launch-YYYY-MM-DD.log`
+  (the alerts a window's launch sent, such as connectors it started without), and what launchd
   captures from each job (`launchd.{out,err}`, `watchdog.launchd.{out,err}`, `learn.launchd.{out,err}`)
 - `watchdog.json`: the watchdog's de-duplication state
 - `login.json`: the last Claude Code login check (see Claude Code login)
 - `codex-sessions.json`: which Codex session each window's name stands for
+- `connectors.json`: the URL or command line `claude mcp list` last showed for each name a list holds
+  that only that listing resolves (a claude.ai connector, a plugin's server the installed plugins do not
+  give), for a launch whose lookup fails (see [Connectors](#connectors-what-each-window-may-reach))
 - `agent-changes.json`: what bosun changed in Claude Code's and Codex's own files (folder trust, memory
   notes), so that `bosun uninstall` takes back only that
 - `signals/`: what Claude Code's hooks reported per window ([Signals](design/signals.md))
@@ -333,6 +367,76 @@ On Claude Code the model goes in as `--model`; the effort as a session-level set
 it. Empty values leave Claude Code's own default. `bosun send --list` shows what each window
 was launched with, `refresh` restarts idle sessions whose launch settings no longer match the
 config, and `bosun doctor` shows the configured values and your saved default.
+
+### Connectors: what each window may reach
+
+A window bosun starts reaches only the MCP servers and connectors its list names; the rest are off for it.
+On Claude Code, Chrome is not one of them: it stays on through `--chrome`, as before. On Codex, see below.
+
+| Key | Whose list | Default |
+|---|---|---|
+| `BOSUN_CONNECTORS` | every repo window | empty: none |
+| `connectors:` in a `sessions.yml` entry | that window, instead of `BOSUN_CONNECTORS` | (the key's) |
+| `BOSUN_ORCHESTRATOR_CONNECTORS` | the orchestrator, and `bosun chores --dry-run` | empty: none; `bosun init` writes what you tick |
+
+A list is comma-separated, or a YAML list in `sessions.yml` (`[]` is none). Each entry is a server's name
+as `claude mcp list` (and `/mcp`) shows it, or a URL pattern; `all` means every one, as before this
+setting, and stands alone:
+
+```sh
+BOSUN_ORCHESTRATOR_CONNECTORS="claude.ai Slack, plugin:acme-tracker:tracker"
+BOSUN_CONNECTORS="acme-local, https://mcp.example.com/*"
+```
+
+```yaml
+sessions:
+  - name: api
+    dir: ~/Development/api
+    connectors: [acme-local]
+```
+
+At launch bosun turns the list into Claude Code's `allowedMcpServers`, in the window's `--settings`, in
+place of any a site settings file names (with `all`, the site file's applies). A server you added yourself
+goes by its name, a plugin's by its URL or command, and a claude.ai connector by the URL `claude mcp list`
+shows for it. bosun runs that listing (a few seconds) only when the list names a claude.ai connector, or a
+plugin's server the installed plugins do not list (a plugin synced from your account, say), once per
+launch, and keeps what it found in `connectors.json` (a name it no longer shows is dropped there); if the
+listing fails (at a morning wake, before the network is up), the launch uses what was kept. A name it
+cannot find is left out, never let in as more: the launch logs a line, on the window's screen and in
+`launch-YYYY-MM-DD.log`, and for the orchestrator it also alerts you (`bosun alert`, whose output goes to
+that log too). A name you added yourself is matched exactly, and checked only when that listing runs
+anyway: it cannot let in more than a server of that name, so a typo allows nothing, and a launch that runs
+the listing logs such a name it does not show. The list is read at launch, so a change applies once the
+window starts again.
+
+Claude Code adds the `allowedMcpServers` of your own `~/.claude/settings.json` and of the window folder's
+`.claude/settings.json` and `.claude/settings.local.json` to the window's list. So a window with a list
+(anything but `all`) does not start while one of those files allows a server its list does not name, entry
+for entry: the launch says which file and which entries, and what to do: name them in the window's list,
+use `all`, or remove them from that file.
+
+On Codex, a window's list names servers as `codex mcp list` shows them. bosun switches off the servers it
+does not name: those in a `config.toml` (yours, or a trusted repo's) one by one, and a plugin's only by
+switching off every plugin, since Codex can switch a plugin's server off only by its plugin and says
+nowhere which plugin a server comes from. So to keep any plugin's server, the list must name every
+plugin's server; one that names some but not all of them loses all of them, and every plugin's skills
+too. A name Codex has no server by is logged at launch. Servers that `BOSUN_CODEX_FLAGS` adds (a
+`--profile`, a `-c mcp_servers...`) are not switched off, as bosun lists the servers without the window's
+flags: add servers in `config.toml`, not through flags. Unless the list is `all`, bosun also passes
+`--disable apps`, which is documented to switch off ChatGPT's connectors (`codex_apps`; the test VM had no
+ChatGPT login to see that with). Codex's other built-in servers
+(`codex_worktrees`) stay on, as Chrome does on Claude Code: they are local, and `codex mcp list` does not
+show them, so a list cannot name them. bosun also starts Codex without its update screen, which would stop
+an unattended start.
+
+`bosun doctor` has a line for each window: what it reaches (a name resolved to a server it knows), what
+it only allows by name or by pattern, and each name it cannot find. It looks nothing up (`claude mcp list`
+connects to every server), so a claude.ai connector no start has looked up yet shows as not found until
+the window's next start does. For a Codex window it asks `codex mcp list --json` for the servers' names,
+and says which names mean nothing to Codex (a URL pattern, a claude.ai connector). It warns while the
+orchestrator's list is `all`, while `bosun.env` does not set it at all, and for a Claude Code window that
+another settings file would widen, which does not start; and it says what an `allowedMcpServers` in the
+orchestrator's site settings file comes to.
 
 ### How sessions are resumed
 
@@ -446,7 +550,9 @@ Then run `bosun trust <dir>` for any folder Codex has not seen, and `bosun docto
 **What it may do.** Windows start with `BOSUN_CODEX_FLAGS`, by default `--no-daemon --approve-for-me`: Codex's
 sandbox, and an automatic reviewer that decides when a command may go past it, with no prompts. bosun also
 gives the sandbox the repo's `.git`, its own state folder and the network, or nothing could be committed,
-reported or pushed. Keep `--no-daemon`: bosun needs each session in its own process.
+reported or pushed. Keep `--no-daemon`: bosun needs each session in its own process. Each window reaches
+only the MCP servers its list names ([Connectors](#connectors-what-each-window-may-reach)), but servers
+these flags add (a `--profile`, a `-c mcp_servers...`) stay on: add servers in `config.toml` instead.
 
 **What differs from a Claude Code window**, among them no Remote Control from your phone, a revoked login
 that is not reported, and no Impact stats or learning yet:

@@ -22,6 +22,20 @@ goes by, seen in Codex 0.166.0 and not a public API:
   - A turn is `task_started` to `task_complete` or `turn_aborted`. With the default flags nothing asks
     a person; in a mode that asks, a turn waiting for you still reads as busy, because
     the file does not record it (lib/pane_input.py reads that from the screen).
+  - What servers a window reaches: `codex mcp list --json` lists the MCP servers Codex would start in a
+    folder (configured, a trusted project's and plugin ones; not the built-ins `codex_apps`, ChatGPT's
+    connectors, and `codex_worktrees`, which stay on), each with its name and, for a stdio server, its
+    environment in plain text, so `mcp_server_names` keeps the names only, each once. With
+    `--disable plugins` it lists no plugin's server, so `mcp_servers` tells a plugin's servers from the
+    configured ones by listing twice: nothing Codex prints names a server's plugin. A launch switches
+    configured servers off with one `-c mcp_servers={<key>={enabled=false},...}`, which merges into the
+    configuration, every plugin with `--disable plugins` (a plugin's server in that table stops Codex:
+    `invalid transport`), and the connectors with `--disable apps` (lib/connectors.py): one table,
+    because Codex splits a `-c` path at every dot, quotes included, so `mcp_servers."a.b".enabled=false`
+    makes it exit at start. Seen in the Mac VM (`tests/sandbox.sh mac live codex`) for a user's, a
+    project's, a dotted and a local plugin's server.
+  - A start waits at an "Update available" screen once Codex has seen a newer version of itself, so the
+    launch passes `-c check_for_update_on_startup=false`.
   - Codex has no way to name a session from outside, so bosun keeps its own table of names, filled in by
     the program Codex runs when a turn ends (`bosun hook codex-turn-end`). That program also runs for
     Codex's hidden helpers, each with an id of its own (is_terminal_session).
@@ -37,6 +51,7 @@ import subprocess
 import sys
 import tomllib
 from collections.abc import Iterable, Iterator
+from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -281,6 +296,77 @@ def logged_in() -> bool:
     except (OSError, subprocess.TimeoutExpired):
         return False
     return result.returncode == 0
+
+
+class CodexListError(RuntimeError):
+    """`codex mcp list --json` gave no answer to read."""
+
+
+MCP_LIST_TIMEOUT_SECONDS = 30.0
+
+
+def mcp_server_names(
+    codex_bin: str,
+    timeout: float = MCP_LIST_TIMEOUT_SECONDS,
+    cwd: Path | None = None,
+    *,
+    plugins: bool = True,
+) -> list[str]:
+    """The name of each MCP server Codex would start in <cwd> (default: this folder; configured, a
+    trusted project's or, unless <plugins> is False (`--disable plugins`), a plugin's; never its
+    built-ins), each once. Nothing else of the listing is kept: a stdio server's entry holds its
+    environment, secrets included."""
+    switch = [] if plugins else ["--disable", "plugins"]
+    try:
+        result = subprocess.run(
+            [codex_bin, *switch, "mcp", "list", "--json"],
+            cwd=cwd,
+            stdin=subprocess.DEVNULL,
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+            check=False,
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise CodexListError(f"timed out after {timeout:g}s") from exc
+    except OSError as exc:
+        raise CodexListError(f"could not run {codex_bin}: {exc.strerror or exc}") from exc
+    if result.returncode != 0:
+        raise CodexListError(f"exited {result.returncode}")
+    return list(dict.fromkeys(listed_names(result.stdout)))
+
+
+@dataclass(frozen=True)
+class McpServers:
+    """The servers a Codex window would start, by how a launch switches one off: <configured>, an
+    `mcp_servers` table each (in `config.toml`, a trusted project's or a profile's), by name in
+    `-c mcp_servers={...}`; <plugins>, a plugin's each, only all at once (`--disable plugins`), since
+    nothing Codex prints says which plugin a server comes from."""
+
+    configured: tuple[str, ...] = ()
+    plugins: tuple[str, ...] = ()
+
+
+def mcp_servers(
+    codex_bin: str, timeout: float = MCP_LIST_TIMEOUT_SECONDS, cwd: Path | None = None
+) -> McpServers:
+    """Codex's listing twice, with plugins and without: a server only in the first is a plugin's."""
+    every = mcp_server_names(codex_bin, timeout, cwd)
+    configured = mcp_server_names(codex_bin, timeout, cwd, plugins=False)
+    return McpServers(tuple(configured), tuple(name for name in every if name not in configured))
+
+
+def listed_names(text: str) -> list[str]:
+    try:
+        entries = json.loads(text)
+    except ValueError:
+        raise CodexListError("its output is not JSON") from None
+    if not isinstance(entries, list):
+        raise CodexListError("its output is not a list")
+    names = [entry.get("name") if isinstance(entry, dict) else None for entry in entries]
+    if not all(isinstance(name, str) and name for name in names):
+        raise CodexListError("a server in it has no name")
+    return [str(name) for name in names]
 
 
 def ready() -> bool:

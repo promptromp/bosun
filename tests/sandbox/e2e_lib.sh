@@ -102,9 +102,21 @@ install() {
   check "it finishes with bosun doctor passing" test "$installed" = 0
   check "Homebrew's tmux is here" command -v tmux
   check "python3 is new enough" python3 -c 'import sys; sys.exit(sys.version_info < (3, 13))'
-  check "it found the repo in the usual folder" grep -q "name: acme-api" "$CONFIG/sessions.yml"
   check "repo sessions are in auto mode" grep -q -- "--permission-mode auto" "$CONFIG/bosun.env"
   check "bosun is linked" test -L "$HOME/.local/bin/bosun"
+}
+
+# The windows a script wants, as it names them: `get.sh --unattended` sets up none on a first install,
+# since nobody chose them. (A release from before that set them up already, in an order of its own, so
+# --force: then sessions.yml may be rewritten, with a backup.)
+windows_by_answers() { # <repo folder name in ~/Development>...
+  local answers="$OUT/windows.json" name
+  jq -n '{repos: [$ARGS.positional[] | {dir: ("~/Development/" + .)}]}' --args "$@" >"$answers"
+  check "the windows named with bosun init --answers: $*" bash -c '"$1" init --force --answers "$2" >"$3" 2>&1 || { tail -15 "$3"; exit 1; }' \
+    _ "$HOME/.local/bin/bosun" "$answers" "$OUT/windows.txt"
+  for name in "$@"; do
+    check "... $name in sessions.yml" grep -q "name: $name" "$CONFIG/sessions.yml"
+  done
 }
 
 # <folder> is a version: a folder of bosun-versions, a worktree of its bosun.git at the commit it is

@@ -18,6 +18,7 @@ from unittest import mock
 
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "lib"))
+import migrations
 import update_agents
 import update_plan
 import update_state
@@ -309,6 +310,54 @@ class TextTest(unittest.TestCase):
         text = rendered(built(plan=a_plan(commits=("aaaaaaa acme: one",), keys_added=("BOSUN_X",))))
         self.assertTrue(text.startswith("bosun updated: 95545b0 -> c41b186 (1 commit) in 2m 41s\n"), text)
         self.assertIn("\n  1 new key, at its default (bosun doctor lists it)\n", text)
+
+    def test_summary_shows_added_key_notes(self) -> None:
+        """Each added key with a note gets its line, under Config: a kept key's once the update wrote
+        its value (plan.kept, beside bosun.env's line), one whose default applies always; the count
+        is of the other keys only."""
+        written = (
+            'bosun.env: BOSUN_ORCHESTRATOR_CONNECTORS="all" added (before: bosun.env.pre-update-20261104)'
+        )
+        plan = a_plan(
+            keys_added=("BOSUN_CONNECTORS", "BOSUN_ORCHESTRATOR_CONNECTORS", "BOSUN_X"),
+            kept=(("BOSUN_ORCHESTRATOR_CONNECTORS", "all"),),
+        )
+        notes = {entry.key: entry.note for entry in migrations.CONFIG_ADDED}
+        summary = built(plan=plan, config=[written])
+        self.assertEqual(
+            summary.config,
+            (
+                written,
+                f"BOSUN_ORCHESTRATOR_CONNECTORS: {notes['BOSUN_ORCHESTRATOR_CONNECTORS']}",
+                f"BOSUN_CONNECTORS: {notes['BOSUN_CONNECTORS']}",
+                "1 new key, at its default (bosun doctor lists it)",
+            ),
+        )
+        text = rendered(summary)
+        self.assertIn(f"\n  BOSUN_CONNECTORS               {notes['BOSUN_CONNECTORS']}\n", text)
+        self.assertIn(
+            '\n  bosun.env                      BOSUN_ORCHESTRATOR_CONNECTORS="all" added (before: ', text
+        )
+        unwritten = built(plan=dataclasses.replace(plan, kept=())).config
+        self.assertEqual(
+            unwritten,
+            (
+                f"BOSUN_CONNECTORS: {notes['BOSUN_CONNECTORS']}",
+                "2 new keys, at their defaults (bosun doctor lists them)",
+            ),
+        )
+        # No bosun.env to write it to: the orchestrator starts with none, which the summary says.
+        unset = {entry.key: entry.unset for entry in migrations.CONFIG_ADDED}
+        no_env = built(plan=dataclasses.replace(plan, kept=(), unwritten=("BOSUN_ORCHESTRATOR_CONNECTORS",)))
+        self.assertEqual(
+            no_env.config,
+            (
+                f"BOSUN_ORCHESTRATOR_CONNECTORS: {unset['BOSUN_ORCHESTRATOR_CONNECTORS']}",
+                f"BOSUN_CONNECTORS: {notes['BOSUN_CONNECTORS']}",
+                "1 new key, at its default (bosun doctor lists it)",
+            ),
+        )
+        self.assertIn("now it starts with none", rendered(no_env))
 
     def test_each_migration_of_a_store_is_said_and_a_store_not_made_yet(self) -> None:
         applied = [Applied("ledger", 1, 2, "412 items migrated"), Applied("ledger", 2, 3, "9 links rebuilt")]

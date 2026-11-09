@@ -1,12 +1,12 @@
 #!/bin/bash
 # Claude Code's stand-in, for the sandboxes and the clean Mac (tests/install_e2e.sh, tests/work_e2e.sh,
-# tests/sandbox/world.sh): logged in, it answers the login check and the Slack watcher's call, and a
-# window's session behaves where bosun can see it as one does: its running-session record, a transcript
-# named as --name says (so the next launch resumes it), the hooks its --settings give it (SessionStart,
-# UserPromptSubmit and Stop), and prompts from its command line and from its input (bosun send). It
-# answers bosun update's prompts as an agent does: the take-stock prompt by saving the background command
-# it runs (`bosun update note --stock`), the update prompt by starting again each background command the
-# prompt lists, then saying its status (`bosun update note --status`).
+# tests/sandbox/world.sh): logged in, it answers the login check, `claude mcp list` (no servers) and the
+# Slack watcher's call, and a window's session behaves where bosun can see it as one does: its
+# running-session record, a transcript named as --name says (so the next launch resumes it), the hooks its
+# --settings give it (SessionStart, UserPromptSubmit and Stop), and prompts from its command line and from
+# its input (bosun send). It answers bosun update's prompts as an agent does: the take-stock prompt by
+# saving the background command it runs (`bosun update note --stock`), the update prompt by starting again
+# each background command the prompt lists, then saying its status (`bosun update note --status`).
 #
 # Files in ~/.sandbox/claude steer a window's session:
 #   <window>.mode   idle (the default) or busy, a turn that goes on; read again every second
@@ -227,6 +227,7 @@ session() {
 case "$1" in
 -p | --print) print_mode "$@" ;;
 --version) echo "$VERSION (Claude Code)" ;;
+mcp) echo "No MCP servers configured. Use \`claude mcp add\` to add a server." ;; # as a new Mac's says
 *)
 	if [ "$*" = "auth status --json" ]; then
 		echo '{"loggedIn":true,"authMethod":"claude.ai","subscriptionType":"max"}'

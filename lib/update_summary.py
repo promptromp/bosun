@@ -1,8 +1,8 @@
 """What `bosun update` says when it ends (docs/design/update.md, "The summary"): the commits and how
 long it took; each store's migrations and version bumps; the config files it changed, the new keys
-and what to change by hand in my own files; how many prompts changed; the launchd jobs reloaded; the
-handed tasks that keep their old text; what came of each window; what fails after the switch that
-did not before; and where the backup is.
+(each one's note, if it has one) and what to change by hand in my own files; how many prompts
+changed; the launchd jobs reloaded; the handed tasks that keep their old text; what came of each
+window; what fails after the switch that did not before; and where the backup is.
 
 Pure: build, render and as_json take values and read no file nor the environment (render is given the
 home folder, for ~, and the configured launchd label, for the jobs' names). build takes the update's
@@ -69,7 +69,7 @@ class Summary:
     commits: int
     seconds: int
     data: tuple[tuple[str, str], ...]  # each store and its line
-    config: tuple[str, ...]  # the config files changed ("bosun.env: ..."), and the new keys
+    config: tuple[str, ...]  # the config files changed ("bosun.env: ..."), the new keys' notes and count
     prompts: tuple[str, ...]  # their paths in bosun ("orchestrator/policy.md")
     jobs: tuple[str, ...]  # the launchd jobs' labels
     agents: tuple[tuple[str, str], ...]  # each window and what came of it
@@ -106,6 +106,23 @@ def _data(plan: Plan, applied: Sequence[Applied]) -> tuple[tuple[str, str], ...]
     named = [store for store, _ in plan.formats]
     named += [a.store for a in applied] + [store for store, _, _ in plan.rules]
     return tuple((store, _store_line(store, plan, applied)) for store in dict.fromkeys(named))
+
+
+def _added_keys(plan: Plan) -> tuple[str, ...]:
+    """The keys the update added: a line each for those with a note that holds (migrations.added_notes:
+    a kept key's once its value was written, plan.kept, and its unset note when there was no bosun.env to
+    write it to, plan.unwritten), and a count of the others."""
+    notes = migrations.added_notes(plan.keys_added, dict(plan.kept), plan.unwritten)
+    noted = dict(notes)
+    rest = [key for key in plan.keys_added if key not in noted]
+    return (*(f"{key}: {note}" for key, note in notes), *_new_keys(rest))
+
+
+def key_note(key: str) -> str:
+    """What bosun doctor says of <key>, which the last update added and bosun.env does not set, so is
+    at its default: its note when that holds then (nothing was written, added_notes; a kept key's unset
+    note), else ""."""
+    return dict(migrations.added_notes((key,), (), (key,))).get(key, "")
 
 
 def _new_keys(keys: Sequence[str]) -> tuple[str, ...]:
@@ -155,7 +172,7 @@ def build(  # noqa: PLR0913, PLR0917 - the parts, each from the step that learnt
         commits=len(plan.commits),
         seconds=seconds,
         data=_data(plan, applied),
-        config=(*config_lines, *_new_keys(plan.keys_added)),
+        config=(*config_lines, *_added_keys(plan)),
         prompts=plan.prompts,
         jobs=tuple(jobs),
         agents=_agents(plan, agents),

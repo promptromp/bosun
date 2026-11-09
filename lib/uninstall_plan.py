@@ -64,6 +64,8 @@ STATE_FILES = (
     ("alerts", WORKING),
     ("codex-sessions.json", WORKING),
     (".codex-sessions.json.*", WORKING),
+    ("connectors.json", WORKING),  # the connectors' URLs the last launch found (lib/connectors.py)
+    (".connectors.json.*", WORKING),  # what a write cut short left
     ("console", WORKING),
     ("conversations", WORKING),
     ("dry-runs", WORKING),
@@ -110,6 +112,7 @@ LOG_FILES = tuple(
         "learn-*.log",
         "hook-*.log*",
         "impact-*.log",
+        "launch-*.log",
         "launchd.out",
         "launchd.err",
         "*.launchd.out",
