@@ -7,16 +7,26 @@ AGENT_BIN="$BOSUN_CLAUDE_BIN"
 
 # The orchestrator has its own flags, settings, plugin and policy, and the hooks of
 # orchestrator_extra_settings; a repo session gets the hooks of repo_session_settings (lib/common.sh).
+# Both get the connectors their list names (connector_settings), in place of any the settings file names.
 # shellcheck disable=SC2154  # build_model_effort_args and set_autocompact_flag (lib/common.sh) set their arrays
 build_agent_args() { # <window> <session name> <model> <effort>
+  # Here, in the launch's own shell: the lookup runs once, and a failure stops the launch.
+  set_connector_settings "$1"
   if is_orchestrator "$1"; then
-    build_model_effort_args "$3" "$4" "$BOSUN_ORCHESTRATOR_SETTINGS" "$(orchestrator_extra_settings)"
+    build_model_effort_args "$3" "$4" "$BOSUN_ORCHESTRATOR_SETTINGS" \
+      "$({
+        orchestrator_extra_settings
+        connector_settings "$1"
+      } | merge_settings)"
     # shellcheck disable=SC2206  # the flags are words, on purpose
     agent_args=($BOSUN_ORCHESTRATOR_FLAGS "${model_effort_args[@]}"
       --plugin-dir "$BOSUN_INSTALL/orchestrator/plugin"
       --append-system-prompt "$(orchestrator_policy)")
   else
-    build_model_effort_args "$3" "$4" "" "$(repo_session_settings "$1")"
+    build_model_effort_args "$3" "$4" "" "$({
+      repo_session_settings "$1"
+      connector_settings "$1"
+    } | merge_settings)"
     # shellcheck disable=SC2206  # the flags are words, on purpose
     agent_args=($BOSUN_CLAUDE_FLAGS ${model_effort_args[@]+"${model_effort_args[@]}"})
   fi

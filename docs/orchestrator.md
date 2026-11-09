@@ -14,6 +14,9 @@ answer it from your phone. It hands tasks to repo windows whichever agent runs i
   before a read outside its working directories.
 - loads `orchestrator/policy.md` as an appended system prompt and the `orchestrator/plugin`
   commands. The main one is `/bosun:chores morning|check-in`.
+- reaches only the **connectors `BOSUN_ORCHESTRATOR_CONNECTORS` names** (empty: none), such as
+  `claude.ai Slack` and a tracker: see [Connectors](setup.md#connectors-what-each-window-may-reach). A
+  name it cannot find at launch is left out, and `bosun alert` tells you which.
 - must run in a folder Claude Code **already trusts** (`BOSUN_ORCHESTRATOR_DIR`, default your
   repos dir). A trust prompt would block an unattended start; `bosun doctor` checks this.
 
@@ -423,6 +426,10 @@ epic (it may name one) and not a product area (it is part of one). Design, resea
   `bosun doctor` runs it, and fails on an error but only warns on a warning.
 
 ## Your own MCP servers: a site settings file
+
+The orchestrator reaches only the servers and connectors `BOSUN_ORCHESTRATOR_CONNECTORS` names, so name
+yours there first (`"claude.ai Slack, plugin:acme-tracker:tracker, acme-wiki"`); a settings file cannot
+widen that, as bosun's list replaces any `allowedMcpServers` it holds.
 
 `orchestrator/settings.json` only names tools every install can have: the Slack plugin, the
 claude.ai Slack connector, `gh` and `git`. Your own MCP servers (issue tracker, wiki, CI,

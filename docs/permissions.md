@@ -13,6 +13,23 @@
 | Never | a free-text `bosun send` that names no work item; `send --new` or `send --start <msg>` instead of `delegate` | `bosun guard` denies `send` without `--id <ledger id>` or `--no-item`; updates to delegated work go through `delegate --update` |
 | Never | a command substitution the shell would run (`$(...)` or backticks, outside single quotes or in an unquoted heredoc) in `bosun delegate`, `bosun send` or `bosun ledger reach-out`, `ask`, `replied`, `propose`, `approve`, `spawn`, `link`, `unlink`, `fold` or `ticket-sync` | `bosun guard` denies it: their text often comes from Slack, PRs or a tracker, so it must never run commands |
 
+## What each window can reach
+
+Each window bosun starts on Claude Code reaches only the MCP servers and connectors its config names, so
+a repo window with a task cannot forward a mail or share a file it never had:
+
+| Window | Reaches | Set with |
+|---|---|---|
+| Repo windows | none by default | `BOSUN_CONNECTORS`, or `connectors:` in the window's `sessions.yml` entry |
+| The orchestrator (and `bosun chores --dry-run`) | none by default: name the work ones it needs, such as Slack and a tracker | `BOSUN_ORCHESTRATOR_CONNECTORS` |
+| Every window | Chrome, as before, through `--chrome` in `BOSUN_CLAUDE_FLAGS` and `BOSUN_ORCHESTRATOR_FLAGS`; on the orchestrator, the gate above asks before it changes a page | the flags |
+
+bosun passes the list as Claude Code's `allowedMcpServers` in the window's launch settings, in place of
+any a site settings file names. A name bosun cannot find is left out, so a window starts with
+less than its list, never with more, and the orchestrator's launch alerts you. `all` lifts the limit for
+that list. How to write a list: [Connectors](setup.md#connectors-what-each-window-may-reach). Within the
+connectors the orchestrator may reach, the tiers above still decide what it may do.
+
 ## Approvals: approve once, in chat
 
 By default every outward call above opens a Claude Code permission prompt, even after you approved

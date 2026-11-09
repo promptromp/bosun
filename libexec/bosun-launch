@@ -106,9 +106,11 @@ set_agent_args() { # <name>
 # The fingerprint of what window <name> would be launched with, as JSON, as an update would start it
 # again (recorded_restart) and as its pane would run it: in its directory (Codex's arguments name the
 # repository there) from the window list, or the one recorded for a window outside it. Never the
-# caller's. --model / --effort / --harness given here still win.
+# caller's. --model / --effort / --harness given here still win. It runs no `claude mcp list` (an update
+# takes a fingerprint of every window): the connectors resolve from what the last lookups kept.
 print_fingerprint() { # <name>
   local dir listed=1
+  CONNECTOR_LOOKUP=0
   dir="$(window_specs 2>/dev/null | awk -F'\t' -v name="$1" '$1 == name { print $2; exit }')"
   [ -n "$dir" ] || listed=0
   if recorded_restart "$1" "$listed"; then

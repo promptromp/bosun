@@ -262,7 +262,7 @@ and say so.
 | File | Purpose |
 |---|---|
 | `bosun.env` | Schedule, session name, Claude flags, drain prompt, orchestrator and chores settings. Every `BOSUN_*` value can also be overridden from the environment. Commands read the file each time they run, so edits apply at once, also inside running sessions. See `examples/generic/bosun.env` for all keys. |
-| `sessions.yml` | One entry per repo window: `name` (the session name) and `dir`, optionally `harness` (`claude` or `codex`), `model` and `effort`, and on Claude Code `autocompact`, for that window. The orchestrator is configured in `bosun.env`, not here. |
+| `sessions.yml` | One entry per repo window: `name` (the session name) and `dir`, optionally `harness` (`claude` or `codex`), `model`, `effort` and `connectors` (see [Connectors](#connectors-what-each-window-may-reach)), and on Claude Code `autocompact`, for that window. The orchestrator is configured in `bosun.env`, not here. |
 | `setup.sh` | Defines `setup_steps()`. Helpers: `ensure_claude_login` (see Claude Code login), `ensure_aws_sso <profile>`, `run_step "<desc>" cmd...`. |
 
 State and logs go to `~/.local/state/bosun/`:
@@ -287,6 +287,8 @@ State and logs go to `~/.local/state/bosun/`:
 - `watchdog.json`: the watchdog's de-duplication state
 - `login.json`: the last Claude Code login check (see Claude Code login)
 - `codex-sessions.json`: which Codex session each window's name stands for
+- `connectors.json`: the URL `claude mcp list` last showed for each claude.ai connector a list names,
+  for a launch whose lookup fails (see [Connectors](#connectors-what-each-window-may-reach))
 - `agent-changes.json`: what bosun changed in Claude Code's and Codex's own files (folder trust, memory
   notes), so that `bosun uninstall` takes back only that
 - `signals/`: what Claude Code's hooks reported per window ([Signals](design/signals.md))
@@ -333,6 +335,42 @@ On Claude Code the model goes in as `--model`; the effort as a session-level set
 it. Empty values leave Claude Code's own default. `bosun send --list` shows what each window
 was launched with, `refresh` restarts idle sessions whose launch settings no longer match the
 config, and `bosun doctor` shows the configured values and your saved default.
+
+### Connectors: what each window may reach
+
+A window bosun starts on Claude Code reaches only the MCP servers and connectors its list names; the rest
+are off for it. Chrome is not one of them: it stays on through `--chrome`, as before.
+
+| Key | Whose list | Default |
+|---|---|---|
+| `BOSUN_CONNECTORS` | every repo window | empty: none |
+| `connectors:` in a `sessions.yml` entry | that window, instead of `BOSUN_CONNECTORS` | (the key's) |
+| `BOSUN_ORCHESTRATOR_CONNECTORS` | the orchestrator, and `bosun chores --dry-run` | empty: none |
+
+A list is comma-separated, or a YAML list in `sessions.yml` (`[]` is none). Each entry is a server's name
+as `claude mcp list` (and `/mcp`) shows it, or a URL pattern; `all` means every one, as before this
+setting, and stands alone:
+
+```sh
+BOSUN_ORCHESTRATOR_CONNECTORS="claude.ai Slack, plugin:acme-tracker:tracker"
+BOSUN_CONNECTORS="acme-local, https://mcp.example.com/*"
+```
+
+```yaml
+sessions:
+  - name: api
+    dir: ~/Development/api
+    connectors: [acme-local]
+```
+
+At launch bosun turns the list into Claude Code's `allowedMcpServers`, in the window's `--settings`, in
+place of any a site settings file names. A server you added yourself goes by its name, a plugin's by its
+URL or command, and a claude.ai connector by the URL `claude mcp list` shows for it. bosun runs that
+listing (a few seconds) only when the list names a claude.ai connector, once per launch, and keeps what it
+found in `connectors.json`; if the listing fails (at a morning wake, before the network is up), the launch
+uses what was kept. A name it cannot find is left out, never let in as more: the launch logs a line, and
+for the orchestrator it also alerts you (`bosun alert`). The list is read at launch, so a change applies
+once the window starts again.
 
 ### How sessions are resumed
 

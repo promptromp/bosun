@@ -26,9 +26,20 @@ export LANG="${LANG:-en_US.UTF-8}"
 # and an BOSUN_* variable already set in the environment beats both.
 set_harness_defaults() {
   BOSUN_HARNESS="claude"
+  BOSUN_CLAUDE_BIN="claude"
   BOSUN_CODEX_BIN="codex"
   BOSUN_CODEX_FLAGS="--no-daemon --approve-for-me"
   BOSUN_CODEX_MODEL=""
+}
+
+# What each window may reach (docs/setup.md, "Connectors"): a comma-separated list of MCP servers and
+# connectors, by the name `claude mcp list` shows (claude.ai Acme Mail, plugin:acme-tracker:tracker,
+# acme-local) or a URL pattern (https://mcp.example.com/*). Empty: none; all: no limit. Read at launch.
+set_connector_defaults() {
+  # Every repo window's; a sessions.yml entry's `connectors` wins for its window.
+  BOSUN_CONNECTORS=""
+  # The orchestrator's (and `bosun chores --dry-run`'s): the work ones it needs, such as Slack and a tracker.
+  BOSUN_ORCHESTRATOR_CONNECTORS=""
 }
 
 set_defaults() {
@@ -79,8 +90,8 @@ set_defaults() {
   # items the window holds (the orchestrator: what waits for my approval). 0: no hook.
   BOSUN_COMPACT_CONTEXT="1"
   BOSUN_COMPACT_CONTEXT_MAX_CHARS="1500"
-  BOSUN_CLAUDE_BIN="claude"
   set_harness_defaults
+  set_connector_defaults
   BOSUN_CLAUDE_FLAGS="--permission-mode auto --chrome"
   # Model and effort for the repo sessions; sessions.yml entries can override them per window.
   # Model: an alias (opus, sonnet, haiku, fable) or a full model name. Effort: low, medium, high,
@@ -827,6 +838,77 @@ window_autocompact() { # <name>
     puts entry.key?("autocompact") ? entry["autocompact"].to_s : ARGV[2]' \
     "$BOSUN_SESSIONS_FILE" "$1" "$BOSUN_AUTOCOMPACT_TOKENS" 2>/dev/null ||
     printf '%s\n' "$BOSUN_AUTOCOMPACT_TOKENS"
+}
+
+# Window <name>'s list of the MCP servers and connectors it may reach (docs/design/connectors.md): the
+# orchestrator's BOSUN_ORCHESTRATOR_CONNECTORS; else its sessions.yml `connectors` (a string as written, a
+# list joined with ", ", [] for none); else BOSUN_CONNECTORS. Fails when sessions.yml cannot be read, so a
+# window never gets the default its entry narrowed.
+window_connectors() { # <name>
+  if is_orchestrator "$1"; then
+    printf '%s\n' "$BOSUN_ORCHESTRATOR_CONNECTORS"
+    return 0
+  fi
+  [ -f "$BOSUN_SESSIONS_FILE" ] || {
+    printf '%s\n' "$BOSUN_CONNECTORS"
+    return 0
+  }
+  ruby -ryaml -e '
+    entry = (YAML.safe_load(File.read(ARGV[0])) || {}).fetch("sessions", []).find { |s| s["name"] == ARGV[1] } || {}
+    value = entry.fetch("connectors", ARGV[2])
+    puts value.is_a?(Array) ? value.map(&:to_s).join(", ") : value.to_s' \
+    "$BOSUN_SESSIONS_FILE" "$1" "$BOSUN_CONNECTORS"
+}
+
+# Sets connector_settings_json to the Claude Code settings that limit window <name>, launched in this
+# folder, to its list (window_connectors): {"allowedMcpServers": [...]}, or {} for `all`. Once per
+# process: a launch builds its arguments twice, and the second time reuses the first lookup. Call it in
+# the shell itself, not in $(...), which would lose both the result and a die. With CONNECTOR_LOOKUP=0
+# (`launch --fingerprint`) it runs no lookup and alerts nobody.
+set_connector_settings() { # <name>
+  [ "${connector_settings_window-}" = "$1" ] && return 0
+  local list alert=0
+  list="$(window_connectors "$1")" || die "could not read the connectors of '$1' in $BOSUN_SESSIONS_FILE"
+  is_orchestrator "$1" && [ "${CONNECTOR_LOOKUP:-1}" != 0 ] && alert=1
+  connector_settings_json="$(resolve_connectors "$1" "$list" "$PWD" "$alert")" ||
+    die "could not tell which connectors '$1' may reach (lib/connectors.py)"
+  connector_settings_window="$1"
+}
+
+# Window <name>'s settings from set_connector_settings, printed. In $(...), only after
+# set_connector_settings ran for <name> in the shell itself.
+connector_settings() { # <name>
+  set_connector_settings "$1"
+  printf '%s\n' "$connector_settings_json"
+}
+
+# lib/connectors.py's line for a name it left out, after the name.
+CONNECTOR_NOT_FOUND=" not found, so this window starts without it"
+
+# The Claude Code settings that limit <window> to <list>, as lib/connectors.py resolves them in <dir>: it
+# runs `claude mcp list` there only for a name nothing else resolves, never with CONNECTOR_LOOKUP=0 (then
+# from what earlier lookups kept). Its lines go to the log, on stderr. A name not found is left out; with
+# <alert> 1, `bosun alert` says so, in the background. Prints nothing and fails on a list it cannot read
+# or no answer (R7: empty output is never taken for `all`).
+resolve_connectors() { # <window> <list> <dir> <alert: 0|1>
+  local errors json code=0 line name missing=""
+  local -a kept_only=()
+  [ "${CONNECTOR_LOOKUP:-1}" = 0 ] && kept_only=(--kept-only)
+  errors="$(mktemp "${TMPDIR:-/tmp}/bosun-connectors.XXXXXX")" || return 1
+  json="$(python3 "$BOSUN_ROOT/lib/connectors.py" claude --agent-bin "$BOSUN_CLAUDE_BIN" --list="$2" \
+    --cwd "$3" --state-dir "$BOSUN_STATE_DIR" ${kept_only[@]+"${kept_only[@]}"} 2>"$errors")" || code=$?
+  while IFS= read -r line; do
+    log "$1: $line" >&2
+    name="${line#connectors: }"
+    [ "${name%"$CONNECTOR_NOT_FOUND"}" = "$name" ] || missing="${missing:+$missing, }${name%"$CONNECTOR_NOT_FOUND"}"
+  done <"$errors"
+  rm -f "$errors"
+  [ -n "$json" ] && [ "$code" -lt 2 ] || return 1
+  if [ "$code" = 1 ] && [ "$4" = 1 ]; then
+    # Without a name, the resolver failed as a whole: the window starts with none of its list.
+    "$BOSUN" alert "$1: started without connector(s) it may use: ${missing:-$2}" >&2 &
+  fi
+  printf '%s\n' "$json"
 }
 
 # The bosun window this command runs in (from tmux's TMUX_PANE, when the pane belongs to the

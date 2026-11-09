@@ -53,7 +53,9 @@ of truth, so don't copy rules into this file.
   `lib/connectors.py`: what a window may reach (its list of MCP servers and connectors) turned into
   Claude Code's `allowedMcpServers` and Codex's launch arguments, and the URLs kept from the last lookup
   (`connectors.json`); the agents' listings are read through `lib/claude_state.py` (`claude mcp list`,
-  plugins' servers) and `lib/codex_state.py`; design: `docs/design/connectors.md`.
+  plugins' servers) and `lib/codex_state.py`; design: `docs/design/connectors.md`. The shell side is
+  `window_connectors` and `set_connector_settings` (`lib/common.sh`), which `build_agent_args` calls once
+  per launch.
   `lib/delegate.py`: task rendering. `lib/guard.py`: the orchestrator's PreToolUse permission hook
   (added at launch by `guard_hook_settings`, `lib/common.sh`, and to `chores --dry-run`), and with `BOSUN_APPROVALS_ENABLED` its approval hooks (`--approvals`, `--permission-request`,
   `--post-tool-use`; the gated outward calls are one table there, `GATED_*`). `lib/approvals.py` (pure): action specs
