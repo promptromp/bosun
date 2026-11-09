@@ -341,7 +341,8 @@ sets up no repo windows or connectors. Run in the macOS VM with real Claude Code
 test servers: the allow lists hold, new and resumed, a repo's own servers included. The runs changed how a
 Codex window switches servers off (one inline table, since Codex splits a `-c` key at every dot, so a server
 named with a dot stopped every Codex window) and turned off Codex's update screen, which stalled a restart.
-Codex's built-in servers stay on, as Claude Code's Chrome does. Design note:
+Codex's built-in servers stay on, as Claude Code's Chrome does. A plugin's server that `installed_plugins.json`
+does not list (synced from the account, `--plugin-dir`, managed) is allowed by what `claude mcp list` shows for it. Design note:
 [docs/design/connectors.md](docs/design/connectors.md).
 
 ### Docs site

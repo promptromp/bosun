@@ -30,6 +30,8 @@ MCP_LIST = f"""Checking MCP server health…
 {MAIL}: {MAIL_URL} - ✔ Connected
 acme-local: /Users/me/.local/bin/acme-mcp  - ✔ Connected
 """
+SYNCED = "plugin:acme-pdf:pdf"
+SYNCED_URL_NAME = "plugin:acme-docs:docs"
 ODD_NAME = 'claude.ai Acme "Mail" $(touch evaluated)'
 
 
@@ -105,6 +107,27 @@ class PureTest(unittest.TestCase):
             claude_entries(allowed, {}, {ODD_NAME: MAIL_URL}).entries, ({"serverUrl": MAIL_URL},)
         )
 
+    def test_a_plugin_server_only_the_listing_shows_resolves_to_what_it_shows(self) -> None:
+        """A synced, --plugin-dir or managed plugin: not installed, yet `claude mcp list` shows it."""
+        allowed = parse(f"{SYNCED}, {SYNCED_URL_NAME}")
+        self.assertTrue(connectors.needs_lookup(allowed, {}))
+        targets = {SYNCED: "npx -y @acme/pdf-server --stdio", SYNCED_URL_NAME: MAIL_URL}
+        self.assertEqual(
+            claude_entries(allowed, {}, targets),
+            connectors.Resolution(
+                ({"serverCommand": ["npx", "-y", "@acme/pdf-server", "--stdio"]}, {"serverUrl": MAIL_URL}), ()
+            ),
+        )
+
+    def test_an_installed_plugins_own_file_wins_over_what_the_listing_shows(self) -> None:
+        plugins = {SYNCED: {"command": "acme-pdf", "args": ["--stdio"]}}
+        resolution = claude_entries(parse(SYNCED), plugins, {SYNCED: "npx other --stdio"})
+        self.assertEqual(resolution.entries, ({"serverCommand": ["acme-pdf", "--stdio"]},))
+
+    def test_a_name_the_listing_does_not_show_is_still_missing(self) -> None:
+        resolution = claude_entries(parse(SYNCED), {}, {"plugin:acme:other": "npx x"})
+        self.assertEqual(resolution, connectors.Resolution((), (SYNCED,)))
+
     def test_codex_disables_each_unlisted_server_in_one_table(self) -> None:
         self.assertEqual(
             codex_args(parse("acme-docs"), ["acme-docs", "acme-tracker", "acme-wiki"]),
@@ -173,7 +196,7 @@ class KeptTest(unittest.TestCase):
             mock.patch("sys.stderr", io.StringIO()) as err,
         ):
             connectors.save_kept(self.state, [MAIL], {MAIL: MAIL_URL})
-        self.assertTrue(err.getvalue().startswith("connectors: could not keep the addresses found"))
+        self.assertTrue(err.getvalue().startswith("connectors: could not keep the servers found"))
         self.assertEqual(connectors.load_kept(self.state), {})
 
     def test_concurrent_saves_never_crash_and_leave_valid_json(self) -> None:
@@ -248,7 +271,7 @@ class CommandTest(CommandCase):
         code, out, err = self.claude(f"{MAIL}, claude.ai Acme Gone", printing(self.root, MCP_LIST))
         self.assertEqual(code, 1)
         self.assertEqual(self.settings(out), [{"serverUrl": MAIL_URL}])
-        self.assertIn("connectors: could not keep the addresses found", err)
+        self.assertIn("connectors: could not keep the servers found", err)
         self.assertIn("claude.ai Acme Gone not found", err)
 
     def test_all_with_names_is_refused(self) -> None:
@@ -256,6 +279,22 @@ class CommandTest(CommandCase):
         self.assertEqual((code, out), (2, ""))
         self.assertIn("connectors:", err)
         self.assertEqual(self.run_main("codex", "--list", "all,x", "--agent-bin", "x")[0], 2)
+
+    def test_a_plugin_server_only_the_listing_shows_gets_its_command(self) -> None:
+        listing = f"{SYNCED}: /Users/me/bin/acme-pdf --stdio  - ✔ Connected\n"
+        self.installed.write_text(json.dumps({"plugins": {}}))
+        code, out, err = self.claude(SYNCED, printing(self.root, listing))
+        self.assertEqual((code, err), (0, ""))
+        self.assertEqual(self.settings(out), [{"serverCommand": ["/Users/me/bin/acme-pdf", "--stdio"]}])
+        self.assertEqual(connectors.load_kept(self.state), {SYNCED: "/Users/me/bin/acme-pdf --stdio"})
+
+    def test_a_kept_command_line_resolves_on_kept_only(self) -> None:
+        connectors.save_kept(self.state, [SYNCED], {SYNCED: "/Users/me/bin/acme-pdf --stdio"})
+        never = fake_agent(self.root, "exit 1")
+        code, out, _ = self.claude(SYNCED, never, "--kept-only")
+        self.assertEqual(
+            (code, self.settings(out)), (0, [{"serverCommand": ["/Users/me/bin/acme-pdf", "--stdio"]}])
+        )
 
     def test_a_found_lookup_is_kept(self) -> None:
         agent = printing(self.root, MCP_LIST)
@@ -328,7 +367,7 @@ class CommandTest(CommandCase):
         self.assertEqual(code, 0)
         self.assertEqual(self.settings(out), [{"serverUrl": MAIL_URL}])
         self.assertIn("connectors: claude mcp list failed (", err)
-        self.assertIn("); using the addresses kept from the last launch", err)
+        self.assertIn("); using the servers kept from the last launch", err)
 
     def test_lookup_timeout_uses_kept(self) -> None:
         connectors.save_kept(self.state, [MAIL], {MAIL: MAIL_URL})
@@ -346,12 +385,12 @@ class CommandTest(CommandCase):
         self.assertEqual(self.settings(out), [{"serverName": "acme-local"}])
         self.assertIn(f"connectors: {MAIL} not found, so this window starts without it\n", err)
 
-    def test_a_listed_command_is_no_url(self) -> None:
+    def test_a_listed_command_is_its_split_argv(self) -> None:
         agent = printing(self.root, MCP_LIST.replace("acme-local:", "acme local:"))
         code, out, err = self.claude("acme local", agent)
-        self.assertEqual((code, self.settings(out)), (1, []))
-        self.assertIn("acme local not found", err)
-        self.assertEqual(connectors.load_kept(self.state), {})
+        self.assertEqual((code, err), (0, ""))
+        self.assertEqual(self.settings(out), [{"serverCommand": ["/Users/me/.local/bin/acme-mcp"]}])
+        self.assertEqual(connectors.load_kept(self.state), {"acme local": "/Users/me/.local/bin/acme-mcp"})
 
     def test_plugin_server_by_url_and_by_command(self) -> None:
         plugin = self.root / "plugins" / "acme-tools"
@@ -445,7 +484,7 @@ class DoctorTest(CommandCase):
         )
         self.assertEqual(
             self.doctor("alpha", f"acme-local, {MAIL}, claude.ai Acme Gone", never),
-            "warn\talpha: reaches acme-local, claude.ai Acme Mail; not among the addresses earlier starts "
+            "warn\talpha: reaches acme-local, claude.ai Acme Mail; not among the servers earlier starts "
             "looked up: claude.ai Acme Gone (bosun doctor looks nothing up: the window's next start does)",
         )
         self.assertEqual(
@@ -463,11 +502,21 @@ class DoctorTest(CommandCase):
             "names acme-local",
         )
 
+    def test_doctor_says_a_listed_only_plugin_server_is_reached_once_kept(self) -> None:
+        never = fake_agent(self.root, "exit 1")
+        self.assertEqual(
+            self.doctor("alpha", SYNCED, never),
+            f"warn\talpha: reaches nothing; not among the servers earlier starts looked up: {SYNCED} "
+            "(bosun doctor looks nothing up: the window's next start does)",
+        )
+        connectors.save_kept(self.state, [SYNCED], {SYNCED: "/Users/me/bin/acme-pdf --stdio"})
+        self.assertEqual(self.doctor("alpha", SYNCED, never), f"ok\talpha: reaches {SYNCED}")
+
     def test_doctor_names_a_plugin_server_not_found(self) -> None:
         self.installed.write_text(json.dumps({"plugins": {}}))
         self.assertEqual(
             self.doctor("alpha", "acme-local, plugin:acme-tools:gone", self.root / "no-claude"),
-            "warn\talpha: reaches acme-local; not among the addresses earlier starts looked up: "
+            "warn\talpha: reaches acme-local; not among the servers earlier starts looked up: "
             "plugin:acme-tools:gone (bosun doctor looks nothing up: the window's next start does)",
         )
         plugin = self.root / "plugins" / "acme-tools"

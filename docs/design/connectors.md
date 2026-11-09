@@ -127,7 +127,7 @@ rest, as the approvals and compaction hooks are), from the window's list:
 | Entry | Becomes |
 |---|---|
 | a name of letters, digits, `-`, `_` | `{"serverName": <name>}` |
-| `plugin:<plugin>:<server>` | that server's `url` (`serverUrl`) or `command` and `args` (`serverCommand`, with `${CLAUDE_PLUGIN_ROOT}` expanded to the plugin's folder), found by the server's name in the installed plugin's `.mcp.json`, which may hold several (`lib/claude_state.py` already reads it for the Slack watcher, one server only) |
+| `plugin:<plugin>:<server>` | that server's `url` (`serverUrl`) or `command` and `args` (`serverCommand`, with `${CLAUDE_PLUGIN_ROOT}` expanded to the plugin's folder), found by the server's name in the installed plugin's `.mcp.json`, which may hold several (`lib/claude_state.py` already reads it for the Slack watcher, one server only); otherwise (a plugin synced from the account, a `--plugin-dir` one or a managed one, which `installed_plugins.json` does not list) what `claude mcp list` shows for the name: a URL is `serverUrl`, a command line is `serverCommand` split on whitespace (an argument holding a space splits wrongly, matches no server and so fails closed). Claude Code's synced-plugin folders are never read: their layout is internal |
 | `claude.ai <Name>` | its URL from `claude mcp list`, run with `ENABLE_CLAUDEAI_MCP_SERVERS=true` in the window's folder, only when the list holds such a name |
 | a URL pattern | `{"serverUrl": <pattern>}` |
 | `all` | no `allowedMcpServers` key |
@@ -144,9 +144,9 @@ so a launch never takes a failure for `all`.
 
 **When the lookup fails.** At the morning wake the network may not be up yet, and an orchestrator started
 without `claude.ai Slack` would miss Slack all day. So each lookup keeps what it resolved in the state
-folder (`connectors.json`: each `claude.ai` name and its URL, a row in `STATE_FILES`); a lookup that fails
+folder (`connectors.json`: each name that needed `claude mcp list` and the URL or command line it showed, a row in `STATE_FILES`); a lookup that fails
 uses what was kept, and a name with nothing kept is left out, logged, and raised with `bosun alert` for
-the orchestrator. A connector's URL rarely changes, so what was kept is almost always right.
+the orchestrator. A server's target rarely changes, so what was kept is almost always right.
 
 **The fingerprint.** `refresh` and `bosun update` compare a window's launch fingerprint, a digest of its
 arguments, with the one recorded at its launch. The resolved `allowedMcpServers` is part of the arguments,
@@ -196,7 +196,7 @@ older orchestrator, launched with every server, is no launch change and is not r
 `bosun doctor` prints a line per window: the list, what it resolved to, and every allowed name it could
 not find. It warns when my own Claude Code settings hold an `allowedMcpServers` (it widens every window's).
 A Claude Code window's line resolves as `--kept-only` does: `claude mcp list` connects to every server,
-so a claude.ai name no launch has looked up yet reads as not among those kept, and the line says so. A
+so a claude.ai name (or a plugin's server only `claude mcp list` shows) no launch has looked up yet reads as not among those kept, and the line says so. A
 Codex window's comes from `codex mcp list --json` in its folder, names only, and notes URL patterns and
 claude.ai names as meaning nothing there.
 

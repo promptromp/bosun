@@ -116,31 +116,41 @@ def plugin_entry(server: Mapping[str, Any]) -> dict[str, Any] | None:
     return {"serverCommand": [command, *args]}
 
 
+def target_entry(target: str) -> dict[str, Any] | None:
+    """How an allow list names a server `claude mcp list` shows by its <target>: a URL is the
+    address, anything else a command line, split on whitespace (an argument holding a space splits
+    wrongly, so the entry matches no server: the window starts without it)."""
+    if is_url(target):
+        return {"serverUrl": target}
+    argv = target.split()
+    return {"serverCommand": argv} if argv else None
+
+
 def claude_entry(
-    name: str, plugins: Mapping[str, Mapping[str, Any]], urls: Mapping[str, str]
+    name: str, plugins: Mapping[str, Mapping[str, Any]], targets: Mapping[str, str]
 ) -> dict[str, Any] | None:
     if is_url(name):
         return {"serverUrl": name}
     if name in plugins:
         return plugin_entry(plugins[name])
-    if name in urls:
-        return {"serverUrl": urls[name]}
+    if name in targets:
+        return target_entry(targets[name])
     if is_plain(name):
         return {"serverName": name}
     return None
 
 
 def claude_entries(
-    allowed: Allowed, plugins: Mapping[str, Mapping[str, Any]], urls: Mapping[str, str]
+    allowed: Allowed, plugins: Mapping[str, Mapping[str, Any]], targets: Mapping[str, str]
 ) -> Resolution:
-    """The allowedMcpServers entries for a list, given the installed plugins' servers and the URLs
-    found for the other names (claude.ai's connectors)."""
+    """The allowedMcpServers entries for a list, given the installed plugins' servers and the
+    targets (URL or command line) `claude mcp list` showed for the other names."""
     if allowed.everything:
         return Resolution(None, ())
     entries: list[dict[str, Any]] = []
     missing: list[str] = []
     for name in allowed.names:
-        entry = claude_entry(name, plugins, urls)
+        entry = claude_entry(name, plugins, targets)
         if entry is None:
             missing.append(name)
         else:
@@ -148,35 +158,36 @@ def claude_entries(
     return Resolution(tuple(entries), tuple(missing))
 
 
-def needs_url(name: str, plugins: Mapping[str, Any]) -> bool:
+def needs_lookup_of(name: str, plugins: Mapping[str, Any]) -> bool:
     return not (is_url(name) or name in plugins or is_plain(name))
 
 
 def needs_lookup(allowed: Allowed, plugins: Mapping[str, Any]) -> bool:
     """Whether some name can only be resolved by `claude mcp list`."""
-    return any(needs_url(name, plugins) for name in allowed.names)
+    return any(needs_lookup_of(name, plugins) for name in allowed.names)
 
 
 def load_kept(state_dir: Path) -> dict[str, str]:
-    """The URLs the last lookups found, by name; empty if there are none to trust."""
+    """The targets (URL or command line) the last lookups found, by name; empty if there are none to
+    trust."""
     kept = read_object(state_dir / KEPT_FILE)
-    if kept is None or not all(isinstance(url, str) for url in kept.values()):
+    if kept is None or not all(isinstance(target, str) for target in kept.values()):
         return {}
-    return {str(name): str(url) for name, url in kept.items()}
+    return {str(name): str(target) for name, target in kept.items()}
 
 
 def save_kept(state_dir: Path, asked: Iterable[str], found: Mapping[str, str]) -> None:
-    """A lookup's answer for the names it was <asked> about: their kept URLs become <found> (a name
+    """A lookup's answer for the names it was <asked> about: their kept targets become <found> (a name
     asked about and not found is dropped, so `--kept-only` agrees with the launch), and the other names
     kept stay. Best-effort: a launch uses what it found even when it cannot keep it, so a write that
     fails is said on stderr and nothing more. Each writer has a temp file of its own, so launches saving
     at once never break one another (the last one's write wins)."""
     asked = set(asked)
-    kept = {**{name: url for name, url in load_kept(state_dir).items() if name not in asked}, **found}
+    kept = {**{name: target for name, target in load_kept(state_dir).items() if name not in asked}, **found}
     try:
         write_atomically(state_dir / KEPT_FILE, json.dumps(kept, indent=2, sort_keys=True) + "\n")
     except OSError as exc:
-        say(f"could not keep the addresses found in {state_dir / KEPT_FILE} ({exc.strerror or exc})")
+        say(f"could not keep the servers found in {state_dir / KEPT_FILE} ({exc.strerror or exc})")
 
 
 # ---- Codex ----------------------------------------------------------------------------------------
@@ -225,7 +236,7 @@ EVERYTHING_LINE = "all (every MCP server and connector)"
 NAME_THEM = "name the ones it needs in BOSUN_ORCHESTRATOR_CONNECTORS and drop all"
 NOT_FOUND = "not found, so it starts without: {}"
 NOT_KEPT = (
-    "not among the addresses earlier starts looked up: {} "
+    "not among the servers earlier starts looked up: {} "
     "(bosun doctor looks nothing up: the window's next start does)"
 )
 CODEX_OFF = "switches off {}ChatGPT's connectors"
@@ -253,14 +264,14 @@ def claude_report(
     window: str, kind: str, allowed: Allowed, plugins: Mapping[str, Any], kept: Mapping[str, str]
 ) -> tuple[str, str]:
     """A Claude Code window's line, resolved as `--kept-only` does: a name only `claude mcp list` could
-    resolve (claude.ai's) from what earlier lookups kept."""
+    resolve (claude.ai's, a plugin's the installed ones do not list) from what earlier lookups kept."""
     if allowed.everything:
         return _everything(window, kind)
     if not allowed.names:
         return OK, f"{window}: none (no MCP server or connector)"
     missing = claude_entries(allowed, plugins, kept).missing
     reached = [name for name in allowed.names if name not in missing]
-    not_kept = [name for name in missing if needs_url(name, plugins)]
+    not_kept = [name for name in missing if needs_lookup_of(name, plugins)]
     not_found = [name for name in missing if name not in not_kept]
     reach = f"reaches {', '.join(reached) or 'nothing'}"
     return _report(window, reach, [_part(NOT_FOUND, not_found), _part(NOT_KEPT, not_kept)])
@@ -333,8 +344,10 @@ def cmd_doctor(args: argparse.Namespace) -> int:
 # ---- the command line ------------------------------------------------------------------------------
 
 
-def looked_up_urls(allowed: Allowed, plugins: Mapping[str, Any], args: argparse.Namespace) -> dict[str, str]:
-    """The URLs of the names only `claude mcp list` resolves: looked up (and kept), or, when the
+def looked_up_targets(
+    allowed: Allowed, plugins: Mapping[str, Any], args: argparse.Namespace
+) -> dict[str, str]:
+    """The targets of the names only `claude mcp list` resolves: looked up (and kept), or, when the
     lookup fails or is not wanted, those the last lookups kept."""
     if not needs_lookup(allowed, plugins):
         return {}
@@ -343,10 +356,10 @@ def looked_up_urls(allowed: Allowed, plugins: Mapping[str, Any], args: argparse.
     try:
         targets = claude_state.mcp_server_targets(args.agent_bin, args.cwd, LOOKUP_TIMEOUT_SECONDS)
     except claude_state.McpListError as exc:
-        say(f"claude mcp list failed ({exc}); using the addresses kept from the last launch")
+        say(f"claude mcp list failed ({exc}); using the servers kept from the last launch")
         return load_kept(args.state_dir)
-    asked = [name for name in allowed.names if needs_url(name, plugins)]
-    found = {name: targets[name] for name in asked if is_url(targets.get(name, ""))}
+    asked = [name for name in allowed.names if needs_lookup_of(name, plugins)]
+    found = {name: targets[name] for name in asked if name in targets}
     save_kept(args.state_dir, asked, found)
     return found
 
@@ -357,7 +370,7 @@ def claude_settings(args: argparse.Namespace) -> tuple[dict[str, Any], tuple[str
     if allowed.everything:
         return {}, ()
     plugins = claude_state.plugin_mcp_servers()
-    resolution = claude_entries(allowed, plugins, looked_up_urls(allowed, plugins, args))
+    resolution = claude_entries(allowed, plugins, looked_up_targets(allowed, plugins, args))
     for name in resolution.missing:
         say(f"{name} not found, so this window starts without it")
     return {"allowedMcpServers": list(resolution.entries or ())}, resolution.missing

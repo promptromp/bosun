@@ -836,6 +836,10 @@ check "a kept connector the lookup no longer shows is left out, and dropped from
   jq -e "has(\"claude.ai Acme Old\") | not" "$2" >/dev/null && grep -q "claude.ai Acme Old not found" <<<"$1"' _ "$out" "$BOSUN_STATE_DIR/connectors.json"
 check "... so the fingerprint agrees with that launch" bash -c '[ "$(jq -cS .fingerprint "$1")" = "$(cd / && "${@:2}" launch --fingerprint orch 2>/dev/null | jq -cS .)" ]' \
   _ "$BOSUN_STATE_DIR/launches/smoke/orch.json" "${ORCH[@]}" BOSUN_ORCHESTRATOR_CONNECTORS="claude.ai Acme Chat, claude.ai Acme Old" "$BOSUN"
+# A plugin's server `installed_plugins.json` does not list (synced, --plugin-dir, managed) resolves to what the listing shows.
+printf 'plugin:acme-pdf:pdf: /Users/me/bin/acme-pdf --stdio  - ✔ Connected\n' >"$WORK/mcp-list.out"
+out="$(cd "$REPO_A" && "${ORCH[@]}" BOSUN_ORCHESTRATOR_CONNECTORS="plugin:acme-pdf:pdf" "$BOSUN" launch orch 2>&1)"
+check "a plugin: name only claude mcp list shows gets its command from the listing" allows "$out" '$a == [{"serverCommand": ["/Users/me/bin/acme-pdf", "--stdio"]}]'
 # Fail closed in the shell too: a resolver answer that is not one JSON object, settings built without the
 # window's limit, or settings asked for before the lookup ran, each stop the launch.
 check "a resolver answer that is not one JSON object stops the launch" bash -c '
@@ -887,7 +891,7 @@ check "... none" contains "$out" "ok    gamma: none (no MCP server or connector)
 check "... and warns while the orchestrator keeps every connector" contains "$out" \
   "warn  orch: all (every MCP server and connector): name the ones it needs in BOSUN_ORCHESTRATOR_CONNECTORS and drop all"
 out="$("${ORCH[@]}" BOSUN_ORCHESTRATOR_CONNECTORS="claude.ai Acme Chat, claude.ai Acme Gone" "$BOSUN" doctor 2>&1)"
-check "... names what it cannot find" contains "$out" "warn  orch: reaches claude.ai Acme Chat; not among the addresses earlier starts looked up: claude.ai Acme Gone"
+check "... names what it cannot find" contains "$out" "warn  orch: reaches claude.ai Acme Chat; not among the servers earlier starts looked up: claude.ai Acme Gone"
 check "... and looks nothing up" test ! -s "$WORK/mcp-claude.calls"
 check "... nor warns about my own settings while they hold no allow list" not_contains "$out" "allowedMcpServers"
 mkdir -p "$HOME/.claude"
