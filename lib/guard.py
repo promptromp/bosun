@@ -1,11 +1,17 @@
 #!/usr/bin/env python3
-"""PreToolUse hook for the orchestrator (`bosun guard`, wired in orchestrator/settings.json).
+"""PreToolUse hook for the orchestrator (`bosun guard`, added at launch by guard_hook_settings in
+lib/common.sh, naming the bosun that launched the window; `bosun chores --dry-run` gets it too).
 
 The permission rules in settings.json name tools one by one and match Bash commands by prefix, so
 a write tool missing from the `ask` list, or `git push -f` instead of `--force`, would slip
 through. This hook is the catch-all:
 
-- any MCP tool whose name contains a write verb (send, create, update, delete, ...) -> ask you
+- any MCP tool whose name holds a write verb (send, create, update, delete, forward, share, ...)
+  as a word -> ask you. A name's words split on `_`, `-` and lower-to-upper case changes
+  (name_words: editJiraIssue is edit, jira, issue).
+- Chrome's `computer` tool with an action that can change the page (a click, typing, a key, any
+  action but a screenshot, scrolling, zooming, waiting or hovering) -> ask you. Its whole tools
+  that change pages (javascript_tool, form_input) are `ask` rules in orchestrator/settings.json.
 - `git push` with any force form (-f, --force*, +refspec) or `gh pr merge --admin`, anywhere in
   a compound command -> deny
 - `bosun delegate`, `bosun send` or `bosun ledger
@@ -67,8 +73,11 @@ import pr_threads
 import update_gate
 
 
-# Matched against the tool part of mcp__<server>__<tool>, split on "_".
+# Matched against the words of the tool part of mcp__<server>__<tool> (name_words). Words that are
+# also nouns (request, comment, label, order, pin, mark, resolve) are left out: as verbs they would stop
+# the orchestrator at a read such as get_pull_request (docs/design/connectors.md).
 WRITE_VERBS = {
+    "accept",
     "add",
     "approve",
     "archive",
@@ -76,36 +85,56 @@ WRITE_VERBS = {
     "authenticate",
     "batch",
     "cancel",
+    "checkout",
     "close",
     "complete",
     "copy",
     "create",
+    "decline",
     "delete",
     "download",
     "edit",
     "execute",
+    "fork",
+    "forward",
     "generate",
+    "grant",
     "import",
     "invite",
     "link",
     "merge",
     "move",
+    "pay",
     "post",
     "promote",
     "publish",
+    "purchase",
+    "push",
+    "react",
     "remove",
     "rename",
+    "reopen",
     "reply",
+    "respond",
     "restart",
+    "restore",
     "retry",
+    "revoke",
     "run",
     "schedule",
     "send",
     "set",
+    "share",
+    "spam",
     "stop",
     "submit",
     "transition",
+    "trash",
     "trigger",
+    "unlabel",
+    "unpin",
+    "unstar",
+    "untrash",
     "update",
     "upload",
     "use",
@@ -143,6 +172,13 @@ SEND_OPENS_SESSION = (
 SUBSTITUTIONS = ("$(", "`")
 MIN_COMMAND_WORDS = 2
 MCP_NAME_PARTS = 3  # mcp__<server>__<tool>
+# Where a tool's name breaks into words: "_", "-", and between a lower-case letter and an upper-case one.
+NAME_WORD_BREAK = re.compile(r"[_\-]|(?<=[a-z])(?=[A-Z])")
+# Chrome's `computer` tool clicks, types and presses keys; a settings rule cannot ask by an MCP tool's
+# input, so the guard looks at its action. These change nothing; any other action asks. (Its whole
+# tools that change pages, javascript_tool and form_input, are `ask` rules in orchestrator/settings.json.)
+CHROME_COMPUTER = "mcp__claude-in-chrome__computer"
+CHROME_PASSIVE_ACTIONS = frozenset({"screenshot", "scroll", "scroll_to", "zoom", "wait", "hover"})
 HEREDOC = re.compile(r"<<-?\s*(?:(['\"])(\w+)\1|(\w+))")
 REDIRECTION = re.compile(r"^(?:\d*|&)[<>]")  # 2>/dev/null, >out, <<EOF, &>log
 # Words that can precede a command name: `do git push`, `{ bosun ...`, `X=1 git push`.
@@ -166,14 +202,29 @@ WRAPPERS: dict[str, tuple[frozenset[str], int]] = {
 }
 
 
-def mcp_write_verb(tool_name: str) -> str | None:
-    """The write verb in an MCP tool's name, if any."""
+def name_words(tool_name: str) -> list[str]:
+    """The words of an MCP tool's name: the tool part of mcp__<server>__<tool> split on "_", "-"
+    and each lower-to-upper case change, lowercased (editJiraIssue: edit, jira, issue); no words for a
+    tool that is not an MCP tool."""
     parts = tool_name.split("__")
     if len(parts) < MCP_NAME_PARTS or parts[0] != "mcp":
-        return None
-    words = set(re.split(r"[_\-]", parts[-1].lower()))
-    found = sorted(words & WRITE_VERBS)
+        return []
+    return [word.lower() for word in NAME_WORD_BREAK.split(parts[-1]) if word]
+
+
+def mcp_write_verb(tool_name: str) -> str | None:
+    """The write verb in an MCP tool's name, if any."""
+    found = sorted(set(name_words(tool_name)) & WRITE_VERBS)
     return found[0] if found else None
+
+
+def chrome_action_changes(tool_name: str, tool_input: Mapping[str, Any]) -> str | None:
+    """The action of a Chrome `computer` call that can change a page (a click, typing, a key, one
+    Chrome adds later, or none given), or None: another tool, or an action in CHROME_PASSIVE_ACTIONS."""
+    if tool_name != CHROME_COMPUTER:
+        return None
+    action = str(tool_input.get("action") or "")
+    return None if action in CHROME_PASSIVE_ACTIONS else action or "(no action)"
 
 
 def simple_commands(command: str) -> list[list[str]]:
@@ -372,11 +423,15 @@ def decide(event: dict[str, Any]) -> dict[str, str] | None:
         return None
     verb = mcp_write_verb(tool)
     if verb:
-        return {
-            "permissionDecision": "ask",
-            "permissionDecisionReason": f"bosun guard: {tool} can change things ('{verb}'); confirm it",
-        }
+        return ask(f"{tool} can change things ('{verb}'); confirm it")
+    action = chrome_action_changes(tool, tool_input)
+    if action:
+        return ask(f"Chrome's {action} can change the page; confirm it")
     return None
+
+
+def ask(reason: str) -> dict[str, str]:
+    return {"permissionDecision": "ask", "permissionDecisionReason": f"bosun guard: {reason}"}
 
 
 # ---- approvals (BOSUN_APPROVALS_ENABLED; docs/design/approvals.md) -------------------------
@@ -401,8 +456,9 @@ GATED_MCP = {
     "promote_build": "a build promotion",
     "stop_build": "stopping a CI build",
 }
-# Tracker and wiki tools (jira_*, confluence_*) are gated when their name has a write verb.
-GATED_MCP_FAMILIES = ("jira_", "confluence_")
+# Tracker and wiki tools are gated when their name has one of these words and a write verb
+# (jira_add_comment, editJiraIssue, createConfluencePage).
+GATED_MCP_FAMILIES = ("jira", "confluence")
 GATED_COMMANDS = (
     (("gh", "pr", "merge"), "a merge"),
     (("gh", "pr", "ready"), "marking a PR ready for review"),
@@ -431,8 +487,9 @@ def gated_mcp(tool: str) -> str | None:
     name = approvals.tool_suffix(tool)
     if name in GATED_MCP:
         return GATED_MCP[name]
-    if name.startswith(GATED_MCP_FAMILIES) and mcp_write_verb(tool):
-        return f"a {name.split('_', 1)[0]} change"
+    family = next((word for word in GATED_MCP_FAMILIES if word in name_words(tool)), None)
+    if family and mcp_write_verb(tool):
+        return f"a {family} change"
     return None
 
 

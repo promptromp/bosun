@@ -427,7 +427,8 @@ epic (it may name one) and not a product area (it is part of one). Design, resea
 `orchestrator/settings.json` only names tools every install can have: the Slack plugin, the
 claude.ai Slack connector, `gh` and `git`. Your own MCP servers (issue tracker, wiki, CI,
 metrics) are still covered, because `bosun guard` asks before any MCP tool whose name has a
-write verb and auto mode decides on the rest. To let the orchestrator use their read tools without
+write verb (`editJiraIssue` counts: names split on `_`, `-` and case changes) and auto mode decides
+on the rest. To let the orchestrator use their read tools without
 a prompt, or to name their write tools explicitly, keep a settings file of your own outside the
 repo:
 
@@ -438,7 +439,9 @@ repo:
 3. Point bosun at it in `bosun.env`:
    `BOSUN_ORCHESTRATOR_SETTINGS="$BOSUN_CONFIG_DIR/orchestrator-settings.json"`.
 
-The file replaces `orchestrator/settings.json` rather than adding to it, so keep its rules and the
-`hooks` block that runs `bosun guard`. `bosun doctor` fails without that hook and warns
+The file replaces `orchestrator/settings.json` rather than adding to it, so keep its rules. It
+needs no `hooks` block for `bosun guard`: bosun adds the guard at launch, from the bosun that
+launches the window, whatever the settings file. A file copied before that still has the block,
+which runs the guard twice (deciding the same); drop it. `bosun doctor` warns about that block and
 about any rule of `orchestrator/settings.json` the file lacks (for example one added after you
 copied it). The orchestrator picks the file up at its next launch.

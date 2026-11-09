@@ -50,6 +50,77 @@ class McpTest(unittest.TestCase):
     def test_non_mcp_tools_pass(self) -> None:
         self.assertIsNone(decision("Read", file_path="/x"))
 
+    def test_camel_case_tool_names_are_split(self) -> None:
+        self.assertEqual(guard.name_words("mcp__claude_ai_Acme__editJiraIssue"), ["edit", "jira", "issue"])
+        self.assertEqual(guard.name_words("mcp__x__create-ConfluencePage"), ["create", "confluence", "page"])
+        self.assertEqual(guard.mcp_write_verb("mcp__claude_ai_Acme__editJiraIssue"), "edit")
+        self.assertEqual(decision("mcp__claude_ai_Acme__editJiraIssue"), "ask")
+        self.assertIsNone(decision("mcp__claude_ai_Acme__getJiraIssue"))
+
+    def test_new_verbs_ask(self) -> None:
+        for tool in [
+            "mcp__x__accept_event",
+            "mcp__x__checkout_branch",
+            "mcp__x__decline_event",
+            "mcp__x__fork_repository",
+            "mcp__claude_ai_Acme_Mail__forward_message",
+            "mcp__x__grant_access",
+            "mcp__x__pay_invoice",
+            "mcp__x__purchase_item",
+            "mcp__x__push_files",
+            "mcp__x__react_to_message",
+            "mcp__x__reopen_issue",
+            "mcp__x__respondToEvent",
+            "mcp__x__restore_file",
+            "mcp__x__revoke_token",
+            "mcp__x__share_file",
+            "mcp__claude_ai_Acme_Mail__mark_thread_spam",
+            "mcp__claude_ai_Acme_Mail__trash_thread",
+            "mcp__claude_ai_Acme_Mail__unlabel_message",
+            "mcp__x__unpin_message",
+            "mcp__x__unstar_repo",
+            "mcp__claude_ai_Acme_Mail__untrash_thread",
+        ]:
+            with self.subTest(tool=tool):
+                self.assertEqual(decision(tool), "ask")
+
+    def test_noun_like_words_do_not_ask(self) -> None:
+        for tool in [
+            "mcp__x__get_pull_request",
+            "mcp__x__pull_request_read",
+            "mcp__x__get_label",
+            "mcp__x__list_comments",
+            "mcp__x__get_order",
+            "mcp__x__list_pins",
+        ]:
+            with self.subTest(tool=tool):
+                self.assertIsNone(decision(tool))
+
+    def test_camel_case_tracker_writes_are_gated(self) -> None:
+        self.assertEqual(guard.gated_mcp("mcp__x__createConfluencePage"), "a confluence change")
+        self.assertEqual(guard.gated_mcp("mcp__claude_ai_Acme__editJiraIssue"), "a jira change")
+        self.assertEqual(guard.gated_mcp("mcp__acme-tracker__jira_add_comment"), "a jira change")
+        self.assertIsNone(guard.gated_mcp("mcp__claude_ai_Acme__getJiraIssue"))
+        # A word inside another word is not the family: "jirafy" is not "jira".
+        self.assertIsNone(guard.gated_mcp("mcp__x__create_jirafy_note"))
+
+    def test_chrome_clicks_and_typing_ask(self) -> None:
+        computer = "mcp__claude-in-chrome__computer"
+        for action in ["left_click", "type", "key", "some_future_action"]:
+            with self.subTest(action=action):
+                self.assertEqual(decision(computer, action=action), "ask")
+        self.assertEqual(decision(computer), "ask")
+        for action in ["screenshot", "scroll"]:
+            with self.subTest(action=action):
+                self.assertIsNone(decision(computer, action=action))
+        # Uploads, shortcuts and new tabs ask by their verbs.
+        for tool in ["file_upload", "upload_image", "shortcuts_execute", "tabs_create_mcp"]:
+            with self.subTest(tool=tool):
+                self.assertEqual(decision(f"mcp__claude-in-chrome__{tool}"), "ask")
+        # Reading the page and going to a URL pass; the settings' ask rules cover whole tools.
+        self.assertIsNone(decision("mcp__claude-in-chrome__read_page"))
+        self.assertIsNone(decision("mcp__claude-in-chrome__navigate", url="https://example.com"))
+
 
 class BashTest(unittest.TestCase):
     def test_force_pushes_are_denied(self) -> None:

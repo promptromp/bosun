@@ -226,22 +226,34 @@ check_approvals() {
   fi
 }
 
+# The guard is added at launch (guard_hook_settings, lib/common.sh): check that the launch's settings run
+# this bosun's `guard` and that it asks before an MCP write. A settings file that still runs its own
+# `bosun guard` hook (one copied before the guard moved to the launch) runs it twice, which decides the same.
+check_guard() {
+  local probe='{"tool_name":"mcp__example__send_message","tool_input":{}}' command
+  command="$(printf '%q' "$BOSUN_CMD") guard"
+  # shellcheck disable=SC2016  # a jq program, not shell
+  if orchestrator_extra_settings | jq -e --arg command "$command" '[.hooks.PreToolUse[]?.hooks[]?.command] | index($command)' >/dev/null 2>&1 &&
+    printf '%s' "$probe" | "$BOSUN" guard | grep -q '"permissionDecision": "ask"'; then
+    ok "permission guard hook is added at launch ($command) and asks before MCP writes"
+  else
+    fail "the orchestrator's launch settings do not run '$command' as a PreToolUse hook, or it does not answer"
+  fi
+  # shellcheck disable=SC2016  # a jq program, not shell
+  if jq -e '[.hooks.PreToolUse[]?.hooks[]?.command] | any(test("bosun\"? guard$"))' "$BOSUN_ORCHESTRATOR_SETTINGS" >/dev/null 2>&1; then
+    warn "$BOSUN_ORCHESTRATOR_SETTINGS still runs 'bosun guard' itself; drop its hooks block: bosun adds the guard at launch"
+  fi
+}
+
 check_orchestrator() {
-  local probe site_tasks task_file pending
+  local site_tasks task_file pending
   if jq -e .permissions "$BOSUN_ORCHESTRATOR_SETTINGS" >/dev/null 2>&1; then
     ok "settings: $BOSUN_ORCHESTRATOR_SETTINGS"
     check_site_settings
   else
     fail "invalid or missing settings: $BOSUN_ORCHESTRATOR_SETTINGS"
   fi
-  probe='{"tool_name":"mcp__example__send_message","tool_input":{}}'
-  # shellcheck disable=SC2016  # a jq program, not shell
-  if jq -e '[.hooks.PreToolUse[]?.hooks[]?.command] | any(test("bosun\"? guard"))' "$BOSUN_ORCHESTRATOR_SETTINGS" >/dev/null 2>&1 &&
-    printf '%s' "$probe" | "$BOSUN" guard | grep -q '"permissionDecision": "ask"'; then
-    ok "permission guard hook is configured and asks before MCP writes"
-  else
-    fail "the orchestrator settings do not run 'bosun guard' as a PreToolUse hook, or it does not answer; copy the hooks block of orchestrator/settings.json"
-  fi
+  check_guard
   [ -f "$BOSUN_CONFIG_DIR/policy.md" ] && ok "site policy: $BOSUN_CONFIG_DIR/policy.md (appended to the orchestrator policy)"
   site_tasks=""
   for task_file in "$BOSUN_CONFIG_DIR"/tasks/*.md; do

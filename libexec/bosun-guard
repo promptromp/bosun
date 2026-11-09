@@ -1,9 +1,10 @@
 #!/bin/bash
 # Usage: bosun guard [--approvals | --permission-request | --post-tool-use]   (reads a Claude Code hook event on stdin)
 #
-# Permission guard for the orchestrator, run as a PreToolUse hook (orchestrator/settings.json):
-# asks before any MCP tool with a write verb in its name, and denies force pushes and
-# `gh pr merge --admin` anywhere in a Bash command. See lib/guard.py.
+# Permission guard for the orchestrator, run as a PreToolUse hook (added at launch, and to
+# `bosun chores --dry-run`): asks before any MCP tool with a write verb in its name and before
+# Chrome's clicks and typing, and denies force pushes and `gh pr merge --admin` anywhere in a Bash
+# command. See lib/guard.py.
 # With BOSUN_APPROVALS_ENABLED=1, `bosun launch` also runs it as `--approvals` (PreToolUse:
 # deny unapproved outward calls), `--permission-request` (PermissionRequest: allow approved
 # ones) and `--post-tool-use` (PostToolUse, PostToolUseFailure: close the proposal an approved

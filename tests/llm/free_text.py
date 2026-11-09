@@ -102,12 +102,17 @@ def site_settings_file() -> Path:
 
 
 def orchestrator_settings(world: World) -> tuple[Path, list[str]]:
-    """The settings with the guard hook pointed at the scratch wrapper and the effort set; and
-    the ask list (headless Claude cannot ask, so those tools are denied explicitly too)."""
+    """The settings with the guard hook the launch adds (guard_hook_settings, lib/common.sh), here
+    the scratch wrapper's, and the effort set; and the ask list (headless Claude cannot ask, so
+    those tools are denied explicitly too). A site file's own old guard hook is left out."""
     settings: dict[str, Any] = json.loads(site_settings_file().read_text())
-    for matcher in settings.get("hooks", {}).get("PreToolUse", []):
-        for hook in matcher.get("hooks", []):
-            hook["command"] = f'"{world.bin / "bosun"}" guard'
+    guard = {"type": "command", "command": f'"{world.bin / "bosun"}" guard'}
+    hooks = settings.setdefault("hooks", {})
+    hooks["PreToolUse"] = [
+        matcher
+        for matcher in hooks.get("PreToolUse", [])
+        if not any(str(hook.get("command", "")).endswith(" guard") for hook in matcher.get("hooks", []))
+    ] + [{"matcher": "Bash|mcp__.*", "hooks": [guard]}]
     settings["effortLevel"] = EFFORT
     path = world.base / "orchestrator-settings.json"
     path.write_text(json.dumps(settings, indent=2))

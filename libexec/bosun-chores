@@ -5,8 +5,8 @@
 # Without --dry-run: send /bosun:chores <mode> to the orchestrator window (default: check-in),
 # skipping the idle checks that the scheduled check-in applies.
 #
-# --dry-run runs the same command headless (claude -p) with the orchestrator's policy, settings and
-# plugin, and real Slack/GitHub/Confluence reads, but with no side effects:
+# --dry-run runs the same command headless (claude -p) with the orchestrator's policy, settings,
+# plugin and guard (this bosun's own), and real Slack/GitHub/Confluence reads, but with no side effects:
 #   - the ledger is a scratch copy of the real one under $BOSUN_STATE_DIR/dry-runs/<timestamp>/,
 #     so idempotency is exercised against current state. --fresh starts empty; --continue starts
 #     from the previous rehearsal's ledger (run twice to check that nothing is processed again)
@@ -71,8 +71,8 @@ cp "$run_dir/ledger.json" "$run_dir/ledger.before.json" 2>/dev/null || echo '{"i
 log "dry run of '$COMMAND' in $BOSUN_ORCHESTRATOR_DIR; scratch state: $run_dir"
 # shellcheck disable=SC2206
 flags=($BOSUN_ORCHESTRATOR_FLAGS)
-# The same model, effort and settings as the live orchestrator.
-build_model_effort_args "$BOSUN_ORCHESTRATOR_MODEL" "$BOSUN_ORCHESTRATOR_EFFORT" "$BOSUN_ORCHESTRATOR_SETTINGS"
+# The same model, effort and settings as the live orchestrator, and the guard of this bosun.
+build_model_effort_args "$BOSUN_ORCHESTRATOR_MODEL" "$BOSUN_ORCHESTRATOR_EFFORT" "$BOSUN_ORCHESTRATOR_SETTINGS" "$(guard_hook_settings)"
 # Headless Claude cannot ask, so the settings' ask list is denied anyway; deny it by name too.
 deny=(--disallowedTools)
 while IFS= read -r tool; do deny+=("$tool"); done < <(jq -r '.permissions.ask[]?' "$BOSUN_ORCHESTRATOR_SETTINGS")
