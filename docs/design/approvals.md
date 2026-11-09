@@ -44,7 +44,8 @@ The gated calls are one table in `lib/guard.py` (`GATED_MCP`, `GATED_MCP_FAMILIE
 `GATED_COMMANDS`). Its Slack tools and commands are the ones the `ask` rules name; its Jira,
 Confluence and CI build tools have no rule and get their prompt from the plain guard (`WRITE_VERBS`).
 A tracker or wiki tool is in a family when `jira` or `confluence` is a word of its name and so is a
-write verb: the name splits on `_`, `-` and lower-to-upper case changes (`name_words`), so
+write verb: the name splits on `_`, `-` and before an upper-case letter after a lower-case one or a
+digit (`name_words`), so
 `jira_add_comment`, `editJiraIssue` and `createConfluencePage` are gated, and `getJiraIssue` is not.
 A site adds its own command prefixes with
 `BOSUN_APPROVALS_GATED_COMMANDS` (and an `ask` rule for each). Bash commands are matched by
