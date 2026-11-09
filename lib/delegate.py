@@ -1,59 +1,7 @@
 #!/usr/bin/env python3
 """Hand a task to a repo session, built from the task-type files in orchestrator/tasks/.
 
-Usage: bosun delegate --list [--markdown]
-       bosun delegate <type>[,<type>...] --id <ledger id> [--id ...] --ask "<one line>"
-                          [--link <url>] [--requester <who>] [--details "<text>" | --details -]
-                          (--print | --window <window> | --new <window> <dir> | --start <window>)
-                          [--again]
-       bosun delegate --update <ledger id> (--details "<text>" | --details -)
-                          [--window <window> | --print]
-       bosun delegate --update <out-id> [--details ...] [--print]
-
-The task text is the header (ledger ids, link, requester, ask, details), then the block of each
-type in the order given, then the rules every task shares (orchestrator/tasks/_common.md). The
-orchestrator never writes the rules itself, so they cannot drift from the files. Once the task is
-delivered, the ledger records the window and the header on each item (`bosun ledger
-delegation <id>`).
-
-  --again      hand over an item whose last hand-over still awaits a report. Without it
-               delegate refuses, says where and when the item went, and points to --update. A
-               hand-over ends with the session's report, or once the item reaches a state that
-               shows the work done (`bosun ledger kinds`: e.g. reviewed, awaiting-review), so
-               a re-review or the next fix round after a push needs no --again.
-  --update     add to or correct a task already handed over: the text goes to the window the
-               ledger recorded for the item, framed as "Update to ledger item <id>", and is kept
-               in the item's history. Refused if the item was never delegated or is finished;
-               fails if that window is gone or not taking input.
-  --update <id> --window <window>
-               move the item to another window that runs Claude: it gets the whole task again
-               (from the header the ledger kept), led by the move and the update text. Nothing
-               changes if it does not take it. Then the old window is told, by id, to stop
-               (best effort: a gone or stuck window is reported and recorded, not fatal), and
-               the ledger records the move (from, to, whether the old window was told).
-  --update <out-id>
-               hand the reply to an outreach item (`bosun ledger replied`) to the window
-               working on its parent item, as an update to the parent; the reply text comes from
-               the ledger (--details adds to it). Once delivered, the outreach becomes applied.
-               Refused for outreach without a reply, without a parent, or whose parent no
-               window holds: then tell me the reply and transition it to applied.
-
-Sites can add task types in $BOSUN_CONFIG_DIR/tasks/<type>.md (a file named like a built-in
-type replaces it) and add shared rules in $BOSUN_CONFIG_DIR/tasks/_common.md.
-
-  --list       the task types: what the repo session may and may never do, and what the
-               orchestrator does afterwards (--markdown: the rows of the task table in docs/orchestrator.md)
-  --details -  read the details from stdin (use a quoted heredoc: --details - <<'EOF')
-  --model, --effort  override the task type's model and effort (front matter `model`/`effort`;
-               "session" means the session's own). A new window starts with them; a running or
-               resumed session runs the task in a subagent with them.
-  --print      print the task text only
-  --window     paste it into a window already running Claude (bosun send <window>)
-  --new        open a new window with a fresh session (bosun send --new)
-  --start      start Claude in an existing window that has none (bosun send --start)
-
-Every --id must exist in the ledger and be of a kind the type takes (e.g. `review` takes
-review-request items).
+Usage and commands: the header of libexec/bosun-delegate (`bosun delegate --help`).
 """
 
 from __future__ import annotations

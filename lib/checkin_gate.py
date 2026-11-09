@@ -24,7 +24,7 @@ import json
 import sys
 from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass
-from datetime import UTC, date, datetime, timedelta
+from datetime import UTC, datetime, timedelta, tzinfo
 from pathlib import Path
 from typing import Any
 
@@ -106,13 +106,17 @@ def outreach_due(item: Mapping[str, Any], inputs: Inputs, last: datetime) -> boo
         return False
     fields = item.get("fields") or {}
     messages = fields.get("messages") or []
-    if messages and crossed_a_business_day(ledger.last_message_at(messages), last.date(), inputs.now.date()):
+    if messages and crossed_a_business_day(ledger.last_message_at(messages), last, inputs.now):
         return True
     return after(fields.get("expect_by"), last) and not after(fields.get("expect_by"), inputs.now)
 
 
-def crossed_a_business_day(sent_at: str, before: date, today: date) -> bool:
-    return ledger.business_days_since(sent_at, today) > ledger.business_days_since(sent_at, before)
+def crossed_a_business_day(sent_at: str, before: datetime, now: datetime, zone: tzinfo | None = None) -> bool:
+    """Whether the wait gained a business day between <before> and <now>, counted by dates in <zone>
+    (None: this Mac's zone), so a late evening or an early morning is on the day the person lived."""
+    return ledger.business_days_since(
+        sent_at, now.astimezone(zone).date(), zone
+    ) > ledger.business_days_since(sent_at, before.astimezone(zone).date(), zone)
 
 
 def alert_news(inputs: Inputs, last: datetime) -> list[str]:

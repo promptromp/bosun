@@ -1,11 +1,76 @@
 #!/bin/bash
-# Usage: bosun kg <command> [args]   (see `bosun kg --help`)
+# Usage: bosun kg <command> [args]
 #
-# Organizational knowledge (People, Process, Product): entities and facts with sources, two
-# timelines and a daily review batch. Stored in $BOSUN_CONFIG_DIR/knowledge/, with its own
-# git history (BOSUN_KNOWLEDGE_GIT=1). Commands: add-entity, propose, confirm, reject,
-# supersede, batch, batch apply, import, identify, forget, expire, lookup, facts, search,
-# neighbors, context, lint, stats, schema. Design: docs/design/knowledge.md.
+# Organizational knowledge for bosun: People, Process, Product (design: docs/design/knowledge.md).
+#
+# Writing (every change is one transaction in the knowledge directory's journal, then one commit in
+# its own git history; a new fact's id is minted, f-3k9x2a, and older ones stay, f12):
+#   add-entity <type>/<slug> [--name N] [--alias A ...] [--weak-alias W ...] [--summary S]
+#              [--allow-forgotten]
+#                                      add an entity, or merge new aliases into it (strong alias: a
+#                                      true synonym, used to resolve names; weak: a related term,
+#                                      used by search). Near matches are reported as merge suggestions.
+#                                      --allow-forgotten: re-add an id deleted on request
+#   propose <subject> <predicate> [<object>] [--value V] --source kind:ref [--source ...]
+#           [--authority user_said|stakeholder_said|observed|inferred] [--valid-from T] [--order N]
+#           [--rework] [--note N]
+#   propose ... --from-user --quote '<my exact words>' --transcript <session.jsonl>
+#                                      record a fact (an object entity or a --value). Proposing the
+#                                      same fact again re-observes it (adds the source). It is
+#                                      confirmed at once only when: the quote is in a prompt I typed
+#                                      in that transcript; or two trusted sources of different kinds
+#                                      back a low-risk fact naming no person; or a profile source
+#                                      gives a person's title or timezone. Slack, PR, ticket and doc
+#                                      text never confirms anything. Otherwise it waits for kg batch
+#   confirm <fact-id|group-key> ...    confirm facts after review (a group key: an entity id, or
+#   reject <fact-id|group-key> ...     <entity>#reviews|owns|approves, as kg batch groups them)
+#   supersede <fact-id> (--value V | --object E | --by <fact-id> | --close) [--source ... |
+#             --from-user --quote Q --transcript P] [--note N]
+#                                      close a fact (valid_to, superseded_by), never delete it
+#   batch [--cap N] [--max-facts N] [--json]
+#                                      the review batch: proposals grouped by entity and axis, one
+#                                      numbered list, rework-preventing groups first; at most --cap
+#                                      groups (BOSUN_KNOWLEDGE_BATCH_CAP, 10), --max-facts facts
+#                                      (BOSUN_KNOWLEDGE_BATCH_FACTS, 40) and
+#                                      BOSUN_KNOWLEDGE_GROUP_FACTS (8) facts a group
+#   batch apply '<decision>' | --confirm 1,3 --reject 2b [--skip 4]  [--dry-run]
+#                                      answer the last batch in one line: 'confirm all except 2b'
+#                                      (2b stays proposed), 'confirm 1,3 reject 2b', 'skip 4';
+#                                      unanswered facts stay proposed for a later batch
+#   import <file> [--dry-run | --apply] [--auto-confirm]
+#                                      entities and facts from a JSON or JSON-lines file, all as
+#                                      proposals (--auto-confirm: apply the rules above); a dry run
+#                                      unless --apply: counts, refusals with reasons, batches
+#   identify <person|team> slack|github|jira|other <id>
+#                                      a restricted identifier for mentions (never in context packs)
+#   forget person/<slug> [--dry-run]   delete a person on request: entity, facts, identifiers, their
+#                                      changes in the journal (placeholders) and the git history
+#                                      (restarted); only a hash and counts are kept
+#   expire [--dry-run]                 record expired proposals (unreviewed for 30 days) and delete
+#                                      person facts not re-observed for 12 months
+#
+# Reading:
+#   lookup <entity> [--json]           current confirmed facts with sources, links to it, what waits
+#   facts <entity> [--predicate P] [--as-of T] [--status confirmed|proposed|rejected|expired|all]
+#         [--closed] [--json]          facts about an entity, now or as they held at --as-of
+#   search <text> [--limit N]          entities by name, alias, related term, summary or fact text
+#   neighbors <entity> [--hops N]      linked entities within N hops (default 1, at most 3)
+#   context --for <entity|repo|topic> [--max-tokens N]
+#                                      a small pack of confirmed, cited facts (about 1.5k tokens)
+#   lint [--stale-days N] [--json] [--strict]
+#                                      contradictions, expired proposals, retention, stale facts, alias
+#                                      collisions, merge suggestions, orphans (--strict: exit 1 if any)
+#   validate [--json]                  the files against the journal they are the rebuild of: damage,
+#                                      a position that does not match, a rebuild that differs,
+#                                      conflicts, updates waiting for their fact, a change made outside
+#                                      the journal that the next write adopts (exit 1 if any)
+#   stats                              counts (what bosun doctor shows)
+#   schema [--json]                    entity types, predicates, the People whitelist
+#
+# Entities are <type>/<slug> (person/dana, process/release, repo/invoice-exporter); anywhere an
+# entity is expected, a name or strong alias works too. Sources are kind:ref with kind one of user,
+# ledger, report, memory, transcript, profile (trusted) or slack, pr, ticket, doc (untrusted).
+# The knowledge base lives in $BOSUN_CONFIG_DIR/knowledge/ and never in the repository.
 set -uo pipefail
 source "$(dirname "$0")/../lib/common.sh"
 load_config

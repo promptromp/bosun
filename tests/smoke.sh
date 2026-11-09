@@ -113,8 +113,21 @@ done
 check "python compiles" python3 -c "import ast,sys; [ast.parse(open(f).read()) for f in sys.argv[1:]]" "$ROOT/libexec/bosun-resolve" "$ROOT"/lib/*.py
 check "the console's JavaScript passes its node check (skipped without node)" "$ROOT/tests/js_check.sh"
 
-check "every command's --help prints its usage header and no code" bash -c '
-  for cmd in "$1"/libexec/bosun-* "$1"/install.sh "$1"/uninstall.sh; do
+check "every command's --help prints its usage header, reads no config and runs no code" bash -c '
+  source "$1/lib/common.sh"
+  cfg="$(mktemp -d)"
+  echo "exit 7" >"$cfg/bosun.env"
+  for cmd in "$1"/libexec/bosun-*; do
+    name="${cmd##*/bosun-}"
+    want="$(usage_of "$cmd")"
+    out="$(BOSUN_CONFIG_DIR="$cfg" "$1/bin/bosun" "$name" --help 2>&1)" || { echo "bosun $name --help: exit $?"; exit 1; }
+    [ "$out" = "$want" ] || { echo "bosun $name --help is not its header: $(head -1 <<<"$out")"; exit 1; }
+    grep -qi "usage:" <<<"$(head -3 <<<"$out")" || { echo "bosun $name: no usage line: $(head -1 <<<"$out")"; exit 1; }
+    ! grep -qE "^(set -uo|source |import )" <<<"$out" || { echo "bosun $name prints code"; exit 1; }
+    [ "$(BOSUN_CONFIG_DIR="$cfg" "$1/bin/bosun" "$name" -h 2>&1)" = "$want" ] || { echo "bosun $name -h differs"; exit 1; }
+  done' _ "$ROOT"
+check "the installers' --help prints its usage header and no code" bash -c '
+  for cmd in "$1"/install.sh "$1"/uninstall.sh; do
     out="$("$cmd" --help 2>&1)" || { echo "$cmd: exit $?"; exit 1; }
     grep -qi "usage:" <<<"$(head -3 <<<"$out")" || { echo "$cmd: $(head -1 <<<"$out")"; exit 1; }
     ! grep -qE "^(set -uo|source |import )" <<<"$out" || { echo "$cmd prints code"; exit 1; }

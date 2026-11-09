@@ -90,7 +90,9 @@ class NamesTest(ResolveTestCase):
     def test_exit_codes(self) -> None:
         self.assertEqual(self.main(WORKDIR, "missing")[0], agent_files.NOT_FOUND)
         self.assertEqual(self.main(WORKDIR)[0], 2)
-        self.assertEqual(self.main("--help")[0], 0)
+        code, out = self.main("--help")
+        self.assertEqual(code, 0)
+        self.assertTrue(out.startswith("Usage: bosun resolve <workdir> <name>"), out)
 
     def test_list(self) -> None:
         self.transcript("s1", "alpha")

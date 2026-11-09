@@ -1,9 +1,231 @@
 #!/bin/bash
-# Usage: bosun ledger <command> [args]   (see `bosun ledger --help`)
+# Usage: bosun ledger <command> [args]
 #
-# Work-item ledger used by the orchestrator: stable ids, per-kind state machines, processed
-# Slack messages and proposals awaiting approval. Stored in $BOSUN_STATE_DIR/ledger.json,
-# with a readable view in ledger.md next to it.
+# Work-item ledger for the bosun orchestrator: stable ids, per-kind state machines,
+# processed-source bookkeeping and pending proposals that need human approval.
+#
+#   list [--open] [--kind K] [--proposals]       table of items (@window: where it was delegated;
+#                                                "waiting on out:...": open outreach it waits on)
+#   show <id>                                    one item as JSON
+#   upsert <id> [--kind K] [--title T] [--url U] [--field k=v ...]
+#                                                create (in the kind's initial state; needs --kind)
+#                                                or update fields; never changes state
+#   transition <id> <state> --note N [--evidence E] [--field k=v ...] [--force-open-outreach]
+#                                                validated state change, recorded in history. An
+#                                                item waiting on open outreach is not finished (a
+#                                                terminal state) without --force-open-outreach
+#                                                (report --state takes it too), except a PR that
+#                                                merged or closed: the note names the outreach
+#   note <id> <text>                             append a note to the history
+#   report <id> --summary S [--result R ...] [--open O] [--ci green|red|pending|none]
+#          [--state S [--evidence E]] [--field k=v ...]
+#                                                a repo session's outcome: one-line summary,
+#                                                results (PR/review URL, report path), what is
+#                                                left open, the CI status of the pushed commit;
+#                                                --state also transitions the item
+#   reports [--since <ISO time>]                 latest reports: of open items, or all since a time
+#   delegation <id>                              where the item was delegated and whether it awaits
+#                                                a report (JSON); fails if it never was or is
+#                                                finished
+#   said [<id>] [--since T] [--window W]         what I typed in repo windows (recorded by the
+#                                                UserPromptSubmit hook), oldest first, verbatim
+#   working <id> [--window W] [--note N]         a window works on the item now (its active item);
+#                                                an item no window holds yet gets the window
+#   idle <id> [--note N]                         the window put the item aside
+#   record-delegation <id> --window W --task T [--ask A] [--link L] [--requester R] [--details D]
+#   record-update <id> --text T
+#   record-move <id> --window W --text T [--notified]
+#                                                used by `bosun delegate` (--update, and
+#                                                --update --window to move an item)
+#   propose <id> <action | ->                    record an action that awaits approval ("-": read
+#                                                it from stdin, e.g. a quoted heredoc)
+#   propose <id> [<action>] --send slack --channel C [--thread TS] --text <text | ->
+#   propose <id> [<action>] --run '<exact command>'
+#   propose <id> [<action>] --tool <MCP tool> --args-json <JSON object | ->
+#                                                the same, with the exact outward call it stands
+#                                                for (an action spec; the action defaults to it)
+#   approve <id> --quote '<my exact words>'      I approved the pending proposal's action spec in
+#                                                chat: the guard lets exactly that call through,
+#                                                once, while my words are in the session
+#                                                (BOSUN_APPROVALS_ENABLED; docs/design/approvals.md)
+#   approvals [--since T] [--auto]               calls the guard let through: approved in chat, or
+#                                                (--auto: only) under a standing class
+#   resolve <id> done|rejected|withdrawn [--note N]
+#                                                close the pending proposal (learn: items close
+#                                                with bosun learn apply|done|reject instead).
+#                                                With approvals on, a proposal whose approved call
+#                                                succeeded is closed by `bosun guard
+#                                                --post-tool-use`; a failed one records
+#                                                approval-failed and needs a new proposal
+#   resolve-carried-out [--dry-run] [--transcript PATH ...]
+#                                                one-time cleanup: pending proposals whose approval
+#                                                was used, settled by what the transcript shows of
+#                                                that call (recorded at use, else PATH, else the
+#                                                orchestrator's transcripts since): success closes
+#                                                them (outreach: marked carried out), failure
+#                                                records approval-failed; no evidence: listed for
+#                                                resolving by hand, unchanged
+#   mark-run <name>                              print when <name> (morning, check-in) last ran,
+#                                                record now, and print where the Slack scan starts
+#                                                (scan from): a check-in from the last run, a
+#                                                morning from the earlier of the last run and the
+#                                                lookback, never more than the maximum lookback
+#   seen <source-key>                            exit 0 and print the record if already processed;
+#                                                otherwise exit 1, naming the open outreach whose
+#                                                Slack thread (or DM) the message is in, if any (all
+#                                                of them, latest message first, if several)
+#   record-source <source-key> --class C [--item ID]
+#                                                remember that a source (e.g. a Slack permalink)
+#                                                was processed, so it is never classified twice
+#   kinds                                        print the state machines
+#   prune [--days N]                             drop finished items and sources older than N days,
+#                                                but not what open work links to, nor anything a
+#                                                kept item links to: no kept link points nowhere
+#   diff <before.json>                           items added or changed since a copy of the ledger
+#   render                                       rewrite ledger.md
+#
+# Outreach: what we sent (or will send) to someone outside this machine and wait on (kind outreach;
+# ids out:<parent-id>/<id>, or out:<YYYY-MM-DD>/<id> (UTC) when it belongs to no item):
+#
+#   reach-out [<parent-id>] --to WHO --subject TEXT [--channel C] [--purpose P] [--option O ...]
+#             [--details D | --details -] [--expect-by YYYY-MM-DD]
+#                                                record one, in draft; prints its id first, and
+#                                                warns if the parent has open outreach to the same
+#                                                person. --channel: slack (default), email, jira,
+#                                                github, confluence, other. --purpose: question
+#                                                (default), decision, clarification, approval,
+#                                                review, info-ack (they confirm they saw it), fyi
+#                                                (one-way: no reply expected, done once sent)
+#   ask ... --question TEXT                      the same command (--question is --subject)
+#   upsert <out-id> [--title T] [--field subject=T] [--field options='a | b'] [--field to=WHO]
+#                                                keep it in line with the message (title and
+#                                                subject are one); also channel, purpose
+#   propose <out-id> <message | ->               the outgoing message awaits approval (-> proposed;
+#                                                rejecting the proposal goes back to draft)
+#   sent <out-id> [<out-id> ...] --ref <permalink|message id> [--channel C] [--note N] [--at TIME]
+#                                                a message went out: the first (-> sent; fyi: ->
+#                                                applied) or, once sent, a follow-up/nudge (kept in
+#                                                a list of refs); resolves the pending proposal.
+#                                                Several ids: one message covering them all, recorded
+#                                                on each. Its time: --at, else a Slack permalink's
+#                                                own time, else now. --at with a ref already
+#                                                recorded corrects that message's time
+#   replied <out-id> --evidence <reply ref> --summary S [--at TIME]
+#                                                the reply (-> replied); says where it goes next.
+#                                                Its time: --at, else the Slack permalink's, else now
+#   TIME: ISO 8601 with an offset (2026-10-15T12:20+01:00, ...Z) or local 'YYYY-MM-DD HH:MM'; not
+#   in the future. Pass --at when it happened before you record it and the ref has no Slack time.
+#   outreach [--open] [--parent ID]              outreach with status, messages and replies
+#   in-flight <window>                           ids of the items <window> holds with work not done
+#   compact-context (--window <w> | --orchestrator) [--max-chars N]
+#                                                the block a session gets back after a compaction
+#
+#   Hand a reply to the window holding the parent with `bosun delegate --update <out-id>`
+#   (-> applied); otherwise tell me and transition it to applied. Gave up after the last nudge:
+#   -> no-reply. Any state -> dropped. Its questions go into another message: fold <out-id> --into
+#   <other-id> (records folded_into); it asks exactly what another asks: --note 'duplicate of
+#   <other-id>' (records duplicate_of).
+#
+# Tasks and links: work we decided to do that has no artifact of its own (kind task; ids
+# task:<YYYY-MM-DD>/<id>, the day in UTC), and typed links between items (stored once, the inverse
+# computed). A task or outreach <id> is six base32 characters minted from this Mac's replica and the
+# journal position, so two Macs never make the same one (older ids end in a number, and stay):
+#
+#   spawn [<from-id>] --title T --ask A [--via V] [--requester R] [--repo R] [--area A]
+#         [--done-when D] [--blocks]
+#                                                record a proposed task spawned from <from-id>
+#                                                (--via: the message that asked for it, or 'user:
+#                                                <what I said>'; without <from-id>, --via is
+#                                                needed); prints its id first and warns about a
+#                                                similar open task from the same source. --blocks:
+#                                                <from-id> is not finished while the task is open.
+#                                                Only my word accepts it: transition <id> accepted
+#                                                --evidence 'user: ...'; delegate then -> delegated
+#   link <id> <rel> <other-id> [--via V]         rel: spawned_from, produces, blocked_by,
+#                                                duplicate_of, folded_into, tracks (<other-id> a
+#                                                ticket, created if new), relates_to. Refuses unknown
+#                                                ids, self-links and cycles
+#   unlink <id> <rel> <other-id>
+#   fold <id> --into <other-id> [--note N] [--force-closed-target] [--force-open-outreach]
+#                                                <id>'s work goes on as part of <other-id> (e.g. in
+#                                                its PR): records folded_into, withdraws <id>'s
+#                                                pending proposal and closes <id> in its kind's
+#                                                escape state (dropped, else dismissed) with the note
+#                                                'folded into <other-id>: N'. Refuses an open-outreach
+#                                                or blocked <id> as transition does, and a finished
+#                                                <other-id> without --force-closed-target. If
+#                                                <other-id> is with a window, prints the delegate
+#                                                --update that carries the work there. Idempotent.
+#                                                A drop note 'merged into <id>' or 'folded into <id>'
+#                                                records folded_into too; 'duplicate of <id>' records
+#                                                duplicate_of (the same item twice)
+#   tree <id>                                    lineage up and down (spawned, produces, outreach),
+#                                                with states, other links and hints
+#   migrate-links [--dry-run]                    one-shot: fields.origin naming an item ->
+#                                                spawned_from; drop notes 'merged into <id>' ->
+#                                                folded_into, 'duplicate of <id>' -> duplicate_of
+#                                                (also a duplicate_of recorded from a 'merged into'
+#                                                note). Idempotent
+#
+# External tickets (kind ticket; ids jira:<KEY>-<n>, ghissue:<owner>/<repo>#<n>), a read-only
+# mirror of the tracker:
+#
+#   ticket-sync <ticket-id> --status RAW [--category C] [--title T] [--url U] [--assignee A]
+#                                                record what the tracker shows (created if new);
+#                                                the category comes from BOSUN_TICKET_STATUS_MAP,
+#                                                then the built-in status names, then --category
+#                                                (ours, or the tracker's own: Jira statusCategory)
+#   tickets [--all] [--mismatch]                 tickets of open work, how to read each, and where
+#                                                the ticket and our work disagree (proposals only;
+#                                                for a ticket outside BOSUN_TICKET_OWNED_PROJECTS,
+#                                                FYI lines: another team's to move, never ours)
+#   ticket-sync ... --parent <key>               also records the ticket's parent (Jira's parent
+#                                                field: the epic of a story), for workstreams
+#
+# Workstreams: a time-bound effort I drive (kind workstream; ids ws:<slug>), grouping items for
+# stand-up summaries and stats (docs/design/workstreams.md):
+#
+#   ws add <slug> [--title T] [--epic <ticket>] [--channel <Slack channel id> ...] [--repo R ...]
+#          [--started D] [--ended D] [--target D] [--area <knowledge entity>] [--parent <ws>]
+#          [--alias A ...]
+#                                                create (needs --title) or update the fields given;
+#                                                --parent: it is part of another workstream (two
+#                                                levels at most). Its epic and channel assign items
+#   ws list [--all]                              workstreams (done ones with --all), with counts by
+#                                                how items were assigned, and the unassigned count
+#   ws show <ws>                                 fields, the workstreams under it, items by kind
+#   ws set-state <ws> active|paused|done --note N
+#   ws alias <ws> <alias> [--remove]             another name it answers to (any <ws> argument
+#                                                takes the id, the slug or an alias)
+#   link <id> part_of <ws> [--move]              the item's one workstream (refuses a second unless
+#                                                --move, which leaves the old one; relates_to for a
+#                                                looser tie). Tag the root: what came from it
+#                                                inherits it
+#   assign [--dry-run|--apply] [--ws W]          make epic and rule assignments explicit on the
+#                                                topmost items (dry run by default); uncertain
+#                                                cases are printed as proposals
+#   summary [--ws W|--all] [--since S] [--markdown]
+#                                                a stand-up draft: shipped and decisions since S
+#                                                (a date, an ISO time; default: this Monday), and
+#                                                now in review, waiting on others, blocked, next;
+#                                                --all: per workstream, then the unassigned
+#   lint [--json] [--strict]                     doubtful assignments: evidence that disagrees, a
+#                                                child tagged differently from its parent, a
+#                                                growing unassigned count (--strict: exit 1)
+#   list --ws <ws|unassigned>                    only the items in that workstream (or under it)
+#   validate [--journal] [--json]                check every rule: states, links, one part_of; with
+#                                                --journal also the journal's rebuild against
+#                                                ledger.json (conflicts, items that differ, a
+#                                                position that does not match). Exit 1 on findings
+#   Resolution order: part_of > inherited (spawned_from, produced_by, outreach parent, then folded
+#   into) > a tracked ticket whose epic a workstream names > rules in
+#   $BOSUN_CONFIG_DIR/workstreams.json and a workstream's channel > unassigned. `show` says
+#   which (derived.workstream).
+#
+# State lives in $BOSUN_STATE_DIR/ledger.json; ledger.md is a readable view of it. Every write
+# appends its changes to the journal in $BOSUN_STATE_DIR/journal/ledger/ first, and ledger.json is
+# the rebuild of that journal (docs/design/sync.md).
+# review: and mypr: items are only created for repositories matching BOSUN_REPO_MASK.
 set -uo pipefail
 source "$(dirname "$0")/../lib/common.sh"
 load_config

@@ -14,7 +14,7 @@ import tempfile
 import time
 import unittest
 from collections.abc import Iterator
-from datetime import UTC, date, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 from unittest import mock
@@ -806,10 +806,24 @@ class MessageTimeTest(OutreachTestCase):
 class TimeTest(unittest.TestCase):
     def test_business_days_skip_weekends(self) -> None:
         friday = "2026-10-16T17:00:00+00:00"
-        self.assertEqual(ledger.business_days_since(friday, date(2026, 10, 16)), 0)
-        self.assertEqual(ledger.business_days_since(friday, date(2026, 10, 18)), 0)
-        self.assertEqual(ledger.business_days_since(friday, date(2026, 10, 19)), 1)
-        self.assertEqual(ledger.business_days_since(friday, date(2026, 10, 23)), 5)
+        self.assertEqual(ledger.business_days_since(friday, date(2026, 10, 16), UTC), 0)
+        self.assertEqual(ledger.business_days_since(friday, date(2026, 10, 18), UTC), 0)
+        self.assertEqual(ledger.business_days_since(friday, date(2026, 10, 19), UTC), 1)
+        self.assertEqual(ledger.business_days_since(friday, date(2026, 10, 23), UTC), 5)
+
+    def test_business_days_count_local_dates_east_of_utc(self) -> None:
+        # Sunday 22:30 UTC is Monday 00:30 at +02:00, so Tuesday is one business day later.
+        sent = "2026-11-08T22:30:00Z"
+        self.assertEqual(
+            ledger.business_days_since(sent, date(2026, 11, 10), timezone(timedelta(hours=2))), 1
+        )
+
+    def test_business_days_count_local_dates_west_of_utc(self) -> None:
+        # Tuesday 02:00 UTC is Monday 21:00 at -05:00, so Tuesday is one business day later.
+        sent = "2026-11-10T02:00:00Z"
+        self.assertEqual(
+            ledger.business_days_since(sent, date(2026, 11, 10), timezone(timedelta(hours=-5))), 1
+        )
 
     def test_age(self) -> None:
         moment = datetime.now(UTC)

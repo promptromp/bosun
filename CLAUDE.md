@@ -6,7 +6,8 @@ of truth, so don't copy rules into this file.
 ## Where things live
 
 - `bin/bosun` dispatches `bosun <cmd>` to `libexec/bosun-<cmd>`. Each command's
-  `# Usage:` header is its `--help`.
+  `# Usage:` header is its `--help`, which `bin/bosun` prints itself (`usage_of`, `lib/common.sh`) without
+  running the command, so it needs no config.
 - Two paths (`lib/install_paths.py`, design: `docs/design/update.md`): a process runs the code of its own
   folder (`BOSUN_ROOT`, `BOSUN`), and whatever outlives it (hook commands in launch settings, the launch
   command, plists, the `~/.local/bin/bosun` link, `--plugin-dir`, Codex's notify, the orchestrator
@@ -261,8 +262,9 @@ of truth, so don't copy rules into this file.
 - **A new kind of file written by hand:** its linter in `.pre-commit-config.yaml` and `pyproject.toml`'s
   dev group, here under Tooling. If it is glue code in Python, add it to mypy's `files` and to the
   complexity hooks, which do not cover `tests/`.
-- **A command:** `libexec/bosun-<cmd>` with a `# Usage:` header (`usage` prints it for
-  `--help`; `die_usage` reports usage errors with exit 2), a line in `bin/bosun`'s usage, the
+- **A command:** `libexec/bosun-<cmd>` with a `# Usage:` header that holds all of its help
+  (`bin/bosun` prints it for `--help`, with no flag handling of the command's own for exactly that;
+  `die_usage` reports usage errors with exit 2), a line in `bin/bosun`'s usage, the
   table in `docs/commands.md`, and smoke tests.
 - **A command or background job that writes a store** (the ledger, the knowledge base): it runs
   under `update_gate.guarded` (`lib/update_gate.py`), or catches `WriteRefused` and fails its run in

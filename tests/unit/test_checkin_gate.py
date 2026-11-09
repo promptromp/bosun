@@ -6,12 +6,15 @@ from __future__ import annotations
 import contextlib
 import io
 import json
+import os
 import sys
 import tempfile
+import time
 import unittest
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
+from unittest import mock
 
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "lib"))
@@ -84,11 +87,25 @@ class FindingsTest(unittest.TestCase):
         self.assertEqual(gate.findings(inputs(items=items)), ["report(s) on task:2026-10-27/1"])
 
     def test_outreach_is_news_once_its_wait_crosses_a_business_day(self) -> None:
+        with mock.patch.dict(os.environ, {"TZ": "UTC"}):  # the gate counts in this Mac's zone
+            time.tzset()
+            self.addCleanup(time.tzset)
+            self.check_crossing_in_the_local_zone()
+
+    def check_crossing_in_the_local_zone(self) -> None:
         crossed = outreach(NOW - timedelta(days=1))
         overnight = NOW.replace(hour=0) - timedelta(minutes=30)
         first_check_of_the_day = inputs(items={"o": crossed}, last=overnight, max_quiet=timedelta(hours=24))
         self.assertIn("out:slack:C0/1/1", gate.findings(first_check_of_the_day)[0])
         self.assertEqual(gate.findings(inputs(items={"o": crossed})), [])  # already counted today
+
+    def test_a_business_day_is_crossed_at_local_midnight_not_utc_midnight(self) -> None:
+        east = timezone(timedelta(hours=2))
+        sent = "2026-11-09T10:00:00Z"  # Monday
+        before = datetime(2026, 11, 10, 21, 30, tzinfo=UTC)  # Tuesday 23:30 local
+        now = datetime(2026, 11, 10, 22, 30, tzinfo=UTC)  # Wednesday 00:30 local, still Tuesday in UTC
+        self.assertTrue(gate.crossed_a_business_day(sent, before, now, east))
+        self.assertFalse(gate.crossed_a_business_day(sent, before, now, UTC))
 
     def test_a_passed_expect_by_is_news_once(self) -> None:
         due = outreach(NOW - timedelta(minutes=90), expect_by=iso(NOW - timedelta(minutes=20)))
