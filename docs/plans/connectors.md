@@ -8,7 +8,8 @@ nobody saw; two roadmap bugs fixed on the way.
 
 **Architecture:** `lib/connectors.py` (pure, plus a small CLI) turns a window's list into Claude Code's
 `allowedMcpServers` (in the launch's `--settings`) or Codex's `-c mcp_servers.<name>.enabled=false`
-overrides, from facts read through `lib/claude_state.py` and `lib/codex_state.py`. The shell launch path
+overrides (Task 9's VM run changed these to one `-c mcp_servers={<name>={enabled=false},...}`, since Codex
+splits a `-c` key at every dot: see the design note), from facts read through `lib/claude_state.py` and `lib/codex_state.py`. The shell launch path
 calls it once per launch. Existing installs keep the orchestrator's reach through a new kind of config
 migration. The gate's changes stay in `lib/guard.py` and `orchestrator/settings.json`.
 

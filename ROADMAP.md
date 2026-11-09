@@ -338,10 +338,11 @@ windows (none by default), `BOSUN_ORCHESTRATOR_CONNECTORS` for the orchestrator 
 switched off. `bosun doctor` shows each window's, and an update keeps an older orchestrator's `all` and
 says how to narrow it. The recommendation ticks the one repo I use most, and an unattended first install
 sets up no repo windows or connectors. Run in the macOS VM with real Claude Code and Codex windows and local
-test servers: the allow lists hold, new and resumed, a repo's own servers included. Next: a Codex server
-named with a dot cannot be switched off the way the launch does it (Codex splits `-c` keys at every dot), so
-with one no Codex window starts; an inline table works. Codex's built-in `codex_worktrees` server stays on,
-and its update screen stalls a start. Design note: [docs/design/connectors.md](docs/design/connectors.md).
+test servers: the allow lists hold, new and resumed, a repo's own servers included. The runs changed how a
+Codex window switches servers off (one inline table, since Codex splits a `-c` key at every dot, so a server
+named with a dot stopped every Codex window) and turned off Codex's update screen, which stalled a restart.
+Codex's built-in servers stay on, as Claude Code's Chrome does. Design note:
+[docs/design/connectors.md](docs/design/connectors.md).
 
 ### Docs site
 

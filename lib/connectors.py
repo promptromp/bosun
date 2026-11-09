@@ -182,21 +182,39 @@ def save_kept(state_dir: Path, asked: Iterable[str], found: Mapping[str, str]) -
 # ---- Codex ----------------------------------------------------------------------------------------
 
 
+# What a TOML basic string may not hold raw: the quote and the backslash, written as their escapes, and
+# the control characters (U+0000 to U+001F, and U+007F), written as \uXXXX.
+TOML_ESCAPES = {'"': '\\"', "\\": "\\\\"}
+TOML_CONTROL = frozenset(chr(code) for code in (*range(0x20), 0x7F))
+
+
+def toml_char(char: str) -> str:
+    if char in TOML_ESCAPES:
+        return TOML_ESCAPES[char]
+    return f"\\u{ord(char):04X}" if char in TOML_CONTROL else char
+
+
+def toml_string(text: str) -> str:
+    """<text> as a TOML basic string (json.dumps would leave U+007F raw, which TOML forbids)."""
+    return '"' + "".join(toml_char(char) for char in text) + '"'
+
+
 def toml_key(name: str) -> str:
-    """<name> as one TOML key: bare when it can be, else a quoted string."""
-    return name if is_plain(name) else json.dumps(name, ensure_ascii=False)
+    """<name> as one TOML key: bare when it can be, else a basic string."""
+    return name if is_plain(name) else toml_string(name)
 
 
 def codex_args(allowed: Allowed, servers: Sequence[str]) -> list[str]:
-    """Codex's launch arguments: each of <servers> the list does not name switched off, and ChatGPT's
-    connectors (its `apps` feature) unless the list is `all`."""
+    """Codex's launch arguments: every one of <servers> the list does not name switched off, in one
+    inline table (`-c mcp_servers={<key>={enabled=false},...}`, which Codex merges into its
+    configuration), and ChatGPT's connectors (its `apps` feature) off; nothing for `all`. One table,
+    because Codex splits a `-c` key at every dot, quotes included, so `mcp_servers."a.b".enabled`
+    names another server; inside a value its TOML parser reads quoted keys as TOML does."""
     if allowed.everything:
         return []
-    args: list[str] = []
-    for server in servers:
-        if server not in allowed.names:
-            args += ["-c", f"mcp_servers.{toml_key(server)}.enabled=false"]
-    return [*args, "--disable", "apps"]
+    off = [f"{toml_key(server)}={{enabled=false}}" for server in servers if server not in allowed.names]
+    table = ["-c", f"mcp_servers={{{','.join(off)}}}"] if off else []
+    return [*table, "--disable", "apps"]
 
 
 # ---- bosun doctor ---------------------------------------------------------------------------------

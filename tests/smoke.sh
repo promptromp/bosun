@@ -2637,14 +2637,16 @@ for line in sys.stdin:
     echo
   }
   out="$(codex_launch_args "$(CX launch cx)")"
-  check "with no list, a server is switched off by name" contains "$out" ' -c mcp_servers.acme-docs.enabled=false '
-  check "... a name that is not a bare TOML key, quoted" contains "$out" ' -c mcp_servers."acme.mail".enabled=false '
+  check "with no list, every server is switched off by name, in one inline table, a name that is not a bare TOML key quoted" \
+    contains "$out" ' -c mcp_servers={acme-docs={enabled=false},"acme.mail"={enabled=false}} '
   check "... and ChatGPT's connectors off" contains "$out" ' --disable apps'
+  check "... and no update screen to stall at" contains "$out" ' -c check_for_update_on_startup=false '
   out="$(codex_launch_args "$(CX launch cx-docs)")"
   check "with connectors: [acme-docs], only the other server is switched off" bash -c '
-    ! grep -qF "acme-docs.enabled" <<<"$1" && grep -qF " -c mcp_servers.\"acme.mail\".enabled=false " <<<"$1" && grep -qF " --disable apps" <<<"$1"' _ "$out"
+    grep -qF " -c mcp_servers={\"acme.mail\"={enabled=false}} --disable apps" <<<"$1"' _ "$out"
   out="$(codex_launch_args "$(CX launch cx-all)")"
   check "with connectors: all, nothing is switched off" bash -c '! grep -qF mcp_servers <<<"$1" && ! grep -qF -- --disable <<<"$1"' _ "$out"
+  check "... and there is still no update screen" contains "$out" ' -c check_for_update_on_startup=false '
   out="$(BOSUN_CONNECTORS="acme-docs, https://mcp.example.com/*" CX doctor)"
   check "doctor says what a Codex window reaches, from its server names" contains "$out" \
     "ok    cx-docs: reaches acme-docs (switches off acme.mail and ChatGPT's connectors)"
@@ -2670,14 +2672,16 @@ for line in sys.stdin:
       return 1
     }
   }
-  check "arguments of whole pairs and --disable apps are taken" outputs valid codex_args_valid "" -c 'mcp_servers.acme-docs.enabled=false' -c 'mcp_servers."acme.mail".enabled=false' --disable apps
+  check "one table of servers switched off and --disable apps are taken" outputs valid codex_args_valid "" -c 'mcp_servers={acme-docs={enabled=false},"acme.mail"={enabled=false}}' --disable apps
   check "... and --disable apps alone" outputs valid codex_args_valid "acme-docs" --disable apps
   check "... and nothing for all" outputs valid codex_args_valid " all "
   check "... but nothing for any other list is no answer" outputs refused codex_args_valid "acme-docs"
-  check "... nor a pair cut short" outputs refused codex_args_valid "" -c 'mcp_servers.acme-docs.enabled=false' -c
-  check "... nor a pair of anything but a server switched off" outputs refused codex_args_valid "" -c 'mcp_servers.acme-docs.enabled=true' --disable apps
-  check "... nor a missing --disable apps" outputs refused codex_args_valid "" -c 'mcp_servers.acme-docs.enabled=false'
-  check "... nor more after it" outputs refused codex_args_valid "" --disable apps -c 'mcp_servers.acme-docs.enabled=false'
+  check "... nor -c cut short" outputs refused codex_args_valid "" -c --disable apps
+  check "... nor a table of anything but servers switched off" outputs refused codex_args_valid "" -c 'mcp_servers={acme-docs={enabled=true}}' --disable apps
+  check "... nor the form Codex splits at every dot" outputs refused codex_args_valid "" -c 'mcp_servers."acme.mail".enabled=false' --disable apps
+  check "... nor two tables" outputs refused codex_args_valid "" -c 'mcp_servers={a={enabled=false}}' -c 'mcp_servers={b={enabled=false}}' --disable apps
+  check "... nor a missing --disable apps" outputs refused codex_args_valid "" -c 'mcp_servers={acme-docs={enabled=false}}'
+  check "... nor more after it" outputs refused codex_args_valid "" --disable apps -c 'mcp_servers={acme-docs={enabled=false}}'
 
   echo "get.sh (a dry run: it changes nothing)"
   check "it is plain sh" sh -n "$ROOT/get.sh"

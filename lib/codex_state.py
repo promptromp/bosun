@@ -24,13 +24,15 @@ goes by, seen in Codex 0.166.0 and not a public API:
     the file does not record it (lib/pane_input.py reads that from the screen).
   - What servers a window reaches: `codex mcp list --json` lists the MCP servers Codex would start in a
     folder (configured, a trusted project's and plugin ones; not the built-ins `codex_apps`, ChatGPT's
-    connectors, and `codex_worktrees`), each with its name and, for a stdio server, its environment in
-    plain text, so `mcp_server_names` keeps the names only. A launch switches one off with
-    `-c mcp_servers.<name>.enabled=false` and the connectors with `--disable apps` (lib/connectors.py):
-    confirmed in the Mac VM (`tests/sandbox.sh mac live codex`) for a user's and a project's server, new
-    and resumed. Not for a name with a dot: Codex splits a `-c` key at every dot, quotes included, and
-    exits at start (`invalid transport`); an inline table, `-c 'mcp_servers={"a.b"={enabled=false}}'`,
-    merges and works (docs/design/connectors.md, "What the VM showed").
+    connectors, and `codex_worktrees`, which stay on), each with its name and, for a stdio server, its
+    environment in plain text, so `mcp_server_names` keeps the names only. A launch switches servers off
+    with one `-c mcp_servers={<key>={enabled=false},...}`, which merges into the configuration, and the
+    connectors with `--disable apps` (lib/connectors.py): one table, because Codex splits a `-c` path at
+    every dot, quotes included, so `mcp_servers."a.b".enabled=false` makes it exit at start. Seen in the
+    Mac VM (`tests/sandbox.sh mac live codex`) for a user's, a project's and a dotted server, new and
+    resumed.
+  - A start waits at an "Update available" screen once Codex has seen a newer version of itself, so the
+    launch passes `-c check_for_update_on_startup=false`.
   - Codex has no way to name a session from outside, so bosun keeps its own table of names, filled in by
     the program Codex runs when a turn ends (`bosun hook codex-turn-end`). That program also runs for
     Codex's hidden helpers, each with an id of its own (is_terminal_session).

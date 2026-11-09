@@ -9,6 +9,7 @@ import subprocess
 import sys
 import tempfile
 import time
+import tomllib
 import unittest
 from pathlib import Path
 from typing import Any
@@ -104,27 +105,35 @@ class PureTest(unittest.TestCase):
             claude_entries(allowed, {}, {ODD_NAME: MAIL_URL}).entries, ({"serverUrl": MAIL_URL},)
         )
 
-    def test_codex_disables_each_unlisted_server(self) -> None:
+    def test_codex_disables_each_unlisted_server_in_one_table(self) -> None:
         self.assertEqual(
-            codex_args(parse("acme-docs"), ["acme-docs", "acme-tracker"]),
-            ["-c", "mcp_servers.acme-tracker.enabled=false", "--disable", "apps"],
-        )
-        self.assertEqual(codex_args(parse(""), []), ["--disable", "apps"])
-
-    def test_codex_quotes_odd_names(self) -> None:
-        self.assertEqual(
-            codex_args(parse(""), ["acme.mail", "acme docs", 'acme"q']),
+            codex_args(parse("acme-docs"), ["acme-docs", "acme-tracker", "acme-wiki"]),
             [
                 "-c",
-                'mcp_servers."acme.mail".enabled=false',
-                "-c",
-                'mcp_servers."acme docs".enabled=false',
-                "-c",
-                'mcp_servers."acme\\"q".enabled=false',
+                "mcp_servers={acme-tracker={enabled=false},acme-wiki={enabled=false}}",
                 "--disable",
                 "apps",
             ],
         )
+
+    def test_codex_with_nothing_to_switch_off_only_turns_off_apps(self) -> None:
+        self.assertEqual(codex_args(parse(""), []), ["--disable", "apps"])
+        self.assertEqual(codex_args(parse("acme-docs"), ["acme-docs"]), ["--disable", "apps"])
+
+    def test_codex_quotes_odd_names_as_toml_basic_strings(self) -> None:
+        names = ["acme.mail", "acme docs", 'acme"q', "acme\\b", "acme\x7f", "acme\nline", "acmé"]
+        args = codex_args(parse(""), names)
+        self.assertEqual(args[0], "-c")
+        self.assertEqual(args[2:], ["--disable", "apps"])
+        self.assertEqual(
+            args[1],
+            'mcp_servers={"acme.mail"={enabled=false},"acme docs"={enabled=false},'
+            '"acme\\"q"={enabled=false},"acme\\\\b"={enabled=false},"acme\\u007F"={enabled=false},'
+            '"acme\\u000Aline"={enabled=false},"acmé"={enabled=false}}',
+        )
+        # What Codex's TOML parser reads it as: each server by its own name, switched off.
+        self.assertEqual(tomllib.loads(args[1])["mcp_servers"], {name: {"enabled": False} for name in names})
+        self.assertNotIn("\n", args[1])  # one argument a line, for lib/launch/codex.sh
         self.assertEqual(connectors.toml_key("acme_docs-2"), "acme_docs-2")
 
     def test_codex_all_keeps_apps(self) -> None:
@@ -396,7 +405,7 @@ class CommandTest(CommandCase):
         code, out, err = self.run_main("codex", "--list", "acme-docs", "--agent-bin", str(agent))
         self.assertEqual((code, err), (0, ""))
         self.assertEqual(
-            out.splitlines(), ["-c", 'mcp_servers."acme.mail".enabled=false', "--disable", "apps"]
+            out.splitlines(), ["-c", 'mcp_servers={"acme.mail"={enabled=false}}', "--disable", "apps"]
         )
 
     def test_codex_listing_that_fails_stops_the_window(self) -> None:

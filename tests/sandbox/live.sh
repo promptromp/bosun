@@ -540,7 +540,7 @@ probe_restarted() { # <what>: its agent stopped and relaunched by bosun refresh,
   check "... on the session it had" bash -c '[ -n "$1" ] && [ "$1" = "$2" ]' _ "$before" "$(window "$PROBE_WINDOW" sessionId)"
 }
 
-# On Codex, a server whose name is no bare TOML key (probe.dotted): the launch quotes it in its `-c`.
+# On Codex, a server whose name is no bare TOML key (probe.dotted): the launch quotes it in its table.
 dotted_starts() {
   codex_lists '["probe-allowed","probe-blocked","probe-project","probe.dotted"]' || return 1
   : >"$PROBE_LOG"
@@ -551,6 +551,9 @@ dotted_name() {
   probe_toml '"probe.dotted"' dotted >>"$HOME/.codex/config.toml"
   check "Codex takes a server named probe.dotted, and starts it without a limit" dotted_starts
   probe_restarted "relaunched with probe.dotted in Codex's config, it resumes"
+  check "... launched with probe.dotted in its one table of servers switched off" bash -c '
+    table="$(ps -o command= -p "$1" | grep -oE -- "-c mcp_servers=\{[^ ]*\} --disable apps")" &&
+      for key in "\"probe.dotted\"" probe-blocked probe-project; do grep -qF "$key={enabled=false}" <<<"$table" || exit 1; done' _ "$(pid_of "$PROBE_WINDOW")"
   reaches_only_allowed "with probe.dotted" blocked dotted project
 }
 
@@ -567,10 +570,6 @@ connectors() {
     check "without a limit, Codex lists the three probe servers, the repo's too, and starts them" codex_servers
   fi
   echo 'BOSUN_CONNECTORS="probe-allowed"' >>"$CONFIG/bosun.env"
-  # Codex shows a screen at start once it has seen a newer version of itself, and waits there: a restart
-  # here would stop at it (bosun does not answer it yet; seen in this VM with Codex 0.166.0).
-  [ "$AGENT" = "codex" ] && printf '\ncheck_for_update_on_startup = false\n' | cat - "$HOME/.codex/config.toml" >"$OUT/codex-config" &&
-    cat "$OUT/codex-config" >"$HOME/.codex/config.toml"
   : >"$PROBE_LOG"
   bosun refresh "$PROBE_WINDOW" >"$OUT/probe-refresh.txt" 2>&1
   probe_started "the probe window reaches a session"

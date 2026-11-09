@@ -6,10 +6,10 @@ missed, and an unattended install grants nothing nobody saw.
 
 Run 2026-11-09 in the macOS VM (`tests/sandbox.sh mac run`, `mac live claude`, `mac live codex`, `mac
 work`), with real Claude Code and Codex 0.166.0 windows and local test servers: Claude Code's allow list
-holds, new and resumed; on Codex, switching a server off holds for its own and a project's servers, new and
-resumed, and `--disable apps` is taken, but a server whose name holds a dot cannot be switched off with
-`-c` (see [What the VM showed](#what-the-vm-showed)), so with one in Codex's configuration no Codex window
-starts.
+holds, new and resumed; on Codex, the servers a window's list does not name are switched off in one inline
+table, a user's, a project's and one named with a dot, new and resumed, and `--disable apps` is taken. The
+first form, a `-c mcp_servers.<name>.enabled=false` per server, could not name a server with a dot, so the
+VM changed it ([What the VM showed](#what-the-vm-showed)).
 
 ## Why
 
@@ -73,11 +73,13 @@ allow list in my own `~/.claude/settings.json` would widen a window's; deny list
 
 Codex 0.167.0, from its docs and source (checked in the VM: [What the VM showed](#what-the-vm-showed)): servers come from `[mcp_servers.<name>]`
 in `~/.codex/config.toml`, a trusted project's `.codex/config.toml`, profiles and plugins; ChatGPT's
-connectors are one built-in server, `codex_apps`, present with a ChatGPT login. A launch turns one server
-off with `-c mcp_servers.<name>.enabled=false` (`-c mcp_servers={}` removes nothing: `-c` tables merge),
-and the connectors with `--disable apps`. `codex mcp list --json` lists the configured and plugin servers
-by name (not `codex_apps`), with each stdio server's environment in plain text, so a caller keeps the
-names only. bosun already launches Codex with `--no-daemon`, without which a shared background server may
+connectors are one built-in server, `codex_apps`, present with a ChatGPT login. A launch turns servers
+off with an inline table, `-c 'mcp_servers={<name>={enabled=false},...}'`, which merges into the
+configuration (so `-c mcp_servers={}` removes nothing), and the connectors with `--disable apps`. The form
+`-c mcp_servers.<name>.enabled=false` only works for a bare name: Codex splits a `-c` path at every dot,
+quotes included (`config/src/overrides.rs`). `codex mcp list --json` lists the configured and plugin
+servers by name (not its built-ins, `codex_apps` and `codex_worktrees`), with each stdio server's
+environment in plain text, so a caller keeps the names only. bosun already launches Codex with `--no-daemon`, without which a shared background server may
 ignore the overrides.
 
 ### What the VM showed
@@ -96,12 +98,11 @@ never from what its model says (a model leaves deferred tools out of a list):
 | the overrides after `codex resume` | confirmed: the resumed session started only the allowed server, and `/mcp` showed the same |
 | `-c mcp_servers."probe.dotted".enabled=false` (the name quoted as a TOML key) | **refuted**: Codex splits a `-c` key at every dot, quotes or not, so this makes a server named `"probe` with no command, and Codex exits at start with `Error: invalid transport in mcp_servers."probe`. The window does not start (fail closed), and since the launch switches off every server its list does not name, one such server in Codex's configuration keeps every Codex window from starting |
 | `-c 'mcp_servers={"probe.dotted"={enabled=false}}'` (an inline table) | merges into the configuration rather than replacing it: `codex mcp list --json` shows that server `enabled: false` with its command kept and the others as they were, and `codex exec` with it started all but that one. One inline table naming three servers, with `--disable apps`, started only the fourth |
-| what `codex mcp list --json` leaves out | besides `codex_apps`, a built-in `codex_worktrees` server (3 tools), which `/mcp` shows `connected` in every window: bosun does not switch it off |
-| Codex's own update screen | once Codex has seen a newer version of itself, a start shows "Update available" and waits for a key, which stalled a restart (the VM's later runs set `check_for_update_on_startup = false`) |
+| the launch's one inline table for every server not named, `probe.dotted` among them | confirmed: a new window and a resumed one started only the allowed server, and `/mcp` showed the others `disabled (0 tools)` |
+| what `codex mcp list --json` leaves out | besides `codex_apps`, a built-in `codex_worktrees` server (3 tools), which `/mcp` shows `connected` in every window. Codex's built-ins stay on, as Claude Code's Chrome and computer-use do: they are local, and a list cannot name what the listing does not show |
+| Codex's own update screen | once Codex has seen a newer version of itself, a start shows "Update available" and waits for a key, which stalled a restart; so the launch passes `-c check_for_update_on_startup=false` (the key Codex documents for centrally managed updates) |
 
-So a server whose name is not a bare TOML key needs another form than the one this note chose; the inline
-table is the form the VM showed works. Until it is chosen, such a server keeps Codex windows from starting,
-as the design asks of a server a window cannot switch off.
+So the launch switches servers off in one inline table ([Codex](#codex)).
 
 ## The design
 
@@ -164,14 +165,16 @@ the Slack watcher, the login check) do not change.
 ### Codex
 
 At launch, `lib/launch/codex.sh` lists the servers (`codex mcp list --json`, names only, never logged
-whole) and adds `-c mcp_servers.<name>.enabled=false` for each one the list does not name, the name
-quoted as a TOML key. `--disable apps` unless the list is `all`. URL patterns and `claude.ai` names mean
-nothing to Codex: doctor says so for a Codex window. A listing that fails keeps the window from starting,
-and the launch says why: without it, bosun cannot tell which servers to switch off. The facts above
-marked "to be confirmed" are checked in the VM before this lands, and `lib/codex_state.py`'s note and
-`docs/design/harnesses.md` record them. One that does not hold gets another way that the VM shows works
-(`--disable plugins` for a plugin's server, say); failing that, a Codex window with a server it cannot
-switch off does not start.
+whole) and adds one `-c mcp_servers={<name>={enabled=false},...}` for every one the list does not name
+(none when there are none), each name a bare TOML key when it can be and otherwise a TOML basic string,
+its quote, backslash and control characters escaped. One table rather than a `-c` per server, because Codex
+splits a `-c` path at every dot. `--disable apps` unless the list is `all`, which adds nothing. Codex's
+built-in servers (`codex_worktrees`) stay on, as Claude Code's Chrome does: they are local, and the listing
+does not show them, so a list cannot name them. URL patterns and `claude.ai` names mean nothing to Codex:
+doctor says so for a Codex window. A listing that fails, or arguments that are not that shape, keep the
+window from starting, and the launch says why: without it, bosun cannot tell which servers to switch off.
+The VM checked the facts this rests on ([What the VM showed](#what-the-vm-showed)), and `lib/codex_state.py`'s
+note and `docs/design/harnesses.md` record them.
 
 ### Existing installs
 

@@ -7,8 +7,9 @@
 AGENT_BIN="$BOSUN_CODEX_BIN"
 
 # Sets codex_connector_args to the launch arguments that limit window <name>, launched in this folder, to
-# its list (window_connectors; docs/design/connectors.md): `-c mcp_servers.<key>.enabled=false` for each
-# server it does not name, and `--disable apps`, as lib/connectors.py prints them. None for `all`. Once
+# its list (window_connectors; docs/design/connectors.md): one `-c mcp_servers={<key>={enabled=false},...}`
+# for the servers it does not name (none when there are none), and `--disable apps`, as lib/connectors.py
+# prints them. None for `all`. Once
 # per process: a launch builds its arguments twice, and the second time reuses the first lookup. A
 # listing that fails, or arguments that are not what it prints, stop the launch: the window never starts
 # with a server its list does not name. Call it in the shell itself, not in $(...), which would lose both
@@ -30,25 +31,33 @@ set_codex_connector_args() { # <name>
   codex_connector_window="$1"
 }
 
-# Whether codex_connector_args are what lib/connectors.py codex prints for <list>: whole `-c`
-# `mcp_servers.<key>.enabled=false` pairs, then `--disable apps`; or nothing, for `all`. Anything else is
-# no answer, never taken for "no limit".
+# Whether codex_connector_args are what lib/connectors.py codex prints for <list>: nothing, for `all`;
+# `--disable apps`; or `-c`, one `mcp_servers={...={enabled=false}}` table, then `--disable apps`.
+# Anything else is no answer, never taken for "no limit".
 codex_connector_args_valid() { # <list>
-  local i=0 n=${#codex_connector_args[@]} list="${1//[[:space:]]/}"
-  [ "$n" -gt 0 ] || [ "$list" = all ] || return 1
-  [ "$n" -gt 0 ] || return 0
-  while [ "$((n - i))" -ge 2 ] && [ "${codex_connector_args[$i]}" = -c ]; do
-    case "${codex_connector_args[$((i + 1))]}" in
-      mcp_servers.*.enabled=false) i=$((i + 2)) ;;
-      *) return 1 ;;
-    esac
-  done
-  [ "$((n - i))" = 2 ] && [ "${codex_connector_args[$i]}" = --disable ] && [ "${codex_connector_args[$((i + 1))]}" = apps ]
+  local n=${#codex_connector_args[@]} list="${1//[[:space:]]/}"
+  case "$n" in
+    0) [ "$list" = all ] ;;
+    2) disables_apps 0 ;;
+    4)
+      [ "${codex_connector_args[0]}" = -c ] && disables_apps 2 &&
+        case "${codex_connector_args[1]}" in
+          "mcp_servers={"*"={enabled=false}}") return 0 ;;
+          *) return 1 ;;
+        esac
+      ;;
+    *) return 1 ;;
+  esac
+}
+disables_apps() { # <index>: codex_connector_args from there are `--disable apps`
+  [ "${codex_connector_args[$1]}" = --disable ] && [ "${codex_connector_args[$(($1 + 1))]}" = apps ]
 }
 
 # What Codex's sandbox must let a session reach. It keeps a repo's .git read-only by default, so nothing
 # could be committed; a task also goes through bosun's state, and the network for git and gh.
 # What needs more than that (a login in the Keychain) goes past the sandbox through the reviewer.
+# No update screen: once Codex has seen a newer version of itself, a start waits at one for a key, which
+# stalls an unattended start and which the Enter `bosun send` presses would answer.
 build_agent_args() { # <window> <session name> <model> <effort>
   local git_dir roots notify
   git_dir="$(git rev-parse --path-format=absolute --git-common-dir 2>/dev/null)"
@@ -60,6 +69,7 @@ build_agent_args() { # <window> <session name> <model> <effort>
   agent_args=($BOSUN_CODEX_FLAGS
     -c "sandbox_workspace_write.writable_roots=$roots"
     -c "sandbox_workspace_write.network_access=true"
+    -c "check_for_update_on_startup=false"
     -c "notify=$notify")
   [ -n "$3" ] && [ "$3" != "-" ] && agent_args+=(--model "$3")
   [ -n "$4" ] && [ "$4" != "-" ] && agent_args+=(-c "model_reasoning_effort=\"$4\"")
