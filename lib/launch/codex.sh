@@ -7,13 +7,13 @@
 AGENT_BIN="$BOSUN_CODEX_BIN"
 
 # Sets codex_connector_args to the launch arguments that limit window <name>, launched in this folder, to
-# its list (window_connectors; docs/design/connectors.md): one `-c mcp_servers={<key>={enabled=false},...}`
-# for the servers it does not name (none when there are none), and `--disable apps`, as lib/connectors.py
-# prints them. None for `all`. Once
-# per process: a launch builds its arguments twice, and the second time reuses the first lookup. A
-# listing that fails, or arguments that are not what it prints, stop the launch: the window never starts
-# with a server its list does not name. Call it in the shell itself, not in $(...), which would lose both
-# the result and the die.
+# its list (window_connectors; docs/design/connectors.md), as lib/connectors.py prints them: one
+# `-c mcp_servers={<key>={enabled=false},...}` for the configured servers it does not name (none when there
+# are none), `--disable plugins` when it does not name one of the plugins' servers, and `--disable apps`.
+# None for `all`. Once per process: a launch builds its arguments twice, and the second time reuses the
+# first lookup. A listing that fails, or arguments not of that shape, stop the launch: the window never
+# starts with a server its list does not name. Call it in the shell itself, not in $(...), which would lose
+# both the result and the die.
 set_codex_connector_args() { # <name>
   [ "${codex_connector_window-}" = "$1" ] && return 0
   local list output line
@@ -31,26 +31,26 @@ set_codex_connector_args() { # <name>
   codex_connector_window="$1"
 }
 
-# Whether codex_connector_args are what lib/connectors.py codex prints for <list>: nothing, for `all`;
-# `--disable apps`; or `-c`, one `mcp_servers={...={enabled=false}}` table, then `--disable apps`.
-# Anything else is no answer, never taken for "no limit".
+# Whether codex_connector_args have the shape of what lib/connectors.py codex prints for <list>: nothing,
+# for `all`; otherwise, in this order, an optional `-c` with an `mcp_servers={...}` table, an optional
+# `--disable plugins`, then `--disable apps`, and nothing after. A shape check only, so that a missing or
+# garbled answer is never taken for "no limit"; what the table holds is lib/connectors.py's (its tests read
+# it back as TOML).
 codex_connector_args_valid() { # <list>
-  local n=${#codex_connector_args[@]} list="${1//[[:space:]]/}"
-  case "$n" in
-    0) [ "$list" = all ] ;;
-    2) disables_apps 0 ;;
-    4)
-      [ "${codex_connector_args[0]}" = -c ] && disables_apps 2 &&
-        case "${codex_connector_args[1]}" in
-          "mcp_servers={"*"={enabled=false}}") return 0 ;;
-          *) return 1 ;;
-        esac
-      ;;
-    *) return 1 ;;
-  esac
+  local n=${#codex_connector_args[@]} i=0 list="${1//[[:space:]]/}"
+  [ "$n" -gt 0 ] || [ "$list" = all ] || return 1
+  [ "$n" -gt 0 ] || return 0
+  if [ "${codex_connector_args[0]}" = -c ]; then
+    case "${codex_connector_args[1]-}" in
+      "mcp_servers={"*"}") i=2 ;;
+      *) return 1 ;;
+    esac
+  fi
+  codex_disables "$i" plugins && i=$((i + 2))
+  codex_disables "$i" apps && [ "$n" = $((i + 2)) ]
 }
-disables_apps() { # <index>: codex_connector_args from there are `--disable apps`
-  [ "${codex_connector_args[$1]}" = --disable ] && [ "${codex_connector_args[$(($1 + 1))]}" = apps ]
+codex_disables() { # <index> <feature>: codex_connector_args from <index> are `--disable <feature>`
+  [ "${codex_connector_args[$1]-}" = --disable ] && [ "${codex_connector_args[$(($1 + 1))]-}" = "$2" ]
 }
 
 # What Codex's sandbox must let a session reach. It keeps a repo's .git read-only by default, so nothing

@@ -237,8 +237,9 @@ of truth, so don't copy rules into this file.
   config value, never code: `BOSUN_ORCHESTRATOR_CONNECTORS`, `BOSUN_CONNECTORS` or `connectors:` in a
   `sessions.yml` entry, in the site's config dir (`bosun init` asks for the orchestrator's). No server's
   name goes in the repo. A new way to name a server, or an agent update that changes how one is switched
-  off: `lib/connectors.py`, `docs/design/connectors.md`, and a run of `tests/sandbox.sh mac live` (its
-  connectors part).
+  off: `lib/connectors.py` (on Codex, `codex_args` and its shape check `codex_connector_args_valid` in
+  `lib/launch/codex.sh` change together), `docs/design/connectors.md`, and a run of `tests/sandbox.sh mac
+  live` (its connectors part).
 - **An outward tool to gate** (approvals): a row in `GATED_MCP` / `GATED_COMMANDS` (`lib/guard.py`)
   and its `ask` rule in `orchestrator/settings.json`; a standing class: `STANDING_CLASSES` and its
   check in `lib/approvals.py`, its config keys, the design note and `docs/permissions.md`.

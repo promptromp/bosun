@@ -246,7 +246,8 @@ class LaunchCommandTest(unittest.TestCase):
         self.state = tmp / "state"
         # A Codex that lists no MCP servers, which is what a launch asks it, and does no more.
         self.codex = tmp / "codex"
-        self.codex.write_text("#!/bin/sh\n[ \"$1 $2 $3\" = 'mcp list --json' ] && echo '[]'\n")
+        # Its servers, with plugins and without (`--disable plugins`): none.
+        self.codex.write_text("#!/bin/sh\ncase \"$*\" in *'mcp list --json') echo '[]' ;; esac\n")
         self.codex.chmod(0o755)
         self.env = {
             "PATH": os.environ["PATH"],

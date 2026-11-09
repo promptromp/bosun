@@ -340,8 +340,9 @@ says how to narrow it. The recommendation ticks the one repo I use most, and an 
 sets up no repo windows or connectors. Run in the macOS VM with real Claude Code and Codex windows and local
 test servers: the allow lists hold, new and resumed, a repo's own servers included. The runs changed how a
 Codex window switches servers off (one inline table, since Codex splits a `-c` key at every dot, so a server
-named with a dot stopped every Codex window) and turned off Codex's update screen, which stalled a restart.
-Codex's built-in servers stay on, as Claude Code's Chrome does. A plugin's server that `installed_plugins.json`
+named with a dot stopped every Codex window; a plugin's server only by switching every plugin off, since
+Codex says nowhere which plugin a server is from) and turned off Codex's update screen, which stalled a
+restart. Codex's built-in servers stay on, as Claude Code's Chrome does. A plugin's server that `installed_plugins.json`
 does not list (synced from the account, `--plugin-dir`, managed) is allowed by what `claude mcp list` shows for it. Design note:
 [docs/design/connectors.md](docs/design/connectors.md).
 

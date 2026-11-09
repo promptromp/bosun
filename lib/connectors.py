@@ -20,8 +20,9 @@ Usage: connectors.py claude --list <value> --cwd <dir> --state-dir <dir> --agent
            (after an unexpected error, every name of the list): what a caller tells me, never parsed
            from stderr.
        connectors.py codex --list <value> --agent-bin <codex>
-           Codex's launch arguments, one per line: each listed server the list does not name switched
-           off, and ChatGPT's connectors unless the list is `all`.
+           Codex's launch arguments, one per line, from `codex mcp list --json` with plugins and
+           without: each configured server the list does not name switched off, every plugin when it
+           does not name one of their servers, and ChatGPT's connectors; nothing for `all`.
        connectors.py doctor --window <name> --kind <kind> --harness claude|codex --list <value>
                             --cwd <dir> --state-dir <dir> --agent-bin <agent>
            bosun doctor's line for a window: `ok` or `warn`, a tab, then what it reaches (names only),
@@ -215,17 +216,45 @@ def toml_key(name: str) -> str:
     return name if is_plain(name) else toml_string(name)
 
 
-def codex_args(allowed: Allowed, servers: Sequence[str]) -> list[str]:
-    """Codex's launch arguments: every one of <servers> the list does not name switched off, in one
-    inline table (`-c mcp_servers={<key>={enabled=false},...}`, which Codex merges into its
-    configuration), and ChatGPT's connectors (its `apps` feature) off; nothing for `all`. One table,
-    because Codex splits a `-c` key at every dot, quotes included, so `mcp_servers."a.b".enabled`
-    names another server; inside a value its TOML parser reads quoted keys as TOML does."""
+@dataclass(frozen=True)
+class CodexPlan:
+    """What a Codex window's launch switches off, from its list and its servers: <off>, the configured
+    servers it does not name, each by name; every plugin when it does not name one of the plugins'
+    servers (<unnamed>), which also drops those of them it names (<dropped>)."""
+
+    off: tuple[str, ...]
+    unnamed: tuple[str, ...]
+    dropped: tuple[str, ...]
+
+    @property
+    def plugins_off(self) -> bool:
+        return bool(self.unnamed)
+
+
+def codex_plan(allowed: Allowed, servers: codex_state.McpServers) -> CodexPlan:
+    unnamed = tuple(name for name in servers.plugins if name not in allowed.names)
+    dropped = tuple(name for name in servers.plugins if name in allowed.names) if unnamed else ()
+    return CodexPlan(
+        tuple(name for name in servers.configured if name not in allowed.names), unnamed, dropped
+    )
+
+
+def codex_args(allowed: Allowed, servers: codex_state.McpServers) -> list[str]:
+    """Codex's launch arguments; nothing for `all`. Every configured server the list does not name
+    switched off, in one inline table (`-c mcp_servers={<key>={enabled=false},...}`, which Codex merges
+    into its configuration); every plugin (`--disable plugins`) when the list does not name one of
+    their servers, since a plugin's server is not an `mcp_servers` table (naming one there stops Codex)
+    and nothing says which plugin it is from; and ChatGPT's connectors (its `apps` feature). One
+    table, because Codex splits a `-c` key at every dot, quotes included, so
+    `mcp_servers."a.b".enabled` names another server; inside a value its TOML parser reads quoted keys
+    as TOML does."""
     if allowed.everything:
         return []
-    off = [f"{toml_key(server)}={{enabled=false}}" for server in servers if server not in allowed.names]
+    plan = codex_plan(allowed, servers)
+    off = [f"{toml_key(server)}={{enabled=false}}" for server in plan.off]
     table = ["-c", f"mcp_servers={{{','.join(off)}}}"] if off else []
-    return [*table, "--disable", "apps"]
+    plugins = ["--disable", "plugins"] if plan.plugins_off else []
+    return [*table, *plugins, "--disable", "apps"]
 
 
 # ---- bosun doctor ---------------------------------------------------------------------------------
@@ -241,6 +270,10 @@ NOT_KEPT = (
 )
 CODEX_OFF = "switches off {}ChatGPT's connectors"
 MEANINGLESS = "mean nothing to Codex: {}"
+DROPPED = (
+    "every plugin is switched off for the plugin servers its list does not name, so it also starts "
+    "without: {}"
+)
 
 
 def _report(window: str, reach: str, problems: Sequence[str]) -> tuple[str, str]:
@@ -283,31 +316,37 @@ def means_nothing_to_codex(name: str) -> bool:
     return is_url(name) or claude_state.is_claude_ai_connector(name)
 
 
-def _codex_off(allowed: Allowed, servers: Sequence[str]) -> str:
-    """What a Codex window's launch switches off: each server its list does not name, and ChatGPT's."""
-    off = [server for server in servers if server not in allowed.names]
+def _codex_off(plan: CodexPlan) -> str:
+    """What a Codex window's launch switches off: each configured server its list does not name, every
+    plugin when it does not name one of their servers, and ChatGPT's connectors."""
+    plugins = [f"every plugin (with {', '.join(plan.unnamed + plan.dropped)})"] if plan.plugins_off else []
+    off = [*plan.off, *plugins]
     return CODEX_OFF.format(f"{', '.join(off)} and " if off else "")
 
 
-def _codex_names(allowed: Allowed, servers: Sequence[str]) -> tuple[list[str], list[str], list[str]]:
-    """The names of a Codex window's list it has a server by, those it has none by, and those that
-    mean nothing to Codex."""
-    unknown = [name for name in allowed.names if name not in servers]
+def _codex_names(allowed: Allowed, servers: codex_state.McpServers) -> tuple[list[str], list[str]]:
+    """The names of a Codex window's list it has no server by, and those that mean nothing to Codex."""
+    unknown = [name for name in allowed.names if name not in (*servers.configured, *servers.plugins)]
     meaningless = [name for name in unknown if means_nothing_to_codex(name)]
-    reached = [name for name in allowed.names if name in servers]
-    return reached, [name for name in unknown if name not in meaningless], meaningless
+    return [name for name in unknown if name not in meaningless], meaningless
 
 
-def codex_report(window: str, kind: str, allowed: Allowed, servers: Sequence[str]) -> tuple[str, str]:
-    """A Codex window's line, from the names of its servers (<servers>): what it keeps, what it
-    switches off, and the names it has no server by."""
+def codex_report(
+    window: str, kind: str, allowed: Allowed, servers: codex_state.McpServers
+) -> tuple[str, str]:
+    """A Codex window's line, from its servers: what it keeps, what it switches off, the plugin
+    servers it names that go with every plugin, and the names it has no server by."""
     if allowed.everything:
         return _everything(window, kind)
+    plan = codex_plan(allowed, servers)
     if not allowed.names:
-        return OK, f"{window}: none ({_codex_off(allowed, servers)})"
-    reached, not_found, meaningless = _codex_names(allowed, servers)
-    reach = f"reaches {', '.join(reached) or 'nothing'} ({_codex_off(allowed, servers)})"
-    return _report(window, reach, [_part(NOT_FOUND, not_found), _part(MEANINGLESS, meaningless)])
+        return OK, f"{window}: none ({_codex_off(plan)})"
+    kept = [*servers.configured, *(() if plan.plugins_off else servers.plugins)]
+    reached = [name for name in allowed.names if name in kept]
+    not_found, meaningless = _codex_names(allowed, servers)
+    reach = f"reaches {', '.join(reached) or 'nothing'} ({_codex_off(plan)})"
+    problems = [_part(DROPPED, plan.dropped), _part(NOT_FOUND, not_found), _part(MEANINGLESS, meaningless)]
+    return _report(window, reach, problems)
 
 
 def _claude_line(args: argparse.Namespace, allowed: Allowed) -> tuple[str, str]:
@@ -319,7 +358,7 @@ def _codex_line(args: argparse.Namespace, allowed: Allowed) -> tuple[str, str]:
     if allowed.everything:
         return _everything(args.window, args.kind)
     try:
-        servers = codex_state.mcp_server_names(args.agent_bin, LOOKUP_TIMEOUT_SECONDS, args.cwd)
+        servers = codex_state.mcp_servers(args.agent_bin, LOOKUP_TIMEOUT_SECONDS, args.cwd)
     except codex_state.CodexListError as exc:
         why = f"codex mcp list failed ({exc}), so bosun cannot tell which servers to switch off"
         return WARN, f"{args.window}: does not start: {why}"
@@ -406,7 +445,7 @@ def cmd_codex(args: argparse.Namespace) -> int:
     if allowed.everything:
         return 0
     try:
-        servers = codex_state.mcp_server_names(args.agent_bin, LOOKUP_TIMEOUT_SECONDS)
+        servers = codex_state.mcp_servers(args.agent_bin, LOOKUP_TIMEOUT_SECONDS)
     except codex_state.CodexListError as exc:
         say(f"codex mcp list failed ({exc}), so bosun cannot tell which servers to switch off")
         return 1

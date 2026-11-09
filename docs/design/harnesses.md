@@ -54,10 +54,13 @@ auto mode. On top of that, `lib/launch/codex.sh` adds what a task always needs:
 **What a window reaches.** A Codex window starts with the MCP servers its connectors list names, as a
 Claude Code window does ([connectors](connectors.md)). At launch `lib/launch/codex.sh` has
 `lib/connectors.py codex` list the servers Codex would start in that folder (`codex mcp list --json`, names
-only: a stdio server's entry holds its environment in plain text) and add one `-c
-mcp_servers={<name>={enabled=false},...}` for every one the list does not name, each name a bare TOML key or
-a TOML basic string, and `--disable apps` to switch ChatGPT's connectors off, unless the list is `all`. One
-inline table, because Codex splits a `-c` path at every dot, quotes included (`config/src/overrides.rs`), so
+only: a stdio server's entry holds its environment in plain text), once with plugins and once with
+`--disable plugins`, so a server only in the first is a plugin's. It adds one `-c
+mcp_servers={<name>={enabled=false},...}` for every configured server the list does not name, each name a
+bare TOML key or a TOML basic string; `--disable plugins` when the list does not name one of the plugins'
+servers, since a plugin's server is not an `mcp_servers` table (naming one there stops Codex) and nothing
+Codex prints says which plugin it is from, so every plugin goes, a plugin server the list names too; and
+`--disable apps` to switch ChatGPT's connectors off; nothing for `all`. One inline table, because Codex splits a `-c` path at every dot, quotes included (`config/src/overrides.rs`), so
 `-c mcp_servers."a.b".enabled=false` names a server `"a` and Codex exits at start (`invalid transport`); a
 table in the value is read as TOML and merges into the configuration. The Mac VM (`tests/sandbox.sh mac live
 codex`, Codex 0.166.0) showed it for a user's server, a project's and one named with a dot, new and after
@@ -65,7 +68,7 @@ codex`, Codex 0.166.0) showed it for a user's server, a project's and one named 
 ([connectors](connectors.md#what-the-vm-showed)). Codex's built-in servers (`codex_worktrees`, and
 `codex_apps` without `--disable apps`) are not in the listing and stay on, as Claude Code's Chrome and
 computer-use do: they are local, and a list cannot name them. A listing that fails, or arguments of any other
-shape than one table and `--disable apps`, keep the window from starting: bosun cannot tell which servers to
+shape than `[-c mcp_servers={...}] [--disable plugins] --disable apps`, keep the window from starting: bosun cannot tell which servers to
 switch off, and it would rather not start the window than start it with all of them. A launch lists once,
 however many times it builds its arguments. `launch --fingerprint` lists too, since the fingerprint holds
 these arguments; when that fails during an update, the window reads as changed and its restart refuses to

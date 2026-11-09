@@ -354,6 +354,8 @@ prompts_by_hand() {
   prompt_for take-stock >"$OUT/take-stock.txt"
   check "the take-stock prompt, to Codex" bosun send --no-item exporter - <"$OUT/take-stock.txt"
   check "... it lists its background work with bosun update note --stock" wait_for 240 noted exporter stock
+  # Its turn goes on after the note; an update restarts a window only once that turn is over.
+  check "... and its turn ends" wait_for 120 idle exporter
   prompt_for restarted >"$OUT/update-prompt.txt"
   before="$(pid_of exporter)"
   check "... restarted with the update prompt" bosun refresh --update-restart "$OUT/update-prompt.txt" exporter
@@ -498,12 +500,23 @@ codex_servers() {
 
 # Its own /mcp, as a person looks: Claude Code's lists the servers it has (`✔ probe-allowed ... 1 tool`),
 # Codex's every server it is configured with, `connected (1 tool)` or `disabled (0 tools)`.
-mcp_screen() { # <file>
+mcp_title() { if [ "$AGENT" = "claude" ]; then echo "Manage MCP servers"; else echo "MCP Tools"; fi; }
+titles() { probe_pane | grep -cF "$(mcp_title)"; }
+mcp_shown() { # <how many titles the pane showed before>: one more now, and the pane stays as it is for a second
+  local now
+  now="$(probe_pane)"
+  [ "$(grep -cF "$(mcp_title)" <<<"$now")" -gt "$1" ] && sleep 1 && [ "$now" = "$(probe_pane)" ]
+}
+mcp_screen() { # <file>: what its last /mcp shows, from its title down
+  local before title
+  title="$(mcp_title)"
+  tmux -L bosun clear-history -t "=bosun:=$PROBE_WINDOW"
+  before="$(titles)"
   tmux -L bosun send-keys -t "=bosun:=$PROBE_WINDOW" "/mcp"
-  sleep 2
+  sleep 1
   tmux -L bosun send-keys -t "=bosun:=$PROBE_WINDOW" Enter
-  sleep 6
-  probe_pane >"$1"
+  wait_for 30 mcp_shown "$before" || echo "  note  /mcp did not show its title in 30 seconds"
+  probe_pane | sed -n "/$title/h; /$title/!H; \${x;p;}" >"$1"
   [ "$AGENT" = "claude" ] && tmux -L bosun send-keys -t "=bosun:=$PROBE_WINDOW" Escape
   grep -iE "mcp|server|probe|tool" "$1" | grep -v '^[[:space:]]*$' | tail -30 | cut -c1-110 | sed 's/^/  \/mcp  /'
 }
@@ -511,7 +524,7 @@ mcp_shows_only_allowed() { # <file>
   if [ "$AGENT" = "claude" ]; then
     grep -q "Manage MCP servers" "$1" && grep -q "probe-allowed" "$1" && ! grep -qE "probe-(blocked|project)" "$1"
   else
-    grep -q "probe-allowed: connected" "$1" && ! grep -qE "probe[-.](blocked|dotted|project): connected" "$1"
+    grep -q "probe-allowed: connected" "$1" && ! grep -qE "probe[-.](blocked|dotted|project|plugin): connected" "$1"
   fi
 }
 
@@ -533,7 +546,7 @@ probe_restarted() { # <what>: its agent stopped and relaunched by bosun refresh,
   pid="$(pid_of "$PROBE_WINDOW")"
   before="$(window "$PROBE_WINDOW" sessionId)"
   [ -n "$pid" ] && kill -TERM "$pid"
-  check "... its agent stopped" wait_for 60 bash -c '[ -z "$1" ] || ! kill -0 "$1"' _ "$pid"
+  check "... its agent stopped" wait_for 60 bash -c '[ -n "$1" ] && ! kill -0 "$1"' _ "$pid"
   : >"$PROBE_LOG"
   bosun refresh "$PROBE_WINDOW" >>"$OUT/probe-refresh.txt" 2>&1
   probe_started "$1"
@@ -555,6 +568,62 @@ dotted_name() {
     table="$(ps -o command= -p "$1" | grep -oE -- "-c mcp_servers=\{[^ ]*\} --disable apps")" &&
       for key in "\"probe.dotted\"" probe-blocked probe-project; do grep -qF "$key={enabled=false}" <<<"$table" || exit 1; done' _ "$(pid_of "$PROBE_WINDOW")"
   reaches_only_allowed "with probe.dotted" blocked dotted project
+}
+
+# On Codex, a plugin's server (probe-plugin, of a plugin probe-kit from a local marketplace): it is no
+# `mcp_servers` table, so a list that does not name it switches every plugin off, and one that names it
+# keeps them on. The layout is Codex's (core-plugins: `.agents/plugins/marketplace.json`, the plugin's
+# `.codex-plugin/plugin.json` and `.mcp.json`).
+PROBE_MARKET="$HOME/probe-market"
+a_codex_plugin() {
+  local kit="$PROBE_MARKET/plugins/probe-kit"
+  mkdir -p "$PROBE_MARKET/.agents/plugins" "$kit/.codex-plugin"
+  echo '{"name": "probe-market", "plugins": [{"name": "probe-kit", "source": {"source": "local", "path": "./plugins/probe-kit"}}]}' \
+    >"$PROBE_MARKET/.agents/plugins/marketplace.json"
+  echo '{"name": "probe-kit", "version": "0.1.0", "description": "a probe server for the sandbox"}' >"$kit/.codex-plugin/plugin.json"
+  jq -n --arg python "$(command -v python3)" --argjson args "$(probe_args plugin)" \
+    '{mcpServers: {"probe-plugin": {command: $python, args: $args}}}' >"$kit/.mcp.json"
+  if ! codex plugin marketplace add "$PROBE_MARKET" >"$OUT/plugin-add.txt" 2>&1 ||
+    ! codex plugin add probe-kit@probe-market >>"$OUT/plugin-add.txt" 2>&1; then
+    cat "$OUT/plugin-add.txt"
+    return 1
+  fi
+}
+plugin_listed_and_starts() { # in the listing, not in the one without plugins, and started with no limit
+  local every configured
+  every="$(cd "$PROBE_REPO" && codex mcp list --json | jq -c '[.[].name]')"
+  configured="$(cd "$PROBE_REPO" && codex --disable plugins mcp list --json | jq -c '[.[].name]')"
+  if ! jq -e 'any(. == "probe-plugin")' <<<"$every" >/dev/null || jq -e 'any(. == "probe-plugin")' <<<"$configured" >/dev/null; then
+    echo "with plugins: $every; without: $configured"
+    return 1
+  fi
+  : >"$PROBE_LOG"
+  codex_turn
+  all_started plugin
+}
+launched_with() { # <grep -E pattern> [!]: the window's launch line has it (or, with !, has not)
+  local line
+  line="$(ps -o command= -p "$(pid_of "$PROBE_WINDOW")")"
+  if [ "${2:-}" = "!" ]; then ! grep -qE -- "$1" <<<"$line"; else grep -qE -- "$1" <<<"$line"; fi
+}
+mcp_shows_plugin_kept() { # <file>
+  grep -q "probe-allowed: connected" "$1" && grep -q "probe-plugin: connected" "$1" &&
+    ! grep -qE "probe[-.](blocked|dotted|project): connected" "$1"
+}
+plugin_server() {
+  check "Codex takes a local plugin with a server, probe-plugin" a_codex_plugin
+  check "... a plugin's server: listed with plugins on and not without, and started with no limit" plugin_listed_and_starts
+  probe_restarted "relaunched with the plugin installed, it resumes"
+  check "... launched with every plugin switched off, since its list does not name probe-plugin" launched_with "--disable plugins --disable apps"
+  check "... and probe-plugin in no table (a plugin's server is not an mcp_servers table)" launched_with "mcp_servers=\{[^ ]*probe-plugin" !
+  reaches_only_allowed "plugins off" blocked dotted project plugin
+  echo 'BOSUN_CONNECTORS="probe-allowed, probe-plugin"' >>"$CONFIG/bosun.env"
+  probe_restarted "with a list that names probe-plugin, relaunched, it resumes"
+  check "... launched with plugins on" launched_with "--disable plugins" !
+  check "... it started probe-allowed and probe-plugin and none of the others" bash -c '
+    grep -qx "allowed initialize" "$1" && grep -qx "plugin initialize" "$1" && ! grep -qE "^(blocked|dotted|project) initialize" "$1" || { tr "\n" " " <"$1"; exit 1; }' _ "$PROBE_LOG"
+  mcp_screen "$OUT/mcp-plugin-kept.txt"
+  check "... its /mcp shows probe-allowed and probe-plugin connected, and none of the others" mcp_shows_plugin_kept "$OUT/mcp-plugin-kept.txt"
 }
 
 connectors() {
@@ -584,7 +653,10 @@ connectors() {
   check "... and answers" wait_for 120 idle "$PROBE_WINDOW"
   probe_restarted "relaunched, it resumes its session"
   reaches_only_allowed "resumed" blocked project
-  [ "$AGENT" = "codex" ] && dotted_name
+  if [ "$AGENT" = "codex" ]; then
+    dotted_name
+    plugin_server
+  fi
 }
 
 # While bosun uninstall runs, until $OUT/recorded is there: each process in the sessions of bosun's panes

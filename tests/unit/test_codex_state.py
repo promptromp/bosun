@@ -371,6 +371,26 @@ class McpNamesTest(unittest.TestCase):
         self.assertEqual(codex_state.mcp_server_names(self.listing(servers)), ["acme-docs", "acme.mail"])
         self.assertEqual(codex_state.mcp_server_names(self.listing([])), [])
 
+    def test_mcp_names_each_once(self) -> None:
+        listing = [{"name": "acme-docs"}, {"name": "acme.mail"}, {"name": "acme-docs"}]
+        self.assertEqual(codex_state.mcp_server_names(self.listing(listing)), ["acme-docs", "acme.mail"])
+
+    def test_mcp_servers_a_plugins_are_those_only_with_plugins_on(self) -> None:
+        every = self.root / "every.json"
+        configured = self.root / "configured.json"
+        every.write_text(
+            json.dumps([{"name": n} for n in ("acme-docs", "acme-kit", "acme.mail", "acme-kit")])
+        )
+        configured.write_text(json.dumps([{"name": n} for n in ("acme-docs", "acme.mail")]))
+        codex = self.fake_codex(
+            f'case "$*" in\n  "mcp list --json") cat "{every}" ;;\n'
+            f'  "--disable plugins mcp list --json") cat "{configured}" ;;\n  *) exit 9 ;;\nesac'
+        )
+        self.assertEqual(
+            codex_state.mcp_servers(codex), codex_state.McpServers(("acme-docs", "acme.mail"), ("acme-kit",))
+        )
+        self.assertEqual(codex_state.mcp_server_names(codex, plugins=False), ["acme-docs", "acme.mail"])
+
     def test_mcp_list_failure_raises(self) -> None:
         for codex in (
             self.fake_codex("exit 1"),

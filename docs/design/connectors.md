@@ -7,9 +7,9 @@ missed, and an unattended install grants nothing nobody saw.
 Run 2026-11-09 in the macOS VM (`tests/sandbox.sh mac run`, `mac live claude`, `mac live codex`, `mac
 work`), with real Claude Code and Codex 0.166.0 windows and local test servers: Claude Code's allow list
 holds, new and resumed; on Codex, the servers a window's list does not name are switched off in one inline
-table, a user's, a project's and one named with a dot, new and resumed, and `--disable apps` is taken. The
-first form, a `-c mcp_servers.<name>.enabled=false` per server, could not name a server with a dot, so the
-VM changed it ([What the VM showed](#what-the-vm-showed)).
+table, a user's, a project's and one named with a dot, new and resumed, a local plugin's by switching every
+plugin off, and `--disable apps` is taken. The first form, a `-c mcp_servers.<name>.enabled=false` per
+server, could not name a server with a dot, so the VM changed it ([What the VM showed](#what-the-vm-showed)).
 
 ## Why
 
@@ -71,16 +71,23 @@ or command and its health, claude.ai connectors included (with `ENABLE_CLAUDEAI_
 about 4 seconds; it connects to each to check it. Allow lists from every settings scope add up, so an
 allow list in my own `~/.claude/settings.json` would widen a window's; deny lists add up too.
 
-Codex 0.167.0, from its docs and source (checked in the VM: [What the VM showed](#what-the-vm-showed)): servers come from `[mcp_servers.<name>]`
-in `~/.codex/config.toml`, a trusted project's `.codex/config.toml`, profiles and plugins; ChatGPT's
-connectors are one built-in server, `codex_apps`, present with a ChatGPT login. A launch turns servers
-off with an inline table, `-c 'mcp_servers={<name>={enabled=false},...}'`, which merges into the
-configuration (so `-c mcp_servers={}` removes nothing), and the connectors with `--disable apps`. The form
-`-c mcp_servers.<name>.enabled=false` only works for a bare name: Codex splits a `-c` path at every dot,
-quotes included (`config/src/overrides.rs`). `codex mcp list --json` lists the configured and plugin
-servers by name (not its built-ins, `codex_apps` and `codex_worktrees`), with each stdio server's
-environment in plain text, so a caller keeps the names only. bosun already launches Codex with `--no-daemon`, without which a shared background server may
-ignore the overrides.
+Codex, from its docs and source (0.167.0) and checked in the VM on 0.166.0 ([What the VM
+showed](#what-the-vm-showed)): servers come from `[mcp_servers.<name>]` in `~/.codex/config.toml`, a
+trusted project's `.codex/config.toml`, profiles and plugins; ChatGPT's connectors are one built-in server,
+`codex_apps`, present with a ChatGPT login. A launch turns configured servers off with an inline table,
+`-c 'mcp_servers={<name>={enabled=false},...}'`, which merges into the configuration (so `-c
+mcp_servers={}` removes nothing), and the connectors with `--disable apps`. The form `-c
+mcp_servers.<name>.enabled=false` only works for a bare name: Codex splits a `-c` path at every dot, quotes
+included (`config/src/overrides.rs`). A plugin's server is no `mcp_servers` table: naming one in that table
+makes a server without a command, and Codex stops (`invalid transport`). It switches off under
+`plugins.<plugin>.mcp_servers.<server>.enabled` (`config/src/types.rs`), but nothing Codex prints says which
+plugin a server is from (`codex mcp list --json` has no plugin field, and `codex plugin list --json` does
+not list a plugin's servers), so a launch can only turn every plugin off, with `--disable plugins`.
+`codex mcp list --json` lists the configured and plugin servers by name (not its built-ins, `codex_apps`
+and `codex_worktrees`), with each stdio server's environment in plain text, so a caller keeps the names
+only; with `--disable plugins` it lists the configured ones only, so a server in the first listing and not
+the second is a plugin's. bosun already launches Codex with `--no-daemon`, without which a shared
+background server may ignore the overrides.
 
 ### What the VM showed
 
@@ -99,6 +106,9 @@ never from what its model says (a model leaves deferred tools out of a list):
 | `-c mcp_servers."probe.dotted".enabled=false` (the name quoted as a TOML key) | **refuted**: Codex splits a `-c` key at every dot, quotes or not, so this makes a server named `"probe` with no command, and Codex exits at start with `Error: invalid transport in mcp_servers."probe`. The window does not start (fail closed), and since the launch switches off every server its list does not name, one such server in Codex's configuration keeps every Codex window from starting |
 | `-c 'mcp_servers={"probe.dotted"={enabled=false}}'` (an inline table) | merges into the configuration rather than replacing it: `codex mcp list --json` shows that server `enabled: false` with its command kept and the others as they were, and `codex exec` with it started all but that one. One inline table naming three servers, with `--disable apps`, started only the fourth |
 | the launch's one inline table for every server not named, `probe.dotted` among them | confirmed: a new window and a resumed one started only the allowed server, and `/mcp` showed the others `disabled (0 tools)` |
+| a plugin's server (`probe-plugin`, of a local plugin added with `codex plugin marketplace add` and `codex plugin add`) | `codex mcp list --json` lists it, and does not with `--disable plugins`; with no limit `codex exec` started it. Named in the `mcp_servers` table, Codex stops (`invalid transport`, seen by the controller on 0.167.0) |
+| a list that does not name the plugin's server | the launch passes `--disable plugins`, with the server in no table: after a restart that resumed the session, only the allowed server started, and `/mcp` did not list `probe-plugin` |
+| a list that names it | no `--disable plugins`: the allowed server and `probe-plugin` started, `/mcp` showed both `connected (1 tool)` and the others `disabled (0 tools)` |
 | what `codex mcp list --json` leaves out | besides `codex_apps`, a built-in `codex_worktrees` server (3 tools), which `/mcp` shows `connected` in every window. Codex's built-ins stay on, as Claude Code's Chrome and computer-use do: they are local, and a list cannot name what the listing does not show |
 | Codex's own update screen | once Codex has seen a newer version of itself, a start shows "Update available" and waits for a key, which stalled a restart; so the launch passes `-c check_for_update_on_startup=false` (the key Codex documents for centrally managed updates) |
 
@@ -164,17 +174,22 @@ the Slack watcher, the login check) do not change.
 
 ### Codex
 
-At launch, `lib/launch/codex.sh` lists the servers (`codex mcp list --json`, names only, never logged
-whole) and adds one `-c mcp_servers={<name>={enabled=false},...}` for every one the list does not name
-(none when there are none), each name a bare TOML key when it can be and otherwise a TOML basic string,
-its quote, backslash and control characters escaped. One table rather than a `-c` per server, because Codex
-splits a `-c` path at every dot. `--disable apps` unless the list is `all`, which adds nothing. Codex's
-built-in servers (`codex_worktrees`) stay on, as Claude Code's Chrome does: they are local, and the listing
-does not show them, so a list cannot name them. URL patterns and `claude.ai` names mean nothing to Codex:
-doctor says so for a Codex window. A listing that fails, or arguments that are not that shape, keep the
-window from starting, and the launch says why: without it, bosun cannot tell which servers to switch off.
-The VM checked the facts this rests on ([What the VM showed](#what-the-vm-showed)), and `lib/codex_state.py`'s
-note and `docs/design/harnesses.md` record them.
+At launch, `lib/launch/codex.sh` lists the servers twice (`codex mcp list --json`, with plugins and with
+`--disable plugins`; names only, each once, never logged whole): a server only in the first is a plugin's.
+It adds one `-c mcp_servers={<name>={enabled=false},...}` for every configured server the list does not
+name (none when there are none), each name a bare TOML key when it can be and otherwise a TOML basic
+string, its quote, backslash and control characters escaped; one table rather than a `-c` per server,
+because Codex splits a `-c` path at every dot. When the list does not name one of the plugins' servers, it
+adds `--disable plugins`, which turns every plugin off: a plugin's server cannot go in that table, and
+nothing says which plugin it is from. That also drops every plugin's skills, and a plugin server the list
+does name, which doctor warns about. Then `--disable apps`; the list `all` adds nothing. Codex's built-in
+servers (`codex_worktrees`) stay on, as Claude Code's Chrome does: they are local, and the listing does not
+show them, so a list cannot name them. URL patterns and `claude.ai` names mean nothing to Codex: doctor
+says so for a Codex window. A listing that fails, or arguments not of the shape `[-c mcp_servers={...}]
+[--disable plugins] --disable apps` (or nothing, for `all`), keep the window from starting, and the launch
+says why: without it, bosun cannot tell which servers to switch off. The launch also passes `-c
+check_for_update_on_startup=false`. The VM checked the facts this rests on ([What the VM
+showed](#what-the-vm-showed)), and `lib/codex_state.py`'s note and `docs/design/harnesses.md` record them.
 
 ### Existing installs
 
@@ -275,7 +290,7 @@ claude.ai names as meaning nothing there.
 |---|---|
 | Unit | Each entry's resolution, `claude mcp list`'s text parsed (placeholder servers), an unresolved name left out, a failed lookup falling back to what was kept (and the alert when nothing was), the Codex arguments and a failed listing refusing the start, the kept config value written once and only when the update adds the key, the init recommendations, its re-run and `--unattended`, the gate's new verbs (and the noun-like words left out), camel case and Chrome actions, business days in a zone east and west of UTC |
 | Smoke | A launch's arguments for a window with none, a few, and `all` (the fake `claude` answers `mcp list`); `--fingerprint` running no lookup; the guard hook in the orchestrator's launch and in `chores --dry-run`; `--help` with no config; doctor's lines |
-| VM, `mac live` | Real Claude Code and Codex windows with local stdio test servers (one allowed, one not, one a project's, one a plugin's named through `${CLAUDE_PLUGIN_ROOT}`): each window lists only what it may reach; the Codex facts above; an orchestrator that had everything keeps it after an update and doctor warns |
+| VM, `mac live` | Real Claude Code and Codex windows with local stdio test servers (one allowed, one not, one a project's; on Codex also one named with a dot and one of a local plugin): each window starts and shows only what it may reach, new and resumed; on Codex a list that does not name the plugin's server switches every plugin off, and one that names it keeps plugins on; the Codex facts above. An orchestrator that had everything keeps it after an update and doctor warns: `mac work` |
 | This Mac | One interactive Claude Code window with an allow list naming one claude.ai connector, since only a real claude.ai login has them; it shows that one and none of the others |
 
 ## Later

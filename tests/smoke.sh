@@ -1203,7 +1203,7 @@ check "... with the update's prompt" wait_for 10 launched_with_update_prompt gam
 check "... on Claude, as it was launched" bash -c '
   screen="$(tmux -L "$1" capture-pane -p -J -S -500 -t "=smoke:gamma")"
   grep -q -- "--remote-control gamma" <<<"$screen" && ! grep -q codex-turn-end <<<"$screen"' _ "$SOCKET"
-printf '#!/bin/sh\n[ "$1" = mcp ] && echo "[]" && exit 0\necho "codex-cli 0.50.0"\n' >"$WORK/fake-codex"
+printf '#!/bin/sh\ncase "$*" in *"mcp list --json") echo "[]" && exit 0 ;; esac\necho "codex-cli 0.50.0"\n' >"$WORK/fake-codex"
 chmod +x "$WORK/fake-codex"
 wait_for 10 pane_is_idle gamma
 gamma_pane="$(pane_of gamma)"
@@ -2651,6 +2651,18 @@ for line in sys.stdin:
   out="$(codex_launch_args "$(CX launch cx-all)")"
   check "with connectors: all, nothing is switched off" bash -c '! grep -qF mcp_servers <<<"$1" && ! grep -qF -- --disable <<<"$1"' _ "$out"
   check "... and there is still no update screen" contains "$out" ' -c check_for_update_on_startup=false '
+  # A plugin's server: in the listing, but not in the one with --disable plugins.
+  printf '[{"name":"acme-docs"},{"name":"acme.mail"},{"name":"acme-kit"}]' >"$WORK/cx-servers-plugins.json"
+  CXP() { CODEX_STAND_IN_MCP_LIST="$WORK/cx-servers-plugins.json" CODEX_STAND_IN_MCP_LIST_NO_PLUGINS="$WORK/cx-servers.json" CX "$@"; }
+  out="$(codex_launch_args "$(CXP launch cx-docs)")"
+  check "a plugin's server the list does not name switches every plugin off, and is not in the table" bash -c '
+    grep -qF " -c mcp_servers={\"acme.mail\"={enabled=false}} --disable plugins --disable apps" <<<"$1" && ! grep -qF acme-kit <<<"$1"' _ "$out"
+  out="$(codex_launch_args "$(BOSUN_CONNECTORS=acme-kit CXP launch cx)")"
+  check "... and a list that names it keeps plugins on" bash -c '
+    grep -qF " -c mcp_servers={acme-docs={enabled=false},\"acme.mail\"={enabled=false}} --disable apps" <<<"$1" && ! grep -qF -- "--disable plugins" <<<"$1"' _ "$out"
+  out="$(BOSUN_CONNECTORS=acme-docs CXP doctor)"
+  check "... and doctor says every plugin goes" contains "$out" \
+    "cx: reaches acme-docs (switches off acme.mail, every plugin (with acme-kit) and ChatGPT's connectors)"
   out="$(BOSUN_CONNECTORS="acme-docs, https://mcp.example.com/*" CX doctor)"
   check "doctor says what a Codex window reaches, from its server names" contains "$out" \
     "ok    cx-docs: reaches acme-docs (switches off acme.mail and ChatGPT's connectors)"
@@ -2676,16 +2688,22 @@ for line in sys.stdin:
       return 1
     }
   }
-  check "one table of servers switched off and --disable apps are taken" outputs valid codex_args_valid "" -c 'mcp_servers={acme-docs={enabled=false},"acme.mail"={enabled=false}}' --disable apps
+  # The shape only: nothing for all, else an optional -c mcp_servers={...}, an optional --disable plugins,
+  # then --disable apps. What the table holds is connectors.py's (its unit tests read it back as TOML).
+  check "the shape -c mcp_servers={...}, --disable plugins, --disable apps is taken" outputs valid codex_args_valid "" -c 'mcp_servers={acme-docs={enabled=false},"acme.mail"={enabled=false}}' --disable plugins --disable apps
+  check "... and without --disable plugins" outputs valid codex_args_valid "" -c 'mcp_servers={acme-docs={enabled=false}}' --disable apps
+  check "... and without the table" outputs valid codex_args_valid "acme-docs" --disable plugins --disable apps
   check "... and --disable apps alone" outputs valid codex_args_valid "acme-docs" --disable apps
   check "... and nothing for all" outputs valid codex_args_valid " all "
   check "... but nothing for any other list is no answer" outputs refused codex_args_valid "acme-docs"
   check "... nor -c cut short" outputs refused codex_args_valid "" -c --disable apps
-  check "... nor a table of anything but servers switched off" outputs refused codex_args_valid "" -c 'mcp_servers={acme-docs={enabled=true}}' --disable apps
-  check "... nor the form Codex splits at every dot" outputs refused codex_args_valid "" -c 'mcp_servers."acme.mail".enabled=false' --disable apps
+  check "... nor -c with anything but an mcp_servers table, such as the form Codex splits at every dot" outputs refused codex_args_valid "" -c 'mcp_servers."acme.mail".enabled=false' --disable apps
   check "... nor two tables" outputs refused codex_args_valid "" -c 'mcp_servers={a={enabled=false}}' -c 'mcp_servers={b={enabled=false}}' --disable apps
-  check "... nor a missing --disable apps" outputs refused codex_args_valid "" -c 'mcp_servers={acme-docs={enabled=false}}'
-  check "... nor more after it" outputs refused codex_args_valid "" --disable apps -c 'mcp_servers={acme-docs={enabled=false}}'
+  check "... nor a missing --disable apps" outputs refused codex_args_valid "" -c 'mcp_servers={acme-docs={enabled=false}}' --disable plugins
+  check "... nor the two --disable pairs the other way round" outputs refused codex_args_valid "" --disable apps --disable plugins
+  check "... nor more after --disable apps" outputs refused codex_args_valid "" --disable apps -c 'mcp_servers={acme-docs={enabled=false}}'
+  check "... nor extra text after it" outputs refused codex_args_valid "" --disable apps extra
+  check "... nor an unknown flag" outputs refused codex_args_valid "" --frob --disable apps
 
   echo "get.sh (a dry run: it changes nothing)"
   check "it is plain sh" sh -n "$ROOT/get.sh"

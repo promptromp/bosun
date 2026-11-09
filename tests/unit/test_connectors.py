@@ -19,6 +19,7 @@ from unittest import mock
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "lib"))
 import claude_state  # noqa: E402
+import codex_state  # noqa: E402
 import connectors  # noqa: E402
 from connectors import Allowed, ConnectorsError, claude_entries, codex_args, parse  # noqa: E402
 
@@ -41,6 +42,21 @@ def fake_agent(folder: Path, body: str) -> Path:
     path.write_text(f"#!/bin/sh\n{body}\n")
     path.chmod(0o755)
     return path
+
+
+def servers(*configured: str, plugins: tuple[str, ...] = ()) -> codex_state.McpServers:
+    return codex_state.McpServers(configured, plugins)
+
+
+def codex_listing(folder: Path, every: list[str], configured: list[str]) -> Path:
+    """A `codex` whose `mcp list --json` shows <every> server, and <configured> with --disable plugins."""
+    for name, names in (("every", every), ("configured", configured)):
+        (folder / f"{name}.json").write_text(json.dumps([{"name": n, "env": {"TOKEN": "x"}} for n in names]))
+    return fake_agent(
+        folder,
+        f'case "$*" in\n  "mcp list --json") cat "{folder}/every.json" ;;\n'
+        f'  "--disable plugins mcp list --json") cat "{folder}/configured.json" ;;\n  *) exit 9 ;;\nesac',
+    )
 
 
 def printing(folder: Path, text: str) -> Path:
@@ -130,7 +146,7 @@ class PureTest(unittest.TestCase):
 
     def test_codex_disables_each_unlisted_server_in_one_table(self) -> None:
         self.assertEqual(
-            codex_args(parse("acme-docs"), ["acme-docs", "acme-tracker", "acme-wiki"]),
+            codex_args(parse("acme-docs"), servers("acme-docs", "acme-tracker", "acme-wiki")),
             [
                 "-c",
                 "mcp_servers={acme-tracker={enabled=false},acme-wiki={enabled=false}}",
@@ -140,12 +156,12 @@ class PureTest(unittest.TestCase):
         )
 
     def test_codex_with_nothing_to_switch_off_only_turns_off_apps(self) -> None:
-        self.assertEqual(codex_args(parse(""), []), ["--disable", "apps"])
-        self.assertEqual(codex_args(parse("acme-docs"), ["acme-docs"]), ["--disable", "apps"])
+        self.assertEqual(codex_args(parse(""), servers()), ["--disable", "apps"])
+        self.assertEqual(codex_args(parse("acme-docs"), servers("acme-docs")), ["--disable", "apps"])
 
     def test_codex_quotes_odd_names_as_toml_basic_strings(self) -> None:
         names = ["acme.mail", "acme docs", 'acme"q', "acme\\b", "acme\x7f", "acme\nline", "acmé"]
-        args = codex_args(parse(""), names)
+        args = codex_args(parse(""), servers(*names))
         self.assertEqual(args[0], "-c")
         self.assertEqual(args[2:], ["--disable", "apps"])
         self.assertEqual(
@@ -160,7 +176,42 @@ class PureTest(unittest.TestCase):
         self.assertEqual(connectors.toml_key("acme_docs-2"), "acme_docs-2")
 
     def test_codex_all_keeps_apps(self) -> None:
-        self.assertEqual(codex_args(parse("all"), ["acme-docs", "acme.mail"]), [])
+        self.assertEqual(codex_args(parse("all"), servers("acme-docs", "acme.mail", plugins=("kit",))), [])
+
+    def test_codex_a_named_plugin_server_keeps_plugins_on(self) -> None:
+        self.assertEqual(
+            codex_args(parse("acme-kit"), servers("acme-docs", plugins=("acme-kit",))),
+            ["-c", "mcp_servers={acme-docs={enabled=false}}", "--disable", "apps"],
+        )
+
+    def test_codex_a_plugin_server_not_named_switches_every_plugin_off(self) -> None:
+        """Never in the table: a plugin's server is no `mcp_servers` table, and naming one stops Codex."""
+        self.assertEqual(
+            codex_args(parse("acme-docs"), servers("acme-docs", plugins=("acme-kit",))),
+            ["--disable", "plugins", "--disable", "apps"],
+        )
+        self.assertEqual(
+            codex_args(parse(""), servers("acme-docs", plugins=("acme-kit",))),
+            ["-c", "mcp_servers={acme-docs={enabled=false}}", "--disable", "plugins", "--disable", "apps"],
+        )
+
+    def test_codex_a_mix_of_plugin_servers_named_and_not(self) -> None:
+        listing = servers("acme-docs", "acme.mail", plugins=("acme-kit", "acme-pad"))
+        plan = connectors.codex_plan(parse("acme-docs, acme-kit"), listing)
+        self.assertEqual(plan, connectors.CodexPlan(("acme.mail",), ("acme-pad",), ("acme-kit",)))
+        self.assertEqual(
+            codex_args(parse("acme-docs, acme-kit"), listing),
+            ["-c", 'mcp_servers={"acme.mail"={enabled=false}}', "--disable", "plugins", "--disable", "apps"],
+        )
+        self.assertEqual(
+            codex_args(parse("acme-kit, acme-pad"), listing),
+            [
+                "-c",
+                'mcp_servers={acme-docs={enabled=false},"acme.mail"={enabled=false}}',
+                "--disable",
+                "apps",
+            ],
+        )
 
 
 class KeptTest(unittest.TestCase):
@@ -447,6 +498,12 @@ class CommandTest(CommandCase):
             out.splitlines(), ["-c", 'mcp_servers={"acme.mail"={enabled=false}}', "--disable", "apps"]
         )
 
+    def test_codex_lists_with_plugins_and_without(self) -> None:
+        agent = codex_listing(self.root, ["acme-docs", "acme-kit", "acme-kit"], ["acme-docs"])
+        code, out, err = self.run_main("codex", "--list", "acme-docs", "--agent-bin", str(agent))
+        self.assertEqual((code, err), (0, ""))
+        self.assertEqual(out.splitlines(), ["--disable", "plugins", "--disable", "apps"])
+
     def test_codex_listing_that_fails_stops_the_window(self) -> None:
         code, out, err = self.run_main(
             "codex", "--list", "", "--agent-bin", str(fake_agent(self.root, "exit 3"))
@@ -528,6 +585,19 @@ class DoctorTest(CommandCase):
         self.assertEqual(
             self.doctor("alpha", "plugin:acme-tools:broken", self.root / "no-claude"),
             "warn\talpha: reaches nothing; not found, so it starts without: plugin:acme-tools:broken",
+        )
+
+    def test_doctor_says_when_every_plugin_goes(self) -> None:
+        agent = codex_listing(self.root, ["acme-docs", "acme-kit", "acme-pad"], ["acme-docs"])
+        self.assertEqual(
+            self.doctor("cx", "acme-docs, acme-kit", agent, harness="codex"),
+            "warn\tcx: reaches acme-docs (switches off every plugin (with acme-pad, acme-kit) and ChatGPT's "
+            "connectors); every plugin is switched off for the plugin servers its list does not name, so it "
+            "also starts without: acme-kit",
+        )
+        self.assertEqual(
+            self.doctor("cx", "acme-kit, acme-pad", agent, harness="codex"),
+            "ok\tcx: reaches acme-kit, acme-pad (switches off acme-docs and ChatGPT's connectors)",
         )
 
     def test_doctor_lines_for_a_codex_window(self) -> None:

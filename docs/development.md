@@ -234,7 +234,9 @@ Then connectors ([design](design/connectors.md#what-the-vm-showed)): local stdio
 every one of them; a `probe` window with `BOSUN_CONNECTORS="probe-allowed"` must start `probe-allowed` and
 none of the others, and show only it as connected in its own `/mcp`, both when new and after a restart resumes
 its session. On Codex a server named with a dot (`probe.dotted`) is then added and the window restarted, with
-the same check. What a window reaches is read from the agent (which servers it started, its `/mcp`), never
+the same check; then a local plugin with a server of its own (`probe-plugin`, from a marketplace folder the
+test makes), which a list that does not name it must keep from starting by switching every plugin off, and
+a list that names it must keep. What a window reaches is read from the agent (which servers it started, its `/mcp`), never
 from what its model says: a model leaves deferred tools out of a list. This part adds about three minutes and
 a few cents.
 

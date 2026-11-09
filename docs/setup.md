@@ -394,6 +394,16 @@ out, never let in as more: the launch logs a line, and for the orchestrator it a
 alert`, whose output goes to `launch-YYYY-MM-DD.log`). The list is read at launch, so a change applies
 once the window starts again.
 
+On Codex, a window's list names servers as `codex mcp list` shows them. bosun switches off the servers it
+does not name: those in a `config.toml` (yours, or a trusted repo's) one by one, and a plugin's only by
+switching off every plugin, since Codex can switch a plugin's server off only by its plugin and says
+nowhere which plugin a server comes from. So a list that names one plugin's server but not another's
+loses both, and every plugin's skills too: name every plugin server the window should keep, or none.
+ChatGPT's connectors (`codex_apps`) are off unless the list is `all`. Codex's other built-in servers
+(`codex_worktrees`) stay on, as Chrome does on Claude Code: they are local, and `codex mcp list` does not
+show them, so a list cannot name them. bosun also starts Codex without its update screen, which would stop
+an unattended start.
+
 `bosun doctor` has a line for each window: what it reaches, by name, and each name it cannot find. It
 looks nothing up (`claude mcp list` connects to every server), so a claude.ai connector no start has
 looked up yet shows as not found until the window's next start does. For a Codex window it asks `codex
