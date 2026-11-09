@@ -193,7 +193,7 @@ says a site's settings must carry the guard, the docstring at the top of `lib/gu
     `everything`. `toml_key(name: str) -> str`: the name bare when it is all letters, digits, `-`, `_`
     (TOML's bare-key rule), else `json.dumps(name)`.
   - CLI `python3 lib/connectors.py claude --list <value> --cwd <dir> --state-dir <dir> [--kept-only]`: prints
-    the settings JSON (`{"allowedMcpServers": [...]}`; nothing for `all`), one stderr line per missing name
+    the settings JSON (`{"allowedMcpServers": [...]}`; `{}` for `all`; never empty, R7), one stderr line per missing name
     (`connectors: <name> not found, so this window starts without it`), exit 1 when any is missing, 2 on a
     bad list. Looks up only when `needs_lookup` and not `--kept-only`; a found lookup is saved; a failed one
     uses `load_kept` and says `connectors: claude mcp list failed (<why>); using the addresses kept from
@@ -235,7 +235,8 @@ row: `connectors`), `docs/permissions.md` (a section on what each window can rea
 - `connector_settings <name>`: runs `connectors.py claude` once per process (kept in a variable per window
   name), with `--kept-only` when `CONNECTOR_LOOKUP=0`; its stderr lines go to `log`; when it exits 1 for the
   orchestrator, `bosun alert "<window>: started without connector(s) it may use: <names>"` (not in
-  `--kept-only`). Prints the settings JSON or nothing; a bad list (exit 2) is `die`.
+  `--kept-only`). Prints the settings JSON (`{}` for `all`); the list goes as `--list=<value>`, so a value
+  starting with `-` is no flag. Empty stdout or an exit of 2 or more (a bad list) is `die` (R7).
 - `build_agent_args` (claude.sh): the connector settings join the extra settings for both kinds of window,
   through `merge_settings`.
 - `print_fingerprint` sets `CONNECTOR_LOOKUP=0`.
