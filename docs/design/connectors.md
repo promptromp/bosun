@@ -74,8 +74,8 @@ A connector's URL is in no file Claude Code keeps, but `claude mcp list` prints 
 or command and its health, claude.ai connectors included (with `ENABLE_CLAUDEAI_MCP_SERVERS=true`), in
 about 4 seconds; it connects to each to check it. A window's allow list is the sum of every scope's: the
 launch's own `--settings`, my `~/.claude/settings.json`, and the window folder's `.claude/settings.json`
-and `.claude/settings.local.json` (an organization's managed settings are a scope of their own, which no
-bosun install has). So an allow list in any of those three files would widen a window's
+and `.claude/settings.local.json` (an organization's managed settings are a scope of their own, which bosun
+does not read). So an allow list in any of those three files would widen a window's
 ([Other scopes' allow lists](#other-scopes-allow-lists)); deny lists add up too.
 
 Codex, from its docs and source (0.167.0) and checked in the VM on 0.166.0 ([What the VM

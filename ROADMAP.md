@@ -343,7 +343,11 @@ Codex window switches servers off (one inline table, since Codex splits a `-c` k
 named with a dot stopped every Codex window; a plugin's server only by switching every plugin off, since
 Codex says nowhere which plugin a server is from) and turned off Codex's update screen, which stalled a
 restart. Codex's built-in servers stay on, as Claude Code's Chrome does. A plugin's server that `installed_plugins.json`
-does not list (synced from the account, `--plugin-dir`, managed) is allowed by what `claude mcp list` shows for it. Design note:
+does not list (synced from the account, `--plugin-dir`, managed) is allowed by what `claude mcp list` shows for it.
+Claude Code adds up every scope's allow list, so a window whose repo (or my own settings) allows a server its
+list does not name refuses to start, saying which file and what to do. Next: a window whose restart in an
+update dies at its launch (that refusal, a failed Codex listing) is reported as restarted and still waited
+for; the summary should say it did not start, and why. Design note:
 [docs/design/connectors.md](docs/design/connectors.md).
 
 ### Docs site

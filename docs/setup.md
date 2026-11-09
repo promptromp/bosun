@@ -180,6 +180,13 @@ plan, the summary and `bosun doctor` say. A checkout of your own that you update
 such change: set `BOSUN_ORCHESTRATOR_CONNECTORS` in `bosun.env` to the connectors the orchestrator needs,
 or to `all`, or it starts with none, which `bosun doctor` warns about until the key is set.
 
+A Claude Code window that a repo's own `.claude/settings.json` (or `settings.local.json`, or your
+`~/.claude/settings.json`) would give servers its list does not name does not start on the new version
+([Connectors](#connectors-what-each-window-may-reach)). The update restarts it, the launch refuses in its
+pane, and the summary says it was restarted and is still waited for; its pane, the day's launch log and
+`bosun doctor` say why. Name those servers in its list, or remove them from that file. Until the window
+answers, the next `bosun update` names it and how to finish it.
+
 ### The first update of an older install
 
 An install from before versions side by side is a checkout in `~/.local/share/bosun`, and the bosun in it

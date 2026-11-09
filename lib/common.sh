@@ -861,7 +861,8 @@ window_connectors() { # <name>
     names = value.is_a?(Array) ? value : [value]
     unless names.all? { |name| name.is_a?(String) } && !(value.is_a?(Array) && names.any? { |name| name.include?(",") })
       abort "#{ARGV[0]}: the connectors of #{ARGV[1]} must be a comma-separated string or a list of names, " \
-        "none holding a comma (it is #{value.inspect})"
+        "none holding a comma (it is #{value.inspect}): [] for none, " \
+        "or leave the key out for BOSUN_CONNECTORS"
     end
     puts names.join(", ")' \
     "$BOSUN_SESSIONS_FILE" "$1" "$BOSUN_CONNECTORS"
