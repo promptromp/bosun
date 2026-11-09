@@ -230,7 +230,12 @@ class ReposTest(unittest.TestCase):
 
     def test_a_rerun_keeps_a_windows_options_and_its_scope(self) -> None:
         listed = ({"name": "api", "dir": f"{HOME}/d/api", "model": "haiku"},)
-        env = {"BOSUN_REPO_MASK": "my-org", "BOSUN_REPOS_DIR": "$HOME/elsewhere", "BOSUN_DAYS": "MTWRF"}
+        env = {
+            "BOSUN_REPO_MASK": "my-org",
+            "BOSUN_REPOS_DIR": "$HOME/elsewhere",
+            "BOSUN_DAYS": "MTWRF",
+            "BOSUN_ORCHESTRATOR_CONNECTORS": "",  # set: a config from before the key would ask about all
+        }
         the_facts = facts(files={"sessions.yml": "...", "bosun.env": "..."}, sessions=listed, env=env)
         answers, _ = run(ALL_RECOMMENDED, the_facts)
         assert answers is not None
@@ -308,6 +313,14 @@ class ConnectorsTest(unittest.TestCase):
         answers, _ = run([ENTER, "2", *WITH_CONNECTORS[1:]], the_facts)
         assert answers is not None
         self.assertEqual(answers.orchestrator_connectors, "acme-local")
+
+    def test_a_url_pattern_is_marked_as_one_not_as_not_found(self) -> None:
+        """A pattern names no one server, so `claude mcp list` never shows it."""
+        _, ui = run(
+            WITH_CONNECTORS, rerun_facts("https://mcp.example.com/*, acme-gone", found=("acme-local",))
+        )
+        self.assertRegex(ui.screens[1], r"\[x\] \(2\)  https://mcp\.example\.com/\* +a pattern")
+        self.assertRegex(ui.screens[1], r"\[x\] \(3\)  acme-gone +not found")
 
     def test_a_kept_name_is_asked_about_though_nothing_is_found(self) -> None:
         answers, ui = run([ENTER, "1", *WITH_CONNECTORS[1:]], rerun_facts("acme-gone", found=()))

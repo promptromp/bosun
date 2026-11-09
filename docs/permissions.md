@@ -3,7 +3,7 @@
 | Tier | Examples | How it is enforced |
 |---|---|---|
 | Do without asking | read Slack/GitHub/Confluence, update the ledger, `bosun delegate --window` (and `--update`) to a repo window already running an agent; that session then acts within its task type's rules (see Delegated tasks) | auto mode, plus an explicit allow list |
-| Propose, then wait | the orchestrator's own Slack posts and reactions, `gh pr merge/review/comment/edit/close/ready/update-branch`, `gh api`, `git push`, Confluence/Jira comments, and any other MCP tool whose name has a write verb (send, create, update, delete, transition, execute, forward, share, trash, push, ...) | the policy, `ask` rules in `orchestrator/settings.json`, and `bosun guard`, a PreToolUse hook that asks before every MCP write tool, including ones the rules do not list (verified: Claude Code prompts even in auto mode). A name's words split on `_`, `-` and case changes (`editJiraIssue` is edit, jira, issue); words that are also nouns (request, comment, label, order, pin, mark, resolve) do not count, so reads like `get_pull_request` pass. bosun adds the guard when it launches the orchestrator (and to `bosun chores --dry-run`), from the bosun that launched it, so no settings file has to carry it |
+| Propose, then wait | the orchestrator's own Slack posts and reactions, `gh pr merge/review/comment/edit/close/ready/update-branch`, `gh api`, `git push`, Confluence/Jira comments, and any other MCP tool whose name has a write verb (send, create, update, delete, transition, execute, forward, share, trash, push, ...) | the policy, `ask` rules in `orchestrator/settings.json`, and `bosun guard`, a PreToolUse hook that asks before every MCP write tool, including ones the rules do not list (verified: Claude Code prompts even in auto mode). A name's words split on `_`, `-` and case changes (`editJiraIssue` is edit, jira, issue; `s3Upload` is s3, upload); words that are also nouns or adjectives in reads' names (request, comment, label, order, pin, mark, resolve, patch, put, clear, drop) do not count, so reads like `get_pull_request` and `get_patch` pass. bosun adds the guard when it launches the orchestrator (and to `bosun chores --dry-run`), from the bosun that launched it, so no settings file has to carry it |
 | Propose, then wait | Chrome changing a page: clicking, typing, pressing keys, filling forms, running scripts | `ask` rules in `orchestrator/settings.json` for its whole tools that change pages (`javascript_tool`, `form_input`), and `bosun guard` for `computer`, which asks for every action but a screenshot, scrolling, zooming, waiting or hovering (a new action Chrome adds asks too). Reading a page, finding on it and going to a URL pass; uploads, shortcuts and new tabs ask by their verbs |
 | Propose, then wait | starting an agent's session: in a new window (`bosun delegate ... --new`) or in a window that has none (`--start`) | the policy and chores procedure only, so you approve once in the plan without a second permission prompt |
 | Propose, then wait | accepting work someone else asked for (a task spawned from their message); changing an external ticket (transition, assign, edit) | a task is accepted only with `user:` evidence and `delegate` refuses it before; ticket changes are proposals from `ledger tickets --mismatch`, and the tracker's write tools ask (guard) |
@@ -15,8 +15,8 @@
 
 ## What each window can reach
 
-Each window bosun starts on Claude Code reaches only the MCP servers and connectors its config names, so
-a repo window with a task cannot forward a mail or share a file it never had:
+Each window bosun starts reaches only the MCP servers and connectors its config names, so a repo window
+with a task cannot forward a mail or share a file it never had:
 
 | Window | Reaches | Set with |
 |---|---|---|
@@ -25,10 +25,15 @@ a repo window with a task cannot forward a mail or share a file it never had:
 | Every window | Chrome, as before, through `--chrome` in `BOSUN_CLAUDE_FLAGS` and `BOSUN_ORCHESTRATOR_FLAGS`; on the orchestrator, the gate above asks before it changes a page | the flags |
 
 bosun passes the list as Claude Code's `allowedMcpServers` in the window's launch settings, in place of
-any a site settings file names. A name bosun cannot find is left out, so a window starts with
-less than its list, never with more, and the orchestrator's launch alerts you. `all` lifts the limit for
-that list. How to write a list: [Connectors](setup.md#connectors-what-each-window-may-reach). Within the
-connectors the orchestrator may reach, the tiers above still decide what it may do.
+any a site settings file names. A name bosun cannot find is left out, so a window starts with less than
+its list, never with more, and the orchestrator's launch alerts you. `all` lifts the limit for that list.
+Claude Code adds the `allowedMcpServers` of your `~/.claude/settings.json` and of the window folder's
+`.claude/settings.json` and `.claude/settings.local.json` to the window's, so a window with a list does
+not start while one of those allows more than its list names. On Codex, bosun switches off the servers the
+list does not name, every plugin when it leaves out a plugin's server, and ChatGPT's connectors
+([Codex](setup.md#connectors-what-each-window-may-reach)). How to write a list:
+[Connectors](setup.md#connectors-what-each-window-may-reach). Within the connectors the orchestrator may
+reach, the tiers above still decide what it may do.
 
 ## Approvals: approve once, in chat
 

@@ -392,18 +392,27 @@ class McpNamesTest(unittest.TestCase):
         self.assertEqual(codex_state.mcp_server_names(codex, plugins=False), ["acme-docs", "acme.mail"])
 
     def test_mcp_list_failure_raises(self) -> None:
+        """Whatever fails, the reason never holds what the listing printed: a stdio server's entry holds
+        its environment, secrets included."""
+        secret = {"ACME_TOKEN": "acme-secret-value"}
         for codex in (
             self.fake_codex("exit 1"),
             self.fake_codex("exec sleep 20"),
-            self.fake_codex("echo 'not json'"),
-            self.listing({"name": "acme-docs"}),
-            self.listing([{"name": "acme-docs"}, {"transport": {}}]),
-            self.listing([{"name": ""}]),
+            self.fake_codex("echo 'ACME_TOKEN=acme-secret-value is not json'"),
+            self.listing({"name": "acme-docs", "env": secret}),
+            self.listing([{"name": "acme-docs", "env": secret}, {"transport": {"env": secret}}]),
+            self.listing([{"name": "", "env": secret}]),
             str(self.root / "no-codex"),
         ):
             with self.subTest(codex=codex), self.assertRaises(codex_state.CodexListError) as raised:
                 codex_state.mcp_server_names(codex, timeout=0.5)
-            self.assertNotIn("ACME", str(raised.exception))
+            self.assertNotIn("acme-secret-value", str(raised.exception))
+
+    def test_mcp_names_keep_no_environment(self) -> None:
+        listed = [
+            {"name": "acme.mail", "transport": {"type": "stdio", "env": {"ACME_TOKEN": "acme-secret-value"}}}
+        ]
+        self.assertEqual(codex_state.mcp_server_names(self.listing(listed)), ["acme.mail"])
 
 
 if __name__ == "__main__":

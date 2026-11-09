@@ -219,11 +219,16 @@ class ConnectorChoice:
 
 
 def connector_choices(facts: Facts, answers: Answers) -> list[ConnectorChoice]:
-    """`all` if the answer is, then each server found, then each name of the answer not found."""
+    """`all` if the answer is, then each server found, then each name of the answer not found (a URL
+    pattern, which `claude mcp list` never shows, marked as one)."""
     allowed = connectors.parse(answers.orchestrator_connectors)
     choices = [ConnectorChoice(EVERY_SERVER, "every server, as before")] if allowed.everything else []
     choices += [ConnectorChoice(name) for name in facts.connectors]
-    choices += [ConnectorChoice(name, "not found") for name in allowed.names if name not in facts.connectors]
+    choices += [
+        ConnectorChoice(name, "a pattern" if connectors.is_url(name) else "not found")
+        for name in allowed.names
+        if name not in facts.connectors
+    ]
     return choices
 
 

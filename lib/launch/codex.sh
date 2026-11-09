@@ -12,22 +12,27 @@ AGENT_BIN="$BOSUN_CODEX_BIN"
 # are none), `--disable plugins` when it does not name one of the plugins' servers, and `--disable apps`.
 # None for `all`. Once per process: a launch builds its arguments twice, and the second time reuses the
 # first lookup. A listing that fails, or arguments not of that shape, stop the launch: the window never
-# starts with a server its list does not name. Call it in the shell itself, not in $(...), which would lose
-# both the result and the die.
+# starts with a server its list does not name. Its lines (a name Codex has no server by, a listing that
+# failed) are logged as a Claude Code window's are (log_connector_lines). Call it in the shell itself, not
+# in $(...), which would lose both the result and the die.
 set_codex_connector_args() { # <name>
   [ "${codex_connector_window-}" = "$1" ] && return 0
-  local list output line
+  local list output line errors code=0
   list="$(window_connectors "$1")" || die "could not read the connectors of '$1' in $BOSUN_SESSIONS_FILE"
-  # Its reason for a failure goes to the log on stderr; the list is its own argument, so one that
-  # starts with "-" is no flag.
-  output="$(python3 "$BOSUN_ROOT/lib/connectors.py" codex --agent-bin "$BOSUN_CODEX_BIN" --list="$list")" ||
+  errors="$(mktemp "${TMPDIR:-/tmp}/bosun-connectors.XXXXXX")" || die "'$1' does not start: no temporary file"
+  # The list is its own argument, so one that starts with "-" is no flag.
+  output="$(python3 "$BOSUN_ROOT/lib/connectors.py" codex --agent-bin "$BOSUN_CODEX_BIN" --list="$list" 2>"$errors")" ||
+    code=$?
+  log_connector_lines "$1" "$errors"
+  rm -f "$errors"
+  [ "$code" = 0 ] ||
     die "'$1' does not start: could not tell which servers its connectors switch off (lib/connectors.py, above)"
   codex_connector_args=()
   if [ -n "$output" ]; then
     while IFS= read -r line; do codex_connector_args+=("$line"); done <<<"$output"
   fi
   codex_connector_args_valid "$list" ||
-    die "'$1' does not start: lib/connectors.py gave arguments that switch off the wrong servers"
+    die "'$1' does not start: lib/connectors.py gave arguments not of the expected shape"
   codex_connector_window="$1"
 }
 
@@ -37,8 +42,8 @@ set_codex_connector_args() { # <name>
 # garbled answer is never taken for "no limit"; what the table holds is lib/connectors.py's (its tests read
 # it back as TOML).
 codex_connector_args_valid() { # <list>
-  local n=${#codex_connector_args[@]} i=0 list="${1//[[:space:]]/}"
-  [ "$n" -gt 0 ] || [ "$list" = all ] || return 1
+  local n=${#codex_connector_args[@]} i=0
+  [ "$n" -gt 0 ] || lists_everything "$1" || return 1
   [ "$n" -gt 0 ] || return 0
   if [ "${codex_connector_args[0]}" = -c ]; then
     case "${codex_connector_args[1]-}" in

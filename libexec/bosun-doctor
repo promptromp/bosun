@@ -2,9 +2,10 @@
 # Usage: bosun doctor
 #
 # Check everything the morning run depends on, without changing anything: tools (also as
-# launchd would see them), the Claude Code login, config, session names, schedule (with the
-# watchdog and learning agents), power, keychain, setup steps, and the knowledge base and the
-# ledger, each against its journal. Exits non-zero if any check fails.
+# launchd would see them), the Claude Code login, config, session names, what each window may reach
+# (its connectors, looking nothing up), schedule (with the watchdog and learning agents), power,
+# keychain, setup steps, and the knowledge base and the ledger, each against its journal. Exits
+# non-zero if any check fails.
 set -uo pipefail
 source "$(dirname "$0")/../lib/common.sh"
 load_config
@@ -129,20 +130,25 @@ check_after_update() {
 # What each window may reach (docs/design/connectors.md): its list (window_connectors) as
 # lib/connectors.py doctor resolves it, from what earlier lookups kept for a Claude Code window (it looks
 # nothing up: `claude mcp list` connects to every server) and from `codex mcp list --json` for a Codex
-# one. A warning for the orchestrator with `all` and for a name not found; and once when my own Claude
-# Code settings hold an allowedMcpServers, which widens every window's. A window list that cannot be
-# read is check_config's.
+# one. A warning for the orchestrator with `all`, for a name not found, and for a Claude Code window that
+# another settings scope would widen, which does not start (the launch's own check); for the orchestrator,
+# what its settings file's allowedMcpServers comes to. A window list that cannot be read is check_config's.
 check_connectors() {
   local specs name dir kind harness list said
+  local -a site
+  [ -z "$BOSUN_ORCHESTRATOR" ] || check_orchestrator_connectors_set
   if specs="$(window_specs 2>/dev/null)"; then
     while IFS=$'\t' read -r name dir kind _ _ harness; do
       [ "$kind" = "checkin" ] && continue
-      if ! list="$(window_connectors "$name")"; then
-        fail "$name: could not read its connectors in $BOSUN_SESSIONS_FILE"
+      if ! list="$(window_connectors "$name" 2>/dev/null)"; then
+        fail "$name: could not read its connectors: $(window_connectors "$name" 2>&1 >/dev/null | tail -n 1)"
         continue
       fi
+      site=()
+      [ "$kind" = orchestrator ] && site=(--settings-file "$BOSUN_ORCHESTRATOR_SETTINGS")
       said="$(python3 "$BOSUN_ROOT/lib/connectors.py" doctor --window "$name" --kind "$kind" --harness "$harness" \
-        --list="$list" --cwd "$dir" --state-dir "$BOSUN_STATE_DIR" --agent-bin "$(harness_bin "$harness")" </dev/null 2>&1)"
+        --list="$list" --cwd "$dir" --state-dir "$BOSUN_STATE_DIR" --agent-bin "$(harness_bin "$harness")" \
+        ${site[@]+"${site[@]}"} </dev/null 2>&1)"
       case "$said" in
         "ok"$'\t'*) ok "${said#*$'\t'}" ;;
         "warn"$'\t'*) warn "${said#*$'\t'}" ;;
@@ -150,9 +156,22 @@ check_connectors() {
       esac
     done <<<"$specs"
   fi
-  if claude_state sets-allowed-mcp-servers; then
-    warn "your own Claude Code settings (~/.claude/settings.json) hold allowedMcpServers, which widens every window's list: remove it there"
+}
+
+# An orchestrator whose bosun.env does not set BOSUN_ORCHESTRATOR_CONNECTORS (absent, or no bosun.env, read
+# as bosun update reads it: lib/migrations.py's unset) had every connector before that key, and starts with
+# none now, which bosun update would have kept as `all`: a warning until it is set, even to nothing. One the
+# environment sets is set.
+check_orchestrator_connectors_set() {
+  local said key note
+  is_env_override BOSUN_ORCHESTRATOR_CONNECTORS && return 0
+  if ! said="$(python3 "$BOSUN_ROOT/lib/migrations.py" unset --config-dir "$BOSUN_CONFIG_DIR" BOSUN_ORCHESTRATOR_CONNECTORS 2>&1)"; then
+    warn "could not read whether bosun.env sets BOSUN_ORCHESTRATOR_CONNECTORS: $said"
+    return 0
   fi
+  while IFS=$'\t' read -r key note; do
+    [ -z "$key" ] || warn "$key is not set in bosun.env: $note"
+  done <<<"$said"
 }
 
 # Knowledge (docs/design/knowledge.md): whether there is a knowledge base, what it holds, and the

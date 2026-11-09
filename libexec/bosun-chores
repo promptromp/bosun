@@ -6,7 +6,10 @@
 # skipping the idle checks that the scheduled check-in applies.
 #
 # --dry-run runs the same command headless (claude -p) with the orchestrator's policy, settings,
-# plugin and guard (this bosun's own), and real Slack/GitHub/Confluence reads, but with no side effects:
+# plugin and guard (this bosun's own), and its connectors (BOSUN_ORCHESTRATOR_CONNECTORS, resolved as its
+# launch resolves them, and refused as its launch refuses a list another settings file would widen; any
+# list but none turns claude.ai's connectors on, as a headless Claude has them only when asked), and real
+# Slack/GitHub/Confluence reads, but with no side effects:
 #   - the ledger is a scratch copy of the real one under $BOSUN_STATE_DIR/dry-runs/<timestamp>/,
 #     so idempotency is exercised against current state. --fresh starts empty; --continue starts
 #     from the previous rehearsal's ledger (run twice to check that nothing is processed again)
@@ -77,7 +80,7 @@ flags=($BOSUN_ORCHESTRATOR_FLAGS)
 set_rehearsal_args() {
   local connectors
   connectors="$(resolve_connectors "$BOSUN_ORCHESTRATOR" "$BOSUN_ORCHESTRATOR_CONNECTORS" "$BOSUN_ORCHESTRATOR_DIR" 0)" ||
-    die "could not tell which connectors the orchestrator may reach (lib/connectors.py)"
+    die "the orchestrator's connectors were refused or could not be resolved (lib/connectors.py, above)"
   build_model_effort_args "$BOSUN_ORCHESTRATOR_MODEL" "$BOSUN_ORCHESTRATOR_EFFORT" "$BOSUN_ORCHESTRATOR_SETTINGS" \
     "$(printf '%s\n' "$(guard_hook_settings)" "$connectors" | merge_settings)"
   require_connector_limit "$BOSUN_ORCHESTRATOR" "$connectors"

@@ -11,7 +11,9 @@
 #             running Claude picks up a changed command file of its plugin, and `bosun update` to the next
 #             version (this checkout and tests/sandbox/update_patch.sh) while the repo window waits on a
 #             background command: the take-stock and update prompts, to the real agents; then connectors:
-#             a window with BOSUN_CONNECTORS reaches only the local test servers it names, also resumed
+#             a window with BOSUN_CONNECTORS reaches only the local test servers it names, also resumed;
+#             on Claude Code a repo whose own settings allow more keeps it from starting until the list
+#             names that, and whether `claude mcp list` writes ~/.claude.json
 # The keys go in between, from mac.sh, so this script never sees where they come from.
 # Checks pass shell snippets to `bash -c '...' _ args`; their $ must not expand here.
 # shellcheck disable=SC2016
@@ -475,6 +477,23 @@ claude_servers() {
     fi
   done
 }
+# Whether `claude mcp list` writes ~/.claude.json, as lib/init_detect.py runs it (in the home folder, with
+# claude.ai's connectors): the file's SHA-256 before and after one run, and, when they differ, the names of
+# its top-level keys whose values changed. Never a value: the file may hold a login.
+mcp_list_writes() {
+  local before after
+  cp "$HOME/.claude.json" "$OUT/claude-json-before"
+  before="$(shasum -a 256 <"$HOME/.claude.json" | cut -d' ' -f1)"
+  (cd "$HOME" && ENABLE_CLAUDEAI_MCP_SERVERS=true claude mcp list) >"$OUT/mcp-list-home.txt" 2>&1
+  after="$(shasum -a 256 <"$HOME/.claude.json" | cut -d' ' -f1)"
+  if [ "$before" = "$after" ]; then
+    echo "  note  ~/.claude.json: claude mcp list left it as it was (the same SHA-256 before and after)"
+  else
+    echo "  note  ~/.claude.json: claude mcp list changed it; top-level keys whose values changed: $(jq -r --slurpfile was "$OUT/claude-json-before" \
+      '. as $now | [(keys + ($was[0] | keys)) | unique[] | select($now[.] != $was[0][.])] | join(", ")' "$HOME/.claude.json" 2>/dev/null)"
+  fi
+  rm -f "$OUT/claude-json-before"
+}
 codex_turn() { # one turn of Codex in the probe repo, its output in $OUT/codex-exec.txt
   # shellcheck disable=SC2046 # the model's two words, when one is chosen
   (cd "$PROBE_REPO" && codex exec $([ -z "$CODEX_MODEL" ] || echo --model "$CODEX_MODEL") "Reply with just: ok") >"$OUT/codex-exec.txt" 2>&1
@@ -626,6 +645,33 @@ plugin_server() {
   check "... its /mcp shows probe-allowed and probe-plugin connected, and none of the others" mcp_shows_plugin_kept "$OUT/mcp-plugin-kept.txt"
 }
 
+# Claude Code adds the repo's own .claude/settings.json allow list to the window's, so a launch with a list
+# refuses one that allows a server the list does not name (probe-blocked), and starts once the list names it.
+widened_by_the_repo() {
+  local pid log
+  log="$STATE/logs/launch-$(date +%F).log"
+  jq -n '{allowedMcpServers: [{serverName: "probe-blocked"}]}' >"$PROBE_REPO/.claude/settings.json"
+  pid="$(pid_of "$PROBE_WINDOW")"
+  [ -n "$pid" ] && kill -TERM "$pid"
+  check "with probe-blocked allowed in the repo's .claude/settings.json, its agent stopped" wait_for 60 bash -c '[ -n "$1" ] && ! kill -0 "$1"' _ "$pid"
+  : >"$PROBE_LOG"
+  bosun refresh "$PROBE_WINDOW" >"$OUT/probe-widened.txt" 2>&1
+  check "... the window does not start, and its launch says which file allows what" wait_for 60 grep -qF \
+    "$PROBE_REPO/.claude/settings.json allows [{\"serverName\": \"probe-blocked\"}], beyond this window's list" "$log"
+  check "... on its screen too" bash -c 'tmux -L bosun capture-pane -p -J -S -200 -t "=bosun:=$1" | grep -qF "allows [{\"serverName\": \"probe-blocked\"}]"' _ "$PROBE_WINDOW"
+  check "... with no agent in it, nor any probe server started" bash -c '[ -z "$(window "$1" pid)" ] && ! grep -q initialize "$2"' _ "$PROBE_WINDOW" "$PROBE_LOG"
+  grep -F "beyond this window's list" "$log" | tail -1 | cut -c1-300 | sed 's/^/  note  launch log: /'
+  echo 'BOSUN_CONNECTORS="probe-allowed, probe-blocked"' >>"$CONFIG/bosun.env"
+  : >"$PROBE_LOG"
+  bosun refresh "$PROBE_WINDOW" >>"$OUT/probe-widened.txt" 2>&1
+  probe_started "with probe-blocked in its list too, it starts"
+  check "... it started probe-allowed and probe-blocked, and not probe-project" bash -c '
+    grep -qx "allowed initialize" "$1" && grep -qx "blocked initialize" "$1" && ! grep -qx "project initialize" "$1" || { tr "\n" " " <"$1"; exit 1; }' _ "$PROBE_LOG"
+  mcp_screen "$OUT/mcp-widened.txt"
+  check "... and its /mcp shows probe-blocked" grep -q "probe-blocked" "$OUT/mcp-widened.txt"
+  rm -f "$PROBE_REPO/.claude/settings.json"
+}
+
 connectors() {
   echo "connectors: a window reaches only the servers its list names"
   local pid
@@ -635,6 +681,7 @@ connectors() {
   check "the probe repo is trusted" bosun trust "$PROBE_REPO"
   if [ "$AGENT" = "claude" ]; then
     check "without a limit, Claude Code starts the three probe servers (claude mcp list)" claude_servers
+    mcp_list_writes
   else
     check "without a limit, Codex lists the three probe servers, the repo's too, and starts them" codex_servers
   fi
@@ -646,7 +693,11 @@ connectors() {
   echo "  note  launched as: $(ps -o command= -p "${pid:-0}" | grep -oE -- '(-c mcp_servers[^ ]+|--disable apps|--settings [^ ]+)' | tr '\n' ' ' | cut -c1-400)"
   reaches_only_allowed "a new session" blocked project
   bosun doctor >"$OUT/probe-doctor.txt" 2>&1
-  check "doctor's line: it reaches probe-allowed" grep -q "$PROBE_WINDOW: reaches probe-allowed" "$OUT/probe-doctor.txt"
+  if [ "$AGENT" = "claude" ]; then # a plain name: allowed by it, as nothing doctor reads says the server exists
+    check "doctor's line: it allows probe-allowed by name" grep -q "$PROBE_WINDOW: allowed by name: probe-allowed" "$OUT/probe-doctor.txt"
+  else # from Codex's own listing
+    check "doctor's line: it reaches probe-allowed" grep -q "$PROBE_WINDOW: reaches probe-allowed" "$OUT/probe-doctor.txt"
+  fi
   grep "$PROBE_WINDOW: " "$OUT/probe-doctor.txt" | sed 's/^/  note  doctor: /'
   # A session with nothing in it has nothing to come back to.
   check "it takes a message" bosun send --no-item "$PROBE_WINDOW" "Reply with just: ready"
@@ -656,6 +707,8 @@ connectors() {
   if [ "$AGENT" = "codex" ]; then
     dotted_name
     plugin_server
+  else
+    widened_by_the_repo
   fi
 }
 

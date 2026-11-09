@@ -64,12 +64,15 @@ without `bosun.git`):
 
 On a first run your own history beats a generic default. A re-run starts from your config instead: the
 windows `sessions.yml` lists, and the connectors `BOSUN_ORCHESTRATOR_CONNECTORS` names (`all` as one line,
-ticked, which ticking a server unticks; a name `claude mcp list` no longer shows kept, marked not found).
+ticked, which ticking a server unticks; a name `claude mcp list` no longer shows kept, marked not found, and
+a URL pattern, which it never shows, marked as one). A `bosun.env` from before that key (it does not set
+it) is an orchestrator that had every connector: the recommendation is `all`, what `bosun update` writes
+for it, and the plan says why.
 
 | Answer | From |
 |---|---|
 | Repos | Ticked: the one you typed the most prompts in over 30 days, in Claude Code and Codex. Worktrees count for their main checkout; scripted runs (`claude -p`) do not count. With no history at all, the newest git repo in the usual folders. The others found are listed, unticked, up to the screen's nine: one window is a guess worth making, more are your choice. |
-| Orchestrator's connectors | None: which servers are work tools cannot be told from their names, and a list of names to guess by would be wrong for someone. The question lists what `claude mcp list` shows (with claude.ai's connectors), and is asked only when it shows some or the config names some. |
+| Orchestrator's connectors | None: which servers are work tools cannot be told from their names, and a list of names to guess by would be wrong for someone. The question lists what `claude mcp list` shows (with claude.ai's connectors), and is asked only when it shows some or the config names some. A re-run on a `bosun.env` without the key: `all`, as above. |
 | Days | Weekdays you worked on at least 60% of since your first prompt. |
 | Hours | Half an hour before your median first prompt, to after your median last one, at least 4 hours. Work before 04:00 belongs to the day before. With under 5 active days: 08:00 to 20:00, Monday to Friday. |
 | Features | Events, approvals and learning on. The Slack watcher only if the Slack plugin is installed. |

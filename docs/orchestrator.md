@@ -429,7 +429,8 @@ epic (it may name one) and not a product area (it is part of one). Design, resea
 
 The orchestrator reaches only the servers and connectors `BOSUN_ORCHESTRATOR_CONNECTORS` names, so name
 yours there first (`"claude.ai Slack, plugin:acme-tracker:tracker, acme-wiki"`); a settings file cannot
-widen that, as bosun's list replaces any `allowedMcpServers` it holds.
+widen that, as bosun's list replaces any `allowedMcpServers` it holds (with `all` there is no list of
+bosun's, and the file's applies; `bosun doctor` says which).
 
 `orchestrator/settings.json` only names tools every install can have: the Slack plugin, the
 claude.ai Slack connector, `gh` and `git`. Your own MCP servers (issue tracker, wiki, CI,
@@ -449,6 +450,7 @@ repo:
 The file replaces `orchestrator/settings.json` rather than adding to it, so keep its rules. It
 needs no `hooks` block for `bosun guard`: bosun adds the guard at launch, from the bosun that
 launches the window, whatever the settings file. A file copied before that still has the block,
-which runs the guard twice (deciding the same); drop it. `bosun doctor` warns about that block and
+which runs the guard twice, and the two need not be the same version (a checkout's guard and the
+installed one's), so they may not decide alike; drop it. `bosun doctor` warns about that block and
 about any rule of `orchestrator/settings.json` the file lacks (for example one added after you
 copied it). The orchestrator picks the file up at its next launch.

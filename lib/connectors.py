@@ -12,28 +12,37 @@ Usage: connectors.py claude --list <value> --cwd <dir> --state-dir <dir> --agent
                             [--missing-to <file>]
            Claude Code's settings, always a JSON object: {"allowedMcpServers": [...]}, or {} for `all`;
            a line on stderr per name not found. Runs `claude mcp list` in <dir> only for a name it
-           cannot resolve otherwise (never with --kept-only), and keeps in <state-dir>/connectors.json
+           cannot resolve otherwise (never with --kept-only), keeps in <state-dir>/connectors.json
            what that lookup found for the names it was asked about (a name it no longer shows is
-           dropped), for when the listing fails. Whatever else goes wrong, it prints
-           {"allowedMcpServers": []} and exits 1: a window starts with less, never with more.
+           dropped), for when the listing fails, and says each plain name it does not show (it stays
+           allowed). Whatever else goes wrong, it prints {"allowedMcpServers": []} and exits 1: a window
+           starts with less, never with more. But when another settings scope of <dir> (mine, the
+           folder's project and local settings) allows an entry the settings it would print do not hold
+           exactly, it prints nothing, says which file allows what, and exits 2: Claude Code adds those
+           lists up, so the window must not start.
            --missing-to writes the names left out to <file>, on every exit 0 or 1, as a JSON array
            (after an unexpected error, every name of the list): what a caller tells me, never parsed
            from stderr.
        connectors.py codex --list <value> --agent-bin <codex>
            Codex's launch arguments, one per line, from `codex mcp list --json` with plugins and
            without: each configured server the list does not name switched off, every plugin when it
-           does not name one of their servers, and ChatGPT's connectors; nothing for `all`.
+           does not name one of their servers, and ChatGPT's connectors; nothing for `all`. A line on
+           stderr per name of the list Codex has no server by.
        connectors.py doctor --window <name> --kind <kind> --harness claude|codex --list <value>
-                            --cwd <dir> --state-dir <dir> --agent-bin <agent>
-           bosun doctor's line for a window: `ok` or `warn`, a tab, then what it reaches (names only),
-           each name not found, and, for the orchestrator with `all`, to name its connectors. Claude
-           Code's from what earlier lookups kept (never `claude mcp list`, which connects to every
-           server); Codex's from `codex mcp list --json` in <dir>, which starts none. Always exit 0
-           with one line, but for a command line that cannot be read (2).
+                            --cwd <dir> --state-dir <dir> --agent-bin <agent> [--settings-file <file>]
+           bosun doctor's line for a window: `ok` or `warn`, a tab, then what it reaches (names only;
+           on Claude Code a plain name is only allowed by name and a URL pattern by pattern), each name
+           not found, for the orchestrator with `all` to name its connectors, and on Claude Code another
+           settings scope that keeps it from starting, and what the allow list of the orchestrator's
+           settings file (--settings-file) comes to. Claude Code's from what earlier lookups kept
+           (never `claude mcp list`, which connects to every server); Codex's from `codex mcp list
+           --json` in <dir>, which starts none. Always exit 0 with one line, but for a command line that
+           cannot be read (2).
 
 Exit codes: 0 done, 1 a name not found or something else went wrong (claude: the settings printed are
 still the ones to use), or the servers could not be listed (codex), 2 a list or command line that cannot
-be read. So a caller takes empty output or an exit of 2 or more as fatal.
+be read, or (claude) a list another settings scope would widen. So a caller takes empty output or an exit
+of 2 or more as fatal.
 """
 
 from __future__ import annotations
@@ -191,6 +200,40 @@ def save_kept(state_dir: Path, asked: Iterable[str], found: Mapping[str, str]) -
         say(f"could not keep the servers found in {state_dir / KEPT_FILE} ({exc.strerror or exc})")
 
 
+def widening(
+    entries: Sequence[Any], scopes: Iterable[tuple[Path, Sequence[Any]]]
+) -> list[tuple[Path, list[Any]]]:
+    """Each settings file of <scopes> (claude_state.settings_allow_lists) whose allowedMcpServers holds an
+    entry that is not exactly (JSON-equal) one of a window's own <entries>, and those entries: Claude Code
+    adds every scope's allow list to the one a window is launched with, so each would widen it. A
+    narrower or a wider pattern is not equal either."""
+    return [(path, extra) for path, listed in scopes if (extra := [e for e in listed if e not in entries])]
+
+
+def widening_problem(widened: Sequence[tuple[Path, Sequence[Any]]]) -> str:
+    """Why a window whose list <widened> files widen does not start, naming each file and its entries,
+    and what to do about it."""
+    it = "it" if sum(len(extra) for _, extra in widened) == 1 else "them"
+    where = "that file" if len(widened) == 1 else "those files"
+    files = "; ".join(
+        f"{path} allows {json.dumps(list(extra), ensure_ascii=False)}" for path, extra in widened
+    )
+    return (
+        f"{files}, beyond this window's list, and Claude Code adds {it} to it: name {it} in the window's "
+        f"list, use all, or remove {it} from {where}"
+    )
+
+
+def refuse_widening(settings: Mapping[str, Any], cwd: Path) -> None:
+    """ConnectorsError (the launch does not start) when another settings scope of a window in <cwd> would
+    widen its <settings>' allow list; a window with no limit (`all`) is not checked."""
+    if claude_state.ALLOW_LIST not in settings:
+        return
+    widened = widening(settings[claude_state.ALLOW_LIST], claude_state.settings_allow_lists(cwd))
+    if widened:
+        raise ConnectorsError(widening_problem(widened))
+
+
 # ---- Codex ----------------------------------------------------------------------------------------
 
 
@@ -247,7 +290,8 @@ def codex_args(allowed: Allowed, servers: codex_state.McpServers) -> list[str]:
     and nothing says which plugin it is from; and ChatGPT's connectors (its `apps` feature). One
     table, because Codex splits a `-c` key at every dot, quotes included, so
     `mcp_servers."a.b".enabled` names another server; inside a value its TOML parser reads quoted keys
-    as TOML does."""
+    as TOML does. What it prints has the shape `codex_connector_args_valid` (lib/launch/codex.sh) checks
+    before a launch: a change of shape here changes that check with it."""
     if allowed.everything:
         return []
     plan = codex_plan(allowed, servers)
@@ -262,6 +306,7 @@ def codex_args(allowed: Allowed, servers: codex_state.McpServers) -> list[str]:
 OK, WARN = "ok", "warn"
 ORCHESTRATOR = "orchestrator"  # its kind in the window list
 EVERYTHING_LINE = "all (every MCP server and connector)"
+NONE_LINE = "none (no MCP server or connector)"
 NAME_THEM = "name the ones it needs in BOSUN_ORCHESTRATOR_CONNECTORS and drop all"
 NOT_FOUND = "not found, so it starts without: {}"
 NOT_KEPT = (
@@ -270,44 +315,107 @@ NOT_KEPT = (
 )
 CODEX_OFF = "switches off {}ChatGPT's connectors"
 MEANINGLESS = "mean nothing to Codex: {}"
+MEANS_NOTHING = (
+    "means nothing to Codex (a URL pattern or a claude.ai connector), so this window starts without it"
+)
 DROPPED = (
     "every plugin is switched off for the plugin servers its list does not name, so it also starts "
     "without: {}"
 )
 
 
-def _report(window: str, reach: str, problems: Sequence[str]) -> tuple[str, str]:
-    """A window's line: what it reaches, then each problem (a part only when it names something)."""
+def _report(window: str, reach: str, problems: Sequence[str], notes: Sequence[str] = ()) -> tuple[str, str]:
+    """A window's line: what it reaches, each problem, then each note, which warns of nothing (a part
+    only when it says something)."""
     parts = [part for part in problems if part]
-    return (WARN if parts else OK), "; ".join([f"{window}: {reach}", *parts])
+    return (WARN if parts else OK), "; ".join([f"{window}: {reach}", *parts, *(n for n in notes if n)])
 
 
 def _part(text: str, names: Sequence[str]) -> str:
     return text.format(", ".join(names)) if names else ""
 
 
-def _everything(window: str, kind: str) -> tuple[str, str]:
-    """All: no limit, which the orchestrator should not keep (it reaches every connector of mine)."""
+SiteAllowList = tuple[Path, Sequence[Any]]  # a settings file, and the allowedMcpServers it holds
+
+
+def _everything(window: str, kind: str, site: SiteAllowList | None = None) -> tuple[str, str]:
+    """All: no limit, which the orchestrator should not keep (it reaches every connector of mine), but
+    for the allow list of its settings file (<site>), which no list replaces then."""
+    reach = EVERYTHING_LINE
+    if site is not None:
+        listed = json.dumps(list(site[1]), ensure_ascii=False)
+        reach = f"all, so the allowedMcpServers of its settings file ({site[0]}) applies: {listed}"
     if kind == ORCHESTRATOR:
-        return WARN, f"{window}: {EVERYTHING_LINE}: {NAME_THEM}"
-    return OK, f"{window}: {EVERYTHING_LINE}"
+        return WARN, f"{window}: {reach}: {NAME_THEM}"
+    return OK, f"{window}: {reach}"
 
 
-def claude_report(
-    window: str, kind: str, allowed: Allowed, plugins: Mapping[str, Any], kept: Mapping[str, str]
-) -> tuple[str, str]:
-    """A Claude Code window's line, resolved as `--kept-only` does: a name only `claude mcp list` could
-    resolve (claude.ai's, a plugin's the installed ones do not list) from what earlier lookups kept."""
-    if allowed.everything:
-        return _everything(window, kind)
+@dataclass(frozen=True)
+class ClaudeFacts:
+    """What a Claude Code window's doctor line goes by: the installed plugins' servers, the targets
+    earlier lookups kept, the other settings scopes' allow lists (claude_state.settings_allow_lists),
+    and, for the orchestrator, the allow list of its settings file, merged into its launch settings."""
+
+    plugins: Mapping[str, Any]
+    kept: Mapping[str, str]
+    scopes: Sequence[tuple[Path, Sequence[Any]]] = ()
+    site: SiteAllowList | None = None
+
+
+REACH_LABELS = ("reaches", "allowed by name:", "allowed by pattern:")
+
+
+def _reach_label(name: str, missing: Sequence[str]) -> str | None:
+    """How a doctor line says <name>: reached, when it resolved to a known server; a plain name and a URL
+    pattern only allowed (Claude Code matches them as they are), since nothing here says such a server
+    exists; None for a name not found."""
+    if is_url(name):
+        return REACH_LABELS[2]
+    if is_plain(name):
+        return REACH_LABELS[1]
+    return None if name in missing else REACH_LABELS[0]
+
+
+def _claude_reach(allowed: Allowed, missing: Sequence[str]) -> str:
+    """What a list reaches, and what it only allows, by name or by pattern (_reach_label)."""
     if not allowed.names:
-        return OK, f"{window}: none (no MCP server or connector)"
-    missing = claude_entries(allowed, plugins, kept).missing
-    reached = [name for name in allowed.names if name not in missing]
-    not_kept = [name for name in missing if needs_lookup_of(name, plugins)]
-    not_found = [name for name in missing if name not in not_kept]
-    reach = f"reaches {', '.join(reached) or 'nothing'}"
-    return _report(window, reach, [_part(NOT_FOUND, not_found), _part(NOT_KEPT, not_kept)])
+        return NONE_LINE
+    groups: dict[str, list[str]] = {label: [] for label in REACH_LABELS}
+    for name in allowed.names:
+        if label := _reach_label(name, missing):
+            groups[label].append(name)
+    return (
+        "; ".join(f"{label} {', '.join(names)}" for label, names in groups.items() if names)
+        or "reaches nothing"
+    )
+
+
+def claude_report(window: str, kind: str, allowed: Allowed, facts: ClaudeFacts) -> tuple[str, str]:
+    """A Claude Code window's line, resolved as `--kept-only` does: a name only `claude mcp list` could
+    resolve (claude.ai's, a plugin's the installed ones do not list) from what earlier lookups kept; and
+    whether another settings scope widens it, which keeps it from starting (refuse_widening)."""
+    if allowed.everything:
+        return _everything(window, kind, facts.site)
+    resolution = claude_entries(allowed, facts.plugins, facts.kept)
+    not_kept = [name for name in resolution.missing if needs_lookup_of(name, facts.plugins)]
+    not_found = [name for name in resolution.missing if name not in not_kept]
+    widened = widening(resolution.entries or (), facts.scopes)
+    problems = [
+        _part(NOT_FOUND, not_found),
+        _part(NOT_KEPT, not_kept),
+        f"does not start: {widening_problem(widened)}" if widened else "",
+    ]
+    return _report(window, _claude_reach(allowed, resolution.missing), problems, [_replaced(facts.site)])
+
+
+def _replaced(site: SiteAllowList | None) -> str:
+    """The note that a list (not `all`) replaces the allow list of the orchestrator's settings file: the
+    launch merges that file into its settings, and the window's list wins."""
+    return (
+        ""
+        if site is None
+        else f"its settings file ({site[0]}) holds an allowedMcpServers, which this list replaces"
+    )
 
 
 def means_nothing_to_codex(name: str) -> bool:
@@ -349,9 +457,17 @@ def codex_report(
     return _report(window, reach, problems)
 
 
+def _site(settings_file: Path | None) -> SiteAllowList | None:
+    """The orchestrator's settings file and the allow list it holds; None without one."""
+    listed = None if settings_file is None else claude_state.settings_allow_list(settings_file)
+    return None if settings_file is None or listed is None else (settings_file, listed)
+
+
 def _claude_line(args: argparse.Namespace, allowed: Allowed) -> tuple[str, str]:
-    plugins = claude_state.plugin_mcp_servers() if allowed.names else {}
-    return claude_report(args.window, args.kind, allowed, plugins, load_kept(args.state_dir))
+    plugins = plugins_by_file() if allowed.names else {}
+    scopes = claude_state.settings_allow_lists(args.cwd)
+    facts = ClaudeFacts(plugins, load_kept(args.state_dir), scopes, _site(args.settings_file))
+    return claude_report(args.window, args.kind, allowed, facts)
 
 
 def _codex_line(args: argparse.Namespace, allowed: Allowed) -> tuple[str, str]:
@@ -397,10 +513,27 @@ def looked_up_targets(
     except claude_state.McpListError as exc:
         say(f"claude mcp list failed ({exc}); using the servers kept from the last launch")
         return load_kept(args.state_dir)
+    say_unshown(allowed, targets)
     asked = [name for name in allowed.names if needs_lookup_of(name, plugins)]
     found = {name: targets[name] for name in asked if name in targets}
     save_kept(args.state_dir, asked, found)
     return found
+
+
+def say_unshown(allowed: Allowed, targets: Mapping[str, str]) -> None:
+    """Each plain name a lookup that ran anyway does not show: it stays allowed (a serverName cannot
+    widen a list), but may be a typo."""
+    for name in allowed.names:
+        if is_plain(name) and name not in targets:
+            say(f"{name} is not among the servers claude mcp list shows here; it stays allowed by name")
+
+
+def plugins_by_file() -> dict[str, dict[str, Any]]:
+    """The installed plugins' servers an allow list can name from their own .mcp.json: not one that holds a
+    variable bosun cannot expand (claude_state.unexpanded), whose name resolves as `claude mcp list` shows
+    it, as for a plugin the installed ones do not list."""
+    servers = claude_state.plugin_mcp_servers()
+    return {name: config for name, config in servers.items() if not claude_state.unexpanded(config)}
 
 
 def claude_settings(args: argparse.Namespace) -> tuple[dict[str, Any], tuple[str, ...]]:
@@ -408,7 +541,7 @@ def claude_settings(args: argparse.Namespace) -> tuple[dict[str, Any], tuple[str
     allowed = parse(args.list)
     if allowed.everything:
         return {}, ()
-    plugins = claude_state.plugin_mcp_servers()
+    plugins = plugins_by_file()
     resolution = claude_entries(allowed, plugins, looked_up_targets(allowed, plugins, args))
     for name in resolution.missing:
         say(f"{name} not found, so this window starts without it")
@@ -424,7 +557,10 @@ def write_missing(path: Path, missing: Sequence[str]) -> None:
 
 
 def cmd_claude(args: argparse.Namespace) -> int:
-    """Always a JSON object on stdout, so the launch never reads a failure as `all` (no limit)."""
+    """Always a JSON object on stdout, so the launch never reads a failure as `all` (no limit), unless
+    another settings scope would widen it (refuse_widening): then nothing, and the window does not start.
+    That check runs outside the catch-all, on what is printed, so that its own failure prints nothing
+    either."""
     try:
         settings, missing = claude_settings(args)
         code = 1 if missing else 0
@@ -434,6 +570,7 @@ def cmd_claude(args: argparse.Namespace) -> int:
         why = " ".join(f"{type(exc).__name__}: {exc}".split())  # one line, whatever the exception says
         say(f"could not resolve the list ({why}), so this window starts without servers")
         settings, missing, code = {"allowedMcpServers": []}, parse(args.list).names, 1
+    refuse_widening(settings, args.cwd)
     if args.missing_to is not None:
         write_missing(args.missing_to, missing)
     print(json.dumps(settings, separators=(",", ":")))
@@ -449,9 +586,20 @@ def cmd_codex(args: argparse.Namespace) -> int:
     except codex_state.CodexListError as exc:
         say(f"codex mcp list failed ({exc}), so bosun cannot tell which servers to switch off")
         return 1
+    say_codex_unknown(allowed, servers)
     for arg in codex_args(allowed, servers):
         print(arg)
     return 0
+
+
+def say_codex_unknown(allowed: Allowed, servers: codex_state.McpServers) -> None:
+    """Each name of the list Codex has no server by: one it does not list, and one that means nothing
+    to it (a URL pattern, a claude.ai connector)."""
+    not_found, meaningless = _codex_names(allowed, servers)
+    for name in not_found:
+        say(f"{name} not found, so this window starts without it")
+    for name in meaningless:
+        say(f"{name} {MEANS_NOTHING}")
 
 
 def parser() -> argparse.ArgumentParser:
@@ -477,6 +625,7 @@ def parser() -> argparse.ArgumentParser:
     doctor.add_argument("--cwd", required=True, type=Path)
     doctor.add_argument("--state-dir", required=True, type=Path)
     doctor.add_argument("--agent-bin", required=True)
+    doctor.add_argument("--settings-file", type=Path)  # the orchestrator's (BOSUN_ORCHESTRATOR_SETTINGS)
     doctor.set_defaults(run=cmd_doctor)
     return top
 

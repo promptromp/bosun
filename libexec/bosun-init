@@ -1,14 +1,19 @@
 #!/bin/bash
-# Usage: bosun init [--recommended | --answers <file>] [--force] [--dry-run]
+# Usage: bosun init [--recommended [--unattended] | --answers <file>] [--force] [--dry-run]
 #        bosun init --detect
 #        bosun init --print-answers [--answers <file>]
 #
-# Set bosun up from what this Mac shows: the repos you use your agents in, your usual hours, your
-# logins. It starts by checking what bosun needs (`bosun preflight`), and stops there if something is
-# missing. In a terminal it then asks a few questions, one key each, and shows the plan before it
-# changes anything. Without a terminal, or with --dry-run, it only prints the plan.
+# Set bosun up from what this Mac shows: the repos you use your agents in, the connectors `claude mcp
+# list` shows, your usual hours, your logins. It starts by checking what bosun needs (`bosun
+# preflight`), and stops there if something is missing. In a terminal it then asks a few questions, one
+# key each, among them which connectors the orchestrator may use (none ticked on a first run), and shows
+# the plan before it changes anything. Without a terminal, or with --dry-run, it only prints the plan.
 #   --recommended      carry out the recommended plan: write the config, trust the folders, then run
 #                      install.sh (links `bosun`, loads the launchd jobs, runs `bosun doctor`)
+#   --unattended       with --recommended, on a first run (no bosun.env): no repo windows (unless
+#                      sessions.yml already lists some) and no connectors, since nobody chose them, and
+#                      a last line saying so. BOSUN_INIT_UNATTENDED=1 is the same (get.sh --unattended
+#                      sets it). A re-run is the recommendation as it is
 #   --answers <file>   the same with your answers, JSON, `-` for stdin; it only needs what it changes
 #   --force            also replace a sessions.yml that lists other windows (backed up)
 #   --dry-run          print the plan and stop

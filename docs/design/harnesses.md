@@ -69,8 +69,9 @@ codex`, Codex 0.166.0) showed it for a user's server, a project's and one named 
 `codex_apps` without `--disable apps`) are not in the listing and stay on, as Claude Code's Chrome and
 computer-use do: they are local, and a list cannot name them. A listing that fails, or arguments of any other
 shape than `[-c mcp_servers={...}] [--disable plugins] --disable apps`, keep the window from starting: bosun cannot tell which servers to
-switch off, and it would rather not start the window than start it with all of them. A launch lists once,
-however many times it builds its arguments. `launch --fingerprint` lists too, since the fingerprint holds
+switch off, and it would rather not start the window than start it with all of them. A launch looks up
+once, however many times it builds its arguments: one lookup of two listings (with plugins, and with
+`--disable plugins`). `launch --fingerprint` lists too, since the fingerprint holds
 these arguments; when that fails during an update, the window reads as changed and its restart refuses to
 start it.
 

@@ -29,8 +29,9 @@ None of these are public APIs. If a Claude Code update changes them, this is the
 - `claude mcp list`: a line per MCP server a session in that folder gets, `<name>: <URL or command>
   - <health>`, claude.ai's connectors (named `claude.ai <Name>`) only with
   ENABLE_CLAUDEAI_MCP_SERVERS=true
-- ~/.claude/settings.json: `skipDangerousModePermissionPrompt` (the bypass warning accepted), and
-  whether it holds `allowedMcpServers`, which Claude Code merges with a window's own and so widens it
+- ~/.claude/settings.json: `skipDangerousModePermissionPrompt` (the bypass warning accepted); it, and a
+  folder's `.claude/settings.json` and `.claude/settings.local.json`: `allowedMcpServers`, which Claude
+  Code adds to the list a window is launched with (every scope's lists add up), so each widens it
 
 Usage: claude_state.py resolve <workdir> <name>    the most recent session named exactly <name>
        claude_state.py list <workdir>              named sessions, newest first
@@ -41,7 +42,6 @@ Usage: claude_state.py resolve <workdir> <name>    the most recent session named
        claude_state.py trusted <dir>               exit 0 if Claude Code trusts <dir>
        claude_state.py onboarded                   exit 0 if its first-run screens are done
        claude_state.py bypass-accepted             exit 0 if its bypass-mode warning was accepted
-       claude_state.py sets-allowed-mcp-servers    exit 0 if my own settings hold allowedMcpServers
        claude_state.py logged-in                   exit 0 if `claude auth status` says so
        claude_state.py set-trust <dir> true|false  record (or remove) folder trust
        claude_state.py prompts <transcript> [<ISO time>]
@@ -57,9 +57,11 @@ Exit codes: 0 found / done, 3 not found, 2 usage.
 
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 import re
+import signal
 import subprocess
 import sys
 import tempfile
@@ -95,6 +97,7 @@ PROJECTS_DIR = HOME / ".claude" / "projects"
 LIVE_SESSIONS_DIR = HOME / ".claude" / "sessions"
 CONFIG_FILE = HOME / ".claude.json"
 SETTINGS_FILE = HOME / ".claude" / "settings.json"
+ALLOW_LIST = "allowedMcpServers"  # in a settings file: the MCP servers a session may reach
 INSTALLED_PLUGINS = HOME / ".claude" / "plugins" / "installed_plugins.json"
 CLAUDE_AI_PREFIX = "claude.ai "  # how `claude mcp list` names claude.ai's connectors: claude.ai Acme Mail
 SLACK_PLUGIN = "slack"
@@ -211,10 +214,13 @@ def plugin_mcp_servers(installed: Path | None = None) -> dict[str, dict[str, Any
 
 
 def install_servers(install: object) -> dict[str, dict[str, Any]]:
-    """The servers in one installed plugin's .mcp.json, its root expanded."""
+    """The servers in one installed plugin's .mcp.json, its root expanded; none for an install without
+    an absolute path, whose .mcp.json would be read in this process's folder (a window's own)."""
     if not isinstance(install, dict):
         return {}
-    root = str(install.get("installPath", ""))
+    root = str(install.get("installPath") or "")
+    if not Path(root).is_absolute():
+        return {}
     servers = (read_object(Path(root) / ".mcp.json") or {}).get("mcpServers")
     if not isinstance(servers, dict):
         return {}
@@ -236,6 +242,14 @@ def expand_root(config: dict[str, Any], root: str) -> dict[str, Any]:
     return result
 
 
+def unexpanded(config: dict[str, Any]) -> bool:
+    """Whether a plugin server's `command`, `args` or `url` still holds a `${...}` after expand_root: a
+    variable Claude Code expands from its own environment, which bosun cannot know."""
+    args = config.get("args")
+    values = [config.get("command"), config.get("url"), *(args if isinstance(args, list) else [])]
+    return any(isinstance(value, str) and "${" in value for value in values)
+
+
 # ---- the MCP servers a window would get ------------------------------------------------------------
 
 
@@ -254,15 +268,8 @@ def mcp_server_targets(
     `claude mcp list` (which connects to each to check it, a few seconds). claude.ai's connectors are
     listed only with ENABLE_CLAUDEAI_MCP_SERVERS=true."""
     try:
-        result = subprocess.run(
-            [claude_bin, "mcp", "list"],
-            cwd=cwd,
-            env={**os.environ, "ENABLE_CLAUDEAI_MCP_SERVERS": "true"},
-            stdin=subprocess.DEVNULL,
-            capture_output=True,
-            text=True,
-            timeout=timeout,
-            check=False,
+        result = run_in_own_group(
+            [claude_bin, "mcp", "list"], cwd, {**os.environ, "ENABLE_CLAUDEAI_MCP_SERVERS": "true"}, timeout
         )
     except subprocess.TimeoutExpired as exc:
         raise McpListError(f"timed out after {timeout:g}s") from exc
@@ -274,6 +281,32 @@ def mcp_server_targets(
     if not targets:
         raise McpListError("no server in its output")
     return targets
+
+
+def run_in_own_group(
+    argv: list[str], cwd: Path, env: dict[str, str], timeout: float
+) -> subprocess.CompletedProcess[str]:
+    """<argv> run in a process group of its own, its output kept. One that outlasts <timeout> is killed
+    with its whole group, every stdio server `claude mcp list` started to check it included, so none is
+    left behind, and TimeoutExpired raised."""
+    with subprocess.Popen(
+        argv,
+        cwd=cwd,
+        env=env,
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        start_new_session=True,
+    ) as process:
+        try:
+            out, err = process.communicate(timeout=timeout)
+        except subprocess.TimeoutExpired:
+            with contextlib.suppress(ProcessLookupError, PermissionError):
+                os.killpg(process.pid, signal.SIGKILL)
+            process.wait()  # not communicate(): a server that left the group may hold the pipes open
+            raise
+    return subprocess.CompletedProcess(argv, process.returncode, out, err)
 
 
 def parse_mcp_list(text: str) -> dict[str, str]:
@@ -366,10 +399,28 @@ def bypass_accepted() -> bool:
     return (read_object(SETTINGS_FILE) or {}).get("skipDangerousModePermissionPrompt") is True
 
 
-def sets_allowed_mcp_servers() -> bool:
-    """Whether my own settings hold an `allowedMcpServers`: Claude Code adds it to the one a window is
-    launched with, so it widens every window's list (docs/design/connectors.md)."""
-    return "allowedMcpServers" in (read_object(SETTINGS_FILE) or {})
+def settings_allow_list(path: Path) -> list[Any] | None:
+    """The `allowedMcpServers` a settings file holds; None when the file is missing or unreadable, or
+    holds no such list."""
+    entries = (read_object(path) or {}).get(ALLOW_LIST)
+    return entries if isinstance(entries, list) else None
+
+
+def allow_list_scopes(cwd: Path) -> tuple[Path, ...]:
+    """The settings files whose `allowedMcpServers` Claude Code adds to the one a window started in <cwd> is
+    launched with: mine, and the folder's shared and local project settings. Each once, as a folder that is
+    my home folder has my settings as its project's."""
+    project = Path(cwd) / ".claude"
+    files: dict[Path, Path] = {}
+    for path in (SETTINGS_FILE, project / "settings.json", project / "settings.local.json"):
+        files.setdefault(path.resolve(), path)
+    return tuple(files.values())
+
+
+def settings_allow_lists(cwd: Path) -> list[tuple[Path, list[Any]]]:
+    """Each of allow_list_scopes(<cwd>) that holds `allowedMcpServers` entries, and those entries. Claude
+    Code adds them up, so each widens a window's own list (docs/design/connectors.md)."""
+    return [(path, entries) for path in allow_list_scopes(cwd) if (entries := settings_allow_list(path))]
 
 
 def is_claude_ai_connector(name: str) -> bool:
@@ -1485,7 +1536,6 @@ COMMANDS: dict[str, Command] = {
     "trusted": (1, lambda args: 0 if trusted(args[0]) else NOT_FOUND),
     "onboarded": (0, lambda _args: 0 if onboarded() else NOT_FOUND),
     "bypass-accepted": (0, lambda _args: 0 if bypass_accepted() else NOT_FOUND),
-    "sets-allowed-mcp-servers": (0, lambda _args: 0 if sets_allowed_mcp_servers() else NOT_FOUND),
     "logged-in": (0, cmd_logged_in),
     "set-trust": (2, cmd_set_trust),
     "prompts": (None, cmd_prompts),

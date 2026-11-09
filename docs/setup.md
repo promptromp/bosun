@@ -175,7 +175,10 @@ such key is `BOSUN_ORCHESTRATOR_CONNECTORS="all"`: an install from before
 `bosun doctor` warns until you name the ones it needs and drop `all`. Repo windows start without
 connectors from then on, a repo's own `.mcp.json` servers included, which the plan and the summary say:
 give one back with `BOSUN_CONNECTORS`, or `connectors:` in its `sessions.yml` entry. Without a `bosun.env`
-nothing is written, and the defaults apply.
+nothing is written, and the defaults apply: the orchestrator then starts with no connectors, which the
+plan, the summary and `bosun doctor` say. A checkout of your own that you update with `git pull` gets no
+such change: set `BOSUN_ORCHESTRATOR_CONNECTORS` in `bosun.env` to the connectors the orchestrator needs,
+or to `all`, or it starts with none, which `bosun doctor` warns about until the key is set.
 
 ### The first update of an older install
 
@@ -308,8 +311,9 @@ State and logs go to `~/.local/state/bosun/`:
 - `watchdog.json`: the watchdog's de-duplication state
 - `login.json`: the last Claude Code login check (see Claude Code login)
 - `codex-sessions.json`: which Codex session each window's name stands for
-- `connectors.json`: the URL `claude mcp list` last showed for each claude.ai connector a list names,
-  for a launch whose lookup fails (see [Connectors](#connectors-what-each-window-may-reach))
+- `connectors.json`: the URL or command line `claude mcp list` last showed for each name a list holds
+  that only that listing resolves (a claude.ai connector, a plugin's server the installed plugins do not
+  give), for a launch whose lookup fails (see [Connectors](#connectors-what-each-window-may-reach))
 - `agent-changes.json`: what bosun changed in Claude Code's and Codex's own files (folder trust, memory
   notes), so that `bosun uninstall` takes back only that
 - `signals/`: what Claude Code's hooks reported per window ([Signals](design/signals.md))
@@ -359,8 +363,8 @@ config, and `bosun doctor` shows the configured values and your saved default.
 
 ### Connectors: what each window may reach
 
-A window bosun starts on Claude Code reaches only the MCP servers and connectors its list names; the rest
-are off for it. Chrome is not one of them: it stays on through `--chrome`, as before.
+A window bosun starts reaches only the MCP servers and connectors its list names; the rest are off for it.
+On Claude Code, Chrome is not one of them: it stays on through `--chrome`, as before. On Codex, see below.
 
 | Key | Whose list | Default |
 |---|---|---|
@@ -385,31 +389,47 @@ sessions:
 ```
 
 At launch bosun turns the list into Claude Code's `allowedMcpServers`, in the window's `--settings`, in
-place of any a site settings file names. A server you added yourself goes by its name, a plugin's by its
-URL or command, and a claude.ai connector by the URL `claude mcp list` shows for it. bosun runs that
-listing (a few seconds) only when the list names a claude.ai connector, once per launch, and keeps what it
-found in `connectors.json` (a name it no longer shows is dropped there); if the listing fails (at a
-morning wake, before the network is up), the launch uses what was kept. A name it cannot find is left
-out, never let in as more: the launch logs a line, and for the orchestrator it also alerts you (`bosun
-alert`, whose output goes to `launch-YYYY-MM-DD.log`). The list is read at launch, so a change applies
-once the window starts again.
+place of any a site settings file names (with `all`, the site file's applies). A server you added yourself
+goes by its name, a plugin's by its URL or command, and a claude.ai connector by the URL `claude mcp list`
+shows for it. bosun runs that listing (a few seconds) only when the list names a claude.ai connector, or a
+plugin's server the installed plugins do not list (a plugin synced from your account, say), once per
+launch, and keeps what it found in `connectors.json` (a name it no longer shows is dropped there); if the
+listing fails (at a morning wake, before the network is up), the launch uses what was kept. A name it
+cannot find is left out, never let in as more: the launch logs a line, on the window's screen and in
+`launch-YYYY-MM-DD.log`, and for the orchestrator it also alerts you (`bosun alert`, whose output goes to
+that log too). A name you added yourself is matched exactly, and checked only when that listing runs
+anyway: it cannot let in more than a server of that name, so a typo allows nothing, and a launch that runs
+the listing logs such a name it does not show. The list is read at launch, so a change applies once the
+window starts again.
+
+Claude Code adds the `allowedMcpServers` of your own `~/.claude/settings.json` and of the window folder's
+`.claude/settings.json` and `.claude/settings.local.json` to the window's list. So a window with a list
+(anything but `all`) does not start while one of those files allows a server its list does not name, entry
+for entry: the launch says which file and which entries, and what to do: name them in the window's list,
+use `all`, or remove them from that file.
 
 On Codex, a window's list names servers as `codex mcp list` shows them. bosun switches off the servers it
 does not name: those in a `config.toml` (yours, or a trusted repo's) one by one, and a plugin's only by
 switching off every plugin, since Codex can switch a plugin's server off only by its plugin and says
-nowhere which plugin a server comes from. So a list that names one plugin's server but not another's
-loses both, and every plugin's skills too: name every plugin server the window should keep, or none.
-ChatGPT's connectors (`codex_apps`) are off unless the list is `all`. Codex's other built-in servers
+nowhere which plugin a server comes from. So to keep any plugin's server, the list must name every
+plugin's server; one that names some but not all of them loses all of them, and every plugin's skills
+too. A name Codex has no server by is logged at launch. Servers that `BOSUN_CODEX_FLAGS` adds (a
+`--profile`, a `-c mcp_servers...`) are not switched off, as bosun lists the servers without the window's
+flags: add servers in `config.toml`, not through flags. Unless the list is `all`, bosun also passes
+`--disable apps`, which is documented to switch off ChatGPT's connectors (`codex_apps`; the test VM had no
+ChatGPT login to see that with). Codex's other built-in servers
 (`codex_worktrees`) stay on, as Chrome does on Claude Code: they are local, and `codex mcp list` does not
 show them, so a list cannot name them. bosun also starts Codex without its update screen, which would stop
 an unattended start.
 
-`bosun doctor` has a line for each window: what it reaches, by name, and each name it cannot find. It
-looks nothing up (`claude mcp list` connects to every server), so a claude.ai connector no start has
-looked up yet shows as not found until the window's next start does. For a Codex window it asks `codex
-mcp list --json` for the servers' names, and says which names mean nothing to Codex (a URL pattern, a
-claude.ai connector). It warns while the orchestrator's list is `all`, and when your own
-`~/.claude/settings.json` holds an `allowedMcpServers`: Claude Code adds that to every window's list.
+`bosun doctor` has a line for each window: what it reaches (a name resolved to a server it knows), what
+it only allows by name or by pattern, and each name it cannot find. It looks nothing up (`claude mcp list`
+connects to every server), so a claude.ai connector no start has looked up yet shows as not found until
+the window's next start does. For a Codex window it asks `codex mcp list --json` for the servers' names,
+and says which names mean nothing to Codex (a URL pattern, a claude.ai connector). It warns while the
+orchestrator's list is `all`, while `bosun.env` does not set it at all, and for a Claude Code window that
+another settings file would widen, which does not start; and it says what an `allowedMcpServers` in the
+orchestrator's site settings file comes to.
 
 ### How sessions are resumed
 
@@ -523,7 +543,9 @@ Then run `bosun trust <dir>` for any folder Codex has not seen, and `bosun docto
 **What it may do.** Windows start with `BOSUN_CODEX_FLAGS`, by default `--no-daemon --approve-for-me`: Codex's
 sandbox, and an automatic reviewer that decides when a command may go past it, with no prompts. bosun also
 gives the sandbox the repo's `.git`, its own state folder and the network, or nothing could be committed,
-reported or pushed. Keep `--no-daemon`: bosun needs each session in its own process.
+reported or pushed. Keep `--no-daemon`: bosun needs each session in its own process. Each window reaches
+only the MCP servers its list names ([Connectors](#connectors-what-each-window-may-reach)), but servers
+these flags add (a `--profile`, a `-c mcp_servers...`) stay on: add servers in `config.toml` instead.
 
 **What differs from a Claude Code window**, among them no Remote Control from your phone, a revoked login
 that is not reported, and no Impact stats or learning yet:

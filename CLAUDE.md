@@ -51,18 +51,21 @@ of truth, so don't copy rules into this file.
   word-overlap similarity for near-duplicate hints (`ledger spawn`, learning's outreach overlap,
   which held item a prompt is about).
   `lib/connectors.py`: what a window may reach (its list of MCP servers and connectors) turned into
-  Claude Code's `allowedMcpServers` and Codex's launch arguments, and the URLs kept from the last lookup
-  (`connectors.json`); the agents' listings are read through `lib/claude_state.py` (`claude mcp list`,
-  plugins' servers) and `lib/codex_state.py`; design: `docs/design/connectors.md`. The shell side is
+  Claude Code's `allowedMcpServers` and Codex's launch arguments, and the URLs and command lines kept from
+  the last lookup (`connectors.json`); the agents' listings are read through `lib/claude_state.py` (`claude
+  mcp list`, plugins' servers, the settings scopes' allow lists a launch refuses to be widened by) and
+  `lib/codex_state.py`; design: `docs/design/connectors.md`. The shell side is
   `window_connectors` and `set_connector_settings` (`lib/common.sh`), which `build_agent_args` calls once
   per launch; `bosun doctor`'s line per window is its `doctor` subcommand (`check_connectors`).
   `lib/delegate.py`: task rendering. `lib/guard.py`: the orchestrator's PreToolUse permission hook
-  (added at launch by `guard_hook_settings`, `lib/common.sh`, and to `chores --dry-run`), and with `BOSUN_APPROVALS_ENABLED` its approval hooks (`--approvals`, `--permission-request`,
+  (which `guard_hook_settings` in `lib/common.sh` adds to the orchestrator's launch and to `chores
+  --dry-run`), and with `BOSUN_APPROVALS_ENABLED` its approval hooks (`--approvals`, `--permission-request`,
   `--post-tool-use`; the gated outward calls are one table there, `GATED_*`). `lib/approvals.py` (pure): action specs
   and exact matching, whose prompts count for an approval's quote, the standing classes
   (`STANDING_CLASSES`), matching a call's result to the approval it used and where a proposal
-  stands for me (`proposal_status`); `ledger propose --send|--run|--tool`, `approve`, `approvals` store and list
-  them; `orchestrator_extra_settings` (`lib/common.sh`) adds the hooks at launch. Design:
+  stands for me (`proposal_status`); `ledger propose --send|--run|--tool` and `ledger approve` store
+  them and `ledger approvals` lists them; `orchestrator_extra_settings` (`lib/common.sh`) adds the hooks
+  at launch. Design:
   `docs/design/approvals.md`. `lib/pr_threads.py`: a PR's review threads and rounds, read-only
   (`bosun pr-threads`; which threads await the author), also used by the guard's re-review
   check (`check_bump`, `BOSUN_APPROVALS_CHECK_REVIEW_THREADS`) and by `lib/review_watch.py`
@@ -253,7 +256,8 @@ of truth, so don't copy rules into this file.
   overrides. The guide in `docs/` if users should know. Renamed or removed: a row in `CONFIG_RENAMES`
   (`lib/migrations.py`), which `bosun update` applies to `bosun.env`. A new key whose default would
   change what an older install did, or that needs a word in the update's plan and summary: an entry
-  in `CONFIG_ADDED` there (its kept value, written to `bosun.env`, and its note). A change to one of my own files
+  in `CONFIG_ADDED` there (its kept value, written to `bosun.env`, its note, and for a kept value the
+  unset note that the plan, the summary and `bosun doctor` say while `bosun.env` does not set it). A change to one of my own files
   (`sessions.yml`, `policy.md`, `tasks/`) is never made for me: a row in `USER_FILE_CHANGES` there.
 - **Any substantial change** (an agent or OS, install steps, what runs where, a default, a command): every doc
   it affects changes in the same pull request, not later. Grep for what it touches ("Claude Code", "macOS

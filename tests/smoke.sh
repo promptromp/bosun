@@ -818,6 +818,8 @@ out="$(cd "$REPO_A" && "${ORCH[@]}" BOSUN_ORCHESTRATOR_CONNECTORS="claude.ai Acm
 check "a name not found is left out" allows "$out" '$a == [{"serverUrl": "https://chat.example.com/mcp"}]'
 check "... logged" contains "$out" "connectors: claude.ai Acme Gone not found, so this window starts without it"
 LAUNCH_LOG="$BOSUN_LOG_DIR/launch-$(date +%F).log"
+check "... in the launch log too, as is a failed lookup" bash -c '
+  grep -qF "orch: connectors: claude.ai Acme Gone not found, so this window starts without it" "$1" && grep -qF "orch: connectors: claude mcp list failed" "$1"' _ "$LAUNCH_LOG"
 check "... and the orchestrator's launch alerts me, the alert's output in the launch log" wait_for 10 grep -qF \
   "alert (notification only; BOSUN_ALERT_SLACK_USER is empty): orch: started without connector(s) it may use: claude.ai Acme Gone" "$LAUNCH_LOG"
 check "... never on the window's screen" bash -c 'grep -q "alerting you that it started without connector(s) it may use: claude.ai Acme Gone" <<<"$1" && ! grep -q "notification only" <<<"$1"' _ "$out"
@@ -844,14 +846,22 @@ check "a plugin: name only claude mcp list shows gets its command from the listi
 # window's limit, or settings asked for before the lookup ran, each stop the launch.
 check "a resolver answer that is not one JSON object stops the launch" bash -c '
   source "$1/lib/common.sh"; load_config
-  for answer in "not json" "{}{}" "[]"; do
+  for answer in "not json" "{}{}" "[]" "{}" "{\"allowedMcpServers\": {}}"; do
     python3() { printf "%s\n" "$answer"; }
     ! resolve_connectors alpha acme-local "$PWD" 0 >/dev/null 2>&1 || { echo "took: $answer"; exit 1; }
   done' _ "$ROOT"
+check "... but {} (no limit) for the list all" bash -c '
+  source "$1/lib/common.sh"; load_config
+  python3() { echo "{}"; }
+  [ "$(resolve_connectors alpha " all " "$PWD" 0)" = "{}" ]' _ "$ROOT"
 check "settings that lost the window's limit are refused" fails_with "lost its connector limit" bash -c '
   source "$1/lib/common.sh"; load_config
   model_effort_args=(--model opus --settings "{\"effortLevel\":\"medium\"}")
   require_connector_limit alpha "{\"allowedMcpServers\":[]}"' _ "$ROOT"
+check "... as is connector JSON that cannot be read, never taken for no limit" fails_with "cannot be read; not starting it with every server" bash -c '
+  source "$1/lib/common.sh"; load_config
+  model_effort_args=(--model opus)
+  require_connector_limit alpha "not json"' _ "$ROOT"
 check "... and settings asked for before the lookup ran" fails_with "were not resolved before" bash -c '
   source "$1/lib/common.sh"; load_config; connector_settings alpha' _ "$ROOT"
 check "a list naming all and more is refused" fails_with "stands alone" "${ORCH[@]}" BOSUN_ORCHESTRATOR_CONNECTORS="all, claude.ai Acme Chat" "$BOSUN" launch orch
@@ -872,6 +882,21 @@ TRICKY="https://mcp.example.com/a\"b\$(touch $WORK/pwned)*"
 check "connectors: in sessions.yml as a string" allows "$(cd "$REPO_A" && "${SN[@]}" "$BOSUN" launch alpha 2>&1)" '$a == [{"serverName": "acme-local"}, {"serverUrl": "https://mcp.example.com/*"}]'
 check "... as a list, a name with \" and \$( reaching the JSON as data" allows "$(cd "$REPO_A" && "${SN[@]}" "$BOSUN" launch beta 2>&1)" "\$a == [{\"serverName\": \"acme-local\"}, {\"serverUrl\": $(jq -n --arg t "$TRICKY" '$t')}]"
 check "... never run" test ! -e "$WORK/pwned"
+cat >"$WORK/connectors-odd-sessions.yml" <<YAML
+sessions:
+  - name: delta
+    dir: $REPO_A
+    connectors: ["claude.ai Acme, Inc"]
+  - name: epsilon
+    dir: $REPO_A
+    connectors: no
+YAML
+ODD=("${CN[@]}" BOSUN_SESSIONS_FILE="$WORK/connectors-odd-sessions.yml")
+check "... a list entry holding a comma is refused, never split into two names" fails_with \
+  "the connectors of delta must be a comma-separated string or a list of names, none holding a comma" bash -c 'cd "$1" && "${@:2}" launch delta' _ "$REPO_A" "${ODD[@]}" "$BOSUN"
+check "... as is a value that is no string, such as connectors: no (YAML's false)" fails_with \
+  "the connectors of epsilon must be a comma-separated string or a list of names" bash -c 'cd "$1" && "${@:2}" launch epsilon' _ "$REPO_A" "${ODD[@]}" "$BOSUN"
+check "... and doctor says why" contains "$("${ODD[@]}" "$BOSUN" doctor 2>&1)" "FAIL  epsilon: could not read its connectors: $WORK/connectors-odd-sessions.yml: the connectors of epsilon must be"
 check "... as [] (none), over BOSUN_CONNECTORS" allows "$(cd "$REPO_A" && "${SN[@]}" "$BOSUN" launch gamma 2>&1)" '$a == []'
 check "... and BOSUN_CONNECTORS for a window without the key" allows "$(cd "$REPO_A" && "${SN[@]}" BOSUN_SESSIONS_FILE="$BOSUN_CONFIG_DIR/sessions.yml" "$BOSUN" launch alpha 2>&1)" '$a == [{"serverName": "acme-default"}]'
 out="$(cd "$REPO_A" && "${ORCH[@]}" BOSUN_ORCHESTRATOR_CONNECTORS="$TRICKY" "$BOSUN" launch orch 2>&1)"
@@ -882,23 +907,50 @@ check "... and in an alert" wait_for 10 bash -c 'grep -qF "notification only; BO
 jq '. + {allowedMcpServers: [{serverName: "site-wide"}]}' "$ROOT/orchestrator/settings.json" >"$WORK/site-mcp-settings.json"
 check "a site settings file's own allowedMcpServers is replaced by the window's list" \
   allows "$(cd "$REPO_A" && "${ORCH[@]}" BOSUN_ORCHESTRATOR_SETTINGS="$WORK/site-mcp-settings.json" BOSUN_ORCHESTRATOR_CONNECTORS=acme-local "$BOSUN" launch orch 2>&1)" '$a == [{"serverName": "acme-local"}]'
+check "... and left as it is with all" \
+  allows "$(cd "$REPO_A" && "${ORCH[@]}" BOSUN_ORCHESTRATOR_SETTINGS="$WORK/site-mcp-settings.json" BOSUN_ORCHESTRATOR_CONNECTORS=all "$BOSUN" launch orch 2>&1)" '$a == [{"serverName": "site-wide"}]'
+check "doctor says which applies" contains "$("${ORCH[@]}" BOSUN_ORCHESTRATOR_SETTINGS="$WORK/site-mcp-settings.json" BOSUN_ORCHESTRATOR_CONNECTORS=acme-local "$BOSUN" doctor 2>&1)" \
+  "ok    orch: allowed by name: acme-local; its settings file ($WORK/site-mcp-settings.json) holds an allowedMcpServers, which this list replaces"
+# Allow lists in other settings scopes add to a window's (Claude Code), so a launch with a list refuses one
+# that allows more than the list names, and starts once the list names it; a window with all is not checked.
+mkdir -p "$REPO_A/.claude"
+echo '{"allowedMcpServers": [{"serverName": "acme-repo"}]}' >"$REPO_A/.claude/settings.json"
+check "a repo whose own settings allow a server its window's list does not name does not start" fails_with \
+  "connectors: $REPO_A/.claude/settings.json allows [{\"serverName\": \"acme-repo\"}], beyond this window's list, and Claude Code adds it to it: name it in the window's list, use all, or remove it from that file" \
+  bash -c 'cd "$1" && "${@:2}" launch alpha' _ "$REPO_A" "${CN[@]}" "$BOSUN"
+check "... and starts once its list names it" allows "$(cd "$REPO_A" && "${CN[@]}" BOSUN_CONNECTORS=acme-repo "$BOSUN" launch alpha 2>&1)" '$a == [{"serverName": "acme-repo"}]'
+check "... or with all" allows "$(cd "$REPO_A" && "${CN[@]}" BOSUN_CONNECTORS=all "$BOSUN" launch alpha 2>&1)" '$a == "no key"'
+check "... and doctor says it does not start" contains "$("${CN[@]}" "$BOSUN" doctor 2>&1)" \
+  "warn  alpha: none (no MCP server or connector); does not start: $REPO_A/.claude/settings.json allows"
+rm -rf "$REPO_A/.claude/settings.json"
 # bosun doctor: a line per window, resolved from what earlier starts kept (claude.ai Acme Chat), looking
 # nothing up; and a warning when my own Claude Code settings hold an allow list, which widens every window's.
 : >"$WORK/mcp-claude.calls"
 out="$("${SN[@]}" BOSUN_ORCHESTRATOR=orch BOSUN_ORCHESTRATOR_DIR="$REPO_A" BOSUN_ORCHESTRATOR_CONNECTORS=all "$BOSUN" doctor 2>&1)"
-check "doctor says what each window reaches: a few" contains "$out" "ok    alpha: reaches acme-local, https://mcp.example.com/*"
+check "doctor says what each window reaches: a few" contains "$out" "ok    alpha: allowed by name: acme-local; allowed by pattern: https://mcp.example.com/*"
 check "... none" contains "$out" "ok    gamma: none (no MCP server or connector)"
 check "... and warns while the orchestrator keeps every connector" contains "$out" \
   "warn  orch: all (every MCP server and connector): name the ones it needs in BOSUN_ORCHESTRATOR_CONNECTORS and drop all"
 out="$("${ORCH[@]}" BOSUN_ORCHESTRATOR_CONNECTORS="claude.ai Acme Chat, claude.ai Acme Gone" "$BOSUN" doctor 2>&1)"
 check "... names what it cannot find" contains "$out" "warn  orch: reaches claude.ai Acme Chat; not among the servers earlier starts looked up: claude.ai Acme Gone"
 check "... and looks nothing up" test ! -s "$WORK/mcp-claude.calls"
-check "... nor warns about my own settings while they hold no allow list" not_contains "$out" "allowedMcpServers"
+# An orchestrator whose bosun.env does not set its list (none there, or no bosun.env) had every connector
+# before the key: doctor says it now has none, until the key is set, to nothing too.
+UNSET_LINE="warn  BOSUN_ORCHESTRATOR_CONNECTORS is not set in bosun.env: before this version the orchestrator had every connector, and now it starts with none"
+check "doctor warns while there is no bosun.env to set the orchestrator's list" contains "$("${ORCH[@]}" "$BOSUN" doctor 2>&1)" "$UNSET_LINE"
+echo 'BOSUN_DRAIN_PROMPT="carry on"' >"$BOSUN_CONFIG_DIR/bosun.env"
+check "... and while bosun.env does not set it" contains "$("${ORCH[@]}" "$BOSUN" doctor 2>&1)" "$UNSET_LINE"
+echo 'BOSUN_ORCHESTRATOR_CONNECTORS=""' >"$BOSUN_CONFIG_DIR/bosun.env"
+check "... but not once it is set, to nothing too" bash -c '! grep -qF "$2" <<<"$1" && grep -qF "ok    orch: none (no MCP server or connector)" <<<"$1"' \
+  _ "$("${ORCH[@]}" "$BOSUN" doctor 2>&1)" "$UNSET_LINE"
+rm -f "$BOSUN_CONFIG_DIR/bosun.env"
 mkdir -p "$HOME/.claude"
 echo '{"allowedMcpServers": [{"serverName": "acme-local"}]}' >"$HOME/.claude/settings.json"
-check "doctor warns once when my own Claude Code settings hold an allow list" bash -c '
-  [ "$(grep -c "warn  your own Claude Code settings (~/.claude/settings.json) hold allowedMcpServers, which widens every window" <<<"$1")" = 1 ]' \
-  _ "$("${ORCH[@]}" "$BOSUN" doctor 2>&1)"
+out="$("${ORCH[@]}" BOSUN_ORCHESTRATOR_CONNECTORS="claude.ai Acme Chat" "$BOSUN" doctor 2>&1)"
+check "doctor says a window that my own Claude Code settings would widen does not start" contains "$out" \
+  "warn  orch: reaches claude.ai Acme Chat; does not start: $HOME/.claude/settings.json allows [{\"serverName\": \"acme-local\"}]"
+check "... and so does its launch" fails_with "$HOME/.claude/settings.json allows" \
+  bash -c 'cd "$1" && "${@:2}" launch orch' _ "$REPO_A" "${ORCH[@]}" BOSUN_ORCHESTRATOR_CONNECTORS="claude.ai Acme Chat" "$BOSUN"
 rm -f "$HOME/.claude/settings.json"
 rm -f "$WORK/mcp-claude.calls" "$BOSUN_STATE_DIR/connectors.json" "$LAUNCH_LOG"
 
@@ -2668,6 +2720,9 @@ for line in sys.stdin:
     "ok    cx-docs: reaches acme-docs (switches off acme.mail and ChatGPT's connectors)"
   check "... and that a URL means nothing to Codex" contains "$out" \
     "warn  cx: reaches acme-docs (switches off acme.mail and ChatGPT's connectors); mean nothing to Codex: https://mcp.example.com/*"
+  out="$(BOSUN_CONNECTORS="acme-docs, acme-gone" CX launch cx)"
+  check "a Codex launch says which names of its list it has no server by" contains "$out" "cx: connectors: acme-gone not found, so this window starts without it"
+  check "... in the launch log too" grep -qF "cx: connectors: acme-gone not found, so this window starts without it" "$BOSUN_LOG_DIR/launch-$(date +%F).log"
   check "a listing that fails keeps the window from starting" fails_with "codex mcp list failed" env CODEX_STAND_IN_MCP_LIST="$WORK/no-such-listing" bash -c 'cd "$1" && BOSUN_CODEX_BIN="$2" CODEX_HOME="$3" BOSUN_SESSIONS_FILE="$4" BOSUN_LAUNCH_DRY_RUN=1 BOSUN_EVENTS_ENABLED=0 "$5" launch cx' _ "$CX_REPO" "$ROOT/tests/sandbox/codex-stand-in" "$CX_HOME" "$WORK/cx-sessions.yml" "$BOSUN"
   out="$(CODEX_STAND_IN_MCP_LIST="$WORK/no-such-listing" CX launch cx || true)"
   check "... and says why, without starting Codex" bash -c 'grep -q "so bosun cannot tell which servers to switch off" <<<"$1" && ! grep -q "dry-run: would run" <<<"$1"' _ "$out"
@@ -2678,7 +2733,7 @@ for line in sys.stdin:
   # codex_args_valid <list> <lines...>: "valid" or "refused", as lib/launch/codex.sh judges what
   # connectors.py would print for <list>. A crash prints neither, so it is no answer to either check.
   codex_args_valid() {
-    bash -c 'set -u; BOSUN_CODEX_BIN=codex; source "$1/lib/launch/codex.sh" || exit 3; list="$2"; shift 2; codex_connector_args=("$@")
+    bash -c 'set -u; BOSUN_CODEX_BIN=codex; source "$1/lib/common.sh" && source "$1/lib/launch/codex.sh" || exit 3; list="$2"; shift 2; codex_connector_args=("$@")
       if codex_connector_args_valid "$list"; then echo valid; else echo refused; fi' _ "$ROOT" "$@"
   }
   outputs() { # <want> <command...>: the command prints exactly <want>

@@ -144,6 +144,32 @@ class PureTest(unittest.TestCase):
         resolution = claude_entries(parse(SYNCED), {}, {"plugin:acme:other": "npx x"})
         self.assertEqual(resolution, connectors.Resolution((), (SYNCED,)))
 
+    def test_widening_is_any_entry_not_exactly_among_the_window_s(self) -> None:
+        """Claude Code adds every scope's allow list to a window's: an entry not JSON-equal to one of the
+        window's own widens it, a narrower or a wider pattern too."""
+        own = ({"serverName": "acme-local"}, {"serverUrl": "https://mcp.example.com/*"})
+        user, project = Path("/home/me/.claude/settings.json"), Path("/repo/.claude/settings.json")
+        scopes: list[tuple[Path, list[Any]]] = [
+            (user, [{"serverName": "acme-local"}, {"serverUrl": "https://*"}]),
+            (project, [{"serverUrl": "https://mcp.example.com/mcp"}, {"serverName": "acme-local", "x": 1}]),
+        ]
+        self.assertEqual(
+            connectors.widening(own, scopes),
+            [
+                (user, [{"serverUrl": "https://*"}]),
+                (
+                    project,
+                    [{"serverUrl": "https://mcp.example.com/mcp"}, {"serverName": "acme-local", "x": 1}],
+                ),
+            ],
+        )
+        same = [(project, [{"serverUrl": "https://mcp.example.com/*"}, {"serverName": "acme-local"}])]
+        self.assertEqual(connectors.widening(own, same), [])
+        self.assertEqual(
+            connectors.widening((), [(user, [{"serverName": "acme-local"}])]),
+            [(user, [{"serverName": "acme-local"}])],
+        )
+
     def test_codex_disables_each_unlisted_server_in_one_table(self) -> None:
         self.assertEqual(
             codex_args(parse("acme-docs"), servers("acme-docs", "acme-tracker", "acme-wiki")),
@@ -284,9 +310,16 @@ class CommandCase(unittest.TestCase):
         self.root = Path(temp.name).resolve()
         self.state = self.root / "state"
         self.installed = self.root / "installed_plugins.json"
-        patch = mock.patch.object(claude_state, "INSTALLED_PLUGINS", self.installed)
-        patch.start()
-        self.addCleanup(patch.stop)
+        self.home_settings = self.root / "home" / ".claude" / "settings.json"
+        for name, value in (("INSTALLED_PLUGINS", self.installed), ("SETTINGS_FILE", self.home_settings)):
+            patch = mock.patch.object(claude_state, name, value)
+            patch.start()
+            self.addCleanup(patch.stop)
+
+    def allow_in(self, settings: Path, *entries: object) -> None:
+        """A settings file holding an allowedMcpServers of <entries>."""
+        settings.parent.mkdir(parents=True, exist_ok=True)
+        settings.write_text(json.dumps({"permissions": {}, "allowedMcpServers": list(entries)}))
 
     def run_main(self, *argv: str) -> tuple[int, str, str]:
         with mock.patch("sys.stdout", io.StringIO()) as out, mock.patch("sys.stderr", io.StringIO()) as err:
@@ -466,6 +499,25 @@ class CommandTest(CommandCase):
             ],
         )
 
+    def test_a_plugin_server_whose_file_holds_another_variable_is_looked_up(self) -> None:
+        """${CLAUDE_PLUGIN_ROOT} is the only variable bosun expands: a server whose command, arguments or
+        URL hold another is resolved as `claude mcp list` shows it, as for a plugin not installed."""
+        plugin = self.root / "plugins" / "acme-tools"
+        plugin.mkdir(parents=True)
+        servers = {"pdf": {"command": "${ACME_HOME}/bin/pdf", "args": ["--stdio"]}}
+        (plugin / ".mcp.json").write_text(json.dumps({"mcpServers": servers}))
+        self.installed.write_text(
+            json.dumps({"plugins": {"acme-tools@market": [{"installPath": str(plugin)}]}})
+        )
+        listing = "plugin:acme-tools:pdf: /opt/acme/bin/pdf --stdio - ✔ Connected\n"
+        code, out, err = self.claude("plugin:acme-tools:pdf", printing(self.root, listing))
+        self.assertEqual((code, err), (0, ""))
+        self.assertEqual(self.settings(out), [{"serverCommand": ["/opt/acme/bin/pdf", "--stdio"]}])
+        code, out, err = self.claude("plugin:acme-tools:pdf", fake_agent(self.root, "exit 1"), "--kept-only")
+        self.assertEqual(
+            (code, self.settings(out)), (0, [{"serverCommand": ["/opt/acme/bin/pdf", "--stdio"]}])
+        )
+
     def test_names_with_shell_characters_pass_as_data(self) -> None:
         """Through the real command line, as the launch runs it: the name is data, never evaluated."""
         agent = printing(self.root, MCP_LIST)
@@ -516,16 +568,151 @@ class CommandTest(CommandCase):
             self.run_main("codex", "--list", "all", "--agent-bin", str(self.root / "none")), (0, "", "")
         )
 
+    def test_codex_says_which_names_it_has_no_server_by(self) -> None:
+        agent = printing(self.root, json.dumps([{"name": "acme-docs"}, {"name": "acme.mail"}]))
+        code, out, err = self.run_main(
+            "codex",
+            "--list",
+            f"acme-docs, acme-gone, https://mcp.example.com/*, {MAIL}",
+            "--agent-bin",
+            str(agent),
+        )
+        self.assertEqual(code, 0)
+        self.assertEqual(out.splitlines()[-2:], ["--disable", "apps"])
+        meaningless = connectors.MEANS_NOTHING
+        self.assertEqual(
+            err.splitlines(),
+            [
+                "connectors: acme-gone not found, so this window starts without it",
+                f"connectors: https://mcp.example.com/* {meaningless}",
+                f"connectors: {MAIL} {meaningless}",
+            ],
+        )
+
+    def test_a_plain_name_a_lookup_does_not_show_is_said_and_stays_allowed(self) -> None:
+        """serverName cannot widen, so a name `claude mcp list` does not show stays in; when a lookup runs
+        anyway the launch says so, as it may be a typo."""
+        code, out, err = self.claude(f"{MAIL}, acme-local, acme-typo", printing(self.root, MCP_LIST))
+        self.assertEqual(code, 0)
+        self.assertEqual(
+            self.settings(out),
+            [{"serverUrl": MAIL_URL}, {"serverName": "acme-local"}, {"serverName": "acme-typo"}],
+        )
+        self.assertEqual(
+            err,
+            "connectors: acme-typo is not among the servers claude mcp list shows here; it stays allowed by "
+            "name\n",
+        )
+        connectors.save_kept(self.state, [MAIL], {MAIL: MAIL_URL})
+        for extra in (("--kept-only",), ()):
+            value = f"{MAIL}, acme-typo" if extra else "acme-typo"
+            code, _, err = self.claude(value, fake_agent(self.root, "exit 1"), *extra)
+            self.assertEqual((code, err), (0, ""), extra)
+
+
+class ScopesTest(CommandCase):
+    """R21: an allowedMcpServers in another settings scope adds to a window's, so a launch with a list
+    refuses one that holds an entry its own resolved entries do not."""
+
+    def claude(self, value: str, *extra: str) -> tuple[int, str, str]:
+        common = ["--cwd", str(self.root), "--state-dir", str(self.state), "--agent-bin", "no-claude"]
+        return self.run_main("claude", "--list", value, *common, *extra)
+
+    def scope_files(self) -> list[Path]:
+        project = self.root / ".claude"
+        return [self.home_settings, project / "settings.json", project / "settings.local.json"]
+
+    def test_each_scope_is_read(self) -> None:
+        for settings in self.scope_files():
+            with self.subTest(settings=settings):
+                self.allow_in(settings, {"serverUrl": "https://*"}, {"serverName": "acme-local"})
+                self.assertEqual(
+                    claude_state.settings_allow_lists(self.root),
+                    [(settings, [{"serverUrl": "https://*"}, {"serverName": "acme-local"}])],
+                )
+                settings.unlink()
+
+    def test_missing_unreadable_or_listless_files_hold_no_entries(self) -> None:
+        user, project, local = self.scope_files()
+        self.assertEqual(claude_state.settings_allow_lists(self.root), [])
+        project.parent.mkdir(parents=True)
+        user.parent.mkdir(parents=True)
+        user.write_text("{not json")
+        project.write_text(json.dumps({"allowedMcpServers": {"serverName": "x"}}))
+        local.write_text(json.dumps({"allowedMcpServers": []}))
+        self.assertEqual(claude_state.settings_allow_lists(self.root), [])
+        self.assertIsNone(claude_state.settings_allow_list(project))
+        self.assertEqual(claude_state.settings_allow_list(local), [])
+
+    def test_a_folder_that_is_home_reads_its_settings_once(self) -> None:
+        home = self.home_settings.parent.parent
+        self.allow_in(self.home_settings, {"serverName": "x"})
+        self.assertEqual(
+            claude_state.settings_allow_lists(home), [(self.home_settings, [{"serverName": "x"}])]
+        )
+
+    def test_an_extra_entry_in_any_scope_refuses_the_launch(self) -> None:
+        for settings in self.scope_files():
+            with self.subTest(settings=settings):
+                self.allow_in(settings, {"serverName": "acme-local"}, {"serverUrl": "https://*"})
+                missing = self.root / "missing.json"
+                code, out, err = self.claude("acme-local", "--missing-to", str(missing))
+                self.assertEqual((code, out), (2, ""))
+                self.assertEqual(
+                    err,
+                    f'connectors: {settings} allows [{{"serverUrl": "https://*"}}], beyond this window\'s '
+                    "list, and Claude Code adds it to it: name it in the window's list, use all, or remove "
+                    "it from that file\n",
+                )
+                self.assertFalse(missing.exists())
+                settings.unlink()
+
+    def test_an_empty_list_is_widened_too(self) -> None:
+        user, project, _ = self.scope_files()
+        self.allow_in(user, {"serverName": "acme-a"})
+        self.allow_in(project, {"serverName": "acme-b"}, {"serverName": "acme-c"})
+        code, out, err = self.claude("")
+        self.assertEqual((code, out), (2, ""))
+        self.assertIn(f'{user} allows [{{"serverName": "acme-a"}}]', err)
+        self.assertIn(f'{project} allows [{{"serverName": "acme-b"}}, {{"serverName": "acme-c"}}]', err)
+        self.assertIn("name them in the window's list, use all, or remove them from those files", err)
+
+    def test_entries_the_list_names_start(self) -> None:
+        _, project, local = self.scope_files()
+        self.allow_in(project, {"serverUrl": "https://mcp.example.com/*"})
+        self.allow_in(local, {"serverName": "acme-local"})
+        code, out, err = self.claude("acme-local, https://mcp.example.com/*")
+        self.assertEqual((code, err), (0, ""))
+        self.assertEqual(len(json.loads(out)["allowedMcpServers"]), 2)
+
+    def test_all_is_not_checked(self) -> None:
+        self.allow_in(self.home_settings, {"serverUrl": "https://*"})
+        self.assertEqual(self.claude("all"), (0, "{}\n", ""))
+
+    def test_the_fallback_after_an_unexpected_failure_is_checked_too(self) -> None:
+        self.allow_in(self.home_settings, {"serverUrl": "https://*"})
+        with mock.patch.object(claude_state, "plugin_mcp_servers", side_effect=RuntimeError("boom")):
+            code, out, err = self.claude("acme-local")
+        self.assertEqual((code, out), (2, ""))
+        self.assertIn("beyond this window's list, and Claude Code adds it to it", err)
+
 
 class DoctorTest(CommandCase):
     """`connectors.py doctor`: bosun doctor's line for a window, its level and a tab first."""
 
     def doctor(
-        self, window: str, value: str, agent: Path, kind: str = "session", harness: str = "claude"
+        self,
+        window: str,
+        value: str,
+        agent: Path,
+        kind: str = "session",
+        harness: str = "claude",
+        settings_file: Path | None = None,
     ) -> str:
+        site = ("--settings-file", str(settings_file)) if settings_file else ()
         code, out, err = self.run_main(
             *("doctor", "--window", window, "--kind", kind, "--harness", harness, "--list", value),
-            *("--cwd", str(self.root), "--state-dir", str(self.state), "--agent-bin", str(agent)),
+            *("--cwd", str(self.root), "--state-dir", str(self.state), "--agent-bin", str(agent), *site),
         )
         self.assertEqual((code, err), (0, ""))
         self.assertEqual(len(out.splitlines()), 1, out)
@@ -537,12 +724,18 @@ class DoctorTest(CommandCase):
         self.assertEqual(self.doctor("alpha", "", never), "ok\talpha: none (no MCP server or connector)")
         self.assertEqual(
             self.doctor("alpha", f"acme-local, {MAIL}, https://mcp.example.com/*", never),
-            f"ok\talpha: reaches acme-local, {MAIL}, https://mcp.example.com/*",
+            f"ok\talpha: reaches {MAIL}; allowed by name: acme-local; allowed by pattern: "
+            "https://mcp.example.com/*",
+        )
+        self.assertEqual(
+            self.doctor("alpha", "acme-local, acme-typo", never),
+            "ok\talpha: allowed by name: acme-local, acme-typo",
         )
         self.assertEqual(
             self.doctor("alpha", f"acme-local, {MAIL}, claude.ai Acme Gone", never),
-            "warn\talpha: reaches acme-local, claude.ai Acme Mail; not among the servers earlier starts "
-            "looked up: claude.ai Acme Gone (bosun doctor looks nothing up: the window's next start does)",
+            "warn\talpha: reaches claude.ai Acme Mail; allowed by name: acme-local; not among the servers "
+            "earlier starts looked up: claude.ai Acme Gone (bosun doctor looks nothing up: the window's next "
+            "start does)",
         )
         self.assertEqual(
             self.doctor("alpha", "all", never), "ok\talpha: all (every MCP server and connector)"
@@ -573,7 +766,7 @@ class DoctorTest(CommandCase):
         self.installed.write_text(json.dumps({"plugins": {}}))
         self.assertEqual(
             self.doctor("alpha", "acme-local, plugin:acme-tools:gone", self.root / "no-claude"),
-            "warn\talpha: reaches acme-local; not among the servers earlier starts looked up: "
+            "warn\talpha: allowed by name: acme-local; not among the servers earlier starts looked up: "
             "plugin:acme-tools:gone (bosun doctor looks nothing up: the window's next start does)",
         )
         plugin = self.root / "plugins" / "acme-tools"
@@ -586,6 +779,49 @@ class DoctorTest(CommandCase):
             self.doctor("alpha", "plugin:acme-tools:broken", self.root / "no-claude"),
             "warn\talpha: reaches nothing; not found, so it starts without: plugin:acme-tools:broken",
         )
+
+    def test_doctor_says_a_window_another_scope_widens_does_not_start(self) -> None:
+        never = self.root / "no-claude"
+        project = self.root / ".claude" / "settings.json"
+        self.allow_in(project, {"serverName": "acme-local"}, {"serverUrl": "https://*"})
+        self.assertEqual(
+            self.doctor("alpha", "acme-local", never),
+            f'warn\talpha: allowed by name: acme-local; does not start: {project} allows [{{"serverUrl": '
+            '"https://*"}], beyond this window\'s list, and Claude Code adds it to it: name it in the '
+            "window's list, use all, or remove it from that file",
+        )
+        self.assertEqual(
+            self.doctor("alpha", "", never).split("; ")[0], "warn\talpha: none (no MCP server or connector)"
+        )
+        self.assertEqual(
+            self.doctor("alpha", "all", never), "ok\talpha: all (every MCP server and connector)"
+        )
+        self.assertEqual(
+            self.doctor("alpha", "acme-local, https://*", never),
+            "ok\talpha: allowed by name: acme-local; allowed by pattern: https://*",
+        )
+
+    def test_doctor_says_what_the_orchestrator_s_settings_file_allow_list_does(self) -> None:
+        """It is merged into the window's own --settings: bosun's list replaces it, and `all` leaves it."""
+        never = self.root / "no-claude"
+        site = self.root / "site-settings.json"
+        self.allow_in(site, {"serverName": "acme-site"})
+        line = self.doctor("orch", "acme-local", never, kind="orchestrator", settings_file=site)
+        self.assertEqual(
+            line,
+            f"ok\torch: allowed by name: acme-local; its settings file ({site}) holds an allowedMcpServers, "
+            "which this list replaces",
+        )
+        line = self.doctor("orch", "all", never, kind="orchestrator", settings_file=site)
+        self.assertEqual(
+            line,
+            f"warn\torch: all, so the allowedMcpServers of its settings file ({site}) applies: "
+            '[{"serverName": "acme-site"}]: name the ones it needs in BOSUN_ORCHESTRATOR_CONNECTORS and drop '
+            "all",
+        )
+        site.write_text(json.dumps({"permissions": {}}))
+        line = self.doctor("orch", "acme-local", never, kind="orchestrator", settings_file=site)
+        self.assertEqual(line, "ok\torch: allowed by name: acme-local")
 
     def test_doctor_says_when_every_plugin_goes(self) -> None:
         agent = codex_listing(self.root, ["acme-docs", "acme-kit", "acme-pad"], ["acme-docs"])
@@ -642,22 +878,6 @@ class DoctorTest(CommandCase):
         )
         self.assertEqual(code, 0)
         self.assertEqual(Path((self.root / "where").read_text().strip()).resolve(), folder.resolve())
-
-
-class ClaudeSettingsTest(unittest.TestCase):
-    def test_whether_my_own_settings_hold_an_allow_list(self) -> None:
-        with tempfile.TemporaryDirectory() as temp:
-            settings = Path(temp) / "settings.json"
-            with mock.patch.object(claude_state, "SETTINGS_FILE", settings):
-                self.assertFalse(claude_state.sets_allowed_mcp_servers())
-                settings.write_text(json.dumps({"skipDangerousModePermissionPrompt": True}))
-                self.assertFalse(claude_state.sets_allowed_mcp_servers())
-                settings.write_text(json.dumps({"allowedMcpServers": []}))
-                self.assertTrue(claude_state.sets_allowed_mcp_servers())
-                self.assertEqual(claude_state.main(["sets-allowed-mcp-servers"]), 0)
-                settings.write_text("{not json")
-                self.assertFalse(claude_state.sets_allowed_mcp_servers())
-                self.assertEqual(claude_state.main(["sets-allowed-mcp-servers"]), 3)
 
 
 if __name__ == "__main__":

@@ -129,8 +129,29 @@ class RecommendTest(unittest.TestCase):
                 env = {"BOSUN_DAYS": "MTWRF", "BOSUN_ORCHESTRATOR_CONNECTORS": value}
                 answers = init_plan.recommend(facts(env=env, connectors=("acme-local",)))
                 self.assertEqual(answers.orchestrator_connectors, value)
-        rerun = init_plan.recommend(facts(env={"BOSUN_DAYS": "MTWRF"}, connectors=("acme-local",)))
-        self.assertEqual(rerun.orchestrator_connectors, "")  # a config without the key: its default, none
+
+    def test_rerun_on_a_config_from_before_the_key_keeps_every_connector(self) -> None:
+        """bosun.env from before BOSUN_ORCHESTRATOR_CONNECTORS: that orchestrator had every connector, so
+        the recommendation is `all`, what bosun update writes, and the plan says why. A first run (no
+        bosun.env) still recommends none."""
+        older = facts(
+            env={"BOSUN_DAYS": "MTWRF"}, files={"bosun.env": "BOSUN_DAYS=MTWRF\n"}, connectors=("acme-local",)
+        )
+        rerun = init_plan.recommend(older)
+        self.assertEqual(rerun.orchestrator_connectors, "all")
+        notes = " ".join(init_plan.build_plan(older, rerun, DirState()).notes)
+        self.assertIn("bosun.env does not set BOSUN_ORCHESTRATOR_CONNECTORS", notes)
+        self.assertIn("keeps all, as bosun update does", notes)
+        chosen = replace(rerun, orchestrator_connectors="acme-local")
+        self.assertNotIn(
+            "BOSUN_ORCHESTRATOR_CONNECTORS", " ".join(init_plan.build_plan(older, chosen, DirState()).notes)
+        )
+        first = facts(connectors=("acme-local",))
+        self.assertEqual(init_plan.recommend(first).orchestrator_connectors, "")
+        self.assertNotIn(
+            "BOSUN_ORCHESTRATOR_CONNECTORS",
+            " ".join(init_plan.build_plan(first, init_plan.recommend(first), DirState()).notes),
+        )
 
     def test_window_names_are_usable_and_unique(self) -> None:
         taken: set[str] = set()
@@ -652,7 +673,7 @@ class PlanTest(unittest.TestCase):
         for expected in (
             "Nothing has changed yet",
             "Windows    api",
-            "Connectors the orchestrator's: none",
+            "Connectors none, for the orchestrator",
             "Mon-Fri, 09:00 to 21:30",
             "events, approvals, learning on; Slack watcher off",
             "Files in ~/.config/bosun",

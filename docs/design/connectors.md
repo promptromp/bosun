@@ -1,6 +1,6 @@
 # Connectors: what each window may reach
 
-Status: accepted 2026-11-09. A window bosun starts gets only the connectors its config names: none for a
+Status: built 2026-11-09. A window bosun starts gets only the connectors its config names: none for a
 repo window, the work ones I chose for the orchestrator. The orchestrator's gate covers what it still
 missed, and an unattended install grants nothing nobody saw.
 
@@ -10,6 +10,9 @@ holds, new and resumed; on Codex, the servers a window's list does not name are 
 table, a user's, a project's and one named with a dot, new and resumed, a local plugin's by switching every
 plugin off, and `--disable apps` is taken. The first form, a `-c mcp_servers.<name>.enabled=false` per
 server, could not name a server with a dot, so the VM changed it ([What the VM showed](#what-the-vm-showed)).
+A second `mac live claude` run, after the final review's fixes, showed a repo's own `.claude/settings.json`
+allow list keeping its window from starting until the list names it, and that `claude mcp list` writes
+nothing to `~/.claude.json`.
 
 ## Why
 
@@ -65,11 +68,15 @@ refused:
 | `permissions.deny: ["mcp__*"]` | no MCP tools, but every server still connects |
 | `--strict-mcp-config` | no server (Chrome stays with `--chrome`) |
 | `disableClaudeAiConnectors: true` | no claude.ai connector; local and plugin servers stay |
+| `--settings` allowing two servers, and the folder's `.claude/settings.json` with `allowedMcpServers: [{"serverUrl": "https://*"}]` | every claude.ai connector and every plugin's server (11 in an interactive window's `/mcp`, on a real Mac): allow lists from different scopes add up |
 
 A connector's URL is in no file Claude Code keeps, but `claude mcp list` prints every server with its URL
 or command and its health, claude.ai connectors included (with `ENABLE_CLAUDEAI_MCP_SERVERS=true`), in
-about 4 seconds; it connects to each to check it. Allow lists from every settings scope add up, so an
-allow list in my own `~/.claude/settings.json` would widen a window's; deny lists add up too.
+about 4 seconds; it connects to each to check it. A window's allow list is the sum of every scope's: the
+launch's own `--settings`, my `~/.claude/settings.json`, and the window folder's `.claude/settings.json`
+and `.claude/settings.local.json` (an organization's managed settings are a scope of their own, which no
+bosun install has). So an allow list in any of those three files would widen a window's
+([Other scopes' allow lists](#other-scopes-allow-lists)); deny lists add up too.
 
 Codex, from its docs and source (0.167.0) and checked in the VM on 0.166.0 ([What the VM
 showed](#what-the-vm-showed)): servers come from `[mcp_servers.<name>]` in `~/.codex/config.toml`, a
@@ -110,6 +117,8 @@ never from what its model says (a model leaves deferred tools out of a list):
 | a list that does not name the plugin's server | the launch passes `--disable plugins`, with the server in no table: after a restart that resumed the session, only the allowed server started, and `/mcp` did not list `probe-plugin` |
 | a list that names it | no `--disable plugins`: the allowed server and `probe-plugin` started, `/mcp` showed both `connected (1 tool)` and the others `disabled (0 tools)` |
 | what `codex mcp list --json` leaves out | besides `codex_apps`, a built-in `codex_worktrees` server (3 tools), which `/mcp` shows `connected` in every window. Codex's built-ins stay on, as Claude Code's Chrome and computer-use do: they are local, and a list cannot name what the listing does not show |
+| a repo's own `.claude/settings.json` allowing `probe-blocked`, which the window's list (`probe-allowed`) does not name (the second run) | the window does not start: its launch's line names the file and the entry, on its screen and in `logs/launch-YYYY-MM-DD.log`, and no agent and no probe server started. With the list naming `probe-blocked` too, it started, started `probe-allowed` and `probe-blocked` and not the repo's `probe-project`, and `/mcp` showed `probe-blocked` |
+| `claude mcp list` in the home folder with `ENABLE_CLAUDEAI_MCP_SERVERS=true`, as `lib/init_detect.py` runs it (the second run) | it writes nothing: `~/.claude.json` had the same SHA-256 before and after (compared by hash only, never read out), so `init_detect` stays read-only |
 | Codex's own update screen | once Codex has seen a newer version of itself, a start shows "Update available" and waits for a key, which stalled a restart; so the launch passes `-c check_for_update_on_startup=false` (the key Codex documents for centrally managed updates) |
 
 So the launch switches servers off in one inline table ([Codex](#codex)).
@@ -137,8 +146,8 @@ rest, as the approvals and compaction hooks are), from the window's list:
 | Entry | Becomes |
 |---|---|
 | a name of letters, digits, `-`, `_` | `{"serverName": <name>}` |
-| `plugin:<plugin>:<server>` | that server's `url` (`serverUrl`) or `command` and `args` (`serverCommand`, with `${CLAUDE_PLUGIN_ROOT}` expanded to the plugin's folder), found by the server's name in the installed plugin's `.mcp.json`, which may hold several (`lib/claude_state.py` already reads it for the Slack watcher, one server only); otherwise (a plugin synced from the account, a `--plugin-dir` one or a managed one, which `installed_plugins.json` does not list) what `claude mcp list` shows for the name: a URL is `serverUrl`, a command line is `serverCommand` split on whitespace (an argument holding a space splits wrongly, matches no server and so fails closed). Claude Code's synced-plugin folders are never read: their layout is internal |
-| `claude.ai <Name>` | its URL from `claude mcp list`, run with `ENABLE_CLAUDEAI_MCP_SERVERS=true` in the window's folder, only when the list holds such a name |
+| `plugin:<plugin>:<server>` | that server's `url` (`serverUrl`) or `command` and `args` (`serverCommand`, with `${CLAUDE_PLUGIN_ROOT}` expanded to the plugin's folder), found by the server's name in the installed plugin's `.mcp.json`, which may hold several (`lib/claude_state.py` already reads it for the Slack watcher, one server only; an install without an absolute `installPath` is skipped, as its `.mcp.json` would be the window folder's own); otherwise (a server whose command, arguments or URL still hold another `${...}`, a variable Claude Code expands from its own environment, or a plugin synced from the account, a `--plugin-dir` one or a managed one, which `installed_plugins.json` does not list) what `claude mcp list` shows for the name: a URL is `serverUrl`, a command line is `serverCommand` split on whitespace (an argument holding a space splits wrongly, matches no server and so fails closed). Claude Code's synced-plugin folders are never read: their layout is internal |
+| `claude.ai <Name>` | its URL from `claude mcp list`, run with `ENABLE_CLAUDEAI_MCP_SERVERS=true` in the window's folder, only when the list holds such a name (or a plugin's server its file does not give, above) |
 | a URL pattern | `{"serverUrl": <pattern>}` |
 | `all` | no `allowedMcpServers` key |
 
@@ -146,17 +155,26 @@ An empty list is `allowedMcpServers: []`. A plugin and a claude.ai connector at 
 server to Claude Code (it loads one of them), so allowing either lets that one in.
 
 **When a name is not found.** An entry that resolves to nothing is left out, and the launch logs one line
-naming it: the window starts with less, never with more. `claude mcp list` is read only through
-`lib/claude_state.py`, like every other Claude Code internal; its parsing is pinned by a unit test on its
-text, and a run that fails or times out (30 s) is told apart from a name it does not show. The resolver
-always prints a JSON object (`{}` for `all`); one that fails in any other way prints an empty allow list,
-so a launch never takes a failure for `all`.
+naming it (on the window's screen and in `logs/launch-YYYY-MM-DD.log`): the window starts with less, never
+with more. A plain name is matched exactly and checked only when a lookup runs: it becomes a `serverName`,
+which cannot widen a list, so a name no server has (a typo) allows nothing, and a launch that runs `claude
+mcp list` anyway, for another name, logs a plain name the listing does not show (it stays in the list). No
+lookup is added for that, so with none a typo shows only in doctor's wording, "allowed by name" rather
+than "reaches". `claude mcp list` is read only through `lib/claude_state.py`, like every other Claude Code
+internal; its parsing is pinned by a unit test on its text, and a run that fails or times out (30 s) is
+told apart from a name it does not show. It runs in a process group of its own, which a timeout kills
+whole, so no stdio server it started to check is left behind. The resolver always prints a JSON object
+(`{}` for `all`); one that fails in any other way prints an empty allow list, so a launch never takes a
+failure for `all`, and the launch takes `{}` only for the list `all`.
 
 **When the lookup fails.** At the morning wake the network may not be up yet, and an orchestrator started
 without `claude.ai Slack` would miss Slack all day. So each lookup keeps what it resolved in the state
-folder (`connectors.json`: each name that needed `claude mcp list` and the URL or command line it showed, a row in `STATE_FILES`); a lookup that fails
-uses what was kept, and a name with nothing kept is left out, logged, and raised with `bosun alert` for
-the orchestrator. A server's target rarely changes, so what was kept is almost always right.
+folder (`connectors.json`: each name that needed `claude mcp list` and the URL or command line it showed,
+a row in `STATE_FILES`); a lookup that fails uses what was kept, and a name with nothing kept is left out,
+logged, and raised with `bosun alert` for the orchestrator. A server's target rarely changes, so what was
+kept is almost always right. A lookup that works is the truth for the names it was asked about: it
+replaces what was kept of them, so a name it no longer shows is dropped from `connectors.json`, and a
+fingerprint (below) agrees with that launch.
 
 **The fingerprint.** `refresh` and `bosun update` compare a window's launch fingerprint, a digest of its
 arguments, with the one recorded at its launch. The resolved `allowedMcpServers` is part of the arguments,
@@ -168,9 +186,32 @@ fingerprint is printed, the window reads as changed, and its restart refuses to 
 launch looks up once, however many times it builds its arguments.
 
 `bosun chores --dry-run` builds the orchestrator's list the same way, and runs with
-`ENABLE_CLAUDEAI_MCP_SERVERS=true` when that list names a claude.ai connector or is `all`, so that the
-rehearsal reaches what the window does. The headless calls that already limit their servers (learning,
-the Slack watcher, the login check) do not change.
+`ENABLE_CLAUDEAI_MCP_SERVERS=true` whenever that list is not empty (it may name a claude.ai connector, or
+be `all`), so that the rehearsal reaches what the window does. The headless calls that already limit their
+servers (learning, the Slack watcher, the login check) do not change.
+
+#### Other scopes' allow lists
+
+Claude Code adds up the allow lists of every scope, so an `allowedMcpServers` in my
+`~/.claude/settings.json`, or in the window folder's `.claude/settings.json` or
+`.claude/settings.local.json`, would widen a window's. A launch with a list (anything but `all`) reads
+those three files (`claude_state.settings_allow_lists`: JSON, each once, and one that is missing or cannot
+be read holds none) and refuses to start the window when any of their entries is not exactly, JSON-equal,
+one of the window's own resolved entries; a narrower or a wider pattern is not equal. It names the file
+and those entries, and what to do: name them in the window's list, use `all`, or remove them from that
+file. The check is the resolver's (`refuse_widening` in `lib/connectors.py`), so every path that starts a
+Claude Code window goes through it: a new or a resumed launch, `refresh`, `send --new`, an update's
+restart (and the fingerprint before it, which then reads the window as changed), and `bosun chores
+--dry-run`. It runs on what the resolver prints, outside its catch-all, so the check's own failure prints
+nothing and the window does not start. `bosun doctor` says the same for each window, from the same
+function. A window with `all` has no limit to widen and is not checked.
+
+**The orchestrator's settings file.** `BOSUN_ORCHESTRATOR_SETTINGS` is no scope of its own: the launch
+merges it into the window's one `--settings` object (`build_model_effort_args`, with jq's `*`, which
+replaces a list), so with a list the window's `allowedMcpServers` replaces the file's, and
+`require_connector_limit` checks that the merged settings hold exactly the window's. With `all` bosun adds
+no `allowedMcpServers`, so the file's applies, as it did before this version. Doctor says which of the two
+it is.
 
 ### Codex
 
@@ -184,8 +225,12 @@ adds `--disable plugins`, which turns every plugin off: a plugin's server cannot
 nothing says which plugin it is from. That also drops every plugin's skills, and a plugin server the list
 does name, which doctor warns about. Then `--disable apps`; the list `all` adds nothing. Codex's built-in
 servers (`codex_worktrees`) stay on, as Claude Code's Chrome does: they are local, and the listing does not
-show them, so a list cannot name them. URL patterns and `claude.ai` names mean nothing to Codex: doctor
-says so for a Codex window. A listing that fails, or arguments not of the shape `[-c mcp_servers={...}]
+show them, so a list cannot name them. URL patterns and `claude.ai` names mean nothing to Codex: the
+launch logs each name of the list Codex has no server by, as a Claude Code launch does, and doctor says so
+for a Codex window. Servers that `BOSUN_CODEX_FLAGS` adds (a `--profile`, a `-c mcp_servers...`) are not
+switched off: the listing runs without the window's flags, since some of them are for the interactive
+Codex only and would make the listing, and so every window, fail, and picking them apart would be parsing
+Codex's command line. Add servers in `config.toml`, not through flags. A listing that fails, or arguments not of the shape `[-c mcp_servers={...}]
 [--disable plugins] --disable apps` (or nothing, for `all`), keep the window from starting, and the launch
 says why: without it, bosun cannot tell which servers to switch off. The launch also passes `-c
 check_for_update_on_startup=false`. The VM checked the facts this rests on ([What the VM
@@ -199,7 +244,16 @@ windows get none) and wrong for the orchestrator, whose chores would stop seeing
 the value that keeps what an older install did (`BOSUN_ORCHESTRATOR_CONNECTORS="all"`). The update writes
 it to `bosun.env` when the plan's `keys_added` holds that key and the file does not set it, with the same
 backup a rename gets, and its summary says it in a line with what to do: name the connectors and drop `all`.
-`bosun doctor` warns while the orchestrator's list is `all`. The summary also says, in a line of its own,
+`bosun doctor` warns while the orchestrator's list is `all`. An orchestrator whose `bosun.env` does not set
+the key at all is told too, rather than quietly narrowed: with no `bosun.env` the update writes nothing,
+a checkout updated with `git pull` has no update, and either starts the orchestrator with none. The key's
+entry carries a third text for that, said while it is unset: before this version the orchestrator had
+every connector, and now it starts with none, so set it to the connectors it needs, or to `all`. The
+update's plan and summary say it when there is no `bosun.env` to write to (the plan's `unwritten`);
+`bosun doctor` warns with it whenever `bosun.env` does not set the key, read as the update reads the file
+(`migrations.py unset`), so a key set to nothing is my choice and not warned about; and a re-run of `bosun
+init` on a `bosun.env` without the key recommends `all`, with that note in its plan. The launch's default
+stays none. The summary also says, in a line of its own,
 that repo windows now start without connectors (a repo's own `.mcp.json` servers included), and how to
 give one back (`BOSUN_CONNECTORS`, or `connectors:` in its `sessions.yml` entry). Each added key with
 something to say carries its line in the registry, beside the kept value. The plan shows the kept value,
@@ -209,8 +263,11 @@ older orchestrator, launched with every server, is no launch change and is not r
 ### Seeing it
 
 `bosun doctor` prints a line per window: the list, what it resolved to, and every allowed name it could
-not find. It warns when my own Claude Code settings hold an `allowedMcpServers` (it widens every window's).
-A Claude Code window's line resolves as `--kept-only` does: `claude mcp list` connects to every server,
+not find. "Reaches" is only for a name resolved to a known server (a plugin's, a name a lookup kept); a
+plain name reads "allowed by name" and a URL pattern "allowed by pattern", since nothing doctor reads says
+such a server exists. A Claude Code window that another settings scope would widen is a warning that it
+does not start ([Other scopes' allow lists](#other-scopes-allow-lists)), and the orchestrator's line says
+what its settings file's `allowedMcpServers` comes to. A Claude Code window's line resolves as `--kept-only` does: `claude mcp list` connects to every server,
 so a claude.ai name (or a plugin's server only `claude mcp list` shows) no launch has looked up yet reads as not among those kept, and the line says so. A
 Codex window's comes from `codex mcp list --json` in its folder, names only, and notes URL patterns and
 claude.ai names as meaning nothing there.
@@ -244,14 +301,15 @@ claude.ai names as meaning nothing there.
 
 ### The orchestrator's gate
 
-- **Verbs.** `WRITE_VERBS` gains: accept, checkout, decline, fork, forward, grant, pay, purchase, push,
-  react, reopen, respond, restore, revoke, share, spam, trash, unlabel, unpin, unstar, untrash. Words
-  that are also nouns (request, comment, label, order, pin, mark, resolve) are left out: as verbs they
-  would stop the orchestrator at a GitHub server's `get_pull_request`, and a rule for where in a name a
-  word counts would be one more thing to keep up. The corpus fixtures' (`tests/fixtures/corpus/`) guard
+- **Verbs.** `WRITE_VERBS` gains: accept, append, apply, checkout, decline, duplicate, fork, forward,
+  grant, insert, invoke, kill, modify, pay, purchase, push, react, reopen, respond, restore, revoke, save,
+  share, spam, trash, unlabel, unpin, unstar, untrash. Words that are also nouns or adjectives in reads'
+  names (request, comment, label, order, pin, mark, resolve, patch, put, clear, drop) are left out: as
+  verbs they would stop the orchestrator at a GitHub server's `get_pull_request` or `get_patch`, and a
+  rule for where in a name a word counts would be one more thing to keep up. The corpus fixtures' (`tests/fixtures/corpus/`) guard
   decisions are checked against the new list.
-- **Names.** A tool's name splits on `_`, `-` and lower-to-upper case changes (`editJiraIssue`: edit,
-  jira, issue). The approvals' tracker families match `jira` or `confluence` as a word of the name, not
+- **Names.** A tool's name splits on `_`, `-` and before an upper-case letter that follows a lower-case
+  one or a digit (`editJiraIssue`: edit, jira, issue; `s3Upload`: s3, upload). The approvals' tracker families match `jira` or `confluence` as a word of the name, not
   as its prefix.
 - **Chrome.** `javascript_tool` and `form_input` get Claude Code's own `ask` rules in
   `orchestrator/settings.json`, the idiomatic place for a whole tool. `computer` needs its input looked
@@ -266,7 +324,8 @@ claude.ai names as meaning nothing there.
 - **From the launch.** The guard's PreToolUse hook is added at launch (`guard_hook_settings` in
   `lib/common.sh`, naming `$BOSUN_CMD`), for the orchestrator window and `bosun chores --dry-run` alike,
   and leaves `orchestrator/settings.json`. A site's own settings file that still has the old hook runs
-  the guard twice, which decides the same; the docs say to drop it.
+  the guard twice, and the two may be different versions (a checkout's guard and the installed one), so
+  they need not decide alike; the docs say to drop it.
 - **Not taken: asking about any tool with no known verb.** It would have the orchestrator stop at a
   prompt for every read tool whose name has no read word, and an unattended orchestrator at a prompt is
   stalled until the watchdog sees it. The allow list is now what keeps the reach small; the verbs
@@ -288,9 +347,9 @@ claude.ai names as meaning nothing there.
 
 | Layer | What it shows |
 |---|---|
-| Unit | Each entry's resolution, `claude mcp list`'s text parsed (placeholder servers), an unresolved name left out, a failed lookup falling back to what was kept (and the alert when nothing was), the Codex arguments and a failed listing refusing the start, the kept config value written once and only when the update adds the key, the init recommendations, its re-run and `--unattended`, the gate's new verbs (and the noun-like words left out), camel case and Chrome actions, business days in a zone east and west of UTC |
-| Smoke | A launch's arguments for a window with none, a few, and `all` (the fake `claude` answers `mcp list`); `--fingerprint` running no lookup; the guard hook in the orchestrator's launch and in `chores --dry-run`; `--help` with no config; doctor's lines |
-| VM, `mac live` | Real Claude Code and Codex windows with local stdio test servers (one allowed, one not, one a project's; on Codex also one named with a dot and one of a local plugin): each window starts and shows only what it may reach, new and resumed; on Codex a list that does not name the plugin's server switches every plugin off, and one that names it keeps plugins on; the Codex facts above. An orchestrator that had everything keeps it after an update and doctor warns: `mac work` |
+| Unit | Each entry's resolution, `claude mcp list`'s text parsed (placeholder servers), an unresolved name left out, a failed lookup falling back to what was kept (and the alert when nothing was), the Codex arguments and a failed listing refusing the start, the kept config value written once and only when the update adds the key, the init recommendations, its re-run and `--unattended`, the gate's new verbs (and the noun-like words left out), camel case and a digit before a capital, Chrome actions, business days in a zone east and west of UTC; another scope's allow list refusing a launch (each scope, exact equality, a missing or unreadable file, `all` unchecked), doctor's "allowed by name" and "by pattern", a kept key's unset note in the plan, the summary and doctor's reader, init's `all` on a `bosun.env` from before the key |
+| Smoke | A launch's arguments for a window with none, a few, and `all` (the fake `claude` answers `mcp list`); `--fingerprint` running no lookup; the guard hook in the orchestrator's launch and in `chores --dry-run`; `--help` with no config; doctor's lines; a repo whose own settings allow more refusing its window's launch, until the list names it; a site settings file's allow list replaced, or kept with `all`; doctor's warning while `bosun.env` does not set the orchestrator's list; a YAML list entry holding a comma refused |
+| VM, `mac live` | Real Claude Code and Codex windows with local stdio test servers (one allowed, one not, one a project's; on Codex also one named with a dot and one of a local plugin): each window starts and shows only what it may reach, new and resumed; on Codex a list that does not name the plugin's server switches every plugin off, and one that names it keeps plugins on; the Codex facts above; on Claude Code, a repo whose `.claude/settings.json` allows a server the list does not name keeps the window from starting, and naming it starts it; whether `claude mcp list` writes `~/.claude.json`. An orchestrator that had everything keeps it after an update and doctor warns: `mac work` |
 | This Mac | One interactive Claude Code window with an allow list naming one claude.ai connector, since only a real claude.ai login has them; it shows that one and none of the others |
 
 ## Later
@@ -298,3 +357,5 @@ claude.ai names as meaning nothing there.
 - Chrome for repo windows: off unless a window's list names `chrome`.
 - Codex's connectors one by one (`apps._default.enabled=false` and `apps.<id>.enabled=true`).
 - The Slack watcher and the login check could take their server from the same resolution.
+- Codex servers added through `BOSUN_CODEX_FLAGS` (a `--profile`, a `-c mcp_servers`) stay on in a limited
+  window: add servers in `config.toml`, not through flags, until the listing can take the window's flags.

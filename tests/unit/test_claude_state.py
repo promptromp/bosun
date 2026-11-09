@@ -261,6 +261,54 @@ class McpServersTest(unittest.TestCase):
         self.assertEqual(resolve.plugin_mcp_servers(self.root / "missing.json"), {})
         self.assertIsNone(resolve.slack_plugin_mcp_config(installed))
 
+    def test_an_install_without_an_absolute_path_is_skipped(self) -> None:
+        """Path("") / ".mcp.json" would be the window folder's own .mcp.json, read as a plugin's."""
+        repo = self.root / "repo"
+        repo.mkdir()
+        (repo / ".mcp.json").write_text(json.dumps({"mcpServers": {"own": {"command": "repo-server"}}}))
+        installed = self.root / "installed_plugins.json"
+        installs = {"blank@market": [{"installPath": ""}], "relative@market": [{"installPath": "."}]}
+        installed.write_text(json.dumps({"plugins": {**installs, "none@market": [{}]}}))
+        cwd = Path.cwd()
+        os.chdir(repo)
+        self.addCleanup(os.chdir, cwd)
+        self.assertEqual(resolve.plugin_mcp_servers(installed), {})
+
+    def test_a_variable_left_after_the_plugin_root_is_unexpanded(self) -> None:
+        """Claude Code expands other ${VARIABLES} from its own environment, which bosun cannot know."""
+        self.assertFalse(resolve.unexpanded({"command": "/opt/pdf", "args": ["--stdio"], "url": None}))
+        self.assertFalse(resolve.unexpanded({"command": "x", "args": "not a list"}))
+        for config in (
+            {"command": "${ACME_HOME}/bin/pdf"},
+            {"command": "pdf", "args": ["--token", "${ACME_TOKEN}"]},
+            {"type": "http", "url": "https://${ACME_HOST}/mcp"},
+        ):
+            with self.subTest(config=config):
+                self.assertTrue(resolve.unexpanded(config))
+
+    def test_a_listing_that_times_out_leaves_no_server_it_started_behind(self) -> None:
+        """`claude mcp list` starts each stdio server to check it; on a timeout its whole process group
+        goes, not only the claude process."""
+        pid_file = self.root / "server.pid"
+        claude = fake_claude(self.root, f'sleep 60 &\necho $! > "{pid_file}"\nexec sleep 60')
+        with self.assertRaisesRegex(resolve.McpListError, "timed out"):
+            resolve.mcp_server_targets(str(claude), self.root, timeout=1.0)
+        server = int(pid_file.read_text())
+        deadline = time.monotonic() + 10
+        while time.monotonic() < deadline and alive(server):
+            time.sleep(0.1)
+        self.assertFalse(alive(server))
+
+
+def alive(pid: int) -> bool:
+    """Whether <pid> runs (a zombie its new parent has not reaped yet counts as gone)."""
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    state = os.popen(f"ps -o stat= -p {pid}").read().strip()  # noqa: S605 - a fixed command, a number
+    return bool(state) and not state.startswith("Z")
+
 
 if __name__ == "__main__":
     unittest.main()

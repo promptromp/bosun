@@ -451,9 +451,31 @@ def recommended_model(facts: Facts) -> str:
     return "opus" if facts.claude_plan in OPUS_PLANS else "sonnet"
 
 
+ORCHESTRATOR_CONNECTORS = "BOSUN_ORCHESTRATOR_CONNECTORS"
+OLDER_CONFIG_NOTE = (
+    "bosun.env does not set BOSUN_ORCHESTRATOR_CONNECTORS, so until now the orchestrator had every "
+    "connector: the recommendation keeps all, as bosun update does. Name the ones it needs instead, such as "
+    "Slack and a tracker."
+)
+
+
+def from_before_connectors(facts: Facts) -> bool:
+    """A re-run on a bosun.env from before BOSUN_ORCHESTRATOR_CONNECTORS (it does not set it): that
+    orchestrator had every connector."""
+    return bool(facts.env) and ORCHESTRATOR_CONNECTORS not in facts.env
+
+
+def recommended_connectors(facts: Facts) -> str:
+    """The orchestrator's connectors, never guessed from their names: none on a first run; on a re-run what
+    bosun.env says, and `all` for a bosun.env from before the key, what bosun update writes for it
+    (migrations.CONFIG_ADDED), so that a re-run takes nothing away unasked."""
+    if from_before_connectors(facts):
+        return connectors.EVERYTHING
+    return facts.env.get(ORCHESTRATOR_CONNECTORS, "")
+
+
 def recommend(facts: Facts) -> Answers:
-    """The recommended setup: a first run from what the Mac shows, a re-run from the config it has.
-    The orchestrator's connectors are never guessed from their names: none on a first run."""
+    """The recommended setup: a first run from what the Mac shows, a re-run from the config it has."""
     repos = recommended_repos(facts)
     uses = in_scope(facts, ticked_uses(facts, repos))
     days, start, until = recommended_schedule(facts)
@@ -475,7 +497,7 @@ def recommend(facts: Facts) -> Answers:
         model=recommended_model(facts),
         harness=recommended_harness(facts),
         permissions=recommended_permissions(facts),
-        orchestrator_connectors=facts.env.get("BOSUN_ORCHESTRATOR_CONNECTORS", ""),
+        orchestrator_connectors=recommended_connectors(facts),
         repo_mask=recommended_mask(facts, uses),
         repos_dir=recommended_repos_dir(facts, uses),
         # With more than one profile, which one the mornings should log in to is your call.
@@ -681,8 +703,9 @@ def yaml_scalar(value: object) -> str:
 SESSIONS_HEADER = """\
 # One tmux window per entry, written by `bosun init`. `name` is the window's name, and the name its
 # session is resumed by; if there is no such session in `dir`, a new one is created.
-# Optional per window: `harness` (claude or codex), `model`, `effort` and, on Claude Code, `autocompact`
-# (defaults: bosun.env).
+# Optional per window: `harness` (claude or codex), `model`, `effort`, `connectors` (the MCP servers and
+# connectors it may reach, as `claude mcp list` names them: a list, [] for none) and, on Claude Code,
+# `autocompact` (defaults: bosun.env; connectors: BOSUN_CONNECTORS, empty: none).
 """
 
 
@@ -887,10 +910,17 @@ def permission_notes(facts: Facts, answers: Answers) -> list[str]:
     return [AUTO_NOTE] if ENV_FILE not in facts.files else []
 
 
+def connector_notes(facts: Facts, answers: Answers) -> list[str]:
+    """Why a re-run on a bosun.env from before the orchestrator's connectors keeps `all`, while it does."""
+    keeps_all = answers.orchestrator_connectors.strip() == connectors.EVERYTHING
+    return [OLDER_CONFIG_NOTE] if from_before_connectors(facts) and keeps_all else []
+
+
 def notes(facts: Facts, answers: Answers) -> tuple[str, ...]:
     return tuple(
         login_notes(facts)
         + feature_notes(facts, answers)
+        + connector_notes(facts, answers)
         + wake_notes(facts, answers)
         + permission_notes(facts, answers)
     )
@@ -955,7 +985,7 @@ def summary_lines(answers: Answers) -> list[str]:
     windows = ", ".join(r.name for r in answers.repos) or "none yet (add them to sessions.yml)"
     return [
         f"  Windows    {windows} (plus the orchestrator and its check-in loop)",
-        f"  Connectors the orchestrator's: {answers.orchestrator_connectors or 'none'}",
+        f"  Connectors {answers.orchestrator_connectors or 'none'}, for the orchestrator",
         f"  Schedule   {describe_days(answers.days)}, {answers.start} to {answers.until}",
         f"  Features   {describe_features(answers)}",
         *model_lines(answers),
