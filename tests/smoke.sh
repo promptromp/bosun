@@ -2719,6 +2719,17 @@ for line in sys.stdin:
   check "with an install bosun init has not set up yet (it stopped at what bosun needs), it starts bosun init again, as it is" says_lines "$G_UNFINISHED" \
     "$G_UNFINISHED_LINE" "Then it would start: $G_DIR/bin/bosun init"
   check "... getting nothing" not_contains "$G_UNFINISHED" "  \$ git"
+  check "... unattended, it would hand that over as a variable, which an older bosun ignores" says_lines \
+    "$(HOME="$G/home" BOSUN_DIR="$G_DIR" BOSUN_REPO="$G/upstream" sh "$ROOT/get.sh" --dry-run --unattended 2>&1)" \
+    "Then it would start: BOSUN_INIT_UNATTENDED=1 $G_DIR/bin/bosun init --recommended"
+  # The version there is older than this get.sh: a bosun that knows no --unattended, which says what it got.
+  printf '#!/bin/sh\necho "init got: $*, BOSUN_INIT_UNATTENDED=${BOSUN_INIT_UNATTENDED:-}"\n' >"$G_DIR/bin/bosun"
+  chmod +x "$G_DIR/bin/bosun"
+  check "... and does: init --recommended, with BOSUN_INIT_UNATTENDED=1" says_lines \
+    "$(HOME="$G/home" BOSUN_DIR="$G_DIR" BOSUN_REPO="$G/upstream" sh "$ROOT/get.sh" --unattended </dev/null 2>&1)" \
+    "init got: init --recommended, BOSUN_INIT_UNATTENDED=1"
+  printf '#!/bin/sh\n' >"$G_DIR/bin/bosun"
+  chmod -x "$G_DIR/bin/bosun" # as it was
   mkdir -p "$G/home/.local/bin"
   ln -s "$G/gone/bin/bosun" "$G/home/.local/bin/bosun"
   check "... and so with a ~/.local/bin/bosun that leads nowhere" says_lines "$(get_dry)" "$G_UNFINISHED_LINE"

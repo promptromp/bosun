@@ -158,7 +158,16 @@ class RecommendTest(unittest.TestCase):
             use("toy", 30, "my-org"),
             use("mine", 30, ""),
         )
-        self.assertEqual(init_plan.recommend(facts(repos=repos)).repo_mask, "acme my-org")
+        self.assertEqual(init_plan.recommend(facts(repos=repos)).repo_mask, "acme")  # the ticked repo's
+
+    def test_with_nothing_ticked_the_scope_is_the_repos_you_use(self) -> None:
+        repos = (use("api", 90, "acme"), RepoUse(f"{HOME}/work/toy", 30, "my-org"))
+        the_facts = facts(repos=repos)
+        recommended = init_plan.recommend(the_facts)
+        self.assertEqual((recommended.repo_mask, recommended.repos_dir), ("acme", "~/Development"))
+        unattended = init_plan.unattended(the_facts, recommended)
+        self.assertEqual(unattended.repos, ())
+        self.assertEqual((unattended.repo_mask, unattended.repos_dir), ("acme my-org", "~/Development"))
 
     def test_the_model_follows_the_plan(self) -> None:
         self.assertEqual(init_plan.recommend(facts(claude_plan="max")).model, "opus")
@@ -435,7 +444,7 @@ class PlanTest(unittest.TestCase):
         self.assertEqual(
             replace(unattended, repos=recommended.repos, orchestrator_connectors="acme-local"), recommended
         )
-        self.assertEqual(init_plan.unattended_note(the_facts), init_plan.UNATTENDED_NOTE)
+        self.assertEqual(init_plan.unattended_note(the_facts, unattended), init_plan.UNATTENDED_NOTE)
 
     def test_unattended_keeps_windows_a_sessions_file_already_lists(self) -> None:
         listed = ({"name": "api", "dir": f"{HOME}/d/api"},)
@@ -443,12 +452,28 @@ class PlanTest(unittest.TestCase):
         unattended = init_plan.unattended(the_facts, init_plan.recommend(the_facts))
         self.assertEqual(unattended.repos, (Repo("api", "~/d/api"),))
 
+    def test_the_unattended_note_names_the_windows_it_kept(self) -> None:
+        listed = ({"name": "api", "dir": f"{HOME}/d/api"}, {"name": "web", "dir": f"{HOME}/d/web"})
+        the_facts = facts(files={"sessions.yml": "..."}, sessions=listed)
+        note = init_plan.unattended_note(
+            the_facts, init_plan.unattended(the_facts, init_plan.recommend(the_facts))
+        )
+        self.assertNotIn("No repo windows", note)
+        self.assertIn("No connectors were set up", note)
+        self.assertIn("the windows sessions.yml lists stay: api, web", note)
+
+    def test_a_sessions_file_that_cannot_be_read_needs_force(self) -> None:
+        the_facts = facts(files={"sessions.yml": "sessions: [unclosed"}, sessions_unreadable=True)
+        wanted = replace(init_plan.recommend(the_facts), repos=(Repo("web", "~/d/web"),))
+        self.assertEqual(self.actions(self.plan(the_facts, wanted))["sessions.yml"], "refuse")
+        self.assertEqual(self.actions(self.plan(the_facts, wanted, force=True))["sessions.yml"], "replace")
+
     def test_unattended_rerun_is_the_recommendation(self) -> None:
         the_facts = self.configured(Answers(repos=(Repo("api", "~/d/api"),), orchestrator_connectors="all"))
         recommended = init_plan.recommend(the_facts)
         self.assertEqual(init_plan.unattended(the_facts, recommended), recommended)
         self.assertEqual(recommended.orchestrator_connectors, "all")
-        self.assertEqual(init_plan.unattended_note(the_facts), "")
+        self.assertEqual(init_plan.unattended_note(the_facts, recommended), "")
 
     def test_setup_stays_yours_even_with_force(self) -> None:
         answers = Answers()

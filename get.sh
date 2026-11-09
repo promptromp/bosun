@@ -203,13 +203,24 @@ get_bosun() {
 start_init() {
   command="$DIR/bin/bosun"
   if [ "$DRY_RUN" = 1 ]; then
-    say "Then it would start: $command init"
+    if [ "$UNATTENDED" = 1 ]; then
+      say "Then it would start: BOSUN_INIT_UNATTENDED=1 $command init --recommended"
+    else
+      say "Then it would start: $command init"
+    fi
     return 0
   fi
   BOSUN_USER_PATH="$USER_PATH"
   BOSUN_RERUN="$THIS_LINE"
   export BOSUN_USER_PATH BOSUN_RERUN
-  [ "$UNATTENDED" = 0 ] || exec "$command" init --recommended --unattended
+  # Unattended is handed over as a variable, as the two above: an older version on disk (an install it
+  # never finished) ignores it and takes the recommended setup as it always did, where a flag it does not
+  # know would stop it.
+  if [ "$UNATTENDED" = 1 ]; then
+    BOSUN_INIT_UNATTENDED=1
+    export BOSUN_INIT_UNATTENDED
+    exec "$command" init --recommended
+  fi
   has_terminal && exec "$command" init </dev/tty
   exec "$command" init # no terminal to ask on: it prints the plan
 }

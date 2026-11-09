@@ -35,6 +35,7 @@ from install_paths import install_bin
 ROOT = Path(__file__).resolve().parents[1]
 EXIT_BLOCKED = 1
 EXIT_USAGE = 2
+UNATTENDED_VARIABLE = "BOSUN_INIT_UNATTENDED"  # what get.sh --unattended sets: --unattended
 
 
 def parse_args(argv: list[str]) -> argparse.Namespace:
@@ -59,6 +60,8 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     args = parser.parse_args(argv)
     if args.unattended and not args.recommended:
         parser.error("--unattended goes with --recommended")
+    # get.sh hands it over as a variable, which an older bosun ignores (a flag would stop it).
+    args.unattended = args.unattended or (args.recommended and os.environ.get(UNATTENDED_VARIABLE) == "1")
     return args
 
 
@@ -238,7 +241,7 @@ def show_plan(facts: Facts, answers: Answers, args: argparse.Namespace, config_d
     status = carry_out(plan, config_dir)
     if status == 0:
         print("\nbosun is set up. `bosun start` brings the windows up now; `bosun console` shows them.")
-        note = init_plan.unattended_note(facts) if args.unattended else ""
+        note = init_plan.unattended_note(facts, answers) if args.unattended else ""
         print(note, end="\n" if note else "")
     return status
 

@@ -280,6 +280,16 @@ class DetectTest(WorldTest):
     def test_a_failed_listing_is_no_connectors(self) -> None:
         self.assertEqual(init_detect.detect(self.config, NOW).connectors, ())
 
+    def test_a_sessions_file_that_cannot_be_read_is_not_one_with_no_windows(self) -> None:
+        self.config.mkdir(parents=True)
+        for text in ("sessions: [unclosed\n", "- just a list\n", "sessions: api\n"):
+            with self.subTest(text=text):
+                (self.config / "sessions.yml").write_text(text)
+                facts = init_detect.detect(self.config, NOW)
+                self.assertEqual((facts.sessions, facts.sessions_unreadable), ((), True))
+        (self.config / "sessions.yml").write_text("sessions: []\n")
+        self.assertFalse(init_detect.detect(self.config, NOW).sessions_unreadable)
+
     def test_a_rerun_sees_the_config(self) -> None:
         self.config.mkdir(parents=True)
         (self.config / "bosun.env").write_text('BOSUN_DAYS="MWF"\n')
@@ -404,6 +414,23 @@ class CommandTest(WorldTest):
         status, out, _ = self.bosun_init("--recommended", "--unattended")
         self.assertEqual(status, 0)
         self.assertEqual({p.name: p.read_text() for p in self.config.iterdir()}, before)
+        self.assertNotIn(init_plan.UNATTENDED_NOTE, out)
+
+    def test_get_sh_hands_unattended_over_as_a_variable(self) -> None:
+        with mock.patch.dict(os.environ, {"BOSUN_INIT_UNATTENDED": "1"}):
+            status, out, _ = self.bosun_init("--recommended")
+            self.assertFalse(init.parse_args([]).unattended)  # only with --recommended
+        self.assertEqual(status, 0)
+        self.assertIn("sessions: []", (self.config / "sessions.yml").read_text())
+        self.assertEqual(out.rstrip().splitlines()[-1], init_plan.UNATTENDED_NOTE)
+
+    def test_unattended_keeps_and_names_the_windows_sessions_yml_lists(self) -> None:
+        self.config.mkdir(parents=True)
+        (self.config / "sessions.yml").write_text(f"sessions:\n  - name: api\n    dir: {self.api}\n")
+        status, out, _ = self.bosun_init("--recommended", "--unattended")
+        self.assertEqual(status, 0)
+        self.assertIn("name: api", (self.config / "sessions.yml").read_text())
+        self.assertIn("the windows sessions.yml lists stay: api", out.rstrip().splitlines()[-1])
         self.assertNotIn(init_plan.UNATTENDED_NOTE, out)
 
     def test_unattended_only_goes_with_recommended(self) -> None:

@@ -190,9 +190,7 @@ def ask_repos(ui: Ui, facts: Facts, answers: Answers, machine: Machine, top: Seq
             continue
         chosen.symmetric_difference_update({choices[int(key) - 1].directory})
     repos = chosen_repos(choices, chosen)
-    # In scope: the repos you use, as the recommendation has them, and any you chose besides.
-    chosen_uses = [c.use for c in choices if c.directory in chosen and c.use]
-    uses = list(dict.fromkeys([*init_plan.recommended_uses(facts.repos), *chosen_uses]))
+    uses = init_plan.in_scope(facts, [c.use for c in choices if c.directory in chosen and c.use])
     return replace(
         answers,
         repos=repos,

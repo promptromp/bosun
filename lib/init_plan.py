@@ -124,6 +124,7 @@ class Facts:
     files: Mapping[str, str] = field(default_factory=dict)  # the config files that exist, by name
     env: Mapping[str, str] = field(default_factory=dict)  # what bosun.env sets now
     sessions: tuple[Mapping[str, Any], ...] = ()  # what sessions.yml lists now
+    sessions_unreadable: bool = False  # sessions.yml is there, but what it lists could not be read
 
 
 # ---- answers -------------------------------------------------------------------------------------
@@ -387,6 +388,18 @@ def existing_repos(facts: Facts) -> tuple[Repo, ...]:
     return tuple(repos)
 
 
+def ticked_uses(facts: Facts, repos: Sequence[Repo]) -> list[RepoUse]:
+    """What was found of the repos that get a window."""
+    folders = {repo.dir for repo in repos}
+    return [use for use in facts.repos if tilde(use.dir, facts.home) in folders]
+
+
+def in_scope(facts: Facts, ticked: Sequence[RepoUse]) -> list[RepoUse]:
+    """The repos the mask and the orchestrator's folder follow: the ticked ones, or with none ticked the
+    ones you use, so that unticking never widens the mask to every repo."""
+    return list(ticked) or recommended_uses(facts.repos)
+
+
 def recommended_repos(facts: Facts) -> tuple[Repo, ...]:
     """On a re-run what sessions.yml lists; on a first run the repo you use most, the one window worth
     a guess (the wizard lists the others, unticked)."""
@@ -441,7 +454,8 @@ def recommended_model(facts: Facts) -> str:
 def recommend(facts: Facts) -> Answers:
     """The recommended setup: a first run from what the Mac shows, a re-run from the config it has.
     The orchestrator's connectors are never guessed from their names: none on a first run."""
-    uses = recommended_uses(facts.repos)
+    repos = recommended_repos(facts)
+    uses = in_scope(facts, ticked_uses(facts, repos))
     days, start, until = recommended_schedule(facts)
 
     def on(key: str, recommended: bool) -> bool:
@@ -450,7 +464,7 @@ def recommend(facts: Facts) -> Answers:
 
     events = on("BOSUN_EVENTS_ENABLED", True)
     return Answers(
-        repos=recommended_repos(facts),
+        repos=repos,
         days=days,
         start=start,
         until=until,
@@ -486,12 +500,28 @@ def unattended(facts: Facts, recommended: Answers) -> Answers:
     if not first_run(facts):
         return recommended
     repos = recommended.repos if SESSIONS_FILE in facts.files else ()
-    return replace(recommended, repos=repos, orchestrator_connectors="")
+    uses = in_scope(facts, ticked_uses(facts, repos))
+    return replace(
+        recommended,
+        repos=repos,
+        orchestrator_connectors="",
+        repo_mask=recommended_mask(facts, uses),
+        repos_dir=recommended_repos_dir(facts, uses),
+    )
 
 
-def unattended_note(facts: Facts) -> str:
-    """The last line of a first unattended run."""
-    return UNATTENDED_NOTE if first_run(facts) else ""
+def unattended_note(facts: Facts, answers: Answers) -> str:
+    """The last line of a first unattended run, from what it set up (<answers>, which have no
+    connectors): no windows, or the ones sessions.yml listed already."""
+    if not first_run(facts):
+        return ""
+    if not answers.repos:
+        return UNATTENDED_NOTE
+    windows = ", ".join(repo.name for repo in answers.repos)
+    return (
+        "No connectors were set up, since nobody chose them; the windows sessions.yml lists stay: "
+        f"{windows}. Run bosun init to change them."
+    )
 
 
 # ---- the config files ----------------------------------------------------------------------------
@@ -740,7 +770,7 @@ def sessions_change(facts: Facts, answers: Answers, force: bool) -> FileChange:
         return FileChange(SESSIONS_FILE, CREATE, text, count)
     if same_sessions(facts, answers):
         return FileChange(SESSIONS_FILE, SAME, facts.files[SESSIONS_FILE], "already lists these windows")
-    if not existing_repos(facts):  # it listed no window, so there is nothing to lose
+    if not existing_repos(facts) and not facts.sessions_unreadable:  # it listed no window: nothing to lose
         return FileChange(SESSIONS_FILE, REPLACE, text, f"{count}; it listed none, and is kept as a backup")
     if force:
         return FileChange(SESSIONS_FILE, REPLACE, text, f"{count}; the old file is kept as a backup")

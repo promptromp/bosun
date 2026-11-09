@@ -166,13 +166,19 @@ def config_files(config_dir: Path) -> dict[str, str]:
     return found
 
 
-def sessions_listed(path: Path) -> tuple[dict[str, Any], ...]:
-    """What sessions.yml lists. Ruby reads the YAML, as lib/common.sh does: Python has no parser built
-    in."""
-    text = output_of("ruby", "-e", YAML_TO_JSON, str(path)) if path.exists() else None
-    if text is None:
+def sessions_listed(path: Path) -> tuple[dict[str, Any], ...] | None:
+    """What sessions.yml lists (nothing if there is none); None if it is there but cannot be read. Ruby
+    reads the YAML, as lib/common.sh does: Python has no parser built in."""
+    if not path.exists():
         return ()
-    listed = json.loads(text).get("sessions") or []
+    text = output_of("ruby", "-e", YAML_TO_JSON, str(path))
+    try:
+        data = json.loads(text) if text is not None else None
+    except json.JSONDecodeError:
+        return None
+    listed = (data.get("sessions") or []) if isinstance(data, dict) else None
+    if not isinstance(listed, list):
+        return None
     return tuple(entry for entry in listed if isinstance(entry, dict))
 
 
@@ -206,6 +212,7 @@ def detect(config_dir: Path, now: datetime | None = None) -> Facts:
     claude_bin = os.environ.get("BOSUN_CLAUDE_BIN") or "claude"
     auth = claude_state.auth_status(claude_bin)
     files = config_files(config_dir)
+    listed = sessions_listed(config_dir / init_plan.SESSIONS_FILE)
     return Facts(
         home=str(home),
         today=moment.date().isoformat(),
@@ -228,5 +235,6 @@ def detect(config_dir: Path, now: datetime | None = None) -> Facts:
         repeating_wake=repeating_wake(output_of("pmset", "-g", "sched") or ""),
         files=files,
         env=init_plan.parse_env(files.get(init_plan.ENV_FILE, "")),
-        sessions=sessions_listed(config_dir / init_plan.SESSIONS_FILE),
+        sessions=listed or (),
+        sessions_unreadable=listed is None,
     )

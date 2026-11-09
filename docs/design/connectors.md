@@ -181,14 +181,18 @@ claude.ai names as meaning nothing there.
   as not found. Past the screen's nine, the names stay as they are. Repo windows get none, and it says
   where to add some.
 - **Which repos.** The recommendation ticks the repo I use most; the others are listed, unticked, up to
-  the screen's limit. The repo mask and the orchestrator's folder still come from the repos I use, so
-  unticking a window keeps its repo in scope. A re-run keeps what `sessions.yml` holds, as now.
-- **Unattended.** `get.sh --unattended` runs `bosun init --recommended --unattended`. On a first install
-  (no `bosun.env`): the recommended setup without repo windows (unless a `sessions.yml` already lists some)
-  or connectors, since nobody chose them, and the last line `No repo windows or connectors were set up,
-  since nobody chose them: run bosun init to add them.` The rest of the recommendation stays as it is. A
+  the screen's limit. The repo mask and the orchestrator's folder follow the ticked repos (the
+  recommendation's: its one repo's owner), and with none ticked the repos I use, so unticking never
+  empties the mask, which would mean every repo. A re-run keeps what `sessions.yml` holds, as now.
+- **Unattended.** `get.sh --unattended` runs `bosun init --recommended` with `BOSUN_INIT_UNATTENDED=1`,
+  which is `--unattended` (an older bosun on disk, from an install never finished, ignores the variable,
+  where it would refuse a flag). On a first install (no `bosun.env`): the recommended setup without repo
+  windows (unless a `sessions.yml` already lists some) or connectors, since nobody chose them, its scope
+  the repos I use, and a last line from what it set up: `No repo windows or connectors were set up, since
+  nobody chose them: run bosun init to add them.`, or the windows `sessions.yml` listed, by name. A
   re-run, or an update, is unchanged. A script that wants windows says which with `--answers`; a
-  `sessions.yml` that lists none is replaced without `--force`, since there is nothing to lose.
+  `sessions.yml` that lists none is replaced without `--force`, since there is nothing to lose (one that
+  cannot be read still needs it).
 
 ### The orchestrator's gate
 

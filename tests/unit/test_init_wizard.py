@@ -196,15 +196,27 @@ class ReposTest(unittest.TestCase):
         assert answers is not None
         self.assertEqual(len(answers.repos), 1)
 
-    def test_the_scope_covers_the_repos_you_use_not_only_the_ticked_one(self) -> None:
+    def test_the_scope_follows_the_ticked_repos(self) -> None:
         the_facts = facts(
             repos=(RepoUse(f"{HOME}/d/api", 400, "acme"), RepoUse(f"{HOME}/w/web", 50, "my-org"))
         )
         answers, _ = run(ALL_RECOMMENDED, the_facts)
         assert answers is not None
         self.assertEqual([r.name for r in answers.repos], ["api"])
-        self.assertEqual((answers.repo_mask, answers.repos_dir), ("acme my-org", "~/d"))
+        self.assertEqual((answers.repo_mask, answers.repos_dir), ("acme", "~/d"))
         self.assertEqual(answers, init_plan.recommend(the_facts))
+        answers, _ = run(["1", "2", *ALL_RECOMMENDED], the_facts)
+        assert answers is not None
+        self.assertEqual((answers.repo_mask, answers.repos_dir), ("my-org", "~/w"))  # narrowed
+
+    def test_with_nothing_ticked_the_scope_is_the_repos_you_use_never_every_repo(self) -> None:
+        the_facts = facts(
+            repos=(RepoUse(f"{HOME}/d/api", 400, "acme"), RepoUse(f"{HOME}/w/web", 50, "my-org"))
+        )
+        answers, _ = run(["1", *ALL_RECOMMENDED], the_facts)
+        assert answers is not None
+        self.assertEqual(answers.repos, ())
+        self.assertEqual(answers.repo_mask, "acme my-org")
 
     def test_at_most_nine_are_listed(self) -> None:
         many = tuple(RepoUse(f"{HOME}/d/r{n}", 100 - n) for n in range(15))
