@@ -296,7 +296,11 @@ write to take in. Measure before building that.
 
   Each `CONFIG_ADDED` entry carries a note: what the plan shows beside the key, a line of its own in
   the summary under Config, and what `bosun doctor` adds to the key while `bosun.env` does not set it. A
-  kept key's note says the install keeps what it did, so it is said only where its value was written.
+  kept key's note says the install keeps what it did, so it is said only where its value was written; it
+  also carries an unset note, for while it is at its default: with no `bosun.env` to write it to, the
+  plan and the summary say that one (`unwritten` in the record; an older record has none), and so does
+  `bosun doctor`, which warns whenever `bosun.env` does not set such a key (`migrations.py unset`, also
+  for a checkout updated with `git pull`, which no update ran for).
   The plan lists the kept values it will write (`kept` in its record; an older record has none), and
   compares each window's launch with them given, so a window that keeps what it had is no launch
   change. Whether an update may change `bosun.env` (keys renamed, or a kept key among those added) is

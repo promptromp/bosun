@@ -1025,16 +1025,18 @@ class AgentsCommandTest(World):
     def test_after_update_gives_a_new_key_s_note_where_it_holds(self) -> None:
         """A third column: the note of a key at its default. A kept key bosun.env does not set (no
         bosun.env to write it to) is at its default too, so its note ("keeps every connector") would be
-        false: none."""
+        false: its unset note instead ("now it starts with none")."""
         self.record("done")
         state = update_state.read(self.state)
         assert state is not None
         plan = {"keys_added": ["BOSUN_CONNECTORS", "BOSUN_ORCHESTRATOR_CONNECTORS"]}
         update_state.write(self.state, dataclasses.replace(state, plan=plan))
-        note = next(entry.note for entry in migrations.CONFIG_ADDED if entry.key == "BOSUN_CONNECTORS")
+        notes = {entry.key: entry for entry in migrations.CONFIG_ADDED}
+        note, unset = notes["BOSUN_CONNECTORS"].note, notes["BOSUN_ORCHESTRATOR_CONNECTORS"].unset
         argv = ("after-update", "--state-dir", str(self.state), "--config-dir", str(self.config))
         self.assertEqual(
-            self.main(*argv), (0, f"key\tBOSUN_CONNECTORS\t{note}\nkey\tBOSUN_ORCHESTRATOR_CONNECTORS\n", "")
+            self.main(*argv),
+            (0, f"key\tBOSUN_CONNECTORS\t{note}\nkey\tBOSUN_ORCHESTRATOR_CONNECTORS\t{unset}\n", ""),
         )
 
     def test_advance_with_nothing_pending_does_nothing(self) -> None:

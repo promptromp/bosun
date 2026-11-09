@@ -500,4 +500,7 @@ def plan_for(old_root: Path, new_root: Path, state_dir: Path, config_dir: Path) 
         *install_problem(old_root, new_root),
         *pending_windows_blocker(state_dir),
     ]
-    return dataclasses.replace(plan, blockers=(*plan.blockers, *extra), kept=tuple(kept.items()))
+    unwritten = migrations.keys_unwritten(config_dir, new.keys - old.keys)
+    return dataclasses.replace(
+        plan, blockers=(*plan.blockers, *extra), kept=tuple(kept.items()), unwritten=unwritten
+    )

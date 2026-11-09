@@ -26,7 +26,9 @@ removed (CONFIG_RENAMES) is edited in bosun.env, which is kept first as bosun.en
 A key whose default would change what an older install did (CONFIG_ADDED, with a kept value) is
 written to bosun.env with that value, when the update adds it and the file does not set it, with the
 same copy kept; each added key with something to say carries its note there, for the plan, the
-summary and bosun doctor (added_notes).
+summary and bosun doctor (added_notes), and a kept key a note for while it is at its default (unset):
+no bosun.env to write it to (keys_unwritten), or one that does not set it, which bosun doctor warns of
+(unset_notes, `migrations.py unset`).
 My own files (sessions.yml, setup.sh, policy.md, learn.md, tasks/, workstreams.json) are never
 edited: what to change in one is in USER_FILE_CHANGES, for the plan, the summary and bosun doctor
 to say. Doctor reads it from the last update's record (update_summary.left_to_me), with the config
@@ -35,9 +37,11 @@ keys that update added and bosun.env does not set (assigned_keys).
 
 from __future__ import annotations
 
+import argparse
 import os
 import re
 import stat
+import sys
 from collections.abc import Callable, Collection, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -126,11 +130,14 @@ USER_FILE_CHANGES: tuple[tuple[str, str], ...] = ()
 class AddedKey:
     """A config key an update adds that has something to say: <kept>, the value written to bosun.env
     so that an install from before the key keeps doing what it did (None: its default is right for
-    it too); <note>, what the plan, the summary and bosun doctor say of it."""
+    it too); <note>, what the plan, the summary and bosun doctor say of it; for a kept key, <unset>,
+    what they say while bosun.env does not set it (no bosun.env to write it to, a checkout updated with
+    git pull, a line removed): its default, which changed what such an install did."""
 
     key: str
     kept: str | None
     note: str
+    unset: str | None = None
 
 
 # The keys an update adds with a kept value or a note (the others need nothing: their defaults apply).
@@ -141,6 +148,8 @@ CONFIG_ADDED: tuple[AddedKey, ...] = (
         "all",
         "the orchestrator keeps every connector, as before; name the ones it needs and drop all "
         "(bosun doctor lists them)",
+        "before this version the orchestrator had every connector, and now it starts with none: set it in "
+        "bosun.env to the connectors it needs, or to all",
     ),
     AddedKey(
         "BOSUN_CONNECTORS",
@@ -402,14 +411,37 @@ def keys_to_keep(config_dir: Path, added: Collection[str]) -> dict[str, str]:
     return {} if text is None else kept_values(added, _assigned(text))
 
 
-def added_notes(added: Collection[str], written: Collection[str]) -> list[tuple[str, str]]:
+def keys_unwritten(config_dir: Path, added: Collection[str]) -> tuple[str, ...]:
+    """The keys of <added> with a kept value that the update cannot write, as <config_dir> has no
+    bosun.env: they start at their defaults (the unset note of each says what that changes)."""
+    return () if _read_config(config_dir) is not None else tuple(kept_values(added))
+
+
+def _note(entry: AddedKey, written: Collection[str], unwritten: Collection[str]) -> str | None:
+    if entry.kept is None or entry.key in written:
+        return entry.note
+    return entry.unset if entry.key in unwritten else None
+
+
+def added_notes(
+    added: Collection[str], written: Collection[str], unwritten: Collection[str] = ()
+) -> list[tuple[str, str]]:
     """Each key of <added> with a note that holds, and the note, in CONFIG_ADDED's order: a key whose
-    default applies, and one with a kept value only where the update wrote it (<written>), since its
-    note says the install keeps what it did."""
+    default applies; one with a kept value where the update wrote it (<written>), since its note says the
+    install keeps what it did, and its unset note where it is at its default (<unwritten>)."""
+    notes = ((entry.key, _note(entry, written, unwritten)) for entry in CONFIG_ADDED if entry.key in added)
+    return [(key, note) for key, note in notes if note]
+
+
+def unset_notes(config_dir: Path, keys: Collection[str]) -> list[tuple[str, str]]:
+    """Each of <keys> with a kept value (CONFIG_ADDED) that <config_dir>'s bosun.env does not set (or there
+    is no bosun.env), and its unset note: read as the update reads the file, so a key set to nothing is
+    set. What bosun doctor warns of (`migrations.py unset`)."""
+    assigned = assigned_keys(config_dir)
     return [
-        (entry.key, entry.note)
+        (entry.key, entry.unset)
         for entry in CONFIG_ADDED
-        if entry.key in added and (entry.kept is None or entry.key in written)
+        if entry.key in keys and entry.unset is not None and entry.key not in assigned
     ]
 
 
@@ -454,3 +486,21 @@ def write_config(config_dir: Path, now: datetime, added: Collection[str] = ()) -
     journal.create_new(config_copy(config_dir, now), was, mode)
     _replace(target, changed.encode("utf-8", "surrogateescape"), mode)
     return said
+
+
+def main(argv: Sequence[str]) -> int:
+    """`unset --config-dir <dir> <key>...`, which bosun doctor runs: unset_notes, a line each, the key and a
+    tab first."""
+    parser = argparse.ArgumentParser(prog="migrations.py", allow_abbrev=False)
+    commands = parser.add_subparsers(dest="command", required=True)
+    unset = commands.add_parser("unset", help="the kept keys bosun.env does not set, and what that means")
+    unset.add_argument("--config-dir", type=Path, required=True)
+    unset.add_argument("keys", nargs="+")
+    args = parser.parse_args(list(argv))
+    for key, note in unset_notes(args.config_dir, args.keys):
+        print(f"{key}\t{note}")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))

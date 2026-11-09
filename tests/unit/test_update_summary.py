@@ -346,6 +346,18 @@ class TextTest(unittest.TestCase):
                 "2 new keys, at their defaults (bosun doctor lists them)",
             ),
         )
+        # No bosun.env to write it to: the orchestrator starts with none, which the summary says.
+        unset = {entry.key: entry.unset for entry in migrations.CONFIG_ADDED}
+        no_env = built(plan=dataclasses.replace(plan, kept=(), unwritten=("BOSUN_ORCHESTRATOR_CONNECTORS",)))
+        self.assertEqual(
+            no_env.config,
+            (
+                f"BOSUN_ORCHESTRATOR_CONNECTORS: {unset['BOSUN_ORCHESTRATOR_CONNECTORS']}",
+                f"BOSUN_CONNECTORS: {notes['BOSUN_CONNECTORS']}",
+                "1 new key, at its default (bosun doctor lists it)",
+            ),
+        )
+        self.assertIn("now it starts with none", rendered(no_env))
 
     def test_each_migration_of_a_store_is_said_and_a_store_not_made_yet(self) -> None:
         applied = [Applied("ledger", 1, 2, "412 items migrated"), Applied("ledger", 2, 3, "9 links rebuilt")]

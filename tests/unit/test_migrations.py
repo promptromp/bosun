@@ -4,6 +4,7 @@ format to the code's (docs/design/update.md, "Migrations"). Fictional data."""
 from __future__ import annotations
 
 import fcntl
+import io
 import json
 import shutil
 import sys
@@ -430,7 +431,9 @@ class TestConfig(MigrationTest):
 
 
 ADDED = (
-    migrations.AddedKey("BOSUN_KEEPS", "all", "keeps what it did; name what it needs"),
+    migrations.AddedKey(
+        "BOSUN_KEEPS", "all", "keeps what it did; name what it needs", "had all, now none: set it"
+    ),
     migrations.AddedKey("BOSUN_FRESH", None, "starts at its default now"),
 )
 
@@ -537,6 +540,48 @@ class TestAddedKeys(MigrationTest):
         self.assertEqual(migrations.added_notes(added, ()), [("BOSUN_FRESH", "starts at its default now")])
         self.assertEqual(migrations.added_notes(("BOSUN_OTHER",), ("BOSUN_OTHER",)), [])
 
+    def test_a_kept_key_left_at_its_default_says_so(self) -> None:
+        """With no bosun.env to write it to (<unwritten>), a kept key is at its default, which changed
+        what the install did: its unset note says so."""
+        added = ("BOSUN_KEEPS", "BOSUN_FRESH")
+        self.assertEqual(
+            migrations.added_notes(added, (), ("BOSUN_KEEPS",)),
+            [("BOSUN_KEEPS", "had all, now none: set it"), ("BOSUN_FRESH", "starts at its default now")],
+        )
+        self.assertEqual(migrations.keys_unwritten(self.ctx.config_dir, added), ("BOSUN_KEEPS",))
+        self.env.write_text("KEEP=2\n")
+        self.assertEqual(migrations.keys_unwritten(self.ctx.config_dir, added), ())
+
+    def test_which_kept_keys_bosun_env_does_not_set(self) -> None:
+        """What bosun doctor warns of, read as the update reads bosun.env: a key absent, or no bosun.env;
+        a key set, even to nothing, is my choice."""
+        keys = ("BOSUN_KEEPS", "BOSUN_FRESH")
+        unset = [("BOSUN_KEEPS", "had all, now none: set it")]
+        self.assertEqual(migrations.unset_notes(self.ctx.config_dir, keys), unset)
+        self.env.write_text("KEEP=2\n# BOSUN_KEEPS=all\n")
+        self.assertEqual(migrations.unset_notes(self.ctx.config_dir, keys), unset)
+        self.env.write_text('KEEP=2\nBOSUN_KEEPS=""\n')
+        self.assertEqual(migrations.unset_notes(self.ctx.config_dir, keys), [])
+        self.env.write_text("export BOSUN_KEEPS=all\n")
+        self.assertEqual(migrations.unset_notes(self.ctx.config_dir, keys), [])
+        self.assertEqual(migrations.unset_notes(self.ctx.config_dir, ("BOSUN_FRESH",)), [])
+
+    def test_the_unset_command(self) -> None:
+        """`migrations.py unset --config-dir <dir> <key>...`, which bosun doctor runs: a line per key, its
+        note after a tab."""
+        with mock.patch("sys.stdout", new_callable=io.StringIO) as out:
+            self.assertEqual(
+                migrations.main(
+                    ["unset", "--config-dir", str(self.ctx.config_dir), "BOSUN_KEEPS", "BOSUN_FRESH"]
+                ),
+                0,
+            )
+        self.assertEqual(out.getvalue(), "BOSUN_KEEPS\thad all, now none: set it\n")
+        self.env.write_text("BOSUN_KEEPS=\n")
+        with mock.patch("sys.stdout", new_callable=io.StringIO) as out:
+            migrations.main(["unset", "--config-dir", str(self.ctx.config_dir), "BOSUN_KEEPS"])
+        self.assertEqual(out.getvalue(), "")
+
 
 class TestConfigAdded(unittest.TestCase):
     def test_the_registry(self) -> None:
@@ -549,6 +594,11 @@ class TestConfigAdded(unittest.TestCase):
             with self.subTest(key=entry.key):
                 self.assertIn(f"\n  {entry.key}=", common)
                 self.assertTrue(entry.note and "\n" not in entry.note)
+                self.assertEqual(
+                    entry.unset is not None, entry.kept is not None
+                )  # a kept key says it when unset
+                self.assertNotIn("\n", entry.unset or "")
+                self.assertNotIn("\t", entry.unset or "")  # bosun doctor reads it after a tab
                 if entry.kept is not None:
                     self.assertFalse(set(entry.kept) & set('"$`\\\n'), entry.kept)
 

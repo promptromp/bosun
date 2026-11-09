@@ -84,10 +84,13 @@ class BlockerTest(World):
         (self.config / "bosun.env").write_text("BOSUN_DAYS=MTWRF\n")
         with keys:
             self.assertEqual(self.plan().kept, (("BOSUN_ORCHESTRATOR_CONNECTORS", "all"),))
+            self.assertEqual(self.plan().unwritten, ())
             (self.config / "bosun.env").write_text('BOSUN_ORCHESTRATOR_CONNECTORS="claude.ai Acme Chat"\n')
-            self.assertEqual(self.plan().kept, ())
+            self.assertEqual((self.plan().kept, self.plan().unwritten), ((), ()))
             (self.config / "bosun.env").unlink()
             self.assertEqual(self.plan().kept, ())
+            # No bosun.env to write it to: the plan says the key starts at its default.
+            self.assertEqual(self.plan().unwritten, ("BOSUN_ORCHESTRATOR_CONNECTORS",))
 
     def test_versions_not_side_by_side_are_a_blocker(self) -> None:
         self.assertEqual(update_facts.install_problem(self.old, self.new), [])

@@ -90,7 +90,8 @@ class Plan:
     """What an update would do (make_plan). <renames>: each config key bosun.env sets that the new
     version renamed, and its name now; an empty name means the key was removed. <kept>: each key the
     update adds that it writes to bosun.env, and the value that keeps what this install did
-    (migrations.keys_to_keep, which update_facts.plan_for sets)."""
+    (migrations.keys_to_keep, which update_facts.plan_for sets); <unwritten>: each key it would have
+    written there, but there is no bosun.env, so it starts at its default (migrations.keys_unwritten)."""
 
     from_commit: str
     to_commit: str
@@ -110,6 +111,7 @@ class Plan:
     # Each store's format on disk (0: none yet), in the new version's order of its stores.
     formats: tuple[tuple[str, int], ...] = ()
     kept: tuple[tuple[str, str], ...] = ()  # an older record has none: nothing written, as it ran then
+    unwritten: tuple[str, ...] = ()  # an older record has none: nothing said of them, as it ran then
 
 
 def _matches(path: str, patterns: Sequence[str]) -> bool:
@@ -244,6 +246,7 @@ _READ: dict[str, tuple[Callable[[Any], Any], Any]] = {
     "kinds": (_pairs, ()),
     "formats": (lambda value: tuple((str(store), int(n)) for store, n in _listed(value)), ()),
     "kept": (_pairs, ()),
+    "unwritten": (_strings, ()),
 }
 
 
@@ -271,7 +274,7 @@ def _rename_line(old: str, new: str) -> str:
 
 def _key_lines(plan: Plan) -> list[str]:
     """Each key the update adds, with its note when it has one that holds (migrations.added_notes)."""
-    notes = dict(migrations.added_notes(plan.keys_added, dict(plan.kept)))
+    notes = dict(migrations.added_notes(plan.keys_added, dict(plan.kept), plan.unwritten))
     return [f"{key}: {notes[key]}" if key in notes else key for key in plan.keys_added]
 
 

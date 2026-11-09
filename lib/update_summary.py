@@ -110,8 +110,9 @@ def _data(plan: Plan, applied: Sequence[Applied]) -> tuple[tuple[str, str], ...]
 
 def _added_keys(plan: Plan) -> tuple[str, ...]:
     """The keys the update added: a line each for those with a note that holds (migrations.added_notes:
-    a kept key's once its value was written, plan.kept), and a count of the others."""
-    notes = migrations.added_notes(plan.keys_added, dict(plan.kept))
+    a kept key's once its value was written, plan.kept, and its unset note when there was no bosun.env to
+    write it to, plan.unwritten), and a count of the others."""
+    notes = migrations.added_notes(plan.keys_added, dict(plan.kept), plan.unwritten)
     noted = dict(notes)
     rest = [key for key in plan.keys_added if key not in noted]
     return (*(f"{key}: {note}" for key, note in notes), *_new_keys(rest))
@@ -119,8 +120,9 @@ def _added_keys(plan: Plan) -> tuple[str, ...]:
 
 def key_note(key: str) -> str:
     """What bosun doctor says of <key>, which the last update added and bosun.env does not set, so is
-    at its default: its note when that holds then (nothing was written, added_notes), else ""."""
-    return dict(migrations.added_notes((key,), ())).get(key, "")
+    at its default: its note when that holds then (nothing was written, added_notes; a kept key's unset
+    note), else ""."""
+    return dict(migrations.added_notes((key,), (), (key,))).get(key, "")
 
 
 def _new_keys(keys: Sequence[str]) -> tuple[str, ...]:
