@@ -57,8 +57,13 @@ Claude Code window does ([connectors](connectors.md)). At launch `lib/launch/cod
 only: a stdio server's entry holds its environment in plain text) and add `-c
 mcp_servers.<name>.enabled=false` for each one the list does not name, the name quoted as a TOML key when
 it is not a bare one, and `--disable apps` to switch ChatGPT's connectors off, unless the list is `all`.
-Both the `-c` form and `--disable apps` are from Codex's docs and source and wait for the Mac VM run
-(`tests/sandbox.sh mac live codex`) to be confirmed. A listing that fails, or arguments that are not whole
+The Mac VM (`tests/sandbox.sh mac live codex`, Codex 0.166.0) confirmed the `-c` form for a user's and a
+project's server, new and after `codex resume` (`/mcp` shows such a server `disabled (0 tools)`), and that
+`--disable apps` is taken. It refuted the quoted key: Codex splits a `-c` key at every dot, quotes included,
+so a server named with a dot cannot be switched off this way, and Codex exits at start (`invalid transport`);
+an inline table, `-c 'mcp_servers={"a.b"={enabled=false}}'`, merges and works
+([connectors](connectors.md#what-the-vm-showed)). Codex's built-in `codex_worktrees` server is not in the
+listing, so it stays on, as `codex_apps` would without `--disable apps`. A listing that fails, or arguments that are not whole
 `-c` pairs and `--disable apps`, keep the window from starting: bosun cannot tell which servers to switch off,
 and it would rather not start the window than start it with all of them. A launch lists once, however many times it builds its arguments. `launch --fingerprint` lists too, since the
 fingerprint holds these arguments; when that fails during an update, the window reads as changed and its
@@ -102,6 +107,7 @@ does not record the question, and Enter would answer it. So `bosun send` reads t
 | `shell`, `idle-bg` and the watchdog's `long-shell` | Codex's session file records only idle or busy, so a background command left running does not show |
 | Per-task model and effort on a running session | A task's settings reach a running Claude Code session through a subagent, an instruction that names its Agent tool. A running Codex session gets the task at its own settings. A window opened for the task (`--new`) does start at them |
 | `bosun resolve` | Claude Code's names only. A Codex window's are in `codex-sessions.json` |
+| Codex's update screen | Once Codex has seen a newer version of itself, a start shows "Update available" and waits for a key (seen in the Mac VM on 0.166.0). bosun does not answer it, so a window started or restarted then stalls until a person does; `check_for_update_on_startup = false` in `~/.codex/config.toml` turns the screen off |
 | Compact-context and signal hooks | Claude Code only. Codex has hooks, but each new one stops at a review screen until a person accepts it, which is why bosun uses `notify=` |
 | A real GitHub login inside a session | Not tested: the runs so far used a stand-in `gh`. A real one is expected to go through the reviewer, since the sandbox blocks the Keychain |
 

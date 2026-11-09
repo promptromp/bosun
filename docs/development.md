@@ -53,7 +53,7 @@ the cheapest of these that can show what you changed:
 | `get.sh`, `install.sh`, launchd, `pmset`, anything macOS does its own way | `tests/sandbox.sh mac run` | the real thing on real macOS, except sleep | 2 minutes |
 | What a new Mac lacks: Homebrew, Apple's tools | `tests/sandbox.sh mac run --from-nothing` | the same from a Mac with nothing on it | 4 minutes |
 | What an update does to an install in use, its windows, its ledger and knowledge base, and what real use does to them: their journals, ids, writes, privacy | `tests/sandbox.sh mac work` | a week of work through the first update's conversion and a mid-afternoon update on a year of data, on real macOS: launchd, a moving clock, racing writers, writes cut short, files changed outside the journal, going back | 16 minutes |
-| How an agent behaves: launching it, its screens and files, a task handed to it, an update's prompts | `tests/sandbox.sh mac live claude`, `... live codex` | the real agents from nothing, through setup, sessions and an update | about a dollar |
+| How an agent behaves: launching it, its screens and files, a task handed to it, an update's prompts, which MCP servers a window reaches | `tests/sandbox.sh mac live claude`, `... live codex` | the real agents from nothing, through setup, sessions, an update and connectors | about 10 minutes and a dollar each |
 | The wake itself | `bosun wake-test`, on real hardware | a real sleep and a real wake | 5 minutes |
 
 The first also runs in CI (the second's unit and smoke suites run there natively), and so does the third on
@@ -227,6 +227,16 @@ command again and answer with `bosun update note --status`. Codex records no bac
 leaves a Codex window running, and its take-stock and update prompts are sent by hand, in the update's own
 words. Each version folder must read clean while Claude runs with its plugin from it, as an update's prune and
 `bosun uninstall` read one.
+
+Then connectors ([design](design/connectors.md#what-the-vm-showed)): local stdio test servers
+(`tests/sandbox/mcp_probe_server.py`, which logs what each was asked) are added to the agent's own config
+(`probe-allowed`, `probe-blocked`) and to a repo of its own (`probe-project`). Without a limit the agent starts
+every one of them; a `probe` window with `BOSUN_CONNECTORS="probe-allowed"` must start `probe-allowed` and
+none of the others, and show only it as connected in its own `/mcp`, both when new and after a restart resumes
+its session. On Codex a server named with a dot (`probe.dotted`) is then added and the window restarted, with
+the same check. What a window reaches is read from the agent (which servers it started, its `/mcp`), never
+from what its model says: a model leaves deferred tools out of a list. This part adds about three minutes and
+a few cents.
 
 **The keys.** It reads two API keys from your Keychain, one for Anthropic, and for `live codex` one for OpenAI.
 Use keys made for this, with a spend limit. Copy each to the clipboard and store it like this, because

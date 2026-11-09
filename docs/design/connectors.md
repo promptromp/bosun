@@ -4,6 +4,13 @@ Status: accepted 2026-11-09. A window bosun starts gets only the connectors its 
 repo window, the work ones I chose for the orchestrator. The orchestrator's gate covers what it still
 missed, and an unattended install grants nothing nobody saw.
 
+Run 2026-11-09 in the macOS VM (`tests/sandbox.sh mac run`, `mac live claude`, `mac live codex`, `mac
+work`), with real Claude Code and Codex 0.166.0 windows and local test servers: Claude Code's allow list
+holds, new and resumed; on Codex, switching a server off holds for its own and a project's servers, new and
+resumed, and `--disable apps` is taken, but a server whose name holds a dot cannot be switched off with
+`-c` (see [What the VM showed](#what-the-vm-showed)), so with one in Codex's configuration no Codex window
+starts.
+
 ## Why
 
 A window bosun starts is an agent that runs for hours, mostly unwatched. Until now it got every connector
@@ -64,7 +71,7 @@ or command and its health, claude.ai connectors included (with `ENABLE_CLAUDEAI_
 about 4 seconds; it connects to each to check it. Allow lists from every settings scope add up, so an
 allow list in my own `~/.claude/settings.json` would widen a window's; deny lists add up too.
 
-Codex 0.167.0, from its docs and source (to be confirmed in the VM): servers come from `[mcp_servers.<name>]`
+Codex 0.167.0, from its docs and source (checked in the VM: [What the VM showed](#what-the-vm-showed)): servers come from `[mcp_servers.<name>]`
 in `~/.codex/config.toml`, a trusted project's `.codex/config.toml`, profiles and plugins; ChatGPT's
 connectors are one built-in server, `codex_apps`, present with a ChatGPT login. A launch turns one server
 off with `-c mcp_servers.<name>.enabled=false` (`-c mcp_servers={}` removes nothing: `-c` tables merge),
@@ -72,6 +79,29 @@ and the connectors with `--disable apps`. `codex mcp list --json` lists the conf
 by name (not `codex_apps`), with each stdio server's environment in plain text, so a caller keeps the
 names only. bosun already launches Codex with `--no-daemon`, without which a shared background server may
 ignore the overrides.
+
+### What the VM showed
+
+`tests/sandbox/live.sh`'s connectors part, 2026-11-09, on Claude Code 2.1.308 and Codex 0.166.0 (an API-key
+login, so no claude.ai or ChatGPT connectors). Local stdio servers (`tests/sandbox/mcp_probe_server.py`) log
+what they are asked, so which ones an agent started is read from them, and what it shows from its own `/mcp`,
+never from what its model says (a model leaves deferred tools out of a list):
+
+| Fact | Seen |
+|---|---|
+| Claude Code: `allowedMcpServers: [{"serverName": "probe-allowed"}]` with a user server not named and a repo's `.mcp.json` server I had approved | only `probe-allowed` started and is in `/mcp`, in a new window and after a restart resumed its session; `claude mcp list` in that folder, with no limit, started all three |
+| Codex lists a trusted project's servers and a name with a dot | `codex mcp list --json` in the repo listed the user's, the project's `.codex/config.toml` server and `probe.dotted` (`[mcp_servers."probe.dotted"]`); without a limit `codex exec` started all of them |
+| `-c mcp_servers.<name>.enabled=false`, a user's server and a project's | confirmed: never started; `/mcp` shows each `disabled (0 tools)`, and the allowed one `connected (1 tool)` |
+| `--disable apps` | taken: the window starts with it (whether it removes ChatGPT's connectors needs a ChatGPT login, which the VM has not) |
+| the overrides after `codex resume` | confirmed: the resumed session started only the allowed server, and `/mcp` showed the same |
+| `-c mcp_servers."probe.dotted".enabled=false` (the name quoted as a TOML key) | **refuted**: Codex splits a `-c` key at every dot, quotes or not, so this makes a server named `"probe` with no command, and Codex exits at start with `Error: invalid transport in mcp_servers."probe`. The window does not start (fail closed), and since the launch switches off every server its list does not name, one such server in Codex's configuration keeps every Codex window from starting |
+| `-c 'mcp_servers={"probe.dotted"={enabled=false}}'` (an inline table) | merges into the configuration rather than replacing it: `codex mcp list --json` shows that server `enabled: false` with its command kept and the others as they were, and `codex exec` with it started all but that one. One inline table naming three servers, with `--disable apps`, started only the fourth |
+| what `codex mcp list --json` leaves out | besides `codex_apps`, a built-in `codex_worktrees` server (3 tools), which `/mcp` shows `connected` in every window: bosun does not switch it off |
+| Codex's own update screen | once Codex has seen a newer version of itself, a start shows "Update available" and waits for a key, which stalled a restart (the VM's later runs set `check_for_update_on_startup = false`) |
+
+So a server whose name is not a bare TOML key needs another form than the one this note chose; the inline
+table is the form the VM showed works. Until it is chosen, such a server keeps Codex windows from starting,
+as the design asks of a server a window cannot switch off.
 
 ## The design
 

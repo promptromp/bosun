@@ -153,7 +153,7 @@ copy_checkout() { # [<name of the bundle in the VM>]
   to_vm "$CLONE" "$WORK/repo.bundle" "${1:-repo.bundle}" || die "could not copy the checkout"
   COPYFILE_DISABLE=1 tar -C "$ROOT" -czf "$WORK/e2e.tgz" get.sh tests/install_e2e.sh tests/work_e2e.sh \
     tests/sandbox/e2e_lib.sh tests/sandbox/acme_week.sh tests/sandbox/claude-stand-in \
-    tests/sandbox/gh-stand-in tests/sandbox/drive.py tests/sandbox/live.sh tests/sandbox/live \
+    tests/sandbox/gh-stand-in tests/sandbox/drive.py tests/sandbox/live.sh tests/sandbox/live tests/sandbox/mcp_probe_server.py \
     tests/sandbox/acme_year.py tests/fixtures/knowledge/acme-import.jsonl
   to_vm "$CLONE" "$WORK/e2e.tgz" e2e.tgz || die "could not copy the test"
   in_vm "$CLONE" 'mkdir -p e2e && tar -xzf e2e.tgz -C e2e' || die "could not unpack the test"

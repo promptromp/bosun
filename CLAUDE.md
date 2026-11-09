@@ -233,6 +233,12 @@ of truth, so don't copy rules into this file.
   to read it, how an approved change is made, its status categories and names), the tickets
   section of `docs/orchestrator.md`, and a test in `tests/unit/test_tickets.py`. Site status names belong in
   `BOSUN_TICKET_STATUS_MAP`, not in the table.
+- **A connector a window should reach** (Slack for the orchestrator, a tracker for a repo window): a
+  config value, never code: `BOSUN_ORCHESTRATOR_CONNECTORS`, `BOSUN_CONNECTORS` or `connectors:` in a
+  `sessions.yml` entry, in the site's config dir (`bosun init` asks for the orchestrator's). No server's
+  name goes in the repo. A new way to name a server, or an agent update that changes how one is switched
+  off: `lib/connectors.py`, `docs/design/connectors.md`, and a run of `tests/sandbox.sh mac live` (its
+  connectors part).
 - **An outward tool to gate** (approvals): a row in `GATED_MCP` / `GATED_COMMANDS` (`lib/guard.py`)
   and its `ask` rule in `orchestrator/settings.json`; a standing class: `STANDING_CLASSES` and its
   check in `lib/approvals.py`, its config keys, the design note and `docs/permissions.md`.

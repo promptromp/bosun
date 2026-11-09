@@ -329,6 +329,20 @@ of kept stores on a fresh install (`init`, with a backup), and a Codex window's 
 bosun cannot see, so one whose launch changed is restarted without taking stock. Design note:
 [docs/design/update.md](docs/design/update.md).
 
+**Done (2026-11-09): what a window may reach, and what setup grants.** Every window bosun started got
+every MCP server and connector the agent had on the Mac (mail, files, calendars), the recommended setup
+ticked up to six repos, and `get.sh --unattended` carried that out with nobody looking: what kept me from
+running bosun on my own Mac. Now a window reaches only what its config names: `BOSUN_CONNECTORS` for repo
+windows (none by default), `BOSUN_ORCHESTRATOR_CONNECTORS` for the orchestrator (`bosun init` asks), or
+`connectors:` per window; Claude Code gets an allow list at launch, and Codex has every other server
+switched off. `bosun doctor` shows each window's, and an update keeps an older orchestrator's `all` and
+says how to narrow it. The recommendation ticks the one repo I use most, and an unattended first install
+sets up no repo windows or connectors. Run in the macOS VM with real Claude Code and Codex windows and local
+test servers: the allow lists hold, new and resumed, a repo's own servers included. Next: a Codex server
+named with a dot cannot be switched off the way the launch does it (Codex splits `-c` keys at every dot), so
+with one no Codex window starts; an inline table works. Codex's built-in `codex_worktrees` server stays on,
+and its update screen stalls a start. Design note: [docs/design/connectors.md](docs/design/connectors.md).
+
 ### Docs site
 
 **Done (2026-11-02):** a docs site, <https://promptromp.github.io/bosun/>, built with MkDocs
