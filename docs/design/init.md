@@ -62,18 +62,21 @@ without `bosun.git`):
 
 ## What it recommends
 
-On a first run your own history beats a generic default. A re-run starts from your config instead.
+On a first run your own history beats a generic default. A re-run starts from your config instead: the
+windows `sessions.yml` lists, and the connectors `BOSUN_ORCHESTRATOR_CONNECTORS` names (`all` as one line,
+ticked, which ticking a server unticks; a name `claude mcp list` no longer shows kept, marked not found).
 
 | Answer | From |
 |---|---|
-| Repos | The ones you typed the most prompts in over 30 days, in Claude Code and Codex (20 or more, at most 6). Worktrees count for their main checkout; scripted runs (`claude -p`) do not count. With none at 20, the 3 with the most prompts. With no history at all, up to 3 git repos from the usual folders, newest first. |
+| Repos | Ticked: the one you typed the most prompts in over 30 days, in Claude Code and Codex. Worktrees count for their main checkout; scripted runs (`claude -p`) do not count. With no history at all, the newest git repo in the usual folders. The others found are listed, unticked, up to the screen's nine: one window is a guess worth making, more are your choice. |
+| Orchestrator's connectors | None: which servers are work tools cannot be told from their names, and a list of names to guess by would be wrong for someone. The question lists what `claude mcp list` shows (with claude.ai's connectors), and is asked only when it shows some or the config names some. |
 | Days | Weekdays you worked on at least 60% of since your first prompt. |
 | Hours | Half an hour before your median first prompt, to after your median last one, at least 4 hours. Work before 04:00 belongs to the day before. With under 5 active days: 08:00 to 20:00, Monday to Friday. |
 | Features | Events, approvals and learning on. The Slack watcher only if the Slack plugin is installed. |
 | Agent | Only asked once Codex is installed and logged in: what `BOSUN_HARNESS` asks for, else your config, else Codex if you typed more prompts there, else Claude Code. |
 | Model | `opus` on Max, Team and Enterprise plans, else `sonnet`. On Codex this is for the orchestrator, and repo sessions use `BOSUN_CODEX_MODEL`. |
-| Repo mask | The GitHub owners of the chosen repos. |
-| Orchestrator folder | The folder the repos share, never your home folder. |
+| Repo mask | The GitHub owners of the repos you use: those with 20 or more prompts (at most 6), else the 3 with the most, else up to 3 found in the usual folders; and of any repo you tick besides. Unticking a repo's window keeps it in scope. |
+| Orchestrator folder | The folder those repos share, never your home folder. |
 | AWS SSO | The profile, if there is exactly one; with more, the choice is yours. |
 | Wake | Yes, unless `pmset` already has a repeating event that bosun did not set: it keeps only one, and it is not ours to replace by default. |
 
@@ -85,7 +88,13 @@ It only reads where and when prompts were typed, never what they say.
   line stays, and the old file is kept as `bosun.env.pre-init-<time>`. Settings that follow from an
   answer (the orchestrator's model, the learning time) only move when that answer does, so one you
   set apart from it stays yours. A `sessions.yml` that lists other windows needs `--force`, also with
-  a backup. `setup.sh` is code: once it exists it is never changed.
+  a backup (one that lists none does not: there is nothing to lose). `setup.sh` is code: once it
+  exists it is never changed.
+- **Grant what nobody chose.** `get.sh --unattended` runs `bosun init --recommended --unattended`. On a
+  first run (no `bosun.env`) that is the recommendation without repo windows (unless a `sessions.yml`
+  already lists some) and without connectors for the orchestrator, ending with the line `No repo windows
+  or connectors were set up, since nobody chose them: run bosun init to add them.` On a re-run it is
+  `--recommended`. A script that wants windows names them with `--answers`.
 - **Change your setup on a re-run.** A re-run goes by your config and bosun's defaults, not by your
   history: a switch `bosun.env` leaves out stays off. To change something, answer it.
 - **Use `sudo` quietly.** One command, `pmset repeat`, named in the plan with its reason, and only

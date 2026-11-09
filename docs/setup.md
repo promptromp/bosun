@@ -38,25 +38,34 @@ To run the repo sessions on Codex, ask for it after the pipe, so that it checks 
 curl -fsSL https://raw.githubusercontent.com/promptromp/bosun/main/get.sh | BOSUN_HARNESS=codex sh
 ```
 
-Run it again to update: it hands over to the newest version's `bosun update` (see
-[Updating](#updating)). After the pipe, `sh -s -- --dry-run` says what it would do and does nothing, and
-`sh -s -- --unattended` asks nothing: it takes the recommended setup, or goes ahead with the update.
-`BOSUN_DIR`, `BOSUN_REPO` and `BOSUN_BRANCH` override where it goes and what it gets; on an install that
-is already there, the defaults are what it came from, and a `BOSUN_REPO` or `BOSUN_BRANCH` given then is
-kept for the updates after it.
+Run it again to update: it hands over to the newest version's `bosun update` (see [Updating](#updating)).
+After the pipe, `sh -s -- --dry-run` says what it would do and does nothing, and `sh -s -- --unattended`
+asks nothing: it takes the recommended setup, or goes ahead with the update. On a first install that
+setup has no repo windows and gives the orchestrator no connectors, since nobody chose them, and its last
+line says so: run `bosun init` to add them, or name them in a file with `bosun init --answers` (below).
+Run again, it keeps what your config says. `BOSUN_DIR`, `BOSUN_REPO` and `BOSUN_BRANCH` override where it
+goes and what it gets; on an install that is already there, the defaults are what it came from, and a
+`BOSUN_REPO` or `BOSUN_BRANCH` given then is kept for the updates after it.
 
-`bosun init` reads what this Mac already shows: the repos you use your agents in, your usual hours,
-your logins. In a terminal it asks a few questions, one key each: Return takes the recommended
-answer, `r` starts again and `q` leaves with nothing changed. It says why it recommends what it does,
-and lists every file and command for you to accept before it touches anything. Then it writes the
-config, trusts the folders, and runs `install.sh`.
+`bosun init` reads what this Mac already shows: the repos you use your agents in, the MCP servers and
+connectors `claude mcp list` shows, your usual hours, your logins. In a terminal it asks a few questions,
+one key each: Return takes the recommended answer, `r` starts again and `q` leaves with nothing changed.
+It says why it recommends what it does, and lists every file and command for you to accept before it
+touches anything. Then it writes the config, trusts the folders, and runs `install.sh`.
+
+Two of the questions are lists to tick. Which repos get a window: the one you use most is ticked, and the
+others it found are listed for you to add. Which connectors the orchestrator may use (asked when
+`claude mcp list` shows any): nothing is ticked, because only you know which are work tools; tick the ones
+it needs, such as Slack and your tracker. It writes them to `BOSUN_ORCHESTRATOR_CONNECTORS`. Repo windows
+get none: `BOSUN_CONNECTORS`, or `connectors:` in a `sessions.yml` entry, gives them some (see
+[Connectors](#connectors-what-each-window-may-reach)).
 
 Without a terminal, or with `--dry-run`, it only prints the plan. To use answers from a file instead,
 which only needs what it changes:
 
 ```bash
 bosun init --print-answers > answers.json
-$EDITOR answers.json           # repos, days, start, until, events, approvals, learning, ...
+$EDITOR answers.json           # repos, orchestrator_connectors, days, start, until, events, ...
 bosun init --answers answers.json
 bosun init --recommended       # or just take what it recommends
 ```
@@ -357,7 +366,7 @@ are off for it. Chrome is not one of them: it stays on through `--chrome`, as be
 |---|---|---|
 | `BOSUN_CONNECTORS` | every repo window | empty: none |
 | `connectors:` in a `sessions.yml` entry | that window, instead of `BOSUN_CONNECTORS` | (the key's) |
-| `BOSUN_ORCHESTRATOR_CONNECTORS` | the orchestrator, and `bosun chores --dry-run` | empty: none |
+| `BOSUN_ORCHESTRATOR_CONNECTORS` | the orchestrator, and `bosun chores --dry-run` | empty: none; `bosun init` writes what you tick |
 
 A list is comma-separated, or a YAML list in `sessions.yml` (`[]` is none). Each entry is a server's name
 as `claude mcp list` (and `/mcp`) shows it, or a URL pattern; `all` means every one, as before this

@@ -17,7 +17,9 @@
 # `bosun init` again instead. `bosun uninstall` takes it all off again.
 #
 #   curl ... | sh -s -- --dry-run      say what it would do, and do nothing
-#   curl ... | sh -s -- --unattended   ask nothing: take the recommended setup, or go ahead with the update
+#   curl ... | sh -s -- --unattended   ask nothing: take the recommended setup (on a first install without
+#                                      repo windows or connectors, since nobody chose them), or go ahead
+#                                      with the update
 #   curl ... | BOSUN_HARNESS=codex sh  run repo sessions on Codex, and check that it is ready
 #
 # BOSUN_DIR (where it goes), BOSUN_REPO and BOSUN_BRANCH (what it gets) override the defaults. On an
@@ -207,7 +209,7 @@ start_init() {
   BOSUN_USER_PATH="$USER_PATH"
   BOSUN_RERUN="$THIS_LINE"
   export BOSUN_USER_PATH BOSUN_RERUN
-  [ "$UNATTENDED" = 0 ] || exec "$command" init --recommended
+  [ "$UNATTENDED" = 0 ] || exec "$command" init --recommended --unattended
   has_terminal && exec "$command" init </dev/tty
   exec "$command" init # no terminal to ask on: it prints the plan
 }

@@ -9,16 +9,26 @@ set -uo pipefail
 # The guard (it refuses to run anywhere else), the checks and the steps tests/work_e2e.sh shares.
 source "$(dirname "$0")/sandbox/e2e_lib.sh" || exit 1
 
+backups() { find "$CONFIG" -maxdepth 1 -name '*.pre-init-*' | wc -l | tr -d ' '; }
+
+# A first install, unattended: nobody chose a window or a connector, so there are none, and it says so.
+nothing_chosen() {
+  check "on a first install, no repo window, since nobody chose one" grep -qx "sessions: \[\]" "$CONFIG/sessions.yml"
+  check "... nor connectors for the orchestrator" grep -qx 'BOSUN_ORCHESTRATOR_CONNECTORS=""' "$CONFIG/bosun.env"
+  check "... and it says how to add them" grep -q "No repo windows or connectors were set up" "$OUT/install.txt"
+}
+
 run_again() {
   echo "a re-run"
-  local before after
+  local before after kept
   before="$(cat "$CONFIG"/bosun.env "$CONFIG"/sessions.yml "$CONFIG"/setup.sh | cksum)"
+  kept="$(backups)" # sessions.yml's, from when the windows were named
   # shellcheck disable=SC2002
   cat "$ROOT/get.sh" | sh -s -- --unattended >"$OUT/again.txt" 2>&1
   check "it updates and passes again" test "$?" = 0
   after="$(cat "$CONFIG"/bosun.env "$CONFIG"/sessions.yml "$CONFIG"/setup.sh | cksum)"
   check "the same answers change nothing" test "$before" = "$after"
-  check "... and back nothing up" bash -c '! ls "$1"/*.pre-init-* >/dev/null 2>&1' _ "$CONFIG"
+  check "... and back nothing up" test "$kept" = "$(backups)"
 }
 
 # Through a real terminal, with real launchd and pmset.
@@ -62,6 +72,8 @@ a_new_machine
 follow_what_it_says
 install
 check "... versions side by side, the install path a link to the version in use" side_by_side
+nothing_chosen
+windows_by_answers acme-api
 launchd_for_real
 run_again
 uninstall

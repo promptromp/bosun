@@ -1503,7 +1503,7 @@ a_repo_by_hand acme-web https://github.com/acme/web.git
 a_repo_by_hand invoice-exporter https://github.com/acme/invoice-exporter.git
 follow_what_it_says
 install
-check "... and the other two" bash -c 'grep -q "name: acme-web" "$1" && grep -q "name: invoice-exporter" "$1"' _ "$CONFIG/sessions.yml"
+windows_by_answers acme-api acme-web invoice-exporter
 what_the_release_does
 git_keeps_tokens_out
 launchd_for_real

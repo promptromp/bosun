@@ -18,6 +18,7 @@ from dataclasses import dataclass, field, fields, replace
 from datetime import date, datetime, timedelta
 from typing import Any, NamedTuple
 
+import connectors
 from awake import DAY_LETTERS
 
 
@@ -116,6 +117,7 @@ class Facts:
     bypass_accepted: bool = False
     ready_agents: tuple[str, ...] = ()  # installed and logged in
     asked_harness: str = ""  # BOSUN_HARNESS in the environment: curl ... | BOSUN_HARNESS=codex sh
+    connectors: tuple[str, ...] = ()  # the MCP servers `claude mcp list` shows; none if it failed
     agent_prompts: Mapping[str, int] = field(default_factory=dict)  # per agent, over the history
     has_battery: bool = False
     repeating_wake: str = ""  # the repeating event pmset has now
@@ -147,6 +149,7 @@ class Answers:
     model: str = DEFAULT_MODEL
     harness: str = CLAUDE
     permissions: str = AUTO
+    orchestrator_connectors: str = ""  # BOSUN_ORCHESTRATOR_CONNECTORS: none, `all`, or a list of names
     repo_mask: str = ""
     repos_dir: str = DEFAULT_REPOS_DIR
     aws_sso_profiles: tuple[str, ...] = ()
@@ -163,7 +166,17 @@ WINDOW_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]*$")
 MODEL_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._\[\]-]*$")
 CONTROL = re.compile(r"[\x00-\x1f\x7f]")
 BOOL_ANSWERS = ("events", "approvals", "learning", "slack_watch", "wake", "trust")
-TEXT_ANSWERS = ("days", "start", "until", "model", "harness", "permissions", "repo_mask", "repos_dir")
+TEXT_ANSWERS = (
+    "days",
+    "start",
+    "until",
+    "model",
+    "harness",
+    "permissions",
+    "orchestrator_connectors",
+    "repo_mask",
+    "repos_dir",
+)
 
 
 def answers_to_json(answers: Answers) -> dict[str, Any]:
@@ -248,9 +261,17 @@ def repo_problems(repos: Sequence[Repo]) -> list[str]:
     return problems
 
 
+def connector_problems(answers: Answers) -> list[str]:
+    try:
+        connectors.parse(answers.orchestrator_connectors)
+    except connectors.ConnectorsError as error:
+        return [f"orchestrator_connectors: {error}"]
+    return []
+
+
 def validate(answers: Answers) -> list[str]:
     """Why these answers cannot be used, if they cannot."""
-    problems = schedule_problems(answers) + repo_problems(answers.repos)
+    problems = schedule_problems(answers) + repo_problems(answers.repos) + connector_problems(answers)
     if answers.slack_watch and not answers.events:
         problems.append("slack_watch: the Slack watcher needs events on")
     if answers.harness not in (CLAUDE, CODEX):
@@ -259,9 +280,15 @@ def validate(answers: Answers) -> list[str]:
         problems.append(f"permissions: '{answers.permissions}' must be {AUTO} or {BYPASS}")
     if not MODEL_NAME.match(answers.model):
         problems.append(f"model: '{answers.model}' is not a model name")
-    texts = [answers.repo_mask, answers.repos_dir, *answers.aws_sso_profiles, *(r.dir for r in answers.repos)]
+    texts = [
+        answers.repo_mask,
+        answers.repos_dir,
+        answers.orchestrator_connectors,
+        *answers.aws_sso_profiles,
+        *(r.dir for r in answers.repos),
+    ]
     if any(CONTROL.search(text) for text in texts):
-        problems.append("a repo, folder or profile contains a control character")
+        problems.append("a repo, folder, connector or profile contains a control character")
     return problems
 
 
@@ -361,11 +388,14 @@ def existing_repos(facts: Facts) -> tuple[Repo, ...]:
 
 
 def recommended_repos(facts: Facts) -> tuple[Repo, ...]:
+    """On a re-run what sessions.yml lists; on a first run the repo you use most, the one window worth
+    a guess (the wizard lists the others, unticked)."""
     if SESSIONS_FILE in facts.files:
         return existing_repos(facts)
     taken: set[str] = set(RESERVED_WINDOWS)
     return tuple(
-        Repo(window_name(use.dir, taken), tilde(use.dir, facts.home)) for use in recommended_uses(facts.repos)
+        Repo(window_name(use.dir, taken), tilde(use.dir, facts.home))
+        for use in recommended_uses(facts.repos)[:1]
     )
 
 
@@ -409,7 +439,8 @@ def recommended_model(facts: Facts) -> str:
 
 
 def recommend(facts: Facts) -> Answers:
-    """The recommended setup: a first run from what the Mac shows, a re-run from the config it has."""
+    """The recommended setup: a first run from what the Mac shows, a re-run from the config it has.
+    The orchestrator's connectors are never guessed from their names: none on a first run."""
     uses = recommended_uses(facts.repos)
     days, start, until = recommended_schedule(facts)
 
@@ -430,6 +461,7 @@ def recommend(facts: Facts) -> Answers:
         model=recommended_model(facts),
         harness=recommended_harness(facts),
         permissions=recommended_permissions(facts),
+        orchestrator_connectors=facts.env.get("BOSUN_ORCHESTRATOR_CONNECTORS", ""),
         repo_mask=recommended_mask(facts, uses),
         repos_dir=recommended_repos_dir(facts, uses),
         # With more than one profile, which one the mornings should log in to is your call.
@@ -437,6 +469,29 @@ def recommend(facts: Facts) -> Answers:
         # pmset keeps only one repeating event: never replace someone else's by default.
         wake=not facts.repeating_wake or bool(facts.env),
     )
+
+
+UNATTENDED_NOTE = (
+    "No repo windows or connectors were set up, since nobody chose them: run bosun init to add them."
+)
+
+
+def first_run(facts: Facts) -> bool:
+    return ENV_FILE not in facts.files
+
+
+def unattended(facts: Facts, recommended: Answers) -> Answers:
+    """`--unattended` (get.sh's): on a first run the recommendation without what nobody chose, no repo
+    windows (unless sessions.yml already lists some) and no connectors; on a re-run the recommendation."""
+    if not first_run(facts):
+        return recommended
+    repos = recommended.repos if SESSIONS_FILE in facts.files else ()
+    return replace(recommended, repos=repos, orchestrator_connectors="")
+
+
+def unattended_note(facts: Facts) -> str:
+    """The last line of a first unattended run."""
+    return UNATTENDED_NOTE if first_run(facts) else ""
 
 
 # ---- the config files ----------------------------------------------------------------------------
@@ -482,6 +537,10 @@ def env_groups(answers: Answers) -> list[tuple[str, list[tuple[str, str]]]]:
         (
             "How repo sessions handle permissions",
             [("BOSUN_CLAUDE_FLAGS", PERMISSION_FLAGS[answers.permissions])],
+        ),
+        (
+            "The MCP servers and connectors the orchestrator may reach (repo windows: BOSUN_CONNECTORS)",
+            [("BOSUN_ORCHESTRATOR_CONNECTORS", answers.orchestrator_connectors)],
         ),
         (
             "Where the repos are, and which are in scope",
@@ -681,6 +740,8 @@ def sessions_change(facts: Facts, answers: Answers, force: bool) -> FileChange:
         return FileChange(SESSIONS_FILE, CREATE, text, count)
     if same_sessions(facts, answers):
         return FileChange(SESSIONS_FILE, SAME, facts.files[SESSIONS_FILE], "already lists these windows")
+    if not existing_repos(facts):  # it listed no window, so there is nothing to lose
+        return FileChange(SESSIONS_FILE, REPLACE, text, f"{count}; it listed none, and is kept as a backup")
     if force:
         return FileChange(SESSIONS_FILE, REPLACE, text, f"{count}; the old file is kept as a backup")
     return FileChange(SESSIONS_FILE, REFUSE, text, "lists other windows; --force replaces it, with a backup")
@@ -715,9 +776,11 @@ def wake_command(facts: Facts, answers: Answers) -> str:
 def windows_reason(facts: Facts, answers: Answers) -> list[str]:
     if not answers.repos or SESSIONS_FILE in facts.files:
         return []
+    others = "The others are yours to add: `bosun init` lists them."
     if any(use.prompts for use in facts.repos):
-        return [f"Windows: the repos you used your agents in most over the last {facts.history_days} days."]
-    return ["Windows: the git repos found in your usual folders, newest first."]
+        days = facts.history_days
+        return [f"Windows: the repo you used your agents in most over the last {days} days. {others}"]
+    return [f"Windows: the newest git repo found in your usual folders. {others}"]
 
 
 def usual_hours(facts: Facts) -> str:
@@ -861,9 +924,10 @@ def describe_features(answers: Answers) -> str:
 def summary_lines(answers: Answers) -> list[str]:
     windows = ", ".join(r.name for r in answers.repos) or "none yet (add them to sessions.yml)"
     return [
-        f"  Windows   {windows} (plus the orchestrator and its check-in loop)",
-        f"  Schedule  {describe_days(answers.days)}, {answers.start} to {answers.until}",
-        f"  Features  {describe_features(answers)}",
+        f"  Windows    {windows} (plus the orchestrator and its check-in loop)",
+        f"  Connectors the orchestrator's: {answers.orchestrator_connectors or 'none'}",
+        f"  Schedule   {describe_days(answers.days)}, {answers.start} to {answers.until}",
+        f"  Features   {describe_features(answers)}",
         *model_lines(answers),
     ]
 
@@ -894,9 +958,9 @@ def bullets(items: Sequence[str]) -> list[str]:
 def model_lines(answers: Answers) -> list[str]:
     if answers.harness in OTHER_AGENTS:
         sessions = OTHER_AGENTS[answers.harness].sessions
-        return [f"  Model     {answers.model} for the orchestrator", f"  Sessions  {sessions}"]
+        return [f"  Model      {answers.model} for the orchestrator", f"  Sessions   {sessions}"]
     how = "auto mode" if answers.permissions == AUTO else "bypass mode, no permission checks"
-    return [f"  Model     {answers.model}", f"  Sessions  {how}"]
+    return [f"  Model      {answers.model}", f"  Sessions   {how}"]
 
 
 def render_plan(plan: Plan, answers: Answers, facts: Facts, config_dir: str) -> str:

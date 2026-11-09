@@ -41,6 +41,11 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser = argparse.ArgumentParser(prog="bosun init", description=__doc__)
     source = parser.add_mutually_exclusive_group()
     source.add_argument("--recommended", action="store_true", help="carry out the recommended plan")
+    parser.add_argument(
+        "--unattended",
+        action="store_true",
+        help="with --recommended (get.sh's): a first run sets up no repo windows or connectors",
+    )
     source.add_argument(
         "--answers", metavar="FILE", help="carry out the plan for these answers (- for stdin)"
     )
@@ -51,7 +56,10 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     show = parser.add_mutually_exclusive_group()
     show.add_argument("--detect", action="store_true", help="print what was found, as JSON")
     show.add_argument("--print-answers", action="store_true", help="print the answers, as JSON")
-    return parser.parse_args(argv)
+    args = parser.parse_args(argv)
+    if args.unattended and not args.recommended:
+        parser.error("--unattended goes with --recommended")
+    return args
 
 
 def printable(facts: Facts) -> dict[str, object]:
@@ -195,6 +203,11 @@ def start_windows() -> None:
 
 
 def run_wizard(facts: Facts, config_dir: Path) -> int:
+    recommended = init_plan.recommend(facts)
+    unreadable = init_plan.connector_problems(recommended)  # the screen starts from what bosun.env says
+    if unreadable:
+        print(f"bosun init: {unreadable[0]} (BOSUN_ORCHESTRATOR_CONNECTORS in bosun.env)", file=sys.stderr)
+        return EXIT_USAGE
     ui = init_terminal.TerminalUi()
 
     def plan_for(answers: Answers) -> Plan:  # you see what it would replace before you accept it
@@ -202,7 +215,7 @@ def run_wizard(facts: Facts, config_dir: Path) -> int:
 
     try:
         machine = init_wizard.Machine(plan_for, typed_repo)
-        answers = init_wizard.run(ui, facts, init_plan.recommend(facts), machine, str(config_dir))
+        answers = init_wizard.run(ui, facts, recommended, machine, str(config_dir))
     except (init_wizard.Quit, KeyboardInterrupt):
         answers = None
     if answers is None:
@@ -225,6 +238,8 @@ def show_plan(facts: Facts, answers: Answers, args: argparse.Namespace, config_d
     status = carry_out(plan, config_dir)
     if status == 0:
         print("\nbosun is set up. `bosun start` brings the windows up now; `bosun console` shows them.")
+        note = init_plan.unattended_note(facts) if args.unattended else ""
+        print(note, end="\n" if note else "")
     return status
 
 
@@ -239,6 +254,7 @@ def main(argv: list[str]) -> int:
         return run_wizard(facts, config_dir)
     try:
         answers = load_answers(args.answers, init_plan.recommend(facts))
+        answers = init_plan.unattended(facts, answers) if args.unattended else answers
     except AnswersError as error:
         print(f"bosun init: {error}", file=sys.stderr)
         return EXIT_USAGE

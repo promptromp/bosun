@@ -1,8 +1,9 @@
 """What `bosun init` finds on this Mac, read-only: the facts lib/init_plan.py recommends from.
 
 Which repos you use Claude Code in and when (lib/claude_state.py reads the transcripts), or the git
-repos in the usual folders if there is no history; your tools and logins; AWS SSO profiles; whether
-this is a laptop; the repeating wake pmset has; and the config bosun already has.
+repos in the usual folders if there is no history; your tools and logins; the MCP servers and connectors
+`claude mcp list` shows; AWS SSO profiles; whether this is a laptop; the repeating wake pmset has; and
+the config bosun already has.
 """
 
 from __future__ import annotations
@@ -187,13 +188,23 @@ def ready_agents() -> tuple[str, ...]:
     return tuple(name for name, agent in agent_state.AGENTS.items() if agent.ready())
 
 
+def connectors_found(claude_bin: str, cwd: Path) -> tuple[str, ...]:
+    """The names `claude mcp list` shows (it connects to each, a few seconds); none if it fails, which
+    only leaves the question with nothing to tick."""
+    try:
+        return tuple(claude_state.mcp_server_targets(claude_bin, cwd))
+    except claude_state.McpListError:
+        return ()
+
+
 def detect(config_dir: Path, now: datetime | None = None) -> Facts:
     moment = now or datetime.now().astimezone()
     home = Path.home()
     since = moment - timedelta(days=HISTORY_DAYS)
     agent_uses = uses_per_agent(since)
     uses = list(chain.from_iterable(agent_uses.values()))
-    auth = claude_state.auth_status(os.environ.get("BOSUN_CLAUDE_BIN") or "claude")
+    claude_bin = os.environ.get("BOSUN_CLAUDE_BIN") or "claude"
+    auth = claude_state.auth_status(claude_bin)
     files = config_files(config_dir)
     return Facts(
         home=str(home),
@@ -211,6 +222,7 @@ def detect(config_dir: Path, now: datetime | None = None) -> Facts:
         bypass_accepted=claude_state.bypass_accepted(),
         ready_agents=ready_agents(),
         asked_harness=os.environ.get("BOSUN_HARNESS", ""),
+        connectors=connectors_found(claude_bin, home),
         agent_prompts=counts(agent_uses),
         has_battery="InternalBattery" in (output_of("pmset", "-g", "batt") or ""),
         repeating_wake=repeating_wake(output_of("pmset", "-g", "sched") or ""),

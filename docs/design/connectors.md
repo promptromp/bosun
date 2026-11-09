@@ -170,20 +170,25 @@ claude.ai names as meaning nothing there.
 ### Setup
 
 - **Which connectors.** `bosun init` asks which connectors the orchestrator may use, from what `claude mcp
-  list` shows (`lib/init_detect.py`, which already reads Claude Code through `lib/claude_state.py`). One
-  screen like the repos', an answer `orchestrator_connectors` in `Answers` (its check, the key in
-  `env_groups`, the table in `docs/design/init.md`). On a first run nothing is ticked: guessing which are
-  work tools from their names would be a list of words to keep up, and wrong for someone. I tick what the
-  orchestrator needs (Slack, a tracker). A re-run starts from what `bosun.env` says, as for repos: `all`
-  is one line, ticked (a server ticked unticks it), and a name that `claude mcp list` no longer shows
-  stays, marked as not found. Repo windows get none, and it says where to add some.
+  list` shows (`lib/init_detect.py`, which already reads Claude Code through `lib/claude_state.py`; run once
+  per `init`, in the home folder, and a failed listing only leaves nothing to tick). One screen like the
+  repos', after them, an answer `orchestrator_connectors` in `Answers` (its check, the key in
+  `env_groups`, the table in `docs/design/init.md`), asked only when there is something to tick. On a
+  first run nothing is ticked: guessing which are work tools from their names would be a list of words to
+  keep up, and wrong for someone. I tick what the orchestrator needs (Slack, a tracker). A re-run starts
+  from what `bosun.env` says, as for repos: `all` is one line, first and ticked (a server ticked unticks
+  it, and ticking it unticks the servers), and a name that `claude mcp list` no longer shows stays, marked
+  as not found. Past the screen's nine, the names stay as they are. Repo windows get none, and it says
+  where to add some.
 - **Which repos.** The recommendation ticks the repo I use most; the others are listed, unticked, up to
-  the screen's limit. A re-run keeps what `sessions.yml` holds, as now.
-- **Unattended.** `get.sh --unattended` on a first install runs `bosun init --recommended --unattended`:
-  the recommended setup without repo windows or connectors, since nobody chose them, and a last line
-  saying the orchestrator has no connectors and how to add them and windows (`bosun init`). The rest of
-  the recommendation stays as it is. A re-run, or an update, is unchanged. A script that wants windows
-  says which with `--answers`.
+  the screen's limit. The repo mask and the orchestrator's folder still come from the repos I use, so
+  unticking a window keeps its repo in scope. A re-run keeps what `sessions.yml` holds, as now.
+- **Unattended.** `get.sh --unattended` runs `bosun init --recommended --unattended`. On a first install
+  (no `bosun.env`): the recommended setup without repo windows (unless a `sessions.yml` already lists some)
+  or connectors, since nobody chose them, and the last line `No repo windows or connectors were set up,
+  since nobody chose them: run bosun init to add them.` The rest of the recommendation stays as it is. A
+  re-run, or an update, is unchanged. A script that wants windows says which with `--answers`; a
+  `sessions.yml` that lists none is replaced without `--force`, since there is nothing to lose.
 
 ### The orchestrator's gate
 
