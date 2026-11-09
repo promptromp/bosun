@@ -64,7 +64,7 @@ first_look() {
   check "nothing of bosun is here yet" bash -c '[ ! -e "$1" ] && [ ! -e "$2" ]' _ "$HOME/.local/bin/bosun" "$CONFIG"
   check "bosun init prints a plan" bash -c '"$1" init >"$2"' _ "$BOSUN" "$out"
   check "... the most used repo, and no other" says "Windows    api (plus" "$out"
-  check "... no connectors for the orchestrator" says "Connectors the orchestrator's: none" "$out"
+  check "... no connectors for the orchestrator" says "Connectors none, for the orchestrator" "$out"
   check "... the schedule from the history" says "Mon-Fri, 08:30 to 19:00" "$out"
   check "... the recommended features" says "events, approvals, learning on; Slack watcher off" "$out"
   check "... says why" says "your usual first prompt is 09:10" "$out"

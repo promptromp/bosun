@@ -22,7 +22,13 @@ import versions
 from install_paths import REPO
 
 
-GIT = ["git", "-c", "user.name=t", "-c", "user.email=t@example.com", "-c", "commit.gpgsign=false"]
+# maintenance.auto: git's auto maintenance runs detached after a commit, in the folder, and prune keeps a
+# folder a running process has open.
+GIT = [
+    "git",
+    *("-c", "user.name=t", "-c", "user.email=t@example.com", "-c", "commit.gpgsign=false"),
+    *("-c", "maintenance.auto=false"),
+]
 
 
 def no_work(_folder: Path) -> str:
