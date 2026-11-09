@@ -342,5 +342,49 @@ class AgentStateTest(unittest.TestCase):
             self.assertEqual(agent.HARNESS, name)
 
 
+class McpNamesTest(unittest.TestCase):
+    def setUp(self) -> None:
+        temp = tempfile.TemporaryDirectory()
+        self.addCleanup(temp.cleanup)
+        self.root = Path(temp.name).resolve()
+
+    def fake_codex(self, body: str) -> str:
+        path = self.root / f"fake-codex-{len(list(self.root.iterdir()))}"
+        path.write_text(f"#!/bin/sh\n{body}\n")
+        path.chmod(0o755)
+        return str(path)
+
+    def listing(self, value: object) -> str:
+        listing = self.root / f"listing-{len(list(self.root.iterdir()))}.json"
+        listing.write_text(json.dumps(value))
+        return self.fake_codex(f'[ "$*" = "mcp list --json" ] || exit 9\ncat "{listing}"')
+
+    def test_mcp_names_only(self) -> None:
+        servers = [
+            {
+                "name": "acme-docs",
+                "enabled": True,
+                "transport": {"type": "streamable_http", "url": "https://d"},
+            },
+            {"name": "acme.mail", "transport": {"type": "stdio", "command": "m", "env": {"ACME_TOKEN": "x"}}},
+        ]
+        self.assertEqual(codex_state.mcp_server_names(self.listing(servers)), ["acme-docs", "acme.mail"])
+        self.assertEqual(codex_state.mcp_server_names(self.listing([])), [])
+
+    def test_mcp_list_failure_raises(self) -> None:
+        for codex in (
+            self.fake_codex("exit 1"),
+            self.fake_codex("exec sleep 20"),
+            self.fake_codex("echo 'not json'"),
+            self.listing({"name": "acme-docs"}),
+            self.listing([{"name": "acme-docs"}, {"transport": {}}]),
+            self.listing([{"name": ""}]),
+            str(self.root / "no-codex"),
+        ):
+            with self.subTest(codex=codex), self.assertRaises(codex_state.CodexListError) as raised:
+                codex_state.mcp_server_names(codex, timeout=0.5)
+            self.assertNotIn("ACME", str(raised.exception))
+
+
 if __name__ == "__main__":
     unittest.main()

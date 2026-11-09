@@ -165,6 +165,101 @@ class TrustTest(ResolveTestCase):
         return str(path)
 
 
+MCP_LIST = """Checking MCP server health…
+
+claude.ai Acme Mail: https://mail.example.com/mcp - ✔ Connected
+plugin:acme-tracker:tracker: https://tracker.example.com/mcp (HTTP) - ! Needs authentication
+plugin:pdf-tools:pdf: npx -y @acme/pdf-server --stdio - ✔ Connected
+acme-local: /Users/me/.local/bin/acme-mcp  - ✔ Connected
+claude.ai Acme Metrics: https://metrics.example.com/mcp - ✘ Failed to connect — HTTP 502: bad - try later
+"""
+
+
+def fake_claude(folder: Path, body: str) -> Path:
+    path = folder / "fake-claude"
+    path.write_text(f"#!/bin/sh\n{body}\n")
+    path.chmod(0o755)
+    return path
+
+
+class McpServersTest(unittest.TestCase):
+    def setUp(self) -> None:
+        temp = tempfile.TemporaryDirectory()
+        self.addCleanup(temp.cleanup)
+        self.root = Path(temp.name).resolve()
+
+    def test_mcp_list_text_parsed(self) -> None:
+        (self.root / "listing.txt").write_text(MCP_LIST)
+        claude = fake_claude(
+            self.root,
+            f'[ "$*" = "mcp list" ] || exit 9\npwd -P > "{self.root}/cwd"\n'
+            f'[ "$ENABLE_CLAUDEAI_MCP_SERVERS" = true ] || exit 8\ncat "{self.root}/listing.txt"',
+        )
+        workdir = self.root / "repo"
+        workdir.mkdir()
+        self.assertEqual(
+            resolve.mcp_server_targets(str(claude), workdir),
+            {
+                "claude.ai Acme Mail": "https://mail.example.com/mcp",
+                "plugin:acme-tracker:tracker": "https://tracker.example.com/mcp",
+                "plugin:pdf-tools:pdf": "npx -y @acme/pdf-server --stdio",
+                "acme-local": "/Users/me/.local/bin/acme-mcp",
+                "claude.ai Acme Metrics": "https://metrics.example.com/mcp",
+            },
+        )
+        self.assertEqual((self.root / "cwd").read_text().strip(), str(workdir))
+
+    def test_mcp_list_failure_raises(self) -> None:
+        cases = {
+            "exit 1": "exited 1",
+            "exec sleep 20": "timed out",
+            "echo 'Checking MCP server health…'; echo": "no server",
+            "echo 'No MCP servers configured.'": "no server",
+        }
+        for body, why in cases.items():
+            with self.subTest(body=body), self.assertRaisesRegex(resolve.McpListError, why):
+                resolve.mcp_server_targets(str(fake_claude(self.root, body)), self.root, timeout=0.5)
+        with self.assertRaisesRegex(resolve.McpListError, "could not run"):
+            resolve.mcp_server_targets(str(self.root / "no-claude"), self.root)
+
+    def test_plugin_servers_expand_the_plugin_root(self) -> None:
+        tracker = self.root / "plugins" / "acme-tracker"
+        pdf = self.root / "plugins" / "pdf-tools"
+        for folder, servers in (
+            (tracker, {"tracker": {"type": "http", "url": "${CLAUDE_PLUGIN_ROOT}/../t"}}),
+            (
+                pdf,
+                {
+                    "pdf": {
+                        "command": "${CLAUDE_PLUGIN_ROOT}/bin/pdf",
+                        "args": ["--root", "${CLAUDE_PLUGIN_ROOT}/d"],
+                    },
+                    "preview": {"type": "http", "url": "https://pdf.example.com/mcp"},
+                },
+            ),
+        ):
+            folder.mkdir(parents=True)
+            (folder / ".mcp.json").write_text(json.dumps({"mcpServers": servers}))
+        installed = self.root / "installed_plugins.json"
+        plugins = {
+            "acme-tracker@market": [{"installPath": str(tracker)}],
+            "pdf-tools@market": [{"installPath": str(pdf)}, "not an install"],
+            "empty@market": [{"installPath": str(self.root / "nothing")}],
+            "odd@market": "not a list",
+        }
+        installed.write_text(json.dumps({"plugins": plugins}))
+        self.assertEqual(
+            resolve.plugin_mcp_servers(installed),
+            {
+                "plugin:acme-tracker:tracker": {"type": "http", "url": f"{tracker}/../t"},
+                "plugin:pdf-tools:pdf": {"command": f"{pdf}/bin/pdf", "args": ["--root", f"{pdf}/d"]},
+                "plugin:pdf-tools:preview": {"type": "http", "url": "https://pdf.example.com/mcp"},
+            },
+        )
+        self.assertEqual(resolve.plugin_mcp_servers(self.root / "missing.json"), {})
+        self.assertIsNone(resolve.slack_plugin_mcp_config(installed))
+
+
 if __name__ == "__main__":
     unittest.main()
 

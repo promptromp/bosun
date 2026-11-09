@@ -50,6 +50,10 @@ of truth, so don't copy rules into this file.
   the stand-up summary; design: `docs/design/workstreams.md`. `lib/similar.py` (pure): loose
   word-overlap similarity for near-duplicate hints (`ledger spawn`, learning's outreach overlap,
   which held item a prompt is about).
+  `lib/connectors.py`: what a window may reach (its list of MCP servers and connectors) turned into
+  Claude Code's `allowedMcpServers` and Codex's launch arguments, and the URLs kept from the last lookup
+  (`connectors.json`); the agents' listings are read through `lib/claude_state.py` (`claude mcp list`,
+  plugins' servers) and `lib/codex_state.py`; design: `docs/design/connectors.md`.
   `lib/delegate.py`: task rendering. `lib/guard.py`: the orchestrator's PreToolUse permission hook
   (added at launch by `guard_hook_settings`, `lib/common.sh`, and to `chores --dry-run`), and with `BOSUN_APPROVALS_ENABLED` its approval hooks (`--approvals`, `--permission-request`,
   `--post-tool-use`; the gated outward calls are one table there, `GATED_*`). `lib/approvals.py` (pure): action specs

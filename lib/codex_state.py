@@ -283,6 +283,48 @@ def logged_in() -> bool:
     return result.returncode == 0
 
 
+class CodexListError(RuntimeError):
+    """`codex mcp list --json` gave no answer to read."""
+
+
+MCP_LIST_TIMEOUT_SECONDS = 30.0
+
+
+def mcp_server_names(codex_bin: str, timeout: float = MCP_LIST_TIMEOUT_SECONDS) -> list[str]:
+    """The name of each MCP server Codex would start in this folder (configured or a plugin's; not
+    `codex_apps`, ChatGPT's connectors). Nothing else of the listing is kept: a stdio server's entry
+    holds its environment, secrets included."""
+    try:
+        result = subprocess.run(
+            [codex_bin, "mcp", "list", "--json"],
+            stdin=subprocess.DEVNULL,
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+            check=False,
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise CodexListError(f"timed out after {timeout:g}s") from exc
+    except OSError as exc:
+        raise CodexListError(f"could not run {codex_bin}: {exc.strerror or exc}") from exc
+    if result.returncode != 0:
+        raise CodexListError(f"exited {result.returncode}")
+    return listed_names(result.stdout)
+
+
+def listed_names(text: str) -> list[str]:
+    try:
+        entries = json.loads(text)
+    except ValueError:
+        raise CodexListError("its output is not JSON") from None
+    if not isinstance(entries, list):
+        raise CodexListError("its output is not a list")
+    names = [entry.get("name") if isinstance(entry, dict) else None for entry in entries]
+    if not all(isinstance(name, str) and name for name in names):
+        raise CodexListError("a server in it has no name")
+    return [str(name) for name in names]
+
+
 def ready() -> bool:
     """Whether Codex is installed and logged in."""
     return shutil.which(codex_bin()) is not None and logged_in()

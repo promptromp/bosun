@@ -24,6 +24,10 @@ None of these are public APIs. If a Claude Code update changes them, this is the
   message and `is_error` / `api_error_status` on its result
 - `claude auth status --json`: `loggedIn` and `authMethod`, from the stored credentials only (it
   makes no request, so a token the server revoked still shows as logged in)
+- ~/.claude/plugins/installed_plugins.json (`plugins`: per plugin, its installs and `installPath`)
+  and each plugin's .mcp.json (`mcpServers`, `${CLAUDE_PLUGIN_ROOT}` standing for that folder)
+- `claude mcp list`: a line per MCP server a session in that folder gets, `<name>: <URL or command>
+  - <health>`, claude.ai's connectors only with ENABLE_CLAUDEAI_MCP_SERVERS=true
 
 Usage: claude_state.py resolve <workdir> <name>    the most recent session named exactly <name>
        claude_state.py list <workdir>              named sessions, newest first
@@ -89,6 +93,7 @@ CONFIG_FILE = HOME / ".claude.json"
 SETTINGS_FILE = HOME / ".claude" / "settings.json"
 INSTALLED_PLUGINS = HOME / ".claude" / "plugins" / "installed_plugins.json"
 SLACK_PLUGIN = "slack"
+PLUGIN_ROOT = "${CLAUDE_PLUGIN_ROOT}"  # in a plugin's .mcp.json: the folder it is installed in
 TITLE_MARKER = '"custom-title"'
 SESSION_PREFIX = re.compile(r"^[0-9a-f]{8,36}$")  # a session id or its start, as references quote it
 START_TIME_TOLERANCE_SECONDS = 2
@@ -176,28 +181,109 @@ def subagent_transcripts(transcript: Path) -> list[Path]:
 
 def slack_plugin_mcp_config(installed: Path | None = None) -> dict[str, Any] | None:
     """The Slack plugin's MCP server as an --mcp-config document, or None if the plugin is not
-    installed. The server keeps the name Claude Code gives a plugin's server
-    (plugin:<plugin>:<server>), so a headless Claude with --strict-mcp-config finds the login it
-    stored for it (the plugin's .mcp.json under the server's name alone has no login)."""
+    installed or has more than one server. The server keeps the name Claude Code gives a plugin's
+    server (plugin:<plugin>:<server>), so a headless Claude with --strict-mcp-config finds the login
+    it stored for it (the plugin's .mcp.json under the server's name alone has no login)."""
+    prefix = f"plugin:{SLACK_PLUGIN}:"
+    servers = {
+        name: config for name, config in plugin_mcp_servers(installed).items() if name.startswith(prefix)
+    }
+    return {"mcpServers": servers} if len(servers) == 1 else None
+
+
+def plugin_mcp_servers(installed: Path | None = None) -> dict[str, dict[str, Any]]:
+    """Every installed plugin's MCP servers, keyed as Claude Code names them (plugin:<plugin>:<server>),
+    with ${CLAUDE_PLUGIN_ROOT} in `command`, `args` and `url` replaced by the plugin's folder. A plugin's
+    .mcp.json may hold several servers; where a plugin is installed more than once, the first wins."""
     plugins = (read_object(installed or INSTALLED_PLUGINS) or {}).get("plugins")
-    for key, installs in (plugins or {}).items():
-        if str(key).split("@")[0] != SLACK_PLUGIN or not isinstance(installs, list):
-            continue
-        for install in installs:
-            server = plugin_server(install)
-            if server:
-                return {"mcpServers": {f"plugin:{SLACK_PLUGIN}:{server[0]}": server[1]}}
-    return None
+    found: dict[str, dict[str, Any]] = {}
+    for key, installs in (plugins if isinstance(plugins, dict) else {}).items():
+        plugin = str(key).split("@")[0]
+        for install in installs if isinstance(installs, list) else []:
+            for server, config in install_servers(install).items():
+                found.setdefault(f"plugin:{plugin}:{server}", config)
+    return found
 
 
-def plugin_server(install: object) -> tuple[str, Any] | None:
-    """The one MCP server (name, config) in an installed plugin's .mcp.json, if it has exactly one."""
+def install_servers(install: object) -> dict[str, dict[str, Any]]:
+    """The servers in one installed plugin's .mcp.json, its root expanded."""
     if not isinstance(install, dict):
-        return None
-    servers = (read_object(Path(str(install.get("installPath", ""))) / ".mcp.json") or {}).get("mcpServers")
-    if not isinstance(servers, dict) or len(servers) != 1:
-        return None
-    return next(iter(servers.items()))
+        return {}
+    root = str(install.get("installPath", ""))
+    servers = (read_object(Path(root) / ".mcp.json") or {}).get("mcpServers")
+    if not isinstance(servers, dict):
+        return {}
+    return {
+        str(name): expand_root(config, root) for name, config in servers.items() if isinstance(config, dict)
+    }
+
+
+def expand_root(config: dict[str, Any], root: str) -> dict[str, Any]:
+    def expanded(value: object) -> object:
+        return value.replace(PLUGIN_ROOT, root) if isinstance(value, str) else value
+
+    result = dict(config)
+    for key in ("command", "url"):
+        if key in result:
+            result[key] = expanded(result[key])
+    if isinstance(result.get("args"), list):
+        result["args"] = [expanded(arg) for arg in result["args"]]
+    return result
+
+
+# ---- the MCP servers a window would get ------------------------------------------------------------
+
+
+class McpListError(RuntimeError):
+    """`claude mcp list` gave no answer to read: it failed, timed out or listed no server."""
+
+
+MCP_LIST_TIMEOUT_SECONDS = 30.0
+URL_SCHEMES = ("http://", "https://")
+
+
+def mcp_server_targets(
+    claude_bin: str, cwd: Path, timeout: float = MCP_LIST_TIMEOUT_SECONDS
+) -> dict[str, str]:
+    """Each MCP server a Claude Code started in <cwd> would get, and its URL or command line, from
+    `claude mcp list` (which connects to each to check it, a few seconds). claude.ai's connectors are
+    listed only with ENABLE_CLAUDEAI_MCP_SERVERS=true."""
+    try:
+        result = subprocess.run(
+            [claude_bin, "mcp", "list"],
+            cwd=cwd,
+            env={**os.environ, "ENABLE_CLAUDEAI_MCP_SERVERS": "true"},
+            stdin=subprocess.DEVNULL,
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+            check=False,
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise McpListError(f"timed out after {timeout:g}s") from exc
+    except OSError as exc:
+        raise McpListError(f"could not run {claude_bin}: {exc.strerror or exc}") from exc
+    if result.returncode != 0:
+        raise McpListError(f"exited {result.returncode}")
+    targets = parse_mcp_list(result.stdout)
+    if not targets:
+        raise McpListError("no server in its output")
+    return targets
+
+
+def parse_mcp_list(text: str) -> dict[str, str]:
+    """The one reader of `claude mcp list`'s text (Claude Code 2.1.319): a line per server,
+    `<name>: <target> - <status>`, after a line saying it is checking. The target is a URL (then
+    followed by its transport, ` (HTTP)`) or a command line; the status may itself hold ` - `."""
+    targets: dict[str, str] = {}
+    for line in text.splitlines():
+        name, colon, rest = line.partition(": ")
+        target, dash, _status = rest.partition(" - ")
+        target = target.strip()
+        if not (colon and dash and name.strip() and target):
+            continue
+        targets[name.strip()] = target.split()[0] if target.startswith(URL_SCHEMES) else target
+    return targets
 
 
 def record(pid: int | str) -> dict[str, Any] | None:
