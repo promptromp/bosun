@@ -1034,8 +1034,9 @@ check "refresh recreates missing windows" contains "$out" "gamma: create the mis
 printf 'sessions:\n  - name: alpha\n    dir: %s\n  - name: ghost\n    dir: %s\n' "$REPO_A" "$WORK/repos/moved-away" >"$WORK/ghost-sessions.yml"
 check "refresh skips a window whose folder is gone, as start does, never opening it elsewhere" contains \
   "$(BOSUN_SESSIONS_FILE="$WORK/ghost-sessions.yml" "$BOSUN" refresh --dry-run 2>&1)" "ghost: directory $WORK/repos/moved-away does not exist; skipping the window"
-python3 "$ROOT/lib/run_locked.py" "$BOSUN_STATE_DIR/windows.lock" 0 busy -- sleep 20 &
+python3 "$ROOT/lib/run_locked.py" "$BOSUN_STATE_DIR/windows.lock" 10 busy -- sleep 20 &
 windows_holder=$!
+# The holders below wait (10 s) for the lock, since this probe may take it for a moment before they start.
 lock_taken() { # <lock file>: someone holds it (exit 75, busy), not merely that the probe failed
   python3 "$ROOT/lib/run_locked.py" "$1" 0 probe -- true 2>/dev/null
   [ $? -eq 75 ]
@@ -2666,7 +2667,7 @@ for line in sys.stdin:
   check "init --detect prints JSON" env BOSUN_CONFIG_DIR="$INIT_CFG" bash -c '"$1" init --detect | jq -e .home >/dev/null' _ "$BOSUN"
   check "init --print-answers prints JSON" env BOSUN_CONFIG_DIR="$INIT_CFG" bash -c '"$1" init --print-answers | jq -e .days >/dev/null' _ "$BOSUN"
   check "init refuses bad answers" fails_with "unknown answers" env BOSUN_CONFIG_DIR="$INIT_CFG" "$BOSUN" init --answers <(echo '{"typo": 1}')
-  python3 "$ROOT/lib/run_locked.py" "$BOSUN_STATE_DIR/init.lock" 0 busy -- sleep 20 &
+  python3 "$ROOT/lib/run_locked.py" "$BOSUN_STATE_DIR/init.lock" 10 busy -- sleep 20 &
   init_holder=$!
   wait_for 5 lock_taken "$BOSUN_STATE_DIR/init.lock"
   check "a second bosun init while one runs is refused at once" fails_with "bosun init is already running" env BOSUN_CONFIG_DIR="$INIT_CFG" "$BOSUN" init --answers "$INIT_ANSWERS"
