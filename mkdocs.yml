@@ -129,6 +129,7 @@ nav:
           - Sync, phase 0: plans/sync-phase-0.md
           - Updating: plans/update.md
           - Connectors: plans/connectors.md
+          - Agents that say what they can do: plans/agent-profiles.md
   - Project:
       - Roadmap: roadmap.md
       - Development: development.md
