@@ -52,13 +52,16 @@ without `bosun.git`):
   branch, and marks it the installer's (`bosun.managed`, which [uninstall](uninstall.md) goes by) with
   the branch it follows (`bosun.branch`). It adds the head's folder, links the install path to it
   ([versions side by side](update.md#versions-side-by-side-switched-in-one-step)) and starts `init`.
-- **An install `init` has set up** (its `install.sh` linked `~/.local/bin/bosun` to it): a link to a
+- **An install `init` has set up** (its `install.sh` linked `~/.local/bin/bosun` to it, as its last step,
+  after the launchd jobs and the wake, so an install cut short is not taken for one set up): a link to a
   version, or a checkout an older `get.sh` made. It fetches the branch into `bosun.git` (made beside a
   checkout first), adds the new version's folder, and runs that version's `bosun update --from` the one in
   use, with `--yes` when unattended. That version's update converts a checkout, once
   ([update.md](update.md#getsh-on-an-existing-install)).
-- **An install `init` never finished** (it stopped at what bosun needs, or at a question): `init` again,
-  from the version there, as before. Nothing of it runs yet, and only `bosun update` switches versions.
+- **An install `init` never finished** (it stopped at what bosun needs, at a question, or part way
+  through carrying out the plan, at the launchd jobs or at `sudo` for the wake): `init` again, from the
+  version there, as before; the same answers change nothing it already did. Only `bosun update` switches
+  versions. Two `init` runs at once are refused: the second says one is running, and changes nothing.
 
 ## What it recommends
 

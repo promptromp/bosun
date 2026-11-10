@@ -88,6 +88,12 @@ installed. The usual ones:
 | `not logged in` under Codex | It has no login | Run `codex login`. With an API key: `printenv OPENAI_API_KEY \| codex login --with-api-key` |
 | A window is on a screen, and the watchdog reports `stalled-start` | The agent is asking something only you can answer, usually about trusting the folder | `bosun attach`, then read it. Do not just press Return: on several of Claude Code's screens the default is to exit, and on Codex's it says yes |
 | `does not run on <your OS> yet`, or `bosun runs on macOS today` | bosun runs on macOS today, and Linux is next | See the [roadmap](../ROADMAP.md) |
+| `bosun.env does not parse, so none of it was read` | An edit left a line bash cannot read: an unclosed quote, a stray word. Read half, the file would give a config that is neither yours nor the defaults, so every command stops instead | Fix the line it names, or move the file aside to run on the defaults |
+| `warn  bosun.env sets BOSUN_...: bosun does not read it` in `bosun doctor` | A typo, or a key bosun no longer has; it names the key you most likely meant | Fix the name. A key renamed is changed by `bosun update` |
+| `run bosun as yourself, not as root` | You ran it with `sudo`, which would leave root's files in your folders | Run it without `sudo`: it asks for `sudo` itself, once, for the wake schedule |
+| `another bosun start or refresh is setting up the windows` | Two runs at once, such as the morning job and one you typed; one sets the windows up while the other waits, up to 3 minutes | Nothing, usually: the first one does the work. Run it again if you need to |
+| `... and this runs inside it` (`start --restart`, `update`) | You ran it in one of bosun's own windows, which it would stop or wait on | Run it from another terminal. `bosun stop` works from inside: it stops its own window last |
+| `its agent, ..., is not installed for this window's shell` in a window | The window's shell cannot find Claude Code or Codex, so the window stays a plain shell; you also get an alert | Install it, or name its path in `bosun.env` (`BOSUN_CLAUDE_BIN`, `BOSUN_CODEX_BIN`) |
 
 If none of these fit, open an issue with what `bosun preflight` and `bosun doctor` print:
 <https://github.com/promptromp/bosun/issues>.
@@ -291,7 +297,7 @@ and say so.
 
 | File | Purpose |
 |---|---|
-| `bosun.env` | Schedule, session name, Claude flags, drain prompt, orchestrator and chores settings. Every `BOSUN_*` value can also be overridden from the environment. Commands read the file each time they run, so edits apply at once, also inside running sessions. See `examples/generic/bosun.env` for all keys. |
+| `bosun.env` | Schedule, session name, Claude flags, drain prompt, orchestrator and chores settings. Every `BOSUN_*` value can also be overridden from the environment. Commands read the file each time they run, so edits apply at once, also inside running sessions. A file bash cannot parse is not read at all, and commands stop and say which line; `bosun doctor` warns of a key bosun does not read (with the one you most likely meant) and of a word where a number goes. See `examples/generic/bosun.env` for all keys. |
 | `sessions.yml` | One entry per repo window: `name` (the session name) and `dir`, optionally `harness` (`claude` or `codex`), `model`, `effort` and `connectors` (see [Connectors](#connectors-what-each-window-may-reach)), and on Claude Code `autocompact`, for that window. The orchestrator is configured in `bosun.env`, not here. |
 | `setup.sh` | Defines `setup_steps()`. Helpers: `ensure_claude_login` (see Claude Code login), `ensure_aws_sso <profile>`, `run_step "<desc>" cmd...`. |
 
@@ -459,6 +465,7 @@ It runs `bosun refresh`, which handles each window on its own:
 
 | Window | Action |
 |---|---|
+| its folder gone (moved or deleted) | skip it, as `bosun start` does, and say so in the log, which the watchdog alerts on: never open it in another folder |
 | missing | create it and launch its agent |
 | agent not running | relaunch in the manifest directory (resume by UUID, drain prompt) |
 | agent `busy` (mid-turn) | leave alone |

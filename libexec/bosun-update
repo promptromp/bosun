@@ -95,6 +95,13 @@ while [ $# -gt 0 ]; do
   shift
 done
 
+# An update brings bosun's windows along, restarting each once idle: run in one of them, it would wait
+# on its own window, or restart it under itself.
+case " ${args[*]-} " in
+  *" --dry-run "*) ;;
+  *) ! inside_bosun_tmux || die "an update restarts bosun's windows, and this runs inside one of them. Run it from another terminal (--dry-run shows the plan from here)." ;;
+esac
+
 # The new version, handed over to: the update itself (lib/update.py).
 [ -z "$FROM" ] || run_update --from "$FROM" ${args[@]+"${args[@]}"}
 
@@ -109,8 +116,9 @@ if [ "$BOSUN_INSTALL" = "$BOSUN_ROOT" ]; then
   die "bosun update moves an install made by get.sh, with its versions side by side in <install>-versions; $BOSUN_ROOT is a checkout: update it with git (one an earlier get.sh made, at ~/.local/share/bosun: run get.sh again, which converts it)"
 fi
 branch="$(repo_git config bosun.branch)" || branch=main
-repo_git fetch --quiet origin "+refs/heads/$branch:refs/remotes/origin/$branch" ||
-  die "could not fetch $branch from $(repo_git config remote.origin.url)"
+# A transfer slower than 1 KB/s for 30 seconds is given up on, never waited for without end.
+repo_git -c http.lowSpeedLimit=1000 -c http.lowSpeedTime=30 fetch --quiet origin "+refs/heads/$branch:refs/remotes/origin/$branch" ||
+  die "could not fetch $branch from $(url_without_credentials "$(repo_git config remote.origin.url)")"
 commit="$(repo_git rev-parse --verify --quiet "refs/remotes/origin/$branch^{commit}")" ||
   die "no commit at the head of $branch"
 folder="$VERSIONS/${commit:0:12}"

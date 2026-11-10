@@ -37,7 +37,8 @@ of truth, so don't copy rules into this file.
   (`window_specs`: orchestrator, sessions.yml entries, checkin), tmux, the one
   launch path (`build_launch_command`, used by `start`, `refresh` and `send`), and the launchd
   labels and plist rendering (from `templates/launchd.plist`, `launchd-watchdog.plist`,
-  `launchd-learn.plist`). `lib/setup-helpers.sh`: the helpers a site's `setup.sh` calls
+  `launchd-learn.plist`), and `one_at_a_time` (`lib/run_locked.py`: the rest of a shell command run
+  holding a lock that what it starts inherits; `start`, `refresh` and `init` use it). `lib/setup-helpers.sh`: the helpers a site's `setup.sh` calls
   (`run_step`, `ensure_aws_sso`, `ensure_claude_login`). `lib/ledger.py`: item kinds, id formats, Slack classes, state
   machines and the states that end a hand-over to a repo session (`work_done`), plus delegations
   and reports, outreach (what we wait on from other people: its channels table, reply

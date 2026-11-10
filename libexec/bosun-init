@@ -33,6 +33,12 @@ case "${1:-}" in
     ;;
 esac
 
+# Two at once would write the same config files and load the same launchd jobs, each over the other's.
+case " $* " in
+  *" --detect "* | *" --print-answers "* | *" --dry-run "*) ;;
+  *) one_at_a_time init 0 "bosun init is already running (in another terminal?); let it finish, then run this again if you need to" "$0" "$@" ;;
+esac
+
 # Carrying anything out starts with what bosun needs. BOSUN_SKIP_PREFLIGHT=1 if you know better.
 case " $* " in
   *" --detect "* | *" --print-answers "* | *" --dry-run "*) ;;

@@ -83,9 +83,36 @@ check_window() { # <name> <dir> <kind>
   fi
 }
 
+# The config keys bosun has a default for (set_defaults), and those whose default is a whole number:
+# from a shell of their own, which has not read bosun.env (this one has, and would know its typos).
+defaults_shell() { # <commands>, run after set_defaults
+  env -i HOME="$HOME" PATH="$PATH" bash -c "source \"\$1/lib/common.sh\"; set_defaults; $1" _ "$BOSUN_ROOT"
+}
+default_keys() { defaults_shell 'compgen -v BOSUN_'; }
+# shellcheck disable=SC2016  # expanded in the shell defaults_shell starts, not here
+number_keys() { defaults_shell 'for key in $(compgen -v BOSUN_); do [[ "${!key}" =~ ^[0-9]+$ ]] && echo "$key"; done'; }
+
+# What bosun.env sets that bosun does not read (a typo, a key renamed), and words where a number goes,
+# which bosun would read as off.
+check_config_keys() {
+  local said key note
+  # shellcheck disable=SC2046  # one argument per key
+  if ! said="$(python3 "$BOSUN_ROOT/lib/migrations.py" unread --config-dir "$BOSUN_CONFIG_DIR" $(default_keys) 2>&1)"; then
+    warn "could not read which keys bosun.env sets: $said"
+    return 0
+  fi
+  while IFS=$'\t' read -r key note; do
+    [ -z "$key" ] || warn "bosun.env sets $key: $note"
+  done <<<"$said"
+  for key in $(number_keys); do
+    [[ "${!key}" =~ ^[0-9]+$ ]] || warn "$key is '${!key}', not a whole number: bosun reads it as off or fails on it"
+  done
+}
+
 check_config() {
   local sessions name dir kind model effort
   if [ -f "$BOSUN_CONFIG_DIR/bosun.env" ]; then ok "bosun.env"; else warn "no bosun.env; using defaults"; fi
+  check_config_keys
   if ! sessions="$(window_specs 2>&1)"; then
     fail "$sessions"
     return

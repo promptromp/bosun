@@ -350,6 +350,27 @@ update dies at its launch (that refusal, a failed Codex listing) is reported as 
 for; the summary should say it did not start, and why. Design note:
 [docs/design/connectors.md](docs/design/connectors.md).
 
+**Done (2026-11-10): a hardening round.** Gaps an inventory of the adversarial cases turned up, each now
+handled and tested:
+
+- `bosun update`'s fetch printed a remote's token and could wait for ever on a stalled transfer;
+- `bosun refresh` opened a window whose folder was gone in another folder;
+- a window whose agent was not installed became a plain shell with nothing to say why;
+- two `start` or `refresh` runs at once (the morning job and one you typed) could add windows twice;
+- two `bosun init` runs at once wrote over each other;
+- a `bosun.env` that did not parse was read up to the error, and `bosun doctor` said nothing of a key
+  bosun does not read or a word in a number;
+- `start --restart` and `update`, run inside bosun's own windows, stopped or waited on themselves, and
+  `stop` there stopped before finishing;
+- `sudo bosun` and `sudo` with the install line would write root's files into your folders;
+- an install cut short after `~/.local/bin/bosun` was linked was taken for one set up, and never finished;
+- after the clock went back, an update's prune could delete the backup it had just taken.
+
+Next: two install lines run at once (their clones race, with git's own error), a full disk end to end, the
+Mac sleeping in the middle of an update (its hold lifts after an hour), commands run with another user's
+HOME, and a window left at a permission prompt, which holds its update open and blocks the next one until
+answered.
+
 ### Docs site
 
 **Done (2026-11-02):** a docs site, <https://promptromp.github.io/bosun/>, built with MkDocs

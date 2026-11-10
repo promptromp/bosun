@@ -164,6 +164,18 @@ if [ "$initial_prompt" = "--prompt-file" ]; then
 fi
 set_agent_args "$name"
 
+# An agent that is not installed for this pane's shell would leave the window a plain shell, with
+# nothing to say why: it says so here, in the pane and the launch log, and alerts you.
+require_agent_bin() { # <window>
+  command -v "$AGENT_BIN" >/dev/null 2>&1 && return 0
+  local log_file
+  log_file="$(launch_log)"
+  log "$1: its agent, $AGENT_BIN, is not installed for this window's shell (not on its PATH); the window stays a plain shell" |
+    tee -a "$log_file" >&2
+  ("$BOSUN" alert "$1: its agent, $AGENT_BIN, is not installed for the window's shell; install it, or name it in bosun.env" </dev/null >>"$log_file" 2>&1 &)
+  exit 1
+}
+
 run_agent() {
   record_launch
   if [ "$BOSUN_LAUNCH_DRY_RUN" = "1" ]; then
@@ -172,6 +184,7 @@ run_agent() {
     printf '\n'
     return 0
   fi
+  require_agent_bin "$name"
   # exec: no bash process stays behind reading this script while the agent runs, so editing the
   # script can never make a running launcher execute the wrong lines when the agent exits.
   exec "$AGENT_BIN" "$@"

@@ -245,7 +245,9 @@ write to take in. Measure before building that.
   Logs, dry runs and earlier backups are left out.
 - **Where.** `~/.local/state/bosun/backups/<time>-<from>-<to>/`, made with APFS clones so they cost
   little. Each has a manifest listing both versions, every file with its digest, and the format
-  versions. The last three are kept. The backups folder has a row in `STATE_FILES`, of a class of its
+  versions. The last three are kept, by name, always counting the backup of the update that prunes them:
+  taken after the clock went back, its name sorts first, and a second backup in the same second gets
+  `-2` after its name rather than failing. The backups folder has a row in `STATE_FILES`, of a class of its
   own (`BACKUPS`): `bosun uninstall` deletes it with either store, as each backup holds both.
 - **Restoring.** The update itself restores from a backup when its checks fail. In the first
   version, restoring later is by hand; the summary and `docs/setup.md` say how.

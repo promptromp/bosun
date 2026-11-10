@@ -566,6 +566,27 @@ class TestAddedKeys(MigrationTest):
         self.assertEqual(migrations.unset_notes(self.ctx.config_dir, keys), [])
         self.assertEqual(migrations.unset_notes(self.ctx.config_dir, ("BOSUN_FRESH",)), [])
 
+    def test_the_keys_bosun_env_sets_that_bosun_does_not_read(self) -> None:
+        """What bosun doctor warns of: a typo, with the key it most likely meant; a key renamed or
+        removed, which bosun update changes; nothing for a key bosun reads, or one that is not bosun's."""
+        known = ("BOSUN_START_TIME", "BOSUN_CHECKIN_MINUTES")
+        renames = (("BOSUN_OLD_TIME", "BOSUN_START_TIME"), ("BOSUN_GONE", ""))
+        self.env.write_text(
+            "BOSUN_START_TIME=08:00\nexport BOSUN_CHECKIN_MINS=30\nBOSUN_OLD_TIME=07:00\n"
+            "BOSUN_GONE=1\nBOSUN_ZZZ=1\nAWS_PROFILE=dev\n# BOSUN_COMMENTED=1\n"
+        )
+        self.assertEqual(
+            migrations.unread_notes(self.ctx.config_dir, known, renames),
+            [
+                ("BOSUN_CHECKIN_MINS", "bosun does not read it: did you mean BOSUN_CHECKIN_MINUTES?"),
+                ("BOSUN_GONE", "no longer used; bosun update changes it in bosun.env"),
+                ("BOSUN_OLD_TIME", "renamed to BOSUN_START_TIME; bosun update changes it in bosun.env"),
+                ("BOSUN_ZZZ", "bosun does not read it"),
+            ],
+        )
+        self.env.unlink()
+        self.assertEqual(migrations.unread_notes(self.ctx.config_dir, known, renames), [])
+
     def test_the_unset_command(self) -> None:
         """`migrations.py unset --config-dir <dir> <key>...`, which bosun doctor runs: a line per key, its
         note after a tab."""

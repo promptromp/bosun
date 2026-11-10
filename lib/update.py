@@ -318,7 +318,7 @@ def _prune(state_dir: Path, state: UpdateState) -> list[str]:
     versions of this update; the temporary links a switch cut short before this update started. One
     that holds anything of yours stays (versions.kept: as bosun uninstall checks a checkout, and an older
     version for a change or a commit of its own), and is a finding: said once, in the summary."""
-    for gone in update_backups.prune(state_dir):
+    for gone in update_backups.prune(state_dir, current=Path(state.backup) if state.backup else None):
         Output.say(f"  deleted the old backup {gone.name}")
     to_root = Path(state.to_root)
     install = install_paths.install_path(to_root)

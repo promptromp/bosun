@@ -9,6 +9,9 @@ export PYTHONDONTWRITEBYTECODE=1
 # may export GIT_DIR, GIT_WORK_TREE, GIT_INDEX_FILE, GIT_COMMON_DIR, GIT_CONFIG*, ... and every git
 # command below (git init, git log in scratch folders) would then read or write that repository.
 for git_var in $(compgen -e | grep '^GIT_'); do unset "$git_var"; done
+# Run from inside tmux (yours, or an agent's), the commands would see that tmux; in CI there is none.
+# Checks that want one set TMUX themselves.
+unset TMUX TMUX_PANE
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 # What must not change during the run: this checkout's HEAD, the shared repository's HEAD and
@@ -262,6 +265,10 @@ check "environment overrides still beat the file" test "$(BOSUN_CONFIG_DIR="$CFG
 multi_line=$'line one\nline two'
 check "multi-line overrides survive" test "$(BOSUN_CONFIG_DIR="$CFG" BOSUN_DRAIN_PROMPT="$multi_line" bash "$WORK/config-child.sh" "$ROOT" BOSUN_DRAIN_PROMPT)" = "$multi_line"
 check "load_config exports only environment overrides" env BOSUN_CONFIG_DIR="$CFG" bash -c 'source "$1/lib/common.sh"; load_config; ! env | grep -q "^BOSUN_DRAIN_PROMPT="' _ "$ROOT"
+printf 'BOSUN_DRAIN_PROMPT=before\nif then fi\nBOSUN_START_TIME=11:11\n' >"$CFG/bosun.env"
+check "a bosun.env that does not parse is refused in bash's own words, none of it read" fails_with "bosun.env does not parse, so none of it was read: $CFG/bosun.env: line 2: syntax error" env BOSUN_CONFIG_DIR="$CFG" "$BOSUN" status
+check "... while --help still answers" env BOSUN_CONFIG_DIR="$CFG" "$BOSUN" status --help
+rm -f "$CFG/bosun.env"
 
 echo "lib/common.sh functions"
 fn() { bash -c 'source "$1/lib/common.sh"; shift; "$@"' _ "$ROOT" "$@"; }
@@ -943,6 +950,11 @@ check "... and while bosun.env does not set it" contains "$("${ORCH[@]}" "$BOSUN
 echo 'BOSUN_ORCHESTRATOR_CONNECTORS=""' >"$BOSUN_CONFIG_DIR/bosun.env"
 check "... but not once it is set, to nothing too" bash -c '! grep -qF "$2" <<<"$1" && grep -qF "ok    orch: none (no MCP server or connector)" <<<"$1"' \
   _ "$("${ORCH[@]}" "$BOSUN" doctor 2>&1)" "$UNSET_LINE"
+printf 'BOSUN_CHECKIN_MINS=30\nBOSUN_CHECKIN_MINUTES=abc\n' >"$BOSUN_CONFIG_DIR/bosun.env"
+out="$("$BOSUN" doctor 2>&1)"
+check "doctor names a key bosun.env sets that bosun does not read, and the one it most likely meant" contains "$out" \
+  "warn  bosun.env sets BOSUN_CHECKIN_MINS: bosun does not read it: did you mean BOSUN_CHECKIN_MINUTES?"
+check "... and a word where a number goes" contains "$out" "warn  BOSUN_CHECKIN_MINUTES is 'abc', not a whole number"
 rm -f "$BOSUN_CONFIG_DIR/bosun.env"
 mkdir -p "$HOME/.claude"
 echo '{"allowedMcpServers": [{"serverName": "acme-local"}]}' >"$HOME/.claude/settings.json"
@@ -1019,6 +1031,24 @@ tmux -L "$SOCKET" kill-window -t "=smoke:2"
 out="$("$BOSUN" start 2>&1)"
 check "second start refreshes instead of duplicating" contains "$out" "already exists; mode: refresh"
 check "refresh recreates missing windows" contains "$out" "gamma: create the missing window"
+printf 'sessions:\n  - name: alpha\n    dir: %s\n  - name: ghost\n    dir: %s\n' "$REPO_A" "$WORK/repos/moved-away" >"$WORK/ghost-sessions.yml"
+check "refresh skips a window whose folder is gone, as start does, never opening it elsewhere" contains \
+  "$(BOSUN_SESSIONS_FILE="$WORK/ghost-sessions.yml" "$BOSUN" refresh --dry-run 2>&1)" "ghost: directory $WORK/repos/moved-away does not exist; skipping the window"
+python3 "$ROOT/lib/run_locked.py" "$BOSUN_STATE_DIR/windows.lock" 0 busy -- sleep 20 &
+windows_holder=$!
+lock_taken() { # <lock file>: someone holds it (exit 75, busy), not merely that the probe failed
+  python3 "$ROOT/lib/run_locked.py" "$1" 0 probe -- true 2>/dev/null
+  [ $? -eq 75 ]
+}
+wait_for 5 lock_taken "$BOSUN_STATE_DIR/windows.lock"
+check "a start while another sets up the windows waits, then gives up saying why" fails_with "another bosun start or refresh is setting up the windows" env BOSUN_WINDOWS_LOCK_WAIT_SECONDS=0 "$BOSUN" start
+check "... and so does a refresh" fails_with "another bosun start or refresh is setting up the windows" env BOSUN_WINDOWS_LOCK_WAIT_SECONDS=0 "$BOSUN" refresh
+check "... but not a dry run, which changes nothing" "$BOSUN" refresh --dry-run
+kill "$windows_holder"
+wait "$windows_holder" 2>/dev/null
+check "start --restart from inside bosun's tmux refuses: it would stop itself" fails_with "it would stop itself before starting again" env TMUX="/tmp/tmux-0/$SOCKET,1,0" "$BOSUN" start --restart
+check "a window whose agent is not installed says so, rather than becoming a plain shell" fails_with "its agent, $WORK/no-such-claude, is not installed for this window's shell" \
+  bash -c 'cd "$1" && BOSUN_LAUNCH_DRY_RUN=0 BOSUN_CLAUDE_BIN="$2" "$3" launch alpha </dev/null' _ "$REPO_A" "$WORK/no-such-claude" "$BOSUN"
 check "send refuses windows without Claude" fails_with "is not running an agent" "$BOSUN" send alpha hello
 check "send refuses unknown windows" fails_with "no window 'no-such-window'" "$BOSUN" send no-such-window hello
 check "stop rejects unknown arguments and keeps the session" bash -c '! "$1" stop --dry-run 2>/dev/null && tmux -L "$2" has-session -t =smoke' _ "$BOSUN" "$SOCKET"
@@ -2453,6 +2483,7 @@ echo "install and uninstall (fake launchctl and pmset, test label)"
 cat >"$HOME/.local/bin/launchctl" <<EOF
 #!/bin/bash
 echo "launchctl \$*" >>"$WORK/system.log"
+[ ! -e "$WORK/launchctl-fails" ] || [ "\$1" != bootstrap ] || exit 5
 [ "\$1" != print ] || [ -e "\$HOME/Library/LaunchAgents/\${2##*/}.plist" ]
 EOF
 cat >"$HOME/.local/bin/pmset" <<EOF
@@ -2476,6 +2507,10 @@ INSTALL_CFG="$WORK/install-config"
 PLIST="$HOME/Library/LaunchAgents/$BOSUN_LAUNCHD_LABEL.plist"
 # Never let a test touch the real launchd, pmset or sudo: only run if the fakes come first on PATH.
 if [ "$(bash -c 'source "$1/lib/common.sh"; command -v launchctl; command -v pmset; command -v sudo' _ "$ROOT" | tr '\n' ' ')" = "$HOME/.local/bin/launchctl $HOME/.local/bin/pmset $HOME/.local/bin/sudo " ]; then
+  touch "$WORK/launchctl-fails"
+  check "an install that stops at the launchd jobs fails" fails_with "could not load the launchd jobs" env BOSUN_CONFIG_DIR="$INSTALL_CFG" "$ROOT/install.sh" --example generic
+  check "... and leaves ~/.local/bin/bosun unlinked, so the install line takes the install for unfinished and runs init again" test ! -e "$HOME/.local/bin/bosun"
+  rm -f "$WORK/launchctl-fails" "$HOME"/Library/LaunchAgents/"$BOSUN_LAUNCHD_LABEL"*.plist
   BOSUN_CONFIG_DIR="$INSTALL_CFG" "$ROOT/install.sh" --example generic >/dev/null 2>&1
   check "install copies the example config" bash -c '[ -f "$1/bosun.env" ] && [ -f "$1/sessions.yml" ] && [ -f "$1/setup.sh" ]' _ "$INSTALL_CFG"
   check "install links bosun into ~/.local/bin" test "$(readlink "$HOME/.local/bin/bosun")" = "$BOSUN"
@@ -2631,6 +2666,13 @@ for line in sys.stdin:
   check "init --detect prints JSON" env BOSUN_CONFIG_DIR="$INIT_CFG" bash -c '"$1" init --detect | jq -e .home >/dev/null' _ "$BOSUN"
   check "init --print-answers prints JSON" env BOSUN_CONFIG_DIR="$INIT_CFG" bash -c '"$1" init --print-answers | jq -e .days >/dev/null' _ "$BOSUN"
   check "init refuses bad answers" fails_with "unknown answers" env BOSUN_CONFIG_DIR="$INIT_CFG" "$BOSUN" init --answers <(echo '{"typo": 1}')
+  python3 "$ROOT/lib/run_locked.py" "$BOSUN_STATE_DIR/init.lock" 0 busy -- sleep 20 &
+  init_holder=$!
+  wait_for 5 lock_taken "$BOSUN_STATE_DIR/init.lock"
+  check "a second bosun init while one runs is refused at once" fails_with "bosun init is already running" env BOSUN_CONFIG_DIR="$INIT_CFG" "$BOSUN" init --answers "$INIT_ANSWERS"
+  check "... and changes nothing" test ! -e "$INIT_CFG"
+  kill "$init_holder"
+  wait "$init_holder" 2>/dev/null
   BOSUN_CONFIG_DIR="$INIT_CFG" "$BOSUN" init --answers "$INIT_ANSWERS" >"$WORK/init.out" 2>&1
   check "init writes the config" bash -c 'grep -q "BOSUN_DAYS=\"MWF\"" "$1/bosun.env" && grep -q "name: init-api" "$1/sessions.yml" && [ -f "$1/setup.sh" ]' _ "$INIT_CFG"
   check "what it writes loads as config" env BOSUN_CONFIG_DIR="$INIT_CFG" bash -c 'source "$1/lib/common.sh"; load_config; [ "$BOSUN_START_TIME" = 09:00 ] && [ "$BOSUN_EVENTS_ENABLED" = 1 ] && [ "$BOSUN_REPOS_DIR" = "$HOME/Development" ]' _ "$ROOT"
@@ -2947,6 +2989,11 @@ PY
   check "... and that the update writes to bosun.env the value that keeps what this install did" bash -c '
     grep -q "^Written to bosun.env, to keep what this install did:" <<<"$1" && grep -qx "  BOSUN_ORCHESTRATOR_CONNECTORS=\"all\"" <<<"$1"' _ "$out"
   check "... nor the link" u_at "$U_V1"
+  git --git-dir="$U_VERSIONS/bosun.git" remote set-url origin "https://0000placeholder-token@127.0.0.1:9/acme/bosun.git" # gitleaks:allow
+  out="$(ub update --dry-run 2>&1)"
+  check "a fetch that fails says so, without the token in the remote's URL" bash -c 'grep -qF "could not fetch main from https://127.0.0.1:9/acme/bosun.git" <<<"$1" && ! grep -q placeholder-token <<<"$1"' _ "$out"
+  git --git-dir="$U_VERSIONS/bosun.git" remote set-url origin "$U_UP"
+  check "an update refuses to run inside bosun's tmux, whose windows it restarts" fails_with "runs inside one of them" env TMUX="/tmp/tmux-0/$SOCKET,1,0" "${U_ENV[@]}" "$U_LINK/bin/bosun" update --yes
   out="$(ub update </dev/null 2>&1)"
   check "without --yes and no terminal, it shows the plan and stops" bash -c 'grep -q "ledger: format 1 -> 2" <<<"$1" && grep -q "Nothing has changed" <<<"$1"' _ "$out"
   check "... changing nothing" bash -c '[ "$1" = "$2" ]' _ "$(u_files)" "$before"
