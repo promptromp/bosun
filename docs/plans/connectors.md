@@ -2,6 +2,10 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
+Status: done. The two roadmap bugs merged 2026-11-09 (#29), the gate the same day (#30), and the
+connectors, setup grants and the final review's fixes that night (#31). What the macOS VM changed is in
+the design note, and what comes next in its Later list and `ROADMAP.md`.
+
 **Goal:** every window bosun starts reaches only the connectors its config names; the orchestrator's gate
 covers what it missed and comes from the bosun that launched it; an unattended install grants nothing
 nobody saw; two roadmap bugs fixed on the way.
