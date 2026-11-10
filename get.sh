@@ -98,6 +98,8 @@ clean_env() { unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_OBJECT_DIRECTORY GI
 
 # The first layer: what this OS needs to get as far as the profiles in the repo.
 check_os() {
+  # As root, the install would land in root's home folder, owned by root, and its jobs in root's session.
+  [ "$(id -u)" != 0 ] || die "run this as yourself, not as root (sudo): bosun asks for sudo itself, once, when it needs it."
   case "$(uname -s)" in
     Darwin)
       xcode-select -p >/dev/null 2>&1 ||
@@ -239,8 +241,9 @@ start_update() {
   exec "$command" update --from "$FROM" # no terminal to ask on: it shows the plan
 }
 
-# Whether bosun init has set the install at $DIR up: its install.sh links ~/.local/bin/bosun to it. An
-# install it never finished (stopped at what bosun needs, or at a question) is not set up yet.
+# Whether bosun init has set the install at $DIR up: its install.sh links ~/.local/bin/bosun to it, as its
+# last step. An install it never finished (stopped at what bosun needs, at a question, at the launchd jobs
+# or at sudo for the wake) is not set up yet.
 set_up() {
   target="$(readlink "$HOME/.local/bin/bosun" 2>/dev/null)" || return 1
   linked="$(cd "$(dirname "$target")" 2>/dev/null && pwd -P)" || return 1

@@ -239,6 +239,21 @@ class BackupsTest(unittest.TestCase):
         self.assertEqual(sorted(gone), sorted([good[0], cut]))
         self.assertEqual(ub.listed(self.state), good[1:])
 
+    def test_after_the_clock_went_back_the_backup_just_taken_is_kept(self) -> None:
+        """Backups sort by their names, which are times: one taken after the clock went back sorts
+        first, and the update that took it, and names it in its record, must not prune it."""
+        older = [self.take(600), self.take(601), self.take(602)]
+        current = self.take(-3600)  # an hour back
+        gone = ub.prune(self.state, current=current)
+        self.assertEqual(gone, [older[0]])
+        self.assertEqual(sorted(ub.listed(self.state)), sorted([*older[1:], current]))
+
+    def test_two_backups_in_the_same_second_both_stand(self) -> None:
+        first, second = self.take(0), self.take(0)
+        self.assertNotEqual(first, second)
+        self.assertEqual(second.name, f"{first.name}-2")
+        self.assertEqual(ub.listed(self.state), [first, second])
+
     def test_the_folder_is_named_by_utc_time_and_seven_character_commits(self) -> None:
         backup = ub.take(self.state, self.config, "a" * 40, "b" * 40, {}, NOW)
         self.assertEqual(backup.name, "20261105-090000-aaaaaaa-bbbbbbb")

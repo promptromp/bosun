@@ -403,9 +403,16 @@ read_config() {
     override_values+=("${!name}")
   done
   set_defaults
+  # A bosun.env that does not parse is not read at all: sourced, bash would stop at the error and keep
+  # what came before it, a config that is neither yours nor the defaults. load_config refuses it.
+  BOSUN_ENV_ERROR=""
   if [ -f "$BOSUN_CONFIG_DIR/bosun.env" ]; then
-    # shellcheck disable=SC1091
-    source "$BOSUN_CONFIG_DIR/bosun.env"
+    if ! BOSUN_ENV_ERROR="$(bash -n "$BOSUN_CONFIG_DIR/bosun.env" 2>&1)"; then
+      BOSUN_ENV_ERROR="${BOSUN_ENV_ERROR:-bash -n fails on it}"
+    else
+      # shellcheck disable=SC1091
+      source "$BOSUN_CONFIG_DIR/bosun.env"
+    fi
   fi
   while [ "$i" -lt ${#override_names[@]} ]; do
     printf -v "${override_names[$i]}" '%s' "${override_values[$i]}"
@@ -417,6 +424,8 @@ read_config() {
 
 load_config() {
   read_config
+  [ -z "$BOSUN_ENV_ERROR" ] ||
+    die "bosun.env does not parse, so none of it was read: ${BOSUN_ENV_ERROR//$'\n'/ }. Fix it, or move it aside to run on the defaults."
   mkdir -p "$BOSUN_STATE_DIR" "$BOSUN_LOG_DIR"
 }
 
@@ -439,6 +448,22 @@ usage_of() { awk 'NR == 1 { next } /^#/ { sub(/^# ?/, ""); print; next } { exit 
 usage() { usage_of "$0"; }
 
 # A usage error: exit 2, pointing at --help.
+# <url> as it may be shown: without a user name, password or token before its host (get.sh's
+# shown() does the same, in plain sh).
+url_without_credentials() { # <url>
+  local rest host
+  case "$1" in
+    *://*) ;;
+    *)
+      printf '%s' "$1"
+      return 0
+      ;;
+  esac
+  rest="${1#*://}"
+  host="${rest%%/*}"
+  printf '%s://%s%s' "${1%%://*}" "${host##*@}" "${rest#"$host"}"
+}
+
 die_usage() {
   log "ERROR: $* (see --help)" >&2
   exit 2
@@ -448,14 +473,39 @@ notify() {
   osascript -e "display notification \"${2//\"/\\\"}\" with title \"${1//\"/\\\"}\"" >/dev/null 2>&1 || true
 }
 
+# Whether this runs in a pane of bosun's own tmux server (lib/uninstall.py's inside_bosun is the same
+# test): with no socket of its own, bosun shares your default server, so any tmux there counts.
+inside_bosun_tmux() {
+  local server="${TMUX:-}"
+  server="${server%%,*}"
+  [ -n "$server" ] && [ "$(basename "$server")" = "${BOSUN_TMUX_SOCKET:-default}" ]
+}
+
+# Whether window <name> can start in <dir>: a folder that is gone is logged with "skipping the window"
+# (the watchdog alerts on it), never opened somewhere else.
+window_dir_missing() { # <name> <dir>
+  [ -n "$2" ] && [ ! -d "$2" ] || return 1
+  log "$1: directory $2 does not exist; skipping the window"
+}
+
 tmux_cmd() {
   # -u: without a UTF-8 locale (LC_ALL=C), tmux prints the tabs in its -F formats as "_", and every
-  # window would look missing.
+  # window would look missing. 9>&-: the server this may start outlives the command, and must not keep
+  # its one_at_a_time lock (lib/run_locked.py's LOCK_FD).
   if [ -n "$BOSUN_TMUX_SOCKET" ]; then
-    tmux -u -L "$BOSUN_TMUX_SOCKET" "$@"
+    tmux -u -L "$BOSUN_TMUX_SOCKET" "$@" 9>&-
   else
-    tmux -u "$@"
+    tmux -u "$@" 9>&-
   fi
+}
+
+# One at a time: the rest of this command runs holding lock <name> (lib/run_locked.py), waiting up to
+# <wait> seconds for the one holding it; past that it stops with <message>, exit 75. What this command
+# starts holds it too, so a nested one goes on. Call it after load_config, passing "$0" "$@".
+one_at_a_time() { # <name> <wait seconds> <message> "$0" "$@"
+  local lock="$BOSUN_STATE_DIR/$1.lock"
+  python3 "$BOSUN_ROOT/lib/run_locked.py" --held "$lock" && return 0
+  exec python3 "$BOSUN_ROOT/lib/run_locked.py" "$lock" "$2" "$3" -- "${@:4}"
 }
 
 # The orchestrator's policy: orchestrator/policy.md, then the site's $BOSUN_CONFIG_DIR/policy.md

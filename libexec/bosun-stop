@@ -16,13 +16,8 @@ case "${1:-}" in
   *) die_usage "unknown argument '$1'" ;;
 esac
 
-if session_exists; then
-  reap_session_helpers
-  tmux_cmd kill-session -t "=$BOSUN_SESSION_NAME"
-  log "killed tmux session '$BOSUN_SESSION_NAME'"
-else
-  log "no tmux session '$BOSUN_SESSION_NAME'"
-fi
+# Everything but the session itself first: run in one of its windows (you, or an agent asked to stop
+# bosun for the day), killing the session ends this command too, so that comes last.
 # You stopped it on purpose: the watchdog does not alert about a missing session today.
 date '+%F %T' >"$(stop_marker)"
 
@@ -32,3 +27,11 @@ if [ -f "$pidfile" ] && pid="$(cat "$pidfile")" && ps -p "$pid" -o comm= 2>/dev/
   log "released keep-awake (caffeinate pid $pid)"
 fi
 rm -f "$pidfile"
+
+if session_exists; then
+  reap_session_helpers
+  log "killing tmux session '$BOSUN_SESSION_NAME'"
+  tmux_cmd kill-session -t "=$BOSUN_SESSION_NAME"
+else
+  log "no tmux session '$BOSUN_SESSION_NAME'"
+fi

@@ -27,6 +27,11 @@ for arg in "$@"; do
   esac
 done
 
+# Two starts at once (the morning job's and yours) would both build the windows, and the second, finding
+# half a session, add the ones the first had not made yet a second time.
+# BOSUN_WINDOWS_LOCK_WAIT_SECONDS is for tests.
+one_at_a_time windows "${BOSUN_WINDOWS_LOCK_WAIT_SECONDS:-180}" "another bosun start or refresh is setting up the windows, and did not finish in time" "$0" "$@"
+
 SESSION="$BOSUN_SESSION_NAME"
 rm -f "$(stop_marker)" # the watchdog expects the session again
 
@@ -36,10 +41,7 @@ start_fresh() {
   log "starting tmux session '$SESSION' from $BOSUN_SESSIONS_FILE"
   while IFS=$'\t' read -r name dir kind model effort _; do
     [ -n "$name" ] || continue
-    if [ ! -d "$dir" ]; then
-      log "$name: directory $dir does not exist; skipping the window"
-      continue
-    fi
+    window_dir_missing "$name" "$dir" && continue
     build_launch_command "$name" "" "$kind"
     if [ "$created" = "0" ]; then
       tmux_cmd new-session -d -s "$SESSION" -n "$name" -c "$dir" "${launch_cmd[@]}" ||
@@ -54,6 +56,9 @@ start_fresh() {
   log "started '$SESSION' with windows: $(tmux_cmd list-windows -t "=$SESSION" -F '#{window_name}' | tr '\n' ' ')"
 }
 
+if session_exists && [ "$BOSUN_ON_EXISTING" = restart ] && inside_bosun_tmux; then
+  die "a restart stops bosun's tmux session, and this runs inside it: it would stop itself before starting again. Run it from another terminal."
+fi
 if session_exists; then
   log "session '$SESSION' already exists; mode: $BOSUN_ON_EXISTING"
   case "$BOSUN_ON_EXISTING" in

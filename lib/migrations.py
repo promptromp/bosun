@@ -38,6 +38,7 @@ keys that update added and bosun.env does not set (assigned_keys).
 from __future__ import annotations
 
 import argparse
+import difflib
 import os
 import re
 import stat
@@ -445,6 +446,26 @@ def unset_notes(config_dir: Path, keys: Collection[str]) -> list[tuple[str, str]
     ]
 
 
+def unread_notes(
+    config_dir: Path, known: Collection[str], renames: Sequence[tuple[str, str]] | None = None
+) -> list[tuple[str, str]]:
+    """The BOSUN_ keys <config_dir>'s bosun.env sets that bosun does not read (<known>: the keys it has a
+    default for), each with what to do: a renamed key's name now (bosun update changes it), or the known
+    key closest to it, which a typo usually is."""
+    names = config_names(renames)
+    notes = []
+    for key in sorted(assigned_keys(config_dir)):
+        if not key.startswith("BOSUN_") or key in known:
+            continue
+        if key in names:
+            now = f"renamed to {names[key]}" if names[key] else "no longer used"
+            notes.append((key, f"{now}; bosun update changes it in bosun.env"))
+            continue
+        close = difflib.get_close_matches(key, sorted(known), n=1)
+        notes.append((key, "bosun does not read it" + (f": did you mean {close[0]}?" if close else "")))
+    return notes
+
+
 def assignment(key: str, value: str) -> str:
     """How bosun.env sets <key> to a kept <value>, and how the plan shows it."""
     return f'{key}="{value}"'
@@ -489,15 +510,23 @@ def write_config(config_dir: Path, now: datetime, added: Collection[str] = ()) -
 
 
 def main(argv: Sequence[str]) -> int:
-    """`unset --config-dir <dir> <key>...`, which bosun doctor runs: unset_notes, a line each, the key and a
-    tab first."""
+    """What bosun doctor runs, a line each, the key and a tab first: `unset --config-dir <dir> <key>...`
+    (unset_notes) and `unread --config-dir <dir> <known key>...` (unread_notes)."""
     parser = argparse.ArgumentParser(prog="migrations.py", allow_abbrev=False)
     commands = parser.add_subparsers(dest="command", required=True)
     unset = commands.add_parser("unset", help="the kept keys bosun.env does not set, and what that means")
     unset.add_argument("--config-dir", type=Path, required=True)
     unset.add_argument("keys", nargs="+")
+    unread = commands.add_parser("unread", help="the keys bosun.env sets that bosun does not read")
+    unread.add_argument("--config-dir", type=Path, required=True)
+    unread.add_argument("known", nargs="*", help="the keys bosun has a default for")
     args = parser.parse_args(list(argv))
-    for key, note in unset_notes(args.config_dir, args.keys):
+    notes = (
+        unset_notes(args.config_dir, args.keys)
+        if args.command == "unset"
+        else unread_notes(args.config_dir, args.known)
+    )
+    for key, note in notes:
         print(f"{key}\t{note}")
     return 0
 

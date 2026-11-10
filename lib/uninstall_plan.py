@@ -85,6 +85,8 @@ STATE_FILES = (
     ("watchdog.json", WORKING),
     ("watchdog.json.tmp", WORKING),
     ("watchdog.lock", WORKING),
+    ("windows.lock", WORKING),
+    ("init.lock", WORKING),
     (".DS_Store", WORKING),  # Finder's, if you ever looked in the folder
 )
 CONFIG_FILES = (

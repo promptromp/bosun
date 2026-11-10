@@ -20,6 +20,7 @@ from __future__ import annotations
 import errno
 import fnmatch
 import hashlib
+import itertools
 import json
 import os
 import shutil
@@ -217,8 +218,7 @@ def take(
     """A backup of the backup set, as <state_dir>/backups/<time>-<from>-<to>/, its manifest last.
     A folder that cannot be finished is deleted, so there is never half of one with a manifest."""
     moment = now.astimezone(UTC)
-    backup = state_dir / BACKUPS_DIR / f"{moment:%Y%m%d-%H%M%S}-{from_commit[:7]}-{to_commit[:7]}"
-    backup.mkdir(parents=True, mode=0o700)
+    backup = _new_folder(state_dir / BACKUPS_DIR, f"{moment:%Y%m%d-%H%M%S}-{from_commit[:7]}-{to_commit[:7]}")
     try:
         copy_set(state_dir, config_dir, backup)
         manifest = Manifest(from_commit, to_commit, moment.isoformat(), dict(formats), _digests(backup))
@@ -227,6 +227,20 @@ def take(
         shutil.rmtree(backup, ignore_errors=True)
         raise
     return backup
+
+
+def _new_folder(parent: Path, name: str) -> Path:
+    """A new folder <name> in <parent>, or <name>-2, -3, ... when it is taken: a second backup in the
+    same second, or one whose time the clock went back onto, never fails the update that takes it."""
+    parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    for n in itertools.count(1):
+        folder = parent / (name if n == 1 else f"{name}-{n}")
+        try:
+            folder.mkdir(mode=0o700)
+        except FileExistsError:
+            continue
+        return folder
+    raise AssertionError("not reached")  # itertools.count never ends
 
 
 def _under(relative: str, prefixes: Sequence[str]) -> bool:
@@ -443,11 +457,20 @@ def listed(state_dir: Path) -> list[Path]:
     return [p for p in _folders(state_dir) if (p / MANIFEST).is_file()]
 
 
-def prune(state_dir: Path, keep: int = KEEP) -> list[Path]:
+def _with_current(kept: list[Path], good: list[Path], current: Path | None) -> list[Path]:
+    """<kept> with <current> among them (found in <good> by name), in place of the oldest kept."""
+    mine = [p for p in good if current is not None and p.name == current.name]
+    if not kept or not mine or mine[0] in kept:
+        return kept
+    return [*kept[1:], mine[0]]
+
+
+def prune(state_dir: Path, keep: int = KEEP, current: Path | None = None) -> list[Path]:
     """Deletes the oldest backups beyond <keep>, and the folders of backups cut short (they hold
-    copied records); returns them."""
+    copied records); returns them. <current>, the backup of the update that prunes, which its record
+    names, is one of the <keep> whatever its name: taken after the clock went back, it sorts first."""
     good = listed(state_dir)
-    kept = good[-keep:] if keep > 0 else []
+    kept = _with_current(good[-keep:] if keep > 0 else [], good, current)
     gone = [p for p in _folders(state_dir) if p not in kept]
     for backup in gone:
         shutil.rmtree(backup)

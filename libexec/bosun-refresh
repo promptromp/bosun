@@ -65,6 +65,16 @@ set -uo pipefail
 source "$(dirname "$0")/../lib/common.sh"
 load_config
 
+# One start or refresh at a time (bosun start's lock: a nested refresh holds it already); a dry run
+# changes nothing and goes on. BOSUN_WINDOWS_LOCK_WAIT_SECONDS is for tests.
+one_refresh_at_a_time() {
+  case " $* " in
+    *" --dry-run "* | *" -h "* | *" --help "*) return 0 ;;
+  esac
+  one_at_a_time windows "${BOSUN_WINDOWS_LOCK_WAIT_SECONDS:-180}" "another bosun start or refresh is setting up the windows, and did not finish in time" "$0" "$@"
+}
+one_refresh_at_a_time "$@"
+
 SESSION="$BOSUN_SESSION_NAME"
 EXIT_WAIT_SECONDS=20
 EXIT_POLL_SECONDS=0.5
@@ -375,6 +385,11 @@ update_restart_agent() { # <name> <dir> <window_id> <agent_pid>
 # nothing when quiet).
 refresh_window() { # <name> <dir> <kind> <model> <effort>
   local name="$1" dir="$2" kind="$3" pane_pid window_id agent_pid
+  # A folder that is gone: skipped, and for an update a restart that failed, which its summary reports.
+  if window_dir_missing "$name" "$dir"; then
+    [ -z "$UPDATE_PROMPT" ]
+    return
+  fi
   read -r pane_pid window_id <<<"$(find_window "$name")"
   if [ -z "${window_id:-}" ]; then
     choose_start_prompt "$name" "$dir"
@@ -434,6 +449,7 @@ restart_checkin_loop() {
   dir="$(window_specs | awk -F'\t' '$3 == "checkin" { print $2; exit }')"
   [ -n "$dir" ] || die "no checkin window: it runs only with an orchestrator, and check-ins (or events) on"
   read -r pane_pid window_id <<<"$(find_window checkin)"
+  window_dir_missing checkin "$dir" && return 0
   if [ -z "${window_id:-}" ]; then
     act checkin "create the missing window" create_and_launch checkin "$dir" checkin
     return

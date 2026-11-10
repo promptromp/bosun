@@ -54,10 +54,6 @@ done
 
 load_config
 
-mkdir -p "$HOME/.local/bin"
-ln -sfn "$BOSUN_CMD" "$HOME/.local/bin/bosun"
-log "linked ~/.local/bin/bosun"
-
 # Earlier versions installed a tmuxinator project; `bosun start` no longer uses it.
 old_tmuxinator_file="$HOME/.config/tmuxinator/$BOSUN_SESSION_NAME.yml"
 if grep -q "bosun tmuxinator project" "$old_tmuxinator_file" 2>/dev/null; then
@@ -91,6 +87,12 @@ if [ "$WITH_WAKE" = "1" ]; then
 else
   log "to wake the Mac on schedule, run once:  ${wake_cmd[*]}"
 fi
+
+# Last: get.sh takes this link for an install that is set up, and runs `bosun update` on it; made any
+# earlier, an install cut short after it (at the jobs, or at sudo for the wake) would never be finished.
+mkdir -p "$HOME/.local/bin"
+ln -sfn "$BOSUN_CMD" "$HOME/.local/bin/bosun"
+log "linked ~/.local/bin/bosun"
 
 echo
 "$BOSUN" doctor
