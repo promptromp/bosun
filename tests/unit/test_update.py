@@ -27,6 +27,7 @@ from unittest import mock
 
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "lib"))
+import checkout_work
 import install_paths
 import knowledge_store
 import ledger
@@ -444,6 +445,20 @@ class ReleaseTest(World):
         self.assertEqual(done.reloaded, ("com.bosun.morning", "com.bosun.morning.watchdog"))
         self.assertEqual(update_state.read(self.state), done)
 
+    @staticmethod
+    def why_still_there(folder: Path, done: UpdateState) -> str:
+        """What a failure of the test below says: it has failed on CI only, now and then, after lsof
+        was stubbed and with git's maintenance off, so the next failure must say what the prune saw."""
+        status = versions.git(
+            "-C", str(folder), "status", "--porcelain", "--ignored", "--untracked-files=all"
+        )
+        unpushed = versions.git("-C", str(folder), "log", "--all", "--not", "--remotes", "--oneline")
+        return (
+            f"findings {done.findings}; checkout {checkout_work.checkout(folder)}; "
+            f"status {status.returncode} {status.stdout!r} {status.stderr!r}; "
+            f"unpushed {unpushed.returncode} {unpushed.stdout!r} {unpushed.stderr!r}"
+        )
+
     def test_a_checkout_from_before_versions_with_work_in_it_is_kept_and_said(self) -> None:
         """The release's prune checks it as bosun uninstall checks a checkout, and the
         summary says once what it kept."""
@@ -472,7 +487,7 @@ class ReleaseTest(World):
         ):
             done = update.release(self.record("checked"))
         self.assertTrue(mine.is_dir())
-        self.assertFalse(clean.exists())
+        self.assertFalse(clean.exists(), self.why_still_there(clean, done))
         said = f"kept {mine}, the checkout from before versions: it has uncommitted changes; delete it"
         self.assertEqual(done.findings, (f"{said} once you have what you need",))
 
