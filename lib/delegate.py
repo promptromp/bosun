@@ -16,6 +16,8 @@ from collections.abc import Iterable
 from pathlib import Path
 from typing import Any
 
+import agent_state
+
 
 ROOT = Path(__file__).resolve().parent.parent
 TASKS_DIR = ROOT / "orchestrator" / "tasks"
@@ -30,7 +32,6 @@ def site_tasks_dir() -> Path | None:
 
 
 BOSUN = str(ROOT / "bin" / "bosun")
-SUBAGENT_HARNESS = "claude"  # the agent whose Agent tool subagent_preamble names
 FRONT_MATTER_FIELDS = ("title", "kinds", "may", "never", "followup")
 ANY_KIND = "any"
 # Front-matter `model` and `effort`: a model or effort level for the task, or "session" (the
@@ -310,16 +311,21 @@ def window_harness(window: str) -> str:
     try:
         windows = json.loads(result.stdout)
     except ValueError:
-        return SUBAGENT_HARNESS
+        return agent_state.DEFAULT_HARNESS
     entry: dict[str, Any] = next((w for w in windows if w.get("name") == window), {})
-    return str((entry.get("agent") or {}).get("harness") or entry.get("harness") or SUBAGENT_HARNESS)
+    return str(
+        (entry.get("agent") or {}).get("harness") or entry.get("harness") or agent_state.DEFAULT_HARNESS
+    )
 
 
 def can_use_subagents(args: argparse.Namespace) -> bool:
-    """The preamble names Claude Code's Agent tool, so another agent runs the task at its own settings.
-    --print shows what a window on Claude Code would get."""
+    """The preamble names Claude Code's Agent tool, which only an agent whose profile says `subagents`
+    has; any other agent runs the task at its own settings. --print shows what the default agent gets."""
     target = args.window or args.start
-    return not target or window_harness(target) == SUBAGENT_HARNESS
+    if not target:
+        return True
+    agent = agent_state.AGENTS.get(window_harness(target))
+    return agent is not None and agent.PROFILE.subagents
 
 
 def hand_over(args: argparse.Namespace, chosen: list[Task]) -> int:
