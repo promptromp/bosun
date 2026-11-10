@@ -20,6 +20,10 @@ TIMEOUT_SECONDS = 60
 # After the last step, how long the command may take to finish (an install runs then): past it, the
 # run fails and says what the screen showed, rather than waiting for the CI job's own timeout.
 FINISH_SECONDS = 300
+# How long a Ctrl-C waits after its text shows. A prompt shows before the command blocks in its read,
+# and Python's input() notices a SIGINT that comes in between only when a read is interrupted, so a
+# Ctrl-C sent at once can be lost and the command wait forever; a person is never that quick.
+CTRL_C_SETTLE_SECONDS = 0.5
 CHUNK = 65536
 
 
@@ -63,6 +67,8 @@ def main(argv: list[str]) -> int:
             print(f"never saw: {expected}")
             status = 1
             break
+        if "<ctrl-c>" in keys:
+            time.sleep(CTRL_C_SETTLE_SECONDS)
         os.write(fd, keys.replace("<enter>", "\r").replace("<ctrl-c>", "\x03").encode())
     finish_by = time.monotonic() + FINISH_SECONDS
     while status == 0 and (chunk := read_some(fd, 1.0)) is not None:
