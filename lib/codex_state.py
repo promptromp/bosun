@@ -83,6 +83,17 @@ PROFILE = Profile(
     autocompact=False,
     subagents=False,
     state_files=("codex-sessions.json",),
+    display_name="Codex",
+    setup_preview=(
+        (
+            "One Codex session per repo, in its sandbox, with its reviewer deciding when something may go "
+            "past it."
+        ),
+        (
+            "The orchestrator stays on Claude Code. Costs and what you said in a window show less for Codex "
+            "so far."
+        ),
+    ),
     setup_sessions="Codex, with its automatic reviewer",
     setup_note=(
         "Repo sessions run on Codex with its automatic reviewer (BOSUN_CODEX_FLAGS): a sandbox, and a safety "

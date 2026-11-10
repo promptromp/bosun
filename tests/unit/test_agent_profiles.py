@@ -51,6 +51,12 @@ class AgentProfileTest(unittest.TestCase):
         assert codex.setup_sessions == "Codex, with its automatic reviewer"
         assert codex.setup_note.startswith("Repo sessions run on Codex")
 
+    def test_each_agent_says_how_to_show_it(self) -> None:
+        self.assertEqual(claude_state.PROFILE.display_name, "Claude Code")
+        self.assertEqual(codex_state.PROFILE.display_name, "Codex")
+        for agent in AGENTS.values():
+            self.assertTrue(agent.PROFILE.setup_preview)
+
     def test_every_state_file_is_in_the_tables(self) -> None:
         patterns = {pattern for pattern, _kind in uninstall_plan.STATE_FILES}
         for agent in AGENTS.values():

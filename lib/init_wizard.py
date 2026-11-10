@@ -407,15 +407,6 @@ def ask_model(ui: Ui, answers: Answers, top: Sequence[str]) -> Answers:
 
 
 ALWAYS_ASKED = 5  # repos, schedule, features, model, wake
-CLAUDE_PREVIEW = ("One Claude Code session per repo, and the orchestrator runs on it too.",)
-CODEX_PREVIEW = (
-    "One Codex session per repo, in its sandbox, with its reviewer deciding when something may go past it.",
-    "The orchestrator stays on Claude Code. Costs and what you said in a window show less for Codex so far.",
-)
-AGENT_CHOICES = {
-    agent_state.DEFAULT_HARNESS: ("Claude Code", CLAUDE_PREVIEW),
-    "codex": ("Codex", CODEX_PREVIEW),
-}
 AUTO_PREVIEW = (
     "A safety check reviews each action and blocks risky ones.",
     "Nothing to accept first, and it uses slightly more tokens.",
@@ -496,9 +487,15 @@ def has_a_choice_of_agents(facts: Facts) -> bool:
 
 
 def harness_options(facts: Facts, answers: Answers) -> list[Option]:
-    offered = [a for a in AGENT_CHOICES if a == agent_state.DEFAULT_HARNESS or a in facts.ready_agents]
+    offered = [a for a in agent_state.AGENTS if a == agent_state.DEFAULT_HARNESS or a in facts.ready_agents]
     return [
-        Option(str(n), AGENT_CHOICES[a][0], {"harness": a}, AGENT_CHOICES[a][1], answers.harness == a)
+        Option(
+            str(n),
+            agent_state.AGENTS[a].PROFILE.display_name,
+            {"harness": a},
+            agent_state.AGENTS[a].PROFILE.setup_preview,
+            answers.harness == a,
+        )
         for n, a in enumerate(offered, 1)
     ]
 

@@ -43,6 +43,8 @@ class Profile:
     autocompact: bool  # whether it compacts a long conversation itself
     subagents: bool  # whether it can run subagents at a model and effort of their own
     state_files: tuple[str, ...]  # the files it keeps in bosun's state folder
+    display_name: str  # how bosun names it to a person
+    setup_preview: tuple[str, ...]  # the lines `bosun init`'s agent question shows for it
     setup_sessions: str = ""  # how `bosun init` says its repo sessions will run
     setup_note: str = ""  # what `bosun init` tells the person about running them on it
 

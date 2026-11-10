@@ -100,6 +100,8 @@ PROFILE = Profile(
     autocompact=True,
     subagents=True,
     state_files=(),
+    display_name="Claude Code",
+    setup_preview=("One Claude Code session per repo, and the orchestrator runs on it too.",),
 )
 MODEL_FLAG = re.compile(r"(?:^|\s)--model\s+(\S+)")
 EFFORT_SETTING = re.compile(r'"effortLevel":"([a-z]+)"')
