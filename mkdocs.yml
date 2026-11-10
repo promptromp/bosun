@@ -1,6 +1,7 @@
-# The docs site, https://promptromp.github.io/bosun/, built from docs/ and the root files in
-# tools/mkdocs_hooks.py (README.md is the home page). Build it with `uv run mkdocs build --strict`,
-# or preview it with `uv run mkdocs serve`; .github/workflows/docs.yml publishes it from main.
+# The docs site, https://promptromp.github.io/bosun/, built from docs/ (docs/index.md is the home
+# page, with theme/home.html) and the root files in tools/mkdocs_hooks.py. Build it with
+# `uv run mkdocs build --strict`, or preview it with `uv run mkdocs serve`;
+# .github/workflows/docs.yml publishes it from main.
 site_name: bosun
 site_description: Agents write the code. Bosun runs the rest of the day, and remembers it.
 site_url: https://promptromp.github.io/bosun/
@@ -9,35 +10,47 @@ repo_url: https://github.com/promptromp/bosun
 
 theme:
   name: material
+  # Our own look on top of Material: theme/ overrides its templates (fonts, the home page),
+  # docs/assets/site.css sets the type and colours.
+  custom_dir: theme
   logo: assets/logo.png
   favicon: assets/logo.png
-  font:
-    text: Merriweather Sans
-    code: Red Hat Mono
+  # Loaded by theme/main.html, with the weights the headings use.
+  font: false
   palette:
-    # Dark mode
-    - scheme: slate
+    - media: "(prefers-color-scheme)"
       toggle:
-        icon: material/weather-sunny
+        icon: material/brightness-auto
         name: Light mode
-      primary: teal
-      accent: amber
-    # Light mode
-    - scheme: default
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      primary: custom
+      accent: custom
       toggle:
         icon: material/weather-night
         name: Dark mode
-      primary: teal
-      accent: amber
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      primary: custom
+      accent: custom
+      toggle:
+        icon: material/brightness-auto
+        name: Follow the system
   features:
     - content.code.copy
     - navigation.footer
     - navigation.sections
     - navigation.tabs
+    - navigation.top
+    - search.highlight
     - search.suggest
+    - toc.follow
 
 hooks:
   - tools/mkdocs_hooks.py
+
+extra_css:
+  - assets/site.css
 
 # A prototype page with its own build; it stays a link to GitHub.
 exclude_docs: |
@@ -53,6 +66,7 @@ validation:
 markdown_extensions:
   - admonition
   - attr_list
+  - md_in_html
   - pymdownx.details
   - pymdownx.highlight:
       anchor_linenums: true
@@ -83,6 +97,7 @@ nav:
       - How a day runs: day.md
       - Commands: commands.md
       - Orchestrator: orchestrator.md
+      - The ledger: ledger.md
       - Permissions: permissions.md
       - Events: events.md
       - Knowledge: knowledge.md

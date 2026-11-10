@@ -1,8 +1,9 @@
 #!/bin/bash
 # The console page's JavaScript (console/app.js), checked with node when this machine has it:
 # `node --check` for syntax, then tests/js/app_check.js, which runs the script in a fake DOM and
-# renders views from real API models (tests/js/api_models.py). No npm packages. Without node it
-# says so and passes, so the hook and the smoke suite work everywhere.
+# renders views from real API models (tests/js/api_models.py). The docs site's examples
+# (docs/assets/home/examples.js) get the syntax check. No npm packages. Without node it says so and
+# passes, so the hook and the smoke suite work everywhere.
 # Usage: tests/js_check.sh
 set -uo pipefail
 
@@ -12,6 +13,7 @@ if ! command -v node >/dev/null 2>&1; then
   exit 0
 fi
 node --check "$ROOT/console/app.js" || exit 1
+node --check "$ROOT/docs/assets/home/examples.js" || exit 1
 models="$(mktemp)"
 trap 'rm -f "$models"' EXIT
 PYTHONDONTWRITEBYTECODE=1 python3 "$ROOT/tests/js/api_models.py" >"$models" || exit 1

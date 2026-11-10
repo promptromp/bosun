@@ -145,7 +145,7 @@ repos:
         # Not --quiet: it hides the warnings --strict counts, and the build then passes anyway.
         entry: env NO_MKDOCS_2_WARNING=1 uv run mkdocs build --strict
         language: system
-        files: ^(docs/|[A-Z_]+\.md$|mkdocs\.yml$|tools/(mkdocs_hooks|check_links)\.py$)
+        files: ^(docs/|theme/|[A-Z_]+\.md$|mkdocs\.yml$|tools/(mkdocs_hooks|check_links|docs_examples)\.py$|tests/fixtures/(console|knowledge)/)
         pass_filenames: false
       - id: unit-tests
         name: unit tests
@@ -153,13 +153,13 @@ repos:
         language: system
         types_or: [python, shell]
         pass_filenames: false
-      # The console page's JavaScript: node --check and a fake-DOM render (no npm packages); it
-      # passes with a note when node is not on PATH.
+      # The console page's JavaScript: node --check and a fake-DOM render (no npm packages), and
+      # the docs site's examples: node --check. It passes with a note when node is not on PATH.
       - id: js-check
-        name: console JS check (node, if present)
+        name: JS check (node, if present)
         entry: tests/js_check.sh
         language: system
-        files: ^(console/|tests/js|lib/console_)
+        files: ^(console/|tests/js|lib/console_|docs/assets/.*\.js$)
         pass_filenames: false
       - id: smoke-tests
         name: smoke tests (end to end)

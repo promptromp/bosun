@@ -1,0 +1,394 @@
+/* bosun's docs site: its own look on top of Material for MkDocs (mkdocs.yml, theme/).
+
+   The colours come from the logo's knot, and each one means something wherever it appears:
+   teal is bosun at work (links, buttons, what it did), amber is what waits for you (an approval,
+   a proposal to confirm). Ink and the pale "shallows" blue carry the rest. The type is Atkinson
+   Hyperlegible, made to be easy to read, at a comfortable size with short lines.
+
+   The home page's own layout and its examples are in assets/home/home.css. */
+
+:root {
+  --md-text-font: "Atkinson Hyperlegible Next";
+  --md-code-font: "Atkinson Hyperlegible Mono";
+  --bx-measure: 38rem; /* a guide's text column: about 75 characters */
+  --bx-radius: 8px;
+}
+
+[data-md-color-scheme="default"] {
+  --bx-ink: #132a3e;
+  --bx-muted: #4a5d6d;
+  --bx-bg: #fbfcfd;
+  --bx-surface: #ffffff;
+  --bx-shallows: #eaf4f7;
+  --bx-line: #d7e3e8;
+  --bx-teal: #0b7a72;
+  --bx-teal-soft: #e1f3f1;
+  --bx-amber: #e6a020;
+  --bx-amber-text: #8a5300;
+  --bx-amber-soft: #fdf1d8;
+  --bx-problem: #b42318;
+
+  --md-default-fg-color: var(--bx-ink);
+  --md-default-fg-color--light: #4a5d6d;
+  --md-default-fg-color--lighter: #8697a4;
+  --md-default-fg-color--lightest: #d7e3e8;
+  --md-default-bg-color: var(--bx-bg);
+  --md-default-bg-color--light: #ffffffb3;
+  --md-typeset-color: var(--bx-ink);
+  --md-typeset-a-color: var(--bx-teal);
+  --md-primary-fg-color: var(--bx-teal);
+  --md-primary-fg-color--light: #2b9a90;
+  --md-primary-fg-color--dark: #075a54;
+  --md-primary-bg-color: #ffffff;
+  --md-primary-bg-color--light: #ffffffb3;
+  --md-accent-fg-color: #075a54;
+  --md-accent-fg-color--transparent: #0b7a721a;
+  --md-accent-bg-color: #ffffff;
+  --md-code-bg-color: #eef4f6;
+  --md-code-fg-color: #1d3448;
+  --md-footer-bg-color: #132a3e;
+  --md-footer-bg-color--dark: #0e2132;
+}
+
+[data-md-color-scheme="slate"] {
+  --bx-ink: #e2ecef;
+  --bx-muted: #9db1bc;
+  --bx-bg: #0b1822;
+  --bx-surface: #11222e;
+  --bx-shallows: #0f2a33;
+  --bx-line: #22394a;
+  --bx-teal: #4cc3b5;
+  --bx-teal-soft: #0f3532;
+  --bx-amber: #f2b74a;
+  --bx-amber-text: #f5c46b;
+  --bx-amber-soft: #382a0f;
+  --bx-problem: #ff8a7a;
+
+  --md-hue: 200;
+  --md-default-fg-color: var(--bx-ink);
+  --md-default-fg-color--light: #9db1bc;
+  --md-default-fg-color--lighter: #6b8291;
+  --md-default-fg-color--lightest: #22394a;
+  --md-default-bg-color: var(--bx-bg);
+  --md-default-bg-color--light: #0b1822b3;
+  --md-typeset-color: var(--bx-ink);
+  --md-typeset-a-color: var(--bx-teal);
+  --md-primary-fg-color: var(--bx-teal);
+  --md-primary-fg-color--light: #7dd8cd;
+  --md-primary-fg-color--dark: #2f9e92;
+  --md-primary-bg-color: #062421;
+  --md-primary-bg-color--light: #062421b3;
+  --md-accent-fg-color: #7dd8cd;
+  --md-accent-fg-color--transparent: #4cc3b51a;
+  --md-accent-bg-color: #062421;
+  --md-code-bg-color: #11222e;
+  --md-code-fg-color: #d6e3e8;
+  --md-footer-bg-color: #08131b;
+  --md-footer-bg-color--dark: #050d13;
+}
+
+body {
+  background: var(--bx-bg);
+  -webkit-font-smoothing: antialiased;
+}
+
+/* ---------- Header and tabs: quiet, on the page's own background ---------- */
+
+.md-header {
+  background: var(--bx-bg);
+  color: var(--bx-ink);
+  box-shadow: none;
+  border-bottom: 1px solid var(--bx-line);
+}
+.md-header[data-md-state="shadow"],
+.md-header--shadow {
+  box-shadow: none;
+}
+.md-header__title {
+  font-weight: 800;
+  font-size: 0.95rem;
+  letter-spacing: -0.01em;
+}
+.md-header__button.md-logo img {
+  height: 1.5rem;
+}
+.md-tabs {
+  background: var(--bx-bg);
+  color: var(--bx-ink);
+  border-bottom: 1px solid var(--bx-line);
+}
+.md-tabs__link {
+  font-size: 0.72rem;
+  font-weight: 500;
+  opacity: 0.8;
+}
+.md-tabs__item--active .md-tabs__link,
+.md-tabs__link:hover {
+  color: var(--bx-teal);
+  opacity: 1;
+}
+.md-search__form {
+  background: var(--md-code-bg-color);
+  border-radius: 999px;
+}
+.md-search__input {
+  color: var(--bx-ink);
+}
+.md-search__input::placeholder,
+.md-search__icon {
+  color: var(--bx-muted);
+}
+.md-source {
+  color: var(--bx-muted);
+}
+
+/* ---------- Layout: a wider page, a guide's text at a reading measure ---------- */
+
+.md-grid {
+  max-width: 76rem;
+}
+.md-main__inner {
+  margin-top: 1.25rem;
+}
+.md-content__inner {
+  max-width: var(--bx-measure);
+  margin-left: auto;
+  margin-right: auto;
+  padding-bottom: 3rem;
+}
+@media screen and (min-width: 76.25em) {
+  .md-content__inner {
+    margin-left: 2.4rem;
+  }
+}
+
+.md-nav {
+  font-size: 0.7rem;
+}
+.md-nav__title {
+  font-weight: 700;
+}
+.md-nav__link--active,
+.md-nav__item .md-nav__link--active {
+  color: var(--bx-teal);
+  font-weight: 700;
+}
+.md-sidebar--secondary .md-nav__title {
+  color: var(--bx-muted);
+  font-weight: 500;
+  background: transparent;
+  box-shadow: none;
+}
+
+/* ---------- Type: easy to read ---------- */
+
+.md-typeset {
+  font-size: 0.85rem; /* 17px */
+  line-height: 1.65;
+  font-feature-settings: "kern";
+}
+.md-typeset h1,
+.md-typeset h2,
+.md-typeset h3,
+.md-typeset h4 {
+  color: var(--bx-ink);
+  letter-spacing: -0.015em;
+}
+.md-typeset h1 {
+  font-size: 2.1rem;
+  font-weight: 800;
+  line-height: 1.1;
+  letter-spacing: -0.025em;
+  margin: 0.4em 0 0.6em;
+}
+.md-typeset h1 + p {
+  font-size: 1.12em;
+  color: var(--bx-muted);
+}
+.md-typeset h2 {
+  font-size: 1.35rem;
+  font-weight: 800;
+  line-height: 1.2;
+  margin: 2.6em 0 0.7em;
+  padding-top: 1.4em;
+  border-top: 1px solid var(--bx-line);
+}
+.md-typeset h3 {
+  font-size: 1.02rem;
+  font-weight: 700;
+  margin: 2em 0 0.5em;
+}
+.md-typeset h4 {
+  font-size: 0.9rem;
+  font-weight: 700;
+}
+.md-typeset p,
+.md-typeset ul,
+.md-typeset ol {
+  margin-bottom: 1em;
+}
+.md-typeset li {
+  margin-bottom: 0.4em;
+}
+.md-typeset strong {
+  font-weight: 700;
+}
+.md-typeset a {
+  text-decoration: underline;
+  text-decoration-thickness: 1px;
+  text-underline-offset: 0.18em;
+  text-decoration-color: color-mix(in srgb, var(--bx-teal) 45%, transparent);
+}
+.md-typeset a:hover {
+  text-decoration-color: currentColor;
+}
+.md-typeset .headerlink {
+  text-decoration: none;
+}
+.md-typeset hr {
+  border-bottom-color: var(--bx-line);
+}
+
+/* Code: inline marks and blocks with a quiet surface; a title reads as the block's label */
+.md-typeset code {
+  border-radius: 4px;
+  font-size: 0.86em;
+  padding: 0.1em 0.35em;
+}
+.md-typeset pre > code {
+  padding: 1em 1.2em;
+  font-size: 0.82em;
+  line-height: 1.6;
+}
+.md-typeset .highlight,
+.md-typeset pre {
+  border-radius: var(--bx-radius);
+}
+.md-typeset .highlight span.filename {
+  background: var(--bx-shallows);
+  border-bottom: 1px solid var(--bx-line);
+  border-radius: var(--bx-radius) var(--bx-radius) 0 0;
+  font-weight: 500;
+  font-size: 0.75em;
+  color: var(--bx-muted);
+}
+.md-typeset .highlight span.filename + pre,
+.md-typeset .highlight span.filename + pre > code {
+  border-radius: 0 0 var(--bx-radius) var(--bx-radius);
+}
+
+/* Tables: room to breathe, no heavy grid */
+.md-typeset table:not([class]) {
+  font-size: 0.8em;
+  border: 1px solid var(--bx-line);
+  border-radius: var(--bx-radius);
+  box-shadow: none;
+}
+.md-typeset table:not([class]) th {
+  background: var(--bx-shallows);
+  font-weight: 700;
+}
+.md-typeset table:not([class]) td,
+.md-typeset table:not([class]) th {
+  padding: 0.75em 1em;
+  border-top-color: var(--bx-line);
+}
+
+/* Admonitions: a quiet panel. Folded details: a line you open, like a question you might have. */
+.md-typeset .admonition,
+.md-typeset .admonition.note {
+  border: 1px solid var(--bx-line);
+  border-radius: var(--bx-radius);
+  box-shadow: none;
+  font-size: 0.85em;
+  background: var(--bx-surface);
+}
+.md-typeset details,
+.md-typeset details.note {
+  border: 0;
+  border-top: 1px solid var(--bx-line);
+  border-bottom: 1px solid var(--bx-line);
+  border-radius: 0;
+  box-shadow: none;
+  background: transparent;
+  font-size: 0.9em;
+  margin: 1.4em 0;
+  padding: 0;
+}
+.md-typeset details > summary,
+.md-typeset details.note > summary {
+  background: transparent;
+  border: 0;
+  font-weight: 700;
+  padding: 0.7em 0 0.7em 1.6rem;
+  color: var(--bx-ink);
+}
+.md-typeset details > summary:hover {
+  color: var(--bx-teal);
+}
+.md-typeset details > summary::before,
+.md-typeset details.note > summary::before {
+  display: none;
+}
+.md-typeset details > summary::after {
+  left: 0;
+  right: auto;
+  top: 0.75em;
+  background-color: var(--bx-teal);
+}
+.md-typeset details > :not(summary) {
+  margin-left: 0;
+  margin-right: 0;
+}
+.md-typeset details[open] > summary {
+  margin-bottom: 0.4em;
+}
+.md-typeset .admonition-title {
+  font-weight: 700;
+}
+
+/* Buttons: teal for what bosun does next */
+.md-typeset .md-button {
+  border-radius: 999px;
+  font-weight: 700;
+  font-size: 0.78rem;
+  padding: 0.55em 1.3em;
+  border-width: 1.5px;
+  color: var(--bx-ink);
+  border-color: var(--bx-line);
+  text-decoration: none;
+}
+.md-typeset .md-button--primary {
+  background: var(--bx-teal);
+  border-color: var(--bx-teal);
+  color: var(--md-primary-bg-color);
+}
+.md-typeset .md-button:hover,
+.md-typeset .md-button:focus {
+  background: var(--bx-teal);
+  border-color: var(--bx-teal);
+  color: var(--md-primary-bg-color);
+}
+
+:focus-visible {
+  outline: 2px solid var(--bx-teal);
+  outline-offset: 2px;
+}
+
+/* Mermaid diagrams take the site's colours */
+.mermaid {
+  --md-mermaid-font-family: var(--md-text-font-family);
+  --md-mermaid-edge-color: var(--bx-muted);
+  --md-mermaid-node-bg-color: var(--bx-teal-soft);
+  --md-mermaid-node-fg-color: var(--bx-ink);
+  --md-mermaid-label-bg-color: var(--bx-bg);
+  --md-mermaid-label-fg-color: var(--bx-ink);
+}
+
+/* Footer */
+.md-footer {
+  color: #d6e3e8;
+}
+.md-footer-meta {
+  background: var(--md-footer-bg-color--dark);
+}

@@ -1,0 +1,834 @@
+/* The home page (theme/home.html, docs/index.md): a wide page of sections beside an "On this page"
+   rail, and the live examples drawn by examples.js. Colours and type come from ../site.css:
+   teal is bosun at work, amber is what waits for you. */
+
+/* ---------- The page ---------- */
+
+.md-main__inner:has(.bx-home) {
+  max-width: none;
+  margin: 0;
+}
+.bx-home {
+  overflow-x: clip;
+}
+.bx-home__grid {
+  max-width: 74rem;
+  margin: 0 auto;
+  padding: 0 1.2rem 3rem;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 8.5rem;
+  column-gap: 3rem;
+  font-size: 0.85rem;
+}
+.bx-home__grid > section {
+  grid-column: 1;
+  min-width: 0;
+}
+.bx-home__grid > .bx-hero {
+  grid-column: 1 / -1;
+}
+.bx-home .headerlink {
+  display: none;
+}
+
+.bx-home h1,
+.bx-home h2,
+.bx-home h3 {
+  border: 0;
+  padding: 0;
+}
+.bx-home h2 {
+  font-size: 1.7rem;
+  font-weight: 800;
+  line-height: 1.12;
+  letter-spacing: -0.025em;
+  margin: 0 0 0.6rem;
+}
+.bx-home h3 {
+  font-size: 0.95rem;
+  margin: 0 0 0.4rem;
+}
+.bx-lead {
+  font-size: 1.12em;
+  line-height: 1.55;
+  color: var(--bx-muted);
+  max-width: 40em;
+}
+.bx-fine {
+  font-size: 0.85em;
+  color: var(--bx-muted);
+}
+
+/* ---------- Hero: the pitch, and the one line to install ---------- */
+
+.bx-hero {
+  position: relative;
+  isolation: isolate;
+  display: grid;
+  grid-template-columns: minmax(0, 7fr) minmax(0, 5fr);
+  gap: 3.5rem;
+  align-items: center;
+  padding: 4rem 0 3.6rem;
+}
+.bx-hero::before {
+  content: "";
+  position: absolute;
+  inset: 0 -100vmax;
+  z-index: -1;
+  background: var(--bx-shallows);
+  border-bottom: 1px solid var(--bx-line);
+}
+.bx-home .bx-hero__title {
+  font-size: clamp(2rem, 3.7vw, 2.85rem);
+  font-weight: 800;
+  line-height: 1.05;
+  letter-spacing: -0.035em;
+  margin: 0 0 1.2rem;
+  text-wrap: balance;
+}
+.bx-hero .bx-lead {
+  font-size: 1.2em;
+  color: var(--bx-ink);
+  opacity: 0.86;
+}
+.bx-hero__actions {
+  margin: 1.8rem 0 1rem;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.6rem;
+}
+.bx-hero__actions .md-button {
+  margin: 0;
+}
+.bx-install {
+  background: var(--bx-surface);
+  border: 1px solid var(--bx-line);
+  border-radius: 14px;
+  padding: 1.4rem 1.5rem 1.2rem;
+  box-shadow: 0 18px 40px -28px rgba(19, 42, 62, 0.45);
+}
+.bx-home .bx-install__title {
+  font-size: 1rem;
+  letter-spacing: -0.01em;
+  margin-bottom: 0.3rem;
+}
+.bx-install p {
+  margin: 0.4rem 0;
+}
+.bx-install .highlight {
+  margin: 0.8rem 0;
+}
+
+/* ---------- Sections ---------- */
+
+.bx-section {
+  position: relative;
+  padding: 3.6rem 0 3.2rem;
+}
+.bx-section + .bx-section::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  left: -100vmax;
+  right: -100vmax;
+  border-top: 1px solid var(--bx-line);
+}
+
+/* Steps: a real sequence, so numbered */
+.bx-home .md-typeset .bx-steps {
+  counter-reset: bx-step;
+  list-style: none;
+  margin: 2rem 0 0;
+  padding: 0;
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 1.8rem;
+}
+.bx-home .md-typeset .bx-steps > li {
+  counter-increment: bx-step;
+  margin: 0;
+  padding-top: 2.1rem;
+  position: relative;
+  color: var(--bx-muted);
+}
+.bx-steps > li::before {
+  content: counter(bx-step);
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 1.5rem;
+  height: 1.5rem;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  font-weight: 800;
+  font-size: 0.75em;
+  color: var(--bx-teal);
+  border: 1.5px solid var(--bx-teal);
+}
+.bx-steps strong {
+  color: var(--bx-ink);
+}
+.bx-home .md-typeset .bx-steps--stacked {
+  grid-template-columns: 1fr;
+  gap: 1.2rem;
+  margin-top: 0;
+}
+.bx-home .md-typeset .bx-steps--stacked > li {
+  padding: 0 0 0 2.4rem;
+}
+.bx-home .md-typeset details {
+  margin-top: 2.2rem;
+}
+
+/* An example: its story on the left, the live example on the right */
+.bx-example__body {
+  display: grid;
+  grid-template-columns: minmax(0, 5fr) minmax(0, 7fr);
+  gap: 2.6rem;
+  align-items: start;
+  margin-top: 2rem;
+}
+
+/* Guides and today */
+.bx-guides {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 2rem;
+  margin-top: 1.4rem;
+}
+.bx-guide p {
+  color: var(--bx-muted);
+  margin: 0 0 0.6rem;
+}
+.bx-home .md-typeset .bx-guide ul,
+.bx-home .md-typeset .bx-links {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.bx-home .md-typeset .bx-guide li {
+  margin: 0 0 0.3rem;
+}
+.bx-home .md-typeset .bx-links {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem 1.6rem;
+  margin-top: 1.2rem;
+}
+.bx-home .md-typeset .bx-links li {
+  margin: 0;
+}
+.bx-today ul {
+  max-width: 44em;
+}
+
+/* ---------- The rail ---------- */
+
+.bx-rail {
+  grid-column: 2;
+  grid-row: 2 / span 12;
+  align-self: start;
+  position: sticky;
+  top: 6.5rem;
+  margin-top: 3.6rem;
+  font-size: 0.68rem;
+}
+.bx-home .md-typeset .bx-rail__title {
+  font-weight: 700;
+  margin: 0 0 0.5rem;
+  color: var(--bx-ink);
+}
+.bx-home .md-typeset .bx-rail ul {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  border-left: 1.5px solid var(--bx-line);
+}
+.bx-home .md-typeset .bx-rail li {
+  margin: 0;
+}
+.bx-home .md-typeset .bx-rail a {
+  display: block;
+  padding: 0.3rem 0 0.3rem 0.8rem;
+  margin-left: -1.5px;
+  border-left: 1.5px solid transparent;
+  color: var(--bx-muted);
+  text-decoration: none;
+}
+.bx-home .md-typeset .bx-rail a:hover,
+.bx-home .md-typeset .bx-rail a.is-current {
+  color: var(--bx-teal);
+  border-left-color: var(--bx-teal);
+}
+
+/* ---------- The live examples: shared parts ---------- */
+
+/* Their lists are layouts, not prose: none of Material's bullets, indents or block display. */
+.bx-home .md-typeset :is(.bx-tree, .bx-machine, .bx-needs, .bx-done, .bx-facts, .bx-steps, .bx-links) {
+  list-style: none;
+  margin-left: 0;
+  margin-right: 0;
+  padding: 0;
+}
+.bx-home .md-typeset :is(.bx-tree, .bx-machine, .bx-needs, .bx-done, .bx-facts, .bx-steps, .bx-links) > li {
+  margin-left: 0;
+  margin-right: 0;
+  list-style: none;
+}
+.bx-home .md-typeset .bx-machine,
+.bx-home .md-typeset .bx-links {
+  display: flex;
+}
+
+.bx-demo {
+  background: var(--bx-surface);
+  border: 1px solid var(--bx-line);
+  border-radius: 14px;
+  padding: 1.1rem 1.2rem 1.2rem;
+  font-size: 0.8rem;
+  line-height: 1.5;
+  min-width: 0;
+}
+.bx-demo--wide {
+  margin-top: 2rem;
+}
+.bx-demo__fallback {
+  color: var(--bx-muted);
+}
+.bx-demo__bar {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 1rem;
+  margin: 0 0 0.9rem;
+  font-size: 0.85em;
+  color: var(--bx-muted);
+}
+.bx-demo__bar strong {
+  color: var(--bx-ink);
+  font-size: 1.1em;
+}
+.bx-demo button {
+  font: inherit;
+  cursor: pointer;
+}
+.bx-btn {
+  border: 1.5px solid var(--bx-line);
+  background: var(--bx-surface);
+  color: var(--bx-ink);
+  border-radius: 999px;
+  padding: 0.25em 0.9em;
+  font-weight: 700;
+  font-size: 0.92em;
+}
+.bx-btn:hover {
+  border-color: var(--bx-teal);
+  color: var(--bx-teal);
+}
+.bx-btn--go {
+  background: var(--bx-teal);
+  border-color: var(--bx-teal);
+  color: var(--md-primary-bg-color);
+}
+.bx-btn--go:hover {
+  color: var(--md-primary-bg-color);
+  filter: brightness(1.08);
+}
+.bx-btn--quiet {
+  border-color: transparent;
+  color: var(--bx-muted);
+  font-weight: 500;
+}
+.bx-id {
+  font-family: var(--md-code-font-family);
+  font-size: 0.88em;
+  color: var(--bx-muted);
+  overflow-wrap: anywhere;
+}
+
+/* A state, coloured by what it means for you */
+.bx-state {
+  display: inline-block;
+  white-space: nowrap;
+  border-radius: 999px;
+  padding: 0.05em 0.65em;
+  font-size: 0.85em;
+  font-weight: 700;
+  background: var(--bx-teal-soft);
+  color: var(--bx-teal);
+}
+.bx-state--you {
+  background: var(--bx-amber-soft);
+  color: var(--bx-amber-text);
+}
+.bx-state--closed {
+  background: transparent;
+  color: var(--bx-muted);
+  border: 1px solid var(--bx-line);
+}
+
+/* What bosun answered: a moved item, or a refusal in its own words */
+.bx-said {
+  margin-top: 0.9rem;
+  border-radius: 10px;
+  padding: 0.7rem 0.9rem;
+  background: var(--bx-teal-soft);
+  color: var(--bx-ink);
+}
+.bx-said--no {
+  background: var(--bx-amber-soft);
+}
+.bx-said b {
+  display: block;
+  margin-bottom: 0.2rem;
+}
+.bx-said code {
+  font-size: 0.85em;
+}
+
+/* ---------- The ledger example ---------- */
+
+.bx-tree {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.bx-home .md-typeset .bx-tree li {
+  margin: 0;
+}
+.bx-tree__row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 0.2rem 0.8rem;
+  align-items: center;
+  width: 100%;
+  text-align: left;
+  border: 1px solid transparent;
+  background: none;
+  color: inherit;
+  border-radius: 10px;
+  padding: 0.45rem 0.6rem;
+}
+.bx-tree__row:hover {
+  background: var(--bx-shallows);
+}
+.bx-tree__row[aria-pressed="true"] {
+  border-color: var(--bx-teal);
+  background: var(--bx-teal-soft);
+}
+.bx-tree__what {
+  display: block;
+}
+.bx-tree__rel {
+  color: var(--bx-muted);
+  font-size: 0.88em;
+  margin-right: 0.35em;
+}
+.bx-tree__title {
+  font-weight: 700;
+}
+.bx-tree__row--done .bx-tree__title {
+  font-weight: 500;
+  color: var(--bx-muted);
+}
+.bx-tree__depth-1 {
+  padding-left: 1.4rem;
+}
+.bx-tree__depth-2 {
+  padding-left: 2.8rem;
+}
+.bx-tree [class*="bx-tree__depth-"] {
+  position: relative;
+}
+.bx-tree__depth-1::before,
+.bx-tree__depth-2::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: 50%;
+  width: 0.7rem;
+  border-left: 1.5px solid var(--bx-line);
+  border-bottom: 1.5px solid var(--bx-line);
+  border-bottom-left-radius: 6px;
+}
+.bx-tree__depth-1::before {
+  left: 0.6rem;
+}
+.bx-tree__depth-2::before {
+  left: 2rem;
+}
+
+.bx-item {
+  border-top: 1px solid var(--bx-line);
+  margin-top: 0.9rem;
+  padding-top: 0.9rem;
+}
+.bx-item__head {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.2rem 0.7rem;
+  align-items: baseline;
+}
+.bx-item__kind {
+  font-weight: 800;
+}
+.bx-item__desc {
+  color: var(--bx-muted);
+  margin: 0.3rem 0 0.8rem;
+}
+.bx-machine {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+  margin: 0.4rem 0 0.9rem;
+  padding: 0;
+  list-style: none;
+}
+.bx-home .md-typeset .bx-machine li {
+  margin: 0;
+}
+.bx-machine__state {
+  border: 1px dashed var(--bx-line);
+  border-radius: 6px;
+  padding: 0.1em 0.55em;
+  color: var(--bx-muted);
+  font-size: 0.9em;
+}
+.bx-machine__state--now {
+  border-style: solid;
+  border-color: var(--bx-teal);
+  background: var(--bx-teal);
+  color: var(--md-primary-bg-color);
+  font-weight: 700;
+}
+.bx-machine__state--next {
+  border-style: solid;
+  color: var(--bx-ink);
+}
+.bx-moves {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.4rem;
+}
+.bx-moves__label {
+  color: var(--bx-muted);
+  margin-right: 0.2rem;
+}
+.bx-proof {
+  margin-top: 0.7rem;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+/* ---------- "Needs you" ---------- */
+
+.bx-needs {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.bx-home .md-typeset .bx-needs > li {
+  margin: 0 0 0.6rem;
+  border: 1px solid var(--bx-line);
+  border-left: 4px solid var(--bx-amber);
+  border-radius: 10px;
+  padding: 0.7rem 0.9rem;
+}
+.bx-needs__title {
+  font-weight: 700;
+}
+.bx-needs__action {
+  margin: 0.35rem 0 0.6rem;
+  font-size: 0.95em;
+  overflow-wrap: anywhere;
+}
+.bx-needs__action--command {
+  font-family: var(--md-code-font-family);
+  font-size: 0.85em;
+  color: var(--bx-muted);
+}
+.bx-needs textarea {
+  width: 100%;
+  font: inherit;
+  color: var(--bx-ink);
+  background: var(--bx-bg);
+  border: 1.5px solid var(--bx-line);
+  border-radius: 8px;
+  padding: 0.5rem 0.6rem;
+  resize: vertical;
+  min-height: 3.5rem;
+}
+.bx-needs__changed {
+  color: var(--bx-amber-text);
+  font-weight: 700;
+  margin: 0.3rem 0 0.4rem;
+}
+.bx-needs__buttons {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+}
+.bx-done {
+  list-style: none;
+  margin: 0.9rem 0 0;
+  padding: 0;
+  color: var(--bx-muted);
+}
+.bx-home .md-typeset .bx-done li {
+  margin: 0 0 0.35rem;
+  padding-left: 1.3rem;
+  position: relative;
+}
+.bx-done li::before {
+  content: "";
+  position: absolute;
+  left: 0.15rem;
+  top: 0.45em;
+  width: 0.55rem;
+  height: 0.3rem;
+  border-left: 2px solid var(--bx-teal);
+  border-bottom: 2px solid var(--bx-teal);
+  transform: rotate(-45deg);
+}
+
+/* ---------- The knowledge map ---------- */
+
+.bx-map-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 7fr) minmax(0, 5fr);
+  gap: 1.4rem;
+  align-items: start;
+}
+.bx-map-layout .bx-item {
+  border-top: 0;
+  margin-top: 0;
+  padding-top: 0;
+}
+
+.bx-map {
+  display: block;
+  width: 100%;
+  height: auto;
+  border-radius: 10px;
+  background: var(--bx-shallows);
+}
+.bx-map__edge {
+  stroke: var(--bx-muted);
+  stroke-opacity: 0.55;
+  stroke-width: 2.5;
+}
+.bx-map__edge--proposed {
+  stroke: var(--bx-amber);
+  stroke-opacity: 0.9;
+  stroke-dasharray: 5 5;
+}
+.bx-map__edge-label {
+  fill: var(--bx-muted);
+  font-size: 19px;
+  paint-order: stroke;
+  stroke: var(--bx-shallows);
+  stroke-width: 6px;
+  stroke-linejoin: round;
+}
+.bx-map__node {
+  cursor: pointer;
+  transition: transform 450ms cubic-bezier(0.2, 0.7, 0.2, 1);
+}
+.bx-map__node circle {
+  fill: var(--bx-surface);
+  stroke: var(--bx-teal);
+  stroke-width: 4;
+}
+.bx-map__node--center circle {
+  fill: var(--bx-teal);
+}
+.bx-map__node text {
+  fill: var(--bx-ink);
+  font-size: 25px;
+  font-weight: 700;
+  paint-order: stroke;
+  stroke: var(--bx-shallows);
+  stroke-width: 5px;
+  stroke-linejoin: round;
+}
+.bx-map__node:hover circle,
+.bx-map__node:focus-visible circle {
+  stroke-width: 7;
+}
+.bx-map__node:focus {
+  outline: none;
+}
+.bx-facts {
+  list-style: none;
+  margin: 0.4rem 0 0;
+  padding: 0;
+}
+.bx-home .md-typeset .bx-facts > li {
+  margin: 0;
+  padding: 0.6rem 0;
+  border-top: 1px solid var(--bx-line);
+}
+.bx-fact__line {
+  display: flex;
+  justify-content: space-between;
+  gap: 0.8rem;
+  align-items: baseline;
+}
+.bx-fact__sources {
+  color: var(--bx-muted);
+  font-size: 0.88em;
+  margin-top: 0.15rem;
+}
+.bx-fact__review {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  margin-top: 0.45rem;
+}
+
+/* ---------- A day with bosun ---------- */
+
+.bx-day__top {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 1.2rem;
+  align-items: start;
+}
+.bx-day__time {
+  font-size: 2.2rem;
+  font-weight: 800;
+  letter-spacing: -0.03em;
+  line-height: 1;
+  font-variant-numeric: tabular-nums;
+}
+.bx-day__what {
+  font-size: 1.05em;
+  min-height: 3em;
+}
+.bx-day__what--you {
+  color: var(--bx-amber-text);
+  font-weight: 700;
+}
+.bx-day__track {
+  position: relative;
+  margin: 1.2rem 0 0.4rem;
+}
+.bx-day__track input[type="range"] {
+  width: 100%;
+  accent-color: var(--bx-teal);
+  margin: 0;
+}
+.bx-day__ticks {
+  position: relative;
+  height: 0.8rem;
+  margin: 0 0.5rem;
+}
+.bx-day__tick {
+  position: absolute;
+  top: 0;
+  width: 2px;
+  height: 0.55rem;
+  background: var(--bx-line);
+  transform: translateX(-1px);
+}
+.bx-day__tick--you {
+  background: var(--bx-amber);
+  height: 0.8rem;
+  width: 3px;
+}
+.bx-day__scale {
+  display: flex;
+  justify-content: space-between;
+  color: var(--bx-muted);
+  font-size: 0.85em;
+}
+.bx-windows {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 0.6rem;
+  margin-top: 1.1rem;
+}
+.bx-window {
+  border: 1px solid var(--bx-line);
+  border-radius: 10px;
+  padding: 0.55rem 0.7rem;
+  min-height: 4.4rem;
+}
+.bx-window__name {
+  font-family: var(--md-code-font-family);
+  font-size: 0.85em;
+  color: var(--bx-muted);
+}
+.bx-window__status {
+  font-weight: 700;
+  margin-top: 0.15rem;
+}
+.bx-window__status::before {
+  content: "";
+  display: inline-block;
+  width: 0.5rem;
+  height: 0.5rem;
+  border-radius: 50%;
+  margin-right: 0.4rem;
+  background: var(--bx-line);
+  vertical-align: 0.05em;
+}
+.bx-window--working .bx-window__status::before {
+  background: var(--bx-teal);
+}
+.bx-window--you {
+  border-color: var(--bx-amber);
+  background: var(--bx-amber-soft);
+}
+.bx-window--you .bx-window__status::before {
+  background: var(--bx-amber);
+}
+.bx-window__doing {
+  color: var(--bx-muted);
+  font-size: 0.9em;
+}
+.bx-day__controls {
+  display: flex;
+  gap: 0.5rem;
+  margin-top: 1rem;
+}
+
+/* ---------- Narrow screens ---------- */
+
+@media screen and (max-width: 60em) {
+  .bx-home__grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .bx-rail {
+    display: none;
+  }
+  .bx-hero,
+  .bx-example__body,
+  .bx-guides {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 2rem;
+  }
+  .bx-hero {
+    padding: 2.6rem 0;
+  }
+  .bx-home .md-typeset .bx-steps {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 1.2rem;
+  }
+  .bx-windows {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .bx-map-layout {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .bx-map__node {
+    transition: none;
+  }
+}

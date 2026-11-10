@@ -12,8 +12,16 @@ on:
       - docs/**
       - "*.md"
       - mkdocs.yml
+      - theme/**
       - tools/mkdocs_hooks.py
       - tools/check_links.py
+      # The home page's examples are made from these when the site is built.
+      - tools/docs_examples.py
+      - lib/ledger.py
+      - lib/lineage.py
+      - lib/console_kg_graph.py
+      - tests/fixtures/console/acme-ledger.json
+      - tests/fixtures/knowledge/acme-import.jsonl
       - pyproject.toml
       - uv.lock
       - .github/workflows/docs.yml

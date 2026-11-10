@@ -189,7 +189,10 @@ of truth, so don't copy rules into this file.
   `docs/plans/`. A user-facing change goes in its part's guide. They are also the docs site
   (`mkdocs.yml`: its `nav` lists every page; `tools/mkdocs_hooks.py` adds the root pages and points
   links at the site; published by `.github/workflows/docs.yml`; guide: `docs/development.md`, "The
-  docs site"). A new page goes in `nav` and the guide table of `README.md`.
+  docs site"). The site's home page is `docs/index.md` with `theme/home.html`, its look `theme/` and
+  `docs/assets/site.css`, and its live examples `docs/assets/home/examples.js`, fed by
+  `tools/docs_examples.py` from bosun's own tables and fixtures. A new page goes in `nav` and the
+  guide table of `README.md`.
 
 ## Common changes
 
