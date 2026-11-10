@@ -110,6 +110,7 @@ nav:
       - Uninstalling: design/uninstall.md
       - Updating: design/update.md
       - Agents: design/harnesses.md
+      - Antigravity windows: design/antigravity.md
       - Connectors: design/connectors.md
       - Approvals: design/approvals.md
       - Events: design/events.md
