@@ -1,0 +1,12 @@
+The home page's masthead (home.css, .bx-hero): a fleet seen from above, one boat in amber leading.
+Made on 2026-11-10 with OpenAI's gpt-image-2 at 1536x1024, quality high, then saved as WebP at
+quality 80. To change them, keep the palette (docs/assets/site.css) and the open water on the left,
+where the headline sits.
+
+masthead-day.webp, for the light scheme:
+
+A calm, wide flat-vector illustration of the sea seen from directly above at early morning, like a beautifully designed nautical chart come to life. Soft layered shapes of shallow water in pale aqua and sea-glass blues, with thin smooth depth-contour lines. A loose formation of six small boats in the right half, drawn as simple slender shapes in deep teal and navy, each leaving a long fine white wake, heading toward the upper right; one small boat with a warm amber accent leads them. The left half is open, quiet pale water with subtle texture, leaving room for a headline. Palette strictly: pale aqua #eaf4f7, sea-glass #cfe6ec, mist #dbeef2, deep teal #0b7a72, navy #132a3e, a touch of amber #e6a020. Crisp, minimal, sophisticated, no gradients that look cheap. No text, no numbers, no letters, no labels, no people, no logos, no border.
+
+masthead-night.webp, for the dark scheme:
+
+A calm, wide flat-vector illustration of the sea seen from directly above at night, like a beautifully designed nautical chart in dark mode. Soft layered shapes of deep water in dark navy and deep teal blues, with thin smooth depth-contour lines a little lighter than the water. A loose formation of six small boats in the right half, drawn as simple slender shapes in muted sea-glass and pale teal, each leaving a long fine pale wake, heading toward the upper right; one small boat with a warm amber light leads them. The left half is open, quiet dark water with subtle texture, leaving room for a light headline. Palette strictly: night water #0b1822, deep water #0f2a33, harbour #11222e, teal #4cc3b5, sea-glass #9db1bc, a touch of amber #f2b74a. Crisp, minimal, sophisticated, low contrast overall so text stays readable. No text, no numbers, no letters, no labels, no people, no logos, no border, no stars, no moon.

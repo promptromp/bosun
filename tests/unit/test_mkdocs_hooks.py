@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import importlib.util
+import json
 import sys
 import tempfile
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "tools"))
@@ -115,9 +117,10 @@ class BuildTest(unittest.TestCase):
             "# Guide\n\n## Usage\n\nBack to [the start](../README.md).\n"
         )
         (self.root / "get.sh").write_text("echo hi\n")
-        (self.root / "README.md").write_text(
-            '# Widget\n\n<img src="docs/assets/logo.png">\n\n'
-            "See [usage](docs/guide.md#usage), [the script](get.sh) and [the roadmap](ROADMAP.md).\n"
+        (self.root / "README.md").write_text("# Widget\n\nGitHub's front page.\n")
+        (self.root / "docs" / "index.md").write_text(
+            '# Widget\n\n<img src="assets/logo.png">\n\n'
+            "See [usage](guide.md#usage), [the script](../get.sh) and [the roadmap](../ROADMAP.md).\n"
         )
         (self.root / "ROADMAP.md").write_text("# Roadmap\n\nNext: [usage](docs/guide.md#usage).\n")
         hooks = Path(mkdocs_hooks.__file__).resolve()
@@ -144,7 +147,12 @@ class BuildTest(unittest.TestCase):
         self.assertIn('href="https://github.com/acme/widget/blob/main/get.sh"', home)
         self.assertIn('src="assets/logo.png"', home)
         self.assertIn('href="../guide/#usage"', (site / "roadmap" / "index.html").read_text())
-        self.assertIn('href="../"', (site / "guide" / "index.html").read_text())
+
+    def test_the_readme_stays_github_s_front_page(self) -> None:
+        site = self.build()
+        self.assertFalse((site / "readme").exists())
+        guide = (site / "guide" / "index.html").read_text()
+        self.assertIn('href="https://github.com/acme/widget/blob/main/README.md"', guide)
 
     def test_a_glued_list_fails_the_strict_build(self) -> None:
         (self.root / "docs" / "guide.md").write_text("# Guide\n\n## Usage\n\nSteps:\n- one\n- two\n")
@@ -156,3 +164,22 @@ class BuildTest(unittest.TestCase):
             logged.output,
             ["WARNING:mkdocs.hooks.bosun:guide.md: put a blank line before the list after 'Steps:'"],
         )
+
+
+class HomeExamplesTest(unittest.TestCase):
+    """The home page, and only the home page, carries its examples' data."""
+
+    def context(self, template: str | None) -> dict[str, object]:
+        page = SimpleNamespace(meta={"template": template} if template else {})
+        config = SimpleNamespace(
+            config_file_path=str(Path(mkdocs_hooks.__file__).resolve().parents[1] / "mkdocs.yml")
+        )
+        return mkdocs_hooks.on_page_context({}, page, config, None)  # type: ignore[arg-type]
+
+    def test_the_home_page_gets_the_data(self) -> None:
+        data = json.loads(str(self.context(mkdocs_hooks.HOME_TEMPLATE)["examples"]))
+        self.assertEqual(set(data), {"ledger", "needs_you", "knowledge"})
+
+    def test_other_pages_do_not(self) -> None:
+        self.assertNotIn("examples", self.context(None))
+        self.assertNotIn("examples", self.context("main.html"))

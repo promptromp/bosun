@@ -119,6 +119,7 @@ The guides, design notes and roadmap are also a website, with search:
 | [How a day runs](docs/day.md) | What runs when: the morning, check-ins, the watchdog, the evening |
 | [Commands](docs/commands.md) | Every `bosun` command |
 | [Orchestrator](docs/orchestrator.md) | Chores, delegated tasks, the ledger, outreach, tasks, tickets, workstreams |
+| [The ledger](docs/ledger.md) | The record of every piece of work: kinds, states, rules, links, trackers |
 | [Permissions](docs/permissions.md) | What needs your approval, and approvals bound to the exact call |
 | [Events](docs/events.md) | Events from repo sessions and the Slack watcher |
 | [Knowledge](docs/knowledge.md) | The organizational knowledge graph |

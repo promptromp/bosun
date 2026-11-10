@@ -1,0 +1,33 @@
+{#- The home page (docs/index.md names this template): its sections side by side with an "On this
+    page" rail, no site navigation, and its live examples (docs/assets/home/), which read their data
+    from the JSON below (tools/docs_examples.py, through tools/mkdocs_hooks.py). -#}
+{% extends "main.html" %}
+
+{#- After the site's own stylesheet (extra_css), so that the home page's rules win at equal weight. -#}
+{% block extrahead %}
+  <link rel="stylesheet" href="{{ 'assets/home/home.css' | url }}">
+{% endblock %}
+
+{% block site_nav %}{% endblock %}
+
+{% block container %}
+  <div class="md-content bx-home" data-md-component="content">
+    <div class="md-typeset bx-home__grid">
+      {{ page.content }}
+      <nav class="bx-rail" aria-label="On this page">
+        <p class="bx-rail__title">On this page</p>
+        <ul>
+          {%- for top in page.toc %}{% for section in top.children %}
+          <li><a href="{{ section.url }}">{{ section.title }}</a></li>
+          {%- endfor %}{% endfor %}
+        </ul>
+      </nav>
+    </div>
+  </div>
+{% endblock %}
+
+{% block scripts %}
+  {{ super() }}
+  <script type="application/json" id="bosun-examples">{{ examples | safe }}</script>
+  <script src="{{ 'assets/home/examples.js' | url }}"></script>
+{% endblock %}

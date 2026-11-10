@@ -23,10 +23,9 @@ Issues and pull requests are welcome: see [CONTRIBUTING.md](../CONTRIBUTING.md) 
 
 ## The docs site
 
-The guides, design notes and plans in `docs/`, with `README.md` as the home page and `ROADMAP.md`,
-`CONTRIBUTING.md`, `SECURITY.md` and `CODE_OF_CONDUCT.md`, are also a website:
-[promptromp.github.io/bosun](https://promptromp.github.io/bosun/), built with
-[MkDocs](https://www.mkdocs.org/) and [Material for MkDocs](https://squidfunk.github.io/mkdocs-material/)
+The guides, design notes and plans in `docs/`, with `ROADMAP.md`, `CONTRIBUTING.md`, `SECURITY.md` and
+`CODE_OF_CONDUCT.md`, are also a website: [promptromp.github.io/bosun](https://promptromp.github.io/bosun/),
+built with [MkDocs](https://www.mkdocs.org/) and [Material for MkDocs](https://squidfunk.github.io/mkdocs-material/)
 from `mkdocs.yml`. `.github/workflows/docs.yml` publishes it each time `main` changes them.
 
 ```bash
@@ -39,6 +38,23 @@ files pages and points each link at its page on the site, or at the file on GitH
 have it. The strict build fails on a page missing from `nav` in `mkdocs.yml`, a broken link or anchor, and
 a list that starts on the line after a paragraph: GitHub shows a list there, the site one paragraph, so
 put a blank line before it.
+
+The site has its own look on top of Material:
+
+- **The theme** is `theme/` (Material's `custom_dir`): `main.html` loads the fonts, `home.html` lays out
+  the home page. The type and colours are `docs/assets/site.css`. Teal is bosun at work and amber is
+  what waits for you, wherever they appear; keep it so.
+- **The home page** is `docs/index.md`, not `README.md`, which stays GitHub's front page (a link to it
+  from the docs goes to GitHub). Its masthead is two generated pictures, by day and by night;
+  `docs/assets/home/masthead.txt` says how they were made. Its sections are HTML blocks with Markdown inside (`md_in_html`), and
+  a heading's `data-toc-label` is its name in the "On this page" rail.
+- **Its live examples** are drawn by `docs/assets/home/examples.js` (plain JavaScript, no build step,
+  styled by `docs/assets/home/home.css`) from JSON the page carries. `tools/docs_examples.py` makes that
+  JSON when the site is built, from bosun's own tables and its fictional acme data: the ledger's
+  `KINDS`, the console's fixture ledger and knowledge base, and the console's map walk. So a change to
+  those shows on the site, and `tests/unit/test_docs_examples.py` checks the data and that
+  `docs/ledger.md`'s state diagrams match `KINDS`. `mkdocs serve` does not reload `tools/`: restart it
+  after changing them.
 
 ## Which sandbox for what
 

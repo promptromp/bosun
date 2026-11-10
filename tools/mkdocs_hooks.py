@@ -1,15 +1,19 @@
-"""MkDocs hooks for the docs site (mkdocs.yml): the root files it shows, and links that work on both.
+"""MkDocs hooks for the docs site (mkdocs.yml): the root files it shows, links that work on both, and
+the home page's live examples.
 
 The Markdown is written for GitHub, where a relative link resolves in the repository and
 tools/check_links.py checks every one. The site is built from docs/ plus the root files in
 ROOT_PAGES, so these hooks:
 
-- add each root file in ROOT_PAGES as a page of the site (README.md is the home page);
+- add each root file in ROOT_PAGES as a page of the site (the home page is docs/index.md; README.md
+  stays GitHub's front page, and a link to it goes to GitHub);
 - point each relative link at what it names on the site, or, for anything the site does not have (a
   script, CLAUDE.md, a folder), at the file on GitHub.
 
 Links are found as tools/check_links.py finds them, outside code. `mkdocs build --strict` then checks
 the rewritten links and their anchors.
+
+The home page (template HOME_TEMPLATE) gets the data of its examples from tools/docs_examples.py.
 """
 
 from __future__ import annotations
@@ -23,6 +27,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from check_links import HTML_LINK, MARKDOWN_LINK, WEB, without_code
+from docs_examples import page_data, script_json
 
 
 # MkDocs only for types, and in on_files: the rest is plain Python, which the smoke suite's unit run
@@ -31,18 +36,19 @@ if TYPE_CHECKING:
     from mkdocs.config.defaults import MkDocsConfig
     from mkdocs.livereload import LiveReloadServer
     from mkdocs.structure.files import File, Files
+    from mkdocs.structure.nav import Navigation
     from mkdocs.structure.pages import Page
 
 
 # Root files the site shows, and their pages there. GitHub looks for these at the root.
 ROOT_PAGES = {
-    "README.md": "index.md",
     "ROADMAP.md": "roadmap.md",
     "CONTRIBUTING.md": "contributing.md",
     "SECURITY.md": "security.md",
     "CODE_OF_CONDUCT.md": "code-of-conduct.md",
 }
 BRANCH = "main"
+HOME_TEMPLATE = "home.html"  # theme/home.html: the home page and its live examples
 PARAGRAPH = re.compile(r"<p>(.*?)</p>", re.DOTALL)
 GLUED_LIST = re.compile(r"\n[ \t]*(?:[-*+]|1[.)])[ \t]")  # a line that would start a list on GitHub
 TAG = re.compile(r"<[^>]+>")
@@ -164,3 +170,15 @@ def on_page_markdown(markdown: str, page: Page, config: MkDocsConfig, files: Fil
         return rewritten(link, source, page.file.src_uri, by_source, blob)
 
     return with_links(markdown, change)
+
+
+def on_page_context(
+    context: dict[str, Any],
+    page: Page,
+    config: MkDocsConfig,
+    nav: Navigation,  # noqa: ARG001 (MkDocs passes it)
+) -> dict[str, Any]:
+    """The home page's examples read their data from the page, as JSON (`examples` in the template)."""
+    if page.meta.get("template") == HOME_TEMPLATE:
+        context["examples"] = script_json(page_data(repo_root(config)))
+    return context
