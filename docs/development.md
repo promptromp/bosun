@@ -45,7 +45,8 @@ The site has its own look on top of Material:
   the home page. The type and colours are `docs/assets/site.css`. Teal is bosun at work and amber is
   what waits for you, wherever they appear; keep it so.
 - **The home page** is `docs/index.md`, not `README.md`, which stays GitHub's front page (a link to it
-  from the docs goes to GitHub). Its sections are HTML blocks with Markdown inside (`md_in_html`), and
+  from the docs goes to GitHub). Its masthead is two generated pictures, by day and by night;
+  `docs/assets/home/masthead.txt` says how they were made. Its sections are HTML blocks with Markdown inside (`md_in_html`), and
   a heading's `data-toc-label` is its name in the "On this page" rail.
 - **Its live examples** are drawn by `docs/assets/home/examples.js` (plain JavaScript, no build step,
   styled by `docs/assets/home/home.css`) from JSON the page carries. `tools/docs_examples.py` makes that

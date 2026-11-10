@@ -70,12 +70,21 @@
   align-items: center;
   padding: 4rem 0 3.6rem;
 }
+/* The masthead: a fleet seen from above, one boat in amber leading (masthead.txt says how it was
+   made), across the full width, with open water on the left for the headline. Its lead boat shows
+   above the install box, and the rest through it. */
+[data-md-color-scheme="default"] {
+  --bx-masthead: url("masthead-day.webp");
+}
+[data-md-color-scheme="slate"] {
+  --bx-masthead: url("masthead-night.webp");
+}
 .bx-hero::before {
   content: "";
   position: absolute;
-  inset: 0 -100vmax;
+  inset: 0 calc(50% - 50vw);
   z-index: -1;
-  background: var(--bx-shallows);
+  background: var(--bx-shallows) var(--bx-masthead) 100% 38% / cover no-repeat;
   border-bottom: 1px solid var(--bx-line);
 }
 .bx-home .bx-hero__title {
@@ -100,8 +109,13 @@
 .bx-hero__actions .md-button {
   margin: 0;
 }
-.bx-install {
+.bx-hero__actions .md-button:not(.md-button--primary, :hover, :focus) {
   background: var(--bx-surface);
+}
+.bx-install {
+  background: color-mix(in srgb, var(--bx-surface) 80%, transparent);
+  -webkit-backdrop-filter: blur(5px);
+  backdrop-filter: blur(5px);
   border: 1px solid var(--bx-line);
   border-radius: 14px;
   padding: 1.4rem 1.5rem 1.2rem;
@@ -814,6 +828,14 @@
   }
   .bx-hero {
     padding: 2.6rem 0;
+  }
+  /* On a narrow screen the text runs over the whole picture: keep the water under it calm, and the
+     fleet low and to the right. */
+  .bx-hero::before {
+    background:
+      linear-gradient(var(--bx-shallows) 40%, color-mix(in srgb, var(--bx-shallows) 30%, transparent) 85%),
+      var(--bx-masthead) 72% 100% / auto 65% no-repeat,
+      var(--bx-shallows);
   }
   .bx-home .md-typeset .bx-steps {
     grid-template-columns: minmax(0, 1fr);
