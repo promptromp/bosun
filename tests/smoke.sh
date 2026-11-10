@@ -299,6 +299,48 @@ check "no attached client means no answer" bash -c 'source "$1/lib/common.sh"; t
 check "only idle, busy and shell sessions take input" bash -c 'source "$1/lib/common.sh"; agent_takes_input idle && agent_takes_input busy && agent_takes_input shell && ! agent_takes_input waiting && ! agent_takes_input ""' _ "$ROOT"
 check "run_with_timeout stops a slow command" bash -c 'source "$1/lib/common.sh"; start=$SECONDS; ! run_with_timeout 1 sleep 10 && [ $((SECONDS - start)) -lt 5 ]' _ "$ROOT"
 check "run_with_timeout passes a fast command's status" bash -c 'source "$1/lib/common.sh"; run_with_timeout 5 true && ! run_with_timeout 5 false' _ "$ROOT"
+fnc() { bash -c 'source "$1/lib/common.sh"; load_config; shift; "$@"' _ "$ROOT" "$@"; } # with the config's defaults
+check "harness_bin names the command the config gives each agent" test "$(fnc harness_bin codex)" = codex
+check "... and an override of it" test "$(BOSUN_CODEX_BIN=/opt/acme/codex fnc harness_bin codex)" = /opt/acme/codex
+check "harness_default_model: Codex has none unless configured" test "$(fnc harness_default_model codex)" = -
+check "... or the one in BOSUN_CODEX_MODEL" test "$(BOSUN_CODEX_MODEL=gpt-acme fnc harness_default_model codex)" = gpt-acme
+check "... and Claude Code's is BOSUN_MODEL's" test "$(BOSUN_MODEL=acme-model fnc harness_default_model claude)" = acme-model
+check "... or - when that is empty" test "$(BOSUN_MODEL="" fnc harness_default_model claude)" = -
+check "harness_bin of an agent with no profile exits 1 and prints nothing" bash -c 'source "$1/lib/common.sh"; load_config; out="$(harness_bin agy 2>&1)" && exit 1; [ -z "$out" ]' _ "$ROOT"
+check "... as does harness_default_model" bash -c 'source "$1/lib/common.sh"; load_config; out="$(harness_default_model agy 2>&1)" && exit 1; [ -z "$out" ]' _ "$ROOT"
+check "known_harnesses lists the agents in the order of AGENTS" test "$(fn known_harnesses)" = "claude codex"
+check "profile_field reads a column by its name" test "$(fn profile_field codex flags_key)" = BOSUN_CODEX_FLAGS
+mkdir -p "$WORK/broken-python"
+printf '#!/bin/sh\necho "python is broken" >&2\nexit 1\n' >"$WORK/broken-python/python3"
+chmod +x "$WORK/broken-python/python3"
+check "profiles that cannot be read stop the command, saying so" fails_with "could not read the agents' profiles" bash -c 'source "$1/lib/common.sh"; PATH="$2:$PATH"; harness_bin claude' _ "$ROOT" "$WORK/broken-python"
+cat >"$WORK/specs-agents.yml" <<YML
+sessions:
+  - name: cx-window
+    dir: $REPO_A
+    harness: codex
+  - name: cl-window
+    dir: $REPO_A
+    harness: claude
+  - name: cl-pinned
+    dir: $REPO_A
+    harness: claude
+    model: acme-pinned
+YML
+agent_specs() { BOSUN_SESSIONS_FILE="$WORK/specs-agents.yml" fnc window_specs; }
+spec_model() { awk -F'\t' -v name="$1" '$1 == name { print $4 }'; } # <window>: its model, from window_specs on stdin
+check "window_specs gives a Codex window BOSUN_CODEX_MODEL" test "$(BOSUN_CODEX_MODEL=gpt-acme agent_specs | spec_model cx-window)" = gpt-acme
+check "... or - when that is empty" test "$(BOSUN_CODEX_MODEL="" agent_specs | spec_model cx-window)" = -
+check "... a Claude Code window BOSUN_MODEL" test "$(BOSUN_MODEL=acme-model agent_specs | spec_model cl-window)" = acme-model
+check "... and a window's own model beats the default" test "$(BOSUN_MODEL=acme-model agent_specs | spec_model cl-pinned)" = acme-pinned
+cat >"$WORK/ghost-sessions.yml" <<YML
+sessions:
+  - name: ghost-agent
+    dir: $REPO_A
+    harness: agy
+YML
+check "a window's model reads right through a tab-separated read, in bash 3.2 too" test "$(BOSUN_SESSIONS_FILE="$WORK/specs-agents.yml" BOSUN_MODEL=acme-model /bin/bash -c 'source "$1/lib/common.sh"; load_config; need_profiles; IFS=$'"'"'\t'"'"' read -r model effort <<<"$(window_model_effort cl-window)"; echo "$model"' _ "$ROOT")" = acme-model
+check "bosun launch refuses a window whose agent has no profile" fails_with "no agent 'agy': bosun knows claude, codex" bash -c 'cd "$1" && BOSUN_SESSIONS_FILE="$2" BOSUN_LAUNCH_DRY_RUN=1 "$3" launch ghost-agent </dev/null' _ "$REPO_A" "$WORK/ghost-sessions.yml" "$BOSUN"
 
 echo "example configs"
 check "the generic example lists every setting with its default value" bash -c '

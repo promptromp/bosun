@@ -7,9 +7,63 @@
 # The orchestrator stands on Claude Code's hooks, plugins and permission settings, for now.
 ORCHESTRATOR_HARNESS="claude"
 
+# What each agent says it is and can do (Profile in lib/agent_files.py), asked of lib/agent_state.py once per
+# process: one tab-separated line per agent, in AGENTS order, with the columns of AGENT_PROFILE_COLUMNS.
+# A command substitution has its own copy of the variable, so a function that makes many of them reads the
+# profiles first (need_profiles), and what they inherit is filled in.
+AGENT_PROFILE_COLUMNS="harness bin_key flags_key model_key names_sessions remote_control autocompact subagents statuses"
+AGENT_PROFILES=""
+AGENT_PROFILES_ERROR=""
+
+# Fills AGENT_PROFILES; on a failure returns 1 with why in AGENT_PROFILES_ERROR (run_preflight goes on
+# without: it is what says python3 is missing).
+load_agent_profiles() {
+  [ -n "$AGENT_PROFILES" ] && return 0
+  local out
+  if ! out="$(python3 "$BOSUN_ROOT/lib/agent_state.py" profiles 2>&1)" || [ -z "$out" ]; then
+    AGENT_PROFILES_ERROR="could not read the agents' profiles (lib/agent_state.py profiles): $out"
+    return 1
+  fi
+  AGENT_PROFILES="$out"
+}
+
+need_profiles() { load_agent_profiles || die "$AGENT_PROFILES_ERROR"; }
+
+agent_profiles() {
+  need_profiles
+  printf '%s\n' "$AGENT_PROFILES"
+}
+
+# One field of <harness>'s profile, by its column name; exit 1 and nothing printed for a harness with none.
+profile_field() { # <harness> <field>
+  need_profiles
+  printf '%s\n' "$AGENT_PROFILES" | awk -F'\t' -v harness="$1" -v field="$2" -v columns="$AGENT_PROFILE_COLUMNS" '
+    BEGIN { n = split(columns, names, " "); for (i = 1; i <= n; i++) if (names[i] == field) column = i }
+    column && $1 == harness { print $column; found = 1; exit }
+    END { exit !found }'
+}
+
+# The agents bosun knows, as one line of words, in the order of AGENTS.
+known_harnesses() {
+  need_profiles
+  printf '%s\n' "$AGENT_PROFILES" | awk -F'\t' '{ printf "%s%s", (NR > 1 ? " " : ""), $1 } END { print "" }'
+}
+
+# Sets agent_bin_assignments to KEY=value for the setting that names each agent's command: what a process
+# started with `env` gets, since load_config exports nothing. Callers declare it local.
+agent_bin_env() {
+  local key IFS=$' \t\n' # bash 3.2 lets `IFS=$'\t' read <<<"$(f)"` reach the words f splits
+  agent_bin_assignments=()
+  need_profiles
+  for key in $(printf '%s\n' "$AGENT_PROFILES" | cut -f2); do
+    agent_bin_assignments+=("$key=${!key:-}")
+  done
+}
+
 agent_state() {
-  BOSUN_STATE_DIR="$BOSUN_STATE_DIR" BOSUN_CLAUDE_BIN="$BOSUN_CLAUDE_BIN" BOSUN_CODEX_BIN="$BOSUN_CODEX_BIN" \
-    python3 "$BOSUN_ROOT/lib/agent_state.py" "$@"
+  local agent_bin_assignments
+  agent_bin_env
+  env BOSUN_STATE_DIR="$BOSUN_STATE_DIR" "${agent_bin_assignments[@]}" python3 "$BOSUN_ROOT/lib/agent_state.py" "$@"
 }
 
 # What only Claude Code has, such as its bypass warning.
@@ -29,18 +83,16 @@ window_harness() { # <window>
 
 # The model a window on <harness> runs unless it says otherwise; each agent names its models differently.
 harness_default_model() { # <harness>
-  case "$1" in
-    codex) echo "${BOSUN_CODEX_MODEL:--}" ;;
-    *) echo "${BOSUN_MODEL:--}" ;;
-  esac
+  local key
+  key="$(profile_field "$1" model_key)" || return 1
+  echo "${!key:--}"
 }
 
 # The command that runs <harness>, as the config names it.
 harness_bin() { # <harness>
-  case "$1" in
-    codex) echo "$BOSUN_CODEX_BIN" ;;
-    *) echo "$BOSUN_CLAUDE_BIN" ;;
-  esac
+  local key
+  key="$(profile_field "$1" bin_key)" || return 1
+  echo "${!key:-}"
 }
 
 # Every agent this setup uses, as one line of words: what preflight and `bosun trust` go through.
@@ -55,14 +107,19 @@ harnesses_in_use() {
 # The check `bosun preflight`, `init` and `doctor` all start with. The agents' commands go along
 # explicitly, since load_config does not export them.
 run_preflight() { # [--quiet]
-  BOSUN_HARNESSES="$(harnesses_in_use)" BOSUN_CLAUDE_BIN="$BOSUN_CLAUDE_BIN" BOSUN_CODEX_BIN="$BOSUN_CODEX_BIN" \
+  local agent_bin_assignments=()
+  # Without python3 the commands cannot be named; preflight then says that python3 is what is missing.
+  if load_agent_profiles; then agent_bin_env; fi
+  env BOSUN_HARNESSES="$(harnesses_in_use)" ${agent_bin_assignments[@]+"${agent_bin_assignments[@]}"} \
     sh "$BOSUN_ROOT/lib/preflight.sh" "$@"
 }
 
 # Ask an agent's profile (lib/harnesses/<harness>.sh) something.
 from_profile() { # <harness> <function>
-  BOSUN_CLAUDE_BIN="$BOSUN_CLAUDE_BIN" BOSUN_CODEX_BIN="$BOSUN_CODEX_BIN" \
-    sh -c '. "$1"; "$2"' _ "$BOSUN_ROOT/lib/harnesses/$1.sh" "$2"
+  local agent_bin_assignments
+  agent_bin_env
+  # shellcheck disable=SC2016  # the dot-script's own $1 and $2, in the sh that env starts
+  env "${agent_bin_assignments[@]}" sh -c '. "$1"; "$2"' _ "$BOSUN_ROOT/lib/harnesses/$1.sh" "$2"
 }
 agent_display_name() { from_profile "$1" harness_name; }         # <harness>
 agent_installed_version() { from_profile "$1" harness_version; } # <harness>
@@ -83,9 +140,12 @@ agent_pid_under() {
 # PID of an agent's process under a tmux pane, session or not. Every screen before a session (first run,
 # trust) runs without one, so agent_pid_under cannot see it. Goes by the first word of its command line,
 # which is the name however it was installed: the npm one's process is called node.
-agent_pid_starting() { # <pane_pid>
-  local pid command agents
-  agents=" $(basename "$BOSUN_CLAUDE_BIN") $(basename "$BOSUN_CODEX_BIN") "
+agent_pid_starting() {                          # <pane_pid>
+  local pid command agents harness IFS=$' \t\n' # as in agent_bin_env
+  agents=" "
+  for harness in $(known_harnesses); do
+    agents="$agents$(basename "$(harness_bin "$harness")") "
+  done
   for pid in $(descendants "$1"); do
     command="$(ps -o command= -p "$pid" 2>/dev/null)"
     case "$agents" in
@@ -102,6 +162,7 @@ agent_pid_starting() { # <pane_pid>
 # the pid of one that has none yet.
 window_agent_facts() {
   local name pane_pid pid starting
+  need_profiles # once, before the substitutions below
   tmux_cmd list-windows -t "=$BOSUN_SESSION_NAME" -F '#{window_name}	#{pane_pid}' 2>/dev/null |
     while IFS=$'\t' read -r name pane_pid; do
       starting=""

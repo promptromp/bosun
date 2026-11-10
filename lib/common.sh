@@ -685,19 +685,24 @@ reap_session_helpers() {
 # the sessions.yml entry or the defaults; "-" means the agent's own default. The one list that
 # start, refresh, launch, morning --dry-run and doctor work from.
 window_specs() {
+  local harness models=() IFS=$' \t\n' # as in agent_bin_env
   [ -f "$BOSUN_SESSIONS_FILE" ] || die "sessions manifest not found: $BOSUN_SESSIONS_FILE"
+  need_profiles # once, before the substitutions below
+  for harness in $(known_harnesses); do
+    models+=("$harness=$(harness_default_model "$harness")")
+  done
   if [ -n "$BOSUN_ORCHESTRATOR" ]; then
     printf '%s\t%s\torchestrator\t%s\t%s\t%s\n' "$BOSUN_ORCHESTRATOR" "$BOSUN_ORCHESTRATOR_DIR" \
       "${BOSUN_ORCHESTRATOR_MODEL:--}" "${BOSUN_ORCHESTRATOR_EFFORT:--}" "$ORCHESTRATOR_HARNESS"
   fi
   ruby -ryaml -e '
     pick = ->(value, default) { value.to_s.empty? ? default : value.to_s }
-    default_model = { "claude" => ARGV[1], "codex" => ARGV[4] }  # as harness_default_model says
+    default_model = ARGV.drop(3).map { |pair| pair.split("=", 2) }.to_h  # harness=model, as harness_default_model says
     (YAML.safe_load(File.read(ARGV[0])) || {}).fetch("sessions", []).each do |s|
-      harness = pick.(s["harness"], ARGV[3])
+      harness = pick.(s["harness"], ARGV[2])
       puts [s.fetch("name"), File.expand_path(s.fetch("dir")), "session",
-            pick.(s["model"], default_model.fetch(harness, "-")), pick.(s["effort"], ARGV[2]), harness].join("\t")
-    end' "$BOSUN_SESSIONS_FILE" "$(harness_default_model claude)" "${BOSUN_EFFORT:--}" "$BOSUN_HARNESS" "$(harness_default_model codex)" ||
+            pick.(s["model"], default_model.fetch(harness, "-")), pick.(s["effort"], ARGV[1]), harness].join("\t")
+    end' "$BOSUN_SESSIONS_FILE" "${BOSUN_EFFORT:--}" "$BOSUN_HARNESS" "${models[@]}" ||
     die "could not read $BOSUN_SESSIONS_FILE"
   if checkin_loop_wanted; then
     printf 'checkin\t%s\tcheckin\t-\t-\t-\n' "$HOME"
