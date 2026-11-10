@@ -13,6 +13,7 @@ from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from typing import Any, Protocol
 
+import agent_state
 import awake
 import connectors
 import init_plan
@@ -411,7 +412,10 @@ CODEX_PREVIEW = (
     "One Codex session per repo, in its sandbox, with its reviewer deciding when something may go past it.",
     "The orchestrator stays on Claude Code. Costs and what you said in a window show less for Codex so far.",
 )
-AGENT_CHOICES = {init_plan.CLAUDE: ("Claude Code", CLAUDE_PREVIEW), init_plan.CODEX: ("Codex", CODEX_PREVIEW)}
+AGENT_CHOICES = {
+    agent_state.DEFAULT_HARNESS: ("Claude Code", CLAUDE_PREVIEW),
+    "codex": ("Codex", CODEX_PREVIEW),
+}
 AUTO_PREVIEW = (
     "A safety check reviews each action and blocks risky ones.",
     "Nothing to accept first, and it uses slightly more tokens.",
@@ -488,11 +492,11 @@ def ask_aws(ui: Ui, facts: Facts, answers: Answers, top: Sequence[str]) -> Answe
 
 def has_a_choice_of_agents(facts: Facts) -> bool:
     """Claude Code runs the orchestrator, so it is always there to pick."""
-    return any(agent != init_plan.CLAUDE for agent in facts.ready_agents)
+    return any(agent != agent_state.DEFAULT_HARNESS for agent in facts.ready_agents)
 
 
 def harness_options(facts: Facts, answers: Answers) -> list[Option]:
-    offered = [a for a in AGENT_CHOICES if a == init_plan.CLAUDE or a in facts.ready_agents]
+    offered = [a for a in AGENT_CHOICES if a == agent_state.DEFAULT_HARNESS or a in facts.ready_agents]
     return [
         Option(str(n), AGENT_CHOICES[a][0], {"harness": a}, AGENT_CHOICES[a][1], answers.harness == a)
         for n, a in enumerate(offered, 1)
@@ -508,7 +512,7 @@ def total_steps(facts: Facts, answers: Answers, asks_connectors: bool) -> int:
         ALWAYS_ASKED
         + asks_connectors
         + has_a_choice_of_agents(facts)
-        + (answers.harness == init_plan.CLAUDE)
+        + (answers.harness == agent_state.DEFAULT_HARNESS)
         + bool(facts.aws_sso_profiles)
     )
 
@@ -532,7 +536,7 @@ def ask_all(ui: Ui, facts: Facts, answers: Answers, machine: Machine) -> Answers
     answers = ask_features(ui, facts, answers, top("How proactive should it be?"))
     if has_a_choice_of_agents(facts):
         answers = ask_harness(ui, facts, answers, top("Which agent should run the repo sessions?"))
-    on_claude = answers.harness == init_plan.CLAUDE
+    on_claude = answers.harness == agent_state.DEFAULT_HARNESS
     who = "sessions" if on_claude else "orchestrator"
     answers = ask_model(ui, answers, top(f"Which model should the {who} use?"))
     if on_claude:

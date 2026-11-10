@@ -16,8 +16,9 @@ from collections import Counter
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, field, fields, replace
 from datetime import date, datetime, timedelta
-from typing import Any, NamedTuple
+from typing import Any
 
+import agent_state
 import connectors
 from awake import DAY_LETTERS
 
@@ -44,24 +45,6 @@ MAX_UNUSED_REPOS = 3  # when there is no history to go by
 MIN_PROMPTS = 20
 OPUS_PLANS = frozenset({"max", "team", "enterprise"})
 LINE_WIDTH = 78
-CLAUDE, CODEX = "claude", "codex"
-
-
-class OtherAgent(NamedTuple):
-    """What the plan says about repo sessions on an agent other than Claude Code."""
-
-    sessions: str
-    note: str
-
-
-OTHER_AGENTS = {
-    CODEX: OtherAgent(
-        "Codex, with its automatic reviewer",
-        "Repo sessions run on Codex with its automatic reviewer (BOSUN_CODEX_FLAGS): a sandbox, and a safety "
-        "check that decides when something may go past it, with no prompts. The orchestrator stays on "
-        "Claude Code.",
-    ),
-}
 AUTO, BYPASS = "auto", "bypass"
 PERMISSION_FLAGS = {
     AUTO: "--permission-mode auto --chrome",
@@ -148,7 +131,7 @@ class Answers:
     learning: bool = True
     slack_watch: bool = False
     model: str = DEFAULT_MODEL
-    harness: str = CLAUDE
+    harness: str = agent_state.DEFAULT_HARNESS
     permissions: str = AUTO
     orchestrator_connectors: str = ""  # BOSUN_ORCHESTRATOR_CONNECTORS: none, `all`, or a list of names
     repo_mask: str = ""
@@ -275,8 +258,9 @@ def validate(answers: Answers) -> list[str]:
     problems = schedule_problems(answers) + repo_problems(answers.repos) + connector_problems(answers)
     if answers.slack_watch and not answers.events:
         problems.append("slack_watch: the Slack watcher needs events on")
-    if answers.harness not in (CLAUDE, CODEX):
-        problems.append(f"harness: '{answers.harness}' must be {CLAUDE} or {CODEX}")
+    if answers.harness not in agent_state.AGENTS:
+        known = " or ".join(sorted(agent_state.AGENTS))
+        problems.append(f"harness: '{answers.harness}' must be {known}")
     if answers.permissions not in PERMISSION_FLAGS:
         problems.append(f"permissions: '{answers.permissions}' must be {AUTO} or {BYPASS}")
     if not MODEL_NAME.match(answers.model):
@@ -437,8 +421,9 @@ def recommended_harness(facts: Facts) -> str:
     if chosen:
         return chosen
     prompts = facts.agent_prompts.get
-    most_used = max(facts.ready_agents, key=lambda agent: prompts(agent, 0), default=CLAUDE)
-    return most_used if prompts(most_used, 0) > prompts(CLAUDE, 0) else CLAUDE
+    default = agent_state.DEFAULT_HARNESS
+    most_used = max(facts.ready_agents, key=lambda agent: prompts(agent, 0), default=default)
+    return most_used if prompts(most_used, 0) > prompts(default, 0) else default
 
 
 def recommended_permissions(facts: Facts) -> str:
@@ -903,8 +888,8 @@ def feature_notes(facts: Facts, answers: Answers) -> list[str]:
 
 def permission_notes(facts: Facts, answers: Answers) -> list[str]:
     """Permissions as asked are Claude Code's. Another agent has its own flags and its own note."""
-    if answers.harness in OTHER_AGENTS:
-        return [OTHER_AGENTS[answers.harness].note]
+    if answers.harness in agent_state.AGENTS and answers.harness != agent_state.DEFAULT_HARNESS:
+        return [agent_state.AGENTS[answers.harness].PROFILE.setup_note]
     if answers.permissions == BYPASS:
         return [BYPASS_NOTE] + ([] if facts.bypass_accepted else [BYPASS_ACCEPT_NOTE])
     return [AUTO_NOTE] if ENV_FILE not in facts.files else []
@@ -1016,8 +1001,8 @@ def bullets(items: Sequence[str]) -> list[str]:
 
 
 def model_lines(answers: Answers) -> list[str]:
-    if answers.harness in OTHER_AGENTS:
-        sessions = OTHER_AGENTS[answers.harness].sessions
+    if answers.harness in agent_state.AGENTS and answers.harness != agent_state.DEFAULT_HARNESS:
+        sessions = agent_state.AGENTS[answers.harness].PROFILE.setup_sessions
         return [f"  Model      {answers.model} for the orchestrator", f"  Sessions   {sessions}"]
     how = "auto mode" if answers.permissions == AUTO else "bypass mode, no permission checks"
     return [f"  Model      {answers.model}", f"  Sessions   {how}"]

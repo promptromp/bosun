@@ -13,7 +13,6 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "lib"))
 import agent_state
 import claude_state
 import codex_state
-import init_plan
 import uninstall_plan
 import update_backups
 from agent_files import Profile
@@ -49,8 +48,8 @@ class AgentProfileTest(unittest.TestCase):
         assert codex.statuses == {"idle", "busy"}
         assert not (codex.remote_control or codex.autocompact or codex.subagents)
         assert codex.state_files == ("codex-sessions.json",)
-        other = init_plan.OTHER_AGENTS["codex"]
-        assert (codex.setup_sessions, codex.setup_note) == (other.sessions, other.note)
+        assert codex.setup_sessions == "Codex, with its automatic reviewer"
+        assert codex.setup_note.startswith("Repo sessions run on Codex")
 
     def test_every_state_file_is_in_the_tables(self) -> None:
         patterns = {pattern for pattern, _kind in uninstall_plan.STATE_FILES}
