@@ -10,6 +10,7 @@ import sys
 import tempfile
 import time
 from collections.abc import Callable, Iterator, Mapping
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, NamedTuple
 
@@ -27,6 +28,23 @@ class LaunchSettings(NamedTuple):
     model: str | None
     effort: str | None
     by_bosun: bool
+
+
+@dataclass(frozen=True)
+class Profile:
+    """What an agent is and can do, declared by its module so that shared code never names the agent."""
+
+    bin_key: str  # the config key naming its executable
+    flags_key: str  # the config key holding the flags its repo sessions launch with
+    model_key: str  # the config key holding the model its repo sessions run
+    names_sessions: bool  # whether a session can be given a name to resume it by
+    statuses: frozenset[str]  # the window statuses it can show, of idle, busy, shell and waiting
+    remote_control: bool  # whether it has Claude Code's remote control
+    autocompact: bool  # whether it compacts a long conversation itself
+    subagents: bool  # whether it can run subagents at a model and effort of their own
+    state_files: tuple[str, ...]  # the files it keeps in bosun's state folder
+    setup_sessions: str = ""  # how `bosun init` says its repo sessions will run
+    setup_note: str = ""  # what `bosun init` tells the person about running them on it
 
 
 def command_line(pid: int | str) -> str:

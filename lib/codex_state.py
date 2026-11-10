@@ -62,6 +62,7 @@ from agent_files import (
     NOT_FOUND,
     Command,
     LaunchSettings,
+    Profile,
     command_line,
     emit,
     read_object,
@@ -72,6 +73,23 @@ from agent_files import (
 
 
 HARNESS = "codex"
+PROFILE = Profile(
+    bin_key="BOSUN_CODEX_BIN",
+    flags_key="BOSUN_CODEX_FLAGS",
+    model_key="BOSUN_CODEX_MODEL",
+    names_sessions=False,
+    statuses=frozenset({"idle", "busy"}),
+    remote_control=False,
+    autocompact=False,
+    subagents=False,
+    state_files=("codex-sessions.json",),
+    setup_sessions="Codex, with its automatic reviewer",
+    setup_note=(
+        "Repo sessions run on Codex with its automatic reviewer (BOSUN_CODEX_FLAGS): a sandbox, and a safety "
+        "check that decides when something may go past it, with no prompts. The orchestrator stays on "
+        "Claude Code."
+    ),
+)
 HOME = Path.home()
 CODEX_HOME = Path(os.environ.get("CODEX_HOME") or HOME / ".codex")
 CONFIG_FILE = CODEX_HOME / "config.toml"

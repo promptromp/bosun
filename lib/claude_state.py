@@ -78,6 +78,7 @@ from agent_files import (
     USAGE,
     Command,
     LaunchSettings,
+    Profile,
     command_line,
     emit,
     process_start,
@@ -89,6 +90,17 @@ from agent_files import (
 
 
 HARNESS = "claude"
+PROFILE = Profile(
+    bin_key="BOSUN_CLAUDE_BIN",
+    flags_key="BOSUN_CLAUDE_FLAGS",
+    model_key="BOSUN_MODEL",
+    names_sessions=True,
+    statuses=frozenset({"idle", "busy", "shell", "waiting"}),
+    remote_control=True,
+    autocompact=True,
+    subagents=True,
+    state_files=(),
+)
 MODEL_FLAG = re.compile(r"(?:^|\s)--model\s+(\S+)")
 EFFORT_SETTING = re.compile(r'"effortLevel":"([a-z]+)"')
 BOSUN_LAUNCHED = re.compile(r"\s--remote-control\s")
