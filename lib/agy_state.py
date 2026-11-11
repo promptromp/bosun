@@ -80,12 +80,13 @@ NAMES_FILE = "agy-sessions.json"  # in bosun's state dir
 STATUS_DIR = "agy"  # in bosun's state dir: a status file per window
 KEYCHAIN_SERVICE = "gemini"  # the Keychain item agy's login is
 IDLE, BUSY, SHELL, WAITING = "idle", "busy", "shell", "waiting"
-LOG_FILE = re.compile(r"--log-file[ =](\S+)")  # in agy's command line at launch
+# The log file's flag, a word of its own with its value one word after it, in agy's command line at launch.
+LOG_FILE = re.compile(r"(?<!\S)--log-file[= ](\S+)")
 LOG_PREFIX, LOG_SUFFIX = "agy-", ".log"  # around the conversation name in that file's name
-TMUX_SOCKET = re.compile(r"(?:^|\s)TMUX=([^,\s]+)")  # in its environment: the socket, then a comma
-TMUX_PANE = re.compile(r"(?:^|\s)TMUX_PANE=(\S+)")
-MODEL_FLAG = re.compile(r"(?:^|\s)--model(?:=|\s+)(\S+)")
-EFFORT_FLAG = re.compile(r"(?:^|\s)--effort(?:=|\s+)(\S+)")
+# bosun's flags come before the first prompt, which is on the command line too and can say anything (text from
+# Slack, say), so a flag read for the launch settings is the first of its kind.
+MODEL_FLAG = re.compile(r"(?<!\S)--model(?:=|\s+)(\S+)")
+EFFORT_FLAG = re.compile(r"(?<!\S)--effort(?:=|\s+)(\S+)")
 PS_TIMEOUT_SECONDS = 10
 CAPTURE_TIMEOUT_SECONDS = 5
 
@@ -173,6 +174,19 @@ def write_status(name: str, **fields: Any) -> None:
     write_atomically(status_path(name), json.dumps({**read_status(name), **fields}, indent=1))
 
 
+def write_status_if_unchanged(name: str, since: Any, **fields: Any) -> dict[str, Any]:
+    """Merge <fields> into the status file of <name> if its statusUpdatedAt is still <since>, the one its
+    reader saw, deciding and merging on one read of the file; the file as it is afterwards is returned.
+    Without a lock, a hook's write between that read and the replace is still lost: this narrows the window
+    and does not close it, and the next hook event corrects what is lost."""
+    current = read_status(name)
+    if current.get("statusUpdatedAt") != since:
+        return current
+    current.update(fields)
+    write_atomically(status_path(name), json.dumps(current, indent=1))
+    return current
+
+
 def now_ms() -> int:
     return int(time.time() * 1000)
 
@@ -229,19 +243,27 @@ class Marker(NamedTuple):
     pane: str | None
 
 
+def last_value(key: str, words: str) -> str | None:
+    """The value of the last `<key>=<value>` word in <words>. `ps eww` prints a process's environment after
+    its arguments, and the arguments include the first prompt, which can hold such a word too, so only the
+    last is the environment's."""
+    values = re.findall(rf"(?<!\S){key}=(\S+)", words)
+    return values[-1] if values else None
+
+
 def parse_marker(words: str) -> Marker | None:
-    """The marker in the output of `ps eww` for one process, None if it is not agy launched by bosun."""
-    log = LOG_FILE.search(words)
-    if not is_agy_command(words) or log is None:
+    """The marker in the output of `ps eww` for one process, None if it is not agy launched by bosun. The
+    conversation name is the environment's BOSUN_CONVERSATION (the last one, see `last_value`), and counts
+    only if the command line also has a `--log-file` for exactly that name: a prompt on the command line can
+    say other names, sockets and panes, but not what the environment says after it."""
+    name = last_value("BOSUN_CONVERSATION", words)
+    if name is None or not is_agy_command(words):
         return None
-    base = os.path.basename(log.group(1))
-    if not (base.startswith(LOG_PREFIX) and base.endswith(LOG_SUFFIX)):
+    log_name = f"{LOG_PREFIX}{name}{LOG_SUFFIX}"
+    if not any(os.path.basename(path) == log_name for path in LOG_FILE.findall(words)):
         return None
-    name = base[len(LOG_PREFIX) : -len(LOG_SUFFIX)]
-    socket, pane = TMUX_SOCKET.search(words), TMUX_PANE.search(words)
-    return (
-        Marker(name, socket.group(1) if socket else None, pane.group(1) if pane else None) if name else None
-    )
+    socket = last_value("TMUX", words)
+    return Marker(name, socket.split(",")[0] if socket else None, last_value("TMUX_PANE", words))
 
 
 def run_ps(args: list[str]) -> str:
@@ -304,8 +326,10 @@ def screen_of(found: Marker) -> str | None:
 def settle(found: Marker, status: dict[str, Any]) -> tuple[str, Any]:
     """The status and its time of a window, as the file says them unless it says busy: a turn that Esc
     cancelled fires no hook, so then the screen is asked. Idle and shell are written to the file, with
-    the time they were seen, unless a hook wrote since; waiting is not, so the next look reads the screen
-    again. Whatever the screen cannot tell (no pane, a failed capture, a turn on it) stays busy."""
+    the time they were seen, and what the file says afterwards is the answer: if a hook wrote meanwhile
+    (`write_status_if_unchanged`), that is its fresh status, not the screen's. Waiting is not written, so
+    the next look reads the screen again. Whatever the screen cannot tell (no pane, a failed capture, a turn
+    on it) stays busy."""
     shown, since = str(status.get("status") or ""), status.get("statusUpdatedAt")
     if shown != BUSY:
         return shown, since
@@ -315,10 +339,8 @@ def settle(found: Marker, status: dict[str, Any]) -> tuple[str, Any]:
         return WAITING, since
     if seen not in (IDLE, SHELL):
         return BUSY, since
-    now = now_ms()
-    if read_status(found.name).get("statusUpdatedAt") == since:
-        write_status(found.name, status=seen, statusUpdatedAt=now)
-    return str(seen), now
+    written = write_status_if_unchanged(found.name, since, status=seen, statusUpdatedAt=now_ms())
+    return str(written.get("status") or ""), written.get("statusUpdatedAt")
 
 
 # ---- the records

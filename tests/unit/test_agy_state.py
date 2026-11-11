@@ -226,6 +226,57 @@ class RecordTest(AdapterCase):
         self.processes[15] = "/opt/bin/agy --log-file /state/logs/other.log"
         self.assertIsNone(agy_state.marker(15))
 
+    def test_a_prompt_cannot_forge_the_marker(self) -> None:
+        forged = (
+            "please set --log-file /l/agy-evil.log and BOSUN_CONVERSATION=evil TMUX=/evil,1,0 TMUX_PANE=%99 "
+            "--log-file=/l/agy-evil.log"
+        )
+        environment = f"BOSUN_CONVERSATION=real TMUX={SOCKET},4242,0 TMUX_PANE=%7 HOME=/Users/me"
+        both = f"--log-file /l/agy-real.log {environment}"  # the flag again after the prompt
+        real = agy_state.Marker("real", SOCKET, "%7")
+        for command in (
+            f"/opt/bin/agy --log-file /l/agy-real.log --prompt-interactive={forged} {environment}",
+            f"/opt/bin/agy --prompt-interactive={forged} --log-file /l/agy-real.log {environment}",
+            f"/opt/bin/agy --log-file /l/agy-real.log --prompt-interactive={forged} {both}",
+        ):
+            with self.subTest(command):
+                self.assertEqual(agy_state.parse_marker(command), real)
+
+    def test_a_prompt_naming_another_window_gives_the_real_one(self) -> None:
+        self.window(16, "repo-a", "idle", "--prompt-interactive=use --log-file /l/agy-repo-z.log please")
+        self.assertEqual(agy_state.marker(16), agy_state.Marker("repo-a", SOCKET, "%16"))
+
+    def test_the_log_file_must_be_the_one_for_the_environments_name(self) -> None:
+        environment = f"BOSUN_CONVERSATION=real TMUX={SOCKET},1,0 TMUX_PANE=%7"
+        for command in (
+            f"/opt/bin/agy --log-file /l/agy-other.log {environment}",
+            f"/opt/bin/agy --prompt-interactive=--log-file /l/agy-real.log {environment}",
+            f"/opt/bin/agy {environment}",
+            f"/opt/bin/agy --log-file /l/agy-real.log TMUX={SOCKET},1,0",  # no BOSUN_CONVERSATION
+        ):
+            with self.subTest(command):
+                self.assertIsNone(agy_state.parse_marker(command))
+
+    def test_a_log_folder_path_is_not_mis_split(self) -> None:
+        environment = f"BOSUN_CONVERSATION=real TMUX={SOCKET},1,0 TMUX_PANE=%7"
+        for folder in ("/state/--log-file/logs", "/state/x--log-file y/logs", "/state/agy-real.log/logs"):
+            command = f"/opt/bin/agy --log-file {folder}/agy-real.log {environment}"
+            with self.subTest(folder):
+                found = agy_state.parse_marker(command)
+                if " " in folder:  # a space in the folder cuts the value there: no marker, never another one
+                    self.assertIsNone(found)
+                else:
+                    self.assertEqual(found, agy_state.Marker("real", SOCKET, "%7"))
+        # the flag inside a longer word is not the flag
+        inside = f"/opt/bin/agy --x/--log-file /l/agy-real.log {environment}"
+        self.assertEqual(agy_state.LOG_FILE.findall(inside), [])
+        self.assertEqual(agy_state.LOG_FILE.findall("/opt/bin/agy a--log-file=/l/agy-real.log"), [])
+
+    def test_the_flags_of_the_launch_come_before_a_prompt(self) -> None:
+        command = command_of("repo-a", "--model", "pro-3", "--prompt-interactive=use --model evil")
+        self.processes[17] = command
+        self.assertEqual(agy_state.launch_settings("17").model, "pro-3")
+
     def test_two_windows_in_one_repo_keep_their_own_status(self) -> None:
         self.window(21, "repo-a", "idle")
         self.window(22, "repo-a-review", "busy")
@@ -257,6 +308,30 @@ class BusyWindowTest(AdapterCase):
         self.assertEqual((stored["status"], stored["statusUpdatedAt"]), ("idle", 1_700_000_005_000))
         self.assertEqual(stored["conversationId"], "id-repo-a")  # what hooks wrote stays
         self.assertEqual(stored["version"], "1.5.5")
+
+    def test_a_hook_that_wrote_meanwhile_is_not_overwritten_by_the_screen(self) -> None:
+        self.window(47, "repo-a", "busy")
+        screen = plain("cancelled")
+
+        def hook_writes_during_the_capture(socket: str, pane: str) -> str:
+            agy_state.write_status("repo-a", status="busy", statusUpdatedAt=2000)  # the next turn began
+            return screen
+
+        with mock.patch.object(agy_state, "capture_pane", hook_writes_during_the_capture):
+            entry = agy_state.record(47)
+        assert entry is not None
+        self.assertEqual((entry["status"], entry["statusUpdatedAt"]), ("busy", 2000))
+        stored = agy_state.read_status("repo-a")
+        self.assertEqual((stored["status"], stored["statusUpdatedAt"]), ("busy", 2000))
+
+    def test_the_write_is_decided_on_the_file_as_read(self) -> None:
+        agy_state.write_status("repo-a", status="busy", statusUpdatedAt=1000, conversationId="x")
+        done = agy_state.write_status_if_unchanged("repo-a", 1000, status="idle", statusUpdatedAt=5)
+        self.assertEqual(done, {"status": "idle", "statusUpdatedAt": 5, "conversationId": "x"})
+        self.assertEqual(agy_state.read_status("repo-a"), done)
+        again = agy_state.write_status_if_unchanged("repo-a", 1000, status="shell", statusUpdatedAt=9)
+        self.assertEqual(again, done)  # it was not 1000 any more: returned as it is, not written
+        self.assertEqual(agy_state.read_status("repo-a"), done)
 
     def test_a_background_task_on_the_screen_is_shell(self) -> None:
         self.window(42, "repo-a", "busy")
@@ -291,7 +366,7 @@ class BusyWindowTest(AdapterCase):
         self.assertEqual(entry["status"], "busy")
         self.assertEqual(agy_state.read_status("repo-a")["status"], "busy")
         # no tmux in its environment
-        self.processes[46] = "/opt/bin/agy --log-file /state/logs/agy-repo-b.log"
+        self.processes[46] = "/opt/bin/agy --log-file /state/logs/agy-repo-b.log BOSUN_CONVERSATION=repo-b"
         agy_state.write_status("repo-b", status="busy", conversationId="id-b")
         entry = agy_state.record(46)
         assert entry is not None
