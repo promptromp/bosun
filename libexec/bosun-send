@@ -50,7 +50,7 @@ list_windows() {
 }
 
 send_message() {
-  local window="$1" message="$2" pane_pid window_id agent_pid status buffer rejected_before
+  local window="$1" message="$2" pane_pid window_id agent_pid harness status buffer rejected_before
   if [ "${BOSUN_SEND_DRY_RUN:-0}" = "1" ]; then
     log "dry-run: would deliver to $SESSION:$window: $(head -c 300 <<<"$message" | tr '\n' ' ')"
     return 0
@@ -58,14 +58,15 @@ send_message() {
   read -r pane_pid window_id <<<"$(find_window "$window")"
   [ -n "$window_id" ] || die "no window '$window' in session '$SESSION'"
   agent_pid="$(agent_pid_under "$pane_pid")" || die "window '$window' is not running an agent"
+  harness="$(agent_session_field "$agent_pid" harness)"
   status="$(agent_session_field "$agent_pid" status)"
-  ! tmux_cmd capture-pane -p -t "$window_id" 2>/dev/null | python3 "$BOSUN_ROOT/lib/pane_input.py" question ||
+  ! tmux_cmd capture-pane -p -t "$window_id" 2>/dev/null | screen_reader question "$harness" ||
     die "window '$window' is asking something on its screen, and Enter would answer it; nothing sent (bosun attach)"
   agent_takes_input "$status" ||
     die "window '$window' is ${status:-in an unknown state} (a permission prompt or question waits for you there); not pasting into it"
   wait_until_pasteable "$window" "$window_id"
   note_bosun_prompt "$window" "$message"
-  rejected_before="$(rejected_count "$window_id")"
+  rejected_before="$(rejected_count "$window_id" "$harness")"
   # A buffer per call, so overlapping sends never swap messages.
   buffer="bosun-send-$$"
   printf '%s' "$message" | tmux_cmd load-buffer -b "$buffer" - || die "tmux could not load the message"
@@ -75,12 +76,22 @@ send_message() {
   fi
   sleep "$PASTE_SETTLE_SECONDS"
   tmux_cmd send-keys -t "$window_id" Enter || die "tmux could not press Enter in window '$window'"
-  confirm_taken "$window" "$window_id" "$rejected_before"
+  confirm_taken "$window" "$window_id" "$rejected_before" "$harness"
   log "delivered to $SESSION:$window"
 }
 
-rejected_count() { # <window_id>: Claude's "Unknown command" replies on screen
-  tmux_cmd capture-pane -p -S -200 -t "$1" 2>/dev/null | python3 "$BOSUN_ROOT/lib/pane_input.py" rejected | grep -c .
+# Reads a capture on stdin the way the window's agent shows its screen (lib/pane_input.py); with no agent
+# (an older record does not say), the way any agent does.
+screen_reader() { # <typed|rejected|question> <agent, or empty>
+  if [ -n "${2:-}" ]; then
+    python3 "$BOSUN_ROOT/lib/pane_input.py" "$1" --harness "$2"
+  else
+    python3 "$BOSUN_ROOT/lib/pane_input.py" "$1"
+  fi
+}
+
+rejected_count() { # <window_id> <agent>: the replies on screen saying a paste ran as an unknown command
+  tmux_cmd capture-pane -p -S -200 -t "$1" 2>/dev/null | screen_reader rejected "$2" | grep -c .
 }
 
 wait_until_pasteable() { # <window> <window_id>
@@ -93,12 +104,12 @@ wait_until_pasteable() { # <window> <window_id>
   done
 }
 
-# Fails unless Claude in window <id> took the prompt: no new "Unknown command" reply (the paste
+# Fails unless the agent in window <id> took the prompt: no new "Unknown command" reply (the paste
 # ran as a slash command) and, where the input line can be read, the line emptied.
-confirm_taken() { # <window> <window_id> <rejected count before>
+confirm_taken() { # <window> <window_id> <rejected count before> <agent>
   local deadline=$((SECONDS + BOSUN_SEND_CONFIRM_SECONDS)) status
   while :; do
-    [ "$(rejected_count "$2")" -gt "$3" ] &&
+    [ "$(rejected_count "$2" "$4")" -gt "$3" ] &&
       die "window '$1' ran the paste as an unknown command, so the message was not delivered; send it again"
     input_line "$2" >/dev/null
     status=$?

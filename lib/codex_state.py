@@ -21,7 +21,7 @@ goes by, seen in Codex 0.166.0 and not a public API:
     like Claude Code's screens, a Codex with no session file is at a screen or still starting.
   - A turn is `task_started` to `task_complete` or `turn_aborted`. With the default flags nothing asks
     a person; in a mode that asks, a turn waiting for you still reads as busy, because
-    the file does not record it (lib/pane_input.py reads that from the screen).
+    the file does not record it (its screen reader, below, reads that).
   - What servers a window reaches: `codex mcp list --json` lists the MCP servers Codex would start in a
     folder (configured, a trusted project's and plugin ones; not the built-ins `codex_apps`, ChatGPT's
     connectors, and `codex_worktrees`, which stay on), each with its name and, for a stdio server, its
@@ -63,13 +63,49 @@ from agent_files import (
     Command,
     LaunchSettings,
     Profile,
+    Screen,
     command_line,
     emit,
+    never_rejects,
     read_object,
     reversed_lines,
     run_command,
     write_atomically,
 )
+from screen_text import NBSP, SGR, visible
+
+
+CODEX_MARK = "\u203a"  # the input line's prompt mark
+CODEX_QUESTIONS = ("Press enter to confirm", "enter continue")  # the last line of each kind of question
+CODEX_QUESTION_LINES = 6  # how far up from the bottom of the screen it can be
+
+
+# ---- the screen --------------------------------------------------------------------------------
+# Codex's input box is the last line starting with its mark, down to the first blank line, and "Ask Codex to
+# do anything" drawn dim when empty. It also shows its questions (approving a command, trusting a folder)
+# with that same mark on the first choice, and pressing Enter there answers them, so send asks about those
+# first. Its session file does not record them. A paste that is not a command does not come back as an
+# unknown one.
+
+
+def codex_typed_text(lines: list[str]) -> str | None:
+    """The text in Codex's box, if this screen has one."""
+    start = next(
+        (i for i in range(len(lines) - 1, -1, -1) if SGR.sub("", lines[i]).startswith(CODEX_MARK)),
+        None,
+    )
+    if start is None:
+        return None
+    end = next((i for i in range(start + 1, len(lines)) if not SGR.sub("", lines[i]).strip()), len(lines))
+    texts = [visible(line).replace(NBSP, " ") for line in lines[start:end]]
+    texts[0] = texts[0].removeprefix(CODEX_MARK)
+    return "\n".join(texts).strip()
+
+
+def codex_question(capture: str) -> bool:
+    """Whether Codex is asking something on this screen."""
+    lines = [line for line in capture.splitlines() if line.strip()]
+    return any(question in line for line in lines[-CODEX_QUESTION_LINES:] for question in CODEX_QUESTIONS)
 
 
 HARNESS = "codex"
@@ -100,6 +136,7 @@ PROFILE = Profile(
         "check that decides when something may go past it, with no prompts. The orchestrator stays on "
         "Claude Code."
     ),
+    screen=Screen(codex_typed_text, codex_question, never_rejects),
 )
 HOME = Path.home()
 CODEX_HOME = Path(os.environ.get("CODEX_HOME") or HOME / ".codex")

@@ -79,14 +79,43 @@ from agent_files import (
     Command,
     LaunchSettings,
     Profile,
+    Screen,
     command_line,
     emit,
+    never_asks,
     process_start,
     read_object,
     reversed_lines,
     run_command,
     write_atomically,
 )
+from screen_text import NBSP, box_lines, visible
+
+
+PROMPT_MARK = "\u276f"  # the input line's prompt mark
+UNKNOWN_COMMAND = "Unknown command"
+
+
+# ---- the screen --------------------------------------------------------------------------------
+# Claude Code's input box is the line starting with the prompt mark right under a horizontal rule, plus
+# any continuation lines down to the next rule. Text it draws faint (a placeholder suggestion) is not typed.
+# It has no questions to read: a window waiting on one shows the status `waiting`.
+
+
+def claude_typed_text(lines: list[str]) -> str | None:
+    """The text in Claude Code's box, if this screen has one."""
+    box = box_lines(lines, PROMPT_MARK)
+    if box is None:
+        return None
+    first = visible(box[0]).replace(NBSP, " ").lstrip()
+    first = first.removeprefix(PROMPT_MARK)
+    rest = [visible(line).replace(NBSP, " ") for line in box[1:]]
+    return "\n".join([first, *rest]).strip()
+
+
+def unknown_command_lines(capture: str) -> list[str]:
+    """Claude's replies that a pasted prompt ran as an unknown slash command."""
+    return [line.strip() for line in capture.splitlines() if UNKNOWN_COMMAND in line]
 
 
 HARNESS = "claude"
@@ -102,6 +131,7 @@ PROFILE = Profile(
     state_files=(),
     display_name="Claude Code",
     setup_preview=("One Claude Code session per repo, and the orchestrator runs on it too.",),
+    screen=Screen(claude_typed_text, never_asks, unknown_command_lines),
 )
 MODEL_FLAG = re.compile(r"(?:^|\s)--model\s+(\S+)")
 EFFORT_SETTING = re.compile(r'"effortLevel":"([a-z]+)"')

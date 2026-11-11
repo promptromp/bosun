@@ -24,7 +24,7 @@ Shared code never asks which agent it has. Each layer has one place per agent, a
 | Checking a machine | `lib/preflight.sh`, the flow | `lib/harnesses/<harness>.sh`, a profile |
 | Starting a window | `libexec/bosun-launch`, the flow: resolve the session, refuse a second copy, start or resume | `lib/launch/<harness>.sh`: `build_agent_args`, `first_prompt`, `run_new`, `run_resumed` |
 | A running session | `lib/agent_state.py`: the `Agent` interface and the `AGENTS` table. `lib/agents.sh` is its shell side | `lib/claude_state.py`, `lib/codex_state.py`, each a module with `Agent`'s functions (`mypy` checks they match) |
-| Reading a screen | `lib/pane_input.py`: `typed_text` | A reader per agent in `BOX_READERS` |
+| Reading a screen | `lib/pane_input.py` asks the `AGENTS` table; `lib/screen_text.py` has the helpers readers share | A `Screen` in its profile: `typed`, `question`, `rejected` (`lib/agent_files.py`) |
 
 `window_specs` is the one source of which agent a window runs: `window_harness` and `harnesses_in_use` read it.
 
