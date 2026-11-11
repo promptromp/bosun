@@ -10,6 +10,7 @@ from typing import ClassVar
 
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "lib"))
+import agent_state
 import journal as jr
 import uninstall_plan as up
 import update_backups as ub
@@ -81,6 +82,20 @@ def stays(plan: up.Plan) -> set[str]:
 
 
 class FileTables(unittest.TestCase):
+    def test_each_agents_state_files_are_rows(self) -> None:
+        rows = up.agent_state_rows()
+        for agent in agent_state.AGENTS.values():
+            for name in agent.PROFILE.state_files:
+                self.assertIn((name, up.WORKING), rows)
+                self.assertIn((name, up.WORKING), up.STATE_FILES)
+                if "/" not in name:
+                    self.assertIn((f".{name}.*", up.WORKING), rows)
+                    self.assertIn((f".{name}.*", up.WORKING), up.STATE_FILES)
+
+    def test_the_rows_for_codex_are_what_they_were(self) -> None:
+        self.assertIn(("codex-sessions.json", up.WORKING), up.STATE_FILES)
+        self.assertIn((".codex-sessions.json.*", up.WORKING), up.STATE_FILES)
+
     def test_what_each_file_is(self) -> None:
         for name, kind in (
             ("ledger.json", up.LEDGER),

@@ -30,6 +30,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 
+import agent_state
 import journal
 from uninstall_plan import CONFIG_FILES, KNOWLEDGE, LEDGER, SETTINGS, STATE_FILES, kind_of
 
@@ -41,7 +42,14 @@ SUMMARY = "summary.md"
 REHEARSAL = Path("update") / "rehearsal"
 
 # Working files that carry work in flight, backed up with the records.
-IN_FLIGHT = ("events", "signals", "slack-watch", "login.json", "codex-sessions.json", "agent-changes.json")
+IN_FLIGHT = (
+    "events",
+    "signals",
+    "slack-watch",
+    "login.json",
+    "agent-changes.json",
+    *(name for agent in agent_state.AGENTS.values() for name in agent.PROFILE.state_files),
+)
 # What the freeze's locks cover, so what a failed freeze puts back (an event queued meanwhile is
 # never undone).
 FROZEN = (

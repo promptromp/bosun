@@ -22,6 +22,7 @@ from collections.abc import Collection, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
+import agent_state
 from checkout_work import Checkout, why_kept
 from init_plan import tilde
 
@@ -36,6 +37,19 @@ BACKUPS = (
 SETTINGS = "settings"  # what you configured: it stays, unless --purge
 OURS_TO_LEAVE = "leave"  # in bosun's folder, but not part of running it: it always stays
 UNKNOWN = "unknown"  # not listed below: it always stays
+
+
+def agent_state_rows() -> tuple[tuple[str, str], ...]:
+    """A row for each file an agent keeps in the state folder, and for a file there, the pattern its
+    atomic write leaves when cut short."""
+    rows: list[tuple[str, str]] = []
+    for agent in agent_state.AGENTS.values():
+        for name in agent.PROFILE.state_files:
+            rows.append((name, WORKING))
+            if "/" not in name:
+                rows.append((f".{name}.*", WORKING))
+    return tuple(rows)
+
 
 STATE_FILES = (
     ("ledger.json", LEDGER),
@@ -62,8 +76,6 @@ STATE_FILES = (
     (".agent-changes.json.*", WORKING),
     ("alerted-*", WORKING),  # what the check-in loop left, before the watchdog
     ("alerts", WORKING),
-    ("codex-sessions.json", WORKING),
-    (".codex-sessions.json.*", WORKING),
     ("connectors.json", WORKING),  # the connectors' URLs the last launch found (lib/connectors_claude.py)
     (".connectors.json.*", WORKING),  # what a write cut short left
     ("console", WORKING),
@@ -88,6 +100,7 @@ STATE_FILES = (
     ("windows.lock", WORKING),
     ("init.lock", WORKING),
     (".DS_Store", WORKING),  # Finder's, if you ever looked in the folder
+    *agent_state_rows(),  # the files each agent keeps here (its profile)
 )
 CONFIG_FILES = (
     ("knowledge", KNOWLEDGE),
