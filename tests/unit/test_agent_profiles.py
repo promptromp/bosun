@@ -168,6 +168,14 @@ class AgentSetupCommandTest(unittest.TestCase):
         assert self.calls == ["needed", "apply"]
         assert agent_changes.setups_made(self.state) == ("stub",)
 
+    def test_no_state_folder_means_no_setup(self) -> None:
+        self.install(needed=True)
+        with mock.patch.dict(os.environ, {"BOSUN_STATE_DIR": ""}):
+            status, out, err = self.run_setup()
+        assert (status, out) == (1, "")
+        assert "BOSUN_STATE_DIR" in err
+        assert self.calls == ["needed"]  # never applied unrecorded
+
     def test_a_failed_setup_says_why(self) -> None:
         def refuse() -> None:
             raise SetupError("stub's plugin command is not installed")

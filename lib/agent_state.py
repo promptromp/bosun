@@ -158,8 +158,10 @@ def cmd_setup(harness: str, _args: list[str]) -> int:
     if setup is None or not setup.needed():
         return 0
     state_dir = os.environ.get("BOSUN_STATE_DIR")
-    if state_dir:
-        agent_changes.record_setup(Path(state_dir), harness)
+    if not state_dir:
+        print("no BOSUN_STATE_DIR to put the setup on record in, so it is not made", file=sys.stderr)
+        return 1
+    agent_changes.record_setup(Path(state_dir), harness)
     try:
         setup.apply()
     except SetupError as error:
