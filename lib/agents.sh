@@ -19,11 +19,16 @@ AGENT_PROFILES_ERROR=""
 # without: it is what says python3 is missing).
 load_agent_profiles() {
   [ -n "$AGENT_PROFILES" ] && return 0
-  local out
-  if ! out="$(python3 "$BOSUN_ROOT/lib/agent_state.py" profiles 2>&1)" || [ -z "$out" ]; then
-    AGENT_PROFILES_ERROR="could not read the agents' profiles (lib/agent_state.py profiles): $out"
+  local out errors_file="" errors=""
+  # Only stdout is the profiles: what a working python3 says on stderr (a warning, a shim's notice) is not.
+  errors_file="$(mktemp "${TMPDIR:-/tmp}/bosun-profiles.XXXXXX" 2>/dev/null)" || errors_file=/dev/null
+  if ! out="$(python3 "$BOSUN_ROOT/lib/agent_state.py" profiles 2>"$errors_file")" || [ -z "$out" ]; then
+    errors="$(cat "$errors_file" 2>/dev/null)"
+    [ "$errors_file" = /dev/null ] || rm -f "$errors_file"
+    AGENT_PROFILES_ERROR="could not read the agents' profiles (lib/agent_state.py profiles): ${errors:-$out}"
     return 1
   fi
+  [ "$errors_file" = /dev/null ] || rm -f "$errors_file"
   AGENT_PROFILES="$out"
 }
 

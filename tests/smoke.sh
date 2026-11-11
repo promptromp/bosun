@@ -306,14 +306,21 @@ check "harness_default_model: Codex has none unless configured" test "$(fnc harn
 check "... or the one in BOSUN_CODEX_MODEL" test "$(BOSUN_CODEX_MODEL=gpt-acme fnc harness_default_model codex)" = gpt-acme
 check "... and Claude Code's is BOSUN_MODEL's" test "$(BOSUN_MODEL=acme-model fnc harness_default_model claude)" = acme-model
 check "... or - when that is empty" test "$(BOSUN_MODEL="" fnc harness_default_model claude)" = -
-check "harness_bin of an agent with no profile exits 1 and prints nothing" bash -c 'source "$1/lib/common.sh"; load_config; out="$(harness_bin agy 2>&1)" && exit 1; [ -z "$out" ]' _ "$ROOT"
-check "... as does harness_default_model" bash -c 'source "$1/lib/common.sh"; load_config; out="$(harness_default_model agy 2>&1)" && exit 1; [ -z "$out" ]' _ "$ROOT"
+check "harness_bin of an agent with no profile exits 1 and prints nothing" bash -c 'source "$1/lib/common.sh"; load_config; out="$(harness_bin acme-agent 2>&1)" && exit 1; [ -z "$out" ]' _ "$ROOT"
+check "... as does harness_default_model" bash -c 'source "$1/lib/common.sh"; load_config; out="$(harness_default_model acme-agent 2>&1)" && exit 1; [ -z "$out" ]' _ "$ROOT"
 check "known_harnesses lists the agents in the order of AGENTS" test "$(fn known_harnesses)" = "claude codex"
 check "profile_field reads a column by its name" test "$(fn profile_field codex flags_key)" = BOSUN_CODEX_FLAGS
 mkdir -p "$WORK/broken-python"
 printf '#!/bin/sh\necho "python is broken" >&2\nexit 1\n' >"$WORK/broken-python/python3"
 chmod +x "$WORK/broken-python/python3"
 check "profiles that cannot be read stop the command, saying so" fails_with "could not read the agents' profiles" bash -c 'source "$1/lib/common.sh"; PATH="$2:$PATH"; harness_bin claude' _ "$ROOT" "$WORK/broken-python"
+mkdir -p "$WORK/chatty-python"
+printf '#!/bin/sh\necho "acme warning: something deprecated" >&2\nexec "%s" "$@"\n' "$(command -v python3)" >"$WORK/chatty-python/python3"
+chmod +x "$WORK/chatty-python/python3"
+check "a python3 that warns on stderr leaves the profiles alone" test "$(bash -c 'source "$1/lib/common.sh"; PATH="$2:$PATH"; known_harnesses' _ "$ROOT" "$WORK/chatty-python" 2>/dev/null)" = "claude codex"
+for shell_bin in /bin/bash bash; do
+  check "... and agent_bin_env works under $shell_bin" test "$(BOSUN_CODEX_BIN=acme-codex "$shell_bin" -c 'source "$1/lib/common.sh"; load_config; PATH="$2:$PATH"; agent_bin_env; printf "%s\n" "${agent_bin_assignments[@]}"' _ "$ROOT" "$WORK/chatty-python" 2>/dev/null | tr '\n' ' ')" = "BOSUN_CLAUDE_BIN=claude BOSUN_CODEX_BIN=acme-codex "
+done
 cat >"$WORK/specs-agents.yml" <<YML
 sessions:
   - name: cx-window
@@ -337,10 +344,10 @@ cat >"$WORK/ghost-sessions.yml" <<YML
 sessions:
   - name: ghost-agent
     dir: $REPO_A
-    harness: agy
+    harness: acme-agent
 YML
 check "a window's model reads right through a tab-separated read, in bash 3.2 too" test "$(BOSUN_SESSIONS_FILE="$WORK/specs-agents.yml" BOSUN_MODEL=acme-model /bin/bash -c 'source "$1/lib/common.sh"; load_config; need_profiles; IFS=$'"'"'\t'"'"' read -r model effort <<<"$(window_model_effort cl-window)"; echo "$model"' _ "$ROOT")" = acme-model
-check "bosun launch refuses a window whose agent has no profile" fails_with "no agent 'agy': bosun knows claude, codex" bash -c 'cd "$1" && BOSUN_SESSIONS_FILE="$2" BOSUN_LAUNCH_DRY_RUN=1 "$3" launch ghost-agent </dev/null' _ "$REPO_A" "$WORK/ghost-sessions.yml" "$BOSUN"
+check "bosun launch refuses a window whose agent has no profile" fails_with "no agent 'acme-agent': bosun knows claude, codex" bash -c 'cd "$1" && BOSUN_SESSIONS_FILE="$2" BOSUN_LAUNCH_DRY_RUN=1 "$3" launch ghost-agent </dev/null' _ "$REPO_A" "$WORK/ghost-sessions.yml" "$BOSUN"
 
 echo "example configs"
 check "the generic example lists every setting with its default value" bash -c '

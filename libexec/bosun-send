@@ -27,6 +27,7 @@
 set -uo pipefail
 source "$(dirname "$0")/../lib/common.sh"
 load_config
+need_profiles # here, so the agent lookups in substitutions below do not each read them
 
 SESSION="$BOSUN_SESSION_NAME"
 PASTE_SETTLE_SECONDS=0.5
