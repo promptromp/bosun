@@ -37,8 +37,8 @@ goes by, seen in Codex 0.166.0 and not a public API:
   - A start waits at an "Update available" screen once Codex has seen a newer version of itself, so the
     launch passes `-c check_for_update_on_startup=false`.
   - Codex has no way to name a session from outside, so bosun keeps its own table of names, filled in by
-    the program Codex runs when a turn ends (`bosun hook codex-turn-end`). That program also runs for
-    Codex's hidden helpers, each with an id of its own (is_terminal_session).
+    the program Codex runs when a turn ends (`bosun hook turn-end --harness codex`). That program also
+    runs for Codex's hidden helpers, each with an id of its own (is_terminal_session).
 """
 
 from __future__ import annotations
@@ -50,7 +50,7 @@ import shutil
 import subprocess
 import sys
 import tomllib
-from collections.abc import Iterable, Iterator
+from collections.abc import Iterable, Iterator, Mapping
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -64,6 +64,8 @@ from agent_files import (
     LaunchSettings,
     Profile,
     Screen,
+    TurnEnd,
+    TurnReport,
     command_line,
     emit,
     never_rejects,
@@ -109,36 +111,6 @@ def codex_question(capture: str) -> bool:
 
 
 HARNESS = "codex"
-PROFILE = Profile(
-    bin_key="BOSUN_CODEX_BIN",
-    flags_key="BOSUN_CODEX_FLAGS",
-    model_key="BOSUN_CODEX_MODEL",
-    names_sessions=False,
-    statuses=frozenset({"idle", "busy"}),
-    remote_control=False,
-    autocompact=False,
-    subagents=False,
-    state_files=("codex-sessions.json",),
-    display_name="Codex",
-    setup_preview=(
-        (
-            "One Codex session per repo, in its sandbox, with its reviewer deciding when something may go "
-            "past it."
-        ),
-        (
-            "The orchestrator stays on Claude Code. Costs and what you said in a window show less for Codex "
-            "so far."
-        ),
-    ),
-    setup_sessions="Codex, with its automatic reviewer",
-    setup_note=(
-        "Repo sessions run on Codex with its automatic reviewer (BOSUN_CODEX_FLAGS): a sandbox, and a safety "
-        "check that decides when something may go past it, with no prompts. The orchestrator stays on "
-        "Claude Code."
-    ),
-    screen=Screen(codex_typed_text, codex_question, never_rejects),
-    connectors="connectors_codex",
-)
 HOME = Path.home()
 CODEX_HOME = Path(os.environ.get("CODEX_HOME") or HOME / ".codex")
 CONFIG_FILE = CODEX_HOME / "config.toml"
@@ -150,7 +122,9 @@ TURN_ENDED = ("task_complete", "turn_aborted")
 TURN_MARKER = re.compile(rb'"(task_started|task_complete|turn_aborted)"')
 MODEL_FLAG = re.compile(r"(?:^|\s)(?:--model|-m)\s+(\S+)")
 EFFORT_SETTING = re.compile(r'model_reasoning_effort="([a-z]+)"')
-BOSUN_LAUNCHED = '"codex-turn-end"'  # in bosun's notify= at launch
+BOSUN_LAUNCHED = re.compile(
+    r'"(?:codex-)?turn-end"'
+)  # in bosun's notify= at launch (`codex-turn-end` before it was `turn-end`)
 NAME_ARGUMENT = re.compile(r'"--conversation","([^"]+)"')  # in bosun's notify= at launch
 LOGIN_TIMEOUT_SECONDS = 30
 IDLE, BUSY = "idle", "busy"
@@ -282,7 +256,9 @@ def launch_settings(pid: str) -> LaunchSettings:
     model = MODEL_FLAG.search(command)
     effort = EFFORT_SETTING.search(command)
     return LaunchSettings(
-        model.group(1) if model else None, effort.group(1) if effort else None, BOSUN_LAUNCHED in command
+        model.group(1) if model else None,
+        effort.group(1) if effort else None,
+        BOSUN_LAUNCHED.search(command) is not None,
     )
 
 
@@ -488,6 +464,50 @@ def resolve(workdir: str, name: str) -> str | None:
         return None
     session_id = str(entry.get("id") or "")
     return session_id if session_id and rollout_exists(session_id) else None
+
+
+def turn_report(conversation: str, payload: Mapping[str, Any]) -> TurnReport | str:
+    """What Codex's report at the end of a turn says about <conversation>'s session, or why it is
+    ignored: it is also the report of a hidden helper, which is no one's session."""
+    session_id = str(payload.get("thread-id") or "")
+    if not is_terminal_session(session_id):
+        return f"ignored: {session_id or 'no id'} is one of Codex's helpers, not {conversation}"
+    prompts = [str(text) for text in payload.get("input-messages") or []]
+    new = tuple(new_prompts(conversation, session_id, prompts))
+    return TurnReport(session_id, str(payload.get("cwd") or ""), len(prompts), new)
+
+
+PROFILE = Profile(
+    bin_key="BOSUN_CODEX_BIN",
+    flags_key="BOSUN_CODEX_FLAGS",
+    model_key="BOSUN_CODEX_MODEL",
+    names_sessions=False,
+    statuses=frozenset({"idle", "busy"}),
+    remote_control=False,
+    autocompact=False,
+    subagents=False,
+    state_files=("codex-sessions.json",),
+    display_name="Codex",
+    setup_preview=(
+        (
+            "One Codex session per repo, in its sandbox, with its reviewer deciding when something may go "
+            "past it."
+        ),
+        (
+            "The orchestrator stays on Claude Code. Costs and what you said in a window show less for Codex "
+            "so far."
+        ),
+    ),
+    setup_sessions="Codex, with its automatic reviewer",
+    setup_note=(
+        "Repo sessions run on Codex with its automatic reviewer (BOSUN_CODEX_FLAGS): a sandbox, and a safety "
+        "check that decides when something may go past it, with no prompts. The orchestrator stays on "
+        "Claude Code."
+    ),
+    screen=Screen(codex_typed_text, codex_question, never_rejects),
+    connectors="connectors_codex",
+    turn_end=TurnEnd(turn_report, remember),
+)
 
 
 # --- what `bosun init` recommends from

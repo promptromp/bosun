@@ -323,7 +323,8 @@ class LaunchCommandTest(unittest.TestCase):
         plain = self.bosun(
             "launch", "api", cwd=self.repo
         )  # a launch not for an update: the agent configured now
-        self.assertIn("codex-turn-end", plain.stdout)
+        self.assertIn("turn-end", plain.stdout)
+        self.assertNotIn("codex-turn-end", plain.stdout)
         self.assertEqual(self.launched("api")["harness"], "codex")
 
     def test_a_codex_window_whose_servers_cannot_be_listed_does_not_start(self) -> None:

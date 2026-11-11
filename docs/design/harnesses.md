@@ -26,6 +26,7 @@ Shared code never asks which agent it has. Each layer has one place per agent, a
 | A running session | `lib/agent_state.py`: the `Agent` interface and the `AGENTS` table. `lib/agents.sh` is its shell side | `lib/claude_state.py`, `lib/codex_state.py`, each a module with `Agent`'s functions (`mypy` checks they match) |
 | Reading a screen | `lib/pane_input.py` asks the `AGENTS` table; `lib/screen_text.py` has the helpers readers share | A `Screen` in its profile: `typed`, `question`, `rejected` (`lib/agent_files.py`) |
 | Holding a window to its connectors | `lib/connectors.py`: reading a list, the report's helpers, and `doctor`, which imports the module the window's profile names | `lib/connectors_<harness>.py`, named by `Profile.connectors`: `main` (its launch command line) and `doctor_line` |
+| The end of a turn | `lib/hook.py`'s `turn-end --harness <agent>`: the update gate, events, the log | A `TurnEnd` in its profile, or none (`lib/agent_files.py`): `report` (what its JSON says: `TurnReport`, or why it is ignored) and `remember` (the name its session goes by) |
 
 `window_specs` is the one source of which agent a window runs: `window_harness` and `harnesses_in_use` read it.
 
@@ -91,7 +92,7 @@ where Enter exits, so `send` must never reach it (below).
 
 **Names are bosun's.** Codex has no way to name a session from outside, so bosun keeps a table in
 `codex-sessions.json`, filled in by what Codex runs at the end of a turn (`notify=`, `bosun hook
-codex-turn-end`). That report has two traps, both found only by running the real thing:
+turn-end --harness codex`; `codex-turn-end` is the same, kept for windows started before). That report has two traps, both found only by running the real thing:
 
 - It also fires for Codex's hidden helpers, such as the one that writes a session's title, each under an
   id of its own. A thread only counts if it has a session file that came from the terminal.

@@ -1327,7 +1327,7 @@ check "... and --update-restart starts it again" update_restart gamma
 check "... with the update's prompt" wait_for 10 launched_with_update_prompt gamma "$gamma_pane"
 check "... on Claude, as it was launched" bash -c '
   screen="$(tmux -L "$1" capture-pane -p -J -S -500 -t "=smoke:gamma")"
-  grep -q -- "--remote-control gamma" <<<"$screen" && ! grep -q codex-turn-end <<<"$screen"' _ "$SOCKET"
+  grep -q -- "--remote-control gamma" <<<"$screen" && ! grep -q turn-end <<<"$screen"' _ "$SOCKET"
 printf '#!/bin/sh\ncase "$*" in *"mcp list --json") echo "[]" && exit 0 ;; esac\necho "codex-cli 0.50.0"\n' >"$WORK/fake-codex"
 chmod +x "$WORK/fake-codex"
 wait_for 10 pane_is_idle gamma
@@ -1337,7 +1337,7 @@ echo "BOSUN_CODEX_BIN=\"$WORK/fake-codex\"" >"$BOSUN_CONFIG_DIR/bosun.env"
 check "a plain refresh, not for an update" "$BOSUN" refresh gamma
 check "... starts it on the agent configured now (Codex)" wait_for 10 bash -c '
   [ "$(tmux -L "$1" display -p -t =smoke:gamma "#{pane_pid}")" != "$2" ] &&
-    tmux -L "$1" capture-pane -p -J -S -500 -t "=smoke:gamma" | grep -q codex-turn-end' _ "$SOCKET" "$gamma_pane"
+    tmux -L "$1" capture-pane -p -J -S -500 -t "=smoke:gamma" | grep -q turn-end' _ "$SOCKET" "$gamma_pane"
 rm -f "$BOSUN_CONFIG_DIR/bosun.env"
 cp "$WORK/sessions.yml.on-claude" "$BOSUN_CONFIG_DIR/sessions.yml"
 "$BOSUN" stop >/dev/null 2>&1
@@ -2741,7 +2741,8 @@ for line in sys.stdin:
   out="$(CX launch cx)"
   check "a new Codex session starts with what keeps it unattended" contains "$out" "--no-daemon --approve-for-me"
   check "... can reach git and bosun's state" contains "$out" "sandbox_workspace_write.writable_roots"
-  check "... reports when a turn ends" contains "$out" "codex-turn-end"
+  check "... reports when a turn ends, by the agent's own name" contains "$out" "turn-end"
+  check "... not by the name only Codex had" not_contains "$out" "codex-turn-end"
   check "... and always has a first prompt" contains "$out" 'nothing\ to\ do\ yet'
   check "... with the model only if one is set" not_contains "$out" "--model"
   check "a prompt it was given goes after --" contains "$(CX launch cx '-starts with a dash')" "-- -starts\\ with\\ a\\ dash"
@@ -2755,7 +2756,7 @@ for line in sys.stdin:
   out="$(CX sessions --json)"
   check "sessions knows its model" contains "$(BOSUN_CODEX_MODEL=gpt-test CX sessions --json | jq -r '.[] | select(.name == "cx") | .model')" "gpt-test"
   printf '{"type":"session_meta","payload":{"id":"cx-1","cwd":"%s","source":"cli"}}\n' "$(cd "$CX_REPO" && pwd -P)" >"$CX_HOME/sessions/2026/10/30/rollout-2026-10-30T00-00-00-cx-1.jsonl"
-  CX hook codex-turn-end --window cx --conversation cx "{\"thread-id\":\"cx-1\",\"cwd\":\"$CX_REPO\"}" >/dev/null
+  CX hook turn-end --harness codex --window cx --conversation cx "{\"thread-id\":\"cx-1\",\"cwd\":\"$CX_REPO\"}" >/dev/null
   CX hook codex-turn-end --window cx --conversation cx "{\"thread-id\":\"a-helper\",\"cwd\":\"$CX_REPO\"}" >/dev/null
   check "once a turn has ended it resumes that session" wait_for 5 bash -c 'cd "$1" && BOSUN_CODEX_BIN="$5" CODEX_HOME="$2" BOSUN_SESSIONS_FILE="$3" BOSUN_LAUNCH_DRY_RUN=1 "$4" launch cx 2>&1 | grep -q "resume .* cx-1"' _ "$CX_REPO" "$CX_HOME" "$WORK/cx-sessions.yml" "$BOSUN" "$ROOT/tests/sandbox/codex-stand-in"
   check "bosun trust covers each agent in use" bash -c 'cd "$1" && CODEX_HOME="$2" BOSUN_SESSIONS_FILE="$3" "$4" trust --any "$1" >/dev/null 2>&1 && grep -q "trust_level = \"trusted\"" "$2/config.toml"' _ "$CX_REPO" "$CX_HOME" "$WORK/cx-sessions.yml" "$BOSUN"

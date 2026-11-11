@@ -64,7 +64,11 @@ class HookTest(unittest.TestCase):
         return json.dumps({"hook_event_name": "UserPromptSubmit", "session_id": "s-1", "prompt": prompt})
 
     def codex_turn(
-        self, prompts: str | list[str], env: dict[str, str] | None = None, thread: str = "t-1"
+        self,
+        prompts: str | list[str],
+        env: dict[str, str] | None = None,
+        thread: str = "t-1",
+        head: tuple[str, ...] = ("codex-turn-end",),
     ) -> int:
         session_meta = {"type": "session_meta", "payload": {"id": "t-1", "source": "cli"}}
         rollouts = self.state_dir / "codex" / "2026" / "10" / "30"
@@ -75,8 +79,35 @@ class HookTest(unittest.TestCase):
         self.addCleanup(patcher.stop)
         inputs = [prompts] if isinstance(prompts, str) else prompts
         payload = {"thread-id": thread, "cwd": "/repo", "input-messages": inputs}
-        argv = ["codex-turn-end", "--window", WINDOW, "--conversation", f"{WINDOW}-2", json.dumps(payload)]
+        argv = [*head, "--window", WINDOW, "--conversation", f"{WINDOW}-2", json.dumps(payload)]
         return hook.main(argv, env or self.env)
+
+    def test_turn_end_with_harness_codex_does_what_codex_turn_end_did(self) -> None:
+        def after(*head: str) -> tuple[dict[str, Any], list[tuple[Any, ...]]]:
+            self.setUp()  # a state folder of its own for each name
+            self.codex_turn("go with option b", head=head)
+            names = json.loads((self.state_dir / "codex-sessions.json").read_text())
+            return names, [(e["items"], e["window"], e["session"], e["text"]) for e in self.said()]
+
+        old = after("codex-turn-end")
+        new = after("turn-end", "--harness", "codex")
+        self.assertEqual(old, new)
+        self.assertEqual(new[0][f"{WINDOW}-2"]["id"], "t-1")
+        self.assertEqual(len(new[1]), 1)
+
+    def test_an_agent_that_reports_no_turns_is_refused(self) -> None:
+        stderr = io.StringIO()
+        with self.assertRaises(SystemExit) as raised, mock.patch.object(sys, "stderr", stderr):
+            hook.main(["turn-end", "--harness", "claude", "--window", WINDOW, "{}"], self.env)
+        self.assertEqual(raised.exception.code, 2)
+        self.assertIn("claude reports no turns", stderr.getvalue())
+
+    def test_an_agent_bosun_does_not_know_is_refused_with_the_ones_it_does(self) -> None:
+        stderr = io.StringIO()
+        with self.assertRaises(SystemExit) as raised, mock.patch.object(sys, "stderr", stderr):
+            hook.main(["turn-end", "--harness", "nope", "--window", WINDOW, "{}"], self.env)
+        self.assertEqual(raised.exception.code, 2)
+        self.assertIn("no agent 'nope': bosun knows claude, codex", stderr.getvalue())
 
     def test_a_codex_turn_says_which_session_a_window_s_name_stands_for(self) -> None:
         self.assertEqual(self.codex_turn("go with option b"), 0)

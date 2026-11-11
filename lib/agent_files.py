@@ -50,6 +50,26 @@ class Screen:
 
 
 @dataclass(frozen=True)
+class TurnReport:
+    """What an agent's report at the end of a turn says about the session that ended it."""
+
+    session_id: str
+    workdir: str
+    prompts: int  # how many prompts the session has had, in all
+    new: tuple[str, ...]  # the ones not seen in an earlier report
+
+
+@dataclass(frozen=True)
+class TurnEnd:
+    """How bosun takes what an agent runs when a turn ends (`bosun hook turn-end --harness <agent>`)."""
+
+    # (the window's conversation, the agent's JSON) -> its report, or why it is ignored
+    report: Callable[[str, Mapping[str, Any]], TurnReport | str]
+    # (conversation, session id, workdir, prompts seen) -> makes the name stand for the session
+    remember: Callable[[str, str, str, int], None]
+
+
+@dataclass(frozen=True)
 class Profile:
     """What an agent is and can do, declared by its module so that shared code never names the agent."""
 
@@ -70,6 +90,7 @@ class Profile:
     )
     setup_sessions: str = ""  # how `bosun init` says its repo sessions will run
     setup_note: str = ""  # what `bosun init` tells the person about running them on it
+    turn_end: TurnEnd | None = None  # how it reports the end of a turn; None: it does not
 
 
 def command_line(pid: int | str) -> str:

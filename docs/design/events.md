@@ -50,7 +50,7 @@ is recorded in the ledger's `said` list and on the item(s) it is about: the held
 id, else the held item whose title shares the most words with it, else the window's active item;
 the other held items are listed as also held, so `ledger said <id>` finds it from any of them.
 A repo session on Codex has no such hook: what Codex runs when a turn ends (`notify=`, `bosun hook
-codex-turn-end`) records that turn's new prompts the same way, also only with events on, so they
+turn-end --harness codex`) records that turn's new prompts the same way, also only with events on, so they
 arrive when the turn ends, not when I press Return ([harnesses.md](harnesses.md#what-codex-needed)).
 Verbatim up to 2000 characters, redacted like learning's digest (`lib/redact.py`). Prompts that are
 not mine are skipped: what bosun pasted (`bosun send` notes a hash of each message), its

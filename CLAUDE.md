@@ -152,8 +152,9 @@ of truth, so don't copy rules into this file.
   `lib/agent_files.py`, and neither imports the other. `lib/agents.sh` is the shell side: `agent_state`,
   `window_harness`, `harnesses_in_use`, `agent_*`. `libexec/bosun-launch` holds the flow, and
   `lib/launch/<harness>.sh` what differs in it (`build_agent_args`, `first_prompt`, `run_new`, `run_resumed`).
-  `window_specs` says which agent each window runs. `bosun hook codex-turn-end` (`lib/hook.py`) is what Codex
-  runs when a turn ends; each agent's profile has a `Screen` (its readers for its input box, questions and
+  `window_specs` says which agent each window runs. `bosun hook turn-end --harness <agent>` (`lib/hook.py`) is what
+  an agent runs when a turn ends, by its profile's `turn_end` (`codex-turn-end` is its alias for Codex windows
+  started before, whose launch command outlives the bosun that wrote it); each agent's profile has a `Screen` (its readers for its input box, questions and
   rejected pastes, with `lib/screen_text.py`'s helpers), which `lib/pane_input.py` asks.
 - Console (`bosun console`, design: `docs/design/console.md`): `lib/console_server.py` (the
   HTTP server and its request checks: bind address, Host, token cookie, static allowlist,

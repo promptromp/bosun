@@ -69,7 +69,7 @@ build_agent_args() { # <window> <session name> <model> <effort>
   roots="$(jq -cn --arg state "$BOSUN_STATE_DIR" --arg logs "$BOSUN_LOG_DIR" --arg git "$git_dir" \
     '[$state, $logs, $git] | map(select(. != ""))')"
   notify="$(jq -cn --arg bosun "$BOSUN_CMD" --arg window "$1" --arg name "$2" \
-    '[$bosun, "hook", "codex-turn-end", "--window", $window, "--conversation", $name]')"
+    '[$bosun, "hook", "turn-end", "--harness", "codex", "--window", $window, "--conversation", $name]')"
   # shellcheck disable=SC2206  # the flags are words, on purpose
   agent_args=($BOSUN_CODEX_FLAGS
     -c "sandbox_workspace_write.writable_roots=$roots"
