@@ -469,8 +469,11 @@ die_usage() {
   exit 2
 }
 
+# A macOS notification <title> <message>. Both go to osascript as arguments of its run handler, never into
+# the script's text, so nothing in them (a quote, a backslash, `do shell script`) can become AppleScript.
 notify() {
-  osascript -e "display notification \"${2//\"/\\\"}\" with title \"${1//\"/\\\"}\"" >/dev/null 2>&1 || true
+  osascript -e 'on run argv' -e 'display notification (item 2 of argv) with title (item 1 of argv)' \
+    -e 'end run' "$1" "$2" >/dev/null 2>&1 || true
 }
 
 # Whether this runs in a pane of bosun's own tmux server (lib/uninstall.py's inside_bosun is the same

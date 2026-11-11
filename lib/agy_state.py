@@ -480,6 +480,7 @@ APPROVAL = json.dumps(
     {"decision": "auto_approve", "overwrite": {"BypassSandbox": True}}, separators=(",", ":")
 )
 SAID_FD_LIMIT = 1024  # the descriptors the recording child closes: the agent's stdout pipe is one of them
+REMOTE_TIMEOUT_SECONDS = 5  # reading a remote's URL from the repository's config
 PUNCTUATION = ";&|()<>\n"  # what ends a simple command, and the redirections
 
 
@@ -681,14 +682,34 @@ def short_letters(word: str) -> str:
     return word[1:] if word.startswith("-") and not word.startswith("--") else ""
 
 
+def configured_remote(name: str, cwd: str) -> bool:
+    """Whether the repository in <cwd> has a remote <name> with a URL in its config, which the agent cannot
+    write from the sandbox (`.git` is read-only there). Anything but an answer is no."""
+    try:
+        done = subprocess.run(
+            ["git", "-C", cwd, "config", "--get", f"remote.{name}.url"],
+            stdin=subprocess.DEVNULL,
+            capture_output=True,
+            text=True,
+            timeout=REMOTE_TIMEOUT_SECONDS,
+            check=False,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return False
+    return done.returncode == 0 and bool(done.stdout.strip())
+
+
 def plain_remote(word: str, cwd: str) -> bool:
     """Whether <word>, a push, fetch or pull's repository, can only be a remote by its name: no path, URL,
-    `host:path` or transport (`ext::`, `file:`), not zsh's `=command`, and nothing of that name (or with git's
-    `.git` added) in the folder the command runs in, where git would take it for a repository the agent wrote,
-    whose hooks and config would run."""
+    `host:path` or transport (`ext::`, `file:`), not zsh's `=command`, nothing of that name (or with git's
+    `.git` added) in the folder the command runs in, and a remote of the repository's own config. git takes a
+    configured remote before a folder of that name, so a folder made after the approval (by a command the
+    agent left running) changes nothing; the folder test only refuses earlier."""
     if word.startswith(("/", ".", "~", "-", "=")) or ":" in word or "/" in word:
         return False
-    return not any(os.path.lexists(Path(cwd) / name) for name in (word, f"{word}.git"))
+    if any(os.path.lexists(Path(cwd) / name) for name in (word, f"{word}.git")):
+        return False
+    return configured_remote(word, cwd)
 
 
 class Flags(NamedTuple):
@@ -836,8 +857,10 @@ class GhRule(NamedTuple):
     urls: bool = True  # whether its words may hold a URL
 
 
-# gh's commands a bosun window may run outside the sandbox: never extension (ext, extensions), alias, config,
-# auth, secret, codespace, gist, or repo clone and fork, which hand their words to git.
+# gh's commands a bosun window may run outside the sandbox. Not extension (ext, extensions), alias, config,
+# auth or codespace, which run programs or change gh itself, nor repo clone and fork, which hand their words
+# to git. `api` reaches whatever the person's token allows (gists, secrets, workflow runs too), which is
+# within their decision that gh may pass.
 GH: dict[str, GhRule] = {
     "pr": GhRule(  # reads and changes pull requests
         frozenset({"view", "list", "status", "create", "checkout", "merge", "review", "comment", "diff"})
@@ -882,30 +905,40 @@ def gh_allows(words: list[str], _cwd: str) -> bool:
     return second and urls and not any(map(gh_refuses, words[1:]))
 
 
-STARTS_WINDOWS = frozenset({"--new", "--start"})  # start a window, perhaps in a folder the agent wrote
-# bosun's commands a bosun window may run outside the sandbox, and the words refused in each: never launch,
-# trust, start, refresh, update, init or uninstall.
-BOSUN: dict[str, frozenset[str]] = {
-    "ledger": frozenset(),  # the work items, in bosun's state folder
+class BosunRule(NamedTuple):
+    """What an allowed bosun command may not carry."""
+
+    words: frozenset[str] = frozenset()  # options refused anywhere in it (also as `--name=value`)
+    seconds: frozenset[str] = frozenset()  # its own subcommands refused as its second word
+
+
+STARTS_WINDOWS = BosunRule(frozenset({"--new", "--start"}))  # start a window, perhaps in a folder the agent
+# wrote
+# bosun's commands a bosun window may run outside the sandbox: never launch, trust, start, refresh, update,
+# init or uninstall, nor alert, whose notification text is the agent's.
+BOSUN: dict[str, BosunRule] = {
+    "ledger": BosunRule(seconds=frozenset({"approve"})),  # the work items; never approves its own proposal
     "send": STARTS_WINDOWS,  # pastes into a running window
     "delegate": STARTS_WINDOWS,  # hands a task to a running window
-    "sessions": frozenset(),  # reads
-    "status": frozenset(),  # reads
-    "context": frozenset(),  # reads
-    "pr-threads": frozenset(),  # reads
-    "my-prs": frozenset(),  # reads
-    "impact": frozenset(),  # reads
-    "resolve": frozenset(),  # reads
-    "alert": frozenset(),  # tells the person
-    "doctor": frozenset(),  # reads
-    "preflight": frozenset(),  # reads
+    "sessions": BosunRule(),  # reads
+    "status": BosunRule(),  # reads
+    "context": BosunRule(),  # reads
+    "pr-threads": BosunRule(),  # reads
+    "my-prs": BosunRule(),  # reads
+    "impact": BosunRule(),  # reads
+    "resolve": BosunRule(),  # reads
+    "doctor": BosunRule(),  # reads
+    "preflight": BosunRule(),  # reads
 }
 
 
 def bosun_allows(words: list[str], _cwd: str) -> bool:
-    """Whether `bosun <words>` is an allowed command, first, with none of its refused words."""
-    refused = BOSUN.get(words[0])
-    return refused is not None and not any(word.partition("=")[0] in refused for word in words[1:])
+    """Whether `bosun <words>` is an allowed command, first, with neither a refused subcommand second nor a
+    refused option anywhere."""
+    rule = BOSUN.get(words[0])
+    if rule is None or any(second in rule.seconds for second in words[1:2]):
+        return False
+    return not any(word.partition("=")[0] in rule.words for word in words[1:])
 
 
 # The programs that pass the sandbox, each by its exact name (never a path), and what checks its words.

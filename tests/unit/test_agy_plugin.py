@@ -252,6 +252,15 @@ class PreToolUseTest(HookCase):
         super().setUp()
         self.work = self.root / "r1"
         self.work.mkdir()
+        self.remotes = {"origin"}  # the remotes of the repository's config, never a real one's
+        self.config_reads: list[tuple[str, str]] = []
+        patcher = mock.patch.object(agy_state, "configured_remote", self.configured_remote)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def configured_remote(self, name: str, cwd: str) -> bool:
+        self.config_reads.append((name, cwd))
+        return name in self.remotes
 
     def body(self, command: str) -> dict[str, Any]:
         return {**command_payload(command), "cwd": str(self.work), "workspacePaths": [str(self.work)]}
@@ -387,6 +396,8 @@ class PreToolUseTest(HookCase):
             "bosun launch foo",
             "bosun send --new w x hi",
             "bosun uninstall",
+            "bosun alert x",
+            "bosun ledger approve x --quote e",
         )
 
     def test_a_push_or_fetch_reaches_only_a_remote_by_its_name(self) -> None:
@@ -418,6 +429,25 @@ class PreToolUseTest(HookCase):
             "git remote show origin",
             "git remote get-url origin",
         )
+
+    def test_the_repository_must_be_a_remote_in_its_own_config(self) -> None:
+        (self.work / "upstream").mkdir()
+        self.remotes = {"origin", "upstream"}
+        self.assert_no_answer(
+            "git push upstream HEAD",  # a folder too: refused even though configured
+            "git push fork HEAD",  # neither a folder nor a remote: a folder made later would be pushed to
+            "git fetch fork",
+            "git pull fork main",
+            "git remote show fork",
+            "git remote get-url fork",
+        )
+        self.config_reads.clear()
+        self.assert_approved("git push origin feature", "git push")
+        self.assertEqual(self.config_reads, [("origin", str(self.work))])
+
+    def test_bosun_ledger_never_approves_a_proposal(self) -> None:
+        self.assert_no_answer("bosun ledger approve x --quote e", "bosun ledger approve")
+        self.assert_approved("bosun ledger list", "bosun ledger show x", "bosun ledger note x approve")
 
     def test_global_options_before_the_subcommand_get_no_answer(self) -> None:
         self.assert_no_answer(
@@ -580,6 +610,35 @@ class PreToolUseTest(HookCase):
         self.assertEqual(self.answer("PreToolUse", body), "")
         self.assertEqual(self.answer("PreToolUse", {"toolCall": "git status"}), "")
         self.assertEqual(self.answer("PreToolUse", {}), "")
+
+
+class ConfiguredRemoteTest(unittest.TestCase):
+    """configured_remote against a scratch repository, with no global or system git config."""
+
+    def setUp(self) -> None:
+        scratch = tempfile.TemporaryDirectory()
+        self.addCleanup(scratch.cleanup)
+        self.root = Path(scratch.name)
+        isolated = {"HOME": str(self.root), "GIT_CONFIG_NOSYSTEM": "1", "GIT_CONFIG_GLOBAL": os.devnull}
+        patcher = mock.patch.dict(os.environ, isolated)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        self.repo = self.root / "repo"
+        self.repo.mkdir()
+        for argv in (["init", "-q"], ["remote", "add", "origin", "https://example.com/x.git"]):
+            subprocess.run(["git", "-C", str(self.repo), *argv], check=True, stdin=subprocess.DEVNULL)
+
+    def test_a_remote_of_the_config_and_nothing_else(self) -> None:
+        self.assertTrue(agy_state.configured_remote("origin", str(self.repo)))
+        self.assertFalse(agy_state.configured_remote("evil", str(self.repo)))
+        (self.repo / "evil").mkdir()
+        self.assertFalse(agy_state.configured_remote("evil", str(self.repo)))
+        self.assertFalse(agy_state.configured_remote("origin", str(self.root)))  # not a repository
+
+    def test_a_config_that_cannot_be_read_is_no_remote(self) -> None:
+        for error in (OSError("no git"), subprocess.TimeoutExpired("git", 5)):
+            with mock.patch("subprocess.run", side_effect=error):
+                self.assertFalse(agy_state.configured_remote("origin", str(self.repo)))
 
 
 class RunHookTest(unittest.TestCase):

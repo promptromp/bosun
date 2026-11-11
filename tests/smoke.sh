@@ -679,6 +679,14 @@ echo "my-prs (fake gh)"
 mkdir -p "$HOME/.local/bin"
 printf '#!/bin/sh\nexit 0\n' >"$HOME/.local/bin/osascript" # no real notifications from tests
 chmod +x "$HOME/.local/bin/osascript"
+mkdir -p "$WORK/osascript-argv"
+printf '#!/bin/sh\nfor a in "$@"; do printf "%%s\\0" "$a"; done >"%s"\n' "$WORK/osascript.argv" >"$WORK/osascript-argv/osascript"
+chmod +x "$WORK/osascript-argv/osascript"
+# shellcheck disable=SC1003 # the backslash before the closing quote is part of the message, on purpose
+hostile='a \" & (do shell script "touch PWNED") -- "b" \'
+/bin/bash -c 'source "$1/lib/common.sh"; PATH="$3:$PATH"; notify "t \" x" "$2"' _ "$ROOT" "$hostile" "$WORK/osascript-argv"
+check "notify hands osascript the title and message as arguments, unchanged, never as script text" test \
+  "$(tr '\0' '\n' <"$WORK/osascript.argv")" = "$(printf '%s\n' -e 'on run argv' -e 'display notification (item 2 of argv) with title (item 1 of argv)' -e 'end run' 't " x' "$hostile")"
 cat >"$HOME/.local/bin/gh" <<FAKE
 #!/bin/bash
 printf '%s\n' "\$@" >"$WORK/fake-gh.args"
