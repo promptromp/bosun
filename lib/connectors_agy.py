@@ -112,15 +112,26 @@ def plugin_listing(agent_bin: str) -> list[Any]:
 
 def plugin_servers(agent_bin: str) -> dict[str, str]:
     """Each server of an enabled plugin by the name a session gives it, `<plugin>_<server>`, with its
-    source."""
+    source. A plugin is off only when the listing says `"enabled": false`, and an entry of a shape bosun
+    cannot read stops the listing: skipping it could miss a server agy starts."""
     found: dict[str, str] = {}
     for plugin in plugin_listing(agent_bin):
-        if not isinstance(plugin, dict) or not plugin.get("enabled", True) or not plugin.get("name"):
+        name, servers = plugin_entry(plugin)
+        if plugin.get("enabled", True) is False:
             continue
-        names = plugin.get("mcpServers") or []
-        for server in names if isinstance(names, list) else []:
-            found.setdefault(f"{plugin['name']}_{server}", f"plugin {plugin['name']}")
+        for server in servers:
+            found.setdefault(f"{name}_{server}", f"plugin {name}")
     return found
+
+
+def plugin_entry(plugin: Any) -> tuple[str, list[str]]:
+    """One plugin's name and its servers' names from `plugin list --json`, or ConnectorsError."""
+    if not isinstance(plugin, dict) or not isinstance(plugin.get("name"), str) or not plugin["name"]:
+        raise ConnectorsError("`plugin list --json` gave a plugin without a name")
+    servers = plugin.get("mcpServers") or []
+    if not isinstance(servers, list) or not all(isinstance(server, str) for server in servers):
+        raise ConnectorsError(f"`plugin list --json` gave plugin {plugin['name']} servers that are not names")
+    return plugin["name"], servers
 
 
 def sources(workdir: str, agent_bin: str) -> dict[str, str]:

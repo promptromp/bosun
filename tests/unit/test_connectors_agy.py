@@ -121,6 +121,30 @@ class ServersTest(AgyCase):
         self.assertIn("plugin acme-plug", err)
         self.assertEqual(self.run_main("acme-plug_tracker, acme-plug_wiki", agent), (0, "", ""))
 
+    def test_a_plugin_is_off_only_when_it_says_false(self) -> None:
+        agent = self.plugins(
+            [
+                {"name": "acme-unsaid", "mcpServers": ["a"]},
+                {"name": "acme-null", "enabled": None, "mcpServers": ["b"]},
+            ]
+        )
+        self.assertEqual(
+            connectors_agy.servers(str(self.below), str(agent)), ["acme-unsaid_a", "acme-null_b"]
+        )
+
+    def test_a_plugin_listing_bosun_cannot_read_refuses(self) -> None:
+        for listing in (
+            [{"enabled": True, "mcpServers": ["a"]}],
+            [{"name": "acme-plug", "mcpServers": [{"command": "x"}]}],
+            [{"name": "acme-plug", "mcpServers": "tracker"}],
+            ["acme-plug"],
+        ):
+            with self.subTest(listing=listing):
+                code, out, err = self.run_main("acme-docs", self.plugins(listing))
+                self.assertEqual((code, out), (1, ""))
+                self.assertIn("plugin list --json", err)
+                self.assertNotIn('"command"', err)
+
     def test_a_server_found_twice_is_listed_once(self) -> None:
         self.write_servers(self.config, {"acme-docs": stdio()})
         self.write_servers(self.repo / ".agents", {"acme-docs": stdio()})
