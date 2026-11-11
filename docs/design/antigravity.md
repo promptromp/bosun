@@ -2,7 +2,8 @@
 
 bosun runs repo windows on Claude Code or Codex. This adds Google's Antigravity CLI (`agy`) as a third, and
 first makes adding an agent what [Agents](harnesses.md) says it is: a module per agent, with no agent's name
-in shared code. Status: proposed, 2026-11-10. Part 1 built (pull request to follow); Part 2 not started.
+in shared code. Status: approved, 2026-11-10. Part 1 built (#36, plan `docs/plans/agent-profiles.md`); Part 2
+next, starting with a run of the real `agy` in the macOS VM.
 
 ## Why
 
