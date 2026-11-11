@@ -147,6 +147,38 @@ class CodexTest(unittest.TestCase):
         with mock.patch.object(codex_state, "command_line", return_value="codex"):
             self.assertEqual(codex_state.launch_settings("1"), agent_files.LaunchSettings(None, None, False))
 
+    def test_a_turn_report_counts_what_it_has_not_seen_and_ignores_helpers(self) -> None:
+        self.rollout(meta())
+        payload = {"thread-id": SESSION_ID, "cwd": "/work/api", "input-messages": ["one", "two"]}
+        report = codex_state.turn_report("api-2", payload)
+        self.assertEqual(report, agent_files.TurnReport(SESSION_ID, "/work/api", 2, ("two",)))
+        turn = codex_state.PROFILE.turn_end
+        assert turn is not None
+        turn.remember("api-2", SESSION_ID, "/work/api", 2)
+        self.assertEqual(
+            codex_state.turn_report("api-2", {**payload, "input-messages": ["one", "two", "3"]}),
+            agent_files.TurnReport(SESSION_ID, "/work/api", 3, ("3",)),
+        )
+        ignored = codex_state.turn_report("api-2", {"thread-id": "a-helper"})
+        self.assertEqual(ignored, "ignored: a-helper is one of Codex's helpers, not api-2")
+        self.assertEqual(
+            codex_state.turn_report("api-2", {}), "ignored: no id is one of Codex's helpers, not api-2"
+        )
+
+    def test_only_codex_reports_turns_of_the_agents_bosun_knows(self) -> None:
+        self.assertIsNotNone(codex_state.PROFILE.turn_end)
+        self.assertIsNone(claude_state.PROFILE.turn_end)
+
+    def test_a_launch_by_the_generic_turn_end_name_is_bosun_s_too(self) -> None:
+        notify = (
+            'notify=["/bin/bosun","hook","turn-end","--harness","codex",'
+            '"--window","api","--conversation","api-2"]'
+        )
+        line = f"codex --no-daemon -c {notify} resume x"
+        with mock.patch.object(codex_state, "command_line", return_value=line):
+            self.assertTrue(codex_state.launch_settings("1").by_bosun)
+            self.assertEqual(codex_state.NAME_ARGUMENT.search(line).group(1), "api-2")  # type: ignore[union-attr]
+
     def test_how_large_the_conversation_is(self) -> None:
         path = self.rollout(meta(), event("token_count", info={"last_token_usage": {"total_tokens": 12651}}))
         with mock.patch.object(codex_state, "record", return_value={"transcript": str(path)}):

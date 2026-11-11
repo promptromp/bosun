@@ -64,7 +64,11 @@ class HookTest(unittest.TestCase):
         return json.dumps({"hook_event_name": "UserPromptSubmit", "session_id": "s-1", "prompt": prompt})
 
     def codex_turn(
-        self, prompts: str | list[str], env: dict[str, str] | None = None, thread: str = "t-1"
+        self,
+        prompts: str | list[str],
+        env: dict[str, str] | None = None,
+        thread: str = "t-1",
+        head: tuple[str, ...] = ("codex-turn-end",),
     ) -> int:
         session_meta = {"type": "session_meta", "payload": {"id": "t-1", "source": "cli"}}
         rollouts = self.state_dir / "codex" / "2026" / "10" / "30"
@@ -75,8 +79,41 @@ class HookTest(unittest.TestCase):
         self.addCleanup(patcher.stop)
         inputs = [prompts] if isinstance(prompts, str) else prompts
         payload = {"thread-id": thread, "cwd": "/repo", "input-messages": inputs}
-        argv = ["codex-turn-end", "--window", WINDOW, "--conversation", f"{WINDOW}-2", json.dumps(payload)]
+        argv = [*head, "--window", WINDOW, "--conversation", f"{WINDOW}-2", json.dumps(payload)]
         return hook.main(argv, env or self.env)
+
+    def after_codex_turn(self, *head: str) -> tuple[dict[str, Any], list[tuple[Any, ...]]]:
+        """What a Codex turn run through <head> leaves in this test's state: the names, and what was said."""
+        self.codex_turn("go with option b", head=head)
+        names = json.loads((self.state_dir / "codex-sessions.json").read_text())
+        return names, [(e["items"], e["window"], e["session"], e["text"]) for e in self.said()]
+
+    def test_older_event_names_come_from_the_profiles(self) -> None:
+        self.assertEqual({"codex-turn-end": "codex"}, hook.legacy_events())
+
+    def test_turn_end_with_harness_codex_does_what_codex_turn_end_did(self) -> None:
+        old = self.after_codex_turn("codex-turn-end")
+        other = type(self)(self._testMethodName)  # a state folder of its own, cleaned up with this test's
+        other.setUp()
+        self.addCleanup(other.doCleanups)
+        new = other.after_codex_turn("turn-end", "--harness", "codex")
+        self.assertEqual(old, new)
+        self.assertEqual(new[0][f"{WINDOW}-2"]["id"], "t-1")
+        self.assertEqual(len(new[1]), 1)
+
+    def test_an_agent_that_reports_no_turns_is_refused(self) -> None:
+        stderr = io.StringIO()
+        with self.assertRaises(SystemExit) as raised, mock.patch.object(sys, "stderr", stderr):
+            hook.main(["turn-end", "--harness", "claude", "--window", WINDOW, "{}"], self.env)
+        self.assertEqual(raised.exception.code, 2)
+        self.assertIn("claude reports no turns", stderr.getvalue())
+
+    def test_an_agent_bosun_does_not_know_is_refused_with_the_ones_it_does(self) -> None:
+        stderr = io.StringIO()
+        with self.assertRaises(SystemExit) as raised, mock.patch.object(sys, "stderr", stderr):
+            hook.main(["turn-end", "--harness", "nope", "--window", WINDOW, "{}"], self.env)
+        self.assertEqual(raised.exception.code, 2)
+        self.assertIn("no agent 'nope': bosun knows claude, codex", stderr.getvalue())
 
     def test_a_codex_turn_says_which_session_a_window_s_name_stands_for(self) -> None:
         self.assertEqual(self.codex_turn("go with option b"), 0)
@@ -185,6 +222,23 @@ class HookTest(unittest.TestCase):
         with mock.patch.object(update_gate, "guarded", return_value=0):
             self.assertEqual(hook.run(argv, self.env), 0)
         self.assertEqual(self.log().count("ERROR"), 1)
+
+    def test_the_error_line_never_carries_the_payload_whatever_the_arguments(self) -> None:
+        said = "go with option c"
+        payload = json.dumps({"thread-id": "t-1", "cwd": "/repo", "input-messages": [said]})
+        forms = (
+            (["codex-turn-end", "--window", WINDOW, payload], f"codex-turn-end --window {WINDOW} recorded"),
+            (
+                ["turn-end", "--harness", "codex", "--window", WINDOW, "--conversation", "n", payload],
+                f"turn-end --harness codex --window {WINDOW} --conversation n recorded",
+            ),
+        )
+        for argv, line in forms:
+            with self.subTest(argv[0]), mock.patch.object(update_gate, "guarded", return_value=1):
+                self.assertEqual(hook.run(argv, self.env), 1)
+                self.assertIn(f"ERROR: bosun hook {line} nothing", self.log())
+        self.assertNotIn(said, self.log())
+        self.assertNotIn("t-1", self.log())
 
     def test_it_never_fails_the_prompt(self) -> None:
         self.assertEqual(self.run_hook("{not json"), 0)

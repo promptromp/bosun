@@ -10,9 +10,11 @@ from dataclasses import replace
 from datetime import date, datetime
 from pathlib import Path
 from typing import Any
+from unittest import mock
 
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "lib"))
+import codex_state
 import init_plan
 from init_plan import Answers, AnswersError, DayUse, DirState, Facts, Repo, RepoUse
 
@@ -645,6 +647,22 @@ class PlanTest(unittest.TestCase):
         self.assertIn("for the orchestrator", text)
         self.assertIn("stays on Claude Code", " ".join(" ".join(plan.notes).split()))
         self.assertNotIn("auto mode", " ".join(plan.notes))
+
+    def test_any_agent_with_a_profile_is_an_answer(self) -> None:
+        self.assertEqual(init_plan.validate(Answers(harness="codex")), [])
+        self.assertIn(
+            "harness: 'acme-agent' must be claude or codex", init_plan.validate(Answers(harness="acme-agent"))
+        )
+
+    def test_an_agent_other_than_the_default_says_what_its_windows_run(self) -> None:
+        profile = replace(codex_state.PROFILE, setup_sessions="Acme sessions", setup_note="Acme note.")
+        the_facts = facts()
+        answers = Answers(harness="codex")
+        with mock.patch.object(codex_state, "PROFILE", profile):
+            plan = self.plan(the_facts, answers)
+            text = init_plan.render_plan(plan, answers, the_facts, "/c")
+        self.assertIn("Acme sessions", text)
+        self.assertIn("Acme note.", " ".join(plan.notes))
 
     def test_an_unknown_agent_is_refused(self) -> None:
         self.assertIn("harness", " ".join(init_plan.validate(Answers(harness="nosuch"))))

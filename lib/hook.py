@@ -1,9 +1,14 @@
 #!/usr/bin/env python3
-"""Claude Code hooks for repo sessions (design: docs/design/events.md), and what Codex runs when a turn
-ends (design: docs/design/harnesses.md).
+"""Claude Code hooks for repo sessions (design: docs/design/events.md), and what an agent runs when a
+turn ends (design: docs/design/harnesses.md).
 
 Usage: hook.py user-prompt --window <window>    (the hook's JSON on stdin)
+       hook.py turn-end --harness <agent> --window <window> --conversation <name> <json>
        hook.py codex-turn-end --window <window> --conversation <name> <json>
+
+`codex-turn-end` is `turn-end --harness codex`, which a Codex window started before the generic name
+still runs: its launch command outlives the bosun that wrote it. An agent whose profile has no
+`turn_end` reports no turns, and is refused.
 
 Run it as `bosun hook user-prompt --window <window>`: `bosun launch` installs it as the
 UserPromptSubmit hook of a repo window's Claude when BOSUN_EVENTS_ENABLED=1. It records each
@@ -36,10 +41,11 @@ from typing import Any
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import activity
-import codex_state
 import events
 import ledger
 import update_gate
+from agent_files import TurnEnd, TurnReport
+from agent_state import AGENTS
 
 
 USER_PROMPT_EVENT = "UserPromptSubmit"
@@ -83,25 +89,28 @@ def record_prompt(window: str, payload: Mapping[str, Any], env: Mapping[str, str
     return f"user-said in {window} recorded on {on}"
 
 
-def codex_turn_end(window: str, conversation: str, payload: Mapping[str, Any], env: Mapping[str, str]) -> str:
+def turn_end(
+    turn: TurnEnd, window: str, conversation: str, payload: Mapping[str, Any], env: Mapping[str, str]
+) -> str:
     """Remember which session <conversation> is, and with events on what was said in this turn."""
-    session_id = str(payload.get("thread-id") or "")
-    if not codex_state.is_terminal_session(session_id):
-        return f"ignored: {session_id or 'no id'} is one of Codex's helpers, not {conversation}"
-    prompts = [str(text) for text in payload.get("input-messages") or []]
-    new = codex_state.new_prompts(conversation, session_id, prompts)
+    report = turn.report(conversation, payload)
+    if isinstance(report, str):
+        return report
     said: list[str] = []
-    with counted(conversation, session_id, str(payload.get("cwd") or ""), len(prompts)):
+    with counted(turn, conversation, report):
         if env.get("BOSUN_EVENTS_ENABLED") == "1":
-            said = [record_prompt(window, {"prompt": text, "session_id": session_id}, env) for text in new]
-    return "; ".join([f"{conversation} is {session_id}", *said])
+            said = [
+                record_prompt(window, {"prompt": text, "session_id": report.session_id}, env)
+                for text in report.new
+            ]
+    return "; ".join([f"{conversation} is {report.session_id}", *said])
 
 
 @contextlib.contextmanager
-def counted(conversation: str, session_id: str, workdir: str, prompts: int) -> Iterator[None]:
-    """Remembers <conversation> as <session_id> with <prompts> seen once the block ends, whatever
-    happened in it, but for a write the update gate refused: the run again on the installed version
-    then takes the same prompts as new."""
+def counted(turn: TurnEnd, conversation: str, report: TurnReport) -> Iterator[None]:
+    """Remembers <conversation> as the report's session with its prompts seen once the block ends,
+    whatever happened in it, but for a write the update gate refused: the run again on the installed
+    version then takes the same prompts as new."""
     refused = False
     try:
         yield
@@ -110,7 +119,7 @@ def counted(conversation: str, session_id: str, workdir: str, prompts: int) -> I
         raise
     finally:
         if not refused:
-            codex_state.remember(conversation, session_id, workdir, prompts)
+            turn.remember(conversation, report.session_id, report.workdir, report.prompts)
 
 
 def detach(env: Mapping[str, str]) -> bool:
@@ -131,13 +140,56 @@ def detach(env: Mapping[str, str]) -> bool:
     return False
 
 
-def main(argv: list[str], env: Mapping[str, str]) -> int:
+def legacy_events() -> dict[str, str]:
+    """The agent each older event name stands for (`turn-end --harness <agent>`), from the profiles."""
+    return {
+        agent.PROFILE.turn_end.legacy_event: name
+        for name, agent in AGENTS.items()
+        if agent.PROFILE.turn_end and agent.PROFILE.turn_end.legacy_event
+    }
+
+
+def turn_end_of(parser: argparse.ArgumentParser, args: argparse.Namespace) -> TurnEnd | None:
+    """The turn-end handling of the agent <args> names (an older event name stands for its agent), or None
+    for a hook that is not about a turn. A usage error, before anything detaches, for an agent with none."""
+    if args.event == "user-prompt":
+        return None
+    harness = legacy_events().get(args.event) or args.harness
+    if not harness:
+        parser.error("turn-end needs --harness <agent>")
+    if harness not in AGENTS:
+        parser.error(f"no agent '{harness}': bosun knows {', '.join(AGENTS)}")
+    turn: TurnEnd | None = AGENTS[harness].PROFILE.turn_end
+    if turn is None:
+        parser.error(f"{harness} reports no turns")
+    return turn
+
+
+def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="bosun hook", description=__doc__)
-    parser.add_argument("event", choices=("user-prompt", "codex-turn-end"))
+    parser.add_argument("event", choices=("user-prompt", "turn-end", *legacy_events()))
+    parser.add_argument("--harness", default="")
     parser.add_argument("--window", required=True)
     parser.add_argument("--conversation", default="")
     parser.add_argument("payload", nargs="?")
+    return parser
+
+
+def described(argv: list[str]) -> str:
+    """The event, agent, window and conversation <argv> names, for a log line: never its payload, which
+    holds what was said in the window, wherever the arguments put it."""
+    try:
+        args = build_parser().parse_args(argv)
+    except SystemExit:  # not a call main would have run
+        return argv[0] if argv else ""
+    options = (("--harness", args.harness), ("--window", args.window), ("--conversation", args.conversation))
+    return " ".join([args.event, *(f"{flag} {value}" for flag, value in options if value)])
+
+
+def main(argv: list[str], env: Mapping[str, str]) -> int:
+    parser = build_parser()
     args = parser.parse_args(argv)
+    turn = turn_end_of(parser, args)
     try:
         payload = json.loads(args.payload or sys.stdin.read() or "{}")
     except (OSError, json.JSONDecodeError) as exc:
@@ -146,8 +198,8 @@ def main(argv: list[str], env: Mapping[str, str]) -> int:
     if detach(env):
         return 0
     try:
-        if args.event == "codex-turn-end":
-            log(env, codex_turn_end(args.window, args.conversation or args.window, payload, env))
+        if turn is not None:
+            log(env, turn_end(turn, args.window, args.conversation or args.window, payload, env))
         else:
             log(env, record_prompt(args.window, payload, env))
     except update_gate.WriteRefused as exc:
@@ -167,8 +219,7 @@ def run(argv: list[str], env: Mapping[str, str]) -> int:
     watchdog (the gate's own line, on stderr, says why)."""
     code = update_gate.guarded("hook", lambda args: main(args, env), argv)
     if code != 0:
-        what = " ".join(argv[:3])  # the event and the window, never a payload
-        log(env, f"ERROR: bosun hook {what} recorded nothing: the update gate refused its write")
+        log(env, f"ERROR: bosun hook {described(argv)} recorded nothing: the update gate refused its write")
     return code
 
 

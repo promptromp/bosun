@@ -8,9 +8,11 @@ import unittest
 from dataclasses import replace
 from pathlib import Path
 from typing import Any
+from unittest import mock
 
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "lib"))
+import codex_state
 import init_plan
 import init_wizard
 from init_plan import Answers, DayUse, DirState, Facts, Repo, RepoUse
@@ -432,6 +434,14 @@ class OtherQuestionsTest(unittest.TestCase):
     def test_codex_is_only_offered_when_it_is_ready(self) -> None:
         _, ui = run(ALL_RECOMMENDED)
         self.assertFalse(any("Which agent" in screen for screen in ui.screens))
+
+    def test_the_agent_question_shows_each_agent_as_its_profile_says(self) -> None:
+        profile = replace(codex_state.PROFILE, display_name="Acme Agent", setup_preview=("Acme line.",))
+        with mock.patch.object(codex_state, "PROFILE", profile):
+            _, ui = run([*ALL_RECOMMENDED, ENTER], facts(ready_agents=("claude", "codex")))
+        question = next(screen for screen in ui.screens if "Which agent" in screen)
+        self.assertIn("Acme Agent", question)
+        self.assertIn("Acme line.", question)
 
     def test_choosing_codex_asks_nothing_about_claude_s_permissions(self) -> None:
         answers, ui = run(

@@ -140,7 +140,7 @@ The freeze makes writers wait, but it does not keep old code out. Some writers l
 before the switch and write after it:
 
 - a `bosun ledger` command an agent started just before the switch;
-- the detached child of the UserPromptSubmit hook, and of Codex's `codex-turn-end` hook;
+- the detached child of the UserPromptSubmit hook, and of Codex's `turn-end` hook (`codex-turn-end` in windows started before);
 - the approval hooks;
 - a running `bosun console`, which saves review decisions.
 

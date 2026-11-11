@@ -96,7 +96,7 @@ processes in their panes' sessions, and all the panes started), then waits until
 anything it started apart from the windows, in a session of its own. It sees only what it finds through a
 process it watches: Claude Code starts its async hooks in a session of their own a second or so after its
 window stopped, while it still runs, so the signal hook behind the race is found and waited for; a worker
-bosun's own hooks detach (`codex-turn-end`'s, should Codex end a turn as it is stopped) is launchd's within
+bosun's own hooks detach (`turn-end`'s for Codex, should Codex end a turn as it is stopped) is launchd's within
 milliseconds and is not. What an agent starts in its own window's session as it ends is not waited for:
 Claude Code's `caffeinate -i -t 300` outlives it by five minutes. It waits 15 seconds at the most, never
 matching processes by their command line. The windows are gone by then, so what they started and still runs

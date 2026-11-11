@@ -110,6 +110,7 @@ nav:
       - Uninstalling: design/uninstall.md
       - Updating: design/update.md
       - Agents: design/harnesses.md
+      - Antigravity windows: design/antigravity.md
       - Connectors: design/connectors.md
       - Approvals: design/approvals.md
       - Events: design/events.md
@@ -128,6 +129,7 @@ nav:
           - Sync, phase 0: plans/sync-phase-0.md
           - Updating: plans/update.md
           - Connectors: plans/connectors.md
+          - Agents that say what they can do: plans/agent-profiles.md
   - Project:
       - Roadmap: roadmap.md
       - Development: development.md

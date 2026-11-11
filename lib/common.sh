@@ -685,19 +685,24 @@ reap_session_helpers() {
 # the sessions.yml entry or the defaults; "-" means the agent's own default. The one list that
 # start, refresh, launch, morning --dry-run and doctor work from.
 window_specs() {
+  local harness models=() IFS=$' \t\n' # as in agent_bin_env
   [ -f "$BOSUN_SESSIONS_FILE" ] || die "sessions manifest not found: $BOSUN_SESSIONS_FILE"
+  need_profiles # once, before the substitutions below
+  for harness in $(known_harnesses); do
+    models+=("$harness=$(harness_default_model "$harness")")
+  done
   if [ -n "$BOSUN_ORCHESTRATOR" ]; then
     printf '%s\t%s\torchestrator\t%s\t%s\t%s\n' "$BOSUN_ORCHESTRATOR" "$BOSUN_ORCHESTRATOR_DIR" \
       "${BOSUN_ORCHESTRATOR_MODEL:--}" "${BOSUN_ORCHESTRATOR_EFFORT:--}" "$ORCHESTRATOR_HARNESS"
   fi
   ruby -ryaml -e '
     pick = ->(value, default) { value.to_s.empty? ? default : value.to_s }
-    default_model = { "claude" => ARGV[1], "codex" => ARGV[4] }  # as harness_default_model says
+    default_model = ARGV.drop(3).map { |pair| pair.split("=", 2) }.to_h  # harness=model, as harness_default_model says
     (YAML.safe_load(File.read(ARGV[0])) || {}).fetch("sessions", []).each do |s|
-      harness = pick.(s["harness"], ARGV[3])
+      harness = pick.(s["harness"], ARGV[2])
       puts [s.fetch("name"), File.expand_path(s.fetch("dir")), "session",
-            pick.(s["model"], default_model.fetch(harness, "-")), pick.(s["effort"], ARGV[2]), harness].join("\t")
-    end' "$BOSUN_SESSIONS_FILE" "$(harness_default_model claude)" "${BOSUN_EFFORT:--}" "$BOSUN_HARNESS" "$(harness_default_model codex)" ||
+            pick.(s["model"], default_model.fetch(harness, "-")), pick.(s["effort"], ARGV[1]), harness].join("\t")
+    end' "$BOSUN_SESSIONS_FILE" "${BOSUN_EFFORT:--}" "$BOSUN_HARNESS" "${models[@]}" ||
     die "could not read $BOSUN_SESSIONS_FILE"
   if checkin_loop_wanted; then
     printf 'checkin\t%s\tcheckin\t-\t-\t-\n' "$HOME"
@@ -929,7 +934,7 @@ set_connector_settings() { # <name>
   list="$(window_connectors "$1")" || die "could not read the connectors of '$1' in $BOSUN_SESSIONS_FILE"
   is_orchestrator "$1" && [ "${CONNECTOR_LOOKUP:-1}" != 0 ] && alert=1
   connector_settings_json="$(resolve_connectors "$1" "$list" "$PWD" "$alert")" ||
-    die "'$1' does not start: its connectors were refused or could not be resolved (lib/connectors.py, above)"
+    die "'$1' does not start: its connectors were refused or could not be resolved (lib/connectors_claude.py, above)"
   connector_settings_window="$1"
 }
 
@@ -942,11 +947,11 @@ connector_settings() { # <name>
   printf '%s\n' "$connector_settings_json"
 }
 
-# The Claude Code settings that limit <window> to <list>, as lib/connectors.py resolves them in <dir>: it
+# The Claude Code settings that limit <window> to <list>, as lib/connectors_claude.py resolves them in <dir>: it
 # runs `claude mcp list` there only for a name nothing else resolves, never with CONNECTOR_LOOKUP=0 (then
 # from what earlier lookups kept). Its lines are logged (log_connector_lines). A name not found is left out;
 # with <alert> 1, `bosun alert` says which (alert_missing_connectors). Prints nothing and fails on a list it
-# cannot read, on one that another settings scope of <dir> would widen (lib/connectors.py says which), and
+# cannot read, on one that another settings scope of <dir> would widen (lib/connectors_claude.py says which), and
 # on anything but a JSON object with an allowedMcpServers list, which only `all` may lack (R7: a failure
 # is never taken for `all`).
 resolve_connectors() { # <window> <list> <dir> <alert: 0|1>
@@ -954,7 +959,7 @@ resolve_connectors() { # <window> <list> <dir> <alert: 0|1>
   local -a kept_only=()
   [ "${CONNECTOR_LOOKUP:-1}" = 0 ] && kept_only=(--kept-only)
   work="$(mktemp -d "${TMPDIR:-/tmp}/bosun-connectors.XXXXXX")" || return 1
-  json="$(python3 "$BOSUN_ROOT/lib/connectors.py" claude --agent-bin "$BOSUN_CLAUDE_BIN" --list="$2" \
+  json="$(python3 "$BOSUN_ROOT/lib/connectors_claude.py" --agent-bin "$BOSUN_CLAUDE_BIN" --list="$2" \
     --cwd "$3" --state-dir "$BOSUN_STATE_DIR" --missing-to "$work/missing.json" \
     ${kept_only[@]+"${kept_only[@]}"} 2>"$work/errors")" || code=$?
   log_connector_lines "$1" "$work/errors"
@@ -968,7 +973,7 @@ resolve_connectors() { # <window> <list> <dir> <alert: 0|1>
   return 1
 }
 
-# Whether <resolver output> is what lib/connectors.py claude prints for <list>: one JSON object, holding an
+# Whether <resolver output> is what lib/connectors_claude.py prints for <list>: one JSON object, holding an
 # allowedMcpServers list unless <list> is `all` (lists_everything), the only list that may have no limit.
 connector_settings_valid() { # <list> <resolver output>
   jq -se 'length == 1 and (.[0] | type == "object")' <<<"$2" >/dev/null 2>&1 || return 1
@@ -982,16 +987,17 @@ lists_everything() { [ "${1//[[:space:]]/}" = all ]; } # <list>
 # The day's launch log: what a window's launch says beyond its screen (connectors' lines, alerts' output).
 launch_log() { echo "$BOSUN_LOG_DIR/launch-$(date +%F).log"; }
 
-# <window>'s lines from lib/connectors.py (<file>, its stderr: a name not found, a lookup that failed, a
-# list refused) logged where the launch's own go (stderr, the window's screen), and, for a real launch (not
-# CONNECTOR_LOOKUP=0, a fingerprint, which starts nothing), in the day's launch log too.
+# <window>'s lines from its agent's connectors module (lib/connectors_<agent>.py; <file>, its stderr: a name
+# not found, a lookup that failed, a list refused) logged where the launch's own go (stderr, the window's
+# screen), and, for a real launch (not CONNECTOR_LOOKUP=0, a fingerprint, which starts nothing), in the day's
+# launch log too.
 log_connector_lines() { # <window> <file>
   local line log_file=/dev/null
   [ "${CONNECTOR_LOOKUP:-1}" = 0 ] || log_file="$(launch_log)"
   while IFS= read -r line; do log "$1: $line"; done <"$2" | tee -a "$log_file" >&2
 }
 
-# `bosun alert` that <window> started without the names lib/connectors.py left out (<missing file>, a JSON
+# `bosun alert` that <window> started without the names lib/connectors_claude.py left out (<missing file>, a JSON
 # array; all of <list> if it cannot be read). Detached, its output in the day's launch log: never on the
 # window's screen, never a child of the agent the launch becomes, never holding a $(...) open.
 alert_missing_connectors() { # <window> <missing file> <list>

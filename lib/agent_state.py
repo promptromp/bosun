@@ -12,6 +12,7 @@ Usage: agent_state.py registered <pid>...               the first of them that i
        agent_state.py resolve <harness> <dir> <name>    the session that agent knows by <name> in <dir>
        agent_state.py trusted <harness> <dir>           exit 0 if that agent trusts <dir>
        agent_state.py set-trust <harness> <dir> <true|false>
+       agent_state.py profiles                          every agent's profile, a line each
 
 A record has the fields of Claude Code's running-session record, and `harness`, the agent's name.
 Exit status 0 found or done, 3 not found, 2 usage.
@@ -32,13 +33,14 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import agent_changes
 import claude_state
 import codex_state
-from agent_files import NOT_FOUND, USAGE, Command, LaunchSettings, emit, run_command
+from agent_files import NOT_FOUND, USAGE, Command, LaunchSettings, Profile, emit, run_command
 
 
 class Agent(Protocol):
     """What bosun asks every agent. Each agent's own files are its module's business."""
 
     HARNESS: str
+    PROFILE: Profile
 
     def record(self, pid: int | str) -> dict[str, Any] | None: ...
     def registered(self, pids: Iterable[str]) -> str | None: ...
@@ -56,6 +58,12 @@ class Agent(Protocol):
 
 
 AGENTS: dict[str, Agent] = {claude_state.HARNESS: claude_state, codex_state.HARNESS: codex_state}
+
+DEFAULT_HARNESS = claude_state.HARNESS  # the agent a window runs when nothing says otherwise
+# The orchestrator stands on Claude Code's hooks, plugins and permission settings (ORCHESTRATOR_HARNESS in
+# lib/agents.sh), whichever agent the repo windows default to.
+ORCHESTRATOR_HARNESS = claude_state.HARNESS
+STATUS_ORDER = ("idle", "busy", "shell", "waiting")
 
 
 def record(pid: int | str) -> dict[str, Any] | None:
@@ -140,6 +148,21 @@ def cmd_set_trust(harness: str, args: list[str]) -> int:
     return 0
 
 
+def profile_line(harness: str, profile: Profile) -> str:
+    """One agent's profile as a tab-separated line, booleans as yes and no."""
+    yes_no = (
+        "yes" if flag else "no"
+        for flag in (profile.names_sessions, profile.remote_control, profile.autocompact, profile.subagents)
+    )
+    statuses = ",".join(status for status in STATUS_ORDER if status in profile.statuses)
+    return "\t".join([harness, profile.bin_key, profile.flags_key, profile.model_key, *yes_no, statuses])
+
+
+def cmd_profiles(_args: list[str]) -> int:
+    print("\n".join(profile_line(harness, agent.PROFILE) for harness, agent in AGENTS.items()))
+    return 0
+
+
 COMMANDS: dict[str, Command] = {
     "registered": (None, lambda args: emit(registered(args))),
     "field": (2, cmd_field),
@@ -147,6 +170,7 @@ COMMANDS: dict[str, Command] = {
     "live": (1, lambda args: emit(live_pid(args[0]))),
     "context": (1, lambda args: emit(conversation_size(args[0]))),
     "launch": (1, cmd_launch),
+    "profiles": (0, cmd_profiles),
 }
 PER_AGENT = {
     "resolve": (2, cmd_resolve),

@@ -64,7 +64,7 @@ STATE_FILES = (
     ("alerts", WORKING),
     ("codex-sessions.json", WORKING),
     (".codex-sessions.json.*", WORKING),
-    ("connectors.json", WORKING),  # the connectors' URLs the last launch found (lib/connectors.py)
+    ("connectors.json", WORKING),  # the connectors' URLs the last launch found (lib/connectors_claude.py)
     (".connectors.json.*", WORKING),  # what a write cut short left
     ("console", WORKING),
     ("conversations", WORKING),
@@ -259,7 +259,7 @@ def still_running(table: Processes, sessions: Collection[int], watched: Mapping[
     in a session of its own, with whatever that starts. It sees only what it finds through a process it
     watches: Claude Code, ending as its window stops, starts its async hooks (SessionEnd's `bosun hook
     signal`, which wrote in the state folder after its deletion) in a session of their own while it still
-    runs, so they are found and waited for; a worker bosun's own hooks detach (`codex-turn-end`'s) is
+    runs, so they are found and waited for; a worker bosun's own hooks detach (`turn-end`'s, for Codex) is
     launchd's within milliseconds and is not. What an agent starts in its window's own session as it ends
     is not waited for: Claude Code's `caffeinate -i -t 300` outlives it by five minutes."""
     apart = {pid for pid, _, sid in table if sid is None or sid not in sessions}

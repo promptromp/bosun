@@ -386,6 +386,11 @@ what differs at launch is in `lib/launch/<harness>.sh`. `tests/sandbox.sh mac li
 agents on a clean Mac. Design note: [docs/design/harnesses.md](docs/design/harnesses.md). The
 installer's checks are split by OS and by agent ([docs/design/init.md](docs/design/init.md)).
 
+**Done (2026-11-11): agents that say what they can do.** Each agent declares a `Profile` (its keys, statuses,
+screens, connectors, turn-end report and setup text), so shared code names no agent and a test keeps it so
+([docs/design/antigravity.md](docs/design/antigravity.md), Part 1). Behaviour is unchanged. Next: Part 2 of that
+note, windows on Antigravity (`agy`), then OpenCode and GitHub Copilot CLI.
+
 **Next on Codex:** the orchestrator (a system prompt, chores without a plugin, the guard and approvals on its
 own hooks and sandbox; hooks stop at a review screen, so this needs thought); noticing a revoked login;
 its sessions in the Impact stats and the learning digest (`Harness` in `lib/learn_digest.py`); a real GitHub

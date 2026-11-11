@@ -88,7 +88,9 @@ def load_answers(source: str | None, base: Answers) -> Answers:
 
 def is_trusted(folder: str, harness: str) -> bool:
     """`bosun trust` covers the orchestrator's agent and the one chosen, so this asks both."""
-    return all(agent_state.AGENTS[agent].trusted(folder) for agent in {init_plan.CLAUDE, harness})
+    return all(
+        agent_state.AGENTS[agent].trusted(folder) for agent in {agent_state.ORCHESTRATOR_HARNESS, harness}
+    )
 
 
 def dir_state(answers: Answers) -> DirState:

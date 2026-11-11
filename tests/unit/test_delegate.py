@@ -15,6 +15,7 @@ from unittest import mock
 
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "lib"))
+import agent_state
 import delegate
 
 
@@ -260,6 +261,21 @@ class ModelEffortTest(unittest.TestCase):
             self.assertEqual(delegate.window_harness("unknown"), "claude")
         with mock.patch("subprocess.run", return_value=subprocess.CompletedProcess([], 1, "", "")):
             self.assertEqual(delegate.window_harness("running"), "claude")
+
+    def test_a_window_whose_agent_has_subagents_gets_the_preamble(self) -> None:
+        args = argparse.Namespace(window="w", start=None)
+        for harness, expected in (("claude", True), ("codex", False), ("acme-agent", False)):
+            with mock.patch.object(delegate, "window_harness", return_value=harness):
+                self.assertEqual(delegate.can_use_subagents(args), expected, harness)
+        self.assertTrue(delegate.can_use_subagents(argparse.Namespace(window=None, start=None)))
+
+    def test_an_unreadable_session_list_falls_back_to_the_default_agent(self) -> None:
+        done = subprocess.CompletedProcess([], 0, "not json", "")
+        with (
+            mock.patch("subprocess.run", return_value=done),
+            mock.patch.object(agent_state, "DEFAULT_HARNESS", "codex"),
+        ):
+            self.assertEqual(delegate.window_harness("w"), "codex")
 
     def test_a_running_window_gets_the_subagent_preamble(self) -> None:
         run, _ = self.run_main(["review", "--id", "review:a/b#1", "--ask", "a", "--window", "w"])

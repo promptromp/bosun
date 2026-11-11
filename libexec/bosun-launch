@@ -88,12 +88,14 @@ esac
 # shellcheck disable=SC2154  # build_agent_args, in the sourced lib/launch/<harness>.sh, sets agent_args
 set_agent_args() { # <name>
   local agent_module
+  need_profiles # here, so the lookups in substitutions below do not each read them
   session_name="$(expected_session_name "$1")"
   IFS=$'\t' read -r model effort <<<"$(window_model_effort "$1")"
   model="${model_override:-$model}"
   effort="${effort_override:-$effort}"
   valid_effort "$effort" || die_usage "effort must be one of: $EFFORT_LEVELS (got '$effort')"
   harness="${harness_override:-$(window_harness "$1")}"
+  profile_field "$harness" harness >/dev/null || die "no agent '$harness': bosun knows $(known_harnesses | sed 's/ /, /g')"
   agent_module="$BOSUN_ROOT/lib/launch/$harness.sh"
   [ -f "$agent_module" ] || die "no way to run a window on '$harness' (BOSUN_HARNESS, or harness: in sessions.yml)"
   # shellcheck disable=SC1090  # one module per agent, each with the same functions
@@ -110,7 +112,7 @@ set_agent_args() { # <name>
 # takes a fingerprint of every window): a Claude Code window's connectors resolve from what the last
 # lookups kept. A Codex window's arguments come from `codex mcp list --json` (lib/launch/codex.sh), so its
 # fingerprint runs it. When that fails, or another settings scope would widen a Claude Code window's list
-# (refuse_widening, lib/connectors.py), no fingerprint is printed (exit 1), an update reads the window as
+# (refuse_widening, lib/connectors_claude.py), no fingerprint is printed (exit 1), an update reads the window as
 # changed, and its restart then refuses to start it.
 print_fingerprint() { # <name>
   local dir listed=1

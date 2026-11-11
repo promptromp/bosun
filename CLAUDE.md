@@ -51,13 +51,17 @@ of truth, so don't copy rules into this file.
   the stand-up summary; design: `docs/design/workstreams.md`. `lib/similar.py` (pure): loose
   word-overlap similarity for near-duplicate hints (`ledger spawn`, learning's outreach overlap,
   which held item a prompt is about).
-  `lib/connectors.py`: what a window may reach (its list of MCP servers and connectors) turned into
-  Claude Code's `allowedMcpServers` and Codex's launch arguments, and the URLs and command lines kept from
-  the last lookup (`connectors.json`); the agents' listings are read through `lib/claude_state.py` (`claude
+  `lib/connectors.py`: what a window may reach (its list of MCP servers and connectors), and what every
+  agent's module shares (reading a list, the report's helpers and texts); each agent turns it into what that
+  agent takes at launch in its own module, which its `Profile.connectors` names: `lib/connectors_claude.py`
+  (Claude Code's `allowedMcpServers`, and the URLs and command lines kept from the last lookup in
+  `connectors.json`) and `lib/connectors_codex.py` (Codex's launch arguments), each with `main` and
+  `doctor_line`; the agents' listings are read through `lib/claude_state.py` (`claude
   mcp list`, plugins' servers, the settings scopes' allow lists a launch refuses to be widened by) and
   `lib/codex_state.py`; design: `docs/design/connectors.md`. The shell side is
   `window_connectors` and `set_connector_settings` (`lib/common.sh`), which `build_agent_args` calls once
-  per launch; `bosun doctor`'s line per window is its `doctor` subcommand (`check_connectors`).
+  per launch; `bosun doctor`'s line per window is `connectors.py doctor`, which asks the window's agent
+  module (`check_connectors`).
   `lib/delegate.py`: task rendering. `lib/guard.py`: the orchestrator's PreToolUse permission hook
   (which `guard_hook_settings` in `lib/common.sh` adds to the orchestrator's launch and to `chores
   --dry-run`), and with `BOSUN_APPROVALS_ENABLED` its approval hooks (`--approvals`, `--permission-request`,
@@ -144,12 +148,16 @@ of truth, so don't copy rules into this file.
   import file; the fixture knowledge base is `tests/fixtures/knowledge/acme-import.jsonl`.
 - Agents (design: `docs/design/harnesses.md`): an adapter per agent, `lib/claude_state.py` and
   `lib/codex_state.py`, each a module with the functions of `Agent` in `lib/agent_state.py`, whose `AGENTS`
-  table is the one place that lists them and whose `record` the watchdog, ledger and events use. They share
-  `lib/agent_files.py`, and neither imports the other. `lib/agents.sh` is the shell side: `agent_state`,
-  `window_harness`, `harnesses_in_use`, `agent_*`. `libexec/bosun-launch` holds the flow, and
-  `lib/launch/<harness>.sh` what differs in it (`build_agent_args`, `first_prompt`, `run_new`, `run_resumed`).
-  `window_specs` says which agent each window runs. `bosun hook codex-turn-end` (`lib/hook.py`) is what Codex
-  runs when a turn ends; `lib/pane_input.py` has a reader per agent for its input box.
+  table is the one place that lists them (each module's `PROFILE`, a `Profile` in `lib/agent_files.py`, says
+  what it is and can do; `lib/agent_state.py profiles` prints them for the shell) and whose `record` the
+  watchdog, ledger and events use. They share `lib/agent_files.py`, and neither imports the other.
+  `lib/agents.sh` is the shell side: `agent_state`, `window_harness`, `harnesses_in_use`, `agent_*`.
+  `libexec/bosun-launch` holds the flow, and `lib/launch/<harness>.sh` what differs in it
+  (`build_agent_args`, `first_prompt`, `run_new`, `run_resumed`). `window_specs` says which agent each window
+  runs. `bosun hook turn-end --harness <agent>` (`lib/hook.py`) is what an agent runs when a turn ends, by
+  its profile's `turn_end` (`codex-turn-end` is its alias for Codex windows started before, whose launch
+  command outlives the bosun that wrote it); each agent's profile has a `Screen` (its readers for its input
+  box, questions and rejected pastes, with `lib/screen_text.py`'s helpers), which `lib/pane_input.py` asks.
 - Console (`bosun console`, design: `docs/design/console.md`): `lib/console_server.py` (the
   HTTP server and its request checks: bind address, Host, token cookie, static allowlist,
   headers), `lib/console_data.py` (ledger snapshots, `/api/version`, what the views share),
@@ -244,9 +252,9 @@ of truth, so don't copy rules into this file.
   config value, never code: `BOSUN_ORCHESTRATOR_CONNECTORS`, `BOSUN_CONNECTORS` or `connectors:` in a
   `sessions.yml` entry, in the site's config dir (`bosun init` asks for the orchestrator's). No server's
   name goes in the repo. A new way to name a server, or an agent update that changes how one is switched
-  off: `lib/connectors.py` (on Codex, `codex_args` and its shape check `codex_connector_args_valid` in
-  `lib/launch/codex.sh` change together), `docs/design/connectors.md`, and a run of `tests/sandbox.sh mac
-  live` (its connectors part).
+  off: that agent's module, `lib/connectors_claude.py` or `lib/connectors_codex.py` (on Codex, `codex_args`
+  and its shape check `codex_connector_args_valid` in `lib/launch/codex.sh` change together),
+  `docs/design/connectors.md`, and a run of `tests/sandbox.sh mac live` (its connectors part).
 - **An outward tool to gate** (approvals): a row in `GATED_MCP` / `GATED_COMMANDS` (`lib/guard.py`)
   and its `ask` rule in `orchestrator/settings.json`; a standing class: `STANDING_CLASSES` and its
   check in `lib/approvals.py`, its config keys, the design note and `docs/permissions.md`.
@@ -269,8 +277,9 @@ of truth, so don't copy rules into this file.
   `examples/` and `.github/` templates, and say in the pull request which changed.
 - **An OS to support:** a profile in `lib/platforms/` with the same functions as the others
   (`tests/unit/test_preflight.py` checks); what else still assumes macOS is in `docs/design/init.md`.
-- **An agent to support:** `docs/design/harnesses.md#adding-another`. Shared code asks the `AGENTS` table or
-  a module per agent; an `if` on an agent's name in shared code means something belongs in its module.
+- **An agent to support:** `docs/design/harnesses.md#adding-another`. Shared code asks the `AGENTS` table, the
+  agent's `Profile` or a module per agent; an `if` on an agent's name in shared code means something belongs in
+  its module or profile, and `tests/unit/test_agent_names.py` fails on it.
 - **A Codex fact changes** (after a Codex update): `lib/codex_state.py`, the note at its top,
   `tests/sandbox/codex-stand-in` so the stand-in does it too, and `docs/design/harnesses.md`.
 - **A file bosun writes in its state or config folder, or anything it leaves elsewhere:** a row in `STATE_FILES`
