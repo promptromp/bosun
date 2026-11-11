@@ -81,6 +81,20 @@ class AgentHooks:
     answer: Callable[[str, Mapping[str, Any], Mapping[str, str]], str]
 
 
+class SetupError(Exception):
+    """An agent's one-time setup could not be made; the text says why, for a person to act on."""
+
+
+@dataclass(frozen=True)
+class AgentSetup:
+    """A one-time change bosun makes to an agent before its first window, taken back by uninstall."""
+
+    description: str  # how uninstall names it, as what it removes
+    needed: Callable[[], bool]  # whether it is still to be made
+    apply: Callable[[], None]  # makes it; raises SetupError, saying why, when it cannot
+    undo: Callable[[], None]  # takes it back
+
+
 @dataclass(frozen=True)
 class Profile:
     """What an agent is and can do, declared by its module so that shared code never names the agent."""
@@ -103,6 +117,10 @@ class Profile:
     setup_note: str = ""  # what `bosun init` tells the person about running them on it
     turn_end: TurnEnd | None = None  # how it reports the end of a turn; None: it does not
     hooks: AgentHooks | None = None  # the hooks it runs through bosun; None: it has none
+    setup: AgentSetup | None = None  # what bosun sets up in it once, before a window starts; None: nothing
+    # the arguments to its command that update it, which `bosun morning` runs once at a quiet moment; () for
+    # an agent that updates itself or is updated by hand
+    update_args: tuple[str, ...] = ()
 
 
 def command_line(pid: int | str) -> str:

@@ -73,6 +73,7 @@ STATE_FILES = (
     ("update", WORKING),
     (".*.restoring", WORKING),  # what an update's restore was writing, cut short (lib/update_backups.py)
     ("agent-changes.json", WORKING),
+    ("agent-setup.lock", WORKING),  # held while an agent's one-time setup is made
     (".agent-changes.json.*", WORKING),
     ("alerted-*", WORKING),  # what the check-in loop left, before the watchdog
     ("alerts", WORKING),
@@ -142,6 +143,7 @@ WAKE = "wake"
 JOB = "job"
 STOP = "stop"
 TRUST = "trust"
+SETUP = "setup"
 NOTE = "note"
 LINK = "link"
 FILE = "file"
@@ -183,6 +185,7 @@ class Facts:
     link: str = ""  # ~/.local/bin/bosun, if it is this checkout's
     old_files: tuple[str, ...] = ()  # what earlier versions installed
     trust: tuple[tuple[str, str], ...] = ()  # (harness, folder) bosun marked, and the agent may still trust
+    setups: tuple[tuple[str, str], ...] = ()  # (harness, what it is called) of each one-time setup bosun made
     notes: tuple[str, ...] = ()  # memory notes bosun wrote that are still there
     state_entries: tuple[str, ...] = ()  # the names directly in each folder
     config_entries: tuple[str, ...] = ()
@@ -208,7 +211,7 @@ class Choices:
 class Step:
     kind: str
     target: str
-    harness: str = ""  # for TRUST
+    harness: str = ""  # for TRUST and SETUP
     by_hand: str = ""  # what to run if it could not be done
 
 
@@ -369,7 +372,8 @@ def stop_steps(facts: Facts) -> list[Step]:
 
 def agent_steps(facts: Facts) -> list[Step]:
     trust = [Step(TRUST, folder, harness) for harness, folder in facts.trust]
-    return [*trust, *(Step(NOTE, note, by_hand=f"rm {quoted(note)}") for note in facts.notes)]
+    setups = [Step(SETUP, description, harness) for harness, description in facts.setups]
+    return [*trust, *setups, *(Step(NOTE, note, by_hand=f"rm {quoted(note)}") for note in facts.notes)]
 
 
 def link_steps(facts: Facts) -> list[Step]:
@@ -394,7 +398,9 @@ def wanted_gone(kind: str, facts: Facts, choices: Choices) -> bool:
 def goes(kind: str, name: str, facts: Facts, choices: Choices) -> bool:
     """The record of what bosun changed in the agents' files stays as long as something it lists is still
     there: it is how a second run finishes the job."""
-    if name.startswith(("agent-changes.json", ".agent-changes.json")) and (facts.trust or facts.notes):
+    if name.startswith(("agent-changes.json", ".agent-changes.json")) and (
+        facts.trust or facts.setups or facts.notes
+    ):
         return False
     return wanted_gone(kind, facts, choices)
 
@@ -558,6 +564,7 @@ def describe(step: Step, home: str) -> str:
         JOB: f"launchd job {step.target}",
         STOP: f"the running windows: {step.target or 'none, only the keep-awake'}",
         TRUST: f"the trust bosun gave {target} ({step.harness})",
+        SETUP: f"{step.target} ({step.harness})",
         NOTE: f"the memory note bosun learned, {target}",
     }.get(step.kind, target)
 

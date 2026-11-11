@@ -195,6 +195,18 @@ def trust_still_given(state_dir: Path) -> tuple[tuple[str, str], ...]:
     )
 
 
+def setup_description(harness: str) -> str:
+    agent = AGENTS.get(harness)
+    setup = agent.PROFILE.setup if agent else None
+    return setup.description if setup else f"the setup bosun made for {harness}"
+
+
+def setups_made(state_dir: Path) -> tuple[tuple[str, str], ...]:
+    """(harness, what it is called) for each one-time setup bosun recorded: one of an agent bosun no longer
+    knows is named by the agent, and uninstall says why it cannot be undone."""
+    return tuple((harness, setup_description(harness)) for harness in agent_changes.setups_made(state_dir))
+
+
 def same(one: Path, other: Path) -> bool:
     try:
         return os.path.samefile(one, other)
@@ -249,6 +261,7 @@ def detect(env: Mapping[str, str], root: Path) -> Facts:
         link=own_link(roots),
         old_files=old_files(env),
         trust=trust_still_given(state_dir),
+        setups=setups_made(state_dir),
         notes=tuple(note for note in agent_changes.notes(state_dir) if Path(note).exists()),
         state_entries=entries(state_dir),
         config_entries=entries(config_dir),

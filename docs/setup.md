@@ -327,8 +327,9 @@ State and logs go to `~/.local/state/bosun/`:
 - `connectors.json`: the URL or command line `claude mcp list` last showed for each name a list holds
   that only that listing resolves (a claude.ai connector, a plugin's server the installed plugins do not
   give), for a launch whose lookup fails (see [Connectors](#connectors-what-each-window-may-reach))
-- `agent-changes.json`: what bosun changed in Claude Code's and Codex's own files (folder trust, memory
-  notes), so that `bosun uninstall` takes back only that
+- `agent-changes.json`: what bosun changed in the agents' own files (folder trust, memory notes, an agent's
+  one-time setup), so that `bosun uninstall` takes back only that
+- `agent-setup.lock`: held while an agent's one-time setup is made, so two windows starting together make it once
 - `signals/`: what Claude Code's hooks reported per window ([Signals](design/signals.md))
 - `conversations/`: a repo window's current conversation, once refresh started a fresh one
 - `prompts/`: the first prompt of each window start, passed to its launch as a file

@@ -12,6 +12,7 @@ Usage: agent_state.py registered <pid>...               the first of them that i
        agent_state.py resolve <harness> <dir> <name>    the session that agent knows by <name> in <dir>
        agent_state.py trusted <harness> <dir>           exit 0 if that agent trusts <dir>
        agent_state.py set-trust <harness> <dir> <true|false>
+       agent_state.py setup <harness>                   make that agent's one-time setup, if it needs one
        agent_state.py profiles                          every agent's profile, a line each
 
 A record has the fields of Claude Code's running-session record, and `harness`, the agent's name.
@@ -33,7 +34,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import agent_changes
 import claude_state
 import codex_state
-from agent_files import NOT_FOUND, USAGE, Command, LaunchSettings, Profile, emit, run_command
+from agent_files import NOT_FOUND, USAGE, Command, LaunchSettings, Profile, SetupError, emit, run_command
 
 
 class Agent(Protocol):
@@ -148,6 +149,23 @@ def cmd_set_trust(harness: str, args: list[str]) -> int:
     return 0
 
 
+def cmd_setup(harness: str, _args: list[str]) -> int:
+    """Make the agent's one-time setup if it is still needed, and put it on record for uninstall. A setup
+    that cannot be made is exit 1 and why on stderr."""
+    setup = AGENTS[harness].PROFILE.setup
+    if setup is None or not setup.needed():
+        return 0
+    try:
+        setup.apply()
+    except SetupError as error:
+        print(error, file=sys.stderr)
+        return 1
+    state_dir = os.environ.get("BOSUN_STATE_DIR")
+    if state_dir:
+        agent_changes.record_setup(Path(state_dir), harness)
+    return 0
+
+
 def profile_line(harness: str, profile: Profile) -> str:
     """One agent's profile as a tab-separated line, booleans as yes and no."""
     yes_no = (
@@ -155,7 +173,10 @@ def profile_line(harness: str, profile: Profile) -> str:
         for flag in (profile.names_sessions, profile.remote_control, profile.autocompact, profile.subagents)
     )
     statuses = ",".join(status for status in STATUS_ORDER if status in profile.statuses)
-    return "\t".join([harness, profile.bin_key, profile.flags_key, profile.model_key, *yes_no, statuses])
+    update = " ".join(profile.update_args) or "-"
+    return "\t".join(
+        [harness, profile.bin_key, profile.flags_key, profile.model_key, *yes_no, statuses, update]
+    )
 
 
 def cmd_profiles(_args: list[str]) -> int:
@@ -176,6 +197,7 @@ PER_AGENT = {
     "resolve": (2, cmd_resolve),
     "trusted": (1, cmd_trusted),
     "set-trust": (2, cmd_set_trust),
+    "setup": (0, cmd_setup),
 }
 
 

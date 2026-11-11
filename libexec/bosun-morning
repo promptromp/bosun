@@ -5,11 +5,13 @@
 #   1. promote the wake to a full wake and hold a keep-awake assertion until BOSUN_AWAKE_UNTIL
 #   2. wait for the network
 #   3. run setup steps (credential refresh) from setup.sh
-#   4. start the tmux session, or refresh it if it survived the night (unless you are typing in it)
-#   5. post a macOS notification with the outcome
+#   4. update the agents that bosun starts with their own auto-update off (an agent's `update_args`),
+#      once, before any window starts on them; a failure is a problem in the notification, nothing more
+#   5. start the tmux session, or refresh it if it survived the night (unless you are typing in it)
+#   6. post a macOS notification with the outcome
 #
 #   --dry-run          report what would happen; no keep-awake, logins or tmux changes
-#   --skip-setup       skip step 3
+#   --skip-setup       skip step 3 (the agents' update, step 4, still runs)
 #   --awake-minutes N  hold the keep-awake for N minutes instead of until BOSUN_AWAKE_UNTIL
 set -uo pipefail
 source "$(dirname "$0")/../lib/common.sh"
@@ -107,6 +109,13 @@ elif [ "$DRY_RUN" = "1" ]; then
 else
   "$BOSUN" setup || problems+=("setup")
 fi
+
+update_flags=()
+[ "$DRY_RUN" = "1" ] && update_flags=(--dry-run)
+# update_agents logs on stderr and prints one problem word per failure (lib/agents.sh).
+for problem in $(update_agents ${update_flags[@]+"${update_flags[@]}"}); do
+  problems+=("$problem")
+done
 
 if [ "$DRY_RUN" = "1" ]; then
   if session_exists && [ "$BOSUN_ON_EXISTING" = "restart" ]; then

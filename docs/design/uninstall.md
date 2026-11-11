@@ -37,7 +37,8 @@ this note is why.
 - **It undoes what bosun did, not what it finds.** A folder you trusted yourself looks exactly like one bosun
   marked, so `lib/agent_changes.py` keeps a record of the changes, as the Nix installer's receipt does, and only a
   change is recorded: bosun marking a folder that was already trusted did nothing. The same goes for memory notes:
-  one you named `bosun-something` is still yours. Losing the record only means that those changes stay.
+  one you named `bosun-something` is still yours. An agent's one-time setup (`Profile.setup`) is on the record
+  too, and undone through the agent's own module. Losing the record only means that those changes stay.
 - **Your work is not bosun's to delete.** The checkout goes only if `get.sh` made it (it sets `bosun.managed` in
   the checkout's git config) and git shows nothing in it of yours: no uncommitted changes, no stash, no commit
   that is not on a remote (on any branch, or none), no other worktree, and nothing git ignores but the caches

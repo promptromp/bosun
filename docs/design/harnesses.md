@@ -146,5 +146,11 @@ does not record the question, and Enter would answer it. So `bosun send` reads t
    Claude Code has; a new agent adds nothing there, and its own modules are taken from `AGENTS` and
    `Profile.connectors`. An agent other than the orchestrator's also needs `setup_sessions` and `setup_note` in its
    profile (`tests/unit/test_agent_profiles.py` checks), which `bosun init` shows when it is chosen.
+   An agent that needs something set up once (a plugin installed in it) declares `Profile.setup`, an `AgentSetup`:
+   `bosun launch` makes it before the agent's first window starts (`agent_setup` in `lib/agents.sh`, holding
+   `agent-setup.lock`), records it in `agent-changes.json`, and `bosun uninstall` undoes it. One that bosun
+   starts with its own auto-update off declares `Profile.update_args`, the arguments of its command that update
+   it, which `bosun morning` runs once, before the windows start (`update_agents`); a failure is a problem in
+   the notification and stops nothing.
 6. The docs: this note, [Setup](../setup.md#running-repo-sessions-on-codex), the README's Status section,
    [Known limits](../limits.md) and `ROADMAP.md`.

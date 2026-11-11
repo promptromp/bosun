@@ -21,6 +21,7 @@ FILE = "agent-changes.json"  # in bosun's state dir
 PAIR = 2  # [harness, folder]
 TRUST = "trust"
 NOTES = "memory_notes"
+SETUPS = "setups"  # the agents bosun made a one-time setup in (AgentSetup in lib/agent_files.py)
 
 
 def well_formed_pairs(value: Any) -> list[list[str]]:
@@ -32,6 +33,10 @@ def well_formed_pairs(value: Any) -> list[list[str]]:
     ]
 
 
+def well_formed_names(value: Any) -> list[str]:
+    return [name for name in value if isinstance(name, str)] if isinstance(value, list) else []
+
+
 def read(state_dir: Path) -> dict[str, Any]:
     """The record, with only its well-formed entries: anyone may have edited it."""
     found = read_object(state_dir / FILE) or {}
@@ -39,6 +44,7 @@ def read(state_dir: Path) -> dict[str, Any]:
     return {
         TRUST: well_formed_pairs(found.get(TRUST)),
         NOTES: [note for note in notes if isinstance(note, str)] if isinstance(notes, list) else [],
+        SETUPS: well_formed_names(found.get(SETUPS)),
     }
 
 
@@ -82,4 +88,23 @@ def forget_note(state_dir: Path, note: str) -> None:
     changes = read(state_dir)
     if note in changes[NOTES]:
         changes[NOTES].remove(note)
+        write(state_dir, changes)
+
+
+def setups_made(state_dir: Path) -> tuple[str, ...]:
+    """The agents bosun made a one-time setup in."""
+    return tuple(read(state_dir)[SETUPS])
+
+
+def record_setup(state_dir: Path, harness: str) -> None:
+    changes = read(state_dir)
+    if harness not in changes[SETUPS]:
+        changes[SETUPS].append(harness)
+        write(state_dir, changes)
+
+
+def forget_setup(state_dir: Path, harness: str) -> None:
+    changes = read(state_dir)
+    if harness in changes[SETUPS]:
+        changes[SETUPS].remove(harness)
         write(state_dir, changes)

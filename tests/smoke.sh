@@ -2322,6 +2322,32 @@ check "... but starts no caffeinate" test ! -f "$BOSUN_STATE_DIR/keep-awake-smok
 check "it waits for the network" contains "$out" "network is up"
 check "it previews the setup steps" contains "$out" "aws profile good is valid, no login needed"
 check "it lists the windows it would start, with model and effort" contains "$out" "alpha (session, opus/medium) -> $REPO_A"
+check "it names no agent update when no agent in use has update_args" bash -c '! grep -qE "updated |could not update|would run .*update" <<<"$1"' _ "$out"
+
+echo "agents: the morning's update"
+# An agent whose profile has update_args (none of the real ones does yet): the profiles' text is a shell
+# variable, so a stub line stands in for the real table, and its command is a script that records its arguments.
+printf '#!/bin/sh\necho "$@" >"%s/stub-agent.args"\n' "$WORK" >"$WORK/stub-agent-ok"
+printf '#!/bin/sh\necho first line\necho network unreachable\nexit 1\n' >"$WORK/stub-agent-bad"
+chmod +x "$WORK/stub-agent-ok" "$WORK/stub-agent-bad"
+out="$(bash -c 'source "$1/lib/common.sh"; load_config; agent_setup claude' _ "$ROOT" 2>&1)"
+check "an agent with no setup has nothing to set up, silently, under its lock" bash -c '[ -z "$1" ] && [ -f "$2/agent-setup.lock" ]' _ "$out" "$BOSUN_STATE_DIR"
+update_stub() { # <command> [--dry-run]: update_agents with a stub agent in use; its problem words and its log
+  bash -c '
+    source "$1/lib/common.sh"; load_config
+    agent_display_name() { echo Stub; }
+    AGENT_PROFILES="$(printf "stub\tSTUB_BIN\tx\ty\tno\tno\tno\tno\tidle,busy\tself-update --now")"
+    BOSUN_HARNESS=stub BOSUN_ORCHESTRATOR="" BOSUN_SESSIONS_FILE=/nonexistent STUB_BIN="$2"
+    update_agents "${@:3}"' _ "$ROOT" "$@" 2>&1
+}
+out="$(update_stub "$WORK/stub-agent-ok")"
+check "an agent whose profile has update_args is updated with them" bash -c '[ "$(cat "$1/stub-agent.args")" = "self-update --now" ]' _ "$WORK"
+check "... and the update is logged, with no problem" bash -c 'grep -q "updated Stub" <<<"$1" && ! grep -q "update-stub" <<<"$1"' _ "$out"
+rm -f "$WORK/stub-agent.args"
+out="$(update_stub "$WORK/stub-agent-ok" --dry-run)"
+check "a dry run says what it would run and runs nothing" bash -c 'grep -q "dry-run: would run $2 self-update --now" <<<"$1" && [ ! -e "$3/stub-agent.args" ]' _ "$out" "$WORK/stub-agent-ok" "$WORK"
+out="$(update_stub "$WORK/stub-agent-bad")"
+check "a failed update logs its last line and is a problem word" bash -c 'grep -q "could not update Stub: network unreachable" <<<"$1" && grep -qx "update-stub" <<<"$1"' _ "$out"
 
 echo "start modes"
 "$BOSUN" start >/dev/null 2>&1
