@@ -14,7 +14,7 @@ still runs: its launch command outlives the bosun that wrote it. An agent whose 
 `agent` is an agent's own hooks (the plugin bosun installs into Antigravity): the JSON comes on stdin and
 the agent's answer goes to stdout, in the foreground, since the agent waits for it. It never fails: the
 agent takes a failing hook for a refusal, so an error is an ERROR line in the hook log, nothing on stdout
-and exit 0.
+and exit 0. A wrong command line exits 2 here, and `bosun hook` turns that into 0 and an ERROR line.
 
 Run it as `bosun hook user-prompt --window <window>`: `bosun launch` installs it as the
 UserPromptSubmit hook of a repo window's Claude when BOSUN_EVENTS_ENABLED=1. It records each

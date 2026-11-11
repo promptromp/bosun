@@ -8,9 +8,10 @@
 #
 # agent: an agent's own hooks (the plugin bosun installs into Antigravity runs it), with the hook's JSON on
 # stdin and the agent's answer on stdout, which the agent waits for, so it runs in the foreground and
-# whether or not events are on. It never fails: the agent takes a failing hook for a refusal of what it
-# asked, so an error is an ERROR line in the hook log, nothing on stdout, and exit 0. Only a wrong command
-# line (an agent bosun does not know, one with no hooks, an event it has none for) is refused, with exit 2.
+# whether or not events are on. It always exits 0, because the agent takes any other exit for a refusal of
+# the tool it asked about: an error, or a wrong command line (an agent bosun does not know, one with no
+# hooks, an event it has none for), is an ERROR line in the hook log, with nothing on stdout, and the
+# refusal's words on stderr.
 #
 # turn-end: what an agent that reports the end of its turns runs (Codex's notify= setting, from
 # lib/launch/codex.sh), with the JSON as the last argument. It remembers which session this window's name
@@ -95,18 +96,28 @@ run_python_hook() {
 
 python_hook() { run_python_hook "$@" >/dev/null 2>>"$BOSUN_LOG_DIR/hook-$(date +%F).log"; }
 
-# The agent's own hook: stdin in, the answer on stdout. Its stderr is kept apart so that a wrong command line
-# (exit 2) is still said to the caller, while anything else is only in the hook log, and exits 0.
+# The agent's own hook: stdin in, the answer on stdout, and exit 0 whatever happened, a wrong command line
+# included: the agent takes any other exit as a refusal of its tool, so one reaching it would block every
+# tool in the window. What went wrong is an ERROR line in the hook log (the watchdog reports it) and
+# Python's own words on stderr.
 agent_hook() {
-  local err status
+  local err status flag prev="" harness="" event=""
+  for flag in "$@"; do
+    case "$prev" in
+      --harness) harness="$flag" ;;
+      --event) event="$flag" ;;
+    esac
+    prev="$flag"
+  done
   exec 3>&1
   err="$(run_python_hook "$@" 2>&1 1>&3)"
   status=$?
   exec 3>&-
-  [ -z "$err" ] || printf '%s\n' "$err" >>"$BOSUN_LOG_DIR/hook-$(date +%F).log"
-  [ "$status" -ne 2 ] || {
-    printf '%s\n' "$err" >&2
-    exit 2
+  [ -z "$err" ] || printf '%s\n' "$err" >&2
+  [ "$status" -eq 0 ] || {
+    [ -z "$err" ] || printf '%s\n' "$err" >>"$BOSUN_LOG_DIR/hook-$(date +%F).log"
+    BOSUN_COMMAND=hook log "ERROR: bosun hook agent --harness ${harness:-?} --event ${event:-?} exited with status $status" \
+      >>"$BOSUN_LOG_DIR/hook-$(date +%F).log"
   }
   exit 0
 }

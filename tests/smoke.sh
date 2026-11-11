@@ -245,8 +245,19 @@ check "BOSUN_HOOK_SIGNALS=0 leaves the signal hooks out" bash -c '! grep -q "Sto
 printf '{"session_id":"s1","hook_event_name":"StopFailure","error":"rate_limit","last_assistant_message":"spend limit"}' | "$BOSUN" hook signal --window alpha
 check "the signal hook records the event for the window" bash -c 'jq -e "select(.event == \"StopFailure\" and .kind == \"rate_limit\" and .session == \"s1\")" "$1" >/dev/null' _ "$BOSUN_STATE_DIR/signals/alpha.jsonl"
 check "the signal hook never fails" bash -c 'echo "{broken" | BOSUN_STATE_DIR=/nonexistent/x "$1" hook signal --window alpha' _ "$BOSUN"
-check "an agent's own hook is refused for an agent with none" fails_with "claude has no hooks of its own" "$BOSUN" hook agent --harness claude --event Ping </dev/null
-check "... and for one bosun does not know, naming the ones it does" fails_with "no agent 'nope': bosun knows claude, codex" "$BOSUN" hook agent --harness nope --event Ping </dev/null
+exits_0_saying_nothing() {
+  local out status
+  out="$("$@" 2>/dev/null </dev/null)"
+  status=$?
+  [ "$status" -eq 0 ] && [ -z "$out" ]
+}
+check "an agent's own hook with a wrong command line exits 0 with nothing on stdout" exits_0_saying_nothing "$BOSUN" hook agent --harness claude --event Ping
+check "... says why on stderr" contains "$("$BOSUN" hook agent --harness claude --event Ping 2>&1 >/dev/null </dev/null)" "claude has no hooks of its own"
+check "... and in the hook log, as an ERROR line for the watchdog" bash -c 'grep -qE "\[hook\] ERROR: bosun hook agent --harness claude --event Ping exited with status 2" "$1"/hook-*.log' _ "$BOSUN_LOG_DIR"
+mkdir "$WORK/no-python"
+printf '#!/bin/sh\nexit 2\n' >"$WORK/no-python/python3"
+chmod +x "$WORK/no-python/python3"
+check "... and when Python cannot run it at all" exits_0_saying_nothing env PATH="$WORK/no-python:$PATH" "$BOSUN" hook agent --harness claude --event Ping
 check "the signal hook records nothing when it is off" bash -c 'echo "{\"session_id\":\"s2\",\"hook_event_name\":\"Stop\"}" | BOSUN_HOOK_SIGNALS=0 "$1" hook signal --window alpha; ! grep -q s2 "$2"' _ "$BOSUN" "$BOSUN_STATE_DIR/signals/alpha.jsonl"
 out="$(cd "$REPO_B" && "$BOSUN" launch beta 2>&1)"
 check "refuses to resume a live session" contains "$out" "already running as pid $$"
