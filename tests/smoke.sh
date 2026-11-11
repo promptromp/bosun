@@ -280,7 +280,8 @@ check "seconds_until a time already past today is 0" test "$(fn seconds_until 00
 check "the awake window's end at or before the start is the next day" bash -c '[ "$1" -gt 0 ] && [ "$1" -le 86400 ]' _ "$(BOSUN_START_TIME="$(date +%H:%M)" BOSUN_AWAKE_UNTIL="$(date -v-1M +%H:%M)" fn seconds_until_awake_end)"
 soon_end="$(date -v+2M +%H:%M)"
 if [[ "$soon_end" > "$(date +%H:%M)" ]]; then # not across midnight
-  check "... or later today while yesterday's window still runs" bash -c '[ "$1" -gt 60 ] && [ "$1" -le 120 ]' _ "$(BOSUN_START_TIME=23:59 BOSUN_AWAKE_UNTIL="$soon_end" fn seconds_until_awake_end)"
+  # Later today, not tomorrow: up to two minutes, and less when the minute turns over before fn reads the clock.
+  check "... or later today while yesterday's window still runs" bash -c '[ "$1" -gt 0 ] && [ "$1" -le 120 ]' _ "$(BOSUN_START_TIME=23:59 BOSUN_AWAKE_UNTIL="$soon_end" fn seconds_until_awake_end)"
 fi
 soon="$(date -v+2M +%H:%M)"
 if [[ "$soon" > "$(date +%H:%M)" ]]; then # not across midnight
