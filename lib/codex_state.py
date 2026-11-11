@@ -30,7 +30,7 @@ goes by, seen in Codex 0.166.0 and not a public API:
     configured ones by listing twice: nothing Codex prints names a server's plugin. A launch switches
     configured servers off with one `-c mcp_servers={<key>={enabled=false},...}`, which merges into the
     configuration, every plugin with `--disable plugins` (a plugin's server in that table stops Codex:
-    `invalid transport`), and the connectors with `--disable apps` (lib/connectors.py): one table,
+    `invalid transport`), and the connectors with `--disable apps` (lib/connectors_codex.py): one table,
     because Codex splits a `-c` path at every dot, quotes included, so `mcp_servers."a.b".enabled=false`
     makes it exit at start. Seen in the Mac VM (`tests/sandbox.sh mac live codex`) for a user's, a
     project's, a dotted and a local plugin's server.
@@ -137,6 +137,7 @@ PROFILE = Profile(
         "Claude Code."
     ),
     screen=Screen(codex_typed_text, codex_question, never_rejects),
+    connectors="connectors_codex",
 )
 HOME = Path.home()
 CODEX_HOME = Path(os.environ.get("CODEX_HOME") or HOME / ".codex")

@@ -25,6 +25,7 @@ Shared code never asks which agent it has. Each layer has one place per agent, a
 | Starting a window | `libexec/bosun-launch`, the flow: resolve the session, refuse a second copy, start or resume | `lib/launch/<harness>.sh`: `build_agent_args`, `first_prompt`, `run_new`, `run_resumed` |
 | A running session | `lib/agent_state.py`: the `Agent` interface and the `AGENTS` table. `lib/agents.sh` is its shell side | `lib/claude_state.py`, `lib/codex_state.py`, each a module with `Agent`'s functions (`mypy` checks they match) |
 | Reading a screen | `lib/pane_input.py` asks the `AGENTS` table; `lib/screen_text.py` has the helpers readers share | A `Screen` in its profile: `typed`, `question`, `rejected` (`lib/agent_files.py`) |
+| Holding a window to its connectors | `lib/connectors.py`: reading a list, the report's helpers, and `doctor`, which imports the module the window's profile names | `lib/connectors_<harness>.py`, named by `Profile.connectors`: `main` (its launch command line) and `doctor_line` |
 
 `window_specs` is the one source of which agent a window runs: `window_harness` and `harnesses_in_use` read it.
 
@@ -53,7 +54,7 @@ auto mode. On top of that, `lib/launch/codex.sh` adds what a task always needs:
 
 **What a window reaches.** A Codex window starts with the MCP servers its connectors list names, as a
 Claude Code window does ([connectors](connectors.md)). At launch `lib/launch/codex.sh` has
-`lib/connectors.py codex` list the servers Codex would start in that folder (`codex mcp list --json`, names
+`lib/connectors_codex.py` list the servers Codex would start in that folder (`codex mcp list --json`, names
 only: a stdio server's entry holds its environment in plain text), once with plugins and once with
 `--disable plugins`, so a server only in the first is a plugin's. It adds one `-c
 mcp_servers={<name>={enabled=false},...}` for every configured server the list does not name, each name a
@@ -128,6 +129,8 @@ does not record the question, and Enter would answer it. So `bosun send` reads t
 2. A `lib/<harness>_state.py` with the functions of `Agent`, and a line in `AGENTS` (`lib/agent_state.py`).
    `mypy` checks it has them all.
 3. `lib/launch/<harness>.sh`, with the functions of `lib/launch/codex.sh`.
+   Its `lib/connectors_<harness>.py` (`main`, `doctor_line`; `Profile.connectors` names it) holds a window to
+   its list of connectors.
 4. A stand-in in `tests/sandbox/`, a section of `tests/sandbox/fresh_user.sh`, and a run with the real thing:
    `tests/sandbox.sh mac live <harness>`. The stand-in only behaves the way you already believed: every trap
    above was found by the real run, so teach the stand-in each one afterwards.

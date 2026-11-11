@@ -2816,7 +2816,7 @@ for line in sys.stdin:
   out="$(CX launch --fingerprint cx)"
   check "... while a listing that works gives one" bash -c 'jq -e ".args | length > 0" <<<"$1" >/dev/null' _ "$out"
   # codex_args_valid <list> <lines...>: "valid" or "refused", as lib/launch/codex.sh judges what
-  # connectors.py would print for <list>. A crash prints neither, so it is no answer to either check.
+  # connectors_codex.py would print for <list>. A crash prints neither, so it is no answer to either check.
   codex_args_valid() {
     bash -c 'set -u; BOSUN_CODEX_BIN=codex; source "$1/lib/common.sh" && source "$1/lib/launch/codex.sh" || exit 3; list="$2"; shift 2; codex_connector_args=("$@")
       if codex_connector_args_valid "$list"; then echo valid; else echo refused; fi' _ "$ROOT" "$@"
@@ -2829,7 +2829,7 @@ for line in sys.stdin:
     }
   }
   # The shape only: nothing for all, else an optional -c mcp_servers={...}, an optional --disable plugins,
-  # then --disable apps. What the table holds is connectors.py's (its unit tests read it back as TOML).
+  # then --disable apps. What the table holds is connectors_codex.py's (its unit tests read it back as TOML).
   check "the shape -c mcp_servers={...}, --disable plugins, --disable apps is taken" outputs valid codex_args_valid "" -c 'mcp_servers={acme-docs={enabled=false},"acme.mail"={enabled=false}}' --disable plugins --disable apps
   check "... and without --disable plugins" outputs valid codex_args_valid "" -c 'mcp_servers={acme-docs={enabled=false}}' --disable apps
   check "... and without the table" outputs valid codex_args_valid "acme-docs" --disable plugins --disable apps

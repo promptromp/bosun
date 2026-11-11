@@ -51,13 +51,17 @@ of truth, so don't copy rules into this file.
   the stand-up summary; design: `docs/design/workstreams.md`. `lib/similar.py` (pure): loose
   word-overlap similarity for near-duplicate hints (`ledger spawn`, learning's outreach overlap,
   which held item a prompt is about).
-  `lib/connectors.py`: what a window may reach (its list of MCP servers and connectors) turned into
-  Claude Code's `allowedMcpServers` and Codex's launch arguments, and the URLs and command lines kept from
-  the last lookup (`connectors.json`); the agents' listings are read through `lib/claude_state.py` (`claude
+  `lib/connectors.py`: what a window may reach (its list of MCP servers and connectors), and what every
+  agent's module shares (reading a list, the report's helpers and texts); each agent turns it into what that
+  agent takes at launch in its own module, which its `Profile.connectors` names: `lib/connectors_claude.py`
+  (Claude Code's `allowedMcpServers`, and the URLs and command lines kept from the last lookup in
+  `connectors.json`) and `lib/connectors_codex.py` (Codex's launch arguments), each with `main` and
+  `doctor_line`; the agents' listings are read through `lib/claude_state.py` (`claude
   mcp list`, plugins' servers, the settings scopes' allow lists a launch refuses to be widened by) and
   `lib/codex_state.py`; design: `docs/design/connectors.md`. The shell side is
   `window_connectors` and `set_connector_settings` (`lib/common.sh`), which `build_agent_args` calls once
-  per launch; `bosun doctor`'s line per window is its `doctor` subcommand (`check_connectors`).
+  per launch; `bosun doctor`'s line per window is `connectors.py doctor`, which asks the window's agent
+  module (`check_connectors`).
   `lib/delegate.py`: task rendering. `lib/guard.py`: the orchestrator's PreToolUse permission hook
   (which `guard_hook_settings` in `lib/common.sh` adds to the orchestrator's launch and to `chores
   --dry-run`), and with `BOSUN_APPROVALS_ENABLED` its approval hooks (`--approvals`, `--permission-request`,
@@ -245,8 +249,8 @@ of truth, so don't copy rules into this file.
   config value, never code: `BOSUN_ORCHESTRATOR_CONNECTORS`, `BOSUN_CONNECTORS` or `connectors:` in a
   `sessions.yml` entry, in the site's config dir (`bosun init` asks for the orchestrator's). No server's
   name goes in the repo. A new way to name a server, or an agent update that changes how one is switched
-  off: `lib/connectors.py` (on Codex, `codex_args` and its shape check `codex_connector_args_valid` in
-  `lib/launch/codex.sh` change together), `docs/design/connectors.md`, and a run of `tests/sandbox.sh mac
+  off: that agent's module, `lib/connectors_claude.py` or `lib/connectors_codex.py` (on Codex, `codex_args`
+  and its shape check `codex_connector_args_valid` in `lib/launch/codex.sh` change together), `docs/design/connectors.md`, and a run of `tests/sandbox.sh mac
   live` (its connectors part).
 - **An outward tool to gate** (approvals): a row in `GATED_MCP` / `GATED_COMMANDS` (`lib/guard.py`)
   and its `ask` rule in `orchestrator/settings.json`; a standing class: `STANDING_CLASSES` and its

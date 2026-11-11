@@ -80,7 +80,7 @@ flags=($BOSUN_ORCHESTRATOR_FLAGS)
 set_rehearsal_args() {
   local connectors
   connectors="$(resolve_connectors "$BOSUN_ORCHESTRATOR" "$BOSUN_ORCHESTRATOR_CONNECTORS" "$BOSUN_ORCHESTRATOR_DIR" 0)" ||
-    die "the orchestrator's connectors were refused or could not be resolved (lib/connectors.py, above)"
+    die "the orchestrator's connectors were refused or could not be resolved (lib/connectors_claude.py, above)"
   build_model_effort_args "$BOSUN_ORCHESTRATOR_MODEL" "$BOSUN_ORCHESTRATOR_EFFORT" "$BOSUN_ORCHESTRATOR_SETTINGS" \
     "$(printf '%s\n' "$(guard_hook_settings)" "$connectors" | merge_settings)"
   require_connector_limit "$BOSUN_ORCHESTRATOR" "$connectors"

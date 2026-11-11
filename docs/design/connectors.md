@@ -199,7 +199,7 @@ those three files (`claude_state.settings_allow_lists`: JSON, each once, and one
 be read holds none) and refuses to start the window when any of their entries is not exactly, JSON-equal,
 one of the window's own resolved entries; a narrower or a wider pattern is not equal. It names the file
 and those entries, and what to do: name them in the window's list, use `all`, or remove them from that
-file. The check is the resolver's (`refuse_widening` in `lib/connectors.py`), so every path that starts a
+file. The check is the resolver's (`refuse_widening` in `lib/connectors_claude.py`), so every path that starts a
 Claude Code window goes through it: a new or a resumed launch, `refresh`, `send --new`, an update's
 restart (and the fingerprint before it, which then reads the window as changed), and `bosun chores
 --dry-run`. It runs on what the resolver prints, outside its catch-all, so the check's own failure prints

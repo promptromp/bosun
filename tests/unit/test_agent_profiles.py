@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import contextlib
+import importlib
 import io
 import sys
 import unittest
@@ -63,6 +64,13 @@ class AgentProfileTest(unittest.TestCase):
             for name in agent.PROFILE.state_files:
                 assert name in patterns
                 assert name in update_backups.IN_FLIGHT
+
+    def test_each_agent_names_the_module_that_holds_its_windows_to_their_connectors(self) -> None:
+        self.assertEqual(claude_state.PROFILE.connectors, "connectors_claude")
+        self.assertEqual(codex_state.PROFILE.connectors, "connectors_codex")
+        for agent in AGENTS.values():
+            module = importlib.import_module(agent.PROFILE.connectors)
+            assert callable(module.main) and callable(module.doctor_line)
 
     def test_the_profiles_command(self) -> None:
         captured = io.StringIO()

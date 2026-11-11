@@ -7,7 +7,7 @@
 AGENT_BIN="$BOSUN_CODEX_BIN"
 
 # Sets codex_connector_args to the launch arguments that limit window <name>, launched in this folder, to
-# its list (window_connectors; docs/design/connectors.md), as lib/connectors.py prints them: one
+# its list (window_connectors; docs/design/connectors.md), as lib/connectors_codex.py prints them: one
 # `-c mcp_servers={<key>={enabled=false},...}` for the configured servers it does not name (none when there
 # are none), `--disable plugins` when it does not name one of the plugins' servers, and `--disable apps`.
 # None for `all`. Once per process: a launch builds its arguments twice, and the second time reuses the
@@ -21,25 +21,25 @@ set_codex_connector_args() { # <name>
   list="$(window_connectors "$1")" || die "could not read the connectors of '$1' in $BOSUN_SESSIONS_FILE"
   errors="$(mktemp "${TMPDIR:-/tmp}/bosun-connectors.XXXXXX")" || die "'$1' does not start: no temporary file"
   # The list is its own argument, so one that starts with "-" is no flag.
-  output="$(python3 "$BOSUN_ROOT/lib/connectors.py" codex --agent-bin "$BOSUN_CODEX_BIN" --list="$list" 2>"$errors")" ||
+  output="$(python3 "$BOSUN_ROOT/lib/connectors_codex.py" --agent-bin "$BOSUN_CODEX_BIN" --list="$list" 2>"$errors")" ||
     code=$?
   log_connector_lines "$1" "$errors"
   rm -f "$errors"
   [ "$code" = 0 ] ||
-    die "'$1' does not start: could not tell which servers its connectors switch off (lib/connectors.py, above)"
+    die "'$1' does not start: could not tell which servers its connectors switch off (lib/connectors_codex.py, above)"
   codex_connector_args=()
   if [ -n "$output" ]; then
     while IFS= read -r line; do codex_connector_args+=("$line"); done <<<"$output"
   fi
   codex_connector_args_valid "$list" ||
-    die "'$1' does not start: lib/connectors.py gave arguments not of the expected shape"
+    die "'$1' does not start: lib/connectors_codex.py gave arguments not of the expected shape"
   codex_connector_window="$1"
 }
 
-# Whether codex_connector_args have the shape of what lib/connectors.py codex prints for <list>: nothing,
+# Whether codex_connector_args have the shape of what lib/connectors_codex.py prints for <list>: nothing,
 # for `all`; otherwise, in this order, an optional `-c` with an `mcp_servers={...}` table, an optional
 # `--disable plugins`, then `--disable apps`, and nothing after. A shape check only, so that a missing or
-# garbled answer is never taken for "no limit"; what the table holds is lib/connectors.py's (its tests read
+# garbled answer is never taken for "no limit"; what the table holds is lib/connectors_codex.py's (its tests read
 # it back as TOML).
 codex_connector_args_valid() { # <list>
   local n=${#codex_connector_args[@]} i=0

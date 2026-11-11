@@ -22,7 +22,8 @@ tracker, so these are the reports we most want:
 - a way around the approvals gate (`lib/guard.py`, `lib/approvals.py`): an outward action, such as
   a Slack message, a merge or a ticket change, that goes out without the approval that names it;
 - a window that reaches an MCP server or connector its list does not name, beyond the exceptions
-  `docs/design/connectors.md` lists (`lib/connectors.py`);
+  `docs/design/connectors.md` lists (`lib/connectors.py`, `lib/connectors_claude.py`,
+  `lib/connectors_codex.py`);
 - the console (`bosun console`): anything reachable from another host or origin, or without its
   token;
 - secrets or personal data that reach logs, the ledger, learning digests or the knowledge base

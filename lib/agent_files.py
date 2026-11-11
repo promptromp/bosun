@@ -65,6 +65,9 @@ class Profile:
     display_name: str  # how bosun names it to a person
     setup_preview: tuple[str, ...]  # the lines `bosun init`'s agent question shows for it
     screen: Screen  # how its window's input box and questions are read
+    connectors: (
+        str  # the module that holds its windows to their lists of connectors (lib/connectors_<agent>.py)
+    )
     setup_sessions: str = ""  # how `bosun init` says its repo sessions will run
     setup_note: str = ""  # what `bosun init` tells the person about running them on it
 

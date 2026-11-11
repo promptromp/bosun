@@ -132,6 +132,7 @@ PROFILE = Profile(
     display_name="Claude Code",
     setup_preview=("One Claude Code session per repo, and the orchestrator runs on it too.",),
     screen=Screen(claude_typed_text, never_asks, unknown_command_lines),
+    connectors="connectors_claude",
 )
 MODEL_FLAG = re.compile(r"(?:^|\s)--model\s+(\S+)")
 EFFORT_SETTING = re.compile(r'"effortLevel":"([a-z]+)"')
