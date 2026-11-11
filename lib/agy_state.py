@@ -56,6 +56,7 @@ The screen:
 
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 import re
@@ -487,9 +488,9 @@ def hook_error(env: Mapping[str, str], message: str) -> None:
         sys.stderr.write(f"{line}\n")
 
 
-def start_alert(message: str) -> None:
+def start_alert(message: str, env: Mapping[str, str]) -> None:
     """`bosun alert <message>`, started and not waited for, so the hook returns at once."""
-    command = os.environ.get("BOSUN_HOOK_CMD")
+    command = env.get("BOSUN_HOOK_CMD")
     if command:
         subprocess.Popen(
             [command, "alert", message],
@@ -510,9 +511,9 @@ def run_hook(argv: list[str], env: Mapping[str, str]) -> int:
         return hook.run(argv, env)
     if hook.detach(env):
         return 0
-    os.closerange(3, SAID_FD_LIMIT)  # bosun-hook hands the agent's stdout pipe on as descriptor 3
-    code = 1
+    code = 1  # from here on this is the child, which must end here and never return into the answer path
     try:
+        os.closerange(3, SAID_FD_LIMIT)  # bosun-hook hands the agent's stdout pipe on as descriptor 3
         code = hook.run(argv, {**env, hook.SYNC: "1"})
     except Exception as exc:  # noqa: BLE001  (the child has no caller; the log has it)
         hook_error(env, f"recording what was said in {env.get('BOSUN_WINDOW')} failed: {exc!r}")
@@ -541,15 +542,21 @@ def resume_refusal(why: str) -> str:
 
 def refuse_resume(conversation_id: str, resumed: str, env: Mapping[str, str]) -> str:
     """The window resumed a conversation other than the one bosun asked for: stop its turn, and say so in the
-    log and to the person."""
+    log and to the person. The answer is made first and the log and the alert cannot take it away: a guard
+    that failed would let the turn go on."""
     window = env.get("BOSUN_WINDOW")
     why = (
         f"This window resumed a different conversation ({conversation_id or 'none'}) than bosun asked for "
         f"({resumed}); bosun stopped it before its model call."
     )
-    hook_error(env, f"agy window {window}: {why}")
-    start_alert(f"{window}: agy resumed a different conversation than bosun asked for; bosun stopped it")
-    return resume_refusal(why)
+    answer = resume_refusal(why)
+    with contextlib.suppress(Exception):
+        hook_error(env, f"agy window {window}: {why}")
+    with contextlib.suppress(Exception):
+        start_alert(
+            f"{window}: agy resumed a different conversation than bosun asked for; bosun stopped it", env
+        )
+    return answer
 
 
 def pre_invocation(payload: Mapping[str, Any], env: Mapping[str, str]) -> str:
@@ -579,10 +586,64 @@ def stop(payload: Mapping[str, Any], env: Mapping[str, str]) -> str:
     return ""
 
 
+OUTSIDE_QUOTES_REFUSED = frozenset("#$`\\!{}()<>\n\r")  # comments, expansions, escapes, groups, redirections
+IN_DOUBLE_QUOTES_REFUSED = frozenset("$`\\!")  # what the shell still reads inside "..."
+OPERATOR_RUNS = {"|": 2, "&": 2, ";": 1}  # only `||`, `&&` and `;` stay: no pipe, no background, no `;;`
+
+
+def operator_step(command: str, index: int) -> int | None:
+    """How many characters the operator at <index> takes, None for one that is not allowed."""
+    char = command[index]
+    run = len(command) - index - len(command[index:].lstrip(char))
+    return run if run == OPERATOR_RUNS[char] else None
+
+
+def inside_quote(char: str, quote: str) -> str | None:
+    """The quote state after <char> inside <quote>, None for a character not allowed there."""
+    if char == quote:
+        return ""
+    return None if quote == '"' and char in IN_DOUBLE_QUOTES_REFUSED else quote
+
+
+def outside_quotes(command: str, index: int) -> tuple[str, int] | None:
+    """The quote state after the character at <index> outside quotes and how many characters it takes, None
+    for one that is not allowed there."""
+    char = command[index]
+    if char in "'\"":
+        return char, 1
+    if char in OUTSIDE_QUOTES_REFUSED or not (char.isprintable() or char == "\t"):
+        return None
+    step = operator_step(command, index) if char in OPERATOR_RUNS else 1
+    return None if step is None else ("", step)
+
+
+def reads_plainly(command: str) -> bool:
+    """Whether <command> is made only of what every shell reads the same way, so that the lexer below cannot
+    see another command than the shell runs: single and double quotes tracked as the shell does (single
+    quotes hold anything), and outside quotes none of a comment mark, a `$`, a backtick, a backslash, a
+    group, a redirection, a newline or a control character, or an operator but `&&`, `||` and `;`. Inside
+    double quotes no `$`, backtick or backslash. An open quote is not plain. Anything else is refused."""
+    if "\x00" in command:
+        return False
+    quote, index = "", 0
+    while index < len(command):
+        if quote:
+            inside = inside_quote(command[index], quote)
+            moved = None if inside is None else (inside, 1)
+        else:
+            moved = outside_quotes(command, index)
+        if moved is None:
+            return False
+        quote, step = moved
+        index += step
+    return not quote
+
+
 def command_starts(command: str) -> list[str] | None:
-    """The first word of each simple command in <command>, as the shell reads it; None if it cannot be read
-    (an open quote) or redirects (a redirection can write anywhere once the sandbox is lifted)."""
+    """The first word of each simple command in <command>, as the shell reads it; None if it cannot be read.
+    Only for a command that `reads_plainly`: the lexer has no comments, `#` being a plain character."""
     lexer = shlex.shlex(command, posix=True, punctuation_chars=PUNCTUATION)
+    lexer.commenters = ""
     lexer.whitespace = " \t\r"
     lexer.whitespace_split = True
     try:
@@ -593,8 +654,6 @@ def command_starts(command: str) -> list[str] | None:
     at_start = True
     for token in tokens:
         if set(token) <= set(PUNCTUATION):
-            if set(token) & set("<>"):
-                return None
             at_start = True
         elif at_start:
             firsts.append(token)
@@ -602,23 +661,88 @@ def command_starts(command: str) -> list[str] | None:
     return firsts
 
 
-def runs_only_bosuns_commands(command: str) -> bool:
-    """Whether <command> runs only git, gh, bosun and cd, at least one of the first three: the commands a
-    bosun window needs outside agy's sandbox. Nothing is hidden before a command's name (a variable, `env`,
-    `sudo`, a keyword), nor behind a substitution, and what lib/guard.py reads as its simple commands is
-    exactly what is checked here."""
+class Refusal(NamedTuple):
+    """A way into one of the allowed programs that runs any program or rewrites what later commands run."""
+
+    program: str
+    words: tuple[str, ...]  # words of the command that must all be there (the subcommand), () for none
+    option: re.Pattern[str] | None  # a word of the command that must match too, None for none
+    why: str
+
+
+def long_option(name: str) -> re.Pattern[str]:
+    """A long option as git takes it: <name>, or any start of it, with or without `=value`."""
+    starts = "|".join(re.escape(name[:size]) for size in range(1, len(name) + 1))
+    return re.compile(rf"^--(?:{starts})(?:=.*)?$")
+
+
+SHORT_FLAG = r"^-[A-Za-z]*{}[A-Za-z]*$"  # a short option, alone or among others (-qu)
+# Looked for in every word of the command, wherever git or gh would take the subcommand: a refusal costs only
+# agy's own handling of the command, and a word placed to hide the subcommand must not hide it.
+REFUSALS = (
+    Refusal("git", (), re.compile(r"^-c$"), "-c name=value sets any config, such as core.sshCommand"),
+    Refusal("git", (), long_option("config-env"), "sets any config from the environment"),
+    Refusal("git", (), long_option("exec-path"), "runs git's own commands from another folder"),
+    Refusal("git", (), long_option("upload-pack"), "runs the program it names on the other end"),
+    Refusal("git", (), long_option("receive-pack"), "runs the program it names on the other end"),
+    Refusal("git", (), long_option("exec"), "push --exec is --receive-pack, rebase --exec runs a command"),
+    Refusal("git", (), re.compile(r"^ext::"), "a transport that runs a command"),
+    Refusal("git", ("fetch",), re.compile(SHORT_FLAG.format("u")), "-u is --upload-pack"),
+    Refusal("git", ("clone",), re.compile(SHORT_FLAG.format("u")), "-u is --upload-pack"),
+    Refusal("git", ("pull",), re.compile(SHORT_FLAG.format("u")), "-u is --upload-pack"),
+    Refusal("git", ("rebase",), re.compile(SHORT_FLAG.format("x")), "-x is --exec: runs a command"),
+    Refusal("git", ("config",), None, "rewrites what every later git command does"),
+    Refusal("git", ("submodule", "foreach"), None, "runs a command in each submodule"),
+    Refusal("git", ("bisect", "run"), None, "runs a command at each step"),
+    Refusal("gh", ("extension",), None, "installs and runs programs"),
+    Refusal("gh", ("alias",), None, "an alias can be a shell command"),
+    Refusal("gh", ("auth",), None, "changes what gh is logged in as"),
+    Refusal("gh", ("secret",), None, "changes what a repository's workflows can read"),
+    Refusal("bosun", ("uninstall",), None, "takes bosun off the machine"),
+    Refusal("bosun", ("update",), None, "replaces the code every later command runs"),
+    Refusal("bosun", ("init",), None, "rewrites bosun's config and launchd jobs"),
+)
+
+
+def escalates(words: list[str]) -> bool:
+    """Whether the command <words> is one of REFUSALS."""
+    rest = words[1:]
+    return any(
+        row.program == words[0]
+        and set(row.words) <= set(rest)
+        and (row.option is None or any(row.option.search(word) for word in rest))
+        for row in REFUSALS
+    )
+
+
+def hidden_before_a_name(firsts: list[str]) -> bool:
+    """Whether a first word is a keyword, a wrapper (`env`, `sudo`) or an assignment, which hide the name."""
     import guard  # noqa: PLC0415  (it imports the stores)
 
-    firsts = command_starts(command)
-    if not firsts or guard.runs_substitution(command):
-        return False
     hidden = (*guard.SHELL_KEYWORDS, *guard.WRAPPERS)
-    if any(word in hidden or guard.ASSIGNMENT.match(word) for word in firsts):
+    return any(word in hidden or guard.ASSIGNMENT.match(word) for word in firsts)
+
+
+def only_bosuns_programs(programs: list[str]) -> bool:
+    """Whether <programs> are all git, gh, bosun or cd, with at least one of the first three."""
+    return set(programs) <= ALLOWED_PROGRAMS and bool(set(programs) & APPROVED_PROGRAMS)
+
+
+def runs_only_bosuns_commands(command: str) -> bool:
+    """Whether <command> runs only git, gh, bosun and cd, at least one of the first three, and none of
+    REFUSALS: the commands a bosun window needs outside agy's sandbox. It must read the same to every shell
+    (`reads_plainly`), nothing is hidden before a command's name (a variable, `env`, `sudo`, a keyword), and
+    what lib/guard.py reads as its simple commands is exactly what is checked here."""
+    import guard  # noqa: PLC0415
+
+    if not reads_plainly(command) or guard.runs_substitution(command):
         return False
-    programs = [words[0] for words in guard.simple_commands(command)]
-    return (
-        programs == firsts and set(programs) <= ALLOWED_PROGRAMS and bool(set(programs) & APPROVED_PROGRAMS)
-    )
+    firsts = command_starts(command)
+    if not firsts or hidden_before_a_name(firsts):
+        return False
+    commands = guard.simple_commands(command)
+    programs = [words[0] for words in commands]
+    return programs == firsts and only_bosuns_programs(programs) and not any(map(escalates, commands))
 
 
 def pre_tool_use(payload: Mapping[str, Any], _env: Mapping[str, str]) -> str:
@@ -706,10 +830,11 @@ def install_plugin() -> None:
 
 
 def forget_empty_imports() -> None:
-    """Remove agy's import record when it holds no imports; one that holds another plugin's stays."""
+    """Remove agy's import record when its only key is `imports` and that holds none; a record with anything
+    else in it, or another plugin's imports, stays."""
     manifest = AGY_CONFIG / "import_manifest.json"
     found = read_object(manifest)
-    if found is not None and not found.get("imports"):
+    if found is not None and set(found) == {"imports"} and not found["imports"]:
         manifest.unlink(missing_ok=True)
 
 

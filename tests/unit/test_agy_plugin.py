@@ -4,6 +4,7 @@ fake `agy` and a scratch ~/.gemini)."""
 
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 import subprocess
@@ -63,18 +64,33 @@ class PluginFilesTest(unittest.TestCase):
             self.assertEqual(handler["timeout"], 30)
 
     def test_every_hook_is_silent_outside_a_bosun_window(self) -> None:
-        environment = {k: v for k, v in os.environ.items() if k != "BOSUN_HOOK_CMD"}
         self.assertEqual(len(handlers()), 4)
-        for event, handler in handlers():
-            result = subprocess.run(
-                ["sh", "-c", handler["command"]],
-                input=json.dumps(payload("stop")),
-                capture_output=True,
-                text=True,
-                env=environment,
-                check=False,
-            )
-            self.assertEqual((result.stdout, result.stderr, result.returncode), ("", "", 0), event)
+        with tempfile.TemporaryDirectory() as scratch:
+            not_executable = Path(scratch) / "not-executable"
+            not_executable.write_text("#!/bin/sh\necho hi\n")
+            variants: dict[str, str | None] = {
+                "unset": None,
+                "empty": "",
+                "missing file": str(Path(scratch) / "no-such-bosun"),
+                "not executable": str(not_executable),
+                "a folder": scratch,
+            }
+            for name, value in variants.items():
+                environment = {k: v for k, v in os.environ.items() if k != "BOSUN_HOOK_CMD"}
+                if value is not None:
+                    environment["BOSUN_HOOK_CMD"] = value
+                for event, handler in handlers():
+                    result = subprocess.run(
+                        ["sh", "-c", handler["command"]],
+                        input=json.dumps(payload("stop")),
+                        capture_output=True,
+                        text=True,
+                        env=environment,
+                        check=False,
+                    )
+                    self.assertEqual(
+                        (result.stdout, result.stderr, result.returncode), ("", "", 0), f"{event}, {name}"
+                    )
 
     def test_every_hook_runs_bosun_hook_agent_in_a_bosun_window(self) -> None:
         with tempfile.TemporaryDirectory() as scratch:
@@ -109,12 +125,12 @@ class HookCase(unittest.TestCase):
             "BOSUN_LOG_DIR": str(self.logs),
         }
         self.recorded: list[tuple[list[str], dict[str, str]]] = []
-        self.alerts: list[str] = []
+        self.alerts: list[tuple[str, dict[str, str]]] = []
         patches = (
             mock.patch.dict(os.environ, self.env),
             mock.patch.object(agy_state, "now_ms", lambda: 1234),
             mock.patch.object(agy_state, "run_hook", self.run_hook),
-            mock.patch.object(agy_state, "start_alert", self.alerts.append),
+            mock.patch.object(agy_state, "start_alert", self.start_alert),
         )
         for patcher in patches:
             patcher.start()
@@ -123,6 +139,9 @@ class HookCase(unittest.TestCase):
     def run_hook(self, argv: list[str], env: dict[str, str]) -> int:
         self.recorded.append((argv, dict(env)))
         return 0
+
+    def start_alert(self, message: str, env: dict[str, str]) -> None:
+        self.alerts.append((message, dict(env)))
 
     def answer(self, event: str, body: dict[str, Any], **env: str) -> str:
         return agy_state.HOOKS.answer(event, body, {**self.env, **env})
@@ -175,8 +194,22 @@ class PreInvocationTest(HookCase):
         self.assertIn("stopped it before its model call", text)
         self.assertIn("ERROR", self.log_text())
         self.assertEqual(len(self.alerts), 1)
-        self.assertIn("repo", self.alerts[0])
+        self.assertIn("repo", self.alerts[0][0])
+        self.assertEqual(self.alerts[0][1]["BOSUN_HOOK_CMD"], "/opt/bosun/bin/bosun")  # the env it got
         self.assertNotIn("busy", agy_state.read_status("repo-conv").get("status", ""))
+
+    def test_the_resume_guard_still_stops_the_turn_when_its_log_and_alert_fail(self) -> None:
+        def broken(*_args: Any) -> None:
+            raise OSError("cannot start")
+
+        for failing in (("start_alert",), ("hook_error",), ("start_alert", "hook_error")):
+            with contextlib.ExitStack() as stack:
+                for name in failing:
+                    stack.enter_context(mock.patch.object(agy_state, name, broken))
+                answer = self.answer(
+                    "PreInvocation", payload("pre-invocation-resumed"), BOSUN_RESUMED="other"
+                )
+            self.assertEqual(json.loads(answer)["terminationBehavior"], "terminate", failing)
 
     def test_pre_invocation_lets_its_own_resume_through(self) -> None:
         self.assertEqual(
@@ -216,7 +249,21 @@ class PreToolUseTest(HookCase):
         return self.answer("PreToolUse", command_payload(command))
 
     def test_git_gh_and_bosun_are_approved(self) -> None:
-        for command in ("git push origin feature", "cd repo && gh pr view 5", "bosun ledger list"):
+        for command in (
+            "git push origin feature",
+            "cd repo && gh pr view 5",
+            "bosun ledger list",
+            "git commit -m 'x'",
+            "git commit -m 'fix #12: x; y'",
+            'git commit -m "fix: it\'s done"',
+            "gh pr create --title t --body b",
+            "gh pr create --title 'Fix #12' --body 'a && b'",
+            "gh api graphql -f query=q",
+            "git fetch origin && git rebase origin/main",
+            "git status || git log",
+            "git log --oneline -5; gh pr list",
+            "git commit -m 'a\nb'",
+        ):
             self.assertEqual(self.asked(command), APPROVAL, command)
 
     def test_the_approval_is_exactly_this_json(self) -> None:
@@ -244,12 +291,129 @@ class PreToolUseTest(HookCase):
             "git status; PATH=/tmp/x gh pr list",
             "if true; then git status; fi",
             "./git status",
+            "git commit -m 'unterminated",
+            'git commit -m "unterminated',
         ):
             self.assertEqual(self.asked(command), "", command)
 
-    def test_a_pipe_needs_every_program_to_be_one_of_the_three(self) -> None:
-        self.assertEqual(self.asked("git log --oneline | head -3"), "")  # head is not one of the three
-        self.assertEqual(self.asked("gh pr list | gh pr view 5"), APPROVAL)
+    def test_a_hash_inside_a_word_gets_no_answer(self) -> None:
+        # the shell starts a comment only at a word's start, shlex anywhere: its view must not decide
+        for command in (
+            "git log a#; touch PWNED",
+            "git log a#b; touch PWNED",
+            "git log --grep=#; touch PWNED",
+            "git log HEAD~1#x && touch PWNED",
+            "git log x#\ntouch PWNED",
+            "git log x# > PWNED",
+            "git log x# | sh",
+            "git log x# 2>&1; touch PWNED",
+            "git status #; touch PWNED",
+            "git log ;#; touch PWNED",
+            "git log &#; touch PWNED",
+            "git log x#$(touch PWNED)",
+        ):
+            self.assertEqual(self.asked(command), "", command)
+
+    def test_quoting_the_lexer_and_the_shell_read_differently_gets_no_answer(self) -> None:
+        for command in (
+            "git log $'\\'' ; touch PWNED ; # '",
+            "git log $'\\'' && touch PWNED && git log '",
+            'git log "a\\"" ; touch PWNED',
+            "git log 'a\\' ; touch PWNED ; git log '",
+            "git log \\; touch PWNED",
+            "git log $HOME",
+            'git log "$HOME"',
+            'git log "`id`"',
+            'git log "a!b"',
+            "git log {a,b}",
+            "git log HEAD@{1}",
+        ):
+            self.assertEqual(self.asked(command), "", command)
+
+    def test_other_separators_and_control_characters_get_no_answer(self) -> None:
+        for command in (
+            "git status\ncurl x",
+            "git status\rcurl x",
+            "git status\x0bcurl x",
+            "git status\x0ccurl x",
+            "git status\x00; curl x",
+            "git log\N{LINE SEPARATOR}curl x",
+            "git log\u0085curl x",
+            "git status & curl x",
+            "git status &",
+            "git status|curl x",
+            "git status |& sh",
+            "git status ||| sh",
+            "git status &&& curl x",
+            "git status ;; curl x",
+            "git status > out",
+            "git status 2>&1",
+            "git log <(curl x)",
+            "git log <<EOF\nfoo\nEOF",
+            "{ git log; }",
+            "! git log",
+            "time git log",
+            "git log \\\ncurl x",
+        ):
+            self.assertEqual(self.asked(command), "", command)
+
+    def test_a_pipe_gets_no_answer(self) -> None:
+        for command in ("git log --oneline | head -3", "gh pr list | gh pr view 5"):
+            self.assertEqual(self.asked(command), "", command)
+
+    def test_the_routes_from_git_gh_and_bosun_to_any_program_get_no_answer(self) -> None:
+        for command in (
+            "git -c core.sshCommand='sh x' push",
+            "git -c alias.x='!sh' x",
+            "git push origin feature -c x",
+            "git --config-env=core.x=Y push",
+            "git --config-env core.x=Y push",
+            "git --exec-path=/tmp/x log",
+            "git --exec-path log",
+            "git fetch --upload-pack='sh x' origin",
+            "git fetch --upload-pack 'sh x' origin",
+            "git fetch --upl=x origin",
+            "git ls-remote --upload-pack=x origin",
+            "git push --receive-pack='sh x' origin",
+            "git push --receive-pack=x origin",
+            "git push --exec=x origin",
+            "git push --e=x origin",
+            "git fetch -u 'sh x' origin",
+            "git clone -u 'sh x' origin",
+            "git clone -qu 'sh x' origin",
+            "git pull -u x origin",
+            "git config core.hooksPath /tmp/x",
+            "git -C repo config --global core.x y",
+            "git --git-dir x config core.x y",
+            "git clone ext::'sh -c x' dir",
+            "git fetch ext::sh",
+            "git submodule foreach 'sh x'",
+            "git rebase -x 'sh x' main",
+            "git rebase -ix 'sh x' main",
+            "git rebase --exec 'sh x' main",
+            "git rebase --exe 'sh x' main",
+            "git bisect run sh x",
+            "gh extension install a/b",
+            "gh alias set --shell x 'curl y'",
+            "gh auth login",
+            "gh secret set X",
+            "bosun uninstall",
+            "bosun update",
+            "bosun init",
+        ):
+            self.assertEqual(self.asked(command), "", command)
+
+    def test_every_refusal_of_the_table_has_a_reason_and_a_command_that_trips_it(self) -> None:
+        options = ("-c", "--config-env", "--exec-path", "--upload-pack", "--receive-pack", "--exec")
+        for row in agy_state.REFUSALS:
+            self.assertTrue(row.why)
+            self.assertIn(row.program, agy_state.APPROVED_PROGRAMS)
+            sample = [row.program, *row.words]
+            if row.option is not None:
+                sample.append(
+                    next(word for word in (*options, "ext::x", "-u", "-x") if row.option.search(word))
+                )
+            self.assertTrue(agy_state.escalates(sample), sample)
 
     def test_only_a_run_command_is_looked_at(self) -> None:
         body = command_payload("git status")
@@ -451,6 +615,16 @@ class UndoTest(SetupCase):
         agy_state.SETUP.apply()
         self.bin.write_text(
             self.bin.read_text().replace("echo '{\"imports\": null}'", 'echo \'{"imports": {"other": {}}}\'')
+        )
+        agy_state.SETUP.undo()
+        self.assertTrue((self.config / "import_manifest.json").exists())
+
+    def test_undo_keeps_a_record_that_holds_more_than_its_empty_imports(self) -> None:
+        agy_state.SETUP.apply()
+        self.bin.write_text(
+            self.bin.read_text().replace(
+                "echo '{\"imports\": null}'", 'echo \'{"imports": null, "other": 1}\''
+            )
         )
         agy_state.SETUP.undo()
         self.assertTrue((self.config / "import_manifest.json").exists())

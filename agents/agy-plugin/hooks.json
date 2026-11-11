@@ -3,14 +3,14 @@
     "SessionStart": [
       {
         "type": "command",
-        "command": "[ -n \"${BOSUN_HOOK_CMD:-}\" ] || exit 0; exec \"$BOSUN_HOOK_CMD\" hook agent --harness agy --event SessionStart",
+        "command": "[ -n \"${BOSUN_HOOK_CMD:-}\" ] && [ -f \"$BOSUN_HOOK_CMD\" ] && [ -x \"$BOSUN_HOOK_CMD\" ] || exit 0; exec \"$BOSUN_HOOK_CMD\" hook agent --harness agy --event SessionStart",
         "timeout": 30
       }
     ],
     "PreInvocation": [
       {
         "type": "command",
-        "command": "[ -n \"${BOSUN_HOOK_CMD:-}\" ] || exit 0; exec \"$BOSUN_HOOK_CMD\" hook agent --harness agy --event PreInvocation",
+        "command": "[ -n \"${BOSUN_HOOK_CMD:-}\" ] && [ -f \"$BOSUN_HOOK_CMD\" ] && [ -x \"$BOSUN_HOOK_CMD\" ] || exit 0; exec \"$BOSUN_HOOK_CMD\" hook agent --harness agy --event PreInvocation",
         "timeout": 30
       }
     ],
@@ -20,7 +20,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "[ -n \"${BOSUN_HOOK_CMD:-}\" ] || exit 0; exec \"$BOSUN_HOOK_CMD\" hook agent --harness agy --event PreToolUse",
+            "command": "[ -n \"${BOSUN_HOOK_CMD:-}\" ] && [ -f \"$BOSUN_HOOK_CMD\" ] && [ -x \"$BOSUN_HOOK_CMD\" ] || exit 0; exec \"$BOSUN_HOOK_CMD\" hook agent --harness agy --event PreToolUse",
             "timeout": 30
           }
         ]
@@ -29,7 +29,7 @@
     "Stop": [
       {
         "type": "command",
-        "command": "[ -n \"${BOSUN_HOOK_CMD:-}\" ] || exit 0; exec \"$BOSUN_HOOK_CMD\" hook agent --harness agy --event Stop",
+        "command": "[ -n \"${BOSUN_HOOK_CMD:-}\" ] && [ -f \"$BOSUN_HOOK_CMD\" ] && [ -x \"$BOSUN_HOOK_CMD\" ] || exit 0; exec \"$BOSUN_HOOK_CMD\" hook agent --harness agy --event Stop",
         "timeout": 30
       }
     ]
