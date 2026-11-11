@@ -73,6 +73,15 @@ class TurnEnd:
 
 
 @dataclass(frozen=True)
+class AgentHooks:
+    """The hooks an agent runs through bosun (`bosun hook agent --harness <agent> --event <event>`)."""
+
+    events: tuple[str, ...]  # the hook events it runs
+    # (event, the hook's JSON, the environment) -> what to print for the agent: its answer, "" for none
+    answer: Callable[[str, Mapping[str, Any], Mapping[str, str]], str]
+
+
+@dataclass(frozen=True)
 class Profile:
     """What an agent is and can do, declared by its module so that shared code never names the agent."""
 
@@ -93,6 +102,7 @@ class Profile:
     setup_sessions: str = ""  # how `bosun init` says its repo sessions will run
     setup_note: str = ""  # what `bosun init` tells the person about running them on it
     turn_end: TurnEnd | None = None  # how it reports the end of a turn; None: it does not
+    hooks: AgentHooks | None = None  # the hooks it runs through bosun; None: it has none
 
 
 def command_line(pid: int | str) -> str:

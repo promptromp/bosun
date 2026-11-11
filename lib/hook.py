@@ -5,10 +5,16 @@ turn ends (design: docs/design/harnesses.md).
 Usage: hook.py user-prompt --window <window>    (the hook's JSON on stdin)
        hook.py turn-end --harness <agent> --window <window> --conversation <name> <json>
        hook.py codex-turn-end --window <window> --conversation <name> <json>
+       hook.py agent --harness <agent> --event <event>    (the hook's JSON on stdin)
 
 `codex-turn-end` is `turn-end --harness codex`, which a Codex window started before the generic name
 still runs: its launch command outlives the bosun that wrote it. An agent whose profile has no
 `turn_end` reports no turns, and is refused.
+
+`agent` is an agent's own hooks (the plugin bosun installs into Antigravity): the JSON comes on stdin and
+the agent's answer goes to stdout, in the foreground, since the agent waits for it. It never fails: the
+agent takes a failing hook for a refusal, so an error is an ERROR line in the hook log, nothing on stdout
+and exit 0.
 
 Run it as `bosun hook user-prompt --window <window>`: `bosun launch` installs it as the
 UserPromptSubmit hook of a repo window's Claude when BOSUN_EVENTS_ENABLED=1. It records each
@@ -44,7 +50,7 @@ import activity
 import events
 import ledger
 import update_gate
-from agent_files import TurnEnd, TurnReport
+from agent_files import AgentHooks, TurnEnd, TurnReport
 from agent_state import AGENTS
 
 
@@ -149,6 +155,13 @@ def legacy_events() -> dict[str, str]:
     }
 
 
+def known_agent(parser: argparse.ArgumentParser, harness: str) -> Any:
+    """The module of the agent <harness>, or a usage error naming the ones bosun knows."""
+    if harness not in AGENTS:
+        parser.error(f"no agent '{harness}': bosun knows {', '.join(AGENTS)}")
+    return AGENTS[harness]
+
+
 def turn_end_of(parser: argparse.ArgumentParser, args: argparse.Namespace) -> TurnEnd | None:
     """The turn-end handling of the agent <args> names (an older event name stands for its agent), or None
     for a hook that is not about a turn. A usage error, before anything detaches, for an agent with none."""
@@ -157,9 +170,7 @@ def turn_end_of(parser: argparse.ArgumentParser, args: argparse.Namespace) -> Tu
     harness = legacy_events().get(args.event) or args.harness
     if not harness:
         parser.error("turn-end needs --harness <agent>")
-    if harness not in AGENTS:
-        parser.error(f"no agent '{harness}': bosun knows {', '.join(AGENTS)}")
-    turn: TurnEnd | None = AGENTS[harness].PROFILE.turn_end
+    turn: TurnEnd | None = known_agent(parser, harness).PROFILE.turn_end
     if turn is None:
         parser.error(f"{harness} reports no turns")
     return turn
@@ -184,6 +195,41 @@ def described(argv: list[str]) -> str:
         return argv[0] if argv else ""
     options = (("--harness", args.harness), ("--window", args.window), ("--conversation", args.conversation))
     return " ".join([args.event, *(f"{flag} {value}" for flag, value in options if value)])
+
+
+def agent_hooks_of(parser: argparse.ArgumentParser, args: argparse.Namespace) -> AgentHooks:
+    """The hooks of the agent <args> names, or a usage error: that is a wrong command line, which no
+    agent's run of its hook can cause."""
+    hooks: AgentHooks | None = known_agent(parser, args.harness).PROFILE.hooks
+    if hooks is None:
+        parser.error(f"{args.harness} has no hooks of its own")
+    if args.event not in hooks.events:
+        parser.error(f"{args.harness} has no hook {args.event}")
+    return hooks
+
+
+def agent_hook(argv: list[str], env: Mapping[str, str]) -> int:
+    """`agent --harness <agent> --event <event>`: print the agent's answer to the JSON on stdin. Once the
+    agent and event are known nothing fails it: the agent takes a failing hook for a refusal of what it asked,
+    so an error is an ERROR line in the hook log (never the payload, which holds what was said), no
+    answer and exit 0."""
+    parser = argparse.ArgumentParser(prog="bosun hook agent")
+    parser.add_argument("--harness", required=True)
+    parser.add_argument("--event", required=True)
+    args = parser.parse_args(argv)
+    hooks = agent_hooks_of(parser, args)
+    try:
+        answer = hooks.answer(args.event, json.loads(sys.stdin.read()), env)
+        sys.stdout.write(answer)
+        sys.stdout.flush()
+    except Exception as exc:  # noqa: BLE001  (a hook that fails is a refusal to the agent; the log has it)
+        with contextlib.suppress(Exception):
+            line = f"ERROR: {args.harness} hook {args.event} failed: {exc!r}"
+            if env.get("BOSUN_LOG_DIR"):
+                log(env, line)
+            else:  # stdout is the agent's answer
+                sys.stderr.write(f"{line}\n")
+    return 0
 
 
 def main(argv: list[str], env: Mapping[str, str]) -> int:
@@ -217,6 +263,8 @@ def run(argv: list[str], env: Mapping[str, str]) -> int:
     """main, under update_gate.guarded: a write the gate refused is run again on the installed
     version, and one that still could not be made is an ERROR line in the hook log, for the
     watchdog (the gate's own line, on stderr, says why)."""
+    if argv[:1] == ["agent"]:  # writes no store, and the agent waits for its stdin's answer
+        return agent_hook(argv[1:], env)
     code = update_gate.guarded("hook", lambda args: main(args, env), argv)
     if code != 0:
         log(env, f"ERROR: bosun hook {described(argv)} recorded nothing: the update gate refused its write")
