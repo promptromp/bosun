@@ -156,13 +156,29 @@ def turn_end_of(parser: argparse.ArgumentParser, args: argparse.Namespace) -> Tu
     return turn
 
 
-def main(argv: list[str], env: Mapping[str, str]) -> int:
+def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="bosun hook", description=__doc__)
     parser.add_argument("event", choices=("user-prompt", "turn-end", "codex-turn-end"))
     parser.add_argument("--harness", default="")
     parser.add_argument("--window", required=True)
     parser.add_argument("--conversation", default="")
     parser.add_argument("payload", nargs="?")
+    return parser
+
+
+def described(argv: list[str]) -> str:
+    """The event, agent, window and conversation <argv> names, for a log line: never its payload, which
+    holds what was said in the window, wherever the arguments put it."""
+    try:
+        args = build_parser().parse_args(argv)
+    except SystemExit:  # not a call main would have run
+        return argv[0] if argv else ""
+    options = (("--harness", args.harness), ("--window", args.window), ("--conversation", args.conversation))
+    return " ".join([args.event, *(f"{flag} {value}" for flag, value in options if value)])
+
+
+def main(argv: list[str], env: Mapping[str, str]) -> int:
+    parser = build_parser()
     args = parser.parse_args(argv)
     turn = turn_end_of(parser, args)
     try:
@@ -194,8 +210,7 @@ def run(argv: list[str], env: Mapping[str, str]) -> int:
     watchdog (the gate's own line, on stderr, says why)."""
     code = update_gate.guarded("hook", lambda args: main(args, env), argv)
     if code != 0:
-        what = " ".join(argv[:5])  # the event, its agent and the window, never a payload (the last argument)
-        log(env, f"ERROR: bosun hook {what} recorded nothing: the update gate refused its write")
+        log(env, f"ERROR: bosun hook {described(argv)} recorded nothing: the update gate refused its write")
     return code
 
 

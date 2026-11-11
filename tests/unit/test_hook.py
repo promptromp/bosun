@@ -82,15 +82,18 @@ class HookTest(unittest.TestCase):
         argv = [*head, "--window", WINDOW, "--conversation", f"{WINDOW}-2", json.dumps(payload)]
         return hook.main(argv, env or self.env)
 
-    def test_turn_end_with_harness_codex_does_what_codex_turn_end_did(self) -> None:
-        def after(*head: str) -> tuple[dict[str, Any], list[tuple[Any, ...]]]:
-            self.setUp()  # a state folder of its own for each name
-            self.codex_turn("go with option b", head=head)
-            names = json.loads((self.state_dir / "codex-sessions.json").read_text())
-            return names, [(e["items"], e["window"], e["session"], e["text"]) for e in self.said()]
+    def after_codex_turn(self, *head: str) -> tuple[dict[str, Any], list[tuple[Any, ...]]]:
+        """What a Codex turn run through <head> leaves in this test's state: the names, and what was said."""
+        self.codex_turn("go with option b", head=head)
+        names = json.loads((self.state_dir / "codex-sessions.json").read_text())
+        return names, [(e["items"], e["window"], e["session"], e["text"]) for e in self.said()]
 
-        old = after("codex-turn-end")
-        new = after("turn-end", "--harness", "codex")
+    def test_turn_end_with_harness_codex_does_what_codex_turn_end_did(self) -> None:
+        old = self.after_codex_turn("codex-turn-end")
+        other = type(self)(self._testMethodName)  # a state folder of its own, cleaned up with this test's
+        other.setUp()
+        self.addCleanup(other.doCleanups)
+        new = other.after_codex_turn("turn-end", "--harness", "codex")
         self.assertEqual(old, new)
         self.assertEqual(new[0][f"{WINDOW}-2"]["id"], "t-1")
         self.assertEqual(len(new[1]), 1)
@@ -216,6 +219,23 @@ class HookTest(unittest.TestCase):
         with mock.patch.object(update_gate, "guarded", return_value=0):
             self.assertEqual(hook.run(argv, self.env), 0)
         self.assertEqual(self.log().count("ERROR"), 1)
+
+    def test_the_error_line_never_carries_the_payload_whatever_the_arguments(self) -> None:
+        said = "go with option c"
+        payload = json.dumps({"thread-id": "t-1", "cwd": "/repo", "input-messages": [said]})
+        forms = (
+            (["codex-turn-end", "--window", WINDOW, payload], f"codex-turn-end --window {WINDOW} recorded"),
+            (
+                ["turn-end", "--harness", "codex", "--window", WINDOW, "--conversation", "n", payload],
+                f"turn-end --harness codex --window {WINDOW} --conversation n recorded",
+            ),
+        )
+        for argv, line in forms:
+            with self.subTest(argv[0]), mock.patch.object(update_gate, "guarded", return_value=1):
+                self.assertEqual(hook.run(argv, self.env), 1)
+                self.assertIn(f"ERROR: bosun hook {line} nothing", self.log())
+        self.assertNotIn(said, self.log())
+        self.assertNotIn("t-1", self.log())
 
     def test_it_never_fails_the_prompt(self) -> None:
         self.assertEqual(self.run_hook("{not json"), 0)
