@@ -483,11 +483,13 @@ def ask_aws(ui: Ui, facts: Facts, answers: Answers, top: Sequence[str]) -> Answe
 
 def has_a_choice_of_agents(facts: Facts) -> bool:
     """Claude Code runs the orchestrator, so it is always there to pick."""
-    return any(agent != agent_state.DEFAULT_HARNESS for agent in facts.ready_agents)
+    return any(agent != agent_state.ORCHESTRATOR_HARNESS for agent in facts.ready_agents)
 
 
 def harness_options(facts: Facts, answers: Answers) -> list[Option]:
-    offered = [a for a in agent_state.AGENTS if a == agent_state.DEFAULT_HARNESS or a in facts.ready_agents]
+    offered = [
+        a for a in agent_state.AGENTS if a == agent_state.ORCHESTRATOR_HARNESS or a in facts.ready_agents
+    ]
     return [
         Option(
             str(n),
@@ -509,7 +511,7 @@ def total_steps(facts: Facts, answers: Answers, asks_connectors: bool) -> int:
         ALWAYS_ASKED
         + asks_connectors
         + has_a_choice_of_agents(facts)
-        + (answers.harness == agent_state.DEFAULT_HARNESS)
+        + (answers.harness == agent_state.ORCHESTRATOR_HARNESS)
         + bool(facts.aws_sso_profiles)
     )
 
@@ -533,7 +535,7 @@ def ask_all(ui: Ui, facts: Facts, answers: Answers, machine: Machine) -> Answers
     answers = ask_features(ui, facts, answers, top("How proactive should it be?"))
     if has_a_choice_of_agents(facts):
         answers = ask_harness(ui, facts, answers, top("Which agent should run the repo sessions?"))
-    on_claude = answers.harness == agent_state.DEFAULT_HARNESS
+    on_claude = answers.harness == agent_state.ORCHESTRATOR_HARNESS
     who = "sessions" if on_claude else "orchestrator"
     answers = ask_model(ui, answers, top(f"Which model should the {who} use?"))
     if on_claude:

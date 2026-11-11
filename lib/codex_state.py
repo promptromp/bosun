@@ -115,6 +115,7 @@ HOME = Path.home()
 CODEX_HOME = Path(os.environ.get("CODEX_HOME") or HOME / ".codex")
 CONFIG_FILE = CODEX_HOME / "config.toml"
 SESSIONS_DIR = CODEX_HOME / "sessions"
+BIN_KEY = "BOSUN_CODEX_BIN"  # the setting that names its command
 NAMES_FILE = "codex-sessions.json"  # in bosun's state dir
 TERMINAL_SOURCE = "cli"  # session_meta.source of a session in the terminal: not `exec`, not a reviewer
 TURN_STARTED = "task_started"
@@ -131,7 +132,7 @@ IDLE, BUSY = "idle", "busy"
 
 
 def codex_bin() -> str:
-    return os.environ.get("BOSUN_CODEX_BIN") or HARNESS
+    return os.environ.get(BIN_KEY) or HARNESS
 
 
 def held_rollouts(pids: Iterable[int | str]) -> dict[int, list[Path]]:
@@ -478,7 +479,7 @@ def turn_report(conversation: str, payload: Mapping[str, Any]) -> TurnReport | s
 
 
 PROFILE = Profile(
-    bin_key="BOSUN_CODEX_BIN",
+    bin_key=BIN_KEY,
     flags_key="BOSUN_CODEX_FLAGS",
     model_key="BOSUN_CODEX_MODEL",
     names_sessions=False,
@@ -486,7 +487,7 @@ PROFILE = Profile(
     remote_control=False,
     autocompact=False,
     subagents=False,
-    state_files=("codex-sessions.json",),
+    state_files=(NAMES_FILE,),
     display_name="Codex",
     setup_preview=(
         (

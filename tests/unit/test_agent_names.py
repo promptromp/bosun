@@ -7,6 +7,8 @@ import re
 import sys
 import unittest
 from pathlib import Path
+from types import ModuleType
+from typing import cast
 
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "lib"))
@@ -18,11 +20,9 @@ ROOT = Path(__file__).resolve().parents[2]
 
 # The agents' own modules, and the table that lists them, may name them.
 OWN_MODULES = {
-    "claude_state.py",
-    "codex_state.py",
-    "connectors_claude.py",
-    "connectors_codex.py",
     "agent_state.py",
+    *(f"{cast(ModuleType, agent).__name__}.py" for agent in AGENTS.values()),
+    *(f"{agent.PROFILE.connectors}.py" for agent in AGENTS.values()),
 }
 
 # Files that hold something only Claude Code has: how many places, and what they are. A new place in
@@ -260,8 +260,12 @@ class TheChecksFindWhatTheyLookForTest(unittest.TestCase):
         text = (ROOT / "libexec" / "bosun-send").read_text(encoding="utf-8")
         lines, problems = shell_code(text)
         self.assertEqual([], problems)
-        scanned = {number for number, _ in lines}
-        self.assertTrue({192, 230, 259} <= scanned)
+        last_code = [
+            number
+            for number, line in enumerate(text.splitlines(), 1)
+            if line.strip() and not line.strip().startswith("#")
+        ][-1]
+        self.assertIn(last_code, {number for number, _ in lines})
 
     def test_python_strings_equal_to_an_id_are_reported(self) -> None:
         agent = next(iter(AGENTS))

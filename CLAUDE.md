@@ -148,15 +148,16 @@ of truth, so don't copy rules into this file.
   import file; the fixture knowledge base is `tests/fixtures/knowledge/acme-import.jsonl`.
 - Agents (design: `docs/design/harnesses.md`): an adapter per agent, `lib/claude_state.py` and
   `lib/codex_state.py`, each a module with the functions of `Agent` in `lib/agent_state.py`, whose `AGENTS`
-  table is the one place that lists them (each module's `PROFILE`, a `Profile` in `lib/agent_files.py`, says what it
-  is and can do; `lib/agent_state.py profiles` prints them for the shell) and whose `record` the watchdog, ledger and events use. They share
-  `lib/agent_files.py`, and neither imports the other. `lib/agents.sh` is the shell side: `agent_state`,
-  `window_harness`, `harnesses_in_use`, `agent_*`. `libexec/bosun-launch` holds the flow, and
-  `lib/launch/<harness>.sh` what differs in it (`build_agent_args`, `first_prompt`, `run_new`, `run_resumed`).
-  `window_specs` says which agent each window runs. `bosun hook turn-end --harness <agent>` (`lib/hook.py`) is what
-  an agent runs when a turn ends, by its profile's `turn_end` (`codex-turn-end` is its alias for Codex windows
-  started before, whose launch command outlives the bosun that wrote it); each agent's profile has a `Screen` (its readers for its input box, questions and
-  rejected pastes, with `lib/screen_text.py`'s helpers), which `lib/pane_input.py` asks.
+  table is the one place that lists them (each module's `PROFILE`, a `Profile` in `lib/agent_files.py`, says
+  what it is and can do; `lib/agent_state.py profiles` prints them for the shell) and whose `record` the
+  watchdog, ledger and events use. They share `lib/agent_files.py`, and neither imports the other.
+  `lib/agents.sh` is the shell side: `agent_state`, `window_harness`, `harnesses_in_use`, `agent_*`.
+  `libexec/bosun-launch` holds the flow, and `lib/launch/<harness>.sh` what differs in it
+  (`build_agent_args`, `first_prompt`, `run_new`, `run_resumed`). `window_specs` says which agent each window
+  runs. `bosun hook turn-end --harness <agent>` (`lib/hook.py`) is what an agent runs when a turn ends, by
+  its profile's `turn_end` (`codex-turn-end` is its alias for Codex windows started before, whose launch
+  command outlives the bosun that wrote it); each agent's profile has a `Screen` (its readers for its input
+  box, questions and rejected pastes, with `lib/screen_text.py`'s helpers), which `lib/pane_input.py` asks.
 - Console (`bosun console`, design: `docs/design/console.md`): `lib/console_server.py` (the
   HTTP server and its request checks: bind address, Host, token cookie, static allowlist,
   headers), `lib/console_data.py` (ledger snapshots, `/api/version`, what the views share),
@@ -252,8 +253,8 @@ of truth, so don't copy rules into this file.
   `sessions.yml` entry, in the site's config dir (`bosun init` asks for the orchestrator's). No server's
   name goes in the repo. A new way to name a server, or an agent update that changes how one is switched
   off: that agent's module, `lib/connectors_claude.py` or `lib/connectors_codex.py` (on Codex, `codex_args`
-  and its shape check `codex_connector_args_valid` in `lib/launch/codex.sh` change together), `docs/design/connectors.md`, and a run of `tests/sandbox.sh mac
-  live` (its connectors part).
+  and its shape check `codex_connector_args_valid` in `lib/launch/codex.sh` change together),
+  `docs/design/connectors.md`, and a run of `tests/sandbox.sh mac live` (its connectors part).
 - **An outward tool to gate** (approvals): a row in `GATED_MCP` / `GATED_COMMANDS` (`lib/guard.py`)
   and its `ask` rule in `orchestrator/settings.json`; a standing class: `STANDING_CLASSES` and its
   check in `lib/approvals.py`, its config keys, the design note and `docs/permissions.md`.

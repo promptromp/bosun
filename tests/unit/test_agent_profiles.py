@@ -5,7 +5,10 @@ from __future__ import annotations
 import contextlib
 import importlib
 import io
+import os
+import subprocess
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -81,8 +84,30 @@ class AgentProfileTest(unittest.TestCase):
             "codex\tBOSUN_CODEX_BIN\tBOSUN_CODEX_FLAGS\tBOSUN_CODEX_MODEL\tno\tno\tno\tno\tidle,busy",
         ]
 
+    def test_every_agent_but_the_default_has_its_setup_texts(self) -> None:
+        for name, agent in AGENTS.items():
+            if name not in {agent_state.DEFAULT_HARNESS, agent_state.ORCHESTRATOR_HARNESS}:
+                assert agent.PROFILE.setup_sessions.strip(), name
+                assert agent.PROFILE.setup_note.strip(), name
+
+    def test_the_display_names_agree_with_the_shell_profiles(self) -> None:
+        root = Path(__file__).resolve().parents[2]
+        with tempfile.TemporaryDirectory() as home:
+            for name, agent in AGENTS.items():
+                out = subprocess.run(
+                    ["sh", "-c", '. "$1"; harness_name', "_", str(root / "lib" / "harnesses" / f"{name}.sh")],
+                    capture_output=True,
+                    text=True,
+                    check=True,
+                    env={"PATH": os.environ["PATH"], "HOME": home},
+                )
+                assert out.stdout.strip() == agent.PROFILE.display_name, name
+
     def test_the_default_agent(self) -> None:
         assert agent_state.DEFAULT_HARNESS == claude_state.HARNESS
+
+    def test_the_orchestrators_agent(self) -> None:
+        assert agent_state.ORCHESTRATOR_HARNESS == claude_state.HARNESS
 
 
 if __name__ == "__main__":

@@ -143,6 +143,8 @@ does not record the question, and Enter would answer it. So `bosun send` reads t
    above was found by the real run, so teach the stand-in each one afterwards.
 5. `tests/unit/test_agent_names.py` must still pass: it fails on an agent's id as a string constant in shared
    Python, or as a case arm or comparison in shared shell. Its `ALLOWED` lists the files that hold what only
-   Claude Code has; a new agent adds nothing there.
+   Claude Code has; a new agent adds nothing there, and its own modules are taken from `AGENTS` and
+   `Profile.connectors`. An agent other than the default also needs `setup_sessions` and `setup_note` in its
+   profile (`tests/unit/test_agent_profiles.py` checks), which `bosun init` shows when it is chosen.
 6. The docs: this note, [Setup](../setup.md#running-repo-sessions-on-codex), the README's Status section,
    [Known limits](../limits.md) and `ROADMAP.md`.

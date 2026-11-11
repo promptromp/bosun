@@ -119,8 +119,9 @@ def unknown_command_lines(capture: str) -> list[str]:
 
 
 HARNESS = "claude"
+BIN_KEY = "BOSUN_CLAUDE_BIN"  # the setting that names its command
 PROFILE = Profile(
-    bin_key="BOSUN_CLAUDE_BIN",
+    bin_key=BIN_KEY,
     flags_key="BOSUN_CLAUDE_FLAGS",
     model_key="BOSUN_MODEL",
     names_sessions=True,
@@ -1527,7 +1528,7 @@ def conversation_size(pid: str) -> int | None:
 
 def ready() -> bool:
     """Whether Claude Code is installed and logged in."""
-    return auth_status(os.environ.get("BOSUN_CLAUDE_BIN") or "claude").logged_in is True
+    return auth_status(os.environ.get(BIN_KEY) or "claude").logged_in is True
 
 
 def cmd_context(args: list[str]) -> int:

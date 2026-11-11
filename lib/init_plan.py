@@ -20,6 +20,7 @@ from typing import Any
 
 import agent_state
 import connectors
+from agent_files import Profile
 from awake import DAY_LETTERS
 
 
@@ -886,10 +887,18 @@ def feature_notes(facts: Facts, answers: Answers) -> list[str]:
     return found
 
 
+def other_agent(answers: Answers) -> Profile | None:
+    """The chosen agent's profile when it is not Claude Code, whose permissions are the ones asked for."""
+    if answers.harness in agent_state.AGENTS and answers.harness != agent_state.ORCHESTRATOR_HARNESS:
+        return agent_state.AGENTS[answers.harness].PROFILE
+    return None
+
+
 def permission_notes(facts: Facts, answers: Answers) -> list[str]:
     """Permissions as asked are Claude Code's. Another agent has its own flags and its own note."""
-    if answers.harness in agent_state.AGENTS and answers.harness != agent_state.DEFAULT_HARNESS:
-        return [agent_state.AGENTS[answers.harness].PROFILE.setup_note]
+    other = other_agent(answers)
+    if other:
+        return [other.setup_note]
     if answers.permissions == BYPASS:
         return [BYPASS_NOTE] + ([] if facts.bypass_accepted else [BYPASS_ACCEPT_NOTE])
     return [AUTO_NOTE] if ENV_FILE not in facts.files else []
@@ -1001,9 +1010,9 @@ def bullets(items: Sequence[str]) -> list[str]:
 
 
 def model_lines(answers: Answers) -> list[str]:
-    if answers.harness in agent_state.AGENTS and answers.harness != agent_state.DEFAULT_HARNESS:
-        sessions = agent_state.AGENTS[answers.harness].PROFILE.setup_sessions
-        return [f"  Model      {answers.model} for the orchestrator", f"  Sessions   {sessions}"]
+    other = other_agent(answers)
+    if other:
+        return [f"  Model      {answers.model} for the orchestrator", f"  Sessions   {other.setup_sessions}"]
     how = "auto mode" if answers.permissions == AUTO else "bypass mode, no permission checks"
     return [f"  Model      {answers.model}", f"  Sessions   {how}"]
 

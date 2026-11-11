@@ -264,7 +264,7 @@ class ModelEffortTest(unittest.TestCase):
 
     def test_a_window_whose_agent_has_subagents_gets_the_preamble(self) -> None:
         args = argparse.Namespace(window="w", start=None)
-        for harness, expected in (("claude", True), ("codex", False), ("agy", False)):
+        for harness, expected in (("claude", True), ("codex", False), ("acme-agent", False)):
             with mock.patch.object(delegate, "window_harness", return_value=harness):
                 self.assertEqual(delegate.can_use_subagents(args), expected, harness)
         self.assertTrue(delegate.can_use_subagents(argparse.Namespace(window=None, start=None)))

@@ -60,6 +60,9 @@ class Agent(Protocol):
 AGENTS: dict[str, Agent] = {claude_state.HARNESS: claude_state, codex_state.HARNESS: codex_state}
 
 DEFAULT_HARNESS = claude_state.HARNESS  # the agent a window runs when nothing says otherwise
+# The orchestrator stands on Claude Code's hooks, plugins and permission settings (ORCHESTRATOR_HARNESS in
+# lib/agents.sh), whichever agent the repo windows default to.
+ORCHESTRATOR_HARNESS = claude_state.HARNESS
 STATUS_ORDER = ("idle", "busy", "shell", "waiting")
 
 
