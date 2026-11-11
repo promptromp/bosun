@@ -1,0 +1,37 @@
+{
+  "bosun": {
+    "SessionStart": [
+      {
+        "type": "command",
+        "command": "[ -n \"${BOSUN_HOOK_CMD:-}\" ] || exit 0; exec \"$BOSUN_HOOK_CMD\" hook agent --harness agy --event SessionStart",
+        "timeout": 30
+      }
+    ],
+    "PreInvocation": [
+      {
+        "type": "command",
+        "command": "[ -n \"${BOSUN_HOOK_CMD:-}\" ] || exit 0; exec \"$BOSUN_HOOK_CMD\" hook agent --harness agy --event PreInvocation",
+        "timeout": 30
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "run_command",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "[ -n \"${BOSUN_HOOK_CMD:-}\" ] || exit 0; exec \"$BOSUN_HOOK_CMD\" hook agent --harness agy --event PreToolUse",
+            "timeout": 30
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "type": "command",
+        "command": "[ -n \"${BOSUN_HOOK_CMD:-}\" ] || exit 0; exec \"$BOSUN_HOOK_CMD\" hook agent --harness agy --event Stop",
+        "timeout": 30
+      }
+    ]
+  }
+}
