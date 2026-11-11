@@ -48,6 +48,17 @@ class TypedTextTest(unittest.TestCase):
     def test_no_box(self) -> None:
         self.assertIsNone(agy_state.agy_typed_text(["no box here", "> not between rules"]))
 
+    def test_a_box_no_rule_closes_is_no_box(self) -> None:
+        rule = "\x1b[90m" + "\u2500" * 40
+        self.assertIsNone(agy_state.agy_typed_text([rule, "> old", "reply"]))
+        self.assertIsNone(agy_state.agy_typed_text([rule, "> old", rule]))
+        self.assertEqual(agy_state.agy_typed_text([rule, "> old", rule, "? for shortcuts"]), "old")
+
+    def test_no_box_on_a_dialog_or_the_trust_and_sign_in_screens(self) -> None:
+        for name in ("dialog", "trust", "sign-in"):
+            with self.subTest(name):
+                self.assertIsNone(agy_state.agy_typed_text(ansi(name)))
+
     def test_plain_capture_of_an_empty_box(self) -> None:
         self.assertEqual(agy_state.agy_typed_text(plain("cancelled").splitlines()), "")
 

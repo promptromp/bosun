@@ -3,10 +3,11 @@ lib/claude_state.py and lib/codex_state.py do for the other agents. Design: docs
 
 What it goes by, seen in agy 1.5.5 (the Mac VM run, `tests/fixtures/agy/screens/`) and not a public API.
 The screen:
-  - The input box is the line starting with `>` between two lines of `─`, drawn grey (`ESC[90m`), and
-    the lines under it down to the second rule. The empty box is the mark alone (`ESC[94m>ESC[39m`).
-    Earlier messages in the history are drawn with the same mark under a rule too, so the last such line
-    is the box.
+  - The input box is the line starting with `>` between two lines of `─` (the rules, drawn grey,
+    `ESC[90m`), and the lines under it down to the second rule. The empty box is the mark alone
+    (`ESC[94m>ESC[39m`). Earlier messages in the history are drawn with the same mark under a rule too,
+    so the last such line is the box, if a second rule closes it with the footer right under it. A dialog
+    has a rule above its choices with a blank line under it, and the trust screen none: no box.
   - Under the box a footer line says what agy is doing: it starts with `? for shortcuts` when it is idle
     and `esc to cancel` when a turn runs. Text in the box blanks the hint. A background task adds `task(s)`
     and `/tasks` to the idle footer (`· 1 task(s) · /tasks`), and a message queued with a turn running
@@ -27,7 +28,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from agent_files import Screen, never_rejects
-from screen_text import NBSP, box_lines, visible
+from screen_text import NBSP, SGR, is_rule, visible
 
 
 AGY_MARK = ">"  # the input line's prompt mark
@@ -44,15 +45,27 @@ BOX_INDENT = "  "  # what the lines of a box under its first line are indented b
 # ---- the screen --------------------------------------------------------------------------------
 
 
+def agy_box(lines: list[str]) -> list[str] | None:
+    """The lines of agy's box: from the last line with the mark under a rule down to the next rule, which has
+    a footer or a task line right under it. None if there is none: a dialog's choices also have the mark,
+    and a rule above them, but its rule has a blank line under it (the trust screen has no rule at all)."""
+    for start in range(len(lines) - 1, 0, -1):
+        if SGR.sub("", lines[start]).lstrip().startswith(AGY_MARK) and is_rule(lines[start - 1]):
+            end = next((i for i in range(start + 1, len(lines)) if is_rule(lines[i])), None)
+            if end is None or end + 1 >= len(lines) or not lines[end + 1].strip():
+                return None
+            return lines[start:end]
+    return None
+
+
 def agy_typed_text(lines: list[str]) -> str | None:
     """The text in agy's box, if this screen has one."""
-    box = box_lines(lines, AGY_MARK)
+    box = agy_box(lines)
     if box is None:
         return None
-    texts = [visible(line).replace(NBSP, " ") for line in box]
-    texts[0] = texts[0].lstrip().removeprefix(AGY_MARK).removeprefix(" ")
-    texts[1:] = [text.removeprefix(BOX_INDENT) for text in texts[1:]]
-    return "\n".join(texts).strip()
+    first, *rest = (visible(line).replace(NBSP, " ") for line in box)
+    first = first.lstrip().removeprefix(AGY_MARK).removeprefix(" ")
+    return "\n".join([first, *(text.removeprefix(BOX_INDENT) for text in rest)]).strip()
 
 
 def agy_question(capture: str) -> bool:
