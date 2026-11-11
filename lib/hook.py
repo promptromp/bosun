@@ -140,12 +140,21 @@ def detach(env: Mapping[str, str]) -> bool:
     return False
 
 
+def legacy_events() -> dict[str, str]:
+    """The agent each older event name stands for (`turn-end --harness <agent>`), from the profiles."""
+    return {
+        agent.PROFILE.turn_end.legacy_event: name
+        for name, agent in AGENTS.items()
+        if agent.PROFILE.turn_end and agent.PROFILE.turn_end.legacy_event
+    }
+
+
 def turn_end_of(parser: argparse.ArgumentParser, args: argparse.Namespace) -> TurnEnd | None:
-    """The turn-end handling of the agent <args> names (`codex-turn-end` is codex's), or None for a hook
-    that is not about a turn. A usage error, before anything detaches, for an agent that has none."""
+    """The turn-end handling of the agent <args> names (an older event name stands for its agent), or None
+    for a hook that is not about a turn. A usage error, before anything detaches, for an agent with none."""
     if args.event == "user-prompt":
         return None
-    harness = "codex" if args.event == "codex-turn-end" else args.harness
+    harness = legacy_events().get(args.event) or args.harness
     if not harness:
         parser.error("turn-end needs --harness <agent>")
     if harness not in AGENTS:
@@ -158,7 +167,7 @@ def turn_end_of(parser: argparse.ArgumentParser, args: argparse.Namespace) -> Tu
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="bosun hook", description=__doc__)
-    parser.add_argument("event", choices=("user-prompt", "turn-end", "codex-turn-end"))
+    parser.add_argument("event", choices=("user-prompt", "turn-end", *legacy_events()))
     parser.add_argument("--harness", default="")
     parser.add_argument("--window", required=True)
     parser.add_argument("--conversation", default="")

@@ -88,6 +88,9 @@ class HookTest(unittest.TestCase):
         names = json.loads((self.state_dir / "codex-sessions.json").read_text())
         return names, [(e["items"], e["window"], e["session"], e["text"]) for e in self.said()]
 
+    def test_older_event_names_come_from_the_profiles(self) -> None:
+        self.assertEqual({"codex-turn-end": "codex"}, hook.legacy_events())
+
     def test_turn_end_with_harness_codex_does_what_codex_turn_end_did(self) -> None:
         old = self.after_codex_turn("codex-turn-end")
         other = type(self)(self._testMethodName)  # a state folder of its own, cleaned up with this test's

@@ -67,6 +67,9 @@ class TurnEnd:
     report: Callable[[str, Mapping[str, Any]], TurnReport | str]
     # (conversation, session id, workdir, prompts seen) -> makes the name stand for the session
     remember: Callable[[str, str, str, int], None]
+    # an event name `bosun hook` still takes for this agent's windows started before `turn-end --harness`
+    # (their launch command outlives the bosun that wrote it), or "" for none
+    legacy_event: str = ""
 
 
 @dataclass(frozen=True)
