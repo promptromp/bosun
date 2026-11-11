@@ -24,11 +24,16 @@ Shared code never asks which agent it has. Each layer has one place per agent, a
 | Checking a machine | `lib/preflight.sh`, the flow | `lib/harnesses/<harness>.sh`, a profile |
 | Starting a window | `libexec/bosun-launch`, the flow: resolve the session, refuse a second copy, start or resume | `lib/launch/<harness>.sh`: `build_agent_args`, `first_prompt`, `run_new`, `run_resumed` |
 | A running session | `lib/agent_state.py`: the `Agent` interface and the `AGENTS` table. `lib/agents.sh` is its shell side | `lib/claude_state.py`, `lib/codex_state.py`, each a module with `Agent`'s functions (`mypy` checks they match) |
+| What an agent is and can do | `lib/agent_state.py profiles` prints one tab-separated line per agent, which `lib/agents.sh` reads (`profile_field`, `known_harnesses`, `agent_bin_env`, `harness_bin`, `harness_default_model`) | A `Profile` in each adapter (`PROFILE`, `lib/agent_files.py`): its config keys, whether its name for a session comes from the agent, which statuses it reports, Remote Control, autocompact, per-task subagents, its state files, and how `bosun init` shows it |
 | Reading a screen | `lib/pane_input.py` asks the `AGENTS` table; `lib/screen_text.py` has the helpers readers share | A `Screen` in its profile: `typed`, `question`, `rejected` (`lib/agent_files.py`) |
 | Holding a window to its connectors | `lib/connectors.py`: reading a list, the report's helpers, and `doctor`, which imports the module the window's profile names | `lib/connectors_<harness>.py`, named by `Profile.connectors`: `main` (its launch command line) and `doctor_line` |
 | The end of a turn | `lib/hook.py`'s `turn-end --harness <agent>`: the update gate, events, the log | A `TurnEnd` in its profile, or none (`lib/agent_files.py`): `report` (what its JSON says: `TurnReport`, or why it is ignored) and `remember` (the name its session goes by) |
 
 `window_specs` is the one source of which agent a window runs: `window_harness` and `harnesses_in_use` read it.
+
+`bosun launch` refuses an agent that has no profile (`no agent '<h>': bosun knows claude, codex`). Delegation
+asks the profile whether a window can take a per-task subagent, and `bosun init`'s agent question and plan
+take each agent's name, preview and notes from its profile.
 
 A running agent's record has the fields of Claude Code's running-session record, plus `harness`, so what goes
 by a window's status (`send`, `sessions`, check-ins, the watchdog) works for both without knowing which it
@@ -127,13 +132,17 @@ does not record the question, and Enter would answer it. So `bosun send` reads t
 
 1. A profile in `lib/harnesses/<harness>.sh`, so preflight can check it (`tests/unit/test_preflight.py`
    checks it has every function).
-2. A `lib/<harness>_state.py` with the functions of `Agent`, and a line in `AGENTS` (`lib/agent_state.py`).
-   `mypy` checks it has them all.
+2. A `lib/<harness>_state.py` with the functions of `Agent` and a `PROFILE` (`Profile` in `lib/agent_files.py`:
+   say what the agent is and can do, with a `Screen` and, if it reports its turns, a `TurnEnd`), and a line in
+   `AGENTS` (`lib/agent_state.py`). `mypy` checks it has them all.
 3. `lib/launch/<harness>.sh`, with the functions of `lib/launch/codex.sh`.
    Its `lib/connectors_<harness>.py` (`main`, `doctor_line`; `Profile.connectors` names it) holds a window to
    its list of connectors.
 4. A stand-in in `tests/sandbox/`, a section of `tests/sandbox/fresh_user.sh`, and a run with the real thing:
    `tests/sandbox.sh mac live <harness>`. The stand-in only behaves the way you already believed: every trap
    above was found by the real run, so teach the stand-in each one afterwards.
-5. The docs: this note, [Setup](../setup.md#running-repo-sessions-on-codex), the README's Status section,
+5. `tests/unit/test_agent_names.py` must still pass: it fails on an agent's id as a string constant in shared
+   Python, or as a case arm or comparison in shared shell. Its `ALLOWED` lists the files that hold what only
+   Claude Code has; a new agent adds nothing there.
+6. The docs: this note, [Setup](../setup.md#running-repo-sessions-on-codex), the README's Status section,
    [Known limits](../limits.md) and `ROADMAP.md`.

@@ -148,7 +148,8 @@ of truth, so don't copy rules into this file.
   import file; the fixture knowledge base is `tests/fixtures/knowledge/acme-import.jsonl`.
 - Agents (design: `docs/design/harnesses.md`): an adapter per agent, `lib/claude_state.py` and
   `lib/codex_state.py`, each a module with the functions of `Agent` in `lib/agent_state.py`, whose `AGENTS`
-  table is the one place that lists them and whose `record` the watchdog, ledger and events use. They share
+  table is the one place that lists them (each module's `PROFILE`, a `Profile` in `lib/agent_files.py`, says what it
+  is and can do; `lib/agent_state.py profiles` prints them for the shell) and whose `record` the watchdog, ledger and events use. They share
   `lib/agent_files.py`, and neither imports the other. `lib/agents.sh` is the shell side: `agent_state`,
   `window_harness`, `harnesses_in_use`, `agent_*`. `libexec/bosun-launch` holds the flow, and
   `lib/launch/<harness>.sh` what differs in it (`build_agent_args`, `first_prompt`, `run_new`, `run_resumed`).
@@ -275,8 +276,9 @@ of truth, so don't copy rules into this file.
   `examples/` and `.github/` templates, and say in the pull request which changed.
 - **An OS to support:** a profile in `lib/platforms/` with the same functions as the others
   (`tests/unit/test_preflight.py` checks); what else still assumes macOS is in `docs/design/init.md`.
-- **An agent to support:** `docs/design/harnesses.md#adding-another`. Shared code asks the `AGENTS` table or
-  a module per agent; an `if` on an agent's name in shared code means something belongs in its module.
+- **An agent to support:** `docs/design/harnesses.md#adding-another`. Shared code asks the `AGENTS` table, the
+  agent's `Profile` or a module per agent; an `if` on an agent's name in shared code means something belongs in
+  its module or profile, and `tests/unit/test_agent_names.py` fails on it.
 - **A Codex fact changes** (after a Codex update): `lib/codex_state.py`, the note at its top,
   `tests/sandbox/codex-stand-in` so the stand-in does it too, and `docs/design/harnesses.md`.
 - **A file bosun writes in its state or config folder, or anything it leaves elsewhere:** a row in `STATE_FILES`
