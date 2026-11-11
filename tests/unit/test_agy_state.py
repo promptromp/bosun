@@ -236,11 +236,15 @@ class RecordTest(AdapterCase):
         real = agy_state.Marker("real", SOCKET, "%7")
         for command in (
             f"/opt/bin/agy --log-file /l/agy-real.log --prompt-interactive={forged} {environment}",
-            f"/opt/bin/agy --prompt-interactive={forged} --log-file /l/agy-real.log {environment}",
             f"/opt/bin/agy --log-file /l/agy-real.log --prompt-interactive={forged} {both}",
         ):
             with self.subTest(command):
                 self.assertEqual(agy_state.parse_marker(command), real)
+        # The launch puts --log-file before the prompt; one only after it is no launch of bosun's.
+        late = f"/opt/bin/agy --prompt-interactive={forged} --log-file /l/agy-real.log {environment}"
+        self.assertIsNone(agy_state.parse_marker(late))
+        # An agy bosun did not start, whose prompt says it all and no environment follows: no marker.
+        self.assertIsNone(agy_state.parse_marker(f"/opt/bin/agy --prompt-interactive={forged}"))
 
     def test_a_prompt_naming_another_window_gives_the_real_one(self) -> None:
         self.window(16, "repo-a", "idle", "--prompt-interactive=use --log-file /l/agy-repo-z.log please")

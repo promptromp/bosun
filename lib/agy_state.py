@@ -83,6 +83,7 @@ IDLE, BUSY, SHELL, WAITING = "idle", "busy", "shell", "waiting"
 # The log file's flag, a word of its own with its value one word after it, in agy's command line at launch.
 LOG_FILE = re.compile(r"(?<!\S)--log-file[= ](\S+)")
 LOG_PREFIX, LOG_SUFFIX = "agy-", ".log"  # around the conversation name in that file's name
+FIRST_PROMPT = re.compile(r"(?<!\S)--prompt-interactive(?:=|\s)")  # where the launch's own flags end
 # bosun's flags come before the first prompt, which is on the command line too and can say anything (text from
 # Slack, say), so a flag read for the launch settings is the first of its kind.
 MODEL_FLAG = re.compile(r"(?<!\S)--model(?:=|\s+)(\S+)")
@@ -254,13 +255,15 @@ def last_value(key: str, words: str) -> str | None:
 def parse_marker(words: str) -> Marker | None:
     """The marker in the output of `ps eww` for one process, None if it is not agy launched by bosun. The
     conversation name is the environment's BOSUN_CONVERSATION (the last one, see `last_value`), and counts
-    only if the command line also has a `--log-file` for exactly that name: a prompt on the command line can
-    say other names, sockets and panes, but not what the environment says after it."""
+    only if the command line also has a `--log-file` for exactly that name before its first prompt, where the
+    launch puts it. A prompt on the command line can say other names, sockets and panes, but neither what the
+    environment says after it nor a flag before it."""
     name = last_value("BOSUN_CONVERSATION", words)
     if name is None or not is_agy_command(words):
         return None
     log_name = f"{LOG_PREFIX}{name}{LOG_SUFFIX}"
-    if not any(os.path.basename(path) == log_name for path in LOG_FILE.findall(words)):
+    flags = FIRST_PROMPT.split(words, maxsplit=1)[0]
+    if not any(os.path.basename(path) == log_name for path in LOG_FILE.findall(flags)):
         return None
     socket = last_value("TMUX", words)
     return Marker(name, socket.split(",")[0] if socket else None, last_value("TMUX_PANE", words))
