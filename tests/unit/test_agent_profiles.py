@@ -84,9 +84,9 @@ class AgentProfileTest(unittest.TestCase):
             "codex\tBOSUN_CODEX_BIN\tBOSUN_CODEX_FLAGS\tBOSUN_CODEX_MODEL\tno\tno\tno\tno\tidle,busy",
         ]
 
-    def test_every_agent_but_the_default_has_its_setup_texts(self) -> None:
+    def test_every_agent_but_the_orchestrators_has_its_setup_texts(self) -> None:
         for name, agent in AGENTS.items():
-            if name not in {agent_state.DEFAULT_HARNESS, agent_state.ORCHESTRATOR_HARNESS}:
+            if name != agent_state.ORCHESTRATOR_HARNESS:
                 assert agent.PROFILE.setup_sessions.strip(), name
                 assert agent.PROFILE.setup_note.strip(), name
 

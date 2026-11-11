@@ -888,7 +888,7 @@ def feature_notes(facts: Facts, answers: Answers) -> list[str]:
 
 
 def other_agent(answers: Answers) -> Profile | None:
-    """The chosen agent's profile when it is not Claude Code, whose permissions are the ones asked for."""
+    """The chosen agent's profile when it is not the orchestrator's (whose permissions init asks about)."""
     if answers.harness in agent_state.AGENTS and answers.harness != agent_state.ORCHESTRATOR_HARNESS:
         return agent_state.AGENTS[answers.harness].PROFILE
     return None
