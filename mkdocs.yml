@@ -130,6 +130,7 @@ nav:
           - Updating: plans/update.md
           - Connectors: plans/connectors.md
           - Agents that say what they can do: plans/agent-profiles.md
+          - Antigravity windows: plans/antigravity.md
   - Project:
       - Roadmap: roadmap.md
       - Development: development.md

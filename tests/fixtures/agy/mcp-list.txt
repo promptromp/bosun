@@ -1,0 +1,124 @@
+== mcp_config.json before:        0 bytes
+== agy mcp list (no servers)
+No MCP servers configured.
+exit=0
+== agy mcp list --json
+Usage: agy mcp list [flags]
+
+List all configured MCP servers
+
+Flags:
+  -h      Show help
+  --help  Show help
+Error: flags provided but not defined: -json
+exit=1
+== agy mcp add disc-true /usr/bin/true
+Added MCP server "disc-true" (stdio)
+exit=0
+== agy mcp add --env K=v disc-py -- python3 -c 'pass'
+Added MCP server "disc-py" (stdio)
+exit=0
+== mcp_config.json after add
+{
+  "mcpServers": {
+    "disc-py": {
+      "args": [
+        "-c",
+        "pass"
+      ],
+      "command": "python3",
+      "disabled": false,
+      "env": {
+        "K": "v"
+      }
+    },
+    "disc-true": {
+      "command": "/usr/bin/true",
+      "disabled": false
+    }
+  }
+}
+== agy mcp list (two servers)
+NAME       TYPE   STATUS   COMMAND/URL
+disc-py    stdio  enabled  python3 -c pass
+disc-true  stdio  enabled  /usr/bin/true
+exit=0
+== agy mcp disable disc-true
+Disabled MCP server "disc-true"
+exit=0
+== agy mcp list (one disabled)
+NAME       TYPE   STATUS    COMMAND/URL
+disc-py    stdio  enabled   python3 -c pass
+disc-true  stdio  disabled  /usr/bin/true
+exit=0
+== mcp_config.json after disable
+{
+  "mcpServers": {
+    "disc-py": {
+      "args": [
+        "-c",
+        "pass"
+      ],
+      "command": "python3",
+      "disabled": false,
+      "env": {
+        "K": "v"
+      }
+    },
+    "disc-true": {
+      "command": "/usr/bin/true",
+      "disabled": true
+    }
+  }
+}
+== workspace file .agents/mcp_config.json in r1
+NAME       TYPE   STATUS    COMMAND/URL
+disc-py    stdio  enabled   python3 -c pass
+disc-true  stdio  disabled  /usr/bin/true
+exit=0
+== plugin server: a second local plugin with an mcp_config.json
+  [ok]    disc-mcp
+          ✔ mcpServers  : 1 installed (disc-plug)
+          Installed to /Users/me/.gemini/config/plugins/disc-mcp
+exit=0
+NAME       TYPE   STATUS    COMMAND/URL
+disc-py    stdio  enabled   python3 -c pass
+disc-true  stdio  disabled  /usr/bin/true
+exit=0
+[
+  {
+    "name": "bosun-disc",
+    "enabled": true,
+    "source": "antigravity",
+    "path": "/Users/me/.gemini/config/plugins/bosun-disc",
+    "hooks": [
+      "bosun-disc"
+    ]
+  },
+  {
+    "name": "disc-mcp",
+    "enabled": true,
+    "version": "0.0.1",
+    "source": "antigravity",
+    "path": "/Users/me/.gemini/config/plugins/disc-mcp",
+    "mcpServers": [
+      "disc-plug"
+    ]
+  }
+]
+== cleanup
+Uninstalled plugin "disc-mcp"
+exit=0
+Removed MCP server "disc-true"
+exit=0
+Removed MCP server "disc-py"
+exit=0
+== mcp_config.json after remove:       23 bytes
+{
+  "mcpServers": {}
+}
+
+fd4d3c0535ac0af33b860e0d9d5167731d4e1b35  /Users/me/.gemini/config/mcp_config.json
+da39a3ee5e6b4b0d3255bfef95601890afd80709  /Users/me/disc/base/mcp_config.json
+No MCP servers configured.
+exit=0
