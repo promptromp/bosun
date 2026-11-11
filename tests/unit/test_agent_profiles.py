@@ -122,10 +122,6 @@ class AgentProfileTest(unittest.TestCase):
         assert agent_state.ORCHESTRATOR_HARNESS == claude_state.HARNESS
 
 
-if __name__ == "__main__":
-    unittest.main()
-
-
 class AgentSetupCommandTest(unittest.TestCase):
     """`agent_state.py setup <harness>`: an agent's one-time setup, recorded for uninstall to take back."""
 
@@ -181,7 +177,24 @@ class AgentSetupCommandTest(unittest.TestCase):
         assert status == 1
         assert out == ""
         assert err.strip() == "stub's plugin command is not installed"
-        assert agent_changes.setups_made(self.state) == ()
+        assert agent_changes.setups_made(self.state) == ("stub",)  # on record before it was applied
+
+    def test_an_error_that_is_not_a_setup_error_is_one_line(self) -> None:
+        def crash() -> None:
+            raise PermissionError("plugins folder is read-only")
+
+        self.install(needed=True, apply=crash)
+        status, out, err = self.run_setup()
+        assert status == 1
+        assert out == ""
+        assert err == "PermissionError: plugins folder is read-only\n"
+        assert agent_changes.setups_made(self.state) == ("stub",)
+
+    def test_the_setup_is_on_record_while_it_is_applied(self) -> None:
+        seen: list[tuple[str, ...]] = []
+        self.install(needed=True, apply=lambda: seen.append(agent_changes.setups_made(self.state)))
+        self.run_setup()
+        assert seen == [("stub",)]
 
     def test_an_agent_without_a_setup_has_nothing_to_do(self) -> None:
         assert self.run_setup("claude") == (0, "", "")
@@ -190,3 +203,7 @@ class AgentSetupCommandTest(unittest.TestCase):
     def test_an_agent_bosun_does_not_know_is_a_usage_error(self) -> None:
         with contextlib.redirect_stderr(io.StringIO()):
             assert agent_state.main(["setup", "nobody"]) == USAGE
+
+
+if __name__ == "__main__":
+    unittest.main()

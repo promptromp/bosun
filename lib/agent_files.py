@@ -92,7 +92,7 @@ class AgentSetup:
     description: str  # how uninstall names it, as what it removes
     needed: Callable[[], bool]  # whether it is still to be made
     apply: Callable[[], None]  # makes it; raises SetupError, saying why, when it cannot
-    undo: Callable[[], None]  # takes it back
+    undo: Callable[[], None]  # takes it back; must succeed when there is nothing to undo
 
 
 @dataclass(frozen=True)

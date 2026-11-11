@@ -6,7 +6,9 @@
 #   2. wait for the network
 #   3. run setup steps (credential refresh) from setup.sh
 #   4. update the agents that bosun starts with their own auto-update off (an agent's `update_args`),
-#      once, before any window starts on them; a failure is a problem in the notification, nothing more
+#      once, before the windows start or refresh; windows that survived the night keep running their
+#      version until the refresh restarts them when idle. A failure is a problem in the notification,
+#      nothing more
 #   5. start the tmux session, or refresh it if it survived the night (unless you are typing in it)
 #   6. post a macOS notification with the outcome
 #

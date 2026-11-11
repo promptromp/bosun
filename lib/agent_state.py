@@ -150,19 +150,24 @@ def cmd_set_trust(harness: str, args: list[str]) -> int:
 
 
 def cmd_setup(harness: str, _args: list[str]) -> int:
-    """Make the agent's one-time setup if it is still needed, and put it on record for uninstall. A setup
-    that cannot be made is exit 1 and why on stderr."""
+    """Make the agent's one-time setup if it is still needed. It goes on record for uninstall first, so a
+    setup that exists is always on record (one whose apply then failed only costs an undo that finds nothing).
+    A setup that cannot be made, for whatever reason, is exit 1 and one line on stderr: its own words for a
+    SetupError, <type>: <message> for any other error."""
     setup = AGENTS[harness].PROFILE.setup
     if setup is None or not setup.needed():
         return 0
+    state_dir = os.environ.get("BOSUN_STATE_DIR")
+    if state_dir:
+        agent_changes.record_setup(Path(state_dir), harness)
     try:
         setup.apply()
     except SetupError as error:
         print(error, file=sys.stderr)
         return 1
-    state_dir = os.environ.get("BOSUN_STATE_DIR")
-    if state_dir:
-        agent_changes.record_setup(Path(state_dir), harness)
+    except Exception as error:  # noqa: BLE001 (the launch needs one line saying why, not a traceback)
+        print(f"{type(error).__name__}: {error}", file=sys.stderr)
+        return 1
     return 0
 
 
