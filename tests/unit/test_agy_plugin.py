@@ -245,26 +245,57 @@ class StopTest(HookCase):
 
 
 class PreToolUseTest(HookCase):
+    """What passes agy's sandbox: allow-lists of git, gh and bosun subcommands, in the workspace the payload
+    names (a scratch folder here, so that a path the agent wrote can be planted in it)."""
+
+    def setUp(self) -> None:
+        super().setUp()
+        self.work = self.root / "r1"
+        self.work.mkdir()
+
+    def body(self, command: str) -> dict[str, Any]:
+        return {**command_payload(command), "cwd": str(self.work), "workspacePaths": [str(self.work)]}
+
     def asked(self, command: str) -> str:
-        return self.answer("PreToolUse", command_payload(command))
+        return self.answer("PreToolUse", self.body(command))
+
+    def assert_approved(self, *commands: str) -> None:
+        for command in commands:
+            self.assertEqual(self.asked(command), APPROVAL, command)
+
+    def assert_no_answer(self, *commands: str) -> None:
+        for command in commands:
+            self.assertEqual(self.asked(command), "", command)
 
     def test_git_gh_and_bosun_are_approved(self) -> None:
-        for command in (
+        self.assert_approved(
             "git push origin feature",
-            "cd repo && gh pr view 5",
-            "bosun ledger list",
-            "git commit -m 'x'",
-            "git commit -m 'fix #12: x; y'",
-            'git commit -m "fix: it\'s done"',
-            "gh pr create --title t --body b",
+            "git push",
+            "git pull --rebase",
+            "git fetch origin",
+            "git commit -m 'fix #12: a; b'",
+            "git commit -c HEAD",
+            "git switch -c new",
+            "git log -c",
+            "git add src/a.py",
+            "git status",
             "gh pr create --title 'Fix #12' --body 'a && b'",
+            "gh pr view 5",
             "gh api graphql -f query=q",
+            "gh run view 9",
+            "bosun ledger list",
+            "bosun send w hi",
+            "git status && git push origin feature",
+            'git commit -m "fix: it\'s done"',
             "git fetch origin && git rebase origin/main",
             "git status || git log",
             "git log --oneline -5; gh pr list",
             "git commit -m 'a\nb'",
-        ):
-            self.assertEqual(self.asked(command), APPROVAL, command)
+            "git push -u origin feature",
+            "git push --force-with-lease origin HEAD:feature",
+            "git cherry-pick -x abc123",
+            "git add 'src/*.py'",
+        )
 
     def test_the_approval_is_exactly_this_json(self) -> None:
         self.assertEqual(
@@ -272,13 +303,165 @@ class PreToolUseTest(HookCase):
             {"decision": "auto_approve", "overwrite": {"BypassSandbox": True}},
         )
 
+    def test_every_subcommand_of_the_tables_is_approved_on_its_own(self) -> None:
+        for sub in agy_state.GIT:
+            self.assert_approved(f"git {sub}")
+        for sub, seconds in agy_state.GH.items():
+            self.assert_approved(*(f"gh {sub} {second}" for second in (seconds.seconds or ("x",))))
+        for sub in agy_state.BOSUN:
+            self.assert_approved(f"bosun {sub}")
+
     def test_other_commands_get_no_answer(self) -> None:
         self.assertEqual(self.answer("PreToolUse", payload("pre-tool-use")), "")  # uname -s
-        for command in ("curl https://example.com", "git status; rm -rf x", "cd repo", ""):
-            self.assertEqual(self.asked(command), "", command)
+        self.assert_no_answer("curl https://example.com", "git status; rm -rf x", "cd repo", "")
+
+    def test_a_working_directory_in_the_args_gets_no_answer(self) -> None:
+        for key in ("Cwd", "WorkingDirectory", "cwd"):
+            body = self.body("git status")
+            body["toolCall"]["args"][key] = str(self.work / "elsewhere")
+            self.assertEqual(self.answer("PreToolUse", body), "", key)
+        body = self.body("git status")
+        body["toolCall"]["args"]["BypassSandbox"] = True
+        self.assertEqual(self.answer("PreToolUse", body), APPROVAL)
+
+    def test_a_cwd_outside_its_workspaces_gets_no_answer(self) -> None:
+        for cwd in (str(self.root), str(self.work / "sub"), "", "r1"):
+            body = {**self.body("git status"), "cwd": cwd}
+            self.assertEqual(self.answer("PreToolUse", body), "", cwd)
+        self.assertEqual(self.answer("PreToolUse", {**self.body("git status"), "workspacePaths": "/"}), "")
+
+    def test_without_workspaces_the_cwd_must_still_be_a_full_path(self) -> None:
+        for cwd, expected in ((str(self.work), APPROVAL), ("", ""), ("r1", ""), (None, "")):
+            body = {**self.body("git status"), "workspacePaths": [], "cwd": cwd}
+            self.assertEqual(self.answer("PreToolUse", body), expected, cwd)
+
+    def test_the_reviewers_lines_get_no_answer(self) -> None:
+        (self.work / "evil").mkdir()
+        self.assert_no_answer(
+            "git * zz",
+            "git ?? x zz",
+            "git [-]c x zz",
+            "git log ~/x",
+            "git log HEAD~1",
+            "git fetch -u./x origin",
+            "git fetch -qu./x origin",
+            "git pull -u./x origin",
+            "git rebase -x'cmd' main",
+            "git rebase -ix'sh x' main",
+            "git difftool -x x",
+            "git filter-branch --tree-filter x HEAD",
+            "git grep -O./x pattern",
+            "git send-email x.patch",
+            "git instaweb",
+            "git daemon .",
+            "git init --template=t",
+            "git clone src dst",
+            "git push ./evil HEAD",
+            "git push evil HEAD",
+            "git push file:///x HEAD",
+            "git push host:path HEAD",
+            "git push ext::sh HEAD",
+            "git remote add evil ./x",
+            "git submodule update",
+            "git -C x status",
+            "git --git-dir=x log",
+            "cd x && git status",
+            "git log --output=x",
+            "git log --out x",
+            "git bundle create x",
+            "git archive --output=x HEAD",
+            "git config x y",
+            "git -c a=b status",
+            "git merge -s ours x",
+            "git merge -Xs x",
+            "git rebase -i main",
+            "gh ext install .",
+            "gh extensions list",
+            "gh config set browser x",
+            "gh codespace ssh",
+            "gh repo clone a/b -- --template=t",
+            "gh api -F x=@/etc/passwd",
+            "gh pr create --body-file /x",
+            "gh gist create x",
+            "bosun trust --any x",
+            "bosun launch foo",
+            "bosun send --new w x hi",
+            "bosun uninstall",
+        )
+
+    def test_a_push_or_fetch_reaches_only_a_remote_by_its_name(self) -> None:
+        (self.work / "evil.git").mkdir()
+        (self.work / "bundle").write_text("x")
+        self.assert_no_answer(
+            "git push evil HEAD",  # git tries evil.git too
+            "git fetch bundle",
+            "git push -o x ./evil HEAD",  # -o takes the next word: ./evil is the repository
+            "git fetch --depth 1 /x",
+            "git fetch --multiple origin ./x",
+            "git fetch -j 2 /x",
+            "git push origin -- x",
+            "git push --repo=x",
+            "git push =git HEAD",
+            "git pull --rebase=interactive origin",
+            "git pull -rinteractive origin",
+            "git remote show ./x",
+            "git remote get-url /x",
+            "git remote set-url origin ./x",
+            "git remote -v show",
+        )
+        self.assert_approved(
+            "git fetch --depth=1 origin",
+            "git pull --rebase=merges origin main",
+            "git push --no-verify origin HEAD:refs/heads/x",
+            "git remote",
+            "git remote -v",
+            "git remote show origin",
+            "git remote get-url origin",
+        )
+
+    def test_global_options_before_the_subcommand_get_no_answer(self) -> None:
+        self.assert_no_answer(
+            "git --exec-path=/x log",
+            "git --work-tree=x status",
+            "git --namespace=x push",
+            "git -p log",
+            "gh -R a/b pr view 5",
+            "bosun --help",
+            "git",
+            "gh",
+            "bosun",
+        )
+
+    def test_what_runs_a_program_or_reads_a_file_into_what_is_sent_gets_no_answer(self) -> None:
+        self.assert_no_answer(
+            "git diff --ext-diff",
+            "git log --exec=x",
+            "git commit -F /x",
+            "git commit --file=/x",
+            "git commit -t /x",
+            "git tag -F /x v1",
+            "git merge -F /x topic",
+            "git checkout --recurse-submodules main",
+            "git rebase --strategy=x main",
+            "git rebase --interactive main",
+            "git cherry-pick -s abc",  # --signoff here, but -s is a strategy in merge and rebase
+            "git status --upload-pack=x",
+            "gh pr create --recover /x",
+            "gh issue create -T x",
+            "gh api https://example.com/x",
+            "gh api --input /x repos/a/b/issues",
+            "gh api --hostname example.com /x",
+            "gh pr comment 5 --body=@/x",
+            "gh pr checkout 5 --recurse-submodules",
+            "gh pr comment 5 -- x",
+            "gh pr frob 5",
+            "gh repo clone a/b",
+            "bosun delegate review --id i-1 --ask x --start w",
+            "bosun send --start w",
+        )
 
     def test_a_command_that_hides_another_gets_no_answer(self) -> None:
-        for command in (
+        self.assert_no_answer(
             "git log $(rm -rf x)",
             "git log `rm -rf x`",
             "git status | sh",
@@ -291,14 +474,14 @@ class PreToolUseTest(HookCase):
             "git status; PATH=/tmp/x gh pr list",
             "if true; then git status; fi",
             "./git status",
+            "/usr/bin/git status",
             "git commit -m 'unterminated",
             'git commit -m "unterminated',
-        ):
-            self.assertEqual(self.asked(command), "", command)
+        )
 
     def test_a_hash_inside_a_word_gets_no_answer(self) -> None:
         # the shell starts a comment only at a word's start, shlex anywhere: its view must not decide
-        for command in (
+        self.assert_no_answer(
             "git log a#; touch PWNED",
             "git log a#b; touch PWNED",
             "git log --grep=#; touch PWNED",
@@ -311,11 +494,10 @@ class PreToolUseTest(HookCase):
             "git log ;#; touch PWNED",
             "git log &#; touch PWNED",
             "git log x#$(touch PWNED)",
-        ):
-            self.assertEqual(self.asked(command), "", command)
+        )
 
     def test_quoting_the_lexer_and_the_shell_read_differently_gets_no_answer(self) -> None:
-        for command in (
+        self.assert_no_answer(
             "git log $'\\'' ; touch PWNED ; # '",
             "git log $'\\'' && touch PWNED && git log '",
             'git log "a\\"" ; touch PWNED',
@@ -327,11 +509,16 @@ class PreToolUseTest(HookCase):
             'git log "a!b"',
             "git log {a,b}",
             "git log HEAD@{1}",
-        ):
-            self.assertEqual(self.asked(command), "", command)
+            # a quoted operator or nothing in quotes: both lexers split there, the shell does not, so this
+            # would be checked as two commands and run as `git merge x ; git log -sevil` (a strategy)
+            "git merge x ';' git log -sevil",
+            "git status '&&' git log",
+            "git push '' HEAD",
+            'git commit -m ""',
+        )
 
     def test_other_separators_and_control_characters_get_no_answer(self) -> None:
-        for command in (
+        self.assert_no_answer(
             "git status\ncurl x",
             "git status\rcurl x",
             "git status\x0bcurl x",
@@ -354,42 +541,28 @@ class PreToolUseTest(HookCase):
             "! git log",
             "time git log",
             "git log \\\ncurl x",
-        ):
-            self.assertEqual(self.asked(command), "", command)
+        )
 
     def test_a_pipe_gets_no_answer(self) -> None:
-        for command in ("git log --oneline | head -3", "gh pr list | gh pr view 5"):
-            self.assertEqual(self.asked(command), "", command)
+        self.assert_no_answer("git log --oneline | head -3", "gh pr list | gh pr view 5")
 
     def test_the_routes_from_git_gh_and_bosun_to_any_program_get_no_answer(self) -> None:
-        for command in (
+        self.assert_no_answer(
             "git -c core.sshCommand='sh x' push",
             "git -c alias.x='!sh' x",
             "git push origin feature -c x",
             "git --config-env=core.x=Y push",
-            "git --config-env core.x=Y push",
-            "git --exec-path=/tmp/x log",
-            "git --exec-path log",
             "git fetch --upload-pack='sh x' origin",
-            "git fetch --upload-pack 'sh x' origin",
             "git fetch --upl=x origin",
             "git ls-remote --upload-pack=x origin",
             "git push --receive-pack='sh x' origin",
-            "git push --receive-pack=x origin",
             "git push --exec=x origin",
             "git push --e=x origin",
             "git fetch -u 'sh x' origin",
-            "git clone -u 'sh x' origin",
-            "git clone -qu 'sh x' origin",
             "git pull -u x origin",
-            "git config core.hooksPath /tmp/x",
-            "git -C repo config --global core.x y",
-            "git --git-dir x config core.x y",
             "git clone ext::'sh -c x' dir",
-            "git fetch ext::sh",
             "git submodule foreach 'sh x'",
             "git rebase -x 'sh x' main",
-            "git rebase -ix 'sh x' main",
             "git rebase --exec 'sh x' main",
             "git rebase --exe 'sh x' main",
             "git bisect run sh x",
@@ -397,33 +570,16 @@ class PreToolUseTest(HookCase):
             "gh alias set --shell x 'curl y'",
             "gh auth login",
             "gh secret set X",
-            "bosun uninstall",
             "bosun update",
             "bosun init",
-        ):
-            self.assertEqual(self.asked(command), "", command)
-
-    def test_every_refusal_of_the_table_has_a_reason_and_a_command_that_trips_it(self) -> None:
-        options = ("-c", "--config-env", "--exec-path", "--upload-pack", "--receive-pack", "--exec")
-        for row in agy_state.REFUSALS:
-            self.assertTrue(row.why)
-            self.assertIn(row.program, agy_state.APPROVED_PROGRAMS)
-            sample = [row.program, *row.words]
-            if row.option is not None:
-                sample.append(
-                    next(word for word in (*options, "ext::x", "-u", "-x") if row.option.search(word))
-                )
-            self.assertTrue(agy_state.escalates(sample), sample)
+        )
 
     def test_only_a_run_command_is_looked_at(self) -> None:
-        body = command_payload("git status")
+        body = self.body("git status")
         body["toolCall"]["name"] = "write_to_file"
         self.assertEqual(self.answer("PreToolUse", body), "")
         self.assertEqual(self.answer("PreToolUse", {"toolCall": "git status"}), "")
         self.assertEqual(self.answer("PreToolUse", {}), "")
-
-    def test_an_unreadable_command_gets_no_answer(self) -> None:
-        self.assertEqual(self.asked("git commit -m 'unterminated"), "")
 
 
 class RunHookTest(unittest.TestCase):

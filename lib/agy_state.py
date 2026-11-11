@@ -36,6 +36,13 @@ goes by, seen in agy 1.5.5 (the Mac VM run, `tests/fixtures/agy/screens/`) and n
     {"decision":"auto_approve","overwrite":{"BypassSandbox":true}}: {}, a blank decision and any exit but 0
     refuse the tool. PreInvocation's {"injectSteps":[{"errorMessage":{"userMessage":...}}],
     "terminationBehavior":"terminate"} ends the turn before its model call.
+What passes the sandbox: in a bosun window the PreToolUse hook lifts agy's sandbox (network, writes anywhere)
+for a run_command only when the line reads the same to every shell, runs in the payload's workspace with no
+folder of its own in its args, and each of its simple commands is `git`, `gh` or `bosun` followed at once by a
+subcommand of that program's allow-list (GIT, GH, BOSUN) whose words pass that subcommand's rule. Everything
+else gets no answer, and agy handles it as it would without bosun. It is an allow-list because git and gh have
+too many ways to run another program or write outside the workspace (global options, aliases, globs, glued
+values, transports, a repository or submodule the agent wrote) for a list of dangers ever to be complete.
 The screen:
   - The input box is the line starting with `>` between two lines of `─` (the rules, drawn grey,
     `ESC[90m`), and the lines under it down to the second rule. The empty box is the mark alone
@@ -65,8 +72,9 @@ import shutil
 import subprocess
 import sys
 import time
-from collections.abc import Iterable, Iterator, Mapping
+from collections.abc import Callable, Iterable, Iterator, Mapping
 from datetime import datetime
+from functools import partial
 from pathlib import Path
 from typing import Any, NamedTuple
 
@@ -473,8 +481,6 @@ APPROVAL = json.dumps(
 )
 SAID_FD_LIMIT = 1024  # the descriptors the recording child closes: the agent's stdout pipe is one of them
 PUNCTUATION = ";&|()<>\n"  # what ends a simple command, and the redirections
-ALLOWED_PROGRAMS = frozenset({"git", "gh", "bosun", "cd"})  # a command line of only these runs unsandboxed...
-APPROVED_PROGRAMS = frozenset({"git", "gh", "bosun"})  # ...if it has at least one of these
 
 
 def hook_error(env: Mapping[str, str], message: str) -> None:
@@ -586,7 +592,10 @@ def stop(payload: Mapping[str, Any], env: Mapping[str, str]) -> str:
     return ""
 
 
-OUTSIDE_QUOTES_REFUSED = frozenset("#$`\\!{}()<>\n\r")  # comments, expansions, escapes, groups, redirections
+# ---- what passes agy's sandbox: allow-lists of subcommands ----------------------------------------
+
+OUTSIDE_QUOTES_REFUSED = frozenset("#$`\\!{}()<>\n\r*?[]~")  # comments, expansions, escapes, groups,
+# redirections, globs (a file the agent named `-c` would become an option) and `~`
 IN_DOUBLE_QUOTES_REFUSED = frozenset("$`\\!")  # what the shell still reads inside "..."
 OPERATOR_RUNS = {"|": 2, "&": 2, ";": 1}  # only `||`, `&&` and `;` stay: no pipe, no background, no `;;`
 
@@ -598,49 +607,44 @@ def operator_step(command: str, index: int) -> int | None:
     return run if run == OPERATOR_RUNS[char] else None
 
 
-def inside_quote(char: str, quote: str) -> str | None:
-    """The quote state after <char> inside <quote>, None for a character not allowed there."""
-    if char == quote:
-        return ""
-    return None if quote == '"' and char in IN_DOUBLE_QUOTES_REFUSED else quote
-
-
-def outside_quotes(command: str, index: int) -> tuple[str, int] | None:
-    """The quote state after the character at <index> outside quotes and how many characters it takes, None
-    for one that is not allowed there."""
-    char = command[index]
-    if char in "'\"":
-        return char, 1
-    if char in OUTSIDE_QUOTES_REFUSED or not (char.isprintable() or char == "\t"):
+def quoted_end(command: str, index: int) -> int | None:
+    """Where the quote opening at <index> ends (the index after it), None for one that is not plain: open,
+    empty or only operators (which the lexer below would take for an unquoted one), or holding a `$`, a
+    backtick, a backslash or a `!` inside double quotes. Single quotes hold anything else."""
+    quote = command[index]
+    end = command.find(quote, index + 1)
+    content = set(command[index + 1 : end])
+    if end < 0 or content <= set(PUNCTUATION) or (quote == '"' and content & IN_DOUBLE_QUOTES_REFUSED):
         return None
-    step = operator_step(command, index) if char in OPERATOR_RUNS else 1
-    return None if step is None else ("", step)
+    return end + 1
 
 
 def reads_plainly(command: str) -> bool:
     """Whether <command> is made only of what every shell reads the same way, so that the lexer below cannot
-    see another command than the shell runs: single and double quotes tracked as the shell does (single
-    quotes hold anything), and outside quotes none of a comment mark, a `$`, a backtick, a backslash, a
-    group, a redirection, a newline or a control character, or an operator but `&&`, `||` and `;`. Inside
-    double quotes no `$`, backtick or backslash. An open quote is not plain. Anything else is refused."""
+    see another command than the shell runs: quotes as `quoted_end` takes them, and outside quotes none of a
+    comment mark, a `$`, a backtick, a backslash, a group, a redirection, a glob, a `~`, a newline or a
+    control character, or an operator but `&&`, `||` and `;`. Anything else is refused."""
     if "\x00" in command:
         return False
-    quote, index = "", 0
+    index = 0
     while index < len(command):
-        if quote:
-            inside = inside_quote(command[index], quote)
-            moved = None if inside is None else (inside, 1)
-        else:
-            moved = outside_quotes(command, index)
-        if moved is None:
+        char = command[index]
+        end: int | None = index + 1
+        if char in "'\"":
+            end = quoted_end(command, index)
+        elif char in OUTSIDE_QUOTES_REFUSED or not (char.isprintable() or char == "\t"):
+            end = None
+        elif char in OPERATOR_RUNS:
+            step = operator_step(command, index)
+            end = None if step is None else index + step
+        if end is None:
             return False
-        quote, step = moved
-        index += step
-    return not quote
+        index = end
+    return True
 
 
-def command_starts(command: str) -> list[str] | None:
-    """The first word of each simple command in <command>, as the shell reads it; None if it cannot be read.
+def command_words(command: str) -> list[list[str]] | None:
+    """The words of each simple command in <command>, as the shell reads them; None if it cannot be read.
     Only for a command that `reads_plainly`: the lexer has no comments, `#` being a plain character."""
     lexer = shlex.shlex(command, posix=True, punctuation_chars=PUNCTUATION)
     lexer.commenters = ""
@@ -650,24 +654,19 @@ def command_starts(command: str) -> list[str] | None:
         tokens = list(lexer)
     except ValueError:
         return None
-    firsts: list[str] = []
-    at_start = True
+    commands: list[list[str]] = [[]]
     for token in tokens:
         if set(token) <= set(PUNCTUATION):
-            at_start = True
-        elif at_start:
-            firsts.append(token)
-            at_start = False
-    return firsts
+            commands.append([])
+        else:
+            commands[-1].append(token)
+    return [words for words in commands if words]
 
 
-class Refusal(NamedTuple):
-    """A way into one of the allowed programs that runs any program or rewrites what later commands run."""
-
-    program: str
-    words: tuple[str, ...]  # words of the command that must all be there (the subcommand), () for none
-    option: re.Pattern[str] | None  # a word of the command that must match too, None for none
-    why: str
+def command_starts(command: str) -> list[str] | None:
+    """The first word of each simple command in <command>, as the shell reads it; None if it is unreadable."""
+    commands = command_words(command)
+    return None if commands is None else [words[0] for words in commands]
 
 
 def long_option(name: str) -> re.Pattern[str]:
@@ -676,43 +675,251 @@ def long_option(name: str) -> re.Pattern[str]:
     return re.compile(rf"^--(?:{starts})(?:=.*)?$")
 
 
-SHORT_FLAG = r"^-[A-Za-z]*{}[A-Za-z]*$"  # a short option, alone or among others (-qu)
-# Looked for in every word of the command, wherever git or gh would take the subcommand: a refusal costs only
-# agy's own handling of the command, and a word placed to hide the subcommand must not hide it.
-REFUSALS = (
-    Refusal("git", (), re.compile(r"^-c$"), "-c name=value sets any config, such as core.sshCommand"),
-    Refusal("git", (), long_option("config-env"), "sets any config from the environment"),
-    Refusal("git", (), long_option("exec-path"), "runs git's own commands from another folder"),
-    Refusal("git", (), long_option("upload-pack"), "runs the program it names on the other end"),
-    Refusal("git", (), long_option("receive-pack"), "runs the program it names on the other end"),
-    Refusal("git", (), long_option("exec"), "push --exec is --receive-pack, rebase --exec runs a command"),
-    Refusal("git", (), re.compile(r"^ext::"), "a transport that runs a command"),
-    Refusal("git", ("fetch",), re.compile(SHORT_FLAG.format("u")), "-u is --upload-pack"),
-    Refusal("git", ("clone",), re.compile(SHORT_FLAG.format("u")), "-u is --upload-pack"),
-    Refusal("git", ("pull",), re.compile(SHORT_FLAG.format("u")), "-u is --upload-pack"),
-    Refusal("git", ("rebase",), re.compile(SHORT_FLAG.format("x")), "-x is --exec: runs a command"),
-    Refusal("git", ("config",), None, "rewrites what every later git command does"),
-    Refusal("git", ("submodule", "foreach"), None, "runs a command in each submodule"),
-    Refusal("git", ("bisect", "run"), None, "runs a command at each step"),
-    Refusal("gh", ("extension",), None, "installs and runs programs"),
-    Refusal("gh", ("alias",), None, "an alias can be a shell command"),
-    Refusal("gh", ("auth",), None, "changes what gh is logged in as"),
-    Refusal("gh", ("secret",), None, "changes what a repository's workflows can read"),
-    Refusal("bosun", ("uninstall",), None, "takes bosun off the machine"),
-    Refusal("bosun", ("update",), None, "replaces the code every later command runs"),
-    Refusal("bosun", ("init",), None, "rewrites bosun's config and launchd jobs"),
+def short_letters(word: str) -> str:
+    """What follows the single `-` of a short-option word (`-qu./x` gives `qu./x`): a value glued to an
+    option is looked at as letters too, which can only refuse more."""
+    return word[1:] if word.startswith("-") and not word.startswith("--") else ""
+
+
+def plain_remote(word: str, cwd: str) -> bool:
+    """Whether <word>, a push, fetch or pull's repository, can only be a remote by its name: no path, URL,
+    `host:path` or transport (`ext::`, `file:`), not zsh's `=command`, and nothing of that name (or with git's
+    `.git` added) in the folder the command runs in, where git would take it for a repository the agent wrote,
+    whose hooks and config would run."""
+    if word.startswith(("/", ".", "~", "-", "=")) or ":" in word or "/" in word:
+        return False
+    return not any(os.path.lexists(Path(cwd) / name) for name in (word, f"{word}.git"))
+
+
+class Flags(NamedTuple):
+    """The only options a push, fetch or pull may carry. None takes its value from the next word, so the
+    first word that is not an option is surely the repository (`-o x ./evil` would hide it)."""
+
+    letters: str  # short options that take no value, alone or in a cluster
+    names: frozenset[str]  # long options that take no value, and their --no- forms; exact, never abbreviated
+    valued: frozenset[str]  # `name=value` as given, or `name=` for any value glued to <name>
+
+    def allows(self, word: str) -> bool:
+        if word.startswith("--"):
+            name, glued, _value = word[2:].partition("=")
+            if glued:
+                return f"{name}=" in self.valued or word[2:] in self.valued
+            return name.removeprefix("no-") in self.names
+        return len(word) > 1 and all(letter in self.letters for letter in word[1:])
+
+
+SENDING = frozenset({"verbose", "quiet", "progress", "dry-run", "force", "atomic", "ipv4", "ipv6"})
+PUSH_FLAGS = Flags(
+    "vqdnfu46",  # -u is --set-upstream here
+    SENDING
+    | {"all", "branches", "delete", "tags", "porcelain", "force-with-lease", "force-if-includes", "prune"}
+    | {"set-upstream", "verify", "follow-tags", "thin"},
+    frozenset({"force-with-lease="}),
+)
+FETCH_FLAGS = Flags(
+    "vqaftnpPk46",  # not -u (--upload-pack in clone), -m (every word a repository), -j or -o (take a value)
+    SENDING
+    | {"all", "append", "tags", "prune", "prune-tags", "porcelain", "keep", "unshallow", "refetch"}
+    | {"show-forced-updates", "write-fetch-head", "set-upstream"},
+    frozenset({"depth=", "deepen=", "shallow-since="}),
+)
+PULL_FLAGS = Flags(
+    "vqnrftpk46",  # -r takes the rest of its cluster as its value, which these letters cannot spell into
+    # `interactive`; not -s or -X (a strategy), -S, -u, -j or -o
+    SENDING
+    | {"rebase", "stat", "compact-summary", "log", "signoff", "squash", "commit", "edit", "ff", "ff-only"}
+    | {"verify", "verify-signatures", "autostash", "allow-unrelated-histories", "all", "append", "tags"}
+    | {"prune", "keep", "unshallow", "set-upstream"},
+    frozenset({"rebase=true", "rebase=false", "rebase=merges", "depth="}),
 )
 
 
-def escalates(words: list[str]) -> bool:
-    """Whether the command <words> is one of REFUSALS."""
-    rest = words[1:]
-    return any(
-        row.program == words[0]
-        and set(row.words) <= set(rest)
-        and (row.option is None or any(row.option.search(word) for word in rest))
-        for row in REFUSALS
+def names_a_remote(flags: Flags, words: list[str], cwd: str) -> bool:
+    """Whether <words> (after push, fetch or pull) carry only <flags>, and their repository, if they name
+    one, is a remote by its plain name. No repository is the branch's upstream, which git's config names."""
+    options = [word for word in words if word.startswith("-")]
+    others = [word for word in words if not word.startswith("-")]
+    return all(map(flags.allows, options)) and (not others or plain_remote(others[0], cwd))
+
+
+def remote_shape(words: list[str], cwd: str) -> bool:
+    """`git remote`, `git remote -v`, `git remote show <name>` or `git remote get-url <name>`: it only reads
+    (a name that is not a remote would be taken for a URL and reached)."""
+    if words[:1] in (["show"], ["get-url"]) and len(words[1:]) == 1:
+        return plain_remote(words[1], cwd)
+    return words in ([], ["-v"])
+
+
+def any_words(_words: list[str], _cwd: str) -> bool:
+    return True
+
+
+class GitRule(NamedTuple):
+    """What an allowed git subcommand may not carry, beyond GIT_REFUSED_LONG."""
+
+    letters: str = ""  # short options refused, alone or in a cluster
+    longs: tuple[re.Pattern[str], ...] = ()  # long options refused, as git abbreviates them
+    words: Callable[[list[str], str], bool] = any_words  # what the words after it must also be, in <cwd>
+
+
+# Refused after every git subcommand, as git abbreviates them: a file written anywhere (--output,
+# --output-directory), a program run (--exec, --upload-pack, --receive-pack, --ext-diff, --strategy,
+# --interactive's editor), another repository or its config (--git-dir, --work-tree, --separate-git-dir,
+# --repo, --config, --config-env, --template), or a submodule's repository, which the agent may have written
+# (--recurse-submodules).
+GIT_REFUSED_LONG = tuple(
+    map(
+        long_option,
+        (
+            *("output", "output-directory", "exec", "upload-pack", "receive-pack", "template", "git-dir"),
+            *("work-tree", "separate-git-dir", "config", "config-env", "repo", "strategy", "ext-diff"),
+            *("interactive", "recurse-submodules"),
+        ),
     )
+)
+MESSAGE_FILE = (long_option("file"),)  # reads any file into a message a push sends out
+STRATEGY = "s"  # -s <strategy> runs a program named git-merge-<strategy>
+
+# git's subcommands a bosun window may run outside the sandbox. Its global options (-c, -C, --git-dir,
+# --exec-path, ...) are closed by the subcommand having to come first.
+GIT: dict[str, GitRule] = {
+    "status": GitRule(),  # reads the work tree
+    "log": GitRule(),  # reads history; its -c is combined diffs
+    "diff": GitRule(),  # reads; --output and --ext-diff are refused for all
+    "show": GitRule(),  # reads
+    "add": GitRule(),  # stages files; git refuses paths outside the repository
+    "rm": GitRule(),  # in the repository only
+    "mv": GitRule(),  # in the repository only
+    "restore": GitRule(),  # in the repository only
+    "reset": GitRule(),  # moves the branch and the index
+    "commit": GitRule("Ft", MESSAGE_FILE),  # -F/--file and -t (--template) read any file; -c reuses a commit
+    "checkout": GitRule(),  # in the repository only
+    "switch": GitRule(),  # its -c is --create
+    "branch": GitRule(),  # names branches
+    "merge": GitRule(STRATEGY + "F", MESSAGE_FILE),  # not -s (a strategy program) or -F (a message file)
+    "rebase": GitRule(STRATEGY + "xi"),  # not -s, -x (--exec) or -i (--interactive)
+    "cherry-pick": GitRule(STRATEGY),  # over-refuses its -s, --signoff here, a strategy in merge and rebase
+    "revert": GitRule(STRATEGY),  # likewise
+    "stash": GitRule(),  # in the repository only
+    "tag": GitRule("F", MESSAGE_FILE),  # not -F/--file, which reads any file into a tag a push sends
+    "fetch": GitRule(words=partial(names_a_remote, FETCH_FLAGS)),  # from a remote by its name only
+    "pull": GitRule(STRATEGY, words=partial(names_a_remote, PULL_FLAGS)),  # likewise, and no strategy
+    "push": GitRule(words=partial(names_a_remote, PUSH_FLAGS)),  # to a remote by its name only: never a
+    # repository the agent wrote, whose hooks would run
+    "rev-parse": GitRule(),  # reads
+    "ls-files": GitRule(),  # reads
+    "blame": GitRule(),  # reads
+    "describe": GitRule(),  # reads
+    "merge-base": GitRule(),  # reads
+    "remote": GitRule(words=remote_shape),  # only lists and shows remotes; never adds or changes one
+}
+
+
+def git_refuses(rule: GitRule, word: str) -> bool:
+    """Whether <word>, after the subcommand, is an option <rule> or every git subcommand refuses."""
+    if any(letter in rule.letters for letter in short_letters(word)):
+        return True
+    return any(pattern.match(word) for pattern in (*GIT_REFUSED_LONG, *rule.longs))
+
+
+def git_allows(words: list[str], cwd: str) -> bool:
+    """Whether `git <words>` is an allowed subcommand, first, and its words pass its rule."""
+    rule = GIT.get(words[0])
+    rest = words[1:]
+    return rule is not None and not any(git_refuses(rule, word) for word in rest) and rule.words(rest, cwd)
+
+
+class GhRule(NamedTuple):
+    """An allowed gh command and its own subcommands."""
+
+    seconds: frozenset[str] | None  # the subcommands its second word may be, None for any
+    urls: bool = True  # whether its words may hold a URL
+
+
+# gh's commands a bosun window may run outside the sandbox: never extension (ext, extensions), alias, config,
+# auth, secret, codespace, gist, or repo clone and fork, which hand their words to git.
+GH: dict[str, GhRule] = {
+    "pr": GhRule(  # reads and changes pull requests
+        frozenset({"view", "list", "status", "create", "checkout", "merge", "review", "comment", "diff"})
+        | {"ready", "edit", "close", "reopen", "checks"}
+    ),
+    "issue": GhRule(  # reads and changes issues
+        frozenset({"view", "list", "create", "comment", "edit", "close", "reopen", "status"})
+    ),
+    "run": GhRule(frozenset({"view", "list", "watch", "rerun"})),  # workflow runs
+    "repo": GhRule(frozenset({"view"})),  # reads only
+    "workflow": GhRule(frozenset({"view", "list"})),  # reads only, never runs one
+    "search": GhRule(None),  # reads only
+    "status": GhRule(None),  # reads only; has no subcommands of its own
+    "api": GhRule(None, urls=False),  # the host gh is logged in to, by a path, never a full URL
+}
+# Refused in every gh command: what reads a file and sends it (--field and -F, --input, --body-file,
+# --recover, --template and -T, a word starting with `@` or holding `=@`), another host (--hostname), git in
+# submodules (--recurse-submodules), and `--`, after which gh hands words to git.
+GH_REFUSED_LONG = frozenset(
+    {"field", "input", "body-file", "template", "hostname", "recover", "recurse-submodules"}
+)
+GH_REFUSED_LETTERS = "FT"
+
+
+def gh_refuses(word: str) -> bool:
+    """Whether <word>, in a gh command, is one GH_REFUSED_* refuses (gh takes long options only in full)."""
+    if word == "--" or word.startswith("@") or "=@" in word:
+        return True
+    if word.startswith("--"):
+        return word[2:].partition("=")[0] in GH_REFUSED_LONG
+    return any(letter in GH_REFUSED_LETTERS for letter in short_letters(word))
+
+
+def gh_allows(words: list[str], _cwd: str) -> bool:
+    """Whether `gh <words>` is an allowed command, first, with an allowed subcommand second, and none of its
+    words refused."""
+    rule = GH.get(words[0])
+    if rule is None:
+        return False
+    second = rule.seconds is None or (len(words) > 1 and words[1] in rule.seconds)
+    urls = rule.urls or not any("://" in word for word in words)
+    return second and urls and not any(map(gh_refuses, words[1:]))
+
+
+STARTS_WINDOWS = frozenset({"--new", "--start"})  # start a window, perhaps in a folder the agent wrote
+# bosun's commands a bosun window may run outside the sandbox, and the words refused in each: never launch,
+# trust, start, refresh, update, init or uninstall.
+BOSUN: dict[str, frozenset[str]] = {
+    "ledger": frozenset(),  # the work items, in bosun's state folder
+    "send": STARTS_WINDOWS,  # pastes into a running window
+    "delegate": STARTS_WINDOWS,  # hands a task to a running window
+    "sessions": frozenset(),  # reads
+    "status": frozenset(),  # reads
+    "context": frozenset(),  # reads
+    "pr-threads": frozenset(),  # reads
+    "my-prs": frozenset(),  # reads
+    "impact": frozenset(),  # reads
+    "resolve": frozenset(),  # reads
+    "alert": frozenset(),  # tells the person
+    "doctor": frozenset(),  # reads
+    "preflight": frozenset(),  # reads
+}
+
+
+def bosun_allows(words: list[str], _cwd: str) -> bool:
+    """Whether `bosun <words>` is an allowed command, first, with none of its refused words."""
+    refused = BOSUN.get(words[0])
+    return refused is not None and not any(word.partition("=")[0] in refused for word in words[1:])
+
+
+# The programs that pass the sandbox, each by its exact name (never a path), and what checks its words.
+PROGRAMS: dict[str, Callable[[list[str], str], bool]] = {
+    "git": git_allows,
+    "gh": gh_allows,
+    "bosun": bosun_allows,
+}
+
+
+def command_allowed(words: list[str], cwd: str) -> bool:
+    """Whether the simple command <words>, run in <cwd>, is one PROGRAMS allow."""
+    check = PROGRAMS.get(words[0])
+    return check is not None and len(words) > 1 and check(words[1:], cwd)
 
 
 def hidden_before_a_name(firsts: list[str]) -> bool:
@@ -723,34 +930,48 @@ def hidden_before_a_name(firsts: list[str]) -> bool:
     return any(word in hidden or guard.ASSIGNMENT.match(word) for word in firsts)
 
 
-def only_bosuns_programs(programs: list[str]) -> bool:
-    """Whether <programs> are all git, gh, bosun or cd, with at least one of the first three."""
-    return set(programs) <= ALLOWED_PROGRAMS and bool(set(programs) & APPROVED_PROGRAMS)
-
-
-def runs_only_bosuns_commands(command: str) -> bool:
-    """Whether <command> runs only git, gh, bosun and cd, at least one of the first three, and none of
-    REFUSALS: the commands a bosun window needs outside agy's sandbox. It must read the same to every shell
-    (`reads_plainly`), nothing is hidden before a command's name (a variable, `env`, `sudo`, a keyword), and
-    what lib/guard.py reads as its simple commands is exactly what is checked here."""
+def runs_only_bosuns_commands(command: str, cwd: str) -> bool:
+    """Whether every simple command in <command>, run in <cwd>, is one PROGRAMS allow: the commands a bosun
+    window needs outside agy's sandbox. It must read the same to every shell (`reads_plainly`), nothing is
+    hidden before a command's name (a variable, `env`, `sudo`, a keyword), and what lib/guard.py reads as its
+    simple commands is exactly what is checked here."""
     import guard  # noqa: PLC0415
 
     if not reads_plainly(command) or guard.runs_substitution(command):
         return False
-    firsts = command_starts(command)
-    if not firsts or hidden_before_a_name(firsts):
+    commands = command_words(command)
+    if not commands or hidden_before_a_name([words[0] for words in commands]):
         return False
-    commands = guard.simple_commands(command)
-    programs = [words[0] for words in commands]
-    return programs == firsts and only_bosuns_programs(programs) and not any(map(escalates, commands))
+    return guard.simple_commands(command) == commands and all(command_allowed(w, cwd) for w in commands)
+
+
+RUN_COMMAND_ARGS = frozenset({"CommandLine", "WaitMsBeforeAsync", "toolSummary", "BypassSandbox"})
+
+
+def in_a_workspace(cwd: str, payload: Mapping[str, Any]) -> bool:
+    """Whether <cwd> is a full path and one of the payload's workspaces, when it names any."""
+    workspaces = payload.get("workspacePaths") or []
+    return isinstance(workspaces, list) and os.path.isabs(cwd) and (not workspaces or cwd in workspaces)
+
+
+def command_and_folder(payload: Mapping[str, Any]) -> tuple[str, str] | None:
+    """The command line of a run_command and the folder it runs in, None unless its args name no folder of
+    their own and the folder is a full path among the payload's workspaces (when it names any)."""
+    call = payload.get("toolCall")
+    args = call.get("args") if isinstance(call, dict) and call.get("name") == "run_command" else None
+    if not isinstance(args, dict) or not set(args) <= RUN_COMMAND_ARGS:
+        return None
+    command, cwd = args.get("CommandLine"), payload.get("cwd")
+    if not isinstance(command, str) or not isinstance(cwd, str) or not in_a_workspace(cwd, payload):
+        return None
+    return command, cwd
 
 
 def pre_tool_use(payload: Mapping[str, Any], _env: Mapping[str, str]) -> str:
-    """The approval for a run_command of git, gh or bosun; no answer for anything else."""
-    call = payload.get("toolCall")
-    args = call.get("args") if isinstance(call, dict) and call.get("name") == "run_command" else None
-    command = args.get("CommandLine") if isinstance(args, dict) else None
-    return APPROVAL if isinstance(command, str) and runs_only_bosuns_commands(command) else ""
+    """The approval for a run_command that `runs_only_bosuns_commands` in its workspace; no answer for
+    anything else."""
+    found = command_and_folder(payload)
+    return APPROVAL if found and runs_only_bosuns_commands(*found) else ""
 
 
 HOOK_ANSWERS = {

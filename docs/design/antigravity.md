@@ -162,8 +162,11 @@ sandbox.
   if the plugin made it). (Changed: the first version installed it at `bosun init` and `bosun update`; the
   first launch on `agy` covers both, and windows added later.)
 - **What bosun's plugin approves.** Its `PreToolUse` hook answers `auto_approve` with `BypassSandbox` for a
-  `run_command` whose command is `git`, `gh` or `bosun` (past `cd` and environment prefixes, as `lib/guard.py`
-  reads commands), in bosun windows only, and nothing for every other command. `allow` is not enough: it still
+  `run_command` whose every command is `git`, `gh` or `bosun` with a subcommand of that program's allow-list
+  (`GIT`, `GH` and `BOSUN` in `lib/agy_state.py`: no global option before it, no `cd`, no prefix, no glob, run in
+  the payload's own workspace, and per subcommand the options and repositories it may name), in bosun windows
+  only, and nothing for every other command. (Changed: the first version took any `git`, `gh` or `bosun`
+  command past `cd` and refused a list of dangerous options, which two reviews showed could not be completed.) `allow` is not enough: it still
   shows `agy`'s dialog, and the command still runs in the sandbox with no network. (Changed: the first version
   said "approves".) `agy`'s reviewer can still ask, and the window is then `waiting`. Nothing in `agy`'s
   global settings changes (my decision, 2026-11-10).
