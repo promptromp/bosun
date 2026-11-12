@@ -87,7 +87,12 @@ OUTPUT_LINES = 6
 HOOK_SECONDS = 30
 STEP_FIRST = 26  # the steps a fresh conversation starts at in the payloads, as the fixtures'
 
-ANSWERS = {"approve": "auto_approve", "refuse": "refused", None: "no answer"}  # as the log says them
+ANSWERS = {  # as the log says them
+    "approve": "auto_approve, BypassSandbox true",
+    "approve without bypass": "auto_approve, BypassSandbox not true",
+    "refuse": "refused",
+    None: "no answer",
+}
 HINT = "? for shortcuts"
 INTERRUPTED = "\x1b[90m  \u23bf  Interrupted \u00b7 What should Antigravity CLI do instead?\x1b[39m"
 CHOICES = (
@@ -331,8 +336,9 @@ def termination(answers: list[tuple[int, str]]) -> str | None:
 
 
 def verdict(answers: list[tuple[int, str]]) -> str | None:
-    """A PreToolUse answer: "approve", "refuse", or None for no opinion. Anything but an auto_approve
-    decision is a refusal, the blank decision and {} too, and so is an exit other than 0."""
+    """A PreToolUse answer: "approve" (the sandbox lifted: overwrite.BypassSandbox true), "approve without
+    bypass", "refuse", or None for no opinion. Anything but an auto_approve decision is a refusal, the blank
+    decision and {} too, and so is an exit other than 0."""
     for code, output in answers:
         if code != 0:
             return "refuse"
@@ -342,7 +348,10 @@ def verdict(answers: list[tuple[int, str]]) -> str | None:
             found = json.loads(output)
         except ValueError:
             return "refuse"
-        return "approve" if isinstance(found, dict) and found.get("decision") == "auto_approve" else "refuse"
+        if not isinstance(found, dict) or found.get("decision") != "auto_approve":
+            return "refuse"
+        lifted = (found.get("overwrite") or {}).get("BypassSandbox") is True
+        return "approve" if lifted else "approve without bypass"
     return None
 
 
@@ -566,12 +575,12 @@ class Session:
         return {
             "artifactDirectoryPath": str(folder),
             "conversationId": self.conversation.id,
-            "cwd": self.cwd,
+            "cwd": "" if event == "SessionStart" else self.cwd,  # as the one capture of it
             "hookEventName": event,
             "lastUserInput": self.last_input,
             "modelName": MODEL,
             "transcriptPath": str(folder / ".system_generated" / "logs" / "transcript_full.jsonl"),
-            "workspacePaths": [self.cwd],
+            "workspacePaths": [] if event == "SessionStart" else [self.cwd],
             **fields,
         }
 

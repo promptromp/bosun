@@ -433,6 +433,14 @@ class StatusFileTest(AdapterCase):
         agy_state.launched("repo-a", "1.5.5", "%4", "")  # a pane with no socket cannot be looked at
         self.assertEqual(agy_state.read_status("repo-a"), {"version": "1.5.5"})
 
+    def test_a_launch_records_its_folder_and_replaces_the_last_one(self) -> None:
+        agy_state.launched("repo-a", "1.5.5", "", "", "/work/a")
+        self.assertEqual(agy_state.read_status("repo-a"), {"version": "1.5.5", "folder": "/work/a"})
+        agy_state.launched("repo-a", "1.5.5", "%4", SOCKET, "/work/b")
+        self.assertEqual(agy_state.read_status("repo-a")["folder"], "/work/b")
+        agy_state.launched("repo-a", "1.5.5")
+        self.assertNotIn("folder", agy_state.read_status("repo-a"))
+
     def test_a_launch_with_no_known_version_leaves_none(self) -> None:
         agy_state.launched("repo-b", "")
         self.assertEqual(agy_state.read_status("repo-b"), {"version": None})
@@ -572,9 +580,10 @@ class CommandLineTest(AdapterCase):
         self.assertEqual(agy_state.read_status("repo-a"), {"version": "1.5.5"})
         self.assertEqual(self.run_main("launched", "repo-a", ""), (0, ""))
         self.assertEqual(agy_state.read_status("repo-a"), {"version": None})
-        self.assertEqual(self.run_main("launched", "repo-a", "1.5.5", "%2", SOCKET), (0, ""))
+        self.assertEqual(self.run_main("launched", "repo-a", "1.5.5", "%2", SOCKET, "/work/a"), (0, ""))
         self.assertEqual(
-            agy_state.read_status("repo-a"), {"version": "1.5.5", "pane": "%2", "socket": SOCKET}
+            agy_state.read_status("repo-a"),
+            {"version": "1.5.5", "pane": "%2", "socket": SOCKET, "folder": "/work/a"},
         )
         self.assertEqual(self.run_main("launched", "repo-a", "1.5.5", "%2")[0], agent_files.USAGE)
 

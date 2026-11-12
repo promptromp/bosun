@@ -164,6 +164,21 @@ class SessionStartTest(HookCase):
         self.answer("SessionStart", payload("session-start", workspacePaths=[folder, "/elsewhere"]))
         self.assertEqual(self.known()["repo-conv"]["cwd"], os.path.realpath(folder))
 
+    def test_the_folder_the_launch_recorded_stands_in_when_the_payload_has_none(self) -> None:
+        folder = str(self.root)
+        agy_state.launched("repo-conv", "1.5.5", "%1", "/run/tmux/sock", folder)
+        self.assertEqual(self.answer("SessionStart", payload("session-start")), "")  # cwd "", no workspaces
+        self.assertEqual(self.known()["repo-conv"], {"id": CONVERSATION, "cwd": os.path.realpath(folder)})
+        self.assertNotIn("ERROR", self.log_text())
+
+    def test_the_payload_wins_over_the_folder_the_launch_recorded(self) -> None:
+        agy_state.launched("repo-conv", "1.5.5", "", "", "/recorded")
+        folder = str(self.root)
+        self.answer("SessionStart", payload("session-start", cwd=folder))
+        self.assertEqual(self.known()["repo-conv"]["cwd"], os.path.realpath(folder))
+        self.answer("SessionStart", payload("session-start", workspacePaths=["", folder]))
+        self.assertEqual(self.known()["repo-conv"]["cwd"], os.path.realpath(folder))
+
     def test_no_folder_is_an_error_and_remembers_nothing(self) -> None:
         self.assertEqual(self.answer("SessionStart", payload("session-start")), "")
         self.assertEqual(self.known(), {})

@@ -73,7 +73,8 @@ set_agy_git_environment() {
   export GIT_EDITOR=false GIT_PAGER=cat GH_EDITOR=false GH_PAGER=cat GH_PROMPT_DISABLED=1
 }
 
-# What bosun's plugin and the adapter know a window by, in agy's environment (lib/agy_state.py's marker):
+# What agy's environment gives bosun's plugin, for its hooks (the adapter never reads a process's environment:
+# it knows a window by the `--log-file` in its command line, and by bosun's own status file, below):
 # BOSUN_WINDOW, BOSUN_CONVERSATION (the name its conversation goes by, which `resolve` looks up),
 # BOSUN_HOOK_CMD (what the plugin's hooks run: the install link, which outlives this version, and without
 # which they do nothing), and agy's own updates off, which the morning run does at a quiet moment instead.
@@ -138,7 +139,8 @@ first_prompt() { # <window> <prompt given, or empty>
 # agy starts on, and forgets what the last run of the window left (lib/agy_state.py launched), so that a
 # relaunch is never taken for the run before it. It also records the window's tmux pane and the server's
 # socket (the path in $TMUX before its first comma), which is where the adapter looks at the window's screen;
-# none outside tmux. The status is written only here, never while the arguments
+# none outside tmux. It records the window's folder too, which names its conversation when agy's SessionStart
+# hook gives none. The status is written only here, never while the arguments
 # are built, which `--fingerprint` and the window list do for a window that keeps running.
 note_agy_launch() {
   local var version i key tmux_socket
@@ -158,7 +160,7 @@ note_agy_launch() {
   tmux_socket="${TMUX:-}"
   tmux_socket="${tmux_socket%%,*}"
   env BOSUN_STATE_DIR="$BOSUN_STATE_DIR" python3 "$BOSUN_ROOT/lib/agy_state.py" launched "$agy_conversation" "$version" \
-    "${TMUX_PANE:-}" "$tmux_socket" ||
+    "${TMUX_PANE:-}" "$tmux_socket" "$PWD" ||
     die "'$agy_window' does not start: could not record its launch (lib/agy_state.py launched)"
 }
 

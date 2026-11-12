@@ -2998,8 +2998,8 @@ FAKE
   check "a window has no person at an editor or a pager, in git and in gh" bash -c '
     env=$1
     for pair in GIT_EDITOR=false GIT_PAGER=cat GH_EDITOR=false GH_PAGER=cat GH_PROMPT_DISABLED=1; do grep -qx "$pair" "$env" || exit 1; done' _ "$WORK/agy-run.env"
-  check "a launch forgets what the last run left in the status file, and records its version" bash -c '
-    jq -e ". == {version: \"1.5.5\", lastSaid: \"hello\"}" "$1" >/dev/null' _ "$BOSUN_STATE_DIR/agy/agyw.json"
+  check "a launch forgets what the last run left in the status file, and records its version and folder" bash -c '
+    jq -e --arg dir "$2" ". == {version: \"1.5.5\", lastSaid: \"hello\", folder: \$dir}" "$1" >/dev/null' _ "$BOSUN_STATE_DIR/agy/agyw.json" "$(cd "$AGY_REPO" && pwd)"
   check "the first launch on agy sets up bosun's plugin" test -f "$HOME/.gemini/config/plugins/bosun/plugin.json"
 
   CONV_DIR="$HOME/.gemini/antigravity-cli/conversations"
@@ -3081,7 +3081,7 @@ FAKE
   al_window agyl Escape
   check "... Esc cancels it, and the window reads idle again" wait_for 15 al_has agyl idle
   al_window agyl "run git status" Enter
-  check "a git command through bosun's plugin is approved, as bosun's hook answers it" wait_for 15 grep -q "PreToolUse git status: auto_approve" "$BOSUN_LOG_DIR/agy-agyl.log"
+  check "a git command through bosun's plugin is approved, with the sandbox lifted, as bosun's hook answers it" wait_for 15 grep -qF "PreToolUse git status: auto_approve, BypassSandbox true" "$BOSUN_LOG_DIR/agy-agyl.log"
   check "... and the turn ends idle" wait_for 15 al_has agyl idle
   al_window agyl "run date" Enter
   check "a command outside its allow-list gets no answer" wait_for 15 grep -q "PreToolUse date: no answer" "$BOSUN_LOG_DIR/agy-agyl.log"
@@ -3093,7 +3093,7 @@ FAKE
   al_tmux kill-window -t "=agy-live:=person"
   conversations_before="$(al_conversations)"
   al stop >/dev/null
-  check "stop leaves no agy running" wait_for 15 bash -c '! pgrep -f "$1 -c" >/dev/null' _ "$AGY_STAND_IN"
+  check "stop leaves no agy of this run running" wait_for 15 bash -c '! pgrep -f "$1 -c.*$2/state/logs" >/dev/null' _ "$AGY_STAND_IN" "$WORK"
   al start >/dev/null
   check "a restart resumes the conversation it had" wait_for 30 al_has agyl idle
   check "... the same one, under the same name" test "$(al_conversation agyl)" = "$conversation"

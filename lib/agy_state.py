@@ -5,9 +5,10 @@ lib/claude_state.py and lib/codex_state.py do for the other agents. Design: docs
 Usage: agy_state.py logged-in                      exit 0 if agy has a login and its onboarding is done
        agy_state.py resolve <workdir> <name>       print the conversation bosun knows by <name> there
        agy_state.py live <conversation-id>         print the pid of a running agy holding it
-       agy_state.py launched <name> <version> [<pane> <socket>]
+       agy_state.py launched <name> <version> [<pane> <socket> <folder>]
                                                    record that window <name> starts on agy <version>,
-                                                   in tmux pane <pane> of the server at <socket>
+                                                   in tmux pane <pane> of the server at <socket>,
+                                                   in <folder>
 
 Exit status 3: not found.
 
@@ -18,7 +19,8 @@ goes by, seen in agy 1.5.5 (the Mac VM run, `tests/fixtures/agy/screens/`) and n
     processes. What it relies on is a process's command line and its own status file. `bosun launch` starts
     agy with `--log-file <logs>/agy-<conversation name>.log` among the flags before the first prompt, so a
     process whose command line has that is bosun's window <name>, whatever its folder. The launch writes
-    the window's tmux pane and server socket into the status file, which is where the screen is looked for.
+    the window's tmux pane and server socket into the status file, which is where the screen is looked for,
+    and its folder, which names its conversation when agy's SessionStart hook says none.
   - agy has no status of its own to read. bosun's plugin hooks write a status file per window,
     <state>/agy/<name>.json: busy before each model call, idle or shell at the end of a turn, with the
     conversationId (the launch writes the version it started on, and its pane and socket). Esc cancels a
@@ -116,7 +118,7 @@ STATUS_DIR = "agy"  # in bosun's state dir: a status file per window
 KEYCHAIN_SERVICE = "gemini"  # the Keychain item agy's login is
 IDLE, BUSY, SHELL, WAITING = "idle", "busy", "shell", "waiting"
 # What a launch forgets of the last run (and writes again: the pane and the socket, if it has them).
-RUN_FIELDS = ("status", "statusUpdatedAt", "conversationId", "pane", "socket")
+RUN_FIELDS = ("status", "statusUpdatedAt", "conversationId", "pane", "socket", "folder")
 # The log file's flag, a word of its own with its value one word after it, in agy's command line at launch.
 LOG_FILE = re.compile(r"(?<!\S)--log-file[= ](\S+)")
 LOG_NAME = re.compile(r"agy-(.+)\.log")  # the log file's name: the conversation name in it
@@ -215,15 +217,19 @@ def write_status(name: str, **fields: Any) -> None:
     write_atomically(status_path(name), json.dumps({**read_status(name), **fields}, indent=1))
 
 
-def launched(name: str, version: str, pane: str = "", socket: str = "") -> None:
+def launched(name: str, version: str, pane: str = "", socket: str = "", folder: str = "") -> None:
     """A launch of the window <name> on agy <version> ("" when it is not known), in tmux pane <pane> of the
-    server at <socket> ("" outside tmux: then the window's screen is never looked at). Everything the last
-    run of the window left in its status file about itself goes, its status, when that changed, its
-    conversation and its pane: the file would otherwise show a window that has not started as the one that
-    ended, and it is never seen starting. What was last said stays, as that is the hooks' own memory."""
+    server at <socket> ("" outside tmux: then the window's screen is never looked at), in <folder>. Everything
+    the last run of the window left in its status file about itself goes, its status, when that changed, its
+    conversation, its pane and its folder: the file would otherwise show a window that has not started as the
+    one that ended, and it is never seen starting. What was last said stays, as that is the hooks' own
+    memory."""
     kept = {key: value for key, value in read_status(name).items() if key not in RUN_FIELDS}
     where = {"pane": pane, "socket": socket} if pane and socket else {}
-    write_atomically(status_path(name), json.dumps({**kept, "version": version or None, **where}, indent=1))
+    here = {"folder": folder} if folder else {}
+    write_atomically(
+        status_path(name), json.dumps({**kept, "version": version or None, **where, **here}, indent=1)
+    )
 
 
 def write_status_if_unchanged(name: str, since: Any, **fields: Any) -> dict[str, Any]:
@@ -540,13 +546,21 @@ def run_hook(argv: list[str], env: Mapping[str, str]) -> int:
 
 def session_start(payload: Mapping[str, Any], env: Mapping[str, str]) -> str:
     """Remember the conversation by the window's name: in <cwd>, or in the first workspace when cwd is empty
-    (after a trust screen, which a bosun launch never shows). Nothing known of the folder is an ERROR."""
+    (as in the one capture, which came after a trust screen), or in the folder the launch recorded in the
+    window's status file. None of the three is an ERROR."""
+    name = env["BOSUN_CONVERSATION"]
     workspaces = payload.get("workspacePaths") or []
-    folder = payload.get("cwd") or next((path for path in workspaces if path), "")
+    folder = (
+        payload.get("cwd")
+        or next((path for path in workspaces if path), "")
+        or str(read_status(name).get("folder") or "")
+    )
     if not folder:
-        hook_error(env, f"agy SessionStart in {env.get('BOSUN_WINDOW')} has neither a cwd nor a workspace")
+        hook_error(
+            env, f"agy SessionStart in {env.get('BOSUN_WINDOW')} has no cwd, no workspace and no folder"
+        )
         return ""
-    remember(env["BOSUN_CONVERSATION"], str(payload["conversationId"]), str(folder))
+    remember(name, str(payload["conversationId"]), str(folder))
     return ""
 
 
@@ -1152,7 +1166,7 @@ def ready() -> bool:
 
 
 def cmd_launched(args: list[str]) -> int:
-    if len(args) not in (2, 4):
+    if len(args) not in (2, 5):
         return USAGE
     launched(*args)
     return 0
