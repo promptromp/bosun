@@ -81,6 +81,12 @@ light or dark mode and works down to a narrow window.
 
 - It listens on `127.0.0.1` only, on `BOSUN_CONSOLE_PORT` (8765) or `--port N`; `--port 0`
   picks a free port. A port in use is an error, not a silent fallback.
+- With `BOSUN_CONSOLE_ALWAYS=1` (default 0) the console runs as a launchd job, which `install.sh` loads and
+  `bosun update` keeps current: `bosun start` makes `$BOSUN_STATE_DIR/console/wanted`, and the job runs while that
+  file is there. `bosun console --url` prints its address, token included ("the console is not running" and exit 1
+  when none runs), and a `bosun console` you run by hand while one serves prints the same address (`--open` opens it)
+  instead of failing on the port; `--new-token` is refused then, since the running console keeps its token. The job's
+  errors go to `console.launchd.err` in the log folder, never its address. Turned off again, `install.sh` removes the job.
 - The first visit swaps the URL's token for an HttpOnly, SameSite=Strict cookie and drops it from
   the address bar; the API answers 401 without the cookie, so other local processes and pages
   cannot read the ledger by finding the port. The token is kept across restarts in

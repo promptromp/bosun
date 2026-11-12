@@ -62,14 +62,14 @@ if grep -q "bosun tmuxinator project" "$old_tmuxinator_file" 2>/dev/null; then
 fi
 
 # The morning job and the watchdog, which runs on its own, outside the tmux session, so it notices when
-# that is gone too; learning only when enabled (an earlier one is removed otherwise). Each is written
+# that is gone too; learning and the console only when enabled (an earlier one is removed otherwise). Each is written
 # and reloaded only where its plist changed or it is not loaded.
 reloaded="$(reload_changed_jobs)" || die "could not load the launchd jobs; see above"
 for label in $reloaded; do
   if [ -e "$HOME/Library/LaunchAgents/$label.plist" ]; then
     log "loaded launchd job $label"
   else
-    log "removed launchd job $label (no longer wanted: BOSUN_LEARN_ENABLED is not 1)"
+    log "removed launchd job $label (no longer wanted: its setting, BOSUN_LEARN_ENABLED or BOSUN_CONSOLE_ALWAYS, is not 1)"
   fi
 done
 [ -n "$reloaded" ] || log "the launchd jobs are loaded and up to date"

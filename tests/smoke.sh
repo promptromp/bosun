@@ -2412,6 +2412,12 @@ write_quit paused
 "$BOSUN" start >/dev/null 2>&1
 check "bosun start clears it, paused or not" test ! -e "$BOSUN_STATE_DIR/quit.json"
 check "... and the watchdog runs again" not_contains "$("$BOSUN" watchdog --dry-run 2>&1)" "bosun is stopped"
+check "... and with BOSUN_CONSOLE_ALWAYS off it leaves no marker for the console job" test ! -e "$BOSUN_STATE_DIR/console/wanted"
+"$BOSUN" stop >/dev/null 2>&1
+BOSUN_CONSOLE_ALWAYS=1 "$BOSUN" start >/dev/null 2>&1
+check "with BOSUN_CONSOLE_ALWAYS=1 bosun start makes console/wanted, which the console job's KeepAlive watches" test -f "$BOSUN_STATE_DIR/console/wanted"
+"$BOSUN" start >/dev/null 2>&1
+check "a start with it off again takes the marker away" test ! -e "$BOSUN_STATE_DIR/console/wanted"
 "$BOSUN" stop >/dev/null 2>&1
 
 echo "console (local server on a free port, fixture ledger)"
@@ -2597,8 +2603,9 @@ check "a ledger write shows in /api/version" bash -c '
 check "the log has the refusals, but no token, query, item id or ledger text" bash -c '
   grep -q "POST /api/version 405" "$1" && grep -q "GET /api/items/<id> 404" "$1" &&
     ! grep -qE "t=|acme|Credit|mine" "$1"' _ "$WORK/console.err"
+# (Another state folder: a console already serving from this one is the one a hand run prints the address of.)
 check "a port in use is a clear error" fails_with "use --port N, or --port 0 for a free one" \
-  env BOSUN_STATE_DIR="$CONSOLE_STATE" "$BOSUN" console --port "$CONSOLE_PORT"
+  env BOSUN_STATE_DIR="$WORK/console-state-other" "$BOSUN" console --port "$CONSOLE_PORT"
 check "it refuses a non-loopback address" fails_with "only listens on 127.0.0.1, not 0.0.0.0" \
   env BOSUN_STATE_DIR="$CONSOLE_STATE" "$BOSUN" console --port 0 --host 0.0.0.0
 kill "$CONSOLE_PID" 2>/dev/null
@@ -2616,6 +2623,23 @@ console_token_of_start() {
   wait "$pid" 2>/dev/null
 }
 FIRST_TOKEN="${CONSOLE_URL##*\?t=}"
+check "--url with no console running says so, and fails" fails_with "the console is not running" \
+  env BOSUN_STATE_DIR="$CONSOLE_STATE" BOSUN_CONFIG_DIR="$CONSOLE_CONFIG" "$BOSUN" console --url
+# The console as the job runs it (BOSUN_TRIGGER=launchd) serves while a hand run asks for its address.
+BOSUN_TRIGGER=launchd BOSUN_STATE_DIR="$CONSOLE_STATE" BOSUN_CONFIG_DIR="$CONSOLE_CONFIG" \
+  "$BOSUN" console --port 0 >"$WORK/console-job.out" 2>"$WORK/console-job.err" &
+CONSOLE_PID=$!
+console_started "$WORK/console-job.out" "$WORK/console-job.err" >/dev/null
+JOB_URL="$(grep -o 'http://[^ ]*' "$WORK/console-job.out")"
+console_here() { BOSUN_STATE_DIR="$CONSOLE_STATE" BOSUN_CONFIG_DIR="$CONSOLE_CONFIG" "$BOSUN" console "$@"; }
+check "--url prints the running console's address from the stored token and its port, and only that" test "$(console_here --url 2>&1)" = "$JOB_URL"
+check "... with the token the console stored" contains "$(console_here --url)" "/?t=$FIRST_TOKEN"
+check "a hand run while it serves prints that address, and exits 0 at once" bash -c 'source "$1/lib/common.sh"; out="$(run_with_timeout 20 "${@:3}" 2>&1)" && grep -q "bosun console: $2" <<<"$out"' _ "$ROOT" "$JOB_URL" env BOSUN_STATE_DIR="$CONSOLE_STATE" BOSUN_CONFIG_DIR="$CONSOLE_CONFIG" "$BOSUN" console --port 0
+check "... it does not rotate the token under the running console" fails_with "already running" console_here --new-token
+check "... and the console is still the one serving" curl -sf -o /dev/null "${JOB_URL%%/\?*}/"
+kill "$CONSOLE_PID" 2>/dev/null
+check "... --url fails again once it stops" wait_for 10 bash -c '! env BOSUN_STATE_DIR="$1" BOSUN_CONFIG_DIR="$2" "$3" console --url >/dev/null 2>&1' _ "$CONSOLE_STATE" "$CONSOLE_CONFIG" "$BOSUN"
+CONSOLE_PID=""
 check "a restart keeps the token, so an open tab stays signed in" test "$(console_token_of_start)" = "$FIRST_TOKEN"
 check "... stored 0600 in a 0700 folder" bash -c '
   [ "$(stat -c %a "$1/console/token" 2>/dev/null || stat -f %Lp "$1/console/token")" = 600 ] &&
@@ -2716,6 +2740,27 @@ if [ "$(bash -c 'source "$1/lib/common.sh"; command -v launchctl; command -v pms
   check "... with the reader's warning kept out of the counts' ok line" bash -c '! grep -q "ok    knowledge: .*damaged" <<<"$1"' _ "$doctor_said"
   BOSUN_CONFIG_DIR="$INSTALL_CFG" "$ROOT/install.sh" >/dev/null 2>&1
   check "... and removes it again once disabled" test ! -e "$LEARN_PLIST"
+  CONSOLE_PLIST="$HOME/Library/LaunchAgents/$BOSUN_LAUNCHD_LABEL.console.plist"
+  check "install writes no console job by default" test ! -e "$CONSOLE_PLIST"
+  BOSUN_CONSOLE_ALWAYS=1 BOSUN_CONFIG_DIR="$INSTALL_CFG" "$ROOT/install.sh" >/dev/null 2>&1
+  check "with BOSUN_CONSOLE_ALWAYS=1 it writes and loads the console job" bash -c 'plutil -lint -s "$1" && grep -q "launchctl bootstrap gui/$(id -u) $1" "$2"' _ "$CONSOLE_PLIST" "$WORK/system.log"
+  check "... named by the morning job's label plus .console, running bosun console" python3 -I -c '
+import plistlib, sys
+job = plistlib.load(open(sys.argv[1], "rb"))
+assert job["Label"] == sys.argv[2] + ".console", job["Label"]
+assert job["ProgramArguments"][-1].rstrip().endswith("/bin/bosun\" console"), job["ProgramArguments"]
+' "$CONSOLE_PLIST" "$BOSUN_LAUNCHD_LABEL"
+  check "... not started at load: the marker alone keeps it, so a quit stays quit through a reboot" python3 -I -c '
+import plistlib, sys
+job = plistlib.load(open(sys.argv[1], "rb"))
+assert job.get("RunAtLoad") is not True, job.get("RunAtLoad")
+assert job["KeepAlive"] == {"PathState": {sys.argv[2] + "/console/wanted": True}}, job["KeepAlive"]
+' "$CONSOLE_PLIST" "$BOSUN_STATE_DIR"
+  log_lines="$(wc -l <"$WORK/system.log")"
+  BOSUN_CONSOLE_ALWAYS=1 BOSUN_CONFIG_DIR="$INSTALL_CFG" "$ROOT/install.sh" >/dev/null 2>&1
+  check "a second install leaves it loaded as it is" bash -c '! tail -n +$(($2 + 1)) "$1" | grep -q "launchctl bootstrap .*console"' _ "$WORK/system.log" "$log_lines"
+  BOSUN_CONFIG_DIR="$INSTALL_CFG" "$ROOT/install.sh" >/dev/null 2>&1
+  check "turned off, install unloads and removes it" bash -c 'tail -n +$(($4 + 1)) "$1" | grep -q "launchctl bootout gui/$(id -u)/$2.console" && [ ! -e "$3" ]' _ "$WORK/system.log" "$BOSUN_LAUNCHD_LABEL" "$CONSOLE_PLIST" "$log_lines"
 
   echo "uninstall (fake launchctl, pmset and sudo, test label)"
   # Its own session and state: it would otherwise stop and delete what the rest of this run uses.

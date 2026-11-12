@@ -365,6 +365,10 @@ set_knowledge_defaults() {
 set_console_defaults() {
   # `bosun console` (docs/design/console.md): its port on 127.0.0.1 (--port overrides it).
   BOSUN_CONSOLE_PORT="8765"
+  # 1: the console runs as a launchd job (install.sh loads it) from `bosun start` until `bosun quit`,
+  # so `bosun console --url` always has an address to give (the menu bar app's "Open Console" uses it).
+  # 0: it runs when you start it by hand.
+  BOSUN_CONSOLE_ALWAYS="0"
   # 1: keep the console's access token across restarts ($BOSUN_STATE_DIR/console/token, 0600),
   # so an open tab stays signed in; `bosun console --new-token` rotates it. 0: new each start.
   BOSUN_CONSOLE_PERSIST_TOKEN="1"
@@ -1264,8 +1268,33 @@ learn_plist() { echo "$HOME/Library/LaunchAgents/$(learn_label).plist"; }
 # `bosun wake-test`'s own job, which it removes when it finishes.
 waketest_label() { echo "$BOSUN_LAUNCHD_LABEL.waketest"; }
 
+# The console's launchd job, with BOSUN_CONSOLE_ALWAYS=1 (templates/launchd-console.plist). The marker file
+# is its KeepAlive condition: `bosun start` makes it (console_mark_wanted); `bosun quit` removes it, and
+# stops the console with `launchctl kill TERM gui/$(id -u)/$(console_label)`.
+console_label() { echo "$BOSUN_LAUNCHD_LABEL.console"; }
+console_wanted_marker() { echo "$BOSUN_STATE_DIR/console/wanted"; }
+
+# The marker as BOSUN_CONSOLE_ALWAYS says: made with 1, removed otherwise.
+console_mark_wanted() {
+  local marker
+  marker="$(console_wanted_marker)"
+  if [ "$BOSUN_CONSOLE_ALWAYS" != "1" ]; then
+    rm -f "$marker"
+    return 0
+  fi
+  mkdir -p "$(dirname "$marker")" && chmod 700 "$(dirname "$marker")" && : >"$marker"
+}
+
 # Every launchd job bosun can have loaded: what `bosun uninstall` looks for.
-job_labels() { echo "$BOSUN_LAUNCHD_LABEL $(watchdog_label) $(learn_label) $(waketest_label)"; }
+job_labels() { echo "$BOSUN_LAUNCHD_LABEL $(watchdog_label) $(learn_label) $(console_label) $(waketest_label)"; }
+
+render_console_plist() {
+  ENV_XML="$(launchd_env_xml BOSUN_TRIGGER=launchd)" LABEL="$(console_label)" ROOT="$BOSUN_INSTALL" LOGS="$BOSUN_LOG_DIR" WANTED="$(console_wanted_marker)" \
+    ruby -e 'print STDIN.read
+      .gsub("__LABEL__", ENV["LABEL"]).gsub("__BOSUN_ROOT__", ENV["ROOT"]).gsub("__WANTED__", ENV["WANTED"])
+      .gsub("__ENV__", ENV["ENV_XML"]).gsub("__LOG_DIR__", ENV["LOGS"])' \
+    <"$BOSUN_ROOT/templates/launchd-console.plist"
+}
 
 render_learn_plist() {
   ENV_XML="$(launchd_env_xml)" CALENDAR="$(launchd_calendar_xml "$BOSUN_LEARN_AT" "$BOSUN_DAYS")" \
@@ -1277,12 +1306,14 @@ render_learn_plist() {
 }
 
 # The plist of the launchd job <label> as this version renders it from the config: the morning job,
-# the watchdog, and learning with BOSUN_LEARN_ENABLED=1; nothing for a job not wanted.
+# the watchdog, learning with BOSUN_LEARN_ENABLED=1 and the console with BOSUN_CONSOLE_ALWAYS=1; nothing
+# for a job not wanted.
 render_job() { # <label>
   case "$1" in
     "$BOSUN_LAUNCHD_LABEL") render_launchd_plist "$1" "$BOSUN_START_TIME" "$BOSUN_DAYS" "" BOSUN_TRIGGER=launchd ;;
     "$(watchdog_label)") render_watchdog_plist ;;
     "$(learn_label)") if [ "$BOSUN_LEARN_ENABLED" = "1" ]; then render_learn_plist; fi ;;
+    "$(console_label)") if [ "$BOSUN_CONSOLE_ALWAYS" = "1" ]; then render_console_plist; fi ;;
   esac
 }
 
@@ -1326,7 +1357,7 @@ job_changed() { # <label> <rendered> <installed>
 reload_changed_jobs() { # [--dry-run]
   local label installed rendered status=0 changed
   rendered="$(mktemp)" || return 1
-  for label in "$BOSUN_LAUNCHD_LABEL" "$(watchdog_label)" "$(learn_label)"; do
+  for label in "$BOSUN_LAUNCHD_LABEL" "$(watchdog_label)" "$(learn_label)" "$(console_label)"; do
     installed="$HOME/Library/LaunchAgents/$label.plist"
     if ! render_job "$label" >"$rendered"; then
       log "ERROR: could not render the plist of $label" >&2

@@ -35,7 +35,7 @@ from agent_files import AgentSetup
 
 
 LABEL = "com.bosun.morning"
-LABELS = f"{LABEL} {LABEL}.watchdog {LABEL}.learn {LABEL}.waketest"
+LABELS = f"{LABEL} {LABEL}.watchdog {LABEL}.learn {LABEL}.console {LABEL}.waketest"
 WAKE_LINE = "wakepoweron at 9:01AM every day"
 real_run = subprocess.run
 

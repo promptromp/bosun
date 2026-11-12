@@ -83,7 +83,10 @@ STATE_FILES = (
     ("alerts", WORKING),
     ("connectors.json", WORKING),  # the connectors' URLs the last launch found (lib/connectors_claude.py)
     (".connectors.json.*", WORKING),  # what a write cut short left
-    ("console", WORKING),
+    (
+        "console",
+        WORKING,
+    ),  # the console's token, its running lock (with its port) and the `wanted` marker of its job
     ("conversations", WORKING),
     ("dry-runs", WORKING),
     ("events", WORKING),

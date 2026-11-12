@@ -10,7 +10,8 @@
 #   drain              the same, but never restart
 #   restart            kill the whole session and start it fresh (also: --restart)
 # --unless-active is passed to `bosun refresh` (skip if you are typing in the session).
-# Starting also ends a `bosun quit`: the watchdog, learning and the morning job run again.
+# Starting also ends a `bosun quit`: the watchdog, learning and the morning job run again, and with
+# BOSUN_CONSOLE_ALWAYS=1 the console's launchd job starts (its marker, $BOSUN_STATE_DIR/console/wanted).
 set -uo pipefail
 source "$(dirname "$0")/../lib/common.sh"
 load_config
@@ -36,6 +37,7 @@ one_at_a_time windows "${BOSUN_WINDOWS_LOCK_WAIT_SECONDS:-180}" "another bosun s
 SESSION="$BOSUN_SESSION_NAME"
 rm -f "$(stop_marker)" # the watchdog expects the session again
 quit_clear             # and no longer skips its runs, nor does learning or the morning job (bosun quit)
+console_mark_wanted    # and the console's launchd job (BOSUN_CONSOLE_ALWAYS=1) is wanted: it starts and stays up
 
 start_fresh() {
   local specs name dir kind created=0

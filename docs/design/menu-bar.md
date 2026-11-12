@@ -98,8 +98,8 @@ Calls made from the research and the builder check, to check while reading:
   awake hours end when it is inside them, then start or refresh — on any day, at any hour. Opening the app in the red
   state starts bosun too.
 - **The console always running is a setting**, `BOSUN_CONSOLE_ALWAYS`, on for installs with the app and off for
-  others (a `CONFIG_ADDED` entry keeps it off on existing installs). A `bosun console` by hand while the job runs opens
-  the running one instead of starting a second.
+  others (no `CONFIG_ADDED` entry: its default, 0, is what an older install did). A `bosun console` by hand while the
+  job runs prints (and with `--open` opens) the running one instead of starting a second.
 - **"Uninstall bosun…" opens Terminal running `bosun uninstall`**: one implementation with its questions, and the
   administrator password the scheduled wake needs is asked where `sudo` can ask for it.
 - **Where the app comes from:** the GitHub releases of the repository bosun was installed from (its origin), or
@@ -153,9 +153,13 @@ Calls made from the research and the builder check, to check while reading:
   bosun is stopped by a Quit and whether the morning start is paused, and the console's state. Its level comes
   from what the console's health view and the watchdog already compute (`lib/console_sessions.py`,
   `lib/watchdog.py`), in one pure function, so the menu, the console and the watchdog never disagree.
-- **The console as a job.** `templates/launchd-console.plist` runs `bosun console` (persisted token, its port) with
-  KeepAlive while bosun runs; `bosun console --url` prints its address with the token. Stopping bosun boots it out;
-  starting bosun loads it.
+- **The console as a job.** `templates/launchd-console.plist` runs `bosun console` (persisted token, its port),
+  rendered and loaded by `reload_changed_jobs` only with `BOSUN_CONSOLE_ALWAYS=1`. Its `KeepAlive` is `PathState` on
+  `$BOSUN_STATE_DIR/console/wanted` alone and `RunAtLoad` is false: launchd starts a job whose KeepAlive condition holds
+  (`man launchd.plist`), so the marker alone starts and keeps it, where a server started at load would run all session
+  after a quit and a reboot with the marker gone. `bosun start` makes the marker; quit removes it and stops the process
+  (`launchctl kill TERM`). `bosun console --url` prints its address with the token: the port the console recorded in its
+  running lock and the stored token.
 - **`bosun quit`.** The one command Quit runs (the app collects the choices; the CLI does the work, so a terminal
   can quit bosun the same way):
   1. Marks bosun stopped (a state file: since when, and whether the morning start is paused), so the watchdog and

@@ -118,7 +118,7 @@ TEXT_TYPE = "text/plain; charset=utf-8"
 
 
 class ConsoleError(Exception):
-    """A refused start (address, port); main prints it and exits 1."""
+    """A refused start (address, port) or a console that cannot be found; main prints it and exits 1."""
 
 
 # ---- request checks (pure) ----------------------------------------------------------------------
@@ -647,11 +647,50 @@ def serve(server: ThreadingHTTPServer, url: str, open_browser: bool) -> None:
         server.server_close()
 
 
+def served_url(state: Path, configured_port: int) -> str:
+    """The address of the console serving from <state>: the stored token and the port it recorded
+    (<configured_port> for one from before it did). A ConsoleError when none runs, or when the
+    address is not kept (BOSUN_CONSOLE_PERSIST_TOKEN=0 keeps no token)."""
+    if not console_token.running(state):
+        raise ConsoleError("the console is not running")
+    port = console_token.served_port(state) or configured_port
+    token = console_token.stored_token(console_token.token_path(state))
+    if not port or token is None:
+        raise ConsoleError(
+            "the console is running, but its address is not kept on disk (BOSUN_CONSOLE_PERSIST_TOKEN=0?)"
+        )
+    return f"http://{BIND_HOST}:{port}/?{QUERY_KEY}={token}"
+
+
+def serving_url(state: Path, args: argparse.Namespace) -> str | None:
+    """For a console started by hand: the address of one already serving, which it prints instead
+    of failing on the port; None when it should start one. The launchd job (BOSUN_TRIGGER=launchd)
+    always starts. --new-token cannot reach a running console, which keeps the token it started with."""
+    if os.environ.get("BOSUN_TRIGGER") == "launchd" or not console_token.running(state):
+        return None
+    if args.new_token:
+        raise ConsoleError(
+            "the console is already running, and a new token would not reach it: stop it first"
+        )
+    try:
+        return served_url(state, args.port)
+    except ConsoleError:
+        return None
+
+
+def show_running(url: str, open_browser: bool) -> None:
+    print(f"bosun console: {url}", flush=True)
+    print("The console is already running (bosun start keeps it up): nothing started here.", flush=True)
+    if open_browser:
+        webbrowser.open(url)
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="bosun console", description=__doc__)
     parser.add_argument("--port", type=int, default=DEFAULT_PORT)
     parser.add_argument("--host", default=BIND_HOST)
     parser.add_argument("--open", action="store_true")
+    parser.add_argument("--url", action="store_true", help="print the address of the running console")
     parser.add_argument("--new-token", action="store_true", help="replace the stored access token")
     return parser
 
@@ -659,12 +698,21 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv: list[str]) -> int:
     args = build_parser().parse_args(argv)
     try:
-        app = new_app(state_dir(), rotate=args.new_token)
+        state = state_dir()
+        if args.url:
+            print(served_url(state, args.port))
+            return 0
+        check_bind_host(args.host)  # also for a hand run that only prints the address of a running console
+        running_at = serving_url(state, args)
+        if running_at is not None:
+            show_running(running_at, args.open)
+            return 0
+        app = new_app(state, rotate=args.new_token)
         server = make_server(app, args.host, args.port)
     except ConsoleError as exc:
         print(f"bosun console: {exc}", file=sys.stderr)
         return 1
-    with console_token.serving(state_dir()):  # so that bosun update knows a console runs
+    with console_token.serving(state, app.port):  # so that bosun update knows a console runs
         serve(server, f"http://{BIND_HOST}:{app.port}/?{QUERY_KEY}={app.token}", args.open)
     return 0
 

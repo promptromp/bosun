@@ -1,5 +1,5 @@
 #!/bin/bash
-# Usage: bosun console [--port N] [--open] [--new-token]
+# Usage: bosun console [--port N] [--open] [--new-token] [--url]
 #
 # A local web console over the ledger, the sessions, bosun's health, stats, learning, the
 # knowledge base and the editorial files (design: docs/design/console.md). Read-only, except that
@@ -11,10 +11,16 @@
 # becomes a cookie, so the API answers only that browser). The token is kept across restarts in
 # $BOSUN_STATE_DIR/console/token (0600), so an open tab stays signed in; with
 # BOSUN_CONSOLE_PERSIST_TOKEN=0 it is new each start.
+# With BOSUN_CONSOLE_ALWAYS=1 a launchd job runs the console from `bosun start` until `bosun quit`; a
+# `bosun console` you run by hand while one serves prints its address (and opens it with --open)
+# instead of failing on the port.
 #   --port N     port on 127.0.0.1 (default BOSUN_CONSOLE_PORT, 8765); 0 picks a free one,
 #                printed in the URL. A port in use is an error.
 #   --open       also open the URL in the default browser
 #   --new-token  replace the stored token (signs out every open tab)
+#   --url        print the address of the running console (http://127.0.0.1:<port>/?t=<token>, from
+#                its stored token and the port it recorded) and exit 0; "the console is not running"
+#                and exit 1 when none runs. It starts nothing
 #   --host H     only 127.0.0.1 is accepted: the console never listens beyond this machine
 # Only refused requests are logged (to stderr: method, path, status), never ledger content.
 set -uo pipefail

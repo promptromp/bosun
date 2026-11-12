@@ -21,6 +21,7 @@ from pathlib import Path
 
 
 TOKEN_BYTES = 32
+MAX_PORT = 65536
 TOKEN_DIR = "console"  # noqa: S105 - a folder name, not a secret
 TOKEN_FILE = "token"  # noqa: S105 - a file name, not a secret
 RUNNING_LOCK = "running.lock"  # held, shared, by each console while it serves
@@ -92,15 +93,29 @@ def persist_setting(value: str | None) -> bool:
 
 
 @contextlib.contextmanager
-def serving(state_dir: Path) -> Iterator[None]:
-    """The console's running lock, held (shared) for the block: while the server runs."""
+def serving(state_dir: Path, port: int | None = None) -> Iterator[None]:
+    """The console's running lock, held (shared) for the block: while the server runs. It keeps
+    the port the console listens on, which `bosun console --url` reads back (served_port)."""
     private_dir(state_dir / TOKEN_DIR)
     fd = os.open(state_dir / TOKEN_DIR / RUNNING_LOCK, os.O_RDWR | os.O_CREAT, FILE_MODE)
     try:
         fcntl.flock(fd, fcntl.LOCK_SH)
+        if port is not None:
+            os.ftruncate(fd, 0)
+            os.pwrite(fd, f"{port}\n".encode("ascii"), 0)
         yield
     finally:
         os.close(fd)
+
+
+def served_port(state_dir: Path) -> int | None:
+    """The port the console serving from <state_dir> recorded in its running lock; None when it
+    recorded none (a console from before it did) or the file holds anything else."""
+    try:
+        text = (state_dir / TOKEN_DIR / RUNNING_LOCK).read_text(encoding="ascii").strip()
+    except (OSError, UnicodeDecodeError):
+        return None
+    return int(text) if text.isdigit() and 0 < int(text) < MAX_PORT else None
 
 
 def running(state_dir: Path) -> bool:
