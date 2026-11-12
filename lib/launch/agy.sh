@@ -140,9 +140,12 @@ first_prompt() { # <window> <prompt given, or empty>
 # relaunch is never taken for the run before it. It also records the window's tmux pane and the server's
 # socket (the path in $TMUX before its first comma), which is where the adapter looks at the window's screen;
 # none outside tmux. It records the window's folder too, which names its conversation when agy's SessionStart
-# hook gives none. The status is written only here, never while the arguments
-# are built, which `--fingerprint` and the window list do for a window that keeps running.
-note_agy_launch() {
+# hook gives none. A launch that resumes a conversation (the id its caller passes) records it too, with the
+# window idle: agy fires no hook until the window's first prompt, and a resume with none must still be a
+# session bosun sees; a new conversation is none until its first hook names it. The status is written only
+# here, never while the arguments are built, which `--fingerprint` and the window list do for a window that
+# keeps running.
+note_agy_launch() { # [<conversation id it resumes>]
   local var version i key tmux_socket
   if [ "$BOSUN_LAUNCH_DRY_RUN" = "1" ]; then
     printf 'dry-run: would set:'
@@ -160,7 +163,7 @@ note_agy_launch() {
   tmux_socket="${TMUX:-}"
   tmux_socket="${tmux_socket%%,*}"
   env BOSUN_STATE_DIR="$BOSUN_STATE_DIR" python3 "$BOSUN_ROOT/lib/agy_state.py" launched "$agy_conversation" "$version" \
-    "${TMUX_PANE:-}" "$tmux_socket" "$PWD" ||
+    "${TMUX_PANE:-}" "$tmux_socket" "$PWD" "${1:-}" ||
     die "'$agy_window' does not start: could not record its launch (lib/agy_state.py launched)"
 }
 
@@ -176,7 +179,7 @@ run_new() { # <prompt>
 # the window's first model call.
 run_resumed() { # <conversation id> [prompt]
   export BOSUN_RESUMED="$1"
-  note_agy_launch
+  note_agy_launch "$1"
   if [ -n "${2:-}" ]; then
     run_agent "${agent_args[@]}" --conversation "$1" "--prompt-interactive=$2"
   else

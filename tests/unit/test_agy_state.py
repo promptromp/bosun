@@ -423,6 +423,29 @@ class StatusFileTest(AdapterCase):
         self.window(15, "repo-a", None)
         self.assertIsNone(agy_state.record(15))  # a window not yet seen starting is no session
 
+    def test_a_resumed_launch_is_a_session_at_once_with_the_conversation_it_resumed(self) -> None:
+        self.processes[16] = command_of("repo-a")
+        agy_state.write_status("repo-a", status="busy", statusUpdatedAt=7, conversationId="old")
+        agy_state.launched(
+            "repo-a", "1.5.5", "", "", "/work/a", "conv-9"
+        )  # no pane: the screen is never read
+        found = agy_state.read_status("repo-a")
+        self.assertEqual(
+            (found["conversationId"], found["status"], found["folder"]), ("conv-9", "idle", "/work/a")
+        )
+        self.assertEqual(found["statusUpdatedAt"], agy_state.now_ms())
+        entry = agy_state.record(16)
+        assert entry is not None
+        self.assertEqual((entry["sessionId"], entry["status"]), ("conv-9", "idle"))
+
+    def test_a_new_launch_is_no_session_before_its_first_hook_even_after_a_resumed_one(self) -> None:
+        self.processes[17] = command_of("repo-a")
+        agy_state.launched("repo-a", "1.5.5", "", "", "/work/a", "conv-9")
+        agy_state.launched("repo-a", "1.5.5", "", "", "/work/a", "")
+        self.assertNotIn("conversationId", agy_state.read_status("repo-a"))
+        self.assertNotIn("status", agy_state.read_status("repo-a"))
+        self.assertIsNone(agy_state.record(17))
+
     def test_a_launch_records_its_pane_and_socket_and_replaces_the_last_ones(self) -> None:
         agy_state.launched("repo-a", "1.5.5", "%4", SOCKET)
         self.assertEqual(
@@ -586,6 +609,13 @@ class CommandLineTest(AdapterCase):
             {"version": "1.5.5", "pane": "%2", "socket": SOCKET, "folder": "/work/a"},
         )
         self.assertEqual(self.run_main("launched", "repo-a", "1.5.5", "%2")[0], agent_files.USAGE)
+        self.assertEqual(self.run_main("launched", "repo-a", "1.5.5", "", "", "/work/a", "conv-9"), (0, ""))
+        self.assertEqual(agy_state.read_status("repo-a")["conversationId"], "conv-9")
+        self.assertEqual(self.run_main("launched", "repo-a", "1.5.5", "", "", "/work/a", ""), (0, ""))
+        self.assertNotIn("conversationId", agy_state.read_status("repo-a"))
+        self.assertEqual(
+            self.run_main("launched", "a", "1", "", "", "/w", "c", "extra")[0], agent_files.USAGE
+        )
 
     def test_logged_in_exits_0_or_3(self) -> None:
         with mock.patch.object(agy_state, "logged_in", return_value=True):

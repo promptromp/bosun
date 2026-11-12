@@ -3018,6 +3018,8 @@ FAKE
   rm -f "$WORK/agy-run.args" "$WORK/agy-run.env"
   BOSUN_LAUNCH_DRY_RUN=0 AGY_STAND_IN_RECORD="$WORK/agy-run" AGY launch --no-prompt agyw >/dev/null
   check "a resume with no prompt has none" bash -c '! grep -q -- "--prompt-interactive" "$1" && grep -qx conv-1 "$1"' _ "$WORK/agy-run.args"
+  check "... and the window is on record at once, idle, with the conversation it resumed (agy fires no hook before a prompt)" bash -c '
+    jq -e ".conversationId == \"conv-1\" and .status == \"idle\" and .statusUpdatedAt > 5" "$1" >/dev/null' _ "$BOSUN_STATE_DIR/agy/agyw.json"
   rm "$CONV_DIR/conv-1.db"
   check "... and a conversation that agy no longer has is started anew" bash -c '! grep -qF -- "--conversation" <<<"$1"' _ "$(AGYD launch agyw)"
 
@@ -3100,6 +3102,15 @@ FAKE
   check "... and made no new one" test "$(al_conversations)" = "$conversations_before"
   check "... which the stand-in resumed, as its log says" grep -q "resumed conversation $conversation" "$BOSUN_LOG_DIR/agy-agyl.log"
   al stop >/dev/null
+  wait_for 15 bash -c '! pgrep -f "$1 -c.*$2/state/logs" >/dev/null' _ "$AGY_STAND_IN" "$WORK" # its conversation is held while it runs
+  # A resume with no prompt: agy is idle and fires no hook, and bosun already knows the window and its conversation.
+  # (the launch is the pane shell's child, as bosun starts it, so that the window's agent is found under the pane)
+  al_tmux new-session -d -s agy-live -n agyl -c "$AGY_REPO" "$(printf '%q ' "${AL[@]}" "$BOSUN" launch --no-prompt agyl); sleep 600"
+  check "a window resumed with no prompt reads idle at once, a session of the conversation it resumed" wait_for 15 al_has agyl idle
+  check "... that conversation, before any prompt" bash -c '[ "$(jq -r ".[] | select(.name == \"agyl\") | .agent.sessionId" <<<"$1")" = "$2" ]' _ "$(al sessions --json)" "$conversation"
+  al_tmux kill-server 2>/dev/null
+  al stop >/dev/null
+  check "... and nothing of it is left running" wait_for 15 bash -c '! pgrep -f "$1 -c.*$2/state/logs" >/dev/null' _ "$AGY_STAND_IN" "$WORK"
   rm -f "$AL_HOME/conversations/$conversation.db"
   al start >/dev/null
   al_renamed() { [ -n "$(al_conversation agyl)" ] && [ "$(al_conversation agyl)" != "$1" ]; } # <the old id>

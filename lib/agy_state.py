@@ -5,10 +5,10 @@ lib/claude_state.py and lib/codex_state.py do for the other agents. Design: docs
 Usage: agy_state.py logged-in                      exit 0 if agy has a login and its onboarding is done
        agy_state.py resolve <workdir> <name>       print the conversation bosun knows by <name> there
        agy_state.py live <conversation-id>         print the pid of a running agy holding it
-       agy_state.py launched <name> <version> [<pane> <socket> <folder>]
+       agy_state.py launched <name> <version> [<pane> <socket> <folder> [<conversation>]]
                                                    record that window <name> starts on agy <version>,
                                                    in tmux pane <pane> of the server at <socket>,
-                                                   in <folder>
+                                                   in <folder>, resuming <conversation> if one is given
 
 Exit status 3: not found.
 
@@ -217,18 +217,26 @@ def write_status(name: str, **fields: Any) -> None:
     write_atomically(status_path(name), json.dumps({**read_status(name), **fields}, indent=1))
 
 
-def launched(name: str, version: str, pane: str = "", socket: str = "", folder: str = "") -> None:
+def launched(
+    name: str, version: str, pane: str = "", socket: str = "", folder: str = "", conversation: str = ""
+) -> None:
     """A launch of the window <name> on agy <version> ("" when it is not known), in tmux pane <pane> of the
     server at <socket> ("" outside tmux: then the window's screen is never looked at), in <folder>. Everything
     the last run of the window left in its status file about itself goes, its status, when that changed, its
     conversation, its pane and its folder: the file would otherwise show a window that has not started as the
     one that ended, and it is never seen starting. What was last said stays, as that is the hooks' own
-    memory."""
+    memory. A launch that resumes <conversation> knows it, and agy fires no hook until the window's first
+    prompt (and a quiet resume has none), so the window is on record at once, idle, with that conversation;
+    a new conversation is named by its first hook and is no session before."""
     kept = {key: value for key, value in read_status(name).items() if key not in RUN_FIELDS}
     where = {"pane": pane, "socket": socket} if pane and socket else {}
     here = {"folder": folder} if folder else {}
+    resumed = (
+        {"conversationId": conversation, "status": IDLE, "statusUpdatedAt": now_ms()} if conversation else {}
+    )
     write_atomically(
-        status_path(name), json.dumps({**kept, "version": version or None, **where, **here}, indent=1)
+        status_path(name),
+        json.dumps({**kept, "version": version or None, **where, **here, **resumed}, indent=1),
     )
 
 
@@ -410,8 +418,8 @@ def build_record(pid: int, name: str, status: dict[str, Any]) -> dict[str, Any]:
 
 def record(pid: int | str) -> dict[str, Any] | None:
     """A running agy's conversation, in the shape of Claude Code's running-session record. None until its
-    window has had its first prompt (no conversation in its status file yet), as for a Claude Code at a
-    screen."""
+    window has a conversation in its status file: a launch that resumes one writes it, and a new one is named
+    by its first hook, at its first prompt, as for a Claude Code at a screen."""
     if not str(pid).isdigit():
         return None
     name = marker(pid)
@@ -1166,7 +1174,7 @@ def ready() -> bool:
 
 
 def cmd_launched(args: list[str]) -> int:
-    if len(args) not in (2, 5):
+    if len(args) not in (2, 5, 6):
         return USAGE
     launched(*args)
     return 0

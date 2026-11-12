@@ -226,17 +226,17 @@ agy_another() { # <window> <pid before>: an agy with a record now, not the one t
   now="$(pid_of "$1")"
   [ -n "$now" ] && [ "$now" != "$2" ]
 }
-# bosun refresh --restart-idle, at once. agy writes nothing until its first prompt, so a restarted window that
-# resumed with none is not seen: after 90 seconds it is given one by hand, and the run says so.
+# bosun refresh --restart-idle, at once. The launch resumes the conversation it knows and records it, so the
+# restarted window is on record (a new agy, idle) before any prompt: agy fires no hook until one.
 agy_restart() { # <window>
   local pid
   pid="$(pid_of "$1")"
   BOSUN_RESTART_MIN_IDLE_SECONDS=0 bosun refresh --restart-idle "$1" >>"$OUT/refresh.txt" 2>&1
-  wait_for 90 agy_another "$1" "$pid" && return 0
-  echo "  note  no record of the restarted $1 after 90 seconds; the refresh said: $(tail -2 "$OUT/refresh.txt" | tr '\n' ' ')"
-  screen_of "$1"
-  tmux -L bosun send-keys -t "=bosun:=$1" "Reply with just: ready" Enter
-  wait_for 90 agy_another "$1" "$pid"
+  wait_for 90 agy_another "$1" "$pid" || {
+    echo "no record of a restarted $1 after 90 seconds; the refresh said: $(tail -2 "$OUT/refresh.txt" | tr '\n' ' ')"
+    screen_of "$1"
+    return 1
+  }
 }
 agy_status_says() { # <jq test>: on the status file of the repo window's conversation, which bosun's hooks write
   local id
@@ -255,10 +255,10 @@ agy_remote_control() {
 agy_refresh_and_resume() {
   local id
   id="$(window "$AGY_WINDOW" sessionId)"
-  agy_restart "$AGY_WINDOW"
-  check "after bosun refresh --restart-idle the window is back, idle" wait_for 120 idle "$AGY_WINDOW"
+  check "bosun refresh --restart-idle brings the window straight back: a new agy, on record, before any prompt" agy_restart "$AGY_WINDOW"
+  check "... idle, from the launch, with no prompt sent" wait_for 20 idle "$AGY_WINDOW"
   check "... on the same conversation, not a new one" test "$(window "$AGY_WINDOW" sessionId)" = "$id"
-  check "... a turn goes through" agy_ask "$RECALL_PROMPT" 120
+  check "... a prompt sent by bosun send goes through" agy_ask "$RECALL_PROMPT" 120
   agy_note_seen
   check "... and it recalls the word it was given before the restart (shown spelled backwards)" wait_for 30 agy_screen_has HSIFARBEZ
 }
@@ -379,6 +379,7 @@ agy_approvals() {
   check "a git push of a feature branch to the local bare remote is answered with BypassSandbox" agy_answered '^git push .*feature-live' approved
   check "... and it landed there" git -C "$HOME/remotes/exporter.git" rev-parse --verify -q refs/heads/feature-live
   check "a gh command of the allow-list (gh pr list) is answered with BypassSandbox" agy_answered '^gh pr list' approved
+  check "... and agy ran it outside its sandbox: the stand-in gh wrote its call log, outside the workspace (a real gh with no token would show an auth error, never could-not-resolve-host)" grep -qx "gh pr list" "$HOME/.sandbox/gh/calls.log"
   check "an ls gets no answer" agy_answered '^ls( |$)' none
   agy_command_fact gh-version-answer '^gh --version'
   agy_command_fact git-commit-answer '^git commit'

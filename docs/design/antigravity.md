@@ -139,7 +139,7 @@ sandbox.
 - **Names and resuming.** bosun keeps `agy-sessions.json`: a window's name and folder to its conversation id,
   written by its `SessionStart` hook, which fires at a new conversation's first prompt and never on a resume.
   A launch resumes with `--conversation <id>` only if `~/.gemini/antigravity-cli/conversations/<id>.db` is
-  there, and never uses `-c` ("the latest in this folder"), which two windows in one repo would share. `agy`
+  there, and never uses `-c` ("the latest in this folder"), which two windows in one repo would share. A resuming launch also records that conversation in the window's status file, idle, since `agy` fires no hook until a prompt and a resume may have none: the window is a session at once. A new conversation is none until its first hook names it. `agy`
   starts a fresh conversation under an unknown id without failing, so the launch also tells bosun's hooks the
   id it resumed: the window's first `PreInvocation` stops the turn before its model call if `agy` reports
   another id, and bosun says so in the launch log and alerts.
