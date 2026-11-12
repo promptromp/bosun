@@ -26,7 +26,9 @@ See also [ROADMAP.md](../ROADMAP.md) for planned work and open questions.
 - An `agy` window runs repo git hooks nowhere: an approved commit would otherwise run the repo's own hook
   code outside `agy`'s sandbox. Checks that a pre-commit hook makes run in CI only. The login reaches only a
   desktop session, never ssh. A window starts only if `agy` has no MCP server its connectors list does not
-  name, the Antigravity app's included.
+  name, the Antigravity app's included. It does not start in a folder with an `.agents/hooks.json` (in it or
+  any folder up to its repo's root), whose hooks `agy` would run outside its sandbox, nor with a log folder
+  (`BOSUN_LOG_DIR`) that has a space in its path.
 - Whether Remote Control reconnects after a long sleep without a restart is not verified. Sessions
   that `refresh` restarts get a fresh connection.
 - Static AWS credential variables (`AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`,

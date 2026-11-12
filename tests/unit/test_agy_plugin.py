@@ -179,6 +179,21 @@ class SessionStartTest(HookCase):
         self.answer("SessionStart", payload("session-start", workspacePaths=["", folder]))
         self.assertEqual(self.known()["repo-conv"]["cwd"], os.path.realpath(folder))
 
+    def test_a_resume_that_fell_back_to_a_fresh_conversation_does_not_repoint_the_name(self) -> None:
+        folder = str(self.root)
+        agy_state.remember("repo-conv", "0000-asked-for", folder)
+        self.assertEqual(
+            self.answer("SessionStart", payload("session-start", cwd=folder), BOSUN_RESUMED="0000-asked-for"),
+            "",
+        )
+        self.assertEqual(self.known()["repo-conv"]["id"], "0000-asked-for")
+        self.assertNotIn("ERROR", self.log_text())
+
+    def test_a_resume_that_got_the_conversation_it_asked_for_is_remembered(self) -> None:
+        folder = str(self.root)
+        self.answer("SessionStart", payload("session-start", cwd=folder), BOSUN_RESUMED=CONVERSATION)
+        self.assertEqual(self.known()["repo-conv"], {"id": CONVERSATION, "cwd": os.path.realpath(folder)})
+
     def test_no_folder_is_an_error_and_remembers_nothing(self) -> None:
         self.assertEqual(self.answer("SessionStart", payload("session-start")), "")
         self.assertEqual(self.known(), {})
@@ -267,6 +282,13 @@ class PreToolUseTest(HookCase):
         super().setUp()
         self.work = self.root / "r1"
         self.work.mkdir()
+        self.bin = self.root / "bin"  # the programs of the approval, found first and outside the workspace
+        self.bin.mkdir()
+        for program in ("git", "gh", "bosun"):
+            self.plant_program(self.bin, program)
+        path = mock.patch.dict(os.environ, {"PATH": f"{self.bin}{os.pathsep}{os.environ.get('PATH', '')}"})
+        path.start()
+        self.addCleanup(path.stop)
         self.remotes = {"origin"}  # the remotes of the repository's config, never a real one's
         self.config_reads: list[tuple[str, str]] = []
         patcher = mock.patch.object(agy_state, "configured_remote", self.configured_remote)
@@ -276,6 +298,13 @@ class PreToolUseTest(HookCase):
     def configured_remote(self, name: str, cwd: str) -> bool:
         self.config_reads.append((name, cwd))
         return name in self.remotes
+
+    @staticmethod
+    def plant_program(folder: Path, name: str) -> Path:
+        program = folder / name
+        program.write_text("#!/bin/sh\nexit 0\n")
+        program.chmod(0o755)
+        return program
 
     def body(self, command: str) -> dict[str, Any]:
         return {**command_payload(command), "cwd": str(self.work), "workspacePaths": [str(self.work)]}
@@ -320,6 +349,40 @@ class PreToolUseTest(HookCase):
             "git cherry-pick -x abc123",
             "git add 'src/*.py'",
         )
+
+    def test_a_program_planted_in_the_workspace_and_put_first_on_path_is_not_approved(self) -> None:
+        self.assert_approved("git status", "gh pr list", "bosun ledger list")
+        for program, command in (("git", "git status"), ("gh", "gh pr list"), ("bosun", "bosun ledger list")):
+            with self.subTest(program=program):
+                planted = self.work / "tools"
+                planted.mkdir(exist_ok=True)
+                self.plant_program(planted, program)
+                with mock.patch.dict(os.environ, {"PATH": f"{planted}{os.pathsep}{os.environ['PATH']}"}):
+                    self.assert_no_answer(command, f"git status && {command}")
+                    self.assertEqual(
+                        self.answer("PreToolUse", {**self.body(command), "cwd": str(planted)}), "", command
+                    )  # also when the workspace named is the folder it is planted in
+
+    def test_a_program_in_another_workspace_of_the_payload_is_not_approved_either(self) -> None:
+        other = self.root / "r2"
+        other.mkdir()
+        self.plant_program(other, "git")
+        body = {**self.body("git status"), "workspacePaths": [str(self.work), str(other)]}
+        with mock.patch.dict(os.environ, {"PATH": f"{other}{os.pathsep}{os.environ['PATH']}"}):
+            self.assertEqual(self.answer("PreToolUse", body), "")
+
+    def test_a_program_that_does_not_resolve_or_resolves_by_a_relative_path_is_not_approved(self) -> None:
+        with mock.patch.dict(os.environ, {"PATH": str(self.root / "nowhere")}):
+            self.assert_no_answer("git status", "gh pr list", "bosun ledger list")
+        with mock.patch("shutil.which", lambda _name: "./git"):
+            self.assert_no_answer("git status")
+
+    def test_a_link_into_the_workspace_is_not_approved(self) -> None:
+        folder = self.root / "links"
+        folder.mkdir()
+        (folder / "git").symlink_to(self.plant_program(self.work, "real-git"))
+        with mock.patch.dict(os.environ, {"PATH": f"{folder}{os.pathsep}{os.environ['PATH']}"}):
+            self.assert_no_answer("git status")
 
     def test_the_approval_is_exactly_this_json(self) -> None:
         self.assertEqual(
@@ -508,6 +571,25 @@ class PreToolUseTest(HookCase):
             "gh repo clone a/b",
             "bosun delegate review --id i-1 --ask x --start w",
             "bosun send --start w",
+        )
+
+    def test_a_window_starting_option_is_refused_however_it_is_abbreviated(self) -> None:
+        self.assert_no_answer(
+            "bosun delegate review --id x --ask y --ne w /tmp/d",
+            "bosun delegate review --id x --ask y --new=w /tmp/d",
+            "bosun delegate review --id x --ask y --n w /tmp/d",
+            "bosun delegate review --id x --ask y --sta=w",
+            "bosun delegate review --id x --ask y --star w",
+            "bosun delegate review --id x --ask y --s w",
+            "bosun send --ne w x hi",
+            "bosun send --sta w",
+        )
+        self.assert_approved(
+            "bosun delegate review --id x --ask y --window w",
+            "bosun delegate review --id x --ask y --print",
+            "bosun delegate review --id x --ask y --details d --model m",
+            "bosun send --id x w hi",
+            "bosun ledger list --state open",
         )
 
     def test_a_command_that_hides_another_gets_no_answer(self) -> None:
@@ -790,6 +872,29 @@ class SetupTest(SetupCase):
         (plugin / "plugin.json").write_text(
             json.dumps({"name": "bosun", "version": agy_state.PLUGIN_VERSION})
         )
+        self.assertTrue(agy_state.SETUP.needed())  # the right version, but no hooks.json
+        (plugin / "hooks.json").write_bytes((PLUGIN / "hooks.json").read_bytes())
+        self.assertFalse(agy_state.SETUP.needed())
+
+    def test_needed_when_the_installed_hooks_differ_from_the_installs_by_a_byte(self) -> None:
+        agy_state.SETUP.apply()
+        self.assertFalse(agy_state.SETUP.needed())
+        hooks = self.config / "plugins" / "bosun" / "hooks.json"
+        hooks.write_bytes(hooks.read_bytes() + b" ")  # the same version, one byte more
+        self.assertTrue(agy_state.SETUP.needed())
+        self.calls.unlink()
+        agy_state.SETUP.apply()  # an older hooks.json is replaced like an older version
+        self.assertEqual(
+            self.commands(),
+            ["plugin uninstall bosun", f"plugin install {self.install}/agents/agy-plugin"],
+        )
+        self.assertFalse(agy_state.SETUP.needed())
+        (self.install / "agents" / "agy-plugin" / "hooks.json").write_text("{}")  # this install's own change
+        self.assertTrue(agy_state.SETUP.needed())
+
+    def test_no_source_to_compare_to_leaves_the_version_to_decide(self) -> None:
+        agy_state.SETUP.apply()
+        (self.install / "agents" / "agy-plugin" / "hooks.json").unlink()
         self.assertFalse(agy_state.SETUP.needed())
 
     def test_setup_installs_when_missing_or_older(self) -> None:

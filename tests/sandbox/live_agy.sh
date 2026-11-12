@@ -30,6 +30,9 @@ HOOKLOG="$HOME/hooklog"
 FACTS="$HOME/agy-facts.txt" # across the steps, which are processes of their own
 TREE_BEFORE="$HOME/gemini-tree-before.txt"
 FSMON_MARKER="$HOME/fsmonitor-ran"
+WT_WINDOW="freshwt"
+WT_REPO="$HOME/Development/factrepo-wt" # a worktree of FACT_REPO: its .git is a file
+HOOK_MARKER="$HOME/pre-commit-hook-ran"
 SIGN_IN_SECONDS=900
 CODE_WORD="ZEBRAFISH"
 
@@ -44,6 +47,11 @@ GIT_DIR_PROMPT="Run each of these as its own shell command with your command-run
 BARE_PROMPT="Run each of these as its own shell command with your command-running tool: git push probe HEAD:refs/heads/probe-branch, then cd probe-bare.git && git rev-parse --git-dir > ../bare-discovery.txt 2>&1. Then reply with just: done"
 STATUS_PROMPT="Run git status with your command-running tool, then reply with just: done"
 GH_VERSION_PROMPT="Run gh --version with your command-running tool, then reply with just: done"
+SHELL_SET_PROMPT='Run this as one shell command with your command-running tool, exactly as written: BOSUN_PROBE_VAR=kept; export BOSUN_PROBE_VAR; probe_fn() { echo fn; }; echo $$ > shell-pid-1.txt. Then reply with just: done'
+SHELL_CHECK_PROMPT='Run this as one shell command with your command-running tool, exactly as written: echo "var=${BOSUN_PROBE_VAR:-unset} fn=$(type probe_fn 2>&1 | head -1) pid=$$" > shell-reuse.txt. Then reply with just: done'
+WORKTREE_PROMPT="Run each of these as its own shell command with your command-running tool: cp .git git-file-copy.txt, then echo probe >> .git. Then reply with just: done"
+HOOKS_PATH_PROMPT="Run git rev-parse --git-path hooks with your command-running tool, then reply with just the line it printed"
+COMMIT_PROMPT="Run git commit --allow-empty -m probe with your command-running tool, then reply with just: done"
 
 fact() { # <name> <what the run saw>: kept for the end of the run, and said now
   printf '%s: %s\n' "$1" "$2" >>"$FACTS"
@@ -493,7 +501,7 @@ agy_environment() {
 
 agy_fact_repo() { # a repo with: a nested one, a bare one and a remote of it, and a submodule whose own config runs a program
   local sub="$HOME/sub-origin"
-  rm -rf "$FACT_REPO" "$sub" "$FSMON_MARKER"
+  rm -rf "$FACT_REPO" "$WT_REPO" "$sub" "$FSMON_MARKER" "$HOOK_MARKER"
   mkdir -p "$FACT_REPO" "$sub"
   git -C "$sub" init -q && git -C "$sub" commit -q --allow-empty -m "a submodule" || return 1
   git -C "$FACT_REPO" init -q && echo facts >"$FACT_REPO/README" && git -C "$FACT_REPO" add -A &&
@@ -504,12 +512,16 @@ agy_fact_repo() { # a repo with: a nested one, a bare one and a remote of it, an
   printf '#!/bin/sh\ntouch "%s"\nexit 1\n' "$FSMON_MARKER" >"$HOME/fsmon.sh"
   chmod +x "$HOME/fsmon.sh"
   git config -f "$FACT_REPO/.git/modules/planted/config" core.fsmonitor "$HOME/fsmon.sh"
+  printf '#!/bin/sh\ntouch "%s"\nexit 0\n' "$HOOK_MARKER" >"$FACT_REPO/.git/hooks/pre-commit" &&
+    chmod +x "$FACT_REPO/.git/hooks/pre-commit" || return 1
+  git -C "$FACT_REPO" worktree add -q "$WT_REPO" -b wt-probe
 }
-agy_fact_turn() { # <prompt>: a turn in the fact window; a dialog it stops at is left with Esc, and said
-  agy_ask "$1" 150 "$FACT_WINDOW" >"$OUT/fact-turn.txt" 2>&1
-  if [ "$(window "$FACT_WINDOW" status)" = waiting ]; then
+agy_fact_turn() { # <prompt> [window]: a turn in the fact window; a dialog it stops at is left with Esc, and said
+  local window="${2:-$FACT_WINDOW}"
+  agy_ask "$1" 150 "$window" >"$OUT/fact-turn.txt" 2>&1
+  if [ "$(window "$window" status)" = waiting ]; then
     echo asked >"$OUT/fact-asked"
-    agy_dismiss "$FACT_WINDOW"
+    agy_dismiss "$window"
   else
     rm -f "$OUT/fact-asked"
   fi
@@ -546,7 +558,48 @@ agy_facts_window() {
   agy_command_fact gh-version-answer '^gh --version'
   agy_fact_turn "$STATUS_PROMPT"
   fact planted-fsmonitor-window "on the window's git status, with the git config bosun puts in its environment, the program of the planted submodule $(ran_word RAN "did not run"); asked: $(asked_word)"
+  agy_shell_fact
+  agy_past_the_sandbox_fact
+  agy_worktree_fact
   agy_facts_from_hooks
+}
+
+# Whether run_command keeps one shell between calls: the first call sets a variable and a function and writes
+# its shell's pid; the second says what it finds (recorded, not judged).
+agy_shell_fact() {
+  rm -f "$FACT_REPO/shell-pid-1.txt" "$FACT_REPO/shell-reuse.txt"
+  agy_fact_turn "$SHELL_SET_PROMPT"
+  agy_fact_turn "$SHELL_CHECK_PROMPT"
+  fact run-command-shell "the second call found: $(head -c 200 "$FACT_REPO/shell-reuse.txt" 2>/dev/null | tr '\n' ' '); the first call's shell pid: $(head -c 20 "$FACT_REPO/shell-pid-1.txt" 2>/dev/null | tr '\n' ' ') (the same pid with the variable and the function there means one shell is reused); asked: $(asked_word)"
+}
+
+ran_marker() { if [ -e "$1" ]; then echo "$2"; else echo "$3"; fi; } # <marker> <if it exists> <if not>
+
+# What a command run past the sandbox (an approved git, with the plugin) sees of the git environment the launch
+# pinned (GIT_CONFIG_COUNT, GIT_CONFIG_KEY_n, core.hooksPath=/dev/null): `git rev-parse --git-path hooks` prints
+# the hooks folder git uses, and an approved commit runs the pre-commit hook planted in the repo only if the
+# pin did not reach it.
+agy_past_the_sandbox_fact() {
+  local printed
+  rm -f "$HOOK_MARKER"
+  agy_fact_turn "$HOOKS_PATH_PROMPT"
+  printed="$(agy_screen "$FACT_WINDOW" | grep -E '^[[:space:]]*(/dev/null|[^ ]*/hooks)[[:space:]]*$' | tail -1 | tr -d ' ')"
+  agy_command_fact git-path-hooks-answer '^git rev-parse --git-path hooks'
+  fact approved-git-sees-the-pin "git rev-parse --git-path hooks, as printed in the window: ${printed:-nothing found on the screen} (/dev/null means the GIT_CONFIG_* pins reached it)"
+  agy_fact_turn "$COMMIT_PROMPT"
+  agy_command_fact git-commit-probe-answer '^git commit --allow-empty'
+  fact approved-commit-and-hooks "the planted pre-commit hook $(ran_marker "$HOOK_MARKER" "ran (the pin did not reach an approved commit)" "did not run (or the commit was not approved: see the answer above)"); asked: $(asked_word)"
+}
+
+# In a repo that is a git worktree (its .git is a file), whether a sandboxed command can rewrite that file.
+agy_worktree_fact() {
+  check "a window on a git worktree starts, new" bash -c 'bosun send --new "$1" "$2" "Reply with just: ready" >"$3" 2>&1 || { cat "$3"; exit 1; }' _ "$WT_WINDOW" "$WT_REPO" "$OUT/fresh-wt.txt"
+  check "... and reads idle" wait_for 120 idle "$WT_WINDOW"
+  check "... with agy's footer on its screen" wait_for 150 agy_ui_ready "$WT_WINDOW"
+  rm -f "$WT_REPO/git-file-copy.txt"
+  agy_fact_turn "$WORKTREE_PROMPT" "$WT_WINDOW"
+  fact worktree-git-file "the .git of a worktree $(if [ -f "$WT_REPO/.git" ]; then echo "is still a file"; else echo "is no longer a file"; fi); a sandboxed command's write to it $(if grep -q '^probe$' "$WT_REPO/.git" 2>/dev/null; then echo "LANDED (it can be rewritten)"; else echo "did not land"; fi); the copy it made first: $(written "$WT_REPO/git-file-copy.txt"); asked: $(asked_word)"
+  [ ! -f "$WT_REPO/git-file-copy.txt" ] || cp "$WT_REPO/git-file-copy.txt" "$WT_REPO/.git"
 }
 
 agy_recording_phase() {

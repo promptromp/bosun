@@ -29,6 +29,26 @@ check_agy_connectors() { # <name>
   agy_connector_window="$1"
 }
 
+# Checks, once per process, what would make an agy window start unsafe or unseen, in the launch's own shell (a
+# die in $(...) would be lost). Both are refusals, as the connectors' is:
+#   - `.agents/hooks.json` in the window's folder or any folder up to its repo's root (lib/agy_workspace.py):
+#     agy runs the hooks of such a file when it starts, outside its sandbox, and bosun relaunches windows by
+#     itself.
+#   - a space in the log folder: the adapter finds a window by the `--log-file <path>` in its command line, and
+#     reads the path as one word (LOG_FILE in lib/agy_state.py).
+check_agy_workspace() { # <name>
+  [ "${agy_workspace_window-}" = "$1" ] && return 0
+  local hooks
+  hooks="$(python3 "$BOSUN_ROOT/lib/agy_workspace.py" hooks "$PWD")" ||
+    die "'$1' does not start: could not look for workspace hooks (lib/agy_workspace.py)"
+  [ -z "$hooks" ] ||
+    die "'$1' does not start: ${hooks%%$'\n'*} would run outside agy's sandbox when agy starts (bosun does not start agy windows with workspace hooks)"
+  case "$BOSUN_LOG_DIR" in
+    *[[:space:]]*) die "'$1' does not start: bosun's log folder \"$BOSUN_LOG_DIR\" has a space in it, which agy windows cannot use yet" ;;
+  esac
+  agy_workspace_window="$1"
+}
+
 # Exports what makes a git or gh command run by an agy window safe and unattended, for agy and whatever it
 # starts (the launch's own commands after it are unaffected in effect). Git's environment config
 # (GIT_CONFIG_COUNT, GIT_CONFIG_KEY_<n>, GIT_CONFIG_VALUE_<n>) outranks every repo's config file and reaches
@@ -119,7 +139,8 @@ build_agent_args() { # <window> <session name> <model> <effort>
   [ -n "$3" ] && [ "$3" != "-" ] && agent_args+=(--model "$(agy_base_model "$3")")
   case "$effort" in xhigh | max) effort=high ;; esac
   [ -n "$effort" ] && [ "$effort" != "-" ] && agent_args+=(--effort "$effort")
-  # Here, in the launch's own shell: the listing runs once, and a refusal stops the launch.
+  # Here, in the launch's own shell: each runs once, and a refusal stops the launch.
+  check_agy_workspace "$1"
   check_agy_connectors "$1"
   return 0
 }

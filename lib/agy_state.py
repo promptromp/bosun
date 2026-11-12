@@ -51,6 +51,7 @@ subcommand of that program's allow-list (GIT, GH, BOSUN) whose words pass that s
 else gets no answer, and agy handles it as it would without bosun. It is an allow-list because git and gh have
 too many ways to run another program or write outside the workspace (global options, aliases, globs, glued
 values, transports, a repository or submodule the agent wrote) for a list of dangers ever to be complete.
+Each of the three must also resolve, on the hook's PATH, to a full path outside the workspaces.
 The screen:
   - The input box is the line starting with `>` between two lines of `─` (the rules, drawn grey,
     `ESC[90m`), and the lines under it down to the second rule. The empty box is the mark alone
@@ -552,17 +553,28 @@ def run_hook(argv: list[str], env: Mapping[str, str]) -> int:
     return code
 
 
+def session_folder(payload: Mapping[str, Any], name: str) -> str:
+    """The folder of a SessionStart: the payload's cwd, else its first workspace, else the launch's record."""
+    workspaces = payload.get("workspacePaths") or []
+    return str(
+        payload.get("cwd")
+        or next((path for path in workspaces if path), "")
+        or read_status(name).get("folder")
+        or ""
+    )
+
+
 def session_start(payload: Mapping[str, Any], env: Mapping[str, str]) -> str:
     """Remember the conversation by the window's name: in <cwd>, or in the first workspace when cwd is empty
     (as in the one capture, which came after a trust screen), or in the folder the launch recorded in the
-    window's status file. None of the three is an ERROR."""
+    window's status file. None of the three is an ERROR. Nothing is remembered when the window was launched to
+    resume another conversation than the payload's (BOSUN_RESUMED): the name must not move to the fresh one,
+    which pre_invocation stops before its model call."""
     name = env["BOSUN_CONVERSATION"]
-    workspaces = payload.get("workspacePaths") or []
-    folder = (
-        payload.get("cwd")
-        or next((path for path in workspaces if path), "")
-        or str(read_status(name).get("folder") or "")
-    )
+    resumed = env.get("BOSUN_RESUMED")
+    if resumed and str(payload.get("conversationId") or "") != resumed:
+        return ""  # a resume that fell back to a fresh conversation: its name stays on the one asked for
+    folder = session_folder(payload, name)
     if not folder:
         hook_error(
             env, f"agy SessionStart in {env.get('BOSUN_WINDOW')} has no cwd, no workspace and no folder"
@@ -963,6 +975,14 @@ BOSUN: dict[str, BosunRule] = {
 }
 
 
+def abbreviates(name: str, refused: frozenset[str]) -> bool:
+    """Whether <name>, an option as given (before any `=`), is one of <refused> or a start of one (`--ne`,
+    `--sta`, even `--n`): a parser that takes abbreviations would read it as the whole option, which an
+    exact comparison would miss. bosun's own parsers take none (allow_abbrev=False), so this is the second
+    lock on the same door; it can only refuse more."""
+    return name.startswith("--") and name != "--" and any(option.startswith(name) for option in refused)
+
+
 def bosun_allows(words: list[str], _cwd: str) -> bool:
     """Whether `bosun <words>` is an allowed command, first, with neither a refused subcommand second nor a
     refused option anywhere. No `--` either: bosun's commands need none, and after one argparse still reads
@@ -970,7 +990,7 @@ def bosun_allows(words: list[str], _cwd: str) -> bool:
     rule = BOSUN.get(words[0])
     if rule is None or "--" in words or any(second in rule.seconds for second in words[1:2]):
         return False
-    return not any(word.partition("=")[0] in rule.words for word in words[1:])
+    return not any(abbreviates(word.partition("=")[0], rule.words) for word in words[1:])
 
 
 # The programs that pass the sandbox, each by its exact name (never a path), and what checks its words.
@@ -1032,11 +1052,38 @@ def command_and_folder(payload: Mapping[str, Any]) -> tuple[str, str] | None:
     return command, cwd
 
 
+def inside(path: str, folder: str) -> bool:
+    """Whether <path> is <folder> or under it, as written and as resolved."""
+    for one, other in ((path, folder), (os.path.realpath(path), os.path.realpath(folder))):
+        if one == other or one.startswith(other.rstrip(os.sep) + os.sep):
+            return True
+    return False
+
+
+def program_is_trusted(name: str, folders: list[str]) -> bool:
+    """Whether <name>, found on this process's PATH, is a full path outside every one of <folders>: a `git`
+    the agent planted in its workspace and put first on PATH (a repo's `.envrc`, a profile it wrote) would
+    otherwise run outside the sandbox under the approval of the real one."""
+    found = shutil.which(name)
+    return found is not None and os.path.isabs(found) and not any(inside(found, folder) for folder in folders)
+
+
+def programs_are_trusted(command: str, folders: list[str]) -> bool:
+    """Whether <command> names a program and each one it names passes `program_is_trusted`."""
+    names = set(command_starts(command) or ())
+    return bool(names) and all(program_is_trusted(name, folders) for name in names)
+
+
 def pre_tool_use(payload: Mapping[str, Any], _env: Mapping[str, str]) -> str:
-    """The approval for a run_command that `runs_only_bosuns_commands` in its workspace; no answer for
-    anything else."""
+    """The approval for a run_command that `runs_only_bosuns_commands` in its workspace, with each program
+    it names resolving to somewhere outside the workspaces; no answer for anything else."""
     found = command_and_folder(payload)
-    return APPROVAL if found and runs_only_bosuns_commands(*found) else ""
+    if not found or not runs_only_bosuns_commands(*found):
+        return ""
+    command, cwd = found
+    workspaces = payload.get("workspacePaths") or []
+    folders = [cwd, *(path for path in workspaces if isinstance(path, str) and path)]
+    return APPROVAL if programs_are_trusted(command, folders) else ""
 
 
 HOOK_ANSWERS = {
@@ -1062,10 +1109,28 @@ def plugin_dir() -> Path:
     return AGY_CONFIG / "plugins" / PLUGIN_NAME
 
 
+def hooks_differ() -> bool:
+    """Whether the installed hooks.json is not, byte for byte, the one in this install's plugin folder (a
+    change to the hooks that kept its version), or is missing or unreadable. With no source to compare to it
+    says no: the version check, and the install itself, say what is wrong then."""
+    install = os.environ.get("BOSUN_INSTALL")
+    if not install:
+        return False
+    try:
+        source = (Path(install) / "agents" / "agy-plugin" / "hooks.json").read_bytes()
+    except OSError:
+        return False
+    try:
+        return (plugin_dir() / "hooks.json").read_bytes() != source
+    except OSError:
+        return True
+
+
 def plugin_needed() -> bool:
-    """Whether the plugin is missing from agy, unreadable there, or of another version than this one."""
+    """Whether the plugin is missing from agy, unreadable there, of another version than this one, or its
+    hooks.json differs from this install's."""
     found = read_object(plugin_dir() / "plugin.json")
-    return found is None or found.get("version") != PLUGIN_VERSION
+    return found is None or found.get("version") != PLUGIN_VERSION or hooks_differ()
 
 
 def agy_run(args: list[str]) -> tuple[int, str]:

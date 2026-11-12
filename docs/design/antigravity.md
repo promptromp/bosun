@@ -169,7 +169,10 @@ sandbox.
   `run_command` whose every command is `git`, `gh` or `bosun` with a subcommand of that program's allow-list
   (`GIT`, `GH` and `BOSUN` in `lib/agy_state.py`: no global option before it, no `cd`, no prefix, no glob, run in
   the payload's own workspace, and per subcommand the options and repositories it may name), in bosun windows
-  only, and nothing for every other command. (Changed: the first version took any `git`, `gh` or `bosun`
+  only, and nothing for every other command. A program that does not resolve on the hook's `PATH` to a full path
+  outside the payload's workspaces (a `git` the agent planted and put first) gets none either, and a
+  window-starting option of `bosun send` or `bosun delegate` is refused however it is abbreviated (`--ne`,
+  `--sta=w`), as `bosun delegate`'s own parser takes no abbreviation. (Changed: the first version took any `git`, `gh` or `bosun`
   command past `cd` and refused a list of dangerous options, which two reviews showed could not be completed.) `allow` is not enough: it still
   shows `agy`'s dialog, and the command still runs in the sandbox with no network. (Changed: the first version
   said "approves".) `agy`'s reviewer can still ask, and the window is then `waiting`. Nothing in `agy`'s
@@ -186,6 +189,11 @@ sandbox.
   listing that fails refuses too. bosun's own plugin brings no server. `bosun doctor` names the servers that
   block a window. In practice a repo window with no connectors starts on `agy` only if `agy` has no MCP servers
   set up at all, the app's included.
+- **What would run when `agy` starts.** `agy` reads hooks from `.agents/hooks.json` in a workspace and runs
+  them outside its sandbox, and bosun relaunches windows by itself. So a launch is refused when that file
+  exists in the window's folder or any folder up to its repo's root (the walk the connectors check uses,
+  `lib/agy_workspace.py`), with its path in the message. It is also refused when the log folder has a space
+  in it: the adapter finds a window by the one-word path after `--log-file` in its command line.
 - **Reading its screen.** Readers for `pane_input`, from the run's captures. The box is the line starting with
   `>` between two grey rules, and text in it blanks the footer's hint. A question is a dialog ("↑/↓ Navigate",
   whose footer also says "esc to cancel", so it is checked before busy), the trust screen ("Do you trust the
@@ -239,6 +247,9 @@ breaks one stops Part 2 until it has a fix. These stop it too, since unattended 
 them: the marker reaches bosun's hooks, and the Keychain login works in a tmux started by launchd. Anything
 else the run finds that `agy` lacks ships as a documented gap, in [Agents](harnesses.md) and
 [Known limits](../limits.md).
+
+Decided 2026-11-12: Part 2 merges as a preview before its live run passes, as the docs say
+([Agents](harnesses.md)); the run's findings then follow as fixes or documented gaps.
 
 ## Two pull requests
 

@@ -126,9 +126,10 @@ set_agent_args() { # <name>
 # caller's. --model / --effort / --harness given here still win. It runs no `claude mcp list` (an update
 # takes a fingerprint of every window): a Claude Code window's connectors resolve from what the last
 # lookups kept. A Codex window's arguments come from `codex mcp list --json` (lib/launch/codex.sh), so its
-# fingerprint runs it. When that fails, or another settings scope would widen a Claude Code window's list
-# (refuse_widening, lib/connectors_claude.py), no fingerprint is printed (exit 1), an update reads the window as
-# changed, and its restart then refuses to start it.
+# fingerprint runs it, and an agy window's connector check runs `agy plugin list --json` (lib/connectors_agy.py)
+# on each fingerprint in the same way. When that fails, or another settings scope would widen a Claude Code
+# window's list (refuse_widening, lib/connectors_claude.py), no fingerprint is printed (exit 1), an update
+# reads the window as changed, and its restart then refuses to start it.
 print_fingerprint() { # <name>
   local dir listed=1
   CONNECTOR_LOOKUP=0

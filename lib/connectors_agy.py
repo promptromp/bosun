@@ -33,6 +33,7 @@ from typing import Any
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import claude_state
 import connectors
+from agy_workspace import workspace_folders
 from connectors import Allowed, ConnectorsError, is_url, parse, say
 
 
@@ -70,16 +71,6 @@ def read_servers(path: Path) -> list[str]:
         for name, entry in table.items()
         if not (isinstance(entry, dict) and entry.get("disabled") is True)
     ]
-
-
-def workspace_folders(workdir: Path) -> list[Path]:
-    """<workdir> and each folder above it up to its repo's root, the folder holding `.git`; <workdir>
-    alone when there is none."""
-    folders = [workdir, *workdir.parents]
-    for index, folder in enumerate(folders):
-        if (folder / ".git").exists():
-            return folders[: index + 1]
-    return folders[:1]
 
 
 def plugin_listing(agent_bin: str) -> list[Any]:
