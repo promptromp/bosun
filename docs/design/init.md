@@ -59,8 +59,11 @@ without `bosun.git`):
   ([versions side by side](update.md#versions-side-by-side-switched-in-one-step)) and starts `init`. A
   repository with no release yet gets the head of `main`, and `get.sh` says so; one that cannot be reached
   stops the install. With `BOSUN_BRANCH` it takes that branch's head instead, and hands `init`
-  `BOSUN_UPDATE_CHANNEL=main` (as it hands `BOSUN_USER_PATH`), which writes the key into `bosun.env`: the
-  install follows the branch, with no question asked about it.
+  `BOSUN_INIT_CHANNEL=main` (a variable of init's own, as `BOSUN_INIT_UNATTENDED` is, so that the windows init
+  starts never inherit the config key, which would beat `bosun.env`), which writes `BOSUN_UPDATE_CHANNEL` into
+  `bosun.env`: the install follows the branch, with no question asked about it. The line `get.sh` prints for
+  after what bosun needs is there keeps `BOSUN_BRANCH` (as it keeps `BOSUN_HARNESS`), so the install that
+  stopped there goes on following the branch.
 - **An install `init` has set up** (its `install.sh` linked `~/.local/bin/bosun` to it, as its last step,
   after the launchd jobs and the wake, so an install cut short is not taken for one set up):
   - a link to a version: it fetches nothing, and runs the install's own `bosun update`, with `--yes` when
@@ -91,7 +94,7 @@ for it, and the plan says why.
 | Days | Weekdays you worked on at least 60% of since your first prompt. |
 | Hours | Half an hour before your median first prompt, to after your median last one, at least 4 hours. Work before 04:00 belongs to the day before. With under 5 active days: 08:00 to 20:00, Monday to Friday. |
 | Features | Events, approvals and learning on. The Slack watcher only if the Slack plugin is installed. |
-| Update channel | Never asked. What `BOSUN_UPDATE_CHANNEL` in the environment says (`get.sh` sets it to `main` when `BOSUN_BRANCH` was given), else your config, else the releases. A `bosun.env` from before the key follows `main`, as `bosun update` writes it, so a re-run changes nothing unasked. It is the `update_channel` answer, written as `BOSUN_UPDATE_CHANNEL`. |
+| Update channel | Never asked. What `BOSUN_INIT_CHANNEL` in the environment says (`get.sh` sets it to `main` when `BOSUN_BRANCH` was given), else your config, else the releases. A `bosun.env` from before the key follows `main`, as `bosun update` writes it, so a re-run changes nothing unasked. It is the `update_channel` answer, written as `BOSUN_UPDATE_CHANNEL`. |
 | Agent | Only asked once Codex is installed and logged in: what `BOSUN_HARNESS` asks for, else your config, else Codex if you typed more prompts there, else Claude Code. |
 | Model | `opus` on Max, Team and Enterprise plans, else `sonnet`. On Codex this is for the orchestrator, and repo sessions use `BOSUN_CODEX_MODEL`. |
 | Repo mask | The GitHub owners of the ticked repos, so the recommendation's is its one repo's owner, and unticking a repo narrows it. With none ticked, the owners of the repos you use (20 or more prompts, at most 6; else the 3 with the most; else up to 3 found), so that unticking never makes it empty, which would mean every repo. |

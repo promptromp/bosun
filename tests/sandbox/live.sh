@@ -97,7 +97,7 @@ prepare() {
   check "... with the line to run" says "brew install" "$out"
   check "... and how to get Claude Code" says "claude.com/claude-code" "$out"
   [ "$AGENT" = "codex" ] && check "... and Codex" says "developers.openai.com/codex" "$out"
-  [ "$AGENT" = "codex" ] && check "... and the next line keeps asking for Codex" says "get.sh | BOSUN_HARNESS=codex sh" "$out"
+  [ "$AGENT" = "codex" ] && check "... and the next line keeps asking for Codex" says "BOSUN_HARNESS=codex sh" "$out"
   line="$(grep -oE "brew install [a-z0-9 ]+" "$out" | head -1)"
   # shellcheck disable=SC2086 # the words of the line it printed
   check "that line works" $line

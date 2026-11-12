@@ -280,8 +280,14 @@ the_installer() {
   check "it is plain sh" sh -n "$ROOT/get.sh"
   check "with something missing it gets bosun, says what to do and stops" bash -c '! cat "$1/get.sh" | sh >"$2" 2>&1 && grep -q "brew install gh" "$2"' _ "$ROOT" "$out"
   check "... and says to run the same line again" says "Then run this again: curl -fsSL" "$out"
+  check "... which keeps the branch it was asked for" says "| BOSUN_BRANCH=$branch sh" "$out"
   brew install gh
-  check "the piped installer hands over to the wizard" python3 "$DRIVE" "$out" \
+  # What a person does: run the line it printed, with nothing of the branch in the environment now (the
+  # curl is this checkout's get.sh). The install stopped at what bosun needs, so this is init again, which
+  # has to know the install follows the branch.
+  rerun="$(sed -n 's/^Then run this again: .* | //p' "$out" | head -1)"
+  unset BOSUN_BRANCH
+  check "the piped installer hands over to the wizard, from the line it printed" python3 "$DRIVE" "$out" \
     "Which repos" "<enter>" \
     "When should" "2" \
     "How proactive" "<enter>" \
@@ -291,7 +297,8 @@ the_installer() {
     "Nothing has changed yet" "y" \
     "Start the windows now?" "y" \
     "The windows are up" "" \
-    -- sh -c "cat '$ROOT/get.sh' | sh"
+    -- sh -c "cat '$ROOT/get.sh' | $rerun"
+  export BOSUN_BRANCH="$branch" # for the steps after: they install again, with a branch asked for
   check "it put bosun where it said" test -x "$INSTALL/bin/bosun"
   check "... the install a link to the version in use, a folder of its own beside bosun.git" bash -c '
     [ -L "$1" ] && [ "$(dirname "$(readlink "$1")")" = "$2" ] && [ -d "$2/bosun.git" ] &&
@@ -373,7 +380,7 @@ the_first_day_on_codex() {
   echo "the first day on Codex: the same steps, then real windows on the stand-in"
   rm -rf "$CONFIG"
   check "asking for Codex without it says where to get it" bash -c '! BOSUN_HARNESS=codex "$1" init --recommended >"$2" 2>&1 && grep -q "developers.openai.com/codex" "$2"' _ "$BOSUN" "$out"
-  check "the installer's next line keeps that choice" bash -c '! cat "$1/get.sh" | BOSUN_DIR="$HOME/.local/share/bosun" BOSUN_REPO="$1" BOSUN_BRANCH="$(git -C "$1" branch --show-current)" BOSUN_HARNESS=codex sh >"$2" 2>&1 && grep -q "get.sh | BOSUN_HARNESS=codex sh" "$2"' _ "$ROOT" "$out"
+  check "the installer's next line keeps that choice" bash -c '! cat "$1/get.sh" | BOSUN_DIR="$HOME/.local/share/bosun" BOSUN_REPO="$1" BOSUN_BRANCH="$(git -C "$1" branch --show-current)" BOSUN_HARNESS=codex sh >"$2" 2>&1 && grep -q "BOSUN_BRANCH=[^ ]* BOSUN_HARNESS=codex sh" "$2"' _ "$ROOT" "$out"
   brew install codex
   check "with Codex here, the wizard offers it" python3 "$DRIVE" "$out" \
     "Which repos" "<enter>" \
@@ -437,7 +444,7 @@ the_first_day_on_agy() {
   rm -rf "$CONFIG"
   rm -f "$HOME/.local/bin/codex" # a machine that has agy and no Codex, so agy is the wizard's second agent
   check "asking for agy without it says where to get it" bash -c '! BOSUN_HARNESS=agy "$1" init --recommended >"$2" 2>&1 && grep -q "antigravity.google/cli" "$2"' _ "$BOSUN" "$out"
-  check "the installer's next line keeps that choice" bash -c '! cat "$1/get.sh" | BOSUN_DIR="$HOME/.local/share/bosun" BOSUN_REPO="$1" BOSUN_BRANCH="$(git -C "$1" branch --show-current)" BOSUN_HARNESS=agy sh >"$2" 2>&1 && grep -q "get.sh | BOSUN_HARNESS=agy sh" "$2"' _ "$ROOT" "$out"
+  check "the installer's next line keeps that choice" bash -c '! cat "$1/get.sh" | BOSUN_DIR="$HOME/.local/share/bosun" BOSUN_REPO="$1" BOSUN_BRANCH="$(git -C "$1" branch --show-current)" BOSUN_HARNESS=agy sh >"$2" 2>&1 && grep -q "BOSUN_BRANCH=[^ ]* BOSUN_HARNESS=agy sh" "$2"' _ "$ROOT" "$out"
   brew install agy
   mkdir -p "$cli/cache"
   echo '{"onboardingComplete": true}' >"$cli/cache/onboarding.json" # a person signed in and went through its first-run screens

@@ -3191,10 +3191,10 @@ FAKE
     "$(HOME="$G/home" BOSUN_DIR="$G_DIR" BOSUN_REPO="$G/upstream" BOSUN_BRANCH=main sh "$ROOT/get.sh" --dry-run 2>&1)" \
     "  \$ git -c core.hooksPath=/dev/null --git-dir=$G_VERSIONS/bosun.git fetch --quiet --no-tags origin +refs/heads/main:refs/remotes/origin/main" \
     "  \$ ln -s $G_VERSIONS/<commit> $G_DIR" \
-    "Then it would start: BOSUN_UPDATE_CHANNEL=main $G_DIR/bin/bosun init"
+    "Then it would start: BOSUN_INIT_CHANNEL=main $G_DIR/bin/bosun init"
   check "... also unattended" says_lines \
     "$(HOME="$G/home" BOSUN_DIR="$G_DIR" BOSUN_REPO="$G/upstream" BOSUN_BRANCH=main sh "$ROOT/get.sh" --dry-run --unattended 2>&1)" \
-    "Then it would start: BOSUN_UPDATE_CHANNEL=main BOSUN_INIT_UNATTENDED=1 $G_DIR/bin/bosun init --recommended"
+    "Then it would start: BOSUN_INIT_CHANNEL=main BOSUN_INIT_UNATTENDED=1 $G_DIR/bin/bosun init --recommended"
   mkdir -p "$G/no-release"
   git -C "$G/no-release" init -q -b main
   git -C "$G/no-release" -c user.name=acme -c user.email=dev@example.com -c commit.gpgsign=false commit -q --allow-empty -m "first"
@@ -3222,11 +3222,22 @@ FAKE
     "$(HOME="$G/home" BOSUN_DIR="$G_DIR" BOSUN_REPO="$G/upstream" sh "$ROOT/get.sh" --dry-run --unattended 2>&1)" \
     "Then it would start: BOSUN_INIT_UNATTENDED=1 $G_DIR/bin/bosun init --recommended"
   # The version there is older than this get.sh: a bosun that knows no --unattended, which says what it got.
-  printf '#!/bin/sh\necho "init got: $*, BOSUN_INIT_UNATTENDED=${BOSUN_INIT_UNATTENDED:-}"\n' >"$G_DIR/bin/bosun"
+  printf '#!/bin/sh\necho "init got: $*, BOSUN_INIT_UNATTENDED=${BOSUN_INIT_UNATTENDED:-}"\necho "init env: channel=${BOSUN_INIT_CHANNEL:-} config_channel=${BOSUN_UPDATE_CHANNEL:-} rerun=${BOSUN_RERUN:-}"\n' >"$G_DIR/bin/bosun"
   chmod +x "$G_DIR/bin/bosun"
   check "... and does: init --recommended, with BOSUN_INIT_UNATTENDED=1" says_lines \
     "$(HOME="$G/home" BOSUN_DIR="$G_DIR" BOSUN_REPO="$G/upstream" sh "$ROOT/get.sh" --unattended </dev/null 2>&1)" \
     "init got: init --recommended, BOSUN_INIT_UNATTENDED=1"
+  g_init_env() { # [VAR=value...]: what the stand-in says it was handed
+    env -u BOSUN_HARNESS -u BOSUN_BRANCH -u BOSUN_UPDATE_CHANNEL -u BOSUN_INIT_CHANNEL "$@" HOME="$G/home" BOSUN_DIR="$G_DIR" \
+      sh "$ROOT/get.sh" --unattended </dev/null 2>&1 | grep "^init env: "
+  }
+  g_line="curl -fsSL https://raw.githubusercontent.com/promptromp/bosun/main/get.sh"
+  check "... a first install that asked for a branch hands init the channel under init's own name, never the config key" says_lines \
+    "$(g_init_env BOSUN_BRANCH=feature)" "init env: channel=main config_channel= rerun=$g_line | BOSUN_BRANCH=feature sh"
+  check "... and the line it prints to run again keeps that branch, as it keeps the agent" says_lines \
+    "$(g_init_env BOSUN_BRANCH=feature BOSUN_HARNESS=codex)" "init env: channel=main config_channel= rerun=$g_line | BOSUN_BRANCH=feature BOSUN_HARNESS=codex sh"
+  check "... without a branch, init is told no channel, and the line has none" says_lines \
+    "$(g_init_env)" "init env: channel= config_channel= rerun=$g_line | sh"
   printf '#!/bin/sh\n' >"$G_DIR/bin/bosun"
   chmod -x "$G_DIR/bin/bosun" # as it was
   mkdir -p "$G/home/.local/bin"
@@ -3265,13 +3276,15 @@ FAKE
     "$(get_dry_plain --unattended)" \
     "Then it would run: $G_DIR/bin/bosun update"
   check "... and its dry run changes nothing" test "$(g_tree)" = "$g_before"
-  printf '#!/bin/sh\necho "update got: $*"\n' >"$G_VERSIONS/0123456789ab/bin/bosun"
+  printf '#!/bin/sh\nif [ -t 0 ]; then echo "update got: $* (stdin is a terminal)"; else echo "update got: $*"; fi\n' >"$G_VERSIONS/0123456789ab/bin/bosun"
   chmod +x "$G_VERSIONS/0123456789ab/bin/bosun"
   check "... and does: bosun update, with --yes when unattended" says_lines \
     "$(HOME="$G/home" BOSUN_DIR="$G_DIR" sh "$ROOT/get.sh" --unattended </dev/null 2>&1 | tail -1)" \
     "update got: update --yes"
-  check "... and with no terminal to ask on, bosun update as it is, which shows its plan" says_lines \
-    "$(HOME="$G/home" BOSUN_DIR="$G_DIR" sh "$ROOT/get.sh" </dev/null 2>&1 | tail -1)" \
+  # In a session of its own, which has no controlling terminal whatever ran the suite: /dev/tty cannot be opened.
+  g_no_tty() { python3 -c 'import os, sys; os.setsid(); os.execvp(sys.argv[1], sys.argv[1:])' "$@"; }
+  check "... and with no terminal to ask on (none to open), bosun update as it is, which shows its plan: nothing is --yes, and its input is not a terminal" says_lines \
+    "$(HOME="$G/home" BOSUN_DIR="$G_DIR" g_no_tty sh "$ROOT/get.sh" </dev/null 2>&1 | tail -1)" \
     "update got: update"
   chmod -x "$G_VERSIONS/0123456789ab/bin/bosun"
   printf '#!/bin/sh\n' >"$G_VERSIONS/0123456789ab/bin/bosun" # as it was

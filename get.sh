@@ -9,7 +9,9 @@
 # anything missing, then asks a few questions and shows its plan before it changes anything. It installs
 # nothing else, and never uses sudo; `bosun init` asks for it once, for the wake schedule, and says so
 # first. A repository with no release yet gets the head of main, and it says so. With BOSUN_BRANCH it
-# gets the head of that branch instead, and the install follows the branch (BOSUN_UPDATE_CHANNEL=main).
+# gets the head of that branch instead, and the install follows the branch: init is told through
+# BOSUN_INIT_CHANNEL=main, and the line it prints to run again after what bosun needs is there keeps
+# BOSUN_BRANCH, as it keeps BOSUN_HARNESS.
 #
 # Run it again to update: it hands over to the `bosun update` of the install, which moves it as its own
 # channel says (the newest release, or the head of its branch), shows its plan and asks first. An install
@@ -45,7 +47,7 @@ BARE="$VERSIONS/bosun.git"
 BRANCH="${BOSUN_BRANCH:-}" # pick_branch settles it
 RELEASE=""                 # pick_release: the newest release's tag, on a new install that asked for no branch
 RELEASE_COMMIT=""          # ... and its commit
-THIS_LINE="curl -fsSL https://raw.githubusercontent.com/promptromp/bosun/main/get.sh | ${BOSUN_HARNESS:+BOSUN_HARNESS=$BOSUN_HARNESS }sh"
+THIS_LINE="curl -fsSL https://raw.githubusercontent.com/promptromp/bosun/main/get.sh | ${BOSUN_BRANCH:+BOSUN_BRANCH=$BOSUN_BRANCH }${BOSUN_HARNESS:+BOSUN_HARNESS=$BOSUN_HARNESS }sh"
 ROADMAP="https://github.com/promptromp/bosun/blob/main/ROADMAP.md"
 USER_PATH="$PATH"
 PATH="/opt/homebrew/bin:/usr/local/bin:$HOME/.local/bin:$PATH" # where Homebrew and Claude Code go
@@ -271,7 +273,7 @@ start_init() {
   # An install that asked for a branch follows it: init is told, and writes it into bosun.env (the others
   # follow the releases, which is its default).
   channel=""
-  [ -z "${BOSUN_BRANCH:-}" ] || channel="BOSUN_UPDATE_CHANNEL=main "
+  [ -z "${BOSUN_BRANCH:-}" ] || channel="BOSUN_INIT_CHANNEL=main "
   if [ "$DRY_RUN" = 1 ]; then
     if [ "$UNATTENDED" = 1 ]; then
       say "Then it would start: ${channel}BOSUN_INIT_UNATTENDED=1 $command init --recommended"
@@ -283,7 +285,7 @@ start_init() {
   BOSUN_USER_PATH="$USER_PATH"
   BOSUN_RERUN="$THIS_LINE"
   export BOSUN_USER_PATH BOSUN_RERUN
-  [ -z "$channel" ] || export BOSUN_UPDATE_CHANNEL=main
+  [ -z "$channel" ] || export BOSUN_INIT_CHANNEL=main # init's own variable: never the config key, which would beat bosun.env in every window it starts
   # Unattended is handed over as a variable, as the two above: an older version on disk (an install it
   # never finished) ignores it and takes the recommended setup as it always did, where a flag it does not
   # know would stop it.
@@ -296,18 +298,25 @@ start_init() {
   exec "$command" init # no terminal to ask on: it prints the plan
 }
 
+# Replaces this with `<command> update <args>`, which shows its plan and asks first: with --yes when
+# unattended, and with the terminal when there is one.
+exec_update() {
+  command="$1"
+  shift
+  [ "$UNATTENDED" = 0 ] || exec "$command" update "$@" --yes
+  has_terminal && exec "$command" update "$@" </dev/tty
+  exec "$command" update "$@" # no terminal to ask on: it shows the plan
+}
+
 # A re-run on an install: the install's own `bosun update`, which moves it as its channel says (the newest
-# release, or the head of its branch), shows its plan and asks first. Nothing is fetched here, so this
-# never moves an install off its channel.
+# release, or the head of its branch). Nothing is fetched here, so this never moves an install off its
+# channel.
 hand_over() {
-  command="$DIR/bin/bosun"
   if [ "$DRY_RUN" = 1 ]; then
-    say "Then it would run: $command update"
+    say "Then it would run: $DIR/bin/bosun update"
     return 0
   fi
-  [ "$UNATTENDED" = 0 ] || exec "$command" update --yes
-  has_terminal && exec "$command" update </dev/tty
-  exec "$command" update # no terminal to ask on: it shows the plan
+  exec_update "$DIR/bin/bosun"
 }
 
 # The new version's `bosun update`, from the version in use, which is a checkout from before versions (or
@@ -320,9 +329,7 @@ start_update() {
       say "which converts $CHECKOUT_SET_ASIDE at a quiet moment: it keeps it as $VERSIONS/legacy-<its commit>, and $DIR becomes a link to the new version"
     return 0
   fi
-  [ "$UNATTENDED" = 0 ] || exec "$command" update --from "$FROM" --yes
-  has_terminal && exec "$command" update --from "$FROM" </dev/tty
-  exec "$command" update --from "$FROM" # no terminal to ask on: it shows the plan
+  exec_update "$command" --from "$FROM"
 }
 
 # Whether bosun init has set the install at $DIR up: its install.sh links ~/.local/bin/bosun to it, as its

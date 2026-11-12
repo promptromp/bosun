@@ -27,6 +27,7 @@ import init_plan
 from init_plan import Facts, RepoUse
 
 
+CHANNEL_VARIABLE = "BOSUN_INIT_CHANNEL"  # what get.sh sets to main for BOSUN_BRANCH; init only reads it
 HISTORY_DAYS = 30
 COMMAND_TIMEOUT_SECONDS = 15
 USUAL_REPO_FOLDERS = ("Development", "dev", "code", "src", "projects", "work", "repos", "git")
@@ -229,7 +230,7 @@ def detect(config_dir: Path, now: datetime | None = None) -> Facts:
         bypass_accepted=claude_state.bypass_accepted(),
         ready_agents=ready_agents(),
         asked_harness=os.environ.get("BOSUN_HARNESS", ""),
-        asked_channel=os.environ.get("BOSUN_UPDATE_CHANNEL", ""),
+        asked_channel=os.environ.get(CHANNEL_VARIABLE, ""),
         connectors=connectors_found(claude_bin, home),
         agent_prompts=counts(agent_uses),
         has_battery="InternalBattery" in (output_of("pmset", "-g", "batt") or ""),

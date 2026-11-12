@@ -48,13 +48,14 @@ setup has no repo windows and gives the orchestrator no connectors, since nobody
 line says so: run `bosun init` to add them, or name them in a file with `bosun init --answers` (below).
 Run again, it keeps what your config says. `BOSUN_DIR`, `BOSUN_REPO` and `BOSUN_BRANCH` override where it
 goes and what it gets; on an install that is already there, the defaults are what it came from, and a
-`BOSUN_REPO` or `BOSUN_BRANCH` given then is kept for the updates after it.
+`BOSUN_REPO` given then is kept for the updates after it, and so is a `BOSUN_BRANCH` on the `main` channel (an install made with a branch is on it). On a releases install a branch given later is not followed until `BOSUN_UPDATE_CHANNEL="main"` is set.
 
 A new install gets the newest release (a tag `v<YYYY.MM.DD>`, as `bosun update` follows them). A repository that
 has no release yet gets the head of `main`, and `get.sh` says so. With `BOSUN_BRANCH` (after the pipe, as
 `BOSUN_HARNESS` above) it gets the head of that branch instead, and the install follows the branch, not the
 releases: `bosun init` writes `BOSUN_UPDATE_CHANNEL="main"` to `bosun.env` without asking, and `bosun update`
-goes on to the head of the branch. The channel is the one setting; `bosun init --answers` takes it as
+goes on to the head of the branch (the line it prints to run again after what bosun needs is there keeps `BOSUN_BRANCH`,
+as it keeps `BOSUN_HARNESS`). The channel is the one setting; `bosun init --answers` takes it as
 `update_channel` (`releases` or `main`).
 
 `bosun init` reads what this Mac already shows: the repos you use your agents in, the MCP servers and

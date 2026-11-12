@@ -67,6 +67,11 @@ TAG_LISTS = {
     "a peeled entry alone is no release": [("v2026.11.12^{}", A), ("v2026.11.05", B)],
     "tags that are not releases": [("v1", A), ("app-v1.0.0", B), ("v2026.11.12-rc1", C), ("2026.11.12", D)],
     "a longer number or date is no release": [("v2026.11.12.2.3", A), ("v20261.11.12", B), ("v2026.1.12", C)],
+    "a leading zero is the same number": [("v2026.11.12.02", A), ("v2026.11.12.2", B)],
+    "a leading zero is the same number, listed the other way": [("v2026.11.12.2", B), ("v2026.11.12.02", A)],
+    "a leading zero alone": [("v2026.11.12.02", A)],
+    ".01 is not a release": [("v2026.11.12", A), ("v2026.11.12.01", B)],
+    ".010 is above .9": [("v2026.11.12.9", A), ("v2026.11.12.010", B)],
     "none": [],
 }
 
@@ -136,6 +141,11 @@ class NewestReleaseTwin(Source):
             "a peeled entry alone is no release": ("v2026.11.05", B),
             "tags that are not releases": None,
             "a longer number or date is no release": None,
+            "a leading zero is the same number": ("v2026.11.12.2", B),
+            "a leading zero is the same number, listed the other way": ("v2026.11.12.2", B),
+            "a leading zero alone": ("v2026.11.12.02", A),
+            ".01 is not a release": ("v2026.11.12", A),
+            ".010 is above .9": ("v2026.11.12.010", B),
             "none": None,
         }
         for name, answer in expected.items():

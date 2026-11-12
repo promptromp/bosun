@@ -104,7 +104,7 @@ class Facts:
     bypass_accepted: bool = False
     ready_agents: tuple[str, ...] = ()  # installed and logged in
     asked_harness: str = ""  # BOSUN_HARNESS in the environment: curl ... | BOSUN_HARNESS=codex sh
-    asked_channel: str = ""  # BOSUN_UPDATE_CHANNEL in the environment: get.sh sets it for BOSUN_BRANCH
+    asked_channel: str = ""  # BOSUN_INIT_CHANNEL in the environment: get.sh sets it for BOSUN_BRANCH
     connectors: tuple[str, ...] = ()  # the MCP servers `claude mcp list` shows; none if it failed
     agent_prompts: Mapping[str, int] = field(default_factory=dict)  # per agent, over the history
     has_battery: bool = False

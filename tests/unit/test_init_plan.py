@@ -644,7 +644,7 @@ class PlanTest(unittest.TestCase):
         self.assertIn('BOSUN_UPDATE_CHANNEL="releases"\n', init_plan.render_env(Answers()))
 
     def test_an_install_that_asked_for_a_branch_follows_it(self) -> None:
-        """get.sh hands BOSUN_UPDATE_CHANNEL=main to init when BOSUN_BRANCH was given: the answer is taken
+        """get.sh hands BOSUN_INIT_CHANNEL=main to init when BOSUN_BRANCH was given: the answer is taken
         from the environment, with no question."""
         answers = init_plan.recommend(facts(asked_channel="main"))
         self.assertEqual(answers.update_channel, "main")
