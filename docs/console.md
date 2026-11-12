@@ -111,8 +111,8 @@ time to merge, reviews given per week and time to my first review, agent busy ho
 touch time (leverage, week by week and before the start against since where transcripts from before
 exist), what learning has produced (runs, findings that came back, proposals, the knowledge base's
 growth), cost per week and per merged PR, and where agent time went per window, with the PRs behind
-each week as links. Codex windows are not counted yet
-([what they lack](design/harnesses.md#what-codex-windows-do-not-have-yet)), so with them leverage and cost
+each week as links. Codex and `agy` windows are not counted yet
+([what they lack](design/harnesses.md#what-windows-do-not-have-yet)), so with them leverage and cost
 come out low. Estimates (my touch time: `BOSUN_IMPACT_PROMPT_MINUTES` per
 prompt I typed; cost at list prices) carry an "estimate" badge and a range, every number says how
 many weeks it rests on, and fewer than four weeks since the start is marked early data. Other people

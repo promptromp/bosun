@@ -4,7 +4,7 @@ bosun runs repo windows on Claude Code or Codex. This adds Google's Antigravity 
 first makes adding an agent what [Agents](harnesses.md) says it is: a module per agent, with no agent's name
 in shared code. Status: approved, 2026-11-10. Part 1 built (#36, plan `docs/plans/agent-profiles.md`). Part 2
 amended after a run of the real `agy` in the macOS VM (2026-11-11), and approved the same day; plan
-`docs/plans/antigravity.md`.
+`docs/plans/antigravity.md`. Part 2 built and merged as a preview; its live run on the real `agy` is still to pass.
 
 ## Why
 
@@ -128,7 +128,8 @@ sandbox.
   - The marker: `--log-file <bosun's log folder>/agy-<window>.log` among the flags before the first prompt,
     which `ps` shows and which keeps `agy` from adding a log of its own under `~/.gemini` at every start; bosun
     finds its own `agy` processes by it, and by nothing in a process's environment, which macOS 27.2 keeps from
-    `ps` even for a user's own processes. `BOSUN_WINDOW=<window>` is in `agy`'s environment too, which reaches
+    `ps` even for a user's own processes. The log file's name alone identifies a window, so a person's own `agy`
+    run given bosun's log-file name would read as that window. `BOSUN_WINDOW=<window>` is in `agy`'s environment too, which reaches
     every hook (`agy` passes its environment through): that is for the hooks, never read from the process. The
     launch writes the window's tmux pane and server socket into the window's status file.
   - Model and effort: `agy models` lists names with the effort in them (`gemini-3.8-flash-low`). bosun passes

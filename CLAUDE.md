@@ -146,8 +146,8 @@ of truth, so don't copy rules into this file.
   reads caught up with the journal, `knowledge.load` being the one reader, which the console calls with the identifiers, forgotten records and key left out; `kg validate`). Quotes of my words are checked
   with `lib/approvals.py`'s genuine-prompt test. `tools/survey_to_kg.py` converts a survey into an
   import file; the fixture knowledge base is `tests/fixtures/knowledge/acme-import.jsonl`.
-- Agents (design: `docs/design/harnesses.md`): an adapter per agent, `lib/claude_state.py` and
-  `lib/codex_state.py`, each a module with the functions of `Agent` in `lib/agent_state.py`, whose `AGENTS`
+- Agents (design: `docs/design/harnesses.md`): an adapter per agent, `lib/claude_state.py`,
+  `lib/codex_state.py` and `lib/agy_state.py`, each a module with the functions of `Agent` in `lib/agent_state.py`, whose `AGENTS`
   table is the one place that lists them (each module's `PROFILE`, a `Profile` in `lib/agent_files.py`, says
   what it is and can do; `lib/agent_state.py profiles` prints them for the shell) and whose `record` the
   watchdog, ledger and events use. They share `lib/agent_files.py`, and neither imports the other.
@@ -158,6 +158,11 @@ of truth, so don't copy rules into this file.
   its profile's `turn_end` (`codex-turn-end` is its alias for Codex windows started before, whose launch
   command outlives the bosun that wrote it); each agent's profile has a `Screen` (its readers for its input
   box, questions and rejected pastes, with `lib/screen_text.py`'s helpers), which `lib/pane_input.py` asks.
+  An agent with hooks of its own (`agy`) names them in its profile: `bosun hook agent --harness <agent> --event
+  <event>` runs them, and always exits 0, since the agent takes another exit as a refusal of its tool; an
+  agent that needs a one-time step (`agy`'s plugin, from `agents/agy-plugin/`) has `Profile.setup`, made by
+  `bosun launch` and recorded in `lib/agent_changes.py`, and `Profile.update_args`, its update, run by `bosun
+  morning`. `lib/connectors_agy.py` refuses a window instead of limiting it.
 - Console (`bosun console`, design: `docs/design/console.md`): `lib/console_server.py` (the
   HTTP server and its request checks: bind address, Host, token cookie, static allowlist,
   headers), `lib/console_data.py` (ledger snapshots, `/api/version`, what the views share),
@@ -282,6 +287,9 @@ of truth, so don't copy rules into this file.
   its module or profile, and `tests/unit/test_agent_names.py` fails on it.
 - **A Codex fact changes** (after a Codex update): `lib/codex_state.py`, the note at its top,
   `tests/sandbox/codex-stand-in` so the stand-in does it too, and `docs/design/harnesses.md`.
+- **An agy fact changes** (after an `agy` update or a live run): `lib/agy_state.py`, its docstring,
+  `tests/sandbox/agy-stand-in` so the stand-in does it too, `tests/fixtures/agy/` (the recorded hook payloads,
+  screens and listings) and `docs/design/antigravity.md`.
 - **A file bosun writes in its state or config folder, or anything it leaves elsewhere:** a row in `STATE_FILES`
   or `CONFIG_FILES` (`lib/uninstall_plan.py`), or a step there, or uninstall leaves it behind. The smoke suite
   fails on a file in the state folder that the table does not list. A change in an agent's own files goes on

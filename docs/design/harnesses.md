@@ -1,17 +1,18 @@
-# Agents: Claude Code and Codex
+# Agents: Claude Code, Codex and Antigravity
 
 bosun runs coding agents in tmux windows and needs to know a few things about each: how to start and
 resume it, whether it is busy, whether it can take a message, what it is allowed to do. An agent is called
-a *harness* in the code. There are two today.
+a *harness* in the code. There are three today; Antigravity (`agy`) is a preview, built and tested against a
+stand-in but with its live run on the real `agy` still to pass ([its design note](antigravity.md)).
 
-| | Claude Code | Codex |
-|---|---|---|
-| Repo sessions | Yes | Yes |
-| The orchestrator | Yes | Not yet: it stands on Claude Code's hooks, plugins and permission settings |
-| Chosen by | The default | `BOSUN_HARNESS=codex`, or `harness: codex` on a window in `sessions.yml` |
-| Unattended flags | `BOSUN_CLAUDE_FLAGS`: `--permission-mode auto --chrome` | `BOSUN_CODEX_FLAGS`: `--no-daemon --approve-for-me` |
-| Model | `BOSUN_MODEL`, or the window's `model:` | `BOSUN_CODEX_MODEL` (empty: Codex's own default), or the window's `model:` |
-| Its files, read through | `lib/claude_state.py` | `lib/codex_state.py` |
+| | Claude Code | Codex | Antigravity (`agy`) |
+|---|---|---|---|
+| Repo sessions | Yes | Yes | Yes (preview) |
+| The orchestrator | Yes | Not yet: it stands on Claude Code's hooks, plugins and permission settings | No: `agy` takes plugins, rules and hooks only globally, and has no system prompt flag |
+| Chosen by | The default | `BOSUN_HARNESS=codex`, or `harness: codex` on a window in `sessions.yml` | `BOSUN_HARNESS=agy`, or `harness: agy` |
+| Unattended flags | `BOSUN_CLAUDE_FLAGS`: `--permission-mode auto --chrome` | `BOSUN_CODEX_FLAGS`: `--no-daemon --approve-for-me` | `auto` mode, from `--settings` for that session; `BOSUN_AGY_FLAGS` adds flags |
+| Model | `BOSUN_MODEL`, or the window's `model:` | `BOSUN_CODEX_MODEL` (empty: Codex's own default), or the window's `model:` | `BOSUN_AGY_MODEL` (empty: `agy`'s own default), or the window's `model:` |
+| Its files, read through | `lib/claude_state.py` | `lib/codex_state.py` | `lib/agy_state.py` |
 
 A setup can mix them window by window.
 
@@ -23,7 +24,7 @@ Shared code never asks which agent it has. Each layer has one place per agent, a
 |---|---|---|
 | Checking a machine | `lib/preflight.sh`, the flow | `lib/harnesses/<harness>.sh`, a profile |
 | Starting a window | `libexec/bosun-launch`, the flow: resolve the session, refuse a second copy, start or resume | `lib/launch/<harness>.sh`: `build_agent_args`, `first_prompt`, `run_new`, `run_resumed` |
-| A running session | `lib/agent_state.py`: the `Agent` interface and the `AGENTS` table. `lib/agents.sh` is its shell side | `lib/claude_state.py`, `lib/codex_state.py`, each a module with `Agent`'s functions (`mypy` checks they match) |
+| A running session | `lib/agent_state.py`: the `Agent` interface and the `AGENTS` table. `lib/agents.sh` is its shell side | `lib/claude_state.py`, `lib/codex_state.py`, `lib/agy_state.py`, each a module with `Agent`'s functions (`mypy` checks they match) |
 | What an agent is and can do | `lib/agent_state.py profiles` prints one tab-separated line per agent, which `lib/agents.sh` reads (`profile_field`, `known_harnesses`, `agent_bin_env`, `harness_bin`, `harness_default_model`) | A `Profile` in each adapter (`PROFILE`, `lib/agent_files.py`): its config keys, whether its name for a session comes from the agent, which statuses it reports, Remote Control, autocompact, per-task subagents, its state files, and how `bosun init` shows it |
 | Reading a screen | `lib/pane_input.py` asks the `AGENTS` table; `lib/screen_text.py` has the helpers readers share | A `Screen` in its profile: `typed`, `question`, `rejected` (`lib/agent_files.py`) |
 | Holding a window to its connectors | `lib/connectors.py`: reading a list, the report's helpers, and `doctor`, which imports the module the window's profile names | `lib/connectors_<harness>.py`, named by `Profile.connectors`: `main` (its launch command line) and `doctor_line` |
@@ -31,12 +32,12 @@ Shared code never asks which agent it has. Each layer has one place per agent, a
 
 `window_specs` is the one source of which agent a window runs: `window_harness` and `harnesses_in_use` read it.
 
-`bosun launch` refuses an agent that has no profile (`no agent '<h>': bosun knows claude, codex`). Delegation
+`bosun launch` refuses an agent that has no profile (`no agent '<h>': bosun knows claude, codex, agy`). Delegation
 asks the profile whether a window can take a per-task subagent, and `bosun init`'s agent question and plan
 take each agent's name, preview and notes from its profile.
 
 A running agent's record has the fields of Claude Code's running-session record, plus `harness`, so what goes
-by a window's status (`send`, `sessions`, check-ins, the watchdog) works for both without knowing which it
+by a window's status (`send`, `sessions`, check-ins, the watchdog) works for every agent without knowing which it
 has. Adapters share `lib/agent_files.py`, and neither imports the other.
 
 What only one agent has stays out of the interface and is called by name: Claude Code's login checks
@@ -111,22 +112,25 @@ session files of its own, marked as such.
 does not record the question, and Enter would answer it. So `bosun send` reads the screen first and refuses
 (`lib/pane_input.py`). With the default flags Codex does not ask, so this is a guard, not a usual path.
 
-## What Codex windows do not have yet
+## What windows do not have yet
 
-| Feature | On Codex |
-|---|---|
-| The orchestrator | Claude Code only, and it must be installed. `BOSUN_ORCHESTRATOR=""` runs windows with no orchestrator and stops preflight asking for it, but `bosun init`, `install.sh` and `bosun doctor` still require the `claude` command |
-| Remote Control from your phone | No such thing: drive the window from a terminal |
-| A revoked login | Not reported. `codex login status` only says a key is there, and a failed request shows on the screen but not in the session file |
-| What you said in a window | Recorded when the turn ends, not when you press Return, because that is when Codex reports it |
-| The watchdog's `waiting`, `spend-limit` and `context-size` | `waiting` never fires, whatever the flags: the session file records only idle or busy, so a question reads as busy. Only `bosun send` reads a question, from the screen (above). The other two read Claude Code's transcripts |
-| Impact stats and daily learning | Read Claude Code's transcripts, so Codex sessions are not counted. `lib/learn_digest.py`'s `Harness` protocol is where an adapter goes |
-| Autocompact | Claude Code only: `BOSUN_AUTOCOMPACT_TOKENS` and `autocompact:` do nothing on a Codex window |
-| `shell`, `idle-bg` and the watchdog's `long-shell` | Codex's session file records only idle or busy, so a background command left running does not show |
-| Per-task model and effort on a running session | A task's settings reach a running Claude Code session through a subagent, an instruction that names its Agent tool. A running Codex session gets the task at its own settings. A window opened for the task (`--new`) does start at them |
-| `bosun resolve` | Claude Code's names only. A Codex window's are in `codex-sessions.json` |
-| Compact-context and signal hooks | Claude Code only. Codex has hooks, but each new one stops at a review screen until a person accepts it, which is why bosun uses `notify=` |
-| A real GitHub login inside a session | Not tested: the runs so far used a stand-in `gh`. A real one is expected to go through the reviewer, since the sandbox blocks the Keychain |
+What a Claude Code window has and the others lack. The `agy` column is a preview's: what the build found,
+with the facts and their reasons in [the design note](antigravity.md#part-2-agy-windows).
+
+| Feature | On Codex | On `agy` |
+|---|---|---|
+| The orchestrator | Claude Code only, and it must be installed. `BOSUN_ORCHESTRATOR=""` runs windows with no orchestrator and stops preflight asking for it, but `bosun init`, `install.sh` and `bosun doctor` still require the `claude` command | Claude Code only, and the headless jobs (login check, learning, the Slack watcher) stay on it too |
+| Remote Control from your phone | No such thing: drive the window from a terminal | Asked for with `--remote-control`; the live run has not shown it yet |
+| A revoked login | Not reported. `codex login status` only says a key is there, and a failed request shows on the screen but not in the session file | Not reported: bosun checks that the Keychain item exists, with no model call |
+| What you said in a window | Recorded when the turn ends, not when you press Return, because that is when Codex reports it | Recorded at the first `PreInvocation` that carries a new `lastUserInput`, so when the turn starts |
+| The watchdog's `waiting`, `spend-limit` and `context-size` | `waiting` never fires, whatever the flags: the session file records only idle or busy, so a question reads as busy. Only `bosun send` reads a question, from the screen (above). The other two read Claude Code's transcripts | `waiting` fires from `agy`'s dialogs, read from the screen while a window is busy. `spend-limit` and `context-size` read Claude Code's transcripts, so not for `agy` |
+| Impact stats and daily learning | Read Claude Code's transcripts, so Codex sessions are not counted. `lib/learn_digest.py`'s `Harness` protocol is where an adapter goes | Not counted: `agy`'s transcript store is undocumented |
+| Autocompact | Claude Code only: `BOSUN_AUTOCOMPACT_TOKENS` and `autocompact:` do nothing on a Codex window | None: `BOSUN_AUTOCOMPACT_TOKENS` and `autocompact:` do nothing |
+| `shell`, `idle-bg` and the watchdog's `long-shell` | Codex's session file records only idle or busy, so a background command left running does not show | `shell` shows at a `Stop` with `fullyIdle` false (a background command still runs) |
+| Per-task model and effort on a running session | A task's settings reach a running Claude Code session through a subagent, an instruction that names its Agent tool. A running Codex session gets the task at its own settings. A window opened for the task (`--new`) does start at them | No subagent: the task runs at the window's settings; `--new` starts at the task's |
+| `bosun resolve` | Claude Code's names only. A Codex window's are in `codex-sessions.json` | Names are in `agy-sessions.json` |
+| Compact-context and signal hooks | Claude Code only. Codex has hooks, but each new one stops at a review screen until a person accepts it, which is why bosun uses `notify=` | bosun's plugin carries `agy`'s own hooks (status, what you said); no compact-context or signal hooks, and no hook when a window exits |
+| A real GitHub login inside a session | Not tested: the runs so far used a stand-in `gh`. A real one is expected to go through the reviewer, since the sandbox blocks the Keychain | bosun's plugin lets allow-listed `git`, `gh` and `bosun` commands past `agy`'s sandbox, in bosun windows only. Repo git hooks do not run in an `agy` window. Not yet run with a real login |
 
 ## Adding another
 

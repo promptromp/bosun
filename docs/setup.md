@@ -15,6 +15,8 @@ Requirements, installation and configuration, and the morning's logins.
 - Optional, to run repo sessions on it: [Codex](https://developers.openai.com/codex/cli) 0.166.0 or newer
   (`brew install codex`), logged in (`codex login`). See
   [Running repo sessions on Codex](#running-repo-sessions-on-codex)
+- Optional, a preview: Google's Antigravity CLI (`agy`) 1.5.5 or newer, signed in. See
+  [Running repo sessions on Antigravity](#running-repo-sessions-on-antigravity-a-preview)
 
 You do not have to check these yourself. `bosun preflight` does, changes nothing, and lists everything
 missing at once, with what to do about each. `bosun init` and `bosun doctor` start with the same check.
@@ -93,7 +95,7 @@ installed. The usual ones:
 | `run bosun as yourself, not as root` | You ran it with `sudo`, which would leave root's files in your folders | Run it without `sudo`: it asks for `sudo` itself, once, for the wake schedule |
 | `another bosun start or refresh is setting up the windows` | Two runs at once, such as the morning job and one you typed; one sets the windows up while the other waits, up to 3 minutes | Nothing, usually: the first one does the work. Run it again if you need to |
 | `... and this runs inside it` (`start --restart`, `update`) | You ran it in one of bosun's own windows, which it would stop or wait on | Run it from another terminal. `bosun stop` works from inside: it stops its own window last |
-| `its agent, ..., is not installed for this window's shell` in a window | The window's shell cannot find Claude Code or Codex, so the window stays a plain shell; you also get an alert | Install it, or name its path in `bosun.env` (`BOSUN_CLAUDE_BIN`, `BOSUN_CODEX_BIN`) |
+| `its agent, ..., is not installed for this window's shell` in a window | The window's shell cannot find its agent (Claude Code, Codex or `agy`), so the window stays a plain shell; you also get an alert | Install it, or name its path in `bosun.env` (`BOSUN_CLAUDE_BIN`, `BOSUN_CODEX_BIN`, `BOSUN_AGY_BIN`) |
 
 If none of these fit, open an issue with what `bosun preflight` and `bosun doctor` print:
 <https://github.com/promptromp/bosun/issues>.
@@ -257,7 +259,8 @@ as it was.
 | Your windows | Stopped, so any work in them stops. It says which are running first, and waits up to 15 seconds for what they started to end, so their last hooks finish first; what still runs then it names and leaves running, such as a background command a Codex window started |
 | The launchd jobs (morning, watchdog, learning) | Unloaded and deleted, before the windows stop, so the watchdog cannot bring them back |
 | The repeating wake | Cancelled with `sudo pmset repeat cancel`, if it is the one bosun set. `pmset` can only cancel every repeating event at once, so another event, or a wake at another time, stays and it says so |
-| Folder trust | Taken back for the folders bosun marked, in Claude Code and Codex. A folder you had accepted yourself stays trusted. It goes by bosun's record of what it changed (`agent-changes.json`), kept since `bosun uninstall` was added; trust or notes from an install before that are not on it and stay |
+| Folder trust | Taken back for the folders bosun marked, in Claude Code and Codex (`agy` windows pass their folder at each start and mark nothing). A folder you had accepted yourself stays trusted. It goes by bosun's record of what it changed (`agent-changes.json`), kept since `bosun uninstall` was added; trust or notes from an install before that are not on it and stay |
+| The plugin bosun installed into `agy`, if an `agy` window ever started | Uninstalled with `agy plugin uninstall`, with what that leaves behind (`plugin_data/bosun/`), by bosun's record of having installed it. Your own `agy` setup is not touched |
 | Memory notes from [`bosun learn`](learning.md#learning) | Deleted, with their line in `MEMORY.md`. Your own notes stay |
 | `~/.local/bin/bosun` and bosun's working files | Deleted |
 | What `get.sh` installed: `~/.local/share/bosun-versions` (its `bosun.git` and every version), the checkout from before versions kept there, and the link `~/.local/share/bosun` | Deleted, last. Each folder is checked as a checkout is, and anything of yours in any of them keeps them all, link included: changes, a stash, commits not pushed, a worktree elsewhere, a file git ignores. Versions you made yourself, without the installer's mark on `bosun.git`, stay |
@@ -268,7 +271,7 @@ as it was.
 | Anything else in those folders | Stays, and it names it. It only deletes what it knows is bosun's, and if you pointed `BOSUN_STATE_DIR` or `BOSUN_LOG_DIR` at a folder that also holds other files, it leaves that folder whole |
 
 `/bosun:chores` and bosun's hooks need no removing: bosun passes them to each window it starts, so neither
-Claude Code nor Codex has them installed. Your repos, branches and pull requests are not touched, nor are
+Claude Code nor Codex has them installed. (`agy` takes plugins only by installing them: see below.) Your repos, branches and pull requests are not touched, nor are
 your conversations.
 
 Install again with the same line, and bosun picks up what you kept. `replica.json`, this Mac's id in
@@ -564,7 +567,49 @@ these flags add (a `--profile`, a `-c mcp_servers...`) stay on: add servers in `
 
 **What differs from a Claude Code window**, among them no Remote Control from your phone, a revoked login
 that is not reported, and no Impact stats or learning yet:
-[what Codex windows do not have yet](design/harnesses.md#what-codex-windows-do-not-have-yet).
+[what windows do not have yet](design/harnesses.md#what-windows-do-not-have-yet).
+
+## Running repo sessions on Antigravity (a preview)
+
+Google's Antigravity CLI (`agy`) can run repo sessions, as Codex can. The orchestrator stays on Claude Code.
+This is a preview. The windows are built and tested against a stand-in, in the smoke suite and in the Docker
+sandbox, but the live run on the real `agy` (`tests/sandbox.sh mac live agy`, which needs a person to sign in
+to `agy` inside the throwaway VM) has not passed yet. Expect rough edges, and read the risk below first.
+
+Set it up once:
+
+1. Install `agy` with Google's installer, `curl -fsSL https://antigravity.google/cli/install.sh | bash`. It
+   puts `agy` in `~/.local/bin` and does not add that folder to your PATH, so do that yourself.
+2. Sign in in the desktop session, not over ssh: `agy` reads its login from the Keychain only there.
+3. Run `agy` once and go through its first-run screens, then leave it.
+4. Choose it for the windows you want: `harness: agy` on a window in `sessions.yml`, or `BOSUN_HARNESS=agy`
+   for all of them (or `BOSUN_HARNESS=agy` after the pipe of the install line, as for Codex).
+   `bosun preflight` and `bosun doctor` check the version, the login and the first-run screens.
+
+What an `agy` window does:
+
+- It runs in `agy`'s `auto` mode, set for that session only, with the repo folder passed as trusted at each
+  start. bosun never saves a setting in `agy`. `BOSUN_AGY_FLAGS`, `BOSUN_AGY_MODEL` and `BOSUN_AGY_BIN` are the
+  keys, like Codex's.
+- When the first `agy` window starts, bosun installs a small plugin of its own into `agy`. It is recorded, and
+  `bosun uninstall` takes it back. In a bosun window the plugin lets exactly allow-listed `git`, `gh` and
+  `bosun` commands run past `agy`'s sandbox, so that pushes and `gh` work; every other command is left to
+  `agy`. In your own `agy` sessions the plugin does nothing.
+- Repo git hooks do not run in an `agy` window: an approved commit would otherwise run the repo's own hook
+  code outside the sandbox. Pre-commit-style checks therefore run in CI only.
+- Its status comes from `agy`'s hooks and, while a window is busy, from its screen (Esc, and `agy`'s dialogs).
+- A window is refused, saying so, when `agy` would start an MCP server that its connectors list does not
+  name ([Connectors](#connectors-what-each-window-may-reach)). A repo window with no connectors starts only
+  if `agy` has no MCP servers set up at all, the Antigravity app's included. `bosun doctor` names the servers
+  that block a window.
+- `bosun morning` updates `agy` once before the windows start, and `bosun refresh` restarts an idle window
+  that runs an older version.
+
+**What it goes without:** transcript features (Impact stats and learning), autocompact, per-task subagents,
+and a hook when a window exits; see [what windows go without](design/harnesses.md#what-windows-do-not-have-yet).
+
+**The risk.** Google has said nothing about another program driving `agy` unattended, and a forum thread
+appeals an `agy` account suspended under its terms. Use an account you can afford to lose access to.
 
 ## Claude Code login
 
