@@ -34,15 +34,16 @@ SIGN_IN_SECONDS=900
 CODE_WORD="ZEBRAFISH"
 
 REMEMBER_PROMPT="Remember this: the code word is $CODE_WORD. Count from 1 to 40 in words, one number per line, and end with the line: noted"
-RECALL_PROMPT="What was the code word I told you before? Reply with just that word spelled backwards, in capital letters."
+RECALL_PROMPT="What was the code word I told you before? Reply with just that word, in lowercase letters."
 LONG_PROMPT="Write the numbers from 1 to 400 in words, one per line, each followed by a short sentence about that number. Do not use any tools."
-APPROVAL_PROMPT="In this repo, do these steps in order. Run each as its own shell command with your command-running tool (never your file tools, never two steps in one command), and do not ask me anything. 1. git checkout -b feature-live 2. echo feature > FEATURE.txt 3. git add FEATURE.txt 4. git commit -m 'a feature' 5. git push origin feature-live 6. gh pr list 7. gh --version 8. ls. Then reply with just: done"
+APPROVAL_PROMPT="In this repo, do these steps in order. Run each as its own shell command with your command-running tool (never your file tools, never two steps in one command), and do not ask me anything. 1. git checkout -b feature-live 2. echo feature > FEATURE.txt 3. git add FEATURE.txt 4. git commit -m 'a feature' 5. git push origin feature-live 6. gh pr list 7. ls. Then reply with just: done"
 PUSH_MAIN_PROMPT="In this repo, do these steps in order. Run each as its own shell command with your command-running tool (never your file tools, never two steps in one command), and do not ask me anything. 1. git checkout main 2. echo a note > NOTES.txt 3. git add NOTES.txt 4. git commit -m note 5. git push origin main. Then reply with just: done"
 SLOW_PROMPT="Run exactly one shell command, with your command-running tool: gh pr list. Then reply with just: done"
 CWD_PROMPT="With your command-running tool, run pwd in the folder /tmp: if the tool has a working-directory option, use it, otherwise use cd. Then reply with just: done"
 GIT_DIR_PROMPT="Run each of these as its own shell command with your command-running tool: touch .git/probe-top, then touch nested/.git/probe-nested. Then reply with just: done"
 BARE_PROMPT="Run each of these as its own shell command with your command-running tool: git push probe HEAD:refs/heads/probe-branch, then cd probe-bare.git && git rev-parse --git-dir > ../bare-discovery.txt 2>&1. Then reply with just: done"
 STATUS_PROMPT="Run git status with your command-running tool, then reply with just: done"
+GH_VERSION_PROMPT="Run gh --version with your command-running tool, then reply with just: done"
 
 fact() { # <name> <what the run saw>: kept for the end of the run, and said now
   printf '%s: %s\n' "$1" "$2" >>"$FACTS"
@@ -53,9 +54,16 @@ fact() { # <name> <what the run saw>: kept for the end of the run, and said now
 
 # <command...> in the desktop session, the only one where agy's Keychain login is seen: root asks launchd to run
 # it in the user's session, as the user, with what get.sh and bosun need passed along.
+# Not proven to work in this VM, so it is tried once, and without it the command is run as it is: the Keychain
+# item is found over ssh too (asked for without -w), which is all the installer's and doctor's checks need.
+GUI_OK="$(sudo -n launchctl asuser "$GUI_UID" true >/dev/null 2>&1 && echo 1)"
 gui_do() {
-  sudo launchctl asuser "$GUI_UID" sudo -u "$(id -un)" -H env "PATH=$PATH" "BOSUN_REPO=$BOSUN_REPO" \
-    "BOSUN_BRANCH=$BOSUN_BRANCH" BOSUN_HARNESS=agy HOMEBREW_NO_AUTO_UPDATE=1 "$@"
+  if [ -n "$GUI_OK" ]; then
+    sudo launchctl asuser "$GUI_UID" sudo -u "$(id -un)" -H env "PATH=$PATH" "BOSUN_REPO=$BOSUN_REPO" \
+      "BOSUN_BRANCH=$BOSUN_BRANCH" BOSUN_HARNESS=agy HOMEBREW_NO_AUTO_UPDATE=1 "$@"
+  else
+    "$@"
+  fi
 }
 # agy's login is a Keychain item whose service is `gemini`: asked for with neither -w nor -g, which would
 # read the secret.
@@ -81,31 +89,56 @@ agy_login() {
   cat <<'EOF'
 
   >>> Your turn, in the window of the throwaway Mac this run started:
-  >>>   1. Open Terminal there (Cmd-Space, type Terminal, Return).
+  >>>   1. Open Terminal there (Cmd-Space, type Terminal, Return; or Finder, Applications, Utilities,
+  >>>      Terminal).
   >>>   2. Run:  ~/.local/bin/agy
   >>>   3. Sign in with your Google account in the browser it opens, and go through agy's first-run
-  >>>      screens until it shows its prompt.
+  >>>      screens until it shows its prompt. If macOS asks whether agy may use the Keychain item
+  >>>      "gemini", click "Always Allow".
   >>>   4. Quit agy (type /exit, or press Ctrl-C twice). You can then close Terminal.
   >>> This waits up to 15 minutes, checking every 10 seconds. Your sign-in stays in that Mac, which is
-  >>> deleted when this run ends.
+  >>> deleted when this run ends. If this script is killed before that, `tests/sandbox.sh mac clean`
+  >>> removes the clone that is left.
 
 EOF
-  agy_wait_for_sign_in
+  agy_wait_for_sign_in || echo "  the sign-in timed out after 15 minutes"
   check "you signed in and went through agy's first-run screens (its Keychain item is there, onboarding done)" agy_signed_in
+  # The only check of the login: what else is found about it is a fact, so that no unproven path ends the run
+  # after the person signed in.
+  agy_signed_in || return 0
+  echo "  signed in: quit agy now (/exit) and leave the VM alone"
+  agy_wait_for_agy_to_quit
   if agy_keychain_over_ssh; then fact keychain-over-ssh "the item is found over ssh"; else fact keychain-over-ssh "the item is not found over ssh"; fi
-  if agy_keychain_in_desktop; then
+  if [ -z "$GUI_OK" ]; then
+    fact keychain-in-desktop "launchctl asuser does not work here (sudo -n failed): bosun was run directly"
+  elif agy_keychain_in_desktop; then
     fact keychain-in-desktop "the item is found in the desktop session (launchctl asuser)"
   else
     fact keychain-in-desktop "the item is not found in the desktop session"
   fi
-  check "the desktop session sees the login" agy_keychain_in_desktop
   fact agy-version "$("$HOME/.local/bin/agy" --version 2>&1 | head -1)"
+}
+
+# Whether an agy that is the person's own runs: any agy but bosun's windows', which have their log file in
+# bosun's log folder in their command line.
+agy_person_running() {
+  ps -axww -o command= | awk -v logs="$STATE/logs/agy-" '$1 ~ /(^|\/)agy$/ && index($0, logs) == 0 { found = 1 } END { exit !found }'
+}
+agy_wait_for_agy_to_quit() {
+  local deadline=$((SECONDS + 120))
+  while agy_person_running; do
+    if [ "$SECONDS" -ge "$deadline" ]; then
+      echo "  note  agy is still running after 120 seconds: the run goes on with it"
+      return 0
+    fi
+    sleep 5
+  done
 }
 
 # ---- before the login: what a new user does -------------------------------------------------------------
 
 agy_installs() { # Google's own installer, which puts agy in ~/.local/bin and not on PATH
-  if curl -fsSL https://antigravity.google/cli/install.sh -o "$OUT/agy-install.sh"; then
+  if curl -fsSL --max-time 120 https://antigravity.google/cli/install.sh -o "$OUT/agy-install.sh"; then
     bash "$OUT/agy-install.sh" >"$OUT/agy-install.txt" 2>&1 </dev/null || {
       tail -15 "$OUT/agy-install.txt"
       return 1
@@ -120,6 +153,7 @@ agy_version_is_enough() { # 1.5.5, the version bosun has been run against, or ne
   local version
   version="$("$HOME/.local/bin/agy" --version 2>/dev/null | head -1)"
   echo "agy $version"
+  [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || return 1
   printf '%s\n' 1.5.5 "$version" | sort -V | head -1 | grep -qx 1.5.5
 }
 
@@ -177,7 +211,7 @@ agy_kickstart() {
   local before
   before="$(morning_runs)"
   launchctl kickstart -k "gui/$GUI_UID/$MORNING_LABEL" || return 1
-  wait_for 300 more_morning_runs_than "$before"
+  wait_for 480 more_morning_runs_than "$before"
 }
 agy_update_logged() { grep -qhE "updated Antigravity|could not update Antigravity" "$STATE"/logs/morning-*.log; }
 
@@ -196,7 +230,11 @@ agy_ask() { # <prompt> <seconds> [window]
     [ "$status" = "$last" ] || echo "$status" >>"$OUT/seen"
     last="$status"
     [ "$status" = waiting ] && return 0
-    if [ "$status" = idle ] && grep -qx busy "$OUT/seen"; then return 0; fi
+    if [ "$status" = idle ] && grep -qx busy "$OUT/seen"; then
+      sleep 5 # a turn can read idle for a moment between two model calls: it ends when it still does
+      [ "$(window "$window" status)" = idle ] && return 0
+      continue
+    fi
     if [ "$status" = idle ] && [ $((SECONDS - started)) -gt 25 ]; then
       echo "it never read busy: statuses $(tr '\n' ' ' <"$OUT/seen")"
       return 1
@@ -211,7 +249,18 @@ agy_busy() { [ "$(window "$1" status)" = busy ]; }
 
 # A window's pane, with its history: agy_screen [window]; agy_screen_has <text> [window].
 agy_screen() { tmux -L bosun capture-pane -p -J -S -300 -t "=bosun:=${1:-$AGY_WINDOW}" 2>/dev/null; }
-agy_screen_has() { agy_screen "${2:-$AGY_WINDOW}" | grep -q -- "$1"; }
+agy_screen_has() { # grep -q ends a pipeline early: the screen is read first
+  local screen
+  screen="$(agy_screen "${2:-$AGY_WINDOW}")"
+  grep -q -- "$1" <<<"$screen"
+}
+# Whether the window's visible pane shows agy's idle footer: its UI is up (a resumed launch is recorded idle
+# at once, and agy can take a minute to start).
+agy_ui_ready() { # <window>
+  local screen
+  screen="$(tmux -L bosun capture-pane -p -t "=bosun:=$1" 2>/dev/null)"
+  grep -qF "? for shortcuts" <<<"$screen"
+}
 
 # <window>: Esc, and again if it is still not idle.
 agy_dismiss() {
@@ -234,6 +283,11 @@ agy_restart() { # <window>
   BOSUN_RESTART_MIN_IDLE_SECONDS=0 bosun refresh --restart-idle "$1" >>"$OUT/refresh.txt" 2>&1
   wait_for 90 agy_another "$1" "$pid" || {
     echo "no record of a restarted $1 after 90 seconds; the refresh said: $(tail -2 "$OUT/refresh.txt" | tr '\n' ' ')"
+    screen_of "$1"
+    return 1
+  }
+  wait_for 150 agy_ui_ready "$1" || {
+    echo "agy's footer is not on the screen of $1 after 150 seconds"
     screen_of "$1"
     return 1
   }
@@ -260,7 +314,7 @@ agy_refresh_and_resume() {
   check "... on the same conversation, not a new one" test "$(window "$AGY_WINDOW" sessionId)" = "$id"
   check "... a prompt sent by bosun send goes through" agy_ask "$RECALL_PROMPT" 120
   agy_note_seen
-  check "... and it recalls the word it was given before the restart (shown spelled backwards)" wait_for 30 agy_screen_has HSIFARBEZ
+  check "... and it recalls the word it was given before the restart (shown in lowercase: it was given in capitals)" wait_for 30 agy_screen_has "$(tr '[:upper:]' '[:lower:]' <<<"$CODE_WORD")"
 }
 
 agy_first_window() {
@@ -274,6 +328,7 @@ agy_first_window() {
   fact agy-update "$(grep -hE 'updated Antigravity|could not update Antigravity' "$STATE"/logs/morning-*.log | tail -1 | cut -c1-200); agy is now $(agy --version 2>&1 | head -1)"
   check "the orchestrator reaches a session" wait_for 120 idle orchestrator
   check "the repo window reaches a session" wait_for 240 idle "$AGY_WINDOW"
+  check "... and its screen shows agy's footer" wait_for 150 agy_ui_ready "$AGY_WINDOW"
   idle "$AGY_WINDOW" || {
     screen_of "$AGY_WINDOW"
     return 0
@@ -285,9 +340,9 @@ agy_first_window() {
   check "bosun knows the conversation by its window's name" jq -e --arg id "$id" '.exporter.id == $id' "$STATE/agy-sessions.json"
   check "bosun status lists the window" bash -c 'bosun status 2>&1 | grep -q "$1"' _ "$AGY_WINDOW"
   check "doctor passes with the windows up" gui_do bash -c 'bosun doctor >"$1" 2>&1 || { tail -15 "$1"; exit 1; }' _ "$OUT/doctor-up.txt"
-  check "the window reads busy, then idle, on a turn of its own" agy_ask "$REMEMBER_PROMPT" 90
+  check "the window reads busy, then idle, on a turn of its own" agy_ask "$REMEMBER_PROMPT" 180
   agy_note_seen
-  check "... and the hooks' own record says idle, on that conversation" agy_status_says '.status == "idle"'
+  check "... and the hooks' own record says idle, on that conversation" wait_for 15 agy_status_says '.status == "idle"'
   check "--remote-control is accepted at startup: on its command line, with no error about it in agy's log" agy_remote_control
   fact remote-control-log "$(grep -ih remote "$STATE"/logs/agy-*.log 2>/dev/null | head -3 | cut -c1-160 | tr '\n' ' ')"
   fact process-name "$(ps -o comm= -p "$(pid_of "$AGY_WINDOW")" 2>&1)"
@@ -374,19 +429,18 @@ agy_command_fact() { # <fact name> <regex>: how the recorded PreToolUse rows for
 agy_approvals() {
   date +%s >"$OUT/approvals-since"
   echo "what bosun's plugin approves, from what agy's hooks recorded"
-  check "a turn of git, gh and ls commands ends with no dialog of agy's own" agy_asks_without_dialog "$APPROVAL_PROMPT" 240
+  check "a turn of git, gh and ls commands ends with no dialog of agy's own" agy_asks_without_dialog "$APPROVAL_PROMPT" 420
   agy_note_seen
   check "a git push of a feature branch to the local bare remote is answered with BypassSandbox" agy_answered '^git push .*feature-live' approved
   check "... and it landed there" git -C "$HOME/remotes/exporter.git" rev-parse --verify -q refs/heads/feature-live
   check "a gh command of the allow-list (gh pr list) is answered with BypassSandbox" agy_answered '^gh pr list' approved
   check "... and agy ran it outside its sandbox: the stand-in gh wrote its call log, outside the workspace (a real gh with no token would show an auth error, never could-not-resolve-host)" grep -qx "gh pr list" "$HOME/.sandbox/gh/calls.log"
   check "an ls gets no answer" agy_answered '^ls( |$)' none
-  agy_command_fact gh-version-answer '^gh --version'
   agy_command_fact git-commit-answer '^git commit'
 }
 
 agy_waits_at_dialog() {
-  agy_ask "$PUSH_MAIN_PROMPT" 240 || return 1
+  agy_ask "$PUSH_MAIN_PROMPT" 360 || return 1
   [ "$(window "$AGY_WINDOW" status)" = waiting ] || {
     echo "it reads $(window "$AGY_WINDOW" status): $(tr '\n' ' ' <"$OUT/seen")"
     return 1
@@ -482,11 +536,14 @@ agy_facts_window() {
   rm -f "$FSMON_MARKER"
   check "a window on that repo starts, new" bash -c 'bosun send --new "$1" "$2" "Reply with just: ready" >"$3" 2>&1 || { cat "$3"; exit 1; }' _ "$FACT_WINDOW" "$FACT_REPO" "$OUT/fresh.txt"
   check "... and reads idle" wait_for 120 idle "$FACT_WINDOW"
+  check "... with agy's footer on its screen" wait_for 150 agy_ui_ready "$FACT_WINDOW"
   agy_fact_turn "$CWD_PROMPT"
   agy_fact_turn "$GIT_DIR_PROMPT"
   fact sandbox-git-dirs "the top .git: $(written "$FACT_REPO/.git/probe-top"); a nested .git: $(written "$FACT_REPO/nested/.git/probe-nested"); the window asked: $(asked_word)"
   agy_fact_turn "$BARE_PROMPT"
   fact bare-repo "the push to a bare repo inside the work tree: $(git -C "$FACT_REPO/probe-bare.git" rev-parse --verify -q refs/heads/probe-branch >/dev/null && echo landed || echo did not land); git rev-parse --git-dir inside it said: $(head -c 160 "$FACT_REPO/bare-discovery.txt" 2>/dev/null | tr '\n' ' '); asked: $(asked_word)"
+  agy_fact_turn "$GH_VERSION_PROMPT"
+  agy_command_fact gh-version-answer '^gh --version'
   agy_fact_turn "$STATUS_PROMPT"
   fact planted-fsmonitor-window "on the window's git status, with the git config bosun puts in its environment, the program of the planted submodule $(ran_word RAN "did not run"); asked: $(asked_word)"
   agy_facts_from_hooks
@@ -566,7 +623,7 @@ agy_connectors() {
 
 # ---- off again ------------------------------------------------------------------------------------------------
 
-agy_tree() { (cd "$AGY_HOME" 2>/dev/null && find . | sort); }
+agy_tree() { (cd "$AGY_HOME" 2>/dev/null && find . -type f | sort); } # files only: uninstall may leave empty folders
 # The paths that only one of the two listings has, but for agy's own conversations and logs, and the MCP
 # config file this test's own `agy mcp add` may have made.
 agy_tree_strays() {

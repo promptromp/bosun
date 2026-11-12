@@ -46,6 +46,9 @@ VM_PID=""
 ANTHROPIC_ITEM="${BOSUN_SANDBOX_ANTHROPIC_ITEM:-bosun-sandbox-anthropic}"
 OPENAI_ITEM="${BOSUN_SANDBOX_OPENAI_ITEM:-bosun-sandbox-openai}"
 KEY_SHAPE='s/sk-(ant|proj|svcacct|admin)-[A-Za-z0-9_*-]+/[KEY]/g'
+# Google's token shapes (agy's sign-in), and the query string of any URL, which a pairing link of agy's
+# Remote Control or a sign-in redirect would carry: masked in what comes back from the VM, as keys are.
+TOKEN_SHAPE='s/(ya29\.|1\/\/|AIza|GOCSPX-)[A-Za-z0-9_.\/-]+/[TOKEN]/g; s/(https?:\/\/[^ ?"<>]+)\?[^ "<>]*/\1?[QUERY]/g'
 
 cleanup() {
   [ -n "$VM_PID" ] && {
@@ -221,7 +224,7 @@ keys_into_vm() { # <agent>
 }
 
 in_vm_masked() { # <live.sh step> <agent> [model]
-  in_vm "$CLONE" "BOSUN_BRANCH=$TREE_BRANCH e2e/tests/sandbox/live.sh $*" </dev/null | sed -l -E "$KEY_SHAPE"
+  in_vm "$CLONE" "BOSUN_BRANCH=$TREE_BRANCH e2e/tests/sandbox/live.sh $*" </dev/null | sed -l -E -e "$KEY_SHAPE" -e "$TOKEN_SHAPE"
   return "${PIPESTATUS[0]}"
 }
 
@@ -243,8 +246,9 @@ live() { # [claude|codex|agy]
   fi
   copy_checkout
   in_vm_masked prepare "$agent" || die "preparing it failed"
-  [ "$agent" = "agy" ] && { in_vm_masked login agy || die "the sign-in to Antigravity did not finish"; }
+  # The keys first: a failure of theirs, or a Keychain prompt on this Mac, never comes after the sign-in.
   keys_into_vm "$agent"
+  [ "$agent" = "agy" ] && { in_vm_masked login agy || die "the sign-in to Antigravity did not finish"; }
   in_vm_masked go "$agent" "${BOSUN_SANDBOX_CODEX_MODEL:-}"
 }
 
