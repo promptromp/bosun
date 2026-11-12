@@ -629,6 +629,11 @@ class TestConfigAdded(unittest.TestCase):
             {"BOSUN_ORCHESTRATOR_CONNECTORS": "all"},
         )
 
+    def test_an_older_install_keeps_following_main(self) -> None:
+        self.assertEqual(migrations.kept_values(("BOSUN_UPDATE_CHANNEL",)), {"BOSUN_UPDATE_CHANNEL": "main"})
+        text = (Path(__file__).resolve().parents[2] / "lib" / "common.sh").read_text()
+        self.assertIn('\n  BOSUN_UPDATE_CHANNEL="releases"\n', text)  # a new install follows the releases
+
 
 class TestValidateUnlocked(MigrationTest):
     def test_validate_unlocked_runs_under_a_held_lock(self) -> None:

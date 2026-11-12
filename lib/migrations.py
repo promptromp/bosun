@@ -153,6 +153,14 @@ CONFIG_ADDED: tuple[AddedKey, ...] = (
         "bosun.env to the connectors it needs, or to all",
     ),
     AddedKey(
+        "BOSUN_UPDATE_CHANNEL",
+        "main",
+        "bosun update goes on following main, as before; to follow the dated releases instead, set "
+        "BOSUN_UPDATE_CHANNEL=releases (bosun update --check says whether there is one)",
+        "before this version bosun update followed the head of main, and now it follows the newest dated "
+        "release: set BOSUN_UPDATE_CHANNEL=main in bosun.env to keep following main",
+    ),
+    AddedKey(
         "BOSUN_CONNECTORS",
         None,
         "repo windows now start without connectors, a repo's own .mcp.json servers included; give one "

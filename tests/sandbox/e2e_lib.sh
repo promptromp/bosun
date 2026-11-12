@@ -10,6 +10,9 @@
   exit 1
 }
 export PATH="/opt/homebrew/bin:/usr/local/bin:$HOME/.local/bin:$PATH"
+# These tests update to the next commit of a branch, which has no release: follow the branch
+# (the default follows the releases, docs/design/menu-bar.md).
+export BOSUN_UPDATE_CHANNEL=main
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 UID_NOW="$(id -u)"

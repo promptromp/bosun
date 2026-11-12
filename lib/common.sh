@@ -45,6 +45,15 @@ set_connector_defaults() {
   BOSUN_ORCHESTRATOR_CONNECTORS=""
 }
 
+set_update_defaults() {
+  # What `bosun update` follows: releases (the newest dated tag, v<YYYY.MM.DD>) or main (the head of the
+  # branch, for developers). Anything else makes the update refuse.
+  BOSUN_UPDATE_CHANNEL="releases"
+  # The morning run leaves the session alone if you typed in an attached tmux client this recently, and
+  # the first `bosun update` of an older install waits until nobody has.
+  BOSUN_ACTIVE_CLIENT_MINUTES="10"
+}
+
 set_defaults() {
   BOSUN_CONFIG_DIR="${BOSUN_CONFIG_DIR:-$HOME/.config/bosun}"
   BOSUN_SESSION_NAME="bosun"
@@ -75,7 +84,6 @@ set_defaults() {
   BOSUN_TRUST_MASKED_REPOS="1"
 
   BOSUN_ON_EXISTING="refresh"
-  BOSUN_ACTIVE_CLIENT_MINUTES="10"
   BOSUN_RESTART_MIN_IDLE_SECONDS="120"
   # With BOSUN_FRESH_CONVERSATIONS=1, refresh starts a fresh conversation for a repo window
   # that is idle, holds nothing in flight, and whose conversation grew past this many tokens (each
@@ -95,6 +103,7 @@ set_defaults() {
   BOSUN_COMPACT_CONTEXT_MAX_CHARS="1500"
   set_harness_defaults
   set_connector_defaults
+  set_update_defaults
   BOSUN_CLAUDE_FLAGS="--permission-mode auto --chrome"
   # Model and effort for the repo sessions; sessions.yml entries can override them per window.
   # Model: an alias (opus, sonnet, haiku, fable) or a full model name. Effort: low, medium, high,

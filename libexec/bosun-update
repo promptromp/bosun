@@ -1,10 +1,14 @@
 #!/bin/bash
 # Usage: bosun update [--dry-run] [--yes] [--json]
+#        bosun update --check [--json]
+#        bosun update --skip <version>
 #
-# Update bosun to the head of the branch it tracks, while the agents keep working, without losing a
-# write (docs/design/update.md). It fetches the branch (`git config bosun.branch` in the versions
-# folder's bosun.git, default main) into a version folder of its own, beside the one running, and hands
-# over to that version, which:
+# Update bosun to the newest release, while the agents keep working, without losing a write
+# (docs/design/update.md). A release is a dated tag, v<YYYY.MM.DD> (a second one the same day is .2), which
+# the project's release workflow makes on main. It fetches the release (BOSUN_UPDATE_CHANNEL=releases, the
+# default; with `main`, the head of the branch `git config bosun.branch` names in the versions folder's
+# bosun.git, default main, which is what an install from before releases keeps following) into a version
+# folder of its own, beside the one running, and hands over to that version, which:
 #   1. shows the plan: the commits, the migrations, the rules versions, config keys added or renamed,
 #      the prompts that changed, what each window gets, the launchd jobs to reload, a running console
 #      to restart, and what stops the update (something the new version needs and this Mac lacks, a
@@ -43,12 +47,23 @@
 # old checkout has no bosun update).
 # An update cut short (Ctrl-C, a crash, a power cut) is carried on by the next `bosun update`: put back
 # if it stopped while writes were paused (the next write to a store does that too), finished if its
-# checks had passed. With nothing new on the branch it says bosun is up to date.
+# checks had passed. With nothing newer it says bosun is up to date; an install past the newest release
+# (it was on main, after the release) says it is ahead of it, and changes nothing.
 #   --dry-run  show the plan, and change nothing
 #   --yes      go ahead without asking
 #   --json     one JSON object on every path: the plan (null when none was made: up to date, refused),
 #              the update's record as it stands, and the summary (null unless an update ended in
 #              this run); what it says goes to stderr
+#
+# Whether there is an update, without changing anything (no version folder, no hold, no lock; the menu bar
+# app's "Check for Updates..." runs it):
+#   --check    look up the newest release with git ls-remote and read its notes from the tag's message
+#              (on the main channel: the head of the branch, and the commit subjects since yours). One line,
+#              or with --json one object: {contract, channel, installed: {version, commit}, latest:
+#              {version, commit, notes} or null, available, skipped, ahead, error}. Always exit 0: a problem,
+#              such as an origin that cannot be reached, is the object's "error".
+#   --skip <version>  do not offer that release again: --check reports it as skipped (update-skip.json in the
+#              state folder); the next release is offered as usual. It does not stop an update you run.
 #
 # What the agents and the check-in loop run while it brings the windows along:
 #   bosun update note --window <w> --stock|--status
@@ -63,10 +78,21 @@ set -uo pipefail
 source "$(dirname "$0")/../lib/common.sh"
 load_config
 
-# lib/update.py of this version, with the config's folders and session (load_config exports none).
-run_update() {
+need_python() {
   python3 -c 'import sys; sys.exit(sys.version_info < (3, 13))' 2>/dev/null ||
     die "bosun needs Python 3.13 or newer as python3: bosun preflight says how to get it"
+}
+
+# lib/update_lookup.py of the version in use (its check, its skip, and the release to install), with the
+# state folder and the channel; it never takes the update's lock or writes a version folder.
+lookup() {
+  need_python
+  BOSUN_STATE_DIR="$BOSUN_STATE_DIR" BOSUN_UPDATE_CHANNEL="$BOSUN_UPDATE_CHANNEL" python3 "$BOSUN_ROOT/lib/update_lookup.py" "$@"
+}
+
+# lib/update.py of this version, with the config's folders and session (load_config exports none).
+run_update() {
+  need_python
   BOSUN_CONFIG_DIR="$BOSUN_CONFIG_DIR" BOSUN_STATE_DIR="$BOSUN_STATE_DIR" BOSUN_LOG_DIR="$BOSUN_LOG_DIR" \
     BOSUN_SESSION_NAME="$BOSUN_SESSION_NAME" exec python3 "$BOSUN_ROOT/lib/update.py" "$@"
 }
@@ -77,23 +103,52 @@ case "${1:-}" in
 esac
 
 FROM=""
+CHECK=0
+SKIP=""
 args=()
-while [ $# -gt 0 ]; do
-  case "$1" in
-    -h | --help)
-      usage
-      exit 0
-      ;;
-    --dry-run | --yes | --json) args+=("$1") ;;
-    --from)
-      FROM="${2:-}"
-      [ -n "$FROM" ] || die_usage "--from takes the version folder that handed over"
-      shift
-      ;;
-    *) die_usage "unknown argument $1" ;;
+read_arguments() {
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      -h | --help)
+        usage
+        exit 0
+        ;;
+      --dry-run | --yes | --json) args+=("$1") ;;
+      --check) CHECK=1 ;;
+      --skip)
+        SKIP="${2:-}"
+        [ -n "$SKIP" ] || die_usage "--skip takes the release version to skip, such as v2026.11.12"
+        shift
+        ;;
+      --from)
+        FROM="${2:-}"
+        [ -n "$FROM" ] || die_usage "--from takes the version folder that handed over"
+        shift
+        ;;
+      *) die_usage "unknown argument $1" ;;
+    esac
+    shift
+  done
+}
+read_arguments "$@"
+
+# Whether there is an update, and which release not to offer: read-only, on the version in use.
+check_or_skip() {
+  [ "$CHECK" = 0 ] || [ -z "$SKIP" ] || die_usage "--check and --skip are separate: run one, then the other"
+  case " ${args[*]-} " in
+    *" --dry-run "* | *" --yes "*) die_usage "--check and --skip change nothing: they take no --dry-run or --yes" ;;
   esac
-  shift
-done
+  if [ "$CHECK" = 1 ]; then
+    lookup check ${args[@]+"${args[@]}"} # only --json is left
+  else
+    [ ${#args[@]} -eq 0 ] || die_usage "--skip takes no other flag"
+    lookup skip "$SKIP"
+  fi
+}
+if [ "$CHECK" = 1 ] || [ -n "$SKIP" ]; then
+  check_or_skip
+  exit $?
+fi
 
 # An update brings bosun's windows along, restarting each once idle: run in one of them, it would wait
 # on its own window, or restart it under itself.
@@ -115,12 +170,39 @@ REPO="$VERSIONS/bosun.git"
 if [ "$BOSUN_INSTALL" = "$BOSUN_ROOT" ]; then
   die "bosun update moves an install made by get.sh, with its versions side by side in <install>-versions; $BOSUN_ROOT is a checkout: update it with git (one an earlier get.sh made, at ~/.local/share/bosun: run get.sh again, which converts it)"
 fi
-branch="$(repo_git config bosun.branch)" || branch=main
-# A transfer slower than 1 KB/s for 30 seconds is given up on, never waited for without end.
-repo_git -c http.lowSpeedLimit=1000 -c http.lowSpeedTime=30 fetch --quiet origin "+refs/heads/$branch:refs/remotes/origin/$branch" ||
-  die "could not fetch $branch from $(url_without_credentials "$(repo_git config remote.origin.url)")"
-commit="$(repo_git rev-parse --verify --quiet "refs/remotes/origin/$branch^{commit}")" ||
-  die "no commit at the head of $branch"
+# Sets commit to the one to install, in the versions' repository: the newest release's, or on the main
+# channel the head of the branch; and AHEAD to the newest release when the install is past it.
+AHEAD=""
+commit=""
+newest_commit() {
+  local branch found
+  case "$BOSUN_UPDATE_CHANNEL" in
+    releases)
+      found="$(lookup target)" || exit 1
+      case "$found" in
+        "ahead "*) AHEAD="${found#ahead }" ;;
+        "commit "*) commit="$(cut -d' ' -f2 <<<"$found")" ;;
+        *) die "bosun update could not tell which release to install ($found)" ;;
+      esac
+      ;;
+    main)
+      branch="$(repo_git config bosun.branch)" || branch=main
+      # A transfer slower than 1 KB/s for 30 seconds is given up on, never waited for without end.
+      repo_git -c http.lowSpeedLimit=1000 -c http.lowSpeedTime=30 fetch --quiet origin "+refs/heads/$branch:refs/remotes/origin/$branch" ||
+        die "could not fetch $branch from $(url_without_credentials "$(repo_git config remote.origin.url)")"
+      commit="$(repo_git rev-parse --verify --quiet "refs/remotes/origin/$branch^{commit}")" ||
+        die "no commit at the head of $branch"
+      ;;
+    *) die "BOSUN_UPDATE_CHANNEL is \"$BOSUN_UPDATE_CHANNEL\": it is releases or main" ;;
+  esac
+}
+newest_commit
+# An install past the newest release: nothing to move to. The version in use takes it from here (it carries
+# on an update cut short first), and says it is ahead instead of up to date.
+if [ -n "$AHEAD" ]; then
+  export BOSUN_UPDATE_AHEAD="$AHEAD"
+  exec "$BOSUN_ROOT/bin/bosun" update --from "$BOSUN_ROOT" ${args[@]+"${args[@]}"}
+fi
 folder="$VERSIONS/${commit:0:12}"
 if [ ! -d "$folder" ]; then
   repo_git worktree add --quiet --detach "$folder" "$commit" >/dev/null ||

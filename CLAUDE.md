@@ -22,7 +22,10 @@ of truth, so don't copy rules into this file.
   directory and overrides its restart keeps, through `recorded_restart` in `lib/common.sh`; `bosun
   launch` writes it, `launch --fingerprint` and `refresh --update-restart` use it) and
   `lib/update_plan.py` (pure: the plan, what each window gets, its text). `libexec/bosun-update` (the
-  wrapper: fetch the branch into its own version folder, hand over to that version) and
+  wrapper: fetch the newest release, or on `BOSUN_UPDATE_CHANNEL=main` the branch, into its own version folder,
+  hand over to that version; `--check` and `--skip`), `lib/update_check.py` (pure: the release tag rule, which
+  `tools/release.py` uses too, and the check's answer) with `lib/update_lookup.py` (its git side: read-only, no
+  version folder, no lock) and
   `lib/update_facts.py` (the facts the plan is made from, and what stops it there) and `lib/update.py`
   (the command: the rehearsal, the hold, the freeze and its put-back, the release, an update cut
   short carried on; `update note` and `update advance`), `lib/update_agents.py` (the decisions, its

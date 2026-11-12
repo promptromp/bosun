@@ -3301,8 +3301,11 @@ PY
   chmod +x "$U/quiet-claude"
   U_ENV=(env BOSUN_STATE_DIR="$U_STATE" BOSUN_LOG_DIR="$U_STATE/logs" BOSUN_CONFIG_DIR="$U_CONFIG"
     BOSUN_SESSION_NAME=update-test BOSUN_LAUNCHD_LABEL=com.bosun.update-test BOSUN_SKIP_PREFLIGHT=1 BOSUN_KNOWLEDGE_GIT=0
-    BOSUN_CLAUDE_BIN="$U/quiet-claude")
+    BOSUN_CLAUDE_BIN="$U/quiet-claude" BOSUN_UPDATE_CHANNEL=main)
+  # Upstream's next versions are commits of main, no releases: the update follows the branch here, as an
+  # install from before releases does; the release tests below name the channel (uc).
   ub() { "${U_ENV[@]}" "$U_LINK/bin/bosun" "$@"; }
+  uc() { "${U_ENV[@]}" BOSUN_UPDATE_CHANNEL="$1" "$U_LINK/bin/bosun" "${@:2}"; }
   ub ledger upsert 'review:acme/api#1' --kind review-request --title "Exporter retries" >/dev/null
   ub ledger upsert 'mypr:acme/api#2' --kind my-pr --title "Nightly export" >/dev/null
   ub kg import "$KG_FIXTURE" --apply --auto-confirm >/dev/null 2>&1
@@ -3335,6 +3338,58 @@ PY
   out="$(ub update --dry-run 2>&1)"
   check "a fetch that fails says so, without the token in the remote's URL" bash -c 'grep -qF "could not fetch main from https://127.0.0.1:9/acme/bosun.git" <<<"$1" && ! grep -q placeholder-token <<<"$1"' _ "$out"
   git --git-dir="$U_VERSIONS/bosun.git" remote set-url origin "$U_UP"
+
+  # Releases: dated tags in upstream (v1's commit is the first release, the failing v2 the next one).
+  # `bosun update --check` only looks: no version folder, no state, no hold or lock.
+  ug tag -a v2026.01.01 -m "- The first release" "$U_V1_COMMIT"
+  before="$(u_files)"
+  u_folders="$(find "$U_VERSIONS" -maxdepth 1 | LC_ALL=C sort)"
+  json="$(uc releases update --check --json)"
+  check "update --check --json names the newest release, which this install is" jq -e --arg c "$U_V1_COMMIT" '
+    .contract == 1 and .channel == "releases" and .latest.version == "v2026.01.01" and .latest.commit == $c and
+    .installed.version == "v2026.01.01" and .installed.commit == $c and .available == false and
+    .ahead == false and .skipped == false and .error == null' <<<"$json"
+  check "... in one line without --json" contains "$(uc releases update --check)" "bosun is up to date (v2026.01.01)"
+  ug tag -a v2026.02.01 -m "- The next version" "$U_FAILING_COMMIT"
+  json="$(uc releases update --check --json)"
+  check "... a newer release is available, with its notes from the tag's message" jq -e --arg c "$U_FAILING_COMMIT" '
+    .available == true and .latest.version == "v2026.02.01" and .latest.commit == $c and
+    .latest.notes == "- The next version" and .installed.version == "v2026.01.01"' <<<"$json"
+  check "... said in one line" contains "$(uc releases update --check)" "bosun v2026.02.01 is available (you have v2026.01.01)"
+  check "... changing nothing in the state or the config" test "$(u_files)" = "$before"
+  check "... and making no version folder" test "$(find "$U_VERSIONS" -maxdepth 1 | LC_ALL=C sort)" = "$u_folders"
+  check "--skip records the release it is given" contains "$(uc releases update --skip v2026.02.01)" "will not offer v2026.02.01"
+  check "... in update-skip.json" jq -e '.version == "v2026.02.01" and (.at | length > 0)' "$U_STATE/update-skip.json"
+  check "... which --check then reports as skipped, the update still available" jq -e '.skipped == true and .available == true' <<<"$(uc releases update --check --json)"
+  check "--skip refuses what is not a release" fails_with "--skip takes a release version" uc releases update --skip main
+  rm "$U_STATE/update-skip.json"
+  check "--check takes no --yes: it changes nothing" fails_with "take no --dry-run or --yes" uc releases update --check --yes
+  git --git-dir="$U_VERSIONS/bosun.git" remote set-url origin "https://0000placeholder-token@127.0.0.1:9/acme/bosun.git" # gitleaks:allow
+  json="$(uc releases update --check --json)"
+  u_rc=$?
+  git --git-dir="$U_VERSIONS/bosun.git" remote set-url origin "$U_UP"
+  check "an origin that cannot be reached is the check's error, exit 0, and no token in it" bash -c '
+    [ "$1" = 0 ] && jq -e ".error == \"could not reach https://127.0.0.1:9/acme/bosun.git\" and .available == false and .latest == null" <<<"$2" >/dev/null &&
+      ! grep -q placeholder-token <<<"$2"' _ "$u_rc" "$json"
+  json="$(uc main update --check --json)"
+  check "on the main channel the latest is the head of the branch, its notes the subjects since this install" jq -e --arg c "$U_FAILING_COMMIT" '
+    .channel == "main" and .available == true and .latest.commit == $c and
+    .latest.notes == "- v2, whose migration fails while writes are paused"' <<<"$json"
+  check "... said as the commits it is behind by" contains "$(uc main update --check)" "1 commit on main since yours"
+  check "a channel that is neither is refused, naming the key" fails_with 'BOSUN_UPDATE_CHANNEL is "nightly": it is releases or main' uc nightly update --dry-run
+  out="$(uc releases update --dry-run 2>&1)"
+  check "update --dry-run on the releases channel plans the newest release: the ledger's migration" contains "$out" "ledger: format 1 -> 2"
+  check "... and the install is still v1" u_at "$U_V1"
+  # An install past the newest release: the link on the failing v2 (a descendant of the first release, once
+  # the next one is gone) for the one dry run, and back.
+  ug tag -d v2026.02.01 >/dev/null
+  ln -sfn "bosun-versions/${U_FAILING_COMMIT:0:12}" "$U_LINK"
+  out="$(uc releases update --dry-run 2>&1)"
+  ln -sfn "bosun-versions/${U_V1_COMMIT:0:12}" "$U_LINK"
+  check "an install past the newest release says it is ahead of it, and changes nothing" contains "$out" "bosun is ahead of the newest release (v2026.01.01)"
+  check "... the link where it was" u_at "$U_V1"
+  ug tag -d v2026.01.01 >/dev/null
+  check "with no release at all, the releases channel says so, in one line" fails_with "no release at" uc releases update --dry-run
   check "an update refuses to run inside bosun's tmux, whose windows it restarts" fails_with "runs inside one of them" env TMUX="/tmp/tmux-0/$SOCKET,1,0" "${U_ENV[@]}" "$U_LINK/bin/bosun" update --yes
   out="$(ub update </dev/null 2>&1)"
   check "without --yes and no terminal, it shows the plan and stops" bash -c 'grep -q "ledger: format 1 -> 2" <<<"$1" && grep -q "Nothing has changed" <<<"$1"' _ "$out"

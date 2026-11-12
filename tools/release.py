@@ -18,7 +18,6 @@ gathered: the required check names one per line, and the PR head's check runs as
 from __future__ import annotations
 
 import json
-import re
 import subprocess
 import sys
 from collections.abc import Iterable, Mapping, Sequence
@@ -26,30 +25,19 @@ from datetime import UTC, date, datetime
 from pathlib import Path
 
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "lib"))
+from update_check import release_key  # the tag rule, once: what `bosun update` finds the newest release by
+
+
 NOTES_ARGS = 2  # `notes` and its range
-FIRST_REPEAT = 2  # a second release of a day is `.2`
 PASSING = ("success", "neutral", "skipped")  # what GitHub accepts for a required check
-TAG = re.compile(r"^v(\d{4})\.(\d{2})\.(\d{2})(?:\.(\d+))?$")
-
-
-def _key(tag: str) -> tuple[int, int, int, int] | None:
-    """(year, month, day, number) of a release tag; None for any other tag. The day's first
-    has no number and a later one starts at 2, so `.0` and `.1` are not release tags."""
-    m = TAG.match(tag.strip())
-    if not m:
-        return None
-    if m[4] is None:
-        return int(m[1]), int(m[2]), int(m[3]), 1
-    if int(m[4]) < FIRST_REPEAT:
-        return None
-    return int(m[1]), int(m[2]), int(m[3]), int(m[4])
 
 
 def next_tag(existing: Iterable[str], today: date) -> str:
     """The tag for today: the day's first is plain, the later ones count from 2."""
     taken = 0
     for tag in existing:
-        key = _key(tag)
+        key = release_key(tag)
         if key and key[:3] == (today.year, today.month, today.day):
             taken = max(taken, key[3])
     base = f"v{today:%Y.%m.%d}"
@@ -58,7 +46,7 @@ def next_tag(existing: Iterable[str], today: date) -> str:
 
 def latest(existing: Iterable[str]) -> str | None:
     """The newest release tag, by date then number; None when there is none."""
-    keyed = [(k, t.strip()) for t in existing if (k := _key(t))]
+    keyed = [(k, t.strip()) for t in existing if (k := release_key(t))]
     return max(keyed)[1] if keyed else None
 
 

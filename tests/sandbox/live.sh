@@ -27,6 +27,7 @@ set -uo pipefail
   exit 1
 }
 export PATH="/opt/homebrew/bin:/usr/local/bin:$HOME/.local/bin:$PATH" HOMEBREW_NO_AUTO_UPDATE=1
+export BOSUN_UPDATE_CHANNEL=main # its update goes to the next commit of a branch, which has no release
 
 STEP="${1:?prepare or go}"
 AGENT="${2:?claude, codex or agy}"

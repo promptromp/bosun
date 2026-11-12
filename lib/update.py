@@ -86,6 +86,7 @@ BLOCKED = 1
 USAGE = 2
 AGENT_COMMANDS = ("note", "advance")  # what the agents and the check-in loop run (lib/update_windows.py)
 AFTER_UPDATE = "after-update"  # what bosun doctor runs: what the last update left me
+AHEAD_ENV = "BOSUN_UPDATE_AHEAD"  # the wrapper sets it to the newest release when the install is past it
 
 
 class Output:
@@ -928,6 +929,12 @@ def _is_this_one(old_root: Path) -> bool:
 
 
 def _say_up_to_date() -> None:
+    """Nothing newer: up to date, or, when the wrapper found the install past the newest release (it
+    sets AHEAD_ENV to its tag), ahead of it."""
+    ahead = os.environ.get(AHEAD_ENV)
+    if ahead:
+        Output.say(f"bosun is ahead of the newest release ({ahead}): nothing to update to.")
+        return
     Output.say(f"bosun is up to date ({_short(versions.commit_of(ROOT))}).")
 
 
