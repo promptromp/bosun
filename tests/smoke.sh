@@ -316,13 +316,15 @@ check "run_with_timeout passes a fast command's status" bash -c 'source "$1/lib/
 fnc() { bash -c 'source "$1/lib/common.sh"; load_config; shift; "$@"' _ "$ROOT" "$@"; } # with the config's defaults
 check "harness_bin names the command the config gives each agent" test "$(fnc harness_bin codex)" = codex
 check "... and an override of it" test "$(BOSUN_CODEX_BIN=/opt/acme/codex fnc harness_bin codex)" = /opt/acme/codex
+check "harness_bin names agy's command, and an override of it" test "$(fnc harness_bin agy) $(BOSUN_AGY_BIN=/opt/acme/agy fnc harness_bin agy)" = "agy /opt/acme/agy"
+check "harness_default_model: agy has none unless configured, and BOSUN_AGY_MODEL is its" test "$(fnc harness_default_model agy) $(BOSUN_AGY_MODEL=gemini-acme fnc harness_default_model agy)" = "- gemini-acme"
 check "harness_default_model: Codex has none unless configured" test "$(fnc harness_default_model codex)" = -
 check "... or the one in BOSUN_CODEX_MODEL" test "$(BOSUN_CODEX_MODEL=gpt-acme fnc harness_default_model codex)" = gpt-acme
 check "... and Claude Code's is BOSUN_MODEL's" test "$(BOSUN_MODEL=acme-model fnc harness_default_model claude)" = acme-model
 check "... or - when that is empty" test "$(BOSUN_MODEL="" fnc harness_default_model claude)" = -
 check "harness_bin of an agent with no profile exits 1 and prints nothing" bash -c 'source "$1/lib/common.sh"; load_config; out="$(harness_bin acme-agent 2>&1)" && exit 1; [ -z "$out" ]' _ "$ROOT"
 check "... as does harness_default_model" bash -c 'source "$1/lib/common.sh"; load_config; out="$(harness_default_model acme-agent 2>&1)" && exit 1; [ -z "$out" ]' _ "$ROOT"
-check "known_harnesses lists the agents in the order of AGENTS" test "$(fn known_harnesses)" = "claude codex"
+check "known_harnesses lists the agents in the order of AGENTS" test "$(fn known_harnesses)" = "claude codex agy"
 check "profile_field reads a column by its name" test "$(fn profile_field codex flags_key)" = BOSUN_CODEX_FLAGS
 mkdir -p "$WORK/broken-python"
 printf '#!/bin/sh\necho "python is broken" >&2\nexit 1\n' >"$WORK/broken-python/python3"
@@ -331,9 +333,9 @@ check "profiles that cannot be read stop the command, saying so" fails_with "cou
 mkdir -p "$WORK/chatty-python"
 printf '#!/bin/sh\necho "acme warning: something deprecated" >&2\nexec "%s" "$@"\n' "$(command -v python3)" >"$WORK/chatty-python/python3"
 chmod +x "$WORK/chatty-python/python3"
-check "a python3 that warns on stderr leaves the profiles alone" test "$(bash -c 'source "$1/lib/common.sh"; PATH="$2:$PATH"; known_harnesses' _ "$ROOT" "$WORK/chatty-python" 2>/dev/null)" = "claude codex"
+check "a python3 that warns on stderr leaves the profiles alone" test "$(bash -c 'source "$1/lib/common.sh"; PATH="$2:$PATH"; known_harnesses' _ "$ROOT" "$WORK/chatty-python" 2>/dev/null)" = "claude codex agy"
 for shell_bin in /bin/bash bash; do
-  check "... and agent_bin_env works under $shell_bin" test "$(BOSUN_CODEX_BIN=acme-codex "$shell_bin" -c 'source "$1/lib/common.sh"; load_config; PATH="$2:$PATH"; agent_bin_env; printf "%s\n" "${agent_bin_assignments[@]}"' _ "$ROOT" "$WORK/chatty-python" 2>/dev/null | tr '\n' ' ')" = "BOSUN_CLAUDE_BIN=claude BOSUN_CODEX_BIN=acme-codex "
+  check "... and agent_bin_env works under $shell_bin" test "$(BOSUN_CODEX_BIN=acme-codex "$shell_bin" -c 'source "$1/lib/common.sh"; load_config; PATH="$2:$PATH"; agent_bin_env; printf "%s\n" "${agent_bin_assignments[@]}"' _ "$ROOT" "$WORK/chatty-python" 2>/dev/null | tr '\n' ' ')" = "BOSUN_CLAUDE_BIN=claude BOSUN_CODEX_BIN=acme-codex BOSUN_AGY_BIN=agy "
 done
 cat >"$WORK/specs-agents.yml" <<YML
 sessions:
@@ -2900,6 +2902,137 @@ for line in sys.stdin:
   check "... nor more after --disable apps" outputs refused codex_args_valid "" --disable apps -c 'mcp_servers={acme-docs={enabled=false}}'
   check "... nor extra text after it" outputs refused codex_args_valid "" --disable apps extra
   check "... nor an unknown flag" outputs refused codex_args_valid "" --frob --disable apps
+
+  echo "a window on agy (launch, with a stand-in that records what it was started with)"
+  AGY_REPO="$WORK/agy-repo"
+  mkdir -p "$AGY_REPO"
+  git -C "$AGY_REPO" init -q
+  # What agy is asked, and what it would run with: it answers `--version`, `plugin list|install|uninstall`
+  # as the real one does for bosun's setup, and any other call it records (arguments one per line, and its
+  # environment) in the files AGY_STAND_IN_RECORD names.
+  cat >"$WORK/fake-agy" <<'FAKE'
+#!/bin/sh
+case "$1 $2" in
+  "--version "*)
+    echo 1.5.5
+    exit 0
+    ;;
+  "plugin list")
+    echo '[]'
+    exit 0
+    ;;
+  "plugin install")
+    mkdir -p "$HOME/.gemini/config/plugins" && rm -rf "$HOME/.gemini/config/plugins/bosun" &&
+      cp -R "$3" "$HOME/.gemini/config/plugins/bosun"
+    exit $?
+    ;;
+  "plugin uninstall")
+    rm -rf "$HOME/.gemini/config/plugins/bosun"
+    exit 0
+    ;;
+esac
+[ -n "$AGY_STAND_IN_RECORD" ] || exit 0
+printf '%s\n' "$@" >"$AGY_STAND_IN_RECORD.args"
+env >"$AGY_STAND_IN_RECORD.env"
+FAKE
+  chmod +x "$WORK/fake-agy"
+  printf 'sessions:\n  - name: agyw\n    dir: %s\n    harness: agy\n  - name: agy-docs\n    dir: %s\n    harness: agy\n    connectors: [acme-docs]\n' "$AGY_REPO" "$AGY_REPO" >"$WORK/agy-sessions.yml"
+  AGY() { (cd "$AGY_REPO" && BOSUN_AGY_BIN="$WORK/fake-agy" BOSUN_SESSIONS_FILE="$WORK/agy-sessions.yml" BOSUN_EVENTS_ENABLED=0 "$BOSUN" "$@" 2>&1); }
+  AGYD() { BOSUN_LAUNCH_DRY_RUN=1 AGY "$@"; }
+  # (the suite exports BOSUN_LAUNCH_DRY_RUN=1: a real launch of the stand-in says BOSUN_LAUNCH_DRY_RUN=0)
+  # agy_flag <flag>: the argument the stand-in got after <flag>, from its last real run
+  agy_flag() { awk -v flag="$1" 'found { print; exit } $0 == flag { found = 1 }' "$WORK/agy-run.args"; }
+  agy_env() { grep -m1 "^$1=" "$WORK/agy-run.env" | cut -d= -f2-; } # <name>: its value in that run's environment
+  out="$(AGYD launch agyw)"
+  check "a new agy window's dry run says what it would run" contains "$out" "dry-run: would run: $WORK/fake-agy"
+  check "... with its folder trusted by --settings, in auto" contains "$out" 'agentMode'
+  check "... a log file named for its conversation, and Remote Control" bash -c 'grep -qF -- "--log-file $2/agy-agyw.log --remote-control" <<<"$1"' _ "$out" "$BOSUN_LOG_DIR"
+  check "... and a first prompt of its own, ready to be answered" contains "$out" "--prompt-interactive=This\\ is\\ bosun\\'s\\ agyw\\ window"
+  check "... none of the flags an agy window never gets" bash -c '! grep -qE -- " (--add-dir|--mode|-c|--continue|--dangerously-skip-permissions)( |$)" <<<"$1"' _ "$out"
+  check "... and the model only if one is set" not_contains "$out" "--model"
+  check "... the effort the window is configured with (BOSUN_EFFORT)" contains "$out" "--effort medium"
+  check "... and none when it has none" not_contains "$(BOSUN_EFFORT="" AGYD launch agyw)" "--effort"
+  check "the dry run shows the environment it would set: git's config that outranks every repo's" contains "$out" "dry-run: would set:"
+  check "... with the hooks off" bash -c 'grep -q "GIT_CONFIG_VALUE_[0-9]*=/dev/null" <<<"$1" && grep -q "GIT_CONFIG_KEY_[0-9]*=core.hooksPath" <<<"$1"' _ "$out"
+  check "a dry run records nothing about a start" test ! -e "$BOSUN_STATE_DIR/agy/agyw.json"
+  check "... and installs no plugin" test ! -e "$HOME/.gemini/config/plugins/bosun"
+  check "an effort above high is passed as high" contains "$(AGYD launch --effort xhigh agyw)" "--effort high"
+  check "... also max" contains "$(AGYD launch --effort max agyw)" "--effort high"
+  check "... and a lower one as it is" contains "$(AGYD launch --effort medium agyw)" "--effort medium"
+  check "a model name loses its effort suffix, which --effort carries" contains "$(AGYD launch --model gemini-3.8-flash-low agyw)" "--model gemini-3.8-flash "
+  check "... also -medium and -high" bash -c 'grep -qF -- "--model gemini-3.8-pro " <<<"$1" && grep -qF -- "--model gemini-3.8-pro " <<<"$2"' _ "$(AGYD launch --model gemini-3.8-pro-medium agyw)" "$(AGYD launch --model gemini-3.8-pro-high agyw)"
+  check "BOSUN_AGY_MODEL is an agy window's model" contains "$(BOSUN_AGY_MODEL=gemini-3.8-flash AGYD launch agyw)" "--model gemini-3.8-flash"
+  check "... and BOSUN_MODEL is not" not_contains "$(BOSUN_MODEL=opus AGYD launch agyw)" "--model opus"
+  check "BOSUN_AGY_FLAGS come first" contains "$(BOSUN_AGY_FLAGS='--acme-flag' AGYD launch agyw)" "$WORK/fake-agy --acme-flag --settings"
+  check "a prompt that starts with a dash is no flag" contains "$(AGYD launch agyw '-starts with a dash')" '--prompt-interactive=-starts\ with\ a\ dash'
+  check "bosun launch --fingerprint covers an agy window" bash -c 'jq -e ".args | length > 0" <<<"$1" >/dev/null' _ "$(AGY launch --fingerprint agyw)"
+  check "... and writes no status for it" test ! -e "$BOSUN_STATE_DIR/agy/agyw.json"
+
+  mkdir -p "$BOSUN_STATE_DIR/agy"
+  printf '{"status":"idle","statusUpdatedAt":5,"conversationId":"old-run","version":"1.5.4","lastSaid":"hello"}' >"$BOSUN_STATE_DIR/agy/agyw.json"
+  rm -f "$WORK/agy-run.args" "$WORK/agy-run.env"
+  out="$(BOSUN_LAUNCH_DRY_RUN=0 SSH_CLIENT="192.0.2.1 22 22" SSH_CONNECTION="192.0.2.1 22 192.0.2.2 22" GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=user.name GIT_CONFIG_VALUE_0=acme AGY_STAND_IN_RECORD="$WORK/agy-run" AGY launch agyw)"
+  check "a real launch starts agy" test -s "$WORK/agy-run.args"
+  check "... with --settings one JSON object: auto, and the folder as given" bash -c 'jq -e --arg dir "$2" ". == {agentMode: \"auto\", trustedWorkspaces: [\$dir]}" <<<"$1" >/dev/null' _ "$(agy_flag --settings)" "$AGY_REPO"
+  check "... the log file for its conversation" test "$(agy_flag --log-file)" = "$BOSUN_LOG_DIR/agy-agyw.log"
+  check "... and its prompt last" bash -c 'tail -n 1 "$1" | grep -q "^--prompt-interactive=This is bosun"' _ "$WORK/agy-run.args"
+  check "its environment is the marker: the window" test "$(agy_env BOSUN_WINDOW)" = agyw
+  check "... the conversation name" test "$(agy_env BOSUN_CONVERSATION)" = agyw
+  check "... the install link its hooks run" test "$(agy_env BOSUN_HOOK_CMD)" = "$ROOT/bin/bosun"
+  check "... and no resume" test -z "$(agy_env BOSUN_RESUMED)"
+  check "... with its own updates off" test "$(agy_env AGY_CLI_DISABLE_AUTO_UPDATE)" = true
+  check "... and no ssh variables, which would hide its login" bash -c '! grep -qE "^SSH_(CLIENT|CONNECTION)=" "$1"' _ "$WORK/agy-run.env"
+  check "git's config is appended after what the environment held" bash -c '
+    env=$1
+    [ "$(grep -m1 ^GIT_CONFIG_COUNT= "$env")" = GIT_CONFIG_COUNT=10 ] &&
+    grep -qx GIT_CONFIG_KEY_0=user.name "$env" && grep -qx GIT_CONFIG_VALUE_0=acme "$env"' _ "$WORK/agy-run.env"
+  check "... once, though a launch builds its arguments twice" bash -c '! grep -q "^GIT_CONFIG_KEY_10=" "$1"' _ "$WORK/agy-run.env"
+  for pair in safe.bareRepository=explicit core.fsmonitor=false core.hooksPath=/dev/null core.editor=false sequence.editor=false core.pager=cat submodule.recurse=false fetch.recurseSubmodules=false diff.ignoreSubmodules=all; do
+    check "... holds ${pair%%=*}=${pair#*=}" bash -c '
+      env=$1; key=${2%%=*}; value=${2#*=}
+      n=$(grep -x "GIT_CONFIG_KEY_[0-9]*=$key" "$env" | tail -1 | sed "s/GIT_CONFIG_KEY_\([0-9]*\)=.*/\1/")
+      [ -n "$n" ] && [ "$n" -ge 1 ] && grep -qxF "GIT_CONFIG_VALUE_$n=$value" "$env"' _ "$WORK/agy-run.env" "$pair"
+  done
+  check "a window has no person at an editor or a pager, in git and in gh" bash -c '
+    env=$1
+    for pair in GIT_EDITOR=false GIT_PAGER=cat GH_EDITOR=false GH_PAGER=cat GH_PROMPT_DISABLED=1; do grep -qx "$pair" "$env" || exit 1; done' _ "$WORK/agy-run.env"
+  check "a launch forgets what the last run left in the status file, and records its version" bash -c '
+    jq -e ". == {version: \"1.5.5\", lastSaid: \"hello\"}" "$1" >/dev/null' _ "$BOSUN_STATE_DIR/agy/agyw.json"
+  check "the first launch on agy sets up bosun's plugin" test -f "$HOME/.gemini/config/plugins/bosun/plugin.json"
+
+  CONV_DIR="$HOME/.gemini/antigravity-cli/conversations"
+  mkdir -p "$CONV_DIR"
+  : >"$CONV_DIR/conv-1.db"
+  jq -n --arg cwd "$(cd "$AGY_REPO" && pwd -P)" '{agyw: {id: "conv-1", cwd: $cwd}}' >"$BOSUN_STATE_DIR/agy-sessions.json"
+  check "a resume prints --conversation <id>" bash -c 'grep -qF -- "--conversation conv-1" <<<"$1"' _ "$(AGYD launch agyw)"
+  rm -f "$WORK/agy-run.args" "$WORK/agy-run.env"
+  BOSUN_LAUNCH_DRY_RUN=0 AGY_STAND_IN_RECORD="$WORK/agy-run" AGY launch agyw 'carry on' >/dev/null
+  check "a real resume names the conversation before the prompt" bash -c '
+    args=$1; n=$(grep -nx -- --conversation "$args" | cut -d: -f1)
+    [ -n "$n" ] && [ "$(sed -n "$((n + 1))p" "$args")" = conv-1 ] && [ "$(tail -n 1 "$args")" = "--prompt-interactive=carry on" ]' _ "$WORK/agy-run.args"
+  check "... tells bosun's hooks which conversation it asked for" test "$(agy_env BOSUN_RESUMED)" = conv-1
+  rm -f "$WORK/agy-run.args" "$WORK/agy-run.env"
+  BOSUN_LAUNCH_DRY_RUN=0 AGY_STAND_IN_RECORD="$WORK/agy-run" AGY launch --no-prompt agyw >/dev/null
+  check "a resume with no prompt has none" bash -c '! grep -q -- "--prompt-interactive" "$1" && grep -qx conv-1 "$1"' _ "$WORK/agy-run.args"
+  rm "$CONV_DIR/conv-1.db"
+  check "... and a conversation that agy no longer has is started anew" bash -c '! grep -qF -- "--conversation" <<<"$1"' _ "$(AGYD launch agyw)"
+
+  mkdir -p "$HOME/.gemini/config"
+  printf '{"mcpServers":{"acme-docs":{},"acme-mail":{}}}' >"$HOME/.gemini/config/mcp_config.json"
+  out="$(AGYD launch agyw || true)"
+  check "a server beyond the window's list keeps it from starting" bash -c 'grep -q "acme-docs (global) is not in this window" <<<"$1" && grep -q "agyw. does not start" <<<"$1" && ! grep -q "dry-run: would run" <<<"$1"' _ "$out"
+  out="$(AGYD launch agy-docs || true)"
+  check "... also with one of the two named" bash -c 'grep -q "acme-mail (global)" <<<"$1" && ! grep -q "dry-run: would run" <<<"$1"' _ "$out"
+  check "... but a list naming them all starts it" contains "$(BOSUN_CONNECTORS=all AGYD launch agyw)" "dry-run: would run"
+  check "... and a refusal is logged like Codex's" grep -qF "agyw: connectors: acme-mail (global)" "$BOSUN_LOG_DIR/launch-$(date +%F).log"
+  rm -f "$HOME/.gemini/config/mcp_config.json"
+  printf '#!/bin/sh\nexit 1\n' >"$WORK/failing-agy"
+  chmod +x "$WORK/failing-agy"
+  check "a listing that fails keeps it from starting too" fails_with "does not start" env BOSUN_AGY_BIN="$WORK/failing-agy" BOSUN_SESSIONS_FILE="$WORK/agy-sessions.yml" BOSUN_LAUNCH_DRY_RUN=1 BOSUN_EVENTS_ENABLED=0 bash -c 'cd "$1" && "$2" launch agyw' _ "$AGY_REPO" "$BOSUN"
+  check "a window on an agent that does not exist lists the ones that do" fails_with "no agent 'acme-agent': bosun knows claude, codex, agy" bash -c 'cd "$1" && BOSUN_LAUNCH_DRY_RUN=1 "$2" launch --harness acme-agent agyw' _ "$AGY_REPO" "$BOSUN"
+  check "preflight checks agy, which it names" contains "$(BOSUN_SESSIONS_FILE="$WORK/agy-sessions.yml" BOSUN_AGY_BIN="$WORK/fake-agy" "$BOSUN" preflight 2>&1)" "Antigravity"
+  out="$(BOSUN_SESSIONS_FILE="$WORK/agy-sessions.yml" BOSUN_AGY_BIN="$WORK/fake-agy" BOSUN_CONFIG_DIR="$SETUP_CFG" BOSUN_NETWORK_PROBE_URL=file:///dev/null "$BOSUN" morning --dry-run --awake-minutes 5 2>&1)"
+  check "the morning run would update agy with its own command" contains "$out" "dry-run: would run $WORK/fake-agy update"
 
   echo "get.sh (a dry run: it changes nothing)"
   check "it is plain sh" sh -n "$ROOT/get.sh"

@@ -32,6 +32,7 @@ from typing import Any, Protocol
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import agent_changes
+import agy_state
 import claude_state
 import codex_state
 from agent_files import NOT_FOUND, USAGE, Command, LaunchSettings, Profile, SetupError, emit, run_command
@@ -58,7 +59,11 @@ class Agent(Protocol):
     def ready(self) -> bool: ...
 
 
-AGENTS: dict[str, Agent] = {claude_state.HARNESS: claude_state, codex_state.HARNESS: codex_state}
+AGENTS: dict[str, Agent] = {
+    claude_state.HARNESS: claude_state,
+    codex_state.HARNESS: codex_state,
+    agy_state.HARNESS: agy_state,
+}
 
 DEFAULT_HARNESS = claude_state.HARNESS  # the agent a window runs when nothing says otherwise
 # The orchestrator stands on Claude Code's hooks, plugins and permission settings (ORCHESTRATOR_HARNESS in

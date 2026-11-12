@@ -651,7 +651,8 @@ class PlanTest(unittest.TestCase):
     def test_any_agent_with_a_profile_is_an_answer(self) -> None:
         self.assertEqual(init_plan.validate(Answers(harness="codex")), [])
         self.assertIn(
-            "harness: 'acme-agent' must be claude or codex", init_plan.validate(Answers(harness="acme-agent"))
+            "harness: 'acme-agent' must be agy or claude or codex",
+            init_plan.validate(Answers(harness="acme-agent")),
         )
 
     def test_an_agent_other_than_the_default_says_what_its_windows_run(self) -> None:

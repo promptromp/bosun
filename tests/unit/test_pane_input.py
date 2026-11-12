@@ -172,7 +172,7 @@ class MainTest(unittest.TestCase):
         err = io.StringIO()
         with unittest.mock.patch("sys.stderr", err):
             self.assertEqual(self.run_main("typed", "", "gemini")[0], 2)
-        self.assertEqual(err.getvalue(), "no agent 'gemini': bosun knows claude, codex\n")
+        self.assertEqual(err.getvalue(), "no agent 'gemini': bosun knows claude, codex, agy\n")
 
 
 if __name__ == "__main__":

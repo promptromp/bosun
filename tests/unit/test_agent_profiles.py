@@ -20,6 +20,7 @@ from unittest import mock
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "lib"))
 import agent_changes
 import agent_state
+import agy_state
 import claude_state
 import codex_state
 import uninstall_plan
@@ -63,6 +64,7 @@ class AgentProfileTest(unittest.TestCase):
     def test_each_agent_says_how_to_show_it(self) -> None:
         self.assertEqual(claude_state.PROFILE.display_name, "Claude Code")
         self.assertEqual(codex_state.PROFILE.display_name, "Codex")
+        self.assertEqual(agy_state.PROFILE.display_name, "Antigravity")
         for agent in AGENTS.values():
             self.assertTrue(agent.PROFILE.setup_preview)
 
@@ -76,6 +78,7 @@ class AgentProfileTest(unittest.TestCase):
     def test_each_agent_names_the_module_that_holds_its_windows_to_their_connectors(self) -> None:
         self.assertEqual(claude_state.PROFILE.connectors, "connectors_claude")
         self.assertEqual(codex_state.PROFILE.connectors, "connectors_codex")
+        self.assertEqual(agy_state.PROFILE.connectors, "connectors_agy")
         for agent in AGENTS.values():
             module = importlib.import_module(agent.PROFILE.connectors)
             assert callable(module.main) and callable(module.doctor_line)
@@ -87,12 +90,17 @@ class AgentProfileTest(unittest.TestCase):
         assert captured.getvalue().splitlines() == [
             "claude\tBOSUN_CLAUDE_BIN\tBOSUN_CLAUDE_FLAGS\tBOSUN_MODEL\tyes\tyes\tyes\tyes\tidle,busy,shell,waiting\t-",
             "codex\tBOSUN_CODEX_BIN\tBOSUN_CODEX_FLAGS\tBOSUN_CODEX_MODEL\tno\tno\tno\tno\tidle,busy\t-",
+            "agy\tBOSUN_AGY_BIN\tBOSUN_AGY_FLAGS\tBOSUN_AGY_MODEL\tno\tyes\tno\tno\tidle,busy,shell,waiting\tupdate",
         ]
 
     def test_profiles_print_update_args(self) -> None:
         for harness in ("claude", "codex"):
             assert AGENTS[harness].PROFILE.update_args == ()
             assert agent_state.profile_line(harness, AGENTS[harness].PROFILE).endswith("\t-")
+        assert AGENTS["agy"].PROFILE.update_args == ("update",)
+        assert agent_state.profile_line("agy", AGENTS["agy"].PROFILE).endswith(
+            "\tidle,busy,shell,waiting\tupdate"
+        )
         updating = dataclasses.replace(claude_state.PROFILE, update_args=("update", "--now"))
         assert agent_state.profile_line("stub", updating).endswith("\tidle,busy,shell,waiting\tupdate --now")
 

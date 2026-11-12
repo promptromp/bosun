@@ -612,10 +612,11 @@ def render_plan(plan: Plan, facts: Facts, *, asking: bool = True) -> str:
         if plan.stays:
             lines += ["", "Still here:", *stay_lines(plan.stays, facts.home)]
         return "\n".join(lines) + "\n"
+    agents = [agent.PROFILE.display_name for agent in agent_state.AGENTS.values()]
     intro = [
         "This takes bosun off this Mac. Your repos, branches and pull requests are not touched, nor are",
-        "your conversations in Claude Code and Codex. Its /bosun:chores command and its hooks exist only in",
-        "the windows bosun starts, so nothing of them stays behind in either agent.",
+        f"your conversations in {', '.join(agents[:-1])} and {agents[-1]}. Its /bosun:chores command and its",
+        "hooks work only in the windows bosun starts, so nothing of them stays behind in any agent.",
         "",
     ]
     return "\n".join([*intro, *plan_sections(plan, facts, asking=asking)]) + "\n"

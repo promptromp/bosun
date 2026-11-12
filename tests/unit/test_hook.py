@@ -118,7 +118,7 @@ class HookTest(unittest.TestCase):
         with self.assertRaises(SystemExit) as raised, mock.patch.object(sys, "stderr", stderr):
             hook.main(["turn-end", "--harness", "nope", "--window", WINDOW, "{}"], self.env)
         self.assertEqual(raised.exception.code, 2)
-        self.assertIn("no agent 'nope': bosun knows claude, codex", stderr.getvalue())
+        self.assertIn("no agent 'nope': bosun knows claude, codex, agy", stderr.getvalue())
 
     def test_a_codex_turn_says_which_session_a_window_s_name_stands_for(self) -> None:
         self.assertEqual(self.codex_turn("go with option b"), 0)
@@ -332,7 +332,7 @@ class AgentHookTest(unittest.TestCase):
 
     def test_an_agent_bosun_does_not_know_is_refused_with_the_ones_it_does(self) -> None:
         self.assertIn(
-            "no agent 'nope': bosun knows claude, codex, stub",
+            "no agent 'nope': bosun knows claude, codex, agy, stub",
             self.refused("--harness", "nope", "--event", "Ping"),
         )
 

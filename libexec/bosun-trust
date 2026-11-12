@@ -5,7 +5,8 @@
 # In an untrusted folder an agent shows that prompt at startup and waits, which stalls an unattended
 # start, and neither has a setting or flag that skips it. This records the same entry the agent writes
 # when you accept the prompt (Claude Code: `hasTrustDialogAccepted` in ~/.claude.json; Codex: `trust_level`
-# in ~/.codex/config.toml; both internal formats), and checks it took.
+# in ~/.codex/config.toml; both internal formats), and checks it took. Antigravity (agy) has nothing to
+# record: each launch passes its folder as trusted for that session.
 #
 # Only git repositories whose origin matches BOSUN_REPO_MASK are trusted, unless --any.
 # --check exits 0 if every directory is trusted. --revoke removes the trust.

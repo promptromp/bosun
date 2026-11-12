@@ -399,6 +399,19 @@ class StatusFileTest(AdapterCase):
         self.assertEqual(json.loads(path.read_text())["status"], "idle")
         self.assertEqual(agy_state.read_status("nobody"), {})
 
+    def test_a_launch_records_its_version_and_forgets_the_last_run(self) -> None:
+        agy_state.write_status(
+            "repo-a", version="1.5.4", status="idle", statusUpdatedAt=7, conversationId="x", lastSaid="hi"
+        )
+        agy_state.launched("repo-a", "1.5.5")
+        self.assertEqual(agy_state.read_status("repo-a"), {"version": "1.5.5", "lastSaid": "hi"})
+        self.window(15, "repo-a", None)
+        self.assertIsNone(agy_state.record(15))  # a window not yet seen starting is no session
+
+    def test_a_launch_with_no_known_version_leaves_none(self) -> None:
+        agy_state.launched("repo-b", "")
+        self.assertEqual(agy_state.read_status("repo-b"), {"version": None})
+
 
 class LaunchSettingsTest(AdapterCase):
     def test_launch_settings_read_the_command_line(self) -> None:
@@ -475,6 +488,42 @@ class TrustAndHistoryTest(AdapterCase):
         self.assertEqual(list(agy_state.prompt_history(datetime(2026, 1, 1))), [])
 
 
+class ProfileTest(unittest.TestCase):
+    def test_what_agy_is_and_can_do(self) -> None:
+        profile = agy_state.PROFILE
+        self.assertEqual(
+            (profile.bin_key, profile.flags_key, profile.model_key),
+            ("BOSUN_AGY_BIN", "BOSUN_AGY_FLAGS", "BOSUN_AGY_MODEL"),
+        )
+        self.assertFalse(profile.names_sessions)
+        self.assertEqual(profile.statuses, {"idle", "busy", "shell", "waiting"})
+        self.assertTrue(profile.remote_control)
+        self.assertFalse(profile.autocompact or profile.subagents)
+        self.assertEqual(profile.state_files, (agy_state.NAMES_FILE, agy_state.STATUS_DIR))
+        self.assertEqual(profile.display_name, "Antigravity")
+        self.assertEqual(profile.connectors, "connectors_agy")
+        self.assertIs(profile.screen, agy_state.SCREEN)
+        self.assertIs(profile.hooks, agy_state.HOOKS)
+        self.assertIs(profile.setup, agy_state.SETUP)
+        self.assertEqual(profile.update_args, ("update",))
+        self.assertIsNone(profile.turn_end)
+
+    def test_the_setup_texts_say_where_it_runs_and_what_it_goes_without(self) -> None:
+        profile = agy_state.PROFILE
+        self.assertTrue(profile.setup_preview)
+        self.assertIn("auto", profile.setup_sessions)
+        for text in (profile.setup_note, *profile.setup_preview):
+            self.assertTrue(text.strip())
+        self.assertIn("orchestrator stays on Claude Code", profile.setup_note)
+        self.assertIn("without", profile.setup_note.lower())
+
+    def test_agy_is_registered_after_codex(self) -> None:
+        import agent_state
+
+        self.assertEqual(list(agent_state.AGENTS), ["claude", "codex", "agy"])
+        self.assertIs(agent_state.AGENTS["agy"], agy_state)
+
+
 class CommandLineTest(AdapterCase):
     def run_main(self, *argv: str) -> tuple[int, str]:
         with mock.patch("builtins.print") as printed:
@@ -491,6 +540,13 @@ class CommandLineTest(AdapterCase):
         agy_state.write_status("repo-a", conversationId="abc")
         self.assertEqual(self.run_main("live", "abc"), (0, "81"))
         self.assertEqual(self.run_main("live", "zzz"), (agent_files.NOT_FOUND, ""))
+
+    def test_launched_writes_the_status_file(self) -> None:
+        agy_state.write_status("repo-a", status="busy", conversationId="old")
+        self.assertEqual(self.run_main("launched", "repo-a", "1.5.5"), (0, ""))
+        self.assertEqual(agy_state.read_status("repo-a"), {"version": "1.5.5"})
+        self.assertEqual(self.run_main("launched", "repo-a", ""), (0, ""))
+        self.assertEqual(agy_state.read_status("repo-a"), {"version": None})
 
     def test_logged_in_exits_0_or_3(self) -> None:
         with mock.patch.object(agy_state, "logged_in", return_value=True):

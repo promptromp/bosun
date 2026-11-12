@@ -5,6 +5,7 @@ lib/claude_state.py and lib/codex_state.py do for the other agents. Design: docs
 Usage: agy_state.py logged-in                      exit 0 if agy has a login and its onboarding is done
        agy_state.py resolve <workdir> <name>       print the conversation bosun knows by <name> there
        agy_state.py live <conversation-id>         print the pid of a running agy holding it
+       agy_state.py launched <name> <version>      record that window <name> starts on agy <version>
 
 Exit status 3: not found.
 
@@ -86,6 +87,7 @@ from agent_files import (
     AgentSetup,
     Command,
     LaunchSettings,
+    Profile,
     Screen,
     SetupError,
     emit,
@@ -107,6 +109,7 @@ NAMES_FILE = "agy-sessions.json"  # in bosun's state dir
 STATUS_DIR = "agy"  # in bosun's state dir: a status file per window
 KEYCHAIN_SERVICE = "gemini"  # the Keychain item agy's login is
 IDLE, BUSY, SHELL, WAITING = "idle", "busy", "shell", "waiting"
+RUN_FIELDS = ("status", "statusUpdatedAt", "conversationId")  # what a launch forgets of the last run
 # The log file's flag, a word of its own with its value one word after it, in agy's command line at launch.
 LOG_FILE = re.compile(r"(?<!\S)--log-file[= ](\S+)")
 LOG_PREFIX, LOG_SUFFIX = "agy-", ".log"  # around the conversation name in that file's name
@@ -200,6 +203,15 @@ def write_status(name: str, **fields: Any) -> None:
     """Merge <fields> into the status file of <name>. Two hooks can race here, and the one that loses only
     leaves a status that the next event corrects, so no lock."""
     write_atomically(status_path(name), json.dumps({**read_status(name), **fields}, indent=1))
+
+
+def launched(name: str, version: str) -> None:
+    """A launch of the window <name> on agy <version> ("" when it is not known). Everything the last run
+    of the window left in its status file about itself goes, its status, when that changed and its
+    conversation: the file would otherwise show a window that has not started as the one that ended, and
+    it is never seen starting. What was last said stays, as that is the hooks' own memory."""
+    kept = {key: value for key, value in read_status(name).items() if key not in RUN_FIELDS}
+    write_atomically(status_path(name), json.dumps({**kept, "version": version or None}, indent=1))
 
 
 def write_status_if_unchanged(name: str, since: Any, **fields: Any) -> dict[str, Any]:
@@ -1142,12 +1154,54 @@ def ready() -> bool:
     return shutil.which(agy_bin()) is not None and logged_in()
 
 
+def cmd_launched(args: list[str]) -> int:
+    launched(args[0], args[1])
+    return 0
+
+
 def cmd_logged_in(_args: list[str]) -> int:
     return 0 if logged_in() else NOT_FOUND
 
 
+PROFILE = Profile(
+    bin_key=BIN_KEY,
+    flags_key="BOSUN_AGY_FLAGS",
+    model_key="BOSUN_AGY_MODEL",
+    names_sessions=False,
+    statuses=frozenset({IDLE, BUSY, SHELL, WAITING}),
+    remote_control=True,
+    autocompact=False,
+    subagents=False,
+    state_files=(NAMES_FILE, STATUS_DIR),
+    display_name="Antigravity",
+    setup_preview=(
+        (
+            "One Antigravity (agy) session per repo, in its auto mode: a sandbox, and its reviewer deciding "
+            "when something may go past it. bosun's plugin lets git, gh and bosun commands through."
+        ),
+        (
+            "The orchestrator stays on Claude Code. Costs, context size and what you said in a window show "
+            "less for Antigravity so far."
+        ),
+    ),
+    setup_sessions="Antigravity, in auto mode",
+    setup_note=(
+        "Repo sessions run on Antigravity (agy) in its auto mode: a sandbox, and a reviewer that decides "
+        "when something may go past it, and bosun's own plugin, which lets git, gh and bosun commands "
+        "through. The orchestrator stays on Claude Code. Antigravity windows go without autocompact, "
+        "per-task subagents and the context size and cost statistics, and a window starts only if it "
+        "reaches no connector beyond its list: agy cannot be held to one."
+    ),
+    screen=SCREEN,
+    connectors="connectors_agy",
+    hooks=HOOKS,
+    setup=SETUP,
+    update_args=("update",),
+)
+
 COMMANDS: dict[str, Command] = {
     "logged-in": (0, cmd_logged_in),
+    "launched": (2, cmd_launched),
     "resolve": (2, lambda args: emit(resolve(args[0], args[1]))),
     "live": (1, lambda args: emit(live_pid(args[0]))),
 }

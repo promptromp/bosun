@@ -19,6 +19,7 @@ from unittest import mock
 
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "lib"))
+import agy_state
 import claude_state
 import codex_state
 import init
@@ -70,6 +71,7 @@ class WorldTest(unittest.TestCase):
             mock.patch.object(codex_state, "SESSIONS_DIR", self.home / ".codex" / "sessions"),
             mock.patch.object(codex_state, "CONFIG_FILE", self.home / ".codex" / "config.toml"),
             mock.patch.object(codex_state, "ready", return_value=False),
+            mock.patch.object(agy_state, "ready", return_value=False),
             mock.patch.object(Path, "home", return_value=self.home),
             # This scratch home is itself in a temporary folder.
             mock.patch.object(init_detect, "TEMPORARY_FOLDERS", (str(self.home / "scratch"),)),

@@ -30,6 +30,9 @@ set_harness_defaults() {
   BOSUN_CODEX_BIN="codex"
   BOSUN_CODEX_FLAGS="--no-daemon --approve-for-me"
   BOSUN_CODEX_MODEL=""
+  BOSUN_AGY_BIN="agy"
+  BOSUN_AGY_FLAGS=""
+  BOSUN_AGY_MODEL=""
 }
 
 # What each window may reach (docs/setup.md, "Connectors"): a comma-separated list of MCP servers and
