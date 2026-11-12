@@ -19,6 +19,7 @@ from typing import Any
 CONTRACT = 1  # the shape of the check's JSON; the menu bar app reads it
 CHANNELS = ("releases", "main")
 RELEASE_TAG = re.compile(r"^v(\d{4})\.(\d{2})\.(\d{2})(?:\.(\d+))?$")
+CREDENTIALS = re.compile(r"([A-Za-z][A-Za-z0-9+.-]*://)[^/\s@'\"]*@")  # `scheme://user:secret@`
 FIRST_REPEAT = 2  # a second release of a day is `.2`
 PEELED = "^{}"  # what `git ls-remote` appends to a tag's name for the commit an annotated tag points at
 TAGS_PREFIX = "refs/tags/"
@@ -90,6 +91,11 @@ def url_without_credentials(url: str) -> str:
     return f"{scheme}://{host.rpartition('@')[2]}{slash}{path}"
 
 
+def strip_credentials(text: str) -> str:
+    """<text> with the user name, password or token before the host of any URL in it taken off."""
+    return CREDENTIALS.sub(r"\1", text)
+
+
 def count_notes(notes: str) -> int:
     """How many bullets (`- <subject>` lines) <notes> holds."""
     return sum(1 for line in notes.splitlines() if line.strip())
@@ -111,7 +117,8 @@ def check(  # noqa: PLR0913 - the five the caller always has, and two it may nam
     on the `main` channel the branch head's short commit and commit; None when there is none. <skipped>
     is the version the person asked not to be offered; skipped is true while it is the latest, and the
     update stays available (the one who asks decides). <ahead>: the installed commit descends from the
-    latest, so there is nothing to update to. <notes> is what the latest holds that the install lacks."""
+    latest, so there is nothing to update to. <notes> is the newest release's tag message (its notes), or
+    on `main` the subjects of the commits since the installed one."""
     latest = None if newest is None else {"version": newest[0], "commit": newest[1], "notes": notes}
     differs = newest is not None and newest[1] != installed_commit
     return {

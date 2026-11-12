@@ -18,6 +18,7 @@ from unittest import mock
 
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "lib"))
+import checkout_work
 import update_lookup
 
 
@@ -46,6 +47,16 @@ class LookupTest(unittest.TestCase):
         self.versions.mkdir(parents=True)
         self.repo = self.versions / "bosun.git"
         git(self.tmp, "clone", "-q", "--bare", str(self.up), str(self.repo))
+        # As get.sh leaves it: the branch fetched into its remote ref, at the install's commit.
+        git(
+            self.tmp,
+            "--git-dir",
+            str(self.repo),
+            "fetch",
+            "-q",
+            "origin",
+            "+refs/heads/main:refs/remotes/origin/main",
+        )
         self.commits += [self.commit("second"), self.commit("third")]
         self.state = self.tmp / "state"
         self.install(0)
@@ -98,6 +109,35 @@ class LookupTest(unittest.TestCase):
         )
         self.assertEqual(found["installed"], {"version": "v2025.12.01", "commit": self.commits[0]})
         self.assertEqual(self.folders(), before, "no version folder was made")
+
+    def uninstall_would_lose(self) -> str:
+        """What uninstall's check finds in the versions folder to keep it for."""
+        return checkout_work.versions_work(self.versions, [self.versions / self.commits[0][:12]])
+
+    def test_a_check_leaves_nothing_for_uninstall_to_keep(self) -> None:
+        self.tag("v2026.01.01", 1, "- Second\n")
+        self.assertEqual(self.uninstall_would_lose(), "")
+        self.assertTrue(self.answer()["available"])
+        self.assertEqual(self.uninstall_would_lose(), "")
+
+    def test_a_target_leaves_nothing_for_uninstall_to_keep(self) -> None:
+        self.tag("v2026.01.01", 1, "- Second\n")
+        self.tag("v2026.01.02", 2, "- Third\n")
+        self.assertEqual(update_lookup.target(), f"commit {self.commits[2]} v2026.01.02")
+        self.assertEqual(self.uninstall_would_lose(), "")
+
+    def test_a_target_that_fails_says_why_and_never_the_password(self) -> None:
+        self.tag("v2026.01.01", 1, "- Second\n")
+        login = "user:0000placeholder"  # made up
+        url = f"https://{login}@127.0.0.1:9/acme/bosun.git"
+        git(self.tmp, "--git-dir", str(self.repo), "remote", "set-url", "origin", url)
+        with self.assertRaises(update_lookup.LookupFailed) as failed:
+            update_lookup.target()
+        message = str(failed.exception)
+        self.assertTrue(message.startswith("could not reach https://127.0.0.1:9/acme/bosun.git: "), message)
+        self.assertGreater(len(message), len("could not reach https://127.0.0.1:9/acme/bosun.git: "))
+        self.assertNotIn("0000placeholder", message)
+        self.assertEqual(self.answer()["error"], "could not reach https://127.0.0.1:9/acme/bosun.git")
 
     def test_a_check_changes_no_state(self) -> None:
         self.tag("v2026.01.01", 1, "- Second\n")

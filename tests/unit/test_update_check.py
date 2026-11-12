@@ -117,6 +117,21 @@ class CheckTest(unittest.TestCase):
 
 
 class UrlTest(unittest.TestCase):
+    def test_credentials_are_taken_out_of_a_line_of_git_s(self) -> None:
+        login = "user:0000placeholder"  # made up
+        line = f"fatal: unable to access 'https://{login}@example.com/a.git/': Could not resolve host"
+        stripped = update_check.strip_credentials(line)
+        self.assertEqual(
+            stripped, "fatal: unable to access 'https://example.com/a.git/': Could not resolve host"
+        )
+        both = update_check.strip_credentials(
+            "https://a:b@one.example/x https://tok@two.example/y"
+        )  # gitleaks:allow
+        self.assertEqual(both, "https://one.example/x https://two.example/y")
+        self.assertEqual(
+            update_check.strip_credentials("git@example.com:acme/x.git"), "git@example.com:acme/x.git"
+        )
+
     def test_credentials_are_taken_off(self) -> None:
         shown = update_check.url_without_credentials
         self.assertEqual(

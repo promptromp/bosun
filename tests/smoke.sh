@@ -3259,10 +3259,10 @@ FAKE
   U_CONFIG="$U/config"
   mkdir -p "$U_VERSIONS" "$U_STATE" "$U_CONFIG"
   copy_tree "$U_UP"
-  # v1 stands for an install from before the connector keys: its lib/common.sh has no default line for
-  # them (what the plan reads a version's keys from), though it still sets them, to every connector as
-  # such an install had, so that v1 runs. Each v2 gets them back (u_next), so the update adds both and
-  # writes the orchestrator's kept value to bosun.env (migrations.CONFIG_ADDED).
+  # v1 stands for an install from before the connector keys and the update channel: its lib/common.sh has
+  # no default line for them (what the plan reads a version's keys from), though it still sets them, to
+  # every connector and to main as such an install had, so that v1 runs. Each v2 gets them back (u_next), so
+  # the update adds them and writes the kept values to bosun.env (migrations.CONFIG_ADDED).
   cp "$U_UP/lib/common.sh" "$U/common.sh.with-connectors"
   python3 - "$U_UP/lib/common.sh" <<'PY'
 import sys
@@ -3270,11 +3270,15 @@ from pathlib import Path
 
 path = Path(sys.argv[1])
 text = path.read_text()
-for key in ("BOSUN_CONNECTORS", "BOSUN_ORCHESTRATOR_CONNECTORS"):
-    line = f'  {key}=""\n'
+for key, default, kept in (
+    ("BOSUN_CONNECTORS", '""', "all"),
+    ("BOSUN_ORCHESTRATOR_CONNECTORS", '""', "all"),
+    ("BOSUN_UPDATE_CHANNEL", '"releases"', "main"),
+):
+    line = f"  {key}={default}\n"
     if text.count(line) != 1:
         raise SystemExit(f"{path} does not hold {line!r} once")
-    text = text.replace(line, f'  : "${{{key}=all}}"\n')
+    text = text.replace(line, f'  : "${{{key}={kept}}}"\n')
 path.write_text(text)
 PY
   u_next() { # [--failing]: v2 made from v1 in upstream's tree, its connector keys' defaults back
@@ -3333,6 +3337,8 @@ PY
   check "... and changes nothing in the state or the config" test "$(u_files)" = "$before"
   check "... and that the update writes to bosun.env the value that keeps what this install did" bash -c '
     grep -q "^Written to bosun.env, to keep what this install did:" <<<"$1" && grep -qx "  BOSUN_ORCHESTRATOR_CONNECTORS=\"all\"" <<<"$1"' _ "$out"
+  check "... and, as the install had no update channel, BOSUN_UPDATE_CHANNEL=\"main\" with its note: it goes on following main" bash -c '
+    grep -qx "  BOSUN_UPDATE_CHANNEL=\"main\"" <<<"$1" && grep -q "bosun update goes on following main, as before; to follow the dated releases instead, set BOSUN_UPDATE_CHANNEL=releases" <<<"$1"' _ "$out"
   check "... nor the link" u_at "$U_V1"
   git --git-dir="$U_VERSIONS/bosun.git" remote set-url origin "https://0000placeholder-token@127.0.0.1:9/acme/bosun.git" # gitleaks:allow
   out="$(ub update --dry-run 2>&1)"
@@ -3455,11 +3461,13 @@ PY
   check "... and what bosun doctor found then (here: no sessions.yml)" jq -e '.findings | any(contains("sessions manifest not found"))' "$U_STATE/update.json"
   check "... it wrote the value that keeps what the install did to bosun.env, keeping a copy as it was" bash -c '
     grep -qx "BOSUN_ORCHESTRATOR_CONNECTORS=\"all\"" "$1/bosun.env" && ! grep -q "^BOSUN_CONNECTORS=" "$1/bosun.env" &&
+      grep -qx "BOSUN_UPDATE_CHANNEL=\"main\"" "$1/bosun.env" &&
       [ "$(cat "$1"/bosun.env.pre-update-*)" = "# acme: an install from before connectors" ]' _ "$U_CONFIG"
   check "... and its summary says so, with what each added key means" bash -c '
-    grep -q "^  bosun\.env  *BOSUN_ORCHESTRATOR_CONNECTORS=\"all\" added (before: bosun\.env\.pre-update-" "$1" &&
+    grep -q "^  bosun\.env  *BOSUN_ORCHESTRATOR_CONNECTORS=\"all\" added.*BOSUN_UPDATE_CHANNEL=\"main\" added (before: bosun\.env\.pre-update-" "$1" &&
       grep -q "^  BOSUN_ORCHESTRATOR_CONNECTORS  *the orchestrator keeps every connector, as before" "$1" &&
-      grep -q "^  BOSUN_CONNECTORS  *repo windows now start without connectors" "$1"' _ "$U/summary.txt"
+      grep -q "^  BOSUN_CONNECTORS  *repo windows now start without connectors" "$1" &&
+      grep -q "^  BOSUN_UPDATE_CHANNEL  *bosun update goes on following main, as before" "$1"' _ "$U/summary.txt"
   check "... it reloaded the launchd jobs, which run the link" bash -c 'grep -qF "$2/bin/bosun" "$1/Library/LaunchAgents/com.bosun.update-test.plist"' _ "$HOME" "$(cd "$U/share" && pwd -P)/bosun"
   check "... and deleted the folder of the version that failed, keeping v1's and v2's" bash -c '[ ! -e "$1/${2:0:12}" ] && [ -d "$3" ] && [ -d "$4" ]' _ "$U_VERSIONS" "$U_FAILING_COMMIT" "$U_V1" "$U_V2"
   check "the write that waited ran again on v2, and landed" bash -c '[ "$1" = 0 ] && [ "$(jq -r ".items[\"review:acme/api#3\"].title" "$2/ledger.json")" = "Written while paused" ]' _ "$writer_rc" "$U_STATE"

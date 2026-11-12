@@ -42,15 +42,19 @@ LOCAL_SECONDS = 30
 USAGE = 2  # the exit status of a command line that makes no sense
 # A transfer slower than 1 KB/s for 30 seconds is given up on, as the update's own fetch does.
 SLOW = ("-c", "http.lowSpeedLimit=1000", "-c", "http.lowSpeedTime=30")
+# Where the release looked at is fetched to: a remote ref, one that each fetch overwrites, never
+# refs/tags. Uninstall (lib/checkout_work.py) counts what a branch or tag of the versions' repository
+# holds that no remote ref does as work of yours, and would keep the versions folder for a tag.
+RELEASE_REF = "refs/remotes/origin/release"
 
 
 class LookupFailed(Exception):
     """Something the lookup could not do: what it says is shown as it is."""
 
 
-def _git(repo: Path, *args: str, network: str | None = None) -> str:
+def _git(repo: Path, *args: str, network: str | None = None, why: bool = False) -> str:
     """<args> in <repo>; its output. A failure is LookupFailed: <network>, when the call went over the
-    network, else git's own words."""
+    network (with <why>, and git's last line of complaint, credentials taken off), else git's own words."""
     try:
         done = versions.git(
             *(SLOW if network else ()),
@@ -64,8 +68,14 @@ def _git(repo: Path, *args: str, network: str | None = None) -> str:
     if done is not None and done.returncode == 0:
         return done.stdout
     if network:
-        raise LookupFailed(network)
+        raise LookupFailed(f"{network}: {_reason(done)}" if why and done is not None else network)
     raise LookupFailed(f"git {args[0]} failed: {done.stderr.strip() if done else 'timed out'}")
+
+
+def _reason(done: subprocess.CompletedProcess[str]) -> str:
+    """The last line git said, with no credentials in it."""
+    lines = [line.strip() for line in done.stderr.splitlines() if line.strip()]
+    return update_check.strip_credentials(lines[-1]) if lines else f"git exited {done.returncode}"
 
 
 def _succeeds(repo: Path, *args: str) -> bool:
@@ -88,12 +98,14 @@ def _origin(repo: Path) -> str:
     return update_check.url_without_credentials(_git(repo, "config", "remote.origin.url").strip())
 
 
-def _remote_tags(repo: Path) -> list[tuple[str, str]]:
-    out = _git(repo, "ls-remote", "--tags", "origin", "v*", network=f"could not reach {_origin(repo)}")
+def _remote_tags(repo: Path, *, why: bool = False) -> list[tuple[str, str]]:
+    out = _git(
+        repo, "ls-remote", "--tags", "origin", "v*", network=f"could not reach {_origin(repo)}", why=why
+    )
     return update_check.parse_ls_remote(out)
 
 
-def _fetch(repo: Path, refspec: str, what: str) -> None:
+def _fetch(repo: Path, refspec: str, what: str, *, why: bool = False) -> None:
     _git(
         repo,
         "fetch",
@@ -102,11 +114,13 @@ def _fetch(repo: Path, refspec: str, what: str) -> None:
         "origin",
         refspec,
         network=f"could not fetch {what} from {_origin(repo)}",
+        why=why,
     )
 
 
-def _fetch_tag(repo: Path, tag: str) -> None:
-    _fetch(repo, f"+refs/tags/{tag}:refs/tags/{tag}", tag)
+def _fetch_tag(repo: Path, tag: str, *, why: bool = False) -> None:
+    """The release <tag>'s objects, at RELEASE_REF."""
+    _fetch(repo, f"+refs/tags/{tag}:{RELEASE_REF}", tag, why=why)
 
 
 def _branch(repo: Path) -> str:
@@ -161,7 +175,7 @@ def _release_answer(repo: Path, installed: str, skipped: str | None) -> dict[str
     tag, commit = newest
     _fetch_tag(repo, tag)
     ahead = _descends(repo, commit, installed)
-    notes = "" if ahead else _git(repo, "tag", "-l", "--format=%(contents)", tag).strip()
+    notes = "" if ahead else _git(repo, "for-each-ref", "--format=%(contents)", RELEASE_REF).strip()
     return update_check.check(installed, version, newest, skipped, ahead, notes=notes)
 
 
@@ -202,14 +216,14 @@ def target() -> str:
     """`commit <sha> <tag>`: the newest release, fetched, for the update to install; `ahead <tag>` when
     the install is past it. LookupFailed when there is no release or it cannot be had."""
     repo = _repo()
-    newest = update_check.newest_release(_remote_tags(repo))
+    newest = update_check.newest_release(_remote_tags(repo, why=True))
     if newest is None:
         raise LookupFailed(
             f"no release at {_origin(repo)} yet "
             "(BOSUN_UPDATE_CHANNEL=main follows the head of the branch instead)"
         )
     tag, commit = newest
-    _fetch_tag(repo, tag)
+    _fetch_tag(repo, tag, why=True)
     installed = _installed_commit()
     if installed is not None and installed != commit and _descends(repo, commit, installed):
         return f"ahead {tag}"

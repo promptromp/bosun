@@ -207,8 +207,8 @@ people can skip, read about and recognise.
 - **`bosun update` follows releases by default** (`BOSUN_UPDATE_CHANNEL=releases`); `main` stays a channel for
   developers. An existing install keeps following `main` (a `CONFIG_ADDED` entry with the kept value `main`) and the
   update's summary says how to switch.
-- **`bosun update --check --json`** looks up the newest release with `git ls-remote` (no fetch, no folder) and reads
-  its notes from the tag's message: what the app's "Update Available" and its dialog show. The app checks every 6
+- **`bosun update --check --json`** looks up the newest release with `git ls-remote`, fetches only that tag's objects (no branch, no
+  version folder) and reads its notes from the tag's message: what the app's "Update Available" and its dialog show. The app checks every 6
   hours and when the menu opens, at most once a minute.
 - **"Update Now" shows the plan first:** the app runs the update's rehearsal (`bosun update --dry-run --json`), shows
   what it will do (the windows that restart, anything that needs you, a reason it cannot run), and only then runs

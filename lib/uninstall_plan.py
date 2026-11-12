@@ -70,10 +70,7 @@ STATE_FILES = (
     ("update.json", WORKING),  # the update's record (docs/design/update.md)
     ("update.json.tmp", WORKING),
     ("update.lock", WORKING),
-    (
-        "update-skip.json",
-        WORKING,
-    ),  # the release `bosun update --skip` said not to offer (lib/update_lookup.py)
+    ("update-skip.json", WORKING),  # the release `--skip` said not to offer
     (".update-skip.json.tmp", WORKING),
     ("update", WORKING),
     (".*.restoring", WORKING),  # what an update's restore was writing, cut short (lib/update_backups.py)
