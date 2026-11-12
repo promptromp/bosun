@@ -2380,6 +2380,40 @@ check "--restart starts the session afresh" bash -c 'grep -q "restarting existin
 check "an unknown mode is an error" fails_with "must be refresh, drain or restart" env BOSUN_ON_EXISTING=bogus "$BOSUN" start
 "$BOSUN" stop >/dev/null 2>&1
 
+echo "stopped until started (what bosun quit leaves: quit.json)"
+write_quit() { # <paused|running>: the file `bosun quit` writes
+  python3 -I -c 'import sys; from pathlib import Path; sys.path.insert(0, sys.argv[1]); import quit_state; quit_state.write(Path(sys.argv[2]), sys.argv[3] == "paused")' "$ROOT/lib" "$BOSUN_STATE_DIR" "$1"
+}
+mkdir -p "$WORK/fake-caffeinate"
+printf '#!/bin/sh\nexit 0\n' >"$WORK/fake-caffeinate/caffeinate" # a real one would keep this Mac awake
+chmod +x "$WORK/fake-caffeinate/caffeinate"
+write_quit paused
+cp "$BOSUN_STATE_DIR/watchdog.json" "$WORK/watchdog-before-quit.json"
+out="$("$BOSUN" watchdog 2>&1)"
+check "the watchdog skips its run while bosun is stopped, saying since when" bash -c 'grep -qE "^bosun is stopped \(bosun quit at [0-9]{2}:[0-9]{2}\): skipping this run$" <<<"$1"' _ "$out"
+check "... also the check-in loop's partial run" contains "$("$BOSUN" watchdog --only waiting 2>&1)" "bosun is stopped (bosun quit at"
+check "... changing no state" cmp -s "$BOSUN_STATE_DIR/watchdog.json" "$WORK/watchdog-before-quit.json"
+check "... but its read-only modes still answer" not_contains "$("$BOSUN" watchdog --status 2>&1)" "skipping this run"
+out="$(BOSUN_LEARN_ENABLED=1 "$BOSUN" learn --scheduled 2>&1)"
+check "the scheduled learning run skips while bosun is stopped" bash -c 'grep -qE "^bosun is stopped \(bosun quit at [0-9]{2}:[0-9]{2}\): skipping this learning run$" <<<"$1"' _ "$out"
+check "... but a learn you type yourself still runs" contains "$(BOSUN_CLAUDE_BIN=false "$BOSUN" learn --collect-only --out "$WORK/learn-digest" 2>&1)" "digest of"
+out="$("$BOSUN" morning --skip-setup 2>&1)"
+check "a paused morning logs why and starts nothing" bash -c 'grep -qE "the morning start is paused \(bosun quit at [0-9]{2}:[0-9]{2}\); start bosun to resume" <<<"$1" && ! grep -qE "network is up|holding keep-awake|starting tmux session" <<<"$1"' _ "$out"
+check "... it exits 0" "$BOSUN" morning --skip-setup
+check "... with no session, no keep-awake and the file still there" bash -c '! tmux -L "$1" has-session -t =smoke && [ ! -e "$2/keep-awake-smoke.pid" ] && [ -f "$2/quit.json" ]' _ "$SOCKET" "$BOSUN_STATE_DIR"
+check "... also as a dry run" contains "$("$BOSUN" morning --dry-run 2>&1)" "the morning start is paused"
+write_quit running
+check "a quit that did not pause the morning does not stop a dry run, or clear the file for one" bash -c 'out="$("$1" morning --dry-run --skip-setup 2>&1)" && ! grep -q "is paused" <<<"$out" && [ -f "$2/quit.json" ]' _ "$BOSUN" "$BOSUN_STATE_DIR"
+check "... a morning starts as usual" bash -c 'PATH="$3:$PATH" BOSUN_NETWORK_PROBE_URL=file:///dev/null "$1" morning --skip-setup --awake-minutes 1 >/dev/null 2>&1; tmux -L "$2" has-session -t =smoke' _ "$BOSUN" "$SOCKET" "$WORK/fake-caffeinate"
+check "... and clears the file" test ! -e "$BOSUN_STATE_DIR/quit.json"
+"$BOSUN" stop >/dev/null 2>&1
+rm -f "$BOSUN_STATE_DIR/keep-awake-smoke.pid"
+write_quit paused
+"$BOSUN" start >/dev/null 2>&1
+check "bosun start clears it, paused or not" test ! -e "$BOSUN_STATE_DIR/quit.json"
+check "... and the watchdog runs again" not_contains "$("$BOSUN" watchdog --dry-run 2>&1)" "bosun is stopped"
+"$BOSUN" stop >/dev/null 2>&1
+
 echo "console (local server on a free port, fixture ledger)"
 CONSOLE_STATE="$WORK/console-state"
 mkdir -p "$CONSOLE_STATE"

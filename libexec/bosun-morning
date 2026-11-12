@@ -15,6 +15,9 @@
 #   --dry-run          report what would happen; no keep-awake, logins or tmux changes
 #   --skip-setup       skip step 3 (the agents' update, step 4, still runs)
 #   --awake-minutes N  hold the keep-awake for N minutes instead of until BOSUN_AWAKE_UNTIL
+#
+# After a `bosun quit` that paused the morning start it logs that and exits 0 before doing anything, until
+# `bosun start`. After one that did not, it starts as usual and ends the quit.
 set -uo pipefail
 source "$(dirname "$0")/../lib/common.sh"
 load_config
@@ -97,6 +100,12 @@ wait_for_update_hold() {
 }
 
 log "=== morning run (trigger=${BOSUN_TRIGGER:-manual}, session=$BOSUN_SESSION_NAME, dry_run=$DRY_RUN) ==="
+if quit_at="$(quit_paused)"; then
+  log "the morning start is paused (bosun quit at $quit_at); start bosun to resume"
+  exit 0
+fi
+# A quit that did not pause the morning ends here: bosun starts as usual, and the quit is over.
+[ "$DRY_RUN" = "1" ] || quit_clear
 pmset -g batt | head -1 | sed 's/^/power: /'
 
 problems=()

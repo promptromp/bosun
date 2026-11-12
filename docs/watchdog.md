@@ -34,6 +34,9 @@ question it waits on reads as busy (`waiting`) and a background command does not
 
 How it avoids false alarms:
 
+- **Not while bosun is quit:** after `bosun quit`, a run that records or alerts says "bosun is stopped
+  (bosun quit at HH:MM): skipping this run" and exits, before it looks at anything, until `bosun start`
+  (as it skips while an update holds its work). `--dry-run`, `--status`, `--list` and `--facts` still answer.
 - **Only in the awake window:** alerts go out on scheduled days (`BOSUN_DAYS`) between
   `BOSUN_START_TIME` and `BOSUN_AWAKE_UNTIL` (an end at or before the start runs past
   midnight: 08:00 to 01:00 ends at 1 am the next day). Anything found outside it is held: a prompt

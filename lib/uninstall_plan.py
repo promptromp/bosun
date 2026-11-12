@@ -72,6 +72,8 @@ STATE_FILES = (
     ("update.lock", WORKING),
     ("update-skip.json", WORKING),  # the release `--skip` said not to offer
     (".update-skip.json.tmp", WORKING),
+    ("quit.json", WORKING),  # bosun is stopped until started (lib/quit_state.py)
+    (".quit.json.*", WORKING),  # what writing it left, cut short
     ("update", WORKING),
     (".*.restoring", WORKING),  # what an update's restore was writing, cut short (lib/update_backups.py)
     ("agent-changes.json", WORKING),

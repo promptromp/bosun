@@ -89,6 +89,9 @@ of truth, so don't copy rules into this file.
   the one repo-mask implementation. `lib/watchdog.py`: the watchdog's table of checks (`CHECKS`),
   awake window, de-dup state and alert sinks; `libexec/bosun-watchdog` only collects the live
   facts (tmux windows, the Claude in each, the check-in loop, launchd) for it.
+- `lib/quit_state.py` (design: `docs/design/menu-bar.md`): what `bosun quit` leaves (`quit.json`: since when, whether the
+  morning start is paused), which the watchdog and learning's scheduled run skip on, and the morning run when paused
+  (`quit_stopped`, `quit_paused`, `quit_clear` in `lib/common.sh`); `bosun start` clears it.
 - Sync (design: `docs/design/sync.md`): every ledger write goes through `locked_ledger` into a
   journal that `ledger.json` is the rebuild of, and every knowledge write through
   `knowledge.opened` into one in `knowledge/journal/`. `lib/change_log.py` (pure: the envelope, ids,

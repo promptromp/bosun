@@ -48,6 +48,9 @@
 # alerts once (per day, per prompt, per item, per outage); what one run finds goes out as one
 # message. A missing run, session or check-in loop must be seen on two runs in a row first. State:
 # $BOSUN_STATE_DIR/watchdog.json.
+#
+# A run that records or alerts does nothing while bosun is stopped by `bosun quit` (quit.json in the
+# state folder, until `bosun start`): it says so and exits 0, before collecting any fact.
 set -uo pipefail
 source "$(dirname "$0")/../lib/common.sh"
 load_config
@@ -120,6 +123,11 @@ case "${args[*]-}" in
   "" | "--once" | "--only "* | "--once --only "*)
     if update_hold_active; then
       echo "update in progress: skipping this watchdog run"
+      exit 0
+    fi
+    # Before any fact is collected: while bosun is quit there is nothing to look at and nothing to restart.
+    if quit_at="$(quit_stopped)"; then
+      echo "bosun is stopped (bosun quit at $quit_at): skipping this run"
       exit 0
     fi
     ;;

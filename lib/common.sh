@@ -575,6 +575,20 @@ keep_awake_pidfile() { echo "$BOSUN_STATE_DIR/keep-awake-$BOSUN_SESSION_NAME.pid
 # expect the session on a day you stopped it.
 stop_marker() { echo "$BOSUN_STATE_DIR/stopped-$BOSUN_SESSION_NAME"; }
 
+# Whether `bosun quit` left bosun stopped until it is started (lib/quit_state.py, quit.json in the state
+# folder): succeeds and prints the time of the quit (HH:MM). The watchdog's and learning's scheduled runs
+# skip while it does; quit_paused is the same for the morning run, when the quit also paused it.
+# `bosun start` and a morning run that is not paused call quit_clear.
+quit_stopped() {
+  [ -f "$BOSUN_STATE_DIR/quit.json" ] || return 1
+  python3 "$BOSUN_ROOT/lib/quit_state.py" stopped --state-dir "$BOSUN_STATE_DIR"
+}
+quit_paused() {
+  [ -f "$BOSUN_STATE_DIR/quit.json" ] || return 1
+  python3 "$BOSUN_ROOT/lib/quit_state.py" paused --state-dir "$BOSUN_STATE_DIR"
+}
+quit_clear() { rm -f "$BOSUN_STATE_DIR/quit.json"; }
+
 session_exists() { tmux_cmd has-session -t "=$BOSUN_SESSION_NAME" 2>/dev/null; }
 
 # Command for attaching to the session, for messages.
