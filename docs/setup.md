@@ -27,9 +27,9 @@ missing at once, with what to do about each. `bosun init` and `bosun doctor` sta
 curl -fsSL https://raw.githubusercontent.com/promptromp/bosun/main/get.sh | sh
 ```
 
-[`get.sh`](../get.sh) puts bosun in `~/.local/share/bosun-versions`, a folder for each version beside the
-one repository they come from (`bosun.git`), makes `~/.local/share/bosun` a link to the version in use,
-and starts `bosun init`. It installs nothing else: if something is missing, it says what, gives you the
+[`get.sh`](../get.sh) puts the newest release of bosun in `~/.local/share/bosun-versions`, a folder for each
+version beside the one repository they come from (`bosun.git`), makes `~/.local/share/bosun` a link to the
+version in use, and starts `bosun init`. It installs nothing else: if something is missing, it says what, gives you the
 lines to run and the pages to go to, and stops. Do those, and run the same line again. It takes a few
 minutes the first time, most of it Homebrew's, and once everything is there the questions take about a
 minute.
@@ -40,7 +40,8 @@ To run the repo sessions on Codex, ask for it after the pipe, so that it checks 
 curl -fsSL https://raw.githubusercontent.com/promptromp/bosun/main/get.sh | BOSUN_HARNESS=codex sh
 ```
 
-Run it again to update: it hands over to the newest version's `bosun update` (see [Updating](#updating)).
+Run it again to update: it hands over to the `bosun update` of the install you have (see
+[Updating](#updating)), which moves it as its own channel says, so it never moves an install off its channel.
 After the pipe, `sh -s -- --dry-run` says what it would do and does nothing, and `sh -s -- --unattended`
 asks nothing: it takes the recommended setup, or goes ahead with the update. On a first install that
 setup has no repo windows and gives the orchestrator no connectors, since nobody chose them, and its last
@@ -48,6 +49,13 @@ line says so: run `bosun init` to add them, or name them in a file with `bosun i
 Run again, it keeps what your config says. `BOSUN_DIR`, `BOSUN_REPO` and `BOSUN_BRANCH` override where it
 goes and what it gets; on an install that is already there, the defaults are what it came from, and a
 `BOSUN_REPO` or `BOSUN_BRANCH` given then is kept for the updates after it.
+
+A new install gets the newest release (a tag `v<YYYY.MM.DD>`, as `bosun update` follows them). A repository that
+has no release yet gets the head of `main`, and `get.sh` says so. With `BOSUN_BRANCH` (after the pipe, as
+`BOSUN_HARNESS` above) it gets the head of that branch instead, and the install follows the branch, not the
+releases: `bosun init` writes `BOSUN_UPDATE_CHANNEL="main"` to `bosun.env` without asking, and `bosun update`
+goes on to the head of the branch. The channel is the one setting; `bosun init --answers` takes it as
+`update_channel` (`releases` or `main`).
 
 `bosun init` reads what this Mac already shows: the repos you use your agents in, the MCP servers and
 connectors `claude mcp list` shows, your usual hours, your logins. In a terminal it asks a few questions,
@@ -136,8 +144,8 @@ bosun update --dry-run   # only shows the plan
 bosun update --yes       # goes ahead without asking
 ```
 
-It updates bosun to the head of the branch the install follows (`main`, or the `BOSUN_BRANCH` it was
-installed with), while the agents keep working. It gets the new version into a folder of its own, beside
+It updates bosun to the newest release, or on the `main` channel (`BOSUN_UPDATE_CHANNEL="main"`, which an install
+made with `BOSUN_BRANCH` follows) to the head of the branch the install follows, while the agents keep working. It gets the new version into a folder of its own, beside
 the one you run, and that version shows its plan: the commits, the migrations your data needs, the
 prompts that changed, what each window gets, the launchd jobs to reload, and anything that stops it. In a
 terminal it asks first; without one it stops at the plan. Running the install line again does the same,

@@ -441,8 +441,9 @@ Settled while building it:
 ### `get.sh` on an existing install
 
 The bosun already installed may not have `update` yet. `get.sh` is always fetched fresh from the
-branch, so on an existing install it gets the new version into its own folder and runs that version's
-`bosun update`. A first install uses the new layout from the start.
+branch, so on an existing install it hands over to `bosun update`: the install's own when it is a link
+to a version, so that its channel decides what it moves to, and the new version's, from the head of the
+branch, when it is a checkout from before versions. A first install uses the new layout from the start.
 
 **The first update converts, at a quiet moment.** The version it converts from may have none of the
 following (a checkout from before Part A has none; one of Part A has the hold, the write check and a
@@ -463,8 +464,9 @@ between two versions that both have `update` (not run yet).
 Settled while building it:
 
 - **`get.sh`** looks at the install path first, and refuses what it does not know. On an install `init`
-  has set up, it fetches the branch into `bosun.git` (cloned bare beside a checkout first), adds the new
-  version's folder and runs that version's `bosun update --from` the version in use. An install `init`
+  has set up, a link to a version gets the install's own `bosun update` and fetches nothing; a checkout
+  gets the branch fetched into `bosun.git` (cloned bare beside it first), the new version's folder and
+  that version's `bosun update --from` the checkout. An install `init`
   never finished gets `init` again, as it is, since only `bosun update` switches versions. The cases:
   [init.md](init.md#the-wizard).
 - **Which update converts** is decided by the version updated from, once an update cut short is carried

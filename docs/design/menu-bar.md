@@ -206,7 +206,11 @@ people can skip, read about and recognise.
   message.
 - **`bosun update` follows releases by default** (`BOSUN_UPDATE_CHANNEL=releases`); `main` stays a channel for
   developers. An existing install keeps following `main` (a `CONFIG_ADDED` entry with the kept value `main`) and the
-  update's summary says how to switch.
+  update's summary says how to switch. A first install (`get.sh`) takes the newest release too, found by a small `sh`
+  function that follows the same tag rule (it cannot ask Python, which has not been checked yet; a unit test holds
+  the two to the same answers); a repository with no release yet gets the head of `main`, and `get.sh` says so. With
+  `BOSUN_BRANCH` it installs that branch's head and the install follows the branch (`BOSUN_UPDATE_CHANNEL=main`).
+  Running the install line again hands over to the install's own `bosun update`, so its channel decides.
 - **`bosun update --check --json`** looks up the newest release with `git ls-remote`, fetches only that tag's objects (no branch, no
   version folder) and reads its notes from the tag's message: what the app's "Update Available" and its dialog show. The app checks every 6
   hours and when the menu opens, at most once a minute.

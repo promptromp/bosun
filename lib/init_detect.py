@@ -229,6 +229,7 @@ def detect(config_dir: Path, now: datetime | None = None) -> Facts:
         bypass_accepted=claude_state.bypass_accepted(),
         ready_agents=ready_agents(),
         asked_harness=os.environ.get("BOSUN_HARNESS", ""),
+        asked_channel=os.environ.get("BOSUN_UPDATE_CHANNEL", ""),
         connectors=connectors_found(claude_bin, home),
         agent_prompts=counts(agent_uses),
         has_battery="InternalBattery" in (output_of("pmset", "-g", "batt") or ""),

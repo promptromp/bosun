@@ -20,6 +20,7 @@ from typing import Any
 
 import agent_state
 import connectors
+import update_check
 from agent_files import Profile
 from awake import DAY_LETTERS
 
@@ -31,6 +32,8 @@ RESERVED_WINDOWS = frozenset({"orchestrator", "checkin"})  # lib/common.sh's win
 
 DEFAULT_DAYS, DEFAULT_START, DEFAULT_UNTIL = "MTWRF", "08:00", "20:00"
 DEFAULT_MODEL, DEFAULT_REPOS_DIR = "opus", "~/Development"
+DEFAULT_CHANNEL = "releases"  # what bosun update follows: the dated releases (lib/update_check.py)
+UPDATE_CHANNEL = "BOSUN_UPDATE_CHANNEL"
 DEFAULT_WAKE_DELAY_MINUTES = 1
 MINUTES_PER_DAY = 24 * 60
 HALF_HOUR = 30
@@ -101,6 +104,7 @@ class Facts:
     bypass_accepted: bool = False
     ready_agents: tuple[str, ...] = ()  # installed and logged in
     asked_harness: str = ""  # BOSUN_HARNESS in the environment: curl ... | BOSUN_HARNESS=codex sh
+    asked_channel: str = ""  # BOSUN_UPDATE_CHANNEL in the environment: get.sh sets it for BOSUN_BRANCH
     connectors: tuple[str, ...] = ()  # the MCP servers `claude mcp list` shows; none if it failed
     agent_prompts: Mapping[str, int] = field(default_factory=dict)  # per agent, over the history
     has_battery: bool = False
@@ -133,6 +137,7 @@ class Answers:
     slack_watch: bool = False
     model: str = DEFAULT_MODEL
     harness: str = agent_state.DEFAULT_HARNESS
+    update_channel: str = DEFAULT_CHANNEL  # BOSUN_UPDATE_CHANNEL: releases, or main (a branch)
     permissions: str = AUTO
     orchestrator_connectors: str = ""  # BOSUN_ORCHESTRATOR_CONNECTORS: none, `all`, or a list of names
     repo_mask: str = ""
@@ -157,6 +162,7 @@ TEXT_ANSWERS = (
     "until",
     "model",
     "harness",
+    "update_channel",
     "permissions",
     "orchestrator_connectors",
     "repo_mask",
@@ -262,6 +268,10 @@ def validate(answers: Answers) -> list[str]:
     if answers.harness not in agent_state.AGENTS:
         known = " or ".join(sorted(agent_state.AGENTS))
         problems.append(f"harness: '{answers.harness}' must be {known}")
+    if answers.update_channel not in update_check.CHANNELS:
+        problems.append(
+            f"update_channel: '{answers.update_channel}' must be {' or '.join(update_check.CHANNELS)}"
+        )
     if answers.permissions not in PERMISSION_FLAGS:
         problems.append(f"permissions: '{answers.permissions}' must be {AUTO} or {BYPASS}")
     if not MODEL_NAME.match(answers.model):
@@ -427,6 +437,16 @@ def recommended_harness(facts: Facts) -> str:
     return most_used if prompts(most_used, 0) > prompts(default, 0) else default
 
 
+def recommended_channel(facts: Facts) -> str:
+    """What the environment asks for (get.sh with BOSUN_BRANCH: `main`, the branch's head, with no question),
+    or else what your config says; a config from before the key goes on following main, as bosun update
+    writes it (migrations.CONFIG_ADDED), so that a re-run changes nothing unasked; else the releases."""
+    chosen = facts.asked_channel or facts.env.get(UPDATE_CHANNEL)
+    if chosen:
+        return chosen
+    return "main" if facts.env else DEFAULT_CHANNEL
+
+
 def recommended_permissions(facts: Facts) -> str:
     return BYPASS if BYPASS_FLAG in facts.env.get("BOSUN_CLAUDE_FLAGS", "") else AUTO
 
@@ -482,6 +502,7 @@ def recommend(facts: Facts) -> Answers:
         slack_watch=on("BOSUN_SLACK_WATCH_ENABLED", facts.slack_plugin and events),
         model=recommended_model(facts),
         harness=recommended_harness(facts),
+        update_channel=recommended_channel(facts),
         permissions=recommended_permissions(facts),
         orchestrator_connectors=recommended_connectors(facts),
         repo_mask=recommended_mask(facts, uses),
@@ -572,6 +593,10 @@ def env_groups(answers: Answers) -> list[tuple[str, list[tuple[str, str]]]]:
             ],
         ),
         ("Which agent runs repo sessions", [("BOSUN_HARNESS", answers.harness)]),
+        (
+            "What bosun update follows: the dated releases, or the head of a branch (main)",
+            [(UPDATE_CHANNEL, answers.update_channel)],
+        ),
         (
             "How repo sessions handle permissions",
             [("BOSUN_CLAUDE_FLAGS", PERMISSION_FLAGS[answers.permissions])],

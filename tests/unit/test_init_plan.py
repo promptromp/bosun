@@ -638,6 +638,46 @@ class PlanTest(unittest.TestCase):
         self.assertIn('BOSUN_HARNESS="codex"', init_plan.render_env(Answers(harness="codex")))
         self.assertIn('BOSUN_HARNESS="claude"', init_plan.render_env(Answers()))
 
+    def test_a_first_install_follows_the_releases(self) -> None:
+        self.assertEqual(init_plan.recommend(facts()).update_channel, "releases")
+        self.assertEqual(Answers().update_channel, "releases")
+        self.assertIn('BOSUN_UPDATE_CHANNEL="releases"\n', init_plan.render_env(Answers()))
+
+    def test_an_install_that_asked_for_a_branch_follows_it(self) -> None:
+        """get.sh hands BOSUN_UPDATE_CHANNEL=main to init when BOSUN_BRANCH was given: the answer is taken
+        from the environment, with no question."""
+        answers = init_plan.recommend(facts(asked_channel="main"))
+        self.assertEqual(answers.update_channel, "main")
+        self.assertEqual(init_plan.validate(answers), [])
+        self.assertIn('BOSUN_UPDATE_CHANNEL="main"\n', init_plan.render_env(answers))
+        self.assertEqual(init_plan.unattended(facts(asked_channel="main"), answers).update_channel, "main")
+
+    def test_a_rerun_keeps_the_channel_the_config_has(self) -> None:
+        self.assertEqual(
+            init_plan.recommend(facts(env={"BOSUN_UPDATE_CHANNEL": "main"})).update_channel, "main"
+        )
+        self.assertEqual(
+            init_plan.recommend(facts(env={"BOSUN_UPDATE_CHANNEL": "releases"})).update_channel, "releases"
+        )
+        asked = facts(asked_channel="releases", env={"BOSUN_UPDATE_CHANNEL": "main"})
+        self.assertEqual(init_plan.recommend(asked).update_channel, "releases")
+
+    def test_a_config_from_before_the_channel_goes_on_following_main(self) -> None:
+        """What bosun update writes for it (migrations.CONFIG_ADDED): a re-run changes nothing unasked."""
+        self.assertEqual(init_plan.recommend(facts(env={"BOSUN_DAYS": "MTWRF"})).update_channel, "main")
+
+    def test_the_channel_is_one_of_the_two(self) -> None:
+        self.assertIn("update_channel", " ".join(init_plan.validate(Answers(update_channel="nightly"))))
+        changed = init_plan.answers_from_json({"update_channel": "main"}, Answers())
+        self.assertEqual(changed.update_channel, "main")
+        with self.assertRaisesRegex(AnswersError, "update_channel"):
+            init_plan.answers_from_json({"update_channel": 3}, Answers())
+
+    def test_a_rerun_with_the_same_channel_changes_nothing_in_the_file(self) -> None:
+        text = init_plan.render_env(Answers(update_channel="main"))
+        self.assertEqual(init_plan.merge_env(text, Answers(update_channel="main")), text)
+        self.assertIn('BOSUN_UPDATE_CHANNEL="releases"', init_plan.merge_env(text, Answers()))
+
     def test_on_codex_the_plan_says_so(self) -> None:
         the_facts = facts()
         answers = Answers(harness="codex")

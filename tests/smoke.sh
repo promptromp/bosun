@@ -3165,14 +3165,48 @@ FAKE
       return 1
     }; done
   }
+  # An upstream of its own: a first install looks for its newest release, so the repository has to be there.
+  g_git() { git -C "$G/upstream" -c user.name=acme -c user.email=dev@example.com -c commit.gpgsign=false "$@"; }
+  mkdir -p "$G/upstream"
+  git -C "$G/upstream" init -q -b main
+  g_git commit -q --allow-empty -m "first"
+  g_git tag v2026.11.05
+  g_git commit -q --allow-empty -m "second"
+  g_git tag -a v2026.11.12 -m "- Second"
+  g_git commit -q --allow-empty -m "past the release"
+  g_release="$(g_git rev-parse 'v2026.11.12^{commit}' | cut -c1-12)"
+  g_head="$(g_git rev-parse HEAD | cut -c1-12)"
   G_NOTHING="$(get_dry)"
-  check "with nothing installed, a dry run would clone bosun.git bare beside the install, add the head's folder, link the install to it and start bosun init" says_lines "$G_NOTHING" \
-    "  \$ git -c core.hooksPath=/dev/null clone --quiet --bare --single-branch --branch main $G/upstream $G_VERSIONS/bosun.git" \
+  check "with nothing installed, a dry run would clone bosun.git bare beside the install, fetch the newest release into a remote ref, add its folder, link the install to it and start bosun init" says_lines "$G_NOTHING" \
+    "Getting bosun v2026.11.12, the newest release, into $G_VERSIONS, with $G_DIR a link to the version in use" \
+    "  \$ git -c core.hooksPath=/dev/null clone --quiet --bare --no-tags --single-branch --branch main $G/upstream $G_VERSIONS/bosun.git" \
     "  \$ git --git-dir=$G_VERSIONS/bosun.git config bosun.managed true" \
     "  \$ git --git-dir=$G_VERSIONS/bosun.git config bosun.branch main" \
-    "  \$ ln -s $G_VERSIONS/<commit> $G_DIR" \
+    "  \$ git -c core.hooksPath=/dev/null --git-dir=$G_VERSIONS/bosun.git fetch --quiet --no-tags origin +refs/tags/v2026.11.12:refs/remotes/origin/release" \
+    "  \$ ln -s $G_VERSIONS/$g_release $G_DIR" \
     "Then it would start: $G_DIR/bin/bosun init"
   check "... and does none of it" test ! -e "$G/share"
+  check "... and is not the head of main" not_contains "$G_NOTHING" "$g_head"
+  check "with BOSUN_BRANCH it is that branch's head, and init is told the install follows it" says_lines \
+    "$(HOME="$G/home" BOSUN_DIR="$G_DIR" BOSUN_REPO="$G/upstream" BOSUN_BRANCH=main sh "$ROOT/get.sh" --dry-run 2>&1)" \
+    "  \$ git -c core.hooksPath=/dev/null --git-dir=$G_VERSIONS/bosun.git fetch --quiet --no-tags origin +refs/heads/main:refs/remotes/origin/main" \
+    "  \$ ln -s $G_VERSIONS/<commit> $G_DIR" \
+    "Then it would start: BOSUN_UPDATE_CHANNEL=main $G_DIR/bin/bosun init"
+  check "... also unattended" says_lines \
+    "$(HOME="$G/home" BOSUN_DIR="$G_DIR" BOSUN_REPO="$G/upstream" BOSUN_BRANCH=main sh "$ROOT/get.sh" --dry-run --unattended 2>&1)" \
+    "Then it would start: BOSUN_UPDATE_CHANNEL=main BOSUN_INIT_UNATTENDED=1 $G_DIR/bin/bosun init --recommended"
+  mkdir -p "$G/no-release"
+  git -C "$G/no-release" init -q -b main
+  git -C "$G/no-release" -c user.name=acme -c user.email=dev@example.com -c commit.gpgsign=false commit -q --allow-empty -m "first"
+  git -C "$G/no-release" tag app-v1.0.0
+  G_NO_RELEASE="$(HOME="$G/home" BOSUN_DIR="$G_DIR" BOSUN_REPO="$G/no-release" sh "$ROOT/get.sh" --dry-run 2>&1)"
+  check "a repository with no release yet gets the head of main, and says so" says_lines "$G_NO_RELEASE" \
+    "There is no release of bosun at $G/no-release yet: getting the head of main" \
+    "  \$ git -c core.hooksPath=/dev/null --git-dir=$G_VERSIONS/bosun.git fetch --quiet --no-tags origin +refs/heads/main:refs/remotes/origin/main" \
+    "Then it would start: $G_DIR/bin/bosun init"
+  check "a repository that cannot be reached is not a repository with no release" fails_with "could not reach $G/nowhere" \
+    env HOME="$G/home" BOSUN_DIR="$G_DIR" BOSUN_REPO="$G/nowhere" sh "$ROOT/get.sh" --dry-run
+  check "... and nothing was made" test ! -e "$G/share"
   mkdir -p "$G_DIR/bin"
   printf '#!/bin/sh\n' >"$G_DIR/bin/bosun"
   git -C "$G_DIR" init -q
@@ -3202,7 +3236,7 @@ FAKE
   g_before="$(g_tree)"
   G_CHECKOUT="$(get_dry)"
   check "with a checkout from before versions, it would convert: get the head into a folder beside it, then hand over to that version's bosun update --from the checkout" says_lines "$G_CHECKOUT" \
-    "  \$ git -c core.hooksPath=/dev/null clone --quiet --bare --single-branch --branch main $G/upstream $G_VERSIONS/bosun.git" \
+    "  \$ git -c core.hooksPath=/dev/null clone --quiet --bare --no-tags --single-branch --branch main $G/upstream $G_VERSIONS/bosun.git" \
     "Then it would run: $G_VERSIONS/<commit>/bin/bosun update --from $G_DIR" \
     "which converts the checkout at a quiet moment: it keeps it as $G_VERSIONS/legacy-<its commit>, and $G_DIR becomes a link to the new version"
   check "... and changes nothing" test "$(g_tree)" = "$g_before"
@@ -3210,11 +3244,11 @@ FAKE
   get_dry_from_origin() { HOME="$G/home" BOSUN_DIR="$G_DIR" env -u BOSUN_REPO sh "$ROOT/get.sh" --dry-run 2>&1; }
   git -C "$G_DIR" remote add origin "$G/fork"
   check "... cloning bosun.git from the checkout's own origin, without BOSUN_REPO" says_lines "$(get_dry_from_origin)" \
-    "  \$ git -c core.hooksPath=/dev/null clone --quiet --bare --single-branch --branch main $G/fork $G_VERSIONS/bosun.git"
+    "  \$ git -c core.hooksPath=/dev/null clone --quiet --bare --no-tags --single-branch --branch main $G/fork $G_VERSIONS/bosun.git"
   git -C "$G_DIR" remote set-url origin "https://0000placeholder-token@example.com/acme/bosun.git" # gitleaks:allow
   out="$(get_dry_from_origin)"
   check "... and never saying the token in its URL" bash -c '
-    grep -qxF "  \$ git -c core.hooksPath=/dev/null clone --quiet --bare --single-branch --branch main https://example.com/acme/bosun.git $2/bosun.git" <<<"$1" &&
+    grep -qxF "  \$ git -c core.hooksPath=/dev/null clone --quiet --bare --no-tags --single-branch --branch main https://example.com/acme/bosun.git $2/bosun.git" <<<"$1" &&
       ! grep -q 0000placeholder-token <<<"$1"' _ "$out" "$G_VERSIONS"
   git -C "$G_DIR" remote remove origin
   mv "$G_DIR" "$G/a-checkout"
@@ -3222,12 +3256,30 @@ FAKE
   printf '#!/bin/sh\n' >"$G_VERSIONS/0123456789ab/bin/bosun"
   ln -s "$G_VERSIONS/0123456789ab" "$G_DIR"
   g_before="$(g_tree)"
-  G_LINK="$(get_dry)"
-  check "with versions side by side, it would update: get the head into a folder of its own, then hand over to its bosun update --from the version in use" says_lines "$G_LINK" \
-    "  \$ git -c core.hooksPath=/dev/null --git-dir=$G_VERSIONS/bosun.git fetch --quiet origin +refs/heads/main:refs/remotes/origin/main" \
-    "Then it would run: $G_VERSIONS/<commit>/bin/bosun update --from $G_VERSIONS/0123456789ab"
-  check "... and changes nothing" test "$(g_tree)" = "$g_before"
-  check "... and clones nothing" not_contains "$G_LINK" "git clone"
+  get_dry_plain() { HOME="$G/home" BOSUN_DIR="$G_DIR" env -u BOSUN_REPO -u BOSUN_BRANCH sh "$ROOT/get.sh" --dry-run "$@" 2>&1; }
+  G_LINK="$(get_dry_plain)"
+  check "with versions side by side, it would hand over to the install's own bosun update, which its channel decides" says_lines "$G_LINK" \
+    "Then it would run: $G_DIR/bin/bosun update"
+  check "... fetching nothing, cloning nothing, and changing nothing" not_contains "$G_LINK" '  $ '
+  check "... also unattended, which goes ahead" says_lines \
+    "$(get_dry_plain --unattended)" \
+    "Then it would run: $G_DIR/bin/bosun update"
+  check "... and its dry run changes nothing" test "$(g_tree)" = "$g_before"
+  printf '#!/bin/sh\necho "update got: $*"\n' >"$G_VERSIONS/0123456789ab/bin/bosun"
+  chmod +x "$G_VERSIONS/0123456789ab/bin/bosun"
+  check "... and does: bosun update, with --yes when unattended" says_lines \
+    "$(HOME="$G/home" BOSUN_DIR="$G_DIR" sh "$ROOT/get.sh" --unattended </dev/null 2>&1 | tail -1)" \
+    "update got: update --yes"
+  check "... and with no terminal to ask on, bosun update as it is, which shows its plan" says_lines \
+    "$(HOME="$G/home" BOSUN_DIR="$G_DIR" sh "$ROOT/get.sh" </dev/null 2>&1 | tail -1)" \
+    "update got: update"
+  chmod -x "$G_VERSIONS/0123456789ab/bin/bosun"
+  printf '#!/bin/sh\n' >"$G_VERSIONS/0123456789ab/bin/bosun" # as it was
+  check "... a BOSUN_REPO or BOSUN_BRANCH given then is kept for the updates after it, as before" says_lines \
+    "$(HOME="$G/home" BOSUN_DIR="$G_DIR" BOSUN_REPO="$G/upstream" BOSUN_BRANCH=feature sh "$ROOT/get.sh" --dry-run 2>&1)" \
+    "  \$ git --git-dir=$G_VERSIONS/bosun.git remote set-url origin $G/upstream" \
+    "  \$ git --git-dir=$G_VERSIONS/bosun.git config bosun.branch feature" \
+    "Then it would run: $G_DIR/bin/bosun update"
   rm "$G_DIR"
   ln -s "$G/a-checkout" "$G_DIR"
   check "a link to anything but a version beside bosun.git is refused, not guessed at" fails_with "is a link to $G/a-checkout, which is not a version in $G_VERSIONS" get_dry

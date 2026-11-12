@@ -274,7 +274,7 @@ the_installer() {
   mv "$HOME/.local/bin/gh" "$HOME/.sandbox/packages/gh"
   before_install="$(other_files)" # bosun's own folders are not new here: earlier steps ran bosun too
   check "a dry run says what it would do: clone bosun.git bare, and link the install to its version" bash -c '
-    sh "$1/get.sh" --dry-run >"$2" && grep -q "clone --quiet --bare --single-branch --branch $3 $1 $4/bosun.git" "$2" &&
+    sh "$1/get.sh" --dry-run >"$2" && grep -q "clone --quiet --bare --no-tags --single-branch --branch $3 $1 $4/bosun.git" "$2" &&
       grep -q "ln -s $4/<commit> $5" "$2"' _ "$ROOT" "$out" "$branch" "$VERSIONS" "$INSTALL"
   check "... and does none of it" bash -c '[ ! -e "$1" ] && [ ! -e "$2" ]' _ "$INSTALL" "$VERSIONS"
   check "it is plain sh" sh -n "$ROOT/get.sh"
@@ -298,6 +298,7 @@ the_installer() {
       [ "$(git -C "$(readlink "$1")" rev-parse HEAD)" = "$(git -C "$3" rev-parse HEAD)" ]' _ "$INSTALL" "$VERSIONS" "$ROOT"
   check "... bosun.git marked as made by the installer, following the branch it was asked for" bash -c '
     [ "$(git --git-dir="$1/bosun.git" config bosun.managed)" = true ] && [ "$(git --git-dir="$1/bosun.git" config bosun.branch)" = "$2" ]' _ "$VERSIONS" "$branch"
+  check "... and, as it was asked for a branch, following that: init was told, and wrote it down" says 'BOSUN_UPDATE_CHANNEL="main"' "$CONFIG/bosun.env"
   check "it linked that one, through the install link" bash -c '[ "$(readlink "$HOME/.local/bin/bosun")" = "$1/bin/bosun" ]' _ "$INSTALL"
   check "... and its jobs run it through the link too" grep -qF "exec \"$INSTALL/bin/bosun\" " "$AGENTS/com.bosun.morning.plist"
   check "the repo not ticked has no window" absent "name: web" "$CONFIG/sessions.yml"
@@ -307,13 +308,45 @@ the_installer() {
   check "repo sessions are in auto mode" says "--permission-mode auto" "$CONFIG/bosun.env"
   check "the windows it started" bash -c '[ "$1" = "api checkin orchestrator " ] || { echo "windows: $1"; exit 1; }' _ "$(windows)"
   "$HOME/.local/bin/bosun" stop >/dev/null 2>&1
-  check "running it again hands over to the newest version's bosun update: up to date" python3 "$DRIVE" "$out" \
-    "Getting the newest bosun into $VERSIONS" "" "bosun is up to date" "" -- sh -c "cat '$ROOT/get.sh' | sh"
+  check "running it again hands over to the install's own bosun update, which follows its branch: up to date" python3 "$DRIVE" "$out" \
+    "It hands over to the bosun you run" "" "bosun is up to date" "" -- sh -c "cat '$ROOT/get.sh' | sh"
   check "... the link where it was, and no other version" bash -c '[ "$(ls "$1" | grep -vc "^bosun.git$")" = 1 ] && [ -L "$2" ]' _ "$VERSIONS" "$INSTALL"
   check "a download cut short does nothing" bash -c 'head -c 900 "$1/get.sh" | BOSUN_DIR="$HOME/cut-short" sh; [ ! -e "$HOME/cut-short" ]' _ "$ROOT"
   the_uninstall "$before_install"
   the_installer_unattended
+  the_release_installer
   unset BOSUN_REPO BOSUN_BRANCH
+}
+
+# A first install that asks for no branch gets the newest release of the repository, and follows the
+# releases. The repository is a clone of this checkout with a release tag (annotated, as the workflow makes
+# them) on its head, and later a newer one.
+the_release_installer() {
+  local out="$HOME/release.txt" repo="$HOME/release-repo" bosun="$HOME/.local/bin/bosun" release
+  local as_acme=(git -C "$HOME/release-repo" -c user.name=acme -c user.email=dev@example.com -c commit.gpgsign=false)
+  echo "the installer, with a release: the newest one, and the install follows the releases"
+  git clone -q "$ROOT" "$repo"
+  "${as_acme[@]}" checkout -q -B main
+  "${as_acme[@]}" tag -a v2026.11.12 -m "- A release"
+  release="$("${as_acme[@]}" rev-parse 'v2026.11.12^{commit}')"
+  unset BOSUN_BRANCH
+  export BOSUN_REPO="$repo"
+  # shellcheck disable=SC2002 # the pipe is the point: this is how people run it
+  check "it sets bosun up" bash -c 'cat "$1/get.sh" | sh -s -- --unattended >"$2" 2>&1 || { tail -5 "$2"; exit 1; }' _ "$ROOT" "$out"
+  check "... saying which release it got" says "Getting bosun v2026.11.12, the newest release" "$out"
+  check "... the version in use is that release's commit" bash -c '[ "$(git -C "$(readlink "$1")" rev-parse HEAD)" = "$2" ]' _ "$INSTALL" "$release"
+  check "... following the releases, which init writes down" says 'BOSUN_UPDATE_CHANNEL="releases"' "$CONFIG/bosun.env"
+  check "... the release in a remote ref of bosun.git, and no tag of its own there" bash -c '
+    git --git-dir="$1/bosun.git" rev-parse -q --verify refs/remotes/origin/release >/dev/null &&
+      [ -z "$(git --git-dir="$1/bosun.git" for-each-ref refs/tags)" ]' _ "$VERSIONS"
+  check "bosun update --check says it is up to date" bash -c '"$1" update --check | grep -q "up to date"' _ "$bosun"
+  check "running the line again hands over to bosun update, which is up to date" bash -c '
+    cat "$1/get.sh" | sh -s -- --unattended >"$2" 2>&1 && grep -q "bosun is up to date" "$2"' _ "$ROOT" "$out"
+  "${as_acme[@]}" commit -q --allow-empty -m "Next"
+  "${as_acme[@]}" tag -a v2026.11.13 -m "- The next"
+  check "a newer release is offered" bash -c '"$1" update --check | grep -q "v2026.11.13 is available"' _ "$bosun"
+  check "uninstall takes it all off, the versions with it: nothing of yours was in them" bash -c '
+    "$1" uninstall --yes --purge >"$2" 2>&1 && [ ! -e "$1" ] && [ ! -e "$3" ] && [ ! -e "$4" ]' _ "$bosun" "$out" "$VERSIONS" "$INSTALL"
 }
 
 # On a first install, unattended: the recommendation, but nothing nobody chose, and it says so.
