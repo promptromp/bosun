@@ -31,6 +31,26 @@ inputs).
   (`bosun morning --now` and `bosun update --yes` are started detached, their progress read back from `status`).
 - Test hooks (`--test-hooks <dir>`) exist only for the VM suite, and only when the app is launched with that argument.
 - Swift files pass `swift format lint --strict` (the toolchain's swift-format) with a committed `.swift-format`.
+- Tooling and coverage, the same bar as the repo's Python and shell (the person asked for good coverage and a tight
+  feedback loop):
+  - Swift 6 language mode (complete strict concurrency) in `Package.swift`; every build and test with
+    `-Xswiftc -warnings-as-errors`.
+  - SwiftLint through the SwiftLintPlugins package's command plugin, its version pinned in `Package.resolved` so
+    laptops and CI run the same one; `app/.swiftlint.yml` with the repo's limits: `cyclomatic_complexity` 10,
+    `function_body_length` 60, `type_body_length` 300, `file_length` 400; `force_unwrapping`, `force_try` and
+    `force_cast` errors in Sources (allowed in Tests); no `print` in Sources (`os.Logger`). When a limit trips, split
+    the function, as CLAUDE.md says.
+  - Coverage: `swift test --enable-code-coverage`; `tools/swift_coverage.py` reads `llvm-cov export -summary-only`
+    for the files under `Sources/BosunMenuCore` and fails under 95% of lines (the core is pure; the AppKit target
+    is kept thin and tested for what it renders, without a floor).
+  - Pre-commit hooks on `files: ^app/` only, so a Python-only commit pays nothing: `swift format lint --strict`,
+    SwiftLint, and `swift test` with warnings as errors (incremental, seconds). Each skips with one line when
+    `swift` is absent (CI's Linux `lint` job); the `app` job enforces them.
+  - CI's `app` job is required on every pull request, but its first step compares the pull request with its base:
+    when nothing under `app/`, `tools/contract_samples.py`, `tools/swift_coverage.py` or the workflow changed, it
+    passes in seconds without building, since GitHub's macOS runners are scarce (on 2026-11-12 two jobs waited 15
+    minutes for one and were cancelled). Contract drift stays caught on every pull request: the Linux `test` jobs
+    run `tests/unit/test_contract_samples.py`, and regenerated fixtures live under `app/`, which runs the full job.
 - The repo's other limits as usual; docs in the same pull request.
 
 ## Review Focus
@@ -53,6 +73,11 @@ inputs).
 
 **Files:**
 
+- Modify: `.pre-commit-config.yaml` (the three `^app/` hooks of the Global Constraints, from the first Swift file,
+  so the loop is tight from the start), CLAUDE.md (Tooling: the Swift hooks and the floor)
+- Create: `app/.swiftlint.yml`, `tools/swift_coverage.py` and `tests/unit/test_swift_coverage.py` (the floor's
+  arithmetic over a recorded `llvm-cov` summary: per-file filter, the percentage, the message naming the files
+  under it)
 - Create: `app/Package.swift`, `app/.swift-format`, `app/Sources/BosunMenuCore/{Contract.swift, MenuModel.swift,
   UpdateFlow.swift, QuitFlow.swift, BosunCLI.swift}`, `app/Tests/BosunMenuCoreTests/*.swift`
 - Create: `tools/contract_samples.py` (writes `app/Tests/BosunMenuCoreTests/Fixtures/*.json` from part 1's pure
@@ -86,7 +111,9 @@ inputs).
   then still busy then stop; cancel at each step); `oneFlowAtATime`; the quit argv for each choice set.
 - [ ] **Step 2: Run** `cd app && swift test` to see them fail.
 - [ ] **Step 3: Implement** the core; `tools/contract_samples.py` and its Python test keep the fixtures true to part 1.
-- [ ] **Step 4: Run** `swift test`, `swift format lint --strict -r Sources Tests`, the Python test.
+- [ ] **Step 4: Run** `swift test --enable-code-coverage -Xswiftc -warnings-as-errors`, `uv run python
+  tools/swift_coverage.py` (95% of the core's lines), SwiftLint, `swift format lint --strict -r Sources Tests`, and
+  the Python tests.
 - [ ] **Step 5: Commit** ("bosun.app: the core — the contract, the menu, the update and quit flows").
 
 ### Task 2: The AppKit app
@@ -95,6 +122,10 @@ inputs).
 
 - Create: `app/Sources/BosunMenu/{main.swift, AppDelegate.swift, StatusItemController.swift, MenuRenderer.swift,
   Poller.swift, Dialogs.swift, ProcessBosunCLI.swift, Actions.swift, TestHooks.swift}`
+- Test: `app/Tests/BosunMenuTests` (AppKit, headless, no window shown: `MenuRenderer` turns a `MenuModel` into an
+  `NSMenu` with the titles, order, enabled states, key equivalents, separators and submenus it says, and rebuilds in
+  place without leaking items; `Dialogs`' builders make the quit alert's checkboxes and their defaults from a
+  `QuitPlan` and the update alert's text from an `UpdatePlan`, tested on the built `NSAlert` before it is run)
 - Test: `app/Tests/BosunMenuCoreTests` (what the shell's pieces can be tested without AppKit: the poller's timing with a
   clock, the CLI's timeout against a fake process)
 
@@ -118,7 +149,9 @@ inputs).
   open dialog: which button, which boxes) and perform them as if clicked; log each URL it would open and each command
   it runs to `<dir>/log.jsonl`. Absent the argument, none of this exists at run time.
 
-- [ ] **Step 1: Tests** for the poller and the CLI timeout (`slowCommandTimesOut`), and the wake refresh.
+- [ ] **Step 1: Tests** for the poller and the CLI timeout (`slowCommandTimesOut`), and the wake refresh; the
+  renderer (`rendersEachLevel`, `rebuildsInPlace`) and the dialog builders (`quitAlertDefaults`,
+  `quitAlertNamesBusyAgents`, `updateAlertShowsWhatRestarts`).
 - [ ] **Step 2: Run them to see them fail.**  - [ ] **Step 3: Implement.**
 - [ ] **Step 4: Run** `swift test`, `swift build -c release`, the format lint.
 - [ ] **Step 5: Commit** ("bosun.app: the menu bar app over the core").
@@ -154,13 +187,15 @@ inputs).
 
 **Files:**
 
-- Modify: `.github/workflows/ci.yml` (job `app`), `.github/rulesets/main.json` (`app` required), `.pre-commit-config.yaml`
-  (`swift format lint` when `swift` is present; the `app` job runs it in CI)
+- Modify: `.github/workflows/ci.yml` (job `app`, with its early pass when nothing app-related changed),
+  `.github/rulesets/main.json` (`app` required), CLAUDE.md (Tooling: the `app` job)
 - Create: `.github/workflows/release-app.yml`, `docs/development.md` section "Releasing bosun.app"
 
 **Interfaces:**
 
-- Produces: CI job `app` (macos-latest): `swift test`, `swift format lint --strict`, `app/build.sh` ad hoc, and
+- Produces: CI job `app` (macos-latest): the early pass, then `swift test --enable-code-coverage` with warnings as
+  errors, the coverage floor, SwiftLint, `swift format lint --strict`, `app/build.sh` ad hoc (with `plutil -lint` of
+  the bundle's Info.plist), and
   `codesign --verify` of the result, on every pull request.
 - Produces: `release-app.yml` on a tag `app-v<semver>` matching `app/VERSION`: the certificate imported into a throwaway
   keychain (never the login keychain; deleted at the end), `app/build.sh --identity "$MACOS_SIGN_IDENTITY"`,
