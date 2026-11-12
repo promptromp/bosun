@@ -125,9 +125,12 @@ sandbox.
     as it does for Claude Code. My call: `agy` keeps itself current anyway, and this only moves when to a
     quiet moment.
   - `--remote-control`, as Claude Code windows get theirs. The run did not try it; the live run shows it.
-  - The marker: `BOSUN_WINDOW=<window>` in `agy`'s environment, which reaches every hook (`agy` passes its
-    environment through), and `--log-file <bosun's log folder>/agy-<window>.log`, which `ps` shows and which
-    keeps `agy` from adding a log of its own under `~/.gemini` at every start.
+  - The marker: `--log-file <bosun's log folder>/agy-<window>.log` among the flags before the first prompt,
+    which `ps` shows and which keeps `agy` from adding a log of its own under `~/.gemini` at every start; bosun
+    finds its own `agy` processes by it, and by nothing in a process's environment, which macOS 27.2 keeps from
+    `ps` even for a user's own processes. `BOSUN_WINDOW=<window>` is in `agy`'s environment too, which reaches
+    every hook (`agy` passes its environment through): that is for the hooks, never read from the process. The
+    launch writes the window's tmux pane and server socket into the window's status file.
   - Model and effort: `agy models` lists names with the effort in them (`gemini-3.8-flash-low`). bosun passes
     the base name and `--effort`, and an effort above `high` as `high`: `xhigh` silently switched a model to
     another. `/model` is never pasted into a window, since `agy` saves it for every later session, as Claude
@@ -144,7 +147,7 @@ sandbox.
   `fullyIdle` false (a background command still runs; when it ends, `agy` starts a turn by itself). Each
   window's status and when it changed are a file in bosun's state folder. Esc cancels a turn with no hook at
   all, so a busy status alone could stay busy for good. So while the hooks say busy, the adapter reads the
-  window's screen (tmux names its pane in `agy`'s own environment): `agy`'s idle footer over an empty box means
+  window's screen (the launch recorded its tmux pane in the status file): `agy`'s idle footer over an empty box means
   the turn ended, and the window is idle from then; a dialog ("↑/↓ Navigate") means it waits for a person, and
   the window is `waiting`. `auto`'s reviewer does ask, for a push to `main`. Both are what the screen shows,
   not a guess, and only a busy status is checked, so an idle window costs nothing. (Changed: the first version

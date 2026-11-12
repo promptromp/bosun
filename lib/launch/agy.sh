@@ -136,10 +136,12 @@ first_prompt() { # <window> <prompt given, or empty>
 # What a launch does just before it hands over to agy. In a dry run it says what it would set, as
 # `dry-run: would set:` and each NAME=value: the marker, the git environment. Otherwise it records the version
 # agy starts on, and forgets what the last run of the window left (lib/agy_state.py launched), so that a
-# relaunch is never taken for the run before it. The status is written only here, never while the arguments
+# relaunch is never taken for the run before it. It also records the window's tmux pane and the server's
+# socket (the path in $TMUX before its first comma), which is where the adapter looks at the window's screen;
+# none outside tmux. The status is written only here, never while the arguments
 # are built, which `--fingerprint` and the window list do for a window that keeps running.
 note_agy_launch() {
-  local var version i key
+  local var version i key tmux_socket
   if [ "$BOSUN_LAUNCH_DRY_RUN" = "1" ]; then
     printf 'dry-run: would set:'
     for var in BOSUN_WINDOW BOSUN_CONVERSATION BOSUN_HOOK_CMD BOSUN_RESUMED AGY_CLI_DISABLE_AUTO_UPDATE \
@@ -153,7 +155,10 @@ note_agy_launch() {
     return 0
   fi
   version="$(agent_installed_version agy)"
-  env BOSUN_STATE_DIR="$BOSUN_STATE_DIR" python3 "$BOSUN_ROOT/lib/agy_state.py" launched "$agy_conversation" "$version" ||
+  tmux_socket="${TMUX:-}"
+  tmux_socket="${tmux_socket%%,*}"
+  env BOSUN_STATE_DIR="$BOSUN_STATE_DIR" python3 "$BOSUN_ROOT/lib/agy_state.py" launched "$agy_conversation" "$version" \
+    "${TMUX_PANE:-}" "$tmux_socket" ||
     die "'$agy_window' does not start: could not record its launch (lib/agy_state.py launched)"
 }
 

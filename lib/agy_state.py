@@ -5,20 +5,25 @@ lib/claude_state.py and lib/codex_state.py do for the other agents. Design: docs
 Usage: agy_state.py logged-in                      exit 0 if agy has a login and its onboarding is done
        agy_state.py resolve <workdir> <name>       print the conversation bosun knows by <name> there
        agy_state.py live <conversation-id>         print the pid of a running agy holding it
-       agy_state.py launched <name> <version>      record that window <name> starts on agy <version>
+       agy_state.py launched <name> <version> [<pane> <socket>]
+                                                   record that window <name> starts on agy <version>,
+                                                   in tmux pane <pane> of the server at <socket>
 
 Exit status 3: not found.
 
 A running agy writes no record of itself, so `record` builds one in the shape of Claude Code's
 ~/.claude/sessions/<pid>.json, and everything that goes by a window's status works for all agents. What it
 goes by, seen in agy 1.5.5 (the Mac VM run, `tests/fixtures/agy/screens/`) and not a public API:
-  - `bosun launch` starts agy with `--log-file <logs>/agy-<conversation name>.log` and the environment
-    BOSUN_CONVERSATION, TMUX and TMUX_PANE, which `ps eww` shows, so a process is bosun's window <name> in
-    pane <pane> of its tmux server, whatever its folder.
+  - bosun never reads another process's environment: macOS 27.2 keeps it from `ps eww`, even for a user's own
+    processes. What it relies on is a process's command line and its own status file. `bosun launch` starts
+    agy with `--log-file <logs>/agy-<conversation name>.log` among the flags before the first prompt, so a
+    process whose command line has that is bosun's window <name>, whatever its folder. The launch writes
+    the window's tmux pane and server socket into the status file, which is where the screen is looked for.
   - agy has no status of its own to read. bosun's plugin hooks write a status file per window,
     <state>/agy/<name>.json: busy before each model call, idle or shell at the end of a turn, with the
-    conversationId (the launch writes the version it started on). Esc cancels a turn and fires no hook, so
-    while the file says busy the window's screen says what it is doing (`screen_status`).
+    conversationId (the launch writes the version it started on, and its pane and socket). Esc cancels a
+    turn and fires no hook, so while the file says busy the window's screen says what it is doing
+    (`screen_status`).
   - agy keeps each conversation as <home>/conversations/<id>.db, and resumes one only by its id, so bosun
     keeps its own table of names, filled in by the hooks.
   - Its login is a Keychain item with service `gemini` (looked for without reading the secret) and an
@@ -83,6 +88,7 @@ from typing import Any, NamedTuple
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from agent_files import (
     NOT_FOUND,
+    USAGE,
     AgentHooks,
     AgentSetup,
     Command,
@@ -109,10 +115,11 @@ NAMES_FILE = "agy-sessions.json"  # in bosun's state dir
 STATUS_DIR = "agy"  # in bosun's state dir: a status file per window
 KEYCHAIN_SERVICE = "gemini"  # the Keychain item agy's login is
 IDLE, BUSY, SHELL, WAITING = "idle", "busy", "shell", "waiting"
-RUN_FIELDS = ("status", "statusUpdatedAt", "conversationId")  # what a launch forgets of the last run
+# What a launch forgets of the last run (and writes again: the pane and the socket, if it has them).
+RUN_FIELDS = ("status", "statusUpdatedAt", "conversationId", "pane", "socket")
 # The log file's flag, a word of its own with its value one word after it, in agy's command line at launch.
 LOG_FILE = re.compile(r"(?<!\S)--log-file[= ](\S+)")
-LOG_PREFIX, LOG_SUFFIX = "agy-", ".log"  # around the conversation name in that file's name
+LOG_NAME = re.compile(r"agy-(.+)\.log")  # the log file's name: the conversation name in it
 FIRST_PROMPT = re.compile(r"(?<!\S)--prompt-interactive(?:=|\s)")  # where the launch's own flags end
 # bosun's flags come before the first prompt, which is on the command line too and can say anything (text from
 # Slack, say), so a flag read for the launch settings is the first of its kind.
@@ -208,13 +215,15 @@ def write_status(name: str, **fields: Any) -> None:
     write_atomically(status_path(name), json.dumps({**read_status(name), **fields}, indent=1))
 
 
-def launched(name: str, version: str) -> None:
-    """A launch of the window <name> on agy <version> ("" when it is not known). Everything the last run
-    of the window left in its status file about itself goes, its status, when that changed and its
-    conversation: the file would otherwise show a window that has not started as the one that ended, and
-    it is never seen starting. What was last said stays, as that is the hooks' own memory."""
+def launched(name: str, version: str, pane: str = "", socket: str = "") -> None:
+    """A launch of the window <name> on agy <version> ("" when it is not known), in tmux pane <pane> of the
+    server at <socket> ("" outside tmux: then the window's screen is never looked at). Everything the last
+    run of the window left in its status file about itself goes, its status, when that changed, its
+    conversation and its pane: the file would otherwise show a window that has not started as the one that
+    ended, and it is never seen starting. What was last said stays, as that is the hooks' own memory."""
     kept = {key: value for key, value in read_status(name).items() if key not in RUN_FIELDS}
-    write_atomically(status_path(name), json.dumps({**kept, "version": version or None}, indent=1))
+    where = {"pane": pane, "socket": socket} if pane and socket else {}
+    write_atomically(status_path(name), json.dumps({**kept, "version": version or None, **where}, indent=1))
 
 
 def write_status_if_unchanged(name: str, since: Any, **fields: Any) -> dict[str, Any]:
@@ -278,37 +287,20 @@ def is_agy_command(words: str) -> bool:
     return os.path.basename(first) == os.path.basename(agy_bin())
 
 
-class Marker(NamedTuple):
-    """What a bosun-launched agy's command line and environment say: its conversation name and its pane."""
-
-    name: str
-    socket: str | None  # the tmux server's socket
-    pane: str | None
-
-
-def last_value(key: str, words: str) -> str | None:
-    """The value of the last `<key>=<value>` word in <words>. `ps eww` prints a process's environment after
-    its arguments, and the arguments include the first prompt, which can hold such a word too, so only the
-    last is the environment's."""
-    values = re.findall(rf"(?<!\S){key}=(\S+)", words)
-    return values[-1] if values else None
-
-
-def parse_marker(words: str) -> Marker | None:
-    """The marker in the output of `ps eww` for one process, None if it is not agy launched by bosun. The
-    conversation name is the environment's BOSUN_CONVERSATION (the last one, see `last_value`), and counts
-    only if the command line also has a `--log-file` for exactly that name before its first prompt, where the
-    launch puts it. A prompt on the command line can say other names, sockets and panes, but neither what the
-    environment says after it nor a flag before it."""
-    name = last_value("BOSUN_CONVERSATION", words)
-    if name is None or not is_agy_command(words):
+def parse_marker(words: str) -> str | None:
+    """The name of the window whose agy has command line <words>, None if it is not agy launched by bosun.
+    The launch puts `--log-file <logs>/agy-<name>.log` among its flags before the first prompt; the prompt,
+    which comes after them and can say anything, never counts, and the last such flag is the launch's own
+    (BOSUN_AGY_FLAGS come first)."""
+    if not is_agy_command(words):
         return None
-    log_name = f"{LOG_PREFIX}{name}{LOG_SUFFIX}"
     flags = FIRST_PROMPT.split(words, maxsplit=1)[0]
-    if not any(os.path.basename(path) == log_name for path in LOG_FILE.findall(flags)):
-        return None
-    socket = last_value("TMUX", words)
-    return Marker(name, socket.split(",")[0] if socket else None, last_value("TMUX_PANE", words))
+    names = [
+        found.group(1)
+        for path in LOG_FILE.findall(flags)
+        if (found := LOG_NAME.fullmatch(os.path.basename(path)))
+    ]
+    return names[-1] if names else None
 
 
 def run_ps(args: list[str]) -> str:
@@ -326,9 +318,9 @@ def run_ps(args: list[str]) -> str:
     return result.stdout
 
 
-def process_environment(pid: int | str) -> str:
-    """A process's command line followed by its environment, as `ps eww` prints them."""
-    return run_ps(["eww", "-o", "command=", "-p", str(pid)]).strip()
+def process_command(pid: int | str) -> str:
+    """A process's command line, as `ps -ww` prints it."""
+    return run_ps(["-ww", "-o", "command=", "-p", str(pid)]).strip()
 
 
 def process_table() -> list[tuple[int, str]]:
@@ -341,8 +333,8 @@ def process_table() -> list[tuple[int, str]]:
     return table
 
 
-def marker(pid: int | str) -> Marker | None:
-    return parse_marker(process_environment(pid))
+def marker(pid: int | str) -> str | None:
+    return parse_marker(process_command(pid))
 
 
 # ---- the screen of a window that reads busy
@@ -364,11 +356,13 @@ def capture_pane(socket: str, pane: str) -> str | None:
     return result.stdout if result.returncode == 0 else None
 
 
-def screen_of(found: Marker) -> str | None:
-    return capture_pane(found.socket, found.pane) if found.socket and found.pane else None
+def screen_of(status: dict[str, Any]) -> str | None:
+    """The screen of the window's pane, where its status file says the launch put it."""
+    socket, pane = status.get("socket"), status.get("pane")
+    return capture_pane(socket, pane) if isinstance(socket, str) and isinstance(pane, str) else None
 
 
-def settle(found: Marker, status: dict[str, Any]) -> tuple[str, Any]:
+def settle(name: str, status: dict[str, Any]) -> tuple[str, Any]:
     """The status and its time of a window, as the file says them unless it says busy: a turn that Esc
     cancelled fires no hook, so then the screen is asked. Idle and shell are written to the file, with
     the time they were seen, and what the file says afterwards is the answer: if a hook wrote meanwhile
@@ -378,28 +372,28 @@ def settle(found: Marker, status: dict[str, Any]) -> tuple[str, Any]:
     shown, since = str(status.get("status") or ""), status.get("statusUpdatedAt")
     if shown != BUSY:
         return shown, since
-    capture = screen_of(found)
+    capture = screen_of(status)
     seen = screen_status(capture) if capture else None
     if seen == WAITING:
         return WAITING, since
     if seen not in (IDLE, SHELL):
         return BUSY, since
-    written = write_status_if_unchanged(found.name, since, status=seen, statusUpdatedAt=now_ms())
+    written = write_status_if_unchanged(name, since, status=seen, statusUpdatedAt=now_ms())
     return str(written.get("status") or ""), written.get("statusUpdatedAt")
 
 
 # ---- the records
 
 
-def build_record(pid: int, found: Marker, status: dict[str, Any]) -> dict[str, Any]:
+def build_record(pid: int, name: str, status: dict[str, Any]) -> dict[str, Any]:
     conversation_id = str(status["conversationId"])
-    shown, since = settle(found, status)
-    entry = known_names().get(found.name)
+    shown, since = settle(name, status)
+    entry = known_names().get(name)
     named_here = isinstance(entry, dict) and entry.get("id") == conversation_id
     return {
         "pid": pid,
         "sessionId": conversation_id,
-        "name": found.name,
+        "name": name,
         "status": shown,
         "statusUpdatedAt": since,
         "version": status.get("version"),
@@ -414,9 +408,9 @@ def record(pid: int | str) -> dict[str, Any] | None:
     screen."""
     if not str(pid).isdigit():
         return None
-    found = marker(pid)
-    status = read_status(found.name) if found else {}
-    return build_record(int(pid), found, status) if found and status.get("conversationId") else None
+    name = marker(pid)
+    status = read_status(name) if name else {}
+    return build_record(int(pid), name, status) if name and status.get("conversationId") else None
 
 
 def describe(pid: str) -> dict[str, Any] | None:
@@ -448,8 +442,8 @@ def live_status(name: str) -> str | None:
 
 def launch_settings(pid: str) -> LaunchSettings:
     """The model and effort a running agy was launched with, read from its command line; and whether bosun
-    launched it, which only its log file and environment say."""
-    words = process_environment(pid)
+    launched it, which only its log file says."""
+    words = process_command(pid)
     model, effort = MODEL_FLAG.search(words), EFFORT_FLAG.search(words)
     return LaunchSettings(
         model.group(1) if model else None,
@@ -1158,7 +1152,9 @@ def ready() -> bool:
 
 
 def cmd_launched(args: list[str]) -> int:
-    launched(args[0], args[1])
+    if len(args) not in (2, 4):
+        return USAGE
+    launched(*args)
     return 0
 
 
@@ -1204,7 +1200,7 @@ PROFILE = Profile(
 
 COMMANDS: dict[str, Command] = {
     "logged-in": (0, cmd_logged_in),
-    "launched": (2, cmd_launched),
+    "launched": (None, cmd_launched),
     "resolve": (2, lambda args: emit(resolve(args[0], args[1]))),
     "live": (1, lambda args: emit(live_pid(args[0]))),
 }

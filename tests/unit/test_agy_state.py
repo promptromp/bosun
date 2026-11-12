@@ -121,12 +121,9 @@ class ScreenTest(unittest.TestCase):
 SOCKET = "/private/tmp/tmux-501/bosun"
 
 
-def command_of(name: str, *flags: str, agy: str = "/opt/bin/agy", pane: str = "%3") -> str:
-    """What `ps eww -o command=` prints for an agy window: its command line, then its environment."""
-    environment = (
-        f"BOSUN_WINDOW={name} BOSUN_CONVERSATION={name} TMUX={SOCKET},4242,0 TMUX_PANE={pane} HOME=/Users/me"
-    )
-    return f"{agy} --log-file /state/logs/agy-{name}.log {' '.join(flags)} {environment}"
+def command_of(name: str, *flags: str, agy: str = "/opt/bin/agy") -> str:
+    """What `ps -ww -o command=` prints for an agy window: its command line, with the launch's flags first."""
+    return f"{agy} --log-file /state/logs/agy-{name}.log {' '.join(flags)}".rstrip()
 
 
 class AdapterCase(unittest.TestCase):
@@ -147,7 +144,7 @@ class AdapterCase(unittest.TestCase):
             mock.patch.object(agy_state, "CLI_HOME", self.cli_home),
             mock.patch.object(agy_state, "HOME", self.root),
             mock.patch.object(agy_state, "process_table", self.process_table),
-            mock.patch.object(agy_state, "process_environment", self.process_environment),
+            mock.patch.object(agy_state, "process_command", self.process_command),
             mock.patch.object(agy_state, "capture_pane", self.capture_pane),
             mock.patch.object(agy_state, "now_ms", lambda: self.clock),
             mock.patch.dict(os.environ, {"BOSUN_STATE_DIR": str(self.state)}),
@@ -158,9 +155,9 @@ class AdapterCase(unittest.TestCase):
         os.environ.pop(agy_state.BIN_KEY, None)
 
     def process_table(self) -> list[tuple[int, str]]:
-        return [(pid, command.split(" BOSUN_WINDOW=")[0]) for pid, command in self.processes.items()]
+        return list(self.processes.items())
 
-    def process_environment(self, pid: int | str) -> str:
+    def process_command(self, pid: int | str) -> str:
         return self.processes.get(int(pid), "")
 
     def capture_pane(self, socket: str, pane: str) -> str | None:
@@ -172,10 +169,16 @@ class AdapterCase(unittest.TestCase):
 
     def window(self, pid: int, name: str, status: str | None, *flags: str, pane: str | None = None) -> None:
         """A running agy window <name>, its status file saying <status> (None: no status file yet)."""
-        self.processes[pid] = command_of(name, *flags, pane=pane or f"%{pid}")
-        if status is not None:
+        self.processes[pid] = command_of(name, *flags)
+        if status is not None:  # the launch wrote the pane and the socket, the hooks the rest
             agy_state.write_status(
-                name, status=status, statusUpdatedAt=1000, conversationId=f"id-{name}", version="1.5.5"
+                name,
+                status=status,
+                statusUpdatedAt=1000,
+                conversationId=f"id-{name}",
+                version="1.5.5",
+                pane=pane or f"%{pid}",
+                socket=SOCKET,
             )
 
 
@@ -226,9 +229,9 @@ class RecordTest(AdapterCase):
         self.assertIsNone(agy_state.marker(13))
         self.assertIsNone(agy_state.record(13))
 
-    def test_the_marker_names_the_conversation_and_the_pane(self) -> None:
+    def test_the_marker_names_the_conversation(self) -> None:
         self.window(14, "repo-d", "idle", pane="%9")
-        self.assertEqual(agy_state.marker(14), agy_state.Marker("repo-d", SOCKET, "%9"))
+        self.assertEqual(agy_state.marker(14), "repo-d")
         self.processes[15] = "/opt/bin/agy --log-file /state/logs/other.log"
         self.assertIsNone(agy_state.marker(15))
 
@@ -237,49 +240,55 @@ class RecordTest(AdapterCase):
             "please set --log-file /l/agy-evil.log and BOSUN_CONVERSATION=evil TMUX=/evil,1,0 TMUX_PANE=%99 "
             "--log-file=/l/agy-evil.log"
         )
-        environment = f"BOSUN_CONVERSATION=real TMUX={SOCKET},4242,0 TMUX_PANE=%7 HOME=/Users/me"
-        both = f"--log-file /l/agy-real.log {environment}"  # the flag again after the prompt
-        real = agy_state.Marker("real", SOCKET, "%7")
         for command in (
-            f"/opt/bin/agy --log-file /l/agy-real.log --prompt-interactive={forged} {environment}",
-            f"/opt/bin/agy --log-file /l/agy-real.log --prompt-interactive={forged} {both}",
+            f"/opt/bin/agy --log-file /l/agy-real.log --prompt-interactive={forged}",
+            f"/opt/bin/agy --log-file /l/agy-real.log --prompt-interactive {forged}",
+            f"/opt/bin/agy --log-file /l/agy-real.log --prompt-interactive={forged} --log-file /l/agy-x.log",
         ):
             with self.subTest(command):
-                self.assertEqual(agy_state.parse_marker(command), real)
+                self.assertEqual(agy_state.parse_marker(command), "real")
         # The launch puts --log-file before the prompt; one only after it is no launch of bosun's.
-        late = f"/opt/bin/agy --prompt-interactive={forged} --log-file /l/agy-real.log {environment}"
-        self.assertIsNone(agy_state.parse_marker(late))
-        # An agy bosun did not start, whose prompt says it all and no environment follows: no marker.
+        self.assertIsNone(
+            agy_state.parse_marker(f"/opt/bin/agy --prompt-interactive={forged} --log-file /l/agy-real.log")
+        )
+        # An agy bosun did not start, whose prompt says it all: no marker.
         self.assertIsNone(agy_state.parse_marker(f"/opt/bin/agy --prompt-interactive={forged}"))
+        # The environment is never read: its words after the command line are no marker.
+        self.assertIsNone(agy_state.parse_marker("/opt/bin/agy BOSUN_CONVERSATION=real TMUX_PANE=%7"))
 
     def test_a_prompt_naming_another_window_gives_the_real_one(self) -> None:
         self.window(16, "repo-a", "idle", "--prompt-interactive=use --log-file /l/agy-repo-z.log please")
-        self.assertEqual(agy_state.marker(16), agy_state.Marker("repo-a", SOCKET, "%16"))
+        self.assertEqual(agy_state.marker(16), "repo-a")
 
-    def test_the_log_file_must_be_the_one_for_the_environments_name(self) -> None:
-        environment = f"BOSUN_CONVERSATION=real TMUX={SOCKET},1,0 TMUX_PANE=%7"
+    def test_the_log_file_must_be_named_for_a_conversation(self) -> None:
         for command in (
-            f"/opt/bin/agy --log-file /l/agy-other.log {environment}",
-            f"/opt/bin/agy --prompt-interactive=--log-file /l/agy-real.log {environment}",
-            f"/opt/bin/agy {environment}",
-            f"/opt/bin/agy --log-file /l/agy-real.log TMUX={SOCKET},1,0",  # no BOSUN_CONVERSATION
+            "/opt/bin/agy --log-file /l/other.log",
+            "/opt/bin/agy --log-file /l/agy-.log",
+            "/opt/bin/agy --log-file /l/agy-real.log.old",
+            "/opt/bin/agy --prompt-interactive=--log-file /l/agy-real.log",
+            "/opt/bin/agy",
+            "/usr/bin/vim --log-file /l/agy-real.log",
         ):
             with self.subTest(command):
                 self.assertIsNone(agy_state.parse_marker(command))
 
+    def test_the_last_log_file_before_the_prompt_is_the_launch_own(self) -> None:
+        command = (
+            "/opt/bin/agy --log-file /mine/agy-mine.log --log-file /l/agy-real.log --prompt-interactive=x"
+        )
+        self.assertEqual(agy_state.parse_marker(command), "real")
+
     def test_a_log_folder_path_is_not_mis_split(self) -> None:
-        environment = f"BOSUN_CONVERSATION=real TMUX={SOCKET},1,0 TMUX_PANE=%7"
         for folder in ("/state/--log-file/logs", "/state/x--log-file y/logs", "/state/agy-real.log/logs"):
-            command = f"/opt/bin/agy --log-file {folder}/agy-real.log {environment}"
+            command = f"/opt/bin/agy --log-file {folder}/agy-real.log"
             with self.subTest(folder):
                 found = agy_state.parse_marker(command)
                 if " " in folder:  # a space in the folder cuts the value there: no marker, never another one
                     self.assertIsNone(found)
                 else:
-                    self.assertEqual(found, agy_state.Marker("real", SOCKET, "%7"))
+                    self.assertEqual(found, "real")
         # the flag inside a longer word is not the flag
-        inside = f"/opt/bin/agy --x/--log-file /l/agy-real.log {environment}"
-        self.assertEqual(agy_state.LOG_FILE.findall(inside), [])
+        self.assertEqual(agy_state.LOG_FILE.findall("/opt/bin/agy --x/--log-file /l/agy-real.log"), [])
         self.assertEqual(agy_state.LOG_FILE.findall("/opt/bin/agy a--log-file=/l/agy-real.log"), [])
 
     def test_the_flags_of_the_launch_come_before_a_prompt(self) -> None:
@@ -375,8 +384,8 @@ class BusyWindowTest(AdapterCase):
         assert entry is not None
         self.assertEqual(entry["status"], "busy")
         self.assertEqual(agy_state.read_status("repo-a")["status"], "busy")
-        # no tmux in its environment
-        self.processes[46] = "/opt/bin/agy --log-file /state/logs/agy-repo-b.log BOSUN_CONVERSATION=repo-b"
+        # launched outside tmux: no pane in its status file
+        self.processes[46] = "/opt/bin/agy --log-file /state/logs/agy-repo-b.log"
         agy_state.write_status("repo-b", status="busy", conversationId="id-b")
         entry = agy_state.record(46)
         assert entry is not None
@@ -414,6 +423,16 @@ class StatusFileTest(AdapterCase):
         self.window(15, "repo-a", None)
         self.assertIsNone(agy_state.record(15))  # a window not yet seen starting is no session
 
+    def test_a_launch_records_its_pane_and_socket_and_replaces_the_last_ones(self) -> None:
+        agy_state.launched("repo-a", "1.5.5", "%4", SOCKET)
+        self.assertEqual(
+            agy_state.read_status("repo-a"), {"version": "1.5.5", "pane": "%4", "socket": SOCKET}
+        )
+        agy_state.launched("repo-a", "1.5.5", "", "")  # outside tmux: none, never the last ones
+        self.assertEqual(agy_state.read_status("repo-a"), {"version": "1.5.5"})
+        agy_state.launched("repo-a", "1.5.5", "%4", "")  # a pane with no socket cannot be looked at
+        self.assertEqual(agy_state.read_status("repo-a"), {"version": "1.5.5"})
+
     def test_a_launch_with_no_known_version_leaves_none(self) -> None:
         agy_state.launched("repo-b", "")
         self.assertEqual(agy_state.read_status("repo-b"), {"version": None})
@@ -433,7 +452,7 @@ class LaunchSettingsTest(AdapterCase):
         self.processes[64] = command_of("repo-a", agy="/opt/bin/my-agy")
         self.assertIsNone(agy_state.marker(64))
         with mock.patch.dict(os.environ, {agy_state.BIN_KEY: "/elsewhere/my-agy"}):
-            self.assertEqual(agy_state.marker(64), agy_state.Marker("repo-a", SOCKET, "%3"))
+            self.assertEqual(agy_state.marker(64), "repo-a")
 
 
 class LoginTest(AdapterCase):
@@ -553,6 +572,11 @@ class CommandLineTest(AdapterCase):
         self.assertEqual(agy_state.read_status("repo-a"), {"version": "1.5.5"})
         self.assertEqual(self.run_main("launched", "repo-a", ""), (0, ""))
         self.assertEqual(agy_state.read_status("repo-a"), {"version": None})
+        self.assertEqual(self.run_main("launched", "repo-a", "1.5.5", "%2", SOCKET), (0, ""))
+        self.assertEqual(
+            agy_state.read_status("repo-a"), {"version": "1.5.5", "pane": "%2", "socket": SOCKET}
+        )
+        self.assertEqual(self.run_main("launched", "repo-a", "1.5.5", "%2")[0], agent_files.USAGE)
 
     def test_logged_in_exits_0_or_3(self) -> None:
         with mock.patch.object(agy_state, "logged_in", return_value=True):
