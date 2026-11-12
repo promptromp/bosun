@@ -4,6 +4,16 @@
 #        bosun hook codex-turn-end --window <window> --conversation <name> <json>
 #        bosun hook compact-context (--window <window> | --orchestrator)
 #        bosun hook signal --window <window>
+#        bosun hook agent --harness <agent> --event <event>
+#
+# agent: an agent's own hooks (the plugin bosun installs into Antigravity runs it), with the hook's JSON on
+# stdin and the agent's answer on stdout, which the agent waits for, so it runs in the foreground and
+# whether or not events are on. It always exits 0, because the agent takes any other exit for a refusal of
+# the tool it asked about: an error, or a wrong command line (an agent bosun does not know, one with no
+# hooks, an event it has none for), is an ERROR line in the hook log, with nothing on stdout, and the
+# refusal's words on stderr. A bosun.env that does not parse, or stops before its end when read, is no
+# reason to refuse either: this route
+# reads the config without dying (the defaults, then the environment) and logs the error.
 #
 # turn-end: what an agent that reports the end of its turns runs (Codex's notify= setting, from
 # lib/launch/codex.sh), with the JSON as the last argument. It remembers which session this window's name
@@ -38,7 +48,15 @@
 # ERROR lines). Design: docs/design/events.md.
 set -uo pipefail
 source "$(dirname "$0")/../lib/common.sh"
-load_config
+# The agent route never dies on the config: a bosun.env that cannot be read would otherwise exit 1, which an
+# agent takes as a refusal of every tool in every window. It reads what it can (read_config falls back to
+# the defaults and the environment) and says so in the hook log.
+if [ "${1:-}" = "agent" ]; then
+  read_config
+  mkdir -p "$BOSUN_STATE_DIR" "$BOSUN_LOG_DIR" 2>/dev/null || true
+else
+  load_config
+fi
 
 case "${1:-}" in -h | --help)
   usage
@@ -76,15 +94,49 @@ if [ "${1:-}" = "compact-context" ]; then
   exit 0
 fi
 
-python_hook() {
+run_python_hook() {
   BOSUN_STATE_DIR="$BOSUN_STATE_DIR" BOSUN_LOG_DIR="$BOSUN_LOG_DIR" \
     BOSUN_CONFIG_DIR="$BOSUN_CONFIG_DIR" \
     BOSUN_REPO_MASK="$BOSUN_REPO_MASK" BOSUN_EVENTS_ENABLED="$BOSUN_EVENTS_ENABLED" \
     BOSUN_TICKET_STATUS_MAP="$BOSUN_TICKET_STATUS_MAP" \
     BOSUN_TICKET_STALE_HOURS="$BOSUN_TICKET_STALE_HOURS" \
     BOSUN_DRAIN_PROMPT="$BOSUN_DRAIN_PROMPT" \
-    python3 "$BOSUN_ROOT/lib/hook.py" "$@" >/dev/null 2>>"$BOSUN_LOG_DIR/hook-$(date +%F).log"
+    python3 "$BOSUN_ROOT/lib/hook.py" "$@"
 }
+
+python_hook() { run_python_hook "$@" >/dev/null 2>>"$BOSUN_LOG_DIR/hook-$(date +%F).log"; }
+
+# The agent's own hook: stdin in, the answer on stdout, and exit 0 whatever happened, a wrong command line
+# included: the agent takes any other exit as a refusal of its tool, so one reaching it would block every
+# tool in the window. What went wrong is an ERROR line in the hook log (the watchdog reports it) and
+# Python's own words on stderr.
+agent_hook() {
+  local err status flag prev="" harness="" event=""
+  for flag in "$@"; do
+    case "$prev" in
+      --harness) harness="$flag" ;;
+      --event) event="$flag" ;;
+    esac
+    prev="$flag"
+  done
+  [ -z "$BOSUN_ENV_ERROR" ] || {
+    BOSUN_COMMAND=hook log "ERROR: bosun.env $BOSUN_ENV_FAULT, so this hook ran on the defaults: ${BOSUN_ENV_ERROR//$'\n'/ }" \
+      >>"$BOSUN_LOG_DIR/hook-$(date +%F).log" 2>/dev/null || true
+  }
+  exec 3>&1
+  err="$(run_python_hook "$@" 2>&1 1>&3)"
+  status=$?
+  exec 3>&-
+  [ -z "$err" ] || printf '%s\n' "$err" >&2
+  [ "$status" -eq 0 ] || {
+    [ -z "$err" ] || printf '%s\n' "$err" >>"$BOSUN_LOG_DIR/hook-$(date +%F).log"
+    BOSUN_COMMAND=hook log "ERROR: bosun hook agent --harness ${harness:-?} --event ${event:-?} exited with status $status" \
+      >>"$BOSUN_LOG_DIR/hook-$(date +%F).log"
+  }
+  exit 0
+}
+
+[ "${1:-}" != "agent" ] || agent_hook "$@"
 
 if [ "${1:-}" = "turn-end" ] || [ "${1:-}" = "codex-turn-end" ]; then
   if [ "${BOSUN_HOOK_SYNC:-0}" = "1" ]; then python_hook "$@" </dev/null; else python_hook "$@" </dev/null & fi

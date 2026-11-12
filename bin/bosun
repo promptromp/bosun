@@ -47,7 +47,8 @@ Inside the tmux session
               prompt) to the idle orchestrator (the check-in loop, with BOSUN_EVENTS_ENABLED=1)
   slack-watch Look for new Slack mentions, DMs and thread replies (read-only headless Claude) and
               queue them as events (the check-in loop, with BOSUN_SLACK_WATCH_ENABLED=1)
-  hook        What the agents call: Claude Code's hooks, and what Codex runs when a turn ends
+  hook        What the agents call: Claude Code's hooks, what Codex runs when a turn ends, and
+              Antigravity's plugin hooks
   learn       Look back over recent sessions, the ledger and the logs; propose memory notes,
               rules and setup changes for my approval (its own launchd agent, if enabled)
 

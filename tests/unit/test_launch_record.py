@@ -350,7 +350,7 @@ class LaunchCommandTest(unittest.TestCase):
         self.assertEqual(self.launched("scratch")["harness"], "claude")
         unknown = self.bosun("launch", "--harness", "nope", "scratch", cwd=self.repo)
         self.assertNotEqual(unknown.returncode, 0)
-        self.assertIn("no agent 'nope': bosun knows claude, codex", unknown.stderr)
+        self.assertIn("no agent 'nope': bosun knows claude, codex, agy", unknown.stderr)
 
     def test_a_window_with_neither_a_list_entry_nor_a_record_is_refused(self) -> None:
         refused = self.bosun("launch", "--fingerprint", "elsewhere", cwd=self.repo)

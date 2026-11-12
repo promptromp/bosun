@@ -1,6 +1,6 @@
 #!/bin/bash
 # Usage: tests/sandbox.sh [init | unit | smoke | all | shell]
-#        tests/sandbox.sh mac (setup | run [--from-nothing] | work [--base <git ref>] | live [claude|codex]
+#        tests/sandbox.sh mac (setup | run [--from-nothing] | work [--base <git ref>] | live [claude|codex|agy]
 #                              | shell | clean)
 #
 # Run bosun on a clean machine that cannot touch this one: a throwaway Linux container with a

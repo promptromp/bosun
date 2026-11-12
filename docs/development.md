@@ -70,6 +70,7 @@ the cheapest of these that can show what you changed:
 | What a new Mac lacks: Homebrew, Apple's tools | `tests/sandbox.sh mac run --from-nothing` | the same from a Mac with nothing on it | 4 minutes |
 | What an update does to an install in use, its windows, its ledger and knowledge base, and what real use does to them: their journals, ids, writes, privacy | `tests/sandbox.sh mac work` | a week of work through the first update's conversion and a mid-afternoon update on a year of data, on real macOS: launchd, a moving clock, racing writers, writes cut short, files changed outside the journal, going back | 16 minutes |
 | How an agent behaves: launching it, its screens and files, a task handed to it, an update's prompts, which MCP servers a window reaches | `tests/sandbox.sh mac live claude`, `... live codex` | the real agents from nothing, through setup, sessions, an update and connectors | about 10 minutes and a dollar each |
+| How Antigravity (`agy`) behaves under bosun: its hooks and plugin, its screen, its dialogs, its login | `tests/sandbox.sh mac live agy` | the real `agy` in a VM with a window, where you sign in; then windows started by launchd, Esc, a reviewer's dialog, the plugin's approvals, a slow hook, connectors, uninstall | about 25 minutes, you at the start, and a personal account's free quota |
 | The wake itself | `bosun wake-test`, on real hardware | a real sleep and a real wake | 5 minutes |
 
 The first also runs in CI (the second's unit and smoke suites run there natively), and so does the third on
@@ -104,6 +105,7 @@ tests/sandbox.sh mac run                  # on a developer's Mac: Homebrew is al
 tests/sandbox.sh mac run --from-nothing   # on a new Mac: no Homebrew, no Apple tools
 tests/sandbox.sh mac work                 # a week of work, through two updates: see below
 tests/sandbox.sh mac live codex           # the real agents: see below
+tests/sandbox.sh mac live agy             # Antigravity: you sign in in the VM's window, see below
 tests/sandbox.sh mac shell                # a window, to try the wizard as a new user would
 tests/sandbox.sh mac clean                # delete the base images (`tart prune` removes the pulled one)
 ```
@@ -256,7 +258,34 @@ a list that names it must keep. What a window reaches is read from the agent (wh
 from what its model says: a model leaves deferred tools out of a list. This part adds about three minutes and
 a few cents.
 
-**The keys.** It reads two API keys from your Keychain, one for Anthropic, and for `live codex` one for OpenAI.
+**`live agy`** is different in how it starts. Antigravity's login is a browser sign-in whose result is a
+Keychain item that `agy` reads only in the desktop session, never over ssh. So the clone boots with its
+window (not headless), Google's own installer puts `agy` in it (`curl -fsSL
+https://antigravity.google/cli/install.sh | bash`), and the run stops and tells you what to do: open Terminal
+in the VM's window, run `~/.local/bin/agy`, sign in with Google (a personal account's free quota), go through
+its first-run screens and quit it. It then looks every 10 seconds, for up to 15 minutes, for the Keychain item
+(asked for without reading it) and `onboardingComplete`, and goes on by itself. Your sign-in stays in the
+clone, which is deleted at the end, and no image is ever saved with it. The Anthropic key goes in as for the
+others, since the orchestrator stays on Claude Code; no OpenAI key.
+
+What it then checks (`tests/sandbox/live_agy.sh`) is the Testing list of the
+[design note](design/antigravity.md#testing): windows started by bosun's launchd job in the desktop session,
+never by `bosun start` over ssh (the installer's and doctor's checks go through `launchctl asuser` for the
+same reason), named, busy then idle from the hooks, refreshed and resumed on their conversation; Esc in a busy
+window reading idle with no hook; a push to `main` stopping at `agy`'s own dialog, read as `waiting`, which
+`bosun send` refuses; `--remote-control` and `SSH_AUTH_SOCK` not stopping the window; the plugin's approvals
+(a feature branch's push and a `gh` command of its list answered with `BypassSandbox`, an `ls` with nothing),
+read from a copy of the plugin that records each hook's payload and answer (`tests/sandbox/live/agy-hook-record`,
+installed for those parts only, since macOS 27.2 shows no process's environment to `ps`); a hook slower than
+its timeout; connectors with none and with a dummy server; the morning's `agy update`; and `bosun uninstall`,
+after which the file tree of `~/.gemini` may differ from before only by `agy`'s conversations and logs. A few
+facts are recorded, not judged, and printed at the end (what `SessionStart` carries, the footer right after a
+hook, whether `run_command` has a working-directory argument, what the sandbox lets a nested `.git` do,
+whether `safe.bareRepository=explicit` and the window's git configuration hold). It costs a few cents of the
+Anthropic key (the orchestrator's start) and the Google account's free quota.
+
+**The keys.** It reads two API keys from your Keychain, one for Anthropic, and for `live codex` one for OpenAI
+(`live agy` needs only the Anthropic one; the sign-in is its own).
 Use keys made for this, with a spend limit. Copy each to the clipboard and store it like this, because
 `security add-generic-password -w` with no value silently cuts what you type at 128 characters and a key is
 longer. It also keeps the key out of the process list, and clears the clipboard:

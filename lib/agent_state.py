@@ -12,6 +12,7 @@ Usage: agent_state.py registered <pid>...               the first of them that i
        agent_state.py resolve <harness> <dir> <name>    the session that agent knows by <name> in <dir>
        agent_state.py trusted <harness> <dir>           exit 0 if that agent trusts <dir>
        agent_state.py set-trust <harness> <dir> <true|false>
+       agent_state.py setup <harness>                   make that agent's one-time setup, if it needs one
        agent_state.py profiles                          every agent's profile, a line each
 
 A record has the fields of Claude Code's running-session record, and `harness`, the agent's name.
@@ -31,9 +32,10 @@ from typing import Any, Protocol
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import agent_changes
+import agy_state
 import claude_state
 import codex_state
-from agent_files import NOT_FOUND, USAGE, Command, LaunchSettings, Profile, emit, run_command
+from agent_files import NOT_FOUND, USAGE, Command, LaunchSettings, Profile, SetupError, emit, run_command
 
 
 class Agent(Protocol):
@@ -57,7 +59,11 @@ class Agent(Protocol):
     def ready(self) -> bool: ...
 
 
-AGENTS: dict[str, Agent] = {claude_state.HARNESS: claude_state, codex_state.HARNESS: codex_state}
+AGENTS: dict[str, Agent] = {
+    claude_state.HARNESS: claude_state,
+    codex_state.HARNESS: codex_state,
+    agy_state.HARNESS: agy_state,
+}
 
 DEFAULT_HARNESS = claude_state.HARNESS  # the agent a window runs when nothing says otherwise
 # The orchestrator stands on Claude Code's hooks, plugins and permission settings (ORCHESTRATOR_HARNESS in
@@ -148,6 +154,30 @@ def cmd_set_trust(harness: str, args: list[str]) -> int:
     return 0
 
 
+def cmd_setup(harness: str, _args: list[str]) -> int:
+    """Make the agent's one-time setup if it is still needed. It goes on record for uninstall first, so a
+    setup that exists is always on record (one whose apply then failed only costs an undo that finds nothing).
+    A setup that cannot be made, for whatever reason, is exit 1 and one line on stderr: its own words for a
+    SetupError, <type>: <message> for any other error."""
+    setup = AGENTS[harness].PROFILE.setup
+    if setup is None or not setup.needed():
+        return 0
+    state_dir = os.environ.get("BOSUN_STATE_DIR")
+    if not state_dir:
+        print("no BOSUN_STATE_DIR to put the setup on record in, so it is not made", file=sys.stderr)
+        return 1
+    agent_changes.record_setup(Path(state_dir), harness)
+    try:
+        setup.apply()
+    except SetupError as error:
+        print(error, file=sys.stderr)
+        return 1
+    except Exception as error:  # noqa: BLE001 (the launch needs one line saying why, not a traceback)
+        print(f"{type(error).__name__}: {error}", file=sys.stderr)
+        return 1
+    return 0
+
+
 def profile_line(harness: str, profile: Profile) -> str:
     """One agent's profile as a tab-separated line, booleans as yes and no."""
     yes_no = (
@@ -155,7 +185,10 @@ def profile_line(harness: str, profile: Profile) -> str:
         for flag in (profile.names_sessions, profile.remote_control, profile.autocompact, profile.subagents)
     )
     statuses = ",".join(status for status in STATUS_ORDER if status in profile.statuses)
-    return "\t".join([harness, profile.bin_key, profile.flags_key, profile.model_key, *yes_no, statuses])
+    update = " ".join(profile.update_args) or "-"
+    return "\t".join(
+        [harness, profile.bin_key, profile.flags_key, profile.model_key, *yes_no, statuses, update]
+    )
 
 
 def cmd_profiles(_args: list[str]) -> int:
@@ -176,6 +209,7 @@ PER_AGENT = {
     "resolve": (2, cmd_resolve),
     "trusted": (1, cmd_trusted),
     "set-trust": (2, cmd_set_trust),
+    "setup": (0, cmd_setup),
 }
 
 

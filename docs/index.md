@@ -21,7 +21,7 @@ and keeps a record of everything in flight. Nothing goes out under your name unt
 <p class="bx-hero__actions" markdown>[Get started](setup.md){ .md-button .md-button--primary }
 [See it work](#how-it-works){ .md-button }</p>
 
-<p class="bx-fine">For macOS, with Claude Code and Codex.</p>
+<p class="bx-fine">For macOS, with Claude Code, Codex and Antigravity.</p>
 
 </div>
 <div class="bx-install" markdown>
@@ -66,7 +66,7 @@ from your phone if you like.</li>
       you(("You<br/>phone or terminal")) <-->|"asks and approvals"| orch["Orchestrator"]
       orch <--> ledger[("Work ledger")]
       orch <--> kg[("Knowledge graph")]
-      orch -->|tasks| repos["Repo sessions<br/>Claude Code or Codex"]
+      orch -->|tasks| repos["Repo sessions<br/>Claude Code, Codex or Antigravity"]
       repos -->|reports| ledger
       orch -->|"approved actions only"| world["Slack, GitHub, tracker"]
       ledger -.-> learn["Daily learning"]
@@ -243,7 +243,7 @@ What bosun learns, how it is built, and what comes next.
 <div class="bx-today" markdown>
 
 - **macOS only, for now.** Linux is next.
-- **Claude Code and Codex** both run repo sessions. The orchestrator needs Claude Code.
+- **Claude Code, Codex and Antigravity** run repo sessions; Antigravity is a preview. The orchestrator needs Claude Code.
 - **One engineer, one Mac.** A ledger and knowledge base shared across a team is next on the
   [roadmap](../ROADMAP.md).
 - **The proactive parts are yours to turn on:** events, approvals, learning and the Slack watcher.

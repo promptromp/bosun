@@ -255,7 +255,10 @@ def render(args: argparse.Namespace, chosen: list[Task], preamble: str = "", lea
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        prog="bosun delegate", description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
+        prog="bosun delegate",
+        description=__doc__,
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        allow_abbrev=False,  # an agy window's approval compares options by their exact words
     )
     parser.add_argument("types", nargs="?", help="task type(s), comma-separated")
     parser.add_argument("--list", action="store_true")

@@ -3,11 +3,13 @@
 
 from __future__ import annotations
 
+import dataclasses
 import io
 import json
 import os
 import sys
 import tempfile
+import types
 import unittest
 from datetime import UTC, datetime, time, timedelta
 from pathlib import Path
@@ -16,12 +18,15 @@ from unittest import mock
 
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "lib"))
+import agent_state
+import claude_state
 import codex_state
 import events
 import hook
 import ledger
 import update_gate
 import watchdog
+from agent_files import AgentHooks
 from watchdog import Config, Facts, Inputs, State
 
 
@@ -113,7 +118,7 @@ class HookTest(unittest.TestCase):
         with self.assertRaises(SystemExit) as raised, mock.patch.object(sys, "stderr", stderr):
             hook.main(["turn-end", "--harness", "nope", "--window", WINDOW, "{}"], self.env)
         self.assertEqual(raised.exception.code, 2)
-        self.assertIn("no agent 'nope': bosun knows claude, codex", stderr.getvalue())
+        self.assertIn("no agent 'nope': bosun knows claude, codex, agy", stderr.getvalue())
 
     def test_a_codex_turn_says_which_session_a_window_s_name_stands_for(self) -> None:
         self.assertEqual(self.codex_turn("go with option b"), 0)
@@ -250,6 +255,86 @@ class HookTest(unittest.TestCase):
         )
         self.assertEqual(self.run_hook(json.dumps({"hook_event_name": "Stop"})), 0)
         self.assertIn("ignored: a Stop hook", self.log())
+
+
+def ping(event: str, payload: Any, env: Any) -> str:
+    return json.dumps({"seen": payload["n"]})
+
+
+def broken(event: str, payload: Any, env: Any) -> str:
+    raise RuntimeError("the answer broke")
+
+
+class AgentHookTest(unittest.TestCase):
+    """`bosun hook agent --harness <agent> --event <event>`: an agent's own hooks, answered on stdout."""
+
+    def setUp(self) -> None:
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.logs = Path(tmp.name) / "logs"
+        self.env = {"BOSUN_LOG_DIR": str(self.logs)}
+        self.install(ping)
+
+    def install(self, answer: Any) -> None:
+        profile = dataclasses.replace(claude_state.PROFILE, hooks=AgentHooks(("Ping",), answer))
+        stub = types.SimpleNamespace(PROFILE=profile)
+        patcher = mock.patch.dict(agent_state.AGENTS, {"stub": stub})
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def run_hook(self, stdin: str, *argv: str) -> tuple[int, str]:
+        out = io.StringIO()
+        with mock.patch.object(sys, "stdin", io.StringIO(stdin)), mock.patch.object(sys, "stdout", out):
+            return hook.agent_hook(list(argv), self.env), out.getvalue()
+
+    def log(self) -> str:
+        return "".join(path.read_text() for path in self.logs.glob("hook-*.log"))
+
+    def refused(self, *argv: str) -> str:
+        stderr = io.StringIO()
+        with self.assertRaises(SystemExit) as raised, mock.patch.object(sys, "stderr", stderr):
+            self.run_hook("{}", *argv)
+        self.assertEqual(raised.exception.code, 2)
+        return stderr.getvalue()
+
+    def test_an_agent_hook_prints_its_answer(self) -> None:
+        self.assertEqual(
+            (0, '{"seen": 1}'), self.run_hook('{"n": 1}', "--harness", "stub", "--event", "Ping")
+        )
+
+    def test_an_empty_answer_prints_nothing_at_all(self) -> None:
+        self.install(lambda event, payload, env: "")
+        self.assertEqual((0, ""), self.run_hook("{}", "--harness", "stub", "--event", "Ping"))
+
+    def test_a_failing_agent_hook_prints_nothing(self) -> None:
+        self.install(broken)
+        self.assertEqual((0, ""), self.run_hook('{"n": 1}', "--harness", "stub", "--event", "Ping"))
+        for part in ("ERROR", "stub", "Ping", "RuntimeError", "the answer broke"):
+            self.assertIn(part, self.log())
+
+    def test_bad_json_prints_nothing(self) -> None:
+        self.assertEqual((0, ""), self.run_hook("{not json", "--harness", "stub", "--event", "Ping"))
+        self.assertIn("ERROR", self.log())
+        self.assertNotIn("not json", self.log())
+
+    def test_the_log_never_carries_the_payload(self) -> None:
+        self.install(broken)
+        self.run_hook('{"n": 1, "prompt": "my secret prompt"}', "--harness", "stub", "--event", "Ping")
+        self.assertNotIn("secret", self.log())
+
+    def test_an_agent_with_no_hooks_is_refused(self) -> None:
+        self.assertIn(
+            "claude has no hooks of its own", self.refused("--harness", "claude", "--event", "Ping")
+        )
+
+    def test_an_unknown_event_is_refused(self) -> None:
+        self.assertIn("stub has no hook Pong", self.refused("--harness", "stub", "--event", "Pong"))
+
+    def test_an_agent_bosun_does_not_know_is_refused_with_the_ones_it_does(self) -> None:
+        self.assertIn(
+            "no agent 'nope': bosun knows claude, codex, agy, stub",
+            self.refused("--harness", "nope", "--event", "Ping"),
+        )
 
 
 NOON = datetime(2026, 1, 5, 12, 0)  # a Monday

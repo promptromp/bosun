@@ -1,5 +1,6 @@
 #!/bin/bash
-# Usage: live.sh prepare <claude|codex> | go <claude|codex> [codex model]   (through tests/sandbox.sh mac live)
+# Usage: live.sh prepare <claude|codex|agy> | go <claude|codex|agy> [codex model] | login agy
+#        (through tests/sandbox.sh mac live)
 #
 # The real agents, on a real throwaway Mac: what a new user does from nothing, following only what the
 # installer prints, then a real task from a real orchestrator to a real repo session, and an update while
@@ -7,6 +8,7 @@
 # leaves the Mac but requests to the agents' APIs. It costs real money, about a dollar a run, so nothing
 # runs it by itself.
 #   prepare   the repo, the installer stopping for what is missing, and doing what it says
+#   login     agy only: waits for a person to sign in to Antigravity in the VM's window (up to 15 minutes)
 #   go        the first-run screens, the install, real windows, a restart and the hand-over; then whether a
 #             running Claude picks up a changed command file of its plugin, and `bosun update` to the next
 #             version (this checkout and tests/sandbox/update_patch.sh) while the repo window waits on a
@@ -14,7 +16,9 @@
 #             a window with BOSUN_CONNECTORS reaches only the local test servers it names, also resumed;
 #             on Claude Code a repo whose own settings allow more keeps it from starting until the list
 #             names that, and whether `claude mcp list` writes ~/.claude.json
-# The keys go in between, from mac.sh, so this script never sees where they come from.
+# The keys go in between, from mac.sh, so this script never sees where they come from. `agy` has steps of its
+# own (tests/sandbox/live_agy.sh, which this sources): the repo window on Antigravity, the orchestrator on
+# Claude Code, and what the design note's Testing list asks of the real agy.
 # Checks pass shell snippets to `bash -c '...' _ args`; their $ must not expand here.
 # shellcheck disable=SC2016
 set -uo pipefail
@@ -25,7 +29,7 @@ set -uo pipefail
 export PATH="/opt/homebrew/bin:/usr/local/bin:$HOME/.local/bin:$PATH" HOMEBREW_NO_AUTO_UPDATE=1
 
 STEP="${1:?prepare or go}"
-AGENT="${2:?claude or codex}"
+AGENT="${2:?claude, codex or agy}"
 CODEX_MODEL="${3:-}"
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 CONFIG="$HOME/.config/bosun"
@@ -33,6 +37,7 @@ STATE="$HOME/.local/state/bosun"
 OUT="$(mktemp -d)"
 export BOSUN_REPO="$HOME/repo.bundle" BOSUN_BRANCH="${BOSUN_BRANCH:?}"
 [ "$AGENT" = "codex" ] && export BOSUN_HARNESS=codex
+[ "$AGENT" = "agy" ] && export BOSUN_HARNESS=agy
 REQUEST="In the exporter repo, invoice_total ignores quantity, so one of the tests fails. Please get the exporter session to fix it on a branch and open a pull request."
 HAND_OVER_SECONDS=480
 UPDATE_SECONDS=600 # the most the update may take to bring every window along
@@ -810,18 +815,33 @@ show_what_happened() {
   tmux -L bosun capture-pane -p -t "=bosun:=exporter" | grep -v '^[[:space:]]*$' | tail -8 | cut -c1-100
 }
 
+source "$(dirname "$0")/live_agy.sh"
+
 case "$STEP" in
-  prepare) prepare ;;
+  prepare)
+    if [ "$AGENT" = "agy" ]; then agy_prepare; else prepare; fi
+    ;;
+  login)
+    [ "$AGENT" = "agy" ] || {
+      echo "login is for agy: the others are logged in by their keys" >&2
+      exit 2
+    }
+    agy_login
+    ;;
   go)
-    install_it
-    real_windows
-    hand_over
-    show_what_happened
-    picks_up_commands
-    update_with_agents_at_work
-    show_what_happened
-    connectors
-    off_again
+    if [ "$AGENT" = "agy" ]; then
+      agy_go
+    else
+      install_it
+      real_windows
+      hand_over
+      show_what_happened
+      picks_up_commands
+      update_with_agents_at_work
+      show_what_happened
+      connectors
+      off_again
+    fi
     ;;
   *)
     echo "unknown step $STEP" >&2

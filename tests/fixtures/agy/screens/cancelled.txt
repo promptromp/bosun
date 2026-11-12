@@ -1,0 +1,23 @@
+
+      ▄▀▀▄        Antigravity CLI 1.5.5
+     ▀▀▀▀▀▀       me@example.com (Google AI)
+    ▀▀▀▀▀▀▀▀      Gemini 3.8 Flash (Low)
+   ▄▀▀    ▀▀▄     ~/work/r2
+  ▄▀▀      ▀▀▄
+
+────────────────────────────────────────────────────────────
+> Write a 400-word story about a lighthouse.
+
+  For forty years, Silas had wound the clockwork gears of the Pelican Spit light. Perched on a splinter of jagged granite five miles off a treacherous coast,
+  the white-washed cylinder was his universe. Salt crust etched its cast-iron lantern room, and the ceaseless roar of churning foam was the only heartbeat
+  that mattered.
+
+  To the mainlanders, the lighthouse was automated now—or supposed to be. Two winters ago, the ministry had fitted solar panels, lithium banks, and a solid-
+  state halogen beacon intended to pulse without a keeper’s touch. But machines had no reverence for the North Atlantic. They knew nothing of the sideways
+  squalls that froze hydraulic bearings solid, nor the sudden, suffoc
+
+  ⎿  Interrupted · What should Antigravity CLI do instead?
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+>
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+? for shortcuts                                                                                                                    auto · Gemini 3.8 Flash · low

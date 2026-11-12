@@ -81,6 +81,18 @@ case "${1:-}" in
   -*) die_usage "unknown option $1" ;;
 esac
 
+# An agent that is not installed for this pane's shell would leave the window a plain shell, with
+# nothing to say why: it says so here, in the pane and the launch log, and alerts you.
+require_agent_bin() { # <window>
+  command -v "$AGENT_BIN" >/dev/null 2>&1 && return 0
+  local log_file
+  log_file="$(launch_log)"
+  log "$1: its agent, $AGENT_BIN, is not installed for this window's shell (not on its PATH); the window stays a plain shell" |
+    tee -a "$log_file" >&2
+  ("$BOSUN" alert "$1: its agent, $AGENT_BIN, is not installed for the window's shell; install it, or name it in bosun.env" </dev/null >>"$log_file" 2>&1 &)
+  exit 1
+}
+
 # Sets agent_args for window <name> (lib/launch/<harness>.sh's build_agent_args), and session_name,
 # harness, model and effort: what it resumes, which agent runs it, and with what. Also input_args, what
 # the record and --fingerprint go by: the same arguments for the conversation name <conversation>,
@@ -100,6 +112,9 @@ set_agent_args() { # <name>
   [ -f "$agent_module" ] || die "no way to run a window on '$harness' (BOSUN_HARNESS, or harness: in sessions.yml)"
   # shellcheck disable=SC1090  # one module per agent, each with the same functions
   source "$agent_module"
+  # Before the arguments are built: some ask the agent itself (its connectors), and a missing one would then
+  # fail with that, not with the word that it is not installed. A dry run and --fingerprint start nothing.
+  [ "$BOSUN_LAUNCH_DRY_RUN" = "1" ] || [ "$fingerprint" = "1" ] || require_agent_bin "$1"
   build_agent_args "$1" "<conversation>" "$model" "$effort"
   input_args=("${agent_args[@]}")
   build_agent_args "$1" "$session_name" "$model" "$effort"
@@ -111,9 +126,10 @@ set_agent_args() { # <name>
 # caller's. --model / --effort / --harness given here still win. It runs no `claude mcp list` (an update
 # takes a fingerprint of every window): a Claude Code window's connectors resolve from what the last
 # lookups kept. A Codex window's arguments come from `codex mcp list --json` (lib/launch/codex.sh), so its
-# fingerprint runs it. When that fails, or another settings scope would widen a Claude Code window's list
-# (refuse_widening, lib/connectors_claude.py), no fingerprint is printed (exit 1), an update reads the window as
-# changed, and its restart then refuses to start it.
+# fingerprint runs it, and an agy window's connector check runs `agy plugin list --json` (lib/connectors_agy.py)
+# on each fingerprint in the same way. When that fails, or another settings scope would widen a Claude Code
+# window's list (refuse_widening, lib/connectors_claude.py), no fingerprint is printed (exit 1), an update
+# reads the window as changed, and its restart then refuses to start it.
 print_fingerprint() { # <name>
   local dir listed=1
   CONNECTOR_LOOKUP=0
@@ -166,17 +182,14 @@ if [ "$initial_prompt" = "--prompt-file" ]; then
 fi
 set_agent_args "$name"
 
-# An agent that is not installed for this pane's shell would leave the window a plain shell, with
-# nothing to say why: it says so here, in the pane and the launch log, and alerts you.
-require_agent_bin() { # <window>
-  command -v "$AGENT_BIN" >/dev/null 2>&1 && return 0
-  local log_file
-  log_file="$(launch_log)"
-  log "$1: its agent, $AGENT_BIN, is not installed for this window's shell (not on its PATH); the window stays a plain shell" |
-    tee -a "$log_file" >&2
-  ("$BOSUN" alert "$1: its agent, $AGENT_BIN, is not installed for the window's shell; install it, or name it in bosun.env" </dev/null >>"$log_file" 2>&1 &)
-  exit 1
+# The agent's one-time setup, if its profile has one, made once before its first window starts (never in a
+# dry run); a setup that cannot be made stops this window, saying why.
+set_up_agent() {
+  local why
+  [ "$BOSUN_LAUNCH_DRY_RUN" = "1" ] && return 0
+  why="$(agent_setup "$harness" 2>&1)" || die "'$name' does not start: $why"
 }
+set_up_agent
 
 run_agent() {
   record_launch

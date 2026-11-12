@@ -14,8 +14,21 @@ See also [ROADMAP.md](../ROADMAP.md) for planned work and open questions.
   files in `~/.codex/sessions/`, `[projects]` in `~/.codex/config.toml`, the JSON of its `notify=` program
   and the screens `lib/pane_input.py` reads. Verified on Codex 0.166.0. After a Codex update, check with
   `bosun doctor`, and with `tests/sandbox.sh mac live codex` if you can.
-- Codex windows do not have everything a Claude Code window has, and the orchestrator needs Claude Code:
-  see [the list](design/harnesses.md#what-codex-windows-do-not-have-yet).
+- Codex and Antigravity windows do not have everything a Claude Code window has, and the orchestrator needs
+  Claude Code: see [the list](design/harnesses.md#what-windows-do-not-have-yet).
+- Antigravity (`agy`) windows are a preview. They are tested against a stand-in, in the smoke and Docker
+  suites, but the live run on the real `agy` (`tests/sandbox.sh mac live agy`, which needs a person to sign
+  in inside the throwaway VM) has not passed yet. They rely on `agy` internals that are not a public API,
+  all in `lib/agy_state.py`: its hooks' JSON, its conversation files and `agy-sessions.json`'s source,
+  the Keychain item of its login, `~/.gemini/config/` and its screens. Verified on `agy` 1.5.5. Google has
+  said nothing about another program driving `agy` unattended, and an `agy` account has been reported
+  suspended under its terms.
+- An `agy` window runs repo git hooks nowhere: an approved commit would otherwise run the repo's own hook
+  code outside `agy`'s sandbox. Checks that a pre-commit hook makes run in CI only. The login reaches only a
+  desktop session, never ssh. A window starts only if `agy` has no MCP server its connectors list does not
+  name, the Antigravity app's included. It does not start in a folder with an `.agents/hooks.json` (in it or
+  any folder up to its repo's root), whose hooks `agy` would run outside its sandbox, nor with a log folder
+  (`BOSUN_LOG_DIR`) that has a space in its path.
 - Whether Remote Control reconnects after a long sleep without a restart is not verified. Sessions
   that `refresh` restarts get a fresh connection.
 - Static AWS credential variables (`AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`,

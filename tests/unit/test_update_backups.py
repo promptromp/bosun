@@ -16,6 +16,7 @@ from unittest import mock
 
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "lib"))
+import agent_state
 import update_backups as ub
 from uninstall_plan import CONFIG_FILES, STATE_FILES
 
@@ -47,6 +48,11 @@ def lay_out(folder: Path, table: tuple[tuple[str, str], ...]) -> None:
 
 
 class BackupsTest(unittest.TestCase):
+    def test_in_flight_holds_each_agents_files(self) -> None:
+        wanted = tuple(name for agent in agent_state.AGENTS.values() for name in agent.PROFILE.state_files)
+        self.assertIn("codex-sessions.json", wanted)
+        self.assertEqual(ub.IN_FLIGHT[len(ub.IN_FLIGHT) - len(wanted) :], wanted)
+
     def setUp(self) -> None:
         tmp = Path(tempfile.mkdtemp())
         self.addCleanup(shutil.rmtree, tmp, ignore_errors=True)

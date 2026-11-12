@@ -4,6 +4,7 @@ fake does not know fails the test, so none reaches launchd, pmset or sudo for re
 from __future__ import annotations
 
 import contextlib
+import dataclasses
 import io
 import json
 import os
@@ -12,8 +13,9 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import types
 import unittest
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from pathlib import Path
 from typing import Any
 from unittest import mock
@@ -29,6 +31,7 @@ import uninstall
 import uninstall_detect
 import uninstall_macos
 import uninstall_plan as up
+from agent_files import AgentSetup
 
 
 LABEL = "com.bosun.morning"
@@ -955,6 +958,58 @@ class WhenItCannot(World):
 
 
 class AgentsFiles(World):
+    def install_stub(self, *, undo: Callable[[], None]) -> list[str]:
+        """An agent with a setup, in AGENTS; the calls its undo got are the list."""
+        calls: list[str] = []
+
+        def undoing() -> None:
+            calls.append("undo")
+            undo()
+
+        setup = AgentSetup("a stub's plugin, installed by bosun", lambda: True, lambda: None, undoing)
+        stub = types.SimpleNamespace(PROFILE=dataclasses.replace(claude_state.PROFILE, setup=setup))
+        patcher = mock.patch.dict(agent_state.AGENTS, {"stub": stub})
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        return calls
+
+    def test_uninstall_undoes_a_setup_and_forgets_it(self) -> None:
+        calls = self.install_stub(undo=lambda: None)
+        agent_changes.record_setup(self.state, "stub")
+        status, output = self.run_it("--yes")
+        self.assertEqual(status, 0)
+        self.assertEqual(calls, ["undo"])
+        self.assertEqual(agent_changes.setups_made(self.state), ())
+        self.assertIn("removed a stub's plugin, installed by bosun (stub)", output)
+        self.assertFalse((self.state / agent_changes.FILE).exists())
+
+    def raises_locked(self) -> None:
+        raise PermissionError("locked")
+
+    def test_a_setup_whose_undo_fails_stays_recorded(self) -> None:
+        calls = self.install_stub(undo=self.raises_locked)
+        agent_changes.record_setup(self.state, "stub")
+        status, output = self.run_it("--yes")
+        self.assertEqual(status, uninstall.EXIT_LEFT)
+        self.assertEqual(calls, ["undo"])
+        self.assertEqual(agent_changes.setups_made(self.state), ("stub",))
+        self.assertIn("could not remove a stub's plugin, installed by bosun (stub): locked", output)
+        self.assertTrue((self.state / agent_changes.FILE).exists())
+
+    def test_a_setup_of_an_agent_bosun_no_longer_knows_stays_recorded(self) -> None:
+        agent_changes.record_setup(self.state, "gone")
+        status, output = self.run_it("--yes")
+        self.assertEqual(status, uninstall.EXIT_LEFT)
+        self.assertEqual(agent_changes.setups_made(self.state), ("gone",))
+        self.assertIn("no agent 'gone' to undo it", output)
+
+    def test_a_setup_the_agent_no_longer_has_stays_recorded(self) -> None:
+        agent_changes.record_setup(self.state, "claude")  # its profile has no setup
+        status, output = self.run_it("--yes")
+        self.assertEqual(status, uninstall.EXIT_LEFT)
+        self.assertEqual(agent_changes.setups_made(self.state), ("claude",))
+        self.assertIn("claude has no setup to undo", output)
+
     def test_only_the_trust_bosun_gave_is_taken_back(self) -> None:
         mine = self.home / "Development" / "mine"
         given = self.home / "Development" / "given"

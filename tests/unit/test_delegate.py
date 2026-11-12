@@ -709,6 +709,18 @@ class MainTest(unittest.TestCase):
             with self.subTest(argv=argv), self.assertRaisesRegex(delegate.DelegateError, message):
                 delegate.main(argv)
 
+    def test_options_are_never_abbreviated(self) -> None:
+        # an agy window's approval compares the window-starting options by their exact words
+        for argv in (["x", "--ne", "w", "/work"], ["x", "--new=w"], ["x", "--sta=w"], ["x", "--star", "w"]):
+            with (
+                self.subTest(argv=argv),
+                mock.patch("sys.stderr", io.StringIO()),
+                self.assertRaises(SystemExit) as raised,
+            ):
+                delegate.build_parser().parse_args(argv)
+            self.assertEqual(raised.exception.code, 2)
+        self.assertEqual(delegate.build_parser().parse_args(["x", "--start", "w"]).start, "w")
+
 
 if __name__ == "__main__":
     unittest.main()

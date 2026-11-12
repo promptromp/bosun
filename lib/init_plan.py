@@ -686,10 +686,16 @@ def yaml_scalar(value: object) -> str:
     return json.dumps(value)
 
 
-SESSIONS_HEADER = """\
+def agent_names() -> str:
+    """The agents bosun knows, as "claude, codex or agy"."""
+    names = list(agent_state.AGENTS)
+    return f"{', '.join(names[:-1])} or {names[-1]}"
+
+
+SESSIONS_HEADER = f"""\
 # One tmux window per entry, written by `bosun init`. `name` is the window's name, and the name its
 # session is resumed by; if there is no such session in `dir`, a new one is created.
-# Optional per window: `harness` (claude or codex), `model`, `effort`, `connectors` (the MCP servers and
+# Optional per window: `harness` ({agent_names()}), `model`, `effort`, `connectors` (the MCP servers and
 # connectors it may reach, as `claude mcp list` names them: a list, [] for none) and, on Claude Code,
 # `autocompact` (defaults: bosun.env; connectors: BOSUN_CONNECTORS, empty: none).
 """

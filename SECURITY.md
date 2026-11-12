@@ -16,21 +16,28 @@ line again. In a checkout of your own (not an install `get.sh` made), `git pull`
 
 ## What matters most
 
-bosun runs Claude Code and Codex sessions with your credentials and can act in Slack, GitHub and your
+bosun runs Claude Code, Codex and Antigravity sessions with your credentials and can act in Slack, GitHub and your
 tracker, so these are the reports we most want:
 
 - a way around the approvals gate (`lib/guard.py`, `lib/approvals.py`): an outward action, such as
   a Slack message, a merge or a ticket change, that goes out without the approval that names it;
 - a window that reaches an MCP server or connector its list does not name, beyond the exceptions
   `docs/design/connectors.md` lists (`lib/connectors.py`, `lib/connectors_claude.py`,
-  `lib/connectors_codex.py`);
+  `lib/connectors_codex.py`, `lib/connectors_agy.py`);
+- Antigravity windows (`lib/agy_state.py`, `agents/agy-plugin/`): bosun installs a small plugin into `agy` when
+  the first `agy` window starts, whose hooks run without approval and which answers `agy`'s permission
+  question for a command. It lets a command run past `agy`'s sandbox only when every part of it is `git`, `gh`
+  or `bosun` with an allow-listed subcommand and options, in a bosun window, and does nothing in a person's
+  own `agy` sessions. A command outside that list that gets past the sandbox, or a bosun hook that does not
+  stay quiet outside a bosun window, is a report we want. Repo git hooks do not run in these windows, for the
+  same reason;
 - the console (`bosun console`): anything reachable from another host or origin, or without its
   token;
 - secrets or personal data that reach logs, the ledger, learning digests or the knowledge base
   without redaction (`lib/redact.py`);
 - the launchd jobs and scripts: a way to make them run code that another user can write.
 
-Problems in Claude Code itself go to Anthropic, and in Codex itself to OpenAI, through their responsible
+Problems in Claude Code itself go to Anthropic, in Codex itself to OpenAI, and in Antigravity itself to Google, through their responsible
 disclosure policies.
 
 ## Bug bounties

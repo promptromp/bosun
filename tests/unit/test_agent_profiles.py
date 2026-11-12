@@ -3,23 +3,29 @@
 from __future__ import annotations
 
 import contextlib
+import dataclasses
 import importlib
 import io
 import os
 import subprocess
 import sys
 import tempfile
+import types
 import unittest
+from collections.abc import Callable
 from pathlib import Path
+from unittest import mock
 
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "lib"))
+import agent_changes
 import agent_state
+import agy_state
 import claude_state
 import codex_state
 import uninstall_plan
 import update_backups
-from agent_files import Profile
+from agent_files import USAGE, AgentSetup, Profile, SetupError
 from agent_state import AGENTS
 
 
@@ -58,6 +64,7 @@ class AgentProfileTest(unittest.TestCase):
     def test_each_agent_says_how_to_show_it(self) -> None:
         self.assertEqual(claude_state.PROFILE.display_name, "Claude Code")
         self.assertEqual(codex_state.PROFILE.display_name, "Codex")
+        self.assertEqual(agy_state.PROFILE.display_name, "Antigravity")
         for agent in AGENTS.values():
             self.assertTrue(agent.PROFILE.setup_preview)
 
@@ -71,6 +78,7 @@ class AgentProfileTest(unittest.TestCase):
     def test_each_agent_names_the_module_that_holds_its_windows_to_their_connectors(self) -> None:
         self.assertEqual(claude_state.PROFILE.connectors, "connectors_claude")
         self.assertEqual(codex_state.PROFILE.connectors, "connectors_codex")
+        self.assertEqual(agy_state.PROFILE.connectors, "connectors_agy")
         for agent in AGENTS.values():
             module = importlib.import_module(agent.PROFILE.connectors)
             assert callable(module.main) and callable(module.doctor_line)
@@ -80,9 +88,21 @@ class AgentProfileTest(unittest.TestCase):
         with contextlib.redirect_stdout(captured):
             assert agent_state.main(["profiles"]) == 0
         assert captured.getvalue().splitlines() == [
-            "claude\tBOSUN_CLAUDE_BIN\tBOSUN_CLAUDE_FLAGS\tBOSUN_MODEL\tyes\tyes\tyes\tyes\tidle,busy,shell,waiting",
-            "codex\tBOSUN_CODEX_BIN\tBOSUN_CODEX_FLAGS\tBOSUN_CODEX_MODEL\tno\tno\tno\tno\tidle,busy",
+            "claude\tBOSUN_CLAUDE_BIN\tBOSUN_CLAUDE_FLAGS\tBOSUN_MODEL\tyes\tyes\tyes\tyes\tidle,busy,shell,waiting\t-",
+            "codex\tBOSUN_CODEX_BIN\tBOSUN_CODEX_FLAGS\tBOSUN_CODEX_MODEL\tno\tno\tno\tno\tidle,busy\t-",
+            "agy\tBOSUN_AGY_BIN\tBOSUN_AGY_FLAGS\tBOSUN_AGY_MODEL\tno\tyes\tno\tno\tidle,busy,shell,waiting\tupdate",
         ]
+
+    def test_profiles_print_update_args(self) -> None:
+        for harness in ("claude", "codex"):
+            assert AGENTS[harness].PROFILE.update_args == ()
+            assert agent_state.profile_line(harness, AGENTS[harness].PROFILE).endswith("\t-")
+        assert AGENTS["agy"].PROFILE.update_args == ("update",)
+        assert agent_state.profile_line("agy", AGENTS["agy"].PROFILE).endswith(
+            "\tidle,busy,shell,waiting\tupdate"
+        )
+        updating = dataclasses.replace(claude_state.PROFILE, update_args=("update", "--now"))
+        assert agent_state.profile_line("stub", updating).endswith("\tidle,busy,shell,waiting\tupdate --now")
 
     def test_every_agent_but_the_orchestrators_has_its_setup_texts(self) -> None:
         for name, agent in AGENTS.items():
@@ -108,6 +128,97 @@ class AgentProfileTest(unittest.TestCase):
 
     def test_the_orchestrators_agent(self) -> None:
         assert agent_state.ORCHESTRATOR_HARNESS == claude_state.HARNESS
+
+
+class AgentSetupCommandTest(unittest.TestCase):
+    """`agent_state.py setup <harness>`: an agent's one-time setup, recorded for uninstall to take back."""
+
+    def setUp(self) -> None:
+        temp = tempfile.TemporaryDirectory()
+        self.addCleanup(temp.cleanup)
+        self.state = Path(temp.name)
+        self.calls: list[str] = []
+        patcher = mock.patch.dict(os.environ, {"BOSUN_STATE_DIR": str(self.state)})
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def install(self, *, needed: bool, apply: Callable[[], None] | None = None) -> None:
+        def applying() -> None:
+            self.calls.append("apply")
+            if apply:
+                apply()
+
+        def needing() -> bool:
+            self.calls.append("needed")
+            return needed
+
+        setup = AgentSetup("a stub's plugin", needing, applying, lambda: self.calls.append("undo"))
+        stub = types.SimpleNamespace(PROFILE=dataclasses.replace(claude_state.PROFILE, setup=setup))
+        patcher = mock.patch.dict(agent_state.AGENTS, {"stub": stub})
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def run_setup(self, harness: str = "stub") -> tuple[int, str, str]:
+        out, err = io.StringIO(), io.StringIO()
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+            status = agent_state.main(["setup", harness])
+        return status, out.getvalue(), err.getvalue()
+
+    def test_setup_applies_only_when_needed(self) -> None:
+        self.install(needed=False)
+        assert self.run_setup() == (0, "", "")
+        assert self.calls == ["needed"]
+        assert agent_changes.setups_made(self.state) == ()
+
+    def test_a_needed_setup_applies_once_and_is_recorded(self) -> None:
+        self.install(needed=True)
+        assert self.run_setup() == (0, "", "")
+        assert self.calls == ["needed", "apply"]
+        assert agent_changes.setups_made(self.state) == ("stub",)
+
+    def test_no_state_folder_means_no_setup(self) -> None:
+        self.install(needed=True)
+        with mock.patch.dict(os.environ, {"BOSUN_STATE_DIR": ""}):
+            status, out, err = self.run_setup()
+        assert (status, out) == (1, "")
+        assert "BOSUN_STATE_DIR" in err
+        assert self.calls == ["needed"]  # never applied unrecorded
+
+    def test_a_failed_setup_says_why(self) -> None:
+        def refuse() -> None:
+            raise SetupError("stub's plugin command is not installed")
+
+        self.install(needed=True, apply=refuse)
+        status, out, err = self.run_setup()
+        assert status == 1
+        assert out == ""
+        assert err.strip() == "stub's plugin command is not installed"
+        assert agent_changes.setups_made(self.state) == ("stub",)  # on record before it was applied
+
+    def test_an_error_that_is_not_a_setup_error_is_one_line(self) -> None:
+        def crash() -> None:
+            raise PermissionError("plugins folder is read-only")
+
+        self.install(needed=True, apply=crash)
+        status, out, err = self.run_setup()
+        assert status == 1
+        assert out == ""
+        assert err == "PermissionError: plugins folder is read-only\n"
+        assert agent_changes.setups_made(self.state) == ("stub",)
+
+    def test_the_setup_is_on_record_while_it_is_applied(self) -> None:
+        seen: list[tuple[str, ...]] = []
+        self.install(needed=True, apply=lambda: seen.append(agent_changes.setups_made(self.state)))
+        self.run_setup()
+        assert seen == [("stub",)]
+
+    def test_an_agent_without_a_setup_has_nothing_to_do(self) -> None:
+        assert self.run_setup("claude") == (0, "", "")
+        assert agent_changes.setups_made(self.state) == ()
+
+    def test_an_agent_bosun_does_not_know_is_a_usage_error(self) -> None:
+        with contextlib.redirect_stderr(io.StringIO()):
+            assert agent_state.main(["setup", "nobody"]) == USAGE
 
 
 if __name__ == "__main__":

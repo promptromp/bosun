@@ -47,6 +47,7 @@ the agent has on this Mac:
 - **Non-goals:** Chrome. Repo windows use it to check pages, so it stays on through `--chrome` as before;
   tightening it is for later. Per-tool rules inside an allowed connector are the gate's job, not this one's.
   Codex's web search stays as Codex sets it.
+  `agy` takes no limit per launch, so its windows are a refusal, not a limit (below).
 - **Anti-goals:** an orchestrator that quietly stops seeing Slack after an update; a list of what to block,
   which a new connector would get past; anything that edits Claude Code's or Codex's own files.
 
@@ -342,6 +343,15 @@ claude.ai names as meaning nothing there.
   not read. The commands whose `--help` was Python's (`ledger`, `kg`, `delegate`, and `resolve`, whose
   help was a docstring) keep the full text in the header; their Python modules no longer carry a copy.
   `bosun ledger list --help` and the like are still argparse's.
+
+## Antigravity: a refusal
+
+`agy` takes no MCP limit per launch, and switching servers off in its shared config would race between windows
+and change the Antigravity app's setup too. So `lib/connectors_agy.py` lists every server `agy` would start
+for the window (the global `~/.gemini/config/mcp_config.json`, each `.agents/mcp_config.json` from the repo
+up to its root, and the plugins' servers from `agy plugin list --json`) and refuses to start the window
+unless each is on its list, or the list is `all`. A listing that fails refuses too. `bosun doctor` names the
+servers that block a window. Details: [Antigravity](antigravity.md#part-2-agy-windows).
 
 ## Testing
 

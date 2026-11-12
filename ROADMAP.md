@@ -388,8 +388,14 @@ installer's checks are split by OS and by agent ([docs/design/init.md](docs/desi
 
 **Done (2026-11-11): agents that say what they can do.** Each agent declares a `Profile` (its keys, statuses,
 screens, connectors, turn-end report and setup text), so shared code names no agent and a test keeps it so
-([docs/design/antigravity.md](docs/design/antigravity.md), Part 1). Behaviour is unchanged. Next: Part 2 of that
-note, windows on Antigravity (`agy`), then OpenCode and GitHub Copilot CLI.
+([docs/design/antigravity.md](docs/design/antigravity.md), Part 1). Behaviour is unchanged.
+
+**Done (2026-11-12), as a preview: repo sessions on Antigravity.** A window runs `agy` with `harness: agy`, in
+its `auto` mode, with a small plugin of bosun's installed into `agy` for its hooks and for letting allow-listed
+`git`, `gh` and `bosun` commands past its sandbox; a window `agy` would start an unlisted MCP server in is
+refused. Built and tested against a stand-in, in the smoke and Docker suites. **Next for `agy`:** the live run
+on the real `agy` (`tests/sandbox.sh mac live agy`, which needs a person to sign in inside the throwaway VM),
+which has not passed yet; until it does, windows on `agy` stay a preview. Then OpenCode and GitHub Copilot CLI.
 
 **Next on Codex:** the orchestrator (a system prompt, chores without a plugin, the guard and approvals on its
 own hooks and sandbox; hooks stop at a review screen, so this needs thought); noticing a revoked login;

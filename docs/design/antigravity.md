@@ -2,8 +2,9 @@
 
 bosun runs repo windows on Claude Code or Codex. This adds Google's Antigravity CLI (`agy`) as a third, and
 first makes adding an agent what [Agents](harnesses.md) says it is: a module per agent, with no agent's name
-in shared code. Status: approved, 2026-11-10. Part 1 built (#36, plan `docs/plans/agent-profiles.md`); Part 2
-next, starting with a run of the real `agy` in the macOS VM.
+in shared code. Status: approved, 2026-11-10. Part 1 built (#36, plan `docs/plans/agent-profiles.md`). Part 2
+amended after a run of the real `agy` in the macOS VM (2026-11-11), and approved the same day; plan
+`docs/plans/antigravity.md`. Part 2 built and merged as a preview; its live run on the real `agy` is still to pass.
 
 ## Why
 
@@ -91,67 +92,121 @@ A unit test fails when shared code compares a harness id string, so the rule hol
 
 ## Part 2: `agy` windows
 
-Each item below says what bosun does, and what the real run in the macOS VM has to prove, since `agy`'s
-docs leave it open.
+A run of the real `agy` 1.5.5 in the macOS VM (2026-11-11) settled most of what its docs left open. Each
+item says what bosun does and what the run showed; what is still open is under Testing. Three findings change
+the note's first version, each marked below: the status of an `agy` window also comes from its screen,
+bosun's plugin is installed by the first launch that needs it, and its approval lets commands past the
+sandbox.
 
-- **Installing and checking.** `lib/harnesses/agy.sh`, a preflight profile: `agy --version` against a minimum
-  version (1.4.7, when every hook began to carry `lastUserInput`; the VM run confirms it), and the login with
-  no model call: the Keychain item `agy` keeps after a browser sign-in. `agy`'s own installer
-  (`curl -fsSL https://antigravity.google/cli/install.sh | bash`) is what preflight tells a person to run; bosun
-  installs nothing.
-- **First-run screens.** A person runs `agy` once (theme, terms), as for Claude Code; preflight checks the
-  settings key that marks it done, which the VM run finds.
-- **Starting.** `agy --prompt-interactive=<prompt> --mode auto --model <m> --effort <e>`, plus:
-  - `--add-dir` for bosun's state and log folders and the repo's git common dir, since `auto`'s sandbox keeps
-    `.git` read-only, as Codex's did. `auto`'s reviewer decides on a command that must leave the sandbox (the
-    network, for `git push` and `gh`). If the VM run shows it stops them, bosun's plugin (below) approves
-    exactly `git`, `gh` and `bosun` commands with `PreToolUse`, inside bosun's windows only; nothing in `agy`'s
-    global settings changes (my decision, 2026-11-10);
-  - `AGY_CLI_DISABLE_AUTO_UPDATE=true`, so `agy` never updates itself under a running window (it releases
-    several times a week). The version a window started on is kept with its launch (`lib/launch_record.py`).
-    The morning run updates it instead, once, with `agy update` before it starts or
-    refreshes the windows, and `bosun refresh` restarts an idle window whose version no longer matches the
-    one installed; `bosun doctor` reports an `agy` older than its newest release. My call: `agy` keeps
-    itself current anyway, and this only moves when to a quiet moment;
-  - `--remote-control`, as Claude Code windows get theirs;
-  - a marker that the process is bosun's and which window it is, which `launch_settings` reads back from
-    `ps`. `agy` has no flag to name a session, so the marker is an environment variable and a documented flag
-    such as `--log-file <state>/agy/<window>.log`; the VM run settles which works.
-  - Effort above `high` is passed as `high`. `/model` is never pasted into a window, since `agy` saves it for
-    every later session, as Claude Code does.
+- **Installing and checking.** `lib/harnesses/agy.sh`, a preflight profile. `agy --version` prints the bare
+  version (`1.5.5`), checked against a minimum of 1.5.5, the version the run saw. The login is checked with no
+  model call: the Keychain item whose service is `gemini`, looked up without reading it. `agy`'s own installer
+  (`curl -fsSL https://antigravity.google/cli/install.sh | bash`) puts `agy` in `~/.local/bin` and does not add
+  that to PATH; preflight says both. bosun installs nothing.
+- **First-run screens.** A person runs `agy` once to sign in and finish its first-run screens; preflight checks
+  `~/.gemini/antigravity-cli/cache/onboarding.json` for `onboardingComplete`.
+- **The login reaches only a desktop session.** `agy` reads its login from the Keychain only when neither
+  `SSH_CLIENT` nor `SSH_CONNECTION` is set (otherwise it looks for a login file it never wrote), and over ssh
+  the Keychain is locked anyway. bosun's tmux server is started by launchd in the desktop session, where the
+  run showed the login works. The launch unsets those two variables, in case a tmux server inherited them from
+  an ssh session, and preflight says that a check run over ssh cannot see the login.
+- **Starting.** `agy --prompt-interactive=<prompt> --settings <json> --log-file <log> --model <m> --effort <e>
+  --remote-control`:
+  - `auto` comes from `--settings '{"agentMode":"auto"}'`. `--mode auto` is dropped at startup with only a line
+    in `agy`'s log ("auto mode is unavailable, falling back to default"), which would leave the window stopping
+    at every command for a person. `--settings` holds for this session only and is never saved.
+  - No `--add-dir`. `agy` runs the agent's commands in the first of its workspace folders in sorted order, so a
+    state folder could take over from the repo. `auto`'s sandbox makes `.git` read-only and has no network, but
+    a command it stops is retried past the sandbox, which `auto`'s reviewer passes (a commit landed so), and
+    bosun's plugin lets exactly `git`, `gh` and `bosun` commands past it (below).
+  - `AGY_CLI_DISABLE_AUTO_UPDATE=true`, which the run showed it honours. bosun records the version a window
+    started on. The morning run updates `agy` once with `agy update` before it starts or refreshes the
+    windows, and `bosun refresh` restarts an idle window that runs an older version than the one installed,
+    as it does for Claude Code. My call: `agy` keeps itself current anyway, and this only moves when to a
+    quiet moment.
+  - `--remote-control`, as Claude Code windows get theirs. The run did not try it; the live run shows it.
+  - The marker: `--log-file <bosun's log folder>/agy-<window>.log` among the flags before the first prompt,
+    which `ps` shows and which keeps `agy` from adding a log of its own under `~/.gemini` at every start; bosun
+    finds its own `agy` processes by it, and by nothing in a process's environment, which macOS 27.2 keeps from
+    `ps` even for a user's own processes. The log file's name alone identifies a window, so a person's own `agy`
+    run given bosun's log-file name would read as that window. `BOSUN_WINDOW=<window>` is in `agy`'s environment too, which reaches
+    every hook (`agy` passes its environment through): that is for the hooks, never read from the process. The
+    launch writes the window's tmux pane and server socket into the window's status file.
+  - Model and effort: `agy models` lists names with the effort in them (`gemini-3.8-flash-low`). bosun passes
+    the base name and `--effort`, and an effort above `high` as `high`: `xhigh` silently switched a model to
+    another. `/model` is never pasted into a window, since `agy` saves it for every later session, as Claude
+    Code does.
+  - The first prompt is passed with `=`, so one that starts with `-` is no flag (seen).
 - **Names and resuming.** bosun keeps `agy-sessions.json`: a window's name and folder to its conversation id,
-  written by the `SessionStart` hook. A launch resumes with `--conversation <id>` only after checking that the
-  conversation is there (where `agy` keeps it is for the VM run to find), and never uses `-c` ("the latest in
-  this folder"), which two windows in one repo would share. If nothing on disk says so (`agy` may ask its
-  servers), the check is afterwards: the window's `SessionStart` must report the id it was resumed with, or
-  bosun stops it at once, before its first prompt, and says so.
-- **Status.** Busy on `PreInvocation`, idle on `Stop`, from bosun's hooks; `shell` only if the VM run shows a
-  `Stop` with `fullyIdle` false means what `shell` means. No `waiting`: no hook reports it, and the statusline
-  feed that does would replace the footer in my own `agy` sessions (my decision, 2026-11-10: leave it). So, as
-  on Codex, the watchdog's `waiting` never fires for an `agy` window, which rarely asks in `auto`, and
-  `bosun send` reads the screen first. The record is built as `codex_state.build_record` builds Codex's, keyed
-  by pid. What you said in the window is recorded at the first `PreInvocation` that carries a new
-  `lastUserInput`.
-- **bosun's hooks, as an `agy` plugin.** `agy` reads hooks only from a workspace file (which would dirty the
-  repo), the global `hooks.json` (the app's too) or a plugin. So bosun installs a plugin of its own with
-  `agy plugin install`, once a window runs on `agy` (`bosun init`, and `bosun update` when one starts to),
-  never otherwise. Its hooks return at once outside a bosun window (the marker above), so my own `agy`
-  sessions only start a process that ends at once. It is recorded in `lib/agent_changes.py`; `bosun
-  uninstall` takes it back. If `agy` asks a person to approve a new hook, as Codex did, preflight says so
-  before any window starts.
-- **Trust.** `trustedWorkspaces` in `agy`'s settings, written by `bosun trust` for both the folder as given and
-  its resolved path.
+  written by its `SessionStart` hook, which fires at a new conversation's first prompt and never on a resume.
+  A launch resumes with `--conversation <id>` only if `~/.gemini/antigravity-cli/conversations/<id>.db` is
+  there, and never uses `-c` ("the latest in this folder"), which two windows in one repo would share. A resuming launch also records that conversation in the window's status file, idle, since `agy` fires no hook until a prompt and a resume may have none: the window is a session at once. A new conversation is none until its first hook names it. `agy`
+  starts a fresh conversation under an unknown id without failing, so the launch also tells bosun's hooks the
+  id it resumed: the window's first `PreInvocation` stops the turn before its model call if `agy` reports
+  another id, and bosun says so in the launch log and alerts.
+- **Status.** From bosun's hooks: busy at `PreInvocation`, idle at `Stop`, and `shell` at a `Stop` with
+  `fullyIdle` false (a background command still runs; when it ends, `agy` starts a turn by itself). Each
+  window's status and when it changed are a file in bosun's state folder. Esc cancels a turn with no hook at
+  all, so a busy status alone could stay busy for good. So while the hooks say busy, the adapter reads the
+  window's screen (the launch recorded its tmux pane in the status file): `agy`'s idle footer over an empty box means
+  the turn ended, and the window is idle from then; a dialog ("↑/↓ Navigate") means it waits for a person, and
+  the window is `waiting`. `auto`'s reviewer does ask, for a push to `main`. Both are what the screen shows,
+  not a guess, and only a busy status is checked, so an idle window costs nothing. (Changed: the first version
+  had no `waiting` for `agy` windows.) What you said in the window is recorded at the first `PreInvocation`
+  that carries a new `lastUserInput`; a turn `agy` starts by itself repeats the last one, which is not new.
+- **bosun's hooks, as an `agy` plugin.** `--settings` refuses hooks, and otherwise `agy` reads them only from a
+  workspace file (which would dirty the repo), the global `hooks.json` (the app's too) or a plugin. So bosun
+  installs a plugin of its own, `bosun`, with `agy plugin install`, when a window first starts on `agy` (in
+  `bosun launch`, under a lock) and again when the plugin's files change; never otherwise. It installs without
+  asking anyone, and its hooks run without approval. Each hook is one line: without `BOSUN_HOOK_CMD` in its
+  environment (any `agy` session bosun did not start) it exits at once and prints nothing; in a bosun window it
+  runs bosun's hook. Printing nothing matters: `agy` takes an empty answer as no opinion, but `{}` or a failing
+  hook as a refusal of the tool. The plugin is recorded in `lib/agent_changes.py`, and `bosun uninstall` runs
+  `agy plugin uninstall` and removes what that leaves behind (`plugin_data/bosun/`, and `import_manifest.json`
+  if the plugin made it). (Changed: the first version installed it at `bosun init` and `bosun update`; the
+  first launch on `agy` covers both, and windows added later.)
+- **What bosun's plugin approves.** Its `PreToolUse` hook answers `auto_approve` with `BypassSandbox` for a
+  `run_command` whose every command is `git`, `gh` or `bosun` with a subcommand of that program's allow-list
+  (`GIT`, `GH` and `BOSUN` in `lib/agy_state.py`: no global option before it, no `cd`, no prefix, no glob, run in
+  the payload's own workspace, and per subcommand the options and repositories it may name), in bosun windows
+  only, and nothing for every other command. A program that does not resolve on the hook's `PATH` to a full path
+  outside the payload's workspaces (a `git` the agent planted and put first) gets none either, and a
+  window-starting option of `bosun send` or `bosun delegate` is refused however it is abbreviated (`--ne`,
+  `--sta=w`), as `bosun delegate`'s own parser takes no abbreviation. (Changed: the first version took any `git`, `gh` or `bosun`
+  command past `cd` and refused a list of dangerous options, which two reviews showed could not be completed.) `allow` is not enough: it still
+  shows `agy`'s dialog, and the command still runs in the sandbox with no network. (Changed: the first version
+  said "approves".) `agy`'s reviewer can still ask, and the window is then `waiting`. Nothing in `agy`'s
+  global settings changes (my decision, 2026-11-10).
+- **Trust.** Each launch passes the folder, as given, in `--settings` (`trustedWorkspaces`), so the trust
+  screen never shows and `agy`'s settings are never written. `agy` compares the folder as given, not its
+  resolved path, and a trusted folder does not cover the folders under it. `bosun trust` has nothing to do for
+  `agy`.
 - **Connectors.** `agy` takes no MCP limit per launch, and switching servers off in the shared config would
   race between windows and change the app's setup. So before a launch the adapter lists every server `agy`
-  would start there (global, the workspace's, plugins'), and refuses the window unless each is on its list
-  (or the list is `all`); a listing that fails refuses too, as on Codex. bosun's own plugin brings no server.
-  `bosun doctor` names the servers that block a window. In practice a repo window with no connectors starts
-  on `agy` only if `agy` has no MCP servers set up at all, the app's included.
-- **Reading its screen.** An input-box reader and a question reader for `pane_input`, from real captures: idle
-  shows "? for shortcuts", busy "esc to cancel", a dialog "↑/↓ Navigate". `bosun send` refuses a window at a
-  question, as for Codex.
-- **Going without.** No transcripts features, autocompact or per-task subagents; `bosun resolve` reads names
-  from `agy-sessions.json`. [Agents](harnesses.md) gets an `agy` column in what windows lack.
+  would start there: the global `~/.gemini/config/mcp_config.json`, each `.agents/mcp_config.json` from the
+  repo up to its root, and the plugins' servers from `agy plugin list --json` (`<plugin>_<server>`); `agy mcp
+  list` shows only the first. It refuses the window unless each is on its list (or the list is `all`), and a
+  listing that fails refuses too. bosun's own plugin brings no server. `bosun doctor` names the servers that
+  block a window. In practice a repo window with no connectors starts on `agy` only if `agy` has no MCP servers
+  set up at all, the app's included.
+- **What would run when `agy` starts.** `agy` reads hooks from `.agents/hooks.json` in a workspace and runs
+  them outside its sandbox, and bosun relaunches windows by itself. So a launch is refused when that file
+  exists in the window's folder or any folder up to its repo's root (the walk the connectors check uses,
+  `lib/agy_workspace.py`), with its path in the message. It is also refused when the log folder has a space
+  in it: the adapter finds a window by the one-word path after `--log-file` in its command line.
+- **Reading its screen.** Readers for `pane_input`, from the run's captures. The box is the line starting with
+  `>` between two grey rules, and text in it blanks the footer's hint. A question is a dialog ("↑/↓ Navigate",
+  whose footer also says "esc to cancel", so it is checked before busy), the trust screen ("Do you trust the
+  contents of this project?") or the sign-in screen ("You are currently not signed in"). `bosun send` refuses a
+  window at a question, as for Codex. One Enter submits a paste; a paste while busy is queued by `agy` and sent
+  when the turn ends.
+- **What shared code gains**, each asked of the profile, as Part 1 set out: an agent's own hooks (a field
+  beside `TurnEnd`, which has Codex's shape), a step a launch takes once per machine (the plugin), the command
+  that updates an agent (`agy update`), and the uninstall and backup tables' rows for an agent's state files,
+  which now come from its profile instead of naming Codex's.
+- **Going without.** No transcripts features, autocompact or per-task subagents, and no hook when a window
+  exits; `bosun resolve` reads names from `agy-sessions.json`. [Agents](harnesses.md) gets an `agy` column in
+  what windows lack.
 
 ## Risk
 
@@ -161,34 +216,40 @@ window on `agy`.
 
 ## Testing
 
-- **Unit:** each profile and the lookup, the agent-name test, `lib/agy_state.py` against recorded hook
-  payloads, the session table, the connector refusal, and the screen readers against
-  real captures.
-- **A stand-in** (`tests/sandbox/agy-stand-in`), teaching it each fact the real run finds, as
-  `codex-stand-in` was taught Codex's; a smoke section and a first-day section in `tests/sandbox/fresh_user.sh`.
-- **The real thing:** `tests/sandbox.sh mac live agy`, about a dollar a run. The login is `agy`'s own: I sign
-  in inside the throwaway VM, whose clone is deleted after the run, and no image is saved with a login in it.
-  It must prove:
-  - a prompt that starts with `-`;
-  - a bracketed paste and Enter;
-  - trust in both path forms;
-  - whether plugin hooks wait for approval;
-  - `--conversation` after a restart, and with an unknown id;
-  - the Keychain when tmux was started by launchd;
-  - whether `auto`'s reviewer lets `git push` and `gh` through, and the plugin's approval if not;
-  - what a `Stop` with `fullyIdle` false means;
-  - the onboarding key, and `agy --version`'s format;
-  - the connector refusal with a server set up, and none.
+- **Unit:** each profile and the lookup, the agent-name test, `lib/agy_state.py` against the payloads the VM
+  run recorded, the session table, the resume guard, the status from hooks and screen, the connector refusal,
+  the plugin's approval, and the screen readers against the run's captures.
+- **A stand-in** (`tests/sandbox/agy-stand-in`), taught each fact the run found, as `codex-stand-in` was taught
+  Codex's; a smoke section and a first-day section in `tests/sandbox/fresh_user.sh`.
+- **The real thing:** `tests/sandbox.sh mac live agy`, on a personal account's free quota. The login is
+  `agy`'s own: I sign in inside the throwaway VM, whose clone is deleted after the run, and no image is saved
+  with a login in it. The discovery run (2026-11-11) already showed: a prompt that starts with `-`; a bracketed
+  paste and Enter; trust as given and resolved; that plugin hooks need no approval; `--conversation` after a
+  restart and with an unknown id; the Keychain in a tmux started by launchd; the reviewer and the sandbox for
+  `git push` and the network; what a `Stop` with `fullyIdle` false means; the onboarding key and
+  `agy --version`'s format. The live run proves bosun's side of each, and what the discovery did not see:
+  - a window started, resumed and refreshed by bosun on `agy`, end to end;
+  - Esc in a busy window read as idle, and a reviewer's dialog read as `waiting`;
+  - `--remote-control` starting;
+  - `SSH_AUTH_SOCK`, which launchd sets in a desktop session, not hiding the login;
+  - a `gh` and a `git push` command approved by the plugin, and every other command left alone;
+  - a hook slower than `agy`'s timeout;
+  - the plugin's install and uninstall leaving nothing else behind;
+  - the connector refusal with a server set up, and with none;
+  - the morning `agy update` with automatic updates off.
 
 ## What stops the second pull request
 
 Part 1 merges on its own. Part 2 merges only if the VM run shows each anti-goal above holds: a window
 resumes its own conversation (or is stopped before its first prompt), its connectors hold, its status is
-never guessed, and nothing of the user's Antigravity setup changes but what bosun records. A finding that
+never guessed (the hooks and, while they say busy, the screen), and nothing of the user's Antigravity setup changes but what bosun records. A finding that
 breaks one stops Part 2 until it has a fix. These stop it too, since unattended windows cannot work without
 them: the marker reaches bosun's hooks, and the Keychain login works in a tmux started by launchd. Anything
 else the run finds that `agy` lacks ships as a documented gap, in [Agents](harnesses.md) and
 [Known limits](../limits.md).
+
+Decided 2026-11-12: Part 2 merges as a preview before its live run passes, as the docs say
+([Agents](harnesses.md)); the run's findings then follow as fixes or documented gaps.
 
 ## Two pull requests
 

@@ -6,6 +6,7 @@ state="$HOME/.sandbox/gh"
 mkdir -p "$state"
 echo "gh $*" >>"$state/calls.log"
 case "$*" in
+"--version"*) echo "gh version 2.0.0 (the sandbox stand-in)" ;;
 "auth status"*) echo "Logged in to github.com account acme-dev" ;;
 "api user"*)
 	case "$*" in

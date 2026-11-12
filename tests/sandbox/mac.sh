@@ -1,6 +1,6 @@
 #!/bin/bash
-# Usage: tests/sandbox/mac.sh setup | run [--from-nothing] | work [--base <git ref>] | live [claude|codex]
-#        | shell | clean
+# Usage: tests/sandbox/mac.sh setup | run [--from-nothing] | work [--base <git ref>]
+#        | live [claude|codex|agy] | shell | clean
 #        (through tests/sandbox.sh mac)
 #
 # A real, throwaway Mac: macOS in a Tart VM on this machine, for what the Docker sandbox cannot show.
@@ -18,7 +18,12 @@
 #           take-stock and update prompts (tests/sandbox/live.sh). It costs
 #           real money, about a dollar. It reads API keys from your Keychain, as BOSUN_SANDBOX_ANTHROPIC_ITEM
 #           and BOSUN_SANDBOX_OPENAI_ITEM name them; they never leave the clone, which is deleted.
-#           BOSUN_SANDBOX_CODEX_MODEL picks a cheaper model than Codex's default
+#           BOSUN_SANDBOX_CODEX_MODEL picks a cheaper model than Codex's default.
+#           live agy needs you: its login is a browser sign-in, in the desktop session. The clone boots with
+#           its window, agy is installed with Google's installer, and you are told to open Terminal there,
+#           run ~/.local/bin/agy, sign in with Google (a personal account's free quota) and quit it; the run
+#           waits up to 15 minutes for that. The orchestrator stays on Claude Code (the Anthropic key only).
+#           Your sign-in stays in the clone, which is deleted at the end; no image is ever saved
 #   shell   a clone with a window, to try things as a new user would; deleted when you exit
 #   clean   delete the clones and base images (the pulled image stays: `tart prune` removes it)
 # Needs Tart: brew install openai/tools/tart. Guide: docs/development.md.
@@ -41,6 +46,9 @@ VM_PID=""
 ANTHROPIC_ITEM="${BOSUN_SANDBOX_ANTHROPIC_ITEM:-bosun-sandbox-anthropic}"
 OPENAI_ITEM="${BOSUN_SANDBOX_OPENAI_ITEM:-bosun-sandbox-openai}"
 KEY_SHAPE='s/sk-(ant|proj|svcacct|admin)-[A-Za-z0-9_*-]+/[KEY]/g'
+# Google's token shapes (agy's sign-in), and the query string of any URL, which a pairing link of agy's
+# Remote Control or a sign-in redirect would carry: masked in what comes back from the VM, as keys are.
+TOKEN_SHAPE='s/(ya29\.|1\/\/|AIza|GOCSPX-)[A-Za-z0-9_.\/-]+/[TOKEN]/g; s/(https?:\/\/[^ ?"<>]+)\?[^ "<>]*/\1?[QUERY]/g'
 
 cleanup() {
   [ -n "$VM_PID" ] && {
@@ -63,7 +71,7 @@ die() {
 # this needs nothing installed for it.
 # shellcheck disable=SC2054 # that comma is inside one option's value
 ssh_options=(-q -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=15
-  -o PreferredAuthentications=password,keyboard-interactive)
+  -o ServerAliveInterval=30 -o PreferredAuthentications=password,keyboard-interactive)
 in_vm() { # <vm> <command...>
   local vm="$1"
   shift
@@ -153,7 +161,8 @@ copy_checkout() { # [<name of the bundle in the VM>]
   to_vm "$CLONE" "$WORK/repo.bundle" "${1:-repo.bundle}" || die "could not copy the checkout"
   COPYFILE_DISABLE=1 tar -C "$ROOT" -czf "$WORK/e2e.tgz" get.sh tests/install_e2e.sh tests/work_e2e.sh \
     tests/sandbox/e2e_lib.sh tests/sandbox/acme_week.sh tests/sandbox/claude-stand-in \
-    tests/sandbox/gh-stand-in tests/sandbox/drive.py tests/sandbox/live.sh tests/sandbox/live tests/sandbox/mcp_probe_server.py \
+    tests/sandbox/gh-stand-in tests/sandbox/drive.py tests/sandbox/live.sh tests/sandbox/live_agy.sh tests/sandbox/live \
+    tests/sandbox/mcp_probe_server.py \
     tests/sandbox/acme_year.py tests/fixtures/knowledge/acme-import.jsonl
   to_vm "$CLONE" "$WORK/e2e.tgz" e2e.tgz || die "could not copy the test"
   in_vm "$CLONE" 'mkdir -p e2e && tar -xzf e2e.tgz -C e2e' || die "could not unpack the test"
@@ -215,24 +224,31 @@ keys_into_vm() { # <agent>
 }
 
 in_vm_masked() { # <live.sh step> <agent> [model]
-  in_vm "$CLONE" "BOSUN_BRANCH=$TREE_BRANCH e2e/tests/sandbox/live.sh $*" </dev/null | sed -l -E "$KEY_SHAPE"
+  in_vm "$CLONE" "BOSUN_BRANCH=$TREE_BRANCH e2e/tests/sandbox/live.sh $*" </dev/null | sed -l -E -e "$KEY_SHAPE" -e "$TOKEN_SHAPE"
   return "${PIPESTATUS[0]}"
 }
 
-live() { # [claude|codex]
+live() { # [claude|codex|agy]
   local agent="${1:-claude}"
   case "$agent" in
-    claude | codex) ;;
-    *) die "unknown agent '$agent': claude or codex" ;;
+    claude | codex | agy) ;;
+    *) die "unknown agent '$agent': claude, codex or agy" ;;
   esac
   need_key "$ANTHROPIC_ITEM"
   [ "$agent" = "codex" ] && need_key "$OPENAI_ITEM"
   prepare_clone "$DEV_MAC"
   say "booting a clone of $DEV_MAC, for real $agent"
-  boot "$CLONE" --no-graphics
+  if [ "$agent" = "agy" ]; then # a person signs in to it in the desktop session, so the VM has its window
+    say "a window opens with the clone: you will be asked to sign in to Antigravity in it, in a few minutes"
+    boot "$CLONE"
+  else
+    boot "$CLONE" --no-graphics
+  fi
   copy_checkout
   in_vm_masked prepare "$agent" || die "preparing it failed"
+  # The keys first: a failure of theirs, or a Keychain prompt on this Mac, never comes after the sign-in.
   keys_into_vm "$agent"
+  [ "$agent" = "agy" ] && { in_vm_masked login agy || die "the sign-in to Antigravity did not finish"; }
   in_vm_masked go "$agent" "${BOSUN_SANDBOX_CODEX_MODEL:-}"
 }
 

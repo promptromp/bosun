@@ -7,7 +7,7 @@
 </p>
 
 On a ship, the bosun runs the deck crew and the day's work so the captain can steer. This bosun
-runs a fleet of coding agents (Claude Code and Codex) and the work around the code: reviews,
+runs a fleet of coding agents (Claude Code, Codex and Antigravity) and the work around the code: reviews,
 follow-ups, hand-offs and the people you are waiting on. Everything it handles becomes a
 structured record: a work ledger of what is in flight, and a knowledge graph of how your
 organization actually works, sourced, reviewed and improved every day. People and their agents
@@ -45,7 +45,7 @@ flowchart LR
   you(("You<br/>phone or terminal")) <-->|"asks and approvals"| orch["Orchestrator"]
   orch <--> ledger[("Work ledger")]
   orch <--> kg[("Knowledge graph")]
-  orch -->|tasks| repos["Repo sessions<br/>Claude Code or Codex"]
+  orch -->|tasks| repos["Repo sessions<br/>Claude Code, Codex or Antigravity"]
   repos -->|reports| ledger
   orch -->|"approved actions only"| world["Slack, GitHub, tracker"]
   ledger -.-> learn["Daily learning"]
@@ -99,9 +99,13 @@ asks first.
 
 - **macOS only** (launchd, `pmset`, `caffeinate`) for now. Linux is next, and the installer's checks are
   already split by OS so it can follow.
-- **Claude Code and Codex** both run repo sessions, window by window. The orchestrator needs Claude Code,
-  and Codex windows do not have everything yet: see
-  [what they lack](docs/design/harnesses.md#what-codex-windows-do-not-have-yet).
+- **Claude Code, Codex and Antigravity** run repo sessions, window by window. The orchestrator needs Claude
+  Code, and Codex and Antigravity windows do not have everything yet: see
+  [what they lack](docs/design/harnesses.md#what-windows-do-not-have-yet).
+- **Antigravity (`agy`) windows are a preview.** They are built and tested against a stand-in, in the smoke
+  and Docker suites, but the live run on the real `agy` (`tests/sandbox.sh mac live agy`) has not passed yet.
+  See [Running repo sessions on Antigravity](docs/setup.md#running-repo-sessions-on-antigravity-a-preview),
+  which also says what Google has not said about driving `agy` unattended.
 - **One engineer, one Mac** today. A ledger and knowledge base shared across a team is next.
 - **The proactive parts are off in bosun's own defaults** while they mature: events, approvals,
   learning and the Slack watcher. `bosun init` recommends turning them on (the Slack watcher only

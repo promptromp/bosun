@@ -186,6 +186,7 @@ class Carrying:
             up.JOB: self.remove_job,
             up.STOP: self.stop,
             up.TRUST: self.revoke_trust,
+            up.SETUP: self.undo_setup,
             up.NOTE: self.remove_note,
             up.LINK: lambda step: remove_path(Path(step.target)),
             up.FILE: lambda step: remove_path(Path(step.target)),
@@ -210,6 +211,16 @@ class Carrying:
         if agent.trust_recorded(step.target) is not False:
             raise StepFailed(f"{step.harness} still trusts it")
         agent_changes.forget_trust(self.state_dir, step.harness, step.target)
+
+    def undo_setup(self, step: Step) -> None:
+        """Forgotten only once it is undone: the record is what a second run goes by."""
+        agent = AGENTS.get(step.harness)
+        if agent is None:
+            raise StepFailed(f"no agent '{step.harness}' to undo it")
+        if agent.PROFILE.setup is None:
+            raise StepFailed(f"{step.harness} has no setup to undo")
+        agent.PROFILE.setup.undo()
+        agent_changes.forget_setup(self.state_dir, step.harness)
 
     def remove_note(self, step: Step) -> None:
         claude_state.remove_memory_note(Path(step.target))

@@ -2,9 +2,10 @@
 """What a window may reach: its list of MCP servers and connectors (BOSUN_CONNECTORS,
 BOSUN_ORCHESTRATOR_CONNECTORS, `connectors:` in sessions.yml), which each agent's module turns into what
 that agent takes at launch: lib/connectors_claude.py (Claude Code's settings) and lib/connectors_codex.py
-(Codex's arguments), each with a command line of its own. This module holds what they share: reading a
-list, the report's helpers and texts, and `doctor`, which asks the window's agent. Design:
-docs/design/connectors.md.
+(Codex's arguments), each with a command line of its own; Antigravity takes no limit, so
+lib/connectors_agy.py refuses a window whose agent would start a server its list does not name.
+This module holds what they share: reading a list, the report's helpers and texts, and `doctor`, which
+asks the window's agent. Design: docs/design/connectors.md.
 
 A list is comma-separated: server names as `claude mcp list` shows them (`claude.ai Acme Mail`,
 `plugin:acme-tracker:tracker`, `acme-local`) or URL patterns (`https://mcp.example.com/*`). Empty

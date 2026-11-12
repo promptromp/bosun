@@ -11,7 +11,7 @@ ORCHESTRATOR_HARNESS="claude"
 # process: one tab-separated line per agent, in AGENTS order, with the columns of AGENT_PROFILE_COLUMNS.
 # A command substitution has its own copy of the variable, so a function that makes many of them reads the
 # profiles first (need_profiles), and what they inherit is filled in.
-AGENT_PROFILE_COLUMNS="harness bin_key flags_key model_key names_sessions remote_control autocompact subagents statuses"
+AGENT_PROFILE_COLUMNS="harness bin_key flags_key model_key names_sessions remote_control autocompact subagents statuses update_args"
 AGENT_PROFILES=""
 AGENT_PROFILES_ERROR=""
 
@@ -107,6 +107,58 @@ harnesses_in_use() {
     echo "$BOSUN_HARNESS"
     [ -f "$BOSUN_SESSIONS_FILE" ] && window_specs 2>/dev/null | cut -f6 | grep -v '^-$'
   } | awk '!seen[$0]++' | tr '\n' ' ' | sed 's/ $//'
+}
+
+# Makes <harness>'s one-time setup, if its profile has one and it is still to be made (agent_state.py setup),
+# and puts it on record for `bosun uninstall`. It holds agent-setup.lock, waiting up to 60 seconds, so two
+# windows starting at once on an agent that has not been set up do it once. Says why on stderr when it
+# cannot; the caller stops the launch. The setup may install from this install (BOSUN_INSTALL), and
+# load_config exports nothing, so what it needs goes along explicitly.
+agent_setup() { # <harness>
+  local agent_bin_assignments
+  agent_bin_env
+  python3 "$BOSUN_ROOT/lib/run_locked.py" "$BOSUN_STATE_DIR/agent-setup.lock" 60 \
+    "another bosun is setting up $1 and did not finish within a minute" -- \
+    env BOSUN_STATE_DIR="$BOSUN_STATE_DIR" BOSUN_INSTALL="$BOSUN_INSTALL" "${agent_bin_assignments[@]}" \
+    python3 "$BOSUN_ROOT/lib/agent_state.py" setup "$1"
+}
+
+# Updates one agent with its own command (its profile's update_args), as the morning run does for an agent
+# bosun starts with its auto-update off. Logs what came of it on stderr; prints the problem word
+# (update-<agent>) on stdout when it failed. With --dry-run it only says what it would run.
+update_one_agent() { # [--dry-run] <harness> <update args>
+  local dry_run=0 harness bin name out_file rc=0 update_words
+  [ "$1" = "--dry-run" ] && dry_run=1 && shift
+  harness="$1"
+  read -r -a update_words <<<"$2"
+  bin="$(harness_bin "$harness")"
+  name="$(agent_display_name "$harness")"
+  if [ "$dry_run" = "1" ]; then
+    log "dry-run: would run $bin ${update_words[*]}" >&2
+    return 0
+  fi
+  out_file="$(mktemp "${TMPDIR:-/tmp}/bosun-update-agent.XXXXXX")" || out_file=/dev/null
+  run_with_timeout 300 "$bin" "${update_words[@]}" >"$out_file" 2>&1 || rc=$?
+  if [ "$rc" = "0" ]; then
+    log "updated $name" >&2
+  else
+    log "could not update $name: $(grep -v '^[[:space:]]*$' "$out_file" 2>/dev/null | tail -n 1)" >&2
+    echo "update-$harness"
+  fi
+  [ "$out_file" = /dev/null ] || rm -f "$out_file"
+}
+
+# Updates each agent in use whose profile says how (update_args), once, at a quiet moment: bosun starts
+# such an agent with its own auto-update off, so a running window is never changed under it. A failure is
+# a problem word on stdout, for the morning's notification, and stops nothing.
+update_agents() { # [--dry-run]
+  local harness update
+  need_profiles
+  for harness in $(harnesses_in_use); do
+    update="$(profile_field "$harness" update_args)" || continue
+    [ "$update" = "-" ] && continue
+    update_one_agent "$@" "$harness" "$update"
+  done
 }
 
 # The check `bosun preflight`, `init` and `doctor` all start with. The agents' commands go along

@@ -10,6 +10,7 @@ from typing import ClassVar
 
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "lib"))
+import agent_state
 import journal as jr
 import uninstall_plan as up
 import update_backups as ub
@@ -81,6 +82,20 @@ def stays(plan: up.Plan) -> set[str]:
 
 
 class FileTables(unittest.TestCase):
+    def test_each_agents_state_files_are_rows(self) -> None:
+        rows = up.agent_state_rows()
+        for agent in agent_state.AGENTS.values():
+            for name in agent.PROFILE.state_files:
+                self.assertIn((name, up.WORKING), rows)
+                self.assertIn((name, up.WORKING), up.STATE_FILES)
+                if "/" not in name:
+                    self.assertIn((f".{name}.*", up.WORKING), rows)
+                    self.assertIn((f".{name}.*", up.WORKING), up.STATE_FILES)
+
+    def test_the_rows_for_codex_are_what_they_were(self) -> None:
+        self.assertIn(("codex-sessions.json", up.WORKING), up.STATE_FILES)
+        self.assertIn((".codex-sessions.json.*", up.WORKING), up.STATE_FILES)
+
     def test_what_each_file_is(self) -> None:
         for name, kind in (
             ("ledger.json", up.LEDGER),
@@ -329,6 +344,38 @@ class AgentsRecord(unittest.TestCase):
         )
         done = facts(state_entries=entries, trust=(), notes=())
         self.assertIn(f"{STATE}/agent-changes.json", targets(up.build_plan(done, Choices())))
+
+
+class AgentSetups(unittest.TestCase):
+    SETUP = ("stub", "the bosun plugin installed in Stub")
+
+    def test_a_recorded_setup_is_an_uninstall_step(self) -> None:
+        plan = up.build_plan(facts(setups=(self.SETUP,)), Choices())
+        self.assertIn(Step(up.SETUP, self.SETUP[1], "stub"), plan.steps)
+
+    def test_a_setup_step_reads_with_its_description_and_agent(self) -> None:
+        step = Step(up.SETUP, self.SETUP[1], "stub")
+        self.assertEqual(up.describe(step, HOME), "the bosun plugin installed in Stub (stub)")
+
+    def test_setups_come_with_the_trust_after_the_windows_stop(self) -> None:
+        kinds = [step.kind for step in up.build_plan(facts(setups=(self.SETUP,)), Choices()).steps]
+        self.assertLess(kinds.index(up.STOP), kinds.index(up.SETUP))
+        self.assertLess(kinds.index(up.SETUP), kinds.index(up.LINK))
+
+    def test_no_setup_no_step(self) -> None:
+        self.assertNotIn(up.SETUP, [step.kind for step in up.build_plan(facts(), Choices()).steps])
+
+    def test_the_record_stays_while_a_setup_is_still_there(self) -> None:
+        entries = ("agent-changes.json", "agent-setup.lock", "logs")
+        left = facts(state_entries=entries, trust=(), notes=(), setups=(self.SETUP,))
+        planned = targets(up.build_plan(left, Choices()))
+        self.assertNotIn(f"{STATE}/agent-changes.json", planned)
+        self.assertIn(f"{STATE}/agent-setup.lock", planned)
+        done = facts(state_entries=entries, trust=(), notes=(), setups=())
+        self.assertIn(f"{STATE}/agent-changes.json", targets(up.build_plan(done, Choices())))
+
+    def test_the_setup_lock_is_bosuns_own(self) -> None:
+        self.assertIn(("agent-setup.lock", up.WORKING), up.STATE_FILES)
 
 
 class CheckoutRules(unittest.TestCase):

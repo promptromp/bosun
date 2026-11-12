@@ -387,6 +387,69 @@ the_first_day_on_codex() {
   check "... and nothing of its state" test ! -e "$state"
 }
 
+# What the stand-in's conversations hold: the steps (prompts and replies) of all of them. Exported, for the
+# checks that run it in a shell of their own.
+agy_steps() {
+  python3 -c '
+import glob, sqlite3, sys
+print(sum(sqlite3.connect(path).execute("select count(*) from steps").fetchone()[0] for path in glob.glob(sys.argv[1] + "/*.db")))
+' "$HOME/.gemini/antigravity-cli/conversations"
+}
+export -f agy_steps
+
+the_first_day_on_agy() {
+  local out="$HOME/agy.txt" steps conversations state="$HOME/.local/state/bosun"
+  local bosun="$HOME/.local/bin/bosun" cli="$HOME/.gemini/antigravity-cli"
+  echo "the first day on agy: the same steps, then real windows on the stand-in"
+  rm -rf "$CONFIG"
+  rm -f "$HOME/.local/bin/codex" # a machine that has agy and no Codex, so agy is the wizard's second agent
+  check "asking for agy without it says where to get it" bash -c '! BOSUN_HARNESS=agy "$1" init --recommended >"$2" 2>&1 && grep -q "antigravity.google/cli" "$2"' _ "$BOSUN" "$out"
+  check "the installer's next line keeps that choice" bash -c '! cat "$1/get.sh" | BOSUN_DIR="$HOME/.local/share/bosun" BOSUN_REPO="$1" BOSUN_BRANCH="$(git -C "$1" branch --show-current)" BOSUN_HARNESS=agy sh >"$2" 2>&1 && grep -q "get.sh | BOSUN_HARNESS=agy sh" "$2"' _ "$ROOT" "$out"
+  brew install agy
+  mkdir -p "$cli/cache"
+  echo '{"onboardingComplete": true}' >"$cli/cache/onboarding.json" # a person signed in and went through its first-run screens
+  check "with agy here, the wizard offers it" python3 "$DRIVE" "$out" \
+    "Which repos" "<enter>" \
+    "When should" "<enter>" \
+    "How proactive" "<enter>" \
+    "Which agent" "2" \
+    "model should the orchestrator" "<enter>" \
+    "wake by itself" "<enter>" \
+    "Nothing has changed yet" "y" \
+    "Start the windows now?" "y" \
+    "The windows are up" "" \
+    -- "$BOSUN" init
+  check "the config says agy" says 'BOSUN_HARNESS="agy"' "$CONFIG/bosun.env"
+  check "doctor agrees" bash -c '"$1" doctor >"$2" 2>&1 || { tail -12 "$2"; exit 1; }' _ "$bosun" "$out"
+  check "the repo window runs agy" wait_for 30 bash -c '"$1" sessions --json | jq -e ".[] | select(.name == \"api\") | .agent.harness == \"agy\" and .agent.status == \"idle\"" >/dev/null' _ "$bosun"
+  check "the orchestrator stays on Claude Code" wait_for 20 bash -c '"$1" sessions --json | jq -e ".[] | select(.name == \"orchestrator\") | .agent.harness == \"claude\"" >/dev/null' _ "$bosun"
+  check "lists say which agent" bash -c '"$1" sessions | grep -q "agy:idle"' _ "$bosun"
+  check "bosun's plugin is in agy, installed by agy itself" jq -e '.name == "bosun"' "$HOME/.gemini/config/plugins/bosun/plugin.json"
+  check "bosun knows the conversation by its window" wait_for 10 jq -e '.api.id' "$state/agy-sessions.json"
+  conversations="$(find "$cli/conversations" -name '*.db' | wc -l)"
+  steps="$(agy_steps)"
+  check "a message reaches it" "$bosun" send --no-item api "please look at the failing test"
+  check "... as a turn of its own" wait_for 10 bash -c '[ "$(agy_steps)" -gt "$1" ]' _ "$steps"
+  tmux -L bosun send-keys -t "=bosun:=api" "go with option b" Enter
+  check "what you type there is recorded" wait_for 10 jq -e '[.said[]? | select(.text == "go with option b")] | length == 1' "$state/ledger.json"
+  tmux -L bosun send-keys -t "=bosun:=api" "run echo and keep the tests" Enter
+  check "... once, though agy repeats it at each of the turn's model calls" wait_for 10 jq -e '[.said[]? | select(.text == "run echo and keep the tests")] | length == 1' "$state/ledger.json"
+  check "... and bosun's own prompts are not yours" jq -e '[.said[]? | select(.text | test("nothing to do yet|look at the failing test"))] | length == 0' "$state/ledger.json"
+  "$bosun" stop >/dev/null 2>&1
+  "$bosun" start >/dev/null 2>&1
+  check "a restart picks the same conversation up" wait_for 30 bash -c '"$1" sessions --json | jq -e ".[] | select(.name == \"api\") | .agent.status == \"idle\"" >/dev/null' _ "$bosun"
+  check "... with no new one" test "$conversations" = "$(find "$cli/conversations" -name '*.db' | wc -l)"
+  "$bosun" stop >/dev/null 2>&1
+  mv "$cli/cache/onboarding.json" "$HOME/onboarding.json"
+  check "without its first-run screens done, doctor says so" bash -c '! "$1" doctor >"$2" 2>&1; grep -q "first-run screens" "$2"' _ "$bosun" "$out"
+  mv "$HOME/onboarding.json" "$cli/cache/onboarding.json"
+  check "uninstall takes back bosun's plugin" bash -c '"$1" uninstall --yes --purge >"$2" 2>&1; [ ! -e "$3/config/plugins/bosun" ] && [ ! -e "$3/antigravity-cli/plugin_data/bosun" ]' _ "$bosun" "$out" "$HOME/.gemini"
+  check "... and agy's import record, which holds nothing else" test ! -e "$HOME/.gemini/config/import_manifest.json"
+  check "... but not the conversations, which are agy's" test "$(find "$cli/conversations" -name '*.db' | wc -l)" -gt 0
+  check "... and leaves no link" test ! -e "$HOME/.local/bin/bosun"
+  check "... and nothing of its state" test ! -e "$state"
+}
+
 "$ROOT/tests/sandbox/world.sh"
 first_look
 set_up
@@ -398,6 +461,7 @@ the_wizard_quit
 preflight_stops_early
 the_installer
 the_first_day_on_codex
+the_first_day_on_agy
 echo
 echo "$passed passed, $failed failed"
 [ "$failed" -eq 0 ]

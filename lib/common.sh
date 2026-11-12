@@ -30,6 +30,9 @@ set_harness_defaults() {
   BOSUN_CODEX_BIN="codex"
   BOSUN_CODEX_FLAGS="--no-daemon --approve-for-me"
   BOSUN_CODEX_MODEL=""
+  BOSUN_AGY_BIN="agy"
+  BOSUN_AGY_FLAGS=""
+  BOSUN_AGY_MODEL=""
 }
 
 # What each window may reach (docs/setup.md, "Connectors"): a comma-separated list of MCP servers and
@@ -403,12 +406,17 @@ read_config() {
     override_values+=("${!name}")
   done
   set_defaults
-  # A bosun.env that does not parse is not read at all: sourced, bash would stop at the error and keep
-  # what came before it, a config that is neither yours nor the defaults. load_config refuses it.
-  BOSUN_ENV_ERROR=""
+  # A bosun.env that does not parse, or that stops the shell reading it before its end (an unset variable
+  # under set -u, as under launchd, which has none of your shell's; an exit), is not read at all: sourced,
+  # bash would stop there and keep what came before it, a config that is neither yours nor the defaults.
+  # load_config refuses it, saying which (BOSUN_ENV_FAULT) and in bash's words (BOSUN_ENV_ERROR).
+  BOSUN_ENV_ERROR="" BOSUN_ENV_FAULT=""
   if [ -f "$BOSUN_CONFIG_DIR/bosun.env" ]; then
     if ! BOSUN_ENV_ERROR="$(bash -n "$BOSUN_CONFIG_DIR/bosun.env" 2>&1)"; then
+      BOSUN_ENV_FAULT="does not parse"
       BOSUN_ENV_ERROR="${BOSUN_ENV_ERROR:-bash -n fails on it}"
+    elif BOSUN_ENV_ERROR="$(env_file_stops "$BOSUN_CONFIG_DIR/bosun.env")"; then
+      BOSUN_ENV_FAULT="stops before its end when read"
     else
       # shellcheck disable=SC1091
       source "$BOSUN_CONFIG_DIR/bosun.env"
@@ -422,10 +430,25 @@ read_config() {
   : "${BOSUN_ORCHESTRATOR_SETTINGS:=$BOSUN_INSTALL/orchestrator/settings.json}"
 }
 
+# Why reading <file> with `source` stops the shell before its end (an unset variable under set -u, an
+# exit), and success when it does; nothing, and failure, when it runs through. A file that parses can
+# still stop the shell that reads it. It is read in a subshell with the caller's options, its stdin and
+# stdout closed off.
+env_file_stops() { # <file>
+  local said
+  # shellcheck disable=SC1090
+  said="$({
+    source "$1" </dev/null >/dev/null
+    printf '%s' bosun-env-read-through
+  } 2>&1)"
+  case "$said" in *bosun-env-read-through) return 1 ;; esac
+  printf '%s' "${said:-it stops with no word of why}"
+}
+
 load_config() {
   read_config
   [ -z "$BOSUN_ENV_ERROR" ] ||
-    die "bosun.env does not parse, so none of it was read: ${BOSUN_ENV_ERROR//$'\n'/ }. Fix it, or move it aside to run on the defaults."
+    die "bosun.env $BOSUN_ENV_FAULT, so none of it was read: ${BOSUN_ENV_ERROR//$'\n'/ }. Fix it, or move it aside to run on the defaults."
   mkdir -p "$BOSUN_STATE_DIR" "$BOSUN_LOG_DIR"
 }
 
@@ -469,8 +492,11 @@ die_usage() {
   exit 2
 }
 
+# A macOS notification <title> <message>. Both go to osascript as arguments of its run handler, never into
+# the script's text, so nothing in them (a quote, a backslash, `do shell script`) can become AppleScript.
 notify() {
-  osascript -e "display notification \"${2//\"/\\\"}\" with title \"${1//\"/\\\"}\"" >/dev/null 2>&1 || true
+  osascript -e 'on run argv' -e 'display notification (item 2 of argv) with title (item 1 of argv)' \
+    -e 'end run' "$1" "$2" >/dev/null 2>&1 || true
 }
 
 # Whether this runs in a pane of bosun's own tmux server (lib/uninstall.py's inside_bosun is the same
