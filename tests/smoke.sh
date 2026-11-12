@@ -34,7 +34,9 @@ cleanup() {
   [ -n "$CONSOLE_PID" ] && kill "$CONSOLE_PID" 2>/dev/null
   tmux -L "$SOCKET" kill-server 2>/dev/null
   tmux -L "$SOCKET-update" kill-server 2>/dev/null # the update's windows (bosun update)
-  rm -f "${TMUX_TMPDIR:-/tmp}/tmux-$(id -u)/${SOCKET:?}" "${TMUX_TMPDIR:-/tmp}/tmux-$(id -u)/${SOCKET:?}-update"
+  tmux -L "$SOCKET-agy" kill-server 2>/dev/null    # the windows on the agy stand-in
+  rm -f "${TMUX_TMPDIR:-/tmp}/tmux-$(id -u)/${SOCKET:?}" "${TMUX_TMPDIR:-/tmp}/tmux-$(id -u)/${SOCKET:?}-update" \
+    "${TMUX_TMPDIR:-/tmp}/tmux-$(id -u)/${SOCKET:?}-agy"
   rm -rf "${WORK:?}"
 }
 trap cleanup EXIT
@@ -3040,6 +3042,95 @@ FAKE
   check "preflight checks agy, which it names" contains "$(BOSUN_SESSIONS_FILE="$WORK/agy-sessions.yml" BOSUN_AGY_BIN="$WORK/fake-agy" "$BOSUN" preflight 2>&1)" "Antigravity"
   out="$(BOSUN_SESSIONS_FILE="$WORK/agy-sessions.yml" BOSUN_AGY_BIN="$WORK/fake-agy" BOSUN_CONFIG_DIR="$SETUP_CFG" BOSUN_NETWORK_PROBE_URL=file:///dev/null "$BOSUN" morning --dry-run --awake-minutes 5 2>&1)"
   check "the morning run would update agy with its own command" contains "$out" "dry-run: would run $WORK/fake-agy update"
+
+  # An agy is found by what `ps eww` shows of its environment, which some macOS versions keep from a user's
+  # own processes: there the live windows below cannot be found, so they are skipped (CI and the Docker
+  # sandbox show it).
+  ps_shows_environment() {
+    local pid found=1
+    BOSUN_PS_PROBE=1 sleep 5 &
+    pid=$!
+    ps eww -o command= -p "$pid" | grep -q BOSUN_PS_PROBE && found=0
+    kill "$pid" 2>/dev/null
+    wait "$pid" 2>/dev/null
+    return "$found"
+  }
+  agy_live_windows() {
+    echo "windows on agy (real windows, with the stand-in: tests/sandbox/agy-stand-in)"
+    AGY_STAND_IN="$ROOT/tests/sandbox/agy-stand-in"
+    AL_SOCKET="$SOCKET-agy"
+    AL_STATE="$BOSUN_STATE_DIR"
+    AL_HOME="$HOME/.gemini/antigravity-cli"
+    rm -rf "$HOME/.gemini" "$AL_STATE/agy" "$AL_STATE/agy-sessions.json" # the stand-in installs bosun's plugin itself
+    printf 'sessions:\n  - name: agyl\n    dir: %s\n    harness: agy\n' "$AGY_REPO" >"$WORK/agy-live-sessions.yml"
+    AL=(env BOSUN_TMUX_SOCKET="$AL_SOCKET" BOSUN_SESSION_NAME=agy-live BOSUN_SESSIONS_FILE="$WORK/agy-live-sessions.yml"
+      BOSUN_AGY_BIN="$AGY_STAND_IN" BOSUN_LAUNCH_DRY_RUN=0 BOSUN_EVENTS_ENABLED=0 BOSUN_ORCHESTRATOR="")
+    al() { (cd "$AGY_REPO" && "${AL[@]}" "$BOSUN" "$@" 2>&1); }
+    al_tmux() { tmux -L "$AL_SOCKET" "$@"; }
+    al_window() { al_tmux send-keys -t "=agy-live:=$1" "${@:2}"; }                                                 # <window> <keys...>
+    al_status() { al sessions --json | jq -r --arg w "$1" '.[] | select(.name == $w) | .agent.status // "none"'; } # <window>
+    al_has() { [ "$(al_status "$1")" = "$2" ]; }                                                                   # <window> <status>
+    al_conversation() { jq -r --arg w "$1" '.[$w].id // empty' "$AL_STATE/agy-sessions.json"; }                    # <window>
+    al_screen() { al_tmux capture-pane -p -t "=agy-live:=$1"; }                                                    # <window>
+    al_named() { [ -n "$(al_conversation "$1")" ]; }                                                               # <window>
+    al_conversations() { find "$AL_HOME/conversations" -name '*.db' 2>/dev/null | wc -l | tr -d ' '; }
+    check "the stand-in answers --version, as agy does" test "$("$AGY_STAND_IN" --version)" = 1.5.5
+    check "... refuses an unknown key in --settings, as agy does" fails_with 'unknown field "hooks"' "$AGY_STAND_IN" --settings '{"hooks":{}}'
+    al start >/dev/null
+    check "a window starts, and bosun's plugin was installed into agy by its setup" wait_for 30 bash -c 'jq -e ".[] | select(.name == \"bosun\")" <(HOME="$1" "$2" plugin list --json) >/dev/null' _ "$HOME" "$AGY_STAND_IN"
+    check "... records the name of its conversation, from agy's own hook" wait_for 30 al_named agyl
+    conversation="$(al_conversation agyl)"
+    check "... which agy keeps, and holds open" bash -c '[ -f "$1/conversations/$2.db" ] && [ -f "$1/presence/$2.lock" ]' _ "$AL_HOME" "$conversation"
+    check "... and reads idle, from the hooks, once its first prompt is answered" wait_for 30 al_has agyl idle
+    check "bosun sessions says it is agy's" bash -c '[ "$(jq -r ".[] | select(.name == \"agyl\") | .agent.harness" <<<"$1")" = agy ]' _ "$(al sessions --json)"
+    check "a message is delivered, a turn runs, and the window reads busy" al send --no-item agyl "sleep 60"
+    check "... busy, from the hook before the model call" wait_for 15 al_has agyl busy
+    al_window agyl Escape
+    check "Esc cancels the turn, which fires no hook, and the screen says idle" wait_for 15 al_has agyl idle
+    al_window agyl "please ask" Enter
+    check "... a window at a dialog reads waiting" wait_for 15 al_has agyl waiting
+    check "... and bosun send refuses it, so a pasted Enter never answers it" fails_with "asking something on its screen" al send --no-item agyl "go on"
+    al_window agyl Escape
+    check "... Esc cancels it, and the window reads idle again" wait_for 15 al_has agyl idle
+    al_window agyl "run git status" Enter
+    check "a git command through bosun's plugin is approved, as bosun's hook answers it" wait_for 15 grep -q "PreToolUse git status: auto_approve" "$BOSUN_LOG_DIR/agy-agyl.log"
+    check "... and the turn ends idle" wait_for 15 al_has agyl idle
+    al_window agyl "run date" Enter
+    check "a command outside its allow-list gets no answer" wait_for 15 grep -q "PreToolUse date: no answer" "$BOSUN_LOG_DIR/agy-agyl.log"
+    check "... and the turn ends idle" wait_for 15 al_has agyl idle
+    # A person's own agy, in the same folder with bosun's plugin installed: no BOSUN_* in its environment.
+    al_tmux new-window -d -n person -c "$AGY_REPO" "env -u BOSUN_HOOK_CMD -u BOSUN_WINDOW -u BOSUN_CONVERSATION '$AGY_STAND_IN' --log-file '$WORK/person-agy.log' '--prompt-interactive=run git status'"
+    check "a person's own agy run gets no answer from any hook, not even for git" wait_for 20 grep -q "PreToolUse git status: no answer" "$WORK/person-agy.log"
+    check "... and bosun's hooks wrote no status for it" bash -c '[ "$(ls "$1/agy" | tr "\n" " ")" = "agyl.json " ]' _ "$AL_STATE"
+    al_tmux kill-window -t "=agy-live:=person"
+    conversations_before="$(al_conversations)"
+    al stop >/dev/null
+    check "stop leaves no agy running" wait_for 15 bash -c '! pgrep -f "$1 -c" >/dev/null' _ "$AGY_STAND_IN"
+    al start >/dev/null
+    check "a restart resumes the conversation it had" wait_for 30 al_has agyl idle
+    check "... the same one, under the same name" test "$(al_conversation agyl)" = "$conversation"
+    check "... and made no new one" test "$(al_conversations)" = "$conversations_before"
+    check "... which the stand-in resumed, as its log says" grep -q "resumed conversation $conversation" "$BOSUN_LOG_DIR/agy-agyl.log"
+    al stop >/dev/null
+    rm -f "$AL_HOME/conversations/$conversation.db"
+    al start >/dev/null
+    al_renamed() { [ -n "$(al_conversation agyl)" ] && [ "$(al_conversation agyl)" != "$1" ]; } # <the old id>
+    check "a window whose conversation is gone starts a new one" wait_for 30 al_renamed "$conversation"
+    check "... never under the old id: that conversation stays gone" test ! -e "$AL_HOME/conversations/$conversation.db"
+    check "... and reads idle" wait_for 30 al_has agyl idle
+    # A resume that agy turns into a fresh conversation (an id it does not have), with the marker bosun's launch sets.
+    al_tmux new-window -d -n guard -c "$AGY_REPO" "env BOSUN_WINDOW=guard BOSUN_CONVERSATION=guard BOSUN_HOOK_CMD='$BOSUN' BOSUN_RESUMED=ghost-conversation '$AGY_STAND_IN' --log-file '$BOSUN_LOG_DIR/agy-guard.log' --conversation ghost-conversation '--prompt-interactive=hello'"
+    check "a resume that agy makes a fresh conversation of says so on its screen" wait_for 20 bash -c 'tmux -L "$1" capture-pane -p -t "=agy-live:=guard" | grep -q "conversation \"ghost-conversation\" not found"' _ "$AL_SOCKET"
+    check "... and bosun stops its first model call, and says why" wait_for 20 bash -c 'tmux -L "$1" capture-pane -p -t "=agy-live:=guard" | grep -q "resumed a different conversation"' _ "$AL_SOCKET"
+    check "... so it never answered" bash -c '! tmux -L "$1" capture-pane -p -t "=agy-live:=guard" | grep -q "stand-in\] ok"' _ "$AL_SOCKET"
+    al stop >/dev/null
+    al_tmux kill-server 2>/dev/null
+  }
+  if ps_shows_environment; then
+    agy_live_windows
+  else
+    echo "windows on agy: skipped, ps does not show a process's environment on this machine"
+  fi
 
   echo "get.sh (a dry run: it changes nothing)"
   check "it is plain sh" sh -n "$ROOT/get.sh"

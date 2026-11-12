@@ -1,0 +1,816 @@
+#!/usr/bin/env python3
+"""Antigravity CLI's (agy's) stand-in, for the smoke suite and the sandbox: it does what the VM run of
+2026-11-11 showed the real agy 1.5.5 doing (the captures and payloads are in tests/fixtures/agy/) and nothing
+it was not seen to do. It has no login, no network and no model: its "model" is a script, read from the
+prompt.
+
+Commands, into its own ~/.gemini:
+  --version                       1.5.5
+  models                          model names
+  mcp list                        the servers of config/mcp_config.json, or "No MCP servers configured."
+  plugin install <dir>            copies the plugin to config/plugins/<name>/ and writes
+                                  config/import_manifest.json
+  plugin uninstall <name>         removes it, and leaves import_manifest.json (its imports null) and an empty
+                                  antigravity-cli/plugin_data/<name>/, as the real one does
+  plugin list [--json]            the plugins
+Anything else is a session in the pane, drawn as the screens of tests/fixtures/agy/screens/ are: a box (the
+`>` line between two grey rules), `? for shortcuts` under it when idle, `esc to cancel` and a spinner when a
+turn runs, a dialog ("Run this command?", numbered options) for a command named ask, and text typed or
+pasted into the box (bracketed paste, as `bosun send` pastes) with the hint blanked. Flags:
+--prompt-interactive (a first prompt), --conversation <id> (an unknown id prints `warning: conversation
+"<id>" not found` and starts a fresh conversation), --settings <json> (a key other than agentMode and
+trustedWorkspaces is an error, as `hooks` is for agy), --log-file, --model, --effort, --remote-control.
+A conversation is antigravity-cli/conversations/<id>.db (written at its first prompt), with
+presence/<id>.lock while open.
+
+It runs the hooks of the installed plugins (config/plugins/*/hooks.json) as agy does: each handler through
+`sh -c` in the plugin's folder, with this process's environment and the payload on stdin. SessionStart at a
+new conversation's first prompt (never on a resume), PreInvocation before each model call, PreToolUse before a
+run_command (handlers grouped under a `matcher`), Stop at the end of a turn, with fullyIdle false while a
+background task runs. A handler's answer: nothing is no opinion; {"decision":"auto_approve",...} approves;
+anything else, a blank decision, {} and an exit other than 0 refuse the tool; a PreInvocation answer with
+terminationBehavior terminate stops the turn before its model call, saying the step's userMessage. Esc
+cancels a turn and fires no hook.
+
+What the scripted model does with a prompt, first match first:
+  run <command>   a run_command tool call for <command> (to the end of the line): PreToolUse, then the command
+                  runs unless a hook refused it, then a second model call
+  ask             a run_command for a command named ask: PreToolUse, then, if no hook answered, the dialog,
+                  which Enter, 1, 2 or 3 answer yes, and 4 or Esc cancel the turn
+  sleep <n>       a turn that takes n seconds (Esc cancels it)
+  background [n]  the turn ends at once, Stop with fullyIdle false, and n seconds later (3 without one) a turn
+                  of its own starts, with the same lastUserInput, and ends fully idle
+  anything else   one line, "[stand-in] ok"
+The word `/exit` leaves, as agy's does.
+
+ps names a script's process for its interpreter, and bosun finds an agy by the name of its command's first
+word, so a session starts again as `bash -c` under this file's own name, which runs the program as its child.
+"""
+
+import json
+import os
+import re
+import select
+import shutil
+import signal
+import sqlite3
+import subprocess
+import sys
+import termios
+import time
+import tty
+import uuid
+from collections.abc import Callable
+from pathlib import Path
+from typing import Any
+
+
+VERSION = "1.5.5"
+MODEL = "gemini-3.8-flash-low"
+MODEL_SHOWN = "Gemini 3.8 Flash · low"
+MODELS = ("gemini-3.8-flash-low", "gemini-3.8-flash-medium", "gemini-3.8-flash-high")
+SETTINGS_KEYS = ("agentMode", "trustedWorkspaces")
+HOME = Path.home()
+CONFIG = HOME / ".gemini" / "config"
+CLI = HOME / ".gemini" / "antigravity-cli"
+NAMED = "AGY_STAND_IN_NAMED"
+
+PASTE_START, PASTE_END = "\x1b[200~", "\x1b[201~"
+CSI = re.compile(r"\x1b\[[0-9;?]*[A-Za-z~]")
+ARROWS = {"\x1b[A": "UP", "\x1b[B": "DOWN"}
+SPINNER = "⣾⣽⣻⢿⡿⢟⣯⣷"
+DEFAULT_COLUMNS, DEFAULT_ROWS = 120, 40
+TICK_SECONDS = 0.1
+ESCAPE_WAIT_SECONDS = 0.05
+BACKGROUND_SECONDS = 3
+OUTPUT_LINES = 6
+HOOK_SECONDS = 30
+STEP_FIRST = 26  # the steps a fresh conversation starts at in the payloads, as the fixtures'
+
+ANSWERS = {"approve": "auto_approve", "refuse": "refused", None: "no answer"}  # as the log says them
+HINT = "? for shortcuts"
+INTERRUPTED = "\x1b[90m  \u23bf  Interrupted \u00b7 What should Antigravity CLI do instead?\x1b[39m"
+CHOICES = (
+    "Yes, run command",
+    "Yes, and always allow in this conversation for commands that start with '{word}'",
+    "Yes, and always allow for commands that start with '{word}' (Persist to settings.json)",
+    "No, cancel",
+)
+
+
+class UsageError(Exception):
+    """A command line agy refuses."""
+
+
+class Cancelled(Exception):
+    """Esc in a turn."""
+
+
+# ---- the commands ---------------------------------------------------------------------------------
+
+
+def plugin_listing() -> list[dict[str, Any]]:
+    found = []
+    for manifest in sorted((CONFIG / "plugins").glob("*/plugin.json")):
+        folder = manifest.parent
+        entry: dict[str, Any] = {"name": folder.name, "enabled": True, "source": "antigravity"}
+        version = json.loads(manifest.read_text()).get("version")
+        if version:
+            entry["version"] = version
+        entry["path"] = str(folder)
+        if (folder / "hooks.json").is_file():
+            entry["hooks"] = [folder.name]
+        found.append(entry)
+    return found
+
+
+def plugin_install(source: str) -> int:
+    try:
+        name = json.loads((Path(source) / "plugin.json").read_text())["name"]
+    except (OSError, ValueError, KeyError) as exc:
+        print(f"Error: {source} is not a plugin: {exc}", file=sys.stderr)
+        return 1
+    target = CONFIG / "plugins" / name
+    shutil.rmtree(target, ignore_errors=True)
+    shutil.copytree(source, target)
+    manifest = {"imports": [{"name": name, "source": str(Path(source).resolve())}]}
+    (CONFIG / "import_manifest.json").write_text(json.dumps(manifest, indent=2))
+    print(f"  [ok]    {name}\n          Installed to {target}")
+    return 0
+
+
+def plugin_uninstall(name: str) -> int:
+    target = CONFIG / "plugins" / name
+    if not target.is_dir():
+        print(f'Error: plugin "{name}" is not installed', file=sys.stderr)
+        return 1
+    shutil.rmtree(target)
+    (CONFIG / "import_manifest.json").write_text(json.dumps({"imports": None}, indent=2))
+    (CLI / "plugin_data" / name).mkdir(parents=True, exist_ok=True)
+    print(f'Uninstalled plugin "{name}"')
+    return 0
+
+
+def plugin_command(words: list[str]) -> int:
+    if words[:1] == ["install"] and len(words) == 2:
+        return plugin_install(words[1])
+    if words[:1] == ["uninstall"] and len(words) == 2:
+        return plugin_uninstall(words[1])
+    if words[:1] == ["list"]:
+        plugins = plugin_listing()
+        print(json.dumps(plugins, indent=2) if "--json" in words else "\n".join(p["name"] for p in plugins))
+        return 0
+    print("Usage: agy plugin install <dir> | uninstall <name> | list [--json]", file=sys.stderr)
+    return 1
+
+
+def mcp_list() -> int:
+    try:
+        servers = json.loads((CONFIG / "mcp_config.json").read_text()).get("mcpServers") or {}
+    except (OSError, ValueError):
+        servers = {}
+    if not servers:
+        print("No MCP servers configured.")
+        return 0
+    rows = [("NAME", "TYPE", "STATUS", "COMMAND/URL")]
+    for name, server in sorted(servers.items()):
+        status = "disabled" if server.get("disabled") else "enabled"
+        rows.append((name, "stdio", status, " ".join([server.get("command", ""), *server.get("args", [])])))
+    widths = [max(len(row[i]) for row in rows) for i in range(3)]
+    for row in rows:
+        print("  ".join([*(row[i].ljust(widths[i]) for i in range(3)), row[3]]))
+    return 0
+
+
+def command(argv: list[str]) -> int | None:
+    """The exit status of a command that is no session, None for a session."""
+    if argv == ["--version"]:
+        print(VERSION)
+        return 0
+    if argv == ["models"]:
+        print("\n".join(MODELS))
+        return 0
+    if argv == ["mcp", "list"]:
+        return mcp_list()
+    if argv[:1] == ["plugin"]:
+        return plugin_command(argv[1:])
+    return None
+
+
+# ---- the command line of a session ------------------------------------------------------------------
+
+
+class Options:
+    """What a session was started with."""
+
+    VALUE_FLAGS = (
+        "--settings",
+        "--log-file",
+        "--model",
+        "--effort",
+        "--conversation",
+        "--prompt-interactive",
+    )
+
+    def __init__(self, argv: list[str]) -> None:
+        self.values: dict[str, str] = {}
+        index = 0
+        while index < len(argv):
+            word = argv[index]
+            flag, equals, value = word.partition("=")
+            if flag in self.VALUE_FLAGS:
+                if not equals:
+                    index += 1
+                    if index == len(argv):
+                        raise UsageError(f"flag needs an argument: {flag.lstrip('-')}")
+                    value = argv[index]
+                self.values[flag] = value
+            elif word != "--remote-control":
+                raise UsageError(f"flags provided but not defined: -{word.lstrip('-')}")
+            index += 1
+        self.check_settings()
+
+    def check_settings(self) -> None:
+        try:
+            settings = json.loads(self.values.get("--settings") or "{}")
+        except ValueError as exc:
+            raise UsageError(f"invalid settings: {exc}") from exc
+        if not isinstance(settings, dict):
+            raise UsageError("invalid settings: not an object")
+        for key in settings:
+            if key not in SETTINGS_KEYS:
+                raise UsageError(f'invalid settings: unknown field "{key}"')
+
+    def get(self, flag: str) -> str:
+        return self.values.get(flag, "")
+
+
+# ---- conversations and hooks ------------------------------------------------------------------------
+
+
+class Conversation:
+    """antigravity-cli/conversations/<id>.db, and presence/<id>.lock while it is open."""
+
+    def __init__(self, conversation_id: str) -> None:
+        self.id = conversation_id
+        self.db_path = CLI / "conversations" / f"{conversation_id}.db"
+        self.lock = CLI / "presence" / f"{conversation_id}.lock"
+        self.db: sqlite3.Connection | None = None
+
+    @staticmethod
+    def exists(conversation_id: str) -> bool:
+        return (CLI / "conversations" / f"{conversation_id}.db").is_file()
+
+    def open(self) -> None:
+        for folder in (self.db_path.parent, self.lock.parent):
+            folder.mkdir(parents=True, exist_ok=True)
+        self.db = sqlite3.connect(self.db_path)
+        self.db.execute("create table if not exists steps (n integer primary key, kind text, text text)")
+        self.lock.write_text(str(os.getpid()))
+
+    def record(self, kind: str, text: str) -> None:
+        if self.db is not None:
+            self.db.execute("insert into steps (kind, text) values (?, ?)", (kind, text))
+            self.db.commit()
+
+    def steps(self) -> int:
+        if self.db is None:
+            return STEP_FIRST
+        return STEP_FIRST + self.db.execute("select count(*) from steps").fetchone()[0]
+
+    def close(self) -> None:
+        self.lock.unlink(missing_ok=True)
+        if self.db is not None:
+            self.db.close()
+
+
+def handlers_of(event: str, tool: str | None) -> list[tuple[Path, str, int]]:
+    """Every handler of the installed plugins for <event>: the folder it runs in, its command and timeout."""
+    found = []
+    for hooks_file in sorted((CONFIG / "plugins").glob("*/hooks.json")):
+        for events in json.loads(hooks_file.read_text()).values():
+            for entry in events.get(event, []):
+                matcher = entry.get("matcher")
+                if matcher is not None and not (tool and re.search(matcher, tool)):
+                    continue
+                found.extend(
+                    (hooks_file.parent, handler["command"], handler.get("timeout", HOOK_SECONDS))
+                    for handler in entry.get("hooks", [entry])
+                )
+    return found
+
+
+def run_hooks(event: str, payload: dict[str, Any], tool: str | None = None) -> list[tuple[int, str]]:
+    """Each handler's exit status and output."""
+    answers = []
+    for folder, shell_command, timeout in handlers_of(event, tool):
+        done = subprocess.run(
+            ["sh", "-c", shell_command],
+            cwd=folder,
+            input=json.dumps(payload, sort_keys=True, separators=(",", ":")),
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+            check=False,
+        )
+        answers.append((done.returncode, done.stdout.strip()))
+    return answers
+
+
+def termination(answers: list[tuple[int, str]]) -> str | None:
+    """Why a PreInvocation answer stops the turn, if one does."""
+    for _, output in answers:
+        try:
+            found = json.loads(output) if output else {}
+        except ValueError:
+            continue
+        if isinstance(found, dict) and found.get("terminationBehavior") == "terminate":
+            steps = found.get("injectSteps") or [{}]
+            return str(steps[0].get("errorMessage", {}).get("userMessage") or "stopped before the model call")
+    return None
+
+
+def verdict(answers: list[tuple[int, str]]) -> str | None:
+    """A PreToolUse answer: "approve", "refuse", or None for no opinion. Anything but an auto_approve
+    decision is a refusal, the blank decision and {} too, and so is an exit other than 0."""
+    for code, output in answers:
+        if code != 0:
+            return "refuse"
+        if not output:
+            continue
+        try:
+            found = json.loads(output)
+        except ValueError:
+            return "refuse"
+        return "approve" if isinstance(found, dict) and found.get("decision") == "auto_approve" else "refuse"
+    return None
+
+
+def script(prompt: str) -> tuple[str, str]:
+    """What the scripted model does with <prompt>: (what, its argument)."""
+    ran = re.search(r"(?:^|\s)run (.+)", prompt)
+    if ran:
+        return "tool", ran.group(1).splitlines()[0].strip()
+    if re.search(r"\bask\b", prompt):
+        return "tool", "ask"
+    slept = re.search(r"\bsleep (\d+)", prompt)
+    if slept:
+        return "sleep", slept.group(1)
+    background = re.search(r"\bbackground(?: (\d+))?", prompt)
+    if background:
+        return "background", background.group(1) or str(BACKGROUND_SECONDS)
+    return "reply", ""
+
+
+# ---- the screen -------------------------------------------------------------------------------------
+
+
+def clip(text: str, columns: int) -> str:
+    return text if len(text) < columns else text[: columns - 1]
+
+
+class Screen:
+    """What is drawn: the lines of the history, and the state that decides what is under it."""
+
+    def __init__(self, cwd: str, warning: str) -> None:
+        self.cwd = cwd
+        self.head = [warning] if warning else []
+        self.history: list[str] = []
+        self.state = "idle"  # idle, busy or dialog
+        self.live: list[str] = []
+        self.typed = ""
+        self.queue: list[str] = []
+        self.task = False
+        self.choice = 0
+        self.dialog_command = ""
+        self.spin = 0
+
+    def rule(self, columns: int) -> str:
+        return f"\x1b[90m{'─' * columns}\x1b[39m"
+
+    def box(self, columns: int) -> list[str]:
+        mark = "\x1b[94m>\x1b[39m"
+        first, *rest = self.typed.split("\n")
+        lines = [f"{mark} {clip(first, columns - 3)}" if self.typed else mark]
+        return [*lines, *(f"  {clip(line, columns - 3)}" for line in rest)]
+
+    def footer(self, columns: int) -> str:
+        right = MODEL_SHOWN + (" · 1 task(s) · /tasks" if self.task else "")
+        if self.state == "dialog" or (self.state == "busy" and not self.typed and not self.queue):
+            left, shown = "\x1b[90mesc to cancel\x1b[39m", "esc to cancel"
+        elif self.queue and not self.typed:
+            left = shown = "  Press up to edit queued messages\x1b[39m"
+        elif self.typed:
+            left = shown = "\x1b[39m"
+        else:
+            left, shown = f"{HINT}\x1b[39m", HINT
+        pad = " " * max(1, columns - len(shown.replace("\x1b[39m", "")) - len(right))
+        return f"{left}{pad}\x1b[2m{right}\x1b[0m"
+
+    def dialog(self, columns: int) -> list[str]:
+        word = self.dialog_command.split()[0] if self.dialog_command.split() else ""
+        lines = [
+            f"\x1b[33m●\x1b[39m \x1b[1m\x1b[33mRan\x1b[0m \x1b[37m({self.dialog_command})\x1b[39m"
+            + " \x1b[37m(ctrl+o to expand)\x1b[39m",
+            "",
+            "\x1b[1m\x1b[33mCommand\x1b[0m",
+            self.rule(columns),
+            "",
+            "\x1b[1m\x1b[37mRequesting permission for:\x1b[0m",
+            f"\x1b[37m   {self.dialog_command}\x1b[39m",
+            "",
+            "\x1b[1mRun this command?\x1b[0m",
+        ]
+        for number, choice in enumerate(CHOICES, 1):
+            text = clip(f"{number}. {choice.format(word=word)}", columns - 3)
+            lines.append(f"\x1b[94m> {text}\x1b[39m" if number - 1 == self.choice else f"  {text}")
+        navigate = "\x1b[1m\x1b[94m↑/↓\x1b[0m\x1b[90m Navigate · \x1b[1m\x1b[94mtab\x1b[0m"
+        lines += [
+            "",
+            f"  {navigate}\x1b[90m Amend · \x1b[1m\x1b[94mctrl+g\x1b[0m\x1b[90m edit/expand command\x1b[39m",
+        ]
+        return lines
+
+    def lower(self, columns: int) -> list[str]:
+        """Everything under the history."""
+        if self.state == "dialog":
+            return [*self.dialog(columns), self.footer(columns)]
+        spinner = SPINNER[self.spin % len(SPINNER)]
+        live = (
+            [f"\x1b[94m{spinner}\x1b[39m  {line}" for line in self.live[-1:]] if self.state == "busy" else []
+        )
+        queued = [f"\x1b[90m▸ {clip(text, columns - 3)}\x1b[39m" for text in self.queue]
+        rule = self.rule(columns)
+        return [*self.live[:-1], *live, *queued, rule, *self.box(columns), rule, self.footer(columns)]
+
+    def frame(self, columns: int, rows: int) -> str:
+        head = [
+            *self.head,
+            f"  \x1b[1m\x1b[94mAntigravity CLI {VERSION}\x1b[0m \x1b[90m(stand-in)\x1b[39m",
+            f"  \x1b[90m{self.cwd}\x1b[39m",
+            "",
+        ]
+        lower = self.lower(columns)
+        room = max(0, rows - len(head) - len(lower))
+        shown = self.history[-room:] if room else []
+        return "\x1b[H\x1b[J" + "\n".join([*head, *shown, *lower])
+
+
+# ---- a session --------------------------------------------------------------------------------------
+
+
+class Session:
+    """The terminal, the conversation and the turns."""
+
+    def __init__(self, options: Options) -> None:
+        self.options = options
+        self.cwd = os.path.realpath(".")
+        resumed = options.get("--conversation")
+        warning = ""
+        self.conversation: Conversation | None = None
+        if resumed and Conversation.exists(resumed):
+            self.conversation = Conversation(resumed)
+        elif resumed:
+            warning = f'warning: conversation "{resumed}" not found'
+        self.screen = Screen(self.cwd, warning)
+        self.last_input = ""
+        self.pending = ""
+        self.task_due: float | None = None
+        self.tty_state: list[Any] | None = None
+
+    # -- terminal
+
+    def draw(self) -> None:
+        size = shutil.get_terminal_size((DEFAULT_COLUMNS, DEFAULT_ROWS))
+        sys.stdout.write(self.screen.frame(size.columns, size.lines))
+        sys.stdout.flush()
+
+    def split_keys(self) -> list[str]:
+        keys: list[str] = []
+        buf = self.pending
+        while buf:
+            if buf.startswith(PASTE_START):
+                end = buf.find(PASTE_END)
+                if end < 0:
+                    break
+                keys.append("PASTE:" + buf[len(PASTE_START) : end].replace("\r\n", "\n").replace("\r", "\n"))
+                buf = buf[end + len(PASTE_END) :]
+            elif buf.startswith("\x1b["):
+                found = CSI.match(buf)
+                if not found:
+                    break
+                keys.append(ARROWS.get(found.group(), "OTHER"))
+                buf = buf[found.end() :]
+            elif buf == "\x1b":
+                break
+            else:
+                keys.append(self.key_of(buf[0]))
+                buf = buf[1:]
+        self.pending = buf
+        return [key for key in keys if key]
+
+    @staticmethod
+    def key_of(char: str) -> str:
+        if char == "\x1b":
+            return "ESC"
+        if char in "\r\n":
+            return "ENTER"
+        if char in "\x7f\x08":
+            return "BACKSPACE"
+        return char if char.isprintable() else ""
+
+    def read_keys(self, timeout: float) -> list[str]:
+        ready, _, _ = select.select([0], [], [], timeout)
+        if ready:
+            data = os.read(0, 4096)
+            if not data:
+                raise SystemExit(0)
+            self.pending += data.decode(errors="replace")
+        keys = self.split_keys()
+        if self.pending == "\x1b" and not select.select([0], [], [], ESCAPE_WAIT_SECONDS)[0]:
+            self.pending = ""
+            keys.append("ESC")
+        return keys
+
+    def edit(self, key: str) -> str | None:
+        """Apply a key to the box; the text when Enter sends it."""
+        if key == "ENTER":
+            text, self.screen.typed = self.screen.typed.strip(), ""
+            return text or None
+        if key == "BACKSPACE":
+            self.screen.typed = self.screen.typed[:-1]
+        elif key.startswith("PASTE:"):
+            self.screen.typed += key[len("PASTE:") :]
+        elif len(key) == 1:
+            self.screen.typed += key
+        return None
+
+    def pump(self, seconds: float) -> None:
+        """Wait <seconds> in a turn, taking keys: Esc cancels it, Enter queues what is in the box."""
+        end = time.monotonic() + seconds
+        while (left := end - time.monotonic()) > 0:
+            for key in self.read_keys(min(left, TICK_SECONDS)):
+                if key == "ESC":
+                    raise Cancelled
+                text = self.edit(key)
+                if text:
+                    self.screen.queue.append(text)
+            self.screen.spin += 1
+            self.draw()
+
+    # -- hooks and payloads
+
+    def payload(self, event: str, **fields: Any) -> dict[str, Any]:
+        assert self.conversation is not None
+        folder = CLI / "brain" / self.conversation.id
+        return {
+            "artifactDirectoryPath": str(folder),
+            "conversationId": self.conversation.id,
+            "cwd": self.cwd,
+            "hookEventName": event,
+            "lastUserInput": self.last_input,
+            "modelName": MODEL,
+            "transcriptPath": str(folder / ".system_generated" / "logs" / "transcript_full.jsonl"),
+            "workspacePaths": [self.cwd],
+            **fields,
+        }
+
+    def model_call(self, number: int) -> bool:
+        """PreInvocation; False when a hook stopped the turn before its model call."""
+        assert self.conversation is not None
+        answers = run_hooks(
+            "PreInvocation",
+            self.payload("PreInvocation", initialNumSteps=self.conversation.steps(), invocationNum=number),
+        )
+        why = termination(answers)
+        if why:
+            self.screen.history.append(f"\x1b[33m⚠ {why}\x1b[39m")
+        return why is None
+
+    def stop(self, fully_idle: bool) -> None:
+        fields = {
+            "error": "",
+            "executionNum": 0,
+            "fullyIdle": fully_idle,
+            "terminationReason": "NO_TOOL_CALL",
+        }
+        run_hooks("Stop", self.payload("Stop", **fields))
+
+    # -- turns
+
+    def say(self, text: str) -> None:
+        assert self.conversation is not None
+        width = shutil.get_terminal_size((DEFAULT_COLUMNS, DEFAULT_ROWS)).columns
+        first, *rest = (clip(line, width - 3) for line in text.split("\n"))
+        self.screen.history += [self.screen.rule(width), f"\x1b[1m\x1b[34m> {first}\x1b[0m"]
+        self.screen.history += [*(f"  {line}" for line in rest), ""]
+        self.conversation.record("user", text)
+
+    def reply(self, text: str) -> None:
+        assert self.conversation is not None
+        width = shutil.get_terminal_size((DEFAULT_COLUMNS, DEFAULT_ROWS)).columns
+        self.screen.history.append(f"  {clip(text, width - 3)}")
+        self.conversation.record("reply", text)
+
+    def begin(self, text: str) -> None:
+        """The first prompt of a conversation that has none yet, or the next one of one that has."""
+        new = self.conversation is None
+        if self.conversation is None:
+            self.conversation = Conversation(str(uuid.uuid4()))
+        if self.conversation.db is None:
+            self.conversation.open()
+        self.last_input = text
+        self.say(text)
+        if new:
+            run_hooks("SessionStart", self.payload("SessionStart"))
+
+    def dialog(self, shell_command: str) -> None:
+        """Wait at the dialog: Enter, 1, 2 and 3 answer yes, 4 and Esc cancel the turn."""
+        self.screen.state, self.screen.dialog_command, self.screen.choice = "dialog", shell_command, 0
+        try:
+            while True:
+                self.draw()
+                for key in self.read_keys(TICK_SECONDS * 2):
+                    if key in ("ESC", "4"):
+                        raise Cancelled
+                    if key in ("ENTER", "1", "2", "3"):
+                        return
+                    step = {"UP": -1, "DOWN": 1}.get(key, 0)
+                    self.screen.choice = (self.screen.choice + step) % len(CHOICES)
+        finally:
+            self.screen.state = "busy"
+
+    def execute(self, shell_command: str) -> None:
+        self.screen.live = [
+            f"\x1b[33m\u25cb\x1b[39m Running ({shell_command}) (ctrl+o to expand)",
+            "Running command...",
+        ]
+        proc = subprocess.Popen(
+            ["sh", "-c", shell_command],
+            cwd=self.cwd,
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+        )
+        try:
+            while proc.poll() is None:
+                self.pump(TICK_SECONDS)
+        finally:
+            if proc.poll() is None:
+                proc.kill()
+                proc.wait()
+            self.screen.live = ["Generating..."]
+        output = (proc.stdout.read() if proc.stdout else "").splitlines()[:OUTPUT_LINES]
+        width = shutil.get_terminal_size((DEFAULT_COLUMNS, DEFAULT_ROWS)).columns
+        self.screen.history += [clip(f"● Ran ({shell_command})", width)]
+        self.screen.history += [f"  {clip(line, width - 3)}" for line in output]
+
+    def use_tool(self, shell_command: str) -> None:
+        assert self.conversation is not None
+        call = {
+            "args": {"CommandLine": shell_command, "WaitMsBeforeAsync": 5000, "toolSummary": "Run a command"},
+            "id": f"call_{uuid.uuid4().int % 10**19}",
+            "name": "run_command",
+        }
+        fields = {"stepIdx": self.conversation.steps(), "toolCall": call}
+        decided = verdict(run_hooks("PreToolUse", self.payload("PreToolUse", **fields), tool="run_command"))
+        self.log(f"PreToolUse {shell_command}: {ANSWERS[decided]}")
+        if decided is None and shell_command == "ask":
+            self.dialog(shell_command)
+        if decided == "refuse":
+            denied = "The shell command execution was denied by a pre-tool hook."
+            self.screen.history += [f"● Ran ({shell_command}) failed", f"  {denied}"]
+        else:
+            self.execute(shell_command)
+
+    def turn(self, text: str) -> None:
+        self.screen.state, self.screen.live = "busy", ["Generating..."]
+        self.begin(text)
+        self.draw()
+        what, argument = script(text)
+        if not self.model_call(0):
+            return
+        if what == "tool":
+            self.use_tool(argument)
+            if not self.model_call(1):
+                return
+            self.reply(f"[stand-in] ran {argument}")
+        elif what == "sleep":
+            self.pump(float(argument))
+            self.reply("[stand-in] slept")
+        else:
+            self.reply("[stand-in] ok")
+        self.stop(fully_idle=what != "background")
+        if what == "background":
+            self.task_due = time.monotonic() + float(argument)
+            self.screen.task = True
+
+    def task_turn(self, _text: str = "") -> None:
+        """The turn a background task starts by itself, with the last input it was started by."""
+        self.task_due = None
+        self.screen.state, self.screen.live = "busy", ["Generating..."]
+        self.draw()
+        if self.model_call(0):
+            self.reply("[stand-in] the background task finished")
+            self.screen.task = False
+            self.stop(fully_idle=True)
+
+    def submit(self, text: str) -> None:
+        if text == "/exit":
+            raise SystemExit(0)
+        self.attempt(self.turn, text)
+
+    def attempt(self, run: Callable[[str], None], text: str = "") -> None:
+        """A turn, ended by Esc if it is cancelled: "Interrupted" and the idle screen, and no hook."""
+        try:
+            run(text)
+        except Cancelled:
+            self.screen.history.append(INTERRUPTED)
+            self.task_due = None
+            self.screen.task = False
+        self.screen.state, self.screen.live = "idle", []
+        self.draw()
+
+    # -- the session
+
+    def start_terminal(self) -> None:
+        try:
+            self.tty_state = termios.tcgetattr(0)
+            tty.setcbreak(0)
+        except termios.error:
+            self.tty_state = None
+        sys.stdout.write("\x1b[?2004h")
+
+    def stop_terminal(self) -> None:
+        sys.stdout.write("\x1b[?2004l")
+        sys.stdout.flush()
+        if self.tty_state is not None:
+            termios.tcsetattr(0, termios.TCSADRAIN, self.tty_state)
+
+    def log(self, line: str) -> None:
+        """A line in the --log-file, which agy writes its own log to."""
+        name = self.options.get("--log-file")
+        if name:
+            Path(name).parent.mkdir(parents=True, exist_ok=True)
+            with Path(name).open("a") as file:
+                file.write(f"{line}\n")
+
+    def run(self) -> None:
+        self.log(f"agy stand-in {VERSION} started")
+        if self.conversation is not None:
+            self.conversation.open()
+            self.log(f"resumed conversation {self.conversation.id}")
+        self.start_terminal()
+        try:
+            self.draw()
+            if self.options.get("--prompt-interactive"):
+                self.submit(self.options.get("--prompt-interactive"))
+            self.loop()
+        finally:
+            self.stop_terminal()
+            if self.conversation is not None:
+                self.conversation.close()
+
+    def loop(self) -> None:
+        while True:
+            for key in self.read_keys(TICK_SECONDS):
+                text = self.edit(key)
+                if text:
+                    self.submit(text)
+            if self.task_due is not None and time.monotonic() >= self.task_due:
+                self.attempt(self.task_turn)
+            elif self.screen.queue:
+                self.submit(self.screen.queue.pop(0))
+            self.draw()
+
+
+# ---- main -------------------------------------------------------------------------------------------
+
+
+def under_own_name(argv: list[str]) -> None:
+    """Start again as `bash -c` named for this file, with the program as its child (see the top)."""
+    if os.environ.get(NAMED):
+        return
+    os.environ[NAMED] = "1"
+    os.execv("/bin/bash", [sys.argv[0], "-c", '"$@"; exit $?', "agy", sys.executable, sys.argv[0], *argv])  # noqa: S606  (a fixed program)
+
+
+def main(argv: list[str]) -> int:
+    done = command(argv)
+    if done is not None:
+        return done
+    try:
+        options = Options(argv)
+    except UsageError as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        return 1
+    under_own_name(argv)
+    signal.signal(signal.SIGTERM, lambda *_: sys.exit(0))
+    signal.signal(signal.SIGHUP, lambda *_: sys.exit(0))
+    Session(options).run()
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))

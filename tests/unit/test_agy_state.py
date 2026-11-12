@@ -75,6 +75,12 @@ class QuestionTest(unittest.TestCase):
             with self.subTest(name):
                 self.assertTrue(agy_state.agy_question(plain(name)))
 
+    def test_a_capture_with_escapes_is_read_as_the_text_it_draws(self) -> None:
+        for name in ("dialog", "trust", "sign-in"):
+            with self.subTest(name):
+                self.assertTrue(agy_state.agy_question("\n".join(ansi(name))))
+        self.assertEqual(agy_state.screen_status("\n".join(ansi("dialog"))), "waiting")
+
     def test_other_screens_are_not(self) -> None:
         for name in ("idle", "typed", "busy", "queued", "task", "cancelled"):
             with self.subTest(name):

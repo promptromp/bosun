@@ -27,6 +27,7 @@ echo '{"hasCompletedOnboarding": true}' >"$HOME/.claude.json" # a person went th
 # Not installed yet: `brew install codex` puts it in place, where a test wants it.
 mkdir -p "$HOME/.sandbox/packages"
 cp "$(dirname "$0")/codex-stand-in" "$HOME/.sandbox/packages/codex"
+cp "$(dirname "$0")/agy-stand-in" "$HOME/.sandbox/packages/agy"
 
 python3 - <<'HISTORY'
 import json

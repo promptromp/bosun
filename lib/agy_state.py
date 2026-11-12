@@ -96,7 +96,7 @@ from agent_files import (
     run_command,
     write_atomically,
 )
-from screen_text import NBSP, SGR, is_rule, visible
+from screen_text import NBSP, OTHER_ESCAPES, SGR, is_rule, visible
 
 
 HARNESS = "agy"
@@ -160,8 +160,11 @@ def agy_typed_text(lines: list[str]) -> str | None:
 
 
 def agy_question(capture: str) -> bool:
-    """Whether agy is asking something on this screen (a dialog, the trust or the sign-in screen)."""
-    return any(question in capture for question in AGY_QUESTIONS)
+    """Whether agy is asking something on this screen (a dialog, the trust or the sign-in screen). A capture
+    with escape sequences is read as the text it draws: they split `↑/↓ Navigate`, whose key is bold and
+    its words grey."""
+    text = OTHER_ESCAPES.sub("", SGR.sub("", capture))
+    return any(question in text for question in AGY_QUESTIONS)
 
 
 def screen_status(capture: str) -> str | None:
