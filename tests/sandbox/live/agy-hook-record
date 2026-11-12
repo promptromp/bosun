@@ -1,0 +1,45 @@
+#!/bin/bash
+# Usage: agy-hook-record <event>      (an agy hook's command, with bosun's own hook behind it)
+#
+# For tests/sandbox/live_agy.sh, in the throwaway Mac only: a copy of bosun's plugin for agy runs this in
+# place of bosun's own hook line, so that the run can read what the real agy sent and what bosun answered.
+# It does what the plugin's line does, in the same environment (agy's, which holds BOSUN_HOOK_CMD): bosun's
+# hook gets the payload on stdin and its answer, which agy takes for the hook's, is printed unchanged, with
+# its exit status. And it appends one line to ~/hooklog/<event>.jsonl:
+#   event, ts (seconds), payload (agy's JSON, as a string), answer, code, env (only the variables the run
+#   asks about: none is a secret), and screen (the last lines of the window's tmux pane, when the hook ran).
+# A PreInvocation also leaves, a second later, the pane's last lines in ~/hooklog/after-pre-invocation.txt
+# (ts, window, lines joined with ~): whether the footer of a window says it is busy right after the hook.
+set -uo pipefail
+export PATH="/opt/homebrew/bin:/usr/local/bin:$PATH"
+event="${1:?the event of the hook}"
+dir="$HOME/hooklog"
+mkdir -p "$dir"
+
+screen() { # the last lines of the window's pane, without blank ones
+	[ -n "${TMUX_PANE:-}" ] && tmux -L bosun capture-pane -p -t "$TMUX_PANE" 2>/dev/null | grep -v '^[[:space:]]*$' | tail -6
+	return 0
+}
+
+payload="$(cat)"
+answer="$(printf '%s' "$payload" | "$BOSUN_HOOK_CMD" hook agent --harness agy --event "$event")"
+code=$?
+printf '%s' "$answer"
+
+env_json="$(jq -n '[$ARGS.positional[] | {key: ., value: env[.]} | select(.value != null)] | from_entries' \
+	--args SSH_AUTH_SOCK SSH_CLIENT SSH_CONNECTION AGY_CLI_DISABLE_AUTO_UPDATE BOSUN_WINDOW BOSUN_CONVERSATION \
+	BOSUN_RESUMED GIT_CONFIG_COUNT TMUX_PANE)"
+[ -n "$env_json" ] || env_json='{}'
+jq -cn --arg event "$event" --argjson ts "$(date +%s)" --arg payload "$payload" --arg answer "$answer" \
+	--argjson code "$code" --argjson env "$env_json" --arg screen "$(screen)" \
+	'{event: $event, ts: $ts, payload: $payload, answer: $answer, code: $code, env: $env, screen: $screen}' \
+	>>"$dir/$event.jsonl"
+
+if [ "$event" = PreInvocation ]; then
+	# Its stdout and stderr go elsewhere at once, or agy would wait for them to close.
+	(
+		sleep 1
+		printf '%s\t%s\t%s\n' "$(date +%s)" "${BOSUN_WINDOW:-}" "$(screen | tr '\n' '~')" >>"$dir/after-pre-invocation.txt"
+	) </dev/null >/dev/null 2>&1 &
+fi
+exit "$code"
