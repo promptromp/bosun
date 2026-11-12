@@ -760,14 +760,17 @@ class RunHookTest(unittest.TestCase):
             "def fake(argv, env):\n"
             "    time.sleep(0.5)\n"
             "    try:\n"
-            "        os.fstat(3)\n"
-            "        open_3 = True\n"
+            "        os.fstat(pipe)\n"
+            "        still_open = True\n"
             "    except OSError:\n"
-            "        open_3 = False\n"
-            "    open(sys.argv[1], 'w').write(' '.join(argv) + ' fd3=' + str(open_3))\n"
+            "        still_open = False\n"
+            "    open(sys.argv[1], 'w').write(' '.join(argv) + ' pipe=' + str(still_open))\n"
             "    return 0\n"
             "hook.run = fake\n"
-            "assert os.open(os.devnull, os.O_RDONLY) == 3  # stands for the agent's pipe\n"
+            # Stands for the agent's pipe: descriptor 3 in bosun-hook, but whichever is free here (Python
+            # 3.14 and later may hold 3 already); the child closes every descriptor from 3 up.
+            "pipe = os.open(os.devnull, os.O_RDONLY)\n"
+            "assert pipe >= 3\n"
             "start = time.time()\n"
             "agy_state.run_hook(['x', 'y'], {})\n"
             "print('returned in', round(time.time() - start, 1))\n"
@@ -790,7 +793,7 @@ class RunHookTest(unittest.TestCase):
                 if marker.exists():
                     break
                 time.sleep(0.1)
-            self.assertEqual(marker.read_text(), "x y fd3=False")
+            self.assertEqual(marker.read_text(), "x y pipe=False")
 
 
 class SetupCase(unittest.TestCase):

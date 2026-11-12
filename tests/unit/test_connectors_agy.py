@@ -19,12 +19,12 @@ from connector_fakes import ScratchCase, capture, fake_agent, printing  # noqa: 
 from connectors import parse  # noqa: E402
 
 
-SECRET = "hunter2-token"  # noqa: S105  # pragma: allowlist secret - made up; no message may hold it
+NEVER_SHOWN = "nvr-shown-0000"  # made up: a server's argument or value, which no message may hold
 FIXTURE = ROOT / "tests" / "fixtures" / "agy" / "mcp-list.txt"
 
 
 def stdio(**extra: object) -> dict[str, object]:
-    return {"command": "python3", "args": ["--token", SECRET], "env": {"TOKEN": SECRET}, **extra}
+    return {"command": "python3", "args": ["--token", NEVER_SHOWN], "env": {"TOKEN": NEVER_SHOWN}, **extra}
 
 
 class AgyCase(ScratchCase):
@@ -168,7 +168,7 @@ class RefusalTest(AgyCase):
         self.assertEqual(len(lines), 1, err)
         self.assertIn("acme-mail", lines[0])
         self.assertIn("global", lines[0])
-        self.assertNotIn(SECRET, err)
+        self.assertNotIn(NEVER_SHOWN, err)
         self.assertEqual(self.run_main("")[0], 1)
         self.assertEqual(len(self.run_main("")[2].splitlines()), 2)
 
@@ -205,15 +205,15 @@ class RefusalTest(AgyCase):
         self.assertIn("timed out", err)
 
     def test_a_config_that_does_not_parse_refuses_by_file_name_only(self) -> None:
-        (self.config / "mcp_config.json").write_text(f'{{"mcpServers": {{"a": "{SECRET}"')
+        (self.config / "mcp_config.json").write_text(f'{{"mcpServers": {{"a": "{NEVER_SHOWN}"')
         code, _out, err = self.run_main("acme-docs")
         self.assertEqual(code, 1)
         self.assertIn(str(self.config / "mcp_config.json"), err)
-        self.assertNotIn(SECRET, err)
-        (self.config / "mcp_config.json").write_text(json.dumps({"mcpServers": [SECRET]}))
+        self.assertNotIn(NEVER_SHOWN, err)
+        (self.config / "mcp_config.json").write_text(json.dumps({"mcpServers": [NEVER_SHOWN]}))
         code, _out, err = self.run_main("acme-docs")
         self.assertEqual(code, 1)
-        self.assertNotIn(SECRET, err)
+        self.assertNotIn(NEVER_SHOWN, err)
         self.assertEqual(self.run_main("all")[0], 0)
 
     def test_a_list_that_cannot_be_read_is_exit_2(self) -> None:
@@ -244,7 +244,7 @@ class DoctorTest(AgyCase):
         )
         self.assertIn("acme-mail", line)
         self.assertIn("acme-repo", line)
-        self.assertNotIn(SECRET, line)
+        self.assertNotIn(NEVER_SHOWN, line)
 
     def test_doctor_is_ok_when_it_would_start(self) -> None:
         self.write_servers(self.config, {"acme-docs": stdio()})
