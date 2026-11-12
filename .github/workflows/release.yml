@@ -1,0 +1,70 @@
+# Cuts a release: a dated annotated tag on main (v<YYYY.MM.DD>, then .2, ...) and a GitHub release with
+# the same notes, which `bosun update` follows (docs/design/menu-bar.md, "Releases"). Weekly, and by hand.
+# It does nothing when main has no commit since the newest v* tag, or when a required check of main's
+# head (the names are read from .github/rulesets/main.json) is not green.
+name: Release
+
+on:
+  schedule:
+    - cron: "0 6 * * 1" # Monday, 06:00 UTC
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: main
+          fetch-depth: 0
+          persist-credentials: true # the tag is pushed with this token
+      - name: Is there something to release, and are main's checks green?
+        id: gate
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -eu
+          last=$(git tag --list 'v*' --sort=-creatordate | head -n 1)
+          head_sha=$(git rev-parse HEAD)
+          if [ -n "$last" ] && [ -z "$(git rev-list -n 1 "$last..HEAD")" ]; then
+            echo "No commit on main since $last."
+            echo "go=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          required=$(jq -r '.rules[] | select(.type == "required_status_checks") | .parameters.required_status_checks[].context' .github/rulesets/main.json)
+          runs=$(gh api --paginate "repos/$REPO/commits/$head_sha/check-runs?per_page=100" --jq '.check_runs[] | [.name, .status, (.conclusion // "")] | @tsv')
+          for name in $required; do
+            if ! printf '%s\n' "$runs" | grep -Fxq "$(printf '%s\tcompleted\tsuccess' "$name")"; then
+              echo "Required check '$name' is not green on $head_sha; not releasing."
+              echo "go=false" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+          done
+          {
+            echo "go=true"
+            echo "last=$last"
+          } >> "$GITHUB_OUTPUT"
+      - name: Tag and release
+        if: steps.gate.outputs.go == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          LAST: ${{ steps.gate.outputs.last }}
+        run: |
+          set -eu
+          git config user.name "github-actions[bot]"
+          git config user.email "41898274+github-actions[bot]@users.noreply.github.com"
+          tag=$(python3 tools/release.py next-tag)
+          range=HEAD
+          if [ -n "$LAST" ]; then range="$LAST..HEAD"; fi
+          python3 tools/release.py notes "$range" > "$RUNNER_TEMP/notes.md"
+          git tag -a "$tag" -F "$RUNNER_TEMP/notes.md"
+          git push origin "refs/tags/$tag"
+          gh release create "$tag" --verify-tag --title "$tag" --notes-file "$RUNNER_TEMP/notes.md"
