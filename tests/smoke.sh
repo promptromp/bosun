@@ -265,6 +265,10 @@ printf 'BOSUN_DRAIN_PROMPT=before\nif then fi\n' >"$WORK/broken-cfg/bosun.env"
 check "an agent's own hook exits 0 with nothing on stdout even when bosun.env does not parse" exits_0_saying_nothing env BOSUN_CONFIG_DIR="$WORK/broken-cfg" BOSUN_LOG_DIR="$WORK/broken-logs" "$BOSUN" hook agent --harness agy --event Stop
 check "... and says in the hook log that bosun.env did not parse" bash -c 'grep -qE "\[hook\] ERROR: bosun.env does not parse, so this hook ran on the defaults" "$1"/hook-*.log' _ "$WORK/broken-logs"
 check "any other hook still refuses a bosun.env that does not parse" fails_with "bosun.env does not parse" env BOSUN_CONFIG_DIR="$WORK/broken-cfg" BOSUN_LOG_DIR="$WORK/broken-logs" "$BOSUN" hook signal --window alpha
+printf 'BOSUN_DRAIN_PROMPT="$NOT_SET_UNDER_LAUNCHD"\n' >"$WORK/broken-cfg/bosun.env"
+check "an agent's own hook exits 0 with nothing on stdout when bosun.env stops before its end when read" exits_0_saying_nothing env BOSUN_CONFIG_DIR="$WORK/broken-cfg" BOSUN_LOG_DIR="$WORK/broken-logs" "$BOSUN" hook agent --harness agy --event Stop
+check "... and says so in the hook log" bash -c 'grep -qE "\[hook\] ERROR: bosun.env stops before its end when read, so this hook ran on the defaults: .*NOT_SET_UNDER_LAUNCHD" "$1"/hook-*.log' _ "$WORK/broken-logs"
+check "any other command refuses it, naming the variable" fails_with "bosun.env stops before its end when read, so none of it was read:" env BOSUN_CONFIG_DIR="$WORK/broken-cfg" "$BOSUN" status
 check "the signal hook records nothing when it is off" bash -c 'echo "{\"session_id\":\"s2\",\"hook_event_name\":\"Stop\"}" | BOSUN_HOOK_SIGNALS=0 "$1" hook signal --window alpha; ! grep -q s2 "$2"' _ "$BOSUN" "$BOSUN_STATE_DIR/signals/alpha.jsonl"
 out="$(cd "$REPO_B" && "$BOSUN" launch beta 2>&1)"
 check "refuses to resume a live session" contains "$out" "already running as pid $$"
