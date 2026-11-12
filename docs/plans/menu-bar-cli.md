@@ -324,15 +324,57 @@ commands gather facts and act, as the repo's other features do. Releases are git
 - Modify: `docs/commands.md`, `docs/setup.md` (releases, the app, quitting), `docs/watchdog.md`, `docs/design/update.md`
   (channels), `docs/design/console.md` (the job), `docs/design/menu-bar.md` (status), `README.md`, `ROADMAP.md`,
   `CLAUDE.md`
-- Modify: `tests/sandbox/mac.sh` and `tests/install_e2e.sh` (or a new `tests/quit_e2e.sh` copied by `copy_checkout`)
+- Modify: `tests/sandbox/mac.sh` and `tests/install_e2e.sh` (or a new `tests/quit_e2e.sh` copied by `copy_checkout`),
+  `tests/sandbox/e2e_lib.sh` (the fresh install runs on the default channel)
 
 - [ ] **Step 1: Docs** as listed (grep for `bosun update`, `bosun stop`, `bosun console`, "follows main").
 - [ ] **Step 2: A VM run** of the CLI side on a real Mac: `tests/sandbox.sh mac run` extended so the install also
   turns on `BOSUN_CONSOLE_ALWAYS=1`: the console job really runs and serves; `bosun quit --stop-now --pause-morning
   --sleep` leaves no tmux server, no caffeinate, no console process, and the watchdog's next kickstarted run logs that
   it skipped; `launchctl kickstart -k` of the morning job then starts nothing; `bosun morning --now` brings everything
-  back; `bosun update --check --json` against the bundle remote with a tag.
+  back; `bosun update --check --json` against the bundle remote with a tag. The fresh install runs on the default
+  `releases` channel (no `BOSUN_UPDATE_CHANNEL=main` export for it; the work run keeps `main`, which its conversion
+  writes anyway): the bundle remote carries a release tag, `get.sh` installs that release, the patch commit is tagged
+  as the next release, `bosun update --yes` moves to it, and the uninstall after it removes `bosun-versions` (nothing
+  of yours kept there).
 - [ ] **Step 3: Run** `uv run pre-commit run --all-files`, the smoke suite, `tests/sandbox.sh init` and `tests/sandbox.sh
   mac run`. Expected: all pass.
 - [ ] **Step 4: Commit** and open the pull request (the CLI side of bosun.app; behaviour for existing installs
   unchanged by the kept values; the VM run's results).
+
+### Task 11: A first install takes the newest release
+
+Runs right after Task 2 (ledger ruling 5); numbered last so the others keep their numbers.
+
+**Files:**
+
+- Modify: `get.sh`, `lib/init_plan.py` and `lib/init.py` (the channel a branch install follows), `docs/setup.md`,
+  `docs/design/init.md`, `docs/design/menu-bar.md` (Releases)
+- Test: a unit test for `get.sh`'s release pick (with `tests/unit/test_update_check.py`'s tag lists),
+  `tests/unit/test_init_plan.py`, `tests/smoke.sh` or `tests/sandbox.sh init` for the hand-over
+
+**Interfaces:**
+
+- Consumes: `lib/update_check.py`'s tag rule (`RELEASE_TAG`, `release_key`, `newest_release` over `git ls-remote --tags`
+  output, peeled `^{}` commits preferred).
+- Changes:
+  - A new install (no `BOSUN_BRANCH`): `get.sh` installs the newest release, found with `git ls-remote --tags <repo>
+    'v*'` by a POSIX sh function that follows the same rule. `get.sh` cannot import Python (it runs before preflight,
+    and a new Mac's `python3` may be older than bosun needs), so a unit test runs the sh function and
+    `update_check.newest_release` on the same ls-remote outputs (including `.0`/`.1` refused, `.10` above `.9`, peeled
+    commits, no release) and requires the same answer. A repo with no release yet: the head of `main`, and one line
+    saying so.
+  - `BOSUN_BRANCH` given on a new install: that branch's head as today, and the install follows that branch: `get.sh`
+    hands `BOSUN_UPDATE_CHANNEL=main` to `bosun init` (as it hands `BOSUN_USER_PATH`), which writes it to `bosun.env`
+    (an answer of `init`, per CLAUDE.md "An answer bosun init offers").
+  - A re-run on a link install hands over to the install's own `bosun update` (`--yes` when unattended), which moves
+    to what its channel says; `get.sh` no longer fetches a version for it, so it never moves an install off its
+    channel (nor a `main` install back to an older release). The dry run says "Then it would run: <link>/bin/bosun
+    update". A checkout from before versions converts as today (main's head; the conversion keeps `main`).
+
+- [ ] **Step 1: Tests**: the twin-rule test; `init`'s plan writes `BOSUN_UPDATE_CHANNEL="main"` when handed it; the
+  link re-run's dry run names `bosun update`; a new install's dry run names the release it would install.
+- [ ] **Step 2: Run them to see them fail.**  - [ ] **Step 3: Implement** (`get.sh` stays plain POSIX sh, functions
+  with `main` last).
+- [ ] **Step 4: Run** the unit tests, the smoke suite and `tests/sandbox.sh init`.  - [ ] **Step 5: Commit** ("A first
+  install takes the newest release, and a re-run hands over to bosun update").
