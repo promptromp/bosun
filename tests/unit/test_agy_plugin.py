@@ -446,7 +446,12 @@ class PreToolUseTest(HookCase):
         self.assertEqual(self.config_reads, [("origin", str(self.work))])
 
     def test_bosun_ledger_never_approves_a_proposal(self) -> None:
-        self.assert_no_answer("bosun ledger approve x --quote e", "bosun ledger approve")
+        self.assert_no_answer(
+            "bosun ledger approve x --quote e",
+            "bosun ledger approve",
+            "bosun ledger -- approve x --quote e",
+            "bosun ledger list --",
+        )
         self.assert_approved("bosun ledger list", "bosun ledger show x", "bosun ledger note x approve")
 
     def test_global_options_before_the_subcommand_get_no_answer(self) -> None:

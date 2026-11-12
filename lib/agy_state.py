@@ -934,9 +934,10 @@ BOSUN: dict[str, BosunRule] = {
 
 def bosun_allows(words: list[str], _cwd: str) -> bool:
     """Whether `bosun <words>` is an allowed command, first, with neither a refused subcommand second nor a
-    refused option anywhere."""
+    refused option anywhere. No `--` either: bosun's commands need none, and after one argparse still reads
+    the next word as the subcommand, so `ledger -- approve` would get past the second-word check."""
     rule = BOSUN.get(words[0])
-    if rule is None or any(second in rule.seconds for second in words[1:2]):
+    if rule is None or "--" in words or any(second in rule.seconds for second in words[1:2]):
         return False
     return not any(word.partition("=")[0] in rule.words for word in words[1:])
 
