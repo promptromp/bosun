@@ -52,7 +52,8 @@ set_agy_git_environment() {
   local pair i=0
   if [ -z "${agy_git_config_base+x}" ]; then
     agy_git_config_base="${GIT_CONFIG_COUNT:-0}"
-    case "$agy_git_config_base" in '' | *[!0-9]*) agy_git_config_base=0 ;; esac
+    # Only 0, or a number with no leading zero ($((...)) would read 08 as octal): git refuses any other.
+    case "$agy_git_config_base" in '' | *[!0-9]* | 0?*) agy_git_config_base=0 ;; esac
   fi
   for pair in \
     safe.bareRepository=explicit \
@@ -138,12 +139,12 @@ first_prompt() { # <window> <prompt given, or empty>
 # relaunch is never taken for the run before it. The status is written only here, never while the arguments
 # are built, which `--fingerprint` and the window list do for a window that keeps running.
 note_agy_launch() {
-  local name version i key
+  local var version i key
   if [ "$BOSUN_LAUNCH_DRY_RUN" = "1" ]; then
     printf 'dry-run: would set:'
-    for name in BOSUN_WINDOW BOSUN_CONVERSATION BOSUN_HOOK_CMD BOSUN_RESUMED AGY_CLI_DISABLE_AUTO_UPDATE \
+    for var in BOSUN_WINDOW BOSUN_CONVERSATION BOSUN_HOOK_CMD BOSUN_RESUMED AGY_CLI_DISABLE_AUTO_UPDATE \
       GIT_EDITOR GIT_PAGER GH_EDITOR GH_PAGER GH_PROMPT_DISABLED GIT_CONFIG_COUNT; do
-      [ -n "${!name+x}" ] && printf ' %s=%q' "$name" "${!name}"
+      [ -n "${!var+x}" ] && printf ' %s=%q' "$var" "${!var}"
     done
     for ((i = agy_git_config_base; i < GIT_CONFIG_COUNT; i++)); do
       for key in GIT_CONFIG_KEY_$i GIT_CONFIG_VALUE_$i; do printf ' %s=%q' "$key" "${!key}"; done

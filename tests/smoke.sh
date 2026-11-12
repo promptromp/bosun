@@ -3004,7 +3004,9 @@ FAKE
   mkdir -p "$CONV_DIR"
   : >"$CONV_DIR/conv-1.db"
   jq -n --arg cwd "$(cd "$AGY_REPO" && pwd -P)" '{agyw: {id: "conv-1", cwd: $cwd}}' >"$BOSUN_STATE_DIR/agy-sessions.json"
-  check "a resume prints --conversation <id>" bash -c 'grep -qF -- "--conversation conv-1" <<<"$1"' _ "$(AGYD launch agyw)"
+  out="$(AGYD launch agyw)"
+  check "a resume prints --conversation <id>" bash -c 'grep -qF -- "--conversation conv-1" <<<"$1"' _ "$out"
+  check "... and says in its environment which conversation it asked for" contains "$out" "BOSUN_RESUMED=conv-1"
   rm -f "$WORK/agy-run.args" "$WORK/agy-run.env"
   BOSUN_LAUNCH_DRY_RUN=0 AGY_STAND_IN_RECORD="$WORK/agy-run" AGY launch agyw 'carry on' >/dev/null
   check "a real resume names the conversation before the prompt" bash -c '
@@ -3029,6 +3031,11 @@ FAKE
   printf '#!/bin/sh\nexit 1\n' >"$WORK/failing-agy"
   chmod +x "$WORK/failing-agy"
   check "a listing that fails keeps it from starting too" fails_with "does not start" env BOSUN_AGY_BIN="$WORK/failing-agy" BOSUN_SESSIONS_FILE="$WORK/agy-sessions.yml" BOSUN_LAUNCH_DRY_RUN=1 BOSUN_EVENTS_ENABLED=0 bash -c 'cd "$1" && "$2" launch agyw' _ "$AGY_REPO" "$BOSUN"
+  check "an agy that is not installed is said so, not left to the connectors check" fails_with "its agent, /nonexistent/agy, is not installed for this window's shell" env BOSUN_AGY_BIN=/nonexistent/agy BOSUN_SESSIONS_FILE="$WORK/agy-sessions.yml" BOSUN_LAUNCH_DRY_RUN=0 BOSUN_EVENTS_ENABLED=0 bash -c 'cd "$1" && "$2" launch agyw' _ "$AGY_REPO" "$BOSUN"
+  check "... and so is a Codex that is not installed, which is asked for its servers too" fails_with "its agent, /nonexistent/codex, is not installed for this window's shell" env BOSUN_CODEX_BIN=/nonexistent/codex CODEX_HOME="$CX_HOME" BOSUN_SESSIONS_FILE="$WORK/cx-sessions.yml" BOSUN_LAUNCH_DRY_RUN=0 BOSUN_EVENTS_ENABLED=0 bash -c 'cd "$1" && "$2" launch cx' _ "$CX_REPO" "$BOSUN"
+  rm -f "$WORK/agy-run.args" "$WORK/agy-run.env"
+  BOSUN_LAUNCH_DRY_RUN=0 GIT_CONFIG_COUNT=08 AGY_STAND_IN_RECORD="$WORK/agy-run" AGY launch agyw >/dev/null
+  check "a GIT_CONFIG_COUNT that git would refuse (08, read as octal by the shell) counts as none" test "$(agy_env GIT_CONFIG_COUNT)" = 9
   check "a window on an agent that does not exist lists the ones that do" fails_with "no agent 'acme-agent': bosun knows claude, codex, agy" bash -c 'cd "$1" && BOSUN_LAUNCH_DRY_RUN=1 "$2" launch --harness acme-agent agyw' _ "$AGY_REPO" "$BOSUN"
   check "preflight checks agy, which it names" contains "$(BOSUN_SESSIONS_FILE="$WORK/agy-sessions.yml" BOSUN_AGY_BIN="$WORK/fake-agy" "$BOSUN" preflight 2>&1)" "Antigravity"
   out="$(BOSUN_SESSIONS_FILE="$WORK/agy-sessions.yml" BOSUN_AGY_BIN="$WORK/fake-agy" BOSUN_CONFIG_DIR="$SETUP_CFG" BOSUN_NETWORK_PROBE_URL=file:///dev/null "$BOSUN" morning --dry-run --awake-minutes 5 2>&1)"
