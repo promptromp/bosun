@@ -114,10 +114,10 @@ build() {
   echo "zip $out/bosun-app-$version.zip"
 }
 
-# zip_only <bundle> <out> <version>: <bundle> zipped as the build zips it.
+# zip_only <bundle> <out> <version>: <bundle> zipped as the build zips it. A zip of that version already in <out>
+# is replaced by the move, and is still there if the zipping fails.
 zip_only() {
   local bundle="$1" out="$2" version="$3"
-  [ -d "$bundle" ] && [ "$(basename "$bundle")" = bosun.app ] || die "--zip needs a bosun.app folder, not $bundle"
   make_zip "$bundle" "$STAGING/bosun-app-$version.zip"
   mv "$STAGING/bosun-app-$version.zip" "$out/bosun-app-$version.zip" || die "cannot move the zip into $out"
   echo "zip $out/bosun-app-$version.zip"
@@ -139,6 +139,9 @@ parse_arguments() {
     esac
   done
   [ -z "$zip_bundle" ] || [ -z "$identity" ] || die_usage "--zip does not sign: --identity is for a build"
+  # Before anything is made or removed: a wrong argument leaves --out as it was
+  [ -z "$zip_bundle" ] || { [ -d "$zip_bundle" ] && [ "$(basename "$zip_bundle")" = bosun.app ]; } ||
+    die "--zip needs a bosun.app folder, not $zip_bundle"
 }
 
 main() {
@@ -150,7 +153,6 @@ main() {
   trap cleanup EXIT
   STAGING="$(mktemp -d "$out/.bosun-build.XXXXXX")" || die "cannot make a folder in $out"
   if [ -n "$zip_bundle" ]; then
-    rm -f "$out/bosun-app-$version.zip"
     zip_only "$zip_bundle" "$out" "$version"
     return
   fi

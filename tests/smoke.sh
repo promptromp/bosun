@@ -3236,7 +3236,7 @@ EOF
         echo none
         return
       }
-      (cd "$APP_DIR" && find . | sort && find . -type f -exec cksum {} + | sort) | cksum
+      (cd "$APP_DIR" && find . | LC_ALL=C sort && find . -type f -exec cksum {} + | LC_ALL=C sort) | cksum
     }
     # app_release <version> <a Team ID, adhoc or unsigned> <notarized: yes or no> <bundle id> [<extra>]: the zip the
     # release holds ($APP_ZIP): bosun.app, signed as the stand-ins read it, and <extra> beside it (a second app, or
@@ -3341,10 +3341,11 @@ sys.exit(not (all(n.startswith("bosun.app/") for n in names) and all(f"bosun.app
       check "... and an Info.plist with app/VERSION and app/publisher.json's bundle id" plist_is "$contents/Info.plist" "$APP_ID" "$version"
       check "... and is zipped as bosun-app-<version>.zip, the one bosun.app" zip_holds "$out/bosun-app-$version.zip" Contents/MacOS/bosun Contents/Info.plist
       check "... the build and --zip zip the same way (one function, the same flags)" bash -c '[ "$(grep -c "^ditto -c -k --keepParent --norsrc --noextattr --noqtn " "$1")" -ge 1 ]' _ "$APP_LOG"
-      check "... and nothing else is left in --out: no staging folder" test "$(find "$out" -mindepth 1 -maxdepth 1 | sort | sed 's|.*/||' | tr '\n' ' ')" = "bosun-app-$version.zip bosun.app "
+      check "... and nothing else is left in --out: no staging folder" test "$(find "$out" -mindepth 1 -maxdepth 1 | LC_ALL=C sort | sed 's|.*/||' | tr '\n' ' ')" = "bosun-app-$version.zip bosun.app "
       check "app/build.sh --zip zips a bundle again, as the build does, into --out" bash -c '"$1" --zip "$2/bosun.app" --out "$3" >/dev/null && grep -qE "^ditto -c -k --keepParent --norsrc --noextattr --noqtn $2/bosun\.app $3/\.bosun-build\.[^/]*/bosun-app-$4\.zip$" "$5"' _ "$APP_CHECKOUT/app/build.sh" "$out" "$WORK/app-rezip" "$version" "$APP_LOG"
       check "... which holds the one bosun.app" zip_holds "$WORK/app-rezip/bosun-app-$version.zip" Contents/MacOS/bosun
       check "... and refuses what is not a bosun.app, and a --zip with an --identity" bash -c '! "$1" --zip "$2" >/dev/null 2>&1 && "$1" --zip "$2/bosun.app" --identity - >/dev/null 2>&1; [ $? = 2 ]' _ "$APP_CHECKOUT/app/build.sh" "$out"
+      check "... a refused --zip first leaves the zip already in --out as it was, and makes no staging folder" bash -c '! "$1" --zip "$2" --out "$2" >/dev/null 2>&1 && [ -f "$2/bosun-app-$3.zip" ] && [ "$(find "$2" -mindepth 1 -maxdepth 1 | wc -l | tr -d " ")" = 2 ]' _ "$APP_CHECKOUT/app/build.sh" "$out" "$version"
       touch "$HOME/.sandbox/swift-fails"
       check "a failed app/build.sh removes the bundle and the zip of an earlier build, and leaves no unsigned bundle or staging folder" bash -c '
         ! "$1" --out "$2" >/dev/null 2>&1 && [ -z "$(ls -A "$2")" ]' _ "$APP_CHECKOUT/app/build.sh" "$out"
