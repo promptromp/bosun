@@ -752,6 +752,8 @@ check "harness_bin of an agent with no profile exits 1 and prints nothing" bash 
 check "... as does harness_default_model" bash -c 'source "$1/lib/common.sh"; load_config; out="$(harness_default_model acme-agent 2>&1)" && exit 1; [ -z "$out" ]' _ "$ROOT"
 check "known_harnesses lists the agents in the order of AGENTS" test "$(fn known_harnesses)" = "claude codex agy"
 check "profile_field reads a column by its name" test "$(fn profile_field codex flags_key)" = BOSUN_CODEX_FLAGS
+check "find_window finds an early match in a long listing, exit 0 under pipefail" bash -c 'set -o pipefail; source "$1/lib/common.sh"; tmux_cmd() { printf "w1\t42 @1\n"; awk "BEGIN { for (i = 0; i < 300000; i++) print \"x\t1 @2\" }"; }; out="$(find_window w1)"; rc=$?; [ "$out" = "42 @1" ] && [ "$rc" = 0 ]' _ "$ROOT"
+check "window_harness finds an early match in a long window list, as it does under pipefail" bash -c 'set -o pipefail; source "$1/lib/common.sh"; load_config; window_specs() { printf "w1\t\t\t\t\tcodex\n"; awk "BEGIN { for (i = 0; i < 300000; i++) print \"x\" }"; }; out="$(window_harness w1)"; rc=$?; [ "$out" = codex ] && [ "$rc" = 0 ]' _ "$ROOT"
 mkdir -p "$WORK/broken-python"
 printf '#!/bin/sh\necho "python is broken" >&2\nexit 1\n' >"$WORK/broken-python/python3"
 chmod +x "$WORK/broken-python/python3"

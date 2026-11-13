@@ -67,7 +67,10 @@ jobs:
           BASE: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha }}
           HEAD: ${{ github.event.pull_request.head.sha || github.event.merge_group.head_sha }}
         run: |
+          # An empty range must fail, not pass by checking nothing.
+          : "${BASE:?no base commit for this event}" "${HEAD:?no head commit for this event}"
           { printf '%s\n\n%s\n\n' "$TITLE" "$BODY"; git log --format=%B "$BASE..$HEAD"; } >"$RUNNER_TEMP/messages.txt"
+          grep -q '[^[:space:]]' "$RUNNER_TEMP/messages.txt" || { echo "no commit messages to check" >&2; exit 1; }
           uv run python tools/forbidden_terms.py --contents-only "$RUNNER_TEMP/messages.txt"
 
   test:

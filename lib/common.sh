@@ -1535,7 +1535,7 @@ shift_time() {
 # (tmux target lookups fall back to the current window for unknown names, so match by hand.)
 find_window() {
   tmux_cmd list-windows -t "=$BOSUN_SESSION_NAME" -F '#{window_name}	#{pane_pid} #{window_id}' 2>/dev/null |
-    awk -F'\t' -v name="$1" '$1 == name { print $2; found = 1; exit } END { exit !found }'
+    awk -F'\t' -v name="$1" '$1 == name && !found { print $2; found = 1 } END { exit !found }'
 }
 
 # With events on, tell <window>'s prompt hook that <text> is bosun's, not yours, so it is not
