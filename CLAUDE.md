@@ -422,8 +422,12 @@ and CI agree on versions. On commit (`.pre-commit-config.yaml`; run all with `uv
   detect-secrets audit .secrets.baseline`), and `tools/forbidden_terms.py` on staged files and
   commit messages (see Publishing below).
 - The unit tests the change can reach, in parallel (`pytest -n auto --impacted`, pytest-impacted
-  and pytest-xdist): the change is what git has uncommitted, so `pre-commit run --all-files` selects
-  the same. Before a push, the smoke suite (end to end only; skipped if this exact tree passed it here
+  and pytest-xdist; `--dist=worksteal` is in `pyproject.toml`'s `addopts`, so an idle worker takes
+  queued tests from a busy one): the change is what git has uncommitted, so `pre-commit run --all-files`
+  selects the same. A change to a module that many others import (`ledger.py`, but also small ones such
+  as `similar.py` or `screen_text.py`) reaches most of the suite through the import graph, so such a
+  commit pays nearly the full run (about a minute); that is the selection being right, not loose, and a
+  docs edit pays about ten seconds. Before a push, the smoke suite (end to end only; skipped if this exact tree passed it here
   in the last 24 hours); in CI, every unit test (its smoke job, when it is on, always runs the whole suite).
 
 Which tests a change reaches: the plugin follows Python imports from `lib/` (an import root, as
@@ -449,7 +453,10 @@ of the merge queue (`merge_group`: without it the queue waits forever for checks
 (`lint`; the forbidden-terms list comes from the `FORBIDDEN_TERMS` Actions secret, and the pull
 request's title, description and commit messages are checked too; for a merge group only the commit
 messages between its `base_sha` and `head_sha`), every unit test in parallel on
-Python 3.13 to 3.15 with a floor under coverage (`test (<version>)`, never `--impacted`), every unit
+Python 3.13 and 3.14 (the floor is `requires-python`; 3.15 comes back once it is released and the suite
+is fast) with a floor under coverage, measured through `sys.monitoring` (`COVERAGE_CORE=sysmon`: coverage's
+default on 3.13 is `sys.settrace`, which made every test about a quarter slower; the same lines are reported)
+(`test (<version>)`, never `--impacted`), every unit
 test again on macOS and then the end-to-end smoke suite (`smoke`, which is off until the
 feature-complete MVP: its job-level `if` in `ci.yml` wants the repository variable `CI_SMOKE` set
 to `true`, and it is not a required check in `.github/rulesets/main.json`; to turn it back on,

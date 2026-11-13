@@ -79,7 +79,9 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        python-version: ["3.13", "3.14", "3.15"]
+        # 3.13 is the floor (pyproject's requires-python). 3.15 comes back once it is released and
+        # the suite is fast.
+        python-version: ["3.13", "3.14"]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -90,8 +92,13 @@ jobs:
       - run: uv sync --locked
       # Every unit test, in parallel, never only those a change reaches (the commit hook's
       # --impacted). Coverage here only: it would slow the commit hook, and a floor is about the
-      # long run.
+      # long run. COVERAGE_CORE=sysmon: coverage.py measures through sys.monitoring (Python 3.12 and
+      # newer), as it already does by default on 3.14, instead of 3.13's sys.settrace, which made
+      # every test about a quarter slower and 3.13 the slowest job; it reports the same lines
+      # (95.65 percent against 95.66).
       - run: uv run pytest -n auto --cov=lib --cov=tools --cov-fail-under=94 --cov-report=term:skip-covered
+        env:
+          COVERAGE_CORE: sysmon
 
   # On macOS like the machines bosun runs on (the scripts use BSD date and /bin/bash 3.2): every
   # unit test once, in parallel, then the end-to-end suite, which leaves the unit tests to the first

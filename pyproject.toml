@@ -38,6 +38,10 @@ default-groups = ["dev", "docs"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests/unit"]
+# With -n: an idle worker takes tests from a busy one's queue (the default hands each worker its next
+# tests up front, so one that drew several slow ones, the ten-second corpus replay or a few uninstall
+# runs, finished long after the rest). Measured 4-5% faster on 4 workers, the same as loadfile.
+addopts = ["--dist=worksteal"]
 pythonpath = ["lib"]
 # pytest-impacted: the commit hook runs only the tests a change can reach (`pytest --impacted`, in
 # .pre-commit-config.yaml); CI and `tests/smoke.sh --with-unit` run them all. Its import analysis
