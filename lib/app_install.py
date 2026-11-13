@@ -68,6 +68,7 @@ CURL = (
     "-w",
     "%{http_code}",
 )
+INTERRUPTED = 130  # the exit status of a command ended by Ctrl-C
 HTTP_ERROR = 22  # curl -f: the server answered with an error, such as 404
 NOT_FOUND = "404"
 CODESIGN_UNSATISFIED = 3  # codesign --verify: the code does not meet the requirement given with -R
@@ -363,11 +364,10 @@ def raising_on_signals() -> Iterator[None]:
     the handlers there before are put back after."""
 
     def end(signum: int, _frame: FrameType | None) -> None:
-        raise Interrupted(
-            f"ended by {signal.Signals(signum).name}: the old {BUNDLE} was put back, if it was moved"
-        )
+        raise Interrupted(f"ended by {signal.Signals(signum).name}")
 
-    wanted = (signal.SIGTERM, signal.SIGHUP)
+    # A signal that was ignored (a hangup under nohup) stays ignored: it was not asked to end anything.
+    wanted = [n for n in (signal.SIGTERM, signal.SIGHUP) if signal.getsignal(n) != signal.SIG_IGN]
     before = {number: signal.signal(number, end) for number in wanted}
     try:
         yield
@@ -378,7 +378,8 @@ def raising_on_signals() -> Iterator[None]:
 
 def put_in_place(staged: Path, dest: Path, scratch: Path) -> None:
     """<staged> renamed to <dest>; the app there before is renamed into <scratch> first (which goes with it
-    when the install ends), and put back if the rename in fails or the install is ended in between."""
+    when the install ends), and put back if the rename in fails or the install is ended in between. An end
+    this does not catch (Ctrl-C, a second signal while it puts the old app back) is place_app's clean_up."""
     aside = scratch / "previous" / BUNDLE
     try:
         if os.path.lexists(dest):
@@ -391,6 +392,27 @@ def put_in_place(staged: Path, dest: Path, scratch: Path) -> None:
         if isinstance(error, Interrupted):
             raise
         raise AppError(f"could not put {BUNDLE} in {dest.parent}: {error}") from error
+
+
+def clean_up(scratch: Path, app: Path) -> None:
+    """<scratch> removed, but never the old app in it: when it is still at previous/bosun.app and none is at
+    <app> (the install ended between the two renames, in a way put_in_place did not catch), it is put back
+    first, and when that fails the folder stays and Stuck says where the old app is."""
+    old = scratch / "previous" / BUNDLE
+    if old.is_dir() and not os.path.lexists(app):
+        _restore(old, app)
+    shutil.rmtree(scratch, ignore_errors=True)
+
+
+def what_is_there(app: Path) -> str:
+    version = app_release.bundle_version(app)
+    if version:
+        return f"{BUNDLE} {version} is in ~/Applications"
+    return (
+        f"{BUNDLE} is in ~/Applications, and cannot be read"
+        if os.path.lexists(app)
+        else f"no {BUNDLE} is in ~/Applications"
+    )
 
 
 def remove_if_empty(folder: Path) -> None:
@@ -412,12 +434,14 @@ def make_scratch(apps: Path) -> tuple[Path, bool]:
 
 
 def stage_and_place(
-    setup: Setup, publisher: Publisher, produce: Callable[[Path], Path], scratch: Path
+    setup: Setup, publisher: Publisher, produce: Callable[[Path], Path], scratch: Path, *, development: bool
 ) -> bool:
-    """The app <produce> makes in <scratch>, checked (unless the publisher's team is None: a build) and put in
-    place, the running app having been asked to quit once it is verified. Whether it was running."""
+    """The app <produce> makes in <scratch>, verified and put in place, the running app having been asked
+    to quit once it is verified. Whether it was running. Only <development> (a build of the app, ad hoc
+    signed) is not verified: never inferred from the publisher's team_id, and `verify` refuses a missing or
+    invalid one."""
     staged = produce(scratch)
-    if publisher.team_id:
+    if not development:
         reason = verify(staged, publisher, setup.run)
         if reason:
             raise AppError(f"refused {BUNDLE}: {reason}")
@@ -433,27 +457,35 @@ def stage_and_place(
     return reopen
 
 
-def place_app(setup: Setup, publisher: Publisher, produce: Callable[[Path], Path]) -> str:
-    """The app <produce> makes in a scratch folder, checked against <publisher> (a publisher with no team_id:
-    not checked) and placed. Leftovers of an install that was killed are swept first. The scratch folder is
-    removed whatever happens but one case (the old app could not be put back: then it is kept, and the message
-    says where the old app is); a ~/Applications this made is removed too, unless the install worked."""
+def place_app(
+    setup: Setup, publisher: Publisher, produce: Callable[[Path], Path], *, development: bool
+) -> str:
+    """The app <produce> makes in a scratch folder, verified against <publisher> (unless <development>) and
+    placed. Leftovers of an install that was killed are swept first. The scratch folder is removed whatever
+    happens, but never with the old app in it while none is in place: it is given back first, and when that
+    cannot be done the folder is kept and the message says where the old app is. A ~/Applications this made
+    is removed too, unless the install worked."""
     sweep_stale(setup)
     ensure_ours(setup.app, publisher.bundle_id, "replace")
     scratch, created = make_scratch(setup.apps)
     reopen = placed = keep = False
+    ended: Interrupted | None = None
     try:
         with raising_on_signals():
-            reopen = stage_and_place(setup, publisher, produce, scratch)
+            reopen = stage_and_place(setup, publisher, produce, scratch, development=development)
         placed = True
     except Stuck:
         keep = True
         raise
+    except Interrupted as error:
+        ended = error
     finally:
         if not keep:
-            shutil.rmtree(scratch, ignore_errors=True)
+            clean_up(scratch, setup.app)
         if created and not placed:
             remove_if_empty(setup.apps)
+    if ended is not None:
+        raise Interrupted(f"{ended}; {what_is_there(setup.app)}") from None
     shown = " ".join(filter(None, [BUNDLE, app_release.bundle_version(setup.app)]))
     if reopen:
         opened = setup.run(["open", str(setup.app)])
@@ -472,12 +504,13 @@ def install(setup: Setup, *, build: bool = False) -> str:
     if build:
         if not (setup.root / "app" / "build.sh").is_file():
             raise AppError(app_release.NO_BUILD)
-        unchecked = Publisher(publisher.bundle_id, "", publisher.releases)
-        return place_app(setup, unchecked, lambda scratch: build_app(setup, scratch))
+        return place_app(setup, publisher, lambda scratch: build_app(setup, scratch), development=True)
     app_release.require_team(publisher)
     version = app_release.wanted_version(setup.root)
     slug = app_release.releases_slug(setup.releases, publisher, lambda: install_origin(setup.root))
-    return place_app(setup, publisher, lambda scratch: fetch_app(setup, slug, version, scratch))
+    return place_app(
+        setup, publisher, lambda scratch: fetch_app(setup, slug, version, scratch), development=False
+    )
 
 
 def update(setup: Setup) -> str:
@@ -550,6 +583,9 @@ def main(
     except (AppError, OSError) as error:  # one line, never a traceback
         print(f"bosun app: {error}", file=sys.stderr)
         return 1
+    except KeyboardInterrupt:  # what it had done is undone (place_app's clean_up) before it gets here
+        print("bosun app: interrupted", file=sys.stderr)
+        return INTERRUPTED
     if message:
         print(message)
     return 0
