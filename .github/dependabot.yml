@@ -1,7 +1,7 @@
 # Monthly dependency-update pull requests against main, one per ecosystem with all its updates:
 # the GitHub Actions the workflows use, the dev tools pinned in uv.lock and the hook revisions in
 # .pre-commit-config.yaml. Security updates come as soon as an advisory is published, outside this
-# schedule. Every pull request runs the full CI, macOS smoke suite included, hence monthly and
+# schedule. Every pull request runs the full CI (the macOS smoke suite once it is back on), hence monthly and
 # grouped.
 version: 2
 updates:

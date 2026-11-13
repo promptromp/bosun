@@ -367,7 +367,11 @@ CI (`.github/workflows/ci.yml`) runs the same on every pull request to `main`: a
 (`lint`; the forbidden-terms list comes from the `FORBIDDEN_TERMS` Actions secret, and the pull
 request's title, description and commit messages are checked too), every unit test in parallel on
 Python 3.13 to 3.15 with a floor under coverage (`test (<version>)`, never `--impacted`), every unit
-test again on macOS and then the end-to-end smoke suite (`smoke`), and
+test again on macOS and then the end-to-end smoke suite (`smoke`, which is off until the
+feature-complete MVP: its job-level `if` in `ci.yml` wants the repository variable `CI_SMOKE` set
+to `true`, and it is not a required check in `.github/rulesets/main.json`; to turn it back on,
+remove that `if` (or set the variable), re-add `smoke` to the ruleset's required checks and apply
+it; the pre-push hook still runs the suite), and
 gitleaks over the pull request's commits (`gitleaks`; a made-up value in a test carries a
 `gitleaks:allow` comment). `.github/workflows/install.yml` runs the install for real on a clean macOS
 runner and the Docker sandbox, when the install could have changed and weekly; those are not required
