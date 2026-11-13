@@ -15,7 +15,14 @@ limits and conventions.
 On GitHub, every pull request to `main` runs the same checks (`.github/workflows/ci.yml`), the
 a gitleaks scan of the new commits (the smoke suite on macOS is off in CI until the feature-complete
 MVP; the pre-push hook still runs it), and `main` only takes pull requests
-that pass them. CI runs every unit test on Linux (on macOS too once the smoke job is back), and keeps a floor under their
+that pass them, through GitHub's merge queue: once a pull request's checks pass, `gh pr merge --squash`
+(or the Merge button) adds it to the queue, which builds it on top of the latest `main` and the pull
+requests ahead of it, runs the same checks again on that commit (CI listens for `merge_group` as well
+as `pull_request`) and merges it when they pass, so nobody updates a branch by hand. Dependabot's patch
+and minor updates of the GitHub Actions, the sandbox's Docker base image, the pre-commit hooks and the
+uv development dependencies get auto-merge turned on by `.github/workflows/dependabot-auto-merge.yml`,
+which only adds them to the queue once their checks pass; majors and production dependencies wait for
+a person. CI runs every unit test on Linux (on macOS too once the smoke job is back), and keeps a floor under their
 coverage. For the forbidden-terms check to run there too, store your list as the
 `FORBIDDEN_TERMS` Actions secret with `gh secret set FORBIDDEN_TERMS <
 ~/.config/bosun/forbidden-terms.txt`; the logs never print what it matched.
