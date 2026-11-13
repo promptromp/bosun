@@ -62,13 +62,13 @@ app_build_for_real() {
   # The first run of app/build.sh on this Mac, here, right after the assessments were turned on, exits 1 before any
   # line of the script has run or said anything (`--bogus`, which only prints its usage, did the same), whichever
   # copy of the script that first run is; every run after it, of that copy or another, ran as it should. Measured
-  # in a clone, in seven runs of this suite, in which the order of three copies was changed: a trivial script
+  # in a clone, in about ten runs of this suite, in which the order of three copies was changed: a trivial script
   # run first, /bin/bash, python3 and the first run of a script that has other content are not what fails. The
   # script says nothing in that run, not even its ERR trap's line, so the cause is not one of its commands (it
   # is probably Gatekeeper's first look at it: the assessments were just turned on above): one run that is
-  # allowed to fail comes first.
+  # allowed to fail comes first, and the log says how it ended (2, its usage, or 1 when the first run failed).
   bash -c 'cp -R "$1/app" "$2/app-copy" && rm -rf "$2/app-copy/.build" "$2/app-copy/dist" &&
-    { "$2/app-copy/build.sh" --bogus >/dev/null 2>&1; true; }' _ "$DIR" "$work"
+    { "$2/app-copy/build.sh" --bogus >/dev/null 2>&1; echo "  note  the warm-up run of app/build.sh --bogus exited $?"; }' _ "$DIR" "$work"
   check "app/build.sh builds the app for real, ad hoc, for arm64" bash -c '
     "$2/app-copy/build.sh" --identity - --out "$2/built" >"$2/build.log" 2>&1 || {
       echo "app/build.sh exited $?"

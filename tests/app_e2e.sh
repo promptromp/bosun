@@ -181,6 +181,10 @@ step_1() {
 # ---- 2. a problem: yellow, "Show What's Wrong…" lists it; and back --------------------------------------------
 
 an_error_line() { printf '%s [checkin] ERROR: the app suite made this up\n' "$(date '+%Y-%m-%d %H:%M:%S')"; }
+no_start_logged() { ! log_has "$1" '.command == ["morning", "--now", "--background"]'; } # <lines to skip>
+red_with_problems_and_no_start() {
+  menu_says '.level == "error" and .header.dot == "red" and ([.sections[][] | .id] | (index("showProblems") != null and index("startBosun") == null))'
+}
 
 step_2() {
   local log="$STATE/logs/checkin.log" mark plist="$HOME/Library/LaunchAgents/$LABEL.watchdog.plist"
@@ -195,6 +199,22 @@ step_2() {
   reply OK
   check "choosing it opens the dialog, and OK closes it (both actions taken)" wait_for 30 actions_taken
   check "... with no error of the app's in its log" log_has_no_errors "$mark"
+
+  # bosun runs, with an error: with the watchdog booted out nothing marks the line as seen, so its log-errors check
+  # has a finding (severity error) while the windows are open, for as long as this lasts
+  an_error_line >>"$log"
+  check "an ERROR line the watchdog cannot see: bosun status says it runs, with an error" wait_for 60 bash -c '"$1" status --json | jq -e ".level == \"error\" and .running == true"' _ "$BOSUN"
+  check "... the menu is red, with Show What's Wrong… and no Start bosun (bosun runs)" wait_for "$WAIT_POLL" red_with_problems_and_no_start
+  kill "$(app_pids | head -1)" # only the app: bosun is not its child, and runs on
+  check "the app ended (bosun runs on)" wait_for 30 app_gone
+  mark="$(log_count)"
+  launch_app
+  check "opened again while bosun runs with an error, the app shows the red menu, with no Start" wait_for 60 red_with_problems_and_no_start
+  sleep 10 # a dwell, on purpose: a start at launch is decided on the first status, which the menu above shows
+  check "... and starts nothing: no morning --now --background since it opened" no_start_logged "$mark"
+  sed -i '' '/the app suite made this up/d' "$log"
+  check "the line removed, the menu is yellow again (the watchdog is still booted out)" wait_for "$WAIT_POLL" menu_says '.level == "warning" and .header.dot == "yellow"'
+
   launchctl bootstrap "$DOMAIN" "$plist"
   check "the job loaded again, the menu is green again" wait_for "$WAIT_POLL" menu_green_with_windows
   check "... and Show What's Wrong is gone from it" bash -c '! jq -e "[.sections[][] | .id] | any(. == \"showProblems\")" "$1"' _ "$HOOKS/menu.json"
@@ -306,7 +326,7 @@ step_6() {
   reply "Let Them Finish"
   reply "Stop It Now"
   check "Quit, Quit bosun, the busy dialog's Let Them Finish, the still-busy dialog's Stop It Now (all four taken)" wait_for 180 actions_taken
-  check "... the quit that let them finish waited 0 minutes, found acme-api busy, and the app asked again" wait_for 120 log_has "$mark" '.command[0:2] == ["quit", "--let-finish=0"] and .outcome != null'
+  check "... the quit that let them finish waited 0 minutes, found acme-api busy (exit 3), and the app asked again" wait_for 120 log_has "$mark" '.command[0:2] == ["quit", "--let-finish=0"] and .outcome == "exited 3"'
   check "... then stopped them now" wait_for 120 log_has "$mark" '.command[0:2] == ["quit", "--stop-now"] and (.command | index("--pause-morning") != null) and .outcome == "exited 0"'
   check "... the app is gone" wait_for 60 app_gone
   check "... and bosun is stopped: no tmux server, status says stopped" bash -c '! tmux -L bosun info && "$1" status --json | jq -e ".level == \"stopped\""' _ "$BOSUN"

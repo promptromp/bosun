@@ -214,21 +214,21 @@ run() { # [--from-nothing]
 }
 
 # The clone restarted, as a Mac is: shutdown -r in the guest, then back at the desktop (the auto-login) with a
-# new boot time. Whether tart's VM process ends with the guest's restart or goes on is not assumed: if it ends, the
-# clone is started again; either way the new boot is awaited by sysctl kern.boottime.
+# new boot time. Whether tart's VM process ends with the guest's restart or goes on, and when, is not assumed: on
+# every turn of the wait, a VM process that has ended is waited for and the clone started again; either way the
+# new boot is awaited by sysctl kern.boottime.
 reboot_clone() {
   local before deadline=$((SECONDS + 2 * BOOT_SECONDS)) now
   before="$(in_vm "$CLONE" 'sysctl -n kern.boottime')" || die "could not read the clone's boot time"
   say "restarting the clone (sudo shutdown -r now in the guest)"
   in_vm "$CLONE" 'sudo shutdown -r now' >/dev/null 2>&1
-  sleep 30
-  if ! kill -0 "$VM_PID" 2>/dev/null; then
-    wait "$VM_PID" 2>/dev/null
-    say "tart's VM process ended with the restart: starting the clone again"
-    boot "$CLONE" --no-graphics
-  fi
   until now="$(in_vm "$CLONE" 'sysctl -n kern.boottime' 2>/dev/null)" && [ "$now" != "$before" ] && logged_in "$CLONE"; do
     [ "$SECONDS" -ge "$deadline" ] && die "the clone did not come back after the restart"
+    if ! kill -0 "$VM_PID" 2>/dev/null; then
+      wait "$VM_PID" 2>/dev/null
+      say "tart's VM process ended with the restart: starting the clone again"
+      boot "$CLONE" --no-graphics
+    fi
     sleep 3
   done
   say "the clone is back from its restart"
