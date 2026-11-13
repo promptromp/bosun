@@ -56,9 +56,12 @@ app_build_tools() {
 # app/build.sh run for real on a copy of the install's app/ in <work> (the build folder stays out of the install).
 app_build_for_real() {
   local work="$1"
+  # The first run of the copied script is by /bin/bash, not as a program: run directly, right after this Mac's
+  # assessments were turned on, the first run of a script just copied exited 1 with nothing said (every later
+  # run, by bash or directly, built the app). Why is not known; `bosun app install --build` runs it directly.
   check "app/build.sh builds the app for real, ad hoc, for arm64" bash -c '
     cp -R "$1/app" "$2/app-copy" && rm -rf "$2/app-copy/.build" "$2/app-copy/dist" &&
-      "$2/app-copy/build.sh" --identity - --out "$2/built" >"$2/build.log" 2>&1 || { tail -5 "$2/build.log"; exit 1; }
+      /bin/bash "$2/app-copy/build.sh" --identity - --out "$2/built" >"$2/build.log" 2>&1 || { echo "app/build.sh exited $?"; tail -15 "$2/build.log"; exit 1; }
     [ "$(lipo -archs "$2/built/bosun.app/Contents/MacOS/bosun")" = arm64 ]' _ "$DIR" "$work"
   check "... the bundle verifies, is signed as the bundle id of app/publisher.json and is not notarized" bash -c '
     id="$(jq -r .bundle_id "$1/app/publisher.json")" && codesign --verify --deep --strict -R "=identifier \"$id\"" "$2/built/bosun.app" &&
@@ -131,19 +134,6 @@ PLIST
 
 # ---- the console's job, `bosun quit` and the update to the next release (docs/design/menu-bar.md) ----
 
-STATE="$HOME/.local/state/bosun"
-# The job's own state: the first `state =` line of launchctl print (the nested ones are its endpoints').
-job_state() { launchctl print "$DOMAIN/$1" | sed -n 's/^[[:space:]]*state = //p' | head -1; }
-console_process() { pgrep -f 'lib/console_server\.py' >/dev/null; }
-# The running console answers its API, with the cookie its address's token becomes (`bosun console --url`).
-console_answers() {
-  local url port
-  url="$("$HOME/.local/bin/bosun" console --url 2>/dev/null)" || return 1
-  port="$(sed -E 's#^http://127\.0\.0\.1:([0-9]+)/.*#\1#' <<<"$url")"
-  curl -sf -H "Cookie: bosun_console_$port=${url##*t=}" "http://127.0.0.1:$port/api/version" >/dev/null
-}
-status_says() { "$HOME/.local/bin/bosun" status --json | jq -e "$1" >/dev/null; } # <jq filter>
-no_tmux_server() { ! tmux -L bosun info; }
 # <seconds>: the console's process is gone, and stays so a while (launchd would have restarted it by then)
 console_stays_stopped() {
   local deadline=$((SECONDS + $1))
@@ -195,10 +185,6 @@ console_job_for_real() {
   "$bosun" stop >/dev/null 2>&1
 }
 
-morning_lines() { cat "$STATE"/logs/morning-*.log 2>/dev/null | grep -c "$1"; } # <text>: how many lines of the morning logs have it
-morning_lines_above() { [ "$(morning_lines "$1")" -gt "$2" ]; }                 # <text> <count>
-watchdog_skipped() { grep -q "bosun is stopped (bosun quit at .*): skipping this run" "$STATE/logs/watchdog.launchd.out"; }
-
 # `bosun quit` on a Mac that is up: nothing of bosun is left running, what the watchdog and the morning job do
 # about it (nothing), and `bosun morning --now` ending it. Run from here, outside bosun's windows.
 quit_for_real() {
@@ -241,24 +227,7 @@ quit_for_real() {
   "$bosun" stop >/dev/null 2>&1
 }
 
-# The install is on the releases (the default): tests/sandbox/mac.sh made the origin, ~/origin.git, a bare repository
-# with a first release in it (named by BOSUN_E2E_RELEASE), which get.sh took. `bosun update --check --json` sees a
-# next one through git ls-remote, and `bosun update --yes` moves to it. A repository and not a bundle, since `git
-# ls-remote` of a bundle lists an annotated tag's own object and no peeled line, as GitHub does.
-a_next_release() { # <tag>: the first release's tree patched by update_patch.sh, tagged as a release, in the origin
-  local tree="$OUT/next" git=(git -c user.name=sandbox -c user.email=sandbox@example.com)
-  rm -rf "$tree"
-  git clone -q --branch main "$HOME/origin.git" "$tree" &&
-    "$tree/tests/sandbox/update_patch.sh" "$tree" &&
-    "${git[@]}" -C "$tree" commit -qam "the next version" &&
-    "${git[@]}" -C "$tree" tag -a "$1" -m "The next release
-
-- the ledger goes to format 2 (the sandbox's patch)" &&
-    git -C "$tree" push -q origin main "$1"
-}
-version_in_use() { git -C "$(cd "$DIR" && pwd -P)" rev-parse HEAD; }
-version_folders() { find -E "$VERSIONS" -mindepth 1 -maxdepth 1 -type d -regex '.*/[0-9a-f]{12}' | wc -l | tr -d ' '; }
-
+# The install is on the releases (the default), in the origin tests/sandbox/e2e_lib.sh's a_next_release adds to.
 releases_for_real() {
   local bosun="$HOME/.local/bin/bosun" next="v2026.11.02" first="$BOSUN_E2E_RELEASE" first_commit out="$OUT/release-update.txt"
   echo "releases: the install took the newest, and bosun update moves to the next"

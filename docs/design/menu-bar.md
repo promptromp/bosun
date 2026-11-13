@@ -474,3 +474,36 @@ macOS, where the unit and smoke suites cannot:
   release check and the update peel it themselves, locally, after fetching the tag (`refs/remotes/origin/release^{commit}`),
   so a bundle, or a mirror made from one, is read as rightly as GitHub: `tests/unit/test_update_lookup.py` runs both
   against a real bundle. The VM's origin is a bare repository, as GitHub's is, which is the closer stand-in.
+
+## The Mac VM run of the app (2026-11-13)
+
+`tests/sandbox.sh mac app` (`tests/app_e2e.sh`) drives the real bosun.app on a clone of the developer's Mac through its
+test hooks (`menu.json`, `actions/`, `log.jsonl`), `bosun status --json`, `ps` and `launchctl`, in two parts with a restart
+of the Mac between them. What it showed that the unit and smoke suites could not:
+
+- **The desktop session.** A clone started with `--no-graphics` still has the auto-login session (loginwindow, the
+  window server, the Dock and Finder), so the status item has somewhere to be; `open <app> --args --test-hooks <dir>`
+  from the ssh login starts the app with launchd as its parent. The restart brings the session back by itself, and
+  launchd's login job starts the app (`--at-login`, no hooks) at it.
+- **Automation.** Asking the app to quit with `osascript -e 'tell application id "<bundle id>" to quit'`, which
+  `bosun app update`, `bosun app remove` and uninstall do, raised **no Automation prompt and no -1743**, from the ssh
+  login, from the update the app itself started (a child of the app: `tests/sandbox/update_quit_probe.sh` makes the next
+  version's update ask first) and from `bosun uninstall`: exit 0 in a second, the app handled "Quit AppleEvent", no
+  `UserNotificationCenter` process, no `kTCCServiceAppleEvents` request in the TCC log. The control, `tell application
+  "Finder" to get name of startup disk` from the same login, hung for the two minutes of the Apple Event timeout
+  (-1712) behind a prompt nobody answered, so the clone does enforce Automation for other events: the quit event itself
+  is not prompted for.
+- **The menu's own checks** are what the design says: yellow for a log's ERROR line (not for the watchdog's job being
+  booted out, which no check reads), the update item reading "Update Available: <version>…" while the offer is open and
+  "Updating… waiting for 1 window" while a busy window is waited for (the install link is already switched by then), the
+  quit's second dialog with a 0-minute wait finding the agent still busy and its third dialog ending in the stop.
+- **A checkout's history is not a release origin.** `git fetch` of a checkout into the VM's origin follows the tags of
+  the history it brings, and this checkout's history holds the project's real releases: the newest of them, not the
+  test's, was installed. The origin is fetched with `--no-tags`.
+- **`bosun stop` leaves the console's marker**, so the console's job runs again at login; only a quit removes it.
+- **A schedule that starts at 00:00** makes `bosun doctor` fail its wake check (`pmset` prints 0:01AM where it expects
+  12:01AM), so the run's schedule starts at 02:00.
+- **The first direct run of a copied `app/build.sh`** (in `tests/install_e2e.sh`, after the test turned the Mac's
+  assessments on) exited 1 and said nothing, in each of five runs; every later run of the same copy, by `/bin/bash`, by
+  Homebrew's bash, under `env -i` or directly, built the app, and so did a first run by `/bin/bash`. The check runs it
+  by `/bin/bash`. The cause is not known; `bosun app install --build` runs the script directly, so it is open.

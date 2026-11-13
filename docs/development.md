@@ -110,6 +110,7 @@ the cheapest of these that can show what you changed:
 | Anything else in bosun | `tests/sandbox.sh all` | also the unit tests and the smoke suite | 3 minutes |
 | `get.sh`, `install.sh`, launchd, `pmset`, anything macOS does its own way | `tests/sandbox.sh mac run` | the real thing on real macOS, except sleep | 2 minutes |
 | What a new Mac lacks: Homebrew, Apple's tools | `tests/sandbox.sh mac run --from-nothing` | the same from a Mac with nothing on it | 4 minutes |
+| What the menu bar app (`bosun.app`) does: every state of its menu, every dialog and choice of its Quit and update, Open at Login across a restart, one copy at a time, what macOS says to a quit by Apple Event | `tests/sandbox.sh mac app` | the real app, built here and driven by its test hooks on a clone's desktop session, with launchd, a reboot and the Trash; `--from release` the published, notarized one | about 30 minutes |
 | What an update does to an install in use, its windows, its ledger and knowledge base, and what real use does to them: their journals, ids, writes, privacy | `tests/sandbox.sh mac work` | a week of work through the first update's conversion and a mid-afternoon update on a year of data, on real macOS: launchd, a moving clock, racing writers, writes cut short, files changed outside the journal, going back | 16 minutes |
 | How an agent behaves: launching it, its screens and files, a task handed to it, an update's prompts, which MCP servers a window reaches | `tests/sandbox.sh mac live claude`, `... live codex` | the real agents from nothing, through setup, sessions, an update and connectors | about 10 minutes and a dollar each |
 | How Antigravity (`agy`) behaves under bosun: its hooks and plugin, its screen, its dialogs, its login | `tests/sandbox.sh mac live agy` | the real `agy` in a VM with a window, where you sign in; then windows started by launchd, Esc, a reviewer's dialog, the plugin's approvals, a slow hook, connectors, uninstall | about 25 minutes, you at the start, and a personal account's free quota |
@@ -152,6 +153,7 @@ tests/sandbox.sh mac setup                # once: pulls the image (6 minutes) an
 tests/sandbox.sh mac run                  # on a developer's Mac: Homebrew is already there
 tests/sandbox.sh mac run --from-nothing   # on a new Mac: no Homebrew, no Apple tools
 tests/sandbox.sh mac work                 # a week of work, through two updates: see below
+tests/sandbox.sh mac app                  # bosun.app driven through every state and choice, and a restart
 tests/sandbox.sh mac live codex           # the real agents: see below
 tests/sandbox.sh mac live agy             # Antigravity: you sign in in the VM's window, see below
 tests/sandbox.sh mac shell                # a window, to try the wizard as a new user would
@@ -175,6 +177,27 @@ If Homebrew refuses the tap, it wants to be told you trust it. These two are eno
 - **Wait for the login.** ssh answers before the auto-login finishes, and until then launchd has no
   `gui/<uid>` domain and `launchctl bootstrap` fails with error 125. `mac.sh` waits for it; do the same
   if you script a VM by hand.
+
+### The menu bar app: `tests/sandbox.sh mac app [--from build|release]`
+
+`tests/app_e2e.sh` in a clone with its desktop session (the status item needs one; a clone started with
+`--no-graphics` still has it: the auto-login, the window server, the Dock and Finder). The app is started with
+`--test-hooks <dir>`, so it writes its menu to `menu.json` after each render, takes clicks and answers to its dialogs
+from `actions/<n>.json`, and logs each command it runs and each address it would open to `log.jsonl`; the checks
+read those, `bosun status --json`, `ps` and `launchctl`. It runs: the menu green with the windows, yellow with a
+problem and back, Open Console, an update to a newer release tagged in the clone's origin (offer, plan, the
+update waiting for a busy agent, done), Quit with the defaults, the app opened again starting bosun, Quit with a
+busy agent (Let Them Finish with a 0-minute wait, then Stop It Now), Quit keeping the icon and Start, a second copy
+exiting, Open at Login, a restart of the Mac with the app opened by its login job (`--at-login`, bosun not started),
+the app moved to the Trash (the watchdog's `app-missing`) and an uninstall that leaves nothing named bosun.
+It also asks the app to quit with an Apple Event, as `bosun app update` and `bosun app remove` do, from the login
+and from an update the app started, and reports whether macOS prompts for Automation.
+
+`--from build` (the default) builds the app here with `app/build.sh --identity -` (nothing is signed with a real
+identity, and the app is never started on your Mac) and copies it in; it is placed in `~/Applications` as
+`bosun app install` would, since `bosun init` cannot offer an app that is not the publisher's. `--from release` has
+`bosun init` install the published, notarized app and checks Gatekeeper accepts it: it needs a release and a Team ID
+in `app/publisher.json`.
 
 ### A week of work: `tests/sandbox.sh mac work`
 
