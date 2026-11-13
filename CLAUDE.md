@@ -398,7 +398,8 @@ and CI agree on versions. On commit (`.pre-commit-config.yaml`; run all with `uv
   count <= 15 and <= 60 lines; script bodies <= 25 and <= 120 lines), since the Python tools do
   not read shell.
 - Swift (the menu bar app in `app/`; three hooks on `files: ^app/`, so a Python-only commit pays nothing, each
-  skipping with one line when `swift` is absent, through `tools/swift_hook.sh`): `swift format lint --strict` (the
+  run only on a Mac and skipping with one line elsewhere or when `swift` is absent, through `tools/swift_hook.sh`:
+  CI's Linux `lint` job has a `swift` that cannot build AppKit, and the macOS `app` job runs them): `swift format lint --strict` (the
   toolchain's swift-format, `app/.swift-format`), SwiftLint (the SwiftLintPlugins package's command plugin, its version
   pinned in `app/Package.resolved`; `app/.swiftlint.yml` has the repo's limits: cyclomatic 10, function body 60, type
   body 300, file 400; `force_unwrapping`, `force_try` and `force_cast` errors in Sources, allowed in Tests; no `print`
@@ -478,7 +479,8 @@ ahead of it, runs the required checks on that merge group's commit and squash-me
 pass (the ruleset's `merge_queue` rule; so `strict_required_status_checks_policy` is off, the queue
 being what "up to date with `main`" was for, and nobody updates a branch by hand; CodeQL's default setup does not run on merge groups, and GitHub's
 docs say the ruleset's code scanning protection does not apply to them, so CodeQL gates the pull
-request only). The release gate
+request only; a merge group's checks may take 60 minutes, `check_response_timeout_minutes`, above the `app` job's
+30 and the wait for a macOS runner). The release gate
 (`tools/release.py gate`) therefore reads the required checks on main's head commit itself, the merge
 group's, and falls back to the pull request's for commits merged before the queue. The rules are
 in `.github/rulesets/main.json`. A new or renamed job goes in its list too, applied with `gh api -X PUT

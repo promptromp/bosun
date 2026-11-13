@@ -167,8 +167,9 @@ repos:
         files: ^(console/|tests/js|lib/console_|docs/assets/.*\.js$)
         pass_filenames: false
       # The menu bar app's Swift (app/): formatting, SwiftLint and the tests with warnings as errors, only for
-      # a commit that touches app/. Each skips with one line without a Swift toolchain (CI's Linux `lint`
-      # job); the macOS `app` job enforces them.
+      # a commit that touches app/. Each runs only on a Mac and skips with one line elsewhere (CI's Linux `lint`
+      # job, whose image has a `swift` that cannot build AppKit) or without a Swift toolchain; the macOS `app`
+      # job enforces them.
       - id: swift-format
         name: swift format lint (the app)
         entry: tools/swift_hook.sh format
