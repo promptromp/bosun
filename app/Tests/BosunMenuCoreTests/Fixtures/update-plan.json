@@ -1,5 +1,6 @@
 {
   "contract": 1,
+  "error": null,
   "plan": {
     "blockers": [],
     "commits": [

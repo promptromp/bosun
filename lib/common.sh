@@ -1175,8 +1175,9 @@ seconds_until_awake_end() {
 }
 
 # Seconds left in the awake window that now is in: the one rule (lib/awake.py, which the watchdog and the status
-# use too), so `bosun morning --now` and they agree on what "inside" is. Fails printing nothing outside every
-# window; exits 2 printing one line when BOSUN_DAYS, BOSUN_START_TIME or BOSUN_AWAKE_UNTIL does not parse.
+# use too), so `bosun morning --now` and they agree on what "inside" is. Exits 3 (awake.OUTSIDE) printing
+# nothing outside every window; 2 printing one line when BOSUN_DAYS, BOSUN_START_TIME or BOSUN_AWAKE_UNTIL does
+# not parse; any other status is a failure of the command itself.
 awake_seconds_left() {
   python3 "$BOSUN_ROOT/lib/awake.py" remaining --days "$BOSUN_DAYS" --start "$BOSUN_START_TIME" --until "$BOSUN_AWAKE_UNTIL"
 }

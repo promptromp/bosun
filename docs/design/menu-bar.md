@@ -2,7 +2,8 @@
 
 bosun runs as scripts, launchd jobs and a tmux server, and you reach it through a terminal. This adds what a Mac
 app has: an icon in the menu bar that says at a glance whether bosun is well, its updates, its console, a Quit
-that stops it cleanly, and a bosun.app in Applications that starts it again. Status: approved 2026-11-12, with the person's answers of the same day; part 1 (the commands) in progress.
+that stops it cleanly, and a bosun.app in Applications that starts it again. Status: approved 2026-11-12, with the person's answers of the same day; part 1 (the commands) built and run on a real Mac in the Tart VM (`tests/sandbox.sh mac run` and `work`; see
+the end of this note); part 2 (the app itself) is [planned](../plans/menu-bar-app.md).
 Research: the session report "Shipping bosun as a macOS app" (install channels, the native architecture, how
 Ollama, Rogue Amoeba, Docker, OrbStack, Tailscale, Rancher Desktop and Postgres.app behave, and how tools that
 ship a CLI and an app keep them in step).
@@ -71,8 +72,8 @@ The person's, 2026-11-12:
   Mac app is (a throwaway keychain, `notarytool` with an App Store Connect API key, stapled); the person puts the
   certificate and key into the repository's Actions secrets.
 - `bosun init` offers the app; a person can say no.
-- **Signed as the person** with their current Developer ID, team and bundle identifier `ai.predicated.bosun`, for
-  now: the person may move to an organization account later, so the publisher must be easy to swap.
+- **Signed as the person** with their current Developer ID, team and bundle identifier (those in
+  `app/publisher.json`), for now: the person may move to an organization account later, so the publisher must be easy to swap.
 - **The publisher lives in one file and the secrets.** `app/publisher.json` holds the bundle identifier, the Team
   ID (so downloads are checked strictly; a written exception to the repo's rule against ids, in CLAUDE.md's
   Publishing section) and the repository whose releases carry the app; the signing identity, certificate and App
@@ -111,7 +112,8 @@ Calls made from the research and the builder check, to check while reading:
   detached child of the app**, since an update run as a launchd job could boot itself out when it reloads changed
   plists (`reload_changed_jobs`), and what an update starts is not what the privacy prompts are about.
 - **The console always running is a setting**, `BOSUN_CONSOLE_ALWAYS`, on for installs with the app and off for
-  others (no `CONFIG_ADDED` entry: its default, 0, is what an older install did). A `bosun console` by hand while the
+  others (a `CONFIG_ADDED` entry keeps an older install's 0 and writes it to `bosun.env` once, with the note on
+  what the setting does). A `bosun console` by hand while the
   job runs prints (and with `--open` opens) the running one instead of starting a second.
 - **"Uninstall bosun…" opens Terminal running `bosun uninstall`**: one implementation with its questions, and the
   administrator password the scheduled wake needs is asked where `sudo` can ask for it.
@@ -157,7 +159,8 @@ Calls made from the research and the builder check, to check while reading:
   morning job starts bosun at its time. Opened while running: macOS brings up the running copy, which does nothing
   new.
 - **Open at Login.** A LaunchAgent bosun renders like its others (`templates/launchd-app.plist`, RunAtLoad, not
-  KeepAlive), loaded or unloaded by `bosun app login on|off`; the menu item shows its state. A plain plist, as for
+  KeepAlive, `AbandonProcessGroup` true so that quitting the app never takes with it what it started, an update),
+  loaded or unloaded by `bosun app login on|off`; the menu item shows its state. A plain plist, as for
   bosun's other jobs: one place that manages launchd, and uninstall already knows how to take them back.
 
 ## The CLI side
@@ -186,7 +189,10 @@ Calls made from the research and the builder check, to check while reading:
   (`man launchd.plist`), so the marker alone starts and keeps it, where a server started at load would run all session
   after a quit and a reboot with the marker gone. `bosun start` makes the marker; quit removes it and stops the process
   (`launchctl kill TERM`). `bosun console --url` prints its address with the token: the port the console recorded in its
-  running lock and the stored token.
+  running lock and the stored token. The job (`--job`) never exits for a console run by hand that holds the port and
+  `console/running.lock`: it waits, polling every few seconds for the lock, says so once, and serves when the hand run
+  ends, instead of an exit that launchd would answer with a restart loop. `bosun doctor` has a line for the job with
+  `BOSUN_CONSOLE_ALWAYS=1`: loaded, and serving while `console/wanted` is there.
 - **The job that runs `--now`.** `templates/launchd-now.plist` (`<BOSUN_LAUNCHD_LABEL>.now`, `now_label`) runs
   `bosun morning --now` through a login shell like bosun's other jobs, with `RunAtLoad` false and no schedule or
   `KeepAlive`: only a kickstart starts it. It is always rendered, loaded and listed (`job_labels`, `render_job`,
@@ -197,7 +203,7 @@ Calls made from the research and the builder check, to check while reading:
   log with `trigger=now`). A morning run that launchd started, by either job (the scheduled one or this), is not started
   again: `--background` reads both jobs' state (`job_running`, the first top-level `state` line, as the watchdog
   does) before it kickstarts, since the morning script takes no lock and a second run would run the setup steps and
-  the agents' update twice at once. A `bosun morning --now` typed in a terminal is no job and is not seen. Exit 0 when launchd took the kickstart or
+  the agents' update twice at once. A `bosun morning --now` typed in a terminal is no job and is not seen. The check and the kickstart are two steps: a scheduled morning run that starts in the seconds between them overlaps the one `--background` starts (a window of seconds, accepted). Exit 0 when launchd took the kickstart or
   the run is going; exit 1, in one line, when the job is not loaded (run `install.sh` again, or `bosun init`) or
   launchd would not start it; exit 2 for `--background` without `--now` or with `--dry-run`, `--skip-setup` or
   `--awake-minutes`, which the job's run cannot be given. The VM run (`tests/install_e2e.sh`) checks with `launchctl
@@ -265,8 +271,9 @@ Calls made from the research and the builder check, to check while reading:
   no one is at the terminal), but only while `app/publisher.json` has a valid Team ID: until a signed build exists
   there is nothing to install, so it does not offer the app, writes `BOSUN_MENU_APP=0` and says why in its plan.
   With a yes it sets `BOSUN_MENU_APP=1` and `BOSUN_CONSOLE_ALWAYS=1` (the app's Open Console needs the console's
-  job), installs the app and turns on Open at Login; an install that is refused (no network, say) puts both back to
-  0 and init goes on. The commands of `bosun app` never write `bosun.env`: init is its only writer. A re-run does
+  job), installs the app and turns on Open at Login; an install that is refused (no network, say) puts
+  `BOSUN_MENU_APP` back to 0 and `BOSUN_CONSOLE_ALWAYS` to the value it had before the run (0 on a first run), and
+  init goes on; the jobs are reloaded to follow it, and a reload that fails is one line saying so. The commands of `bosun app` never write `bosun.env`: init is its only writer. A re-run does
   not relaunch an app in use (`bosun app update` where it is there, `login on` doing nothing when the job is in
   place), and answering No where it is installed leaves it, saying `bosun app remove` takes it away.
 - **`bosun update`** always runs `bosun app update` of the new version: it goes by the app being there, not by
@@ -293,7 +300,7 @@ people can skip, read about and recognise.
 - **A release is a tag `v<YYYY.MM.DD>`** (a second one that day gets `.2`) on `main`, made by a workflow: a weekly train
   that tags `main` when it has new commits and its checks are green, and a manual run at any time. Its notes are the
   titles of the pull requests merged since the last release, kept as the GitHub release's text and in the tag's
-  message.
+  message; the first release, with no earlier tag to count from, says "First release" instead of the whole history.
 - **`bosun update` follows releases by default** (`BOSUN_UPDATE_CHANNEL=releases`); `main` stays a channel for
   developers. An existing install keeps following `main` (a `CONFIG_ADDED` entry with the kept value `main`) and the
   update's summary says how to switch. A first install (`get.sh`) takes the newest release too, found by a small `sh`
@@ -438,3 +445,32 @@ Where what is built differs from what this note said before, or says more:
   template is black on clear with an alpha: the knot's two ribbons in black, the logo's dark outline and the light fill
   of its loops left clear, so the crossings stay readable at 18 points. The app loads both files as two
   representations of one 18-point template image; with no bundle (run from `swift run`) it shows a system symbol.
+
+## The Mac VM runs of part 1 (2026-11-13)
+
+`tests/sandbox.sh mac run` (`tests/install_e2e.sh`) and `work` (`tests/work_e2e.sh`) check the commands on a real
+macOS, where the unit and smoke suites cannot:
+
+- **The console job** with `BOSUN_CONSOLE_ALWAYS=1`: loaded from a state folder with no `console/`, it runs nothing;
+  `bosun start`'s marker starts it within seconds and the console answers its API; with the marker removed the job
+  stays stopped after `launchctl kill TERM` and after being booted out and loaded again (no `RunAtLoad`); another
+  `bosun start` brings it back.
+- **`bosun quit --stop-now --pause-morning --sleep`** leaves no tmux server, no caffeinate and no console process; the
+  watchdog's next run, kickstarted by launchd, logs that it skipped, and so does the kickstarted morning job (its
+  start is paused); `bosun status --json` says stopped, with the morning paused; `bosun morning --now` brings the
+  windows and the console back and ends the quit.
+- **Releases:** the fresh install runs on the default `releases` channel, from an origin that has a release tag, which
+  `get.sh` installs; `bosun update --check --json` reads the next one (tagged on the patch commit) and its notes from the
+  tag's message; `--skip` marks it skipped and still available; `bosun update --yes` moves to it, the jobs keep naming
+  the install path, and the console job is restarted. The work run has no channel exported: the conversion of the
+  release writes `BOSUN_UPDATE_CHANNEL="main"`, which the updates after it go by.
+- **`launchctl procinfo`** needs root (`This subcommand requires root privileges: procinfo`, so the check retries with
+  `sudo -n`) and prints `responsible pid = <pid>` at the start of a line. A process started over ssh has the
+  `sshd-session` of the login as its responsible process, one of its caller's parents; the tmux server of
+  `bosun morning --now --background` is its own responsible process (launchd's job started it), so none of the caller's.
+- **`spctl`:** a Tart VM has assessments off (`override=security disabled`: it accepts any app), so the test turns them on
+  (`spctl --global-enable`) before it checks that an ad hoc app is rejected.
+- **`git ls-remote` of a bundle** lists an annotated tag's own object and no peeled `^{}` line, unlike GitHub. The
+  release check and the update peel it themselves, locally, after fetching the tag (`refs/remotes/origin/release^{commit}`),
+  so a bundle, or a mirror made from one, is read as rightly as GitHub: `tests/unit/test_update_lookup.py` runs both
+  against a real bundle. The VM's origin is a bare repository, as GitHub's is, which is the closer stand-in.

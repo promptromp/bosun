@@ -108,7 +108,7 @@ class WhatTheAppReadsTest(unittest.TestCase):
         self.assertTrue(SAMPLES["update-check-failed"]["error"])
 
     def test_the_updates_plan_is_the_dry_runs_object_and_one_of_them_is_blocked_and_one_is_none(self) -> None:
-        self.assertEqual(sorted(SAMPLES["update-plan"]), ["contract", "plan", "summary", "update"])
+        self.assertEqual(sorted(SAMPLES["update-plan"]), ["contract", "error", "plan", "summary", "update"])
         self.assertEqual(SAMPLES["update-plan"]["contract"], update.CONTRACT)
         self.assertEqual(SAMPLES["update-plan-none"]["contract"], update.CONTRACT)
         self.assertEqual(SAMPLES["update-plan"]["plan"]["blockers"], [])

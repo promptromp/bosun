@@ -108,15 +108,20 @@ record_keep_awake() { # <caffeinate pid> <seconds>
 # awake window it is in, and none outside every window (lib/awake.py); otherwise until BOSUN_AWAKE_UNTIL.
 # Runs in a subshell: a die ends it with the status that the caller checks.
 keep_awake_seconds() {
-  local seconds
+  local seconds status errors said
   if [ -n "$AWAKE_MINUTES" ]; then
     echo $((AWAKE_MINUTES * 60))
   elif [ "$NOW" = "1" ]; then
-    seconds="$(awake_seconds_left 2>&1)"
-    case $? in
+    errors="$(mktemp)" || die "could not make a temporary file"
+    seconds="$(awake_seconds_left 2>"$errors")"
+    status=$?
+    said="$(tail -n 1 "$errors")"
+    rm -f "$errors"
+    # 3: outside every window (awake.OUTSIDE); anything else is a bad setting or a crash
+    case $status in
       0) echo "$seconds" ;;
-      1) echo 0 ;;
-      *) die "$seconds" ;;
+      3) echo 0 ;;
+      *) die "${said:-the awake window could not be worked out (status $status)}" ;;
     esac
   else
     seconds_until_awake_end || die "bad BOSUN_AWAKE_UNTIL '$BOSUN_AWAKE_UNTIL'"
@@ -184,9 +189,11 @@ wait_for_update_hold() {
 # The run's last word: complete and notify, or (a quit came during the run, so its start skipped) that
 # bosun was not started, with no "Sessions ready", or the problems and exit 1.
 report_result() {
+  local quit_note=""
   if [ ${#problems[@]} -gt 0 ]; then
-    log "morning run finished with problems: ${problems[*]} (log: $LOG_FILE)"
-    notify "bosun: needs attention" "Problems: ${problems[*]}. See $LOG_FILE"
+    [ "${quit_during:-0}" = 1 ] && quit_note="; bosun quit during the run, so its start was skipped"
+    log "morning run finished with problems: ${problems[*]}$quit_note (log: $LOG_FILE)"
+    notify "bosun: needs attention" "Problems: ${problems[*]}$quit_note. See $LOG_FILE"
     exit 1
   fi
   if [ "${quit_during:-0}" = 1 ]; then

@@ -53,7 +53,10 @@
 #   --yes      go ahead without asking
 #   --json     one JSON object on every path: `contract` 1, the plan (null when none was made: up to
 #              date, refused), the update's record as it stands, and the summary (null unless an update ended in
-#              this run); what it says goes to stderr
+#              this run); `error` is null; what it says goes to stderr. A failure of this wrapper's own (no
+#              network, no release yet, Python too old, a checkout, a version folder it could not make) prints
+#              {"contract": 1, "plan": null, "update": null, "summary": null, "error": "<the line it says>"}
+#              and exits as it does without --json
 #
 # Whether there is an update, without changing anything (no version folder, no hold, no lock; the menu bar
 # app's "Check for Updates..." runs it):
@@ -61,7 +64,8 @@
 #              (on the main channel: the head of the branch, and the commit subjects since yours). One line,
 #              or with --json one object: {contract, channel, installed: {version, commit}, latest:
 #              {version, commit, notes} or null, available, skipped, ahead, error}. Always exit 0: a problem,
-#              such as an origin that cannot be reached, is the object's "error".
+#              such as an origin that cannot be reached, is the object's "error" (Python too old to run the
+#              check is the one failure that exits 1, with that object and its error).
 #   --skip <version>  do not offer that release again: --check reports it as skipped (update-skip.json in the
 #              state folder); the next release is offered as usual. It does not stop an update you run.
 #
@@ -77,6 +81,40 @@
 set -uo pipefail
 source "$(dirname "$0")/../lib/common.sh"
 load_config
+
+# With --json, what stops this wrapper is still the one object on stdout, as lib/update.py prints on its
+# paths, which the menu bar app reads: for --check the check's object (update_check.failed), else the
+# update's (update.json_object). The line it says goes to stderr as ever, and the exit status is the same.
+JSON=0
+CHECK=0
+json_text() { # <text>: as the inside of a JSON string, on one line (bash 3.2: no ${x@Q})
+  local text="$1"
+  text="${text//\\/\\\\}"
+  text="${text//\"/\\\"}"
+  text="${text//$'\n'/ }"
+  text="${text//$'\t'/ }"
+  printf '%s' "$text" | LC_ALL=C tr -d '\000-\037'
+}
+json_failure() { # <line>
+  local line
+  line="$(json_text "$1")"
+  if [ "$CHECK" = 1 ]; then
+    printf '{"contract": 1, "channel": "%s", "installed": {"version": null, "commit": null}, "latest": null, "available": false, "skipped": false, "ahead": false, "error": "%s"}\n' \
+      "$(json_text "$BOSUN_UPDATE_CHANNEL")" "$line"
+  else
+    printf '{"contract": 1, "plan": null, "update": null, "summary": null, "error": "%s"}\n' "$line"
+  fi
+}
+die() {
+  [ "$JSON" = 0 ] || json_failure "$*"
+  log "ERROR: $*" >&2
+  exit 1
+}
+die_usage() {
+  [ "$JSON" = 0 ] || json_failure "$* (see --help)"
+  log "ERROR: $* (see --help)" >&2
+  exit 2
+}
 
 need_python() {
   python3 -c 'import sys; sys.exit(sys.version_info < (3, 13))' 2>/dev/null ||
@@ -103,7 +141,6 @@ case "${1:-}" in
 esac
 
 FROM=""
-CHECK=0
 SKIP=""
 args=()
 read_arguments() {
@@ -113,7 +150,11 @@ read_arguments() {
         usage
         exit 0
         ;;
-      --dry-run | --yes | --json) args+=("$1") ;;
+      --dry-run | --yes) args+=("$1") ;;
+      --json)
+        args+=("$1")
+        JSON=1
+        ;;
       --check) CHECK=1 ;;
       --skip)
         SKIP="${2:-}"
@@ -174,11 +215,23 @@ fi
 # channel the head of the branch; and AHEAD to the newest release when the install is past it.
 AHEAD=""
 commit=""
+# `lookup target` failed, and said why in <file>: that goes to stderr as it said it, and with --json its
+# last line is the object's error.
+fail_with_problem() { # <file>
+  local said
+  said="$(tail -n 1 "$1")"
+  cat "$1" >&2
+  rm -f "$1"
+  [ "$JSON" = 0 ] || json_failure "${said#bosun update: }"
+  exit 1
+}
 newest_commit() {
-  local branch found
+  local branch found problem
   case "$BOSUN_UPDATE_CHANNEL" in
     releases)
-      found="$(lookup target)" || exit 1
+      problem="$(mktemp)"
+      found="$(lookup target 2>"$problem")" || fail_with_problem "$problem"
+      rm -f "$problem"
       case "$found" in
         "ahead "*) AHEAD="${found#ahead }" ;;
         "commit "*) commit="$(cut -d' ' -f2 <<<"$found")" ;;
@@ -188,7 +241,7 @@ newest_commit() {
     main)
       branch="$(repo_git config bosun.branch)" || branch=main
       # A transfer slower than 1 KB/s for 30 seconds is given up on, never waited for without end.
-      repo_git -c http.lowSpeedLimit=1000 -c http.lowSpeedTime=30 fetch --quiet origin "+refs/heads/$branch:refs/remotes/origin/$branch" ||
+      repo_git -c http.lowSpeedLimit=1000 -c http.lowSpeedTime=30 fetch --quiet --no-tags origin "+refs/heads/$branch:refs/remotes/origin/$branch" ||
         die "could not fetch $branch from $(url_without_credentials "$(repo_git config remote.origin.url)")"
       commit="$(repo_git rev-parse --verify --quiet "refs/remotes/origin/$branch^{commit}")" ||
         die "no commit at the head of $branch"

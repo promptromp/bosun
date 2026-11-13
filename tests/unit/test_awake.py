@@ -49,16 +49,21 @@ class RemainingTest(unittest.TestCase):
         now = datetime(2026, 11, 12, 19, 59, 59, 400_000)
         self.assertEqual(remaining("MTWRF", "08:00", "20:00", now=now), (0, "1\n", ""))
 
-    def test_outside_prints_nothing_and_exits_one(self) -> None:
-        self.assertEqual(remaining("MTWRF", "13:00", "20:00"), (1, "", ""))
-        self.assertEqual(remaining("MTWRF", "08:00", "11:59"), (1, "", ""))
+    def test_outside_prints_nothing_and_exits_with_its_own_status(self) -> None:
+        self.assertEqual(remaining("MTWRF", "13:00", "20:00"), (awake.OUTSIDE, "", ""))
+        self.assertEqual(remaining("MTWRF", "08:00", "11:59"), (awake.OUTSIDE, "", ""))
+
+    def test_outside_is_not_the_status_of_a_crash_or_a_bad_command_line(self) -> None:
+        # python exits 1 on an uncaught exception and 2 on a usage error: neither may read as "outside"
+        self.assertNotIn(awake.OUTSIDE, (0, 1, 2))
+        self.assertEqual(awake.OUTSIDE, 3)
 
     def test_the_end_itself_is_outside(self) -> None:
-        self.assertEqual(remaining("MTWRF", "08:00", "12:00"), (1, "", ""))
+        self.assertEqual(remaining("MTWRF", "08:00", "12:00"), (awake.OUTSIDE, "", ""))
 
     def test_an_unscheduled_day_is_outside(self) -> None:
-        self.assertEqual(remaining("MTWF", "08:00", "20:00"), (1, "", ""))  # no R: Thursday
-        self.assertEqual(remaining("", "08:00", "20:00"), (1, "", ""))
+        self.assertEqual(remaining("MTWF", "08:00", "20:00"), (awake.OUTSIDE, "", ""))  # no R: Thursday
+        self.assertEqual(remaining("", "08:00", "20:00"), (awake.OUTSIDE, "", ""))
 
     def test_a_window_past_midnight_started_today(self) -> None:
         self.assertEqual(remaining("R", "08:00", "01:00"), (0, f"{13 * 3600}\n", ""))
@@ -69,7 +74,7 @@ class RemainingTest(unittest.TestCase):
 
     def test_yesterdays_window_that_was_not_scheduled_is_not_running(self) -> None:
         now = datetime(2026, 11, 13, 0, 30)
-        self.assertEqual(remaining("F", "08:00", "01:00", now=now), (1, "", ""))
+        self.assertEqual(remaining("F", "08:00", "01:00", now=now), (awake.OUTSIDE, "", ""))
 
     def test_an_until_equal_to_the_start_is_a_full_day(self) -> None:
         self.assertEqual(remaining("R", "08:00", "08:00"), (0, f"{20 * 3600}\n", ""))

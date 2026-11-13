@@ -171,6 +171,56 @@ class LookupTest(unittest.TestCase):
         self.assertEqual(update_lookup.target(), f"commit {self.commits[2]} v2026.01.01.2")
         git(self.tmp, "--git-dir", str(self.repo), "cat-file", "-e", f"{self.commits[2]}^{{commit}}")
 
+    def unpeeled(self) -> Any:
+        """An origin whose `git ls-remote` prints an annotated tag's own object and no `^{}` line (a git
+        bundle, or a mirror made from one)."""
+        real = update_lookup._remote_tags
+
+        def tags(repo: Path, *, why: bool = False) -> list[tuple[str, str]]:
+            return [(ref, sha) for ref, sha in real(repo, why=why) if not ref.endswith("^{}")]
+
+        return mock.patch.object(update_lookup, "_remote_tags", tags)
+
+    def test_an_annotated_tag_without_a_peeled_line_is_resolved_to_its_commit(self) -> None:
+        self.tag("v2026.01.01", 1, "- Second\n")
+        with self.unpeeled():
+            found = self.answer()
+            self.assertEqual(found["latest"]["commit"], self.commits[1])
+            self.assertTrue(found["available"])
+            self.assertEqual(update_lookup.target(), f"commit {self.commits[1]} v2026.01.01")
+
+    def test_an_install_at_an_unpeeled_release_is_up_to_date_not_ahead(self) -> None:
+        self.tag("v2026.01.01", 0, "- First\n")
+        with self.unpeeled():
+            found = self.answer()
+            self.assertFalse(found["available"] or found["ahead"])
+            self.assertEqual(found["installed"]["version"], "v2026.01.01")
+            self.install(2)
+            self.assertTrue(self.answer()["ahead"])
+
+    def test_a_lightweight_tag_and_a_peeled_line_still_work(self) -> None:
+        self.tag("v2026.01.01", 1)
+        self.assertEqual(update_lookup.target(), f"commit {self.commits[1]} v2026.01.01")
+        self.tag("v2026.01.02", 2, "- Third\n")
+        found = self.answer()
+        self.assertEqual(found["latest"]["commit"], self.commits[2])
+        self.assertEqual(found["latest"]["notes"], "- Third")
+
+    def test_a_bundle_origin_is_resolved_by_the_update(self) -> None:
+        """The real thing: a git bundle of a repository with an annotated tag, as the origin."""
+        self.tag("v2026.01.01", 1, "- Second\n")
+        bundle = self.tmp / "origin.bundle"
+        git(self.up, "bundle", "create", "-q", str(bundle), "--all")
+        git(self.tmp, "--git-dir", str(self.repo), "remote", "set-url", "origin", str(bundle))
+        listed = git(self.tmp, "ls-remote", "--tags", str(bundle), "v*")
+        self.assertNotIn("^{}", listed, "a bundle lists no peeled line: this is the case")
+        self.assertEqual(update_lookup.target(), f"commit {self.commits[1]} v2026.01.01")
+        found = self.answer()
+        self.assertEqual(
+            found["latest"], {"version": "v2026.01.01", "commit": self.commits[1], "notes": "- Second"}
+        )
+        self.assertTrue(found["available"])
+
     def test_a_skipped_release_is_reported_until_a_newer_one(self) -> None:
         self.tag("v2026.01.01", 1, "- Second\n")
         update_lookup.write_skip(self.state, "v2026.01.01", datetime(2026, 1, 2, 9, 0, tzinfo=UTC))

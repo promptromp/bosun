@@ -443,10 +443,12 @@ def recommended_harness(facts: Facts) -> str:
 
 
 def recommended_channel(facts: Facts) -> str:
-    """What the environment asks for (get.sh with BOSUN_BRANCH: `main`, the branch's head, with no question),
-    or else what your config says; a config from before the key goes on following main, as bosun update
-    writes it (migrations.CONFIG_ADDED), so that a re-run changes nothing unasked; else the releases."""
-    chosen = facts.asked_channel or facts.env.get(UPDATE_CHANNEL)
+    """What your config says (a re-run never changes it: a window that inherited BOSUN_INIT_CHANNEL from the
+    get.sh that started it must not flip a channel set by hand), or else what the environment asks for
+    (get.sh with BOSUN_BRANCH: `main`, the branch's head, with no question); a config from before the key goes
+    on following main, as bosun update writes it (migrations.CONFIG_ADDED), so that a re-run changes nothing
+    unasked; else the releases."""
+    chosen = facts.env.get(UPDATE_CHANNEL) or facts.asked_channel
     if chosen:
         return chosen
     return "main" if facts.env else DEFAULT_CHANNEL

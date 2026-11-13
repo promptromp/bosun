@@ -20,6 +20,10 @@ __ENV__
        at its time. -->
   <key>RunAtLoad</key>
   <true/>
+  <!-- What the app starts (`bosun update`, which it runs) must outlive it: without this launchd kills the
+       job's process group when the app quits, an update in the middle of its work with it. -->
+  <key>AbandonProcessGroup</key>
+  <true/>
   <key>StandardOutPath</key>
   <string>__LOG_DIR__/app.launchd.out</string>
   <key>StandardErrorPath</key>

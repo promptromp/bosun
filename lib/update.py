@@ -1189,12 +1189,15 @@ def json_object(
 ) -> dict[str, Any]:
     """The one object --json prints on every path (pure, so the menu bar app's fixtures are made with it):
     `contract`, a number that only grows (the app checks it understands what it reads), the plan, the
-    update's record as it stands and the summary, each null when there is none."""
+    update's record as it stands and the summary, each null when there is none, and `error`, always null
+    here: the wrapper's own failures (libexec/bosun-update: no network, no release yet, a checkout) print the
+    same object with the one line that says why."""
     return {
         "contract": CONTRACT,
         "plan": dataclasses.asdict(plan) if plan else None,
         "update": update,
         "summary": update_summary.as_json(summary) if summary else None,
+        "error": None,
     }
 
 

@@ -378,6 +378,7 @@ the_upgrade() {
   check "... from the release to this checkout, with its backup" summary_says "$out" "$RELEASE_COMMIT" "$A_COMMIT"
   check "... and the mark of bosun's own work it stopped is gone" test ! -e "$STATE/update/own-work.json"
   the_orchestrator_keeps_its_connectors "$out.summary"
+  the_channel_stays_main "$out.summary"
   check "bosun doctor passes" bash -c 'bosun doctor >"$1" 2>&1 || { cat "$1"; exit 1; }' _ "$OUT/doctor.txt"
   check "... and warns while the orchestrator keeps every connector" \
     grep -qE "^ +warn +orchestrator: all \(every MCP server and connector\): name the ones it needs" "$OUT/doctor.txt"
@@ -396,9 +397,20 @@ the_orchestrator_keeps_its_connectors() {
     grep -qx "BOSUN_ORCHESTRATOR_CONNECTORS=\"all\"" "$1/bosun.env" && ! grep -q "^BOSUN_CONNECTORS=" "$1/bosun.env" &&
       ls "$1"/bosun.env.pre-update-* >/dev/null' _ "$CONFIG"
   check "... its summary says so, with what each added key means" bash -c '
-    grep -q "^  bosun\.env  *BOSUN_ORCHESTRATOR_CONNECTORS=\"all\" added (before: bosun\.env\.pre-update-" "$1" &&
+    grep -q "^  bosun\.env  *BOSUN_ORCHESTRATOR_CONNECTORS=\"all\" added.* (before: bosun\.env\.pre-update-" "$1" &&
       grep -q "^  BOSUN_ORCHESTRATOR_CONNECTORS  *the orchestrator keeps every connector, as before" "$1" &&
       grep -q "^  BOSUN_CONNECTORS  *repo windows now start without connectors" "$1" || { cat "$1"; exit 1; }' _ "$1"
+}
+# No BOSUN_UPDATE_CHANNEL is exported here (e2e_lib.sh): the release followed `main` and the new default is the
+# releases, so what keeps this install on `main` is the key the update writes (migrations.CONFIG_ADDED), which the
+# updates after it (a_mid_afternoon_update, on a branch with no release) then go by. <summary>: the summary's lines.
+the_channel_stays_main() {
+  check "the update wrote BOSUN_UPDATE_CHANNEL=\"main\" to bosun.env: this install goes on following main" \
+    grep -qx 'BOSUN_UPDATE_CHANNEL="main"' "$CONFIG/bosun.env"
+  check "... its summary says so, with what the key means" bash -c '
+    grep -q "^  bosun\.env  *.*BOSUN_UPDATE_CHANNEL=\"main\" added" "$1" &&
+      grep -q "^  BOSUN_UPDATE_CHANNEL  *bosun update goes on following main, as before" "$1" || { cat "$1"; exit 1; }' _ "$1"
+  check "bosun update --check --json is on the main channel" bash -c 'bosun update --check --json | jq -e ".channel == \"main\" and .error == null"'
 }
 jobs_loaded_on_the_link() {
   jobs_loaded && grep -qF "$DIR/bin/bosun" "$HOME/Library/LaunchAgents/${JOBS[0]}.plist"

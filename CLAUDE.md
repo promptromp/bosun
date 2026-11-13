@@ -285,6 +285,10 @@ of truth, so don't copy rules into this file.
 - **An outreach purpose:** `PURPOSES` (`lib/ledger.py`) and the `reach-out` help there, the
   purpose lists in `policy.md` (with what each means) and `orchestrator/tasks/_common.md`, and the
   outreach table in `docs/orchestrator.md`.
+- **A launchd job:** its template in `templates/` (the hook checks it is XML), a label helper listed in `job_labels`,
+  `render_job` and `reload_changed_jobs` (`lib/common.sh`), and in the Mac VM (`tests/sandbox/e2e_lib.sh`,
+  `tests/install_e2e.sh`) a check that it loads and does what its plist says, and that uninstall removes it
+  (`jobs_are_gone`).
 - **A watchdog check:** a row in `CHECKS` (`lib/watchdog.py`), a line in
   `libexec/bosun-watchdog`'s usage (smoke checks they match), and the table in `docs/watchdog.md`.
 - **A ledger kind:** an entry in `KINDS` (`lib/ledger.py`) and the list of item ids in `docs/orchestrator.md`.
@@ -362,8 +366,8 @@ of truth, so don't copy rules into this file.
   `tests/unit/test_impacted_rules.py` fails.
 - **A unit test that runs bosun's programs, or reads the docs or another repository file:** its line
   in `impacted_map` (`bin/bosun=<test>`, `mkdocs.yml=<test>`, ...); `tests/unit/impacted_guard.py`
-  fails the test until it is there and says which. A test that imports another test file: a map line
-  from that file to it (`test_impacted_rules.py` names it).
+  fails the test until it is there and says which. A test importing a helper or another test file of
+  `tests/unit` needs nothing: the plugin follows it.
 - **A command:** `libexec/bosun-<cmd>` with a `# Usage:` header that holds all of its help
   (`bin/bosun` prints it for `--help`, with no flag handling of the command's own for exactly that;
   `die_usage` reports usage errors with exit 2), a line in `bin/bosun`'s usage, the
@@ -411,15 +415,18 @@ and CI agree on versions. On commit (`.pre-commit-config.yaml`; run all with `uv
   and pytest-xdist): the change is what git has uncommitted, so `pre-commit run --all-files` selects
   the same. Before a push, the smoke suite (end to end only); in CI, every unit test.
 
-Which tests a change reaches: the plugin follows Python imports from `lib/` (through the empty
-package `lib/impacted_root`, since `lib/` is a flat folder on `sys.path`) and from the test files;
-everything else is a rule in `pyproject.toml` (`impacted_map`, `impacted_invalidate_all`), read by
+Which tests a change reaches: the plugin follows Python imports from `lib/` (an import root, as
+pytest's `pythonpath` entry; `impacted_module = "lib"`) and between the test files and the helpers of
+`tests/unit`, which has no `__init__.py`; everything else is a rule in `pyproject.toml` (`impacted_map`, `impacted_invalidate_all`), read by
 `tests/unit/impacted_rules.py`. A rule may select more than it needs, never less: when unsure, a glob
 in `impacted_invalidate_all`. A change to bosun's programs (`lib/*.sh`, `libexec/`, the installers)
 or to any `lib/*.py` counts as one to `bin/bosun`, which selects the tests that run or read the
 programs; a docs page counts as one to `mkdocs.yml`, which selects the tests that read the docs;
 what bosun reads as it runs (`orchestrator/`, `templates/`, `console/`, `examples/`, `agents/`), the
-fixtures and the tests' helpers run every test. `tests/unit/test_impacted_rules.py` runs on every
+fixtures and `conftest.py` run every test (the plugin leaves a conftest's imports out of its analysis, so
+`lib/journal.py` and `lib/change_log.py`, which it imports, select their importers, not every test). A
+glob's `**` matches any depth (`docs/**`, `tests/fixtures/**`), `*` one level, both from the right, as
+the plugin matches (`pytest_impacted.strategies.matches_any_glob`, which `impacted_rules.matches` calls). `tests/unit/test_impacted_rules.py` runs on every
 commit and fails on a file no rule covers, and on a test the plugin would not select for a module
 it imports (through another test too: that is a map line); `tests/unit/impacted_guard.py` fails a
 test that reads or runs a file whose change would not select it, and says which line to add. The
@@ -463,8 +470,19 @@ runs the ones the change reaches, and `uv run pytest -n auto` runs them all (abo
 run `tests/smoke.sh` (hermetic: temp HOME, own tmux socket, fake Claude): end-to-end checks,
 including that task files only use valid ledger transitions and that the task table in
 `docs/orchestrator.md` matches them; `--with-unit` runs every unit test first too, with a plain
-`python3 -m unittest`. Then `bosun doctor`. In `tests/smoke.sh`,
-use `fails_with "<expected error>" cmd` for refusals (a crash must not count as a pass) and
+`python3 -m unittest`. Then `bosun doctor`. While iterating, run only the area you changed: `tests/smoke.sh --list`
+prints the sections' ids, `tests/smoke.sh --only <id>[,<id>...]` runs the shared setup and those (and what they
+`needs`) in seconds (a few minutes for a section with prerequisites), and says in its summary that it was a partial run. Before committing, run the whole
+suite once; CI and the pre-push hook always run all of it. In `tests/smoke.sh`, a new section begins with
+`section <id> "<name>" [needs <id>,...]` (unique kebab-case id; `tests/unit/test_smoke_sections.py` fails
+otherwise): set up what it uses itself, or say `needs` the section whose state it relies on; a helper or a
+constant that more than one section uses goes in the helpers by the fixture HOME, and an export every later
+section sees goes after an `always_run` line. Every section starts by checking that `osascript`, `aws`,
+`launchctl` and the other tools that reach outside the run resolve to stand-ins in the run's folder, and the run
+stops if not (`fakes_first`): a stand-in with a behaviour replaces the plain one in its section and puts it
+back, and a section that points bosun at another HOME puts the plain ones there too (`stand_ins_in <home>`, then
+`fakes_first <home>`). The temp HOME and the stand-ins exist before the first section, so nothing runs on the real
+one. Use `fails_with "<expected error>" cmd` for refusals (a crash must not count as a pass) and
 `wait_for <seconds> cmd` instead of fixed sleeps; external tools (aws, gh, launchctl, pmset,
 osascript) are faked in the temp HOME's `~/.local/bin`, and the install test uses its own launchd
 label and refuses to run unless the fakes come first on PATH.
@@ -520,9 +538,11 @@ The repo is meant to be shareable, so nothing in it may identify an organization
   GitHub, Jira, AWS accounts or profiles), emails or tokens, also not in tests, fixtures, docs or
   commit messages. Use placeholders (`acme`, `my-org`, `example.com`, `/Users/me`, zero-filled
   Slack ids) and clearly fictional names.
-- One exception: the publisher's Team ID in `app/publisher.json` is the one public identifying value the repo may
-  hold (it is what `bosun app install` checks the downloaded app against, and is public in every signed app). It
-  does not loosen the forbidden-terms check for anything else.
+- One exception: the publisher's Team ID and the app's bundle id (the publisher's reverse-DNS id) in
+  `app/publisher.json` are public identifying values the repo may hold, there and nowhere else (`bosun app
+  install` checks the downloaded app against them, and they are public in every signed app). Anything else that
+  needs one reads it from that file. The file's `releases` names this project's own repository, as get.sh and the
+  README do. It does not loosen the forbidden-terms check for anything else.
 - The `forbidden-terms` hook enforces this locally from `$BOSUN_CONFIG_DIR/forbidden-terms.txt`
   (one case-insensitive regex per line, `#` comments), so the list itself never enters the repo;
   without the file it passes. Add a term there whenever something site-specific nearly slipped in.

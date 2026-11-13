@@ -76,9 +76,12 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898274+github-actions[bot]@users.noreply.github.com"
           tag=$(python3 tools/release.py next-tag)
-          range=HEAD
-          if [ -n "$LAST" ]; then range="$LAST..HEAD"; fi
-          python3 tools/release.py notes "$range" > "$RUNNER_TEMP/notes.md"
+          # The first release has no earlier tag to count from: its notes say so, not the whole history.
+          if [ -n "$LAST" ]; then
+            python3 tools/release.py notes "$LAST..HEAD" > "$RUNNER_TEMP/notes.md"
+          else
+            echo "- First release" > "$RUNNER_TEMP/notes.md"
+          fi
           git tag -a "$tag" -F "$RUNNER_TEMP/notes.md"
           git push origin "refs/tags/$tag"
           gh release create "$tag" --verify-tag --title "$tag" --notes-file "$RUNNER_TEMP/notes.md"

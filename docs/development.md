@@ -35,14 +35,28 @@ Issues and pull requests are welcome: see [CONTRIBUTING.md](../CONTRIBUTING.md) 
 | Every unit test | `uv run pytest -n auto` | CI, on Linux (with coverage) and on macOS | about a minute |
 | The end-to-end smoke suite | `tests/smoke.sh` | before every push, and in CI on macOS | about 18 minutes |
 | Every unit test with a plain `python3`, then the smoke suite | `tests/smoke.sh --with-unit` | never | 8 more minutes |
+| One area of the smoke suite | `tests/smoke.sh --only <id>[,<id>...]` (ids: `tests/smoke.sh --list`) | never | seconds to a few minutes |
+
+The smoke suite is in sections, each begun by a `section <id> "<name>"` line. `--list` prints them. `--only`
+runs the shared setup and the sections you name, plus any they `needs` (the list shows those), in the order of
+the file, and its summary says it was a partial run: it is for iterating on the area you changed, and never
+instead of the whole suite before you commit, which CI and the pre-push hook run in full. `--with-unit` and
+`--only` combine. A section either sets up what it uses itself or says `needs <id>`, and
+`tests/unit/test_smoke_sections.py` fails on a section without a marker, a taken id or a `needs` that names
+nothing above it. Every section begins by checking that the tools that reach outside the run
+(`osascript`, `aws`, `launchctl`, `pmset`, `sudo`, `open`, `caffeinate`, `codesign`, `ditto`, `spctl`) are
+stand-ins in the run's own folder, and the run stops if one would be the real one. The run's HOME and those
+stand-ins exist before the first section, and a section that points bosun at another HOME gets them there too.
 
 `-n auto` runs the tests in parallel, one worker per core (pytest-xdist). `--impacted`
 (pytest-impacted) runs only the tests that what git has uncommitted (staged or not, and new files)
 can reach, so `uv run pre-commit run --all-files` selects the same tests as the commit. The plugin
-follows the Python imports from `lib/` and the test files; what it cannot see (a test that runs
+follows the Python imports from `lib/` (an import root, like pytest's `pythonpath`) and between the
+test files and the helpers of `tests/unit`; what it cannot see (a test that runs
 `bin/bosun`, reads a docs page, or a file `bosun` reads as it runs) is a rule in `pyproject.toml`'s
 `impacted_map` and `impacted_invalidate_all`. A rule may select more tests than it needs, never fewer:
-when unsure, it runs every test. Two checks keep the rules honest: `tests/unit/test_impacted_rules.py`
+when unsure, it runs every test (`conftest.py`, the fixtures and what bosun reads as it runs do). A
+rule's `**` matches any depth, as the plugin reads it. Two checks keep the rules honest: `tests/unit/test_impacted_rules.py`
 runs in every selection and fails on a file no rule covers or a module whose importers would not be
 selected, and `tests/unit/impacted_guard.py` fails any test that reads or runs a file whose change
 would not select it, naming the line to add. `uv run impacted-tests --verbose` prints what the
@@ -124,7 +138,12 @@ Docker on a Mac is Linux, so `launchctl`, `pmset`, `caffeinate` and the like are
 macOS in a [Tart](https://tart.run) VM on your Mac (Apple silicon). A run clones a base image, boots it,
 runs `tests/install_e2e.sh` in it and deletes the clone: the real installer, real launchd jobs that really
 fire (the morning job, and the one `bosun morning --now --background` kickstarts, whose tmux server must have a
-responsible process that is not the caller's: `launchctl procinfo`), the real `pmset`, `plutil` and bash 3.2.
+responsible process that is not the caller's: `launchctl procinfo`, which needs root there, so the test tries
+`sudo -n`), the console's job (`BOSUN_CONSOLE_ALWAYS=1`: started by `bosun start`'s marker, no process after a
+`bosun quit`), `bosun quit` with what the watchdog and the morning job do after it, `bosun update` from one release
+to the next (the install is on the default `releases` channel, its origin `~/origin.git` a repository with a release
+tag, and the next release is tagged there by the test), the real `pmset`, `plutil` and bash 3.2. A Tart VM has
+Gatekeeper's assessments off, which the test turns on for its `spctl` check.
 
 ```bash
 brew install openai/tools/tart
