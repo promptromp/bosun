@@ -24,7 +24,7 @@ uv sync && uv run pre-commit install
 
 Commits then run ruff, mypy --strict, the complexity limits, shellcheck, shfmt, hadolint, actionlint,
 zizmor, spelling and link checks, a build of the [docs site](docs/development.md#the-docs-site), the
-secrets scans and the unit tests; pushes also run the smoke suite.
+secrets scans and the unit tests the change can reach; pushes also run the smoke suite.
 
 ## Making a change
 
@@ -34,9 +34,11 @@ check and more), the limits and the gotchas (macOS ships bash 3.2; tmux has its 
 parts your change touches.
 
 - **Tests.** Add a unit test in `tests/unit/` for a change to `lib/*.py`, and a check in
-  `tests/smoke.sh` for a command's behaviour. Before you push, run `tests/smoke.sh` (hermetic: its
-  own HOME, tmux socket and a fake agent) and `uv run pre-commit run --all-files`. Never test an install
-  on your own Mac: [the sandboxes](docs/development.md#which-sandbox-for-what) are throwaway machines.
+  `tests/smoke.sh` for a command's behaviour. Before you push, run `uv run pytest -n auto` (every unit
+  test, in parallel), `tests/smoke.sh` (end to end, hermetic: its own HOME, tmux socket and a fake
+  agent) and `uv run pre-commit run --all-files`; [Running the tests](docs/development.md#running-the-tests)
+  says what runs when. Never test an install on your own Mac:
+  [the sandboxes](docs/development.md#which-sandbox-for-what) are throwaway machines.
 - **Wording that Claude acts on** (`orchestrator/policy.md`, the task files, the prompts) is
   tested against the real Claude by `tests/llm/`. Those runs cost money, so CI does not run them:
   say in the pull request that you changed such wording, and they will be run before merging.

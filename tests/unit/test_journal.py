@@ -233,7 +233,8 @@ class Disk(JournalTestCase):
         self.assertEqual(aside.read_bytes(), TORN * 3)
 
     def test_a_commit_flushes_each_file_to_the_disk_itself(self) -> None:
-        full = jr.FULL_FSYNC
+        # fcntl's own flag, not jr.FULL_FSYNC: conftest.py sets that to None for the other tests.
+        full = getattr(fcntl, "F_FULLFSYNC", None)
         if full is None:
             self.skipTest("macOS only")
         calls: list[int] = []
@@ -246,7 +247,7 @@ class Disk(JournalTestCase):
         tx = self.journal().begin("add")
         tx.add("set", "item:1", {})
         tx.add("set", "item:1", {"quote": "mine"}, local=True)
-        with mock.patch.object(fcntl, "fcntl", recording):
+        with mock.patch.object(jr, "FULL_FSYNC", full), mock.patch.object(fcntl, "fcntl", recording):
             tx.commit()
         self.assertEqual(calls.count(full), 2)  # local.jsonl, then the replica's file
 
