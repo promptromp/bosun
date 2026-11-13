@@ -2644,6 +2644,81 @@ check "bosun start --unless-quit with no quit record starts as usual" bash -c '"
 "$BOSUN" stop >/dev/null 2>&1
 rm -f "$BOSUN_STATE_DIR/quit.json" "$BOSUN_STATE_DIR/console/wanted" "$BOSUN_STATE_DIR/keep-awake-smoke.pid" "$BOSUN_STATE_DIR/keep-awake-smoke.json"
 
+# `bosun morning --now`: the morning run at any hour or day (the app's Start). The awake window is built around the
+# current time, so these hold whatever time the suite runs at: a window ending in 20 minutes that began 2 minutes
+# ago is inside (an end earlier than the start runs past midnight, which the window rule handles), one that is 10
+# to 20 minutes ahead is outside, and with every day but today's and yesterday's scheduled, no window holds now.
+echo "morning --now (the morning run at any hour or day)"
+today_letter="$(printf MTWRFSU | cut -c "$(date +%u)")"
+yesterday_letter="$(printf MTWRFSU | cut -c "$(date -v-1d +%u)")"
+unscheduled_days="$(printf MTWRFSU | tr -d "$today_letter$yesterday_letter")"
+inside_until="$(date -v+20M +%H:%M)"
+awake_inside=(BOSUN_DAYS=MTWRFSU BOSUN_START_TIME="$(date -v-2M +%H:%M)" BOSUN_AWAKE_UNTIL="$inside_until")
+awake_outside=(BOSUN_DAYS=MTWRFSU BOSUN_START_TIME="$(date -v+10M +%H:%M)" BOSUN_AWAKE_UNTIL="$(date -v+20M +%H:%M)")
+awake_unscheduled=(BOSUN_DAYS="$unscheduled_days" BOSUN_START_TIME=00:00 BOSUN_AWAKE_UNTIL=23:59)
+# The morning job's shells carry BOSUN_TRIGGER=launchd: the header must still say now.
+now_morning() { # <VAR=value>... <bosun> morning --now ...: with a stand-in caffeinate and no network
+  env PATH="$WORK/fake-caffeinate:$PATH" BOSUN_TRIGGER=launchd BOSUN_NETWORK_PROBE_URL=file:///dev/null "$@" </dev/null 2>&1
+}
+now_clean() {
+  "$BOSUN" stop >/dev/null 2>&1
+  rm -f "$BOSUN_STATE_DIR/quit.json" "$BOSUN_STATE_DIR/console/wanted" "$BOSUN_STATE_DIR/keep-awake-smoke.pid" "$BOSUN_STATE_DIR/keep-awake-smoke.json"
+}
+has_session() { tmux -L "$SOCKET" has-session -t =smoke; }
+no_keep_awake() { [ ! -e "$BOSUN_STATE_DIR/keep-awake-smoke.pid" ] && [ ! -e "$BOSUN_STATE_DIR/keep-awake-smoke.json" ]; }
+keep_awake_ends_at() { # <HH:MM>: the record's end is that minute, and the pid file is there
+  [ -f "$BOSUN_STATE_DIR/keep-awake-smoke.pid" ] &&
+    python3 -I -c 'import datetime, json, sys; d = json.load(open(sys.argv[1])); sys.exit(datetime.datetime.fromisoformat(d["until"]).strftime("%H:%M") != sys.argv[2])' "$BOSUN_STATE_DIR/keep-awake-smoke.json" "$1"
+}
+
+keep_awake_ends_in() { # <minutes>: the record's end is that far ahead, give or take the seconds the run took
+  python3 -I -c 'import datetime, json, sys; d = json.load(open(sys.argv[1])); left = (datetime.datetime.fromisoformat(d["until"]) - datetime.datetime.now().astimezone()).total_seconds(); sys.exit(not (int(sys.argv[2]) * 60 - 60 < left <= int(sys.argv[2]) * 60 + 5))' "$BOSUN_STATE_DIR/keep-awake-smoke.json" "$1"
+}
+
+write_quit paused
+out="$(now_morning "${awake_outside[@]}" "$BOSUN" morning --now --skip-setup)"
+now_rc=$?
+check "--now outside the awake window starts the session, exits 0 and says so in its header whatever BOSUN_TRIGGER is" bash -c 'grep -q "=== morning run (trigger=now, " <<<"$1" && ! grep -q "trigger=launchd" <<<"$1" && grep -q "morning run complete" <<<"$1" && [ "$2" -eq 0 ] && tmux -L "$3" has-session -t =smoke' _ "$out" "$now_rc" "$SOCKET"
+check "... it holds no keep-awake and logs one line saying it is outside the window" bash -c 'grep -c "outside the awake window" <<<"$1" | grep -qx 1 && ! grep -q "holding keep-awake" <<<"$1"' _ "$out"
+check "... no caffeinate, no pid file, no record" no_keep_awake
+check "... it cleared the quit that paused the morning, instead of stopping for it" bash -c '! grep -q "is paused" <<<"$1" && [ ! -e "$2/quit.json" ]' _ "$out" "$BOSUN_STATE_DIR"
+now_clean
+
+out="$(now_morning "${awake_inside[@]}" "$BOSUN" morning --now --skip-setup)"
+check "--now inside the awake window holds the keep-awake until BOSUN_AWAKE_UNTIL (the record says so) and starts the session" bash -c 'grep -q "holding keep-awake for " <<<"$1" && ! grep -q "outside the awake window" <<<"$1" && tmux -L "$2" has-session -t =smoke' _ "$out" "$SOCKET"
+check "... the record ends at that minute" keep_awake_ends_at "$inside_until"
+now_clean
+
+out="$(now_morning "${awake_unscheduled[@]}" "$BOSUN" morning --now --skip-setup)"
+check "--now on a day that is not scheduled holds no keep-awake, and starts the session" bash -c 'grep -q "outside the awake window" <<<"$1" && ! grep -q "holding keep-awake" <<<"$1" && tmux -L "$2" has-session -t =smoke' _ "$out" "$SOCKET"
+check "... no pid file, no record" no_keep_awake
+now_clean
+
+out="$(now_morning "${awake_outside[@]}" "$BOSUN" morning --now --skip-setup --awake-minutes 3)"
+check "--awake-minutes wins over the window with --now, as without it" contains "$out" "holding keep-awake for 3 minutes"
+check "... the record ends in about three minutes" keep_awake_ends_in 3
+now_clean
+
+write_quit paused
+out="$(now_morning "${awake_inside[@]}" "$BOSUN" morning --now --dry-run --skip-setup)"
+check "--now --dry-run says what it would do: the trigger, the quit it would end, the keep-awake and until when" bash -c 'grep -q "=== morning run (trigger=now, .*dry_run=1" <<<"$1" && grep -q "dry-run: would end the bosun quit (at " <<<"$1" && grep -q "dry-run: would hold keep-awake for [0-9]* minutes (until '"$inside_until"')" <<<"$1"' _ "$out"
+check "... and changes nothing: the quit stays, no session, no keep-awake" bash -c '[ -f "$1/quit.json" ] && ! tmux -L "$2" has-session -t =smoke' _ "$BOSUN_STATE_DIR" "$SOCKET"
+check "... no pid file, no record" no_keep_awake
+out="$(now_morning "${awake_outside[@]}" "$BOSUN" morning --now --dry-run --skip-setup)"
+check "--now --dry-run outside the window says it would hold none" bash -c 'grep -q "outside the awake window" <<<"$1" && ! grep -q "would hold keep-awake" <<<"$1"' _ "$out"
+check "... and changes nothing" bash -c '[ -f "$1/quit.json" ] && ! tmux -L "$2" has-session -t =smoke' _ "$BOSUN_STATE_DIR" "$SOCKET"
+now_clean
+
+check "--now with settings that are not a window fails in one line, naming the setting" fails_with "BOSUN_DAYS has 'X'" now_morning BOSUN_DAYS=X "$BOSUN" morning --now --skip-setup
+check "... and so does a bad BOSUN_AWAKE_UNTIL" fails_with "BOSUN_AWAKE_UNTIL must be HH:MM, got 'late'" now_morning BOSUN_AWAKE_UNTIL=late "$BOSUN" morning --now --skip-setup
+check "... starting nothing" bash -c '! tmux -L "$1" has-session -t =smoke' _ "$SOCKET"
+
+# --now clears the quit at its top, but still passes --unless-quit to its start: a quit made while this Start sets up is kept.
+out="$(now_morning "${awake_outside[@]}" BOSUN_SETUP_FILE="$WORK/quit-during-setup.sh" "$BOSUN" morning --now)"
+now_rc=$?
+check "a quit made while --now sets up survives its start, which logs that, and the run says so and exits 0" bash -c 'grep -q "bosun was quit at [0-9:]*: not starting it" <<<"$1" && grep -q "bosun quit during the morning run; not starting" <<<"$1" && ! grep -q "morning run complete" <<<"$1" && [ "$2" -eq 0 ] && [ -f "$3/quit.json" ] && ! tmux -L "$4" has-session -t =smoke' _ "$out" "$now_rc" "$BOSUN_STATE_DIR" "$SOCKET"
+now_clean
+
 stop_keep_awake_leaves_it() { # bosun stop --keep-awake keeps the caffeinate and its files; a plain stop releases them
   start_keep_awake
   "$BOSUN" stop --keep-awake >/dev/null 2>&1

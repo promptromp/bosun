@@ -95,7 +95,10 @@ Calls made from the research and the builder check, to check while reading:
   `reload_changed_jobs` is unchanged. The console job is the one that would restart a process, so its KeepAlive
   depends on a marker file Start creates and Quit removes (launchd's `KeepAlive` → `PathState`).
 - **"Start bosun" does what the morning run does** — the setup refresh, the agents' update, a keep-awake until the
-  awake hours end when it is inside them, then start or refresh — on any day, at any hour. Opening the app in the red
+  awake hours end when it is inside them, then start or refresh — on any day, at any hour. It runs `bosun morning
+  --now`: that run ends a quit (paused or not) instead of stopping for it, takes "inside the awake hours" from
+  `lib/awake.py`'s window (the one rule the watchdog and the status use), holds no keep-awake outside it, and still
+  passes `--unless-quit` to its start, so a Quit made while Start is setting up is kept. Opening the app in the red
   state starts bosun too.
 - **The console always running is a setting**, `BOSUN_CONSOLE_ALWAYS`, on for installs with the app and off for
   others (no `CONFIG_ADDED` entry: its default, 0, is what an older install did). A `bosun console` by hand while the

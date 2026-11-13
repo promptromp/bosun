@@ -1162,6 +1162,13 @@ seconds_until_awake_end() {
   echo $((target > now ? target - now : 0))
 }
 
+# Seconds left in the awake window that now is in: the one rule (lib/awake.py, which the watchdog and the status
+# use too), so `bosun morning --now` and they agree on what "inside" is. Fails printing nothing outside every
+# window; exits 2 printing one line when BOSUN_DAYS, BOSUN_START_TIME or BOSUN_AWAKE_UNTIL does not parse.
+awake_seconds_left() {
+  python3 "$BOSUN_ROOT/lib/awake.py" remaining --days "$BOSUN_DAYS" --start "$BOSUN_START_TIME" --until "$BOSUN_AWAKE_UNTIL"
+}
+
 seconds_until() {
   local target now
   target="$(date -j -f '%Y-%m-%d %H:%M:%S' "$(date +%F) $1:00" +%s)" || return 1
