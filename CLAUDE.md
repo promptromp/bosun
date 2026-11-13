@@ -492,11 +492,11 @@ The repo is meant to be shareable, so nothing in it may identify an organization
   GitHub, Jira, AWS accounts or profiles), emails or tokens, also not in tests, fixtures, docs or
   commit messages. Use placeholders (`acme`, `my-org`, `example.com`, `/Users/me`, zero-filled
   Slack ids) and clearly fictional names.
-- One exception: the values of `app/publisher.json` (the publisher's Team ID, the bundle id, which is the
-  publisher's reverse-DNS id, and the repository whose releases carry the app) are the public identifying values
-  the repo may hold, there and nowhere else (`bosun app install` checks the downloaded app against them, and
-  they are public in every signed app). Anything else that needs one reads it from that file. It does not loosen
-  the forbidden-terms check for anything else.
+- One exception: the publisher's Team ID and the app's bundle id (the publisher's reverse-DNS id) in
+  `app/publisher.json` are public identifying values the repo may hold, there and nowhere else (`bosun app
+  install` checks the downloaded app against them, and they are public in every signed app). Anything else that
+  needs one reads it from that file. The file's `releases` names this project's own repository, as get.sh and the
+  README do. It does not loosen the forbidden-terms check for anything else.
 - The `forbidden-terms` hook enforces this locally from `$BOSUN_CONFIG_DIR/forbidden-terms.txt`
   (one case-insensitive regex per line, `#` comments), so the list itself never enters the repo;
   without the file it passes. Add a term there whenever something site-specific nearly slipped in.
