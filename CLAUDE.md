@@ -455,9 +455,10 @@ to `true`, and it is not a required check in `.github/rulesets/main.json`; to tu
 remove that `if` (or set the variable), re-add `smoke` to the ruleset's required checks and apply
 it; the pre-push hook still runs the suite), the menu bar app (`app`, on macOS: `swift test`
 with warnings as errors, the coverage floor, SwiftLint, `swift format lint --strict`, and an ad hoc build whose
-bundle must verify; its first step compares the pull request with its base and passes in seconds, building
-nothing, when nothing under `app/`, `tools/contract_samples.py`, `tools/swift_coverage.py` or the workflow
-changed, so it can be required on every pull request), and
+bundle must verify; a cheap Linux job, `changes`, compares the pull request or merge group with its base, and `app`
+`needs` it and is skipped (no macOS runner starts, and a skipped job counts as passing) when nothing under `app/`,
+`tools/contract_samples.py`, `tools/swift_coverage.py` or the workflow changed, so it can be required on every
+pull request), and
 gitleaks over the pull request's or merge group's commits (`gitleaks`; a made-up value in a test carries a
 `gitleaks:allow` comment). `.github/workflows/install.yml` runs the install for real on a clean macOS
 runner and the Docker sandbox, when the install could have changed and weekly; those are not required

@@ -23,7 +23,7 @@ and minor updates of the GitHub Actions, the sandbox's Docker base image, the pr
 uv development dependencies get auto-merge turned on by `.github/workflows/dependabot-auto-merge.yml`,
 which only adds them to the queue once their checks pass; majors and production dependencies wait for
 a person. CI runs every unit test on Linux (on macOS too once the smoke job is back), and keeps a floor under their
-coverage. The menu bar app has its own job, `app`: when a pull request or merge group changes nothing under `app/` (or the two tools that feed it, `tools/contract_samples.py` and `tools/swift_coverage.py`, or the workflow), it passes in seconds without building; otherwise it runs the Swift tests with warnings as errors, the coverage floor, SwiftLint, `swift format lint --strict` and an ad hoc signed build. For the forbidden-terms check to run there too, store your list as the
+coverage. The menu bar app has its own job, `app`: when a pull request or merge group changes nothing under `app/` (or the two tools that feed it, `tools/contract_samples.py` and `tools/swift_coverage.py`, or the workflow), it is skipped (a cheap Linux job, `changes`, looks first, so no macOS runner starts, and a skipped job counts as passing for the required check); otherwise it runs the Swift tests with warnings as errors, the coverage floor, SwiftLint, `swift format lint --strict` and an ad hoc signed build. For the forbidden-terms check to run there too, store your list as the
 `FORBIDDEN_TERMS` Actions secret with `gh secret set FORBIDDEN_TERMS <
 ~/.config/bosun/forbidden-terms.txt`; the logs never print what it matched.
 
