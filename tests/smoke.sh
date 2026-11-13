@@ -330,6 +330,7 @@ check "usage errors exit 2" bash -c '
     [ $? -eq 2 ] || { echo "bosun $args did not exit 2"; exit 1; }
   done' _ "$BOSUN"
 
+always_run
 # unit_tests: the unit tests as they have always run, with none of this run's BOSUN_* settings, but in a home of
 # its own (stand-ins in it too) and never the real one.
 unit_tests() {
@@ -339,7 +340,6 @@ unit_tests() {
   fakes_first "$WORK/unit-home"
   HOME="$WORK/unit-home" python3 -m unittest discover -s "$ROOT/tests/unit"
 }
-always_run
 if [ "$WITH_UNIT" = 1 ]; then
   echo "python unit tests (tests/unit)"
   unit_out="$(unit_tests 2>&1)"
