@@ -198,8 +198,8 @@ of truth, so don't copy rules into this file.
   commands by `make-acme-ledger.sh` there (its build day, its replica and one write per second
   are pinned, so the ids stay).
 - Status for the menu bar app (`bosun status --json`, design: `docs/design/menu-bar.md`): `lib/menu_status.py`
-  (pure: the level, sentence and lines from the watchdog's checks, `console_sessions.waiting_in` and the
-  quit record, `snapshot`; its `CONTRACT` only grows) and `lib/menu_status_live.py` (its only I/O, through
+  (pure: the level, sentence and lines from the watchdog's checks and its gate on a missing session
+  (`watchdog.session_gate_kind`), `console_sessions.waiting_in` and the quit record, `snapshot`; its `CONTRACT` only grows) and `lib/menu_status_live.py` (its only I/O, through
   `console_live`'s readers; the command, which always prints the object). The keep-awake end is
   `keep-awake-<session>.json`, written by `libexec/bosun-morning` and removed by `bosun stop`.
 - `orchestrator/policy.md` (appended to the orchestrator's system prompt),

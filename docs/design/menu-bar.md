@@ -155,7 +155,10 @@ Calls made from the research and the builder check, to check while reading:
   `lib/watchdog.py`), in one pure function, so the menu, the console and the watchdog never disagree.
   Built as `lib/menu_status.py` (the pure function, `snapshot`) and `lib/menu_status_live.py` (its facts, read-only,
   and the command). The keep-awake end comes from `keep-awake-<session>.json` (`{"until", "pid"}`), which the morning
-  writes beside the pid file and `bosun stop` removes; a hold whose process is gone is not shown. A quit record that
+  writes beside the pid file and `bosun stop` removes; a hold whose process is gone is not shown. A missing session is judged by the watchdog's own gate
+  (`watchdog.session_gate_kind`), never by a rule of status's own: an error only when it should be running; a plain
+  `bosun stop` today is `stopped` with the morning not paused; outside the awake hours or before the morning is due
+  it is resting, and while the morning runs it is starting. A quit record that
   cannot be read shows as stopped, with the problem saying so and that `bosun start` clears it.
 - **The console as a job.** `templates/launchd-console.plist` runs `bosun console` (persisted token, its port),
   rendered and loaded by `reload_changed_jobs` only with `BOSUN_CONSOLE_ALWAYS=1`. Its `KeepAlive` is `PathState` on

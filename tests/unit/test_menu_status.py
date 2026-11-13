@@ -24,7 +24,7 @@ import menu_status_live
 import quit_state
 import update_state
 from console_live import LiveError
-from menu_status import StatusFacts
+from menu_status import SessionGate, StatusFacts
 
 
 NOW = datetime(2026, 11, 11, 10, 0, 0)  # a Wednesday, local time, inside the awake window
@@ -39,6 +39,9 @@ def window(name: str, status: str | None = "idle", exists: bool = True) -> dict[
 
 
 WINDOWS = [window("orch"), window("exporter"), window("checkin", None)]
+GONE = [window(w["name"], exists=False) for w in WINDOWS]
+EXPECTED = SessionGate(menu_status.EXPECTED)
+RESTING = SessionGate(menu_status.RESTING)
 
 
 def check(name: str, severity: str, *messages: str) -> dict[str, Any]:
@@ -111,53 +114,120 @@ class LevelsTestCase(unittest.TestCase):
         self.assertEqual(out["level"], "error")
         self.assertEqual(sorted(out["problems"]), ["e1", "w1", "w2"])
 
-    def test_no_session_inside_the_awake_window_is_an_error(self) -> None:
-        gone = [window(w["name"], exists=False) for w in WINDOWS]
-        out = snap(windows=gone)
+    def test_no_session_that_the_gate_expects_is_an_error(self) -> None:
+        out = snap(windows=GONE, gate=EXPECTED)
         self.assertEqual((out["level"], out["sentence"]), ("error", "bosun is not running"))
         self.assertEqual(out["windows"], 0)
         self.assertEqual(len(out["problems"]), 1)
         self.assertIn("not running", out["problems"][0])
         self.assertIn("bosun start", out["problems"][0])
+        self.assertIsNone(out["stopped"])
 
     def test_the_watchdogs_own_session_finding_is_not_said_twice(self) -> None:
-        gone = [window(w["name"], exists=False) for w in WINDOWS]
         message = "The tmux session 'acme' is not running. Start it with: bosun start"
-        out = snap(windows=gone, checks=watchdog_checks(check("session-missing", "error", message)))
+        out = snap(
+            windows=GONE, gate=EXPECTED, checks=watchdog_checks(check("session-missing", "error", message))
+        )
         self.assertEqual((out["level"], out["problems"]), ("error", [message]))
 
+    def test_a_session_you_stopped_today_with_bosun_stop_is_stopped_and_the_morning_is_not_paused(
+        self,
+    ) -> None:
+        stopped_at = NOW.replace(hour=9, minute=30)
+        out = snap(windows=GONE, gate=SessionGate(menu_status.STOPPED_BY_STOP, stopped_at))
+        self.assertEqual(
+            (out["level"], out["sentence"]), ("stopped", "bosun is stopped (bosun stop at 09:30)")
+        )
+        self.assertEqual(
+            out["stopped"],
+            {"since": stopped_at.astimezone().isoformat(timespec="seconds"), "morning_paused": False},
+        )
+        self.assertEqual(out["problems"], [])
+        self.assertIn("You stopped bosun at 09:30", out["detail"][0])
+        self.assertIn("morning run starts it again", out["detail"][1])
+
+    def test_a_stop_does_not_hide_windows_that_are_open(self) -> None:
+        out = snap(gate=SessionGate(menu_status.STOPPED_BY_STOP, NOW))
+        self.assertEqual((out["level"], out["sentence"]), ("ok", "bosun is running"))
+        self.assertIsNone(out["stopped"])
+
+    def test_a_quit_beats_a_stop(self) -> None:
+        out = snap(
+            windows=GONE,
+            gate=SessionGate(menu_status.STOPPED_BY_STOP, NOW),
+            quit=quit_state.QuitState(GONE_AT, True),
+        )
+        self.assertEqual((out["sentence"], out["stopped"]["morning_paused"]), ("bosun is stopped", True))
+
     def test_no_session_outside_the_awake_window_is_ok_and_resting(self) -> None:
-        gone = [window(w["name"], exists=False) for w in WINDOWS]
-        out = snap(NOW.replace(hour=21), windows=gone)
+        out = snap(NOW.replace(hour=21), windows=GONE, gate=RESTING)
         self.assertEqual((out["level"], out["sentence"]), ("ok", "bosun is resting until 08:00"))
         self.assertEqual(out["problems"], [])
 
+    def test_no_session_before_the_morning_is_due_is_ok_and_rests_until_then(self) -> None:
+        due = NOW.replace(hour=8, minute=16)
+        out = snap(NOW.replace(hour=8, minute=5), windows=GONE, gate=SessionGate(menu_status.RESTING, due))
+        self.assertEqual((out["level"], out["sentence"]), ("ok", "bosun is resting until 08:16"))
+        self.assertEqual(out["problems"], [])
+
+    def test_a_morning_run_that_is_still_going_is_ok_and_starting(self) -> None:
+        out = snap(windows=GONE, gate=SessionGate(menu_status.STARTING))
+        self.assertEqual((out["level"], out["sentence"]), ("ok", "bosun is starting (the morning run)"))
+        self.assertEqual(out["problems"], [])
+
+    def test_with_no_morning_run_today_only_the_watchdogs_findings_decide(self) -> None:
+        gate = SessionGate(menu_status.NO_MORNING)
+        quiet = snap(windows=GONE, gate=gate)
+        self.assertEqual((quiet["level"], quiet["problems"]), ("ok", []))
+        message = "No morning run today."
+        loud = snap(
+            windows=GONE, gate=gate, checks=watchdog_checks(check("morning-missing", "error", message))
+        )
+        self.assertEqual(
+            (loud["level"], loud["sentence"], loud["problems"]), ("error", "bosun is not running", [message])
+        )
+        mild = snap(
+            windows=GONE, gate=gate, checks=watchdog_checks(check("morning-missing", "warn", message))
+        )
+        self.assertEqual(mild["level"], "warning")
+
     def test_resting_over_a_weekend_waits_for_the_next_scheduled_day(self) -> None:
-        gone = [window(w["name"], exists=False) for w in WINDOWS]
         friday_night = datetime(2026, 11, 13, 21, 0)
-        out = snap(friday_night, windows=gone, awake=awake.AwakeWindow("MTWRF", time(7, 30), time(20, 0)))
+        out = snap(
+            friday_night,
+            windows=GONE,
+            gate=RESTING,
+            awake=awake.AwakeWindow("MTWRF", time(7, 30), time(20, 0)),
+        )
         self.assertEqual(out["sentence"], "bosun is resting until 07:30")
 
     def test_resting_before_the_start_on_a_scheduled_day_is_until_today(self) -> None:
-        gone = [window(w["name"], exists=False) for w in WINDOWS]
-        out = snap(NOW.replace(hour=6), windows=gone)
+        out = snap(NOW.replace(hour=6), windows=GONE, gate=RESTING)
         self.assertEqual(out["sentence"], "bosun is resting until 08:00")
 
     def test_resting_with_a_warning_says_so(self) -> None:
-        gone = [window(w["name"], exists=False) for w in WINDOWS]
-        out = snap(NOW.replace(hour=21), windows=gone, checks=watchdog_checks(check("waiting", "warn", "w1")))
+        out = snap(
+            NOW.replace(hour=21),
+            windows=GONE,
+            gate=RESTING,
+            checks=watchdog_checks(check("waiting", "warn", "w1")),
+        )
         self.assertEqual(
             (out["level"], out["sentence"]), ("warning", "bosun is resting until 08:00, with a warning")
         )
 
     def test_an_error_while_resting_is_still_an_error(self) -> None:
-        gone = [window(w["name"], exists=False) for w in WINDOWS]
         out = snap(
             NOW.replace(hour=21),
-            windows=gone,
+            windows=GONE,
+            gate=RESTING,
             checks=watchdog_checks(check("morning-failed", "error", "e1")),
         )
         self.assertEqual((out["level"], out["sentence"]), ("error", "bosun is not running"))
+
+    def test_a_gate_that_could_not_be_told_makes_no_judgement_of_a_missing_session(self) -> None:
+        out = snap(windows=GONE, gate=None)
+        self.assertEqual((out["level"], out["problems"]), ("ok", []))
 
     def test_a_window_that_is_configured_but_not_open_does_not_count(self) -> None:
         out = snap(windows=[window("orch"), window("exporter", exists=False)])
@@ -255,8 +325,7 @@ class UnreadFactsTestCase(unittest.TestCase):
         self.assertEqual(len(out["problems"]), 2)
 
     def test_without_the_awake_hours_no_session_is_not_called_an_error(self) -> None:
-        gone = [window(w["name"], exists=False) for w in WINDOWS]
-        out = snap(windows=gone, awake=None, errors={"config": "BOSUN_START_TIME must be HH:MM"})
+        out = snap(windows=GONE, awake=None, errors={"config": "BOSUN_START_TIME must be HH:MM"})
         self.assertEqual((out["level"], out["sentence"]), ("warning", "bosun is not running"))
 
 
@@ -517,6 +586,36 @@ class GatherTestCase(unittest.TestCase):
         found = self.gather()
         self.assertEqual(found.quit, quit_state.QuitState(GONE_AT, True))
         self.assertEqual(found.log_errors, ("check-in.log: [checkin] ERROR: x",))
+
+    def test_the_gate_is_the_watchdogs_own_judgement_of_a_missing_session(self) -> None:
+        # What session_gate_kind says at each point of the day, as a fact: never the text of its reason.
+        def at(hour: int, minute: int = 0) -> datetime:
+            return NOW.replace(hour=hour, minute=minute)
+
+        header = (
+            "2026-11-11 08:00:30 [morning] === morning run (trigger=launchd, session=acme, dry_run=0) ==="
+        )
+        log = self.state / "logs" / "morning-2026-11-11.log"
+
+        def gate(moment: datetime) -> SessionGate | None:
+            return menu_status_live.gather(self.env, moment, good_commands()).gate
+
+        self.assertEqual(gate(at(21)), SessionGate(menu_status.RESTING))
+        self.assertEqual(gate(at(8, 5)), SessionGate(menu_status.RESTING, at(8, 16)))
+        self.assertEqual(gate(at(10)), SessionGate(menu_status.NO_MORNING))
+        log.write_text(header + "\n")
+        self.assertEqual(gate(at(10)), SessionGate(menu_status.STARTING))
+        log.write_text(header + "\n2026-11-11 08:03:00 [morning] morning run complete\n")
+        self.assertEqual(gate(at(10)), SessionGate(menu_status.EXPECTED))
+        (self.state / "stopped-acme").write_text("2026-11-11 09:30:00\n")
+        self.assertEqual(gate(at(10)), SessionGate(menu_status.STOPPED_BY_STOP, at(9, 30)))
+        (self.state / "stopped-acme").write_text("2026-11-10 09:30:00\n")  # yesterday's stop is over
+        self.assertEqual(gate(at(10)), SessionGate(menu_status.EXPECTED))
+
+    def test_without_the_checks_there_is_no_gate(self) -> None:
+        self.assertIsNone(self.gather(FakeCommands({"sessions --json": json.dumps(WINDOWS)})).gate)
+        self.env["BOSUN_START_TIME"] = "soon"
+        self.assertIsNone(self.gather().gate)
 
     def test_a_reader_that_fails_leaves_its_part_empty_and_says_why(self) -> None:
         found = self.gather(FakeCommands({"watchdog --facts": json.dumps(WATCHDOG_FACTS)}))

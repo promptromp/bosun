@@ -4,7 +4,8 @@
 Everything here only reads, and it reads what the console's Sessions view and the watchdog's status read
 already: `bosun sessions --json` and `bosun watchdog --facts` through lib/console_live.py's collector (not its
 events, Slack watcher and login parts, which the menu does not show), the watchdog's checks through
-`watchdog.status_data` (no alert, no de-dup state written), the quit record, the update's lock, the console's
+`watchdog.status_data` (no alert, no de-dup state written) and its gate on a missing session
+(`watchdog.session_gate_kind`), the quit record, the update's lock, the console's
 running lock, the keep-awake record the morning writes and the last hour of the logs' ERROR lines (the
 watchdog's own scan, but never its marks).
 
@@ -25,6 +26,7 @@ import sys
 from collections.abc import Callable, Mapping
 from datetime import datetime, timedelta
 from pathlib import Path
+from typing import Any
 
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -37,7 +39,7 @@ import quit_state
 import update_state
 import watchdog
 from console_live import LiveError, Run
-from menu_status import StatusFacts
+from menu_status import SessionGate, StatusFacts
 
 
 LOG_WINDOW = timedelta(hours=1)
@@ -131,6 +133,31 @@ def awake_window(env: Mapping[str, str]) -> awake.AwakeWindow:
         raise LiveError(str(exc)) from exc
 
 
+GATE_KINDS = {
+    watchdog.GATE_OUTSIDE: menu_status.RESTING,
+    watchdog.GATE_MORNING_RUNNING: menu_status.STARTING,
+    watchdog.GATE_NO_MORNING: menu_status.NO_MORNING,
+}
+
+
+def session_gate(
+    settings: console_live.Settings, watchdog_facts: dict[str, Any], now: datetime
+) -> SessionGate:
+    """Whether the watchdog expects the session to run now: its own `session_gate_kind`, over the same
+    context its checks are made from, as a fact (never its text)."""
+    inputs = console_live.watchdog_inputs(settings, watchdog_facts, now)
+    ctx = inputs.context(watchdog.State.load(inputs.config.state_dir))
+    found = watchdog.session_gate_kind(ctx)
+    if found is None:
+        return SessionGate(menu_status.EXPECTED)
+    kind = found[0]
+    if kind == watchdog.GATE_NOT_DUE:  # resting until the morning run is due
+        return SessionGate(menu_status.RESTING, watchdog.morning_due(ctx.config, ctx.today))
+    if kind == watchdog.GATE_STOPPED:
+        return SessionGate(menu_status.STOPPED_BY_STOP, watchdog.stopped_today(ctx))
+    return SessionGate(GATE_KINDS[kind])
+
+
 def update_facts(state_dir: Path) -> tuple[bool, tuple[str, ...]]:
     """Whether an update runs now, and the windows it waits for (it names none unless it is running)."""
     if not update_state.running(state_dir):
@@ -150,15 +177,17 @@ def gather(env: Mapping[str, str], now: datetime, run: Run) -> StatusFacts:
     windows = attempt("sessions", lambda: console_live.bosun_json(run, "sessions", "--json"))
     # With settings that do not load the checks cannot be made (that is said once, as the config)
     watchdog_facts = attempt("watchdog", lambda: console_live.bosun_json(run, "watchdog", "--facts"))
-    checks = None
+    checks, gate = None, None
     if window is not None and watchdog_facts:
-        checks = attempt("watchdog", lambda: console_live.watchdog_status(settings, watchdog_facts))
+        checks = attempt("watchdog", lambda: console_live.watchdog_status(settings, watchdog_facts, now))
+        gate = attempt("watchdog", lambda: session_gate(settings, watchdog_facts, now))
     updating, waiting_for = update_facts(state_dir)
     return StatusFacts(
         windows=windows,
         checks=checks,
         awake=window,
         quit=quit_state.read(state_dir),
+        gate=gate,
         update_running=updating,
         update_waiting_for=waiting_for,
         console_running=console_token.running(state_dir),

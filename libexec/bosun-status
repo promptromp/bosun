@@ -8,17 +8,21 @@
 #           read (design: docs/design/menu-bar.md). It reads only, answers in a second or two, and
 #           always prints the object and exits 0, with what it could not read among its problems:
 #             contract          1; a number that only grows, a field only ever being added
-#             level             ok, warning, error or stopped (you quit bosun)
+#             level             ok, warning, error or stopped (you quit bosun, or stopped it today with
+#                               `bosun stop`). A missing session is judged by the watchdog's own gate:
+#                               an error only when it should be running, ok while resting (outside the
+#                               awake hours, before the morning run is due) or starting
 #             sentence, detail  the menu's first line, and grey lines under it
 #             windows, waiting  the windows open, and the names of those waiting for you
 #             keep_awake_until  HH:MM while the morning's keep-awake holds the Mac up, else null
-#             stopped           {"since": <ISO time>, "morning_paused": <bool>} after a quit, else null
+#             stopped           {"since": <ISO time>, "morning_paused": <bool>} after a quit (or, with
+#                               the morning not paused, a `bosun stop` today), else null
 #             update            {"state": "none"|"running", "waiting_for": [windows]}
 #             console           {"running": <bool>, "url": null} (the address carries the token: it is
 #                               what `bosun console --url` prints)
-#             problems          what is wrong, one line each: the watchdog's findings, no window open
-#                               inside the awake hours, ERROR lines logged in the last hour, a part
-#                               that could not be read
+#             problems          what is wrong, one line each: the watchdog's findings (a missing session
+#                               among them), ERROR lines logged in the last hour, a part that could
+#                               not be read
 #             logs              the log folder
 set -uo pipefail
 source "$(dirname "$0")/../lib/common.sh"

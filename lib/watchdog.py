@@ -658,21 +658,37 @@ def stopped_today(ctx: Context) -> datetime | None:
     return stopped if stopped.date() == ctx.today else None
 
 
-def session_gate(ctx: Context) -> str | None:
-    """Why the session should not be expected to run now, or None if it should."""
+# Why the session is not expected to run now (gate_kind): the awake window is not on, the morning is not
+# due yet, no morning run has happened today, it is still going, or you stopped it with `bosun stop`.
+GATE_OUTSIDE = "outside-window"
+GATE_NOT_DUE = "not-due"
+GATE_NO_MORNING = "no-morning"
+GATE_MORNING_RUNNING = "morning-running"
+GATE_STOPPED = "stopped"
+
+
+def session_gate_kind(ctx: Context) -> tuple[str, str] | None:
+    """Why the session should not be expected to run now, as (GATE_*, the reason's text), or None if it
+    should. `bosun status --json` judges a missing session by this too."""
     if not in_awake_window(ctx.config, ctx.now):
-        return "outside the awake window"
+        return GATE_OUTSIDE, "outside the awake window"
     due = morning_due(ctx.config, ctx.today)
     if ctx.now < due:
-        return f"not expected before {due:%H:%M}"
+        return GATE_NOT_DUE, f"not expected before {due:%H:%M}"
     if ctx.morning_run is None:
-        return "no morning run today (see morning-missing)"
+        return GATE_NO_MORNING, "no morning run today (see morning-missing)"
     if ctx.morning_run.outcome == "running":
-        return "the morning run is still going"
+        return GATE_MORNING_RUNNING, "the morning run is still going"
     stopped = stopped_today(ctx)
     if stopped:
-        return f"you stopped it at {stopped:%H:%M} (bosun stop)"
+        return GATE_STOPPED, f"you stopped it at {stopped:%H:%M} (bosun stop)"
     return None
+
+
+def session_gate(ctx: Context) -> str | None:
+    """The text of session_gate_kind, or None if the session should run."""
+    gate = session_gate_kind(ctx)
+    return gate[1] if gate else None
 
 
 def check_session(ctx: Context) -> Result:

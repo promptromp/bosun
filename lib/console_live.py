@@ -144,19 +144,26 @@ def bosun_json(run: Run, *args: str) -> Any:
         raise LiveError(f"{' '.join(args)} gave no JSON: {exc}") from exc
 
 
-def watchdog_status(settings: Settings, facts: dict[str, Any]) -> dict[str, Any]:
-    """The watchdog's checks as data (read-only), its login check without `claude auth status`."""
+def watchdog_inputs(
+    settings: Settings, facts: dict[str, Any], now: datetime | None = None
+) -> watchdog.Inputs:
+    """What the watchdog's checks are made from (read-only): its login check is made without `claude auth
+    status`."""
     try:
         config = watchdog.Config.from_env(settings.env)
     except watchdog.ConfigError as exc:
         raise LiveError(str(exc)) from exc
-    inputs = watchdog.Inputs(
+    return watchdog.Inputs(
         config,
         watchdog.Facts.from_json(facts),
-        watchdog.current_time(None),
+        now or watchdog.current_time(None),
         auth_status=lambda _bin: NOT_ASKED,
     )
-    data = watchdog.status_data(inputs, watchdog.CHECKS)
+
+
+def watchdog_status(settings: Settings, facts: dict[str, Any], now: datetime | None = None) -> dict[str, Any]:
+    """The watchdog's checks as data (read-only), its login check without `claude auth status`."""
+    data = watchdog.status_data(watchdog_inputs(settings, facts, now), watchdog.CHECKS)
     for check in data["checks"]:
         if check["name"] == watchdog.LOGIN_CHECK and not check["findings"]:
             check["note"] = LOGIN_CHECK_NOTE

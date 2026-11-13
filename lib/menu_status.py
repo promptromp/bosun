@@ -4,15 +4,19 @@ docs/design/menu-bar.md, "The CLI side"). The menu bar app shows it and reads no
 Pure over StatusFacts, which lib/menu_status_live.py gathers, and a time (local and naive, like the
 awake window's). The levels are the watchdog's own and the console's: a check's severity (lib/watchdog.py,
 through `status_data`) decides error or warning, and the windows waiting at a prompt are
-lib/console_sessions.py's. What this adds is what the menu needs and the watchdog's checks do not say:
+lib/console_sessions.py's. Whether a missing session is a problem is the watchdog's own gate
+(`watchdog.session_gate_kind`, which `session-missing` uses), carried in as a SessionGate: no rule of
+its own, so the menu and the watchdog never disagree.
 
-- stopped: you quit bosun (lib/quit_state.py). Nothing else matters then.
-- error: no window is open inside the awake hours and bosun is not stopped (the watchdog's own
-  `session-missing` finding is then the problem listed, not a second line); or a check of severity error
-  has a finding.
+- stopped: you quit bosun (lib/quit_state.py), nothing else matters then; or no window is open and the
+  gate says you stopped it today with `bosun stop` (the morning run starts it as usual tomorrow).
+- error: no window is open and the gate says it should be running (the watchdog's own `session-missing`
+  finding is then the problem listed, not a second line); or a check of severity error has a finding.
 - warning: a check of severity warn has a finding, an ERROR line was logged in the last hour, or a fact
   could not be read (an answer built on a guess is never all well).
-- ok otherwise, and "resting until 08:00" when no window is open outside the awake hours.
+- ok otherwise: "resting until 08:00" when no window is open outside the awake hours or before the
+  morning is due, "starting (the morning run)" while that runs. With no morning run today there is no
+  rule here: the watchdog's `morning-missing` finding sets the level, as any finding does.
 
 The contract number (CONTRACT) is the app's check that it understands what it reads: it only ever grows,
 and a field is only ever added.
@@ -47,7 +51,21 @@ READ_PART = {
     "config": "bosun's settings",
     "logs": "the logs",
 }
+# What a SessionGate says about a missing session (watchdog.session_gate_kind, mapped by menu_status_live)
+EXPECTED = "expected"  # it should be running now
+RESTING = "resting"  # outside the awake window (at: None), or before the morning is due (at: that time)
+STARTING = "starting"  # the morning run is still going
+STOPPED_BY_STOP = "stopped"  # you stopped it today with bosun stop (at: when)
+NO_MORNING = "no-morning"  # no morning run today: morning-missing's to say
 DAYS_AHEAD = 8  # the next scheduled start is within a week; a day more for the same weekday
+
+
+@dataclass(frozen=True)
+class SessionGate:
+    """Whether the watchdog expects the session to run now. <at>: see the kinds above."""
+
+    kind: str
+    at: datetime | None = None  # local and naive
 
 
 @dataclass(frozen=True)
@@ -59,6 +77,7 @@ class StatusFacts:
     checks: Mapping[str, Any] | None  # watchdog.status_data
     awake: awake.AwakeWindow | None  # None when the settings did not load
     quit: quit_state.QuitState | None
+    gate: SessionGate | None = None  # None when it could not be told (the checks could not be made)
     update_running: bool = False
     update_waiting_for: tuple[str, ...] = ()
     console_running: bool = False
@@ -74,6 +93,7 @@ class Verdict:
     sentence: str
     detail: list[str]
     problems: list[str]
+    stopped: dict[str, Any] | None = None  # the `stopped` field, when this is a stop
 
 
 def plural(count: int, noun: str) -> str:
@@ -120,13 +140,13 @@ def unread_problems(errors: Mapping[str, str]) -> list[tuple[str, str]]:
 
 
 def problems_of(facts: StatusFacts, missing: bool) -> list[tuple[str, str]]:
-    """Every problem as (level, text), the watchdog's findings first. <missing>: no window is open
-    inside the awake hours."""
+    """Every problem as (level, text), the watchdog's findings first. <missing>: no window is open and
+    the watchdog's gate expects the session."""
     checked = findings(facts.checks)
     found = [(level, message) for level, _name, message in checked]
     named = {name for _level, name, _message in checked}
     if missing and SESSION_CHECK not in named:
-        text = "bosun's tmux session is not running, inside its awake hours. Start it with: bosun start"
+        text = "bosun's tmux session is not running, though it should be. Start it with: bosun start"
         found.append((ERROR, text))
     if facts.log_errors and LOG_CHECK not in named:
         found.append((WARNING, log_problem(facts.log_errors)))
@@ -144,18 +164,26 @@ def with_level(base: str, level: str, running: bool) -> str:
     return base
 
 
+def not_running_sentence(facts: StatusFacts, level: str, now: datetime) -> str:
+    """The first line when no window is open (and it is not a stop)."""
+    gate = facts.gate
+    if gate is not None and gate.kind == STARTING:
+        return with_level("bosun is starting (the morning run)", level, False)
+    if gate is None or gate.kind != RESTING or level == ERROR:
+        return "bosun is not running"
+    start = gate.at or next_start(facts.awake, now)
+    if start is None:
+        return "bosun is not running"
+    return with_level(f"bosun is resting until {start:%H:%M}", level, False)
+
+
 def running_sentence(facts: StatusFacts, level: str, count: int | None, now: datetime) -> str:
     """The first line of the menu while bosun is not stopped."""
     if count is None:
         return "bosun's windows could not be read"
     if count > 0:
         return with_level("bosun is running", level, True)
-    if facts.awake is not None and facts.awake.contains(now):
-        return "bosun is not running"
-    start = next_start(facts.awake, now)
-    if start is None or level == ERROR:
-        return "bosun is not running"
-    return with_level(f"bosun is resting until {start:%H:%M}", level, False)
+    return not_running_sentence(facts, level, now)
 
 
 def state_lines(facts: StatusFacts, count: int, waiting: list[str], now: datetime) -> list[str]:
@@ -170,16 +198,32 @@ def state_lines(facts: StatusFacts, count: int, waiting: list[str], now: datetim
     return lines
 
 
+def gate_says(facts: StatusFacts, count: int | None, kind: str) -> bool:
+    """Whether no window is open and the watchdog's gate says <kind> about it."""
+    return count == 0 and facts.gate is not None and facts.gate.kind == kind
+
+
 def running_verdict(facts: StatusFacts, now: datetime, waiting: list[str]) -> Verdict:
     count = None if facts.windows is None else open_windows(facts.windows)
-    inside = facts.awake is not None and facts.awake.contains(now)
-    problems = problems_of(facts, missing=count == 0 and inside)
+    if facts.gate is not None and facts.gate.at is not None and gate_says(facts, count, STOPPED_BY_STOP):
+        return stop_verdict(facts.gate.at)
+    problems = problems_of(facts, missing=gate_says(facts, count, EXPECTED))
     level = max((level for level, _text in problems), key=RANK.__getitem__, default=OK)
     return Verdict(
         level,
         running_sentence(facts, level, count, now),
         state_lines(facts, count or 0, waiting, now),
         [text for _level, text in problems],
+    )
+
+
+def stop_verdict(stopped_at: datetime) -> Verdict:
+    """You stopped bosun with `bosun stop` today: stopped, but the morning start is not paused."""
+    clock = f"{stopped_at:%H:%M}"
+    detail = [f"You stopped bosun at {clock} (bosun stop)", "The morning run starts it again as usual"]
+    since = stopped_at.astimezone().isoformat(timespec="seconds")
+    return Verdict(
+        STOPPED, f"bosun is stopped (bosun stop at {clock})", detail, [], stopped_fields_of(since, False)
     )
 
 
@@ -192,7 +236,7 @@ def stopped_verdict(state: quit_state.QuitState) -> Verdict:
         text = "The quit record is unreadable, so the morning is paused too; bosun start clears it"
         detail.append(text)
         problems.append(text)
-    return Verdict(STOPPED, "bosun is stopped", detail, problems)
+    return Verdict(STOPPED, "bosun is stopped", detail, problems, stopped_fields(state))
 
 
 # ---- the object --------------------------------------------------------------------------------
@@ -211,7 +255,7 @@ def snapshot(facts: StatusFacts, now: datetime) -> dict[str, Any]:
         "windows": open_windows(facts.windows),
         "waiting": waiting,
         "keep_awake_until": f"{kept:%H:%M}" if kept is not None and kept > now else None,
-        "stopped": stopped_fields(facts.quit),
+        "stopped": verdict.stopped,
         "update": {
             "state": "running" if facts.update_running else "none",
             "waiting_for": list(facts.update_waiting_for),
@@ -222,10 +266,12 @@ def snapshot(facts: StatusFacts, now: datetime) -> dict[str, Any]:
     }
 
 
-def stopped_fields(state: quit_state.QuitState | None) -> dict[str, Any] | None:
-    if state is None:
-        return None
-    return {"since": state.since.isoformat(timespec="seconds"), "morning_paused": state.morning_paused}
+def stopped_fields_of(since: str, morning_paused: bool) -> dict[str, Any]:
+    return {"since": since, "morning_paused": morning_paused}
+
+
+def stopped_fields(state: quit_state.QuitState) -> dict[str, Any]:
+    return stopped_fields_of(state.since.isoformat(timespec="seconds"), state.morning_paused)
 
 
 def failure(text: str, level: str = ERROR) -> dict[str, Any]:
