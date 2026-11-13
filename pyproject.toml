@@ -114,7 +114,7 @@ impacted_map = [
     "tests/sandbox/**=tests/unit/test_impacted_rules.py",
 ]
 # Whatever bosun reads as it runs (its prompts, task files, templates, the console's page, the
-# example config, the agy plugin), the fixtures, and the tests' conftest, which every test loads
+# example config, the agy plugin), the fixtures, and the tests' conftest with repo_guard.py, which every test loads
 # (and which imports lib/ modules, a dependency the plugin leaves out of its analysis): any test may
 # depend on them, so a change to one runs every test.
 impacted_invalidate_all = [
@@ -127,6 +127,7 @@ impacted_invalidate_all = [
     "agents/*/*",
     "tests/fixtures/**",
     "tests/unit/conftest.py",
+    "tests/unit/repo_guard.py",
 ]
 
 [tool.ruff]
