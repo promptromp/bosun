@@ -91,15 +91,20 @@ Calls made from the research and the builder check, to check while reading:
   Cancel Quit. A window waiting for you (a question or permission prompt on its screen) is not waited on: the dialog
   lists it by name, and Quit stops it.
 - **After Quit the launchd jobs stay loaded and do nothing** until Start: the watchdog and learning skip their runs
-  while bosun is stopped, the morning job skips while paused. So the jobs never need reloading, and
-  `reload_changed_jobs` is unchanged. The console job is the one that would restart a process, so its KeepAlive
+  while bosun is stopped, the morning job skips while paused. So a Quit never reloads a job. The console job is the one that would restart a process, so its KeepAlive
   depends on a marker file Start creates and Quit removes (launchd's `KeepAlive` → `PathState`).
 - **"Start bosun" does what the morning run does** — the setup refresh, the agents' update, a keep-awake until the
   awake hours end when it is inside them, then start or refresh — on any day, at any hour. It runs `bosun morning
   --now`: that run ends a quit (paused or not) instead of stopping for it, takes "inside the awake hours" from
   `lib/awake.py`'s window (the one rule the watchdog and the status use), holds no keep-awake outside it, and still
   passes `--unless-quit` to its start, so a Quit made while Start is setting up is kept. Opening the app in the red
-  state starts bosun too.
+  state starts bosun too. The app runs **`bosun morning --now --background`**, not `--now` itself: a process the app
+  starts keeps bosun.app as its "responsible process" for macOS's privacy (TCC) prompts, even when detached, and
+  everything the morning run starts (the tmux server, the agents) would inherit that, so the prompts would name the
+  app and the grants would follow its signature. `--background` only has launchd start the run, through bosun's own
+  job (below), so launchd is the parent and the prompts name bosun's own processes. **`bosun update --yes` stays a
+  detached child of the app**, since an update run as a launchd job could boot itself out when it reloads changed
+  plists (`reload_changed_jobs`), and what an update starts is not what the privacy prompts are about.
 - **The console always running is a setting**, `BOSUN_CONSOLE_ALWAYS`, on for installs with the app and off for
   others (no `CONFIG_ADDED` entry: its default, 0, is what an older install did). A `bosun console` by hand while the
   job runs prints (and with `--open` opens) the running one instead of starting a second.
@@ -176,6 +181,19 @@ Calls made from the research and the builder check, to check while reading:
   after a quit and a reboot with the marker gone. `bosun start` makes the marker; quit removes it and stops the process
   (`launchctl kill TERM`). `bosun console --url` prints its address with the token: the port the console recorded in its
   running lock and the stored token.
+- **The job that runs `--now`.** `templates/launchd-now.plist` (`<BOSUN_LAUNCHD_LABEL>.now`, `now_label`) runs
+  `bosun morning --now` through a login shell like bosun's other jobs, with `RunAtLoad` false and no schedule or
+  `KeepAlive`: only a kickstart starts it. It is always rendered, loaded and listed (`job_labels`, `render_job`,
+  `reload_changed_jobs`: install.sh and `bosun update` keep it current) and removed by uninstall with the others.
+  `AbandonProcessGroup` is true, since the tmux server and the keep-awake it starts outlive it. `bosun morning --now
+  --background` is `launchctl kickstart gui/<uid>/<label>.now` and a return at once: it adds no morning logic (the quit
+  record, the keep-awake, the update hold stay in the one `--now` path the job runs, whose log is the day's morning
+  log with `trigger=now`). Without `-k` launchd leaves a run that is going alone, so a second Start does not start it
+  twice (a refused kickstart while the job is running is taken for success). Exit 0 when launchd took the kickstart or
+  the run is going; exit 1, in one line, when the job is not loaded (run `install.sh` again, or `bosun init`) or
+  launchd would not start it; exit 2 for `--background` without `--now` or with `--dry-run`, `--skip-setup` or
+  `--awake-minutes`, which the job's run cannot be given. The VM run (`tests/install_e2e.sh`) checks with `launchctl
+  procinfo` that the tmux server it starts has a responsible process that is not the caller's.
 - **`bosun quit`.** The one command Quit runs (the app collects the choices; the CLI does the work, so a terminal
   can quit bosun the same way). `bosun quit --plan [--json]` changes nothing and says what a quit would meet: the
   open windows, which are busy and which wait for you, when the keep-awake ends, and why a quit is refused (an

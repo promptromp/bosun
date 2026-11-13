@@ -140,9 +140,77 @@ side_by_side() {
   }
 }
 
+morning_runs() { cat "$HOME"/.local/state/bosun/logs/morning-*.log 2>/dev/null | grep -c "morning run complete"; }
+
+# This shell's pid and each of its parents': whatever started the check, which macOS must not name as the
+# responsible process of what bosun starts.
+caller_pids() {
+  local pid=$$
+  while [ "${pid:-0}" -gt 1 ]; do
+    echo "$pid"
+    pid="$(ps -o ppid= -p "$pid" | tr -d ' ')"
+  done
+}
+
+# <pid>'s responsible process, from `launchctl procinfo` (sudo as a second try: it may refuse another
+# process). It fails, saying what it got, when that has no "responsible pid = <number>" line, so that a
+# macOS that prints it otherwise is a failure here and not a pass.
+responsible_pid() {
+  local info pid
+  info="$(launchctl procinfo "$1" 2>&1)" || info="$(sudo -n launchctl procinfo "$1" 2>&1)" || {
+    echo "launchctl procinfo $1 failed: $info"
+    return 1
+  }
+  pid="$(sed -n 's/^[[:space:]]*responsible pid = \([0-9][0-9]*\).*/\1/p' <<<"$info" | head -1)"
+  [ -n "$pid" ] || {
+    echo "no 'responsible pid = <number>' line in launchctl procinfo $1: its format is not the one this check reads; it said:"
+    echo "$info"
+    return 1
+  }
+  echo "$pid"
+}
+
+# The tmux server's responsible process is not one of the caller's (it is launchd's job's), which is what
+# `bosun morning --now --background` is for: a process the app starts keeps the app as its responsible
+# process, and with it macOS's privacy prompts.
+server_not_the_callers_child() {
+  local server responsible
+  server="$(tmux -L bosun display-message -p '#{pid}')" || return 1
+  responsible="$(responsible_pid "$server")" || {
+    echo "$responsible"
+    return 1
+  }
+  if caller_pids | grep -qx "$responsible"; then
+    echo "tmux server $server has responsible pid $responsible, which is this check or one of its parents: $(caller_pids | tr '\n' ' ')"
+    return 1
+  fi
+  echo "tmux server $server, responsible pid $responsible (not one of: $(caller_pids | tr '\n' ' '))"
+}
+
+more_runs_than() { [ "$(morning_runs)" -gt "$1" ]; } # <count>
+now_runs() { cat "$HOME"/.local/state/bosun/logs/morning-*.log 2>/dev/null | grep -c "=== morning run (trigger=now, "; }
+now_runs_settle_at() { # <count>: and stay there a while, as a second run would have started by then
+  sleep 5
+  [ "$(now_runs)" = "$1" ]
+}
+
+# `bosun morning --now --background`, from a stopped bosun: launchd's job runs the morning run now.
+now_job_for_real() {
+  local bosun="$HOME/.local/bin/bosun" done_before now_before
+  "$bosun" stop >/dev/null 2>&1
+  done_before="$(morning_runs)"
+  now_before="$(now_runs)"
+  check "bosun morning --now --background returns, exit 0" "$bosun" morning --now --background
+  check "... and a second one straight after, while the run is going, is no error" "$bosun" morning --now --background
+  check "... launchd runs the job: its morning run ends well" wait_for 180 more_runs_than "$done_before"
+  check "... once, whatever the second one asked: launchd does not start a run that is going (no -k)" now_runs_settle_at "$((now_before + 1))"
+  check "... which brings up the orchestrator's window" wait_for 60 has_window orchestrator
+  check "... and the tmux server it started is not a child of the caller" server_not_the_callers_child
+}
+
 launchd_for_real() {
   echo "launchd and pmset, for real"
-  for job in "$LABEL" "$LABEL.watchdog" "$LABEL.learn"; do
+  for job in "$LABEL" "$LABEL.watchdog" "$LABEL.learn" "$LABEL.now"; do
     check "$job is loaded" launchctl print "$DOMAIN/$job"
     check "$job's plist is valid" plutil -lint -s "$HOME/Library/LaunchAgents/$job.plist"
   done
@@ -154,11 +222,12 @@ launchd_for_real() {
   check "... and ended well" grep -q "morning run complete" "$HOME"/.local/state/bosun/logs/morning-*.log
   tail -15 "$HOME"/.local/state/bosun/logs/morning-*.log
   launchctl print "$DOMAIN/$LABEL" | grep -E '^\s+(state|last exit code|runs) ' || true
+  now_job_for_real
   "$HOME/.local/bin/bosun" stop >/dev/null 2>&1
 }
 
 jobs_are_gone() {
-  for job in "$LABEL" "$LABEL.watchdog" "$LABEL.learn"; do
+  for job in "$LABEL" "$LABEL.watchdog" "$LABEL.learn" "$LABEL.now"; do
     check "$job is unloaded" bash -c '! launchctl print "$1"' _ "$DOMAIN/$job"
     check "... launchd cannot run it" bash -c '! launchctl kickstart "$1"' _ "$DOMAIN/$job"
     check "... and its plist is gone" test ! -e "$HOME/Library/LaunchAgents/$job.plist"

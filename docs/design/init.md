@@ -18,7 +18,8 @@ anything.
 | Apply | `lib/init.py` | The CLI. Writes the config with backups, trusts the folders, runs `install.sh`. |
 
 `install.sh` is where installing meets launchd, `pmset` and `bosun doctor`, so `init` only writes
-what `install.sh` reads. `lib/uninstall_macos.py` undoes the launchd jobs and the wake
+what `install.sh` reads (its jobs are the morning run, the watchdog, learning and the console where wanted, and
+the one with no schedule that `bosun morning --now --background` kickstarts, which is always loaded). `lib/uninstall_macos.py` undoes the launchd jobs and the wake
 ([uninstall.md](uninstall.md)). Answers are JSON (`--print-answers`), and a file only needs what it
 changes: the wizard only fills those in, so `--answers` and the wizard cannot disagree.
 

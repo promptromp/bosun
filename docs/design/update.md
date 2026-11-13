@@ -772,7 +772,12 @@ Decided while building it:
   no step past `backed-up` is recorded without it.
 - **The launchd jobs:** a job is reloaded only where its rendered plist differs or it is not loaded,
   and each rendered plist is checked before the job is touched. One that cannot be rendered, or renders
-  invalid, blocks the plan, and in the release it is a finding while the installed job stays loaded.
+  invalid, blocks the plan, and in the release it is a finding while the installed job stays loaded. The job
+  that runs `bosun morning --now` (`<label>.now`, `templates/launchd-now.plist`) is one of them, always wanted:
+  an update from a version without it loads it, and its `ProgramArguments` name the install link like the
+  others'. The update itself is not run through a job like it: it reloads changed plists, which could boot the
+  job it runs in out, so the menu bar app starts `bosun update --yes` as a detached child instead
+  ([menu-bar.md](menu-bar.md)).
 - **The plan before the switch** asks the new version: its `launch --fingerprint` reads the files
   under the install from its own folder. One of bosun's windows with no launch record counts as changed.
 - **A window bosun did not start**: one `bosun sessions` lists outside the window list (`extra`)

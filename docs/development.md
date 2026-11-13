@@ -119,7 +119,8 @@ Docker on a Mac is Linux, so `launchctl`, `pmset`, `caffeinate` and the like are
 
 macOS in a [Tart](https://tart.run) VM on your Mac (Apple silicon). A run clones a base image, boots it,
 runs `tests/install_e2e.sh` in it and deletes the clone: the real installer, real launchd jobs that really
-fire, the real `pmset`, `plutil` and bash 3.2.
+fire (the morning job, and the one `bosun morning --now --background` kickstarts, whose tmux server must have a
+responsible process that is not the caller's: `launchctl procinfo`), the real `pmset`, `plutil` and bash 3.2.
 
 ```bash
 brew install openai/tools/tart

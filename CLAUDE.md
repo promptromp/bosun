@@ -40,7 +40,8 @@ of truth, so don't copy rules into this file.
   (`window_specs`: orchestrator, sessions.yml entries, checkin), tmux, the one
   launch path (`build_launch_command`, used by `start`, `refresh` and `send`), and the launchd
   labels and plist rendering (from `templates/launchd.plist`, `launchd-watchdog.plist`,
-  `launchd-learn.plist`), and `one_at_a_time` (`lib/run_locked.py`: the rest of a shell command run
+  `launchd-learn.plist`, `launchd-console.plist`, `launchd-now.plist` and `launchd-app.plist`: one label helper
+  each, such as `now_label`, listed once in `job_labels`), and `one_at_a_time` (`lib/run_locked.py`: the rest of a shell command run
   holding a lock that what it starts inherits; `start`, `refresh` and `init` use it). `lib/setup-helpers.sh`: the helpers a site's `setup.sh` calls
   (`run_step`, `ensure_aws_sso`, `ensure_claude_login`). `lib/ledger.py`: item kinds, id formats, Slack classes, state
   machines and the states that end a hand-over to a repo session (`work_done`), plus delegations
@@ -206,7 +207,10 @@ of truth, so don't copy rules into this file.
   (`watchdog.session_gate_kind`), `console_sessions.waiting_in` and the quit record, `snapshot`; its `CONTRACT` only grows) and `lib/menu_status_live.py` (its only I/O, through
   `console_live`'s readers; the command, which always prints the object). The keep-awake end is
   `keep-awake-<session>.json`, written by `libexec/bosun-morning` and removed by `bosun stop`, read by
-  `lib/keep_awake.py` (status and quit).
+  `lib/keep_awake.py` (status and quit). The app's Start is `bosun morning --now --background`, which only
+  kickstarts the `.now` job (`now_label`, `templates/launchd-now.plist`, which runs `morning --now`) so that launchd
+  and not the app is the parent of what the run starts; the morning logic stays in the `--now` path. `bosun update`
+  stays a detached child of the app (a job could boot itself out reloading plists).
 - The menu bar app's lifecycle (`bosun app`, design: `docs/design/menu-bar.md`): `libexec/bosun-app` (the commands, and
   `login on|off`, which render and load `templates/launchd-app.plist` through `render_app_plist`, `app_label` and
   `reload_job` in `lib/common.sh`; the login job is there while its plist is, which `reload_changed_jobs` keeps current

@@ -35,7 +35,7 @@ from agent_files import AgentSetup
 
 
 LABEL = "com.bosun.morning"
-LABELS = f"{LABEL} {LABEL}.watchdog {LABEL}.learn {LABEL}.console {LABEL}.app {LABEL}.waketest"
+LABELS = f"{LABEL} {LABEL}.watchdog {LABEL}.learn {LABEL}.console {LABEL}.now {LABEL}.app {LABEL}.waketest"
 BUNDLE_ID = "ai.example.bosun"
 WAKE_LINE = "wakepoweron at 9:01AM every day"
 real_run = subprocess.run
@@ -262,7 +262,7 @@ class World(unittest.TestCase):
 
     def make_jobs(self) -> None:
         self.agents.mkdir(parents=True)
-        for label in (LABEL, f"{LABEL}.watchdog", f"{LABEL}.learn"):
+        for label in (LABEL, f"{LABEL}.watchdog", f"{LABEL}.learn", f"{LABEL}.now"):
             self.write_plist(label, f'exec "{self.root}/bin/bosun" run')
             self.mac.loaded.add(label)
 
@@ -656,6 +656,13 @@ class WhatIsNotBosuns(World):
         self.mac.repeating.append("shutdown at 11:00PM every day")
         self.run_it("--yes")
         self.assertEqual(len(self.mac.repeating), 2)
+
+    def test_the_job_that_runs_the_morning_run_now_goes(self) -> None:
+        now = self.agents / f"{LABEL}.now.plist"
+        self.assertTrue(now.exists())
+        self.run_it("--yes")
+        self.assertFalse(now.exists())
+        self.assertNotIn(f"{LABEL}.now", self.mac.loaded)
 
     def test_a_stranger_s_job_stays(self) -> None:
         theirs = self.write_plist("com.example.backup", "/usr/local/bin/backup")

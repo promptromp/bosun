@@ -75,7 +75,10 @@ this note is why.
   only forgotten once the agent no longer shows it.
 - **A launchd job is bosun's by its label, or by being exactly what install.sh renders.** That is a job that
   runs the install's own `bin/bosun`: the checkout's, or with versions side by side the link's, a version
-  folder's or the old checkout's, which older plists name. Your own job that runs `bosun status` is not.
+  folder's or the old checkout's, which older plists name. Your own job that runs `bosun status` is not. The
+  labels come from `job_labels` (`lib/common.sh`), the one list of bosun's jobs: the morning job, the watchdog,
+  learning, the console, the job that runs `morning --now` (`.now`, which the menu bar app's Start kickstarts), the
+  app's Open at Login job and `bosun wake-test`'s own.
 
 ## What a review found
 

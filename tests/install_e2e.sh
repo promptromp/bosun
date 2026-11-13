@@ -1,6 +1,8 @@
 #!/bin/bash
 # A new machine's install, for real: the piped installer with its real Homebrew, real launchd jobs that
-# really fire, the real pmset and plutil, and a clean uninstall. Claude Code is a stand-in, since these
+# really fire (the morning job, and the one the menu bar app's Start runs through `bosun morning --now
+# --background`, whose tmux server must not be its caller's child: `launchctl procinfo`), the real pmset
+# and plutil, and a clean uninstall. Claude Code is a stand-in, since these
 # machines have no login. It changes the machine it runs on, so it only runs on a GitHub macOS runner
 # (.github/workflows/install.yml) or in the throwaway Mac of tests/sandbox.sh mac.
 # Checks pass shell snippets to `bash -c '...' _ args`; their $ must not expand here.
