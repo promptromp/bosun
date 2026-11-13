@@ -1,5 +1,6 @@
 """pytest setup for the unit tests (the commit hook runs them with pytest): no inherited GIT_*
-variables, and a loud failure if the repository the tests run from changes during the run.
+variables, the journal's flushes without F_FULLFSYNC (pytest_configure), and a loud failure if
+the repository the tests run from changes during the run.
 
 A commit hook exports GIT_DIR and GIT_INDEX_FILE for the repository being committed; a test that
 runs git in a scratch folder would otherwise commit to, or re-initialise, that repository.
@@ -41,6 +42,22 @@ def repo_state() -> tuple[str, str, str]:
 
 
 BEFORE = repo_state()
+
+
+def pytest_configure(config: pytest.Config) -> None:
+    """The journal's writes in this process flush with fsync, not macOS's F_FULLFSYNC, which waits
+    for the drive's own cache: run in parallel, every worker queued behind that one drive, and the
+    suite took more than twice as long. What F_FULLFSYNC adds (surviving a power cut) no unit test
+    can show; test_journal checks that a commit asks for it, and the commands the tests run as
+    subprocesses keep it.
+
+    And the check that each file a test reads or runs selects it in the commit hook's run
+    (impacted_guard.py)."""
+    import impacted_guard
+    import journal
+
+    journal.FULL_FSYNC = None
+    config.pluginmanager.register(impacted_guard, "impacted_guard")
 
 
 def pytest_sessionfinish(session: pytest.Session, exitstatus: int) -> None:
