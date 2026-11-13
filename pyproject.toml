@@ -99,6 +99,8 @@ impacted_map = [
     "lib/*.py=tools/release.py",
     # get.sh: plain sh, run by its own test (and its tag rule held to lib/update_check.py's there).
     "get.sh=tests/unit/test_get_sh.py",
+    # The smoke suite's section markers: its --list and --only run by them.
+    "tests/smoke.sh=tests/unit/test_smoke_sections.py",
     "tests/llm/*.py=tests/unit/test_learn.py",
     "tests/llm/*.py=tests/unit/test_learn_digest.py",
     "tests/sandbox/mcp_probe_server.py=tests/unit/test_mcp_probe_server.py",

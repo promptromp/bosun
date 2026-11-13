@@ -420,8 +420,18 @@ runs the ones the change reaches, and `uv run pytest -n auto` runs them all (abo
 run `tests/smoke.sh` (hermetic: temp HOME, own tmux socket, fake Claude): end-to-end checks,
 including that task files only use valid ledger transitions and that the task table in
 `docs/orchestrator.md` matches them; `--with-unit` runs every unit test first too, with a plain
-`python3 -m unittest`. Then `bosun doctor`. In `tests/smoke.sh`,
-use `fails_with "<expected error>" cmd` for refusals (a crash must not count as a pass) and
+`python3 -m unittest`. Then `bosun doctor`. While iterating, run only the area you changed: `tests/smoke.sh --list`
+prints the sections' ids, `tests/smoke.sh --only <id>[,<id>...]` runs the shared setup and those (and what they
+`needs`) in a minute or two, and says in its summary that it was a partial run. Before committing, run the whole
+suite once; CI and the pre-push hook always run all of it. In `tests/smoke.sh`, a new section begins with
+`section <id> "<name>" [needs <id>,...]` (unique kebab-case id; `tests/unit/test_smoke_sections.py` fails
+otherwise): set up what it uses itself, or say `needs` the section whose state it relies on; a helper or a
+constant that more than one section uses goes in the helpers by the fixture HOME, and an export every later
+section sees goes after an `always_run` line. Every section starts by checking that `osascript`, `aws`,
+`launchctl` and the other tools that reach outside the run resolve to stand-ins in the run's folder, and the run
+stops if not (`fakes_first`): a stand-in with a behaviour replaces the plain one in its section and puts it
+back. Use
+`fails_with "<expected error>" cmd` for refusals (a crash must not count as a pass) and
 `wait_for <seconds> cmd` instead of fixed sleeps; external tools (aws, gh, launchctl, pmset,
 osascript) are faked in the temp HOME's `~/.local/bin`, and the install test uses its own launchd
 label and refuses to run unless the fakes come first on PATH.
