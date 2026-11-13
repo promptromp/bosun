@@ -112,7 +112,7 @@ Calls made from the research and the builder check, to check while reading:
   --now`: that run ends a quit (paused or not) instead of stopping for it, takes "inside the awake hours" from
   `lib/awake.py`'s window (the one rule the watchdog and the status use), holds no keep-awake outside it, and still
   passes `--unless-quit` to its start, so a Quit made while Start is setting up is kept. Opening the app in the red
-  state with no window open starts bosun too (never a bosun that runs, even with an error: the morning run would
+  state with no window open (on a current status) starts bosun too (never a bosun that runs, even with an error: the morning run would
   run its setup again and may restart the session; `bosun status --json`'s `running` says which red it is). The app runs **`bosun morning --now --background`**, not `--now` itself: a process the app
   starts keeps bosun.app as its "responsible process" for macOS's privacy (TCC) prompts, even when detached, and
   everything the morning run starts (the tmux server, the agents) would inherit that, so the prompts would name the
@@ -163,7 +163,7 @@ Calls made from the research and the builder check, to check while reading:
 - **Version skew.** `bosun status --json` carries a `contract` number. An app that does not know the number says
   "bosun.app needs an update" in its status line and offers "Update bosun…" (which runs `bosun update`); a CLI that
   sees an older app than its checkout expects updates it (below).
-- **Opening it.** Opened by you (Finder, Spotlight, Launchpad): if bosun is not running (stopped or quit, or red with no window open), it runs `bosun morning --now --background` (as Start does), then shows
+- **Opening it.** Opened by you (Finder, Spotlight, Launchpad): if bosun is not running and no window is open (stopped or quit, or red with `running` false), it runs `bosun morning --now --background` (as Start does), then shows
   the menu bar icon. Opened at login (its launchd job passes `--at-login`): it only shows the icon; bosun's own
   morning job starts bosun at its time. Opened while running: macOS brings up the running copy, which does nothing
   new.
@@ -470,10 +470,13 @@ Where what is built differs from what this note said before, or says more:
   representations of one 18-point template image; with no bundle (run from `swift run`) it shows a system symbol.
 
 - **After the final review of part 2** (2026-11-13):
-  - Start, and the start at launch, are for a bosun that is not running: stopped, or red with `running` false (no
-    window open: never started today, the morning run failed), or a quit that did not finish. A red bosun with its
-    windows open (an error-level finding, an ERROR line the watchdog has not seen) or with its windows unread offers
-    its problems and no Start. `running` is new in `bosun status --json`; the app reads its absence as not known.
+  - Start is for a bosun that is not running: stopped, or red with `running` false (no window open: never started
+    today, the morning run failed), or a quit that did not finish (the CLI's own way out is `bosun start`, and a
+    click is the person's choice). It is greyed on a status that is not current (kept after a look that timed out).
+    The start at launch is narrower: only with `running` false, on a current status, so opening the app never runs
+    the morning while windows are open, the unfinished quit included. A red bosun with its windows open (an
+    error-level finding, an ERROR line the watchdog has not seen) or with its windows unread offers its problems
+    and no Start. `running` is new in `bosun status --json`; the app reads its absence as not known.
   - A `level` the app does not know is shown as a warning (yellow, Show What's Wrong…, no Start), not as "cannot be
     reached". A link that cannot be run is "bosun cannot be run"; "cannot be reached" (a status that could not be
     had) offers Run bosun doctor, which is what finds out why.

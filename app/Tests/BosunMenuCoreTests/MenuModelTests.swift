@@ -135,6 +135,12 @@ private let tail: [ItemID] = [.checkForUpdates, .openAtLogin, .helpMenu, .quit]
       ])
   }
 
+  @Test func startIsGreyedOnAStatusThatIsNotCurrent() throws {
+    #expect(model(try loaded("status-stopped")).item(.startBosun).enabled)
+    #expect(!model(try loaded("status-stopped", current: false)).item(.startBosun).enabled)
+    #expect(!model(try loaded("status-error", current: false)).item(.startBosun).enabled)
+  }
+
   @Test func aStatusThatIsNotCurrentSaysSoAndKeepsItsColour() throws {
     let menu = model(try loaded("status-warning", current: false))
     #expect(menu.header.sentence == "bosun is running, with a warning (not current)")

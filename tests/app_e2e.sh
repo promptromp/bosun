@@ -182,8 +182,9 @@ step_1() {
 
 an_error_line() { printf '%s [checkin] ERROR: the app suite made this up\n' "$(date '+%Y-%m-%d %H:%M:%S')"; }
 no_start_logged() { ! log_has "$1" '.command == ["morning", "--now", "--background"]'; } # <lines to skip>
-red_with_problems_and_no_start() {
-  menu_says '.level == "error" and .header.dot == "red" and ([.sections[][] | .id] | (index("showProblems") != null and index("startBosun") == null))'
+# what is wrong is offered, and no Start: bosun runs, whatever its level (the watchdog's job is booted out here)
+problems_and_no_start() {
+  menu_says '(.level == "warning" or .level == "error") and ([.sections[][] | .id] | (index("showProblems") != null and index("startBosun") == null))'
 }
 
 step_2() {
@@ -200,16 +201,21 @@ step_2() {
   check "choosing it opens the dialog, and OK closes it (both actions taken)" wait_for 30 actions_taken
   check "... with no error of the app's in its log" log_has_no_errors "$mark"
 
-  # bosun runs, with an error: with the watchdog booted out nothing marks the line as seen, so its log-errors check
-  # has a finding (severity error) while the windows are open, for as long as this lasts
+  # bosun runs, with something wrong: the watchdog booted out, and an ERROR line. Whether the line is an error (the
+  # watchdog's log-errors finding, which needs the baseline of an earlier run of it) or a warning (status's own scan
+  # of the last hour) depends on whether the watchdog has scanned the logs before, which this step does not decide,
+  # so it asserts what it is for: bosun runs, the menu offers what is wrong and never Start, and the app opened
+  # again on it starts nothing. The level seen is noted
   an_error_line >>"$log"
-  check "an ERROR line the watchdog cannot see: bosun status says it runs, with an error" wait_for 60 bash -c '"$1" status --json | jq -e ".level == \"error\" and .running == true"' _ "$BOSUN"
-  check "... the menu is red, with Show What's Wrong… and no Start bosun (bosun runs)" wait_for "$WAIT_POLL" red_with_problems_and_no_start
+  check "an ERROR line with the watchdog booted out: bosun status says it runs, with something wrong" wait_for 60 bash -c '"$1" status --json | jq -e "(.level == \"warning\" or .level == \"error\") and .running == true"' _ "$BOSUN"
+  echo "  note  bosun status: $("$BOSUN" status --json | jq -c '[.level, .sentence, .running]')"
+  check "... the menu offers Show What's Wrong… and no Start bosun (bosun runs)" wait_for "$WAIT_POLL" problems_and_no_start
   kill "$(app_pids | head -1)" # only the app: bosun is not its child, and runs on
   check "the app ended (bosun runs on)" wait_for 30 app_gone
   mark="$(log_count)"
   launch_app
-  check "opened again while bosun runs with an error, the app shows the red menu, with no Start" wait_for 60 red_with_problems_and_no_start
+  check "opened again while bosun runs, the app shows its problems and no Start" wait_for 60 problems_and_no_start
+  jq -c '[.level, .header.sentence]' "$HOOKS/menu.json" | sed 's/^/  note  the menu it opened with: /'
   sleep 10 # a dwell, on purpose: a start at launch is decided on the first status, which the menu above shows
   check "... and starts nothing: no morning --now --background since it opened" no_start_logged "$mark"
   sed -i '' '/the app suite made this up/d' "$log"

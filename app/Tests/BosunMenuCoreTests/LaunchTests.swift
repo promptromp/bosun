@@ -54,8 +54,15 @@ import Testing
     #expect(try !shouldStartAtLaunch(opened, status: state("status-windows-unreadable")))
   }
 
-  @Test func openedByYouAfterAQuitThatDidNotFinishItStartsBosun() throws {
-    #expect(try shouldStartAtLaunch(opened, status: state("status-quit-unfinished")))
+  /// A quit that did not finish leaves windows open: opening the app does not run the morning on them (the
+  /// menu's Start is there, for the person to choose).
+  @Test func openedByYouAfterAQuitThatDidNotFinishItStartsNothing() throws {
+    #expect(try !shouldStartAtLaunch(opened, status: state("status-quit-unfinished")))
+  }
+
+  @Test func aStatusThatIsNotCurrentStartsNothing() throws {
+    let stale = StatusState.loaded(try Fixtures.status("status-stopped"), current: false)
+    #expect(!shouldStartAtLaunch(opened, status: stale))
   }
 
   @Test func openedByYouWhileRunningItStartsNothing() throws {

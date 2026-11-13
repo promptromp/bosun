@@ -180,8 +180,8 @@ starts; see docs/design/menu-bar.md, the Mac VM run of the app)". macOS can stop
 ### The menu
 
 The first line is a coloured dot and one sentence, with grey lines of detail under it. The items follow in this
-order: "Start bosun" (only while bosun is not running: grey, or red with no window open) and "Show What's Wrong..."
-(yellow and red only), Open Console, Check for Updates..., Open at Login, Help, and Quit.
+order: "Start bosun" (only while bosun is not running: grey, red with no window open, or a quit that did not finish)
+and "Show What's Wrong..." (yellow and red only), Open Console, Check for Updates..., Open at Login, Help, and Quit.
 
 | Dot and sentence | Meaning | What the menu offers |
 |---|---|---|
@@ -253,9 +253,11 @@ their runs, and the morning job skips too if you paused it. Nothing is left runn
 keep: no tmux server, no console, no keep-awake. The same is `bosun quit`, in a terminal.
 
 **Start bosun** (first in the menu when bosun is not running: stopped, or red with no window open, such as a
-morning run that failed; opening `bosun.app` from Finder or Spotlight then does it too, and never while bosun runs,
-even with an error) does what the morning run does, at any hour: `bosun morning --now --background`, which has
-launchd start the run so that macOS's privacy prompts name bosun's own processes and not the app.
+morning run that failed, and also after a quit that did not finish, where the choice is yours; greyed on a status
+that is "(not current)") does what the morning run does, at any hour: `bosun morning --now --background`, which has
+launchd start the run so that macOS's privacy prompts name bosun's own processes and not the app. Opening
+`bosun.app` from Finder or Spotlight does it too, but only with no window open: never while bosun runs, even with
+an error, and not after a quit that did not finish.
 
 ### Uninstalling
 

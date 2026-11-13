@@ -176,7 +176,8 @@ private func loadedMenu(
   let stopped = status.level == .stopped
   var actions: [MenuItem] = []
   if status.offersStart {
-    actions.append(MenuItem(id: .startBosun, title: Title.start, enabled: idle))
+    // Only from a current status: one kept after a look that timed out may no longer be true
+    actions.append(MenuItem(id: .startBosun, title: Title.start, enabled: idle && current))
   }
   if showsProblems(status.level) {
     actions.append(MenuItem(id: .showProblems, title: Title.problems))
