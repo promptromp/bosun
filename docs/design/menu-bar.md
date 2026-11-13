@@ -22,7 +22,7 @@ ship a CLI and an app keep them in step).
    coloured dot and one sentence, with a grey detail line.
    - green "bosun is running" (windows open, how many wait for you, keep-awake until when);
    - yellow "bosun is running, with a warning" (the watchdog is not running: its job is booted out, or its last run is older than three of
-     its intervals; errors in the last hour, a window that could not start), with a "Show What's Wrong…" item;
+     its intervals awake; errors in the last hour, a window that could not start), with a "Show What's Wrong…" item;
    - red "bosun is not running" (it should be: inside its awake hours and not stopped), with "Start bosun" first;
    - grey "bosun is stopped" (you quit it), with "Start bosun" first.
    The icon shows a small dot for a warning, an error or an update ready.
@@ -181,7 +181,9 @@ Calls made from the research and the builder check, to check while reading:
   lines of the last hour after the watchdog has alerted them (the same line is an error until the watchdog's next
   run, then a warning for the hour), and the watchdog itself not running (`watchdog --facts` says its launchd job is loaded or
   not and whether its plist is installed; a job that is installed and not loaded, or loaded with no run for three of its
-  five-minute intervals, is a warning, as `bosun doctor` says; no plist is a checkout and no problem, a new job that never ran is
+  five-minute intervals of the Mac being awake (counted from the later of its last run and the Mac's last wake, `sysctl -n
+  kern.waketime`, so the morning's wake is not yellow; with no readable wake, from the last run alone), is a warning
+  (`bosun doctor` has the plain rule); no plist is a checkout and no problem, a new job that never ran is
   new, an update's hold excuses it, and a quit is stopped whatever the watchdog does). A quit record that cannot be read shows as stopped, with the problem saying so and that `bosun start` clears it. A quit record while windows are still open is "bosun quit did not finish", an error (its `bosun stop` failed or
   was cut short, while the watchdog skips its runs), with the problem saying how to finish: `bosun quit --stop-now` again,
   or `bosun start`. Seconds of it during a normal quit, between `quit.json` and the session going, are accepted: the app

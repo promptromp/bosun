@@ -289,6 +289,12 @@ def build_app(setup: Setup, scratch: Path) -> Path:
     done = setup.run([str(setup.root / "app" / "build.sh"), "--identity", "-", "--out", str(built)])
     if done.returncode != 0:
         shown = "\n".join(f"  {line}" for line in done.tail(BUILD_FAILURE_LINES))
+        if not shown:
+            raise AppError(
+                f"app/build.sh exited {done.returncode} and said nothing: run it again (the first run of a "
+                "fresh copy can fail before the script starts; see docs/design/menu-bar.md, the Mac VM "
+                "run of the app)"
+            )
         raise AppError(f"app/build.sh failed, the last lines of its output:\n{shown}")
     if not (built / BUNDLE).is_dir():
         raise AppError(f"app/build.sh did not leave {BUNDLE} in the folder it was given")

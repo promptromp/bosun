@@ -15,8 +15,9 @@ its own, so the menu and the watchdog never disagree.
 - error: no window is open and the gate says it should be running (the watchdog's own `session-missing`
   finding is then the problem listed, not a second line); or a check of severity error has a finding.
 - warning: a check of severity warn has a finding, an ERROR line was logged in the last hour, the watchdog
-  itself is not checking (its launchd job is installed but not loaded, or loaded and its last full run is
-  older than 3 of its intervals, as `bosun doctor` says too; not while an update holds it, and never in a
+  itself is not checking (its launchd job is installed but not loaded, or loaded and its last run is older
+  than 3 of its intervals of the Mac being awake: counted from the later of that run and the Mac's last wake;
+  not while an update holds it, and never in a
   quit, which is stopped), or a fact could not be read (an answer built on a guess is never all well). That
   holds when bosun is stopped too: with a part unread status cannot vouch for "stopped", so it is a warning
   (the `stopped` field stays).
@@ -86,11 +87,12 @@ class SessionGate:
 @dataclass(frozen=True)
 class WatchdogJob:
     """The watchdog's own launchd job: <installed> its plist is there (so it is wanted), <loaded> launchd has
-    it, and when its last full run was (local and naive; None when it never ran)."""
+    it, when its last run was (local and naive; None when it never ran) and when the Mac last woke."""
 
     installed: bool
     loaded: bool
     last_run: datetime | None = None
+    woke_at: datetime | None = None  # the Mac's last wake (local and naive); None when it could not be read
 
 
 @dataclass(frozen=True)
@@ -165,10 +167,20 @@ def when(moment: datetime, now: datetime) -> str:
     return f"{moment:%H:%M}" if moment.date() == now.date() else f"{moment:%Y-%m-%d %H:%M}"
 
 
+def watchdog_stale(job: WatchdogJob, now: datetime) -> bool:
+    """A loaded job whose last run is older than three of its intervals of the Mac being awake: a Mac that
+    slept does not run it, and wakes to a last run that is hours old with the job's next run a few minutes
+    away, so the wake counts as a run. A job that never ran is a new one."""
+    if job.last_run is None:
+        return False
+    counted_from = max(t for t in (job.last_run, job.woke_at) if t is not None)
+    return now - counted_from > timedelta(seconds=WATCHDOG_STALE_RUNS * WATCHDOG_INTERVAL_SECONDS)
+
+
 def watchdog_problem(facts: StatusFacts, now: datetime) -> str | None:
     """What is wrong with the watchdog itself, which no check of its own can say: nothing checks on bosun, and
     nothing alerts, while its job is booted out or stuck. Only a job that is installed counts (a checkout has
-    none); a job that never ran is a new one; an update's hold is why it skips."""
+    none); an update's hold is why it skips."""
     job = facts.watchdog_job
     if job is None or not job.installed or facts.update_running:
         return None
@@ -177,8 +189,7 @@ def watchdog_problem(facts: StatusFacts, now: datetime) -> str | None:
             "bosun's watchdog job is not loaded, so nothing is checking on bosun or alerting you. "
             "`bosun doctor` says so too; install.sh loads it again"
         )
-    stale = timedelta(seconds=WATCHDOG_STALE_RUNS * WATCHDOG_INTERVAL_SECONDS)
-    if job.last_run is not None and now - job.last_run > stale:
+    if job.last_run is not None and watchdog_stale(job, now):
         return (
             f"bosun's watchdog last ran at {when(job.last_run, now)}, though its job runs every "
             f"{WATCHDOG_INTERVAL_SECONDS // 60} minutes: it is loaded and not working "

@@ -23,8 +23,10 @@ import io
 import itertools
 import json
 import os
+import re
+import subprocess
 import sys
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
@@ -166,10 +168,42 @@ def launched_at(log_dir: Path) -> datetime | None:
         return None
 
 
+WAKETIME = re.compile(r"\bsec = (\d+)\b")
+
+
+def parse_waketime(text: str) -> datetime | None:
+    """`sysctl -n kern.waketime` as local time: `{ sec = 1794543736, usec = 756800 } Fri Nov 13 06:22:16`.
+    A sec of 0 is a Mac that has not woken since it started; anything else it prints is no time."""
+    found = WAKETIME.search(text)
+    if found is None or int(found[1]) == 0:
+        return None
+    try:
+        return datetime.fromtimestamp(int(found[1]))
+    except (OverflowError, OSError, ValueError):
+        return None
+
+
+def read_waketime() -> datetime | None:
+    """When the Mac last woke, from the kernel; None when it cannot say (no sysctl, another system)."""
+    try:
+        done = subprocess.run(
+            ["/usr/sbin/sysctl", "-n", "kern.waketime"],
+            capture_output=True,
+            text=True,
+            timeout=5,
+            check=False,
+            stdin=subprocess.DEVNULL,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    return parse_waketime(done.stdout) if done.returncode == 0 else None
+
+
 def watchdog_job_of(
     watchdog_facts: Mapping[str, Any] | None,
     checks: Mapping[str, Any] | None,
     launched: datetime | None = None,
+    woke: datetime | None = None,
 ) -> WatchdogJob | None:
     """The watchdog's own job: what `watchdog --facts` says of it (loaded, plist installed) and when it last
     ran: its last full run (its saved state) or <launched>, whichever is later (a run that skipped is a run).
@@ -183,7 +217,7 @@ def watchdog_job_of(
     except ValueError:
         last_run = None
     ran = max((t for t in (last_run, launched) if t is not None), default=None)
-    return WatchdogJob(bool(job.get("installed")), bool(job.get("state")), ran)
+    return WatchdogJob(bool(job.get("installed")), bool(job.get("state")), ran, woke)
 
 
 def watchdog_parts(
@@ -192,6 +226,7 @@ def watchdog_parts(
     run: Run,
     now: datetime,
     log_dir: Path,
+    waketime: Callable[[], datetime | None] = read_waketime,
 ) -> tuple[dict[str, Any] | None, SessionGate | None, WatchdogJob | None]:
     """The watchdog's checks and gate, and its own job; None for each that could not be made (the reason is in
     collector.errors). The checks need the settings, which are said once, as the config."""
@@ -199,16 +234,22 @@ def watchdog_parts(
     watchdog_facts = attempt("watchdog", lambda: read_watchdog_facts(run))
     if not watchdog_facts:
         return None, None, None
+    woke = waketime() if isinstance(watchdog_facts.get("watchdog_job"), dict) else None
     view = attempt("watchdog", lambda: watchdog_view(config, watchdog_facts, now)) if config else None
     if view is None:
-        return None, None, watchdog_job_of(watchdog_facts, None, launched_at(log_dir))
+        return None, None, watchdog_job_of(watchdog_facts, None, launched_at(log_dir), woke)
     checks, gate, note = view
     if note:
         collector.errors["watchdog-state"] = note
-    return checks, gate, watchdog_job_of(watchdog_facts, checks, launched_at(log_dir))
+    return checks, gate, watchdog_job_of(watchdog_facts, checks, launched_at(log_dir), woke)
 
 
-def gather(env: Mapping[str, str], now: datetime, run: Run) -> StatusFacts:
+def gather(
+    env: Mapping[str, str],
+    now: datetime,
+    run: Run,
+    waketime: Callable[[], datetime | None] = read_waketime,
+) -> StatusFacts:
     """The facts, a part that could not be read left empty with its reason in `errors`. <now> is local."""
     settings = console_live.Settings.from_env(env)
     collector = console_live.Collector(settings, run)
@@ -216,7 +257,7 @@ def gather(env: Mapping[str, str], now: datetime, run: Run) -> StatusFacts:
     state_dir = settings.state_dir
     config = attempt("config", lambda: console_live.watchdog_config(settings))
     windows = attempt("sessions", lambda: read_list(run, "sessions", "--json"))
-    checks, gate, job = watchdog_parts(collector, config, run, now, settings.log_dir)
+    checks, gate, job = watchdog_parts(collector, config, run, now, settings.log_dir, waketime)
     updating, waiting_for = update_facts(state_dir)
     return StatusFacts(
         windows=windows,
@@ -240,6 +281,7 @@ def main(
     env: Mapping[str, str] | None = None,
     run: Run = console_live.run_command,
     now: datetime | None = None,
+    waketime: Callable[[], datetime | None] = read_waketime,
 ) -> int:
     parser = argparse.ArgumentParser(prog="bosun status --json", allow_abbrev=False)
     parser.add_argument("--config-error", metavar="TEXT", help="bosun.env could not be read: say so")
@@ -252,7 +294,7 @@ def main(
         # Whatever anything prints while the facts are gathered (the watchdog's state loading says
         # what it could not read) goes to stderr: stdout is the one object
         with contextlib.redirect_stdout(sys.stderr):
-            facts = gather(os.environ if env is None else env, moment, run)
+            facts = gather(os.environ if env is None else env, moment, run, waketime)
         out = menu_status.snapshot(facts, moment)
     except Exception as exc:  # noqa: BLE001 - the app reads one object whatever went wrong in here
         out = menu_status.failure(f"bosun status could not be completed: {exc!r}", menu_status.WARNING)

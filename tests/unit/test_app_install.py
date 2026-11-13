@@ -613,6 +613,23 @@ class BuildTest(World):
         self.assertIn("error: fatalError", message)
         self.assertFalse(self.apps.exists())
 
+    def test_a_build_that_fails_without_a_word_says_so_in_one_line_and_to_run_it_again(self) -> None:
+        for says in ("", "\n  \n"):
+            with self.subTest(says=says), self.assertRaises(AppError) as caught:
+                self.install(self.write_build(), leaves=False, status=1, says=says)
+            message = str(caught.exception)
+            self.assertEqual(len(message.splitlines()), 1, message)
+            self.assertIn("app/build.sh exited 1 and said nothing", message)
+            self.assertIn("run it again", message)
+            self.assertIn("before the script starts", message)
+            self.assertIn("docs/design/menu-bar.md", message)
+            self.assertFalse(self.apps.exists())
+
+    def test_the_exit_code_is_the_one_it_had(self) -> None:
+        with self.assertRaises(AppError) as caught:
+            self.install(self.write_build(), leaves=False, status=137, says="")
+        self.assertIn("exited 137 and said nothing", str(caught.exception))
+
     def test_only_the_last_twenty_lines_of_a_long_output_are_shown(self) -> None:
         says = "\n".join(f"line {number}" for number in range(1, 31))
         with self.assertRaises(AppError) as caught:
