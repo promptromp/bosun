@@ -24,18 +24,43 @@ private func processExists(_ pid: Int32) -> Bool {
   kill(pid, 0) == 0
 }
 
-private func pid(inFile path: String) throws -> Int32 {
-  let text = try String(contentsOfFile: path, encoding: .utf8).trimmingCharacters(in: .whitespacesAndNewlines)
-  return Int32(text)!
+/// The pid a script wrote, or nil while the file is missing or not yet whole (the shell creates it before it
+/// writes into it).
+private func pid(inFile path: String) -> Int32? {
+  guard let text = try? String(contentsOfFile: path, encoding: .utf8) else { return nil }
+  return Int32(text.trimmingCharacters(in: .whitespacesAndNewlines))
 }
 
-private func waitUntil(seconds: Double = 5, _ done: () -> Bool) async -> Bool {
+/// A condition that load may delay: polled for up to `seconds` (generous: it costs nothing when met).
+private func waitUntil(seconds: Double = 10, _ done: () -> Bool) async -> Bool {
   let end = Date().addingTimeInterval(seconds)
   while Date() < end {
     if done() { return true }
     try? await Task.sleep(for: .milliseconds(20))
   }
   return done()
+}
+
+/// Runs `executable` with a timeout far longer than the test, waits until the script has written its pid
+/// (a bounded poll), then cancels the run, which stops what hung as a timeout does (`stop`). Cancelling after
+/// the file exists, rather than racing a short timeout against the shell's start, cannot fire too early
+/// under load. Nil, with an issue recorded, if the script never wrote it.
+private func stoppedAfterPid(
+  of path: String, in pidFile: String, sourceLocation: SourceLocation = #_sourceLocation
+) async -> (result: CommandResult, pid: Int32)? {
+  let task = Task { await ProcessBosunCLI(executable: path).run([], timeout: .seconds(300)) }
+  var written: Int32?
+  _ = await waitUntil {
+    written = pid(inFile: pidFile)
+    return written != nil
+  }
+  task.cancel()
+  let result = await task.value
+  guard let written else {
+    Issue.record("the script never wrote \(pidFile)", sourceLocation: sourceLocation)
+    return nil
+  }
+  return (result, written)
 }
 
 @Suite struct ProcessRunTests {
@@ -64,30 +89,39 @@ private func waitUntil(seconds: Double = 5, _ done: () -> Bool) async -> Bool {
     #expect(result.stdout == "bar")
   }
 
-  /// Review focus 2: a `bosun` command that hangs has a timeout, and what hung is stopped.
+  /// Review focus 2: a `bosun` command that hangs has a timeout, after which the reply is `timedOut`. The
+  /// timer is the real one (never early; the upper bound only says it did fire, and is far looser than
+  /// load can stretch a one-second timer).
   @Test func slowCommandTimesOut() async throws {
     let folder = try scratchFolder()
-    let pidFile = folder.appendingPathComponent("pid").path
-    let path = try fakeBosun("echo $$ > '\(pidFile)'\nexec sleep 60", in: folder)
+    let path = try fakeBosun("exec sleep 60", in: folder)
     let started = ContinuousClock.now
     let result = await ProcessBosunCLI(executable: path).run(["status"], timeout: .seconds(1))
     let took = ContinuousClock.now - started
     #expect(result.outcome == .timedOut)
-    #expect(took < .seconds(6))
-    let stopped = try pid(inFile: pidFile)
+    #expect(took >= .seconds(1))
+    #expect(took < .seconds(50))  // the script sleeps 60: it was not waited for
+  }
+
+  /// And what hung is stopped: the script's own pid is gone (stopped after its pid file exists, see
+  /// `stoppedAfterPid`).
+  @Test func aHungCommandIsStopped() async throws {
+    let folder = try scratchFolder()
+    let pidFile = folder.appendingPathComponent("pid").path
+    let path = try fakeBosun("echo $$ > '\(pidFile)'\nexec sleep 60", in: folder)
+    guard let (result, stopped) = await stoppedAfterPid(of: path, in: pidFile) else { return }
+    #expect(result.outcome == .timedOut)
     #expect(await waitUntil { !processExists(stopped) })
   }
 
+  /// TERM is ignored, so only the KILL after the grace ends it; `run` returns once it is gone.
   @Test func aCommandThatIgnoresTerminateIsKilled() async throws {
     let folder = try scratchFolder()
     let pidFile = folder.appendingPathComponent("pid").path
     let path = try fakeBosun(
-      "echo $$ > '\(pidFile)'\ntrap '' TERM\nwhile true; do sleep 1; done", in: folder)
-    let started = ContinuousClock.now
-    let result = await ProcessBosunCLI(executable: path).run([], timeout: .seconds(1))
+      "trap '' TERM\necho $$ > '\(pidFile)'\nwhile true; do sleep 1; done", in: folder)
+    guard let (result, stopped) = await stoppedAfterPid(of: path, in: pidFile) else { return }
     #expect(result.outcome == .timedOut)
-    #expect(ContinuousClock.now - started < .seconds(8))
-    let stopped = try pid(inFile: pidFile)
     #expect(await waitUntil { !processExists(stopped) })
   }
 
@@ -106,9 +140,8 @@ private func waitUntil(seconds: Double = 5, _ done: () -> Bool) async -> Bool {
     let folder = try scratchFolder()
     let childFile = folder.appendingPathComponent("child").path
     let path = try fakeBosun("sleep 60 &\necho $! > '\(childFile)'\nwait", in: folder)
-    let result = await ProcessBosunCLI(executable: path).run([], timeout: .seconds(1))
+    guard let (result, child) = await stoppedAfterPid(of: path, in: childFile) else { return }
     #expect(result.outcome == .timedOut)
-    let child = try pid(inFile: childFile)
     #expect(await waitUntil { !processExists(child) })
   }
 
@@ -130,9 +163,10 @@ private func waitUntil(seconds: Double = 5, _ done: () -> Bool) async -> Bool {
 
   @Test func aCancelledRunIsATimeout() async throws {
     let folder = try scratchFolder()
-    let path = try fakeBosun("exec sleep 60", in: folder)
+    let pidFile = folder.appendingPathComponent("pid").path
+    let path = try fakeBosun("echo $$ > '\(pidFile)'\nexec sleep 60", in: folder)
     let task = Task { await ProcessBosunCLI(executable: path).run([], timeout: .seconds(120)) }
-    try await Task.sleep(for: .milliseconds(200))
+    _ = await waitUntil { pid(inFile: pidFile) != nil }
     task.cancel()
     let result = await task.value
     #expect(result.outcome == .timedOut)
@@ -146,15 +180,19 @@ private func waitUntil(seconds: Double = 5, _ done: () -> Bool) async -> Bool {
     #expect(result.stdout.count == 400_000)
   }
 
-  /// A helper the command left running holds the pipe open; the reply is what was said by then.
+  /// A helper the command left running holds the pipe open; the reply is what was said by then. Said by
+  /// behaviour, not by the clock: the reply is the command's own exit (not a timeout) although the helper
+  /// would run for half a minute, and the helper is still there when it arrives.
   @Test func aHelperLeftRunningDoesNotHoldTheReply() async throws {
     let folder = try scratchFolder()
-    let path = try fakeBosun("sleep 4 &\necho done", in: folder)
-    let started = ContinuousClock.now
+    let helperFile = folder.appendingPathComponent("helper").path
+    let path = try fakeBosun("sleep 30 &\necho $! > '\(helperFile)'\necho done", in: folder)
     let result = await ProcessBosunCLI(executable: path).run([], timeout: .seconds(20))
     #expect(result.outcome == .exited(0))
     #expect(result.stdout == "done\n")
-    #expect(ContinuousClock.now - started < .seconds(3))
+    let helper = try #require(pid(inFile: helperFile))
+    #expect(processExists(helper))
+    kill(helper, SIGKILL)
   }
 
   @Test func aCommandKilledBySignalExitsAs128PlusIt() async throws {
@@ -199,14 +237,18 @@ private func waitUntil(seconds: Double = 5, _ done: () -> Bool) async -> Bool {
 }
 
 @Suite struct ProcessStartTests {
+  /// Returns at once, by behaviour: the script waits for a gate the test opens only after `start` came
+  /// back, so `start` cannot have waited for it, and it goes on running to leave its mark.
   @Test func startLeavesItRunningAndReturnsAtOnce() async throws {
     let folder = try scratchFolder()
     let mark = folder.appendingPathComponent("mark").path
-    let path = try fakeBosun("sleep 1\ntouch '\(mark)'\nsleep 1", in: folder)
-    let began = ContinuousClock.now
+    let gate = folder.appendingPathComponent("gate").path
+    let path = try fakeBosun(
+      "while [ ! -e '\(gate)' ]; do sleep 0.05; done\ntouch '\(mark)'", in: folder)
     let result = await ProcessBosunCLI(executable: path).start(["morning", "--now"])
     #expect(result.outcome == .started)
-    #expect(ContinuousClock.now - began < .milliseconds(900))
+    #expect(!FileManager.default.fileExists(atPath: mark))
+    #expect(FileManager.default.createFile(atPath: gate, contents: nil))
     #expect(await waitUntil { FileManager.default.fileExists(atPath: mark) })
   }
 
