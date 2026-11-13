@@ -30,6 +30,11 @@ inputs).
 - Long-running processes are bosun's launchd jobs, never the app's children: the app starts a command and lets it run
   (`bosun morning --now` and `bosun update --yes` are started detached, their progress read back from `status`).
 - Test hooks (`--test-hooks <dir>`) exist only for the VM suite, and only when the app is launched with that argument.
+- One copy at a time, by the app itself: launchd's login job runs `Contents/MacOS/bosun` directly, which bypasses
+  LaunchServices' one-copy rule, and `bosun app login on` loads that job at once (`RunAtLoad`), so a second copy
+  that finds another running application with its bundle identifier exits at launch, starting nothing.
+- While its own `bosun quit` runs, the app does not poll `status` (the seconds between `quit.json` and the stop
+  read as "bosun quit did not finish"); it refreshes once when the quit exits.
 - Swift files pass `swift format lint --strict` (the toolchain's swift-format) with a committed `.swift-format`.
 - Tooling and coverage, the same bar as the repo's Python and shell (the person asked for good coverage and a tight
   feedback loop):
@@ -100,9 +105,13 @@ inputs).
   [Command])` (pure transitions; commands are the `bosun` argv to run).
 - Produces: `struct QuitChoices { pauseMorning = true, sleep = true, keepIcon = false, busy: BusyChoice }` and
   `func quitCommand(_ c: QuitChoices) -> [String]` (`["quit", "--let-finish" | "--stop-now", "--pause-morning"?,
-  "--sleep"?, "--json"]`); `enum QuitStep { first(QuitPlan), busy([String]), stillBusy([String]), done, cancelled }`
-  with the flow of option B: the first dialog's choices; a second only when the plan has busy agents; on exit 3 the
-  "still busy" dialog (Keep Waiting / Stop Them Now / Cancel Quit).
+  "--sleep"?, "--json"]`); `enum QuitStep { first(QuitPlan), busy([String]), stillBusy([String]), failed(String), done,
+  cancelled }` with the flow of option B: the first dialog's choices; a second only when the plan has busy agents; on
+  exit 3 (`result: "busy"`) the "still busy" dialog (Keep Waiting / Stop Them Now / Cancel Quit); exit 1 (`result`
+  `refused` or `failed`) shows its `error` line (a failed quit says the record stays and how to finish); exit 0
+  (`stopped`) is done. `QuitResult` decodes part 1's object: the plan's keys, `result`, `error`, `console` (one of
+  `stopped`, `not running`, `still running`) and `console_port` (an Int or null). `tools/contract_samples.py` writes
+  fixtures for each `result`, and for `status` a stopped bosun, a quit that did not finish, and resting.
 - Produces: `protocol BosunCLI { func run(_ args: [String], timeout: Duration) async -> CommandResult }` and a
   `FakeBosunCLI` for tests.
 
@@ -143,7 +152,9 @@ inputs).
   uninstall`, opened with `NSWorkspace`), Show Logs (the log folder, from `bosun status --json`'s `logs` path — part 1
   adds that field); Quit (the quit flow; after it, the app terminates unless "Keep bosun in the menu bar").
 - Produces: launch behaviour — with `--at-login`: show the icon only; otherwise, when the status is `stopped` or
-  `error`, run Start once; a second launch hands over to the running copy (macOS does this for an app bundle).
+  `error`, run Start once. A second copy exits at launch when `NSRunningApplication` lists another with the app's
+  bundle identifier (the decision a pure core function over that list, tested as `secondCopyExits`); the poller
+  pauses while the app's own quit runs and refreshes once after it.
 - Produces: `--test-hooks <dir>`: after each render, write `<dir>/menu.json` (the `MenuModel` as JSON, with the status
   level); poll `<dir>/actions/` every second for `<n>.json` files (`{"item": "<id>"}`, `{"answer": {...}}` for the
   open dialog: which button, which boxes) and perform them as if clicked; log each URL it would open and each command
@@ -175,8 +186,13 @@ inputs).
   from `app/VERSION`, `LSUIElement`, `LSMinimumSystemVersion` 14.0); signs the whole bundle (`codesign --force --sign
   <identity>`, plus `--options runtime --timestamp` when not ad hoc); verifies (`codesign --verify --strict`); writes
   `<out>/bosun-app-<version>.zip` with `ditto -c -k --keepParent`.
-- Produces: `bosun app install --build`: runs `app/build.sh` ad hoc into a temporary folder and installs it without the
-  team check, saying it is a development build.
+- Produces: `bosun app install --build`: runs `app/build.sh --identity - --out <temporary folder>` (part 1 runs
+  `app/build.sh <folder>` and takes `<folder>/bosun.app`; this task moves it to these options) and installs it
+  without the team check, saying it is a development build.
+- Signing: a Developer ID build's signing identifier is the bundle identifier (`codesign --sign` takes it from
+  `Info.plist`; pass `--identifier` explicitly), since part 1's install accepts a build only when it satisfies the
+  Developer ID designated requirement with `identifier "<bundle_id>"` and `certificate leaf[subject.OU] = "<team_id>"`,
+  and Gatekeeper's `spctl -vv` says `source=Notarized Developer ID`.
 
 - [ ] **Step 1: Tests.**  - [ ] **Step 2: Run them to see them fail.**  - [ ] **Step 3: Implement**; generate the icons
   once with the tool and commit them.
@@ -201,7 +217,9 @@ inputs).
   keychain (never the login keychain; deleted at the end), `app/build.sh --identity "$MACOS_SIGN_IDENTITY"`,
   `xcrun notarytool submit --wait` with the App Store Connect key (written to a 0600 file in `$RUNNER_TEMP`, removed
   after), the status read from `notarytool info` (never inferred), `xcrun stapler staple`, `spctl --assess --type
-  execute`, the zip re-made after stapling, and a GitHub release with the zip. Secrets: `MACOS_CERTIFICATE`, <!-- pragma: allowlist secret -->
+  execute -vv` with its `source=Notarized Developer ID` line, `codesign --verify --deep --strict -R` with the same
+  requirement `bosun app install` checks (so a release the install would refuse is never published), the zip re-made
+  after stapling, and a GitHub release with the zip. Secrets: `MACOS_CERTIFICATE`, <!-- pragma: allowlist secret -->
   `MACOS_CERTIFICATE_PASSWORD`, `MACOS_SIGN_IDENTITY`, `APPLE_API_KEY`, `APPLE_API_KEY_ID`, `APPLE_API_ISSUER_ID`; the <!-- pragma: allowlist secret -->
   team id from `app/publisher.json`. The job runs in a GitHub environment `release` so the person can require approval.
 - Produces: the development guide's steps for the person: the `gh secret set` commands (values from the person's own
@@ -245,8 +263,8 @@ inputs).
   quarantine prompt.
 
 - [ ] **Step 1: Write** the suite and the `mac.sh` subcommand.
-- [ ] **Step 2: Run** `tests/sandbox.sh mac app` (about 25 minutes). Expected: `N passed, 0 failed`; then `tests/sandbox.sh
-  mac run` and `mac live claude` still pass.
+- [ ] **Step 2: Run** `tests/sandbox.sh mac app` (about 25 minutes). Expected: `N passed, 0 failed`. `tests/sandbox.sh
+  mac run` runs once at the end of the branch, not per task; the app changes no agent, so no `mac live` run.
 - [ ] **Step 3: Commit** ("Tests: bosun.app driven through every state and choice on a real Mac").
 
 ### Task 6: The docs
