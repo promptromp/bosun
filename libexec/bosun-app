@@ -56,6 +56,9 @@ load_config
 
 # app_install.py <args...>: the verifying and placing (lib/app_install.py), which gets the one setting it reads.
 app_py() { BOSUN_APP_RELEASES="$BOSUN_APP_RELEASES" python3 "$BOSUN_ROOT/lib/app_install.py" "$@"; }
+# The same, as this process (exec): where nothing follows it, a time limit on `bosun app update` (the update's)
+# stops the Python placer itself, not only this wrapper, which would leave it running on.
+app_exec() { BOSUN_APP_RELEASES="$BOSUN_APP_RELEASES" exec python3 "$BOSUN_ROOT/lib/app_install.py" "$@"; }
 
 # Open at Login on: the job rendered, checked, and loaded (reload_job: unloaded first, then bootstrapped),
 # unless it is there already, as it renders now and loaded: then nothing is done, so that an `init` run again
@@ -109,7 +112,7 @@ case "$sub" in
     ;;
   update)
     no_more_arguments "$@"
-    app_py update
+    app_exec update
     ;;
   remove)
     no_more_arguments "$@"

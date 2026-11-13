@@ -204,9 +204,9 @@ def locked_steps(options: Options, ports: Ports) -> dict[str, Any]:
     stopped). The windows listed are those of this look."""
     _windows, plan = look(ports, options)
     if plan["refused"]:
-        return dict(plan, result="refused")
+        return dict(plan, result="refused", error=None)
     if plan["busy"] and options.mode == "finish":
-        return dict(plan, result="busy")
+        return dict(plan, result="busy", error=None)
     result = dict(plan, result="stopped", morning_paused=options.pause_morning, error=None)
     try:
         ports.write_quit(options.pause_morning)
@@ -287,9 +287,9 @@ def quit_it(options: Options, ports: Ports, err: TextIO) -> dict[str, Any]:
     while True:
         plan = first_plan(options, ports, deadline, err)
         if plan["refused"]:
-            return dict(plan, result="refused")
+            return dict(plan, result="refused", error=None)
         if plan["busy"] and options.mode == "finish":
-            return dict(plan, result="busy")
+            return dict(plan, result="busy", error=None)
         result = stop(options, ports)
         if result["result"] != "busy" or ports.clock() >= deadline:
             return result

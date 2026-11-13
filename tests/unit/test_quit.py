@@ -172,6 +172,8 @@ class RunTest(unittest.TestCase):
         data = json.loads(out)
         self.assertEqual((data["contract"], data["result"]), (1, "refused"))
         self.assertIn("update", data["refused"])
+        self.assertIn("error", data)  # every result carries `result` and `error`
+        self.assertIsNone(data["error"])
         self.assertEqual(fake.steps, [])  # nothing written, nothing stopped
 
     def test_the_refusal_is_one_line_in_text(self) -> None:
@@ -259,6 +261,8 @@ class RunTest(unittest.TestCase):
         data = json.loads(out)
         self.assertEqual(status, 3)
         self.assertEqual((data["contract"], data["result"], data["busy"]), (1, "busy", ["alpha"]))
+        self.assertIn("error", data)
+        self.assertIsNone(data["error"])
 
     def test_zero_minutes_checks_once(self) -> None:
         fake = Fake([window("alpha", "busy")])
@@ -461,6 +465,8 @@ class RunTest(unittest.TestCase):
         status, out, _err = run(fake, "finish", minutes=0, as_json=True)
         data = json.loads(out)
         self.assertEqual((status, data["result"], data["busy"]), (3, "busy", ["alpha"]))
+        self.assertIn("error", data)  # also the busy a second look under the lock finds
+        self.assertIsNone(data["error"])
         self.assertEqual(fake.steps, [])
         self.assertEqual(fake.outside, [])
 

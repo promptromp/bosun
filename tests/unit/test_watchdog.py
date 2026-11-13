@@ -21,6 +21,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "lib"))
 import app_release
 import claude_state
 import login
+import quit_state
 import signals
 import watchdog
 from watchdog import CHECKS, Config, Facts, Inputs, WindowFact
@@ -453,6 +454,15 @@ class SessionTest(WatchdogCase):
         self.morning_run(MONDAY)
         (self.state_dir / "stopped-main").write_text(f"{MONDAY} 09:30:00\n")
         self.assertEqual(self.runs(at(MONDAY, "10:00"), 4, facts=self.gone), [])
+
+    def test_a_session_bosun_was_quit_is_not_missing(self) -> None:
+        # `bosun quit` is a gate like `bosun stop`: no session-missing while the quit record is there, also
+        # when status, the console and --status ask (they judge by the same gate), not only the scheduled run
+        self.morning_run(MONDAY)
+        quit_state.write(self.state_dir, False, now=datetime(2026, 1, 5, 9, 30, tzinfo=UTC))
+        self.assertEqual(self.runs(at(MONDAY, "10:00"), 4, facts=self.gone), [])
+        quit_state.clear(self.state_dir)
+        self.assertEqual(len(self.runs(at(MONDAY, "10:10"), 4, facts=self.gone)), 1)
 
     def test_a_stop_on_an_earlier_day_does_not_count(self) -> None:
         self.morning_run(TUESDAY)

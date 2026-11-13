@@ -62,6 +62,7 @@ EXPECTED = "expected"  # it should be running now
 RESTING = "resting"  # outside the awake window: until its next scheduled start
 STARTING = "starting"  # the morning run is going, or is about to (the awake window began, it is not yet due)
 STOPPED_BY_STOP = "stopped"  # you stopped it today with bosun stop (at: when)
+QUIT = "quit"  # a quit record is there (the quit verdict is its own: this is only a race between two reads)
 NO_MORNING = "no-morning"  # no morning run today: morning-missing's to say
 DAYS_AHEAD = 8  # the next scheduled start is within a week; a day more for the same weekday
 

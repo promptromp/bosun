@@ -87,8 +87,10 @@ light or dark mode and works down to a narrow window.
   file is there: `bosun quit` removes it and stops the console, so a quit leaves no console running, and the
   job does not come back (not at a reboot either) until the next `bosun start`. `bosun console --url` prints its address, token included ("the console is not running" and exit 1
   when none runs), and a `bosun console` you run by hand while one serves prints the same address (`--open` opens it)
-  instead of failing on the port; `--new-token` is refused then, since the running console keeps its token. The job's
-  errors go to `console.launchd.err` in the log folder, never its address. Turned off again, `install.sh` removes the job.
+  instead of failing on the port; `--new-token` is refused then, since the running console keeps its token. The job
+  never exits for a console you run by hand: while that one holds the port, the job waits (it looks again every few
+  seconds, and says so once) and serves once yours ends. `bosun doctor` has a line for the job: loaded, and serving
+  while `console/wanted` is there. The job's errors go to `console.launchd.err` in the log folder, never its address. Turned off again, `install.sh` removes the job.
 - The first visit swaps the URL's token for an HttpOnly, SameSite=Strict cookie and drops it from
   the address bar; the API answers 401 without the cookie, so other local processes and pages
   cannot read the ledger by finding the port. The token is kept across restarts in

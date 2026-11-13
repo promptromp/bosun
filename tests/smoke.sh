@@ -2673,6 +2673,12 @@ quit_morning_rc=$?
 check "a quit made while the morning sets up survives the morning's start, which logs that and starts nothing" bash -c 'grep -q "bosun was quit at [0-9:]*: not starting it" <<<"$1" && [ -f "$2/quit.json" ] && ! tmux -L "$3" has-session -t =smoke' _ "$quit_morning_out" "$BOSUN_STATE_DIR" "$SOCKET"
 check "... the morning then logs that a quit came during it, not that it completed, and exits 0" bash -c 'grep -q "bosun quit during the morning run; not starting" <<<"$1" && ! grep -q "morning run complete" <<<"$1" && [ "$2" -eq 0 ]' _ "$quit_morning_out" "$quit_morning_rc"
 check "... and does not tell you the sessions are ready" bash -c '! grep -q "Sessions ready" "$1"' _ "$WORK/quit-notify.log"
+# The same, with a problem of the run's own (no network): its problems line names the quit too, so it is not read as a start that failed.
+rm -f "$BOSUN_STATE_DIR/quit.json"
+: >"$WORK/quit-notify.log"
+quit_problem_out="$(PATH="$WORK/fake-caffeinate:$PATH" BOSUN_SETUP_FILE="$WORK/quit-during-setup.sh" BOSUN_NETWORK_PROBE_URL=file:///nonexistent-probe BOSUN_NETWORK_TIMEOUT=1 "$BOSUN" morning --awake-minutes 1 2>&1 </dev/null)"
+quit_problem_rc=$?
+check "a quit during a run that also had a problem: the problems line names both, and it exits 1" bash -c 'grep -q "morning run finished with problems: network.*bosun quit during the run, so its start was skipped" <<<"$1" && [ "$2" -eq 1 ] && grep -q "bosun quit during the run" "$3"' _ "$quit_problem_out" "$quit_problem_rc" "$WORK/quit-notify.log"
 printf '#!/bin/sh\nexit 0\n' >"$HOME/.local/bin/osascript" # no real notifications from tests
 check "bosun start --unless-quit with a quit record starts nothing, clears nothing, exits 0" bash -c '"$1" start --unless-quit >/dev/null 2>&1 && [ -f "$2/quit.json" ] && ! tmux -L "$3" has-session -t =smoke' _ "$BOSUN" "$BOSUN_STATE_DIR" "$SOCKET"
 "$BOSUN" start >/dev/null 2>&1
@@ -2993,6 +2999,22 @@ check "... stored 0600 in a 0700 folder" bash -c '
   [ "$(stat -c %a "$1/console/token" 2>/dev/null || stat -f %Lp "$1/console/token")" = 600 ] &&
     [ "$(stat -c %a "$1/console" 2>/dev/null || stat -f %Lp "$1/console")" = 700 ]' _ "$CONSOLE_STATE"
 check "--new-token rotates it" bash -c '[ -n "$1" ] && [ "$1" != "$2" ]' _ "$(console_token_of_start --new-token)" "$FIRST_TOKEN"
+# The job waits for a console run by hand (its port and running.lock), and serves once that one ends.
+BOSUN_STATE_DIR="$CONSOLE_STATE" BOSUN_CONFIG_DIR="$CONSOLE_CONFIG" \
+  "$BOSUN" console --port 0 >"$WORK/console-hand.out" 2>"$WORK/console-hand.err" &
+HAND_PID=$!
+console_started "$WORK/console-hand.out" "$WORK/console-hand.err" >/dev/null
+BOSUN_STATE_DIR="$CONSOLE_STATE" BOSUN_CONFIG_DIR="$CONSOLE_CONFIG" \
+  "$BOSUN" console --job --port 0 >"$WORK/console-job2.out" 2>"$WORK/console-job2.err" &
+CONSOLE_PID=$!
+check "the job started while a console run by hand serves says it waits for it" wait_for 10 grep -q "the job waits for it to end" "$WORK/console-job2.out"
+check "... and does not exit for launchd to start it again" kill -0 "$CONSOLE_PID"
+check "... nor serve yet" bash -c '! grep -q "^bosun console: http" "$1"' _ "$WORK/console-job2.out"
+kill "$HAND_PID" 2>/dev/null
+check "... and serves once the hand-run console ends" console_started "$WORK/console-job2.out" "$WORK/console-job2.err"
+kill "$CONSOLE_PID" 2>/dev/null
+wait "$CONSOLE_PID" 2>/dev/null
+CONSOLE_PID=""
 
 echo "install and uninstall (fake launchctl and pmset, test label)"
 # launchd has a job while it has its plist; pmset's schedule is what a test leaves in a file; sudo only
@@ -3119,8 +3141,18 @@ assert job["KeepAlive"] == {"PathState": {sys.argv[2] + "/console/wanted": True}
   log_lines="$(wc -l <"$WORK/system.log")"
   BOSUN_CONSOLE_ALWAYS=1 BOSUN_CONFIG_DIR="$INSTALL_CFG" "$ROOT/install.sh" >/dev/null 2>&1
   check "a second install leaves it loaded as it is" bash -c '! tail -n +$(($2 + 1)) "$1" | grep -q "launchctl bootstrap .*console"' _ "$WORK/system.log" "$log_lines"
+  # doctor: the job loaded and wanted but no console serving, then bosun stopped (no marker), then not loaded.
+  mkdir -p "$BOSUN_STATE_DIR/console"
+  [ ! -e "$BOSUN_STATE_DIR/console/wanted" ] || mv "$BOSUN_STATE_DIR/console/wanted" "$WORK/console-wanted.aside"
+  : >"$BOSUN_STATE_DIR/console/wanted"
+  check "doctor, with BOSUN_CONSOLE_ALWAYS=1, warns about the console job loaded and wanted while no console serves" contains "$(BOSUN_CONSOLE_ALWAYS=1 "$BOSUN" doctor 2>&1)" "warn  launchd job $BOSUN_LAUNCHD_LABEL.console loaded and wanted, but the console is not serving"
+  rm -f "$BOSUN_STATE_DIR/console/wanted"
+  check "... says all is well, and that bosun is stopped, with no marker" contains "$(BOSUN_CONSOLE_ALWAYS=1 "$BOSUN" doctor 2>&1)" "ok    launchd job $BOSUN_LAUNCHD_LABEL.console loaded (serves the console while bosun runs: not now, bosun is stopped"
+  check "... and says nothing of the console job without BOSUN_CONSOLE_ALWAYS=1" not_contains "$("$BOSUN" doctor 2>&1)" "launchd job $BOSUN_LAUNCHD_LABEL.console"
+  [ ! -e "$WORK/console-wanted.aside" ] || mv "$WORK/console-wanted.aside" "$BOSUN_STATE_DIR/console/wanted"
   BOSUN_CONFIG_DIR="$INSTALL_CFG" "$ROOT/install.sh" >/dev/null 2>&1
   check "turned off, install unloads and removes it" bash -c 'tail -n +$(($4 + 1)) "$1" | grep -q "launchctl bootout gui/$(id -u)/$2.console" && [ ! -e "$3" ]' _ "$WORK/system.log" "$BOSUN_LAUNCHD_LABEL" "$CONSOLE_PLIST" "$log_lines"
+  check "doctor, with BOSUN_CONSOLE_ALWAYS=1 and no job, warns to run install.sh" contains "$(BOSUN_CONSOLE_ALWAYS=1 "$BOSUN" doctor 2>&1)" "warn  launchd job $BOSUN_LAUNCHD_LABEL.console not loaded, though BOSUN_CONSOLE_ALWAYS=1"
 
   NOW_PLIST="$HOME/Library/LaunchAgents/$BOSUN_LAUNCHD_LABEL.now.plist"
   check "install writes and loads the job that runs the morning run now" bash -c 'plutil -lint -s "$1" && grep -q "launchctl bootstrap gui/$(id -u) $1" "$2"' _ "$NOW_PLIST" "$WORK/system.log"
@@ -3293,7 +3325,7 @@ with zipfile.ZipFile(sys.argv[1], "w") as bundle:
         and .login == false and .path == (\$home + \"/Applications/bosun.app\")" <<<"$("$1" app status --json)"' _ "$BOSUN" "$ROOT" "$HOME"
     check "... and in words" contains "$("$BOSUN" app status)" "bosun.app is not installed"
     check "app/VERSION and app/publisher.json are what the design says (the Team ID itself is the publisher's to fill in)" bash -c '
-      jq -e ".bundle_id == \"ai.predicated.bosun\" and .releases == \"promptromp/bosun\" and (.team_id | type) == \"string\"" "$1/app/publisher.json" &&
+      jq -e "(.bundle_id | type == \"string\" and contains(\".\")) and (.releases | type == \"string\") and (.team_id | type) == \"string\"" "$1/app/publisher.json" &&
         grep -qE "^[0-9]+\.[0-9]+\.[0-9]+$" "$1/app/VERSION"' _ "$ROOT"
 
     set_team ""
@@ -3412,13 +3444,14 @@ with zipfile.ZipFile(sys.argv[1], "a") as bundle:
 
     echo "  (Open at Login)"
     check "login on makes the job and loads it" bash -c '"$1" app login on >/dev/null && plutil -lint -s "$2" && grep -q "launchctl bootstrap gui/$(id -u) $2" "$3"' _ "$APP_CHECKOUT/bin/bosun" "$APP_JOB" "$WORK/system.log"
-    check "... which opens the app at login, once, and is not kept alive" python3 -I -c '
+    check "... which opens the app at login, once, and is not kept alive; its process group is abandoned, so quitting the app never takes what it started (an update) with it" python3 -I -c '
 import plistlib, sys
 job = plistlib.load(open(sys.argv[1], "rb"))
 assert job["Label"] == sys.argv[2] + ".app", job["Label"]
 assert job["ProgramArguments"] == [sys.argv[3] + "/Applications/bosun.app/Contents/MacOS/bosun", "--at-login"], job["ProgramArguments"]
 assert job["RunAtLoad"] is True, job
 assert "KeepAlive" not in job, job
+assert job.get("AbandonProcessGroup") is True, job.get("AbandonProcessGroup")
 ' "$APP_JOB" "$BOSUN_LAUNCHD_LABEL" "$HOME"
     check "... and status says Open at Login is on" bash -c 'jq -e ".login == true" <<<"$("$1" app status --json)"' _ "$APP_CHECKOUT/bin/bosun"
     login_log_lines="$(wc -l <"$WORK/system.log")"
@@ -4241,6 +4274,14 @@ PY
   check "an origin that cannot be reached is the check's error, exit 0, and no token in it" bash -c '
     [ "$1" = 0 ] && jq -e ".error == \"could not reach https://127.0.0.1:9/acme/bosun.git\" and .available == false and .latest == null" <<<"$2" >/dev/null &&
       ! grep -q placeholder-token <<<"$2"' _ "$u_rc" "$json"
+  git --git-dir="$U_VERSIONS/bosun.git" remote set-url origin "https://0000placeholder-token@127.0.0.1:9/acme/bosun.git" # gitleaks:allow
+  json="$(uc releases update --dry-run --json 2>/dev/null)"
+  u_rc=$?
+  git --git-dir="$U_VERSIONS/bosun.git" remote set-url origin "$U_UP"
+  check "update --json, when the wrapper cannot reach the origin, still prints its one object with the error, exit 1, no token in it" bash -c '
+    [ "$1" = 1 ] && jq -e ".contract == 1 and .plan == null and .update == null and .summary == null and
+      (.error | startswith(\"could not reach https://127.0.0.1:9/acme/bosun.git\"))" <<<"$2" >/dev/null &&
+      ! grep -q placeholder-token <<<"$2"' _ "$u_rc" "$json"
   json="$(uc main update --check --json)"
   check "on the main channel the latest is the head of the branch, its notes the subjects since this install" jq -e --arg c "$U_FAILING_COMMIT" '
     .channel == "main" and .available == true and .latest.commit == $c and
@@ -4431,6 +4472,11 @@ migrations.run(migrations.Context(pathlib.Path(sys.argv[2]), pathlib.Path(sys.ar
   check "with nothing new on the branch and nothing to carry on, bosun is up to date" u_up_to_date
   check "... and with --json, stdout is the same object: no plan, the record as it stands, no summary" jq -e '.plan == null and .update.step == "done" and .summary == null' <<<"$(ub update --yes --json 2>/dev/null)"
   check "a checkout is updated with git, not bosun update" fails_with "is a checkout: update it with git" "${U_ENV[@]}" "$BOSUN" update --dry-run
+  json="$("${U_ENV[@]}" "$BOSUN" update --dry-run --json 2>/dev/null)"
+  u_rc=$?
+  check "... and with --json the same refusal is the one object, its error the line said, exit 1" bash -c '
+    [ "$1" = 1 ] && jq -e ".contract == 1 and .plan == null and .update == null and .summary == null and
+      (.error | contains(\"is a checkout: update it with git\"))" <<<"$2" >/dev/null' _ "$u_rc" "$json"
 
   # A running session keeps the hook commands it was launched with: each of v1's runs on v2.
   mkdir -p "$U/home/.local/bin"

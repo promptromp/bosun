@@ -9,7 +9,7 @@ is missing.
 |---|---|---|
 | `morning-missing` | a scheduled day, `BOSUN_WATCHDOG_GRACE_MINUTES` (15) after the run was due (start time + wake delay), and today's morning log has no real (non-dry) run | day |
 | `morning-failed` | today's run reported problems (a setup step such as an AWS SSO login failed, the network, a window that could not start, an `ERROR`), crashed (launchd's exit code), or is not done after 45 minutes | day |
-| `session-missing` | after today's morning run, no tmux session, unless you ran `bosun stop` today | day |
+| `session-missing` | after today's morning run, no tmux session, unless you ran `bosun stop` today or bosun is quit (`bosun quit`) | day |
 | `checkin-missing` | the session runs, but the `checkin` window is gone or not running the check-in loop | day |
 | `orchestrator-down` | after the morning run, the orchestrator's window is gone or no Claude runs in it for `BOSUN_WATCHDOG_ORCHESTRATOR_DOWN_MINUTES` (15) awake minutes (0 turns it off): events, check-ins and reports wait meanwhile. With `BOSUN_WATCHDOG_ORCHESTRATOR_RESTART=1` (the default) a full run relaunches it once per outage with `bosun refresh --unless-active <orchestrator>`, which never replaces a running command or acts while you type | outage |
 | `stalled-start` | a window's agent (Claude Code, Codex or `agy`) has run for 5 minutes without reaching a session, so it is on a first-run, trust or similar screen only you can answer (`bosun attach`). Do not just press Return: on several of Claude Code's screens the default is to exit, and on Codex's it says yes | process (window and pid) |
@@ -37,7 +37,10 @@ How it avoids false alarms:
 
 - **Not while bosun is quit:** after `bosun quit`, a run that records or alerts says "bosun is stopped
   (bosun quit at HH:MM): skipping this run" and exits, before it looks at anything, until `bosun start`
-  (as it skips while an update holds its work). `--dry-run`, `--status`, `--list` and `--facts` still answer.
+  (as it skips while an update holds its work). `--dry-run`, `--status`, `--list` and `--facts` still answer, and
+  they too know of the quit: `session-missing` and the check-in check say "you quit bosun at HH:MM (bosun quit)"
+  instead of a missing session, as `bosun status` and the console's health do (the gate the checks share,
+  `session_gate_kind`).
 - **Only in the awake window:** alerts go out on scheduled days (`BOSUN_DAYS`) between
   `BOSUN_START_TIME` and `BOSUN_AWAKE_UNTIL` (an end at or before the start runs past
   midnight: 08:00 to 01:00 ends at 1 am the next day). Anything found outside it is held: a prompt

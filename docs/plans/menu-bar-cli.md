@@ -26,7 +26,7 @@ commands gather facts and act, as the repo's other features do. Releases are git
   `BOSUN_MENU_APP="0"`, `BOSUN_CONSOLE_ALWAYS="0"`, `BOSUN_APP_RELEASES=""` (empty: the install's origin), and
   `BOSUN_QUIT_WAIT_MINUTES="10"`. `CONFIG_ADDED` entries keep an existing install as it was: `BOSUN_UPDATE_CHANNEL`
   kept `main`, `BOSUN_MENU_APP` kept `0`, `BOSUN_CONSOLE_ALWAYS` kept `0`.
-- The publisher's identity is only in `app/publisher.json` (`{"bundle_id": "ai.predicated.bosun", "team_id":
+- The publisher's identity is only in `app/publisher.json` (`{"bundle_id": "<the publisher's reverse-DNS id>", "team_id":
   "<the person's Team ID>", "releases": "<owner>/<repo>"}`) — the team id is filled by the person; until then the
   file holds `"team_id": ""` and `bosun app install` refuses with "app/publisher.json has no team_id yet". CLAUDE.md's
   Publishing section gains the exception for this one public value.

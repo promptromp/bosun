@@ -49,6 +49,7 @@ import learn
 import ledger
 import lineage
 import login
+import quit_state
 import signals
 import slack_watch
 import update_state
@@ -666,17 +667,27 @@ def stopped_today(ctx: Context) -> datetime | None:
 
 
 # Why the session is not expected to run now (gate_kind): the awake window is not on, the morning is not
-# due yet, no morning run has happened today, it is still going, or you stopped it with `bosun stop`.
+# due yet, no morning run has happened today, it is still going, you stopped it with `bosun stop`, or you
+# quit it with `bosun quit` (its record is there until `bosun start`).
 GATE_OUTSIDE = "outside-window"
 GATE_NOT_DUE = "not-due"
 GATE_NO_MORNING = "no-morning"
 GATE_MORNING_RUNNING = "morning-running"
 GATE_STOPPED = "stopped"
+GATE_QUIT = "quit"
 
 
 def session_gate_kind(ctx: Context) -> tuple[str, str] | None:
     """Why the session should not be expected to run now, as (GATE_*, the reason's text), or None if it
     should. `bosun status --json` judges a missing session by this too."""
+    quit_record = quit_state.read(ctx.config.state_dir)
+    if quit_record is not None:
+        return GATE_QUIT, f"you quit bosun at {quit_state.clock(quit_record)} (bosun quit)"
+    return day_gate_kind(ctx)
+
+
+def day_gate_kind(ctx: Context) -> tuple[str, str] | None:
+    """session_gate_kind for a bosun that is not quit: the awake window, the morning run, `bosun stop`."""
     if not in_awake_window(ctx.config, ctx.now):
         return GATE_OUTSIDE, "outside the awake window"
     due = morning_due(ctx.config, ctx.today)

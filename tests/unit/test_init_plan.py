@@ -695,8 +695,15 @@ class PlanTest(unittest.TestCase):
         self.assertEqual(
             init_plan.recommend(facts(env={"BOSUN_UPDATE_CHANNEL": "releases"})).update_channel, "releases"
         )
-        asked = facts(asked_channel="releases", env={"BOSUN_UPDATE_CHANNEL": "main"})
-        self.assertEqual(init_plan.recommend(asked).update_channel, "releases")
+
+    def test_what_the_config_has_wins_over_what_a_window_inherited(self) -> None:
+        """BOSUN_INIT_CHANNEL=main may be inherited by a window get.sh started, long after: a re-run of init
+        there must never flip a channel set by hand back; only a first run (no config) takes it."""
+        inherited = facts(asked_channel="main", env={"BOSUN_UPDATE_CHANNEL": "releases"})
+        self.assertEqual(init_plan.recommend(inherited).update_channel, "releases")
+        flipped = facts(asked_channel="releases", env={"BOSUN_UPDATE_CHANNEL": "main"})
+        self.assertEqual(init_plan.recommend(flipped).update_channel, "main")
+        self.assertEqual(init_plan.recommend(facts(asked_channel="main")).update_channel, "main")  # first run
 
     def test_a_config_from_before_the_channel_goes_on_following_main(self) -> None:
         """What bosun update writes for it (migrations.CONFIG_ADDED): a re-run changes nothing unasked."""

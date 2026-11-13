@@ -685,6 +685,14 @@ def serving_url(state: Path, args: argparse.Namespace) -> str | None:
         return None
 
 
+def wait_for_hand_run(state: Path) -> None:
+    """The launchd job (--job) serves, and a console run by hand holds the port and the running lock: it
+    waits for that one to end and takes over, rather than exiting for launchd to start it again, over and
+    over, for as long as the hand run lasts."""
+    told = "bosun console: one run by hand is serving; the job waits for it to end"
+    console_token.wait_free(state, say=lambda: print(told, flush=True))
+
+
 def show_running(url: str, open_browser: bool) -> None:
     print(f"bosun console: {url}", flush=True)
     print("The console is already running: nothing started here.", flush=True)
@@ -715,6 +723,8 @@ def main(argv: list[str]) -> int:
         if running_at is not None:
             show_running(running_at, args.open)
             return 0
+        if args.job:
+            wait_for_hand_run(state)
         app = new_app(state, rotate=args.new_token)
         server = make_server(app, args.host, args.port)
     except ConsoleError as exc:

@@ -167,9 +167,15 @@ def bosun_app(*argv: str) -> bool:
 
 def follow_the_config() -> None:
     """The launchd jobs made to follow bosun.env again, as install.sh makes them (the shell's
-    reload_changed_jobs: a job no longer wanted is unloaded and its plist removed)."""
+    reload_changed_jobs: a job no longer wanted is unloaded and its plist removed). A job that could not be
+    reloaded is a line, never a failed init: install.sh, run again, does it."""
     script = 'source "$1/lib/common.sh"; load_config; reload_changed_jobs'
-    subprocess.run(["bash", "-c", script, "_", str(ROOT)], check=False, stdout=subprocess.DEVNULL)
+    done = subprocess.run(["bash", "-c", script, "_", str(ROOT)], check=False, stdout=subprocess.DEVNULL)
+    if done.returncode != 0:
+        print(
+            "\nbosun's launchd jobs could not be reloaded to follow bosun.env (see above); "
+            "install.sh, run again, sets them right."
+        )
 
 
 def add_the_app(plan: Plan, config_dir: Path, stamp: str) -> None:

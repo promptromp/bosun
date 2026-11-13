@@ -5,7 +5,8 @@ status and `bosun morning --now`, which asks its command line:
     awake.py remaining --days MTWRF --start 08:00 --until 20:00
 
 prints the whole seconds left in the window that now is in, and exits 0; outside every window it prints
-nothing and exits 1; settings that do not parse are one line on stderr and exit 2."""
+nothing and exits 3 (OUTSIDE: not 1, which is what Python exits with after a crash, so that a caller never
+takes a crash for "outside"); settings that do not parse are one line on stderr and exit 2."""
 
 from __future__ import annotations
 
@@ -18,6 +19,7 @@ from datetime import date, datetime, time, timedelta
 from typing import NoReturn
 
 
+OUTSIDE = 3  # the exit status of `remaining` outside every window
 DAY_LETTERS = "MTWRFSU"  # pmset's letters, Monday first like date.weekday()
 
 
@@ -99,7 +101,7 @@ def main(argv: Sequence[str], now: datetime | None = None) -> int:
         return 2
     seconds = remaining_seconds(window, now or datetime.now())
     if seconds is None:
-        return 1
+        return OUTSIDE
     print(seconds)
     return 0
 

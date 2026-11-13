@@ -346,12 +346,13 @@ class CommandTest(WorldTest):
                 return subprocess.CompletedProcess(command, status)
             if name == "bash" and command[2:3] and "reload_changed_jobs" in str(command[2]):
                 self.reloads.append(str(command[2]))  # the jobs made to follow the config again
-                return subprocess.CompletedProcess(command, 0)
+                return subprocess.CompletedProcess(command, self.reload_status)
             if name in ("git", "ruby"):
                 return real_run(command, *args, **kwargs)
             raise AssertionError(f"a unit test tried to run {command}")
 
         self.install_status = 0
+        self.reload_status = 0
         self.reloads: list[str] = []
         self.statuses: dict[tuple[str, ...], int] = {}  # what a command answers, by its first two words
         patcher = mock.patch.object(subprocess, "run", run)
@@ -755,6 +756,18 @@ class CommandTest(WorldTest):
         self.statuses.clear()
         self.bosun_init("--answers", self.answers_file(menu_app=True))  # installed this time
         self.assertEqual(self.reloads, [])  # the jobs are left as install.sh made them
+
+    def test_a_refused_install_whose_jobs_could_not_be_reloaded_says_so_in_one_line(self) -> None:
+        self.statuses[("app", "install")] = 1
+        self.reload_status = 1
+        status, out, _ = self.bosun_init("--recommended")
+        self.assertEqual(status, 0)  # init goes on: bosun does not need the app
+        [line] = [line for line in out.splitlines() if "could not be reloaded" in line]
+        self.assertIn("install.sh", line)
+        self.reload_status = 0
+        self.statuses.clear()
+        _status, out, _ = self.bosun_init("--recommended")
+        self.assertNotIn("could not be reloaded", out)
 
     def test_the_write_back_keeps_init_s_backup_of_bosun_env(self) -> None:
         """A .pre-init- copy of the file as it was before the write-back, as init's other writes make, where

@@ -98,6 +98,7 @@ GATE_KINDS = {
     watchdog.GATE_NOT_DUE: menu_status.STARTING,
     watchdog.GATE_MORNING_RUNNING: menu_status.STARTING,
     watchdog.GATE_NO_MORNING: menu_status.NO_MORNING,
+    watchdog.GATE_QUIT: menu_status.QUIT,
 }
 
 

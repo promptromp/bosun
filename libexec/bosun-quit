@@ -26,9 +26,9 @@
 # the middle of setting up the windows is waited for, up to BOSUN_WINDOWS_LOCK_WAIT_SECONDS, else nothing
 # changes and it fails); the windows and any update are looked at once more under it (an update that began
 # refuses the quit; with --let-finish a window busy again lets the lock go and goes back to the wait, to
-# the same deadline); then quit.json is written, so the watchdog's next run already skips and never restarts what is being stopped;
-# the console's launchd job (BOSUN_CONSOLE_ALWAYS=1) is stopped; then `bosun stop` (with --keep-awake
-# unless --sleep). If a step after quit.json fails, quit.json stays, `bosun status --json` says the quit
+# the same deadline); then quit.json is written, so the watchdog's next run already skips and never restarts
+# what is being stopped; the console's launchd job (BOSUN_CONSOLE_ALWAYS=1) is stopped; then `bosun stop`
+# (with --keep-awake unless --sleep). If a step after quit.json fails, quit.json stays, `bosun status --json` says the quit
 # did not finish, and the quit says so: run `bosun quit --stop-now` again, or `bosun start`.
 # While an update runs a quit is refused (exit 1). Exit codes: 0 done, 1 refused or failed, 2 usage,
 # 3 the wait ran out. Run it from outside bosun's windows: it stops them, its own last, so --let-finish

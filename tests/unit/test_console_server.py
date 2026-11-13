@@ -719,6 +719,22 @@ class ServedUrlTest(unittest.TestCase):
         ):
             self.assertEqual(console_server.main(["--host", "0.0.0.0"]), 1)  # noqa: S104 - the address it must refuse
 
+    def test_the_job_waits_for_a_console_run_by_hand_before_it_serves_and_a_hand_run_does_not(self) -> None:
+        events: list[str] = []
+        env = {"BOSUN_STATE_DIR": str(self.state)}
+        with (
+            mock.patch.dict(os.environ, env),
+            mock.patch.object(console_token, "wait_free", lambda *_a, **_k: events.append("wait")),
+            mock.patch.object(console_server, "new_app", lambda *_a, **_k: events.append("app")),
+            mock.patch.object(console_server, "make_server", side_effect=console_server.ConsoleError("stop")),
+            mock.patch("sys.stderr"),
+        ):
+            console_server.main(["--job"])
+            self.assertEqual(events, ["wait", "app"])  # the lock first, then the port
+            events.clear()
+            console_server.main([])
+            self.assertEqual(events, ["app"])
+
     def test_url_prints_the_address(self) -> None:
         with (
             console_token.serving(self.state, 8123),
