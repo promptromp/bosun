@@ -81,6 +81,38 @@ def stays(plan: up.Plan) -> set[str]:
     return {stay.path for stay in plan.stays}
 
 
+class TheMenuBarApp(unittest.TestCase):
+    APP = f"{HOME}/Applications/bosun.app"
+
+    def test_the_app_is_a_step_with_what_to_run_by_hand(self) -> None:
+        plan = up.build_plan(facts(app=self.APP), up.Choices())
+        steps = [step for step in plan.steps if step.kind == up.APP]
+        self.assertEqual([(step.target, step.by_hand) for step in steps], [(self.APP, f"rm -rf {self.APP}")])
+
+    def test_it_comes_after_the_jobs_and_before_the_windows(self) -> None:
+        kinds = [step.kind for step in up.build_plan(facts(app=self.APP), up.Choices()).steps]
+        self.assertLess(kinds.index(up.JOB), kinds.index(up.APP))
+        self.assertLess(kinds.index(up.APP), kinds.index(up.STOP))
+
+    def test_it_reads_as_the_menu_bar_app_in_the_plan(self) -> None:
+        plan = up.build_plan(facts(app=self.APP), up.Choices())
+        text = up.render_plan(plan, facts(app=self.APP))
+        self.assertIn("the menu bar app, ~/Applications/bosun.app", text)
+        self.assertIn("asked to quit first", text)
+
+    def test_no_app_no_step(self) -> None:
+        plan = up.build_plan(facts(), up.Choices())
+        self.assertEqual([step for step in plan.steps if step.kind == up.APP], [])
+
+    def test_the_login_job_is_a_job_step_like_the_others(self) -> None:
+        job = Job("com.bosun.morning.app", f"{HOME}/Library/LaunchAgents/com.bosun.morning.app.plist", True)
+        plan = up.build_plan(facts(jobs=(job,)), up.Choices())
+        (step,) = [step for step in plan.steps if step.kind == up.JOB]
+        self.assertEqual(step.target, "com.bosun.morning.app")
+        self.assertIn("launchctl bootout", step.by_hand)
+        self.assertIn(f"rm -f {job.plist}", step.by_hand)
+
+
 class FileTables(unittest.TestCase):
     def test_each_agents_state_files_are_rows(self) -> None:
         rows = up.agent_state_rows()

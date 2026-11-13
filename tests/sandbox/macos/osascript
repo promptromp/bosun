@@ -1,4 +1,16 @@
 #!/bin/bash
-# No notifications in a container: only recorded.
+# No notifications in a container: only recorded. The one thing it answers about is the menu bar app, asked
+# by its bundle id: it runs once `open` started it, until it is asked to quit (unless the file
+# ~/.sandbox/app-quit-refused is there, as for an app that puts up a dialog and stays).
 mkdir -p "$HOME/.sandbox"
 echo "osascript $*" >>"$HOME/.sandbox/system.log"
+for script in "$@"; do
+	case "$script" in
+	'application id "'*'" is running')
+		if [ -e "$HOME/.sandbox/app-running" ]; then echo true; else echo false; fi
+		;;
+	'tell application id "'*'" to quit')
+		[ -e "$HOME/.sandbox/app-quit-refused" ] || rm -f "$HOME/.sandbox/app-running"
+		;;
+	esac
+done

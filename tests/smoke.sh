@@ -3074,6 +3074,242 @@ assert job["KeepAlive"] == {"PathState": {sys.argv[2] + "/console/wanted": True}
   BOSUN_CONFIG_DIR="$INSTALL_CFG" "$ROOT/install.sh" >/dev/null 2>&1
   check "turned off, install unloads and removes it" bash -c 'tail -n +$(($4 + 1)) "$1" | grep -q "launchctl bootout gui/$(id -u)/$2.console" && [ ! -e "$3" ]' _ "$WORK/system.log" "$BOSUN_LAUNCHD_LABEL" "$CONSOLE_PLIST" "$log_lines"
 
+  echo "bosun app (fake curl; the stand-ins for ditto, codesign, spctl, osascript and open)"
+  APP_DIR="$HOME/Applications"
+  APP="$APP_DIR/bosun.app"
+  APP_JOB="$HOME/Library/LaunchAgents/$BOSUN_LAUNCHD_LABEL.app.plist"
+  APP_LOG="$HOME/.sandbox/system.log" # what the stand-ins were asked
+  APP_ZIP="$WORK/app-release.zip"
+  APP_TEAM=ABCDE12345
+  APP_CHECKOUT="$WORK/app-checkout" # a copy of this checkout, with a Team ID in app/publisher.json: the repo's own stays empty until its publisher fills it in
+  mkdir -p "$HOME/.sandbox"
+  for tool in ditto codesign spctl open osascript; do
+    install -m 755 "$ROOT/tests/sandbox/macos/$tool" "$HOME/.local/bin/$tool"
+  done
+  # spctl notes whether the old app is still in place while the new one is assessed, then answers as its stand-in does.
+  cat >"$HOME/.local/bin/spctl" <<EOF
+#!/bin/bash
+[ ! -e "$APP/Contents/old.txt" ] || echo "the old app was in place" >>"$WORK/app-spctl-saw"
+exec "$ROOT/tests/sandbox/macos/spctl" "\$@"
+EOF
+  # curl serves the release zip of the test ($APP_ZIP) and writes down the address; a missing release is its 404.
+  cat >"$HOME/.local/bin/curl" <<EOF
+#!/bin/bash
+echo "curl \$*" >>"$WORK/app-curl.log"
+[ ! -e "$WORK/app-release-missing" ] || exit 22
+out=""
+while [ \$# -gt 0 ]; do
+  [ "\$1" != -o ] || out="\$2"
+  shift
+done
+cp "$APP_ZIP" "\$out"
+EOF
+  chmod +x "$HOME/.local/bin/spctl" "$HOME/.local/bin/curl"
+  if [ "$(bash -c 'source "$1/lib/common.sh"; command -v curl ditto codesign spctl osascript open' _ "$ROOT" | tr '\n' ' ')" = "$HOME/.local/bin/curl $HOME/.local/bin/ditto $HOME/.local/bin/codesign $HOME/.local/bin/spctl $HOME/.local/bin/osascript $HOME/.local/bin/open " ]; then
+    copy_tree "$APP_CHECKOUT"
+    APP_ID="$(jq -r .bundle_id "$ROOT/app/publisher.json")"
+    # bapp: `bosun app` of the copy.
+    bapp() { "$APP_CHECKOUT/bin/bosun" app "$@"; }
+    set_team() { jq --arg team "$1" '.team_id = $team' "$APP_CHECKOUT/app/publisher.json" >"$WORK/publisher.json" && mv "$WORK/publisher.json" "$APP_CHECKOUT/app/publisher.json"; }
+    set_wanted() { echo "$1" >"$APP_CHECKOUT/app/VERSION"; }
+    installed() { bapp status --json | jq -r '.installed // "none"'; }
+    curls() { wc -l <"$WORK/app-curl.log" 2>/dev/null || echo 0; }
+    # Whatever ~/Applications holds, and what is in it, as one number: to compare before and after.
+    apps_state() {
+      [ -d "$APP_DIR" ] || {
+        echo none
+        return
+      }
+      (cd "$APP_DIR" && find . | sort && find . -type f -exec cksum {} + | sort) | cksum
+    }
+    # app_release <version> <a Team ID, adhoc or unsigned> <notarized: yes or no> <bundle id> [<extra>]: the zip the
+    # release holds ($APP_ZIP): bosun.app, signed as the stand-ins read it, and <extra> beside it (a second app, or
+    # a file) when given.
+    app_release() {
+      local version="$1" signature="$2" notarized="$3" bundle_id="$4" extra="${5:-}" dir
+      dir="$(mktemp -d "$WORK/app-release.XXXXXX")"
+      mkdir -p "$dir/bosun.app/Contents/MacOS"
+      : >"$dir/bosun.app/Contents/MacOS/bosun"
+      python3 -I -c 'import plistlib, sys
+plistlib.dump({"CFBundleIdentifier": sys.argv[2], "CFBundleShortVersionString": sys.argv[3]}, open(sys.argv[1], "wb"))' "$dir/bosun.app/Contents/Info.plist" "$bundle_id" "$version"
+      if [ "$signature" != unsigned ]; then
+        mkdir "$dir/bosun.app/Contents/_CodeSignature"
+        [ "$signature" = adhoc ] || echo "$signature" >"$dir/bosun.app/Contents/_CodeSignature/team"
+        [ "$notarized" = no ] || : >"$dir/bosun.app/Contents/_CodeSignature/notarized"
+      fi
+      case "$extra" in
+        "") ;;
+        *.app) cp -R "$dir/bosun.app" "$dir/$extra" ;;
+        *) echo x >"$dir/$extra" ;;
+      esac
+      rm -f "$APP_ZIP"
+      python3 -I -c 'import sys, zipfile
+from pathlib import Path
+with zipfile.ZipFile(sys.argv[1], "w") as bundle:
+    for path in sorted(Path(sys.argv[2]).rglob("*")):
+        bundle.write(path, path.relative_to(sys.argv[2]))' "$APP_ZIP" "$dir"
+      rm -rf "$dir"
+    }
+    good_release() { app_release "$1" "$APP_TEAM" yes "$APP_ID"; } # <version>
+    # app_refused <description> <what it says> <app_release's arguments>: the install is refused, with that
+    # reason, and ~/Applications is as it was.
+    app_refused() {
+      local description="$1" says="$2" before
+      shift 2
+      app_release "$@"
+      before="$(apps_state)"
+      check "install refuses $description" fails_with "$says" bapp install
+      check "... and leaves ~/Applications as it was" test "$(apps_state)" = "$before"
+    }
+    app_refusals() {
+      app_refused "an app signed by another team" "another team" 0.1.0 ZZZZZ99999 yes "$APP_ID"
+      app_refused "one that is not notarized" "not notarized" 0.1.0 "$APP_TEAM" no "$APP_ID"
+      app_refused "one that is not signed at all" "not signed" 0.1.0 unsigned no "$APP_ID"
+      app_refused "one signed ad hoc" "no Team ID" 0.1.0 adhoc yes "$APP_ID"
+      app_refused "one with another bundle id" "bundle id is ai.other.app" 0.1.0 "$APP_TEAM" yes ai.other.app
+      app_refused "a zip with a second app in it" "other.app" 0.1.0 "$APP_TEAM" yes "$APP_ID" other.app
+      app_refused "a zip with a file beside the app" "README.txt" 0.1.0 "$APP_TEAM" yes "$APP_ID" README.txt
+    }
+
+    check "status --json with no app: what this checkout wants, and no Open at Login" bash -c '
+      jq -e --arg want "$(cat "$2/app/VERSION")" --arg home "$3" ".contract == 1 and .installed == null and .wanted == \$want
+        and .login == false and .path == (\$home + \"/Applications/bosun.app\")" <<<"$("$1" app status --json)"' _ "$BOSUN" "$ROOT" "$HOME"
+    check "... and in words" contains "$("$BOSUN" app status)" "bosun.app is not installed"
+    check "app/VERSION and app/publisher.json are what the design says (the Team ID itself is the publisher's to fill in)" bash -c '
+      jq -e ".bundle_id == \"ai.predicated.bosun\" and .releases == \"promptromp/bosun\" and (.team_id | type) == \"string\"" "$1/app/publisher.json" &&
+        grep -qE "^[0-9]+\.[0-9]+\.[0-9]+$" "$1/app/VERSION"' _ "$ROOT"
+
+    set_team ""
+    check "install refuses while app/publisher.json has no team_id" fails_with "app/publisher.json has no team_id yet" bapp install
+    check "... and so does update" fails_with "app/publisher.json has no team_id yet" bapp update
+    check "... with no download and no ~/Applications" bash -c '[ ! -e "$1" ] && [ ! -e "$2" ]' _ "$WORK/app-curl.log" "$APP_DIR"
+    set_team "$APP_TEAM"
+    set_wanted 0.1.0
+    check "--build says part 2 builds the app, and changes nothing" fails_with "part 2 builds the app" bapp install --build
+    set_team ""
+    check "... and is not held up by an empty team_id" fails_with "part 2 builds the app" bapp install --build
+    set_team "$APP_TEAM"
+
+    echo "  (a refused app, with no ~/Applications yet)"
+    app_refusals
+    check "a refusal makes no ~/Applications" test ! -e "$APP_DIR"
+    check "... and no folder of the install is left in the home folder" bash -c '! find "$1" -name ".bosun-app-*" | grep -q .' _ "$HOME"
+
+    good_release 0.1.0
+    check "install downloads the release app/VERSION names, from the publisher's repository" bash -c '
+      "$1" app install >/dev/null && grep -qF "https://github.com/promptromp/bosun/releases/download/app-v0.1.0/bosun-app-0.1.0.zip" "$2"' _ "$APP_CHECKOUT/bin/bosun" "$WORK/app-curl.log"
+    check "... and places the app: the version is the bundle's" test "$(installed)" = 0.1.0
+    check "... with nothing else left in ~/Applications" test "$(ls -A "$APP_DIR")" = bosun.app
+    check "status says it in words" contains "$(bapp status)" "bosun.app 0.1.0 is installed"
+    check "install checked the signature, the team and notarization of the unpacked app, before it was placed" bash -c '
+      folder="$2/\.bosun-app-[^/]*/unpacked/bosun\.app"
+      grep -qE "^codesign --verify --deep --strict $folder$" "$1" && grep -qE "^codesign -dv $folder$" "$1" && grep -qE "^spctl --assess --type execute $folder$" "$1"' _ "$APP_LOG" "$APP_DIR"
+
+    echo "x" >"$APP/Contents/old.txt"
+    echo "  (a refused app, with an old one in place)"
+    app_refusals
+    rm -f "$WORK/app-spctl-saw"
+    set_wanted 0.2.0
+    good_release 0.2.0
+    check "update installs the version app/VERSION names when the installed one differs" bash -c '"$1" app update >/dev/null' _ "$APP_CHECKOUT/bin/bosun"
+    check "... the app is the new one" test "$(installed)" = 0.2.0
+    check "... the old app was in place until the new one was verified" grep -q "the old app was in place" "$WORK/app-spctl-saw"
+    check "... and is gone after, with no folder of the install left in ~/Applications" bash -c '[ ! -e "$1/Contents/old.txt" ] && [ "$(ls -A "$2")" = bosun.app ]' _ "$APP" "$APP_DIR"
+    downloads="$(curls)"
+    check "update with the same version says so" contains "$(bapp update 2>&1)" "up to date"
+    check "... and downloads nothing" test "$(curls)" = "$downloads"
+
+    echo "  (an app that is running)"
+    set_wanted 0.3.0
+    good_release 0.3.0
+    touch "$HOME/.sandbox/app-running"
+    : >"$APP_LOG"
+    bapp update >/dev/null 2>&1
+    check "update asks a running app to quit, by its bundle id, then opens the new one" bash -c '
+      quit="$(grep -n "^osascript -e tell application id \"$3\" to quit$" "$1" | head -1 | cut -d: -f1)"
+      open="$(grep -n "^open $2$" "$1" | head -1 | cut -d: -f1)"
+      [ -n "$quit" ] && [ -n "$open" ] && [ "$quit" -lt "$open" ]' _ "$APP_LOG" "$APP" "$APP_ID"
+    check "... which is the new one" test "$(installed)" = 0.3.0
+    set_wanted 0.4.0
+    good_release 0.4.0
+    rm -f "$HOME/.sandbox/app-running"
+    : >"$APP_LOG"
+    check "an app that is not running is neither asked to quit nor opened" bash -c '"$2" app update >/dev/null && ! grep -qE "to quit|^open " "$1"' _ "$APP_LOG" "$APP_CHECKOUT/bin/bosun"
+    set_wanted 0.5.0
+    app_release 0.5.0 ZZZZZ99999 yes "$APP_ID"
+    touch "$HOME/.sandbox/app-running"
+    : >"$APP_LOG"
+    before="$(apps_state)"
+    check "a refused update leaves the running app running" bash -c '! "$2" app update >/dev/null 2>&1 && [ -e "$HOME/.sandbox/app-running" ] && ! grep -q "to quit" "$1"' _ "$APP_LOG" "$APP_CHECKOUT/bin/bosun"
+    check "... and ~/Applications as it was" test "$(apps_state)" = "$before"
+    good_release 0.5.0
+    touch "$HOME/.sandbox/app-quit-refused"
+    check "an app that will not quit stops the update, naming why" fails_with "still running" bapp update
+    check "... and ~/Applications is as it was" test "$(apps_state)" = "$before"
+    rm -f "$HOME/.sandbox/app-quit-refused" "$HOME/.sandbox/app-running"
+
+    touch "$WORK/app-release-missing"
+    check "a release that is not there is one line saying so" fails_with "no release of bosun.app 0.5.0 at promptromp/bosun" bapp update
+    check "... and ~/Applications is as it was" test "$(apps_state)" = "$before"
+    rm -f "$WORK/app-release-missing"
+
+    echo "  (Open at Login)"
+    check "login on makes the job and loads it" bash -c '"$1" app login on >/dev/null && plutil -lint -s "$2" && grep -q "launchctl bootstrap gui/$(id -u) $2" "$3"' _ "$APP_CHECKOUT/bin/bosun" "$APP_JOB" "$WORK/system.log"
+    check "... which opens the app at login, once, and is not kept alive" python3 -I -c '
+import plistlib, sys
+job = plistlib.load(open(sys.argv[1], "rb"))
+assert job["Label"] == sys.argv[2] + ".app", job["Label"]
+assert job["ProgramArguments"] == [sys.argv[3] + "/Applications/bosun.app/Contents/MacOS/bosun", "--at-login"], job["ProgramArguments"]
+assert job["RunAtLoad"] is True, job
+assert "KeepAlive" not in job, job
+' "$APP_JOB" "$BOSUN_LAUNCHD_LABEL" "$HOME"
+    check "... and status says Open at Login is on" bash -c 'jq -e ".login == true" <<<"$("$1" app status --json)"' _ "$APP_CHECKOUT/bin/bosun"
+    reload_check() { bash -c 'source "$1/lib/common.sh"; load_config; shift; reload_changed_jobs "$@"' _ "$APP_CHECKOUT" "$@" 2>&1; }
+    check "reload_changed_jobs leaves a current one alone" not_contains "$(reload_check --dry-run)" "$BOSUN_LAUNCHD_LABEL.app"
+    echo "<!-- from an older bosun -->" >>"$APP_JOB"
+    check "... and keeps a stale one current" contains "$(reload_check --dry-run)" "$BOSUN_LAUNCHD_LABEL.app"
+    reload_check >/dev/null
+    check "... by writing the job again" not_contains "$(cat "$APP_JOB")" "from an older bosun"
+    check "login off unloads it and removes the plist" bash -c '"$1" app login off >/dev/null && [ ! -e "$2" ] && grep -q "launchctl bootout gui/$(id -u)/$3.app" "$4"' _ "$APP_CHECKOUT/bin/bosun" "$APP_JOB" "$BOSUN_LAUNCHD_LABEL" "$WORK/system.log"
+    check "... and status says it is off" bash -c 'jq -e ".login == false" <<<"$("$1" app status --json)"' _ "$APP_CHECKOUT/bin/bosun"
+    reload_check >/dev/null
+    check "reload_changed_jobs never makes one" test ! -e "$APP_JOB"
+
+    echo "  (remove)"
+    bapp login on >/dev/null
+    touch "$HOME/.sandbox/app-running"
+    : >"$APP_LOG"
+    echo mine >"$APP_DIR/mine.txt"
+    check "remove quits the app, turns Open at Login off and removes the app" bash -c '
+      "$1" app remove >/dev/null && [ ! -e "$2" ] && [ ! -e "$3" ] && grep -q "to quit" "$4" && grep -q "launchctl bootout gui/$(id -u)/$5.app" "$6"' _ "$APP_CHECKOUT/bin/bosun" "$APP" "$APP_JOB" "$APP_LOG" "$BOSUN_LAUNCHD_LABEL" "$WORK/system.log"
+    check "... and what else is in ~/Applications stays" test -f "$APP_DIR/mine.txt"
+    check "remove with no app says so, exit 0" contains "$(bapp remove 2>&1)" "not installed"
+    rm -f "$APP_DIR/mine.txt"
+    downloads="$(curls)"
+    check "update with no app installed says to run install, and downloads nothing" contains "$(bapp update 2>&1)" "run bosun app install"
+    check "... exiting 0" bapp update
+    check "... still no app, and no download" bash -c '[ ! -e "$1" ] && [ "$(wc -l <"$2")" = "$3" ]' _ "$APP" "$WORK/app-curl.log" "$downloads"
+    check "login on with no app is refused" fails_with "bosun.app is not installed: run bosun app install first" bapp login on
+    check "... and makes no job" test ! -e "$APP_JOB"
+
+    check "usage errors exit 2" bash -c '
+      for args in "" "bogus" "install --bogus" "update now" "remove now" "login" "login maybe" "login on now" "status --bogus"; do
+        # shellcheck disable=SC2086  # split the argument list on purpose
+        "$1" app $args >/dev/null 2>&1
+        [ $? -eq 2 ] || { echo "bosun app $args did not exit 2"; exit 1; }
+      done' _ "$APP_CHECKOUT/bin/bosun"
+
+    # What the uninstall below finds: the app, and its job.
+    good_release 0.5.0
+    set_wanted 0.5.0
+    bapp install >/dev/null 2>&1
+    bapp login on >/dev/null 2>&1
+    check "an app and its Open at Login job are in place for the uninstall that follows" bash -c '[ -d "$1" ] && [ -e "$2" ]' _ "$APP" "$APP_JOB"
+  else
+    failed=$((failed + 1))
+    echo "  FAIL  the fake curl and the stand-ins for ditto, codesign, spctl, osascript and open are not first on PATH; skipped the app tests"
+  fi
+
   echo "uninstall (fake launchctl, pmset and sudo, test label)"
   # Its own session and state: it would otherwise stop and delete what the rest of this run uses.
   un() {
@@ -3089,6 +3325,8 @@ assert job["KeepAlive"] == {"PathState": {sys.argv[2] + "/console/wanted": True}
   check "... or from inside the session it would stop" fails_with "another terminal" un_in_its_tmux
   check "... or with an option it does not know" bash -c '"$1" uninstall --bogus >/dev/null 2>&1; [ $? -eq 2 ]' _ "$BOSUN"
   check "--dry-run says what it would remove" contains "$(un --dry-run 2>&1)" "launchd job $BOSUN_LAUNCHD_LABEL"
+  check "... and lists the menu bar app" contains "$(un --dry-run 2>&1)" "the menu bar app, ~/Applications/bosun.app (it is asked to quit first)"
+  check "... and its Open at Login job" contains "$(un --dry-run 2>&1)" "launchd job $BOSUN_LAUNCHD_LABEL.app"
   check "... and creates nothing, not even its own folders" test ! -e "$WORK/un-state"
   check "... and removes nothing" test -e "$PLIST"
   printf 'Repeating power events:\n  wakepoweron at 7:00AM every day\n' >"$WORK/pmset-sched"
@@ -3143,6 +3381,8 @@ for line in sys.stdin:
   check "uninstall unloads and removes the job" bash -c 'grep -q "launchctl bootout gui/$(id -u)/$2" "$1" && [ ! -e "$3" ]' _ "$WORK/system.log" "$BOSUN_LAUNCHD_LABEL" "$PLIST"
   check "uninstall unloads and removes the watchdog agent" bash -c 'grep -q "launchctl bootout gui/$(id -u)/$2.watchdog" "$1" && [ ! -e "$3" ]' _ "$WORK/system.log" "$BOSUN_LAUNCHD_LABEL" "$WATCHDOG_PLIST"
   check "uninstall unloads the learning agent" grep -q "launchctl bootout gui/$(id -u)/$BOSUN_LAUNCHD_LABEL.learn" "$WORK/system.log"
+  check "uninstall removes the menu bar app, and leaves ~/Applications" bash -c '[ ! -e "$1" ] && [ -d "$2" ]' _ "$APP" "$APP_DIR"
+  check "... and unloads and removes its Open at Login job" bash -c 'grep -q "launchctl bootout gui/$(id -u)/$2.app" "$1" && [ ! -e "$3" ]' _ "$WORK/system.log" "$BOSUN_LAUNCHD_LABEL" "$APP_JOB"
   check "uninstall removes the link" test ! -L "$HOME/.local/bin/bosun"
   check "uninstall keeps the config without --purge" test -f "$INSTALL_CFG/bosun.env"
   un_purge() {
@@ -3150,6 +3390,9 @@ for line in sys.stdin:
     [ ! -e "$INSTALL_CFG/bosun.env" ]
   }
   check "--purge takes that too" un_purge
+  # The app tests' tools go, and osascript is the plain one again (no real notifications from tests).
+  rm -f "$HOME/.local/bin/curl" "$HOME/.local/bin/ditto" "$HOME/.local/bin/codesign" "$HOME/.local/bin/spctl" "$HOME/.local/bin/open"
+  printf '#!/bin/sh\nexit 0\n' >"$HOME/.local/bin/osascript"
 
   echo "init (fake launchctl and pmset, test label)"
   export BOSUN_SKIP_PREFLIGHT=1 # what bosun needs has its own tests, on a made-up machine

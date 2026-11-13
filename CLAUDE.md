@@ -207,6 +207,11 @@ of truth, so don't copy rules into this file.
   `console_live`'s readers; the command, which always prints the object). The keep-awake end is
   `keep-awake-<session>.json`, written by `libexec/bosun-morning` and removed by `bosun stop`, read by
   `lib/keep_awake.py` (status and quit).
+- The menu bar app's lifecycle (`bosun app`, design: `docs/design/menu-bar.md`): `libexec/bosun-app` (the commands, and
+  `login on|off`, which render and load `templates/launchd-app.plist` through `render_app_plist`, `app_label` and
+  `reload_job` in `lib/common.sh`; the login job is there while its plist is, which `reload_changed_jobs` keeps current
+  and never makes) and `lib/app_install.py` (every external tool through one `Runner`: the release lookup, `verify`,
+  the unpacking and the placing, `status`). The publisher is `app/publisher.json`, the version `app/VERSION`.
 - `orchestrator/policy.md` (appended to the orchestrator's system prompt),
   `orchestrator/plugin/commands/chores.md` (the chores procedure), `orchestrator/settings.json`
   (the orchestrator's own permissions, generic; a site replaces it with
@@ -439,6 +444,9 @@ The repo is meant to be shareable, so nothing in it may identify an organization
   GitHub, Jira, AWS accounts or profiles), emails or tokens, also not in tests, fixtures, docs or
   commit messages. Use placeholders (`acme`, `my-org`, `example.com`, `/Users/me`, zero-filled
   Slack ids) and clearly fictional names.
+- One exception: the publisher's Team ID in `app/publisher.json` is the one public identifying value the repo may
+  hold (it is what `bosun app install` checks the downloaded app against, and is public in every signed app). It
+  does not loosen the forbidden-terms check for anything else.
 - The `forbidden-terms` hook enforces this locally from `$BOSUN_CONFIG_DIR/forbidden-terms.txt`
   (one case-insensitive regex per line, `#` comments), so the list itself never enters the repo;
   without the file it passes. Add a term there whenever something site-specific nearly slipped in.

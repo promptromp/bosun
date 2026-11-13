@@ -1,0 +1,127 @@
+#!/bin/bash
+# Usage: bosun app install [--build]
+#        bosun app update
+#        bosun app remove
+#        bosun app login on|off
+#        bosun app status [--json]
+#
+# The menu bar app, bosun.app: install it, keep it current, take it away. bosun acts on the app only
+# through these (design: docs/design/menu-bar.md). It accepts only the publisher's notarized build: the
+# app comes from a GitHub release of this repository, and is placed in ~/Applications only when its
+# signature verifies, its Team ID is the one in app/publisher.json, macOS accepts it (spctl) and its
+# bundle id is that file's. A refused or failed install leaves ~/Applications as it was.
+#   install   download the release `app/VERSION` names (BOSUN_APP_RELEASES, else app/publisher.json's
+#             repository, else this install's origin when that is on GitHub), unpack it in a folder of
+#             its own, verify it, and rename it into ~/Applications/bosun.app, the old one kept aside
+#             until it is in. A running app is asked to quit (by its bundle id) and opened again.
+#             Refused with "app/publisher.json has no team_id yet" until the publisher's Team ID is
+#             filled in there
+#     --build   developers only: the app app/build.sh makes, ad hoc signed, installed without the team
+#               check. Until that script exists (the app's own part) it says so and exits 1
+#   update    install app/VERSION when the installed version differs; with the same version, or no
+#             app installed (that is `install`), it says so and downloads nothing. Exit 0
+#   remove    quit the app, turn Open at Login off and remove ~/Applications/bosun.app. bosun keeps
+#             running: this takes away only the app
+#   login     on: make the Open at Login job (a launchd job, as bosun's others), which opens the app when
+#             you log in; refused while no app is installed. off: remove it. Open at Login is on while
+#             the job's plist is in ~/Library/LaunchAgents, and `bosun update` keeps it current
+#   status    the app's state in a line; --json: one object, for the app and anyone:
+#               contract   1; a number that only grows, a field only ever being added
+#               installed  the installed app's version, or null
+#               wanted     the version app/VERSION names, which `update` installs
+#               path       where the app is, or would be installed
+#               login      whether Open at Login is on
+# Exit status: 0 done, 1 refused or failed (one line saying why), 2 usage.
+set -uo pipefail
+source "$(dirname "$0")/../lib/common.sh"
+
+for arg in "$@"; do
+  case "$arg" in
+    -h | --help)
+      usage
+      exit 0
+      ;;
+  esac
+done
+load_config
+
+# app_install.py <args...>: the verifying and placing (lib/app_install.py), which gets the one setting it reads.
+app_py() { BOSUN_APP_RELEASES="$BOSUN_APP_RELEASES" python3 "$BOSUN_ROOT/lib/app_install.py" "$@"; }
+
+# Open at Login on: the job rendered, checked, and loaded (reload_job: unloaded first, then bootstrapped).
+login_on() {
+  local rendered status
+  [ -d "$(app_bundle)" ] || die "bosun.app is not installed: run bosun app install first"
+  rendered="$(mktemp)" || die "could not make a temporary file"
+  render_app_plist >"$rendered" || {
+    rm -f "$rendered"
+    die "could not render the Open at Login job"
+  }
+  plutil -lint -s "$rendered" >&2 || {
+    rm -f "$rendered"
+    die "the rendered Open at Login job is not a valid plist"
+  }
+  reload_job "$(app_label)" "$rendered" "$(app_plist)"
+  status=$?
+  rm -f "$rendered"
+  [ "$status" = 0 ] || die "could not load the Open at Login job"
+}
+
+# Open at Login off: unloaded, its plist removed (reload_job with nothing to load).
+login_off() { reload_job "$(app_label)" /dev/null "$(app_plist)" || die "could not turn Open at Login off"; }
+
+no_more_arguments() { [ $# -eq 0 ] || die_usage "unexpected argument '$1'"; } # <arguments after the subcommand>
+
+sub="${1:-}"
+[ $# -eq 0 ] || shift
+case "$sub" in
+  install)
+    build=()
+    for arg in "$@"; do
+      case "$arg" in
+        --build) build=(--build) ;;
+        *) die_usage "unknown argument '$arg'" ;;
+      esac
+    done
+    app_py install ${build[@]+"${build[@]}"}
+    ;;
+  update)
+    no_more_arguments "$@"
+    app_py update
+    ;;
+  remove)
+    no_more_arguments "$@"
+    app_py quit || exit 1
+    login_off
+    app_py delete
+    ;;
+  login)
+    case "${1:-}" in
+      on)
+        shift
+        no_more_arguments "$@"
+        login_on
+        echo "Open at Login is on: bosun.app opens when you log in"
+        ;;
+      off)
+        shift
+        no_more_arguments "$@"
+        login_off
+        echo "Open at Login is off"
+        ;;
+      *) die_usage "login takes on or off" ;;
+    esac
+    ;;
+  status)
+    json=()
+    for arg in "$@"; do
+      case "$arg" in
+        --json) json=(--json) ;;
+        *) die_usage "unknown argument '$arg'" ;;
+      esac
+    done
+    app_py status ${json[@]+"${json[@]}"} --login-plist "$(app_plist)"
+    ;;
+  "") die_usage "say what to do: install, update, remove, login or status" ;;
+  *) die_usage "unknown command '$sub'" ;;
+esac

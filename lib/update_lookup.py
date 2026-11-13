@@ -94,13 +94,15 @@ def _repo() -> Path:
     return ROOT.parent / install_paths.REPO
 
 
-def _origin(repo: Path) -> str:
+def origin_url(repo: Path) -> str:
+    """The URL of the origin remote of the git directory <repo>, without credentials: where the install
+    came from. `bosun app` looks for its releases there when nothing names them."""
     return update_check.url_without_credentials(_git(repo, "config", "remote.origin.url").strip())
 
 
 def _remote_tags(repo: Path, *, why: bool = False) -> list[tuple[str, str]]:
     out = _git(
-        repo, "ls-remote", "--tags", "origin", "v*", network=f"could not reach {_origin(repo)}", why=why
+        repo, "ls-remote", "--tags", "origin", "v*", network=f"could not reach {origin_url(repo)}", why=why
     )
     return update_check.parse_ls_remote(out)
 
@@ -113,7 +115,7 @@ def _fetch(repo: Path, refspec: str, what: str, *, why: bool = False) -> None:
         "--no-tags",
         "origin",
         refspec,
-        network=f"could not fetch {what} from {_origin(repo)}",
+        network=f"could not fetch {what} from {origin_url(repo)}",
         why=why,
     )
 
@@ -219,7 +221,7 @@ def target() -> str:
     newest = update_check.newest_release(_remote_tags(repo, why=True))
     if newest is None:
         raise LookupFailed(
-            f"no release at {_origin(repo)} yet "
+            f"no release at {origin_url(repo)} yet "
             "(BOSUN_UPDATE_CHANNEL=main follows the head of the branch instead)"
         )
     tag, commit = newest

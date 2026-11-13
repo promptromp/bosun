@@ -105,8 +105,9 @@ Calls made from the research and the builder check, to check while reading:
   job runs prints (and with `--open` opens) the running one instead of starting a second.
 - **"Uninstall bosun…" opens Terminal running `bosun uninstall`**: one implementation with its questions, and the
   administrator password the scheduled wake needs is asked where `sudo` can ask for it.
-- **Where the app comes from:** the GitHub releases of the repository bosun was installed from (its origin), or
-  `BOSUN_APP_RELEASES` for a fork or mirror. No release for `app/VERSION` there: no app, and one line saying so.
+- **Where the app comes from:** the GitHub releases of the repository `BOSUN_APP_RELEASES` names (a fork or
+  mirror), else the one `app/publisher.json` names, else the repository bosun was installed from (its origin). No
+  release for `app/VERSION` there: no app, and one line saying so.
   Developers build it on their own Mac with `bosun app install --build` (ad-hoc signed, for developing the app only).
 - **Quit is option B of the mockups:** a short dialog, and a second one only when agents are busy (as Ollama asks
   only when work would end).
@@ -299,3 +300,19 @@ Where what is built differs from what this note said before, or says more:
 - `bosun start --unless-quit` is new, for the morning run, so that a start in flight cannot undo a quit.
 - Quit takes the `windows` lock, which the note did not mention; a start that holds it makes the quit wait.
 - The helpers a pane left (`lib/orphans.py`) are stopped by `bosun stop` itself, not by quit.
+- `bosun app` (built): where the app comes from is looked up in this order, `BOSUN_APP_RELEASES`, then
+  `app/publisher.json`'s `releases` (which ships naming this repository), then the install's origin when that is a GitHub
+  address, read as `bosun update` reads it, with no credentials ever in the address. The first two are `owner/repo` (a
+  GitHub address is taken for its slug), so the origin is only read when nothing else names the releases.
+- While `app/publisher.json` has no `team_id`, `install` and `update` refuse with "app/publisher.json has no team_id yet"
+  before they look anything up; `--build` is not held up by it. The Team ID is checked to be ten capital letters and
+  digits, so a value such as "not set" (what `codesign` prints for an ad hoc signature) can never match.
+- The download and the unpacking happen in a hidden folder inside `~/Applications` itself (`.bosun-app-…`), so the rename
+  into place never crosses a volume; the old app is renamed into that folder and goes with it, and a failed rename puts it
+  back. The folder, and `~/Applications` if the install made it, are removed whatever the outcome (the latter unless the app
+  was placed), so a refused or failed install leaves `~/Applications` as it was. A running app is asked to quit, and waited
+  for, only after the new app is verified, so a refusal never disturbs it.
+- Open at Login is whether the job's plist (`<label>.app`) is in `~/Library/LaunchAgents`. `reload_changed_jobs` keeps a
+  present plist current and never makes one; `bosun app login on|off` is the only switch, and `on` is refused while no app is
+  installed. Loading the job runs the app at once (RunAtLoad), so the app must be safe to start twice.
+- Uninstall's step for the app asks it to quit first, so a running app is not left running from a folder that is gone.

@@ -168,6 +168,7 @@ set_feature_defaults() {
   set_slack_defaults
   set_console_defaults
   set_quit_defaults
+  set_app_defaults
   set_impact_defaults
   set_knowledge_defaults
   set_approval_defaults
@@ -382,6 +383,13 @@ set_quit_defaults() {
   # `bosun quit --let-finish` (the menu bar app's "Quit bosun"): how long it waits for busy agents to
   # finish, in whole minutes, before it says they are still busy and changes nothing. 0: checks once.
   BOSUN_QUIT_WAIT_MINUTES="10"
+}
+
+set_app_defaults() {
+  # `bosun app install|update` (the menu bar app, bosun.app): the GitHub repository (owner/repo) whose
+  # releases hold it, for a fork or mirror. Empty: the publisher's (app/publisher.json), else the
+  # install's origin when that is on GitHub.
+  BOSUN_APP_RELEASES=""
 }
 
 set_impact_defaults() {
@@ -1303,8 +1311,15 @@ console_mark_wanted() {
   mkdir -p "$(dirname "$marker")" && chmod 700 "$(dirname "$marker")" && : >"$marker"
 }
 
+# The menu bar app's Open at Login job (templates/launchd-app.plist): there while its plist is, which
+# `bosun app login on` makes and `login off` removes. install.sh and `bosun update` keep a present one
+# current (render_job) and never make one.
+app_label() { echo "$BOSUN_LAUNCHD_LABEL.app"; }
+app_plist() { echo "$HOME/Library/LaunchAgents/$(app_label).plist"; }
+app_bundle() { echo "$HOME/Applications/bosun.app"; }
+
 # Every launchd job bosun can have loaded: what `bosun uninstall` looks for.
-job_labels() { echo "$BOSUN_LAUNCHD_LABEL $(watchdog_label) $(learn_label) $(console_label) $(waketest_label)"; }
+job_labels() { echo "$BOSUN_LAUNCHD_LABEL $(watchdog_label) $(learn_label) $(console_label) $(app_label) $(waketest_label)"; }
 
 render_console_plist() {
   ENV_XML="$(launchd_env_xml)" LABEL="$(console_label)" ROOT="$BOSUN_INSTALL" LOGS="$BOSUN_LOG_DIR" WANTED="$(console_wanted_marker)" \
@@ -1312,6 +1327,14 @@ render_console_plist() {
       .gsub("__LABEL__", ENV["LABEL"]).gsub("__BOSUN_ROOT__", ENV["ROOT"]).gsub("__WANTED__", ENV["WANTED"])
       .gsub("__ENV__", ENV["ENV_XML"]).gsub("__LOG_DIR__", ENV["LOGS"])' \
     <"$BOSUN_ROOT/templates/launchd-console.plist"
+}
+
+render_app_plist() {
+  ENV_XML="$(launchd_env_xml)" LABEL="$(app_label)" PROGRAM="$(app_bundle)/Contents/MacOS/bosun" LOGS="$BOSUN_LOG_DIR" \
+    ruby -e 'print STDIN.read
+      .gsub("__LABEL__", ENV["LABEL"]).gsub("__PROGRAM__", ENV["PROGRAM"])
+      .gsub("__ENV__", ENV["ENV_XML"]).gsub("__LOG_DIR__", ENV["LOGS"])' \
+    <"$BOSUN_ROOT/templates/launchd-app.plist"
 }
 
 render_learn_plist() {
@@ -1324,14 +1347,15 @@ render_learn_plist() {
 }
 
 # The plist of the launchd job <label> as this version renders it from the config: the morning job,
-# the watchdog, learning with BOSUN_LEARN_ENABLED=1 and the console with BOSUN_CONSOLE_ALWAYS=1; nothing
-# for a job not wanted.
+# the watchdog, learning with BOSUN_LEARN_ENABLED=1, the console with BOSUN_CONSOLE_ALWAYS=1 and the
+# app's login job while its plist is there; nothing for a job not wanted.
 render_job() { # <label>
   case "$1" in
     "$BOSUN_LAUNCHD_LABEL") render_launchd_plist "$1" "$BOSUN_START_TIME" "$BOSUN_DAYS" "" BOSUN_TRIGGER=launchd ;;
     "$(watchdog_label)") render_watchdog_plist ;;
     "$(learn_label)") if [ "$BOSUN_LEARN_ENABLED" = "1" ]; then render_learn_plist; fi ;;
     "$(console_label)") if [ "$BOSUN_CONSOLE_ALWAYS" = "1" ]; then render_console_plist; fi ;;
+    "$(app_label)") if [ -e "$(app_plist)" ]; then render_app_plist; fi ;;
   esac
 }
 
@@ -1375,7 +1399,7 @@ job_changed() { # <label> <rendered> <installed>
 reload_changed_jobs() { # [--dry-run]
   local label installed rendered status=0 changed
   rendered="$(mktemp)" || return 1
-  for label in "$BOSUN_LAUNCHD_LABEL" "$(watchdog_label)" "$(learn_label)" "$(console_label)"; do
+  for label in "$BOSUN_LAUNCHD_LABEL" "$(watchdog_label)" "$(learn_label)" "$(console_label)" "$(app_label)"; do
     installed="$HOME/Library/LaunchAgents/$label.plist"
     if ! render_job "$label" >"$rendered"; then
       log "ERROR: could not render the plist of $label" >&2

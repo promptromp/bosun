@@ -1,0 +1,10 @@
+#!/bin/bash
+# spctl's stand-in, for `--assess --type execute <app>`: a bundle is accepted while it has
+# Contents/_CodeSignature/notarized, as Gatekeeper accepts a notarized app, and rejected otherwise.
+mkdir -p "$HOME/.sandbox"
+echo "spctl $*" >>"$HOME/.sandbox/system.log"
+app="${!#}"
+[ -e "$app/Contents/_CodeSignature/notarized" ] || {
+	echo "$app: rejected" >&2
+	exit 3
+}

@@ -31,6 +31,43 @@ run_again() {
   check "... and back nothing up" test "$kept" = "$(backups)"
 }
 
+# The tools `bosun app` runs (docs/design/menu-bar.md), for real, on a bundle made here. No Developer ID is on
+# this Mac, so it is signed ad hoc: the two things macOS says of such an app (no team, not notarized) are the
+# refusals bosun's checks rest on. The notarized case is the real release, which needs the publisher's Team ID.
+app_tools() {
+  local work app bosun="$HOME/.local/bin/bosun"
+  work="$(mktemp -d)"
+  app="$work/bosun.app"
+  echo "the tools bosun app runs, for real"
+  mkdir -p "$app/Contents/MacOS"
+  printf '#!/bin/sh\nexit 0\n' >"$app/Contents/MacOS/bosun"
+  chmod +x "$app/Contents/MacOS/bosun"
+  cat >"$app/Contents/Info.plist" <<'PLIST'
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+  <key>CFBundleExecutable</key><string>bosun</string>
+  <key>CFBundleIdentifier</key><string>ai.example.bosun</string>
+  <key>CFBundlePackageType</key><string>APPL</string>
+  <key>CFBundleShortVersionString</key><string>0.0.1</string>
+</dict></plist>
+PLIST
+  check "codesign signs a bundle ad hoc" codesign --force --sign - "$app"
+  check "codesign --verify --deep --strict passes on it" codesign --verify --deep --strict "$app"
+  check "codesign -dv says on stderr that it has no team" bash -c 'codesign -dv "$1" 2>&1 >/dev/null | grep -qx "TeamIdentifier=not set"' _ "$app"
+  check "spctl --assess --type execute rejects it, as it would an app that is not notarized" bash -c '! spctl --assess --type execute "$1" 2>/dev/null' _ "$app"
+  check "ditto -x -k unpacks a zip made with ditto -c -k --keepParent into one bosun.app" bash -c '
+    ditto -c -k --keepParent "$1" "$2/release.zip" && mkdir "$2/unpacked" && ditto -x -k "$2/release.zip" "$2/unpacked" &&
+      [ "$(ls "$2/unpacked")" = bosun.app ]' _ "$app" "$work"
+  check "... and what it unpacks is still a signed bundle" codesign --verify --deep --strict "$work/unpacked/bosun.app"
+  check "osascript does not say an app that is not there is running, asked by its bundle id" bash -c '[ "$(osascript -e "application id \"ai.example.bosun\" is running" 2>/dev/null)" != true ]'
+  check "... and says it of one that is: Finder" bash -c '[ "$(osascript -e "application id \"com.apple.finder\" is running")" = true ]'
+  check "open is there" command -v open
+  check "bosun app status --json answers on this Mac, with no app" bash -c 'jq -e ".contract == 1 and .installed == null and .login == false" <<<"$("$1" app status --json)"' _ "$bosun"
+  check "bosun app login on is refused while no app is installed" bash -c '! out="$("$1" app login on 2>&1)" && grep -q "bosun.app is not installed" <<<"$out"' _ "$bosun"
+  rm -rf "$work"
+}
+
 # Through a real terminal, with real launchd and pmset.
 uninstall() {
   local bosun="$HOME/.local/bin/bosun" state="$HOME/.local/state/bosun" out="$OUT/uninstall.txt"
@@ -76,6 +113,7 @@ nothing_chosen
 windows_by_answers acme-api
 launchd_for_real
 run_again
+app_tools
 uninstall
 rm -rf "$OUT"
 echo

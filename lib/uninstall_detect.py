@@ -237,6 +237,12 @@ def wake_at(env: Mapping[str, str]) -> str:
         return ""
 
 
+def app_present() -> str:
+    """~/Applications/bosun.app, the menu bar app, if it is there; nothing if not."""
+    app = Path.home() / "Applications" / "bosun.app"
+    return str(app) if os.path.lexists(app) else ""
+
+
 def detect(env: Mapping[str, str], root: Path) -> Facts:
     config_dir = Path(env.get("BOSUN_CONFIG_DIR") or Path.home() / ".config" / "bosun")
     state_dir = Path(env.get("BOSUN_STATE_DIR") or Path.home() / ".local" / "state" / "bosun")
@@ -255,6 +261,7 @@ def detect(env: Mapping[str, str], root: Path) -> Facts:
         windows=windows(env),
         keep_awake=(state_dir / f"keep-awake-{session}.pid").exists(),
         jobs=uninstall_macos.jobs(env.get("BOSUN_JOB_LABELS", "").split(), roots),
+        app=app_present(),
         repeating=uninstall_macos.repeating_events(),
         wake_at=wake_at(env),
         days=env.get("BOSUN_DAYS", ""),

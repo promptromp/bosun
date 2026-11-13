@@ -144,9 +144,11 @@ LOG_FILES = tuple(
 )
 
 # The kinds of step, in the order they run. The wake comes first because it alone may ask for something, so
-# the rest runs unattended; the jobs before the windows, because the watchdog would bring those back.
+# the rest runs unattended; the jobs before the windows, because the watchdog would bring those back, and
+# the menu bar app, which polls bosun, after its Open at Login job and before the windows.
 WAKE = "wake"
 JOB = "job"
+APP = "app"
 STOP = "stop"
 TRUST = "trust"
 SETUP = "setup"
@@ -185,6 +187,7 @@ class Facts:
     windows: tuple[str, ...] = ()
     keep_awake: bool = False
     jobs: tuple[Job, ...] = ()
+    app: str = ""  # ~/Applications/bosun.app, if it is there (the menu bar app)
     repeating: tuple[str, ...] = ()  # the repeating power events
     wake_at: str = ""  # the time bosun's wake runs, as pmset prints it
     days: str = ""  # BOSUN_DAYS
@@ -369,6 +372,10 @@ def job_steps(facts: Facts) -> list[Step]:
     return [Step(JOB, job.label, by_hand=by_hand(job)) for job in facts.jobs]
 
 
+def app_steps(facts: Facts) -> list[Step]:
+    return [Step(APP, facts.app, by_hand=f"rm -rf {quoted(facts.app)}")] if facts.app else []
+
+
 def stop_steps(facts: Facts) -> list[Step]:
     if not facts.windows and not facts.keep_awake:
         return []
@@ -519,6 +526,7 @@ def build_plan(facts: Facts, choices: Choices) -> Plan:
         (
             *wake_steps(facts),
             *job_steps(facts),
+            *app_steps(facts),
             *stop_steps(facts),
             *agent_steps(facts),
             *link_steps(facts),
@@ -568,6 +576,7 @@ def describe(step: Step, home: str) -> str:
     return {
         WAKE: f"the repeating wake, {step.target}",
         JOB: f"launchd job {step.target}",
+        APP: f"the menu bar app, {target}",
         STOP: f"the running windows: {step.target or 'none, only the keep-awake'}",
         TRUST: f"the trust bosun gave {target} ({step.harness})",
         SETUP: f"{step.target} ({step.harness})",
@@ -579,6 +588,7 @@ def describe(step: Step, home: str) -> str:
 BEFORE_IT_HAPPENS = {
     WAKE: f" ({CANCEL_WAKE}, which may ask for your password)",
     STOP: " (any work in them stops)",
+    APP: " (it is asked to quit first)",
 }
 
 

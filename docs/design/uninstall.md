@@ -89,7 +89,8 @@ above has a deliberately broken copy that the unit tests must fail.
 ## The order
 
 The wake first, as the one step that may ask for something; the rest then runs unattended. The jobs before the
-windows, because the watchdog would bring those back. Then the agents' files, the link and the working files.
+windows, because the watchdog would bring those back, and the menu bar app (`~/Applications/bosun.app`, asked to
+quit by its bundle id first) after its Open at Login job. Then the agents' files, the link and the working files.
 Stopping the windows writes a file of its own, so it looks again before deleting anything. It also waits for
 what the windows ran to end: an agent ending as its window stops may start an async hook (Claude Code's
 SessionEnd), which writes in the state folder (`logs/`, `signals/`) a moment later, so those folders came back

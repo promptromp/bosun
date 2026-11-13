@@ -1,0 +1,24 @@
+#!/bin/bash
+# codesign's stand-in, for what bosun asks of it: `--verify [--deep] [--strict] <app>` and `-dv <app>`. A bundle
+# is signed while it has Contents/_CodeSignature; the file `team` in there is its Team ID (without one it is
+# signed ad hoc), and `broken` makes the signature fail to verify. spctl's stand-in reads `notarized` there.
+mkdir -p "$HOME/.sandbox"
+echo "codesign $*" >>"$HOME/.sandbox/system.log"
+app="${!#}"
+seal="$app/Contents/_CodeSignature"
+[ -d "$seal" ] || {
+	echo "$app: code object is not signed at all" >&2
+	exit 1
+}
+case "${1:-}" in
+--verify)
+	[ ! -e "$seal/broken" ] || {
+		echo "$app: a sealed resource is missing or invalid" >&2
+		exit 1
+	}
+	;;
+-dv)
+	# It describes on stderr, as the real one does.
+	printf 'Identifier=ai.example.bosun\nTeamIdentifier=%s\nSealed Resources version=2\n' "$(cat "$seal/team" 2>/dev/null || echo "not set")" >&2
+	;;
+esac
