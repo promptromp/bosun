@@ -84,7 +84,7 @@ window_harness() { # <window>
     echo "$ORCHESTRATOR_HARNESS"
     return 0
   fi
-  harness="$(window_specs 2>/dev/null | awk -F'\t' -v name="$1" '$1 == name { print $6; exit }')"
+  harness="$(window_specs 2>/dev/null | awk -F'\t' -v name="$1" '$1 == name && !found { print $6; found = 1 }')"
   echo "${harness:-$BOSUN_HARNESS}"
 }
 

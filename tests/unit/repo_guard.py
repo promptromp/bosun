@@ -1,11 +1,12 @@
 """What the unit tests must leave alone in the repository they run from (conftest.py checks it before
 and after the run; test_repo_guard.py tests it).
 
-Only what this checkout holds, and what a test that wrote into it would change: its HEAD, what is
-staged in its own index, and core.bare. Git worktrees share one repository (refs, branches, the
-stash), so the shared repository's HEAD is not on the list: it is the main checkout's, and moves
-whenever a session in another worktree commits, merges or switches branch, which failed a run that
-had touched nothing. tests/smoke.sh's `repo_state` is the same check in shell."""
+Exactly three values of this checkout, read with git: its HEAD, the set of paths staged in its own
+index, and core.bare. It does not look at the working tree or at untracked files. Git worktrees share
+one repository (refs, branches, the stash), so the shared repository's HEAD is not on the list: it is
+the main checkout's, and moves whenever a session in another worktree commits, merges or switches
+branch, which failed a run that had touched nothing. tests/smoke.sh's `repo_state` is the same check
+in shell."""
 
 from __future__ import annotations
 
