@@ -89,9 +89,11 @@ of truth, so don't copy rules into this file.
   the one repo-mask implementation. `lib/watchdog.py`: the watchdog's table of checks (`CHECKS`),
   awake window, de-dup state and alert sinks; `libexec/bosun-watchdog` only collects the live
   facts (tmux windows, the Claude in each, the check-in loop, launchd) for it.
-- `lib/quit_state.py` (design: `docs/design/menu-bar.md`): what `bosun quit` leaves (`quit.json`: since when, whether the
-  morning start is paused), which the watchdog and learning's scheduled run skip on, and the morning run when paused
-  (`quit_stopped`, `quit_paused`, `quit_clear` in `lib/common.sh`); `bosun start` clears it.
+- Quit (design: `docs/design/menu-bar.md`): `lib/quit.py` (the plan, pure over the windows, and the command: the wait,
+  the `windows` lock, the order of the steps) run by `libexec/bosun-quit` (the command line and settings);
+  `lib/quit_state.py` is what it leaves (`quit.json`: since when, whether the morning start is paused), which the
+  watchdog and learning's scheduled run skip on, and the morning run when paused (`quit_stopped`, `quit_paused`,
+  `quit_clear` in `lib/common.sh`); `bosun start` clears it, `start --unless-quit` (the morning's) never does.
 - Sync (design: `docs/design/sync.md`): every ledger write goes through `locked_ledger` into a
   journal that `ledger.json` is the rebuild of, and every knowledge write through
   `knowledge.opened` into one in `knowledge/journal/`. `lib/change_log.py` (pure: the envelope, ids,
@@ -201,7 +203,8 @@ of truth, so don't copy rules into this file.
   (pure: the level, sentence and lines from the watchdog's checks and its gate on a missing session
   (`watchdog.session_gate_kind`), `console_sessions.waiting_in` and the quit record, `snapshot`; its `CONTRACT` only grows) and `lib/menu_status_live.py` (its only I/O, through
   `console_live`'s readers; the command, which always prints the object). The keep-awake end is
-  `keep-awake-<session>.json`, written by `libexec/bosun-morning` and removed by `bosun stop`.
+  `keep-awake-<session>.json`, written by `libexec/bosun-morning` and removed by `bosun stop`, read by
+  `lib/keep_awake.py` (status and quit).
 - `orchestrator/policy.md` (appended to the orchestrator's system prompt),
   `orchestrator/plugin/commands/chores.md` (the chores procedure), `orchestrator/settings.json`
   (the orchestrator's own permissions, generic; a site replaces it with

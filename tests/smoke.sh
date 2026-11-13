@@ -138,7 +138,7 @@ check "the installers' --help prints its usage header and no code" bash -c '
     ! grep -qE "^(set -uo|source |import )" <<<"$out" || { echo "$cmd prints code"; exit 1; }
   done' _ "$ROOT"
 check "usage errors exit 2" bash -c '
-  for args in "send" "send --bogus" "send window-only" "send --id" "send --no-item window-only" "send --new w" "send --start" "start --bogus" "launch --bogus" "launch --fingerprint alpha extra" "refresh --bogus" "refresh --update-restart" "refresh --update-restart prompt alpha --unless-active" "refresh --checkin-loop alpha" "refresh --checkin-loop --unless-active" "trust --bogus" "watchdog --bogus" "watchdog --only" "sessions --bogus" "learn --bogus" "learn apply" "events --bogus" "slack-watch --bogus" "review-watch --bogus" "console --bogus" "quit" "quit --bogus" "quit --plan --sleep" "stop --bogus" "orphans --bogus""update --bogus" "update note" "update note --window w --mood" "update advance --bogus"; do
+  for args in "send" "send --bogus" "send window-only" "send --id" "send --no-item window-only" "send --new w" "send --start" "start --bogus" "launch --bogus" "launch --fingerprint alpha extra" "refresh --bogus" "refresh --update-restart" "refresh --update-restart prompt alpha --unless-active" "refresh --checkin-loop alpha" "refresh --checkin-loop --unless-active" "trust --bogus" "watchdog --bogus" "watchdog --only" "sessions --bogus" "learn --bogus" "learn apply" "events --bogus" "slack-watch --bogus" "review-watch --bogus" "console --bogus" "quit" "quit --bogus" "quit --plan --sleep" "stop --bogus" "orphans --bogus" "update --bogus" "update note" "update note --window w --mood" "update advance --bogus"; do
     # shellcheck disable=SC2086  # split the argument list on purpose
     "$1" $args >/dev/null 2>&1
     [ $? -eq 2 ] || { echo "bosun $args did not exit 2"; exit 1; }
@@ -2545,6 +2545,11 @@ usage_error_exits_2() {
 }
 check "... all of them exit 2" usage_error_exits_2
 check "a bad BOSUN_QUIT_WAIT_MINUTES is an error that names it" fails_with "BOSUN_QUIT_WAIT_MINUTES must be a whole number of minutes" env BOSUN_QUIT_WAIT_MINUTES=lots "$BOSUN" quit --let-finish
+check "... with --json it is an object, exit 1, with the plan's keys empty" env BOSUN_QUIT_WAIT_MINUTES=lots bash -c '"$1" quit --let-finish --json </dev/null >"$2"; [ $? -eq 1 ]' _ "$BOSUN" "$WORK/quit.out"
+check "... that says why" quit_has 'd["contract"] == 1 and d["result"] == "failed" and "BOSUN_QUIT_WAIT_MINUTES" in d["error"] and d["windows"] == [] and d["busy"] == [] and d["refused"] is None'
+check "--let-finish from inside bosun's own tmux is refused: it would wait on its own window" fails_with "run it from another terminal" env TMUX="/tmp/tmux-0/$SOCKET,1,0" "$BOSUN" quit --let-finish
+check "... as an object too with --json" bash -c 'TMUX="/tmp/tmux-0/$2,1,0" "$1" quit --let-finish --json </dev/null >"$3"; [ $? -eq 1 ]' _ "$BOSUN" "$SOCKET" "$WORK/quit.out"
+check "... that says why" quit_has 'd["result"] == "failed" and "another terminal" in d["error"]'
 
 python3 -I -c 'import fcntl, os, sys, time
 fd = os.open(sys.argv[1], os.O_RDWR | os.O_CREAT)
@@ -2560,14 +2565,32 @@ check "... with the reason" quit_has 'd["contract"] == 1 and d["result"] == "ref
 kill "$update_holder" 2>/dev/null
 wait "$update_holder" 2>/dev/null
 
+# A start that is setting up the windows holds the windows lock: a quit does not write anything under it.
+python3 "$ROOT/lib/run_locked.py" "$BOSUN_STATE_DIR/windows.lock" 10 busy -- sleep 60 &
+lock_holder=$!
+wait_for 5 lock_taken "$BOSUN_STATE_DIR/windows.lock"
+check "a quit while a start holds the windows lock gives up when the wait is over: exit 1 ..." env BOSUN_WINDOWS_LOCK_WAIT_SECONDS=0 bash -c '"$1" quit --stop-now </dev/null >"$2" 2>"$3"; [ $? -eq 1 ]' _ "$BOSUN" "$WORK/quit.out" "$WORK/quit.err"
+check "... with one line, and nothing changed: no quit.json, the session, the marker and the keep-awake" bash -c 'grep -q "setting up the windows" "$1" && [ "$(wc -l <"$1")" -eq 1 ] && [ ! -e "$2/quit.json" ] && tmux -L "$3" has-session -t =smoke && [ -f "$2/console/wanted" ] && [ -f "$2/keep-awake-smoke.pid" ]' _ "$WORK/quit.err" "$BOSUN_STATE_DIR" "$SOCKET"
+kill "$lock_holder" 2>/dev/null
+wait "$lock_holder" 2>/dev/null
+
+# A quit record while windows are open is a quit that did not finish (bosun stop failed or was cut short)
+write_quit paused
+check "bosun status --json calls a quit record with windows still open an error, with how to finish" status_has 'd["level"] == "error" and d["sentence"] == "bosun quit did not finish" and "bosun quit --stop-now" in d["problems"][0] and "bosun start" in d["problems"][0]'
+rm -f "$BOSUN_STATE_DIR/quit.json"
+
 # alpha finishes a few seconds into the wait; beta keeps waiting at its prompt, which does not hold the wait
+# A start still holds the windows lock when alpha is done: the quit takes it only for its stop phase, and waits.
+python3 "$ROOT/lib/run_locked.py" "$BOSUN_STATE_DIR/windows.lock" 10 busy -- sleep 12 &
+wait_for 5 lock_taken "$BOSUN_STATE_DIR/windows.lock"
 (
   sleep 7
   agent_status "$quit_alpha" idle
 ) &
 quit_started=$SECONDS
-check "--let-finish waits (polling every 5 s) until alpha is done, though beta waits at a prompt, then quits: morning paused, Mac kept awake" quit_exits 0 --let-finish=1 --pause-morning
-check "... it waited for alpha: 5 to 30 seconds" bash -c '[ "$1" -ge 5 ] && [ "$1" -le 30 ]' _ $((SECONDS - quit_started))
+check "--let-finish waits (polling every 5 s) until alpha is done, though beta waits at a prompt, and for a start holding the windows lock, then quits: morning paused, Mac kept awake" env BOSUN_WINDOWS_LOCK_WAIT_SECONDS=30 bash -c '"$1" quit --let-finish=1 --pause-morning </dev/null >"$2" 2>"$3"' _ "$BOSUN" "$WORK/quit.out" "$WORK/quit.err"
+check "... it waited for alpha, then for the lock: 10 to 45 seconds" bash -c '[ "$1" -ge 10 ] && [ "$1" -le 45 ]' _ $((SECONDS - quit_started))
+check "... it said once, on stderr, who it waited for" bash -c '[ "$(wc -l <"$1")" -eq 1 ] && grep -q "Waiting for 1 busy window (alpha), up to 1 minute" "$1"' _ "$WORK/quit.err"
 check "... it says what it stopped and who was waiting for you" bash -c 'grep -q "^bosun is stopped\.$" "$1" && grep -q "Stopped the windows: .*alpha" "$1" && grep -q "They were waiting for you: beta" "$1" && grep -q "paused until you run: bosun start" "$1"' _ "$WORK/quit.out"
 check "... no session is left" bash -c '! tmux -L "$1" has-session -t =smoke' _ "$SOCKET"
 check "... quit.json says the morning is paused" bash -c 'python3 -I -c "import json,sys; sys.exit(not json.load(open(sys.argv[1]))[\"morning_paused\"])" "$1/quit.json"' _ "$BOSUN_STATE_DIR"
@@ -2596,6 +2619,19 @@ check "a morning that was not paused starts bosun again, through bosun start: th
   [ ! -e "$2/quit.json" ] && [ -f "$2/console/wanted" ] && tmux -L "$3" has-session -t =smoke' _ "$BOSUN" "$BOSUN_STATE_DIR" "$SOCKET" "" "$WORK/fake-caffeinate"
 "$BOSUN" stop >/dev/null 2>&1
 rm -f "$BOSUN_STATE_DIR/quit.json" "$BOSUN_STATE_DIR/console/wanted"
+
+# The morning clears an unpaused quit, runs its setup (minutes), then starts: a quit made in between must
+# survive that start, even one that did not pause the morning.
+printf 'setup_steps() { python3 -I -c "import sys; from pathlib import Path; sys.path.insert(0, sys.argv[1]); import quit_state; quit_state.write(Path(sys.argv[2]), True)" "%s" "%s"; }\n' \
+  "$ROOT/lib" "$BOSUN_STATE_DIR" >"$WORK/quit-during-setup.sh"
+quit_morning_out="$(PATH="$WORK/fake-caffeinate:$PATH" BOSUN_SETUP_FILE="$WORK/quit-during-setup.sh" BOSUN_NETWORK_PROBE_URL=file:///dev/null "$BOSUN" morning --awake-minutes 1 2>&1 </dev/null)"
+check "a quit made while the morning sets up survives the morning's start, which logs that and starts nothing" bash -c 'grep -q "bosun was quit at [0-9:]*: not starting it" <<<"$1" && [ -f "$2/quit.json" ] && ! tmux -L "$3" has-session -t =smoke' _ "$quit_morning_out" "$BOSUN_STATE_DIR" "$SOCKET"
+check "bosun start --unless-quit with a quit record starts nothing, clears nothing, exits 0" bash -c '"$1" start --unless-quit >/dev/null 2>&1 && [ -f "$2/quit.json" ] && ! tmux -L "$3" has-session -t =smoke' _ "$BOSUN" "$BOSUN_STATE_DIR" "$SOCKET"
+"$BOSUN" start >/dev/null 2>&1
+check "... while a plain bosun start, the person's own act, still ends the quit" bash -c '[ ! -e "$1/quit.json" ] && tmux -L "$2" has-session -t =smoke' _ "$BOSUN_STATE_DIR" "$SOCKET"
+check "bosun start --unless-quit with no quit record starts as usual" bash -c '"$1" stop >/dev/null 2>&1; "$1" start --unless-quit >/dev/null 2>&1 && tmux -L "$2" has-session -t =smoke' _ "$BOSUN" "$SOCKET"
+"$BOSUN" stop >/dev/null 2>&1
+rm -f "$BOSUN_STATE_DIR/quit.json" "$BOSUN_STATE_DIR/console/wanted" "$BOSUN_STATE_DIR/keep-awake-smoke.pid" "$BOSUN_STATE_DIR/keep-awake-smoke.json"
 
 stop_keep_awake_leaves_it() { # bosun stop --keep-awake keeps the caffeinate and its files; a plain stop releases them
   start_keep_awake

@@ -20,6 +20,7 @@ from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "lib"))
 import awake
+import keep_awake
 import menu_status
 import menu_status_live
 import quit_state
@@ -250,6 +251,7 @@ class LevelsTestCase(unittest.TestCase):
 class StoppedTestCase(unittest.TestCase):
     def test_a_quit_is_stopped_whatever_the_windows_and_checks_say(self) -> None:
         out = snap(
+            windows=GONE,
             quit=quit_state.QuitState(GONE_AT, False),
             checks=watchdog_checks(check("morning-failed", "error", "e1")),
         )
@@ -261,13 +263,13 @@ class StoppedTestCase(unittest.TestCase):
         )
 
     def test_a_paused_morning_is_in_the_detail_and_the_fields(self) -> None:
-        out = snap(quit=quit_state.QuitState(GONE_AT, True))
+        out = snap(windows=GONE, quit=quit_state.QuitState(GONE_AT, True))
         self.assertTrue(out["stopped"]["morning_paused"])
         self.assertEqual(len(out["detail"]), 2)
         self.assertIn("morning start is paused", out["detail"][1])
 
     def test_a_quit_record_that_cannot_be_read_says_so_and_how_to_clear_it(self) -> None:
-        out = snap(quit=quit_state.QuitState(GONE_AT, True, readable=False))
+        out = snap(windows=GONE, quit=quit_state.QuitState(GONE_AT, True, readable=False))
         self.assertEqual(out["level"], "stopped")
         self.assertEqual(len(out["problems"]), 1)
         for text in (out["problems"][0], out["detail"][-1]):
@@ -275,10 +277,24 @@ class StoppedTestCase(unittest.TestCase):
             self.assertIn("unreadable", text)
             self.assertIn("bosun start", text)
 
-    def test_the_quit_is_never_read_as_running_when_the_windows_are_open(self) -> None:
+    def test_a_quit_record_with_windows_still_open_is_a_quit_that_did_not_finish(self) -> None:
         out = snap(quit=quit_state.QuitState(GONE_AT, False), windows=WINDOWS)
-        self.assertEqual(out["level"], "stopped")
+        self.assertEqual((out["level"], out["sentence"]), ("error", "bosun quit did not finish"))
         self.assertEqual(out["windows"], 3)
+        self.assertEqual(len(out["problems"]), 1)
+        for text in (out["problems"][0],):
+            self.assertIn("3 windows still open", text)
+            self.assertIn("bosun quit --stop-now", text)
+            self.assertIn("bosun start", text)
+        self.assertEqual(out["stopped"], {"since": "2026-11-12T12:00:00+00:00", "morning_paused": False})
+
+    def test_one_window_open_after_a_quit_says_so_in_the_singular(self) -> None:
+        out = snap(quit=quit_state.QuitState(GONE_AT, True), windows=[window("orch")])
+        self.assertIn("1 window still open", out["problems"][0])
+
+    def test_a_quit_record_whose_windows_could_not_be_read_stays_stopped(self) -> None:
+        out = snap(quit=quit_state.QuitState(GONE_AT, False), windows=None, errors={"sessions": "x"})
+        self.assertEqual(out["level"], "stopped")
 
 
 class StateTestCase(unittest.TestCase):
@@ -384,6 +400,7 @@ class JsonTestCase(unittest.TestCase):
     def test_every_level_serialises_to_the_documented_keys(self) -> None:
         for out in (
             snap(),
+            snap(windows=GONE, quit=quit_state.QuitState(GONE_AT, True)),
             snap(quit=quit_state.QuitState(GONE_AT, True)),
             snap(windows=None, checks=None, errors={"sessions": "x"}),
         ):
@@ -408,7 +425,7 @@ class KeepAwakeTestCase(unittest.TestCase):
         self.file = self.state / "keep-awake-acme.json"
 
     def read(self, alive: bool = True) -> datetime | None:
-        return menu_status_live.keep_awake_until(self.state, "acme", lambda _pid: alive)
+        return keep_awake.keep_awake_until(self.state, "acme", lambda _pid: alive)
 
     def test_absent_is_none(self) -> None:
         self.assertIsNone(self.read())
@@ -433,7 +450,7 @@ class KeepAwakeTestCase(unittest.TestCase):
             asked.append(pid)
             return True
 
-        menu_status_live.keep_awake_until(self.state, "acme", alive)
+        keep_awake.keep_awake_until(self.state, "acme", alive)
         self.assertEqual(asked, [4242])
 
     def test_a_record_that_cannot_be_read_is_none(self) -> None:
@@ -451,8 +468,8 @@ class KeepAwakeTestCase(unittest.TestCase):
                 self.assertIsNone(self.read())
 
     def test_the_real_check_knows_this_process_is_not_caffeinate(self) -> None:
-        self.assertFalse(menu_status_live.is_caffeinate(os.getpid()))
-        self.assertFalse(menu_status_live.is_caffeinate(2**22 + 12345))
+        self.assertFalse(keep_awake.is_caffeinate(os.getpid()))
+        self.assertFalse(keep_awake.is_caffeinate(2**22 + 12345))
 
 
 class RecentLogErrorsTestCase(unittest.TestCase):

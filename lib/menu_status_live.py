@@ -23,9 +23,8 @@ import io
 import itertools
 import json
 import os
-import subprocess
 import sys
-from collections.abc import Callable, Mapping
+from collections.abc import Mapping
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
@@ -35,6 +34,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import agent_files
 import console_live
 import console_token
+import keep_awake
 import menu_status
 import quit_state
 import update_state
@@ -45,41 +45,6 @@ from menu_status import SessionGate, StatusFacts
 
 LOG_WINDOW = timedelta(hours=1)
 SCAN_LINES = 5000  # the most lines read back from the end of one log
-PS_TIMEOUT_SECONDS = 5
-
-Alive = Callable[[int], bool]
-
-
-# ---- the keep-awake ------------------------------------------------------------------------------
-
-
-def is_caffeinate(pid: int) -> bool:
-    """Whether <pid> is a running caffeinate: the morning's keep-awake (a pid can be reused later)."""
-    try:
-        result = subprocess.run(  # our own argv, no shell
-            ["ps", "-p", str(pid), "-o", "comm="],
-            capture_output=True,
-            text=True,
-            timeout=PS_TIMEOUT_SECONDS,
-            stdin=subprocess.DEVNULL,
-            check=False,
-        )
-    except (OSError, subprocess.TimeoutExpired):
-        return False
-    return "caffeinate" in result.stdout
-
-
-def keep_awake_until(state_dir: Path, session: str, alive: Alive = is_caffeinate) -> datetime | None:
-    """When the Mac's keep-awake ends, as local naive time: the morning's keep-awake-<session>.json, while
-    its caffeinate still runs. None when there is none, it is garbled, or the process is gone."""
-    try:
-        data = json.loads((state_dir / f"keep-awake-{session}.json").read_text())
-        until, pid = datetime.fromisoformat(data["until"]), data["pid"]
-    except (OSError, ValueError, KeyError, TypeError):
-        return None
-    if not isinstance(pid, int) or isinstance(pid, bool) or pid <= 0 or not alive(pid):
-        return None
-    return until.astimezone().replace(tzinfo=None)
 
 
 # ---- the logs ------------------------------------------------------------------------------------
@@ -231,7 +196,7 @@ def gather(env: Mapping[str, str], now: datetime, run: Run) -> StatusFacts:
         update_running=updating,
         update_waiting_for=waiting_for,
         console_running=console_token.running(state_dir),
-        keep_awake_until=keep_awake_until(state_dir, settings.session),
+        keep_awake_until=keep_awake.keep_awake_until(state_dir, settings.session),
         log_errors=attempt("logs", lambda: recent_log_errors(settings.log_dir, now)) or (),
         log_dir=str(settings.log_dir),
         errors=dict(collector.errors),

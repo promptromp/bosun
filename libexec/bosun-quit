@@ -20,11 +20,15 @@
 #                   morning started goes on until its time)
 #   --json          one object, `contract` 1, instead of text: the plan, and for a quit its `result`
 #                   (stopped, busy, refused or failed), what was kept and the console's state
-# The order: quit.json is written first, so the watchdog's next run already skips and never restarts
-# what is being stopped; then the console's launchd job (BOSUN_CONSOLE_ALWAYS=1) is stopped; then
-# `bosun stop` (with --keep-awake unless --sleep). If that fails the quit stays and says why.
+# The order: the `windows` lock that `bosun start` holds is taken (a start in the middle of setting up
+# the windows is waited for, up to BOSUN_WINDOWS_LOCK_WAIT_SECONDS, else nothing changes and it fails);
+# quit.json is written, so the watchdog's next run already skips and never restarts what is being stopped;
+# the console's launchd job (BOSUN_CONSOLE_ALWAYS=1) is stopped; then `bosun stop` (with --keep-awake
+# unless --sleep). If a step after quit.json fails, quit.json stays, `bosun status --json` says the quit
+# did not finish, and the quit says so: run `bosun quit --stop-now` again, or `bosun start`.
 # While an update runs a quit is refused (exit 1). Exit codes: 0 done, 1 refused or failed, 2 usage,
-# 3 the wait ran out. Run it from outside bosun's windows: it stops them, its own last.
+# 3 the wait ran out. Run it from outside bosun's windows: it stops them, its own last, so --let-finish
+# there would wait for its own window, and is refused.
 set -uo pipefail
 source "$(dirname "$0")/../lib/common.sh"
 
@@ -64,11 +68,25 @@ if [ "$mode" = plan ] && [ "$pause$sleep_now" != 00 ]; then
   die_usage "--pause-morning and --sleep go with --let-finish or --stop-now"
 fi
 load_config
+
+# refuse <message>: exit 1, as the object a caller reading --json expects, else as a line.
+refuse() {
+  if [ "$json" = 1 ]; then
+    python3 "$BOSUN_ROOT/lib/quit.py" --json --error "$1"
+    exit 1
+  fi
+  die "$1"
+}
+
 [ -n "$wait_minutes" ] || wait_minutes="$BOSUN_QUIT_WAIT_MINUTES"
-is_minutes "$wait_minutes" || die "BOSUN_QUIT_WAIT_MINUTES must be a whole number of minutes, got '$wait_minutes'"
+is_minutes "$wait_minutes" || refuse "BOSUN_QUIT_WAIT_MINUTES must be a whole number of minutes, got '$wait_minutes'"
+if [ "$mode" = finish ] && inside_bosun_tmux; then
+  refuse "--let-finish waits for the busy windows, and this runs inside one of them: run it from another terminal, or use --stop-now"
+fi
 
 args=(--mode "$mode" --wait-minutes "$wait_minutes" --state-dir "$BOSUN_STATE_DIR" --session "$BOSUN_SESSION_NAME"
-  --console-label "$(console_label)" --console-marker "$(console_wanted_marker)")
+  --console-label "$(console_label)" --console-marker "$(console_wanted_marker)"
+  --lock-wait "${BOSUN_WINDOWS_LOCK_WAIT_SECONDS:-180}")
 [ "$pause" = 1 ] && args+=(--pause-morning)
 [ "$sleep_now" = 1 ] && args+=(--sleep)
 [ "$json" = 1 ] && args+=(--json)

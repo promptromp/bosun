@@ -9,7 +9,8 @@
 #           always prints the object and exits 0, with what it could not read among its problems:
 #             contract          1; a number that only grows, a field only ever being added
 #             level             ok, warning, error or stopped (you quit bosun, or stopped it today with
-#                               `bosun stop`). A missing session is judged by the watchdog's own gate:
+#                               `bosun stop`; a quit record with windows still open is an error: the
+#                               quit did not finish). A missing session is judged by the watchdog's own gate:
 #                               an error only when it should be running, ok while resting (outside the
 #                               awake hours) or starting (the morning run is going or about to). A
 #                               warning also lists ERROR lines of the last hour, after the watchdog

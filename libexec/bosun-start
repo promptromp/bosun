@@ -1,5 +1,5 @@
 #!/bin/bash
-# Usage: bosun start [--restart] [--unless-active]
+# Usage: bosun start [--restart] [--unless-active] [--unless-quit]
 #
 # If the tmux session does not exist, start it: the orchestrator, one window per sessions.yml entry,
 # and checkin, each running its command directly (see build_launch_command).
@@ -10,6 +10,9 @@
 #   drain              the same, but never restart
 #   restart            kill the whole session and start it fresh (also: --restart)
 # --unless-active is passed to `bosun refresh` (skip if you are typing in the session).
+# --unless-quit: if bosun was quit (`bosun quit`), log that and exit 0 without starting anything or
+# ending the quit. The morning run passes it, so a quit made while it was setting up is not undone;
+# a start you type never does, since starting is how you end a quit.
 # Starting also ends a `bosun quit`: the watchdog, learning and the morning job run again, and with
 # BOSUN_CONSOLE_ALWAYS=1 the console's launchd job starts (its marker, $BOSUN_STATE_DIR/console/wanted).
 set -uo pipefail
@@ -17,6 +20,7 @@ source "$(dirname "$0")/../lib/common.sh"
 load_config
 
 refresh_args=()
+unless_quit=0
 for arg in "$@"; do
   case "$arg" in
     -h | --help)
@@ -25,6 +29,7 @@ for arg in "$@"; do
       ;;
     --restart) BOSUN_ON_EXISTING=restart ;;
     --unless-active) refresh_args+=(--unless-active) ;;
+    --unless-quit) unless_quit=1 ;;
     *) die_usage "unknown option $arg" ;;
   esac
 done
@@ -35,6 +40,11 @@ done
 one_at_a_time windows "${BOSUN_WINDOWS_LOCK_WAIT_SECONDS:-180}" "another bosun start or refresh is setting up the windows, and did not finish in time" "$0" "$@"
 
 SESSION="$BOSUN_SESSION_NAME"
+# Under the lock, where a quit that took it first is seen and one that comes after waits for this start.
+if [ "$unless_quit" = 1 ] && quit_at="$(quit_stopped)"; then
+  log "bosun was quit at $quit_at: not starting it (run: bosun start)"
+  exit 0
+fi
 rm -f "$(stop_marker)" # the watchdog expects the session again
 quit_clear             # and no longer skips its runs, nor does learning or the morning job (bosun quit)
 # and the console's launchd job (BOSUN_CONSOLE_ALWAYS=1) is wanted: it starts and stays up

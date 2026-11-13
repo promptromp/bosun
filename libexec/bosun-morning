@@ -152,7 +152,7 @@ if [ "$DRY_RUN" = "1" ]; then
     window_specs | while IFS=$'\t' read -r name dir kind model effort _; do log "  $name ($kind, $model/$effort) -> $dir"; done
   fi
 else
-  "$BOSUN" start --unless-active || problems+=("tmux")
+  "$BOSUN" start --unless-active --unless-quit || problems+=("tmux")
   # The Impact view's daily snapshot: in the background, so a slow GitHub never delays the run.
   if [ "$BOSUN_IMPACT_COLLECT" = "1" ]; then
     "$BOSUN" impact collect >>"$BOSUN_LOG_DIR/impact-$(date +%F).log" 2>&1 &

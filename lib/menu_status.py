@@ -8,6 +8,8 @@ lib/console_sessions.py's. Whether a missing session is a problem is the watchdo
 (`watchdog.session_gate_kind`, which `session-missing` uses), carried in as a SessionGate: no rule of
 its own, so the menu and the watchdog never disagree.
 
+- error, a quit that did not finish: a quit record (lib/quit_state.py) while windows are still open (its
+  `bosun stop` failed or was cut short, and the watchdog is skipping); the problem says how to finish.
 - stopped: you quit bosun (lib/quit_state.py), nothing else matters then; or no window is open and the
   gate says you stopped it today with `bosun stop` (the morning run starts it as usual tomorrow).
 - error: no window is open and the gate says it should be running (the watchdog's own `session-missing`
@@ -230,6 +232,26 @@ def stop_verdict(stopped_at: datetime) -> Verdict:
     )
 
 
+def quit_verdict(facts: StatusFacts, now: datetime, waiting: list[str]) -> Verdict:
+    """The verdict while a quit record exists: stopped, unless windows are still open (the quit did not
+    finish: its `bosun stop` failed or was cut short, while the watchdog skips), which is an error."""
+    if facts.quit is None:
+        return running_verdict(facts, now, waiting)
+    if open_windows(facts.windows):
+        return unfinished_verdict(facts.quit, open_windows(facts.windows))
+    return stopped_verdict(facts.quit)
+
+
+def unfinished_verdict(state: quit_state.QuitState, count: int) -> Verdict:
+    """A quit record with windows still open: bosun quit did not finish."""
+    text = (
+        f"bosun quit did not finish: {plural(count, 'window')} still open, and the watchdog is skipping its "
+        "runs. Run `bosun quit --stop-now` again to finish, or `bosun start` to start bosun again"
+    )
+    detail = [f"You quit bosun at {quit_state.clock(state)}, but {plural(count, 'window')} still open"]
+    return Verdict(ERROR, "bosun quit did not finish", detail, [text], stopped_fields(state))
+
+
 def stopped_verdict(state: quit_state.QuitState) -> Verdict:
     detail = [f"You quit bosun at {quit_state.clock(state)}"]
     if state.morning_paused:
@@ -248,7 +270,7 @@ def stopped_verdict(state: quit_state.QuitState) -> Verdict:
 def snapshot(facts: StatusFacts, now: datetime) -> dict[str, Any]:
     """`bosun status --json`: the object the menu bar app reads. <now> is local and naive."""
     waiting = [str(w["name"]) for w in console_sessions.waiting_in(facts.windows or [], now)]
-    verdict = stopped_verdict(facts.quit) if facts.quit else running_verdict(facts, now, waiting)
+    verdict = quit_verdict(facts, now, waiting)
     kept = facts.keep_awake_until
     return {
         "contract": CONTRACT,

@@ -4,16 +4,27 @@ only the sleeps move, the steps written down in the order they happen). Fictiona
 
 from __future__ import annotations
 
+import contextlib
 import io
+import itertools
 import json
+import os
+import subprocess
 import sys
+import tempfile
+import time
 import unittest
+from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
+from unittest import mock
 
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "lib"))
+import console_live
+import console_token
 import quit as quit_cmd
+import run_locked
 
 
 def window(name: str, status: str | None = "idle") -> quit_cmd.Window:
@@ -82,28 +93,49 @@ class Fake:
         self.updating = updating
         self.stop_fails = stop_fails
         self.keep_awake: str | None = None  # when the keep-awake ends
+        self.console = "stopped"
         self.steps: list[str] = []
         self.now = 1000.0
         self.slept: list[float] = []
+        self.lock_busy = False
+        self.locked = False
+        self.outside: list[str] = []  # steps that ran without the windows lock
+        self.read_locked: list[bool] = []  # whether each reading of the windows held the lock
 
     def read_windows(self) -> list[quit_cmd.Window]:
         state = self.states[min(self.reads, len(self.states) - 1)]
         self.reads += 1
+        self.read_locked.append(self.locked)
         return state
+
+    @contextlib.contextmanager
+    def lock(self) -> Iterator[None]:
+        if self.lock_busy:
+            raise quit_cmd.QuitError(quit_cmd.LOCK_BUSY)
+        self.locked = True
+        try:
+            yield
+        finally:
+            self.locked = False
+
+    def step(self, text: str) -> None:
+        self.steps.append(text)
+        if not self.locked:
+            self.outside.append(text)
 
     def sleep(self, seconds: float) -> None:
         self.slept.append(seconds)
         self.now += seconds
 
     def write_quit(self, paused: bool) -> None:
-        self.steps.append(f"quit.json paused={paused}")
+        self.step(f"quit.json paused={paused}")
 
     def stop_console(self) -> str:
-        self.steps.append("console")
-        return "stopped"
+        self.step("console")
+        return self.console
 
     def stop_bosun(self, keep_awake: bool) -> None:
-        self.steps.append(f"stop keep_awake={keep_awake}")
+        self.step(f"stop keep_awake={keep_awake}")
         if self.stop_fails:
             raise quit_cmd.QuitError(self.stop_fails)
 
@@ -112,6 +144,7 @@ class Fake:
             read_windows=self.read_windows,
             updating=lambda: self.updating,
             keep_awake_until=lambda: self.keep_awake,
+            lock=self.lock,
             write_quit=self.write_quit,
             stop_console=self.stop_console,
             stop_bosun=self.stop_bosun,
@@ -287,6 +320,251 @@ class RunTest(unittest.TestCase):
         self.assertEqual(status, 1)
         self.assertIn("sessions --json exited 1", err)
         self.assertEqual(fake.steps, [])
+
+    def test_the_quit_steps_run_under_the_windows_lock_and_the_wait_does_not(self) -> None:
+        fake = Fake([window("alpha", "busy")], [window("alpha")])
+        status, _out, _err = run(fake, "finish")
+        self.assertEqual(status, 0)
+        self.assertEqual(fake.outside, [])  # quit.json, the console and bosun stop all held it
+        self.assertEqual(fake.read_locked, [False, False])  # the wait held none
+
+    def test_a_start_that_holds_the_lock_makes_the_quit_fail_before_changing_anything(self) -> None:
+        fake = Fake([window("alpha")])
+        fake.lock_busy = True
+        status, out, _err = run(fake, "now", as_json=True)
+        data = json.loads(out)
+        self.assertEqual((status, data["result"]), (1, "failed"))
+        self.assertIn("setting up the windows", data["error"])
+        self.assertNotIn("quit record stays", data["error"])  # nothing was written
+        self.assertEqual(fake.steps, [])
+
+    def test_the_lock_busy_message_is_one_line_in_text(self) -> None:
+        fake = Fake([window("alpha")])
+        fake.lock_busy = True
+        status, out, err = run(fake, "now")
+        self.assertEqual((status, out), (1, ""))
+        self.assertEqual(len(err.strip().splitlines()), 1)
+
+    def test_a_failed_stop_says_the_record_stays_and_both_ways_to_finish(self) -> None:
+        fake = Fake([window("alpha")], stop_fails="bosun stop failed: tmux could not kill")
+        for as_json in (False, True):
+            _status, out, err = run(fake, "now", as_json=as_json)
+            text = json.loads(out)["error"] if as_json else err
+            self.assertIn("tmux could not kill", text)
+            self.assertIn("quit record stays", text)
+            self.assertIn("bosun quit --stop-now", text)
+            self.assertIn("bosun start", text)
+
+    def test_a_console_step_that_fails_after_the_record_says_the_same(self) -> None:
+        fake = Fake([window("alpha")])
+
+        def broken() -> str:
+            raise quit_cmd.QuitError("could not remove the marker")
+
+        fake.stop_console = broken  # type: ignore[method-assign]
+        status, out, _err = run(fake, "now", as_json=True)
+        data = json.loads(out)
+        self.assertEqual((status, data["result"]), (1, "failed"))
+        self.assertIn("could not remove the marker", data["error"])
+        self.assertIn("bosun quit --stop-now", data["error"])
+        self.assertEqual(fake.steps, ["quit.json paused=False"])  # bosun stop never ran
+
+    def test_a_record_that_cannot_be_written_is_a_plain_failure_with_nothing_stopped(self) -> None:
+        fake = Fake([window("alpha")])
+
+        def broken(_paused: bool) -> None:
+            raise quit_cmd.QuitError("could not write quit.json")
+
+        fake.write_quit = broken  # type: ignore[method-assign,assignment]
+        _status, out, _err = run(fake, "now", as_json=True)
+        data = json.loads(out)
+        self.assertEqual(data["result"], "failed")
+        self.assertNotIn("quit record stays", data["error"])
+        self.assertEqual(fake.steps, [])
+
+    def test_a_console_still_running_is_said_neutrally_with_its_port(self) -> None:
+        fake = Fake([window("alpha")])
+        fake.console = "still running on port 8765"
+        _status, out, _err = run(fake, "now")
+        self.assertIn("still running on port 8765", out)
+        self.assertNotIn("not the job", out)
+
+    def test_the_wait_says_once_on_stderr_who_it_waits_for_and_how_long(self) -> None:
+        fake = Fake([window("alpha", "busy"), window("beta", "busy")], [window("alpha")])
+        _status, _out, err = run(fake, "finish", minutes=7)
+        lines = err.strip().splitlines()
+        self.assertEqual(len(lines), 1)
+        self.assertIn("2 busy windows", lines[0])
+        self.assertIn("alpha, beta", lines[0])
+        self.assertIn("7 minutes", lines[0])
+
+    def test_no_wait_line_when_nothing_is_busy(self) -> None:
+        _status, _out, err = run(Fake([window("alpha")]), "finish")
+        self.assertEqual(err, "")
+
+    def test_the_plan_failing_is_an_object_with_the_plans_keys_empty_and_the_error(self) -> None:
+        fake = Fake()
+
+        def broken() -> list[quit_cmd.Window]:
+            raise quit_cmd.QuitError("the windows could not be read")
+
+        fake.read_windows = broken  # type: ignore[method-assign]
+        status, out, _err = run(fake, "plan", as_json=True)
+        data = json.loads(out)
+        self.assertEqual(status, 1)
+        self.assertEqual(
+            (data["contract"], data["windows"], data["busy"], data["waiting"], data["keep_awake_until"]),
+            (1, [], [], [], None),
+        )
+        self.assertEqual((data["result"], data["refused"]), ("failed", None))
+        self.assertIn("could not be read", data["error"])
+
+    def test_the_wrappers_own_refusal_is_the_same_object_and_exit_1(self) -> None:
+        out = io.StringIO()
+        with mock.patch("sys.stdout", out):
+            status = quit_cmd.main(["--json", "--error", "BOSUN_QUIT_WAIT_MINUTES must be a number"])
+        data = json.loads(out.getvalue())
+        self.assertEqual((status, data["result"], data["windows"]), (1, "failed", []))
+        self.assertIn("BOSUN_QUIT_WAIT_MINUTES", data["error"])
+
+
+class LiveTest(unittest.TestCase):
+    """The helpers that touch the world: launchctl, the console job, the windows lock, bosun stop."""
+
+    def setUp(self) -> None:
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.state = Path(tmp.name)
+        self.marker = self.state / "console" / "wanted"
+        self.marker.parent.mkdir()
+        self.marker.touch()
+        self.world = quit_cmd.World(self.state, "acme", "com.acme.console", self.marker, 0.2)
+
+    def stop(self, running: list[bool], launchctl: Any) -> str:
+        with (
+            mock.patch.object(quit_cmd, "launchctl", launchctl),
+            mock.patch.object(console_token, "running", side_effect=running + [running[-1]] * 20),
+            mock.patch.object(time, "sleep"),
+            mock.patch.object(time, "monotonic", side_effect=itertools.count(0.0, 1.0)),
+        ):
+            return quit_cmd.stop_console(self.world)
+
+    def test_launchctl_missing_is_a_no_not_a_crash(self) -> None:
+        with mock.patch.object(subprocess, "run", side_effect=FileNotFoundError("launchctl")):
+            self.assertFalse(quit_cmd.launchctl("print", "gui/501/com.acme.console"))
+
+    def test_launchctl_that_times_out_is_a_no(self) -> None:
+        timeout = subprocess.TimeoutExpired("launchctl", 20)
+        with mock.patch.object(subprocess, "run", side_effect=timeout):
+            self.assertFalse(quit_cmd.launchctl("kill", "TERM", "x"))
+
+    def test_a_job_that_is_not_loaded_is_not_told_anything_and_is_no_failure(self) -> None:
+        calls: list[tuple[str, ...]] = []
+
+        def launchctl(*args: str) -> bool:
+            calls.append(args)
+            return False
+
+        self.assertEqual(self.stop([False], launchctl), quit_cmd.CONSOLE_NONE)
+        self.assertFalse(self.marker.exists())  # the marker goes whatever launchctl says
+        self.assertEqual([c[0] for c in calls], ["print"])
+
+    def test_a_loaded_job_is_told_to_stop_and_the_console_is_gone(self) -> None:
+        calls: list[tuple[str, ...]] = []
+
+        def launchctl(*args: str) -> bool:
+            calls.append(args)
+            return True
+
+        self.assertEqual(self.stop([True, True, False], launchctl), quit_cmd.CONSOLE_STOPPED)
+        self.assertEqual(calls[1][:2], ("kill", "TERM"))
+        self.assertTrue(calls[1][2].endswith("/com.acme.console"))
+
+    def test_print_ok_but_kill_failing_is_no_failure_and_a_console_still_running_says_so(self) -> None:
+        launchctl = mock.Mock(side_effect=[True, False])  # print ok, kill fails
+        with mock.patch.object(console_token, "served_port", return_value=8765):
+            said = self.stop([True], launchctl)
+        self.assertEqual(said, "still running on port 8765")
+
+    def test_a_marker_that_cannot_be_removed_is_a_quit_error_not_a_traceback(self) -> None:
+        with (
+            mock.patch.object(Path, "unlink", side_effect=PermissionError("denied")),
+            self.assertRaisesRegex(quit_cmd.QuitError, "could not remove .*wanted"),
+        ):
+            quit_cmd.stop_console(self.world)
+
+    def hold(self) -> subprocess.Popen[str]:
+        """A process holding the windows lock until it is told to stop."""
+        code = (
+            "import os, sys, time\n"
+            f"sys.path.insert(0, {str(Path(quit_cmd.__file__).parent)!r})\n"
+            "import run_locked\n"
+            f"fd = run_locked.acquire({str(self.state / 'windows.lock')!r}, 5)\n"
+            "print('held', flush=True)\n"
+            "sys.stdin.readline()\n"
+        )
+        proc = subprocess.Popen(
+            [sys.executable, "-I", "-c", code],
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            text=True,
+        )
+        assert proc.stdout is not None
+        self.assertEqual(proc.stdout.readline().strip(), "held")
+        return proc
+
+    def release(self, proc: subprocess.Popen[str]) -> None:
+        assert proc.stdin is not None
+        proc.stdin.write("\n")
+        proc.stdin.close()
+        proc.wait(timeout=10)
+        if proc.stdout:
+            proc.stdout.close()
+
+    def test_the_windows_lock_waits_for_a_start_and_gives_up_with_the_busy_message(self) -> None:
+        proc = self.hold()
+        self.addCleanup(self.release, proc)
+        with (
+            self.assertRaisesRegex(quit_cmd.QuitError, "setting up the windows"),
+            quit_cmd.windows_lock(self.world),
+        ):
+            self.fail("the lock was taken while another process held it")
+
+    def test_what_the_lock_starts_finds_it_held_and_it_is_free_afterwards(self) -> None:
+        check = self.state / "bosun"
+        held = f"{Path(run_locked.__file__)} --held {self.state / 'windows.lock'}"
+        check.write_text(f"#!/bin/sh\nexec {sys.executable} -I {held}\n")
+        check.chmod(0o755)
+        code = (
+            "import sys\n"
+            f"sys.path.insert(0, {str(Path(quit_cmd.__file__).parent)!r})\n"
+            "import quit as q\n"
+            "from pathlib import Path\n"
+            "import console_live\n"
+            f"console_live.BOSUN = Path({str(check)!r})\n"
+            f"world = q.World(Path({str(self.state)!r}), 's', 'l', Path('m'), 1)\n"
+            "with q.windows_lock(world):\n"
+            "    q.stop_bosun(True)\n"  # raises QuitError (exit 1) unless the child saw the lock held
+            "print('ok')\n"
+        )
+        result = subprocess.run(
+            [sys.executable, "-I", "-c", code], capture_output=True, text=True, timeout=60, check=False
+        )
+        self.assertEqual((result.returncode, result.stdout.strip()), (0, "ok"), result.stderr)
+        fd = run_locked.acquire(str(self.state / "windows.lock"), 0)
+        self.assertIsNotNone(fd)  # free once the quit's steps are done
+        if fd is not None:
+            os.close(fd)
+
+    def test_bosun_stop_failing_is_the_last_line_of_what_it_said(self) -> None:
+        fake = self.state / "bosun"
+        fake.write_text("#!/bin/sh\necho first >&2\necho tmux could not kill the session >&2\nexit 1\n")
+        fake.chmod(0o755)
+        with (
+            mock.patch.object(console_live, "BOSUN", fake),
+            self.assertRaisesRegex(quit_cmd.QuitError, "bosun stop failed: tmux could not kill the session"),
+        ):
+            quit_cmd.stop_bosun(True)
 
 
 if __name__ == "__main__":
