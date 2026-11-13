@@ -21,6 +21,8 @@ from collections.abc import Callable, Collection, Mapping
 from pathlib import Path
 
 import agent_changes
+import app_install
+import app_release
 import claude_state
 import orphans
 import uninstall_detect
@@ -184,6 +186,8 @@ class Carrying:
         self.actions: dict[str, Callable[[Step], None]] = {
             up.WAKE: self.cancel_wake,
             up.JOB: self.remove_job,
+            up.APP: self.remove_app,
+            up.LEFTOVER: lambda step: remove_path(Path(step.target)),
             up.STOP: self.stop,
             up.TRUST: self.revoke_trust,
             up.SETUP: self.undo_setup,
@@ -203,6 +207,15 @@ class Carrying:
 
     def remove_job(self, step: Step) -> None:
         uninstall_macos.remove_job(self.jobs[step.target])
+
+    def remove_app(self, step: Step) -> None:
+        """The app asked to quit, by its bundle id, so that it is not running from a folder that is gone."""
+        try:
+            bundle_id = app_release.read_publisher(ROOT).bundle_id
+            app_install.quit_app(app_install.Setup(ROOT, Path.home()), bundle_id)
+        except app_release.AppError as error:
+            raise StepFailed(str(error)) from error
+        remove_path(Path(step.target))
 
     def revoke_trust(self, step: Step) -> None:
         """Forgotten only once the agent says it is gone: the record is what a second run goes by."""

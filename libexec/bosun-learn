@@ -22,7 +22,8 @@
 #                   $BOSUN_STATE_DIR/learn/dry-runs/)
 #   --collect-only  only write the digest (no Claude call, no cost)
 #   --scheduled     what the launchd agent runs: only if BOSUN_LEARN_ENABLED=1 and today's run at
-#                   BOSUN_LEARN_AT has not happened yet
+#                   BOSUN_LEARN_AT has not happened yet, and not while bosun is stopped by `bosun quit`
+#                   (a run you type yourself still runs)
 #   --status        schedule, last runs, remembered findings, proposals waiting for you (`status`
 #                   and `list` are the same)
 #   apply <id>      make the approved change its proposal shows: a memory note for a window's folder
@@ -67,6 +68,16 @@ done
 if [ "$1" = "run" ] && update_hold_active; then
   echo "update in progress: skipping this learning run"
   exit 0
+fi
+
+# Only the scheduled run (launchd's) skips while bosun is quit; one you type yourself still runs.
+if [ "$1" = "run" ]; then
+  for arg in "$@"; do
+    if [ "$arg" = "--scheduled" ] && quit_at="$(quit_stopped)"; then
+      echo "bosun is stopped (bosun quit at $quit_at): skipping this learning run"
+      exit 0
+    fi
+  done
 fi
 
 # A run reads the windows from `bosun sessions --json`, and so does apply (a memory note's folder).

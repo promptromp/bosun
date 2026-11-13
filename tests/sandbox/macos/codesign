@@ -1,0 +1,37 @@
+#!/bin/bash
+# codesign's stand-in, for what bosun asks of it: `--verify --deep --strict [-R =<requirement>] <app>`. A bundle
+# is signed while it has Contents/_CodeSignature, and `broken` in there makes the signature fail to verify. With
+# -R the requirement is met when the seal's `team` is the requirement's leaf[subject.OU] and its `identifier`
+# is the requirement's identifier (a seal with no `team` is an ad hoc signature, which no Developer ID
+# requirement meets); otherwise it fails as the real one does, exit 3. spctl's stand-in reads `notarized`.
+# `-dv` is not stood in for, and fails: nothing may read what codesign prints about an app.
+mkdir -p "$HOME/.sandbox"
+echo "codesign $*" >>"$HOME/.sandbox/system.log"
+app="${!#}"
+seal="$app/Contents/_CodeSignature"
+requirement=""
+previous=""
+for argument in "$@"; do
+	[ "$previous" != -R ] || requirement="${argument#=}"
+	previous="$argument"
+done
+[ "${1:-}" = --verify ] || {
+	echo "codesign stand-in: only --verify is stood in for" >&2
+	exit 2
+}
+[ -d "$seal" ] || {
+	echo "$app: code object is not signed at all" >&2
+	exit 1
+}
+[ ! -e "$seal/broken" ] || {
+	echo "$app: a sealed resource is missing or invalid" >&2
+	exit 1
+}
+[ -z "$requirement" ] && exit 0
+team="$(sed -n 's/.*subject\.OU\] = "\([A-Z0-9]*\)".*/\1/p' <<<"$requirement")"
+identifier="$(sed -n 's/.*identifier "\([^"]*\)".*/\1/p' <<<"$requirement")"
+if [ -n "$team" ] && [ "$(cat "$seal/team" 2>/dev/null)" = "$team" ] && [ "$(cat "$seal/identifier" 2>/dev/null)" = "$identifier" ]; then
+	exit 0
+fi
+echo "test-requirement: code failed to satisfy specified code requirement(s)" >&2
+exit 3

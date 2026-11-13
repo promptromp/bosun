@@ -36,9 +36,12 @@ _RENAME_EXCHANGE = 2
 _AT_FDCWD = -100
 
 
-def git(*args: str, cwd: Path | None = None) -> subprocess.CompletedProcess[str]:
+def git(
+    *args: str, cwd: Path | None = None, timeout: float | None = None
+) -> subprocess.CompletedProcess[str]:
     """git with no inherited GIT_* variables (a git hook's, another repository's tooling) and none of
-    the user's hooks; its output kept, decoded tolerantly. bosun update's git goes through it too."""
+    the user's hooks; its output kept, decoded tolerantly. bosun update's git goes through it too.
+    Past <timeout> seconds it raises subprocess.TimeoutExpired."""
     env = {k: v for k, v in os.environ.items() if not k.startswith("GIT_")}
     return subprocess.run(
         ["git", "-c", "core.hooksPath=/dev/null", *args],
@@ -48,6 +51,7 @@ def git(*args: str, cwd: Path | None = None) -> subprocess.CompletedProcess[str]
         text=True,
         errors="replace",
         check=False,
+        timeout=timeout,
     )
 
 

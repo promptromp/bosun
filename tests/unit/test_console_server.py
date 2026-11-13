@@ -5,8 +5,10 @@ Fictional data: acme's invoice exporter (tests/fixtures/console/acme-ledger.json
 
 from __future__ import annotations
 
+import argparse
 import http.client
 import json
+import os
 import shutil
 import sys
 import tempfile
@@ -26,8 +28,10 @@ import console_kb
 import console_knowledge
 import console_live
 import console_server
+import console_token
 import knowledge
 from console_server import ConsoleError
+from console_token import console_token as token_for
 
 
 FIXTURE = Path(__file__).resolve().parents[1] / "fixtures" / "console" / "acme-ledger.json"
@@ -615,6 +619,142 @@ class KnowledgeServerTestCase(RunningServer):
         self.assertFalse(self.get_json(console_server.REVIEW_PATH)["exists"])
         self.assertEqual(self.post({"action": "confirm", "facts": ["f1"]}).status, 404)
         self.assertFalse((self.state / "nothing").exists())
+
+
+class ServedUrlTest(unittest.TestCase):
+    """console_server.served_url and serving_url: the address of a console that runs, for `--url` and a
+    hand run."""
+
+    def setUp(self) -> None:
+        self.tmp = tempfile.TemporaryDirectory()
+        self.state = Path(self.tmp.name)
+        self.token = token_for(self.state, persist=True)
+        self.env = mock.patch.dict(os.environ, {}, clear=False)
+        self.env.start()
+        os.environ.pop(console_server.PERSIST_SETTING, None)
+
+    def tearDown(self) -> None:
+        self.env.stop()
+        self.tmp.cleanup()
+
+    def args(self, *argv: str) -> argparse.Namespace:
+        return console_server.build_parser().parse_args(list(argv))
+
+    def test_not_running_is_an_error(self) -> None:
+        with self.assertRaisesRegex(console_server.ConsoleError, "the console is not running"):
+            console_server.served_url(self.state, 8765)
+
+    def test_the_address_is_the_recorded_port_and_the_stored_token(self) -> None:
+        with console_token.serving(self.state, 8123):
+            self.assertEqual(
+                console_server.served_url(self.state, 8765), f"http://127.0.0.1:8123/?t={self.token}"
+            )
+
+    def test_a_console_from_before_it_recorded_its_port_has_the_configured_one(self) -> None:
+        with console_token.serving(self.state):
+            self.assertEqual(
+                console_server.served_url(self.state, 8765), f"http://127.0.0.1:8765/?t={self.token}"
+            )
+            with self.assertRaisesRegex(console_server.ConsoleError, "address is not kept"):
+                console_server.served_url(self.state, 0)
+
+    def test_no_stored_token_means_no_address(self) -> None:
+        console_token.token_path(self.state).unlink()
+        with (
+            console_token.serving(self.state, 8123),
+            self.assertRaisesRegex(console_server.ConsoleError, "not kept"),
+        ):
+            console_server.served_url(self.state, 8765)
+
+    def test_a_hand_run_takes_the_running_console(self) -> None:
+        args = self.args()
+        self.assertIsNone(console_server.serving_url(self.state, args))
+        with console_token.serving(self.state, 8123):
+            self.assertEqual(
+                console_server.serving_url(self.state, args), f"http://127.0.0.1:8123/?t={self.token}"
+            )
+
+    def test_the_job_always_starts(self) -> None:
+        with console_token.serving(self.state, 8123):
+            self.assertIsNone(console_server.serving_url(self.state, self.args("--job")))
+
+    def test_a_variable_the_morning_job_sets_does_not_make_a_hand_run_the_job(self) -> None:
+        with (
+            console_token.serving(self.state, 8123),
+            mock.patch.dict(os.environ, {"BOSUN_TRIGGER": "launchd"}),
+        ):
+            self.assertEqual(
+                console_server.serving_url(self.state, self.args()), f"http://127.0.0.1:8123/?t={self.token}"
+            )
+
+    def test_a_token_file_left_from_an_earlier_run_is_not_the_address_with_persistence_off(self) -> None:
+        with (
+            console_token.serving(self.state, 8123),
+            mock.patch.dict(os.environ, {console_server.PERSIST_SETTING: "0"}),
+        ):
+            with self.assertRaisesRegex(console_server.ConsoleError, "not kept"):
+                console_server.served_url(self.state, 8765)
+            self.assertIsNone(console_server.serving_url(self.state, self.args()))
+
+    def test_a_new_token_cannot_reach_a_running_console(self) -> None:
+        with (
+            console_token.serving(self.state, 8123),
+            self.assertRaisesRegex(console_server.ConsoleError, "already running") as raised,
+        ):
+            console_server.serving_url(self.state, self.args("--new-token"))
+        # the launchd job's console stops with bosun quit and comes back with bosun start
+        self.assertIn("bosun quit", str(raised.exception))
+        self.assertIn("bosun start", str(raised.exception))
+        self.assertNotIn("install.sh", str(raised.exception))
+
+    def test_a_running_console_with_no_address_leaves_a_hand_run_to_start_one(self) -> None:
+        with console_token.serving(self.state):
+            self.assertIsNone(console_server.serving_url(self.state, self.args("--port", "0")))
+
+    def test_a_hand_run_with_another_address_is_refused_even_while_one_runs(self) -> None:
+        with (
+            console_token.serving(self.state, 8123),
+            mock.patch.dict(os.environ, {"BOSUN_STATE_DIR": str(self.state)}),
+            mock.patch("sys.stderr"),
+        ):
+            self.assertEqual(console_server.main(["--host", "0.0.0.0"]), 1)  # noqa: S104 - the address it must refuse
+
+    def test_the_job_waits_for_a_console_run_by_hand_before_it_serves_and_a_hand_run_does_not(self) -> None:
+        events: list[str] = []
+        env = {"BOSUN_STATE_DIR": str(self.state)}
+        with (
+            mock.patch.dict(os.environ, env),
+            mock.patch.object(console_token, "wait_free", lambda *_a, **_k: events.append("wait")),
+            mock.patch.object(console_server, "new_app", lambda *_a, **_k: events.append("app")),
+            mock.patch.object(console_server, "make_server", side_effect=console_server.ConsoleError("stop")),
+            mock.patch("sys.stderr"),
+        ):
+            console_server.main(["--job"])
+            self.assertEqual(events, ["wait", "app"])  # the lock first, then the port
+            events.clear()
+            console_server.main([])
+            self.assertEqual(events, ["app"])
+
+    def test_url_prints_the_address(self) -> None:
+        with (
+            console_token.serving(self.state, 8123),
+            mock.patch.dict(os.environ, {"BOSUN_STATE_DIR": str(self.state)}),
+            mock.patch("builtins.print") as printed,
+        ):
+            self.assertEqual(console_server.main(["--url"]), 0)
+        printed.assert_called_once_with(f"http://127.0.0.1:8123/?t={self.token}")
+
+    def test_url_with_none_running_exits_1(self) -> None:
+        with (
+            mock.patch.dict(os.environ, {"BOSUN_STATE_DIR": str(self.state)}),
+            mock.patch("sys.stderr") as err,
+        ):
+            self.assertEqual(console_server.main(["--url"]), 1)
+        self.assertIn("the console is not running", "".join(c.args[0] for c in err.write.call_args_list))
+
+    def test_parser_takes_url_and_job(self) -> None:
+        parsed = console_server.build_parser().parse_args(["--url", "--job"])
+        self.assertTrue(parsed.url and parsed.job)
 
 
 if __name__ == "__main__":

@@ -1,0 +1,8 @@
+#!/bin/bash
+# open's stand-in: there are no windows in a container, so it only records the call, and an app it is
+# given "starts": osascript's stand-in says it runs, until it is asked to quit.
+mkdir -p "$HOME/.sandbox"
+echo "open $*" >>"$HOME/.sandbox/system.log"
+case "${!#}" in
+*.app) touch "$HOME/.sandbox/app-running" ;;
+esac

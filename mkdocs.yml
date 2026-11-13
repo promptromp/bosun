@@ -111,6 +111,7 @@ nav:
       - Updating: design/update.md
       - Agents: design/harnesses.md
       - Antigravity windows: design/antigravity.md
+      - The menu bar app: design/menu-bar.md
       - Connectors: design/connectors.md
       - Approvals: design/approvals.md
       - Events: design/events.md
@@ -131,6 +132,8 @@ nav:
           - Connectors: plans/connectors.md
           - Agents that say what they can do: plans/agent-profiles.md
           - Antigravity windows: plans/antigravity.md
+          - The menu bar app, its commands: plans/menu-bar-cli.md
+          - The menu bar app itself: plans/menu-bar-app.md
   - Project:
       - Roadmap: roadmap.md
       - Development: development.md

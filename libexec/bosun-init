@@ -20,7 +20,9 @@
 #   --detect           print what it found, as JSON (read-only)
 #   --print-answers    print the recommended answers, as JSON to edit and pass back with --answers
 # A re-run starts from your config: bosun.env is updated in place, keeping anything you added, with
-# a backup next to it, and setup.sh is never changed once it exists. See docs/design/init.md.
+# a backup next to it, and setup.sh is never changed once it exists. BOSUN_INIT_CHANNEL=main in the
+# environment (get.sh sets it for an install made with BOSUN_BRANCH) is what bosun update follows,
+# written to bosun.env as BOSUN_UPDATE_CHANNEL and never asked. See docs/design/init.md.
 set -uo pipefail
 export BOSUN_USER_PATH="${BOSUN_USER_PATH:-$PATH}" # before common.sh extends PATH for launchd's sake
 source "$(dirname "$0")/../lib/common.sh"

@@ -30,6 +30,9 @@ import init_wizard
 
 
 NOW = datetime(2026, 11, 2, 12, 0, tzinfo=UTC)
+REAL_APP_UNAVAILABLE = (
+    init_detect.app_unavailable
+)  # WorldTest patches it: its own tests read a scratch folder
 
 
 class FakeTerminal:
@@ -93,11 +96,14 @@ class WorldTest(unittest.TestCase):
                 claude_state, "auth_status", return_value=claude_state.AuthStatus(True, "x", "max")
             ),
             mock.patch.object(claude_state, "mcp_server_targets", self.mcp_list),
+            # The repo's own app/publisher.json has no Team ID yet: tests choose whether a build exists.
+            mock.patch.object(init_detect, "app_unavailable", side_effect=lambda root: self.unavailable),
         ):
             tool.start()
             self.addCleanup(tool.stop)
 
     servers: dict[str, str] | None = None  # what `claude mcp list` shows; None: it fails
+    unavailable = ""  # why there is no signed app to install; "": there is
 
     def mcp_list(self, claude_bin: str, cwd: Path, timeout: float = 30.0) -> dict[str, str]:
         """`claude mcp list`, never the real one: what self.servers says, each call recorded."""
@@ -282,6 +288,26 @@ class DetectTest(WorldTest):
     def test_a_failed_listing_is_no_connectors(self) -> None:
         self.assertEqual(init_detect.detect(self.config, NOW).connectors, ())
 
+    def test_the_app_is_unavailable_until_the_publisher_has_a_team_id(self) -> None:
+        """Read with app_release's own publisher reading and team check, from the code's folder."""
+        root = self.home / "code"
+        (root / "app").mkdir(parents=True)
+        publisher = root / "app" / "publisher.json"
+        for team, reason in (("", "no team_id yet"), ("not a team", "not a Team ID"), ("ABCDE12345", "")):
+            with self.subTest(team=team):
+                publisher.write_text(
+                    json.dumps({"bundle_id": "ai.example.bosun", "team_id": team, "releases": "acme/bosun"})
+                )
+                self.assertIn(reason, REAL_APP_UNAVAILABLE(root))
+        self.assertEqual(REAL_APP_UNAVAILABLE(root), "")
+        publisher.write_text("{broken")
+        self.assertTrue(REAL_APP_UNAVAILABLE(root))  # a publisher file it cannot read offers nothing
+
+    def test_the_app_there_is_a_fact(self) -> None:
+        self.assertFalse(init_detect.detect(self.config, NOW).app_present)
+        (self.home / "Applications" / "bosun.app").mkdir(parents=True)
+        self.assertTrue(init_detect.detect(self.config, NOW).app_present)
+
     def test_a_sessions_file_that_cannot_be_read_is_not_one_with_no_windows(self) -> None:
         self.config.mkdir(parents=True)
         for text in ("sessions: [unclosed\n", "- just a list\n", "sessions: api\n"):
@@ -316,12 +342,19 @@ class CommandTest(WorldTest):
             name = Path(str(command[0])).name
             if name in ("install.sh", "bosun"):
                 self.calls.append([name, *command[1:]])
-                return subprocess.CompletedProcess(command, self.install_status)
+                status = self.statuses.get(tuple(str(arg) for arg in command[1:3]), self.install_status)
+                return subprocess.CompletedProcess(command, status)
+            if name == "bash" and command[2:3] and "reload_changed_jobs" in str(command[2]):
+                self.reloads.append(str(command[2]))  # the jobs made to follow the config again
+                return subprocess.CompletedProcess(command, self.reload_status)
             if name in ("git", "ruby"):
                 return real_run(command, *args, **kwargs)
             raise AssertionError(f"a unit test tried to run {command}")
 
         self.install_status = 0
+        self.reload_status = 0
+        self.reloads: list[str] = []
+        self.statuses: dict[tuple[str, ...], int] = {}  # what a command answers, by its first two words
         patcher = mock.patch.object(subprocess, "run", run)
         patcher.start()
         self.addCleanup(patcher.stop)
@@ -533,13 +566,13 @@ class CommandTest(WorldTest):
     def test_trusted_folders_are_not_trusted_again(self) -> None:
         with mock.patch.object(claude_state, "trusted", return_value=True):
             self.bosun_init("--recommended")
-        self.assertEqual([call[0] for call in self.calls], ["install.sh"])
+        self.assertEqual([call[0] for call in self.calls if call[1:2] != ["app"]], ["install.sh"])
 
     def test_without_a_terminal_or_sudo_it_says_what_to_run(self) -> None:
         with mock.patch.object(init, "can_ask_for_sudo", return_value=False):
             _, out, _ = self.bosun_init("--recommended")
         self.assertIn("run this once yourself: sudo pmset repeat", out)
-        self.assertEqual(self.calls[-1], ["install.sh"])
+        self.assertEqual(self.calls[-3], ["install.sh"])  # the app's two commands follow it
 
     def test_a_terminal_gets_the_wizard_and_anything_explicit_does_not(self) -> None:
         # Parsed first: argparse looks at the real stdout, for colour, since Python 3.14.
@@ -586,7 +619,7 @@ class CommandTest(WorldTest):
         self.assertFalse(self.config.exists())
 
     def test_the_wizard_carries_out_what_you_accepted_then_offers_to_start(self) -> None:
-        status, _ = self.wizard([*[init_wizard.ENTER] * 6, "y", "y"])
+        status, _ = self.wizard([*[init_wizard.ENTER] * 7, "y", "y"])
         self.assertEqual(status, 0)
         self.assertIn("name: api", (self.config / "sessions.yml").read_text())
         self.assertEqual(self.calls[-1], ["bosun", "start"])
@@ -595,14 +628,14 @@ class CommandTest(WorldTest):
         self.bosun_init("--recommended")
         self.repo("Development/web")
         self.prompts(self.home / "Development" / "web", 30, session="s9")
-        status, _ = self.wizard(["1", "2", *[init_wizard.ENTER] * 6, "y", "n"])
+        status, _ = self.wizard(["1", "2", *[init_wizard.ENTER] * 7, "y", "n"])
         self.assertEqual(status, 0)
         self.assertIn("name: web", (self.config / "sessions.yml").read_text())
         self.assertTrue(any(name.startswith("sessions.yml.pre-init-") for name in self.backups()))
 
     def test_the_wizard_asks_for_the_orchestrators_connectors(self) -> None:
         self.servers = {"claude.ai Acme Mail": "https://mail.example.com/mcp", "acme-local": "acme-mcp"}
-        status, _ = self.wizard([init_wizard.ENTER, "2", *[init_wizard.ENTER] * 6, "y", "n"])
+        status, _ = self.wizard([init_wizard.ENTER, "2", *[init_wizard.ENTER] * 7, "y", "n"])
         self.assertEqual(status, 0)
         self.assertIn('BOSUN_ORCHESTRATOR_CONNECTORS="acme-local"', (self.config / "bosun.env").read_text())
 
@@ -622,8 +655,179 @@ class CommandTest(WorldTest):
         self.assertFalse(self.config.exists())
 
     def test_no_wake_asked_for_means_no_wake_flag(self) -> None:
-        self.bosun_init("--answers", self.answers_file(wake=False))
+        self.bosun_init("--answers", self.answers_file(wake=False, menu_app=False))
         self.assertEqual(self.calls[-1], ["install.sh"])
+
+    def app_calls(self) -> list[list[str]]:
+        return [call for call in self.calls if call[:2] == ["bosun", "app"]]
+
+    def test_with_the_menu_app_the_app_is_installed_and_opened_at_login_after_install_sh(self) -> None:
+        status, out, _ = self.bosun_init("--recommended")
+        self.assertEqual(status, 0)
+        self.assertEqual(self.app_calls(), [["bosun", "app", "install"], ["bosun", "app", "login", "on"]])
+        self.assertEqual(self.calls[-2:], self.app_calls())  # after install.sh, the last thing it does
+        self.assertLess(
+            self.calls.index(["install.sh", "--with-wake"]), self.calls.index(self.app_calls()[0])
+        )
+        env = (self.config / "bosun.env").read_text()
+        self.assertIn('BOSUN_MENU_APP="1"', env)
+        self.assertIn('BOSUN_CONSOLE_ALWAYS="1"', env)
+        self.assertNotIn("bosun.app was not added", out)
+
+    def test_an_app_already_there_is_updated_not_installed_again(self) -> None:
+        """A re-run must not reinstall, and relaunch, an app that is in use."""
+        (self.home / "Applications" / "bosun.app").mkdir(parents=True)
+        self.bosun_init("--recommended")
+        self.assertEqual(self.app_calls(), [["bosun", "app", "update"], ["bosun", "app", "login", "on"]])
+
+    def test_without_the_menu_app_bosun_app_is_never_run(self) -> None:
+        self.bosun_init("--answers", self.answers_file(menu_app=False))
+        self.assertEqual(self.app_calls(), [])
+        self.assertIn('BOSUN_MENU_APP="0"', (self.config / "bosun.env").read_text())
+
+    def test_unattended_first_run_does_not_add_the_app(self) -> None:
+        self.bosun_init("--recommended", "--unattended")
+        self.assertEqual(self.app_calls(), [])
+
+    def test_the_app_is_not_offered_while_there_is_no_signed_build(self) -> None:
+        """Nothing is installed, and bosun.env does not claim an app that is not there: no false app-missing
+        alert, no `no team_id yet` finding in every update."""
+        self.unavailable = "app/publisher.json has no team_id yet"
+        status, out, _ = self.bosun_init("--recommended")
+        self.assertEqual(status, 0)
+        self.assertEqual(self.app_calls(), [])
+        env = init_plan.parse_env((self.config / "bosun.env").read_text())
+        self.assertEqual((env["BOSUN_MENU_APP"], env["BOSUN_CONSOLE_ALWAYS"]), ("0", "0"))
+        self.assertIn("no signed build to install", out)
+        status, _, _ = self.bosun_init("--answers", self.answers_file(menu_app=True))
+        self.assertEqual(
+            (status, self.app_calls()), (0, [])
+        )  # an answers file cannot ask for what is not there
+        self.assertEqual(init_plan.parse_env((self.config / "bosun.env").read_text())["BOSUN_MENU_APP"], "0")
+
+    def test_a_refused_install_says_no_to_the_app_in_bosun_env_too(self) -> None:
+        """No network, say: the config must not say the app is there. Both settings go back to off."""
+        self.statuses[("app", "install")] = 1
+        status, out, _ = self.bosun_init("--recommended")
+        self.assertEqual(status, 0)
+        env = init_plan.parse_env((self.config / "bosun.env").read_text())
+        self.assertEqual((env["BOSUN_MENU_APP"], env["BOSUN_CONSOLE_ALWAYS"]), ("0", "0"))
+        self.assertEqual(env["BOSUN_DAYS"], "MTWRF")  # nothing else of it moved
+        self.assertIn("bosun app install", out)
+
+    def refused_again(self, console: str) -> dict[str, str]:
+        """A first run that set the app up (both settings on), <console> set by hand, then a re-run whose
+        install is refused (the app is gone, say): the config as that leaves it."""
+        self.bosun_init("--recommended")
+        env = self.config / "bosun.env"
+        env.write_text(
+            env.read_text().replace('BOSUN_CONSOLE_ALWAYS="1"', f'BOSUN_CONSOLE_ALWAYS="{console}"')
+        )
+        self.statuses[("app", "install")] = 1
+        self.reloads.clear()
+        status, _, _ = self.bosun_init("--recommended")
+        self.assertEqual(status, 0)
+        return init_plan.parse_env(env.read_text())
+
+    def test_a_refused_install_restores_the_console_setting_it_found_not_a_flat_off(self) -> None:
+        """BOSUN_CONSOLE_ALWAYS goes back to what it was before this run, so a hand-set 1 survives."""
+        kept = self.refused_again("1")
+        self.assertEqual((kept["BOSUN_MENU_APP"], kept["BOSUN_CONSOLE_ALWAYS"]), ("0", "1"))
+
+    def test_a_refused_install_restores_a_console_setting_that_was_off(self) -> None:
+        off = self.refused_again("0")
+        self.assertEqual((off["BOSUN_MENU_APP"], off["BOSUN_CONSOLE_ALWAYS"]), ("0", "0"))
+
+    def test_the_first_run_that_is_refused_finds_no_console_setting_so_restores_off(self) -> None:
+        self.statuses[("app", "install")] = 1
+        self.bosun_init("--recommended")
+        env = init_plan.parse_env((self.config / "bosun.env").read_text())
+        self.assertEqual((env["BOSUN_MENU_APP"], env["BOSUN_CONSOLE_ALWAYS"]), ("0", "0"))
+
+    def test_a_refused_install_has_the_jobs_follow_the_config_again(self) -> None:
+        """install.sh loaded the console job while the config said 1: the jobs are reloaded from the config
+        now, which unloads one no longer wanted (the shell's reload_changed_jobs, as install.sh runs it)."""
+        self.statuses[("app", "install")] = 1
+        self.bosun_init("--recommended")
+        [script] = self.reloads
+        self.assertIn("load_config", script)
+        self.assertTrue(script.rstrip().endswith("reload_changed_jobs"))
+        self.reloads.clear()
+        self.statuses.clear()
+        self.bosun_init("--answers", self.answers_file(menu_app=True))  # installed this time
+        self.assertEqual(self.reloads, [])  # the jobs are left as install.sh made them
+
+    def test_a_refused_install_whose_jobs_could_not_be_reloaded_says_so_in_one_line(self) -> None:
+        self.statuses[("app", "install")] = 1
+        self.reload_status = 1
+        status, out, _ = self.bosun_init("--recommended")
+        self.assertEqual(status, 0)  # init goes on: bosun does not need the app
+        [line] = [line for line in out.splitlines() if "could not be reloaded" in line]
+        self.assertIn("install.sh", line)
+        self.reload_status = 0
+        self.statuses.clear()
+        _status, out, _ = self.bosun_init("--recommended")
+        self.assertNotIn("could not be reloaded", out)
+
+    def test_the_write_back_keeps_init_s_backup_of_bosun_env(self) -> None:
+        """A .pre-init- copy of the file as it was before the write-back, as init's other writes make, where
+        the run itself left the file as it was (so made none)."""
+        self.bosun_init("--recommended")  # a new file: nothing to back up
+        self.assertEqual(self.backups(), [])
+        env = self.config / "bosun.env"
+        before = env.read_text()
+        self.statuses[("app", "install")] = 1
+        self.bosun_init("--recommended")  # the config says yes, the app is not there: refused, written back
+        [backup] = [b for b in self.backups() if b.startswith("bosun.env.")]
+        self.assertEqual((self.config / backup).read_text(), before)
+        self.assertEqual(init_plan.parse_env(env.read_text())["BOSUN_MENU_APP"], "0")
+
+    def test_a_run_that_changed_bosun_env_keeps_the_copy_of_what_it_found_not_of_its_own_write(self) -> None:
+        self.bosun_init("--recommended")
+        env = self.config / "bosun.env"
+        original = env.read_text().replace('BOSUN_START_TIME="08:00"', 'BOSUN_START_TIME="07:00"')
+        env.write_text(original)
+        self.statuses[("app", "install")] = 1
+        self.bosun_init(
+            "--answers", self.answers_file(start="08:00")
+        )  # moves the start, then the refusal: two writes
+        self.assertIn('BOSUN_START_TIME="08:00"', env.read_text())
+        copies = [b for b in self.backups() if b.startswith("bosun.env.")]
+        self.assertEqual([(self.config / copy).read_text() for copy in copies], [original])
+
+    def test_a_refused_update_of_an_app_that_is_there_leaves_the_config_alone(self) -> None:
+        (self.home / "Applications" / "bosun.app").mkdir(parents=True)
+        self.statuses[("app", "update")] = 1
+        status, out, _ = self.bosun_init("--recommended")
+        self.assertEqual(status, 0)
+        env = init_plan.parse_env((self.config / "bosun.env").read_text())
+        self.assertEqual((env["BOSUN_MENU_APP"], env["BOSUN_CONSOLE_ALWAYS"]), ("1", "1"))
+        self.assertIn("bosun app update", out)
+        self.assertEqual(self.app_calls(), [["bosun", "app", "update"], ["bosun", "app", "login", "on"]])
+
+    def test_a_refused_app_install_is_a_line_and_init_still_succeeds(self) -> None:
+        """No Team ID yet, no network: `bosun app install` says why on its own, and init says how to add the
+        app later; Open at Login is not turned on for an app that is not there."""
+        self.statuses[("app", "install")] = 1
+        status, out, _ = self.bosun_init("--recommended")
+        self.assertEqual(status, 0)
+        self.assertEqual(self.app_calls(), [["bosun", "app", "install"]])
+        self.assertIn("bosun.app was not added", out)
+        self.assertIn("bosun app install", out)
+        self.assertIn("bosun is set up", out)
+
+    def test_a_login_job_that_cannot_be_made_is_a_line_too(self) -> None:
+        self.statuses[("app", "login")] = 1
+        status, out, _ = self.bosun_init("--recommended")
+        self.assertEqual(status, 0)
+        self.assertIn("Open at Login was not turned on", out)
+        self.assertIn("bosun app login on", out)
+
+    def test_a_failed_install_sh_adds_no_app(self) -> None:
+        self.install_status = 1
+        status, _, _ = self.bosun_init("--recommended")
+        self.assertEqual(status, init.EXIT_BLOCKED)
+        self.assertEqual(self.app_calls(), [])
 
 
 if __name__ == "__main__":

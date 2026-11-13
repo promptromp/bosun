@@ -112,6 +112,9 @@ class Plan:
     formats: tuple[tuple[str, int], ...] = ()
     kept: tuple[tuple[str, str], ...] = ()  # an older record has none: nothing written, as it ran then
     unwritten: tuple[str, ...] = ()  # an older record has none: nothing said of them, as it ran then
+    # The console is bosun's launchd job, loaded and wanted: the update restarts it after the switch
+    # (an older record has none: said as before).
+    console_job: bool = False
 
 
 def _matches(path: str, patterns: Sequence[str]) -> bool:
@@ -174,6 +177,7 @@ def make_plan(  # noqa: PLR0913 - the facts the caller gathers, all keyword-only
     missing: Sequence[str],
     deletion_cut_short: bool,
     console: bool,
+    console_job: bool = False,
     steps: Callable[[str, int, int], Sequence[tuple[int, int]]],
 ) -> Plan:
     changed = prompts_changed(old, new)
@@ -192,6 +196,7 @@ def make_plan(  # noqa: PLR0913 - the facts the caller gathers, all keyword-only
         windows=tuple((w.name, treatment(w, reread)) for w in windows),
         jobs=tuple(jobs),
         console=console,
+        console_job=console_job,
         handed=_handed(in_flight, changed),
         user_changes=tuple(f"{file}: {change}" for file, change in user_changes),
         blockers=tuple(blockers),
@@ -247,6 +252,7 @@ _READ: dict[str, tuple[Callable[[Any], Any], Any]] = {
     "formats": (lambda value: tuple((str(store), int(n)) for store, n in _listed(value)), ()),
     "kept": (_pairs, ()),
     "unwritten": (_strings, ()),
+    "console_job": (lambda value: value is True, False),
 }
 
 
@@ -282,6 +288,12 @@ def _window_line(name: str, how: Treatment) -> str:
     return f"{name}: {how.value}"
 
 
+def _console_lines(plan: Plan) -> list[str]:
+    if plan.console_job:
+        return ["bosun's background job: restarted after the update, so it serves the new version"]
+    return ["running: restart it after the update"] if plan.console else []
+
+
 def render_plan(plan: Plan) -> str:
     """The plan as the person reads it before saying yes."""
     out = [f"Update {plan.from_commit} -> {plan.to_commit}", ""]
@@ -295,7 +307,7 @@ def render_plan(plan: Plan) -> str:
     out += _section(f"Prompts changed ({len(plan.prompts)}):", plan.prompts)
     out += _section("Windows:", [_window_line(n, t) for n, t in plan.windows])
     out += _section("Jobs to reload:", plan.jobs)
-    out += _section("Console:", ["running: restart it after the update"] if plan.console else [])
+    out += _section("Console:", _console_lines(plan))
     out += _section("Handed tasks keep their old text (bosun delegate --update):", plan.handed)
     out += _section("Change these of your own files yourself:", plan.user_changes)
     out += _section("Blocked:", plan.blockers)

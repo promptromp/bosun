@@ -61,7 +61,7 @@ See also [ROADMAP.md](../ROADMAP.md) for planned work and open questions.
   another window.
 - `bosun update` has no command to go back: a failed update puts everything back by itself, and going
   back later is by hand, to the version the update came from, and never past a `kg forget`
-  ([Going back](setup.md#going-back)). It updates only to the head of the branch the install follows. Its
+  ([Going back](setup.md#going-back)). It updates only to the newest release, or on the `main` channel the head of the branch the install follows. Its
   unit and smoke tests run on stand-ins (fake windows and launchd), and its prompts have been tried with
   the headless Claude of `tests/llm/` only: the runs in the macOS VM (a working day updated
   mid-afternoon, the first update of an older install, the freeze on a year of data, the real agents in

@@ -48,9 +48,10 @@ Not in the first version:
 
 - **A command to go back to an older version.** A failed update puts everything back itself. Going
   back later is the manual path decided in sync.md, which the summary points to.
-- **Releases, tags or channels.** It updates to the head of the branch the install tracks (`main`, or
-  `BOSUN_BRANCH`), as `get.sh` does today. Each data format carries its own version, so migrations do
-  not depend on release numbers.
+- **Releases, tags or channels** (the first version: it updated to the head of the branch the install tracks,
+  `main` or `BOSUN_BRANCH`, as `get.sh` did then; releases came with the menu bar app, see
+  [Channels](#channels)). Each data format carries its own version, so migrations do not depend on release
+  numbers.
 - **Updating Claude Code or Codex themselves.** `bosun refresh` already restarts idle sessions on a
   new agent version.
 - **More than one Mac.** That comes with sync phase 1.
@@ -173,7 +174,8 @@ check gets no protection from it, which is why the first update converts at a qu
 
 ### The steps
 
-1. **Plan** (changes nothing). Fetch the tracked branch and check out the new version's folder. The
+1. **Plan** (changes nothing). Fetch what the channel follows (the newest release's tag on `releases`, the head
+   of the tracked branch on `main`: [Channels](#channels)) and check out the new version's folder. The
    new version's own code compares the two folders and lists:
    - the commits;
    - each store's format before and after, and the migrations in between;
@@ -189,8 +191,8 @@ check gets no protection from it, which is why the first update converts at a qu
 
    As built, these stop it at the plan too: a store whose format cannot be read, a link among what a
    backup copies that leads nowhere, a launchd job the new version cannot render, versions that are
-   not side by side, and windows the last update still brings along (below). It also lists a running
-   console, the handed tasks that keep their old text, and what to change by hand in my own files.
+   not side by side, and windows the last update still brings along (below). It also lists a console (bosun's background job, which the update restarts itself, or one
+   started by hand, which it does not), the handed tasks that keep their old text, and what to change by hand in my own files.
 
    It shows the plan and asks first, as `init` and `uninstall` do. `--yes` skips the question;
    `--dry-run`, or no terminal to ask in, stops here.
@@ -218,7 +220,11 @@ check gets no protection from it, which is why the first update converts at a qu
    what failed.
 5. **Release.** Reload the launchd jobs whose plist changed, restart the check-in loop while the hold
    is still on (it stops at once, even mid-tick, and the hold keeps a tick from starting meanwhile),
-   lift the hold, delete the old backups and version folders, and run the new version's `bosun
+   bring the menu bar app to the version the new one expects (`bosun app update` of the new version, which
+   goes by the app being there, not by `BOSUN_MENU_APP`, and does nothing with none; a refusal or failure is a
+   finding in the summary and stops nothing), restart the
+   console's launchd job if it is loaded and wanted (`console/wanted` is there; `launchctl kickstart -k`, so it
+   serves the new code; a job that is not loaded is never started), lift the hold, delete the old backups and version folders, and run the new version's `bosun
    doctor`. A finding at this point is reported, not rolled back, since writes may have landed since
    the freeze.
 6. **Bring the agents along** (below).
@@ -438,11 +444,42 @@ Settled while building it:
   own files, and the keys it added that `bosun.env` does not set, with the value each has now and its
   note (a kept key's only where it holds: written).
 
+### Channels
+
+Added with the menu bar app ([menu-bar.md](menu-bar.md)); the rest of this note is unchanged by it. `BOSUN_UPDATE_CHANNEL`
+says what `bosun update` moves to, and is the one setting:
+
+- `releases` (the default): the newest release, a tag `v<YYYY.MM.DD>` (a second one that day `.2`, then `.3`),
+  found by `git ls-remote --tags` (`lib/update_check.py`'s tag rule, with the git side in `lib/update_lookup.py`:
+  read-only, no version folder, no lock). The release is fetched into a remote ref of `bosun.git`
+  (`refs/remotes/origin/release`), never into `refs/tags`, which `bosun uninstall` would count as work of yours,
+  and the commit it points at is resolved there, locally (`refs/remotes/origin/release^{commit}`, as `get.sh`
+  does with its own ref): an origin whose `git ls-remote` prints an annotated tag's own object and no peeled
+  `^{}` line (a git bundle, or a mirror made from one) is read as rightly as GitHub, and every comparison, the
+  commit the update checks out and the one `--check` prints are that commit. The folder is made as for a
+  branch's head. The version is the same folder named by commit; the release's
+  name is only what `--check` and the summary call it. An install past the newest release (on `main` after it) says
+  so and changes nothing.
+- `main`: the head of the branch the install tracks (`bosun.branch`, `main` by default), as before releases. An
+  install made with `BOSUN_BRANCH` is on it (`get.sh` tells `init`, which writes it), and so is an install that
+  was updating before releases existed: `BOSUN_UPDATE_CHANNEL="main"` is a `CONFIG_ADDED` key with that kept value,
+  which the first update writes to `bosun.env` with a note in the plan and the summary saying how to follow the
+  releases instead. Behaviour for an existing install does not change.
+
+`bosun update --check [--json]` is the same lookup with nothing changed (what the app's "Check for Updates..." runs),
+and `--skip <version>` records a release not to be offered again (`update-skip.json`; it does not stop an update you
+run). A first install takes the newest release too (`get.sh`'s own `newest_release`, an `sh` twin of the tag rule
+that `tests/unit/test_get_sh.py` holds to the Python one); a repository with no release yet gets the head of `main`.
+The VM runs (`tests/install_e2e.sh`, on the default channel against a bare repository with release tags: first release
+installed, next one tagged, `--check --json`, `--skip`, `--yes`; `tests/work_e2e.sh`, on the channel its conversion
+keeps) check both.
+
 ### `get.sh` on an existing install
 
 The bosun already installed may not have `update` yet. `get.sh` is always fetched fresh from the
-branch, so on an existing install it gets the new version into its own folder and runs that version's
-`bosun update`. A first install uses the new layout from the start.
+branch, so on an existing install it hands over to `bosun update`: the install's own when it is a link
+to a version, so that its channel decides what it moves to, and the new version's, from the head of the
+branch, when it is a checkout from before versions. A first install uses the new layout from the start.
 
 **The first update converts, at a quiet moment.** The version it converts from may have none of the
 following (a checkout from before Part A has none; one of Part A has the hold, the write check and a
@@ -463,8 +500,9 @@ between two versions that both have `update` (not run yet).
 Settled while building it:
 
 - **`get.sh`** looks at the install path first, and refuses what it does not know. On an install `init`
-  has set up, it fetches the branch into `bosun.git` (cloned bare beside a checkout first), adds the new
-  version's folder and runs that version's `bosun update --from` the version in use. An install `init`
+  has set up, a link to a version gets the install's own `bosun update` and fetches nothing; a checkout
+  gets the branch fetched into `bosun.git` (cloned bare beside it first), the new version's folder and
+  that version's `bosun update --from` the checkout. An install `init`
   never finished gets `init` again, as it is, since only `bosun update` switches versions. The cases:
   [init.md](init.md#the-wizard).
 - **Which update converts** is decided by the version updated from, once an update cut short is carried
@@ -749,7 +787,7 @@ My calls, which the user can overturn:
   deletion's last step, so a deletion cut short finishes it;
 - the update stops while a `kg forget` is cut short;
 - restoring done by the update itself only, with no `--restore` command in the first version;
-- updating to the head of the tracked branch;
+- updating to the head of the tracked branch (releases came later: [Channels](#channels));
 - the summary also saved next to the backup.
 
 Decided while building it:
@@ -766,7 +804,13 @@ Decided while building it:
   no step past `backed-up` is recorded without it.
 - **The launchd jobs:** a job is reloaded only where its rendered plist differs or it is not loaded,
   and each rendered plist is checked before the job is touched. One that cannot be rendered, or renders
-  invalid, blocks the plan, and in the release it is a finding while the installed job stays loaded.
+  invalid, blocks the plan, and in the release it is a finding while the installed job stays loaded. The job
+  that runs `bosun morning --now` (`<label>.now`, `templates/launchd-now.plist`) is one of them, always wanted:
+  an update from a version without it loads it, and its `ProgramArguments` name the install link like the
+  others'. The update itself is not run through a job like it: it reloads changed plists, which could boot the
+  job it runs in out, so the menu bar app starts `bosun update --yes` as a detached child instead
+  ([menu-bar.md](menu-bar.md)). An update whose release changes the `.now` plist boots out a `.now` run that is
+  waiting on the update's hold, as it does for the morning job; that run is not carried on, and Start again starts it.
 - **The plan before the switch** asks the new version: its `launch --fingerprint` reads the files
   under the install from its own folder. One of bosun's windows with no launch record counts as changed.
 - **A window bosun did not start**: one `bosun sessions` lists outside the window list (`extra`)

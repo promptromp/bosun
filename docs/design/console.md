@@ -671,6 +671,17 @@ its own prompts and rules), Knowledge became **Knowledge Graph**, and Library be
 ## Decisions (2026-10-20)
 
 1. Runs on demand (`bosun console --open`); no always-on window or launchd agent for now.
+   Superseded 2026-11-13: with `BOSUN_CONSOLE_ALWAYS=1` a launchd job runs it while bosun runs
+   (see [menu-bar.md](menu-bar.md)). The job (`templates/launchd-console.plist`, label
+   `<BOSUN_LAUNCHD_LABEL>.console`) runs `bosun console --job`, which always serves and never prints the address of
+   one already running. Its `KeepAlive` is `PathState` on `$BOSUN_STATE_DIR/console/wanted` alone and `RunAtLoad` is
+   false: `bosun start` makes the marker and launchd starts the job within seconds; `bosun quit` removes the marker
+   and stops the process (`launchctl kill TERM`), after which launchd does not start it again, also when the job is
+   loaded again (a reboot, `install.sh`). A server started at load would serve all session after a quit. `bosun update`
+   restarts it after the switch when it is loaded and wanted, so it serves the new version. The real-launchd checks
+   are in `tests/install_e2e.sh` (`console_job_for_real`, `quit_for_real`): loaded with no `console/` folder it runs
+   nothing, a start brings it, the marker removed and the job loaded again leave no console process, a quit leaves
+   none.
 2. The Library may show Claude Code memory notes, opt-in by directory
    (`BOSUN_CONSOLE_MEMORY_DIRS`), off by default.
 3. Code-volume stats: cached and opt-in, in phase 1.5 after the MVP.

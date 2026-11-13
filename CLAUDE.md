@@ -22,7 +22,10 @@ of truth, so don't copy rules into this file.
   directory and overrides its restart keeps, through `recorded_restart` in `lib/common.sh`; `bosun
   launch` writes it, `launch --fingerprint` and `refresh --update-restart` use it) and
   `lib/update_plan.py` (pure: the plan, what each window gets, its text). `libexec/bosun-update` (the
-  wrapper: fetch the branch into its own version folder, hand over to that version) and
+  wrapper: fetch the newest release, or on `BOSUN_UPDATE_CHANNEL=main` the branch, into its own version folder,
+  hand over to that version; `--check` and `--skip`), `lib/update_check.py` (pure: the release tag rule, which
+  `tools/release.py` uses too, and the check's answer) with `lib/update_lookup.py` (its git side: read-only, no
+  version folder, no lock) and
   `lib/update_facts.py` (the facts the plan is made from, and what stops it there) and `lib/update.py`
   (the command: the rehearsal, the hold, the freeze and its put-back, the release, an update cut
   short carried on; `update note` and `update advance`), `lib/update_agents.py` (the decisions, its
@@ -37,7 +40,8 @@ of truth, so don't copy rules into this file.
   (`window_specs`: orchestrator, sessions.yml entries, checkin), tmux, the one
   launch path (`build_launch_command`, used by `start`, `refresh` and `send`), and the launchd
   labels and plist rendering (from `templates/launchd.plist`, `launchd-watchdog.plist`,
-  `launchd-learn.plist`), and `one_at_a_time` (`lib/run_locked.py`: the rest of a shell command run
+  `launchd-learn.plist`, `launchd-console.plist`, `launchd-now.plist` and `launchd-app.plist`: one label helper
+  each, such as `now_label`, listed once in `job_labels`), and `one_at_a_time` (`lib/run_locked.py`: the rest of a shell command run
   holding a lock that what it starts inherits; `start`, `refresh` and `init` use it). `lib/setup-helpers.sh`: the helpers a site's `setup.sh` calls
   (`run_step`, `ensure_aws_sso`, `ensure_claude_login`). `lib/ledger.py`: item kinds, id formats, Slack classes, state
   machines and the states that end a hand-over to a repo session (`work_done`), plus delegations
@@ -86,6 +90,13 @@ of truth, so don't copy rules into this file.
   the one repo-mask implementation. `lib/watchdog.py`: the watchdog's table of checks (`CHECKS`),
   awake window, de-dup state and alert sinks; `libexec/bosun-watchdog` only collects the live
   facts (tmux windows, the Claude in each, the check-in loop, launchd) for it.
+- Quit (design: `docs/design/menu-bar.md`): `lib/quit.py` (pure: the plan over the windows, its texts, and the run over
+  `Ports`: the wait, the second look under the lock, the order of the steps) and `lib/quit_live.py` (the world the
+  ports touch: `bosun sessions --json`, the `windows` lock, launchctl and the console job, `bosun stop`; the
+  command), which `libexec/bosun-quit` (the command line and settings) runs;
+  `lib/quit_state.py` is what it leaves (`quit.json`: since when, whether the morning start is paused), which the
+  watchdog and learning's scheduled run skip on, and the morning run when paused (`quit_stopped`, `quit_paused`,
+  `quit_clear` in `lib/common.sh`); `bosun start` clears it, `start --unless-quit` (the morning's) never does.
 - Sync (design: `docs/design/sync.md`): every ledger write goes through `locked_ledger` into a
   journal that `ledger.json` is the rebuild of, and every knowledge write through
   `knowledge.opened` into one in `knowledge/journal/`. `lib/change_log.py` (pure: the envelope, ids,
@@ -103,8 +114,10 @@ of truth, so don't copy rules into this file.
   bump `KG_RULES_VERSION` (`lib/knowledge.py`) and record the new digest under it.
 - Setup (design: `docs/design/init.md`): `get.sh` (what `curl | sh` runs: plain POSIX sh, everything in
   functions with `main` last, because people pipe it straight from `main`; a first install's versions side
-  by side, and on an install `init` set up the hand-over to the new version's `bosun update`, whose first
-  run converts an older checkout: `convert` in `lib/update.py`; `lib/checkout_work.py` is what deleting a
+  by side, taking the newest release (`newest_release`, an sh twin of `lib/update_check.py`'s tag rule, held to
+  it by `tests/unit/test_get_sh.py`; `BOSUN_BRANCH` takes a branch's head and `init` follows `main`), and on an
+  install `init` set up the hand-over to the install's own `bosun update` (to the new version's, for an older
+  checkout, whose first run converts it: `convert` in `lib/update.py`); `lib/checkout_work.py` is what deleting a
   checkout or a version would lose, which uninstall, the conversion and the update's prune go by), `lib/preflight.sh` (what
   bosun needs and what to do about what is missing; plain sh, changes nothing, and `init` and `doctor`
   start with it) with its profiles `lib/platforms/<os>.sh` and `lib/harnesses/<harness>.sh`, `lib/init_detect.py`
@@ -189,6 +202,23 @@ of truth, so don't copy rules into this file.
   Its fixture ledger is `tests/fixtures/console/acme-ledger.json`, rebuilt with the real ledger
   commands by `make-acme-ledger.sh` there (its build day, its replica and one write per second
   are pinned, so the ids stay).
+- Status for the menu bar app (`bosun status --json`, design: `docs/design/menu-bar.md`): `lib/menu_status.py`
+  (pure: the level, sentence and lines from the watchdog's checks and its gate on a missing session
+  (`watchdog.session_gate_kind`), `console_sessions.waiting_in` and the quit record, `snapshot`; its `CONTRACT` only grows) and `lib/menu_status_live.py` (its only I/O, through
+  `console_live`'s readers; the command, which always prints the object). The keep-awake end is
+  `keep-awake-<session>.json`, written by `libexec/bosun-morning` and removed by `bosun stop`, read by
+  `lib/keep_awake.py` (status and quit). The app's Start is `bosun morning --now --background`, which only
+  kickstarts the `.now` job (`now_label`, `templates/launchd-now.plist`, which runs `morning --now`) so that launchd
+  and not the app is the parent of what the run starts; the morning logic stays in the `--now` path. `bosun update`
+  stays a detached child of the app (a job could boot itself out reloading plists).
+- The menu bar app's lifecycle (`bosun app`, design: `docs/design/menu-bar.md`): `libexec/bosun-app` (the commands, and
+  `login on|off`, which render and load `templates/launchd-app.plist` through `render_app_plist`, `app_label` and
+  `reload_job` in `lib/common.sh`; the login job is there while its plist is, which `reload_changed_jobs` keeps current
+  and never makes), `lib/app_release.py` (pure: the publisher, the release address, the code requirement the signature
+  must meet, which archives are refused, `status`) and `lib/app_install.py` (the live side, every external tool through
+  one `Runner`: `verify`, the download, the placing, the sweep of what a killed install left, quit and delete). The
+  Team ID is checked with `codesign -R` against the certificates, never read from `codesign`'s text. The publisher is
+  `app/publisher.json`, the version `app/VERSION`.
 - `orchestrator/policy.md` (appended to the orchestrator's system prompt),
   `orchestrator/plugin/commands/chores.md` (the chores procedure), `orchestrator/settings.json`
   (the orchestrator's own permissions, generic; a site replaces it with
@@ -229,6 +259,10 @@ of truth, so don't copy rules into this file.
 - **An outreach purpose:** `PURPOSES` (`lib/ledger.py`) and the `reach-out` help there, the
   purpose lists in `policy.md` (with what each means) and `orchestrator/tasks/_common.md`, and the
   outreach table in `docs/orchestrator.md`.
+- **A launchd job:** its template in `templates/` (the hook checks it is XML), a label helper listed in `job_labels`,
+  `render_job` and `reload_changed_jobs` (`lib/common.sh`), and in the Mac VM (`tests/sandbox/e2e_lib.sh`,
+  `tests/install_e2e.sh`) a check that it loads and does what its plist says, and that uninstall removes it
+  (`jobs_are_gone`).
 - **A watchdog check:** a row in `CHECKS` (`lib/watchdog.py`), a line in
   `libexec/bosun-watchdog`'s usage (smoke checks they match), and the table in `docs/watchdog.md`.
 - **A ledger kind:** an entry in `KINDS` (`lib/ledger.py`) and the list of item ids in `docs/orchestrator.md`.
@@ -393,8 +427,19 @@ runs the ones the change reaches, and `uv run pytest -n auto` runs them all (abo
 run `tests/smoke.sh` (hermetic: temp HOME, own tmux socket, fake Claude): end-to-end checks,
 including that task files only use valid ledger transitions and that the task table in
 `docs/orchestrator.md` matches them; `--with-unit` runs every unit test first too, with a plain
-`python3 -m unittest`. Then `bosun doctor`. In `tests/smoke.sh`,
-use `fails_with "<expected error>" cmd` for refusals (a crash must not count as a pass) and
+`python3 -m unittest`. Then `bosun doctor`. While iterating, run only the area you changed: `tests/smoke.sh --list`
+prints the sections' ids, `tests/smoke.sh --only <id>[,<id>...]` runs the shared setup and those (and what they
+`needs`) in seconds (a few minutes for a section with prerequisites), and says in its summary that it was a partial run. Before committing, run the whole
+suite once; CI and the pre-push hook always run all of it. In `tests/smoke.sh`, a new section begins with
+`section <id> "<name>" [needs <id>,...]` (unique kebab-case id; `tests/unit/test_smoke_sections.py` fails
+otherwise): set up what it uses itself, or say `needs` the section whose state it relies on; a helper or a
+constant that more than one section uses goes in the helpers by the fixture HOME, and an export every later
+section sees goes after an `always_run` line. Every section starts by checking that `osascript`, `aws`,
+`launchctl` and the other tools that reach outside the run resolve to stand-ins in the run's folder, and the run
+stops if not (`fakes_first`): a stand-in with a behaviour replaces the plain one in its section and puts it
+back, and a section that points bosun at another HOME puts the plain ones there too (`stand_ins_in <home>`, then
+`fakes_first <home>`). The temp HOME and the stand-ins exist before the first section, so nothing runs on the real
+one. Use `fails_with "<expected error>" cmd` for refusals (a crash must not count as a pass) and
 `wait_for <seconds> cmd` instead of fixed sleeps; external tools (aws, gh, launchctl, pmset,
 osascript) are faked in the temp HOME's `~/.local/bin`, and the install test uses its own launchd
 label and refuses to run unless the fakes come first on PATH.
@@ -450,6 +495,11 @@ The repo is meant to be shareable, so nothing in it may identify an organization
   GitHub, Jira, AWS accounts or profiles), emails or tokens, also not in tests, fixtures, docs or
   commit messages. Use placeholders (`acme`, `my-org`, `example.com`, `/Users/me`, zero-filled
   Slack ids) and clearly fictional names.
+- One exception: the publisher's Team ID and the app's bundle id (the publisher's reverse-DNS id) in
+  `app/publisher.json` are public identifying values the repo may hold, there and nowhere else (`bosun app
+  install` checks the downloaded app against them, and they are public in every signed app). Anything else that
+  needs one reads it from that file. The file's `releases` names this project's own repository, as get.sh and the
+  README do. It does not loosen the forbidden-terms check for anything else.
 - The `forbidden-terms` hook enforces this locally from `$BOSUN_CONFIG_DIR/forbidden-terms.txt`
   (one case-insensitive regex per line, `#` comments), so the list itself never enters the repo;
   without the file it passes. Add a term there whenever something site-specific nearly slipped in.

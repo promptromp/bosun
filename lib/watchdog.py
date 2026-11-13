@@ -28,7 +28,7 @@ import os
 import re
 import subprocess
 import sys
-from collections.abc import Callable, Iterator, Mapping
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from datetime import UTC, date, datetime, time, timedelta
 from pathlib import Path
@@ -38,6 +38,7 @@ from typing import Any
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import agent_files
 import agent_state
+import app_release
 import awake
 import claude_state
 import event_model
@@ -48,6 +49,7 @@ import learn
 import ledger
 import lineage
 import login
+import quit_state
 import signals
 import slack_watch
 import update_state
@@ -154,6 +156,7 @@ class Config:
     orchestrator_down_minutes: float = 15
     orchestrator_restart: bool = True
     hook_signals: bool = True
+    menu_app: bool = False
 
     @property
     def loop_wanted(self) -> bool:
@@ -209,6 +212,7 @@ class Config:
             orchestrator_down_minutes=float(env.get("BOSUN_WATCHDOG_ORCHESTRATOR_DOWN_MINUTES") or 15),
             orchestrator_restart=env.get("BOSUN_WATCHDOG_ORCHESTRATOR_RESTART", "1") == "1",
             hook_signals=env.get("BOSUN_HOOK_SIGNALS", "1") == "1",
+            menu_app=env.get("BOSUN_MENU_APP") == "1",
         )
 
 
@@ -325,6 +329,13 @@ def detail(line: str) -> str:
     """A log line without its timestamp, shortened for an alert."""
     text = STAMPED.sub(lambda m: f"[{m['command']}] ", line).strip()
     return text if len(text) <= DETAIL_CHARS else text[: DETAIL_CHARS - 3] + "..."
+
+
+def listed(lines: Sequence[str]) -> str:
+    """The first MAX_DETAIL_LINES of <lines> for an alert, and how many more there are."""
+    shown = "; ".join(lines[:MAX_DETAIL_LINES])
+    more = f" (+{len(lines) - MAX_DETAIL_LINES} more)" if len(lines) > MAX_DETAIL_LINES else ""
+    return f"{shown}{more}"
 
 
 def parse_run(header: re.Match[str], body: list[str]) -> MorningRun:
@@ -522,10 +533,9 @@ def check_morning_failed(ctx: Context) -> Result:
         return unfinished_run(ctx, run)
     if not run.problems:
         return Result(f"the {run.started:%H:%M} run completed")
-    shown = "; ".join(run.problems[:MAX_DETAIL_LINES])
-    more = f" (+{len(run.problems) - MAX_DETAIL_LINES} more)" if len(run.problems) > MAX_DETAIL_LINES else ""
     message = (
-        f"The morning run at {run.started:%H:%M} reported problems: {shown}{more}. Log: {ctx.morning_log}"
+        f"The morning run at {run.started:%H:%M} reported problems: {listed(run.problems)}. "
+        f"Log: {ctx.morning_log}"
     )
     return Result(findings=[Finding(f"morning-failed:{ctx.today}", message)])
 
@@ -640,10 +650,8 @@ def check_log_errors(ctx: Context) -> Result:
     note = f"no new ERROR lines in {len(files)} log file(s)"
     if not found:
         return Result(note, offsets=offsets)
-    shown = "; ".join(found[:MAX_DETAIL_LINES])
-    more = f" (+{len(found) - MAX_DETAIL_LINES} more)" if len(found) > MAX_DETAIL_LINES else ""
     digest = hashlib.sha256("\n".join(found).encode()).hexdigest()[:16]
-    message = f"{len(found)} new ERROR line(s) in the bosun logs: {shown}{more}"
+    message = f"{len(found)} new ERROR line(s) in the bosun logs: {listed(found)}"
     return Result(note, [Finding(f"log-errors:{digest}", message)], offsets)
 
 
@@ -658,21 +666,47 @@ def stopped_today(ctx: Context) -> datetime | None:
     return stopped if stopped.date() == ctx.today else None
 
 
-def session_gate(ctx: Context) -> str | None:
-    """Why the session should not be expected to run now, or None if it should."""
+# Why the session is not expected to run now (gate_kind): the awake window is not on, the morning is not
+# due yet, no morning run has happened today, it is still going, you stopped it with `bosun stop`, or you
+# quit it with `bosun quit` (its record is there until `bosun start`).
+GATE_OUTSIDE = "outside-window"
+GATE_NOT_DUE = "not-due"
+GATE_NO_MORNING = "no-morning"
+GATE_MORNING_RUNNING = "morning-running"
+GATE_STOPPED = "stopped"
+GATE_QUIT = "quit"
+
+
+def session_gate_kind(ctx: Context) -> tuple[str, str] | None:
+    """Why the session should not be expected to run now, as (GATE_*, the reason's text), or None if it
+    should. `bosun status --json` judges a missing session by this too."""
+    quit_record = quit_state.read(ctx.config.state_dir)
+    if quit_record is not None:
+        return GATE_QUIT, f"you quit bosun at {quit_state.clock(quit_record)} (bosun quit)"
+    return day_gate_kind(ctx)
+
+
+def day_gate_kind(ctx: Context) -> tuple[str, str] | None:
+    """session_gate_kind for a bosun that is not quit: the awake window, the morning run, `bosun stop`."""
     if not in_awake_window(ctx.config, ctx.now):
-        return "outside the awake window"
+        return GATE_OUTSIDE, "outside the awake window"
     due = morning_due(ctx.config, ctx.today)
     if ctx.now < due:
-        return f"not expected before {due:%H:%M}"
+        return GATE_NOT_DUE, f"not expected before {due:%H:%M}"
     if ctx.morning_run is None:
-        return "no morning run today (see morning-missing)"
+        return GATE_NO_MORNING, "no morning run today (see morning-missing)"
     if ctx.morning_run.outcome == "running":
-        return "the morning run is still going"
+        return GATE_MORNING_RUNNING, "the morning run is still going"
     stopped = stopped_today(ctx)
     if stopped:
-        return f"you stopped it at {stopped:%H:%M} (bosun stop)"
+        return GATE_STOPPED, f"you stopped it at {stopped:%H:%M} (bosun stop)"
     return None
+
+
+def session_gate(ctx: Context) -> str | None:
+    """The text of session_gate_kind, or None if the session should run."""
+    gate = session_gate_kind(ctx)
+    return gate[1] if gate else None
 
 
 def check_session(ctx: Context) -> Result:
@@ -1313,6 +1347,23 @@ def check_update_stuck(ctx: Context) -> Result:
     )
 
 
+APP_MISSING = "app-missing"
+APP_MISSING_TEXT = (
+    "bosun.app is not in ~/Applications (moved to the Trash?); bosun still runs. "
+    "`bosun uninstall` removes bosun; `bosun app install` brings the app back."
+)
+
+
+def check_app_missing(ctx: Context) -> Result:
+    """With BOSUN_MENU_APP=1, bosun.app is gone from ~/Applications (dragged to the Trash, say): bosun
+    still runs, so this only says so, once, and again if the app comes back and goes."""
+    if not ctx.config.menu_app:
+        return Result("the menu bar app is not wanted (BOSUN_MENU_APP is not 1)")
+    if app_release.app_path(Path.home()).exists():
+        return Result("bosun.app is in ~/Applications")
+    return Result(findings=[Finding(APP_MISSING, APP_MISSING_TEXT)])
+
+
 @dataclass(frozen=True)
 class Check:
     name: str
@@ -1443,6 +1494,14 @@ CHECKS: tuple[Check, ...] = (
         "error",
         "an update stopped and left its hold (or paused writes), or its hold outlived its hour",
         check_update_stuck,
+    ),
+    Check(
+        APP_MISSING,
+        "warn",
+        "with BOSUN_MENU_APP=1: bosun.app is not in ~/Applications (moved to the Trash?); bosun still "
+        "runs; once, and again after the app came back and went",
+        check_app_missing,
+        rearms=True,
     ),
 )
 
@@ -1786,10 +1845,10 @@ def window_text(config: Config, now: datetime, in_window: bool) -> str:
     return f"awake window {config.days} {begin:%H:%M}-{end:%H:%M}, {where}"
 
 
-def status_data(inputs: Inputs, checks: tuple[Check, ...]) -> dict[str, Any]:
+def status_data(inputs: Inputs, checks: tuple[Check, ...], state: State | None = None) -> dict[str, Any]:
     """Every check and its current result, as data (`--status`, and the console's health panel).
-    Reads only: nothing is recorded or sent."""
-    state = State.load(inputs.config.state_dir)
+    Reads only: nothing is recorded or sent. <state> is the one the caller loaded, if it did."""
+    state = state or State.load(inputs.config.state_dir)
     report = evaluate(inputs.context(state), checks)
     decisions = {v.finding.key: v.decision for v in report.verdicts}
 

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import os
 import stat
 import sys
@@ -131,6 +132,51 @@ class RunningTest(unittest.TestCase):
                 self.assertTrue(console_token.running(state))
             self.assertFalse(console_token.running(state))
             self.assertEqual(mode(state / console_token.TOKEN_DIR), console_token.DIR_MODE)
+
+    def test_waiting_returns_at_once_when_none_runs(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            slept: list[float] = []
+            console_token.wait_free(Path(tmp), sleep=slept.append)
+            self.assertEqual(slept, [])
+            self.assertFalse(console_token.running(Path(tmp)))  # and holds nothing afterwards
+
+    def test_waiting_polls_until_the_console_that_runs_ends(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            state = Path(tmp)
+            holder = contextlib.ExitStack()
+            holder.enter_context(console_token.serving(state, 8123))
+            slept: list[float] = []
+            told: list[bool] = []
+
+            def sleep(seconds: float) -> None:
+                slept.append(seconds)
+                if len(slept) == 3:
+                    holder.close()  # the hand-run console ends
+
+            console_token.wait_free(state, say=lambda: told.append(True), sleep=sleep)
+            self.assertEqual(len(slept), 3)
+            self.assertEqual(slept, [console_token.WAIT_POLL_SECONDS] * 3)
+            self.assertEqual(told, [True])  # said once, not at every poll
+            self.assertFalse(console_token.running(state))
+
+    def test_the_port_is_kept_while_it_serves(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            state = Path(tmp)
+            self.assertIsNone(console_token.served_port(state))
+            with console_token.serving(state, 8123):
+                self.assertEqual(console_token.served_port(state), 8123)
+            with console_token.serving(state, 9):  # a shorter one replaces it whole
+                self.assertEqual(console_token.served_port(state), 9)
+
+    def test_a_console_that_kept_no_port_has_none(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            state = Path(tmp)
+            with console_token.serving(state):
+                self.assertIsNone(console_token.served_port(state))
+            (state / console_token.TOKEN_DIR / console_token.RUNNING_LOCK).write_text("not a port\n")
+            self.assertIsNone(console_token.served_port(state))
+            (state / console_token.TOKEN_DIR / console_token.RUNNING_LOCK).write_text("99999\n")
+            self.assertIsNone(console_token.served_port(state))
 
 
 if __name__ == "__main__":

@@ -35,7 +35,8 @@ from agent_files import AgentSetup
 
 
 LABEL = "com.bosun.morning"
-LABELS = f"{LABEL} {LABEL}.watchdog {LABEL}.learn {LABEL}.waketest"
+LABELS = f"{LABEL} {LABEL}.watchdog {LABEL}.learn {LABEL}.console {LABEL}.now {LABEL}.app {LABEL}.waketest"
+BUNDLE_ID = "ai.example.bosun"
 WAKE_LINE = "wakepoweron at 9:01AM every day"
 real_run = subprocess.run
 
@@ -50,6 +51,8 @@ class FakeMac:
         self.windows: list[str] = []
         self.calls: list[str] = []
         self.stuck_jobs: set[str] = set()
+        self.app_running = False  # the menu bar app, as osascript is asked
+        self.app_quits = True
         self.sudo_works = True
         # What runs in the windows: `ps` rows (pid, parent), each process's session, and after the stop the
         # ones a stopped agent left behind, for that many looks (None: for good).
@@ -71,6 +74,17 @@ class FakeMac:
         self.calls.append(f"bootout {label}")
         if label not in self.stuck_jobs:
             self.loaded.discard(label)
+        return self.done()
+
+    def osascript(self, command: Sequence[str]) -> subprocess.CompletedProcess[str]:
+        """Whether the app runs, and asking it to quit, both by its bundle id."""
+        script = command[-1]
+        if BUNDLE_ID not in script:
+            raise AssertionError(f"osascript was not asked about the app: {command}")
+        if script.endswith("is running"):
+            return self.done(out="true\n" if self.app_running else "false\n")
+        self.calls.append("quit app")
+        self.app_running = self.app_running and not self.app_quits
         return self.done()
 
     def pmset(self, command: Sequence[str]) -> subprocess.CompletedProcess[str]:
@@ -128,6 +142,7 @@ class FakeMac:
         handlers = {
             "launchctl": self.launchctl,
             "pmset": self.pmset,
+            "osascript": self.osascript,
             "sudo": self.sudo,
             "tmux": self.tmux,
             "ps": self.ps,
@@ -193,6 +208,10 @@ class World(unittest.TestCase):
         real_run(["git", "init", "-q", "--bare", str(origin)], check=True)
         real_run(["git", "init", "-q", "-b", "main", str(source)], check=True)
         (source / "bin").mkdir()
+        (source / "app").mkdir()
+        (source / "app" / "publisher.json").write_text(
+            json.dumps({"bundle_id": BUNDLE_ID, "team_id": "", "releases": "acme/bosun"})
+        )
         made = []
         for number in range(commits):
             (source / "bin" / "bosun").write_text(f"#!/bin/sh\n# release {number}\n")
@@ -243,7 +262,7 @@ class World(unittest.TestCase):
 
     def make_jobs(self) -> None:
         self.agents.mkdir(parents=True)
-        for label in (LABEL, f"{LABEL}.watchdog", f"{LABEL}.learn"):
+        for label in (LABEL, f"{LABEL}.watchdog", f"{LABEL}.learn", f"{LABEL}.now"):
             self.write_plist(label, f'exec "{self.root}/bin/bosun" run')
             self.mac.loaded.add(label)
 
@@ -352,6 +371,101 @@ class NothingChanges(World):
         self.assertEqual(status, uninstall.EXIT_REFUSED)
         self.assertIn(str(other), output)
         self.assert_untouched(before)
+
+
+class TheMenuBarApp(World):
+    """~/Applications/bosun.app and its Open at Login job: a step each, in the plan and in the doing."""
+
+    def setUp(self) -> None:
+        super().setUp()
+        self.app = self.home / "Applications" / "bosun.app"
+        (self.app / "Contents" / "MacOS").mkdir(parents=True)
+        (self.app / "Contents" / "MacOS" / "bosun").write_text("binary")
+        plist = {"CFBundleIdentifier": BUNDLE_ID, "CFBundleShortVersionString": "0.1.0"}
+        (self.app / "Contents" / "Info.plist").write_bytes(plistlib.dumps(plist))
+        self.job = self.agents / f"{LABEL}.app.plist"
+        arguments = [str(self.app / "Contents" / "MacOS" / "bosun"), "--at-login"]
+        self.job.write_bytes(plistlib.dumps({"Label": f"{LABEL}.app", "ProgramArguments": arguments}))
+        self.mac.loaded.add(f"{LABEL}.app")
+
+    def test_the_plan_lists_the_app_and_its_job(self) -> None:
+        status, output = self.run_it("--dry-run")
+        self.assertEqual(status, 0)
+        self.assertIn(f"launchd job {LABEL}.app", output)
+        self.assertIn("the menu bar app, ~/Applications/bosun.app", output)
+
+    def test_a_dry_run_changes_nothing(self) -> None:
+        before = self.tree()
+        self.run_it("--dry-run")
+        self.assertEqual(self.tree(), before)
+        self.assertEqual(self.mac.calls, [])
+
+    def test_another_app_of_that_name_stays_and_the_plan_says_why(self) -> None:
+        other = {"CFBundleIdentifier": "ai.other.app", "CFBundleShortVersionString": "9"}
+        (self.app / "Contents" / "Info.plist").write_bytes(plistlib.dumps(other))
+        status, output = self.run_it("--yes")
+        self.assertEqual(status, 0)
+        self.assertTrue(self.app.exists())
+        self.assertNotIn("removed the menu bar app", output)
+        self.assertIn("it is not bosun's app", output)
+        self.assertIn("ai.other.app", output)
+        self.assertNotIn("quit app", self.mac.calls)  # it was not even asked to quit
+
+    def test_an_app_it_cannot_read_stays_too(self) -> None:
+        (self.app / "Contents" / "Info.plist").write_text("broken")
+        self.run_it("--yes")
+        self.assertTrue(self.app.exists())
+
+    def test_leftovers_of_an_install_that_was_killed_are_listed_and_go(self) -> None:
+        left = self.home / "Applications" / ".bosun-app-4242-abc"
+        (left / "unpacked").mkdir(parents=True)
+        (left / "unpacked" / "junk").write_text("a full unpacked app")
+        mine = self.home / "Applications" / "Mine.app"
+        mine.mkdir()
+        status, output = self.run_it("--dry-run")
+        self.assertIn("what an install of the menu bar app left, ~/Applications/.bosun-app-4242-abc", output)
+        self.assertEqual(status, 0)
+        self.run_it("--yes")
+        self.assertFalse(left.exists())
+        self.assertTrue(mine.exists())
+
+    def test_with_no_leftovers_there_is_no_line_for_them(self) -> None:
+        _, output = self.run_it("--dry-run")
+        self.assertNotIn("an install of the menu bar app left", output)
+
+    def test_both_go(self) -> None:
+        status, output = self.run_it("--yes")
+        self.assertEqual(status, 0)
+        self.assertFalse(self.app.exists())
+        self.assertFalse(self.job.exists())
+        self.assertNotIn(f"{LABEL}.app", self.mac.loaded)
+        self.assertIn("removed the menu bar app", output)
+        self.assertTrue((self.home / "Applications").is_dir())  # the folder is the person's
+
+    def test_a_running_app_is_asked_to_quit_before_it_goes(self) -> None:
+        self.mac.app_running = True
+        self.run_it("--yes")
+        self.assertIn("quit app", self.mac.calls)
+        self.assertFalse(self.app.exists())
+
+    def test_an_app_that_will_not_quit_stays_and_the_rest_goes(self) -> None:
+        self.mac.app_running = True
+        self.mac.app_quits = False
+        with mock.patch("time.sleep"):  # the wait for an app that does not quit
+            status, output = self.run_it("--yes")
+        self.assertEqual(status, uninstall.EXIT_LEFT)
+        self.assertTrue(self.app.exists())
+        self.assertIn("could not remove the menu bar app", output)
+        self.assertIn(f"rm -rf {self.app}", output)  # by hand
+        self.assertFalse(self.job.exists())
+
+    def test_with_no_app_there_is_no_step(self) -> None:
+        shutil.rmtree(self.app)
+        self.job.unlink()
+        self.mac.loaded.discard(f"{LABEL}.app")
+        status, output = self.run_it("--dry-run")
+        self.assertEqual(status, 0)
+        self.assertNotIn("menu bar app", output)
 
 
 class Uninstalls(World):

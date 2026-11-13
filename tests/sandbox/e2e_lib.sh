@@ -10,6 +10,8 @@
   exit 1
 }
 export PATH="/opt/homebrew/bin:/usr/local/bin:$HOME/.local/bin:$PATH"
+# No BOSUN_UPDATE_CHANNEL here: what an install follows is what bosun.env says, as for a user (the releases by
+# default, `main` for an install that asked for a branch or that an update kept on it), docs/design/menu-bar.md.
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 UID_NOW="$(id -u)"
@@ -137,6 +139,106 @@ side_by_side() {
   }
 }
 
+morning_runs() { cat "$HOME"/.local/state/bosun/logs/morning-*.log 2>/dev/null | grep -c "morning run complete"; }
+
+# This shell's pid and each of its parents': whatever started the check, which macOS must not name as the
+# responsible process of what bosun starts.
+caller_pids() {
+  local pid=$$
+  while [ "${pid:-0}" -gt 1 ]; do
+    echo "$pid"
+    pid="$(ps -o ppid= -p "$pid" | tr -d ' ')"
+  done
+}
+
+# <pid>'s responsible process, from `launchctl procinfo` (sudo as a second try: it may refuse another
+# process). It fails, saying what it got, when that has no "responsible pid = <number>" line, so that a
+# macOS that prints it otherwise is a failure here and not a pass.
+responsible_pid() {
+  local info pid
+  info="$(launchctl procinfo "$1" 2>&1)" || info="$(sudo -n launchctl procinfo "$1" 2>&1)" || {
+    echo "launchctl procinfo $1 failed: $info"
+    return 1
+  }
+  pid="$(sed -n 's/^[[:space:]]*responsible pid = \([0-9][0-9]*\).*/\1/p' <<<"$info" | head -1)"
+  [ -n "$pid" ] || {
+    echo "no 'responsible pid = <number>' line in launchctl procinfo $1: its format is not the one this check reads; it said:"
+    echo "$info"
+    return 1
+  }
+  echo "$pid"
+}
+
+# The tmux server's responsible process is not one of the caller's (it is launchd's job's), which is what
+# `bosun morning --now --background` is for: a process the app starts keeps the app as its responsible
+# process, and with it macOS's privacy prompts.
+server_not_the_callers_child() {
+  local server responsible
+  server="$(tmux -L bosun display-message -p '#{pid}')" || return 1
+  responsible="$(responsible_pid "$server")" || {
+    echo "$responsible"
+    return 1
+  }
+  if caller_pids | grep -qx "$responsible"; then
+    echo "tmux server $server has responsible pid $responsible, which is this check or one of its parents: $(caller_pids | tr '\n' ' ')"
+    return 1
+  fi
+  echo "tmux server $server, responsible pid $responsible (not one of: $(caller_pids | tr '\n' ' '))"
+}
+
+morning_runs_above() { [ "$(morning_runs)" -gt "$1" ]; } # <count>
+
+# A process this shell starts has this shell, or one of its parents, as its responsible process: the control
+# that makes the check on the tmux server mean something, as it shows that `launchctl procinfo` tells the
+# two cases apart on this Mac.
+a_child_has_the_callers_responsible_pid() {
+  local child responsible
+  sleep 120 &
+  child=$!
+  responsible="$(responsible_pid "$child")" || {
+    echo "$responsible"
+    kill "$child" 2>/dev/null
+    return 1
+  }
+  kill "$child" 2>/dev/null
+  if caller_pids | grep -qx "$responsible"; then
+    echo "a sleep started here has responsible pid $responsible, one of: $(caller_pids | tr '\n' ' ')"
+    return 0
+  fi
+  echo "a sleep started here has responsible pid $responsible, which is not this shell or one of its parents ($(caller_pids | tr '\n' ' ')): procinfo does not tell the two cases apart here, and the check on the tmux server proves nothing"
+  return 1
+}
+
+now_runs() { cat "$HOME"/.local/state/bosun/logs/morning-*.log 2>/dev/null | grep -c "=== morning run (trigger=now, "; }
+now_runs_settle_at() { # <count>: and stay there a while, as a second run would have started by then
+  sleep 5
+  [ "$(now_runs)" = "$1" ]
+}
+
+# `bosun morning --now --background`, from a stopped bosun: launchd's job runs the morning run now. Only for a
+# bosun that has the job and the option: install_e2e.sh calls it, and work_e2e.sh once it is on this checkout (the
+# release it starts from has neither).
+now_job_for_real() {
+  local bosun="$HOME/.local/bin/bosun" done_before now_before job="$LABEL.now"
+  echo "the job that runs --now, and bosun morning --now --background"
+  check "$job is loaded" launchctl print "$DOMAIN/$job"
+  check "$job's plist is valid" plutil -lint -s "$HOME/Library/LaunchAgents/$job.plist"
+  "$bosun" stop >/dev/null 2>&1
+  check "bosun is stopped before the kickstart: no session, so a server the scheduled run left cannot satisfy the check below" bash -c '! tmux -L bosun list-sessions'
+  check "control: a process started here has this shell or a parent of it as its responsible pid (launchctl procinfo)" a_child_has_the_callers_responsible_pid
+  a_child_has_the_callers_responsible_pid | sed 's/^/  note  /'
+  done_before="$(morning_runs)"
+  now_before="$(now_runs)"
+  check "bosun morning --now --background returns, exit 0" "$bosun" morning --now --background
+  check "... and a second one straight after, while the run is going, is no error" "$bosun" morning --now --background
+  check "... launchd runs the job: its morning run ends well" wait_for 180 morning_runs_above "$done_before"
+  check "... once, whatever the second one asked: launchd does not start a run that is going (no -k)" now_runs_settle_at "$((now_before + 1))"
+  check "... which brings up the orchestrator's window" wait_for 60 has_window orchestrator
+  check "... and the tmux server it started is not a child of the caller" server_not_the_callers_child
+  server_not_the_callers_child | sed 's/^/  note  /'
+  "$bosun" stop >/dev/null 2>&1
+}
+
 launchd_for_real() {
   echo "launchd and pmset, for real"
   for job in "$LABEL" "$LABEL.watchdog" "$LABEL.learn"; do
@@ -155,7 +257,7 @@ launchd_for_real() {
 }
 
 jobs_are_gone() {
-  for job in "$LABEL" "$LABEL.watchdog" "$LABEL.learn"; do
+  for job in "$LABEL" "$LABEL.watchdog" "$LABEL.learn" "$LABEL.console"; do
     check "$job is unloaded" bash -c '! launchctl print "$1"' _ "$DOMAIN/$job"
     check "... launchd cannot run it" bash -c '! launchctl kickstart "$1"' _ "$DOMAIN/$job"
     check "... and its plist is gone" test ! -e "$HOME/Library/LaunchAgents/$job.plist"

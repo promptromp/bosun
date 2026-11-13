@@ -27,9 +27,9 @@ missing at once, with what to do about each. `bosun init` and `bosun doctor` sta
 curl -fsSL https://raw.githubusercontent.com/promptromp/bosun/main/get.sh | sh
 ```
 
-[`get.sh`](../get.sh) puts bosun in `~/.local/share/bosun-versions`, a folder for each version beside the
-one repository they come from (`bosun.git`), makes `~/.local/share/bosun` a link to the version in use,
-and starts `bosun init`. It installs nothing else: if something is missing, it says what, gives you the
+[`get.sh`](../get.sh) puts the newest release of bosun in `~/.local/share/bosun-versions`, a folder for each
+version beside the one repository they come from (`bosun.git`), makes `~/.local/share/bosun` a link to the
+version in use, and starts `bosun init`. It installs nothing else: if something is missing, it says what, gives you the
 lines to run and the pages to go to, and stops. Do those, and run the same line again. It takes a few
 minutes the first time, most of it Homebrew's, and once everything is there the questions take about a
 minute.
@@ -40,18 +40,30 @@ To run the repo sessions on Codex, ask for it after the pipe, so that it checks 
 curl -fsSL https://raw.githubusercontent.com/promptromp/bosun/main/get.sh | BOSUN_HARNESS=codex sh
 ```
 
-Run it again to update: it hands over to the newest version's `bosun update` (see [Updating](#updating)).
+Run it again to update: it hands over to the `bosun update` of the install you have (see
+[Updating](#updating)), which moves it as its own channel says, so it never moves an install off its channel.
 After the pipe, `sh -s -- --dry-run` says what it would do and does nothing, and `sh -s -- --unattended`
 asks nothing: it takes the recommended setup, or goes ahead with the update. On a first install that
 setup has no repo windows and gives the orchestrator no connectors, since nobody chose them, and its last
 line says so: run `bosun init` to add them, or name them in a file with `bosun init --answers` (below).
 Run again, it keeps what your config says. `BOSUN_DIR`, `BOSUN_REPO` and `BOSUN_BRANCH` override where it
 goes and what it gets; on an install that is already there, the defaults are what it came from, and a
-`BOSUN_REPO` or `BOSUN_BRANCH` given then is kept for the updates after it.
+`BOSUN_REPO` given then is kept for the updates after it, and so is a `BOSUN_BRANCH` on the `main` channel (an install made with a branch is on it). On a releases install a branch given later is not followed until `BOSUN_UPDATE_CHANNEL="main"` is set.
+
+A new install gets the newest release (a tag `v<YYYY.MM.DD>`, as `bosun update` follows them). A repository that
+has no release yet gets the head of `main`, and `get.sh` says so. With `BOSUN_BRANCH` (after the pipe, as
+`BOSUN_HARNESS` above) it gets the head of that branch instead, and the install follows the branch, not the
+releases: `bosun init` writes `BOSUN_UPDATE_CHANNEL="main"` to `bosun.env` without asking, and `bosun update`
+goes on to the head of the branch (the line it prints to run again after what bosun needs is there keeps `BOSUN_BRANCH`,
+as it keeps `BOSUN_HARNESS`). The channel is the one setting; `bosun init --answers` takes it as
+`update_channel` (`releases` or `main`).
 
 `bosun init` reads what this Mac already shows: the repos you use your agents in, the MCP servers and
 connectors `claude mcp list` shows, your usual hours, your logins. In a terminal it asks a few questions,
-one key each: Return takes the recommended answer, `r` starts again and `q` leaves with nothing changed.
+one key each: Return takes the recommended answer, `r` starts again and `q` leaves with nothing changed. The last
+of them (once a signed build of it exists to install) is whether to add the menu bar app: `bosun.app` in
+`~/Applications`, opened at login (`bosun app install` adds it later; `bosun update` keeps an installed app
+current, and `BOSUN_MENU_APP=1` in `bosun.env` makes the watchdog say when it is gone).
 It says why it recommends what it does, and lists every file and command for you to accept before it
 touches anything. Then it writes the config, trusts the folders, and runs `install.sh`.
 
@@ -124,7 +136,10 @@ Waking *before* the job would leave a gap in which an unattended Mac can doze of
 `install.sh` is idempotent and never overwrites your config. It links `bosun` into
 `~/.local/bin` and loads the launchd jobs: the morning run, the [watchdog](watchdog.md#watchdog) and, with
 `BOSUN_LEARN_ENABLED=1`, the daily [learning](learning.md#learning) run
-(`<BOSUN_LAUNCHD_LABEL>.learn`).
+(`<BOSUN_LAUNCHD_LABEL>.learn`) and, with `BOSUN_CONSOLE_ALWAYS=1`, the [console](console.md#console)
+(`<BOSUN_LAUNCHD_LABEL>.console`). One more job, `<BOSUN_LAUNCHD_LABEL>.now`, has no schedule: it runs
+`bosun morning --now` when `bosun morning --now --background` (which the menu bar app's Start runs) kickstarts it,
+so that launchd, not the caller, is the parent of what the morning run starts.
 [`bosun uninstall`](#uninstall) reverses it. A checkout of your own like this one updates with git, not
 with `bosun update`.
 
@@ -136,8 +151,9 @@ bosun update --dry-run   # only shows the plan
 bosun update --yes       # goes ahead without asking
 ```
 
-It updates bosun to the head of the branch the install follows (`main`, or the `BOSUN_BRANCH` it was
-installed with), while the agents keep working. It gets the new version into a folder of its own, beside
+`bosun update --check` says whether there is a newer release and changes nothing (one line, or `--json`), and
+`bosun update --skip <version>` stops it being offered again. It updates bosun to the newest release, or on the `main` channel (`BOSUN_UPDATE_CHANNEL="main"`, which an install
+made with `BOSUN_BRANCH` follows) to the head of the branch the install follows, while the agents keep working. It gets the new version into a folder of its own, beside
 the one you run, and that version shows its plan: the commits, the migrations your data needs, the
 prompts that changed, what each window gets, the launchd jobs to reload, and anything that stops it. In a
 terminal it asks first; without one it stops at the plan. Running the install line again does the same,
@@ -189,6 +205,10 @@ plan, the summary and `bosun doctor` say. A checkout of your own that you update
 such change: set `BOSUN_ORCHESTRATOR_CONNECTORS` in `bosun.env` to the connectors the orchestrator needs,
 or to `all`, or it starts with none, which `bosun doctor` warns about until the key is set.
 
+Another such key is `BOSUN_UPDATE_CHANNEL="main"`: an install that was updating before releases goes on
+following the head of `main`, and the plan and summary say how to follow the dated releases instead
+(`BOSUN_UPDATE_CHANNEL="releases"`, which a new install has).
+
 A Claude Code window that a repo's own `.claude/settings.json` (or `settings.local.json`, or your
 `~/.claude/settings.json`) would give servers its list does not name does not start on the new version
 ([Connectors](#connectors-what-each-window-may-reach)). The update restarts it, the launch refuses in its
@@ -222,9 +242,9 @@ unless something of yours is in it by then, or the installer did not make it, wh
 There is no command for it yet: a failed update puts everything back by itself, and going back later is by
 hand. You need the version the update came from and the backup it took, both named in its summary:
 
-1. Stop what writes: `bosun stop`, and unload the watchdog and learning jobs
-   (`launchctl bootout gui/$(id -u)/com.bosun.morning.watchdog`, and `.learn`, with your
-   `BOSUN_LAUNCHD_LABEL` if you set one).
+1. Stop what writes: `bosun quit --stop-now` (or `bosun stop`), and unload the watchdog, learning and console jobs
+   (`launchctl bootout gui/$(id -u)/com.bosun.morning.watchdog`, and `.learn` and `.console`, with your
+   `BOSUN_LAUNCHD_LABEL` if you set one; the last two only if you have them).
 2. Find the older version's folder in `~/.local/share/bosun-versions`: an update keeps the one it came
    from until the next update. If it is gone, add it again from its commit, whole: the backup's
    `manifest.json` names it as `from` (the summary's first line shows only 7 characters, which
@@ -237,8 +257,9 @@ hand. You need the version the update came from and the backup it took, both nam
    `manifest.json` lists every file). Anything written since the update is not in it.
 4. Lead the link to the older version (`ln -sfn ~/.local/share/bosun-versions/<folder>
    ~/.local/share/bosun`), run its `~/.local/share/bosun/install.sh` to load its jobs again, and
-   `bosun start`. `bosun update` would take you forward again, to the head of the branch (from the
-   checkout kept from before versions, which has no `bosun update`, the install line does).
+   `bosun start`. `bosun update` would take you forward again, to the newest release, or on the `main` channel
+   to the head of the branch (from the checkout kept from before versions, which has no `bosun update`, the
+   install line does).
 
 Going back is only to the version the update came from, and never past a `kg forget`: a deletion of a
 person deletes every update backup there is, as restoring one would bring the person back, and says so in
@@ -258,7 +279,8 @@ as it was.
 | What | What happens |
 |---|---|
 | Your windows | Stopped, so any work in them stops. It says which are running first, and waits up to 15 seconds for what they started to end, so their last hooks finish first; what still runs then it names and leaves running, such as a background command a Codex window started |
-| The launchd jobs (morning, watchdog, learning) | Unloaded and deleted, before the windows stop, so the watchdog cannot bring them back |
+| The launchd jobs (morning, watchdog, learning, console, the job that runs `morning --now` for the menu bar app's Start, and the app's Open at Login job) | Unloaded and deleted, before the windows stop, so the watchdog cannot bring them back |
+| The menu bar app, `~/Applications/bosun.app` (with `bosun app install`) | Asked to quit if it runs, then deleted, after its job and before the windows stop. The `~/Applications` folder stays |
 | The repeating wake | Cancelled with `sudo pmset repeat cancel`, if it is the one bosun set. `pmset` can only cancel every repeating event at once, so another event, or a wake at another time, stays and it says so |
 | Folder trust | Taken back for the folders bosun marked, in Claude Code and Codex (`agy` windows pass their folder at each start and mark nothing). A folder you had accepted yourself stays trusted. It goes by bosun's record of what it changed (`agent-changes.json`), kept since `bosun uninstall` was added; trust or notes from an install before that are not on it and stay |
 | The plugin bosun installed into `agy`, if an `agy` window ever started | Uninstalled with `agy plugin uninstall`, with what that leaves behind (`plugin_data/bosun/`), by bosun's record of having installed it. Your own `agy` setup is not touched |
