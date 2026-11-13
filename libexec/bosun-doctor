@@ -442,7 +442,7 @@ check_schedule() {
   check_watchdog
   check_learn_agent
   wake_hm="$(shift_time "$BOSUN_START_TIME" "$BOSUN_WAKE_DELAY_MINUTES")"
-  wake_label="$(date -j -f '%H:%M' "$wake_hm" '+%l:%M%p' | tr -d ' ')" # pmset prints e.g. 8:01AM
+  wake_label="$(python3 "$BOSUN_ROOT/lib/init_plan.py" pmset-label "$wake_hm")" # pmset prints e.g. 8:01AM, 0:01AM
   wake_cmd="sudo pmset repeat wakeorpoweron $BOSUN_DAYS $wake_hm:00"
   repeat="$(pmset -g sched | sed -n '/Repeating power events/,/^[A-Z]/p' | grep -iE 'wake' || true)"
   if [ -z "$repeat" ]; then

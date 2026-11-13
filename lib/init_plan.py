@@ -11,6 +11,7 @@ import posixpath
 import re
 import shlex
 import statistics
+import sys
 import textwrap
 from collections import Counter
 from collections.abc import Iterable, Mapping, Sequence
@@ -866,9 +867,10 @@ def setup_change(facts: Facts, answers: Answers) -> FileChange:
 
 
 def pmset_label(clock_time: str) -> str:
-    """How `pmset -g sched` prints a time: 8:01AM."""
+    """How `pmset -g sched` prints a time: 8:01AM, 12:01PM, and 0:01AM for the hour after midnight."""
     hours, mins = (int(part) for part in clock_time.split(":"))
-    return f"{hours % 12 or 12}:{mins:02d}{'AM' if hours < 12 else 'PM'}"  # noqa: PLR2004 (noon)
+    shown = hours - 12 if hours > 12 else hours  # noqa: PLR2004 (noon)
+    return f"{shown}:{mins:02d}{'AM' if hours < 12 else 'PM'}"  # noqa: PLR2004 (noon)
 
 
 def wake_command(facts: Facts, answers: Answers) -> str:
@@ -1119,3 +1121,20 @@ def render_plan(plan: Plan, answers: Answers, facts: Facts, config_dir: str) -> 
         *section("Blocked", bullets(plan.blockers)),
     ]
     return "\n".join(lines) + "\n"
+
+
+def main(argv: Sequence[str]) -> int:
+    """`init_plan.py pmset-label HH:MM`: the label `bosun doctor` looks for in `pmset -g sched`."""
+    if len(argv) != 2 or argv[0] != "pmset-label":  # noqa: PLR2004 (command and time)
+        print("usage: init_plan.py pmset-label HH:MM", file=sys.stderr)
+        return 2
+    try:
+        print(pmset_label(argv[1]))
+    except ValueError:
+        print(f"init_plan.py: not a time: {argv[1]}", file=sys.stderr)
+        return 2
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))
