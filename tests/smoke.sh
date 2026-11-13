@@ -1,13 +1,32 @@
 #!/bin/bash
 # Hermetic smoke tests: temp HOME, fixture sessions, isolated tmux socket, no Claude calls,
 # no launchd or pmset changes.
-# Run: tests/smoke.sh [--with-unit] [--only <id>[,<id>...]]     or: tests/smoke.sh --list
+# Run: tests/smoke.sh [-x] [--with-unit] [--only <id>[,<id>...] | --last-failed]     or: tests/smoke.sh --list
+# The pre-push hook runs tests/smoke.sh --pre-push: see below.
 # End to end only by default: the commit hook runs the unit tests a change reaches, and CI all of
 # them. --with-unit runs them all first too, with a plain python3 (python3 -m unittest, no pytest).
 # The checks are in sections, each begun by `section <id> "<name>" [needs <id>,...]`, in the order they
 # run. --list prints the ids and names. --only runs the shared setup and the sections named (and, in file
 # order, the ones they need) and nothing else, to iterate on one area in seconds (a few minutes with
 # prerequisites); its summary says it was a partial run. Before committing, run the whole suite once: CI and the pre-push hook always do.
+# -x (--exitfirst) stops at the first failing check, after its FAIL line, and the summary says in which section
+# and check; the temporary folders and the tmux servers are cleaned up as always. Exit 1.
+# --last-failed (--lf) runs only the sections whose last result was a failure (and, as for --only, the ones
+# they need): every run, whole or partial, records each section it ran as pass or fail in
+# tests/.smoke-cache/sections (git-ignored, per checkout; best effort, a run never fails over it), and a partial
+# run changes only the sections it ran. With none recorded as failed it says so and exits 0. It does not combine
+# with --only; it combines with -x and --with-unit. Checks outside any section (the unit tests of --with-unit,
+# the last check on the repository) are not recorded. While iterating: --only, --last-failed, -x; before
+# committing, one full run with none of them (CI and the pre-push hook run the full suite).
+# --pre-push (what the pre-push hook runs) skips the suite, saying so in one line, if the tree of the commit being
+# pushed (pre-commit's PRE_COMMIT_TO_REF) passed a whole run in this checkout less than 24 hours ago, and
+# otherwise runs the whole suite as without it. A whole run (none of --only, --last-failed, -x) that ends with
+# no failure records its tree in tests/.smoke-cache/passes, but only if the tree is the same at its end as at
+# its start: the tree is the files on disk before the first section runs (what `git add -A` stages in a copy of
+# the index: tracked files, and untracked ones that are not git-ignored, which a commit lacking them will not match,
+# so the suite runs for it), and a run that changed or made any such file records nothing and names it.
+# BOSUN_SMOKE_NO_CACHE=1 makes --pre-push run the suite anyway (the one way, and not SKIP=). Doubt of any kind
+# (the record is unreadable or older, the tree differs, git fails) runs the suite. CI never uses --pre-push.
 # A section that cannot run alone either sets up what it uses itself or says `needs <id>`.
 # `always_run` marks where the code every run needs resumes after a section: the setup, and the last
 # check, that the real repository is as it was.
@@ -21,18 +40,47 @@ SECTION_MARKER='^[[:space:]]*section[[:space:]]+([a-z0-9-]+)[[:space:]]+"([^"]*)
 
 # section <id> "<name>" [needs <id>,...]: the heading of a section, which runs up to the next marker.
 section() {
+  section_done
+  CURRENT_SECTION="$1"
+  SECTION_FAILED_AT="$failed"
   echo "$2"
   [ -z "${FAKES_READY:-}" ] || fakes_first
 }
 # always_run ["<heading>"]: what follows runs in every run, whichever sections were chosen.
 always_run() {
+  section_done
   [ -z "${1:-}" ] || echo "$1"
   [ -z "${FAKES_READY:-}" ] || fakes_first
 }
 
 smoke_usage() {
-  echo "usage: tests/smoke.sh [--with-unit] [--only <id>[,<id>...]]  |  tests/smoke.sh --list" >&2
+  echo "usage: tests/smoke.sh [-x] [--with-unit] [--only <id>[,<id>...] | --last-failed | --pre-push]  |  tests/smoke.sh --list" >&2
   exit 2
+}
+
+# failed_sections <script> <cache file>: "id,id,..." the sections that exist now whose last result was a
+# failure, in file order; empty if none (or no cache).
+failed_sections() {
+  local id needs name out=""
+  [ -f "$2" ] || return 0
+  while IFS='|' read -r id needs name; do
+    grep -qx "$id fail" "$2" && out="${out:+$out,}$id"
+  done < <(section_table "$1")
+  echo "$out"
+}
+
+# section_done: the section that was running is over: its result goes in the cache, as a failure if a check
+# failed in it.
+CURRENT_SECTION="" # "" between sections: the setup, and what an always_run begins
+SECTION_FAILED_AT=0
+section_done() {
+  [ -n "$CURRENT_SECTION" ] || return 0
+  if [ "$failed" -gt "$SECTION_FAILED_AT" ]; then
+    cache_update "$CACHE_FILE" "$CURRENT_SECTION" "$CURRENT_SECTION fail"
+  else
+    cache_update "$CACHE_FILE" "$CURRENT_SECTION" "$CURRENT_SECTION pass"
+  fi
+  CURRENT_SECTION=""
 }
 
 # section_table <script>: one line per section, in file order: id|needs|name.
@@ -97,7 +145,7 @@ filtered_script() {
 # run_chosen <script> <ids>: runs the script again without the sections not named, and says which ones it
 # runs (SMOKE_PARTIAL is what its summary says). Never returns.
 run_chosen() {
-  local chosen id needs="" script unit_flag=""
+  local chosen id needs="" script unit_flag="" exit_flag=""
   chosen="$(chosen_sections "$1" "$2")" || exit 2
   for id in ${chosen//,/ }; do
     case ",$2," in *",$id,"*) ;; *) needs="${needs:+$needs }$id" ;; esac
@@ -106,17 +154,24 @@ run_chosen() {
   filtered_script "$1" "$chosen" >"$script"
   echo "partial run, not the whole suite: ${2//,/ }${needs:+ (and, as they need them: $needs)}"
   [ "$WITH_UNIT" = 1 ] && unit_flag=--with-unit
-  SMOKE_PARTIAL="${2//,/ }${needs:+ + $needs}" SMOKE_FILTERED="$script" SMOKE_ROOT="$ROOT" \
-    exec "$BASH" "$script" ${unit_flag:+"$unit_flag"}
+  [ "$EXITFIRST" = 1 ] && exit_flag=-x
+  SMOKE_PARTIAL="${2//,/ }${needs:+ + $needs}" SMOKE_FILTERED="$script" SMOKE_ROOT="$ROOT" SMOKE_CACHE_DIR="$CACHE_DIR" \
+    exec "$BASH" "$script" ${unit_flag:+"$unit_flag"} ${exit_flag:+"$exit_flag"}
 }
 
 WITH_UNIT=0
 ONLY=""
 LIST=0
+EXITFIRST=0
+LAST_FAILED=0
+PRE_PUSH=0
 while [ $# -gt 0 ]; do
   case "$1" in
     --with-unit) WITH_UNIT=1 ;;
     --list) LIST=1 ;;
+    -x | --exitfirst) EXITFIRST=1 ;;
+    --last-failed | --lf) LAST_FAILED=1 ;;
+    --pre-push) PRE_PUSH=1 ;;
     --only)
       [ $# -ge 2 ] && [ -n "$2" ] || smoke_usage
       ONLY="$2"
@@ -126,6 +181,8 @@ while [ $# -gt 0 ]; do
   esac
   shift
 done
+[ "$LAST_FAILED" = 0 ] || [ -z "$ONLY" ] || smoke_usage                             # the two choose sections in their own ways
+[ "$PRE_PUSH" = 0 ] || { [ -z "$ONLY" ] && [ "$LAST_FAILED" = 0 ]; } || smoke_usage # a hook runs the whole suite
 export PYTHONDONTWRITEBYTECODE=1
 # Never touch the repository this runs from: a git hook (pre-push) or another repository's tooling
 # may export GIT_DIR, GIT_WORK_TREE, GIT_INDEX_FILE, GIT_COMMON_DIR, GIT_CONFIG*, ... and every git
@@ -140,10 +197,29 @@ SCRIPT="$0"
 ROOT="${SMOKE_ROOT:-$(cd "$(dirname "$0")/.." && pwd)}"
 PARTIAL="${SMOKE_PARTIAL:-}"                    # which sections a partial run ran, for its summary
 [ "${SMOKE_FILTERED:-}" != "$0" ] || rm -f "$0" # (an open script can be removed; bash reads it as it goes)
-unset SMOKE_PARTIAL SMOKE_FILTERED SMOKE_ROOT
+# Where each section's last result is kept (see cache_merge), in the checkout: git-ignored, and the copies of the
+# tree that sections make leave it out.
+CACHE_DIR="${SMOKE_CACHE_DIR:-$ROOT/tests/.smoke-cache}"
+CACHE_FILE="$CACHE_DIR/sections"
+PASSES_FILE="$CACHE_DIR/passes"
+# shellcheck source=tests/smoke_cache.sh
+. "$ROOT/tests/smoke_cache.sh"
+unset SMOKE_PARTIAL SMOKE_FILTERED SMOKE_ROOT SMOKE_CACHE_DIR
 if [ "$LIST" = 1 ]; then
   list_sections "$SCRIPT"
   exit 0
+fi
+if [ "$PRE_PUSH" = 1 ]; then # the hook: nothing to run if this tree already passed, here, a whole run
+  pre_push_skip "$ROOT" "$PASSES_FILE" "${PRE_COMMIT_TO_REF:-}" "$(date +%s)"
+  case $? in 0 | 3) exit 0 ;; esac
+fi
+if [ "$LAST_FAILED" = 1 ]; then
+  ONLY="$(failed_sections "$SCRIPT" "$CACHE_FILE")"
+  if [ -z "$ONLY" ]; then
+    echo "--last-failed: no section is recorded as failed; nothing to run"
+    exit 0
+  fi
+  echo "--last-failed: rerunning the sections that failed: ${ONLY//,/ }"
 fi
 [ -z "$ONLY" ] || run_chosen "$SCRIPT" "$ONLY"
 # What must not change during the run: this checkout's HEAD, the shared repository's HEAD and
@@ -155,11 +231,21 @@ repo_state() {
     "$(git --git-dir="$common" rev-parse HEAD 2>/dev/null)" "$(git --git-dir="$common" config --get core.bare 2>/dev/null)"
 }
 REPO_STATE_BEFORE="$(repo_state)"
+# A whole run (no partial one) is recorded as a pass of the tree it tested: the files on disk now, before the first
+# section runs, and again at its end (full_run_end), since a run that changes the repository tested nothing
+# reproducible.
+START_TREE=""
+START_STATUS=""
+if [ -z "$PARTIAL" ]; then
+  START_TREE="$(tree_of_checkout "$ROOT")"
+  START_STATUS="$(status_of_checkout "$ROOT")"
+fi
 BOSUN="$ROOT/bin/bosun"
 WORK="$(mktemp -d)"
 SOCKET="bosun-smoke-$$"
 passed=0
 failed=0
+STOPPED_AT=""  # with -x, where the run stopped
 CONSOLE_PID="" # the console test's server, while it runs
 
 cleanup() {
@@ -181,10 +267,44 @@ check() {
     passed=$((passed + 1))
     echo "  pass  $description"
   else
-    failed=$((failed + 1))
-    echo "  FAIL  $description"
-    [ -n "$output" ] && tail -5 <<<"$output" | sed 's/^/          /'
+    fail_check "$description" "$output"
   fi
+}
+
+# fail_check <description> [output]: a check failed: counted, shown with the end of its output; with -x the run
+# stops here.
+fail_check() {
+  failed=$((failed + 1))
+  echo "  FAIL  $1"
+  [ -z "${2:-}" ] || tail -5 <<<"$2" | sed 's/^/          /'
+  [ "$EXITFIRST" = 1 ] || return 0
+  STOPPED_AT="${CURRENT_SECTION:+section $CURRENT_SECTION, }check: $1"
+  [ -n "$CURRENT_SECTION" ] || STOPPED_AT="outside any section (the shared setup or an always_run part), $STOPPED_AT"
+  full_run_end
+  summary
+  exit 1 # the EXIT trap cleans up
+}
+
+# full_run_end: the end of a whole run, or where -x stops one. A failure forgets the tree's earlier pass; a pass is
+# recorded (the passes file) only without -x and only if the tree is the one the run began with, and a run that
+# changed the repository says what it changed.
+full_run_end() {
+  local end_tree="" what
+  [ -n "$START_TREE" ] || return 0
+  [ "$failed" -gt 0 ] || [ "$EXITFIRST" = 1 ] || end_tree="$(tree_of_checkout "$ROOT")"
+  [ "$failed" -eq 0 ] && [ "$EXITFIRST" = 1 ] && return 0
+  record_full_run "$PASSES_FILE" "$START_TREE" "$end_tree" "$failed" "$passed" "$(date +%s)"
+  [ $? = 2 ] && [ -n "$end_tree" ] || return 0
+  what="$(changed_paths "$START_STATUS" "$(status_of_checkout "$ROOT")")"
+  echo "the run changed the repository, so this tree is not recorded as passing: ${what:-a file that was already changed changed again}"
+}
+
+# summary: what the run did; the end of a run, or of one that -x stops.
+summary() {
+  section_done
+  echo
+  echo "$passed passed, $failed failed${PARTIAL:+ (a partial run, not the whole suite: $PARTIAL)}"
+  [ -z "$STOPPED_AT" ] || echo "stopped at the first failure (-x): $STOPPED_AT"
 }
 
 not_contains() { ! grep -qF -- "$2" <<<"$1"; }
@@ -3694,8 +3814,7 @@ assert job.get("AbandonProcessGroup") is True, job.get("AbandonProcessGroup")
     bapp login on >/dev/null 2>&1
     check "an app and its Open at Login job are in place for the uninstall that follows" bash -c '[ -d "$1" ] && [ -e "$2" ]' _ "$APP" "$APP_JOB"
   else
-    failed=$((failed + 1))
-    echo "  FAIL  the fake curl and the stand-ins for ditto, codesign, spctl, osascript and open are not first on PATH; skipped the app tests"
+    fail_check "the fake curl and the stand-ins for ditto, codesign, spctl, osascript and open are not first on PATH; skipped the app tests"
   fi
 
   section uninstall "uninstall (fake launchctl, pmset and sudo, test label)" needs install,app
@@ -4904,8 +5023,7 @@ HAND
   check "an update after it is one between versions: from v2, up to date" contains "$("${C_ENV[@]}" "$C_V2/bin/bosun" update --from "$C_V2" --dry-run 2>&1)" "bosun is up to date (${U_V2_COMMIT:0:7})"
   always_run
 else
-  failed=$((failed + 1))
-  echo "  FAIL  fake launchctl/pmset are not first on PATH; skipped install tests"
+  fail_check "fake launchctl/pmset are not first on PATH; skipped install tests"
 fi
 unset BOSUN_LAUNCHD_LABEL
 
@@ -4944,6 +5062,6 @@ repo_unchanged() {
 }
 check "its HEAD and core.bare are what they were before the run" repo_unchanged
 
-echo
-echo "$passed passed, $failed failed${PARTIAL:+ (a partial run, not the whole suite: $PARTIAL)}"
+full_run_end
+summary
 [ "$failed" -eq 0 ]
