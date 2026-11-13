@@ -3,7 +3,8 @@
 `uv sync && uv run pre-commit install` once after cloning. Commits then run ruff, mypy --strict,
 complexity limits (complexipy, lizard, and a shell checker in `tools/`), shellcheck, shfmt, hadolint for
 the Dockerfile, actionlint and zizmor for the workflows, spelling, the links between the docs, a build of
-the docs site, a secrets scan (detect-secrets) and the unit tests; pushes also run the smoke suite. A
+the docs site, a secrets scan (detect-secrets) and the unit tests the change can reach; pushes also run
+the smoke suite ([Running the tests](#running-the-tests)). A
 forbidden-terms check (`tools/forbidden_terms.py`) refuses staged files and commit messages that
 contain a term from `~/.config/bosun/forbidden-terms.txt` (one case-insensitive regex
 per line, `#` comments), a list you keep outside the repo of names that must never be committed:
@@ -13,13 +14,35 @@ limits and conventions.
 
 On GitHub, every pull request to `main` runs the same checks (`.github/workflows/ci.yml`), the
 smoke suite on macOS and a gitleaks scan of the new commits, and `main` only takes pull requests
-that pass them. The unit tests there also keep a floor under coverage. For the forbidden-terms check to run there too, store your list as the
+that pass them. CI runs every unit test, on Linux and on macOS, and keeps a floor under their
+coverage. For the forbidden-terms check to run there too, store your list as the
 `FORBIDDEN_TERMS` Actions secret with `gh secret set FORBIDDEN_TERMS <
 ~/.config/bosun/forbidden-terms.txt`; the logs never print what it matched.
 
 Issues and pull requests are welcome: see [CONTRIBUTING.md](../CONTRIBUTING.md) and the
 [code of conduct](../CODE_OF_CONDUCT.md). Report security problems privately, as
 [SECURITY.md](../SECURITY.md) describes.
+
+## Running the tests
+
+| What | Command | When it runs by itself | Time on a 12-core Mac |
+|---|---|---|---|
+| The unit tests a change can reach | `uv run pytest -n auto --impacted` | every commit (the `unit-tests` hook) | seconds to a minute |
+| Every unit test | `uv run pytest -n auto` | CI, on Linux (with coverage) and on macOS | about a minute |
+| The end-to-end smoke suite | `tests/smoke.sh` | before every push, and in CI on macOS | about 18 minutes |
+| Every unit test with a plain `python3`, then the smoke suite | `tests/smoke.sh --with-unit` | never | 8 more minutes |
+
+`-n auto` runs the tests in parallel, one worker per core (pytest-xdist). `--impacted`
+(pytest-impacted) runs only the tests that what git has uncommitted (staged or not, and new files)
+can reach, so `uv run pre-commit run --all-files` selects the same tests as the commit. The plugin
+follows the Python imports from `lib/` and the test files; what it cannot see (a test that runs
+`bin/bosun`, reads a docs page, or a file `bosun` reads as it runs) is a rule in `pyproject.toml`'s
+`impacted_map` and `impacted_invalidate_all`. A rule may select more tests than it needs, never fewer:
+when unsure, it runs every test. Two checks keep the rules honest: `tests/unit/test_impacted_rules.py`
+runs in every selection and fails on a file no rule covers or a module whose importers would not be
+selected, and `tests/unit/impacted_guard.py` fails any test that reads or runs a file whose change
+would not select it, naming the line to add. `uv run impacted-tests --verbose` prints what the
+current changes select, without running it.
 
 ## The docs site
 
@@ -308,11 +331,11 @@ older terms). It is only a test tool here: nothing in bosun needs it or ships it
 
 Work up the levels; each one exercises more of the real chain.
 
-1. **Unit and integration:** `tests/smoke.sh`. It runs the Python unit tests in `tests/unit/`
-   (ledger and outreach, delegate, Claude Code state, repo mask, permission guard, the watchdog's
-   checks with an injected clock, learning's digest, ledger checks and proposals, and replays of
-   orchestrator and repo-session interactions, rewritten as fiction in the acme domain,
-   from `tests/fixtures/corpus/`) and then end-to-end checks,
+1. **Unit and integration:** `uv run pytest -n auto`, then `tests/smoke.sh`. The first runs the
+   Python unit tests in `tests/unit/` (ledger and outreach, delegate, Claude Code state, repo mask,
+   permission guard, the watchdog's checks with an injected clock, learning's digest, ledger checks
+   and proposals, and replays of orchestrator and repo-session interactions, rewritten as fiction in
+   the acme domain, from `tests/fixtures/corpus/`); the second the end-to-end checks,
    including setup with a fake `aws`, the morning dry run, install/uninstall with fake
    `launchctl` and `pmset` under a test label, and `bosun update` between two local commits (the next
    version made by `tests/sandbox/update_patch.sh`), with fake windows brought along, and the first
