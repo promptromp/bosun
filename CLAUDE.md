@@ -210,8 +210,11 @@ of truth, so don't copy rules into this file.
 - The menu bar app's lifecycle (`bosun app`, design: `docs/design/menu-bar.md`): `libexec/bosun-app` (the commands, and
   `login on|off`, which render and load `templates/launchd-app.plist` through `render_app_plist`, `app_label` and
   `reload_job` in `lib/common.sh`; the login job is there while its plist is, which `reload_changed_jobs` keeps current
-  and never makes) and `lib/app_install.py` (every external tool through one `Runner`: the release lookup, `verify`,
-  the unpacking and the placing, `status`). The publisher is `app/publisher.json`, the version `app/VERSION`.
+  and never makes), `lib/app_release.py` (pure: the publisher, the release address, the code requirement the signature
+  must meet, which archives are refused, `status`) and `lib/app_install.py` (the live side, every external tool through
+  one `Runner`: `verify`, the download, the placing, the sweep of what a killed install left, quit and delete). The
+  Team ID is checked with `codesign -R` against the certificates, never read from `codesign`'s text. The publisher is
+  `app/publisher.json`, the version `app/VERSION`.
 - `orchestrator/policy.md` (appended to the orchestrator's system prompt),
   `orchestrator/plugin/commands/chores.md` (the chores procedure), `orchestrator/settings.json`
   (the orchestrator's own permissions, generic; a site replaces it with

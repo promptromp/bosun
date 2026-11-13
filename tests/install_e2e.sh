@@ -54,8 +54,21 @@ app_tools() {
 PLIST
   check "codesign signs a bundle ad hoc" codesign --force --sign - "$app"
   check "codesign --verify --deep --strict passes on it" codesign --verify --deep --strict "$app"
-  check "codesign -dv says on stderr that it has no team" bash -c 'codesign -dv "$1" 2>&1 >/dev/null | grep -qx "TeamIdentifier=not set"' _ "$app"
-  check "spctl --assess --type execute rejects it, as it would an app that is not notarized" bash -c '! spctl --assess --type execute "$1" 2>/dev/null' _ "$app"
+  # The Developer ID requirement bosun builds (lib/app_release.py requirement), for a made-up Team ID: text
+  # introduced by = (`-R =<text>`; without the =, codesign takes it for a file name).
+  local requirement='anchor apple generic and identifier "ai.example.bosun" and certificate 1[field.1.2.840.113635.100.6.2.6] /* exists */ and certificate leaf[field.1.2.840.113635.100.6.1.13] /* exists */ and certificate leaf[subject.OU] = "ABCDE12345"' # pragma: allowlist secret gitleaks:allow
+  check "codesign accepts a requirement an ad hoc bundle meets, with -R and the = (exit 0)" codesign --verify --deep --strict -R '=identifier "ai.example.bosun"' "$app"
+  check "... and fails one it does not meet with exit 3" bash -c 'codesign --verify --deep --strict -R "=identifier \"other\"" "$1" 2>/dev/null; [ $? = 3 ]' _ "$app"
+  check "the Developer ID requirement refuses an ad hoc bundle, with exit 3" bash -c 'codesign --verify --deep --strict -R "=$1" "$2" 2>/dev/null; [ $? = 3 ]' _ "$requirement" "$app"
+  check "... and a requirement codesign cannot read fails too, rather than passing" bash -c '! codesign --verify --deep --strict -R "=anchor apple generic and (" "$1" 2>/dev/null' _ "$app"
+  # A signer can put a line that looks like a Team ID in the identifier (codesign takes a newline in it) ahead of
+  # the real one in what `codesign -dv` prints: the requirement does not read that text.
+  mkdir -p "$work/forged"
+  cp -R "$app" "$work/forged/bosun.app"
+  codesign --force --sign - -i $'foo\nTeamIdentifier=ABCDE12345' "$work/forged/bosun.app" >/dev/null 2>&1
+  check "codesign -dv of a bundle with a forged identifier does show TeamIdentifier=ABCDE12345 first" bash -c 'codesign -dv "$1" 2>&1 | grep -qx "TeamIdentifier=ABCDE12345"' _ "$work/forged/bosun.app"
+  check "... but the Developer ID requirement still refuses it, with exit 3" bash -c 'codesign --verify --deep --strict -R "=$1" "$2" 2>/dev/null; [ $? = 3 ]' _ "$requirement" "$work/forged/bosun.app"
+  check "spctl --assess --type execute -vv rejects it, as it would an app that is not notarized (no Notarized Developer ID line)" bash -c 'out="$(spctl --assess --type execute -vv "$1" 2>&1)"; [ $? -ne 0 ] && ! grep -qx "source=Notarized Developer ID" <<<"$out"' _ "$app"
   check "ditto -x -k unpacks a zip made with ditto -c -k --keepParent into one bosun.app" bash -c '
     ditto -c -k --keepParent "$1" "$2/release.zip" && mkdir "$2/unpacked" && ditto -x -k "$2/release.zip" "$2/unpacked" &&
       [ "$(ls "$2/unpacked")" = bosun.app ]' _ "$app" "$work"

@@ -1,6 +1,7 @@
 #!/bin/bash
-# spctl's stand-in, for `--assess --type execute <app>`: a bundle is accepted while it has
-# Contents/_CodeSignature/notarized, as Gatekeeper accepts a notarized app, and rejected otherwise.
+# spctl's stand-in, for `--assess --type execute [-vv] <app>`: a bundle is accepted while it has
+# Contents/_CodeSignature/notarized, as Gatekeeper accepts a notarized app, and rejected otherwise. With -vv it
+# says on stderr, as the real one does, where the approval came from.
 mkdir -p "$HOME/.sandbox"
 echo "spctl $*" >>"$HOME/.sandbox/system.log"
 app="${!#}"
@@ -8,3 +9,6 @@ app="${!#}"
 	echo "$app: rejected" >&2
 	exit 3
 }
+case " $* " in
+*" -vv "*) printf '%s: accepted\nsource=Notarized Developer ID\n' "$app" >&2 ;;
+esac

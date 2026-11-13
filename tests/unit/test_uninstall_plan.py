@@ -100,6 +100,23 @@ class TheMenuBarApp(unittest.TestCase):
         self.assertIn("the menu bar app, ~/Applications/bosun.app", text)
         self.assertIn("asked to quit first", text)
 
+    def test_leftovers_are_a_step_each_with_what_to_run_by_hand(self) -> None:
+        left = f"{HOME}/Applications/.bosun-app-4242-abc"
+        plan = up.build_plan(facts(app_leftovers=(left,)), up.Choices())
+        (step,) = [step for step in plan.steps if step.kind == up.LEFTOVER]
+        self.assertEqual((step.target, step.by_hand), (left, f"rm -rf {left}"))
+        self.assertIn(
+            "left, ~/Applications/.bosun-app-4242-abc", up.render_plan(plan, facts(app_leftovers=(left,)))
+        )
+
+    def test_another_app_of_that_name_is_no_step_but_a_stay_with_its_reason(self) -> None:
+        other = (self.APP, "its bundle id is ai.other.app, not the publisher's ai.example.bosun")
+        plan = up.build_plan(facts(app_other=other), up.Choices())
+        self.assertEqual([step for step in plan.steps if step.kind == up.APP], [])
+        (stay,) = [stay for stay in plan.stays if stay.path == self.APP]
+        self.assertIn("it is not bosun's app", stay.why)
+        self.assertIn("ai.other.app", stay.why)
+
     def test_no_app_no_step(self) -> None:
         plan = up.build_plan(facts(), up.Choices())
         self.assertEqual([step for step in plan.steps if step.kind == up.APP], [])

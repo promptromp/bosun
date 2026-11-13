@@ -12,6 +12,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 import agent_changes
+import app_release
 import checkout_work
 import init_detect
 import init_plan
@@ -237,10 +238,23 @@ def wake_at(env: Mapping[str, str]) -> str:
         return ""
 
 
-def app_present() -> str:
-    """~/Applications/bosun.app, the menu bar app, if it is there; nothing if not."""
+def app_state(root: Path) -> tuple[str, tuple[str, str] | None]:
+    """~/Applications/bosun.app, the menu bar app: (its path, None) if it is there and is the publisher's,
+    (nothing, (its path, why)) if it is there and cannot be said to be, (nothing, None) if it is not there."""
     app = Path.home() / "Applications" / "bosun.app"
-    return str(app) if os.path.lexists(app) else ""
+    if not os.path.lexists(app):
+        return "", None
+    try:
+        why = app_release.not_ours(app, app_release.read_publisher(root).bundle_id)
+    except app_release.AppError as error:
+        why = f"app/publisher.json cannot say whose it is: {error}"
+    return ("", (str(app), why)) if why else (str(app), None)
+
+
+def app_leftovers() -> tuple[str, ...]:
+    """The `.bosun-app-*` folders in ~/Applications: what an install of the app that was killed left."""
+    found = (Path.home() / "Applications").glob(".bosun-app-*")
+    return tuple(sorted(str(path) for path in found if path.is_dir() and not path.is_symlink()))
 
 
 def detect(env: Mapping[str, str], root: Path) -> Facts:
@@ -249,6 +263,7 @@ def detect(env: Mapping[str, str], root: Path) -> Facts:
     log_dir = Path(env.get("BOSUN_LOG_DIR") or state_dir / "logs")
     session = env.get("BOSUN_SESSION_NAME", "bosun")
     found, roots = installed(root), install_roots(root)
+    app, app_other = app_state(root)
     code = Path(found.code.root)
     return Facts(
         home=str(Path.home()),
@@ -261,7 +276,9 @@ def detect(env: Mapping[str, str], root: Path) -> Facts:
         windows=windows(env),
         keep_awake=(state_dir / f"keep-awake-{session}.pid").exists(),
         jobs=uninstall_macos.jobs(env.get("BOSUN_JOB_LABELS", "").split(), roots),
-        app=app_present(),
+        app=app,
+        app_other=app_other,
+        app_leftovers=app_leftovers(),
         repeating=uninstall_macos.repeating_events(),
         wake_at=wake_at(env),
         days=env.get("BOSUN_DAYS", ""),

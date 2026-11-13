@@ -381,6 +381,8 @@ class TheMenuBarApp(World):
         self.app = self.home / "Applications" / "bosun.app"
         (self.app / "Contents" / "MacOS").mkdir(parents=True)
         (self.app / "Contents" / "MacOS" / "bosun").write_text("binary")
+        plist = {"CFBundleIdentifier": BUNDLE_ID, "CFBundleShortVersionString": "0.1.0"}
+        (self.app / "Contents" / "Info.plist").write_bytes(plistlib.dumps(plist))
         self.job = self.agents / f"{LABEL}.app.plist"
         arguments = [str(self.app / "Contents" / "MacOS" / "bosun"), "--at-login"]
         self.job.write_bytes(plistlib.dumps({"Label": f"{LABEL}.app", "ProgramArguments": arguments}))
@@ -397,6 +399,39 @@ class TheMenuBarApp(World):
         self.run_it("--dry-run")
         self.assertEqual(self.tree(), before)
         self.assertEqual(self.mac.calls, [])
+
+    def test_another_app_of_that_name_stays_and_the_plan_says_why(self) -> None:
+        other = {"CFBundleIdentifier": "ai.other.app", "CFBundleShortVersionString": "9"}
+        (self.app / "Contents" / "Info.plist").write_bytes(plistlib.dumps(other))
+        status, output = self.run_it("--yes")
+        self.assertEqual(status, 0)
+        self.assertTrue(self.app.exists())
+        self.assertNotIn("removed the menu bar app", output)
+        self.assertIn("it is not bosun's app", output)
+        self.assertIn("ai.other.app", output)
+        self.assertNotIn("quit app", self.mac.calls)  # it was not even asked to quit
+
+    def test_an_app_it_cannot_read_stays_too(self) -> None:
+        (self.app / "Contents" / "Info.plist").write_text("broken")
+        self.run_it("--yes")
+        self.assertTrue(self.app.exists())
+
+    def test_leftovers_of_an_install_that_was_killed_are_listed_and_go(self) -> None:
+        left = self.home / "Applications" / ".bosun-app-4242-abc"
+        (left / "unpacked").mkdir(parents=True)
+        (left / "unpacked" / "junk").write_text("a full unpacked app")
+        mine = self.home / "Applications" / "Mine.app"
+        mine.mkdir()
+        status, output = self.run_it("--dry-run")
+        self.assertIn("what an install of the menu bar app left, ~/Applications/.bosun-app-4242-abc", output)
+        self.assertEqual(status, 0)
+        self.run_it("--yes")
+        self.assertFalse(left.exists())
+        self.assertTrue(mine.exists())
+
+    def test_with_no_leftovers_there_is_no_line_for_them(self) -> None:
+        _, output = self.run_it("--dry-run")
+        self.assertNotIn("an install of the menu bar app left", output)
 
     def test_both_go(self) -> None:
         status, output = self.run_it("--yes")

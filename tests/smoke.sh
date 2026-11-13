@@ -3092,11 +3092,15 @@ assert job["KeepAlive"] == {"PathState": {sys.argv[2] + "/console/wanted": True}
 [ ! -e "$APP/Contents/old.txt" ] || echo "the old app was in place" >>"$WORK/app-spctl-saw"
 exec "$ROOT/tests/sandbox/macos/spctl" "\$@"
 EOF
-  # curl serves the release zip of the test ($APP_ZIP) and writes down the address; a missing release is its 404.
+  # curl serves the release zip of the test ($APP_ZIP) and writes down the address; a missing release is its 404, which
+  # -f makes exit 22 and -w prints.
   cat >"$HOME/.local/bin/curl" <<EOF
 #!/bin/bash
 echo "curl \$*" >>"$WORK/app-curl.log"
-[ ! -e "$WORK/app-release-missing" ] || exit 22
+[ ! -e "$WORK/app-release-missing" ] || {
+  printf 404
+  exit 22
+}
 out=""
 while [ \$# -gt 0 ]; do
   [ "\$1" != -o ] || out="\$2"
@@ -3134,6 +3138,7 @@ EOF
 plistlib.dump({"CFBundleIdentifier": sys.argv[2], "CFBundleShortVersionString": sys.argv[3]}, open(sys.argv[1], "wb"))' "$dir/bosun.app/Contents/Info.plist" "$bundle_id" "$version"
       if [ "$signature" != unsigned ]; then
         mkdir "$dir/bosun.app/Contents/_CodeSignature"
+        echo "$APP_ID" >"$dir/bosun.app/Contents/_CodeSignature/identifier" # the code's identifier, which the requirement names
         [ "$signature" = adhoc ] || echo "$signature" >"$dir/bosun.app/Contents/_CodeSignature/team"
         [ "$notarized" = no ] || : >"$dir/bosun.app/Contents/_CodeSignature/notarized"
       fi
@@ -3162,10 +3167,10 @@ with zipfile.ZipFile(sys.argv[1], "w") as bundle:
       check "... and leaves ~/Applications as it was" test "$(apps_state)" = "$before"
     }
     app_refusals() {
-      app_refused "an app signed by another team" "another team" 0.1.0 ZZZZZ99999 yes "$APP_ID"
+      app_refused "an app signed by another team" "not signed with the publisher's Developer ID" 0.1.0 ZZZZZ99999 yes "$APP_ID"
       app_refused "one that is not notarized" "not notarized" 0.1.0 "$APP_TEAM" no "$APP_ID"
       app_refused "one that is not signed at all" "not signed" 0.1.0 unsigned no "$APP_ID"
-      app_refused "one signed ad hoc" "no Team ID" 0.1.0 adhoc yes "$APP_ID"
+      app_refused "one signed ad hoc" "not signed with the publisher's Developer ID" 0.1.0 adhoc yes "$APP_ID"
       app_refused "one with another bundle id" "bundle id is ai.other.app" 0.1.0 "$APP_TEAM" yes ai.other.app
       app_refused "a zip with a second app in it" "other.app" 0.1.0 "$APP_TEAM" yes "$APP_ID" other.app
       app_refused "a zip with a file beside the app" "README.txt" 0.1.0 "$APP_TEAM" yes "$APP_ID" README.txt
@@ -3201,13 +3206,53 @@ with zipfile.ZipFile(sys.argv[1], "w") as bundle:
     check "... and places the app: the version is the bundle's" test "$(installed)" = 0.1.0
     check "... with nothing else left in ~/Applications" test "$(ls -A "$APP_DIR")" = bosun.app
     check "status says it in words" contains "$(bapp status)" "bosun.app 0.1.0 is installed"
-    check "install checked the signature, the team and notarization of the unpacked app, before it was placed" bash -c '
-      folder="$2/\.bosun-app-[^/]*/unpacked/bosun\.app"
-      grep -qE "^codesign --verify --deep --strict $folder$" "$1" && grep -qE "^codesign -dv $folder$" "$1" && grep -qE "^spctl --assess --type execute $folder$" "$1"' _ "$APP_LOG" "$APP_DIR"
+    check "install checked the signature against the publisher's requirement, and notarization, of the unpacked app, before it was placed" bash -c '
+      folder="$2/\.bosun-app-[0-9]*-[^/]*/unpacked/bosun\.app"
+      grep -qE "^codesign --verify --deep --strict -R =anchor apple generic and identifier \"$3\" and .* leaf\[subject\.OU\] = \"$4\" $folder$" "$1" &&
+        grep -qE "^spctl --assess --type execute -vv $folder$" "$1"' _ "$APP_LOG" "$APP_DIR" "$APP_ID" "$APP_TEAM"
+    check "... and read nothing from what codesign prints about the app (codesign -dv was never run)" bash -c '! grep -q "^codesign -dv" "$1"' _ "$APP_LOG"
 
     echo "x" >"$APP/Contents/old.txt"
     echo "  (a refused app, with an old one in place)"
     app_refusals
+    echo "  (what a download may hold, what a killed install leaves, and an app that is not ours)"
+    # app_refused_entry <description> <says> <entry> [symlink]: the good release with one more entry, refused.
+    app_refused_entry() {
+      local description="$1" says="$2" before
+      good_release 0.1.0
+      python3 -I -c 'import sys, zipfile
+with zipfile.ZipFile(sys.argv[1], "a") as bundle:
+    info = zipfile.ZipInfo(sys.argv[2])
+    if len(sys.argv) > 3:
+        info.external_attr = 0o120777 << 16
+    bundle.writestr(info, "x")' "$APP_ZIP" "${@:3}"
+      before="$(apps_state)"
+      check "install refuses $description" fails_with "$says" bapp install
+      check "... and leaves ~/Applications as it was, nothing unpacked" test "$(apps_state)" = "$before"
+    }
+    app_refused_entry "an entry that climbs out of its folder" "climbs out" "../escape.txt"
+    app_refused_entry "an entry with an absolute path" "absolute path" "/etc/escape.txt"
+    app_refused_entry "a symbolic link in the archive" "symbolic link" "bosun.app/Contents/link" symlink
+    check "nothing was unpacked outside: no escape.txt anywhere beside ~/Applications" bash -c '[ ! -e "$1/../escape.txt" ] && [ ! -e /etc/escape.txt ]' _ "$APP_DIR"
+    # An install killed between its two renames leaves the old app in its own folder and none at the app's place.
+    mkdir -p "$APP_DIR/.bosun-app-999999-killed/previous"
+    mv "$APP" "$APP_DIR/.bosun-app-999999-killed/previous/bosun.app"
+    app_release 0.1.0 ZZZZZ99999 yes "$APP_ID"
+    check "an install after a killed one gives the old app back first, even when it is itself refused" bash -c '
+      ! "$1" app install >/dev/null 2>&1 && [ -f "$2/Contents/old.txt" ] && [ ! -e "$3/.bosun-app-999999-killed" ] && [ "$(ls -A "$3")" = bosun.app ]' _ "$APP_CHECKOUT/bin/bosun" "$APP" "$APP_DIR"
+    mkdir -p "$APP_DIR/.bosun-app-999999-junk/unpacked" && echo junk >"$APP_DIR/.bosun-app-999999-junk/unpacked/x"
+    check "... and sweeps what a killed install left unpacked" bash -c '! "$1" app install >/dev/null 2>&1 && [ ! -e "$2/.bosun-app-999999-junk" ]' _ "$APP_CHECKOUT/bin/bosun" "$APP_DIR"
+    # Another app of that name is not bosun's to replace or remove.
+    mv "$APP" "$WORK/bosun.app.kept"
+    mkdir -p "$APP/Contents"
+    python3 -I -c 'import plistlib, sys; plistlib.dump({"CFBundleIdentifier": "ai.other.app", "CFBundleShortVersionString": "9"}, open(sys.argv[1], "wb"))' "$APP/Contents/Info.plist"
+    good_release 0.1.0
+    before="$(apps_state)"
+    check "install leaves another app of that name, and says so" fails_with "not bosun's app" bapp install
+    check "remove leaves it too" fails_with "not bosun's app" bapp remove
+    check "... both with ~/Applications as it was" test "$(apps_state)" = "$before"
+    rm -rf "$APP"
+    mv "$WORK/bosun.app.kept" "$APP"
     rm -f "$WORK/app-spctl-saw"
     set_wanted 0.2.0
     good_release 0.2.0

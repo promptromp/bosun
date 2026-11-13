@@ -3,12 +3,15 @@
 
 It accepts only the publisher's notarized build. The app comes from a GitHub release of this repository (or
 the mirror BOSUN_APP_RELEASES names), is unpacked in a folder of its own and is placed in ~/Applications only
-once `codesign` and `spctl` have vouched for it, its Team ID is the one in app/publisher.json and its bundle
-id is that file's. A refused or failed install leaves ~/Applications as it was.
+once `codesign` has checked its signature against the publisher's Developer ID requirement (Team ID and bundle
+id, from the certificates, never from what codesign prints), Gatekeeper says it is a Notarized Developer
+ID and its bundle id is the publisher's. A refused or failed install leaves ~/Applications as it was.
 
 Every external tool (curl, ditto, codesign, spctl, osascript, open) is run through one runner, `Runner`,
-which a test replaces. The login job (Open at Login) is launchd's and the shell's (`libexec/bosun-app`;
-lib/common.sh renders its plist like the others); here is only whether its plist is there, for `status`.
+which a test replaces. What is decided without a tool (the publisher, the release address, the code
+requirement, which archives are refused, `status`) is lib/app_release.py. The login job (Open at Login) is
+launchd's and the shell's (`libexec/bosun-app`; lib/common.sh renders its plist like the others); here is only
+whether its plist is there, for `status`.
 
     app_install.py install [--build]     download and place the release app/VERSION names; --build: the app
                                          that app/build.sh makes, without the team check (developers)
@@ -26,48 +29,69 @@ import argparse
 import contextlib
 import json
 import os
-import plistlib
 import re
 import shutil
+import signal
 import subprocess
 import sys
 import tempfile
 import time
-from collections.abc import Callable, Mapping, Sequence
+import zipfile
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
-from xml.parsers.expat import ExpatError
+from types import FrameType
 
+import app_release
 import install_paths
 import update_check
 import update_lookup
+from app_release import BUNDLE, AppError, Publisher
 
 
 ROOT = Path(__file__).resolve().parents[1]
-CONTRACT = 1  # the shape of `status --json`; the menu bar app reads it
-BUNDLE = "bosun.app"
 TOOL_SECONDS = 900  # the most any one tool may take: the download is the slow one
-CURL = ("curl", "-fsSL", "--connect-timeout", "30", "--max-time", "600")
+# curl: no ~/.curlrc (-q, which must come first), https only, also after a redirect, a failed status an error
+# (-f) whose number is printed (-w) for the message.
+CURL = (
+    "curl",
+    "-q",
+    "-fsSL",
+    "--proto",
+    "=https",
+    "--proto-redir",
+    "=https",
+    "--connect-timeout",
+    "30",
+    "--max-time",
+    "600",
+    "-w",
+    "%{http_code}",
+)
 HTTP_ERROR = 22  # curl -f: the server answered with an error, such as 404
+NOT_FOUND = "404"
+CODESIGN_UNSATISFIED = 3  # codesign --verify: the code does not meet the requirement given with -R
+NO_SUCH_APP = "(-1728)"  # osascript: Launch Services knows no app of that bundle id, so it is not running
+NOT_ALLOWED = "(-1743)"  # osascript: the user has not allowed bosun to control that app (Automation)
 QUIT_POLLS = 40  # an app asked to quit is looked at this often, QUIT_POLL_SECONDS apart
 QUIT_POLL_SECONDS = 0.5
-SCRATCH_PREFIX = ".bosun-app-"  # hidden, in ~/Applications itself: a rename into place never crosses a volume
-SHOWN = 5  # of the extra names in an archive that a refusal lists
-TEAM_ID = re.compile(r"^[A-Z0-9]{10}$")
-BUNDLE_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9.-]*$")  # goes into AppleScript's text: nothing else may
-VERSION = re.compile(r"^[0-9][0-9A-Za-z.+-]*$")
-SLUG = re.compile(r"^[A-Za-z0-9][A-Za-z0-9-]*/[A-Za-z0-9_][A-Za-z0-9_.-]*$")
-GITHUB = re.compile(
-    r"^(?:(?:https?|ssh|git)://)?(?:[^/@\s]+@)?github\.com[/:]([A-Za-z0-9][A-Za-z0-9-]*)/"
-    r"([A-Za-z0-9_][A-Za-z0-9_.-]*?)(?:\.git)?/?$"
+# Hidden, in ~/Applications itself, so that a rename into place never crosses a volume; the pid of the install
+# that made it is in the name, so that a later one can tell what a dead install left from a live one's.
+SCRATCH_PREFIX = ".bosun-app-"
+SCRATCH_PID = re.compile(r"^\.bosun-app-(\d+)-")
+NOTARIZED = "source=Notarized Developer ID"
+ASK_AUTOMATION = (
+    "macOS did not let bosun ask bosun.app to quit (Automation is not allowed): allow it in System Settings, "
+    "Privacy & Security, Automation, or quit bosun.app by hand, then run this again"
 )
-NO_TEAM = "app/publisher.json has no team_id yet"
-NO_BUILD = "part 2 builds the app"
 
 
-class AppError(Exception):
-    """Something refused or failed, in the one line it is shown as."""
+class Interrupted(AppError):
+    """The install was ended by SIGTERM or SIGHUP; what it had done is undone as for any failure."""
+
+
+class Stuck(AppError):
+    """The old app could not be put back: the folder that holds it is kept, and the message says where."""
 
 
 @dataclass(frozen=True)
@@ -77,9 +101,13 @@ class Run:
     stderr: str = ""
 
     @property
+    def text(self) -> str:
+        return f"{self.stdout}\n{self.stderr}"
+
+    @property
     def last_line(self) -> str:
         """The last line the tool said, on either stream: what a refusal quotes."""
-        lines = [line.strip() for line in f"{self.stdout}\n{self.stderr}".splitlines() if line.strip()]
+        lines = [line.strip() for line in self.text.splitlines() if line.strip()]
         return lines[-1] if lines else f"exit status {self.returncode}"
 
 
@@ -129,60 +157,6 @@ class Setup:
         return self.apps / BUNDLE
 
 
-# ---- who publishes it, and where ------------------------------------------------------------------------
-
-
-@dataclass(frozen=True)
-class Publisher:
-    bundle_id: str
-    team_id: str  # "" until the publisher's own is filled in
-    releases: str  # owner/repo of the releases
-
-
-def read_publisher(root: Path) -> Publisher:
-    path = root / "app" / "publisher.json"
-    try:
-        data = json.loads(path.read_text())
-    except (OSError, ValueError) as error:
-        raise AppError(f"app/publisher.json cannot be read: {error}") from error
-    if not isinstance(data, dict):
-        raise AppError("app/publisher.json must hold an object")
-    fields = {key: data.get(key, "") for key in ("bundle_id", "team_id", "releases")}
-    if not all(isinstance(value, str) for value in fields.values()):
-        raise AppError("app/publisher.json must hold the strings bundle_id, team_id and releases")
-    bundle_id, team_id, releases = (str(value) for value in fields.values())
-    if not BUNDLE_ID.match(bundle_id):
-        raise AppError("app/publisher.json has no bundle_id")
-    return Publisher(bundle_id, team_id, releases)
-
-
-def require_team(publisher: Publisher) -> str:
-    """The publisher's Team ID, which an install checks the app against: refused while it is not filled in."""
-    if not publisher.team_id:
-        raise AppError(NO_TEAM)
-    if not TEAM_ID.match(publisher.team_id):
-        raise AppError("app/publisher.json: team_id is not a Team ID (ten capital letters and digits)")
-    return publisher.team_id
-
-
-def wanted_version(root: Path) -> str:
-    """The app version this checkout works with (app/VERSION)."""
-    try:
-        version = (root / "app" / "VERSION").read_text().strip()
-    except OSError as error:
-        raise AppError(f"app/VERSION cannot be read: {error}") from error
-    if not VERSION.match(version):
-        raise AppError(f"app/VERSION is not a version: {version!r}")
-    return version
-
-
-def github_slug(url: str) -> str | None:
-    """owner/repo of a GitHub address, in any form git takes; None for any other host (credentials in it
-    are dropped, never kept)."""
-    found = GITHUB.match(url.strip())
-    return f"{found[1]}/{found[2]}" if found else None
-
-
 def install_origin(root: Path) -> str:
     """Where the install came from: its origin remote, read as `bosun update` reads it (credentials
     taken off); nothing when it cannot be read."""
@@ -193,153 +167,94 @@ def install_origin(root: Path) -> str:
         return ""
 
 
-def _setting_slug(value: str, name: str) -> str:
-    slug = value if SLUG.match(value) else github_slug(value)
-    if slug is None:
-        shown = update_check.strip_credentials(value)
-        raise AppError(f"{name} is neither owner/repo nor a GitHub address: {shown}")
-    return slug
-
-
-def releases_slug(configured: str, publisher: Publisher, origin: Callable[[], str]) -> str:
-    """owner/repo to look for releases in: BOSUN_APP_RELEASES (<configured>), else the publisher's, else
-    the install's origin when that is on GitHub. <origin> is only called when nothing else names it."""
-    if configured.strip():
-        return _setting_slug(configured.strip(), "BOSUN_APP_RELEASES")
-    if publisher.releases:
-        return _setting_slug(publisher.releases, "app/publisher.json's releases")
-    slug = github_slug(origin())
-    if slug is None:
-        raise AppError(
-            "no address to look for releases at: set BOSUN_APP_RELEASES to <owner>/<repo>, "
-            "as this install's origin is not on GitHub"
-        )
-    return slug
-
-
-def release_asset_url(releases: str, version: str) -> str:
-    """Where release app-v<version> of <releases> (owner/repo) keeps its zip."""
-    if not SLUG.match(releases):
-        raise AppError(f"the releases address is not owner/repo: {update_check.strip_credentials(releases)}")
-    if not VERSION.match(version):
-        raise AppError(f"the app version is not a version: {version!r}")
-    base = f"https://github.com/{releases}/releases/download/app-v{version}"
-    return f"{base}/bosun-app-{version}.zip"
-
-
-# ---- what the app is: its signature, team, notarization and identity -------------------------------------
-
-
-def read_info(app: Path) -> dict[str, Any] | None:
-    try:
-        data = plistlib.loads((app / "Contents" / "Info.plist").read_bytes())
-    except (OSError, ValueError, ExpatError):
-        return None
-    return data if isinstance(data, dict) else None
-
-
-def bundle_version(app: Path) -> str | None:
-    """CFBundleShortVersionString of the bundle at <app>; None when there is none or it cannot be read."""
-    info = read_info(app)
-    version = info.get("CFBundleShortVersionString") if info else None
-    return version if isinstance(version, str) and version else None
+# ---- what the app is: its signature, notarization and identity ------------------------------------------
 
 
 def _quoted(app: Path, done: Run) -> str:
     return done.last_line.removeprefix(f"{app}: ")
 
 
-def _signature_problem(app: Path, run: Runner) -> str | None:
-    done = run(["codesign", "--verify", "--deep", "--strict", str(app)])
+def _signature_problem(app: Path, publisher: Publisher, team_id: str, run: Runner) -> str | None:
+    """One `codesign --verify --deep --strict -R` against the publisher's requirement: the signature is whole,
+    and the certificates in it are the publisher's. Nothing is read from codesign's description of the app,
+    which a signer can write into (an identifier may hold a newline and a line that looks like a Team ID)."""
+    wanted = app_release.requirement(publisher.bundle_id, team_id)
+    done = run(["codesign", "--verify", "--deep", "--strict", "-R", f"={wanted}", str(app)])
     if done.returncode == 0:
         return None
     if "not signed at all" in done.last_line:
         return "it is not signed"
+    if done.returncode == CODESIGN_UNSATISFIED:
+        who = f"team {team_id}, bundle id {publisher.bundle_id}"
+        return f"it is not signed with the publisher's Developer ID ({who})"
     return f"its signature does not verify: {_quoted(app, done)}"
 
 
-def _team_problem(app: Path, team_id: str, run: Runner) -> str | None:
-    done = run(["codesign", "-dv", str(app)])  # it describes on stderr
+def _notarization_problem(app: Path, run: Runner) -> str | None:
+    done = run(["spctl", "--assess", "--type", "execute", "-vv", str(app)])
     if done.returncode != 0:
-        return f"its signature cannot be read: {_quoted(app, done)}"
-    teams = [
-        line.partition("=")[2].strip()
-        for line in f"{done.stdout}\n{done.stderr}".splitlines()
-        if line.startswith("TeamIdentifier=")
-    ]
-    found = teams[0] if teams else ""
-    if found in ("", "not set"):
-        return "it is signed with no Team ID (ad hoc), so it is not the publisher's"
-    if found != team_id:
-        return f"it is signed by another team ({found}), not the publisher's ({team_id})"
+        return f"macOS does not accept it (not notarized?): {_quoted(app, done)}"
+    if NOTARIZED not in [line.strip() for line in done.text.splitlines()]:
+        return "Gatekeeper's assessment did not say Notarized Developer ID"
     return None
 
 
-def _notarization_problem(app: Path, run: Runner) -> str | None:
-    done = run(["spctl", "--assess", "--type", "execute", str(app)])
-    if done.returncode == 0:
-        return None
-    return f"macOS does not accept it (not notarized?): {_quoted(app, done)}"
-
-
-def _identity_problem(app: Path, bundle_id: str) -> str | None:
-    info = read_info(app)
-    if info is None:
-        return "its Info.plist cannot be read"
-    found = info.get("CFBundleIdentifier")
-    return None if found == bundle_id else f"its bundle id is {found}, not the publisher's {bundle_id}"
-
-
-def verify(app: Path, team_id: str, bundle_id: str, run: Runner) -> str | None:
-    """Why the app at <app> is refused, or None when it is the publisher's notarized build: its signature
-    verifies (`codesign --verify --deep --strict`), `codesign -dv` names TeamIdentifier=<team_id>, `spctl
-    --assess --type execute` accepts it and its Info.plist's CFBundleIdentifier is <bundle_id>. It stops at
-    the first refusal."""
+def verify(app: Path, publisher: Publisher, run: Runner) -> str | None:
+    """Why the app at <app> is refused, or None when it is the publisher's notarized build: `codesign
+    --verify --deep --strict -R` against the publisher's Developer ID requirement passes, `spctl --assess
+    --type execute -vv` exits 0 and says `source=Notarized Developer ID`, and its Info.plist's
+    CFBundleIdentifier is the publisher's. It stops at the first refusal."""
     if not app.is_dir() or app.is_symlink():
         return f"{app.name} is not an app bundle"
-    if not TEAM_ID.match(team_id):
+    if not app_release.TEAM_ID.match(publisher.team_id):
         return "there is no Team ID to check it against"
     return (
-        _signature_problem(app, run)
-        or _team_problem(app, team_id, run)
+        _signature_problem(app, publisher, publisher.team_id, run)
         or _notarization_problem(app, run)
-        or _identity_problem(app, bundle_id)
+        or app_release.not_ours(app, publisher.bundle_id)
     )
 
 
-# ---- getting it and placing it --------------------------------------------------------------------------
+# ---- getting it ------------------------------------------------------------------------------------------
 
 
-def archive_problem(folder: Path) -> str | None:
-    """Why what was unpacked in <folder> is refused: it must be exactly one bosun.app (a real folder) and
-    nothing else but macOS's __MACOSX."""
-    names = sorted(name for name in os.listdir(folder) if name != "__MACOSX")
-    if BUNDLE not in names:
-        return f"the archive does not hold {BUNDLE}"
-    extras = [name for name in names if name != BUNDLE]
-    if extras:
-        listed = ", ".join(extras[:SHOWN]) + (", ..." if len(extras) > SHOWN else "")
-        return f"the archive must hold {BUNDLE} and nothing else, but also holds: {listed}"
-    if not (folder / BUNDLE).is_dir() or (folder / BUNDLE).is_symlink():
-        return f"{BUNDLE} in the archive is not a folder"
-    return None
+def download(setup: Setup, url: str, archive: Path, what: str) -> None:
+    """<url> fetched to <archive>; a refusal says what the server answered."""
+    done = setup.run([*CURL, "-o", str(archive), url])
+    if done.returncode == 0:
+        return
+    status = done.stdout.strip()
+    if done.returncode == HTTP_ERROR and status == NOT_FOUND:
+        raise AppError(f"no release of {what}: {url} is not there (HTTP 404)")
+    if done.returncode == HTTP_ERROR and status:
+        raise AppError(f"could not download {url}: the server answered HTTP {status}")
+    raise AppError(f"could not download {url}: {update_check.strip_credentials(done.last_line)}")
+
+
+def check_archive(archive: Path) -> None:
+    """The archive's entries, before anything is unpacked: refused for an absolute path, a `..` or a link."""
+    try:
+        with zipfile.ZipFile(archive) as bundle:
+            entries = bundle.infolist()
+    except (zipfile.BadZipFile, OSError) as error:
+        raise AppError(f"the download is not a zip archive: {error}") from error
+    problem = app_release.entries_problem(entries)
+    if problem:
+        raise AppError(problem)
 
 
 def fetch_app(setup: Setup, slug: str, version: str, scratch: Path) -> Path:
     """The release's app, downloaded and unpacked in <scratch>, and checked to be one bosun.app."""
-    url = release_asset_url(slug, version)
+    url = app_release.release_asset_url(slug, version)
     archive = scratch / "bosun-app.zip"
-    done = setup.run([*CURL, "-o", str(archive), url])
-    if done.returncode == HTTP_ERROR:
-        raise AppError(f"no release of {BUNDLE} {version} at {slug}: {url} is not there")
-    if done.returncode != 0:
-        raise AppError(f"could not download {url}: {update_check.strip_credentials(done.last_line)}")
+    download(setup, url, archive, f"{BUNDLE} {version} at {slug}")
+    check_archive(archive)
     unpacked = scratch / "unpacked"
     unpacked.mkdir()
     done = setup.run(["ditto", "-x", "-k", str(archive), str(unpacked)])
     if done.returncode != 0:
         raise AppError(f"the download is not a zip archive: {done.last_line}")
-    problem = archive_problem(unpacked)
+    problem = app_release.archive_problem(unpacked)
     if problem:
         raise AppError(problem)
     return unpacked / BUNDLE
@@ -357,37 +272,124 @@ def build_app(setup: Setup, scratch: Path) -> Path:
     return built / BUNDLE
 
 
-def is_running(run: Runner, bundle_id: str) -> bool:
-    """Whether the app is running, asked by its bundle id: never found by the name of a process."""
+# ---- the running app -------------------------------------------------------------------------------------
+
+
+def is_running(run: Runner, bundle_id: str) -> bool | None:
+    """Whether the app is running, asked by its bundle id (never found by the name of a process): True,
+    False, or None when osascript could not say. An app Launch Services does not know of is not running."""
     done = run(["osascript", "-e", f'application id "{bundle_id}" is running'])
-    return done.returncode == 0 and done.stdout.strip() == "true"
+    answer = done.stdout.strip()
+    if done.returncode == 0 and answer in ("true", "false"):
+        return answer == "true"
+    return False if NO_SUCH_APP in done.text else None
 
 
-def quit_app(setup: Setup) -> bool:
+def _running(setup: Setup, bundle_id: str) -> bool:
+    """is_running, where an answer it could not give refuses: an app that may be running is not replaced."""
+    running = is_running(setup.run, bundle_id)
+    if running is None:
+        raise AppError(
+            f"could not tell whether {BUNDLE} is running, so it was not touched: it must be quit first"
+        )
+    return running
+
+
+def quit_app(setup: Setup, bundle_id: str) -> bool:
     """Ask the running app to quit, by its bundle id, and wait until it has. Whether it was running."""
-    bundle_id = read_publisher(setup.root).bundle_id
-    if not is_running(setup.run, bundle_id):
+    if not _running(setup, bundle_id):
         return False
-    setup.run(["osascript", "-e", f'tell application id "{bundle_id}" to quit'])
+    done = setup.run(["osascript", "-e", f'tell application id "{bundle_id}" to quit'])
+    if done.returncode != 0:
+        if NOT_ALLOWED in done.text:
+            raise AppError(ASK_AUTOMATION)
+        raise AppError(f"could not ask {BUNDLE} to quit: {done.last_line}")
     for _ in range(QUIT_POLLS):
         setup.sleep(QUIT_POLL_SECONDS)
-        if not is_running(setup.run, bundle_id):
+        if not _running(setup, bundle_id):
             return True
     raise AppError(f"{BUNDLE} is still running: quit it, then run this again")
 
 
+# ---- placing it ------------------------------------------------------------------------------------------
+
+
+def _alive(pid: int) -> bool:
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    return True
+
+
+def _restore(aside: Path, dest: Path) -> None:
+    """The old app, at <aside>, put back at <dest>; Stuck, naming where it is, when that fails."""
+    try:
+        os.rename(aside, dest)
+    except OSError as error:
+        raise Stuck(f"could not put the old {BUNDLE} back at {dest}: {error}; it is at {aside}") from error
+
+
+def sweep_stale(setup: Setup) -> None:
+    """What an install that was killed (SIGKILL, a crash, a power cut) left in ~/Applications: each
+    `.bosun-app-*` folder whose install is gone. One that holds the old app, with none at
+    ~/Applications/bosun.app (killed between the two renames), gives it back first."""
+    for folder in sorted(setup.apps.glob(f"{SCRATCH_PREFIX}*")):
+        found = SCRATCH_PID.match(folder.name)
+        if not folder.is_dir() or folder.is_symlink() or (found and _alive(int(found[1]))):
+            continue
+        old = folder / "previous" / BUNDLE
+        if old.is_dir() and not os.path.lexists(setup.app):
+            _restore(old, setup.app)
+        shutil.rmtree(folder, ignore_errors=True)
+
+
+def ensure_ours(app: Path, bundle_id: str, doing: str) -> None:
+    """Nothing is done to a ~/Applications/bosun.app that cannot be said to be the publisher's."""
+    if not os.path.lexists(app):
+        return
+    why = app_release.not_ours(app, bundle_id)
+    if why:
+        raise AppError(
+            f"~/Applications/{BUNDLE} is not bosun's app ({why}), so it is left as it is: {doing} it yourself"
+        )
+
+
+@contextlib.contextmanager
+def raising_on_signals() -> Iterator[None]:
+    """SIGTERM and SIGHUP end the install as an exception while this holds, so what it has done is undone;
+    the handlers there before are put back after."""
+
+    def end(signum: int, _frame: FrameType | None) -> None:
+        raise Interrupted(
+            f"ended by {signal.Signals(signum).name}: the old {BUNDLE} was put back, if it was moved"
+        )
+
+    wanted = (signal.SIGTERM, signal.SIGHUP)
+    before = {number: signal.signal(number, end) for number in wanted}
+    try:
+        yield
+    finally:
+        for number, handler in before.items():
+            signal.signal(number, handler)
+
+
 def put_in_place(staged: Path, dest: Path, scratch: Path) -> None:
     """<staged> renamed to <dest>; the app there before is renamed into <scratch> first (which goes with it
-    when the install ends), and put back if the rename in fails."""
-    aside = scratch / "previous"
-    had_old = os.path.lexists(dest)
-    if had_old:
-        os.rename(dest, aside)
+    when the install ends), and put back if the rename in fails or the install is ended in between."""
+    aside = scratch / "previous" / BUNDLE
     try:
+        if os.path.lexists(dest):
+            aside.parent.mkdir()
+            os.rename(dest, aside)
         os.rename(staged, dest)
-    except OSError as error:
-        if had_old:
-            os.rename(aside, dest)
+    except (OSError, Interrupted) as error:
+        if os.path.lexists(aside) and not os.path.lexists(dest):  # by what is there, not by what was done
+            _restore(aside, dest)
+        if isinstance(error, Interrupted):
+            raise
         raise AppError(f"could not put {BUNDLE} in {dest.parent}: {error}") from error
 
 
@@ -396,28 +398,63 @@ def remove_if_empty(folder: Path) -> None:
         folder.rmdir()
 
 
-def place_app(setup: Setup, produce: Callable[[Path], Path], team_id: str | None) -> str:
-    """The app <produce> makes in a scratch folder, checked against <team_id> (None: not checked) and
-    placed. The scratch folder is made in ~/Applications, so the rename in is on one volume, and goes
-    whatever happens; a ~/Applications this made goes too, unless the install worked."""
-    publisher = read_publisher(setup.root)
-    created = not setup.apps.exists()
-    setup.apps.mkdir(parents=True, exist_ok=True)
-    scratch = Path(tempfile.mkdtemp(prefix=SCRATCH_PREFIX, dir=setup.apps))
-    reopen = placed = False
+def make_scratch(apps: Path) -> tuple[Path, bool]:
+    """A folder of its own in ~/Applications (made if it is not there), and whether this made ~/Applications;
+    which it removes again, if it made it, when it cannot make the folder."""
+    created = not apps.exists()
+    apps.mkdir(parents=True, exist_ok=True)
     try:
-        staged = produce(scratch)
-        reason = None if team_id is None else verify(staged, team_id, publisher.bundle_id, setup.run)
+        return Path(tempfile.mkdtemp(prefix=f"{SCRATCH_PREFIX}{os.getpid()}-", dir=apps)), created
+    except OSError:
+        if created:
+            remove_if_empty(apps)
+        raise
+
+
+def stage_and_place(
+    setup: Setup, publisher: Publisher, produce: Callable[[Path], Path], scratch: Path
+) -> bool:
+    """The app <produce> makes in <scratch>, checked (unless the publisher's team is None: a build) and put in
+    place, the running app having been asked to quit once it is verified. Whether it was running."""
+    staged = produce(scratch)
+    if publisher.team_id:
+        reason = verify(staged, publisher, setup.run)
         if reason:
             raise AppError(f"refused {BUNDLE}: {reason}")
-        reopen = quit_app(setup)
+    reopen = quit_app(setup, publisher.bundle_id)
+    try:
         put_in_place(staged, setup.app, scratch)
+    except Stuck:
+        raise
+    except AppError:
+        if reopen:  # the old one is back: it was running
+            setup.run(["open", str(setup.app)])
+        raise
+    return reopen
+
+
+def place_app(setup: Setup, publisher: Publisher, produce: Callable[[Path], Path]) -> str:
+    """The app <produce> makes in a scratch folder, checked against <publisher> (a publisher with no team_id:
+    not checked) and placed. Leftovers of an install that was killed are swept first. The scratch folder is
+    removed whatever happens but one case (the old app could not be put back: then it is kept, and the message
+    says where the old app is); a ~/Applications this made is removed too, unless the install worked."""
+    sweep_stale(setup)
+    ensure_ours(setup.app, publisher.bundle_id, "replace")
+    scratch, created = make_scratch(setup.apps)
+    reopen = placed = keep = False
+    try:
+        with raising_on_signals():
+            reopen = stage_and_place(setup, publisher, produce, scratch)
         placed = True
+    except Stuck:
+        keep = True
+        raise
     finally:
-        shutil.rmtree(scratch, ignore_errors=True)
+        if not keep:
+            shutil.rmtree(scratch, ignore_errors=True)
         if created and not placed:
             remove_if_empty(setup.apps)
-    shown = " ".join(filter(None, [BUNDLE, bundle_version(setup.app)]))
+    shown = " ".join(filter(None, [BUNDLE, app_release.bundle_version(setup.app)]))
     if reopen:
         opened = setup.run(["open", str(setup.app)])
         if opened.returncode != 0:
@@ -431,23 +468,24 @@ def place_app(setup: Setup, produce: Callable[[Path], Path], team_id: str | None
 def install(setup: Setup, *, build: bool = False) -> str:
     """Place the release app/VERSION names (checked against the publisher), or with <build> the app
     app/build.sh makes (not checked: it is ad hoc signed, for developing the app)."""
-    publisher = read_publisher(setup.root)
+    publisher = app_release.read_publisher(setup.root)
     if build:
         if not (setup.root / "app" / "build.sh").is_file():
-            raise AppError(NO_BUILD)
-        return place_app(setup, lambda scratch: build_app(setup, scratch), None)
-    team_id = require_team(publisher)
-    version = wanted_version(setup.root)
-    slug = releases_slug(setup.releases, publisher, lambda: install_origin(setup.root))
-    return place_app(setup, lambda scratch: fetch_app(setup, slug, version, scratch), team_id)
+            raise AppError(app_release.NO_BUILD)
+        unchecked = Publisher(publisher.bundle_id, "", publisher.releases)
+        return place_app(setup, unchecked, lambda scratch: build_app(setup, scratch))
+    app_release.require_team(publisher)
+    version = app_release.wanted_version(setup.root)
+    slug = app_release.releases_slug(setup.releases, publisher, lambda: install_origin(setup.root))
+    return place_app(setup, publisher, lambda scratch: fetch_app(setup, slug, version, scratch))
 
 
 def update(setup: Setup) -> str:
     """Install app/VERSION when it differs from the installed app; say so, and download nothing, when it is
     the same or there is no app (bringing one is `install`)."""
-    require_team(read_publisher(setup.root))
-    wanted = wanted_version(setup.root)
-    installed = bundle_version(setup.app)
+    app_release.require_team(app_release.read_publisher(setup.root))
+    wanted = app_release.wanted_version(setup.root)
+    installed = app_release.bundle_version(setup.app)
     if installed is None:
         return f"{BUNDLE} is not installed: run bosun app install"
     if installed == wanted:
@@ -455,33 +493,15 @@ def update(setup: Setup) -> str:
     return install(setup)
 
 
-def status(setup: Setup, login_plist: Path | None) -> dict[str, Any]:
-    """The app's state, for `bosun app status --json`: `login` is whether the login job's plist is there."""
-    return {
-        "contract": CONTRACT,
-        "installed": bundle_version(setup.app),
-        "wanted": wanted_version(setup.root),
-        "path": str(setup.app),
-        "login": login_plist is not None and login_plist.exists(),
-    }
-
-
-def describe(state: Mapping[str, Any]) -> str:
-    """`status` in a line."""
-    login = "on" if state["login"] else "off"
-    have = (
-        f"{BUNDLE} {state['installed']} is installed" if state["installed"] else f"{BUNDLE} is not installed"
-    )
-    return f"{have} (this bosun wants {state['wanted']}); Open at Login: {login}"
-
-
 def delete_app(setup: Setup) -> str:
+    """Remove ~/Applications/bosun.app, if it is the publisher's; leftovers of an install that was killed are
+    swept first (which may give the old app back, to be removed)."""
+    bundle_id = app_release.read_publisher(setup.root).bundle_id
+    sweep_stale(setup)
     if not os.path.lexists(setup.app):
         return f"{BUNDLE} is not installed in ~/Applications"
-    if setup.app.is_symlink() or not setup.app.is_dir():
-        setup.app.unlink()
-    else:
-        shutil.rmtree(setup.app)
+    ensure_ours(setup.app, bundle_id, "remove")
+    shutil.rmtree(setup.app)
     return f"removed ~/Applications/{BUNDLE}"
 
 
@@ -504,10 +524,11 @@ def dispatch(args: argparse.Namespace, setup: Setup) -> str:
     if args.command == "update":
         return update(setup)
     if args.command == "status":
-        state = status(setup, args.login_plist)
-        return json.dumps(state) if args.json else describe(state)
+        state = app_release.status(setup.root, setup.app, args.login_plist)
+        return json.dumps(state) if args.json else app_release.describe(state)
     if args.command == "quit":
-        return f"asked {BUNDLE} to quit" if quit_app(setup) else ""
+        bundle_id = app_release.read_publisher(setup.root).bundle_id
+        return f"asked {BUNDLE} to quit" if quit_app(setup, bundle_id) else ""
     return delete_app(setup)
 
 
@@ -526,7 +547,7 @@ def main(
     setup = Setup(root, home or Path.home(), environ.get("BOSUN_APP_RELEASES", ""), run)
     try:
         message = dispatch(args, setup)
-    except AppError as error:
+    except (AppError, OSError) as error:  # one line, never a traceback
         print(f"bosun app: {error}", file=sys.stderr)
         return 1
     if message:

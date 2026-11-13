@@ -22,6 +22,7 @@ from pathlib import Path
 
 import agent_changes
 import app_install
+import app_release
 import claude_state
 import orphans
 import uninstall_detect
@@ -186,6 +187,7 @@ class Carrying:
             up.WAKE: self.cancel_wake,
             up.JOB: self.remove_job,
             up.APP: self.remove_app,
+            up.LEFTOVER: lambda step: remove_path(Path(step.target)),
             up.STOP: self.stop,
             up.TRUST: self.revoke_trust,
             up.SETUP: self.undo_setup,
@@ -209,8 +211,9 @@ class Carrying:
     def remove_app(self, step: Step) -> None:
         """The app asked to quit, by its bundle id, so that it is not running from a folder that is gone."""
         try:
-            app_install.quit_app(app_install.Setup(ROOT, Path.home()))
-        except app_install.AppError as error:
+            bundle_id = app_release.read_publisher(ROOT).bundle_id
+            app_install.quit_app(app_install.Setup(ROOT, Path.home()), bundle_id)
+        except app_release.AppError as error:
             raise StepFailed(str(error)) from error
         remove_path(Path(step.target))
 

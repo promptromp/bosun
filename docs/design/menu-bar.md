@@ -307,11 +307,30 @@ Where what is built differs from what this note said before, or says more:
 - While `app/publisher.json` has no `team_id`, `install` and `update` refuse with "app/publisher.json has no team_id yet"
   before they look anything up; `--build` is not held up by it. The Team ID is checked to be ten capital letters and
   digits, so a value such as "not set" (what `codesign` prints for an ad hoc signature) can never match.
-- The download and the unpacking happen in a hidden folder inside `~/Applications` itself (`.bosun-app-…`), so the rename
-  into place never crosses a volume; the old app is renamed into that folder and goes with it, and a failed rename puts it
-  back. The folder, and `~/Applications` if the install made it, are removed whatever the outcome (the latter unless the app
-  was placed), so a refused or failed install leaves `~/Applications` as it was. A running app is asked to quit, and waited
-  for, only after the new app is verified, so a refusal never disturbs it.
+- The download and the unpacking happen in a hidden folder inside `~/Applications` itself
+  (`.bosun-app-<pid>-…`), so the rename into place never crosses a volume; the old app is renamed into that
+  folder (`previous/bosun.app`) and goes with it. What the install does when it ends: the folder is removed when
+  it works, when it is refused, when any step fails, and when SIGTERM or SIGHUP end it (both raise, and the old
+  handlers come back); and a `~/Applications` it made is removed too, unless the app was placed. The two
+  exceptions: if the rename in fails and putting the old app back fails too, the folder is kept and the message
+  says where the old app is; and a SIGKILL, a crash or a power cut cannot run anything, so the next `install` or
+  `remove` sweeps the `.bosun-app-*` folders whose install (the pid in the name) is gone, first giving the old app
+  back when none is at `~/Applications/bosun.app` (killed between the renames). `bosun uninstall` lists and
+  removes leftovers too. A running app is asked to quit, and waited for, only after the new app is verified, so
+  a refusal never disturbs it; if the rename in then fails, the old app is opened again.
+- The Team ID is not read from what `codesign` prints (ruling 29): `codesign -dv` shows `Identifier=` before
+  `TeamIdentifier=`, and a signer may put a newline and a line `TeamIdentifier=<anything>` in the identifier, so
+  the first such line is forgeable (reproduced with an ad hoc bundle; only `spctl` refused it). The check is `codesign
+  --verify --deep --strict -R =<requirement>`, the requirement being Apple's Developer ID chain and the bundle id
+  and `certificate leaf[subject.OU] = "<team>"`, which is met by the certificates in the signature or not at all
+  (exit 3). The argument is `-R` then `=<text>` (without the `=`, codesign takes the text for a file name), and a
+  requirement it cannot read fails. `team_id` must be ten capital letters and digits before it goes in, and notarization
+  is `spctl --assess --type execute -vv` exiting 0 with the exact line `source=Notarized Developer ID`.
+- The download is `curl -q` (no `~/.curlrc`), https only also after a redirect, and the archive's entries are read
+  before anything is unpacked: an absolute path, a `..` or a symbolic link is refused.
+- A `~/Applications/bosun.app` whose bundle id is not the publisher's, or that cannot be read, is neither replaced
+  nor removed (by `install`, `update`, `remove` nor `uninstall`): the rule of uninstall is to leave what it cannot
+  say is bosun's.
 - Open at Login is whether the job's plist (`<label>.app`) is in `~/Library/LaunchAgents`. `reload_changed_jobs` keeps a
   present plist current and never makes one; `bosun app login on|off` is the only switch, and `on` is refused while no app is
   installed. Loading the job runs the app at once (RunAtLoad), so the app must be safe to start twice.

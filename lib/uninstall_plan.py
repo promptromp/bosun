@@ -149,6 +149,7 @@ LOG_FILES = tuple(
 WAKE = "wake"
 JOB = "job"
 APP = "app"
+LEFTOVER = "leftover"  # what an install of the app that was killed left in ~/Applications
 STOP = "stop"
 TRUST = "trust"
 SETUP = "setup"
@@ -187,7 +188,9 @@ class Facts:
     windows: tuple[str, ...] = ()
     keep_awake: bool = False
     jobs: tuple[Job, ...] = ()
-    app: str = ""  # ~/Applications/bosun.app, if it is there (the menu bar app)
+    app: str = ""  # ~/Applications/bosun.app, if it is there and is the publisher's (the menu bar app)
+    app_other: tuple[str, str] | None = None  # (path, why) of a bosun.app that cannot be said to be bosun's
+    app_leftovers: tuple[str, ...] = ()  # the `.bosun-app-*` folders an install of it left
     repeating: tuple[str, ...] = ()  # the repeating power events
     wake_at: str = ""  # the time bosun's wake runs, as pmset prints it
     days: str = ""  # BOSUN_DAYS
@@ -373,7 +376,16 @@ def job_steps(facts: Facts) -> list[Step]:
 
 
 def app_steps(facts: Facts) -> list[Step]:
-    return [Step(APP, facts.app, by_hand=f"rm -rf {quoted(facts.app)}")] if facts.app else []
+    app = [Step(APP, facts.app, by_hand=f"rm -rf {quoted(facts.app)}")] if facts.app else []
+    return [*app, *(Step(LEFTOVER, path, by_hand=f"rm -rf {quoted(path)}") for path in facts.app_leftovers)]
+
+
+def app_stays(facts: Facts) -> list[Stay]:
+    """A ~/Applications/bosun.app that is not the publisher's stays, as what it cannot say is bosun's."""
+    if facts.app_other is None:
+        return []
+    path, why = facts.app_other
+    return [Stay(path, f"it is not bosun's app ({why})")]
 
 
 def stop_steps(facts: Facts) -> list[Step]:
@@ -536,6 +548,7 @@ def build_plan(facts: Facts, choices: Choices) -> Plan:
         (
             *settings_stay(facts, choices),
             *records_stay(facts, choices),
+            *app_stays(facts),
             *folder_stays(facts),
             *install_stays(facts),
             *wake_stays(facts),
@@ -577,6 +590,7 @@ def describe(step: Step, home: str) -> str:
         WAKE: f"the repeating wake, {step.target}",
         JOB: f"launchd job {step.target}",
         APP: f"the menu bar app, {target}",
+        LEFTOVER: f"what an install of the menu bar app left, {target}",
         STOP: f"the running windows: {step.target or 'none, only the keep-awake'}",
         TRUST: f"the trust bosun gave {target} ({step.harness})",
         SETUP: f"{step.target} ({step.harness})",

@@ -7,9 +7,13 @@
 #
 # The menu bar app, bosun.app: install it, keep it current, take it away. bosun acts on the app only
 # through these (design: docs/design/menu-bar.md). It accepts only the publisher's notarized build: the
-# app comes from a GitHub release of this repository, and is placed in ~/Applications only when its
-# signature verifies, its Team ID is the one in app/publisher.json, macOS accepts it (spctl) and its
-# bundle id is that file's. A refused or failed install leaves ~/Applications as it was.
+# app comes from a GitHub release of this repository, and is placed in ~/Applications only when `codesign`
+# verifies its signature against the publisher's Developer ID requirement (the Team ID in app/publisher.json
+# and its bundle id, checked in the certificates, never from what codesign prints), Gatekeeper says `source=
+# Notarized Developer ID`, and its Info.plist's bundle id is the publisher's. The download must be https, and
+# its archive holds exactly one bosun.app, with no absolute path, `..` or link. A refused or failed install
+# leaves ~/Applications as it was; what a killed one left (`.bosun-app-*` folders, the old app in one of
+# them) is swept, and the old app given back, by the next install or remove.
 #   install   download the release `app/VERSION` names (BOSUN_APP_RELEASES, else app/publisher.json's
 #             repository, else this install's origin when that is on GitHub), unpack it in a folder of
 #             its own, verify it, and rename it into ~/Applications/bosun.app, the old one kept aside
@@ -21,7 +25,8 @@
 #   update    install app/VERSION when the installed version differs; with the same version, or no
 #             app installed (that is `install`), it says so and downloads nothing. Exit 0
 #   remove    quit the app, turn Open at Login off and remove ~/Applications/bosun.app. bosun keeps
-#             running: this takes away only the app
+#             running: this takes away only the app. A bosun.app that is not the publisher's (another
+#             bundle id, or one it cannot read) is left as it is, and so is one install would replace
 #   login     on: make the Open at Login job (a launchd job, as bosun's others), which opens the app when
 #             you log in; refused while no app is installed. off: remove it. Open at Login is on while
 #             the job's plist is in ~/Library/LaunchAgents, and `bosun update` keeps it current
