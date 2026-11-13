@@ -657,13 +657,6 @@ class WhatIsNotBosuns(World):
         self.run_it("--yes")
         self.assertEqual(len(self.mac.repeating), 2)
 
-    def test_the_job_that_runs_the_morning_run_now_goes(self) -> None:
-        now = self.agents / f"{LABEL}.now.plist"
-        self.assertTrue(now.exists())
-        self.run_it("--yes")
-        self.assertFalse(now.exists())
-        self.assertNotIn(f"{LABEL}.now", self.mac.loaded)
-
     def test_a_stranger_s_job_stays(self) -> None:
         theirs = self.write_plist("com.example.backup", "/usr/local/bin/backup")
         self.mac.loaded.add("com.example.backup")

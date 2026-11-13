@@ -138,7 +138,7 @@ Waking *before* the job would leave a gap in which an unattended Mac can doze of
 `BOSUN_LEARN_ENABLED=1`, the daily [learning](learning.md#learning) run
 (`<BOSUN_LAUNCHD_LABEL>.learn`) and, with `BOSUN_CONSOLE_ALWAYS=1`, the [console](console.md#console)
 (`<BOSUN_LAUNCHD_LABEL>.console`). One more job, `<BOSUN_LAUNCHD_LABEL>.now`, has no schedule: it runs
-`bosun morning --now` when `bosun morning --now --background` (what the menu bar app's Start runs) kickstarts it,
+`bosun morning --now` when `bosun morning --now --background` (which the menu bar app's Start runs) kickstarts it,
 so that launchd, not the caller, is the parent of what the morning run starts.
 [`bosun uninstall`](#uninstall) reverses it. A checkout of your own like this one updates with git, not
 with `bosun update`.

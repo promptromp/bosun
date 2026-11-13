@@ -1333,9 +1333,6 @@ console_mark_wanted() {
 # decides whom macOS names in its privacy prompts.
 now_label() { echo "$BOSUN_LAUNCHD_LABEL.now"; }
 
-# Whether job <label> is running now, as `launchctl print` shows its state.
-job_running() { launchctl print "gui/$(id -u)/$1" 2>/dev/null | grep -q '^[[:space:]]*state = running'; } # <label>
-
 # The menu bar app's Open at Login job (templates/launchd-app.plist): there while its plist is, which
 # `bosun app login on` makes and `login off` removes. install.sh and `bosun update` keep a present one
 # current (render_job) and never make one.
@@ -1395,6 +1392,19 @@ render_job() { # <label>
 }
 
 job_loaded() { launchctl print "gui/$(id -u)/$1" >/dev/null 2>&1; } # <label>
+
+# Job <label>'s state and last exit code, as `launchctl print` shows them, tab-separated (empty if it is not
+# loaded). Its first, top-level "state" and "last exit code" lines are the job's: the lines under it (a
+# process, a dispatch source) say state too. The watchdog and job_running read the job this way.
+job_fields() { # <label>
+  launchctl print "gui/$(id -u)/$1" 2>/dev/null |
+    awk -F' = ' '$1 == "\tstate" && state == "" { state = $2 }
+      $1 == "\tlast exit code" && code == "" { code = $2 }
+      END { printf "%s\t%s\n", state, code }'
+}
+
+# Whether job <label> is running now.
+job_running() { [ "$(job_fields "$1" | cut -f1)" = running ]; } # <label>
 
 # Job <label> unloaded, then, from the plist <rendered> (checked already; empty: the job is no longer
 # wanted), written as <installed> and loaded again; or its plist removed.

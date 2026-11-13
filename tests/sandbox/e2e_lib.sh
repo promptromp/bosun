@@ -187,30 +187,60 @@ server_not_the_callers_child() {
   echo "tmux server $server, responsible pid $responsible (not one of: $(caller_pids | tr '\n' ' '))"
 }
 
-more_runs_than() { [ "$(morning_runs)" -gt "$1" ]; } # <count>
+morning_runs_above() { [ "$(morning_runs)" -gt "$1" ]; } # <count>
+
+# A process this shell starts has this shell, or one of its parents, as its responsible process: the control
+# that makes the check on the tmux server mean something, as it shows that `launchctl procinfo` tells the
+# two cases apart on this Mac.
+a_child_has_the_callers_responsible_pid() {
+  local child responsible
+  sleep 120 &
+  child=$!
+  responsible="$(responsible_pid "$child")" || {
+    echo "$responsible"
+    kill "$child" 2>/dev/null
+    return 1
+  }
+  kill "$child" 2>/dev/null
+  if caller_pids | grep -qx "$responsible"; then
+    echo "a sleep started here has responsible pid $responsible, one of: $(caller_pids | tr '\n' ' ')"
+    return 0
+  fi
+  echo "a sleep started here has responsible pid $responsible, which is not this shell or one of its parents ($(caller_pids | tr '\n' ' ')): procinfo does not tell the two cases apart here, and the check on the tmux server proves nothing"
+  return 1
+}
+
 now_runs() { cat "$HOME"/.local/state/bosun/logs/morning-*.log 2>/dev/null | grep -c "=== morning run (trigger=now, "; }
 now_runs_settle_at() { # <count>: and stay there a while, as a second run would have started by then
   sleep 5
   [ "$(now_runs)" = "$1" ]
 }
 
-# `bosun morning --now --background`, from a stopped bosun: launchd's job runs the morning run now.
+# `bosun morning --now --background`, from a stopped bosun: launchd's job runs the morning run now. Only for a
+# bosun that has the job and the option: install_e2e.sh calls it, and work_e2e.sh once it is on this checkout (the
+# release it starts from has neither).
 now_job_for_real() {
-  local bosun="$HOME/.local/bin/bosun" done_before now_before
+  local bosun="$HOME/.local/bin/bosun" done_before now_before job="$LABEL.now"
+  echo "the job that runs --now, and bosun morning --now --background"
+  check "$job is loaded" launchctl print "$DOMAIN/$job"
+  check "$job's plist is valid" plutil -lint -s "$HOME/Library/LaunchAgents/$job.plist"
   "$bosun" stop >/dev/null 2>&1
+  check "bosun is stopped before the kickstart: no session, so a server the scheduled run left cannot satisfy the check below" bash -c '! tmux -L bosun list-sessions'
+  check "control: a process started here has this shell or a parent of it as its responsible pid (launchctl procinfo)" a_child_has_the_callers_responsible_pid
   done_before="$(morning_runs)"
   now_before="$(now_runs)"
   check "bosun morning --now --background returns, exit 0" "$bosun" morning --now --background
   check "... and a second one straight after, while the run is going, is no error" "$bosun" morning --now --background
-  check "... launchd runs the job: its morning run ends well" wait_for 180 more_runs_than "$done_before"
+  check "... launchd runs the job: its morning run ends well" wait_for 180 morning_runs_above "$done_before"
   check "... once, whatever the second one asked: launchd does not start a run that is going (no -k)" now_runs_settle_at "$((now_before + 1))"
   check "... which brings up the orchestrator's window" wait_for 60 has_window orchestrator
   check "... and the tmux server it started is not a child of the caller" server_not_the_callers_child
+  "$bosun" stop >/dev/null 2>&1
 }
 
 launchd_for_real() {
   echo "launchd and pmset, for real"
-  for job in "$LABEL" "$LABEL.watchdog" "$LABEL.learn" "$LABEL.now"; do
+  for job in "$LABEL" "$LABEL.watchdog" "$LABEL.learn"; do
     check "$job is loaded" launchctl print "$DOMAIN/$job"
     check "$job's plist is valid" plutil -lint -s "$HOME/Library/LaunchAgents/$job.plist"
   done
@@ -222,12 +252,11 @@ launchd_for_real() {
   check "... and ended well" grep -q "morning run complete" "$HOME"/.local/state/bosun/logs/morning-*.log
   tail -15 "$HOME"/.local/state/bosun/logs/morning-*.log
   launchctl print "$DOMAIN/$LABEL" | grep -E '^\s+(state|last exit code|runs) ' || true
-  now_job_for_real
   "$HOME/.local/bin/bosun" stop >/dev/null 2>&1
 }
 
 jobs_are_gone() {
-  for job in "$LABEL" "$LABEL.watchdog" "$LABEL.learn" "$LABEL.now"; do
+  for job in "$LABEL" "$LABEL.watchdog" "$LABEL.learn"; do
     check "$job is unloaded" bash -c '! launchctl print "$1"' _ "$DOMAIN/$job"
     check "... launchd cannot run it" bash -c '! launchctl kickstart "$1"' _ "$DOMAIN/$job"
     check "... and its plist is gone" test ! -e "$HOME/Library/LaunchAgents/$job.plist"

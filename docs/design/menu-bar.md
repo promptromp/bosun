@@ -139,14 +139,15 @@ Calls made from the research and the builder check, to check while reading:
   - `bosun update --check --json`, `bosun update` (started detached, so its output does not go to the app; its progress is in the status);
   - `bosun console --url`: the running console's address with its token;
   - `bosun quit --plan --json` (what quitting would stop, which agents are mid-task) and `bosun quit <choices>`;
-  - `bosun start`;
+  - `bosun morning --now --background` (Start: bosun's own launchd job runs it, so the app is not the parent of what it
+    starts; never `bosun start`, which would make the tmux server the app's child);
   - `bosun app login on|off`.
   It refreshes the status when the menu opens and every 30 seconds otherwise; a menu open shows the last state at
   once and updates in place.
 - **Version skew.** `bosun status --json` carries a `contract` number. An app that does not know the number says
   "bosun.app needs an update" in its status line and offers "Update bosun…" (which runs `bosun update`); a CLI that
   sees an older app than its checkout expects updates it (below).
-- **Opening it.** Opened by you (Finder, Spotlight, Launchpad): if bosun is stopped, it runs `bosun start`, then shows
+- **Opening it.** Opened by you (Finder, Spotlight, Launchpad): if bosun is stopped, it runs `bosun morning --now --background` (as Start does), then shows
   the menu bar icon. Opened at login (its launchd job passes `--at-login`): it only shows the icon; bosun's own
   morning job starts bosun at its time. Opened while running: macOS brings up the running copy, which does nothing
   new.
@@ -188,8 +189,10 @@ Calls made from the research and the builder check, to check while reading:
   `AbandonProcessGroup` is true, since the tmux server and the keep-awake it starts outlive it. `bosun morning --now
   --background` is `launchctl kickstart gui/<uid>/<label>.now` and a return at once: it adds no morning logic (the quit
   record, the keep-awake, the update hold stay in the one `--now` path the job runs, whose log is the day's morning
-  log with `trigger=now`). Without `-k` launchd leaves a run that is going alone, so a second Start does not start it
-  twice (a refused kickstart while the job is running is taken for success). Exit 0 when launchd took the kickstart or
+  log with `trigger=now`). A morning run that launchd started, by either job (the scheduled one or this), is not started
+  again: `--background` reads both jobs' state (`job_running`, the first top-level `state` line, as the watchdog
+  does) before it kickstarts, since the morning script takes no lock and a second run would run the setup steps and
+  the agents' update twice at once. A `bosun morning --now` typed in a terminal is no job and is not seen. Exit 0 when launchd took the kickstart or
   the run is going; exit 1, in one line, when the job is not loaded (run `install.sh` again, or `bosun init`) or
   launchd would not start it; exit 2 for `--background` without `--now` or with `--dry-run`, `--skip-setup` or
   `--awake-minutes`, which the job's run cannot be given. The VM run (`tests/install_e2e.sh`) checks with `launchctl

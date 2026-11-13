@@ -76,13 +76,8 @@ while [ $# -gt 0 ]; do
 done
 
 # The morning launchd job's state and last exit code, as `launchctl print` shows them (empty if
-# it is not loaded). Its first, top-level "state" line is the job's.
-morning_job() {
-  launchctl print "gui/$(id -u)/$BOSUN_LAUNCHD_LABEL" 2>/dev/null |
-    awk -F' = ' '$1 == "\tstate" && state == "" { state = $2 }
-      $1 == "\tlast exit code" && code == "" { code = $2 }
-      END { printf "%s\t%s\n", state, code }'
-}
+# it is not loaded): lib/common.sh's job_fields.
+morning_job() { job_fields "$BOSUN_LAUNCHD_LABEL"; }
 
 # What the watchdog needs from tmux, ps and launchd, as JSON for lib/watchdog.py.
 collect_facts() {

@@ -777,7 +777,8 @@ Decided while building it:
   an update from a version without it loads it, and its `ProgramArguments` name the install link like the
   others'. The update itself is not run through a job like it: it reloads changed plists, which could boot the
   job it runs in out, so the menu bar app starts `bosun update --yes` as a detached child instead
-  ([menu-bar.md](menu-bar.md)).
+  ([menu-bar.md](menu-bar.md)). An update whose release changes the `.now` plist boots out a `.now` run that is
+  waiting on the update's hold, as it does for the morning job; that run is not carried on, and Start again starts it.
 - **The plan before the switch** asks the new version: its `launch --fingerprint` reads the files
   under the install from its own folder. One of bosun's windows with no launch record counts as changed.
 - **A window bosun did not start**: one `bosun sessions` lists outside the window list (`extra`)
