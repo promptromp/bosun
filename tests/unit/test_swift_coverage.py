@@ -159,11 +159,25 @@ class LocateTest(unittest.TestCase):
             (debug / "codecov").mkdir(parents=True)
             (debug / "codecov" / "default.profdata").write_text("")
             (debug / "codecov" / "BosunMenu.json").write_text("{}")
-            binary = debug / "BosunMenuPackageTests.xctest" / "Contents" / "MacOS" / "BosunMenuPackageTests"
+            binary = debug / "BosunMenuCoreTests.xctest" / "Contents" / "MacOS" / "BosunMenuCoreTests"
             binary.parent.mkdir(parents=True)
             binary.write_text("")
             found = sc.locate(debug / "codecov" / "BosunMenu.json")
-        self.assertEqual(found, (debug / "codecov" / "default.profdata", binary))
+        self.assertEqual(found, (debug / "codecov" / "default.profdata", [binary]))
+
+    def test_every_test_binary_is_found_so_a_second_test_target_does_not_break_it(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            debug = Path(tmp) / "Debug"
+            (debug / "codecov").mkdir(parents=True)
+            (debug / "codecov" / "default.profdata").write_text("")
+            binaries = []
+            for target in ("BosunMenuCoreTests", "BosunMenuTests"):
+                binary = debug / f"{target}.xctest" / "Contents" / "MacOS" / target
+                binary.parent.mkdir(parents=True)
+                binary.write_text("")
+                binaries.append(binary)
+            _profile, found = sc.locate(debug / "codecov" / "BosunMenu.json")
+        self.assertEqual(found, binaries)
 
     def test_no_profile_is_an_error_that_says_to_run_the_tests_first(self) -> None:
         with tempfile.TemporaryDirectory() as tmp, self.assertRaises(sc.CoverageError) as caught:
@@ -177,19 +191,29 @@ class LocateTest(unittest.TestCase):
             calls.append(argv)
             return self.completed(json.dumps(GOOD))
 
-        data = sc.llvm_summary(Path("/p/default.profdata"), Path("/p/bin"), run=run)
+        data = sc.llvm_summary(Path("/p/default.profdata"), [Path("/p/bin")], run=run)
         self.assertEqual(data, GOOD)
         self.assertEqual(calls[0][:3], ["xcrun", "llvm-cov", "export"])
         self.assertIn("-summary-only", calls[0])
         self.assertIn("-instr-profile=/p/default.profdata", calls[0])
         self.assertEqual(calls[0][-1], "/p/bin")
 
+    def test_llvm_cov_gets_every_binary_the_first_as_the_object_and_the_rest_with_object(self) -> None:
+        calls: list[list[str]] = []
+
+        def run(argv: list[str], **_kw: Any) -> subprocess.CompletedProcess[str]:
+            calls.append(argv)
+            return self.completed(json.dumps(GOOD))
+
+        sc.llvm_summary(Path("/p/default.profdata"), [Path("/p/a"), Path("/p/b"), Path("/p/c")], run=run)
+        self.assertEqual(calls[0][-5:], ["/p/a", "-object", "/p/b", "-object", "/p/c"])
+
     def test_llvm_cov_failing_is_one_line(self) -> None:
         def run(argv: list[str], **_kw: Any) -> subprocess.CompletedProcess[str]:
             return subprocess.CompletedProcess(argv, 1, "", "error: no such file\nmore")
 
         with self.assertRaises(sc.CoverageError) as caught:
-            sc.llvm_summary(Path("/p/a"), Path("/p/b"), run=run)
+            sc.llvm_summary(Path("/p/a"), [Path("/p/b")], run=run)
         self.assertIn("no such file", str(caught.exception))
         self.assertNotIn("\n", str(caught.exception))
 

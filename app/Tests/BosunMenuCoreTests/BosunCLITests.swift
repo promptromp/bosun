@@ -178,3 +178,51 @@ private func result(_ outcome: CommandOutcome, out: String = "", err: String = "
     #expect(await fetch(Thing.self, command, via: cli) == .failure(.exited(3, "")))
   }
 }
+
+@Suite struct DetachedCommandTests {
+  @Test func aDetachedCommandIsStartedAndLeftRunning() async {
+    let cli = FakeBosunCLI()
+    let result = await cli.start(Bosun.update)
+    #expect(result.outcome == .started)
+    #expect(await cli.started == [["update", "--yes"]])
+    #expect(await cli.calls.isEmpty)
+  }
+
+  @Test func runRefusesADetachedCommandAndStartRefusesAWaitedOne() async {
+    let cli = FakeBosunCLI()
+    guard case .couldNotStart(let ran) = await cli.run(Bosun.update).outcome else {
+      Issue.record("expected a refusal")
+      return
+    }
+    #expect(ran.contains("start it"))
+    guard case .couldNotStart(let started) = await cli.start(Bosun.status).outcome else {
+      Issue.record("expected a refusal")
+      return
+    }
+    #expect(started.contains("run it"))
+    // Neither reached bosun
+    #expect(await cli.calls.isEmpty)
+    #expect(await cli.started.isEmpty)
+  }
+
+  @Test func startBosunIsTheMorningRunDetached() async {
+    let cli = FakeBosunCLI()
+    _ = await cli.start(Bosun.start)
+    #expect(await cli.started == [["morning", "--now"]])
+  }
+
+  @Test func theFakeAnswersAStartWhenToldTo() async {
+    let cli = FakeBosunCLI()
+    await cli.reply(["morning", "--now"], result(.notInstalled))
+    #expect(await cli.start(Bosun.start).outcome == .notInstalled)
+  }
+
+  @Test func aStartedCommandHasNoReplyToRead() {
+    let started = CommandResult(outcome: .started, stdout: "", stderr: "")
+    guard case .failure(.couldNotStart(let why)) = decodeReply(StatusSnapshot.self, started) else {
+      Issue.record("expected a failure")
+      return
+    }
+    #expect(why.contains("no reply"))
+  }
+}

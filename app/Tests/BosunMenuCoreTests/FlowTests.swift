@@ -69,31 +69,62 @@ func flowRunning(_ flow: Flow) -> FlowState {
 }
 
 @Suite struct SingleCopyTests {
-  private let me: Int32 = 4200
   private let id = "ai.example.bosun"
 
+  private func app(_ pid: Int32, started: Double, bundle: String? = "ai.example.bosun") -> RunningApp {
+    RunningApp(pid: pid, bundleID: bundle, startedAt: started)
+  }
+
   @Test func secondCopyExits() {
-    let running = [RunningApp(pid: 4100, bundleID: id), RunningApp(pid: me, bundleID: id)]
+    let me = app(4200, started: 2000)
+    let running = [app(4100, started: 1000), me]
     #expect(shouldExitAsSecondCopy(running: running, me: me, bundleID: id))
   }
 
   @Test func theOnlyCopyStays() {
-    #expect(!shouldExitAsSecondCopy(running: [RunningApp(pid: me, bundleID: id)], me: me, bundleID: id))
+    let me = app(4200, started: 2000)
+    #expect(!shouldExitAsSecondCopy(running: [me], me: me, bundleID: id))
     #expect(!shouldExitAsSecondCopy(running: [], me: me, bundleID: id))
   }
 
   @Test func otherApplicationsDoNotCount() {
+    let me = app(4200, started: 2000)
     let running = [
-      RunningApp(pid: 100, bundleID: "com.apple.finder"), RunningApp(pid: 101, bundleID: nil),
-      RunningApp(pid: me, bundleID: id),
+      app(100, started: 1, bundle: "com.apple.finder"), app(101, started: 1, bundle: nil), me,
     ]
     #expect(!shouldExitAsSecondCopy(running: running, me: me, bundleID: id))
   }
 
-  /// Two copies launched together each see the other: one must stay, so the older (the lower pid) does.
-  @Test func ofTwoLaunchedTogetherOnlyTheNewerExits() {
-    let running = [RunningApp(pid: 4100, bundleID: id), RunningApp(pid: me, bundleID: id)]
-    #expect(shouldExitAsSecondCopy(running: running, me: me, bundleID: id))
-    #expect(!shouldExitAsSecondCopy(running: running, me: 4100, bundleID: id))
+  /// A copy that started later than another exits, and the one that started earlier stays.
+  @Test func theCopyThatStartedEarliestStays() {
+    let older = app(4100, started: 1000)
+    let newer = app(4200, started: 2000)
+    let running = [older, newer]
+    #expect(shouldExitAsSecondCopy(running: running, me: newer, bundleID: id))
+    #expect(!shouldExitAsSecondCopy(running: running, me: older, bundleID: id))
+  }
+
+  /// pids wrap at 99999: the copy launchd started days later can have the lower pid, and is still the
+  /// newer. Going by pid alone would keep it and leave two icons.
+  @Test func aWrappedPidDoesNotMakeTheNewCopyTheOlder() {
+    let old = app(98000, started: 1_000_000)
+    let new = app(120, started: 1_300_000)
+    let running = [old, new]
+    #expect(shouldExitAsSecondCopy(running: running, me: new, bundleID: id))
+    #expect(!shouldExitAsSecondCopy(running: running, me: old, bundleID: id))
+  }
+
+  /// Started in the same instant, the lower pid stays, so one of two always does.
+  @Test func withTheSameStartTheLowerPidStays() {
+    let low = app(4100, started: 1000)
+    let high = app(4200, started: 1000)
+    #expect(!shouldExitAsSecondCopy(running: [low, high], me: low, bundleID: id))
+    #expect(shouldExitAsSecondCopy(running: [low, high], me: high, bundleID: id))
+  }
+
+  @Test func ofThreeOnlyTheEarliestStays() {
+    let copies = [app(300, started: 3000), app(100, started: 1000), app(200, started: 2000)]
+    let exits = copies.map { shouldExitAsSecondCopy(running: copies, me: $0, bundleID: id) }
+    #expect(exits == [true, false, true])
   }
 }

@@ -78,6 +78,48 @@ import Testing
     }
   }
 
+  @Test func aMinorWordItDoesNotKnowDoesNotFailTheRest() throws {
+    let status = Fixtures.text("status-update-running")
+      .replacingOccurrences(of: "\"state\": \"running\"", with: "\"state\": \"paused\"")
+    let decoded = try decodeContract(StatusSnapshot.self, from: status)
+    #expect(decoded.update.state == .unknown("paused"))
+    #expect(decoded.updateEvent == .statusShows(running: false, waitingFor: ["acme-exporter", "acme-web"]))
+    #expect(decoded.level == .ok)
+
+    let quit = Fixtures.text("quit-result-stopped-console-running")
+      .replacingOccurrences(of: "still running", with: "hiding")
+    #expect(try decodeContract(QuitResult.self, from: quit).console == .unknown("hiding"))
+    #expect(QuitResultKind(text: "vanished") == .unknown("vanished"))
+    let vanished = Fixtures.text("quit-result-stopped")
+      .replacingOccurrences(of: "\"result\": \"stopped\"", with: "\"result\": \"vanished\"")
+    #expect(try decodeContract(QuitResult.self, from: vanished).result == .unknown("vanished"))
+  }
+
+  @Test func aReplyThatCannotBeReadSaysSoInOnePlainLineNeverTheDecodersDump() {
+    let cases = [
+      ("not json", "it is not the JSON bosun prints"),
+      (#"{"contract": 1}"#, "it has no \"level\""),
+      (
+        Fixtures.text("status-ok").replacingOccurrences(of: "\"windows\": 3", with: "\"windows\": \"3\""),
+        "\"windows\" is not what was expected"
+      ),
+      (
+        Fixtures.text("status-ok").replacingOccurrences(of: "\"ok\"", with: "\"purple\""),
+        "\"level\" is not what was expected"
+      ),
+    ]
+    for (text, line) in cases {
+      do {
+        _ = try decodeContract(StatusSnapshot.self, from: text)
+        Issue.record("expected a refusal")
+      } catch {
+        #expect(error.description == "bosun's reply could not be read: " + line)
+        #expect(!error.description.contains("DecodingError"))
+        #expect(!error.description.contains("\n"))
+      }
+    }
+  }
+
   @Test func aLevelItDoesNotKnowIsUnreadableNotGuessedAt() {
     let text = Fixtures.text("status-ok").replacingOccurrences(of: "\"ok\"", with: "\"purple\"")
     #expect(throws: ContractError.self) { try decodeContract(StatusSnapshot.self, from: text) }
@@ -261,11 +303,18 @@ import Testing
     #expect(Fixtures.quitResult("quit-result-stopped").message == nil)
   }
 
-  @Test func theConsoleOutcomeIsOneOfThreeFixedWords() {
-    #expect(ConsoleOutcome(rawValue: "stopped") == .stopped)
-    #expect(ConsoleOutcome(rawValue: "not running") == .notRunning)
-    #expect(ConsoleOutcome(rawValue: "still running") == .stillRunning)
-    #expect(ConsoleOutcome(rawValue: "running") == nil)
+  @Test func theConsoleOutcomeIsOneOfThreeWordsAndAnyOtherIsUnknown() {
+    #expect(ConsoleOutcome(text: "stopped") == .stopped)
+    #expect(ConsoleOutcome(text: "not running") == .notRunning)
+    #expect(ConsoleOutcome(text: "still running") == .stillRunning)
+    #expect(ConsoleOutcome(text: "hiding") == .unknown("hiding"))
+  }
+
+  @Test func aPlanThatCouldNotLookIsTheFailedObjectWithItsErrorAndThePlansKeys() {
+    let failed = Fixtures.quitResult("quit-plan-failed")
+    #expect(failed.result == .failed)
+    #expect(failed.message?.contains("tmux did not answer") == true)
+    #expect(failed.plan.windows == [])
   }
 }
 

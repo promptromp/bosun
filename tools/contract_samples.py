@@ -222,7 +222,13 @@ class World:
         self.stop_fails: str | None = kw.get("stop_fails")
         self.console: tuple[str, int | None] = kw.get("console", ("stopped", None))
         self.lock_busy: bool = kw.get("lock_busy", False)
+        self.unreadable: str | None = kw.get("unreadable")  # why the windows cannot be read
         self.now = 1000.0
+
+    def read_windows(self) -> list[quit_cmd.Window]:
+        if self.unreadable:
+            raise quit_cmd.QuitError(self.unreadable)
+        return self.windows
 
     @contextlib.contextmanager
     def lock(self) -> Iterator[None]:
@@ -240,7 +246,7 @@ class World:
     def ports(self) -> quit_cmd.Ports:
         lock: Callable[[], AbstractContextManager[None]] = self.lock
         return quit_cmd.Ports(
-            read_windows=lambda: self.windows,
+            read_windows=self.read_windows,
             updating=lambda: self.updating,
             keep_awake_until=lambda: "20:00",
             lock=lock,
@@ -277,6 +283,10 @@ def quit_samples() -> dict[str, Sample]:
     return {
         "quit-plan": quit_cmd.quit_plan(QUIT_WINDOWS, "20:00", False),
         "quit-plan-refused": quit_cmd.quit_plan(QUIT_WINDOWS, None, True),
+        # `quit --plan --json` when the windows cannot be read: exit 1, this on stdout, nothing on stderr
+        "quit-plan-failed": quit_run(
+            World(QUIET_WINDOWS, unreadable="the windows could not be listed: tmux did not answer"), "plan"
+        ),
         "quit-result-stopped": quit_run(World(QUIET_WINDOWS), "finish"),
         "quit-result-stopped-console-running": quit_run(
             World(QUIET_WINDOWS, console=("still running", 8765)), "now", pause=False, sleep=False
@@ -302,7 +312,7 @@ def app_status(installed: str | None) -> Sample:
         login = Path(tmp) / "app-login.plist"
         if installed:
             (app / "Contents").mkdir(parents=True)
-            info = {"CFBundleIdentifier": "ai.predicated.bosun", "CFBundleShortVersionString": installed}
+            info = {"CFBundleIdentifier": "ai.example.bosun", "CFBundleShortVersionString": installed}
             (app / "Contents" / "Info.plist").write_bytes(plistlib.dumps(info))
             login.write_text("")
         state: Sample = {**app_release.status(root, app, login), "path": APP_PATH}

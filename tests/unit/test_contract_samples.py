@@ -137,6 +137,20 @@ class WhatTheAppReadsTest(unittest.TestCase):
             },
         )
 
+    def test_a_plan_that_could_not_look_is_the_failed_object_with_its_error_and_the_plans_keys(self) -> None:
+        failed = SAMPLES["quit-plan-failed"]
+        self.assertEqual((failed["result"], failed["contract"]), ("failed", 1))
+        self.assertIn("tmux did not answer", failed["error"])
+        self.assertEqual(failed["windows"], [])
+        self.assertEqual(sorted(failed), sorted(SAMPLES["quit-result-failed-early"]))
+
+    def test_no_fixture_names_the_real_publisher(self) -> None:
+        publisher = json.loads((ROOT / "app" / "publisher.json").read_text())
+        for name, text in {name: cs.render(value) for name, value in SAMPLES.items()}.items():
+            with self.subTest(name=name):
+                self.assertNotIn(publisher["bundle_id"], text)
+        self.assertNotIn(publisher["bundle_id"], (ROOT / "tools" / "contract_samples.py").read_text())
+
     def test_a_quit_that_stopped_says_what_it_did_and_a_failed_one_how_to_finish(self) -> None:
         stopped: dict[str, Any] = SAMPLES["quit-result-stopped"]
         self.assertEqual(

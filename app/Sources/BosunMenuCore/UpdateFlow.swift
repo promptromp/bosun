@@ -10,10 +10,14 @@ public enum UpdateState: Equatable, Sendable {
   case idle
   case checking
   case available(UpdateCheck)
-  case planning
-  case confirming(UpdatePlan)
+  /// The plan is being made for the offered update (kept, so a cancel goes back to the offer).
+  case planning(UpdateCheck)
+  case confirming(UpdatePlan, UpdateCheck)
   /// `update --yes` was started and `status` does not yet show it running.
-  case starting
+  case starting(UpdateCheck)
+  /// `starting` went on too long: a fresh check, to tell an update that never began from one that
+  /// has already finished.
+  case checkingStart(UpdateCheck)
   case running(waitingFor: [String])
   case failed(String)
 }
@@ -33,6 +37,7 @@ public enum UpdateEvent: Equatable, Sendable {
   case cancelled
   case statusShows(running: Bool, waitingFor: [String])
   /// `starting` went on too long without `status` showing the update: the shell's grace has run out.
+  /// The app looks again before it calls that a failure.
   case startGaveUp
   case acknowledged
 }
@@ -41,6 +46,19 @@ public let noPlanText =
   "bosun made no plan: it is up to date, or the update was refused. Run bosun update in a terminal to see which."
 public let updateNeverStartedText =
   "The update did not start. Run bosun update in a terminal to see why."
+
+/// Choosing "Update bosun…" (bosun speaks a contract this app does not): the update flow, from its
+/// check, as for "Check for Updates…". The shell begins `Flow.update` and runs the commands.
+public func updateBosunStart() -> FlowStart {
+  let (state, commands) = next(UpdateState.idle, on: UpdateEvent.checkRequested(manual: true))
+  return FlowStart(flow: .update, state: state, commands: commands)
+}
+
+public struct FlowStart: Equatable, Sendable {
+  public let flow: Flow
+  public let state: UpdateState
+  public let commands: [Command]
+}
 
 /// The state after an event, and what to run. An event that means nothing in the state changes nothing.
 public func next(_ state: UpdateState, on event: UpdateEvent) -> (UpdateState, [Command]) {
@@ -61,8 +79,12 @@ private func nextChecking(_ state: UpdateState, on event: UpdateEvent) -> Step? 
     return (manual ? .failed(why) : .idle, [])
   case (.failed, .acknowledged):
     return (.idle, [])
-  case (.available, .updateNowChosen):
-    return (.planning, [Bosun.planUpdate])
+  case (.checkingStart(let before), .checked(let check, _)):
+    return (stillOffered(check, like: before) ? .failed(updateNeverStartedText) : .idle, [])
+  case (.checkingStart, .checkFailed):
+    return (.idle, [])
+  case (.available(let check), .updateNowChosen):
+    return (.planning(check), [Bosun.planUpdate])
   case (.available(let check), .skipChosen):
     return (.idle, check.latest.map { [Bosun.skip(version: $0.version)] } ?? [])
   default:
@@ -73,14 +95,14 @@ private func nextChecking(_ state: UpdateState, on event: UpdateEvent) -> Step? 
 /// The plan, and the person's yes or no to it.
 private func nextPlanning(_ state: UpdateState, on event: UpdateEvent) -> Step? {
   switch (state, event) {
-  case (.planning, .planned(let plan)):
-    return (plan.map { .confirming($0) } ?? .failed(noPlanText), [])
+  case (.planning(let check), .planned(let plan)):
+    return (plan.map { .confirming($0, check) } ?? .failed(noPlanText), [])
   case (.planning, .planFailed(let why)):
     return (.failed(why), [])
-  case (.confirming(let plan), .confirmed):
-    return plan.isBlocked ? (state, []) : (.starting, [Bosun.update])
-  case (.confirming, .cancelled):
-    return (.checking, [Bosun.checkUpdates])
+  case (.confirming(let plan, let check), .confirmed):
+    return plan.isBlocked ? (state, []) : (.starting(check), [Bosun.update])
+  case (.confirming(_, let check), .cancelled):
+    return (.available(check), [])
   default:
     return nil
   }
@@ -95,11 +117,16 @@ private func nextWhileRunning(_ state: UpdateState, on event: UpdateEvent) -> St
     return (.checking, [Bosun.checkUpdates])
   case (_, .statusShows(true, let waiting)):
     return (.running(waitingFor: waiting), [])
-  case (.starting, .startGaveUp):
-    return (.failed(updateNeverStartedText), [])
+  case (.starting(let check), .startGaveUp):
+    return (.checkingStart(check), [Bosun.checkUpdates])
   default:
     return nil
   }
+}
+
+/// The same release is still on offer: what `update --yes` was to install has not been installed.
+private func stillOffered(_ check: UpdateCheck, like before: UpdateCheck) -> Bool {
+  check.error == nil && check.available && check.latest?.version == before.latest?.version
 }
 
 private func afterCheck(_ check: UpdateCheck, manual: Bool) -> UpdateState {

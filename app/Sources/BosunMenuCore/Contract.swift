@@ -56,7 +56,21 @@ public func decodeContract<T: Decodable>(
   } catch let error as ContractError {
     throw error
   } catch {
-    throw ContractError.unreadable(String(describing: error))
+    throw ContractError.unreadable(plainReason(error))
+  }
+}
+
+/// Why a reply could not be read, in a plain line: never a dump of the decoder's own error.
+private func plainReason(_ error: any Error) -> String {
+  guard let failure = error as? DecodingError else { return "it is not what bosun prints" }
+  switch failure {
+  case .keyNotFound(let key, _):
+    return "it has no \"\(key.stringValue)\""
+  case .typeMismatch(_, let context), .valueNotFound(_, let context), .dataCorrupted(let context):
+    let path = context.codingPath.map(\.stringValue).filter { Int($0) == nil }.joined(separator: ".")
+    return path.isEmpty ? "it is not the JSON bosun prints" : "\"\(path)\" is not what was expected"
+  @unknown default:
+    return "it is not what bosun prints"
   }
 }
 
@@ -71,8 +85,21 @@ public struct Stopped: Decodable, Equatable, Sendable {
   public let morningPaused: Bool
 }
 
-public enum UpdateRun: String, Decodable, Equatable, Sendable {
+/// The update's state in `status`. A word this app does not know is `unknown`, and shows as no update.
+public enum UpdateRun: Equatable, Sendable {
   case none, running
+  case unknown(String)
+}
+
+extension UpdateRun: Decodable {
+  public init(from decoder: any Decoder) throws {
+    let word = try decoder.singleValueContainer().decode(String.self)
+    switch word {
+    case "none": self = .none
+    case "running": self = .running
+    default: self = .unknown(word)
+    }
+  }
 }
 
 public struct UpdateProgress: Decodable, Equatable, Sendable {
@@ -250,15 +277,48 @@ public struct QuitPlan: Decodable, Equatable, Sendable {
   }
 }
 
-public enum QuitResultKind: String, Decodable, Equatable, Sendable {
+/// How a quit ended. A word this app does not know is `unknown`, and shows as a failure with the word.
+public enum QuitResultKind: Equatable, Sendable {
   case stopped, busy, refused, failed
+  case unknown(String)
+
+  public init(text: String) {
+    switch text {
+    case "stopped": self = .stopped
+    case "busy": self = .busy
+    case "refused": self = .refused
+    case "failed": self = .failed
+    default: self = .unknown(text)
+    }
+  }
 }
 
-/// What the console was left as (a fixed set: lib/quit.py's `CONSOLE_*`).
-public enum ConsoleOutcome: String, Decodable, Equatable, Sendable {
-  case stopped
-  case notRunning = "not running"
-  case stillRunning = "still running"
+extension QuitResultKind: Decodable {
+  public init(from decoder: any Decoder) throws {
+    self.init(text: try decoder.singleValueContainer().decode(String.self))
+  }
+}
+
+/// What the console was left as (lib/quit.py's `CONSOLE_*`). A word this app does not know is `unknown`
+/// and is said nothing of.
+public enum ConsoleOutcome: Equatable, Sendable {
+  case stopped, notRunning, stillRunning
+  case unknown(String)
+
+  public init(text: String) {
+    switch text {
+    case "stopped": self = .stopped
+    case "not running": self = .notRunning
+    case "still running": self = .stillRunning
+    default: self = .unknown(text)
+    }
+  }
+}
+
+extension ConsoleOutcome: Decodable {
+  public init(from decoder: any Decoder) throws {
+    self.init(text: try decoder.singleValueContainer().decode(String.self))
+  }
 }
 
 public struct QuitResult: Equatable, Sendable {

@@ -101,18 +101,29 @@ public struct FlowState: Equatable, Sendable {
 public struct RunningApp: Equatable, Sendable {
   public let pid: Int32
   public let bundleID: String?
+  /// When the process started, in seconds since 1970 (the shell reads `kp_proc.p_starttime` with sysctl
+  /// KERN_PROC: `NSRunningApplication.launchDate` is nil for an app launchd starts directly).
+  public let startedAt: Double
 
-  public init(pid: Int32, bundleID: String?) {
+  public init(pid: Int32, bundleID: String?, startedAt: Double) {
     self.pid = pid
     self.bundleID = bundleID
+    self.startedAt = startedAt
+  }
+
+  /// Whether this process is the older of the two: it started earlier, and with the same start (to the
+  /// resolution the clock gives) the lower pid. Never by pid alone: pids wrap, at 99999 on macOS.
+  fileprivate func started(before other: RunningApp) -> Bool {
+    (startedAt, pid) < (other.startedAt, other.pid)
   }
 }
 
 /// launchd's login job starts `Contents/MacOS/bosun` directly, which skips LaunchServices' one-copy rule,
-/// so a copy that finds another running application with its bundle identifier exits at launch. Two
-/// started together each see the other: the older (the lower pid) stays, so one always does.
-public func shouldExitAsSecondCopy(running: [RunningApp], me: Int32, bundleID: String) -> Bool {
-  running.contains { $0.bundleID == bundleID && $0.pid < me }
+/// so a copy that finds another running application with its bundle identifier, started before it, exits
+/// at launch: the copy that started earliest stays. Two started together each see the other, and one
+/// always stays.
+public func shouldExitAsSecondCopy(running: [RunningApp], me: RunningApp, bundleID: String) -> Bool {
+  running.contains { $0.bundleID == bundleID && $0.pid != me.pid && $0.started(before: me) }
 }
 
 // MARK: the menu
@@ -203,20 +214,23 @@ private func updateItem(_ state: UpdateState, enabled: Bool) -> MenuItem {
   switch state {
   case .idle, .failed:
     return MenuItem(id: id, title: "Check for Updates…", enabled: enabled)
-  case .checking:
+  case .checking, .checkingStart:
     return MenuItem(id: id, title: "Checking for Updates…", enabled: false)
   case .available(let check):
-    let version = check.latest.map { ": \($0.version)" } ?? ""
-    return MenuItem(id: id, title: "Update Available\(version)…", enabled: enabled, badge: true)
+    return MenuItem(id: id, title: availableTitle(check), enabled: enabled, badge: true)
   case .planning:
     return MenuItem(id: id, title: "Preparing Update…", enabled: false)
-  case .confirming:
-    return MenuItem(id: id, title: "Update Available…", enabled: false, badge: true)
+  case .confirming(_, let check):
+    return MenuItem(id: id, title: availableTitle(check), enabled: false, badge: true)
   case .starting:
     return MenuItem(id: id, title: "Updating…", enabled: false)
   case .running(let waiting):
     return MenuItem(id: id, title: updatingTitle(waiting.count), enabled: false)
   }
+}
+
+private func availableTitle(_ check: UpdateCheck) -> String {
+  "Update Available\(check.latest.map { ": \($0.version)" } ?? "")…"
 }
 
 private func updatingTitle(_ waiting: Int) -> String {

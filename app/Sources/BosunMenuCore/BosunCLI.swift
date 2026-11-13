@@ -21,6 +21,8 @@ public struct Command: Equatable, Sendable {
 
 public enum CommandOutcome: Equatable, Sendable {
   case exited(Int32)
+  /// A detached command was started and left running: it has no reply to read.
+  case started
   case timedOut
   /// There is nothing at `~/.local/bin/bosun`.
   case notInstalled
@@ -41,12 +43,30 @@ public struct CommandResult: Equatable, Sendable {
 }
 
 public protocol BosunCLI: Sendable {
+  /// Runs `bosun <args>` and waits for it, up to `timeout`.
   func run(_ args: [String], timeout: Duration) async -> CommandResult
+  /// Starts `bosun <args>` and leaves it running; returns `.started` once it is, or why it could not be.
+  func start(_ args: [String]) async -> CommandResult
 }
 
 extension BosunCLI {
+  /// Runs a command that is waited for; a detached one is refused (it is to be `start`ed).
   public func run(_ command: Command) async -> CommandResult {
-    await run(command.args, timeout: command.timeout)
+    if command.detached { return Self.misused(command, "is a detached command: start it, do not run it") }
+    return await run(command.args, timeout: command.timeout)
+  }
+
+  /// Starts a detached command; one that is waited for is refused (it is to be `run`).
+  public func start(_ command: Command) async -> CommandResult {
+    if !command.detached {
+      return Self.misused(command, "is not a detached command: run it, do not start it")
+    }
+    return await start(command.args)
+  }
+
+  private static func misused(_ command: Command, _ what: String) -> CommandResult {
+    let why = "bosun \(command.args.joined(separator: " ")) \(what)"
+    return CommandResult(outcome: .couldNotStart(why), stdout: "", stderr: "")
   }
 }
 
@@ -116,6 +136,7 @@ func decodeReply<T: Decodable>(
   case .notInstalled: return .failure(.notInstalled)
   case .timedOut: return .failure(.timedOut)
   case .couldNotStart(let why): return .failure(.couldNotStart(why))
+  case .started: return .failure(.couldNotStart("bosun was started and left running: it has no reply"))
   case .exited(let code):
     let said = FetchFailure.exited(code, firstLine(result.stderr))
     guard code == 0 || trustingStdout else { return .failure(said) }
@@ -172,6 +193,8 @@ public actor FakeBosunCLI: BosunCLI {
   private var replies: [[String]: [CommandResult]] = [:]
   public private(set) var calls: [[String]] = []
   public private(set) var timeouts: [Duration] = []
+  /// What was `start`ed (detached), apart from what was `run`.
+  public private(set) var started: [[String]] = []
 
   public init() {}
 
@@ -188,5 +211,11 @@ public actor FakeBosunCLI: BosunCLI {
     }
     if queue.count > 1 { replies[args] = Array(queue.dropFirst()) }
     return first
+  }
+
+  /// A command started and left running is `.started`, unless it was told otherwise.
+  public func start(_ args: [String]) async -> CommandResult {
+    started.append(args)
+    return replies[args]?.first ?? CommandResult(outcome: .started, stdout: "", stderr: "")
   }
 }

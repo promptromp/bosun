@@ -1,0 +1,10 @@
+{
+  "busy": [],
+  "contract": 1,
+  "error": "the windows could not be listed: tmux did not answer",
+  "keep_awake_until": null,
+  "refused": null,
+  "result": "failed",
+  "waiting": [],
+  "windows": []
+}

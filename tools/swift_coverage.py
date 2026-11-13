@@ -1,9 +1,9 @@
 """The line-coverage floor of the menu bar app's core (docs/plans/menu-bar-app.md, Global Constraints).
 
-`swift test --enable-code-coverage` (run in app/) leaves a profile and a test binary; this reads
-`llvm-cov export -summary-only` over them, keeps the files of Sources/BosunMenuCore (the core is pure; the
-AppKit target has no floor) and fails under 95% of their lines. The message names the files under the
-floor, worst first.
+`swift test --enable-code-coverage` (run in app/) leaves a profile and the test binaries (one per test
+target); this reads `llvm-cov export -summary-only` over them, keeps the files of Sources/BosunMenuCore
+(the core is pure; the AppKit target has no floor) and fails under 95% of their lines. The message names
+the files under the floor, worst first.
 
     uv run python tools/swift_coverage.py [--floor 95] [--summary <llvm-cov summary json>]
 
@@ -92,7 +92,7 @@ def verdict(files: Sequence[FileCoverage], floor: float) -> tuple[bool, str]:
 
 
 def codecov_json(app: Path, run: RunCommand = subprocess.run) -> Path:
-    """The file `swift test --show-codecov-path` names; the profile and the test binary are beside it."""
+    """The file `swift test --show-codecov-path` names; the profile and the test binaries are beside it."""
     done = run(["swift", "test", "--show-codecov-path"], cwd=app, capture_output=True, text=True, check=False)
     lines = done.stdout.strip().splitlines()
     if done.returncode != 0 or not lines:
@@ -100,8 +100,8 @@ def codecov_json(app: Path, run: RunCommand = subprocess.run) -> Path:
     return Path(lines[-1])
 
 
-def locate(codecov: Path) -> tuple[Path, Path]:
-    """(the profile, the test binary) that `swift test --enable-code-coverage` left beside <codecov>."""
+def locate(codecov: Path) -> tuple[Path, list[Path]]:
+    """(the profile, every test binary) that `swift test --enable-code-coverage` left beside <codecov>."""
     profile = codecov.parent / PROFILE
     if not profile.is_file():
         raise CoverageError(
@@ -113,7 +113,7 @@ def locate(codecov: Path) -> tuple[Path, Path]:
         raise CoverageError(
             f"no test binary under {products}: run `swift test --enable-code-coverage` in app/"
         )
-    return profile, binaries[0]
+    return profile, binaries
 
 
 def one_line(text: str) -> str:
@@ -121,8 +121,10 @@ def one_line(text: str) -> str:
     return lines[0] if lines else "no message"
 
 
-def llvm_summary(profile: Path, binary: Path, run: RunCommand = subprocess.run) -> dict[str, Any]:
-    argv = ["xcrun", "llvm-cov", "export", "-summary-only", f"-instr-profile={profile}", str(binary)]
+def llvm_summary(profile: Path, binaries: Sequence[Path], run: RunCommand = subprocess.run) -> dict[str, Any]:
+    """`llvm-cov export -summary-only` over every test binary: the first is the object, the rest `-object`."""
+    objects = [str(binaries[0]), *(arg for binary in binaries[1:] for arg in ("-object", str(binary)))]
+    argv = ["xcrun", "llvm-cov", "export", "-summary-only", f"-instr-profile={profile}", *objects]
     done = run(argv, capture_output=True, text=True, check=False)
     if done.returncode != 0:
         raise CoverageError("llvm-cov failed: " + one_line(done.stderr))
@@ -140,8 +142,8 @@ def read_summary(path: Path | None, app: Path = APP) -> dict[str, Any]:
         except (OSError, ValueError) as error:
             raise CoverageError(f"{path} cannot be read as an llvm-cov summary: {error}") from error
         return data if isinstance(data, dict) else {}
-    profile, binary = locate(codecov_json(app))
-    return llvm_summary(profile, binary)
+    profile, binaries = locate(codecov_json(app))
+    return llvm_summary(profile, binaries)
 
 
 def main(argv: Sequence[str]) -> int:

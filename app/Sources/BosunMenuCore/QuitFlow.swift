@@ -39,6 +39,9 @@ public func quitCommand(_ choices: QuitChoices) -> [String] {
 public enum QuitStep: Equatable, Sendable {
   /// `bosun quit --plan --json` is being asked.
   case planning
+  /// `quit --plan` said it could not look (the windows cannot be read): the reason, with the choices and
+  /// "Stop Now", which does not need the look. This is how a quit that did not finish is finished.
+  case unavailable(String)
   /// The first dialog: what quitting would meet, and the choices.
   case first(QuitPlan)
   /// The second dialog: these agents are busy.
@@ -75,6 +78,8 @@ public enum QuitOutcome: Equatable, Sendable {
 public enum QuitEvent: Equatable, Sendable {
   case planned(QuitPlan)
   case planFailed(String)
+  /// bosun answered the plan with a failure of its own (its `error`), which a Stop Now can get past.
+  case planUnavailable(String)
   case confirmed(QuitChoices)
   case busyChosen(BusyChoice)
   case cancelled
@@ -96,6 +101,10 @@ public func next(_ step: QuitStep, on event: QuitEvent) -> (QuitStep, [Command])
     return (plan.refused.map { .failed($0) } ?? .first(plan), [])
   case (.planning, .planFailed(let why)):
     return (.failed(why), [])
+  case (.planning, .planUnavailable(let why)):
+    return (.unavailable(why), [])
+  case (.unavailable, .confirmed(let choices)):
+    return running(QuitChoices(copying: choices, busy: .stopNow))
   case (.first(let plan), .confirmed(let choices)):
     return confirming(plan, choices)
   case (.busy(_, let choices), .busyChosen(let busy)), (.stillBusy(_, let choices), .busyChosen(let busy)):
@@ -109,7 +118,7 @@ public func next(_ step: QuitStep, on event: QuitEvent) -> (QuitStep, [Command])
 
 private func cancelling(_ step: QuitStep) -> (QuitStep, [Command]) {
   switch step {
-  case .planning, .first, .busy, .stillBusy: return (.cancelled, [])
+  case .planning, .unavailable, .first, .busy, .stillBusy: return (.cancelled, [])
   default: return (step, [])
   }
 }
@@ -145,6 +154,8 @@ extension QuitChoices {
 let quitFailedText =
   "bosun quit did not complete. If bosun was meant to be stopped, run `bosun quit --stop-now` "
   + "again to finish, or `bosun start` to start bosun again."
+let quitPlanFailedText =
+  "bosun could not say what quitting would stop. Stop Now still works: it does not need to."
 let quitTimedOutText =
   "bosun quit did not finish in time. Its record may stay, so bosun stays stopped: run "
   + "`bosun quit --stop-now` again to finish, or `bosun start` to start bosun again."
@@ -160,6 +171,8 @@ public func quitOutcome(from result: CommandResult) -> QuitOutcome {
     case .stopped: return .stopped(note: consoleNote(reply))
     case .busy: return .busy(reply.plan.busy)
     case .refused, .failed: return .failed(reply.message ?? quitFailedText)
+    case .unknown(let word):
+      return .failed("bosun quit answered \"\(word)\", which this app does not know. \(quitFailedText)")
     }
   }
 }
@@ -174,10 +187,45 @@ private func consoleNote(_ reply: QuitResult) -> String? {
 // MARK: running the commands
 
 public func quitPlanEvent(via cli: any BosunCLI) async -> QuitEvent {
-  switch await fetch(QuitPlan.self, Bosun.quitPlan, via: cli) {
+  quitPlanEvent(from: await cli.run(Bosun.quitPlan))
+}
+
+/// `quit --plan --json`'s reply as an event. When it cannot look it exits 1 with its failure object on
+/// stdout (the plan's keys, `result: failed` and its `error`) and nothing on stderr: that `error` is
+/// what is shown, and a Stop Now is offered, which `--stop-now` makes possible with unreadable windows.
+func quitPlanEvent(from result: CommandResult) -> QuitEvent {
+  if let failure = planFailureObject(result) {
+    return .planUnavailable(failure.message ?? quitPlanFailedText)
+  }
+  switch decodeReply(QuitPlan.self, result) {
   case .success(let plan): return .planned(plan)
   case .failure(let failure): return .planFailed(failure.message)
   }
+}
+
+/// The failure object a plan that could not look printed (on a non-zero exit), if that is what it printed.
+private func planFailureObject(_ result: CommandResult) -> QuitResult? {
+  guard case .exited(let code) = result.outcome, code != 0 else { return nil }
+  guard case .success(let failure) = decodeReply(QuitResult.self, result, trustingStdout: true) else {
+    return nil
+  }
+  return failure
+}
+
+// MARK: what Quit does
+
+public enum QuitAction: Equatable, Sendable {
+  /// No dialog: the app only quits, since there is no running bosun to stop (it is stopped, missing, or
+  /// cannot be asked).
+  case exitApp
+  /// The quit flow, from `startQuit()`.
+  case runFlow
+}
+
+/// What choosing Quit does in a state.
+public func quitAction(for status: StatusState) -> QuitAction {
+  if case .loaded(let snapshot, _) = status, snapshot.level != .stopped { return .runFlow }
+  return .exitApp
 }
 
 public func runQuit(_ choices: QuitChoices, via cli: any BosunCLI) async -> QuitEvent {

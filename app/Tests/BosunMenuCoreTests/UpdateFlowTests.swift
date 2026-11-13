@@ -73,7 +73,7 @@ private let checkCommand = [Bosun.checkUpdates]
 @Suite struct UpdateOfferTransitionTests {
   @Test func updateNowAsksTheDryRunForItsPlan() {
     let (state, commands) = next(.available(available), on: .updateNowChosen)
-    #expect(state == .planning)
+    #expect(state == .planning(available))
     #expect(commands == [Bosun.planUpdate])
     #expect(Bosun.planUpdate.args == ["update", "--dry-run", "--json"])
     #expect(Bosun.planUpdate.timeout == .seconds(30))
@@ -94,17 +94,17 @@ private let checkCommand = [Bosun.checkUpdates]
 
 @Suite struct UpdatePlanTransitionTests {
   @Test func aPlanIsShownForConfirmation() {
-    let (state, commands) = next(.planning, on: .planned(plan))
-    #expect(state == .confirming(plan))
+    let (state, commands) = next(.planning(available), on: .planned(plan))
+    #expect(state == .confirming(plan, available))
     #expect(commands.isEmpty)
   }
 
   @Test func aBlockedPlanIsShownToo() {
-    #expect(next(.planning, on: .planned(blocked)).0 == .confirming(blocked))
+    #expect(next(.planning(available), on: .planned(blocked)).0 == .confirming(blocked, available))
   }
 
   @Test func noPlanMeansNothingToUpdateOrARefusal() {
-    let (state, _) = next(.planning, on: .planned(nil))
+    let (state, _) = next(.planning(available), on: .planned(nil))
     guard case .failed(let why) = state else {
       Issue.record("expected a failure")
       return
@@ -113,41 +113,46 @@ private let checkCommand = [Bosun.checkUpdates]
   }
 
   @Test func aPlanThatCouldNotBeMadeFails() {
-    #expect(next(UpdateState.planning, on: UpdateEvent.planFailed("timed out")).0 == .failed("timed out"))
+    let state = next(UpdateState.planning(available), on: UpdateEvent.planFailed("timed out")).0
+    #expect(state == .failed("timed out"))
   }
 
   @Test func yesRunsTheUpdateDetached() {
-    let (state, commands) = next(.confirming(plan), on: .confirmed)
-    #expect(state == .starting)
+    let (state, commands) = next(.confirming(plan, available), on: .confirmed)
+    #expect(state == .starting(available))
     #expect(commands == [Bosun.update])
     #expect(Bosun.update.args == ["update", "--yes"])
     #expect(Bosun.update.detached)
   }
 
   @Test func yesToABlockedPlanDoesNothing() {
-    let state = UpdateState.confirming(blocked)
+    let state = UpdateState.confirming(blocked, available)
     let (after, commands) = next(state, on: .confirmed)
     #expect(after == state)
     #expect(commands.isEmpty)
   }
 
-  @Test func cancellingLooksAgainSoTheOfferComesBack() {
-    let (state, commands) = next(.confirming(plan), on: .cancelled)
-    #expect(state == .checking)
-    #expect(commands == checkCommand)
+  @Test func cancellingGoesBackToTheOfferWithoutAskingAgain() {
+    let (state, commands) = next(.confirming(plan, available), on: .cancelled)
+    #expect(state == .available(available))
+    #expect(commands.isEmpty)
   }
 }
 
 @Suite struct UpdateRunningTransitionTests {
   @Test func theStatusShowingTheUpdateMakesItRunningWithWhatItWaitsFor() {
-    let (state, _) = next(.starting, on: .statusShows(running: true, waitingFor: ["acme-web"]))
+    let (state, _) = next(
+      .starting(available), on: .statusShows(running: true, waitingFor: ["acme-web"]))
     #expect(state == .running(waitingFor: ["acme-web"]))
     let (later, _) = next(state, on: .statusShows(running: true, waitingFor: []))
     #expect(later == .running(waitingFor: []))
   }
 
   @Test func anUpdateStartedElsewhereIsShownToo() {
-    for state in [UpdateState.idle, .checking, .failed("x"), .available(available)] {
+    let states: [UpdateState] = [
+      .idle, .checking, .failed("x"), .available(available), .checkingStart(available),
+    ]
+    for state in states {
       let (after, commands) = next(state, on: .statusShows(running: true, waitingFor: ["a"]))
       #expect(after == .running(waitingFor: ["a"]))
       #expect(commands.isEmpty)
@@ -155,7 +160,7 @@ private let checkCommand = [Bosun.checkUpdates]
   }
 
   @Test func anUpdateBeingPlannedIsNotInterruptedByTheStatus() {
-    for state in [UpdateState.planning, .confirming(plan)] {
+    for state in [UpdateState.planning(available), .confirming(plan, available)] {
       #expect(next(state, on: .statusShows(running: true, waitingFor: [])).0 == state)
     }
   }
@@ -168,25 +173,57 @@ private let checkCommand = [Bosun.checkUpdates]
   }
 
   @Test func theGapBeforeTheStatusShowsItIsNotTheEndOfTheUpdate() {
-    let (state, commands) = next(.starting, on: .statusShows(running: false, waitingFor: []))
-    #expect(state == .starting)
+    let (state, commands) = next(
+      .starting(available), on: .statusShows(running: false, waitingFor: []))
+    #expect(state == .starting(available))
     #expect(commands.isEmpty)
   }
 
-  @Test func anUpdateThatNeverShowsFails() {
-    let (state, _) = next(.starting, on: .startGaveUp)
-    guard case .failed(let why) = state else {
-      Issue.record("expected a failure")
-      return
-    }
-    #expect(why.contains("bosun update"))
+  @Test func givingUpOnTheStartLooksAgainBeforeCallingItAFailure() {
+    let (state, commands) = next(.starting(available), on: .startGaveUp)
+    #expect(state == .checkingStart(available))
+    #expect(commands == checkCommand)
     #expect(next(.running(waitingFor: []), on: .startGaveUp).0 == .running(waitingFor: []))
   }
 
+  @Test func theSameVersionStillOfferedMeansTheUpdateNeverStarted() {
+    let (state, commands) = next(.checkingStart(available), on: .checked(available, manual: false))
+    #expect(state == .failed(updateNeverStartedText))
+    #expect(commands.isEmpty)
+  }
+
+  @Test func anUpdateThatFinishedBetweenPollsIsNoAlarm() {
+    // Nothing newer is on offer now: the update did what it was to
+    #expect(next(.checkingStart(available), on: .checked(current, manual: false)).0 == .idle)
+    // Another release is on offer: not the one that was started, which is therefore done
+    var newer = Fixtures.text("update-check-available")
+    newer = newer.replacingOccurrences(of: "v2026.11.11", with: "v2026.11.18")
+    let other = try! decodeContract(UpdateCheck.self, from: newer)
+    #expect(next(.checkingStart(available), on: .checked(other, manual: false)).0 == .idle)
+  }
+
+  @Test func aLookThatCannotBeMadeCallsNothingAFailure() {
+    // Only the same version still on offer is a failure: no look, or one with an error, is not
+    #expect(next(.checkingStart(available), on: .checkFailed("offline", manual: false)).0 == .idle)
+    #expect(
+      next(.checkingStart(available), on: .checked(failedCheck, manual: false)).0 == .idle)
+  }
+
   @Test func theStatusNotShowingAnUpdateChangesNothingElse() {
-    for state in [UpdateState.idle, .checking, .planning, .available(available), .failed("x")] {
+    let states: [UpdateState] = [
+      .idle, .checking, .planning(available), .available(available), .failed("x"),
+      .checkingStart(available),
+    ]
+    for state in states {
       #expect(next(state, on: .statusShows(running: false, waitingFor: [])).0 == state)
     }
+  }
+}
+
+@Suite struct UpdateBosunTests {
+  @Test func updateBosunBeginsTheUpdateFlowFromItsCheck() {
+    #expect(
+      updateBosunStart() == FlowStart(flow: .update, state: .checking, commands: checkCommand))
   }
 }
 
@@ -196,8 +233,8 @@ private let checkCommand = [Bosun.checkUpdates]
       (.idle, .checked(available, manual: true)),
       (.idle, .updateNowChosen),
       (.checking, .confirmed),
-      (.planning, .skipChosen),
-      (.starting, .cancelled),
+      (.planning(available), .skipChosen),
+      (.starting(available), .cancelled),
       (.running(waitingFor: []), .checkRequested(manual: true)),
       (.failed("x"), .updateNowChosen),
     ]
