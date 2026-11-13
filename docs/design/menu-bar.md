@@ -131,7 +131,7 @@ Calls made from the research and the builder check, to check while reading:
 - **How it talks to bosun.** Only through the install link `~/.local/bin/bosun` (which `bosun update` points at the
   current version), with JSON commands defined in the CLI:
   - `bosun status --json`: the menu's whole state, with a `contract` version (below);
-  - `bosun update --check --json`, `bosun update` (started detached; its progress is in the status);
+  - `bosun update --check --json`, `bosun update` (started detached, so its output does not go to the app; its progress is in the status);
   - `bosun console --url`: the running console's address with its token;
   - `bosun quit --plan --json` (what quitting would stop, which agents are mid-task) and `bosun quit <choices>`;
   - `bosun start`;
@@ -230,10 +230,23 @@ Calls made from the research and the builder check, to check while reading:
   its Team ID is the one in `app/publisher.json`, and `spctl --assess` accepts it; then they move it into
   `~/Applications/bosun.app` in one rename, keeping the old one until the new one starts.
 - **`bosun init`** asks "Add bosun to the menu bar and Applications?" (an `Answers` field, default yes; skipped when
-  no one is at the terminal), sets `BOSUN_MENU_APP=1`, installs the app and turns on Open at Login.
-- **`bosun update`** installs the app version the new checkout expects when `BOSUN_MENU_APP=1` and the installed one
-  differs, and relaunches it if it was running (a refusal or failure is a line in the summary, never a failed update), and restarts the console's launchd job when it is loaded and wanted, so the console serves the new version. An install from before this change gets `BOSUN_MENU_APP=0` (a
-  `CONFIG_ADDED` entry) and a line in the update's summary saying how to add the app.
+  no one is at the terminal), but only while `app/publisher.json` has a valid Team ID: until a signed build exists
+  there is nothing to install, so it does not offer the app, writes `BOSUN_MENU_APP=0` and says why in its plan.
+  With a yes it sets `BOSUN_MENU_APP=1` and `BOSUN_CONSOLE_ALWAYS=1` (the app's Open Console needs the console's
+  job), installs the app and turns on Open at Login; an install that is refused (no network, say) puts both back to
+  0 and init goes on. The commands of `bosun app` never write `bosun.env`: init is its only writer. A re-run does
+  not relaunch an app in use (`bosun app update` where it is there, `login on` doing nothing when the job is in
+  place), and answering No where it is installed leaves it, saying `bosun app remove` takes it away.
+- **`bosun update`** always runs `bosun app update` of the new version: it goes by the app being there, not by
+  `BOSUN_MENU_APP`, which is the person's wish (init's question and the watchdog's alert), as a present Open at
+  Login job is kept current and never made. It installs the app version the new checkout expects when the installed
+  one differs, and relaunches it if it was running; with no app it does nothing, before any Team ID check. A
+  refusal or failure is a line in the summary, never a failed update. It also restarts the console's launchd job
+  when it is loaded and wanted, so the console serves the new version. An install from before this change gets
+  `BOSUN_MENU_APP=0` (a `CONFIG_ADDED` entry) and a line in the update's summary saying how to add the app
+  (`bosun app install`); `bosun app install` ends with a line saying how to have the watchdog watch it
+  (`BOSUN_MENU_APP=1`). The update is started detached by the app, so its own output does not go to the app: the
+  app reads its progress in `bosun status --json`, and an update whose reader went away still finishes.
 - **Uninstall.** `bosun uninstall` removes `~/Applications/bosun.app` and its login job (rows in
   `lib/uninstall_plan.py`). "Uninstall bosun…" runs it after a confirmation that lists what goes and what stays (its
   plan's own text).

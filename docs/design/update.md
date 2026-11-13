@@ -218,8 +218,9 @@ check gets no protection from it, which is why the first update converts at a qu
    what failed.
 5. **Release.** Reload the launchd jobs whose plist changed, restart the check-in loop while the hold
    is still on (it stops at once, even mid-tick, and the hold keeps a tick from starting meanwhile),
-   with `BOSUN_MENU_APP=1` bring the menu bar app to the version the new one expects (`bosun app update` of
-   the new version; a refusal or failure is a finding in the summary and stops nothing), restart the
+   bring the menu bar app to the version the new one expects (`bosun app update` of the new version, which
+   goes by the app being there, not by `BOSUN_MENU_APP`, and does nothing with none; a refusal or failure is a
+   finding in the summary and stops nothing), restart the
    console's launchd job if it is loaded and wanted (`console/wanted` is there; `launchctl kickstart -k`, so it
    serves the new code; a job that is not loaded is never started), lift the hold, delete the old backups and version folders, and run the new version's `bosun
    doctor`. A finding at this point is reported, not rolled back, since writes may have landed since

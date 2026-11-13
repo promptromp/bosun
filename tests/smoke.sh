@@ -2582,6 +2582,8 @@ check "... all of them exit 2" usage_error_exits_2
 check "a bad BOSUN_QUIT_WAIT_MINUTES is an error that names it" fails_with "BOSUN_QUIT_WAIT_MINUTES must be a whole number of minutes" env BOSUN_QUIT_WAIT_MINUTES=lots "$BOSUN" quit --let-finish
 check "... with --json it is an object, exit 1, with the plan's keys empty" env BOSUN_QUIT_WAIT_MINUTES=lots bash -c '"$1" quit --let-finish --json </dev/null >"$2"; [ $? -eq 1 ]' _ "$BOSUN" "$WORK/quit.out"
 check "... that says why" quit_has 'd["contract"] == 1 and d["result"] == "failed" and "BOSUN_QUIT_WAIT_MINUTES" in d["error"] and d["windows"] == [] and d["busy"] == [] and d["refused"] is None'
+check "... and carries the configured lock wait, and 0 minutes for the minutes that are not a number" env BOSUN_QUIT_WAIT_MINUTES=lots BOSUN_WINDOWS_LOCK_WAIT_SECONDS=45 bash -c '"$1" quit --let-finish --json </dev/null >"$2"; true' _ "$BOSUN" "$WORK/quit.out"
+check "... in the object" quit_has 'd["wait_minutes"] == 0 and d["lock_wait_seconds"] == 45'
 check "--let-finish from inside bosun's own tmux is refused: it would wait on its own window" fails_with "run it from another terminal" env TMUX="/tmp/tmux-0/$SOCKET,1,0" "$BOSUN" quit --let-finish
 check "... as an object too with --json" bash -c 'TMUX="/tmp/tmux-0/$2,1,0" "$1" quit --let-finish --json </dev/null >"$3"; [ $? -eq 1 ]' _ "$BOSUN" "$SOCKET" "$WORK/quit.out"
 check "... that says why" quit_has 'd["result"] == "failed" and "another terminal" in d["error"]'
@@ -3221,7 +3223,7 @@ with zipfile.ZipFile(sys.argv[1], "w") as bundle:
 
     set_team ""
     check "install refuses while app/publisher.json has no team_id" fails_with "app/publisher.json has no team_id yet" bapp install
-    check "... and so does update" fails_with "app/publisher.json has no team_id yet" bapp update
+    check "update with no app asks nothing of the publisher: not installed, exit 0" contains "$(bapp update 2>&1)" "not installed"
     check "... with no download and no ~/Applications" bash -c '[ ! -e "$1" ] && [ ! -e "$2" ]' _ "$WORK/app-curl.log" "$APP_DIR"
     set_team "$APP_TEAM"
     set_wanted 0.1.0
@@ -3344,6 +3346,9 @@ assert job["RunAtLoad"] is True, job
 assert "KeepAlive" not in job, job
 ' "$APP_JOB" "$BOSUN_LAUNCHD_LABEL" "$HOME"
     check "... and status says Open at Login is on" bash -c 'jq -e ".login == true" <<<"$("$1" app status --json)"' _ "$APP_CHECKOUT/bin/bosun"
+    login_log_lines="$(wc -l <"$WORK/system.log")"
+    check "login on again, with the job there and loaded, says so" contains "$(bapp login on 2>&1)" "already on"
+    check "... and reloads nothing: no bootout, no bootstrap, which would restart an app the job started" bash -c '! tail -n +$(($2 + 1)) "$1" | grep -qE "launchctl (bootout|bootstrap)"' _ "$WORK/system.log" "$login_log_lines"
     reload_check() { bash -c 'source "$1/lib/common.sh"; load_config; shift; reload_changed_jobs "$@"' _ "$APP_CHECKOUT" "$@" 2>&1; }
     check "reload_changed_jobs leaves a current one alone" not_contains "$(reload_check --dry-run)" "$BOSUN_LAUNCHD_LABEL.app"
     echo "<!-- from an older bosun -->" >>"$APP_JOB"
@@ -3382,7 +3387,10 @@ assert "KeepAlive" not in job, job
     # What the uninstall below finds: the app, and its job.
     good_release 0.5.0
     set_wanted 0.5.0
-    bapp install >/dev/null 2>&1
+    installed_said="$(BOSUN_MENU_APP=0 bapp install 2>&1)"
+    check "install says, with BOSUN_MENU_APP not 1, how to have the watchdog watch the app" contains "$installed_said" "set BOSUN_MENU_APP=1 in bosun.env"
+    check "... and says nothing of it with BOSUN_MENU_APP=1" not_contains "$(BOSUN_MENU_APP=1 bapp install 2>&1)" "set BOSUN_MENU_APP=1"
+    check "... and no bosun app command writes bosun.env" bash -c '[ ! -e "$BOSUN_CONFIG_DIR/bosun.env" ] || ! grep -q BOSUN_MENU_APP "$BOSUN_CONFIG_DIR/bosun.env"'
     bapp login on >/dev/null 2>&1
     check "an app and its Open at Login job are in place for the uninstall that follows" bash -c '[ -d "$1" ] && [ -e "$2" ]' _ "$APP" "$APP_JOB"
   else

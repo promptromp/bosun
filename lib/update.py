@@ -56,6 +56,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+import app_release
 import checkout_work
 import install_paths
 import knowledge
@@ -98,7 +99,10 @@ class Output:
 
     @classmethod
     def say(cls, line: str) -> None:
-        print(line, file=sys.stderr if cls.to_stderr else sys.stdout, flush=True)
+        """A reader that went away (an update started detached, its output going nowhere) is no reason to
+        stop before the hold is lifted."""
+        with contextlib.suppress(BrokenPipeError):
+            print(line, file=sys.stderr if cls.to_stderr else sys.stdout, flush=True)
 
 
 # ---- the rehearsal -----------------------------------------------------------------------------
@@ -288,7 +292,6 @@ def _restart_checkin_loop(root: Path) -> list[str]:
     return [f"the check-in loop: {done.stderr.strip() or 'it could not be restarted'}"]
 
 
-MENU_APP_FLAG = 'printf %s "$BOSUN_MENU_APP"'  # the config's BOSUN_MENU_APP, as the new version reads it
 # The console's launchd job restarted by the new version's common.sh (it is one only when loaded and wanted).
 RESTART_CONSOLE = "if console_restartable; then console_restart && echo restarted; fi"
 
@@ -300,15 +303,16 @@ def _last_line(done: subprocess.CompletedProcess[str]) -> str:
 
 
 def _bring_app_along(root: Path) -> list[str]:
-    """With BOSUN_MENU_APP=1, the menu bar app brought to the version <root> expects (`bosun app update`
-    of that version: nothing when it is current); a finding when it could not be (no network, a refusal
-    such as a missing Team ID): the update goes on, and its summary says."""
-    if update_facts.shell(root, MENU_APP_FLAG).stdout.strip() != "1":
-        return []
+    """The menu bar app brought to the version <root> expects (`bosun app update` of that version, which runs
+    on every install: it does nothing, and exits 0, with no app of the publisher's installed, or with the
+    current one). It goes by the app being there, not by BOSUN_MENU_APP, which is the person's wish (init's
+    question, the watchdog's alert): an app they added by hand is kept current, as a present Open at Login
+    job is. A finding when it could not be (no network, a refusal): the update goes on, its summary says."""
+    present = app_release.app_path(Path.home()).exists()
     done = update_facts.bosun(root, "app", "update")
     if done.returncode == 0:
         said = _last_line(done)
-        if said:
+        if said and present:  # an install with no app is told how to add one once, by CONFIG_ADDED's note
             Output.say(f"  {said}")
         return []
     return [f"bosun.app: {_last_line(done) or 'it could not be updated'}"]
@@ -372,11 +376,11 @@ def _prune(state_dir: Path, state: UpdateState) -> list[str]:
 
 def release(state: UpdateState) -> UpdateState:
     """After the freeze: the launchd jobs whose plist changed reloaded, the check-in loop restarted, the
-    menu bar app brought to the version this one expects (with BOSUN_MENU_APP=1) and the console's job
-    restarted, all while the hold is still on, then the hold lifted (`released`); old backups and version
-    folders pruned; what went wrong there, a checkout from before versions kept for what it holds, and
-    what the new version's `bosun doctor` finds kept as findings, reported, never rolled back (writes
-    may have landed since)."""
+    menu bar app brought to the version this one expects (`bosun app update`, which does nothing with no app
+    installed) and the console's job restarted, all while the hold is still on, then the hold lifted
+    (`released`); old backups and version folders pruned; what went wrong there, a checkout from before
+    versions kept for what it holds, and what the new version's `bosun doctor` finds kept as findings,
+    reported, never rolled back (writes may have landed since)."""
     where = folders()
     to_root = Path(state.to_root)
     labels, found = _reload_jobs(to_root)

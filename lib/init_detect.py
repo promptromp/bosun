@@ -22,6 +22,7 @@ from pathlib import Path
 from typing import Any
 
 import agent_state
+import app_release
 import claude_state
 import init_plan
 from init_plan import Facts, RepoUse
@@ -204,6 +205,19 @@ def connectors_found(claude_bin: str, cwd: Path) -> tuple[str, ...]:
         return ()
 
 
+ROOT = Path(__file__).resolve().parents[1]  # the code's folder: app/publisher.json
+
+
+def app_unavailable(root: Path) -> str:
+    """Why there is no signed menu bar app to install, in one line: the publisher's file, read and checked
+    as `bosun app install` does, has no valid Team ID (or cannot be read). Empty when there is."""
+    try:
+        app_release.require_team(app_release.read_publisher(root))
+    except app_release.AppError as error:
+        return str(error)
+    return ""
+
+
 def detect(config_dir: Path, now: datetime | None = None) -> Facts:
     moment = now or datetime.now().astimezone()
     home = Path.home()
@@ -235,6 +249,8 @@ def detect(config_dir: Path, now: datetime | None = None) -> Facts:
         agent_prompts=counts(agent_uses),
         has_battery="InternalBattery" in (output_of("pmset", "-g", "batt") or ""),
         repeating_wake=repeating_wake(output_of("pmset", "-g", "sched") or ""),
+        app_unavailable=app_unavailable(ROOT),
+        app_present=app_release.app_path(home).exists(),
         files=files,
         env=init_plan.parse_env(files.get(init_plan.ENV_FILE, "")),
         sessions=listed or (),

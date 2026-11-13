@@ -163,10 +163,10 @@ CONFIG_ADDED: tuple[AddedKey, ...] = (
     AddedKey(
         "BOSUN_MENU_APP",
         "0",
-        "this install has no menu bar app: bosun app install adds it, and BOSUN_MENU_APP=1 in bosun.env "
-        "makes updates keep it current",
-        "no menu bar app is set up: bosun app install adds it, and BOSUN_MENU_APP=1 in bosun.env makes "
-        "updates keep it current",
+        "this install has no menu bar app: bosun app install adds it (bosun update keeps an installed one "
+        "current either way), and BOSUN_MENU_APP=1 in bosun.env makes the watchdog say when it is gone",
+        "no menu bar app is set up: bosun app install adds it (bosun update keeps an installed one current "
+        "either way), and BOSUN_MENU_APP=1 in bosun.env makes the watchdog say when it is gone",
     ),
     AddedKey(
         "BOSUN_CONSOLE_ALWAYS",

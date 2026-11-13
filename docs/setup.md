@@ -61,8 +61,9 @@ as it keeps `BOSUN_HARNESS`). The channel is the one setting; `bosun init --answ
 `bosun init` reads what this Mac already shows: the repos you use your agents in, the MCP servers and
 connectors `claude mcp list` shows, your usual hours, your logins. In a terminal it asks a few questions,
 one key each: Return takes the recommended answer, `r` starts again and `q` leaves with nothing changed. The last
-of them is whether to add the menu bar app: `bosun.app` in `~/Applications`, opened at login (`bosun app install`
-adds it later, and `BOSUN_MENU_APP=1` in `bosun.env` keeps it current through `bosun update`).
+of them (once a signed build of it exists to install) is whether to add the menu bar app: `bosun.app` in
+`~/Applications`, opened at login (`bosun app install` adds it later; `bosun update` keeps an installed app
+current, and `BOSUN_MENU_APP=1` in `bosun.env` makes the watchdog say when it is gone).
 It says why it recommends what it does, and lists every file and command for you to accept before it
 touches anything. Then it writes the config, trusts the folders, and runs `install.sh`.
 

@@ -109,6 +109,10 @@ class Facts:
     agent_prompts: Mapping[str, int] = field(default_factory=dict)  # per agent, over the history
     has_battery: bool = False
     repeating_wake: str = ""  # the repeating event pmset has now
+    # Why there is no signed menu bar app to install (app/publisher.json has no valid team_id): the app is
+    # not offered then. Empty: there is one.
+    app_unavailable: str = ""
+    app_present: bool = False  # bosun.app is in ~/Applications
     files: Mapping[str, str] = field(default_factory=dict)  # the config files that exist, by name
     env: Mapping[str, str] = field(default_factory=dict)  # what bosun.env sets now
     sessions: tuple[Mapping[str, Any], ...] = ()  # what sessions.yml lists now
@@ -512,8 +516,13 @@ def recommend(facts: Facts) -> Answers:
         aws_sso_profiles=facts.aws_sso_profiles if len(facts.aws_sso_profiles) == 1 else (),
         # pmset keeps only one repeating event: never replace someone else's by default.
         wake=not facts.repeating_wake or bool(facts.env),
-        menu_app=on("BOSUN_MENU_APP", True),
+        menu_app=not facts.app_unavailable and on("BOSUN_MENU_APP", True),
     )
+
+
+def offered(facts: Facts, answers: Answers) -> Answers:
+    """<answers> without the menu bar app when there is no signed build to install, whoever asked for it."""
+    return replace(answers, menu_app=False) if facts.app_unavailable and answers.menu_app else answers
 
 
 UNATTENDED_NOTE = (
@@ -617,7 +626,7 @@ def env_groups(answers: Answers) -> list[tuple[str, list[tuple[str, str]]]]:
             "The menu bar app (bosun app): in ~/Applications, with the console as a background job for it",
             [
                 ("BOSUN_MENU_APP", flag[answers.menu_app]),
-                *([("BOSUN_CONSOLE_ALWAYS", "1")] if answers.menu_app else []),
+                ("BOSUN_CONSOLE_ALWAYS", flag[answers.menu_app]),
             ],
         ),
         (
@@ -691,6 +700,8 @@ def settings_to_keep(facts: Facts, answers: Answers) -> frozenset[str]:
     schedule = (env.get("BOSUN_START_TIME", DEFAULT_START), env.get("BOSUN_AWAKE_UNTIL", DEFAULT_UNTIL))
     if schedule == (answers.start, answers.until):
         kept.add("BOSUN_LEARN_AT")
+    if env.get("BOSUN_MENU_APP", "0") == ("1" if answers.menu_app else "0"):
+        kept.add("BOSUN_CONSOLE_ALWAYS")  # the console job follows the app answer when that changes
     return frozenset(kept)
 
 
@@ -698,6 +709,17 @@ def merge_env(text: str, answers: Answers, keep: frozenset[str] = frozenset()) -
     """<text> with the answers' settings changed, every other line as it was, and the ones it does
     not have yet added at the end. Settings in <keep> are left as they are, or left out."""
     wanted = {key: value for _, settings in env_groups(answers) for key, value in settings if key not in keep}
+    return set_settings(text, wanted)
+
+
+def menu_app_off(text: str) -> str:
+    """<text> with the menu bar app and the console's job as no, for an install of the app that was refused:
+    bosun.env must not say an app is there that is not."""
+    return set_settings(text, {"BOSUN_MENU_APP": "0", "BOSUN_CONSOLE_ALWAYS": "0"})
+
+
+def set_settings(text: str, wanted: Mapping[str, str]) -> str:
+    """<text> with each of <wanted> assigned, every other line as it was, the missing ones added last."""
     missing = dict(wanted)
     lines = []
     for line in text.splitlines():
@@ -796,6 +818,7 @@ class Plan:
     notes: tuple[str, ...]
     blockers: tuple[str, ...]
     menu_app: bool = False  # install the app and turn on Open at Login, after install.sh
+    app_verb: str = "install"  # `bosun app install`, or `update` where the app is already there
 
 
 def env_change(facts: Facts, answers: Answers) -> FileChange:
@@ -953,12 +976,22 @@ def connector_notes(facts: Facts, answers: Answers) -> list[str]:
     return [OLDER_CONFIG_NOTE] if from_before_connectors(facts) and keeps_all else []
 
 
+def app_notes(facts: Facts, answers: Answers) -> list[str]:
+    """Why the menu bar app is not offered, or, answered no where it is installed, that it stays."""
+    if facts.app_unavailable:
+        return [f"No menu bar app yet: there is no signed build to install ({facts.app_unavailable})."]
+    if facts.app_present and not answers.menu_app:
+        return ["bosun.app stays in ~/Applications; `bosun app remove` takes it away."]
+    return []
+
+
 def notes(facts: Facts, answers: Answers) -> tuple[str, ...]:
     return tuple(
         login_notes(facts)
         + feature_notes(facts, answers)
         + connector_notes(facts, answers)
         + wake_notes(facts, answers)
+        + app_notes(facts, answers)
         + permission_notes(facts, answers)
     )
 
@@ -989,6 +1022,7 @@ def build_plan(facts: Facts, answers: Answers, state: DirState, force: bool = Fa
         notes=notes(facts, answers),
         blockers=blockers(facts, state, files),
         menu_app=answers.menu_app,
+        app_verb="update" if facts.app_present else "install",
     )
 
 
@@ -1039,8 +1073,12 @@ def step_lines(plan: Plan, home: str) -> list[str]:
     if plan.wake_command:
         lines.append(f"  {plan.wake_command}   wakes the Mac on schedule; pmset needs admin rights")
     if plan.menu_app:
-        lines.append("  bosun app install   adds bosun.app to ~/Applications")
-        lines.append("  bosun app login on   opens it when you log in")
+        adds = {
+            "install": "adds bosun.app to ~/Applications",
+            "update": "brings the bosun.app that is there to the version this bosun wants",
+        }
+        lines.append(f"  bosun app {plan.app_verb}   {adds[plan.app_verb]}")
+        lines.append("  bosun app login on   opens it when you log in (as it is, if it already does)")
     return lines
 
 

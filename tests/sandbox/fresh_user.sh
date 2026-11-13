@@ -70,6 +70,7 @@ first_look() {
   check "... says why" says "your usual first prompt is 09:10" "$out"
   check "... says how sessions handle permissions" says "auto mode" "$out"
   check "... says what sudo is for" says "sudo pmset repeat wakeorpoweron MTWRF 08:31:00" "$out"
+  check "... and that the menu bar app is not offered yet" says "no signed build to install" "$out"
   check "... and changed nothing" bash -c '[ ! -e "$1" ] && [ ! -e "$2" ]' _ "$HOME/.local/bin/bosun" "$CONFIG"
 }
 
@@ -90,9 +91,11 @@ set_up() {
   check "the watchdog is loaded" says "com.bosun.morning.watchdog.plist" "$LOG"
   check "learning is loaded" says "com.bosun.morning.learn.plist" "$LOG"
   check "the wake went through sudo" says "sudo pmset repeat wakeorpoweron MTWRF 08:31:00" "$LOG"
-  check "the menu bar app is asked for, with the console as a job for it" bash -c 'grep -q "^BOSUN_MENU_APP=\"1\"" "$1" && grep -q "^BOSUN_CONSOLE_ALWAYS=\"1\"" "$1"' _ "$CONFIG/bosun.env"
-  check "... the console's job is loaded" says "com.bosun.morning.console.plist" "$LOG"
-  check "... the app is not here to install, which init says in a line, and still succeeds" says "bosun.app was not added" "$out"
+  # While app/publisher.json has no Team ID there is no signed build to install: the app is not offered (no
+  # question, nothing installed), and bosun.env does not claim one. Once it has one, this walks the app too.
+  check "the menu bar app is not offered, and bosun.env says it is not there" bash -c 'grep -q "^BOSUN_MENU_APP=\"0\"" "$1" && grep -q "^BOSUN_CONSOLE_ALWAYS=\"0\"" "$1"' _ "$CONFIG/bosun.env"
+  check "... the plan said why" says "no signed build to install" "$out"
+  check "... no console job was loaded for it" absent "com.bosun.morning.console.plist" "$LOG"
   check "it says what to do next" says "bosun is set up" "$out"
 }
 
@@ -236,7 +239,7 @@ the_wizard_quit() {
   check "q on the first screen" python3 "$DRIVE" "$out" "Which repos" "q" -- "$BOSUN" init
   check "... says so" says "Nothing was changed" "$out"
   check "... and nothing is there" test ! -e "$CONFIG"
-  check "q on the plan" python3 "$DRIVE" "$out" "Which repos" "<enter>" "When should" "<enter>" "How proactive" "<enter>" "Which model" "<enter>" "handle permissions" "<enter>" "wake by itself" "<enter>" "menu bar and Applications" "<enter>" "Nothing has changed yet" "q" -- "$BOSUN" init
+  check "q on the plan" python3 "$DRIVE" "$out" "Which repos" "<enter>" "When should" "<enter>" "How proactive" "<enter>" "Which model" "<enter>" "handle permissions" "<enter>" "wake by itself" "<enter>" "Nothing has changed yet" "q" -- "$BOSUN" init
   check "... and nothing is there" test ! -e "$CONFIG"
   check "ctrl-c leaves too" python3 "$DRIVE" "$out" "Which repos" "<ctrl-c>" -- "$BOSUN" init
   check "... and says so" says "Nothing was changed" "$out"
@@ -244,7 +247,7 @@ the_wizard_quit() {
   check "a typed folder, typed hours and the plan" python3 "$DRIVE" "$out" \
     "Which repos" "a" "Folder:" "~/Development/toy<enter>" "Development/toy" "<enter>" \
     "When should" "3" "Days, from" "MWF<enter>" "Start" "07:15<enter>" "Awake until" "16:45<enter>" \
-    "How proactive" "<enter>" "Which model" "<enter>" "handle permissions" "<enter>" "wake by itself" "<enter>" "menu bar and Applications" "<enter>" \
+    "How proactive" "<enter>" "Which model" "<enter>" "handle permissions" "<enter>" "wake by itself" "<enter>" \
     "Mon, Wed, Fri, 07:15 to 16:45" "q" -- "$BOSUN" init
   check "r goes back to the start" python3 "$DRIVE" "$out" "Which repos" "<enter>" "When should" "r" "Which repos" "q" -- "$BOSUN" init
   check "no answers without a terminal: only the plan" bash -c '"$1" init </dev/null | grep -q "Nothing has changed yet"' _ "$BOSUN"
@@ -297,7 +300,7 @@ the_installer() {
     "Which model" "2" \
     "handle permissions" "<enter>" \
     "wake by itself" "<enter>" \
-    "menu bar and Applications" "<enter>" \
+    \
     "Nothing has changed yet" "y" \
     "Start the windows now?" "y" \
     "The windows are up" "" \
@@ -393,7 +396,7 @@ the_first_day_on_codex() {
     "Which agent" "2" \
     "model should the orchestrator" "<enter>" \
     "wake by itself" "<enter>" \
-    "menu bar and Applications" "<enter>" \
+    \
     "Nothing has changed yet" "y" \
     "Start the windows now?" "y" \
     "The windows are up" "" \
@@ -460,7 +463,7 @@ the_first_day_on_agy() {
     "Which agent" "2" \
     "model should the orchestrator" "<enter>" \
     "wake by itself" "<enter>" \
-    "menu bar and Applications" "<enter>" \
+    \
     "Nothing has changed yet" "y" \
     "Start the windows now?" "y" \
     "The windows are up" "" \

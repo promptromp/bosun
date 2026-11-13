@@ -30,6 +30,9 @@ import init_wizard
 
 
 NOW = datetime(2026, 11, 2, 12, 0, tzinfo=UTC)
+REAL_APP_UNAVAILABLE = (
+    init_detect.app_unavailable
+)  # WorldTest patches it: its own tests read a scratch folder
 
 
 class FakeTerminal:
@@ -93,11 +96,14 @@ class WorldTest(unittest.TestCase):
                 claude_state, "auth_status", return_value=claude_state.AuthStatus(True, "x", "max")
             ),
             mock.patch.object(claude_state, "mcp_server_targets", self.mcp_list),
+            # The repo's own app/publisher.json has no Team ID yet: tests choose whether a build exists.
+            mock.patch.object(init_detect, "app_unavailable", side_effect=lambda root: self.unavailable),
         ):
             tool.start()
             self.addCleanup(tool.stop)
 
     servers: dict[str, str] | None = None  # what `claude mcp list` shows; None: it fails
+    unavailable = ""  # why there is no signed app to install; "": there is
 
     def mcp_list(self, claude_bin: str, cwd: Path, timeout: float = 30.0) -> dict[str, str]:
         """`claude mcp list`, never the real one: what self.servers says, each call recorded."""
@@ -281,6 +287,26 @@ class DetectTest(WorldTest):
 
     def test_a_failed_listing_is_no_connectors(self) -> None:
         self.assertEqual(init_detect.detect(self.config, NOW).connectors, ())
+
+    def test_the_app_is_unavailable_until_the_publisher_has_a_team_id(self) -> None:
+        """Read with app_release's own publisher reading and team check, from the code's folder."""
+        root = self.home / "code"
+        (root / "app").mkdir(parents=True)
+        publisher = root / "app" / "publisher.json"
+        for team, reason in (("", "no team_id yet"), ("not a team", "not a Team ID"), ("ABCDE12345", "")):
+            with self.subTest(team=team):
+                publisher.write_text(
+                    json.dumps({"bundle_id": "ai.example.bosun", "team_id": team, "releases": "acme/bosun"})
+                )
+                self.assertIn(reason, REAL_APP_UNAVAILABLE(root))
+        self.assertEqual(REAL_APP_UNAVAILABLE(root), "")
+        publisher.write_text("{broken")
+        self.assertTrue(REAL_APP_UNAVAILABLE(root))  # a publisher file it cannot read offers nothing
+
+    def test_the_app_there_is_a_fact(self) -> None:
+        self.assertFalse(init_detect.detect(self.config, NOW).app_present)
+        (self.home / "Applications" / "bosun.app").mkdir(parents=True)
+        self.assertTrue(init_detect.detect(self.config, NOW).app_present)
 
     def test_a_sessions_file_that_cannot_be_read_is_not_one_with_no_windows(self) -> None:
         self.config.mkdir(parents=True)
@@ -657,6 +683,42 @@ class CommandTest(WorldTest):
     def test_unattended_first_run_does_not_add_the_app(self) -> None:
         self.bosun_init("--recommended", "--unattended")
         self.assertEqual(self.app_calls(), [])
+
+    def test_the_app_is_not_offered_while_there_is_no_signed_build(self) -> None:
+        """Nothing is installed, and bosun.env does not claim an app that is not there: no false app-missing
+        alert, no `no team_id yet` finding in every update."""
+        self.unavailable = "app/publisher.json has no team_id yet"
+        status, out, _ = self.bosun_init("--recommended")
+        self.assertEqual(status, 0)
+        self.assertEqual(self.app_calls(), [])
+        env = init_plan.parse_env((self.config / "bosun.env").read_text())
+        self.assertEqual((env["BOSUN_MENU_APP"], env["BOSUN_CONSOLE_ALWAYS"]), ("0", "0"))
+        self.assertIn("no signed build to install", out)
+        status, _, _ = self.bosun_init("--answers", self.answers_file(menu_app=True))
+        self.assertEqual(
+            (status, self.app_calls()), (0, [])
+        )  # an answers file cannot ask for what is not there
+        self.assertEqual(init_plan.parse_env((self.config / "bosun.env").read_text())["BOSUN_MENU_APP"], "0")
+
+    def test_a_refused_install_says_no_to_the_app_in_bosun_env_too(self) -> None:
+        """No network, say: the config must not say the app is there. Both settings go back to off."""
+        self.statuses[("app", "install")] = 1
+        status, out, _ = self.bosun_init("--recommended")
+        self.assertEqual(status, 0)
+        env = init_plan.parse_env((self.config / "bosun.env").read_text())
+        self.assertEqual((env["BOSUN_MENU_APP"], env["BOSUN_CONSOLE_ALWAYS"]), ("0", "0"))
+        self.assertEqual(env["BOSUN_DAYS"], "MTWRF")  # nothing else of it moved
+        self.assertIn("bosun app install", out)
+
+    def test_a_refused_update_of_an_app_that_is_there_leaves_the_config_alone(self) -> None:
+        (self.home / "Applications" / "bosun.app").mkdir(parents=True)
+        self.statuses[("app", "update")] = 1
+        status, out, _ = self.bosun_init("--recommended")
+        self.assertEqual(status, 0)
+        env = init_plan.parse_env((self.config / "bosun.env").read_text())
+        self.assertEqual((env["BOSUN_MENU_APP"], env["BOSUN_CONSOLE_ALWAYS"]), ("1", "1"))
+        self.assertIn("bosun app update", out)
+        self.assertEqual(self.app_calls(), [["bosun", "app", "update"], ["bosun", "app", "login", "on"]])
 
     def test_a_refused_app_install_is_a_line_and_init_still_succeeds(self) -> None:
         """No Team ID yet, no network: `bosun app install` says why on its own, and init says how to add the

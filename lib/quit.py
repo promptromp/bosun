@@ -70,7 +70,7 @@ class Options:
     pause_morning: bool
     sleep: bool  # the Mac may sleep now: bosun stop releases the keep-awake too
     json: bool
-    lock_wait_seconds: int = 0  # BOSUN_WINDOWS_LOCK_WAIT_SECONDS: how long the steps wait for a start's lock
+    lock_wait_seconds: int  # BOSUN_WINDOWS_LOCK_WAIT_SECONDS: how long the steps wait for a start's lock
 
 
 @dataclass(frozen=True)

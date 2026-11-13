@@ -510,6 +510,24 @@ class OtherQuestionsTest(unittest.TestCase):
         self.assertIn("Open at Login", screen)  # what yes does
         self.assertIn("wake by itself", ui.screens[5])
 
+    def test_the_app_is_not_asked_while_there_is_no_signed_build_to_install(self) -> None:
+        gone = facts(app_unavailable="app/publisher.json has no team_id yet")
+        answers, ui = run([*[ENTER] * 6, "y"], gone)
+        assert answers is not None
+        self.assertFalse(answers.menu_app)
+        self.assertFalse(any("menu bar" in screen.split("Nothing has changed")[0] for screen in ui.screens))
+        self.assertEqual(len(ui.screens), 7)
+        self.assertIn("step 1 of 6", ui.screens[0])
+        self.assertIn("step 6 of 6", ui.screens[5])
+        self.assertIn("no signed build to install", ui.screens[-1])
+
+    def test_no_says_where_it_is_installed_that_the_app_stays(self) -> None:
+        _, ui = run([*[ENTER] * 6, "q"], facts(app_present=True))
+        self.assertIn("stays", ui.screens[6])
+        self.assertIn("bosun app remove", ui.screens[6])
+        _, ui = run([*[ENTER] * 6, "q"])
+        self.assertNotIn("bosun app remove", ui.screens[6])
+
     def test_no_to_the_menu_bar_app_is_the_answer(self) -> None:
         answers, _ = run([*[ENTER] * 6, "n", "y"])
         assert answers is not None

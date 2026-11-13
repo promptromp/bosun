@@ -406,7 +406,7 @@ def ask_model(ui: Ui, answers: Answers, top: Sequence[str]) -> Answers:
     return replace(answers, **picked.changes)
 
 
-ALWAYS_ASKED = 6  # repos, schedule, features, model, wake, the menu bar app
+ALWAYS_ASKED = 5  # repos, schedule, features, model, wake (and the menu bar app, when there is one to offer)
 AUTO_PREVIEW = (
     "A safety check reviews each action and blocks risky ones.",
     "Nothing to accept first, and it uses slightly more tokens.",
@@ -463,21 +463,23 @@ def ask_wake(ui: Ui, facts: Facts, answers: Answers, top: Sequence[str]) -> Answ
     return replace(answers, **picked.changes)
 
 
-def menu_app_options(answers: Answers) -> list[Option]:
+def menu_app_options(facts: Facts, answers: Answers) -> list[Option]:
     yes = (
         "bosun.app goes in ~/Applications; its menu bar icon says at a glance whether bosun is well.",
         "It opens at login (Open at Login: `bosun app login on`), and the console runs as a job for it.",
         "bosun update keeps it current.",
     )
-    no = ("bosun runs as before; `bosun app install` adds the app whenever you like.",)
+    no = ["bosun runs as before; `bosun app install` adds the app whenever you like."]
+    if facts.app_present:
+        no = ["bosun.app stays in ~/Applications, as it is; `bosun app remove` takes it away."]
     return [
         Option("y", "Yes, add it", {"menu_app": True}, yes, recommended=answers.menu_app),
-        Option("n", "No", {"menu_app": False}, no, recommended=not answers.menu_app),
+        Option("n", "No", {"menu_app": False}, tuple(no), recommended=not answers.menu_app),
     ]
 
 
-def ask_menu_app(ui: Ui, answers: Answers, top: Sequence[str]) -> Answers:
-    return replace(answers, **choose(ui, top, menu_app_options(answers)).changes)
+def ask_menu_app(ui: Ui, facts: Facts, answers: Answers, top: Sequence[str]) -> Answers:
+    return replace(answers, **choose(ui, top, menu_app_options(facts, answers)).changes)
 
 
 def ask_aws(ui: Ui, facts: Facts, answers: Answers, top: Sequence[str]) -> Answers:
@@ -526,6 +528,7 @@ def ask_harness(ui: Ui, facts: Facts, answers: Answers, top: Sequence[str]) -> A
 def total_steps(facts: Facts, answers: Answers, asks_connectors: bool) -> int:
     return (
         ALWAYS_ASKED
+        + (not facts.app_unavailable)
         + asks_connectors
         + has_a_choice_of_agents(facts)
         + (answers.harness == agent_state.ORCHESTRATOR_HARNESS)
@@ -558,7 +561,8 @@ def ask_all(ui: Ui, facts: Facts, answers: Answers, machine: Machine) -> Answers
     if on_claude:
         answers = ask_permissions(ui, answers, top("How should repo sessions handle permissions?"))
     answers = ask_wake(ui, facts, answers, top("Should the Mac wake by itself?"))
-    answers = ask_menu_app(ui, answers, top("Add bosun to the menu bar and Applications?"))
+    if not facts.app_unavailable:  # with no signed build to install, there is nothing to offer
+        answers = ask_menu_app(ui, facts, answers, top("Add bosun to the menu bar and Applications?"))
     if facts.aws_sso_profiles:
         answers = ask_aws(ui, facts, answers, top("Which AWS SSO profiles should each morning log in to?"))
     return answers

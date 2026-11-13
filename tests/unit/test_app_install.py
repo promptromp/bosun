@@ -25,6 +25,7 @@ from unittest import mock
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "lib"))
 import app_install
 import app_release
+import update_facts
 from app_fakes import (
     BUNDLE_ID,
     EMPTY_TEAM,
@@ -838,6 +839,14 @@ class ScratchTest(World):
         self.assertRegex(names[0], rf"^\.bosun-app-{os.getpid()}-")
 
 
+class CurlBudgetTest(unittest.TestCase):
+    def test_curl_ends_a_slow_download_itself_before_the_update_stops_the_command(self) -> None:
+        """`bosun app update` run by `bosun update` is killed at update_facts.COMMAND_SECONDS: curl's own
+        --max-time must end first, with its own message."""
+        budget = int(app_install.CURL[app_install.CURL.index("--max-time") + 1])
+        self.assertLess(budget, update_facts.COMMAND_SECONDS)
+
+
 class UpdateTest(World):
     def update(self) -> str:
         return app_install.update(self.setup_for())
@@ -860,6 +869,21 @@ class UpdateTest(World):
         self.assertIn("bosun app install", message)
         self.assertEqual(self.tools.calls, [])
         self.assertFalse(self.apps.exists())
+
+    def test_no_app_is_not_installed_before_any_team_check(self) -> None:
+        """An install with no app of the publisher's asks nothing of the publisher: `bosun update` runs this
+        on every install, app or not, and a Team ID not filled in yet is no failure of it."""
+        for team in ("", "not set"):
+            with self.subTest(team=team):
+                self.write_publisher(team)
+                self.assertIn("not installed", self.update())
+                self.assertEqual(self.tools.calls, [])
+
+    def test_the_same_version_is_up_to_date_with_no_team_id_too(self) -> None:
+        self.write_publisher("")
+        self.install_old("0.2.0")
+        self.assertIn("up to date", self.update())
+        self.assertEqual(self.tools.calls, [])
 
     def test_an_empty_team_id_refuses_an_update_too(self) -> None:
         self.write_publisher("")

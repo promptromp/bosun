@@ -27,6 +27,7 @@ from unittest import mock
 
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "lib"))
+import app_release
 import install_paths
 import knowledge_store
 import ledger
@@ -584,32 +585,77 @@ class ReleaseExtrasTest(World):
             found = REAL_RESTART_CONSOLE(self.new)
         self.assertEqual(found, ["the console: Could not find service"])
 
-    def test_the_app_is_updated_through_the_new_versions_bosun_with_the_menu_app_on(self) -> None:
+    def with_the_app(self, there: bool) -> Any:
+        """A home with bosun.app in ~/Applications, or without."""
+        home = self.state.parent / "home"
+        if there:
+            app_release.app_path(home).mkdir(parents=True)
+        return mock.patch.dict(os.environ, {"HOME": str(home)})
+
+    def test_an_app_that_is_there_is_updated_through_the_new_versions_bosun(self) -> None:
         out = io.StringIO()
-        done = subprocess.CompletedProcess([], 0, "bosun.app 0.1.0 is installed: nothing to do\n", "")
+        done = subprocess.CompletedProcess([], 0, "bosun.app 0.1.0 is up to date\n", "")
         with (
-            self.shell(flag="1"),
+            self.with_the_app(True),
             mock.patch.object(update_facts, "bosun", return_value=done) as bosun,
             contextlib.redirect_stdout(out),
         ):
             found = REAL_BRING_APP_ALONG(self.new)
         self.assertEqual(found, [])
         self.assertEqual(bosun.call_args.args, (self.new, "app", "update"))
-        self.assertIn("bosun.app 0.1.0 is installed: nothing to do", out.getvalue())
+        self.assertIn("bosun.app 0.1.0 is up to date", out.getvalue())
 
-    def test_with_the_menu_app_off_the_app_is_never_touched(self) -> None:
-        for flag in ("0", ""):
-            with self.shell(flag=flag), mock.patch.object(update_facts, "bosun") as bosun:
-                self.assertEqual(REAL_BRING_APP_ALONG(self.new), [])
-            bosun.assert_not_called()
+    def test_it_goes_by_the_app_being_there_not_by_the_setting(self) -> None:
+        """BOSUN_MENU_APP is the person's wish (init's question, the watchdog's alert): an app they added by
+        hand with it at 0 is kept current, as a present Open at Login job is. The config is not even read."""
+        done = subprocess.CompletedProcess([], 0, "bosun.app 0.1.0 installed\n", "")
+        with (
+            self.with_the_app(True),
+            mock.patch.object(update_facts, "shell") as shell,
+            mock.patch.object(update_facts, "bosun", return_value=done) as bosun,
+        ):
+            self.assertEqual(REAL_BRING_APP_ALONG(self.new), [])
+        shell.assert_not_called()
+        bosun.assert_called_once_with(self.new, "app", "update")
+
+    def test_with_no_app_the_command_still_runs_and_the_update_says_nothing_of_it(self) -> None:
+        out = io.StringIO()
+        done = subprocess.CompletedProcess([], 0, "bosun.app is not installed: run bosun app install\n", "")
+        with (
+            self.with_the_app(False),
+            mock.patch.object(update_facts, "bosun", return_value=done) as bosun,
+            contextlib.redirect_stdout(out),
+        ):
+            self.assertEqual(REAL_BRING_APP_ALONG(self.new), [])
+        bosun.assert_called_once_with(self.new, "app", "update")
+        self.assertEqual(out.getvalue(), "")
 
     def test_a_refused_app_update_is_a_finding_that_stops_nothing(self) -> None:
-        """app/publisher.json has no team_id yet, no network, a bundle that is not the publisher's: the
-        command's one line, in the update's summary."""
+        """No network, a bundle that is not the publisher's, a Team ID not filled in: the command's one line,
+        in the update's summary."""
         refused = subprocess.CompletedProcess([], 1, "", "bosun app: app/publisher.json has no team_id yet\n")
-        with self.shell(flag="1"), mock.patch.object(update_facts, "bosun", return_value=refused):
+        with self.with_the_app(True), mock.patch.object(update_facts, "bosun", return_value=refused):
             found = REAL_BRING_APP_ALONG(self.new)
         self.assertEqual(found, ["bosun.app: bosun app: app/publisher.json has no team_id yet"])
+
+    def test_a_reader_that_went_away_does_not_stop_the_update(self) -> None:
+        """Started detached, its output may go nowhere: a closed pipe is no reason to stop before the hold is
+        lifted."""
+
+        class Gone(io.StringIO):
+            def write(self, text: str) -> int:
+                raise BrokenPipeError
+
+            def flush(self) -> None:
+                raise BrokenPipeError
+
+        for to_stderr in (False, True):
+            with (
+                mock.patch.object(update.Output, "to_stderr", to_stderr),
+                mock.patch.object(sys, "stdout", Gone()),
+                mock.patch.object(sys, "stderr", Gone()),
+            ):
+                update.Output.say("  reloaded the launchd job")  # no exception
 
     def test_the_release_does_both_before_it_lifts_the_hold_and_keeps_what_they_found(self) -> None:
         seen: list[tuple[str, str]] = []

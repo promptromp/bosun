@@ -316,6 +316,10 @@ class RunTest(unittest.TestCase):
         data = json.loads(out)
         self.assertEqual((data["wait_minutes"], data["lock_wait_seconds"]), (7, 45))
 
+    def test_lock_wait_seconds_has_no_default_to_forget(self) -> None:
+        with self.assertRaises(TypeError):
+            quit_cmd.Options("plan", 10, False, False, True)  # type: ignore[call-arg]
+
     def test_the_plan_in_text_names_the_windows_that_are_busy_or_waiting(self) -> None:
         _status, out, _err = run(Fake([window("alpha", "busy"), window("beta", "waiting")]), "plan")
         self.assertIn("alpha", out)
