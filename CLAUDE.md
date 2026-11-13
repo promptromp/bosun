@@ -377,7 +377,8 @@ and CI agree on versions. On commit (`.pre-commit-config.yaml`; run all with `uv
   commit messages (see Publishing below).
 - The unit tests the change can reach, in parallel (`pytest -n auto --impacted`, pytest-impacted
   and pytest-xdist): the change is what git has uncommitted, so `pre-commit run --all-files` selects
-  the same. Before a push, the smoke suite (end to end only); in CI, every unit test.
+  the same. Before a push, the smoke suite (end to end only; skipped if this exact tree passed it here
+  in the last 24 hours); in CI, every unit test (its smoke job, when it is on, always runs the whole suite).
 
 Which tests a change reaches: the plugin follows Python imports from `lib/` (an import root, as
 pytest's `pythonpath` entry; `impacted_module = "lib"`) and between the test files and the helpers of
@@ -433,8 +434,14 @@ including that task files only use valid ledger transitions and that the task ta
 `docs/orchestrator.md` matches them; `--with-unit` runs every unit test first too, with a plain
 `python3 -m unittest`. Then `bosun doctor`. While iterating, run only the area you changed: `tests/smoke.sh --list`
 prints the sections' ids, `tests/smoke.sh --only <id>[,<id>...]` runs the shared setup and those (and what they
-`needs`) in seconds (a few minutes for a section with prerequisites), and says in its summary that it was a partial run. Before committing, run the whole
-suite once; CI and the pre-push hook always run all of it. In `tests/smoke.sh`, a new section begins with
+`needs`) in seconds (a few minutes for a section with prerequisites), and says in its summary that it was a
+partial run. While iterating use `--only`, `--last-failed` (`--lf`: only the sections whose last recorded
+result, in the git-ignored `tests/.smoke-cache/`, was a failure) and `-x` (stop at the first failing check);
+before committing, run the whole suite once with none of them. CI's smoke job, when it is on, runs all of it,
+and so does the pre-push hook (`tests/smoke.sh --pre-push`) unless that exact tree (uncommitted and untracked
+files included) passed a whole run in this checkout in the last 24 hours (`BOSUN_SMOKE_NO_CACHE=1` forces it;
+what the record is and why it can only make a run longer: `docs/development.md`). A test must not write into
+the repository: the run then records no pass and names the file. In `tests/smoke.sh`, a new section begins with
 `section <id> "<name>" [needs <id>,...]` (unique kebab-case id; `tests/unit/test_smoke_sections.py` fails
 otherwise): set up what it uses itself, or say `needs` the section whose state it relies on; a helper or a
 constant that more than one section uses goes in the helpers by the fixture HOME, and an export every later
