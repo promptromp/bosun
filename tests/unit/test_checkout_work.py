@@ -86,6 +86,26 @@ class CheckoutTest(World):
             self.assertEqual(cw.checkout_work(self.checkout), "uncommitted changes")
 
 
+class IgnoredFilesTest(World):
+    """What git ignores is yours unless running or building bosun makes it: SwiftPM's .build, which
+    `bosun app install --build` leaves in the folder of the version it builds, is not."""
+
+    def test_swiftpm_s_build_folder_is_a_cache_and_not_your_work(self) -> None:
+        self.assertEqual(cw.ignored_work("!! app/.build/\n!! app/.build/release/BosunMenu\n"), [])
+
+    def test_a_file_of_yours_that_git_ignores_still_is(self) -> None:
+        self.assertEqual(cw.ignored_work("!! app/.build/\n!! app/.env\n"), ["app/.env"])
+
+    def test_a_build_folder_in_a_checkout_leaves_it_with_no_work(self) -> None:
+        exclude = self.checkout / ".git" / "info" / "exclude"
+        exclude.write_text(".build\nkeep.env\n")
+        (self.checkout / "app" / ".build" / "release").mkdir(parents=True)
+        (self.checkout / "app" / ".build" / "release" / "BosunMenu").write_text("binary")
+        self.assertEqual(cw.checkout_work(self.checkout), "")
+        (self.checkout / "keep.env").write_text("TOKEN=x\n")
+        self.assertIn("files git ignores (keep.env)", cw.checkout_work(self.checkout))
+
+
 class VersionTest(World):
     def test_a_version_as_it_was_checked_out_holds_nothing(self) -> None:
         self.assertEqual(cw.version_work(self.folders[0]), "")

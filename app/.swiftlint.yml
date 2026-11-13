@@ -1,0 +1,54 @@
+# The repo's limits (CLAUDE.md, "Tooling and checks"): split the function rather than raise one.
+# Run through the SwiftLintPlugins command plugin, whose version Package.resolved pins:
+#   swift package plugin --allow-writing-to-package-directory swiftlint lint --strict
+included:
+  - Sources
+  - Tests
+excluded:
+  - .build
+
+cyclomatic_complexity:
+  warning: 10
+  error: 10
+function_body_length:
+  warning: 60
+  error: 60
+type_body_length:
+  warning: 300
+  error: 300
+file_length:
+  warning: 400
+  error: 400
+
+# swift-format owns layout, and it writes the trailing comma of a multi-line collection.
+disabled_rules:
+  - trailing_comma
+
+identifier_name:
+  min_length: 2
+  excluded:
+    - id
+
+opt_in_rules:
+  - force_unwrapping
+  - empty_count
+  - explicit_init
+  - first_where
+  - sorted_first_last
+
+custom_rules:
+  no_print_in_sources:
+    name: "No print in Sources"
+    regex: '\bprint\('
+    included: "Sources/.*\\.swift"
+    message: "Log with os.Logger, not print."
+    severity: error
+
+# force_try and force_cast are errors; force_unwrapping is an error in Sources and allowed in Tests
+# (the nested file below).
+force_try:
+  severity: error
+force_cast:
+  severity: error
+force_unwrapping:
+  severity: error

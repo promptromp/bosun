@@ -1,0 +1,13 @@
+{
+  "ahead": false,
+  "available": false,
+  "channel": "releases",
+  "contract": 1,
+  "error": "could not reach the origin: Could not resolve host",
+  "installed": {
+    "commit": "1111111111111111111111111111111111111111",
+    "version": null
+  },
+  "latest": null,
+  "skipped": false
+}

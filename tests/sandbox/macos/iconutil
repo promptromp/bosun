@@ -1,0 +1,23 @@
+#!/bin/bash
+# iconutil's stand-in, for what app/build.sh asks of it: `-c icns <folder>.iconset -o <file>`. It refuses a
+# folder that is not an iconset with pictures in it, as the real one does, and writes a file that says it is a
+# stand-in's (the real icns is a made image; nothing here reads it).
+mkdir -p "$HOME/.sandbox"
+echo "iconutil $*" >>"$HOME/.sandbox/system.log"
+[ "${1:-}" = -c ] && [ "${2:-}" = icns ] && [ "${4:-}" = -o ] && [ -n "${5:-}" ] || {
+	echo "iconutil stand-in: only -c icns <iconset> -o <file> is stood in for" >&2
+	exit 2
+}
+iconset="$3"
+case "$iconset" in
+*.iconset) ;;
+*)
+	echo "iconutil: error: $iconset is not an iconset" >&2
+	exit 1
+	;;
+esac
+ls "$iconset"/icon_*.png >/dev/null 2>&1 || {
+	echo "iconutil: error: $iconset has no icon_*.png" >&2
+	exit 1
+}
+echo "an icns, from a stand-in" >"$5"

@@ -14,7 +14,7 @@ import tempfile
 import unittest
 from datetime import UTC, datetime, time, timedelta
 from pathlib import Path
-from typing import Any
+from typing import Any, ClassVar
 from unittest import mock
 
 
@@ -27,7 +27,7 @@ import quit_state
 import update_state
 import watchdog
 from console_live import LiveError
-from menu_status import SessionGate, StatusFacts
+from menu_status import SessionGate, StatusFacts, WatchdogJob
 
 
 NOW = datetime(2026, 11, 11, 10, 0, 0)  # a Wednesday, local time, inside the awake window
@@ -411,6 +411,7 @@ KEYS = [
     "sentence",
     "detail",
     "windows",
+    "running",
     "waiting",
     "keep_awake_until",
     "stopped",
@@ -439,7 +440,38 @@ class JsonTestCase(unittest.TestCase):
         out = menu_status.unreadable_config("bosun.env line 3 is not a setting")
         self.assertEqual((out["contract"], out["level"]), (1, "error"))
         self.assertEqual(out["problems"], ["bosun.env line 3 is not a setting"])
+        self.assertEqual(sorted(out), sorted(KEYS))
+        self.assertIsNone(out["running"])  # not known
         json.dumps(out)
+
+
+class RunningTestCase(unittest.TestCase):
+    """`running`: whether bosun's windows are open, so the app tells a bosun to start from one that runs
+    with an error; null when the windows could not be read."""
+
+    def test_open_windows_are_running_whatever_the_level(self) -> None:
+        self.assertIs(snap()["running"], True)
+        out = snap(checks=watchdog_checks(check("morning-failed", "error", "e1")))
+        self.assertEqual((out["level"], out["running"]), ("error", True))
+
+    def test_no_window_open_is_not_running(self) -> None:
+        for out in (
+            snap(windows=GONE, gate=EXPECTED),
+            snap(windows=GONE, quit=quit_state.QuitState(GONE_AT, True)),
+            snap(windows=[]),
+        ):
+            with self.subTest(level=out["level"]):
+                self.assertIs(out["running"], False)
+
+    def test_windows_that_could_not_be_read_are_not_known(self) -> None:
+        out = snap(windows=None, errors={"sessions": "tmux did not answer"})
+        self.assertIsNone(out["running"])
+        self.assertEqual(out["windows"], 0)
+
+    def test_a_quit_that_did_not_finish_still_runs(self) -> None:
+        out = snap(quit=quit_state.QuitState(GONE_AT, False))
+        self.assertEqual((out["level"], out["running"]), ("error", True))
+        self.assertIsNotNone(out["stopped"])
 
 
 class KeepAwakeTestCase(unittest.TestCase):
@@ -617,7 +649,7 @@ class GatherTestCase(unittest.TestCase):
         self.env = environment(self.state)
 
     def gather(self, run: FakeCommands | None = None) -> StatusFacts:
-        return menu_status_live.gather(self.env, NOW, run or good_commands())
+        return menu_status_live.gather(self.env, NOW, run or good_commands(), kernel_time=lambda _name: None)
 
     def test_a_quiet_system(self) -> None:
         found = self.gather()
@@ -837,6 +869,321 @@ class CommandTestCase(unittest.TestCase):
         with contextlib.redirect_stderr(err), self.assertRaises(SystemExit) as raised:
             self.run_main("--nope")
         self.assertEqual(raised.exception.code, 2)
+
+
+class WatchdogJobTestCase(unittest.TestCase):
+    """The watchdog itself not running, which none of its own checks can say."""
+
+    def test_the_interval_is_the_one_install_sh_gives_the_job(self) -> None:
+        text = (Path(__file__).resolve().parents[2] / "lib" / "common.sh").read_text()
+        self.assertIn(f"\nWATCHDOG_INTERVAL_SECONDS={menu_status.WATCHDOG_INTERVAL_SECONDS}\n", text)
+
+    def test_a_job_that_is_installed_and_not_loaded_is_a_warning_that_says_so(self) -> None:
+        out = snap(watchdog_job=WatchdogJob(installed=True, loaded=False))
+        self.assertEqual((out["level"], out["sentence"]), ("warning", "bosun is running, with a warning"))
+        self.assertEqual(len(out["problems"]), 1)
+        self.assertIn("watchdog job is not loaded", out["problems"][0])
+        self.assertIn("install.sh", out["problems"][0])
+
+    def test_a_job_that_last_ran_more_than_three_intervals_ago_is_a_warning_with_the_time(self) -> None:
+        out = snap(watchdog_job=WatchdogJob(True, True, NOW - timedelta(minutes=16)))
+        self.assertEqual(out["level"], "warning")
+        self.assertIn("last ran at 09:44", out["problems"][0])
+        self.assertIn("every 5 minutes", out["problems"][0])
+        self.assertIn("/Users/me/.local/state/bosun/logs", out["problems"][0])
+
+    def test_a_run_of_another_day_says_the_day(self) -> None:
+        out = snap(watchdog_job=WatchdogJob(True, True, NOW - timedelta(days=2)))
+        self.assertIn("last ran at 2026-11-09 10:00", out["problems"][0])
+
+    def test_a_job_that_ran_within_three_intervals_is_fine(self) -> None:
+        for minutes in (0, 5, 14, 15):
+            with self.subTest(minutes=minutes):
+                out = snap(watchdog_job=WatchdogJob(True, True, NOW - timedelta(minutes=minutes)))
+                self.assertEqual((out["level"], out["problems"]), ("ok", []))
+
+    def test_a_loaded_job_that_never_ran_is_a_new_one(self) -> None:
+        self.assertEqual(snap(watchdog_job=WatchdogJob(True, True, None))["level"], "ok")
+
+    def test_no_job_installed_is_no_problem_as_in_a_checkout(self) -> None:
+        for job in (WatchdogJob(False, False), WatchdogJob(False, False, NOW - timedelta(days=9)), None):
+            with self.subTest(job=job):
+                self.assertEqual(snap(watchdog_job=job)["level"], "ok")
+
+    def test_an_update_that_holds_the_watchdog_is_not_a_stale_one(self) -> None:
+        job = WatchdogJob(True, True, NOW - timedelta(minutes=40))
+        self.assertEqual(snap(watchdog_job=job, update_running=True)["level"], "ok")
+
+    def test_it_does_not_hide_a_worse_finding_and_is_listed_after_the_checks(self) -> None:
+        out = snap(
+            watchdog_job=WatchdogJob(True, False),
+            checks=watchdog_checks(check("morning-failed", "error", "e1")),
+        )
+        self.assertEqual(out["level"], "error")
+        self.assertEqual(out["problems"][0], "e1")
+        self.assertIn("watchdog job is not loaded", out["problems"][1])
+
+    def test_after_a_quit_the_loaded_job_that_skips_is_stopped_not_yellow(self) -> None:
+        stale = WatchdogJob(True, True, NOW - timedelta(hours=3))
+        out = snap(windows=GONE, quit=quit_state.QuitState(GONE_AT, True), watchdog_job=stale)
+        self.assertEqual((out["level"], out["problems"]), ("stopped", []))
+        gone = WatchdogJob(True, False)
+        out = snap(windows=GONE, quit=quit_state.QuitState(GONE_AT, True), watchdog_job=gone)
+        self.assertEqual((out["level"], out["problems"]), ("stopped", []))
+
+    def test_a_stop_of_today_is_stopped_too(self) -> None:
+        gate = SessionGate(menu_status.STOPPED_BY_STOP, NOW - timedelta(hours=1))
+        out = snap(windows=GONE, gate=gate, watchdog_job=WatchdogJob(True, False))
+        self.assertEqual((out["level"], out["problems"]), ("stopped", []))
+
+
+class WatchdogJobFactsTestCase(unittest.TestCase):
+    JOB: ClassVar[dict[str, Any]] = {"state": "not running", "installed": True}
+
+    def test_a_loaded_job_and_the_last_run_its_state_records(self) -> None:
+        job = menu_status_live.watchdog_job_of(
+            {"watchdog_job": self.JOB}, {"last_run": "2026-11-11 09:55:00"}
+        )
+        self.assertEqual(job, WatchdogJob(True, True, datetime(2026, 11, 11, 9, 55, 0)))
+
+    def test_no_state_is_not_loaded(self) -> None:
+        job = menu_status_live.watchdog_job_of({"watchdog_job": {"state": "", "installed": True}}, None)
+        self.assertEqual(job, WatchdogJob(True, False, None))
+
+    def test_no_plist_is_not_installed(self) -> None:
+        job = menu_status_live.watchdog_job_of({"watchdog_job": {"state": "", "installed": False}}, {})
+        self.assertEqual(job, WatchdogJob(False, False, None))
+
+    def test_facts_that_do_not_say_are_no_job(self) -> None:
+        for facts_seen in (None, {}, {"watchdog_job": "x"}):
+            with self.subTest(facts=facts_seen):
+                self.assertIsNone(menu_status_live.watchdog_job_of(facts_seen, {"last_run": "x"}))
+
+    def test_a_last_run_that_is_not_a_time_is_never_run(self) -> None:
+        for last in ("yesterday", None, 7):
+            with self.subTest(last=last):
+                job = menu_status_live.watchdog_job_of({"watchdog_job": self.JOB}, {"last_run": last})
+                self.assertEqual(job, WatchdogJob(True, True, None))
+
+    def test_a_run_that_skipped_is_a_run_the_later_of_the_state_and_the_output_file(self) -> None:
+        job = {"watchdog_job": self.JOB}
+        saved = {"last_run": "2026-11-11 09:00:00"}
+        later = datetime(2026, 11, 11, 9, 58, 0)
+        self.assertEqual(menu_status_live.watchdog_job_of(job, saved, later).last_run, later)  # type: ignore[union-attr]
+        earlier = datetime(2026, 11, 11, 8, 0, 0)
+        found = menu_status_live.watchdog_job_of(job, saved, earlier)
+        self.assertEqual(found.last_run, datetime(2026, 11, 11, 9, 0, 0))  # type: ignore[union-attr]
+        found = menu_status_live.watchdog_job_of(job, {}, later)
+        self.assertEqual(found.last_run, later)  # type: ignore[union-attr]
+
+    def test_launched_at_is_the_output_files_time_and_none_without_it(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            self.assertIsNone(menu_status_live.launched_at(Path(tmp)))
+            out = Path(tmp) / "watchdog.launchd.out"
+            out.write_text("bosun is stopped (bosun quit at 09:30): skipping this run\n")
+            os.utime(out, (1700000000, 1700000000))
+            self.assertEqual(menu_status_live.launched_at(Path(tmp)), datetime.fromtimestamp(1700000000))
+
+    def test_a_quit_that_ended_long_after_the_last_full_run_is_not_yellow_while_the_job_still_runs(
+        self,
+    ) -> None:
+        # A quit's skipped runs leave last_run old; their lines in the output file are the proof the job runs.
+        with tempfile.TemporaryDirectory() as tmp:
+            state = Path(tmp)
+            (state / "logs").mkdir()
+            (state / "watchdog.json").write_text(json.dumps({"last_run": "2026-11-11 05:00:00"}))
+            out = state / "logs" / "watchdog.launchd.out"
+            out.write_text("bosun is stopped (bosun quit at 05:05): skipping this run\n")
+            stamp = (NOW - timedelta(minutes=2)).timestamp()
+            os.utime(out, (stamp, stamp))
+            run = FakeCommands(
+                {
+                    "sessions --json": json.dumps(WINDOWS),
+                    "watchdog --facts": json.dumps({**WATCHDOG_FACTS, "watchdog_job": self.JOB}),
+                }
+            )
+            found = menu_status_live.gather(environment(state), NOW, run, kernel_time=lambda _name: None)
+        problems = menu_status.snapshot(found, NOW)["problems"]
+        self.assertFalse(any("watchdog last ran" in p for p in problems), problems)
+
+    def test_gather_reads_it_from_the_facts_and_the_saved_state(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            state = Path(tmp)
+            (state / "logs").mkdir()
+            (state / "watchdog.json").write_text(json.dumps({"last_run": "2026-11-11 09:30:00"}))
+            run = FakeCommands(
+                {
+                    "sessions --json": json.dumps(WINDOWS),
+                    "watchdog --facts": json.dumps({**WATCHDOG_FACTS, "watchdog_job": self.JOB}),
+                }
+            )
+            found = menu_status_live.gather(environment(state), NOW, run, kernel_time=lambda _name: None)
+        self.assertEqual(found.watchdog_job, WatchdogJob(True, True, datetime(2026, 11, 11, 9, 30, 0)))
+        problems = menu_status.snapshot(found, NOW)["problems"]  # 30 minutes: not working
+        self.assertTrue(any("watchdog last ran at 09:30" in p for p in problems), problems)
+
+    def test_gather_without_the_job_in_the_facts_has_none(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            (Path(tmp) / "logs").mkdir()
+            found = menu_status_live.gather(
+                environment(Path(tmp)), NOW, good_commands(), kernel_time=lambda _name: None
+            )
+        self.assertIsNone(found.watchdog_job)
+
+
+class WatchdogWakeTestCase(unittest.TestCase):
+    """A Mac that slept runs no watchdog: awake time counts from the later of its last run and its wake."""
+
+    def test_woken_two_minutes_ago_after_a_long_sleep_is_not_yellow(self) -> None:
+        job = WatchdogJob(True, True, NOW - timedelta(hours=9), NOW - timedelta(minutes=2))
+        self.assertEqual((snap(watchdog_job=job)["level"], snap(watchdog_job=job)["problems"]), ("ok", []))
+
+    def test_awake_sixteen_minutes_with_no_run_is_yellow_and_says_the_last_run(self) -> None:
+        job = WatchdogJob(True, True, NOW - timedelta(hours=9), NOW - timedelta(minutes=16))
+        out = snap(watchdog_job=job)
+        self.assertEqual(out["level"], "warning")
+        self.assertIn("last ran at 01:00", out["problems"][0])
+
+    def test_the_edge_is_three_intervals_awake(self) -> None:
+        woke = NOW - timedelta(minutes=15)
+        self.assertEqual(
+            snap(watchdog_job=WatchdogJob(True, True, NOW - timedelta(hours=9), woke))["level"], "ok"
+        )
+        woke = NOW - timedelta(minutes=15, seconds=1)
+        job = WatchdogJob(True, True, NOW - timedelta(hours=9), woke)
+        self.assertEqual(snap(watchdog_job=job)["level"], "warning")
+
+    def test_a_wake_before_the_last_run_changes_nothing(self) -> None:
+        old_wake = NOW - timedelta(hours=2)
+        self.assertEqual(
+            snap(watchdog_job=WatchdogJob(True, True, NOW - timedelta(minutes=1), old_wake))["level"], "ok"
+        )
+        stale = WatchdogJob(True, True, NOW - timedelta(minutes=20), NOW - timedelta(hours=2))
+        self.assertEqual(snap(watchdog_job=stale)["level"], "warning")
+
+    def test_without_a_waketime_it_is_the_rule_of_the_last_run(self) -> None:
+        self.assertEqual(
+            snap(watchdog_job=WatchdogJob(True, True, NOW - timedelta(minutes=16), None))["level"], "warning"
+        )
+        self.assertEqual(
+            snap(watchdog_job=WatchdogJob(True, True, NOW - timedelta(minutes=14), None))["level"], "ok"
+        )
+
+    def test_a_job_that_is_not_loaded_is_yellow_at_once_whatever_the_wake(self) -> None:
+        job = WatchdogJob(True, False, None, NOW - timedelta(seconds=30))
+        out = snap(watchdog_job=job)
+        self.assertEqual(out["level"], "warning")
+        self.assertIn("not loaded", out["problems"][0])
+
+    def test_a_quit_is_stopped_after_a_wake_too(self) -> None:
+        job = WatchdogJob(True, True, NOW - timedelta(hours=9), NOW - timedelta(hours=1))
+        out = snap(windows=GONE, quit=quit_state.QuitState(GONE_AT, True), watchdog_job=job)
+        self.assertEqual((out["level"], out["problems"]), ("stopped", []))
+
+    def test_a_fresh_boot_with_no_run_since_is_not_yellow(self) -> None:
+        # Off overnight: no wake since the boot, the last run was yesterday's, and the job's first run is five
+        # minutes after login
+        job = WatchdogJob(True, True, NOW - timedelta(hours=14), None, NOW - timedelta(minutes=2))
+        self.assertEqual((snap(watchdog_job=job)["level"], snap(watchdog_job=job)["problems"]), ("ok", []))
+
+    def test_a_boot_counts_like_a_wake_three_intervals_on(self) -> None:
+        boot = NOW - timedelta(minutes=15)
+        self.assertEqual(
+            snap(watchdog_job=WatchdogJob(True, True, NOW - timedelta(hours=14), None, boot))["level"], "ok"
+        )
+        boot = NOW - timedelta(minutes=16)
+        out = snap(watchdog_job=WatchdogJob(True, True, NOW - timedelta(hours=14), None, boot))
+        self.assertEqual(out["level"], "warning")
+        self.assertIn("last ran at 2026-11-10 20:00", out["problems"][0])
+
+    def test_the_latest_of_run_wake_and_boot_counts(self) -> None:
+        # Booted days ago, woke an hour ago, ran a minute ago: the run
+        job = WatchdogJob(
+            True, True, NOW - timedelta(minutes=1), NOW - timedelta(hours=1), NOW - timedelta(days=3)
+        )
+        self.assertEqual(snap(watchdog_job=job)["level"], "ok")
+        # Booted and woke long ago, no run for 20 minutes: stale
+        job = WatchdogJob(
+            True, True, NOW - timedelta(minutes=20), NOW - timedelta(hours=1), NOW - timedelta(days=3)
+        )
+        self.assertEqual(snap(watchdog_job=job)["level"], "warning")
+
+    def test_a_time_after_now_is_left_out_not_taken_as_now(self) -> None:
+        # The clock moved back: a wake or boot "in the future" would make every look count from its own now
+        later = NOW + timedelta(hours=2)
+        for job in (
+            WatchdogJob(True, True, NOW - timedelta(minutes=20), later),
+            WatchdogJob(True, True, NOW - timedelta(minutes=20), None, later),
+            WatchdogJob(True, True, NOW - timedelta(minutes=20), later, later),
+        ):
+            with self.subTest(job=job):
+                self.assertEqual(snap(watchdog_job=job)["level"], "warning")
+        # ... and the rule goes on with what is left: a real wake two minutes ago
+        job = WatchdogJob(True, True, NOW - timedelta(hours=9), NOW - timedelta(minutes=2), later)
+        self.assertEqual(snap(watchdog_job=job)["level"], "ok")
+
+    def test_a_last_run_after_now_falls_back_to_the_wake_and_boot(self) -> None:
+        later = NOW + timedelta(days=1)
+        self.assertEqual(
+            snap(watchdog_job=WatchdogJob(True, True, later, NOW - timedelta(minutes=2)))["level"], "ok"
+        )
+        stale = WatchdogJob(True, True, later, NOW - timedelta(hours=2), NOW - timedelta(days=1))
+        self.assertEqual(snap(watchdog_job=stale)["level"], "warning")
+        # nothing left to count from: not stale (the watchdog's next run writes a last run of now)
+        self.assertEqual(snap(watchdog_job=WatchdogJob(True, True, later))["level"], "ok")
+
+    def test_the_kernels_waketime_as_local_time(self) -> None:
+        text = "{ sec = 1794543736, usec = 756800 } Fri Nov 13 06:22:16 2026\n"
+        self.assertEqual(menu_status_live.parse_kernel_time(text), datetime.fromtimestamp(1794543736))
+
+    def test_the_kernels_boottime_reads_the_same_way(self) -> None:
+        text = "{ sec = 1794500000, usec = 123456 } Fri Nov 13 01:33:20 2026\n"
+        self.assertEqual(menu_status_live.parse_kernel_time(text), datetime.fromtimestamp(1794500000))
+
+    def test_a_waketime_that_is_zero_or_not_one_is_none(self) -> None:
+        for text in (
+            "{ sec = 0, usec = 0 } Thu Jan  1 00:00:00 1970",
+            "",
+            "nonsense",
+            "sysctl: unknown oid",
+            "sec = x",
+        ):
+            with self.subTest(text=text):
+                self.assertIsNone(menu_status_live.parse_kernel_time(text))
+
+    def test_the_wake_and_boot_are_read_once_and_only_when_the_facts_have_the_job(self) -> None:
+        asked: list[str] = []
+        times = {"kern.waketime": NOW - timedelta(minutes=1), "kern.boottime": NOW - timedelta(days=3)}
+
+        def woke(name: str) -> datetime | None:
+            asked.append(name)
+            return times[name]
+
+        with tempfile.TemporaryDirectory() as tmp:
+            state = Path(tmp)
+            (state / "logs").mkdir()
+            (state / "watchdog.json").write_text(json.dumps({"last_run": "2026-11-11 01:00:00"}))
+            job = {"state": "not running", "installed": True}
+            run = FakeCommands(
+                {
+                    "sessions --json": json.dumps(WINDOWS),
+                    "watchdog --facts": json.dumps({**WATCHDOG_FACTS, "watchdog_job": job}),
+                }
+            )
+            found = menu_status_live.gather(environment(state), NOW, run, kernel_time=woke)
+            self.assertEqual(
+                found.watchdog_job,
+                WatchdogJob(
+                    True,
+                    True,
+                    datetime(2026, 11, 11, 1, 0, 0),
+                    NOW - timedelta(minutes=1),
+                    NOW - timedelta(days=3),
+                ),
+            )
+            self.assertEqual(asked, ["kern.waketime", "kern.boottime"])
+            menu_status_live.gather(environment(state), NOW, good_commands(), kernel_time=woke)
+            self.assertEqual(asked, ["kern.waketime", "kern.boottime"])  # no job in those facts: not asked
 
 
 if __name__ == "__main__":

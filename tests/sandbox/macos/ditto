@@ -1,10 +1,22 @@
 #!/usr/bin/env python3
 """ditto's stand-in, with Python's zipfile, for what bosun asks of it: `-x -k <archive> <folder>`, unpacking a
-zip into a folder (made if it is not there)."""
+zip into a folder (made if it is not there), and `-c -k [--keepParent] <folder> <archive>` (app/build.sh),
+making one, the folder's name in front of every entry with --keepParent. Other flags (--norsrc and the like)
+are only accepted: a container has no resource forks to leave out."""
 
 import sys
 import zipfile
 from pathlib import Path
+
+
+def pack(source: Path, archive: Path, *, keep_parent: bool) -> None:
+    """<source> as a zip, each entry with its permissions, folders too (as ditto writes them)."""
+    base = source.parent if keep_parent else source
+    entries = [source, *sorted(source.rglob("*"))] if keep_parent else sorted(source.rglob("*"))
+    with zipfile.ZipFile(archive, "w", zipfile.ZIP_DEFLATED) as bundle:
+        for path in entries:
+            name = path.relative_to(base).as_posix() + ("/" if path.is_dir() else "")
+            bundle.write(path, name)
 
 
 def main(argv: list[str]) -> int:
@@ -12,11 +24,14 @@ def main(argv: list[str]) -> int:
     log.mkdir(exist_ok=True)
     with (log / "system.log").open("a") as record:
         record.write(f"ditto {' '.join(argv)}\n")
-    archive, folder = (Path(arg) for arg in argv if not arg.startswith("-"))
+    first, second = (Path(arg) for arg in argv if not arg.startswith("-"))
     try:
-        folder.mkdir(parents=True, exist_ok=True)
-        with zipfile.ZipFile(archive) as bundle:
-            bundle.extractall(folder)
+        if "-c" in argv:
+            pack(first, second, keep_parent="--keepParent" in argv)
+            return 0
+        second.mkdir(parents=True, exist_ok=True)
+        with zipfile.ZipFile(first) as bundle:
+            bundle.extractall(second)
     except (zipfile.BadZipFile, OSError) as error:
         print(f"ditto: Couldn't read PKZip archive: {error}", file=sys.stderr)
         return 1

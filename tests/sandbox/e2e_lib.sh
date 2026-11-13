@@ -322,3 +322,44 @@ install_again() { # <settings>: the piped installer once more, on what uninstall
   check "... versions side by side, the install path a link" side_by_side
   check "... with your settings" settings_as "$1"
 }
+
+# ---- what tests/install_e2e.sh and tests/app_e2e.sh share: bosun's state, its console and the releases ----
+
+STATE="$HOME/.local/state/bosun"
+# The job's own state: the first `state =` line of launchctl print (the nested ones are its endpoints').
+job_state() { launchctl print "$DOMAIN/$1" | sed -n 's/^[[:space:]]*state = //p' | head -1; }
+console_process() { pgrep -f 'lib/console_server\.py' >/dev/null; }
+# The running console answers its API, with the cookie its address's token becomes (`bosun console --url`).
+console_answers() {
+  local url port
+  url="$("$HOME/.local/bin/bosun" console --url 2>/dev/null)" || return 1
+  port="$(sed -E 's#^http://127\.0\.0\.1:([0-9]+)/.*#\1#' <<<"$url")"
+  curl -sf -H "Cookie: bosun_console_$port=${url##*t=}" "http://127.0.0.1:$port/api/version" >/dev/null
+}
+status_says() { "$HOME/.local/bin/bosun" status --json | jq -e "$1" >/dev/null; } # <jq filter>
+no_tmux_server() { ! tmux -L bosun info; }
+
+morning_lines() { cat "$STATE"/logs/morning-*.log 2>/dev/null | grep -c "$1"; } # <text>: how many lines of the morning logs have it
+morning_lines_above() { [ "$(morning_lines "$1")" -gt "$2" ]; }                 # <text> <count>
+watchdog_skipped() { grep -q "bosun is stopped (bosun quit at .*): skipping this run" "$STATE/logs/watchdog.launchd.out"; }
+
+# The install is on the releases (the default): tests/sandbox/mac.sh made the origin, ~/origin.git, a bare repository
+# with a first release in it (named by BOSUN_E2E_RELEASE), which get.sh took. `bosun update --check --json` sees a
+# next one through git ls-remote, and `bosun update --yes` moves to it. A repository and not a bundle, since `git
+# ls-remote` of a bundle lists an annotated tag's own object and no peeled line, as GitHub does.
+# <tag> [<script>]: the origin's main patched by update_patch.sh, tagged as a release, in the origin. With a <script>
+# (given the tree) instead of that patch, for a release after one the patch made: the patch does not apply twice.
+a_next_release() {
+  local tree="$OUT/next" git=(git -c user.name=sandbox -c user.email=sandbox@example.com) patch
+  patch="${2:-$OUT/next/tests/sandbox/update_patch.sh}"
+  rm -rf "$tree"
+  git clone -q --branch main "$HOME/origin.git" "$tree" &&
+    "$patch" "$tree" &&
+    "${git[@]}" -C "$tree" commit -qam "the next version" &&
+    "${git[@]}" -C "$tree" tag -a "$1" -m "The next release
+
+- the ledger goes to format 2 (the sandbox's patch)" &&
+    git -C "$tree" push -q origin main "$1"
+}
+version_in_use() { git -C "$(cd "$DIR" && pwd -P)" rev-parse HEAD; }
+version_folders() { find -E "$VERSIONS" -mindepth 1 -maxdepth 1 -type d -regex '.*/[0-9a-f]{12}' | wc -l | tr -d ' '; }

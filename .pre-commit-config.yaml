@@ -18,9 +18,9 @@ repos:
       - id: check-shebang-scripts-are-executable
       - id: check-symlinks
       - id: check-toml
-      - id: check-xml # a launchd plist: Apple's plutil lets through XML that is not valid
+      - id: check-xml # a launchd plist, or bosun.app's Info.plist template: plutil lets through XML that is not valid
         types: [file]
-        files: \.plist$
+        files: \.plist(\.in)?$
       - id: check-yaml
         exclude: ^mkdocs\.yml$ # Python tags it cannot load; the docs-site hook below reads it
       - id: detect-aws-credentials
@@ -165,6 +165,28 @@ repos:
         entry: tests/js_check.sh
         language: system
         files: ^(console/|tests/js|lib/console_|docs/assets/.*\.js$)
+        pass_filenames: false
+      # The menu bar app's Swift (app/): formatting, SwiftLint and the tests with warnings as errors, only for
+      # a commit that touches app/. Each runs only on a Mac and skips with one line elsewhere (CI's Linux `lint`
+      # job, whose image has a `swift` that cannot build AppKit) or without a Swift toolchain; the macOS `app`
+      # job enforces them.
+      - id: swift-format
+        name: swift format lint (the app)
+        entry: tools/swift_hook.sh format
+        language: system
+        files: ^app/
+        pass_filenames: false
+      - id: swiftlint
+        name: SwiftLint (the app)
+        entry: tools/swift_hook.sh lint
+        language: system
+        files: ^app/
+        pass_filenames: false
+      - id: swift-test
+        name: swift test, warnings as errors (the app)
+        entry: tools/swift_hook.sh test
+        language: system
+        files: ^app/
         pass_filenames: false
       - id: smoke-tests
         name: smoke tests (end to end, the sections the push reaches)

@@ -12,7 +12,7 @@ your organization, products, repos, colleagues, internal hosts and ids. Without 
 passes. `uv run pre-commit run --all-files` checks everything by hand. See `CLAUDE.md` for the
 limits and conventions.
 
-On GitHub, every pull request to `main` runs the same checks (`.github/workflows/ci.yml`), the
+On GitHub, every pull request to `main` runs the same checks (`.github/workflows/ci.yml`) and
 a gitleaks scan of the new commits (the smoke suite on macOS is off in CI until the feature-complete
 MVP; the pre-push hook still runs the sections the change can reach), and `main` only takes pull requests
 that pass them, through GitHub's merge queue: once a pull request's checks pass, `gh pr merge --squash`
@@ -22,8 +22,9 @@ as `pull_request`) and merges it when they pass, so nobody updates a branch by h
 and minor updates of the GitHub Actions, the sandbox's Docker base image, the pre-commit hooks and the
 uv development dependencies get auto-merge turned on by `.github/workflows/dependabot-auto-merge.yml`,
 which only adds them to the queue once their checks pass; majors and production dependencies wait for
-a person. CI runs every unit test on Linux (on macOS too once the smoke job is back), and keeps a floor under their
-coverage. For the forbidden-terms check to run there too, store your list as the
+a person. CI runs every unit test on Linux (Python 3.13 and 3.14; on macOS too once the smoke job is back), and
+keeps a floor under their coverage, measured through `sys.monitoring` (`COVERAGE_CORE=sysmon`) because 3.13's
+default, `sys.settrace`, made every test about a quarter slower. The menu bar app has its own job, `app`: when a pull request or merge group changes nothing under `app/` (or the two tools that feed it, `tools/contract_samples.py` and `tools/swift_coverage.py`, the workflow, `setup-uv`, `uv.lock` or `pyproject.toml`), it is skipped (a cheap Linux job, `changes`, looks first, so no macOS runner starts, and a skipped job counts as passing for the required check); otherwise it runs the Swift tests with warnings as errors, the coverage floor, SwiftLint, `swift format lint --strict` and an ad hoc signed build. For the forbidden-terms check to run there too, store your list as the
 `FORBIDDEN_TERMS` Actions secret with `gh secret set FORBIDDEN_TERMS <
 ~/.config/bosun/forbidden-terms.txt`; the logs never print what it matched.
 
@@ -178,6 +179,7 @@ the cheapest of these that can show what you changed:
 | Anything else in bosun | `tests/sandbox.sh all` | also the unit tests and the smoke suite | 3 minutes |
 | `get.sh`, `install.sh`, launchd, `pmset`, anything macOS does its own way | `tests/sandbox.sh mac run` | the real thing on real macOS, except sleep | 2 minutes |
 | What a new Mac lacks: Homebrew, Apple's tools | `tests/sandbox.sh mac run --from-nothing` | the same from a Mac with nothing on it | 4 minutes |
+| What the menu bar app (`bosun.app`) does: every state of its menu, every dialog and choice of its Quit and update, Open at Login across a restart, one copy at a time, what macOS says to a quit by Apple Event | `tests/sandbox.sh mac app` | the real app, built here and driven by its test hooks on a clone's desktop session, with launchd, a reboot and the Trash; `--from release` the published, notarized one | about 30 minutes |
 | What an update does to an install in use, its windows, its ledger and knowledge base, and what real use does to them: their journals, ids, writes, privacy | `tests/sandbox.sh mac work` | a week of work through the first update's conversion and a mid-afternoon update on a year of data, on real macOS: launchd, a moving clock, racing writers, writes cut short, files changed outside the journal, going back | 16 minutes |
 | How an agent behaves: launching it, its screens and files, a task handed to it, an update's prompts, which MCP servers a window reaches | `tests/sandbox.sh mac live claude`, `... live codex` | the real agents from nothing, through setup, sessions, an update and connectors | about 10 minutes and a dollar each |
 | How Antigravity (`agy`) behaves under bosun: its hooks and plugin, its screen, its dialogs, its login | `tests/sandbox.sh mac live agy` | the real `agy` in a VM with a window, where you sign in; then windows started by launchd, Esc, a reviewer's dialog, the plugin's approvals, a slow hook, connectors, uninstall | about 25 minutes, you at the start, and a personal account's free quota |
@@ -220,6 +222,7 @@ tests/sandbox.sh mac setup                # once: pulls the image (6 minutes) an
 tests/sandbox.sh mac run                  # on a developer's Mac: Homebrew is already there
 tests/sandbox.sh mac run --from-nothing   # on a new Mac: no Homebrew, no Apple tools
 tests/sandbox.sh mac work                 # a week of work, through two updates: see below
+tests/sandbox.sh mac app                  # bosun.app driven through every state and choice, and a restart
 tests/sandbox.sh mac live codex           # the real agents: see below
 tests/sandbox.sh mac live agy             # Antigravity: you sign in in the VM's window, see below
 tests/sandbox.sh mac shell                # a window, to try the wizard as a new user would
@@ -243,6 +246,27 @@ If Homebrew refuses the tap, it wants to be told you trust it. These two are eno
 - **Wait for the login.** ssh answers before the auto-login finishes, and until then launchd has no
   `gui/<uid>` domain and `launchctl bootstrap` fails with error 125. `mac.sh` waits for it; do the same
   if you script a VM by hand.
+
+### The menu bar app: `tests/sandbox.sh mac app [--from build|release]`
+
+`tests/app_e2e.sh` in a clone with its desktop session (the status item needs one; a clone started with
+`--no-graphics` still has it: the auto-login, the window server, the Dock and Finder). The app is started with
+`--test-hooks <dir>`, so it writes its menu to `menu.json` after each render, takes clicks and answers to its dialogs
+from `actions/<n>.json`, and logs each command it runs and each address it would open to `log.jsonl`; the checks
+read those, `bosun status --json`, `ps` and `launchctl`. It runs: the menu green with the windows, yellow with a
+problem and back, Open Console, an update to a newer release tagged in the clone's origin (offer, plan, the
+update waiting for a busy agent, done), Quit with the defaults, the app opened again starting bosun, Quit with a
+busy agent (Let Them Finish with a 0-minute wait, then Stop It Now), Quit keeping the icon and Start, a second copy
+exiting, Open at Login, a restart of the Mac with the app opened by its login job (`--at-login`, bosun not started),
+the app moved to the Trash (the watchdog's `app-missing`) and an uninstall that leaves nothing named bosun.
+It also asks the app to quit with an Apple Event, as `bosun app update` and `bosun app remove` do, from the login
+and from an update the app started, and reports whether macOS prompts for Automation.
+
+`--from build` (the default) builds the app here with `app/build.sh --identity -` (nothing is signed with a real
+identity, and the app is never started on your Mac) and copies it in; it is placed in `~/Applications` as
+`bosun app install` would, since `bosun init` cannot offer an app that is not the publisher's. `--from release` has
+`bosun init` install the published, notarized app and checks Gatekeeper accepts it: it needs a release and a Team ID
+in `app/publisher.json`.
 
 ### A week of work: `tests/sandbox.sh mac work`
 
@@ -419,6 +443,134 @@ token and no shared folder of yours, and an image with a key in it is never save
 Tart is OpenAI's since it acquired Cirrus Labs in 2026. The repository's licence is FSL-1.1-ALv2, which
 allows internal use and becomes Apache 2.0 after two years (the licensing page on tart.run still shows the
 older terms). It is only a test tool here: nothing in bosun needs it or ships it.
+
+## Building the app
+
+The menu bar app is a Swift package in `app/`, so it needs a Swift toolchain (Xcode's or the command line tools').
+`app/build.sh --identity - --out <dir>` builds `bosun.app` (ad hoc signed, which is for developing the app only) and
+zips it; `bosun app install --build` runs it and installs the result. The commit hooks run `swift format lint`,
+SwiftLint and `swift test` with warnings as errors, only for a commit that touches `app/`, and skip with one line
+off a Mac (the app is AppKit; CI's Linux `lint` job has a `swift` that cannot build it) or without Swift; CI's macOS
+`app` job runs them, the coverage floor (`tools/swift_coverage.py`) and an ad hoc build. While
+iterating, `cd app && swift test --filter <suite>`. The app talks to bosun only through its `--json` commands, so a
+change to what one prints needs `uv run python tools/contract_samples.py` to write the fixtures the Swift tests
+decode. What the real app does on a real desktop is `tests/sandbox.sh mac app` (see
+[Which sandbox for what](#which-sandbox-for-what)).
+
+## Releasing bosun.app
+
+The menu bar app is released apart from bosun: a tag `app-v<version>` on `main`, where `<version>` is what
+`app/VERSION` says, starts `.github/workflows/release-app.yml`. It builds the app, signs it with your Developer
+ID in a keychain that exists for that run only, has Apple notarize it, staples the ticket, and attaches
+`bosun-app-<version>.zip` to a GitHub release. Before it publishes anything it puts the final zip through the install's own code
+(`lib/app_install.py verify-archive`: the archive's entries, the code requirement, Gatekeeper's `source=Notarized
+Developer ID` and the bundle id), so a release the install would refuse never goes out. You need an Apple Developer Program membership, a
+*Developer ID Application* certificate and an App Store Connect API key (Users and Access, Integrations, with the
+Developer role). The values below come from your own files and your own terminal: never paste a certificate, a
+key or a password into a chat, an issue or a pull request.
+
+Once, per repository. `<owner>/<repo>` is where you publish. A workflow run's logs are public, and the workflow prints none of these values.
+
+**A. From Apple.** About ten minutes. If another app of yours already signs this way, reuse its `.p12` and `.p8` and skip steps 2 and 3.
+
+1. **Find the certificate and the Team ID.** Run:
+
+    ```sh
+    security find-identity -v -p codesigning
+    ```
+
+    Look for `"Developer ID Application: <name> (<team id>)"`. The whole quoted text is `MACOS_SIGN_IDENTITY`, and the ten characters in the parentheses are the Team ID. If there is no such line, create the certificate:
+
+   1. In Keychain Access, open Certificate Assistant › Request a Certificate From a Certificate Authority. Choose "Saved to disk".
+   2. On developer.apple.com, open Certificates, add a **Developer ID Application** certificate, and upload that request.
+   3. Download the `.cer`, double-click it, and run the command again.
+
+2. **Export the certificate with its private key as a `.p12`.**
+
+   1. In Keychain Access, open the login keychain and choose My Certificates.
+   2. Expand the "Developer ID Application" entry to check that a private key sits under it.
+   3. Choose Export, then Personal Information Exchange (.p12).
+   4. Choose an export password. It becomes `MACOS_CERTIFICATE_PASSWORD`.
+
+3. **Create an App Store Connect API key for notarization.**
+
+   1. In App Store Connect, open Users and Access › Integrations › App Store Connect API › Team Keys, and press +.
+   2. Give the key the Developer access.
+   3. Download `AuthKey_<key id>.p8`. Apple lets you download it only once.
+   4. Note the key's id (`APPLE_API_KEY_ID`) and the Issuer ID at the top of the page (`APPLE_API_ISSUER_ID`).
+
+**B. On GitHub.** About three minutes, with `gh` signed in to an account that administers the repository.
+
+1. **Create the `release` environment.** Only release runs can read its secrets, and only after you approve each run:
+
+    ```sh
+    ME=$(gh api user --jq .id)
+    gh api -X PUT repos/<owner>/<repo>/environments/release --input - <<EOF
+    {"reviewers":[{"type":"User","id":$ME}],"deployment_branch_policy":{"protected_branches":false,"custom_branch_policies":true}}
+    EOF
+    gh api -X POST repos/<owner>/<repo>/environments/release/deployment-branch-policies -f name='app-v*' -f type=tag
+    ```
+
+    The required reviewer is the real control. A tag on a commit that is not on `main` runs that commit's copy of the workflow. The workflow stops such a tag, but only in a step of that same copy, so read what you approve.
+
+2. **Protect the tags.** Only administrators may create `app-v*` tags, and nobody may move or delete them:
+
+    ```sh
+    gh api -X POST repos/<owner>/<repo>/rulesets --input - <<'EOF'
+    {"name":"app release tags","target":"tag","enforcement":"active",
+     "conditions":{"ref_name":{"include":["refs/tags/app-v*"],"exclude":[]}},
+     "rules":[{"type":"creation"},{"type":"update"},{"type":"deletion"}],
+     "bypass_actors":[{"actor_id":5,"actor_type":"RepositoryRole","bypass_mode":"always"}]}
+    EOF
+    ```
+
+3. **Set the six secrets.** A `gh secret set` without `--body` or a pipe asks for the value without showing it, so nothing goes into your shell history:
+
+    ```sh
+    R=<owner>/<repo>
+    base64 -i ~/path/to/developer-id.p12 | gh secret set MACOS_CERTIFICATE --env release -R $R
+    gh secret set MACOS_CERTIFICATE_PASSWORD --env release -R $R   # the .p12's export password
+    gh secret set MACOS_SIGN_IDENTITY --env release -R $R          # Developer ID Application: <name> (<team id>)
+    gh secret set APPLE_API_KEY --env release -R $R < ~/path/to/AuthKey_<key id>.p8
+    gh secret set APPLE_API_KEY_ID --env release -R $R             # the key's id
+    gh secret set APPLE_API_ISSUER_ID --env release -R $R          # the Issuer ID
+    gh secret list --env release -R $R                             # lists the six names
+    ```
+
+4. **Decide what to do with the `.p12` and `.p8` files.** Once the secrets are set, you can delete both. GitHub never shows a secret again, so each file is only useful for setting a secret again, for example in a fork or after rotating a key.
+
+   - **The `.p12`:** keep the certificate and its private key in your login keychain, and you can export it again at any time.
+   - **The `.p8`:** without it, you make a new key and revoke the old one, which takes a few minutes.
+
+   If you want a backup, keep both in a password manager. Never keep them in the repository or a synced folder.
+
+5. **Put the Team ID into `app/publisher.json` as `team_id`, through a pull request.** It is public, since every signed app carries it. The same file names the bundle identifier and the repository whose releases `bosun app install` downloads from, so check `bundle_id` and `releases` while you are there. Until `team_id` is filled in, `bosun init` does not offer the app, and the release workflow stops at its first check.
+
+Then, for each release:
+
+1. Set `app/VERSION` (`major.minor.patch`) in a pull request and merge it. The first release is `0.1.0`.
+2. Tag the merged commit on `main` and push the tag:
+
+    ```sh
+    git switch main && git pull
+    git tag -a app-v0.1.0 -m "bosun.app 0.1.0"
+    git push origin app-v0.1.0
+    ```
+
+3. Approve the run in the Actions tab (if you set a required reviewer). It stops at once if the tag is not
+   `app-v` plus `app/VERSION`, if the commit is not on `main`, or if `team_id` is missing. Notarization takes a few
+   minutes; when Apple does not accept the app, the job prints Apple's log and fails, and nothing is published.
+4. On a Mac of yours, `bosun app install` downloads the release and accepts it only if it passes the same
+   checks. To release again, raise `app/VERSION` and tag again: never move or reuse a tag.
+
+To swap the publisher (a fork, another team) and keep the bundle identifier, edit `team_id` and `releases` in
+`app/publisher.json`, replace the six secrets and cut a release: the next `bosun update` installs the newly signed
+app. A new `bundle_id` takes more. To the version that has it, the installed app is not the publisher's (its bundle
+id is another), and `bosun update`, `bosun app install`, `remove` and `uninstall` never replace or remove an app
+they cannot say is the publisher's: they leave it and say why. So on each Mac, run `bosun app remove` before
+updating to that version (the old version still knows the app), or delete `~/Applications/bosun.app` by hand after
+it; then `bosun app install` installs the new app, which macOS sees as a new one, and `bosun app login on` turns
+Open at Login on again.
 
 ## Testing without waiting for the schedule
 

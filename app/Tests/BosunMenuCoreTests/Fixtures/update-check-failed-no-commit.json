@@ -1,0 +1,13 @@
+{
+  "ahead": false,
+  "available": false,
+  "channel": "releases",
+  "contract": 1,
+  "error": "cannot read the commit of /Users/me/.local/share/bosun/current",
+  "installed": {
+    "commit": null,
+    "version": null
+  },
+  "latest": null,
+  "skipped": false
+}

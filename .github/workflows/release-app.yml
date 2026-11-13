@@ -1,0 +1,195 @@
+# Releases bosun.app (docs/design/menu-bar.md, "Building, releasing, installing"; the steps for the person
+# who publishes are in docs/development.md, "Releasing bosun.app"). A tag `app-v<semver>` that names
+# app/VERSION builds the app, signs it with the publisher's Developer ID in a throwaway keychain, has Apple
+# notarize it, staples the ticket, checks the result the way `bosun app install` does, and attaches
+# bosun-app-<version>.zip to a GitHub release. Nothing is published unless every check passed.
+#
+# The secrets (set with `gh secret set`, never in this file) live in the `release` environment, so a
+# required reviewer there can hold a release before it signs anything: MACOS_CERTIFICATE (the .p12, base64),
+# MACOS_CERTIFICATE_PASSWORD, MACOS_SIGN_IDENTITY, APPLE_API_KEY (the App Store Connect .p8), APPLE_API_KEY_ID
+# and APPLE_API_ISSUER_ID. The team id and bundle id are app/publisher.json's. Each step is given only the
+# secrets it uses, through `env:`, and the logs are public: no step prints one, or what a tool says about
+# the identity.
+name: Release bosun.app
+
+on:
+  push:
+    tags: ["app-v*"]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-app
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: macos-latest
+    environment: release
+    timeout-minutes: 60
+    # Write only to create the release, with the token of the last step.
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 0 # to see that the tag is on main
+      # No cache: a tag run must not restore one that another run (on main, say) wrote.
+      - uses: ./.github/actions/setup-uv
+        with:
+          python-version: "3.13"
+          enable-cache: "false"
+      # Where the later steps keep their files, all in the runner's temporary folder (`runner` is not
+      # a context of a job's `env`). No secret is among them.
+      - name: Paths
+        run: |
+          {
+            echo "KEYCHAIN=$RUNNER_TEMP/bosun-release.keychain-db"
+            echo "CERTIFICATE_FILE=$RUNNER_TEMP/bosun-release.p12"
+            echo "NOTARY_KEY_FILE=$RUNNER_TEMP/bosun-notary-key.p8"
+            echo "DIST=$RUNNER_TEMP/bosun-app-dist"
+          } >>"$GITHUB_ENV"
+      # Fails at once, before any secret is read: the tag must be app-v<app/VERSION>, on main, and
+      # app/publisher.json must hold a Team ID (the requirement is built from it, as the install builds it).
+      - name: The tag names app/VERSION, on main, and the publisher has a Team ID
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -eu
+          version=$(tr -d '[:space:]' <app/VERSION)
+          if [ "$TAG" != "app-v$version" ]; then
+            echo "The tag $TAG is not app-v$version (app/VERSION): not releasing." >&2
+            exit 1
+          fi
+          if ! printf '%s\n' "$version" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$'; then
+            echo "app/VERSION is not major.minor.patch: not releasing." >&2
+            exit 1
+          fi
+          if ! git merge-base --is-ancestor HEAD origin/main; then
+            echo "The tagged commit is not on main: not releasing." >&2
+            exit 1
+          fi
+          uv run --no-project python lib/app_release.py requirement >/dev/null
+      - name: Import the certificate into a throwaway keychain
+        env:
+          MACOS_CERTIFICATE: ${{ secrets.MACOS_CERTIFICATE }}
+          MACOS_CERTIFICATE_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}
+          MACOS_SIGN_IDENTITY: ${{ secrets.MACOS_SIGN_IDENTITY }}
+        run: |
+          set -eu
+          # A random password for this run's keychain, which only this step needs: the keychain stays
+          # unlocked for the later steps. Never the login keychain.
+          keychain_password=$(uuidgen)
+          (
+            umask 077
+            printf '%s' "$MACOS_CERTIFICATE" | base64 --decode >"$CERTIFICATE_FILE"
+          )
+          security create-keychain -p "$keychain_password" "$KEYCHAIN"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN"
+          security unlock-keychain -p "$keychain_password" "$KEYCHAIN"
+          security import "$CERTIFICATE_FILE" -k "$KEYCHAIN" -P "$MACOS_CERTIFICATE_PASSWORD" -T /usr/bin/codesign
+          rm -f "$CERTIFICATE_FILE"
+          security set-key-partition-list -S apple-tool:,apple: -s -k "$keychain_password" "$KEYCHAIN" >/dev/null
+          # Only this keychain is searched for the identity. What find-identity prints names the
+          # identity, so it is checked, not shown.
+          security list-keychains -d user -s "$KEYCHAIN"
+          if ! security find-identity -v -p codesigning "$KEYCHAIN" | grep -qF -- "$MACOS_SIGN_IDENTITY"; then
+            echo "The certificate holds no valid code signing identity named MACOS_SIGN_IDENTITY." >&2
+            exit 1
+          fi
+      - name: Build and sign with the Developer ID
+        env:
+          MACOS_SIGN_IDENTITY: ${{ secrets.MACOS_SIGN_IDENTITY }}
+        run: app/build.sh --identity "$MACOS_SIGN_IDENTITY" --out "$DIST"
+      # Before anything goes to Apple: a signing identity of another team (or another bundle id) stops
+      # here, not after the wait for a notarization the install would refuse anyway. The requirement is
+      # the one `bosun app install` checks (lib/app_release.py), not a copy.
+      - name: The signed bundle meets the install's requirement
+        run: |
+          set -eu
+          requirement=$(uv run --no-project python lib/app_release.py requirement)
+          codesign --verify --deep --strict -R "=$requirement" "$DIST/bosun.app"
+      # `submit --wait` ends when Apple has decided, but its exit status is not what says whether the app
+      # was accepted: the status is read from `notarytool info` for that submission. Anything but
+      # Accepted prints Apple's log and fails.
+      - name: Notarize
+        env:
+          APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
+          APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
+          APPLE_API_ISSUER_ID: ${{ secrets.APPLE_API_ISSUER_ID }}
+        run: |
+          set -eu
+          trap 'rm -f "$NOTARY_KEY_FILE"' EXIT
+          version=$(tr -d '[:space:]' <app/VERSION)
+          (
+            umask 077
+            printf '%s\n' "$APPLE_API_KEY" >"$NOTARY_KEY_FILE"
+          )
+          chmod 600 "$NOTARY_KEY_FILE"
+          notary() {
+            xcrun notarytool "$1" "${@:2}" --key "$NOTARY_KEY_FILE" --key-id "$APPLE_API_KEY_ID" --issuer "$APPLE_API_ISSUER_ID"
+          }
+          field() {
+            python3 -c 'import json, sys; print(json.load(sys.stdin).get(sys.argv[1], ""))' "$1"
+          }
+          submitted=$(notary submit "$DIST/bosun-app-$version.zip" --wait --timeout 40m --output-format json) || echo "notarytool submit ended with status $?"
+          id=$(printf '%s' "$submitted" | field id) || id=""
+          if [ -z "$id" ]; then
+            echo "notarytool submit gave no submission id. It said: $submitted" >&2
+            exit 1
+          fi
+          echo "Submission $id"
+          status=$(notary info "$id" --output-format json | field status) || status=""
+          echo "Notarization status: ${status:-unknown}"
+          if [ "$status" != Accepted ]; then
+            notary log "$id" || true
+            echo "Apple did not accept the app (status: ${status:-unknown})." >&2
+            exit 1
+          fi
+      - name: Staple the ticket and make the zip again
+        run: |
+          set -eu
+          version=$(tr -d '[:space:]' <app/VERSION)
+          xcrun stapler staple "$DIST/bosun.app"
+          xcrun stapler validate "$DIST/bosun.app"
+          app/build.sh --zip "$DIST/bosun.app" --out "$DIST"
+          test -s "$DIST/bosun-app-$version.zip"
+      # The final zip, put through the install's own code (lib/app_install.py): the archive's entries, ditto,
+      # exactly one bosun.app, the code requirement `bosun app install` checks, Gatekeeper's whole line
+      # `source=Notarized Developer ID` with spctl's exit status, and the bundle id. Nothing is installed
+      # and nothing is copied into this file, so a release the install would refuse is never published.
+      # On a refusal it prints what spctl said (no secret in it).
+      - name: Verify the zip as the install does
+        run: |
+          set -eu
+          version=$(tr -d '[:space:]' <app/VERSION)
+          uv run --no-project python lib/app_install.py verify-archive "$DIST/bosun-app-$version.zip"
+      - name: Publish the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -eu
+          version=$(tr -d '[:space:]' <app/VERSION)
+          zip="$DIST/bosun-app-$version.zip"
+          sum=$(shasum -a 256 "$zip" | cut -d' ' -f1)
+          {
+            echo "bosun.app $version: signed with the publisher's Developer ID, notarized and stapled."
+            echo
+            echo "SHA-256 of bosun-app-$version.zip: \`$sum\`"
+            echo
+            echo "Install it with \`bosun app install\`."
+          } >"$RUNNER_TEMP/app-notes.md"
+          gh release create "$TAG" "$zip" --verify-tag --title "bosun.app $version" \
+            --notes-file "$RUNNER_TEMP/app-notes.md" --latest=false
+      # Whatever happened above, the certificate and the key do not stay on the runner.
+      - name: Delete the throwaway keychain and the key file
+        if: always()
+        run: |
+          if [ -n "${KEYCHAIN:-}" ]; then
+            security delete-keychain "$KEYCHAIN" || echo "No keychain to delete."
+          fi
+          rm -f "${CERTIFICATE_FILE:-}" "${NOTARY_KEY_FILE:-}"

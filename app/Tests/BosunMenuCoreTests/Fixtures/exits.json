@@ -1,0 +1,11 @@
+{
+  "quit-plan": 0,
+  "quit-plan-failed": 1,
+  "quit-plan-refused": 0,
+  "quit-result-busy": 3,
+  "quit-result-failed": 1,
+  "quit-result-failed-early": 1,
+  "quit-result-refused": 1,
+  "quit-result-stopped": 0,
+  "quit-result-stopped-console-running": 0
+}

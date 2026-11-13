@@ -1,6 +1,6 @@
 #!/bin/bash
 # Usage: tests/sandbox/mac.sh setup | run [--from-nothing] | work [--base <git ref>]
-#        | live [claude|codex|agy] | shell | clean
+#        | app [--from build|release] | live [claude|codex|agy] | shell | clean
 #        (through tests/sandbox.sh mac)
 #
 # A real, throwaway Mac: macOS in a Tart VM on this machine, for what the Docker sandbox cannot show.
@@ -15,6 +15,11 @@
 #           this checkout by running get.sh again, updates mid-afternoon to the next version on a year of
 #           data, goes back and forward again, and keeps working with the clock moved, writers racing and
 #           writes cut short (tests/work_e2e.sh)
+#   app     on a clone of the developer's Mac, with its desktop session: bosun.app driven through every state and
+#           choice of its menu by its test hooks, and through a reboot (tests/app_e2e.sh). --from build (the
+#           default): the app is built here with app/build.sh, ad hoc signed, and copied in; --from release:
+#           bosun init installs the published, notarized one, as a person gets it (needs a release, and a
+#           Team ID in app/publisher.json). The app is never started on this Mac, only in the clone
 #   live    the real agents from nothing, a real task handed over, and an update with them at work: the
 #           take-stock and update prompts (tests/sandbox/live.sh). It costs
 #           real money, about a dollar. It reads API keys from your Keychain, as BOSUN_SANDBOX_ANTHROPIC_ITEM
@@ -91,12 +96,16 @@ boot() { # <vm> [tart run flags...]: start it and wait for ssh
   tart run "$@" "$vm" >"$WORK/run.log" 2>&1 &
   VM_PID=$!
   tart ip "$vm" --wait "$BOOT_SECONDS" >/dev/null 2>&1 || die "$vm got no IP address"
-  # ssh comes up before the auto-login, and launchd has no gui domain until then.
-  # shellcheck disable=SC2016 # expands in the VM
-  until in_vm "$vm" 'launchctl print "gui/$(id -u)"' >/dev/null 2>&1; do
+  until logged_in "$vm"; do
     [ "$SECONDS" -ge "$deadline" ] && die "$vm did not finish starting"
     sleep 2
   done
+}
+
+# ssh comes up before the auto-login, and launchd has no gui domain until then.
+logged_in() { # <vm>
+  # shellcheck disable=SC2016 # expands in the VM
+  in_vm "$1" 'launchctl print "gui/$(id -u)"' >/dev/null 2>&1
 }
 
 stop() { # <vm>
@@ -162,8 +171,8 @@ bundle_ref() { # <git ref> <file>
 copy_checkout() { # [<name of the bundle in the VM>]
   bundle_checkout "$WORK/repo.bundle" || die "could not bundle this checkout"
   to_vm "$CLONE" "$WORK/repo.bundle" "${1:-repo.bundle}" || die "could not copy the checkout"
-  COPYFILE_DISABLE=1 tar -C "$ROOT" -czf "$WORK/e2e.tgz" get.sh tests/install_e2e.sh tests/work_e2e.sh \
-    tests/sandbox/e2e_lib.sh tests/sandbox/acme_week.sh tests/sandbox/claude-stand-in \
+  COPYFILE_DISABLE=1 tar -C "$ROOT" -czf "$WORK/e2e.tgz" get.sh tests/install_e2e.sh tests/work_e2e.sh tests/app_e2e.sh \
+    tests/sandbox/e2e_lib.sh tests/sandbox/update_quit_probe.sh tests/sandbox/acme_week.sh tests/sandbox/claude-stand-in \
     tests/sandbox/gh-stand-in tests/sandbox/drive.py tests/sandbox/live.sh tests/sandbox/live_agy.sh tests/sandbox/live \
     tests/sandbox/mcp_probe_server.py \
     tests/sandbox/acme_year.py tests/fixtures/knowledge/acme-import.jsonl
@@ -174,13 +183,22 @@ copy_checkout() { # [<name of the bundle in the VM>]
 # This checkout as the head of `main` of a repository that has made a release (RUN_RELEASE, an annotated tag with
 # notes in its message), a bare repository packed in a tar for the VM (~/origin.git there): what a first install
 # takes on the default `releases` channel, and what the next release (tests/install_e2e.sh makes it) is tagged on.
-# A repository and not a bundle: `git ls-remote` of a bundle has no peeled line for an annotated tag, as GitHub has.
+# A repository and not a bundle: `git ls-remote` of a bundle has no peeled line for an annotated tag, as GitHub has. No tags
+# come with the fetch: this checkout's history holds the project's real releases, and a newer one would be the install's.
 release_origin() { # <tar file>
   local scratch="$WORK/origin.git"
   git init -q --bare "$scratch" &&
-    git -C "$scratch" fetch -q "$ROOT" "$TREE_BRANCH:refs/heads/main" &&
+    git -C "$scratch" fetch -q --no-tags "$ROOT" "$TREE_BRANCH:refs/heads/main" &&
     git -C "$scratch" -c user.name=sandbox -c user.email=sandbox@example.com tag -a "$RUN_RELEASE" -m "The first release" refs/heads/main &&
     COPYFILE_DISABLE=1 tar -C "$WORK" -czf "$1" origin.git
+}
+
+# The origin the install takes from has a release: no BOSUN_BRANCH, so get.sh takes the newest release and the
+# install follows the releases, as a user's does (copy_checkout's bundle, a branch with no release, is for the rest).
+copy_release_origin() {
+  release_origin "$WORK/origin.tgz" || die "could not make the release origin"
+  to_vm "$CLONE" "$WORK/origin.tgz" origin.tgz || die "could not copy the release origin"
+  in_vm "$CLONE" 'tar -xzf origin.tgz' || die "could not unpack the release origin"
 }
 
 run() { # [--from-nothing]
@@ -190,13 +208,71 @@ run() { # [--from-nothing]
   say "booting a clone of $base"
   boot "$CLONE" --no-graphics
   copy_checkout
-  # The origin the install takes from has a release: no BOSUN_BRANCH, so get.sh takes the newest release and the
-  # install follows the releases, as a user's does (copy_checkout's bundle, a branch with no release, is for the rest).
-  release_origin "$WORK/origin.tgz" || die "could not make the release origin"
-  to_vm "$CLONE" "$WORK/origin.tgz" origin.tgz || die "could not copy the release origin"
-  in_vm "$CLONE" 'tar -xzf origin.tgz' || die "could not unpack the release origin"
+  copy_release_origin
   # shellcheck disable=SC2016 # expands in the VM
   in_vm "$CLONE" 'BOSUN_REPO="$HOME/origin.git" BOSUN_E2E_RELEASE='"$RUN_RELEASE"' e2e/tests/install_e2e.sh'
+}
+
+# The clone restarted, as a Mac is: shutdown -r in the guest, then back at the desktop (the auto-login) with a
+# new boot time. Whether tart's VM process ends with the guest's restart or goes on, and when, is not assumed: on
+# every turn of the wait, a VM process that has ended is waited for and the clone started again; either way the
+# new boot is awaited by sysctl kern.boottime.
+reboot_clone() {
+  local before deadline=$((SECONDS + 2 * BOOT_SECONDS)) now
+  before="$(in_vm "$CLONE" 'sysctl -n kern.boottime')" || die "could not read the clone's boot time"
+  say "restarting the clone (sudo shutdown -r now in the guest)"
+  in_vm "$CLONE" 'sudo shutdown -r now' >/dev/null 2>&1
+  until now="$(in_vm "$CLONE" 'sysctl -n kern.boottime' 2>/dev/null)" && [ "$now" != "$before" ] && logged_in "$CLONE"; do
+    [ "$SECONDS" -ge "$deadline" ] && die "the clone did not come back after the restart"
+    if ! kill -0 "$VM_PID" 2>/dev/null; then
+      wait "$VM_PID" 2>/dev/null
+      say "tart's VM process ended with the restart: starting the clone again"
+      boot "$CLONE" --no-graphics
+    fi
+    sleep 3
+  done
+  say "the clone is back from its restart"
+}
+
+# bosun.app, built here with app/build.sh (ad hoc: no Team ID or certificate is needed to build, and the app is
+# never started on this Mac, only in the clone) and copied in beside the test, or with --from release left to
+# `bosun init`, which downloads the published one. The clone has its desktop session (the auto-login: the
+# status item needs one), so launchd's gui domain exists, which boot waits for. tests/app_e2e.sh runs in two
+# parts with the restart between them.
+app() { # [--from build|release]
+  local from="build" built="$WORK/app-built" run_env part status=0
+  case "$#:${1:-}" in
+    0:) ;;
+    2:--from) from="$2" ;;
+    *) die "usage: tests/sandbox.sh mac app [--from build|release]" ;;
+  esac
+  case "$from" in
+    build | release) ;;
+    *) die "unknown source '$from': build or release" ;;
+  esac
+  if [ "$from" = "build" ]; then
+    say "building bosun.app with app/build.sh (ad hoc signed; a cold build takes minutes)"
+    mkdir -p "$built"
+    "$ROOT/app/build.sh" --identity - --out "$built" >"$WORK/app-build.log" 2>&1 ||
+      { tail -20 "$WORK/app-build.log" && die "app/build.sh failed"; }
+  fi
+  prepare_clone "$DEV_MAC"
+  say "booting a clone of $DEV_MAC, with its desktop session, to drive bosun.app (from $from)"
+  boot "$CLONE" --no-graphics
+  copy_checkout
+  copy_release_origin
+  if [ "$from" = "build" ]; then
+    to_vm "$CLONE" "$(ls "$built"/bosun-app-*.zip)" e2e/app.zip || die "could not copy the app"
+  fi
+  # shellcheck disable=SC2016 # expands in the VM
+  run_env='BOSUN_REPO="$HOME/origin.git" BOSUN_E2E_RELEASE='"$RUN_RELEASE BOSUN_E2E_APP_FROM=$from"
+  for part in before-reboot after-reboot; do
+    in_vm "$CLONE" "$run_env e2e/tests/app_e2e.sh $part" || status=1
+    [ "$part" = "before-reboot" ] || break
+    in_vm "$CLONE" 'test -e ~/.app-e2e-results' || die "the first part of the test did not finish: no restart"
+    reboot_clone
+  done
+  return "$status"
 }
 
 # The release (<ref>) installed by its own get.sh, then this checkout as its upgrade: two bundles of the
@@ -308,6 +384,10 @@ case "${1:-}" in
   work)
     shift
     work "$@"
+    ;;
+  app)
+    shift
+    app "$@"
     ;;
   live)
     shift

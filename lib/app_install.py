@@ -17,6 +17,9 @@ whether its plist is there, for `status`.
                                          that app/build.sh makes, without the team check (developers)
     app_install.py update                install app/VERSION when the installed version differs
     app_install.py status [--json] [--login-plist PATH]
+    app_install.py verify-archive <zip>  run on a zip what an install runs on a download (the release workflow
+                                         checks its final zip with it before it publishes): the archive's
+                                         entries, ditto, one bosun.app, then `verify`; nothing is installed
     app_install.py quit                  ask the running app, by its bundle id, to quit (remove's first step)
     app_install.py delete                remove ~/Applications/bosun.app (remove's last step)
 
@@ -37,6 +40,7 @@ import sys
 import tempfile
 import time
 import zipfile
+import zlib
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
@@ -77,9 +81,12 @@ NO_SUCH_APP = "(-1728)"  # osascript: Launch Services knows no app of that bundl
 NOT_ALLOWED = "(-1743)"  # osascript: the user has not allowed bosun to control that app (Automation)
 QUIT_POLLS = 40  # an app asked to quit is looked at this often, QUIT_POLL_SECONDS apart
 QUIT_POLL_SECONDS = 0.5
+BUILD_FAILURE_LINES = 20  # of the build's output that a failed build shows: the compiler's last words
 # Hidden, in ~/Applications itself, so that a rename into place never crosses a volume; the pid of the install
 # that made it is in the name, so that a later one can tell what a dead install left from a live one's.
 SCRATCH_PREFIX = ".bosun-app-"
+GATEKEEPER_REFUSALS = ("Gatekeeper's assessment", "macOS does not accept")  # what `verify` says of spctl
+SPCTL_LINES = 10  # of what spctl said, which `verify-archive` shows when it refuses
 SCRATCH_PID = re.compile(r"^\.bosun-app-(\d+)-")
 NOTARIZED = "source=Notarized Developer ID"
 ASK_AUTOMATION = (
@@ -111,6 +118,10 @@ class Run:
         """The last line the tool said, on either stream: what a refusal quotes."""
         lines = [line.strip() for line in self.text.splitlines() if line.strip()]
         return lines[-1] if lines else f"exit status {self.returncode}"
+
+    def tail(self, count: int) -> list[str]:
+        """The last <count> lines the tool said, on either stream (stderr last), without blank ones."""
+        return [line.rstrip() for line in self.text.splitlines() if line.strip()][-count:]
 
 
 Runner = Callable[[Sequence[str]], Run]
@@ -233,16 +244,50 @@ def download(setup: Setup, url: str, archive: Path, what: str) -> None:
     raise AppError(f"could not download {url}: {update_check.strip_credentials(done.last_line)}")
 
 
+def one_line(error: BaseException) -> str:
+    """What an exception says, in one line."""
+    return " ".join(str(error).split()) or type(error).__name__
+
+
 def check_archive(archive: Path) -> None:
-    """The archive's entries, before anything is unpacked: refused for an absolute path, a `..` or a link."""
+    """The archive's entries, before anything is unpacked: refused for an absolute path, a `..` or a link
+    (from the central directory), and unless every entry reads back as that directory lists it. Reading each
+    one compares its local header's name with the directory's, which an unpacker may go by instead: a zip
+    that names one path in the directory and another in the header is refused here, as is a name twice, an
+    entry whose data does not inflate and an encrypted one (zipfile raises RuntimeError for it)."""
     try:
         with zipfile.ZipFile(archive) as bundle:
             entries = bundle.infolist()
-    except (zipfile.BadZipFile, OSError) as error:
-        raise AppError(f"the download is not a zip archive: {error}") from error
-    problem = app_release.entries_problem(entries)
+            problem = app_release.entries_problem(entries)
+            if problem:
+                raise AppError(problem)
+            damaged = bundle.testzip()
+    except (zipfile.BadZipFile, OSError, EOFError, NotImplementedError, zlib.error) as error:
+        raise AppError(f"the download is not a zip archive: {one_line(error)}") from error
+    except RuntimeError as error:  # an encrypted entry: password required
+        raise AppError(f"an entry of the download cannot be read: {one_line(error)}") from error
+    if damaged is not None:
+        raise AppError(f"the download is not a zip archive: {damaged} does not read back")
+    names = [entry.filename for entry in entries]
+    twice = sorted({name for name in names if names.count(name) > 1})
+    if twice:
+        raise AppError(f"the archive names an entry twice: {twice[0]}")
+
+
+def unpack_archive(run: Runner, archive: Path, scratch: Path) -> Path:
+    """The bosun.app of <archive>, unpacked with `ditto -x -k` in <scratch> after its entries are checked,
+    and what was unpacked checked again before anything else looks at it: exactly one bosun.app, and no
+    symbolic link anywhere in it (the entries had none). What an install does with a download."""
+    check_archive(archive)
+    unpacked = scratch / "unpacked"
+    unpacked.mkdir()
+    done = run(["ditto", "-x", "-k", str(archive), str(unpacked)])
+    if done.returncode != 0:
+        raise AppError(f"the download is not a zip archive: {done.last_line}")
+    problem = app_release.archive_problem(unpacked) or app_release.tree_problem(unpacked)
     if problem:
         raise AppError(problem)
+    return unpacked / BUNDLE
 
 
 def fetch_app(setup: Setup, slug: str, version: str, scratch: Path) -> Path:
@@ -250,25 +295,27 @@ def fetch_app(setup: Setup, slug: str, version: str, scratch: Path) -> Path:
     url = app_release.release_asset_url(slug, version)
     archive = scratch / "bosun-app.zip"
     download(setup, url, archive, f"{BUNDLE} {version} at {slug}")
-    check_archive(archive)
-    unpacked = scratch / "unpacked"
-    unpacked.mkdir()
-    done = setup.run(["ditto", "-x", "-k", str(archive), str(unpacked)])
-    if done.returncode != 0:
-        raise AppError(f"the download is not a zip archive: {done.last_line}")
-    problem = app_release.archive_problem(unpacked)
-    if problem:
-        raise AppError(problem)
-    return unpacked / BUNDLE
+    return unpack_archive(setup.run, archive, scratch)
 
 
 def build_app(setup: Setup, scratch: Path) -> Path:
-    """The app app/build.sh makes in a folder of <scratch>, which it is given."""
+    """The app app/build.sh makes in a folder of <scratch>, which it is given: `--identity -` (ad hoc: this is
+    a build for developing the app) and `--out` that folder."""
     built = scratch / "built"
     built.mkdir()
-    done = setup.run([str(setup.root / "app" / "build.sh"), str(built)])
+    print(
+        "building bosun.app with app/build.sh (the first build takes minutes)...", file=sys.stderr, flush=True
+    )
+    done = setup.run([str(setup.root / "app" / "build.sh"), "--identity", "-", "--out", str(built)])
     if done.returncode != 0:
-        raise AppError(f"app/build.sh failed: {done.last_line}")
+        shown = "\n".join(f"  {line}" for line in done.tail(BUILD_FAILURE_LINES))
+        if not shown:
+            raise AppError(
+                f"app/build.sh exited {done.returncode} and said nothing: run it again (the first run of a "
+                "fresh copy can fail before the script starts; see docs/design/menu-bar.md, the Mac VM "
+                "run of the app)"
+            )
+        raise AppError(f"app/build.sh failed, the last lines of its output:\n{shown}")
     if not (built / BUNDLE).is_dir():
         raise AppError(f"app/build.sh did not leave {BUNDLE} in the folder it was given")
     return built / BUNDLE
@@ -500,18 +547,45 @@ def place_app(
 
 def install(setup: Setup, *, build: bool = False) -> str:
     """Place the release app/VERSION names (checked against the publisher), or with <build> the app
-    app/build.sh makes (not checked: it is ad hoc signed, for developing the app)."""
+    app/build.sh makes (not checked: it is ad hoc signed, for developing the app, and says so)."""
     publisher = app_release.read_publisher(setup.root)
     if build:
         if not (setup.root / "app" / "build.sh").is_file():
             raise AppError(app_release.NO_BUILD)
-        return place_app(setup, publisher, lambda scratch: build_app(setup, scratch), development=True)
+        placed = place_app(setup, publisher, lambda scratch: build_app(setup, scratch), development=True)
+        return f"{placed} (a development build: ad hoc signed, not the publisher's notarized app)"
     app_release.require_team(publisher)
     version = app_release.wanted_version(setup.root)
     slug = app_release.releases_slug(setup.releases, publisher, lambda: install_origin(setup.root))
     return place_app(
         setup, publisher, lambda scratch: fetch_app(setup, slug, version, scratch), development=False
     )
+
+
+def verify_archive(setup: Setup, archive: Path) -> str:
+    """<archive> (a zip) put through what an install puts a download through: its entries, `ditto -x -k` into
+    a folder that is removed after, exactly one bosun.app, then `verify` against the publisher (the code
+    requirement, Gatekeeper's Notarized Developer ID, the bundle id). Nothing is installed. Refused with the
+    one line an install would refuse it with; for Gatekeeper's refusals spctl's own words go to stderr too."""
+    publisher = app_release.read_publisher(setup.root)
+    app_release.require_team(publisher)
+    assessments: list[Run] = []
+
+    def run(argv: Sequence[str]) -> Run:
+        done = setup.run(argv)
+        if argv[0] == "spctl":
+            assessments.append(done)
+        return done
+
+    with tempfile.TemporaryDirectory(prefix="bosun-app-verify-") as scratch:
+        staged = unpack_archive(run, archive, Path(scratch))
+        reason = verify(staged, publisher, run)
+    if reason:
+        if assessments and reason.startswith(GATEKEEPER_REFUSALS):
+            for line in assessments[-1].tail(SPCTL_LINES):
+                print(f"spctl said: {line}", file=sys.stderr)
+        raise AppError(f"refused {BUNDLE}: {reason}")
+    return f"{archive.name} passes the checks an install makes"
 
 
 def update(setup: Setup) -> str:
@@ -546,6 +620,7 @@ def build_parser() -> argparse.ArgumentParser:
     show = commands.add_parser("status", allow_abbrev=False)
     show.add_argument("--json", action="store_true")
     show.add_argument("--login-plist", type=Path)
+    commands.add_parser("verify-archive", allow_abbrev=False).add_argument("archive", type=Path)
     commands.add_parser("quit", allow_abbrev=False)
     commands.add_parser("delete", allow_abbrev=False)
     return parser
@@ -559,6 +634,8 @@ def dispatch(args: argparse.Namespace, setup: Setup) -> str:
     if args.command == "status":
         state = app_release.status(setup.root, setup.app, args.login_plist)
         return json.dumps(state) if args.json else app_release.describe(state)
+    if args.command == "verify-archive":
+        return verify_archive(setup, args.archive)
     if args.command == "quit":
         bundle_id = app_release.read_publisher(setup.root).bundle_id
         return f"asked {BUNDLE} to quit" if quit_app(setup, bundle_id) else ""

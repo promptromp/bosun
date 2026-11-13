@@ -21,8 +21,10 @@
 #             Refused with "app/publisher.json has no team_id yet" until the publisher's Team ID is
 #             filled in there. When BOSUN_MENU_APP is not 1 it ends with a line saying how to have the
 #             watchdog watch the app (this command never writes bosun.env: `bosun init` is its only writer)
-#     --build   developers only: the app app/build.sh makes, ad hoc signed, installed without the team
-#               check. Until that script exists (the app's own part) it says so and exits 1
+#     --build   developers only: the app that `app/build.sh --identity -` makes (Swift needed), ad hoc signed,
+#               installed without the team check, and it says it is a development build. It builds the
+#               source of the bosun it is run from: from an install, that install's version, not a checkout of
+#               yours (its build folder, app/.build, stays there; bosun does not count it as your work)
 #   update    install app/VERSION when the installed version differs; with the same version, or no
 #             app installed (that is `install`), it says so and downloads nothing, whatever
 #             BOSUN_MENU_APP says and before any Team ID check. Exit 0. `bosun update` runs it every time

@@ -219,6 +219,35 @@ of truth, so don't copy rules into this file.
   one `Runner`: `verify`, the download, the placing, the sweep of what a killed install left, quit and delete). The
   Team ID is checked with `codesign -R` against the certificates, never read from `codesign`'s text. The publisher is
   `app/publisher.json`, the version `app/VERSION`.
+- The menu bar app itself (`app/`, a Swift package; design: `docs/design/menu-bar.md`, plan:
+  `docs/plans/menu-bar-app.md`): `BosunMenuCore` is pure (no I/O, no AppKit) and carries the most tests (`Contract.swift`: the JSON of part 1's
+  commands, each with `"contract": 1`; `MenuModel.swift`: the menu each state becomes, `FlowState` (one flow at a
+  time) and `shouldExitAsSecondCopy`; `UpdateFlow.swift` and `QuitFlow.swift`: the flows as state machines, with the
+  `bosun` commands each step runs; `BosunCLI.swift`: the one protocol the app runs bosun through, the commands and
+  their timeouts as values, and `FakeBosunCLI`). The tests decode `app/Tests/BosunMenuCoreTests/Fixtures/*.json`,
+  which `tools/contract_samples.py` writes from part 1's own pure functions (quit's results from its run over fake
+  ports): a change to what `bosun status --json`, `update --check|--dry-run --json`, `quit --json` or `app status
+  --json` print fails `tests/unit/test_contract_samples.py` until `uv run python tools/contract_samples.py` writes the
+  fixtures again, and the Swift side follows. The app reads nothing of bosun's but what those commands print (the
+  contract rule: `bosun ... --json` is its only input, and `menu_status.CONTRACT` only grows: a field is added, never
+  renamed or removed, so an older app still reads a newer bosun). `app/` holds `Package.swift`, `Sources/`, `Tests/`,
+  `Resources/` (`Info.plist.in`, the icons), `build.sh`, `publisher.json` and `VERSION`; Swift's lint is under Tooling.
+  What the AppKit shell needs is split by whether it touches the system. Pure, in the core (so tested, and counted by the
+  floor): `AppCoordinator.swift` and `AppCoordinator+Update.swift` (what is chosen, as flows over `AppUI` and
+  `ScriptWriting`: the shell's whole surface), `DialogSpecs.swift` (every dialog's words, buttons and boxes, and what
+  each answer means to a flow), `Poller.swift` (the timing, on a clock it is given), `Launch.swift` (the arguments, the
+  one-copy rule over a start-time reader it is given) and `TestHooks.swift` (the VM suite's hook formats, the menu as
+  JSON). `Sources/BosunMenuSystem` (Foundation only, depends on the core) is what touches the system: `ProcessBosunCLI`
+  (bosun run for real, with timeouts that stop a command's whole process group), `ProcessStartTime` (sysctl),
+  `HookFiles` (the hooks' folder and `LoggingBosunCLI`) and `CommandScriptWriter` (the `.command` files); its tests are
+  `BosunMenuSystemTests`. `Sources/BosunMenu` is only AppKit: `MenuRenderer` (a `MenuModel` as an `NSMenu`, updated in
+  place), `Dialogs` (a `DialogSpec` as an `NSAlert`), `StatusItemController`, `AppShell` (the `AppUI`), `AppDelegate`,
+  `main.swift`. Start is `bosun morning --now --background`, a short command, never a child the app leaves running
+  (the Mac's privacy prompts would name the app); only `update --yes` is started detached.
+- bosun.app's build (design: `docs/design/menu-bar.md`, "The bundle and its pictures"): `app/build.sh` (the bundle
+  from `swift build`, `app/Resources/Info.plist.in`, signed with the bundle id from `app/publisher.json` as its
+  identifier, zipped; what `bosun app install --build` runs, ad hoc) and the pictures `tools/app_icons.py` made once
+  from `docs/assets/logo.png` (`app/Resources/`; `tests/unit/test_app_icons.py` checks them).
 - `orchestrator/policy.md` (appended to the orchestrator's system prompt),
   `orchestrator/plugin/commands/chores.md` (the chores procedure), `orchestrator/settings.json`
   (the orchestrator's own permissions, generic; a site replaces it with
@@ -342,6 +371,12 @@ of truth, so don't copy rules into this file.
   in `impacted_map` (`bin/bosun=<test>`, `mkdocs.yml=<test>`, ...); `tests/unit/impacted_guard.py`
   fails the test until it is there and says which. A test importing a helper or another test file of
   `tests/unit` needs nothing: the plugin follows it.
+- **A menu item** (bosun.app): the item and its state in `MenuModel.swift` (and its dialog in `DialogSpecs.swift`, if it
+  opens one), the `bosun` command it runs in `BosunCLI.swift` (a new command is a command first: `libexec/`, its
+  `# Usage:` header, `docs/commands.md`, and a `--json` output if the app reads it, with its `CONTRACT` grown, never
+  changed), the contract fixture (`uv run python tools/contract_samples.py`, which `tests/unit/test_contract_samples.py`
+  checks), the VM suite's step (`tests/app_e2e.sh`, run with `tests/sandbox.sh mac app`) and the guide (`docs/setup.md`,
+  "The menu bar app").
 - **A command:** `libexec/bosun-<cmd>` with a `# Usage:` header that holds all of its help
   (`bin/bosun` prints it for `--help`, with no flag handling of the command's own for exactly that;
   `die_usage` reports usage errors with exit 2), a line in `bin/bosun`'s usage, the
@@ -362,6 +397,17 @@ and CI agree on versions. On commit (`.pre-commit-config.yaml`; run all with `uv
   indented `case`, from `.editorconfig`), and `tools/shell_complexity.py` (functions: branch
   count <= 15 and <= 60 lines; script bodies <= 25 and <= 120 lines), since the Python tools do
   not read shell.
+- Swift (the menu bar app in `app/`; three hooks on `files: ^app/`, so a Python-only commit pays nothing, each
+  run only on a Mac and skipping with one line elsewhere or when `swift` is absent, through `tools/swift_hook.sh`:
+  CI's Linux `lint` job has a `swift` that cannot build AppKit, and the macOS `app` job runs them): `swift format lint --strict` (the
+  toolchain's swift-format, `app/.swift-format`), SwiftLint (the SwiftLintPlugins package's command plugin, its version
+  pinned in `app/Package.resolved`; `app/.swiftlint.yml` has the repo's limits: cyclomatic 10, function body 60, type
+  body 300, file 400; `force_unwrapping`, `force_try` and `force_cast` errors in Sources, allowed in Tests; no `print`
+  in Sources) and `swift test -Xswiftc -warnings-as-errors`. Swift 6 language mode, so strict concurrency. The floor is
+  95% of the lines of each of `Sources/BosunMenuCore` and `Sources/BosunMenuSystem`: `cd app && swift test --enable-code-coverage -Xswiftc
+  -warnings-as-errors`, then `uv run python tools/swift_coverage.py` (it reads `llvm-cov export -summary-only` and
+  names the files under the floor). While iterating run `swift test --filter <suite>`, not the lot. When a limit
+  trips, split the function, as for Python.
 - Everything else written by hand: hadolint (Dockerfiles), actionlint and zizmor (workflows; actions are
   pinned by commit, with the tag in a comment that Dependabot keeps up to date), the Dependabot config's
   schema, valid XML in the plist templates (Apple's `plutil` is more lenient than XML), `typos`
@@ -376,10 +422,14 @@ and CI agree on versions. On commit (`.pre-commit-config.yaml`; run all with `uv
   detect-secrets audit .secrets.baseline`), and `tools/forbidden_terms.py` on staged files and
   commit messages (see Publishing below).
 - The unit tests the change can reach, in parallel (`pytest -n auto --impacted`, pytest-impacted
-  and pytest-xdist): the change is what git has uncommitted, so `pre-commit run --all-files` selects
-  the same. Before a push, the smoke sections the change can reach (end to end only; the build-out setting:
-  see below; skipped if this exact tree passed a whole run here in the last 24 hours); in CI, every unit test
-  (its smoke job, when it is on, always runs the whole suite).
+  and pytest-xdist; `--dist=worksteal` is in `pyproject.toml`'s `addopts`, so an idle worker takes
+  queued tests from a busy one): the change is what git has uncommitted, so `pre-commit run --all-files`
+  selects the same. A change to a module that many others import (`ledger.py`, but also small ones such
+  as `similar.py` or `screen_text.py`) reaches most of the suite through the import graph, so such a
+  commit pays nearly the full run (about a minute); that is the selection being right, not loose, and a
+  docs edit pays about ten seconds. Before a push, the smoke sections the change can reach (end to end only; the build-out
+  setting: see below; skipped if this exact tree passed a whole run here in the last 24 hours); in CI, every
+  unit test (its smoke job, when it is on, always runs the whole suite).
 
 Which tests a change reaches: the plugin follows Python imports from `lib/` (an import root, as
 pytest's `pythonpath` entry; `impacted_module = "lib"`) and between the test files and the helpers of
@@ -404,16 +454,28 @@ of the merge queue (`merge_group`: without it the queue waits forever for checks
 (`lint`; the forbidden-terms list comes from the `FORBIDDEN_TERMS` Actions secret, and the pull
 request's title, description and commit messages are checked too; for a merge group only the commit
 messages between its `base_sha` and `head_sha`), every unit test in parallel on
-Python 3.13 to 3.15 with a floor under coverage (`test (<version>)`, never `--impacted`), every unit
+Python 3.13 and 3.14 (the floor is `requires-python`; 3.15 comes back once it is released and the suite
+is fast) with a floor under coverage, measured through `sys.monitoring` (`COVERAGE_CORE=sysmon`: coverage's
+default on 3.13 is `sys.settrace`, which made every test about a quarter slower; the same lines are reported)
+(`test (<version>)`, never `--impacted`), every unit
 test again on macOS and then the end-to-end smoke suite (`smoke`, which is off until the
 feature-complete MVP: its job-level `if` in `ci.yml` wants the repository variable `CI_SMOKE` set
 to `true`, and it is not a required check in `.github/rulesets/main.json`; to turn it back on,
 remove that `if` (or set the variable), re-add `smoke` to the ruleset's required checks and apply
-it; the pre-push hook still runs the sections the change reaches), and
+it; the pre-push hook still runs the sections the change reaches), the menu bar app (`app`, on macOS: `swift test`
+with warnings as errors, the coverage floor, SwiftLint, `swift format lint --strict`, and an ad hoc build whose
+bundle must verify; a cheap Linux job, `changes`, compares the pull request or merge group with its base, and `app`
+`needs` it and is skipped (no macOS runner starts, and a skipped job counts as passing) when nothing under `app/`,
+`tools/contract_samples.py`, `tools/swift_coverage.py`, the workflow, `.github/actions/setup-uv/`, `uv.lock` or
+`pyproject.toml` changed, so it can be required on every pull request, as `changes` is, so that a failed `changes`
+cannot skip `app` past the ruleset), and
 gitleaks over the pull request's or merge group's commits (`gitleaks`; a made-up value in a test carries a
 `gitleaks:allow` comment). `.github/workflows/install.yml` runs the install for real on a clean macOS
 runner and the Docker sandbox, when the install could have changed and weekly; those are not required
-checks, because a required check that did not run blocks a merge. `.github/workflows/docs.yml`
+checks, because a required check that did not run blocks a merge. `.github/workflows/release-app.yml`, on a tag
+`app-v<app/VERSION>`, signs, notarizes and publishes bosun.app (steps for the person: `docs/development.md`,
+"Releasing bosun.app"); it checks the signed bundle with `lib/app_release.py requirement` and its final zip
+with `lib/app_install.py verify-archive`, which is the install's own code, never a copy of it. `.github/workflows/docs.yml`
 publishes the docs site to GitHub Pages from `main` (the repository's Pages source is GitHub Actions). The
 logs are public, so neither check prints what it matched. `main` takes changes only through a pull
 request with those checks green, CodeQL's results clean (GitHub's default setup; no error alerts, no
@@ -425,7 +487,8 @@ ahead of it, runs the required checks on that merge group's commit and squash-me
 pass (the ruleset's `merge_queue` rule; so `strict_required_status_checks_policy` is off, the queue
 being what "up to date with `main`" was for, and nobody updates a branch by hand; CodeQL's default setup does not run on merge groups, and GitHub's
 docs say the ruleset's code scanning protection does not apply to them, so CodeQL gates the pull
-request only). The release gate
+request only; a merge group's checks may take 60 minutes, `check_response_timeout_minutes`, above the `app` job's
+30 and the wait for a macOS runner). The release gate
 (`tools/release.py gate`) therefore reads the required checks on main's head commit itself, the merge
 group's, and falls back to the pull request's for commits merged before the queue. The rules are
 in `.github/rulesets/main.json`. A new or renamed job goes in its list too, applied with `gh api -X PUT
@@ -498,6 +561,7 @@ you changed (the table and how to set them up: `docs/development.md`, "Which san
   no time or disk, so make one rather than be careful with one. It has already shown what Docker could
   not: a new Mac has no Apple tools, and launchd has no `gui/<uid>` domain until the auto-login is done.
 - `tests/sandbox.sh mac work [--base <ref>]`: in the same VM, a week of acme work in the ledger and the knowledge base (`tests/work_e2e.sh`, its days in `tests/sandbox/acme_week.sh`, what it shares with `install_e2e.sh` in `tests/sandbox/e2e_lib.sh`) on the release (a checkout from before versions), converted to this checkout by `get.sh`, a mid-afternoon `bosun update` to the next version (`tests/sandbox/update_patch.sh`) on a year of data (`tests/sandbox/acme_year.py`), going back and forward again, then the clock moved, writers racing, writes cut short, the knowledge files changed outside their journal, a person forgotten.
+- `tests/sandbox.sh mac app [--from build|release]`: in the same VM with its desktop session, bosun.app (built on this Mac with `app/build.sh --identity -`, never started here) driven through every state and choice of its menu by its test hooks, a restart of the Mac between the two parts, the app moved to the Trash and an uninstall (`tests/app_e2e.sh`, which shares the update's origin and the console and status helpers in `tests/sandbox/e2e_lib.sh`; the update's third release asks the app to quit, `tests/sandbox/update_quit_probe.sh`, to see what macOS says to a quit that an update the app started makes). `--from release` has `bosun init` install the notarized app.
 - `bosun wake-test` on real hardware: the only proof of a real wake, because a macOS guest cannot sleep and
   `tart suspend` does not make launchd catch up. Check a job's time in the VM by moving its clock.
 

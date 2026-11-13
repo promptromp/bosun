@@ -54,8 +54,13 @@ ignore tests/fixtures/migrations/**
 ignore tests/sandbox.sh
 ignore tests/install_e2e.sh
 ignore tests/work_e2e.sh
+ignore tests/app_e2e.sh
 ignore tests/sandbox/**
 ignore tools/**
+# The menu bar app: its Swift sources, tests and package files have their own CI job and hooks, and no smoke
+# section builds Swift (the `app` section runs app/build.sh against a stand-in swift: it covers build.sh, the
+# bundle's resources, VERSION and publisher.json).
+ignore app/**
 # The console page's JavaScript check: only the `syntax` section (the catch-all, which still runs) calls it.
 ignore tests/js/**
 ignore tests/js_check.sh

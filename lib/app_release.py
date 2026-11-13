@@ -11,8 +11,9 @@ from __future__ import annotations
 import json
 import plistlib
 import re
+import sys
 import zipfile
-from collections.abc import Callable, Iterable, Mapping
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -38,7 +39,7 @@ GITHUB = re.compile(
 NO_TEAM = "app/publisher.json has no team_id yet"
 BAD_TEAM = "app/publisher.json's team_id is not a Team ID"
 BAD_BUNDLE_ID = "app/publisher.json's bundle_id is not a bundle id"
-NO_BUILD = "part 2 builds the app"
+NO_BUILD = "app/build.sh is missing"
 
 
 class AppError(Exception):
@@ -188,6 +189,20 @@ def archive_problem(folder: Path) -> str | None:
     return None
 
 
+def tree_problem(folder: Path) -> str | None:
+    """Why what was unpacked in <folder> is refused after all: a symbolic link anywhere in it, or a path that
+    resolves outside it. The entries were refused for a link before unpacking, so a link here is one the
+    unpacker made from what the central directory did not show (a local header, say)."""
+    root = folder.resolve()
+    for path in sorted(folder.rglob("*")):
+        shown = path.relative_to(folder).as_posix()
+        if path.is_symlink():
+            return f"the unpacked archive holds a symbolic link its entries did not list: {shown}"
+        if not path.resolve().is_relative_to(root):
+            return f"the unpacked archive holds a path outside its folder: {shown}"
+    return None
+
+
 # ---- the app on disk ------------------------------------------------------------------------------------
 
 
@@ -241,3 +256,30 @@ def describe(state: Mapping[str, Any]) -> str:
         f"{BUNDLE} {state['installed']} is installed" if state["installed"] else f"{BUNDLE} is not installed"
     )
     return f"{have} (this bosun wants {state['wanted']}); Open at Login: {login}"
+
+
+# ---- the command line, for the release workflow ---------------------------------------------------------
+
+USAGE = "Usage: app_release.py requirement"
+ROOT = Path(__file__).resolve().parents[1]
+
+
+def main(argv: Sequence[str], root: Path = ROOT) -> int:
+    """`requirement`: print the code requirement `bosun app install` checks a build against, for
+    app/publisher.json's bundle id and Team ID. The release workflow gives it to `codesign --verify -R`, so a
+    release the install would refuse is never published and the requirement is written in one place. Exit 0,
+    1 (one line on stderr: no or a wrong Team ID, an unreadable file) or 2 (usage)."""
+    if list(argv) != ["requirement"]:
+        print(USAGE, file=sys.stderr)
+        return 2
+    try:
+        publisher = read_publisher(root)
+        print(requirement(publisher.bundle_id, require_team(publisher)))
+    except AppError as error:
+        print(f"app_release: {error}", file=sys.stderr)
+        return 1
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))

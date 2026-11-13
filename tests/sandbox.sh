@@ -1,7 +1,7 @@
 #!/bin/bash
 # Usage: tests/sandbox.sh [init | unit | smoke | all | shell]
-#        tests/sandbox.sh mac (setup | run [--from-nothing] | work [--base <git ref>] | live [claude|codex|agy]
-#                              | shell | clean)
+#        tests/sandbox.sh mac (setup | run [--from-nothing] | work [--base <git ref>] | app [--from build|release]
+#                              | live [claude|codex|agy] | shell | clean)
 #
 # Run bosun on a clean machine that cannot touch this one: a throwaway Linux container with a
 # read-only copy of this checkout. Docker on a Mac is Linux, so launchctl, pmset and the like are

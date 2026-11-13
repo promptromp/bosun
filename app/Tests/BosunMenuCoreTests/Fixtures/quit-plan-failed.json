@@ -1,0 +1,13 @@
+{
+  "busy": [],
+  "contract": 1,
+  "error": "the windows could not be listed: tmux did not answer",
+  "keep_awake_until": null,
+  "lock_wait_seconds": 180,
+  "refused": null,
+  "result": "failed",
+  "steps_seconds": 225,
+  "wait_minutes": 10,
+  "waiting": [],
+  "windows": []
+}

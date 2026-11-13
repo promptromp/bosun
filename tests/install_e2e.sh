@@ -35,6 +35,63 @@ run_again() {
   check "... and back nothing up" test "$kept" = "$(backups)"
 }
 
+# What app/build.sh asks of the tools, for real, on the ad hoc bundle <app> in the folder <work>. app/ is the
+# install's (get.sh made it: $DIR is the link to the version in use, the whole tree). The test's own tarball
+# (tests/sandbox/mac.sh copy_checkout) holds no app/.
+app_build_tools() {
+  local work="$1" app="$2"
+  check "the install holds the app's source and its pictures" bash -c '[ -x "$1/app/build.sh" ] && [ -f "$1/app/Resources/Info.plist.in" ] && [ -d "$1/app/Resources/AppIcon.iconset" ]' _ "$DIR"
+  check "iconutil makes an icns of the app's committed icon set" bash -c 'iconutil -c icns "$1/app/Resources/AppIcon.iconset" -o "$2/AppIcon.icns" && [ "$(head -c 4 "$2/AppIcon.icns")" = icns ]' _ "$DIR" "$work"
+  check "plutil -lint accepts the Info.plist app/build.sh makes from its template" bash -c 'sed -e "s/@BUNDLE_ID@/ai.example.bosun/g" -e "s/@VERSION@/0.0.1/g" "$1/app/Resources/Info.plist.in" >"$2/Info.plist" && plutil -lint -s "$2/Info.plist"' _ "$DIR" "$work"
+  check "codesign --identifier makes the signing identifier, which the Developer ID requirement names (not the Info.plist's)" bash -c '
+    cp -R "$1" "$2/named.app" && codesign --force --sign - --identifier ai.example.named "$2/named.app" &&
+      codesign --verify --deep --strict -R "=identifier \"ai.example.named\"" "$2/named.app" &&
+      ! codesign --verify --deep --strict -R "=identifier \"ai.example.bosun\"" "$2/named.app" 2>/dev/null' _ "$app" "$work"
+  check "ditto --norsrc --noextattr --noqtn writes no ._ file for an attribute of this Mac" bash -c '
+    xattr -w com.example.test 1 "$1/Contents/Info.plist" && ditto -c -k --keepParent --norsrc --noextattr --noqtn "$1" "$2/plain.zip" &&
+      ! unzip -l "$2/plain.zip" | grep -qF "._"' _ "$app" "$work"
+  app_build_for_real "$work"
+}
+
+# app/build.sh run for real on a copy of the install's app/ in <work> (the build folder stays out of the install).
+app_build_for_real() {
+  local work="$1"
+  # Run directly, the way `bosun app install --build` runs it. It names the line of a failure it has no message
+  # for (its ERR trap), which is in the log printed here.
+  #
+  # The first run of app/build.sh on this Mac, here, right after the assessments were turned on, exits 1 before any
+  # line of the script has run or said anything (`--bogus`, which only prints its usage, did the same), whichever
+  # copy of the script that first run is; every run after it, of that copy or another, ran as it should. Measured
+  # in a clone, in about ten runs of this suite, in which the order of three copies was changed: a trivial script
+  # run first, /bin/bash, python3 and the first run of a script that has other content are not what fails. The
+  # script says nothing in that run, not even its ERR trap's line, so the cause is not one of its commands (it
+  # is probably Gatekeeper's first look at it: the assessments were just turned on above): one run that is
+  # allowed to fail comes first, and the log says how it ended (2, its usage, or 1 when the first run failed).
+  bash -c 'cp -R "$1/app" "$2/app-copy" && rm -rf "$2/app-copy/.build" "$2/app-copy/dist" &&
+    { "$2/app-copy/build.sh" --bogus >/dev/null 2>&1; echo "  note  the warm-up run of app/build.sh --bogus exited $?"; }' _ "$DIR" "$work"
+  check "app/build.sh builds the app for real, ad hoc, for arm64" bash -c '
+    "$2/app-copy/build.sh" --identity - --out "$2/built" >"$2/build.log" 2>&1 || {
+      echo "app/build.sh exited $?"
+      tail -15 "$2/build.log"
+      ls -lO@ "$2/app-copy/build.sh"
+      exit 1
+    }
+    [ "$(lipo -archs "$2/built/bosun.app/Contents/MacOS/bosun")" = arm64 ]' _ "$DIR" "$work"
+  check "... the bundle verifies, is signed as the bundle id of app/publisher.json and is not notarized" bash -c '
+    id="$(jq -r .bundle_id "$1/app/publisher.json")" && codesign --verify --deep --strict -R "=identifier \"$id\"" "$2/built/bosun.app" &&
+      plutil -lint -s "$2/built/bosun.app/Contents/Info.plist" &&
+      ! spctl --assess --type execute -vv "$2/built/bosun.app" 2>&1 | grep -qx "source=Notarized Developer ID"' _ "$DIR" "$work"
+  check "... and its zip unpacks with ditto into one signed bosun.app" bash -c '
+    mkdir "$2/from-build" && ditto -x -k "$2"/built/bosun-app-*.zip "$2/from-build" && [ "$(ls "$2/from-build")" = bosun.app ] &&
+      codesign --verify --deep --strict "$2/from-build/bosun.app"' _ "$DIR" "$work"
+  check "app/build.sh --zip zips it again, with no ._ file, into one signed bosun.app" bash -c '
+    xattr -w com.example.test 1 "$2/built/bosun.app/Contents/Info.plist" &&
+      "$2/app-copy/build.sh" --zip "$2/built/bosun.app" --out "$2/rezip" >/dev/null &&
+      ! unzip -l "$2"/rezip/bosun-app-*.zip | grep -qF "._" &&
+      mkdir "$2/from-rezip" && ditto -x -k "$2"/rezip/bosun-app-*.zip "$2/from-rezip" &&
+      codesign --verify --deep --strict "$2/from-rezip/bosun.app"' _ "$DIR" "$work"
+}
+
 # The tools `bosun app` runs (docs/design/menu-bar.md), for real, on a bundle made here. No Developer ID is on
 # this Mac, so it is signed ad hoc: the two things macOS says of such an app (no team, not notarized) are the
 # refusals bosun's checks rest on. The notarized case is the real release, which needs the publisher's Team ID.
@@ -80,6 +137,7 @@ PLIST
     ditto -c -k --keepParent "$1" "$2/release.zip" && mkdir "$2/unpacked" && ditto -x -k "$2/release.zip" "$2/unpacked" &&
       [ "$(ls "$2/unpacked")" = bosun.app ]' _ "$app" "$work"
   check "... and what it unpacks is still a signed bundle" codesign --verify --deep --strict "$work/unpacked/bosun.app"
+  app_build_tools "$work" "$app"
   check "osascript does not say an app that is not there is running, asked by its bundle id" bash -c '[ "$(osascript -e "application id \"ai.example.bosun\" is running" 2>/dev/null)" != true ]'
   check "... and says it of one that is: Finder" bash -c '[ "$(osascript -e "application id \"com.apple.finder\" is running")" = true ]'
   check "open is there" command -v open
@@ -90,19 +148,6 @@ PLIST
 
 # ---- the console's job, `bosun quit` and the update to the next release (docs/design/menu-bar.md) ----
 
-STATE="$HOME/.local/state/bosun"
-# The job's own state: the first `state =` line of launchctl print (the nested ones are its endpoints').
-job_state() { launchctl print "$DOMAIN/$1" | sed -n 's/^[[:space:]]*state = //p' | head -1; }
-console_process() { pgrep -f 'lib/console_server\.py' >/dev/null; }
-# The running console answers its API, with the cookie its address's token becomes (`bosun console --url`).
-console_answers() {
-  local url port
-  url="$("$HOME/.local/bin/bosun" console --url 2>/dev/null)" || return 1
-  port="$(sed -E 's#^http://127\.0\.0\.1:([0-9]+)/.*#\1#' <<<"$url")"
-  curl -sf -H "Cookie: bosun_console_$port=${url##*t=}" "http://127.0.0.1:$port/api/version" >/dev/null
-}
-status_says() { "$HOME/.local/bin/bosun" status --json | jq -e "$1" >/dev/null; } # <jq filter>
-no_tmux_server() { ! tmux -L bosun info; }
 # <seconds>: the console's process is gone, and stays so a while (launchd would have restarted it by then)
 console_stays_stopped() {
   local deadline=$((SECONDS + $1))
@@ -154,10 +199,6 @@ console_job_for_real() {
   "$bosun" stop >/dev/null 2>&1
 }
 
-morning_lines() { cat "$STATE"/logs/morning-*.log 2>/dev/null | grep -c "$1"; } # <text>: how many lines of the morning logs have it
-morning_lines_above() { [ "$(morning_lines "$1")" -gt "$2" ]; }                 # <text> <count>
-watchdog_skipped() { grep -q "bosun is stopped (bosun quit at .*): skipping this run" "$STATE/logs/watchdog.launchd.out"; }
-
 # `bosun quit` on a Mac that is up: nothing of bosun is left running, what the watchdog and the morning job do
 # about it (nothing), and `bosun morning --now` ending it. Run from here, outside bosun's windows.
 quit_for_real() {
@@ -200,24 +241,7 @@ quit_for_real() {
   "$bosun" stop >/dev/null 2>&1
 }
 
-# The install is on the releases (the default): tests/sandbox/mac.sh made the origin, ~/origin.git, a bare repository
-# with a first release in it (named by BOSUN_E2E_RELEASE), which get.sh took. `bosun update --check --json` sees a
-# next one through git ls-remote, and `bosun update --yes` moves to it. A repository and not a bundle, since `git
-# ls-remote` of a bundle lists an annotated tag's own object and no peeled line, as GitHub does.
-a_next_release() { # <tag>: the first release's tree patched by update_patch.sh, tagged as a release, in the origin
-  local tree="$OUT/next" git=(git -c user.name=sandbox -c user.email=sandbox@example.com)
-  rm -rf "$tree"
-  git clone -q --branch main "$HOME/origin.git" "$tree" &&
-    "$tree/tests/sandbox/update_patch.sh" "$tree" &&
-    "${git[@]}" -C "$tree" commit -qam "the next version" &&
-    "${git[@]}" -C "$tree" tag -a "$1" -m "The next release
-
-- the ledger goes to format 2 (the sandbox's patch)" &&
-    git -C "$tree" push -q origin main "$1"
-}
-version_in_use() { git -C "$(cd "$DIR" && pwd -P)" rev-parse HEAD; }
-version_folders() { find -E "$VERSIONS" -mindepth 1 -maxdepth 1 -type d -regex '.*/[0-9a-f]{12}' | wc -l | tr -d ' '; }
-
+# The install is on the releases (the default), in the origin tests/sandbox/e2e_lib.sh's a_next_release adds to.
 releases_for_real() {
   local bosun="$HOME/.local/bin/bosun" next="v2026.11.02" first="$BOSUN_E2E_RELEASE" first_commit out="$OUT/release-update.txt"
   echo "releases: the install took the newest, and bosun update moves to the next"
