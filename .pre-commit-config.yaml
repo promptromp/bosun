@@ -18,9 +18,9 @@ repos:
       - id: check-shebang-scripts-are-executable
       - id: check-symlinks
       - id: check-toml
-      - id: check-xml # a launchd plist: Apple's plutil lets through XML that is not valid
+      - id: check-xml # a launchd plist, or bosun.app's Info.plist template: plutil lets through XML that is not valid
         types: [file]
-        files: \.plist$
+        files: \.plist(\.in)?$
       - id: check-yaml
         exclude: ^mkdocs\.yml$ # Python tags it cannot load; the docs-site hook below reads it
       - id: detect-aws-credentials

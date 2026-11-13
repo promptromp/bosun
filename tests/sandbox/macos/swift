@@ -1,0 +1,41 @@
+#!/bin/bash
+# swift's stand-in, for what `bosun app install --build` asks of it, through app/build.sh: `build -c release
+# --arch arm64` makes the executable `BosunMenu` in a folder of the sandbox, and with `--show-bin-path` says
+# which. There is no Swift in a container, and a real build is minutes of work: it proves that build.sh puts
+# what swift made into a bundle, never that the app compiles (the app's own tests, and the build on a Mac,
+# do). While ~/.sandbox/swift-fails is there the build fails, as a compile error does.
+mkdir -p "$HOME/.sandbox"
+echo "swift $*" >>"$HOME/.sandbox/system.log"
+bin="$HOME/.sandbox/swift-bin"
+[ "${1:-}" = build ] || {
+	echo "swift stand-in: only build is stood in for" >&2
+	exit 2
+}
+case " $* " in
+*" -c release "*) ;;
+*)
+	echo "swift stand-in: only a release build is stood in for" >&2
+	exit 2
+	;;
+esac
+case " $* " in
+*" --arch arm64 "*) ;;
+*)
+	echo "swift stand-in: only a build for arm64 is stood in for" >&2
+	exit 2
+	;;
+esac
+case " $* " in
+*" --show-bin-path "*)
+	echo "$bin"
+	exit 0
+	;;
+esac
+if [ -e "$HOME/.sandbox/swift-fails" ]; then
+	echo "error: cannot find 'Pretend' in scope" >&2
+	exit 1
+fi
+mkdir -p "$bin"
+printf '#!/bin/sh\nexit 0\n' >"$bin/BosunMenu"
+chmod +x "$bin/BosunMenu"
+echo "Build complete!"

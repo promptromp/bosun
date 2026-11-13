@@ -31,6 +31,31 @@ run_again() {
   check "... and back nothing up" test "$kept" = "$(backups)"
 }
 
+# What app/build.sh asks of the tools, for real, on the ad hoc bundle <app> in the folder <work>.
+app_build_tools() {
+  local work="$1" app="$2"
+  check "iconutil makes an icns of the app's committed icon set" bash -c 'iconutil -c icns "$1/app/Resources/AppIcon.iconset" -o "$2/AppIcon.icns" && [ "$(head -c 4 "$2/AppIcon.icns")" = icns ]' _ "$ROOT" "$work"
+  check "plutil -lint accepts the Info.plist app/build.sh makes from its template" bash -c 'sed -e "s/@BUNDLE_ID@/ai.example.bosun/g" -e "s/@VERSION@/0.0.1/g" "$1/app/Resources/Info.plist.in" >"$2/Info.plist" && plutil -lint -s "$2/Info.plist"' _ "$ROOT" "$work"
+  check "codesign --identifier makes the signing identifier, which the Developer ID requirement names (not the Info.plist's)" bash -c '
+    cp -R "$1" "$2/named.app" && codesign --force --sign - --identifier ai.example.named "$2/named.app" &&
+      codesign --verify --deep --strict -R "=identifier \"ai.example.named\"" "$2/named.app" &&
+      ! codesign --verify --deep --strict -R "=identifier \"ai.example.bosun\"" "$2/named.app" 2>/dev/null' _ "$app" "$work"
+  check "ditto --norsrc --noextattr --noqtn writes no ._ file for an attribute of this Mac" bash -c '
+    xattr -w com.example.test 1 "$1/Contents/Info.plist" && ditto -c -k --keepParent --norsrc --noextattr --noqtn "$1" "$2/plain.zip" &&
+      ! unzip -l "$2/plain.zip" | grep -qF "._"' _ "$app" "$work"
+  check "app/build.sh builds the app for real, ad hoc, for arm64" bash -c '
+    cp -R "$1/app" "$2/app-copy" && rm -rf "$2/app-copy/.build" "$2/app-copy/dist" &&
+      "$2/app-copy/build.sh" --identity - --out "$2/built" >"$2/build.log" 2>&1 || { tail -5 "$2/build.log"; exit 1; }
+    [ "$(lipo -archs "$2/built/bosun.app/Contents/MacOS/bosun")" = arm64 ]' _ "$ROOT" "$work"
+  check "... the bundle verifies, is signed as the bundle id of app/publisher.json and is not notarized" bash -c '
+    id="$(jq -r .bundle_id "$1/app/publisher.json")" && codesign --verify --deep --strict -R "=identifier \"$id\"" "$2/built/bosun.app" &&
+      plutil -lint -s "$2/built/bosun.app/Contents/Info.plist" &&
+      ! spctl --assess --type execute -vv "$2/built/bosun.app" 2>&1 | grep -qx "source=Notarized Developer ID"' _ "$ROOT" "$work"
+  check "... and its zip unpacks with ditto into one signed bosun.app" bash -c '
+    mkdir "$2/from-build" && ditto -x -k "$2"/built/bosun-app-*.zip "$2/from-build" && [ "$(ls "$2/from-build")" = bosun.app ] &&
+      codesign --verify --deep --strict "$2/from-build/bosun.app"' _ "$ROOT" "$work"
+}
+
 # The tools `bosun app` runs (docs/design/menu-bar.md), for real, on a bundle made here. No Developer ID is on
 # this Mac, so it is signed ad hoc: the two things macOS says of such an app (no team, not notarized) are the
 # refusals bosun's checks rest on. The notarized case is the real release, which needs the publisher's Team ID.
@@ -73,6 +98,7 @@ PLIST
     ditto -c -k --keepParent "$1" "$2/release.zip" && mkdir "$2/unpacked" && ditto -x -k "$2/release.zip" "$2/unpacked" &&
       [ "$(ls "$2/unpacked")" = bosun.app ]' _ "$app" "$work"
   check "... and what it unpacks is still a signed bundle" codesign --verify --deep --strict "$work/unpacked/bosun.app"
+  app_build_tools "$work" "$app"
   check "osascript does not say an app that is not there is running, asked by its bundle id" bash -c '[ "$(osascript -e "application id \"ai.example.bosun\" is running" 2>/dev/null)" != true ]'
   check "... and says it of one that is: Finder" bash -c '[ "$(osascript -e "application id \"com.apple.finder\" is running")" = true ]'
   check "open is there" command -v open

@@ -262,10 +262,11 @@ def fetch_app(setup: Setup, slug: str, version: str, scratch: Path) -> Path:
 
 
 def build_app(setup: Setup, scratch: Path) -> Path:
-    """The app app/build.sh makes in a folder of <scratch>, which it is given."""
+    """The app app/build.sh makes in a folder of <scratch>, which it is given: `--identity -` (ad hoc: this is
+    a build for developing the app) and `--out` that folder."""
     built = scratch / "built"
     built.mkdir()
-    done = setup.run([str(setup.root / "app" / "build.sh"), str(built)])
+    done = setup.run([str(setup.root / "app" / "build.sh"), "--identity", "-", "--out", str(built)])
     if done.returncode != 0:
         raise AppError(f"app/build.sh failed: {done.last_line}")
     if not (built / BUNDLE).is_dir():
@@ -499,12 +500,13 @@ def place_app(
 
 def install(setup: Setup, *, build: bool = False) -> str:
     """Place the release app/VERSION names (checked against the publisher), or with <build> the app
-    app/build.sh makes (not checked: it is ad hoc signed, for developing the app)."""
+    app/build.sh makes (not checked: it is ad hoc signed, for developing the app, and says so)."""
     publisher = app_release.read_publisher(setup.root)
     if build:
         if not (setup.root / "app" / "build.sh").is_file():
             raise AppError(app_release.NO_BUILD)
-        return place_app(setup, publisher, lambda scratch: build_app(setup, scratch), development=True)
+        placed = place_app(setup, publisher, lambda scratch: build_app(setup, scratch), development=True)
+        return f"{placed} (a development build: ad hoc signed, not the publisher's notarized app)"
     app_release.require_team(publisher)
     version = app_release.wanted_version(setup.root)
     slug = app_release.releases_slug(setup.releases, publisher, lambda: install_origin(setup.root))

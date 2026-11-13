@@ -3109,7 +3109,7 @@ assert job["KeepAlive"] == {"PathState": {sys.argv[2] + "/console/wanted": True}
   BOSUN_CONFIG_DIR="$INSTALL_CFG" "$ROOT/install.sh" >/dev/null 2>&1
   check "turned off, install unloads and removes it" bash -c 'tail -n +$(($4 + 1)) "$1" | grep -q "launchctl bootout gui/$(id -u)/$2.console" && [ ! -e "$3" ]' _ "$WORK/system.log" "$BOSUN_LAUNCHD_LABEL" "$CONSOLE_PLIST" "$log_lines"
 
-  echo "bosun app (fake curl; the stand-ins for ditto, codesign, spctl, osascript and open)"
+  echo "bosun app (fake curl; the stand-ins for ditto, codesign, spctl, osascript, open, swift and iconutil)"
   APP_DIR="$HOME/Applications"
   APP="$APP_DIR/bosun.app"
   APP_JOB="$HOME/Library/LaunchAgents/$BOSUN_LAUNCHD_LABEL.app.plist"
@@ -3118,7 +3118,7 @@ assert job["KeepAlive"] == {"PathState": {sys.argv[2] + "/console/wanted": True}
   APP_TEAM=ABCDE12345
   APP_CHECKOUT="$WORK/app-checkout" # a copy of this checkout, with a Team ID in app/publisher.json: the repo's own stays empty until its publisher fills it in
   mkdir -p "$HOME/.sandbox"
-  for tool in ditto codesign spctl open osascript; do
+  for tool in ditto codesign spctl open osascript swift iconutil; do
     install -m 755 "$ROOT/tests/sandbox/macos/$tool" "$HOME/.local/bin/$tool"
   done
   # spctl notes whether the old app is still in place while the new one is assessed, then answers as its stand-in does.
@@ -3144,7 +3144,7 @@ done
 cp "$APP_ZIP" "\$out"
 EOF
   chmod +x "$HOME/.local/bin/spctl" "$HOME/.local/bin/curl"
-  if [ "$(bash -c 'source "$1/lib/common.sh"; command -v curl ditto codesign spctl osascript open' _ "$ROOT" | tr '\n' ' ')" = "$HOME/.local/bin/curl $HOME/.local/bin/ditto $HOME/.local/bin/codesign $HOME/.local/bin/spctl $HOME/.local/bin/osascript $HOME/.local/bin/open " ]; then
+  if [ "$(bash -c 'source "$1/lib/common.sh"; command -v curl ditto codesign spctl osascript open swift iconutil' _ "$ROOT" | tr '\n' ' ')" = "$HOME/.local/bin/curl $HOME/.local/bin/ditto $HOME/.local/bin/codesign $HOME/.local/bin/spctl $HOME/.local/bin/osascript $HOME/.local/bin/open $HOME/.local/bin/swift $HOME/.local/bin/iconutil " ]; then
     copy_tree "$APP_CHECKOUT"
     APP_ID="$(jq -r .bundle_id "$ROOT/app/publisher.json")"
     # bapp: `bosun app` of the copy.
@@ -3211,6 +3211,66 @@ with zipfile.ZipFile(sys.argv[1], "w") as bundle:
       app_refused "a zip with a file beside the app" "README.txt" 0.1.0 "$APP_TEAM" yes "$APP_ID" README.txt
     }
 
+    # logged <regex>: the stand-ins were asked something that matches, a line of $APP_LOG.
+    logged() { grep -qE -- "$1" "$APP_LOG"; }
+    # plist_is <Info.plist> <bundle id> <version>: what app/build.sh puts in the bundle's Info.plist.
+    plist_is() {
+      python3 -I -c 'import plistlib, sys
+info = plistlib.load(open(sys.argv[1], "rb"))
+ok = info["CFBundleIdentifier"] == sys.argv[2] and info["CFBundleShortVersionString"] == sys.argv[3]
+ok = ok and info["CFBundleVersion"] == sys.argv[3] and info["CFBundleExecutable"] == "bosun"
+sys.exit(not (ok and info["LSUIElement"] is True and info["LSMinimumSystemVersion"] == "14.0"))' "$@"
+    }
+    # zip_holds <zip> <name>...: every entry of the archive is inside bosun.app/, and these are in it.
+    zip_holds() {
+      python3 -I -c 'import sys, zipfile
+names = zipfile.ZipFile(sys.argv[1]).namelist()
+sys.exit(not (all(n.startswith("bosun.app/") for n in names) and all(f"bosun.app/{n}" in names for n in sys.argv[2:])))' "$@"
+    }
+    # app_build_checks: `install --build` and app/build.sh itself. swift, iconutil, codesign and ditto are the
+    # stand-ins (tests/install_e2e.sh runs the real ones, and the build on a Mac): this shows what build.sh asks of
+    # them, what goes in the bundle, how it is signed, and that a failed build leaves nothing. It ends with
+    # ~/Applications as it was.
+    app_build_checks() {
+      local out="$WORK/app-build-out" version built
+      local contents="$out/bosun.app/Contents" identity="Developer ID Application: Acme Inc (ABCDE12345)"
+      local PATH="$HOME/.local/bin:$PATH" # `bosun` puts the stand-ins first; the direct runs of app/build.sh must too
+      version="$(cat "$APP_CHECKOUT/app/VERSION")"
+      set_team ""
+      : >"$APP_LOG"
+      touch "$HOME/.sandbox/swift-fails"
+      check "--build with a swift build that fails says why, though no team_id is set" fails_with "app/build.sh failed: app/build.sh: swift build failed" bapp install --build
+      check "... and leaves no ~/Applications" test ! -e "$APP_DIR"
+      rm -f "$HOME/.sandbox/swift-fails"
+      built="$(bapp install --build 2>&1)"
+      check "--build installs the app and says it is a development build" contains "$built" "bosun.app $version installed in ~/Applications (a development build"
+      check "... the app is app/VERSION's, with nothing else left in ~/Applications" test "$(installed) $(ls -A "$APP_DIR")" = "$version bosun.app"
+      check "... it ran swift build for arm64 in release" logged '^swift build -c release --arch arm64( |$)'
+      check "... and signed ad hoc, as the bundle id, into a folder of its own, with no hardened runtime or timestamp" logged "^codesign --force --sign - --identifier $APP_ID [^ ]*/built/bosun\.app\$"
+      check "... its Info.plist has the bundle id, the version and what makes it a menu bar app" plist_is "$APP/Contents/Info.plist" "$APP_ID" "$version"
+      check "... its signature is the bundle id, with no team" bash -c '[ "$(cat "$1/Contents/_CodeSignature/identifier")" = "$2" ] && [ ! -e "$1/Contents/_CodeSignature/team" ]' _ "$APP" "$APP_ID"
+      check "... and nothing was downloaded or assessed by Gatekeeper" bash -c '! grep -qE "^(curl|spctl)" "$1" && [ ! -e "$2" ]' _ "$APP_LOG" "$WORK/app-curl.log"
+      bapp remove >/dev/null 2>&1
+      rm -rf "$APP_DIR"
+
+      rm -rf "$out"
+      check "app/build.sh with a Developer ID makes the bundle" "$APP_CHECKOUT/app/build.sh" --identity "$identity" --out "$out"
+      check "... signing it with the hardened runtime and a timestamp" logged "^codesign --force --sign Developer ID Application: Acme Inc \(ABCDE12345\) --identifier $APP_ID --options runtime --timestamp $out/bosun\.app\$"
+      check "... as the bundle id, with the identity's team" bash -c '[ "$(cat "$1/_CodeSignature/identifier")" = "$2" ] && [ "$(cat "$1/_CodeSignature/team")" = ABCDE12345 ]' _ "$contents" "$APP_ID"
+      check "... which meets the Developer ID requirement of that team and bundle id, as bosun app install asks" codesign --verify --deep --strict -R "=anchor apple generic and identifier \"$APP_ID\" and certificate leaf[subject.OU] = \"ABCDE12345\"" "$out/bosun.app"
+      check "... the bundle has the executable, the icon and both menu bar images" bash -c 'for f in MacOS/bosun Resources/AppIcon.icns Resources/MenuBarIcon.png Resources/MenuBarIcon@2x.png; do [ -f "$1/$f" ] || exit 1; done' _ "$contents"
+      check "... and an Info.plist with app/VERSION and app/publisher.json's bundle id" plist_is "$contents/Info.plist" "$APP_ID" "$version"
+      check "... and is zipped as bosun-app-<version>.zip, the one bosun.app" zip_holds "$out/bosun-app-$version.zip" Contents/MacOS/bosun Contents/Info.plist
+      check "app/build.sh refuses an unknown argument, with usage (exit 2)" bash -c '"$1" --bogus >/dev/null 2>&1; [ $? = 2 ]' _ "$APP_CHECKOUT/app/build.sh"
+      check "... and an option with no value (exit 2)" bash -c '"$1" --out >/dev/null 2>&1; [ $? = 2 ]' _ "$APP_CHECKOUT/app/build.sh"
+      jq '.bundle_id = "not a bundle id"' "$APP_CHECKOUT/app/publisher.json" >"$WORK/publisher.json" && cp "$APP_CHECKOUT/app/publisher.json" "$WORK/publisher.good" && mv "$WORK/publisher.json" "$APP_CHECKOUT/app/publisher.json"
+      : >"$APP_LOG"
+      check "app/build.sh refuses a bundle_id that is not one, before it builds anything" bash -c '! out="$("$1" --out "$2" 2>&1)" && grep -q "is not a bundle identifier" <<<"$out" && ! grep -q "^swift" "$3"' _ "$APP_CHECKOUT/app/build.sh" "$out" "$APP_LOG"
+      mv "$WORK/publisher.good" "$APP_CHECKOUT/app/publisher.json"
+      rm -rf "$out"
+      set_team "$APP_TEAM"
+    }
+
     check "status --json with no app: what this checkout wants, and no Open at Login" bash -c '
       jq -e --arg want "$(cat "$2/app/VERSION")" --arg home "$3" ".contract == 1 and .installed == null and .wanted == \$want
         and .login == false and .path == (\$home + \"/Applications/bosun.app\")" <<<"$("$1" app status --json)"' _ "$BOSUN" "$ROOT" "$HOME"
@@ -3223,11 +3283,9 @@ with zipfile.ZipFile(sys.argv[1], "w") as bundle:
     check "install refuses while app/publisher.json has no team_id" fails_with "app/publisher.json has no team_id yet" bapp install
     check "... and so does update" fails_with "app/publisher.json has no team_id yet" bapp update
     check "... with no download and no ~/Applications" bash -c '[ ! -e "$1" ] && [ ! -e "$2" ]' _ "$WORK/app-curl.log" "$APP_DIR"
-    set_team "$APP_TEAM"
     set_wanted 0.1.0
-    check "--build says part 2 builds the app, and changes nothing" fails_with "part 2 builds the app" bapp install --build
-    set_team ""
-    check "... and is not held up by an empty team_id" fails_with "part 2 builds the app" bapp install --build
+    echo "  (a development build: app/build.sh with the stand-ins for swift, iconutil, codesign and ditto)"
+    app_build_checks
     set_team "$APP_TEAM"
 
     echo "  (a refused app, with no ~/Applications yet)"
@@ -3387,7 +3445,7 @@ assert "KeepAlive" not in job, job
     check "an app and its Open at Login job are in place for the uninstall that follows" bash -c '[ -d "$1" ] && [ -e "$2" ]' _ "$APP" "$APP_JOB"
   else
     failed=$((failed + 1))
-    echo "  FAIL  the fake curl and the stand-ins for ditto, codesign, spctl, osascript and open are not first on PATH; skipped the app tests"
+    echo "  FAIL  the fake curl and the stand-ins for ditto, codesign, spctl, osascript, open, swift and iconutil are not first on PATH; skipped the app tests"
   fi
 
   echo "uninstall (fake launchctl, pmset and sudo, test label)"
@@ -3471,7 +3529,7 @@ for line in sys.stdin:
   }
   check "--purge takes that too" un_purge
   # The app tests' tools go, and osascript is the plain one again (no real notifications from tests).
-  rm -f "$HOME/.local/bin/curl" "$HOME/.local/bin/ditto" "$HOME/.local/bin/codesign" "$HOME/.local/bin/spctl" "$HOME/.local/bin/open"
+  rm -f "$HOME/.local/bin/curl" "$HOME/.local/bin/ditto" "$HOME/.local/bin/codesign" "$HOME/.local/bin/spctl" "$HOME/.local/bin/open" "$HOME/.local/bin/swift" "$HOME/.local/bin/iconutil"
   printf '#!/bin/sh\nexit 0\n' >"$HOME/.local/bin/osascript"
 
   echo "init (fake launchctl and pmset, test label)"

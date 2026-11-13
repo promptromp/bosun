@@ -20,8 +20,8 @@
 #             until it is in. A running app is asked to quit (by its bundle id) and opened again.
 #             Refused with "app/publisher.json has no team_id yet" until the publisher's Team ID is
 #             filled in there
-#     --build   developers only: the app app/build.sh makes, ad hoc signed, installed without the team
-#               check. Until that script exists (the app's own part) it says so and exits 1
+#     --build   developers only: the app that `app/build.sh --identity -` makes (Swift needed), ad hoc signed,
+#               installed without the team check, and it says it is a development build
 #   update    install app/VERSION when the installed version differs; with the same version, or no
 #             app installed (that is `install`), it says so and downloads nothing. Exit 0
 #   remove    quit the app, turn Open at Login off and remove ~/Applications/bosun.app. bosun keeps

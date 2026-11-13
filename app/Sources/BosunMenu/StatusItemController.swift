@@ -5,29 +5,35 @@ import BosunMenuCore
 // and dark), a small coloured dot drawn over its corner for a warning, an error or an update, and the menu.
 
 enum StatusIcon {
-  /// The art in the app bundle (`MenuIcon`, drawn once as a template image), else a plain drawn knot, so the
-  /// icon exists when the app runs outside its bundle.
+  static let side: CGFloat = 18
+
+  /// The art in the app bundle (`MenuBarIcon.png` and `MenuBarIcon@2x.png`: black on clear, made from the
+  /// logo by tools/app_icons.py), as a template image so the menu bar tints it for a light or a dark bar.
+  /// Without the art (the app run outside its bundle) a plain system symbol stands in.
   @MainActor
-  static func template() -> NSImage {
-    let image = Bundle.main.image(forResource: "MenuIcon") ?? drawnKnot()
-    image.size = NSSize(width: 18, height: 18)
+  static func template(resources: URL? = Bundle.main.resourceURL) -> NSImage {
+    let image =
+      artwork(in: resources)
+      ?? NSImage(systemSymbolName: "link", accessibilityDescription: "bosun")
+      ?? NSImage()
+    image.size = NSSize(width: side, height: side)
     image.isTemplate = true
     return image
   }
 
-  private static func drawnKnot() -> NSImage {
-    NSImage(size: NSSize(width: 18, height: 18), flipped: false) { rect in
-      NSColor.black.setStroke()
-      for angle in [45.0, -45.0] {
-        let ring = NSBezierPath(ovalIn: NSRect(x: -5.5, y: -3, width: 11, height: 6))
-        ring.lineWidth = 1.7
-        var transform = AffineTransform(translationByX: rect.midX, byY: rect.midY)
-        transform.rotate(byDegrees: angle)
-        ring.transform(using: transform)
-        ring.stroke()
-      }
-      return true
+  /// One image of both scales, each file a representation of the same eighteen points.
+  private static func artwork(in folder: URL?) -> NSImage? {
+    guard let folder else { return nil }
+    let image = NSImage(size: NSSize(width: side, height: side))
+    for name in ["MenuBarIcon.png", "MenuBarIcon@2x.png"] {
+      guard
+        let data = try? Data(contentsOf: folder.appendingPathComponent(name)),
+        let representation = NSBitmapImageRep(data: data)
+      else { continue }
+      representation.size = NSSize(width: side, height: side)
+      image.addRepresentation(representation)
     }
+    return image.representations.isEmpty ? nil : image
   }
 
   static func dotColor(for badge: IconBadge?) -> NSColor? {

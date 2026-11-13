@@ -23,15 +23,37 @@ private func eventually(seconds: Double = 5, _ condition: () -> Bool) async -> B
   return condition()
 }
 
+/// The pictures the bundle carries: app/Resources of this checkout, where `app/build.sh` copies them from.
+private let bundledArtwork = URL(fileURLWithPath: #filePath)
+  .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+  .appendingPathComponent("Resources")
+
 @MainActor @Suite struct StatusIconTests {
   @Test func theIconIsAnEighteenPointTemplate() {
-    let image = StatusIcon.template()
+    let image = StatusIcon.template(resources: bundledArtwork)
     #expect(image.isTemplate)
     #expect(image.size == NSSize(width: 18, height: 18))
   }
 
+  @Test func theArtIsTheBundlesTemplateImageAtBothScales() throws {
+    let image = StatusIcon.template(resources: bundledArtwork)
+    let sizes = image.representations.map { ($0.pixelsWide, $0.pixelsHigh) }
+    #expect(sizes.count == 2)
+    #expect(sizes.contains { $0 == (18, 18) })
+    #expect(sizes.contains { $0 == (36, 36) })
+    #expect(image.representations.allSatisfy { $0.size == NSSize(width: 18, height: 18) })
+  }
+
+  @Test func withNoArtItStillHasAnEighteenPointTemplateToShow() throws {
+    for folder in [nil, try scratchFolder()] {
+      let image = StatusIcon.template(resources: folder)
+      #expect(image.isTemplate)
+      #expect(image.size == NSSize(width: 18, height: 18))
+    }
+  }
+
   @Test func theTemplateHasSomethingDrawn() throws {
-    let image = StatusIcon.template()
+    let image = StatusIcon.template(resources: bundledArtwork)
     let tiff = try #require(image.tiffRepresentation)
     let bitmap = try #require(NSBitmapImageRep(data: tiff))
     var drawn = false

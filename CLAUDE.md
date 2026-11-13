@@ -237,6 +237,10 @@ of truth, so don't copy rules into this file.
   place), `Dialogs` (a `DialogSpec` as an `NSAlert`), `StatusItemController`, `AppShell` (the `AppUI`), `AppDelegate`,
   `main.swift`. Start is `bosun morning --now --background`, a short command, never a child the app leaves running
   (the Mac's privacy prompts would name the app); only `update --yes` is started detached.
+- bosun.app's build (design: `docs/design/menu-bar.md`, "The bundle and its pictures"): `app/build.sh` (the bundle
+  from `swift build`, `app/Resources/Info.plist.in`, signed with the bundle id from `app/publisher.json` as its
+  identifier, zipped; what `bosun app install --build` runs, ad hoc) and the pictures `tools/app_icons.py` made once
+  from `docs/assets/logo.png` (`app/Resources/`; `tests/unit/test_app_icons.py` checks them).
 - `orchestrator/policy.md` (appended to the orchestrator's system prompt),
   `orchestrator/plugin/commands/chores.md` (the chores procedure), `orchestrator/settings.json`
   (the orchestrator's own permissions, generic; a site replaces it with

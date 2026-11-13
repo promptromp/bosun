@@ -37,7 +37,7 @@ GITHUB = re.compile(
 NO_TEAM = "app/publisher.json has no team_id yet"
 BAD_TEAM = "app/publisher.json's team_id is not a Team ID"
 BAD_BUNDLE_ID = "app/publisher.json's bundle_id is not a bundle id"
-NO_BUILD = "part 2 builds the app"
+NO_BUILD = "app/build.sh is missing"
 
 
 class AppError(Exception):

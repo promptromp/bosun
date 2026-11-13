@@ -549,38 +549,68 @@ class VerificationIsExplicitTest(World):
 
 
 class BuildTest(World):
-    def test_without_part_two_it_says_so_and_changes_nothing(self) -> None:
-        with self.assertRaises(AppError) as caught:
-            app_install.install(self.setup_for(), build=True)
-        self.assertEqual(str(caught.exception), "part 2 builds the app")
-        self.assertEqual(self.tools.calls, [])
+    """`install --build`: app/build.sh --identity - --out <a folder>, and a development build installed."""
 
-    def test_a_build_is_not_held_up_by_an_empty_team_id(self) -> None:
-        self.write_publisher("")
-        with self.assertRaises(AppError) as caught:
-            app_install.install(self.setup_for(), build=True)
-        self.assertNotEqual(str(caught.exception), EMPTY_TEAM)
-
-    def test_with_a_build_script_the_app_it_makes_is_placed_without_the_team_check(self) -> None:
+    def write_build(self) -> Path:
         build = self.root / "app" / "build.sh"
         build.write_text("#!/bin/sh\n")
         build.chmod(0o755)
+        return build
+
+    def install(
+        self, build: Path, *, leaves: bool = True, status: int = 0, says: str = ""
+    ) -> tuple[str, list[Sequence[str]]]:
         made: list[Sequence[str]] = []
 
         def run(argv: Sequence[str]) -> Run:
             if argv[0] == str(build):
                 made.append(argv)
-                write_bundle(Path(argv[1]) / "bosun.app", "0.2.0")
-                return Run(0, "", "")
+                if leaves:
+                    write_bundle(Path(argv[argv.index("--out") + 1]) / "bosun.app", "0.2.0")
+                return Run(status, "", says)
             return self.tools(argv)
 
         message = app_install.install(Setup(self.root, self.home, "", run, lambda _: None), build=True)
+        return message, made
+
+    def test_without_the_build_script_it_says_so_and_changes_nothing(self) -> None:
+        with self.assertRaises(AppError) as caught:
+            app_install.install(self.setup_for(), build=True)
+        self.assertEqual(str(caught.exception), "app/build.sh is missing")
+        self.assertEqual(self.tools.calls, [])
+        self.assertFalse(self.apps.exists())
+
+    def test_it_builds_ad_hoc_into_a_temporary_folder_it_is_given(self) -> None:
+        build = self.write_build()
+        _, made = self.install(build)
         self.assertEqual(len(made), 1)
+        self.assertEqual(list(made[0][:4]), [str(build), "--identity", "-", "--out"])
+        self.assertEqual(len(made[0]), 5)
+        out = Path(made[0][4])
+        self.assertTrue(out.is_relative_to(self.apps))  # beside the install's own scratch
+        self.assertFalse(out.exists())  # and gone again
+
+    def test_the_app_it_makes_is_placed_without_the_team_check_and_called_a_development_build(self) -> None:
+        message, _ = self.install(self.write_build())
         self.assertEqual(app_release.bundle_version(self.app), "0.2.0")
-        self.assertIn("installed", message)
-        self.assertNotIn("spctl", self.tools.names())  # ad hoc signed: macOS would not accept it
-        self.assertNotIn("codesign", self.tools.names())
-        self.assertNotIn("curl", self.tools.names())
+        self.assertIn("installed in ~/Applications", message)
+        self.assertIn("development build", message)
+        self.assertFalse({"spctl", "codesign", "curl"} & set(self.tools.names()))  # ad hoc: macOS refuses it
+
+    def test_a_build_is_not_held_up_by_an_empty_team_id(self) -> None:
+        self.write_publisher("")
+        message, _ = self.install(self.write_build())
+        self.assertIn("development build", message)
+
+    def test_a_build_that_fails_says_why_and_leaves_nothing_behind(self) -> None:
+        with self.assertRaisesRegex(AppError, "app/build.sh failed: error: no such module"):
+            self.install(self.write_build(), leaves=False, status=1, says="warning\nerror: no such module")
+        self.assertFalse(self.apps.exists())
+
+    def test_a_build_that_leaves_no_app_is_refused_and_leaves_nothing_behind(self) -> None:
+        with self.assertRaisesRegex(AppError, "did not leave bosun.app"):
+            self.install(self.write_build(), leaves=False)
+        self.assertFalse(self.apps.exists())
 
 
 class StaleTest(World):

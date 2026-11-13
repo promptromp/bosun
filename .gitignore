@@ -42,5 +42,8 @@ credentials
 *~
 *.bak
 .claude/worktrees/
+# bosun.app's build (app/build.sh): SwiftPM's and the default output folder
+app/.build
+app/dist
 .coverage
 .coverage.*

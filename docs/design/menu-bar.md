@@ -286,7 +286,7 @@ morning job skip; the console stays down); Start brings back what was running; t
 ## Left to the builder
 
 - The exact wording of every line and dialog (the person may refine the copy).
-- The menu bar icon's drawing.
+- The menu bar icon's drawing (done: see the build, below).
 
 ## Changes while building (2026-11-13)
 
@@ -365,3 +365,24 @@ Where what is built differs from what this note said before, or says more:
   first two. Background work (the update checks, a failure being told, the start at launch) runs outside the
   status look, so a command that hangs never holds the next look, and a look that lands while the app's own quit
   runs is dropped.
+- **The bundle and its pictures** (`app/build.sh`, `app/Resources/`, `tools/app_icons.py`). `app/build.sh
+  [--identity <name>|-] [--out <dir>]` runs `swift build -c release --arch arm64`, assembles `bosun.app` in `<dir>`
+  (default `app/dist`, ignored by git), signs the whole bundle, verifies it (`codesign --verify --deep --strict`) and
+  writes `bosun-app-<version>.zip`. The bundle identifier is only `app/publisher.json`'s and the version only
+  `app/VERSION`'s: the build fills them into `app/Resources/Info.plist.in` (`LSUIElement`, `LSMinimumSystemVersion`
+  14.0, the icon) and lints the result with `plutil`. The signing identifier is the bundle identifier, passed with
+  `codesign --identifier`, because `bosun app install` accepts a build only when it satisfies the Developer ID
+  requirement for that identifier; a real identity also gets `--options runtime --timestamp` (the hardened runtime and
+  a secure timestamp, which notarization needs), `-` is ad hoc. The zip is made with `ditto -c -k --keepParent` and
+  without this Mac's extended attributes (`--norsrc --noextattr --noqtn`): without them a build made on a developer's
+  Mac carries a `._` file beside every file of the bundle, which the provenance attribute causes.
+- **`bosun app install --build`** runs `app/build.sh --identity - --out <a temporary folder>` and installs that app with
+  no team check (the explicit development path, never inferred from an empty `team_id`), saying it is a development
+  build; the folder is removed on every path. `swift`, `iconutil`, `codesign` and `ditto` are tools of that run, so each
+  has a stand-in in `tests/sandbox/macos/` and a real check in `tests/install_e2e.sh`.
+- **The pictures** are made once, from the logo, by `tools/app_icons.py` (Pillow, in the dev group; by hand on any
+  machine) and committed: the ten sizes of `AppIcon.iconset` (the logo on a white rounded tile, with the margin macOS
+  leaves round its icons), and the menu bar template `MenuBarIcon.png` (18x18) and `MenuBarIcon@2x.png` (36x36). The
+  template is black on clear with an alpha: the knot's two ribbons in black, the logo's dark outline and the light fill
+  of its loops left clear, so the crossings stay readable at 18 points. The app loads both files as two
+  representations of one 18-point template image; with no bundle (run from `swift run`) it shows a system symbol.

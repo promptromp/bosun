@@ -1,5 +1,8 @@
 #!/bin/bash
-# codesign's stand-in, for what bosun asks of it: `--verify --deep --strict [-R =<requirement>] <app>`. A bundle
+# codesign's stand-in, for what bosun asks of it: `--force --sign <identity> [--identifier <id>] [--options
+# runtime] [--timestamp] <app>` (app/build.sh), which signs a bundle: its seal gets the identifier (the bundle's
+# folder name without --identifier, as the real one does) and, unless the identity is `-` (ad hoc), the Team ID
+# in the parentheses of a Developer ID's name. And `--verify --deep --strict [-R =<requirement>] <app>`. A bundle
 # is signed while it has Contents/_CodeSignature, and `broken` in there makes the signature fail to verify. With
 # -R the requirement is met when the seal's `team` is the requirement's leaf[subject.OU] and its `identifier`
 # is the requirement's identifier (a seal with no `team` is an ad hoc signature, which no Developer ID
@@ -15,8 +18,31 @@ for argument in "$@"; do
 	[ "$previous" != -R ] || requirement="${argument#=}"
 	previous="$argument"
 done
+if [ "${1:-}" = --force ]; then
+	identity=""
+	identifier="$(basename "$app" .app)"
+	previous=""
+	for argument in "$@"; do
+		[ "$previous" != --sign ] || identity="$argument"
+		[ "$previous" != --identifier ] || identifier="$argument"
+		previous="$argument"
+	done
+	[ -n "$identity" ] || {
+		echo "codesign stand-in: --force needs --sign <identity>" >&2
+		exit 2
+	}
+	[ -d "$app" ] || {
+		echo "$app: No such file or directory" >&2
+		exit 1
+	}
+	rm -rf "$seal"
+	mkdir -p "$seal"
+	echo "$identifier" >"$seal/identifier"
+	[ "$identity" = - ] || sed -n 's/.*(\([A-Z0-9]*\))$/\1/p' <<<"$identity" >"$seal/team"
+	exit 0
+fi
 [ "${1:-}" = --verify ] || {
-	echo "codesign stand-in: only --verify is stood in for" >&2
+	echo "codesign stand-in: only --force --sign and --verify are stood in for" >&2
 	exit 2
 }
 [ -d "$seal" ] || {

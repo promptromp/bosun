@@ -275,7 +275,7 @@ commands gather facts and act, as the repo's other features do. Releases are git
   unzips with `ditto -x -k`, requires exactly one `bosun.app`, verifies, then renames it into `~/Applications/bosun.app`
   (the old one renamed aside first and removed after); it relaunches the app when it was running.
 - Produces: `--build` (developers only): `app/build.sh` from part 2, ad-hoc signed, installed without the team check
-  (until part 2 exists, `--build` says "part 2 builds the app").
+  (part 2 added `app/build.sh`, which `--build` now runs).
 - Produces: the login job `<label>.app`: `ProgramArguments` `["$HOME/Applications/bosun.app/Contents/MacOS/bosun",
   "--at-login"]`, `RunAtLoad` true, no `KeepAlive`; `login on|off` renders and loads, or boots out and removes it.
 - Produces: uninstall removes `~/Applications/bosun.app` and the login job (a step each, with by-hand text).
