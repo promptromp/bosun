@@ -17,6 +17,7 @@ import tempfile
 import unittest
 import warnings
 import zipfile
+import zlib
 from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
@@ -328,6 +329,54 @@ class InstallTest(World):
             self.install()
         self.assertNotIn("ditto", self.tools.names())
         self.assertFalse(self.apps.exists())
+
+    def corrupt_download(self, change: Any) -> None:
+        """The fake curl's zip, with an entry added and then <change>(bytes, name) made to the file."""
+        name = "bosun.app/Contents/Resources/notes.txt"
+        original = self.tools.curl
+
+        def curl(argv: Sequence[str]) -> Run:
+            done = original(argv)
+            target = Path(argv[argv.index("-o") + 1])
+            with zipfile.ZipFile(target, "a", zipfile.ZIP_DEFLATED) as bundle:
+                bundle.writestr(name, "the notes of this release " * 200)
+            target.write_bytes(change(target.read_bytes(), name.encode()))
+            return done
+
+        self.tools.curl = curl  # type: ignore[method-assign]
+
+    def test_an_entry_whose_data_does_not_inflate_is_refused_in_one_line(self) -> None:
+        def garble(data: bytes, name: bytes) -> bytes:
+            header = data.rindex(b"PK\x03\x04", 0, data.index(name))
+            begin = header + 30 + len(name)  # no extra field: zipfile writes none here
+            return data[:begin] + b"\xff" * 16 + data[begin + 16 :]  # a block of a type deflate does not have
+
+        self.corrupt_download(garble)
+        with self.assertRaises(AppError) as caught:
+            self.install()
+        self.assertIsInstance(caught.exception.__cause__, zlib.error)
+        self.assertIn("not a zip archive", str(caught.exception))
+        self.assertNotIn("\n", str(caught.exception))
+        self.assertNotIn("ditto", self.tools.names())
+        self.assertFalse(self.apps.exists())
+
+    def test_an_encrypted_entry_is_refused_in_one_line(self) -> None:
+        def encrypt(data: bytes, name: bytes) -> bytes:
+            out = bytearray(data)
+            header = data.rindex(b"PK\x03\x04", 0, data.index(name))
+            central = data.rindex(b"PK\x01\x02", 0, data.rindex(name))
+            out[header + 6] |= 0x01  # general purpose flag: encrypted, in the local header
+            out[central + 8] |= 0x01  # and in the central directory
+            return bytes(out)
+
+        self.corrupt_download(encrypt)
+        with self.assertRaises(AppError) as caught:
+            self.install()
+        self.assertIsInstance(caught.exception.__cause__, RuntimeError)
+        self.assertIn("cannot be read", str(caught.exception))
+        self.assertIn("encrypted", str(caught.exception))
+        self.assertNotIn("\n", str(caught.exception))
+        self.assertNotIn("ditto", self.tools.names())
 
     def test_an_entry_named_twice_is_refused_before_ditto(self) -> None:
         self.tools.zip_extra = [zipfile.ZipInfo("bosun.app/Contents/Info.plist")]

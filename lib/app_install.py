@@ -40,6 +40,7 @@ import sys
 import tempfile
 import time
 import zipfile
+import zlib
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
@@ -243,11 +244,17 @@ def download(setup: Setup, url: str, archive: Path, what: str) -> None:
     raise AppError(f"could not download {url}: {update_check.strip_credentials(done.last_line)}")
 
 
+def one_line(error: BaseException) -> str:
+    """What an exception says, in one line."""
+    return " ".join(str(error).split()) or type(error).__name__
+
+
 def check_archive(archive: Path) -> None:
     """The archive's entries, before anything is unpacked: refused for an absolute path, a `..` or a link
     (from the central directory), and unless every entry reads back as that directory lists it. Reading each
     one compares its local header's name with the directory's, which an unpacker may go by instead: a zip
-    that names one path in the directory and another in the header is refused here, as is a name twice."""
+    that names one path in the directory and another in the header is refused here, as is a name twice, an
+    entry whose data does not inflate and an encrypted one (zipfile raises RuntimeError for it)."""
     try:
         with zipfile.ZipFile(archive) as bundle:
             entries = bundle.infolist()
@@ -255,8 +262,10 @@ def check_archive(archive: Path) -> None:
             if problem:
                 raise AppError(problem)
             damaged = bundle.testzip()
-    except (zipfile.BadZipFile, OSError, EOFError, NotImplementedError) as error:
-        raise AppError(f"the download is not a zip archive: {error}") from error
+    except (zipfile.BadZipFile, OSError, EOFError, NotImplementedError, zlib.error) as error:
+        raise AppError(f"the download is not a zip archive: {one_line(error)}") from error
+    except RuntimeError as error:  # an encrypted entry: password required
+        raise AppError(f"an entry of the download cannot be read: {one_line(error)}") from error
     if damaged is not None:
         raise AppError(f"the download is not a zip archive: {damaged} does not read back")
     names = [entry.filename for entry in entries]
