@@ -715,6 +715,15 @@ class CommandTest(WorldTest):
         self.assertEqual(env["BOSUN_DAYS"], "MTWRF")  # nothing else of it moved
         self.assertIn("bosun app install", out)
 
+    def test_a_first_run_whose_install_is_refused_makes_no_backup_of_the_bosun_env_it_wrote(self) -> None:
+        self.statuses[("app", "install")] = 1
+        status, out, _ = self.bosun_init("--recommended")
+        self.assertEqual(status, 0)
+        self.assertEqual(self.backups(), [])
+        self.assertNotIn("backed up", out)
+        env = init_plan.parse_env((self.config / "bosun.env").read_text())
+        self.assertEqual(env["BOSUN_MENU_APP"], "0")
+
     def refused_again(self, console: str) -> dict[str, str]:
         """A first run that set the app up (both settings on), <console> set by hand, then a re-run whose
         install is refused (the app is gone, say): the config as that leaves it."""
