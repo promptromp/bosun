@@ -912,14 +912,15 @@ class RunTest(World):
 
     def test_the_json_object_is_one_pure_function_of_the_plan_the_record_and_the_summary(self) -> None:
         """What the app's fixtures are made with, so that the outer object cannot drift from the command's:
-        `contract` first, then the three parts, each null when there is none."""
+        `contract` first, then the three parts, each null when there is none, and the error, null here: only
+        the wrapper's own failures (libexec/bosun-update) say one."""
         plan = a_plan()
         record = {"step": "done"}
         empty = update.json_object(None, None, None)
-        self.assertEqual(empty, {"contract": 1, "plan": None, "update": None, "summary": None})
+        self.assertEqual(empty, {"contract": 1, "plan": None, "update": None, "summary": None, "error": None})
         self.assertEqual(update.CONTRACT, 1)
         whole = update.json_object(plan, record, None)
-        self.assertEqual(list(whole), ["contract", "plan", "update", "summary"])
+        self.assertEqual(list(whole), ["contract", "plan", "update", "summary", "error"])
         self.assertEqual(whole["plan"], dataclasses.asdict(plan))
         self.assertEqual(whole["update"], record)
 
@@ -933,7 +934,7 @@ class RunTest(World):
         self.assertEqual(json.loads(out)["contract"], 1)
         with mock.patch.object(update, "run", side_effect=update_facts.UpdateRefused("nothing to do")):
             _code, out, _ = self.main("--dry-run", "--json")
-        self.assertEqual(list(json.loads(out)), ["contract", "plan", "update", "summary"])
+        self.assertEqual(list(json.loads(out)), ["contract", "plan", "update", "summary", "error"])
 
     def test_json_keeps_plan_and_update_on_every_path(self) -> None:
         self.record("done")

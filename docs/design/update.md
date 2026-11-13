@@ -174,7 +174,8 @@ check gets no protection from it, which is why the first update converts at a qu
 
 ### The steps
 
-1. **Plan** (changes nothing). Fetch the tracked branch and check out the new version's folder. The
+1. **Plan** (changes nothing). Fetch what the channel follows (the newest release's tag on `releases`, the head
+   of the tracked branch on `main`: [Channels](#channels)) and check out the new version's folder. The
    new version's own code compares the two folders and lists:
    - the commits;
    - each store's format before and after, and the migrations in between;
@@ -452,7 +453,11 @@ says what `bosun update` moves to, and is the one setting:
   found by `git ls-remote --tags` (`lib/update_check.py`'s tag rule, with the git side in `lib/update_lookup.py`:
   read-only, no version folder, no lock). The release is fetched into a remote ref of `bosun.git`
   (`refs/remotes/origin/release`), never into `refs/tags`, which `bosun uninstall` would count as work of yours,
-  and its folder is made as for a branch's head. The version is the same folder named by commit; the release's
+  and the commit it points at is resolved there, locally (`refs/remotes/origin/release^{commit}`, as `get.sh`
+  does with its own ref): an origin whose `git ls-remote` prints an annotated tag's own object and no peeled
+  `^{}` line (a git bundle, or a mirror made from one) is read as rightly as GitHub, and every comparison, the
+  commit the update checks out and the one `--check` prints are that commit. The folder is made as for a
+  branch's head. The version is the same folder named by commit; the release's
   name is only what `--check` and the summary call it. An install past the newest release (on `main` after it) says
   so and changes nothing.
 - `main`: the head of the branch the install tracks (`bosun.branch`, `main` by default), as before releases. An
@@ -465,7 +470,7 @@ says what `bosun update` moves to, and is the one setting:
 and `--skip <version>` records a release not to be offered again (`update-skip.json`; it does not stop an update you
 run). A first install takes the newest release too (`get.sh`'s own `newest_release`, an `sh` twin of the tag rule
 that `tests/unit/test_get_sh.py` holds to the Python one); a repository with no release yet gets the head of `main`.
-The VM runs (`tests/install_e2e.sh`, on the default channel against a bundle with release tags: first release
+The VM runs (`tests/install_e2e.sh`, on the default channel against a bare repository with release tags: first release
 installed, next one tagged, `--check --json`, `--skip`, `--yes`; `tests/work_e2e.sh`, on the channel its conversion
 keeps) check both.
 

@@ -120,9 +120,12 @@ def _fetch(repo: Path, refspec: str, what: str, *, why: bool = False) -> None:
     )
 
 
-def _fetch_tag(repo: Path, tag: str, *, why: bool = False) -> None:
-    """The release <tag>'s objects, at RELEASE_REF."""
+def _fetch_tag(repo: Path, tag: str, *, why: bool = False) -> str:
+    """The release <tag>'s objects, at RELEASE_REF; the commit it points at. That is peeled here, locally:
+    the origin's `git ls-remote` may print an annotated tag's own object and no `^{}` line (a git bundle,
+    or a mirror made from one), and a tag object is not a commit to check out or to compare."""
     _fetch(repo, f"+refs/tags/{tag}:{RELEASE_REF}", tag, why=why)
+    return _git(repo, "rev-parse", "--verify", f"{RELEASE_REF}^{{commit}}").strip()
 
 
 def _branch(repo: Path) -> str:
@@ -172,10 +175,13 @@ def _release_answer(repo: Path, installed: str, skipped: str | None) -> dict[str
     tags = _remote_tags(repo)
     version = update_check.version_at(installed, tags)
     newest = update_check.newest_release(tags)
-    if newest is None or newest[1] == installed:
-        return update_check.check(installed, version, newest, skipped, False)
-    tag, commit = newest
-    _fetch_tag(repo, tag)
+    if newest is None:
+        return update_check.check(installed, version, None, skipped, False)
+    tag = newest[0]
+    commit = _fetch_tag(repo, tag)
+    newest = (tag, commit)
+    if commit == installed:
+        return update_check.check(installed, version or tag, newest, skipped, False)
     ahead = _descends(repo, commit, installed)
     notes = "" if ahead else _git(repo, "for-each-ref", "--format=%(contents)", RELEASE_REF).strip()
     return update_check.check(installed, version, newest, skipped, ahead, notes=notes)
@@ -224,8 +230,8 @@ def target() -> str:
             f"no release at {origin_url(repo)} yet "
             "(BOSUN_UPDATE_CHANNEL=main follows the head of the branch instead)"
         )
-    tag, commit = newest
-    _fetch_tag(repo, tag, why=True)
+    tag = newest[0]
+    commit = _fetch_tag(repo, tag, why=True)
     installed = _installed_commit()
     if installed is not None and installed != commit and _descends(repo, commit, installed):
         return f"ahead {tag}"

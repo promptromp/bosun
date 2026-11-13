@@ -23,6 +23,11 @@ class ReleaseKeyTest(unittest.TestCase):
         for tag in ("v2026.11.12.0", "v2026.11.12.1", "v1", "app-v1.0.0", "v2026.11.12-rc1", "2026.11.12"):
             self.assertIsNone(update_check.release_key(tag), tag)
 
+    def test_only_ascii_digits_make_a_release(self) -> None:
+        # What get.sh's `[0-9]` twin refuses too (tests/unit/test_get_sh.py).
+        for tag in ("v\u0662\u0660\u0662\u0667.11.12", "v2026.11.12.\u0662\u0663"):
+            self.assertIsNone(update_check.release_key(tag), tag)
+
 
 class NewestReleaseTest(unittest.TestCase):
     def test_newest_release_by_date_then_number(self) -> None:

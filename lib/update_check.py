@@ -18,7 +18,9 @@ from typing import Any
 
 CONTRACT = 1  # the shape of the check's JSON; the menu bar app reads it
 CHANNELS = ("releases", "main")
-RELEASE_TAG = re.compile(r"^v(\d{4})\.(\d{2})\.(\d{2})(?:\.(\d+))?$")
+RELEASE_TAG = re.compile(
+    r"^v(\d{4})\.(\d{2})\.(\d{2})(?:\.(\d+))?$", re.ASCII
+)  # [0-9] only, as get.sh's twin
 CREDENTIALS = re.compile(r"([A-Za-z][A-Za-z0-9+.-]*://)[^/\s@'\"]*@")  # `scheme://user:secret@`
 FIRST_REPEAT = 2  # a second release of a day is `.2`
 PEELED = "^{}"  # what `git ls-remote` appends to a tag's name for the commit an annotated tag points at
