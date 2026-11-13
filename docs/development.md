@@ -15,14 +15,17 @@ limits and conventions.
 On GitHub, every pull request to `main` runs the same checks (`.github/workflows/ci.yml`) and
 a gitleaks scan of the new commits (the smoke suite on macOS is off in CI until the feature-complete
 MVP; the pre-push hook still runs it), and `main` only takes pull requests
-that pass them. CI runs every unit test on Linux (on macOS too once the smoke job is back), and keeps a floor under their
-coverage. The menu bar app has its own job, `app`: when a pull request changes nothing under `app/`
-(or the two tools that feed it, `tools/contract_samples.py` and `tools/swift_coverage.py`, or the
-workflow), it passes in seconds without building; otherwise it runs the Swift tests with warnings as
-errors, the coverage floor, SwiftLint, `swift format lint --strict` and an ad hoc signed build.
-
-For the forbidden-terms check to run in CI too, store your list as the `FORBIDDEN_TERMS` Actions secret with
-`gh secret set FORBIDDEN_TERMS < ~/.config/bosun/forbidden-terms.txt`; the logs never print what it matched.
+that pass them, through GitHub's merge queue: once a pull request's checks pass, `gh pr merge --squash`
+(or the Merge button) adds it to the queue, which builds it on top of the latest `main` and the pull
+requests ahead of it, runs the same checks again on that commit (CI listens for `merge_group` as well
+as `pull_request`) and merges it when they pass, so nobody updates a branch by hand. Dependabot's patch
+and minor updates of the GitHub Actions, the sandbox's Docker base image, the pre-commit hooks and the
+uv development dependencies get auto-merge turned on by `.github/workflows/dependabot-auto-merge.yml`,
+which only adds them to the queue once their checks pass; majors and production dependencies wait for
+a person. CI runs every unit test on Linux (on macOS too once the smoke job is back), and keeps a floor under their
+coverage. The menu bar app has its own job, `app`: when a pull request or merge group changes nothing under `app/` (or the two tools that feed it, `tools/contract_samples.py` and `tools/swift_coverage.py`, or the workflow), it passes in seconds without building; otherwise it runs the Swift tests with warnings as errors, the coverage floor, SwiftLint, `swift format lint --strict` and an ad hoc signed build. For the forbidden-terms check to run there too, store your list as the
+`FORBIDDEN_TERMS` Actions secret with `gh secret set FORBIDDEN_TERMS <
+~/.config/bosun/forbidden-terms.txt`; the logs never print what it matched.
 
 Issues and pull requests are welcome: see [CONTRIBUTING.md](../CONTRIBUTING.md) and the
 [code of conduct](../CODE_OF_CONDUCT.md). Report security problems privately, as
@@ -34,15 +37,46 @@ Issues and pull requests are welcome: see [CONTRIBUTING.md](../CONTRIBUTING.md) 
 |---|---|---|---|
 | The unit tests a change can reach | `uv run pytest -n auto --impacted` | every commit (the `unit-tests` hook) | seconds to a minute |
 | Every unit test | `uv run pytest -n auto` | CI, on Linux (with coverage) and on macOS | about a minute |
-| The end-to-end smoke suite | `tests/smoke.sh` | before every push (CI's macOS job is off until the MVP) | about 18 minutes |
+| The end-to-end smoke suite | `tests/smoke.sh` | before every push (`--pre-push`: skipped if this exact tree already passed it here in the last 24 hours); CI's macOS job is off until the MVP | about 18 minutes |
 | Every unit test with a plain `python3`, then the smoke suite | `tests/smoke.sh --with-unit` | never | 8 more minutes |
 | One area of the smoke suite | `tests/smoke.sh --only <id>[,<id>...]` (ids: `tests/smoke.sh --list`) | never | seconds to a few minutes |
+| Only the sections that failed last time | `tests/smoke.sh --last-failed` (`--lf`) | never | what those sections take |
+| Stop at the first failing check | `tests/smoke.sh -x` (`--exitfirst`), with any of the above | never | up to that check |
 
 The smoke suite is in sections, each begun by a `section <id> "<name>"` line. `--list` prints them. `--only`
 runs the shared setup and the sections you name, plus any they `needs` (the list shows those), in the order of
 the file, and its summary says it was a partial run: it is for iterating on the area you changed, and never
 instead of the whole suite before you commit, which CI and the pre-push hook run in full. `--with-unit` and
-`--only` combine. A section either sets up what it uses itself or says `needs <id>`, and
+`--only` combine.
+
+To cut the waiting while you iterate: `-x` stops at the first failing check, after its `FAIL` line, and the
+summary says in which section and which check; the run's temporary folders and tmux servers are cleaned up as
+always, and the exit status is 1. `--last-failed` reruns only the sections whose last result was a failure,
+and what they `needs`, through the same machinery as `--only` (it says which it reran). Every run records each
+section it ran as pass or fail in `tests/.smoke-cache/sections`, a git-ignored file in your checkout, and a
+partial run changes only the sections it ran, so a section you did not run keeps its earlier result, as in
+pytest's cache. With none recorded as failed, `--last-failed` says so in one line and runs nothing (exit 0).
+It combines with `-x` and `--with-unit`, not with `--only`. The record is best effort: a run never fails over
+it. The loop is `--only` or `--last-failed`, with `-x`, then one full run with none of them before you
+commit.
+
+The pre-push hook runs `tests/smoke.sh --pre-push`, which skips the suite, with a line saying so, when the tree
+of the commit you push (pre-commit's `PRE_COMMIT_TO_REF`) already passed a whole run in this checkout less than
+24 hours ago. A whole run (none of `--only`, `--last-failed` or `-x`) that ends with no failure records, in
+`tests/.smoke-cache/passes`, the tree it tested: the files on disk before the first section runs, uncommitted
+changes included (what `git add -A` stages, taken in a copy of the index, so yours is not touched). It records
+nothing unless the tree is the same at the end of the run: a test that writes a file into the repository, or
+changes a tracked one, is a bug in the test, and the run names the file instead of quietly defeating the skip.
+Git-ignored paths (caches, `__pycache__`, `tests/.smoke-cache/`) never count. An untracked file that is not
+ignored counts at the start, on purpose: it may have influenced the run, the commit you push lacks it, so its
+tree differs and the whole suite runs. In doubt the suite runs: another tree, a record older than a day, a
+partial or failed run, an unreadable record, git failing; the record can make a run longer, never a failing
+tree pass. `BOSUN_SMOKE_NO_CACHE=1 git push` makes the hook run the suite anyway (this is the knob, not
+pre-commit's `SKIP`, which this repository does not use). With several refs in one push pre-commit hands the
+hook only the first one that is not a deletion, and a branch deletion runs nothing. CI never uses the record:
+when its smoke job runs, it runs `tests/smoke.sh` in full.
+
+A section either sets up what it uses itself or says `needs <id>`, and
 `tests/unit/test_smoke_sections.py` fails on a section without a marker, a taken id or a `needs` that names
 nothing above it. Every section begins by checking that the tools that reach outside the run
 (`osascript`, `aws`, `launchctl`, `pmset`, `sudo`, `open`, `caffeinate`, `codesign`, `ditto`, `spctl`) are

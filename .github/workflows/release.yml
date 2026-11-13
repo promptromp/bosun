@@ -1,9 +1,10 @@
 # Cuts a release: a dated annotated tag on main (v<YYYY.MM.DD>, then .2, ...) and a GitHub release with
 # the same notes, which `bosun update` follows (docs/design/menu-bar.md, "Releases"). Weekly, and by hand.
-# It does nothing when main has no commit since the newest release tag, or when main's head is not what
-# its pull request was checked on with every required check green. CI runs on pull requests only, so
-# the checks are read from the pull request main's head was merged from; the decision is
-# tools/release.py gate, and this job only gathers what it needs. The required checks' names are read
+# It does nothing when main has no commit since the newest release tag, or when main's head was not
+# checked with every required check green. Through the merge queue main's head is the merge group's commit, which every
+# required check ran on, so the checks are read on main's head itself; for a commit merged before the
+# queue, from the pull request it was merged from. The decision is tools/release.py gate, and this
+# job only gathers what it needs. The required checks' names are read
 # from .github/rulesets/main.json.
 name: Release
 
@@ -52,11 +53,13 @@ jobs:
             --jq '[.[] | select(.merged_at != null and .base.ref == "main")][0].head.sha // empty')
           pr_tree=""
           : > "$RUNNER_TEMP/runs.json"
+          gh api --paginate "repos/$REPO/commits/$main_sha/check-runs" --jq '.check_runs[]' > "$RUNNER_TEMP/head-runs.json"
           if [ -n "$pr_head" ]; then
             pr_tree=$(gh api "repos/$REPO/git/commits/$pr_head" --jq .tree.sha)
             gh api --paginate "repos/$REPO/commits/$pr_head/check-runs" --jq '.check_runs[]' > "$RUNNER_TEMP/runs.json"
           fi
           if ! python3 tools/release.py gate --required-file "$RUNNER_TEMP/required.txt" --runs-file "$RUNNER_TEMP/runs.json" \
+            --head-runs-file "$RUNNER_TEMP/head-runs.json" \
             --pr-tree "$pr_tree" --main-tree "$main_tree" > "$RUNNER_TEMP/why.txt"; then
             echo "Not releasing $main_sha: $(cat "$RUNNER_TEMP/why.txt")"
             echo "go=false" >> "$GITHUB_OUTPUT"

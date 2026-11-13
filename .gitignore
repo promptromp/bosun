@@ -47,3 +47,6 @@ app/.build
 app/dist
 .coverage
 .coverage.*
+
+# The last results of the smoke suite's sections (tests/smoke.sh --last-failed): per checkout
+tests/.smoke-cache/

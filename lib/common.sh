@@ -804,7 +804,8 @@ window_model_effort() {
     printf '%s\t%s\n' "${BOSUN_ORCHESTRATOR_MODEL:--}" "${BOSUN_ORCHESTRATOR_EFFORT:--}"
     return
   fi
-  { window_specs 2>/dev/null | awk -F'\t' -v name="$1" '$1 == name { print $4 "\t" $5; found = 1; exit } END { exit !found }'; } ||
+  # (awk reads it all: an `exit` once found can let window_specs die of SIGPIPE, and pipefail count that as no entry)
+  { window_specs 2>/dev/null | awk -F'\t' -v name="$1" '$1 == name && !found { print $4 "\t" $5; found = 1 } END { exit !found }'; } ||
     printf '%s\t%s\n' "$(harness_default_model "$(window_harness "$1")")" "${BOSUN_EFFORT:--}"
 }
 
@@ -1534,7 +1535,7 @@ shift_time() {
 # (tmux target lookups fall back to the current window for unknown names, so match by hand.)
 find_window() {
   tmux_cmd list-windows -t "=$BOSUN_SESSION_NAME" -F '#{window_name}	#{pane_pid} #{window_id}' 2>/dev/null |
-    awk -F'\t' -v name="$1" '$1 == name { print $2; found = 1; exit } END { exit !found }'
+    awk -F'\t' -v name="$1" '$1 == name && !found { print $2; found = 1 } END { exit !found }'
 }
 
 # With events on, tell <window>'s prompt hook that <text> is bosun's, not yours, so it is not

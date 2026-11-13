@@ -117,8 +117,11 @@ impacted_map = [
     "app/*/*/*/*=tests/unit/test_impacted_rules.py",
     # get.sh: plain sh, run by its own test (and its tag rule held to lib/update_check.py's there).
     "get.sh=tests/unit/test_get_sh.py",
-    # The smoke suite's section markers: its --list and --only run by them.
+    # The smoke suite's section markers (its --list and --only run by them) and what it keeps between runs.
     "tests/smoke.sh=tests/unit/test_smoke_sections.py",
+    "tests/smoke.sh=tests/unit/test_smoke_cache.py",
+    "tests/smoke_cache.sh=tests/unit/test_smoke_sections.py",
+    "tests/smoke_cache.sh=tests/unit/test_smoke_cache.py",
     "tests/llm/*.py=tests/unit/test_learn.py",
     "tests/llm/*.py=tests/unit/test_learn_digest.py",
     "tests/sandbox/mcp_probe_server.py=tests/unit/test_mcp_probe_server.py",
@@ -131,7 +134,7 @@ impacted_map = [
     "tests/sandbox/**=tests/unit/test_impacted_rules.py",
 ]
 # Whatever bosun reads as it runs (its prompts, task files, templates, the console's page, the
-# example config, the agy plugin), the fixtures, and the tests' conftest, which every test loads
+# example config, the agy plugin), the fixtures, and the tests' conftest with repo_guard.py, which every test loads
 # (and which imports lib/ modules, a dependency the plugin leaves out of its analysis): any test may
 # depend on them, so a change to one runs every test.
 impacted_invalidate_all = [
@@ -144,6 +147,7 @@ impacted_invalidate_all = [
     "agents/*/*",
     "tests/fixtures/**",
     "tests/unit/conftest.py",
+    "tests/unit/repo_guard.py",
 ]
 
 [tool.ruff]

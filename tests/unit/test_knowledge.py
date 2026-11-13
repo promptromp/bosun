@@ -1122,8 +1122,10 @@ class GitHistoryTest(KnowledgeTestCase):
         saved, kg warns and exits 0."""
         self.seed()
         token = f"kg-test-tree-{os.getpid()}-{time.monotonic_ns()}"
-        mark = self.tmp / "written-after-the-timeout"
-        tree = f"sh -c '(sleep 1; : > \"{mark}\") & sleep 30' {token} &\nsleep 30"  # a child, a grandchild
+        mark, go = self.tmp / "written-after-the-timeout", self.tmp / "go"
+        # a child, a grandchild: it writes the mark once `go` exists, which the test makes after the kill
+        waits = f'while [ ! -e "{go}" ]; do sleep 0.05; done; : > "{mark}"'
+        tree = f"sh -c '({waits}) & sleep 30' {token} &\nsleep 30"
         environment = {
             **self.fake_git(tree),
             "BOSUN_CONFIG_DIR": str(self.tmp),
@@ -1141,7 +1143,8 @@ class GitHistoryTest(KnowledgeTestCase):
         self.assertEqual(self.processes_naming(token), [])
         self.assertIn("warning: git commit failed: git add ran past 0.5 s and was stopped\n", said.getvalue())
         self.assertIn("repo/other", self.kb().entities)
-        time.sleep(1.5)
+        go.touch()
+        time.sleep(1)  # the grandchild, if it were still there, would have written the mark by now
         self.assertFalse(mark.exists())  # the grandchild went with git
 
     def test_processes_still_there_after_the_kill_are_said(self) -> None:
@@ -1195,7 +1198,7 @@ class GitHistoryTest(KnowledgeTestCase):
         with mock.patch.dict(os.environ, environment), mock.patch.object(store, "GIT_TIMEOUT_SECONDS", 0.2):
             started = time.monotonic()
             warning = store.commit(self.root, "kg add-entity")
-            self.assertLess(time.monotonic() - started, 3)
+            self.assertLess(time.monotonic() - started, 20)  # not the 30 s of the git it stopped
         self.assertEqual(
             warning,
             "warning: git commit failed: git init ran past 0.2 s and was stopped; the processes it "

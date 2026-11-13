@@ -19,6 +19,9 @@ case "${1:-} ${2:-}" in
 	SU) days="weekends only" ;;
 	*) days="some days" ;;
 	esac
-	printf 'wakepoweron at %s %s\n' "$(date -d "$4" '+%l:%M%p' | tr -d ' ')" "$days" >"$state"
+	hour=$((10#${4%%:*}))
+	rest="${4#*:}"
+	label="$((hour > 12 ? hour - 12 : hour)):${rest%%:*}$([ "$hour" -lt 12 ] && echo AM || echo PM)" # as pmset: 0:01AM, 12:01PM
+	printf 'wakepoweron at %s %s\n' "$label" "$days" >"$state"
 	;;
 esac

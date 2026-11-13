@@ -413,7 +413,8 @@ and CI agree on versions. On commit (`.pre-commit-config.yaml`; run all with `uv
   commit messages (see Publishing below).
 - The unit tests the change can reach, in parallel (`pytest -n auto --impacted`, pytest-impacted
   and pytest-xdist): the change is what git has uncommitted, so `pre-commit run --all-files` selects
-  the same. Before a push, the smoke suite (end to end only); in CI, every unit test.
+  the same. Before a push, the smoke suite (end to end only; skipped if this exact tree passed it here
+  in the last 24 hours); in CI, every unit test (its smoke job, when it is on, always runs the whole suite).
 
 Which tests a change reaches: the plugin follows Python imports from `lib/` (an import root, as
 pytest's `pythonpath` entry; `impacted_module = "lib"`) and between the test files and the helpers of
@@ -433,9 +434,11 @@ test that reads or runs a file whose change would not select it, and says which 
 unit tests flush the journal with fsync, not F_FULLFSYNC (`conftest.py`): in parallel, F_FULLFSYNC
 queued every worker behind the drive.
 
-CI (`.github/workflows/ci.yml`) runs the same on every pull request to `main`: all the hooks
+CI (`.github/workflows/ci.yml`) runs the same on every pull request to `main` and on every merge group
+of the merge queue (`merge_group`: without it the queue waits forever for checks that never report): all the hooks
 (`lint`; the forbidden-terms list comes from the `FORBIDDEN_TERMS` Actions secret, and the pull
-request's title, description and commit messages are checked too), every unit test in parallel on
+request's title, description and commit messages are checked too; for a merge group only the commit
+messages between its `base_sha` and `head_sha`), every unit test in parallel on
 Python 3.13 to 3.15 with a floor under coverage (`test (<version>)`, never `--impacted`), every unit
 test again on macOS and then the end-to-end smoke suite (`smoke`, which is off until the
 feature-complete MVP: its job-level `if` in `ci.yml` wants the repository variable `CI_SMOKE` set
@@ -446,7 +449,7 @@ with warnings as errors, the coverage floor, SwiftLint, `swift format lint --str
 bundle must verify; its first step compares the pull request with its base and passes in seconds, building
 nothing, when nothing under `app/`, `tools/contract_samples.py`, `tools/swift_coverage.py` or the workflow
 changed, so it can be required on every pull request), and
-gitleaks over the pull request's commits (`gitleaks`; a made-up value in a test carries a
+gitleaks over the pull request's or merge group's commits (`gitleaks`; a made-up value in a test carries a
 `gitleaks:allow` comment). `.github/workflows/install.yml` runs the install for real on a clean macOS
 runner and the Docker sandbox, when the install could have changed and weekly; those are not required
 checks, because a required check that did not run blocks a merge. `.github/workflows/release-app.yml`, on a tag
@@ -455,14 +458,27 @@ checks, because a required check that did not run blocks a merge. `.github/workf
 with `lib/app_install.py verify-archive`, which is the install's own code, never a copy of it. `.github/workflows/docs.yml`
 publishes the docs site to GitHub Pages from `main` (the repository's Pages source is GitHub Actions). The
 logs are public, so neither check prints what it matched. `main` takes changes only through a pull
-request with those checks green and up to date with `main`, CodeQL's results clean (GitHub's
-default setup; no error alerts, no high or critical security alerts) and every review thread
-resolved (the ruleset also asks for a Copilot review on each push, which takes effect once
-Copilot code review is enabled for the organization); squashed or rebased: the ruleset in
-`.github/rulesets/main.json`. A new or renamed job goes in its list too, applied with `gh api -X PUT
+request with those checks green, CodeQL's results clean (GitHub's default setup; no error alerts, no
+high or critical security alerts) and every review thread resolved (the ruleset also asks for a
+Copilot review on each push, which takes effect once Copilot code review is enabled for the
+organization), and then through the merge queue: `gh pr merge --squash` adds the pull request to the
+queue once its checks pass, and the queue builds it on top of the latest `main` and the pull requests
+ahead of it, runs the required checks on that merge group's commit and squash-merges it when they
+pass (the ruleset's `merge_queue` rule; so `strict_required_status_checks_policy` is off, the queue
+being what "up to date with `main`" was for, and nobody updates a branch by hand; CodeQL's default setup does not run on merge groups, and GitHub's
+docs say the ruleset's code scanning protection does not apply to them, so CodeQL gates the pull
+request only). The release gate
+(`tools/release.py gate`) therefore reads the required checks on main's head commit itself, the merge
+group's, and falls back to the pull request's for commits merged before the queue. The rules are
+in `.github/rulesets/main.json`. A new or renamed job goes in its list too, applied with `gh api -X PUT
 repos/{owner}/{repo}/rulesets/<id> --input .github/rulesets/main.json`. Dependabot
 (`.github/dependabot.yml`) opens monthly grouped updates of the actions, `uv.lock` and the hook
-revisions, and security updates as advisories come out.
+revisions, and security updates as advisories come out. `.github/workflows/dependabot-auto-merge.yml`
+enables auto-merge (squash) on a Dependabot pull request that is a patch or minor update of a GitHub
+Action, the sandbox's Docker base image, a pre-commit hook revision or a uv development dependency; a
+major update, a production dependency or anything not opened by Dependabot waits for a person. Auto-merge
+adds the pull request to the merge queue once its required checks pass (the repository setting "Allow
+auto-merge" must be on). A new ecosystem in `dependabot.yml` goes in that workflow's condition too.
 
 When a limit trips, split the function rather than raising the limit. Suppress a finding only
 with an inline comment that says why (as for the jq and GraphQL strings). The formatters rewrite
@@ -476,8 +492,14 @@ including that task files only use valid ledger transitions and that the task ta
 `docs/orchestrator.md` matches them; `--with-unit` runs every unit test first too, with a plain
 `python3 -m unittest`. Then `bosun doctor`. While iterating, run only the area you changed: `tests/smoke.sh --list`
 prints the sections' ids, `tests/smoke.sh --only <id>[,<id>...]` runs the shared setup and those (and what they
-`needs`) in seconds (a few minutes for a section with prerequisites), and says in its summary that it was a partial run. Before committing, run the whole
-suite once; CI and the pre-push hook always run all of it. In `tests/smoke.sh`, a new section begins with
+`needs`) in seconds (a few minutes for a section with prerequisites), and says in its summary that it was a
+partial run. While iterating use `--only`, `--last-failed` (`--lf`: only the sections whose last recorded
+result, in the git-ignored `tests/.smoke-cache/`, was a failure) and `-x` (stop at the first failing check);
+before committing, run the whole suite once with none of them. CI's smoke job, when it is on, runs all of it,
+and so does the pre-push hook (`tests/smoke.sh --pre-push`) unless that exact tree (uncommitted and untracked
+files included) passed a whole run in this checkout in the last 24 hours (`BOSUN_SMOKE_NO_CACHE=1` forces it;
+what the record is and why it can only make a run longer: `docs/development.md`). A test must not write into
+the repository: the run then records no pass and names the file. In `tests/smoke.sh`, a new section begins with
 `section <id> "<name>" [needs <id>,...]` (unique kebab-case id; `tests/unit/test_smoke_sections.py` fails
 otherwise): set up what it uses itself, or say `needs` the section whose state it relies on; a helper or a
 constant that more than one section uses goes in the helpers by the fixture HOME, and an export every later

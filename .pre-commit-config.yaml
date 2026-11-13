@@ -33,7 +33,7 @@ repos:
         args: [--fix=lf]
       - id: trailing-whitespace
   - repo: https://github.com/astral-sh/uv-pre-commit
-    rev: 0.13.6
+    rev: 0.13.7
     hooks:
       - id: uv-lock
   - repo: local
@@ -189,7 +189,7 @@ repos:
         pass_filenames: false
       - id: smoke-tests
         name: smoke tests (end to end)
-        entry: tests/smoke.sh
+        entry: tests/smoke.sh --pre-push
         language: system
         pass_filenames: false
         always_run: true

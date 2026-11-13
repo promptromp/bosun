@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import contextlib
+import io
 import posixpath
 import subprocess
 import sys
@@ -605,11 +607,25 @@ class PlanTest(unittest.TestCase):
     def test_pmset_prints_a_twelve_hour_clock(self) -> None:
         for clock_time, label in (
             ("08:01", "8:01AM"),
-            ("00:05", "12:05AM"),
+            ("00:01", "0:01AM"),
+            ("00:30", "0:30AM"),
+            ("11:59", "11:59AM"),
             ("12:00", "12:00PM"),
+            ("12:01", "12:01PM"),
+            ("13:01", "1:01PM"),
             ("18:30", "6:30PM"),
+            ("23:59", "11:59PM"),
         ):
             self.assertEqual(init_plan.pmset_label(clock_time), label)
+
+    def test_doctor_asks_for_the_label_on_the_command_line(self) -> None:
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            self.assertEqual(init_plan.main(["pmset-label", "00:01"]), 0)
+        self.assertEqual(out.getvalue(), "0:01AM\n")
+        with contextlib.redirect_stderr(io.StringIO()):
+            self.assertEqual(init_plan.main(["pmset-label", "soon"]), 2)
+            self.assertEqual(init_plan.main([]), 2)
 
     def test_outside_macos_it_says_so(self) -> None:
         self.assertIn("macOS", " ".join(self.plan(facts(has_launchd=False), Answers()).blockers))

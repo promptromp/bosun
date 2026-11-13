@@ -6,6 +6,7 @@ import contextlib
 import errno
 import io
 import os
+import stat
 import subprocess
 import sys
 import tempfile
@@ -95,11 +96,19 @@ class VersionsTests(unittest.TestCase):
         stop, errors = threading.Event(), []
 
         def reader() -> None:
+            # A gap is the path missing (ENOENT) or not a link. readlink can also fail with EINVAL when
+            # it reached the link just replaced as that one was being torn down (seen on macOS runners
+            # under load): the path itself, looked up again, is a link, so that is not a gap.
             while not stop.is_set():
                 try:
                     os.readlink(install)
-                except FileNotFoundError as exc:
-                    errors.append(exc)
+                except OSError as exc:
+                    try:
+                        gap = exc.errno != errno.EINVAL or not stat.S_ISLNK(os.lstat(install).st_mode)
+                    except OSError as again:
+                        exc, gap = again, True
+                    if gap:
+                        errors.append(exc)
 
         thread = threading.Thread(target=reader)
         thread.start()
