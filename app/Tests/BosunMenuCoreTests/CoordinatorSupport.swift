@@ -1,3 +1,4 @@
+import BosunMenuTestSupport
 import Foundation
 import Testing
 
@@ -129,6 +130,36 @@ struct GatedCLI: BosunCLI {
   }
 }
 
+/// A bosun whose next reading of `args` after `arm()` is made at once (it reads what is there) and then held
+/// at a gate before it is answered: a command that read the world and lands late. The readings after pass.
+struct HeldReading: BosunCLI {
+  actor Armed {
+    private var armed = false
+    func arm() { armed = true }
+    func take() -> Bool {
+      defer { armed = false }
+      return armed
+    }
+  }
+
+  let inner: FakeBosunCLI
+  let args: [String]
+  let gate = Gate()
+  let armed = Armed()
+
+  func arm() async { await armed.arm() }
+
+  func run(_ args: [String], timeout: Duration) async -> CommandResult {
+    let result = await inner.run(args, timeout: timeout)
+    if args == self.args, await armed.take() { await gate.wait() }
+    return result
+  }
+
+  func start(_ args: [String]) async -> CommandResult {
+    await inner.start(args)
+  }
+}
+
 /// A coordinator over a fake bosun and a fake shell, with a clock the test moves.
 @MainActor
 struct World {
@@ -142,13 +173,13 @@ struct World {
     status: String? = "status-ok", login: Bool = true, atLogin: Bool = false,
     now: @escaping @Sendable () -> Date = { Date(timeIntervalSince1970: 1_800_000_000) },
     gates: [[String]: Gate] = [:]
-  ) async {
+  ) async throws {
     cli = FakeBosunCLI()
     ui = FakeUI()
     clock = ManualClock()
     scripts = FakeScripts()
-    if let status { await cli.reply(Bosun.status.args, exited(0, Fixtures.text(status))) }
-    let app = Fixtures.text("app-status").replacingOccurrences(
+    if let status { await cli.reply(Bosun.status.args, exited(0, try Fixtures.text(status))) }
+    let app = try Fixtures.text("app-status").replacingOccurrences(
       of: "\"login\": true", with: "\"login\": \(login)")
     await cli.reply(Bosun.appStatus.args, exited(0, app))
     await cli.reply(Bosun.start.args, exited(0))
@@ -178,8 +209,8 @@ struct World {
     await cli.reply(command.args, result)
   }
 
-  func reply(_ command: Command, fixture: String, code: Int32 = 0) async {
-    await cli.reply(command.args, exited(code, Fixtures.text(fixture)))
+  func reply(_ command: Command, fixture: String, code: Int32 = 0) async throws {
+    await cli.reply(command.args, exited(code, try Fixtures.text(fixture)))
   }
 
   /// From now on `command` answers `result` (a reply told with `reply` after calls waits its turn).

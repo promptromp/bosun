@@ -4,12 +4,14 @@ import Testing
 @testable import BosunMenu
 @testable import BosunMenuCore
 
-/// A status the way `bosun status --json` prints it, for a level.
+/// A status the way `bosun status --json` prints it, for a level: running while ok or a warning, and not
+/// running when red or stopped (so the red one offers Start).
 func snapshot(level: String, sentence: String = "bosun is running") -> StatusSnapshot {
   let detail = #"["3 windows open", "Mac kept awake until 20:00"]"#
+  let running = level == "ok" || level == "warning"
   let json = """
     {"contract": 1, "level": "\(level)", "sentence": "\(sentence)", "detail": \(detail),
-     "windows": 3, "waiting": [], "keep_awake_until": null, "stopped": null,
+     "windows": \(running ? 3 : 0), "running": \(running), "waiting": [], "keep_awake_until": null, "stopped": null,
      "update": {"state": "none", "waiting_for": []}, "console": {"running": false, "url": null},
      "problems": ["a problem"], "logs": "/logs"}
     """

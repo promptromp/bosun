@@ -23,12 +23,16 @@ let package = Package(
     .target(name: "BosunMenuSystem", dependencies: ["BosunMenuCore"]),
     // The AppKit shell: status item, menu, alerts, workspace. Kept thin; tested for what it renders.
     .executableTarget(name: "BosunMenu", dependencies: ["BosunMenuCore", "BosunMenuSystem"]),
+    // What the tests share (a fake bosun): only the test targets depend on it, so the app never ships it.
+    .target(name: "BosunMenuTestSupport", dependencies: ["BosunMenuCore"]),
     .testTarget(
       name: "BosunMenuCoreTests",
-      dependencies: ["BosunMenuCore"],
+      dependencies: ["BosunMenuCore", "BosunMenuTestSupport"],
       resources: [.copy("Fixtures")]
     ),
-    .testTarget(name: "BosunMenuSystemTests", dependencies: ["BosunMenuSystem", "BosunMenuCore"]),
+    .testTarget(
+      name: "BosunMenuSystemTests",
+      dependencies: ["BosunMenuSystem", "BosunMenuCore", "BosunMenuTestSupport"]),
     .testTarget(name: "BosunMenuTests", dependencies: ["BosunMenu", "BosunMenuCore", "BosunMenuSystem"]),
   ],
   swiftLanguageModes: [.v6]

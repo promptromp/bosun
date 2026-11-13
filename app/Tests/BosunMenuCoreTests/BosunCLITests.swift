@@ -1,28 +1,30 @@
+import BosunMenuTestSupport
 import Testing
 
 @testable import BosunMenuCore
 
-private let okStatus = Fixtures.status("status-ok")
+private var okStatus: StatusSnapshot { get throws { try Fixtures.status("status-ok") } }
 
 private func result(_ outcome: CommandOutcome, out: String = "", err: String = "") -> CommandResult {
   CommandResult(outcome: outcome, stdout: out, stderr: err)
 }
 
 @Suite struct StatusFromACommandTests {
-  @Test func aGoodReplyIsTheCurrentStatus() {
-    let state = statusState(from: exited(0, Fixtures.text("status-ok")), previous: nil)
-    #expect(state == .loaded(okStatus, current: true))
+  @Test func aGoodReplyIsTheCurrentStatus() throws {
+    let state = statusState(from: exited(0, try Fixtures.text("status-ok")), previous: nil)
+    #expect(try state == .loaded(okStatus, current: true))
   }
 
   /// Review focus 1: bosun not installed, or its link broken (an update cut short).
-  @Test func statusFromFailedCommand() {
+  @Test func statusFromFailedCommand() throws {
     #expect(statusState(from: result(.notInstalled), previous: nil) == .notInstalled)
-    #expect(statusState(from: result(.notInstalled), previous: okStatus) == .notInstalled)
+    #expect(try statusState(from: result(.notInstalled), previous: okStatus) == .notInstalled)
 
-    let broken = statusState(from: result(.couldNotStart("Permission denied")), previous: nil)
-    #expect(broken == .unreachable("Permission denied"))
+    // a link that cannot be run is not a status that could not be had: doctor could not run either
+    let broken = statusState(from: result(.couldNotStart("Permission denied")), previous: try okStatus)
+    #expect(broken == .cannotRun("Permission denied"))
 
-    let crashed = statusState(from: exited(1, "", err: "bosun: line 3: boom\nmore"), previous: okStatus)
+    let crashed = statusState(from: exited(1, "", err: "bosun: line 3: boom\nmore"), previous: try okStatus)
     #expect(crashed == .unreachable("bosun: line 3: boom"))
 
     let silent = statusState(from: exited(127), previous: nil)
@@ -30,13 +32,13 @@ private func result(_ outcome: CommandOutcome, out: String = "", err: String = "
   }
 
   /// Review focus 2: a command that hangs shows the last state, "not current".
-  @Test func slowCommandTimesOut() {
+  @Test func slowCommandTimesOut() throws {
     let late = result(.timedOut)
-    #expect(statusState(from: late, previous: okStatus) == .loaded(okStatus, current: false))
+    #expect(try statusState(from: late, previous: okStatus) == .loaded(okStatus, current: false))
     #expect(statusState(from: late, previous: nil) == .unreachable("bosun did not answer in time"))
   }
 
-  @Test func aReplyThatIsNotTheObjectIsUnreachableWithWhy() {
+  @Test func aReplyThatIsNotTheObjectIsUnreachableWithWhy() throws {
     guard case .unreachable(let why) = statusState(from: exited(0, "not json"), previous: nil) else {
       Issue.record("expected unreachable")
       return
@@ -44,28 +46,29 @@ private func result(_ outcome: CommandOutcome, out: String = "", err: String = "
     #expect(why.contains("could not be read"))
   }
 
-  @Test func contractTooNew() {
-    let state = statusState(from: exited(0, Fixtures.text("status-ok", contract: 2)), previous: okStatus)
+  @Test func contractTooNew() throws {
+    let state = statusState(
+      from: exited(0, try Fixtures.text("status-ok", contract: 2)), previous: try okStatus)
     #expect(state == .contractTooNew(2))
   }
 
-  @Test func theStatusItselfIsRequestedWithItsFifteenSeconds() async {
+  @Test func theStatusItselfIsRequestedWithItsFifteenSeconds() async throws {
     let cli = FakeBosunCLI()
-    await cli.reply(["status", "--json"], exited(0, Fixtures.text("status-ok")))
+    await cli.reply(["status", "--json"], exited(0, try Fixtures.text("status-ok")))
     let state = await loadStatus(via: cli, previous: nil)
-    #expect(state == .loaded(okStatus, current: true))
+    #expect(try state == .loaded(okStatus, current: true))
     #expect(await cli.timeouts == [.seconds(15)])
   }
 
-  @Test func aStatusThatHangsKeepsTheLastOne() async {
+  @Test func aStatusThatHangsKeepsTheLastOne() async throws {
     let cli = FakeBosunCLI()
     await cli.reply(["status", "--json"], result(.timedOut))
-    #expect(await loadStatus(via: cli, previous: okStatus) == .loaded(okStatus, current: false))
+    #expect(try await loadStatus(via: cli, previous: okStatus) == .loaded(okStatus, current: false))
   }
 }
 
 @Suite struct CommandsTests {
-  @Test func eachCommandIsTheArgvPartOneDefines() {
+  @Test func eachCommandIsTheArgvPartOneDefines() throws {
     #expect(Bosun.status.args == ["status", "--json"])
     #expect(Bosun.start.args == ["morning", "--now", "--background"])
     #expect(Bosun.consoleURL.args == ["console", "--url"])
@@ -75,7 +78,7 @@ private func result(_ outcome: CommandOutcome, out: String = "", err: String = "
     #expect(Bosun.skip(version: "v2026.11.11").args == ["update", "--skip", "v2026.11.11"])
   }
 
-  @Test func onlyTheUpdateStartsDetachedAndTheRestDoNot() {
+  @Test func onlyTheUpdateStartsDetachedAndTheRestDoNot() throws {
     #expect(Bosun.update.detached)
     let others: [Command] = [
       Bosun.status, Bosun.checkUpdates, Bosun.planUpdate, Bosun.quitPlan, Bosun.start, Bosun.consoleURL,
@@ -84,17 +87,18 @@ private func result(_ outcome: CommandOutcome, out: String = "", err: String = "
     #expect(others.allSatisfy { !$0.detached })
   }
 
-  @Test func everyCallHasATimeout() {
+  @Test func everyCallHasATimeout() throws {
     #expect(Bosun.status.timeout == .seconds(15))
     #expect(Bosun.checkUpdates.timeout == .seconds(60))
-    #expect(Bosun.planUpdate.timeout == .seconds(30))
+    // the rehearsal fetches into a version folder as an update does: two minutes, not half of one
+    #expect(Bosun.planUpdate.timeout == .seconds(120))
     #expect(Bosun.quitPlan.timeout == .seconds(30))
     #expect(Bosun.appStatus.timeout > .zero)
     #expect(Bosun.consoleURL.timeout > .zero)
     #expect(Bosun.skip(version: "v1").timeout > .zero)
   }
 
-  @Test func theAppRunsOnlyWhatTheDesignListsAndNeverAFileOfBosuns() {
+  @Test func theAppRunsOnlyWhatTheDesignListsAndNeverAFileOfBosuns() throws {
     let commands: [Command] = [
       Bosun.status, Bosun.checkUpdates, Bosun.planUpdate, Bosun.update, Bosun.skip(version: "v1"),
       Bosun.quitPlan, Bosun.start, Bosun.consoleURL, Bosun.appStatus, Bosun.appLogin(on: true),
@@ -106,7 +110,7 @@ private func result(_ outcome: CommandOutcome, out: String = "", err: String = "
 }
 
 @Suite struct FakeBosunCLITests {
-  @Test func itRecordsWhatWasRunAndAnswersWhatItWasToldTo() async {
+  @Test func itRecordsWhatWasRunAndAnswersWhatItWasToldTo() async throws {
     let cli = FakeBosunCLI()
     await cli.reply(["a"], exited(0, "one"))
     let first = await cli.run(["a"], timeout: .seconds(1))
@@ -115,7 +119,7 @@ private func result(_ outcome: CommandOutcome, out: String = "", err: String = "
     #expect(await cli.timeouts == [.seconds(1)])
   }
 
-  @Test func repliesAreGivenInTheOrderTheyWereToldAndTheLastOneStays() async {
+  @Test func repliesAreGivenInTheOrderTheyWereToldAndTheLastOneStays() async throws {
     let cli = FakeBosunCLI()
     await cli.reply(["a"], exited(0, "one"))
     await cli.reply(["a"], exited(0, "two"))
@@ -127,14 +131,14 @@ private func result(_ outcome: CommandOutcome, out: String = "", err: String = "
     #expect(outs == ["one", "two", "two"])
   }
 
-  @Test func aCommandItWasNotToldAboutFailsLoudly() async {
+  @Test func aCommandItWasNotToldAboutFailsLoudly() async throws {
     let cli = FakeBosunCLI()
     let reply = await cli.run(["surprise", "--now"], timeout: .seconds(1))
     #expect(reply.outcome == .exited(1))
     #expect(reply.stderr.contains("surprise --now"))
   }
 
-  @Test func aCommandRunsThroughItsOwnTimeout() async {
+  @Test func aCommandRunsThroughItsOwnTimeout() async throws {
     let cli = FakeBosunCLI()
     await cli.reply(["status", "--json"], exited(0, "x"))
     _ = await cli.run(Bosun.status)
@@ -145,7 +149,7 @@ private func result(_ outcome: CommandOutcome, out: String = "", err: String = "
 @Suite struct FetchTests {
   struct Thing: Decodable, Equatable, Sendable { let contract: Int }
 
-  @Test func aReplyThatDecodesIsTheThing() async {
+  @Test func aReplyThatDecodesIsTheThing() async throws {
     let cli = FakeBosunCLI()
     await cli.reply(["x"], exited(0, #"{"contract": 1}"#))
     let command = Command(args: ["x"], timeout: .seconds(1))
@@ -153,7 +157,7 @@ private func result(_ outcome: CommandOutcome, out: String = "", err: String = "
     #expect(got == .success(Thing(contract: 1)))
   }
 
-  @Test func theFailuresEachHaveTheirWords() {
+  @Test func theFailuresEachHaveTheirWords() throws {
     #expect(FetchFailure.notInstalled.message == "bosun is not installed")
     #expect(FetchFailure.timedOut.message == "bosun did not answer in time")
     #expect(FetchFailure.couldNotStart("denied").message == "denied")
@@ -162,14 +166,14 @@ private func result(_ outcome: CommandOutcome, out: String = "", err: String = "
     #expect(FetchFailure.contract(.unsupported(2)).message.contains("needs an update"))
   }
 
-  @Test func theCommandsOwnStderrLineIsWhatIsShown() async {
+  @Test func theCommandsOwnStderrLineIsWhatIsShown() async throws {
     let cli = FakeBosunCLI()
     await cli.reply(["x"], exited(2, "", err: "\n  \nbosun x: usage\nmore\n"))
     let got = await fetch(Thing.self, Command(args: ["x"], timeout: .seconds(1)), via: cli)
     #expect(got == .failure(.exited(2, "bosun x: usage")))
   }
 
-  @Test func aNonZeroExitWithTheObjectOnStdoutStillDecodesWhenAskedTo() async {
+  @Test func aNonZeroExitWithTheObjectOnStdoutStillDecodesWhenAskedTo() async throws {
     let cli = FakeBosunCLI()
     await cli.reply(["x"], exited(3, #"{"contract": 1}"#))
     let command = Command(args: ["x"], timeout: .seconds(1))
@@ -179,7 +183,7 @@ private func result(_ outcome: CommandOutcome, out: String = "", err: String = "
 }
 
 @Suite struct DetachedCommandTests {
-  @Test func aDetachedCommandIsStartedAndLeftRunning() async {
+  @Test func aDetachedCommandIsStartedAndLeftRunning() async throws {
     let cli = FakeBosunCLI()
     let result = await cli.start(Bosun.update)
     #expect(result.outcome == .started)
@@ -187,7 +191,7 @@ private func result(_ outcome: CommandOutcome, out: String = "", err: String = "
     #expect(await cli.calls.isEmpty)
   }
 
-  @Test func runRefusesADetachedCommandAndStartRefusesAWaitedOne() async {
+  @Test func runRefusesADetachedCommandAndStartRefusesAWaitedOne() async throws {
     let cli = FakeBosunCLI()
     guard case .couldNotStart(let ran) = await cli.run(Bosun.update).outcome else {
       Issue.record("expected a refusal")
@@ -206,7 +210,7 @@ private func result(_ outcome: CommandOutcome, out: String = "", err: String = "
 
   /// A process the app starts is the app's child, and so is what it starts (tmux, the agents): Start is
   /// `morning --now --background`, which a launchd job carries out, run as a short command and waited for.
-  @Test func startBosunIsAShortCommandThatHandsTheMorningRunToALaunchdJob() async {
+  @Test func startBosunIsAShortCommandThatHandsTheMorningRunToALaunchdJob() async throws {
     #expect(Bosun.start.args == ["morning", "--now", "--background"])
     #expect(!Bosun.start.detached)
     #expect(Bosun.start.timeout == Bosun.status.timeout)
@@ -216,7 +220,7 @@ private func result(_ outcome: CommandOutcome, out: String = "", err: String = "
     #expect(await cli.started.isEmpty)
   }
 
-  @Test func theUpdateIsTheOnlyDetachedCommand() {
+  @Test func theUpdateIsTheOnlyDetachedCommand() throws {
     let all = [
       Bosun.status, Bosun.checkUpdates, Bosun.planUpdate, Bosun.update, Bosun.quitPlan, Bosun.start,
       Bosun.consoleURL, Bosun.appStatus, Bosun.skip(version: "v1"), Bosun.appLogin(on: true),
@@ -225,13 +229,13 @@ private func result(_ outcome: CommandOutcome, out: String = "", err: String = "
     #expect(all.filter(\.detached).map(\.args) == [["update", "--yes"]])
   }
 
-  @Test func theFakeAnswersAStartWhenToldTo() async {
+  @Test func theFakeAnswersAStartWhenToldTo() async throws {
     let cli = FakeBosunCLI()
     await cli.reply(["update", "--yes"], result(.notInstalled))
     #expect(await cli.start(Bosun.update).outcome == .notInstalled)
   }
 
-  @Test func aStartedCommandHasNoReplyToRead() {
+  @Test func aStartedCommandHasNoReplyToRead() throws {
     let started = CommandResult(outcome: .started, stdout: "", stderr: "")
     guard case .failure(.couldNotStart(let why)) = decodeReply(StatusSnapshot.self, started) else {
       Issue.record("expected a failure")

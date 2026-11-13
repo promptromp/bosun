@@ -1,4 +1,5 @@
 import BosunMenuCore
+import BosunMenuTestSupport
 import Foundation
 import Testing
 
@@ -11,18 +12,14 @@ private func scratchFolder() throws -> URL {
   return dir
 }
 
-/// A status as `bosun status --json` prints it, for a level.
-private func loaded(_ level: String) -> StatusState {
-  let json = """
-    {"contract": 1, "level": "\(level)", "sentence": "bosun is running", "detail": ["3 windows open"],
-     "windows": 3, "waiting": [], "keep_awake_until": null, "stopped": null,
-     "update": {"state": "none", "waiting_for": []}, "console": {"running": false, "url": null},
-     "problems": [], "logs": "/logs"}
-    """
-  guard let snapshot = try? decodeContract(StatusSnapshot.self, from: json) else {
-    fatalError("the sample status does not decode")
-  }
-  return .loaded(snapshot, current: true)
+/// A status as `bosun status --json` prints it (`status-<name>`): the fixture tools/contract_samples.py writes
+/// from bosun's own code, read from the core tests' folder (this target has no copy of its own). A missing or
+/// unreadable one fails the test that reads it.
+private func loaded(_ name: String) throws -> StatusState {
+  let fixtures = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
+    .deletingLastPathComponent().appendingPathComponent("BosunMenuCoreTests/Fixtures")
+  let text = try String(contentsOf: fixtures.appendingPathComponent("status-\(name).json"), encoding: .utf8)
+  return .loaded(try decodeContract(StatusSnapshot.self, from: text), current: true)
 }
 
 private func exited(_ code: Int32, _ out: String = "") -> CommandResult {
@@ -71,7 +68,7 @@ private func jsonObject(_ data: Data) throws -> [String: Any] {
 
   @Test func theMenuIsWrittenToMenuJSON() throws {
     let (hooks, folder) = try files()
-    let state = loaded("ok")
+    let state = try loaded("ok")
     try hooks.writeMenu(menu(for: state, update: .idle, flow: FlowState()), status: state)
     let data = try Data(contentsOf: folder.appendingPathComponent("menu.json"))
     #expect(try jsonObject(data)["level"] as? String == "ok")
@@ -80,7 +77,7 @@ private func jsonObject(_ data: Data) throws -> [String: Any] {
   @Test func aNewMenuReplacesTheOldOne() throws {
     let (hooks, folder) = try files()
     for name in ["ok", "error"] {
-      let state = loaded(name)
+      let state = try loaded(name)
       try hooks.writeMenu(menu(for: state, update: .idle, flow: FlowState()), status: state)
     }
     let data = try Data(contentsOf: folder.appendingPathComponent("menu.json"))
@@ -169,6 +166,21 @@ private func jsonObject(_ data: Data) throws -> [String: Any] {
     hooks.log(.open("a"))
     TestHookFiles(directory: folder).log(.open("b"))
     #expect(try logLines(folder).count == 2)
+  }
+
+  /// A-9: lines logged at once from many tasks (a look, a check, `app status`) each land whole, none over
+  /// another: the log is opened to append.
+  @Test func linesLoggedAtOnceEachLandWhole() async throws {
+    let (hooks, folder) = try files()
+    let count = 200
+    await withTaskGroup(of: Void.self) { group in
+      for number in 0..<count {
+        group.addTask { hooks.log(.open("/Users/me/acme-\(number)/a-path-long-enough-to-take-a-while")) }
+      }
+    }
+    let lines = try logLines(folder)
+    #expect(lines.count == count)
+    #expect(Set(lines.compactMap { $0["open"] as? String }).count == count)
   }
 
   private func logLines(_ folder: URL) throws -> [[String: Any]] {

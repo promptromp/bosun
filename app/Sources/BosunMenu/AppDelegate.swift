@@ -11,6 +11,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     self.options = options
   }
 
+  /// How long after launch the app looks for an older copy once more.
+  private static let secondLook: Duration = .seconds(3)
+
   func applicationDidFinishLaunching(_ notification: Notification) {
     // launchd's login job starts this app directly, which skips LaunchServices' one-copy rule: a copy that
     // finds an older one running exits, starting nothing.
@@ -21,6 +24,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     let shell = AppShell(options: options)
     self.shell = shell
     Task { await shell.start() }
+    // Two copies started together may each look before the other is listed, and both stay. A second look
+    // a few seconds on lists both, and the younger one exits (the order of starts is total).
+    Task { [weak self] in
+      try? await Task.sleep(for: Self.secondLook)
+      if self?.isSecondCopy() == true { NSApp.terminate(nil) }
+    }
   }
 
   func applicationWillTerminate(_ notification: Notification) {

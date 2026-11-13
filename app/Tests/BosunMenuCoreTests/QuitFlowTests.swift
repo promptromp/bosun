@@ -1,3 +1,4 @@
+import BosunMenuTestSupport
 import Testing
 
 @testable import BosunMenuCore
@@ -7,7 +8,7 @@ private let busyPlan = quitPlan(
   windows: ["acme-orchestrator", "acme-exporter", "acme-api"], busy: ["acme-exporter", "acme-api"])
 
 @Suite struct QuitCommandTests {
-  @Test func theDefaultsAreToPauseTheMorningLetTheMacSleepAndLeaveTheIcon() {
+  @Test func theDefaultsAreToPauseTheMorningLetTheMacSleepAndLeaveTheIcon() throws {
     let choices = QuitChoices()
     #expect(choices.pauseMorning)
     #expect(choices.sleep)
@@ -15,11 +16,11 @@ private let busyPlan = quitPlan(
     #expect(choices.busy == .letFinish)
   }
 
-  @Test func theDefaultsGiveTheCommandThePlanSays() {
+  @Test func theDefaultsGiveTheCommandThePlanSays() throws {
     #expect(quitCommand(QuitChoices()) == ["quit", "--let-finish", "--pause-morning", "--sleep", "--json"])
   }
 
-  @Test func everySetOfChoicesIsItsOwnArgv() {
+  @Test func everySetOfChoicesIsItsOwnArgv() throws {
     for pause in [true, false] {
       for sleep in [true, false] {
         for busy in [BusyChoice.letFinish, .stopNow] {
@@ -34,21 +35,22 @@ private let busyPlan = quitPlan(
     }
   }
 
-  @Test func keepingTheIconIsTheAppsAndNeverTheCommands() {
+  @Test func keepingTheIconIsTheAppsAndNeverTheCommands() throws {
     #expect(
       quitCommand(QuitChoices(keepIcon: true)) == quitCommand(QuitChoices(keepIcon: false)))
   }
 
-  @Test func theLetFinishCommandWaitsLongerThanTheStopNowOne() {
-    let finish = Bosun.quit(QuitChoices(busy: .letFinish))
-    let now = Bosun.quit(QuitChoices(busy: .stopNow))
+  @Test func theLetFinishCommandWaitsLongerThanTheStopNowOne() throws {
+    let wait = QuitWait(minutes: 10, lockSeconds: 180, stepsSeconds: 225)
+    let finish = Bosun.quit(QuitChoices(busy: .letFinish, wait: wait))
+    let now = Bosun.quit(QuitChoices(busy: .stopNow, wait: wait))
     #expect(finish.timeout > .seconds(60 * 10))
     #expect(now.timeout < finish.timeout)
     #expect(!finish.detached)
-    #expect(finish.args == quitCommand(QuitChoices(busy: .letFinish)))
+    #expect(finish.args == quitCommand(QuitChoices(busy: .letFinish, wait: wait)))
   }
 
-  @Test func theQuitPlanCommand() {
+  @Test func theQuitPlanCommand() throws {
     #expect(Bosun.quitPlan.args == ["quit", "--plan", "--json"])
     #expect(Bosun.quitPlan.timeout == .seconds(30))
   }
@@ -57,13 +59,13 @@ private let busyPlan = quitPlan(
 @Suite struct QuitStepTests {
   private func start() -> (QuitStep, [Command]) { startQuit() }
 
-  @Test func quitStartsByAskingForThePlan() {
+  @Test func quitStartsByAskingForThePlan() throws {
     let (step, commands) = start()
     #expect(step == .planning)
     #expect(commands == [Bosun.quitPlan])
   }
 
-  @Test func withNoBusyAgentsThereIsOneDialogAndThenTheQuit() {
+  @Test func withNoBusyAgentsThereIsOneDialogAndThenTheQuit() throws {
     var (step, _) = start()
     (step, _) = next(step, on: .planned(quiet))
     #expect(step == .first(quiet))
@@ -81,13 +83,13 @@ private let busyPlan = quitPlan(
     #expect(none.isEmpty)
   }
 
-  @Test func theIconStaysWhenTheBoxWasChecked() {
+  @Test func theIconStaysWhenTheBoxWasChecked() throws {
     let choices = QuitChoices(keepIcon: true)
     let (running, _) = next(.first(quiet), on: .confirmed(choices))
     #expect(next(running, on: .ended(.stopped(note: nil))).0 == .done(keepIcon: true, note: nil))
   }
 
-  @Test func busyAgentsAskASecondQuestionBeforeAnythingRuns() {
+  @Test func busyAgentsAskASecondQuestionBeforeAnythingRuns() throws {
     let choices = QuitChoices()
     let (step, commands) = next(.first(busyPlan), on: .confirmed(choices))
     #expect(
@@ -96,34 +98,34 @@ private let busyPlan = quitPlan(
     #expect(commands.isEmpty)
   }
 
-  @Test func letThemFinishRunsTheQuitThatWaits() {
+  @Test func letThemFinishRunsTheQuitThatWaits() throws {
     let choices = QuitChoices(pauseMorning: false)
     let (running, commands) = next(.busy(["acme-exporter"], choices), on: .busyChosen(.letFinish))
     #expect(running == .running(QuitChoices(pauseMorning: false, busy: .letFinish)))
     #expect(commands.map(\.args) == [["quit", "--let-finish", "--sleep", "--json"]])
   }
 
-  @Test func stopThemNowRunsTheQuitThatDoesNotWait() {
+  @Test func stopThemNowRunsTheQuitThatDoesNotWait() throws {
     let (running, commands) = next(.busy(["acme-exporter"], QuitChoices()), on: .busyChosen(.stopNow))
     #expect(running == .running(QuitChoices(busy: .stopNow)))
     #expect(commands.map(\.args) == [["quit", "--stop-now", "--pause-morning", "--sleep", "--json"]])
   }
 
-  @Test func stillBusyAfterTheWaitAsksAgain() {
+  @Test func stillBusyAfterTheWaitAsksAgain() throws {
     let choices = QuitChoices(busy: .letFinish)
     let (step, commands) = next(.running(choices), on: .ended(.busy(["acme-exporter"])))
     #expect(step == .stillBusy(["acme-exporter"], choices))
     #expect(commands.isEmpty)
   }
 
-  @Test func keepWaitingRunsTheWaitingQuitAgain() {
+  @Test func keepWaitingRunsTheWaitingQuitAgain() throws {
     let choices = QuitChoices(busy: .letFinish)
     let (running, commands) = next(.stillBusy(["acme-exporter"], choices), on: .busyChosen(.letFinish))
     #expect(running == .running(choices))
     #expect(commands.map(\.args) == [quitCommand(choices)])
   }
 
-  @Test func stopThemNowAfterTheWaitStopsThem() {
+  @Test func stopThemNowAfterTheWaitStopsThem() throws {
     let (running, commands) = next(
       .stillBusy(["acme-exporter"], QuitChoices(busy: .letFinish)), on: .busyChosen(.stopNow))
     #expect(running == .running(QuitChoices(busy: .stopNow)))
@@ -131,7 +133,7 @@ private let busyPlan = quitPlan(
     #expect(next(running, on: .ended(.stopped(note: nil))).0 == .done(keepIcon: false, note: nil))
   }
 
-  @Test func busyThenFinishThenDoneIsTheWholeWalk() {
+  @Test func busyThenFinishThenDoneIsTheWholeWalk() throws {
     var step = QuitStep.planning
     step = next(step, on: .planned(busyPlan)).0
     step = next(step, on: .confirmed(QuitChoices(keepIcon: true))).0
@@ -140,7 +142,7 @@ private let busyPlan = quitPlan(
     #expect(step == .done(keepIcon: true, note: nil))
   }
 
-  @Test func busyThenStillBusyThenStopIsTheWholeWalk() {
+  @Test func busyThenStillBusyThenStopIsTheWholeWalk() throws {
     var step = QuitStep.planning
     step = next(step, on: .planned(busyPlan)).0
     step = next(step, on: .confirmed(QuitChoices())).0
@@ -151,13 +153,13 @@ private let busyPlan = quitPlan(
     #expect(step == .done(keepIcon: false, note: nil))
   }
 
-  @Test func aConsoleStillRunningIsCarriedToTheEnd() {
+  @Test func aConsoleStillRunningIsCarriedToTheEnd() throws {
     let note = "A console is still running on port 8765"
     let (step, _) = next(.running(QuitChoices()), on: .ended(.stopped(note: note)))
     #expect(step == .done(keepIcon: false, note: note))
   }
 
-  @Test func cancelAtAnyDialogStopsNothing() {
+  @Test func cancelAtAnyDialogStopsNothing() throws {
     let choices = QuitChoices()
     let steps: [QuitStep] = [
       .planning, .first(quiet), .first(busyPlan), .busy(["a"], choices), .stillBusy(["a"], choices),
@@ -169,26 +171,26 @@ private let busyPlan = quitPlan(
     }
   }
 
-  @Test func aPlanThatRefusesIsShownAsTheRefusalAndNoDialogOpens() {
+  @Test func aPlanThatRefusesIsShownAsTheRefusalAndNoDialogOpens() throws {
     let refused = quitPlan(refused: "an update is running: quit when it has finished")
     let (step, commands) = next(.planning, on: .planned(refused))
     #expect(step == .failed("an update is running: quit when it has finished"))
     #expect(commands.isEmpty)
   }
 
-  @Test func aPlanThatCouldNotBeAskedForFails() {
+  @Test func aPlanThatCouldNotBeAskedForFails() throws {
     #expect(
       next(QuitStep.planning, on: QuitEvent.planFailed("bosun cannot be reached")).0
         == .failed("bosun cannot be reached"))
   }
 
-  @Test func aQuitThatFailedShowsItsLine() {
+  @Test func aQuitThatFailedShowsItsLine() throws {
     let (step, commands) = next(.running(QuitChoices()), on: .ended(.failed("bosun stop failed")))
     #expect(step == .failed("bosun stop failed"))
     #expect(commands.isEmpty)
   }
 
-  @Test func anEventThatMeansNothingInTheStepChangesNothing() {
+  @Test func anEventThatMeansNothingInTheStepChangesNothing() throws {
     let nothing: [(QuitStep, QuitEvent)] = [
       (.done(keepIcon: false, note: nil), .confirmed(QuitChoices())),
       (.cancelled, .busyChosen(.stopNow)),
@@ -205,7 +207,7 @@ private let busyPlan = quitPlan(
     }
   }
 
-  @Test func theFinishedStepsAreTheOnesTheFlowEndsIn() {
+  @Test func theFinishedStepsAreTheOnesTheFlowEndsIn() throws {
     #expect(QuitStep.done(keepIcon: false, note: nil).isFinished)
     #expect(QuitStep.failed("x").isFinished)
     #expect(QuitStep.cancelled.isFinished)
@@ -214,7 +216,7 @@ private let busyPlan = quitPlan(
     #expect(!QuitStep.first(quiet).isFinished)
   }
 
-  @Test func onlyAFinishedQuitThatKeptNoIconQuitsTheApp() {
+  @Test func onlyAFinishedQuitThatKeptNoIconQuitsTheApp() throws {
     #expect(QuitStep.done(keepIcon: false, note: nil).quitsTheApp)
     #expect(!QuitStep.done(keepIcon: true, note: nil).quitsTheApp)
     #expect(!QuitStep.failed("x").quitsTheApp)
@@ -222,14 +224,41 @@ private let busyPlan = quitPlan(
   }
 }
 
+/// A-14: the line a running quit shows under the status.
+@Suite struct QuittingLineTests {
+  @Test func aQuitThatLetsAgentsFinishNamesThem() throws {
+    let running = QuitStep.running(QuitChoices(busy: .letFinish))
+    #expect(
+      quittingLine(running, busy: ["acme-exporter"]) == "Quitting: waiting for acme-exporter to finish…")
+    #expect(quittingLine(running, busy: ["a", "b"]) == "Quitting: waiting for a, b to finish…")
+    #expect(quittingLine(running, busy: []) == "Quitting…")
+  }
+
+  @Test func stoppingNowSaysSo() throws {
+    #expect(quittingLine(.running(QuitChoices(busy: .stopNow)), busy: ["a"]) == "Quitting: stopping bosun…")
+  }
+
+  @Test func aDialogStepHasNoLine() throws {
+    #expect(quittingLine(.planning, busy: []) == nil)
+    #expect(quittingLine(.busy(["a"], QuitChoices()), busy: ["a"]) == nil)
+    #expect(quittingLine(.appOnly, busy: []) == nil)
+  }
+
+  @Test func theBusyNamesComeFromTheDialogsThatNamedThem() throws {
+    #expect(QuitStep.busy(["a"], QuitChoices()).busyNames == ["a"])
+    #expect(QuitStep.stillBusy(["b"], QuitChoices()).busyNames == ["b"])
+    #expect(QuitStep.planning.busyNames == nil)
+  }
+}
+
 @Suite struct QuitOutcomeTests {
-  @Test func exitZeroAndStoppedIsDone() {
-    let outcome = quitOutcome(from: exited(0, Fixtures.text("quit-result-stopped")))
+  @Test func exitZeroAndStoppedIsDone() throws {
+    let outcome = quitOutcome(from: try Fixtures.reply("quit-result-stopped"))
     #expect(outcome == .stopped(note: nil))
   }
 
-  @Test func aConsoleStillRunningIsANoteWithItsPort() {
-    let outcome = quitOutcome(from: exited(0, Fixtures.text("quit-result-stopped-console-running")))
+  @Test func aConsoleStillRunningIsANoteWithItsPort() throws {
+    let outcome = quitOutcome(from: try Fixtures.reply("quit-result-stopped-console-running"))
     guard case .stopped(let note?) = outcome else {
       Issue.record("expected a note")
       return
@@ -238,8 +267,8 @@ private let busyPlan = quitPlan(
     #expect(note.contains("still running"))
   }
 
-  @Test func aConsoleStillRunningWithNoPortSaysSo() {
-    let text = Fixtures.text("quit-result-stopped-console-running")
+  @Test func aConsoleStillRunningWithNoPortSaysSo() throws {
+    let text = try Fixtures.text("quit-result-stopped-console-running")
       .replacingOccurrences(of: "8765", with: "null")
     guard case .stopped(let note?) = quitOutcome(from: exited(0, text)) else {
       Issue.record("expected a note")
@@ -248,26 +277,26 @@ private let busyPlan = quitPlan(
     #expect(!note.contains("port"))
   }
 
-  @Test func exitThreeIsStillBusyWithTheNames() {
-    let outcome = quitOutcome(from: exited(3, Fixtures.text("quit-result-busy")))
+  @Test func exitThreeIsStillBusyWithTheNames() throws {
+    let outcome = quitOutcome(from: try Fixtures.reply("quit-result-busy"))
     #expect(outcome == .busy(["acme-exporter"]))
   }
 
-  @Test func aRefusalIsItsReasonAndAFailureItsError() {
-    guard case .failed(let refused) = quitOutcome(from: exited(1, Fixtures.text("quit-result-refused")))
+  @Test func aRefusalIsItsReasonAndAFailureItsError() throws {
+    guard case .failed(let refused) = quitOutcome(from: try Fixtures.reply("quit-result-refused"))
     else {
       Issue.record("expected a failure")
       return
     }
     #expect(refused.contains("update is running"))
-    guard case .failed(let failed) = quitOutcome(from: exited(1, Fixtures.text("quit-result-failed")))
+    guard case .failed(let failed) = quitOutcome(from: try Fixtures.reply("quit-result-failed"))
     else {
       Issue.record("expected a failure")
       return
     }
     #expect(failed.contains("the quit record stays"))
     #expect(failed.contains("bosun quit --stop-now"))
-    guard case .failed(let early) = quitOutcome(from: exited(1, Fixtures.text("quit-result-failed-early")))
+    guard case .failed(let early) = quitOutcome(from: try Fixtures.reply("quit-result-failed-early"))
     else {
       Issue.record("expected a failure")
       return
@@ -275,8 +304,8 @@ private let busyPlan = quitPlan(
     #expect(early.contains("nothing was changed"))
   }
 
-  @Test func aFailureWithNoLineStillSaysHowToFinish() {
-    let text = Fixtures.text("quit-result-failed").replacingOccurrences(
+  @Test func aFailureWithNoLineStillSaysHowToFinish() throws {
+    let text = try Fixtures.text("quit-result-failed").replacingOccurrences(
       of: "\"error\": \"", with: "\"error\": null, \"was\": \"")
     guard case .failed(let line) = quitOutcome(from: exited(1, text)) else {
       Issue.record("expected a failure")
@@ -285,15 +314,16 @@ private let busyPlan = quitPlan(
     #expect(line.contains("bosun quit --stop-now"))
   }
 
-  @Test func theWordsOfTheResultDecideNotTheExitCode() {
-    #expect(quitOutcome(from: exited(1, Fixtures.text("quit-result-stopped"))) == .stopped(note: nil))
-    guard case .failed = quitOutcome(from: exited(0, Fixtures.text("quit-result-refused"))) else {
+  /// Each object with an exit status it was never given: the words decide.
+  @Test func theWordsOfTheResultDecideNotTheExitCode() throws {
+    #expect(quitOutcome(from: exited(1, try Fixtures.text("quit-result-stopped"))) == .stopped(note: nil))
+    guard case .failed = quitOutcome(from: exited(0, try Fixtures.text("quit-result-refused"))) else {
       Issue.record("expected a failure")
       return
     }
   }
 
-  @Test func aQuitThatTimedOutSaysTheRecordMayStayAndHowToFinish() {
+  @Test func aQuitThatTimedOutSaysTheRecordMayStayAndHowToFinish() throws {
     guard
       case .failed(let line) = quitOutcome(from: CommandResult(outcome: .timedOut, stdout: "", stderr: ""))
     else {
@@ -304,7 +334,7 @@ private let busyPlan = quitPlan(
     #expect(line.contains("did not finish"))
   }
 
-  @Test func aQuitThatCouldNotStartIsAFailure() {
+  @Test func aQuitThatCouldNotStartIsAFailure() throws {
     for outcome in [CommandOutcome.notInstalled, .couldNotStart("denied")] {
       guard case .failed = quitOutcome(from: CommandResult(outcome: outcome, stdout: "", stderr: "")) else {
         Issue.record("expected a failure")
@@ -313,7 +343,7 @@ private let busyPlan = quitPlan(
     }
   }
 
-  @Test func aReplyThatIsNotTheObjectIsItsStderrLine() {
+  @Test func aReplyThatIsNotTheObjectIsItsStderrLine() throws {
     guard case .failed(let line) = quitOutcome(from: exited(1, "oops", err: "bosun quit: usage\nmore")) else {
       Issue.record("expected a failure")
       return
@@ -326,9 +356,10 @@ private let busyPlan = quitPlan(
     #expect(silent.contains("status 2"))
   }
 
-  @Test func aNewerContractIsTheAppNeedingAnUpdate() {
+  @Test func aNewerContractIsTheAppNeedingAnUpdate() throws {
     guard
-      case .failed(let line) = quitOutcome(from: exited(0, Fixtures.text("quit-result-stopped", contract: 2)))
+      case .failed(let line) = quitOutcome(
+        from: exited(0, try Fixtures.text("quit-result-stopped", contract: 2)))
     else {
       Issue.record("expected a failure")
       return
@@ -338,15 +369,15 @@ private let busyPlan = quitPlan(
 }
 
 @Suite struct QuitGlueTests {
-  @Test func thePlanThatRanBecomesTheEvent() async {
+  @Test func thePlanThatRanBecomesTheEvent() async throws {
     let cli = FakeBosunCLI()
-    await cli.reply(["quit", "--plan", "--json"], exited(0, Fixtures.text("quit-plan")))
+    await cli.reply(["quit", "--plan", "--json"], try Fixtures.reply("quit-plan"))
     let event = await quitPlanEvent(via: cli)
-    #expect(event == .planned(Fixtures.decode(QuitPlan.self, "quit-plan")))
+    #expect(event == .planned(try Fixtures.decode(QuitPlan.self, "quit-plan")))
     #expect(await cli.timeouts == [.seconds(30)])
   }
 
-  @Test func aPlanThatDidNotRunBecomesAFailureEvent() async {
+  @Test func aPlanThatDidNotRunBecomesAFailureEvent() async throws {
     let cli = FakeBosunCLI()
     await cli.reply(
       ["quit", "--plan", "--json"], CommandResult(outcome: .notInstalled, stdout: "", stderr: ""))
@@ -357,10 +388,10 @@ private let busyPlan = quitPlan(
     #expect(why.contains("not installed"))
   }
 
-  @Test func theQuitThatRanBecomesTheEnding() async {
+  @Test func theQuitThatRanBecomesTheEnding() async throws {
     let cli = FakeBosunCLI()
     let choices = QuitChoices(busy: .stopNow)
-    await cli.reply(quitCommand(choices), exited(0, Fixtures.text("quit-result-stopped")))
+    await cli.reply(quitCommand(choices), try Fixtures.reply("quit-result-stopped"))
     #expect(await runQuit(choices, via: cli) == .ended(.stopped(note: nil)))
     #expect(await cli.calls == [quitCommand(choices)])
     #expect(await cli.timeouts == [Bosun.quit(choices).timeout])

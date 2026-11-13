@@ -41,6 +41,9 @@ public enum UpdateEvent: Equatable, Sendable {
   case startGaveUp
   /// `update --yes` could not be started at all (no bosun, no permission): why.
   case startFailed(String)
+  /// The grace ran out while the app could not read bosun's status (its contract is newer): the update was
+  /// started and cannot be watched, so it is let go without a verdict.
+  case startUnwatched
   case acknowledged
 }
 
@@ -123,6 +126,8 @@ private func nextWhileRunning(_ state: UpdateState, on event: UpdateEvent) -> St
     return (.checkingStart(check), [Bosun.checkUpdates])
   case (.starting, .startFailed(let why)):
     return (.failed(why), [])
+  case (.starting, .startUnwatched):
+    return (.idle, [])
   default:
     return nil
   }

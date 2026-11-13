@@ -1,8 +1,8 @@
 import Foundation
 
 // How the app talks to bosun: one protocol (BosunMenuSystem implements it over `Process`, tests over
-// `FakeBosunCLI`), the commands of part 1 as values, and what each reply means. The app runs bosun only
-// through `~/.local/bin/bosun`, only these commands, and never opens a file of bosun's.
+// BosunMenuTestSupport's `FakeBosunCLI`), the commands of part 1 as values, and what each reply means. The app
+// runs bosun only through `~/.local/bin/bosun`, only these commands, and never opens a file of bosun's.
 
 /// A `bosun` command: its argv, how long to wait for it, and whether it is started and left running
 /// (`bosun update --yes` is: long-running work belongs to bosun's own jobs, never to the app, whose progress is
@@ -73,11 +73,13 @@ extension BosunCLI {
   }
 }
 
-/// The commands the app runs, with the timeouts of the review focus (status 15 s, check 60 s, plan 30 s).
+/// The commands the app runs, with their timeouts: status 15 s, the update check 60 s, the quit's plan 30 s,
+/// and the update's rehearsal 120 s (it fetches the new version into a folder of its own as an update does,
+/// and a fetch on a slow network takes its time).
 public enum Bosun {
   public static let status = Command(args: ["status", "--json"], timeout: .seconds(15))
   public static let checkUpdates = Command(args: ["update", "--check", "--json"], timeout: .seconds(60))
-  public static let planUpdate = Command(args: ["update", "--dry-run", "--json"], timeout: .seconds(30))
+  public static let planUpdate = Command(args: ["update", "--dry-run", "--json"], timeout: .seconds(120))
   public static let update = Command(args: ["update", "--yes"], timeout: .seconds(15), detached: true)
   public static let quitPlan = Command(args: ["quit", "--plan", "--json"], timeout: .seconds(30))
   /// Start: the morning run, as a launchd job, started and returned from (a short command, waited for).
@@ -93,18 +95,12 @@ public enum Bosun {
     Command(args: ["app", "login", on ? "on" : "off"], timeout: .seconds(15))
   }
 
-  /// The quit the choices make. Letting agents finish waits for them: as long as the plan said (the
-  /// minutes, the lock wait and a margin: `QuitWait.timeout`). Only a plan that did not say (it always
-  /// does, against part 1) leaves bosun's own default wait and an hour as the most the app holds a quit
-  /// for. Stopping them now waits for nothing but the lock, which `bosun quit` itself bounds: two minutes.
+  /// The quit the choices make, given as long as the plan said it may take (`QuitWait.timeout(for:)`: the
+  /// minutes when letting agents finish, the lock wait and the steps, and a margin). Only a quit with no
+  /// plan's word on it (a plan object without the fields, or a plan that never answered) leaves bosun's own
+  /// default wait and an hour as the most the app holds a quit for.
   public static func quit(_ choices: QuitChoices) -> Command {
-    let wait: Duration
-    switch (choices.busy, choices.wait) {
-    case (.letFinish, let known?): wait = known.timeout
-    case (.letFinish, nil): wait = .seconds(60 * 60)
-    case (.stopNow, _): wait = .seconds(120)
-    }
-    return Command(args: quitCommand(choices), timeout: wait)
+    Command(args: quitCommand(choices), timeout: choices.wait?.timeout(for: choices.busy) ?? QuitWait.unknown)
   }
 }
 
@@ -170,7 +166,10 @@ public func fetch<T: Decodable & Sendable>(
 /// What the app knows of bosun's state, which is all the menu is drawn from.
 public enum StatusState: Equatable, Sendable {
   case loaded(StatusSnapshot, current: Bool)
+  /// bosun ran (or hung) and its status could not be had: why.
   case unreachable(String)
+  /// There is something at `~/.local/bin/bosun` that cannot be run (a broken link, no permission): why.
+  case cannotRun(String)
   case notInstalled
   case contractTooNew(Int)
 }
@@ -181,6 +180,7 @@ public func statusState(from result: CommandResult, previous: StatusSnapshot?) -
   switch decodeReply(StatusSnapshot.self, result) {
   case .success(let status): return .loaded(status, current: true)
   case .failure(.notInstalled): return .notInstalled
+  case .failure(.couldNotStart(let why)): return .cannotRun(why)
   case .failure(.contract(.unsupported(let number))): return .contractTooNew(number)
   case .failure(.timedOut):
     return previous.map { .loaded($0, current: false) } ?? .unreachable(FetchFailure.timedOut.message)
@@ -190,44 +190,4 @@ public func statusState(from result: CommandResult, previous: StatusSnapshot?) -
 
 public func loadStatus(via cli: any BosunCLI, previous: StatusSnapshot?) async -> StatusState {
   statusState(from: await cli.run(Bosun.status), previous: previous)
-}
-
-// MARK: a stand-in for tests
-
-/// A `BosunCLI` that answers what it was told to and records what it was asked. A reply told twice for
-/// one command is given in turn, the last one staying; a command it was not told about fails loudly.
-public actor FakeBosunCLI: BosunCLI {
-  private var replies: [[String]: [CommandResult]] = [:]
-  public private(set) var calls: [[String]] = []
-  public private(set) var timeouts: [Duration] = []
-  /// What was `start`ed (detached), apart from what was `run`.
-  public private(set) var started: [[String]] = []
-
-  public init() {}
-
-  public func reply(_ args: [String], _ result: CommandResult) {
-    replies[args, default: []].append(result)
-  }
-
-  /// From now on `args` answers `result` alone, whatever was told for it before.
-  public func replaceReply(_ args: [String], _ result: CommandResult) {
-    replies[args] = [result]
-  }
-
-  public func run(_ args: [String], timeout: Duration) async -> CommandResult {
-    calls.append(args)
-    timeouts.append(timeout)
-    guard let queue = replies[args], let first = queue.first else {
-      let said = "FakeBosunCLI: no reply for " + args.joined(separator: " ")
-      return CommandResult(outcome: .exited(1), stdout: "", stderr: said)
-    }
-    if queue.count > 1 { replies[args] = Array(queue.dropFirst()) }
-    return first
-  }
-
-  /// A command started and left running is `.started`, unless it was told otherwise.
-  public func start(_ args: [String]) async -> CommandResult {
-    started.append(args)
-    return replies[args]?.first ?? CommandResult(outcome: .started, stdout: "", stderr: "")
-  }
 }

@@ -8,7 +8,8 @@ private func quitPlan(busy: [String] = ["acme-exporter"], keepAwake: String? = "
   QuitPlan(
     contract: 1, windows: ["acme-orchestrator", "acme-exporter", "acme-web"], busy: busy,
     waiting: ["acme-web"],
-    keepAwakeUntil: keepAwake, refused: nil, note: nil, waitMinutes: 10, lockWaitSeconds: 180)
+    keepAwakeUntil: keepAwake, refused: nil, note: nil, waitMinutes: 10, lockWaitSeconds: 180,
+    stepsSeconds: 225)
 }
 
 private func updatePlan() -> UpdatePlan {
@@ -121,11 +122,12 @@ final class StoppedWith {
 @MainActor @Suite struct KeyEquivalentTests {
   private func keys(_ built: BuiltAlert) -> [String] { built.alert.buttons.map(\.keyEquivalent) }
 
-  /// A destructive action has no default button: Return does nothing, Escape cancels, Stop Now has no key.
+  /// A destructive action has no default button: Return does nothing, Escape cancels, Stop Now and Quit
+  /// bosun.app have no key.
   @Test func theStopNowDialogHasNoDefaultButton() {
     let built = Dialogs.build(quitUnavailableSpec("the windows cannot be read"))
-    #expect(built.alert.buttons.map(\.title) == ["Cancel", "Stop Now"])
-    #expect(keys(built) == ["\u{1b}", ""])
+    #expect(built.alert.buttons.map(\.title) == ["Cancel", "Stop Now", "Quit bosun.app"])
+    #expect(keys(built) == ["\u{1b}", "", ""])
     #expect(!keys(built).contains("\r"))
   }
 

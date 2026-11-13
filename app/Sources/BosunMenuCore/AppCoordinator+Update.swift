@@ -7,11 +7,13 @@ import Foundation
 extension AppCoordinator {
   // MARK: events and commands
 
-  /// The next state for an event, drawn; the commands that state asks for are returned, not run.
+  /// The next state for an event, drawn; the commands that state asks for are returned, not run. Leaving
+  /// `starting` lets its grace go.
   func apply(_ event: UpdateEvent) -> [Command] {
     if case .checkRequested(let manual) = event { checkIsManual = manual }
     let (state, commands) = next(update, on: event)
     update = state
+    if !update.isStarting { graceSleep?.cancel() }
     render()
     return commands
   }
@@ -50,19 +52,30 @@ extension AppCoordinator {
   }
 
   /// `update --yes`, started and left to run; `status` shows it from then on. If it never shows, the grace
-  /// runs out and it is looked into.
+  /// runs out and it is looked into. The grace's sleep is its own task, which leaving `starting` cancels; the
+  /// work after it is never cancelled (it runs commands of its own).
   private func startUpdate(_ command: Command) async -> [UpdateEvent] {
     let result = await cli.start(command)
     guard result.outcome == .started else { return [.startFailed(failureText(result))] }
-    Task { [clock] in
-      try? await clock.sleep(for: Self.startGrace)
+    graceSleep?.cancel()
+    let sleep = Task { [clock] in try await clock.sleep(for: Self.startGrace) }
+    graceSleep = sleep
+    graceWork = Task {
+      guard (try? await sleep.value) != nil else { return }
       await self.graceElapsed()
     }
     return []
   }
 
+  /// The grace ran out with the update still `starting`. With bosun's status read, the update is looked
+  /// into; without it (bosun speaks a newer contract: "Update bosun…") it cannot be watched, and is let go
+  /// with no verdict, since a check alone cannot tell an update that never began from one under way.
   private func graceElapsed() async {
-    guard case .starting = update else { return }
+    guard update.isStarting else { return }
+    guard case .loaded = status else {
+      _ = await drain([.startUnwatched])
+      return
+    }
     _ = await drain([.startGaveUp])
     surfaceFailureInBackground()
   }
@@ -119,8 +132,13 @@ extension AppCoordinator {
     render()
   }
 
-  /// "Update bosun…", when bosun speaks a contract this app does not: the same flow, from its check.
+  /// "Update bosun…", when bosun speaks a contract this app does not: the same flow, from its check. Only from
+  /// a state with nothing under way (the item is greyed otherwise), so a second click starts no second update.
   func updateBosun() async {
+    switch update {
+    case .idle, .failed, .available: break
+    default: return
+    }
     let start = updateBosunStart()
     guard flow.begin(start.flow) else { return }
     render()
@@ -138,7 +156,8 @@ extension AppCoordinator {
     render()
   }
 
-  /// What a check the person asked for came to: an offer, a failure, or "up to date".
+  /// What a check the person asked for came to: an offer, a failure, or "up to date" (only for a check that
+  /// found nothing: one that found an update whose state moved on, say to running, is never "up to date").
   private func afterManualCheck(_ events: [UpdateEvent]) async {
     switch update {
     case .available(let check):
@@ -146,7 +165,7 @@ extension AppCoordinator {
     case .failed:
       await showFailure("Cannot check for updates")
     default:
-      for case .checked(let check, manual: true) in events where check.error == nil {
+      for case .checked(let check, manual: true) in events where check.error == nil && !check.available {
         _ = await ui.present(upToDateSpec(check))
       }
     }

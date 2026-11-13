@@ -14,54 +14,54 @@ import Testing
     secondCopyExits(running: listed, myPid: me, bundleID: bundleID) { starts[$0] }
   }
 
-  @Test func theOlderCopyStaysAndTheNewerExits() {
+  @Test func theOlderCopyStaysAndTheNewerExits() throws {
     let listed: [(pid: Int32, bundleID: String?)] = [(100, bundle), (500, bundle)]
     #expect(exits(listed, starts: [100: 1000, 500: 2000]))
     #expect(!exits(listed, starts: [100: 3000, 500: 2000]))
   }
 
   /// A wrapped pid: the old copy has the higher number.
-  @Test func theStartTimeDecidesNotThePid() {
+  @Test func theStartTimeDecidesNotThePid() throws {
     let listed: [(pid: Int32, bundleID: String?)] = [(98000, bundle), (500, bundle)]
     #expect(exits(listed, starts: [98000: 1000, 500: 2000]))
   }
 
-  @Test func aCopyAloneStaysEvenWhenListingItself() {
+  @Test func aCopyAloneStaysEvenWhenListingItself() throws {
     let alone: [(pid: Int32, bundleID: String?)] = [(500, bundle)]
     let nobody: [(pid: Int32, bundleID: String?)] = []
     #expect(!exits(alone, starts: [500: 2000]))
     #expect(!exits(nobody, starts: [500: 2000]))
   }
 
-  @Test func otherApplicationsDoNotCount() {
+  @Test func otherApplicationsDoNotCount() throws {
     let listed: [(pid: Int32, bundleID: String?)] = [(100, "com.apple.finder"), (101, nil), (500, bundle)]
     #expect(!exits(listed, starts: [100: 1, 101: 1, 500: 2000]))
   }
 
   /// A copy whose start cannot be read is left out: nothing is decided on a time that was not read.
-  @Test func aCopyWhoseStartIsUnknownIsLeftOut() {
+  @Test func aCopyWhoseStartIsUnknownIsLeftOut() throws {
     let listed: [(pid: Int32, bundleID: String?)] = [(100, bundle), (500, bundle)]
     #expect(!exits(listed, starts: [500: 2000]))
   }
 
-  @Test func ifMyOwnStartIsUnknownIStay() {
+  @Test func ifMyOwnStartIsUnknownIStay() throws {
     let listed: [(pid: Int32, bundleID: String?)] = [(100, bundle), (500, bundle)]
     #expect(!exits(listed, starts: [100: 1000]))
   }
 
   /// Unbundled (swift run), there is no identifier and no other copy to find.
-  @Test func withNoBundleIdentifierThereIsNothingToCompare() {
+  @Test func withNoBundleIdentifierThereIsNothingToCompare() throws {
     let listed: [(pid: Int32, bundleID: String?)] = [(100, bundle), (500, bundle)]
     #expect(!exits(listed, starts: [100: 1000, 500: 2000], bundleID: nil))
   }
 
-  @Test func theListIsOfRunningAppsThatHaveAStartTime() {
+  @Test func theListIsOfRunningAppsThatHaveAStartTime() throws {
     let listed: [(pid: Int32, bundleID: String?)] = [(100, bundle), (101, bundle)]
     let apps = runningApps(listed) { $0 == 100 ? 1234.5 : nil }
     #expect(apps == [RunningApp(pid: 100, bundleID: bundle, startedAt: 1234.5)])
   }
 
-  @Test func twoStartedTogetherLeaveOneBehind() {
+  @Test func twoStartedTogetherLeaveOneBehind() throws {
     let listed: [(pid: Int32, bundleID: String?)] = [(100, bundle), (500, bundle)]
     let same = [Int32(100): 1000.0, 500: 1000.0]
     let first = secondCopyExits(running: listed, myPid: 100, bundleID: bundle) { same[$0] }

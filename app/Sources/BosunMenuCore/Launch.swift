@@ -37,11 +37,13 @@ public struct LaunchOptions: Equatable, Sendable {
   }
 }
 
-/// Opened by you, with bosun stopped or not running when it should be: start it, once. At login the app
-/// only shows the icon. Where bosun cannot be run there is nothing to start.
+/// Opened by you, with bosun stopped or not running when it should be (`StatusSnapshot.offersStart`): start
+/// it, once. Never a bosun that runs, even with an error: the morning run would run its setup again and may
+/// restart the session. At login the app only shows the icon. Where bosun cannot be run there is nothing to
+/// start.
 public func shouldStartAtLaunch(_ options: LaunchOptions, status: StatusState) -> Bool {
   guard !options.atLogin, case .loaded(let snapshot, _) = status else { return false }
-  return snapshot.level == .stopped || snapshot.level == .error
+  return snapshot.offersStart
 }
 
 // MARK: one copy at a time

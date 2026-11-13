@@ -133,8 +133,9 @@ extension HookAnswer {
 public func statusLevelName(_ status: StatusState?) -> String {
   switch status {
   case nil: return "loading"
-  case .loaded(let snapshot, _)?: return snapshot.level.rawValue
+  case .loaded(let snapshot, _)?: return snapshot.level.name
   case .unreachable?: return "unreachable"
+  case .cannotRun?: return "cannot_run"
   case .notInstalled?: return "not_installed"
   case .contractTooNew?: return "contract_too_new"
   }

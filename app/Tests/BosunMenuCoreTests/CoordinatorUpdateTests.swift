@@ -11,11 +11,13 @@ final class Today: @unchecked Sendable {
   func advance(by seconds: TimeInterval) { lock.withLock { date = date.addingTimeInterval(seconds) } }
 }
 
-private let available = Fixtures.decode(UpdateCheck.self, "update-check-available")
+private var available: UpdateCheck {
+  get throws { try Fixtures.decode(UpdateCheck.self, "update-check-available") }
+}
 
 @MainActor
-private func running(status: String = "status-ok", today: Today = Today()) async -> World {
-  let world = await World(status: status, now: { today.now })
+private func running(status: String = "status-ok", today: Today = Today()) async throws -> World {
+  let world = try await World(status: status, now: { today.now })
   // The look at launch finds no reply for a check (it fails quietly); a test then sets what a check says
   await world.refresh(.launch)
   return world
@@ -26,24 +28,24 @@ private func checkCalls(_ world: World) async -> Int {
 }
 
 @MainActor @Suite struct CoordinatorUpdateOfferTests {
-  @Test func aCheckThatFindsAnUpdateOffersItWithItsNotes() async {
-    let world = await running()
-    await world.replace(Bosun.checkUpdates, exited(0, Fixtures.text("update-check-available")))
+  @Test func aCheckThatFindsAnUpdateOffersItWithItsNotes() async throws {
+    let world = try await running()
+    await world.replace(Bosun.checkUpdates, exited(0, try Fixtures.text("update-check-available")))
     world.ui.answer("Remind Me Later")
     await world.coordinator.perform(.checkForUpdates)
     #expect(world.ui.presented.map(\.title) == ["Update Available: v2026.11.11"])
-    #expect(world.ui.lastSpec?.scroll == available.latest?.notes)
+    #expect(try world.ui.lastSpec?.scroll == available.latest?.notes)
     // Remind Me Later: still on offer, with its badge, nothing run
-    #expect(world.coordinator.update == .available(available))
+    #expect(try world.coordinator.update == .available(available))
     #expect(world.item(.checkForUpdates)?.title == "Update Available: v2026.11.11…")
     #expect(world.ui.lastModel?.iconBadge == .update)
     #expect(world.coordinator.flow.isIdle)
     #expect(await world.cli.started.isEmpty)
   }
 
-  @Test func skipThisVersionRecordsItThroughBosun() async {
-    let world = await running()
-    await world.replace(Bosun.checkUpdates, exited(0, Fixtures.text("update-check-available")))
+  @Test func skipThisVersionRecordsItThroughBosun() async throws {
+    let world = try await running()
+    await world.replace(Bosun.checkUpdates, exited(0, try Fixtures.text("update-check-available")))
     await world.reply(Bosun.skip(version: "v2026.11.11"), exited(0))
     world.ui.answer("Skip This Version")
     await world.coordinator.perform(.checkForUpdates)
@@ -53,9 +55,9 @@ private func checkCalls(_ world: World) async -> Int {
     #expect(world.item(.checkForUpdates)?.title == "Check for Updates…")
   }
 
-  @Test func aSkipThatFailsSaysSo() async {
-    let world = await running()
-    await world.replace(Bosun.checkUpdates, exited(0, Fixtures.text("update-check-available")))
+  @Test func aSkipThatFailsSaysSo() async throws {
+    let world = try await running()
+    await world.replace(Bosun.checkUpdates, exited(0, try Fixtures.text("update-check-available")))
     await world.reply(Bosun.skip(version: "v2026.11.11"), exited(1, "", err: "cannot write the state\n"))
     world.ui.answer("Skip This Version")
     world.ui.answer("OK")
@@ -64,10 +66,10 @@ private func checkCalls(_ world: World) async -> Int {
     #expect(world.ui.lastSpec?.message == "cannot write the state")
   }
 
-  @Test func updateNowShowsThePlanFirstAndOnlyThenStarts() async {
-    let world = await running()
-    await world.replace(Bosun.checkUpdates, exited(0, Fixtures.text("update-check-available")))
-    await world.reply(Bosun.planUpdate, exited(0, Fixtures.text("update-plan")))
+  @Test func updateNowShowsThePlanFirstAndOnlyThenStarts() async throws {
+    let world = try await running()
+    await world.replace(Bosun.checkUpdates, exited(0, try Fixtures.text("update-check-available")))
+    await world.reply(Bosun.planUpdate, exited(0, try Fixtures.text("update-plan")))
     world.ui.answer("Update Now")
     world.ui.answer("Update")
     await world.coordinator.perform(.checkForUpdates)
@@ -78,52 +80,52 @@ private func checkCalls(_ world: World) async -> Int {
     #expect(await world.commands.contains(Bosun.planUpdate.args))
     #expect(await world.cli.started == [Bosun.update.args])
     #expect(await !world.commands.contains(Bosun.update.args))
-    #expect(world.coordinator.update == .starting(available))
+    #expect(try world.coordinator.update == .starting(available))
     #expect(world.item(.checkForUpdates)?.title == "Updating…")
     #expect(world.item(.checkForUpdates)?.enabled == false)
     #expect(world.coordinator.flow.isIdle)
   }
 
-  @Test func theUpdateIsShownRunningOnceStatusSaysSo() async {
-    let world = await running()
-    await world.replace(Bosun.checkUpdates, exited(0, Fixtures.text("update-check-available")))
-    await world.reply(Bosun.planUpdate, exited(0, Fixtures.text("update-plan")))
+  @Test func theUpdateIsShownRunningOnceStatusSaysSo() async throws {
+    let world = try await running()
+    await world.replace(Bosun.checkUpdates, exited(0, try Fixtures.text("update-check-available")))
+    await world.reply(Bosun.planUpdate, exited(0, try Fixtures.text("update-plan")))
     world.ui.answer("Update Now")
     world.ui.answer("Update")
     await world.coordinator.perform(.checkForUpdates)
-    await world.replace(Bosun.status, exited(0, Fixtures.text("status-update-running")))
+    await world.replace(Bosun.status, exited(0, try Fixtures.text("status-update-running")))
     await world.refresh(.timer)
     #expect(world.item(.checkForUpdates)?.title == "Updating… waiting for 2 windows")
     #expect(world.coordinator.update == .running(waitingFor: ["acme-exporter", "acme-web"]))
   }
 
-  @Test func cancellingThePlanGoesBackToTheOfferAndStartsNothing() async {
-    let world = await running()
-    await world.replace(Bosun.checkUpdates, exited(0, Fixtures.text("update-check-available")))
-    await world.reply(Bosun.planUpdate, exited(0, Fixtures.text("update-plan")))
+  @Test func cancellingThePlanGoesBackToTheOfferAndStartsNothing() async throws {
+    let world = try await running()
+    await world.replace(Bosun.checkUpdates, exited(0, try Fixtures.text("update-check-available")))
+    await world.reply(Bosun.planUpdate, exited(0, try Fixtures.text("update-plan")))
     world.ui.answer("Update Now")
     world.ui.answer("Cancel")
     await world.coordinator.perform(.checkForUpdates)
-    #expect(world.coordinator.update == .available(available))
+    #expect(try world.coordinator.update == .available(available))
     #expect(await world.cli.started.isEmpty)
   }
 
-  @Test func aBlockedPlanSaysWhyAndStartsNothing() async {
-    let world = await running()
-    await world.replace(Bosun.checkUpdates, exited(0, Fixtures.text("update-check-available")))
-    await world.reply(Bosun.planUpdate, exited(0, Fixtures.text("update-plan-blocked")))
+  @Test func aBlockedPlanSaysWhyAndStartsNothing() async throws {
+    let world = try await running()
+    await world.replace(Bosun.checkUpdates, exited(0, try Fixtures.text("update-check-available")))
+    await world.reply(Bosun.planUpdate, exited(0, try Fixtures.text("update-plan-blocked")))
     world.ui.answer("Update Now")
     world.ui.answer("OK")
     await world.coordinator.perform(.checkForUpdates)
     #expect(world.ui.lastSpec?.title == "bosun cannot update now")
     #expect(world.ui.lastSpec?.message.contains("a migration of the knowledge store is missing") == true)
-    #expect(world.coordinator.update == .available(available))
+    #expect(try world.coordinator.update == .available(available))
     #expect(await world.cli.started.isEmpty)
   }
 
-  @Test func aPlanThatCouldNotBeMadeShowsWhy() async {
-    let world = await running()
-    await world.replace(Bosun.checkUpdates, exited(0, Fixtures.text("update-check-available")))
+  @Test func aPlanThatCouldNotBeMadeShowsWhy() async throws {
+    let world = try await running()
+    await world.replace(Bosun.checkUpdates, exited(0, try Fixtures.text("update-check-available")))
     await world.reply(
       Bosun.planUpdate, exited(1, "{\"plan\": null}", err: "bosun update: a quit is in progress\n"))
     world.ui.answer("Update Now")
@@ -134,10 +136,10 @@ private func checkCalls(_ world: World) async -> Int {
     #expect(world.coordinator.update == .idle)
   }
 
-  @Test func anUpdateThatCouldNotBeStartedShowsWhy() async {
-    let world = await running()
-    await world.replace(Bosun.checkUpdates, exited(0, Fixtures.text("update-check-available")))
-    await world.reply(Bosun.planUpdate, exited(0, Fixtures.text("update-plan")))
+  @Test func anUpdateThatCouldNotBeStartedShowsWhy() async throws {
+    let world = try await running()
+    await world.replace(Bosun.checkUpdates, exited(0, try Fixtures.text("update-check-available")))
+    await world.reply(Bosun.planUpdate, exited(0, try Fixtures.text("update-plan")))
     await world.cli.reply(
       Bosun.update.args, CommandResult(outcome: .couldNotStart("no permission"), stdout: "", stderr: ""))
     world.ui.answer("Update Now")
@@ -149,54 +151,14 @@ private func checkCalls(_ world: World) async -> Int {
     #expect(world.coordinator.update == .idle)
   }
 
-  /// `starting` went on too long: look again, and if the same release is still offered, say so.
-  @Test func anUpdateThatNeverShowsInStatusIsCalledAFailure() async {
-    let world = await running()
-    await world.replace(Bosun.checkUpdates, exited(0, Fixtures.text("update-check-available")))
-    await world.reply(Bosun.planUpdate, exited(0, Fixtures.text("update-plan")))
-    world.ui.answer("Update Now")
-    world.ui.answer("Update")
-    await world.coordinator.perform(.checkForUpdates)
-    let before = await checkCalls(world)
-    world.ui.answer("OK")
-    // The grace the update was started with: 90 seconds from now on this clock
-    #expect(await world.clock.waitForSleeper(until: world.clock.now.advanced(by: .seconds(90))))
-    world.clock.advance(by: .seconds(89))
-    #expect(world.clock.sleeperCount == 1)  // it did not wake, so nothing could have looked
-    #expect(await checkCalls(world) == before)
-    world.clock.advance(by: .seconds(1))
-    #expect(await eventually { world.ui.presented.count == 3 })
-    #expect(await checkCalls(world) == before + 1)
-    #expect(world.ui.lastSpec?.message == updateNeverStartedText)
-  }
-
-  @Test func theGraceMeansNothingOnceTheUpdateIsRunning() async {
-    let world = await running()
-    await world.replace(Bosun.checkUpdates, exited(0, Fixtures.text("update-check-available")))
-    await world.reply(Bosun.planUpdate, exited(0, Fixtures.text("update-plan")))
-    world.ui.answer("Update Now")
-    world.ui.answer("Update")
-    await world.coordinator.perform(.checkForUpdates)
-    await world.replace(Bosun.status, exited(0, Fixtures.text("status-update-running")))
-    await world.refresh(.timer)
-    let before = await checkCalls(world)
-    #expect(await world.clock.waitForSleeper(until: world.clock.now.advanced(by: .seconds(90))))
-    world.clock.advance(by: .seconds(120))
-    // The grace wakes and finds the update running: it does nothing, in a task nobody can await, so this
-    // pause only gives a wrong look time to show (it cannot make the test fail by itself).
-    try? await Task.sleep(for: .milliseconds(30))
-    #expect(await checkCalls(world) == before)
-    #expect(world.ui.presented.count == 2)
-  }
-
-  @Test func anUpdateThatHasFinishedMakesANewCheck() async {
-    let world = await running()
-    await world.replace(Bosun.status, exited(0, Fixtures.text("status-update-running")))
+  @Test func anUpdateThatHasFinishedMakesANewCheck() async throws {
+    let world = try await running()
+    await world.replace(Bosun.status, exited(0, try Fixtures.text("status-update-running")))
     await world.refresh(.timer)
     #expect(world.coordinator.update == .running(waitingFor: ["acme-exporter", "acme-web"]))
     let before = await checkCalls(world)
-    await world.replace(Bosun.status, exited(0, Fixtures.text("status-ok")))
-    await world.reply(Bosun.checkUpdates, exited(0, Fixtures.text("update-check-current")))
+    await world.replace(Bosun.status, exited(0, try Fixtures.text("status-ok")))
+    await world.reply(Bosun.checkUpdates, exited(0, try Fixtures.text("update-check-current")))
     await world.refresh(.timer)
     #expect(await checkCalls(world) == before + 1)
     #expect(world.coordinator.update == .idle)
@@ -204,9 +166,9 @@ private func checkCalls(_ world: World) async -> Int {
 }
 
 @MainActor @Suite struct CoordinatorUpdateCheckTests {
-  @Test func nothingNewSaysBosunIsUpToDate() async {
-    let world = await running()
-    await world.replace(Bosun.checkUpdates, exited(0, Fixtures.text("update-check-current")))
+  @Test func nothingNewSaysBosunIsUpToDate() async throws {
+    let world = try await running()
+    await world.replace(Bosun.checkUpdates, exited(0, try Fixtures.text("update-check-current")))
     world.ui.answer("OK")
     await world.coordinator.perform(.checkForUpdates)
     #expect(world.ui.lastSpec?.title == "bosun is up to date")
@@ -214,9 +176,9 @@ private func checkCalls(_ world: World) async -> Int {
     #expect(world.coordinator.flow.isIdle)
   }
 
-  @Test func aCheckThatFailedShowsWhy() async {
-    let world = await running()
-    await world.replace(Bosun.checkUpdates, exited(0, Fixtures.text("update-check-failed")))
+  @Test func aCheckThatFailedShowsWhy() async throws {
+    let world = try await running()
+    await world.replace(Bosun.checkUpdates, exited(0, try Fixtures.text("update-check-failed")))
     world.ui.answer("OK")
     await world.coordinator.perform(.checkForUpdates)
     #expect(world.ui.lastSpec?.title == "Cannot check for updates")
@@ -224,17 +186,17 @@ private func checkCalls(_ world: World) async -> Int {
     #expect(world.coordinator.update == .idle)
   }
 
-  @Test func aCheckThatHungShowsThat() async {
-    let world = await running()
+  @Test func aCheckThatHungShowsThat() async throws {
+    let world = try await running()
     await world.replace(Bosun.checkUpdates, CommandResult(outcome: .timedOut, stdout: "", stderr: ""))
     world.ui.answer("OK")
     await world.coordinator.perform(.checkForUpdates)
     #expect(world.ui.lastSpec?.message == "bosun did not answer in time")
   }
 
-  @Test func theChecksGreyedItemShowsWhileItRuns() async {
-    let world = await running()
-    await world.replace(Bosun.checkUpdates, exited(0, Fixtures.text("update-check-current")))
+  @Test func theChecksGreyedItemShowsWhileItRuns() async throws {
+    let world = try await running()
+    await world.replace(Bosun.checkUpdates, exited(0, try Fixtures.text("update-check-current")))
     world.ui.answer("OK")
     await world.coordinator.perform(.checkForUpdates)
     let titles = world.ui.rendered.compactMap { entry in
@@ -244,34 +206,34 @@ private func checkCalls(_ world: World) async -> Int {
   }
 
   /// The launch look is the first check, quietly: a badge and no dialog.
-  @Test func theCheckAtLaunchOnlyShowsABadge() async {
-    let world = await World(status: "status-ok")
-    await world.reply(Bosun.checkUpdates, exited(0, Fixtures.text("update-check-available")))
+  @Test func theCheckAtLaunchOnlyShowsABadge() async throws {
+    let world = try await World(status: "status-ok")
+    await world.reply(Bosun.checkUpdates, exited(0, try Fixtures.text("update-check-available")))
     await world.refresh(.launch)
-    #expect(world.coordinator.update == .available(available))
+    #expect(try world.coordinator.update == .available(available))
     #expect(world.ui.lastModel?.iconBadge == .update)
     #expect(world.ui.presented.isEmpty)
   }
 
-  @Test func aCheckThatFailsInTheBackgroundSaysNothing() async {
-    let world = await World(status: "status-ok")
-    await world.reply(Bosun.checkUpdates, exited(0, Fixtures.text("update-check-failed")))
+  @Test func aCheckThatFailsInTheBackgroundSaysNothing() async throws {
+    let world = try await World(status: "status-ok")
+    await world.reply(Bosun.checkUpdates, exited(0, try Fixtures.text("update-check-failed")))
     await world.refresh(.launch)
     #expect(world.coordinator.update == .idle)
     #expect(world.ui.presented.isEmpty)
   }
 
-  @Test func aSkippedReleaseIsNotOfferedInTheBackground() async {
-    let world = await World(status: "status-ok")
-    await world.reply(Bosun.checkUpdates, exited(0, Fixtures.text("update-check-skipped")))
+  @Test func aSkippedReleaseIsNotOfferedInTheBackground() async throws {
+    let world = try await World(status: "status-ok")
+    await world.reply(Bosun.checkUpdates, exited(0, try Fixtures.text("update-check-skipped")))
     await world.refresh(.launch)
     #expect(world.coordinator.update == .idle)
     #expect(world.ui.lastModel?.iconBadge == nil)
   }
 
-  @Test func checksAreSixHoursAndAMinuteApart() async {
+  @Test func checksAreSixHoursAndAMinuteApart() async throws {
     let today = Today()
-    let world = await running(today: today)
+    let world = try await running(today: today)
     // The launch look was the first check
     #expect(await checkCalls(world) == 1)
     await world.refresh(.timer)
@@ -285,9 +247,9 @@ private func checkCalls(_ world: World) async -> Int {
     #expect(await checkCalls(world) == 3)
   }
 
-  @Test func clickingAnOfferedUpdateOffersItAgainWithoutAskingBosun() async {
-    let world = await World(status: "status-ok")
-    await world.reply(Bosun.checkUpdates, exited(0, Fixtures.text("update-check-available")))
+  @Test func clickingAnOfferedUpdateOffersItAgainWithoutAskingBosun() async throws {
+    let world = try await World(status: "status-ok")
+    await world.reply(Bosun.checkUpdates, exited(0, try Fixtures.text("update-check-available")))
     await world.refresh(.launch)
     let before = await checkCalls(world)
     world.ui.answer("Remind Me Later")
@@ -296,9 +258,9 @@ private func checkCalls(_ world: World) async -> Int {
     #expect(world.ui.presented.map(\.title) == ["Update Available: v2026.11.11"])
   }
 
-  @Test func whileADialogIsOpenQuitAndTheRestAreIgnored() async {
-    let world = await World(status: "status-ok")
-    await world.reply(Bosun.checkUpdates, exited(0, Fixtures.text("update-check-available")))
+  @Test func whileADialogIsOpenQuitAndTheRestAreIgnored() async throws {
+    let world = try await World(status: "status-ok")
+    await world.reply(Bosun.checkUpdates, exited(0, try Fixtures.text("update-check-available")))
     await world.refresh(.launch)
     world.ui.whileOpen = { _ in
       await world.coordinator.perform(.quit)
@@ -313,22 +275,42 @@ private func checkCalls(_ world: World) async -> Int {
   }
 
   /// bosun speaks a contract this app does not: "Update bosun…" is the update flow from its check.
-  @Test func updateBosunRunsTheUpdateFlow() async {
-    let world = await World(status: nil)
-    await world.reply(Bosun.status, exited(0, Fixtures.text("status-ok", contract: 2)))
-    await world.reply(Bosun.checkUpdates, exited(0, Fixtures.text("update-check-available")))
+  @Test func updateBosunRunsTheUpdateFlow() async throws {
+    let world = try await World(status: nil)
+    await world.reply(Bosun.status, exited(0, try Fixtures.text("status-ok", contract: 2)))
+    await world.reply(Bosun.checkUpdates, exited(0, try Fixtures.text("update-check-available")))
     await world.refresh(.launch)
     #expect(world.item(.updateBosun) != nil)
     world.ui.answer("Remind Me Later")
     await world.coordinator.perform(.updateBosun)
     #expect(world.ui.presented.map(\.title) == ["Update Available: v2026.11.11"])
-    #expect(world.coordinator.update == .available(available))
+    #expect(try world.coordinator.update == .available(available))
   }
 
-  @Test func updateBosunWithNothingToOfferSaysSo() async {
-    let world = await World(status: nil)
-    await world.reply(Bosun.status, exited(0, Fixtures.text("status-ok", contract: 2)))
-    await world.reply(Bosun.checkUpdates, exited(0, Fixtures.text("update-check-current")))
+  /// A-8: a check the person asked for that found an update is never "up to date", even when the state moved
+  /// on before its dialog (a status showed the update running meanwhile).
+  @Test func aCheckThatFoundAnUpdateIsNeverUpToDate() async throws {
+    let gate = Gate()
+    await gate.open()  // the launch's own check goes through
+    let world = try await World(status: "status-ok", gates: [Bosun.checkUpdates.args: gate])
+    await world.refresh(.launch)
+    await world.replace(Bosun.checkUpdates, exited(0, try Fixtures.text("update-check-available")))
+    await world.replace(Bosun.status, exited(0, try Fixtures.text("status-update-running")))
+    await gate.arm()
+    let check = Task { await world.coordinator.perform(.checkForUpdates) }
+    #expect(await gate.waitForWaiter())
+    // while the check waits, a status shows the update running
+    await world.coordinator.refresh(.timer)
+    await gate.open()
+    await check.value
+    #expect(world.coordinator.update == .running(waitingFor: ["acme-exporter", "acme-web"]))
+    #expect(!world.ui.presented.contains { $0.title == "bosun is up to date" })
+  }
+
+  @Test func updateBosunWithNothingToOfferSaysSo() async throws {
+    let world = try await World(status: nil)
+    await world.reply(Bosun.status, exited(0, try Fixtures.text("status-ok", contract: 2)))
+    await world.reply(Bosun.checkUpdates, exited(0, try Fixtures.text("update-check-current")))
     await world.refresh(.launch)
     world.ui.answer("OK")
     await world.coordinator.perform(.updateBosun)

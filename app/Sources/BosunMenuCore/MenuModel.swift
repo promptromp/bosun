@@ -2,8 +2,9 @@ import Foundation
 
 // The menu each state becomes (docs/design/menu-bar.md): pure, so the AppKit shell only renders it.
 // Titles and states are the design note's: the status line's dot per level, "Show What's Wrong…" only on
-// a warning or an error, "Start bosun" first on an error or when stopped, Open Console greyed while
-// stopped, and a Quit without "…" when no dialog follows.
+// a warning or an error, "Start bosun" first only when bosun is not running and is to be (stopped, or red
+// with no window open: `StatusSnapshot.offersStart`), Open Console greyed while stopped, and a Quit without
+// "…" when no dialog follows.
 
 public enum Dot: Equatable, Sendable {
   case green, yellow, red, grey
@@ -70,11 +71,15 @@ public struct MenuModel: Equatable, Sendable {
 
 public enum Flow: Equatable, Sendable {
   case quit, update, start
+  /// Open at Login being switched (`bosun app login on|off`): a second click waits for the first.
+  case login
 }
 
 /// Which flow runs. One at a time: ⌘Q twice, or Quit while an update dialog is open, is ignored.
 public struct FlowState: Equatable, Sendable {
   public private(set) var active: Flow?
+  /// A line under the status while the flow runs (what a quit waits for); gone when it ends.
+  public internal(set) var detail: String?
 
   public init() {}
 
@@ -92,7 +97,9 @@ public struct FlowState: Equatable, Sendable {
   }
 
   public mutating func end(_ flow: Flow) {
-    if active == flow { active = nil }
+    guard active == flow else { return }
+    active = nil
+    detail = nil
   }
 }
 
@@ -141,12 +148,16 @@ public func menu(
         dot: .grey, sentence: "bosun is not installed",
         detail: ["Install bosun (see its README), then open this app again."]),
       badge: nil, flow: flow)
+  case .cannotRun(let why):
+    return offlineMenu(
+      StatusHeader(dot: .red, sentence: "bosun cannot be run", detail: [why]), badge: .error, flow: flow)
   case .unreachable(let why):
+    // bosun runs, only its status could not be had: doctor is what finds out why
     return offlineMenu(
       StatusHeader(dot: .red, sentence: "bosun cannot be reached", detail: [why]),
-      badge: .error, flow: flow)
+      badge: .error, flow: flow, doctor: true)
   case .contractTooNew(let number):
-    return tooNewMenu(number, flow: flow)
+    return tooNewMenu(number, update: update, flow: flow)
   }
 }
 
@@ -164,43 +175,51 @@ private func loadedMenu(
   let idle = flow.isIdle
   let stopped = status.level == .stopped
   var actions: [MenuItem] = []
-  if status.level == .error || stopped {
+  if status.offersStart {
     actions.append(MenuItem(id: .startBosun, title: Title.start, enabled: idle))
   }
-  if status.level == .warning || status.level == .error {
+  if showsProblems(status.level) {
     actions.append(MenuItem(id: .showProblems, title: Title.problems))
   }
   let console = MenuItem(id: .openConsole, title: Title.console, enabled: !stopped, key: "o")
   let own = [
     updateItem(update, enabled: idle),
-    MenuItem(id: .openAtLogin, title: Title.login, checked: login),
-    helpItem(reachable: true, logs: !status.logs.isEmpty, idle: idle),
+    MenuItem(id: .openAtLogin, title: Title.login, enabled: idle, checked: login),
+    helpItem(runsBosun: true, doctor: true, logs: !status.logs.isEmpty, idle: idle),
   ]
   let quit = MenuItem(
     id: .quit, title: stopped ? "Quit bosun" : "Quit bosun…", enabled: idle, key: "q")
   let header = StatusHeader(
     dot: dot(of: status.level),
     sentence: current ? status.sentence : status.sentence + " (not current)",
-    detail: status.detail)
+    detail: status.detail + [flow.detail].compactMap { $0 })
   return MenuModel(
     header: header,
     sections: [actions, [console], own, [quit]].filter { !$0.isEmpty },
     iconBadge: badge(status.level, update))
 }
 
+/// A level this app does not know is shown as a warning: never all well.
 private func dot(of level: Level) -> Dot {
   switch level {
   case .ok: return .green
-  case .warning: return .yellow
+  case .warning, .unknown: return .yellow
   case .error: return .red
   case .stopped: return .grey
+  }
+}
+
+private func showsProblems(_ level: Level) -> Bool {
+  switch level {
+  case .warning, .error, .unknown: return true
+  case .ok, .stopped: return false
   }
 }
 
 private func badge(_ level: Level, _ update: UpdateState) -> IconBadge? {
   switch level {
   case .error: return .error
-  case .warning: return .warning
+  case .warning, .unknown: return .warning
   case .ok, .stopped:
     switch update {
     case .available, .confirming: return .update
@@ -242,24 +261,28 @@ private func updatingTitle(_ waiting: Int) -> String {
 }
 
 /// The Help submenu. The guide is a web page; the rest run bosun (or show what it logged), so they are
-/// there only while bosun can be reached.
-private func helpItem(reachable: Bool, logs: Bool, idle: Bool) -> MenuItem {
+/// there only while bosun can be run: Run bosun doctor also while its status could not be had (which is what
+/// doctor is for), the logs once a status named their folder, and Uninstall only with a status.
+private func helpItem(runsBosun: Bool, doctor: Bool, logs: Bool, idle: Bool) -> MenuItem {
   MenuItem(
     id: .helpMenu, title: Title.help,
     children: [
       MenuItem(id: .help(.guide), title: "bosun Guide"),
-      MenuItem(id: .help(.doctor), title: "Run bosun doctor", enabled: reachable),
-      MenuItem(id: .help(.logs), title: "Show Logs", enabled: reachable && logs),
-      MenuItem(id: .help(.uninstall), title: "Uninstall bosun…", enabled: reachable && idle),
+      MenuItem(id: .help(.doctor), title: "Run bosun doctor", enabled: doctor),
+      MenuItem(id: .help(.logs), title: "Show Logs", enabled: runsBosun && logs),
+      MenuItem(id: .help(.uninstall), title: "Uninstall bosun…", enabled: runsBosun && idle),
     ])
 }
 
-/// bosun is missing or cannot be run: nothing is offered that runs it, and Quit only leaves the app.
-private func offlineMenu(_ header: StatusHeader, badge: IconBadge?, flow: FlowState) -> MenuModel {
+/// bosun is missing, cannot be run or cannot be asked: nothing is offered that acts on it (Run bosun doctor
+/// only where bosun runs and its status could not be had), and Quit only leaves the app.
+private func offlineMenu(
+  _ header: StatusHeader, badge: IconBadge?, flow: FlowState, doctor: Bool = false
+) -> MenuModel {
   MenuModel(
     header: header,
     sections: [
-      [helpItem(reachable: false, logs: false, idle: flow.isIdle)],
+      [helpItem(runsBosun: false, doctor: doctor, logs: false, idle: flow.isIdle)],
       [MenuItem(id: .quit, title: "Quit bosun.app", enabled: flow.isIdle, key: "q")],
     ],
     iconBadge: badge)
@@ -271,14 +294,30 @@ public func loadingMenu(flow: FlowState) -> MenuModel {
     StatusHeader(dot: .grey, sentence: "Checking bosun…", detail: []), badge: nil, flow: flow)
 }
 
-private func tooNewMenu(_ number: Int, flow: FlowState) -> MenuModel {
-  let detail = "bosun reports version \(number) of its status; this app reads version \(Contract.supported)."
+/// bosun speaks a newer contract: "Update bosun…" (bosun's update, which brings the app bosun expects), and
+/// the way on when bosun is current and the app's own release lags behind it.
+private func tooNewMenu(_ number: Int, update: UpdateState, flow: FlowState) -> MenuModel {
+  let detail = [
+    "bosun reports version \(number) of its status; this app reads version \(Contract.supported).",
+    "If bosun is up to date, run `bosun app update` in a terminal.",
+  ]
   return MenuModel(
-    header: StatusHeader(dot: .yellow, sentence: "bosun.app needs an update", detail: [detail]),
+    header: StatusHeader(dot: .yellow, sentence: "bosun.app needs an update", detail: detail),
     sections: [
-      [MenuItem(id: .updateBosun, title: "Update bosun…", enabled: flow.isIdle)],
-      [helpItem(reachable: true, logs: false, idle: flow.isIdle)],
+      [updateBosunItem(update, idle: flow.isIdle)],
+      [helpItem(runsBosun: true, doctor: true, logs: false, idle: flow.isIdle)],
       [MenuItem(id: .quit, title: "Quit bosun.app", enabled: flow.isIdle, key: "q")],
     ],
     iconBadge: .warning)
+}
+
+/// "Update bosun…" while nothing is under way; otherwise what is (greyed), so a second click cannot start
+/// a second update.
+private func updateBosunItem(_ state: UpdateState, idle: Bool) -> MenuItem {
+  switch state {
+  case .idle, .failed, .available:
+    return MenuItem(id: .updateBosun, title: "Update bosun…", enabled: idle)
+  default:
+    return MenuItem(id: .updateBosun, title: updateItem(state, enabled: false).title, enabled: false)
+  }
 }

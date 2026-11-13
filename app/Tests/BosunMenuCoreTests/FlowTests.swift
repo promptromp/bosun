@@ -15,7 +15,7 @@ func flowRunning(_ flow: Flow) -> FlowState {
 
 /// Review focus 4: two Quits at once (⌘Q twice, or Quit while an update dialog is open).
 @Suite struct OneFlowAtATimeTests {
-  @Test func oneFlowAtATime() {
+  @Test func oneFlowAtATime() throws {
     var flow = FlowState()
     #expect(flow.isIdle)
     let first = flow.starts(.quit)
@@ -31,14 +31,34 @@ func flowRunning(_ flow: Flow) -> FlowState {
     #expect(flow.active == .quit)
   }
 
-  @Test func aQuitWhileTheUpdateDialogIsOpenIsIgnored() {
+  @Test func aSwitchOfOpenAtLoginIsAFlowOfItsOwn() throws {
+    var flow = flowRunning(.login)
+    let secondSwitch = flow.starts(.login)
+    let aQuit = flow.starts(.quit)
+    #expect(!secondSwitch)
+    #expect(!aQuit)
+    #expect(flow.pollsStatus)
+    flow.end(.login)
+    #expect(flow.isIdle)
+  }
+
+  @Test func theFlowsLineGoesWithIt() throws {
+    var flow = flowRunning(.quit)
+    flow.detail = "Quitting…"
+    flow.end(.update)  // another flow's end changes nothing
+    #expect(flow.detail == "Quitting…")
+    flow.end(.quit)
+    #expect(flow.detail == nil)
+  }
+
+  @Test func aQuitWhileTheUpdateDialogIsOpenIsIgnored() throws {
     var flow = flowRunning(.update)
     let quit = flow.starts(.quit)
     #expect(!quit)
     #expect(flow.active == .update)
   }
 
-  @Test func aFlowEndedMakesRoomForTheNext() {
+  @Test func aFlowEndedMakesRoomForTheNext() throws {
     var flow = flowRunning(.update)
     flow.end(.update)
     #expect(flow.isIdle)
@@ -46,7 +66,7 @@ func flowRunning(_ flow: Flow) -> FlowState {
     #expect(quit)
   }
 
-  @Test func onlyTheFlowThatIsRunningCanEndIt() {
+  @Test func onlyTheFlowThatIsRunningCanEndIt() throws {
     var flow = flowRunning(.quit)
     flow.end(.update)
     #expect(flow.active == .quit)
@@ -57,7 +77,7 @@ func flowRunning(_ flow: Flow) -> FlowState {
   }
 
   /// The seconds between `quit.json` and the stop read as "bosun quit did not finish".
-  @Test func theStatusIsNotPolledWhileTheAppsOwnQuitRuns() {
+  @Test func theStatusIsNotPolledWhileTheAppsOwnQuitRuns() throws {
     #expect(FlowState().pollsStatus)
     #expect(flowRunning(.update).pollsStatus)
     #expect(flowRunning(.start).pollsStatus)
@@ -75,19 +95,19 @@ func flowRunning(_ flow: Flow) -> FlowState {
     RunningApp(pid: pid, bundleID: bundle, startedAt: started)
   }
 
-  @Test func secondCopyExits() {
+  @Test func secondCopyExits() throws {
     let me = app(4200, started: 2000)
     let running = [app(4100, started: 1000), me]
     #expect(shouldExitAsSecondCopy(running: running, me: me, bundleID: id))
   }
 
-  @Test func theOnlyCopyStays() {
+  @Test func theOnlyCopyStays() throws {
     let me = app(4200, started: 2000)
     #expect(!shouldExitAsSecondCopy(running: [me], me: me, bundleID: id))
     #expect(!shouldExitAsSecondCopy(running: [], me: me, bundleID: id))
   }
 
-  @Test func otherApplicationsDoNotCount() {
+  @Test func otherApplicationsDoNotCount() throws {
     let me = app(4200, started: 2000)
     let running = [
       app(100, started: 1, bundle: "com.apple.finder"), app(101, started: 1, bundle: nil), me,
@@ -96,7 +116,7 @@ func flowRunning(_ flow: Flow) -> FlowState {
   }
 
   /// A copy that started later than another exits, and the one that started earlier stays.
-  @Test func theCopyThatStartedEarliestStays() {
+  @Test func theCopyThatStartedEarliestStays() throws {
     let older = app(4100, started: 1000)
     let newer = app(4200, started: 2000)
     let running = [older, newer]
@@ -106,7 +126,7 @@ func flowRunning(_ flow: Flow) -> FlowState {
 
   /// pids wrap at 99999: the copy launchd started days later can have the lower pid, and is still the
   /// newer. Going by pid alone would keep it and leave two icons.
-  @Test func aWrappedPidDoesNotMakeTheNewCopyTheOlder() {
+  @Test func aWrappedPidDoesNotMakeTheNewCopyTheOlder() throws {
     let old = app(98000, started: 1_000_000)
     let new = app(120, started: 1_300_000)
     let running = [old, new]
@@ -115,14 +135,14 @@ func flowRunning(_ flow: Flow) -> FlowState {
   }
 
   /// Started in the same instant, the lower pid stays, so one of two always does.
-  @Test func withTheSameStartTheLowerPidStays() {
+  @Test func withTheSameStartTheLowerPidStays() throws {
     let low = app(4100, started: 1000)
     let high = app(4200, started: 1000)
     #expect(!shouldExitAsSecondCopy(running: [low, high], me: low, bundleID: id))
     #expect(shouldExitAsSecondCopy(running: [low, high], me: high, bundleID: id))
   }
 
-  @Test func ofThreeOnlyTheEarliestStays() {
+  @Test func ofThreeOnlyTheEarliestStays() throws {
     let copies = [app(300, started: 3000), app(100, started: 1000), app(200, started: 2000)]
     let exits = copies.map { shouldExitAsSecondCopy(running: copies, me: $0, bundleID: id) }
     #expect(exits == [true, false, true])

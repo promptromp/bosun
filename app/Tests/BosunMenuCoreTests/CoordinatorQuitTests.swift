@@ -7,20 +7,21 @@ private let letFinish = ["quit", "--let-finish=10", "--pause-morning", "--sleep"
 private let stopNow = ["quit", "--stop-now", "--pause-morning", "--sleep", "--json"]
 
 /// The fixture's plan, with or without its busy agent.
-private func planText(busy: Bool) -> String {
-  let text = Fixtures.text("quit-plan")
+private func planText(busy: Bool) throws -> String {
+  let text = try Fixtures.text("quit-plan")
   return busy
     ? text : text.replacingOccurrences(of: "\"busy\": [\n    \"acme-exporter\"\n  ]", with: "\"busy\": []")
 }
 
-private func quitReply(_ fixture: String, code: Int32 = 0) -> CommandResult {
-  exited(code, Fixtures.text(fixture))
+/// A quit sample as bosun gave it, with the exit status its run returned.
+private func quitReply(_ fixture: String) throws -> CommandResult {
+  try Fixtures.reply(fixture)
 }
 
 @MainActor
-private func ready(busy: Bool = false, status: String = "status-ok") async -> World {
-  let world = await World(status: status, atLogin: true)
-  await world.reply(Bosun.quitPlan, exited(0, planText(busy: busy)))
+private func ready(busy: Bool = false, status: String = "status-ok") async throws -> World {
+  let world = try await World(status: status, atLogin: true)
+  await world.reply(Bosun.quitPlan, exited(0, try planText(busy: busy)))
   await world.refresh(.launch)
   return world
 }
@@ -30,8 +31,8 @@ private func statusLooks(_ world: World) async -> Int {
 }
 
 @MainActor @Suite struct CoordinatorQuitTests {
-  @Test func whileStoppedQuitJustLeavesTheApp() async {
-    let world = await ready(status: "status-stopped")
+  @Test func whileStoppedQuitJustLeavesTheApp() async throws {
+    let world = try await ready(status: "status-stopped")
     #expect(world.item(.quit)?.title == "Quit bosun")
     await world.coordinator.perform(.quit)
     #expect(world.ui.terminated == 1)
@@ -39,8 +40,8 @@ private func statusLooks(_ world: World) async -> Int {
     #expect(await !world.commands.contains(Bosun.quitPlan.args))
   }
 
-  @Test func withBosunMissingQuitJustLeavesTheApp() async {
-    let world = await World(status: nil)
+  @Test func withBosunMissingQuitJustLeavesTheApp() async throws {
+    let world = try await World(status: nil)
     await world.reply(Bosun.status, CommandResult(outcome: .notInstalled, stdout: "", stderr: ""))
     await world.refresh(.launch)
     #expect(world.item(.quit)?.title == "Quit bosun.app")
@@ -49,9 +50,9 @@ private func statusLooks(_ world: World) async -> Int {
     #expect(world.ui.presented.isEmpty)
   }
 
-  @Test func withNothingBusyOneDialogAndTheQuitRunsWithTheDefaultChoices() async {
-    let world = await ready()
-    await world.reply(Command(args: letFinish, timeout: .seconds(1)), quitReply("quit-result-stopped"))
+  @Test func withNothingBusyOneDialogAndTheQuitRunsWithTheDefaultChoices() async throws {
+    let world = try await ready()
+    await world.reply(Command(args: letFinish, timeout: .seconds(1)), try quitReply("quit-result-stopped"))
     world.ui.answer("Quit bosun")
     await world.coordinator.perform(.quit)
     #expect(world.ui.presented.map(\.title) == ["Quit bosun?"])
@@ -59,29 +60,58 @@ private func statusLooks(_ world: World) async -> Int {
     #expect(world.ui.terminated == 1)
   }
 
-  @Test func theBoxesTheAnswerSetBecomeTheCommand() async {
-    let world = await ready()
+  @Test func theBoxesTheAnswerSetBecomeTheCommand() async throws {
+    let world = try await ready()
     let command = ["quit", "--let-finish=10", "--json"]
-    await world.reply(Command(args: command, timeout: .seconds(1)), quitReply("quit-result-stopped"))
+    await world.reply(Command(args: command, timeout: .seconds(1)), try quitReply("quit-result-stopped"))
     world.ui.answer("Quit bosun", boxes: ["pauseMorning": false, "sleep": false])
     await world.coordinator.perform(.quit)
     #expect(await world.commands.contains(command))
     #expect(world.ui.terminated == 1)
   }
 
-  @Test func theQuitWaitsAsLongAsAnAgentMayTake() async {
-    let world = await ready()
-    await world.reply(Command(args: letFinish, timeout: .seconds(1)), quitReply("quit-result-stopped"))
+  @Test func theQuitWaitsAsLongAsAnAgentMayTake() async throws {
+    let world = try await ready()
+    await world.reply(Command(args: letFinish, timeout: .seconds(1)), try quitReply("quit-result-stopped"))
     world.ui.answer("Quit bosun")
     await world.coordinator.perform(.quit)
     let timeouts = await world.cli.timeouts
-    // The plan's ten minutes, its 180 s of lock wait and the two minutes of margin
-    #expect(timeouts.last == .seconds(900))
+    // The plan's ten minutes, its 180 s of lock wait, the 225 s of its other steps and a minute of margin
+    #expect(timeouts.last == .seconds(1065))  // 600 + 180 + 225 + 60
   }
 
-  @Test func keepingTheIconLeavesTheAppRunningAndLooksOnceMore() async {
-    let world = await ready()
-    await world.reply(Command(args: letFinish, timeout: .seconds(1)), quitReply("quit-result-stopped"))
+  /// A-I1: stopping them now can wait the plan's whole lock wait for a start that holds it, then the console
+  /// and `bosun stop`: the app's timeout outlasts all of it.
+  @Test func stoppingThemNowWaitsAsLongAsTheLockAndTheStopMayTake() async throws {
+    let world = try await ready(busy: true)
+    await world.reply(Command(args: stopNow, timeout: .seconds(1)), try quitReply("quit-result-stopped"))
+    world.ui.answer("Quit bosun")
+    world.ui.answer("Stop Them Now")
+    await world.coordinator.perform(.quit)
+    #expect(await world.cli.timeouts.last == .seconds(465))  // 180 + 225 + 60
+  }
+
+  /// A-14: while bosun quit runs, the menu says what it waits for.
+  @Test func whileTheQuitRunsTheMenuSaysWhatItWaitsFor() async throws {
+    let gate = Gate()
+    let world = try await World(status: "status-ok", atLogin: true, gates: [letFinish: gate])
+    await world.reply(Bosun.quitPlan, exited(0, try planText(busy: true)))
+    await world.reply(Command(args: letFinish, timeout: .seconds(1)), try quitReply("quit-result-stopped"))
+    await world.refresh(.launch)
+    world.ui.answer("Quit bosun", boxes: ["keepIcon": true])
+    world.ui.answer("Let Them Finish")
+    let quitting = Task { await world.coordinator.perform(.quit) }
+    #expect(await gate.waitForWaiter())
+    #expect(world.ui.lastModel?.header.detail.last == "Quitting: waiting for acme-exporter to finish…")
+    await gate.open()
+    await quitting.value
+    #expect(world.coordinator.flow.detail == nil)
+    #expect(world.ui.lastModel?.header.detail.contains { $0.hasPrefix("Quitting") } == false)
+  }
+
+  @Test func keepingTheIconLeavesTheAppRunningAndLooksOnceMore() async throws {
+    let world = try await ready()
+    await world.reply(Command(args: letFinish, timeout: .seconds(1)), try quitReply("quit-result-stopped"))
     let before = await statusLooks(world)
     world.ui.answer("Quit bosun", boxes: ["keepIcon": true])
     await world.coordinator.perform(.quit)
@@ -90,10 +120,10 @@ private func statusLooks(_ world: World) async -> Int {
     #expect(world.coordinator.flow.isIdle)
   }
 
-  @Test func aConsoleThatIsStillRunningIsToldAfterwards() async {
-    let world = await ready()
+  @Test func aConsoleThatIsStillRunningIsToldAfterwards() async throws {
+    let world = try await ready()
     await world.reply(
-      Command(args: letFinish, timeout: .seconds(1)), quitReply("quit-result-stopped-console-running"))
+      Command(args: letFinish, timeout: .seconds(1)), try quitReply("quit-result-stopped-console-running"))
     world.ui.answer("Quit bosun")
     world.ui.answer("OK")
     await world.coordinator.perform(.quit)
@@ -102,8 +132,8 @@ private func statusLooks(_ world: World) async -> Int {
     #expect(world.ui.terminated == 1)
   }
 
-  @Test func cancellingTheFirstDialogRunsNothingAndPollsAgain() async {
-    let world = await ready()
+  @Test func cancellingTheFirstDialogRunsNothingAndPollsAgain() async throws {
+    let world = try await ready()
     let before = await statusLooks(world)
     world.ui.answer("Cancel")
     await world.coordinator.perform(.quit)
@@ -113,9 +143,9 @@ private func statusLooks(_ world: World) async -> Int {
     #expect(await statusLooks(world) == before + 1)
   }
 
-  @Test func aQuitThatIsRefusedSaysWhy() async {
-    let world = await World(status: "status-ok", atLogin: true)
-    await world.reply(Bosun.quitPlan, quitReply("quit-plan-refused"))
+  @Test func aQuitThatIsRefusedSaysWhy() async throws {
+    let world = try await World(status: "status-ok", atLogin: true)
+    await world.reply(Bosun.quitPlan, try quitReply("quit-plan-refused"))
     await world.refresh(.launch)
     world.ui.answer("OK")
     await world.coordinator.perform(.quit)
@@ -125,10 +155,10 @@ private func statusLooks(_ world: World) async -> Int {
     #expect(world.coordinator.flow.isIdle)
   }
 
-  @Test func aQuitThatFailedSaysWhyAndTheAppStays() async {
-    let world = await ready()
+  @Test func aQuitThatFailedSaysWhyAndTheAppStays() async throws {
+    let world = try await ready()
     await world.reply(
-      Command(args: letFinish, timeout: .seconds(1)), quitReply("quit-result-failed", code: 1))
+      Command(args: letFinish, timeout: .seconds(1)), try quitReply("quit-result-failed"))
     world.ui.answer("Quit bosun")
     world.ui.answer("OK")
     await world.coordinator.perform(.quit)
@@ -137,21 +167,46 @@ private func statusLooks(_ world: World) async -> Int {
     #expect(world.ui.terminated == 0)
   }
 
-  @Test func aPlanThatCouldNotLookOffersStopNow() async {
-    let world = await World(status: "status-ok", atLogin: true)
-    await world.reply(Bosun.quitPlan, quitReply("quit-plan-failed", code: 1))
-    await world.reply(Command(args: stopNow, timeout: .seconds(1)), quitReply("quit-result-stopped"))
+  @Test func aPlanThatCouldNotLookOffersStopNow() async throws {
+    let world = try await World(status: "status-ok", atLogin: true)
+    await world.reply(Bosun.quitPlan, try Fixtures.reply("quit-plan-failed"))
+    await world.reply(Command(args: stopNow, timeout: .seconds(1)), try quitReply("quit-result-stopped"))
     await world.refresh(.launch)
     world.ui.answer("Stop Now")
     await world.coordinator.perform(.quit)
-    #expect(world.ui.presented.first?.buttons == ["Cancel", "Stop Now"])
+    #expect(world.ui.presented.first?.buttons == ["Cancel", "Stop Now", "Quit bosun.app"])
     #expect(await world.commands.contains(stopNow))
+    // the failure object's own wait: its lock wait and steps, not a fixed two minutes
+    #expect(await world.cli.timeouts.last == .seconds(465))  // 180 + 225 + 60
     #expect(world.ui.terminated == 1)
   }
 
-  @Test func aPlanThatCouldNotLookCanBeCancelled() async {
-    let world = await World(status: "status-ok", atLogin: true)
-    await world.reply(Bosun.quitPlan, quitReply("quit-plan-failed", code: 1))
+  @Test func aPlanThatCouldNotLookCanLeaveOnlyTheApp() async throws {
+    let world = try await World(status: "status-ok", atLogin: true)
+    await world.reply(Bosun.quitPlan, try Fixtures.reply("quit-plan-failed"))
+    await world.refresh(.launch)
+    world.ui.answer("Quit bosun.app")
+    await world.coordinator.perform(.quit)
+    #expect(world.ui.terminated == 1)
+    #expect(await world.commands.filter { $0.first == "quit" } == [Bosun.quitPlan.args])
+  }
+
+  /// P1: a refusal on a non-zero exit is only told: a Stop Now would be refused too.
+  @Test func aPlanRefusedOnAFailedExitOffersNothingThatWouldBeRefusedAgain() async throws {
+    let world = try await World(status: "status-ok", atLogin: true)
+    await world.reply(Bosun.quitPlan, exited(1, try Fixtures.text("quit-result-refused")))
+    await world.refresh(.launch)
+    world.ui.answer("OK")
+    await world.coordinator.perform(.quit)
+    #expect(world.ui.presented.map(\.title) == ["Quit did not finish"])
+    #expect(world.ui.lastSpec?.buttons == ["OK"])
+    #expect(world.ui.lastSpec?.message.contains("update is running") == true)
+    #expect(world.ui.terminated == 0)
+  }
+
+  @Test func aPlanThatCouldNotLookCanBeCancelled() async throws {
+    let world = try await World(status: "status-ok", atLogin: true)
+    await world.reply(Bosun.quitPlan, try quitReply("quit-plan-failed"))
     await world.refresh(.launch)
     world.ui.answer("Cancel")
     await world.coordinator.perform(.quit)
@@ -159,20 +214,27 @@ private func statusLooks(_ world: World) async -> Int {
     #expect(await world.commands.filter { $0.first == "quit" }.count == 1)
   }
 
-  @Test func aPlanThatHangsFailsWithThat() async {
-    let world = await World(status: "status-ok", atLogin: true)
+  /// A-5: a plan that hangs is no dead end: it says so, and offers Stop Now (with the longest timeout, since
+  /// bosun said nothing of its waits) and a way to leave only the app.
+  @Test func aPlanThatHangsOffersStopNowAndLeavingTheApp() async throws {
+    let world = try await World(status: "status-ok", atLogin: true)
     await world.reply(Bosun.quitPlan, CommandResult(outcome: .timedOut, stdout: "", stderr: ""))
+    await world.reply(Command(args: stopNow, timeout: .seconds(1)), try quitReply("quit-result-stopped"))
     await world.refresh(.launch)
-    world.ui.answer("OK")
+    world.ui.answer("Stop Now")
     await world.coordinator.perform(.quit)
-    #expect(world.ui.lastSpec?.message == "bosun did not answer in time")
+    #expect(world.ui.presented.first?.title == "bosun cannot say what quitting would stop")
+    #expect(world.ui.presented.first?.message.hasPrefix("bosun did not answer in time") == true)
+    #expect(await world.commands.contains(stopNow))
+    #expect(await world.cli.timeouts.last == .seconds(60 * 60))
+    #expect(world.ui.terminated == 1)
   }
 }
 
 @MainActor @Suite struct CoordinatorBusyQuitTests {
-  @Test func busyAgentsGetASecondQuestionNamingThem() async {
-    let world = await ready(busy: true)
-    await world.reply(Command(args: letFinish, timeout: .seconds(1)), quitReply("quit-result-stopped"))
+  @Test func busyAgentsGetASecondQuestionNamingThem() async throws {
+    let world = try await ready(busy: true)
+    await world.reply(Command(args: letFinish, timeout: .seconds(1)), try quitReply("quit-result-stopped"))
     world.ui.answer("Quit bosun")
     world.ui.answer("Let Them Finish")
     await world.coordinator.perform(.quit)
@@ -182,9 +244,9 @@ private func statusLooks(_ world: World) async -> Int {
     #expect(world.ui.terminated == 1)
   }
 
-  @Test func stoppingThemNowIsTheOtherCommand() async {
-    let world = await ready(busy: true)
-    await world.reply(Command(args: stopNow, timeout: .seconds(1)), quitReply("quit-result-stopped"))
+  @Test func stoppingThemNowIsTheOtherCommand() async throws {
+    let world = try await ready(busy: true)
+    await world.reply(Command(args: stopNow, timeout: .seconds(1)), try quitReply("quit-result-stopped"))
     world.ui.answer("Quit bosun")
     world.ui.answer("Stop Them Now")
     await world.coordinator.perform(.quit)
@@ -192,8 +254,8 @@ private func statusLooks(_ world: World) async -> Int {
     #expect(await !world.commands.contains(letFinish))
   }
 
-  @Test func cancellingTheSecondQuestionRunsNoQuit() async {
-    let world = await ready(busy: true)
+  @Test func cancellingTheSecondQuestionRunsNoQuit() async throws {
+    let world = try await ready(busy: true)
     world.ui.answer("Quit bosun")
     world.ui.answer("Cancel")
     await world.coordinator.perform(.quit)
@@ -203,11 +265,11 @@ private func statusLooks(_ world: World) async -> Int {
   }
 
   /// The wait ran out with an agent still busy: ask again, and keep waiting is the default.
-  @Test func anAgentStillBusyAfterTheWaitIsAskedAboutAgain() async {
-    let world = await ready(busy: true)
+  @Test func anAgentStillBusyAfterTheWaitIsAskedAboutAgain() async throws {
+    let world = try await ready(busy: true)
     let command = Command(args: letFinish, timeout: .seconds(1))
-    await world.reply(command, quitReply("quit-result-busy", code: 3))
-    await world.reply(command, quitReply("quit-result-stopped"))
+    await world.reply(command, try quitReply("quit-result-busy"))
+    await world.reply(command, try quitReply("quit-result-stopped"))
     world.ui.answer("Quit bosun")
     world.ui.answer("Let Them Finish")
     world.ui.answer("Keep Waiting")
@@ -218,10 +280,10 @@ private func statusLooks(_ world: World) async -> Int {
     #expect(world.ui.terminated == 1)
   }
 
-  @Test func stopItNowAfterTheWaitStopsThem() async {
-    let world = await ready(busy: true)
-    await world.reply(Command(args: letFinish, timeout: .seconds(1)), quitReply("quit-result-busy", code: 3))
-    await world.reply(Command(args: stopNow, timeout: .seconds(1)), quitReply("quit-result-stopped"))
+  @Test func stopItNowAfterTheWaitStopsThem() async throws {
+    let world = try await ready(busy: true)
+    await world.reply(Command(args: letFinish, timeout: .seconds(1)), try quitReply("quit-result-busy"))
+    await world.reply(Command(args: stopNow, timeout: .seconds(1)), try quitReply("quit-result-stopped"))
     world.ui.answer("Quit bosun")
     world.ui.answer("Let Them Finish")
     world.ui.answer("Stop It Now")
@@ -230,9 +292,9 @@ private func statusLooks(_ world: World) async -> Int {
     #expect(world.ui.terminated == 1)
   }
 
-  @Test func cancelQuitAfterTheWaitLeavesBosunAsItIs() async {
-    let world = await ready(busy: true)
-    await world.reply(Command(args: letFinish, timeout: .seconds(1)), quitReply("quit-result-busy", code: 3))
+  @Test func cancelQuitAfterTheWaitLeavesBosunAsItIs() async throws {
+    let world = try await ready(busy: true)
+    await world.reply(Command(args: letFinish, timeout: .seconds(1)), try quitReply("quit-result-busy"))
     world.ui.answer("Quit bosun")
     world.ui.answer("Let Them Finish")
     world.ui.answer("Cancel Quit")
@@ -244,9 +306,9 @@ private func statusLooks(_ world: World) async -> Int {
 
 /// Review focus 4, and the rule that the app does not poll while its own quit runs.
 @MainActor @Suite struct CoordinatorQuitFlowRulesTests {
-  @Test func nothingIsPolledWhileTheQuitRunsAndOneLookFollowsIt() async {
-    let world = await ready(busy: true)
-    await world.reply(Command(args: letFinish, timeout: .seconds(1)), quitReply("quit-result-stopped"))
+  @Test func nothingIsPolledWhileTheQuitRunsAndOneLookFollowsIt() async throws {
+    let world = try await ready(busy: true)
+    await world.reply(Command(args: letFinish, timeout: .seconds(1)), try quitReply("quit-result-stopped"))
     let before = await statusLooks(world)
     var duringDialogs: [Int] = []
     world.ui.whileOpen = { _ in
@@ -263,8 +325,8 @@ private func statusLooks(_ world: World) async -> Int {
     #expect(await statusLooks(world) == before + 1)
   }
 
-  @Test func theMenuIsGreyedWhileTheQuitRuns() async {
-    let world = await ready()
+  @Test func theMenuIsGreyedWhileTheQuitRuns() async throws {
+    let world = try await ready()
     var greyed: [Bool] = []
     world.ui.whileOpen = { _ in
       greyed.append(
@@ -277,8 +339,8 @@ private func statusLooks(_ world: World) async -> Int {
     #expect(greyed == [true])
   }
 
-  @Test func aSecondQuitWhileOneRunsIsIgnored() async {
-    let world = await ready()
+  @Test func aSecondQuitWhileOneRunsIsIgnored() async throws {
+    let world = try await ready()
     world.ui.whileOpen = { _ in
       await world.coordinator.perform(.quit)
       await world.coordinator.perform(.checkForUpdates)

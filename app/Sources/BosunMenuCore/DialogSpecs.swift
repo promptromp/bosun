@@ -99,15 +99,18 @@ public func quitFirstSpec(_ plan: QuitPlan) -> DialogSpec {
     cancel: 1)
 }
 
-/// Shown when `quit --plan` could not look: the reason, and a Stop Now, which needs no look. Stop Now ends
-/// every window, and bosun cannot tell whether agents are busy: so no button is the default (Return does
-/// nothing), and Escape cancels, as Apple's guidelines allow for a destructive action.
+/// Shown when `quit --plan` could not look (or did not answer): the reason, a Stop Now, which needs no look,
+/// and Quit bosun.app, which leaves bosun as it is. Stop Now ends every window, and bosun cannot tell whether
+/// agents are busy: so no button is the default (Return does nothing), and Escape cancels, as Apple's
+/// guidelines allow for a destructive action.
 public func quitUnavailableSpec(_ why: String) -> DialogSpec {
   DialogSpec(
     title: "bosun cannot say what quitting would stop",
-    message: why + "\n\nStop Now ends every window without waiting for any agent.", scroll: nil,
-    boxes: quitBoxes(sleep: true), buttons: ["Cancel", "Stop Now"], cancel: 0, defaultButton: nil,
-    style: .warning)
+    message: why
+      + "\n\nStop Now ends every window without waiting for any agent. Quit bosun.app leaves bosun "
+      + "as it is.",
+    scroll: nil, boxes: quitBoxes(sleep: true), buttons: ["Cancel", "Stop Now", "Quit bosun.app"], cancel: 0,
+    defaultButton: nil, style: .warning)
 }
 
 public func quitBusySpec(_ names: [String]) -> DialogSpec {
@@ -147,7 +150,11 @@ public func quitEvent(for step: QuitStep, answer: DialogAnswer) -> QuitEvent {
   case .first:
     return answer.button == 0 ? .confirmed(QuitChoices(answer: answer)) : .cancelled
   case .unavailable:
-    return answer.button == 1 ? .confirmed(QuitChoices(answer: answer)) : .cancelled
+    switch answer.button {
+    case 1: return .confirmed(QuitChoices(answer: answer))
+    case 2: return .leaveApp
+    default: return .cancelled
+    }
   case .busy, .stillBusy:
     switch answer.button {
     case 0: return .busyChosen(.letFinish)
@@ -162,7 +169,7 @@ public func quitEvent(for step: QuitStep, answer: DialogAnswer) -> QuitEvent {
 // MARK: Update
 
 private func versionLabel(_ installed: InstalledVersion) -> String {
-  installed.version ?? String(installed.commit.prefix(7))
+  installed.version ?? installed.commit.map { String($0.prefix(7)) } ?? "a version bosun could not read"
 }
 
 public func updateOfferSpec(_ check: UpdateCheck) -> DialogSpec {

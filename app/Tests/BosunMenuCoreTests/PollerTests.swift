@@ -31,7 +31,7 @@ actor Refreshes {
     Poller(clock: clock, interval: .seconds(30)) { reason in await refreshes.record(reason) }
   }
 
-  @Test func refreshesAtLaunchAndThenEveryThirtySeconds() async {
+  @Test func refreshesAtLaunchAndThenEveryThirtySeconds() async throws {
     let clock = ManualClock()
     let refreshes = Refreshes()
     let poller = make(clock, refreshes)
@@ -51,7 +51,7 @@ actor Refreshes {
   }
 
   /// Review focus 3: the Mac wakes and the status refreshes at once, not after 30 s.
-  @Test func aWakeRefreshesAtOnce() async {
+  @Test func aWakeRefreshesAtOnce() async throws {
     let clock = ManualClock()
     let refreshes = Refreshes()
     let poller = make(clock, refreshes)
@@ -61,7 +61,7 @@ actor Refreshes {
     await poller.stop()
   }
 
-  @Test func theMenuOpeningRefreshesAtOnce() async {
+  @Test func theMenuOpeningRefreshesAtOnce() async throws {
     let clock = ManualClock()
     let refreshes = Refreshes()
     let poller = make(clock, refreshes)
@@ -71,7 +71,7 @@ actor Refreshes {
     await poller.stop()
   }
 
-  @Test func aPausedPollerAsksNothing() async {
+  @Test func aPausedPollerAsksNothing() async throws {
     let clock = ManualClock()
     let refreshes = Refreshes()
     let poller = make(clock, refreshes)
@@ -89,7 +89,7 @@ actor Refreshes {
   }
 
   /// The app's own quit pauses it; it refreshes once when the quit is over.
-  @Test func resumingRefreshesOnceAndTheTimerGoesOn() async {
+  @Test func resumingRefreshesOnceAndTheTimerGoesOn() async throws {
     let clock = ManualClock()
     let refreshes = Refreshes()
     let poller = make(clock, refreshes)
@@ -104,7 +104,7 @@ actor Refreshes {
     await poller.stop()
   }
 
-  @Test func resumingWhenNotPausedDoesNothing() async {
+  @Test func resumingWhenNotPausedDoesNothing() async throws {
     let clock = ManualClock()
     let refreshes = Refreshes()
     let poller = make(clock, refreshes)
@@ -112,7 +112,7 @@ actor Refreshes {
     #expect(await refreshes.reasons.isEmpty)
   }
 
-  @Test func askingWhileARefreshIsRunningRunsOneMoreAfterIt() async {
+  @Test func askingWhileARefreshIsRunningRunsOneMoreAfterIt() async throws {
     let clock = ManualClock()
     let refreshes = Refreshes()
     await refreshes.holdTheFirst()
@@ -130,7 +130,7 @@ actor Refreshes {
     await poller.stop()
   }
 
-  @Test func pausingWhileARefreshIsRunningDropsTheOneQueued() async {
+  @Test func pausingWhileARefreshIsRunningDropsTheOneQueued() async throws {
     let clock = ManualClock()
     let refreshes = Refreshes()
     await refreshes.holdTheFirst()
@@ -145,7 +145,7 @@ actor Refreshes {
     await poller.stop()
   }
 
-  @Test func stoppedItAsksNothingMore() async {
+  @Test func stoppedItAsksNothingMore() async throws {
     let clock = ManualClock()
     let refreshes = Refreshes()
     let poller = make(clock, refreshes)
@@ -157,7 +157,7 @@ actor Refreshes {
     #expect(await refreshes.reasons == [.launch])
   }
 
-  @Test func startingTwiceKeepsOneTimer() async {
+  @Test func startingTwiceKeepsOneTimer() async throws {
     let clock = ManualClock()
     let refreshes = Refreshes()
     let poller = make(clock, refreshes)
@@ -179,12 +179,12 @@ final class Throttle {
 @Suite struct UpdateCheckThrottleTests {
   private let start = Date(timeIntervalSince1970: 1_800_000_000)
 
-  @Test func theFirstCheckIsAllowedAtLaunch() {
+  @Test func theFirstCheckIsAllowedAtLaunch() throws {
     let throttle = Throttle()
     #expect(throttle.allows(.launch, at: start))
   }
 
-  @Test func aTimerTickChecksEverySixHours() {
+  @Test func aTimerTickChecksEverySixHours() throws {
     let throttle = Throttle()
     #expect(throttle.allows(.launch, at: start))
     #expect(!throttle.allows(.timer, at: start.addingTimeInterval(30)))
@@ -194,7 +194,7 @@ final class Throttle {
     #expect(!throttle.allows(.timer, at: start.addingTimeInterval(6 * 3600 + 30)))
   }
 
-  @Test func theMenuOpeningChecksAtMostOnceAMinute() {
+  @Test func theMenuOpeningChecksAtMostOnceAMinute() throws {
     let throttle = Throttle()
     #expect(throttle.allows(.menuOpened, at: start))
     #expect(!throttle.allows(.menuOpened, at: start.addingTimeInterval(59)))
@@ -202,26 +202,26 @@ final class Throttle {
     #expect(!throttle.allows(.menuOpened, at: start.addingTimeInterval(61)))
   }
 
-  @Test func aWakeCountsAsATimerTick() {
+  @Test func aWakeCountsAsATimerTick() throws {
     let throttle = Throttle()
     #expect(throttle.allows(.launch, at: start))
     #expect(!throttle.allows(.wake, at: start.addingTimeInterval(3600)))
     #expect(throttle.allows(.wake, at: start.addingTimeInterval(7 * 3600)))
   }
 
-  @Test func resumingAfterAQuitNeverChecks() {
+  @Test func resumingAfterAQuitNeverChecks() throws {
     let throttle = Throttle()
     #expect(!throttle.allows(.resumed, at: start))
     #expect(!throttle.allows(.afterAction, at: start))
   }
 
-  @Test func aCheckThatWasRefusedIsNotRecorded() {
+  @Test func aCheckThatWasRefusedIsNotRecorded() throws {
     let throttle = Throttle()
     #expect(!throttle.allows(.resumed, at: start))
     #expect(throttle.allows(.menuOpened, at: start.addingTimeInterval(1)))
   }
 
-  @Test func aClockThatWentBackwardsChecksAgain() {
+  @Test func aClockThatWentBackwardsChecksAgain() throws {
     let throttle = Throttle()
     #expect(throttle.allows(.launch, at: start))
     #expect(throttle.allows(.menuOpened, at: start.addingTimeInterval(-3600)))

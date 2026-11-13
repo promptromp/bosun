@@ -38,6 +38,10 @@ public final class AppCoordinator {
   var throttle = UpdateCheckThrottle()
   var checkIsManual = false
   var failureShowing = false
+  /// The grace an `update --yes` was started with: its sleep, cancelled when the update leaves `starting`
+  /// (so an earlier grace never fires for a later start), and the work that follows it.
+  var graceSleep: Task<Void, any Error>?
+  var graceWork: Task<Void, Never>?
 
   // Work that goes on outside a look, so a slow command never holds the next look. Each is chained after the
   // last of its kind (one at a time), and `settle` waits for them.
@@ -45,6 +49,9 @@ public final class AppCoordinator {
   var failureWork: Task<Void, Never>?
   private var launchWork: Task<Void, Never>?
   private var launchDecided = false
+  /// Counts Open at Login's switches: a reading of it begun before the last switch is dropped, so a look
+  /// that began earlier cannot put the old state back.
+  private var loginGeneration = 0
   private lazy var poller = Poller(clock: clock) { [weak self] reason in
     await self?.look(reason)
   }
@@ -96,12 +103,17 @@ public final class AppCoordinator {
 
   public func didWake() async { await refresh(.wake) }
 
-  /// Waits for what went on outside the looks: the update checks, a failure being told, the start at launch.
+  /// Waits for what went on outside the looks (the update checks, a failure being told, the start at launch,
+  /// a grace that woke), until none started more of it: the tests' way to let the background settle. A grace
+  /// still asleep (the update is `starting`) is not waited for: it wakes only when its time comes.
   public func settle() async {
-    for _ in 0..<3 {
+    while true {
+      let before = [launchWork, backgroundWork, failureWork, graceWork]
       await launchWork?.value
       await backgroundWork?.value
       await failureWork?.value
+      if !update.isStarting { await graceWork?.value }
+      if [launchWork, backgroundWork, failureWork, graceWork] == before { return }
     }
   }
 
@@ -111,7 +123,7 @@ public final class AppCoordinator {
   /// what it would show).
   private func look(_ reason: RefreshReason) async {
     let state = await loadStatus(via: cli, previous: snapshot)
-    guard flow.active != .quit else { return }
+    guard flow.pollsStatus else { return }
     status = state
     if case .loaded(let snapshot, current: true) = state {
       runInBackground(apply(snapshot.updateEvent))
@@ -119,23 +131,28 @@ public final class AppCoordinator {
     render()
     if [.launch, .menuOpened, .resumed].contains(reason) {
       await readLogin()
-      guard flow.active != .quit else { return }
+      guard flow.pollsStatus else { return }
       render()
     }
     startAtLaunch(state)
     checkInBackground(reason)
   }
 
+  /// Whether Open at Login is on, as `bosun app status` says; a reading begun before the last switch is
+  /// dropped (it may say the state from before it).
   private func readLogin() async {
-    if case .success(let app) = await fetch(AppStatus.self, Bosun.appStatus, via: cli) {
-      login = app.login
-    }
+    let asked = loginGeneration
+    guard case .success(let app) = await fetch(AppStatus.self, Bosun.appStatus, via: cli) else { return }
+    if asked == loginGeneration { login = app.login }
   }
 
-  /// Opened by you with bosun stopped (or red): start it, once, on the first status that says so. Its own
-  /// task: a failure's dialog must not hold the look.
+  /// Opened by you with bosun not running (stopped, or red with no window open): start it, once, on the first
+  /// status that says so. Its own task: a failure's dialog must not hold the look.
   private func startAtLaunch(_ state: StatusState) {
-    if case .unreachable = state { return }
+    switch state {
+    case .unreachable, .cannotRun: return
+    default: break
+    }
     guard !launchDecided else { return }
     launchDecided = true
     if shouldStartAtLaunch(options, status: state) {
@@ -189,14 +206,21 @@ public final class AppCoordinator {
     }
   }
 
+  /// Open at Login, switched: one at a time (the item is greyed meanwhile), and what a look read before or
+  /// during the switch is dropped.
   private func toggleLogin() async {
+    guard flow.begin(.login) else { return }
+    render()
+    loginGeneration += 1
     let result = await cli.run(Bosun.appLogin(on: !login))
-    guard result.outcome == .exited(0) else {
+    loginGeneration += 1
+    if result.outcome == .exited(0) {
+      login.toggle()
+      await readLogin()
+    } else {
       await fail("Cannot change Open at Login", failureText(result))
-      return
     }
-    login.toggle()
-    await readLogin()
+    flow.end(.login)
     render()
   }
 
@@ -231,13 +255,18 @@ public final class AppCoordinator {
     await finishQuit(step)
   }
 
-  /// The quit flow's steps until it is finished: each step's dialog or command makes the next event.
+  /// The quit flow's steps until it is finished: each step's dialog or command makes the next event. While
+  /// `bosun quit` runs, a line under the status says what it waits for.
   private func driveQuit() async -> QuitStep {
     var (step, _) = startQuit()
     var event = await quitPlanEvent(via: cli)
+    var busy: [String] = []
     while true {
       (step, _) = next(step, on: event)
       if step.isFinished { return step }
+      busy = step.busyNames ?? busy
+      flow.detail = quittingLine(step, busy: busy)
+      render()
       event = await nextQuitEvent(after: step)
     }
   }
@@ -245,12 +274,12 @@ public final class AppCoordinator {
   private func nextQuitEvent(after step: QuitStep) async -> QuitEvent {
     switch step {
     case .first(let plan): return await ask(quitFirstSpec(plan), step)
-    case .unavailable(let why): return await ask(quitUnavailableSpec(why), step)
+    case .unavailable(let why, _): return await ask(quitUnavailableSpec(why), step)
     case .busy(let names, _): return await ask(quitBusySpec(names), step)
     case .stillBusy(let names, _): return await ask(quitStillBusySpec(names), step)
     case .running(let choices): return await runQuit(choices, via: cli)
     case .planning: return await quitPlanEvent(via: cli)
-    case .failed, .done, .cancelled: return .cancelled
+    case .failed, .done, .appOnly, .cancelled: return .cancelled
     }
   }
 
@@ -258,20 +287,20 @@ public final class AppCoordinator {
     quitEvent(for: step, answer: await ui.present(spec))
   }
 
-  /// What the quit left: a failure is told, a note too; the app leaves unless the icon is kept; else the
-  /// poller is let go and looks once.
+  /// What the quit left: a failure is told, a note too; the app leaves unless the icon is kept (or leaves
+  /// alone, bosun as it is, when that was chosen); else the poller is let go and looks once.
   private func finishQuit(_ step: QuitStep) async {
     switch step {
     case .done(_, let note):
       if let note { _ = await ui.present(quitNoteSpec(note)) }
-      if step.quitsTheApp {
-        ui.terminate()
-        return
-      }
     case .failed(let why):
       await fail("Quit did not finish", why)
     default:
       break
+    }
+    if step.quitsTheApp {
+      ui.terminate()
+      return
     }
     flow.end(.quit)
     render()

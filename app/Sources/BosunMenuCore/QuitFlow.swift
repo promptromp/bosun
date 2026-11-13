@@ -11,19 +11,39 @@ public enum BusyChoice: Equatable, Sendable {
   case stopNow
 }
 
-/// How long a quit that lets the agents finish may take, as the plan said it: the minutes `--let-finish`
-/// waits for and the seconds its steps may wait for the windows lock.
+/// How long a quit may take, as the plan said it: the minutes `--let-finish` waits for, the seconds its steps
+/// may wait for the windows lock, and the most its other steps take.
 public struct QuitWait: Equatable, Sendable {
   public let minutes: Int
   public let lockSeconds: Int
+  public let stepsSeconds: Int
+
+  public init(minutes: Int, lockSeconds: Int, stepsSeconds: Int = QuitWait.stepsBefore) {
+    self.minutes = minutes
+    self.lockSeconds = lockSeconds
+    self.stepsSeconds = stepsSeconds
+  }
 
   /// The `--let-finish` argument, which keeps the app's wait and bosun's own the same number.
   var argument: String { "--let-finish=\(minutes)" }
 
-  /// The CLI timeout: the wait, the lock wait and a margin for the rest of the quit.
-  var timeout: Duration { .seconds(minutes * 60 + lockSeconds + Self.marginSeconds) }
+  /// The one place a quit's timeout is made. It must outlast what `bosun quit` itself may wait for, or the app
+  /// kills it half way (its `bosun stop` among it): with `--let-finish` the minutes (BOSUN_QUIT_WAIT_MINUTES,
+  /// polled to the deadline), for both modes the wait for the windows lock that a start holds
+  /// (BOSUN_WINDOWS_LOCK_WAIT_SECONDS, 180 s by default, libexec/bosun-quit), and then the steps after it
+  /// (`steps_seconds`: its looks at the windows, the console job's stop, `bosun stop`), plus a margin for
+  /// starting bosun's own processes.
+  func timeout(for busy: BusyChoice) -> Duration {
+    let waited = busy == .letFinish ? minutes * 60 : 0
+    return .seconds(waited + lockSeconds + stepsSeconds + Self.marginSeconds)
+  }
 
-  static let marginSeconds = 120
+  static let marginSeconds = 60
+  /// What a bosun from before `steps_seconds` was said took for those steps (lib/quit_live.py's STEPS_SECONDS
+  /// then: two looks of 30 s, launchctl's two calls of 20 s, 5 s for the console, 120 s for `bosun stop`).
+  public static let stepsBefore = 225
+  /// The longest the app holds a quit whose plan said nothing of its waits.
+  static let unknown: Duration = .seconds(60 * 60)
 }
 
 public struct QuitChoices: Equatable, Sendable {
@@ -64,9 +84,11 @@ public func quitCommand(_ choices: QuitChoices) -> [String] {
 public enum QuitStep: Equatable, Sendable {
   /// `bosun quit --plan --json` is being asked.
   case planning
-  /// `quit --plan` said it could not look (the windows cannot be read): the reason, with the choices and
-  /// "Stop Now", which does not need the look. This is how a quit that did not finish is finished.
-  case unavailable(String)
+  /// `quit --plan` said it could not look (the windows cannot be read), did not answer in time, or failed
+  /// without an object: the reason, with the choices, "Stop Now", which does not need the look, and "Quit
+  /// bosun.app", which leaves bosun as it is. This is how a quit that did not finish is finished. The wait is
+  /// the failure object's, nil when there was none.
+  case unavailable(String, QuitWait?)
   /// The first dialog: what quitting would meet, and the choices.
   case first(QuitPlan)
   /// The second dialog: these agents are busy.
@@ -78,18 +100,23 @@ public enum QuitStep: Equatable, Sendable {
   case failed(String)
   /// The quit happened. The app quits itself unless the icon is kept; `note` is something to tell.
   case done(keepIcon: Bool, note: String?)
+  /// Only the app quits, and bosun is left as it is (chosen where bosun could not say what a quit would stop).
+  case appOnly
   case cancelled
 
   public var isFinished: Bool {
     switch self {
-    case .failed, .done, .cancelled: return true
+    case .failed, .done, .appOnly, .cancelled: return true
     default: return false
     }
   }
 
   public var quitsTheApp: Bool {
-    if case .done(let keepIcon, _) = self { return !keepIcon }
-    return false
+    switch self {
+    case .done(let keepIcon, _): return !keepIcon
+    case .appOnly: return true
+    default: return false
+    }
   }
 }
 
@@ -102,11 +129,15 @@ public enum QuitOutcome: Equatable, Sendable {
 
 public enum QuitEvent: Equatable, Sendable {
   case planned(QuitPlan)
+  /// The plan cannot go on, and nothing the app could run would get past it (a refusal): only told.
   case planFailed(String)
-  /// bosun answered the plan with a failure of its own (its `error`), which a Stop Now can get past.
-  case planUnavailable(String)
+  /// The plan could not be made (bosun's own failure, its `error`; no answer in time; a failure with no
+  /// object), which a Stop Now can get past; with the wait its failure object said, if any.
+  case planUnavailable(String, QuitWait?)
   case confirmed(QuitChoices)
   case busyChosen(BusyChoice)
+  /// Leave the app, and bosun as it is.
+  case leaveApp
   case cancelled
   case ended(QuitOutcome)
 }
@@ -126,10 +157,14 @@ public func next(_ step: QuitStep, on event: QuitEvent) -> (QuitStep, [Command])
     return (plan.refused.map { .failed($0) } ?? .first(plan), [])
   case (.planning, .planFailed(let why)):
     return (.failed(why), [])
-  case (.planning, .planUnavailable(let why)):
-    return (.unavailable(why), [])
-  case (.unavailable, .confirmed(let choices)):
-    return running(QuitChoices(copying: choices, busy: .stopNow))
+  case (.planning, .planUnavailable(let why, let wait)):
+    return (.unavailable(why, wait), [])
+  case (.unavailable(_, let wait), .confirmed(let choices)):
+    var choices = QuitChoices(copying: choices, busy: .stopNow)
+    choices.wait = wait
+    return running(choices)
+  case (.unavailable, .leaveApp):
+    return (.appOnly, [])
   case (.first(let plan), .confirmed(let choices)):
     return confirming(plan, choices)
   case (.busy(_, let choices), .busyChosen(let busy)), (.stillBusy(_, let choices), .busyChosen(let busy)):
@@ -176,6 +211,35 @@ extension QuitChoices {
   }
 }
 
+extension UpdateState {
+  /// `update --yes` was started and `status` does not show it yet: its grace is asleep.
+  var isStarting: Bool {
+    if case .starting = self { return true }
+    return false
+  }
+}
+
+extension QuitStep {
+  /// The busy agents a dialog named, for the line a running quit shows.
+  var busyNames: [String]? {
+    switch self {
+    case .busy(let names, _), .stillBusy(let names, _): return names
+    default: return nil
+    }
+  }
+}
+
+/// The line under the status while `bosun quit` runs: what it waits for (the agents named busy, which it lets
+/// finish), or that it stops bosun now. Nil in any other step.
+public func quittingLine(_ step: QuitStep, busy: [String]) -> String? {
+  guard case .running(let choices) = step else { return nil }
+  switch choices.busy {
+  case .stopNow: return "Quitting: stopping bosun…"
+  case .letFinish:
+    return busy.isEmpty ? "Quitting…" : "Quitting: waiting for \(busy.joined(separator: ", ")) to finish…"
+  }
+}
+
 // MARK: what a quit's reply means
 
 let quitFailedText =
@@ -183,6 +247,7 @@ let quitFailedText =
   + "again to finish, or `bosun start` to start bosun again."
 let quitPlanFailedText =
   "bosun could not say what quitting would stop. Stop Now still works: it does not need to."
+let quitPlanRefusedText = "bosun refused to quit and did not say why. Run `bosun quit --plan` in a terminal."
 let quitTimedOutText =
   "bosun quit did not finish in time. Its record may stay, so bosun stays stopped: run "
   + "`bosun quit --stop-now` again to finish, or `bosun start` to start bosun again."
@@ -219,24 +284,32 @@ public func quitPlanEvent(via cli: any BosunCLI) async -> QuitEvent {
 
 /// `quit --plan --json`'s reply as an event. When it cannot look it exits 1 with its failure object on
 /// stdout (the plan's keys, `result: failed` and its `error`) and nothing on stderr: that `error` is
-/// what is shown, and a Stop Now is offered, which `--stop-now` makes possible with unreadable windows.
+/// what is shown, and a Stop Now is offered, which `--stop-now` makes possible with unreadable windows. Only
+/// `failed` offers it: an object with another result on a non-zero exit (refused: an update runs) would be
+/// refused again, so it is only told. A plan that did not answer in time, or failed with no object, offers
+/// Stop Now too (with the longest wait, since bosun did not say its own), and a way to leave only the app.
 func quitPlanEvent(from result: CommandResult) -> QuitEvent {
-  if let failure = planFailureObject(result) {
-    return .planUnavailable(failure.message ?? quitPlanFailedText)
+  if let reply = planFailureObject(result) {
+    guard reply.result == .failed else { return .planFailed(reply.message ?? quitPlanRefusedText) }
+    return .planUnavailable(reply.message ?? quitPlanFailedText, reply.plan.wait)
   }
   switch decodeReply(QuitPlan.self, result) {
   case .success(let plan): return .planned(plan)
-  case .failure(let failure): return .planFailed(failure.message)
+  case .failure(let failure):
+    switch failure {
+    case .timedOut, .exited: return .planUnavailable(failure.message, nil)
+    case .notInstalled, .couldNotStart, .contract: return .planFailed(failure.message)
+    }
   }
 }
 
-/// The failure object a plan that could not look printed (on a non-zero exit), if that is what it printed.
+/// The object a plan printed on a non-zero exit, if it printed one.
 private func planFailureObject(_ result: CommandResult) -> QuitResult? {
   guard case .exited(let code) = result.outcome, code != 0 else { return nil }
-  guard case .success(let failure) = decodeReply(QuitResult.self, result, trustingStdout: true) else {
+  guard case .success(let reply) = decodeReply(QuitResult.self, result, trustingStdout: true) else {
     return nil
   }
-  return failure
+  return reply
 }
 
 // MARK: what Quit does

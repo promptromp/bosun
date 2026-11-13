@@ -3,7 +3,9 @@ import Testing
 
 @testable import BosunMenuCore
 
-private func loaded(_ name: String) -> StatusState { .loaded(Fixtures.status(name), current: true) }
+private func loaded(_ name: String) throws -> StatusState {
+  .loaded(try Fixtures.status(name), current: true)
+}
 
 private func jsonObject(_ data: Data) throws -> [String: Any] {
   try #require(try JSONSerialization.jsonObject(with: data) as? [String: Any])
@@ -15,13 +17,13 @@ private func jsonObject(_ data: Data) throws -> [String: Any] {
     .help(.guide), .help(.doctor), .help(.logs), .help(.uninstall), .quit,
   ]
 
-  @Test func eachItemNameReadsBackAsTheItem() {
+  @Test func eachItemNameReadsBackAsTheItem() throws {
     for id in all {
       #expect(ItemID(name: id.name) == id, "\(id.name)")
     }
   }
 
-  @Test func theNamesAreTheDocumentedOnes() {
+  @Test func theNamesAreTheDocumentedOnes() throws {
     #expect(
       all.map(\.name) == [
         "startBosun", "showProblems", "openConsole", "checkForUpdates", "openAtLogin", "updateBosun",
@@ -30,11 +32,11 @@ private func jsonObject(_ data: Data) throws -> [String: Any] {
       ])
   }
 
-  @Test func theNamesAreDistinct() {
+  @Test func theNamesAreDistinct() throws {
     #expect(Set(all.map(\.name)).count == all.count)
   }
 
-  @Test func aNameThatIsNotAnItemIsNil() {
+  @Test func aNameThatIsNotAnItemIsNil() throws {
     #expect(ItemID(name: "reboot") == nil)
     #expect(ItemID(name: "help.nothing") == nil)
     #expect(ItemID(name: "") == nil)
@@ -43,7 +45,7 @@ private func jsonObject(_ data: Data) throws -> [String: Any] {
 
 @Suite struct MenuJSONTests {
   @Test func theMenuAndItsStatusLevelAreWritten() throws {
-    let state = loaded("status-ok")
+    let state = try loaded("status-ok")
     let model = menu(for: state, update: .idle, flow: FlowState())
     let object = try jsonObject(menuJSON(model, status: state))
     #expect(object["level"] as? String == "ok")
@@ -58,7 +60,7 @@ private func jsonObject(_ data: Data) throws -> [String: Any] {
   }
 
   @Test func anItemCarriesItsStateAndItsChildren() throws {
-    let state = loaded("status-stopped")
+    let state = try loaded("status-stopped")
     let model = menu(for: state, update: .idle, flow: FlowState(), login: true)
     let object = try jsonObject(menuJSON(model, status: state))
     #expect(object["level"] as? String == "stopped")
@@ -77,19 +79,20 @@ private func jsonObject(_ data: Data) throws -> [String: Any] {
   }
 
   @Test func theBadgeIsNamed() throws {
-    let state = loaded("status-warning")
+    let state = try loaded("status-warning")
     let model = menu(for: state, update: .idle, flow: FlowState())
     let object = try jsonObject(menuJSON(model, status: state))
     #expect(object["icon_badge"] as? String == "warning")
     #expect(object["level"] as? String == "warning")
   }
 
-  @Test func theLevelNamesWhatIsKnownWhenThereIsNoStatus() {
+  @Test func theLevelNamesWhatIsKnownWhenThereIsNoStatus() throws {
     #expect(statusLevelName(.notInstalled) == "not_installed")
     #expect(statusLevelName(.unreachable("x")) == "unreachable")
+    #expect(statusLevelName(.cannotRun("x")) == "cannot_run")
     #expect(statusLevelName(.contractTooNew(2)) == "contract_too_new")
     #expect(statusLevelName(nil) == "loading")
-    #expect(statusLevelName(loaded("status-error")) == "error")
+    #expect(try statusLevelName(loaded("status-error")) == "error")
   }
 
   @Test func theLoadingMenuIsWritten() throws {
@@ -117,13 +120,13 @@ private func jsonObject(_ data: Data) throws -> [String: Any] {
     #expect(try action(#"{"answer": {"button": "OK"}}"#) == .answer(HookAnswer(button: "OK", boxes: [:])))
   }
 
-  @Test func whatIsNotAnActionIsRefusedWithAReason() {
+  @Test func whatIsNotAnActionIsRefusedWithAReason() throws {
     for text in [#"{"item": "reboot"}"#, "{}", "not json", #"{"item": 3}"#, #"{"answer": {}}"#] {
       #expect(throws: HookError.self) { try action(text) }
     }
   }
 
-  @Test func theReasonSaysWhatWasWrong() {
+  @Test func theReasonSaysWhatWasWrong() throws {
     #expect(throws: HookError.unknownItem("reboot")) { try action(#"{"item": "reboot"}"#) }
   }
 }
@@ -137,21 +140,21 @@ private func jsonObject(_ data: Data) throws -> [String: Any] {
     ],
     buttons: ["Quit bosun", "Cancel"], cancel: 1)
 
-  @Test func theButtonIsFoundByItsTitle() {
+  @Test func theButtonIsFoundByItsTitle() throws {
     let answer = HookAnswer(button: "Cancel", boxes: [:]).resolve(for: spec)
     #expect(answer?.button == 1)
   }
 
-  @Test func theBoxesStartAtTheDialogsDefaultsAndTakeTheAnswers() {
+  @Test func theBoxesStartAtTheDialogsDefaultsAndTakeTheAnswers() throws {
     let answer = HookAnswer(button: "Quit bosun", boxes: ["keepIcon": true]).resolve(for: spec)
     #expect(answer == DialogAnswer(button: 0, boxes: ["pauseMorning": true, "keepIcon": true]))
   }
 
-  @Test func aButtonThatIsNotThereIsNoAnswer() {
+  @Test func aButtonThatIsNotThereIsNoAnswer() throws {
     #expect(HookAnswer(button: "Shred", boxes: [:]).resolve(for: spec) == nil)
   }
 
-  @Test func aBoxThatIsNotThereIsNoAnswer() {
+  @Test func aBoxThatIsNotThereIsNoAnswer() throws {
     #expect(HookAnswer(button: "Cancel", boxes: ["nothing": true]).resolve(for: spec) == nil)
   }
 }

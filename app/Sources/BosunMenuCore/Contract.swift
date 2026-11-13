@@ -73,8 +73,36 @@ private func plainReason(_ error: any Error) -> String {
 
 // MARK: bosun status --json
 
-public enum Level: String, Decodable, Equatable, Sendable {
+/// The status's level. A word this app does not know (a CLI that added a level) is `unknown`, and shows as a
+/// warning: never all well, never a Start, and the problems one click away.
+public enum Level: Equatable, Sendable {
   case ok, warning, error, stopped
+  case unknown(String)
+
+  private static let known: [String: Level] = [
+    "ok": .ok, "warning": .warning, "error": .error, "stopped": .stopped,
+  ]
+
+  public init(name: String) {
+    self = Self.known[name] ?? .unknown(name)
+  }
+
+  /// The word bosun used.
+  public var name: String {
+    switch self {
+    case .ok: return "ok"
+    case .warning: return "warning"
+    case .error: return "error"
+    case .stopped: return "stopped"
+    case .unknown(let word): return word
+    }
+  }
+}
+
+extension Level: Decodable {
+  public init(from decoder: any Decoder) throws {
+    self.init(name: try decoder.singleValueContainer().decode(String.self))
+  }
 }
 
 public struct Stopped: Decodable, Equatable, Sendable {
@@ -115,6 +143,9 @@ public struct StatusSnapshot: Decodable, Equatable, Sendable {
   public let sentence: String
   public let detail: [String]
   public let windows: Int
+  /// Whether bosun's windows are open: false when none is, nil when they could not be read (or a bosun that
+  /// does not say).
+  public let running: Bool?
   public let waiting: [String]
   public let keepAwakeUntil: String?
   public let stopped: Stopped?
@@ -127,13 +158,27 @@ public struct StatusSnapshot: Decodable, Equatable, Sendable {
   public var updateEvent: UpdateEvent {
     .statusShows(running: update.state == .running, waitingFor: update.waitingFor)
   }
+
+  /// Whether Start is what this state calls for: bosun is not running, and is to be. You stopped or quit it
+  /// (stopped, or a quit that did not finish), or it is not running though it should be (never started today,
+  /// the morning run failed: an error with no window open). A bosun that runs with an error, or whose windows
+  /// could not be read, is not started again: its problems are shown instead, since Start runs the morning's
+  /// setup and may restart the session.
+  public var offersStart: Bool {
+    switch level {
+    case .stopped: return true
+    case .error: return stopped != nil || running == false
+    case .ok, .warning, .unknown: return false
+    }
+  }
 }
 
 // MARK: bosun update --check --json
 
 public struct InstalledVersion: Decodable, Equatable, Sendable {
   public let version: String?
-  public let commit: String
+  /// Null when bosun could not read its own commit (its check then says why in `error`).
+  public let commit: String?
 }
 
 public struct LatestVersion: Decodable, Equatable, Sendable {
@@ -241,123 +286,6 @@ extension UpdatePlan: Decodable {
 /// What `bosun update --dry-run --json` prints: the plan, null when none was made.
 public struct UpdateDryRun: Decodable, Equatable, Sendable {
   public let plan: UpdatePlan?
-}
-
-// MARK: bosun quit --plan --json, bosun quit ... --json
-
-public struct QuitPlan: Decodable, Equatable, Sendable {
-  public let contract: Int
-  public let windows: [String]
-  public let busy: [String]
-  public let waiting: [String]
-  public let keepAwakeUntil: String?
-  public let refused: String?
-  public let note: String?
-  /// How long a `--let-finish` quit may wait (BOSUN_QUIT_WAIT_MINUTES) and how long its steps wait for the
-  /// windows lock (BOSUN_WINDOWS_LOCK_WAIT_SECONDS): what the quit's timeout is made of. Part 1 prints both
-  /// in every plan; they are optional here only so a plan object without them still reads (see `wait`).
-  public let waitMinutes: Int?
-  public let lockWaitSeconds: Int?
-
-  /// The quit's wait as bosun said it, or nil for a plan object without the fields.
-  public var wait: QuitWait? {
-    guard let minutes = waitMinutes, let lock = lockWaitSeconds else { return nil }
-    return QuitWait(minutes: minutes, lockSeconds: lock)
-  }
-
-  /// What quitting would meet, one line each, for the first dialog.
-  public var lines: [String] {
-    var lines = [Self.windowsLine(windows)]
-    if !busy.isEmpty { lines.append("Busy: " + busy.joined(separator: ", ")) }
-    if !waiting.isEmpty {
-      lines.append("Waiting for you (quit stops them): " + waiting.joined(separator: ", "))
-    }
-    if let until = keepAwakeUntil { lines.append("The Mac is kept awake until \(until)") }
-    return lines
-  }
-
-  private static func windowsLine(_ names: [String]) -> String {
-    switch names.count {
-    case 0: return "No windows are open"
-    case 1: return "1 window open: " + names[0]
-    default: return "\(names.count) windows open: " + names.joined(separator: ", ")
-    }
-  }
-}
-
-/// How a quit ended. A word this app does not know is `unknown`, and shows as a failure with the word.
-public enum QuitResultKind: Equatable, Sendable {
-  case stopped, busy, refused, failed
-  case unknown(String)
-
-  public init(text: String) {
-    switch text {
-    case "stopped": self = .stopped
-    case "busy": self = .busy
-    case "refused": self = .refused
-    case "failed": self = .failed
-    default: self = .unknown(text)
-    }
-  }
-}
-
-extension QuitResultKind: Decodable {
-  public init(from decoder: any Decoder) throws {
-    self.init(text: try decoder.singleValueContainer().decode(String.self))
-  }
-}
-
-/// What the console was left as (lib/quit.py's `CONSOLE_*`). A word this app does not know is `unknown`
-/// and is said nothing of.
-public enum ConsoleOutcome: Equatable, Sendable {
-  case stopped, notRunning, stillRunning
-  case unknown(String)
-
-  public init(text: String) {
-    switch text {
-    case "stopped": self = .stopped
-    case "not running": self = .notRunning
-    case "still running": self = .stillRunning
-    default: self = .unknown(text)
-    }
-  }
-}
-
-extension ConsoleOutcome: Decodable {
-  public init(from decoder: any Decoder) throws {
-    self.init(text: try decoder.singleValueContainer().decode(String.self))
-  }
-}
-
-public struct QuitResult: Equatable, Sendable {
-  public let plan: QuitPlan
-  public let result: QuitResultKind
-  public let error: String?
-  public let morningPaused: Bool?
-  public let keepAwake: String?
-  public let console: ConsoleOutcome?
-  public let consolePort: Int?
-
-  /// The line to show when the quit did not happen: its error, or the reason it was refused.
-  public var message: String? { error ?? plan.refused }
-}
-
-extension QuitResult: Decodable {
-  private enum Key: String, CodingKey {
-    case result, error, morningPaused, keepAwake, console, consolePort
-  }
-
-  public init(from decoder: any Decoder) throws {
-    let values = try decoder.container(keyedBy: Key.self)
-    self.init(
-      plan: try QuitPlan(from: decoder),
-      result: try values.decode(QuitResultKind.self, forKey: .result),
-      error: try values.decodeIfPresent(String.self, forKey: .error),
-      morningPaused: try values.decodeIfPresent(Bool.self, forKey: .morningPaused),
-      keepAwake: try values.decodeIfPresent(String.self, forKey: .keepAwake),
-      console: try values.decodeIfPresent(ConsoleOutcome.self, forKey: .console),
-      consolePort: try values.decodeIfPresent(Int.self, forKey: .consolePort))
-  }
 }
 
 // MARK: bosun app status --json

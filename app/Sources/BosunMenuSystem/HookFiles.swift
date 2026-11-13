@@ -114,13 +114,12 @@ public struct TestHookFiles: Sendable {
       return
     }
     line.append(0x0A)
-    let url = directory.appendingPathComponent("log.jsonl")
-    if !FileManager.default.fileExists(atPath: url.path) {
-      FileManager.default.createFile(atPath: url.path, contents: nil)
-    }
-    guard let handle = try? FileHandle(forWritingTo: url) else { return }
-    defer { try? handle.close() }
-    _ = try? handle.seekToEnd()
-    try? handle.write(contentsOf: line)
+    // O_APPEND: the kernel puts each write at the end, so lines logged at once from several tasks (a look, a
+    // check, `app status`) never land on one another, as a seek to the end and a write could
+    let path = directory.appendingPathComponent("log.jsonl").path
+    let descriptor = open(path, O_WRONLY | O_APPEND | O_CREAT | O_CLOEXEC, 0o644)
+    guard descriptor >= 0 else { return }
+    defer { close(descriptor) }
+    _ = line.withUnsafeBytes { write(descriptor, $0.baseAddress, $0.count) }
   }
 }

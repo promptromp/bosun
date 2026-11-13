@@ -4,7 +4,7 @@ import Testing
 @testable import BosunMenuCore
 
 @Suite struct LoadingMenuTests {
-  @Test func beforeTheFirstStatusTheMenuOnlySaysItIsLooking() {
+  @Test func beforeTheFirstStatusTheMenuOnlySaysItIsLooking() throws {
     let model = loadingMenu(flow: FlowState())
     #expect(model.header.dot == .grey)
     #expect(model.header.sentence == "Checking bosun…")
@@ -20,15 +20,18 @@ import Testing
 }
 
 @Suite struct StartFailedTests {
-  private let check = Fixtures.decode(UpdateCheck.self, "update-check-available")
+  private var check: UpdateCheck {
+    get throws { try Fixtures.decode(UpdateCheck.self, "update-check-available") }
+  }
 
-  @Test func anUpdateThatCouldNotBeStartedFailsWithItsReason() {
-    let (state, commands) = next(UpdateState.starting(check), on: UpdateEvent.startFailed("no permission"))
+  @Test func anUpdateThatCouldNotBeStartedFailsWithItsReason() throws {
+    let (state, commands) = next(
+      UpdateState.starting(try check), on: UpdateEvent.startFailed("no permission"))
     #expect(state == .failed("no permission"))
     #expect(commands.isEmpty)
   }
 
-  @Test func inAnyOtherStateItMeansNothing() {
+  @Test func inAnyOtherStateItMeansNothing() throws {
     let (state, commands) = next(UpdateState.idle, on: UpdateEvent.startFailed("no permission"))
     #expect(state == .idle)
     #expect(commands.isEmpty)
@@ -47,7 +50,7 @@ import Testing
   }
 
   /// The answer is opened in the browser: only the console on this Mac may be.
-  @Test func anythingButTheLocalConsoleIsRefused() {
+  @Test func anythingButTheLocalConsoleIsRefused() throws {
     for text in [
       "file:///etc/passwd", "https://example.com/?t=x", "http://192.168.1.4:8123/", "javascript:alert(1)",
       "not a url", "",
@@ -61,7 +64,7 @@ import Testing
     }
   }
 
-  @Test func aFailureSaysWhatBosunSaid() {
+  @Test func aFailureSaysWhatBosunSaid() throws {
     guard
       case .failure(let error) = consoleURL(from: exited(1, "", err: "bosun: the console is not running\n"))
     else {
@@ -71,7 +74,7 @@ import Testing
     #expect(error.message == "bosun: the console is not running")
   }
 
-  @Test func aFailureThatSaidNothingSaysTheStatus() {
+  @Test func aFailureThatSaidNothingSaysTheStatus() throws {
     guard case .failure(let error) = consoleURL(from: exited(2)) else {
       Issue.record("expected a failure")
       return
@@ -79,7 +82,7 @@ import Testing
     #expect(error.message == "bosun exited with status 2 and said nothing")
   }
 
-  @Test func aHangAndAMissingBosunSayWhat() {
+  @Test func aHangAndAMissingBosunSayWhat() throws {
     let hung = CommandResult(outcome: .timedOut, stdout: "", stderr: "")
     let missing = CommandResult(outcome: .notInstalled, stdout: "", stderr: "")
     guard case .failure(let first) = consoleURL(from: hung),
@@ -94,7 +97,7 @@ import Testing
 }
 
 @Suite struct CommandScriptTextTests {
-  @Test func theScriptRunsBosunAndWaitsForAKeyBeforeTheWindowCloses() {
+  @Test func theScriptRunsBosunAndWaitsForAKeyBeforeTheWindowCloses() throws {
     let text = CommandScript.text(executable: "/Users/me/.local/bin/bosun", args: ["doctor"])
     #expect(text.hasPrefix("#!/bin/sh\n"))
     #expect(text.contains("'/Users/me/.local/bin/bosun' 'doctor'\n"))
@@ -102,7 +105,7 @@ import Testing
     #expect(text.contains("exit $status"))
   }
 
-  @Test func whatIsNotPlainIsQuoted() {
+  @Test func whatIsNotPlainIsQuoted() throws {
     #expect(CommandScript.quote("plain") == "'plain'")
     #expect(CommandScript.quote("a b") == "'a b'")
     #expect(CommandScript.quote("it's") == "'it'\\''s'")
@@ -111,7 +114,7 @@ import Testing
 }
 
 @Suite struct LinkTests {
-  @Test func theGuideIsTheDocsSite() {
+  @Test func theGuideIsTheDocsSite() throws {
     #expect(Links.guide.scheme == "https")
     #expect(Links.guide.absoluteString == "https://promptromp.github.io/bosun/")
   }
