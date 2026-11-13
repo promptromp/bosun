@@ -1,12 +1,14 @@
 """The commit hook's test selection (pytest-impacted, `--impacted`) as rules the tests can check:
 pyproject.toml's impacted_map and impacted_invalidate_all, read here and applied as the plugin
-applies them (globs matched from the right, PurePosixPath.match; a mapped path counts as changed and
-leads on through the other mappings). conftest.py checks with them that a change to each file a test
+applies them (its own matcher, pytest_impacted.strategies.matches_any_glob: globs matched from the
+right, `*` within a segment, `**` across them; a mapped path counts as changed and leads on through
+the other mappings). conftest.py checks with them that a change to each file a test
 reads or runs selects that test; test_impacted_rules.py that every file has a rule, and that the
 plugin follows the imports in this layout.
 
-What the plugin's own import analysis adds (a changed module selects the tests that import it) is
-not in `selected_by`: it only ever selects more."""
+What the plugin's own import analysis adds (a changed module selects the tests that import it, among
+the modules of lib/ and the helpers of tests/unit) is not in `selected_by`: `covers` adds it from
+`import_closure`."""
 
 from __future__ import annotations
 
@@ -16,6 +18,8 @@ import tomllib
 from collections import deque
 from functools import cache
 from pathlib import Path, PurePosixPath
+
+from pytest_impacted.strategies import matches_any_glob
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -47,7 +51,8 @@ def invalidate_all() -> tuple[str, ...]:
 
 
 def matches(path: str, glob: str) -> bool:
-    return PurePosixPath(path).match(glob)
+    """Whether <glob> matches <path>, as the plugin matches every pattern it reads."""
+    return bool(matches_any_glob(path, [glob]))  # bool(): the plugin ships no type information
 
 
 def is_test_file(path: str) -> bool:
@@ -122,6 +127,22 @@ def import_closure(path: str) -> frozenset[str]:
             seen.add(module)
             queue.extend(imports_of(module))
     return frozenset(seen)
+
+
+@cache
+def imported_helpers() -> frozenset[str]:
+    """The helpers of tests/unit that a test imports, directly or through another."""
+    tests = (name for name in repository_files() if is_test_file(name))
+    imported = {module for test in tests for module in import_closure(test)}
+    return frozenset(name for name in imported if name.startswith(f"{TESTS}/"))
+
+
+def is_followed(name: str) -> bool:
+    """Whether the plugin's import analysis follows <name> to the tests that import it: a module of
+    lib/ (an import root: pytest's `pythonpath`), or a helper of tests/unit that a test imports."""
+    return (name.startswith("lib/") and name.endswith(".py") and "/" not in name[4:]) or (
+        name in imported_helpers()
+    )
 
 
 @cache
