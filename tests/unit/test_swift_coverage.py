@@ -196,29 +196,70 @@ class LocateTest(unittest.TestCase):
     def completed(self, out: str, code: int = 0) -> subprocess.CompletedProcess[str]:
         return subprocess.CompletedProcess([], code, out, "")
 
+    @staticmethod
+    def executable(path: Path) -> Path:
+        """<path> made as a test binary is: a regular file that can be run."""
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("")
+        path.chmod(0o755)
+        return path
+
     def test_the_profile_and_the_test_binary_come_from_where_swift_leaves_them(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             debug = Path(tmp) / ".build" / "arm64-apple-macosx" / "debug"
             (debug / "codecov").mkdir(parents=True)
             (debug / "codecov" / "default.profdata").write_text("")
             (debug / "codecov" / "BosunMenu.json").write_text("{}")
-            binary = debug / "BosunMenuCoreTests.xctest" / "Contents" / "MacOS" / "BosunMenuCoreTests"
-            binary.parent.mkdir(parents=True)
-            binary.write_text("")
+            binary = self.executable(
+                debug / "BosunMenuCoreTests.xctest" / "Contents" / "MacOS" / "BosunMenuCoreTests"
+            )
             found = sc.locate(debug / "codecov" / "BosunMenu.json")
         self.assertEqual(found, (debug / "codecov" / "default.profdata", [binary]))
+
+    def test_a_dsym_folder_beside_the_binary_is_never_taken_for_one(self) -> None:
+        # What CI's Xcode leaves: BosunMenuPackageTests.xctest/Contents/MacOS/ holds the binary and its .dSYM
+        with tempfile.TemporaryDirectory() as tmp:
+            debug = Path(tmp) / ".build" / "arm64-apple-macosx" / "debug"
+            (debug / "codecov").mkdir(parents=True)
+            (debug / "codecov" / "default.profdata").write_text("")
+            macos = debug / "BosunMenuPackageTests.xctest" / "Contents" / "MacOS"
+            binary = self.executable(macos / "BosunMenuPackageTests")
+            (macos / "BosunMenuPackageTests.dSYM" / "Contents" / "Resources").mkdir(parents=True)
+            (macos / "notes.txt").write_text("not a binary")
+            _profile, found = sc.locate(debug / "codecov" / "BosunMenu.json")
+        self.assertEqual(found, [binary])
+
+    def test_a_bundle_whose_binary_has_another_name_gives_its_regular_executables(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            debug = Path(tmp) / "debug"
+            (debug / "codecov").mkdir(parents=True)
+            (debug / "codecov" / "default.profdata").write_text("")
+            macos = debug / "Renamed.xctest" / "Contents" / "MacOS"
+            binary = self.executable(macos / "Other")
+            (macos / "Other.dSYM").mkdir()
+            (macos / "data").write_text("")  # not executable
+            _profile, found = sc.locate(debug / "codecov" / "BosunMenu.json")
+        self.assertEqual(found, [binary])
+
+    def test_a_bundle_with_only_a_dsym_is_no_binary_and_says_to_run_the_tests(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            debug = Path(tmp) / "debug"
+            (debug / "codecov").mkdir(parents=True)
+            (debug / "codecov" / "default.profdata").write_text("")
+            (debug / "Only.xctest" / "Contents" / "MacOS" / "Only.dSYM").mkdir(parents=True)
+            with self.assertRaises(sc.CoverageError) as caught:
+                sc.locate(debug / "codecov" / "BosunMenu.json")
+        self.assertIn("no test binary", str(caught.exception))
 
     def test_every_test_binary_is_found_so_a_second_test_target_does_not_break_it(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             debug = Path(tmp) / "Debug"
             (debug / "codecov").mkdir(parents=True)
             (debug / "codecov" / "default.profdata").write_text("")
-            binaries = []
-            for target in ("BosunMenuCoreTests", "BosunMenuSystemTests", "BosunMenuTests"):
-                binary = debug / f"{target}.xctest" / "Contents" / "MacOS" / target
-                binary.parent.mkdir(parents=True)
-                binary.write_text("")
-                binaries.append(binary)
+            binaries = [
+                self.executable(debug / f"{target}.xctest" / "Contents" / "MacOS" / target)
+                for target in ("BosunMenuCoreTests", "BosunMenuSystemTests", "BosunMenuTests")
+            ]
             _profile, found = sc.locate(debug / "codecov" / "BosunMenu.json")
         self.assertEqual(found, binaries)
 

@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import subprocess
 import sys
 from collections.abc import Callable, Mapping, Sequence
@@ -121,6 +122,21 @@ def codecov_json(app: Path, run: RunCommand = subprocess.run) -> Path:
     return Path(lines[-1])
 
 
+def is_binary(path: Path) -> bool:
+    """A regular file that can be run: never a directory (Xcode may leave `<Name>.dSYM` beside the binary)."""
+    return path.is_file() and path.suffix != ".dSYM" and os.access(path, os.X_OK)
+
+
+def bundle_binaries(bundle: Path) -> list[Path]:
+    """The test binary of a `<Name>.xctest` bundle: `Contents/MacOS/<Name>`, as SwiftPM lays it out, else
+    every regular executable file in that folder."""
+    folder = bundle / "Contents" / "MacOS"
+    named = folder / bundle.stem
+    if is_binary(named):
+        return [named]
+    return sorted(path for path in folder.glob("*") if is_binary(path))
+
+
 def locate(codecov: Path) -> tuple[Path, list[Path]]:
     """(the profile, every test binary) that `swift test --enable-code-coverage` left beside <codecov>."""
     profile = codecov.parent / PROFILE
@@ -129,7 +145,7 @@ def locate(codecov: Path) -> tuple[Path, list[Path]]:
             f"no coverage profile at {profile}: run `swift test --enable-code-coverage` in app/"
         )
     products = codecov.parent.parent
-    binaries = sorted(products.glob("*.xctest/Contents/MacOS/*"))
+    binaries = [binary for bundle in sorted(products.glob("*.xctest")) for binary in bundle_binaries(bundle)]
     if not binaries:
         raise CoverageError(
             f"no test binary under {products}: run `swift test --enable-code-coverage` in app/"
