@@ -1,7 +1,7 @@
 # A clean machine for bosun (tests/sandbox.sh). It is Linux, because Docker on a Mac is: macos/ holds
 # stand-ins for what only macOS has, so it tests bosun's logic and never launchd or a real wake. For
 # those, tests/sandbox.sh mac is a real Mac.
-FROM python:3.13-slim-bookworm
+FROM python:3.15-slim-bookworm
 # hadolint ignore=DL3008 # Debian's current versions: this image is thrown away, and pins would only go stale
 RUN apt-get update -qq \
   && apt-get install -y -qq --no-install-recommends tmux jq ruby git curl procps lsof perl zsh >/dev/null \
