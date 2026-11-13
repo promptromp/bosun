@@ -53,6 +53,7 @@ class FakeMac:
         self.stuck_jobs: set[str] = set()
         self.app_running = False  # the menu bar app, as osascript is asked
         self.app_quits = True
+        self.on_quit: Callable[[], None] | None = None  # what happens to the app while it is asked to quit
         self.sudo_works = True
         # What runs in the windows: `ps` rows (pid, parent), each process's session, and after the stop the
         # ones a stopped agent left behind, for that many looks (None: for good).
@@ -84,6 +85,8 @@ class FakeMac:
         if script.endswith("is running"):
             return self.done(out="true\n" if self.app_running else "false\n")
         self.calls.append("quit app")
+        if self.on_quit:
+            self.on_quit()
         self.app_running = self.app_running and not self.app_quits
         return self.done()
 
@@ -455,9 +458,56 @@ class TheMenuBarApp(World):
             status, output = self.run_it("--yes")
         self.assertEqual(status, uninstall.EXIT_LEFT)
         self.assertTrue(self.app.exists())
-        self.assertIn("could not remove the menu bar app", output)
+        self.assertIn("could not remove the menu bar app, ~/Applications/bosun.app: ", output)
         self.assertIn(f"rm -rf {self.app}", output)  # by hand
         self.assertFalse(self.job.exists())
+
+    def test_an_app_replaced_after_the_plan_stays(self) -> None:
+        """The plan looked at the app; the delete looks again, since stopping and quitting take a while."""
+
+        def swapped() -> None:
+            other = {"CFBundleIdentifier": "ai.other.app", "CFBundleShortVersionString": "9"}
+            (self.app / "Contents" / "Info.plist").write_bytes(plistlib.dumps(other))
+
+        self.mac.app_running = True
+        self.mac.on_quit = swapped
+        status, output = self.run_it("--yes")
+        self.assertEqual(status, 0)  # the last look finds it is not bosun's: it is yours, not left over
+        self.assertTrue(self.app.exists())
+        self.assertIn("could not remove the menu bar app, ~/Applications/bosun.app: ", output)
+        self.assertIn("is not bosun's app", output)
+        self.assertNotIn("removed the menu bar app", output)
+
+    def test_an_app_that_became_a_link_stays_and_so_does_what_it_points_at(self) -> None:
+        target = self.home / "elsewhere.app"
+
+        def swapped() -> None:
+            shutil.move(self.app, target)
+            self.app.symlink_to(target)
+
+        self.mac.app_running = True
+        self.mac.on_quit = swapped
+        status, _ = self.run_it("--yes")
+        self.assertEqual(status, 0)  # the last look finds it is not bosun's: it is yours, not left over
+        self.assertTrue(self.app.is_symlink())
+        self.assertTrue((target / "Contents" / "Info.plist").exists())
+
+    def test_files_that_cannot_be_deleted_are_one_line_not_a_traceback(self) -> None:
+        real = uninstall.remove_path
+
+        def remove_path(path: Path) -> None:
+            if path == self.app:
+                raise PermissionError("Operation not permitted")
+            real(path)
+
+        with mock.patch.object(uninstall, "remove_path", remove_path):
+            status, output = self.run_it("--yes")
+        self.assertEqual(status, uninstall.EXIT_LEFT)
+        self.assertTrue(self.app.exists())
+        self.assertIn(
+            "could not remove the menu bar app, ~/Applications/bosun.app: Operation not permitted", output
+        )
+        self.assertNotIn("Traceback", output)
 
     def test_with_no_app_there_is_no_step(self) -> None:
         shutil.rmtree(self.app)
