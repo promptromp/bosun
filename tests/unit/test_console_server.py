@@ -699,9 +699,13 @@ class ServedUrlTest(unittest.TestCase):
     def test_a_new_token_cannot_reach_a_running_console(self) -> None:
         with (
             console_token.serving(self.state, 8123),
-            self.assertRaisesRegex(console_server.ConsoleError, "already running"),
+            self.assertRaisesRegex(console_server.ConsoleError, "already running") as raised,
         ):
             console_server.serving_url(self.state, self.args("--new-token"))
+        # the launchd job's console stops with bosun quit and comes back with bosun start
+        self.assertIn("bosun quit", str(raised.exception))
+        self.assertIn("bosun start", str(raised.exception))
+        self.assertNotIn("install.sh", str(raised.exception))
 
     def test_a_running_console_with_no_address_leaves_a_hand_run_to_start_one(self) -> None:
         with console_token.serving(self.state):

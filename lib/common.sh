@@ -167,6 +167,7 @@ set_feature_defaults() {
   set_event_defaults
   set_slack_defaults
   set_console_defaults
+  set_quit_defaults
   set_impact_defaults
   set_knowledge_defaults
   set_approval_defaults
@@ -375,6 +376,12 @@ set_console_defaults() {
   # Claude Code memory folders the console's Library may show (read-only, .md files only),
   # separated by ':'. Empty: none.
   BOSUN_CONSOLE_MEMORY_DIRS=""
+}
+
+set_quit_defaults() {
+  # `bosun quit --let-finish` (the menu bar app's "Quit bosun"): how long it waits for busy agents to
+  # finish, in whole minutes, before it says they are still busy and changes nothing. 0: checks once.
+  BOSUN_QUIT_WAIT_MINUTES="10"
 }
 
 set_impact_defaults() {

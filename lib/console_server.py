@@ -676,7 +676,8 @@ def serving_url(state: Path, args: argparse.Namespace) -> str | None:
     if args.new_token:
         raise ConsoleError(
             "the console is already running, and a new token would not reach it: stop it first "
-            "(Ctrl-C where you started it; the launchd job's with BOSUN_CONSOLE_ALWAYS=0 and install.sh)"
+            "(Ctrl-C where you started it; the launchd job's console stops with `bosun quit` and starts "
+            "again with `bosun start`)"
         )
     try:
         return served_url(state, args.port)

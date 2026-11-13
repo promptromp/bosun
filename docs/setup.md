@@ -232,7 +232,7 @@ unless something of yours is in it by then, or the installer did not make it, wh
 There is no command for it yet: a failed update puts everything back by itself, and going back later is by
 hand. You need the version the update came from and the backup it took, both named in its summary:
 
-1. Stop what writes: `bosun stop`, and unload the watchdog, learning and console jobs
+1. Stop what writes: `bosun quit --stop-now` (or `bosun stop`), and unload the watchdog, learning and console jobs
    (`launchctl bootout gui/$(id -u)/com.bosun.morning.watchdog`, and `.learn` and `.console`, with your
    `BOSUN_LAUNCHD_LABEL` if you set one; the last two only if you have them).
 2. Find the older version's folder in `~/.local/share/bosun-versions`: an update keeps the one it came

@@ -138,7 +138,7 @@ check "the installers' --help prints its usage header and no code" bash -c '
     ! grep -qE "^(set -uo|source |import )" <<<"$out" || { echo "$cmd prints code"; exit 1; }
   done' _ "$ROOT"
 check "usage errors exit 2" bash -c '
-  for args in "send" "send --bogus" "send window-only" "send --id" "send --no-item window-only" "send --new w" "send --start" "start --bogus" "launch --bogus" "launch --fingerprint alpha extra" "refresh --bogus" "refresh --update-restart" "refresh --update-restart prompt alpha --unless-active" "refresh --checkin-loop alpha" "refresh --checkin-loop --unless-active" "trust --bogus" "watchdog --bogus" "watchdog --only" "sessions --bogus" "learn --bogus" "learn apply" "events --bogus" "slack-watch --bogus" "review-watch --bogus" "console --bogus" "orphans --bogus" "update --bogus" "update note" "update note --window w --mood" "update advance --bogus"; do
+  for args in "send" "send --bogus" "send window-only" "send --id" "send --no-item window-only" "send --new w" "send --start" "start --bogus" "launch --bogus" "launch --fingerprint alpha extra" "refresh --bogus" "refresh --update-restart" "refresh --update-restart prompt alpha --unless-active" "refresh --checkin-loop alpha" "refresh --checkin-loop --unless-active" "trust --bogus" "watchdog --bogus" "watchdog --only" "sessions --bogus" "learn --bogus" "learn apply" "events --bogus" "slack-watch --bogus" "review-watch --bogus" "console --bogus" "quit" "quit --bogus" "quit --plan --sleep" "stop --bogus" "orphans --bogus""update --bogus" "update note" "update note --window w --mood" "update advance --bogus"; do
     # shellcheck disable=SC2086  # split the argument list on purpose
     "$1" $args >/dev/null 2>&1
     [ $? -eq 2 ] || { echo "bosun $args did not exit 2"; exit 1; }
@@ -2459,6 +2459,154 @@ mkdir -p "$WORK/no-jq"
 printf '#!/bin/sh\nexit 1\n' >"$WORK/no-jq/jq"
 chmod +x "$WORK/no-jq/jq"
 check "a part that cannot be read is a problem and at least a warning, not a failure" env PATH="$WORK/no-jq:$PATH" bash -c '"$1" status --json | python3 -I -c "import json, sys; d = json.load(sys.stdin); sys.exit(not (d[\"contract\"] == 1 and d[\"level\"] in (\"warning\", \"error\") and d[\"problems\"]))"' _ "$BOSUN"
+
+echo "quit (bosun quit: the plan, the wait, the order of the stop, and what one start or morning undoes)"
+# A fake launchctl that says every job is loaded and writes down what it was told (in ~/.local/bin, which
+# common.sh puts first on the PATH; the install section below writes its own over it), and a stand-in
+# caffeinate that is only a sleep (named so bosun stop recognises it) and does not keep this Mac awake.
+QUIT_BIN="$WORK/quit-bin"
+QUIT_LAUNCHCTL_LOG="$WORK/quit-launchctl.log"
+mkdir -p "$QUIT_BIN" "$HOME/.local/bin"
+printf '#!/bin/sh\necho "launchctl $*" >>"%s"\nexit 0\n' "$QUIT_LAUNCHCTL_LOG" >"$HOME/.local/bin/launchctl"
+chmod +x "$HOME/.local/bin/launchctl"
+ln -s /bin/sleep "$QUIT_BIN/caffeinate" # not a copy: macOS kills a copied system binary
+: >"$QUIT_LAUNCHCTL_LOG"
+q() { "$BOSUN" quit "$@" </dev/null; }
+quit_exits() { # <status> <bosun quit args...>: it exits with <status>; its output is in quit.out and quit.err
+  local want="$1" rc
+  shift
+  q "$@" >"$WORK/quit.out" 2>"$WORK/quit.err"
+  rc=$?
+  [ "$rc" -eq "$want" ] || {
+    echo "exit $rc, wanted $want"
+    cat "$WORK/quit.out" "$WORK/quit.err"
+    return 1
+  }
+}
+quit_has() { # <python condition over d, the object bosun quit printed to quit.out>
+  python3 -I -c 'import json, sys; d = json.load(open(sys.argv[1])); sys.exit(not eval(sys.argv[2]))' "$WORK/quit.out" "$1"
+}
+plan_has() { # <python condition over d, the object bosun quit --plan --json prints>
+  q --plan --json | python3 -I -c 'import json, re, sys; d = json.load(sys.stdin); sys.exit(not eval(sys.argv[1]))' "$1"
+}
+console_told_to_stop() { # how many times launchd was told to stop the console job
+  grep -Ec "^launchctl kill TERM gui/$(id -u)/[^ ]+\.console\$" "$QUIT_LAUNCHCTL_LOG"
+}
+caffeinate_runs() { ps -p "$1" -o comm= 2>/dev/null | grep -q caffeinate; } # <pid>
+start_keep_awake() {                                                        # sets quit_caffeinate to the pid of a stand-in caffeinate, and records it as the morning does
+  "$QUIT_BIN/caffeinate" 600 &
+  quit_caffeinate=$!
+  echo "$quit_caffeinate" >"$BOSUN_STATE_DIR/keep-awake-smoke.pid"
+  python3 -I -c 'import datetime, json, sys; print(json.dumps({"until": (datetime.datetime.now().astimezone() + datetime.timedelta(hours=1)).isoformat(timespec="seconds"), "pid": int(sys.argv[1])}))' \
+    "$quit_caffeinate" >"$BOSUN_STATE_DIR/keep-awake-smoke.json"
+}
+agent_status() { # <pid> <status>: what the fake Claude of that pid says it is doing
+  printf '{"pid":%d,"status":"%s","version":"2.0.0","statusUpdatedAt":%d,"name":"w"}' "$1" "$2" $((($(date +%s) - 60) * 1000)) >"$HOME/.claude/sessions/$1.json"
+}
+quit_windows_up() { # a fresh session (the console's marker made) with alpha busy and beta waiting at a prompt
+  BOSUN_CONSOLE_ALWAYS=1 "$BOSUN" start >/dev/null 2>&1
+  wait_for 10 has_windows "orch alpha beta gamma checkin " || return 1
+  quit_alpha="$(fake_claude alpha busy 2.0.0 60)" || return 1
+  fake_claude beta waiting 2.0.0 60 >/dev/null || return 1
+}
+quit_windows_up
+start_keep_awake
+check "bosun start with BOSUN_CONSOLE_ALWAYS=1 made the console's marker" test -f "$BOSUN_STATE_DIR/console/wanted"
+
+check "--plan --json: the open windows, the busy one, the waiting one and when the keep-awake ends" plan_has \
+  'd["contract"] == 1 and d["busy"] == ["alpha"] and d["waiting"] == ["beta"] and d["refused"] is None and set(d["windows"]) >= {"orch", "alpha", "beta", "gamma", "checkin"} and re.fullmatch(r"[0-2][0-9]:[0-5][0-9]", d["keep_awake_until"])'
+check "--plan in text names them too" bash -c 'out="$("$1" quit --plan </dev/null)" && grep -q "busy: alpha" <<<"$out" && grep -q "waiting for you: beta" <<<"$out"' _ "$BOSUN"
+check "... and changes nothing" bash -c 'tmux -L "$1" has-session -t =smoke && [ ! -e "$2/quit.json" ] && [ -f "$2/console/wanted" ]' _ "$SOCKET" "$BOSUN_STATE_DIR"
+
+check "--let-finish=0 with an agent busy exits 3 ..." quit_exits 3 --let-finish=0
+check "... naming the busy window, and not the one that waits for you" bash -c 'grep -q "Still busy after 0 minutes: alpha$" "$1" && ! grep -q beta "$1"' _ "$WORK/quit.out"
+check "... and changed nothing: the session, quit.json, the console's marker and job, the keep-awake" bash -c '
+  tmux -L "$1" has-session -t =smoke && [ ! -e "$2/quit.json" ] && [ -f "$2/console/wanted" ] && [ ! -s "$3" ] &&
+  [ -f "$2/keep-awake-smoke.pid" ] && [ -f "$2/keep-awake-smoke.json" ]' _ "$SOCKET" "$BOSUN_STATE_DIR" "$QUIT_LAUNCHCTL_LOG"
+check "... as JSON it exits 3 too" quit_exits 3 --let-finish=0 --json --pause-morning --sleep
+check "... with an object that says the wait ran out, and who is busy" quit_has 'd["contract"] == 1 and d["result"] == "busy" and d["busy"] == ["alpha"]'
+
+check "no mode is a usage error" fails_with "say what to do" q
+check "--let-finish needs whole minutes" fails_with "whole number of minutes" q --let-finish=soon
+check "--let-finish and --stop-now are alternatives" fails_with "alternatives" q --let-finish --stop-now
+check "--plan takes neither --sleep nor --pause-morning" fails_with "go with --let-finish or --stop-now" q --plan --sleep
+check "an unknown argument is a usage error" fails_with "unknown argument '--now'" q --now
+usage_error_exits_2() {
+  local args rc
+  for args in "" "--let-finish=x" "--let-finish --stop-now" "--plan --pause-morning" "--bogus"; do
+    # shellcheck disable=SC2086  # one argument per word, on purpose
+    q $args >/dev/null 2>&1
+    rc=$?
+    [ "$rc" -eq 2 ] || {
+      echo "exit $rc for: $args"
+      return 1
+    }
+  done
+}
+check "... all of them exit 2" usage_error_exits_2
+check "a bad BOSUN_QUIT_WAIT_MINUTES is an error that names it" fails_with "BOSUN_QUIT_WAIT_MINUTES must be a whole number of minutes" env BOSUN_QUIT_WAIT_MINUTES=lots "$BOSUN" quit --let-finish
+
+python3 -I -c 'import fcntl, os, sys, time
+fd = os.open(sys.argv[1], os.O_RDWR | os.O_CREAT)
+fcntl.flock(fd, fcntl.LOCK_EX)
+print("held", flush=True)
+time.sleep(60)' "$BOSUN_STATE_DIR/update.lock" >"$WORK/update-holder.out" &
+update_holder=$!
+wait_for 5 grep -q held "$WORK/update-holder.out"
+check "a quit is refused while an update runs: exit 1 ..." quit_exits 1 --stop-now
+check "... with one line saying an update runs, and nothing stopped" bash -c 'grep -q "an update is running" "$1" && [ "$(wc -l <"$1")" -eq 1 ] && tmux -L "$2" has-session -t =smoke && [ ! -e "$3/quit.json" ]' _ "$WORK/quit.err" "$SOCKET" "$BOSUN_STATE_DIR"
+check "... in JSON an object that says refused, and why" quit_exits 1 --stop-now --json
+check "... with the reason" quit_has 'd["contract"] == 1 and d["result"] == "refused" and "update" in d["refused"]'
+kill "$update_holder" 2>/dev/null
+wait "$update_holder" 2>/dev/null
+
+# alpha finishes a few seconds into the wait; beta keeps waiting at its prompt, which does not hold the wait
+(
+  sleep 7
+  agent_status "$quit_alpha" idle
+) &
+quit_started=$SECONDS
+check "--let-finish waits (polling every 5 s) until alpha is done, though beta waits at a prompt, then quits: morning paused, Mac kept awake" quit_exits 0 --let-finish=1 --pause-morning
+check "... it waited for alpha: 5 to 30 seconds" bash -c '[ "$1" -ge 5 ] && [ "$1" -le 30 ]' _ $((SECONDS - quit_started))
+check "... it says what it stopped and who was waiting for you" bash -c 'grep -q "^bosun is stopped\.$" "$1" && grep -q "Stopped the windows: .*alpha" "$1" && grep -q "They were waiting for you: beta" "$1" && grep -q "paused until you run: bosun start" "$1"' _ "$WORK/quit.out"
+check "... no session is left" bash -c '! tmux -L "$1" has-session -t =smoke' _ "$SOCKET"
+check "... quit.json says the morning is paused" bash -c 'python3 -I -c "import json,sys; sys.exit(not json.load(open(sys.argv[1]))[\"morning_paused\"])" "$1/quit.json"' _ "$BOSUN_STATE_DIR"
+check "... the console's marker is gone, and its job was told to stop" bash -c '[ ! -e "$1/console/wanted" ] && [ "$2" -eq 1 ]' _ "$BOSUN_STATE_DIR" "$(console_told_to_stop)"
+check "... the keep-awake goes on: the caffeinate runs and its files stay" bash -c '[ -f "$1/keep-awake-smoke.pid" ] && [ -f "$1/keep-awake-smoke.json" ]' _ "$BOSUN_STATE_DIR"
+check "... the caffeinate still runs" caffeinate_runs "$quit_caffeinate"
+check "... and the quit says so" bash -c 'grep -qE "keep-awake kept until [0-9]{2}:[0-9]{2}" "$1"' _ "$WORK/quit.out"
+check "bosun status --json says stopped" status_has 'd["level"] == "stopped" and d["stopped"]["morning_paused"] is True'
+check "the watchdog skips its run, so it never restarts what was stopped" contains "$("$BOSUN" watchdog 2>&1)" "bosun is stopped"
+check "... no session appeared" bash -c '! tmux -L "$1" has-session -t =smoke' _ "$SOCKET"
+
+# Ruling 18: bosun start is the one place that creates the session (the morning, init and the update's
+# restart all go through it, and refresh and send need the session to exist), so it is also where a quit ends.
+BOSUN_CONSOLE_ALWAYS=1 "$BOSUN" start >/dev/null 2>&1
+check "bosun start ends the quit: quit.json is gone, the console's marker is back and the session is up" bash -c '[ ! -e "$1/quit.json" ] && [ -f "$1/console/wanted" ] && tmux -L "$2" has-session -t =smoke' _ "$BOSUN_STATE_DIR" "$SOCKET"
+wait_for 10 has_windows "orch alpha beta gamma checkin "
+fake_claude alpha busy 2.0.0 60 >/dev/null
+check "--stop-now quits with an agent busy, and --sleep lets the Mac sleep" quit_exits 0 --stop-now --sleep --json
+check "... the object says stopped, who was busy, that the morning is not paused and that the keep-awake was released" quit_has 'd["contract"] == 1 and d["result"] == "stopped" and d["busy"] == ["alpha"] and d["morning_paused"] is False and d["keep_awake"] == "released" and d["console"] in ("stopped", "not running")'
+check "... no session, quit.json without the morning paused" bash -c '! tmux -L "$1" has-session -t =smoke && python3 -I -c "import json,sys; sys.exit(json.load(open(sys.argv[1]))[\"morning_paused\"])" "$2/quit.json"' _ "$SOCKET" "$BOSUN_STATE_DIR"
+check "... the caffeinate is gone, with its files" bash -c '[ ! -e "$1/keep-awake-smoke.pid" ] && [ ! -e "$1/keep-awake-smoke.json" ]' _ "$BOSUN_STATE_DIR"
+check "... and the process" wait_for 5 bash -c '! ps -p "$1" -o comm= 2>/dev/null | grep -q caffeinate' _ "$quit_caffeinate"
+check "... the console's job was told to stop again" test "$(console_told_to_stop)" = 2
+check "a morning that was not paused starts bosun again, through bosun start: the quit is over and the console's marker is back" bash -c '
+  PATH="$5:$PATH" BOSUN_CONSOLE_ALWAYS=1 BOSUN_NETWORK_PROBE_URL=file:///dev/null "$1" morning --skip-setup --awake-minutes 1 >/dev/null 2>&1
+  [ ! -e "$2/quit.json" ] && [ -f "$2/console/wanted" ] && tmux -L "$3" has-session -t =smoke' _ "$BOSUN" "$BOSUN_STATE_DIR" "$SOCKET" "" "$WORK/fake-caffeinate"
+"$BOSUN" stop >/dev/null 2>&1
+rm -f "$BOSUN_STATE_DIR/quit.json" "$BOSUN_STATE_DIR/console/wanted"
+
+stop_keep_awake_leaves_it() { # bosun stop --keep-awake keeps the caffeinate and its files; a plain stop releases them
+  start_keep_awake
+  "$BOSUN" stop --keep-awake >/dev/null 2>&1
+  [ -f "$BOSUN_STATE_DIR/keep-awake-smoke.pid" ] && [ -f "$BOSUN_STATE_DIR/keep-awake-smoke.json" ] && caffeinate_runs "$quit_caffeinate" || return 1
+  "$BOSUN" stop >/dev/null 2>&1
+  [ ! -e "$BOSUN_STATE_DIR/keep-awake-smoke.pid" ] && [ ! -e "$BOSUN_STATE_DIR/keep-awake-smoke.json" ] || return 1
+  wait_for 5 bash -c '! ps -p "$1" -o comm= 2>/dev/null | grep -q caffeinate' _ "$quit_caffeinate"
+}
+check "bosun stop --keep-awake leaves the caffeinate and its files alone; a plain stop releases them" stop_keep_awake_leaves_it
+rm -f "$HOME/.local/bin/launchctl" # the fake above; this section's alone
 
 echo "console (local server on a free port, fixture ledger)"
 CONSOLE_STATE="$WORK/console-state"

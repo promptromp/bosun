@@ -21,6 +21,8 @@ Daily flow
   setup       Run only the setup steps from setup.sh (credential refresh etc.)
   start       Start the tmux session, or refresh it if it already exists
   stop        Kill the tmux session and release the keep-awake assertion
+  quit        Stop bosun until `bosun start`, with your say over busy agents, the morning start and the
+              Mac's keep-awake (--plan, --let-finish, --stop-now)
   attach      Attach to the tmux session (it runs on its own tmux server)
 
 Inside the tmux session
