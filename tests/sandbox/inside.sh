@@ -15,8 +15,8 @@ git -C "$HOME/bosun" add -A
 git -C "$HOME/bosun" -c user.name=sandbox -c user.email=sandbox@example.com commit -q -m "the checkout"
 cd "$HOME/bosun" || exit 1
 
-run_unit() { uv sync -q && uv run pytest -q tests/unit; }
-run_smoke() { uv sync -q && tests/smoke.sh; }
+run_unit() { uv sync -q && uv run pytest -q -n auto tests/unit; }
+run_smoke() { uv sync -q && tests/smoke.sh; } # end to end: the unit tests are run_unit's
 
 case "${1:-init}" in
   init) tests/sandbox/fresh_user.sh ;;

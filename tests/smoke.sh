@@ -1,9 +1,20 @@
 #!/bin/bash
 # Hermetic smoke tests: temp HOME, fixture sessions, isolated tmux socket, no Claude calls,
-# no launchd or pmset changes. Run: tests/smoke.sh
+# no launchd or pmset changes. Run: tests/smoke.sh [--with-unit]
+# End to end only by default: the commit hook runs the unit tests a change reaches, and CI all of
+# them. --with-unit runs them all first too, with a plain python3 (python3 -m unittest, no pytest).
 # Checks pass shell snippets to `bash -c '...' _ args`; their $ must not expand here.
 # shellcheck disable=SC2016
 set -uo pipefail
+WITH_UNIT=0
+case "$*" in
+  "") ;;
+  --with-unit) WITH_UNIT=1 ;;
+  *)
+    echo "usage: tests/smoke.sh [--with-unit]" >&2
+    exit 2
+    ;;
+esac
 export PYTHONDONTWRITEBYTECODE=1
 # Never touch the repository this runs from: a git hook (pre-push) or another repository's tooling
 # may export GIT_DIR, GIT_WORK_TREE, GIT_INDEX_FILE, GIT_COMMON_DIR, GIT_CONFIG*, ... and every git
@@ -144,14 +155,16 @@ check "usage errors exit 2" bash -c '
     [ $? -eq 2 ] || { echo "bosun $args did not exit 2"; exit 1; }
   done' _ "$BOSUN"
 
-echo "python unit tests (tests/unit)"
-unit_out="$(python3 -m unittest discover -s "$ROOT/tests/unit" 2>&1)"
-unit_end="$(tail -1 <<<"$unit_out")"
-# A plain python3 has no MkDocs, so the docs site's whole-build tests skip here (they run under uv);
-# the label says how many skipped, so a new skip shows.
-unit_ok='^OK( \(skipped=[0-9]+\))?$'
-check "$(grep -o 'Ran [0-9]* tests' <<<"$unit_out" || echo 'unit tests'), all passing$(grep -o ' (skipped=[0-9]*)' <<<"$unit_end")" grep -qE "$unit_ok" <<<"$unit_end"
-grep -qE "$unit_ok" <<<"$unit_end" || tail -25 <<<"$unit_out"
+if [ "$WITH_UNIT" = 1 ]; then
+  echo "python unit tests (tests/unit)"
+  unit_out="$(python3 -m unittest discover -s "$ROOT/tests/unit" 2>&1)"
+  unit_end="$(tail -1 <<<"$unit_out")"
+  # A plain python3 has no MkDocs, so the docs site's whole-build tests skip here (they run under uv);
+  # the label says how many skipped, so a new skip shows.
+  unit_ok='^OK( \(skipped=[0-9]+\))?$'
+  check "$(grep -o 'Ran [0-9]* tests' <<<"$unit_out" || echo 'unit tests'), all passing$(grep -o ' (skipped=[0-9]*)' <<<"$unit_end")" grep -qE "$unit_ok" <<<"$unit_end"
+  grep -qE "$unit_ok" <<<"$unit_end" || tail -25 <<<"$unit_out"
+fi
 
 # Fixture HOME with two projects and named sessions.
 export HOME="$WORK/home"

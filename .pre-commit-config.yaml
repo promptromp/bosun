@@ -103,8 +103,8 @@ repos:
         language: system
         types: [shell]
         exclude: ^tests/smoke\.sh$
-      # Tests: unit tests on every commit (fast); the end-to-end suite before pushing.
-      # Everything else that gets written by hand here.
+      # Tests: on every commit the unit tests the change reaches; the end-to-end suite before
+      # pushing (below). Everything else that gets written by hand here.
       - id: hadolint
         name: hadolint (Dockerfiles)
         entry: uv run hadolint
@@ -147,12 +147,17 @@ repos:
         language: system
         files: ^(docs/|theme/|[A-Z_]+\.md$|mkdocs\.yml$|tools/(mkdocs_hooks|check_links|docs_examples)\.py$|tests/fixtures/(console|knowledge)/)
         pass_filenames: false
+      # Only the tests a change can reach (pytest-impacted; its rules are in pyproject.toml), in
+      # parallel. The change is what git has uncommitted, staged or not, and new files, not
+      # pre-commit's list of files, so `pre-commit run --all-files` selects the same as the commit.
+      # Not before pushing (the smoke tests run then); CI runs every unit test.
       - id: unit-tests
-        name: unit tests
-        entry: uv run pytest -q tests/unit
+        name: unit tests (those the change reaches)
+        entry: uv run pytest -q -n auto --impacted --impacted-git-mode=unstaged
         language: system
-        types_or: [python, shell]
         pass_filenames: false
+        always_run: true
+        stages: [pre-commit, manual]
       # The console page's JavaScript: node --check and a fake-DOM render (no npm packages), and
       # the docs site's examples: node --check. It passes with a note when node is not on PATH.
       - id: js-check
