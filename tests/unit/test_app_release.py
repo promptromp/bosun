@@ -207,6 +207,14 @@ class RequirementTest(World):
             with self.subTest(team=team, bundle=bundle), self.assertRaises(AppError):
                 app_release.requirement(bundle, team)
 
+    def test_each_refusal_names_what_is_wrong(self) -> None:
+        with self.assertRaises(AppError) as team:
+            app_release.requirement(BUNDLE_ID, "nope")
+        self.assertEqual(str(team.exception), NOT_A_TEAM)
+        with self.assertRaises(AppError) as bundle:
+            app_release.requirement('ai.example.bosun" or true', TEAM)
+        self.assertEqual(str(bundle.exception), "app/publisher.json's bundle_id is not a bundle id")
+
 
 class ArchiveEntriesTest(World):
     def test_a_plain_app_passes(self) -> None:

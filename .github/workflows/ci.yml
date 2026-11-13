@@ -78,25 +78,36 @@ jobs:
         with:
           python-version: ${{ matrix.python-version }}
       - run: uv sync --locked
-      # Coverage here only: it would slow the commit hook, and a floor is about the long run.
-      - run: uv run pytest --cov=lib --cov=tools --cov-fail-under=94 --cov-report=term:skip-covered
+      # Every unit test, in parallel, never only those a change reaches (the commit hook's
+      # --impacted). Coverage here only: it would slow the commit hook, and a floor is about the
+      # long run.
+      - run: uv run pytest -n auto --cov=lib --cov=tools --cov-fail-under=94 --cov-report=term:skip-covered
 
-  # The end-to-end suite, on macOS like the machines bosun runs on: the scripts use BSD date and
-  # /bin/bash 3.2.
+  # On macOS like the machines bosun runs on (the scripts use BSD date and /bin/bash 3.2): every
+  # unit test once, in parallel, then the end-to-end suite, which leaves the unit tests to the first
+  # step.
   smoke:
     runs-on: macos-latest
-    # It takes about 20 minutes on GitHub's macOS runner, the unit tests about 7 of them.
+    # The end-to-end suite took about 13 of the 20 minutes on GitHub's macOS runner, the unit tests,
+    # one at a time, the other 7.
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      - uses: ./.github/actions/setup-uv
+        with:
+          python-version: "3.13"
+      - run: uv sync --locked
       - name: Install tmux
         run: brew install tmux
         env:
           HOMEBREW_NO_AUTO_UPDATE: "1"
           HOMEBREW_NO_INSTALL_CLEANUP: "1"
-      - run: tests/smoke.sh
+      - name: Unit tests
+        run: uv run pytest -n auto
+      - name: End to end
+        run: tests/smoke.sh
 
   # Secrets in any commit of the pull request (all history when run by hand), not only in the final
   # tree that the detect-secrets hook sees: a commit that adds a token and a later one that removes

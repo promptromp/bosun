@@ -17,6 +17,8 @@ dev = [
     "pre-commit>=4",
     "pytest>=8",
     "pytest-cov>=7.1.0",
+    "pytest-impacted[fast]>=0.37.0",
+    "pytest-xdist>=3.8.0",
     "ruff>=0.11",
     "shellcheck-py>=0.10",
     "shfmt-py>=3.7",
@@ -36,6 +38,117 @@ default-groups = ["dev", "docs"]
 [tool.pytest.ini_options]
 testpaths = ["tests/unit"]
 pythonpath = ["lib"]
+# pytest-impacted: the commit hook runs only the tests a change can reach (`pytest --impacted`, in
+# .pre-commit-config.yaml); CI and `tests/smoke.sh --with-unit` run them all. Its import analysis
+# follows the imports of lib/ (through lib/impacted_root, whose docstring says why) and of the test
+# files. Everything else a test depends on is a rule here. A rule that is wrong must select more,
+# never less: what bosun's code reads as it runs invalidates all. tests/unit/test_impacted_rules.py
+# checks that every file has a rule and that the plugin follows the imports here; impacted_guard.py
+# that each file a test reads or runs selects that test.
+impacted_module = "lib/impacted_root"
+impacted_tests_dir = "tests/unit"
+impacted_map = [
+    # Any change runs the rules' own check: a new kind of file needs a rule before it is missed.
+    "*=tests/unit/test_impacted_rules.py",
+    # bosun's programs. The tests that run them, or read them, import nothing of what they run, and
+    # the shell runs every lib/ module: a change to any of them counts as one to bin/bosun, and a
+    # change to bin/bosun selects those tests.
+    "lib/*.py=bin/bosun",
+    "lib/*.sh=bin/bosun",
+    "lib/*/*.sh=bin/bosun",
+    "libexec/*=bin/bosun",
+    "get.sh=bin/bosun",
+    "install.sh=bin/bosun",
+    "uninstall.sh=bin/bosun",
+    "bin/bosun=tests/unit/test_agent_names.py",
+    "bin/bosun=tests/unit/test_agent_profiles.py",
+    "bin/bosun=tests/unit/test_claude_state.py",
+    "bin/bosun=tests/unit/test_corpus.py",
+    "bin/bosun=tests/unit/test_delegate.py",
+    "bin/bosun=tests/unit/test_launch_record.py",
+    "bin/bosun=tests/unit/test_learn_digest.py",
+    "bin/bosun=tests/unit/test_migrations.py",
+    "bin/bosun=tests/unit/test_preflight.py",
+    "bin/bosun=tests/unit/test_shell_functions.py",
+    "bin/bosun=tests/unit/test_uninstall_plan.py",
+    "bin/bosun=tests/unit/test_update.py",
+    "bin/bosun=tests/unit/test_update_facts.py",
+    "bin/bosun=tests/unit/test_update_gate.py",
+    # The docs: bosun's code never reads them. A change counts as one to the site (mkdocs.yml),
+    # whose change selects the tests that read a page.
+    "docs/*=mkdocs.yml",
+    "docs/*/*=mkdocs.yml",
+    "docs/*/*/*=mkdocs.yml",
+    "docs/*/*/*/*=mkdocs.yml",
+    "docs/*/*/*/*/*=mkdocs.yml",
+    "theme/*=mkdocs.yml",
+    "[A-Z]*.md=mkdocs.yml",
+    "mkdocs.yml=tests/unit/test_docs_examples.py",
+    "mkdocs.yml=tests/unit/test_update.py",
+    "mkdocs.yml=tests/unit/test_update_summary.py",
+    # Python outside the folders the analysis walks: tools/ (two of which import lib/ modules),
+    # and the helpers in tests/llm and tests/sandbox that unit tests import or run.
+    "tools/*.py=tests/unit/test_check_links.py",
+    "tools/*.py=tests/unit/test_docs_examples.py",
+    "tools/*.py=tests/unit/test_forbidden_terms.py",
+    "tools/*.py=tests/unit/test_mkdocs_hooks.py",
+    "tools/*.py=tests/unit/test_survey_to_kg.py",
+    "tools/*.py=tests/unit/test_release.py",
+    "lib/*.py=tools/docs_examples.py",
+    "lib/*.py=tools/survey_to_kg.py",
+    "lib/*.py=tools/release.py",
+    # get.sh: plain sh, run by its own test (and its tag rule held to lib/update_check.py's there).
+    "get.sh=tests/unit/test_get_sh.py",
+    "tests/llm/*.py=tests/unit/test_learn.py",
+    "tests/llm/*.py=tests/unit/test_learn_digest.py",
+    "tests/sandbox/mcp_probe_server.py=tests/unit/test_mcp_probe_server.py",
+    # Test files that import another: the analysis does not follow an import between the files of
+    # tests/unit (nor of its helpers, which invalidate all, below).
+    "tests/unit/test_approvals.py=tests/unit/test_ledger_changes.py",
+    "tests/unit/test_approvals.py=tests/unit/test_post_tool_use.py",
+    "tests/unit/test_approvals.py=tests/unit/test_review_bump.py",
+    "tests/unit/test_journal.py=tests/unit/test_knowledge_changes.py",
+    "tests/unit/test_knowledge.py=tests/unit/test_knowledge_changes.py",
+    "tests/unit/test_ledger_activity.py=tests/unit/test_compact_context.py",
+    "tests/unit/test_post_tool_use.py=tests/unit/test_ledger_changes.py",
+    "tests/unit/test_update.py=tests/unit/test_update_facts.py",
+    "tests/unit/test_update_agents.py=tests/unit/test_update_windows.py",
+    # What no unit test reads or runs: CI, the repository's own settings, the other suites.
+    ".github/*=tests/unit/test_impacted_rules.py",
+    ".github/*/*=tests/unit/test_impacted_rules.py",
+    ".github/*/*/*=tests/unit/test_impacted_rules.py",
+    ".*=tests/unit/test_impacted_rules.py",
+    "_typos.toml=tests/unit/test_impacted_rules.py",
+    "tests/*.sh=tests/unit/test_impacted_rules.py",
+    "tests/js/*=tests/unit/test_impacted_rules.py",
+    "tests/sandbox/*=tests/unit/test_impacted_rules.py",
+    "tests/sandbox/*/*=tests/unit/test_impacted_rules.py",
+    "tests/sandbox/*/*/*=tests/unit/test_impacted_rules.py",
+]
+# Whatever bosun reads as it runs (its prompts, task files, templates, the console's page, the
+# example config, the agy plugin), the fixtures, and the tests' own helpers: any test may depend on
+# them, so a change to one runs every test.
+impacted_invalidate_all = [
+    "orchestrator/*",
+    "orchestrator/*/*",
+    "orchestrator/*/*/*",
+    "console/*",
+    "templates/*",
+    "app/VERSION",
+    "app/publisher.json",
+    "examples/*/*",
+    "agents/*/*",
+    "lib/impacted_root/*",
+    "tests/fixtures/*",
+    "tests/fixtures/*/*",
+    "tests/fixtures/*/*/*",
+    "tests/unit/conftest.py",
+    "tests/unit/app_fakes.py",
+    "tests/unit/connector_fakes.py",
+    "tests/unit/impacted_guard.py",
+    "tests/unit/impacted_rules.py",
+    "tests/unit/minted.py",
+]
 
 [tool.ruff]
 line-length = 110
@@ -70,3 +183,7 @@ python_version = "3.13"
 strict = true
 files = ["lib", "libexec/bosun-resolve", "tests/unit", "tests/llm", "tests/sandbox/drive.py", "tests/sandbox/acme_year.py", "tests/sandbox/mcp_probe_server.py", "tools"]
 mypy_path = "lib:tools:tests/llm"
+
+[[tool.mypy.overrides]]
+module = ["pytest_impacted", "pytest_impacted.*"]
+ignore_missing_imports = true  # it ships no type information (tests/unit/test_impacted_rules.py)

@@ -36,6 +36,7 @@ GITHUB = re.compile(
 )
 NO_TEAM = "app/publisher.json has no team_id yet"
 BAD_TEAM = "app/publisher.json's team_id is not a Team ID"
+BAD_BUNDLE_ID = "app/publisher.json's bundle_id is not a bundle id"
 NO_BUILD = "part 2 builds the app"
 
 
@@ -85,8 +86,10 @@ def requirement(bundle_id: str, team_id: str) -> str:
     chain (the intermediate and the leaf each carry their Developer ID extension), the code's identifier is
     <bundle_id>, and the leaf certificate's organizational unit, which is the Team ID, is <team_id>.
     `codesign` checks it against the certificates in the signature, never against what codesign prints."""
-    if not TEAM_ID.match(team_id) or not BUNDLE_ID.match(bundle_id):
+    if not TEAM_ID.match(team_id):
         raise AppError(BAD_TEAM)
+    if not BUNDLE_ID.match(bundle_id):
+        raise AppError(BAD_BUNDLE_ID)
     return (
         f'anchor apple generic and identifier "{bundle_id}"'
         " and certificate 1[field.1.2.840.113635.100.6.2.6] /* exists */"

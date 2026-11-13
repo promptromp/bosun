@@ -519,6 +519,35 @@ class OwnershipTest(World):
         self.assertEqual(app_release.bundle_version(self.app), "9.9")
 
 
+class VerificationIsExplicitTest(World):
+    """Whether to verify is a parameter, never inferred from the team_id."""
+
+    def place(self, team: str, *, development: bool) -> str:
+        def produce(scratch: Path) -> Path:
+            write_bundle(scratch / "made" / "bosun.app", "0.2.0")
+            return scratch / "made" / "bosun.app"
+
+        publisher = Publisher(BUNDLE_ID, team, "acme/bosun")
+        return app_install.place_app(self.setup_for(), publisher, produce, development=development)
+
+    def test_a_non_development_install_with_an_empty_or_invalid_team_id_refuses(self) -> None:
+        for team in ("", "not set", "abcde12345", "ABCDE12345\n"):  # pragma: allowlist secret gitleaks:allow
+            with self.subTest(team=team), self.assertRaisesRegex(AppError, "no Team ID to check"):
+                self.place(team, development=False)
+            self.assertFalse(self.apps.exists())
+            self.assertEqual(self.tools.calls, [])
+
+    def test_only_development_skips_the_checks_whatever_the_team_id(self) -> None:
+        self.place("", development=True)
+        self.place(TEAM, development=True)
+        self.assertFalse({"codesign", "spctl"} & set(self.tools.names()))  # not verified
+        self.assertEqual(app_release.bundle_version(self.app), "0.2.0")
+
+    def test_a_valid_team_id_is_verified_when_not_development(self) -> None:
+        self.place(TEAM, development=False)
+        self.assertEqual(self.tools.names()[:2], ["codesign", "spctl"])
+
+
 class BuildTest(World):
     def test_without_part_two_it_says_so_and_changes_nothing(self) -> None:
         with self.assertRaises(AppError) as caught:
@@ -694,6 +723,99 @@ class SignalTest(World):
         with mock.patch("os.rename", rename), self.assertRaises(AppError):
             app_install.install(self.setup_for())
         self.assertEqual(tree(self.home), before)
+
+    def test_ctrl_c_between_the_renames_never_loses_the_old_app(self) -> None:
+        self.install_old()
+        before = tree(self.home)
+        real = os.rename
+
+        def rename(source: Any, target: Any) -> None:
+            real(source, target)
+            if "previous" in str(target):
+                raise KeyboardInterrupt  # the old app has just been moved aside
+
+        with mock.patch("os.rename", rename), self.assertRaises(KeyboardInterrupt):
+            app_install.install(self.setup_for())
+        self.assertEqual(tree(self.home), before)
+
+    def test_a_second_end_while_the_old_app_is_being_put_back_never_loses_it(self) -> None:
+        self.install_old()
+        before = tree(self.home)
+        real_rename, real_restore = os.rename, app_install._restore
+        restores: list[int] = []
+
+        def rename(source: Any, target: Any) -> None:
+            real_rename(source, target)
+            if "previous" in str(target):
+                signal.raise_signal(signal.SIGTERM)  # the first end
+
+        def restore(aside: Path, dest: Path) -> None:
+            restores.append(1)
+            if len(restores) == 1:
+                raise KeyboardInterrupt  # the second, while it puts the old app back
+            real_restore(aside, dest)
+
+        with (
+            mock.patch("os.rename", rename),
+            mock.patch.object(app_install, "_restore", restore),
+            self.assertRaises(KeyboardInterrupt),
+        ):
+            app_install.install(self.setup_for())
+        self.assertEqual(tree(self.home), before)
+
+    def test_when_clean_up_cannot_give_the_old_app_back_it_keeps_the_folder_and_says_where(self) -> None:
+        self.install_old()
+        real = os.rename
+
+        def rename(source: Any, target: Any) -> None:
+            if Path(str(target)) == self.app:
+                raise OSError("disk trouble")  # neither the rename in nor any put back works
+            real(source, target)
+            if "previous" in str(target):
+                raise KeyboardInterrupt
+
+        with mock.patch("os.rename", rename), self.assertRaises(AppError) as caught:
+            app_install.install(self.setup_for())
+        kept = [path for path in self.apps.iterdir() if path.name.startswith(".bosun-app-")]
+        self.assertEqual(len(kept), 1)
+        self.assertTrue((kept[0] / "previous" / "bosun.app" / "Contents" / "old.txt").exists())
+        self.assertIn(str(kept[0] / "previous" / "bosun.app"), str(caught.exception))
+
+    def test_a_signal_after_the_rename_in_says_what_is_actually_there(self) -> None:
+        self.install_old()
+        real = os.rename
+
+        def rename(source: Any, target: Any) -> None:
+            real(source, target)
+            if Path(str(target)) == self.app and "unpacked" in str(source):
+                signal.raise_signal(signal.SIGTERM)  # the new app has just been put in
+
+        with mock.patch("os.rename", rename), self.assertRaises(AppError) as caught:
+            app_install.install(self.setup_for())
+        self.assertIn("SIGTERM", str(caught.exception))
+        self.assertIn("bosun.app 0.2.0 is in ~/Applications", str(caught.exception))
+        self.assertNotIn("put back", str(caught.exception))
+        self.assertEqual(app_release.bundle_version(self.app), "0.2.0")
+        self.assertEqual([path.name for path in self.apps.iterdir()], ["bosun.app"])
+
+    def test_a_signal_that_was_ignored_stays_ignored(self) -> None:
+        seen: list[Any] = []
+        self.tools.on_download = lambda: seen.append(signal.getsignal(signal.SIGHUP))
+        before = signal.signal(signal.SIGHUP, signal.SIG_IGN)
+        self.addCleanup(signal.signal, signal.SIGHUP, before)
+        app_install.install(self.setup_for())
+        self.assertEqual(seen, [signal.SIG_IGN])  # under nohup a hangup is not an end
+        self.assertEqual(signal.getsignal(signal.SIGHUP), signal.SIG_IGN)
+        self.assertNotEqual(signal.getsignal(signal.SIGTERM), signal.SIG_IGN)
+
+    def test_ctrl_c_on_the_command_line_is_one_line_and_exit_130(self) -> None:
+        self.tools.on_download = lambda: (_ for _ in ()).throw(KeyboardInterrupt())
+        out, err = io.StringIO(), io.StringIO()
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+            status = app_install.main(["install"], root=self.root, home=self.home, run=self.tools, environ={})
+        self.assertEqual((status, out.getvalue()), (130, ""))
+        self.assertEqual(err.getvalue().strip(), "bosun app: interrupted")
+        self.assertFalse(self.apps.exists())
 
 
 class ScratchTest(World):

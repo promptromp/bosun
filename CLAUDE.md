@@ -337,7 +337,13 @@ of truth, so don't copy rules into this file.
   passes without it, and a check in `tests/install_e2e.sh` for the real one.
 - **A new kind of file written by hand:** its linter in `.pre-commit-config.yaml` and `pyproject.toml`'s
   dev group, here under Tooling. If it is glue code in Python, add it to mypy's `files` and to the
-  complexity hooks, which do not cover `tests/`.
+  complexity hooks, which do not cover `tests/`. A file in a new place needs a rule for the commit
+  hook's test selection (`impacted_map` or `impacted_invalidate_all` in `pyproject.toml`), or
+  `tests/unit/test_impacted_rules.py` fails.
+- **A unit test that runs bosun's programs, or reads the docs or another repository file:** its line
+  in `impacted_map` (`bin/bosun=<test>`, `mkdocs.yml=<test>`, ...); `tests/unit/impacted_guard.py`
+  fails the test until it is there and says which. A test that imports another test file: a map line
+  from that file to it (`test_impacted_rules.py` names it).
 - **A command:** `libexec/bosun-<cmd>` with a `# Usage:` header that holds all of its help
   (`bin/bosun` prints it for `--help`, with no flag handling of the command's own for exactly that;
   `die_usage` reports usage errors with exit 2), a line in `bin/bosun`'s usage, the
@@ -381,12 +387,30 @@ and CI agree on versions. On commit (`.pre-commit-config.yaml`; run all with `uv
   positive: `uv run detect-secrets scan --baseline .secrets.baseline`, then `uv run
   detect-secrets audit .secrets.baseline`), and `tools/forbidden_terms.py` on staged files and
   commit messages (see Publishing below).
-- The unit tests; the smoke suite runs on push.
+- The unit tests the change can reach, in parallel (`pytest -n auto --impacted`, pytest-impacted
+  and pytest-xdist): the change is what git has uncommitted, so `pre-commit run --all-files` selects
+  the same. Before a push, the smoke suite (end to end only); in CI, every unit test.
+
+Which tests a change reaches: the plugin follows Python imports from `lib/` (through the empty
+package `lib/impacted_root`, since `lib/` is a flat folder on `sys.path`) and from the test files;
+everything else is a rule in `pyproject.toml` (`impacted_map`, `impacted_invalidate_all`), read by
+`tests/unit/impacted_rules.py`. A rule may select more than it needs, never less: when unsure, a glob
+in `impacted_invalidate_all`. A change to bosun's programs (`lib/*.sh`, `libexec/`, the installers)
+or to any `lib/*.py` counts as one to `bin/bosun`, which selects the tests that run or read the
+programs; a docs page counts as one to `mkdocs.yml`, which selects the tests that read the docs;
+what bosun reads as it runs (`orchestrator/`, `templates/`, `console/`, `examples/`, `agents/`), the
+fixtures and the tests' helpers run every test. `tests/unit/test_impacted_rules.py` runs on every
+commit and fails on a file no rule covers, and on a test the plugin would not select for a module
+it imports (through another test too: that is a map line); `tests/unit/impacted_guard.py` fails a
+test that reads or runs a file whose change would not select it, and says which line to add. The
+unit tests flush the journal with fsync, not F_FULLFSYNC (`conftest.py`): in parallel, F_FULLFSYNC
+queued every worker behind the drive.
 
 CI (`.github/workflows/ci.yml`) runs the same on every pull request to `main`: all the hooks
 (`lint`; the forbidden-terms list comes from the `FORBIDDEN_TERMS` Actions secret, and the pull
-request's title, description and commit messages are checked too), the unit tests on Python 3.13
-to 3.15 with a floor under coverage (`test (<version>)`), the smoke suite on macOS (`smoke`) and
+request's title, description and commit messages are checked too), every unit test in parallel on
+Python 3.13 to 3.15 with a floor under coverage (`test (<version>)`, never `--impacted`), every unit
+test again on macOS and then the end-to-end smoke suite (`smoke`), and
 gitleaks over the pull request's commits (`gitleaks`; a made-up value in a test carries a
 `gitleaks:allow` comment). `.github/workflows/install.yml` runs the install for real on a clean macOS
 runner and the Docker sandbox, when the install could have changed and weekly; those are not required
@@ -407,10 +431,12 @@ with an inline comment that says why (as for the jq and GraphQL strings). The fo
 files in place; that is fine for this repo's only long-running script (`checkin --loop`, whose
 loop bash has already parsed), but for hand edits to `libexec/` keep to atomic replacement.
 
-Always run `tests/smoke.sh` (hermetic: temp HOME, own tmux socket, fake Claude). It runs the Python
-unit tests in `tests/unit/` first (add one there for any change to `lib/*.py` or
-`bosun-resolve`), then end-to-end checks, including that task files only use valid ledger
-transitions and that the task table in `docs/orchestrator.md` matches them. Then `bosun doctor`. In `tests/smoke.sh`,
+Add a unit test in `tests/unit/` for any change to `lib/*.py` or `bosun-resolve`; the commit hook
+runs the ones the change reaches, and `uv run pytest -n auto` runs them all (about a minute). Always
+run `tests/smoke.sh` (hermetic: temp HOME, own tmux socket, fake Claude): end-to-end checks,
+including that task files only use valid ledger transitions and that the task table in
+`docs/orchestrator.md` matches them; `--with-unit` runs every unit test first too, with a plain
+`python3 -m unittest`. Then `bosun doctor`. In `tests/smoke.sh`,
 use `fails_with "<expected error>" cmd` for refusals (a crash must not count as a pass) and
 `wait_for <seconds> cmd` instead of fixed sleeps; external tools (aws, gh, launchctl, pmset,
 osascript) are faked in the temp HOME's `~/.local/bin`, and the install test uses its own launchd
