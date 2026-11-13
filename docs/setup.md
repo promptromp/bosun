@@ -180,28 +180,33 @@ starts; see docs/design/menu-bar.md, the Mac VM run of the app)". macOS can stop
 ### The menu
 
 The first line is a coloured dot and one sentence, with grey lines of detail under it. The items follow in this
-order: "Start bosun" (red and grey only) and "Show What's Wrong..." (yellow and red only), Open Console, Check for
-Updates..., Open at Login, Help, and Quit.
+order: "Start bosun" (only while bosun is not running: grey, or red with no window open) and "Show What's Wrong..."
+(yellow and red only), Open Console, Check for Updates..., Open at Login, Help, and Quit.
 
 | Dot and sentence | Meaning | What the menu offers |
 |---|---|---|
 | Green, "bosun is running" | Windows are open, with how many wait for you and until when the Mac is kept awake | Everything but Start, with "Quit bosun..." |
 | Yellow, "bosun is running, with a warning" | The watchdog is not running, a check warns, there were errors in the last hour, or a window could not start | "Show What's Wrong..." lists them; everything else as green |
-| Red, "bosun is not running" | It should be (inside its awake hours, and you did not quit it); a quit that did not finish shows as an error too | "Start bosun" first, then "Show What's Wrong..." |
+| Red, "bosun is not running" | It should be (inside its awake hours, and you did not quit it), or the morning run failed; a quit that did not finish shows as an error too | "Start bosun" first, then "Show What's Wrong..." |
+| Red, "bosun is running, with an error" | Windows are open and something is wrong at the error level: a check failed, or an ERROR line was logged that the watchdog has not seen yet. Red with "bosun's windows could not be read" is treated the same: bosun may be running | "Show What's Wrong..." first, and no Start: bosun runs (opening `bosun.app` does not start it again either) |
 | Grey, "bosun is stopped" | You quit it | "Start bosun" first; Open Console is greyed, and Quit reads "Quit bosun" with no dialog |
-| Red, "bosun cannot be reached" | The app could not run `bosun status --json`, it timed out with no earlier status to show, or its reply could not be read (a timeout after an earlier status shows that status with "(not current)") | Only Help (Run bosun doctor, Show Logs and Uninstall are greyed) and "Quit bosun.app"; there is no Start |
+| Red, "bosun cannot be reached" | `bosun status --json` failed, timed out with no earlier status to show, or its reply could not be read (a timeout after an earlier status shows that status with "(not current)") | Only Help, with Run bosun doctor (Show Logs and Uninstall are greyed), and "Quit bosun.app"; there is no Start |
+| Red, "bosun cannot be run" | There is something at `~/.local/bin/bosun` that cannot be run (a broken link, no permission) | Only Help (Run bosun doctor, Show Logs and Uninstall are greyed) and "Quit bosun.app" |
 | Grey, "bosun is not installed" | The app found no bosun | Only Help and "Quit bosun.app" |
 | Grey, "Checking bosun..." | The first status has not come yet | Only Help and "Quit bosun.app" |
-| Yellow, "bosun.app needs an update" | bosun speaks a newer status contract than this app reads | "Update bosun...", which runs `bosun update`, then Help and "Quit bosun.app" |
+| Yellow, "bosun.app needs an update" | bosun speaks a newer status contract than this app reads | "Update bosun...", which runs `bosun update` (greyed, saying how the update goes, while one is under way), then Help and "Quit bosun.app"; if bosun is already up to date, `bosun app update` in a terminal brings the app it expects |
+| Yellow, with bosun's own sentence | A level this app does not know yet (from a newer bosun) | As for a warning: "Show What's Wrong...", and no Start |
 
 A status that is older than the last good one says "(not current)" after its sentence. The icon shows a small
 dot for a warning, an error or an update ready.
 
 The watchdog counts toward yellow in two ways. If its launchd job is installed but not loaded (booted out), the
 menu is yellow at once. If it is loaded but has not run, it is yellow only when the Mac has been awake for three of
-its five-minute intervals since its last run (counted from the later of that run and the Mac's last wake, so a
-morning wake is not yellow). A checkout with no watchdog job is no problem, and a quit is grey whatever the watchdog does.
-`bosun doctor` has the same rule in plain words.
+its five-minute intervals since its last run (counted from the latest of that run, the Mac's last wake and its
+boot, so neither a morning wake nor the first minutes after a restart are yellow; a time later than now, after the
+clock was moved back, is left out). A checkout with no watchdog job is no problem, and a quit is grey whatever the
+watchdog does. `bosun doctor` has the plain rule: a job that is not loaded, or whose last full run is older than
+three intervals by the clock, is a warning there, with no allowance for sleep, a restart or a run that skipped.
 
 The items:
 
@@ -212,11 +217,12 @@ The items:
   waiting for N windows". `bosun update` stays the one updater, of bosun and of the app.
 - **Open Console** opens the web console, signed in, in your browser. It is greyed while bosun is stopped.
 - **Open at Login** toggles `bosun app login on|off`: a launchd job that opens the icon at login (it does not start
-  bosun; the morning job does that at its time).
+  bosun; the morning job does that at its time). It is greyed while it is being switched.
 - **Help** has "bosun Guide" (a web page), "Run bosun doctor", "Show Logs" (greyed when bosun has logged nothing)
   and **"Uninstall bosun..."**, which opens Terminal running `bosun uninstall` after a confirmation, so its
-  questions and the administrator password the wake needs are asked where they can be. The last three need bosun
-  to be reachable, and Uninstall waits for an update or quit in progress.
+  questions and the administrator password the wake needs are asked where they can be. Show Logs and Uninstall
+  need a status from bosun, Run bosun doctor only a bosun that can be run (it is what finds out why bosun cannot be
+  reached), and Uninstall waits for an update or quit in progress.
 
 ### Quit and Start
 
@@ -226,7 +232,15 @@ awake; unchecked, the keep-awake runs to its end); and "Keep bosun in the menu b
 it, the app quits itself once bosun has stopped, and opening `bosun.app` brings it back). It never touches the
 ledger, the knowledge base or the config.
 
-If bosun cannot say what quitting would stop, the dialog is "bosun cannot say what quitting would stop" instead, with a Cancel and a Stop Now that ends every window without waiting, and it always shows all three boxes.
+If bosun cannot say what quitting would stop (it could not read its windows, did not answer in time, or failed
+without saying more), the dialog is "bosun cannot say what quitting would stop" instead, with Cancel, a Stop Now that
+ends every window without waiting, and "Quit bosun.app", which leaves bosun as it is and only quits the app; it
+always shows all three boxes. A quit that bosun refuses (an update runs) only says why.
+
+While the quit runs, a grey line under the status says what it does: "Quitting: waiting for <names> to finish..."
+while it lets agents finish, "Quitting: stopping bosun..." otherwise. The app gives `bosun quit` as long as bosun
+says it may take (the wait, the wait for a start that is setting up the windows, and the steps after it), so a
+quit is never cut short half way.
 
 If agents are in the middle of a task, a second dialog names them: **Let Them Finish** waits (up to
 `BOSUN_QUIT_WAIT_MINUTES`, 10 by default), **Stop Them Now** quits at once, **Cancel** changes nothing. A window
@@ -238,9 +252,10 @@ After a quit the launchd jobs stay loaded and do nothing until you start again: 
 their runs, and the morning job skips too if you paused it. Nothing is left running that you did not choose to
 keep: no tmux server, no console, no keep-awake. The same is `bosun quit`, in a terminal.
 
-**Start bosun** (first in the menu when bosun is red or stopped; opening `bosun.app` from Finder or Spotlight when
-bosun is stopped does it too) does what the morning run does, at any hour: `bosun morning --now --background`, which
-has launchd start the run so that macOS's privacy prompts name bosun's own processes and not the app.
+**Start bosun** (first in the menu when bosun is not running: stopped, or red with no window open, such as a
+morning run that failed; opening `bosun.app` from Finder or Spotlight then does it too, and never while bosun runs,
+even with an error) does what the morning run does, at any hour: `bosun morning --now --background`, which has
+launchd start the run so that macOS's privacy prompts name bosun's own processes and not the app.
 
 ### Uninstalling
 

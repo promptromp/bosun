@@ -415,7 +415,8 @@ The menu bar app is a Swift package in `app/`, so it needs a Swift toolchain (Xc
 `app/build.sh --identity - --out <dir>` builds `bosun.app` (ad hoc signed, which is for developing the app only) and
 zips it; `bosun app install --build` runs it and installs the result. The commit hooks run `swift format lint`,
 SwiftLint and `swift test` with warnings as errors, only for a commit that touches `app/`, and skip with one line
-without Swift; CI's `app` job runs them, the coverage floor (`tools/swift_coverage.py`) and an ad hoc build. While
+off a Mac (the app is AppKit; CI's Linux `lint` job has a `swift` that cannot build it) or without Swift; CI's macOS
+`app` job runs them, the coverage floor (`tools/swift_coverage.py`) and an ad hoc build. While
 iterating, `cd app && swift test --filter <suite>`. The app talks to bosun only through its `--json` commands, so a
 change to what one prints needs `uv run python tools/contract_samples.py` to write the fixtures the Swift tests
 decode. What the real app does on a real desktop is `tests/sandbox.sh mac app` (see
@@ -433,43 +434,82 @@ Developer ID` and the bundle id), so a release the install would refuse never go
 Developer role). The values below come from your own files and your own terminal: never paste a certificate, a
 key or a password into a chat, an issue or a pull request.
 
-Once, per repository (`<owner>/<repo>` is where you publish; the logs of a workflow run are public, and the
-workflow prints none of these):
+Once, per repository. `<owner>/<repo>` is where you publish. A workflow run's logs are public, and the workflow prints none of these values.
 
-1. **The `release` environment**, whose secrets only a release run can read:
+**A. From Apple.** About ten minutes. If another app of yours already signs this way, reuse its `.p12` and `.p8` and skip steps 2 and 3.
 
-    ```sh
-    gh api -X PUT repos/<owner>/<repo>/environments/release
-    ```
-
-    Then, under Settings, Environments, `release`, add yourself as a required reviewer, and limit the
-    environment's deployment tags to `app-v*`. The required reviewer is the real control: a run only reaches
-    the secrets after you approved it, and a tag on a commit that is not on `main` runs that commit's copy of
-    the workflow, so read what you approve (the workflow stops a tag whose commit is not on `main`, but only
-    in a step of that same copy). Also add a tag ruleset (Settings, Rules, Rulesets, new tag ruleset, target
-    `app-v*`) that restricts who may create these tags, and block deleting and moving them.
-
-2. **The six secrets**, in that environment. Each `gh secret set` without `--body` asks for the value (hidden), or
-   reads a pipe:
+1. **Find the certificate and the Team ID.** Run:
 
     ```sh
-    # The certificate with its private key, exported from Keychain Access as a .p12, base64 encoded
-    base64 -i ~/path/to/developer-id.p12 | gh secret set MACOS_CERTIFICATE --env release
-    gh secret set MACOS_CERTIFICATE_PASSWORD --env release   # the password you gave the export
-    # The certificate's full name, as `security find-identity -v -p codesigning` shows it
-    # ("Developer ID Application: <name> (<team id>)")
-    gh secret set MACOS_SIGN_IDENTITY --env release
-    # The API key's .p8 file, as it is
-    gh secret set APPLE_API_KEY --env release < ~/path/to/AuthKey_<key id>.p8
-    gh secret set APPLE_API_KEY_ID --env release             # the key's id
-    gh secret set APPLE_API_ISSUER_ID --env release          # the issuer id at the top of the keys page
+    security find-identity -v -p codesigning
     ```
 
-3. **The Team ID** goes into `app/publisher.json` as `team_id`, through a pull request: it is the ten letters and
-   digits in the parentheses of the certificate's name, and it is public, since every signed app carries it. The
-   same file names the bundle identifier and the repository whose releases `bosun app install` downloads from, so
-   check `bundle_id` and `releases` while you are there. Until `team_id` is filled in, `bosun init` does not offer
-   the app, and the release workflow stops at its first check.
+    Look for `"Developer ID Application: <name> (<team id>)"`. The whole quoted text is `MACOS_SIGN_IDENTITY`, and the ten characters in the parentheses are the Team ID. If there is no such line, create the certificate:
+
+   1. In Keychain Access, open Certificate Assistant › Request a Certificate From a Certificate Authority. Choose "Saved to disk".
+   2. On developer.apple.com, open Certificates, add a **Developer ID Application** certificate, and upload that request.
+   3. Download the `.cer`, double-click it, and run the command again.
+
+2. **Export the certificate with its private key as a `.p12`.**
+
+   1. In Keychain Access, open the login keychain and choose My Certificates.
+   2. Expand the "Developer ID Application" entry to check that a private key sits under it.
+   3. Choose Export, then Personal Information Exchange (.p12).
+   4. Choose an export password. It becomes `MACOS_CERTIFICATE_PASSWORD`.
+
+3. **Create an App Store Connect API key for notarization.**
+
+   1. In App Store Connect, open Users and Access › Integrations › App Store Connect API › Team Keys, and press +.
+   2. Give the key the Developer access.
+   3. Download `AuthKey_<key id>.p8`. Apple lets you download it only once.
+   4. Note the key's id (`APPLE_API_KEY_ID`) and the Issuer ID at the top of the page (`APPLE_API_ISSUER_ID`).
+
+**B. On GitHub.** About three minutes, with `gh` signed in to an account that administers the repository.
+
+1. **Create the `release` environment.** Only release runs can read its secrets, and only after you approve each run:
+
+    ```sh
+    ME=$(gh api user --jq .id)
+    gh api -X PUT repos/<owner>/<repo>/environments/release --input - <<EOF
+    {"reviewers":[{"type":"User","id":$ME}],"deployment_branch_policy":{"protected_branches":false,"custom_branch_policies":true}}
+    EOF
+    gh api -X POST repos/<owner>/<repo>/environments/release/deployment-branch-policies -f name='app-v*' -f type=tag
+    ```
+
+    The required reviewer is the real control. A tag on a commit that is not on `main` runs that commit's copy of the workflow. The workflow stops such a tag, but only in a step of that same copy, so read what you approve.
+
+2. **Protect the tags.** Only administrators may create `app-v*` tags, and nobody may move or delete them:
+
+    ```sh
+    gh api -X POST repos/<owner>/<repo>/rulesets --input - <<'EOF'
+    {"name":"app release tags","target":"tag","enforcement":"active",
+     "conditions":{"ref_name":{"include":["refs/tags/app-v*"],"exclude":[]}},
+     "rules":[{"type":"creation"},{"type":"update"},{"type":"deletion"}],
+     "bypass_actors":[{"actor_id":5,"actor_type":"RepositoryRole","bypass_mode":"always"}]}
+    EOF
+    ```
+
+3. **Set the six secrets.** A `gh secret set` without `--body` or a pipe asks for the value without showing it, so nothing goes into your shell history:
+
+    ```sh
+    R=<owner>/<repo>
+    base64 -i ~/path/to/developer-id.p12 | gh secret set MACOS_CERTIFICATE --env release -R $R
+    gh secret set MACOS_CERTIFICATE_PASSWORD --env release -R $R   # the .p12's export password
+    gh secret set MACOS_SIGN_IDENTITY --env release -R $R          # Developer ID Application: <name> (<team id>)
+    gh secret set APPLE_API_KEY --env release -R $R < ~/path/to/AuthKey_<key id>.p8
+    gh secret set APPLE_API_KEY_ID --env release -R $R             # the key's id
+    gh secret set APPLE_API_ISSUER_ID --env release -R $R          # the Issuer ID
+    gh secret list --env release -R $R                             # lists the six names
+    ```
+
+4. **Decide what to do with the `.p12` and `.p8` files.** Once the secrets are set, you can delete both. GitHub never shows a secret again, so each file is only useful for setting a secret again, for example in a fork or after rotating a key.
+
+   - **The `.p12`:** keep the certificate and its private key in your login keychain, and you can export it again at any time.
+   - **The `.p8`:** without it, you make a new key and revoke the old one, which takes a few minutes.
+
+   If you want a backup, keep both in a password manager. Never keep them in the repository or a synced folder.
+
+5. **Put the Team ID into `app/publisher.json` as `team_id`, through a pull request.** It is public, since every signed app carries it. The same file names the bundle identifier and the repository whose releases `bosun app install` downloads from, so check `bundle_id` and `releases` while you are there. Until `team_id` is filled in, `bosun init` does not offer the app, and the release workflow stops at its first check.
 
 Then, for each release:
 
@@ -488,8 +528,14 @@ Then, for each release:
 4. On a Mac of yours, `bosun app install` downloads the release and accepts it only if it passes the same
    checks. To release again, raise `app/VERSION` and tag again: never move or reuse a tag.
 
-To swap the publisher (a fork, another team), edit `app/publisher.json`, replace the six secrets and cut a
-release; the next `bosun update` installs the newly signed app.
+To swap the publisher (a fork, another team) and keep the bundle identifier, edit `team_id` and `releases` in
+`app/publisher.json`, replace the six secrets and cut a release: the next `bosun update` installs the newly signed
+app. A new `bundle_id` takes more. To the version that has it, the installed app is not the publisher's (its bundle
+id is another), and `bosun update`, `bosun app install`, `remove` and `uninstall` never replace or remove an app
+they cannot say is the publisher's: they leave it and say why. So on each Mac, run `bosun app remove` before
+updating to that version (the old version still knows the app), or delete `~/Applications/bosun.app` by hand after
+it; then `bosun app install` installs the new app, which macOS sees as a new one, and `bosun app login on` turns
+Open at Login on again.
 
 ## Testing without waiting for the schedule
 
