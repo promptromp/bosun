@@ -28,12 +28,13 @@
 # pushed (pre-commit's PRE_COMMIT_TO_REF) passed a whole run in this checkout less than 24 hours ago, and
 # otherwise runs what --changed origin/main selects (BOSUN_SMOKE_BASE=<ref> names another base; this is the
 # build-out setting, to go back to the whole suite once the project is past its release: drop the selection from
-# the `--pre-push` branch below). BOSUN_SMOKE_FULL=1 runs the whole suite. A whole run (none of --only, --last-failed, -x) that ends with
-# no failure records its tree in tests/.smoke-cache/passes, but only if the tree is the same at its end as at
+# the `--pre-push` branch below). BOSUN_SMOKE_FULL=1 runs the whole suite. A whole run (none of --only,
+# --last-failed, -x) that ends with no failure records its tree in tests/.smoke-cache/passes, but only if the tree is the same at its end as at
 # its start: the tree is the files on disk before the first section runs (what `git add -A` stages in a copy of
 # the index: tracked files, and untracked ones that are not git-ignored, which a commit lacking them will not match,
 # so the suite runs for it), and a run that changed or made any such file records nothing and names it.
-# BOSUN_SMOKE_NO_CACHE=1 makes --pre-push run the suite anyway (the one way, and not SKIP=). Doubt of any kind
+# BOSUN_SMOKE_NO_CACHE=1 makes --pre-push ignore the pass record (the one way, and not SKIP=): it runs what the change
+# reaches, and with BOSUN_SMOKE_FULL=1 the whole suite. Doubt of any kind
 # (the record is unreadable or older, the tree differs, git fails) runs the suite. CI never uses --pre-push.
 # A section that cannot run alone either sets up what it uses itself or says `needs <id>`.
 # `always_run` marks where the code every run needs resumes after a section: the setup, and the last

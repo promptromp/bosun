@@ -272,11 +272,16 @@ class PrePushTest(RecordedPassesTest):
         self.record(self.head_tree(), self.head_tree())
         self.assertEqual(self.skips("HEAD", now=NOW + 86400).returncode, 1)
 
-    def test_the_escape_hatch_runs_the_suite_even_with_a_record(self) -> None:
+    def test_the_escape_hatch_ignores_the_record_and_says_what_it_then_runs(self) -> None:
         self.record(self.head_tree(), self.head_tree())
         result = self.skips("HEAD", now=NOW + 60, BOSUN_SMOKE_NO_CACHE="1")
         self.assertEqual(result.returncode, 1)
-        self.assertIn("BOSUN_SMOKE_NO_CACHE=1", result.stdout)
+        self.assertIn("BOSUN_SMOKE_NO_CACHE=1: ignoring the pass record", result.stdout)
+        self.assertIn("BOSUN_SMOKE_FULL=1 forces the whole suite", result.stdout)
+
+    def test_the_full_knob_ignores_the_record_too(self) -> None:
+        self.record(self.head_tree(), self.head_tree())
+        self.assertEqual(self.skips("HEAD", now=NOW + 60, BOSUN_SMOKE_FULL="1").returncode, 1)
 
     def test_no_ref_or_one_git_cannot_find_runs_the_suite(self) -> None:
         self.record(self.head_tree(), self.head_tree())

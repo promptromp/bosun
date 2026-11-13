@@ -99,6 +99,21 @@ class SelectionRulesTest(unittest.TestCase):
         ]
         self.assertEqual(dead, [], "\n\nThese rules of tests/smoke_selection.txt match no file. Remove them:")
 
+    def test_a_command_common_sh_runs_runs_everything_and_the_others_do_not(self) -> None:
+        """common.sh runs `"$BOSUN_CMD" launch`: every section that starts a window reaches it."""
+        launch = ss.plan_for(["libexec/bosun-launch"], self.sections, self.rules, self.graph)
+        self.assertTrue(launch.full and not launch.unknown, launch.reason)
+        self.assertIn("libexec/bosun-launch", self.graph.common_commands)
+        self.assertNotIn("libexec/bosun-app", self.graph.common_commands)
+        self.assertFalse(ss.plan_for(["libexec/bosun-app"], self.sections, self.rules, self.graph).full)
+
+    def test_a_new_command_nothing_covers_is_flagged_not_covered_by_syntax(self) -> None:
+        """`syntax` parses all of libexec/ and lib/, so it is no sign that a section runs the file."""
+        plan = ss.plan_for(["libexec/bosun-brand-new"], self.sections, self.rules, self.graph)
+        self.assertTrue(plan.full and plan.unknown, plan.reason)
+        self.assertIn("no section covers libexec/bosun-brand-new", plan.reason)
+        self.assertIn("syntax", [s.id for s in self.sections])
+
     def test_the_unknown_file_gets_the_whole_suite_and_the_message_says_what_to_add(self) -> None:
         plan = ss.plan_for(["brand_new_thing.txt"], self.sections, self.rules, self.graph)
         self.assertTrue(plan.full and plan.unknown)

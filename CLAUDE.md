@@ -456,7 +456,7 @@ result, in the git-ignored `tests/.smoke-cache/`, was a failure) and `-x` (stop 
 before committing, run the whole suite once with none of them. CI's smoke job, when it is on, runs all of it.
 The pre-push hook (`tests/smoke.sh --pre-push`) does less, for the build-out phase only: it skips the suite
 when that exact tree (uncommitted and untracked files included) passed a whole run in this checkout in the last
-24 hours (`BOSUN_SMOKE_NO_CACHE=1` forces it; what the record is and why it can only make a run longer:
+24 hours (`BOSUN_SMOKE_NO_CACHE=1` ignores that record, `BOSUN_SMOKE_FULL=1` forces the whole suite; what the record is and why it can only make a run longer:
 `docs/development.md`), and otherwise runs the sections the change since `origin/main` can reach
 (`tests/smoke.sh --changed <ref>` shows the choice for any ref: which file selected which section, or why it
 chose everything), failing closed to the whole suite: a changed file that matches the select-everything list, that

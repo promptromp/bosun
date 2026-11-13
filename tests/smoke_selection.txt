@@ -56,3 +56,8 @@ ignore tests/install_e2e.sh
 ignore tests/work_e2e.sh
 ignore tests/sandbox/**
 ignore tools/**
+# The console page's JavaScript check: only the `syntax` section (the catch-all, which still runs) calls it.
+ignore tests/js/**
+ignore tests/js_check.sh
+# A command that needs real hardware (a real sleep and wake): no section runs it; `syntax` still parses it.
+ignore libexec/bosun-wake-test

@@ -30,11 +30,14 @@ all shared.sh
 all tests/smoke.sh
 ignore docs/**
 ignore *.md
+ignore libexec/bosun-wake
 """
 
 # alpha covers a command, beta one more and a shell file that calls the command, gamma needs alpha and
 # covers the templates. (Their checks do nothing: no section of the real suite runs here.)
-FAKE_SECTIONS = """section alpha "the first fake section" covers 'libexec/bosun-alpha'
+FAKE_SECTIONS = """section syntax "syntax" covers 'libexec/**'
+check "syntax one" true
+section alpha "the first fake section" covers 'libexec/bosun-alpha'
 check "alpha one" true
 section beta "the second" covers 'libexec/bosun-beta,extra/**'
 check "beta one" true
@@ -46,7 +49,8 @@ FILES = {
     "libexec/bosun-alpha": "#!/bin/bash\necho alpha\n",
     # runs alpha: a change to alpha reaches beta's section
     "libexec/bosun-beta": '#!/bin/bash\n"$BOSUN" alpha\n',
-    "libexec/bosun-delta": "#!/bin/bash\necho delta\n",  # no section covers it
+    "libexec/bosun-delta": "#!/bin/bash\necho delta\n",  # only the catch-all `syntax` covers it
+    "libexec/bosun-wake": "#!/bin/bash\necho needs hardware\n",  # ignored: the hardware test
     "templates/job.plist": "<plist/>\n",
     "extra/deep/er/file.txt": "x\n",
     "shared.sh": "echo shared\n",
@@ -171,6 +175,17 @@ class DependenciesTest(Scratch):
         g = self.graph({"docs/setup.md": "# x\n", "libexec/bosun-one": 'echo "see docs/setup.md"\n'})
         self.assertEqual(g.affected("docs/setup.md"), {"docs/setup.md"})
 
+    def test_the_commands_common_sh_runs_are_kept(self) -> None:
+        g = self.graph(
+            {
+                "lib/common.sh": 'build() { "$BOSUN_CMD" launch "$1"; }\n# bosun alert is only said here\n',
+                "libexec/bosun-launch": "",
+                "libexec/bosun-alert": "",
+                "libexec/bosun-ledger": "",
+            }
+        )
+        self.assertEqual(g.common_commands, {"libexec/bosun-launch"})
+
     def test_what_common_sh_names_under_lib_is_shared_by_every_section(self) -> None:
         g = self.graph(
             {
@@ -261,7 +276,8 @@ class ChangedTest(ScratchSuite):
         self.assertIn("  beta: extra/deep/er/file.txt", result.stdout)
         self.assertIn("docs/guide.md is ignored", result.stdout)
 
-    def test_a_file_nothing_covers_runs_the_whole_suite_and_says_what_to_add(self) -> None:
+    def test_the_catch_all_section_alone_is_no_coverage(self) -> None:
+        """`syntax` covers every file of libexec/, so it says nothing: a command only it covers runs all."""
         self.write("libexec/bosun-delta", "#!/bin/bash\necho delta changed\n")
         result = self.run_suite("--changed", "HEAD")
         self.assertEqual(self.ran(result), ["alpha", "beta", "gamma"])
@@ -269,6 +285,20 @@ class ChangedTest(ScratchSuite):
         self.assertIn("covers '...'", result.stdout)
         self.assertIn("tests/smoke_selection.txt", result.stdout)
         self.assertNotIn("a partial run", result.stdout)
+
+    def test_the_catch_all_still_runs_beside_the_sections_that_cover_the_file(self) -> None:
+        self.write("libexec/bosun-alpha", "#!/bin/bash\necho alpha changed\n")
+        result = self.run_suite("--changed", "HEAD")
+        self.assertIn("  syntax: libexec/bosun-alpha", result.stdout)
+        self.assertIn("syntax one", result.stdout)
+
+    def test_an_ignored_command_runs_only_the_catch_all(self) -> None:
+        self.write("libexec/bosun-wake", "#!/bin/bash\necho still needs hardware\n")
+        result = self.run_suite("--changed", "HEAD")
+        self.assertEqual(result.returncode, 0, result.stdout)
+        self.assertEqual(self.ran(result), [])
+        self.assertIn("pass  syntax one", result.stdout)
+        self.assertIn("a partial run, not the whole suite: syntax", result.stdout)
 
     def test_a_file_on_the_select_everything_list_runs_the_whole_suite(self) -> None:
         self.write("shared.sh", "echo shared changed\n")
@@ -424,9 +454,18 @@ class PrePushTest(ScratchSuite):
         result = self.run_suite(
             "--pre-push", BOSUN_SMOKE_BASE="HEAD", PRE_COMMIT_TO_REF="HEAD", BOSUN_SMOKE_NO_CACHE="1"
         )
-        self.assertIn("BOSUN_SMOKE_NO_CACHE=1: running the whole suite", result.stdout)
+        self.assertIn("BOSUN_SMOKE_NO_CACHE=1: ignoring the pass record; running the sections", result.stdout)
+        self.assertIn("BOSUN_SMOKE_FULL=1 forces the whole suite", result.stdout)
         # (the clean tree against HEAD: nothing changed, so nothing is selected)
         self.assertIn("nothing to run", result.stdout)
+
+    def test_full_forces_the_whole_suite_even_for_a_tree_that_passed(self) -> None:
+        self.assertEqual(self.run_suite().returncode, 0)
+        result = self.run_suite(
+            "--pre-push", BOSUN_SMOKE_BASE="HEAD", PRE_COMMIT_TO_REF="HEAD", BOSUN_SMOKE_FULL="1"
+        )
+        self.assertNotIn("already passed", result.stdout)
+        self.assertEqual(self.ran(result), ["alpha", "beta", "gamma"])
 
     def test_a_failing_section_in_a_partial_run_fails_the_push(self) -> None:
         text = self.script.read_text().replace('check "beta one" true', 'check "beta one" false')

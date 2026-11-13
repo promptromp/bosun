@@ -48,18 +48,23 @@ SECTION_MARKER = re.compile(
     r"(?:\s+covers\s+'(?P<covers>[^']*)')?\s*$"
 )
 COMMON = "lib/common.sh"  # sourced by every command: what it names under lib/ runs in every section
-HUBS = (COMMON, "bin/bosun")  # not read for what they refer to: they name nearly everything
+BIN = "bin/bosun"  # not read for what it refers to: it names every command
+CATCH_ALL = (
+    "syntax"  # the section whose `covers` take in all of lib/ and libexec/: it never counts as coverage
+)
 # What a file's code can depend on: only these are read for references.
 SOURCE_DIRS = ("lib/", "libexec/", "bin/")
 SOURCE_FILES = ("install.sh", "uninstall.sh", "get.sh")
 
 IMPORT = re.compile(r"^\s*(?:from|import)\s+([A-Za-z_]\w*)", re.MULTILINE)
-# A command called, not talked about: `bosun-ledger` (its file), `"$BOSUN" ledger` or `bosun ledger` where
-# a shell command starts. A message that says "run `bosun doctor`" is not a call.
+# A command called, not talked about: `bosun-ledger` (its file); `"$BOSUN" ledger` (a variable that names
+# bosun, then a command, wherever it stands: also in a string that builds a command line, such as
+# `"$(printf %q "$BOSUN_CMD") guard"`); or `bosun ledger` where a shell command starts. A message that says
+# "run `bosun doctor`" is not a call.
 SHELL_CALL = re.compile(
     r"\bbosun-(?P<dash>[a-z][a-z0-9-]*)"
-    r"|(?:^|[;&|(`]|\$\(|\bexec\s|\bthen\s|\bdo\s)\s*"
-    r"""(?:"?\$\{?BOSUN\w*\}?"?|bosun)\s+(?P<shell>[a-z][a-z0-9-]*)""",
+    r"""|"?\$\{?BOSUN\w*\}?"?\)?"?\s+(?P<var>[a-z][a-z0-9-]*)"""
+    r"|(?:^|[;&|(`{!]|\$\(|\bexec\s|\bthen\s|\bdo\s)\s*bosun\s+(?P<shell>[a-z][a-z0-9-]*)",
     re.MULTILINE,
 )
 # and in Python an argument list that starts with it: ["bosun", "ledger", ...], [BOSUN_CMD, "send"
@@ -107,7 +112,8 @@ def parse_sections(text: str) -> list[Section]:
     for line in text.splitlines():
         match = SECTION_MARKER.match(line) if re.match(r"^\s*section\s", line) else None
         if match is None:
-            continue  # `section() {`, or a line tests/unit/test_smoke_sections.py reports
+            # `section() {`; a section line that does not parse is caught by test_smoke_sections.py
+            continue
         needs = tuple(match["needs"].split(",")) if match["needs"] else ()
         covers = tuple(g.strip() for g in (match["covers"] or "").split(",") if g.strip())
         found.append(Section(match["id"], match["name"], needs, covers))
@@ -231,8 +237,9 @@ class Graph:
         self.importers: dict[str, set[str]] = {}  # a file -> the modules that import it
         self.callers: dict[str, set[str]] = {}  # a file -> the files that run or read it
         self.common_refers: set[str] = set()  # what lib/common.sh names under lib/
+        self.common_commands: set[str] = set()  # the commands its code runs ("$BOSUN_CMD" launch ...)
         for path in self.files:
-            if is_source(path) and path != HUBS[1] and (root / path).is_file():
+            if is_source(path) and path != BIN and (root / path).is_file():
                 self.record(path, *self.references(root, path))
 
     def index(self, path: str) -> None:
@@ -244,8 +251,9 @@ class Graph:
             self.commands[name[len("bosun-") :]] = path
 
     def record(self, path: str, imports: set[str], calls: set[str]) -> None:
-        if path == COMMON:  # (its commands are in messages as much as in calls: not read)
+        if path == COMMON:  # what it names runs in every section, not only where a command names it
             self.common_refers = {t for t in imports | calls if t.startswith("lib/")}
+            self.common_commands = set(calls) & set(self.commands.values())
             return
         for target in imports:
             self.importers.setdefault(target, set()).add(path)
@@ -282,7 +290,7 @@ class Graph:
             if "." in parts[-1]:  # and a bare `ledger.py` as every file of that name
                 found.update(self.by_name.get(parts[-1], ()))
         for match in SHELL_CALL.finditer(text):
-            command = match["dash"] or match["shell"]
+            command = match["dash"] or match["var"] or match["shell"]
             if command in self.commands:
                 found.add(self.commands[command])
         return found
@@ -311,6 +319,10 @@ def whole_suite(path: str, graph: Graph, rules: Rules) -> Plan | None:
     glob = first_match(path, rules.everything)
     if glob is not None:
         return Plan(full=True, reason=f"{path} is in the select-everything list ({glob})")
+    if path in graph.common_commands:
+        return Plan(
+            full=True, reason=f"{path} is a command {COMMON} runs, in every section that starts a window"
+        )
     shared = sorted(graph.common_refers & graph.affected(path))
     if shared:
         via = "" if shared[0] == path else f" (through {shared[0]})"
@@ -331,12 +343,13 @@ def plan_for(changed: Sequence[str], sections: Sequence[Section], rules: Rules, 
         if settled is not None:
             return settled
         hit = reached_by(path, sections, graph)
-        for section in hit:
+        for section in hit:  # (the catch-all too: its check of the file is cheap)
             plan.picked.setdefault(section, []).append(path)
-        if not hit and first_match(path, rules.ignore) is None:
+        if any(section != CATCH_ALL for section in hit):
+            continue
+        if first_match(path, rules.ignore) is None:
             return Plan(full=True, unknown=True, reason=f"no section covers {path}: {WHOLE_SUITE_HINT}")
-        if not hit:
-            plan.ignored.append(path)
+        plan.ignored.append(path)
     plan.needed = needed_sections(sections, plan.picked)
     return plan
 

@@ -75,7 +75,7 @@ Git-ignored paths (caches, `__pycache__`, `tests/.smoke-cache/`) never count. An
 ignored counts at the start, on purpose: it may have influenced the run, the commit you push lacks it, so its
 tree differs and the whole suite runs. In doubt the suite runs: another tree, a record older than a day, a
 partial or failed run, an unreadable record, git failing; the record can make a run longer, never a failing
-tree pass. `BOSUN_SMOKE_NO_CACHE=1 git push` makes the hook run the suite anyway (this is the knob, not
+tree pass. `BOSUN_SMOKE_NO_CACHE=1 git push` makes the hook ignore the record and run the sections the change reaches (this is the knob, not
 pre-commit's `SKIP`, which this repository does not use). With several refs in one push pre-commit hands the
 hook only the first one that is not a deletion, and a branch deletion runs nothing. CI never uses the record:
 when its smoke job runs, it runs `tests/smoke.sh` in full.
@@ -107,8 +107,8 @@ whole suite: `lib/common.sh`, `bin/bosun`, the suite itself and its stand-ins, w
 and `ignore <glob>`. `tests/unit/test_smoke_selection.py` fails on a file that is none of those, naming it and
 saying what to add; the same for a section without `covers`.
 
-`BOSUN_SMOKE_FULL=1 git push` forces the whole suite (and `BOSUN_SMOKE_NO_CACHE=1` runs it even for a tree that
-passed). A partial run never records the tree as passed: only a whole one does.
+`BOSUN_SMOKE_FULL=1 git push` forces the whole suite (even for a tree that passed it: the pass record is not
+consulted then either; `BOSUN_SMOKE_NO_CACHE=1` only ignores the record, and still runs just the sections the change reaches). A partial run never records the tree as passed: only a whole one does.
 
 A section either sets up what it uses itself or says `needs <id>`, and
 `tests/unit/test_smoke_sections.py` fails on a section without a marker, a taken id or a `needs` that names

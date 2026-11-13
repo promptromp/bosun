@@ -91,7 +91,8 @@ clock_text() { date -r "$1" '+%F %H:%M' 2>/dev/null || date -d "@$1" '+%F %H:%M'
 
 # pre_push_skip <root> <passes file> <pre-commit's to-ref> <now>: whether the pre-push hook has nothing to run:
 # 0 if that ref's tree passed a whole run here in the last day (it says so), 3 for a branch deletion (nothing to
-# test), 1 for everything else: the whole suite runs. BOSUN_SMOKE_NO_CACHE=1 forces 1.
+# test), 1 for everything else: the whole suite runs. BOSUN_SMOKE_NO_CACHE=1 forces 1 (it ignores the record: what
+# --pre-push then runs is the sections the change reaches, or all of them with BOSUN_SMOKE_FULL=1).
 pre_push_skip() {
   local tree when
   case "$3" in
@@ -103,9 +104,10 @@ pre_push_skip() {
       ;;
   esac
   if [ "${BOSUN_SMOKE_NO_CACHE:-}" = 1 ]; then
-    echo "BOSUN_SMOKE_NO_CACHE=1: running the whole suite"
+    echo "BOSUN_SMOKE_NO_CACHE=1: ignoring the pass record; running the sections the change reaches (BOSUN_SMOKE_FULL=1 forces the whole suite)"
     return 1
   fi
+  [ "${BOSUN_SMOKE_FULL:-}" != 1 ] || return 1 # (smoke.sh says it runs the whole suite)
   tree="$(git -C "$1" rev-parse --verify -q "$3^{tree}" 2>/dev/null)" || return 1
   when="$(passed_recently "$2" "$tree" "$4")" || return 1
   echo "smoke already passed on this exact tree at $(clock_text "$when"): skipping"
