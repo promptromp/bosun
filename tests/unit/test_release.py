@@ -93,6 +93,25 @@ class GateTest(unittest.TestCase):
     def test_tree_mismatch(self) -> None:
         self.assertEqual(self.gate(GREEN, main_tree="t2"), MISMATCH)
 
+    def test_merge_queue_commit_is_read_on_its_own_checks(self) -> None:
+        """Checks that ran on main's head itself decide, whatever the pull request says."""
+        self.assertIsNone(release.gate(REQUIRED, [], None, "t1", GREEN))
+        self.assertIsNone(release.gate(REQUIRED, [run("lint", "failure", 1)], "t0", "t1", GREEN))
+
+    def test_merge_queue_commit_with_a_failing_or_missing_check(self) -> None:
+        bad = [*GREEN, run("smoke", "failure", 9)]
+        self.assertEqual(release.gate(REQUIRED, GREEN, "t1", "t1", bad), "smoke: failure")
+        self.assertEqual(release.gate(REQUIRED, GREEN, "t1", "t1", GREEN[:2]), "smoke: missing")
+
+    def test_unrelated_runs_on_main_head_fall_back_to_the_pull_request(self) -> None:
+        """A squash merged before the queue has only push-triggered runs (CodeQL, docs) on its head."""
+        other = [run("Analyze (python)", "success", 7), run("deploy", "success", 8)]
+        self.assertIsNone(release.gate(REQUIRED, GREEN, "t1", "t1", other))
+        self.assertEqual(release.gate(REQUIRED, GREEN, "t1", "t2", other), MISMATCH)
+        self.assertEqual(
+            release.gate(REQUIRED, GREEN, None, "t1", other), "main's head came from no pull request"
+        )
+
 
 class CliTest(unittest.TestCase):
     def setUp(self) -> None:
@@ -140,6 +159,19 @@ class CliTest(unittest.TestCase):
         self.assertEqual(self.call(*args), (0, ""))
         self.assertEqual(self.call(*args[:-1], "x"), (1, MISMATCH + "\n"))
         self.assertEqual(self.call("gate")[0], 2)
+
+    def test_gate_reads_the_checks_on_main_head_when_they_exist(self) -> None:
+        (self.dir / "req").write_text("lint\ntest (3.13)\n")
+        (self.dir / "runs").write_text("")
+        head = [run("lint", "success", 1), run("test (3.13)", "success", 2)]
+        (self.dir / "head").write_text("".join(json.dumps(r) + "\n" for r in head))
+        args = ["gate", "--required-file", "req", "--runs-file", "runs", "--pr-tree", "", "--main-tree", "t"]
+        self.assertEqual(self.call(*args, "--head-runs-file", "head"), (0, ""))
+        self.assertEqual(self.call(*args), (1, "main's head came from no pull request\n"))
+        (self.dir / "head").write_text(
+            json.dumps([run("lint", "success", 1), run("test (3.13)", "failure", 2)])
+        )
+        self.assertEqual(self.call(*args, "--head-runs-file", "head"), (1, "test (3.13): failure\n"))
 
 
 class NotesTest(unittest.TestCase):

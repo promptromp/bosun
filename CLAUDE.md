@@ -398,26 +398,36 @@ test that reads or runs a file whose change would not select it, and says which 
 unit tests flush the journal with fsync, not F_FULLFSYNC (`conftest.py`): in parallel, F_FULLFSYNC
 queued every worker behind the drive.
 
-CI (`.github/workflows/ci.yml`) runs the same on every pull request to `main`: all the hooks
+CI (`.github/workflows/ci.yml`) runs the same on every pull request to `main` and on every merge group
+of the merge queue (`merge_group`: without it the queue waits forever for checks that never report): all the hooks
 (`lint`; the forbidden-terms list comes from the `FORBIDDEN_TERMS` Actions secret, and the pull
-request's title, description and commit messages are checked too), every unit test in parallel on
+request's title, description and commit messages are checked too; for a merge group only the commit
+messages between its `base_sha` and `head_sha`), every unit test in parallel on
 Python 3.13 to 3.15 with a floor under coverage (`test (<version>)`, never `--impacted`), every unit
 test again on macOS and then the end-to-end smoke suite (`smoke`, which is off until the
 feature-complete MVP: its job-level `if` in `ci.yml` wants the repository variable `CI_SMOKE` set
 to `true`, and it is not a required check in `.github/rulesets/main.json`; to turn it back on,
 remove that `if` (or set the variable), re-add `smoke` to the ruleset's required checks and apply
 it; the pre-push hook still runs the suite), and
-gitleaks over the pull request's commits (`gitleaks`; a made-up value in a test carries a
+gitleaks over the pull request's or merge group's commits (`gitleaks`; a made-up value in a test carries a
 `gitleaks:allow` comment). `.github/workflows/install.yml` runs the install for real on a clean macOS
 runner and the Docker sandbox, when the install could have changed and weekly; those are not required
 checks, because a required check that did not run blocks a merge. `.github/workflows/docs.yml`
 publishes the docs site to GitHub Pages from `main` (the repository's Pages source is GitHub Actions). The
 logs are public, so neither check prints what it matched. `main` takes changes only through a pull
-request with those checks green and up to date with `main`, CodeQL's results clean (GitHub's
-default setup; no error alerts, no high or critical security alerts) and every review thread
-resolved (the ruleset also asks for a Copilot review on each push, which takes effect once
-Copilot code review is enabled for the organization); squashed or rebased: the ruleset in
-`.github/rulesets/main.json`. A new or renamed job goes in its list too, applied with `gh api -X PUT
+request with those checks green, CodeQL's results clean (GitHub's default setup; no error alerts, no
+high or critical security alerts) and every review thread resolved (the ruleset also asks for a
+Copilot review on each push, which takes effect once Copilot code review is enabled for the
+organization), and then through the merge queue: `gh pr merge --squash` adds the pull request to the
+queue once its checks pass, and the queue builds it on top of the latest `main` and the pull requests
+ahead of it, runs the required checks on that merge group's commit and squash-merges it when they
+pass (the ruleset's `merge_queue` rule; so `strict_required_status_checks_policy` is off, the queue
+being what "up to date with `main`" was for, and nobody updates a branch by hand; CodeQL's default setup does not run on merge groups, and GitHub's
+docs say the ruleset's code scanning protection does not apply to them, so CodeQL gates the pull
+request only). The release gate
+(`tools/release.py gate`) therefore reads the required checks on main's head commit itself, the merge
+group's, and falls back to the pull request's for commits merged before the queue. The rules are
+in `.github/rulesets/main.json`. A new or renamed job goes in its list too, applied with `gh api -X PUT
 repos/{owner}/{repo}/rulesets/<id> --input .github/rulesets/main.json`. Dependabot
 (`.github/dependabot.yml`) opens monthly grouped updates of the actions, `uv.lock` and the hook
 revisions, and security updates as advisories come out.

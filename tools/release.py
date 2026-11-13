@@ -4,15 +4,17 @@
 Usage: release.py next-tag
        release.py latest
        release.py notes <range>   (<from>..<to>, or a commit for all its history)
-       release.py gate --required-file F --runs-file F --pr-tree T --main-tree T
+       release.py gate --required-file F --runs-file F --pr-tree T --main-tree T [--head-runs-file F]
 
 `next-tag` prints the tag for today (UTC), `v<YYYY.MM.DD>`, or `v<YYYY.MM.DD>.2`, `.3`, ... when
 there is one already, from the repository's `v*` tags. `latest` prints the newest release tag
 (nothing when there is none). `notes` prints one `- <subject>` line per commit of the range, newest
 first, which are the pull requests' titles on a squash-merged `main`. `gate` prints why main's head
-is not to be released and exits 1, or exits 0: the checks run on the pull request, never on a
-squash merge, so it reads the pull request main's head came from (the files are what the workflow
-gathered: the required check names one per line, and the PR head's check runs as JSON).
+is not to be released and exits 1, or exits 0. Through the merge queue main's head is the merge
+group's own commit, which the required checks ran on, so it reads the checks on main's head itself
+(`--head-runs-file`); for a commit merged before the queue, none of them ran there and it reads the
+pull request main's head came from instead (the files are what the workflow gathered: the required
+check names one per line, and the check runs as JSON).
 """
 
 from __future__ import annotations
@@ -50,20 +52,8 @@ def latest(existing: Iterable[str]) -> str | None:
     return max(keyed)[1] if keyed else None
 
 
-def gate(
-    required: Sequence[str],
-    runs: Sequence[Mapping[str, object]],
-    pr_head_tree: str | None,
-    main_tree: str,
-) -> str | None:
-    """Why main's head is not to be released (None: release it).
-
-    It needs the pull request main's head came from, checked on the tree main now has, and for
-    each required check its newest run concluded as GitHub accepts for a required check."""
-    if pr_head_tree is None:
-        return "main's head came from no pull request"
-    if pr_head_tree != main_tree:
-        return "main's head is not the tree its pull request was checked on"
+def _failing_check(required: Sequence[str], runs: Sequence[Mapping[str, object]]) -> str | None:
+    """The first required check that is missing or whose newest run did not pass (None: all green)."""
     for name in required:
         named = [r for r in runs if r.get("name") == name]
         if not named:
@@ -72,6 +62,29 @@ def gate(
         if newest.get("conclusion") not in PASSING:
             return f"{name}: {newest.get('conclusion') or 'not finished'}"
     return None
+
+
+def gate(
+    required: Sequence[str],
+    runs: Sequence[Mapping[str, object]],
+    pr_head_tree: str | None,
+    main_tree: str,
+    head_runs: Sequence[Mapping[str, object]] = (),
+) -> str | None:
+    """Why main's head is not to be released (None: release it).
+
+    When any required check ran on main's head commit itself (the merge queue's commit), each
+    required check's newest run there must have concluded as GitHub accepts for a required check:
+    those runs are on exactly this commit, so no tree comparison is needed. Otherwise (a commit
+    merged before the queue) it needs the pull request main's head came from, checked on the tree
+    main now has, and the same of the pull request's runs."""
+    if any(r.get("name") in required for r in head_runs):
+        return _failing_check(required, head_runs)
+    if pr_head_tree is None:
+        return "main's head came from no pull request"
+    if pr_head_tree != main_tree:
+        return "main's head is not the tree its pull request was checked on"
+    return _failing_check(required, runs)
 
 
 def notes(subjects: Sequence[str]) -> str:
@@ -102,12 +115,14 @@ def _gate_cli(argv: Sequence[str]) -> int:
     try:
         required_text = Path(opts["--required-file"]).read_text()
         runs = _read_runs(Path(opts["--runs-file"]).read_text())
+        head_file = opts.get("--head-runs-file")
+        head_runs = _read_runs(Path(head_file).read_text()) if head_file else []
         main_tree = opts["--main-tree"]
     except (KeyError, OSError, ValueError) as err:
         print(f"release.py gate: {err!r}", file=sys.stderr)
         return 2
     required = [line for line in required_text.splitlines() if line.strip()]
-    why = gate(required, runs, opts.get("--pr-tree") or None, main_tree)
+    why = gate(required, runs, opts.get("--pr-tree") or None, main_tree, head_runs)
     if why:
         print(why)
         return 1
