@@ -98,8 +98,10 @@ def verdict(files: Sequence[FileCoverage], floor: float) -> tuple[bool, str]:
     figures = ", ".join(f"{t} {totals[t]:.1f}%" for t in TARGETS)
     if min(totals.values()) >= floor:
         return True, f"line coverage {figures} (floor {floor:g}% each)"
+    failing = [f for f in files if totals[f.target] < floor]
     under = "; ".join(
-        f"{f.target}/{f.name} {f.percent:.1f}% ({f.covered} of {f.lines} lines)" for f in below(files, floor)
+        f"{f.target}/{f.name} {f.percent:.1f}% ({f.covered} of {f.lines} lines)"
+        for f in below(failing, floor)
     )
     return (
         False,

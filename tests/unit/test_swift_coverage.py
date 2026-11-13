@@ -123,6 +123,19 @@ class VerdictTest(unittest.TestCase):
         self.assertFalse(ok)  # together they are 99%
         self.assertIn("BosunMenuSystem/S.swift 90.0%", message)
 
+    def test_only_the_failing_targets_files_are_listed(self) -> None:
+        files = sc.source_files(
+            summary(
+                entry(f"{CORE}Big.swift", 1000, 1000),
+                entry(f"{CORE}Low.swift", 10, 0),  # under 95% alone, but the core holds the floor
+                entry(f"{SYSTEM}S.swift", 100, 90),
+            )
+        )
+        ok, message = sc.verdict(files, 95.0)
+        self.assertFalse(ok)
+        self.assertIn("BosunMenuSystem/S.swift", message)
+        self.assertNotIn("Low.swift", message)
+
     def test_exactly_the_floor_passes(self) -> None:
         files = sc.source_files(summary(entry(f"{CORE}A.swift", 100, 95), entry(f"{SYSTEM}S.swift", 100, 95)))
         self.assertTrue(sc.verdict(files, 95.0)[0])

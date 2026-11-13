@@ -88,6 +88,8 @@ import Testing
     // Stop Now ends every window: Cancel is the default button, and Escape's
     #expect(spec.buttons == ["Cancel", "Stop Now"])
     #expect(spec.cancel == 0)
+    // ...and no default button: Return does nothing
+    #expect(spec.defaultButton == nil)
     #expect(spec.boxes.map(\.id) == ["pauseMorning", "sleep", "keepIcon"])
   }
 
@@ -199,6 +201,28 @@ import Testing
     #expect(spec.title == "bosun is up to date")
     #expect(spec.message.contains(current.installed.version ?? "?"))
     #expect(spec.buttons == ["OK"])
+  }
+}
+
+@Suite struct DefaultButtonTests {
+  @Test func everyOtherDialogsFirstButtonIsItsDefault() {
+    let plan = QuitPlan(
+      contract: 1, windows: [], busy: [], waiting: [], keepAwakeUntil: nil, refused: nil, note: nil)
+    let specs = [
+      quitFirstSpec(plan), quitBusySpec(["a"]), quitStillBusySpec(["a"]), quitNoteSpec("n"),
+      failureSpec("t", "m"), problemsSpec([]),
+    ]
+    for spec in specs { #expect(spec.defaultButton == 0, "\(spec.title)") }
+  }
+
+  @Test func aSpecSaysItsDefaultWithoutDefaultingTheCancelButton() {
+    let spec = DialogSpec(
+      title: "t", message: "m", scroll: nil, boxes: [], buttons: ["Cancel", "Go"], cancel: 0)
+    #expect(spec.defaultButton == 0)
+    let none = DialogSpec(
+      title: "t", message: "m", scroll: nil, boxes: [], buttons: ["Cancel", "Go"], cancel: 0,
+      defaultButton: nil)
+    #expect(none.defaultButton == nil)
   }
 }
 

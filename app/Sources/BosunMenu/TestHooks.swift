@@ -2,8 +2,9 @@ import AppKit
 import BosunMenuCore
 import BosunMenuSystem
 
-// The VM suite's hooks, wired up (their files and formats are `TestHookFiles` in the core). Made only when
-// the app was launched with `--test-hooks <dir>`: without the argument none of this exists at run time.
+// The VM suite's hooks, wired up (their formats are BosunMenuCore's `HookAction`, their files BosunMenuSystem's
+// `TestHookFiles`). Made only when the app was launched with `--test-hooks <dir>`: without the argument none of
+// this exists at run time.
 
 /// Takes the actions a script drops in the hooks folder, once a second, and does them as if clicked.
 @MainActor

@@ -1,7 +1,8 @@
 import Foundation
 
 // What the app does when it starts: its arguments, whether it starts bosun, and whether it is the second
-// copy. Pure, or one sysctl away from it, so the AppKit shell only asks.
+// copy. Pure: the one thing that reads the system (a process's start time) is BosunMenuSystem's, and is handed
+// in, so the AppKit shell only asks.
 
 public struct LaunchOptions: Equatable, Sendable {
   /// launchd's login job passes `--at-login`: only show the icon; bosun's own morning job starts bosun.

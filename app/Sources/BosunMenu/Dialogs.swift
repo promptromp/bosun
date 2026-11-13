@@ -1,10 +1,11 @@
 import AppKit
 import BosunMenuCore
 
-// `DialogSpec`s as `NSAlert`s: the buttons in the spec's order (the first is the default, Return), Escape on
-// the cancel button, an accessory view with a scrolling read-only text view (the notes, the plan, the
-// problems) and the check boxes. `build` makes the alert without showing it, so it is tested as built;
-// `AlertPresenter` shows it, with the app briefly a regular app so the alert comes to the front.
+// `DialogSpec`s as `NSAlert`s: the buttons in the spec's order, Return on the one the spec makes the default
+// (none for a destructive action), Escape on its cancel button, nothing on the rest, an accessory view with a
+// scrolling read-only text view (the notes, the plan, the problems) and the check boxes.
+// `build` makes the alert without showing it, so it is tested as built; `AlertPresenter` shows it, with the app
+// briefly a regular app so the alert comes to the front.
 
 /// An alert that is built and not yet shown, with what is needed to read the answer back.
 @MainActor
@@ -28,8 +29,7 @@ enum Dialogs {
     alert.informativeText = spec.message
     alert.alertStyle = spec.style == .warning ? .warning : .informational
     for (index, title) in spec.buttons.enumerated() {
-      let button = alert.addButton(withTitle: title)
-      if index == spec.cancel { button.keyEquivalent = "\u{1b}" }
+      alert.addButton(withTitle: title).keyEquivalent = keyEquivalent(of: index, in: spec)
     }
     let scroll = spec.scroll.map(scrollView(showing:))
     let boxes = spec.boxes.map { (id: $0.id, button: checkbox($0)) }
@@ -38,6 +38,13 @@ enum Dialogs {
     views += boxes.map(\.button)
     if !views.isEmpty { alert.accessoryView = stack(views) }
     return BuiltAlert(spec: spec, alert: alert, boxes: boxes, scroll: scroll)
+  }
+
+  /// Return for the spec's default button, Escape for its cancel button, nothing for the rest. Set for every
+  /// button: NSAlert would make the first one the default, and a button titled "Cancel" Escape's, by itself.
+  static func keyEquivalent(of index: Int, in spec: DialogSpec) -> String {
+    if index == spec.defaultButton { return "\r" }
+    return index == spec.cancel ? "\u{1b}" : ""
   }
 
   /// The answer to a response of `runModal`: the button's index and each box as it stands. A response that
@@ -107,7 +114,16 @@ enum Dialogs {
 final class AlertPresenter {
   private var showing = false
   private var waiting: [CheckedContinuation<Void, Never>] = []
-  private(set) var current: BuiltAlert?
+  /// The dialog that is open and has not been answered (a test sets it to stand in for one).
+  var current: BuiltAlert?
+  private let stopModal: @MainActor (NSApplication.ModalResponse) -> Void
+
+  /// `stopModal` ends the modal loop with a response; it is given so a test need not have a loop to end.
+  init(
+    stopModal: @escaping @MainActor (NSApplication.ModalResponse) -> Void = AlertPresenter.stopRunningModal
+  ) {
+    self.stopModal = stopModal
+  }
 
   var hasOpenDialog: Bool { current != nil }
 
@@ -136,10 +152,17 @@ final class AlertPresenter {
   /// A test hook's answer for the dialog that is open: false when none is, or it cannot take that answer.
   /// `stopModal` called from a timer only ends the modal loop once the next event has been taken (AppKit's
   /// documentation of `abortModal` says so), and a VM that nobody touches has none: an event is posted to be it.
+  /// Once answered the dialog is no longer open as far as the hooks are concerned, though the loop may not have
+  /// woken yet: a second answer finds none, waits for the next dialog, and cannot overwrite the first's code.
   func answerOpenDialog(_ hook: HookAnswer) -> Bool {
     guard let built = current, let response = Dialogs.apply(hook, to: built) else { return false }
+    current = nil
+    stopModal(response)
+    return true
+  }
+
+  static func stopRunningModal(_ response: NSApplication.ModalResponse) {
     NSApp.stopModal(withCode: response)
     if let wake = Dialogs.wakeEvent() { NSApp.postEvent(wake, atStart: true) }
-    return true
   }
 }

@@ -111,7 +111,73 @@ extension NSView {
   }
 }
 
+/// What `stopModal` was told, in a test.
+@MainActor
+final class StoppedWith {
+  var responses: [NSApplication.ModalResponse] = []
+}
+
+@MainActor @Suite struct KeyEquivalentTests {
+  private func keys(_ built: BuiltAlert) -> [String] { built.alert.buttons.map(\.keyEquivalent) }
+
+  /// A destructive action has no default button: Return does nothing, Escape cancels, Stop Now has no key.
+  @Test func theStopNowDialogHasNoDefaultButton() {
+    let built = Dialogs.build(quitUnavailableSpec("the windows cannot be read"))
+    #expect(built.alert.buttons.map(\.title) == ["Cancel", "Stop Now"])
+    #expect(keys(built) == ["\u{1b}", ""])
+    #expect(!keys(built).contains("\r"))
+  }
+
+  @Test func theFirstButtonIsTheDefaultWhenTheSpecSaysSo() {
+    let built = Dialogs.build(quitFirstSpec(quitPlan()))
+    #expect(keys(built) == ["\r", "\u{1b}"])
+    #expect(keys(Dialogs.build(failureSpec("t", "m"))) == ["\r"])
+  }
+
+  /// A button titled Cancel that comes first is not Return's unless the spec says so, and not the default
+  /// by its place: the spec names each key.
+  @Test func aCancelTitledFirstButtonLosesNothingAndGainsNothing() {
+    let kept = DialogSpec(
+      title: "t", message: "m", scroll: nil, boxes: [], buttons: ["Cancel", "Go"], cancel: 0, defaultButton: 0
+    )
+    #expect(keys(Dialogs.build(kept)) == ["\r", ""])
+    let none = DialogSpec(
+      title: "t", message: "m", scroll: nil, boxes: [], buttons: ["Cancel", "Go"], cancel: nil,
+      defaultButton: nil)
+    #expect(keys(Dialogs.build(none)) == ["", ""])
+    let second = DialogSpec(
+      title: "t", message: "m", scroll: nil, boxes: [], buttons: ["Go", "Cancel"], cancel: nil,
+      defaultButton: 1)
+    #expect(keys(Dialogs.build(second)) == ["", "\r"])
+  }
+}
+
 @MainActor @Suite struct AnswerWakeTests {
+  private func presenterAnswering(_ codes: StoppedWith) -> AlertPresenter {
+    let presenter = AlertPresenter { codes.responses.append($0) }
+    presenter.current = Dialogs.build(quitFirstSpec(quitPlan()))
+    return presenter
+  }
+
+  /// The loop may not have woken by the next tick: the dialog was answered, a second answer must find none,
+  /// not stop the loop again with another code.
+  @Test func anAnsweredDialogTakesNoSecondAnswer() {
+    let codes = StoppedWith()
+    let presenter = presenterAnswering(codes)
+    #expect(presenter.answerOpenDialog(HookAnswer(button: "Quit bosun", boxes: [:])))
+    #expect(!presenter.hasOpenDialog)
+    #expect(!presenter.answerOpenDialog(HookAnswer(button: "Cancel", boxes: [:])))
+    #expect(codes.responses == [.alertFirstButtonReturn])
+  }
+
+  @Test func anAnswerTheDialogCannotTakeLeavesItOpen() {
+    let codes = StoppedWith()
+    let presenter = presenterAnswering(codes)
+    #expect(!presenter.answerOpenDialog(HookAnswer(button: "Shred", boxes: [:])))
+    #expect(presenter.hasOpenDialog)
+    #expect(codes.responses.isEmpty)
+  }
+
   /// `stopModal` from a timer ends the modal loop only once an event is taken; this is the event posted so a
   /// VM that nobody touches has one. (Whether the loop then ends is Task 5's to see: showing a dialog is not
   /// something a headless test can do.)

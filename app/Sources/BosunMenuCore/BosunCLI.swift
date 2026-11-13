@@ -1,6 +1,6 @@
 import Foundation
 
-// How the app talks to bosun: one protocol (the AppKit shell implements it over `Process`, tests over
+// How the app talks to bosun: one protocol (BosunMenuSystem implements it over `Process`, tests over
 // `FakeBosunCLI`), the commands of part 1 as values, and what each reply means. The app runs bosun only
 // through `~/.local/bin/bosun`, only these commands, and never opens a file of bosun's.
 

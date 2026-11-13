@@ -2,8 +2,9 @@ import Foundation
 
 // The dialogs as values: their texts, buttons and checkboxes, and what each answer means to a flow. The
 // AppKit shell turns a `DialogSpec` into an `NSAlert` and an answer back into a `DialogAnswer`; nothing
-// here knows AppKit, so every word is tested. Buttons are listed default first (the first is the one
-// Return presses), and `cancel` names the one Escape presses.
+// here knows AppKit, so every word is tested. A spec says which button, if any, is the default (the one
+// Return presses) and which is the one Escape presses: the shell sets each button's key explicitly and leaves
+// the rest to nothing, so no title's heuristic decides it.
 
 public struct DialogBox: Equatable, Sendable {
   public let id: String
@@ -30,11 +31,13 @@ public struct DialogSpec: Equatable, Sendable {
   public let buttons: [String]
   /// The index of the button Escape presses.
   public let cancel: Int?
+  /// The index of the button Return presses; nil for none (a destructive action has no default button).
+  public let defaultButton: Int?
   public let style: DialogStyle
 
   public init(
     title: String, message: String, scroll: String?, boxes: [DialogBox], buttons: [String], cancel: Int?,
-    style: DialogStyle = .informational
+    defaultButton: Int? = 0, style: DialogStyle = .informational
   ) {
     self.title = title
     self.message = message
@@ -42,6 +45,7 @@ public struct DialogSpec: Equatable, Sendable {
     self.boxes = boxes
     self.buttons = buttons
     self.cancel = cancel
+    self.defaultButton = defaultButton
     self.style = style
   }
 
@@ -96,12 +100,14 @@ public func quitFirstSpec(_ plan: QuitPlan) -> DialogSpec {
 }
 
 /// Shown when `quit --plan` could not look: the reason, and a Stop Now, which needs no look. Stop Now ends
-/// every window, so Cancel is the default button (Return) and Escape's.
+/// every window, and bosun cannot tell whether agents are busy: so no button is the default (Return does
+/// nothing), and Escape cancels, as Apple's guidelines allow for a destructive action.
 public func quitUnavailableSpec(_ why: String) -> DialogSpec {
   DialogSpec(
     title: "bosun cannot say what quitting would stop",
     message: why + "\n\nStop Now ends every window without waiting for any agent.", scroll: nil,
-    boxes: quitBoxes(sleep: true), buttons: ["Cancel", "Stop Now"], cancel: 0, style: .warning)
+    boxes: quitBoxes(sleep: true), buttons: ["Cancel", "Stop Now"], cancel: 0, defaultButton: nil,
+    style: .warning)
 }
 
 public func quitBusySpec(_ names: [String]) -> DialogSpec {
