@@ -14,6 +14,7 @@ dev = [
     "hadolint-bin>=2.15.1",
     "lizard>=1.17",
     "mypy>=1.15",
+    "pillow>=11",
     "pre-commit>=4",
     "pytest>=8",
     "pytest-cov>=7.1.0",
@@ -80,6 +81,8 @@ impacted_map = [
     "bin/bosun=tests/unit/test_update.py",
     "bin/bosun=tests/unit/test_update_facts.py",
     "bin/bosun=tests/unit/test_update_gate.py",
+    # What a test reads of bosun's programs to hold a constant to it (the watchdog job's interval).
+    "lib/common.sh=tests/unit/test_menu_status.py",
     # The docs: bosun's code never reads them. A change counts as one to the site (mkdocs.yml),
     # whose change selects the tests that read a page.
     "docs/**=mkdocs.yml",
@@ -99,6 +102,23 @@ impacted_map = [
     "lib/*.py=tools/docs_examples.py",
     "lib/*.py=tools/survey_to_kg.py",
     "lib/*.py=tools/release.py",
+    # The menu bar app's contract fixtures (tools/contract_samples.py writes them from part 1's
+    # modules, which it imports) and the coverage tool. The app's Swift and its config are read by no
+    # Python test: a change there runs the rules' own check, as .github/* does.
+    "tools/*.py=tests/unit/test_contract_samples.py",
+    "tools/*.py=tests/unit/test_swift_coverage.py",
+    "lib/*.py=tools/contract_samples.py",
+    "tools/*.sh=tests/unit/test_impacted_rules.py",
+    # The app's pictures, the tool that makes them from the logo, and the logo itself.
+    "tools/app_icons.py=tests/unit/test_app_icons.py",
+    "docs/assets/logo.png=tests/unit/test_app_icons.py",
+    "app/Resources/*=tests/unit/test_app_icons.py",
+    "app/Resources/*/*=tests/unit/test_app_icons.py",
+    "app/Tests/BosunMenuCoreTests/Fixtures/*=tests/unit/test_contract_samples.py",
+    "app/*=tests/unit/test_impacted_rules.py",
+    "app/*/*=tests/unit/test_impacted_rules.py",
+    "app/*/*/*=tests/unit/test_impacted_rules.py",
+    "app/*/*/*/*=tests/unit/test_impacted_rules.py",
     # get.sh: plain sh, run by its own test (and its tag rule held to lib/update_check.py's there).
     "get.sh=tests/unit/test_get_sh.py",
     # The smoke suite's section markers (its --list and --only run by them) and what it keeps between runs.

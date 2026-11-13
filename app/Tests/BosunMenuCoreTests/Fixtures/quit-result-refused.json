@@ -1,0 +1,22 @@
+{
+  "busy": [
+    "acme-exporter"
+  ],
+  "contract": 1,
+  "error": null,
+  "keep_awake_until": "20:00",
+  "lock_wait_seconds": 180,
+  "refused": "an update is running: quit when it has finished (it brings the windows along)",
+  "result": "refused",
+  "steps_seconds": 225,
+  "wait_minutes": 10,
+  "waiting": [
+    "acme-web"
+  ],
+  "windows": [
+    "acme-orchestrator",
+    "acme-exporter",
+    "acme-web",
+    "acme-api"
+  ]
+}

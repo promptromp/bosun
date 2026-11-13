@@ -15,7 +15,9 @@ import signal
 import sys
 import tempfile
 import unittest
+import warnings
 import zipfile
+import zlib
 from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
@@ -305,6 +307,108 @@ class InstallTest(World):
                 self.assertFalse(self.apps.exists())
                 self.tools.calls.clear()
 
+    def test_a_local_header_that_names_another_path_than_the_directory_is_refused_before_ditto(self) -> None:
+        """ditto may unpack by the local headers, which the central directory need not agree with: every entry
+        is read back, which compares the two names."""
+        name = "bosun.app/Contents/Resources/notes.txt"
+        evil = "../../Library/LaunchAgents/x.plist"
+        evil += "x" * (len(name) - len(evil))
+        original = self.tools.curl
+
+        def curl(argv: Sequence[str]) -> Run:
+            done = original(argv)
+            target = Path(argv[argv.index("-o") + 1])
+            with zipfile.ZipFile(target, "a") as bundle:
+                bundle.writestr(name, "x")
+            data = target.read_bytes()
+            target.write_bytes(data.replace(name.encode(), evil.encode(), 1))  # the local header comes first
+            return done
+
+        self.tools.curl = curl  # type: ignore[method-assign]
+        with self.assertRaisesRegex(AppError, "not a zip archive"):
+            self.install()
+        self.assertNotIn("ditto", self.tools.names())
+        self.assertFalse(self.apps.exists())
+
+    def corrupt_download(self, change: Any) -> None:
+        """The fake curl's zip, with an entry added and then <change>(bytes, name) made to the file."""
+        name = "bosun.app/Contents/Resources/notes.txt"
+        original = self.tools.curl
+
+        def curl(argv: Sequence[str]) -> Run:
+            done = original(argv)
+            target = Path(argv[argv.index("-o") + 1])
+            with zipfile.ZipFile(target, "a", zipfile.ZIP_DEFLATED) as bundle:
+                bundle.writestr(name, "the notes of this release " * 200)
+            target.write_bytes(change(target.read_bytes(), name.encode()))
+            return done
+
+        self.tools.curl = curl  # type: ignore[method-assign]
+
+    def test_an_entry_whose_data_does_not_inflate_is_refused_in_one_line(self) -> None:
+        def garble(data: bytes, name: bytes) -> bytes:
+            header = data.rindex(b"PK\x03\x04", 0, data.index(name))
+            begin = header + 30 + len(name)  # no extra field: zipfile writes none here
+            return data[:begin] + b"\xff" * 16 + data[begin + 16 :]  # a block of a type deflate does not have
+
+        self.corrupt_download(garble)
+        with self.assertRaises(AppError) as caught:
+            self.install()
+        self.assertIsInstance(caught.exception.__cause__, zlib.error)
+        self.assertIn("not a zip archive", str(caught.exception))
+        self.assertNotIn("\n", str(caught.exception))
+        self.assertNotIn("ditto", self.tools.names())
+        self.assertFalse(self.apps.exists())
+
+    def test_an_encrypted_entry_is_refused_in_one_line(self) -> None:
+        def encrypt(data: bytes, name: bytes) -> bytes:
+            out = bytearray(data)
+            header = data.rindex(b"PK\x03\x04", 0, data.index(name))
+            central = data.rindex(b"PK\x01\x02", 0, data.rindex(name))
+            out[header + 6] |= 0x01  # general purpose flag: encrypted, in the local header
+            out[central + 8] |= 0x01  # and in the central directory
+            return bytes(out)
+
+        self.corrupt_download(encrypt)
+        with self.assertRaises(AppError) as caught:
+            self.install()
+        self.assertIsInstance(caught.exception.__cause__, RuntimeError)
+        self.assertIn("cannot be read", str(caught.exception))
+        self.assertIn("encrypted", str(caught.exception))
+        self.assertNotIn("\n", str(caught.exception))
+        self.assertNotIn("ditto", self.tools.names())
+
+    def test_an_entry_named_twice_is_refused_before_ditto(self) -> None:
+        self.tools.zip_extra = [zipfile.ZipInfo("bosun.app/Contents/Info.plist")]
+        with (
+            warnings.catch_warnings(),  # zipfile warns as the fake writes the name twice
+            self.assertRaisesRegex(AppError, "names an entry twice: bosun.app/Contents/Info.plist"),
+        ):
+            warnings.simplefilter("ignore", UserWarning)
+            self.install()
+        self.assertNotIn("ditto", self.tools.names())
+
+    def test_a_link_in_what_was_unpacked_is_refused_before_codesign(self) -> None:
+        """The entries listed no link, so one in the unpacked tree came from what the directory did not
+        show."""
+        original = self.tools.ditto
+        for target in ("../../outside", "MacOS/bosun"):
+            with self.subTest(target=target):
+                self.tools.calls.clear()
+
+                def ditto(argv: Sequence[str], to: str = target) -> Run:
+                    done = original(argv)
+                    (Path(argv[-1]) / "bosun.app" / "Contents" / "link").symlink_to(to)
+                    return done
+
+                self.tools.ditto = ditto  # type: ignore[method-assign]
+                with self.assertRaisesRegex(
+                    AppError, "symbolic link its entries did not list: bosun.app/Contents/link"
+                ):
+                    self.install()
+                self.assertNotIn("codesign", self.tools.names())
+                self.assertFalse(self.apps.exists())
+
     def test_a_missing_release_says_so_in_a_line_with_the_status(self) -> None:
         self.tools.download = 22
         with self.assertRaises(AppError) as caught:
@@ -550,38 +654,104 @@ class VerificationIsExplicitTest(World):
 
 
 class BuildTest(World):
-    def test_without_part_two_it_says_so_and_changes_nothing(self) -> None:
-        with self.assertRaises(AppError) as caught:
-            app_install.install(self.setup_for(), build=True)
-        self.assertEqual(str(caught.exception), "part 2 builds the app")
-        self.assertEqual(self.tools.calls, [])
+    """`install --build`: app/build.sh --identity - --out <a folder>, and a development build installed."""
 
-    def test_a_build_is_not_held_up_by_an_empty_team_id(self) -> None:
-        self.write_publisher("")
-        with self.assertRaises(AppError) as caught:
-            app_install.install(self.setup_for(), build=True)
-        self.assertNotEqual(str(caught.exception), EMPTY_TEAM)
-
-    def test_with_a_build_script_the_app_it_makes_is_placed_without_the_team_check(self) -> None:
+    def write_build(self) -> Path:
         build = self.root / "app" / "build.sh"
         build.write_text("#!/bin/sh\n")
         build.chmod(0o755)
+        return build
+
+    def install(
+        self, build: Path, *, leaves: bool = True, status: int = 0, says: str = ""
+    ) -> tuple[str, list[Sequence[str]]]:
         made: list[Sequence[str]] = []
 
         def run(argv: Sequence[str]) -> Run:
             if argv[0] == str(build):
                 made.append(argv)
-                write_bundle(Path(argv[1]) / "bosun.app", "0.2.0")
-                return Run(0, "", "")
+                if leaves:
+                    write_bundle(Path(argv[argv.index("--out") + 1]) / "bosun.app", "0.2.0")
+                return Run(status, "", says)
             return self.tools(argv)
 
         message = app_install.install(Setup(self.root, self.home, "", run, lambda _: None), build=True)
+        return message, made
+
+    def test_without_the_build_script_it_says_so_and_changes_nothing(self) -> None:
+        with self.assertRaises(AppError) as caught:
+            app_install.install(self.setup_for(), build=True)
+        self.assertEqual(str(caught.exception), "app/build.sh is missing")
+        self.assertEqual(self.tools.calls, [])
+        self.assertFalse(self.apps.exists())
+
+    def test_it_builds_ad_hoc_into_a_temporary_folder_it_is_given(self) -> None:
+        build = self.write_build()
+        _, made = self.install(build)
         self.assertEqual(len(made), 1)
+        self.assertEqual(list(made[0][:4]), [str(build), "--identity", "-", "--out"])
+        self.assertEqual(len(made[0]), 5)
+        out = Path(made[0][4])
+        self.assertTrue(out.is_relative_to(self.apps))  # beside the install's own scratch
+        self.assertFalse(out.exists())  # and gone again
+
+    def test_the_app_it_makes_is_placed_without_the_team_check_and_called_a_development_build(self) -> None:
+        message, _ = self.install(self.write_build())
         self.assertEqual(app_release.bundle_version(self.app), "0.2.0")
-        self.assertIn("installed", message)
-        self.assertNotIn("spctl", self.tools.names())  # ad hoc signed: macOS would not accept it
-        self.assertNotIn("codesign", self.tools.names())
-        self.assertNotIn("curl", self.tools.names())
+        self.assertIn("installed in ~/Applications", message)
+        self.assertIn("development build", message)
+        self.assertFalse({"spctl", "codesign", "curl"} & set(self.tools.names()))  # ad hoc: macOS refuses it
+
+    def test_a_build_is_not_held_up_by_an_empty_team_id(self) -> None:
+        self.write_publisher("")
+        message, _ = self.install(self.write_build())
+        self.assertIn("development build", message)
+
+    def test_a_build_that_fails_shows_the_last_lines_of_its_output_and_leaves_nothing_behind(self) -> None:
+        says = "warning: x\nerror: no such module 'Pretend'\nerror: fatalError"
+        with self.assertRaises(AppError) as caught:
+            self.install(self.write_build(), leaves=False, status=1, says=says)
+        message = str(caught.exception)
+        self.assertTrue(message.startswith("app/build.sh failed"), message)
+        self.assertIn("error: no such module 'Pretend'", message)
+        self.assertIn("error: fatalError", message)
+        self.assertFalse(self.apps.exists())
+
+    def test_a_build_that_fails_without_a_word_says_so_in_one_line_and_to_run_it_again(self) -> None:
+        for says in ("", "\n  \n"):
+            with self.subTest(says=says), self.assertRaises(AppError) as caught:
+                self.install(self.write_build(), leaves=False, status=1, says=says)
+            message = str(caught.exception)
+            self.assertEqual(len(message.splitlines()), 1, message)
+            self.assertIn("app/build.sh exited 1 and said nothing", message)
+            self.assertIn("run it again", message)
+            self.assertIn("before the script starts", message)
+            self.assertIn("docs/design/menu-bar.md", message)
+            self.assertFalse(self.apps.exists())
+
+    def test_the_exit_code_is_the_one_it_had(self) -> None:
+        with self.assertRaises(AppError) as caught:
+            self.install(self.write_build(), leaves=False, status=137, says="")
+        self.assertIn("exited 137 and said nothing", str(caught.exception))
+
+    def test_only_the_last_twenty_lines_of_a_long_output_are_shown(self) -> None:
+        says = "\n".join(f"line {number}" for number in range(1, 31))
+        with self.assertRaises(AppError) as caught:
+            self.install(self.write_build(), leaves=False, status=1, says=says)
+        lines = str(caught.exception).splitlines()
+        self.assertEqual([line.strip() for line in lines[1:]], [f"line {n}" for n in range(11, 31)])
+
+    def test_it_says_it_is_building_before_it_does(self) -> None:
+        stderr = io.StringIO()
+        with contextlib.redirect_stderr(stderr):
+            self.install(self.write_build())
+        self.assertIn("building bosun.app", stderr.getvalue())
+        self.assertIn("minutes", stderr.getvalue())
+
+    def test_a_build_that_leaves_no_app_is_refused_and_leaves_nothing_behind(self) -> None:
+        with self.assertRaisesRegex(AppError, "did not leave bosun.app"):
+            self.install(self.write_build(), leaves=False)
+        self.assertFalse(self.apps.exists())
 
 
 class StaleTest(World):
@@ -1001,6 +1171,139 @@ class CommandTest(World):
         self.assertEqual(self.main("quit")[0], 0)
         self.assertEqual(self.main("delete")[0], 0)
         self.assertFalse(self.app.exists())
+
+
+class VerifyArchiveTest(World):
+    """`verify-archive <zip>`: the release workflow's check of its final zip, which is what an install runs on
+    a download (the same functions), without installing anything."""
+
+    def make_zip(self, *extra: zipfile.ZipInfo) -> Path:
+        archive = self.home / "bosun-app-0.2.0.zip"
+        with zipfile.ZipFile(archive, "w") as bundle:
+            bundle.writestr("bosun.app/Contents/Info.plist", "x")
+            for entry in extra:
+                bundle.writestr(entry, "x")
+        return archive
+
+    def check(self, archive: Path | None = None) -> tuple[int, str, str]:
+        out, err = io.StringIO(), io.StringIO()
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+            status = app_install.main(
+                ["verify-archive", str(archive or self.make_zip())],
+                root=self.root,
+                home=self.home,
+                run=self.tools,
+                environ={},
+            )
+        return status, out.getvalue(), err.getvalue()
+
+    def test_a_good_zip_passes_the_same_tools_in_the_same_order_as_an_install(self) -> None:
+        status, out, err = self.check()
+        self.assertEqual((status, err), (0, ""))
+        self.assertIn("passes", out)
+        self.assertEqual(self.tools.names(), ["ditto", "codesign", "spctl"])
+        self.assertEqual(self.tools.calls[0][1:3], ["-x", "-k"])
+        self.assertEqual(self.tools.requirements, ["=" + app_release.requirement(BUNDLE_ID, TEAM)])
+
+    def test_it_installs_nothing_and_leaves_no_folder_behind(self) -> None:
+        unpacked: list[Path] = []
+        original = self.tools.ditto
+
+        def ditto(argv: Sequence[str]) -> Run:
+            unpacked.append(Path(argv[-1]))
+            return original(argv)
+
+        self.tools.ditto = ditto  # type: ignore[method-assign]
+        self.check()
+        self.assertFalse(self.apps.exists())
+        self.assertTrue(unpacked)
+        self.assertFalse(unpacked[0].parent.exists())
+
+    def test_it_cleans_up_after_a_refusal_too(self) -> None:
+        unpacked: list[Path] = []
+        original = self.tools.ditto
+
+        def ditto(argv: Sequence[str]) -> Run:
+            unpacked.append(Path(argv[-1]))
+            return original(argv)
+
+        self.tools.ditto = ditto  # type: ignore[method-assign]
+        self.tools.meets_requirement = False
+        self.assertEqual(self.check()[0], 1)
+        self.assertFalse(unpacked[0].parent.exists())
+
+    def test_what_the_install_refuses_in_an_archive_it_refuses(self) -> None:
+        link = zipfile.ZipInfo("bosun.app/Contents/link")
+        link.external_attr = SYMLINK_ATTR
+        for entry, says in (
+            (zipfile.ZipInfo("/etc/escape"), "absolute path"),
+            (zipfile.ZipInfo("bosun.app/../../escape"), "climbs out"),
+            (link, "symbolic link"),
+        ):
+            with self.subTest(entry=entry.filename):
+                self.tools.calls.clear()
+                status, _, err = self.check(self.make_zip(entry))
+                self.assertEqual(status, 1)
+                self.assertIn(says, err)
+                self.assertNotIn("ditto", self.tools.names())
+
+    def test_an_archive_with_anything_beside_the_app_is_refused(self) -> None:
+        self.tools.archive = ["bosun.app", "another.txt"]
+        status, _, err = self.check()
+        self.assertEqual(status, 1)
+        self.assertIn("must hold bosun.app and nothing else", err)
+
+    def test_an_archive_with_no_bosun_app_is_refused(self) -> None:
+        self.tools.archive = ["other.txt"]
+        status, _, err = self.check()
+        self.assertEqual(status, 1)
+        self.assertIn("does not hold bosun.app", err)
+
+    def test_not_a_zip_and_a_zip_ditto_cannot_read_are_refused(self) -> None:
+        plain = self.home / "x.zip"
+        plain.write_text("not a zip")
+        self.assertIn("not a zip archive", self.check(plain)[2])
+        self.tools.unzip_fails = True
+        self.assertIn("not a zip archive", self.check()[2])
+
+    def test_a_bundle_id_that_is_not_the_publisher_s_is_refused(self) -> None:
+        self.tools.bundle_id = "ai.example.other"
+        status, _, err = self.check()
+        self.assertEqual(status, 1)
+        self.assertIn("ai.example.other", err)
+
+    def test_a_signature_that_does_not_meet_the_requirement_is_refused(self) -> None:
+        self.tools.meets_requirement = False
+        status, _, err = self.check()
+        self.assertEqual(status, 1)
+        self.assertIn("publisher's Developer ID", err)
+        self.assertNotIn("spctl", self.tools.names())
+
+    def test_gatekeeper_must_say_notarized_on_a_line_of_its_own_and_its_words_are_shown(self) -> None:
+        self.tools.assess_source = "source=Developer ID"
+        status, _, err = self.check()
+        self.assertEqual(status, 1)
+        self.assertIn("did not say Notarized Developer ID", err)
+        self.assertIn("spctl said: source=Developer ID", err)
+
+    def test_spctl_s_exit_status_counts(self) -> None:
+        self.tools.assess_says = "rejected"
+        status, _, err = self.check()
+        self.assertEqual(status, 1)
+        self.assertIn("spctl said: ", err)
+        self.assertIn("rejected", err)
+
+    def test_without_a_team_id_it_stops_before_any_tool(self) -> None:
+        self.write_publisher("")
+        status, _, err = self.check()
+        self.assertEqual(status, 1)
+        self.assertIn("no team_id", err)
+        self.assertEqual(self.tools.calls, [])
+
+    def test_the_archive_is_an_argument(self) -> None:
+        with contextlib.redirect_stderr(io.StringIO()):
+            status = app_install.main(["verify-archive"], root=self.root, home=self.home, run=self.tools)
+        self.assertEqual(status, 2)
 
 
 class RunnerTest(unittest.TestCase):

@@ -1,0 +1,26 @@
+{
+  "console": {
+    "running": false,
+    "url": null
+  },
+  "contract": 1,
+  "detail": [
+    "Mac kept awake until 20:00"
+  ],
+  "keep_awake_until": "20:00",
+  "level": "error",
+  "logs": "/Users/me/.local/state/bosun/logs",
+  "problems": [
+    "Today's morning run reported problems: setup.sh exited 1",
+    "could not read the windows: sessions --json did not answer: tmux did not answer"
+  ],
+  "running": null,
+  "sentence": "bosun's windows could not be read",
+  "stopped": null,
+  "update": {
+    "state": "none",
+    "waiting_for": []
+  },
+  "waiting": [],
+  "windows": 0
+}

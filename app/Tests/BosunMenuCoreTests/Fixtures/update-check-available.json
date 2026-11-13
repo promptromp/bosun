@@ -1,0 +1,17 @@
+{
+  "ahead": false,
+  "available": true,
+  "channel": "releases",
+  "contract": 1,
+  "error": null,
+  "installed": {
+    "commit": "1111111111111111111111111111111111111111",
+    "version": "v2026.11.04"
+  },
+  "latest": {
+    "commit": "2222222222222222222222222222222222222222",
+    "notes": "- Hardening: the adversarial cases an inventory found\n- Repo windows on a second agent",
+    "version": "v2026.11.11"
+  },
+  "skipped": false
+}

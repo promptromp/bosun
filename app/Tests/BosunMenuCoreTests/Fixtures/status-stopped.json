@@ -1,0 +1,27 @@
+{
+  "console": {
+    "running": false,
+    "url": null
+  },
+  "contract": 1,
+  "detail": [
+    "You quit bosun at 09:30",
+    "The morning start is paused until you start bosun"
+  ],
+  "keep_awake_until": null,
+  "level": "stopped",
+  "logs": "/Users/me/.local/state/bosun/logs",
+  "problems": [],
+  "running": false,
+  "sentence": "bosun is stopped",
+  "stopped": {
+    "morning_paused": true,
+    "since": "2026-11-11T09:30:00+00:00"
+  },
+  "update": {
+    "state": "none",
+    "waiting_for": []
+  },
+  "waiting": [],
+  "windows": 0
+}

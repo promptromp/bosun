@@ -21,7 +21,7 @@ inputs).
 
 - The app runs `bosun` only through `~/.local/bin/bosun`, and only the commands part 1 defines: `status --json`,
   `update --check --json`, `update --dry-run --json`, `update --yes`, `update --skip <v>`, `quit --plan --json`, `quit
-  …`, `morning --now`, `console --url`, `app status --json`, `app login on|off`. It never opens bosun's files.
+  …`, `morning --now --background`, `console --url`, `app status --json`, `app login on|off`. It never opens bosun's files.
 - It understands `"contract": 1`; any other number shows "bosun.app needs an update" with "Update bosun…".
 - No privacy permissions: no notifications, accessibility, automation, screen recording. Terminal is reached by opening
   a `.command` file with `NSWorkspace`, never by AppleScript.

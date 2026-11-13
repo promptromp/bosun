@@ -4,6 +4,8 @@ Each test runs in a World (tests/unit/app_fakes.py), which shuts subprocess, so 
 
 from __future__ import annotations
 
+import contextlib
+import io
 import json
 import sys
 import unittest
@@ -214,6 +216,48 @@ class RequirementTest(World):
         with self.assertRaises(AppError) as bundle:
             app_release.requirement('ai.example.bosun" or true', TEAM)
         self.assertEqual(str(bundle.exception), "app/publisher.json's bundle_id is not a bundle id")
+
+
+class RequirementCommandTest(World):
+    """`python3 lib/app_release.py requirement`: what the release workflow hands `codesign -R`, so it is the
+    string `bosun app install` checks, never a copy of it."""
+
+    def run_command(self, *argv: str) -> tuple[int, str, str]:
+        out, err = io.StringIO(), io.StringIO()
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+            code = app_release.main(list(argv), self.root)
+        return code, out.getvalue(), err.getvalue()
+
+    def test_it_prints_exactly_the_requirement_of_the_publisher_file(self) -> None:
+        code, out, err = self.run_command("requirement")
+        self.assertEqual((code, err), (0, ""))
+        self.assertEqual(out, app_release.requirement(BUNDLE_ID, TEAM) + "\n")
+        self.assertEqual(out, EXPECTED_REQUIREMENT + "\n")
+
+    def test_without_a_team_id_it_fails_in_one_line_and_prints_no_requirement(self) -> None:
+        self.write_publisher("")
+        code, out, err = self.run_command("requirement")
+        self.assertEqual((code, out), (1, ""))
+        self.assertEqual(err, f"app_release: {EMPTY_TEAM}\n")
+
+    def test_a_team_id_that_is_not_one_is_refused_too(self) -> None:
+        self.write_publisher('ABCDE12345" or true')
+        code, out, err = self.run_command("requirement")
+        self.assertEqual((code, out), (1, ""))
+        self.assertEqual(err, f"app_release: {NOT_A_TEAM}\n")
+
+    def test_an_unreadable_publisher_file_fails_in_one_line(self) -> None:
+        (self.root / "app" / "publisher.json").unlink()
+        code, out, err = self.run_command("requirement")
+        self.assertEqual((code, out), (1, ""))
+        self.assertTrue(err.startswith("app_release: app/publisher.json cannot be read"))
+
+    def test_another_command_is_a_usage_error(self) -> None:
+        for argv in ((), ("version",), ("requirement", "x")):
+            with self.subTest(argv=argv):
+                code, out, err = self.run_command(*argv)
+                self.assertEqual((code, out), (2, ""))
+                self.assertIn("Usage: app_release.py requirement", err)
 
 
 class ArchiveEntriesTest(World):

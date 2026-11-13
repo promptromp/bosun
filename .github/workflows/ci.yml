@@ -135,6 +135,100 @@ jobs:
       - name: End to end
         run: tests/smoke.sh
 
+  # Whether the menu bar app's job has anything to do: a cheap Linux job, so that a pull request that does not
+  # touch the app never starts a macOS runner, which are scarce. Builds (build=true) unless it can show that
+  # nothing the app depends on changed.
+  changes:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    outputs:
+      build: ${{ steps.changed.outputs.build }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 0 # the merge base with the pull request's base
+      # Not a pull request or merge group (by hand), no merge base with the base, or a diff that cannot be made: build.
+      - name: Did anything the app depends on change?
+        id: changed
+        env:
+          EVENT: ${{ github.event_name }}
+          BASE: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha }}
+          HEAD: ${{ github.event.pull_request.head.sha || github.event.merge_group.head_sha }}
+        run: |
+          set -u
+          if [ "$EVENT" != pull_request ] && [ "$EVENT" != merge_group ]; then
+            echo "Not a pull request or merge group: building."
+            echo "build=true" >>"$GITHUB_OUTPUT"
+            exit 0
+          fi
+          # --no-renames: a file moved out of app/ shows its old path too, not only the new one
+          if ! git merge-base "$BASE" "$HEAD" >/dev/null 2>&1 || ! files=$(git diff --name-only --no-renames "$BASE...$HEAD"); then
+            echo "No merge base with the base branch, or no diff: building."
+            echo "build=true" >>"$GITHUB_OUTPUT"
+            exit 0
+          fi
+          build=false
+          while IFS= read -r file; do
+            case $file in
+              app/* | tools/contract_samples.py | tools/swift_coverage.py | .github/workflows/ci.yml | .github/actions/setup-uv/* | uv.lock | pyproject.toml)
+                echo "Changed: $file"
+                build=true
+                ;;
+              *) ;;
+            esac
+          done <<<"$files"
+          if [ "$build" = false ]; then
+            echo "Nothing the app job depends on changed (app/, its two tools, this workflow, setup-uv, uv.lock, pyproject.toml): not building."
+          fi
+          echo "build=$build" >>"$GITHUB_OUTPUT"
+
+  # The menu bar app (app/, docs/design/menu-bar.md): its tests with warnings as errors, a floor under
+  # the coverage of its core, SwiftLint, swift-format, and an ad hoc signed build that must verify.
+  # Required on every pull request, and it answers merge groups too: when `changes` finds nothing the app
+  # depends on, this job is skipped, which a required check counts as passing, so no macOS runner starts;
+  # `changes` is required too (in .github/rulesets/main.json), so a failed `changes` cannot let an app change through
+  # unbuilt.
+  # tools/contract_samples.py writes the fixtures under app/, so contract drift is caught by the Linux
+  # `test` jobs (tests/unit/test_contract_samples.py) on every pull request and by this job when the
+  # fixtures change. The release is .github/workflows/release-app.yml.
+  app:
+    needs: changes
+    if: ${{ needs.changes.outputs.build == 'true' }}
+    runs-on: macos-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/setup-uv
+        with:
+          python-version: "3.13"
+      - run: uv sync --locked
+      - name: Swift toolchain
+        run: swift --version
+      - name: Tests, warnings as errors
+        working-directory: app
+        run: swift test --enable-code-coverage -Xswiftc -warnings-as-errors
+      - name: Coverage floor (the core and the system layer, each 95% of its lines)
+        run: uv run python tools/swift_coverage.py
+      - name: SwiftLint
+        working-directory: app
+        run: swift package plugin --allow-writing-to-package-directory swiftlint lint --strict
+      - name: swift format lint
+        working-directory: app
+        run: swift format lint --strict -r Sources Tests Package.swift
+      - name: Build, ad hoc signed
+        env:
+          OUT: ${{ runner.temp }}/bosun-app
+        run: |
+          set -eu
+          app/build.sh --identity - --out "$OUT"
+          plutil -lint "$OUT/bosun.app/Contents/Info.plist"
+          codesign --verify --deep --strict "$OUT/bosun.app"
+
   # Secrets in any commit of the pull request or merge group (all history when run by hand), not only in the final
   # tree that the detect-secrets hook sees: a commit that adds a token and a later one that removes
   # it. A made-up value in a test carries a `gitleaks:allow` comment. The CLI rather than the

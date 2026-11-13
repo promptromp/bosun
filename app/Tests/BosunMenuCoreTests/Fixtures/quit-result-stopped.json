@@ -1,0 +1,22 @@
+{
+  "busy": [],
+  "console": "stopped",
+  "console_port": null,
+  "contract": 1,
+  "error": null,
+  "keep_awake": "released",
+  "keep_awake_until": "20:00",
+  "lock_wait_seconds": 180,
+  "morning_paused": true,
+  "refused": null,
+  "result": "stopped",
+  "steps_seconds": 225,
+  "wait_minutes": 10,
+  "waiting": [
+    "acme-web"
+  ],
+  "windows": [
+    "acme-orchestrator",
+    "acme-web"
+  ]
+}

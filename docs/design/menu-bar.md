@@ -3,7 +3,7 @@
 bosun runs as scripts, launchd jobs and a tmux server, and you reach it through a terminal. This adds what a Mac
 app has: an icon in the menu bar that says at a glance whether bosun is well, its updates, its console, a Quit
 that stops it cleanly, and a bosun.app in Applications that starts it again. Status: approved 2026-11-12, with the person's answers of the same day; part 1 (the commands) built and run on a real Mac in the Tart VM (`tests/sandbox.sh mac run` and `work`; see
-the end of this note); part 2 (the app itself) is [planned](../plans/menu-bar-app.md).
+the end of this note); part 2 (the app itself, `app/`) is built ([plan](../plans/menu-bar-app.md)) and run in the Mac VM (`tests/sandbox.sh mac app`, the end of this note); its signing and release wait for the publisher's Team ID and Actions secrets (`docs/development.md`, "Releasing bosun.app").
 Research: the session report "Shipping bosun as a macOS app" (install channels, the native architecture, how
 Ollama, Rogue Amoeba, Docker, OrbStack, Tailscale, Rancher Desktop and Postgres.app behave, and how tools that
 ship a CLI and an app keep them in step).
@@ -21,9 +21,11 @@ ship a CLI and an app keep them in step).
 1. **A menu bar icon** with bosun's knot as a template image, and a menu whose first line is bosun's state: a
    coloured dot and one sentence, with a grey detail line.
    - green "bosun is running" (windows open, how many wait for you, keep-awake until when);
-   - yellow "bosun is running, with a warning" (the watchdog has not run, errors in the last hour, a window that
-     could not start), with a "Show What's Wrong…" item;
+   - yellow "bosun is running, with a warning" (the watchdog is not running: its job is booted out, or its last run is older than three of
+     its intervals awake; errors in the last hour, a window that could not start), with a "Show What's Wrong…" item;
    - red "bosun is not running" (it should be: inside its awake hours and not stopped), with "Start bosun" first;
+     red "bosun is running, with an error" (windows open, an error-level finding), with "Show What's Wrong…" and no
+     Start;
    - grey "bosun is stopped" (you quit it), with "Start bosun" first.
    The icon shows a small dot for a warning, an error or an update ready.
 2. **Updates the way Mac apps do them.** "Check for Updates…" runs bosun's own update check. Its states:
@@ -79,9 +81,11 @@ The person's, 2026-11-12:
   Publishing section) and the repository whose releases carry the app; the signing identity, certificate and App
   Store Connect key are the repository's Actions secrets. The build reads the bundle identifier from that file (it
   generates `Info.plist`), the release workflow reads the secrets, and `bosun app install` reads the Team ID and the
-  release repository from it. Nothing else names them. Swapping the publisher is editing that file, replacing the
-  secrets and cutting one app release; the next `bosun update` installs the newly signed app (a new bundle
-  identifier makes macOS see a new app, so its login job is re-made under it).
+  release repository from it. Nothing else names them. Swapping the publisher (its team, the repository of its
+  releases) is editing that file, replacing the secrets and cutting one app release; the next `bosun update` installs
+  the newly signed app. A new bundle identifier is more: the installed app is then not the publisher's, which
+  install, update, remove and uninstall never replace or remove (below), so each Mac removes the old app (`bosun app
+  remove` before the update, or by hand) and installs the new one, which macOS sees as a new app.
 - **bosun gets tagged releases**, which the menu calls versions (below).
 
 Calls made from the research and the builder check, to check while reading:
@@ -91,6 +95,15 @@ Calls made from the research and the builder check, to check while reading:
 - **An agent still busy after the wait** (10 minutes): the app asks again — Keep Waiting (default), Stop It Now,
   Cancel Quit. A window waiting for you (a question or permission prompt on its screen) is not waited on: the dialog
   lists it by name, and Quit stops it.
+- **The app times a quit by the plan.** `quit --plan --json` says how long a `--let-finish` may wait
+  (`wait_minutes`), how long its steps wait for the windows lock (`lock_wait_seconds`) and the most its other
+  steps take (`steps_seconds`: its looks at the windows, the console job's stop and `bosun stop`, from
+  `lib/quit_live.py`'s timeouts). The app runs `bosun quit --let-finish=<wait_minutes>` and gives that command the
+  wait, the lock wait, the steps and a margin of a minute, and a `--stop-now` the lock wait, the steps and the margin
+  (one place, `QuitWait.timeout(for:)`), so the app never cuts a quit short while bosun waits for a start that holds the lock;
+  "Keep Waiting" runs the same quit again with the same minutes. A plan object without `steps_seconds` (part 1's)
+  gets what those steps took then, and one without the other two (part 1 always prints them), or a plan that
+  never answered, leaves bosun's default wait and an hour as the longest the app holds a quit.
 - **After Quit the launchd jobs stay loaded and do nothing** until Start: the watchdog and learning skip their runs
   while bosun is stopped, the morning job skips while paused. So a Quit never reloads a job. The console job is the one that would restart a process, so its KeepAlive
   depends on a marker file Start creates and Quit removes (launchd's `KeepAlive` → `PathState`).
@@ -99,7 +112,8 @@ Calls made from the research and the builder check, to check while reading:
   --now`: that run ends a quit (paused or not) instead of stopping for it, takes "inside the awake hours" from
   `lib/awake.py`'s window (the one rule the watchdog and the status use), holds no keep-awake outside it, and still
   passes `--unless-quit` to its start, so a Quit made while Start is setting up is kept. Opening the app in the red
-  state starts bosun too. The app runs **`bosun morning --now --background`**, not `--now` itself: a process the app
+  state with no window open (on a current status) starts bosun too (never a bosun that runs, even with an error: the morning run would
+  run its setup again and may restart the session; `bosun status --json`'s `running` says which red it is). The app runs **`bosun morning --now --background`**, not `--now` itself: a process the app
   starts keeps bosun.app as its "responsible process" for macOS's privacy (TCC) prompts, even when detached, and
   everything the morning run starts (the tmux server, the agents) would inherit that, so the prompts would name the
   app and the grants would follow its signature. `--background` only has launchd start the run, through bosun's own
@@ -149,7 +163,7 @@ Calls made from the research and the builder check, to check while reading:
 - **Version skew.** `bosun status --json` carries a `contract` number. An app that does not know the number says
   "bosun.app needs an update" in its status line and offers "Update bosun…" (which runs `bosun update`); a CLI that
   sees an older app than its checkout expects updates it (below).
-- **Opening it.** Opened by you (Finder, Spotlight, Launchpad): if bosun is stopped, it runs `bosun morning --now --background` (as Start does), then shows
+- **Opening it.** Opened by you (Finder, Spotlight, Launchpad): if bosun is not running and no window is open (stopped or quit, or red with `running` false), it runs `bosun morning --now --background` (as Start does), then shows
   the menu bar icon. Opened at login (its launchd job passes `--at-login`): it only shows the icon; bosun's own
   morning job starts bosun at its time. Opened while running: macOS brings up the running copy, which does nothing
   new.
@@ -161,8 +175,8 @@ Calls made from the research and the builder check, to check while reading:
 ## The CLI side
 
 - **`bosun status --json`** (new, or the existing `bosun status` with `--json`): the level (`ok`, `warning`,
-  `error`, `stopped`), the sentence and detail lines, the windows and how many wait for you, the keep-awake end,
-  the update state (none, checking, available with version and notes, running with what it waits for), whether
+  `error`, `stopped`), the sentence and detail lines, the windows and how many wait for you, whether the windows
+  are open (`running`: false when none is, null when they could not be read), the keep-awake end, the update state (none, checking, available with version and notes, running with what it waits for), whether
   bosun is stopped by a Quit and whether the morning start is paused, and the console's state. Its level comes
   from what the console's health view and the watchdog already compute (`lib/console_sessions.py`,
   `lib/watchdog.py`), in one pure function, so the menu, the console and the watchdog never disagree.
@@ -174,7 +188,14 @@ Calls made from the research and the builder check, to check while reading:
   scheduled start), and when the awake window has begun and the morning run is going or not yet due it is starting
   (never, at the error level: a crashed or hung morning run is named as failed). The yellow level also lists the ERROR
   lines of the last hour after the watchdog has alerted them (the same line is an error until the watchdog's next
-  run, then a warning for the hour). A quit record that cannot be read shows as stopped, with the problem saying so and that `bosun start` clears it. A quit record while windows are still open is "bosun quit did not finish", an error (its `bosun stop` failed or
+  run, then a warning for the hour), and the watchdog itself not running (`watchdog --facts` says its launchd job is loaded or
+  not and whether its plist is installed; a job that is installed and not loaded, or loaded with no run for three of its
+  five-minute intervals of the Mac being awake (counted from the latest of its last run, the Mac's last wake, `sysctl -n
+  kern.waketime`, and its boot, `kern.boottime`, so neither the morning's wake nor the minutes after a restart, before
+  the job's first run, are yellow; a time later than now, after the clock moved back, is left out rather than taken
+  as now, and the rule goes on with the others; with no readable wake or boot, from the last run alone), is a warning
+  (`bosun doctor` has the plain rule); no plist is a checkout and no problem, a new job that never ran is
+  new, an update's hold excuses it, and a quit is stopped whatever the watchdog does). A quit record that cannot be read shows as stopped, with the problem saying so and that `bosun start` clears it. A quit record while windows are still open is "bosun quit did not finish", an error (its `bosun stop` failed or
   was cut short, while the watchdog skips its runs), with the problem saying how to finish: `bosun quit --stop-now` again,
   or `bosun start`. Seconds of it during a normal quit, between `quit.json` and the session going, are accepted: the app
   does not poll during its own quit.
@@ -247,11 +268,20 @@ Calls made from the research and the builder check, to check while reading:
 
 ## Building, releasing, installing
 
-- **CI.** Every pull request that touches `app/` builds the app (ad-hoc signed) and runs `swift test` on a macOS
-  runner. A release workflow, on a tag `app-v<version>`, builds it, signs it with the Developer ID (throwaway
-  keychain), notarizes and staples it, and attaches `bosun-app-<version>.zip` (made with `ditto`) to a GitHub
-  release. The secrets: the certificate (.p12) and its password, the signing identity, the team id, and the App
-  Store Connect API key (id, issuer, key).
+- **CI.** The `app` job is required on every pull request and merge group. A cheap Linux job, `changes` (required
+  too), compares the change with its base first; when nothing under `app/`, `tools/contract_samples.py`,
+  `tools/swift_coverage.py`, the workflow, `.github/actions/setup-uv`, `uv.lock` or `pyproject.toml` changed, `app` is
+  skipped (a skipped job counts as passing for a required check), so no macOS runner starts; anything that cannot be
+  diffed builds. Otherwise `app` runs `swift test` with warnings as errors, the coverage floor, SwiftLint, `swift
+  format lint --strict` and an ad-hoc signed build that must verify. The merge queue waits up to 60 minutes for a
+  group's checks (`check_response_timeout_minutes`), above the `app` job's 30 and a wait for a macOS runner. The
+  commit hooks run the Swift checks only on a Mac: GitHub's Linux images have a `swift`, which cannot build AppKit. A release workflow, on a tag `app-v<version>` that names `app/VERSION`, builds it, signs it with the
+  Developer ID (throwaway keychain), notarizes it (the status read from `notarytool info`, never inferred) and
+  staples it, makes the zip again after stapling (with `app/build.sh --zip`, `ditto`), checks that zip with the
+  install's own code (`lib/app_install.py verify-archive`: the archive's entries, `ditto`, one `bosun.app`, the
+  requirement `bosun app install` checks, Gatekeeper's `source=Notarized Developer ID`, the bundle id), and only then attaches `bosun-app-<version>.zip` to a GitHub release. The six secrets: the
+  certificate (.p12) and its password, the signing identity, and the App Store Connect API key (the key, its id
+  and its issuer); the team id is not a secret, it is `app/publisher.json`'s.
 - **What a checkout expects.** `app/VERSION` names the app version this checkout works with. `bosun app install`
   and `update` download that release with `curl`, and accept it only if `codesign --verify --deep --strict` passes,
   its Team ID is the one in `app/publisher.json`, and `spctl --assess` accepts it; then they move it into
@@ -327,7 +357,7 @@ morning job skip; the console stays down); Start brings back what was running; t
 ## Left to the builder
 
 - The exact wording of every line and dialog (the person may refine the copy).
-- The menu bar icon's drawing.
+- The menu bar icon's drawing (done: see the build, below).
 
 ## Changes while building (2026-11-13)
 
@@ -368,7 +398,10 @@ Where what is built differs from what this note said before, or says more:
   requirement it cannot read fails. `team_id` must be ten capital letters and digits before it goes in, and notarization
   is `spctl --assess --type execute -vv` exiting 0 with the exact line `source=Notarized Developer ID`.
 - The download is `curl -q` (no `~/.curlrc`), https only also after a redirect, and the archive's entries are read
-  before anything is unpacked: an absolute path, a `..` or a symbolic link is refused.
+  before anything is unpacked: an absolute path, a `..` or a symbolic link is refused. Every entry is also read back
+  (Python compares each local header's name with the central directory's, which `ditto` need not go by), and a name
+  twice is refused; after `ditto`, the unpacked folder is checked again: exactly one `bosun.app`, and no symbolic
+  link anywhere in it (the entries listed none), before `codesign` or anything else looks at it.
 - A `~/Applications/bosun.app` whose bundle id is not the publisher's, or that cannot be read, is neither replaced
   nor removed (by `install`, `update`, `remove` nor `uninstall`): the rule of uninstall is to leave what it cannot
   say is bosun's.
@@ -376,6 +409,89 @@ Where what is built differs from what this note said before, or says more:
   present plist current and never makes one; `bosun app login on|off` is the only switch, and `on` is refused while no app is
   installed. Loading the job runs the app at once (RunAtLoad), so the app must be safe to start twice.
 - Uninstall's step for the app asks it to quit first, so a running app is not left running from a folder that is gone.
+- The AppKit app (built): what it decides is in `BosunMenuCore` (`AppCoordinator`, over an `AppUI` the shell
+  implements), so the shell is only the status item, the menu renderer, the alerts and the workspace. A dialog
+  is a `DialogSpec` (its words, buttons, boxes), shown with the app briefly a regular app. The sleep box of Quit
+  is only on the dialog while the Mac is kept awake. A check the person asked for that finds nothing says "bosun
+  is up to date"; the six-hourly and menu-open checks (at most once a minute) only show the badge.
+  `Show Logs` opens the folder `status --json` names; Run Doctor and Uninstall bosun… open a `.command` file in
+  the app's temporary folder, which runs the command and waits for Return.
+- One copy at a time reads each running copy's start with sysctl (`kp_proc.p_starttime`): `launchDate` is nil for an
+  app launchd starts directly. A copy whose start cannot be read is left out, and one that cannot read its own stays.
+- The test hooks (`--test-hooks <dir>`, for the VM suite, and only then): `<dir>/menu.json` after each render (the
+  menu, its icon badge and the status level); `<dir>/actions/<n>.json`, taken in the order of `n` once a second and
+  removed when taken: `{"item": "quit"}` (an item's name: `startBosun`, `showProblems`, `openConsole`,
+  `checkForUpdates`, `openAtLogin`, `updateBosun`, `help.guide|doctor|logs|uninstall`, `quit`), done as if clicked
+  when the menu has it enabled, or `{"answer": {"button": "<title>", "boxes": {"pauseMorning": true, "sleep": false,
+  "keepIcon": false}}}` for the open dialog (it waits for one); `<dir>/log.jsonl`, one object per line for each
+  command run (`{"command": [...], "detached": false, "outcome": "exited 0"}`) and each address or file it would
+  open (`{"open": "..."}`; with the hooks the app opens nothing).
+- Start is `bosun morning --now --background`, run as a short command (the status timeout) and not started as a
+  child: a process the app starts has the app as its parent, so the tmux server and the agents it starts would
+  have bosun.app as their responsible process for the Mac's privacy prompts, and the grants would follow the app's
+  signature. `--background` kickstarts a one-shot launchd job that does the morning run and returns at once; a
+  non-zero exit shows its line. `bosun update --yes` stays a detached child (the panes' processes are the tmux
+  server's children, and an update run as a launchd job could boot itself out when it reloads changed plists).
+- The app's Swift is in three targets: `BosunMenuCore` is pure (no I/O: the contract, the menu, the flows, the
+  coordinator that acts only through the protocols it is given, the dialogs' words, the poller's timing),
+  `BosunMenuSystem` is what touches the system (running bosun, reading a process's start time, the files of the
+  test hooks and of the `.command` scripts), and `BosunMenu` is AppKit. A fourth, `BosunMenuTestSupport` (the fake
+  bosun the tests share), is a dependency of the test targets only, so the app never ships it. The coverage floor is 95% of each of the
+  first two. Background work (the update checks, a failure being told, the start at launch) runs outside the
+  status look, so a command that hangs never holds the next look, and a look that lands while the app's own quit
+  runs is dropped.
+- **The bundle and its pictures** (`app/build.sh`, `app/Resources/`, `tools/app_icons.py`). `app/build.sh
+  [--identity <name>|-] [--out <dir>]` runs `swift build -c release --arch arm64`, assembles `bosun.app` in `<dir>`
+  (default `app/dist`, ignored by git), signs the whole bundle, verifies it (`codesign --verify --deep --strict`) and
+  writes `bosun-app-<version>.zip`. The bundle identifier is only `app/publisher.json`'s and the version only
+  `app/VERSION`'s: the build fills them into `app/Resources/Info.plist.in` (`LSUIElement`, `LSMinimumSystemVersion`
+  14.0, the icon) and lints the result with `plutil`. The signing identifier is the bundle identifier, passed with
+  `codesign --identifier`, because `bosun app install` accepts a build only when it satisfies the Developer ID
+  requirement for that identifier; a real identity also gets `--options runtime --timestamp` (the hardened runtime and
+  a secure timestamp, which notarization needs), `-` is ad hoc. The zip is made with `ditto -c -k --keepParent` and
+  without this Mac's extended attributes (`--norsrc --noextattr --noqtn`): without them a build made on a developer's
+  Mac carries a `._` file beside every file of the bundle, which the provenance attribute causes.
+  The build is made beside its output and moved in only when the bundle is signed and verified, after any bundle and
+  zip of that version were removed: a failed build leaves no unsigned bundle and no stale one. `app/build.sh --zip
+  <bosun.app> --out <dir>` is the one zip function on its own, for the release workflow to zip again after it staples
+  the notarization ticket with the same flags.
+- **`bosun app install --build`** runs `app/build.sh --identity - --out <a temporary folder>` and installs that app with
+  no team check (the explicit development path, never inferred from an empty `team_id`), saying it is a development
+  build; the folder is removed on every path. It says when the build starts (a cold build takes minutes) and, when it
+  fails, shows the last 20 lines of the build's output. It builds the source of the bosun it runs from, so from an install
+  that is the installed version's, and SwiftPM's `app/.build` stays in that version's folder: `.build` is one of
+  `lib/checkout_work.py`'s `CACHES`, so the update's prune, the conversion and uninstall do not count it as the person's work. `swift`, `iconutil`, `codesign` and `ditto` are tools of that run, so each
+  has a stand-in in `tests/sandbox/macos/` and a real check in `tests/install_e2e.sh`.
+- **The pictures** are made once, from the logo, by `tools/app_icons.py` (Pillow, in the dev group; by hand on any
+  machine) and committed: the ten sizes of `AppIcon.iconset` (the logo on a white rounded tile, with the margin macOS
+  leaves round its icons), and the menu bar template `MenuBarIcon.png` (18x18) and `MenuBarIcon@2x.png` (36x36). The
+  template is black on clear with an alpha: the knot's two ribbons in black, the logo's dark outline and the light fill
+  of its loops left clear, so the crossings stay readable at 18 points. The app loads both files as two
+  representations of one 18-point template image; with no bundle (run from `swift run`) it shows a system symbol.
+
+- **After the final review of part 2** (2026-11-13):
+  - Start is for a bosun that is not running: stopped, or red with `running` false (no window open: never started
+    today, the morning run failed), or a quit that did not finish (the CLI's own way out is `bosun start`, and a
+    click is the person's choice). It is greyed on a status that is not current (kept after a look that timed out).
+    The start at launch is narrower: only with `running` false, on a current status, so opening the app never runs
+    the morning while windows are open, the unfinished quit included. A red bosun with its windows open (an
+    error-level finding, an ERROR line the watchdog has not seen) or with its windows unread offers its problems
+    and no Start. `running` is new in `bosun status --json`; the app reads its absence as not known.
+  - A `level` the app does not know is shown as a warning (yellow, Show What's Wrong…, no Start), not as "cannot be
+    reached". A link that cannot be run is "bosun cannot be run"; "cannot be reached" (a status that could not be
+    had) offers Run bosun doctor, which is what finds out why.
+  - Quit: only a plan's `failed` object offers Stop Now; a refusal on a non-zero exit only says why. A plan that did
+    not answer in time, or failed with no object, is the "cannot say what quitting would stop" dialog too, which now
+    also has "Quit bosun.app" (only the app goes). While `bosun quit` runs, a line under the status says what it
+    waits for.
+  - "Update bosun…" (bosun speaks a newer contract) is greyed while an update is under way, says that `bosun app
+    update` brings the app when bosun is already current, and an update it started that cannot be watched (no
+    readable status) is let go quietly when its grace runs out. An update's grace is cancelled when the update
+    leaves `starting`, so an earlier grace never fires for a later start. A check the person asked for that found an
+    update is never "up to date". Open at Login is greyed while it is switched, and a reading of it begun before the
+    switch is dropped. A second copy started at the same moment as the first looks again three seconds on, and the
+    younger one exits.
+  - The update's rehearsal (`update --dry-run`) is given 120 seconds, not 30: it fetches as an update does.
 
 ## The Mac VM runs of part 1 (2026-11-13)
 
@@ -405,3 +521,40 @@ macOS, where the unit and smoke suites cannot:
   release check and the update peel it themselves, locally, after fetching the tag (`refs/remotes/origin/release^{commit}`),
   so a bundle, or a mirror made from one, is read as rightly as GitHub: `tests/unit/test_update_lookup.py` runs both
   against a real bundle. The VM's origin is a bare repository, as GitHub's is, which is the closer stand-in.
+
+## The Mac VM run of the app (2026-11-13)
+
+`tests/sandbox.sh mac app` (`tests/app_e2e.sh`) drives the real bosun.app on a clone of the developer's Mac through its
+test hooks (`menu.json`, `actions/`, `log.jsonl`), `bosun status --json`, `ps` and `launchctl`, in two parts with a restart
+of the Mac between them. What it showed that the unit and smoke suites could not:
+
+- **The desktop session.** A clone started with `--no-graphics` still has the auto-login session (loginwindow, the
+  window server, the Dock and Finder), so the status item has somewhere to be; `open <app> --args --test-hooks <dir>`
+  from the ssh login starts the app with launchd as its parent. The restart brings the session back by itself, and
+  launchd's login job starts the app (`--at-login`, no hooks) at it.
+- **Automation.** Asking the app to quit with `osascript -e 'tell application id "<bundle id>" to quit'`, which
+  `bosun app update`, `bosun app remove` and uninstall do, raised **no Automation prompt and no -1743**, from the ssh
+  login, from the update the app itself started (a child of the app: `tests/sandbox/update_quit_probe.sh` makes the next
+  version's update ask first) and from `bosun uninstall`: exit 0 in a second, the app handled "Quit AppleEvent", no
+  `UserNotificationCenter` process, no `kTCCServiceAppleEvents` request in the TCC log. The control, `tell application
+  "Finder" to get name of startup disk` from the same login, hung for the two minutes of the Apple Event timeout
+  (-1712) behind a prompt nobody answered, so the clone does enforce Automation for other events: the quit event itself
+  is not prompted for.
+- **The menu's own checks** are what the design says: yellow for the watchdog's job booted out (which no check of the
+  watchdog can say: `bosun status` reads its launchd job through `watchdog --facts` and its last run, the later of
+  its last full run and its output file's time, since a run that skips in a quit or an update's hold writes a line
+  there; a quit stays grey) and for a log's ERROR line, the update item reading "Update Available: <version>…" while the offer is open and
+  "Updating… waiting for 1 window" while a busy window is waited for (the install link is already switched by then), the
+  quit's second dialog with a 0-minute wait finding the agent still busy and its third dialog ending in the stop.
+- **A checkout's history is not a release origin.** `git fetch` of a checkout into the VM's origin follows the tags of
+  the history it brings, and this checkout's history holds the project's real releases: the newest of them, not the
+  test's, was installed. The origin is fetched with `--no-tags`.
+- **`bosun stop` leaves the console's marker**, so the console's job runs again at login; only a quit removes it.
+- **A schedule that starts at 00:00** makes `bosun doctor` fail its wake check (`pmset` prints 0:01AM where it expects
+  12:01AM), so the run's schedule starts at 02:00.
+- **The first direct run of a copied `app/build.sh`** (in `tests/install_e2e.sh`, after the test turned the Mac's
+  assessments on) exits 1 and says nothing, not even its own failure line (`set -E` and an ERR trap make every failure
+  name its line), and not even for `--bogus`, which only prints its usage; the first run of it, whichever copy, and no
+  other: a trivial script run first, `/bin/bash`, python3 and every later run of any copy were all fine. The cause is
+  outside the script (probably Gatekeeper's first look at it), so the test makes one run that may fail first. A user's
+  `bosun app install --build` runs the script directly too; it has not been tried in a clone.

@@ -23,8 +23,10 @@ import io
 import itertools
 import json
 import os
+import re
+import subprocess
 import sys
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
@@ -40,7 +42,7 @@ import quit_state
 import update_state
 import watchdog
 from console_live import LiveError, Run
-from menu_status import SessionGate, StatusFacts
+from menu_status import SessionGate, StatusFacts, WatchdogJob
 
 
 LOG_WINDOW = timedelta(hours=1)
@@ -157,28 +159,104 @@ def read_watchdog_facts(run: Run) -> dict[str, Any]:
     return data
 
 
+def launched_at(log_dir: Path) -> datetime | None:
+    """When launchd last ran the watchdog, whatever the run did: its output file (which every run that skipped
+    writes a line to, in a quit or an update's hold, where `last_run` stays as it was). Local and naive."""
+    try:
+        return datetime.fromtimestamp((log_dir / "watchdog.launchd.out").stat().st_mtime)
+    except OSError:
+        return None
+
+
+KERNEL_TIME = re.compile(r"\bsec = (\d+)\b")
+WAKETIME, BOOTTIME = "kern.waketime", "kern.boottime"
+KernelTime = Callable[[str], datetime | None]  # one of the two names to its time, or None
+
+
+def parse_kernel_time(text: str) -> datetime | None:
+    """`sysctl -n kern.waketime` (or `kern.boottime`) as local time: `{ sec = 1794543736, usec = 756800 } Fri
+    Nov 13 06:22:16`. A sec of 0 is a Mac that has not woken since it started; anything else it prints is no
+    time."""
+    found = KERNEL_TIME.search(text)
+    if found is None or int(found[1]) == 0:
+        return None
+    try:
+        return datetime.fromtimestamp(int(found[1]))
+    except (OverflowError, OSError, ValueError):
+        return None
+
+
+def read_kernel_time(name: str) -> datetime | None:
+    """When the Mac last woke (kern.waketime) or started (kern.boottime), from the kernel; None when it cannot
+    say (no sysctl, another system)."""
+    try:
+        done = subprocess.run(
+            ["/usr/sbin/sysctl", "-n", name],
+            capture_output=True,
+            text=True,
+            timeout=5,
+            check=False,
+            stdin=subprocess.DEVNULL,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    return parse_kernel_time(done.stdout) if done.returncode == 0 else None
+
+
+def watchdog_job_of(
+    watchdog_facts: Mapping[str, Any] | None,
+    checks: Mapping[str, Any] | None,
+    launched: datetime | None = None,
+    woke: datetime | None = None,
+    booted: datetime | None = None,
+) -> WatchdogJob | None:
+    """The watchdog's own job: what `watchdog --facts` says of it (loaded, plist installed) and when it last
+    ran: its last full run (its saved state) or <launched>, whichever is later (a run that skipped is a run),
+    with the Mac's last wake and boot. None when the facts do not say (an older bosun's, or not read)."""
+    job = (watchdog_facts or {}).get("watchdog_job")
+    if not isinstance(job, dict):
+        return None
+    last = (checks or {}).get("last_run")
+    try:
+        last_run = datetime.strptime(last, watchdog.STAMP) if isinstance(last, str) else None
+    except ValueError:
+        last_run = None
+    ran = max((t for t in (last_run, launched) if t is not None), default=None)
+    return WatchdogJob(bool(job.get("installed")), bool(job.get("state")), ran, woke, booted)
+
+
 def watchdog_parts(
     collector: console_live.Collector,
     config: watchdog.Config | None,
     run: Run,
     now: datetime,
-) -> tuple[dict[str, Any] | None, SessionGate | None]:
-    """The watchdog's checks and gate; None for both when they could not be made (the reason is in
-    collector.errors). The checks need the settings, which are said once, as the config."""
+    log_dir: Path,
+    kernel_time: KernelTime = read_kernel_time,
+) -> tuple[dict[str, Any] | None, SessionGate | None, WatchdogJob | None]:
+    """The watchdog's checks and gate, and its own job; None for each that could not be made (the reason is in
+    collector.errors). The checks need the settings, which are said once, as the config. The Mac's wake and
+    boot are read only for a job the facts name."""
     attempt = collector.attempt
     watchdog_facts = attempt("watchdog", lambda: read_watchdog_facts(run))
-    if config is None or not watchdog_facts:
-        return None, None
-    view = attempt("watchdog", lambda: watchdog_view(config, watchdog_facts, now))
+    if not watchdog_facts:
+        return None, None, None
+    has_job = isinstance(watchdog_facts.get("watchdog_job"), dict)
+    woke, booted = (kernel_time(WAKETIME), kernel_time(BOOTTIME)) if has_job else (None, None)
+    view = attempt("watchdog", lambda: watchdog_view(config, watchdog_facts, now)) if config else None
     if view is None:
-        return None, None
+        return None, None, watchdog_job_of(watchdog_facts, None, launched_at(log_dir), woke, booted)
     checks, gate, note = view
     if note:
         collector.errors["watchdog-state"] = note
-    return checks, gate
+    return checks, gate, watchdog_job_of(watchdog_facts, checks, launched_at(log_dir), woke, booted)
 
 
-def gather(env: Mapping[str, str], now: datetime, run: Run) -> StatusFacts:
+def gather(
+    env: Mapping[str, str],
+    now: datetime,
+    run: Run,
+    kernel_time: KernelTime = read_kernel_time,
+) -> StatusFacts:
     """The facts, a part that could not be read left empty with its reason in `errors`. <now> is local."""
     settings = console_live.Settings.from_env(env)
     collector = console_live.Collector(settings, run)
@@ -186,7 +264,7 @@ def gather(env: Mapping[str, str], now: datetime, run: Run) -> StatusFacts:
     state_dir = settings.state_dir
     config = attempt("config", lambda: console_live.watchdog_config(settings))
     windows = attempt("sessions", lambda: read_list(run, "sessions", "--json"))
-    checks, gate = watchdog_parts(collector, config, run, now)
+    checks, gate, job = watchdog_parts(collector, config, run, now, settings.log_dir, kernel_time)
     updating, waiting_for = update_facts(state_dir)
     return StatusFacts(
         windows=windows,
@@ -201,6 +279,7 @@ def gather(env: Mapping[str, str], now: datetime, run: Run) -> StatusFacts:
         log_errors=attempt("logs", lambda: recent_log_errors(settings.log_dir, now)) or (),
         log_dir=str(settings.log_dir),
         errors=dict(collector.errors),
+        watchdog_job=job,
     )
 
 
@@ -209,6 +288,7 @@ def main(
     env: Mapping[str, str] | None = None,
     run: Run = console_live.run_command,
     now: datetime | None = None,
+    kernel_time: KernelTime = read_kernel_time,
 ) -> int:
     parser = argparse.ArgumentParser(prog="bosun status --json", allow_abbrev=False)
     parser.add_argument("--config-error", metavar="TEXT", help="bosun.env could not be read: say so")
@@ -221,7 +301,7 @@ def main(
         # Whatever anything prints while the facts are gathered (the watchdog's state loading says
         # what it could not read) goes to stderr: stdout is the one object
         with contextlib.redirect_stdout(sys.stderr):
-            facts = gather(os.environ if env is None else env, moment, run)
+            facts = gather(os.environ if env is None else env, moment, run, kernel_time)
         out = menu_status.snapshot(facts, moment)
     except Exception as exc:  # noqa: BLE001 - the app reads one object whatever went wrong in here
         out = menu_status.failure(f"bosun status could not be completed: {exc!r}", menu_status.WARNING)

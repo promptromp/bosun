@@ -1,0 +1,17 @@
+{
+  "ahead": false,
+  "available": false,
+  "channel": "releases",
+  "contract": 1,
+  "error": null,
+  "installed": {
+    "commit": "2222222222222222222222222222222222222222",
+    "version": "v2026.11.11"
+  },
+  "latest": {
+    "commit": "2222222222222222222222222222222222222222",
+    "notes": "",
+    "version": "v2026.11.11"
+  },
+  "skipped": false
+}

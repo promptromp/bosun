@@ -1,0 +1,6 @@
+# Tests may force-unwrap, force-try and force-cast (a fixture that is not there should crash the test); the
+# rest of ../.swiftlint.yml holds.
+disabled_rules:
+  - force_unwrapping
+  - force_try
+  - force_cast

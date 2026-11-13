@@ -37,6 +37,24 @@ class CommandTest(unittest.TestCase):
         self.assertIn("BOSUN_QUIT_WAIT_MINUTES", data["error"])
 
 
+class StepsBoundTest(unittest.TestCase):
+    def test_the_steps_bound_covers_each_timeout_of_the_steps(self) -> None:
+        # two looks at the windows, launchctl print and kill, the console's wait, bosun stop
+        self.assertEqual(
+            quit_live.STEPS_SECONDS,
+            2 * console_live.COMMAND_TIMEOUT_SECONDS
+            + 2 * quit_live.LAUNCHCTL_TIMEOUT_SECONDS
+            + quit_live.CONSOLE_WAIT_SECONDS
+            + quit_live.STOP_TIMEOUT_SECONDS,
+        )
+
+    def test_the_command_puts_it_in_every_object(self) -> None:
+        out = io.StringIO()
+        with mock.patch("sys.stdout", out):
+            quit_live.main(["--json", "--error", "x"])
+        self.assertEqual(json.loads(out.getvalue())["steps_seconds"], quit_live.STEPS_SECONDS)
+
+
 class LiveTest(unittest.TestCase):
     """The helpers that touch the world: launchctl, the console job, the windows lock, bosun stop."""
 

@@ -18,6 +18,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "lib"))
 import quit as quit_cmd
 
 
+STEPS = 225  # what lib/quit_live.py's STEPS_SECONDS is
+
+
 def window(name: str, status: str | None = "idle") -> quit_cmd.Window:
     return quit_cmd.Window(name, status)
 
@@ -36,6 +39,7 @@ class PlanTest(unittest.TestCase):
             False,
             10,
             180,
+            STEPS,
         )
         self.assertEqual(
             plan,
@@ -48,21 +52,22 @@ class PlanTest(unittest.TestCase):
                 "refused": None,
                 "wait_minutes": 10,
                 "lock_wait_seconds": 180,
+                "steps_seconds": STEPS,
             },
         )
 
     def test_a_window_with_no_agent_is_open_and_neither_busy_nor_waiting(self) -> None:
-        plan = quit_cmd.quit_plan([window("alpha", None)], "08:30", False, 10, 180)
+        plan = quit_cmd.quit_plan([window("alpha", None)], "08:30", False, 10, 180, STEPS)
         self.assertEqual((plan["windows"], plan["busy"], plan["waiting"]), (["alpha"], [], []))
         self.assertEqual(plan["keep_awake_until"], "08:30")
 
     def test_an_update_refuses_the_quit_and_says_why(self) -> None:
-        plan = quit_cmd.quit_plan([window("alpha", "busy")], None, True, 10, 180)
+        plan = quit_cmd.quit_plan([window("alpha", "busy")], None, True, 10, 180, STEPS)
         self.assertIn("update", str(plan["refused"]))
         self.assertEqual(plan["busy"], ["alpha"])  # still said: what the person would be told about
 
     def test_no_update_is_no_refusal(self) -> None:
-        self.assertIsNone(quit_cmd.quit_plan([], None, False, 10, 180)["refused"])
+        self.assertIsNone(quit_cmd.quit_plan([], None, False, 10, 180, STEPS)["refused"])
 
     def test_the_windows_are_the_open_ones_of_the_listing(self) -> None:
         found = quit_cmd.windows_from_sessions(
@@ -159,7 +164,7 @@ def run(  # noqa: PLR0913, PLR0917 - a test helper: each option of a run is a ke
     lock_wait: int = 180,
 ) -> tuple[int, str, str]:
     out, err = io.StringIO(), io.StringIO()
-    options = quit_cmd.Options(mode, minutes, pause, sleep, as_json, lock_wait)
+    options = quit_cmd.Options(mode, minutes, pause, sleep, as_json, lock_wait, STEPS)
     status = quit_cmd.run(options, fake.ports(), out, err)
     return status, out.getvalue(), err.getvalue()
 
@@ -292,6 +297,7 @@ class RunTest(unittest.TestCase):
                 "keep_awake_until",
                 "lock_wait_seconds",
                 "refused",
+                "steps_seconds",
                 "wait_minutes",
                 "waiting",
                 "windows",
@@ -323,6 +329,15 @@ class RunTest(unittest.TestCase):
     def test_lock_wait_seconds_has_no_default_to_forget(self) -> None:
         with self.assertRaises(TypeError):
             quit_cmd.Options("plan", 10, False, False, True)  # type: ignore[call-arg]
+        with self.assertRaises(TypeError):
+            quit_cmd.Options("plan", 10, False, False, True, 180)  # type: ignore[call-arg]
+
+    def test_the_plan_says_the_most_its_other_steps_take_also_in_a_failure(self) -> None:
+        _status, out, _err = run(Fake([window("alpha")]), "plan", as_json=True)
+        self.assertEqual(json.loads(out)["steps_seconds"], STEPS)
+        fake = Fake([window("alpha")], updating=True)
+        _status, out, _err = run(fake, "now", as_json=True)
+        self.assertEqual(json.loads(out)["steps_seconds"], STEPS)
 
     def test_the_plan_in_text_names_the_windows_that_are_busy_or_waiting(self) -> None:
         _status, out, _err = run(Fake([window("alpha", "busy"), window("beta", "waiting")]), "plan")

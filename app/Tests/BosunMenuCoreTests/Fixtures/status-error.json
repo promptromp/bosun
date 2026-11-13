@@ -1,0 +1,23 @@
+{
+  "console": {
+    "running": false,
+    "url": null
+  },
+  "contract": 1,
+  "detail": [],
+  "keep_awake_until": null,
+  "level": "error",
+  "logs": "/Users/me/.local/state/bosun/logs",
+  "problems": [
+    "bosun's tmux session is not running, though it should be. Start it with: bosun start"
+  ],
+  "running": false,
+  "sentence": "bosun is not running",
+  "stopped": null,
+  "update": {
+    "state": "none",
+    "waiting_for": []
+  },
+  "waiting": [],
+  "windows": 0
+}

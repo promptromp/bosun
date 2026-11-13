@@ -32,7 +32,7 @@
         "max_entries_to_merge": 5,
         "min_entries_to_merge": 1,
         "min_entries_to_merge_wait_minutes": 5,
-        "check_response_timeout_minutes": 30
+        "check_response_timeout_minutes": 60
       }
     },
     {
@@ -44,6 +44,8 @@
           { "context": "lint", "integration_id": 15368 },
           { "context": "test (3.13)", "integration_id": 15368 },
           { "context": "test (3.14)", "integration_id": 15368 },
+          { "context": "changes", "integration_id": 15368 },
+          { "context": "app", "integration_id": 15368 },
           { "context": "gitleaks", "integration_id": 15368 }
         ]
       }

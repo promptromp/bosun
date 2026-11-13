@@ -14,9 +14,14 @@
 #                               an error only when it should be running, ok while resting (outside the
 #                               awake hours) or starting (the morning run is going or about to). A
 #                               warning also lists ERROR lines of the last hour, after the watchdog
-#                               has alerted them
+#                               has alerted them, and the watchdog itself not running (its job booted
+#                               out, or no run for three of its intervals of the Mac being awake). A
+#                               level a reader does not know is to be shown as a warning
 #             sentence, detail  the menu's first line, and grey lines under it
 #             windows, waiting  the windows open, and the names of those waiting for you
+#             running           whether the windows are open: false when none is, null when they could
+#                               not be read (with the level it tells a bosun to start, stopped or red
+#                               with none open, from one that runs with an error)
 #             keep_awake_until  HH:MM while the morning's keep-awake holds the Mac up, else null
 #             stopped           {"since": <ISO time>, "morning_paused": <bool>} after a quit (or, with
 #                               the morning not paused, a `bosun stop` today), else null

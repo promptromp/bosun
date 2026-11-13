@@ -47,6 +47,16 @@ CONSOLE_POLL_SECONDS = 0.5
 CONSOLE_WAIT_SECONDS = 5
 LAUNCHCTL_TIMEOUT_SECONDS = 20
 STOP_TIMEOUT_SECONDS = 120
+# The most a quit's steps take besides its two waits (the --let-finish minutes and the windows lock), which
+# the plan says (`steps_seconds`) so that a caller's timeout outlasts them: two looks at the windows (before
+# the lock and under it, each a `bosun sessions --json`), the console job's `launchctl print` and `kill`, the
+# wait for it to go, and `bosun stop`.
+STEPS_SECONDS = (
+    2 * console_live.COMMAND_TIMEOUT_SECONDS
+    + 2 * LAUNCHCTL_TIMEOUT_SECONDS
+    + CONSOLE_WAIT_SECONDS
+    + STOP_TIMEOUT_SECONDS
+)
 
 
 @dataclass(frozen=True)
@@ -215,6 +225,7 @@ def main(argv: list[str]) -> int:
         args.sleep,
         args.json,
         round(args.lock_wait),
+        STEPS_SECONDS,
     )
     if args.error is not None:  # the wrapper's own refusal, in the shape its caller asked for
         return finish(options, failed_object(args.error, options), sys.stdout, sys.stderr)

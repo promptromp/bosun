@@ -1,0 +1,29 @@
+{
+  "console": {
+    "running": false,
+    "url": null
+  },
+  "contract": 1,
+  "detail": [
+    "3 windows open",
+    "1 waiting for you: acme-web",
+    "Mac kept awake until 20:00"
+  ],
+  "keep_awake_until": "20:00",
+  "level": "warning",
+  "logs": "/Users/me/.local/state/bosun/logs",
+  "problems": [
+    "The acme-web window has waited at a prompt for 45 min."
+  ],
+  "running": true,
+  "sentence": "bosun is running, with a warning",
+  "stopped": null,
+  "update": {
+    "state": "none",
+    "waiting_for": []
+  },
+  "waiting": [
+    "acme-web"
+  ],
+  "windows": 3
+}

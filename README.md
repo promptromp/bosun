@@ -96,6 +96,9 @@ the details: other ways to install, configuration and logins.
 [`bosun uninstall`](docs/setup.md#uninstall) takes it all off again: it says what goes and what stays, and
 asks first.
 
+On a Mac, an optional [menu bar app](docs/setup.md#the-menu-bar-app) shows at a glance whether bosun is well, and
+has updates, the console, Quit and Start in its menu.
+
 ## Status
 
 - **macOS only** (launchd, `pmset`, `caffeinate`) for now. Linux is next, and the installer's checks are
