@@ -23,6 +23,7 @@ import update_check
 
 CONTRACT = 1  # the shape of `status --json`; the menu bar app reads it
 BUNDLE = "bosun.app"
+APPLICATIONS = "Applications"  # in the home folder: where the app is installed
 SHOWN = 5  # of the extra names in an archive that a refusal lists
 SYMLINK = 0o120000  # the file type bits of a zip entry that is a symbolic link
 FILE_TYPE = 0o170000
@@ -215,6 +216,11 @@ def not_ours(app: Path, bundle_id: str) -> str | None:
         return "its Info.plist cannot be read"
     found = info.get("CFBundleIdentifier")
     return None if found == bundle_id else f"its bundle id is {found}, not the publisher's {bundle_id}"
+
+
+def app_path(home: Path) -> Path:
+    """Where the app is, or would be installed, for the home folder <home>."""
+    return home / APPLICATIONS / BUNDLE
 
 
 def status(root: Path, app: Path, login_plist: Path | None) -> dict[str, Any]:

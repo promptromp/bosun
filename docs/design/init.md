@@ -101,6 +101,7 @@ for it, and the plan says why.
 | Orchestrator folder | The folder the same repos share, never your home folder. |
 | AWS SSO | The profile, if there is exactly one; with more, the choice is yours. |
 | Wake | Yes, unless `pmset` already has a repeating event that bosun did not set: it keeps only one, and it is not ours to replace by default. |
+| Menu bar app | Yes on a first run ("Add bosun to the menu bar and Applications?", after the wake question, the `menu_app` answer); unattended, no, since it opens an app at login and someone should say yes. A re-run goes by `BOSUN_MENU_APP` in the config, so an install without the app stays without. With it, `bosun.env` gets `BOSUN_MENU_APP="1"` and `BOSUN_CONSOLE_ALWAYS="1"` (the app's Open Console needs the console's job); without it only `BOSUN_MENU_APP="0"`, leaving a console job you set up yourself. After `install.sh`, `bosun app install` (`bosun app update` where the app is already in `~/Applications`, so a re-run never relaunches an app in use), then `bosun app login on`. A refusal (no Team ID in `app/publisher.json` yet, no network) is one line, with how to add the app later; init still succeeds. |
 
 It only reads where and when prompts were typed, never what they say.
 

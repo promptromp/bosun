@@ -38,6 +38,7 @@ from typing import Any
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import agent_files
 import agent_state
+import app_release
 import awake
 import claude_state
 import event_model
@@ -154,6 +155,7 @@ class Config:
     orchestrator_down_minutes: float = 15
     orchestrator_restart: bool = True
     hook_signals: bool = True
+    menu_app: bool = False
 
     @property
     def loop_wanted(self) -> bool:
@@ -209,6 +211,7 @@ class Config:
             orchestrator_down_minutes=float(env.get("BOSUN_WATCHDOG_ORCHESTRATOR_DOWN_MINUTES") or 15),
             orchestrator_restart=env.get("BOSUN_WATCHDOG_ORCHESTRATOR_RESTART", "1") == "1",
             hook_signals=env.get("BOSUN_HOOK_SIGNALS", "1") == "1",
+            menu_app=env.get("BOSUN_MENU_APP") == "1",
         )
 
 
@@ -1333,6 +1336,23 @@ def check_update_stuck(ctx: Context) -> Result:
     )
 
 
+APP_MISSING = "app-missing"
+APP_MISSING_TEXT = (
+    "bosun.app is not in ~/Applications (moved to the Trash?); bosun still runs. "
+    "`bosun uninstall` removes bosun; `bosun app install` brings the app back."
+)
+
+
+def check_app_missing(ctx: Context) -> Result:
+    """With BOSUN_MENU_APP=1, bosun.app is gone from ~/Applications (dragged to the Trash, say): bosun
+    still runs, so this only says so, once, and again if the app comes back and goes."""
+    if not ctx.config.menu_app:
+        return Result("the menu bar app is not wanted (BOSUN_MENU_APP is not 1)")
+    if app_release.app_path(Path.home()).exists():
+        return Result("bosun.app is in ~/Applications")
+    return Result(findings=[Finding(APP_MISSING, APP_MISSING_TEXT)])
+
+
 @dataclass(frozen=True)
 class Check:
     name: str
@@ -1463,6 +1483,14 @@ CHECKS: tuple[Check, ...] = (
         "error",
         "an update stopped and left its hold (or paused writes), or its hold outlived its hour",
         check_update_stuck,
+    ),
+    Check(
+        APP_MISSING,
+        "warn",
+        "with BOSUN_MENU_APP=1: bosun.app is not in ~/Applications (moved to the Trash?); bosun still "
+        "runs; once, and again after the app came back and went",
+        check_app_missing,
+        rearms=True,
     ),
 )
 

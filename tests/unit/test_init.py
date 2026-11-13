@@ -316,12 +316,14 @@ class CommandTest(WorldTest):
             name = Path(str(command[0])).name
             if name in ("install.sh", "bosun"):
                 self.calls.append([name, *command[1:]])
-                return subprocess.CompletedProcess(command, self.install_status)
+                status = self.statuses.get(tuple(str(arg) for arg in command[1:3]), self.install_status)
+                return subprocess.CompletedProcess(command, status)
             if name in ("git", "ruby"):
                 return real_run(command, *args, **kwargs)
             raise AssertionError(f"a unit test tried to run {command}")
 
         self.install_status = 0
+        self.statuses: dict[tuple[str, ...], int] = {}  # what a command answers, by its first two words
         patcher = mock.patch.object(subprocess, "run", run)
         patcher.start()
         self.addCleanup(patcher.stop)
@@ -533,13 +535,13 @@ class CommandTest(WorldTest):
     def test_trusted_folders_are_not_trusted_again(self) -> None:
         with mock.patch.object(claude_state, "trusted", return_value=True):
             self.bosun_init("--recommended")
-        self.assertEqual([call[0] for call in self.calls], ["install.sh"])
+        self.assertEqual([call[0] for call in self.calls if call[1:2] != ["app"]], ["install.sh"])
 
     def test_without_a_terminal_or_sudo_it_says_what_to_run(self) -> None:
         with mock.patch.object(init, "can_ask_for_sudo", return_value=False):
             _, out, _ = self.bosun_init("--recommended")
         self.assertIn("run this once yourself: sudo pmset repeat", out)
-        self.assertEqual(self.calls[-1], ["install.sh"])
+        self.assertEqual(self.calls[-3], ["install.sh"])  # the app's two commands follow it
 
     def test_a_terminal_gets_the_wizard_and_anything_explicit_does_not(self) -> None:
         # Parsed first: argparse looks at the real stdout, for colour, since Python 3.14.
@@ -586,7 +588,7 @@ class CommandTest(WorldTest):
         self.assertFalse(self.config.exists())
 
     def test_the_wizard_carries_out_what_you_accepted_then_offers_to_start(self) -> None:
-        status, _ = self.wizard([*[init_wizard.ENTER] * 6, "y", "y"])
+        status, _ = self.wizard([*[init_wizard.ENTER] * 7, "y", "y"])
         self.assertEqual(status, 0)
         self.assertIn("name: api", (self.config / "sessions.yml").read_text())
         self.assertEqual(self.calls[-1], ["bosun", "start"])
@@ -595,14 +597,14 @@ class CommandTest(WorldTest):
         self.bosun_init("--recommended")
         self.repo("Development/web")
         self.prompts(self.home / "Development" / "web", 30, session="s9")
-        status, _ = self.wizard(["1", "2", *[init_wizard.ENTER] * 6, "y", "n"])
+        status, _ = self.wizard(["1", "2", *[init_wizard.ENTER] * 7, "y", "n"])
         self.assertEqual(status, 0)
         self.assertIn("name: web", (self.config / "sessions.yml").read_text())
         self.assertTrue(any(name.startswith("sessions.yml.pre-init-") for name in self.backups()))
 
     def test_the_wizard_asks_for_the_orchestrators_connectors(self) -> None:
         self.servers = {"claude.ai Acme Mail": "https://mail.example.com/mcp", "acme-local": "acme-mcp"}
-        status, _ = self.wizard([init_wizard.ENTER, "2", *[init_wizard.ENTER] * 6, "y", "n"])
+        status, _ = self.wizard([init_wizard.ENTER, "2", *[init_wizard.ENTER] * 7, "y", "n"])
         self.assertEqual(status, 0)
         self.assertIn('BOSUN_ORCHESTRATOR_CONNECTORS="acme-local"', (self.config / "bosun.env").read_text())
 
@@ -622,8 +624,63 @@ class CommandTest(WorldTest):
         self.assertFalse(self.config.exists())
 
     def test_no_wake_asked_for_means_no_wake_flag(self) -> None:
-        self.bosun_init("--answers", self.answers_file(wake=False))
+        self.bosun_init("--answers", self.answers_file(wake=False, menu_app=False))
         self.assertEqual(self.calls[-1], ["install.sh"])
+
+    def app_calls(self) -> list[list[str]]:
+        return [call for call in self.calls if call[:2] == ["bosun", "app"]]
+
+    def test_with_the_menu_app_the_app_is_installed_and_opened_at_login_after_install_sh(self) -> None:
+        status, out, _ = self.bosun_init("--recommended")
+        self.assertEqual(status, 0)
+        self.assertEqual(self.app_calls(), [["bosun", "app", "install"], ["bosun", "app", "login", "on"]])
+        self.assertEqual(self.calls[-2:], self.app_calls())  # after install.sh, the last thing it does
+        self.assertLess(
+            self.calls.index(["install.sh", "--with-wake"]), self.calls.index(self.app_calls()[0])
+        )
+        env = (self.config / "bosun.env").read_text()
+        self.assertIn('BOSUN_MENU_APP="1"', env)
+        self.assertIn('BOSUN_CONSOLE_ALWAYS="1"', env)
+        self.assertNotIn("bosun.app was not added", out)
+
+    def test_an_app_already_there_is_updated_not_installed_again(self) -> None:
+        """A re-run must not reinstall, and relaunch, an app that is in use."""
+        (self.home / "Applications" / "bosun.app").mkdir(parents=True)
+        self.bosun_init("--recommended")
+        self.assertEqual(self.app_calls(), [["bosun", "app", "update"], ["bosun", "app", "login", "on"]])
+
+    def test_without_the_menu_app_bosun_app_is_never_run(self) -> None:
+        self.bosun_init("--answers", self.answers_file(menu_app=False))
+        self.assertEqual(self.app_calls(), [])
+        self.assertIn('BOSUN_MENU_APP="0"', (self.config / "bosun.env").read_text())
+
+    def test_unattended_first_run_does_not_add_the_app(self) -> None:
+        self.bosun_init("--recommended", "--unattended")
+        self.assertEqual(self.app_calls(), [])
+
+    def test_a_refused_app_install_is_a_line_and_init_still_succeeds(self) -> None:
+        """No Team ID yet, no network: `bosun app install` says why on its own, and init says how to add the
+        app later; Open at Login is not turned on for an app that is not there."""
+        self.statuses[("app", "install")] = 1
+        status, out, _ = self.bosun_init("--recommended")
+        self.assertEqual(status, 0)
+        self.assertEqual(self.app_calls(), [["bosun", "app", "install"]])
+        self.assertIn("bosun.app was not added", out)
+        self.assertIn("bosun app install", out)
+        self.assertIn("bosun is set up", out)
+
+    def test_a_login_job_that_cannot_be_made_is_a_line_too(self) -> None:
+        self.statuses[("app", "login")] = 1
+        status, out, _ = self.bosun_init("--recommended")
+        self.assertEqual(status, 0)
+        self.assertIn("Open at Login was not turned on", out)
+        self.assertIn("bosun app login on", out)
+
+    def test_a_failed_install_sh_adds_no_app(self) -> None:
+        self.install_status = 1
+        status, _, _ = self.bosun_init("--recommended")
+        self.assertEqual(status, init.EXIT_BLOCKED)
+        self.assertEqual(self.app_calls(), [])
 
 
 if __name__ == "__main__":

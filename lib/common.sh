@@ -390,6 +390,10 @@ set_app_defaults() {
   # releases hold it, for a fork or mirror. Empty: the publisher's (app/publisher.json), else the
   # install's origin when that is on GitHub.
   BOSUN_APP_RELEASES=""
+  # 1: this install has the menu bar app (`bosun init` asks, `bosun app install` adds it): `bosun update`
+  # keeps it at the version it expects, and the watchdog says when it is gone from ~/Applications.
+  # 0: bosun never touches the app.
+  BOSUN_MENU_APP="0"
 }
 
 set_impact_defaults() {
@@ -1270,7 +1274,7 @@ WATCHDOG_SETTINGS="BOSUN_STATE_DIR BOSUN_LOG_DIR BOSUN_SESSION_NAME BOSUN_ORCHES
   BOSUN_WATCHDOG_ORCHESTRATOR_RESTART BOSUN_HOOK_SIGNALS BOSUN_LEARN_ENABLED BOSUN_LEARN_AT BOSUN_LEARN_TIMEOUT_MINUTES
   BOSUN_EVENTS_ENABLED BOSUN_EVENTS_INTERVAL_SECONDS BOSUN_SLACK_WATCH_ENABLED
   BOSUN_SLACK_WATCH_MINUTES BOSUN_CLAUDE_BIN BOSUN_CONTEXT_WARN_TOKENS
-  BOSUN_OVERHEAD_WARN_SHARE"
+  BOSUN_OVERHEAD_WARN_SHARE BOSUN_MENU_APP"
 
 # "NAME=value" for each setting named, one per line (for `env`).
 settings_lines() { # <setting names...>
@@ -1299,6 +1303,18 @@ waketest_label() { echo "$BOSUN_LAUNCHD_LABEL.waketest"; }
 # stops the console with `launchctl kill TERM gui/$(id -u)/$(console_label)`.
 console_label() { echo "$BOSUN_LAUNCHD_LABEL.console"; }
 console_wanted_marker() { echo "$BOSUN_STATE_DIR/console/wanted"; }
+
+# Whether the console's job is one to restart: loaded, and wanted (its marker is there).
+console_restartable() {
+  [ -e "$(console_wanted_marker)" ] && job_loaded "$(console_label)"
+}
+
+# The console's job restarted, so that it serves the code now installed (`bosun update` runs this, from the
+# new version, after the switch); nothing to do, and no failure, when it is not one to restart.
+console_restart() {
+  console_restartable || return 0
+  launchctl kickstart -k "gui/$(id -u)/$(console_label)"
+}
 
 # The marker as BOSUN_CONSOLE_ALWAYS says: made with 1, removed otherwise.
 console_mark_wanted() {

@@ -151,11 +151,11 @@ class Setup:
 
     @property
     def apps(self) -> Path:
-        return self.home / "Applications"
+        return self.home / app_release.APPLICATIONS
 
     @property
     def app(self) -> Path:
-        return self.apps / BUNDLE
+        return app_release.app_path(self.home)
 
 
 def install_origin(root: Path) -> str:

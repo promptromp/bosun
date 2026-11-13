@@ -208,9 +208,16 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv: list[str]) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
-    options = Options(args.mode or "plan", args.wait_minutes, args.pause_morning, args.sleep, args.json)
+    options = Options(
+        args.mode or "plan",
+        args.wait_minutes,
+        args.pause_morning,
+        args.sleep,
+        args.json,
+        round(args.lock_wait),
+    )
     if args.error is not None:  # the wrapper's own refusal, in the shape its caller asked for
-        return finish(options, failed_object(args.error), sys.stdout, sys.stderr)
+        return finish(options, failed_object(args.error, options), sys.stdout, sys.stderr)
     if None in (args.mode, args.state_dir, args.session, args.console_label, args.console_marker):
         parser.error("--mode, --state-dir, --session, --console-label and --console-marker are required")
     world = World(args.state_dir, args.session, args.console_label, args.console_marker, args.lock_wait)

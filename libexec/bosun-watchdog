@@ -31,6 +31,8 @@
 #                    intervals in the awake window, 3 failed runs in a row, or the daily budget spent
 #   update-stuck     an update stopped and left its hold (or paused writes), or its hold
 #                    outlived its hour (the watchdog skips its runs while an update holds)
+#   app-missing      with BOSUN_MENU_APP=1: bosun.app is not in ~/Applications (moved to the Trash?);
+#                    bosun still runs (once, and again after the app came back and went)
 #   login-expired    Claude Code is logged out, the last login check failed, or a Claude window
 #                    answers every prompt with a login error (once per outage; held, like every
 #                    alert, until the awake window opens)

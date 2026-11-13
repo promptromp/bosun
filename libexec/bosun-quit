@@ -18,8 +18,10 @@
 #                   run starts bosun again)
 #   --sleep         the Mac may sleep now: release the keep-awake too (without it the keep-awake the
 #                   morning started goes on until its time)
-#   --json          one object, `contract` 1, instead of text: the plan, and for a quit its `result`
-#                   (stopped, busy, refused or failed), what was kept and the console's state
+#   --json          one object, `contract` 1, instead of text: the plan (with `wait_minutes`, the
+#                   --let-finish minutes of this run, and `lock_wait_seconds`, the windows lock's wait, by
+#                   which a caller times a quit), and for a quit its `result` (stopped, busy, refused or
+#                   failed), what was kept and the console's state
 # The order: the --let-finish wait; then the `windows` lock that `bosun start` holds is taken (a start in
 # the middle of setting up the windows is waited for, up to BOSUN_WINDOWS_LOCK_WAIT_SECONDS, else nothing
 # changes and it fails); the windows and any update are looked at once more under it (an update that began

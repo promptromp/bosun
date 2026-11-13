@@ -232,7 +232,7 @@ Calls made from the research and the builder check, to check while reading:
 - **`bosun init`** asks "Add bosun to the menu bar and Applications?" (an `Answers` field, default yes; skipped when
   no one is at the terminal), sets `BOSUN_MENU_APP=1`, installs the app and turns on Open at Login.
 - **`bosun update`** installs the app version the new checkout expects when `BOSUN_MENU_APP=1` and the installed one
-  differs, and relaunches it if it was running. An install from before this change gets `BOSUN_MENU_APP=0` (a
+  differs, and relaunches it if it was running (a refusal or failure is a line in the summary, never a failed update), and restarts the console's launchd job when it is loaded and wanted, so the console serves the new version. An install from before this change gets `BOSUN_MENU_APP=0` (a
   `CONFIG_ADDED` entry) and a line in the update's summary saying how to add the app.
 - **Uninstall.** `bosun uninstall` removes `~/Applications/bosun.app` and its login job (rows in
   `lib/uninstall_plan.py`). "Uninstall bosun…" runs it after a confirmation that lists what goes and what stays (its

@@ -70,6 +70,7 @@ class Options:
     pause_morning: bool
     sleep: bool  # the Mac may sleep now: bosun stop releases the keep-awake too
     json: bool
+    lock_wait_seconds: int = 0  # BOSUN_WINDOWS_LOCK_WAIT_SECONDS: how long the steps wait for a start's lock
 
 
 @dataclass(frozen=True)
@@ -94,9 +95,17 @@ def windows_from_sessions(listing: Sequence[dict[str, Any]]) -> list[Window]:
     return [Window(w["name"], (w.get("agent") or {}).get("status")) for w in listing if w.get("window")]
 
 
-def quit_plan(windows: Sequence[Window], keep_awake_until: str | None, updating: bool) -> dict[str, Any]:
+def quit_plan(
+    windows: Sequence[Window],
+    keep_awake_until: str | None,
+    updating: bool,
+    wait_minutes: int,
+    lock_wait_seconds: int,
+) -> dict[str, Any]:
     """What a quit would meet: the open windows, which are busy and which wait for you, when the Mac's
-    keep-awake ends, and why a quit is refused (an update runs)."""
+    keep-awake ends, and why a quit is refused (an update runs); and how long a quit may wait, which the
+    menu bar app times it by: <wait_minutes> of --let-finish (BOSUN_QUIT_WAIT_MINUTES unless asked
+    otherwise) and <lock_wait_seconds> for the windows lock (BOSUN_WINDOWS_LOCK_WAIT_SECONDS)."""
     return {
         "contract": CONTRACT,
         "windows": [w.name for w in windows],
@@ -104,12 +113,15 @@ def quit_plan(windows: Sequence[Window], keep_awake_until: str | None, updating:
         "waiting": [w.name for w in windows if w.status == WAITING],
         "keep_awake_until": keep_awake_until,
         "refused": UPDATING if updating else None,
+        "wait_minutes": wait_minutes,
+        "lock_wait_seconds": lock_wait_seconds,
     }
 
 
-def failed_object(error: str) -> dict[str, Any]:
+def failed_object(error: str, options: Options) -> dict[str, Any]:
     """The object of a quit that could not even look: the plan's keys, empty, and why."""
-    return dict(quit_plan([], None, False), result="failed", error=error)
+    plan = quit_plan([], None, False, options.wait_minutes, options.lock_wait_seconds)
+    return dict(plan, result="failed", error=error)
 
 
 def plural(count: int, noun: str) -> str:
@@ -133,17 +145,23 @@ def plan_text(plan: dict[str, Any]) -> str:
 # ---- the run ---------------------------------------------------------------------------------------
 
 
-def look(ports: Ports, mode: str) -> tuple[list[Window] | None, dict[str, Any]]:
+def look(ports: Ports, options: Options) -> tuple[list[Window] | None, dict[str, Any]]:
     """The windows as they are now and the plan from them. Windows that cannot be read stop every mode but
     --stop-now, which is your say (the plan then lists none, and says it could not be read)."""
     try:
         windows: list[Window] | None = ports.read_windows()
     except QuitError:
-        if mode == "now":
+        if options.mode == "now":
             windows = None
         else:
             raise
-    plan = quit_plan(windows or [], ports.keep_awake_until(), ports.updating())
+    plan = quit_plan(
+        windows or [],
+        ports.keep_awake_until(),
+        ports.updating(),
+        options.wait_minutes,
+        options.lock_wait_seconds,
+    )
     if windows is None:
         plan["note"] = "the windows could not be read, so none is listed"
     return windows, plan
@@ -156,7 +174,7 @@ def wait_until_nothing_is_busy(
     an update began (`refused`). Says on <err>, when it begins to wait, who it waits for."""
     said = False
     while True:
-        _windows, plan = look(ports, options.mode)
+        _windows, plan = look(ports, options)
         if plan["refused"] or not plan["busy"] or ports.clock() >= deadline:
             return plan
         if not said:
@@ -184,7 +202,7 @@ def locked_steps(options: Options, ports: Ports) -> dict[str, Any]:
     and with --let-finish a window busy again leaves it to wait on (`busy`), both with nothing written. A step
     that fails ends the quit there, with its reason; quit.json, once written, stays (bosun is meant to be
     stopped). The windows listed are those of this look."""
-    _windows, plan = look(ports, options.mode)
+    _windows, plan = look(ports, options)
     if plan["refused"]:
         return dict(plan, result="refused")
     if plan["busy"] and options.mode == "finish":
@@ -211,7 +229,7 @@ def stop(options: Options, ports: Ports) -> dict[str, Any]:
         with ports.lock():
             return locked_steps(options, ports)
     except QuitError as exc:
-        return failed_object(str(exc))
+        return failed_object(str(exc), options)
 
 
 def stopped_text(result: dict[str, Any]) -> str:
@@ -259,7 +277,7 @@ def first_plan(options: Options, ports: Ports, deadline: float, err: TextIO) -> 
     """The plan the quit goes on from: with --let-finish after the wait for the busy windows."""
     if options.mode == "finish":
         return wait_until_nothing_is_busy(options, ports, deadline, err)
-    return look(ports, options.mode)[1]
+    return look(ports, options)[1]
 
 
 def quit_it(options: Options, ports: Ports, err: TextIO) -> dict[str, Any]:
@@ -281,10 +299,10 @@ def run(options: Options, ports: Ports, out: TextIO, err: TextIO) -> int:
     """The quit as <options> say. Returns the exit status."""
     try:
         if options.mode == "plan":
-            _windows, plan = look(ports, options.mode)
+            _windows, plan = look(ports, options)
             print(json.dumps(plan) if options.json else plan_text(plan), file=out)
             return 0
         result = quit_it(options, ports, err)
     except QuitError as exc:
-        result = failed_object(str(exc))
+        result = failed_object(str(exc), options)
     return finish(options, result, out, err)

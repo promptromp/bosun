@@ -144,6 +144,7 @@ class Answers:
     repos_dir: str = DEFAULT_REPOS_DIR
     aws_sso_profiles: tuple[str, ...] = ()
     wake: bool = True
+    menu_app: bool = True  # BOSUN_MENU_APP: bosun.app in Applications, opened at login (bosun app)
     trust: bool = True
 
 
@@ -155,7 +156,7 @@ TIME = re.compile(r"^([01]\d|2[0-3]):[0-5]\d$")
 WINDOW_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]*$")
 MODEL_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._\[\]-]*$")
 CONTROL = re.compile(r"[\x00-\x1f\x7f]")
-BOOL_ANSWERS = ("events", "approvals", "learning", "slack_watch", "wake", "trust")
+BOOL_ANSWERS = ("events", "approvals", "learning", "slack_watch", "wake", "menu_app", "trust")
 TEXT_ANSWERS = (
     "days",
     "start",
@@ -511,6 +512,7 @@ def recommend(facts: Facts) -> Answers:
         aws_sso_profiles=facts.aws_sso_profiles if len(facts.aws_sso_profiles) == 1 else (),
         # pmset keeps only one repeating event: never replace someone else's by default.
         wake=not facts.repeating_wake or bool(facts.env),
+        menu_app=on("BOSUN_MENU_APP", True),
     )
 
 
@@ -525,7 +527,8 @@ def first_run(facts: Facts) -> bool:
 
 def unattended(facts: Facts, recommended: Answers) -> Answers:
     """`--unattended` (get.sh's): on a first run the recommendation without what nobody chose, no repo
-    windows (unless sessions.yml already lists some) and no connectors; on a re-run the recommendation."""
+    windows (unless sessions.yml already lists some), no connectors and no menu bar app (it opens an app
+    at login: someone should say yes); on a re-run the recommendation."""
     if not first_run(facts):
         return recommended
     repos = recommended.repos if SESSIONS_FILE in facts.files else ()
@@ -536,6 +539,7 @@ def unattended(facts: Facts, recommended: Answers) -> Answers:
         orchestrator_connectors="",
         repo_mask=recommended_mask(facts, uses),
         repos_dir=recommended_repos_dir(facts, uses),
+        menu_app=False,
     )
 
 
@@ -608,6 +612,13 @@ def env_groups(answers: Answers) -> list[tuple[str, list[tuple[str, str]]]]:
         (
             "Where the repos are, and which are in scope",
             [("BOSUN_REPOS_DIR", env_path(answers.repos_dir)), ("BOSUN_REPO_MASK", answers.repo_mask)],
+        ),
+        (
+            "The menu bar app (bosun app): in ~/Applications, with the console as a background job for it",
+            [
+                ("BOSUN_MENU_APP", flag[answers.menu_app]),
+                *([("BOSUN_CONSOLE_ALWAYS", "1")] if answers.menu_app else []),
+            ],
         ),
         (
             "Features",
@@ -784,6 +795,7 @@ class Plan:
     reasons: tuple[str, ...]
     notes: tuple[str, ...]
     blockers: tuple[str, ...]
+    menu_app: bool = False  # install the app and turn on Open at Login, after install.sh
 
 
 def env_change(facts: Facts, answers: Answers) -> FileChange:
@@ -976,6 +988,7 @@ def build_plan(facts: Facts, answers: Answers, state: DirState, force: bool = Fa
         reasons=reasons(facts, answers),
         notes=notes(facts, answers),
         blockers=blockers(facts, state, files),
+        menu_app=answers.menu_app,
     )
 
 
@@ -1025,6 +1038,9 @@ def step_lines(plan: Plan, home: str) -> list[str]:
     lines.append(f"  ./install.sh{with_wake}   links `bosun`, loads its launchd jobs, runs `bosun doctor`")
     if plan.wake_command:
         lines.append(f"  {plan.wake_command}   wakes the Mac on schedule; pmset needs admin rights")
+    if plan.menu_app:
+        lines.append("  bosun app install   adds bosun.app to ~/Applications")
+        lines.append("  bosun app login on   opens it when you log in")
     return lines
 
 

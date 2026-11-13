@@ -189,8 +189,8 @@ check gets no protection from it, which is why the first update converts at a qu
 
    As built, these stop it at the plan too: a store whose format cannot be read, a link among what a
    backup copies that leads nowhere, a launchd job the new version cannot render, versions that are
-   not side by side, and windows the last update still brings along (below). It also lists a running
-   console, the handed tasks that keep their old text, and what to change by hand in my own files.
+   not side by side, and windows the last update still brings along (below). It also lists a console (bosun's background job, which the update restarts itself, or one
+   started by hand, which it does not), the handed tasks that keep their old text, and what to change by hand in my own files.
 
    It shows the plan and asks first, as `init` and `uninstall` do. `--yes` skips the question;
    `--dry-run`, or no terminal to ask in, stops here.
@@ -218,7 +218,10 @@ check gets no protection from it, which is why the first update converts at a qu
    what failed.
 5. **Release.** Reload the launchd jobs whose plist changed, restart the check-in loop while the hold
    is still on (it stops at once, even mid-tick, and the hold keeps a tick from starting meanwhile),
-   lift the hold, delete the old backups and version folders, and run the new version's `bosun
+   with `BOSUN_MENU_APP=1` bring the menu bar app to the version the new one expects (`bosun app update` of
+   the new version; a refusal or failure is a finding in the summary and stops nothing), restart the
+   console's launchd job if it is loaded and wanted (`console/wanted` is there; `launchctl kickstart -k`, so it
+   serves the new code; a job that is not loaded is never started), lift the hold, delete the old backups and version folders, and run the new version's `bosun
    doctor`. A finding at this point is reported, not rolled back, since writes may have landed since
    the freeze.
 6. **Bring the agents along** (below).

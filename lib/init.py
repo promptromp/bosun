@@ -24,6 +24,7 @@ from datetime import datetime
 from pathlib import Path
 
 import agent_state
+import app_release
 import init_detect
 import init_plan
 import init_terminal
@@ -149,7 +150,28 @@ def run_steps(plan: Plan) -> int:
                 f"No terminal to ask for your password, so run this once yourself: {plan.wake_command}",
                 flush=True,
             )
-    return subprocess.run([str(ROOT / "install.sh"), *flags], check=False).returncode
+    status = subprocess.run([str(ROOT / "install.sh"), *flags], check=False).returncode
+    if status == 0 and plan.menu_app:
+        add_the_app()
+    return status
+
+
+def bosun_app(*argv: str) -> bool:
+    """`bosun app <argv>`, which says its own one line when it refuses; whether it went through."""
+    sys.stdout.flush()
+    return subprocess.run([str(ROOT / "bin" / "bosun"), "app", *argv], check=False).returncode == 0
+
+
+def add_the_app() -> None:
+    """The menu bar app, once install.sh has made bosun work: installed (updated, if it is there: a re-run
+    must not relaunch an app in use) and opened at login. A refusal, such as a Team ID not filled in yet
+    or no network, is a line, never a failed init: bosun does not need the app."""
+    present = app_release.app_path(Path.home()).exists()
+    if not bosun_app("update" if present else "install"):
+        print("\nbosun.app was not added; bosun is set up without it. `bosun app install` adds it later.")
+        return
+    if not bosun_app("login", "on"):
+        print("\nOpen at Login was not turned on; `bosun app login on` does it.")
 
 
 def user_path() -> str:

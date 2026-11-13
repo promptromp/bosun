@@ -201,6 +201,14 @@ class RecommendTest(unittest.TestCase):
         self.assertEqual(init_plan.recommend(facts(aws_sso_profiles=("dev",))).aws_sso_profiles, ("dev",))
         self.assertEqual(init_plan.recommend(facts(aws_sso_profiles=("dev", "prod"))).aws_sso_profiles, ())
 
+    def test_the_menu_bar_app_is_recommended_on_a_first_run(self) -> None:
+        self.assertTrue(init_plan.recommend(facts()).menu_app)
+
+    def test_a_rerun_goes_by_the_config_so_an_install_without_the_app_stays_without(self) -> None:
+        self.assertFalse(init_plan.recommend(facts(env={"BOSUN_DAYS": "MTWRF"})).menu_app)
+        self.assertFalse(init_plan.recommend(facts(env={"BOSUN_MENU_APP": "0"})).menu_app)
+        self.assertTrue(init_plan.recommend(facts(env={"BOSUN_MENU_APP": "1"})).menu_app)
+
     def test_someone_elses_repeating_wake_is_not_replaced(self) -> None:
         self.assertFalse(init_plan.recommend(facts(repeating_wake="wake at 6:00AM")).wake)
         self.assertTrue(init_plan.recommend(facts()).wake)
@@ -465,9 +473,23 @@ class PlanTest(unittest.TestCase):
         unattended = init_plan.unattended(the_facts, recommended)
         self.assertEqual((unattended.repos, unattended.orchestrator_connectors), ((), ""))
         self.assertEqual(
-            replace(unattended, repos=recommended.repos, orchestrator_connectors="acme-local"), recommended
+            replace(
+                unattended,
+                repos=recommended.repos,
+                orchestrator_connectors="acme-local",
+                menu_app=recommended.menu_app,
+            ),
+            recommended,
         )
         self.assertEqual(init_plan.unattended_note(the_facts, unattended), init_plan.UNATTENDED_NOTE)
+
+    def test_unattended_first_run_skips_the_menu_bar_app_nobody_asked_for(self) -> None:
+        the_facts = facts(repos=(use("api", 400),))
+        recommended = init_plan.recommend(the_facts)
+        self.assertTrue(recommended.menu_app)
+        self.assertFalse(init_plan.unattended(the_facts, recommended).menu_app)
+        rerun = self.configured(Answers(menu_app=True))
+        self.assertTrue(init_plan.unattended(rerun, init_plan.recommend(rerun)).menu_app)
 
     def test_unattended_keeps_windows_a_sessions_file_already_lists(self) -> None:
         listed = ({"name": "api", "dir": f"{HOME}/d/api"},)
@@ -741,6 +763,38 @@ class PlanTest(unittest.TestCase):
             "sudo pmset repeat wakeorpoweron MTWRF 09:01:00",
         ):
             self.assertIn(expected, text)
+
+    def test_the_menu_bar_app_turns_on_its_setting_and_the_consoles_background_job(self) -> None:
+        on = init_plan.parse_env(init_plan.render_env(Answers(menu_app=True)))
+        self.assertEqual((on["BOSUN_MENU_APP"], on["BOSUN_CONSOLE_ALWAYS"]), ("1", "1"))
+        off = init_plan.parse_env(init_plan.render_env(Answers(menu_app=False)))
+        self.assertEqual(off["BOSUN_MENU_APP"], "0")
+        self.assertNotIn("BOSUN_CONSOLE_ALWAYS", off)  # a console job you set up yourself stays yours
+
+    def test_a_rerun_without_the_app_leaves_an_always_on_console_as_it_was(self) -> None:
+        text = init_plan.render_env(Answers(menu_app=True))
+        merged = init_plan.parse_env(init_plan.merge_env(text, Answers(menu_app=False)))
+        self.assertEqual((merged["BOSUN_MENU_APP"], merged["BOSUN_CONSOLE_ALWAYS"]), ("0", "1"))
+
+    def test_the_plan_says_it_installs_the_app_and_turns_on_open_at_login(self) -> None:
+        wanted = self.plan(facts(), Answers(menu_app=True))
+        self.assertTrue(wanted.menu_app)
+        text = init_plan.render_plan(wanted, Answers(menu_app=True), facts(), "/Users/me/.config/bosun")
+        self.assertIn("bosun app install", text)
+        self.assertIn("bosun app login on", text)
+        unwanted = self.plan(facts(), Answers(menu_app=False))
+        self.assertFalse(unwanted.menu_app)
+        self.assertNotIn(
+            "bosun app",
+            init_plan.render_plan(unwanted, Answers(menu_app=False), facts(), "/Users/me/.config/bosun"),
+        )
+
+    def test_the_menu_app_answer_is_a_yes_or_no_in_an_answers_file(self) -> None:
+        base = Answers()
+        self.assertFalse(init_plan.answers_from_json({"menu_app": False}, base).menu_app)
+        with self.assertRaises(AnswersError):
+            init_plan.answers_from_json({"menu_app": "yes"}, base)
+        self.assertIs(init_plan.answers_to_json(base)["menu_app"], True)
 
     def test_days_read_naturally(self) -> None:
         for letters, words in (
