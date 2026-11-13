@@ -106,8 +106,8 @@ jobs:
   #
   # Off until the feature-complete MVP (2026-11-13, the repo owner's decision): it takes 15-20
   # minutes on a scarce macOS runner per pull request, while basic features are still being built.
-  # The smoke suite still runs locally (the pre-push hook, `tests/smoke.sh`). To turn it back on,
-  # remove the `if` line (or set the repository variable CI_SMOKE to true; actionlint refuses a
+  # The smoke suite still runs locally, for the sections a push reaches (the pre-push hook,
+  # `tests/smoke.sh --pre-push`). To turn it back on, remove the `if` line (or set the repository variable CI_SMOKE to true; actionlint refuses a
   # constant `if: false`) and re-add `smoke` to .github/rulesets/main.json's required checks, then
   # apply the ruleset. While off it is skipped in merge groups too, and the queue does not
   # wait on it.

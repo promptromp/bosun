@@ -1,7 +1,7 @@
 #!/bin/bash
 # Hermetic smoke tests: temp HOME, fixture sessions, isolated tmux socket, no Claude calls,
 # no launchd or pmset changes.
-# Run: tests/smoke.sh [-x] [--with-unit] [--only <id>[,<id>...] | --last-failed]     or: tests/smoke.sh --list
+# Run: tests/smoke.sh [-x] [--with-unit] [--only <id>[,<id>...] | --last-failed | --changed <git ref>]     or: tests/smoke.sh --list
 # The pre-push hook runs tests/smoke.sh --pre-push: see below.
 # End to end only by default: the commit hook runs the unit tests a change reaches, and CI all of
 # them. --with-unit runs them all first too, with a plain python3 (python3 -m unittest, no pytest).
@@ -18,14 +18,23 @@
 # with --only; it combines with -x and --with-unit. Checks outside any section (the unit tests of --with-unit,
 # the last check on the repository) are not recorded. While iterating: --only, --last-failed, -x; before
 # committing, one full run with none of them (CI and the pre-push hook run the full suite).
+# --changed <git ref> runs only the sections the change since the merge-base of <ref> and HEAD can reach (committed,
+# staged, unstaged and untracked files), each section's `covers` and tests/smoke_selection.txt being what that goes by
+# (tools/smoke_select.py: its docstring has the rules), and prints which file selected which section. It fails closed:
+# a changed file on the select-everything list, one no section covers and nothing ignores, a ref that does not resolve,
+# a selection that fails, all run the whole suite; only ignored files (the docs) run nothing, exit 0. It does not
+# combine with --only or --last-failed; it combines with -x and --with-unit.
 # --pre-push (what the pre-push hook runs) skips the suite, saying so in one line, if the tree of the commit being
 # pushed (pre-commit's PRE_COMMIT_TO_REF) passed a whole run in this checkout less than 24 hours ago, and
-# otherwise runs the whole suite as without it. A whole run (none of --only, --last-failed, -x) that ends with
-# no failure records its tree in tests/.smoke-cache/passes, but only if the tree is the same at its end as at
+# otherwise runs what --changed origin/main selects (BOSUN_SMOKE_BASE=<ref> names another base; this is the
+# build-out setting, to go back to the whole suite once the project is past its release: drop the selection from
+# the `--pre-push` branch below). BOSUN_SMOKE_FULL=1 runs the whole suite. A whole run (none of --only,
+# --last-failed, -x) that ends with no failure records its tree in tests/.smoke-cache/passes, but only if the tree is the same at its end as at
 # its start: the tree is the files on disk before the first section runs (what `git add -A` stages in a copy of
 # the index: tracked files, and untracked ones that are not git-ignored, which a commit lacking them will not match,
 # so the suite runs for it), and a run that changed or made any such file records nothing and names it.
-# BOSUN_SMOKE_NO_CACHE=1 makes --pre-push run the suite anyway (the one way, and not SKIP=). Doubt of any kind
+# BOSUN_SMOKE_NO_CACHE=1 makes --pre-push ignore the pass record (the one way, and not SKIP=): it runs what the change
+# reaches, and with BOSUN_SMOKE_FULL=1 the whole suite. Doubt of any kind
 # (the record is unreadable or older, the tree differs, git fails) runs the suite. CI never uses --pre-push.
 # A section that cannot run alone either sets up what it uses itself or says `needs <id>`.
 # `always_run` marks where the code every run needs resumes after a section: the setup, and the last
@@ -36,9 +45,10 @@ set -uo pipefail
 
 # A marker is a line that starts with `section` (indented inside the one `if` that guards the install
 # tests). tests/unit/test_smoke_sections.py holds the file to this: every marker parses, ids are unique.
-SECTION_MARKER='^[[:space:]]*section[[:space:]]+([a-z0-9-]+)[[:space:]]+"([^"]*)"([[:space:]]+needs[[:space:]]+([a-z0-9,-]+))?[[:space:]]*$'
+SECTION_MARKER='^[[:space:]]*section[[:space:]]+([a-z0-9-]+)[[:space:]]+"([^"]*)"([[:space:]]+needs[[:space:]]+([a-z0-9,-]+))?([[:space:]]+covers[[:space:]]+'\''([^'\'']*)'\'')?[[:space:]]*$'
 
-# section <id> "<name>" [needs <id>,...]: the heading of a section, which runs up to the next marker.
+# section <id> "<name>" [needs <id>,...] [covers '<glob>,...']: the heading of a section, which runs up to the next
+# marker. `covers` is what --changed (and the pre-push hook) go by: the files the section runs or reads (see below).
 section() {
   section_done
   CURRENT_SECTION="$1"
@@ -54,7 +64,7 @@ always_run() {
 }
 
 smoke_usage() {
-  echo "usage: tests/smoke.sh [-x] [--with-unit] [--only <id>[,<id>...] | --last-failed | --pre-push]  |  tests/smoke.sh --list" >&2
+  echo "usage: tests/smoke.sh [-x] [--with-unit] [--only <id>[,<id>...] | --last-failed | --changed <git ref> | --pre-push]  |  tests/smoke.sh --list" >&2
   exit 2
 }
 
@@ -159,8 +169,30 @@ run_chosen() {
     exec "$BASH" "$script" ${unit_flag:+"$unit_flag"} ${exit_flag:+"$exit_flag"}
 }
 
+# select_changed <git ref>: the sections the change since <ref> can reach (tools/smoke_select.py reads their
+# `covers` and tests/smoke_selection.txt; its docstring says how). Prints its report, and sets SELECTED to `full`,
+# `none` or `only` (with SELECTED_IDS). Whatever goes wrong (no python3, no answer, a ref that does not resolve) is `full`.
+SELECTED=full
+SELECTED_IDS=""
+select_changed() {
+  local out last
+  out="$(python3 "$ROOT/tools/smoke_select.py" --root "$ROOT" --script "$SCRIPT" \
+    --selection "$ROOT/tests/smoke_selection.txt" --base "$1" 2>&1)"
+  last="${out##*$'\n'}"
+  case "$last" in
+    "=> none" | "=> full") SELECTED="${last#=> }" ;;
+    "=> only "?*)
+      SELECTED=only
+      SELECTED_IDS="${last#=> only }"
+      ;;
+    *) out="smoke selection: the whole suite: tools/smoke_select.py gave no answer${out:+: $out}" ;;
+  esac
+  echo "${out%$'\n'*}"
+}
+
 WITH_UNIT=0
 ONLY=""
+CHANGED=""
 LIST=0
 EXITFIRST=0
 LAST_FAILED=0
@@ -172,6 +204,11 @@ while [ $# -gt 0 ]; do
     -x | --exitfirst) EXITFIRST=1 ;;
     --last-failed | --lf) LAST_FAILED=1 ;;
     --pre-push) PRE_PUSH=1 ;;
+    --changed)
+      [ $# -ge 2 ] && [ -n "$2" ] || smoke_usage
+      CHANGED="$2"
+      shift
+      ;;
     --only)
       [ $# -ge 2 ] && [ -n "$2" ] || smoke_usage
       ONLY="$2"
@@ -181,8 +218,9 @@ while [ $# -gt 0 ]; do
   esac
   shift
 done
-[ "$LAST_FAILED" = 0 ] || [ -z "$ONLY" ] || smoke_usage                             # the two choose sections in their own ways
-[ "$PRE_PUSH" = 0 ] || { [ -z "$ONLY" ] && [ "$LAST_FAILED" = 0 ]; } || smoke_usage # a hook runs the whole suite
+[ "$LAST_FAILED" = 0 ] || [ -z "$ONLY" ] || smoke_usage                                                  # the two choose sections in their own ways
+[ "$PRE_PUSH" = 0 ] || { [ -z "$ONLY" ] && [ "$LAST_FAILED" = 0 ] && [ -z "$CHANGED" ]; } || smoke_usage # a hook chooses by itself
+[ -z "$CHANGED" ] || { [ -z "$ONLY" ] && [ "$LAST_FAILED" = 0 ]; } || smoke_usage                        # three ways to choose sections
 export PYTHONDONTWRITEBYTECODE=1
 # Never touch the repository this runs from: a git hook (pre-push) or another repository's tooling
 # may export GIT_DIR, GIT_WORK_TREE, GIT_INDEX_FILE, GIT_COMMON_DIR, GIT_CONFIG*, ... and every git
@@ -212,6 +250,19 @@ fi
 if [ "$PRE_PUSH" = 1 ]; then # the hook: nothing to run if this tree already passed, here, a whole run
   pre_push_skip "$ROOT" "$PASSES_FILE" "${PRE_COMMIT_TO_REF:-}" "$(date +%s)"
   case $? in 0 | 3) exit 0 ;; esac
+  # otherwise the sections the change from origin/main can reach (the build-out setting), or all of them
+  if [ "${BOSUN_SMOKE_FULL:-}" = 1 ]; then
+    echo "BOSUN_SMOKE_FULL=1: running the whole suite"
+  else
+    CHANGED="${BOSUN_SMOKE_BASE:-origin/main}"
+  fi
+fi
+if [ -n "$CHANGED" ]; then
+  select_changed "$CHANGED"
+  case "$SELECTED" in
+    none) exit 0 ;;
+    only) ONLY="$SELECTED_IDS" ;;
+  esac
 fi
 if [ "$LAST_FAILED" = 1 ]; then
   ONLY="$(failed_sections "$SCRIPT" "$CACHE_FILE")"
@@ -417,7 +468,7 @@ fakes_first() { # [home]: with HOME as <home> (the run's, by default)
 fakes_first
 FAKES_READY=1
 
-section syntax "syntax"
+section syntax "syntax" covers 'lib/**,libexec/**,install.sh,uninstall.sh,get.sh,console/**,tests/js_check.sh,tests/js/**'
 for script in "$ROOT"/bin/bosun "$ROOT"/libexec/bosun-* "$ROOT"/install.sh "$ROOT"/uninstall.sh "$ROOT"/lib/*.sh; do
   head -1 "$script" | grep -q python && continue
   check "bash -n $(basename "$script")" bash -n "$script"
@@ -609,7 +660,7 @@ sessions:
     autocompact: 500000
 EOF
 
-section resolve "resolve"
+section resolve "resolve" covers 'libexec/bosun-resolve'
 check "picks most recent exact match" test "$("$BOSUN" resolve "$REPO_A" alpha)" = 11111111-0000-0000-0000-000000000002
 check "does not prefix-match" test "$("$BOSUN" resolve "$REPO_A" alpha-extended)" = 11111111-0000-0000-0000-000000000003
 check "unknown name exits 1" bash -c "! '$BOSUN' resolve '$REPO_B' gamma"
@@ -621,7 +672,7 @@ check "an unreadable transcript does not break the lookup" test "$("$BOSUN" reso
 printf '{"pid":%d,"sessionId":"33333333-0000-0000-0000-000000000001","startedAt":1000}' $$ >"$HOME/.claude/sessions/stale.json"
 check "--live skips a record whose pid was reused" bash -c '"$1" resolve --live 33333333-0000-0000-0000-000000000001; [ $? -eq 3 ]' _ "$BOSUN"
 
-section launch-dry-run "launch (dry run)"
+section launch-dry-run "launch (dry run)" covers 'libexec/bosun-launch,libexec/bosun-hook,libexec/bosun-status,libexec/bosun-send'
 out="$(cd "$REPO_A" && "$BOSUN" launch alpha 2>&1)"
 check "resumes by UUID with name, remote control and drain prompt" contains "$out" "--name alpha --remote-control alpha --resume 11111111-0000-0000-0000-000000000002"
 check "the prompt follows --, so a leading dash is not an option" contains "$out" "--resume 11111111-0000-0000-0000-000000000002 -- Bosun\\ resumed"
@@ -690,7 +741,7 @@ check "refuses to resume a live session" contains "$out" "already running as pid
 out="$(cd "$REPO_B" && "$BOSUN" launch gamma 2>&1)"
 check "starts a new named session when none exists" contains "$out" "starting a new one"
 
-section config-loading "config loading"
+section config-loading "config loading" covers 'libexec/bosun-status,examples/generic/bosun.env'
 CFG="$WORK/cfg-test"
 mkdir -p "$CFG"
 cat >"$WORK/config-child.sh" <<'SH'
@@ -709,7 +760,7 @@ check "a bosun.env that does not parse is refused in bash's own words, none of i
 check "... while --help still answers" env BOSUN_CONFIG_DIR="$CFG" "$BOSUN" status --help
 rm -f "$CFG/bosun.env"
 
-section common-functions "lib/common.sh functions"
+section common-functions "lib/common.sh functions" covers 'libexec/bosun-launch'
 fn() { bash -c 'source "$1/lib/common.sh"; shift; "$@"' _ "$ROOT" "$@"; }
 check "shift_time adds minutes" test "$(fn shift_time 08:00 1)" = 08:01
 check "shift_time wraps past midnight" test "$(fn shift_time 23:59 2)" = 00:01
@@ -793,7 +844,7 @@ YML
 check "a window's model reads right through a tab-separated read, in bash 3.2 too" test "$(BOSUN_SESSIONS_FILE="$WORK/specs-agents.yml" BOSUN_MODEL=acme-model /bin/bash -c 'source "$1/lib/common.sh"; load_config; need_profiles; IFS=$'"'"'\t'"'"' read -r model effort <<<"$(window_model_effort cl-window)"; echo "$model"' _ "$ROOT")" = acme-model
 check "bosun launch refuses a window whose agent has no profile" fails_with "no agent 'acme-agent': bosun knows claude, codex" bash -c 'cd "$1" && BOSUN_SESSIONS_FILE="$2" BOSUN_LAUNCH_DRY_RUN=1 "$3" launch ghost-agent </dev/null' _ "$REPO_A" "$WORK/ghost-sessions.yml" "$BOSUN"
 
-section example-configs "example configs"
+section example-configs "example configs" covers 'examples/**'
 check "the generic example lists every setting with its default value" bash -c '
   dump() { for v in $(compgen -v BOSUN_ | grep -vx "BOSUN_ROOT\|BOSUN_INSTALL\|BOSUN_CMD\|BOSUN_PASSTHROUGH_VARS\|BOSUN_CONFIG_DIR"); do printf "%s=%s\n" "$v" "${!v}"; done; }
   defaults="$(env -i HOME="$HOME" bash -c "source \"\$1/lib/common.sh\"; set_defaults; $(declare -f dump); dump" _ "$1")"
@@ -805,7 +856,7 @@ check "the example configs only set known settings" bash -c '
     for key in $(grep -oE "^BOSUN_[A-Z_]+=" "$f" | tr -d =); do grep -qx "$key" <<<"$known" || { echo "$f: $key"; exit 1; }; done
   done' _ "$ROOT"
 
-section templates "templates"
+section templates "templates" covers 'templates/**,libexec/bosun-learn,libexec/bosun-watchdog'
 plist="$(bash -c "source '$ROOT/lib/common.sh'; load_config; render_launchd_plist com.example.test 08:00 MTWRF '' BOSUN_TRIGGER=launchd")"
 check "launchd plist is valid" plutil -lint - <<<"$plist"
 check "launchd plist has weekday schedule" contains "$plist" "<key>Weekday</key><integer>5</integer>"
@@ -817,7 +868,7 @@ plist="$(bash -c "source '$ROOT/lib/common.sh'; load_config; render_learn_plist"
 check "the learning agent's plist is valid" plutil -lint - <<<"$plist"
 check "... runs learn --scheduled daily at BOSUN_LEARN_AT under its own label" bash -c 'grep -q "<string>com.bosun.morning.learn</string>" <<<"$1" && grep -q "learn --scheduled" <<<"$1" && grep -q "<key>Hour</key><integer>18</integer><key>Minute</key><integer>30</integer>" <<<"$1"' _ "$plist"
 
-section two-paths "two paths"
+section two-paths "two paths" covers 'libexec/bosun-launch,lib/install_paths.py'
 V1="$(version_folder v1)"
 ln -s bosun-versions/v1 "$WORK/share/bosun" # the install link, as an update leaves it
 LINK="$(cd "$WORK/share" && pwd -P)/bosun"
@@ -864,7 +915,7 @@ check "a version's plists run the link" contains "$plists" "$LINK/"
 check "... never its own folder" not_contains "$plists" "bosun-versions/"
 check "a version's window command line names the link" contains "$(bash -c 'source "$1/lib/common.sh"; load_config; build_launch_command alpha; printf "%s\\n" "${launch_cmd[@]}"' _ "$V1")" "$LINK/bin/bosun"
 
-section window-list "window list"
+section window-list "window list" covers 'libexec/bosun-checkin,examples/generic/sessions.yml'
 specs() { bash -c 'source "$1/lib/common.sh"; load_config; window_specs' _ "$ROOT"; }
 check "one window per session, without orchestrator or checkin when disabled" test "$(specs | cut -f1,3 | tr '\t\n' ': ')" = "alpha:session beta:session gamma:session "
 out="$(BOSUN_ORCHESTRATOR=orch BOSUN_ORCHESTRATOR_DIR="$REPO_A" specs | cut -f1,3 | tr '\t\n' ': ')"
@@ -873,7 +924,7 @@ check "no checkin window when check-ins are off" bash -c '! BOSUN_ORCHESTRATOR=o
 check "a checkin window for events alone when asked" bash -c 'BOSUN_ORCHESTRATOR=orch BOSUN_CHECKIN_MINUTES=0 BOSUN_EVENTS_ENABLED=1 BOSUN_EVENTS_WITHOUT_CHECKINS=1 bash -c "source \"\$1/lib/common.sh\"; load_config; window_specs" _ "$1" | grep -q "^checkin"' _ "$ROOT"
 check "events alone need events on" bash -c '! BOSUN_ORCHESTRATOR=orch BOSUN_CHECKIN_MINUTES=0 BOSUN_EVENTS_WITHOUT_CHECKINS=1 bash -c "source \"\$1/lib/common.sh\"; load_config; window_specs" _ "$1" | grep -q checkin' _ "$ROOT"
 
-section ledger "ledger"
+section ledger "ledger" covers 'libexec/bosun-ledger,libexec/bosun-resolve'
 check "upsert creates in the initial state" contains "$(L upsert 'review:o/r#1' --kind review-request --title 'Fix X' --url https://github.com/o/r/pull/1)" "created: review:o/r#1 [review-request] state=requested"
 check "upsert is idempotent" contains "$(L upsert 'review:o/r#1' --kind review-request --title 'Fix X')" "unchanged"
 check "unknown kind is rejected" fails_with "unknown kind" "$BOSUN" ledger upsert x:1 --kind nope
@@ -933,7 +984,7 @@ check "every write went through the journal" test -d "$BOSUN_STATE_DIR/journal/l
 check "... and ledger.json is its rebuild, after 20 writers at once too" journal_rebuilds "$BOSUN_STATE_DIR"
 check "ledger validate --journal agrees: the ledger is valid and its journal rebuilds it" L validate --journal
 
-section outreach "outreach (waiting on other people)"
+section outreach "outreach (waiting on other people)" covers 'libexec/bosun-delegate,libexec/bosun-ledger'
 L upsert 'slack:C5/1' --kind mention --title 'template question' >/dev/null
 L record-delegation 'slack:C5/1' --window exporter --task new-work >/dev/null
 out="$(L reach-out 'slack:C5/1' --to 'Dana (product)' --purpose decision --subject 'Keep the template unchanged?' --option a --option b)"
@@ -971,7 +1022,7 @@ out="$(L reach-out 'slack:C5/2' --to Priya --purpose fyi --subject 'One more com
 check "a one-way (fyi) message is done once sent" contains "$(L sent "${out%%$'\n'*}" --ref 'https://acme.example.com/fyi')" "draft -> sent -> applied (fyi: one-way, no reply expected)"
 check "upsert keeps an outreach's subject and title one" contains "$(L upsert "$HEADER" --field 'subject=And the header row?' && L list --open)" "$HEADER  [outreach: sent] - And the header row?"
 
-section tasks-links-tickets "tasks, links and tickets" needs outreach
+section tasks-links-tickets "tasks, links and tickets" needs outreach covers 'libexec/bosun-delegate,libexec/bosun-ledger'
 out="$(L spawn "$OUT1" --title 'Fix the PDF renderer' --ask 'apply the fix there' --via 'user: go ahead')"
 TASK="${out%%$'\n'*}"
 check "spawn prints the new task's id first, minted on the UTC day" bash -c '[[ $1 =~ ^task:$2/$3$ ]]' _ "$TASK" "$(date -u +%F)" "$MINTED"
@@ -1003,7 +1054,7 @@ check "fold is idempotent" contains "$(L fold "$FOLDED" --into "$TASK")" "unchan
 check "list shows the fold from both ends" bash -c 'out="$("$1" ledger list)"; grep -q "| folded into $3" <<<"$out" && grep -q "| absorbs $2" <<<"$out"' _ "$BOSUN" "$FOLDED" "$TASK"
 check "fold refuses a finished target" fails_with "add --force-closed-target" "$BOSUN" ledger fold "$HEADER" --into 'slack:C5/1'
 
-section workstreams "workstreams"
+section workstreams "workstreams" covers 'libexec/bosun-ledger,examples/generic/workstreams.json'
 check "ws add creates a workstream with an alias" contains "$(L ws add widget-gen --title 'Automated widget generation' --epic WID-100 --alias widgets)" "created: ws:widget-gen [workstream: active]"
 check "a workstream holds two levels at most" fails_with "at most 2" bash -c '"$1" ledger ws add widget-ui --title UI --parent widgets >/dev/null && "$1" ledger ws add widget-ui-dark --title Dark --parent ws:widget-ui' _ "$BOSUN"
 L upsert 'mypr:acme/widgets#12' --kind my-pr --title 'Widget template cache' >/dev/null
@@ -1028,7 +1079,7 @@ L ws set-state widgets active --note reopened >/dev/null
 check "ws list counts by how items were assigned" contains "$(L ws list)" "ws:widget-gen  [active] Automated widget generation | 4 item(s) (explicit 3, inherited 1), 4 open"
 rm "$BOSUN_CONFIG_DIR/workstreams.json"
 
-section repo-window-prompts "what I say in a repo window, and what a window works on" needs tasks-links-tickets
+section repo-window-prompts "what I say in a repo window, and what a window works on" needs tasks-links-tickets covers 'libexec/bosun-launch,libexec/bosun-ledger'
 said_payload='{"hook_event_name":"UserPromptSubmit","session_id":"s-1","prompt":"go with option b for the suites"}'
 check "the prompt hook does nothing while events are off" bash -c '"$1" hook user-prompt --window exporter <<<"$2" && [ "$("$1" ledger said)" = "(nothing I said in a repo window matches)" ]' _ "$BOSUN" "$said_payload"
 check "the prompt hook records what I type on the item the window holds" bash -c '
@@ -1058,7 +1109,7 @@ check "with events on, repo sessions launch with the prompt hook" contains "$out
 check "... and without, they do not" bash -c '! grep -q "user-prompt" <<<"$1"' _ "$(cd "$REPO_A" && "$BOSUN" launch alpha 2>&1)"
 check "ledger.json is still the journal's rebuild after outreach, tasks, workstreams and the hook" journal_rebuilds "$BOSUN_STATE_DIR"
 
-section repo-mask "repo mask"
+section repo-mask "repo mask" covers 'libexec/bosun-ledger'
 mask_check() { # <mask> <repo>
   bash -c 'source "$1/lib/common.sh"; BOSUN_REPO_MASK="$2"; repo_in_mask "$3"' _ "$ROOT" "$1" "$2"
 }
@@ -1072,7 +1123,7 @@ check "ledger rejects items outside the mask" fails_with "outside BOSUN_REPO_MAS
 check "ledger accepts items inside the mask" contains "$(BOSUN_REPO_MASK="acme/*" L upsert 'mypr:acme/api#1' --kind my-pr)" "created"
 check "mask does not apply to non-repo items" contains "$(BOSUN_REPO_MASK="acme/*" L upsert 'slack:C9/1' --kind mention)" "created"
 
-section my-prs "my-prs (fake gh)"
+section my-prs "my-prs (fake gh)" covers 'libexec/bosun-my-prs'
 mkdir -p "$HOME/.local/bin"
 printf '#!/bin/sh\nexit 0\n' >"$HOME/.local/bin/osascript" # no real notifications from tests
 chmod +x "$HOME/.local/bin/osascript"
@@ -1104,7 +1155,7 @@ check "--since accepts a date" grep -qx -- "--updated=>=2026-05-01" "$WORK/fake-
 check "--since rejects nonsense" fails_with "bad window" "$BOSUN" my-prs --since soon
 rm "$HOME/.local/bin/gh"
 
-section context "context (fake gh)" needs repo-mask
+section context "context (fake gh)" needs repo-mask covers 'libexec/bosun-context'
 printf '#!/bin/sh\necho octo-me\n' >"$HOME/.local/bin/gh"
 chmod +x "$HOME/.local/bin/gh"
 for slug in acme/api personal/x; do
@@ -1117,7 +1168,7 @@ check "context says when the session is not running" contains "$out" "(session n
 check "context lists the open ledger items" contains "$out" "slack:C9/1"
 rm "$HOME/.local/bin/gh"
 
-section orchestrator "orchestrator"
+section orchestrator "orchestrator" covers 'libexec/bosun-delegate,libexec/bosun-guard,libexec/bosun-launch,libexec/bosun-send,libexec/bosun-update'
 out="$(cd "$REPO_A" && BOSUN_ORCHESTRATOR=orch "$BOSUN" launch orch 2>&1)"
 check "orchestrator starts a dated conversation" contains "$out" "--name orch-$(date +%F) --remote-control orch"
 check "orchestrator runs in auto mode, with its model and effort before the long policy" contains "$out" "--permission-mode auto --model opus --settings"
@@ -1189,7 +1240,7 @@ check "guard allows delegate --update" test "$(guard_says "bosun delegate --upda
 more
 EOF")" = ""
 
-section approvals "approvals"
+section approvals "approvals" covers 'libexec/bosun-guard,libexec/bosun-launch,libexec/bosun-ledger'
 out="$(cd "$REPO_A" && BOSUN_ORCHESTRATOR=orch "$BOSUN" launch orch 2>&1)"
 check "approvals off: the orchestrator's launch has no approval hooks" bash -c '! grep -q -- "--permission-request" <<<"$1" && ! grep -q -- "--post-tool-use" <<<"$1" && ! grep -q PostToolUse <<<"$1"' _ "$out"
 out="$(cd "$REPO_A" && BOSUN_APPROVALS_ENABLED=1 BOSUN_ORCHESTRATOR=orch "$BOSUN" launch orch 2>&1)"
@@ -1233,7 +1284,7 @@ check "resolve-carried-out finds nothing left to settle" contains "$(ap ledger r
 unset BOSUN_APPROVALS_ENABLED
 check "with approvals off the post hook does nothing" test -z "$(ap guard --post-tool-use <<<"$post")"
 
-section connectors "connectors (fake claude mcp list)"
+section connectors "connectors (fake claude mcp list)" covers 'libexec/bosun-doctor,libexec/bosun-launch,lib/connectors*.py,lib/claude_state.py,lib/codex_state.py'
 # `claude mcp list` prints $WORK/mcp-list.out, or fails while there is none; each call is recorded.
 cat >"$WORK/mcp-claude" <<FAKE
 #!/bin/bash
@@ -1427,7 +1478,7 @@ check "... and so does its launch" fails_with "$HOME/.claude/settings.json allow
 rm -f "$HOME/.claude/settings.json"
 rm -f "$WORK/mcp-claude.calls" "$BOSUN_STATE_DIR/connectors.json" "$LAUNCH_LOG"
 
-section knowledge "knowledge (kg, fixture acme knowledge base)"
+section knowledge "knowledge (kg, fixture acme knowledge base)" covers 'libexec/bosun-kg,libexec/bosun-context,tests/fixtures/knowledge/**'
 out="$(kg import "$KG_FIXTURE" 2>&1)"
 check "import is a dry run first: counts and refusals, nothing written" bash -c 'grep -q "confirmed automatically: 0; waiting for review: 20" <<<"$1" && grep -q "refused: 2 people whitelist" <<<"$1" && [ ! -e "$2" ]' _ "$out" "$KG_DIR"
 check "import --apply --auto-confirm writes the knowledge base" contains "$(kg import "$KG_FIXTURE" --apply --auto-confirm 2>&1)" "confirmed automatically: 6; waiting for review: 14"
@@ -1474,7 +1525,7 @@ printf '#!/bin/sh\necho "2.0.0 (Claude Code)"\n' >"$WORK/fake-claude"
 chmod +x "$WORK/fake-claude"
 export BOSUN_CLAUDE_BIN="$WORK/fake-claude"
 
-section tmux-session "tmux session (isolated socket, dry-run windows)"
+section tmux-session "tmux session (isolated socket, dry-run windows)" covers 'libexec/bosun-start,libexec/bosun-stop,libexec/bosun-send,libexec/bosun-refresh,libexec/bosun-ledger,lib/run_locked.py'
 "$BOSUN" start >/dev/null 2>&1
 wait_for 30 has_windows "alpha beta gamma "
 windows="$(tmux -L "$SOCKET" list-windows -t "=smoke" -F '#{window_name}' 2>/dev/null | tr '\n' ' ')"
@@ -1511,7 +1562,7 @@ check "setup rejects unknown arguments" bash -c '! "$1" setup --dryrun 2>/dev/nu
 "$BOSUN" stop >/dev/null 2>&1
 check "stop kills the session" bash -c "! tmux -L '$SOCKET' has-session -t '=smoke'"
 
-section refresh "refresh (fake Claude processes and status records)"
+section refresh "refresh (fake Claude processes and status records)" covers 'libexec/bosun-refresh,libexec/bosun-send,libexec/bosun-start,libexec/bosun-ledger,lib/claude_state.py'
 "$BOSUN" start >/dev/null 2>&1
 wait_for 30 has_windows "alpha beta gamma "
 alpha_pid="$(fake_claude alpha idle 1.0.0 3600)"
@@ -1603,7 +1654,7 @@ printf '{"pid":%d,"status":"waiting","version":"2.0.0","statusUpdatedAt":%d}' "$
 check "refresh leaves a session waiting for you alone" contains "$("$BOSUN" refresh --dry-run gamma 2>&1)" "gamma: waiting (a permission prompt or question waits for you); leaving alone"
 check "send refuses a session waiting for you" contains "$("$BOSUN" send gamma hello 2>&1)" "not pasting into it"
 
-section console-sessions "console sessions and health (these fake Claude windows; it never starts Claude)" needs refresh
+section console-sessions "console sessions and health (these fake Claude windows; it never starts Claude)" needs refresh covers 'libexec/bosun-console,libexec/bosun-refresh,libexec/bosun-send,libexec/bosun-stop,libexec/bosun-update'
 printf '#!/bin/sh\ntouch "%s"\nexit 1\n' "$WORK/claude-was-started" >"$WORK/no-agent"
 chmod +x "$WORK/no-agent"
 touch "$WORK/before-console"
@@ -1737,7 +1788,7 @@ rm -f "$BOSUN_CONFIG_DIR/bosun.env"
 cp "$WORK/sessions.yml.on-claude" "$BOSUN_CONFIG_DIR/sessions.yml"
 "$BOSUN" stop >/dev/null 2>&1
 
-section restart-shells "restarts leave no shells behind (zsh with a prompt helper in its startup file)"
+section restart-shells "restarts leave no shells behind (zsh with a prompt helper in its startup file)" covers 'libexec/bosun-refresh,libexec/bosun-start,libexec/bosun-stop'
 # Like a prompt theme's git-status daemon: interactive startup forks a helper off (detached, so
 # launchd adopts it at once), and only the shell's first prompt lets it exit. A pane's launch shell
 # (zsh -lic) never shows a prompt. The cap ends a leaked helper after 5 minutes.
@@ -1790,7 +1841,7 @@ export SHELL="$saved_shell"
 if [ -n "$saved_zdotdir" ]; then export ZDOTDIR="$saved_zdotdir"; else unset ZDOTDIR; fi
 rm -f "$HOME/.zshrc" "$HOME"/helper.*
 
-section orphans "orphans (fake processes adopted by launchd)"
+section orphans "orphans (fake processes adopted by launchd)" covers 'libexec/bosun-launch,libexec/bosun-orphans'
 FAKE_PIDS="$WORK/fake-orphan-pids"
 fake_process() { # <command line> [child]: a process launchd adopts that shows <command line>; with "child", it has one
   (FAKE_PIDS="$FAKE_PIDS" perl -e 'open(my $f, ">>", $ENV{FAKE_PIDS}) or die; print $f "$$\n"; close $f;
@@ -1822,7 +1873,7 @@ done <"$FAKE_PIDS"
 # From here on the session has an orchestrator window.
 always_run
 export BOSUN_ORCHESTRATOR=orch BOSUN_ORCHESTRATOR_DIR="$REPO_A"
-section orchestrator-refresh "orchestrator refresh and check-ins"
+section orchestrator-refresh "orchestrator refresh and check-ins" covers 'libexec/bosun-checkin,libexec/bosun-doctor,libexec/bosun-learn,libexec/bosun-ledger,libexec/bosun-refresh,libexec/bosun-send,libexec/bosun-start,libexec/bosun-update,libexec/bosun-watchdog,lib/update_state.py'
 "$BOSUN" start >/dev/null 2>&1
 check "start opens the orchestrator first and checkin last" wait_for 30 has_windows "orch alpha beta gamma checkin "
 runs_checkin_loop() { # the checkin window of this test session runs `bosun checkin --loop`
@@ -1968,7 +2019,7 @@ check "... logging the skip once, not on every retry" test "$(grep -c 'skip: orc
 check "... while events keep flowing during the wait" grep -q "\[events\] dry-run: " "$WORK/deferred-loop.out"
 orch_status busy 3600 orch
 
-section expired-login "expired Claude login (fake claude, fictional transcripts)" needs orchestrator-refresh
+section expired-login "expired Claude login (fake claude, fictional transcripts)" needs orchestrator-refresh covers 'libexec/bosun-checkin,libexec/bosun-status,libexec/bosun-watchdog,lib/login.py,lib/signals.py'
 ORCH_TRANSCRIPT="$(project_dir "$REPO_A")/0000000a-0000-0000-0000-000000000000.jsonl"
 mkdir -p "$(dirname "$ORCH_TRANSCRIPT")"
 login_reply() { # <seconds ago> [error fields]: a reply in the orchestrator's transcript
@@ -2010,7 +2061,7 @@ check "the dry run names it and makes no login check request" bash -c 'grep -q "
 rm -f "$ORCH_TRANSCRIPT" "$BOSUN_STATE_DIR/login.json" "$BOSUN_STATE_DIR/watchdog.json"
 printf '{"pid":%d,"status":"busy","version":"2.0.0","statusUpdatedAt":%d,"name":"orch"}' "$orch_pid" $((($(date +%s) - 3600) * 1000)) >"$HOME/.claude/sessions/$orch_pid.json"
 
-section events "events to the orchestrator (fake Claude, send dry-run)" needs ledger,repo-window-prompts,orchestrator-refresh
+section events "events to the orchestrator (fake Claude, send dry-run)" needs ledger,repo-window-prompts,orchestrator-refresh covers 'libexec/bosun-events,libexec/bosun-ledger'
 EV() { BOSUN_EVENTS_ENABLED=1 BOSUN_EVENTS_DEBOUNCE_SECONDS=0 BOSUN_EVENTS_MIN_IDLE_SECONDS=60 BOSUN_SEND_DRY_RUN=1 "$BOSUN" events "$@" 2>&1; }
 check "events are off by default" contains "$("$BOSUN" events 2>&1)" "events are off (BOSUN_EVENTS_ENABLED=0)"
 check "the earlier user-said events are pending" contains "$("$BOSUN" events --list)" "user-said exporter"
@@ -2027,7 +2078,7 @@ BOSUN_EVENTS_ENABLED=1 L report 'slack:C1/6' --summary 'found the cause, again' 
 check "a check-in covers what is pending" contains "$("$BOSUN" events --covered)" "1 pending event(s) covered by the check-in"
 check "status shows the dispatcher's last run" contains "$("$BOSUN" events --status)" "deliveries today: 1"
 
-section slack-watcher "slack watcher (fake claude with fixture JSON)" needs orchestrator-refresh
+section slack-watcher "slack watcher (fake claude with fixture JSON)" needs orchestrator-refresh covers 'libexec/bosun-checkin,libexec/bosun-events,libexec/bosun-slack-watch,libexec/bosun-watchdog'
 # The orchestrator is idle, as the section before leaves it (a dispatcher run delivers to an idle one).
 printf '{"pid":%d,"status":"idle","version":"2.0.0","statusUpdatedAt":%d,"name":"orch-%s"}' "$orch_pid" $((($(date +%s) - 3600) * 1000)) "$(date +%F)" >"$HOME/.claude/sessions/$orch_pid.json"
 # The fake prints what a real call streams: the init message with the tools it could see, then the
@@ -2075,7 +2126,7 @@ check "the watchdog checks the watcher once it is enabled" contains "$(BOSUN_EVE
 check "the check-in loop runs the watcher with events on" contains "$(BOSUN_EVENTS_ENABLED=1 "$BOSUN" checkin --dry-run 2>&1)" "dry-run: would run bosun slack-watch --scheduled"
 "$BOSUN" events --covered >/dev/null
 
-section alerts "alerts" needs orchestrator-refresh
+section alerts "alerts" needs orchestrator-refresh covers 'libexec/bosun-alert,libexec/bosun-checkin,libexec/bosun-send,libexec/bosun-watchdog,libexec/bosun-ledger'
 echo '{"result":"https://x.slack.com/archives/D1/p1","permission_denials":[],"total_cost_usd":0.02}' >"$WORK/alert-sent.json"
 cat >"$WORK/alert-claude" <<FAKE
 #!/bin/bash
@@ -2114,7 +2165,7 @@ check "without a member id, only a notification" contains "$(BOSUN_ALERT_SLACK_U
 check "send dry-run only logs" contains "$(BOSUN_SEND_DRY_RUN=1 "$BOSUN" send orch hello 2>&1)" "dry-run: would deliver to smoke:orch: hello"
 check "send --new dry-run opens nothing" bash -c 'BOSUN_SEND_DRY_RUN=1 "$1" send --new extra "$2" hi >/dev/null && ! tmux -L "$3" list-windows -t =smoke -F "#{window_name}" | grep -qx extra' _ "$BOSUN" "$REPO_A" "$SOCKET"
 
-section watchdog "watchdog (pinned clock, fake alert Claude)" needs alerts
+section watchdog "watchdog (pinned clock, fake alert Claude)" needs alerts covers 'libexec/bosun-status,libexec/bosun-stop,libexec/bosun-watchdog'
 # A label with no launchd job, so `launchctl print` (read-only) finds nothing.
 export BOSUN_LAUNCHD_LABEL="com.bosun.smoke-watchdog"
 TODAY="$(date +%F)"
@@ -2162,7 +2213,7 @@ check "outside the awake window nothing is sent" contains "$(BOSUN_WATCHDOG_NOW=
 check "status reports the watchdog" contains "$("$BOSUN" status 2>&1)" "Watchdog (com.bosun.smoke-watchdog.watchdog)"
 unset BOSUN_WATCHDOG_NOW BOSUN_DAYS BOSUN_ALERT_SLACK_USER BOSUN_LAUNCHD_LABEL
 
-section sessions-learn "sessions and learn (fake analysis Claude)"
+section sessions-learn "sessions and learn (fake analysis Claude)" covers 'libexec/bosun-learn,libexec/bosun-ledger,libexec/bosun-sessions,libexec/bosun-watchdog'
 cat >"$WORK/learn-claude" <<'EOF'
 #!/bin/bash
 cat >/dev/null
@@ -2191,7 +2242,7 @@ check "a second run does not propose it again" contains "$(LEARN --since 2h)" "n
 check "the watchdog checks the learning run once it is enabled" contains "$(BOSUN_LEARN_ENABLED=1 "$BOSUN" watchdog --status 2>&1)" "learn            "
 rm -f "$BOSUN_CONFIG_DIR/policy.md"
 
-section folder-trust "folder trust"
+section folder-trust "folder trust" covers 'libexec/bosun-trust'
 TRUST_REPO="$WORK/repos/trust-me"
 git init -q "$TRUST_REPO" && git -C "$TRUST_REPO" remote add origin git@github.com:acme/api.git
 TRUST_REPO="$(cd "$TRUST_REPO" && pwd -P)"
@@ -2204,7 +2255,7 @@ check "--check passes once trusted" "$BOSUN" trust --check "$TRUST_REPO"
 check "--revoke removes it" bash -c '"$1" trust --revoke "$2" && ! "$1" trust --check "$2"' _ "$BOSUN" "$TRUST_REPO"
 check "--any trusts any folder" "$BOSUN" trust --any "$REPO_B"
 
-section send-new-start "send --new and --start (fake Claude that registers itself)" needs folder-trust
+section send-new-start "send --new and --start (fake Claude that registers itself)" needs folder-trust covers 'libexec/bosun-delegate,libexec/bosun-ledger,libexec/bosun-refresh,libexec/bosun-send,libexec/bosun-start,libexec/bosun-stop,libexec/bosun-trust'
 cat >"$WORK/live-claude" <<FAKE
 #!/bin/bash
 if [ "\$1" = "--version" ]; then echo "2.0.0 (Claude Code)"; exit 0; fi
@@ -2404,7 +2455,7 @@ check "a finished item is not moved" fails_with "is done; a finished item takes 
 check "--start dry-run only logs" contains "$(BOSUN_SEND_DRY_RUN=1 "$BOSUN" send --start gamma hi 2>&1)" "dry-run: would start Claude in smoke:gamma"
 "$BOSUN" stop >/dev/null 2>&1
 
-section checkin-loop-timing "check-in loop timing"
+section checkin-loop-timing "check-in loop timing" covers 'libexec/bosun-checkin,libexec/bosun-chores'
 check "the loop waits one interval before the first check-in" bash -c '
   BOSUN_CHECKIN_MINUTES=1 "$1" checkin --loop >"$2" 2>&1 & pid=$!
   sleep 2; kill $pid 2>/dev/null; pkill -P $pid 2>/dev/null; wait $pid 2>/dev/null
@@ -2418,7 +2469,7 @@ check "with events alone the loop keeps running and sends no check-in" bash -c '
   kill $pid 2>/dev/null; pkill -P $pid 2>/dev/null; wait $pid 2>/dev/null
   [ "$alive" = 1 ] && ! grep -q "chores check-in" "$2"' _ "$BOSUN" "$WORK/events-loop.out"
 
-section delegate "delegate (task types)"
+section delegate "delegate (task types)" covers 'libexec/bosun-delegate,libexec/bosun-ledger,docs/orchestrator.md'
 L upsert 'review:acme/api#5' --kind review-request --title 'Add X' >/dev/null
 L upsert 'slack:C7/1' --kind mention >/dev/null
 check "--list shows every task type" bash -c 'for t in review fix-my-pr new-work investigate; do grep -q "^$t: " <<<"$1" || exit 1; done' _ "$("$BOSUN" delegate --list)"
@@ -2458,7 +2509,7 @@ check "the task table in docs/orchestrator.md matches the task files, row for ro
   table="$(sed -n "/^## Delegated tasks/,/^## /p" "$2" | grep "^| " | grep -v "^| Task |")"
   diff <(sort <<<"$1") <(sort <<<"$table")' _ "$("$BOSUN" delegate --list --markdown)" "$ROOT/docs/orchestrator.md"
 
-section chores-dry-run "chores dry run (fake claude)"
+section chores-dry-run "chores dry run (fake claude)" covers 'libexec/bosun-chores,libexec/bosun-ledger'
 cat >"$WORK/fake-claude" <<FAKE
 #!/bin/bash
 if [ "\$1" = "--version" ]; then echo "2.0.0 (Claude Code)"; exit 0; fi
@@ -2493,11 +2544,11 @@ out="$("$BOSUN" chores morning --dry-run --continue 2>&1)"
 check "--continue starts from the previous rehearsal" contains "$out" "seeded from $BOSUN_STATE_DIR/dry-runs/"
 check "--continue sees earlier items as existing" contains "$out" "(0 change(s)"
 
-section chores-options "chores options"
+section chores-options "chores options" covers 'libexec/bosun-chores'
 check "--fresh and --continue conflict" fails_with "either --fresh or --continue" "$BOSUN" chores morning --dry-run --fresh --continue
 check "--fresh needs --dry-run" fails_with "only apply to --dry-run" "$BOSUN" chores morning --fresh
 
-section pr-threads "pr-threads (fake gh)"
+section pr-threads "pr-threads (fake gh)" covers 'libexec/bosun-pr-threads'
 cat >"$WORK/threads.json" <<'JSON'
 {"data": {"repository": {"pullRequest": {"url": "https://github.com/acme/api/pull/5", "author": {"login": "me"},
   "reviews": {"nodes": [{"id": "R1", "url": "https://x/r1", "author": {"login": "rev"}, "state": "CHANGES_REQUESTED", "submittedAt": "2026-01-01T00:00:00Z", "body": ""}]},
@@ -2531,7 +2582,7 @@ check "pr-threads --awaiting-author lists only those" bash -c 'grep -q "a.py:3" 
 check "pr-threads --json parses" bash -c '"$1" pr-threads https://github.com/acme/api/pull/5 --json | jq -e ".awaiting_author == 1" >/dev/null' _ "$BOSUN"
 check "pr-threads rejects other URLs" fails_with "not a GitHub PR URL" "$BOSUN" pr-threads https://example.com/x
 
-section review-watch "review-watch (fake gh)" needs pr-threads
+section review-watch "review-watch (fake gh)" needs pr-threads covers 'libexec/bosun-delegate,libexec/bosun-ledger,libexec/bosun-review-watch'
 RW_ID='mypr:acme/api#5'
 "$BOSUN" ledger upsert "$RW_ID" --kind my-pr --title "api fix" --url https://github.com/acme/api/pull/5 >/dev/null
 "$BOSUN" ledger transition "$RW_ID" changes-requested --note "round 1" >/dev/null
@@ -2553,7 +2604,7 @@ check "review-watch records a review once" bash -c '"$1" ledger show "$2" | jq -
 check "review-watch --quiet prints nothing once it is recorded" test -z "$("$BOSUN" review-watch --id "$RW_ID" --quiet 2>&1)"
 rm "$HOME/.local/bin/gh"
 
-section impact "impact (fake gh)"
+section impact "impact (fake gh)" covers 'libexec/bosun-impact'
 cat >"$HOME/.local/bin/gh" <<'FAKE'
 #!/bin/sh
 case "$1 $2" in
@@ -2574,7 +2625,7 @@ check "... with the guardrails and the overhead fix date" bash -c 'jq -e "(.guar
 check "impact collect refuses a bad --since" fails_with "--since takes a date" "$BOSUN" impact collect --since yesterday
 rm "$HOME/.local/bin/gh"
 
-section setup-steps "setup steps (fake aws)"
+section setup-steps "setup steps (fake aws)" covers 'libexec/bosun-setup,libexec/bosun-alert,libexec/bosun-send,lib/setup-helpers.sh,examples/generic/setup.sh'
 SETUP_CFG="$WORK/setup-config"
 mkdir -p "$SETUP_CFG"
 cp "$BOSUN_CONFIG_DIR/sessions.yml" "$SETUP_CFG/"
@@ -2670,7 +2721,7 @@ check "a revoked login fails the step loudly, for the morning-failed alert" bash
 out="$(FAKE_AUTH=out LS)"
 check "logged out fails without a request" bash -c 'grep -q "FAIL: Claude Code login: claude auth status: not logged in" <<<"$1" && [ "$2" = 2 ]' _ "$out" "$(probes)"
 
-section morning-dry-run "morning (dry run)" needs setup-steps
+section morning-dry-run "morning (dry run)" needs setup-steps covers 'libexec/bosun-morning'
 out="$(BOSUN_CONFIG_DIR="$SETUP_CFG" BOSUN_NETWORK_PROBE_URL=file:///dev/null "$BOSUN" morning --dry-run --awake-minutes 5 2>&1)"
 check "morning --dry-run would hold the keep-awake" contains "$out" "dry-run: would hold keep-awake for 5 minutes"
 check "... but starts no caffeinate" test ! -f "$BOSUN_STATE_DIR/keep-awake-smoke.pid"
@@ -2679,7 +2730,7 @@ check "it previews the setup steps" contains "$out" "aws profile good is valid, 
 check "it lists the windows it would start, with model and effort" contains "$out" "alpha (session, opus/medium) -> $REPO_A"
 check "it names no agent update when no agent in use has update_args" bash -c '! grep -qE "updated |could not update|would run .*update" <<<"$1"' _ "$out"
 
-section morning-agents-update "agents: the morning's update"
+section morning-agents-update "agents: the morning's update" covers 'libexec/bosun-morning,libexec/bosun-update'
 # An agent whose profile has update_args (none of the real ones does yet): the profiles' text is a shell
 # variable, so a stub line stands in for the real table, and its command is a script that records its arguments.
 printf '#!/bin/sh\necho "$@" >"%s/stub-agent.args"\n' "$WORK" >"$WORK/stub-agent-ok"
@@ -2704,7 +2755,7 @@ check "a dry run says what it would run and runs nothing" bash -c 'grep -q "dry-
 out="$(update_stub "$WORK/stub-agent-bad")"
 check "a failed update logs its last line and is a problem word" bash -c 'grep -q "could not update Stub: network unreachable" <<<"$1" && grep -qx "update-stub" <<<"$1"' _ "$out"
 
-section start-modes "start modes"
+section start-modes "start modes" covers 'libexec/bosun-start,libexec/bosun-stop,libexec/bosun-ledger'
 "$BOSUN" start >/dev/null 2>&1
 wait_for 30 has_windows "orch alpha beta gamma checkin "
 check "drain mode refreshes without restarts" contains "$(BOSUN_ON_EXISTING=drain "$BOSUN" start 2>&1)" "mode: drain"
@@ -2714,7 +2765,7 @@ check "--restart starts the session afresh" bash -c 'grep -q "restarting existin
 check "an unknown mode is an error" fails_with "must be refresh, drain or restart" env BOSUN_ON_EXISTING=bogus "$BOSUN" start
 "$BOSUN" stop >/dev/null 2>&1
 
-section stopped-until-started "stopped until started (what bosun quit leaves: quit.json)"
+section stopped-until-started "stopped until started (what bosun quit leaves: quit.json)" covers 'libexec/bosun-learn,libexec/bosun-morning,libexec/bosun-quit,libexec/bosun-start,libexec/bosun-status,libexec/bosun-stop,libexec/bosun-watchdog,lib/quit_state.py'
 mkdir -p "$WORK/fake-caffeinate"
 printf '#!/bin/sh\nexit 0\n' >"$WORK/fake-caffeinate/caffeinate" # a real one would keep this Mac awake
 chmod +x "$WORK/fake-caffeinate/caffeinate"
@@ -2757,7 +2808,7 @@ check "with BOSUN_CONSOLE_ALWAYS=1 bosun start makes console/wanted, which the c
 check "a start with it off again takes the marker away" test ! -e "$BOSUN_STATE_DIR/console/wanted"
 "$BOSUN" stop >/dev/null 2>&1
 
-section status-json "status --json (the menu bar app's one source of how bosun is)" needs stopped-until-started
+section status-json "status --json (the menu bar app's one source of how bosun is)" needs stopped-until-started covers 'libexec/bosun-status,libexec/bosun-start,libexec/bosun-stop,lib/menu_status*.py'
 "$BOSUN" stop >/dev/null 2>&1 # what a stop made today leaves (the section before ends with it too)
 check "it prints one object with contract 1 and the documented fields, and exits 0" status_has 'd["contract"] == 1 and sorted(d) == sorted("contract level sentence detail windows running waiting keep_awake_until stopped update console problems logs".split())'
 check "... exit 0" "$BOSUN" status --json
@@ -2809,7 +2860,7 @@ if away_from_midnight; then
   cp -p "$WORK/watchdog-before-stopped.json" "$BOSUN_STATE_DIR/watchdog.json"
 fi
 
-section quit "quit (bosun quit: the plan, the wait, the order of the stop, and what one start or morning undoes)"
+section quit "quit (bosun quit: the plan, the wait, the order of the stop, and what one start or morning undoes)" covers 'libexec/bosun-morning,libexec/bosun-quit,libexec/bosun-start,libexec/bosun-status,libexec/bosun-stop,libexec/bosun-watchdog,lib/quit*.py'
 # A fake launchctl that says every job is loaded and writes down what it was told (in ~/.local/bin, which
 # common.sh puts first on the PATH; the install section below writes its own over it), and a stand-in
 # caffeinate that is only a sleep (named so bosun stop recognises it) and does not keep this Mac awake.
@@ -3005,7 +3056,7 @@ rm -f "$BOSUN_STATE_DIR/quit.json" "$BOSUN_STATE_DIR/console/wanted" "$BOSUN_STA
 # current time, so these hold whatever time the suite runs at: a window ending in 20 minutes that began 2 minutes
 # ago is inside (an end earlier than the start runs past midnight, which the window rule handles), one that is 10
 # to 20 minutes ahead is outside, and with every day but today's and yesterday's scheduled, no window holds now.
-section morning-now "morning --now (the morning run at any hour or day)" needs quit
+section morning-now "morning --now (the morning run at any hour or day)" needs quit covers 'libexec/bosun-morning,libexec/bosun-quit,libexec/bosun-stop,libexec/bosun-ledger,lib/keep_awake.py'
 today_letter="$(printf MTWRFSU | cut -c "$(date +%u)")"
 yesterday_letter="$(printf MTWRFSU | cut -c "$(date -v-1d +%u)")"
 unscheduled_days="$(printf MTWRFSU | tr -d "$today_letter$yesterday_letter")"
@@ -3087,7 +3138,7 @@ stop_keep_awake_leaves_it() { # bosun stop --keep-awake keeps the caffeinate and
 check "bosun stop --keep-awake leaves the caffeinate and its files alone; a plain stop releases them" stop_keep_awake_leaves_it
 plain_fake launchctl 113 # the fake above; this section's alone
 
-section console "console (local server on a free port, fixture ledger)"
+section console "console (local server on a free port, fixture ledger)" covers 'libexec/bosun-console,libexec/bosun-kg,console/**,tests/fixtures/console/**,tests/fixtures/knowledge/**,lib/console_*.py'
 CONSOLE_STATE="$WORK/console-state"
 mkdir -p "$CONSOLE_STATE"
 cp "$ROOT/tests/fixtures/console/acme-ledger.json" "$CONSOLE_STATE/ledger.json"
@@ -3370,7 +3421,7 @@ INSTALL_CFG="$WORK/install-config"
 PLIST="$HOME/Library/LaunchAgents/$BOSUN_LAUNCHD_LABEL.plist"
 # Never let a test touch the real launchd, pmset or sudo: only run if the fakes come first on PATH.
 if [ "$(bash -c 'source "$1/lib/common.sh"; command -v launchctl; command -v pmset; command -v sudo' _ "$ROOT" | tr '\n' ' ')" = "$HOME/.local/bin/launchctl $HOME/.local/bin/pmset $HOME/.local/bin/sudo " ]; then
-  section install "install and uninstall (fake launchctl and pmset, test label)" needs ledger,knowledge
+  section install "install and uninstall (fake launchctl and pmset, test label)" needs ledger,knowledge covers 'install.sh,templates/**,examples/**,tests/fixtures/knowledge/**,libexec/bosun-console,libexec/bosun-doctor,libexec/bosun-kg,libexec/bosun-morning,libexec/bosun-ledger'
   touch "$WORK/launchctl-fails"
   check "an install that stops at the launchd jobs fails" fails_with "could not load the launchd jobs" env BOSUN_CONFIG_DIR="$INSTALL_CFG" "$ROOT/install.sh" --example generic
   check "... and leaves ~/.local/bin/bosun unlinked, so the install line takes the install for unfinished and runs init again" test ! -e "$HOME/.local/bin/bosun"
@@ -3495,7 +3546,7 @@ assert job.get("AbandonProcessGroup") is True, job.get("AbandonProcessGroup")
   check "a second install leaves it loaded as it is" bash -c '! tail -n +$(($2 + 1)) "$1" | grep -q "launchctl bootstrap .*\.now"' _ "$WORK/system.log" "$log_lines"
 
   # --background: launchd starts the run (the job above), so that nothing it starts is the caller's child.
-  section morning-background "morning --now --background (fake launchctl)" needs install
+  section morning-background "morning --now --background (fake launchctl)" needs install covers 'install.sh,templates/launchd-now.plist,libexec/bosun-morning,libexec/bosun-doctor'
   morning_headers() { cat "$BOSUN_LOG_DIR"/morning-*.log 2>/dev/null | grep -c "=== morning run" || true; }
   bg_kickstarts() { grep -c "^launchctl kickstart gui/$(id -u)/$BOSUN_LAUNCHD_LABEL.now\$" "$WORK/system.log" || true; }
   bg_headers="$(morning_headers)"
@@ -3537,7 +3588,7 @@ assert job.get("AbandonProcessGroup") is True, job.get("AbandonProcessGroup")
   check "... and none of them asked launchctl for anything" test "$bg_before" = "$(bg_kickstarts)"
   check "--help says what --background is, without a config" contains "$(env -i HOME="$HOME" PATH="$PATH" "$BOSUN" morning --help 2>&1)" "--background"
 
-  section app "bosun app (fake curl; the stand-ins for ditto, codesign, spctl, osascript, open, swift and iconutil)"
+  section app "bosun app (fake curl; the stand-ins for ditto, codesign, spctl, osascript, open, swift and iconutil)" covers 'libexec/bosun-app,libexec/bosun-status,libexec/bosun-update,lib/app_*.py,app/build.sh,app/VERSION,app/publisher.json,app/Resources/**,templates/launchd-app.plist'
   APP_DIR="$HOME/Applications"
   APP="$APP_DIR/bosun.app"
   APP_JOB="$HOME/Library/LaunchAgents/$BOSUN_LAUNCHD_LABEL.app.plist"
@@ -3901,7 +3952,7 @@ assert job.get("AbandonProcessGroup") is True, job.get("AbandonProcessGroup")
     fail_check "the fake curl and the stand-ins for ditto, codesign, spctl, osascript, open, swift and iconutil are not first on PATH; skipped the app tests"
   fi
 
-  section uninstall "uninstall (fake launchctl, pmset and sudo, test label)" needs install,app
+  section uninstall "uninstall (fake launchctl, pmset and sudo, test label)" needs install,app covers 'uninstall.sh,install.sh,lib/claude_state.py,lib/hook.py,libexec/bosun-uninstall,libexec/bosun-trust'
   # Its own session and state: it would otherwise stop and delete what the rest of this run uses.
   un() {
     BOSUN_CONFIG_DIR="$INSTALL_CFG" BOSUN_STATE_DIR="$WORK/un-state" BOSUN_LOG_DIR="$WORK/un-state/logs" \
@@ -3987,7 +4038,7 @@ for line in sys.stdin:
   rm -f "$HOME/.local/bin/curl" "$HOME/.local/bin/swift" "$HOME/.local/bin/iconutil"
   for tool in ditto codesign spctl open osascript; do plain_fake "$tool"; done
 
-  section init "init (fake launchctl and pmset, test label)" needs install
+  section init "init (fake launchctl and pmset, test label)" needs install covers 'install.sh,uninstall.sh,lib/init*.py,lib/claude_state.py,lib/run_locked.py,libexec/bosun-init'
   export BOSUN_SKIP_PREFLIGHT=1 # what bosun needs has its own tests, on a made-up machine
   INIT_CFG="$WORK/init-config"
   INIT_REPO="$HOME/Development/init-api"
@@ -4023,7 +4074,7 @@ for line in sys.stdin:
     BOSUN_SESSION_NAME=un-test "$ROOT/uninstall.sh" --yes >/dev/null 2>&1
   unset BOSUN_SKIP_PREFLIGHT
 
-  section codex-launch "a window on Codex (launch's dry run)"
+  section codex-launch "a window on Codex (launch's dry run)" covers 'libexec/bosun-launch,libexec/bosun-hook,libexec/bosun-preflight,libexec/bosun-sessions,libexec/bosun-trust,tests/sandbox/codex-stand-in,lib/codex_state.py'
   CX_HOME="$WORK/cx-home"
   CX_REPO="$WORK/cx-repo"
   mkdir -p "$CX_HOME/sessions/2026/10/30" "$CX_REPO"
@@ -4058,7 +4109,7 @@ for line in sys.stdin:
   check "... and can take it back" bash -c 'cd "$1" && CODEX_HOME="$2" BOSUN_SESSIONS_FILE="$3" "$4" trust --revoke "$1" >/dev/null 2>&1 && ! grep -q trust_level "$2/config.toml"' _ "$CX_REPO" "$CX_HOME" "$WORK/cx-sessions.yml" "$BOSUN"
   check "preflight checks each agent in use" contains "$(CX preflight)" "Codex"
 
-  section codex-connectors "a window on Codex reaches only the servers its config names" needs codex-launch
+  section codex-connectors "a window on Codex reaches only the servers its config names" needs codex-launch covers 'libexec/bosun-doctor,libexec/bosun-launch,tests/sandbox/codex-stand-in,lib/connectors_codex.py,lib/codex_state.py'
   printf '  - name: cx-docs\n    dir: %s\n    harness: codex\n    connectors: [acme-docs]\n  - name: cx-all\n    dir: %s\n    harness: codex\n    connectors: all\n' "$CX_REPO" "$CX_REPO" >>"$WORK/cx-sessions.yml"
   # codex_launch_args <launch output>: the arguments its dry-run line hands Codex, on one line.
   codex_launch_args() {
@@ -4141,7 +4192,7 @@ for line in sys.stdin:
   check "... nor extra text after it" outputs refused codex_args_valid "" --disable apps extra
   check "... nor an unknown flag" outputs refused codex_args_valid "" --frob --disable apps
 
-  section agy-launch "a window on agy (launch, with a stand-in that records what it was started with)" needs codex-launch,setup-steps
+  section agy-launch "a window on agy (launch, with a stand-in that records what it was started with)" needs codex-launch,setup-steps covers 'libexec/bosun-launch,libexec/bosun-morning,libexec/bosun-preflight,libexec/bosun-sessions,tests/sandbox/agy-stand-in,tests/fixtures/agy/**,agents/agy-plugin/**,lib/agy_*.py,lib/connectors_agy.py'
   AGY_REPO="$WORK/agy-repo"
   mkdir -p "$AGY_REPO"
   git -C "$AGY_REPO" init -q
@@ -4291,7 +4342,7 @@ FAKE
   out="$(BOSUN_SESSIONS_FILE="$WORK/agy-sessions.yml" BOSUN_AGY_BIN="$WORK/fake-agy" BOSUN_CONFIG_DIR="$SETUP_CFG" BOSUN_NETWORK_PROBE_URL=file:///dev/null "$BOSUN" morning --dry-run --awake-minutes 5 2>&1)"
   check "the morning run would update agy with its own command" contains "$out" "dry-run: would run $WORK/fake-agy update"
 
-  section agy-windows "windows on agy (real windows, with the stand-in: tests/sandbox/agy-stand-in)" needs agy-launch
+  section agy-windows "windows on agy (real windows, with the stand-in: tests/sandbox/agy-stand-in)" needs agy-launch covers 'libexec/bosun-launch,libexec/bosun-send,libexec/bosun-quit,libexec/bosun-sessions,libexec/bosun-start,libexec/bosun-stop,tests/sandbox/agy-stand-in,tests/fixtures/agy/**,agents/agy-plugin/**,lib/agy_*.py'
   AGY_STAND_IN="$ROOT/tests/sandbox/agy-stand-in"
   AL_SOCKET="$SOCKET-agy"
   AL_STATE="$BOSUN_STATE_DIR"
@@ -4374,7 +4425,7 @@ FAKE
   al stop >/dev/null
   al_tmux kill-server 2>/dev/null
 
-  section get-sh "get.sh (a dry run: it changes nothing)"
+  section get-sh "get.sh (a dry run: it changes nothing)" covers 'get.sh,install.sh,libexec/bosun-init,libexec/bosun-update'
   check "it is plain sh" sh -n "$ROOT/get.sh"
   check "it says how to use it" bash -c 'sh "$1/get.sh" --help | grep -q "Usage: get.sh"' _ "$ROOT"
   check "it refuses what it does not know" fails_with "unknown option" sh "$ROOT/get.sh" --typo
@@ -4543,7 +4594,7 @@ FAKE
   check "... and a versions folder that is someone else's" fails_with "$G_VERSIONS is there, without bosun.git" get_dry
   check "everything in it is in functions, so a download cut short does nothing" bash -c '[ "$(tail -1 "$1/get.sh")" = "main \"\$@\"" ]' _ "$ROOT"
 
-  section update "bosun update (two local commits, fake launchctl)"
+  section update "bosun update (two local commits, fake launchctl)" covers 'install.sh,templates/launchd.plist,docs/setup.md,tests/sandbox/update_patch.sh,tests/sandbox/acme_year.py,lib/update*.py,lib/versions.py,lib/migrations.py,lib/launch_record.py,libexec/bosun-update,libexec/bosun-checkin,libexec/bosun-doctor,libexec/bosun-guard,libexec/bosun-hook,libexec/bosun-kg,libexec/bosun-launch,libexec/bosun-ledger,libexec/bosun-start'
   # An install of its own, with its own state and config. Upstream holds v1 (this working tree) and
   # v2 (tests/sandbox/update_patch.sh: the ledger's format 2, with a migration that sleeps
   # UPDATE_PATCH_SLEEP seconds while writes are paused, and a changed line of policy.md); the
@@ -5060,7 +5111,7 @@ HAND
     [ "$1" = 1 ] && cmp -s "$2.plist" "$3/morning.plist" && cmp -s "$2.watchdog.plist" "$3/watchdog.plist" && [ "$4" = "$5" ]' \
     _ "$rc" "$u_jobs" "$U" "$bootouts" "$(u_bootouts)"
 
-  section update-convert "the first update converts a checkout from before versions (fake launchctl)" needs update
+  section update-convert "the first update converts a checkout from before versions (fake launchctl)" needs update covers 'get.sh,docs/setup.md,lib/update*.py,libexec/bosun-update,libexec/bosun-ledger'
   # An install an earlier get.sh made: a checkout of upstream at v1 in the install path, with a ledger
   # v1 wrote. get.sh adds bosun.git beside it and v2's folder, then runs v2's bosun update --from the
   # checkout, as here. No tmux session runs, so it is a quiet moment at once.
@@ -5116,7 +5167,7 @@ unset BOSUN_LAUNCHD_LABEL
 
 # What this whole run left behind is the best list there is of what bosun writes: uninstall must know it all,
 # or the file stays on people's machines after they uninstall. A new file goes in lib/uninstall_plan.py's tables.
-section uninstall-files "uninstall knows every file bosun writes"
+section uninstall-files "uninstall knows every file bosun writes" covers 'lib/uninstall*.py,lib/agent_changes.py,libexec/bosun-uninstall'
 knows_all_of() { # <state dir> <config dir>: names what it does not know
   local unknown
   unknown="$(BOSUN_STATE_DIR="$1" BOSUN_LOG_DIR="$1/logs" BOSUN_CONFIG_DIR="$2" "$BOSUN" uninstall --dry-run 2>&1 |
