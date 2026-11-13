@@ -15,7 +15,10 @@ limits and conventions.
 On GitHub, every pull request to `main` runs the same checks (`.github/workflows/ci.yml`), the
 smoke suite on macOS and a gitleaks scan of the new commits, and `main` only takes pull requests
 that pass them. CI runs every unit test, on Linux and on macOS, and keeps a floor under their
-coverage. For the forbidden-terms check to run there too, store your list as the
+coverage. The menu bar app has its own job, `app`: when a pull request changes nothing under `app/`
+(or the two tools that feed it, `tools/contract_samples.py` and `tools/swift_coverage.py`, or the
+workflow), it passes in seconds without building; otherwise it runs the Swift tests with warnings as
+errors, the coverage floor, SwiftLint, `swift format lint --strict` and an ad hoc signed build. For the forbidden-terms check to run there too, store your list as the
 `FORBIDDEN_TERMS` Actions secret with `gh secret set FORBIDDEN_TERMS <
 ~/.config/bosun/forbidden-terms.txt`; the logs never print what it matched.
 
@@ -327,6 +330,72 @@ token and no shared folder of yours, and an image with a key in it is never save
 Tart is OpenAI's since it acquired Cirrus Labs in 2026. The repository's licence is FSL-1.1-ALv2, which
 allows internal use and becomes Apache 2.0 after two years (the licensing page on tart.run still shows the
 older terms). It is only a test tool here: nothing in bosun needs it or ships it.
+
+## Releasing bosun.app
+
+The menu bar app is released apart from bosun: a tag `app-v<version>` on `main`, where `<version>` is what
+`app/VERSION` says, starts `.github/workflows/release-app.yml`. It builds the app, signs it with your Developer
+ID in a keychain that exists for that run only, has Apple notarize it, staples the ticket, and attaches
+`bosun-app-<version>.zip` to a GitHub release. Before it publishes anything it checks the zip the way `bosun app
+install` does (the same code requirement, from `lib/app_release.py`, and Gatekeeper's `source=Notarized Developer
+ID`), so a release the install would refuse never goes out. You need an Apple Developer Program membership, a
+*Developer ID Application* certificate and an App Store Connect API key (Users and Access, Integrations, with the
+Developer role). The values below come from your own files and your own terminal: never paste a certificate, a
+key or a password into a chat, an issue or a pull request.
+
+Once, per repository (`<owner>/<repo>` is where you publish; the logs of a workflow run are public, and the
+workflow prints none of these):
+
+1. **The `release` environment**, whose secrets only a release run can read:
+
+    ```sh
+    gh api -X PUT repos/<owner>/<repo>/environments/release
+    ```
+
+    Then, under Settings, Environments, `release`, add yourself as a required reviewer, so a tag only signs
+    something after you approved the run, and limit the environment's deployment tags to `app-v*`.
+
+2. **The six secrets**, in that environment. Each `gh secret set` without `--body` asks for the value (hidden), or
+   reads a pipe:
+
+    ```sh
+    # The certificate with its private key, exported from Keychain Access as a .p12, base64 encoded
+    base64 -i ~/path/to/developer-id.p12 | gh secret set MACOS_CERTIFICATE --env release
+    gh secret set MACOS_CERTIFICATE_PASSWORD --env release   # the password you gave the export
+    # The certificate's full name, as `security find-identity -v -p codesigning` shows it
+    # ("Developer ID Application: <name> (<team id>)")
+    gh secret set MACOS_SIGN_IDENTITY --env release
+    # The API key's .p8 file, as it is
+    gh secret set APPLE_API_KEY --env release < ~/path/to/AuthKey_<key id>.p8
+    gh secret set APPLE_API_KEY_ID --env release             # the key's id
+    gh secret set APPLE_API_ISSUER_ID --env release          # the issuer id at the top of the keys page
+    ```
+
+3. **The Team ID** goes into `app/publisher.json` as `team_id`, through a pull request: it is the ten letters and
+   digits in the parentheses of the certificate's name, and it is public, since every signed app carries it. The
+   same file names the bundle identifier and the repository whose releases `bosun app install` downloads from, so
+   check `bundle_id` and `releases` while you are there. Until `team_id` is filled in, `bosun init` does not offer
+   the app, and the release workflow stops at its first step.
+
+Then, for each release:
+
+1. Set `app/VERSION` (`major.minor.patch`) in a pull request and merge it. The first release is `0.1.0`.
+2. Tag the merged commit on `main` and push the tag:
+
+    ```sh
+    git switch main && git pull
+    git tag -a app-v0.1.0 -m "bosun.app 0.1.0"
+    git push origin app-v0.1.0
+    ```
+
+3. Approve the run in the Actions tab (if you set a required reviewer). It stops at once if the tag is not
+   `app-v` plus `app/VERSION`, if the commit is not on `main`, or if `team_id` is missing. Notarization takes a few
+   minutes; when Apple does not accept the app, the job prints Apple's log and fails, and nothing is published.
+4. On a Mac of yours, `bosun app install` downloads the release and accepts it only if it passes the same
+   checks. To release again, raise `app/VERSION` and tag again: never move or reuse a tag.
+
+To swap the publisher (a fork, another team), edit `app/publisher.json`, replace the six secrets and cut a
+release; the next `bosun update` installs the newly signed app.
 
 ## Testing without waiting for the schedule
 

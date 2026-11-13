@@ -246,10 +246,15 @@ Calls made from the research and the builder check, to check while reading:
 
 ## Building, releasing, installing
 
-- **CI.** Every pull request that touches `app/` builds the app (ad-hoc signed) and runs `swift test` on a macOS
-  runner. A release workflow, on a tag `app-v<version>`, builds it, signs it with the Developer ID (throwaway
-  keychain), notarizes and staples it, and attaches `bosun-app-<version>.zip` (made with `ditto`) to a GitHub
-  release. The secrets: the certificate (.p12) and its password, the signing identity, the team id, and the App
+- **CI.** The `app` job is required on every pull request. Its first step compares the pull request with its base
+  and, when nothing under `app/`, `tools/contract_samples.py`, `tools/swift_coverage.py` or the workflow changed,
+  passes in seconds without building, since the macOS runners are scarce; otherwise it runs `swift test` with
+  warnings as errors, the coverage floor, SwiftLint, `swift format lint --strict` and an ad-hoc signed build that
+  must verify. A release workflow, on a tag `app-v<version>` that names `app/VERSION`, builds it, signs it with the
+  Developer ID (throwaway keychain), notarizes it (the status read from `notarytool info`, never inferred) and
+  staples it, makes the zip again after stapling (with `app/build.sh --zip`, `ditto`), checks that zip with the
+  requirement `bosun app install` checks (`lib/app_release.py requirement`) and Gatekeeper's `source=Notarized
+  Developer ID`, and only then attaches `bosun-app-<version>.zip` to a GitHub release. The secrets: the certificate (.p12) and its password, the signing identity, the team id, and the App
   Store Connect API key (id, issuer, key).
 - **What a checkout expects.** `app/VERSION` names the app version this checkout works with. `bosun app install`
   and `update` download that release with `curl`, and accept it only if `codesign --verify --deep --strict` passes,

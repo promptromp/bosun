@@ -430,11 +430,18 @@ CI (`.github/workflows/ci.yml`) runs the same on every pull request to `main`: a
 (`lint`; the forbidden-terms list comes from the `FORBIDDEN_TERMS` Actions secret, and the pull
 request's title, description and commit messages are checked too), every unit test in parallel on
 Python 3.13 to 3.15 with a floor under coverage (`test (<version>)`, never `--impacted`), every unit
-test again on macOS and then the end-to-end smoke suite (`smoke`), and
+test again on macOS and then the end-to-end smoke suite (`smoke`), the menu bar app (`app`, on macOS: `swift test`
+with warnings as errors, the coverage floor, SwiftLint, `swift format lint --strict`, and an ad hoc build whose
+bundle must verify; its first step compares the pull request with its base and passes in seconds, building
+nothing, when nothing under `app/`, `tools/contract_samples.py`, `tools/swift_coverage.py` or the workflow
+changed, so it can be required on every pull request), and
 gitleaks over the pull request's commits (`gitleaks`; a made-up value in a test carries a
 `gitleaks:allow` comment). `.github/workflows/install.yml` runs the install for real on a clean macOS
 runner and the Docker sandbox, when the install could have changed and weekly; those are not required
-checks, because a required check that did not run blocks a merge. `.github/workflows/docs.yml`
+checks, because a required check that did not run blocks a merge. `.github/workflows/release-app.yml`, on a tag
+`app-v<app/VERSION>`, signs, notarizes and publishes bosun.app (steps for the person: `docs/development.md`,
+"Releasing bosun.app"); it checks the bundle with `lib/app_release.py requirement`, the requirement
+`bosun app install` checks, never a copy of it. `.github/workflows/docs.yml`
 publishes the docs site to GitHub Pages from `main` (the repository's Pages source is GitHub Actions). The
 logs are public, so neither check prints what it matched. `main` takes changes only through a pull
 request with those checks green and up to date with `main`, CodeQL's results clean (GitHub's

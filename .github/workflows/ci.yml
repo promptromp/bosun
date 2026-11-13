@@ -109,6 +109,89 @@ jobs:
       - name: End to end
         run: tests/smoke.sh
 
+  # The menu bar app (app/, docs/design/menu-bar.md): its tests with warnings as errors, a floor under
+  # the coverage of its core, SwiftLint, swift-format, and an ad hoc signed build that must verify.
+  # Required on every pull request, so the first step compares the pull request with its base: when
+  # nothing the app depends on changed it passes in seconds and builds nothing, because GitHub's macOS
+  # runners are scarce. tools/contract_samples.py writes the fixtures under app/, so contract drift is
+  # caught by the Linux `test` jobs (tests/unit/test_contract_samples.py) on every pull request and by
+  # this job when the fixtures change. The release is .github/workflows/release-app.yml.
+  app:
+    runs-on: macos-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 0 # the merge base with the pull request's base
+      # Builds (build=true) unless it can show that nothing the app depends on changed: not a pull
+      # request (by hand), no merge base with the base, or a diff that cannot be made all build.
+      - name: Did anything the app depends on change?
+        id: changed
+        env:
+          EVENT: ${{ github.event_name }}
+          BASE: ${{ github.event.pull_request.base.sha }}
+          HEAD: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -u
+          if [ "$EVENT" != pull_request ]; then
+            echo "Not a pull request: building."
+            echo "build=true" >>"$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if ! git merge-base "$BASE" "$HEAD" >/dev/null 2>&1 || ! files=$(git diff --name-only "$BASE...$HEAD"); then
+            echo "No merge base with the base branch, or no diff: building."
+            echo "build=true" >>"$GITHUB_OUTPUT"
+            exit 0
+          fi
+          build=false
+          while IFS= read -r file; do
+            case $file in
+              app/* | tools/contract_samples.py | tools/swift_coverage.py | .github/workflows/ci.yml)
+                echo "Changed: $file"
+                build=true
+                ;;
+              *) ;;
+            esac
+          done <<<"$files"
+          if [ "$build" = false ]; then
+            echo "Nothing under app/, tools/contract_samples.py, tools/swift_coverage.py or this workflow changed: not building."
+          fi
+          echo "build=$build" >>"$GITHUB_OUTPUT"
+      - if: steps.changed.outputs.build == 'true'
+        uses: ./.github/actions/setup-uv
+        with:
+          python-version: "3.13"
+      - if: steps.changed.outputs.build == 'true'
+        run: uv sync --locked
+      - name: Swift toolchain
+        if: steps.changed.outputs.build == 'true'
+        run: swift --version
+      - name: Tests, warnings as errors
+        if: steps.changed.outputs.build == 'true'
+        working-directory: app
+        run: swift test --enable-code-coverage -Xswiftc -warnings-as-errors
+      - name: Coverage floor (the core and the system layer, each 95% of its lines)
+        if: steps.changed.outputs.build == 'true'
+        run: uv run python tools/swift_coverage.py
+      - name: SwiftLint
+        if: steps.changed.outputs.build == 'true'
+        working-directory: app
+        run: swift package plugin --allow-writing-to-package-directory swiftlint lint --strict
+      - name: swift format lint
+        if: steps.changed.outputs.build == 'true'
+        working-directory: app
+        run: swift format lint --strict -r Sources Tests Package.swift
+      - name: Build, ad hoc signed
+        if: steps.changed.outputs.build == 'true'
+        env:
+          OUT: ${{ runner.temp }}/bosun-app
+        run: |
+          set -eu
+          app/build.sh --identity - --out "$OUT"
+          plutil -lint "$OUT/bosun.app/Contents/Info.plist"
+          codesign --verify --deep --strict "$OUT/bosun.app"
+
   # Secrets in any commit of the pull request (all history when run by hand), not only in the final
   # tree that the detect-secrets hook sees: a commit that adds a token and a later one that removes
   # it. A made-up value in a test carries a `gitleaks:allow` comment. The CLI rather than the
