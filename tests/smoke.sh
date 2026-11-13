@@ -2431,7 +2431,21 @@ status_has() { # <python condition over d, the object bosun status --json printe
 }
 check "it prints one object with contract 1 and the documented fields, and exits 0" status_has 'd["contract"] == 1 and sorted(d) == sorted("contract level sentence detail windows waiting keep_awake_until stopped update console problems logs".split())'
 check "... exit 0" "$BOSUN" status --json
-check "with no window open it does not say bosun is running" status_has 'd["windows"] == 0 and d["sentence"] != "bosun is running" and d["stopped"] is None and d["update"] == {"state": "none", "waiting_for": []}'
+# What status says of a session that is not there depends on the awake window, which is the watchdog's gate: outside
+# it bosun is resting; inside it, once the morning is due and has run, a `bosun stop` made today is "stopped". So
+# each check sets its own window instead of meeting whichever one the clock gives: outside is a window two to four
+# hours ahead, wherever now is (one that wraps midnight starts later today, so now is before it); inside is the
+# whole day, which is only safe away from midnight, where the morning is not yet due.
+awake_outside() { BOSUN_DAYS=MTWRFSU BOSUN_START_TIME="$(date -v+3H +%H:%M)" BOSUN_AWAKE_UNTIL="$(date -v+5H +%H:%M)" "$@"; }
+awake_all_day() { BOSUN_DAYS=MTWRFSU BOSUN_START_TIME=00:00 BOSUN_AWAKE_UNTIL=23:59 "$@"; }
+away_from_midnight() {
+  local now=$((10#$(date +%H%M)))
+  [ "$now" -gt 30 ] && [ "$now" -lt 2359 ]
+}
+check "with no window open, outside the awake hours, it does not say bosun is running: it is resting, not stopped" awake_outside status_has 'd["windows"] == 0 and d["sentence"] != "bosun is running" and d["sentence"].startswith("bosun is resting") and d["stopped"] is None and d["update"] == {"state": "none", "waiting_for": []}'
+if away_from_midnight; then
+  check "... and inside them, a stop made today is stopped, the morning not paused, and nothing is wrong" awake_all_day status_has 'd["windows"] == 0 and d["level"] == "stopped" and d["sentence"].startswith("bosun is stopped (bosun stop at ") and d["stopped"]["morning_paused"] is False and d["problems"] == []'
+fi
 check "... its console is not running and the address, which carries the token, is never in it" status_has 'd["console"] == {"running": False, "url": None} and "?t=" not in json.dumps(d)'
 write_quit paused
 check "after a quit it says stopped, since when, and that the morning is paused" status_has 'd["level"] == "stopped" and d["sentence"] == "bosun is stopped" and d["stopped"]["morning_paused"] is True and d["stopped"]["since"][:2] == "20" and d["problems"] == []'
@@ -2458,7 +2472,15 @@ check "a bosun.env that does not parse still gets the object: an error, with the
 mkdir -p "$WORK/no-jq"
 printf '#!/bin/sh\nexit 1\n' >"$WORK/no-jq/jq"
 chmod +x "$WORK/no-jq/jq"
-check "a part that cannot be read is a problem and at least a warning, not a failure" env PATH="$WORK/no-jq:$PATH" bash -c '"$1" status --json | python3 -I -c "import json, sys; d = json.load(sys.stdin); sys.exit(not (d[\"contract\"] == 1 and d[\"level\"] in (\"warning\", \"error\") and d[\"problems\"]))"' _ "$BOSUN"
+check "a part that cannot be read is a problem and at least a warning, not a failure, outside the awake hours" awake_outside env PATH="$WORK/no-jq:$PATH" bash -c '"$1" status --json | python3 -I -c "import json, sys; d = json.load(sys.stdin); sys.exit(not (d[\"contract\"] == 1 and d[\"level\"] in (\"warning\", \"error\") and d[\"problems\"]))"' _ "$BOSUN"
+if away_from_midnight; then
+  # Stopped with a part unread: status cannot vouch for "stopped", so it is a warning that still carries the stop.
+  # (The watchdog's saved state, since a jq that fails stops the checks that tell it was a stop at all.)
+  cp -p "$BOSUN_STATE_DIR/watchdog.json" "$WORK/watchdog-before-stopped.json"
+  : >"$BOSUN_STATE_DIR/watchdog.json"
+  check "... and inside them, where a stop made today has stopped bosun: a warning that says which part, and is still stopped" awake_all_day status_has 'd["level"] == "warning" and d["sentence"].endswith(", with a warning") and d["stopped"] is not None and any("could not read" in p for p in d["problems"])'
+  cp -p "$WORK/watchdog-before-stopped.json" "$BOSUN_STATE_DIR/watchdog.json"
+fi
 
 echo "quit (bosun quit: the plan, the wait, the order of the stop, and what one start or morning undoes)"
 # A fake launchctl that says every job is loaded and writes down what it was told (in ~/.local/bin, which

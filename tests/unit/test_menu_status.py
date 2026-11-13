@@ -292,9 +292,34 @@ class StoppedTestCase(unittest.TestCase):
         out = snap(quit=quit_state.QuitState(GONE_AT, True), windows=[window("orch")])
         self.assertIn("1 window still open", out["problems"][0])
 
-    def test_a_quit_record_whose_windows_could_not_be_read_stays_stopped(self) -> None:
+    def test_a_quit_record_whose_windows_could_not_be_read_is_a_warning_that_still_says_it_is_stopped(
+        self,
+    ) -> None:
         out = snap(quit=quit_state.QuitState(GONE_AT, False), windows=None, errors={"sessions": "x"})
-        self.assertEqual(out["level"], "stopped")
+        self.assertEqual(out["level"], "warning")
+        self.assertEqual(out["sentence"], "bosun is stopped, with a warning")
+        self.assertEqual(out["stopped"], {"since": "2026-11-12T12:00:00+00:00", "morning_paused": False})
+        self.assertEqual(out["problems"], ["could not read the windows: x"])
+
+    def test_a_stop_with_a_part_that_could_not_be_read_is_a_warning_too(self) -> None:
+        gate = SessionGate(menu_status.STOPPED_BY_STOP, NOW.replace(hour=9, minute=30))
+        out = snap(windows=GONE, gate=gate, checks=None, errors={"watchdog": "watchdog --facts exited 1"})
+        self.assertEqual(
+            (out["level"], out["sentence"]),
+            ("warning", "bosun is stopped (bosun stop at 09:30), with a warning"),
+        )
+        self.assertIsNotNone(out["stopped"])
+        self.assertIn("could not read the watchdog's checks", out["problems"][0])
+
+    def test_a_stopped_bosun_with_everything_readable_stays_stopped(self) -> None:
+        quit_out = snap(windows=GONE, quit=quit_state.QuitState(GONE_AT, False))
+        stop_out = snap(windows=GONE, gate=SessionGate(menu_status.STOPPED_BY_STOP, NOW))
+        for out in (quit_out, stop_out):
+            self.assertEqual((out["level"], out["problems"]), ("stopped", []))
+
+    def test_an_unread_part_does_not_turn_a_quit_that_did_not_finish_into_a_warning(self) -> None:
+        out = snap(quit=quit_state.QuitState(GONE_AT, False), windows=WINDOWS, errors={"logs": "x"})
+        self.assertEqual(out["level"], "error")
 
 
 class StateTestCase(unittest.TestCase):

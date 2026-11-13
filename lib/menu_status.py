@@ -15,7 +15,8 @@ its own, so the menu and the watchdog never disagree.
 - error: no window is open and the gate says it should be running (the watchdog's own `session-missing`
   finding is then the problem listed, not a second line); or a check of severity error has a finding.
 - warning: a check of severity warn has a finding, an ERROR line was logged in the last hour, or a fact
-  could not be read (an answer built on a guess is never all well).
+  could not be read (an answer built on a guess is never all well). That holds when bosun is stopped too:
+  with a part unread status cannot vouch for "stopped", so it is a warning (the `stopped` field stays).
 - ok otherwise: "resting until 08:00" when no window is open outside the awake hours, "starting (the
   morning run)" once the window began and the run is going or not yet due (at the error level never
   "starting": a crashed or hung run keeps counting as going, and is named as failed). With no morning run
@@ -29,7 +30,7 @@ from __future__ import annotations
 
 import sys
 from collections.abc import Iterable, Mapping
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
@@ -267,10 +268,25 @@ def stopped_verdict(state: quit_state.QuitState) -> Verdict:
 # ---- the object --------------------------------------------------------------------------------
 
 
+def vouched(verdict: Verdict, errors: Mapping[str, str]) -> Verdict:
+    """A stopped verdict is only as good as what was read: with a part that could not be read, status cannot
+    vouch for "stopped" (a window may be open, a finding missed), so it is at least a warning, and says which
+    part. It keeps its `stopped` field: bosun was stopped, as far as it can tell."""
+    if verdict.level != STOPPED or not errors:
+        return verdict
+    unread = [text for _level, text in unread_problems(errors)]
+    return replace(
+        verdict,
+        level=WARNING,
+        sentence=with_level(verdict.sentence, WARNING),
+        problems=[*verdict.problems, *unread],
+    )
+
+
 def snapshot(facts: StatusFacts, now: datetime) -> dict[str, Any]:
     """`bosun status --json`: the object the menu bar app reads. <now> is local and naive."""
     waiting = [str(w["name"]) for w in console_sessions.waiting_in(facts.windows or [], now)]
-    verdict = quit_verdict(facts, now, waiting)
+    verdict = vouched(quit_verdict(facts, now, waiting), facts.errors)
     kept = facts.keep_awake_until
     return {
         "contract": CONTRACT,
