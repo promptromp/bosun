@@ -285,6 +285,12 @@ class LaunchCommandTest(unittest.TestCase):
         assert record is not None, f"no launch of {window} recorded"
         return record
 
+    def fingerprint_of(self, window: str) -> object:
+        """What `bosun launch --fingerprint <window>` prints, after its exit status and what it said."""
+        printed = self.bosun("launch", "--fingerprint", window, cwd=self.tmp)
+        self.assertEqual((printed.returncode, printed.stdout == ""), (0, False), printed.stderr)
+        return json.loads(printed.stdout)
+
     def test_the_conversation_name_is_not_a_launch_input(self) -> None:
         for window in ("api", "web"):
             with self.subTest(window=window):
@@ -297,8 +303,7 @@ class LaunchCommandTest(unittest.TestCase):
                 self.assertEqual(again.returncode, 0, again.stderr)
                 self.assertIn(f"{window}-2026-11-06-1", again.stdout)  # the launch itself goes by it
                 self.assertEqual(self.launched(window)["fingerprint"], before)
-                printed = self.bosun("launch", "--fingerprint", window, cwd=self.tmp)
-                self.assertEqual(json.loads(printed.stdout), before, printed.stderr)
+                self.assertEqual(self.fingerprint_of(window), before)
 
     def test_a_window_outside_the_list_fingerprints_from_its_record(self) -> None:
         done = self.bosun("launch", "--model", "sonnet", "--effort", "low", "scratch", cwd=self.repo)
@@ -308,8 +313,7 @@ class LaunchCommandTest(unittest.TestCase):
             (record["dir"], record["model_override"], record["effort_override"]),
             (str(self.repo), "sonnet", "low"),
         )
-        printed = self.bosun("launch", "--fingerprint", "scratch", cwd=self.tmp)
-        self.assertEqual(json.loads(printed.stdout), record["fingerprint"], printed.stderr)
+        self.assertEqual(self.fingerprint_of("scratch"), record["fingerprint"])
 
     def test_a_listed_window_keeps_its_recorded_agent_when_the_config_changes(self) -> None:
         self.configure(f"api\n    dir: {self.repo}")
@@ -318,8 +322,7 @@ class LaunchCommandTest(unittest.TestCase):
         before = self.launched("api")
         self.assertEqual((before["harness"], before["model"], before["effort"]), ("claude", "opus", "medium"))
         self.configure(f"api\n    dir: {self.repo}\n    harness: codex\n    model: gpt-test")
-        printed = self.bosun("launch", "--fingerprint", "api", cwd=self.tmp)
-        self.assertEqual(json.loads(printed.stdout), before["fingerprint"], printed.stderr)
+        self.assertEqual(self.fingerprint_of("api"), before["fingerprint"])
         plain = self.bosun(
             "launch", "api", cwd=self.repo
         )  # a launch not for an update: the agent configured now
@@ -339,8 +342,7 @@ class LaunchCommandTest(unittest.TestCase):
         self.assertEqual(done.returncode, 0, done.stderr)
         before = self.launched("scratch")["fingerprint"]
         self.env["BOSUN_HARNESS"] = "codex"
-        printed = self.bosun("launch", "--fingerprint", "scratch", cwd=self.tmp)
-        self.assertEqual(json.loads(printed.stdout), before, printed.stderr)
+        self.assertEqual(self.fingerprint_of("scratch"), before)
 
     def test_launch_harness_starts_the_window_on_that_agent(self) -> None:
         self.env["BOSUN_HARNESS"] = "codex"

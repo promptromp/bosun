@@ -40,7 +40,9 @@ from ledger_changes import rebuild, state_hash
 
 ROOT = Path(__file__).resolve().parents[2]
 CORPUS = ROOT / "tests" / "fixtures" / "corpus"
-STEP_TIMEOUT_SECONDS = 30
+# One step's command, which can run many ledger commands, each starting Python: a bound against a hang, not
+# a speed (a loaded runner took more than 30 s); each step has its own, and the scenarios run side by side.
+STEP_TIMEOUT_SECONDS = 600
 
 
 def load(name: str) -> Any:

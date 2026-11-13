@@ -340,8 +340,8 @@ class CommandTest(ClaudeCase):
         connectors_claude.save_kept(self.state, [MAIL], {MAIL: MAIL_URL})
         started = time.monotonic()
         with mock.patch.object(connectors, "LOOKUP_TIMEOUT_SECONDS", 0.5):
-            code, out, err = self.claude(MAIL, fake_agent(self.root, "exec sleep 20"))
-        self.assertLess(time.monotonic() - started, 10)
+            code, out, err = self.claude(MAIL, fake_agent(self.root, "exec sleep 120"))
+        self.assertLess(time.monotonic() - started, 60)  # not the 120 s of the listing it stopped
         self.assertEqual(code, 0)
         self.assertEqual(self.settings(out), [{"serverUrl": MAIL_URL}])
         self.assertIn("claude mcp list failed", err)
