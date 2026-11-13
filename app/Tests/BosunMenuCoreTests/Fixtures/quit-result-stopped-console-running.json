@@ -10,6 +10,7 @@
   "morning_paused": false,
   "refused": null,
   "result": "stopped",
+  "steps_seconds": 225,
   "wait_minutes": 10,
   "waiting": [
     "acme-web"

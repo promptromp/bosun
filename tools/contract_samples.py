@@ -3,10 +3,10 @@
 Each fixture is made by part 1's own code, never typed by hand: the status objects by
 `menu_status.snapshot` over recorded facts, the update check by `update_check.check`, the update's plan
 by `update_plan.make_plan` inside `update.json_object` (the object `bosun update --dry-run --json` prints),
-the quit plan by `quit.quit_plan` and each quit result by `quit.run` over fake ports (the world it would
-touch replaced, as tests/unit/test_quit.py does), the app's state by `app_release.status`. A change on the
-Python side that alters what the app reads fails tests/unit/test_contract_samples.py until the fixtures
-are written again:
+the quit plans and each quit result by `quit.run` over fake ports (the world it would touch replaced, as
+tests/unit/test_quit.py does), with the exit status each run returned in `exits.json`, the app's state by
+`app_release.status`. A change on the Python side that alters what the app reads fails
+tests/unit/test_contract_samples.py until the fixtures are written again:
 
     uv run python tools/contract_samples.py
 
@@ -112,10 +112,22 @@ def snapshot(now: datetime = NOW, **changes: Any) -> Sample:
 def status_samples() -> dict[str, Sample]:
     quit_at = datetime(2026, 11, 11, 9, 30, tzinfo=UTC)
     warning = "The acme-web window has waited at a prompt for 45 min."
+    logged = (
+        "1 new ERROR line(s) in the bosun logs: check-in.log: [checkin] ERROR: the exporter's tests failed"
+    )
+    failed = "Today's morning run reported problems: setup.sh exited 1"
     return {
         "status-ok": snapshot(),
         "status-warning": snapshot(checks=watchdog_checks(check("waiting", "warn", warning))),
         "status-error": snapshot(windows=GONE, gate=SessionGate(menu_status.EXPECTED), keep_awake_until=None),
+        # bosun runs, its windows open, and an error-severity finding: the app must not start it again
+        "status-running-error": snapshot(checks=watchdog_checks(check("log-errors", "error", logged))),
+        # the windows could not be read (running is null) and a finding is an error: nor this
+        "status-windows-unreadable": snapshot(
+            windows=None,
+            checks=watchdog_checks(check("morning-failed", "error", failed)),
+            errors={"sessions": "sessions --json did not answer: tmux did not answer"},
+        ),
         "status-stopped": snapshot(
             windows=GONE, quit=quit_state.QuitState(quit_at, True), keep_awake_until=None
         ),
@@ -148,6 +160,10 @@ def update_check_samples() -> dict[str, Sample]:
         ),
         "update-check-failed": update_check.failed(
             "releases", INSTALLED, "could not reach the origin: Could not resolve host"
+        ),
+        # the install's own commit could not be read: `installed.commit` is null
+        "update-check-failed-no-commit": update_check.failed(
+            "releases", None, "cannot read the commit of /Users/me/.local/share/bosun/current"
         ),
     }
 
@@ -266,6 +282,7 @@ def quit_window(name: str, status: str = "idle") -> quit_cmd.Window:
 
 
 LOCK_WAIT_SECONDS = 180  # BOSUN_WINDOWS_LOCK_WAIT_SECONDS' default
+STEPS_SECONDS = 225  # lib/quit_live.py's STEPS_SECONDS (a test holds the two together)
 QUIT_WAIT_MINUTES = 10  # BOSUN_QUIT_WAIT_MINUTES' default
 QUIT_WINDOWS = [
     quit_window("acme-orchestrator"),
@@ -278,21 +295,19 @@ QUIET_WINDOWS = [quit_window("acme-orchestrator"), quit_window("acme-web", "wait
 
 def quit_run(
     world: World, mode: str, *, minutes: int = QUIT_WAIT_MINUTES, pause: bool = True, sleep: bool = True
-) -> Sample:
-    """The one object `bosun quit ... --json` prints for a run over <world>."""
+) -> tuple[int, Sample]:
+    """The exit status of `bosun quit ... --json` for a run over <world>, and the one object it prints."""
     out, err = io.StringIO(), io.StringIO()
-    options = quit_cmd.Options(mode, minutes, pause, sleep, True, LOCK_WAIT_SECONDS)
-    quit_cmd.run(options, world.ports(), out, err)
+    options = quit_cmd.Options(mode, minutes, pause, sleep, True, LOCK_WAIT_SECONDS, STEPS_SECONDS)
+    status = quit_cmd.run(options, world.ports(), out, err)
     result: Sample = json.loads(out.getvalue())
-    return result
+    return status, result
 
 
-def quit_samples() -> dict[str, Sample]:
+def quit_runs() -> dict[str, tuple[int, Sample]]:
     return {
-        "quit-plan": quit_cmd.quit_plan(QUIT_WINDOWS, "20:00", False, QUIT_WAIT_MINUTES, LOCK_WAIT_SECONDS),
-        "quit-plan-refused": quit_cmd.quit_plan(
-            QUIT_WINDOWS, None, True, QUIT_WAIT_MINUTES, LOCK_WAIT_SECONDS
-        ),
+        "quit-plan": quit_run(World(QUIT_WINDOWS), "plan"),
+        "quit-plan-refused": quit_run(World(QUIT_WINDOWS, updating=True), "plan"),
         # `quit --plan --json` when the windows cannot be read: exit 1, this on stdout, nothing on stderr
         "quit-plan-failed": quit_run(
             World(QUIET_WINDOWS, unreadable="the windows could not be listed: tmux did not answer"), "plan"
@@ -307,6 +322,16 @@ def quit_samples() -> dict[str, Sample]:
             World(QUIET_WINDOWS, stop_fails="bosun stop failed: the tmux server did not answer"), "now"
         ),
         "quit-result-failed-early": quit_run(World(QUIET_WINDOWS, lock_busy=True), "now"),
+    }
+
+
+def quit_samples() -> dict[str, Any]:
+    """Each quit's object, and `exits`: the exit status each run returned, by fixture name (the app's tests
+    pair a reply with its own status, never one typed beside it)."""
+    runs = quit_runs()
+    return {
+        **{name: sample for name, (_status, sample) in runs.items()},
+        "exits": {n: s for n, (s, _) in runs.items()},
     }
 
 

@@ -26,7 +26,10 @@ world, which the tests replace. The order of a quit is fixed:
 
 It never touches the ledger, the knowledge base or the config. Exit codes: 0 done, 1 refused (an update
 runs) or failed, 2 usage (libexec/bosun-quit), 3 the wait ran out. Each --json output is one object with
-`contract` 1 and the plan's keys; a run's has `result` (stopped, busy, refused or failed) and `error`.
+`contract` 1 and the plan's keys; a run's has `result` (stopped, busy, refused or failed) and `error`. The
+plan says how long a quit can take, which is what a caller (the menu bar app) times it by: the minutes of
+step 1, the lock's wait of step 2, and the most steps 3 to 6 take (`steps_seconds`, lib/quit_live.py's
+timeouts); a quit with --let-finish takes at most all three, with --stop-now the last two.
 """
 
 from __future__ import annotations
@@ -71,6 +74,7 @@ class Options:
     sleep: bool  # the Mac may sleep now: bosun stop releases the keep-awake too
     json: bool
     lock_wait_seconds: int  # BOSUN_WINDOWS_LOCK_WAIT_SECONDS: how long the steps wait for a start's lock
+    steps_seconds: int  # the most the steps besides the two waits take (lib/quit_live.py's STEPS_SECONDS)
 
 
 @dataclass(frozen=True)
@@ -101,11 +105,14 @@ def quit_plan(
     updating: bool,
     wait_minutes: int,
     lock_wait_seconds: int,
+    steps_seconds: int,
 ) -> dict[str, Any]:
     """What a quit would meet: the open windows, which are busy and which wait for you, when the Mac's
-    keep-awake ends, and why a quit is refused (an update runs); and how long a quit may wait, which the
+    keep-awake ends, and why a quit is refused (an update runs); and how long a quit may take, which the
     menu bar app times it by: <wait_minutes> of --let-finish (BOSUN_QUIT_WAIT_MINUTES unless asked
-    otherwise) and <lock_wait_seconds> for the windows lock (BOSUN_WINDOWS_LOCK_WAIT_SECONDS)."""
+    otherwise), <lock_wait_seconds> for the windows lock (BOSUN_WINDOWS_LOCK_WAIT_SECONDS) and
+    <steps_seconds>, the most its other steps take (its looks at the windows, the console's job, bosun
+    stop)."""
     return {
         "contract": CONTRACT,
         "windows": [w.name for w in windows],
@@ -115,12 +122,13 @@ def quit_plan(
         "refused": UPDATING if updating else None,
         "wait_minutes": wait_minutes,
         "lock_wait_seconds": lock_wait_seconds,
+        "steps_seconds": steps_seconds,
     }
 
 
 def failed_object(error: str, options: Options) -> dict[str, Any]:
     """The object of a quit that could not even look: the plan's keys, empty, and why."""
-    plan = quit_plan([], None, False, options.wait_minutes, options.lock_wait_seconds)
+    plan = quit_plan([], None, False, options.wait_minutes, options.lock_wait_seconds, options.steps_seconds)
     return dict(plan, result="failed", error=error)
 
 
@@ -161,6 +169,7 @@ def look(ports: Ports, options: Options) -> tuple[list[Window] | None, dict[str,
         ports.updating(),
         options.wait_minutes,
         options.lock_wait_seconds,
+        options.steps_seconds,
     )
     if windows is None:
         plan["note"] = "the windows could not be read, so none is listed"

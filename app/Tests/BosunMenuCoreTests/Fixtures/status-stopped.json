@@ -12,6 +12,7 @@
   "level": "stopped",
   "logs": "/Users/me/.local/state/bosun/logs",
   "problems": [],
+  "running": false,
   "sentence": "bosun is stopped",
   "stopped": {
     "morning_paused": true,

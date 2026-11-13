@@ -2759,7 +2759,7 @@ check "a start with it off again takes the marker away" test ! -e "$BOSUN_STATE_
 
 section status-json "status --json (the menu bar app's one source of how bosun is)" needs stopped-until-started
 "$BOSUN" stop >/dev/null 2>&1 # what a stop made today leaves (the section before ends with it too)
-check "it prints one object with contract 1 and the documented fields, and exits 0" status_has 'd["contract"] == 1 and sorted(d) == sorted("contract level sentence detail windows waiting keep_awake_until stopped update console problems logs".split())'
+check "it prints one object with contract 1 and the documented fields, and exits 0" status_has 'd["contract"] == 1 and sorted(d) == sorted("contract level sentence detail windows running waiting keep_awake_until stopped update console problems logs".split())'
 check "... exit 0" "$BOSUN" status --json
 away_from_midnight() {
   local now=$((10#$(date +%H%M)))
@@ -2897,7 +2897,7 @@ check "a bad BOSUN_QUIT_WAIT_MINUTES is an error that names it" fails_with "BOSU
 check "... with --json it is an object, exit 1, with the plan's keys empty" env BOSUN_QUIT_WAIT_MINUTES=lots bash -c '"$1" quit --let-finish --json </dev/null >"$2"; [ $? -eq 1 ]' _ "$BOSUN" "$WORK/quit.out"
 check "... that says why" quit_has 'd["contract"] == 1 and d["result"] == "failed" and "BOSUN_QUIT_WAIT_MINUTES" in d["error"] and d["windows"] == [] and d["busy"] == [] and d["refused"] is None'
 check "... and carries the configured lock wait, and 0 minutes for the minutes that are not a number" env BOSUN_QUIT_WAIT_MINUTES=lots BOSUN_WINDOWS_LOCK_WAIT_SECONDS=45 bash -c '"$1" quit --let-finish --json </dev/null >"$2"; true' _ "$BOSUN" "$WORK/quit.out"
-check "... in the object" quit_has 'd["wait_minutes"] == 0 and d["lock_wait_seconds"] == 45'
+check "... in the object" quit_has 'd["wait_minutes"] == 0 and d["lock_wait_seconds"] == 45 and d["steps_seconds"] > 120'
 check "--let-finish from inside bosun's own tmux is refused: it would wait on its own window" fails_with "run it from another terminal" env TMUX="/tmp/tmux-0/$SOCKET,1,0" "$BOSUN" quit --let-finish
 check "... as an object too with --json" bash -c 'TMUX="/tmp/tmux-0/$2,1,0" "$1" quit --let-finish --json </dev/null >"$3"; [ $? -eq 1 ]' _ "$BOSUN" "$SOCKET" "$WORK/quit.out"
 check "... that says why" quit_has 'd["result"] == "failed" and "another terminal" in d["error"]'

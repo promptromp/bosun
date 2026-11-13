@@ -11,6 +11,7 @@
   "problems": [
     "bosun's tmux session is not running, though it should be. Start it with: bosun start"
   ],
+  "running": false,
   "sentence": "bosun is not running",
   "stopped": null,
   "update": {

@@ -9,6 +9,7 @@
   "level": "ok",
   "logs": "/Users/me/.local/state/bosun/logs",
   "problems": [],
+  "running": false,
   "sentence": "bosun is resting until 08:00",
   "stopped": null,
   "update": {

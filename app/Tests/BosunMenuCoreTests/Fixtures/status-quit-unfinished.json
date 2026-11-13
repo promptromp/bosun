@@ -13,6 +13,7 @@
   "problems": [
     "bosun quit did not finish: 3 windows still open, and the watchdog is skipping its runs. Run `bosun quit --stop-now` again to finish, or `bosun start` to start bosun again"
   ],
+  "running": true,
   "sentence": "bosun quit did not finish",
   "stopped": {
     "morning_paused": false,

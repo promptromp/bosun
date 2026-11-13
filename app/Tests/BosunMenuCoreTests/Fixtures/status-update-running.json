@@ -14,6 +14,7 @@
   "level": "ok",
   "logs": "/Users/me/.local/state/bosun/logs",
   "problems": [],
+  "running": true,
   "sentence": "bosun is running",
   "stopped": null,
   "update": {

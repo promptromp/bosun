@@ -15,6 +15,7 @@
   "problems": [
     "The acme-web window has waited at a prompt for 45 min."
   ],
+  "running": true,
   "sentence": "bosun is running, with a warning",
   "stopped": null,
   "update": {

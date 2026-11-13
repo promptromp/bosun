@@ -8,6 +8,7 @@
   "lock_wait_seconds": 180,
   "refused": null,
   "result": "busy",
+  "steps_seconds": 225,
   "wait_minutes": 0,
   "waiting": [
     "acme-web"

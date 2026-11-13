@@ -16,6 +16,7 @@ from typing import Any
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "tools"))
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "lib"))
 import contract_samples as cs
+import quit_live
 import update
 import update_plan
 
@@ -70,7 +71,7 @@ class FixturesAreTrueTest(unittest.TestCase):
 class WhatTheAppReadsTest(unittest.TestCase):
     def test_every_object_but_the_updates_plan_carries_contract_1(self) -> None:
         for name, value in SAMPLES.items():
-            if name.startswith(("update-plan", "update-treatments")):
+            if name.startswith(("update-plan", "update-treatments", "exits")):
                 continue
             with self.subTest(name=name):
                 self.assertEqual(value["contract"], 1)
@@ -84,15 +85,36 @@ class WhatTheAppReadsTest(unittest.TestCase):
                 "status-ok": "ok",
                 "status-quit-unfinished": "error",
                 "status-resting": "ok",
+                "status-running-error": "error",
                 "status-stopped": "stopped",
                 "status-update-running": "ok",
                 "status-warning": "warning",
+                "status-windows-unreadable": "error",
             },
         )
         self.assertTrue(SAMPLES["status-stopped"]["stopped"]["morning_paused"])
         self.assertIn("did not finish", SAMPLES["status-quit-unfinished"]["sentence"])
         self.assertIn("resting until 08:00", SAMPLES["status-resting"]["sentence"])
         self.assertEqual(SAMPLES["status-update-running"]["update"]["state"], "running")
+
+    def test_running_tells_a_bosun_to_start_from_one_that_runs_with_an_error(self) -> None:
+        running = {name: SAMPLES[name]["running"] for name in names("status-")}
+        self.assertEqual(
+            running,
+            {
+                "status-error": False,
+                "status-ok": True,
+                "status-quit-unfinished": True,
+                "status-resting": False,
+                "status-running-error": True,
+                "status-stopped": False,
+                "status-update-running": True,
+                "status-warning": True,
+                "status-windows-unreadable": None,
+            },
+        )
+        self.assertIn("with an error", SAMPLES["status-running-error"]["sentence"])
+        self.assertIn("could not be read", SAMPLES["status-windows-unreadable"]["sentence"])
 
     def test_status_has_windows_waiting_for_you_and_a_keep_awake_somewhere(self) -> None:
         self.assertTrue(SAMPLES["status-ok"]["waiting"])
@@ -106,6 +128,7 @@ class WhatTheAppReadsTest(unittest.TestCase):
         self.assertTrue(SAMPLES["update-check-skipped"]["skipped"])
         self.assertTrue(SAMPLES["update-check-skipped"]["available"])
         self.assertTrue(SAMPLES["update-check-failed"]["error"])
+        self.assertIsNone(SAMPLES["update-check-failed-no-commit"]["installed"]["commit"])
 
     def test_the_updates_plan_is_the_dry_runs_object_and_one_of_them_is_blocked_and_one_is_none(self) -> None:
         self.assertEqual(sorted(SAMPLES["update-plan"]), ["contract", "error", "plan", "summary", "update"])
@@ -127,6 +150,7 @@ class WhatTheAppReadsTest(unittest.TestCase):
         for name in ("quit-plan", "quit-plan-refused", "quit-plan-failed", "quit-result-busy"):
             self.assertIsInstance(SAMPLES[name]["wait_minutes"], int, name)
             self.assertIsInstance(SAMPLES[name]["lock_wait_seconds"], int, name)
+            self.assertEqual(SAMPLES[name]["steps_seconds"], quit_live.STEPS_SECONDS, name)
         self.assertEqual(SAMPLES["quit-plan"]["waiting"], ["acme-web"])
         self.assertIsNone(SAMPLES["quit-plan"]["refused"])
         self.assertTrue(SAMPLES["quit-plan-refused"]["refused"])
@@ -168,6 +192,23 @@ class WhatTheAppReadsTest(unittest.TestCase):
         self.assertIn("quit --stop-now", SAMPLES["quit-result-failed"]["error"])
         self.assertIsNone(SAMPLES["quit-result-busy"].get("error"))
         self.assertTrue(SAMPLES["quit-result-busy"]["busy"])
+
+    def test_each_quit_fixture_has_the_exit_status_its_run_returned(self) -> None:
+        self.assertEqual(sorted(SAMPLES["exits"]), names("quit-"))
+        self.assertEqual(
+            SAMPLES["exits"],
+            {
+                "quit-plan": 0,
+                "quit-plan-refused": 0,
+                "quit-plan-failed": 1,
+                "quit-result-busy": 3,
+                "quit-result-failed": 1,
+                "quit-result-failed-early": 1,
+                "quit-result-refused": 1,
+                "quit-result-stopped": 0,
+                "quit-result-stopped-console-running": 0,
+            },
+        )
 
     def test_app_status_is_installed_and_not_installed(self) -> None:
         self.assertEqual(SAMPLES["app-status"]["installed"], "0.1.0")

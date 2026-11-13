@@ -16,9 +16,10 @@ its own, so the menu and the watchdog never disagree.
   finding is then the problem listed, not a second line); or a check of severity error has a finding.
 - warning: a check of severity warn has a finding, an ERROR line was logged in the last hour, the watchdog
   itself is not checking (its launchd job is installed but not loaded, or loaded and its last run is older
-  than 3 of its intervals of the Mac being awake: counted from the later of that run and the Mac's last wake;
-  not while an update holds it, and never in a
-  quit, which is stopped), or a fact could not be read (an answer built on a guess is never all well). That
+  than 3 of its intervals of the Mac being awake: counted from the latest of that run, the Mac's last wake and
+  its boot, a time later than now, after the clock moved back, left out; not while an update holds it, and
+  never in a quit, which is stopped), or a fact could not be read (an answer built on a guess is never all
+  well). That
   holds when bosun is stopped too: with a part unread status cannot vouch for "stopped", so it is a warning
   (the `stopped` field stays).
 - ok otherwise: "resting until 08:00" when no window is open outside the awake hours, "starting (the
@@ -27,7 +28,9 @@ its own, so the menu and the watchdog never disagree.
   today there is no rule here: the watchdog's `morning-missing` finding sets the level, as any finding does.
 
 The contract number (CONTRACT) is the app's check that it understands what it reads: it only ever grows,
-and a field is only ever added.
+and a field is only ever added. A new level is a new word in `level`, which the app shows as a warning until
+it knows it (never as all well); `running` says whether bosun's windows are open (null when they could not be
+read), which with the level tells a bosun to start from one that runs with an error.
 """
 
 from __future__ import annotations
@@ -87,12 +90,14 @@ class SessionGate:
 @dataclass(frozen=True)
 class WatchdogJob:
     """The watchdog's own launchd job: <installed> its plist is there (so it is wanted), <loaded> launchd has
-    it, when its last run was (local and naive; None when it never ran) and when the Mac last woke."""
+    it, when its last run was (local and naive; None when it never ran), when the Mac last woke and when it
+    started."""
 
     installed: bool
     loaded: bool
     last_run: datetime | None = None
     woke_at: datetime | None = None  # the Mac's last wake (local and naive); None when it could not be read
+    booted_at: datetime | None = None  # the Mac's boot (local and naive); None when it could not be read
 
 
 @dataclass(frozen=True)
@@ -168,13 +173,18 @@ def when(moment: datetime, now: datetime) -> str:
 
 
 def watchdog_stale(job: WatchdogJob, now: datetime) -> bool:
-    """A loaded job whose last run is older than three of its intervals of the Mac being awake: a Mac that
+    """A loaded job whose last run is older than three of its intervals of the Mac being awake. A Mac that
     slept does not run it, and wakes to a last run that is hours old with the job's next run a few minutes
-    away, so the wake counts as a run. A job that never ran is a new one."""
+    away, so the wake counts as a run; a Mac that was off starts its jobs at login, the watchdog's first run
+    five minutes after, so the boot counts as one too. A time later than <now> (the clock moved back since) is
+    left out, never taken as now: each look would count from its own now and never be stale; with none left
+    there is nothing to count from. A job that never ran is a new one."""
     if job.last_run is None:
         return False
-    counted_from = max(t for t in (job.last_run, job.woke_at) if t is not None)
-    return now - counted_from > timedelta(seconds=WATCHDOG_STALE_RUNS * WATCHDOG_INTERVAL_SECONDS)
+    times = [t for t in (job.last_run, job.woke_at, job.booted_at) if t is not None and t <= now]
+    if not times:
+        return False
+    return now - max(times) > timedelta(seconds=WATCHDOG_STALE_RUNS * WATCHDOG_INTERVAL_SECONDS)
 
 
 def watchdog_problem(facts: StatusFacts, now: datetime) -> str | None:
@@ -354,6 +364,7 @@ def snapshot(facts: StatusFacts, now: datetime) -> dict[str, Any]:
         "sentence": verdict.sentence,
         "detail": verdict.detail,
         "windows": open_windows(facts.windows),
+        "running": None if facts.windows is None else open_windows(facts.windows) > 0,
         "waiting": waiting,
         "keep_awake_until": f"{kept:%H:%M}" if kept is not None and kept > now else None,
         "stopped": verdict.stopped,
@@ -384,6 +395,7 @@ def failure(text: str, level: str = ERROR) -> dict[str, Any]:
         "sentence": "bosun cannot tell how it is",
         "detail": [],
         "windows": 0,
+        "running": None,  # not known
         "waiting": [],
         "keep_awake_until": None,
         "stopped": None,
