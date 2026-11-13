@@ -344,11 +344,15 @@ class CommandTest(WorldTest):
                 self.calls.append([name, *command[1:]])
                 status = self.statuses.get(tuple(str(arg) for arg in command[1:3]), self.install_status)
                 return subprocess.CompletedProcess(command, status)
+            if name == "bash" and command[2:3] and "reload_changed_jobs" in str(command[2]):
+                self.reloads.append(str(command[2]))  # the jobs made to follow the config again
+                return subprocess.CompletedProcess(command, 0)
             if name in ("git", "ruby"):
                 return real_run(command, *args, **kwargs)
             raise AssertionError(f"a unit test tried to run {command}")
 
         self.install_status = 0
+        self.reloads: list[str] = []
         self.statuses: dict[tuple[str, ...], int] = {}  # what a command answers, by its first two words
         patcher = mock.patch.object(subprocess, "run", run)
         patcher.start()
@@ -709,6 +713,74 @@ class CommandTest(WorldTest):
         self.assertEqual((env["BOSUN_MENU_APP"], env["BOSUN_CONSOLE_ALWAYS"]), ("0", "0"))
         self.assertEqual(env["BOSUN_DAYS"], "MTWRF")  # nothing else of it moved
         self.assertIn("bosun app install", out)
+
+    def refused_again(self, console: str) -> dict[str, str]:
+        """A first run that set the app up (both settings on), <console> set by hand, then a re-run whose
+        install is refused (the app is gone, say): the config as that leaves it."""
+        self.bosun_init("--recommended")
+        env = self.config / "bosun.env"
+        env.write_text(
+            env.read_text().replace('BOSUN_CONSOLE_ALWAYS="1"', f'BOSUN_CONSOLE_ALWAYS="{console}"')
+        )
+        self.statuses[("app", "install")] = 1
+        self.reloads.clear()
+        status, _, _ = self.bosun_init("--recommended")
+        self.assertEqual(status, 0)
+        return init_plan.parse_env(env.read_text())
+
+    def test_a_refused_install_restores_the_console_setting_it_found_not_a_flat_off(self) -> None:
+        """BOSUN_CONSOLE_ALWAYS goes back to what it was before this run, so a hand-set 1 survives."""
+        kept = self.refused_again("1")
+        self.assertEqual((kept["BOSUN_MENU_APP"], kept["BOSUN_CONSOLE_ALWAYS"]), ("0", "1"))
+
+    def test_a_refused_install_restores_a_console_setting_that_was_off(self) -> None:
+        off = self.refused_again("0")
+        self.assertEqual((off["BOSUN_MENU_APP"], off["BOSUN_CONSOLE_ALWAYS"]), ("0", "0"))
+
+    def test_the_first_run_that_is_refused_finds_no_console_setting_so_restores_off(self) -> None:
+        self.statuses[("app", "install")] = 1
+        self.bosun_init("--recommended")
+        env = init_plan.parse_env((self.config / "bosun.env").read_text())
+        self.assertEqual((env["BOSUN_MENU_APP"], env["BOSUN_CONSOLE_ALWAYS"]), ("0", "0"))
+
+    def test_a_refused_install_has_the_jobs_follow_the_config_again(self) -> None:
+        """install.sh loaded the console job while the config said 1: the jobs are reloaded from the config
+        now, which unloads one no longer wanted (the shell's reload_changed_jobs, as install.sh runs it)."""
+        self.statuses[("app", "install")] = 1
+        self.bosun_init("--recommended")
+        [script] = self.reloads
+        self.assertIn("load_config", script)
+        self.assertTrue(script.rstrip().endswith("reload_changed_jobs"))
+        self.reloads.clear()
+        self.statuses.clear()
+        self.bosun_init("--answers", self.answers_file(menu_app=True))  # installed this time
+        self.assertEqual(self.reloads, [])  # the jobs are left as install.sh made them
+
+    def test_the_write_back_keeps_init_s_backup_of_bosun_env(self) -> None:
+        """A .pre-init- copy of the file as it was before the write-back, as init's other writes make, where
+        the run itself left the file as it was (so made none)."""
+        self.bosun_init("--recommended")  # a new file: nothing to back up
+        self.assertEqual(self.backups(), [])
+        env = self.config / "bosun.env"
+        before = env.read_text()
+        self.statuses[("app", "install")] = 1
+        self.bosun_init("--recommended")  # the config says yes, the app is not there: refused, written back
+        [backup] = [b for b in self.backups() if b.startswith("bosun.env.")]
+        self.assertEqual((self.config / backup).read_text(), before)
+        self.assertEqual(init_plan.parse_env(env.read_text())["BOSUN_MENU_APP"], "0")
+
+    def test_a_run_that_changed_bosun_env_keeps_the_copy_of_what_it_found_not_of_its_own_write(self) -> None:
+        self.bosun_init("--recommended")
+        env = self.config / "bosun.env"
+        original = env.read_text().replace('BOSUN_START_TIME="08:00"', 'BOSUN_START_TIME="07:00"')
+        env.write_text(original)
+        self.statuses[("app", "install")] = 1
+        self.bosun_init(
+            "--answers", self.answers_file(start="08:00")
+        )  # moves the start, then the refusal: two writes
+        self.assertIn('BOSUN_START_TIME="08:00"', env.read_text())
+        copies = [b for b in self.backups() if b.startswith("bosun.env.")]
+        self.assertEqual([(self.config / copy).read_text() for copy in copies], [original])
 
     def test_a_refused_update_of_an_app_that_is_there_leaves_the_config_alone(self) -> None:
         (self.home / "Applications" / "bosun.app").mkdir(parents=True)

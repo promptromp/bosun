@@ -300,7 +300,6 @@ the_installer() {
     "Which model" "2" \
     "handle permissions" "<enter>" \
     "wake by itself" "<enter>" \
-    \
     "Nothing has changed yet" "y" \
     "Start the windows now?" "y" \
     "The windows are up" "" \
@@ -396,7 +395,6 @@ the_first_day_on_codex() {
     "Which agent" "2" \
     "model should the orchestrator" "<enter>" \
     "wake by itself" "<enter>" \
-    \
     "Nothing has changed yet" "y" \
     "Start the windows now?" "y" \
     "The windows are up" "" \
@@ -463,7 +461,6 @@ the_first_day_on_agy() {
     "Which agent" "2" \
     "model should the orchestrator" "<enter>" \
     "wake by itself" "<enter>" \
-    \
     "Nothing has changed yet" "y" \
     "Start the windows now?" "y" \
     "The windows are up" "" \

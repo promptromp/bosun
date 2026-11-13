@@ -712,10 +712,10 @@ def merge_env(text: str, answers: Answers, keep: frozenset[str] = frozenset()) -
     return set_settings(text, wanted)
 
 
-def menu_app_off(text: str) -> str:
-    """<text> with the menu bar app and the console's job as no, for an install of the app that was refused:
-    bosun.env must not say an app is there that is not."""
-    return set_settings(text, {"BOSUN_MENU_APP": "0", "BOSUN_CONSOLE_ALWAYS": "0"})
+def menu_app_off(text: str, console: str = "0") -> str:
+    """<text> with the menu bar app as no, for an install of the app that was refused: bosun.env must not say
+    an app is there that is not. The console's job goes back to <console>, what it was before the run."""
+    return set_settings(text, {"BOSUN_MENU_APP": "0", "BOSUN_CONSOLE_ALWAYS": console})
 
 
 def set_settings(text: str, wanted: Mapping[str, str]) -> str:
@@ -819,6 +819,7 @@ class Plan:
     blockers: tuple[str, ...]
     menu_app: bool = False  # install the app and turn on Open at Login, after install.sh
     app_verb: str = "install"  # `bosun app install`, or `update` where the app is already there
+    console_before: str = "0"  # BOSUN_CONSOLE_ALWAYS as bosun.env had it, which a refused install restores
 
 
 def env_change(facts: Facts, answers: Answers) -> FileChange:
@@ -1023,6 +1024,7 @@ def build_plan(facts: Facts, answers: Answers, state: DirState, force: bool = Fa
         blockers=blockers(facts, state, files),
         menu_app=answers.menu_app,
         app_verb="update" if facts.app_present else "install",
+        console_before=facts.env.get("BOSUN_CONSOLE_ALWAYS", "0"),
     )
 
 

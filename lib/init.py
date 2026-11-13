@@ -121,12 +121,19 @@ def apply_files(plan: Plan, config_dir: Path, stamp: str) -> None:
         if change.action not in init_plan.CHANGING:
             continue
         path = config_dir / change.name
-        if path.exists():
-            backup = path.with_name(f"{change.name}.pre-init-{stamp}")
-            shutil.copy2(path, backup)
-            print(f"backed up {change.name} as {backup.name}")
-        write_file(path, change.text)
+        write_with_backup(path, change.text, stamp)
         print(f"wrote {path}")
+
+
+def write_with_backup(path: Path, text: str, stamp: str) -> None:
+    """<text> as <path>, after a copy of what it was as `<name>.pre-init-<stamp>`: one per run, the first, so
+    it holds the file as the run found it, however many times the run writes it."""
+    if path.exists():
+        backup = path.with_name(f"{path.name}.pre-init-{stamp}")
+        if not backup.exists():
+            shutil.copy2(path, backup)
+            print(f"backed up {path.name} as {backup.name}")
+    write_file(path, text)
 
 
 def can_ask_for_sudo() -> bool:
@@ -158,7 +165,14 @@ def bosun_app(*argv: str) -> bool:
     return subprocess.run([str(ROOT / "bin" / "bosun"), "app", *argv], check=False).returncode == 0
 
 
-def add_the_app(plan: Plan, config_dir: Path) -> None:
+def follow_the_config() -> None:
+    """The launchd jobs made to follow bosun.env again, as install.sh makes them (the shell's
+    reload_changed_jobs: a job no longer wanted is unloaded and its plist removed)."""
+    script = 'source "$1/lib/common.sh"; load_config; reload_changed_jobs'
+    subprocess.run(["bash", "-c", script, "_", str(ROOT)], check=False, stdout=subprocess.DEVNULL)
+
+
+def add_the_app(plan: Plan, config_dir: Path, stamp: str) -> None:
     """The menu bar app, once install.sh has made bosun work: installed, or updated where it is already there
     (a re-run must not relaunch an app in use), and opened at login (a no-op when it already is). A refused
     install, such as no network, is a line, never a failed init: bosun does not need the app, and bosun.env
@@ -166,7 +180,8 @@ def add_the_app(plan: Plan, config_dir: Path) -> None:
     if not bosun_app(plan.app_verb):
         if plan.app_verb == "install":
             env = config_dir / init_plan.ENV_FILE
-            write_file(env, init_plan.menu_app_off(env.read_text()))
+            write_with_backup(env, init_plan.menu_app_off(env.read_text(), plan.console_before), stamp)
+            follow_the_config()  # install.sh loaded the console's job while the config still said yes
             print(
                 "\nbosun.app was not added, and bosun.env says so (BOSUN_MENU_APP is 0): bosun is set up "
                 "without it. `bosun app install` adds it later."
@@ -205,13 +220,14 @@ def carry_out(plan: Plan, config_dir: Path) -> int:
     if plan.blockers:
         print("\nNothing was changed: fix what is under Blocked first.", file=sys.stderr)
         return EXIT_BLOCKED
-    apply_files(plan, config_dir, datetime.now().strftime("%Y%m%d-%H%M%S"))
+    stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+    apply_files(plan, config_dir, stamp)
     status = run_steps(plan)
     if status != 0:
         print("\n`bosun doctor` found problems, listed above. Fix them and run it again.", file=sys.stderr)
         return EXIT_BLOCKED
     if plan.menu_app:
-        add_the_app(plan, config_dir)
+        add_the_app(plan, config_dir, stamp)
     print(path_note(), end="\n" if path_note() else "")
     return 0
 
