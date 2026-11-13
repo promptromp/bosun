@@ -3,7 +3,7 @@ import Testing
 
 @testable import BosunMenuCore
 
-private let letFinish = ["quit", "--let-finish", "--pause-morning", "--sleep", "--json"]
+private let letFinish = ["quit", "--let-finish=10", "--pause-morning", "--sleep", "--json"]
 private let stopNow = ["quit", "--stop-now", "--pause-morning", "--sleep", "--json"]
 
 /// The fixture's plan, with or without its busy agent.
@@ -61,7 +61,7 @@ private func statusLooks(_ world: World) async -> Int {
 
   @Test func theBoxesTheAnswerSetBecomeTheCommand() async {
     let world = await ready()
-    let command = ["quit", "--let-finish", "--json"]
+    let command = ["quit", "--let-finish=10", "--json"]
     await world.reply(Command(args: command, timeout: .seconds(1)), quitReply("quit-result-stopped"))
     world.ui.answer("Quit bosun", boxes: ["pauseMorning": false, "sleep": false])
     await world.coordinator.perform(.quit)
@@ -75,7 +75,8 @@ private func statusLooks(_ world: World) async -> Int {
     world.ui.answer("Quit bosun")
     await world.coordinator.perform(.quit)
     let timeouts = await world.cli.timeouts
-    #expect(timeouts.last == Bosun.quit(QuitChoices()).timeout)
+    // The plan's ten minutes, its 180 s of lock wait and the two minutes of margin
+    #expect(timeouts.last == .seconds(900))
   }
 
   @Test func keepingTheIconLeavesTheAppRunningAndLooksOnceMore() async {

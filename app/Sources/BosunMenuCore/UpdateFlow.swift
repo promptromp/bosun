@@ -155,7 +155,7 @@ public func planEvent(via cli: any BosunCLI) async -> UpdateEvent {
 /// A dry run's reply as an event. It prints its object on every path, so a refusal has no plan and a
 /// line on stderr saying why, which is shown rather than "no plan".
 func planEvent(from result: CommandResult) -> UpdateEvent {
-  switch decodeReply(UpdateDryRun.self, result, contractRequired: false, trustingStdout: true) {
+  switch decodeReply(UpdateDryRun.self, result, trustingStdout: true) {
   case .failure(let failure): return .planFailed(failure.message)
   case .success(let run):
     if let plan = run.plan { return .planned(plan) }

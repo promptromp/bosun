@@ -35,23 +35,20 @@ private struct ContractHeader: Decodable {
   let contract: Int?
 }
 
-/// Decodes bosun's JSON object of type `T`, after checking its contract number. `contractRequired` is
-/// false only for `update --dry-run --json`, whose object carries none: a number that is there must still
-/// be ours.
+/// Decodes bosun's JSON object of type `T`, after checking its contract number: every object bosun prints
+/// carries one, and one that is missing or not ours is refused.
 public func decodeContract<T: Decodable>(
-  _ type: T.Type, from text: String, contractRequired: Bool = true
+  _ type: T.Type, from text: String
 ) throws(ContractError) -> T {
   let decoder = JSONDecoder()
   decoder.keyDecodingStrategy = .convertFromSnakeCase
   let data = Data(text.utf8)
   do {
     let header = try decoder.decode(ContractHeader.self, from: data)
-    if let number = header.contract, number != Contract.supported {
-      throw ContractError.unsupported(number)
-    }
-    if header.contract == nil && contractRequired {
+    guard let number = header.contract else {
       throw ContractError.unreadable("it has no contract number")
     }
+    if number != Contract.supported { throw ContractError.unsupported(number) }
     return try decoder.decode(type, from: data)
   } catch let error as ContractError {
     throw error
@@ -256,6 +253,17 @@ public struct QuitPlan: Decodable, Equatable, Sendable {
   public let keepAwakeUntil: String?
   public let refused: String?
   public let note: String?
+  /// How long a `--let-finish` quit may wait (BOSUN_QUIT_WAIT_MINUTES) and how long its steps wait for the
+  /// windows lock (BOSUN_WINDOWS_LOCK_WAIT_SECONDS): what the quit's timeout is made of. Part 1 prints both
+  /// in every plan; they are optional here only so a plan object without them still reads (see `wait`).
+  public let waitMinutes: Int?
+  public let lockWaitSeconds: Int?
+
+  /// The quit's wait as bosun said it, or nil for a plan object without the fields.
+  public var wait: QuitWait? {
+    guard let minutes = waitMinutes, let lock = lockWaitSeconds else { return nil }
+    return QuitWait(minutes: minutes, lockSeconds: lock)
+  }
 
   /// What quitting would meet, one line each, for the first dialog.
   public var lines: [String] {

@@ -9,7 +9,7 @@ import Testing
   ) -> QuitPlan {
     QuitPlan(
       contract: 1, windows: ["acme-orchestrator", "acme-exporter"], busy: busy, waiting: waiting,
-      keepAwakeUntil: keepAwake, refused: nil, note: note)
+      keepAwakeUntil: keepAwake, refused: nil, note: note, waitMinutes: 10, lockWaitSeconds: 180)
   }
 
   @Test func theFirstDialogShowsWhatQuittingWouldMeet() {
@@ -207,7 +207,8 @@ import Testing
 @Suite struct DefaultButtonTests {
   @Test func everyOtherDialogsFirstButtonIsItsDefault() {
     let plan = QuitPlan(
-      contract: 1, windows: [], busy: [], waiting: [], keepAwakeUntil: nil, refused: nil, note: nil)
+      contract: 1, windows: [], busy: [], waiting: [], keepAwakeUntil: nil, refused: nil, note: nil,
+      waitMinutes: nil, lockWaitSeconds: nil)
     let specs = [
       quitFirstSpec(plan), quitBusySpec(["a"]), quitStillBusySpec(["a"]), quitNoteSpec("n"),
       failureSpec("t", "m"), problemsSpec([]),
@@ -256,8 +257,7 @@ import Testing
   }
 
   @Test func aDialogsDefaultAnswerIsItsCancelButtonOrItsLast() {
-    let spec = quitFirstSpec(
-      QuitPlan(contract: 1, windows: [], busy: [], waiting: [], keepAwakeUntil: nil, refused: nil, note: nil))
+    let spec = quitFirstSpec(quitPlan(windows: []))
     #expect(spec.defaultAnswer == DialogAnswer(button: 1, boxes: ["pauseMorning": true, "keepIcon": false]))
     #expect(failureSpec("t", "m").defaultAnswer == DialogAnswer(button: 0, boxes: [:]))
   }

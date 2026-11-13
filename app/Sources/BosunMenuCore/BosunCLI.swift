@@ -93,11 +93,17 @@ public enum Bosun {
     Command(args: ["app", "login", on ? "on" : "off"], timeout: .seconds(15))
   }
 
-  /// The quit the choices make. Letting agents finish waits for them (bosun's own wait is ten minutes
-  /// by default, and a setting): the timeout is longer than any wait the app expects, and an hour is
-  /// the most it holds a quit for.
+  /// The quit the choices make. Letting agents finish waits for them: as long as the plan said (the
+  /// minutes, the lock wait and a margin: `QuitWait.timeout`). Only a plan that did not say (it always
+  /// does, against part 1) leaves bosun's own default wait and an hour as the most the app holds a quit
+  /// for. Stopping them now waits for nothing but the lock, which `bosun quit` itself bounds: two minutes.
   public static func quit(_ choices: QuitChoices) -> Command {
-    let wait: Duration = choices.busy == .letFinish ? .seconds(60 * 60) : .seconds(120)
+    let wait: Duration
+    switch (choices.busy, choices.wait) {
+    case (.letFinish, let known?): wait = known.timeout
+    case (.letFinish, nil): wait = .seconds(60 * 60)
+    case (.stopNow, _): wait = .seconds(120)
+    }
     return Command(args: quitCommand(choices), timeout: wait)
   }
 }
@@ -134,7 +140,7 @@ func firstLine(_ text: String) -> String {
 /// another exit (`update --dry-run` and `quit` print their object on every path, and say what went
 /// wrong in it). A contract number that is not ours is always `contract(.unsupported)`.
 func decodeReply<T: Decodable>(
-  _ type: T.Type, _ result: CommandResult, contractRequired: Bool = true, trustingStdout: Bool = false
+  _ type: T.Type, _ result: CommandResult, trustingStdout: Bool = false
 ) -> Result<T, FetchFailure> {
   switch result.outcome {
   case .notInstalled: return .failure(.notInstalled)
@@ -145,8 +151,7 @@ func decodeReply<T: Decodable>(
     let said = FetchFailure.exited(code, firstLine(result.stderr))
     guard code == 0 || trustingStdout else { return .failure(said) }
     do {
-      return .success(
-        try decodeContract(type, from: result.stdout, contractRequired: contractRequired))
+      return .success(try decodeContract(type, from: result.stdout))
     } catch {
       return .failure(code == 0 || error.isUnsupported ? .contract(error) : said)
     }
@@ -155,11 +160,9 @@ func decodeReply<T: Decodable>(
 
 /// Runs `command` and reads its reply as a `T`.
 public func fetch<T: Decodable & Sendable>(
-  _ type: T.Type, _ command: Command, via cli: any BosunCLI, contractRequired: Bool = true,
-  trustingStdout: Bool = false
+  _ type: T.Type, _ command: Command, via cli: any BosunCLI, trustingStdout: Bool = false
 ) async -> Result<T, FetchFailure> {
-  decodeReply(
-    type, await cli.run(command), contractRequired: contractRequired, trustingStdout: trustingStdout)
+  decodeReply(type, await cli.run(command), trustingStdout: trustingStdout)
 }
 
 // MARK: the status

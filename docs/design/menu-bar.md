@@ -90,6 +90,11 @@ Calls made from the research and the builder check, to check while reading:
 - **An agent still busy after the wait** (10 minutes): the app asks again — Keep Waiting (default), Stop It Now,
   Cancel Quit. A window waiting for you (a question or permission prompt on its screen) is not waited on: the dialog
   lists it by name, and Quit stops it.
+- **The app times a quit by the plan.** `quit --plan --json` says how long a `--let-finish` may wait
+  (`wait_minutes`) and how long its steps wait for the windows lock (`lock_wait_seconds`). The app runs
+  `bosun quit --let-finish=<wait_minutes>` and gives that command wait + lock wait + a margin of two minutes,
+  and "Keep Waiting" runs the same quit again with the same minutes. A plan object without the two fields
+  (part 1 always prints them) leaves bosun's default wait and an hour as the longest the app holds a quit.
 - **After Quit the launchd jobs stay loaded and do nothing** until Start: the watchdog and learning skip their runs
   while bosun is stopped, the morning job skips while paused. So a Quit never reloads a job. The console job is the one that would restart a process, so its KeepAlive
   depends on a marker file Start creates and Quit removes (launchd's `KeepAlive` → `PathState`).

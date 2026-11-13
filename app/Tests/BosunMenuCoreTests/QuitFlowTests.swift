@@ -70,9 +70,12 @@ private let busyPlan = quitPlan(
     let choices = QuitChoices(pauseMorning: false, sleep: true, keepIcon: false, busy: .stopNow)
     let (running, commands) = next(step, on: .confirmed(choices))
     // Nothing is busy, so there is nothing to stop: the safe way waits for anything that turns busy
+    let wait = QuitWait(minutes: 10, lockSeconds: 180)  // what the plan said
     #expect(
-      running == .running(QuitChoices(pauseMorning: false, sleep: true, keepIcon: false, busy: .letFinish)))
-    #expect(commands.map(\.args) == [["quit", "--let-finish", "--sleep", "--json"]])
+      running
+        == .running(
+          QuitChoices(pauseMorning: false, sleep: true, keepIcon: false, busy: .letFinish, wait: wait)))
+    #expect(commands.map(\.args) == [["quit", "--let-finish=10", "--sleep", "--json"]])
     let (done, none) = next(running, on: .ended(.stopped(note: nil)))
     #expect(done == .done(keepIcon: false, note: nil))
     #expect(none.isEmpty)
@@ -87,7 +90,9 @@ private let busyPlan = quitPlan(
   @Test func busyAgentsAskASecondQuestionBeforeAnythingRuns() {
     let choices = QuitChoices()
     let (step, commands) = next(.first(busyPlan), on: .confirmed(choices))
-    #expect(step == .busy(["acme-exporter", "acme-api"], choices))
+    #expect(
+      step
+        == .busy(["acme-exporter", "acme-api"], QuitChoices(wait: QuitWait(minutes: 10, lockSeconds: 180))))
     #expect(commands.isEmpty)
   }
 

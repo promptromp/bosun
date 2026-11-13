@@ -195,13 +195,15 @@ import Testing
     #expect(Fixtures.dryRun("update-plan-none").plan == nil)
   }
 
-  @Test func theDryRunHasNoContractNumberButOneThatIsThereMustBeOurs() {
+  @Test func theDryRunCarriesTheContractNumberLikeEveryOtherObject() {
     #expect(throws: ContractError.unsupported(2)) {
-      try decodeContract(
-        UpdateDryRun.self, from: #"{"contract": 2, "plan": null}"#, contractRequired: false)
+      try decodeContract(UpdateDryRun.self, from: #"{"contract": 2, "plan": null}"#)
+    }
+    #expect(throws: ContractError.unreadable("it has no contract number")) {
+      try decodeContract(UpdateDryRun.self, from: #"{"plan": null}"#)
     }
     #expect(throws: ContractError.self) {
-      try decodeContract(UpdateDryRun.self, from: "{", contractRequired: false)
+      try decodeContract(UpdateDryRun.self, from: "{")
     }
   }
 
@@ -222,13 +224,13 @@ import Testing
   }
 
   @Test func aWindowIsANameAndHowItIsTreated() throws {
-    let text = #"{"plan": {"windows": [["acme-api", "restart"]]}}"#
-    let run = try decodeContract(UpdateDryRun.self, from: text, contractRequired: false)
+    let text = #"{"contract": 1, "plan": {"windows": [["acme-api", "restart"]]}}"#
+    let run = try decodeContract(UpdateDryRun.self, from: text)
     #expect(run.plan?.windows == [PlannedWindow(name: "acme-api", treatment: .restart)])
     #expect(run.plan?.commits == [])
     #expect(throws: ContractError.self) {
       try decodeContract(
-        UpdateDryRun.self, from: #"{"plan": {"windows": [["only a name"]]}}"#, contractRequired: false)
+        UpdateDryRun.self, from: #"{"contract": 1, "plan": {"windows": [["only a name"]]}}"#)
     }
   }
 }

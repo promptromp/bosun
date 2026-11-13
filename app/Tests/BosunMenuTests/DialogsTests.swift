@@ -8,17 +8,18 @@ private func quitPlan(busy: [String] = ["acme-exporter"], keepAwake: String? = "
   QuitPlan(
     contract: 1, windows: ["acme-orchestrator", "acme-exporter", "acme-web"], busy: busy,
     waiting: ["acme-web"],
-    keepAwakeUntil: keepAwake, refused: nil, note: nil)
+    keepAwakeUntil: keepAwake, refused: nil, note: nil, waitMinutes: 10, lockWaitSeconds: 180)
 }
 
 private func updatePlan() -> UpdatePlan {
   let json = """
-    {"plan": {"from_commit": "a", "to_commit": "b", "commits": ["Hardening", "Repo windows on a second agent"],
+    {"contract": 1,
+     "plan": {"from_commit": "a", "to_commit": "b", "commits": ["Hardening", "Repo windows on a second agent"],
      "windows": [["acme-api", "restart"], ["acme-exporter", "take stock, then restart"], ["acme-web", "ask first"],
                  ["acme-notes", "leave"]],
      "handed": ["task:acme/exporter#7"], "user_changes": [], "blockers": []}}
     """
-  return try! decodeContract(UpdateDryRun.self, from: json, contractRequired: false).plan!
+  return try! decodeContract(UpdateDryRun.self, from: json).plan!
 }
 
 private func check() -> UpdateCheck {
@@ -217,10 +218,10 @@ final class StoppedWith {
 
   @Test func theBlockedPlanOnlyHasOK() {
     let json = """
-      {"plan": {"from_commit": "a", "to_commit": "b", "commits": [], "windows": [], "handed": [],
+      {"contract": 1, "plan": {"from_commit": "a", "to_commit": "b", "commits": [], "windows": [], "handed": [],
        "user_changes": [], "blockers": ["a migration is missing"]}}
       """
-    let plan = try! decodeContract(UpdateDryRun.self, from: json, contractRequired: false).plan!
+    let plan = try! decodeContract(UpdateDryRun.self, from: json).plan!
     let built = Dialogs.build(updatePlanSpec(plan, check: check()))
     #expect(built.alert.buttons.map(\.title) == ["OK"])
     #expect(built.alert.informativeText.contains("a migration is missing"))

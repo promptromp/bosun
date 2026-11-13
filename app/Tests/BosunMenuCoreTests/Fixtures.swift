@@ -23,7 +23,7 @@ enum Fixtures {
   }
 
   static func dryRun(_ name: String) -> UpdateDryRun {
-    try! decodeContract(UpdateDryRun.self, from: text(name), contractRequired: false)
+    try! decodeContract(UpdateDryRun.self, from: text(name))
   }
 
   static func plan(_ name: String = "update-plan") -> UpdatePlan {
@@ -50,9 +50,11 @@ func quitPlan(
   busy: [String] = [],
   waiting: [String] = [],
   keepAwake: String? = nil,
-  refused: String? = nil
+  refused: String? = nil,
+  waitMinutes: Int? = 10,
+  lockWaitSeconds: Int? = 180
 ) -> QuitPlan {
   QuitPlan(
     contract: 1, windows: windows, busy: busy, waiting: waiting, keepAwakeUntil: keepAwake,
-    refused: refused, note: nil)
+    refused: refused, note: nil, waitMinutes: waitMinutes, lockWaitSeconds: lockWaitSeconds)
 }

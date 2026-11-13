@@ -11,26 +11,51 @@ public enum BusyChoice: Equatable, Sendable {
   case stopNow
 }
 
+/// How long a quit that lets the agents finish may take, as the plan said it: the minutes `--let-finish`
+/// waits for and the seconds its steps may wait for the windows lock.
+public struct QuitWait: Equatable, Sendable {
+  public let minutes: Int
+  public let lockSeconds: Int
+
+  /// The `--let-finish` argument, which keeps the app's wait and bosun's own the same number.
+  var argument: String { "--let-finish=\(minutes)" }
+
+  /// The CLI timeout: the wait, the lock wait and a margin for the rest of the quit.
+  var timeout: Duration { .seconds(minutes * 60 + lockSeconds + Self.marginSeconds) }
+
+  static let marginSeconds = 120
+}
+
 public struct QuitChoices: Equatable, Sendable {
   public var pauseMorning: Bool
   public var sleep: Bool
   public var keepIcon: Bool
   public var busy: BusyChoice
+  /// The wait a `--let-finish` quit is given, taken from the plan when the first dialog is answered, and
+  /// kept for "Keep Waiting". Nil only for a plan that did not say (`QuitPlan.wait`): bosun's own default
+  /// minutes then, and the longest timeout the app ever holds a quit for.
+  public var wait: QuitWait?
 
   public init(
-    pauseMorning: Bool = true, sleep: Bool = true, keepIcon: Bool = false, busy: BusyChoice = .letFinish
+    pauseMorning: Bool = true, sleep: Bool = true, keepIcon: Bool = false, busy: BusyChoice = .letFinish,
+    wait: QuitWait? = nil
   ) {
     self.pauseMorning = pauseMorning
     self.sleep = sleep
     self.keepIcon = keepIcon
     self.busy = busy
+    self.wait = wait
   }
 }
 
-/// The `bosun quit` argv for the choices: `quit --let-finish|--stop-now [--pause-morning] [--sleep] --json`.
-/// `keepIcon` is the app's own and never the command's.
+/// The `bosun quit` argv for the choices: `quit --let-finish[=<minutes>]|--stop-now [--pause-morning]
+/// [--sleep] --json`. `keepIcon` is the app's own and never the command's.
 public func quitCommand(_ choices: QuitChoices) -> [String] {
-  var args = ["quit", choices.busy == .letFinish ? "--let-finish" : "--stop-now"]
+  var args = ["quit"]
+  switch choices.busy {
+  case .letFinish: args.append(choices.wait?.argument ?? "--let-finish")
+  case .stopNow: args.append("--stop-now")
+  }
   if choices.pauseMorning { args.append("--pause-morning") }
   if choices.sleep { args.append("--sleep") }
   return args + ["--json"]
@@ -126,6 +151,8 @@ private func cancelling(_ step: QuitStep) -> (QuitStep, [Command]) {
 /// The first dialog's answer. Busy agents get a second question; with none, the quit waits for any that
 /// turns busy meanwhile, so it never stops an agent's work without a say.
 private func confirming(_ plan: QuitPlan, _ choices: QuitChoices) -> (QuitStep, [Command]) {
+  var choices = choices
+  choices.wait = plan.wait
   if plan.busy.isEmpty { return running(QuitChoices(copying: choices, busy: .letFinish)) }
   return (.busy(plan.busy, choices), [])
 }
