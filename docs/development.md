@@ -22,8 +22,9 @@ as `pull_request`) and merges it when they pass, so nobody updates a branch by h
 and minor updates of the GitHub Actions, the sandbox's Docker base image, the pre-commit hooks and the
 uv development dependencies get auto-merge turned on by `.github/workflows/dependabot-auto-merge.yml`,
 which only adds them to the queue once their checks pass; majors and production dependencies wait for
-a person. CI runs every unit test on Linux (on macOS too once the smoke job is back), and keeps a floor under their
-coverage. For the forbidden-terms check to run there too, store your list as the
+a person. CI runs every unit test on Linux (Python 3.13 and 3.14; on macOS too once the smoke job is back), and
+keeps a floor under their coverage, measured through `sys.monitoring` (`COVERAGE_CORE=sysmon`) because 3.13's
+default, `sys.settrace`, made every test about a quarter slower. For the forbidden-terms check to run there too, store your list as the
 `FORBIDDEN_TERMS` Actions secret with `gh secret set FORBIDDEN_TERMS <
 ~/.config/bosun/forbidden-terms.txt`; the logs never print what it matched.
 
