@@ -4465,11 +4465,11 @@ FAKE
   }
   g_line="curl -fsSL https://raw.githubusercontent.com/promptromp/bosun/main/get.sh"
   check "... a first install that asked for a branch hands init the channel under init's own name, never the config key" says_lines \
-    "$(g_init_env BOSUN_BRANCH=feature)" "init env: channel=main config_channel= rerun=$g_line | BOSUN_BRANCH=feature sh"
-  check "... and the line it prints to run again keeps that branch, as it keeps the agent" says_lines \
-    "$(g_init_env BOSUN_BRANCH=feature BOSUN_HARNESS=codex)" "init env: channel=main config_channel= rerun=$g_line | BOSUN_BRANCH=feature BOSUN_HARNESS=codex sh"
-  check "... without a branch, init is told no channel, and the line has none" says_lines \
-    "$(g_init_env)" "init env: channel= config_channel= rerun=$g_line | sh"
+    "$(g_init_env BOSUN_BRANCH=feature)" "init env: channel=main config_channel= rerun=$g_line | BOSUN_DIR=$G_DIR BOSUN_BRANCH=feature sh"
+  check "... and the line it prints to run again keeps that branch and the folder, as it keeps the agent" says_lines \
+    "$(g_init_env BOSUN_BRANCH=feature BOSUN_HARNESS=codex)" "init env: channel=main config_channel= rerun=$g_line | BOSUN_DIR=$G_DIR BOSUN_BRANCH=feature BOSUN_HARNESS=codex sh"
+  check "... without a branch, init is told no channel, and the line has none (it keeps the folder)" says_lines \
+    "$(g_init_env)" "init env: channel= config_channel= rerun=$g_line | BOSUN_DIR=$G_DIR sh"
   printf '#!/bin/sh\n' >"$G_DIR/bin/bosun"
   chmod -x "$G_DIR/bin/bosun" # as it was
   mkdir -p "$G/home/.local/bin"
