@@ -2447,6 +2447,10 @@ status_seconds="$(python3 -I -c 'import subprocess, sys, time; t = time.monotoni
 echo "  note  bosun status --json took ${status_seconds}s with five windows (the app polls it)"
 check "... quick enough to poll: under 10 seconds" python3 -I -c 'import sys; sys.exit(not float(sys.argv[1]) < 10)' "$status_seconds"
 check "... a level of ok is one with no problems, anything else lists them" status_has '(d["level"] == "ok") == (d["problems"] == []) and all(isinstance(p, str) for p in d["problems"])'
+cp -p "$BOSUN_STATE_DIR/watchdog.json" "$WORK/watchdog-before-status.json"
+: >"$BOSUN_STATE_DIR/watchdog.json"
+check "an empty watchdog.json still gives one parseable object on stdout, and says so" status_has 'd["level"] in ("warning", "error") and "saved state" in " ".join(d["problems"])'
+cp -p "$WORK/watchdog-before-status.json" "$BOSUN_STATE_DIR/watchdog.json"
 "$BOSUN" stop >/dev/null 2>&1
 mkdir -p "$WORK/status-cfg"
 printf 'if then fi\n' >"$WORK/status-cfg/bosun.env"

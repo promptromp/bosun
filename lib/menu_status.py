@@ -14,9 +14,10 @@ its own, so the menu and the watchdog never disagree.
   finding is then the problem listed, not a second line); or a check of severity error has a finding.
 - warning: a check of severity warn has a finding, an ERROR line was logged in the last hour, or a fact
   could not be read (an answer built on a guess is never all well).
-- ok otherwise: "resting until 08:00" when no window is open outside the awake hours or before the
-  morning is due, "starting (the morning run)" while that runs. With no morning run today there is no
-  rule here: the watchdog's `morning-missing` finding sets the level, as any finding does.
+- ok otherwise: "resting until 08:00" when no window is open outside the awake hours, "starting (the
+  morning run)" once the window began and the run is going or not yet due (at the error level never
+  "starting": a crashed or hung run keeps counting as going, and is named as failed). With no morning run
+  today there is no rule here: the watchdog's `morning-missing` finding sets the level, as any finding does.
 
 The contract number (CONTRACT) is the app's check that it understands what it reads: it only ever grows,
 and a field is only ever added.
@@ -45,16 +46,18 @@ RANK = {OK: 0, WARNING: 1, ERROR: 2}
 SEVERITY_LEVEL = {"warn": WARNING, "error": ERROR}
 SESSION_CHECK = "session-missing"
 LOG_CHECK = "log-errors"
+MORNING_FAILED = "morning-failed"
 READ_PART = {
     "sessions": "the windows",
     "watchdog": "the watchdog's checks",
+    "watchdog-state": "the watchdog's saved state (its checks run as if on a first run)",
     "config": "bosun's settings",
     "logs": "the logs",
 }
 # What a SessionGate says about a missing session (watchdog.session_gate_kind, mapped by menu_status_live)
 EXPECTED = "expected"  # it should be running now
-RESTING = "resting"  # outside the awake window (at: None), or before the morning is due (at: that time)
-STARTING = "starting"  # the morning run is still going
+RESTING = "resting"  # outside the awake window: until its next scheduled start
+STARTING = "starting"  # the morning run is going, or is about to (the awake window began, it is not yet due)
 STOPPED_BY_STOP = "stopped"  # you stopped it today with bosun stop (at: when)
 NO_MORNING = "no-morning"  # no morning run today: morning-missing's to say
 DAYS_AHEAD = 8  # the next scheduled start is within a week; a day more for the same weekday
@@ -128,11 +131,7 @@ def next_start(window: awake.AwakeWindow | None, now: datetime) -> datetime | No
 
 
 def log_problem(lines: tuple[str, ...]) -> str:
-    shown = "; ".join(lines[: watchdog.MAX_DETAIL_LINES])
-    more = (
-        f" (+{len(lines) - watchdog.MAX_DETAIL_LINES} more)" if len(lines) > watchdog.MAX_DETAIL_LINES else ""
-    )
-    return f"{plural(len(lines), 'ERROR line')} in the bosun logs in the last hour: {shown}{more}"
+    return f"{plural(len(lines), 'ERROR line')} in the bosun logs in the last hour: {watchdog.listed(lines)}"
 
 
 def unread_problems(errors: Mapping[str, str]) -> list[tuple[str, str]]:
@@ -156,25 +155,29 @@ def problems_of(facts: StatusFacts, missing: bool) -> list[tuple[str, str]]:
 # ---- the sentence ------------------------------------------------------------------------------
 
 
-def with_level(base: str, level: str, running: bool) -> str:
-    if level == WARNING:
-        return f"{base}, with a warning"
-    if level == ERROR and running:
-        return f"{base}, with an error"
-    return base
+def with_level(base: str, level: str) -> str:
+    suffix = {WARNING: ", with a warning", ERROR: ", with an error"}
+    return base + suffix.get(level, "")
+
+
+def failed_sentence(facts: StatusFacts) -> str:
+    """The first line when the morning run is going but a check says it failed (it crashed or hung, and
+    still counts as running): never "starting"."""
+    failed = any(name == MORNING_FAILED for _level, name, _message in findings(facts.checks))
+    return "bosun is not running: the morning run failed" if failed else "bosun is not running"
 
 
 def not_running_sentence(facts: StatusFacts, level: str, now: datetime) -> str:
     """The first line when no window is open (and it is not a stop)."""
-    gate = facts.gate
-    if gate is not None and gate.kind == STARTING:
-        return with_level("bosun is starting (the morning run)", level, False)
-    if gate is None or gate.kind != RESTING or level == ERROR:
-        return "bosun is not running"
-    start = gate.at or next_start(facts.awake, now)
+    kind = facts.gate.kind if facts.gate is not None else None
+    if kind == STARTING:
+        if level == ERROR:
+            return failed_sentence(facts)
+        return with_level("bosun is starting (the morning run)", level)
+    start = next_start(facts.awake, now) if kind == RESTING else None
     if start is None:
         return "bosun is not running"
-    return with_level(f"bosun is resting until {start:%H:%M}", level, False)
+    return with_level(f"bosun is resting until {start:%H:%M}", level)
 
 
 def running_sentence(facts: StatusFacts, level: str, count: int | None, now: datetime) -> str:
@@ -182,7 +185,7 @@ def running_sentence(facts: StatusFacts, level: str, count: int | None, now: dat
     if count is None:
         return "bosun's windows could not be read"
     if count > 0:
-        return with_level("bosun is running", level, True)
+        return with_level("bosun is running", level)
     return not_running_sentence(facts, level, now)
 
 

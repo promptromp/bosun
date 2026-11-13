@@ -15,6 +15,7 @@ import unittest
 from datetime import UTC, datetime, time, timedelta
 from pathlib import Path
 from typing import Any
+from unittest import mock
 
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "lib"))
@@ -23,6 +24,7 @@ import menu_status
 import menu_status_live
 import quit_state
 import update_state
+import watchdog
 from console_live import LiveError
 from menu_status import SessionGate, StatusFacts
 
@@ -164,12 +166,6 @@ class LevelsTestCase(unittest.TestCase):
         self.assertEqual((out["level"], out["sentence"]), ("ok", "bosun is resting until 08:00"))
         self.assertEqual(out["problems"], [])
 
-    def test_no_session_before_the_morning_is_due_is_ok_and_rests_until_then(self) -> None:
-        due = NOW.replace(hour=8, minute=16)
-        out = snap(NOW.replace(hour=8, minute=5), windows=GONE, gate=SessionGate(menu_status.RESTING, due))
-        self.assertEqual((out["level"], out["sentence"]), ("ok", "bosun is resting until 08:16"))
-        self.assertEqual(out["problems"], [])
-
     def test_a_morning_run_that_is_still_going_is_ok_and_starting(self) -> None:
         out = snap(windows=GONE, gate=SessionGate(menu_status.STARTING))
         self.assertEqual((out["level"], out["sentence"]), ("ok", "bosun is starting (the morning run)"))
@@ -177,8 +173,6 @@ class LevelsTestCase(unittest.TestCase):
 
     def test_with_no_morning_run_today_only_the_watchdogs_findings_decide(self) -> None:
         gate = SessionGate(menu_status.NO_MORNING)
-        quiet = snap(windows=GONE, gate=gate)
-        self.assertEqual((quiet["level"], quiet["problems"]), ("ok", []))
         message = "No morning run today."
         loud = snap(
             windows=GONE, gate=gate, checks=watchdog_checks(check("morning-missing", "error", message))
@@ -223,11 +217,29 @@ class LevelsTestCase(unittest.TestCase):
             gate=RESTING,
             checks=watchdog_checks(check("morning-failed", "error", "e1")),
         )
-        self.assertEqual((out["level"], out["sentence"]), ("error", "bosun is not running"))
+        self.assertEqual(
+            (out["level"], out["sentence"]), ("error", "bosun is resting until 08:00, with an error")
+        )
 
-    def test_a_gate_that_could_not_be_told_makes_no_judgement_of_a_missing_session(self) -> None:
-        out = snap(windows=GONE, gate=None)
-        self.assertEqual((out["level"], out["problems"]), ("ok", []))
+    def test_a_morning_run_that_failed_is_never_starting(self) -> None:
+        # A crashed or hung run keeps outcome "running": the gate says it is going, morning-failed says not
+        gate = SessionGate(menu_status.STARTING)
+        out = snap(
+            windows=GONE,
+            gate=gate,
+            checks=watchdog_checks(check("morning-failed", "error", "The morning run did not finish.")),
+        )
+        self.assertEqual(
+            (out["level"], out["sentence"]), ("error", "bosun is not running: the morning run failed")
+        )
+        other = snap(windows=GONE, gate=gate, checks=watchdog_checks(check("waiting", "error", "e1")))
+        self.assertEqual((other["level"], other["sentence"]), ("error", "bosun is not running"))
+        mild = snap(windows=GONE, gate=gate, checks=watchdog_checks(check("waiting", "warn", "w1")))
+        self.assertEqual(mild["sentence"], "bosun is starting (the morning run), with a warning")
+
+    def test_a_gate_that_could_not_be_told_is_said_by_the_part_that_failed(self) -> None:
+        out = snap(windows=GONE, gate=None, checks=None, errors={"watchdog": "watchdog --facts exited 1"})
+        self.assertEqual((out["level"], out["sentence"]), ("warning", "bosun is not running"))
 
     def test_a_window_that_is_configured_but_not_open_does_not_count(self) -> None:
         out = snap(windows=[window("orch"), window("exporter", exists=False)])
@@ -601,16 +613,73 @@ class GatherTestCase(unittest.TestCase):
             return menu_status_live.gather(self.env, moment, good_commands()).gate
 
         self.assertEqual(gate(at(21)), SessionGate(menu_status.RESTING))
-        self.assertEqual(gate(at(8, 5)), SessionGate(menu_status.RESTING, at(8, 16)))
+        # the window began, the morning is not due yet (08:16): starting, not resting until a past time
+        self.assertEqual(gate(at(8, 5)), SessionGate(menu_status.STARTING))
         self.assertEqual(gate(at(10)), SessionGate(menu_status.NO_MORNING))
         log.write_text(header + "\n")
         self.assertEqual(gate(at(10)), SessionGate(menu_status.STARTING))
+        self.assertEqual(gate(at(8, 5)), SessionGate(menu_status.STARTING))  # going, though not yet due
         log.write_text(header + "\n2026-11-11 08:03:00 [morning] morning run complete\n")
         self.assertEqual(gate(at(10)), SessionGate(menu_status.EXPECTED))
         (self.state / "stopped-acme").write_text("2026-11-11 09:30:00\n")
         self.assertEqual(gate(at(10)), SessionGate(menu_status.STOPPED_BY_STOP, at(9, 30)))
         (self.state / "stopped-acme").write_text("2026-11-10 09:30:00\n")  # yesterday's stop is over
         self.assertEqual(gate(at(10)), SessionGate(menu_status.EXPECTED))
+
+    def test_a_morning_that_crashed_is_not_called_starting(self) -> None:
+        # No end line, the launchd job not running with exit 1: outcome stays "running"
+        header = (
+            "2026-11-11 08:00:30 [morning] === morning run (trigger=launchd, session=acme, dry_run=0) ==="
+        )
+        (self.state / "logs" / "morning-2026-11-11.log").write_text(header + "\n")
+        facts_json = {**WATCHDOG_FACTS, "session_exists": False, "windows": []}
+        facts_json["morning_job"] = {"state": "not running", "last_exit_code": "1"}
+        gone = [window(w["name"], exists=False) for w in WINDOWS]
+        run = FakeCommands({"sessions --json": json.dumps(gone), "watchdog --facts": json.dumps(facts_json)})
+        found = self.gather(run)
+        self.assertEqual(found.gate, SessionGate(menu_status.STARTING))
+        out = menu_status.snapshot(found, NOW)
+        self.assertEqual(out["level"], "error")
+        self.assertEqual(out["sentence"], "bosun is not running: the morning run failed")
+
+    def test_the_state_is_read_once_and_an_unreadable_one_is_a_problem(self) -> None:
+        (self.state / "watchdog.json").write_text("")
+        loads: list[Path] = []
+        real = watchdog.State.load.__func__  # type: ignore[attr-defined]
+
+        def counting(cls: type[watchdog.State], state_dir: Path) -> watchdog.State:
+            loads.append(state_dir)
+            return real(cls, state_dir)  # type: ignore[no-any-return]
+
+        said = io.StringIO()
+        with (
+            mock.patch.object(watchdog.State, "load", classmethod(counting)),
+            contextlib.redirect_stdout(said),
+        ):
+            found = self.gather()
+        self.assertEqual(len(loads), 1)
+        self.assertEqual(said.getvalue(), "")  # what it said was caught, not printed
+        self.assertIn("watchdog.json", found.errors["watchdog-state"])
+        self.assertIn("starting afresh", found.errors["watchdog-state"])
+        self.assertIsNotNone(found.checks)
+        self.assertIsNotNone(found.gate)
+        out = menu_status.snapshot(found, NOW)
+        self.assertNotEqual(out["level"], "ok")
+        self.assertIn("the watchdog's saved state", " ".join(out["problems"]))
+
+    def test_facts_that_are_not_facts_are_a_problem_not_a_pass(self) -> None:
+        for text in ("null", "{}", "[]", '"x"'):
+            with self.subTest(text=text):
+                run = FakeCommands({"sessions --json": json.dumps(WINDOWS), "watchdog --facts": text})
+                found = self.gather(run)
+                self.assertIn("watchdog --facts", found.errors["watchdog"])
+                self.assertIsNone(found.checks)
+        for text in ("null", "{}", '"x"'):
+            with self.subTest(sessions=text):
+                run = FakeCommands({"sessions --json": text, "watchdog --facts": json.dumps(WATCHDOG_FACTS)})
+                found = self.gather(run)
+                self.assertIsNone(found.windows)
+                self.assertIn("sessions --json", found.errors["sessions"])
 
     def test_without_the_checks_there_is_no_gate(self) -> None:
         self.assertIsNone(self.gather(FakeCommands({"sessions --json": json.dumps(WINDOWS)})).gate)
@@ -682,6 +751,22 @@ class CommandTestCase(unittest.TestCase):
         self.assertEqual(data["contract"], 1)
         self.assertEqual(data["windows"], 3)
         self.assertIsNone(data["console"]["url"])
+
+    def test_what_is_printed_while_gathering_does_not_reach_stdout(self) -> None:
+        (self.state / "watchdog.json").write_text("")  # the watchdog says so, and starts afresh
+
+        def noisy(argv: list[str]) -> str:
+            print("[bosun] noise from a reader")
+            return good_commands()(argv)
+
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err):
+            status, text = self.run_main(run=noisy)
+        data = json.loads(text)  # one object, nothing before it
+        self.assertEqual((status, text.count("\n")), (0, 1))
+        self.assertIn("watchdog.json", " ".join(data["problems"]))
+        self.assertIn(data["level"], ("warning", "error"))
+        self.assertIn("noise from a reader", err.getvalue())
 
     def test_nothing_readable_still_prints_the_object(self) -> None:
         status, text = self.run_main(run=FakeCommands({}))

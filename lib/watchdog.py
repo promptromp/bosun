@@ -28,7 +28,7 @@ import os
 import re
 import subprocess
 import sys
-from collections.abc import Callable, Iterator, Mapping
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from datetime import UTC, date, datetime, time, timedelta
 from pathlib import Path
@@ -327,6 +327,13 @@ def detail(line: str) -> str:
     return text if len(text) <= DETAIL_CHARS else text[: DETAIL_CHARS - 3] + "..."
 
 
+def listed(lines: Sequence[str]) -> str:
+    """The first MAX_DETAIL_LINES of <lines> for an alert, and how many more there are."""
+    shown = "; ".join(lines[:MAX_DETAIL_LINES])
+    more = f" (+{len(lines) - MAX_DETAIL_LINES} more)" if len(lines) > MAX_DETAIL_LINES else ""
+    return f"{shown}{more}"
+
+
 def parse_run(header: re.Match[str], body: list[str]) -> MorningRun:
     run = MorningRun(datetime.strptime(header["at"], STAMP), header["trigger"])
     for line in body:
@@ -522,10 +529,9 @@ def check_morning_failed(ctx: Context) -> Result:
         return unfinished_run(ctx, run)
     if not run.problems:
         return Result(f"the {run.started:%H:%M} run completed")
-    shown = "; ".join(run.problems[:MAX_DETAIL_LINES])
-    more = f" (+{len(run.problems) - MAX_DETAIL_LINES} more)" if len(run.problems) > MAX_DETAIL_LINES else ""
     message = (
-        f"The morning run at {run.started:%H:%M} reported problems: {shown}{more}. Log: {ctx.morning_log}"
+        f"The morning run at {run.started:%H:%M} reported problems: {listed(run.problems)}. "
+        f"Log: {ctx.morning_log}"
     )
     return Result(findings=[Finding(f"morning-failed:{ctx.today}", message)])
 
@@ -640,10 +646,8 @@ def check_log_errors(ctx: Context) -> Result:
     note = f"no new ERROR lines in {len(files)} log file(s)"
     if not found:
         return Result(note, offsets=offsets)
-    shown = "; ".join(found[:MAX_DETAIL_LINES])
-    more = f" (+{len(found) - MAX_DETAIL_LINES} more)" if len(found) > MAX_DETAIL_LINES else ""
     digest = hashlib.sha256("\n".join(found).encode()).hexdigest()[:16]
-    message = f"{len(found)} new ERROR line(s) in the bosun logs: {shown}{more}"
+    message = f"{len(found)} new ERROR line(s) in the bosun logs: {listed(found)}"
     return Result(note, [Finding(f"log-errors:{digest}", message)], offsets)
 
 
@@ -1802,10 +1806,10 @@ def window_text(config: Config, now: datetime, in_window: bool) -> str:
     return f"awake window {config.days} {begin:%H:%M}-{end:%H:%M}, {where}"
 
 
-def status_data(inputs: Inputs, checks: tuple[Check, ...]) -> dict[str, Any]:
+def status_data(inputs: Inputs, checks: tuple[Check, ...], state: State | None = None) -> dict[str, Any]:
     """Every check and its current result, as data (`--status`, and the console's health panel).
-    Reads only: nothing is recorded or sent."""
-    state = State.load(inputs.config.state_dir)
+    Reads only: nothing is recorded or sent. <state> is the one the caller loaded, if it did."""
+    state = state or State.load(inputs.config.state_dir)
     report = evaluate(inputs.context(state), checks)
     decisions = {v.finding.key: v.decision for v in report.verdicts}
 

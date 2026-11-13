@@ -157,9 +157,11 @@ Calls made from the research and the builder check, to check while reading:
   and the command). The keep-awake end comes from `keep-awake-<session>.json` (`{"until", "pid"}`), which the morning
   writes beside the pid file and `bosun stop` removes; a hold whose process is gone is not shown. A missing session is judged by the watchdog's own gate
   (`watchdog.session_gate_kind`), never by a rule of status's own: an error only when it should be running; a plain
-  `bosun stop` today is `stopped` with the morning not paused; outside the awake hours or before the morning is due
-  it is resting, and while the morning runs it is starting. A quit record that
-  cannot be read shows as stopped, with the problem saying so and that `bosun start` clears it.
+  `bosun stop` today is `stopped` with the morning not paused; outside the awake hours it is resting (until the next
+  scheduled start), and when the awake window has begun and the morning run is going or not yet due it is starting
+  (never, at the error level: a crashed or hung morning run is named as failed). The yellow level also lists the ERROR
+  lines of the last hour after the watchdog has alerted them (the same line is an error until the watchdog's next
+  run, then a warning for the hour). A quit record that cannot be read shows as stopped, with the problem saying so and that `bosun start` clears it.
 - **The console as a job.** `templates/launchd-console.plist` runs `bosun console` (persisted token, its port),
   rendered and loaded by `reload_changed_jobs` only with `BOSUN_CONSOLE_ALWAYS=1`. Its `KeepAlive` is `PathState` on
   `$BOSUN_STATE_DIR/console/wanted` alone and `RunAtLoad` is false: launchd starts a job whose KeepAlive condition holds

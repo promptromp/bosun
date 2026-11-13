@@ -18,6 +18,8 @@ part that failed becomes a problems line and at least a warning, and a bug in he
 from __future__ import annotations
 
 import argparse
+import contextlib
+import io
 import itertools
 import json
 import os
@@ -31,7 +33,6 @@ from typing import Any
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import agent_files
-import awake
 import console_live
 import console_token
 import menu_status
@@ -126,36 +127,45 @@ def recent_log_errors(log_dir: Path, now: datetime) -> tuple[str, ...]:
 # ---- the rest ------------------------------------------------------------------------------------
 
 
-def awake_window(env: Mapping[str, str]) -> awake.AwakeWindow:
-    try:
-        return watchdog.Config.from_env(env).awake
-    except watchdog.ConfigError as exc:
-        raise LiveError(str(exc)) from exc
-
-
 GATE_KINDS = {
     watchdog.GATE_OUTSIDE: menu_status.RESTING,
+    # The awake window began and the morning run is not yet due (it may be going, or about to): starting
+    watchdog.GATE_NOT_DUE: menu_status.STARTING,
     watchdog.GATE_MORNING_RUNNING: menu_status.STARTING,
     watchdog.GATE_NO_MORNING: menu_status.NO_MORNING,
 }
 
 
-def session_gate(
-    settings: console_live.Settings, watchdog_facts: dict[str, Any], now: datetime
-) -> SessionGate:
-    """Whether the watchdog expects the session to run now: its own `session_gate_kind`, over the same
-    context its checks are made from, as a fact (never its text)."""
-    inputs = console_live.watchdog_inputs(settings, watchdog_facts, now)
-    ctx = inputs.context(watchdog.State.load(inputs.config.state_dir))
+def gate_of(ctx: watchdog.Context) -> SessionGate:
+    """Whether the watchdog expects the session to run now: its own `session_gate_kind` over the context its
+    checks are made from, as a fact (never its text)."""
     found = watchdog.session_gate_kind(ctx)
     if found is None:
         return SessionGate(menu_status.EXPECTED)
-    kind = found[0]
-    if kind == watchdog.GATE_NOT_DUE:  # resting until the morning run is due
-        return SessionGate(menu_status.RESTING, watchdog.morning_due(ctx.config, ctx.today))
-    if kind == watchdog.GATE_STOPPED:
+    if found[0] == watchdog.GATE_STOPPED:
         return SessionGate(menu_status.STOPPED_BY_STOP, watchdog.stopped_today(ctx))
-    return SessionGate(GATE_KINDS[kind])
+    return SessionGate(GATE_KINDS[found[0]])
+
+
+def load_state(state_dir: Path) -> tuple[watchdog.State, str]:
+    """The watchdog's saved state, and what it said if it could not be read (it prints that and starts
+    afresh, which must not reach this command's stdout)."""
+    said = io.StringIO()
+    with contextlib.redirect_stdout(said):
+        state = watchdog.State.load(state_dir)
+    text = said.getvalue().strip()
+    return state, watchdog.detail(text) if text else ""
+
+
+def watchdog_view(
+    config: watchdog.Config, watchdog_facts: dict[str, Any], now: datetime
+) -> tuple[dict[str, Any], SessionGate, str]:
+    """The watchdog's checks as data and its gate, from one set of inputs and one loading of its state
+    (read-only), and what it said about the state if that could not be read."""
+    inputs = console_live.watchdog_inputs(config, watchdog_facts, now)
+    state, note = load_state(config.state_dir)
+    checks = watchdog.status_data(inputs, watchdog.CHECKS, state)
+    return checks, gate_of(inputs.context(state)), note
 
 
 def update_facts(state_dir: Path) -> tuple[bool, tuple[str, ...]]:
@@ -167,25 +177,55 @@ def update_facts(state_dir: Path) -> tuple[bool, tuple[str, ...]]:
     return True, tuple(waiting)
 
 
+def read_list(run: Run, *args: str) -> list[dict[str, Any]]:
+    data = console_live.bosun_json(run, *args)
+    if not isinstance(data, list):
+        raise LiveError(f"{' '.join(args)} gave no list")
+    return data
+
+
+def read_watchdog_facts(run: Run) -> dict[str, Any]:
+    data = console_live.bosun_json(run, "watchdog", "--facts")
+    if not isinstance(data, dict) or not data:
+        raise LiveError("watchdog --facts gave no facts")
+    return data
+
+
+def watchdog_parts(
+    collector: console_live.Collector,
+    config: watchdog.Config | None,
+    run: Run,
+    now: datetime,
+) -> tuple[dict[str, Any] | None, SessionGate | None]:
+    """The watchdog's checks and gate; None for both when they could not be made (the reason is in
+    collector.errors). The checks need the settings, which are said once, as the config."""
+    attempt = collector.attempt
+    watchdog_facts = attempt("watchdog", lambda: read_watchdog_facts(run))
+    if config is None or not watchdog_facts:
+        return None, None
+    view = attempt("watchdog", lambda: watchdog_view(config, watchdog_facts, now))
+    if view is None:
+        return None, None
+    checks, gate, note = view
+    if note:
+        collector.errors["watchdog-state"] = note
+    return checks, gate
+
+
 def gather(env: Mapping[str, str], now: datetime, run: Run) -> StatusFacts:
     """The facts, a part that could not be read left empty with its reason in `errors`. <now> is local."""
     settings = console_live.Settings.from_env(env)
     collector = console_live.Collector(settings, run)
     attempt = collector.attempt
     state_dir = settings.state_dir
-    window = attempt("config", lambda: awake_window(env))
-    windows = attempt("sessions", lambda: console_live.bosun_json(run, "sessions", "--json"))
-    # With settings that do not load the checks cannot be made (that is said once, as the config)
-    watchdog_facts = attempt("watchdog", lambda: console_live.bosun_json(run, "watchdog", "--facts"))
-    checks, gate = None, None
-    if window is not None and watchdog_facts:
-        checks = attempt("watchdog", lambda: console_live.watchdog_status(settings, watchdog_facts, now))
-        gate = attempt("watchdog", lambda: session_gate(settings, watchdog_facts, now))
+    config = attempt("config", lambda: console_live.watchdog_config(settings))
+    windows = attempt("sessions", lambda: read_list(run, "sessions", "--json"))
+    checks, gate = watchdog_parts(collector, config, run, now)
     updating, waiting_for = update_facts(state_dir)
     return StatusFacts(
         windows=windows,
         checks=checks,
-        awake=window,
+        awake=config.awake if config else None,
         quit=quit_state.read(state_dir),
         gate=gate,
         update_running=updating,
@@ -212,7 +252,11 @@ def main(
         return 0
     moment = now or watchdog.current_time(None)
     try:
-        out = menu_status.snapshot(gather(os.environ if env is None else env, moment, run), moment)
+        # Whatever anything prints while the facts are gathered (the watchdog's state loading says
+        # what it could not read) goes to stderr: stdout is the one object
+        with contextlib.redirect_stdout(sys.stderr):
+            facts = gather(os.environ if env is None else env, moment, run)
+        out = menu_status.snapshot(facts, moment)
     except Exception as exc:  # noqa: BLE001 - the app reads one object whatever went wrong in here
         out = menu_status.failure(f"bosun status could not be completed: {exc!r}", menu_status.WARNING)
     print(json.dumps(out))

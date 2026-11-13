@@ -11,7 +11,9 @@
 #             level             ok, warning, error or stopped (you quit bosun, or stopped it today with
 #                               `bosun stop`). A missing session is judged by the watchdog's own gate:
 #                               an error only when it should be running, ok while resting (outside the
-#                               awake hours, before the morning run is due) or starting
+#                               awake hours) or starting (the morning run is going or about to). A
+#                               warning also lists ERROR lines of the last hour, after the watchdog
+#                               has alerted them
 #             sentence, detail  the menu's first line, and grey lines under it
 #             windows, waiting  the windows open, and the names of those waiting for you
 #             keep_awake_until  HH:MM while the morning's keep-awake holds the Mac up, else null

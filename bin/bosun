@@ -64,7 +64,7 @@ Checking it works
   orphans     List shells earlier window starts left behind (ppid 1); --apply stops them
   watchdog    Alert me about a missed or failed morning run, a missing session, stuck prompts,
               errors in the logs (its own launchd agent runs it every 5 minutes; --status)
-  status      Show schedule, keep-awake, tmux windows and the latest log
+  status      Show schedule, keep-awake, tmux windows and the latest log (--json: how bosun is, as one object)
   wake-test   Real sleep/wake end-to-end test in N minutes (needs sudo)
 
 Run `bosun <command> --help` for details.
