@@ -185,11 +185,11 @@ Updates..., Open at Login, Help, and Quit.
 
 | Dot and sentence | Meaning | What the menu offers |
 |---|---|---|
-| Green, "bosun is running" | Windows are open, with how many wait for you and until when the Mac is kept awake | Everything, with "Quit bosun..." |
+| Green, "bosun is running" | Windows are open, with how many wait for you and until when the Mac is kept awake | Everything but Start, with "Quit bosun..." |
 | Yellow, "bosun is running, with a warning" | The watchdog is not running, a check warns, there were errors in the last hour, or a window could not start | "Show What's Wrong..." lists them; everything else as green |
 | Red, "bosun is not running" | It should be (inside its awake hours, and you did not quit it); a quit that did not finish shows as an error too | "Start bosun" first, then "Show What's Wrong..." |
 | Grey, "bosun is stopped" | You quit it | "Start bosun" first; Open Console is greyed, and Quit reads "Quit bosun" with no dialog |
-| Red, "bosun cannot be reached" | The app could not run `bosun status --json` | Only Help (Run bosun doctor, Show Logs and Uninstall are greyed) and "Quit bosun.app"; there is no Start |
+| Red, "bosun cannot be reached" | The app could not run `bosun status --json`, it timed out with no earlier status to show, or its reply could not be read (a timeout after an earlier status shows that status with "(not current)") | Only Help (Run bosun doctor, Show Logs and Uninstall are greyed) and "Quit bosun.app"; there is no Start |
 | Grey, "bosun is not installed" | The app found no bosun | Only Help and "Quit bosun.app" |
 | Grey, "Checking bosun..." | The first status has not come yet | Only Help and "Quit bosun.app" |
 | Yellow, "bosun.app needs an update" | bosun speaks a newer status contract than this app reads | "Update bosun...", which runs `bosun update`, then Help and "Quit bosun.app" |
@@ -225,6 +225,8 @@ bosun again" (on by default); "Let this Mac sleep now" (on by default, and there
 awake; unchecked, the keep-awake runs to its end); and "Keep bosun in the menu bar" (off by default: unless you check
 it, the app quits itself once bosun has stopped, and opening `bosun.app` brings it back). It never touches the
 ledger, the knowledge base or the config.
+
+If bosun cannot say what quitting would stop, the dialog is "bosun cannot say what quitting would stop" instead, with a Cancel and a Stop Now that ends every window without waiting, and it always shows all three boxes.
 
 If agents are in the middle of a task, a second dialog names them: **Let Them Finish** waits (up to
 `BOSUN_QUIT_WAIT_MINUTES`, 10 by default), **Stop Them Now** quits at once, **Cancel** changes nothing. A window

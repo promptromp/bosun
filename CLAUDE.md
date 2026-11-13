@@ -457,8 +457,9 @@ it; the pre-push hook still runs the suite), the menu bar app (`app`, on macOS: 
 with warnings as errors, the coverage floor, SwiftLint, `swift format lint --strict`, and an ad hoc build whose
 bundle must verify; a cheap Linux job, `changes`, compares the pull request or merge group with its base, and `app`
 `needs` it and is skipped (no macOS runner starts, and a skipped job counts as passing) when nothing under `app/`,
-`tools/contract_samples.py`, `tools/swift_coverage.py` or the workflow changed, so it can be required on every
-pull request), and
+`tools/contract_samples.py`, `tools/swift_coverage.py`, the workflow, `.github/actions/setup-uv/`, `uv.lock` or
+`pyproject.toml` changed, so it can be required on every pull request, as `changes` is, so that a failed `changes`
+cannot skip `app` past the ruleset), and
 gitleaks over the pull request's or merge group's commits (`gitleaks`; a made-up value in a test carries a
 `gitleaks:allow` comment). `.github/workflows/install.yml` runs the install for real on a clean macOS
 runner and the Docker sandbox, when the install could have changed and weekly; those are not required

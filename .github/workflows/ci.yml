@@ -166,7 +166,7 @@ jobs:
           build=false
           while IFS= read -r file; do
             case $file in
-              app/* | tools/contract_samples.py | tools/swift_coverage.py | .github/workflows/ci.yml)
+              app/* | tools/contract_samples.py | tools/swift_coverage.py | .github/workflows/ci.yml | .github/actions/setup-uv/* | uv.lock | pyproject.toml)
                 echo "Changed: $file"
                 build=true
                 ;;
@@ -174,14 +174,16 @@ jobs:
             esac
           done <<<"$files"
           if [ "$build" = false ]; then
-            echo "Nothing under app/, tools/contract_samples.py, tools/swift_coverage.py or this workflow changed: not building."
+            echo "Nothing the app job depends on changed (app/, its two tools, this workflow, setup-uv, uv.lock, pyproject.toml): not building."
           fi
           echo "build=$build" >>"$GITHUB_OUTPUT"
 
   # The menu bar app (app/, docs/design/menu-bar.md): its tests with warnings as errors, a floor under
   # the coverage of its core, SwiftLint, swift-format, and an ad hoc signed build that must verify.
   # Required on every pull request, and it answers merge groups too: when `changes` finds nothing the app
-  # depends on, this job is skipped, which a required check counts as passing, so no macOS runner starts.
+  # depends on, this job is skipped, which a required check counts as passing, so no macOS runner starts;
+  # `changes` is required too (in .github/rulesets/main.json), so a failed `changes` cannot let an app change through
+  # unbuilt.
   # tools/contract_samples.py writes the fixtures under app/, so contract drift is caught by the Linux
   # `test` jobs (tests/unit/test_contract_samples.py) on every pull request and by this job when the
   # fixtures change. The release is .github/workflows/release-app.yml.
