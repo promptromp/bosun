@@ -383,3 +383,41 @@ Runs right after Task 2 (ledger ruling 5); numbered last so the others keep thei
   with `main` last).
 - [ ] **Step 4: Run** the unit tests, the smoke suite and `tests/sandbox.sh init`.  - [ ] **Step 5: Commit** ("A first
   install takes the newest release, and a re-run hands over to bosun update").
+
+### Task 12: Start through bosun's own launchd job
+
+Runs after Task 9 and before Task 10, so the VM run covers it (ledger ruling 35).
+
+**Files:**
+
+- Create: `templates/launchd-now.plist`
+- Modify: `lib/common.sh` (render it, `job_labels`, `reload_changed_jobs`), `libexec/bosun-morning` (`--background`),
+  `lib/uninstall_plan.py` and `lib/uninstall_detect.py` (the job), `install.sh` if it lists the jobs it loads
+- Docs and comments, in the same commit: every place that lists bosun's launchd jobs or says what the app's Start runs
+  — `docs/commands.md` (the morning row), `docs/design/menu-bar.md` (the "Start bosun" bullet: it runs `bosun morning
+  --now --background`, and why — macOS's responsible process for privacy prompts; the update stays detached, and
+  why), `docs/setup.md`, `docs/day.md`, `docs/design/uninstall.md`, `docs/design/update.md`, `docs/design/init.md`,
+  `docs/development.md` and `CLAUDE.md` wherever they list the jobs or their templates, `tests/install_e2e.sh`'s
+  header, and the comments that call `--now` "the app's Start" (`tests/smoke.sh`); grep `launchd job`,
+  `console_label`, `launchd-console.plist`, `morning --now` and `the app's Start` to find them
+- Not redundant: `--background` only kickstarts the job; the morning run's logic (the quit record, the keep-awake,
+  the update hold) stays in the one `--now` path the job runs; the plist goes through the same rendering as the other
+  jobs, its label from one helper beside `console_label`, listed once in `job_labels`
+- Test: `tests/smoke.sh` (with the fake `launchctl`), `tests/unit/test_uninstall_plan.py`, `tests/install_e2e.sh` (the
+  real job: `bosun morning --now --background` brings the session up, and its tmux server's responsible process is not
+  the caller — `launchctl procinfo`)
+
+**Interfaces:**
+
+- Produces: the job `<label>.now`: `ProgramArguments` `["<install link>/bin/bosun", "morning", "--now"]`,
+  `RunAtLoad` false, no `KeepAlive`, `AbandonProcessGroup` true (the tmux server it starts outlives it); rendered,
+  loaded and listed like the morning job, and removed by uninstall.
+- Produces: `bosun morning --now --background`: `launchctl kickstart gui/<uid>/<label>.now` and return at once (exit
+  0 when launchd took it; 1 with one line when the job is not loaded, e.g. "run install.sh again"; a run already going
+  is not started twice). This is what the app's Start runs, so nothing bosun starts is the app's child (whose
+  processes would name bosun.app in macOS's privacy prompts). `bosun update --yes` stays a child the app starts
+  detached: an update run as a launchd job could boot itself out when it reloads changed plists.
+
+- [ ] **Step 1: Tests.**  - [ ] **Step 2: Run them to see them fail.**  - [ ] **Step 3: Implement** (atomically).
+- [ ] **Step 4: Run** the smoke suite once.  - [ ] **Step 5: Commit** ("Morning: --now --background starts the morning
+  run as bosun's own launchd job, which the app's Start uses").

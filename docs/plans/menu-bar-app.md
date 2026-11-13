@@ -28,7 +28,10 @@ inputs).
 - `LSUIElement`, not sandboxed, hardened runtime when signed, minimum macOS 14, Apple silicon.
 - The bundle identifier comes from `app/publisher.json`, the version from `app/VERSION`; nothing else names them.
 - Long-running processes are bosun's launchd jobs, never the app's children: the app starts a command and lets it run
-  (`bosun morning --now` and `bosun update --yes` are started detached, their progress read back from `status`).
+  (Start runs `bosun morning --now --background`, which has bosun's own launchd job start the morning run and
+  returns at once; `bosun update --yes` is started detached, in its own process group with no output to the app;
+  progress is read back from `status`). Nothing bosun starts is the app's child, whose processes would name
+  bosun.app in macOS's privacy prompts (ledger ruling 35).
 - Test hooks (`--test-hooks <dir>`) exist only for the VM suite, and only when the app is launched with that argument.
 - One copy at a time, by the app itself: launchd's login job runs `Contents/MacOS/bosun` directly, which bypasses
   LaunchServices' one-copy rule, and `bosun app login on` loads that job at once (`RunAtLoad`), so a second copy
@@ -146,7 +149,7 @@ inputs).
   `menuWillOpen` and every 30 s and on wake; the dialogs as `NSAlert`s with accessory views (the quit options as
   checkboxes, the update notes and plan in a scrolling text view), shown with the app briefly made a regular app so the
   alert comes to the front, then back to accessory.
-- Produces: actions — Open Console (`console --url` → `NSWorkspace.open`); Start bosun (`morning --now`, detached);
+- Produces: actions — Open Console (`console --url` → `NSWorkspace.open`); Start bosun (`morning --now --background`, a short command: bosun's own launchd job starts the run);
   Check for Updates (the update flow); Open at Login (`app login on|off`); Help: the guide (the docs site URL), Run
   Doctor and Uninstall bosun… (a `.command` file in the app's temporary folder running `bosun doctor` or `bosun
   uninstall`, opened with `NSWorkspace`), Show Logs (the log folder, from `bosun status --json`'s `logs` path — part 1
