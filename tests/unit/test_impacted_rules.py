@@ -20,6 +20,8 @@ from unittest import mock
 import impacted_rules as rules
 
 
+HAVE_PLUGIN = importlib.util.find_spec("pytest_impacted") is not None
+NO_PLUGIN = "pytest-impacted is not installed (uv sync installs the dev group)"
 HAVE_PYTEST = importlib.util.find_spec("pytest") is not None  # impacted_guard is a pytest plugin
 CATCH_ALL = "*"  # the glob that maps every change to this test
 DEPENDENCY_FILES = ("pyproject.toml", "uv.lock")  # the plugin runs every test for a change to one
@@ -35,6 +37,7 @@ def has_rule(name: str) -> bool:
     )
 
 
+@unittest.skipUnless(HAVE_PLUGIN, NO_PLUGIN)  # the rules are matched with the plugin's own matcher
 class RulesTest(unittest.TestCase):
     def test_every_file_has_a_rule(self) -> None:
         missing = sorted(name for name in rules.repository_files() if not has_rule(name))
@@ -105,6 +108,7 @@ class GuardTest(unittest.TestCase):
         self.assertEqual(self.started("cp", f"{root}/lib/common.sh", "/work/x"), {"lib/common.sh"})
 
 
+@unittest.skipUnless(HAVE_PLUGIN, NO_PLUGIN)
 class PluginTest(unittest.TestCase):
     """The plugin itself, with the changed files given rather than read from git."""
 

@@ -19,8 +19,6 @@ from collections import deque
 from functools import cache
 from pathlib import Path, PurePosixPath
 
-from pytest_impacted.strategies import matches_any_glob
-
 
 ROOT = Path(__file__).resolve().parents[2]
 TESTS = "tests/unit"
@@ -51,7 +49,11 @@ def invalidate_all() -> tuple[str, ...]:
 
 
 def matches(path: str, glob: str) -> bool:
-    """Whether <glob> matches <path>, as the plugin matches every pattern it reads."""
+    """Whether <glob> matches <path>, as the plugin matches every pattern it reads. The plugin is
+    imported here, not above: the module imports without it (a plain python3 runs the unit tests
+    too, and test_impacted_rules.py skips what needs it)."""
+    from pytest_impacted.strategies import matches_any_glob
+
     return bool(matches_any_glob(path, [glob]))  # bool(): the plugin ships no type information
 
 
