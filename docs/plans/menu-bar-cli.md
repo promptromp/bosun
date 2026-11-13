@@ -309,6 +309,9 @@ commands gather facts and act, as the repo's other features do. Releases are git
 - Produces: the update, after it switches and before it releases the hold, runs `bosun app update` when
   `BOSUN_MENU_APP=1`; a failure is a line in its summary and stops nothing; the summary of an install without the app
   says once how to add it (`bosun app install`).
+- Produces: after the switch the update restarts the console job (`launchctl kickstart -k gui/<uid>/<label>.console`)
+  when it is loaded and `console/wanted` exists, so the console serves the new version; `lib/update_plan.py`'s
+  console line says so instead of "restart it after the update" (ruling 14).
 - Produces: `app-missing` (warn): `BOSUN_MENU_APP=1` and `~/Applications/bosun.app` is gone: "bosun.app is not in
   ~/Applications (moved to the Trash?); bosun still runs. `bosun uninstall` removes bosun; `bosun app install` brings
   the app back."
@@ -329,7 +332,9 @@ commands gather facts and act, as the repo's other features do. Releases are git
 
 - [ ] **Step 1: Docs** as listed (grep for `bosun update`, `bosun stop`, `bosun console`, "follows main").
 - [ ] **Step 2: A VM run** of the CLI side on a real Mac: `tests/sandbox.sh mac run` extended so the install also
-  turns on `BOSUN_CONSOLE_ALWAYS=1`: the console job really runs and serves; `bosun quit --stop-now --pause-morning
+  turns on `BOSUN_CONSOLE_ALWAYS=1`: the console job really runs and serves (from a state folder with no `console/`
+  yet: the job loaded, then `bosun start`, and the console answers within seconds; with the marker removed and the
+  job loaded again, no console process — ruling 11); `bosun quit --stop-now --pause-morning
   --sleep` leaves no tmux server, no caffeinate, no console process, and the watchdog's next kickstarted run logs that
   it skipped; `launchctl kickstart -k` of the morning job then starts nothing; `bosun morning --now` brings everything
   back; `bosun update --check --json` against the bundle remote with a tag. The fresh install runs on the default
