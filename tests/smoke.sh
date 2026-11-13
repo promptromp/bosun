@@ -3576,6 +3576,13 @@ sys.exit(not (all(n.startswith("bosun.app/") for n in names) and all(f"bosun.app
       rm -f "$HOME/.sandbox/swift-fails"
       check "app/build.sh refuses an unknown argument, with usage (exit 2)" bash -c '"$1" --bogus >/dev/null 2>&1; [ $? = 2 ]' _ "$APP_CHECKOUT/app/build.sh"
       check "... and an option with no value (exit 2)" bash -c '"$1" --out >/dev/null 2>&1; [ $? = 2 ]' _ "$APP_CHECKOUT/app/build.sh"
+      check "a fresh copy of app/build.sh, run directly with a bogus option, says its usage and exits 2, with no failure of its own" bash -c '
+        cp -R "$1/app" "$2/app-fresh" && out="$("$2/app-fresh/build.sh" --bogus 2>&1)"; status=$?; rm -rf "$2/app-fresh"
+        [ "$status" = 2 ] && grep -q "^Usage: app/build.sh " <<<"$out" && ! grep -q "failed at line" <<<"$out"' _ "$APP_CHECKOUT" "$WORK"
+      check "app/build.sh names the line of a failure it has no message for (an rm that fails), and exits 1" bash -c '
+        mkdir -p "$2/stub" && printf "#!/bin/sh\nexit 1\n" >"$2/stub/rm" && chmod +x "$2/stub/rm"
+        out="$(PATH="$2/stub:$PATH" "$1" --out "$2/out" 2>&1)"; status=$?; /bin/rm -rf "$2"
+        [ "$status" = 1 ] && grep -q "^app/build.sh: failed at line [0-9]*: rm -rf " <<<"$out"' _ "$APP_CHECKOUT/app/build.sh" "$WORK/build-trap"
       jq '.bundle_id = "not a bundle id"' "$APP_CHECKOUT/app/publisher.json" >"$WORK/publisher.json" && cp "$APP_CHECKOUT/app/publisher.json" "$WORK/publisher.good" && mv "$WORK/publisher.json" "$APP_CHECKOUT/app/publisher.json"
       : >"$APP_LOG"
       check "app/build.sh refuses a bundle_id that is not one, before it builds anything" bash -c '! out="$("$1" --out "$2" 2>&1)" && grep -q "is not a bundle identifier" <<<"$out" && ! grep -q "^swift" "$3"' _ "$APP_CHECKOUT/app/build.sh" "$out" "$APP_LOG"

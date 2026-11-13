@@ -21,8 +21,8 @@ ship a CLI and an app keep them in step).
 1. **A menu bar icon** with bosun's knot as a template image, and a menu whose first line is bosun's state: a
    coloured dot and one sentence, with a grey detail line.
    - green "bosun is running" (windows open, how many wait for you, keep-awake until when);
-   - yellow "bosun is running, with a warning" (the watchdog has not run, errors in the last hour, a window that
-     could not start), with a "Show What's Wrong…" item;
+   - yellow "bosun is running, with a warning" (the watchdog is not running: its job is booted out, or its last run is older than three of
+     its intervals; errors in the last hour, a window that could not start), with a "Show What's Wrong…" item;
    - red "bosun is not running" (it should be: inside its awake hours and not stopped), with "Start bosun" first;
    - grey "bosun is stopped" (you quit it), with "Start bosun" first.
    The icon shows a small dot for a warning, an error or an update ready.
@@ -179,7 +179,10 @@ Calls made from the research and the builder check, to check while reading:
   scheduled start), and when the awake window has begun and the morning run is going or not yet due it is starting
   (never, at the error level: a crashed or hung morning run is named as failed). The yellow level also lists the ERROR
   lines of the last hour after the watchdog has alerted them (the same line is an error until the watchdog's next
-  run, then a warning for the hour). A quit record that cannot be read shows as stopped, with the problem saying so and that `bosun start` clears it. A quit record while windows are still open is "bosun quit did not finish", an error (its `bosun stop` failed or
+  run, then a warning for the hour), and the watchdog itself not running (`watchdog --facts` says its launchd job is loaded or
+  not and whether its plist is installed; a job that is installed and not loaded, or loaded with no run for three of its
+  five-minute intervals, is a warning, as `bosun doctor` says; no plist is a checkout and no problem, a new job that never ran is
+  new, an update's hold excuses it, and a quit is stopped whatever the watchdog does). A quit record that cannot be read shows as stopped, with the problem saying so and that `bosun start` clears it. A quit record while windows are still open is "bosun quit did not finish", an error (its `bosun stop` failed or
   was cut short, while the watchdog skips its runs), with the problem saying how to finish: `bosun quit --stop-now` again,
   or `bosun start`. Seconds of it during a normal quit, between `quit.json` and the session going, are accepted: the app
   does not poll during its own quit.
@@ -493,8 +496,10 @@ of the Mac between them. What it showed that the unit and smoke suites could not
   "Finder" to get name of startup disk` from the same login, hung for the two minutes of the Apple Event timeout
   (-1712) behind a prompt nobody answered, so the clone does enforce Automation for other events: the quit event itself
   is not prompted for.
-- **The menu's own checks** are what the design says: yellow for a log's ERROR line (not for the watchdog's job being
-  booted out, which no check reads), the update item reading "Update Available: <version>…" while the offer is open and
+- **The menu's own checks** are what the design says: yellow for the watchdog's job booted out (which no check of the
+  watchdog can say: `bosun status` reads its launchd job through `watchdog --facts` and its last run, the later of
+  its last full run and its output file's time, since a run that skips in a quit or an update's hold writes a line
+  there; a quit stays grey) and for a log's ERROR line, the update item reading "Update Available: <version>…" while the offer is open and
   "Updating… waiting for 1 window" while a busy window is waited for (the install link is already switched by then), the
   quit's second dialog with a 0-minute wait finding the agent still busy and its third dialog ending in the stop.
 - **A checkout's history is not a release origin.** `git fetch` of a checkout into the VM's origin follows the tags of
@@ -504,6 +509,8 @@ of the Mac between them. What it showed that the unit and smoke suites could not
 - **A schedule that starts at 00:00** makes `bosun doctor` fail its wake check (`pmset` prints 0:01AM where it expects
   12:01AM), so the run's schedule starts at 02:00.
 - **The first direct run of a copied `app/build.sh`** (in `tests/install_e2e.sh`, after the test turned the Mac's
-  assessments on) exited 1 and said nothing, in each of five runs; every later run of the same copy, by `/bin/bash`, by
-  Homebrew's bash, under `env -i` or directly, built the app, and so did a first run by `/bin/bash`. The check runs it
-  by `/bin/bash`. The cause is not known; `bosun app install --build` runs the script directly, so it is open.
+  assessments on) exits 1 and says nothing, not even its own failure line (`set -E` and an ERR trap make every failure
+  name its line), and not even for `--bogus`, which only prints its usage; the first run of it, whichever copy, and no
+  other: a trivial script run first, `/bin/bash`, python3 and every later run of any copy were all fine. The cause is
+  outside the script (probably Gatekeeper's first look at it), so the test makes one run that may fail first. A user's
+  `bosun app install --build` runs the script directly too; it has not been tried in a clone.

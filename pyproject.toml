@@ -77,6 +77,8 @@ impacted_map = [
     "bin/bosun=tests/unit/test_update.py",
     "bin/bosun=tests/unit/test_update_facts.py",
     "bin/bosun=tests/unit/test_update_gate.py",
+    # What a test reads of bosun's programs to hold a constant to it (the watchdog job's interval).
+    "lib/common.sh=tests/unit/test_menu_status.py",
     # The docs: bosun's code never reads them. A change counts as one to the site (mkdocs.yml),
     # whose change selects the tests that read a page.
     "docs/**=mkdocs.yml",

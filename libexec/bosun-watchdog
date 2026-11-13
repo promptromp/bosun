@@ -42,7 +42,7 @@
 #   --status   every check and its current result (read-only)
 #   --list     the checks, with their severity and de-duplication rule
 #   --facts    the live facts it collects (tmux windows and the Claude in each, the check-in loop,
-#              the morning launchd job) as JSON, read-only; what `bosun console` reads
+#              the morning launchd job, its own) as JSON, read-only; what `bosun console` reads
 #   --only     run only these checks (the check-in loop runs `--only waiting`)
 #
 # Alerts go out on scheduled days (BOSUN_DAYS) between BOSUN_START_TIME and
@@ -79,6 +79,10 @@ done
 # it is not loaded): lib/common.sh's job_fields.
 morning_job() { job_fields "$BOSUN_LAUNCHD_LABEL"; }
 
+# The watchdog's own launchd job, for bosun status (a booted-out job leaves its plist, and checks nothing): its
+# state as `launchctl print` shows it (empty if it is not loaded), and whether its plist is installed.
+watchdog_job() { printf '%s\t%s\n' "$(job_fields "$(watchdog_label)" | cut -f1)" "$([ -f "$(watchdog_plist)" ] && echo yes || echo no)"; }
+
 # What the watchdog needs from tmux, ps and launchd, as JSON for lib/watchdog.py.
 collect_facts() {
   local session=false checkin_window=false checkin_loop=false windows="" pane_pid
@@ -92,14 +96,15 @@ collect_facts() {
     fi
   fi
   jq -n --argjson session "$session" --argjson checkin_window "$checkin_window" \
-    --argjson checkin_loop "$checkin_loop" --arg windows "$windows" --arg job "$(morning_job)" '{
+    --argjson checkin_loop "$checkin_loop" --arg windows "$windows" --arg job "$(morning_job)" --arg watchdog "$(watchdog_job)" '{
       session_exists: $session,
       windows: [$windows | split("\n")[] | select(length > 0) | split("\t")
         | {name: .[0], agent_pid: ((.[1] // "") | if . == "" then null else tonumber end),
            starting_pid: ((.[2] // "") | if . == "" then null else tonumber end)}],
       checkin_window: $checkin_window,
       checkin_loop: $checkin_loop,
-      morning_job: ($job | split("\t") | {state: .[0], last_exit_code: .[1]})
+      morning_job: ($job | split("\t") | {state: .[0], last_exit_code: .[1]}),
+      watchdog_job: ($watchdog | split("\t") | {state: .[0], installed: (.[1] == "yes")})
     }'
 }
 

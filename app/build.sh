@@ -20,7 +20,10 @@
 # and verified: a failed build leaves neither, never an unsigned bundle. The compiler's output goes to stderr.
 # It builds in this folder (app/.build), which an install made by get.sh keeps in its version's folder.
 # Exit status: 0 built, 1 failed (one line saying why), 2 usage.
-set -euo pipefail
+set -Eeuo pipefail
+# Whatever fails without a line of its own says where (the header's "one line saying why"): a command that fails
+# under set -e, in a function or a $(...), is named here, and a failure the script handles itself (|| die) is not.
+trap 'echo "app/build.sh: failed at line $LINENO: $BASH_COMMAND" >&2' ERR
 
 APP_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 RESOURCES="$APP_DIR/Resources"
@@ -149,7 +152,7 @@ main() {
   parse_arguments "$@"
   version="$(app_version)"
   mkdir -p "$out" || die "cannot make $out"
-  out="$(cd "$out" && pwd)"
+  out="$(cd "$out" && pwd)" || die "cannot enter $out"
   trap cleanup EXIT
   STAGING="$(mktemp -d "$out/.bosun-build.XXXXXX")" || die "cannot make a folder in $out"
   if [ -n "$zip_bundle" ]; then

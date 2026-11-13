@@ -56,12 +56,26 @@ app_build_tools() {
 # app/build.sh run for real on a copy of the install's app/ in <work> (the build folder stays out of the install).
 app_build_for_real() {
   local work="$1"
-  # The first run of the copied script is by /bin/bash, not as a program: run directly, right after this Mac's
-  # assessments were turned on, the first run of a script just copied exited 1 with nothing said (every later
-  # run, by bash or directly, built the app). Why is not known; `bosun app install --build` runs it directly.
+  # Run directly, the way `bosun app install --build` runs it. It names the line of a failure it has no message
+  # for (its ERR trap), which is in the log printed here.
+  #
+  # The first run of app/build.sh on this Mac, here, right after the assessments were turned on, exits 1 before any
+  # line of the script has run or said anything (`--bogus`, which only prints its usage, did the same), whichever
+  # copy of the script that first run is; every run after it, of that copy or another, ran as it should. Measured
+  # in a clone, in seven runs of this suite, in which the order of three copies was changed: a trivial script
+  # run first, /bin/bash, python3 and the first run of a script that has other content are not what fails. The
+  # script says nothing in that run, not even its ERR trap's line, so the cause is not one of its commands (it
+  # is probably Gatekeeper's first look at it: the assessments were just turned on above): one run that is
+  # allowed to fail comes first.
+  bash -c 'cp -R "$1/app" "$2/app-copy" && rm -rf "$2/app-copy/.build" "$2/app-copy/dist" &&
+    { "$2/app-copy/build.sh" --bogus >/dev/null 2>&1; true; }' _ "$DIR" "$work"
   check "app/build.sh builds the app for real, ad hoc, for arm64" bash -c '
-    cp -R "$1/app" "$2/app-copy" && rm -rf "$2/app-copy/.build" "$2/app-copy/dist" &&
-      /bin/bash "$2/app-copy/build.sh" --identity - --out "$2/built" >"$2/build.log" 2>&1 || { echo "app/build.sh exited $?"; tail -15 "$2/build.log"; exit 1; }
+    "$2/app-copy/build.sh" --identity - --out "$2/built" >"$2/build.log" 2>&1 || {
+      echo "app/build.sh exited $?"
+      tail -15 "$2/build.log"
+      ls -lO@ "$2/app-copy/build.sh"
+      exit 1
+    }
     [ "$(lipo -archs "$2/built/bosun.app/Contents/MacOS/bosun")" = arm64 ]' _ "$DIR" "$work"
   check "... the bundle verifies, is signed as the bundle id of app/publisher.json and is not notarized" bash -c '
     id="$(jq -r .bundle_id "$1/app/publisher.json")" && codesign --verify --deep --strict -R "=identifier \"$id\"" "$2/built/bosun.app" &&

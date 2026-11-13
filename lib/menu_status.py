@@ -14,9 +14,12 @@ its own, so the menu and the watchdog never disagree.
   gate says you stopped it today with `bosun stop` (the morning run starts it as usual tomorrow).
 - error: no window is open and the gate says it should be running (the watchdog's own `session-missing`
   finding is then the problem listed, not a second line); or a check of severity error has a finding.
-- warning: a check of severity warn has a finding, an ERROR line was logged in the last hour, or a fact
-  could not be read (an answer built on a guess is never all well). That holds when bosun is stopped too:
-  with a part unread status cannot vouch for "stopped", so it is a warning (the `stopped` field stays).
+- warning: a check of severity warn has a finding, an ERROR line was logged in the last hour, the watchdog
+  itself is not checking (its launchd job is installed but not loaded, or loaded and its last full run is
+  older than 3 of its intervals, as `bosun doctor` says too; not while an update holds it, and never in a
+  quit, which is stopped), or a fact could not be read (an answer built on a guess is never all well). That
+  holds when bosun is stopped too: with a part unread status cannot vouch for "stopped", so it is a warning
+  (the `stopped` field stays).
 - ok otherwise: "resting until 08:00" when no window is open outside the awake hours, "starting (the
   morning run)" once the window began and the run is going or not yet due (at the error level never
   "starting": a crashed or hung run keeps counting as going, and is named as failed). With no morning run
@@ -64,6 +67,11 @@ STARTING = "starting"  # the morning run is going, or is about to (the awake win
 STOPPED_BY_STOP = "stopped"  # you stopped it today with bosun stop (at: when)
 QUIT = "quit"  # a quit record is there (the quit verdict is its own: this is only a race between two reads)
 NO_MORNING = "no-morning"  # no morning run today: morning-missing's to say
+# The watchdog's launchd job runs every WATCHDOG_INTERVAL_SECONDS (lib/common.sh's, which
+# tests/unit/test_menu_status.py holds this to); a last full run older than WATCHDOG_STALE_RUNS intervals is a
+# watchdog that is not working.
+WATCHDOG_INTERVAL_SECONDS = 300
+WATCHDOG_STALE_RUNS = 3
 DAYS_AHEAD = 8  # the next scheduled start is within a week; a day more for the same weekday
 
 
@@ -73,6 +81,16 @@ class SessionGate:
 
     kind: str
     at: datetime | None = None  # local and naive
+
+
+@dataclass(frozen=True)
+class WatchdogJob:
+    """The watchdog's own launchd job: <installed> its plist is there (so it is wanted), <loaded> launchd has
+    it, and when its last full run was (local and naive; None when it never ran)."""
+
+    installed: bool
+    loaded: bool
+    last_run: datetime | None = None
 
 
 @dataclass(frozen=True)
@@ -92,6 +110,7 @@ class StatusFacts:
     log_errors: tuple[str, ...] = ()  # "<log>: <line>" of the last hour's ERROR lines
     log_dir: str = ""
     errors: Mapping[str, str] = field(default_factory=dict)
+    watchdog_job: WatchdogJob | None = None  # None when it could not be told, or there is no job (a checkout)
 
 
 @dataclass(frozen=True)
@@ -142,7 +161,33 @@ def unread_problems(errors: Mapping[str, str]) -> list[tuple[str, str]]:
     return [(WARNING, f"could not read {READ_PART.get(p, p)}: {why}") for p, why in sorted(errors.items())]
 
 
-def problems_of(facts: StatusFacts, missing: bool) -> list[tuple[str, str]]:
+def when(moment: datetime, now: datetime) -> str:
+    return f"{moment:%H:%M}" if moment.date() == now.date() else f"{moment:%Y-%m-%d %H:%M}"
+
+
+def watchdog_problem(facts: StatusFacts, now: datetime) -> str | None:
+    """What is wrong with the watchdog itself, which no check of its own can say: nothing checks on bosun, and
+    nothing alerts, while its job is booted out or stuck. Only a job that is installed counts (a checkout has
+    none); a job that never ran is a new one; an update's hold is why it skips."""
+    job = facts.watchdog_job
+    if job is None or not job.installed or facts.update_running:
+        return None
+    if not job.loaded:
+        return (
+            "bosun's watchdog job is not loaded, so nothing is checking on bosun or alerting you. "
+            "`bosun doctor` says so too; install.sh loads it again"
+        )
+    stale = timedelta(seconds=WATCHDOG_STALE_RUNS * WATCHDOG_INTERVAL_SECONDS)
+    if job.last_run is not None and now - job.last_run > stale:
+        return (
+            f"bosun's watchdog last ran at {when(job.last_run, now)}, though its job runs every "
+            f"{WATCHDOG_INTERVAL_SECONDS // 60} minutes: it is loaded and not working "
+            f"(see watchdog.launchd.err in {facts.log_dir or 'the log folder'})"
+        )
+    return None
+
+
+def problems_of(facts: StatusFacts, missing: bool, now: datetime) -> list[tuple[str, str]]:
     """Every problem as (level, text), the watchdog's findings first. <missing>: no window is open and
     the watchdog's gate expects the session."""
     checked = findings(facts.checks)
@@ -153,6 +198,9 @@ def problems_of(facts: StatusFacts, missing: bool) -> list[tuple[str, str]]:
         found.append((ERROR, text))
     if facts.log_errors and LOG_CHECK not in named:
         found.append((WARNING, log_problem(facts.log_errors)))
+    unwatched = watchdog_problem(facts, now)
+    if unwatched:
+        found.append((WARNING, unwatched))
     return found + unread_problems(facts.errors)
 
 
@@ -214,7 +262,7 @@ def running_verdict(facts: StatusFacts, now: datetime, waiting: list[str]) -> Ve
     count = None if facts.windows is None else open_windows(facts.windows)
     if facts.gate is not None and facts.gate.at is not None and gate_says(facts, count, STOPPED_BY_STOP):
         return stop_verdict(facts.gate.at)
-    problems = problems_of(facts, missing=gate_says(facts, count, EXPECTED))
+    problems = problems_of(facts, gate_says(facts, count, EXPECTED), now)
     level = max((level for level, _text in problems), key=RANK.__getitem__, default=OK)
     return Verdict(
         level,

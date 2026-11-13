@@ -40,7 +40,7 @@ import quit_state
 import update_state
 import watchdog
 from console_live import LiveError, Run
-from menu_status import SessionGate, StatusFacts
+from menu_status import SessionGate, StatusFacts, WatchdogJob
 
 
 LOG_WINDOW = timedelta(hours=1)
@@ -157,25 +157,55 @@ def read_watchdog_facts(run: Run) -> dict[str, Any]:
     return data
 
 
+def launched_at(log_dir: Path) -> datetime | None:
+    """When launchd last ran the watchdog, whatever the run did: its output file (which every run that skipped
+    writes a line to, in a quit or an update's hold, where `last_run` stays as it was). Local and naive."""
+    try:
+        return datetime.fromtimestamp((log_dir / "watchdog.launchd.out").stat().st_mtime)
+    except OSError:
+        return None
+
+
+def watchdog_job_of(
+    watchdog_facts: Mapping[str, Any] | None,
+    checks: Mapping[str, Any] | None,
+    launched: datetime | None = None,
+) -> WatchdogJob | None:
+    """The watchdog's own job: what `watchdog --facts` says of it (loaded, plist installed) and when it last
+    ran: its last full run (its saved state) or <launched>, whichever is later (a run that skipped is a run).
+    None when the facts do not say (an older bosun's, or not read)."""
+    job = (watchdog_facts or {}).get("watchdog_job")
+    if not isinstance(job, dict):
+        return None
+    last = (checks or {}).get("last_run")
+    try:
+        last_run = datetime.strptime(last, watchdog.STAMP) if isinstance(last, str) else None
+    except ValueError:
+        last_run = None
+    ran = max((t for t in (last_run, launched) if t is not None), default=None)
+    return WatchdogJob(bool(job.get("installed")), bool(job.get("state")), ran)
+
+
 def watchdog_parts(
     collector: console_live.Collector,
     config: watchdog.Config | None,
     run: Run,
     now: datetime,
-) -> tuple[dict[str, Any] | None, SessionGate | None]:
-    """The watchdog's checks and gate; None for both when they could not be made (the reason is in
+    log_dir: Path,
+) -> tuple[dict[str, Any] | None, SessionGate | None, WatchdogJob | None]:
+    """The watchdog's checks and gate, and its own job; None for each that could not be made (the reason is in
     collector.errors). The checks need the settings, which are said once, as the config."""
     attempt = collector.attempt
     watchdog_facts = attempt("watchdog", lambda: read_watchdog_facts(run))
-    if config is None or not watchdog_facts:
-        return None, None
-    view = attempt("watchdog", lambda: watchdog_view(config, watchdog_facts, now))
+    if not watchdog_facts:
+        return None, None, None
+    view = attempt("watchdog", lambda: watchdog_view(config, watchdog_facts, now)) if config else None
     if view is None:
-        return None, None
+        return None, None, watchdog_job_of(watchdog_facts, None, launched_at(log_dir))
     checks, gate, note = view
     if note:
         collector.errors["watchdog-state"] = note
-    return checks, gate
+    return checks, gate, watchdog_job_of(watchdog_facts, checks, launched_at(log_dir))
 
 
 def gather(env: Mapping[str, str], now: datetime, run: Run) -> StatusFacts:
@@ -186,7 +216,7 @@ def gather(env: Mapping[str, str], now: datetime, run: Run) -> StatusFacts:
     state_dir = settings.state_dir
     config = attempt("config", lambda: console_live.watchdog_config(settings))
     windows = attempt("sessions", lambda: read_list(run, "sessions", "--json"))
-    checks, gate = watchdog_parts(collector, config, run, now)
+    checks, gate, job = watchdog_parts(collector, config, run, now, settings.log_dir)
     updating, waiting_for = update_facts(state_dir)
     return StatusFacts(
         windows=windows,
@@ -201,6 +231,7 @@ def gather(env: Mapping[str, str], now: datetime, run: Run) -> StatusFacts:
         log_errors=attempt("logs", lambda: recent_log_errors(settings.log_dir, now)) or (),
         log_dir=str(settings.log_dir),
         errors=dict(collector.errors),
+        watchdog_job=job,
     )
 
 

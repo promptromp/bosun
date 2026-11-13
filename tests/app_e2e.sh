@@ -183,20 +183,27 @@ step_1() {
 an_error_line() { printf '%s [checkin] ERROR: the app suite made this up\n' "$(date '+%Y-%m-%d %H:%M:%S')"; }
 
 step_2() {
-  local log="$STATE/logs/checkin.log" mark
-  echo "2. an ERROR line in a log: yellow, Show What's Wrong lists it; the line gone: green"
+  local log="$STATE/logs/checkin.log" mark plist="$HOME/Library/LaunchAgents/$LABEL.watchdog.plist"
+  echo "2. the watchdog's job booted out, and an ERROR line in a log: yellow, Show What's Wrong lists it; put right: green"
   mark="$(log_count)"
-  an_error_line >>"$log"
-  check "the menu turns yellow, with a warning" wait_for "$WAIT_POLL" menu_says '.level == "warning" and .header.dot == "yellow" and .icon_badge == "warning"'
-  check "... bosun status --json says the same, and names the line" bash -c '"$1" status --json | jq -e ".level == \"warning\" and (.problems | any(contains(\"made this up\")))"' _ "$BOSUN"
+  check "the watchdog's job is loaded, and its plist is in LaunchAgents" bash -c 'launchctl print "$1/$2" >/dev/null && test -f "$3"' _ "$DOMAIN" "$LABEL.watchdog" "$plist"
+  launchctl bootout "$DOMAIN/$LABEL.watchdog"
+  check "booted out, the menu turns yellow, with a warning" wait_for "$WAIT_POLL" menu_says '.level == "warning" and .header.dot == "yellow" and .icon_badge == "warning"'
+  check "... bosun status --json says the same, and names the job" bash -c '"$1" status --json | jq -e ".level == \"warning\" and (.problems | any(contains(\"watchdog job is not loaded\")))"' _ "$BOSUN"
   check "... and the menu has Show What's Wrong…" menu_title_is showProblems "Show What's Wrong…"
   click showProblems
   reply OK
   check "choosing it opens the dialog, and OK closes it (both actions taken)" wait_for 30 actions_taken
   check "... with no error of the app's in its log" log_has_no_errors "$mark"
+  launchctl bootstrap "$DOMAIN" "$plist"
+  check "the job loaded again, the menu is green again" wait_for "$WAIT_POLL" menu_green_with_windows
+  check "... and Show What's Wrong is gone from it" bash -c '! jq -e "[.sections[][] | .id] | any(. == \"showProblems\")" "$1"' _ "$HOOKS/menu.json"
+
+  an_error_line >>"$log"
+  check "an ERROR line in a bosun log turns it yellow too" wait_for "$WAIT_POLL" menu_says '.level == "warning" and .header.dot == "yellow"'
+  check "... bosun status --json names the line" bash -c '"$1" status --json | jq -e ".problems | any(contains(\"made this up\"))"' _ "$BOSUN"
   sed -i '' '/the app suite made this up/d' "$log"
   check "the line removed, the menu is green again" wait_for "$WAIT_POLL" menu_green_with_windows
-  check "... and Show What's Wrong is gone from it" bash -c '! jq -e "[.sections[][] | .id] | any(. == \"showProblems\")" "$1"' _ "$HOOKS/menu.json"
 }
 
 # ---- 3. Open Console -------------------------------------------------------------------------------------------
@@ -275,7 +282,7 @@ step_5() {
   paused="$(morning_lines "the morning start is paused")"
   launchctl kickstart -k "$DOMAIN/$LABEL"
   check "the morning job, kickstarted, logs that its start is paused" wait_for 90 morning_lines_above "the morning start is paused" "$paused"
-  sleep 10
+  sleep 10 # a dwell, on purpose: nothing happening has no event to wait for, and a start would have begun by now
   check "... and starts nothing: no tmux server, no console, no caffeinate" bash -c '! tmux -L bosun info && ! pgrep -f "lib/console_server\.py" && ! pgrep -x caffeinate'
   check "... and the app was not brought back by any of it" app_gone
 }
@@ -333,8 +340,7 @@ step_8() {
   pid=$!
   check "a copy started the way launchd's login job starts it (the executable, --at-login) exits at once" wait_for 20 bash -c '! kill -0 "$1" 2>/dev/null' _ "$pid"
   check "... still one app process" test "$(app_count)" = 1
-  open "$APP"
-  sleep 5
+  open "$APP" # returns once Launch Services has handled it: for a running app it only activates it, nothing starts
   check "open on the running app (LaunchServices) is still one process" test "$(app_count)" = 1
   check "... and its menu still answers: the hooks are the first copy's" menu_says '.level != null'
 }
@@ -342,12 +348,36 @@ step_8() {
 # ---- 7 (before the restart). Open at Login on; the Automation check ----------------------------------------------
 
 an_automation_prompt() { pgrep -x UserNotificationCenter >/dev/null; }
+job_runs() { launchctl print "$DOMAIN/$1" | sed -n 's/^[[:space:]]*runs = //p' | head -1; } # <label>: how often launchd ran it
+login_job_ran_and_exited() { [ "$(job_runs "$APP_JOB")" -ge 1 ] 2>/dev/null && [ "$(job_state "$APP_JOB")" != running ]; }
+
+# The control for the checks below, which rest on there being no UserNotificationCenter process (the TCC prompt's):
+# an Apple Event that macOS does ask about, from the same login, must show one, or the detector shows nothing.
+# Finder's is asked here and left unanswered (the call would end with -1712 after two minutes), then the call and
+# the prompt are ended, so nothing is left open and no answer is recorded.
+the_detector_sees_a_prompt() {
+  local pid
+  osascript -e 'tell application "Finder" to get name of startup disk' >"$OUT/finder-control.txt" 2>&1 &
+  pid=$!
+  if wait_for 40 an_automation_prompt; then
+    echo "  note  the control: a Finder Apple Event from this login raised a prompt (a UserNotificationCenter process)"
+  else
+    echo "  note  the control: no prompt came in 40 s; osascript said: $(cat "$OUT/finder-control.txt")"
+  fi
+  an_automation_prompt
+  local seen=$?
+  kill "$pid" 2>/dev/null
+  pkill -x UserNotificationCenter
+  return "$seen"
+}
 
 # What macOS says when something asks the app to quit with an Apple Event (osascript, as `bosun app update` and
 # `bosun app remove` do): reported, and a check that it went through with no prompt and no -1743.
 ask_the_app_to_quit_from_here() {
   local out="$OUT/quit-from-ssh.txt" status started=$SECONDS
   echo "the Automation check, asked from this login (as a person's terminal would):"
+  check "control: an Apple Event macOS does ask about (Finder's) raises a prompt this check sees" the_detector_sees_a_prompt
+  check "... and ending it leaves no prompt behind" wait_for 30 bash -c '! pgrep -x UserNotificationCenter'
   "$DIR/bin/bosun" app status >/dev/null 2>&1
   python3 "$DIR/lib/app_install.py" quit >"$out" 2>&1
   status=$?
@@ -368,8 +398,8 @@ step_7_login() {
   check "... the login job's plist is in LaunchAgents and loaded" bash -c 'test -f "$1" && launchctl print "$2/$3" >/dev/null' _ "$APP_PLIST" "$DOMAIN" "$APP_JOB"
   check "... bosun app status --json says login true" bash -c '"$1" app status --json | jq -e ".login == true"' _ "$BOSUN"
   check "... and the menu item is checked" wait_for "$WAIT_POLL" menu_says '[.sections[][] | select(.id == "openAtLogin")] | first | .checked == true'
-  sleep 10
-  check "loading the job ran the app at once (RunAtLoad): the second copy exited, one app process" test "$(app_count)" = 1
+  check "loading the job ran the app at once (RunAtLoad): launchd ran it, and that second copy has exited" wait_for 60 login_job_ran_and_exited
+  check "... so there is still one app process" test "$(app_count)" = 1
   check "... and it is still the first copy: it has the hooks" bash -c 'ps -o args= -p "$(pgrep -f "^$1( |\$)" | head -1)" | grep -q -- "--test-hooks"' _ "$APP_EXEC"
 }
 
@@ -432,7 +462,7 @@ step_7_after() {
   check "... as the login job runs it, with --at-login and no hooks" bash -c 'args="$(ps -o args= -p "$(pgrep -f "^$1( |\$)" | head -1)")"; echo "$args"; [[ "$args" == *--at-login* && "$args" != *--test-hooks* ]]' _ "$APP_EXEC"
   check "... one app process" test "$(app_count)" = 1
   check "... and the login job is loaded, its plist still in LaunchAgents" bash -c 'test -f "$1" && launchctl print "$2/$3" >/dev/null' _ "$APP_PLIST" "$DOMAIN" "$APP_JOB"
-  sleep 20
+  sleep 20 # a dwell, on purpose: a start by the app or the login would come within seconds of the app being up
   check "bosun was not started: no tmux server, no caffeinate" bash -c '! tmux -L bosun info && ! pgrep -x caffeinate'
   echo "  note  the console's job runs again at login, as its marker is still there (bosun stop does not remove it, bosun quit does): $(pgrep -f 'lib/console_server\.py' | tr '\n' ' ')"
   check "... and bosun status --json says stopped" status_says '.level == "stopped"'
