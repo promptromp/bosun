@@ -1,0 +1,18 @@
+{
+  "busy": [],
+  "console": "stopped",
+  "console_port": null,
+  "contract": 1,
+  "error": "bosun stop failed: the tmux server did not answer; the quit record stays, so bosun stays stopped: run `bosun quit --stop-now` again to finish, or `bosun start` to start bosun again",
+  "keep_awake_until": "20:00",
+  "morning_paused": true,
+  "refused": null,
+  "result": "failed",
+  "waiting": [
+    "acme-web"
+  ],
+  "windows": [
+    "acme-orchestrator",
+    "acme-web"
+  ]
+}

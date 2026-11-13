@@ -215,6 +215,16 @@ of truth, so don't copy rules into this file.
   one `Runner`: `verify`, the download, the placing, the sweep of what a killed install left, quit and delete). The
   Team ID is checked with `codesign -R` against the certificates, never read from `codesign`'s text. The publisher is
   `app/publisher.json`, the version `app/VERSION`.
+- The menu bar app itself (`app/`, a Swift package; design: `docs/design/menu-bar.md`, plan:
+  `docs/plans/menu-bar-app.md`): `BosunMenuCore` is pure and carries the tests (`Contract.swift`: the JSON of part 1's
+  commands, each with `"contract": 1`; `MenuModel.swift`: the menu each state becomes, `FlowState` (one flow at a
+  time) and `shouldExitAsSecondCopy`; `UpdateFlow.swift` and `QuitFlow.swift`: the flows as state machines, with the
+  `bosun` commands each step runs; `BosunCLI.swift`: the one protocol the app runs bosun through, the commands and
+  their timeouts as values, and `FakeBosunCLI`). The tests decode `app/Tests/BosunMenuCoreTests/Fixtures/*.json`,
+  which `tools/contract_samples.py` writes from part 1's own pure functions (quit's results from its run over fake
+  ports): a change to what `bosun status --json`, `update --check|--dry-run --json`, `quit --json` or `app status
+  --json` print fails `tests/unit/test_contract_samples.py` until `uv run python tools/contract_samples.py` writes the
+  fixtures again, and the Swift side follows. The app reads nothing of bosun's but what those commands print.
 - `orchestrator/policy.md` (appended to the orchestrator's system prompt),
   `orchestrator/plugin/commands/chores.md` (the chores procedure), `orchestrator/settings.json`
   (the orchestrator's own permissions, generic; a site replaces it with
@@ -348,6 +358,16 @@ and CI agree on versions. On commit (`.pre-commit-config.yaml`; run all with `uv
   indented `case`, from `.editorconfig`), and `tools/shell_complexity.py` (functions: branch
   count <= 15 and <= 60 lines; script bodies <= 25 and <= 120 lines), since the Python tools do
   not read shell.
+- Swift (the menu bar app in `app/`; three hooks on `files: ^app/`, so a Python-only commit pays nothing, each
+  skipping with one line when `swift` is absent, through `tools/swift_hook.sh`): `swift format lint --strict` (the
+  toolchain's swift-format, `app/.swift-format`), SwiftLint (the SwiftLintPlugins package's command plugin, its version
+  pinned in `app/Package.resolved`; `app/.swiftlint.yml` has the repo's limits: cyclomatic 10, function body 60, type
+  body 300, file 400; `force_unwrapping`, `force_try` and `force_cast` errors in Sources, allowed in Tests; no `print`
+  in Sources) and `swift test -Xswiftc -warnings-as-errors`. Swift 6 language mode, so strict concurrency. The floor is
+  95% of the lines of `Sources/BosunMenuCore`: `cd app && swift test --enable-code-coverage -Xswiftc
+  -warnings-as-errors`, then `uv run python tools/swift_coverage.py` (it reads `llvm-cov export -summary-only` and
+  names the files under the floor). While iterating run `swift test --filter <suite>`, not the lot. When a limit
+  trips, split the function, as for Python.
 - Everything else written by hand: hadolint (Dockerfiles), actionlint and zizmor (workflows; actions are
   pinned by commit, with the tag in a comment that Dependabot keeps up to date), the Dependabot config's
   schema, valid XML in the plist templates (Apple's `plutil` is more lenient than XML), `typos`

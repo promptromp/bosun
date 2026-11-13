@@ -161,6 +161,27 @@ repos:
         language: system
         files: ^(console/|tests/js|lib/console_|docs/assets/.*\.js$)
         pass_filenames: false
+      # The menu bar app's Swift (app/): formatting, SwiftLint and the tests with warnings as errors, only for
+      # a commit that touches app/. Each skips with one line without a Swift toolchain (CI's Linux `lint`
+      # job); the macOS `app` job enforces them.
+      - id: swift-format
+        name: swift format lint (the app)
+        entry: tools/swift_hook.sh format
+        language: system
+        files: ^app/
+        pass_filenames: false
+      - id: swiftlint
+        name: SwiftLint (the app)
+        entry: tools/swift_hook.sh lint
+        language: system
+        files: ^app/
+        pass_filenames: false
+      - id: swift-test
+        name: swift test, warnings as errors (the app)
+        entry: tools/swift_hook.sh test
+        language: system
+        files: ^app/
+        pass_filenames: false
       - id: smoke-tests
         name: smoke tests (end to end)
         entry: tests/smoke.sh

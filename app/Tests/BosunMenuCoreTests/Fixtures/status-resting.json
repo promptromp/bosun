@@ -1,0 +1,20 @@
+{
+  "console": {
+    "running": false,
+    "url": null
+  },
+  "contract": 1,
+  "detail": [],
+  "keep_awake_until": null,
+  "level": "ok",
+  "logs": "/Users/me/.local/state/bosun/logs",
+  "problems": [],
+  "sentence": "bosun is resting until 08:00",
+  "stopped": null,
+  "update": {
+    "state": "none",
+    "waiting_for": []
+  },
+  "waiting": [],
+  "windows": 0
+}

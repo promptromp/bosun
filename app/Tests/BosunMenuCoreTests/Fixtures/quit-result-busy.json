@@ -1,0 +1,18 @@
+{
+  "busy": [
+    "acme-exporter"
+  ],
+  "contract": 1,
+  "keep_awake_until": "20:00",
+  "refused": null,
+  "result": "busy",
+  "waiting": [
+    "acme-web"
+  ],
+  "windows": [
+    "acme-orchestrator",
+    "acme-exporter",
+    "acme-web",
+    "acme-api"
+  ]
+}

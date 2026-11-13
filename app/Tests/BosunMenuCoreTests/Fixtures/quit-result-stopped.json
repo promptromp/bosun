@@ -1,0 +1,19 @@
+{
+  "busy": [],
+  "console": "stopped",
+  "console_port": null,
+  "contract": 1,
+  "error": null,
+  "keep_awake": "released",
+  "keep_awake_until": "20:00",
+  "morning_paused": true,
+  "refused": null,
+  "result": "stopped",
+  "waiting": [
+    "acme-web"
+  ],
+  "windows": [
+    "acme-orchestrator",
+    "acme-web"
+  ]
+}

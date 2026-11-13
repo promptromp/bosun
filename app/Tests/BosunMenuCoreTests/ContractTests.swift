@@ -1,0 +1,286 @@
+import Testing
+
+@testable import BosunMenuCore
+
+@Suite struct StatusContractTests {
+  static let names = [
+    "status-ok", "status-warning", "status-error", "status-stopped", "status-quit-unfinished",
+    "status-resting", "status-update-running",
+  ]
+
+  @Test(arguments: names) func everyStatusFixtureDecodes(name: String) {
+    let status = Fixtures.status(name)
+    #expect(status.contract == 1)
+    #expect(!status.sentence.isEmpty)
+    #expect(status.logs == "/Users/me/.local/state/bosun/logs")
+  }
+
+  @Test func theLevelsAreTheOnesBosunSays() {
+    let levels = Self.names.map { Fixtures.status($0).level }
+    #expect(levels == [.ok, .warning, .error, .stopped, .error, .ok, .ok])
+  }
+
+  @Test func aRunningBosunWithAWindowWaitingAndAKeepAwake() {
+    let status = Fixtures.status("status-ok")
+    #expect(status.sentence == "bosun is running")
+    #expect(status.windows == 3)
+    #expect(status.waiting == ["acme-web"])
+    #expect(status.keepAwakeUntil == "20:00")
+    #expect(status.stopped == nil)
+    #expect(status.update == UpdateProgress(state: .none, waitingFor: []))
+    #expect(status.console == ConsoleStatus(running: false, url: nil))
+    #expect(status.detail == ["3 windows open", "1 waiting for you: acme-web", "Mac kept awake until 20:00"])
+  }
+
+  @Test func aWarningListsItsProblems() {
+    let status = Fixtures.status("status-warning")
+    #expect(status.sentence == "bosun is running, with a warning")
+    #expect(status.problems == ["The acme-web window has waited at a prompt for 45 min."])
+  }
+
+  @Test func aQuitLeavesTheStoppedFields() {
+    let status = Fixtures.status("status-stopped")
+    #expect(status.stopped == Stopped(since: "2026-11-11T09:30:00+00:00", morningPaused: true))
+    #expect(status.keepAwakeUntil == nil)
+  }
+
+  @Test func aQuitThatDidNotFinishIsAnErrorWithTheWayOut() {
+    let status = Fixtures.status("status-quit-unfinished")
+    #expect(status.sentence == "bosun quit did not finish")
+    #expect(status.problems.first?.contains("bosun quit --stop-now") == true)
+    #expect(status.stopped?.morningPaused == false)
+  }
+
+  @Test func anUpdateInProgressNamesTheWindowsItWaitsFor() {
+    let status = Fixtures.status("status-update-running")
+    #expect(status.update == UpdateProgress(state: .running, waitingFor: ["acme-exporter", "acme-web"]))
+    #expect(status.updateEvent == .statusShows(running: true, waitingFor: ["acme-exporter", "acme-web"]))
+    #expect(Fixtures.status("status-ok").updateEvent == .statusShows(running: false, waitingFor: []))
+  }
+
+  @Test func aContractOtherThanOneIsRefusedBeforeAnythingElseIsRead() {
+    #expect(throws: ContractError.unsupported(2)) {
+      try decodeContract(StatusSnapshot.self, from: Fixtures.text("status-ok", contract: 2))
+    }
+    #expect(throws: ContractError.unsupported(7)) {
+      try decodeContract(StatusSnapshot.self, from: #"{"contract": 7, "future": ["shape"]}"#)
+    }
+  }
+
+  @Test func textThatIsNotTheObjectIsUnreadable() {
+    for text in ["", "not json", "[]", #"{"contract": 1}"#, #"{"contract": "1"}"#] {
+      #expect(throws: ContractError.self) { try decodeContract(StatusSnapshot.self, from: text) }
+    }
+    do {
+      _ = try decodeContract(StatusSnapshot.self, from: "not json")
+    } catch {
+      #expect(error.description.contains("could not be read"))
+    }
+  }
+
+  @Test func aLevelItDoesNotKnowIsUnreadableNotGuessedAt() {
+    let text = Fixtures.text("status-ok").replacingOccurrences(of: "\"ok\"", with: "\"purple\"")
+    #expect(throws: ContractError.self) { try decodeContract(StatusSnapshot.self, from: text) }
+  }
+
+  @Test func theContractErrorsSayWhatIsWrong() {
+    #expect(ContractError.unsupported(3).description.contains("needs an update"))
+    #expect(ContractError.unreadable("x").description.contains("x"))
+  }
+}
+
+@Suite struct UpdateContractTests {
+  @Test func anAvailableUpdateHasItsVersionAndNotes() {
+    let check = Fixtures.decode(UpdateCheck.self, "update-check-available")
+    #expect(check.available)
+    #expect(!check.skipped)
+    #expect(check.latest?.version == "v2026.11.11")
+    #expect(check.latest?.notes.contains("Hardening") == true)
+    #expect(check.installed.version == "v2026.11.04")
+    #expect(check.channel == "releases")
+    #expect(check.error == nil)
+  }
+
+  @Test func aCurrentBosunHasNothingToOffer() {
+    let check = Fixtures.decode(UpdateCheck.self, "update-check-current")
+    #expect(!check.available)
+    #expect(check.latest?.version == "v2026.11.11")
+  }
+
+  @Test func aSkippedVersionIsStillAvailableToWhoeverAsks() {
+    let check = Fixtures.decode(UpdateCheck.self, "update-check-skipped")
+    #expect(check.skipped)
+    #expect(check.available)
+  }
+
+  @Test func aCheckThatCouldNotBeMadeSaysWhy() {
+    let check = Fixtures.decode(UpdateCheck.self, "update-check-failed")
+    #expect(check.error?.contains("could not reach") == true)
+    #expect(check.latest == nil)
+    #expect(!check.available)
+  }
+
+  @Test func theDryRunsPlanHasWhatTheDialogShows() {
+    let plan = Fixtures.plan()
+    #expect(plan.fromCommit == String(repeating: "1", count: 40))
+    #expect(plan.toCommit == String(repeating: "2", count: 40))
+    #expect(plan.commits.count == 2)
+    #expect(plan.isBlocked == false)
+    #expect(plan.userChanges == ["sessions.yml: add connectors: to the exporter entry"])
+    #expect(plan.handed == ["task:acme/exporter#7"])
+    #expect(plan.windows.count == 9)
+  }
+
+  @Test func theWindowsThatRestartAreTheOnesTheUpdateTouches() {
+    let plan = Fixtures.plan()
+    #expect(
+      plan.restarting == [
+        "acme-api", "acme-exporter", "acme-worker", "acme-docs", "checkin",
+      ])
+  }
+
+  @Test func theWindowsThatNeedYouAreTheOnesItMustAskFirst() {
+    #expect(Fixtures.plan().windowsNeedingYou == ["acme-web"])
+  }
+
+  @Test func aBlockedPlanSaysWhy() {
+    let plan = Fixtures.plan("update-plan-blocked")
+    #expect(plan.isBlocked)
+    #expect(plan.blockers == ["a migration of the knowledge store is missing"])
+  }
+
+  @Test func aDryRunWithNoPlanIsNil() {
+    #expect(Fixtures.dryRun("update-plan-none").plan == nil)
+  }
+
+  @Test func theDryRunHasNoContractNumberButOneThatIsThereMustBeOurs() {
+    #expect(throws: ContractError.unsupported(2)) {
+      try decodeContract(
+        UpdateDryRun.self, from: #"{"contract": 2, "plan": null}"#, contractRequired: false)
+    }
+    #expect(throws: ContractError.self) {
+      try decodeContract(UpdateDryRun.self, from: "{", contractRequired: false)
+    }
+  }
+
+  @Test func everyTreatmentBosunHasIsOneTheAppKnows() {
+    let all = Fixtures.strings("update-treatments")
+    #expect(all.count == 9)
+    for text in all {
+      if case .unknown = Treatment(text: text) { Issue.record("the app does not know \(text)") }
+    }
+    #expect(Set(all.map { Treatment(text: $0) }).count == 9)
+  }
+
+  @Test func aTreatmentItDoesNotKnowNeedsYouAndIsNotARestart() {
+    let treatment = Treatment(text: "something new")
+    #expect(treatment == .unknown("something new"))
+    #expect(treatment.needsYou)
+    #expect(!treatment.restarts)
+  }
+
+  @Test func aWindowIsANameAndHowItIsTreated() throws {
+    let text = #"{"plan": {"windows": [["acme-api", "restart"]]}}"#
+    let run = try decodeContract(UpdateDryRun.self, from: text, contractRequired: false)
+    #expect(run.plan?.windows == [PlannedWindow(name: "acme-api", treatment: .restart)])
+    #expect(run.plan?.commits == [])
+    #expect(throws: ContractError.self) {
+      try decodeContract(
+        UpdateDryRun.self, from: #"{"plan": {"windows": [["only a name"]]}}"#, contractRequired: false)
+    }
+  }
+}
+
+@Suite struct QuitContractTests {
+  @Test func theQuitPlanTellsApartBusyAndWaiting() {
+    let plan = Fixtures.decode(QuitPlan.self, "quit-plan")
+    #expect(plan.windows.count == 4)
+    #expect(plan.busy == ["acme-exporter"])
+    #expect(plan.waiting == ["acme-web"])
+    #expect(plan.keepAwakeUntil == "20:00")
+    #expect(plan.refused == nil)
+  }
+
+  @Test func aRefusedPlanCarriesTheReason() {
+    let plan = Fixtures.decode(QuitPlan.self, "quit-plan-refused")
+    #expect(plan.refused?.contains("update is running") == true)
+  }
+
+  @Test func theQuitPlansLinesSayWhatQuittingWouldMeet() {
+    let plan = Fixtures.decode(QuitPlan.self, "quit-plan")
+    #expect(
+      plan.lines == [
+        "4 windows open: acme-orchestrator, acme-exporter, acme-web, acme-api",
+        "Busy: acme-exporter",
+        "Waiting for you (quit stops them): acme-web",
+        "The Mac is kept awake until 20:00",
+      ])
+    #expect(quitPlan(windows: ["acme-api"]).lines == ["1 window open: acme-api"])
+    #expect(quitPlan(windows: []).lines == ["No windows are open"])
+  }
+
+  @Test func eachResultDecodesWithItsOwnFields() {
+    let stopped = Fixtures.quitResult("quit-result-stopped")
+    #expect(stopped.result == .stopped)
+    #expect(stopped.morningPaused == true)
+    #expect(stopped.keepAwake == "released")
+    #expect(stopped.console == .stopped)
+    #expect(stopped.consolePort == nil)
+    #expect(stopped.error == nil)
+    #expect(stopped.plan.waiting == ["acme-web"])
+
+    let still = Fixtures.quitResult("quit-result-stopped-console-running")
+    #expect(still.console == .stillRunning)
+    #expect(still.consolePort == 8765)
+    #expect(still.morningPaused == false)
+    #expect(still.keepAwake == "kept until 20:00")
+
+    let busy = Fixtures.quitResult("quit-result-busy")
+    #expect(busy.result == .busy)
+    #expect(busy.plan.busy == ["acme-exporter"])
+    #expect(busy.error == nil)
+    #expect(busy.console == nil)
+
+    let refused = Fixtures.quitResult("quit-result-refused")
+    #expect(refused.result == .refused)
+    #expect(refused.error == nil)
+    #expect(refused.message?.contains("update is running") == true)
+
+    let failed = Fixtures.quitResult("quit-result-failed")
+    #expect(failed.result == .failed)
+    #expect(failed.message?.contains("quit --stop-now") == true)
+
+    let early = Fixtures.quitResult("quit-result-failed-early")
+    #expect(early.result == .failed)
+    #expect(early.plan.windows == [])
+    #expect(early.message?.contains("nothing was changed") == true)
+  }
+
+  @Test func aResultWithNeitherAnErrorNorARefusalHasNoMessage() {
+    #expect(Fixtures.quitResult("quit-result-busy").message == nil)
+    #expect(Fixtures.quitResult("quit-result-stopped").message == nil)
+  }
+
+  @Test func theConsoleOutcomeIsOneOfThreeFixedWords() {
+    #expect(ConsoleOutcome(rawValue: "stopped") == .stopped)
+    #expect(ConsoleOutcome(rawValue: "not running") == .notRunning)
+    #expect(ConsoleOutcome(rawValue: "still running") == .stillRunning)
+    #expect(ConsoleOutcome(rawValue: "running") == nil)
+  }
+}
+
+@Suite struct AppContractTests {
+  @Test func theInstalledApp() {
+    let app = Fixtures.decode(AppStatus.self, "app-status")
+    #expect(app.installed == "0.1.0")
+    #expect(app.wanted == "0.1.0")
+    #expect(app.login)
+    #expect(app.path == "/Users/me/Applications/bosun.app")
+  }
+
+  @Test func noAppInstalled() {
+    let app = Fixtures.decode(AppStatus.self, "app-status-not-installed")
+    #expect(app.installed == nil)
+    #expect(!app.login)
+  }
+}

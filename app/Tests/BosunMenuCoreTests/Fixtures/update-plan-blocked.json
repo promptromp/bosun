@@ -1,0 +1,126 @@
+{
+  "plan": {
+    "blockers": [
+      "a migration of the knowledge store is missing"
+    ],
+    "commits": [
+      "Hardening: the adversarial cases an inventory found",
+      "Repo windows on a second agent"
+    ],
+    "console": true,
+    "formats": [
+      [
+        "ledger",
+        1
+      ]
+    ],
+    "from_commit": "1111111111111111111111111111111111111111",
+    "handed": [
+      "task:acme/exporter#7"
+    ],
+    "jobs": [
+      "watchdog",
+      "console"
+    ],
+    "kept": [],
+    "keys_added": [
+      "BOSUN_MENU_APP"
+    ],
+    "kinds": [
+      [
+        "acme-orchestrator",
+        "orchestrator"
+      ],
+      [
+        "acme-api",
+        "repo"
+      ],
+      [
+        "acme-exporter",
+        "repo"
+      ],
+      [
+        "acme-worker",
+        "repo"
+      ],
+      [
+        "acme-web",
+        "repo"
+      ],
+      [
+        "acme-docs",
+        "repo"
+      ],
+      [
+        "checkin",
+        "checkin"
+      ],
+      [
+        "acme-notes",
+        "repo"
+      ],
+      [
+        "scratch",
+        "repo"
+      ]
+    ],
+    "migrations": [
+      [
+        "ledger",
+        1,
+        2
+      ]
+    ],
+    "prompts": [
+      "orchestrator/policy.md",
+      "orchestrator/tasks/review.md"
+    ],
+    "renames": [],
+    "rules": [],
+    "to_commit": "2222222222222222222222222222222222222222",
+    "unwritten": [],
+    "user_changes": [
+      "sessions.yml: add connectors: to the exporter entry"
+    ],
+    "windows": [
+      [
+        "acme-orchestrator",
+        "re-read"
+      ],
+      [
+        "acme-api",
+        "restart"
+      ],
+      [
+        "acme-exporter",
+        "take stock, then restart"
+      ],
+      [
+        "acme-worker",
+        "wait until idle"
+      ],
+      [
+        "acme-web",
+        "ask first"
+      ],
+      [
+        "acme-docs",
+        "relaunch"
+      ],
+      [
+        "checkin",
+        "restart the loop"
+      ],
+      [
+        "acme-notes",
+        "leave"
+      ],
+      [
+        "scratch",
+        "not started by bosun: left as it is"
+      ]
+    ]
+  },
+  "summary": null,
+  "update": null
+}

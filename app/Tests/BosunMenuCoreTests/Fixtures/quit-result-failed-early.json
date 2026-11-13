@@ -1,0 +1,10 @@
+{
+  "busy": [],
+  "contract": 1,
+  "error": "another bosun start or refresh is setting up the windows, and did not finish in time: nothing was changed, try the quit again",
+  "keep_awake_until": null,
+  "refused": null,
+  "result": "failed",
+  "waiting": [],
+  "windows": []
+}
