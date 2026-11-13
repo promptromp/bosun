@@ -39,7 +39,7 @@ actor Refreshes {
     #expect(await refreshes.reasons == [.launch])
     await clock.waitForSleepers()
     clock.advance(by: .seconds(29))
-    try? await Task.sleep(for: .milliseconds(30))
+    #expect(clock.sleeperCount == 1)  // the timer was not woken, so it cannot have asked
     #expect(await refreshes.count == 1)
     clock.advance(by: .seconds(1))
     #expect(await eventually { await refreshes.count == 2 })
@@ -79,7 +79,8 @@ actor Refreshes {
     await poller.pause()
     await clock.waitForSleepers()
     clock.advance(by: .seconds(30))
-    try? await Task.sleep(for: .milliseconds(30))
+    // The timer woke, was refused (paused) and sleeps again, to the next 30 seconds
+    #expect(await clock.waitForSleeper(until: clock.now.advanced(by: .seconds(30))))
     await poller.refreshNow(.menuOpened)
     await poller.refreshNow(.wake)
     #expect(await refreshes.reasons == [.launch])
@@ -151,8 +152,8 @@ actor Refreshes {
     await poller.start()
     await clock.waitForSleepers()
     await poller.stop()
+    #expect(clock.sleeperCount == 0)  // stopping took the timer's sleep away: nothing is left to wake
     clock.advance(by: .seconds(60))
-    try? await Task.sleep(for: .milliseconds(30))
     #expect(await refreshes.reasons == [.launch])
   }
 

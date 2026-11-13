@@ -159,9 +159,10 @@ private func checkCalls(_ world: World) async -> Int {
     await world.coordinator.perform(.checkForUpdates)
     let before = await checkCalls(world)
     world.ui.answer("OK")
-    await world.clock.waitForSleepers()
+    // The grace the update was started with: 90 seconds from now on this clock
+    #expect(await world.clock.waitForSleeper(until: world.clock.now.advanced(by: .seconds(90))))
     world.clock.advance(by: .seconds(89))
-    try? await Task.sleep(for: .milliseconds(30))
+    #expect(world.clock.sleeperCount == 1)  // it did not wake, so nothing could have looked
     #expect(await checkCalls(world) == before)
     world.clock.advance(by: .seconds(1))
     #expect(await eventually { world.ui.presented.count == 3 })
@@ -179,8 +180,10 @@ private func checkCalls(_ world: World) async -> Int {
     await world.replace(Bosun.status, exited(0, Fixtures.text("status-update-running")))
     await world.refresh(.timer)
     let before = await checkCalls(world)
-    await world.clock.waitForSleepers()
+    #expect(await world.clock.waitForSleeper(until: world.clock.now.advanced(by: .seconds(90))))
     world.clock.advance(by: .seconds(120))
+    // The grace wakes and finds the update running: it does nothing, in a task nobody can await, so this
+    // pause only gives a wrong look time to show (it cannot make the test fail by itself).
     try? await Task.sleep(for: .milliseconds(30))
     #expect(await checkCalls(world) == before)
     #expect(world.ui.presented.count == 2)

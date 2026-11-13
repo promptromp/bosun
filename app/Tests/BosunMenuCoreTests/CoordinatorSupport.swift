@@ -73,10 +73,33 @@ final class FakeScripts: ScriptWriting, @unchecked Sendable {
 actor Gate {
   private var isOpen = false
   private var waiting: [CheckedContinuation<Void, Never>] = []
+  private var arrivals: [UUID: CheckedContinuation<Bool, Never>] = [:]
 
   func wait() async {
     if isOpen { return }
-    await withCheckedContinuation { waiting.append($0) }
+    await withCheckedContinuation { continuation in
+      waiting.append(continuation)
+      let told = arrivals
+      arrivals = [:]
+      for (_, arrival) in told { arrival.resume(returning: true) }
+    }
+  }
+
+  /// Returns once something waits at the gate, shut (at once if it already does): the signal a test awaits
+  /// instead of sleeping and hoping the look got there. False if nothing came within `limit`, so a test
+  /// that never gets there fails instead of hanging.
+  func waitForWaiter(within limit: Duration = .seconds(10)) async -> Bool {
+    if !waiting.isEmpty { return true }
+    let id = UUID()
+    Task {
+      try? await Task.sleep(for: limit)
+      self.giveUpWaiting(id)
+    }
+    return await withCheckedContinuation { arrivals[id] = $0 }
+  }
+
+  private func giveUpWaiting(_ id: UUID) {
+    arrivals.removeValue(forKey: id)?.resume(returning: false)
   }
 
   /// Shuts it again, for the next command to wait at.

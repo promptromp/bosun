@@ -62,6 +62,21 @@ final class ManualClock: Clock, @unchecked Sendable {
     for sleeper in due { sleeper.continuation.resume() }
   }
 
+  /// Waits (in real time, up to five seconds) until a task sleeps on this clock with exactly this
+  /// deadline: the sleeper a test means, whatever else sleeps here (the poller's own timer counts as
+  /// one). False if none registered.
+  func waitForSleeper(until deadline: Instant) async -> Bool {
+    let end = Date().addingTimeInterval(5)
+    while !hasSleeper(until: deadline) && Date() < end {
+      try? await Task.sleep(for: .milliseconds(2))
+    }
+    return hasSleeper(until: deadline)
+  }
+
+  private func hasSleeper(until deadline: Instant) -> Bool {
+    lock.withLock { sleepers.contains { $0.deadline == deadline } }
+  }
+
   /// Waits (in real time, briefly) until `count` tasks sleep on this clock.
   func waitForSleepers(_ count: Int = 1) async {
     let end = Date().addingTimeInterval(5)

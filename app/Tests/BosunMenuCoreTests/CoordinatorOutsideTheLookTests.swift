@@ -97,7 +97,7 @@ import Testing
     await world.replace(Bosun.status, exited(0, Fixtures.text("status-quit-unfinished")))
     await hold.arm()
     let look = Task { await world.coordinator.refresh(.timer) }
-    try? await Task.sleep(for: .milliseconds(50))
+    #expect(await hold.waitForWaiter())  // the look is out, and waits at the gate
     let seen = Seen()
     world.ui.whileOpen = { _ in
       // The quit is under way (its dialog is open); the look lands now
