@@ -51,7 +51,7 @@ parts your change touches.
 ## Pull requests
 
 Open them against `main`, one topic each, saying what changed, why, and how you tested it. CI runs
-the hooks, the unit tests on Python 3.13 to 3.15, the smoke suite on macOS, gitleaks and CodeQL;
+the hooks, the unit tests on Python 3.13 to 3.15, gitleaks and CodeQL (the macOS smoke suite is off until the MVP; the pre-push hook still runs it);
 `main` takes a pull request once those pass and its review threads are resolved, squashed or
 rebased.
 
