@@ -430,7 +430,12 @@ group's, and falls back to the pull request's for commits merged before the queu
 in `.github/rulesets/main.json`. A new or renamed job goes in its list too, applied with `gh api -X PUT
 repos/{owner}/{repo}/rulesets/<id> --input .github/rulesets/main.json`. Dependabot
 (`.github/dependabot.yml`) opens monthly grouped updates of the actions, `uv.lock` and the hook
-revisions, and security updates as advisories come out.
+revisions, and security updates as advisories come out. `.github/workflows/dependabot-auto-merge.yml`
+enables auto-merge (squash) on a Dependabot pull request that is a patch or minor update of a GitHub
+Action, the sandbox's Docker base image, a pre-commit hook revision or a uv development dependency; a
+major update, a production dependency or anything not opened by Dependabot waits for a person. Auto-merge
+adds the pull request to the merge queue once its required checks pass (the repository setting "Allow
+auto-merge" must be on). A new ecosystem in `dependabot.yml` goes in that workflow's condition too.
 
 When a limit trips, split the function rather than raising the limit. Suppress a finding only
 with an inline comment that says why (as for the jq and GraphQL strings). The formatters rewrite
