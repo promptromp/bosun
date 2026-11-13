@@ -93,14 +93,7 @@ import Testing
   }
 }
 
-@Suite struct CommandScriptTests {
-  private func scratchFolder() throws -> URL {
-    let dir = FileManager.default.temporaryDirectory
-      .appendingPathComponent("bosun-script-test-\(UUID().uuidString)")
-    try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-    return dir
-  }
-
+@Suite struct CommandScriptTextTests {
   @Test func theScriptRunsBosunAndWaitsForAKeyBeforeTheWindowCloses() {
     let text = CommandScript.text(executable: "/Users/me/.local/bin/bosun", args: ["doctor"])
     #expect(text.hasPrefix("#!/bin/sh\n"))
@@ -114,55 +107,6 @@ import Testing
     #expect(CommandScript.quote("a b") == "'a b'")
     #expect(CommandScript.quote("it's") == "'it'\\''s'")
     #expect(CommandScript.quote("$(rm -rf ~)") == "'$(rm -rf ~)'")
-  }
-
-  @Test func theFileIsExecutableAndIsNamedForTheCommand() throws {
-    let folder = try scratchFolder()
-    let url = try CommandScript.write(
-      executable: "/Users/me/.local/bin/bosun", args: ["uninstall"], folder: folder)
-    #expect(url.lastPathComponent == "bosun-uninstall.command")
-    #expect(url.deletingLastPathComponent().standardizedFileURL == folder.standardizedFileURL)
-    let mode = try FileManager.default.attributesOfItem(atPath: url.path)[.posixPermissions] as? Int
-    #expect(mode == 0o755)
-  }
-
-  @Test func writingItAgainReplacesIt() throws {
-    let folder = try scratchFolder()
-    _ = try CommandScript.write(executable: "/one", args: ["doctor"], folder: folder)
-    let url = try CommandScript.write(executable: "/two", args: ["doctor"], folder: folder)
-    let text = try String(contentsOf: url, encoding: .utf8)
-    #expect(text.contains("'/two'"))
-    #expect(!text.contains("'/one'"))
-  }
-
-  @Test func theFolderIsMadeWhenItIsNotThere() throws {
-    let folder = try scratchFolder().appendingPathComponent("not/yet")
-    let url = try CommandScript.write(executable: "/x", args: ["doctor"], folder: folder)
-    #expect(FileManager.default.fileExists(atPath: url.path))
-  }
-
-  /// Run for real, with a stand-in for bosun: it prints, the script waits for Return, and passes its status on.
-  @Test func theScriptRunsAndKeepsTheExitStatus() throws {
-    let folder = try scratchFolder()
-    let fake = folder.appendingPathComponent("fake-bosun")
-    try "#!/bin/sh\necho \"ran: $*\"\nexit 4\n".write(to: fake, atomically: true, encoding: .utf8)
-    try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: fake.path)
-    let url = try CommandScript.write(executable: fake.path, args: ["doctor"], folder: folder)
-    let process = Process()
-    process.executableURL = url
-    let input = Pipe()
-    let output = Pipe()
-    process.standardInput = input
-    process.standardOutput = output
-    try process.run()
-    input.fileHandleForWriting.write(Data("\n".utf8))
-    try input.fileHandleForWriting.close()
-    let data = output.fileHandleForReading.readDataToEndOfFile()
-    let said = try #require(String(bytes: data, encoding: .utf8))
-    process.waitUntilExit()
-    #expect(said.contains("ran: doctor"))
-    #expect(said.contains("Press Return"))
-    #expect(process.terminationStatus == 4)
   }
 }
 

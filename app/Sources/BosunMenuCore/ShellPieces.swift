@@ -51,16 +51,11 @@ func failureText(_ result: CommandResult) -> String {
 
 // MARK: Terminal
 
-/// Where the `.command` files go and what they run: Terminal is reached by opening a file, never by
-/// AppleScript (which would ask for the Automation permission the app does not have).
-public struct ScriptSettings: Sendable {
-  public let executable: String
-  public let folder: URL
-
-  public init(executable: String, folder: URL) {
-    self.executable = executable
-    self.folder = folder
-  }
+/// Makes the `.command` file that runs `bosun <args>` in Terminal and says where it is. Terminal is reached by
+/// opening a file, never by AppleScript (which would ask for the Automation permission the app does not have).
+/// The writing is BosunMenuSystem's.
+public protocol ScriptWriting: Sendable {
+  func write(args: [String]) throws -> URL
 }
 
 public enum CommandScript {
@@ -82,15 +77,6 @@ public enum CommandScript {
       exit $status
 
       """
-  }
-
-  /// Writes `bosun-<command>.command` into `folder`, executable, replacing the last one.
-  public static func write(executable: String, args: [String], folder: URL) throws -> URL {
-    try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
-    let url = folder.appendingPathComponent("bosun-\(args.first ?? "run").command")
-    try text(executable: executable, args: args).write(to: url, atomically: true, encoding: .utf8)
-    try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: url.path)
-    return url
   }
 }
 

@@ -59,6 +59,13 @@ enum Dialogs {
       rawValue: NSApplication.ModalResponse.alertFirstButtonReturn.rawValue + answer.button)
   }
 
+  /// An event that does nothing, posted so a modal loop that was told to stop takes one and does.
+  static func wakeEvent() -> NSEvent? {
+    NSEvent.otherEvent(
+      with: .applicationDefined, location: .zero, modifierFlags: [], timestamp: 0, windowNumber: 0,
+      context: nil, subtype: 0, data1: 0, data2: 0)
+  }
+
   // MARK: views
 
   private static func checkbox(_ box: DialogBox) -> NSButton {
@@ -93,8 +100,9 @@ enum Dialogs {
   }
 }
 
-/// Shows dialogs one at a time. The app is a regular app (it has a Dock icon) only while one is open, so
-/// the alert comes to the front, and an accessory again after.
+/// Shows dialogs one at a time. The app is a regular app (it has a Dock icon) from the first dialog until the
+/// last one of a queue is answered, so the alert comes to the front and the icon does not flicker between
+/// dialogs; an accessory again after.
 @MainActor
 final class AlertPresenter {
   private var showing = false
@@ -109,16 +117,16 @@ final class AlertPresenter {
       await withCheckedContinuation { waiting.append($0) }
     } else {
       showing = true
+      NSApp.setActivationPolicy(.regular)
     }
     let built = Dialogs.build(spec)
     current = built
-    NSApp.setActivationPolicy(.regular)
     NSApp.activate()
     let response = built.alert.runModal()
-    NSApp.setActivationPolicy(.accessory)
     current = nil
     if waiting.isEmpty {
       showing = false
+      NSApp.setActivationPolicy(.accessory)
     } else {
       waiting.removeFirst().resume()
     }
@@ -126,9 +134,12 @@ final class AlertPresenter {
   }
 
   /// A test hook's answer for the dialog that is open: false when none is, or it cannot take that answer.
+  /// `stopModal` called from a timer only ends the modal loop once the next event has been taken (AppKit's
+  /// documentation of `abortModal` says so), and a VM that nobody touches has none: an event is posted to be it.
   func answerOpenDialog(_ hook: HookAnswer) -> Bool {
     guard let built = current, let response = Dialogs.apply(hook, to: built) else { return false }
     NSApp.stopModal(withCode: response)
+    if let wake = Dialogs.wakeEvent() { NSApp.postEvent(wake, atStart: true) }
     return true
   }
 }

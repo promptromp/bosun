@@ -45,6 +45,67 @@ final class FakeUI: AppUI {
   func terminate() { terminated += 1 }
 }
 
+/// Writes no files: remembers what it was asked to write, and says where it would have.
+final class FakeScripts: ScriptWriting, @unchecked Sendable {
+  private let lock = NSLock()
+  private var asked: [[String]] = []
+  private var failing = false
+
+  var written: [[String]] { lock.withLock { asked } }
+
+  var fails: Bool {
+    get { lock.withLock { failing } }
+    set { lock.withLock { failing = newValue } }
+  }
+
+  struct Refused: Error, LocalizedError {
+    var errorDescription: String? { "the folder cannot be written" }
+  }
+
+  func write(args: [String]) throws -> URL {
+    if fails { throw Refused() }
+    lock.withLock { asked.append(args) }
+    return URL(fileURLWithPath: "/tmp/bosun-app/bosun-\(args[0]).command")
+  }
+}
+
+/// A door a test holds shut: what waits at it goes on when the test opens it.
+actor Gate {
+  private var isOpen = false
+  private var waiting: [CheckedContinuation<Void, Never>] = []
+
+  func wait() async {
+    if isOpen { return }
+    await withCheckedContinuation { waiting.append($0) }
+  }
+
+  /// Shuts it again, for the next command to wait at.
+  func arm() {
+    isOpen = false
+  }
+
+  func open() {
+    isOpen = true
+    for continuation in waiting { continuation.resume() }
+    waiting = []
+  }
+}
+
+/// A bosun some of whose commands wait at a gate before they are answered (a command that hangs).
+struct GatedCLI: BosunCLI {
+  let inner: FakeBosunCLI
+  let gates: [[String]: Gate]
+
+  func run(_ args: [String], timeout: Duration) async -> CommandResult {
+    if let gate = gates[args] { await gate.wait() }
+    return await inner.run(args, timeout: timeout)
+  }
+
+  func start(_ args: [String]) async -> CommandResult {
+    await inner.start(args)
+  }
+}
+
 /// A coordinator over a fake bosun and a fake shell, with a clock the test moves.
 @MainActor
 struct World {
@@ -52,24 +113,42 @@ struct World {
   let cli: FakeBosunCLI
   let ui: FakeUI
   let clock: ManualClock
-  let scripts: URL
+  let scripts: FakeScripts
 
   init(
     status: String? = "status-ok", login: Bool = true, atLogin: Bool = false,
-    now: @escaping @Sendable () -> Date = { Date(timeIntervalSince1970: 1_800_000_000) }
+    now: @escaping @Sendable () -> Date = { Date(timeIntervalSince1970: 1_800_000_000) },
+    gates: [[String]: Gate] = [:]
   ) async {
     cli = FakeBosunCLI()
     ui = FakeUI()
     clock = ManualClock()
-    scripts = FileManager.default.temporaryDirectory
-      .appendingPathComponent("bosun-coordinator-test-\(UUID().uuidString)")
+    scripts = FakeScripts()
     if let status { await cli.reply(Bosun.status.args, exited(0, Fixtures.text(status))) }
     let app = Fixtures.text("app-status").replacingOccurrences(
       of: "\"login\": true", with: "\"login\": \(login)")
     await cli.reply(Bosun.appStatus.args, exited(0, app))
+    await cli.reply(Bosun.start.args, exited(0))
     coordinator = AppCoordinator(
-      cli: cli, ui: ui, options: LaunchOptions(atLogin: atLogin, testHooks: nil), clock: clock, now: now,
-      script: ScriptSettings(executable: "/Users/me/.local/bin/bosun", folder: scripts))
+      cli: GatedCLI(inner: cli, gates: gates), ui: ui,
+      options: LaunchOptions(atLogin: atLogin, testHooks: nil), clock: clock, now: now,
+      scripts: scripts)
+  }
+
+  /// A look at the status, and then the work it set going outside the look (an update check).
+  func refresh(_ reason: RefreshReason) async {
+    await coordinator.refresh(reason)
+    await coordinator.settle()
+  }
+
+  func menuWillOpen() async {
+    await coordinator.menuWillOpen()
+    await coordinator.settle()
+  }
+
+  func didWake() async {
+    await coordinator.didWake()
+    await coordinator.settle()
   }
 
   func reply(_ command: Command, _ result: CommandResult) async {
@@ -100,6 +179,11 @@ struct World {
       return nil
     }
     return find((ui.lastModel?.sections ?? []).flatMap { $0 })
+  }
+
+  /// How many times Start was run.
+  var starts: Int {
+    get async { await cli.calls.filter { $0 == Bosun.start.args }.count }
   }
 
   /// What bosun was asked to run (waited for), apart from the status and login looks.

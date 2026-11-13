@@ -4,7 +4,7 @@ import Foundation
 // next state and the `bosun` commands to run. The shell runs the commands and feeds their outcome back as
 // events (`checkEvent`, `planEvent`); it reads the update's progress back from `status` (`updateEvent`).
 // `bosun update` stays the one updater: the app only asks (--check), shows the plan (--dry-run), and
-// starts `update --yes` detached.
+// starts `update --yes` detached (Start is `morning --now --background`, a short command).
 
 public enum UpdateState: Equatable, Sendable {
   case idle

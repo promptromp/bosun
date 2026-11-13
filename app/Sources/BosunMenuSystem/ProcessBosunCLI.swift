@@ -1,9 +1,12 @@
+import BosunMenuCore
 import Foundation
 
-// Runs `bosun` for real: a `BosunCLI` over `Process`. Foundation only, so it is tested here (against shell
-// scripts that stand in for bosun) and not in the AppKit shell. Every call waits at most its timeout; what
-// hung is terminated, then killed. Output is read as it comes, so a reply bigger than a pipe cannot hang
-// the command, and a helper the command left running (holding the pipe open) cannot hold the reply.
+// Runs `bosun` for real: a `BosunCLI` over `Process`. Foundation only, so it is tested (against shell scripts
+// that stand in for bosun) apart from AppKit. Every call waits at most its timeout; what hung is stopped
+// with its whole process group, TERM then KILL, so the git and tmux a bosun script started go too. Output is
+// read as it comes, so a reply bigger than a pipe cannot hang the command, and a helper the command left
+// running (holding the pipe open) cannot hold the reply. Nothing waits by polling: the end of the command
+// and of each pipe are signals.
 
 public struct ProcessBosunCLI: BosunCLI {
   public let executable: String
@@ -12,9 +15,8 @@ public struct ProcessBosunCLI: BosunCLI {
   /// How long, after the command ended, a pipe may stay open (a helper left running) before its reply is
   /// taken as it is.
   static let drainGrace: Duration = .seconds(1)
-  /// How long a command that was told to stop (SIGTERM) has to do so before it is killed.
+  /// How long a command that was told to stop (TERM) has to do so before it is killed.
   static let killGrace: Duration = .seconds(1)
-  private static let pollEvery: Duration = .milliseconds(10)
 
   public init(executable: String, environment: [String: String] = ProcessInfo.processInfo.environment) {
     self.executable = executable
@@ -49,29 +51,33 @@ public struct ProcessBosunCLI: BosunCLI {
     let process = makeProcess(args)
     let output = OutputCollector()
     let errors = OutputCollector()
+    let exited = Signal()
     process.standardInput = FileHandle.nullDevice
     process.standardOutput = output.pipe
     process.standardError = errors.pipe
+    process.terminationHandler = { _ in exited.fire() }
     do {
       try process.run()
     } catch {
-      output.close()
-      errors.close()
+      output.release()
+      errors.release()
       return Self.couldNotStart("\(executable) could not be run: \(error.localizedDescription)")
     }
-    let deadline = ContinuousClock.now.advanced(by: timeout)
-    guard await Self.wait(for: process, until: deadline) else {
-      await Self.stop(process)
-      output.close()
-      errors.close()
+    guard await exited.wait(timeout: timeout) else {
+      await Self.stop(process, exited: exited)
+      output.release()
+      errors.release()
       return CommandResult(outcome: .timedOut, stdout: "", stderr: "")
     }
     await Self.drain(output, errors)
+    output.release()
+    errors.release()
     return CommandResult(
       outcome: .exited(Self.exitCode(of: process)), stdout: output.text, stderr: errors.text)
   }
 
   /// Started and left running: no input, its output goes nowhere. The child outlives the app if need be.
+  /// (The app does not use this for Start: a child of the app is a child for the Mac's privacy rules.)
   public func start(_ args: [String]) async -> CommandResult {
     if let refusal = launchRefusal() { return refusal }
     let process = makeProcess(args)
@@ -113,54 +119,34 @@ public struct ProcessBosunCLI: BosunCLI {
     return process
   }
 
-  /// True when the process ended before the deadline; false at the deadline, or when the caller was cancelled.
-  private static func wait(for process: Process, until deadline: ContinuousClock.Instant) async -> Bool {
-    while process.isRunning {
-      if ContinuousClock.now >= deadline { return false }
-      do {
-        try await Task.sleep(for: pollEvery)
-      } catch {
-        return false
-      }
-    }
-    return true
-  }
-
-  /// SIGTERM, and SIGKILL if it does not go.
-  private static func stop(_ process: Process) async {
-    process.terminate()
-    let grace = ContinuousClock.now.advanced(by: killGrace)
-    if await !waitIgnoringCancellation(for: process, until: grace) {
-      kill(process.processIdentifier, SIGKILL)
-      _ = await waitIgnoringCancellation(for: process, until: ContinuousClock.now.advanced(by: killGrace))
+  /// TERM, and KILL if it does not go. A cancelled caller does not cut it short: stopping must finish.
+  private static func stop(_ process: Process, exited: Signal) async {
+    send(SIGTERM, to: process)
+    if await !waitUnstoppable(exited) {
+      send(SIGKILL, to: process)
+      _ = await waitUnstoppable(exited)
     }
   }
 
-  /// `wait`, but a cancelled caller does not cut it short: stopping what was started must finish.
-  private static func waitIgnoringCancellation(
-    for process: Process, until deadline: ContinuousClock.Instant
-  ) async -> Bool {
-    while process.isRunning {
-      if ContinuousClock.now >= deadline { return false }
-      await nap()
-    }
-    return true
+  /// The wait for the end of a command that was told to stop, in a task of its own, which cancelling the
+  /// caller does not cancel.
+  private static func waitUnstoppable(_ exited: Signal) async -> Bool {
+    let grace = killGrace
+    return await Task { await exited.wait(timeout: grace) }.value
+  }
+
+  /// To the child's process group when it leads one (so the subprocesses of a bosun script go with it), else
+  /// to the child alone: never to the app's own group.
+  private static func send(_ signal: Int32, to process: Process) {
+    let pid = process.processIdentifier
+    kill(getpgid(pid) == pid ? -pid : pid, signal)
   }
 
   /// Waits for both pipes to reach their end, for at most the grace.
   private static func drain(_ first: OutputCollector, _ second: OutputCollector) async {
     let end = ContinuousClock.now.advanced(by: drainGrace)
-    while !(first.isDone && second.isDone) && ContinuousClock.now < end {
-      await nap()
-    }
-    first.close()
-    second.close()
-  }
-
-  /// A short pause that a cancelled caller does not cut short (an unstructured task is not cancelled with it),
-  /// so a loop that waits on one does not spin.
-  private static func nap() async {
-    await Task { try? await Task.sleep(for: pollEvery) }.value
+    _ = await first.ended.wait(timeout: drainGrace)
+    _ = await second.ended.wait(timeout: max(ContinuousClock.now.duration(to: end), .zero))
   }
 
   /// A command ended by a signal exits as the shell reports it: 128 plus the signal.
@@ -169,12 +155,84 @@ public struct ProcessBosunCLI: BosunCLI {
   }
 }
 
-/// Reads one of a command's pipes as it fills.
+// MARK: waiting without polling
+
+/// One answer, given once, to one waiter: whoever resolves it first wins.
+private final class Race: @unchecked Sendable {
+  private let lock = NSLock()
+  private var value: Bool?
+  private var waiter: CheckedContinuation<Bool, Never>?
+
+  func resolve(_ answer: Bool) {
+    let waiting = lock.withLock { () -> CheckedContinuation<Bool, Never>? in
+      guard value == nil else { return nil }
+      value = answer
+      defer { waiter = nil }
+      return waiter
+    }
+    waiting?.resume(returning: answer)
+  }
+
+  func result() async -> Bool {
+    await withCheckedContinuation { (continuation: CheckedContinuation<Bool, Never>) in
+      lock.lock()
+      if let value {
+        lock.unlock()
+        continuation.resume(returning: value)
+      } else {
+        waiter = continuation
+        lock.unlock()
+      }
+    }
+  }
+}
+
+/// Something that happens once (a command ends, a pipe is read to its end): `wait` says whether it did,
+/// within a time. A cancelled waiter is told no.
+final class Signal: @unchecked Sendable {
+  private let lock = NSLock()
+  private var happened = false
+  private var listeners: [UUID: @Sendable () -> Void] = [:]
+
+  func fire() {
+    let calls = lock.withLock { () -> [UUID: @Sendable () -> Void] in
+      happened = true
+      defer { listeners = [:] }
+      return listeners
+    }
+    for call in calls.values { call() }
+  }
+
+  func wait(timeout: Duration) async -> Bool {
+    let race = Race()
+    let id = UUID()
+    let already = lock.withLock { () -> Bool in
+      if !happened { listeners[id] = { race.resolve(true) } }
+      return happened
+    }
+    if already { return true }
+    let timer = Task {
+      try? await Task.sleep(for: timeout)
+      race.resolve(false)
+    }
+    let answer = await withTaskCancellationHandler {
+      await race.result()
+    } onCancel: {
+      race.resolve(false)
+    }
+    timer.cancel()
+    lock.withLock { listeners[id] = nil }
+    return answer
+  }
+}
+
+/// Reads one of a command's pipes as it fills. The read end is not closed by hand (a read in flight would be
+/// reading a closed file): the handler is taken off and the pipe closes when it is let go.
 private final class OutputCollector: @unchecked Sendable {
   let pipe = Pipe()
+  let ended = Signal()
   private let lock = NSLock()
   private var data = Data()
-  private var finished = false
 
   init() {
     pipe.fileHandleForReading.readabilityHandler = { [weak self] handle in
@@ -183,18 +241,13 @@ private final class OutputCollector: @unchecked Sendable {
   }
 
   private func receive(_ chunk: Data) {
-    let ended = lock.withLock { () -> Bool in
-      if chunk.isEmpty {
-        finished = true
-      } else {
-        data.append(chunk)
-      }
-      return finished
+    guard chunk.isEmpty else {
+      lock.withLock { data.append(chunk) }
+      return
     }
-    if ended { pipe.fileHandleForReading.readabilityHandler = nil }
+    pipe.fileHandleForReading.readabilityHandler = nil
+    ended.fire()
   }
-
-  var isDone: Bool { lock.withLock { finished } }
 
   /// What was said; bytes that are not UTF-8 become the replacement character, so a reply is never lost to them.
   var text: String {
@@ -202,8 +255,7 @@ private final class OutputCollector: @unchecked Sendable {
     lock.withLock { String(decoding: data, as: UTF8.self) }
   }
 
-  func close() {
+  func release() {
     pipe.fileHandleForReading.readabilityHandler = nil
-    try? pipe.fileHandleForReading.close()
   }
 }

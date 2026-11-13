@@ -1,5 +1,6 @@
 import AppKit
 import BosunMenuCore
+import BosunMenuSystem
 
 // The shell that ties the pieces together: it is what the core's coordinator draws and asks through
 // (`AppUI`): the status item, the alerts, the workspace; and it routes what happens to the app (a menu item
@@ -57,7 +58,7 @@ final class AppShell: AppUI {
   private var wake: WakeObserver?
   private lazy var coordinator = AppCoordinator(
     cli: cli, ui: self, options: options,
-    script: ScriptSettings(
+    scripts: CommandScriptWriter(
       executable: ProcessBosunCLI.installLink(),
       folder: FileManager.default.temporaryDirectory.appendingPathComponent("bosun-app")))
 

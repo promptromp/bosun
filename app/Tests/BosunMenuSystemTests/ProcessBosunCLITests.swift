@@ -1,7 +1,8 @@
+import BosunMenuCore
 import Foundation
 import Testing
 
-@testable import BosunMenuCore
+@testable import BosunMenuSystem
 
 /// A folder of its own (the process tests run real scripts, never bosun).
 private func scratchFolder() throws -> URL {
@@ -88,6 +89,43 @@ private func waitUntil(seconds: Double = 5, _ done: () -> Bool) async -> Bool {
     #expect(ContinuousClock.now - started < .seconds(8))
     let stopped = try pid(inFile: pidFile)
     #expect(await waitUntil { !processExists(stopped) })
+  }
+
+  /// The child leads its own process group: what a timeout signals, so a script's own children go with it.
+  @Test func theCommandLeadsItsOwnProcessGroup() async throws {
+    let folder = try scratchFolder()
+    let path = try fakeBosun("echo \"$$ $(ps -o pgid= -p $$)\"", in: folder)
+    let result = await ProcessBosunCLI(executable: path).run([], timeout: .seconds(10))
+    let words = result.stdout.split(separator: " ").map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+    #expect(words.count == 2)
+    #expect(words.first == words.last)
+    #expect(words.first != String(getpgrp()))
+  }
+
+  @Test func aTimeoutStopsWhatTheCommandStartedToo() async throws {
+    let folder = try scratchFolder()
+    let childFile = folder.appendingPathComponent("child").path
+    let path = try fakeBosun("sleep 60 &\necho $! > '\(childFile)'\nwait", in: folder)
+    let result = await ProcessBosunCLI(executable: path).run([], timeout: .seconds(1))
+    #expect(result.outcome == .timedOut)
+    let child = try pid(inFile: childFile)
+    #expect(await waitUntil { !processExists(child) })
+  }
+
+  /// Many commands at once, each read to its end and let go: nothing reads a pipe that was closed.
+  @Test func manyCommandsAtOnceAllAnswer() async throws {
+    let folder = try scratchFolder()
+    let path = try fakeBosun("echo hello; echo there >&2", in: folder)
+    let cli = ProcessBosunCLI(executable: path)
+    let results = await withTaskGroup(of: CommandResult.self) { group in
+      for _ in 0..<40 { group.addTask { await cli.run([], timeout: .seconds(20)) } }
+      var all: [CommandResult] = []
+      for await result in group { all.append(result) }
+      return all
+    }
+    #expect(results.count == 40)
+    #expect(
+      results.allSatisfy { $0.outcome == .exited(0) && $0.stdout == "hello\n" && $0.stderr == "there\n" })
   }
 
   @Test func aCancelledRunIsATimeout() async throws {

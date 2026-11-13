@@ -1,5 +1,6 @@
 import AppKit
 import BosunMenuCore
+import BosunMenuSystem
 
 // The VM suite's hooks, wired up (their files and formats are `TestHookFiles` in the core). Made only when
 // the app was launched with `--test-hooks <dir>`: without the argument none of this exists at run time.

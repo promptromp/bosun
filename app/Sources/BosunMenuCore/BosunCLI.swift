@@ -5,8 +5,11 @@ import Foundation
 // through `~/.local/bin/bosun`, only these commands, and never opens a file of bosun's.
 
 /// A `bosun` command: its argv, how long to wait for it, and whether it is started and left running
-/// (`bosun morning --now` and `bosun update --yes` are: long-running work belongs to bosun's own jobs,
-/// never to the app, whose progress is read back from `status`).
+/// (`bosun update --yes` is: long-running work belongs to bosun's own jobs, never to the app, whose progress is
+/// read back from `status`). Start is not: `bosun morning --now --background` hands the work to a launchd job
+/// and returns at once, because a process the app starts has the app as its parent, and so does everything that
+/// process starts (the tmux server, the agents): the Mac's privacy prompts would name the app, and the grants
+/// would follow its signature.
 public struct Command: Equatable, Sendable {
   public let args: [String]
   public let timeout: Duration
@@ -77,7 +80,8 @@ public enum Bosun {
   public static let planUpdate = Command(args: ["update", "--dry-run", "--json"], timeout: .seconds(30))
   public static let update = Command(args: ["update", "--yes"], timeout: .seconds(15), detached: true)
   public static let quitPlan = Command(args: ["quit", "--plan", "--json"], timeout: .seconds(30))
-  public static let start = Command(args: ["morning", "--now"], timeout: .seconds(15), detached: true)
+  /// Start: the morning run, as a launchd job, started and returned from (a short command, waited for).
+  public static let start = Command(args: ["morning", "--now", "--background"], timeout: .seconds(15))
   public static let consoleURL = Command(args: ["console", "--url"], timeout: .seconds(15))
   public static let appStatus = Command(args: ["app", "status", "--json"], timeout: .seconds(15))
 

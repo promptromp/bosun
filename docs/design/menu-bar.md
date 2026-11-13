@@ -352,3 +352,16 @@ Where what is built differs from what this note said before, or says more:
   "keepIcon": false}}}` for the open dialog (it waits for one); `<dir>/log.jsonl`, one object per line for each
   command run (`{"command": [...], "detached": false, "outcome": "exited 0"}`) and each address or file it would
   open (`{"open": "..."}`; with the hooks the app opens nothing).
+- Start is `bosun morning --now --background`, run as a short command (the status timeout) and not started as a
+  child: a process the app starts has the app as its parent, so the tmux server and the agents it starts would
+  have bosun.app as their responsible process for the Mac's privacy prompts, and the grants would follow the app's
+  signature. `--background` kickstarts a one-shot launchd job that does the morning run and returns at once; a
+  non-zero exit shows its line. `bosun update --yes` stays a detached child (the panes' processes are the tmux
+  server's children, and an update run as a launchd job could boot itself out when it reloads changed plists).
+- The app's Swift is in three targets: `BosunMenuCore` is pure (no I/O: the contract, the menu, the flows, the
+  coordinator that acts only through the protocols it is given, the dialogs' words, the poller's timing),
+  `BosunMenuSystem` is what touches the system (running bosun, reading a process's start time, the files of the
+  test hooks and of the `.command` scripts), and `BosunMenu` is AppKit. The coverage floor is 95% of each of the
+  first two. Background work (the update checks, a failure being told, the start at launch) runs outside the
+  status look, so a command that hangs never holds the next look, and a look that lands while the app's own quit
+  runs is dropped.

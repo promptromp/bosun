@@ -1,4 +1,3 @@
-import Darwin
 import Foundation
 
 // What the app does when it starts: its arguments, whether it starts bosun, and whether it is the second
@@ -46,25 +45,10 @@ public func shouldStartAtLaunch(_ options: LaunchOptions, status: StatusState) -
 
 // MARK: one copy at a time
 
-/// When a process started, in seconds since 1970, from the kernel's process table (`kp_proc.p_starttime`).
-/// `NSRunningApplication.launchDate` is nil for an app launchd starts directly, which is how the login job
-/// starts this one. Nil when the process is not there or the kernel will not say; never 0.
-public func processStartTime(pid: Int32) -> Double? {
-  var mib: [Int32] = [CTL_KERN, KERN_PROC, KERN_PROC_PID, pid]
-  var info = kinfo_proc()
-  var size = MemoryLayout<kinfo_proc>.stride
-  guard sysctl(&mib, UInt32(mib.count), &info, &size, nil, 0) == 0, size == MemoryLayout<kinfo_proc>.stride,
-    info.kp_proc.p_pid == pid
-  else { return nil }
-  let started = info.kp_proc.p_starttime
-  let seconds = Double(started.tv_sec) + Double(started.tv_usec) / 1_000_000
-  return seconds > 0 ? seconds : nil
-}
-
 /// The running applications with a start time. A copy whose start cannot be read is left out of the list:
 /// whether it is older than this one is not known, and a start time made up (or 0) would decide wrongly.
 public func runningApps(
-  _ listed: [(pid: Int32, bundleID: String?)], startTime: (Int32) -> Double? = processStartTime(pid:)
+  _ listed: [(pid: Int32, bundleID: String?)], startTime: (Int32) -> Double?
 ) -> [RunningApp] {
   listed.compactMap { app in
     startTime(app.pid).map { RunningApp(pid: app.pid, bundleID: app.bundleID, startedAt: $0) }
@@ -73,10 +57,11 @@ public func runningApps(
 
 /// Whether this copy exits at launch because an older copy of the app is running. `listed` is what
 /// `NSRunningApplication` lists with the app's bundle identifier. A copy that cannot say when it started,
-/// or has no bundle identifier (not run from the app), stays.
+/// or has no bundle identifier (not run from the app), stays. `startTime` reads a process's start (the shell
+/// gives it `processStartTime` of BosunMenuSystem; the core reads nothing itself).
 public func secondCopyExits(
   running listed: [(pid: Int32, bundleID: String?)], myPid: Int32, bundleID: String?,
-  startTime: (Int32) -> Double? = processStartTime(pid:)
+  startTime: (Int32) -> Double?
 ) -> Bool {
   guard let bundleID, let mine = startTime(myPid) else { return false }
   let me = RunningApp(pid: myPid, bundleID: bundleID, startedAt: mine)

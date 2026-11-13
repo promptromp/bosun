@@ -1,5 +1,6 @@
 import AppKit
 import BosunMenuCore
+import BosunMenuSystem
 
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
@@ -35,6 +36,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
       } ?? []
     return secondCopyExits(
-      running: listed, myPid: ProcessInfo.processInfo.processIdentifier, bundleID: bundleID)
+      running: listed, myPid: ProcessInfo.processInfo.processIdentifier, bundleID: bundleID,
+      startTime: processStartTime(pid:))
   }
 }

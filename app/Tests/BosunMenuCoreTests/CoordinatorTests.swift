@@ -15,7 +15,7 @@ import Testing
 
   @Test func aRefreshDrawsTheMenuTheStatusMakes() async {
     let world = await World(status: "status-warning")
-    await world.coordinator.refresh(.timer)
+    await world.refresh(.timer)
     #expect(world.ui.lastModel?.header.dot == .yellow)
     #expect(world.itemIDs.contains(.showProblems))
     #expect(world.ui.rendered.last?.status != nil)
@@ -24,7 +24,7 @@ import Testing
   @Test func aBosunThatCannotBeReachedIsShownAndNothingElseRuns() async {
     let world = await World(status: nil)
     await world.cli.reply(Bosun.status.args, exited(1, "", err: "cannot execute\n"))
-    await world.coordinator.refresh(.launch)
+    await world.refresh(.launch)
     #expect(world.ui.lastModel?.header.sentence == "bosun cannot be reached")
     #expect(
       world.itemIDs == [.helpMenu, .help(.guide), .help(.doctor), .help(.logs), .help(.uninstall), .quit])
@@ -35,44 +35,44 @@ import Testing
     let world = await World(status: nil)
     await world.reply(Bosun.status, exited(0, Fixtures.text("status-ok")))
     await world.reply(Bosun.status, CommandResult(outcome: .timedOut, stdout: "", stderr: ""))
-    await world.coordinator.refresh(.timer)
-    await world.coordinator.refresh(.timer)
+    await world.refresh(.timer)
+    await world.refresh(.timer)
     #expect(world.ui.lastModel?.header.sentence == "bosun is running (not current)")
   }
 
   @Test func openAtLoginShowsWhatAppStatusSays() async {
     let on = await World(login: true)
-    await on.coordinator.refresh(.launch)
+    await on.refresh(.launch)
     #expect(on.item(.openAtLogin)?.checked == true)
     let off = await World(login: false)
-    await off.coordinator.refresh(.launch)
+    await off.refresh(.launch)
     #expect(off.item(.openAtLogin)?.checked == false)
   }
 
   @Test func theLoginIsLookedAtWhenTheMenuOpensAndNotEveryHalfMinute() async {
     let world = await World(login: false)
-    await world.coordinator.refresh(.launch)
-    await world.coordinator.refresh(.timer)
-    await world.coordinator.refresh(.timer)
+    await world.refresh(.launch)
+    await world.refresh(.timer)
+    await world.refresh(.timer)
     let looks = await world.cli.calls.filter { $0 == Bosun.appStatus.args }
     #expect(looks.count == 1)
     await world.replace(Bosun.appStatus, exited(0, Fixtures.text("app-status")))
-    await world.coordinator.menuWillOpen()
+    await world.menuWillOpen()
     #expect(world.item(.openAtLogin)?.checked == true)
   }
 
   @Test func anAppStatusThatCannotBeReadKeepsTheLoginAsItWas() async {
     let world = await World(login: true)
-    await world.coordinator.refresh(.launch)
+    await world.refresh(.launch)
     await world.replace(Bosun.appStatus, exited(1, "", err: "nope\n"))
-    await world.coordinator.menuWillOpen()
+    await world.menuWillOpen()
     #expect(world.item(.openAtLogin)?.checked == true)
   }
 
   /// Review focus 3: waking refreshes at once.
   @Test func aWakeRefreshesTheStatus() async {
     let world = await World()
-    await world.coordinator.didWake()
+    await world.didWake()
     let looks = await world.cli.calls.filter { $0 == Bosun.status.args }
     #expect(looks.count == 1)
     #expect(world.ui.lastModel?.header.sentence == "bosun is running")
@@ -80,7 +80,7 @@ import Testing
 
   @Test func theMenuOpeningRefreshesTheStatus() async {
     let world = await World()
-    await world.coordinator.menuWillOpen()
+    await world.menuWillOpen()
     #expect(world.ui.lastModel?.header.sentence == "bosun is running")
   }
 }
@@ -88,54 +88,54 @@ import Testing
 @MainActor @Suite struct CoordinatorLaunchTests {
   @Test func openedByYouWhileStoppedItStartsBosunOnce() async {
     let world = await World(status: "status-stopped")
-    await world.coordinator.refresh(.launch)
-    await world.coordinator.refresh(.timer)
-    #expect(await world.cli.started == [Bosun.start.args])
+    await world.refresh(.launch)
+    await world.refresh(.timer)
+    #expect(await world.starts == 1)
   }
 
   @Test func openedByYouInTheRedStateItStartsBosun() async {
     let world = await World(status: "status-error")
-    await world.coordinator.refresh(.launch)
-    #expect(await world.cli.started == [Bosun.start.args])
+    await world.refresh(.launch)
+    #expect(await world.starts == 1)
   }
 
   @Test func atLoginItOnlyShowsTheIcon() async {
     let world = await World(status: "status-stopped", atLogin: true)
-    await world.coordinator.refresh(.launch)
-    #expect(await world.cli.started.isEmpty)
+    await world.refresh(.launch)
+    #expect(await world.starts == 0)
     #expect(world.ui.lastModel?.header.dot == .grey)
   }
 
   @Test func whileRunningItStartsNothing() async {
     let world = await World(status: "status-ok")
-    await world.coordinator.refresh(.launch)
-    #expect(await world.cli.started.isEmpty)
+    await world.refresh(.launch)
+    #expect(await world.starts == 0)
   }
 
   /// The decision is of the first status only: a bosun that stops later is not started behind your back.
   @Test func aStopLaterOnIsNotStartedAgain() async {
     let world = await World(status: "status-ok")
-    await world.coordinator.refresh(.launch)
+    await world.refresh(.launch)
     await world.replace(Bosun.status, exited(0, Fixtures.text("status-stopped")))
-    await world.coordinator.refresh(.timer)
-    #expect(await world.cli.started.isEmpty)
+    await world.refresh(.timer)
+    #expect(await world.starts == 0)
   }
 
   @Test func ifTheFirstStatusIsNotThereTheDecisionWaitsForTheNext() async {
     let world = await World(status: nil)
     await world.cli.reply(Bosun.status.args, CommandResult(outcome: .timedOut, stdout: "", stderr: ""))
     await world.reply(Bosun.status, exited(0, Fixtures.text("status-stopped")))
-    await world.coordinator.refresh(.launch)
-    #expect(await world.cli.started.isEmpty)
-    await world.coordinator.refresh(.timer)
-    #expect(await world.cli.started == [Bosun.start.args])
+    await world.refresh(.launch)
+    #expect(await world.starts == 0)
+    await world.refresh(.timer)
+    #expect(await world.starts == 1)
   }
 }
 
 @MainActor @Suite struct CoordinatorActionTests {
   @Test func openConsoleOpensTheAddressBosunGives() async {
     let world = await World()
-    await world.coordinator.refresh(.launch)
+    await world.refresh(.launch)
     await world.reply(Bosun.consoleURL, exited(0, "http://127.0.0.1:8123/?t=abc\n"))
     await world.coordinator.perform(.openConsole)
     #expect(world.ui.opened == [URL(string: "http://127.0.0.1:8123/?t=abc")!])
@@ -143,7 +143,7 @@ import Testing
 
   @Test func openConsoleThatFailsShowsWhy() async {
     let world = await World()
-    await world.coordinator.refresh(.launch)
+    await world.refresh(.launch)
     await world.reply(Bosun.consoleURL, exited(1, "", err: "the console is not running\n"))
     world.ui.answer("OK")
     await world.coordinator.perform(.openConsole)
@@ -154,7 +154,7 @@ import Testing
 
   @Test func openConsoleThatAnswersWithAnythingElseOpensNothing() async {
     let world = await World()
-    await world.coordinator.refresh(.launch)
+    await world.refresh(.launch)
     await world.reply(Bosun.consoleURL, exited(0, "file:///etc/passwd\n"))
     world.ui.answer("OK")
     await world.coordinator.perform(.openConsole)
@@ -164,12 +164,16 @@ import Testing
 
   @Test func startBosunStartsTheMorningRunAndLooksAgain() async {
     let world = await World(status: "status-stopped")
-    await world.coordinator.refresh(.launch)
-    let started = await world.cli.started.count  // the start at launch
+    await world.refresh(.launch)
+    await world.coordinator.settle()
+    let starts = await world.starts  // the start at launch
     let looksBefore = await world.cli.calls.filter { $0 == Bosun.status.args }.count
     await world.coordinator.perform(.startBosun)
-    #expect(await world.cli.started.count == started + 1)
-    #expect(await world.cli.started.last == ["morning", "--now"])
+    #expect(await world.starts == starts + 1)
+    // A short command, waited for: never a child the app leaves running
+    #expect(
+      await world.commands.last(where: { $0.first == "morning" }) == ["morning", "--now", "--background"])
+    #expect(await world.cli.started.isEmpty)
     #expect(world.coordinator.flow.isIdle)
     // It looks at the status once it is started
     let looks = await world.cli.calls.filter { $0 == Bosun.status.args }
@@ -178,9 +182,9 @@ import Testing
 
   @Test func startBosunThatCannotStartShowsWhy() async {
     let world = await World(status: "status-stopped", atLogin: true)
-    await world.coordinator.refresh(.launch)
-    await world.cli.reply(
-      Bosun.start.args, CommandResult(outcome: .couldNotStart("no permission"), stdout: "", stderr: ""))
+    await world.refresh(.launch)
+    await world.replace(
+      Bosun.start, CommandResult(outcome: .couldNotStart("no permission"), stdout: "", stderr: ""))
     world.ui.answer("OK")
     await world.coordinator.perform(.startBosun)
     #expect(world.ui.lastSpec?.title == "bosun did not start")
@@ -188,11 +192,20 @@ import Testing
     #expect(world.coordinator.flow.isIdle)
   }
 
+  @Test func startBosunThatExitsNonZeroShowsItsLine() async {
+    let world = await World(status: "status-stopped", atLogin: true)
+    await world.refresh(.launch)
+    await world.replace(Bosun.start, exited(1, "", err: "bosun: the morning job is not loaded\n"))
+    world.ui.answer("OK")
+    await world.coordinator.perform(.startBosun)
+    #expect(world.ui.lastSpec?.title == "bosun did not start")
+    #expect(world.ui.lastSpec?.message == "bosun: the morning job is not loaded")
+  }
+
   @Test func startBosunWithBosunMissingSaysSo() async {
     let world = await World(status: "status-stopped", atLogin: true)
-    await world.coordinator.refresh(.launch)
-    await world.cli.reply(
-      Bosun.start.args, CommandResult(outcome: .notInstalled, stdout: "", stderr: ""))
+    await world.refresh(.launch)
+    await world.replace(Bosun.start, CommandResult(outcome: .notInstalled, stdout: "", stderr: ""))
     world.ui.answer("OK")
     await world.coordinator.perform(.startBosun)
     #expect(world.ui.lastSpec?.message == "bosun is not installed")
@@ -200,7 +213,7 @@ import Testing
 
   @Test func openAtLoginTurnsItOnAndShowsItChecked() async {
     let world = await World(login: false)
-    await world.coordinator.refresh(.launch)
+    await world.refresh(.launch)
     #expect(world.item(.openAtLogin)?.checked == false)
     await world.reply(Bosun.appLogin(on: true), exited(0))
     await world.replace(Bosun.appStatus, exited(0, Fixtures.text("app-status")))
@@ -211,7 +224,7 @@ import Testing
 
   @Test func openAtLoginTurnsItOffWhenItIsOn() async {
     let world = await World(login: true)
-    await world.coordinator.refresh(.launch)
+    await world.refresh(.launch)
     await world.reply(Bosun.appLogin(on: false), exited(0))
     let off = Fixtures.text("app-status").replacingOccurrences(
       of: "\"login\": true", with: "\"login\": false")
@@ -223,7 +236,7 @@ import Testing
 
   @Test func openAtLoginThatFailsShowsWhyAndChangesNothing() async {
     let world = await World(login: false)
-    await world.coordinator.refresh(.launch)
+    await world.refresh(.launch)
     await world.reply(Bosun.appLogin(on: true), exited(1, "", err: "bosun.app is not installed\n"))
     world.ui.answer("OK")
     await world.coordinator.perform(.openAtLogin)
@@ -234,7 +247,7 @@ import Testing
 
   @Test func showWhatsWrongListsTheProblems() async {
     let world = await World(status: "status-warning")
-    await world.coordinator.refresh(.launch)
+    await world.refresh(.launch)
     world.ui.answer("OK")
     await world.coordinator.perform(.showProblems)
     let problems = Fixtures.status("status-warning").problems
@@ -244,42 +257,38 @@ import Testing
 
   @Test func theGuideIsTheDocsSite() async {
     let world = await World()
-    await world.coordinator.refresh(.launch)
+    await world.refresh(.launch)
     await world.coordinator.perform(.help(.guide))
     #expect(world.ui.opened == [Links.guide])
   }
 
   @Test func showLogsOpensTheFolderStatusGave() async {
     let world = await World()
-    await world.coordinator.refresh(.launch)
+    await world.refresh(.launch)
     await world.coordinator.perform(.help(.logs))
     #expect(world.ui.opened == [URL(fileURLWithPath: "/Users/me/.local/state/bosun/logs")])
   }
 
   @Test func runDoctorOpensAScriptThatRunsIt() async throws {
     let world = await World()
-    await world.coordinator.refresh(.launch)
+    await world.refresh(.launch)
     await world.coordinator.perform(.help(.doctor))
-    let url = try #require(world.ui.opened.first)
-    #expect(url.lastPathComponent == "bosun-doctor.command")
-    let text = try String(contentsOf: url, encoding: .utf8)
-    #expect(text.contains("'/Users/me/.local/bin/bosun' 'doctor'"))
+    #expect(world.scripts.written == [["doctor"]])
+    #expect(world.ui.opened == [URL(fileURLWithPath: "/tmp/bosun-app/bosun-doctor.command")])
   }
 
   @Test func uninstallOpensAScriptThatRunsIt() async throws {
     let world = await World()
-    await world.coordinator.refresh(.launch)
+    await world.refresh(.launch)
     await world.coordinator.perform(.help(.uninstall))
-    let url = try #require(world.ui.opened.first)
-    #expect(url.lastPathComponent == "bosun-uninstall.command")
-    #expect(try String(contentsOf: url, encoding: .utf8).contains("'uninstall'"))
+    #expect(world.scripts.written == [["uninstall"]])
+    #expect(world.ui.opened == [URL(fileURLWithPath: "/tmp/bosun-app/bosun-uninstall.command")])
   }
 
   @Test func aScriptThatCannotBeWrittenShowsWhy() async {
     let world = await World()
-    await world.coordinator.refresh(.launch)
-    // A file where the folder should be
-    try? Data().write(to: world.scripts)
+    await world.refresh(.launch)
+    world.scripts.fails = true
     world.ui.answer("OK")
     await world.coordinator.perform(.help(.doctor))
     #expect(world.ui.opened.isEmpty)
@@ -289,7 +298,7 @@ import Testing
   /// A greyed item cannot be chosen: a click that comes in anyway (the test hooks') is ignored.
   @Test func anItemThatIsGreyedIsIgnored() async {
     let world = await World(status: "status-stopped", atLogin: true)
-    await world.coordinator.refresh(.launch)
+    await world.refresh(.launch)
     #expect(world.item(.openConsole)?.enabled == false)
     await world.coordinator.perform(.openConsole)
     #expect(await !world.commands.contains(Bosun.consoleURL.args))
@@ -298,14 +307,14 @@ import Testing
 
   @Test func anItemThatIsNotInTheMenuIsIgnored() async {
     let world = await World()
-    await world.coordinator.refresh(.launch)
+    await world.refresh(.launch)
     await world.coordinator.perform(.startBosun)
-    #expect(await world.cli.started.isEmpty)
+    #expect(await world.starts == 0)
   }
 
   @Test func theHelpMenuItselfDoesNothing() async {
     let world = await World()
-    await world.coordinator.refresh(.launch)
+    await world.refresh(.launch)
     let drawn = world.ui.rendered.count
     await world.coordinator.perform(.helpMenu)
     #expect(world.ui.opened.isEmpty)

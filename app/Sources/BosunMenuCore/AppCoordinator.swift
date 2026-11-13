@@ -4,7 +4,7 @@ import Foundation
 // which flow runs, whether Open at Login is on), draws the menu through `AppUI`, and carries out what is
 // chosen by running `bosun` commands and asking the person through dialogs. The shell implements `AppUI`
 // (the status item, the alerts, the workspace); everything the flows decide is here, tested with a fake
-// bosun and a fake shell.
+// bosun and a fake shell. The update flow's side is in AppCoordinator+Update.swift.
 
 @MainActor
 public protocol AppUI: AnyObject {
@@ -22,36 +22,43 @@ public final class AppCoordinator {
   /// How long `update --yes` has to show in `status` before it is looked into.
   static let startGrace: Duration = .seconds(90)
 
-  private let cli: any BosunCLI
-  private let ui: any AppUI
+  let cli: any BosunCLI
+  let ui: any AppUI
+  let clock: any Clock<Duration>
+  let now: @Sendable () -> Date
   private let options: LaunchOptions
-  private let clock: any Clock<Duration>
-  private let now: @Sendable () -> Date
-  private let script: ScriptSettings
+  private let scripts: any ScriptWriting
 
   public private(set) var status: StatusState?
-  public private(set) var update: UpdateState = .idle
-  public private(set) var flow = FlowState()
+  public internal(set) var update: UpdateState = .idle
+  public internal(set) var flow = FlowState()
   public private(set) var login = false
 
-  private var throttle = UpdateCheckThrottle()
+  // What the update flow keeps (AppCoordinator+Update.swift)
+  var throttle = UpdateCheckThrottle()
+  var checkIsManual = false
+  var failureShowing = false
+
+  // Work that goes on outside a look, so a slow command never holds the next look. Each is chained after the
+  // last of its kind (one at a time), and `settle` waits for them.
+  var backgroundWork: Task<Void, Never>?
+  var failureWork: Task<Void, Never>?
+  private var launchWork: Task<Void, Never>?
   private var launchDecided = false
-  private var checkIsManual = false
-  private var failureShowing = false
   private lazy var poller = Poller(clock: clock) { [weak self] reason in
     await self?.look(reason)
   }
 
   public init(
     cli: any BosunCLI, ui: any AppUI, options: LaunchOptions, clock: any Clock<Duration> = ContinuousClock(),
-    now: @escaping @Sendable () -> Date = { Date() }, script: ScriptSettings
+    now: @escaping @Sendable () -> Date = { Date() }, scripts: any ScriptWriting
   ) {
     self.cli = cli
     self.ui = ui
     self.options = options
     self.clock = clock
     self.now = now
-    self.script = script
+    self.scripts = scripts
   }
 
   public var menuModel: MenuModel {
@@ -59,7 +66,7 @@ public final class AppCoordinator {
     return menu(for: status, update: update, flow: flow, login: login)
   }
 
-  private func render() {
+  func render() {
     ui.render(menuModel, status: status)
   }
 
@@ -89,18 +96,34 @@ public final class AppCoordinator {
 
   public func didWake() async { await refresh(.wake) }
 
-  /// One look: the status, the login when it is likely to have changed, and the update check when it is due.
+  /// Waits for what went on outside the looks: the update checks, a failure being told, the start at launch.
+  public func settle() async {
+    for _ in 0..<3 {
+      await launchWork?.value
+      await backgroundWork?.value
+      await failureWork?.value
+    }
+  }
+
+  /// One look: the status, drawn at once; the login when it is likely to have changed. What the status asks of
+  /// the update flow and the update check that is due run outside the look. A look that lands while the app's
+  /// own quit runs is dropped (`quit.json` is written before the windows go: "bosun quit did not finish" is
+  /// what it would show).
   private func look(_ reason: RefreshReason) async {
     let state = await loadStatus(via: cli, previous: snapshot)
+    guard flow.active != .quit else { return }
     status = state
     if case .loaded(let snapshot, current: true) = state {
-      _ = await drain([snapshot.updateEvent])
-      surfaceFailureInBackground()
+      runInBackground(apply(snapshot.updateEvent))
     }
-    if [.launch, .menuOpened, .resumed].contains(reason) { await readLogin() }
     render()
-    await startAtLaunch(state)
-    await checkInBackground(reason)
+    if [.launch, .menuOpened, .resumed].contains(reason) {
+      await readLogin()
+      guard flow.active != .quit else { return }
+      render()
+    }
+    startAtLaunch(state)
+    checkInBackground(reason)
   }
 
   private func readLogin() async {
@@ -109,12 +132,15 @@ public final class AppCoordinator {
     }
   }
 
-  /// Opened by you with bosun stopped (or red): start it, once, on the first status that says so.
-  private func startAtLaunch(_ state: StatusState) async {
+  /// Opened by you with bosun stopped (or red): start it, once, on the first status that says so. Its own
+  /// task: a failure's dialog must not hold the look.
+  private func startAtLaunch(_ state: StatusState) {
     if case .unreachable = state { return }
     guard !launchDecided else { return }
     launchDecided = true
-    if shouldStartAtLaunch(options, status: state) { await startBosun() }
+    if shouldStartAtLaunch(options, status: state) {
+      launchWork = Task { await self.startBosun() }
+    }
   }
 
   // MARK: choosing
@@ -135,15 +161,17 @@ public final class AppCoordinator {
     }
   }
 
-  private func fail(_ title: String, _ why: String) async {
+  func fail(_ title: String, _ why: String) async {
     _ = await ui.present(failureSpec(title, why))
   }
 
+  /// Start: `bosun morning --now --background`, which hands the morning run to a launchd job and returns, so
+  /// bosun's processes are not the app's children. Its progress is read back from `status`.
   private func startBosun() async {
     guard flow.begin(.start) else { return }
     render()
-    let result = await cli.start(Bosun.start)
-    if result.outcome != .started { await fail("bosun did not start", failureText(result)) }
+    let result = await cli.run(Bosun.start)
+    if result.outcome != .exited(0) { await fail("bosun did not start", failureText(result)) }
     flow.end(.start)
     render()
     await refresh(.afterAction)
@@ -183,7 +211,7 @@ public final class AppCoordinator {
 
   private func openTerminal(running args: [String]) async {
     do {
-      ui.open(try CommandScript.write(executable: script.executable, args: args, folder: script.folder))
+      ui.open(try scripts.write(args: args))
     } catch {
       await fail("Cannot open Terminal", error.localizedDescription)
     }
@@ -248,142 +276,5 @@ public final class AppCoordinator {
     flow.end(.quit)
     render()
     await poller.resume()
-  }
-
-  // MARK: updates
-
-  /// The update flow's events, one after the other: each makes the next state, which is drawn, and the
-  /// commands it asks for are run, their outcomes being events. Returns the events it took.
-  private func drain(_ first: [UpdateEvent]) async -> [UpdateEvent] {
-    var queue = first
-    var taken: [UpdateEvent] = []
-    while !queue.isEmpty {
-      let event = queue.removeFirst()
-      taken.append(event)
-      if case .checkRequested(let manual) = event { checkIsManual = manual }
-      let (state, commands) = next(update, on: event)
-      update = state
-      render()
-      for command in commands { queue += await execute(command) }
-    }
-    return taken
-  }
-
-  private func execute(_ command: Command) async -> [UpdateEvent] {
-    switch command {
-    case Bosun.checkUpdates:
-      let manual = checkIsManual
-      checkIsManual = false
-      return [await checkEvent(via: cli, manual: manual)]
-    case Bosun.planUpdate:
-      return [await planEvent(via: cli)]
-    case Bosun.update:
-      return await startUpdate(command)
-    default:
-      let result = await cli.run(command)
-      if result.outcome != .exited(0) { await fail("Cannot skip this version", failureText(result)) }
-      return []
-    }
-  }
-
-  /// `update --yes`, started and left to run; `status` shows it from then on. If it never shows, the grace
-  /// runs out and it is looked into.
-  private func startUpdate(_ command: Command) async -> [UpdateEvent] {
-    let result = await cli.start(command)
-    guard result.outcome == .started else { return [.startFailed(failureText(result))] }
-    Task { [clock] in
-      try? await clock.sleep(for: Self.startGrace)
-      await self.graceElapsed()
-    }
-    return []
-  }
-
-  private func graceElapsed() async {
-    guard case .starting = update else { return }
-    _ = await drain([.startGaveUp])
-    surfaceFailureInBackground()
-  }
-
-  /// The update check that is due (see `UpdateCheckThrottle`), quietly: a badge, never a dialog.
-  private func checkInBackground(_ reason: RefreshReason) async {
-    guard case .idle = update, throttle.allows(reason, at: now()) else { return }
-    _ = await drain([.checkRequested(manual: false)])
-  }
-
-  /// A failure the person did not ask for (an update that never started): told, outside the look in progress.
-  private func surfaceFailureInBackground() {
-    guard case .failed = update, !failureShowing else { return }
-    Task { await self.showFailure("Cannot update bosun") }
-  }
-
-  /// Tells the update flow's failure and lets it go: the state is `.failed` until it is.
-  private func showFailure(_ title: String) async {
-    guard case .failed(let why) = update, !failureShowing else { return }
-    failureShowing = true
-    await fail(title, why)
-    failureShowing = false
-    _ = await drain([.acknowledged])
-  }
-
-  /// "Check for Updates…" (or the offer it became, when an update is waiting): the flow with its dialogs.
-  private func checkForUpdates() async {
-    guard flow.begin(.update) else { return }
-    render()
-    if case .available(let check) = update {
-      await offer(check)
-    } else {
-      await afterManualCheck(await drain([.checkRequested(manual: true)]))
-    }
-    flow.end(.update)
-    render()
-  }
-
-  /// "Update bosun…", when bosun speaks a contract this app does not: the same flow, from its check.
-  private func updateBosun() async {
-    let start = updateBosunStart()
-    guard flow.begin(start.flow) else { return }
-    render()
-    if case .available(let check) = update {
-      await offer(check)
-    } else {
-      update = start.state
-      checkIsManual = true
-      render()
-      var events: [UpdateEvent] = []
-      for command in start.commands { events += await execute(command) }
-      await afterManualCheck(await drain(events))
-    }
-    flow.end(.update)
-    render()
-  }
-
-  /// What a check the person asked for came to: an offer, a failure, or "up to date".
-  private func afterManualCheck(_ events: [UpdateEvent]) async {
-    switch update {
-    case .available(let check):
-      await offer(check)
-    case .failed:
-      await showFailure("Cannot check for updates")
-    default:
-      for case .checked(let check, manual: true) in events where check.error == nil {
-        _ = await ui.present(upToDateSpec(check))
-      }
-    }
-  }
-
-  private func offer(_ check: UpdateCheck) async {
-    let answer = await ui.present(updateOfferSpec(check))
-    _ = await drain([updateOfferEvent(answer: answer)])
-    if case .confirming(let plan, let check) = update {
-      await confirm(plan, check)
-    } else {
-      await showFailure("Cannot update bosun")
-    }
-  }
-
-  private func confirm(_ plan: UpdatePlan, _ check: UpdateCheck) async {
-    let answer = await ui.present(updatePlanSpec(plan, check: check))
-    _ = await drain([updatePlanEvent(plan: plan, answer: answer)])
-    await showFailure("Cannot update bosun")
   }
 }

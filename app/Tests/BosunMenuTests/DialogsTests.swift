@@ -111,6 +111,21 @@ extension NSView {
   }
 }
 
+@MainActor @Suite struct AnswerWakeTests {
+  /// `stopModal` from a timer ends the modal loop only once an event is taken; this is the event posted so a
+  /// VM that nobody touches has one. (Whether the loop then ends is Task 5's to see: showing a dialog is not
+  /// something a headless test can do.)
+  @Test func theEventThatWakesTheModalLoopIsAnApplicationDefinedOne() {
+    #expect(Dialogs.wakeEvent()?.type == .applicationDefined)
+  }
+
+  @Test func withNoDialogOpenAnAnswerHasNoTakerAndPostsNothing() {
+    let presenter = AlertPresenter()
+    #expect(!presenter.hasOpenDialog)
+    #expect(!presenter.answerOpenDialog(HookAnswer(button: "OK", boxes: [:])))
+  }
+}
+
 @MainActor @Suite struct UpdateAlertTests {
   @Test func updateAlertShowsWhatRestarts() {
     let built = Dialogs.build(updatePlanSpec(updatePlan(), check: check()))

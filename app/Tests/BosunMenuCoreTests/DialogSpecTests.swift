@@ -85,7 +85,9 @@ import Testing
   @Test func whenThePlanCouldNotLookTheReasonAndAStopNowAreOffered() {
     let spec = quitUnavailableSpec("the windows cannot be read")
     #expect(spec.message.contains("the windows cannot be read"))
-    #expect(spec.buttons == ["Stop Now", "Cancel"])
+    // Stop Now ends every window: Cancel is the default button, and Escape's
+    #expect(spec.buttons == ["Cancel", "Stop Now"])
+    #expect(spec.cancel == 0)
     #expect(spec.boxes.map(\.id) == ["pauseMorning", "sleep", "keepIcon"])
   }
 
@@ -103,8 +105,8 @@ import Testing
     #expect(quitEvent(for: still, answer: DialogAnswer(button: 1, boxes: [:])) == .busyChosen(.stopNow))
     #expect(quitEvent(for: still, answer: DialogAnswer(button: 2, boxes: [:])) == .cancelled)
     let gone = QuitStep.unavailable("x")
-    #expect(quitEvent(for: gone, answer: ok) == .confirmed(QuitChoices()))
-    #expect(quitEvent(for: gone, answer: DialogAnswer(button: 1, boxes: [:])) == .cancelled)
+    #expect(quitEvent(for: gone, answer: ok) == .cancelled)
+    #expect(quitEvent(for: gone, answer: DialogAnswer(button: 1, boxes: [:])) == .confirmed(QuitChoices()))
   }
 
   @Test func aStepWithNoDialogIsCancelled() {

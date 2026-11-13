@@ -95,12 +95,13 @@ public func quitFirstSpec(_ plan: QuitPlan) -> DialogSpec {
     cancel: 1)
 }
 
-/// Shown when `quit --plan` could not look: the reason, and a Stop Now, which needs no look.
+/// Shown when `quit --plan` could not look: the reason, and a Stop Now, which needs no look. Stop Now ends
+/// every window, so Cancel is the default button (Return) and Escape's.
 public func quitUnavailableSpec(_ why: String) -> DialogSpec {
   DialogSpec(
     title: "bosun cannot say what quitting would stop",
     message: why + "\n\nStop Now ends every window without waiting for any agent.", scroll: nil,
-    boxes: quitBoxes(sleep: true), buttons: ["Stop Now", "Cancel"], cancel: 1, style: .warning)
+    boxes: quitBoxes(sleep: true), buttons: ["Cancel", "Stop Now"], cancel: 0, style: .warning)
 }
 
 public func quitBusySpec(_ names: [String]) -> DialogSpec {
@@ -137,8 +138,10 @@ extension QuitChoices {
 /// An answer to the dialog of a quit step, as the event of the flow.
 public func quitEvent(for step: QuitStep, answer: DialogAnswer) -> QuitEvent {
   switch step {
-  case .first, .unavailable:
+  case .first:
     return answer.button == 0 ? .confirmed(QuitChoices(answer: answer)) : .cancelled
+  case .unavailable:
+    return answer.button == 1 ? .confirmed(QuitChoices(answer: answer)) : .cancelled
   case .busy, .stillBusy:
     switch answer.button {
     case 0: return .busyChosen(.letFinish)

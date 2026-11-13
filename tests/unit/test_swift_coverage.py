@@ -1,5 +1,6 @@
-"""tools/swift_coverage.py: the line-coverage floor of the menu bar app's core, over a recorded
-`llvm-cov export -summary-only` (what `swift test --enable-code-coverage` leaves). Fictional file names."""
+"""tools/swift_coverage.py: the line-coverage floor of the menu bar app's core and system layer, over a
+recorded `llvm-cov export -summary-only` (what `swift test --enable-code-coverage` leaves).
+Fictional names."""
 
 from __future__ import annotations
 
@@ -34,20 +35,26 @@ def summary(*files: dict[str, Any]) -> dict[str, Any]:
 
 
 CORE = "Sources/BosunMenuCore/"
+SYSTEM = "Sources/BosunMenuSystem/"
 GOOD = summary(
     entry(f"{CORE}Contract.swift", 100, 100),
     entry(f"{CORE}MenuModel.swift", 200, 190),
+    entry(f"{SYSTEM}ProcessBosunCLI.swift", 100, 97),
     entry("Tests/BosunMenuCoreTests/ContractTests.swift", 500, 500),  # not the core
     entry("Sources/BosunMenu/App.swift", 80, 0),  # the AppKit shell: no floor
 )
 
 
 class ReadTest(unittest.TestCase):
-    def test_only_the_cores_files_are_read_with_their_names_from_the_core(self) -> None:
-        files = sc.core_files(GOOD)
+    def test_only_the_two_targets_files_are_read_with_their_names_from_their_folder(self) -> None:
+        files = sc.source_files(GOOD)
         self.assertEqual(
-            [(f.name, f.lines, f.covered) for f in files],
-            [("Contract.swift", 100, 100), ("MenuModel.swift", 200, 190)],
+            [(f.target, f.name, f.lines, f.covered) for f in files],
+            [
+                ("BosunMenuCore", "Contract.swift", 100, 100),
+                ("BosunMenuCore", "MenuModel.swift", 200, 190),
+                ("BosunMenuSystem", "ProcessBosunCLI.swift", 100, 97),
+            ],
         )
 
     def test_a_summary_of_another_shape_reads_as_no_files(self) -> None:
@@ -59,20 +66,23 @@ class ReadTest(unittest.TestCase):
         ]
         for odd in odds:
             with self.subTest(odd=odd):
-                self.assertEqual(sc.core_files(odd), [])
+                self.assertEqual(sc.source_files(odd), [])
 
-    def test_a_folder_that_only_looks_like_the_core_is_not_it(self) -> None:
-        other = summary(entry("Sources/BosunMenuCoreExtras/A.swift", 10, 0))
-        self.assertEqual(sc.core_files(other), [])
+    def test_a_folder_that_only_looks_like_a_target_is_not_one(self) -> None:
+        other = summary(
+            entry("Sources/BosunMenuCoreExtras/A.swift", 10, 0),
+            entry("Sources/BosunMenuSystemX/A.swift", 10, 0),
+        )
+        self.assertEqual(sc.source_files(other), [])
 
 
 class PercentTest(unittest.TestCase):
     def test_the_percentage_is_of_all_lines_not_the_mean_of_the_files(self) -> None:
-        files = sc.core_files(GOOD)
+        files = [f for f in sc.source_files(GOOD) if f.target == "BosunMenuCore"]
         self.assertAlmostEqual(sc.percent(files), 100 * 290 / 300)
 
     def test_a_file_with_no_lines_counts_for_nothing_and_is_full(self) -> None:
-        files = sc.core_files(summary(entry(f"{CORE}Empty.swift", 0, 0), entry(f"{CORE}A.swift", 10, 10)))
+        files = sc.source_files(summary(entry(f"{CORE}Empty.swift", 0, 0), entry(f"{CORE}A.swift", 10, 10)))
         self.assertEqual(sc.percent(files), 100.0)
         self.assertEqual(sc.below(files, 95.0), [])
 
@@ -81,35 +91,51 @@ class PercentTest(unittest.TestCase):
 
 
 class VerdictTest(unittest.TestCase):
-    def test_at_the_floor_passes_and_says_the_figure(self) -> None:
-        ok, message = sc.verdict(sc.core_files(GOOD), 95.0)
+    def test_at_the_floor_passes_and_says_each_figure(self) -> None:
+        ok, message = sc.verdict(sc.source_files(GOOD), 95.0)
         self.assertTrue(ok)
-        self.assertIn("96.7%", message)
-        self.assertIn("floor 95%", message)
+        self.assertIn("BosunMenuCore 96.7%", message)
+        self.assertIn("BosunMenuSystem 97.0%", message)
+        self.assertIn("floor 95% each", message)
 
     def test_under_the_floor_fails_and_names_the_files_under_it_worst_first(self) -> None:
-        files = sc.core_files(
+        files = sc.source_files(
             summary(
                 entry(f"{CORE}A.swift", 100, 100),
                 entry(f"{CORE}B.swift", 100, 80),
                 entry(f"{CORE}C.swift", 100, 60),
+                entry(f"{SYSTEM}S.swift", 100, 100),
             )
         )
         ok, message = sc.verdict(files, 95.0)
         self.assertFalse(ok)
-        self.assertIn("80.0%", message)  # the total
+        self.assertIn("BosunMenuCore 80.0%", message)  # the core's total
         self.assertLess(message.index("C.swift"), message.index("B.swift"))
         self.assertNotIn("A.swift", message)
+        self.assertNotIn("S.swift", message)
         self.assertIn("60 of 100 lines", message)
 
-    def test_exactly_the_floor_passes(self) -> None:
-        ok, _message = sc.verdict(sc.core_files(summary(entry(f"{CORE}A.swift", 100, 95))), 95.0)
-        self.assertTrue(ok)
+    def test_a_high_target_does_not_hide_a_low_one(self) -> None:
+        files = sc.source_files(
+            summary(entry(f"{CORE}A.swift", 1000, 1000), entry(f"{SYSTEM}S.swift", 100, 90))
+        )
+        ok, message = sc.verdict(files, 95.0)
+        self.assertFalse(ok)  # together they are 99%
+        self.assertIn("BosunMenuSystem/S.swift 90.0%", message)
 
-    def test_no_core_files_fails_and_says_to_run_the_tests_with_coverage(self) -> None:
+    def test_exactly_the_floor_passes(self) -> None:
+        files = sc.source_files(summary(entry(f"{CORE}A.swift", 100, 95), entry(f"{SYSTEM}S.swift", 100, 95)))
+        self.assertTrue(sc.verdict(files, 95.0)[0])
+
+    def test_no_files_fails_and_says_to_run_the_tests_with_coverage(self) -> None:
         ok, message = sc.verdict([], 95.0)
         self.assertFalse(ok)
         self.assertIn("--enable-code-coverage", message)
+
+    def test_a_target_with_no_files_fails_and_is_named(self) -> None:
+        ok, message = sc.verdict(sc.source_files(summary(entry(f"{CORE}A.swift", 10, 10))), 95.0)
+        self.assertFalse(ok)
+        self.assertIn("Sources/BosunMenuSystem", message)
 
 
 class MainTest(unittest.TestCase):
@@ -128,12 +154,16 @@ class MainTest(unittest.TestCase):
         self.assertEqual(len(out.strip().splitlines()), 1)
 
     def test_a_low_one_exits_1_and_says_why_on_stderr(self) -> None:
-        code, _out, err = self.run_main(summary(entry(f"{CORE}A.swift", 100, 10)))
+        code, _out, err = self.run_main(
+            summary(entry(f"{CORE}A.swift", 100, 10), entry(f"{SYSTEM}S.swift", 100, 100))
+        )
         self.assertEqual(code, 1)
         self.assertIn("A.swift", err)
 
     def test_the_floor_can_be_given(self) -> None:
-        code, _out, _err = self.run_main(summary(entry(f"{CORE}A.swift", 100, 50)), "--floor", "40")
+        code, _out, _err = self.run_main(
+            summary(entry(f"{CORE}A.swift", 100, 50), entry(f"{SYSTEM}S.swift", 100, 50)), "--floor", "40"
+        )
         self.assertEqual(code, 0)
 
     def test_a_file_that_is_not_json_is_one_line_and_exit_2(self) -> None:
@@ -171,7 +201,7 @@ class LocateTest(unittest.TestCase):
             (debug / "codecov").mkdir(parents=True)
             (debug / "codecov" / "default.profdata").write_text("")
             binaries = []
-            for target in ("BosunMenuCoreTests", "BosunMenuTests"):
+            for target in ("BosunMenuCoreTests", "BosunMenuSystemTests", "BosunMenuTests"):
                 binary = debug / f"{target}.xctest" / "Contents" / "MacOS" / target
                 binary.parent.mkdir(parents=True)
                 binary.write_text("")

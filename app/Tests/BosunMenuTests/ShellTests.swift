@@ -4,6 +4,7 @@ import Testing
 
 @testable import BosunMenu
 @testable import BosunMenuCore
+@testable import BosunMenuSystem
 
 private func scratchFolder() throws -> URL {
   let dir = FileManager.default.temporaryDirectory

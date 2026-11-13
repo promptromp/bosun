@@ -67,7 +67,7 @@ private func result(_ outcome: CommandOutcome, out: String = "", err: String = "
 @Suite struct CommandsTests {
   @Test func eachCommandIsTheArgvPartOneDefines() {
     #expect(Bosun.status.args == ["status", "--json"])
-    #expect(Bosun.start.args == ["morning", "--now"])
+    #expect(Bosun.start.args == ["morning", "--now", "--background"])
     #expect(Bosun.consoleURL.args == ["console", "--url"])
     #expect(Bosun.appStatus.args == ["app", "status", "--json"])
     #expect(Bosun.appLogin(on: true).args == ["app", "login", "on"])
@@ -75,11 +75,10 @@ private func result(_ outcome: CommandOutcome, out: String = "", err: String = "
     #expect(Bosun.skip(version: "v2026.11.11").args == ["update", "--skip", "v2026.11.11"])
   }
 
-  @Test func theLongOnesStartDetachedAndTheRestDoNot() {
-    #expect(Bosun.start.detached)
+  @Test func onlyTheUpdateStartsDetachedAndTheRestDoNot() {
     #expect(Bosun.update.detached)
     let others: [Command] = [
-      Bosun.status, Bosun.checkUpdates, Bosun.planUpdate, Bosun.quitPlan, Bosun.consoleURL,
+      Bosun.status, Bosun.checkUpdates, Bosun.planUpdate, Bosun.quitPlan, Bosun.start, Bosun.consoleURL,
       Bosun.appStatus,
     ]
     #expect(others.allSatisfy { !$0.detached })
@@ -205,16 +204,31 @@ private func result(_ outcome: CommandOutcome, out: String = "", err: String = "
     #expect(await cli.started.isEmpty)
   }
 
-  @Test func startBosunIsTheMorningRunDetached() async {
+  /// A process the app starts is the app's child, and so is what it starts (tmux, the agents): Start is
+  /// `morning --now --background`, which a launchd job carries out, run as a short command and waited for.
+  @Test func startBosunIsAShortCommandThatHandsTheMorningRunToALaunchdJob() async {
+    #expect(Bosun.start.args == ["morning", "--now", "--background"])
+    #expect(!Bosun.start.detached)
+    #expect(Bosun.start.timeout == Bosun.status.timeout)
     let cli = FakeBosunCLI()
-    _ = await cli.start(Bosun.start)
-    #expect(await cli.started == [["morning", "--now"]])
+    await cli.reply(Bosun.start.args, exited(0))
+    #expect(await cli.run(Bosun.start).outcome == .exited(0))
+    #expect(await cli.started.isEmpty)
+  }
+
+  @Test func theUpdateIsTheOnlyDetachedCommand() {
+    let all = [
+      Bosun.status, Bosun.checkUpdates, Bosun.planUpdate, Bosun.update, Bosun.quitPlan, Bosun.start,
+      Bosun.consoleURL, Bosun.appStatus, Bosun.skip(version: "v1"), Bosun.appLogin(on: true),
+      Bosun.quit(QuitChoices()),
+    ]
+    #expect(all.filter(\.detached).map(\.args) == [["update", "--yes"]])
   }
 
   @Test func theFakeAnswersAStartWhenToldTo() async {
     let cli = FakeBosunCLI()
-    await cli.reply(["morning", "--now"], result(.notInstalled))
-    #expect(await cli.start(Bosun.start).outcome == .notInstalled)
+    await cli.reply(["update", "--yes"], result(.notInstalled))
+    #expect(await cli.start(Bosun.update).outcome == .notInstalled)
   }
 
   @Test func aStartedCommandHasNoReplyToRead() {

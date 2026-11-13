@@ -216,7 +216,7 @@ of truth, so don't copy rules into this file.
   Team ID is checked with `codesign -R` against the certificates, never read from `codesign`'s text. The publisher is
   `app/publisher.json`, the version `app/VERSION`.
 - The menu bar app itself (`app/`, a Swift package; design: `docs/design/menu-bar.md`, plan:
-  `docs/plans/menu-bar-app.md`): `BosunMenuCore` is pure and carries the tests (`Contract.swift`: the JSON of part 1's
+  `docs/plans/menu-bar-app.md`): `BosunMenuCore` is pure (no I/O, no AppKit) and carries the most tests (`Contract.swift`: the JSON of part 1's
   commands, each with `"contract": 1`; `MenuModel.swift`: the menu each state becomes, `FlowState` (one flow at a
   time) and `shouldExitAsSecondCopy`; `UpdateFlow.swift` and `QuitFlow.swift`: the flows as state machines, with the
   `bosun` commands each step runs; `BosunCLI.swift`: the one protocol the app runs bosun through, the commands and
@@ -225,13 +225,18 @@ of truth, so don't copy rules into this file.
   ports): a change to what `bosun status --json`, `update --check|--dry-run --json`, `quit --json` or `app status
   --json` print fails `tests/unit/test_contract_samples.py` until `uv run python tools/contract_samples.py` writes the
   fixtures again, and the Swift side follows. The app reads nothing of bosun's but what those commands print.
-  What the AppKit shell needs that has no AppKit in it is in the core too, so it is tested and counts towards the
-  floor: `AppCoordinator.swift` (what is chosen, as flows over `AppUI`: the shell's whole surface), `DialogSpecs.swift`
-  (every dialog's words, buttons and boxes, and what each answer means to a flow), `Poller.swift` (the timing, on a
-  clock it is given), `ProcessBosunCLI.swift` (bosun run for real, with timeouts), `Launch.swift` (the arguments, the
-  start-time reading behind the one-copy rule) and `TestHooks.swift` (the VM suite's hooks: their files and formats).
-  `Sources/BosunMenu` is only AppKit: `MenuRenderer` (a `MenuModel` as an `NSMenu`, updated in place), `Dialogs` (a
-  `DialogSpec` as an `NSAlert`), `StatusItemController`, `AppShell` (the `AppUI`), `AppDelegate`, `main.swift`.
+  What the AppKit shell needs is split by whether it touches the system. Pure, in the core (so tested, and counted by the
+  floor): `AppCoordinator.swift` and `AppCoordinator+Update.swift` (what is chosen, as flows over `AppUI` and
+  `ScriptWriting`: the shell's whole surface), `DialogSpecs.swift` (every dialog's words, buttons and boxes, and what
+  each answer means to a flow), `Poller.swift` (the timing, on a clock it is given), `Launch.swift` (the arguments, the
+  one-copy rule over a start-time reader it is given) and `TestHooks.swift` (the VM suite's hook formats, the menu as
+  JSON). `Sources/BosunMenuSystem` (Foundation only, depends on the core) is what touches the system: `ProcessBosunCLI`
+  (bosun run for real, with timeouts that stop a command's whole process group), `ProcessStartTime` (sysctl),
+  `HookFiles` (the hooks' folder and `LoggingBosunCLI`) and `CommandScriptWriter` (the `.command` files); its tests are
+  `BosunMenuSystemTests`. `Sources/BosunMenu` is only AppKit: `MenuRenderer` (a `MenuModel` as an `NSMenu`, updated in
+  place), `Dialogs` (a `DialogSpec` as an `NSAlert`), `StatusItemController`, `AppShell` (the `AppUI`), `AppDelegate`,
+  `main.swift`. Start is `bosun morning --now --background`, a short command, never a child the app leaves running
+  (the Mac's privacy prompts would name the app); only `update --yes` is started detached.
 - `orchestrator/policy.md` (appended to the orchestrator's system prompt),
   `orchestrator/plugin/commands/chores.md` (the chores procedure), `orchestrator/settings.json`
   (the orchestrator's own permissions, generic; a site replaces it with
@@ -377,7 +382,7 @@ and CI agree on versions. On commit (`.pre-commit-config.yaml`; run all with `uv
   pinned in `app/Package.resolved`; `app/.swiftlint.yml` has the repo's limits: cyclomatic 10, function body 60, type
   body 300, file 400; `force_unwrapping`, `force_try` and `force_cast` errors in Sources, allowed in Tests; no `print`
   in Sources) and `swift test -Xswiftc -warnings-as-errors`. Swift 6 language mode, so strict concurrency. The floor is
-  95% of the lines of `Sources/BosunMenuCore`: `cd app && swift test --enable-code-coverage -Xswiftc
+  95% of the lines of each of `Sources/BosunMenuCore` and `Sources/BosunMenuSystem`: `cd app && swift test --enable-code-coverage -Xswiftc
   -warnings-as-errors`, then `uv run python tools/swift_coverage.py` (it reads `llvm-cov export -summary-only` and
   names the files under the floor). While iterating run `swift test --filter <suite>`, not the lot. When a limit
   trips, split the function, as for Python.
