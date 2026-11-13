@@ -35,10 +35,12 @@ Issues and pull requests are welcome: see [CONTRIBUTING.md](../CONTRIBUTING.md) 
 `-n auto` runs the tests in parallel, one worker per core (pytest-xdist). `--impacted`
 (pytest-impacted) runs only the tests that what git has uncommitted (staged or not, and new files)
 can reach, so `uv run pre-commit run --all-files` selects the same tests as the commit. The plugin
-follows the Python imports from `lib/` and the test files; what it cannot see (a test that runs
+follows the Python imports from `lib/` (an import root, like pytest's `pythonpath`) and between the
+test files and the helpers of `tests/unit`; what it cannot see (a test that runs
 `bin/bosun`, reads a docs page, or a file `bosun` reads as it runs) is a rule in `pyproject.toml`'s
 `impacted_map` and `impacted_invalidate_all`. A rule may select more tests than it needs, never fewer:
-when unsure, it runs every test. Two checks keep the rules honest: `tests/unit/test_impacted_rules.py`
+when unsure, it runs every test (`conftest.py`, the fixtures and what bosun reads as it runs do). A
+rule's `**` matches any depth, as the plugin reads it. Two checks keep the rules honest: `tests/unit/test_impacted_rules.py`
 runs in every selection and fails on a file no rule covers or a module whose importers would not be
 selected, and `tests/unit/impacted_guard.py` fails any test that reads or runs a file whose change
 would not select it, naming the line to add. `uv run impacted-tests --verbose` prints what the

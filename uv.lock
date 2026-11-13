@@ -162,7 +162,7 @@ dev = [
     { name = "pre-commit", specifier = ">=4" },
     { name = "pytest", specifier = ">=8" },
     { name = "pytest-cov", specifier = ">=7.1.0" },
-    { name = "pytest-impacted", extras = ["fast"], specifier = ">=0.37.0" },
+    { name = "pytest-impacted", extras = ["fast"], specifier = ">=0.38.0" },
     { name = "pytest-xdist", specifier = ">=3.8.0" },
     { name = "ruff", specifier = ">=0.11" },
     { name = "shellcheck-py", specifier = ">=0.10" },
@@ -1149,7 +1149,7 @@ wheels = [
 
 [[package]]
 name = "pytest-impacted"
-version = "0.37.0"
+version = "0.38.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "astroid" },
@@ -1160,9 +1160,9 @@ dependencies = [
     { name = "pytest" },
     { name = "rich" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/ab/a3/820d8590a10cbe59a2822f8fe590500f37f02d97281445109f66f2bf30a7/pytest_impacted-0.37.0.tar.gz", hash = "sha256:bd7cfd09c476984874d355fafbd6e720a27d92b181a0a93eb317556549cbd68f", size = 891089, upload-time = "2026-11-02T12:24:58.947Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/2e/9a/959d449e11f115cadc19caf4fcb2cea71226e47ca93f67f4b575fa9b51cd/pytest_impacted-0.38.0.tar.gz", hash = "sha256:0bd5002e8b2092061a8e997c4b562873255c337b7f0378522d0e1dc2b7758b51", size = 909250, upload-time = "2026-11-13T14:41:48.806Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/2e/55/230585f0ef9d518267dc3558773ba8af5c1a17ad2266cba87327743a8cc3/pytest_impacted-0.37.0-py3-none-any.whl", hash = "sha256:2d3ef4642ea63d117ce84daaad245d4c9b84384930809171ee0c37b5d093e2ae", size = 818147, upload-time = "2026-11-02T12:24:57.213Z" },
+    { url = "https://files.pythonhosted.org/packages/7e/3e/682ea6dfdf8f87001e3a25bf1aa2f83b8a5ba380ea33a81dc21e25a45de2/pytest_impacted-0.38.0-py3-none-any.whl", hash = "sha256:7bbb8248b9226111ab952be123fc68e2992c084b49cc789eaabf2b97629b5543", size = 836647, upload-time = "2026-11-13T14:41:47.186Z" },
 ]
 
 [package.optional-dependencies]
@@ -1172,15 +1172,15 @@ fast = [
 
 [[package]]
 name = "pytest-impacted-rs"
-version = "0.37.0"
+version = "0.38.0"
 source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/6e/00/ca0ddf4ed2054c4ab08988115d27315081b745b200c7c160f2a4b9925844/pytest_impacted_rs-0.37.0.tar.gz", hash = "sha256:61798f3739076a13f2cd8098133f5bc4a3a3b33a4cdb5b3e1e1d84acae8996d5", size = 8621, upload-time = "2026-11-02T12:39:33.497Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/97/0a/78ea650a8859695a91b93dcbdd25edc9841d98048a205f556baa59e1e439/pytest_impacted_rs-0.38.0.tar.gz", hash = "sha256:52d56bafcf64f1ee119f33d24c47155e1b7cbdea036c72b893a9f512c037428f", size = 8622, upload-time = "2026-11-13T14:44:11.408Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/75/2b/47abd8e6ca05778d902744e9bc12732fbfe7a4f1cd05c1d4ebd43afa684d/pytest_impacted_rs-0.37.0-cp311-abi3-macosx_10_12_x86_64.whl", hash = "sha256:7b2eb56b1683f58d58edd0845404efcfbd77c2cd8ef0b814039d74125b4b3359", size = 1024629, upload-time = "2026-11-02T12:39:26.37Z" },
-    { url = "https://files.pythonhosted.org/packages/24/33/9c0730691aa652f6b7f7f2d51ec15f4831d9a8953bd0226be9b4773bbfc6/pytest_impacted_rs-0.37.0-cp311-abi3-macosx_11_0_arm64.whl", hash = "sha256:e83b751c065a8fb432edbb336a1639219a4834a84b735d98aebef0dd4ae12898", size = 1012272, upload-time = "2026-11-02T12:39:28.022Z" },
-    { url = "https://files.pythonhosted.org/packages/ec/cf/2fe909c7d1a3c7cc6fd1c804b596755afc37594efbece99d016c3427711f/pytest_impacted_rs-0.37.0-cp311-abi3-manylinux2014_aarch64.manylinux_2_17_aarch64.whl", hash = "sha256:d29f051f852cfb70efda17dbe48f262373cca1b782ac1bf1d54afd7693593e70", size = 1046652, upload-time = "2026-11-02T12:39:29.462Z" },
-    { url = "https://files.pythonhosted.org/packages/a9/2a/6f7501721a6f4e99e757b05e858facaa6ece6e555904d472df8519bcb505/pytest_impacted_rs-0.37.0-cp311-abi3-manylinux2014_x86_64.manylinux_2_17_x86_64.whl", hash = "sha256:79ce14f1cce4e44e7ab82975c2a4795799a5dec26de1cea421b0b26e607eb686", size = 1054349, upload-time = "2026-11-02T12:39:30.861Z" },
-    { url = "https://files.pythonhosted.org/packages/59/69/850f24d03f3c54fa602f1573cd6f86d267c18a800250740a214d9cdfd49c/pytest_impacted_rs-0.37.0-cp311-abi3-win_amd64.whl", hash = "sha256:edfa1cf50d1b1d8506e3cd0c5664f8515dcfd43ffb324d9df819b1fa2ba0b0e5", size = 955745, upload-time = "2026-11-02T12:39:32.228Z" },
+    { url = "https://files.pythonhosted.org/packages/f0/de/1eacd2c7969fc89df7c12c44af8dc300763edd3afd8f88fa6846307d7b4d/pytest_impacted_rs-0.38.0-cp311-abi3-macosx_10_12_x86_64.whl", hash = "sha256:2c877949b559804c9ed409b56fa8bf30fc53bfdb9cb2ac5fc442f8ea58416e15", size = 1024548, upload-time = "2026-11-13T14:44:03.355Z" },
+    { url = "https://files.pythonhosted.org/packages/9f/34/efabc3bb31338f1812cf1d6708b4a2da8e8a67c7392cd25936170ee182dc/pytest_impacted_rs-0.38.0-cp311-abi3-macosx_11_0_arm64.whl", hash = "sha256:8fef65f62f18f61d9ece4dd8e00c13ff4da8fcfcfc6137b4d8fac8e5c2ae3719", size = 1012265, upload-time = "2026-11-13T14:44:05.239Z" },
+    { url = "https://files.pythonhosted.org/packages/fb/2c/4e656d7c922fa31af0380db253a14d5f35c272e647533cf2fec9d9fe2633/pytest_impacted_rs-0.38.0-cp311-abi3-manylinux2014_aarch64.manylinux_2_17_aarch64.whl", hash = "sha256:41ec5c7305cadcfcfedb8c9d820591de12e23dbcb3a34f769d46c4ef73cd4dad", size = 1047657, upload-time = "2026-11-13T14:44:06.562Z" },
+    { url = "https://files.pythonhosted.org/packages/52/ab/fac3e47d8c894c6c78838c1bad24ed71be99c786229e96e5e85767e5aa5e/pytest_impacted_rs-0.38.0-cp311-abi3-manylinux2014_x86_64.manylinux_2_17_x86_64.whl", hash = "sha256:9d299fba3170735bc112d35551f71633a1472924970dccb6015cd8c414c1ba38", size = 1056878, upload-time = "2026-11-13T14:44:08.243Z" },
+    { url = "https://files.pythonhosted.org/packages/b6/67/002d6ab6d8cf947eee792280c54060a022a49f9d2fdf07597835b39863da/pytest_impacted_rs-0.38.0-cp311-abi3-win_amd64.whl", hash = "sha256:66ef13ce18023cf156c28579b799ed9a12030ae354e40b3633a0c7d3c031a187", size = 955705, upload-time = "2026-11-13T14:44:10.107Z" },
 ]
 
 [[package]]
