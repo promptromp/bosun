@@ -14,7 +14,7 @@ limits and conventions.
 
 On GitHub, every pull request to `main` runs the same checks (`.github/workflows/ci.yml`), the
 a gitleaks scan of the new commits (the smoke suite on macOS is off in CI until the feature-complete
-MVP; the pre-push hook still runs it), and `main` only takes pull requests
+MVP; the pre-push hook still runs the sections the change can reach), and `main` only takes pull requests
 that pass them, through GitHub's merge queue: once a pull request's checks pass, `gh pr merge --squash`
 (or the Merge button) adds it to the queue, which builds it on top of the latest `main` and the pull
 requests ahead of it, runs the same checks again on that commit (CI listens for `merge_group` as well
@@ -37,7 +37,8 @@ Issues and pull requests are welcome: see [CONTRIBUTING.md](../CONTRIBUTING.md) 
 |---|---|---|---|
 | The unit tests a change can reach | `uv run pytest -n auto --impacted` | every commit (the `unit-tests` hook) | seconds to a minute |
 | Every unit test | `uv run pytest -n auto` | CI, on Linux (with coverage) and on macOS | about a minute |
-| The end-to-end smoke suite | `tests/smoke.sh` | before every push (`--pre-push`: skipped if this exact tree already passed it here in the last 24 hours); CI's macOS job is off until the MVP | about 18 minutes |
+| The end-to-end smoke suite | `tests/smoke.sh` | before every push, but only the sections the change can reach (`--pre-push`, the build-out setting: skipped if this exact tree already passed a whole run here in the last 24 hours); CI's macOS job is off until the MVP | about 18 minutes in full |
+| The sections a change reaches | `tests/smoke.sh --changed <git ref>` | by the pre-push hook, against `origin/main` | what those sections take |
 | Every unit test with a plain `python3`, then the smoke suite | `tests/smoke.sh --with-unit` | never | 8 more minutes |
 | One area of the smoke suite | `tests/smoke.sh --only <id>[,<id>...]` (ids: `tests/smoke.sh --list`) | never | seconds to a few minutes |
 | Only the sections that failed last time | `tests/smoke.sh --last-failed` (`--lf`) | never | what those sections take |
@@ -46,7 +47,7 @@ Issues and pull requests are welcome: see [CONTRIBUTING.md](../CONTRIBUTING.md) 
 The smoke suite is in sections, each begun by a `section <id> "<name>"` line. `--list` prints them. `--only`
 runs the shared setup and the sections you name, plus any they `needs` (the list shows those), in the order of
 the file, and its summary says it was a partial run: it is for iterating on the area you changed, and never
-instead of the whole suite before you commit, which CI and the pre-push hook run in full. `--with-unit` and
+instead of the whole suite before you commit; CI (when its smoke job is on) runs the whole suite, and the pre-push hook the sections the change reaches (below). `--with-unit` and
 `--only` combine.
 
 To cut the waiting while you iterate: `-x` stops at the first failing check, after its `FAIL` line, and the
@@ -62,7 +63,10 @@ commit.
 
 The pre-push hook runs `tests/smoke.sh --pre-push`, which skips the suite, with a line saying so, when the tree
 of the commit you push (pre-commit's `PRE_COMMIT_TO_REF`) already passed a whole run in this checkout less than
-24 hours ago. A whole run (none of `--only`, `--last-failed` or `-x`) that ends with no failure records, in
+24 hours ago. Otherwise it runs only the sections the change can reach, which is the build-out setting: a push
+need not wait for the whole 18 minutes, and the whole suite on every push comes back once the project is past
+its release (CI runs it again at the MVP, when its smoke job is turned on with the repository variable
+`CI_SMOKE`). The choice is described in [Which sections a push runs](#which-sections-a-push-runs) below. A whole run (none of `--only`, `--last-failed` or `-x`) that ends with no failure records, in
 `tests/.smoke-cache/passes`, the tree it tested: the files on disk before the first section runs, uncommitted
 changes included (what `git add -A` stages, taken in a copy of the index, so yours is not touched). It records
 nothing unless the tree is the same at the end of the run: a test that writes a file into the repository, or
@@ -75,6 +79,36 @@ tree pass. `BOSUN_SMOKE_NO_CACHE=1 git push` makes the hook run the suite anyway
 pre-commit's `SKIP`, which this repository does not use). With several refs in one push pre-commit hands the
 hook only the first one that is not a deletion, and a branch deletion runs nothing. CI never uses the record:
 when its smoke job runs, it runs `tests/smoke.sh` in full.
+
+### Which sections a push runs
+
+`tests/smoke.sh --changed <git ref>` works out the files that changed since the merge-base of that ref and
+`HEAD`: committed since, staged, unstaged and untracked (not ignored) ones, since what is tested is the tree on
+disk. `--pre-push` does this against `origin/main` (`BOSUN_SMOKE_BASE` names another ref), after the tree check
+above. The answer is one of three, printed with the files that led to it:
+
+- **the whole suite**, when any changed file is on the select-everything list, is used by `lib/common.sh` (which
+  every command sources: the modules it names under `lib/`, and what imports those), or is covered by no section
+  and no `ignore` rule (a file nothing says is safe), when `origin/main` or the merge-base cannot be found, or when
+  the selection itself fails for any reason;
+- **nothing**, when every changed file is ignored (the docs, which their own hooks check; the settings of the
+  checks themselves; the unit and sandbox suites), saying so in one line;
+- **the sections that cover a changed file**, plus the ones they `needs`, plus the shared setup and the
+  `always_run` parts, as `--only` runs them.
+
+A section says what it runs or reads in a clause on its line: `section app "bosun app ..." covers
+'libexec/bosun-app,lib/app_*.py,templates/launchd-app.plist'`. A glob is matched against the path from the
+repository root, whole: `*` stays in a folder, `**` goes through any number of them. What depends on a covered
+file is followed by `tools/smoke_select.py`: a module that imports a changed module, and the commands and
+scripts that run a changed file (one step; a script that names `lib/ledger.py`, or runs `bosun ledger`). So a
+section lists the files it runs directly, and a change to a library module reaches the section through the
+command that runs it. `tests/smoke_selection.txt` holds the two lists that need no section: `all <glob>` (the
+whole suite: `lib/common.sh`, `bin/bosun`, the suite itself and its stand-ins, what every window's launch loads)
+and `ignore <glob>`. `tests/unit/test_smoke_selection.py` fails on a file that is none of those, naming it and
+saying what to add; the same for a section without `covers`.
+
+`BOSUN_SMOKE_FULL=1 git push` forces the whole suite (and `BOSUN_SMOKE_NO_CACHE=1` runs it even for a tree that
+passed). A partial run never records the tree as passed: only a whole one does.
 
 A section either sets up what it uses itself or says `needs <id>`, and
 `tests/unit/test_smoke_sections.py` fails on a section without a marker, a taken id or a `needs` that names

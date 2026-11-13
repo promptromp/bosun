@@ -147,7 +147,10 @@ class PluginTest(unittest.TestCase):
 
     def test_a_change_to_a_test_selects_only_it_and_the_rules(self) -> None:
         name = "tests/unit/test_tickets.py"
-        self.assertEqual(self.selected(name), {name, "tests/unit/test_impacted_rules.py"})
+        self.assertEqual(
+            self.selected(name),
+            {name, "tests/unit/test_impacted_rules.py", "tests/unit/test_smoke_selection.py"},
+        )
 
     def test_a_change_to_the_docs_selects_only_the_tests_that_read_them(self) -> None:
         self.assertEqual(
@@ -158,6 +161,7 @@ class PluginTest(unittest.TestCase):
                 "tests/unit/test_update_facts.py",  # it imports test_update
                 "tests/unit/test_update_summary.py",
                 "tests/unit/test_impacted_rules.py",
+                "tests/unit/test_smoke_selection.py",
             },
         )
 

@@ -1,0 +1,58 @@
+# Which changes the smoke suite's selection (tools/smoke_select.py, `tests/smoke.sh --changed`, the pre-push hook)
+# decides without the sections' `covers`. One rule per line: `all <glob>` or `ignore <glob>`. Globs match the
+# path from the repository root, whole: `*` within a folder, `**` through any number of them.
+#
+# For a changed file the order is: `all` (the whole suite), then the sections that cover it (directly or through
+# the code that depends on it: see the tool's docstring), then `ignore` (nothing to run), and a file in none of the
+# three runs the whole suite. tests/unit/test_smoke_selection.py fails on a tracked file that falls in none, and
+# says what to add. When unsure, add it to `all`: the pre-push then does what it did before this file.
+
+# --- all: a change here can reach every section ------------------------------------------------------------------
+# The shell library every command sources, and the dispatcher. (What lib/common.sh itself names under lib/, such as
+# lib/launch_record.py, is `all` too: the tool reads that from the file.)
+all lib/common.sh
+all bin/bosun
+# The suite itself: its shared setup, its stand-ins, the cache and this selection.
+all tests/smoke.sh
+all tests/smoke_cache.sh
+all tests/smoke_selection.txt
+all tools/smoke_select.py
+all tests/sandbox/macos/**
+# What every window's launch loads: the agents' shell sides (some are named in a variable, which no reader of the
+# files could follow), the orchestrator's policy, settings, plugin and task files (every section that starts or
+# reads an orchestrator window).
+all lib/agents.sh
+all lib/launch/**
+all lib/harnesses/**
+all lib/platforms/**
+all orchestrator/**
+# Decides which files count as the tree (what is tracked and what is not), and so what selection can see.
+all .gitignore
+
+# --- ignore: no section runs or reads these ----------------------------------------------------------------------
+# Prose, and the site made from it. The docs hooks check them (links, anchors, the build); the smoke suite reads
+# only the two pages some sections name, which their `covers` say.
+ignore docs/**
+ignore *.md
+ignore mkdocs.yml
+ignore theme/**
+ignore .github/**
+# Settings of the checks themselves (the commit hooks and CI), the dependency pins, and the unit and other suites,
+# which the commit hook runs and the sandboxes use: none is read by a section.
+ignore .pre-commit-config.yaml
+ignore pyproject.toml
+ignore uv.lock
+ignore .secrets.baseline
+ignore .gitleaks.toml
+ignore .editorconfig
+ignore .shellcheckrc
+ignore _typos.toml
+ignore tests/unit/**
+ignore tests/llm/**
+ignore tests/fixtures/corpus/**
+ignore tests/fixtures/migrations/**
+ignore tests/sandbox.sh
+ignore tests/install_e2e.sh
+ignore tests/work_e2e.sh
+ignore tests/sandbox/**
+ignore tools/**
