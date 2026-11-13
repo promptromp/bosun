@@ -3393,6 +3393,10 @@ if [ "$(bash -c 'source "$1/lib/common.sh"; command -v launchctl; command -v pms
   check "doctor checks the learning agent once it is enabled" contains "$doctor_said" "ok    learning agent $BOSUN_LAUNCHD_LABEL.learn loaded"
   check "doctor checks the job that runs --now, which the app's Start kickstarts" contains "$doctor_said" "ok    launchd job $BOSUN_LAUNCHD_LABEL.now loaded"
   check "doctor checks the ledger against its journal" contains "$doctor_said" "ok    the ledger and its journal: ledger is valid"
+  # pmset prints the hour after midnight as 0:01AM, not 12:01AM (seen on a real Mac)
+  printf 'Repeating power events:\n  wakepoweron at 0:01AM every day\n' >"$WORK/pmset-sched"
+  check "doctor accepts a wake at 00:01, as pmset prints it (0:01AM)" contains "$(BOSUN_START_TIME=00:00 BOSUN_WAKE_DELAY_MINUTES=1 "$BOSUN" doctor 2>&1)" "ok    pmset repeating wake:"
+  rm -f "$WORK/pmset-sched"
   # A ledger of its own: a link to an item that is gone (an old prune) warns and adds no failure;
   # a damaged journal fails. (Doctor's login check calls the fake claude, which writes the ledger.)
   dstate="$WORK/doctor-state"
