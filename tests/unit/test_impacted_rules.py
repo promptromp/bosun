@@ -1,7 +1,9 @@
 """The commit hook's test selection (pytest-impacted, `--impacted`; pyproject.toml's impacted_*
 settings, read by impacted_rules.py): every file has a rule, every mapped path is a file, and the
-plugin selects each test for a change to any module the test imports, directly or not. lib/ is a
-flat folder of modules on sys.path, which the plugin follows only through lib/impacted_root.
+plugin selects each test for a change to any module the test imports, directly or not: a module of
+lib/ (a flat folder of modules on sys.path, an import root through pytest's `pythonpath`) or a helper
+of tests/unit (which has no __init__.py). The Python files the plugin follows need no rule of their
+own; everything else (shell, templates, docs, data) does.
 
 pyproject.toml maps every change to this file, so it runs in each commit's selection: a new kind of
 file fails here until it has a rule, rather than selecting nothing. What a test reads or runs as it
@@ -19,6 +21,7 @@ import impacted_rules as rules
 
 
 HAVE_PLUGIN = importlib.util.find_spec("pytest_impacted") is not None
+NO_PLUGIN = "pytest-impacted is not installed (uv sync installs the dev group)"
 HAVE_PYTEST = importlib.util.find_spec("pytest") is not None  # impacted_guard is a pytest plugin
 CATCH_ALL = "*"  # the glob that maps every change to this test
 DEPENDENCY_FILES = ("pyproject.toml", "uv.lock")  # the plugin runs every test for a change to one
@@ -27,12 +30,14 @@ DEPENDENCY_FILES = ("pyproject.toml", "uv.lock")  # the plugin runs every test f
 def has_rule(name: str) -> bool:
     return (
         rules.is_test_file(name)
+        or rules.is_followed(name)
         or name in DEPENDENCY_FILES
         or any(rules.matches(name, glob) for glob in rules.invalidate_all())
         or any(rules.matches(name, glob) for glob, _ in rules.file_map() if glob != CATCH_ALL)
     )
 
 
+@unittest.skipUnless(HAVE_PLUGIN, NO_PLUGIN)  # the rules are matched with the plugin's own matcher
 class RulesTest(unittest.TestCase):
     def test_every_file_has_a_rule(self) -> None:
         missing = sorted(name for name in rules.repository_files() if not has_rule(name))
@@ -56,6 +61,17 @@ class RulesTest(unittest.TestCase):
         for name in ("orchestrator/policy.md", "templates/launchd.plist", "console/app.js"):
             with self.subTest(name):
                 self.assertIs(rules.selected_by(name), rules.ALL)
+
+    def test_the_plugin_s_matcher_reads_a_double_star_across_folders(self) -> None:
+        self.assertTrue(rules.matches("docs/design/prototypes/a/b.html", "docs/**"))
+        self.assertFalse(rules.matches("docs/design/a.md", "docs/*"))
+        self.assertTrue(rules.matches("docs/a.md", "docs/*"))
+
+    def test_the_python_files_the_plugin_follows_need_no_rule(self) -> None:
+        self.assertTrue(rules.is_followed("lib/awake.py"))
+        self.assertTrue(rules.is_followed("tests/unit/minted.py"))
+        self.assertFalse(rules.is_followed("lib/common.sh"))
+        self.assertFalse(rules.is_followed("tests/sandbox/drive.py"))
 
     def test_a_module_a_test_imports_covers_it_without_a_rule(self) -> None:
         self.assertTrue(rules.covers("tests/unit/test_ledger_protocol.py", "lib/ledger.py"))
@@ -92,12 +108,12 @@ class GuardTest(unittest.TestCase):
         self.assertEqual(self.started("cp", f"{root}/lib/common.sh", "/work/x"), {"lib/common.sh"})
 
 
-@unittest.skipUnless(HAVE_PLUGIN, "pytest-impacted is not installed (uv sync installs the dev group)")
+@unittest.skipUnless(HAVE_PLUGIN, NO_PLUGIN)
 class PluginTest(unittest.TestCase):
     """The plugin itself, with the changed files given rather than read from git."""
 
     def selected(self, name: str) -> set[str]:
-        from pytest_impacted import api, file_map
+        from pytest_impacted import api, file_map, ini
         from pytest_impacted.git import GitMode
 
         options = rules.options()
@@ -115,6 +131,7 @@ class PluginTest(unittest.TestCase):
                 tests_dir=str(options["impacted_tests_dir"]),
                 invalidate_all_patterns=rules.invalidate_all(),
                 file_map=file_map.parse_file_map(options.get("impacted_map", [])),
+                pythonpath=ini.find_pytest_config(rules.ROOT).paths("pythonpath"),
             )
         return {str(Path(path).resolve().relative_to(rules.ROOT)) for path in found or []}
 
