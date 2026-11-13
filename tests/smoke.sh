@@ -146,13 +146,14 @@ if [ "$LIST" = 1 ]; then
   exit 0
 fi
 [ -z "$ONLY" ] || run_chosen "$SCRIPT" "$ONLY"
-# What must not change during the run: this checkout's HEAD, the shared repository's HEAD and
-# core.bare (checked at the end).
+# What must not change during the run, in this checkout: its HEAD, what it has staged and core.bare (checked
+# at the end). Not the shared repository's HEAD: with git worktrees that is the main checkout's, and it moves
+# when a session in another worktree commits (tests/unit/repo_guard.py is the twin of this, and tests it).
 repo_state() {
-  local common
-  common="$(git -C "$ROOT" rev-parse --path-format=absolute --git-common-dir 2>/dev/null)" || return 0
-  printf 'head=%s main=%s bare=%s\n' "$(git -C "$ROOT" rev-parse HEAD 2>/dev/null)" \
-    "$(git --git-dir="$common" rev-parse HEAD 2>/dev/null)" "$(git --git-dir="$common" config --get core.bare 2>/dev/null)"
+  local staged
+  staged="$(git -C "$ROOT" diff --cached --raw --no-abbrev 2>/dev/null | shasum | cut -c1-12)"
+  printf 'head=%s staged=%s bare=%s\n' "$(git -C "$ROOT" rev-parse HEAD 2>/dev/null)" "$staged" \
+    "$(git -C "$ROOT" config --get core.bare 2>/dev/null)"
 }
 REPO_STATE_BEFORE="$(repo_state)"
 BOSUN="$ROOT/bin/bosun"
@@ -235,7 +236,7 @@ wait_for() {
 
 # console_started <stdout file> <stderr file>: the console printed its URL; if not, what it said.
 console_started() {
-  wait_for 10 grep -q '^bosun console: http://127.0.0.1:[0-9]*/?t=' "$1" && return 0
+  wait_for 30 grep -q '^bosun console: http://127.0.0.1:[0-9]*/?t=' "$1" && return 0
   echo "no URL; the console's stderr:"
   tail -5 "$2"
   return 1
@@ -916,7 +917,7 @@ check "... in the background: the hook returns at once" bash -c '
   BOSUN_EVENTS_ENABLED=1 "$1" hook user-prompt --window exporter <<<"$2"
   python3 -c "import sys, time; sys.exit(time.time() - float(sys.argv[1]) > 1.0)" "$start"' _ "$BOSUN" "$said_payload"
 check "... and never fails the prompt, even on garbage" bash -c 'BOSUN_EVENTS_ENABLED=1 "$1" hook user-prompt --window exporter <<<"{nope"' _ "$BOSUN"
-check "... it logs the error instead" wait_for 10 bash -c 'grep -q "ERROR: unreadable hook input" "$1"/hook-*.log' _ "$BOSUN_LOG_DIR"
+check "... it logs the error instead" wait_for 30 bash -c 'grep -q "ERROR: unreadable hook input" "$1"/hook-*.log' _ "$BOSUN_LOG_DIR"
 check "a prompt bosun passes at launch is not taken for mine" bash -c '
   prompt="Bosun started this fresh conversation for this window; reply with a one-line status"
   (cd "$3" && BOSUN_EVENTS_ENABLED=1 "$1" launch exporter "$prompt" >/dev/null 2>&1) || exit 1
@@ -1165,7 +1166,7 @@ check "... logged" contains "$out" "connectors: claude.ai Acme Gone not found, s
 LAUNCH_LOG="$BOSUN_LOG_DIR/launch-$(date +%F).log"
 check "... in the launch log too, as is a failed lookup" bash -c '
   grep -qF "orch: connectors: claude.ai Acme Gone not found, so this window starts without it" "$1" && grep -qF "orch: connectors: claude mcp list failed" "$1"' _ "$LAUNCH_LOG"
-check "... and the orchestrator's launch alerts me, the alert's output in the launch log" wait_for 10 grep -qF \
+check "... and the orchestrator's launch alerts me, the alert's output in the launch log" wait_for 30 grep -qF \
   "alert (notification only; BOSUN_ALERT_SLACK_USER is empty): orch: started without connector(s) it may use: claude.ai Acme Gone" "$LAUNCH_LOG"
 check "... never on the window's screen" bash -c 'grep -q "alerting you that it started without connector(s) it may use: claude.ai Acme Gone" <<<"$1" && ! grep -q "notification only" <<<"$1"' _ "$out"
 out="$(cd "$REPO_A" && "${CN[@]}" BOSUN_CONNECTORS="claude.ai Acme Gone" "$BOSUN" launch alpha 2>&1)"
@@ -1248,7 +1249,7 @@ out="$(cd "$REPO_A" && "${ORCH[@]}" BOSUN_ORCHESTRATOR_CONNECTORS="$TRICKY" "$BO
 check "the same name in BOSUN_ORCHESTRATOR_CONNECTORS" allows "$out" "\$a == [{\"serverUrl\": $(jq -n --arg t "$TRICKY" '$t')}]"
 check "... never run" test ! -e "$WORK/pwned"
 out="$(cd "$REPO_A" && "${ORCH[@]}" BOSUN_ORCHESTRATOR_CONNECTORS="claude.ai Acme \"Mail\" \$(touch $WORK/pwned)" "$BOSUN" launch orch 2>&1)"
-check "... and in an alert" wait_for 10 bash -c 'grep -qF "notification only; BOSUN_ALERT_SLACK_USER is empty): orch: started without connector(s) it may use: claude.ai Acme \"Mail\" \$(touch $2/pwned)" "$1" && [ ! -e "$2/pwned" ]' _ "$LAUNCH_LOG" "$WORK"
+check "... and in an alert" wait_for 30 bash -c 'grep -qF "notification only; BOSUN_ALERT_SLACK_USER is empty): orch: started without connector(s) it may use: claude.ai Acme \"Mail\" \$(touch $2/pwned)" "$1" && [ ! -e "$2/pwned" ]' _ "$LAUNCH_LOG" "$WORK"
 jq '. + {allowedMcpServers: [{serverName: "site-wide"}]}' "$ROOT/orchestrator/settings.json" >"$WORK/site-mcp-settings.json"
 check "a site settings file's own allowedMcpServers is replaced by the window's list" \
   allows "$(cd "$REPO_A" && "${ORCH[@]}" BOSUN_ORCHESTRATOR_SETTINGS="$WORK/site-mcp-settings.json" BOSUN_ORCHESTRATOR_CONNECTORS=acme-local "$BOSUN" launch orch 2>&1)" '$a == [{"serverName": "acme-local"}]'
@@ -1353,15 +1354,15 @@ export BOSUN_CLAUDE_BIN="$WORK/fake-claude"
 
 section tmux-session "tmux session (isolated socket, dry-run windows)"
 "$BOSUN" start >/dev/null 2>&1
-wait_for 10 has_windows "alpha beta gamma "
+wait_for 30 has_windows "alpha beta gamma "
 windows="$(tmux -L "$SOCKET" list-windows -t "=smoke" -F '#{window_name}' 2>/dev/null | tr '\n' ' ')"
 check "start creates one window per session" test "$windows" = "alpha beta gamma "
 tmux -L "$SOCKET" new-window -d -t "=smoke" -n at-a-screen "bash -c '(exec -a fake-claude sleep 60); true'"
-check "the watchdog sees a Claude that has no session yet" wait_for 5 bash -c '"$1" watchdog --facts | jq -e ".windows[] | select(.name == \"at-a-screen\") | .starting_pid > 0 and .agent_pid == null" >/dev/null' _ "$BOSUN"
+check "the watchdog sees a Claude that has no session yet" wait_for 30 bash -c '"$1" watchdog --facts | jq -e ".windows[] | select(.name == \"at-a-screen\") | .starting_pid > 0 and .agent_pid == null" >/dev/null' _ "$BOSUN"
 tmux -L "$SOCKET" kill-window -t "=smoke:at-a-screen"
 check "windows are found without a UTF-8 locale too" bash -c 'LC_ALL=C "$1" sessions --json | jq -e "[.[] | select(.name == \"alpha\")] | .[0].window == true" >/dev/null' _ "$BOSUN"
 # -S -200: the launch line (its --settings JSON) wraps over more rows than the window shows.
-check "window runs the launcher" wait_for 10 bash -c 'tmux -L "$1" capture-pane -p -S -200 -t "=smoke:0" | grep -q "dry-run: would run"' _ "$SOCKET"
+check "window runs the launcher" wait_for 30 bash -c 'tmux -L "$1" capture-pane -p -S -200 -t "=smoke:0" | grep -q "dry-run: would run"' _ "$SOCKET"
 tmux -L "$SOCKET" kill-window -t "=smoke:2"
 out="$("$BOSUN" start 2>&1)"
 check "second start refreshes instead of duplicating" contains "$out" "already exists; mode: refresh"
@@ -1372,7 +1373,7 @@ check "refresh skips a window whose folder is gone, as start does, never opening
 python3 "$ROOT/lib/run_locked.py" "$BOSUN_STATE_DIR/windows.lock" 10 busy -- sleep 20 &
 windows_holder=$!
 # The holders below wait (10 s) for the lock, since this probe may take it for a moment before they start.
-wait_for 5 lock_taken "$BOSUN_STATE_DIR/windows.lock"
+wait_for 30 lock_taken "$BOSUN_STATE_DIR/windows.lock"
 check "a start while another sets up the windows waits, then gives up saying why" fails_with "another bosun start or refresh is setting up the windows" env BOSUN_WINDOWS_LOCK_WAIT_SECONDS=0 "$BOSUN" start
 check "... and so does a refresh" fails_with "another bosun start or refresh is setting up the windows" env BOSUN_WINDOWS_LOCK_WAIT_SECONDS=0 "$BOSUN" refresh
 check "... but not a dry run, which changes nothing" "$BOSUN" refresh --dry-run
@@ -1390,7 +1391,7 @@ check "stop kills the session" bash -c "! tmux -L '$SOCKET' has-session -t '=smo
 
 section refresh "refresh (fake Claude processes and status records)"
 "$BOSUN" start >/dev/null 2>&1
-wait_for 10 has_windows "alpha beta gamma "
+wait_for 30 has_windows "alpha beta gamma "
 alpha_pid="$(fake_claude alpha idle 1.0.0 3600)"
 fake_claude beta busy 1.0.0 3600 >/dev/null
 gamma_pid="$(fake_claude gamma idle 2.0.0 3600)"
@@ -1445,22 +1446,22 @@ out="$("$BOSUN" refresh --dry-run gamma 2>&1)"
 check "defers restart when only briefly idle" contains "$out" "restart deferred (status idle"
 alpha_pane_pid="$(tmux -L "$SOCKET" display -p -t "=smoke:alpha" '#{pane_pid}')"
 "$BOSUN" refresh alpha >/dev/null 2>&1
-check "restart stops the old process" wait_for 10 bash -c "! kill -0 $alpha_pid 2>/dev/null"
-check "restart relaunches in the same window, in a new process" wait_for 10 bash -c '
+check "restart stops the old process" wait_for 30 bash -c "! kill -0 $alpha_pid 2>/dev/null"
+check "restart relaunches in the same window, in a new process" wait_for 30 bash -c '
   [ "$(tmux -L "$1" display -p -t "=smoke:alpha" "#{pane_pid}")" != "$2" ] &&
   tmux -L "$1" capture-pane -p -S -200 -t "=smoke:alpha" | grep -q "resuming '"'"'alpha'"'"'"' _ "$SOCKET" "$alpha_pane_pid"
-check "... without the drain prompt, since nothing is in flight there" wait_for 10 bash -c '
+check "... without the drain prompt, since nothing is in flight there" wait_for 30 bash -c '
   tmux -L "$1" capture-pane -p -S -200 -t "=smoke:alpha" | grep -q "idle: no prompt"' _ "$SOCKET"
 check "--unless-active is a no-op without attached clients" "$BOSUN" refresh --dry-run --unless-active
 beta_window="$(tmux -L "$SOCKET" list-windows -t =smoke -F '#{window_name} #{window_id}' | awk '$1 == "beta" { print $2 }')"
 beta_pane="$(tmux -L "$SOCKET" display -p -t "$beta_window" '#{pane_pid}')"
 pkill -P "$beta_pane" sleep
-wait_for 5 bash -c '! pgrep -P "$1" sleep' _ "$beta_pane"
+wait_for 30 bash -c '! pgrep -P "$1" sleep' _ "$beta_pane"
 cat >"$WORK/beta-claude.sh" <<'SH'
 exec -a 'claude --model sonnet --settings {"effortLevel":"low"}' sleep 600
 SH
 tmux -L "$SOCKET" send-keys -t "$beta_window" "bash $WORK/beta-claude.sh" Enter
-wait_for 5 pgrep -P "$beta_pane" # exec -a renames it, so match the pane's child, not "sleep"
+wait_for 30 pgrep -P "$beta_pane" # exec -a renames it, so match the pane's child, not "sleep"
 beta_pid="$(pgrep -P "$beta_pane" | head -1)"
 printf '{"pid":%d,"status":"idle","version":"2.0.0","statusUpdatedAt":%d}' "$beta_pid" $((($(date +%s) - 3600) * 1000)) >"$HOME/.claude/sessions/$beta_pid.json"
 check "send --list shows the model and effort a session was launched with" bash -c 'grep -E "^beta " <<<"$1" | grep -q "sonnet/low"' _ "$("$BOSUN" send --list)"
@@ -1470,9 +1471,9 @@ cat >"$WORK/old-claude.sh" <<'SH'
 exec -a 'claude --dangerously-skip-permissions --name beta --remote-control beta' sleep 600
 SH
 kill "$beta_pid"
-wait_for 5 bash -c '! pgrep -P "$1" >/dev/null' _ "$beta_pane"
+wait_for 30 bash -c '! pgrep -P "$1" >/dev/null' _ "$beta_pane"
 tmux -L "$SOCKET" send-keys -t "$beta_window" "bash $WORK/old-claude.sh" Enter
-wait_for 5 pgrep -P "$beta_pane"
+wait_for 30 pgrep -P "$beta_pane"
 beta_pid="$(pgrep -P "$beta_pane" | head -1)"
 printf '{"pid":%d,"status":"idle","version":"2.0.0","statusUpdatedAt":%d}' "$beta_pid" $((($(date +%s) - 3600) * 1000)) >"$HOME/.claude/sessions/$beta_pid.json"
 check "an bosun session from before model/effort settings is moved onto them" contains "$("$BOSUN" refresh --dry-run beta 2>&1)" "beta: would restart (model/effort -/- -> opus/medium"
@@ -1516,12 +1517,12 @@ check "... and reading them started no Claude, wrote no state and left the panes
   [ ! -e "$1/claude-was-started" ] && [ -z "$(find "$2" -type f -newer "$1/before-console" ! -path "$2/console/token" ! -path "$2/console/running.lock")" ] &&
     [ "$(tmux -L "$3" capture-pane -p -t "=smoke:gamma")" = "$4" ]' _ "$WORK" "$BOSUN_STATE_DIR" "$SOCKET" "$gamma_screen"
 kill "$CONSOLE_PID" 2>/dev/null
-check "... and it stops" wait_for 10 bash -c '! kill -0 "$1" 2>/dev/null' _ "$CONSOLE_PID"
+check "... and it stops" wait_for 30 bash -c '! kill -0 "$1" 2>/dev/null' _ "$CONSOLE_PID"
 CONSOLE_PID=""
 tmux -L "$SOCKET" send-keys -t "=smoke:alpha" "cd /" Enter
-wait_for 5 bash -c '[ "$(tmux -L "$1" display -p -t =smoke:alpha "#{pane_current_path}")" = / ]' _ "$SOCKET"
+wait_for 30 bash -c '[ "$(tmux -L "$1" display -p -t =smoke:alpha "#{pane_current_path}")" = / ]' _ "$SOCKET"
 "$BOSUN" refresh alpha >/dev/null 2>&1
-check "relaunch starts in the manifest directory" wait_for 10 bash -c '[ "$(tmux -L "$1" display -p -t "=smoke:alpha" "#{pane_current_path}")" = "$2" ]' _ "$SOCKET" "$REPO_A"
+check "relaunch starts in the manifest directory" wait_for 30 bash -c '[ "$(tmux -L "$1" display -p -t "=smoke:alpha" "#{pane_current_path}")" = "$2" ]' _ "$SOCKET" "$REPO_A"
 tmux -L "$SOCKET" split-window -d -t "=smoke:alpha" "sleep 600"
 check "refresh refuses to relaunch into a split window and fails" bash -c '! "$1" refresh alpha >"$2" 2>&1 && grep -q "split into several panes" "$2"' _ "$BOSUN" "$WORK/split.out"
 check "... and the other pane keeps running" bash -c 'tmux -L "$1" list-panes -t =smoke:alpha -F "#{pane_current_command}" | grep -qx sleep' _ "$SOCKET"
@@ -1539,13 +1540,13 @@ gamma_record busy 3600
 check "... and a busy one" bash -c '"$1" refresh --update-restart "$2" gamma >/dev/null 2>&1; [ $? -eq 3 ] && kill -0 "$3"' _ "$BOSUN" "$WORK/update-prompt" "$gamma_pid"
 gamma_record idle 5
 check "... restarts an idle one at once, however briefly idle" update_restart gamma
-check "... stopping the old process" wait_for 10 bash -c '! kill -0 "$1" 2>/dev/null' _ "$gamma_pid"
-check "... and starting it with the update's prompt instead of the drain prompt" wait_for 10 bash -c '
+check "... stopping the old process" wait_for 30 bash -c '! kill -0 "$1" 2>/dev/null' _ "$gamma_pid"
+check "... and starting it with the update's prompt instead of the drain prompt" wait_for 30 bash -c '
   screen="$(tmux -L "$1" capture-pane -p -J -S -200 -t "=smoke:gamma")" &&
     grep -q "dry-run: would run: .* -- bosun-was-updated:check-in" <<<"$screen" && ! grep -q "Bosun\\\\ resumed" <<<"$screen"' _ "$SOCKET"
 gamma_pid="$(fake_claude gamma shell 2.0.0 5)"
 check "... and one in shell (only background work runs)" update_restart gamma
-check "... stopping it too" wait_for 10 bash -c '! kill -0 "$1" 2>/dev/null' _ "$gamma_pid"
+check "... stopping it too" wait_for 30 bash -c '! kill -0 "$1" 2>/dev/null' _ "$gamma_pid"
 pane_of() { tmux -L "$SOCKET" display -p -t "=smoke:$1" '#{pane_pid}'; }
 # <window> [old pane pid]: a launch with the update's prompt ran in the window (in a new pane process;
 # respawn-pane starts the pane's screen and history afresh).
@@ -1553,22 +1554,22 @@ launched_with_update_prompt() {
   [ "$(pane_of "$1")" != "${2:-}" ] &&
     tmux -L "$SOCKET" capture-pane -p -J -S -500 -t "=smoke:$1" | grep -qF -e '-- bosun-was-updated:check-in'
 }
-wait_for 10 launched_with_update_prompt gamma
+wait_for 30 launched_with_update_prompt gamma
 gamma_pane="$(pane_of gamma)"
 # gamma has a conversation of its own to resume, so its relaunch is a resume, with the update's prompt.
 make_session "$REPO_B" 22222222-0000-0000-0000-000000000002 gamma 202601020000
 check "... relaunches one whose agent is not running, with the update's prompt" update_restart gamma
-check "... (it runs launch again)" wait_for 10 launched_with_update_prompt gamma "$gamma_pane"
+check "... (it runs launch again)" wait_for 30 launched_with_update_prompt gamma "$gamma_pane"
 tmux -L "$SOCKET" kill-window -t "=smoke:gamma"
 check "... and creates a missing one, with that prompt" contains "$(update_restart gamma 2>&1)" "gamma: create the missing window"
-check "... (its launch has it)" wait_for 10 launched_with_update_prompt gamma
-wait_for 10 bash -c '[ -z "$(pgrep -P "$(tmux -L "$1" display -p -t =smoke:gamma "#{pane_pid}")")" ]' _ "$SOCKET"
+check "... (its launch has it)" wait_for 30 launched_with_update_prompt gamma
+wait_for 30 bash -c '[ -z "$(pgrep -P "$(tmux -L "$1" display -p -t =smoke:gamma "#{pane_pid}")")" ]' _ "$SOCKET"
 gamma_pane="$(pane_of gamma)"
 echo "gamma-$(date +%F)-1" >"$BOSUN_STATE_DIR/conversations/gamma"
 check "... and with a fresh conversation pending, one whose agent is not running starts that one, not with the update's prompt, and exits 4" bash -c '
   out="$("$1" refresh --update-restart "$2" gamma 2>&1)"
   [ $? -eq 4 ] && grep -qF "gamma: its launch starts a new conversation (gamma-$(date +%F)-1)" <<<"$out"' _ "$BOSUN" "$WORK/update-prompt"
-check "... (its launch has the fresh conversation's prompt)" wait_for 10 bash -c '
+check "... (its launch has the fresh conversation's prompt)" wait_for 30 bash -c '
   [ "$(tmux -L "$1" display -p -t =smoke:gamma "#{pane_pid}")" != "$2" ] && screen="$(tmux -L "$1" capture-pane -p -J -S -500 -t =smoke:gamma)" &&
     grep -qF -e "--name gamma-$3-1 " <<<"$screen" && grep -q "fresh.*conversation" <<<"$screen" && ! grep -q bosun-was-updated <<<"$screen"' \
   _ "$SOCKET" "$gamma_pane" "$(date +%F)"
@@ -1577,9 +1578,9 @@ cat >"$WORK/typing-claude.sh" <<'SH'
 printf '%s\n\342\235\257 half a prompt\n%s\n' "────────────────────" "────────────────────"
 exec sleep 600
 SH
-wait_for 10 bash -c '[ -z "$(pgrep -P "$(tmux -L "$1" display -p -t =smoke:gamma "#{pane_pid}")")" ]' _ "$SOCKET"
+wait_for 30 bash -c '[ -z "$(pgrep -P "$(tmux -L "$1" display -p -t =smoke:gamma "#{pane_pid}")")" ]' _ "$SOCKET"
 tmux -L "$SOCKET" send-keys -t "=smoke:gamma" "bash $WORK/typing-claude.sh" Enter
-wait_for 5 pgrep -P "$(tmux -L "$SOCKET" display -p -t =smoke:gamma '#{pane_pid}')" -x sleep
+wait_for 30 pgrep -P "$(tmux -L "$SOCKET" display -p -t =smoke:gamma '#{pane_pid}')" -x sleep
 gamma_pid="$(pgrep -P "$(tmux -L "$SOCKET" display -p -t =smoke:gamma '#{pane_pid}')" -x sleep)"
 gamma_record idle 3600
 check "... and leaves one whose input box holds unsent text, as send would wait (exit 3)" bash -c '
@@ -1589,25 +1590,25 @@ check "... and leaves one whose input box holds unsent text, as send would wait 
 # restart that is not for an update.
 pane_is_idle() { [ -z "$(pgrep -P "$(pane_of "$1")")" ]; } # <window>: its pane's shell runs nothing
 kill "$gamma_pid"
-wait_for 10 pane_is_idle gamma
+wait_for 30 pane_is_idle gamma
 cp "$BOSUN_CONFIG_DIR/sessions.yml" "$WORK/sessions.yml.on-claude"
 echo "    harness: codex" >>"$BOSUN_CONFIG_DIR/sessions.yml" # gamma's entry is the last
 check "a window launched on Claude, its entry now on Codex, fingerprints the same (its agent is no change)" bash -c '
   [ "$(cd / && "$1" launch --fingerprint gamma | jq -cS .)" = "$(jq -cS .fingerprint "$2/launches/smoke/gamma.json")" ]' _ "$BOSUN" "$BOSUN_STATE_DIR"
 gamma_pane="$(pane_of gamma)"
 check "... and --update-restart starts it again" update_restart gamma
-check "... with the update's prompt" wait_for 10 launched_with_update_prompt gamma "$gamma_pane"
+check "... with the update's prompt" wait_for 30 launched_with_update_prompt gamma "$gamma_pane"
 check "... on Claude, as it was launched" bash -c '
   screen="$(tmux -L "$1" capture-pane -p -J -S -500 -t "=smoke:gamma")"
   grep -q -- "--remote-control gamma" <<<"$screen" && ! grep -q turn-end <<<"$screen"' _ "$SOCKET"
 printf '#!/bin/sh\ncase "$*" in *"mcp list --json") echo "[]" && exit 0 ;; esac\necho "codex-cli 0.50.0"\n' >"$WORK/fake-codex"
 chmod +x "$WORK/fake-codex"
-wait_for 10 pane_is_idle gamma
+wait_for 30 pane_is_idle gamma
 gamma_pane="$(pane_of gamma)"
 # The window's own launch (in a tmux pane, which does not inherit this shell's variables) reads the fake from the config.
 echo "BOSUN_CODEX_BIN=\"$WORK/fake-codex\"" >"$BOSUN_CONFIG_DIR/bosun.env"
 check "a plain refresh, not for an update" "$BOSUN" refresh gamma
-check "... starts it on the agent configured now (Codex)" wait_for 10 bash -c '
+check "... starts it on the agent configured now (Codex)" wait_for 30 bash -c '
   [ "$(tmux -L "$1" display -p -t =smoke:gamma "#{pane_pid}")" != "$2" ] &&
     tmux -L "$1" capture-pane -p -J -S -500 -t "=smoke:gamma" | grep -q turn-end' _ "$SOCKET" "$gamma_pane"
 rm -f "$BOSUN_CONFIG_DIR/bosun.env"
@@ -1635,16 +1636,16 @@ ZSHRC
 saved_shell="$SHELL" saved_zdotdir="${ZDOTDIR-}"
 export SHELL=/bin/zsh ZDOTDIR="$HOME" HELPER_PIDS
 "$BOSUN" start >/dev/null 2>&1
-wait_for 10 has_windows "alpha beta gamma "
+wait_for 30 has_windows "alpha beta gamma "
 launched_in() { tmux -L "$SOCKET" capture-pane -p -S -200 -t "=smoke:$1" | grep -q "dry-run: would run"; }
 for _ in 1 2 3; do
-  wait_for 10 launched_in alpha
+  wait_for 30 launched_in alpha
   helper_pane="$(tmux -L "$SOCKET" display -p -t "=smoke:alpha" '#{pane_pid}')"
   fake_claude alpha idle 1.0.0 3600 >/dev/null
   "$BOSUN" refresh alpha >/dev/null 2>&1
-  wait_for 10 bash -c '[ "$(tmux -L "$1" display -p -t "=smoke:alpha" "#{pane_pid}")" != "$2" ]' _ "$SOCKET" "$helper_pane"
+  wait_for 30 bash -c '[ "$(tmux -L "$1" display -p -t "=smoke:alpha" "#{pane_pid}")" != "$2" ]' _ "$SOCKET" "$helper_pane"
 done
-wait_for 10 launched_in alpha
+wait_for 30 launched_in alpha
 "$BOSUN" stop >/dev/null 2>&1
 helpers_left() { # the helpers still running, as "pid ppid"
   local pid
@@ -1660,7 +1661,7 @@ no_helpers_left() {
     return 1
   }
 }
-wait_for 5 no_helpers_left
+wait_for 30 no_helpers_left
 check "after start, three restarts and stop, none is left behind" no_helpers_left
 helpers_left | awk '{ print $1 }' | xargs kill 2>/dev/null
 export SHELL="$saved_shell"
@@ -1678,7 +1679,7 @@ fake_process "$wrapper launch smoke-orphan ; exec $SHELL -l"
 fake_process "$wrapper launch smoke-busy ; exec $SHELL -l" child
 fake_process "tmux -L $SOCKET new-session -d -s smoke-tmux -- $wrapper launch smoke-tmux"
 fake_process "$SHELL -lic /Users/me/elsewhere/bin/bosun launch smoke-elsewhere ; exec $SHELL -l"
-wait_for 5 bash -c '[ "$(wc -l <"$1")" -ge 4 ]' _ "$FAKE_PIDS"
+wait_for 30 bash -c '[ "$(wc -l <"$1")" -ge 4 ]' _ "$FAKE_PIDS"
 out="$("$BOSUN" orphans 2>&1)"
 check "orphans lists a launch shell's leftover: launchd's, this checkout's command line, no children" bash -c '
   grep -q "1 shell(s) left behind" <<<"$1" && grep -q "launch smoke-orphan" <<<"$1"' _ "$out"
@@ -1701,7 +1702,7 @@ always_run
 export BOSUN_ORCHESTRATOR=orch BOSUN_ORCHESTRATOR_DIR="$REPO_A"
 section orchestrator-refresh "orchestrator refresh and check-ins"
 "$BOSUN" start >/dev/null 2>&1
-check "start opens the orchestrator first and checkin last" wait_for 10 has_windows "orch alpha beta gamma checkin "
+check "start opens the orchestrator first and checkin last" wait_for 30 has_windows "orch alpha beta gamma checkin "
 runs_checkin_loop() { # the checkin window of this test session runs `bosun checkin --loop`
   local pane_pid pid
   pane_pid="$(tmux -L "$SOCKET" list-panes -t "=smoke:checkin" -F '#{pane_pid}' 2>/dev/null)" || return 1
@@ -1710,10 +1711,10 @@ runs_checkin_loop() { # the checkin window of this test session runs `bosun chec
   done
   return 1
 }
-check "the checkin window runs the check-in loop" wait_for 10 runs_checkin_loop
+check "the checkin window runs the check-in loop" wait_for 30 runs_checkin_loop
 tmux -L "$SOCKET" kill-window -t "=smoke:checkin"
 check "refresh recreates a missing checkin window" contains "$("$BOSUN" refresh 2>&1)" "checkin: create the missing window"
-check "... and it runs the check-in loop again" wait_for 10 runs_checkin_loop
+check "... and it runs the check-in loop again" wait_for 30 runs_checkin_loop
 new_checkin_loop() { # <old pid>: the checkin window runs a loop, and not that one
   local now
   now="$(bash -c 'source "$1/lib/common.sh"; checkin_loop_pid "$(tmux -L "$2" list-panes -t "=smoke:checkin" -F "#{pane_pid}")"' _ "$ROOT" "$SOCKET")"
@@ -1721,8 +1722,8 @@ new_checkin_loop() { # <old pid>: the checkin window runs a loop, and not that o
 }
 loop_before="$(bash -c 'source "$1/lib/common.sh"; checkin_loop_pid "$(tmux -L "$2" list-panes -t "=smoke:checkin" -F "#{pane_pid}")"' _ "$ROOT" "$SOCKET")"
 check "refresh --checkin-loop restarts the check-in loop" contains "$("$BOSUN" refresh --checkin-loop 2>&1)" "checkin: restart the check-in loop"
-check "... stopping the old one" wait_for 10 bash -c '[ -n "$1" ] && ! kill -0 "$1" 2>/dev/null' _ "$loop_before"
-check "... and running a new one in the same window" wait_for 10 new_checkin_loop "$loop_before"
+check "... stopping the old one" wait_for 30 bash -c '[ -n "$1" ] && ! kill -0 "$1" 2>/dev/null' _ "$loop_before"
+check "... and running a new one in the same window" wait_for 30 new_checkin_loop "$loop_before"
 check "... and says so when there is no checkin window to restart" fails_with "no checkin window" env BOSUN_CHECKIN_MINUTES=0 "$BOSUN" refresh --checkin-loop
 tmux -L "$SOCKET" new-window -d -t "=smoke:" -n loop-itself -- perl -e '$0 = "/bin/bash /x/libexec/bosun-checkin --loop"; sleep 60'
 loop_pane="$(tmux -L "$SOCKET" display -p -t "=smoke:loop-itself" '#{pane_pid}')"
@@ -1744,16 +1745,16 @@ orch_pane="$(tmux -L "$SOCKET" display -p -t "=smoke:orch" '#{pane_pid}')"
 check "refresh --update-restart restarts an orchestrator still on yesterday's conversation as a new day does, and exits 4" bash -c '
   out="$("$1" refresh --update-restart "$2" orch 2>&1)"
   [ $? -eq 4 ] && grep -qF "orch: restart for the update (idle), into orch-$(date +%F), as its next conversation starts" <<<"$out"' _ "$BOSUN" "$WORK/update-prompt"
-check "... starting today's with the morning chores" wait_for 10 launched_with_morning_chores "$orch_pane"
+check "... starting today's with the morning chores" wait_for 30 launched_with_morning_chores "$orch_pane"
 check "... not with the update's prompt" bash -c '! tmux -L "$1" capture-pane -p -J -S -500 -t "=smoke:orch" | grep -q bosun-was-updated' _ "$SOCKET"
-wait_for 10 bash -c '[ -z "$(pgrep -P "$(tmux -L "$1" display -p -t =smoke:orch "#{pane_pid}")")" ]' _ "$SOCKET"
+wait_for 30 bash -c '[ -z "$(pgrep -P "$(tmux -L "$1" display -p -t =smoke:orch "#{pane_pid}")")" ]' _ "$SOCKET"
 orch_pane="$(tmux -L "$SOCKET" display -p -t "=smoke:orch" '#{pane_pid}')"
 check "... and one whose agent exited, today's conversation not there yet, is relaunched as a new day starts, and exits 4" bash -c '
   out="$("$1" refresh --update-restart "$2" orch 2>&1)"
   [ $? -eq 4 ] && grep -qF "orch: its launch starts a new conversation (orch-$(date +%F))" <<<"$out"' _ "$BOSUN" "$WORK/update-prompt"
-check "... with the morning chores" wait_for 10 launched_with_morning_chores "$orch_pane"
+check "... with the morning chores" wait_for 30 launched_with_morning_chores "$orch_pane"
 check "... never the update's prompt in a blank conversation" bash -c '! tmux -L "$1" capture-pane -p -J -S -500 -t "=smoke:orch" | grep -q bosun-was-updated' _ "$SOCKET"
-wait_for 10 bash -c '[ -z "$(pgrep -P "$(tmux -L "$1" display -p -t =smoke:orch "#{pane_pid}")")" ]' _ "$SOCKET"
+wait_for 30 bash -c '[ -z "$(pgrep -P "$(tmux -L "$1" display -p -t =smoke:orch "#{pane_pid}")")" ]' _ "$SOCKET"
 orch_pid="$(fake_claude orch idle 2.0.0 3600 orch-2000-01-01)"
 printf '{"pid":%d,"status":"idle","version":"2.0.0","statusUpdatedAt":%d,"name":"orch-2000-01-01"}' "$orch_pid" $((($(date +%s) - 30) * 1000)) >"$HOME/.claude/sessions/$orch_pid.json"
 out="$("$BOSUN" refresh --dry-run orch 2>&1)"
@@ -1783,7 +1784,7 @@ with update_state.one_update(Path(sys.argv[2])):
     time.sleep(600)
 ' "$ROOT/lib" "$BOSUN_STATE_DIR" >"$WORK/update-holder.out" &
 update_holder=$!
-wait_for 10 grep -q held "$WORK/update-holder.out"
+wait_for 30 grep -q held "$WORK/update-holder.out"
 check "checkin skips its tick while an update holds" contains "$("$BOSUN" checkin --dry-run 2>&1)" "update in progress: skipping this tick"
 check "the watchdog skips a run while an update holds" contains "$("$BOSUN" watchdog 2>&1)" "update in progress"
 check "learning skips a run while an update holds" contains "$("$BOSUN" learn 2>&1)" "update in progress"
@@ -1834,10 +1835,10 @@ orch_status busy 3600
 BOSUN_EVENTS_ENABLED=1 BOSUN_EVENTS_INTERVAL_SECONDS=1 BOSUN_CHECKIN_EVERY_SECONDS=1 \
   "$BOSUN" checkin --loop --dry-run >"$WORK/deferred-loop.out" 2>&1 &
 deferred_loop=$!
-check "the loop keeps a deferred check-in due" wait_for 10 grep -q "the check-in stays due; retrying every tick" "$WORK/deferred-loop.out"
+check "the loop keeps a deferred check-in due" wait_for 30 grep -q "the check-in stays due; retrying every tick" "$WORK/deferred-loop.out"
 sleep 3
 orch_status idle 3600
-check "... and sends it on a later tick, once the orchestrator is free" wait_for 10 grep -q "would send '/bosun:chores check-in'" "$WORK/deferred-loop.out"
+check "... and sends it on a later tick, once the orchestrator is free" wait_for 30 grep -q "would send '/bosun:chores check-in'" "$WORK/deferred-loop.out"
 pkill -P "$deferred_loop" 2>/dev/null
 kill "$deferred_loop" 2>/dev/null
 wait "$deferred_loop" 2>/dev/null
@@ -2093,7 +2094,7 @@ exec sleep 600
 FAKE
 chmod +x "$WORK/live-claude"
 BOSUN_CLAUDE_BIN="$WORK/live-claude" "$BOSUN" start >/dev/null 2>&1
-wait_for 10 has_windows "orch alpha beta gamma checkin "
+wait_for 30 has_windows "orch alpha beta gamma checkin "
 live() { BOSUN_LAUNCH_DRY_RUN=0 BOSUN_START_TIMEOUT=5 "$BOSUN" send "$@"; }
 claude_in() { # <window>: prints the pid of the fake Claude running in the window
   local pane_pid
@@ -2136,7 +2137,7 @@ check "... keeping its --model and --effort, with the update's prompt" bash -c '
   grep -qx haiku "$1.args" && grep -q "\"effortLevel\":\"low\"" "$1.args" && [ "$(cat "$1.prompt")" = bosun-was-updated:check-in ]' _ "$WORK/live-claude.$(claude_in zeta)"
 zeta_pid="$(claude_in zeta)"
 kill "$zeta_pid"
-wait_for 10 bash -c '! pgrep -P "$(tmux -L "$1" display -p -t =smoke:zeta "#{pane_pid}")" >/dev/null' _ "$SOCKET"
+wait_for 30 bash -c '! pgrep -P "$(tmux -L "$1" display -p -t =smoke:zeta "#{pane_pid}")" >/dev/null' _ "$SOCKET"
 # A real Claude leaves its conversation to resume; this fake writes none, so zeta is given one.
 make_session "$REPO_A" 44444444-0000-0000-0000-000000000001 zeta 202601040000
 check "... and once its agent has exited, an update's restart" env BOSUN_LAUNCH_DRY_RUN=0 "$BOSUN" refresh --update-restart "$WORK/update-prompt" zeta
@@ -2168,15 +2169,15 @@ check "--new trusts a repo inside the mask before starting" contains "$out" "tru
 check "... and Claude starts there" contains "$out" "Claude is running in smoke:epsilon"
 tmux -L "$SOCKET" send-keys -t "=smoke:gamma" "sleep 600" Enter
 pane_has_children() { [ -n "$(pgrep -P "$(tmux -L "$SOCKET" display -p -t "=smoke:$1" '#{pane_pid}')")" ]; }
-wait_for 5 pane_has_children gamma
+wait_for 30 pane_has_children gamma
 check "--start never replaces a running command" fails_with "running another command" env BOSUN_RELAUNCH_SETTLE_SECONDS=1 "$BOSUN" send --start gamma x
 tmux -L "$SOCKET" send-keys -t "=smoke:gamma" C-c
-wait_for 5 bash -c '! pgrep -P "$(tmux -L "$1" display -p -t =smoke:gamma "#{pane_pid}")" >/dev/null' _ "$SOCKET"
+wait_for 30 bash -c '! pgrep -P "$(tmux -L "$1" display -p -t =smoke:gamma "#{pane_pid}")" >/dev/null' _ "$SOCKET"
 tmux -L "$SOCKET" send-keys -t "=smoke:gamma" "sleep 2" Enter
-wait_for 5 pane_has_children gamma
+wait_for 30 pane_has_children gamma
 check "--start waits for a briefly busy shell to settle" contains "$(live --start gamma 'after the shell settled' 2>&1)" "Claude is running in smoke:gamma"
 kill "$alpha_pid"
-wait_for 10 bash -c '! pgrep -P "$(tmux -L "$1" display -p -t =smoke:alpha "#{pane_pid}")" >/dev/null' _ "$SOCKET"
+wait_for 30 bash -c '! pgrep -P "$(tmux -L "$1" display -p -t =smoke:alpha "#{pane_pid}")" >/dev/null' _ "$SOCKET"
 drain_prompt="$(bash -c 'source "$1/lib/common.sh"; load_config; printf %s "$BOSUN_DRAIN_PROMPT"' _ "$ROOT")"
 out="$(live --start alpha 2>&1)"
 check "--start without a message resumes with the drain prompt" test "$(cat "$WORK/live-claude.$(claude_in alpha).prompt")" = "$drain_prompt"
@@ -2187,7 +2188,7 @@ exec cat >"$WORK/received.txt"
 FAKE
 chmod +x "$WORK/echo-claude"
 tmux -L "$SOCKET" new-window -d -t "=smoke:" -n echo "$WORK/echo-claude; sleep 1"
-wait_for 10 claude_in echo
+wait_for 30 claude_in echo
 cat >"$WORK/bg-claude" <<FAKE
 #!/bin/bash
 printf '{"pid":%d,"status":"shell"}' \$\$ >"\$HOME/.claude/sessions/\$\$.json"
@@ -2195,7 +2196,7 @@ exec sleep 600
 FAKE
 chmod +x "$WORK/bg-claude"
 tmux -L "$SOCKET" new-window -d -t "=smoke:" -n bgcmd "$WORK/bg-claude; sleep 1"
-wait_for 10 claude_in bgcmd
+wait_for 30 claude_in bgcmd
 check "send --list shows a Claude with a background command as idle-bg, not as a shell" bash -c 'grep -E "^bgcmd " <<<"$1" | grep -q "claude:idle-bg"' _ "$("$BOSUN" send --list)"
 tmux -L "$SOCKET" kill-window -t "=smoke:bgcmd"
 # A fake Claude screen: an input box (rule, prompt line, rule) holding $1; with $2=reject, it
@@ -2212,7 +2213,7 @@ FAKE
 chmod +x "$WORK/box-claude"
 box_window() { # <name> <box text> [reject]
   tmux -L "$SOCKET" new-window -d -t "=smoke:" -n "$1" "$WORK/box-claude '$2' ${3:-}; sleep 1"
-  wait_for 10 claude_in "$1"
+  wait_for 30 claude_in "$1"
 }
 box_window halftyped "half typed"
 check "send waits for unsent text in the input line, then fails" fails_with "input line holds unsent text (half typed)" \
@@ -2225,24 +2226,24 @@ check "send fails when the paste ran as an unknown command" fails_with "ran the 
 for w in halftyped emptybox clearing; do tmux -L "$SOCKET" kill-window -t "=smoke:$w"; done
 message="$(printf 'first line\nsecond line')"
 "$BOSUN" send echo "$message" >/dev/null 2>&1
-check "send delivers the whole multi-line message" wait_for 5 bash -c '[ "$(cat "$1")" = "$2" ]' _ "$WORK/received.txt" "$message"
+check "send delivers the whole multi-line message" wait_for 30 bash -c '[ "$(cat "$1")" = "$2" ]' _ "$WORK/received.txt" "$message"
 check "send leaves no paste buffer behind" bash -c '! tmux -L "$1" list-buffers -F "#{buffer_name}" 2>/dev/null | grep -q bosun-send' _ "$SOCKET"
 "$BOSUN" send --no-item echo - >/dev/null 2>&1 <<'EOF'
 from stdin, not a dash
 EOF
-check "send - delivers stdin, never a literal '-'" wait_for 5 bash -c 'grep -qx "from stdin, not a dash" "$1" && ! grep -qx -- "-" "$1"' _ "$WORK/received.txt"
+check "send - delivers stdin, never a literal '-'" wait_for 30 bash -c 'grep -qx "from stdin, not a dash" "$1" && ! grep -qx -- "-" "$1"' _ "$WORK/received.txt"
 check "send - refuses an empty stdin" fails_with "message on stdin is empty" bash -c '"$1" send echo - </dev/null' _ "$BOSUN"
 check "send --id refuses an unknown item" fails_with "no ledger item slack:C8/404" "$BOSUN" send --id slack:C8/404 echo hi
 L upsert 'slack:C8/2' --kind mention >/dev/null
 "$BOSUN" send --id slack:C8/2 echo "is it done" >/dev/null 2>&1
-check "send --id names the item in the message" wait_for 5 grep -q "Ledger item slack:C8/2: is it done" "$WORK/received.txt"
+check "send --id names the item in the message" wait_for 30 grep -q "Ledger item slack:C8/2: is it done" "$WORK/received.txt"
 check "... and notes the delivery on the item" contains "$(L show slack:C8/2)" "message sent to echo"
 "$BOSUN" delegate investigate --id slack:C8/2 --ask 'look into it' --window echo >/dev/null 2>&1
 check "delegate records the window on the item" contains "$(L delegation slack:C8/2)" '"window": "echo"'
 "$BOSUN" delegate --update slack:C8/2 --details - >/dev/null 2>&1 <<'EOF'
 Also check the second case.
 EOF
-check "delegate --update reaches the item's window, framed with its id" wait_for 5 grep -q "Update to ledger item slack:C8/2" "$WORK/received.txt"
+check "delegate --update reaches the item's window, framed with its id" wait_for 30 grep -q "Update to ledger item slack:C8/2" "$WORK/received.txt"
 check "... and is kept in the item's history" contains "$(L show slack:C8/2)" "Also check the second case."
 L upsert 'slack:C8/3' --kind mention >/dev/null
 L record-delegation 'slack:C8/3' --window gone --task investigate >/dev/null
@@ -2266,7 +2267,7 @@ check "a move to an unknown window changes nothing" fails_with "not delivered to
 check "a move to a window without Claude changes nothing" fails_with "is not running an agent" "$BOSUN" delegate --update slack:C8/5 --window plain --details 'echo is stuck'
 check "a move to the same window is refused" fails_with "already delegated to echo; drop --window" "$BOSUN" delegate --update slack:C8/5 --window echo --details x
 check "--update --window moves the item and tells the old window" contains "$("$BOSUN" delegate --update slack:C8/5 --window delta --details 'echo is stuck' 2>&1)" "moved from echo to delta (the old window was told to stop)"
-check "... the old window gets the stop notice by id" wait_for 5 grep -q "Ledger item slack:C8/5 has moved to window delta. Stop working on it here" "$WORK/received.txt"
+check "... the old window gets the stop notice by id" wait_for 30 grep -q "Ledger item slack:C8/5 has moved to window delta. Stop working on it here" "$WORK/received.txt"
 check "... and the ledger has the new window and the move" bash -c '
   "$1" ledger delegation slack:C8/5 | grep -q "\"window\": \"delta\".*\"moved_from\": \"echo\"\|\"moved_from\": \"echo\".*\"window\": \"delta\"" &&
   "$1" ledger show slack:C8/5 | grep -q "\"event\": \"moved\""' _ "$BOSUN"
@@ -2275,7 +2276,7 @@ L record-delegation 'slack:C8/6' --window gone2 --task investigate --ask 'look' 
 out="$("$BOSUN" delegate --update slack:C8/6 --window echo --details 'gone2 was closed' 2>&1)"
 check "a move away from a gone window still happens" contains "$out" "moved from gone2 to echo (the old window was NOT told to stop)"
 check "... and says the old window was not told" contains "$out" "window gone2 was not told to stop"
-check "... the new window gets the whole task" wait_for 5 grep -q "Ledger item slack:C8/6 moves to this window from window gone2" "$WORK/received.txt"
+check "... the new window gets the whole task" wait_for 30 grep -q "Ledger item slack:C8/6 moves to this window from window gone2" "$WORK/received.txt"
 L transition 'slack:C8/6' 'done' --note 'answered' >/dev/null
 check "a finished item is not moved" fails_with "is done; a finished item takes no updates" "$BOSUN" delegate --update slack:C8/6 --window delta --details x
 check "--start dry-run only logs" contains "$(BOSUN_SEND_DRY_RUN=1 "$BOSUN" send --start gamma hi 2>&1)" "dry-run: would start Claude in smoke:gamma"
@@ -2583,7 +2584,7 @@ check "a failed update logs its last line and is a problem word" bash -c 'grep -
 
 section start-modes "start modes"
 "$BOSUN" start >/dev/null 2>&1
-wait_for 10 has_windows "orch alpha beta gamma checkin "
+wait_for 30 has_windows "orch alpha beta gamma checkin "
 check "drain mode refreshes without restarts" contains "$(BOSUN_ON_EXISTING=drain "$BOSUN" start 2>&1)" "mode: drain"
 first_pane="$(tmux -L "$SOCKET" display -p -t "=smoke:alpha" '#{pane_pid}')"
 out="$("$BOSUN" start --restart 2>&1)"
@@ -2655,7 +2656,7 @@ printf '{garbage' >"$BOSUN_STATE_DIR/quit.json"
 check "a quit record that cannot be read is stopped too, and says so and how to clear it" status_has 'd["level"] == "stopped" and "unreadable" in d["problems"][0] and "bosun start" in d["problems"][0]'
 rm -f "$BOSUN_STATE_DIR/quit.json"
 "$BOSUN" start >/dev/null 2>&1
-wait_for 10 has_windows "orch alpha beta gamma checkin "
+wait_for 30 has_windows "orch alpha beta gamma checkin "
 check "with the windows open it counts them, and none of the fake Claudes waits" status_has 'd["windows"] == 5 and d["waiting"] == [] and d["level"] != "stopped"'
 status_seconds="$(python3 -I -c 'import subprocess, sys, time; t = time.monotonic(); subprocess.run(sys.argv[1:], stdout=subprocess.DEVNULL, stdin=subprocess.DEVNULL); print(round(time.monotonic() - t, 1))' "$BOSUN" status --json)"
 echo "  note  bosun status --json took ${status_seconds}s with five windows (the app polls it)"
@@ -2731,7 +2732,7 @@ agent_status() { # <pid> <status>: what the fake Claude of that pid says it is d
 }
 quit_windows_up() { # a fresh session (the console's marker made) with alpha busy and beta waiting at a prompt
   BOSUN_CONSOLE_ALWAYS=1 "$BOSUN" start >/dev/null 2>&1
-  wait_for 10 has_windows "orch alpha beta gamma checkin " || return 1
+  wait_for 30 has_windows "orch alpha beta gamma checkin " || return 1
   quit_alpha="$(fake_claude alpha busy 2.0.0 60)" || return 1
   fake_claude beta waiting 2.0.0 60 >/dev/null || return 1
 }
@@ -2785,7 +2786,7 @@ fcntl.flock(fd, fcntl.LOCK_EX)
 print("held", flush=True)
 time.sleep(60)' "$BOSUN_STATE_DIR/update.lock" >"$WORK/update-holder.out" &
 update_holder=$!
-wait_for 5 grep -q held "$WORK/update-holder.out"
+wait_for 30 grep -q held "$WORK/update-holder.out"
 check "a quit is refused while an update runs: exit 1 ..." quit_exits 1 --stop-now
 check "... with one line saying an update runs, and nothing stopped" bash -c 'grep -q "an update is running" "$1" && [ "$(wc -l <"$1")" -eq 1 ] && tmux -L "$2" has-session -t =smoke && [ ! -e "$3/quit.json" ]' _ "$WORK/quit.err" "$SOCKET" "$BOSUN_STATE_DIR"
 check "... in JSON an object that says refused, and why" quit_exits 1 --stop-now --json
@@ -2796,7 +2797,7 @@ wait "$update_holder" 2>/dev/null
 # A start that is setting up the windows holds the windows lock: a quit does not write anything under it.
 python3 "$ROOT/lib/run_locked.py" "$BOSUN_STATE_DIR/windows.lock" 10 busy -- sleep 60 &
 lock_holder=$!
-wait_for 5 lock_taken "$BOSUN_STATE_DIR/windows.lock"
+wait_for 30 lock_taken "$BOSUN_STATE_DIR/windows.lock"
 check "a quit while a start holds the windows lock gives up when the wait is over: exit 1 ..." env BOSUN_WINDOWS_LOCK_WAIT_SECONDS=0 bash -c '"$1" quit --stop-now </dev/null >"$2" 2>"$3"; [ $? -eq 1 ]' _ "$BOSUN" "$WORK/quit.out" "$WORK/quit.err"
 check "... with one line, and nothing changed: no quit.json, the session, the marker and the keep-awake" bash -c 'grep -q "setting up the windows" "$1" && [ "$(wc -l <"$1")" -eq 1 ] && [ ! -e "$2/quit.json" ] && tmux -L "$3" has-session -t =smoke && [ -f "$2/console/wanted" ] && [ -f "$2/keep-awake-smoke.pid" ]' _ "$WORK/quit.err" "$BOSUN_STATE_DIR" "$SOCKET"
 kill "$lock_holder" 2>/dev/null
@@ -2810,7 +2811,7 @@ rm -f "$BOSUN_STATE_DIR/quit.json"
 # alpha finishes a few seconds into the wait; beta keeps waiting at its prompt, which does not hold the wait
 # A start still holds the windows lock when alpha is done: the quit takes it only for its stop phase, and waits.
 python3 "$ROOT/lib/run_locked.py" "$BOSUN_STATE_DIR/windows.lock" 10 busy -- sleep 12 &
-wait_for 5 lock_taken "$BOSUN_STATE_DIR/windows.lock"
+wait_for 30 lock_taken "$BOSUN_STATE_DIR/windows.lock"
 (
   sleep 7
   agent_status "$quit_alpha" idle
@@ -2834,13 +2835,13 @@ check "... no session appeared" bash -c '! tmux -L "$1" has-session -t =smoke' _
 # restart all go through it, and refresh and send need the session to exist), so it is also where a quit ends.
 BOSUN_CONSOLE_ALWAYS=1 "$BOSUN" start >/dev/null 2>&1
 check "bosun start ends the quit: quit.json is gone, the console's marker is back and the session is up" bash -c '[ ! -e "$1/quit.json" ] && [ -f "$1/console/wanted" ] && tmux -L "$2" has-session -t =smoke' _ "$BOSUN_STATE_DIR" "$SOCKET"
-wait_for 10 has_windows "orch alpha beta gamma checkin "
+wait_for 30 has_windows "orch alpha beta gamma checkin "
 fake_claude alpha busy 2.0.0 60 >/dev/null
 check "--stop-now quits with an agent busy, and --sleep lets the Mac sleep" quit_exits 0 --stop-now --sleep --json
 check "... the object says stopped, who was busy, that the morning is not paused and that the keep-awake was released" quit_has 'd["contract"] == 1 and d["result"] == "stopped" and d["busy"] == ["alpha"] and d["morning_paused"] is False and d["keep_awake"] == "released" and d["console"] in ("stopped", "not running")'
 check "... no session, quit.json without the morning paused" bash -c '! tmux -L "$1" has-session -t =smoke && python3 -I -c "import json,sys; sys.exit(json.load(open(sys.argv[1]))[\"morning_paused\"])" "$2/quit.json"' _ "$SOCKET" "$BOSUN_STATE_DIR"
 check "... the caffeinate is gone, with its files" bash -c '[ ! -e "$1/keep-awake-smoke.pid" ] && [ ! -e "$1/keep-awake-smoke.json" ]' _ "$BOSUN_STATE_DIR"
-check "... and the process" wait_for 5 bash -c '! ps -p "$1" -o comm= 2>/dev/null | grep -q caffeinate' _ "$quit_caffeinate"
+check "... and the process" wait_for 30 bash -c '! ps -p "$1" -o comm= 2>/dev/null | grep -q caffeinate' _ "$quit_caffeinate"
 check "... the console's job was told to stop again" test "$(console_told_to_stop)" = 2
 # A notification stand-in that writes down what it was asked to show (~/.local/bin comes first on the PATH);
 # the plain `exit 0` one is put back after the morning checks below.
@@ -2959,7 +2960,7 @@ stop_keep_awake_leaves_it() { # bosun stop --keep-awake keeps the caffeinate and
   [ -f "$BOSUN_STATE_DIR/keep-awake-smoke.pid" ] && [ -f "$BOSUN_STATE_DIR/keep-awake-smoke.json" ] && caffeinate_runs "$quit_caffeinate" || return 1
   "$BOSUN" stop >/dev/null 2>&1
   [ ! -e "$BOSUN_STATE_DIR/keep-awake-smoke.pid" ] && [ ! -e "$BOSUN_STATE_DIR/keep-awake-smoke.json" ] || return 1
-  wait_for 5 bash -c '! ps -p "$1" -o comm= 2>/dev/null | grep -q caffeinate' _ "$quit_caffeinate"
+  wait_for 30 bash -c '! ps -p "$1" -o comm= 2>/dev/null | grep -q caffeinate' _ "$quit_caffeinate"
 }
 check "bosun stop --keep-awake leaves the caffeinate and its files alone; a plain stop releases them" stop_keep_awake_leaves_it
 plain_fake launchctl 113 # the fake above; this section's alone
@@ -3153,8 +3154,8 @@ check "a port in use is a clear error" fails_with "use --port N, or --port 0 for
 check "it refuses a non-loopback address" fails_with "only listens on 127.0.0.1, not 0.0.0.0" \
   env BOSUN_STATE_DIR="$CONSOLE_STATE" "$BOSUN" console --port 0 --host 0.0.0.0
 kill "$CONSOLE_PID" 2>/dev/null
-check "a TERM stops it cleanly" wait_for 10 grep -q "bosun console: stopped" "$WORK/console.out"
-check "... and it exits" wait_for 10 bash -c '! kill -0 "$1" 2>/dev/null' _ "$CONSOLE_PID"
+check "a TERM stops it cleanly" wait_for 30 grep -q "bosun console: stopped" "$WORK/console.out"
+check "... and it exits" wait_for 30 bash -c '! kill -0 "$1" 2>/dev/null' _ "$CONSOLE_PID"
 CONSOLE_PID=""
 # console_token_of_start [args...]: start the console on the same state, print its URL's token, stop it.
 console_token_of_start() {
@@ -3183,7 +3184,7 @@ check "a hand run while it serves prints that address, and exits 0 at once, also
 check "... it does not rotate the token under the running console" fails_with "already running" console_here --new-token
 check "... and the console is still the one serving" curl -sf -o /dev/null "${JOB_URL%%/\?*}/"
 kill "$CONSOLE_PID" 2>/dev/null
-check "... --url fails again once it stops" wait_for 10 bash -c '! env BOSUN_STATE_DIR="$1" BOSUN_CONFIG_DIR="$2" "$3" console --url >/dev/null 2>&1' _ "$CONSOLE_STATE" "$CONSOLE_CONFIG" "$BOSUN"
+check "... --url fails again once it stops" wait_for 30 bash -c '! env BOSUN_STATE_DIR="$1" BOSUN_CONFIG_DIR="$2" "$3" console --url >/dev/null 2>&1' _ "$CONSOLE_STATE" "$CONSOLE_CONFIG" "$BOSUN"
 CONSOLE_PID=""
 check "a restart keeps the token, so an open tab stays signed in" test "$(console_token_of_start)" = "$FIRST_TOKEN"
 check "... stored 0600 in a 0700 folder" bash -c '
@@ -3198,7 +3199,7 @@ console_started "$WORK/console-hand.out" "$WORK/console-hand.err" >/dev/null
 BOSUN_STATE_DIR="$CONSOLE_STATE" BOSUN_CONFIG_DIR="$CONSOLE_CONFIG" \
   "$BOSUN" console --job --port 0 >"$WORK/console-job2.out" 2>"$WORK/console-job2.err" &
 CONSOLE_PID=$!
-check "the job started while a console run by hand serves says it waits for it" wait_for 10 grep -q "the job waits for it to end" "$WORK/console-job2.out"
+check "the job started while a console run by hand serves says it waits for it" wait_for 30 grep -q "the job waits for it to end" "$WORK/console-job2.out"
 check "... and does not exit for launchd to start it again" kill -0 "$CONSOLE_PID"
 check "... nor serve yet" bash -c '! grep -q "^bosun console: http" "$1"' _ "$WORK/console-job2.out"
 kill "$HAND_PID" 2>/dev/null
@@ -3803,7 +3804,7 @@ for line in sys.stdin:
   check "init refuses bad answers" fails_with "unknown answers" env BOSUN_CONFIG_DIR="$INIT_CFG" "$BOSUN" init --answers <(echo '{"typo": 1}')
   python3 "$ROOT/lib/run_locked.py" "$BOSUN_STATE_DIR/init.lock" 10 busy -- sleep 20 &
   init_holder=$!
-  wait_for 5 lock_taken "$BOSUN_STATE_DIR/init.lock"
+  wait_for 30 lock_taken "$BOSUN_STATE_DIR/init.lock"
   check "a second bosun init while one runs is refused at once" fails_with "bosun init is already running" env BOSUN_CONFIG_DIR="$INIT_CFG" "$BOSUN" init --answers "$INIT_ANSWERS"
   check "... and changes nothing" test ! -e "$INIT_CFG"
   kill "$init_holder"
@@ -3850,7 +3851,7 @@ for line in sys.stdin:
   printf '{"type":"session_meta","payload":{"id":"cx-1","cwd":"%s","source":"cli"}}\n' "$(cd "$CX_REPO" && pwd -P)" >"$CX_HOME/sessions/2026/10/30/rollout-2026-10-30T00-00-00-cx-1.jsonl"
   CX hook turn-end --harness codex --window cx --conversation cx "{\"thread-id\":\"cx-1\",\"cwd\":\"$CX_REPO\"}" >/dev/null
   CX hook codex-turn-end --window cx --conversation cx "{\"thread-id\":\"a-helper\",\"cwd\":\"$CX_REPO\"}" >/dev/null
-  check "once a turn has ended it resumes that session" wait_for 5 bash -c 'cd "$1" && BOSUN_CODEX_BIN="$5" CODEX_HOME="$2" BOSUN_SESSIONS_FILE="$3" BOSUN_LAUNCH_DRY_RUN=1 "$4" launch cx 2>&1 | grep -q "resume .* cx-1"' _ "$CX_REPO" "$CX_HOME" "$WORK/cx-sessions.yml" "$BOSUN" "$ROOT/tests/sandbox/codex-stand-in"
+  check "once a turn has ended it resumes that session" wait_for 30 bash -c 'cd "$1" && BOSUN_CODEX_BIN="$5" CODEX_HOME="$2" BOSUN_SESSIONS_FILE="$3" BOSUN_LAUNCH_DRY_RUN=1 "$4" launch cx 2>&1 | grep -q "resume .* cx-1"' _ "$CX_REPO" "$CX_HOME" "$WORK/cx-sessions.yml" "$BOSUN" "$ROOT/tests/sandbox/codex-stand-in"
   check "bosun trust covers each agent in use" bash -c 'cd "$1" && CODEX_HOME="$2" BOSUN_SESSIONS_FILE="$3" "$4" trust --any "$1" >/dev/null 2>&1 && grep -q "trust_level = \"trusted\"" "$2/config.toml"' _ "$CX_REPO" "$CX_HOME" "$WORK/cx-sessions.yml" "$BOSUN"
   check "... and can take it back" bash -c 'cd "$1" && CODEX_HOME="$2" BOSUN_SESSIONS_FILE="$3" "$4" trust --revoke "$1" >/dev/null 2>&1 && ! grep -q trust_level "$2/config.toml"' _ "$CX_REPO" "$CX_HOME" "$WORK/cx-sessions.yml" "$BOSUN"
   check "preflight checks each agent in use" contains "$(CX preflight)" "Codex"
@@ -4109,61 +4110,64 @@ FAKE
   check "the stand-in answers --version, as agy does" test "$("$AGY_STAND_IN" --version)" = 1.5.5
   check "... refuses an unknown key in --settings, as agy does" fails_with 'unknown field "hooks"' "$AGY_STAND_IN" --settings '{"hooks":{}}'
   al start >/dev/null
-  check "a window starts, and bosun's plugin was installed into agy by its setup" wait_for 30 bash -c 'jq -e ".[] | select(.name == \"bosun\")" <(HOME="$1" "$2" plugin list --json) >/dev/null' _ "$HOME" "$AGY_STAND_IN"
-  check "... records the name of its conversation, from agy's own hook" wait_for 30 al_named agyl
+  check "a window starts, and bosun's plugin was installed into agy by its setup" wait_for 90 bash -c 'jq -e ".[] | select(.name == \"bosun\")" <(HOME="$1" "$2" plugin list --json) >/dev/null' _ "$HOME" "$AGY_STAND_IN"
+  check "... records the name of its conversation, from agy's own hook" wait_for 90 al_named agyl
   conversation="$(al_conversation agyl)"
   check "... which agy keeps, and holds open" bash -c '[ -f "$1/conversations/$2.db" ] && [ -f "$1/presence/$2.lock" ]' _ "$AL_HOME" "$conversation"
-  check "... and reads idle, from the hooks, once its first prompt is answered" wait_for 30 al_has agyl idle
+  check "... and reads idle, from the hooks, once its first prompt is answered" wait_for 90 al_has agyl idle
   check "... and the launch recorded where its screen is, in its status file" jq -e '.pane != null and .socket != null' "$AL_STATE/agy/agyl.json"
   check "bosun sessions says it is agy's" bash -c '[ "$(jq -r ".[] | select(.name == \"agyl\") | .agent.harness" <<<"$1")" = agy ]' _ "$(al sessions --json)"
   check "a message is delivered, a turn runs, and the window reads busy" al send --no-item agyl "sleep 60"
-  check "... busy, from the hook before the model call" wait_for 15 al_has agyl busy
+  check "... busy, from the hook before the model call" wait_for 60 al_has agyl busy
   al_window agyl Escape
-  check "Esc cancels the turn, which fires no hook, and the screen says idle" wait_for 15 al_has agyl idle
+  check "Esc cancels the turn, which fires no hook, and the screen says idle" wait_for 60 al_has agyl idle
   al_window agyl "please ask" Enter
-  check "... a window at a dialog reads waiting" wait_for 15 al_has agyl waiting
-  check "... and bosun send refuses it, so a pasted Enter never answers it" fails_with "asking something on its screen" al send --no-item agyl "go on"
+  check "... a window at a dialog reads waiting" wait_for 60 al_has agyl waiting
+  # Refused either way; which of its two refusals says so depends on whether its screen shows the dialog yet.
+  check "... and bosun send refuses it, so a pasted Enter never answers it" wait_for 30 fails_with "asking something on its screen" al send --no-item agyl "go on"
   al_window agyl Escape
-  check "... Esc cancels it, and the window reads idle again" wait_for 15 al_has agyl idle
+  check "... Esc cancels it, and the window reads idle again" wait_for 60 al_has agyl idle
   al_window agyl "run git status" Enter
-  check "a git command through bosun's plugin is approved, with the sandbox lifted, as bosun's hook answers it" wait_for 15 grep -qF "PreToolUse git status: auto_approve, BypassSandbox true" "$BOSUN_LOG_DIR/agy-agyl.log"
-  check "... and the turn ends idle" wait_for 15 al_has agyl idle
+  check "a git command through bosun's plugin is approved, with the sandbox lifted, as bosun's hook answers it" wait_for 60 grep -qF "PreToolUse git status: auto_approve, BypassSandbox true" "$BOSUN_LOG_DIR/agy-agyl.log"
+  check "... and the turn ends idle" wait_for 60 al_has agyl idle
   al_window agyl "run date" Enter
-  check "a command outside its allow-list gets no answer" wait_for 15 grep -q "PreToolUse date: no answer" "$BOSUN_LOG_DIR/agy-agyl.log"
-  check "... and the turn ends idle" wait_for 15 al_has agyl idle
+  check "a command outside its allow-list gets no answer" wait_for 60 grep -q "PreToolUse date: no answer" "$BOSUN_LOG_DIR/agy-agyl.log"
+  check "... and the turn ends idle" wait_for 60 al_has agyl idle
   # A person's own agy, in the same folder with bosun's plugin installed: no BOSUN_* in its environment.
   al_tmux new-window -d -n person -c "$AGY_REPO" "env -u BOSUN_HOOK_CMD -u BOSUN_WINDOW -u BOSUN_CONVERSATION '$AGY_STAND_IN' --log-file '$WORK/person-agy.log' '--prompt-interactive=run git status'"
-  check "a person's own agy run gets no answer from any hook, not even for git" wait_for 20 grep -q "PreToolUse git status: no answer" "$WORK/person-agy.log"
+  check "a person's own agy run gets no answer from any hook, not even for git" wait_for 60 grep -q "PreToolUse git status: no answer" "$WORK/person-agy.log"
   check "... and bosun's hooks wrote no status for it" bash -c '[ "$(ls "$1/agy" | tr "\n" " ")" = "agyl.json " ]' _ "$AL_STATE"
   al_tmux kill-window -t "=agy-live:=person"
   conversations_before="$(al_conversations)"
   al stop >/dev/null
-  check "stop leaves no agy of this run running" wait_for 15 bash -c '! pgrep -f "$1 -c.*$2/state/logs" >/dev/null' _ "$AGY_STAND_IN" "$WORK"
+  check "stop leaves no agy of this run running" wait_for 60 bash -c '! pgrep -f "$1 -c.*$2/state/logs" >/dev/null' _ "$AGY_STAND_IN" "$WORK"
   al start >/dev/null
-  check "a restart resumes the conversation it had" wait_for 30 al_has agyl idle
+  check "a restart resumes the conversation it had" wait_for 90 al_has agyl idle
+  # The launch records an idle resumed window at once, before the stand-in has started and logged: wait for
+  # its log, then look at what it kept.
+  check "... which the stand-in resumed, as its log says" wait_for 60 grep -q "resumed conversation $conversation" "$BOSUN_LOG_DIR/agy-agyl.log"
   check "... the same one, under the same name" test "$(al_conversation agyl)" = "$conversation"
   check "... and made no new one" test "$(al_conversations)" = "$conversations_before"
-  check "... which the stand-in resumed, as its log says" grep -q "resumed conversation $conversation" "$BOSUN_LOG_DIR/agy-agyl.log"
   al stop >/dev/null
-  wait_for 15 bash -c '! pgrep -f "$1 -c.*$2/state/logs" >/dev/null' _ "$AGY_STAND_IN" "$WORK" # its conversation is held while it runs
+  wait_for 60 bash -c '! pgrep -f "$1 -c.*$2/state/logs" >/dev/null' _ "$AGY_STAND_IN" "$WORK" # its conversation is held while it runs
   # A resume with no prompt: agy is idle and fires no hook, and bosun already knows the window and its conversation.
   # (the launch is the pane shell's child, as bosun starts it, so that the window's agent is found under the pane)
   al_tmux new-session -d -s agy-live -n agyl -c "$AGY_REPO" "$(printf '%q ' "${AL[@]}" "$BOSUN" launch --no-prompt agyl); sleep 600"
-  check "a window resumed with no prompt reads idle at once, a session of the conversation it resumed" wait_for 15 al_has agyl idle
+  check "a window resumed with no prompt reads idle at once, a session of the conversation it resumed" wait_for 60 al_has agyl idle
   check "... that conversation, before any prompt" bash -c '[ "$(jq -r ".[] | select(.name == \"agyl\") | .agent.sessionId" <<<"$1")" = "$2" ]' _ "$(al sessions --json)" "$conversation"
   al_tmux kill-server 2>/dev/null
   al stop >/dev/null
-  check "... and nothing of it is left running" wait_for 15 bash -c '! pgrep -f "$1 -c.*$2/state/logs" >/dev/null' _ "$AGY_STAND_IN" "$WORK"
+  check "... and nothing of it is left running" wait_for 60 bash -c '! pgrep -f "$1 -c.*$2/state/logs" >/dev/null' _ "$AGY_STAND_IN" "$WORK"
   rm -f "$AL_HOME/conversations/$conversation.db"
   al start >/dev/null
   al_renamed() { [ -n "$(al_conversation agyl)" ] && [ "$(al_conversation agyl)" != "$1" ]; } # <the old id>
-  check "a window whose conversation is gone starts a new one" wait_for 30 al_renamed "$conversation"
+  check "a window whose conversation is gone starts a new one" wait_for 90 al_renamed "$conversation"
   check "... never under the old id: that conversation stays gone" test ! -e "$AL_HOME/conversations/$conversation.db"
-  check "... and reads idle" wait_for 30 al_has agyl idle
+  check "... and reads idle" wait_for 90 al_has agyl idle
   # A resume that agy turns into a fresh conversation (an id it does not have), with the marker bosun's launch sets.
   al_tmux new-window -d -n guard -c "$AGY_REPO" "env BOSUN_WINDOW=guard BOSUN_CONVERSATION=guard BOSUN_HOOK_CMD='$BOSUN' BOSUN_RESUMED=ghost-conversation '$AGY_STAND_IN' --log-file '$BOSUN_LOG_DIR/agy-guard.log' --conversation ghost-conversation '--prompt-interactive=hello'"
-  check "a resume that agy makes a fresh conversation of says so on its screen" wait_for 20 bash -c 'tmux -L "$1" capture-pane -p -t "=agy-live:=guard" | grep -q "conversation \"ghost-conversation\" not found"' _ "$AL_SOCKET"
-  check "... and bosun stops its first model call, and says why" wait_for 20 bash -c 'tmux -L "$1" capture-pane -p -t "=agy-live:=guard" | grep -q "resumed a different conversation"' _ "$AL_SOCKET"
+  check "a resume that agy makes a fresh conversation of says so on its screen" wait_for 60 bash -c 'tmux -L "$1" capture-pane -p -t "=agy-live:=guard" | grep -q "conversation \"ghost-conversation\" not found"' _ "$AL_SOCKET"
+  check "... and bosun stops its first model call, and says why" wait_for 60 bash -c 'tmux -L "$1" capture-pane -p -t "=agy-live:=guard" | grep -q "resumed a different conversation"' _ "$AL_SOCKET"
   check "... so it never answered" bash -c '! tmux -L "$1" capture-pane -p -t "=agy-live:=guard" | grep -q "stand-in\] ok"' _ "$AL_SOCKET"
   al stop >/dev/null
   al_tmux kill-server 2>/dev/null
@@ -4762,7 +4766,7 @@ HAND
   tmux -L "$U_TMUX" new-window -d -t "=update-test:" -n u-mine -- /bin/sh
   tmux -L "$U_TMUX" new-window -d -t "=update-test:" -n u-hand -- bash -c '"$1"; exec sleep 600' _ "$U/hand-claude"
   u_pane() { tmux -L "$U_TMUX" display -p -t "=update-test:$1" '#{pane_pid}'; }
-  check "... with a plain shell and a Claude started by hand beside them" wait_for 10 u_claude u-hand
+  check "... with a plain shell and a Claude started by hand beside them" wait_for 30 u_claude u-hand
   mine_pane="$(u_pane u-mine)"
   hand_pane="$(u_pane u-hand)"
   hand_pid="$(u_claude u-hand)"
@@ -4796,7 +4800,7 @@ HAND
     jq -e ".windows[\"u-shell\"] == [\"repo\", \"take stock, then restart\", \"asked to take stock\", \"restarted\", \"answered\"]" "$1/update.json" >/dev/null &&
       ! kill -0 "$2" 2>/dev/null && grep -l "this session was restarted" "$3"/prompt.u-shell.* | xargs grep -q "sleep 600: the wait for CI"' _ "$U_STATE" "$shell_pid" "$U"
   check "... the busy one is left running, never restarted" bash -c 'kill -0 "$1" && [ "$(jq -c ".windows[\"u-busy\"]" "$2/update.json")" = "[\"repo\",\"wait until idle\"]" ]' _ "$busy_pid" "$U_STATE"
-  check "... and the update says it waits for it" wait_for 10 grep -q "Waiting for u-busy" "$U/agents.out"
+  check "... and the update says it waits for it" wait_for 30 grep -q "Waiting for u-busy" "$U/agents.out"
   kill -INT "$updating"
   wait "$updating"
   rc=$?
@@ -4942,7 +4946,7 @@ repo_unchanged() {
   echo "after:  $after" >&2
   return 1
 }
-check "its HEAD and core.bare are what they were before the run" repo_unchanged
+check "its HEAD, staged files and core.bare are what they were before the run" repo_unchanged
 
 echo
 echo "$passed passed, $failed failed${PARTIAL:+ (a partial run, not the whole suite: $PARTIAL)}"

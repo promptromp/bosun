@@ -54,6 +54,23 @@ FROM = "aaaaaaa1111111111111111111111111111111111"
 TO = "bbbbbbb2222222222222222222222222222222222"
 
 
+class FakeTime:
+    """`time` as update.py sees it, with monotonic() a clock only advance() moves (in milliseconds);
+    everything else is the real module's."""
+
+    def __init__(self) -> None:
+        self.now_ms = 0
+
+    def advance(self, ms: int) -> None:
+        self.now_ms += ms
+
+    def monotonic(self) -> float:
+        return self.now_ms / 1000
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(time, name)
+
+
 def a_plan(renames: tuple[tuple[str, str], ...] = ()) -> update_plan.Plan:
     return update_plan.Plan(
         from_commit=FROM,
@@ -218,23 +235,50 @@ class FreezeTest(World):
 
     def test_freeze_ms_counts_from_the_locks_taken_not_the_wait_for_them(self) -> None:
         """A writer holding the ledger's lock when the freeze starts delays it; writes were not
-        paused by the update meanwhile, so that wait is not in freeze_ms."""
-        held, done = threading.Event(), threading.Event()
+        paused by the update meanwhile, so that wait is not in freeze_ms. Run on a clock that only
+        the test moves: the wait is 5000 ms of it, the freeze's own work none, so the answer does not
+        depend on how fast or loaded the machine is."""
+        clock = FakeTime()
+        held, entering, release = threading.Event(), threading.Event(), threading.Event()
+        real_store_locks = update_gate.store_locks
+
+        @contextlib.contextmanager
+        def announced(*args: Any, **kwargs: Any) -> Iterator[None]:
+            entering.set()  # the freeze is at the locks (the writer still holds the ledger's)
+            with real_store_locks(*args, **kwargs):
+                yield
 
         def writer() -> None:
             with ledger.lock_at(self.state, fcntl.LOCK_EX):
                 held.set()
-                done.wait(1.0)
+                release.wait(30)
 
-        thread = threading.Thread(target=writer)
-        thread.start()
-        held.wait(5)
+        results: list[UpdateState] = []
+        freezing = threading.Thread(
+            target=lambda: results.append(
+                update.freeze(self.record("holding"), a_plan(), self.state, self.config)
+            )
+        )
+        holder = threading.Thread(target=writer)
+        holder.start()
         try:
-            state = update.freeze(self.record("holding"), a_plan(), self.state, self.config)
+            self.assertTrue(held.wait(30))
+            with (
+                mock.patch.object(update, "time", clock),
+                mock.patch.object(update_gate, "store_locks", announced),
+            ):
+                freezing.start()
+                self.assertTrue(entering.wait(30))
+                clock.advance(5000)  # the wait for the writer's lock
+                release.set()
+                freezing.join(60)
         finally:
-            thread.join()
-        self.assertEqual(state.step, "checked")
-        self.assertLess(state.freeze_ms, 800)
+            release.set()
+            holder.join(30)
+            freezing.join(60)
+        self.assertEqual(len(results), 1)
+        self.assertEqual(results[0].step, "checked")
+        self.assertEqual(results[0].freeze_ms, 0)
 
     def test_a_plan_that_renames_config_keys_restores_bosun_env_too(self) -> None:
         self.assertEqual(

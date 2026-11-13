@@ -40,11 +40,13 @@ agent_profiles() {
 }
 
 # One field of <harness>'s profile, by its column name; exit 1 and nothing printed for a harness with none.
+# The awk reads all of its input (no `exit` once found): quitting early can leave printf writing to a closed
+# pipe, and with pipefail its SIGPIPE then fails a lookup that found the harness.
 profile_field() { # <harness> <field>
   need_profiles
   printf '%s\n' "$AGENT_PROFILES" | awk -F'\t' -v harness="$1" -v field="$2" -v columns="$AGENT_PROFILE_COLUMNS" '
     BEGIN { n = split(columns, names, " "); for (i = 1; i <= n; i++) if (names[i] == field) column = i }
-    column && $1 == harness { print $column; found = 1; exit }
+    column && $1 == harness && !found { print $column; found = 1 }
     END { exit !found }'
 }
 
