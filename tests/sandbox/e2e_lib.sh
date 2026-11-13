@@ -10,9 +10,8 @@
   exit 1
 }
 export PATH="/opt/homebrew/bin:/usr/local/bin:$HOME/.local/bin:$PATH"
-# These tests update to the next commit of a branch, which has no release: follow the branch
-# (the default follows the releases, docs/design/menu-bar.md).
-export BOSUN_UPDATE_CHANNEL=main
+# No BOSUN_UPDATE_CHANNEL here: what an install follows is what bosun.env says, as for a user (the releases by
+# default, `main` for an install that asked for a branch or that an update kept on it), docs/design/menu-bar.md.
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 UID_NOW="$(id -u)"
@@ -227,6 +226,7 @@ now_job_for_real() {
   "$bosun" stop >/dev/null 2>&1
   check "bosun is stopped before the kickstart: no session, so a server the scheduled run left cannot satisfy the check below" bash -c '! tmux -L bosun list-sessions'
   check "control: a process started here has this shell or a parent of it as its responsible pid (launchctl procinfo)" a_child_has_the_callers_responsible_pid
+  a_child_has_the_callers_responsible_pid | sed 's/^/  note  /'
   done_before="$(morning_runs)"
   now_before="$(now_runs)"
   check "bosun morning --now --background returns, exit 0" "$bosun" morning --now --background
@@ -235,6 +235,7 @@ now_job_for_real() {
   check "... once, whatever the second one asked: launchd does not start a run that is going (no -k)" now_runs_settle_at "$((now_before + 1))"
   check "... which brings up the orchestrator's window" wait_for 60 has_window orchestrator
   check "... and the tmux server it started is not a child of the caller" server_not_the_callers_child
+  server_not_the_callers_child | sed 's/^/  note  /'
   "$bosun" stop >/dev/null 2>&1
 }
 
@@ -256,7 +257,7 @@ launchd_for_real() {
 }
 
 jobs_are_gone() {
-  for job in "$LABEL" "$LABEL.watchdog" "$LABEL.learn"; do
+  for job in "$LABEL" "$LABEL.watchdog" "$LABEL.learn" "$LABEL.console"; do
     check "$job is unloaded" bash -c '! launchctl print "$1"' _ "$DOMAIN/$job"
     check "... launchd cannot run it" bash -c '! launchctl kickstart "$1"' _ "$DOMAIN/$job"
     check "... and its plist is gone" test ! -e "$HOME/Library/LaunchAgents/$job.plist"

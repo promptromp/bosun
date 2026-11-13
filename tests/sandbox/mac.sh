@@ -7,8 +7,9 @@
 # Each run clones a base image, which takes no time and no disk, and deletes the clone afterwards.
 #   setup   pull the image (about 29 GB) and prepare the two base images: bosun-mac-new, a new Mac (no
 #           Homebrew, no Apple tools), and bosun-mac-dev, a developer's Mac (the same with Homebrew)
-#   run     on a clone of the developer's Mac: this checkout's installer, real launchd, a real wake
-#           schedule and uninstall (tests/install_e2e.sh). --from-nothing: on the new Mac instead
+#   run     on a clone of the developer's Mac: this checkout's installer on the default releases (its origin
+#           has a release tag), real launchd, the console's job, `bosun quit`, an update to the next release,
+#           a real wake schedule and uninstall (tests/install_e2e.sh). --from-nothing: on the new Mac instead
 #   work    on a clone of the developer's Mac: a week of real work that installs the release (--base,
 #           default the last bosun from before versions and the knowledge base's journal), converts it to
 #           this checkout by running get.sh again, updates mid-afternoon to the next version on a year of
@@ -42,6 +43,8 @@ WORK="$(mktemp -d)"
 # base's journal (#17), so its first update converts its checkout, and its knowledge base starts a journal.
 # (A commit id, not a secret.)
 RELEASE="95545b0ba6a0e3729e980aa9468876e1228c1874" # pragma: allowlist secret
+# The release `run` makes in its origin (the next one, v2026.11.02, is tests/install_e2e.sh's).
+RUN_RELEASE="v2026.11.01"
 VM_PID=""
 ANTHROPIC_ITEM="${BOSUN_SANDBOX_ANTHROPIC_ITEM:-bosun-sandbox-anthropic}"
 OPENAI_ITEM="${BOSUN_SANDBOX_OPENAI_ITEM:-bosun-sandbox-openai}"
@@ -168,6 +171,18 @@ copy_checkout() { # [<name of the bundle in the VM>]
   in_vm "$CLONE" 'mkdir -p e2e && tar -xzf e2e.tgz -C e2e' || die "could not unpack the test"
 }
 
+# This checkout as the head of `main` of a repository that has made a release (RUN_RELEASE, an annotated tag with
+# notes in its message), a bare repository packed in a tar for the VM (~/origin.git there): what a first install
+# takes on the default `releases` channel, and what the next release (tests/install_e2e.sh makes it) is tagged on.
+# A repository and not a bundle: `git ls-remote` of a bundle has no peeled line for an annotated tag, as GitHub has.
+release_origin() { # <tar file>
+  local scratch="$WORK/origin.git"
+  git init -q --bare "$scratch" &&
+    git -C "$scratch" fetch -q "$ROOT" "$TREE_BRANCH:refs/heads/main" &&
+    git -C "$scratch" -c user.name=sandbox -c user.email=sandbox@example.com tag -a "$RUN_RELEASE" -m "The first release" refs/heads/main &&
+    COPYFILE_DISABLE=1 tar -C "$WORK" -czf "$1" origin.git
+}
+
 run() { # [--from-nothing]
   local base="$DEV_MAC"
   [ "${1:-}" = "--from-nothing" ] && base="$NEW_MAC"
@@ -175,8 +190,13 @@ run() { # [--from-nothing]
   say "booting a clone of $base"
   boot "$CLONE" --no-graphics
   copy_checkout
+  # The origin the install takes from has a release: no BOSUN_BRANCH, so get.sh takes the newest release and the
+  # install follows the releases, as a user's does (copy_checkout's bundle, a branch with no release, is for the rest).
+  release_origin "$WORK/origin.tgz" || die "could not make the release origin"
+  to_vm "$CLONE" "$WORK/origin.tgz" origin.tgz || die "could not copy the release origin"
+  in_vm "$CLONE" 'tar -xzf origin.tgz' || die "could not unpack the release origin"
   # shellcheck disable=SC2016 # expands in the VM
-  in_vm "$CLONE" 'BOSUN_REPO="$HOME/repo.bundle" BOSUN_BRANCH='"$TREE_BRANCH"' e2e/tests/install_e2e.sh'
+  in_vm "$CLONE" 'BOSUN_REPO="$HOME/origin.git" BOSUN_E2E_RELEASE='"$RUN_RELEASE"' e2e/tests/install_e2e.sh'
 }
 
 # The release (<ref>) installed by its own get.sh, then this checkout as its upgrade: two bundles of the
