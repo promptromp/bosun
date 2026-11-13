@@ -202,6 +202,11 @@ public actor FakeBosunCLI: BosunCLI {
     replies[args, default: []].append(result)
   }
 
+  /// From now on `args` answers `result` alone, whatever was told for it before.
+  public func replaceReply(_ args: [String], _ result: CommandResult) {
+    replies[args] = [result]
+  }
+
   public func run(_ args: [String], timeout: Duration) async -> CommandResult {
     calls.append(args)
     timeouts.append(timeout)

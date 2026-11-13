@@ -265,6 +265,12 @@ private func offlineMenu(_ header: StatusHeader, badge: IconBadge?, flow: FlowSt
     iconBadge: badge)
 }
 
+/// The menu before the first status has come: it says it is looking, and offers nothing that runs bosun.
+public func loadingMenu(flow: FlowState) -> MenuModel {
+  offlineMenu(
+    StatusHeader(dot: .grey, sentence: "Checking bosun…", detail: []), badge: nil, flow: flow)
+}
+
 private func tooNewMenu(_ number: Int, flow: FlowState) -> MenuModel {
   let detail = "bosun reports version \(number) of its status; this app reads version \(Contract.supported)."
   return MenuModel(

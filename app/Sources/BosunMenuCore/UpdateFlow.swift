@@ -39,6 +39,8 @@ public enum UpdateEvent: Equatable, Sendable {
   /// `starting` went on too long without `status` showing the update: the shell's grace has run out.
   /// The app looks again before it calls that a failure.
   case startGaveUp
+  /// `update --yes` could not be started at all (no bosun, no permission): why.
+  case startFailed(String)
   case acknowledged
 }
 
@@ -119,6 +121,8 @@ private func nextWhileRunning(_ state: UpdateState, on event: UpdateEvent) -> St
     return (.running(waitingFor: waiting), [])
   case (.starting(let check), .startGaveUp):
     return (.checkingStart(check), [Bosun.checkUpdates])
+  case (.starting, .startFailed(let why)):
+    return (.failed(why), [])
   default:
     return nil
   }

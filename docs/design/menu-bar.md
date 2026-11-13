@@ -335,3 +335,20 @@ Where what is built differs from what this note said before, or says more:
   present plist current and never makes one; `bosun app login on|off` is the only switch, and `on` is refused while no app is
   installed. Loading the job runs the app at once (RunAtLoad), so the app must be safe to start twice.
 - Uninstall's step for the app asks it to quit first, so a running app is not left running from a folder that is gone.
+- The AppKit app (built): what it decides is in `BosunMenuCore` (`AppCoordinator`, over an `AppUI` the shell
+  implements), so the shell is only the status item, the menu renderer, the alerts and the workspace. A dialog
+  is a `DialogSpec` (its words, buttons, boxes), shown with the app briefly a regular app. The sleep box of Quit
+  is only on the dialog while the Mac is kept awake. A check the person asked for that finds nothing says "bosun
+  is up to date"; the six-hourly and menu-open checks (at most once a minute) only show the badge.
+  `Show Logs` opens the folder `status --json` names; Run Doctor and Uninstall bosun… open a `.command` file in
+  the app's temporary folder, which runs the command and waits for Return.
+- One copy at a time reads each running copy's start with sysctl (`kp_proc.p_starttime`): `launchDate` is nil for an
+  app launchd starts directly. A copy whose start cannot be read is left out, and one that cannot read its own stays.
+- The test hooks (`--test-hooks <dir>`, for the VM suite, and only then): `<dir>/menu.json` after each render (the
+  menu, its icon badge and the status level); `<dir>/actions/<n>.json`, taken in the order of `n` once a second and
+  removed when taken: `{"item": "quit"}` (an item's name: `startBosun`, `showProblems`, `openConsole`,
+  `checkForUpdates`, `openAtLogin`, `updateBosun`, `help.guide|doctor|logs|uninstall`, `quit`), done as if clicked
+  when the menu has it enabled, or `{"answer": {"button": "<title>", "boxes": {"pauseMorning": true, "sleep": false,
+  "keepIcon": false}}}` for the open dialog (it waits for one); `<dir>/log.jsonl`, one object per line for each
+  command run (`{"command": [...], "detached": false, "outcome": "exited 0"}`) and each address or file it would
+  open (`{"open": "..."}`; with the hooks the app opens nothing).

@@ -225,6 +225,13 @@ of truth, so don't copy rules into this file.
   ports): a change to what `bosun status --json`, `update --check|--dry-run --json`, `quit --json` or `app status
   --json` print fails `tests/unit/test_contract_samples.py` until `uv run python tools/contract_samples.py` writes the
   fixtures again, and the Swift side follows. The app reads nothing of bosun's but what those commands print.
+  What the AppKit shell needs that has no AppKit in it is in the core too, so it is tested and counts towards the
+  floor: `AppCoordinator.swift` (what is chosen, as flows over `AppUI`: the shell's whole surface), `DialogSpecs.swift`
+  (every dialog's words, buttons and boxes, and what each answer means to a flow), `Poller.swift` (the timing, on a
+  clock it is given), `ProcessBosunCLI.swift` (bosun run for real, with timeouts), `Launch.swift` (the arguments, the
+  start-time reading behind the one-copy rule) and `TestHooks.swift` (the VM suite's hooks: their files and formats).
+  `Sources/BosunMenu` is only AppKit: `MenuRenderer` (a `MenuModel` as an `NSMenu`, updated in place), `Dialogs` (a
+  `DialogSpec` as an `NSAlert`), `StatusItemController`, `AppShell` (the `AppUI`), `AppDelegate`, `main.swift`.
 - `orchestrator/policy.md` (appended to the orchestrator's system prompt),
   `orchestrator/plugin/commands/chores.md` (the chores procedure), `orchestrator/settings.json`
   (the orchestrator's own permissions, generic; a site replaces it with
