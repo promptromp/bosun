@@ -24,6 +24,7 @@ is missing.
 | `context-size` | a Claude window's conversation has re-read `BOSUN_CONTEXT_WARN_TOKENS` (300000) tokens or more a turn for a day: every check-in, notification and resume there re-reads it all (`0` turns it off) | conversation (window and session) |
 | `overhead-share` | the turns bosun started itself (check-ins, events summaries, notifications, resumes, messages between sessions, a site's scheduled prompts) cost more than `BOSUN_OVERHEAD_WARN_SHARE` (0.5) of the last 7 days, from the Impact snapshot (skipped without one, or when it is over 3 days old; `0` turns it off) | week |
 | `update-stuck` | an update stopped and left its hold (or paused writes) with nothing running it, or a running update's hold (which pauses the watchdog, learning and the check-in loop) outlived its hour | update (alerts again for the next update) |
+| `app-missing` | with `BOSUN_MENU_APP=1`: `bosun.app` is not in `~/Applications`, say moved to the Trash. bosun still runs: the alert says so, and that `bosun uninstall` removes bosun and `bosun app install` brings the app back | outage (alerts again if the app came back and went) |
 | `login-expired` | Claude Code is logged out (`claude auth status`), the last login check request got a login error, or any Claude window's latest replies are all login errors (see Claude Code login); alerts at once, but like every check only inside the awake window | outage (alerts again after it recovered) |
 
 Some checks cannot fire on a Codex window yet. Its session file records only busy or idle, so a

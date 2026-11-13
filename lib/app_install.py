@@ -64,7 +64,8 @@ CURL = (
     "--connect-timeout",
     "30",
     "--max-time",
-    "600",
+    # inside the 600 s `bosun update` gives a command (update_facts.COMMAND_SECONDS): curl ends it itself
+    "540",
     "-w",
     "%{http_code}",
 )
@@ -156,11 +157,11 @@ class Setup:
 
     @property
     def apps(self) -> Path:
-        return self.home / "Applications"
+        return self.home / app_release.APPLICATIONS
 
     @property
     def app(self) -> Path:
-        return self.apps / BUNDLE
+        return app_release.app_path(self.home)
 
 
 def install_origin(root: Path) -> str:
@@ -527,14 +528,13 @@ def install(setup: Setup, *, build: bool = False) -> str:
 def update(setup: Setup) -> str:
     """Install app/VERSION when it differs from the installed app; say so, and download nothing, when it is
     the same or there is no app (bringing one is `install`)."""
-    app_release.require_team(app_release.read_publisher(setup.root))
     wanted = app_release.wanted_version(setup.root)
     installed = app_release.bundle_version(setup.app)
-    if installed is None:
+    if installed is None:  # `bosun update` runs this on every install: no Team ID is needed to say so
         return f"{BUNDLE} is not installed: run bosun app install"
     if installed == wanted:
         return f"{BUNDLE} {wanted} is up to date"
-    return install(setup)
+    return install(setup)  # which refuses, before anything else, a Team ID that is not filled in
 
 
 def delete_app(setup: Setup) -> str:

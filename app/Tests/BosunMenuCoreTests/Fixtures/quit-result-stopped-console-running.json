@@ -6,9 +6,11 @@
   "error": null,
   "keep_awake": "kept until 20:00",
   "keep_awake_until": "20:00",
+  "lock_wait_seconds": 180,
   "morning_paused": false,
   "refused": null,
   "result": "stopped",
+  "wait_minutes": 10,
   "waiting": [
     "acme-web"
   ],

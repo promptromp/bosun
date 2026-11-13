@@ -1,4 +1,5 @@
 {
+  "contract": 1,
   "plan": {
     "blockers": [
       "a migration of the knowledge store is missing"
@@ -8,6 +9,7 @@
       "Repo windows on a second agent"
     ],
     "console": true,
+    "console_job": false,
     "formats": [
       [
         "ledger",

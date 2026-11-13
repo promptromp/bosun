@@ -5,9 +5,11 @@
   "contract": 1,
   "error": "bosun stop failed: the tmux server did not answer; the quit record stays, so bosun stays stopped: run `bosun quit --stop-now` again to finish, or `bosun start` to start bosun again",
   "keep_awake_until": "20:00",
+  "lock_wait_seconds": 180,
   "morning_paused": true,
   "refused": null,
   "result": "failed",
+  "wait_minutes": 10,
   "waiting": [
     "acme-web"
   ],

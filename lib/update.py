@@ -47,14 +47,16 @@ import json
 import os
 import shutil
 import signal
+import subprocess
 import sys
 import time
-from collections.abc import Callable, Iterator, Sequence
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+import app_release
 import checkout_work
 import install_paths
 import knowledge
@@ -82,6 +84,7 @@ SHORT = update_gate.SHORT
 FINISHED = ("done", "failed", "restored")
 ENDED = ("done", "agents")  # past its release: done, or its windows left to the check-in loop
 BEFORE_FREEZE = ("planned", "rehearsed", "holding")
+CONTRACT = 1  # the shape of --json's object, which the menu bar app reads; it only grows
 BLOCKED = 1
 USAGE = 2
 AGENT_COMMANDS = ("note", "advance")  # what the agents and the check-in loop run (lib/update_windows.py)
@@ -96,7 +99,10 @@ class Output:
 
     @classmethod
     def say(cls, line: str) -> None:
-        print(line, file=sys.stderr if cls.to_stderr else sys.stdout, flush=True)
+        """A reader that went away (an update started detached, its output going nowhere) is no reason to
+        stop before the hold is lifted."""
+        with contextlib.suppress(BrokenPipeError):
+            print(line, file=sys.stderr if cls.to_stderr else sys.stdout, flush=True)
 
 
 # ---- the rehearsal -----------------------------------------------------------------------------
@@ -286,6 +292,43 @@ def _restart_checkin_loop(root: Path) -> list[str]:
     return [f"the check-in loop: {done.stderr.strip() or 'it could not be restarted'}"]
 
 
+# The console's launchd job restarted by the new version's common.sh (it is one only when loaded and wanted).
+RESTART_CONSOLE = "if console_restartable; then console_restart && echo restarted; fi"
+
+
+def _last_line(done: subprocess.CompletedProcess[str]) -> str:
+    """The last line the command said: on stderr when it failed, else on stdout."""
+    lines = (done.stderr if done.returncode else done.stdout).strip().splitlines()
+    return lines[-1].strip() if lines else ""
+
+
+def _bring_app_along(root: Path) -> list[str]:
+    """The menu bar app brought to the version <root> expects (`bosun app update` of that version, which runs
+    on every install: it does nothing, and exits 0, with no app of the publisher's installed, or with the
+    current one). It goes by the app being there, not by BOSUN_MENU_APP, which is the person's wish (init's
+    question, the watchdog's alert): an app they added by hand is kept current, as a present Open at Login
+    job is. A finding when it could not be (no network, a refusal): the update goes on, its summary says."""
+    present = app_release.app_path(Path.home()).exists()
+    done = update_facts.bosun(root, "app", "update")
+    if done.returncode == 0:
+        said = _last_line(done)
+        if said and present:  # an install with no app is told how to add one once, by CONFIG_ADDED's note
+            Output.say(f"  {said}")
+        return []
+    return [f"bosun.app: {_last_line(done) or 'it could not be updated'}"]
+
+
+def _restart_console(root: Path) -> list[str]:
+    """The console's launchd job, when it is loaded and wanted, restarted on the version in <root>, so it
+    serves the new code; a finding if that fails. A console started by hand is the person's to restart."""
+    done = update_facts.shell(root, RESTART_CONSOLE)
+    if done.returncode:
+        return [f"the console: {_last_line(done) or 'its job could not be restarted'}"]
+    if done.stdout.strip() == "restarted":
+        Output.say("  restarted the console's job")
+    return []
+
+
 def _doctor(root: Path) -> list[str]:
     """What `bosun doctor` of the version in <root> fails or warns about, a line each, its detail
     joined onto it (update_summary.doctor_found)."""
@@ -332,11 +375,12 @@ def _prune(state_dir: Path, state: UpdateState) -> list[str]:
 
 
 def release(state: UpdateState) -> UpdateState:
-    """After the freeze: the launchd jobs whose plist changed reloaded, the check-in loop restarted
-    while the hold is still on, then the hold lifted (`released`); old backups and version
-    folders pruned; what went wrong there, a checkout from before versions kept for what it holds, and
-    what the new version's `bosun doctor` finds kept as findings, reported, never rolled back (writes
-    may have landed since)."""
+    """After the freeze: the launchd jobs whose plist changed reloaded, the check-in loop restarted, the
+    menu bar app brought to the version this one expects (`bosun app update`, which does nothing with no app
+    installed) and the console's job restarted, all while the hold is still on, then the hold lifted
+    (`released`); old backups and version folders pruned; what went wrong there, a checkout from before
+    versions kept for what it holds, and what the new version's `bosun doctor` finds kept as findings,
+    reported, never rolled back (writes may have landed since)."""
     where = folders()
     to_root = Path(state.to_root)
     labels, found = _reload_jobs(to_root)
@@ -344,6 +388,8 @@ def release(state: UpdateState) -> UpdateState:
         reloaded = tuple(dict.fromkeys((*state.reloaded, *labels)))
         state = _record(where.state_dir, dataclasses.replace(state, reloaded=reloaded))
     found += _restart_checkin_loop(to_root)
+    found += _bring_app_along(to_root)
+    found += _restart_console(to_root)
     _unmark(where.state_dir)  # a conversion's own work: the reload and the restart brought it back
     state = _step(where.state_dir, state, "released")
     Output.say("  lifted the hold on bosun's background work")
@@ -1138,6 +1184,20 @@ def after_update_command(argv: Sequence[str]) -> int:
     return 0
 
 
+def json_object(
+    plan: Plan | None, update: Mapping[str, Any] | None, summary: update_summary.Summary | None
+) -> dict[str, Any]:
+    """The one object --json prints on every path (pure, so the menu bar app's fixtures are made with it):
+    `contract`, a number that only grows (the app checks it understands what it reads), the plan, the
+    update's record as it stands and the summary, each null when there is none."""
+    return {
+        "contract": CONTRACT,
+        "plan": dataclasses.asdict(plan) if plan else None,
+        "update": update,
+        "summary": update_summary.as_json(summary) if summary else None,
+    }
+
+
 def main(argv: Sequence[str]) -> int:
     """The command, and with --json one object on stdout on every path: the plan (null when none was
     made: up to date, refused, a failure before it), the update's record as it stands, and the summary
@@ -1152,9 +1212,7 @@ def main(argv: Sequence[str]) -> int:
     said = Said()
     code = _said(args, said)
     if args.json:
-        plan = dataclasses.asdict(said.plan) if said.plan else None
-        summary = update_summary.as_json(said.summary) if said.summary else None
-        print(json.dumps({"plan": plan, "update": _record_now(), "summary": summary}, indent=2))
+        print(json.dumps(json_object(said.plan, _record_now(), said.summary), indent=2))
     return code
 
 

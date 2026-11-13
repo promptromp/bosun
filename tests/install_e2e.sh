@@ -1,6 +1,8 @@
 #!/bin/bash
 # A new machine's install, for real: the piped installer with its real Homebrew, real launchd jobs that
-# really fire, the real pmset and plutil, and a clean uninstall. Claude Code is a stand-in, since these
+# really fire (the morning job, and the one the menu bar app's Start runs through `bosun morning --now
+# --background`, whose tmux server must not be its caller's child: `launchctl procinfo`), the real pmset
+# and plutil, and a clean uninstall. Claude Code is a stand-in, since these
 # machines have no login. It changes the machine it runs on, so it only runs on a GitHub macOS runner
 # (.github/workflows/install.yml) or in the throwaway Mac of tests/sandbox.sh mac.
 # Checks pass shell snippets to `bash -c '...' _ args`; their $ must not expand here.
@@ -153,6 +155,7 @@ uninstall() {
   check "... and says so" grep -q "may not be bosun" "$out"
   sudo pmset repeat cancel
   jobs_are_gone
+  check "the job that runs --now is unloaded and its plist gone too" bash -c '! launchctl print "$1" && [ ! -e "$2" ]' _ "$DOMAIN/$LABEL.now" "$HOME/Library/LaunchAgents/$LABEL.now.plist"
   check "the state folder is gone" test ! -e "$state"
   check "the config folder is gone" test ! -e "$CONFIG"
   check "nothing named bosun is left in this home folder" bash -c '[ -z "$1" ] || { echo "$1"; exit 1; }' _ "$(named_bosun)"
@@ -166,6 +169,7 @@ check "... versions side by side, the install path a link to the version in use"
 nothing_chosen
 windows_by_answers acme-api
 launchd_for_real
+now_job_for_real
 run_again
 app_tools
 uninstall

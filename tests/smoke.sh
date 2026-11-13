@@ -2582,6 +2582,8 @@ check "... all of them exit 2" usage_error_exits_2
 check "a bad BOSUN_QUIT_WAIT_MINUTES is an error that names it" fails_with "BOSUN_QUIT_WAIT_MINUTES must be a whole number of minutes" env BOSUN_QUIT_WAIT_MINUTES=lots "$BOSUN" quit --let-finish
 check "... with --json it is an object, exit 1, with the plan's keys empty" env BOSUN_QUIT_WAIT_MINUTES=lots bash -c '"$1" quit --let-finish --json </dev/null >"$2"; [ $? -eq 1 ]' _ "$BOSUN" "$WORK/quit.out"
 check "... that says why" quit_has 'd["contract"] == 1 and d["result"] == "failed" and "BOSUN_QUIT_WAIT_MINUTES" in d["error"] and d["windows"] == [] and d["busy"] == [] and d["refused"] is None'
+check "... and carries the configured lock wait, and 0 minutes for the minutes that are not a number" env BOSUN_QUIT_WAIT_MINUTES=lots BOSUN_WINDOWS_LOCK_WAIT_SECONDS=45 bash -c '"$1" quit --let-finish --json </dev/null >"$2"; true' _ "$BOSUN" "$WORK/quit.out"
+check "... in the object" quit_has 'd["wait_minutes"] == 0 and d["lock_wait_seconds"] == 45'
 check "--let-finish from inside bosun's own tmux is refused: it would wait on its own window" fails_with "run it from another terminal" env TMUX="/tmp/tmux-0/$SOCKET,1,0" "$BOSUN" quit --let-finish
 check "... as an object too with --json" bash -c 'TMUX="/tmp/tmux-0/$2,1,0" "$1" quit --let-finish --json </dev/null >"$3"; [ $? -eq 1 ]' _ "$BOSUN" "$SOCKET" "$WORK/quit.out"
 check "... that says why" quit_has 'd["result"] == "failed" and "another terminal" in d["error"]'
@@ -2679,7 +2681,7 @@ check "bosun start --unless-quit with no quit record starts as usual" bash -c '"
 "$BOSUN" stop >/dev/null 2>&1
 rm -f "$BOSUN_STATE_DIR/quit.json" "$BOSUN_STATE_DIR/console/wanted" "$BOSUN_STATE_DIR/keep-awake-smoke.pid" "$BOSUN_STATE_DIR/keep-awake-smoke.json"
 
-# `bosun morning --now`: the morning run at any hour or day (the app's Start). The awake window is built around the
+# `bosun morning --now`: the morning run at any hour or day (what the app's Start runs, through --background). The awake window is built around the
 # current time, so these hold whatever time the suite runs at: a window ending in 20 minutes that began 2 minutes
 # ago is inside (an end earlier than the start runs past midnight, which the window rule handles), one that is 10
 # to 20 minutes ahead is outside, and with every day but today's and yesterday's scheduled, no window holds now.
@@ -2999,7 +3001,17 @@ cat >"$HOME/.local/bin/launchctl" <<EOF
 #!/bin/bash
 echo "launchctl \$*" >>"$WORK/system.log"
 [ ! -e "$WORK/launchctl-fails" ] || [ "\$1" != bootstrap ] || exit 5
-[ "\$1" != print ] || [ -e "\$HOME/Library/LaunchAgents/\${2##*/}.plist" ]
+case "\$1" in
+print) # loaded where its plist is; running while its label is in the file the suite writes (an inner line says
+  # running for every job, as launchd's lists of processes do: only the top-level one is the job's)
+  [ -e "\$HOME/Library/LaunchAgents/\${2##*/}.plist" ] || exit 113
+  if grep -qx "\${2##*/}" "$WORK/job-running" 2>/dev/null; then printf '\tstate = running\n'; else printf '\tstate = not running\n'; fi
+  printf '\tprocess = {\n\t\tstate = running\n\t}\n'
+  ;;
+kickstart) # takes it, a running job too (without -k it leaves that one alone); fails when the suite says so
+  [ ! -e "$WORK/kickstart-fails" ] || { echo "Could not kickstart service: 113: Could not find service" >&2; exit 113; }
+  ;;
+esac
 EOF
 cat >"$HOME/.local/bin/pmset" <<EOF
 #!/bin/bash
@@ -3044,6 +3056,7 @@ if [ "$(bash -c 'source "$1/lib/common.sh"; command -v launchctl; command -v pms
   check "with BOSUN_LEARN_ENABLED=1 it writes and loads one" bash -c 'plutil -lint -s "$1" && grep -q "launchctl bootstrap gui/$(id -u) $1" "$2"' _ "$LEARN_PLIST" "$WORK/system.log"
   doctor_said="$(BOSUN_LEARN_ENABLED=1 "$BOSUN" doctor 2>&1)"
   check "doctor checks the learning agent once it is enabled" contains "$doctor_said" "ok    learning agent $BOSUN_LAUNCHD_LABEL.learn loaded"
+  check "doctor checks the job that runs --now, which the app's Start kickstarts" contains "$doctor_said" "ok    launchd job $BOSUN_LAUNCHD_LABEL.now loaded"
   check "doctor checks the ledger against its journal" contains "$doctor_said" "ok    the ledger and its journal: ledger is valid"
   # A ledger of its own: a link to an item that is gone (an old prune) warns and adds no failure;
   # a damaged journal fails. (Doctor's login check calls the fake claude, which writes the ledger.)
@@ -3108,6 +3121,70 @@ assert job["KeepAlive"] == {"PathState": {sys.argv[2] + "/console/wanted": True}
   check "a second install leaves it loaded as it is" bash -c '! tail -n +$(($2 + 1)) "$1" | grep -q "launchctl bootstrap .*console"' _ "$WORK/system.log" "$log_lines"
   BOSUN_CONFIG_DIR="$INSTALL_CFG" "$ROOT/install.sh" >/dev/null 2>&1
   check "turned off, install unloads and removes it" bash -c 'tail -n +$(($4 + 1)) "$1" | grep -q "launchctl bootout gui/$(id -u)/$2.console" && [ ! -e "$3" ]' _ "$WORK/system.log" "$BOSUN_LAUNCHD_LABEL" "$CONSOLE_PLIST" "$log_lines"
+
+  NOW_PLIST="$HOME/Library/LaunchAgents/$BOSUN_LAUNCHD_LABEL.now.plist"
+  check "install writes and loads the job that runs the morning run now" bash -c 'plutil -lint -s "$1" && grep -q "launchctl bootstrap gui/$(id -u) $1" "$2"' _ "$NOW_PLIST" "$WORK/system.log"
+  check "... named by the morning job's label plus .now, running bosun morning --now in a login shell (and no BOSUN_TRIGGER)" python3 -I -c '
+import plistlib, sys
+job = plistlib.load(open(sys.argv[1], "rb"))
+assert job["Label"] == sys.argv[2] + ".now", job["Label"]
+assert job["ProgramArguments"][:2] == ["/bin/bash", "-lc"], job["ProgramArguments"]
+assert job["ProgramArguments"][-1].startswith("exec \"") and job["ProgramArguments"][-1].endswith("/bin/bosun\" morning --now"), job["ProgramArguments"]
+assert "BOSUN_TRIGGER" not in job["EnvironmentVariables"], job["EnvironmentVariables"]
+' "$NOW_PLIST" "$BOSUN_LAUNCHD_LABEL"
+  check "... started by nothing but a kickstart: no load, schedule or keep-alive; its process group is abandoned, so the tmux server it starts outlives it" python3 -I -c '
+import plistlib, sys
+job = plistlib.load(open(sys.argv[1], "rb"))
+assert job.get("RunAtLoad") is False, job.get("RunAtLoad")
+assert not {"KeepAlive", "StartCalendarInterval", "StartInterval", "WatchPaths", "QueueDirectories"} & set(job), sorted(job)
+assert job.get("AbandonProcessGroup") is True, job.get("AbandonProcessGroup")
+' "$NOW_PLIST"
+  log_lines="$(wc -l <"$WORK/system.log")"
+  BOSUN_CONFIG_DIR="$INSTALL_CFG" "$ROOT/install.sh" >/dev/null 2>&1
+  check "a second install leaves it loaded as it is" bash -c '! tail -n +$(($2 + 1)) "$1" | grep -q "launchctl bootstrap .*\.now"' _ "$WORK/system.log" "$log_lines"
+
+  # --background: launchd starts the run (the job above), so that nothing it starts is the caller's child.
+  echo "morning --now --background (fake launchctl)"
+  morning_headers() { cat "$BOSUN_LOG_DIR"/morning-*.log 2>/dev/null | grep -c "=== morning run" || true; }
+  bg_kickstarts() { grep -c "^launchctl kickstart gui/$(id -u)/$BOSUN_LAUNCHD_LABEL.now\$" "$WORK/system.log" || true; }
+  bg_headers="$(morning_headers)"
+  bg_before="$(bg_kickstarts)"
+  out="$("$BOSUN" morning --now --background 2>&1)"
+  bg_rc=$?
+  check "--background kickstarts the job and exits 0" bash -c '[ "$1" -eq 0 ] && [ "$3" -eq $(($2 + 1)) ]' _ "$bg_rc" "$bg_before" "$(bg_kickstarts)"
+  check "... without -k: a run already going is not restarted" bash -c '! grep -q "^launchctl kickstart -k" "$1"' _ "$WORK/system.log"
+  check "... says so in a line, and runs nothing itself: no session, no morning log header" bash -c '[ "$(wc -l <<<"$1")" -eq 1 ] && grep -q "started" <<<"$1" && ! tmux -L "$2" has-session -t =smoke && [ "$3" = "$4" ]' _ "$out" "$SOCKET" "$bg_headers" "$(morning_headers)"
+  for running_job in "$BOSUN_LAUNCHD_LABEL.now" "$BOSUN_LAUNCHD_LABEL"; do
+    echo "$running_job" >"$WORK/job-running"
+    bg_before="$(bg_kickstarts)"
+    out="$("$BOSUN" morning --now --background 2>&1)"
+    bg_rc=$?
+    check "with $running_job running, it exits 0, says so in one line and starts nothing (no kickstart)" bash -c '[ "$1" -eq 0 ] && [ "$(wc -l <<<"$2")" -eq 1 ] && grep -q "already going (launchd job $3)" <<<"$2" && [ "$4" = "$5" ]' _ "$bg_rc" "$out" "$running_job" "$bg_before" "$(bg_kickstarts)"
+  done
+  rm -f "$WORK/job-running"
+  touch "$WORK/kickstart-fails"
+  out="$("$BOSUN" morning --now --background 2>&1)"
+  bg_rc=$?
+  check "a kickstart launchd refuses, with nothing running, exits 1, in one line, with launchd's words" bash -c '[ "$1" -eq 1 ] && [ "$(wc -l <<<"$2")" -eq 1 ] && grep -q "launchd did not start" <<<"$2" && grep -q "Could not find service" <<<"$2"' _ "$bg_rc" "$out"
+  rm -f "$WORK/kickstart-fails"
+  mv "$NOW_PLIST" "$WORK/now.plist"
+  bg_before="$(bg_kickstarts)"
+  out="$("$BOSUN" morning --now --background 2>&1)"
+  bg_rc=$?
+  check "with the job not loaded it exits 1, in one line that says to run install.sh again, and kickstarts nothing" bash -c '[ "$1" -eq 1 ] && [ "$(wc -l <<<"$2")" -eq 1 ] && grep -q "not loaded" <<<"$2" && grep -q "run install.sh again" <<<"$2" && [ "$3" = "$4" ]' _ "$bg_rc" "$out" "$bg_before" "$(bg_kickstarts)"
+  check "... and doctor warns about it, saying to run install.sh (a warning, as nothing else fails)" contains "$("$BOSUN" doctor 2>&1)" "warn  launchd job $BOSUN_LAUNCHD_LABEL.now not loaded"
+  mv "$WORK/now.plist" "$NOW_PLIST"
+  bg_before="$(bg_kickstarts)"
+  bg_usage() {
+    "$BOSUN" morning "$@" >/dev/null 2>&1
+    [ $? -eq 2 ]
+  }
+  check "--background without --now is a usage error (exit 2)" bg_usage --background
+  check "... so is --dry-run with it, which would start nothing to look at" bg_usage --now --background --dry-run
+  check "... and --skip-setup, which the job's run cannot be given" bg_usage --now --background --skip-setup
+  check "... and --awake-minutes" bg_usage --now --background --awake-minutes 5
+  check "... and none of them asked launchctl for anything" test "$bg_before" = "$(bg_kickstarts)"
+  check "--help says what --background is, without a config" contains "$(env -i HOME="$HOME" PATH="$PATH" "$BOSUN" morning --help 2>&1)" "--background"
 
   echo "bosun app (fake curl; the stand-ins for ditto, codesign, spctl, osascript, open, swift and iconutil)"
   APP_DIR="$HOME/Applications"
@@ -3292,7 +3369,7 @@ sys.exit(not (all(n.startswith("bosun.app/") for n in names) and all(f"bosun.app
 
     set_team ""
     check "install refuses while app/publisher.json has no team_id" fails_with "app/publisher.json has no team_id yet" bapp install
-    check "... and so does update" fails_with "app/publisher.json has no team_id yet" bapp update
+    check "update with no app asks nothing of the publisher: not installed, exit 0" contains "$(bapp update 2>&1)" "not installed"
     check "... with no download and no ~/Applications" bash -c '[ ! -e "$1" ] && [ ! -e "$2" ]' _ "$WORK/app-curl.log" "$APP_DIR"
     set_wanted 0.1.0
     echo "  (a development build: app/build.sh with the stand-ins for swift, iconutil, codesign and ditto)"
@@ -3413,6 +3490,9 @@ assert job["RunAtLoad"] is True, job
 assert "KeepAlive" not in job, job
 ' "$APP_JOB" "$BOSUN_LAUNCHD_LABEL" "$HOME"
     check "... and status says Open at Login is on" bash -c 'jq -e ".login == true" <<<"$("$1" app status --json)"' _ "$APP_CHECKOUT/bin/bosun"
+    login_log_lines="$(wc -l <"$WORK/system.log")"
+    check "login on again, with the job there and loaded, says so" contains "$(bapp login on 2>&1)" "already on"
+    check "... and reloads nothing: no bootout, no bootstrap, which would restart an app the job started" bash -c '! tail -n +$(($2 + 1)) "$1" | grep -qE "launchctl (bootout|bootstrap)"' _ "$WORK/system.log" "$login_log_lines"
     reload_check() { bash -c 'source "$1/lib/common.sh"; load_config; shift; reload_changed_jobs "$@"' _ "$APP_CHECKOUT" "$@" 2>&1; }
     check "reload_changed_jobs leaves a current one alone" not_contains "$(reload_check --dry-run)" "$BOSUN_LAUNCHD_LABEL.app"
     echo "<!-- from an older bosun -->" >>"$APP_JOB"
@@ -3451,7 +3531,10 @@ assert "KeepAlive" not in job, job
     # What the uninstall below finds: the app, and its job.
     good_release 0.5.0
     set_wanted 0.5.0
-    bapp install >/dev/null 2>&1
+    installed_said="$(BOSUN_MENU_APP=0 bapp install 2>&1)"
+    check "install says, with BOSUN_MENU_APP not 1, how to have the watchdog watch the app" contains "$installed_said" "set BOSUN_MENU_APP=1 in bosun.env"
+    check "... and says nothing of it with BOSUN_MENU_APP=1" not_contains "$(BOSUN_MENU_APP=1 bapp install 2>&1)" "set BOSUN_MENU_APP=1"
+    check "... and no bosun app command writes bosun.env" bash -c '[ ! -e "$BOSUN_CONFIG_DIR/bosun.env" ] || ! grep -q BOSUN_MENU_APP "$BOSUN_CONFIG_DIR/bosun.env"'
     bapp login on >/dev/null 2>&1
     check "an app and its Open at Login job are in place for the uninstall that follows" bash -c '[ -d "$1" ] && [ -e "$2" ]' _ "$APP" "$APP_JOB"
   else
@@ -3476,6 +3559,7 @@ assert "KeepAlive" not in job, job
   check "--dry-run says what it would remove" contains "$(un --dry-run 2>&1)" "launchd job $BOSUN_LAUNCHD_LABEL"
   check "... and lists the menu bar app" contains "$(un --dry-run 2>&1)" "the menu bar app, ~/Applications/bosun.app (it is asked to quit first)"
   check "... and its Open at Login job" contains "$(un --dry-run 2>&1)" "launchd job $BOSUN_LAUNCHD_LABEL.app"
+  check "... and the job that runs the morning run now" contains "$(un --dry-run 2>&1)" "launchd job $BOSUN_LAUNCHD_LABEL.now"
   check "... and creates nothing, not even its own folders" test ! -e "$WORK/un-state"
   check "... and removes nothing" test -e "$PLIST"
   printf 'Repeating power events:\n  wakepoweron at 7:00AM every day\n' >"$WORK/pmset-sched"
@@ -3529,6 +3613,7 @@ for line in sys.stdin:
   check "a second run finds nothing to do" contains "$(un --yes 2>&1)" "Nothing of bosun is left"
   check "uninstall unloads and removes the job" bash -c 'grep -q "launchctl bootout gui/$(id -u)/$2" "$1" && [ ! -e "$3" ]' _ "$WORK/system.log" "$BOSUN_LAUNCHD_LABEL" "$PLIST"
   check "uninstall unloads and removes the watchdog agent" bash -c 'grep -q "launchctl bootout gui/$(id -u)/$2.watchdog" "$1" && [ ! -e "$3" ]' _ "$WORK/system.log" "$BOSUN_LAUNCHD_LABEL" "$WATCHDOG_PLIST"
+  check "uninstall unloads and removes the job that runs the morning run now" bash -c 'grep -q "launchctl bootout gui/$(id -u)/$2.now" "$1" && [ ! -e "$3" ]' _ "$WORK/system.log" "$BOSUN_LAUNCHD_LABEL" "$NOW_PLIST"
   check "uninstall unloads the learning agent" grep -q "launchctl bootout gui/$(id -u)/$BOSUN_LAUNCHD_LABEL.learn" "$WORK/system.log"
   check "uninstall removes the menu bar app, and leaves ~/Applications" bash -c '[ ! -e "$1" ] && [ -d "$2" ]' _ "$APP" "$APP_DIR"
   check "... and unloads and removes its Open at Login job" bash -c 'grep -q "launchctl bootout gui/$(id -u)/$2.app" "$1" && [ ! -e "$3" ]' _ "$WORK/system.log" "$BOSUN_LAUNCHD_LABEL" "$APP_JOB"
@@ -4288,7 +4373,7 @@ PY
   u_summary_is() { # the summary the update ended with, as the design lays it out
     grep -qE "^bosun updated: ${U_V1_COMMIT:0:7} -> ${U_V2_COMMIT:0:7} \(1 commit\) in [0-9]+(m [0-9]+)?s$" "$1" &&
       grep -qE "^  ledger      format 1 -> 2 \([0-9]+ items migrated\)$" "$1" && grep -qx "  knowledge   format 1, unchanged" "$1" &&
-      grep -qx "Prompts changed: 1 (policy.md)" "$1" && grep -qx "Jobs reloaded: morning, watchdog" "$1" &&
+      grep -qx "Prompts changed: 1 (policy.md)" "$1" && grep -qx "Jobs reloaded: morning, watchdog, now" "$1" &&
       ! grep -q "^  FAIL: " "$1" && grep -qE "^  [0-9]+ already failing before the update$" "$1" &&
       grep -qE "^  [0-9]+ warnings?: run bosun doctor$" "$1" &&
       grep -qxE "Backup: $2 \([0-9.]+ (bytes|KB|MB|GB)\)" "$1" && [ "$(tail -1 "$1")" = "Going back: docs/setup.md#going-back" ] || {
@@ -4575,7 +4660,8 @@ HAND
   rm -f "$U_CONFIG/sessions.yml"
 
   # A next version whose launchd templates are broken: the morning job's fails to render, the
-  # watchdog's renders XML that is not valid. Nothing installed is unloaded or removed.
+  # watchdog's renders XML that is not valid. Neither of those is unloaded or removed (the job that runs
+  # `morning --now` renders fine, and goes on being reloaded: a job that fails does not stop the others).
   ug rm -q templates/launchd.plist
   printf '<plist><dict><string>__LABEL__</string>\n' >"$U_UP/templates/launchd-watchdog.plist"
   ug commit -qam "v3, its launchd templates broken"
@@ -4587,7 +4673,7 @@ HAND
   u_jobs="$HOME/Library/LaunchAgents/com.bosun.update-test"
   cp "$u_jobs.plist" "$U/morning.plist"
   cp "$u_jobs.watchdog.plist" "$U/watchdog.plist"
-  u_bootouts() { grep -c "launchctl bootout gui/$(id -u)/com.bosun.update-test" "$WORK/system.log"; }
+  u_bootouts() { grep -cE "launchctl bootout gui/$(id -u)/com.bosun.update-test(\.watchdog)?\$" "$WORK/system.log"; }
   bootouts="$(u_bootouts)"
   "${U_ENV[@]}" bash -c 'source "$1/lib/common.sh"; load_config; reload_changed_jobs' _ "$U_VERSIONS/${U_V3_COMMIT:0:12}" >/dev/null 2>&1
   rc=$?

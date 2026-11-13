@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- Rendered by bosun install.sh. Edit bosun.env and re-run install.sh instead. -->
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>__LABEL__</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/bin/bash</string>
+    <string>-lc</string>
+    <string>exec "__BOSUN_ROOT__/bin/bosun" morning --now</string>
+  </array>
+  <key>EnvironmentVariables</key>
+  <dict>
+__ENV__
+  </dict>
+  <!-- Run only when `bosun morning` with its now and background options kickstarts it (launchctl kickstart, without
+       its kill option, which leaves a run that is going alone): launchd, not the program that asked, is then
+       the parent of the morning run and of everything it starts, so macOS's privacy prompts name bosun and not
+       the menu bar app. No schedule, no RunAtLoad and no KeepAlive: nothing else starts it. -->
+  <key>RunAtLoad</key>
+  <false/>
+  <!-- The tmux server and the keep-awake caffeinate outlive this job; without this launchd would kill them
+       when it exits. -->
+  <key>AbandonProcessGroup</key>
+  <true/>
+  <key>StandardOutPath</key>
+  <string>__LOG_DIR__/now.launchd.out</string>
+  <key>StandardErrorPath</key>
+  <string>__LOG_DIR__/now.launchd.err</string>
+</dict>
+</plist>

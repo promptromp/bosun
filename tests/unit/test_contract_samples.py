@@ -16,6 +16,7 @@ from typing import Any
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "tools"))
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "lib"))
 import contract_samples as cs
+import update
 import update_plan
 
 
@@ -107,7 +108,9 @@ class WhatTheAppReadsTest(unittest.TestCase):
         self.assertTrue(SAMPLES["update-check-failed"]["error"])
 
     def test_the_updates_plan_is_the_dry_runs_object_and_one_of_them_is_blocked_and_one_is_none(self) -> None:
-        self.assertEqual(sorted(SAMPLES["update-plan"]), ["plan", "summary", "update"])
+        self.assertEqual(sorted(SAMPLES["update-plan"]), ["contract", "plan", "summary", "update"])
+        self.assertEqual(SAMPLES["update-plan"]["contract"], update.CONTRACT)
+        self.assertEqual(SAMPLES["update-plan-none"]["contract"], update.CONTRACT)
         self.assertEqual(SAMPLES["update-plan"]["plan"]["blockers"], [])
         self.assertTrue(SAMPLES["update-plan-blocked"]["plan"]["blockers"])
         self.assertIsNone(SAMPLES["update-plan-none"]["plan"])
@@ -121,6 +124,9 @@ class WhatTheAppReadsTest(unittest.TestCase):
 
     def test_quit_has_the_plan_with_and_without_a_refusal_and_each_result(self) -> None:
         self.assertEqual(SAMPLES["quit-plan"]["busy"], ["acme-exporter"])
+        for name in ("quit-plan", "quit-plan-refused", "quit-plan-failed", "quit-result-busy"):
+            self.assertIsInstance(SAMPLES[name]["wait_minutes"], int, name)
+            self.assertIsInstance(SAMPLES[name]["lock_wait_seconds"], int, name)
         self.assertEqual(SAMPLES["quit-plan"]["waiting"], ["acme-web"])
         self.assertIsNone(SAMPLES["quit-plan"]["refused"])
         self.assertTrue(SAMPLES["quit-plan-refused"]["refused"])

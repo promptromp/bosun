@@ -269,6 +269,15 @@ class NotOursTest(World):
         self.assertIn("not an app", str(app_release.not_ours(self.app, BUNDLE_ID)))
 
 
+class AppPathTest(unittest.TestCase):
+    def test_the_app_is_in_the_applications_folder_of_the_home_it_is_given(self) -> None:
+        """The one place the path is made: the install, the watchdog and the tests all ask."""
+        home = Path("/Users/me")
+        self.assertEqual(app_release.app_path(home), home / "Applications" / "bosun.app")
+        self.assertEqual(app_install.Setup(root=home, home=home).app, app_release.app_path(home))
+        self.assertEqual(app_install.Setup(root=home, home=home).apps, app_release.app_path(home).parent)
+
+
 class StatusTest(World):
     def status(self, login: Path | None = None) -> dict[str, Any]:
         return app_release.status(self.root, self.app, login)

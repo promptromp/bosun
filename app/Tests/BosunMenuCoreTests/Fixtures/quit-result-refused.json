@@ -4,8 +4,10 @@
   ],
   "contract": 1,
   "keep_awake_until": "20:00",
+  "lock_wait_seconds": 180,
   "refused": "an update is running: quit when it has finished (it brings the windows along)",
   "result": "refused",
+  "wait_minutes": 10,
   "waiting": [
     "acme-web"
   ],

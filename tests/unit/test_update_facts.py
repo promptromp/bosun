@@ -73,6 +73,22 @@ class BlockerTest(World):
         self.record("agents")
         self.assertEqual(self.plan().blockers, ())
 
+    def test_the_plan_says_whether_the_console_job_will_be_restarted(self) -> None:
+        self.assertFalse(self.plan().console_job)
+        with mock.patch.object(update_facts, "console_job", return_value=True):
+            self.assertTrue(self.plan().console_job)
+
+    def test_the_console_job_is_one_the_new_version_would_restart(self) -> None:
+        """Asked of the new version's own shell (its common.sh decides: loaded, and wanted)."""
+        done = subprocess.CompletedProcess([], 0, "", "")
+        with mock.patch.object(update_facts, "shell", return_value=done) as shell:
+            self.assertTrue(update_facts.console_job(self.new))
+        self.assertEqual(shell.call_args.args, (self.new, "console_restartable"))
+        for code in (1, 127):
+            done = subprocess.CompletedProcess([], code, "", "")
+            with mock.patch.object(update_facts, "shell", return_value=done):
+                self.assertFalse(update_facts.console_job(self.new))
+
     def test_the_plan_says_which_kept_values_it_writes_to_bosun_env(self) -> None:
         """A key the update adds with a kept value (migrations.CONFIG_ADDED), that bosun.env does not
         set: the plan shows it, so the person saying yes sees bosun.env change."""

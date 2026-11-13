@@ -3,8 +3,10 @@
   "contract": 1,
   "error": "another bosun start or refresh is setting up the windows, and did not finish in time: nothing was changed, try the quit again",
   "keep_awake_until": null,
+  "lock_wait_seconds": 180,
   "refused": null,
   "result": "failed",
+  "wait_minutes": 10,
   "waiting": [],
   "windows": []
 }

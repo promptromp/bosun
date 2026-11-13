@@ -70,6 +70,7 @@ first_look() {
   check "... says why" says "your usual first prompt is 09:10" "$out"
   check "... says how sessions handle permissions" says "auto mode" "$out"
   check "... says what sudo is for" says "sudo pmset repeat wakeorpoweron MTWRF 08:31:00" "$out"
+  check "... and that the menu bar app is not offered yet" says "no signed build to install" "$out"
   check "... and changed nothing" bash -c '[ ! -e "$1" ] && [ ! -e "$2" ]' _ "$HOME/.local/bin/bosun" "$CONFIG"
 }
 
@@ -90,6 +91,11 @@ set_up() {
   check "the watchdog is loaded" says "com.bosun.morning.watchdog.plist" "$LOG"
   check "learning is loaded" says "com.bosun.morning.learn.plist" "$LOG"
   check "the wake went through sudo" says "sudo pmset repeat wakeorpoweron MTWRF 08:31:00" "$LOG"
+  # While app/publisher.json has no Team ID there is no signed build to install: the app is not offered (no
+  # question, nothing installed), and bosun.env does not claim one. Once it has one, this walks the app too.
+  check "the menu bar app is not offered, and bosun.env says it is not there" bash -c 'grep -q "^BOSUN_MENU_APP=\"0\"" "$1" && grep -q "^BOSUN_CONSOLE_ALWAYS=\"0\"" "$1"' _ "$CONFIG/bosun.env"
+  check "... the plan said why" says "no signed build to install" "$out"
+  check "... no console job was loaded for it" absent "com.bosun.morning.console.plist" "$LOG"
   check "it says what to do next" says "bosun is set up" "$out"
 }
 

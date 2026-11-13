@@ -634,6 +634,22 @@ class TestConfigAdded(unittest.TestCase):
         text = (Path(__file__).resolve().parents[2] / "lib" / "common.sh").read_text()
         self.assertIn('\n  BOSUN_UPDATE_CHANNEL="releases"\n', text)  # a new install follows the releases
 
+    def test_an_older_install_has_neither_the_menu_bar_app_nor_an_always_on_console(self) -> None:
+        """Both kept at 0, written to bosun.env once: the update's plan and summary say how to add the app
+        and that the console can be a background job, in the one update, and never again."""
+        keys = ("BOSUN_MENU_APP", "BOSUN_CONSOLE_ALWAYS")
+        self.assertEqual(migrations.kept_values(keys), {"BOSUN_MENU_APP": "0", "BOSUN_CONSOLE_ALWAYS": "0"})
+        notes = dict(migrations.added_notes(keys, written=keys))
+        self.assertIn("bosun app install", notes["BOSUN_MENU_APP"])
+        self.assertIn("BOSUN_MENU_APP=1", notes["BOSUN_MENU_APP"])
+        self.assertIn("BOSUN_CONSOLE_ALWAYS=1", notes["BOSUN_CONSOLE_ALWAYS"])
+        self.assertEqual(migrations.added_notes(keys, written=()), [])  # once written, never said again
+        unset = dict(migrations.added_notes(keys, written=(), unwritten=keys))
+        self.assertIn("bosun app install", unset["BOSUN_MENU_APP"])
+        root = Path(__file__).resolve().parents[2]
+        self.assertIn('\n  BOSUN_MENU_APP="0"\n', (root / "lib" / "common.sh").read_text())
+        self.assertIn('\nBOSUN_MENU_APP="0"\n', (root / "examples" / "generic" / "bosun.env").read_text())
+
 
 class TestValidateUnlocked(MigrationTest):
     def test_validate_unlocked_runs_under_a_held_lock(self) -> None:

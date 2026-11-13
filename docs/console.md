@@ -82,7 +82,7 @@ light or dark mode and works down to a narrow window.
 - It listens on `127.0.0.1` only, on `BOSUN_CONSOLE_PORT` (8765) or `--port N`; `--port 0`
   picks a free port. A port in use is an error, not a silent fallback.
 - With `BOSUN_CONSOLE_ALWAYS=1` (default 0) the console runs as a launchd job, which `install.sh` loads and
-  `bosun update` renders again (a console already running keeps the version it started on until it is restarted);
+  `bosun update` renders again, and restarts after the switch when it is loaded and wanted, so it serves the new version (a console you started by hand keeps the version it started on until you restart it);
   `bosun start` makes `$BOSUN_STATE_DIR/console/wanted`, and the job runs while that
   file is there. `bosun console --url` prints its address, token included ("the console is not running" and exit 1
   when none runs), and a `bosun console` you run by hand while one serves prints the same address (`--open` opens it)
@@ -105,7 +105,7 @@ light or dark mode and works down to a narrow window.
   each agent's session records), at most every 10 s; it never sends keys to a pane, never reads
   a pane's text and never starts an agent.
 - It logs only refused requests (to stderr), never ledger content or item ids.
-- A console keeps the code it started with. `bosun update`'s plan says to restart one that runs, and
+- A console keeps the code it started with. `bosun update`'s plan says to restart one you started by hand (the background job is restarted by the update), and
   a review decision it can no longer save after an update says so, and to restart it (`bosun console`).
 
 ## Impact

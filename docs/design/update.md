@@ -189,8 +189,8 @@ check gets no protection from it, which is why the first update converts at a qu
 
    As built, these stop it at the plan too: a store whose format cannot be read, a link among what a
    backup copies that leads nowhere, a launchd job the new version cannot render, versions that are
-   not side by side, and windows the last update still brings along (below). It also lists a running
-   console, the handed tasks that keep their old text, and what to change by hand in my own files.
+   not side by side, and windows the last update still brings along (below). It also lists a console (bosun's background job, which the update restarts itself, or one
+   started by hand, which it does not), the handed tasks that keep their old text, and what to change by hand in my own files.
 
    It shows the plan and asks first, as `init` and `uninstall` do. `--yes` skips the question;
    `--dry-run`, or no terminal to ask in, stops here.
@@ -218,7 +218,11 @@ check gets no protection from it, which is why the first update converts at a qu
    what failed.
 5. **Release.** Reload the launchd jobs whose plist changed, restart the check-in loop while the hold
    is still on (it stops at once, even mid-tick, and the hold keeps a tick from starting meanwhile),
-   lift the hold, delete the old backups and version folders, and run the new version's `bosun
+   bring the menu bar app to the version the new one expects (`bosun app update` of the new version, which
+   goes by the app being there, not by `BOSUN_MENU_APP`, and does nothing with none; a refusal or failure is a
+   finding in the summary and stops nothing), restart the
+   console's launchd job if it is loaded and wanted (`console/wanted` is there; `launchctl kickstart -k`, so it
+   serves the new code; a job that is not loaded is never started), lift the hold, delete the old backups and version folders, and run the new version's `bosun
    doctor`. A finding at this point is reported, not rolled back, since writes may have landed since
    the freeze.
 6. **Bring the agents along** (below).
@@ -768,7 +772,13 @@ Decided while building it:
   no step past `backed-up` is recorded without it.
 - **The launchd jobs:** a job is reloaded only where its rendered plist differs or it is not loaded,
   and each rendered plist is checked before the job is touched. One that cannot be rendered, or renders
-  invalid, blocks the plan, and in the release it is a finding while the installed job stays loaded.
+  invalid, blocks the plan, and in the release it is a finding while the installed job stays loaded. The job
+  that runs `bosun morning --now` (`<label>.now`, `templates/launchd-now.plist`) is one of them, always wanted:
+  an update from a version without it loads it, and its `ProgramArguments` name the install link like the
+  others'. The update itself is not run through a job like it: it reloads changed plists, which could boot the
+  job it runs in out, so the menu bar app starts `bosun update --yes` as a detached child instead
+  ([menu-bar.md](menu-bar.md)). An update whose release changes the `.now` plist boots out a `.now` run that is
+  waiting on the update's hold, as it does for the morning job; that run is not carried on, and Start again starts it.
 - **The plan before the switch** asks the new version: its `launch --fingerprint` reads the files
   under the install from its own folder. One of bosun's windows with no launch record counts as changed.
 - **A window bosun did not start**: one `bosun sessions` lists outside the window list (`extra`)

@@ -35,7 +35,7 @@ from agent_files import AgentSetup
 
 
 LABEL = "com.bosun.morning"
-LABELS = f"{LABEL} {LABEL}.watchdog {LABEL}.learn {LABEL}.console {LABEL}.app {LABEL}.waketest"
+LABELS = f"{LABEL} {LABEL}.watchdog {LABEL}.learn {LABEL}.console {LABEL}.now {LABEL}.app {LABEL}.waketest"
 BUNDLE_ID = "ai.example.bosun"
 WAKE_LINE = "wakepoweron at 9:01AM every day"
 real_run = subprocess.run
@@ -262,7 +262,7 @@ class World(unittest.TestCase):
 
     def make_jobs(self) -> None:
         self.agents.mkdir(parents=True)
-        for label in (LABEL, f"{LABEL}.watchdog", f"{LABEL}.learn"):
+        for label in (LABEL, f"{LABEL}.watchdog", f"{LABEL}.learn", f"{LABEL}.now"):
             self.write_plist(label, f'exec "{self.root}/bin/bosun" run')
             self.mac.loaded.add(label)
 

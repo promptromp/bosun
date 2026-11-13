@@ -1,4 +1,5 @@
 {
+  "contract": 1,
   "plan": {
     "blockers": [],
     "commits": [
@@ -6,6 +7,7 @@
       "Repo windows on a second agent"
     ],
     "console": true,
+    "console_job": false,
     "formats": [
       [
         "ledger",

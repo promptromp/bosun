@@ -161,6 +161,22 @@ CONFIG_ADDED: tuple[AddedKey, ...] = (
         "release: set BOSUN_UPDATE_CHANNEL=main in bosun.env to keep following main",
     ),
     AddedKey(
+        "BOSUN_MENU_APP",
+        "0",
+        "this install has no menu bar app: bosun app install adds it (bosun update keeps an installed one "
+        "current either way), and BOSUN_MENU_APP=1 in bosun.env makes the watchdog say when it is gone",
+        "no menu bar app is set up: bosun app install adds it (bosun update keeps an installed one current "
+        "either way), and BOSUN_MENU_APP=1 in bosun.env makes the watchdog say when it is gone",
+    ),
+    AddedKey(
+        "BOSUN_CONSOLE_ALWAYS",
+        "0",
+        "the console runs when you start it, as before; with BOSUN_CONSOLE_ALWAYS=1 it runs as a "
+        "background job from bosun start until bosun quit",
+        "the console runs when you start it, as before; with BOSUN_CONSOLE_ALWAYS=1 it runs as a "
+        "background job from bosun start until bosun quit",
+    ),
+    AddedKey(
         "BOSUN_CONNECTORS",
         None,
         "repo windows now start without connectors, a repo's own .mcp.json servers included; give one "

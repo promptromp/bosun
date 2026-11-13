@@ -70,8 +70,6 @@ put_the_clock_back() {
   check "the clock is back at the real time: $(date -u '+%a %F %R') UTC" clock_reads 0
 }
 
-morning_runs() { cat "$STATE"/logs/morning-*.log 2>/dev/null | grep -c "morning run complete"; }
-morning_runs_above() { [ "$(morning_runs)" -gt "$1" ]; }
 jobs_quiet() { ! pgrep -f 'libexec/bosun-(morning|learn)' >/dev/null; }
 
 next_day() { # <days after the first>: the clock moves on, and whatever launchd does about it settles
@@ -1431,6 +1429,8 @@ launchd_on_the_new_bosun() {
   tail -5 "$STATE"/logs/morning-"$(date +%F)".log
   valid "ledger validate --journal stays clean"
   bosun stop >/dev/null 2>&1
+  # The job that runs --now is on this checkout only (the release has neither it nor --background).
+  now_job_for_real
 }
 
 console_url() { grep -m 1 -oE 'http://127\.0\.0\.1:[0-9]+/\?t=[A-Za-z0-9_-]+' "$OUT/console.txt"; }

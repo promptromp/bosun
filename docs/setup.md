@@ -60,7 +60,10 @@ as it keeps `BOSUN_HARNESS`). The channel is the one setting; `bosun init --answ
 
 `bosun init` reads what this Mac already shows: the repos you use your agents in, the MCP servers and
 connectors `claude mcp list` shows, your usual hours, your logins. In a terminal it asks a few questions,
-one key each: Return takes the recommended answer, `r` starts again and `q` leaves with nothing changed.
+one key each: Return takes the recommended answer, `r` starts again and `q` leaves with nothing changed. The last
+of them (once a signed build of it exists to install) is whether to add the menu bar app: `bosun.app` in
+`~/Applications`, opened at login (`bosun app install` adds it later; `bosun update` keeps an installed app
+current, and `BOSUN_MENU_APP=1` in `bosun.env` makes the watchdog say when it is gone).
 It says why it recommends what it does, and lists every file and command for you to accept before it
 touches anything. Then it writes the config, trusts the folders, and runs `install.sh`.
 
@@ -134,7 +137,9 @@ Waking *before* the job would leave a gap in which an unattended Mac can doze of
 `~/.local/bin` and loads the launchd jobs: the morning run, the [watchdog](watchdog.md#watchdog) and, with
 `BOSUN_LEARN_ENABLED=1`, the daily [learning](learning.md#learning) run
 (`<BOSUN_LAUNCHD_LABEL>.learn`) and, with `BOSUN_CONSOLE_ALWAYS=1`, the [console](console.md#console)
-(`<BOSUN_LAUNCHD_LABEL>.console`).
+(`<BOSUN_LAUNCHD_LABEL>.console`). One more job, `<BOSUN_LAUNCHD_LABEL>.now`, has no schedule: it runs
+`bosun morning --now` when `bosun morning --now --background` (which the menu bar app's Start runs) kickstarts it,
+so that launchd, not the caller, is the parent of what the morning run starts.
 [`bosun uninstall`](#uninstall) reverses it. A checkout of your own like this one updates with git, not
 with `bosun update`.
 
@@ -268,7 +273,7 @@ as it was.
 | What | What happens |
 |---|---|
 | Your windows | Stopped, so any work in them stops. It says which are running first, and waits up to 15 seconds for what they started to end, so their last hooks finish first; what still runs then it names and leaves running, such as a background command a Codex window started |
-| The launchd jobs (morning, watchdog, learning, console, and the menu bar app's Open at Login job) | Unloaded and deleted, before the windows stop, so the watchdog cannot bring them back |
+| The launchd jobs (morning, watchdog, learning, console, the job that runs `morning --now` for the menu bar app's Start, and the app's Open at Login job) | Unloaded and deleted, before the windows stop, so the watchdog cannot bring them back |
 | The menu bar app, `~/Applications/bosun.app` (with `bosun app install`) | Asked to quit if it runs, then deleted, after its job and before the windows stop. The `~/Applications` folder stays |
 | The repeating wake | Cancelled with `sudo pmset repeat cancel`, if it is the one bosun set. `pmset` can only cancel every repeating event at once, so another event, or a wake at another time, stays and it says so |
 | Folder trust | Taken back for the folders bosun marked, in Claude Code and Codex (`agy` windows pass their folder at each start and mark nothing). A folder you had accepted yourself stays trusted. It goes by bosun's record of what it changed (`agent-changes.json`), kept since `bosun uninstall` was added; trust or notes from an install before that are not on it and stay |

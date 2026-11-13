@@ -18,7 +18,8 @@ anything.
 | Apply | `lib/init.py` | The CLI. Writes the config with backups, trusts the folders, runs `install.sh`. |
 
 `install.sh` is where installing meets launchd, `pmset` and `bosun doctor`, so `init` only writes
-what `install.sh` reads. `lib/uninstall_macos.py` undoes the launchd jobs and the wake
+what `install.sh` reads (its jobs are the morning run, the watchdog, learning and the console where wanted, and
+the one with no schedule that `bosun morning --now --background` kickstarts, which is always loaded). `lib/uninstall_macos.py` undoes the launchd jobs and the wake
 ([uninstall.md](uninstall.md)). Answers are JSON (`--print-answers`), and a file only needs what it
 changes: the wizard only fills those in, so `--answers` and the wizard cannot disagree.
 
@@ -101,6 +102,7 @@ for it, and the plan says why.
 | Orchestrator folder | The folder the same repos share, never your home folder. |
 | AWS SSO | The profile, if there is exactly one; with more, the choice is yours. |
 | Wake | Yes, unless `pmset` already has a repeating event that bosun did not set: it keeps only one, and it is not ours to replace by default. |
+| Menu bar app | Yes on a first run ("Add bosun to the menu bar and Applications?", after the wake question, the `menu_app` answer), but only while `app/publisher.json` has a valid `team_id` (read with `lib/app_release.py`'s own reading and check): with no signed build to install the app is not offered, the question is not asked, `menu_app` is no and the plan says why in a line. Unattended, no, since it opens an app at login and someone should say yes. A re-run goes by `BOSUN_MENU_APP` in the config, so an install without the app stays without. `BOSUN_MENU_APP` is written `1` or `0`; `BOSUN_CONSOLE_ALWAYS` (the app's Open Console needs the console's job) follows it when the answer changes (to `1` or `0`) and stays as it is while the answer does not, so a hand-set value survives re-runs, and turning the app off turns the console job off. After `install.sh`, `bosun app install` (`bosun app update` where the app is already in `~/Applications`, and the plan says which, so a re-run never relaunches an app in use), then `bosun app login on` (which does nothing when the job is there, unchanged and loaded). A refused install (no network, say) is one line, with how to add the app later: `bosun.env` goes back to `BOSUN_MENU_APP="0"` and `BOSUN_CONSOLE_ALWAYS="0"` (init is the only writer of `bosun.env`: `bosun app` never writes it), and init still succeeds. Answering No where the app is installed leaves it there: the plan says `bosun app remove` takes it away. |
 
 It only reads where and when prompts were typed, never what they say.
 

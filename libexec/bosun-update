@@ -51,8 +51,8 @@
 # (it was on main, after the release) says it is ahead of it, and changes nothing.
 #   --dry-run  show the plan, and change nothing
 #   --yes      go ahead without asking
-#   --json     one JSON object on every path: the plan (null when none was made: up to date, refused),
-#              the update's record as it stands, and the summary (null unless an update ended in
+#   --json     one JSON object on every path: `contract` 1, the plan (null when none was made: up to
+#              date, refused), the update's record as it stands, and the summary (null unless an update ended in
 #              this run); what it says goes to stderr
 #
 # Whether there is an update, without changing anything (no version folder, no hold, no lock; the menu bar

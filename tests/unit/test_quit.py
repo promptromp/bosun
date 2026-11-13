@@ -34,6 +34,8 @@ class PlanTest(unittest.TestCase):
             [window("orch"), window("alpha", "busy"), window("beta", "waiting"), window("gamma", "shell")],
             None,
             False,
+            10,
+            180,
         )
         self.assertEqual(
             plan,
@@ -44,21 +46,23 @@ class PlanTest(unittest.TestCase):
                 "waiting": ["beta"],
                 "keep_awake_until": None,
                 "refused": None,
+                "wait_minutes": 10,
+                "lock_wait_seconds": 180,
             },
         )
 
     def test_a_window_with_no_agent_is_open_and_neither_busy_nor_waiting(self) -> None:
-        plan = quit_cmd.quit_plan([window("alpha", None)], "08:30", False)
+        plan = quit_cmd.quit_plan([window("alpha", None)], "08:30", False, 10, 180)
         self.assertEqual((plan["windows"], plan["busy"], plan["waiting"]), (["alpha"], [], []))
         self.assertEqual(plan["keep_awake_until"], "08:30")
 
     def test_an_update_refuses_the_quit_and_says_why(self) -> None:
-        plan = quit_cmd.quit_plan([window("alpha", "busy")], None, True)
+        plan = quit_cmd.quit_plan([window("alpha", "busy")], None, True, 10, 180)
         self.assertIn("update", str(plan["refused"]))
         self.assertEqual(plan["busy"], ["alpha"])  # still said: what the person would be told about
 
     def test_no_update_is_no_refusal(self) -> None:
-        self.assertIsNone(quit_cmd.quit_plan([], None, False)["refused"])
+        self.assertIsNone(quit_cmd.quit_plan([], None, False, 10, 180)["refused"])
 
     def test_the_windows_are_the_open_ones_of_the_listing(self) -> None:
         found = quit_cmd.windows_from_sessions(
@@ -145,16 +149,17 @@ class Fake:
         )
 
 
-def run(
+def run(  # noqa: PLR0913, PLR0917 - a test helper: each option of a run is a keyword
     fake: Fake,
     mode: str,
     minutes: int = 10,
     pause: bool = False,
     sleep: bool = False,
     as_json: bool = False,
+    lock_wait: int = 180,
 ) -> tuple[int, str, str]:
     out, err = io.StringIO(), io.StringIO()
-    options = quit_cmd.Options(mode, minutes, pause, sleep, as_json)
+    options = quit_cmd.Options(mode, minutes, pause, sleep, as_json, lock_wait)
     status = quit_cmd.run(options, fake.ports(), out, err)
     return status, out.getvalue(), err.getvalue()
 
@@ -276,10 +281,44 @@ class RunTest(unittest.TestCase):
         data = json.loads(out)
         self.assertEqual(status, 0)
         self.assertEqual(
-            sorted(data), ["busy", "contract", "keep_awake_until", "refused", "waiting", "windows"]
+            sorted(data),
+            [
+                "busy",
+                "contract",
+                "keep_awake_until",
+                "lock_wait_seconds",
+                "refused",
+                "wait_minutes",
+                "waiting",
+                "windows",
+            ],
         )
         self.assertEqual(data["keep_awake_until"], "09:00")
         self.assertEqual(fake.steps, [])
+
+    def test_the_plan_says_how_long_a_quit_may_wait_so_the_app_can_time_it(self) -> None:
+        """The app passes --let-finish=<N> and gives the quit N minutes plus the windows lock wait plus a
+        margin: the minutes of the run (BOSUN_QUIT_WAIT_MINUTES, which the command passes as them) and the
+        lock's seconds (BOSUN_WINDOWS_LOCK_WAIT_SECONDS), ints, also in the object of a failure."""
+        for minutes, lock in ((10, 180), (0, 0), (25, 30)):
+            _status, out, _err = run(
+                Fake([window("alpha")]), "plan", minutes=minutes, as_json=True, lock_wait=lock
+            )
+            data = json.loads(out)
+            self.assertEqual((data["wait_minutes"], data["lock_wait_seconds"]), (minutes, lock))
+
+        def broken() -> list[quit_cmd.Window]:
+            raise quit_cmd.QuitError("the windows could not be read")
+
+        fake = Fake([])
+        fake.read_windows = broken  # type: ignore[method-assign]
+        _status, out, _err = run(fake, "plan", minutes=7, as_json=True, lock_wait=45)
+        data = json.loads(out)
+        self.assertEqual((data["wait_minutes"], data["lock_wait_seconds"]), (7, 45))
+
+    def test_lock_wait_seconds_has_no_default_to_forget(self) -> None:
+        with self.assertRaises(TypeError):
+            quit_cmd.Options("plan", 10, False, False, True)  # type: ignore[call-arg]
 
     def test_the_plan_in_text_names_the_windows_that_are_busy_or_waiting(self) -> None:
         _status, out, _err = run(Fake([window("alpha", "busy"), window("beta", "waiting")]), "plan")

@@ -91,15 +91,20 @@ Calls made from the research and the builder check, to check while reading:
   Cancel Quit. A window waiting for you (a question or permission prompt on its screen) is not waited on: the dialog
   lists it by name, and Quit stops it.
 - **After Quit the launchd jobs stay loaded and do nothing** until Start: the watchdog and learning skip their runs
-  while bosun is stopped, the morning job skips while paused. So the jobs never need reloading, and
-  `reload_changed_jobs` is unchanged. The console job is the one that would restart a process, so its KeepAlive
+  while bosun is stopped, the morning job skips while paused. So a Quit never reloads a job. The console job is the one that would restart a process, so its KeepAlive
   depends on a marker file Start creates and Quit removes (launchd's `KeepAlive` → `PathState`).
 - **"Start bosun" does what the morning run does** — the setup refresh, the agents' update, a keep-awake until the
   awake hours end when it is inside them, then start or refresh — on any day, at any hour. It runs `bosun morning
   --now`: that run ends a quit (paused or not) instead of stopping for it, takes "inside the awake hours" from
   `lib/awake.py`'s window (the one rule the watchdog and the status use), holds no keep-awake outside it, and still
   passes `--unless-quit` to its start, so a Quit made while Start is setting up is kept. Opening the app in the red
-  state starts bosun too.
+  state starts bosun too. The app runs **`bosun morning --now --background`**, not `--now` itself: a process the app
+  starts keeps bosun.app as its "responsible process" for macOS's privacy (TCC) prompts, even when detached, and
+  everything the morning run starts (the tmux server, the agents) would inherit that, so the prompts would name the
+  app and the grants would follow its signature. `--background` only has launchd start the run, through bosun's own
+  job (below), so launchd is the parent and the prompts name bosun's own processes. **`bosun update --yes` stays a
+  detached child of the app**, since an update run as a launchd job could boot itself out when it reloads changed
+  plists (`reload_changed_jobs`), and what an update starts is not what the privacy prompts are about.
 - **The console always running is a setting**, `BOSUN_CONSOLE_ALWAYS`, on for installs with the app and off for
   others (no `CONFIG_ADDED` entry: its default, 0, is what an older install did). A `bosun console` by hand while the
   job runs prints (and with `--open` opens) the running one instead of starting a second.
@@ -131,17 +136,18 @@ Calls made from the research and the builder check, to check while reading:
 - **How it talks to bosun.** Only through the install link `~/.local/bin/bosun` (which `bosun update` points at the
   current version), with JSON commands defined in the CLI:
   - `bosun status --json`: the menu's whole state, with a `contract` version (below);
-  - `bosun update --check --json`, `bosun update` (started detached; its progress is in the status);
+  - `bosun update --check --json`, `bosun update` (started detached, so its output does not go to the app; its progress is in the status);
   - `bosun console --url`: the running console's address with its token;
   - `bosun quit --plan --json` (what quitting would stop, which agents are mid-task) and `bosun quit <choices>`;
-  - `bosun start`;
+  - `bosun morning --now --background` (Start: bosun's own launchd job runs it, so the app is not the parent of what it
+    starts; never `bosun start`, which would make the tmux server the app's child);
   - `bosun app login on|off`.
   It refreshes the status when the menu opens and every 30 seconds otherwise; a menu open shows the last state at
   once and updates in place.
 - **Version skew.** `bosun status --json` carries a `contract` number. An app that does not know the number says
   "bosun.app needs an update" in its status line and offers "Update bosun…" (which runs `bosun update`); a CLI that
   sees an older app than its checkout expects updates it (below).
-- **Opening it.** Opened by you (Finder, Spotlight, Launchpad): if bosun is stopped, it runs `bosun start`, then shows
+- **Opening it.** Opened by you (Finder, Spotlight, Launchpad): if bosun is stopped, it runs `bosun morning --now --background` (as Start does), then shows
   the menu bar icon. Opened at login (its launchd job passes `--at-login`): it only shows the icon; bosun's own
   morning job starts bosun at its time. Opened while running: macOS brings up the running copy, which does nothing
   new.
@@ -176,6 +182,21 @@ Calls made from the research and the builder check, to check while reading:
   after a quit and a reboot with the marker gone. `bosun start` makes the marker; quit removes it and stops the process
   (`launchctl kill TERM`). `bosun console --url` prints its address with the token: the port the console recorded in its
   running lock and the stored token.
+- **The job that runs `--now`.** `templates/launchd-now.plist` (`<BOSUN_LAUNCHD_LABEL>.now`, `now_label`) runs
+  `bosun morning --now` through a login shell like bosun's other jobs, with `RunAtLoad` false and no schedule or
+  `KeepAlive`: only a kickstart starts it. It is always rendered, loaded and listed (`job_labels`, `render_job`,
+  `reload_changed_jobs`: install.sh and `bosun update` keep it current) and removed by uninstall with the others.
+  `AbandonProcessGroup` is true, since the tmux server and the keep-awake it starts outlive it. `bosun morning --now
+  --background` is `launchctl kickstart gui/<uid>/<label>.now` and a return at once: it adds no morning logic (the quit
+  record, the keep-awake, the update hold stay in the one `--now` path the job runs, whose log is the day's morning
+  log with `trigger=now`). A morning run that launchd started, by either job (the scheduled one or this), is not started
+  again: `--background` reads both jobs' state (`job_running`, the first top-level `state` line, as the watchdog
+  does) before it kickstarts, since the morning script takes no lock and a second run would run the setup steps and
+  the agents' update twice at once. A `bosun morning --now` typed in a terminal is no job and is not seen. Exit 0 when launchd took the kickstart or
+  the run is going; exit 1, in one line, when the job is not loaded (run `install.sh` again, or `bosun init`) or
+  launchd would not start it; exit 2 for `--background` without `--now` or with `--dry-run`, `--skip-setup` or
+  `--awake-minutes`, which the job's run cannot be given. The VM run (`tests/install_e2e.sh`) checks with `launchctl
+  procinfo` that the tmux server it starts has a responsible process that is not the caller's.
 - **`bosun quit`.** The one command Quit runs (the app collects the choices; the CLI does the work, so a terminal
   can quit bosun the same way). `bosun quit --plan [--json]` changes nothing and says what a quit would meet: the
   open windows, which are busy and which wait for you, when the keep-awake ends, and why a quit is refused (an
@@ -230,10 +251,23 @@ Calls made from the research and the builder check, to check while reading:
   its Team ID is the one in `app/publisher.json`, and `spctl --assess` accepts it; then they move it into
   `~/Applications/bosun.app` in one rename, keeping the old one until the new one starts.
 - **`bosun init`** asks "Add bosun to the menu bar and Applications?" (an `Answers` field, default yes; skipped when
-  no one is at the terminal), sets `BOSUN_MENU_APP=1`, installs the app and turns on Open at Login.
-- **`bosun update`** installs the app version the new checkout expects when `BOSUN_MENU_APP=1` and the installed one
-  differs, and relaunches it if it was running. An install from before this change gets `BOSUN_MENU_APP=0` (a
-  `CONFIG_ADDED` entry) and a line in the update's summary saying how to add the app.
+  no one is at the terminal), but only while `app/publisher.json` has a valid Team ID: until a signed build exists
+  there is nothing to install, so it does not offer the app, writes `BOSUN_MENU_APP=0` and says why in its plan.
+  With a yes it sets `BOSUN_MENU_APP=1` and `BOSUN_CONSOLE_ALWAYS=1` (the app's Open Console needs the console's
+  job), installs the app and turns on Open at Login; an install that is refused (no network, say) puts both back to
+  0 and init goes on. The commands of `bosun app` never write `bosun.env`: init is its only writer. A re-run does
+  not relaunch an app in use (`bosun app update` where it is there, `login on` doing nothing when the job is in
+  place), and answering No where it is installed leaves it, saying `bosun app remove` takes it away.
+- **`bosun update`** always runs `bosun app update` of the new version: it goes by the app being there, not by
+  `BOSUN_MENU_APP`, which is the person's wish (init's question and the watchdog's alert), as a present Open at
+  Login job is kept current and never made. It installs the app version the new checkout expects when the installed
+  one differs, and relaunches it if it was running; with no app it does nothing, before any Team ID check. A
+  refusal or failure is a line in the summary, never a failed update. It also restarts the console's launchd job
+  when it is loaded and wanted, so the console serves the new version. An install from before this change gets
+  `BOSUN_MENU_APP=0` (a `CONFIG_ADDED` entry) and a line in the update's summary saying how to add the app
+  (`bosun app install`); `bosun app install` ends with a line saying how to have the watchdog watch it
+  (`BOSUN_MENU_APP=1`). The update is started detached by the app, so its own output does not go to the app: the
+  app reads its progress in `bosun status --json`, and an update whose reader went away still finishes.
 - **Uninstall.** `bosun uninstall` removes `~/Applications/bosun.app` and its login job (rows in
   `lib/uninstall_plan.py`). "Uninstall bosun…" runs it after a confirmation that lists what goes and what stays (its
   plan's own text).

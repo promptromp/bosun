@@ -2,10 +2,11 @@
 
 Each fixture is made by part 1's own code, never typed by hand: the status objects by
 `menu_status.snapshot` over recorded facts, the update check by `update_check.check`, the update's plan
-by `update_plan.make_plan` (as `bosun update --dry-run --json` prints it), the quit plan by
-`quit.quit_plan` and each quit result by `quit.run` over fake ports (the world it would touch replaced, as
-tests/unit/test_quit.py does), the app's state by `app_release.status`. A change on the Python side that
-alters what the app reads fails tests/unit/test_contract_samples.py until the fixtures are written again:
+by `update_plan.make_plan` inside `update.json_object` (the object `bosun update --dry-run --json` prints),
+the quit plan by `quit.quit_plan` and each quit result by `quit.run` over fake ports (the world it would
+touch replaced, as tests/unit/test_quit.py does), the app's state by `app_release.status`. A change on the
+Python side that alters what the app reads fails tests/unit/test_contract_samples.py until the fixtures
+are written again:
 
     uv run python tools/contract_samples.py
 
@@ -36,6 +37,7 @@ import awake
 import menu_status
 import quit as quit_cmd
 import quit_state
+import update
 import update_check
 import update_plan
 from menu_status import SessionGate, StatusFacts
@@ -194,9 +196,10 @@ def make_plan(missing: Sequence[str] = ()) -> update_plan.Plan:
 
 
 def dry_run(plan: update_plan.Plan | None) -> Sample:
-    """What `bosun update --dry-run --json` prints: the plan (null when none was made), the update's record
-    and the summary, which a dry run has none of."""
-    return {"plan": update_plan.as_record(plan) if plan else None, "update": None, "summary": None}
+    """What `bosun update --dry-run --json` prints, made by the function that prints it: `contract`, the plan
+    (null when none was made), the update's record and the summary, which a dry run has none of."""
+    printed: Sample = json.loads(json.dumps(update.json_object(plan, None, None)))  # as it is on stdout
+    return printed
 
 
 def update_plan_samples() -> dict[str, Any]:
@@ -262,6 +265,8 @@ def quit_window(name: str, status: str = "idle") -> quit_cmd.Window:
     return quit_cmd.Window(name, status)
 
 
+LOCK_WAIT_SECONDS = 180  # BOSUN_WINDOWS_LOCK_WAIT_SECONDS' default
+QUIT_WAIT_MINUTES = 10  # BOSUN_QUIT_WAIT_MINUTES' default
 QUIT_WINDOWS = [
     quit_window("acme-orchestrator"),
     quit_window("acme-exporter", "busy"),
@@ -271,18 +276,23 @@ QUIT_WINDOWS = [
 QUIET_WINDOWS = [quit_window("acme-orchestrator"), quit_window("acme-web", "waiting")]
 
 
-def quit_run(world: World, mode: str, *, minutes: int = 10, pause: bool = True, sleep: bool = True) -> Sample:
+def quit_run(
+    world: World, mode: str, *, minutes: int = QUIT_WAIT_MINUTES, pause: bool = True, sleep: bool = True
+) -> Sample:
     """The one object `bosun quit ... --json` prints for a run over <world>."""
     out, err = io.StringIO(), io.StringIO()
-    quit_cmd.run(quit_cmd.Options(mode, minutes, pause, sleep, True), world.ports(), out, err)
+    options = quit_cmd.Options(mode, minutes, pause, sleep, True, LOCK_WAIT_SECONDS)
+    quit_cmd.run(options, world.ports(), out, err)
     result: Sample = json.loads(out.getvalue())
     return result
 
 
 def quit_samples() -> dict[str, Sample]:
     return {
-        "quit-plan": quit_cmd.quit_plan(QUIT_WINDOWS, "20:00", False),
-        "quit-plan-refused": quit_cmd.quit_plan(QUIT_WINDOWS, None, True),
+        "quit-plan": quit_cmd.quit_plan(QUIT_WINDOWS, "20:00", False, QUIT_WAIT_MINUTES, LOCK_WAIT_SECONDS),
+        "quit-plan-refused": quit_cmd.quit_plan(
+            QUIT_WINDOWS, None, True, QUIT_WAIT_MINUTES, LOCK_WAIT_SECONDS
+        ),
         # `quit --plan --json` when the windows cannot be read: exit 1, this on stdout, nothing on stderr
         "quit-plan-failed": quit_run(
             World(QUIET_WINDOWS, unreadable="the windows could not be listed: tmux did not answer"), "plan"
