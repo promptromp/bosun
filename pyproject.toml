@@ -97,6 +97,18 @@ impacted_map = [
     "lib/*.py=tools/docs_examples.py",
     "lib/*.py=tools/survey_to_kg.py",
     "lib/*.py=tools/release.py",
+    # The menu bar app's contract fixtures (tools/contract_samples.py writes them from part 1's
+    # modules, which it imports) and the coverage tool. The app's Swift and its config are read by no
+    # Python test: a change there runs the rules' own check, as .github/* does.
+    "tools/*.py=tests/unit/test_contract_samples.py",
+    "tools/*.py=tests/unit/test_swift_coverage.py",
+    "lib/*.py=tools/contract_samples.py",
+    "tools/*.sh=tests/unit/test_impacted_rules.py",
+    "app/Tests/BosunMenuCoreTests/Fixtures/*=tests/unit/test_contract_samples.py",
+    "app/*=tests/unit/test_impacted_rules.py",
+    "app/*/*=tests/unit/test_impacted_rules.py",
+    "app/*/*/*=tests/unit/test_impacted_rules.py",
+    "app/*/*/*/*=tests/unit/test_impacted_rules.py",
     # get.sh: plain sh, run by its own test (and its tag rule held to lib/update_check.py's there).
     "get.sh=tests/unit/test_get_sh.py",
     "tests/llm/*.py=tests/unit/test_learn.py",
