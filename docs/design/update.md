@@ -48,9 +48,10 @@ Not in the first version:
 
 - **A command to go back to an older version.** A failed update puts everything back itself. Going
   back later is the manual path decided in sync.md, which the summary points to.
-- **Releases, tags or channels.** It updates to the head of the branch the install tracks (`main`, or
-  `BOSUN_BRANCH`), as `get.sh` does today. Each data format carries its own version, so migrations do
-  not depend on release numbers.
+- **Releases, tags or channels** (the first version: it updated to the head of the branch the install tracks,
+  `main` or `BOSUN_BRANCH`, as `get.sh` did then; releases came with the menu bar app, see
+  [Channels](#channels)). Each data format carries its own version, so migrations do not depend on release
+  numbers.
 - **Updating Claude Code or Codex themselves.** `bosun refresh` already restarts idle sessions on a
   new agent version.
 - **More than one Mac.** That comes with sync phase 1.
@@ -442,6 +443,32 @@ Settled while building it:
   own files, and the keys it added that `bosun.env` does not set, with the value each has now and its
   note (a kept key's only where it holds: written).
 
+### Channels
+
+Added with the menu bar app ([menu-bar.md](menu-bar.md)); the rest of this note is unchanged by it. `BOSUN_UPDATE_CHANNEL`
+says what `bosun update` moves to, and is the one setting:
+
+- `releases` (the default): the newest release, a tag `v<YYYY.MM.DD>` (a second one that day `.2`, then `.3`),
+  found by `git ls-remote --tags` (`lib/update_check.py`'s tag rule, with the git side in `lib/update_lookup.py`:
+  read-only, no version folder, no lock). The release is fetched into a remote ref of `bosun.git`
+  (`refs/remotes/origin/release`), never into `refs/tags`, which `bosun uninstall` would count as work of yours,
+  and its folder is made as for a branch's head. The version is the same folder named by commit; the release's
+  name is only what `--check` and the summary call it. An install past the newest release (on `main` after it) says
+  so and changes nothing.
+- `main`: the head of the branch the install tracks (`bosun.branch`, `main` by default), as before releases. An
+  install made with `BOSUN_BRANCH` is on it (`get.sh` tells `init`, which writes it), and so is an install that
+  was updating before releases existed: `BOSUN_UPDATE_CHANNEL="main"` is a `CONFIG_ADDED` key with that kept value,
+  which the first update writes to `bosun.env` with a note in the plan and the summary saying how to follow the
+  releases instead. Behaviour for an existing install does not change.
+
+`bosun update --check [--json]` is the same lookup with nothing changed (what the app's "Check for Updates..." runs),
+and `--skip <version>` records a release not to be offered again (`update-skip.json`; it does not stop an update you
+run). A first install takes the newest release too (`get.sh`'s own `newest_release`, an `sh` twin of the tag rule
+that `tests/unit/test_get_sh.py` holds to the Python one); a repository with no release yet gets the head of `main`.
+The VM runs (`tests/install_e2e.sh`, on the default channel against a bundle with release tags: first release
+installed, next one tagged, `--check --json`, `--skip`, `--yes`; `tests/work_e2e.sh`, on the channel its conversion
+keeps) check both.
+
 ### `get.sh` on an existing install
 
 The bosun already installed may not have `update` yet. `get.sh` is always fetched fresh from the
@@ -755,7 +782,7 @@ My calls, which the user can overturn:
   deletion's last step, so a deletion cut short finishes it;
 - the update stops while a `kg forget` is cut short;
 - restoring done by the update itself only, with no `--restore` command in the first version;
-- updating to the head of the tracked branch;
+- updating to the head of the tracked branch (releases came later: [Channels](#channels));
 - the summary also saved next to the backup.
 
 Decided while building it:

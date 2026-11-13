@@ -120,7 +120,12 @@ Docker on a Mac is Linux, so `launchctl`, `pmset`, `caffeinate` and the like are
 macOS in a [Tart](https://tart.run) VM on your Mac (Apple silicon). A run clones a base image, boots it,
 runs `tests/install_e2e.sh` in it and deletes the clone: the real installer, real launchd jobs that really
 fire (the morning job, and the one `bosun morning --now --background` kickstarts, whose tmux server must have a
-responsible process that is not the caller's: `launchctl procinfo`), the real `pmset`, `plutil` and bash 3.2.
+responsible process that is not the caller's: `launchctl procinfo`, which needs root there, so the test tries
+`sudo -n`), the console's job (`BOSUN_CONSOLE_ALWAYS=1`: started by `bosun start`'s marker, no process after a
+`bosun quit`), `bosun quit` with what the watchdog and the morning job do after it, `bosun update` from one release
+to the next (the install is on the default `releases` channel, its origin `~/origin.git` a repository with a release
+tag, and the next release is tagged there by the test), the real `pmset`, `plutil` and bash 3.2. A Tart VM has
+Gatekeeper's assessments off, which the test turns on for its `spctl` check.
 
 ```bash
 brew install openai/tools/tart

@@ -151,7 +151,8 @@ bosun update --dry-run   # only shows the plan
 bosun update --yes       # goes ahead without asking
 ```
 
-It updates bosun to the newest release, or on the `main` channel (`BOSUN_UPDATE_CHANNEL="main"`, which an install
+`bosun update --check` says whether there is a newer release and changes nothing (one line, or `--json`), and
+`bosun update --skip <version>` stops it being offered again. It updates bosun to the newest release, or on the `main` channel (`BOSUN_UPDATE_CHANNEL="main"`, which an install
 made with `BOSUN_BRANCH` follows) to the head of the branch the install follows, while the agents keep working. It gets the new version into a folder of its own, beside
 the one you run, and that version shows its plan: the commits, the migrations your data needs, the
 prompts that changed, what each window gets, the launchd jobs to reload, and anything that stops it. In a
@@ -204,6 +205,10 @@ plan, the summary and `bosun doctor` say. A checkout of your own that you update
 such change: set `BOSUN_ORCHESTRATOR_CONNECTORS` in `bosun.env` to the connectors the orchestrator needs,
 or to `all`, or it starts with none, which `bosun doctor` warns about until the key is set.
 
+Another such key is `BOSUN_UPDATE_CHANNEL="main"`: an install that was updating before releases goes on
+following the head of `main`, and the plan and summary say how to follow the dated releases instead
+(`BOSUN_UPDATE_CHANNEL="releases"`, which a new install has).
+
 A Claude Code window that a repo's own `.claude/settings.json` (or `settings.local.json`, or your
 `~/.claude/settings.json`) would give servers its list does not name does not start on the new version
 ([Connectors](#connectors-what-each-window-may-reach)). The update restarts it, the launch refuses in its
@@ -252,8 +257,9 @@ hand. You need the version the update came from and the backup it took, both nam
    `manifest.json` lists every file). Anything written since the update is not in it.
 4. Lead the link to the older version (`ln -sfn ~/.local/share/bosun-versions/<folder>
    ~/.local/share/bosun`), run its `~/.local/share/bosun/install.sh` to load its jobs again, and
-   `bosun start`. `bosun update` would take you forward again, to the head of the branch (from the
-   checkout kept from before versions, which has no `bosun update`, the install line does).
+   `bosun start`. `bosun update` would take you forward again, to the newest release, or on the `main` channel
+   to the head of the branch (from the checkout kept from before versions, which has no `bosun update`, the
+   install line does).
 
 Going back is only to the version the update came from, and never past a `kg forget`: a deletion of a
 person deletes every update backup there is, as restoring one would bring the person back, and says so in
