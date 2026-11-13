@@ -189,6 +189,20 @@ def archive_problem(folder: Path) -> str | None:
     return None
 
 
+def tree_problem(folder: Path) -> str | None:
+    """Why what was unpacked in <folder> is refused after all: a symbolic link anywhere in it, or a path that
+    resolves outside it. The entries were refused for a link before unpacking, so a link here is one the
+    unpacker made from what the central directory did not show (a local header, say)."""
+    root = folder.resolve()
+    for path in sorted(folder.rglob("*")):
+        shown = path.relative_to(folder).as_posix()
+        if path.is_symlink():
+            return f"the unpacked archive holds a symbolic link its entries did not list: {shown}"
+        if not path.resolve().is_relative_to(root):
+            return f"the unpacked archive holds a path outside its folder: {shown}"
+    return None
+
+
 # ---- the app on disk ------------------------------------------------------------------------------------
 
 

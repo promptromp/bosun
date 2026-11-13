@@ -244,27 +244,38 @@ def download(setup: Setup, url: str, archive: Path, what: str) -> None:
 
 
 def check_archive(archive: Path) -> None:
-    """The archive's entries, before anything is unpacked: refused for an absolute path, a `..` or a link."""
+    """The archive's entries, before anything is unpacked: refused for an absolute path, a `..` or a link
+    (from the central directory), and unless every entry reads back as that directory lists it. Reading each
+    one compares its local header's name with the directory's, which an unpacker may go by instead: a zip
+    that names one path in the directory and another in the header is refused here, as is a name twice."""
     try:
         with zipfile.ZipFile(archive) as bundle:
             entries = bundle.infolist()
-    except (zipfile.BadZipFile, OSError) as error:
+            problem = app_release.entries_problem(entries)
+            if problem:
+                raise AppError(problem)
+            damaged = bundle.testzip()
+    except (zipfile.BadZipFile, OSError, EOFError, NotImplementedError) as error:
         raise AppError(f"the download is not a zip archive: {error}") from error
-    problem = app_release.entries_problem(entries)
-    if problem:
-        raise AppError(problem)
+    if damaged is not None:
+        raise AppError(f"the download is not a zip archive: {damaged} does not read back")
+    names = [entry.filename for entry in entries]
+    twice = sorted({name for name in names if names.count(name) > 1})
+    if twice:
+        raise AppError(f"the archive names an entry twice: {twice[0]}")
 
 
 def unpack_archive(run: Runner, archive: Path, scratch: Path) -> Path:
-    """The bosun.app of <archive>, unpacked with `ditto -x -k` in <scratch> after its entries are checked
-    and checked to be exactly one bosun.app: what an install does with a download."""
+    """The bosun.app of <archive>, unpacked with `ditto -x -k` in <scratch> after its entries are checked,
+    and what was unpacked checked again before anything else looks at it: exactly one bosun.app, and no
+    symbolic link anywhere in it (the entries had none). What an install does with a download."""
     check_archive(archive)
     unpacked = scratch / "unpacked"
     unpacked.mkdir()
     done = run(["ditto", "-x", "-k", str(archive), str(unpacked)])
     if done.returncode != 0:
         raise AppError(f"the download is not a zip archive: {done.last_line}")
-    problem = app_release.archive_problem(unpacked)
+    problem = app_release.archive_problem(unpacked) or app_release.tree_problem(unpacked)
     if problem:
         raise AppError(problem)
     return unpacked / BUNDLE

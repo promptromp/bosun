@@ -15,6 +15,7 @@ import signal
 import sys
 import tempfile
 import unittest
+import warnings
 import zipfile
 from collections.abc import Sequence
 from pathlib import Path
@@ -304,6 +305,60 @@ class InstallTest(World):
                 self.assertNotIn("ditto", self.tools.names())
                 self.assertFalse(self.apps.exists())
                 self.tools.calls.clear()
+
+    def test_a_local_header_that_names_another_path_than_the_directory_is_refused_before_ditto(self) -> None:
+        """ditto may unpack by the local headers, which the central directory need not agree with: every entry
+        is read back, which compares the two names."""
+        name = "bosun.app/Contents/Resources/notes.txt"
+        evil = "../../Library/LaunchAgents/x.plist"
+        evil += "x" * (len(name) - len(evil))
+        original = self.tools.curl
+
+        def curl(argv: Sequence[str]) -> Run:
+            done = original(argv)
+            target = Path(argv[argv.index("-o") + 1])
+            with zipfile.ZipFile(target, "a") as bundle:
+                bundle.writestr(name, "x")
+            data = target.read_bytes()
+            target.write_bytes(data.replace(name.encode(), evil.encode(), 1))  # the local header comes first
+            return done
+
+        self.tools.curl = curl  # type: ignore[method-assign]
+        with self.assertRaisesRegex(AppError, "not a zip archive"):
+            self.install()
+        self.assertNotIn("ditto", self.tools.names())
+        self.assertFalse(self.apps.exists())
+
+    def test_an_entry_named_twice_is_refused_before_ditto(self) -> None:
+        self.tools.zip_extra = [zipfile.ZipInfo("bosun.app/Contents/Info.plist")]
+        with (
+            warnings.catch_warnings(),  # zipfile warns as the fake writes the name twice
+            self.assertRaisesRegex(AppError, "names an entry twice: bosun.app/Contents/Info.plist"),
+        ):
+            warnings.simplefilter("ignore", UserWarning)
+            self.install()
+        self.assertNotIn("ditto", self.tools.names())
+
+    def test_a_link_in_what_was_unpacked_is_refused_before_codesign(self) -> None:
+        """The entries listed no link, so one in the unpacked tree came from what the directory did not
+        show."""
+        original = self.tools.ditto
+        for target in ("../../outside", "MacOS/bosun"):
+            with self.subTest(target=target):
+                self.tools.calls.clear()
+
+                def ditto(argv: Sequence[str], to: str = target) -> Run:
+                    done = original(argv)
+                    (Path(argv[-1]) / "bosun.app" / "Contents" / "link").symlink_to(to)
+                    return done
+
+                self.tools.ditto = ditto  # type: ignore[method-assign]
+                with self.assertRaisesRegex(
+                    AppError, "symbolic link its entries did not list: bosun.app/Contents/link"
+                ):
+                    self.install()
+                self.assertNotIn("codesign", self.tools.names())
+                self.assertFalse(self.apps.exists())
 
     def test_a_missing_release_says_so_in_a_line_with_the_status(self) -> None:
         self.tools.download = 22
