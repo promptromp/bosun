@@ -31,11 +31,14 @@ run_again() {
   check "... and back nothing up" test "$kept" = "$(backups)"
 }
 
-# What app/build.sh asks of the tools, for real, on the ad hoc bundle <app> in the folder <work>.
+# What app/build.sh asks of the tools, for real, on the ad hoc bundle <app> in the folder <work>. app/ is the
+# install's (get.sh made it: $DIR is the link to the version in use, the whole tree). The test's own tarball
+# (tests/sandbox/mac.sh copy_checkout) holds no app/.
 app_build_tools() {
   local work="$1" app="$2"
-  check "iconutil makes an icns of the app's committed icon set" bash -c 'iconutil -c icns "$1/app/Resources/AppIcon.iconset" -o "$2/AppIcon.icns" && [ "$(head -c 4 "$2/AppIcon.icns")" = icns ]' _ "$ROOT" "$work"
-  check "plutil -lint accepts the Info.plist app/build.sh makes from its template" bash -c 'sed -e "s/@BUNDLE_ID@/ai.example.bosun/g" -e "s/@VERSION@/0.0.1/g" "$1/app/Resources/Info.plist.in" >"$2/Info.plist" && plutil -lint -s "$2/Info.plist"' _ "$ROOT" "$work"
+  check "the install holds the app's source and its pictures" bash -c '[ -x "$1/app/build.sh" ] && [ -f "$1/app/Resources/Info.plist.in" ] && [ -d "$1/app/Resources/AppIcon.iconset" ]' _ "$DIR"
+  check "iconutil makes an icns of the app's committed icon set" bash -c 'iconutil -c icns "$1/app/Resources/AppIcon.iconset" -o "$2/AppIcon.icns" && [ "$(head -c 4 "$2/AppIcon.icns")" = icns ]' _ "$DIR" "$work"
+  check "plutil -lint accepts the Info.plist app/build.sh makes from its template" bash -c 'sed -e "s/@BUNDLE_ID@/ai.example.bosun/g" -e "s/@VERSION@/0.0.1/g" "$1/app/Resources/Info.plist.in" >"$2/Info.plist" && plutil -lint -s "$2/Info.plist"' _ "$DIR" "$work"
   check "codesign --identifier makes the signing identifier, which the Developer ID requirement names (not the Info.plist's)" bash -c '
     cp -R "$1" "$2/named.app" && codesign --force --sign - --identifier ai.example.named "$2/named.app" &&
       codesign --verify --deep --strict -R "=identifier \"ai.example.named\"" "$2/named.app" &&
@@ -43,17 +46,29 @@ app_build_tools() {
   check "ditto --norsrc --noextattr --noqtn writes no ._ file for an attribute of this Mac" bash -c '
     xattr -w com.example.test 1 "$1/Contents/Info.plist" && ditto -c -k --keepParent --norsrc --noextattr --noqtn "$1" "$2/plain.zip" &&
       ! unzip -l "$2/plain.zip" | grep -qF "._"' _ "$app" "$work"
+  app_build_for_real "$work"
+}
+
+# app/build.sh run for real on a copy of the install's app/ in <work> (the build folder stays out of the install).
+app_build_for_real() {
+  local work="$1"
   check "app/build.sh builds the app for real, ad hoc, for arm64" bash -c '
     cp -R "$1/app" "$2/app-copy" && rm -rf "$2/app-copy/.build" "$2/app-copy/dist" &&
       "$2/app-copy/build.sh" --identity - --out "$2/built" >"$2/build.log" 2>&1 || { tail -5 "$2/build.log"; exit 1; }
-    [ "$(lipo -archs "$2/built/bosun.app/Contents/MacOS/bosun")" = arm64 ]' _ "$ROOT" "$work"
+    [ "$(lipo -archs "$2/built/bosun.app/Contents/MacOS/bosun")" = arm64 ]' _ "$DIR" "$work"
   check "... the bundle verifies, is signed as the bundle id of app/publisher.json and is not notarized" bash -c '
     id="$(jq -r .bundle_id "$1/app/publisher.json")" && codesign --verify --deep --strict -R "=identifier \"$id\"" "$2/built/bosun.app" &&
       plutil -lint -s "$2/built/bosun.app/Contents/Info.plist" &&
-      ! spctl --assess --type execute -vv "$2/built/bosun.app" 2>&1 | grep -qx "source=Notarized Developer ID"' _ "$ROOT" "$work"
+      ! spctl --assess --type execute -vv "$2/built/bosun.app" 2>&1 | grep -qx "source=Notarized Developer ID"' _ "$DIR" "$work"
   check "... and its zip unpacks with ditto into one signed bosun.app" bash -c '
     mkdir "$2/from-build" && ditto -x -k "$2"/built/bosun-app-*.zip "$2/from-build" && [ "$(ls "$2/from-build")" = bosun.app ] &&
-      codesign --verify --deep --strict "$2/from-build/bosun.app"' _ "$ROOT" "$work"
+      codesign --verify --deep --strict "$2/from-build/bosun.app"' _ "$DIR" "$work"
+  check "app/build.sh --zip zips it again, with no ._ file, into one signed bosun.app" bash -c '
+    xattr -w com.example.test 1 "$2/built/bosun.app/Contents/Info.plist" &&
+      "$2/app-copy/build.sh" --zip "$2/built/bosun.app" --out "$2/rezip" >/dev/null &&
+      ! unzip -l "$2"/rezip/bosun-app-*.zip | grep -qF "._" &&
+      mkdir "$2/from-rezip" && ditto -x -k "$2"/rezip/bosun-app-*.zip "$2/from-rezip" &&
+      codesign --verify --deep --strict "$2/from-rezip/bosun.app"' _ "$DIR" "$work"
 }
 
 # The tools `bosun app` runs (docs/design/menu-bar.md), for real, on a bundle made here. No Developer ID is on

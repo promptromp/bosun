@@ -602,10 +602,29 @@ class BuildTest(World):
         message, _ = self.install(self.write_build())
         self.assertIn("development build", message)
 
-    def test_a_build_that_fails_says_why_and_leaves_nothing_behind(self) -> None:
-        with self.assertRaisesRegex(AppError, "app/build.sh failed: error: no such module"):
-            self.install(self.write_build(), leaves=False, status=1, says="warning\nerror: no such module")
+    def test_a_build_that_fails_shows_the_last_lines_of_its_output_and_leaves_nothing_behind(self) -> None:
+        says = "warning: x\nerror: no such module 'Pretend'\nerror: fatalError"
+        with self.assertRaises(AppError) as caught:
+            self.install(self.write_build(), leaves=False, status=1, says=says)
+        message = str(caught.exception)
+        self.assertTrue(message.startswith("app/build.sh failed"), message)
+        self.assertIn("error: no such module 'Pretend'", message)
+        self.assertIn("error: fatalError", message)
         self.assertFalse(self.apps.exists())
+
+    def test_only_the_last_twenty_lines_of_a_long_output_are_shown(self) -> None:
+        says = "\n".join(f"line {number}" for number in range(1, 31))
+        with self.assertRaises(AppError) as caught:
+            self.install(self.write_build(), leaves=False, status=1, says=says)
+        lines = str(caught.exception).splitlines()
+        self.assertEqual([line.strip() for line in lines[1:]], [f"line {n}" for n in range(11, 31)])
+
+    def test_it_says_it_is_building_before_it_does(self) -> None:
+        stderr = io.StringIO()
+        with contextlib.redirect_stderr(stderr):
+            self.install(self.write_build())
+        self.assertIn("building bosun.app", stderr.getvalue())
+        self.assertIn("minutes", stderr.getvalue())
 
     def test_a_build_that_leaves_no_app_is_refused_and_leaves_nothing_behind(self) -> None:
         with self.assertRaisesRegex(AppError, "did not leave bosun.app"):

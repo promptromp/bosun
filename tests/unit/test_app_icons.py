@@ -4,19 +4,24 @@ template (black on clear, one colour with an alpha, 18x18 and 36x36), and the ic
 
 from __future__ import annotations
 
+import importlib.util
 import sys
 import tempfile
 import unittest
 from pathlib import Path
 
-from PIL import Image
 
+# Pillow is in the dev group; the smoke suite's --with-unit runs these with a plain python3 that has none.
+HAVE_PIL = importlib.util.find_spec("PIL") is not None
+NO_PIL = "Pillow is not installed (uv sync installs the dev group)"
+if HAVE_PIL:
+    from PIL import Image
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "tools"))
-import app_icons
-
+    sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "tools"))
+    import app_icons
 
 RESOURCES = Path(__file__).resolve().parents[2] / "app" / "Resources"
+PIXEL_TOLERANCE = 3  # of 255, in any channel of a pixel that is drawn
 ICONSET = RESOURCES / "AppIcon.iconset"
 EXPECTED_SIZES = {
     "icon_16x16.png": 16,
@@ -42,6 +47,15 @@ def pixels(path: Path) -> list[tuple[int, ...]]:
         return pixels_of(image)
 
 
+def worst_difference(made: list[tuple[int, ...]], committed: list[tuple[int, ...]]) -> int:
+    """The largest difference in any channel of a pixel that is drawn in either picture."""
+    worst = 0
+    for one, other in zip(made, committed, strict=True):
+        if one[3] or other[3]:
+            worst = max(worst, *(abs(a - b) for a, b in zip(one, other, strict=True)))
+    return worst
+
+
 def assert_template(case: unittest.TestCase, path: Path, side: int) -> None:
     with Image.open(path) as image:
         case.assertEqual(image.size, (side, side), path.name)
@@ -57,6 +71,7 @@ def assert_template(case: unittest.TestCase, path: Path, side: int) -> None:
     case.assertTrue(0.15 < ink < 0.6, f"{path.name}: {ink:.0%} of it is black, a knot and not a blob")
 
 
+@unittest.skipUnless(HAVE_PIL, NO_PIL)
 class CommittedPicturesTest(unittest.TestCase):
     def test_the_menu_bar_image_is_a_template_at_eighteen_points(self) -> None:
         assert_template(self, RESOURCES / "MenuBarIcon.png", 18)
@@ -80,6 +95,7 @@ class CommittedPicturesTest(unittest.TestCase):
                 self.assertEqual(image.getpixel((side // 2, side // 2))[3], 255)  # type: ignore[index]
 
 
+@unittest.skipUnless(HAVE_PIL, NO_PIL)
 class ToolTest(unittest.TestCase):
     temp: tempfile.TemporaryDirectory[str]
     out: Path
@@ -102,12 +118,23 @@ class ToolTest(unittest.TestCase):
         )
         self.assertEqual(names, expected)
 
-    def test_what_it_makes_is_what_is_committed_in_size_and_kind(self) -> None:
+    def test_what_it_makes_is_a_template_and_the_ten_sizes(self) -> None:
         assert_template(self, self.out / "MenuBarIcon.png", 18)
         assert_template(self, self.out / "MenuBarIcon@2x.png", 36)
         for name, side in EXPECTED_SIZES.items():
             with Image.open(self.out / "AppIcon.iconset" / name) as image:
                 self.assertEqual(image.size, (side, side), name)
+
+    def test_what_is_committed_is_what_the_tool_makes_from_the_logo(self) -> None:
+        """Pixel by pixel, to a small tolerance (another Pillow may resample a shade differently): a change of
+        the logo, or of the tool, that was not followed by running it fails here."""
+        for path in self.written:
+            name = str(path.relative_to(self.out))
+            with self.subTest(name):
+                made, committed = pixels(path), pixels(RESOURCES / name)
+                self.assertEqual(len(made), len(committed))
+                worst = worst_difference(made, committed)
+                self.assertLessEqual(worst, PIXEL_TOLERANCE, f"{name} is not what tools/app_icons.py makes")
 
     def test_the_template_is_the_logo_s_outline_and_not_its_colours(self) -> None:
         logo = app_icons.read_logo(app_icons.LOGO)

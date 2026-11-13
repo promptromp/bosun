@@ -3239,14 +3239,16 @@ sys.exit(not (all(n.startswith("bosun.app/") for n in names) and all(f"bosun.app
       set_team ""
       : >"$APP_LOG"
       touch "$HOME/.sandbox/swift-fails"
-      check "--build with a swift build that fails says why, though no team_id is set" fails_with "app/build.sh failed: app/build.sh: swift build failed" bapp install --build
+      check "--build with a swift build that fails says why, though no team_id is set" fails_with "app/build.sh failed, the last lines of its output:" bapp install --build
+      check "... shows the compiler's own words, and the build's last line" fails_with "error: cannot find 'Pretend' in scope" bapp install --build
+      check "... and says when the build starts, on stderr" bash -c '"$1" app install --build 2>&1 >/dev/null | grep -qF "building bosun.app with app/build.sh"' _ "$APP_CHECKOUT/bin/bosun"
       check "... and leaves no ~/Applications" test ! -e "$APP_DIR"
       rm -f "$HOME/.sandbox/swift-fails"
       built="$(bapp install --build 2>&1)"
       check "--build installs the app and says it is a development build" contains "$built" "bosun.app $version installed in ~/Applications (a development build"
       check "... the app is app/VERSION's, with nothing else left in ~/Applications" test "$(installed) $(ls -A "$APP_DIR")" = "$version bosun.app"
       check "... it ran swift build for arm64 in release" logged '^swift build -c release --arch arm64( |$)'
-      check "... and signed ad hoc, as the bundle id, into a folder of its own, with no hardened runtime or timestamp" logged "^codesign --force --sign - --identifier $APP_ID [^ ]*/built/bosun\.app\$"
+      check "... and signed ad hoc, as the bundle id, into a folder of its own, with no hardened runtime or timestamp" logged "^codesign --force --sign - --identifier $APP_ID [^ ]*/built/\.bosun-build\.[^/ ]*/bosun\.app\$"
       check "... its Info.plist has the bundle id, the version and what makes it a menu bar app" plist_is "$APP/Contents/Info.plist" "$APP_ID" "$version"
       check "... its signature is the bundle id, with no team" bash -c '[ "$(cat "$1/Contents/_CodeSignature/identifier")" = "$2" ] && [ ! -e "$1/Contents/_CodeSignature/team" ]' _ "$APP" "$APP_ID"
       check "... and nothing was downloaded or assessed by Gatekeeper" bash -c '! grep -qE "^(curl|spctl)" "$1" && [ ! -e "$2" ]' _ "$APP_LOG" "$WORK/app-curl.log"
@@ -3255,19 +3257,28 @@ sys.exit(not (all(n.startswith("bosun.app/") for n in names) and all(f"bosun.app
 
       rm -rf "$out"
       check "app/build.sh with a Developer ID makes the bundle" "$APP_CHECKOUT/app/build.sh" --identity "$identity" --out "$out"
-      check "... signing it with the hardened runtime and a timestamp" logged "^codesign --force --sign Developer ID Application: Acme Inc \(ABCDE12345\) --identifier $APP_ID --options runtime --timestamp $out/bosun\.app\$"
+      check "... signing it with the hardened runtime and a timestamp" logged "^codesign --force --sign Developer ID Application: Acme Inc \(ABCDE12345\) --identifier $APP_ID --options runtime --timestamp $out/\.bosun-build\.[^/ ]*/bosun\.app\$"
       check "... as the bundle id, with the identity's team" bash -c '[ "$(cat "$1/_CodeSignature/identifier")" = "$2" ] && [ "$(cat "$1/_CodeSignature/team")" = ABCDE12345 ]' _ "$contents" "$APP_ID"
       check "... which meets the Developer ID requirement of that team and bundle id, as bosun app install asks" codesign --verify --deep --strict -R "=anchor apple generic and identifier \"$APP_ID\" and certificate leaf[subject.OU] = \"ABCDE12345\"" "$out/bosun.app"
       check "... the bundle has the executable, the icon and both menu bar images" bash -c 'for f in MacOS/bosun Resources/AppIcon.icns Resources/MenuBarIcon.png Resources/MenuBarIcon@2x.png; do [ -f "$1/$f" ] || exit 1; done' _ "$contents"
       check "... and an Info.plist with app/VERSION and app/publisher.json's bundle id" plist_is "$contents/Info.plist" "$APP_ID" "$version"
       check "... and is zipped as bosun-app-<version>.zip, the one bosun.app" zip_holds "$out/bosun-app-$version.zip" Contents/MacOS/bosun Contents/Info.plist
+      check "... the build and --zip zip the same way (one function, the same flags)" bash -c '[ "$(grep -c "^ditto -c -k --keepParent --norsrc --noextattr --noqtn " "$1")" -ge 1 ]' _ "$APP_LOG"
+      check "... and nothing else is left in --out: no staging folder" test "$(find "$out" -mindepth 1 -maxdepth 1 | sort | sed 's|.*/||' | tr '\n' ' ')" = "bosun-app-$version.zip bosun.app "
+      check "app/build.sh --zip zips a bundle again, as the build does, into --out" bash -c '"$1" --zip "$2/bosun.app" --out "$3" >/dev/null && grep -qE "^ditto -c -k --keepParent --norsrc --noextattr --noqtn $2/bosun\.app $3/\.bosun-build\.[^/]*/bosun-app-$4\.zip$" "$5"' _ "$APP_CHECKOUT/app/build.sh" "$out" "$WORK/app-rezip" "$version" "$APP_LOG"
+      check "... which holds the one bosun.app" zip_holds "$WORK/app-rezip/bosun-app-$version.zip" Contents/MacOS/bosun
+      check "... and refuses what is not a bosun.app, and a --zip with an --identity" bash -c '! "$1" --zip "$2" >/dev/null 2>&1 && "$1" --zip "$2/bosun.app" --identity - >/dev/null 2>&1; [ $? = 2 ]' _ "$APP_CHECKOUT/app/build.sh" "$out"
+      touch "$HOME/.sandbox/swift-fails"
+      check "a failed app/build.sh removes the bundle and the zip of an earlier build, and leaves no unsigned bundle or staging folder" bash -c '
+        ! "$1" --out "$2" >/dev/null 2>&1 && [ -z "$(ls -A "$2")" ]' _ "$APP_CHECKOUT/app/build.sh" "$out"
+      rm -f "$HOME/.sandbox/swift-fails"
       check "app/build.sh refuses an unknown argument, with usage (exit 2)" bash -c '"$1" --bogus >/dev/null 2>&1; [ $? = 2 ]' _ "$APP_CHECKOUT/app/build.sh"
       check "... and an option with no value (exit 2)" bash -c '"$1" --out >/dev/null 2>&1; [ $? = 2 ]' _ "$APP_CHECKOUT/app/build.sh"
       jq '.bundle_id = "not a bundle id"' "$APP_CHECKOUT/app/publisher.json" >"$WORK/publisher.json" && cp "$APP_CHECKOUT/app/publisher.json" "$WORK/publisher.good" && mv "$WORK/publisher.json" "$APP_CHECKOUT/app/publisher.json"
       : >"$APP_LOG"
       check "app/build.sh refuses a bundle_id that is not one, before it builds anything" bash -c '! out="$("$1" --out "$2" 2>&1)" && grep -q "is not a bundle identifier" <<<"$out" && ! grep -q "^swift" "$3"' _ "$APP_CHECKOUT/app/build.sh" "$out" "$APP_LOG"
       mv "$WORK/publisher.good" "$APP_CHECKOUT/app/publisher.json"
-      rm -rf "$out"
+      rm -rf "$out" "$WORK/app-rezip"
       set_team "$APP_TEAM"
     }
 

@@ -21,7 +21,11 @@ import install_paths
 
 
 GIT_CONFIG_MARK = "bosun.managed"  # what get.sh sets on what it made
-CACHES = frozenset({"__pycache__", ".pytest_cache", ".mypy_cache", ".ruff_cache", ".venv", ".DS_Store"})
+# What running or building bosun makes: Python's and the linters' caches, and SwiftPM's build folder
+# (app/.build, which `bosun app install --build` leaves in the folder it builds: hundreds of megabytes).
+CACHES = frozenset(
+    {"__pycache__", ".pytest_cache", ".mypy_cache", ".ruff_cache", ".venv", ".DS_Store", ".build"}
+)
 UNCHECKED = "a git repository that could not be checked"
 NOT_THE_INSTALLERS = "it was not made by the installer, so it is yours"
 NOT_BOSUNS = "bosun did not put it there"  # a folder in the versions folder that is no version

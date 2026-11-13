@@ -76,6 +76,7 @@ NO_SUCH_APP = "(-1728)"  # osascript: Launch Services knows no app of that bundl
 NOT_ALLOWED = "(-1743)"  # osascript: the user has not allowed bosun to control that app (Automation)
 QUIT_POLLS = 40  # an app asked to quit is looked at this often, QUIT_POLL_SECONDS apart
 QUIT_POLL_SECONDS = 0.5
+BUILD_FAILURE_LINES = 20  # of the build's output that a failed build shows: the compiler's last words
 # Hidden, in ~/Applications itself, so that a rename into place never crosses a volume; the pid of the install
 # that made it is in the name, so that a later one can tell what a dead install left from a live one's.
 SCRATCH_PREFIX = ".bosun-app-"
@@ -110,6 +111,10 @@ class Run:
         """The last line the tool said, on either stream: what a refusal quotes."""
         lines = [line.strip() for line in self.text.splitlines() if line.strip()]
         return lines[-1] if lines else f"exit status {self.returncode}"
+
+    def tail(self, count: int) -> list[str]:
+        """The last <count> lines the tool said, on either stream (stderr last), without blank ones."""
+        return [line.rstrip() for line in self.text.splitlines() if line.strip()][-count:]
 
 
 Runner = Callable[[Sequence[str]], Run]
@@ -266,9 +271,13 @@ def build_app(setup: Setup, scratch: Path) -> Path:
     a build for developing the app) and `--out` that folder."""
     built = scratch / "built"
     built.mkdir()
+    print(
+        "building bosun.app with app/build.sh (the first build takes minutes)...", file=sys.stderr, flush=True
+    )
     done = setup.run([str(setup.root / "app" / "build.sh"), "--identity", "-", "--out", str(built)])
     if done.returncode != 0:
-        raise AppError(f"app/build.sh failed: {done.last_line}")
+        shown = "\n".join(f"  {line}" for line in done.tail(BUILD_FAILURE_LINES))
+        raise AppError(f"app/build.sh failed, the last lines of its output:\n{shown}")
     if not (built / BUNDLE).is_dir():
         raise AppError(f"app/build.sh did not leave {BUNDLE} in the folder it was given")
     return built / BUNDLE

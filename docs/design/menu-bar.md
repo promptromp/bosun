@@ -376,9 +376,16 @@ Where what is built differs from what this note said before, or says more:
   a secure timestamp, which notarization needs), `-` is ad hoc. The zip is made with `ditto -c -k --keepParent` and
   without this Mac's extended attributes (`--norsrc --noextattr --noqtn`): without them a build made on a developer's
   Mac carries a `._` file beside every file of the bundle, which the provenance attribute causes.
+  The build is made beside its output and moved in only when the bundle is signed and verified, after any bundle and
+  zip of that version were removed: a failed build leaves no unsigned bundle and no stale one. `app/build.sh --zip
+  <bosun.app> --out <dir>` is the one zip function on its own, for the release workflow to zip again after it staples
+  the notarization ticket with the same flags.
 - **`bosun app install --build`** runs `app/build.sh --identity - --out <a temporary folder>` and installs that app with
   no team check (the explicit development path, never inferred from an empty `team_id`), saying it is a development
-  build; the folder is removed on every path. `swift`, `iconutil`, `codesign` and `ditto` are tools of that run, so each
+  build; the folder is removed on every path. It says when the build starts (a cold build takes minutes) and, when it
+  fails, shows the last 20 lines of the build's output. It builds the source of the bosun it runs from, so from an install
+  that is the installed version's, and SwiftPM's `app/.build` stays in that version's folder: `.build` is one of
+  `lib/checkout_work.py`'s `CACHES`, so the update's prune, the conversion and uninstall do not count it as the person's work. `swift`, `iconutil`, `codesign` and `ditto` are tools of that run, so each
   has a stand-in in `tests/sandbox/macos/` and a real check in `tests/install_e2e.sh`.
 - **The pictures** are made once, from the logo, by `tools/app_icons.py` (Pillow, in the dev group; by hand on any
   machine) and committed: the ten sizes of `AppIcon.iconset` (the logo on a white rounded tile, with the margin macOS
