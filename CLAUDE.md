@@ -437,7 +437,11 @@ CI (`.github/workflows/ci.yml`) runs the same on every pull request to `main`: a
 (`lint`; the forbidden-terms list comes from the `FORBIDDEN_TERMS` Actions secret, and the pull
 request's title, description and commit messages are checked too), every unit test in parallel on
 Python 3.13 to 3.15 with a floor under coverage (`test (<version>)`, never `--impacted`), every unit
-test again on macOS and then the end-to-end smoke suite (`smoke`), the menu bar app (`app`, on macOS: `swift test`
+test again on macOS and then the end-to-end smoke suite (`smoke`, which is off until the
+feature-complete MVP: its job-level `if` in `ci.yml` wants the repository variable `CI_SMOKE` set
+to `true`, and it is not a required check in `.github/rulesets/main.json`; to turn it back on,
+remove that `if` (or set the variable), re-add `smoke` to the ruleset's required checks and apply
+it; the pre-push hook still runs the suite), the menu bar app (`app`, on macOS: `swift test`
 with warnings as errors, the coverage floor, SwiftLint, `swift format lint --strict`, and an ad hoc build whose
 bundle must verify; its first step compares the pull request with its base and passes in seconds, building
 nothing, when nothing under `app/`, `tools/contract_samples.py`, `tools/swift_coverage.py` or the workflow

@@ -86,7 +86,15 @@ jobs:
   # On macOS like the machines bosun runs on (the scripts use BSD date and /bin/bash 3.2): every
   # unit test once, in parallel, then the end-to-end suite, which leaves the unit tests to the first
   # step.
+  #
+  # Off until the feature-complete MVP (2026-11-13, the repo owner's decision): it takes 15-20
+  # minutes on a scarce macOS runner per pull request, while basic features are still being built.
+  # The smoke suite still runs locally (the pre-push hook, `tests/smoke.sh`). To turn it back on,
+  # remove the `if` line (or set the repository variable CI_SMOKE to true; actionlint refuses a
+  # constant `if: false`) and re-add `smoke` to .github/rulesets/main.json's required checks, then
+  # apply the ruleset.
   smoke:
+    if: ${{ vars.CI_SMOKE == 'true' }}
     runs-on: macos-latest
     # The end-to-end suite took about 13 of the 20 minutes on GitHub's macOS runner, the unit tests,
     # one at a time, the other 7.

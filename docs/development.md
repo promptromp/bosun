@@ -12,9 +12,10 @@ your organization, products, repos, colleagues, internal hosts and ids. Without 
 passes. `uv run pre-commit run --all-files` checks everything by hand. See `CLAUDE.md` for the
 limits and conventions.
 
-On GitHub, every pull request to `main` runs the same checks (`.github/workflows/ci.yml`), the
-smoke suite on macOS and a gitleaks scan of the new commits, and `main` only takes pull requests
-that pass them. CI runs every unit test, on Linux and on macOS, and keeps a floor under their
+On GitHub, every pull request to `main` runs the same checks (`.github/workflows/ci.yml`) and
+a gitleaks scan of the new commits (the smoke suite on macOS is off in CI until the feature-complete
+MVP; the pre-push hook still runs it), and `main` only takes pull requests
+that pass them. CI runs every unit test on Linux (on macOS too once the smoke job is back), and keeps a floor under their
 coverage. The menu bar app has its own job, `app`: when a pull request changes nothing under `app/`
 (or the two tools that feed it, `tools/contract_samples.py` and `tools/swift_coverage.py`, or the
 workflow), it passes in seconds without building; otherwise it runs the Swift tests with warnings as
@@ -33,7 +34,7 @@ Issues and pull requests are welcome: see [CONTRIBUTING.md](../CONTRIBUTING.md) 
 |---|---|---|---|
 | The unit tests a change can reach | `uv run pytest -n auto --impacted` | every commit (the `unit-tests` hook) | seconds to a minute |
 | Every unit test | `uv run pytest -n auto` | CI, on Linux (with coverage) and on macOS | about a minute |
-| The end-to-end smoke suite | `tests/smoke.sh` | before every push, and in CI on macOS | about 18 minutes |
+| The end-to-end smoke suite | `tests/smoke.sh` | before every push (CI's macOS job is off until the MVP) | about 18 minutes |
 | Every unit test with a plain `python3`, then the smoke suite | `tests/smoke.sh --with-unit` | never | 8 more minutes |
 | One area of the smoke suite | `tests/smoke.sh --only <id>[,<id>...]` (ids: `tests/smoke.sh --list`) | never | seconds to a few minutes |
 
@@ -114,7 +115,7 @@ the cheapest of these that can show what you changed:
 | How Antigravity (`agy`) behaves under bosun: its hooks and plugin, its screen, its dialogs, its login | `tests/sandbox.sh mac live agy` | the real `agy` in a VM with a window, where you sign in; then windows started by launchd, Esc, a reviewer's dialog, the plugin's approvals, a slow hook, connectors, uninstall | about 25 minutes, you at the start, and a personal account's free quota |
 | The wake itself | `bosun wake-test`, on real hardware | a real sleep and a real wake | 5 minutes |
 
-The first also runs in CI (the second's unit and smoke suites run there natively), and so does the third on
+The first also runs in CI (the second's unit and smoke suites run there natively, once the smoke job is back), and so does the third on
 a clean GitHub macOS runner, whenever the install could have changed (`.github/workflows/install.yml`). The sandboxes' scripts install for real, so they
 refuse to run anywhere else.
 

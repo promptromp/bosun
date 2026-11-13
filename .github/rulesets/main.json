@@ -33,7 +33,6 @@
           { "context": "test (3.13)", "integration_id": 15368 },
           { "context": "test (3.14)", "integration_id": 15368 },
           { "context": "test (3.15)", "integration_id": 15368 },
-          { "context": "smoke", "integration_id": 15368 },
           { "context": "app", "integration_id": 15368 },
           { "context": "gitleaks", "integration_id": 15368 }
         ]
