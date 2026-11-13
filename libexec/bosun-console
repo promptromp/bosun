@@ -1,5 +1,5 @@
 #!/bin/bash
-# Usage: bosun console [--port N] [--open] [--new-token] [--url]
+# Usage: bosun console [--port N] [--open] [--new-token] [--url] [--job]
 #
 # A local web console over the ledger, the sessions, bosun's health, stats, learning, the
 # knowledge base and the editorial files (design: docs/design/console.md). Read-only, except that
@@ -21,6 +21,8 @@
 #   --url        print the address of the running console (http://127.0.0.1:<port>/?t=<token>, from
 #                its stored token and the port it recorded) and exit 0; "the console is not running"
 #                and exit 1 when none runs. It starts nothing
+#   --job        how the launchd job (BOSUN_CONSOLE_ALWAYS=1) runs it: always serve, never print the
+#                address of one already running. Not for typing
 #   --host H     only 127.0.0.1 is accepted: the console never listens beyond this machine
 # Only refused requests are logged (to stderr: method, path, status), never ledger content.
 set -uo pipefail

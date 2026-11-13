@@ -9,7 +9,7 @@
   <array>
     <string>/bin/bash</string>
     <string>-lc</string>
-    <string>exec "__BOSUN_ROOT__/bin/bosun" console</string>
+    <string>exec "__BOSUN_ROOT__/bin/bosun" console --job</string>
   </array>
   <key>EnvironmentVariables</key>
   <dict>

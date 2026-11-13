@@ -133,7 +133,8 @@ Waking *before* the job would leave a gap in which an unattended Mac can doze of
 `install.sh` is idempotent and never overwrites your config. It links `bosun` into
 `~/.local/bin` and loads the launchd jobs: the morning run, the [watchdog](watchdog.md#watchdog) and, with
 `BOSUN_LEARN_ENABLED=1`, the daily [learning](learning.md#learning) run
-(`<BOSUN_LAUNCHD_LABEL>.learn`).
+(`<BOSUN_LAUNCHD_LABEL>.learn`) and, with `BOSUN_CONSOLE_ALWAYS=1`, the [console](console.md#console)
+(`<BOSUN_LAUNCHD_LABEL>.console`).
 [`bosun uninstall`](#uninstall) reverses it. A checkout of your own like this one updates with git, not
 with `bosun update`.
 
@@ -231,9 +232,9 @@ unless something of yours is in it by then, or the installer did not make it, wh
 There is no command for it yet: a failed update puts everything back by itself, and going back later is by
 hand. You need the version the update came from and the backup it took, both named in its summary:
 
-1. Stop what writes: `bosun stop`, and unload the watchdog and learning jobs
-   (`launchctl bootout gui/$(id -u)/com.bosun.morning.watchdog`, and `.learn`, with your
-   `BOSUN_LAUNCHD_LABEL` if you set one).
+1. Stop what writes: `bosun stop`, and unload the watchdog, learning and console jobs
+   (`launchctl bootout gui/$(id -u)/com.bosun.morning.watchdog`, and `.learn` and `.console`, with your
+   `BOSUN_LAUNCHD_LABEL` if you set one; the last two only if you have them).
 2. Find the older version's folder in `~/.local/share/bosun-versions`: an update keeps the one it came
    from until the next update. If it is gone, add it again from its commit, whole: the backup's
    `manifest.json` names it as `from` (the summary's first line shows only 7 characters, which

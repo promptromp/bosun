@@ -21,7 +21,7 @@ from pathlib import Path
 
 
 TOKEN_BYTES = 32
-MAX_PORT = 65536
+PORT_LIMIT = 65535  # the highest port
 TOKEN_DIR = "console"  # noqa: S105 - a folder name, not a secret
 TOKEN_FILE = "token"  # noqa: S105 - a file name, not a secret
 RUNNING_LOCK = "running.lock"  # held, shared, by each console while it serves
@@ -115,7 +115,7 @@ def served_port(state_dir: Path) -> int | None:
         text = (state_dir / TOKEN_DIR / RUNNING_LOCK).read_text(encoding="ascii").strip()
     except (OSError, UnicodeDecodeError):
         return None
-    return int(text) if text.isdigit() and 0 < int(text) < MAX_PORT else None
+    return int(text) if text.isdigit() and 0 < int(text) <= PORT_LIMIT else None
 
 
 def running(state_dir: Path) -> bool:

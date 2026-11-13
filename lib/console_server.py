@@ -647,30 +647,36 @@ def serve(server: ThreadingHTTPServer, url: str, open_browser: bool) -> None:
         server.server_close()
 
 
+NOT_KEPT = "the console is running, but its address is not kept on disk (BOSUN_CONSOLE_PERSIST_TOKEN=0?)"
+
+
 def served_url(state: Path, configured_port: int) -> str:
     """The address of the console serving from <state>: the stored token and the port it recorded
     (<configured_port> for one from before it did). A ConsoleError when none runs, or when the
-    address is not kept (BOSUN_CONSOLE_PERSIST_TOKEN=0 keeps no token)."""
+    address is not kept (BOSUN_CONSOLE_PERSIST_TOKEN=0 keeps no token: a file left from an earlier
+    run is not the running console's)."""
     if not console_token.running(state):
         raise ConsoleError("the console is not running")
+    if not console_token.persist_setting(os.environ.get(PERSIST_SETTING)):
+        raise ConsoleError(NOT_KEPT)
     port = console_token.served_port(state) or configured_port
     token = console_token.stored_token(console_token.token_path(state))
     if not port or token is None:
-        raise ConsoleError(
-            "the console is running, but its address is not kept on disk (BOSUN_CONSOLE_PERSIST_TOKEN=0?)"
-        )
+        raise ConsoleError(NOT_KEPT)
     return f"http://{BIND_HOST}:{port}/?{QUERY_KEY}={token}"
 
 
 def serving_url(state: Path, args: argparse.Namespace) -> str | None:
     """For a console started by hand: the address of one already serving, which it prints instead
-    of failing on the port; None when it should start one. The launchd job (BOSUN_TRIGGER=launchd)
-    always starts. --new-token cannot reach a running console, which keeps the token it started with."""
-    if os.environ.get("BOSUN_TRIGGER") == "launchd" or not console_token.running(state):
+    of failing on the port; None when it should start one. The launchd job (--job in its plist's
+    arguments, never a variable the shells under bosun inherit) always starts. --new-token cannot
+    reach a running console, which keeps the token it started with."""
+    if args.job or not console_token.running(state):
         return None
     if args.new_token:
         raise ConsoleError(
-            "the console is already running, and a new token would not reach it: stop it first"
+            "the console is already running, and a new token would not reach it: stop it first "
+            "(Ctrl-C where you started it; the launchd job's with BOSUN_CONSOLE_ALWAYS=0 and install.sh)"
         )
     try:
         return served_url(state, args.port)
@@ -680,7 +686,7 @@ def serving_url(state: Path, args: argparse.Namespace) -> str | None:
 
 def show_running(url: str, open_browser: bool) -> None:
     print(f"bosun console: {url}", flush=True)
-    print("The console is already running (bosun start keeps it up): nothing started here.", flush=True)
+    print("The console is already running: nothing started here.", flush=True)
     if open_browser:
         webbrowser.open(url)
 
@@ -691,6 +697,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--host", default=BIND_HOST)
     parser.add_argument("--open", action="store_true")
     parser.add_argument("--url", action="store_true", help="print the address of the running console")
+    parser.add_argument("--job", action="store_true", help="how the launchd job runs it: always serve")
     parser.add_argument("--new-token", action="store_true", help="replace the stored access token")
     return parser
 

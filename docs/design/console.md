@@ -671,6 +671,8 @@ its own prompts and rules), Knowledge became **Knowledge Graph**, and Library be
 ## Decisions (2026-10-20)
 
 1. Runs on demand (`bosun console --open`); no always-on window or launchd agent for now.
+   Superseded 2026-11-13: with `BOSUN_CONSOLE_ALWAYS=1` a launchd job runs it while bosun runs
+   (see [menu-bar.md](menu-bar.md)).
 2. The Library may show Claude Code memory notes, opt-in by directory
    (`BOSUN_CONSOLE_MEMORY_DIRS`), off by default.
 3. Code-volume stats: cached and opt-in, in phase 1.5 after the MVP.

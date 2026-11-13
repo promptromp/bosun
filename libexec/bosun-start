@@ -37,7 +37,8 @@ one_at_a_time windows "${BOSUN_WINDOWS_LOCK_WAIT_SECONDS:-180}" "another bosun s
 SESSION="$BOSUN_SESSION_NAME"
 rm -f "$(stop_marker)" # the watchdog expects the session again
 quit_clear             # and no longer skips its runs, nor does learning or the morning job (bosun quit)
-console_mark_wanted    # and the console's launchd job (BOSUN_CONSOLE_ALWAYS=1) is wanted: it starts and stays up
+# and the console's launchd job (BOSUN_CONSOLE_ALWAYS=1) is wanted: it starts and stays up
+console_mark_wanted || log "WARN: could not make $(console_wanted_marker): the console job will not start"
 
 start_fresh() {
   local specs name dir kind created=0

@@ -2625,16 +2625,17 @@ console_token_of_start() {
 FIRST_TOKEN="${CONSOLE_URL##*\?t=}"
 check "--url with no console running says so, and fails" fails_with "the console is not running" \
   env BOSUN_STATE_DIR="$CONSOLE_STATE" BOSUN_CONFIG_DIR="$CONSOLE_CONFIG" "$BOSUN" console --url
-# The console as the job runs it (BOSUN_TRIGGER=launchd) serves while a hand run asks for its address.
-BOSUN_TRIGGER=launchd BOSUN_STATE_DIR="$CONSOLE_STATE" BOSUN_CONFIG_DIR="$CONSOLE_CONFIG" \
-  "$BOSUN" console --port 0 >"$WORK/console-job.out" 2>"$WORK/console-job.err" &
+# The console as the job runs it (--job) serves while a hand run asks for its address.
+BOSUN_STATE_DIR="$CONSOLE_STATE" BOSUN_CONFIG_DIR="$CONSOLE_CONFIG" \
+  "$BOSUN" console --job --port 0 >"$WORK/console-job.out" 2>"$WORK/console-job.err" &
 CONSOLE_PID=$!
 console_started "$WORK/console-job.out" "$WORK/console-job.err" >/dev/null
 JOB_URL="$(grep -o 'http://[^ ]*' "$WORK/console-job.out")"
 console_here() { BOSUN_STATE_DIR="$CONSOLE_STATE" BOSUN_CONFIG_DIR="$CONSOLE_CONFIG" "$BOSUN" console "$@"; }
 check "--url prints the running console's address from the stored token and its port, and only that" test "$(console_here --url 2>&1)" = "$JOB_URL"
 check "... with the token the console stored" contains "$(console_here --url)" "/?t=$FIRST_TOKEN"
-check "a hand run while it serves prints that address, and exits 0 at once" bash -c 'source "$1/lib/common.sh"; out="$(run_with_timeout 20 "${@:3}" 2>&1)" && grep -q "bosun console: $2" <<<"$out"' _ "$ROOT" "$JOB_URL" env BOSUN_STATE_DIR="$CONSOLE_STATE" BOSUN_CONFIG_DIR="$CONSOLE_CONFIG" "$BOSUN" console --port 0
+# BOSUN_TRIGGER=launchd is what the morning job's shells inherit: it does not make a hand run the job.
+check "a hand run while it serves prints that address, and exits 0 at once, also under the morning job's variable" bash -c 'source "$1/lib/common.sh"; out="$(run_with_timeout 20 "${@:3}" 2>&1)" && grep -q "bosun console: $2" <<<"$out"' _ "$ROOT" "$JOB_URL" env BOSUN_TRIGGER=launchd BOSUN_STATE_DIR="$CONSOLE_STATE" BOSUN_CONFIG_DIR="$CONSOLE_CONFIG" "$BOSUN" console --port 0
 check "... it does not rotate the token under the running console" fails_with "already running" console_here --new-token
 check "... and the console is still the one serving" curl -sf -o /dev/null "${JOB_URL%%/\?*}/"
 kill "$CONSOLE_PID" 2>/dev/null
@@ -2744,11 +2745,12 @@ if [ "$(bash -c 'source "$1/lib/common.sh"; command -v launchctl; command -v pms
   check "install writes no console job by default" test ! -e "$CONSOLE_PLIST"
   BOSUN_CONSOLE_ALWAYS=1 BOSUN_CONFIG_DIR="$INSTALL_CFG" "$ROOT/install.sh" >/dev/null 2>&1
   check "with BOSUN_CONSOLE_ALWAYS=1 it writes and loads the console job" bash -c 'plutil -lint -s "$1" && grep -q "launchctl bootstrap gui/$(id -u) $1" "$2"' _ "$CONSOLE_PLIST" "$WORK/system.log"
-  check "... named by the morning job's label plus .console, running bosun console" python3 -I -c '
+  check "... named by the morning job's label plus .console, running bosun console --job (and no BOSUN_TRIGGER)" python3 -I -c '
 import plistlib, sys
 job = plistlib.load(open(sys.argv[1], "rb"))
 assert job["Label"] == sys.argv[2] + ".console", job["Label"]
-assert job["ProgramArguments"][-1].rstrip().endswith("/bin/bosun\" console"), job["ProgramArguments"]
+assert job["ProgramArguments"][-1].rstrip().endswith("/bin/bosun\" console --job"), job["ProgramArguments"]
+assert "BOSUN_TRIGGER" not in job["EnvironmentVariables"], job["EnvironmentVariables"]
 ' "$CONSOLE_PLIST" "$BOSUN_LAUNCHD_LABEL"
   check "... not started at load: the marker alone keeps it, so a quit stays quit through a reboot" python3 -I -c '
 import plistlib, sys
