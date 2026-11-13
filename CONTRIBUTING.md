@@ -51,10 +51,9 @@ parts your change touches.
 ## Pull requests
 
 Open them against `main`, one topic each, saying what changed, why, and how you tested it. CI runs
-the hooks, the unit tests on Python 3.13 to 3.15, the smoke suite on macOS, the menu bar app's build and tests (quick when `app/` is untouched), gitleaks and
-CodeQL;
-`main` takes a pull request once those pass and its review threads are resolved, squashed or
-rebased.
+the hooks, the unit tests on Python 3.13 to 3.15, the smoke suite on macOS, the menu bar app's build and
+tests (quick when `app/` is untouched), gitleaks and CodeQL; `main` takes a pull request once those pass and
+its review threads are resolved, squashed or rebased.
 
 ## Code of conduct
 

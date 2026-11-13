@@ -6,6 +6,12 @@ inputs:
   python-version:
     description: The Python version uv uses.
     required: true
+  enable-cache:
+    description: >-
+      Whether to restore and save uv's cache. "false" for a release job, which must not restore a cache
+      that another run wrote.
+    required: false
+    default: "true"
 runs:
   using: composite
   steps:
@@ -14,7 +20,7 @@ runs:
       uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
       with:
         python-version: ${{ inputs.python-version }}
-        enable-cache: true
+        enable-cache: ${{ inputs.enable-cache }}
     - if: steps.install.outcome == 'failure'
       shell: bash
       run: sleep 20
@@ -22,4 +28,4 @@ runs:
       uses: astral-sh/setup-uv@07a047e608db84b3d8c06cd9a7c7dcc9c355c18e # v10.3.2
       with:
         python-version: ${{ inputs.python-version }}
-        enable-cache: true
+        enable-cache: ${{ inputs.enable-cache }}

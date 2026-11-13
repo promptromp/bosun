@@ -17,6 +17,9 @@ whether its plist is there, for `status`.
                                          that app/build.sh makes, without the team check (developers)
     app_install.py update                install app/VERSION when the installed version differs
     app_install.py status [--json] [--login-plist PATH]
+    app_install.py verify-archive <zip>  run on a zip what an install runs on a download (the release workflow
+                                         checks its final zip with it before it publishes): the archive's
+                                         entries, ditto, one bosun.app, then `verify`; nothing is installed
     app_install.py quit                  ask the running app, by its bundle id, to quit (remove's first step)
     app_install.py delete                remove ~/Applications/bosun.app (remove's last step)
 
@@ -81,6 +84,8 @@ BUILD_FAILURE_LINES = 20  # of the build's output that a failed build shows: the
 # Hidden, in ~/Applications itself, so that a rename into place never crosses a volume; the pid of the install
 # that made it is in the name, so that a later one can tell what a dead install left from a live one's.
 SCRATCH_PREFIX = ".bosun-app-"
+GATEKEEPER_REFUSALS = ("Gatekeeper's assessment", "macOS does not accept")  # what `verify` says of spctl
+SPCTL_LINES = 10  # of what spctl said, which `verify-archive` shows when it refuses
 SCRATCH_PID = re.compile(r"^\.bosun-app-(\d+)-")
 NOTARIZED = "source=Notarized Developer ID"
 ASK_AUTOMATION = (
@@ -250,21 +255,27 @@ def check_archive(archive: Path) -> None:
         raise AppError(problem)
 
 
-def fetch_app(setup: Setup, slug: str, version: str, scratch: Path) -> Path:
-    """The release's app, downloaded and unpacked in <scratch>, and checked to be one bosun.app."""
-    url = app_release.release_asset_url(slug, version)
-    archive = scratch / "bosun-app.zip"
-    download(setup, url, archive, f"{BUNDLE} {version} at {slug}")
+def unpack_archive(run: Runner, archive: Path, scratch: Path) -> Path:
+    """The bosun.app of <archive>, unpacked with `ditto -x -k` in <scratch> after its entries are checked
+    and checked to be exactly one bosun.app: what an install does with a download."""
     check_archive(archive)
     unpacked = scratch / "unpacked"
     unpacked.mkdir()
-    done = setup.run(["ditto", "-x", "-k", str(archive), str(unpacked)])
+    done = run(["ditto", "-x", "-k", str(archive), str(unpacked)])
     if done.returncode != 0:
         raise AppError(f"the download is not a zip archive: {done.last_line}")
     problem = app_release.archive_problem(unpacked)
     if problem:
         raise AppError(problem)
     return unpacked / BUNDLE
+
+
+def fetch_app(setup: Setup, slug: str, version: str, scratch: Path) -> Path:
+    """The release's app, downloaded and unpacked in <scratch>, and checked to be one bosun.app."""
+    url = app_release.release_asset_url(slug, version)
+    archive = scratch / "bosun-app.zip"
+    download(setup, url, archive, f"{BUNDLE} {version} at {slug}")
+    return unpack_archive(setup.run, archive, scratch)
 
 
 def build_app(setup: Setup, scratch: Path) -> Path:
@@ -525,6 +536,32 @@ def install(setup: Setup, *, build: bool = False) -> str:
     )
 
 
+def verify_archive(setup: Setup, archive: Path) -> str:
+    """<archive> (a zip) put through what an install puts a download through: its entries, `ditto -x -k` into
+    a folder that is removed after, exactly one bosun.app, then `verify` against the publisher (the code
+    requirement, Gatekeeper's Notarized Developer ID, the bundle id). Nothing is installed. Refused with the
+    one line an install would refuse it with; for Gatekeeper's refusals spctl's own words go to stderr too."""
+    publisher = app_release.read_publisher(setup.root)
+    app_release.require_team(publisher)
+    assessments: list[Run] = []
+
+    def run(argv: Sequence[str]) -> Run:
+        done = setup.run(argv)
+        if argv[0] == "spctl":
+            assessments.append(done)
+        return done
+
+    with tempfile.TemporaryDirectory(prefix="bosun-app-verify-") as scratch:
+        staged = unpack_archive(run, archive, Path(scratch))
+        reason = verify(staged, publisher, run)
+    if reason:
+        if assessments and reason.startswith(GATEKEEPER_REFUSALS):
+            for line in assessments[-1].tail(SPCTL_LINES):
+                print(f"spctl said: {line}", file=sys.stderr)
+        raise AppError(f"refused {BUNDLE}: {reason}")
+    return f"{archive.name} passes the checks an install makes"
+
+
 def update(setup: Setup) -> str:
     """Install app/VERSION when it differs from the installed app; say so, and download nothing, when it is
     the same or there is no app (bringing one is `install`)."""
@@ -557,6 +594,7 @@ def build_parser() -> argparse.ArgumentParser:
     show = commands.add_parser("status", allow_abbrev=False)
     show.add_argument("--json", action="store_true")
     show.add_argument("--login-plist", type=Path)
+    commands.add_parser("verify-archive", allow_abbrev=False).add_argument("archive", type=Path)
     commands.add_parser("quit", allow_abbrev=False)
     commands.add_parser("delete", allow_abbrev=False)
     return parser
@@ -570,6 +608,8 @@ def dispatch(args: argparse.Namespace, setup: Setup) -> str:
     if args.command == "status":
         state = app_release.status(setup.root, setup.app, args.login_plist)
         return json.dumps(state) if args.json else app_release.describe(state)
+    if args.command == "verify-archive":
+        return verify_archive(setup, args.archive)
     if args.command == "quit":
         bundle_id = app_release.read_publisher(setup.root).bundle_id
         return f"asked {BUNDLE} to quit" if quit_app(setup, bundle_id) else ""

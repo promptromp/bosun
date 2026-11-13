@@ -36,9 +36,11 @@ jobs:
         with:
           persist-credentials: false
           fetch-depth: 0 # to see that the tag is on main
+      # No cache: a tag run must not restore one that another run (on main, say) wrote.
       - uses: ./.github/actions/setup-uv
         with:
           python-version: "3.13"
+          enable-cache: "false"
       # Where the later steps keep their files, all in the runner's temporary folder (`runner` is not
       # a context of a job's `env`). No secret is among them.
       - name: Paths
@@ -48,7 +50,6 @@ jobs:
             echo "CERTIFICATE_FILE=$RUNNER_TEMP/bosun-release.p12"
             echo "NOTARY_KEY_FILE=$RUNNER_TEMP/bosun-notary-key.p8"
             echo "DIST=$RUNNER_TEMP/bosun-app-dist"
-            echo "CHECK=$RUNNER_TEMP/bosun-app-check"
           } >>"$GITHUB_ENV"
       # Fails at once, before any secret is read: the tag must be app-v<app/VERSION>, on main, and
       # app/publisher.json must hold a Team ID (the requirement is built from it, as the install builds it).
@@ -102,6 +103,14 @@ jobs:
         env:
           MACOS_SIGN_IDENTITY: ${{ secrets.MACOS_SIGN_IDENTITY }}
         run: app/build.sh --identity "$MACOS_SIGN_IDENTITY" --out "$DIST"
+      # Before anything goes to Apple: a signing identity of another team (or another bundle id) stops
+      # here, not after the wait for a notarization the install would refuse anyway. The requirement is
+      # the one `bosun app install` checks (lib/app_release.py), not a copy.
+      - name: The signed bundle meets the install's requirement
+        run: |
+          set -eu
+          requirement=$(uv run --no-project python lib/app_release.py requirement)
+          codesign --verify --deep --strict -R "=$requirement" "$DIST/bosun.app"
       # `submit --wait` ends when Apple has decided, but its exit status is not what says whether the app
       # was accepted: the status is read from `notarytool info` for that submission. Anything but
       # Accepted prints Apple's log and fails.
@@ -128,7 +137,7 @@ jobs:
           submitted=$(notary submit "$DIST/bosun-app-$version.zip" --wait --timeout 40m --output-format json) || echo "notarytool submit ended with status $?"
           id=$(printf '%s' "$submitted" | field id) || id=""
           if [ -z "$id" ]; then
-            echo "notarytool submit gave no submission id." >&2
+            echo "notarytool submit gave no submission id. It said: $submitted" >&2
             exit 1
           fi
           echo "Submission $id"
@@ -144,28 +153,19 @@ jobs:
           set -eu
           version=$(tr -d '[:space:]' <app/VERSION)
           xcrun stapler staple "$DIST/bosun.app"
+          xcrun stapler validate "$DIST/bosun.app"
           app/build.sh --zip "$DIST/bosun.app" --out "$DIST"
           test -s "$DIST/bosun-app-$version.zip"
-      # What the install would check, of what will be downloaded: the zip as made, unpacked on its own.
-      # The requirement is the one `bosun app install` verifies (lib/app_release.py), not a copy.
+      # The final zip, put through the install's own code (lib/app_install.py): the archive's entries, ditto,
+      # exactly one bosun.app, the code requirement `bosun app install` checks, Gatekeeper's whole line
+      # `source=Notarized Developer ID` with spctl's exit status, and the bundle id. Nothing is installed
+      # and nothing is copied into this file, so a release the install would refuse is never published.
+      # On a refusal it prints what spctl said (no secret in it).
       - name: Verify the zip as the install does
         run: |
           set -eu
           version=$(tr -d '[:space:]' <app/VERSION)
-          requirement=$(uv run --no-project python lib/app_release.py requirement)
-          rm -rf "$CHECK"
-          mkdir "$CHECK"
-          unzip -q "$DIST/bosun-app-$version.zip" -d "$CHECK"
-          test -d "$CHECK/bosun.app"
-          xcrun stapler validate "$CHECK/bosun.app"
-          codesign --verify --deep --strict -R "=$requirement" "$CHECK/bosun.app"
-          # The whole line, as the install matches it. spctl says more (the origin names the identity),
-          # which stays out of the log.
-          if ! spctl --assess --type execute -vv "$CHECK/bosun.app" 2>&1 | sed 's/^[[:space:]]*//;s/[[:space:]]*$//' | grep -qxF 'source=Notarized Developer ID'; then
-            echo "Gatekeeper's assessment did not say source=Notarized Developer ID." >&2
-            exit 1
-          fi
-          echo "Verified: signed with the publisher's Developer ID, notarized, stapled."
+          uv run --no-project python lib/app_install.py verify-archive "$DIST/bosun-app-$version.zip"
       - name: Publish the release
         env:
           GH_TOKEN: ${{ github.token }}
@@ -189,5 +189,7 @@ jobs:
       - name: Delete the throwaway keychain and the key file
         if: always()
         run: |
-          security delete-keychain "$KEYCHAIN" || echo "No keychain to delete."
-          rm -f "$CERTIFICATE_FILE" "$NOTARY_KEY_FILE"
+          if [ -n "${KEYCHAIN:-}" ]; then
+            security delete-keychain "$KEYCHAIN" || echo "No keychain to delete."
+          fi
+          rm -f "${CERTIFICATE_FILE:-}" "${NOTARY_KEY_FILE:-}"

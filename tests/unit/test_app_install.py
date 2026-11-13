@@ -1052,6 +1052,139 @@ class CommandTest(World):
         self.assertFalse(self.app.exists())
 
 
+class VerifyArchiveTest(World):
+    """`verify-archive <zip>`: the release workflow's check of its final zip, which is what an install runs on
+    a download (the same functions), without installing anything."""
+
+    def make_zip(self, *extra: zipfile.ZipInfo) -> Path:
+        archive = self.home / "bosun-app-0.2.0.zip"
+        with zipfile.ZipFile(archive, "w") as bundle:
+            bundle.writestr("bosun.app/Contents/Info.plist", "x")
+            for entry in extra:
+                bundle.writestr(entry, "x")
+        return archive
+
+    def check(self, archive: Path | None = None) -> tuple[int, str, str]:
+        out, err = io.StringIO(), io.StringIO()
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+            status = app_install.main(
+                ["verify-archive", str(archive or self.make_zip())],
+                root=self.root,
+                home=self.home,
+                run=self.tools,
+                environ={},
+            )
+        return status, out.getvalue(), err.getvalue()
+
+    def test_a_good_zip_passes_the_same_tools_in_the_same_order_as_an_install(self) -> None:
+        status, out, err = self.check()
+        self.assertEqual((status, err), (0, ""))
+        self.assertIn("passes", out)
+        self.assertEqual(self.tools.names(), ["ditto", "codesign", "spctl"])
+        self.assertEqual(self.tools.calls[0][1:3], ["-x", "-k"])
+        self.assertEqual(self.tools.requirements, ["=" + app_release.requirement(BUNDLE_ID, TEAM)])
+
+    def test_it_installs_nothing_and_leaves_no_folder_behind(self) -> None:
+        unpacked: list[Path] = []
+        original = self.tools.ditto
+
+        def ditto(argv: Sequence[str]) -> Run:
+            unpacked.append(Path(argv[-1]))
+            return original(argv)
+
+        self.tools.ditto = ditto  # type: ignore[method-assign]
+        self.check()
+        self.assertFalse(self.apps.exists())
+        self.assertTrue(unpacked)
+        self.assertFalse(unpacked[0].parent.exists())
+
+    def test_it_cleans_up_after_a_refusal_too(self) -> None:
+        unpacked: list[Path] = []
+        original = self.tools.ditto
+
+        def ditto(argv: Sequence[str]) -> Run:
+            unpacked.append(Path(argv[-1]))
+            return original(argv)
+
+        self.tools.ditto = ditto  # type: ignore[method-assign]
+        self.tools.meets_requirement = False
+        self.assertEqual(self.check()[0], 1)
+        self.assertFalse(unpacked[0].parent.exists())
+
+    def test_what_the_install_refuses_in_an_archive_it_refuses(self) -> None:
+        link = zipfile.ZipInfo("bosun.app/Contents/link")
+        link.external_attr = SYMLINK_ATTR
+        for entry, says in (
+            (zipfile.ZipInfo("/etc/escape"), "absolute path"),
+            (zipfile.ZipInfo("bosun.app/../../escape"), "climbs out"),
+            (link, "symbolic link"),
+        ):
+            with self.subTest(entry=entry.filename):
+                self.tools.calls.clear()
+                status, _, err = self.check(self.make_zip(entry))
+                self.assertEqual(status, 1)
+                self.assertIn(says, err)
+                self.assertNotIn("ditto", self.tools.names())
+
+    def test_an_archive_with_anything_beside_the_app_is_refused(self) -> None:
+        self.tools.archive = ["bosun.app", "another.txt"]
+        status, _, err = self.check()
+        self.assertEqual(status, 1)
+        self.assertIn("must hold bosun.app and nothing else", err)
+
+    def test_an_archive_with_no_bosun_app_is_refused(self) -> None:
+        self.tools.archive = ["other.txt"]
+        status, _, err = self.check()
+        self.assertEqual(status, 1)
+        self.assertIn("does not hold bosun.app", err)
+
+    def test_not_a_zip_and_a_zip_ditto_cannot_read_are_refused(self) -> None:
+        plain = self.home / "x.zip"
+        plain.write_text("not a zip")
+        self.assertIn("not a zip archive", self.check(plain)[2])
+        self.tools.unzip_fails = True
+        self.assertIn("not a zip archive", self.check()[2])
+
+    def test_a_bundle_id_that_is_not_the_publisher_s_is_refused(self) -> None:
+        self.tools.bundle_id = "ai.example.other"
+        status, _, err = self.check()
+        self.assertEqual(status, 1)
+        self.assertIn("ai.example.other", err)
+
+    def test_a_signature_that_does_not_meet_the_requirement_is_refused(self) -> None:
+        self.tools.meets_requirement = False
+        status, _, err = self.check()
+        self.assertEqual(status, 1)
+        self.assertIn("publisher's Developer ID", err)
+        self.assertNotIn("spctl", self.tools.names())
+
+    def test_gatekeeper_must_say_notarized_on_a_line_of_its_own_and_its_words_are_shown(self) -> None:
+        self.tools.assess_source = "source=Developer ID"
+        status, _, err = self.check()
+        self.assertEqual(status, 1)
+        self.assertIn("did not say Notarized Developer ID", err)
+        self.assertIn("spctl said: source=Developer ID", err)
+
+    def test_spctl_s_exit_status_counts(self) -> None:
+        self.tools.assess_says = "rejected"
+        status, _, err = self.check()
+        self.assertEqual(status, 1)
+        self.assertIn("spctl said: ", err)
+        self.assertIn("rejected", err)
+
+    def test_without_a_team_id_it_stops_before_any_tool(self) -> None:
+        self.write_publisher("")
+        status, _, err = self.check()
+        self.assertEqual(status, 1)
+        self.assertIn("no team_id", err)
+        self.assertEqual(self.tools.calls, [])
+
+    def test_the_archive_is_an_argument(self) -> None:
+        with contextlib.redirect_stderr(io.StringIO()):
+            status = app_install.main(["verify-archive"], root=self.root, home=self.home, run=self.tools)
+        self.assertEqual(status, 2)
+
+
 class RunnerTest(unittest.TestCase):
     def test_the_default_runner_is_the_only_place_that_runs_a_tool(self) -> None:
         with tempfile.TemporaryDirectory() as folder, mock.patch("subprocess.run") as run:

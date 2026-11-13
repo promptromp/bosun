@@ -18,9 +18,10 @@ that pass them. CI runs every unit test, on Linux and on macOS, and keeps a floo
 coverage. The menu bar app has its own job, `app`: when a pull request changes nothing under `app/`
 (or the two tools that feed it, `tools/contract_samples.py` and `tools/swift_coverage.py`, or the
 workflow), it passes in seconds without building; otherwise it runs the Swift tests with warnings as
-errors, the coverage floor, SwiftLint, `swift format lint --strict` and an ad hoc signed build. For the forbidden-terms check to run there too, store your list as the
-`FORBIDDEN_TERMS` Actions secret with `gh secret set FORBIDDEN_TERMS <
-~/.config/bosun/forbidden-terms.txt`; the logs never print what it matched.
+errors, the coverage floor, SwiftLint, `swift format lint --strict` and an ad hoc signed build.
+
+For the forbidden-terms check to run in CI too, store your list as the `FORBIDDEN_TERMS` Actions secret with
+`gh secret set FORBIDDEN_TERMS < ~/.config/bosun/forbidden-terms.txt`; the logs never print what it matched.
 
 Issues and pull requests are welcome: see [CONTRIBUTING.md](../CONTRIBUTING.md) and the
 [code of conduct](../CODE_OF_CONDUCT.md). Report security problems privately, as
@@ -336,9 +337,9 @@ older terms). It is only a test tool here: nothing in bosun needs it or ships it
 The menu bar app is released apart from bosun: a tag `app-v<version>` on `main`, where `<version>` is what
 `app/VERSION` says, starts `.github/workflows/release-app.yml`. It builds the app, signs it with your Developer
 ID in a keychain that exists for that run only, has Apple notarize it, staples the ticket, and attaches
-`bosun-app-<version>.zip` to a GitHub release. Before it publishes anything it checks the zip the way `bosun app
-install` does (the same code requirement, from `lib/app_release.py`, and Gatekeeper's `source=Notarized Developer
-ID`), so a release the install would refuse never goes out. You need an Apple Developer Program membership, a
+`bosun-app-<version>.zip` to a GitHub release. Before it publishes anything it puts the final zip through the install's own code
+(`lib/app_install.py verify-archive`: the archive's entries, the code requirement, Gatekeeper's `source=Notarized
+Developer ID` and the bundle id), so a release the install would refuse never goes out. You need an Apple Developer Program membership, a
 *Developer ID Application* certificate and an App Store Connect API key (Users and Access, Integrations, with the
 Developer role). The values below come from your own files and your own terminal: never paste a certificate, a
 key or a password into a chat, an issue or a pull request.
@@ -352,8 +353,12 @@ workflow prints none of these):
     gh api -X PUT repos/<owner>/<repo>/environments/release
     ```
 
-    Then, under Settings, Environments, `release`, add yourself as a required reviewer, so a tag only signs
-    something after you approved the run, and limit the environment's deployment tags to `app-v*`.
+    Then, under Settings, Environments, `release`, add yourself as a required reviewer, and limit the
+    environment's deployment tags to `app-v*`. The required reviewer is the real control: a run only reaches
+    the secrets after you approved it, and a tag on a commit that is not on `main` runs that commit's copy of
+    the workflow, so read what you approve (the workflow stops a tag whose commit is not on `main`, but only
+    in a step of that same copy). Also add a tag ruleset (Settings, Rules, Rulesets, new tag ruleset, target
+    `app-v*`) that restricts who may create these tags, and block deleting and moving them.
 
 2. **The six secrets**, in that environment. Each `gh secret set` without `--body` asks for the value (hidden), or
    reads a pipe:
@@ -375,7 +380,7 @@ workflow prints none of these):
    digits in the parentheses of the certificate's name, and it is public, since every signed app carries it. The
    same file names the bundle identifier and the repository whose releases `bosun app install` downloads from, so
    check `bundle_id` and `releases` while you are there. Until `team_id` is filled in, `bosun init` does not offer
-   the app, and the release workflow stops at its first step.
+   the app, and the release workflow stops at its first check.
 
 Then, for each release:
 

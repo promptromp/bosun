@@ -440,8 +440,8 @@ gitleaks over the pull request's commits (`gitleaks`; a made-up value in a test 
 runner and the Docker sandbox, when the install could have changed and weekly; those are not required
 checks, because a required check that did not run blocks a merge. `.github/workflows/release-app.yml`, on a tag
 `app-v<app/VERSION>`, signs, notarizes and publishes bosun.app (steps for the person: `docs/development.md`,
-"Releasing bosun.app"); it checks the bundle with `lib/app_release.py requirement`, the requirement
-`bosun app install` checks, never a copy of it. `.github/workflows/docs.yml`
+"Releasing bosun.app"); it checks the signed bundle with `lib/app_release.py requirement` and its final zip
+with `lib/app_install.py verify-archive`, which is the install's own code, never a copy of it. `.github/workflows/docs.yml`
 publishes the docs site to GitHub Pages from `main` (the repository's Pages source is GitHub Actions). The
 logs are public, so neither check prints what it matched. `main` takes changes only through a pull
 request with those checks green and up to date with `main`, CodeQL's results clean (GitHub's

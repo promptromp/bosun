@@ -253,9 +253,10 @@ Calls made from the research and the builder check, to check while reading:
   must verify. A release workflow, on a tag `app-v<version>` that names `app/VERSION`, builds it, signs it with the
   Developer ID (throwaway keychain), notarizes it (the status read from `notarytool info`, never inferred) and
   staples it, makes the zip again after stapling (with `app/build.sh --zip`, `ditto`), checks that zip with the
-  requirement `bosun app install` checks (`lib/app_release.py requirement`) and Gatekeeper's `source=Notarized
-  Developer ID`, and only then attaches `bosun-app-<version>.zip` to a GitHub release. The secrets: the certificate (.p12) and its password, the signing identity, the team id, and the App
-  Store Connect API key (id, issuer, key).
+  install's own code (`lib/app_install.py verify-archive`: the archive's entries, `ditto`, one `bosun.app`, the
+  requirement `bosun app install` checks, Gatekeeper's `source=Notarized Developer ID`, the bundle id), and only then attaches `bosun-app-<version>.zip` to a GitHub release. The six secrets: the
+  certificate (.p12) and its password, the signing identity, and the App Store Connect API key (the key, its id
+  and its issuer); the team id is not a secret, it is `app/publisher.json`'s.
 - **What a checkout expects.** `app/VERSION` names the app version this checkout works with. `bosun app install`
   and `update` download that release with `curl`, and accept it only if `codesign --verify --deep --strict` passes,
   its Team ID is the one in `app/publisher.json`, and `spctl --assess` accepts it; then they move it into

@@ -139,7 +139,8 @@ jobs:
             echo "build=true" >>"$GITHUB_OUTPUT"
             exit 0
           fi
-          if ! git merge-base "$BASE" "$HEAD" >/dev/null 2>&1 || ! files=$(git diff --name-only "$BASE...$HEAD"); then
+          # --no-renames: a file moved out of app/ shows its old path too, not only the new one
+          if ! git merge-base "$BASE" "$HEAD" >/dev/null 2>&1 || ! files=$(git diff --name-only --no-renames "$BASE...$HEAD"); then
             echo "No merge base with the base branch, or no diff: building."
             echo "build=true" >>"$GITHUB_OUTPUT"
             exit 0
