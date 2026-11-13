@@ -45,6 +45,15 @@ set_connector_defaults() {
   BOSUN_ORCHESTRATOR_CONNECTORS=""
 }
 
+set_update_defaults() {
+  # What `bosun update` follows: releases (the newest dated tag, v<YYYY.MM.DD>) or main (the head of the
+  # branch, for developers). Anything else makes the update refuse.
+  BOSUN_UPDATE_CHANNEL="releases"
+  # The morning run leaves the session alone if you typed in an attached tmux client this recently, and
+  # the first `bosun update` of an older install waits until nobody has.
+  BOSUN_ACTIVE_CLIENT_MINUTES="10"
+}
+
 set_defaults() {
   BOSUN_CONFIG_DIR="${BOSUN_CONFIG_DIR:-$HOME/.config/bosun}"
   BOSUN_SESSION_NAME="bosun"
@@ -75,7 +84,6 @@ set_defaults() {
   BOSUN_TRUST_MASKED_REPOS="1"
 
   BOSUN_ON_EXISTING="refresh"
-  BOSUN_ACTIVE_CLIENT_MINUTES="10"
   BOSUN_RESTART_MIN_IDLE_SECONDS="120"
   # With BOSUN_FRESH_CONVERSATIONS=1, refresh starts a fresh conversation for a repo window
   # that is idle, holds nothing in flight, and whose conversation grew past this many tokens (each
@@ -95,6 +103,7 @@ set_defaults() {
   BOSUN_COMPACT_CONTEXT_MAX_CHARS="1500"
   set_harness_defaults
   set_connector_defaults
+  set_update_defaults
   BOSUN_CLAUDE_FLAGS="--permission-mode auto --chrome"
   # Model and effort for the repo sessions; sessions.yml entries can override them per window.
   # Model: an alias (opus, sonnet, haiku, fable) or a full model name. Effort: low, medium, high,
@@ -158,6 +167,8 @@ set_feature_defaults() {
   set_event_defaults
   set_slack_defaults
   set_console_defaults
+  set_quit_defaults
+  set_app_defaults
   set_impact_defaults
   set_knowledge_defaults
   set_approval_defaults
@@ -356,12 +367,33 @@ set_knowledge_defaults() {
 set_console_defaults() {
   # `bosun console` (docs/design/console.md): its port on 127.0.0.1 (--port overrides it).
   BOSUN_CONSOLE_PORT="8765"
+  # 1: the console runs as a launchd job (install.sh loads it) from `bosun start` until `bosun quit`,
+  # so `bosun console --url` always has an address to give (the menu bar app's "Open Console" uses it).
+  # 0: it runs when you start it by hand.
+  BOSUN_CONSOLE_ALWAYS="0"
   # 1: keep the console's access token across restarts ($BOSUN_STATE_DIR/console/token, 0600),
   # so an open tab stays signed in; `bosun console --new-token` rotates it. 0: new each start.
   BOSUN_CONSOLE_PERSIST_TOKEN="1"
   # Claude Code memory folders the console's Library may show (read-only, .md files only),
   # separated by ':'. Empty: none.
   BOSUN_CONSOLE_MEMORY_DIRS=""
+}
+
+set_quit_defaults() {
+  # `bosun quit --let-finish` (the menu bar app's "Quit bosun"): how long it waits for busy agents to
+  # finish, in whole minutes, before it says they are still busy and changes nothing. 0: checks once.
+  BOSUN_QUIT_WAIT_MINUTES="10"
+}
+
+set_app_defaults() {
+  # `bosun app install|update` (the menu bar app, bosun.app): the GitHub repository (owner/repo) whose
+  # releases hold it, for a fork or mirror. Empty: the publisher's (app/publisher.json), else the
+  # install's origin when that is on GitHub.
+  BOSUN_APP_RELEASES=""
+  # 1: this install has the menu bar app (`bosun init` asks, `bosun app install` adds it): `bosun update`
+  # keeps it at the version it expects, and the watchdog says when it is gone from ~/Applications.
+  # 0: bosun never touches the app.
+  BOSUN_MENU_APP="0"
 }
 
 set_impact_defaults() {
@@ -562,9 +594,27 @@ update_windows_pending() {
 
 keep_awake_pidfile() { echo "$BOSUN_STATE_DIR/keep-awake-$BOSUN_SESSION_NAME.pid"; }
 
+# Beside the pid file, what `bosun status --json` reads: {"until": "<ISO time>", "pid": N}, when the
+# keep-awake ends and whose it is. `morning` writes it and `stop` removes it with the pid file.
+keep_awake_file() { echo "$BOSUN_STATE_DIR/keep-awake-$BOSUN_SESSION_NAME.json"; }
+
 # When you stopped the session (`stop` writes it, `start` removes it). The watchdog does not
 # expect the session on a day you stopped it.
 stop_marker() { echo "$BOSUN_STATE_DIR/stopped-$BOSUN_SESSION_NAME"; }
+
+# Whether `bosun quit` left bosun stopped until it is started (lib/quit_state.py, quit.json in the state
+# folder): succeeds and prints the time of the quit (HH:MM). The watchdog's and learning's scheduled runs
+# skip while it does; quit_paused is the same for the morning run, when the quit also paused it.
+# `bosun start` and a morning run that is not paused call quit_clear.
+quit_stopped() {
+  [ -f "$BOSUN_STATE_DIR/quit.json" ] || return 1
+  python3 "$BOSUN_ROOT/lib/quit_state.py" stopped --state-dir "$BOSUN_STATE_DIR"
+}
+quit_paused() {
+  [ -f "$BOSUN_STATE_DIR/quit.json" ] || return 1
+  python3 "$BOSUN_ROOT/lib/quit_state.py" paused --state-dir "$BOSUN_STATE_DIR"
+}
+quit_clear() { rm -f "$BOSUN_STATE_DIR/quit.json"; }
 
 session_exists() { tmux_cmd has-session -t "=$BOSUN_SESSION_NAME" 2>/dev/null; }
 
@@ -1124,6 +1174,14 @@ seconds_until_awake_end() {
   echo $((target > now ? target - now : 0))
 }
 
+# Seconds left in the awake window that now is in: the one rule (lib/awake.py, which the watchdog and the status
+# use too), so `bosun morning --now` and they agree on what "inside" is. Exits 3 (awake.OUTSIDE) printing
+# nothing outside every window; 2 printing one line when BOSUN_DAYS, BOSUN_START_TIME or BOSUN_AWAKE_UNTIL does
+# not parse; any other status is a failure of the command itself.
+awake_seconds_left() {
+  python3 "$BOSUN_ROOT/lib/awake.py" remaining --days "$BOSUN_DAYS" --start "$BOSUN_START_TIME" --until "$BOSUN_AWAKE_UNTIL"
+}
+
 seconds_until() {
   local target now
   target="$(date -j -f '%Y-%m-%d %H:%M:%S' "$(date +%F) $1:00" +%s)" || return 1
@@ -1217,7 +1275,7 @@ WATCHDOG_SETTINGS="BOSUN_STATE_DIR BOSUN_LOG_DIR BOSUN_SESSION_NAME BOSUN_ORCHES
   BOSUN_WATCHDOG_ORCHESTRATOR_RESTART BOSUN_HOOK_SIGNALS BOSUN_LEARN_ENABLED BOSUN_LEARN_AT BOSUN_LEARN_TIMEOUT_MINUTES
   BOSUN_EVENTS_ENABLED BOSUN_EVENTS_INTERVAL_SECONDS BOSUN_SLACK_WATCH_ENABLED
   BOSUN_SLACK_WATCH_MINUTES BOSUN_CLAUDE_BIN BOSUN_CONTEXT_WARN_TOKENS
-  BOSUN_OVERHEAD_WARN_SHARE"
+  BOSUN_OVERHEAD_WARN_SHARE BOSUN_MENU_APP"
 
 # "NAME=value" for each setting named, one per line (for `env`).
 settings_lines() { # <setting names...>
@@ -1241,8 +1299,74 @@ learn_plist() { echo "$HOME/Library/LaunchAgents/$(learn_label).plist"; }
 # `bosun wake-test`'s own job, which it removes when it finishes.
 waketest_label() { echo "$BOSUN_LAUNCHD_LABEL.waketest"; }
 
+# The console's launchd job, with BOSUN_CONSOLE_ALWAYS=1 (templates/launchd-console.plist). The marker file
+# is its KeepAlive condition: `bosun start` makes it (console_mark_wanted); `bosun quit` removes it, and
+# stops the console with `launchctl kill TERM gui/$(id -u)/$(console_label)`.
+console_label() { echo "$BOSUN_LAUNCHD_LABEL.console"; }
+console_wanted_marker() { echo "$BOSUN_STATE_DIR/console/wanted"; }
+
+# Whether the console's job is one to restart: loaded, and wanted (its marker is there).
+console_restartable() {
+  [ -e "$(console_wanted_marker)" ] && job_loaded "$(console_label)"
+}
+
+# The console's job restarted, so that it serves the code now installed (`bosun update` runs this, from the
+# new version, after the switch); nothing to do, and no failure, when it is not one to restart.
+console_restart() {
+  console_restartable || return 0
+  launchctl kickstart -k "gui/$(id -u)/$(console_label)"
+}
+
+# The marker as BOSUN_CONSOLE_ALWAYS says: made with 1, removed otherwise.
+console_mark_wanted() {
+  local marker
+  marker="$(console_wanted_marker)"
+  if [ "$BOSUN_CONSOLE_ALWAYS" != "1" ]; then
+    rm -f "$marker"
+    return 0
+  fi
+  mkdir -p "$(dirname "$marker")" && chmod 700 "$(dirname "$marker")" && : >"$marker"
+}
+
+# The job that runs `bosun morning --now` (templates/launchd-now.plist): always there, started by nothing but
+# a kickstart, which `bosun morning --now --background` makes (what the menu bar app's Start runs). launchd,
+# not the caller, is then the parent of the morning run and of the tmux server and agents it starts, which
+# decides whom macOS names in its privacy prompts.
+now_label() { echo "$BOSUN_LAUNCHD_LABEL.now"; }
+
+# The menu bar app's Open at Login job (templates/launchd-app.plist): there while its plist is, which
+# `bosun app login on` makes and `login off` removes. install.sh and `bosun update` keep a present one
+# current (render_job) and never make one.
+app_label() { echo "$BOSUN_LAUNCHD_LABEL.app"; }
+app_plist() { echo "$HOME/Library/LaunchAgents/$(app_label).plist"; }
+app_bundle() { echo "$HOME/Applications/bosun.app"; }
+
 # Every launchd job bosun can have loaded: what `bosun uninstall` looks for.
-job_labels() { echo "$BOSUN_LAUNCHD_LABEL $(watchdog_label) $(learn_label) $(waketest_label)"; }
+job_labels() { echo "$BOSUN_LAUNCHD_LABEL $(watchdog_label) $(learn_label) $(console_label) $(now_label) $(app_label) $(waketest_label)"; }
+
+render_console_plist() {
+  ENV_XML="$(launchd_env_xml)" LABEL="$(console_label)" ROOT="$BOSUN_INSTALL" LOGS="$BOSUN_LOG_DIR" WANTED="$(console_wanted_marker)" \
+    ruby -e 'print STDIN.read
+      .gsub("__LABEL__", ENV["LABEL"]).gsub("__BOSUN_ROOT__", ENV["ROOT"]).gsub("__WANTED__", ENV["WANTED"])
+      .gsub("__ENV__", ENV["ENV_XML"]).gsub("__LOG_DIR__", ENV["LOGS"])' \
+    <"$BOSUN_ROOT/templates/launchd-console.plist"
+}
+
+render_now_plist() {
+  ENV_XML="$(launchd_env_xml)" LABEL="$(now_label)" ROOT="$BOSUN_INSTALL" LOGS="$BOSUN_LOG_DIR" \
+    ruby -e 'print STDIN.read
+      .gsub("__LABEL__", ENV["LABEL"]).gsub("__BOSUN_ROOT__", ENV["ROOT"])
+      .gsub("__ENV__", ENV["ENV_XML"]).gsub("__LOG_DIR__", ENV["LOGS"])' \
+    <"$BOSUN_ROOT/templates/launchd-now.plist"
+}
+
+render_app_plist() {
+  ENV_XML="$(launchd_env_xml)" LABEL="$(app_label)" PROGRAM="$(app_bundle)/Contents/MacOS/bosun" LOGS="$BOSUN_LOG_DIR" \
+    ruby -e 'print STDIN.read
+      .gsub("__LABEL__", ENV["LABEL"]).gsub("__PROGRAM__", ENV["PROGRAM"])
+      .gsub("__ENV__", ENV["ENV_XML"]).gsub("__LOG_DIR__", ENV["LOGS"])' \
+    <"$BOSUN_ROOT/templates/launchd-app.plist"
+}
 
 render_learn_plist() {
   ENV_XML="$(launchd_env_xml)" CALENDAR="$(launchd_calendar_xml "$BOSUN_LEARN_AT" "$BOSUN_DAYS")" \
@@ -1254,16 +1378,34 @@ render_learn_plist() {
 }
 
 # The plist of the launchd job <label> as this version renders it from the config: the morning job,
-# the watchdog, and learning with BOSUN_LEARN_ENABLED=1; nothing for a job not wanted.
+# the watchdog, learning with BOSUN_LEARN_ENABLED=1, the console with BOSUN_CONSOLE_ALWAYS=1, the job
+# that runs the morning run now, and the app's login job while its plist is there; nothing for a job not
+# wanted.
 render_job() { # <label>
   case "$1" in
     "$BOSUN_LAUNCHD_LABEL") render_launchd_plist "$1" "$BOSUN_START_TIME" "$BOSUN_DAYS" "" BOSUN_TRIGGER=launchd ;;
     "$(watchdog_label)") render_watchdog_plist ;;
     "$(learn_label)") if [ "$BOSUN_LEARN_ENABLED" = "1" ]; then render_learn_plist; fi ;;
+    "$(console_label)") if [ "$BOSUN_CONSOLE_ALWAYS" = "1" ]; then render_console_plist; fi ;;
+    "$(now_label)") render_now_plist ;;
+    "$(app_label)") if [ -e "$(app_plist)" ]; then render_app_plist; fi ;;
   esac
 }
 
 job_loaded() { launchctl print "gui/$(id -u)/$1" >/dev/null 2>&1; } # <label>
+
+# Job <label>'s state and last exit code, as `launchctl print` shows them, tab-separated (empty if it is not
+# loaded). Its first, top-level "state" and "last exit code" lines are the job's: the lines under it (a
+# process, a dispatch source) say state too. The watchdog and job_running read the job this way.
+job_fields() { # <label>
+  launchctl print "gui/$(id -u)/$1" 2>/dev/null |
+    awk -F' = ' '$1 == "\tstate" && state == "" { state = $2 }
+      $1 == "\tlast exit code" && code == "" { code = $2 }
+      END { printf "%s\t%s\n", state, code }'
+}
+
+# Whether job <label> is running now.
+job_running() { [ "$(job_fields "$1" | cut -f1)" = running ]; } # <label>
 
 # Job <label> unloaded, then, from the plist <rendered> (checked already; empty: the job is no longer
 # wanted), written as <installed> and loaded again; or its plist removed.
@@ -1303,7 +1445,7 @@ job_changed() { # <label> <rendered> <installed>
 reload_changed_jobs() { # [--dry-run]
   local label installed rendered status=0 changed
   rendered="$(mktemp)" || return 1
-  for label in "$BOSUN_LAUNCHD_LABEL" "$(watchdog_label)" "$(learn_label)"; do
+  for label in "$BOSUN_LAUNCHD_LABEL" "$(watchdog_label)" "$(learn_label)" "$(console_label)" "$(now_label)" "$(app_label)"; do
     installed="$HOME/Library/LaunchAgents/$label.plist"
     if ! render_job "$label" >"$rendered"; then
       log "ERROR: could not render the plist of $label" >&2

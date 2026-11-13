@@ -36,7 +36,7 @@ parts your change touches.
 - **Tests.** Add a unit test in `tests/unit/` for a change to `lib/*.py`, and a check in
   `tests/smoke.sh` for a command's behaviour. Before you push, run `uv run pytest -n auto` (every unit
   test, in parallel), `tests/smoke.sh` (end to end, hermetic: its own HOME, tmux socket and a fake
-  agent) and `uv run pre-commit run --all-files`; [Running the tests](docs/development.md#running-the-tests)
+  agent; while iterating, `tests/smoke.sh --only <id>` runs one area, `--list` shows them) and `uv run pre-commit run --all-files`; [Running the tests](docs/development.md#running-the-tests)
   says what runs when. Never test an install on your own Mac:
   [the sandboxes](docs/development.md#which-sandbox-for-what) are throwaway machines.
 - **Wording that Claude acts on** (`orchestrator/policy.md`, the task files, the prompts) is

@@ -4,7 +4,8 @@
 # Take bosun off this Mac. It first shows what goes and what stays, then asks whether you are sure, and
 # changes nothing until you have answered everything. Ctrl-C at any question leaves it all as it was.
 #
-# It stops the windows, and removes the launchd jobs, the repeating wake it set (sudo, once), the trust it
+# It stops the windows, and removes the launchd jobs (the menu bar app's Open at Login job among them) and
+# the menu bar app, ~/Applications/bosun.app, the repeating wake it set (sudo, once), the trust it
 # gave folders, the memory notes it learned, the `bosun` link, its working files and what get.sh
 # installed: ~/.local/share/bosun-versions (bosun.git, every version, the checkout from before versions
 # kept there) and the link ~/.local/share/bosun, or the checkout an older get.sh made. It asks whether to

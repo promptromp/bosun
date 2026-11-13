@@ -1,0 +1,101 @@
+#!/bin/bash
+# Usage: bosun quit --plan [--json]
+#        bosun quit (--let-finish[=<minutes>] | --stop-now) [--pause-morning] [--sleep] [--json]
+#
+# Stop bosun cleanly, with your say over busy agents, the morning start and the Mac's keep-awake. It
+# changes nothing of your work: the ledger, the knowledge base and the config stay as they are, and
+# `bosun start` brings everything back.
+#   --plan          say what a quit would meet and change nothing: the open windows, which are busy and
+#                   which wait for you, when the Mac's keep-awake ends, and why a quit is refused
+#   --let-finish    wait until no window is busy, then quit. It checks every 5 seconds, for up to
+#                   <minutes> (default BOSUN_QUIT_WAIT_MINUTES, 10; 0 checks once). A window waiting at
+#                   a prompt does not hold the wait (it needs you, and is stopped with the rest), and
+#                   one at `shell` has only background work, which counts as done. When the minutes
+#                   run out it changes nothing, names the windows still busy and exits 3, so you can
+#                   wait longer, stop them with --stop-now or give up. It never sends a key to a window
+#   --stop-now      quit now, whatever the windows are doing
+#   --pause-morning also keep the morning start off until `bosun start` (without it the next morning
+#                   run starts bosun again)
+#   --sleep         the Mac may sleep now: release the keep-awake too (without it the keep-awake the
+#                   morning started goes on until its time)
+#   --json          one object, `contract` 1, instead of text: the plan (with `wait_minutes`, the
+#                   --let-finish minutes of this run, and `lock_wait_seconds`, the windows lock's wait, by
+#                   which a caller times a quit), and for a quit its `result` (stopped, busy, refused or
+#                   failed), what was kept and the console's state
+# The order: the --let-finish wait; then the `windows` lock that `bosun start` holds is taken (a start in
+# the middle of setting up the windows is waited for, up to BOSUN_WINDOWS_LOCK_WAIT_SECONDS, else nothing
+# changes and it fails); the windows and any update are looked at once more under it (an update that began
+# refuses the quit; with --let-finish a window busy again lets the lock go and goes back to the wait, to
+# the same deadline); then quit.json is written, so the watchdog's next run already skips and never restarts
+# what is being stopped; the console's launchd job (BOSUN_CONSOLE_ALWAYS=1) is stopped; then `bosun stop`
+# (with --keep-awake unless --sleep). If a step after quit.json fails, quit.json stays, `bosun status --json`
+# says the quit did not finish, and the quit says so: run `bosun quit --stop-now` again, or `bosun start`.
+# While an update runs a quit is refused (exit 1). Exit codes: 0 done, 1 refused or failed, 2 usage,
+# 3 the wait ran out. Run it from outside bosun's windows: it stops them, its own last, so --let-finish
+# there would wait for its own window, and is refused.
+set -uo pipefail
+source "$(dirname "$0")/../lib/common.sh"
+
+mode="" wait_minutes="" pause=0 sleep_now=0 json=0
+
+# set_mode <mode>: one of --plan, --let-finish and --stop-now, not two.
+set_mode() {
+  [ -z "$mode" ] || [ "$mode" = "$1" ] || die_usage "--plan, --let-finish and --stop-now are alternatives: give one"
+  mode="$1"
+}
+
+# is_minutes <text>: a whole number of minutes.
+is_minutes() { [[ "$1" =~ ^[0-9]+$ ]]; }
+
+for arg in "$@"; do
+  case "$arg" in
+    -h | --help)
+      usage
+      exit 0
+      ;;
+    --plan) set_mode plan ;;
+    --let-finish) set_mode finish ;;
+    --let-finish=*)
+      set_mode finish
+      wait_minutes="${arg#*=}"
+      is_minutes "$wait_minutes" || die_usage "--let-finish takes a whole number of minutes, got '$wait_minutes'"
+      ;;
+    --stop-now) set_mode now ;;
+    --pause-morning) pause=1 ;;
+    --sleep) sleep_now=1 ;;
+    --json) json=1 ;;
+    *) die_usage "unknown argument '$arg'" ;;
+  esac
+done
+[ -n "$mode" ] || die_usage "say what to do: --plan, --let-finish or --stop-now"
+if [ "$mode" = plan ] && [ "$pause$sleep_now" != 00 ]; then
+  die_usage "--pause-morning and --sleep go with --let-finish or --stop-now"
+fi
+load_config
+
+# refuse <message>: exit 1, as the object a caller reading --json expects, else as a line.
+refuse() {
+  if [ "$json" = 1 ]; then
+    # the minutes only when they are a number: the refusal may be that they are not
+    local minutes=0
+    ! is_minutes "${wait_minutes:-}" || minutes="$wait_minutes"
+    python3 "$BOSUN_ROOT/lib/quit_live.py" --json --error "$1" --wait-minutes "$minutes" \
+      --lock-wait "${BOSUN_WINDOWS_LOCK_WAIT_SECONDS:-180}"
+    exit 1
+  fi
+  die "$1"
+}
+
+[ -n "$wait_minutes" ] || wait_minutes="$BOSUN_QUIT_WAIT_MINUTES"
+is_minutes "$wait_minutes" || refuse "BOSUN_QUIT_WAIT_MINUTES must be a whole number of minutes, got '$wait_minutes'"
+if [ "$mode" = finish ] && inside_bosun_tmux; then
+  refuse "--let-finish waits for the busy windows, and this runs inside one of them: run it from another terminal, or use --stop-now"
+fi
+
+args=(--mode "$mode" --wait-minutes "$wait_minutes" --state-dir "$BOSUN_STATE_DIR" --session "$BOSUN_SESSION_NAME"
+  --console-label "$(console_label)" --console-marker "$(console_wanted_marker)"
+  --lock-wait "${BOSUN_WINDOWS_LOCK_WAIT_SECONDS:-180}")
+[ "$pause" = 1 ] && args+=(--pause-morning)
+[ "$sleep_now" = 1 ] && args+=(--sleep)
+[ "$json" = 1 ] && args+=(--json)
+exec python3 "$BOSUN_ROOT/lib/quit_live.py" "${args[@]}"

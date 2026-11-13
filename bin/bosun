@@ -12,15 +12,19 @@ Getting started
   preflight   Check what bosun needs on this machine, and say exactly what to do about anything missing
   init        Set bosun up from what this Mac shows (repos, hours, logins): a few questions in a
               terminal, then a plan to accept; --recommended or --answers to skip the questions
-  update      Update bosun to the head of its branch while the agents keep working: a plan to
-              accept, a rehearsal on a copy, then the data backed up, migrated and checked, and
+  update      Update bosun to its newest release (or the head of main) while the agents keep working:
+              a plan to accept, a rehearsal on a copy, then the data backed up, migrated and checked, and
               each agent brought along
+  app         Install, update or remove the menu bar app (bosun.app) and its Open at Login job; it accepts
+              only the publisher's notarized build
 
 Daily flow
   morning     Scheduled entry point: keep awake, run setup steps, start or refresh sessions
   setup       Run only the setup steps from setup.sh (credential refresh etc.)
   start       Start the tmux session, or refresh it if it already exists
   stop        Kill the tmux session and release the keep-awake assertion
+  quit        Stop bosun until `bosun start`, with your say over busy agents, the morning start and the
+              Mac's keep-awake (--plan, --let-finish, --stop-now)
   attach      Attach to the tmux session (it runs on its own tmux server)
 
 Inside the tmux session
@@ -57,6 +61,13 @@ Looking at it
               knowledge review decisions (127.0.0.1, token in the printed URL)
   impact      Collect the console's Impact snapshot: my PRs and reviews (GitHub, read-only),
               agent busy time, my prompts and tokens per window (`impact collect`)
+EOF
+  usage_checking
+}
+
+# The last sections of the usage, apart so that no one function outgrows tools/shell_complexity.py's limits.
+usage_checking() {
+  cat <<'EOF'
 
 Checking it works
   uninstall   Take bosun off this Mac: says what goes and what stays, then asks first
@@ -64,7 +75,7 @@ Checking it works
   orphans     List shells earlier window starts left behind (ppid 1); --apply stops them
   watchdog    Alert me about a missed or failed morning run, a missing session, stuck prompts,
               errors in the logs (its own launchd agent runs it every 5 minutes; --status)
-  status      Show schedule, keep-awake, tmux windows and the latest log
+  status      Show schedule, keep-awake, tmux windows and the latest log (--json: how bosun is, as one object)
   wake-test   Real sleep/wake end-to-end test in N minutes (needs sudo)
 
 Run `bosun <command> --help` for details.

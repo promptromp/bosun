@@ -18,8 +18,10 @@ from typing import Any
 
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "lib"))
+import app_release
 import claude_state
 import login
+import quit_state
 import signals
 import watchdog
 from watchdog import CHECKS, Config, Facts, Inputs, WindowFact
@@ -453,6 +455,15 @@ class SessionTest(WatchdogCase):
         (self.state_dir / "stopped-main").write_text(f"{MONDAY} 09:30:00\n")
         self.assertEqual(self.runs(at(MONDAY, "10:00"), 4, facts=self.gone), [])
 
+    def test_a_session_bosun_was_quit_is_not_missing(self) -> None:
+        # `bosun quit` is a gate like `bosun stop`: no session-missing while the quit record is there, also
+        # when status, the console and --status ask (they judge by the same gate), not only the scheduled run
+        self.morning_run(MONDAY)
+        quit_state.write(self.state_dir, False, now=datetime(2026, 1, 5, 9, 30, tzinfo=UTC))
+        self.assertEqual(self.runs(at(MONDAY, "10:00"), 4, facts=self.gone), [])
+        quit_state.clear(self.state_dir)
+        self.assertEqual(len(self.runs(at(MONDAY, "10:10"), 4, facts=self.gone)), 1)
+
     def test_a_stop_on_an_earlier_day_does_not_count(self) -> None:
         self.morning_run(TUESDAY)
         (self.state_dir / "stopped-main").write_text(f"{MONDAY} 19:30:00\n")
@@ -885,6 +896,62 @@ class RunTest(WatchdogCase):
         (self.state_dir / watchdog.STATE_FILE).write_text("{")
         self.morning_run(MONDAY)
         self.assertEqual(self.watch(at(MONDAY, "10:00")), [])
+
+
+class AppMissingTest(WatchdogCase):
+    """app-missing: with BOSUN_MENU_APP=1, bosun.app is not in ~/Applications (moved to the Trash?)."""
+
+    def setUp(self) -> None:
+        super().setUp()
+        self.home = Path(self.tmp.name) / "home"
+        self.home.mkdir()
+        patch = unittest.mock.patch.dict(os.environ, {"HOME": str(self.home)})
+        patch.start()
+        self.addCleanup(patch.stop)
+        self.config = replace(self.config, menu_app=True)
+        self.morning_run(MONDAY)
+
+    def put_the_app_there(self) -> None:
+        app_release.app_path(self.home).mkdir(parents=True)
+
+    def found(self) -> list[watchdog.Finding]:
+        return watchdog.check_app_missing(
+            self.inputs(at(MONDAY, "09:00")).context(watchdog.State.load(self.state_dir))
+        ).findings
+
+    def test_the_app_gone_is_a_warning_with_the_words_that_say_what_to_do(self) -> None:
+        [finding] = self.found()
+        self.assertEqual(finding.key, "app-missing")
+        self.assertEqual(
+            finding.message,
+            "bosun.app is not in ~/Applications (moved to the Trash?); bosun still runs. "
+            "`bosun uninstall` removes bosun; `bosun app install` brings the app back.",
+        )
+        [check] = [c for c in CHECKS if c.name == "app-missing"]
+        self.assertEqual(check.severity, "warn")
+
+    def test_the_app_there_is_nothing_to_say(self) -> None:
+        self.put_the_app_there()
+        self.assertEqual(self.found(), [])
+
+    def test_without_the_menu_app_it_is_never_looked_for(self) -> None:
+        self.config = replace(self.config, menu_app=False)
+        self.assertEqual(self.found(), [])
+
+    def test_it_alerts_once_and_again_after_the_app_was_back_and_gone(self) -> None:
+        sent = self.runs(at(MONDAY, "09:00"), 3, only="app-missing")
+        self.assertEqual(len(sent), 1)
+        self.assertIn("bosun.app is not in ~/Applications", sent[0])
+        self.put_the_app_there()
+        self.assertEqual(self.watch(at(MONDAY, "09:20"), only="app-missing"), [])
+        (app_release.app_path(self.home)).rmdir()
+        self.assertEqual(len(self.runs(at(MONDAY, "09:25"), 2, only="app-missing")), 1)
+
+    def test_the_setting_is_read_from_the_environment(self) -> None:
+        env = InputsTest().env()
+        self.assertFalse(Config.from_env(env).menu_app)
+        self.assertTrue(Config.from_env({**env, "BOSUN_MENU_APP": "1"}).menu_app)
+        self.assertFalse(Config.from_env({**env, "BOSUN_MENU_APP": "0"}).menu_app)
 
 
 class InputsTest(unittest.TestCase):

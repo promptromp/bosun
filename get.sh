@@ -3,18 +3,22 @@
 #
 #   curl -fsSL https://raw.githubusercontent.com/promptromp/bosun/main/get.sh | sh
 #
-# A first install puts bosun in ~/.local/share/bosun-versions, a folder for each version beside the one
-# repository they come from (bosun.git), makes ~/.local/share/bosun a link to the version in use, and
-# starts `bosun init`, which checks what bosun needs and says what to do about anything missing, then
-# asks a few questions and shows its plan before it changes anything. It installs nothing else, and never
-# uses sudo; `bosun init` asks for it once, for the wake schedule, and says so first.
+# A first install puts the newest release of bosun in ~/.local/share/bosun-versions, a folder for each
+# version beside the one repository they come from (bosun.git), makes ~/.local/share/bosun a link to the
+# version in use, and starts `bosun init`, which checks what bosun needs and says what to do about
+# anything missing, then asks a few questions and shows its plan before it changes anything. It installs
+# nothing else, and never uses sudo; `bosun init` asks for it once, for the wake schedule, and says so
+# first. A repository with no release yet gets the head of main, and it says so. With BOSUN_BRANCH it
+# gets the head of that branch instead, and the install follows the branch: init is told through
+# BOSUN_INIT_CHANNEL=main, and the line it prints to run again after what bosun needs is there keeps
+# BOSUN_BRANCH, as it keeps BOSUN_HARNESS.
 #
-# Run it again to update: it gets the head of the branch into a folder of its own, beside the version in
-# use, and hands over to that version's `bosun update`, which shows its plan and asks first. An install
-# an earlier get.sh made, a checkout in ~/.local/share/bosun, is converted by that first update, at a
-# quiet moment: the checkout is kept as bosun-versions/legacy-<its commit>, and ~/.local/share/bosun
-# becomes the link. An install `bosun init` has not set up yet (it stopped at what bosun needs) gets
-# `bosun init` again instead. `bosun uninstall` takes it all off again.
+# Run it again to update: it hands over to the `bosun update` of the install, which moves it as its own
+# channel says (the newest release, or the head of its branch), shows its plan and asks first. An install
+# an earlier get.sh made, a checkout in ~/.local/share/bosun, is converted by a first update, at a quiet
+# moment, by the update this gets from the head of main: the checkout is kept as bosun-versions/legacy-<its
+# commit>, and ~/.local/share/bosun becomes the link. An install `bosun init` has not set up yet (it
+# stopped at what bosun needs) gets `bosun init` again instead. `bosun uninstall` takes it all off again.
 #
 #   curl ... | sh -s -- --dry-run      say what it would do, and do nothing
 #   curl ... | sh -s -- --unattended   ask nothing: take the recommended setup (on a first install without
@@ -25,6 +29,9 @@
 # BOSUN_DIR (where it goes), BOSUN_REPO and BOSUN_BRANCH (what it gets) override the defaults. On an
 # existing install the defaults are what it came from: bosun.git's origin, and its bosun.branch; for a
 # checkout from before versions, its own origin. What it says never shows a URL's user and password.
+# The newest release is found by newest_release below, which follows lib/update_check.py's rule for
+# one (tests/unit/test_get_sh.py holds the two to the same answers): this runs before Python can be
+# relied on, so it cannot ask it.
 #
 # Plain POSIX sh, because this runs before anything else is known to be there. Everything is in
 # functions and main runs last, so a download cut short does nothing. What bosun needs, per OS and per
@@ -38,7 +45,9 @@ DIR="${DIR%/}"
 VERSIONS="$DIR-versions" # as lib/install_paths.py's versions_dir
 BARE="$VERSIONS/bosun.git"
 BRANCH="${BOSUN_BRANCH:-}" # pick_branch settles it
-THIS_LINE="curl -fsSL https://raw.githubusercontent.com/promptromp/bosun/main/get.sh | ${BOSUN_HARNESS:+BOSUN_HARNESS=$BOSUN_HARNESS }sh"
+RELEASE=""                 # pick_release: the newest release's tag, on a new install that asked for no branch
+RELEASE_COMMIT=""          # ... and its commit
+THIS_LINE="curl -fsSL https://raw.githubusercontent.com/promptromp/bosun/main/get.sh | ${BOSUN_BRANCH:+BOSUN_BRANCH=$BOSUN_BRANCH }${BOSUN_HARNESS:+BOSUN_HARNESS=$BOSUN_HARNESS }sh"
 ROADMAP="https://github.com/promptromp/bosun/blob/main/ROADMAP.md"
 USER_PATH="$PATH"
 PATH="/opt/homebrew/bin:/usr/local/bin:$HOME/.local/bin:$PATH" # where Homebrew and Claude Code go
@@ -159,12 +168,58 @@ pick_branch() {
   [ -n "$BRANCH" ] || BRANCH=main
 }
 
-# bosun.git, a bare clone of the one branch, marked as the installer's.
+# `git ls-remote --tags` output on stdin: the newest release in it, as "<tag> <commit>"; nothing when there
+# is none. A release tag is v<YYYY.MM.DD>, and a second one the same day v<YYYY.MM.DD>.2, then .3 (.0 and
+# .1 are not release tags); the newest is the latest by date, then by number, and an annotated tag's
+# commit is its peeled entry's (<tag>^{}). This is a twin of newest_release in lib/update_check.py, which
+# `bosun update` asks, pinned to it by tests/unit/test_get_sh.py: change one, change the other.
+newest_release() {
+  awk -F '\t' '
+    $1 != "" && $2 != "" {
+      ref = $2
+      sub(/^refs\/tags\//, "", ref)
+      if (sub(/\^\{\}$/, "", ref)) peeled[ref] = $1; else plain[ref] = $1
+    }
+    END {
+      for (tag in plain) {
+        if (tag !~ /^v[0-9][0-9][0-9][0-9]\.[0-9][0-9]\.[0-9][0-9](\.[0-9]+)?$/) continue
+        parts = split(substr(tag, 2), field, ".")
+        number = 1
+        if (parts == 4) number = field[4] + 0
+        if (parts == 4 && number < 2) continue
+        key = sprintf("%04d%02d%02d%012d", field[1], field[2], field[3], number)
+        if (best == "" || key > bestkey || (key == bestkey && tag > best)) {
+          best = tag
+          bestkey = key
+        }
+      }
+      if (best != "") print best, (best in peeled ? peeled[best] : plain[best])
+    }'
+}
+
+# On a new install that asked for no branch: the newest release of REPO (RELEASE, RELEASE_COMMIT). A
+# repository with no release yet gets the head of its branch, as a branch would, and it says so; one that
+# cannot be reached stops the install here, as it would at the clone.
+pick_release() {
+  [ "$KIND" = new ] && [ -z "${BOSUN_BRANCH:-}" ] || return 0
+  tags="$(git ls-remote --tags "$REPO" 'v*')" || die "could not reach $(shown "$REPO")"
+  newest="$(printf '%s\n' "$tags" | newest_release)"
+  if [ -z "$newest" ]; then
+    say "There is no release of bosun at $(shown "$REPO") yet: getting the head of $BRANCH"
+    return 0
+  fi
+  RELEASE="${newest% *}"
+  RELEASE_COMMIT="${newest#* }"
+}
+
+# bosun.git, a bare clone of the one branch, marked as the installer's. No tags come with it: a release
+# is fetched into a remote ref (add_version), as `bosun update` does, never into refs/tags, which
+# `bosun uninstall` would count as work of yours.
 make_repo() {
   run mkdir -p "$VERSIONS"
-  run git -c core.hooksPath=/dev/null clone --quiet --bare --single-branch --branch "$BRANCH" "$REPO" "$BARE"
+  run git -c core.hooksPath=/dev/null clone --quiet --bare --no-tags --single-branch --branch "$BRANCH" "$REPO" "$BARE"
   run git --git-dir="$BARE" config bosun.managed true     # `bosun uninstall` only deletes versions marked so
-  run git --git-dir="$BARE" config bosun.branch "$BRANCH" # what `bosun update` follows
+  run git --git-dir="$BARE" config bosun.branch "$BRANCH" # what `bosun update` follows on the main channel
 }
 
 # bosun.git as it is, but for what BOSUN_REPO or BOSUN_BRANCH asks for instead.
@@ -173,15 +228,15 @@ use_repo() {
   [ -z "${BOSUN_BRANCH:-}" ] || run git --git-dir="$BARE" config bosun.branch "$BRANCH"
 }
 
-# The head of the branch fetched into bosun.git (where `bosun update` fetches it too), and its folder
-# beside the others, made if it is not there: NEW.
+# <what> fetched into bosun.git as `bosun update` fetches it (<refspec>, into the remote ref <ref>), and its
+# folder beside the others, made if it is not there: NEW. <commit> is what a dry run says it leads to.
 add_version() {
-  run git -c core.hooksPath=/dev/null --git-dir="$BARE" fetch --quiet origin "+refs/heads/$BRANCH:refs/remotes/origin/$BRANCH" ||
-    die "could not fetch $BRANCH from $(shown "$(git --git-dir="$BARE" config remote.origin.url)")"
-  commit="<commit>"
+  what="$1" refspec="$2" ref="$3" commit="$4"
+  run git -c core.hooksPath=/dev/null --git-dir="$BARE" fetch --quiet --no-tags origin "$refspec" ||
+    die "could not fetch $what from $(shown "$(git --git-dir="$BARE" config remote.origin.url)")"
   if [ "$DRY_RUN" = 0 ]; then
-    commit="$(git --git-dir="$BARE" rev-parse --verify --quiet "refs/remotes/origin/$BRANCH^{commit}")" ||
-      die "no commit at the head of $BRANCH"
+    commit="$(git --git-dir="$BARE" rev-parse --verify --quiet "$ref^{commit}")" ||
+      die "no commit at $what"
   fi
   NEW="$VERSIONS/$(printf '%s' "$commit" | cut -c1-12)"
   [ -d "$NEW" ] || run git -c core.hooksPath=/dev/null --git-dir="$BARE" worktree add --quiet --detach "$NEW" "$commit"
@@ -192,29 +247,45 @@ add_version() {
 get_bosun() {
   pick_repo
   pick_branch
+  pick_release
   case "$KIND" in
-    new) say "Getting bosun into $VERSIONS, with $DIR a link to the version in use" ;;
+    new)
+      if [ -n "$RELEASE" ]; then
+        say "Getting bosun $RELEASE, the newest release, into $VERSIONS, with $DIR a link to the version in use"
+      else
+        say "Getting bosun into $VERSIONS, with $DIR a link to the version in use"
+      fi
+      ;;
     checkout) say "$DIR is a checkout from before versions: getting the newest bosun beside it, into $VERSIONS" ;;
     link) say "Getting the newest bosun into $VERSIONS, beside the one in use ($FROM)" ;;
   esac
   if [ -d "$BARE" ]; then use_repo; else make_repo; fi
-  add_version
+  if [ -n "$RELEASE" ]; then
+    add_version "$RELEASE" "+refs/tags/$RELEASE:refs/remotes/origin/release" refs/remotes/origin/release "$RELEASE_COMMIT"
+  else
+    add_version "$BRANCH" "+refs/heads/$BRANCH:refs/remotes/origin/$BRANCH" "refs/remotes/origin/$BRANCH" "<commit>"
+  fi
   [ "$KIND" != new ] || run ln -s "$NEW" "$DIR"
 }
 
 start_init() {
   command="$DIR/bin/bosun"
+  # An install that asked for a branch follows it: init is told, and writes it into bosun.env (the others
+  # follow the releases, which is its default).
+  channel=""
+  [ -z "${BOSUN_BRANCH:-}" ] || channel="BOSUN_INIT_CHANNEL=main "
   if [ "$DRY_RUN" = 1 ]; then
     if [ "$UNATTENDED" = 1 ]; then
-      say "Then it would start: BOSUN_INIT_UNATTENDED=1 $command init --recommended"
+      say "Then it would start: ${channel}BOSUN_INIT_UNATTENDED=1 $command init --recommended"
     else
-      say "Then it would start: $command init"
+      say "Then it would start: ${channel}$command init"
     fi
     return 0
   fi
   BOSUN_USER_PATH="$USER_PATH"
   BOSUN_RERUN="$THIS_LINE"
   export BOSUN_USER_PATH BOSUN_RERUN
+  [ -z "$channel" ] || export BOSUN_INIT_CHANNEL=main # init's own variable: never the config key, which would beat bosun.env in every window it starts
   # Unattended is handed over as a variable, as the two above: an older version on disk (an install it
   # never finished) ignores it and takes the recommended setup as it always did, where a flag it does not
   # know would stop it.
@@ -227,7 +298,29 @@ start_init() {
   exec "$command" init # no terminal to ask on: it prints the plan
 }
 
-# The new version's `bosun update`, from the version in use: it shows the plan and asks first.
+# Replaces this with `<command> update <args>`, which shows its plan and asks first: with --yes when
+# unattended, and with the terminal when there is one.
+exec_update() {
+  command="$1"
+  shift
+  [ "$UNATTENDED" = 0 ] || exec "$command" update "$@" --yes
+  has_terminal && exec "$command" update "$@" </dev/tty
+  exec "$command" update "$@" # no terminal to ask on: it shows the plan
+}
+
+# A re-run on an install: the install's own `bosun update`, which moves it as its channel says (the newest
+# release, or the head of its branch). Nothing is fetched here, so this never moves an install off its
+# channel.
+hand_over() {
+  if [ "$DRY_RUN" = 1 ]; then
+    say "Then it would run: $DIR/bin/bosun update"
+    return 0
+  fi
+  exec_update "$DIR/bin/bosun"
+}
+
+# The new version's `bosun update`, from the version in use, which is a checkout from before versions (or
+# one put back after a conversion): it converts it, shows the plan and asks first.
 start_update() {
   command="$NEW/bin/bosun"
   if [ "$DRY_RUN" = 1 ]; then
@@ -236,9 +329,7 @@ start_update() {
       say "which converts $CHECKOUT_SET_ASIDE at a quiet moment: it keeps it as $VERSIONS/legacy-<its commit>, and $DIR becomes a link to the new version"
     return 0
   fi
-  [ "$UNATTENDED" = 0 ] || exec "$command" update --from "$FROM" --yes
-  has_terminal && exec "$command" update --from "$FROM" </dev/tty
-  exec "$command" update --from "$FROM" # no terminal to ask on: it shows the plan
+  exec_update "$command" --from "$FROM"
 }
 
 # Whether bosun init has set the install at $DIR up: its install.sh links ~/.local/bin/bosun to it, as its
@@ -259,8 +350,13 @@ intro() {
       say "questions, and a plan to accept. Nothing changes until you do."
       ;;
     *)
-      say "It gets the newest version beside the one you run, whose bosun update shows its plan and asks"
-      say "first. Nothing changes until you accept it."
+      if [ -n "$CHECKOUT_SET_ASIDE" ]; then
+        say "It gets the newest version beside the one you run, whose bosun update shows its plan and asks"
+        say "first. Nothing changes until you accept it."
+      else
+        say "It hands over to the bosun you run: its bosun update looks for what its channel says is newest,"
+        say "shows its plan and asks first. Nothing changes until you accept it."
+      fi
       ;;
   esac
   [ "$DRY_RUN" = 0 ] || say "(a dry run: nothing changes)"
@@ -286,8 +382,13 @@ main() {
       start_init
       ;;
     *)
-      get_bosun
-      start_update
+      if [ -n "$CHECKOUT_SET_ASIDE" ]; then
+        get_bosun
+        start_update
+      else
+        use_repo
+        hand_over
+      fi
       ;;
   esac
 }

@@ -91,8 +91,14 @@ impacted_map = [
     "tools/*.py=tests/unit/test_forbidden_terms.py",
     "tools/*.py=tests/unit/test_mkdocs_hooks.py",
     "tools/*.py=tests/unit/test_survey_to_kg.py",
+    "tools/*.py=tests/unit/test_release.py",
     "lib/*.py=tools/docs_examples.py",
     "lib/*.py=tools/survey_to_kg.py",
+    "lib/*.py=tools/release.py",
+    # get.sh: plain sh, run by its own test (and its tag rule held to lib/update_check.py's there).
+    "get.sh=tests/unit/test_get_sh.py",
+    # The smoke suite's section markers: its --list and --only run by them.
+    "tests/smoke.sh=tests/unit/test_smoke_sections.py",
     "tests/llm/*.py=tests/unit/test_learn.py",
     "tests/llm/*.py=tests/unit/test_learn_digest.py",
     "tests/sandbox/mcp_probe_server.py=tests/unit/test_mcp_probe_server.py",
@@ -112,6 +118,8 @@ impacted_invalidate_all = [
     "orchestrator/**",
     "console/*",
     "templates/*",
+    "app/VERSION",
+    "app/publisher.json",
     "examples/*/*",
     "agents/*/*",
     "tests/fixtures/**",

@@ -368,6 +368,12 @@ def console_running(state_dir: Path) -> bool:
     return console_token.running(state_dir)
 
 
+def console_job(root: Path) -> bool:
+    """Whether the version in <root> would restart the console after the switch: its launchd job is
+    loaded and wanted (lib/common.sh's console_restartable)."""
+    return shell(root, "console_restartable").returncode == 0
+
+
 def in_flight(state_dir: Path, config_dir: Path) -> list[tuple[str, tuple[str, ...]]]:
     """Each item handed to a repo session whose work is not done, with the task types whose built-in
     text its session got: those its task names ("review,fix" for `bosun delegate review,fix`) but a
@@ -490,6 +496,7 @@ def plan_for(old_root: Path, new_root: Path, state_dir: Path, config_dir: Path) 
         missing=missing(new_root),
         deletion_cut_short=cut_short,
         console=console_running(state_dir),
+        console_job=console_job(new_root),
         steps=_steps,
     )
     extra = [

@@ -16,16 +16,19 @@ import os
 import re
 import secrets
 import stat
-from collections.abc import Iterator
+import time
+from collections.abc import Callable, Iterator
 from pathlib import Path
 
 
 TOKEN_BYTES = 32
+PORT_LIMIT = 65535  # the highest port
 TOKEN_DIR = "console"  # noqa: S105 - a folder name, not a secret
 TOKEN_FILE = "token"  # noqa: S105 - a file name, not a secret
 RUNNING_LOCK = "running.lock"  # held, shared, by each console while it serves
 DIR_MODE = 0o700
 FILE_MODE = 0o600
+WAIT_POLL_SECONDS = 3.0  # how often the launchd job looks again while a console run by hand serves
 # What secrets.token_urlsafe(TOKEN_BYTES) produces: 43 URL-safe characters, unpadded.
 TOKEN_PATTERN = re.compile(r"[A-Za-z0-9_-]{43,}")
 OTHERS_BITS = stat.S_IRWXG | stat.S_IRWXO
@@ -92,15 +95,29 @@ def persist_setting(value: str | None) -> bool:
 
 
 @contextlib.contextmanager
-def serving(state_dir: Path) -> Iterator[None]:
-    """The console's running lock, held (shared) for the block: while the server runs."""
+def serving(state_dir: Path, port: int | None = None) -> Iterator[None]:
+    """The console's running lock, held (shared) for the block: while the server runs. It keeps
+    the port the console listens on, which `bosun console --url` reads back (served_port)."""
     private_dir(state_dir / TOKEN_DIR)
     fd = os.open(state_dir / TOKEN_DIR / RUNNING_LOCK, os.O_RDWR | os.O_CREAT, FILE_MODE)
     try:
         fcntl.flock(fd, fcntl.LOCK_SH)
+        if port is not None:
+            os.ftruncate(fd, 0)
+            os.pwrite(fd, f"{port}\n".encode("ascii"), 0)
         yield
     finally:
         os.close(fd)
+
+
+def served_port(state_dir: Path) -> int | None:
+    """The port the console serving from <state_dir> recorded in its running lock; None when it
+    recorded none (a console from before it did) or the file holds anything else."""
+    try:
+        text = (state_dir / TOKEN_DIR / RUNNING_LOCK).read_text(encoding="ascii").strip()
+    except (OSError, UnicodeDecodeError):
+        return None
+    return int(text) if text.isdigit() and 0 < int(text) <= PORT_LIMIT else None
 
 
 def running(state_dir: Path) -> bool:
@@ -117,3 +134,28 @@ def running(state_dir: Path) -> bool:
     finally:
         os.close(fd)
     return False
+
+
+def wait_free(
+    state_dir: Path,
+    say: Callable[[], None] | None = None,
+    sleep: Callable[[float], None] = time.sleep,
+) -> None:
+    """Return once no console serves from <state_dir>: its running lock could be taken exclusively (and
+    is let go again). The launchd job waits like this for a console run by hand to end, polling every
+    WAIT_POLL_SECONDS and calling <say> once, instead of exiting for launchd to start it again."""
+    private_dir(state_dir / TOKEN_DIR)
+    fd = os.open(state_dir / TOKEN_DIR / RUNNING_LOCK, os.O_RDWR | os.O_CREAT, FILE_MODE)
+    try:
+        told = False
+        while True:
+            try:
+                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                return
+            except OSError:
+                if say is not None and not told:
+                    say()
+                    told = True
+                sleep(WAIT_POLL_SECONDS)
+    finally:
+        os.close(fd)

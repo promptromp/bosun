@@ -1,32 +1,40 @@
 #!/bin/bash
-# Usage: bosun stop
+# Usage: bosun stop [--keep-awake]
 #
-# Kill the tmux session and release the keep-awake assertion started by `bosun morning`.
+# Kill the tmux session and release the keep-awake assertion started by `bosun morning` (its pid file and
+# the record `bosun status --json` reads).
 # The watchdog then expects no session for the rest of the day (or until `bosun start`).
+#   --keep-awake  leave the keep-awake (the caffeinate and its files) alone, so the Mac stays awake until the
+#                 morning's time; `bosun quit` does this unless it is told the Mac may sleep
 set -uo pipefail
 source "$(dirname "$0")/../lib/common.sh"
 load_config
 
-case "${1:-}" in
-  -h | --help)
-    usage
-    exit 0
-    ;;
-  "") ;;
-  *) die_usage "unknown argument '$1'" ;;
-esac
+keep_awake=0
+for arg in "$@"; do
+  case "$arg" in
+    -h | --help)
+      usage
+      exit 0
+      ;;
+    --keep-awake) keep_awake=1 ;;
+    *) die_usage "unknown argument '$arg'" ;;
+  esac
+done
 
 # Everything but the session itself first: run in one of its windows (you, or an agent asked to stop
 # bosun for the day), killing the session ends this command too, so that comes last.
 # You stopped it on purpose: the watchdog does not alert about a missing session today.
 date '+%F %T' >"$(stop_marker)"
 
-pidfile="$(keep_awake_pidfile)"
-if [ -f "$pidfile" ] && pid="$(cat "$pidfile")" && ps -p "$pid" -o comm= 2>/dev/null | grep -q caffeinate; then
-  kill "$pid"
-  log "released keep-awake (caffeinate pid $pid)"
+if [ "$keep_awake" = 0 ]; then
+  pidfile="$(keep_awake_pidfile)"
+  if [ -f "$pidfile" ] && pid="$(cat "$pidfile")" && ps -p "$pid" -o comm= 2>/dev/null | grep -q caffeinate; then
+    kill "$pid"
+    log "released keep-awake (caffeinate pid $pid)"
+  fi
+  rm -f "$pidfile" "$(keep_awake_file)"
 fi
-rm -f "$pidfile"
 
 if session_exists; then
   reap_session_helpers

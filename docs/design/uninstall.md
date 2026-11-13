@@ -75,7 +75,10 @@ this note is why.
   only forgotten once the agent no longer shows it.
 - **A launchd job is bosun's by its label, or by being exactly what install.sh renders.** That is a job that
   runs the install's own `bin/bosun`: the checkout's, or with versions side by side the link's, a version
-  folder's or the old checkout's, which older plists name. Your own job that runs `bosun status` is not.
+  folder's or the old checkout's, which older plists name. Your own job that runs `bosun status` is not. The
+  labels come from `job_labels` (`lib/common.sh`), the one list of bosun's jobs: the morning job, the watchdog,
+  learning, the console, the job that runs `morning --now` (`.now`, which the menu bar app's Start kickstarts), the
+  app's Open at Login job and `bosun wake-test`'s own.
 
 ## What a review found
 
@@ -89,7 +92,8 @@ above has a deliberately broken copy that the unit tests must fail.
 ## The order
 
 The wake first, as the one step that may ask for something; the rest then runs unattended. The jobs before the
-windows, because the watchdog would bring those back. Then the agents' files, the link and the working files.
+windows, because the watchdog would bring those back, and the menu bar app (`~/Applications/bosun.app`, asked to
+quit by its bundle id first) after its Open at Login job. Then the agents' files, the link and the working files.
 Stopping the windows writes a file of its own, so it looks again before deleting anything. It also waits for
 what the windows ran to end: an agent ending as its window stops may start an async hook (Claude Code's
 SessionEnd), which writes in the state folder (`logs/`, `signals/`) a moment later, so those folders came back

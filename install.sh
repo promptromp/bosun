@@ -4,7 +4,8 @@
 # Idempotent. Safe to re-run after editing bosun.env.
 #   1. seed ~/.config/bosun from examples/<name> (default: generic); never overwrites
 #   2. link `bosun` into ~/.local/bin
-#   3. install and load the launchd jobs that run `bosun morning` on schedule and
+#   3. install and load the launchd jobs that run `bosun morning` on schedule (and, started only by a kickstart,
+#      `bosun morning --now`, which the menu bar app's Start runs through `--background`) and
 #      `bosun watchdog` every 5 minutes (and `bosun learn` daily, with
 #      BOSUN_LEARN_ENABLED=1), each only where its plist changed or it is not loaded
 #   4. print (or with --with-wake, run via sudo) the pmset repeating-wake command
@@ -62,14 +63,15 @@ if grep -q "bosun tmuxinator project" "$old_tmuxinator_file" 2>/dev/null; then
 fi
 
 # The morning job and the watchdog, which runs on its own, outside the tmux session, so it notices when
-# that is gone too; learning only when enabled (an earlier one is removed otherwise). Each is written
+# that is gone too, and the job that runs `morning --now` for `morning --now --background`; learning and the console
+# only when enabled (an earlier one is removed otherwise). Each is written
 # and reloaded only where its plist changed or it is not loaded.
 reloaded="$(reload_changed_jobs)" || die "could not load the launchd jobs; see above"
 for label in $reloaded; do
   if [ -e "$HOME/Library/LaunchAgents/$label.plist" ]; then
     log "loaded launchd job $label"
   else
-    log "removed launchd job $label (no longer wanted: BOSUN_LEARN_ENABLED is not 1)"
+    log "removed launchd job $label (no longer wanted: its setting, BOSUN_LEARN_ENABLED or BOSUN_CONSOLE_ALWAYS, is not 1)"
   fi
 done
 [ -n "$reloaded" ] || log "the launchd jobs are loaded and up to date"

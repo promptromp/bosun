@@ -1,21 +1,62 @@
 #!/bin/bash
-# Usage: bosun status
+# Usage: bosun status [--json]
 #
 # Show the wake schedule, recent sleep/wake events, keep-awake assertions, tmux windows, the Claude
 # Code login (and whether each window gets real replies), the watchdog's checks, proposals awaiting
 # approval, open outreach (what we wait on from other people) and the tail of today's morning log.
+#   --json  instead, one JSON object saying how bosun is, which the menu bar app polls and anyone can
+#           read (design: docs/design/menu-bar.md). It reads only, answers in a second or two, and
+#           always prints the object and exits 0, with what it could not read among its problems:
+#             contract          1; a number that only grows, a field only ever being added
+#             level             ok, warning, error or stopped (you quit bosun, or stopped it today with
+#                               `bosun stop`; a quit record with windows still open is an error: the
+#                               quit did not finish). A missing session is judged by the watchdog's own gate:
+#                               an error only when it should be running, ok while resting (outside the
+#                               awake hours) or starting (the morning run is going or about to). A
+#                               warning also lists ERROR lines of the last hour, after the watchdog
+#                               has alerted them
+#             sentence, detail  the menu's first line, and grey lines under it
+#             windows, waiting  the windows open, and the names of those waiting for you
+#             keep_awake_until  HH:MM while the morning's keep-awake holds the Mac up, else null
+#             stopped           {"since": <ISO time>, "morning_paused": <bool>} after a quit (or, with
+#                               the morning not paused, a `bosun stop` today), else null
+#             update            {"state": "none"|"running", "waiting_for": [windows]}
+#             console           {"running": <bool>, "url": null} (the address carries the token: it is
+#                               what `bosun console --url` prints)
+#             problems          what is wrong, one line each: the watchdog's findings (a missing session
+#                               among them), ERROR lines logged in the last hour, a part that could
+#                               not be read
+#             logs              the log folder
 set -uo pipefail
 source "$(dirname "$0")/../lib/common.sh"
-load_config
+
+# One JSON object (lib/menu_status_live.py), also when bosun.env cannot be read, which load_config would
+# stop at. The settings the watchdog's checks and the console's readers need are passed explicitly.
+status_json() {
+  local line settings=()
+  read_config
+  if [ -n "$BOSUN_ENV_ERROR" ]; then
+    exec python3 "$BOSUN_ROOT/lib/menu_status_live.py" \
+      --config-error "bosun.env $BOSUN_ENV_FAULT: ${BOSUN_ENV_ERROR//$'\n'/ }"
+  fi
+  # shellcheck disable=SC2086  # one name per word, on purpose
+  while IFS= read -r line; do settings+=("$line"); done < <(settings_lines $WATCHDOG_SETTINGS BOSUN_TMUX_SOCKET)
+  exec env "${settings[@]}" python3 "$BOSUN_ROOT/lib/menu_status_live.py"
+}
 
 case "${1:-}" in
   -h | --help)
     usage
     exit 0
     ;;
+  --json)
+    [ $# -eq 1 ] || die_usage "--json takes no other argument"
+    status_json
+    ;;
   "") ;;
   *) die_usage "unknown argument '$1'" ;;
 esac
+load_config
 
 echo "Schedule"
 pmset -g sched | sed 's/^/  /'

@@ -10,9 +10,11 @@ otherwise.
 
 ## Supported versions
 
-bosun has no releases yet, so fixes land on `main` only: update with `bosun update`, or run the install
-line again. In a checkout of your own (not an install `get.sh` made), `git pull` and re-run
-`./install.sh`.
+Fixes land on `main` and ship in the next dated release (a tag `v<YYYY.MM.DD>`, which a weekly workflow
+or a manual run makes), so the newest release is the supported version: update with `bosun update`
+(`bosun update --check` says whether there is a newer one), or run the install line again. An install on
+the `main` channel (`BOSUN_UPDATE_CHANNEL="main"`) follows the head of `main` instead. In a checkout of
+your own (not an install `get.sh` made), `git pull` and re-run `./install.sh`.
 
 ## What matters most
 

@@ -252,6 +252,12 @@ class TestRecord(unittest.TestCase):
         self.assertEqual(up.as_record(full), kept)  # JSON's types only, so a record read back is equal
         self.assertEqual(up.from_record(kept), full)
 
+    def test_a_record_from_before_the_console_job_reads_as_none(self) -> None:
+        older = {key: value for key, value in up.as_record(self.full()).items() if key != "console_job"}
+        self.assertFalse(up.from_record(older).console_job)
+        job = dataclasses.replace(self.full(), console_job=True)
+        self.assertTrue(up.from_record(json.loads(json.dumps(up.as_record(job)))).console_job)
+
     def test_a_record_with_no_plan_reads_as_one_with_nothing_in_it(self) -> None:
         empty = up.from_record({})
         self.assertEqual((empty.commits, empty.formats, empty.windows, empty.console), ((), (), (), False))
@@ -313,6 +319,18 @@ class TestRender(unittest.TestCase):
         ):
             self.assertIn(part, text)
         self.assertTrue(text.rstrip().endswith("Nothing changes until you say yes."))
+
+    def test_a_console_job_is_restarted_by_the_update_and_a_console_by_hand_is_yours_to_restart(self) -> None:
+        """The console line: bosun's job (loaded, and wanted) is restarted after the switch, so it serves
+        the new version; a console started by hand is not, and the line says to restart it."""
+        job = up.render_plan(plan(console=True, console_job=True))
+        self.assertIn("Console:\n  bosun's background job: restarted after the update", job)
+        self.assertNotIn("restart it after the update", job)
+        by_hand = up.render_plan(plan(console=True))
+        self.assertIn("running: restart it after the update", by_hand)
+        self.assertNotIn("Console:", up.render_plan(plan()))
+        self.assertTrue(plan(console_job=True).console_job)  # a job to restart, though none runs now
+        self.assertIn("Console:", up.render_plan(plan(console_job=True)))
 
     def test_a_kept_value_and_the_added_keys_notes_are_shown(self) -> None:
         """So the person saying yes sees that bosun.env changes, and what each added key means. A kept

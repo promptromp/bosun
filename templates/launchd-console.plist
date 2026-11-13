@@ -1,0 +1,39 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- Rendered by bosun install.sh, only with BOSUN_CONSOLE_ALWAYS=1. Edit bosun.env and re-run install.sh instead. -->
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>__LABEL__</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/bin/bash</string>
+    <string>-lc</string>
+    <string>exec "__BOSUN_ROOT__/bin/bosun" console --job</string>
+  </array>
+  <key>EnvironmentVariables</key>
+  <dict>
+__ENV__
+  </dict>
+  <!-- The console is wanted while bosun runs: `bosun start` makes the marker file and `bosun quit` removes it.
+       The marker alone starts the job and keeps it: launchd starts a job whose KeepAlive condition holds
+       (man launchd.plist), and with the marker gone it falls back on demand and does not restart it.
+       RunAtLoad stays false on purpose: a server started at load never exits, so it would serve all
+       session after a quit and again after a reboot, with the marker gone. -->
+  <key>RunAtLoad</key>
+  <false/>
+  <key>KeepAlive</key>
+  <dict>
+    <key>PathState</key>
+    <dict>
+      <key>__WANTED__</key>
+      <true/>
+    </dict>
+  </dict>
+  <!-- The console prints its address, which holds the access token, on stdout: not into a log file. -->
+  <key>StandardOutPath</key>
+  <string>/dev/null</string>
+  <key>StandardErrorPath</key>
+  <string>__LOG_DIR__/console.launchd.err</string>
+</dict>
+</plist>

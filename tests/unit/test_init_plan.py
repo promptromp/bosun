@@ -201,6 +201,28 @@ class RecommendTest(unittest.TestCase):
         self.assertEqual(init_plan.recommend(facts(aws_sso_profiles=("dev",))).aws_sso_profiles, ("dev",))
         self.assertEqual(init_plan.recommend(facts(aws_sso_profiles=("dev", "prod"))).aws_sso_profiles, ())
 
+    def test_the_menu_bar_app_is_recommended_on_a_first_run(self) -> None:
+        self.assertTrue(init_plan.recommend(facts()).menu_app)
+
+    def test_a_rerun_goes_by_the_config_so_an_install_without_the_app_stays_without(self) -> None:
+        self.assertFalse(init_plan.recommend(facts(env={"BOSUN_DAYS": "MTWRF"})).menu_app)
+        self.assertFalse(init_plan.recommend(facts(env={"BOSUN_MENU_APP": "0"})).menu_app)
+        self.assertTrue(init_plan.recommend(facts(env={"BOSUN_MENU_APP": "1"})).menu_app)
+
+    def test_the_app_is_not_offered_while_there_is_no_signed_build_to_install(self) -> None:
+        """app/publisher.json has no valid team_id: no recommendation, whatever the config says."""
+        gone = "app/publisher.json has no team_id yet"
+        self.assertFalse(init_plan.recommend(facts(app_unavailable=gone)).menu_app)
+        self.assertFalse(
+            init_plan.recommend(facts(app_unavailable=gone, env={"BOSUN_MENU_APP": "1"})).menu_app
+        )
+        offered = init_plan.offered(facts(app_unavailable=gone), Answers(menu_app=True))
+        self.assertFalse(offered.menu_app)
+        self.assertEqual(init_plan.offered(facts(), Answers(menu_app=True)), Answers(menu_app=True))
+        self.assertEqual(
+            init_plan.offered(facts(app_unavailable=gone), Answers(menu_app=False)), Answers(menu_app=False)
+        )
+
     def test_someone_elses_repeating_wake_is_not_replaced(self) -> None:
         self.assertFalse(init_plan.recommend(facts(repeating_wake="wake at 6:00AM")).wake)
         self.assertTrue(init_plan.recommend(facts()).wake)
@@ -465,9 +487,23 @@ class PlanTest(unittest.TestCase):
         unattended = init_plan.unattended(the_facts, recommended)
         self.assertEqual((unattended.repos, unattended.orchestrator_connectors), ((), ""))
         self.assertEqual(
-            replace(unattended, repos=recommended.repos, orchestrator_connectors="acme-local"), recommended
+            replace(
+                unattended,
+                repos=recommended.repos,
+                orchestrator_connectors="acme-local",
+                menu_app=recommended.menu_app,
+            ),
+            recommended,
         )
         self.assertEqual(init_plan.unattended_note(the_facts, unattended), init_plan.UNATTENDED_NOTE)
+
+    def test_unattended_first_run_skips_the_menu_bar_app_nobody_asked_for(self) -> None:
+        the_facts = facts(repos=(use("api", 400),))
+        recommended = init_plan.recommend(the_facts)
+        self.assertTrue(recommended.menu_app)
+        self.assertFalse(init_plan.unattended(the_facts, recommended).menu_app)
+        rerun = self.configured(Answers(menu_app=True))
+        self.assertTrue(init_plan.unattended(rerun, init_plan.recommend(rerun)).menu_app)
 
     def test_unattended_keeps_windows_a_sessions_file_already_lists(self) -> None:
         listed = ({"name": "api", "dir": f"{HOME}/d/api"},)
@@ -638,6 +674,53 @@ class PlanTest(unittest.TestCase):
         self.assertIn('BOSUN_HARNESS="codex"', init_plan.render_env(Answers(harness="codex")))
         self.assertIn('BOSUN_HARNESS="claude"', init_plan.render_env(Answers()))
 
+    def test_a_first_install_follows_the_releases(self) -> None:
+        self.assertEqual(init_plan.recommend(facts()).update_channel, "releases")
+        self.assertEqual(Answers().update_channel, "releases")
+        self.assertIn('BOSUN_UPDATE_CHANNEL="releases"\n', init_plan.render_env(Answers()))
+
+    def test_an_install_that_asked_for_a_branch_follows_it(self) -> None:
+        """get.sh hands BOSUN_INIT_CHANNEL=main to init when BOSUN_BRANCH was given: the answer is taken
+        from the environment, with no question."""
+        answers = init_plan.recommend(facts(asked_channel="main"))
+        self.assertEqual(answers.update_channel, "main")
+        self.assertEqual(init_plan.validate(answers), [])
+        self.assertIn('BOSUN_UPDATE_CHANNEL="main"\n', init_plan.render_env(answers))
+        self.assertEqual(init_plan.unattended(facts(asked_channel="main"), answers).update_channel, "main")
+
+    def test_a_rerun_keeps_the_channel_the_config_has(self) -> None:
+        self.assertEqual(
+            init_plan.recommend(facts(env={"BOSUN_UPDATE_CHANNEL": "main"})).update_channel, "main"
+        )
+        self.assertEqual(
+            init_plan.recommend(facts(env={"BOSUN_UPDATE_CHANNEL": "releases"})).update_channel, "releases"
+        )
+
+    def test_what_the_config_has_wins_over_what_a_window_inherited(self) -> None:
+        """BOSUN_INIT_CHANNEL=main may be inherited by a window get.sh started, long after: a re-run of init
+        there must never flip a channel set by hand back; only a first run (no config) takes it."""
+        inherited = facts(asked_channel="main", env={"BOSUN_UPDATE_CHANNEL": "releases"})
+        self.assertEqual(init_plan.recommend(inherited).update_channel, "releases")
+        flipped = facts(asked_channel="releases", env={"BOSUN_UPDATE_CHANNEL": "main"})
+        self.assertEqual(init_plan.recommend(flipped).update_channel, "main")
+        self.assertEqual(init_plan.recommend(facts(asked_channel="main")).update_channel, "main")  # first run
+
+    def test_a_config_from_before_the_channel_goes_on_following_main(self) -> None:
+        """What bosun update writes for it (migrations.CONFIG_ADDED): a re-run changes nothing unasked."""
+        self.assertEqual(init_plan.recommend(facts(env={"BOSUN_DAYS": "MTWRF"})).update_channel, "main")
+
+    def test_the_channel_is_one_of_the_two(self) -> None:
+        self.assertIn("update_channel", " ".join(init_plan.validate(Answers(update_channel="nightly"))))
+        changed = init_plan.answers_from_json({"update_channel": "main"}, Answers())
+        self.assertEqual(changed.update_channel, "main")
+        with self.assertRaisesRegex(AnswersError, "update_channel"):
+            init_plan.answers_from_json({"update_channel": 3}, Answers())
+
+    def test_a_rerun_with_the_same_channel_changes_nothing_in_the_file(self) -> None:
+        text = init_plan.render_env(Answers(update_channel="main"))
+        self.assertEqual(init_plan.merge_env(text, Answers(update_channel="main")), text)
+        self.assertIn('BOSUN_UPDATE_CHANNEL="releases"', init_plan.merge_env(text, Answers()))
+
     def test_on_codex_the_plan_says_so(self) -> None:
         the_facts = facts()
         answers = Answers(harness="codex")
@@ -701,6 +784,105 @@ class PlanTest(unittest.TestCase):
             "sudo pmset repeat wakeorpoweron MTWRF 09:01:00",
         ):
             self.assertIn(expected, text)
+
+    def test_the_menu_bar_app_turns_on_its_setting_and_the_consoles_background_job(self) -> None:
+        on = init_plan.parse_env(init_plan.render_env(Answers(menu_app=True)))
+        self.assertEqual((on["BOSUN_MENU_APP"], on["BOSUN_CONSOLE_ALWAYS"]), ("1", "1"))
+        off = init_plan.parse_env(init_plan.render_env(Answers(menu_app=False)))
+        self.assertEqual((off["BOSUN_MENU_APP"], off["BOSUN_CONSOLE_ALWAYS"]), ("0", "0"))
+
+    def merged(self, env: dict[str, str], answers: Answers) -> dict[str, str]:
+        """What a re-run on a bosun.env that sets <env> leaves it as, for <answers>."""
+        text = "".join(f'{key}="{value}"\n' for key, value in env.items())
+        the_facts = facts(files={"bosun.env": text}, env=env)
+        keep = init_plan.settings_to_keep(the_facts, answers)
+        return init_plan.parse_env(init_plan.merge_env(text, answers, keep))
+
+    def test_the_console_job_follows_the_app_answer_when_the_answer_changes(self) -> None:
+        # No to yes: both on. Yes to no: both off, so turning the app off turns the console job off.
+        on = self.merged({"BOSUN_MENU_APP": "0", "BOSUN_CONSOLE_ALWAYS": "0"}, Answers(menu_app=True))
+        self.assertEqual((on["BOSUN_MENU_APP"], on["BOSUN_CONSOLE_ALWAYS"]), ("1", "1"))
+        off = self.merged({"BOSUN_MENU_APP": "1", "BOSUN_CONSOLE_ALWAYS": "1"}, Answers(menu_app=False))
+        self.assertEqual((off["BOSUN_MENU_APP"], off["BOSUN_CONSOLE_ALWAYS"]), ("0", "0"))
+        # A bosun.env from before the key: its app was off, so yes is a change.
+        older = self.merged({"BOSUN_DAYS": "MTWRF"}, Answers(menu_app=True))
+        self.assertEqual((older["BOSUN_MENU_APP"], older["BOSUN_CONSOLE_ALWAYS"]), ("1", "1"))
+
+    def test_a_hand_set_console_setting_survives_a_rerun_that_changes_nothing(self) -> None:
+        kept = self.merged({"BOSUN_MENU_APP": "1", "BOSUN_CONSOLE_ALWAYS": "0"}, Answers(menu_app=True))
+        self.assertEqual((kept["BOSUN_MENU_APP"], kept["BOSUN_CONSOLE_ALWAYS"]), ("1", "0"))
+        also = self.merged({"BOSUN_MENU_APP": "0", "BOSUN_CONSOLE_ALWAYS": "1"}, Answers(menu_app=False))
+        self.assertEqual((also["BOSUN_MENU_APP"], also["BOSUN_CONSOLE_ALWAYS"]), ("0", "1"))
+
+    def test_a_refused_install_puts_both_settings_back_to_off_and_leaves_the_rest(self) -> None:
+        text = init_plan.render_env(Answers(menu_app=True)) + '\n# mine\nBOSUN_ALERT_SLACK_USER="U000"\n'
+        back = init_plan.parse_env(init_plan.menu_app_off(text))
+        self.assertEqual((back["BOSUN_MENU_APP"], back["BOSUN_CONSOLE_ALWAYS"]), ("0", "0"))
+        self.assertEqual(back["BOSUN_ALERT_SLACK_USER"], "U000")
+        self.assertEqual(back["BOSUN_DAYS"], "MTWRF")
+        self.assertEqual(init_plan.menu_app_off(init_plan.menu_app_off(text)), init_plan.menu_app_off(text))
+        self.assertIn(
+            'BOSUN_MENU_APP="0"', init_plan.menu_app_off('BOSUN_DAYS="MWF"\n')
+        )  # added when missing
+
+    def test_the_plan_says_it_installs_the_app_and_turns_on_open_at_login(self) -> None:
+        wanted = self.plan(facts(), Answers(menu_app=True))
+        self.assertTrue(wanted.menu_app)
+        text = init_plan.render_plan(wanted, Answers(menu_app=True), facts(), "/Users/me/.config/bosun")
+        self.assertIn("bosun app install", text)
+        self.assertIn("bosun app login on", text)
+        self.assertEqual(wanted.app_verb, "install")
+        self.assertNotIn("bosun app update", text)
+        unwanted = self.plan(facts(), Answers(menu_app=False))
+        self.assertFalse(unwanted.menu_app)
+        self.assertNotIn(
+            "bosun app",
+            init_plan.render_plan(unwanted, Answers(menu_app=False), facts(), "/Users/me/.config/bosun"),
+        )
+
+    def test_the_plan_says_what_will_run_where_the_app_is_already_there(self) -> None:
+        there = facts(app_present=True)
+        plan = self.plan(there, Answers(menu_app=True))
+        self.assertEqual(plan.app_verb, "update")
+        text = init_plan.render_plan(plan, Answers(menu_app=True), there, "/Users/me/.config/bosun")
+        self.assertIn("bosun app update", text)
+        self.assertNotIn("bosun app install", text)
+        self.assertIn("bosun app login on", text)
+
+    def test_the_plan_says_why_the_app_is_not_offered_in_one_line(self) -> None:
+        gone = facts(app_unavailable="app/publisher.json has no team_id yet")
+        plan = self.plan(gone, Answers(menu_app=False))
+        lines = [note for note in plan.notes if "menu bar app" in note]
+        self.assertEqual(len(lines), 1)
+        self.assertIn("app/publisher.json has no team_id yet", lines[0])
+        self.assertIn("no signed build to install", lines[0])
+        self.assertEqual(
+            [n for n in self.plan(facts(), Answers(menu_app=False)).notes if "menu bar app" in n], []
+        )
+
+    def test_no_to_the_app_where_it_is_installed_says_it_stays_and_how_to_remove_it(self) -> None:
+        plan = self.plan(facts(app_present=True), Answers(menu_app=False))
+        [line] = [note for note in plan.notes if "bosun.app" in note]
+        self.assertIn("stays", line)
+        self.assertIn("bosun app remove", line)
+        self.assertEqual(
+            [n for n in self.plan(facts(), Answers(menu_app=False)).notes if "bosun app remove" in n], []
+        )
+        self.assertEqual(
+            [
+                n
+                for n in self.plan(facts(app_present=True), Answers(menu_app=True)).notes
+                if "bosun app remove" in n
+            ],
+            [],
+        )
+
+    def test_the_menu_app_answer_is_a_yes_or_no_in_an_answers_file(self) -> None:
+        base = Answers()
+        self.assertFalse(init_plan.answers_from_json({"menu_app": False}, base).menu_app)
+        with self.assertRaises(AnswersError):
+            init_plan.answers_from_json({"menu_app": "yes"}, base)
+        self.assertIs(init_plan.answers_to_json(base)["menu_app"], True)
 
     def test_days_read_naturally(self) -> None:
         for letters, words in (

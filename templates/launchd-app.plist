@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- Rendered by `bosun app login on` (Open at Login for bosun.app); install.sh and `bosun update` keep a
+     present one current and never make one. `bosun app login off` removes it. -->
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>__LABEL__</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>__PROGRAM__</string>
+    <string>--at-login</string>
+  </array>
+  <key>EnvironmentVariables</key>
+  <dict>
+__ENV__
+  </dict>
+  <!-- Opened once at login, and never kept alive: quitting the app is a quit, not a crash to undo.
+       The at-login argument makes it only show its menu bar icon: bosun's own morning job starts bosun
+       at its time. -->
+  <key>RunAtLoad</key>
+  <true/>
+  <!-- What the app starts (`bosun update`, which it runs) must outlive it: without this launchd kills the
+       job's process group when the app quits, an update in the middle of its work with it. -->
+  <key>AbandonProcessGroup</key>
+  <true/>
+  <key>StandardOutPath</key>
+  <string>__LOG_DIR__/app.launchd.out</string>
+  <key>StandardErrorPath</key>
+  <string>__LOG_DIR__/app.launchd.err</string>
+</dict>
+</plist>

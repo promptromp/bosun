@@ -9,7 +9,7 @@ anything.
 
 | Part | File | What it does |
 |---|---|---|
-| Bootstrap | `get.sh` | Plain `sh`, because it runs before anything is known to be there: only gets bosun, its versions side by side, and starts `init`; on an install `init` has set up, it hands over to the newest version's `bosun update` instead. |
+| Bootstrap | `get.sh` | Plain `sh`, because it runs before anything is known to be there: only gets bosun (the newest release), its versions side by side, and starts `init`; on an install `init` has set up, it hands over to the install's own `bosun update` instead. |
 | Preflight | `lib/preflight.sh`, `lib/platforms/`, `lib/harnesses/` | Plain `sh`: what bosun needs, and what to do about anything missing. Changes nothing. |
 | Detect | `lib/init_detect.py` | Read-only: the facts. Each agent's files are read through its adapter, by way of `AGENTS` in `lib/agent_state.py`. |
 | Plan | `lib/init_plan.py` | Pure: facts to recommended answers, answers to file contents and a plan. |
@@ -18,7 +18,8 @@ anything.
 | Apply | `lib/init.py` | The CLI. Writes the config with backups, trusts the folders, runs `install.sh`. |
 
 `install.sh` is where installing meets launchd, `pmset` and `bosun doctor`, so `init` only writes
-what `install.sh` reads. `lib/uninstall_macos.py` undoes the launchd jobs and the wake
+what `install.sh` reads (its jobs are the morning run, the watchdog, learning and the console where wanted, and
+the one with no schedule that `bosun morning --now --background` kickstarts, which is always loaded). `lib/uninstall_macos.py` undoes the launchd jobs and the wake
 ([uninstall.md](uninstall.md)). Answers are JSON (`--print-answers`), and a file only needs what it
 changes: the wizard only fills those in, so `--answers` and the wizard cannot disagree.
 
@@ -49,15 +50,30 @@ rather than guess (a folder that is not bosun's, a link to anything but a versio
 without `bosun.git`):
 
 - **Nothing:** a first install. It clones `bosun.git` bare into `~/.local/share/bosun-versions`, one
-  branch, and marks it the installer's (`bosun.managed`, which [uninstall](uninstall.md) goes by) with
-  the branch it follows (`bosun.branch`). It adds the head's folder, links the install path to it
-  ([versions side by side](update.md#versions-side-by-side-switched-in-one-step)) and starts `init`.
+  branch and no tags, and marks it the installer's (`bosun.managed`, which [uninstall](uninstall.md) goes by)
+  with the branch it follows (`bosun.branch`, `main` unless `BOSUN_BRANCH` says another). It finds the
+  newest release with `git ls-remote --tags` and `newest_release`, a small `sh` function that follows the
+  rule of `lib/update_check.py` (`get.sh` runs before Python can be relied on, so it cannot ask it; a unit
+  test, `tests/unit/test_get_sh.py`, holds the two to the same answer for the same listings), fetches that
+  tag into `refs/remotes/origin/release` (a remote ref, like the update's, never `refs/tags`, which
+  uninstall would count as your work), adds its folder, links the install path to it
+  ([versions side by side](update.md#versions-side-by-side-switched-in-one-step)) and starts `init`. A
+  repository with no release yet gets the head of `main`, and `get.sh` says so; one that cannot be reached
+  stops the install. With `BOSUN_BRANCH` it takes that branch's head instead, and hands `init`
+  `BOSUN_INIT_CHANNEL=main` (a variable of init's own, as `BOSUN_INIT_UNATTENDED` is, so that the windows init
+  starts never inherit the config key, which would beat `bosun.env`), which writes `BOSUN_UPDATE_CHANNEL` into
+  `bosun.env`: the install follows the branch, with no question asked about it. The line `get.sh` prints for
+  after what bosun needs is there keeps `BOSUN_BRANCH` (as it keeps `BOSUN_HARNESS`), so the install that
+  stopped there goes on following the branch.
 - **An install `init` has set up** (its `install.sh` linked `~/.local/bin/bosun` to it, as its last step,
-  after the launchd jobs and the wake, so an install cut short is not taken for one set up): a link to a
-  version, or a checkout an older `get.sh` made. It fetches the branch into `bosun.git` (made beside a
-  checkout first), adds the new version's folder, and runs that version's `bosun update --from` the one in
-  use, with `--yes` when unattended. That version's update converts a checkout, once
-  ([update.md](update.md#getsh-on-an-existing-install)).
+  after the launchd jobs and the wake, so an install cut short is not taken for one set up):
+  - a link to a version: it fetches nothing, and runs the install's own `bosun update`, with `--yes` when
+    unattended, so the install's channel decides what it moves to (the newest release, or on `main` the
+    head of its branch) and a re-run never moves an install off its channel;
+  - a checkout an older `get.sh` made (or one a conversion put back): it fetches the head of the branch
+    into `bosun.git` (made beside the checkout first), adds the new version's folder, and runs that
+    version's `bosun update --from` the checkout. That update converts it, once, and keeps `main` as its
+    channel ([update.md](update.md#getsh-on-an-existing-install)).
 - **An install `init` never finished** (it stopped at what bosun needs, at a question, or part way
   through carrying out the plan, at the launchd jobs or at `sudo` for the wake): `init` again, from the
   version there, as before; the same answers change nothing it already did. Only `bosun update` switches
@@ -79,12 +95,14 @@ for it, and the plan says why.
 | Days | Weekdays you worked on at least 60% of since your first prompt. |
 | Hours | Half an hour before your median first prompt, to after your median last one, at least 4 hours. Work before 04:00 belongs to the day before. With under 5 active days: 08:00 to 20:00, Monday to Friday. |
 | Features | Events, approvals and learning on. The Slack watcher only if the Slack plugin is installed. |
+| Update channel | Never asked. What your config says (so that a re-run never flips a channel set by hand, also from a window that inherited `BOSUN_INIT_CHANNEL` from the `get.sh` that started it), else what `BOSUN_INIT_CHANNEL` in the environment says (`get.sh` sets it to `main` when `BOSUN_BRANCH` was given), else the releases. A `bosun.env` from before the key follows `main`, as `bosun update` writes it, so a re-run changes nothing unasked. It is the `update_channel` answer, written as `BOSUN_UPDATE_CHANNEL`. |
 | Agent | Only asked once Codex is installed and logged in: what `BOSUN_HARNESS` asks for, else your config, else Codex if you typed more prompts there, else Claude Code. |
 | Model | `opus` on Max, Team and Enterprise plans, else `sonnet`. On Codex this is for the orchestrator, and repo sessions use `BOSUN_CODEX_MODEL`. |
 | Repo mask | The GitHub owners of the ticked repos, so the recommendation's is its one repo's owner, and unticking a repo narrows it. With none ticked, the owners of the repos you use (20 or more prompts, at most 6; else the 3 with the most; else up to 3 found), so that unticking never makes it empty, which would mean every repo. |
 | Orchestrator folder | The folder the same repos share, never your home folder. |
 | AWS SSO | The profile, if there is exactly one; with more, the choice is yours. |
 | Wake | Yes, unless `pmset` already has a repeating event that bosun did not set: it keeps only one, and it is not ours to replace by default. |
+| Menu bar app | Yes on a first run ("Add bosun to the menu bar and Applications?", after the wake question, the `menu_app` answer), but only while `app/publisher.json` has a valid `team_id` (read with `lib/app_release.py`'s own reading and check): with no signed build to install the app is not offered, the question is not asked, `menu_app` is no and the plan says why in a line. Unattended, no, since it opens an app at login and someone should say yes. A re-run goes by `BOSUN_MENU_APP` in the config, so an install without the app stays without. `BOSUN_MENU_APP` is written `1` or `0`; `BOSUN_CONSOLE_ALWAYS` (the app's Open Console needs the console's job) follows it when the answer changes (to `1` or `0`) and stays as it is while the answer does not, so a hand-set value survives re-runs, and turning the app off turns the console job off. After `install.sh`, `bosun app install` (`bosun app update` where the app is already in `~/Applications`, and the plan says which, so a re-run never relaunches an app in use), then `bosun app login on` (which does nothing when the job is there, unchanged and loaded). A refused install (no network, say) is one line, with how to add the app later: `bosun.env` goes back to `BOSUN_MENU_APP="0"` and `BOSUN_CONSOLE_ALWAYS` to the value it had before the run (so a hand-set `1` survives; `0` on a first run), the jobs are reloaded to follow it (a reload that fails is one line saying so; `install.sh`, run again, does it), init is the only writer of `bosun.env` (`bosun app` never writes it), and init still succeeds. Answering No where the app is installed leaves it there: the plan says `bosun app remove` takes it away. |
 
 It only reads where and when prompts were typed, never what they say.
 
