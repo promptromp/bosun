@@ -409,6 +409,18 @@ Tart is OpenAI's since it acquired Cirrus Labs in 2026. The repository's licence
 allows internal use and becomes Apache 2.0 after two years (the licensing page on tart.run still shows the
 older terms). It is only a test tool here: nothing in bosun needs it or ships it.
 
+## Building the app
+
+The menu bar app is a Swift package in `app/`, so it needs a Swift toolchain (Xcode's or the command line tools').
+`app/build.sh --identity - --out <dir>` builds `bosun.app` (ad hoc signed, which is for developing the app only) and
+zips it; `bosun app install --build` runs it and installs the result. The commit hooks run `swift format lint`,
+SwiftLint and `swift test` with warnings as errors, only for a commit that touches `app/`, and skip with one line
+without Swift; CI's `app` job runs them, the coverage floor (`tools/swift_coverage.py`) and an ad hoc build. While
+iterating, `cd app && swift test --filter <suite>`. The app talks to bosun only through its `--json` commands, so a
+change to what one prints needs `uv run python tools/contract_samples.py` to write the fixtures the Swift tests
+decode. What the real app does on a real desktop is `tests/sandbox.sh mac app` (see
+[Which sandbox for what](#which-sandbox-for-what)).
+
 ## Releasing bosun.app
 
 The menu bar app is released apart from bosun: a tag `app-v<version>` on `main`, where `<version>` is what

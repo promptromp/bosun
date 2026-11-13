@@ -143,6 +143,97 @@ so that launchd, not the caller, is the parent of what the morning run starts.
 [`bosun uninstall`](#uninstall) reverses it. A checkout of your own like this one updates with git, not
 with `bosun update`.
 
+## The menu bar app
+
+`bosun.app` puts a small icon in the menu bar that says whether bosun is well, and has the few things you
+would otherwise type: update, open the console, quit and start again. It lives in `~/Applications`, has no Dock
+icon, and asks macOS for no permissions. It reads nothing of bosun's but what `bosun status --json` and its other
+`--json` commands print, so it never disagrees with them. Design: [design/menu-bar.md](design/menu-bar.md).
+
+### Installing it
+
+`bosun init` asks "Add bosun to the menu bar and Applications?" (recommended yes) once the publisher's signed build
+exists; answering yes sets `BOSUN_MENU_APP=1` and `BOSUN_CONSOLE_ALWAYS=1` (Open Console needs the console's job),
+installs the app and turns Open at Login on. On an install made before, or after answering no:
+
+```bash
+bosun app install     # download the release this version expects, verify it, place it in ~/Applications
+bosun app status      # what is installed and what this version wants
+```
+
+`install` accepts the app only if its signature meets the publisher's Developer ID requirement (the publisher's
+Team ID from `app/publisher.json`) and Gatekeeper says it is notarized; otherwise it says why in one line and leaves
+`~/Applications` as it was. It refuses until the publisher's Team ID is filled in. It ends with a line on setting
+`BOSUN_MENU_APP=1` in `bosun.env` if you want the watchdog to say when the app is gone. `bosun update` keeps an
+installed app current and never adds one.
+
+For a checkout without a publisher (developing bosun), `bosun app install --build` builds the app on this Mac
+with `app/build.sh` (Swift needed; the first build takes minutes), ad hoc signed and installed without the team or
+Gatekeeper check, and says it is a development build.
+
+If `bosun app install --build` fails with exit 1 and no output on the first run of a fresh copy, run it again. The
+first direct run of a copied `app/build.sh` can be stopped by macOS before the script starts, and only that one;
+the second run builds. (What was seen is in [the design note](design/menu-bar.md#the-mac-vm-run-of-the-app-2026-11-13).)
+
+### The menu
+
+The first line is a coloured dot and one sentence, with grey lines of detail under it:
+
+| Dot | Meaning |
+|---|---|
+| Green | bosun is running: windows are open, with how many wait for you and until when the Mac is kept awake |
+| Yellow | bosun is running, with a warning: the watchdog is not running, a check warns, there were errors in the last hour, or a window could not start. "Show What's Wrong..." lists them |
+| Red | bosun is not running though it should be (inside its awake hours, and you did not quit it). "Start bosun" comes first |
+| Grey | bosun is stopped because you quit it, or the app is still checking. "Start bosun" comes first |
+
+The watchdog counts toward yellow in two ways. If its launchd job is installed but not loaded (booted out), the
+menu is yellow at once. If it is loaded but has not run, it is yellow only when the Mac has been awake for three of
+its five-minute intervals since its last run (counted from the later of that run and the Mac's last wake, so a
+morning wake is not yellow). A checkout with no watchdog job is no problem, and a quit is grey whatever the watchdog does.
+`bosun doctor` has the same rule in plain words.
+
+The rest of the menu:
+
+- **Check for Updates...** runs `bosun update --check`. It reads "Checking for Updates..." while it looks, and
+  "Update Available: <version>..." with a badge on the icon when there is one, which opens what is new with
+  Update Now, Remind Me Later and Skip This Version. Update Now shows what `bosun update` would do (which windows
+  restart, which ask you first) and then runs it; while it waits for a quiet moment the item reads "Updating...
+  waiting for N windows". `bosun update` stays the one updater, of bosun and of the app.
+- **Open Console** opens the web console, signed in, in your browser. It is greyed while the console is not
+  running.
+- **Open at Login** toggles `bosun app login on|off`: a launchd job that opens the icon at login (it does not start
+  bosun; the morning job does that at its time).
+- **Help** has Run bosun doctor, Show Logs and **Uninstall bosun...**, which opens Terminal running
+  `bosun uninstall` after a confirmation, so its questions and the administrator password the wake needs are asked
+  where they can be.
+
+### Quit and Start
+
+**Quit bosun...** opens a dialog listing what stops, with three boxes: pause the morning start until you open
+bosun again (on), let this Mac sleep now (on; unchecked, the keep-awake runs to its end), and keep bosun in the menu
+bar (on). It never touches the ledger, the knowledge base or the config.
+
+If agents are in the middle of a task, a second dialog names them: **Let Them Finish** waits (up to
+`BOSUN_QUIT_WAIT_MINUTES`, 10 by default), **Stop Them Now** quits at once, **Cancel** changes nothing. A window
+waiting for you at a question or permission prompt is not waited on; it is named and stopped with the rest. If
+agents are still busy when the wait ends, a third dialog, "Still busy", offers **Keep Waiting**, **Stop It Now**
+and **Cancel Quit**.
+
+After a quit the launchd jobs stay loaded and do nothing until you start again: the watchdog and learning skip
+their runs, and the morning job skips too if you paused it. Nothing is left running that you did not choose to
+keep: no tmux server, no console, no keep-awake. The same is `bosun quit`, in a terminal.
+
+**Start bosun** (first in the menu when bosun is red or stopped; opening `bosun.app` from Finder or Spotlight when
+bosun is stopped does it too) does what the morning run does, at any hour: `bosun morning --now --background`, which
+has launchd start the run so that macOS's privacy prompts name bosun's own processes and not the app.
+
+### Uninstalling
+
+Moving `bosun.app` to the Trash does not uninstall bosun: bosun keeps running, and with `BOSUN_MENU_APP=1` the
+watchdog says once that the app is gone (`bosun app install` brings it back). `bosun app remove` quits the app, turns
+Open at Login off and deletes it, with bosun left running. To take everything off, use "Uninstall bosun..." or
+[`bosun uninstall`](#uninstall), which removes the app and its login job too.
+
 ## Updating
 
 ```bash

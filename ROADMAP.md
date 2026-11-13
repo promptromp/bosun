@@ -392,8 +392,12 @@ launchd job from `bosun start` to `bosun quit` (`BOSUN_CONSOLE_ALWAYS`); `bosun 
 and init, update and the watchdog bringing the app along. Run on a real Mac in the Tart VM
 (`tests/sandbox.sh mac run` and `work`).
 
-**Next, part 2, the app itself** ([plan](docs/plans/menu-bar-app.md)): the Swift menu bar app, built and notarized in
-CI. `bosun app install` refuses until `app/publisher.json` has a Team ID, so no install offers the app yet.
+**Done (2026-11-13), part 2, the app itself** ([plan](docs/plans/menu-bar-app.md)): the Swift menu bar app (`app/`), its
+build, CI's `app` job, the release workflow and the VM suite (`tests/sandbox.sh mac app`); the guide is
+[The menu bar app](docs/setup.md#the-menu-bar-app). Not yet released: `bosun app install` refuses until
+`app/publisher.json` has a Team ID and the publisher's secrets exist, so no install offers the app yet.
+
+**Next:** a DMG download of the notarized app, and a Homebrew cask, which carry what part 2 builds.
 
 ### Other agents and other operating systems
 

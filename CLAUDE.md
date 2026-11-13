@@ -228,7 +228,10 @@ of truth, so don't copy rules into this file.
   which `tools/contract_samples.py` writes from part 1's own pure functions (quit's results from its run over fake
   ports): a change to what `bosun status --json`, `update --check|--dry-run --json`, `quit --json` or `app status
   --json` print fails `tests/unit/test_contract_samples.py` until `uv run python tools/contract_samples.py` writes the
-  fixtures again, and the Swift side follows. The app reads nothing of bosun's but what those commands print.
+  fixtures again, and the Swift side follows. The app reads nothing of bosun's but what those commands print (the
+  contract rule: `bosun ... --json` is its only input, and `menu_status.CONTRACT` only grows: a field is added, never
+  renamed or removed, so an older app still reads a newer bosun). `app/` holds `Package.swift`, `Sources/`, `Tests/`,
+  `Resources/` (`Info.plist.in`, the icons), `build.sh`, `publisher.json` and `VERSION`; Swift's lint is under Tooling.
   What the AppKit shell needs is split by whether it touches the system. Pure, in the core (so tested, and counted by the
   floor): `AppCoordinator.swift` and `AppCoordinator+Update.swift` (what is chosen, as flows over `AppUI` and
   `ScriptWriting`: the shell's whole surface), `DialogSpecs.swift` (every dialog's words, buttons and boxes, and what
@@ -368,6 +371,12 @@ of truth, so don't copy rules into this file.
   in `impacted_map` (`bin/bosun=<test>`, `mkdocs.yml=<test>`, ...); `tests/unit/impacted_guard.py`
   fails the test until it is there and says which. A test importing a helper or another test file of
   `tests/unit` needs nothing: the plugin follows it.
+- **A menu item** (bosun.app): the item and its state in `MenuModel.swift` (and its dialog in `DialogSpecs.swift`, if it
+  opens one), the `bosun` command it runs in `BosunCLI.swift` (a new command is a command first: `libexec/`, its
+  `# Usage:` header, `docs/commands.md`, and a `--json` output if the app reads it, with its `CONTRACT` grown, never
+  changed), the contract fixture (`uv run python tools/contract_samples.py`, which `tests/unit/test_contract_samples.py`
+  checks), the VM suite's step (`tests/app_e2e.sh`, run with `tests/sandbox.sh mac app`) and the guide (`docs/setup.md`,
+  "The menu bar app").
 - **A command:** `libexec/bosun-<cmd>` with a `# Usage:` header that holds all of its help
   (`bin/bosun` prints it for `--help`, with no flag handling of the command's own for exactly that;
   `die_usage` reports usage errors with exit 2), a line in `bin/bosun`'s usage, the

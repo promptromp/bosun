@@ -3,7 +3,7 @@
 bosun runs as scripts, launchd jobs and a tmux server, and you reach it through a terminal. This adds what a Mac
 app has: an icon in the menu bar that says at a glance whether bosun is well, its updates, its console, a Quit
 that stops it cleanly, and a bosun.app in Applications that starts it again. Status: approved 2026-11-12, with the person's answers of the same day; part 1 (the commands) built and run on a real Mac in the Tart VM (`tests/sandbox.sh mac run` and `work`; see
-the end of this note); part 2 (the app itself) is [planned](../plans/menu-bar-app.md).
+the end of this note); part 2 (the app itself, `app/`) is built ([plan](../plans/menu-bar-app.md)) and run in the Mac VM (`tests/sandbox.sh mac app`, the end of this note); its signing and release wait for the publisher's Team ID and Actions secrets (`docs/development.md`, "Releasing bosun.app").
 Research: the session report "Shipping bosun as a macOS app" (install channels, the native architecture, how
 Ollama, Rogue Amoeba, Docker, OrbStack, Tailscale, Rancher Desktop and Postgres.app behave, and how tools that
 ship a CLI and an app keep them in step).
