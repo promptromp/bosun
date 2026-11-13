@@ -388,7 +388,11 @@ Where what is built differs from what this note said before, or says more:
   `remove` sweeps the `.bosun-app-*` folders whose install (the pid in the name) is gone, first giving the old app
   back when none is at `~/Applications/bosun.app` (killed between the renames). `bosun uninstall` lists and
   removes leftovers too. A running app is asked to quit, and waited for, only after the new app is verified, so
-  a refusal never disturbs it; if the rename in then fails, the old app is opened again.
+  a refusal never disturbs it. Once it has been asked to quit, any end but placing the new app (the rename in
+  failing, SIGTERM or SIGHUP, Ctrl-C) opens it again by its bundle id (`open -b`), after the clean-up has put the old
+  app back where it was (or with the new one in place, when that was placed). The clean-up itself, and the
+  removal of a `~/Applications` the install made, run with SIGTERM, SIGHUP and Ctrl-C held, which arrive after, so
+  one is never cut in half.
 - The Team ID is not read from what `codesign` prints (ruling 29): `codesign -dv` shows `Identifier=` before
   `TeamIdentifier=`, and a signer may put a newline and a line `TeamIdentifier=<anything>` in the identifier, so
   the first such line is forgeable (reproduced with an ad hoc bundle; only `spctl` refused it). The check is `codesign
