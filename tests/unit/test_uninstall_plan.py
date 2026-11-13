@@ -109,6 +109,8 @@ class FileTables(unittest.TestCase):
             ("logs", up.WORKING),
             ("stopped-bosun", up.WORKING),
             ("keep-awake-bosun.pid", up.WORKING),
+            ("keep-awake-bosun.json", up.WORKING),  # when the hold ends, and its pid (bosun status --json)
+            (".keep-awake-bosun.json.4242", up.WORKING),  # that, cut short
             (".ledger.json.restoring", up.WORKING),  # what an update's restore was writing, cut short
             (".replica.json.restoring", up.WORKING),
             ("anything-else", up.UNKNOWN),

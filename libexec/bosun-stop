@@ -1,7 +1,8 @@
 #!/bin/bash
 # Usage: bosun stop
 #
-# Kill the tmux session and release the keep-awake assertion started by `bosun morning`.
+# Kill the tmux session and release the keep-awake assertion started by `bosun morning` (its pid file and
+# the record `bosun status --json` reads).
 # The watchdog then expects no session for the rest of the day (or until `bosun start`).
 set -uo pipefail
 source "$(dirname "$0")/../lib/common.sh"
@@ -26,7 +27,7 @@ if [ -f "$pidfile" ] && pid="$(cat "$pidfile")" && ps -p "$pid" -o comm= 2>/dev/
   kill "$pid"
   log "released keep-awake (caffeinate pid $pid)"
 fi
-rm -f "$pidfile"
+rm -f "$pidfile" "$(keep_awake_file)"
 
 if session_exists; then
   reap_session_helpers

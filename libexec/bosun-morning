@@ -47,8 +47,17 @@ exec > >(tee -a "$LOG_FILE") 2>&1
 
 KEEP_AWAKE_PIDFILE="$(keep_awake_pidfile)"
 
+# What `bosun status --json` reads (keep_awake_file): when the hold ends and whose it is, written whole.
+record_keep_awake() { # <caffeinate pid> <seconds>
+  local file temp until
+  file="$(keep_awake_file)"
+  temp="$(dirname "$file")/.$(basename "$file").$$"
+  until="$(date -v+"$2"S '+%Y-%m-%dT%H:%M:%S%z')"
+  printf '{"until": "%s", "pid": %s}\n' "$until" "$1" >"$temp" && mv "$temp" "$file"
+}
+
 start_keep_awake() {
-  local seconds old_pid
+  local seconds old_pid pid
   if [ -n "$AWAKE_MINUTES" ]; then
     seconds=$((AWAKE_MINUTES * 60))
   else
@@ -70,8 +79,10 @@ start_keep_awake() {
   fi
   # -i: no idle sleep; -s: no system sleep while on AC power.
   nohup caffeinate -i -s -t "$seconds" >/dev/null 2>&1 &
-  echo $! >"$KEEP_AWAKE_PIDFILE"
-  log "holding keep-awake for $((seconds / 60)) minutes (caffeinate pid $!)"
+  pid=$!
+  echo "$pid" >"$KEEP_AWAKE_PIDFILE"
+  record_keep_awake "$pid" "$seconds"
+  log "holding keep-awake for $((seconds / 60)) minutes (caffeinate pid $pid)"
 }
 
 wait_for_network() {

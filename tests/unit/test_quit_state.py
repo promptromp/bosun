@@ -96,6 +96,22 @@ class QuitStateTest(unittest.TestCase):
                 os.utime(self.file, (NOON.timestamp(), NOON.timestamp()))
                 self.assertEqual(quit_state.read(self.state), quit_state.QuitState(NOON, True))
 
+    def test_only_a_file_that_cannot_be_read_says_it_is_unreadable(self) -> None:
+        quit_state.write(self.state, True, now=NOON)
+        good = quit_state.read(self.state)
+        assert good is not None
+        self.assertTrue(good.readable)
+        for text in ("{not json", "", '{"since": "2026-11-12T12:00:00+00:00"}'):
+            with self.subTest(text=text):
+                self.file.write_text(text)
+                bad = quit_state.read(self.state)
+                assert bad is not None
+                self.assertFalse(bad.readable)
+        self.file.write_bytes(b"\xff\xfe\x00")
+        not_text = quit_state.read(self.state)
+        assert not_text is not None
+        self.assertFalse(not_text.readable)
+
     def test_a_file_that_is_not_text_counts_the_same(self) -> None:
         self.state.mkdir()
         self.file.write_bytes(b"\xff\xfe\x00")

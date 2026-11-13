@@ -575,6 +575,10 @@ update_windows_pending() {
 
 keep_awake_pidfile() { echo "$BOSUN_STATE_DIR/keep-awake-$BOSUN_SESSION_NAME.pid"; }
 
+# Beside the pid file, what `bosun status --json` reads: {"until": "<ISO time>", "pid": N}, when the
+# keep-awake ends and whose it is. `morning` writes it and `stop` removes it with the pid file.
+keep_awake_file() { echo "$BOSUN_STATE_DIR/keep-awake-$BOSUN_SESSION_NAME.json"; }
+
 # When you stopped the session (`stop` writes it, `start` removes it). The watchdog does not
 # expect the session on a day you stopped it.
 stop_marker() { echo "$BOSUN_STATE_DIR/stopped-$BOSUN_SESSION_NAME"; }

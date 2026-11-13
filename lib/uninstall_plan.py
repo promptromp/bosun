@@ -89,6 +89,8 @@ STATE_FILES = (
     ("events", WORKING),
     ("impact", WORKING),
     ("keep-awake-*.pid", WORKING),
+    ("keep-awake-*.json", WORKING),  # when the hold ends, and its pid (bosun status --json)
+    (".keep-awake-*.json.*", WORKING),  # what writing it left, cut short
     ("launches", WORKING),  # what each window was launched with (lib/launch_record.py)
     ("logs", WORKING),
     ("login.json", WORKING),

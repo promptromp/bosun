@@ -178,10 +178,13 @@ def sessions_model(facts: Facts, data: Mapping[str, Any], now: datetime) -> dict
 def waiting_windows(facts: Facts, now: datetime) -> list[dict[str, Any]] | None:
     """The windows whose Claude waits at a permission prompt or question, longest first; None when
     the windows could not be read."""
-    if facts.windows is None:
-        return None
+    return None if facts.windows is None else waiting_in(facts.windows, now)
+
+
+def waiting_in(windows: Iterable[Mapping[str, Any]], now: datetime) -> list[dict[str, Any]]:
+    """waiting_windows over the windows `bosun sessions --json` lists (also `bosun status --json`)."""
     found = []
-    for window in facts.windows:
+    for window in windows:
         agent = agent_model(window.get("agent"), now)
         if window.get("window") and agent and agent["status"] == WAITING:
             found.append({"name": window["name"], "since": agent["since"], "seconds": agent["seconds"]})

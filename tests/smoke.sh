@@ -2406,7 +2406,12 @@ write_quit running
 check "a quit that did not pause the morning does not stop a dry run, or clear the file for one" bash -c 'out="$("$1" morning --dry-run --skip-setup 2>&1)" && ! grep -q "is paused" <<<"$out" && [ -f "$2/quit.json" ]' _ "$BOSUN" "$BOSUN_STATE_DIR"
 check "... a morning starts as usual" bash -c 'PATH="$3:$PATH" BOSUN_NETWORK_PROBE_URL=file:///dev/null "$1" morning --skip-setup --awake-minutes 1 >/dev/null 2>&1; tmux -L "$2" has-session -t =smoke' _ "$BOSUN" "$SOCKET" "$WORK/fake-caffeinate"
 check "... and clears the file" test ! -e "$BOSUN_STATE_DIR/quit.json"
+keep_awake_record_ok() { # the morning's keep-awake-<session>.json: an ISO time and an integer pid
+  python3 -I -c 'import datetime, json, sys; d = json.load(open(sys.argv[1])); datetime.datetime.fromisoformat(d["until"]); sys.exit(not isinstance(d["pid"], int))' "$1"
+}
+check "the morning records when its keep-awake ends and whose it is (for bosun status --json)" keep_awake_record_ok "$BOSUN_STATE_DIR/keep-awake-smoke.json"
 "$BOSUN" stop >/dev/null 2>&1
+check "bosun stop removes that record with the pid file" test ! -e "$BOSUN_STATE_DIR/keep-awake-smoke.json"
 rm -f "$BOSUN_STATE_DIR/keep-awake-smoke.pid"
 write_quit paused
 "$BOSUN" start >/dev/null 2>&1
@@ -2419,6 +2424,37 @@ check "with BOSUN_CONSOLE_ALWAYS=1 bosun start makes console/wanted, which the c
 "$BOSUN" start >/dev/null 2>&1
 check "a start with it off again takes the marker away" test ! -e "$BOSUN_STATE_DIR/console/wanted"
 "$BOSUN" stop >/dev/null 2>&1
+
+echo "status --json (the menu bar app's one source of how bosun is)"
+status_has() { # <python condition over d, the object bosun status --json printed>
+  "$BOSUN" status --json </dev/null | python3 -I -c 'import json, sys; d = json.load(sys.stdin); sys.exit(not eval(sys.argv[1]))' "$1"
+}
+check "it prints one object with contract 1 and the documented fields, and exits 0" status_has 'd["contract"] == 1 and sorted(d) == sorted("contract level sentence detail windows waiting keep_awake_until stopped update console problems logs".split())'
+check "... exit 0" "$BOSUN" status --json
+check "with no window open it does not say bosun is running" status_has 'd["windows"] == 0 and d["sentence"] != "bosun is running" and d["stopped"] is None and d["update"] == {"state": "none", "waiting_for": []}'
+check "... its console is not running and the address, which carries the token, is never in it" status_has 'd["console"] == {"running": False, "url": None} and "?t=" not in json.dumps(d)'
+write_quit paused
+check "after a quit it says stopped, since when, and that the morning is paused" status_has 'd["level"] == "stopped" and d["sentence"] == "bosun is stopped" and d["stopped"]["morning_paused"] is True and d["stopped"]["since"][:2] == "20" and d["problems"] == []'
+write_quit running
+check "... and when the morning is not" status_has 'd["level"] == "stopped" and d["stopped"]["morning_paused"] is False'
+printf '{garbage' >"$BOSUN_STATE_DIR/quit.json"
+check "a quit record that cannot be read is stopped too, and says so and how to clear it" status_has 'd["level"] == "stopped" and "unreadable" in d["problems"][0] and "bosun start" in d["problems"][0]'
+rm -f "$BOSUN_STATE_DIR/quit.json"
+"$BOSUN" start >/dev/null 2>&1
+wait_for 10 has_windows "orch alpha beta gamma checkin "
+check "with the windows open it counts them, and none of the fake Claudes waits" status_has 'd["windows"] == 5 and d["waiting"] == [] and d["level"] != "stopped"'
+status_seconds="$(python3 -I -c 'import subprocess, sys, time; t = time.monotonic(); subprocess.run(sys.argv[1:], stdout=subprocess.DEVNULL, stdin=subprocess.DEVNULL); print(round(time.monotonic() - t, 1))' "$BOSUN" status --json)"
+echo "  note  bosun status --json took ${status_seconds}s with five windows (the app polls it)"
+check "... quick enough to poll: under 10 seconds" python3 -I -c 'import sys; sys.exit(not float(sys.argv[1]) < 10)' "$status_seconds"
+check "... a level of ok is one with no problems, anything else lists them" status_has '(d["level"] == "ok") == (d["problems"] == []) and all(isinstance(p, str) for p in d["problems"])'
+"$BOSUN" stop >/dev/null 2>&1
+mkdir -p "$WORK/status-cfg"
+printf 'if then fi\n' >"$WORK/status-cfg/bosun.env"
+check "a bosun.env that does not parse still gets the object: an error, with the reason" env BOSUN_CONFIG_DIR="$WORK/status-cfg" bash -c '"$1" status --json | python3 -I -c "import json, sys; d = json.load(sys.stdin); sys.exit(not (d[\"contract\"] == 1 and d[\"level\"] == \"error\" and \"does not parse\" in d[\"problems\"][0]))"' _ "$BOSUN"
+mkdir -p "$WORK/no-jq"
+printf '#!/bin/sh\nexit 1\n' >"$WORK/no-jq/jq"
+chmod +x "$WORK/no-jq/jq"
+check "a part that cannot be read is a problem and at least a warning, not a failure" env PATH="$WORK/no-jq:$PATH" bash -c '"$1" status --json | python3 -I -c "import json, sys; d = json.load(sys.stdin); sys.exit(not (d[\"contract\"] == 1 and d[\"level\"] in (\"warning\", \"error\") and d[\"problems\"]))"' _ "$BOSUN"
 
 echo "console (local server on a free port, fixture ledger)"
 CONSOLE_STATE="$WORK/console-state"

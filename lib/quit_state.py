@@ -22,7 +22,7 @@ from __future__ import annotations
 import argparse
 import json
 import sys
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -36,6 +36,8 @@ QUIT_FILE = "quit.json"
 class QuitState:
     since: datetime  # when bosun was quit; always timezone-aware
     morning_paused: bool  # whether the morning run stays off until bosun is started
+    # False only for the garbled file (see the top): status says so. Not part of what two states equal.
+    readable: bool = field(default=True, compare=False)
 
 
 def _parse(text: str) -> QuitState | None:
@@ -56,7 +58,7 @@ def _unreadable(path: Path) -> QuitState:
         changed = datetime.fromtimestamp(path.stat().st_mtime, UTC)
     except OSError:
         changed = datetime.now(UTC)
-    return QuitState(changed, True)
+    return QuitState(changed, True, readable=False)
 
 
 def read(state_dir: Path) -> QuitState | None:

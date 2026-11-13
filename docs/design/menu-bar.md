@@ -153,6 +153,10 @@ Calls made from the research and the builder check, to check while reading:
   bosun is stopped by a Quit and whether the morning start is paused, and the console's state. Its level comes
   from what the console's health view and the watchdog already compute (`lib/console_sessions.py`,
   `lib/watchdog.py`), in one pure function, so the menu, the console and the watchdog never disagree.
+  Built as `lib/menu_status.py` (the pure function, `snapshot`) and `lib/menu_status_live.py` (its facts, read-only,
+  and the command). The keep-awake end comes from `keep-awake-<session>.json` (`{"until", "pid"}`), which the morning
+  writes beside the pid file and `bosun stop` removes; a hold whose process is gone is not shown. A quit record that
+  cannot be read shows as stopped, with the problem saying so and that `bosun start` clears it.
 - **The console as a job.** `templates/launchd-console.plist` runs `bosun console` (persisted token, its port),
   rendered and loaded by `reload_changed_jobs` only with `BOSUN_CONSOLE_ALWAYS=1`. Its `KeepAlive` is `PathState` on
   `$BOSUN_STATE_DIR/console/wanted` alone and `RunAtLoad` is false: launchd starts a job whose KeepAlive condition holds
@@ -245,6 +249,4 @@ morning job skip; the console stays down); Start brings back what was running; t
 ## Left to the builder
 
 - The exact wording of every line and dialog (the person may refine the copy).
-- The JSON fields of `bosun status --json` beyond those listed, and the contract's first number.
-- Whether `bosun status --json` extends `bosun status` or is a new command.
 - The menu bar icon's drawing.
