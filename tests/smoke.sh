@@ -6,8 +6,8 @@
 # them. --with-unit runs them all first too, with a plain python3 (python3 -m unittest, no pytest).
 # The checks are in sections, each begun by `section <id> "<name>" [needs <id>,...]`, in the order they
 # run. --list prints the ids and names. --only runs the shared setup and the sections named (and, in file
-# order, the ones they need) and nothing else, to iterate on one area in a minute or two; its summary says
-# it was a partial run. Before committing, run the whole suite once: CI and the pre-push hook always do.
+# order, the ones they need) and nothing else, to iterate on one area in seconds (a few minutes with
+# prerequisites); its summary says it was a partial run. Before committing, run the whole suite once: CI and the pre-push hook always do.
 # A section that cannot run alone either sets up what it uses itself or says `needs <id>`.
 # `always_run` marks where the code every run needs resumes after a section: the setup, and the last
 # check, that the real repository is as it was.
@@ -242,6 +242,60 @@ console_started() {
 }
 has_windows() { [ "$(tmux -L "$SOCKET" list-windows -t =smoke -F '#{window_name}' 2>/dev/null | tr '\n' ' ')" = "$1" ]; }
 
+# The run's own HOME, with two projects and named sessions, and the stand-ins, before the first section: no
+# section and no unit test ever runs on the real HOME or reaches a real tool.
+export HOME="$WORK/home"
+export BOSUN_CONFIG_DIR="$WORK/config"
+export BOSUN_STATE_DIR="$WORK/state"
+export BOSUN_LOG_DIR="$WORK/state/logs"
+export BOSUN_SESSION_NAME="smoke"
+export BOSUN_TMUX_SOCKET="$SOCKET"
+export BOSUN_LAUNCH_DRY_RUN=1
+export BOSUN_ORCHESTRATOR="" # orchestrator tests below enable it explicitly
+REPO_A="$WORK/repos/svc-a"
+REPO_B="$WORK/repos/svc-b"
+mkdir -p "$REPO_A/.git" "$REPO_B/.git" "$HOME/.claude/sessions" "$HOME/.local/bin" "$BOSUN_CONFIG_DIR"
+REPO_A="$(cd "$REPO_A" && pwd -P)"
+REPO_B="$(cd "$REPO_B" && pwd -P)"
+L() { "$BOSUN" ledger "$@"; }
+# This run's own process, as a running Claude's record: a live holder of beta's conversation.
+printf '{"pid":%d,"sessionId":"22222222-0000-0000-0000-000000000001"}' $$ >"$HOME/.claude/sessions/$$.json"
+# The tools that reach outside this run (a notification on the desktop, an AWS login in the browser, launchd,
+# power settings, sudo, opening an app) get a stand-in that does nothing from the start, so that a run which
+# skips the section that installs the real fake (--only) never reaches the real tool. Sections that need a
+# stand-in with a behaviour replace the plain one, and put it back when they are done. fakes_first, which every
+# section and every always_run begins with, stops the run if any of these tools would resolve to anything that
+# is not under this run's folder, for bosun's own PATH (it puts $HOME/.local/bin first) or one a section made.
+FAKED_TOOLS="osascript open caffeinate codesign ditto spctl pmset aws launchctl sudo"
+plain_fake() { # <tool> [exit status] [home]
+  printf '#!/bin/sh\nexit %s\n' "${2:-0}" >"${3:-$HOME}/.local/bin/$1"
+  chmod +x "${3:-$HOME}/.local/bin/$1"
+}
+stand_ins_in() { # <home>: the plain stand-ins in <home>/.local/bin, where bosun looks first when HOME is <home>
+  local tool
+  mkdir -p "$1/.local/bin"
+  for tool in $FAKED_TOOLS; do plain_fake "$tool" 0 "$1"; done
+  plain_fake aws 127 "$1"
+  plain_fake launchctl 113 "$1"
+  plain_fake sudo 1 "$1"
+}
+stand_ins_in "$HOME"
+fakes_first() { # [home]: with HOME as <home> (the run's, by default)
+  local tool path
+  for tool in $FAKED_TOOLS; do
+    path="$(HOME="${1:-$HOME}" bash -c 'source "$1/lib/common.sh"; command -v "$2"' _ "$ROOT" "$tool")"
+    case "$path" in
+      "$WORK"/*) ;;
+      *)
+        echo "tests/smoke.sh: $tool would be ${path:-not found} with HOME ${1:-$HOME}, not a stand-in under $WORK: refusing to go on" >&2
+        exit 1
+        ;;
+    esac
+  done
+}
+fakes_first
+FAKES_READY=1
+
 section syntax "syntax"
 for script in "$ROOT"/bin/bosun "$ROOT"/libexec/bosun-* "$ROOT"/install.sh "$ROOT"/uninstall.sh "$ROOT"/lib/*.sh; do
   head -1 "$script" | grep -q python && continue
@@ -276,10 +330,19 @@ check "usage errors exit 2" bash -c '
     [ $? -eq 2 ] || { echo "bosun $args did not exit 2"; exit 1; }
   done' _ "$BOSUN"
 
+# unit_tests: the unit tests as they have always run, with none of this run's BOSUN_* settings, but in a home of
+# its own (stand-ins in it too) and never the real one.
+unit_tests() {
+  local var
+  for var in $(compgen -e | grep '^BOSUN_'); do unset "$var"; done
+  stand_ins_in "$WORK/unit-home"
+  fakes_first "$WORK/unit-home"
+  HOME="$WORK/unit-home" python3 -m unittest discover -s "$ROOT/tests/unit"
+}
 always_run
 if [ "$WITH_UNIT" = 1 ]; then
   echo "python unit tests (tests/unit)"
-  unit_out="$(python3 -m unittest discover -s "$ROOT/tests/unit" 2>&1)"
+  unit_out="$(unit_tests 2>&1)"
   unit_end="$(tail -1 <<<"$unit_out")"
   # A plain python3 has no MkDocs, so the docs site's whole-build tests skip here (they run under uv);
   # the label says how many skipped, so a new skip shows.
@@ -287,54 +350,6 @@ if [ "$WITH_UNIT" = 1 ]; then
   check "$(grep -o 'Ran [0-9]* tests' <<<"$unit_out" || echo 'unit tests'), all passing$(grep -o ' (skipped=[0-9]*)' <<<"$unit_end")" grep -qE "$unit_ok" <<<"$unit_end"
   grep -qE "$unit_ok" <<<"$unit_end" || tail -25 <<<"$unit_out"
 fi
-
-# Fixture HOME with two projects and named sessions.
-export HOME="$WORK/home"
-export BOSUN_CONFIG_DIR="$WORK/config"
-export BOSUN_STATE_DIR="$WORK/state"
-export BOSUN_LOG_DIR="$WORK/state/logs"
-export BOSUN_SESSION_NAME="smoke"
-export BOSUN_TMUX_SOCKET="$SOCKET"
-export BOSUN_LAUNCH_DRY_RUN=1
-export BOSUN_ORCHESTRATOR="" # orchestrator tests below enable it explicitly
-REPO_A="$WORK/repos/svc-a"
-REPO_B="$WORK/repos/svc-b"
-mkdir -p "$REPO_A/.git" "$REPO_B/.git" "$HOME/.claude/sessions" "$HOME/.local/bin" "$BOSUN_CONFIG_DIR"
-REPO_A="$(cd "$REPO_A" && pwd -P)"
-REPO_B="$(cd "$REPO_B" && pwd -P)"
-L() { "$BOSUN" ledger "$@"; }
-# This run's own process, as a running Claude's record: a live holder of beta's conversation.
-printf '{"pid":%d,"sessionId":"22222222-0000-0000-0000-000000000001"}' $$ >"$HOME/.claude/sessions/$$.json"
-# The tools that reach outside this run (a notification on the desktop, an AWS login in the browser, launchd,
-# power settings, sudo, opening an app) get a stand-in that does nothing from the start, so that a run which
-# skips the section that installs the real fake (--only) never reaches the real tool. Sections that need a
-# stand-in with a behaviour replace the plain one, and put it back when they are done. fakes_first, which every
-# section and every always_run begins with, stops the run if any of these tools would resolve to anything that
-# is not under this run's folder, for bosun's own PATH (it puts $HOME/.local/bin first) or one a section made.
-FAKED_TOOLS="osascript open caffeinate codesign ditto spctl pmset aws launchctl sudo"
-plain_fake() { # <tool> [exit status]
-  printf '#!/bin/sh\nexit %s\n' "${2:-0}" >"$HOME/.local/bin/$1"
-  chmod +x "$HOME/.local/bin/$1"
-}
-for tool in $FAKED_TOOLS; do plain_fake "$tool"; done
-plain_fake aws 127
-plain_fake launchctl 113
-plain_fake sudo 1
-fakes_first() {
-  local tool path
-  for tool in $FAKED_TOOLS; do
-    path="$(bash -c 'source "$1/lib/common.sh"; command -v "$2"' _ "$ROOT" "$tool")"
-    case "$path" in
-      "$WORK"/*) ;;
-      *)
-        echo "tests/smoke.sh: $tool would be ${path:-not found}, not a stand-in under $WORK: refusing to go on" >&2
-        exit 1
-        ;;
-    esac
-  done
-}
-fakes_first
-FAKES_READY=1
 
 echo "bosun-was-updated:check-in" >"$WORK/update-prompt" # the prompt of an update's restart (refresh --update-restart)
 # Helpers (and what is a constant) that more than one section uses, so that a section can run without the one
@@ -4122,6 +4137,8 @@ FAKE
   G_DIR="$G/share/bosun"
   G_VERSIONS="$G/share/bosun-versions"
   mkdir -p "$G/home"
+  stand_ins_in "$G/home" # get.sh runs bosun with this HOME
+  fakes_first "$G/home"
   get_dry() { HOME="$G/home" BOSUN_DIR="$G_DIR" BOSUN_REPO="$G/upstream" sh "$ROOT/get.sh" --dry-run 2>&1; }
   g_tree() { (cd "$G" && find . -print | LC_ALL=C sort && find . -type f -print0 | LC_ALL=C sort -z | xargs -0 cat | shasum); }
   says_lines() { # <output> <line...>: each line, whole, in the output
@@ -4610,8 +4627,10 @@ migrations.run(migrations.Context(pathlib.Path(sys.argv[2]), pathlib.Path(sys.ar
   hook_payload='{"session_id":"00000000-0000-0000-0000-000000000000","transcript_path":"/dev/null","cwd":"/","hook_event_name":"Stop","tool_name":"Bash","tool_input":{"command":"ls"},"tool_use_id":"toolu_0","tool_response":{"stdout":""},"prompt":"how are the exports?"}'
   u_run_hooks() {
     local command
+    stand_ins_in "$U/home"
+    fakes_first "$U/home"
     while IFS= read -r command; do
-      "${U_ENV[@]}" HOME="$U/home" PATH="$HOME/.local/bin:$PATH" BOSUN_APPROVALS_ENABLED=1 BOSUN_EVENTS_ENABLED=1 bash -c "$command" <<<"$hook_payload" >/dev/null 2>"$U/hook.err" ||
+      "${U_ENV[@]}" HOME="$U/home" BOSUN_APPROVALS_ENABLED=1 BOSUN_EVENTS_ENABLED=1 bash -c "$command" <<<"$hook_payload" >/dev/null 2>"$U/hook.err" ||
         { echo "$command: exit $?: $(tail -2 "$U/hook.err")" && return 1; }
     done <<<"$u_hooks"
   }

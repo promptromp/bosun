@@ -41,7 +41,8 @@ instead of the whole suite before you commit, which CI and the pre-push hook run
 `tests/unit/test_smoke_sections.py` fails on a section without a marker, a taken id or a `needs` that names
 nothing above it. Every section begins by checking that the tools that reach outside the run
 (`osascript`, `aws`, `launchctl`, `pmset`, `sudo`, `open`, `caffeinate`, `codesign`, `ditto`, `spctl`) are
-stand-ins in the run's own folder, and the run stops if one would be the real one.
+stand-ins in the run's own folder, and the run stops if one would be the real one. The run's HOME and those
+stand-ins exist before the first section, and a section that points bosun at another HOME gets them there too.
 
 `-n auto` runs the tests in parallel, one worker per core (pytest-xdist). `--impacted`
 (pytest-impacted) runs only the tests that what git has uncommitted (staged or not, and new files)
