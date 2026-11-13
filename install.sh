@@ -5,7 +5,7 @@
 #   1. seed ~/.config/bosun from examples/<name> (default: generic); never overwrites
 #   2. link `bosun` into ~/.local/bin
 #   3. install and load the launchd jobs that run `bosun morning` on schedule (and, started only by a kickstart,
-#      `bosun morning --now`, which the menu bar app's Start runs) and
+#      `bosun morning --now`, which the menu bar app's Start runs through `--background`) and
 #      `bosun watchdog` every 5 minutes (and `bosun learn` daily, with
 #      BOSUN_LEARN_ENABLED=1), each only where its plist changed or it is not loaded
 #   4. print (or with --with-wake, run via sudo) the pmset repeating-wake command

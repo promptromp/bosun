@@ -3193,12 +3193,14 @@ cat >"$HOME/.local/bin/launchctl" <<EOF
 echo "launchctl \$*" >>"$WORK/system.log"
 [ ! -e "$WORK/launchctl-fails" ] || [ "\$1" != bootstrap ] || exit 5
 case "\$1" in
-print) # loaded where its plist is; "running" while the suite says a run is going
+print) # loaded where its plist is; running while its label is in the file the suite writes (an inner line says
+  # running for every job, as launchd's lists of processes do: only the top-level one is the job's)
   [ -e "\$HOME/Library/LaunchAgents/\${2##*/}.plist" ] || exit 113
-  if [ -e "$WORK/job-running" ]; then printf '\tstate = running\n'; else printf '\tstate = not running\n'; fi
+  if grep -qx "\${2##*/}" "$WORK/job-running" 2>/dev/null; then printf '\tstate = running\n'; else printf '\tstate = not running\n'; fi
+  printf '\tprocess = {\n\t\tstate = running\n\t}\n'
   ;;
-kickstart) # refused, as launchd does a job that is running already, while the suite says so
-  [ ! -e "$WORK/kickstart-refused" ] || { echo "Could not kickstart service: 37: Operation already in progress" >&2; exit 37; }
+kickstart) # takes it, a running job too (without -k it leaves that one alone); fails when the suite says so
+  [ ! -e "$WORK/kickstart-fails" ] || { echo "Could not kickstart service: 113: Could not find service" >&2; exit 113; }
   ;;
 esac
 EOF
@@ -3246,6 +3248,7 @@ if [ "$(bash -c 'source "$1/lib/common.sh"; command -v launchctl; command -v pms
   check "with BOSUN_LEARN_ENABLED=1 it writes and loads one" bash -c 'plutil -lint -s "$1" && grep -q "launchctl bootstrap gui/$(id -u) $1" "$2"' _ "$LEARN_PLIST" "$WORK/system.log"
   doctor_said="$(BOSUN_LEARN_ENABLED=1 "$BOSUN" doctor 2>&1)"
   check "doctor checks the learning agent once it is enabled" contains "$doctor_said" "ok    learning agent $BOSUN_LAUNCHD_LABEL.learn loaded"
+  check "doctor checks the job that runs --now, which the app's Start kickstarts" contains "$doctor_said" "ok    launchd job $BOSUN_LAUNCHD_LABEL.now loaded"
   check "doctor checks the ledger against its journal" contains "$doctor_said" "ok    the ledger and its journal: ledger is valid"
   # A ledger of its own: a link to an item that is gone (an old prune) warns and adds no failure;
   # a damaged journal fails. (Doctor's login check calls the fake claude, which writes the ledger.)
@@ -3343,20 +3346,25 @@ assert job.get("AbandonProcessGroup") is True, job.get("AbandonProcessGroup")
   check "--background kickstarts the job and exits 0" bash -c '[ "$1" -eq 0 ] && [ "$3" -eq $(($2 + 1)) ]' _ "$bg_rc" "$bg_before" "$(bg_kickstarts)"
   check "... without -k: a run already going is not restarted" bash -c '! grep -q "^launchctl kickstart -k" "$1"' _ "$WORK/system.log"
   check "... says so in a line, and runs nothing itself: no session, no morning log header" bash -c '[ "$(wc -l <<<"$1")" -eq 1 ] && grep -q "started" <<<"$1" && ! tmux -L "$2" has-session -t =smoke && [ "$3" = "$4" ]' _ "$out" "$SOCKET" "$bg_headers" "$(morning_headers)"
-  touch "$WORK/job-running" "$WORK/kickstart-refused"
-  out="$("$BOSUN" morning --now --background 2>&1)"
-  bg_rc=$?
-  check "with the run going already, launchd refuses the kickstart: it exits 0 and says it is running" bash -c '[ "$1" -eq 0 ] && grep -q "already running" <<<"$2"' _ "$bg_rc" "$out"
+  for running_job in "$BOSUN_LAUNCHD_LABEL.now" "$BOSUN_LAUNCHD_LABEL"; do
+    echo "$running_job" >"$WORK/job-running"
+    bg_before="$(bg_kickstarts)"
+    out="$("$BOSUN" morning --now --background 2>&1)"
+    bg_rc=$?
+    check "with $running_job running, it exits 0, says so in one line and starts nothing (no kickstart)" bash -c '[ "$1" -eq 0 ] && [ "$(wc -l <<<"$2")" -eq 1 ] && grep -q "already going (launchd job $3)" <<<"$2" && [ "$4" = "$5" ]' _ "$bg_rc" "$out" "$running_job" "$bg_before" "$(bg_kickstarts)"
+  done
   rm -f "$WORK/job-running"
+  touch "$WORK/kickstart-fails"
   out="$("$BOSUN" morning --now --background 2>&1)"
   bg_rc=$?
-  check "a refusal with nothing running exits 1, in one line, with launchd's words" bash -c '[ "$1" -eq 1 ] && [ "$(wc -l <<<"$2")" -eq 1 ] && grep -q "launchd did not start" <<<"$2" && grep -q "Operation already in progress" <<<"$2"' _ "$bg_rc" "$out"
-  rm -f "$WORK/kickstart-refused"
+  check "a kickstart launchd refuses, with nothing running, exits 1, in one line, with launchd's words" bash -c '[ "$1" -eq 1 ] && [ "$(wc -l <<<"$2")" -eq 1 ] && grep -q "launchd did not start" <<<"$2" && grep -q "Could not find service" <<<"$2"' _ "$bg_rc" "$out"
+  rm -f "$WORK/kickstart-fails"
   mv "$NOW_PLIST" "$WORK/now.plist"
   bg_before="$(bg_kickstarts)"
   out="$("$BOSUN" morning --now --background 2>&1)"
   bg_rc=$?
   check "with the job not loaded it exits 1, in one line that says to run install.sh again, and kickstarts nothing" bash -c '[ "$1" -eq 1 ] && [ "$(wc -l <<<"$2")" -eq 1 ] && grep -q "not loaded" <<<"$2" && grep -q "run install.sh again" <<<"$2" && [ "$3" = "$4" ]' _ "$bg_rc" "$out" "$bg_before" "$(bg_kickstarts)"
+  check "... and doctor warns about it, saying to run install.sh (a warning, as nothing else fails)" contains "$("$BOSUN" doctor 2>&1)" "warn  launchd job $BOSUN_LAUNCHD_LABEL.now not loaded"
   mv "$WORK/now.plist" "$NOW_PLIST"
   bg_before="$(bg_kickstarts)"
   bg_usage() {

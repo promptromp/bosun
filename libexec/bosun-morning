@@ -12,20 +12,22 @@
 #   5. start the tmux session, or refresh it if it survived the night (unless you are typing in it)
 #   6. post a macOS notification with the outcome
 #
-#   --now              the same run at any hour or day, as you start it (what the menu bar app's Start
-#                      runs): it ends a `bosun quit`, paused or not, and holds the keep-awake until
-#                      BOSUN_AWAKE_UNTIL only while now is inside an awake window (BOSUN_DAYS, from
-#                      BOSUN_START_TIME to BOSUN_AWAKE_UNTIL), none outside it; its log says trigger=now
+#   --now              the same run at any hour or day, as you start it (which the menu bar app's Start
+#                      runs through --background): it ends a `bosun quit`, paused or not, and holds the
+#                      keep-awake until BOSUN_AWAKE_UNTIL only while now is inside an awake window
+#                      (BOSUN_DAYS, from BOSUN_START_TIME to BOSUN_AWAKE_UNTIL), none outside it; its log
+#                      says trigger=now
 #   --background       with --now alone (no other option): have launchd run it and return at once, as bosun's own
 #                      launchd job (<BOSUN_LAUNCHD_LABEL>.now, which install.sh loads, runs `bosun morning --now`),
 #                      kickstarted without -k: what the menu bar app's Start runs. The run is then launchd's child,
 #                      and so is everything it starts, not the caller's, which is whom macOS names in its privacy
 #                      prompts. It adds no logic of its own: the run is the --now run above, its log the day's
-#                      morning log. Exit 0 when launchd took the kickstart, or the run is going already (a run
-#                      going is not started twice); exit 1, in one line, when the job is not loaded (run
-#                      install.sh again, or `bosun init`) or launchd would not start it; exit 2 for --background
-#                      without --now, or with --dry-run, --skip-setup or --awake-minutes, which the job's run
-#                      cannot be given
+#                      morning log. A morning run that launchd started, by either job (the scheduled one or
+#                      this), is not started again: it says so and exits 0; a `bosun morning --now` typed in a
+#                      terminal is no job and is not seen. Exit 0 when launchd took the kickstart or such a run
+#                      is going; exit 1, in one line, when the job is not loaded (run install.sh again, or
+#                      `bosun init`) or launchd would not start it; exit 2 for --background without --now, or
+#                      with --dry-run, --skip-setup or --awake-minutes, which the job's run cannot be given
 #   --dry-run          report what would happen; no keep-awake, logins or tmux changes
 #   --skip-setup       skip step 3 (the agents' update, step 4, still runs)
 #   --awake-minutes N  hold the keep-awake for N minutes instead of until BOSUN_AWAKE_UNTIL (also with --now)
@@ -63,17 +65,24 @@ done
 
 # The job runs plain `morning --now`: only that can be started in the background.
 start_in_background() {
-  local label launchd_said
+  local label running launchd_said
   [ "$NOW" = "1" ] || die_usage "--background goes with --now"
   [ "$DRY_RUN" = "0" ] && [ "$SKIP_SETUP" = "0" ] && [ -z "$AWAKE_MINUTES" ] ||
     die_usage "--background takes no --dry-run, --skip-setup or --awake-minutes: the job runs plain --now"
   label="$(now_label)"
   job_loaded "$label" || die "the job that starts it, $label, is not loaded: run install.sh again (or bosun init)"
-  # Without -k launchd leaves a run that is going alone, so a second Start does not start it twice.
+  # A run launchd started, by either job, is not started again: this script takes no lock, so a second
+  # one would run the setup steps and the agents' update at the same time. (`kickstart` without -k leaves a
+  # running job alone too, but the state is what is asked, not its exit code.) A `bosun morning --now`
+  # typed in a terminal is no job and is not seen.
+  for running in "$label" "$BOSUN_LAUNCHD_LABEL"; do
+    if job_running "$running"; then
+      log "the morning run is already going (launchd job $running); not starting it again"
+      exit 0
+    fi
+  done
   if launchd_said="$(launchctl kickstart "gui/$(id -u)/$label" 2>&1)"; then
     log "morning run started by launchd ($label); its log is $BOSUN_LOG_DIR/morning-$(date +%F).log"
-  elif job_running "$label"; then
-    log "the morning run is already running ($label); not starting it again"
   else
     die "launchd did not start $label: $(tr '\n' ' ' <<<"$launchd_said")"
   fi

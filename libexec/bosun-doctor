@@ -402,6 +402,17 @@ check_learn_agent() {
   fi
 }
 
+# The job `bosun morning --now --background` kickstarts (the menu bar app's Start depends on it).
+check_now_job() {
+  local label
+  label="$(now_label)"
+  if job_loaded "$label"; then
+    ok "launchd job $label loaded (runs bosun morning --now when kickstarted: bosun morning --now --background)"
+  else
+    warn "launchd job $label not loaded, so bosun morning --now --background (the menu bar app's Start) cannot start bosun; run install.sh"
+  fi
+}
+
 check_schedule() {
   local wake_hm wake_label wake_cmd repeat
   if launchctl print "gui/$(id -u)/$BOSUN_LAUNCHD_LABEL" >/dev/null 2>&1; then
@@ -409,6 +420,7 @@ check_schedule() {
   else
     fail "launchd job $BOSUN_LAUNCHD_LABEL not loaded; run install.sh"
   fi
+  check_now_job
   check_watchdog
   check_learn_agent
   wake_hm="$(shift_time "$BOSUN_START_TIME" "$BOSUN_WAKE_DELAY_MINUTES")"

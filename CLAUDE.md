@@ -259,6 +259,10 @@ of truth, so don't copy rules into this file.
 - **An outreach purpose:** `PURPOSES` (`lib/ledger.py`) and the `reach-out` help there, the
   purpose lists in `policy.md` (with what each means) and `orchestrator/tasks/_common.md`, and the
   outreach table in `docs/orchestrator.md`.
+- **A launchd job:** its template in `templates/` (the hook checks it is XML), a label helper listed in `job_labels`,
+  `render_job` and `reload_changed_jobs` (`lib/common.sh`), and in the Mac VM (`tests/sandbox/e2e_lib.sh`,
+  `tests/install_e2e.sh`) a check that it loads and does what its plist says, and that uninstall removes it
+  (`jobs_are_gone`).
 - **A watchdog check:** a row in `CHECKS` (`lib/watchdog.py`), a line in
   `libexec/bosun-watchdog`'s usage (smoke checks they match), and the table in `docs/watchdog.md`.
 - **A ledger kind:** an entry in `KINDS` (`lib/ledger.py`) and the list of item ids in `docs/orchestrator.md`.

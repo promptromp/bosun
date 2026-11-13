@@ -59,3 +59,17 @@ pmset wake 08:01 ─> launchd runs the 08:00 job it missed during sleep ──> 
   sessions, the ledger and the logs and proposes fixes for your approval. See [Learning](learning.md).
 - **20:00** (`BOSUN_AWAKE_UNTIL`): bosun stops keeping the Mac awake. The sessions stay in tmux, and the next
   morning starts from where they are.
+
+## Stopping before the evening, and starting again
+
+- **`bosun quit`** stops bosun until you start it: `bosun quit --let-finish` waits until no window is busy
+  (exit 3 if they still are, so you can wait longer or stop them), `--stop-now` quits whatever they are doing,
+  and `--plan` says what a quit would meet and changes nothing. A quit ends the windows and the console's job,
+  and with `--sleep` the keep-awake too (without it the keep-awake the morning started goes on until its time),
+  and records itself in `quit.json`: the watchdog and the scheduled learning run skip while it is there, so nothing
+  restarts what you stopped. Tomorrow's morning run starts bosun again, unless you quit with `--pause-morning`.
+  `bosun stop` only ends the windows, as before.
+- **`bosun start`** brings the windows back and ends a quit, and so does **`bosun morning --now`**, the morning
+  run at any hour (`--background` has launchd start it: what the menu bar app's Start runs). `bosun status
+  --json` says in one object how bosun is, including whether it is stopped. See [Commands](commands.md) for each
+  one's options.

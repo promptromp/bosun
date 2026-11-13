@@ -377,6 +377,24 @@ answered.
 Material from `docs/` and the root pages (`mkdocs.yml`, `tools/mkdocs_hooks.py`) and published from
 `main` by `.github/workflows/docs.yml`. Every pull request builds it with `--strict`.
 
+### The menu bar app
+
+**Why:** nothing on screen says bosun is running, `bosun stop` leaves the launchd jobs and the keep-awake up (and
+tomorrow's morning start), and updating or opening the console are commands to remember. Design note:
+[docs/design/menu-bar.md](docs/design/menu-bar.md).
+
+**Done (2026-11-13), part 1, the commands the app runs** ([plan](docs/plans/menu-bar-cli.md)): tagged releases
+(`v<YYYY.MM.DD>`), which `bosun update` and a first install follow by default (`BOSUN_UPDATE_CHANNEL`; an existing
+install keeps following `main`), `bosun update --check` and `--skip`; `bosun quit` (`--let-finish`, `--stop-now`,
+`--pause-morning`, `--sleep`) with the record the watchdog, learning and the morning job respect; the console as a
+launchd job from `bosun start` to `bosun quit` (`BOSUN_CONSOLE_ALWAYS`); `bosun status --json`;
+`bosun morning --now`, and `--background` through its own launchd job; `bosun app install|update|remove|login|status`;
+and init, update and the watchdog bringing the app along. Run on a real Mac in the Tart VM
+(`tests/sandbox.sh mac run` and `work`).
+
+**Next, part 2, the app itself** ([plan](docs/plans/menu-bar-app.md)): the Swift menu bar app, built and notarized in
+CI. `bosun app install` refuses until `app/publisher.json` has a Team ID, so no install offers the app yet.
+
 ### Other agents and other operating systems
 
 **Done (2026-10-30): repo sessions on Codex.** A window runs Codex with `harness: codex` in
