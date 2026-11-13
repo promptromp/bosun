@@ -89,8 +89,10 @@ of truth, so don't copy rules into this file.
   the one repo-mask implementation. `lib/watchdog.py`: the watchdog's table of checks (`CHECKS`),
   awake window, de-dup state and alert sinks; `libexec/bosun-watchdog` only collects the live
   facts (tmux windows, the Claude in each, the check-in loop, launchd) for it.
-- Quit (design: `docs/design/menu-bar.md`): `lib/quit.py` (the plan, pure over the windows, and the command: the wait,
-  the `windows` lock, the order of the steps) run by `libexec/bosun-quit` (the command line and settings);
+- Quit (design: `docs/design/menu-bar.md`): `lib/quit.py` (pure: the plan over the windows, its texts, and the run over
+  `Ports`: the wait, the second look under the lock, the order of the steps) and `lib/quit_live.py` (the world the
+  ports touch: `bosun sessions --json`, the `windows` lock, launchctl and the console job, `bosun stop`; the
+  command), which `libexec/bosun-quit` (the command line and settings) runs;
   `lib/quit_state.py` is what it leaves (`quit.json`: since when, whether the morning start is paused), which the
   watchdog and learning's scheduled run skip on, and the morning run when paused (`quit_stopped`, `quit_paused`,
   `quit_clear` in `lib/common.sh`); `bosun start` clears it, `start --unless-quit` (the morning's) never does.

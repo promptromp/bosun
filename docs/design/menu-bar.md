@@ -161,7 +161,10 @@ Calls made from the research and the builder check, to check while reading:
   scheduled start), and when the awake window has begun and the morning run is going or not yet due it is starting
   (never, at the error level: a crashed or hung morning run is named as failed). The yellow level also lists the ERROR
   lines of the last hour after the watchdog has alerted them (the same line is an error until the watchdog's next
-  run, then a warning for the hour). A quit record that cannot be read shows as stopped, with the problem saying so and that `bosun start` clears it.
+  run, then a warning for the hour). A quit record that cannot be read shows as stopped, with the problem saying so and that `bosun start` clears it. A quit record while windows are still open is "bosun quit did not finish", an error (its `bosun stop` failed or
+  was cut short, while the watchdog skips its runs), with the problem saying how to finish: `bosun quit --stop-now` again,
+  or `bosun start`. Seconds of it during a normal quit, between `quit.json` and the session going, are accepted: the app
+  does not poll during its own quit.
 - **The console as a job.** `templates/launchd-console.plist` runs `bosun console` (persisted token, its port),
   rendered and loaded by `reload_changed_jobs` only with `BOSUN_CONSOLE_ALWAYS=1`. Its `KeepAlive` is `PathState` on
   `$BOSUN_STATE_DIR/console/wanted` alone and `RunAtLoad` is false: launchd starts a job whose KeepAlive condition holds
@@ -170,19 +173,44 @@ Calls made from the research and the builder check, to check while reading:
   (`launchctl kill TERM`). `bosun console --url` prints its address with the token: the port the console recorded in its
   running lock and the stored token.
 - **`bosun quit`.** The one command Quit runs (the app collects the choices; the CLI does the work, so a terminal
-  can quit bosun the same way):
-  1. Marks bosun stopped (a state file: since when, and whether the morning start is paused), so the watchdog and
-     the check-in loop do not restart or alert about what is stopping.
-  2. Agents mid-task: `--let-finish[=<minutes>]` waits until each window's turn is over (the update's wait,
-     `lib/update_windows.py`, up to 10 minutes), then stops them; `--stop-now` stops them at once.
-  3. Stops the windows and the tmux server (`bosun stop`), the console job, the helpers the panes left
-     (`lib/orphans.py`).
-  4. `--sleep` ends bosun's keep-awake.
-  5. `--pause-morning` keeps the morning job from starting bosun until `bosun start`; the scheduled wake stays (it
-     needs an administrator to change), so the Mac may wake at its time and sleep again.
-  6. Prints what it stopped, as JSON with `--json`.
-  The app then quits itself, unless "Keep bosun in the menu bar" was checked.
-- **`bosun start`** clears the stopped mark, loads the console job, and starts the session as today.
+  can quit bosun the same way). `bosun quit --plan [--json]` changes nothing and says what a quit would meet: the
+  open windows, which are busy and which wait for you, when the keep-awake ends, and why a quit is refused (an
+  update runs). `bosun quit (--let-finish[=<minutes>] | --stop-now) [--pause-morning] [--sleep] [--json]` does it,
+  in this order (built as `lib/quit.py`, the plan and the run over its ports, and `lib/quit_live.py`, the world
+  they touch):
+  1. **The wait, with `--let-finish`**: until no window is busy, polling every 5 seconds for up to the minutes
+     (`BOSUN_QUIT_WAIT_MINUTES`, default 10; 0 checks once). A window waiting for you does not hold it, and one at
+     `shell` (only background work) counts as done. It holds no lock and changes nothing; if the minutes run out
+     it names the windows still busy and exits 3, so the app can ask again. `--stop-now` has no wait. Quit never
+     sends a key to a window, and `--let-finish` inside one of bosun's own windows is refused (it would wait on
+     itself).
+  2. **The `windows` lock**, the one `bosun start` and `bosun refresh` hold, waiting up to
+     `BOSUN_WINDOWS_LOCK_WAIT_SECONDS` for a start that is setting up the windows; if it does not come free (or
+     cannot be opened), quit fails with nothing changed. Everything after holds it, and so does what it starts.
+  3. **A second look under the lock**, for both modes: the windows and whether an update runs are read again. An
+     update that began refuses the quit (exit 1); with `--let-finish`, a window busy again lets the lock go and
+     goes back to the wait, within the same deadline (exit 3 when it passes); all with nothing written. The
+     windows the quit reports as stopped are those of this look.
+  4. **`quit.json`** is written (since when, and whether the morning start is paused), so the watchdog and the
+     scheduled learning skip their runs and never restart or alert about what is stopping.
+  5. **The console**: the `console/wanted` marker is removed first (so launchd does not start the job again),
+     then the job is told to stop; a console still running afterwards (the job's slow to exit, or one started by
+     hand, which is not hunted for) is reported as `still running` with its `console_port`.
+  6. **`bosun stop`**, with `--keep-awake` unless `--sleep` (the Mac may sleep now: a plain `bosun stop`, which
+     ends bosun's keep-awake). `--pause-morning` is the `morning_paused` field of `quit.json`; the scheduled wake
+     stays (it needs an administrator to change), so the Mac may wake at its time and sleep again.
+  Exit codes: 0 done; 1 refused (an update runs, or began) or failed; 2 usage; 3 the wait ran out. With `--json`
+  each result is one object with `contract` 1 and the plan's keys, plus `result` (`stopped`, `busy`, `refused`,
+  `failed`) and `error`; when it stopped bosun also `morning_paused`, `keep_awake`, `console` (a fixed set:
+  `stopped`, `not running`, `still running`) and `console_port`. If a step after step 4 fails, `quit.json` stays
+  (bosun is meant to be stopped) and the quit says so, with the two ways out: run `bosun quit --stop-now` again,
+  or `bosun start`. The app then quits itself, unless "Keep bosun in the menu bar" was checked.
+- **`bosun start`** clears the stopped mark, loads the console job, and starts the session as today. `bosun start
+  --unless-quit` instead logs that bosun was quit and exits 0, starting nothing and clearing nothing, checked under
+  the same lock before the clear. The morning run passes it: it clears an unpaused quit when it begins, then runs
+  its setup for minutes, and a quit made in between (even one that paused the morning) must not be undone by its
+  start; a start you type is the way to end a quit, so it never skips. A morning skipped this way logs "bosun quit
+  during the morning run; not starting" and sends no "Sessions ready" notification.
 - **`bosun app install|update|remove|login on|off`**: the app's own lifecycle, which `bosun init`, `bosun update` and
   `bosun uninstall` call.
 
@@ -255,3 +283,16 @@ morning job skip; the console stays down); Start brings back what was running; t
 
 - The exact wording of every line and dialog (the person may refine the copy).
 - The menu bar icon's drawing.
+
+## Changes while building (2026-11-13)
+
+Where what is built differs from what this note said before, or says more:
+
+- Quit's order was "mark stopped first, then wait, then stop". It is now the wait first (so a quit that gives up
+  changes nothing and leaves the watchdog running), then the `windows` lock and a second look, then the mark, the
+  console and `bosun stop`: the mark is still written before anything is stopped, but after the person's say.
+- The stopped mark does not mean the session is gone: a quit record with windows open is an error in status, since
+  `bosun stop` can fail after the record is written.
+- `bosun start --unless-quit` is new, for the morning run, so that a start in flight cannot undo a quit.
+- Quit takes the `windows` lock, which the note did not mention; a start that holds it makes the quit wait.
+- The helpers a pane left (`lib/orphans.py`) are stopped by `bosun stop` itself, not by quit.

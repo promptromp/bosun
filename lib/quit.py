@@ -1,6 +1,6 @@
 """`bosun quit`: stop bosun cleanly, with your say over busy agents, the morning start and the keep-awake
-(design: docs/design/menu-bar.md, "Quit"). Run by libexec/bosun-quit, which parses the command line and the
-settings, and passes them as the options below.
+(design: docs/design/menu-bar.md, "Quit"). This file is the plan, the texts and the run over `Ports`;
+lib/quit_live.py is the world the ports touch, and the command that libexec/bosun-quit runs.
 
 The plan is pure over the windows (`quit_plan`); the run goes through `Ports`, the steps that touch the
 world, which the tests replace. The order of a quit is fixed:
@@ -13,10 +13,14 @@ world, which the tests replace. The order of a quit is fixed:
 2. take the `windows` lock that `bosun start` and `bosun refresh` hold (lib/run_locked.py), waiting for one
    that sets up the windows; the rest holds it, and so does what it starts (`bosun stop`), so a start cannot
    begin in between and undo the quit,
-3. write quit.json (lib/quit_state.py), so the watchdog's next run already skips and never restarts what is
+3. look once more under the lock (the wait, or a start that held it, may have changed things): an update
+   that began refuses the quit, and with --let-finish a window busy again lets the lock go and goes back to
+   the wait, within the same deadline (exit 3 when it passes); all with nothing written. The windows the quit
+   reports stopping are those of this look,
+4. write quit.json (lib/quit_state.py), so the watchdog's next run already skips and never restarts what is
    being stopped,
-4. take the console's launchd marker away and tell its job to stop,
-5. `bosun stop`, with --keep-awake unless the Mac may sleep now. If a step after 3 fails, quit.json stays
+5. take the console's launchd marker away and tell its job to stop,
+6. `bosun stop`, with --keep-awake unless the Mac may sleep now. If a step after 4 fails, quit.json stays
    (bosun is meant to be stopped; `bosun status --json` then says the quit did not finish) and the quit fails
    with the reason and how to finish it.
 
@@ -27,27 +31,11 @@ runs) or failed, 2 usage (libexec/bosun-quit), 3 the wait ran out. Each --json o
 
 from __future__ import annotations
 
-import argparse
-import contextlib
 import json
-import os
-import subprocess
-import sys
-import time
-from collections.abc import Callable, Iterator, Sequence
+from collections.abc import Callable, Sequence
 from contextlib import AbstractContextManager
 from dataclasses import dataclass
-from pathlib import Path
 from typing import Any, TextIO
-
-
-sys.path.insert(0, str(Path(__file__).resolve().parent))
-import console_live
-import console_token
-import keep_awake
-import quit_state
-import run_locked
-import update_state
 
 
 CONTRACT = 1
@@ -62,11 +50,7 @@ RECORD_STAYS = (
     "the quit record stays, so bosun stays stopped: run `bosun quit --stop-now` again to finish, "
     "or `bosun start` to start bosun again"
 )
-CONSOLE_POLL_SECONDS = 0.5
-CONSOLE_WAIT_SECONDS = 5
 CONSOLE_STOPPED, CONSOLE_NONE, CONSOLE_STILL = "stopped", "not running", "still running"
-LAUNCHCTL_TIMEOUT_SECONDS = 20
-STOP_TIMEOUT_SECONDS = 120
 
 
 class QuitError(Exception):
@@ -95,7 +79,8 @@ class Ports:
     keep_awake_until: Callable[[], str | None]  # HH:MM
     lock: Callable[[], AbstractContextManager[None]]  # the windows lock; QuitError if it stays taken
     write_quit: Callable[[bool], None]  # morning_paused
-    stop_console: Callable[[], str]  # CONSOLE_STOPPED, CONSOLE_NONE or CONSOLE_STILL (+ " on port N")
+    stop_console: Callable[[], tuple[str, int | None]]  # CONSOLE_STOPPED, CONSOLE_NONE or CONSOLE_STILL, and
+    # the port of one still running
     stop_bosun: Callable[[bool], None]  # keep_awake; raises QuitError with the reason
     sleep: Callable[[float], None]
     clock: Callable[[], float]
@@ -164,10 +149,11 @@ def look(ports: Ports, mode: str) -> tuple[list[Window] | None, dict[str, Any]]:
     return windows, plan
 
 
-def wait_until_nothing_is_busy(options: Options, ports: Ports, err: TextIO) -> dict[str, Any]:
-    """The plan as it is when no window is busy, or when the minutes ran out (its `busy` is not empty), or
-    when an update began (`refused`). Says on <err> once, when it begins to wait, who it waits for."""
-    deadline = ports.clock() + options.wait_minutes * 60
+def wait_until_nothing_is_busy(
+    options: Options, ports: Ports, deadline: float, err: TextIO
+) -> dict[str, Any]:
+    """The plan as it is when no window is busy, or when <deadline> passed (its `busy` is not empty), or when
+    an update began (`refused`). Says on <err>, when it begins to wait, who it waits for."""
     said = False
     while True:
         _windows, plan = look(ports, options.mode)
@@ -186,20 +172,27 @@ def wait_until_nothing_is_busy(options: Options, ports: Ports, err: TextIO) -> d
 def stop_steps(options: Options, ports: Ports, result: dict[str, Any]) -> None:
     """What follows the quit record: the console, then bosun stop. A failure says how to finish."""
     try:
-        result["console"] = ports.stop_console()
+        result["console"], result["console_port"] = ports.stop_console()
         ports.stop_bosun(not options.sleep)
     except QuitError as exc:
         raise QuitError(f"{exc}; {RECORD_STAYS}") from exc
 
 
-def stop(options: Options, ports: Ports, plan: dict[str, Any]) -> dict[str, Any]:
-    """The steps, in order, under the windows lock. A step that fails ends the quit there, with its reason;
-    quit.json, once written, stays (bosun is meant to be stopped)."""
+def locked_steps(options: Options, ports: Ports) -> dict[str, Any]:
+    """Under the windows lock: look once more (what the wait saw may be minutes old, and a start that held
+    the lock may have changed the windows), then the steps, in order. An update that began refuses the quit,
+    and with --let-finish a window busy again leaves it to wait on (`busy`), both with nothing written. A step
+    that fails ends the quit there, with its reason; quit.json, once written, stays (bosun is meant to be
+    stopped). The windows listed are those of this look."""
+    _windows, plan = look(ports, options.mode)
+    if plan["refused"]:
+        return dict(plan, result="refused")
+    if plan["busy"] and options.mode == "finish":
+        return dict(plan, result="busy")
     result = dict(plan, result="stopped", morning_paused=options.pause_morning, error=None)
     try:
-        with ports.lock():
-            ports.write_quit(options.pause_morning)
-            stop_steps(options, ports, result)
+        ports.write_quit(options.pause_morning)
+        stop_steps(options, ports, result)
     except QuitError as exc:
         result.update(result="failed", error=str(exc))
         return result
@@ -209,6 +202,16 @@ def stop(options: Options, ports: Ports, plan: dict[str, Any]) -> dict[str, Any]
     else:
         result["keep_awake"] = f"kept until {until}" if until else None
     return result
+
+
+def stop(options: Options, ports: Ports) -> dict[str, Any]:
+    """The quit's last phase, holding the windows lock; a lock that stays taken, or cannot be opened, or a
+    reading that fails under it, fails the quit with nothing written."""
+    try:
+        with ports.lock():
+            return locked_steps(options, ports)
+    except QuitError as exc:
+        return failed_object(str(exc))
 
 
 def stopped_text(result: dict[str, Any]) -> str:
@@ -225,9 +228,10 @@ def stopped_text(result: dict[str, Any]) -> str:
         lines.append(f"The Mac: keep-awake {result['keep_awake']}")
     if result["console"] == CONSOLE_STOPPED:
         lines.append("The console's job is stopped; it comes back with: bosun start")
-    elif result["console"].startswith(CONSOLE_STILL):
+    elif result["console"] == CONSOLE_STILL:
+        port = f" on port {result['console_port']}" if result.get("console_port") else ""
         lines.append(
-            f"A console is {result['console']}: the job's may still be exiting; if it stays, or it is one "
+            f"A console is still running{port}: the job's may still be exiting; if it stays, or it is one "
             "you started by hand, stop it where you started it"
         )
     if result.get("note"):
@@ -251,6 +255,28 @@ def finish(options: Options, result: dict[str, Any], out: TextIO, err: TextIO) -
     return status
 
 
+def first_plan(options: Options, ports: Ports, deadline: float, err: TextIO) -> dict[str, Any]:
+    """The plan the quit goes on from: with --let-finish after the wait for the busy windows."""
+    if options.mode == "finish":
+        return wait_until_nothing_is_busy(options, ports, deadline, err)
+    return look(ports, options.mode)[1]
+
+
+def quit_it(options: Options, ports: Ports, err: TextIO) -> dict[str, Any]:
+    """The result of a quit (not of a plan): refused, busy (the wait ran out), failed or stopped. Busy again
+    under the lock, with time left, goes back to waiting, as the same deadline's."""
+    deadline = ports.clock() + options.wait_minutes * 60
+    while True:
+        plan = first_plan(options, ports, deadline, err)
+        if plan["refused"]:
+            return dict(plan, result="refused")
+        if plan["busy"] and options.mode == "finish":
+            return dict(plan, result="busy")
+        result = stop(options, ports)
+        if result["result"] != "busy" or ports.clock() >= deadline:
+            return result
+
+
 def run(options: Options, ports: Ports, out: TextIO, err: TextIO) -> int:
     """The quit as <options> say. Returns the exit status."""
     try:
@@ -258,186 +284,7 @@ def run(options: Options, ports: Ports, out: TextIO, err: TextIO) -> int:
             _windows, plan = look(ports, options.mode)
             print(json.dumps(plan) if options.json else plan_text(plan), file=out)
             return 0
-        if options.mode == "finish":
-            plan = wait_until_nothing_is_busy(options, ports, err)
-        else:
-            plan = look(ports, options.mode)[1]
+        result = quit_it(options, ports, err)
     except QuitError as exc:
-        return finish(options, failed_object(str(exc)), out, err)
-    if plan["refused"]:
-        return finish(options, dict(plan, result="refused"), out, err)
-    if plan["busy"] and options.mode == "finish":
-        return finish(options, dict(plan, result="busy"), out, err)
-    return finish(options, stop(options, ports, plan), out, err)
-
-
-# ---- the world -------------------------------------------------------------------------------------
-
-
-@dataclass(frozen=True)
-class World:
-    """What the live ports need to know of this install, as libexec/bosun-quit passes it."""
-
-    state_dir: Path
-    session: str
-    console_label: str
-    console_marker: Path
-    lock_wait: float  # seconds to wait for a start or refresh that holds the windows lock
-
-
-def read_windows() -> list[Window]:
-    try:
-        listing = console_live.bosun_json(console_live.run_command, "sessions", "--json")
-    except console_live.LiveError as exc:
-        raise QuitError(f"the windows could not be read: {exc}") from exc
-    if not isinstance(listing, list):
-        raise QuitError("the windows could not be read: sessions --json gave no list")
-    return windows_from_sessions(listing)
-
-
-def keep_awake_clock(world: World) -> str | None:
-    until = keep_awake.keep_awake_until(world.state_dir, world.session)
-    return f"{until:%H:%M}" if until is not None else None
-
-
-def lock_fd_open() -> bool:
-    """Whether the windows lock's descriptor is open in this process (inside the lock)."""
-    try:
-        os.fstat(run_locked.LOCK_FD)
-    except OSError:
-        return False
-    return True
-
-
-@contextlib.contextmanager
-def windows_lock(world: World) -> Iterator[None]:
-    """Hold the `windows` lock (what `bosun start` takes: one_at_a_time) for the body, on run_locked.LOCK_FD
-    so that what the body starts inherits it. Under one already (a parent holds it) nothing is taken."""
-    path = str(world.state_dir / "windows.lock")
-    if run_locked.held(path):
-        yield
-        return
-    fd = run_locked.acquire(path, world.lock_wait)
-    if fd is None:
-        raise QuitError(LOCK_BUSY)
-    if fd != run_locked.LOCK_FD:
-        os.dup2(fd, run_locked.LOCK_FD)  # inheritable, unlike the descriptor os.open made
-        os.close(fd)
-    try:
-        yield
-    finally:
-        os.close(run_locked.LOCK_FD)
-
-
-def launchctl(*args: str) -> bool:
-    """Whether `launchctl <args>` succeeded; a missing launchctl or a slow one is a no."""
-    try:
-        return (
-            subprocess.run(  # our own argv, no shell
-                ["launchctl", *args],
-                capture_output=True,
-                stdin=subprocess.DEVNULL,
-                timeout=LAUNCHCTL_TIMEOUT_SECONDS,
-                check=False,
-            ).returncode
-            == 0
-        )
-    except (OSError, subprocess.TimeoutExpired):
-        return False
-
-
-def stop_console(world: World) -> str:
-    """The console's job stopped, and said so. The marker goes first: it is the job's KeepAlive condition,
-    so launchd does not start it again. A console that still runs afterwards is said, with its port: the
-    job's may be slow to exit, or it was started by hand, which is not hunted for."""
-    try:
-        world.console_marker.unlink(missing_ok=True)
-    except OSError as exc:
-        raise QuitError(
-            f"could not remove {world.console_marker}, which keeps the console job up: {exc}"
-        ) from exc
-    was_running = console_token.running(world.state_dir)
-    target = f"gui/{os.getuid()}/{world.console_label}"
-    if launchctl("print", target):  # a missing job (BOSUN_CONSOLE_ALWAYS=0) is no failure
-        launchctl("kill", "TERM", target)
-        deadline = time.monotonic() + CONSOLE_WAIT_SECONDS
-        while console_token.running(world.state_dir) and time.monotonic() < deadline:
-            time.sleep(CONSOLE_POLL_SECONDS)
-    if console_token.running(world.state_dir):
-        port = console_token.served_port(world.state_dir)
-        return f"{CONSOLE_STILL} on port {port}" if port else CONSOLE_STILL
-    return CONSOLE_STOPPED if was_running else CONSOLE_NONE
-
-
-def write_quit(world: World, paused: bool) -> None:
-    try:
-        quit_state.write(world.state_dir, paused)
-    except OSError as exc:
-        raise QuitError(f"could not write {quit_state.QUIT_FILE}: {exc}") from exc
-
-
-def stop_bosun(keep_awake_stays: bool) -> None:
-    """`bosun stop` (--keep-awake: the Mac's keep-awake stays), holding the windows lock if this does; its
-    last line is the reason if it fails."""
-    argv = [str(console_live.BOSUN), "stop", *(["--keep-awake"] if keep_awake_stays else [])]
-    try:
-        result = subprocess.run(  # our own argv, no shell
-            argv,
-            capture_output=True,
-            text=True,
-            stdin=subprocess.DEVNULL,
-            timeout=STOP_TIMEOUT_SECONDS,
-            check=False,
-            pass_fds=(run_locked.LOCK_FD,) if lock_fd_open() else (),
-        )
-    except (OSError, subprocess.TimeoutExpired) as exc:
-        raise QuitError(f"bosun stop did not finish: {exc}") from exc
-    if result.returncode != 0:
-        last = ((result.stderr or result.stdout).strip().splitlines() or ["no output"])[-1]
-        raise QuitError(f"bosun stop failed: {last}")
-
-
-def live_ports(world: World) -> Ports:
-    return Ports(
-        read_windows=read_windows,
-        updating=lambda: update_state.running(world.state_dir),
-        keep_awake_until=lambda: keep_awake_clock(world),
-        lock=lambda: windows_lock(world),
-        write_quit=lambda paused: write_quit(world, paused),
-        stop_console=lambda: stop_console(world),
-        stop_bosun=stop_bosun,
-        sleep=time.sleep,
-        clock=time.monotonic,
-    )
-
-
-def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(prog="quit.py", allow_abbrev=False)
-    parser.add_argument("--mode", choices=("plan", "finish", "now"))
-    parser.add_argument("--wait-minutes", type=int, default=0)
-    parser.add_argument("--pause-morning", action="store_true")
-    parser.add_argument("--sleep", action="store_true")
-    parser.add_argument("--json", action="store_true")
-    parser.add_argument("--state-dir", type=Path)
-    parser.add_argument("--session")
-    parser.add_argument("--console-label")
-    parser.add_argument("--console-marker", type=Path)
-    parser.add_argument("--lock-wait", type=float, default=0.0)
-    parser.add_argument("--error", metavar="TEXT", help="only say that the quit failed, and why")
-    return parser
-
-
-def main(argv: list[str]) -> int:
-    parser = build_parser()
-    args = parser.parse_args(argv)
-    options = Options(args.mode or "plan", args.wait_minutes, args.pause_morning, args.sleep, args.json)
-    if args.error is not None:  # the wrapper's own refusal, in the shape its caller asked for
-        return finish(options, failed_object(args.error), sys.stdout, sys.stderr)
-    if None in (args.mode, args.state_dir, args.session, args.console_label, args.console_marker):
-        parser.error("--mode, --state-dir, --session, --console-label and --console-marker are required")
-    world = World(args.state_dir, args.session, args.console_label, args.console_marker, args.lock_wait)
-    return run(options, live_ports(world), sys.stdout, sys.stderr)
-
-
-if __name__ == "__main__":
-    sys.exit(main(sys.argv[1:]))
+        result = failed_object(str(exc))
+    return finish(options, result, out, err)

@@ -2614,18 +2614,29 @@ check "... no session, quit.json without the morning paused" bash -c '! tmux -L 
 check "... the caffeinate is gone, with its files" bash -c '[ ! -e "$1/keep-awake-smoke.pid" ] && [ ! -e "$1/keep-awake-smoke.json" ]' _ "$BOSUN_STATE_DIR"
 check "... and the process" wait_for 5 bash -c '! ps -p "$1" -o comm= 2>/dev/null | grep -q caffeinate' _ "$quit_caffeinate"
 check "... the console's job was told to stop again" test "$(console_told_to_stop)" = 2
+# A notification stand-in that writes down what it was asked to show (~/.local/bin comes first on the PATH);
+# the plain `exit 0` one is put back after the morning checks below.
+printf '#!/bin/sh\nprintf "%%s\\n" "$*" >>"%s"\n' "$WORK/quit-notify.log" >"$HOME/.local/bin/osascript"
+chmod +x "$HOME/.local/bin/osascript"
+: >"$WORK/quit-notify.log"
 check "a morning that was not paused starts bosun again, through bosun start: the quit is over and the console's marker is back" bash -c '
   PATH="$5:$PATH" BOSUN_CONSOLE_ALWAYS=1 BOSUN_NETWORK_PROBE_URL=file:///dev/null "$1" morning --skip-setup --awake-minutes 1 >/dev/null 2>&1
   [ ! -e "$2/quit.json" ] && [ -f "$2/console/wanted" ] && tmux -L "$3" has-session -t =smoke' _ "$BOSUN" "$BOSUN_STATE_DIR" "$SOCKET" "" "$WORK/fake-caffeinate"
+check "... and tells you the sessions are ready (the control for the check below)" grep -q "Sessions ready" "$WORK/quit-notify.log"
 "$BOSUN" stop >/dev/null 2>&1
 rm -f "$BOSUN_STATE_DIR/quit.json" "$BOSUN_STATE_DIR/console/wanted"
+: >"$WORK/quit-notify.log"
 
 # The morning clears an unpaused quit, runs its setup (minutes), then starts: a quit made in between must
 # survive that start, even one that did not pause the morning.
 printf 'setup_steps() { python3 -I -c "import sys; from pathlib import Path; sys.path.insert(0, sys.argv[1]); import quit_state; quit_state.write(Path(sys.argv[2]), True)" "%s" "%s"; }\n' \
   "$ROOT/lib" "$BOSUN_STATE_DIR" >"$WORK/quit-during-setup.sh"
 quit_morning_out="$(PATH="$WORK/fake-caffeinate:$PATH" BOSUN_SETUP_FILE="$WORK/quit-during-setup.sh" BOSUN_NETWORK_PROBE_URL=file:///dev/null "$BOSUN" morning --awake-minutes 1 2>&1 </dev/null)"
+quit_morning_rc=$?
 check "a quit made while the morning sets up survives the morning's start, which logs that and starts nothing" bash -c 'grep -q "bosun was quit at [0-9:]*: not starting it" <<<"$1" && [ -f "$2/quit.json" ] && ! tmux -L "$3" has-session -t =smoke' _ "$quit_morning_out" "$BOSUN_STATE_DIR" "$SOCKET"
+check "... the morning then logs that a quit came during it, not that it completed, and exits 0" bash -c 'grep -q "bosun quit during the morning run; not starting" <<<"$1" && ! grep -q "morning run complete" <<<"$1" && [ "$2" -eq 0 ]' _ "$quit_morning_out" "$quit_morning_rc"
+check "... and does not tell you the sessions are ready" bash -c '! grep -q "Sessions ready" "$1"' _ "$WORK/quit-notify.log"
+printf '#!/bin/sh\nexit 0\n' >"$HOME/.local/bin/osascript" # no real notifications from tests
 check "bosun start --unless-quit with a quit record starts nothing, clears nothing, exits 0" bash -c '"$1" start --unless-quit >/dev/null 2>&1 && [ -f "$2/quit.json" ] && ! tmux -L "$3" has-session -t =smoke' _ "$BOSUN" "$BOSUN_STATE_DIR" "$SOCKET"
 "$BOSUN" start >/dev/null 2>&1
 check "... while a plain bosun start, the person's own act, still ends the quit" bash -c '[ ! -e "$1/quit.json" ] && tmux -L "$2" has-session -t =smoke' _ "$BOSUN_STATE_DIR" "$SOCKET"

@@ -110,6 +110,22 @@ wait_for_update_hold() {
   done
 }
 
+# The run's last word: complete and notify, or (a quit came during the run, so its start skipped) that
+# bosun was not started, with no "Sessions ready", or the problems and exit 1.
+report_result() {
+  if [ ${#problems[@]} -gt 0 ]; then
+    log "morning run finished with problems: ${problems[*]} (log: $LOG_FILE)"
+    notify "bosun: needs attention" "Problems: ${problems[*]}. See $LOG_FILE"
+    exit 1
+  fi
+  if [ "${quit_during:-0}" = 1 ]; then
+    log "bosun quit during the morning run; not starting"
+    return
+  fi
+  log "morning run complete"
+  notify "bosun" "Sessions ready in tmux '$BOSUN_SESSION_NAME'"
+}
+
 log "=== morning run (trigger=${BOSUN_TRIGGER:-manual}, session=$BOSUN_SESSION_NAME, dry_run=$DRY_RUN) ==="
 if quit_at="$(quit_paused)"; then
   log "the morning start is paused (bosun quit at $quit_at); start bosun to resume"
@@ -153,17 +169,13 @@ if [ "$DRY_RUN" = "1" ]; then
   fi
 else
   "$BOSUN" start --unless-active --unless-quit || problems+=("tmux")
+  # A quit made while this run set up: that start skipped (and a quit that came after it stopped bosun).
+  quit_during=0
+  quit_stopped >/dev/null && quit_during=1
   # The Impact view's daily snapshot: in the background, so a slow GitHub never delays the run.
-  if [ "$BOSUN_IMPACT_COLLECT" = "1" ]; then
+  if [ "$quit_during" = 0 ] && [ "$BOSUN_IMPACT_COLLECT" = "1" ]; then
     "$BOSUN" impact collect >>"$BOSUN_LOG_DIR/impact-$(date +%F).log" 2>&1 &
   fi
 fi
 
-if [ ${#problems[@]} -eq 0 ]; then
-  log "morning run complete"
-  notify "bosun" "Sessions ready in tmux '$BOSUN_SESSION_NAME'"
-else
-  log "morning run finished with problems: ${problems[*]} (log: $LOG_FILE)"
-  notify "bosun: needs attention" "Problems: ${problems[*]}. See $LOG_FILE"
-  exit 1
-fi
+report_result

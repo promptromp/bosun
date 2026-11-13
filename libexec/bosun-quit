@@ -20,9 +20,11 @@
 #                   morning started goes on until its time)
 #   --json          one object, `contract` 1, instead of text: the plan, and for a quit its `result`
 #                   (stopped, busy, refused or failed), what was kept and the console's state
-# The order: the `windows` lock that `bosun start` holds is taken (a start in the middle of setting up
-# the windows is waited for, up to BOSUN_WINDOWS_LOCK_WAIT_SECONDS, else nothing changes and it fails);
-# quit.json is written, so the watchdog's next run already skips and never restarts what is being stopped;
+# The order: the --let-finish wait; then the `windows` lock that `bosun start` holds is taken (a start in
+# the middle of setting up the windows is waited for, up to BOSUN_WINDOWS_LOCK_WAIT_SECONDS, else nothing
+# changes and it fails); the windows and any update are looked at once more under it (an update that began
+# refuses the quit; with --let-finish a window busy again lets the lock go and goes back to the wait, to
+# the same deadline); then quit.json is written, so the watchdog's next run already skips and never restarts what is being stopped;
 # the console's launchd job (BOSUN_CONSOLE_ALWAYS=1) is stopped; then `bosun stop` (with --keep-awake
 # unless --sleep). If a step after quit.json fails, quit.json stays, `bosun status --json` says the quit
 # did not finish, and the quit says so: run `bosun quit --stop-now` again, or `bosun start`.
@@ -72,7 +74,7 @@ load_config
 # refuse <message>: exit 1, as the object a caller reading --json expects, else as a line.
 refuse() {
   if [ "$json" = 1 ]; then
-    python3 "$BOSUN_ROOT/lib/quit.py" --json --error "$1"
+    python3 "$BOSUN_ROOT/lib/quit_live.py" --json --error "$1"
     exit 1
   fi
   die "$1"
@@ -90,4 +92,4 @@ args=(--mode "$mode" --wait-minutes "$wait_minutes" --state-dir "$BOSUN_STATE_DI
 [ "$pause" = 1 ] && args+=(--pause-morning)
 [ "$sleep_now" = 1 ] && args+=(--sleep)
 [ "$json" = 1 ] && args+=(--json)
-exec python3 "$BOSUN_ROOT/lib/quit.py" "${args[@]}"
+exec python3 "$BOSUN_ROOT/lib/quit_live.py" "${args[@]}"
