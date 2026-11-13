@@ -1,8 +1,10 @@
 """What the smoke suite keeps between runs (tests/smoke_cache.sh, tests/.smoke-cache/): each section's last
 result for `--last-failed`, and the tree a whole run passed for `--pre-push`. Checked here without running
 the suite: the shell functions are sourced and called on their own, in scratch folders and a scratch git
-repository, and the options of tests/smoke.sh that reach no section (a usage error, nothing to run, a skip)
-are run for real.
+repository; the options of tests/smoke.sh that reach no section (a usage error, nothing to run, a skip) are
+run for real; and the ones that run sections go through a script generated for the test, with the real
+script's setup and its `section`/`check` machinery around three fake sections. No real section runs here:
+they need macOS's tools and take minutes.
 
 The rule under test is that the cache can only make the suite run: an unreadable or odd record, another tree,
 a record a day old, a failed or partial or changed run all mean the whole suite runs."""
@@ -10,6 +12,8 @@ a record a day old, a failed or partial or changed run all mean the whole suite 
 from __future__ import annotations
 
 import os
+import re
+import shutil
 import subprocess
 import tempfile
 import time
@@ -51,6 +55,48 @@ def smoke(*args: str, cache: Path, **env: str) -> subprocess.CompletedProcess[st
         env=clean_env(SMOKE_CACHE_DIR=str(cache), **env),
         stdin=subprocess.DEVNULL,
     )
+
+
+# The sections of a generated script. beta and gamma fail on purpose when the environment says so, alpha
+# leaves a file in the checkout it runs on (a bug in a test, which a whole run must notice) or an ignored one.
+FAKE_SECTIONS = """section alpha "the first fake section"
+check "alpha one" true
+[ -z "${FAKE_LEAVE:-}" ] || touch "$ROOT/left-behind.txt"
+[ -z "${FAKE_IGNORED:-}" ] || { mkdir -p "$ROOT/cache" && touch "$ROOT/cache/artifact"; }
+section beta "the second, which can fail on purpose"
+check "beta before" true
+check "beta fails when asked" test -z "${FAKE_BETA_FAILS:-}"
+check "beta after" true
+section gamma "the third, which needs the first" needs alpha
+check "gamma fails when asked" test -z "${FAKE_GAMMA_FAILS:-}"
+"""
+
+
+def fake_suite(directory: Path) -> Path:
+    """tests/smoke.sh with its sections replaced by the fake ones: its setup (options, the fake-tool
+    guard, `section`, `check`, the cache) up to the first section, and its end (the repository check, the
+    summary)."""
+    text = SMOKE.read_text()
+    first = re.search(r"^section syntax ", text, re.MULTILINE)
+    last = re.search(r'^always_run "the repository this ran from"', text, re.MULTILINE)
+    assert first is not None and last is not None
+    script = directory / "smoke-fake.sh"
+    script.write_text(text[: first.start()] + FAKE_SECTIONS + "always_run\n" + text[last.start() :])
+    return script
+
+
+def scratch_checkout(directory: Path) -> Path:
+    """A git repository that looks enough like this checkout to run the setup in: bosun's lib/ (linked) and
+    the cache functions. Its `cache/` is ignored."""
+    root = directory / "checkout"
+    (root / "tests").mkdir(parents=True)
+    (root / "lib").symlink_to(ROOT / "lib")
+    shutil.copy(LIB, root / "tests" / "smoke_cache.sh")
+    (root / ".gitignore").write_text("cache/\n")
+    git(root, "init", "-q")
+    git(root, "add", "-A")
+    git(root, "commit", "-q", "-m", "scratch")
+    return root
 
 
 def git(repo: Path, *args: str) -> str:
@@ -167,14 +213,6 @@ class RecordedPassesTest(Scratch):
         self.assertEqual(self.record("not-a-tree", "not-a-tree"), 2)
         self.assertEqual(self.lines("passes"), [])
 
-    def test_a_partial_run_leaves_no_record(self) -> None:
-        """Only the whole run records a pass: a partial one never reaches the passes file."""
-        cache = self.dir / "cache"
-        result = smoke("--only", "resolve", cache=cache)
-        self.assertEqual(result.returncode, 0, result.stdout[-400:] + result.stderr)
-        self.assertEqual((cache / "sections").read_text().split(), ["resolve", "pass"])
-        self.assertFalse((cache / "passes").exists())
-
     def test_an_unreadable_or_odd_record_runs_the_suite(self) -> None:
         for content in (
             "",
@@ -226,7 +264,9 @@ class PrePushTest(RecordedPassesTest):
 
     def test_a_commit_with_another_tree_runs_the_suite(self) -> None:
         self.record(self.head_tree(), self.head_tree())
-        self.assertEqual(self.skips("HEAD~1", now=NOW + 60).returncode, 1)
+        empty = git(ROOT, "hash-object", "-t", "tree", "/dev/null")  # a tree that is not this checkout's
+        self.assertNotEqual(empty, self.head_tree())
+        self.assertEqual(self.skips(empty, now=NOW + 60).returncode, 1)
 
     def test_a_stale_record_runs_the_suite(self) -> None:
         self.record(self.head_tree(), self.head_tree())
@@ -363,6 +403,170 @@ class TreeOfCheckoutTest(Scratch):
         self.assertEqual((result.returncode, result.stdout), (1, ""))
 
 
+class FakeSuiteTest(Scratch):
+    """-x, --last-failed and the record of a whole run, through the real script's own setup and `section` and
+    `check`, around the fake sections."""
+
+    def setUp(self) -> None:
+        super().setUp()
+        self.root = scratch_checkout(self.dir)
+        self.script = fake_suite(self.dir)
+        self.cache = self.dir / "cache"
+
+    def run_suite(self, *args: str, **env: str) -> subprocess.CompletedProcess[str]:
+        return subprocess.run(
+            ["/bin/bash", str(self.script), *args],
+            capture_output=True,
+            text=True,
+            check=False,
+            env=clean_env(SMOKE_ROOT=str(self.root), SMOKE_CACHE_DIR=str(self.cache), **env),
+            stdin=subprocess.DEVNULL,
+        )
+
+    def results(self) -> dict[str, str]:
+        path = self.cache / "sections"
+        return dict(line.split() for line in path.read_text().splitlines()) if path.exists() else {}
+
+    def recorded_passes(self) -> str:
+        path = self.cache / "passes"
+        return path.read_text() if path.exists() else ""
+
+    def test_a_whole_run_records_every_section_and_the_tree_it_passed(self) -> None:
+        result = self.run_suite()
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("6 passed, 0 failed\n", result.stdout)
+        self.assertEqual(self.results(), {"alpha": "pass", "beta": "pass", "gamma": "pass"})
+        tree = git(self.root, "rev-parse", "HEAD^{tree}")
+        self.assertRegex((self.cache / "passes").read_text(), rf"^{tree} 6 \d+\n$")
+
+    def test_exitfirst_stops_at_the_first_failure_and_says_where(self) -> None:
+        result = self.run_suite("-x", FAKE_BETA_FAILS="1")
+        self.assertEqual(result.returncode, 1, result.stdout)
+        self.assertIn("  FAIL  beta fails when asked", result.stdout)
+        self.assertNotIn("beta after", result.stdout)
+        self.assertNotIn("the third", result.stdout)
+        self.assertIn("2 passed, 1 failed\n", result.stdout)
+        self.assertIn(
+            "stopped at the first failure (-x): section beta, check: beta fails when asked", result.stdout
+        )
+        self.assertEqual(self.results(), {"alpha": "pass", "beta": "fail"})  # gamma never ran
+        self.assertEqual(self.recorded_passes(), "")
+
+    def test_without_exitfirst_the_run_goes_on_past_a_failure(self) -> None:
+        result = self.run_suite(FAKE_BETA_FAILS="1")
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("beta after", result.stdout)
+        self.assertNotIn("stopped at the first failure", result.stdout)
+        self.assertEqual(self.results(), {"alpha": "pass", "beta": "fail", "gamma": "pass"})
+
+    def test_exitfirst_works_with_only(self) -> None:
+        result = self.run_suite("-x", "--only", "gamma", FAKE_GAMMA_FAILS="1")
+        self.assertEqual(result.returncode, 1, result.stdout)
+        self.assertIn("section gamma, check: gamma fails when asked", result.stdout)
+        self.assertIn("a partial run", result.stdout)
+
+    def test_a_failing_whole_run_forgets_the_pass_of_the_same_tree(self) -> None:
+        self.assertEqual(self.run_suite().returncode, 0)
+        self.assertTrue((self.cache / "passes").read_text())
+        self.assertEqual(self.run_suite(FAKE_BETA_FAILS="1").returncode, 1)
+        self.assertEqual((self.cache / "passes").read_text(), "")
+
+    def test_last_failed_reruns_only_the_failed_section_and_records_its_new_result(self) -> None:
+        self.assertEqual(self.run_suite(FAKE_BETA_FAILS="1").returncode, 1)
+        rerun = self.run_suite("--last-failed")  # the failure fixed
+        self.assertEqual(rerun.returncode, 0, rerun.stdout)
+        self.assertIn("--last-failed: rerunning the sections that failed: beta\n", rerun.stdout)
+        self.assertIn("the second, which can fail on purpose", rerun.stdout)
+        self.assertNotIn("the first fake section", rerun.stdout)
+        self.assertNotIn("the third", rerun.stdout)
+        self.assertIn("a partial run, not the whole suite: beta", rerun.stdout)
+        self.assertEqual(self.results(), {"alpha": "pass", "beta": "pass", "gamma": "pass"})
+        again = self.run_suite("--last-failed")
+        self.assertEqual(again.returncode, 0)
+        self.assertEqual(again.stdout, "--last-failed: no section is recorded as failed; nothing to run\n")
+
+    def test_last_failed_still_failing_stays_recorded_as_failed(self) -> None:
+        self.assertEqual(self.run_suite(FAKE_BETA_FAILS="1").returncode, 1)
+        rerun = self.run_suite("--last-failed", FAKE_BETA_FAILS="1")
+        self.assertEqual(rerun.returncode, 1)
+        self.assertEqual(self.results()["beta"], "fail")
+
+    def test_last_failed_brings_in_what_the_failed_section_needs(self) -> None:
+        self.assertEqual(self.run_suite(FAKE_GAMMA_FAILS="1").returncode, 1)
+        rerun = self.run_suite("--last-failed", "-x")
+        self.assertEqual(rerun.returncode, 0, rerun.stdout)
+        self.assertIn("rerunning the sections that failed: gamma", rerun.stdout)
+        self.assertIn("(and, as they need them: alpha)", rerun.stdout)
+        self.assertEqual(self.results()["gamma"], "pass")
+
+    def test_a_partial_run_changes_only_the_sections_it_ran(self) -> None:
+        self.cache.mkdir()
+        (self.cache / "sections").write_text("alpha fail\nbeta fail\ngamma pass\n")
+        self.assertEqual(self.run_suite("--only", "alpha").returncode, 0)
+        self.assertEqual(self.results(), {"alpha": "pass", "beta": "fail", "gamma": "pass"})
+
+    def test_a_partial_run_leaves_no_record_of_a_pass(self) -> None:
+        """Only a whole run records a tree: a partial one never reaches the passes file."""
+        self.assertEqual(self.run_suite("--only", "alpha").returncode, 0)
+        self.assertFalse((self.cache / "passes").exists())
+
+    def test_a_file_a_run_leaves_in_the_checkout_means_no_pass_and_is_named(self) -> None:
+        result = self.run_suite(FAKE_LEAVE="1")
+        self.assertEqual(
+            result.returncode, 0, result.stdout
+        )  # the checks passed; the record is what is refused
+        self.assertIn(
+            "the run changed the repository, so this tree is not recorded as passing: left-behind.txt",
+            result.stdout,
+        )
+        self.assertFalse((self.cache / "passes").exists())
+
+    def test_an_ignored_artifact_a_run_leaves_still_records_the_pass(self) -> None:
+        result = self.run_suite(FAKE_IGNORED="1")
+        self.assertEqual(result.returncode, 0, result.stdout)
+        self.assertNotIn("changed the repository", result.stdout)
+        self.assertTrue((self.root / "cache" / "artifact").exists())
+        self.assertTrue((self.cache / "passes").read_text())
+
+    def test_an_untracked_file_at_the_start_is_in_the_tree_so_the_commit_without_it_does_not_match(
+        self,
+    ) -> None:
+        (self.root / "scratch.txt").write_text("there before the run\n")
+        self.assertEqual(self.run_suite().returncode, 0)
+        # HEAD, the commit that would be pushed, lacks the file: another tree
+        skip = subprocess.run(
+            ["/bin/bash", str(self.script), "--pre-push"],
+            capture_output=True,
+            text=True,
+            check=False,
+            env=clean_env(
+                SMOKE_ROOT=str(self.root),
+                SMOKE_CACHE_DIR=str(self.cache),
+                PRE_COMMIT_TO_REF="HEAD",
+            ),
+            stdin=subprocess.DEVNULL,
+        )
+        self.assertNotIn("skipping", skip.stdout)  # it runs the suite instead
+        self.assertIn("the first fake section", skip.stdout)
+
+    def test_pre_push_skips_a_commit_whose_tree_a_whole_run_passed(self) -> None:
+        self.assertEqual(self.run_suite().returncode, 0)
+        skip = subprocess.run(
+            ["/bin/bash", str(self.script), "--pre-push"],
+            capture_output=True,
+            text=True,
+            check=False,
+            env=clean_env(
+                SMOKE_ROOT=str(self.root),
+                SMOKE_CACHE_DIR=str(self.cache),
+                PRE_COMMIT_TO_REF="HEAD",
+            ),
+            stdin=subprocess.DEVNULL,
+        )
+        self.assertEqual(skip.returncode, 0, skip.stdout)
+        self.assertRegex(skip.stdout, r"^smoke already passed on this exact tree at .*: skipping\n$")
+
+
 class OptionsTest(Scratch):
     def test_last_failed_with_nothing_recorded_says_so_in_one_line_and_runs_nothing(self) -> None:
         cache = self.dir / "cache"
@@ -381,20 +585,6 @@ class OptionsTest(Scratch):
         result = smoke("--last-failed", cache=cache)
         self.assertEqual(result.returncode, 0)
         self.assertIn("no section is recorded as failed", result.stdout)
-
-    def test_last_failed_reruns_the_failed_section_and_records_its_new_result(self) -> None:
-        cache = self.dir / "cache"
-        cache.mkdir()
-        (cache / "sections").write_text("resolve pass\ntemplates fail\n")
-        result = smoke("--last-failed", "-x", cache=cache)
-        self.assertEqual(result.returncode, 0, result.stdout[-500:] + result.stderr)
-        self.assertIn("--last-failed: rerunning the sections that failed: templates", result.stdout)
-        self.assertIn("a partial run, not the whole suite: templates", result.stdout)
-        self.assertNotIn("\nresolve\n", result.stdout)
-        self.assertEqual(
-            sorted((cache / "sections").read_text().splitlines()), ["resolve pass", "templates pass"]
-        )
-        self.assertFalse((cache / "passes").exists())
 
     def test_the_options_that_choose_sections_do_not_combine(self) -> None:
         cache = self.dir / "cache"
