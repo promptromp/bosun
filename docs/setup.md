@@ -17,6 +17,11 @@ Requirements, installation and configuration, and the morning's logins.
   [Running repo sessions on Codex](#running-repo-sessions-on-codex)
 - Optional, a preview: Google's Antigravity CLI (`agy`) 1.5.5 or newer, signed in. See
   [Running repo sessions on Antigravity](#running-repo-sessions-on-antigravity-a-preview)
+- Your login shell as it is: zsh (macOS's default) or bash, oh-my-zsh and Powerlevel10k included. Each window
+  starts through it as a terminal you open does (`<shell> -lic`), so your PATH and tools load. In those windows
+  oh-my-zsh's update question is switched off (`DISABLE_AUTO_UPDATE=true`: it would wait for a key and the
+  window would never start its agent; it counts while your `.zshrc` picks no update mode with `zstyle`), and
+  the helpers a prompt theme starts are stopped as the window's launch ends (`bosun orphans`)
 
 You do not have to check these yourself. `bosun preflight` does, changes nothing, and lists everything
 missing at once, with what to do about each. `bosun init` and `bosun doctor` start with the same check.

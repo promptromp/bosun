@@ -930,6 +930,7 @@ plists="$(bash -c 'source "$1/lib/common.sh"; load_config; render_launchd_plist 
 check "a version's plists run the link" contains "$plists" "$LINK/"
 check "... never its own folder" not_contains "$plists" "bosun-versions/"
 check "a version's window command line names the link" contains "$(bash -c 'source "$1/lib/common.sh"; load_config; build_launch_command alpha; printf "%s\\n" "${launch_cmd[@]}"' _ "$V1")" "$LINK/bin/bosun"
+check "a window's shell says no to oh-my-zsh's update question, which would hold its launch" contains "$(bash -c 'source "$1/lib/common.sh"; load_config; build_launch_command alpha; printf "%s\\n" "${launch_cmd[@]}"' _ "$ROOT")" "DISABLE_AUTO_UPDATE=true"
 
 section window-list "window list" covers 'libexec/bosun-checkin,examples/generic/sessions.yml'
 specs() { bash -c 'source "$1/lib/common.sh"; load_config; window_specs' _ "$ROOT"; }

@@ -689,7 +689,10 @@ build_launch_command() { # <window> [prompt] [kind] [model] [effort] [quiet] [ha
   fi
   shell="$(tmux_cmd show-options -gv default-shell 2>/dev/null)" # fails before the server runs
   [ -n "$shell" ] || shell="$(login_shell)"
-  launch_cmd=()
+  # oh-my-zsh asks "Would you like to update? [Y/n]" every 13 days in an interactive shell on a terminal and
+  # waits for a key, so the window would never start its agent: its own switch says no (it counts while your
+  # .zshrc picks no update mode with zstyle). Your own terminals ask as before.
+  launch_cmd=(-e DISABLE_AUTO_UPDATE=true)
   for var in $BOSUN_PASSTHROUGH_VARS; do
     if is_env_override "$var"; then launch_cmd+=(-e "$var=${!var}"); fi
   done
