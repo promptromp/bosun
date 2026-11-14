@@ -262,10 +262,9 @@ ul {
 }
 
 .brand-mark {
-  width: 0.9rem;
-  height: 0.9rem;
-  border-radius: 4px;
-  background: linear-gradient(135deg, var(--accent), var(--busy-fg));
+  width: 1.25rem;
+  height: 1.25rem;
+  display: block;
 }
 
 nav {
