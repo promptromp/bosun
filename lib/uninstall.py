@@ -209,13 +209,17 @@ class Carrying:
         uninstall_macos.remove_job(self.jobs[step.target])
 
     def remove_app(self, step: Step) -> None:
-        """The app asked to quit, by its bundle id, so that it is not running from a folder that is gone."""
+        """The app asked to quit, by its bundle id, so that it is not running from a folder that is gone; then
+        looked at again, as the plan did (a bundle with the publisher's bundle id), because it is a while
+        since: only what is still that app is deleted. A trouble with the files is one line, like the rest."""
+        app = Path(step.target)
         try:
             bundle_id = app_release.read_publisher(ROOT).bundle_id
             app_install.quit_app(app_install.Setup(ROOT, Path.home()), bundle_id)
-        except app_release.AppError as error:
+            app_install.ensure_ours(app, bundle_id, "remove")
+            remove_path(app)
+        except (app_release.AppError, OSError) as error:
             raise StepFailed(str(error)) from error
-        remove_path(Path(step.target))
 
     def revoke_trust(self, step: Step) -> None:
         """Forgotten only once the agent says it is gone: the record is what a second run goes by."""

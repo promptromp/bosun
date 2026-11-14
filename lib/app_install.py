@@ -344,10 +344,21 @@ def _running(setup: Setup, bundle_id: str) -> bool:
     return running
 
 
-def quit_app(setup: Setup, bundle_id: str) -> bool:
-    """Ask the running app to quit, by its bundle id, and wait until it has. Whether it was running."""
+@dataclass
+class Quit:
+    """Whether an install has asked the running app to quit: what place_app opens it again for, when the
+    install ends in any way but placing the app (an end, a failure), whatever stage it had got to."""
+
+    asked: bool = False
+
+
+def quit_app(setup: Setup, bundle_id: str, state: Quit | None = None) -> bool:
+    """Ask the running app to quit, by its bundle id, and wait until it has; <state> says it was asked, before
+    it is. Whether it was running."""
     if not _running(setup, bundle_id):
         return False
+    if state is not None:
+        state.asked = True
     done = setup.run(["osascript", "-e", f'tell application id "{bundle_id}" to quit'])
     if done.returncode != 0:
         if NOT_ALLOWED in done.text:
@@ -482,7 +493,13 @@ def make_scratch(apps: Path) -> tuple[Path, bool]:
 
 
 def stage_and_place(
-    setup: Setup, publisher: Publisher, produce: Callable[[Path], Path], scratch: Path, *, development: bool
+    setup: Setup,
+    publisher: Publisher,
+    produce: Callable[[Path], Path],
+    scratch: Path,
+    state: Quit,
+    *,
+    development: bool,
 ) -> bool:
     """The app <produce> makes in <scratch>, verified and put in place, the running app having been asked
     to quit once it is verified. Whether it was running. Only <development> (a build of the app, ad hoc
@@ -493,16 +510,30 @@ def stage_and_place(
         reason = verify(staged, publisher, setup.run)
         if reason:
             raise AppError(f"refused {BUNDLE}: {reason}")
-    reopen = quit_app(setup, publisher.bundle_id)
-    try:
-        put_in_place(staged, setup.app, scratch)
-    except Stuck:
-        raise
-    except AppError:
-        if reopen:  # the old one is back: it was running
-            setup.run(["open", str(setup.app)])
-        raise
+    reopen = quit_app(setup, publisher.bundle_id, state)
+    put_in_place(staged, setup.app, scratch)  # a failure here: place_app opens the old app, put back, again
     return reopen
+
+
+@contextlib.contextmanager
+def deferring_signals() -> Iterator[None]:
+    """SIGTERM, SIGHUP and Ctrl-C wait while this holds and arrive after it, as they would have: what is done
+    in here is not cut in half by one. Each step of clean_up is a check of what is there, so a clean-up that
+    was cut short by SIGKILL is finished by the next install's sweep_stale."""
+    held = (signal.SIGTERM, signal.SIGHUP, signal.SIGINT)
+    before = signal.pthread_sigmask(signal.SIG_BLOCK, held)
+    try:
+        yield
+    finally:
+        signal.pthread_sigmask(signal.SIG_SETMASK, before)
+
+
+def reopen_after_end(setup: Setup, bundle_id: str) -> None:
+    """The app, quit for an install that did not end in placing the new one, opened again: the old one when it
+    is still in place, the new one when that was placed. `open -b` by its bundle id, as it was asked to quit;
+    a failure is not said, as the end that brought us here is what the person is told."""
+    with contextlib.suppress(OSError):
+        setup.run(["open", "-b", bundle_id])
 
 
 def place_app(
@@ -512,7 +543,22 @@ def place_app(
     placed. Leftovers of an install that was killed are swept first. The scratch folder is removed whatever
     happens, but never with the old app in it while none is in place: it is given back first, and when that
     cannot be done the folder is kept and the message says where the old app is. A ~/Applications this made
-    is removed too, unless the install worked."""
+    is removed too, unless the install worked. An app that was asked to quit and is not placed again by the
+    end (Ctrl-C, SIGTERM, a failure) is opened again, after the clean-up has put it where it was."""
+    state = Quit()
+    try:
+        return _place_app(setup, publisher, produce, state, development=development)
+    except Stuck:
+        raise
+    except BaseException:
+        if state.asked:
+            reopen_after_end(setup, publisher.bundle_id)
+        raise
+
+
+def _place_app(
+    setup: Setup, publisher: Publisher, produce: Callable[[Path], Path], state: Quit, *, development: bool
+) -> str:
     sweep_stale(setup)
     ensure_ours(setup.app, publisher.bundle_id, "replace")
     scratch, created = make_scratch(setup.apps)
@@ -520,18 +566,20 @@ def place_app(
     ended: Interrupted | None = None
     try:
         with raising_on_signals():
-            reopen = stage_and_place(setup, publisher, produce, scratch, development=development)
+            reopen = stage_and_place(setup, publisher, produce, scratch, state, development=development)
         placed = True
+        state.asked = False  # the new app is in: opening it is the end of this, below
     except Stuck:
         keep = True
         raise
     except Interrupted as error:
         ended = error
     finally:
-        if not keep:
-            clean_up(scratch, setup.app)
-        if created and not placed:
-            remove_if_empty(setup.apps)
+        with deferring_signals():
+            if not keep:
+                clean_up(scratch, setup.app)
+            if created and not placed:
+                remove_if_empty(setup.apps)
     if ended is not None:
         raise Interrupted(f"{ended}; {what_is_there(setup.app)}") from None
     shown = " ".join(filter(None, [BUNDLE, app_release.bundle_version(setup.app)]))

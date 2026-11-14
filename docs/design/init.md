@@ -109,7 +109,8 @@ It only reads where and when prompts were typed, never what they say.
 ## What it never does
 
 - **Overwrite what is yours.** `bosun.env` is merged: the settings it manages change, every other
-  line stays, and the old file is kept as `bosun.env.pre-init-<time>`. Settings that follow from an
+  line stays, and the old file is kept as `bosun.env.pre-init-<time>` (a first run, which found none, keeps no copy of
+  the file it wrote itself, also when a refused app install writes it back). Settings that follow from an
   answer (the orchestrator's model, the learning time) only move when that answer does, so one you
   set apart from it stays yours. A `sessions.yml` that lists other windows needs `--force`, also with
   a backup (one that lists none does not: there is nothing to lose; one that cannot be read does).

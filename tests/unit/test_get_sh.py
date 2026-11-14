@@ -162,6 +162,66 @@ class NewestReleaseTwin(Source):
         )
 
 
+class RerunLine(Source):
+    """The line get.sh prints to run it again: what this run was asked for, as a shell reads it back."""
+
+    HEAD = "curl -fsSL https://raw.githubusercontent.com/promptromp/bosun/main/get.sh | "
+
+    def line(self, **env: str) -> str:
+        done = subprocess.run(
+            ["sh", "-c", '. "$1"; rerun_line', "_", str(self.source)],
+            env={**clean_env(), "HOME": "/home/acme", **env},
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        self.assertEqual(done.returncode, 0, done.stderr)
+        return done.stdout
+
+    def test_with_nothing_asked_for_it_is_the_plain_line(self) -> None:
+        self.assertEqual(self.line(), self.HEAD + "sh")
+
+    def test_it_keeps_the_repository_the_folder_the_branch_and_the_agent_in_that_order(self) -> None:
+        line = self.line(
+            BOSUN_HARNESS="codex",
+            BOSUN_BRANCH="feature",
+            BOSUN_DIR="/opt/acme/bosun",
+            BOSUN_REPO="https://git.example.com/acme/bosun.git",
+        )
+        self.assertEqual(
+            line,
+            self.HEAD
+            + "BOSUN_REPO=https://git.example.com/acme/bosun.git BOSUN_DIR=/opt/acme/bosun "
+            + "BOSUN_BRANCH=feature BOSUN_HARNESS=codex sh",
+        )
+
+    def test_an_empty_setting_is_left_out(self) -> None:
+        self.assertEqual(self.line(BOSUN_DIR="", BOSUN_REPO=""), self.HEAD + "sh")
+
+    def test_a_value_the_shell_would_split_or_expand_is_quoted_and_reads_back_as_it_was(self) -> None:
+        awkward = {
+            "BOSUN_DIR": "/Users/me/my bosun/$HOME;`x`",
+            "BOSUN_REPO": "/srv/it's here/bosun.git",
+            "BOSUN_BRANCH": "feat/it's*",
+        }
+        line = self.line(**awkward)
+        # The line without its curl, ending in a command that prints what it was given.
+        command = (
+            line.removeprefix(self.HEAD)[: -len("sh")]
+            + 'sh -c \'printf "%s\\n" "$BOSUN_DIR" "$BOSUN_REPO" "$BOSUN_BRANCH"\''
+        )
+        done = subprocess.run(
+            ["sh", "-c", command], env=clean_env(), capture_output=True, text=True, check=False
+        )
+        self.assertEqual(done.returncode, 0, done.stderr)
+        self.assertEqual(done.stdout.splitlines(), list(awkward.values()))
+
+    def test_a_password_in_the_repository_address_is_not_printed(self) -> None:
+        line = self.line(BOSUN_REPO="https://user:secret-token@git.example.com/acme/bosun.git")
+        self.assertNotIn("secret-token", line)
+        self.assertIn("BOSUN_REPO=https://git.example.com/acme/bosun.git ", line)
+
+
 class Upstream(Source):
     """An upstream with three commits and a place for the install, in a home of its own."""
 

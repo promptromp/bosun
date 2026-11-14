@@ -567,7 +567,7 @@ class InstallTest(World):
 
         with mock.patch("os.rename", rename), self.assertRaises(AppError):
             self.install()
-        self.assertEqual(self.tools.calls[-1], ["open", str(self.app)])
+        self.assertEqual(self.tools.calls[-1], ["open", "-b", BUNDLE_ID])
         self.assertTrue((self.app / "Contents" / "old.txt").exists())
 
     def test_an_open_that_fails_is_said_after_the_app_is_in(self) -> None:
@@ -968,6 +968,121 @@ class SignalTest(World):
         self.assertNotIn("put back", str(caught.exception))
         self.assertEqual(app_release.bundle_version(self.app), "0.2.0")
         self.assertEqual([path.name for path in self.apps.iterdir()], ["bosun.app"])
+
+    def test_an_end_after_the_app_was_quit_opens_the_old_app_again(self) -> None:
+        for number in (signal.SIGTERM, signal.SIGHUP):
+            with self.subTest(signal=number.name):
+                self.install_old()
+                before = tree(self.home)
+                self.tools.running = True
+
+                def rename(
+                    source: Any, target: Any, number: signal.Signals = number, real: Any = os.rename
+                ) -> None:
+                    real(source, target)
+                    if "previous" in str(target):
+                        signal.raise_signal(number)  # the old app has just been moved aside
+
+                with mock.patch("os.rename", rename), self.assertRaises(AppError):
+                    app_install.install(self.setup_for())
+                self.assertEqual(self.tools.calls[-1], ["open", "-b", BUNDLE_ID])
+                self.assertEqual(tree(self.home), before)  # the old app, still in place, is what opens
+                shutil.rmtree(self.apps, ignore_errors=True)
+
+    def test_ctrl_c_after_the_app_was_quit_opens_it_again_after_the_old_app_is_put_back(self) -> None:
+        self.install_old()
+        before = tree(self.home)
+        self.tools.running = True
+        real = os.rename
+        seen: list[bool] = []
+
+        def rename(source: Any, target: Any) -> None:
+            real(source, target)
+            if "previous" in str(target):
+                raise KeyboardInterrupt  # the old app has just been moved aside
+
+        real_open = self.tools.open
+
+        def opened(argv: Sequence[str]) -> Run:
+            seen.append(self.app.exists())  # opening needs the app where it was
+            return real_open(argv)
+
+        self.tools.open = opened  # type: ignore[method-assign]
+        with mock.patch("os.rename", rename), self.assertRaises(KeyboardInterrupt):
+            app_install.install(self.setup_for())
+        self.assertEqual((seen, self.tools.calls[-1]), ([True], ["open", "-b", BUNDLE_ID]))
+        self.assertEqual(tree(self.home), before)
+
+    def test_an_end_after_the_new_app_was_put_in_opens_that_one(self) -> None:
+        self.install_old()
+        self.tools.running = True
+        real = os.rename
+
+        def rename(source: Any, target: Any) -> None:
+            real(source, target)
+            if Path(str(target)) == self.app and "unpacked" in str(source):
+                signal.raise_signal(signal.SIGTERM)  # the new app has just been put in
+
+        with mock.patch("os.rename", rename), self.assertRaises(AppError):
+            app_install.install(self.setup_for())
+        self.assertEqual(self.tools.calls[-1], ["open", "-b", BUNDLE_ID])
+        self.assertEqual(app_release.bundle_version(self.app), "0.2.0")
+
+    def test_an_end_before_the_app_was_asked_to_quit_opens_nothing(self) -> None:
+        self.install_old()
+        self.tools.running = True
+        self.tools.on_download = lambda: signal.raise_signal(signal.SIGTERM)
+        with self.assertRaises(AppError):
+            app_install.install(self.setup_for())
+        self.assertNotIn("open", self.tools.names())
+        self.assertFalse(self.tools.quit_asked)
+
+    def test_an_app_that_was_not_running_is_not_opened_after_an_end(self) -> None:
+        self.install_old()
+        self.tools.on_assess = lambda: signal.raise_signal(signal.SIGTERM)
+        with self.assertRaises(AppError):
+            app_install.install(self.setup_for())
+        self.assertNotIn("open", self.tools.names())
+
+    def test_a_signal_during_clean_up_waits_until_it_is_done(self) -> None:
+        """clean_up and the removal of a ~/Applications this made are not cut in half by SIGTERM: it arrives
+        after both, when the old app is back and the scratch folder is gone."""
+        self.install_old()
+        before = tree(self.home)
+        arrived: list[dict[str, bool]] = []
+        real_rmtree, real_rename = shutil.rmtree, os.rename
+
+        def rename(source: Any, target: Any) -> None:
+            real_rename(source, target)
+            if "previous" in str(target):
+                raise KeyboardInterrupt  # the old app is aside: clean_up has to give it back
+
+        def rmtree(path: Any, *args: Any, **kwargs: Any) -> None:
+            if ".bosun-app-" in str(path):
+                signal.raise_signal(signal.SIGTERM)  # in the middle of clean_up
+                arrived.append({"in_clean_up": True})
+            real_rmtree(path, *args, **kwargs)
+
+        def handler(_signum: int, _frame: Any) -> None:
+            arrived.append({"in_clean_up": False, "old_app_back": self.app.exists()})
+            raise SystemExit(143)
+
+        before_handler = signal.signal(signal.SIGTERM, handler)
+        self.addCleanup(signal.signal, signal.SIGTERM, before_handler)
+        with (
+            mock.patch("os.rename", rename),
+            mock.patch("shutil.rmtree", rmtree),
+            self.assertRaises(SystemExit),
+        ):
+            app_install.install(self.setup_for())
+        # the signal was raised in clean_up, and its handler ran only once clean_up was over
+        self.assertEqual(arrived, [{"in_clean_up": True}, {"in_clean_up": False, "old_app_back": True}])
+        self.assertEqual(tree(self.home), before)
+
+    def test_a_signal_is_not_held_for_ever_the_mask_is_put_back(self) -> None:
+        before = signal.pthread_sigmask(signal.SIG_BLOCK, [])
+        app_install.install(self.setup_for())
+        self.assertEqual(signal.pthread_sigmask(signal.SIG_BLOCK, []), before)
 
     def test_a_signal_that_was_ignored_stays_ignored(self) -> None:
         seen: list[Any] = []

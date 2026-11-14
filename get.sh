@@ -47,7 +47,6 @@ BARE="$VERSIONS/bosun.git"
 BRANCH="${BOSUN_BRANCH:-}" # pick_branch settles it
 RELEASE=""                 # pick_release: the newest release's tag, on a new install that asked for no branch
 RELEASE_COMMIT=""          # ... and its commit
-THIS_LINE="curl -fsSL https://raw.githubusercontent.com/promptromp/bosun/main/get.sh | ${BOSUN_BRANCH:+BOSUN_BRANCH=$BOSUN_BRANCH }${BOSUN_HARNESS:+BOSUN_HARNESS=$BOSUN_HARNESS }sh"
 ROADMAP="https://github.com/promptromp/bosun/blob/main/ROADMAP.md"
 USER_PATH="$PATH"
 PATH="/opt/homebrew/bin:/usr/local/bin:$HOME/.local/bin:$PATH" # where Homebrew and Claude Code go
@@ -84,6 +83,26 @@ run() {
   for run_arg in "$@"; do printf ' %s' "$(shown "$run_arg")"; done
   printf '\n'
   [ "$DRY_RUN" = 1 ] || "$@"
+}
+# <name>=<value> and a space, for a setting of this run that is not empty, quoted for the shell it is pasted into
+# (single quotes, unless the value is made of characters that need none); nothing for an empty value.
+env_word() {
+  word_value="$2"
+  [ -n "$word_value" ] || return 0
+  case "$word_value" in
+    *[!A-Za-z0-9_./:@%+=,-]*) word_value="'$(printf '%s' "$word_value" | sed "s/'/'\\\\''/g")'" ;;
+  esac
+  printf '%s=%s ' "$1" "$word_value"
+}
+# The line to run again, with what this run was asked for: where it gets bosun (BOSUN_REPO, without a
+# password in it, as it is shown elsewhere) and where it puts it, the branch and the agent.
+rerun_line() {
+  printf 'curl -fsSL https://raw.githubusercontent.com/promptromp/bosun/main/get.sh | '
+  env_word BOSUN_REPO "$(shown "${BOSUN_REPO:-}")"
+  env_word BOSUN_DIR "${BOSUN_DIR:-}"
+  env_word BOSUN_BRANCH "${BOSUN_BRANCH:-}"
+  env_word BOSUN_HARNESS "${BOSUN_HARNESS:-}"
+  printf 'sh'
 }
 has_terminal() { [ "$UNATTENDED" = 0 ] && (: </dev/tty) 2>/dev/null; }
 
@@ -283,7 +302,7 @@ start_init() {
     return 0
   fi
   BOSUN_USER_PATH="$USER_PATH"
-  BOSUN_RERUN="$THIS_LINE"
+  BOSUN_RERUN="$(rerun_line)"
   export BOSUN_USER_PATH BOSUN_RERUN
   [ -z "$channel" ] || export BOSUN_INIT_CHANNEL=main # init's own variable: never the config key, which would beat bosun.env in every window it starts
   # Unattended is handed over as a variable, as the two above: an older version on disk (an install it
