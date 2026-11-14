@@ -33,6 +33,12 @@ it knows it (never as all well); `running` says whether bosun's windows are open
 read), which with the level tells a bosun to start from one that runs with an error. `update.last` is the
 record the last update left (`id`, `started_at`, `step`; null when there is none): an update that ended before
 any look saw it running is told by it, so the app can end "Updating…" for the one it started.
+
+`attention` lists the windows that need you, each as `{"window", "problem"}`, so the app can offer to open one
+(`bosun attach <window>`): first the problems about one window (a watchdog finding that names its window:
+stalled-start, waiting, long-shell, spend-limit, context-size), in the order of `problems`, then each window
+waiting at a prompt that the waiting check has not named yet (`waiting`, which no level counts), with a line
+of its own. A window can be listed more than once, one entry per problem.
 """
 
 from __future__ import annotations
@@ -58,6 +64,7 @@ RANK = {OK: 0, WARNING: 1, ERROR: 2}
 SEVERITY_LEVEL = {"warn": WARNING, "error": ERROR}
 SESSION_CHECK = "session-missing"
 LOG_CHECK = "log-errors"
+WAITING_CHECK = "waiting"
 MORNING_FAILED = "morning-failed"
 READ_PART = {
     "sessions": "the windows",
@@ -138,12 +145,25 @@ class StatusFacts:
 
 
 @dataclass(frozen=True)
+class Attention:
+    """A window that needs you, and the problem it has (from the check named <check>, or none)."""
+
+    window: str
+    problem: str
+    check: str = ""
+
+    def as_json(self) -> dict[str, str]:
+        return {"window": self.window, "problem": self.problem}
+
+
+@dataclass(frozen=True)
 class Verdict:
     level: str
     sentence: str
     detail: list[str]
     problems: list[str]
     stopped: dict[str, Any] | None = None  # the `stopped` field, when this is a stop
+    attention: list[Attention] = field(default_factory=list)  # the problems above that are about one window
 
 
 def plural(count: int, noun: str) -> str:
@@ -164,6 +184,27 @@ def findings(checks: Mapping[str, Any] | None) -> list[tuple[str, str, str]]:
         level = SEVERITY_LEVEL.get(item["severity"], WARNING)
         found += [(level, item["name"], f["message"]) for f in item["findings"]]
     return found
+
+
+def window_findings(checks: Mapping[str, Any] | None) -> list[Attention]:
+    """The findings of the watchdog's checks that name the window they are about, in findings()' order."""
+    found = []
+    for item in (checks or {}).get("checks", []):
+        found += [
+            Attention(f["window"], f["message"], item["name"]) for f in item["findings"] if f.get("window")
+        ]
+    return found
+
+
+def waiting_attention(waiting: Iterable[str], listed: Iterable[Attention]) -> list[Attention]:
+    """Each window waiting at a prompt that the waiting check has not named yet (it names one only after
+    BOSUN_ALERT_WAITING_MINUTES): no problem of any level, but a window that needs you."""
+    said = {entry.window for entry in listed if entry.check == WAITING_CHECK}
+    return [
+        Attention(name, f"The {name} window is waiting for you at a permission prompt or question.")
+        for name in waiting
+        if name not in said
+    ]
 
 
 def next_start(window: awake.AwakeWindow | None, now: datetime) -> datetime | None:
@@ -307,6 +348,7 @@ def running_verdict(facts: StatusFacts, now: datetime, waiting: list[str]) -> Ve
         running_sentence(facts, level, count, now),
         state_lines(facts, count or 0, waiting, now),
         [text for _level, text in problems],
+        attention=window_findings(facts.checks),
     )
 
 
@@ -374,6 +416,7 @@ def snapshot(facts: StatusFacts, now: datetime) -> dict[str, Any]:
     """`bosun status --json`: the object the menu bar app reads. <now> is local and naive."""
     waiting = [str(w["name"]) for w in console_sessions.waiting_in(facts.windows or [], now)]
     verdict = vouched(quit_verdict(facts, now, waiting), facts.errors)
+    attention = [*verdict.attention, *waiting_attention(waiting, verdict.attention)]
     kept = facts.keep_awake_until
     return {
         "contract": CONTRACT,
@@ -392,6 +435,7 @@ def snapshot(facts: StatusFacts, now: datetime) -> dict[str, Any]:
         },
         "console": {"running": facts.console_running, "url": None},  # the address carries the token
         "problems": verdict.problems,
+        "attention": [entry.as_json() for entry in attention],
         "logs": facts.log_dir,
     }
 
@@ -420,6 +464,7 @@ def failure(text: str, level: str = ERROR) -> dict[str, Any]:
         "update": {"state": "none", "waiting_for": [], "last": None},
         "console": {"running": False, "url": None},
         "problems": [text],
+        "attention": [],
         "logs": "",
     }
 

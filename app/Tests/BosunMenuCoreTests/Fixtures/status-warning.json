@@ -1,4 +1,10 @@
 {
+  "attention": [
+    {
+      "problem": "The acme-web window has waited at a prompt for 45 min.",
+      "window": "acme-web"
+    }
+  ],
   "console": {
     "running": false,
     "url": null

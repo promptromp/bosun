@@ -26,6 +26,7 @@ import hashlib
 import json
 import os
 import re
+import shlex
 import subprocess
 import sys
 from collections.abc import Callable, Iterator, Mapping, Sequence
@@ -449,6 +450,10 @@ class Finding:
     # "<pid>:<statusUpdatedAt>"): honoured and kept up to date, so the two never alert twice.
     legacy_marker: Path | None = None
     legacy_value: str = ""
+    # The open window the finding is about: set by the checks that go over the session's windows one by
+    # one (a window tmux lists), never parsed from the key. `status_data` carries it, and `bosun status
+    # --json` lists it among the windows that need you (lib/menu_status.py's `attention`).
+    window: str | None = None
 
 
 @dataclass
@@ -544,6 +549,11 @@ def check_morning_failed(ctx: Context) -> Result:
     return Result(findings=[Finding(f"morning-failed:{ctx.today}", message)])
 
 
+def attach_hint(window: str) -> str:
+    """The command that opens <window> in a terminal: bosun attach with its name."""
+    return f"bosun attach {shlex.quote(window)}"
+
+
 def waiting_finding(ctx: Context, window: WindowFact, record: dict[str, Any]) -> Finding | None:
     updated = record.get("statusUpdatedAt")
     if record.get("status") != "waiting" or not isinstance(updated, (int, float)):
@@ -558,13 +568,14 @@ def waiting_finding(ctx: Context, window: WindowFact, record: dict[str, Any]) ->
     question = f" ({asked})" if asked else ""
     message = (
         f"The {window.name} session has waited {int(waited // SECONDS_PER_MINUTE)} min at a permission "
-        f"prompt or question{question}{paused} (bosun attach, or Remote Control)."
+        f"prompt or question{question}{paused} ({attach_hint(window.name)}, or Remote Control)."
     )
     return Finding(
         f"waiting:{window.name}:{window.agent_pid}:{updated}",
         message,
         legacy_marker=ctx.config.state_dir / f"alerted-{window.name}" if orchestrator else None,
         legacy_value=f"{window.agent_pid}:{updated}",
+        window=window.name,
     )
 
 
@@ -584,20 +595,21 @@ def stalled_finding(ctx: Context, window: WindowFact) -> Finding | None:
     if waited < STALLED_START_MINUTES * SECONDS_PER_MINUTE:
         return None
     minutes = int(waited // SECONDS_PER_MINUTE)
+    attach = attach_hint(window.name)
     if window.starting_pid is None:
         message = (
             f"The {window.name} window's shell started {minutes} min ago and has not started its agent: your "
             "shell's startup files are probably waiting for an answer (an update question, or zsh's insecure "
-            "directories). Answer it in the window (bosun attach), or change your startup files so they "
+            f"directories). Answer it in the window ({attach}), or change your startup files so they "
             "do not ask."
         )
     else:
         message = (
             f"The {window.name} window's agent started {minutes} min ago and never reached a session: it is "
-            "probably on a first-run or trust screen only you can answer (bosun attach). Do not just press "
+            f"probably on a first-run or trust screen only you can answer ({attach}). Do not just press "
             "Return: on several of these screens the default is to exit."
         )
-    return Finding(f"stalled-start:{window.name}:{pid}", message)
+    return Finding(f"stalled-start:{window.name}:{pid}", message, window=window.name)
 
 
 def check_stalled_start(ctx: Context) -> Result:
@@ -1122,7 +1134,7 @@ def long_shell_finding(
         f"A background command has kept {window} in shell for {hours:.0f}h (awake hours, since "
         f"{since:%a %H:%M}){what}: check it is still wanted. Meanwhile refresh does not restart that Claude."
     )
-    return Finding(f"{LONG_SHELL}:{window}:{episode['pid']}:{episode['since']}", message)
+    return Finding(f"{LONG_SHELL}:{window}:{episode['pid']}:{episode['since']}", message, window=window)
 
 
 def check_long_shell(ctx: Context) -> Result:
@@ -1247,7 +1259,7 @@ def stop_finding(window: str, stop: dict[str, Any], items: list[str]) -> Finding
         "the limit (/usage-credits in a Claude window asks your admin) or wait for it to reset; the "
         "watchdog then asks the window to resume."
     )
-    return Finding(f"{SPEND_LIMIT}:{window}:{stop['pid']}:{since:%Y-%m-%dT%H:%M}", message)
+    return Finding(f"{SPEND_LIMIT}:{window}:{stop['pid']}:{since:%Y-%m-%dT%H:%M}", message, window=window)
 
 
 def probe_note(probe: dict[str, str] | None) -> str:
@@ -1310,6 +1322,7 @@ def context_finding(ctx: Context, window: WindowFact) -> Finding | None:
         f"{hours:.0f} h (over {ctx.config.context_warn_tokens // 1000}k): every check-in, notification "
         "and resume there re-reads it all. Start it on a fresh conversation when it is idle and holds "
         "no unfinished work.",
+        window=window.name,
     )
 
 
@@ -1881,7 +1894,10 @@ def status_data(inputs: Inputs, checks: tuple[Check, ...], state: State | None =
                 "severity": check.severity,
                 "summary": check.summary,
                 "note": result.note,
-                "findings": [{"message": f.message, "decision": decided(f)} for f in result.findings],
+                "findings": [
+                    {"message": f.message, "decision": decided(f), "window": f.window}
+                    for f in result.findings
+                ],
             }
             for check, result in report.results
         ],

@@ -538,7 +538,8 @@ class FakeSuiteTest(Scratch):
     ) -> None:
         (self.root / "scratch.txt").write_text("there before the run\n")
         self.assertEqual(self.run_suite().returncode, 0)
-        # HEAD, the commit that would be pushed, lacks the file: another tree
+        # HEAD, the commit that would be pushed, lacks the file: another tree. BOSUN_SMOKE_FULL=1, so that
+        # past the record the hook runs the whole suite here rather than leave it to the merge queue.
         skip = subprocess.run(
             ["/bin/bash", str(self.script), "--pre-push"],
             capture_output=True,
@@ -548,6 +549,7 @@ class FakeSuiteTest(Scratch):
                 SMOKE_ROOT=str(self.root),
                 SMOKE_CACHE_DIR=str(self.cache),
                 PRE_COMMIT_TO_REF="HEAD",
+                BOSUN_SMOKE_FULL="1",
             ),
             stdin=subprocess.DEVNULL,
         )

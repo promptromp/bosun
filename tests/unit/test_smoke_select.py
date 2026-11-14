@@ -411,11 +411,23 @@ class PrePushTest(ScratchSuite):
         self.assertEqual(self.ran(result), ["beta"])
         self.assertFalse((self.cache / "passes").exists())
 
-    def test_the_default_base_is_origin_main_and_without_one_the_whole_suite_runs(self) -> None:
+    def test_the_default_base_is_origin_main_and_without_one_the_whole_suite_is_the_queue_s(self) -> None:
         self.write("extra/deep/er/file.txt", "changed\n")
         result = self.run_suite("--pre-push")
-        self.assertEqual(self.ran(result), ["alpha", "beta", "gamma"])
+        self.assertEqual(result.returncode, 0)
+        self.assertEqual(self.ran(result), [])
         self.assertIn("the whole suite: git merge-base origin/main HEAD failed", result.stdout)
+        self.assertIn("the change reaches the whole suite, which the merge queue runs", result.stdout)
+
+    def test_a_change_that_reaches_every_section_is_left_to_the_merge_queue(self) -> None:
+        """The hook does not wait out the whole suite that the merge queue's smoke job runs anyway."""
+        self.write("shared.sh", "# changed\n")  # on the select-everything list
+        result = self.run_suite("--pre-push", BOSUN_SMOKE_BASE="HEAD")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(self.ran(result), [])
+        self.assertIn("BOSUN_SMOKE_FULL=1 runs it here", result.stdout)
+        ci = self.run_suite("--changed", "HEAD")  # the merge queue's way: the whole suite
+        self.assertEqual(self.ran(ci), ["alpha", "beta", "gamma"])
 
     def test_a_remote_main_is_the_base_when_there_is_one(self) -> None:
         remote = self.dir / "remote.git"

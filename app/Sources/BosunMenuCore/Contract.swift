@@ -154,6 +154,18 @@ public struct ConsoleStatus: Decodable, Equatable, Sendable {
   public let url: String?
 }
 
+/// A window that needs you (`attention`): its name in bosun's tmux session, and the problem it has (a watchdog
+/// finding about it, or that it waits at a prompt). `bosun attach <window>` opens it.
+public struct WindowAttention: Decodable, Equatable, Sendable {
+  public let window: String
+  public let problem: String
+
+  public init(window: String, problem: String) {
+    self.window = window
+    self.problem = problem
+  }
+}
+
 public struct StatusSnapshot: Decodable, Equatable, Sendable {
   public let contract: Int
   public let level: Level
@@ -169,7 +181,13 @@ public struct StatusSnapshot: Decodable, Equatable, Sendable {
   public let update: UpdateProgress
   public let console: ConsoleStatus
   public let problems: [String]
+  /// The windows that need you, one entry per problem (a window may be named more than once); nil from a bosun
+  /// that does not say.
+  public let attention: [WindowAttention]?
   public let logs: String
+
+  /// The windows that need you, in bosun's order (empty from a bosun that does not say).
+  public var needsYou: [WindowAttention] { attention ?? [] }
 
   /// What the update flow is told of the status: whether an update runs, and what it waits for.
   public var updateEvent: UpdateEvent {

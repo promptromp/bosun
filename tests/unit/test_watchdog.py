@@ -326,6 +326,7 @@ class WaitingTest(WatchdogCase):
         self.waiting(REPO_PID, at(MONDAY, "09:00"))
         sent = self.watch(at(MONDAY, "10:00"))
         self.assertIn("The alpha session has waited 60 min", sent[0])
+        self.assertIn("(bosun attach alpha, or Remote Control)", sent[0])
         self.assertFalse((self.state_dir / "alerted-alpha").exists())
 
     def test_a_prompt_the_check_in_loop_already_alerted_about_is_skipped(self) -> None:
@@ -1328,3 +1329,36 @@ class OverheadChecksTest(WatchdogCase):
             self.inputs(at(TUESDAY, "09:10")).context(watchdog.State.load(self.state_dir))
         )
         self.assertIn("over 3 days old", result.note)
+
+
+class FindingWindowTest(WatchdogCase):
+    """A finding about one open window names it (Finding.window, never parsed from its key), and status_data
+    carries it: what `bosun status --json` lists among the windows that need you."""
+
+    def context(self, now: datetime) -> watchdog.Context:
+        return self.inputs(now).context(watchdog.State.load(self.state_dir))
+
+    def test_status_data_carries_the_window_of_a_finding_and_none_for_one_about_no_window(self) -> None:
+        self.morning_run(MONDAY)
+        self.waiting(REPO_PID, at(MONDAY, "09:00"))
+        facts = replace(self.facts, checkin_loop=False)
+        data = watchdog.status_data(self.inputs(at(MONDAY, "10:00"), facts), CHECKS)
+        found = {c["name"]: [f["window"] for f in c["findings"]] for c in data["checks"] if c["findings"]}
+        self.assertEqual(found["waiting"], ["alpha"])
+        self.assertEqual(found["checkin-missing"], [None])
+
+    def test_long_shell_spend_limit_and_context_size_name_their_window(self) -> None:
+        ctx = self.context(at(MONDAY, "17:00"))
+        shell = watchdog.long_shell_finding(ctx, "alpha", {"pid": REPO_PID, "since": ms(at(MONDAY, "08:30"))})
+        assert shell is not None
+        stop = {"pid": REPO_PID, "since": watchdog.stamp(at(MONDAY, "09:00")), "main": True, "subagents": 0}
+        run = claude_state.ContextRun(400_000, at(MONDAY, "07:00") - timedelta(days=2))
+        with (
+            unittest.mock.patch.object(claude_state, "transcript_of", return_value=Path("/nowhere.jsonl")),
+            unittest.mock.patch.object(claude_state, "context_run", return_value=run),
+        ):
+            context = watchdog.context_finding(ctx, WindowFact("alpha", REPO_PID))
+        assert context is not None
+        self.assertEqual(
+            [shell.window, watchdog.stop_finding("alpha", stop, []).window, context.window], ["alpha"] * 3
+        )

@@ -1,0 +1,40 @@
+{
+  "attention": [
+    {
+      "problem": "The acme-exporter window's agent started 7 min ago and never reached a session: it is probably on a first-run or trust screen only you can answer (bosun attach acme-exporter).",
+      "window": "acme-exporter"
+    },
+    {
+      "problem": "The acme-web window is waiting for you at a permission prompt or question.",
+      "window": "acme-web"
+    }
+  ],
+  "console": {
+    "running": false,
+    "url": null
+  },
+  "contract": 1,
+  "detail": [
+    "3 windows open",
+    "1 waiting for you: acme-web",
+    "Mac kept awake until 20:00"
+  ],
+  "keep_awake_until": "20:00",
+  "level": "error",
+  "logs": "/Users/me/.local/state/bosun/logs",
+  "problems": [
+    "The acme-exporter window's agent started 7 min ago and never reached a session: it is probably on a first-run or trust screen only you can answer (bosun attach acme-exporter)."
+  ],
+  "running": true,
+  "sentence": "bosun is running, with an error",
+  "stopped": null,
+  "update": {
+    "last": null,
+    "state": "none",
+    "waiting_for": []
+  },
+  "waiting": [
+    "acme-web"
+  ],
+  "windows": 3
+}

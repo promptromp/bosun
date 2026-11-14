@@ -141,10 +141,26 @@ class ToolTest(unittest.TestCase):
         found = pixels_of(app_icons.template(logo, 36))
         self.assertEqual({tuple(rgb) for *rgb, alpha in found if alpha}, {(0, 0, 0)})
 
+    def test_the_console_s_mark_is_the_logo_in_colour_and_what_is_committed(self) -> None:
+        logo = app_icons.read_logo(app_icons.LOGO)
+        with tempfile.TemporaryDirectory() as folder:
+            made = app_icons.write_console_mark(logo, Path(folder))
+            with Image.open(made) as image:
+                self.assertEqual((image.size, image.mode), ((64, 64), "RGBA"))
+            drawn = pixels(made)
+            self.assertGreater(
+                len({pixel[:3] for pixel in drawn if pixel[3] > 200}), 4
+            )  # colours, not a template
+            worst = worst_difference(drawn, pixels(app_icons.CONSOLE / app_icons.CONSOLE_MARK))
+            self.assertLessEqual(
+                worst, PIXEL_TOLERANCE, "console/logo.png is not what tools/app_icons.py makes"
+            )
+
     def test_it_runs_as_a_command_and_says_what_it_wrote(self) -> None:
         with tempfile.TemporaryDirectory() as folder:
-            self.assertEqual(app_icons.main(["--out", folder]), 0)
+            self.assertEqual(app_icons.main(["--out", folder, "--console-out", folder]), 0)
             self.assertTrue((Path(folder) / "MenuBarIcon.png").is_file())
+            self.assertTrue((Path(folder) / "logo.png").is_file())
 
 
 if __name__ == "__main__":
