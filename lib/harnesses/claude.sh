@@ -10,7 +10,7 @@ harness_upgrade_help() { echo "Update Claude Code: claude update"; }
 
 # The first version where auto mode, which repo sessions run in, is the built-in starting mode.
 harness_min_version() { echo "2.1.283"; }
-harness_version() { "$(harness_command)" --version 2>/dev/null | awk 'NR == 1 && $1 ~ /^[0-9]/ { print $1 }'; }
+harness_version() { "$(harness_command)" --version </dev/null 2>/dev/null | awk 'NR == 1 && $1 ~ /^[0-9]/ { print $1 }'; }
 
 # What else it needs, past being installed. Python is known to be there when this runs.
 harness_checks() {

@@ -141,7 +141,13 @@ def held_rollouts(pids: Iterable[int | str]) -> dict[int, list[Path]]:
     if not listed:
         return {}
     try:
-        result = subprocess.run(["lsof", "-p", listed, "-Fpn"], check=False, capture_output=True, text=True)
+        result = subprocess.run(
+            ["lsof", "-p", listed, "-Fpn"],
+            check=False,
+            stdin=subprocess.DEVNULL,
+            capture_output=True,
+            text=True,
+        )
     except OSError:
         return {}
     root = str(SESSIONS_DIR.resolve())
@@ -233,7 +239,12 @@ def registered(pids: Iterable[str]) -> str | None:
 def running() -> Iterator[dict[str, Any]]:
     """The records of every Codex running on this machine."""
     result = subprocess.run(
-        ["ps", "-Ao", "pid=,command="], check=False, capture_output=True, text=True, errors="replace"
+        ["ps", "-Ao", "pid=,command="],
+        check=False,
+        stdin=subprocess.DEVNULL,
+        capture_output=True,
+        text=True,
+        errors="replace",
     )
     pids = [line.split(None, 1)[0] for line in result.stdout.splitlines() if HARNESS in line]
     for pid, rollouts in held_rollouts(pids).items():
@@ -335,7 +346,11 @@ def logged_in() -> bool:
     """What Codex says. For an API key that only means there is one: it is checked when first used."""
     try:
         result = subprocess.run(
-            [codex_bin(), "login", "status"], check=False, capture_output=True, timeout=LOGIN_TIMEOUT_SECONDS
+            [codex_bin(), "login", "status"],
+            check=False,
+            stdin=subprocess.DEVNULL,  # an answer, never a conversation: no terminal as its input
+            capture_output=True,
+            timeout=LOGIN_TIMEOUT_SECONDS,
         )
     except (OSError, subprocess.TimeoutExpired):
         return False

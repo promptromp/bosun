@@ -21,8 +21,8 @@
 # skip the orchestrator until you answer): it runs `bosun watchdog --only waiting`, every few
 # minutes with --loop. Once the watchdog's own launchd agent is installed, it leaves that to it.
 #
-# With BOSUN_EVENTS_ENABLED=1 (read when the loop starts), the loop also runs `bosun events`
-# every BOSUN_EVENTS_INTERVAL_SECONDS, which pushes events from the repo sessions to an idle
+# With BOSUN_EVENTS_ENABLED=1 (read when the loop starts), the loop also runs `bosun events` as it
+# starts and every BOSUN_EVENTS_INTERVAL_SECONDS, which pushes events from the repo sessions to an idle
 # orchestrator; a check-in that goes out covers the events pending at that moment. With events on,
 # each tick also runs `bosun slack-watch --scheduled` in the background, which looks for new
 # Slack activity every BOSUN_SLACK_WATCH_MINUTES once BOSUN_SLACK_WATCH_ENABLED=1, and
@@ -232,6 +232,15 @@ events_once() {
   return 0
 }
 
+# The dispatcher runs once as the loop starts, not a tick later: until its first run of this session the
+# watchdog reads it as stalled (never, or since the last session), which turned the menu yellow for that
+# tick after every start. It delivers nothing while the orchestrator is busy with the morning chores.
+events_at_start() {
+  [ "$LOOP" = "1" ] || return 0
+  update_hold_active && return 0
+  events_once 2>&1 | tee -a "$(checkin_log)"
+}
+
 # Look for new Slack activity (with events on). In the background, writing straight to the log, so
 # a slow search never delays the loop; slack-watch keeps its own interval, the awake window, one run
 # at a time and the budget, and is quiet while nothing is due.
@@ -285,7 +294,7 @@ update_windows_once() {
 # The loop starts alongside the orchestrator, which runs the morning chores first, so the first
 # check-in comes one interval later. In between it looks for a stuck orchestrator every
 # ALERT_CHECK_MINUTES (or every interval, if that is shorter), and with events on it dispatches
-# them every BOSUN_EVENTS_INTERVAL_SECONDS. Times are in seconds of sleep.
+# them as it starts (events_at_start) and every BOSUN_EVENTS_INTERVAL_SECONDS. Times are in seconds of sleep.
 # How often to look for a stuck window: ALERT_CHECK_MINUTES, or the check-in interval if shorter.
 alert_seconds() {
   local minutes=$ALERT_CHECK_MINUTES
@@ -308,6 +317,7 @@ since_review=0
 checkin_deferred=0
 checkin_status=0
 update_logged=0
+events_at_start
 while true; do
   if [ "$LOOP" = "1" ]; then
     sleep "$tick"

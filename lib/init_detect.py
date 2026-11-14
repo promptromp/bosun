@@ -43,7 +43,12 @@ def output_of(*command: str) -> str | None:
     """A command's stdout if it succeeded, else None (also if it is not installed)."""
     try:
         result = subprocess.run(
-            command, capture_output=True, text=True, timeout=COMMAND_TIMEOUT_SECONDS, check=False
+            command,
+            stdin=subprocess.DEVNULL,  # init runs on /dev/tty: a command asked for an answer gets no terminal
+            capture_output=True,
+            text=True,
+            timeout=COMMAND_TIMEOUT_SECONDS,
+            check=False,
         )
     except (OSError, subprocess.SubprocessError):
         return None

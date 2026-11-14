@@ -1263,6 +1263,10 @@ class AuthStatus:
 
 AUTH_STATUS_TIMEOUT_SECONDS = 30
 
+# NO_TERMINAL: a command of Claude Code's that bosun runs for an answer gets no terminal as its input.
+# Claude Code runs on Bun, which cannot watch /dev/tty on macOS (kqueue: EINVAL) and dies before it
+# answers; get.sh starts `bosun init` with its input on /dev/tty, so `auth status` read as logged out.
+
 
 def parse_auth_status(text: str) -> AuthStatus:
     try:
@@ -1283,6 +1287,7 @@ def auth_status(claude_bin: str) -> AuthStatus:
     try:
         result = subprocess.run(
             [claude_bin, "auth", "status", "--json"],
+            stdin=subprocess.DEVNULL,  # never the terminal: see NO_TERMINAL
             capture_output=True,
             text=True,
             timeout=AUTH_STATUS_TIMEOUT_SECONDS,
@@ -1382,6 +1387,7 @@ def probe(claude_bin: str) -> ProbeResult:
             result = subprocess.run(
                 probe_command(claude_bin),
                 cwd=scratch,
+                stdin=subprocess.DEVNULL,  # never the terminal: see NO_TERMINAL
                 capture_output=True,
                 text=True,
                 timeout=PROBE_TIMEOUT_SECONDS,

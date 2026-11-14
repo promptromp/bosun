@@ -12,7 +12,7 @@ With it on:
   checks it before asking me anything, so it never asks again what I answered in the window.
 - **Events are pushed to the orchestrator.** Reports, what I said in a window, outreach drafts,
   follow-up tasks and repo windows waiting at a prompt go to an event queue
-  (`$BOSUN_STATE_DIR/events/`). The check-in loop runs `bosun events` every
+  (`$BOSUN_STATE_DIR/events/`). The check-in loop runs `bosun events` as it starts and every
   `BOSUN_EVENTS_INTERVAL_SECONDS` and delivers them as one summary, batched, only to an
   orchestrator that is idle (or in `shell`) on today's conversation while I am not typing, at most
   `BOSUN_EVENTS_MAX_PER_DAY` times a day. Slack activity and windows stuck at a prompt take a

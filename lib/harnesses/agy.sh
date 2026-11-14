@@ -15,7 +15,7 @@ harness_upgrade_help() { echo "Update Antigravity: agy update"; }
 # The version bosun has been run against: its auto mode, --settings and --conversation as bosun uses them,
 # and what lib/agy_state.py reads of it, which is not a public API.
 harness_min_version() { echo "1.5.5"; }
-harness_version() { "$(harness_command)" --version 2>/dev/null | awk 'NR == 1 && $1 ~ /^[0-9]/ { print $1 }'; }
+harness_version() { "$(harness_command)" --version </dev/null 2>/dev/null | awk 'NR == 1 && $1 ~ /^[0-9]/ { print $1 }'; }
 
 # What else it needs, past being installed. Python is known to be there when this runs. The login is the
 # Keychain's item, looked up without reading it, and agy's first-run screens, which an unattended window would

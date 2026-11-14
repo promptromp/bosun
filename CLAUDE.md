@@ -675,4 +675,8 @@ for a checkout of your own, or a change made by hand:
   `projects[<dir>].hasTrustDialogAccepted` in `~/.claude.json` (trust is per git repo since 2.1.232;
   no flag skips the prompt). After a Claude Code update, check with `bosun doctor` and
   `bosun refresh --dry-run`.
+- A command bosun runs for an answer (`claude auth status`, `--version`, a listing) gets no terminal as its input:
+  `stdin=subprocess.DEVNULL`, or `</dev/null` in sh. `get.sh` starts `bosun init` on `/dev/tty`, and Claude Code
+  (on Bun) dies on that before it answers. `tests/unit/test_agent_input.py` checks the agent modules and
+  `lib/init_detect.py`; `docs/design/harnesses.md` has the rest.
 - When testing outward-facing features, never post to shared Slack channels; DM yourself.

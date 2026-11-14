@@ -323,6 +323,7 @@ def run_ps(args: list[str]) -> str:
         result = subprocess.run(
             ["ps", *args],
             check=False,
+            stdin=subprocess.DEVNULL,
             capture_output=True,
             text=True,
             errors="replace",
@@ -361,6 +362,7 @@ def capture_pane(socket: str, pane: str) -> str | None:
         result = subprocess.run(
             ["tmux", "-S", socket, "capture-pane", "-e", "-p", "-t", pane],
             check=False,
+            stdin=subprocess.DEVNULL,
             capture_output=True,
             text=True,
             errors="replace",
@@ -1214,6 +1216,7 @@ def keychain_item() -> bool:
         result = subprocess.run(
             ["security", "find-generic-password", "-s", KEYCHAIN_SERVICE],
             check=False,
+            stdin=subprocess.DEVNULL,
             capture_output=True,
             timeout=CAPTURE_TIMEOUT_SECONDS,
         )

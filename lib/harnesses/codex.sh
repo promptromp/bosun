@@ -11,7 +11,7 @@ harness_upgrade_help() { echo "Update Codex: codex update, or brew upgrade codex
 # The oldest version bosun has been run against: --no-daemon and --approve-for-me are not in much older
 # ones, and what lib/codex_state.py reads is not a public API.
 harness_min_version() { echo "0.166.0"; }
-harness_version() { "$(harness_command)" --version 2>/dev/null | awk 'NR == 1 { print $2 }'; }
+harness_version() { "$(harness_command)" --version </dev/null 2>/dev/null | awk 'NR == 1 { print $2 }'; }
 
 harness_checks() {
   if python3 "$ROOT/lib/codex_state.py" logged-in; then

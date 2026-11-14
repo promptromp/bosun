@@ -14,6 +14,8 @@ import tempfile
 import unittest
 from pathlib import Path
 
+from terminal_input import REFUSES_A_TERMINAL
+
 
 ROOT = Path(__file__).resolve().parents[2]
 PREFLIGHT = ROOT / "lib" / "preflight.sh"
@@ -47,10 +49,11 @@ class PreflightTest(unittest.TestCase):
         path.write_text(f"#!/bin/sh\n{body}\n")
         path.chmod(path.stat().st_mode | stat.S_IXUSR)
 
-    def claude(self, version: str, auth: str) -> None:
+    def claude(self, version: str, auth: str, first: str = "") -> None:
         self.tool(
             "claude",
-            f"""case "$*" in
+            f"""{first}
+case "$*" in
   --version) echo "{version} (Claude Code)" ;;
   "auth status --json") echo '{auth}' ;;
 esac""",
@@ -60,17 +63,70 @@ esac""",
         for name in names:
             (self.bin / name).unlink()
 
-    def run_it(self, *args: str, **env: str) -> subprocess.CompletedProcess[str]:
+    def run_it(self, *args: str, stdin: int | None = None, **env: str) -> subprocess.CompletedProcess[str]:
         environment = {"PATH": str(self.bin), "HOME": str(self.home), "BOSUN_PLATFORM": "macos", **env}
         return subprocess.run(
-            ["/bin/sh", str(PREFLIGHT), *args], env=environment, capture_output=True, text=True, check=False
+            ["/bin/sh", str(PREFLIGHT), *args],
+            env=environment,
+            stdin=stdin,
+            capture_output=True,
+            text=True,
+            check=False,
         )
+
+    def run_on_a_terminal(self, *args: str, **env: str) -> subprocess.CompletedProcess[str]:
+        """As `bosun init` runs it under get.sh: its input a terminal (/dev/tty there, a pty here)."""
+        primary, secondary = os.openpty()
+        try:
+            return self.run_it(*args, stdin=secondary, **env)
+        finally:
+            os.close(secondary)
+            os.close(primary)
 
     def test_all_there(self) -> None:
         result = self.run_it()
         self.assertEqual(result.returncode, 0, result.stdout)
         self.assertIn("Everything bosun needs is here", result.stdout)
         self.assertIn("on macOS", result.stdout)
+
+    def test_on_init_s_terminal_claude_is_asked_without_it(self) -> None:
+        """Claude Code dies on a terminal as its input (terminal_input.py): its version and login are
+        asked with none, or it reads as not logged in."""
+        self.claude("2.1.308", LOGGED_IN, first=REFUSES_A_TERMINAL)
+        result = self.run_on_a_terminal()
+        self.assertIn("version 2.1.308", result.stdout)
+        self.assertIn("ok         logged in", result.stdout)
+        self.assertNotIn("not logged in", result.stdout)
+
+    def test_each_profile_asks_its_version_without_the_terminal(self) -> None:
+        cases = {  # harness: (its command's setting, what --version prints, the version read from it)
+            "claude": ("BOSUN_CLAUDE_BIN", "2.1.308 (Claude Code)", "2.1.308"),
+            "codex": ("BOSUN_CODEX_BIN", "codex-cli 0.48.0", "0.48.0"),
+            "agy": ("BOSUN_AGY_BIN", "1.20.6", "1.20.6"),
+        }
+        for harness, (key, printed, version) in cases.items():
+            with self.subTest(harness=harness):
+                self.tool(harness, f'{REFUSES_A_TERMINAL}\necho "{printed}"')
+                primary, secondary = os.openpty()
+                try:
+                    result = subprocess.run(
+                        [
+                            "/bin/sh",
+                            "-c",
+                            '. "$1"; harness_version',
+                            "_",
+                            str(ROOT / "lib" / "harnesses" / f"{harness}.sh"),
+                        ],
+                        env={"PATH": str(self.bin), key: str(self.bin / harness)},
+                        stdin=secondary,
+                        capture_output=True,
+                        text=True,
+                        check=False,
+                    )
+                finally:
+                    os.close(secondary)
+                    os.close(primary)
+                self.assertEqual(result.stdout.strip(), version)
 
     def test_quiet_says_nothing_when_all_is_well(self) -> None:
         result = self.run_it("--quiet")

@@ -82,7 +82,8 @@ thread, also against a mention's own id) or URL, and names it with the window ho
 `$BOSUN_STATE_DIR/events/queue.jsonl` (append-only, one JSON object per line, time-ordered
 ids) for a report, something I said in a window, an outreach draft and a spawned task, each with
 the window it came from (`bosun ledger` reads it from tmux's `TMUX_PANE`). The dispatcher,
-`bosun events`, runs from the check-in loop every `BOSUN_EVENTS_INTERVAL_SECONDS` (30);
+`bosun events`, runs from the check-in loop as it starts and every `BOSUN_EVENTS_INTERVAL_SECONDS` (30;
+the first run at the start is what tells the watchdog the dispatcher is alive in this session);
 with check-ins off (`BOSUN_CHECKIN_MINUTES=0`), `BOSUN_EVENTS_WITHOUT_CHECKINS=1` keeps the
 loop (and the `checkin` window) running for events, the Slack and review watchers and waiting
 alerts, and it never sends a check-in. It

@@ -43,6 +43,13 @@ has. Adapters share `lib/agent_files.py`, and neither imports the other.
 What only one agent has stays out of the interface and is called by name: Claude Code's login checks
 (`lib/login.py`), its bypass warning, and the transcripts Impact and learning read.
 
+A command bosun runs for an answer (a login check, a version, a listing) never gets the terminal as its input:
+`stdin=subprocess.DEVNULL` in the adapters, `</dev/null` in the preflight profiles. Claude Code runs on Bun,
+which cannot watch `/dev/tty` on macOS (kqueue: `EINVAL`) and ends before it answers, and `get.sh` starts
+`bosun init` with its input on `/dev/tty`: its login check read as logged out on the first real `curl | sh`
+(2026-11-14). `tests/unit/test_agent_input.py` fails on a call in an adapter or `lib/init_detect.py` that
+does not say what its input is, and `tests/sandbox/claude-stand-in` fails on `/dev/tty` as Claude Code does.
+
 ## What Codex needed
 
 All of this was found by running real Codex 0.166.0 on a real Mac, and none of it is a public API.
