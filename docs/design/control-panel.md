@@ -3,8 +3,9 @@
 bosun.app ([the menu bar app](menu-bar.md)) shows bosun's state and runs a few actions. This turns it into what the
 person who runs bosun reaches for whatever the hour: a control panel that is there from login, apart from bosun's
 session (the orchestrator, the windows, the check-ins), which keeps to the schedule. It adds starting bosun at
-login, a separate Stop and Quit, and a Settings window. Status: proposed 2026-11-14, with the person's answers of
-the same day.
+login, a separate Stop and Quit, and a Settings window. Status: approved 2026-11-14, with the person's answers of
+the same day. Plan: [control-panel.md](../plans/control-panel.md). (Builder's call in the plan: Open at Login
+moves from the menu into Settings → General, beside starting at login, so it lives in one place.)
 
 ## Why
 
@@ -75,16 +76,13 @@ item (⌘,), in a window titled "<App> Settings", with panes only when there are
   scheduled day within the hours.
 - **A start you make always starts**: Start in the menu, opening bosun.app by hand when it is stopped (as today),
   `bosun start`, `bosun morning --now`.
-- **What a running session does outside the hours: to decide.** It covers a session you started on a weekend and
-  the everyday evening too, since a morning session runs on past `BOSUN_AWAKE_UNTIL` (only the keep-awake ends).
-  Two ways:
-  1. **The work follows the session** (recommended): while the session runs, its check-ins, events and the Slack
-     watcher (when on) run, whatever the hour. The clock decides only the automatic starts, the keep-awake's end,
-     the watchdog's holding of alerts, learning's time, and the status's "outside your hours". One rule, no
-     marker of how the session started; the check-ins already work this way, and the Slack watcher would follow
-     (it stops at `BOSUN_AWAKE_UNTIL` today).
-  2. **The work follows the clock**: outside the hours a running session's check-ins, events and Slack watcher
-     pause until the hours begin; a session you start on a weekend is quiet until you speak to it.
+- **The work follows the session** (the person's choice, 2026-11-14, of two): while the session runs, its
+  check-ins, events and the Slack watcher (when on) run, whatever the hour: a session you started on a weekend, and
+  the everyday evening, since a morning session runs on past `BOSUN_AWAKE_UNTIL` (only the keep-awake ends). The
+  clock decides only the automatic starts, the keep-awake's end, the watchdog's holding of alerts, learning's time,
+  and the status's "outside your hours". One rule, no marker of how the session started; the check-ins already work
+  this way, and the Slack watcher follows (it stopped at `BOSUN_AWAKE_UNTIL`). The other way, the work following the
+  clock (a running session quiet outside the hours), was not taken.
 - The status says it by the clock: "Running · outside your hours".
 
 ### Start at login
