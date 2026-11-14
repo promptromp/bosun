@@ -10,6 +10,11 @@
 # and APPLE_API_ISSUER_ID. The team id and bundle id are app/publisher.json's. Each step is given only the
 # secrets it uses, through `env:`, and the logs are public: no step prints one, or what a tool says about
 # the identity.
+#
+# Two jobs, so that the token that can write to the repository and the signing secrets are never in the same
+# job: `build` holds the secrets with a read-only token and hands the checked zip on as an artifact, with its
+# SHA-256 as an output; `publish` holds no secret, checks the artifact against that SHA-256, and is the only
+# job that may write, to create the release.
 name: Release bosun.app
 
 on:
@@ -24,13 +29,14 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  release:
+  build:
     runs-on: macos-latest
     environment: release
     timeout-minutes: 60
-    # Write only to create the release, with the token of the last step.
     permissions:
-      contents: write
+      contents: read
+    outputs:
+      sha256: ${{ steps.checksum.outputs.sha256 }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -166,16 +172,56 @@ jobs:
           set -eu
           version=$(tr -d '[:space:]' <app/VERSION)
           uv run --no-project python lib/app_install.py verify-archive "$DIST/bosun-app-$version.zip"
+      # The verified zip's SHA-256, which `publish` checks the artifact against and puts in the notes.
+      - name: The zip's checksum
+        id: checksum
+        run: |
+          set -eu
+          version=$(tr -d '[:space:]' <app/VERSION)
+          echo "sha256=$(shasum -a 256 "$DIST/bosun-app-$version.zip" | cut -d' ' -f1)" >>"$GITHUB_OUTPUT"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: bosun-app
+          path: ${{ env.DIST }}/bosun-app-*.zip
+          if-no-files-found: error
+          retention-days: 1
+      # Whatever happened above, the certificate and the key do not stay on the runner.
+      - name: Delete the throwaway keychain and the key file
+        if: always()
+        run: |
+          if [ -n "${KEYCHAIN:-}" ]; then
+            security delete-keychain "$KEYCHAIN" || echo "No keychain to delete."
+          fi
+          rm -f "${CERTIFICATE_FILE:-}" "${NOTARY_KEY_FILE:-}"
+
+  # No secret and no checkout here: the zip `build` verified, checked against its SHA-256, and the release.
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: bosun-app
+          path: ${{ runner.temp }}/bosun-app-dist
       - name: Publish the release
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
           TAG: ${{ github.ref_name }}
+          SHA256: ${{ needs.build.outputs.sha256 }}
         run: |
           set -eu
-          version=$(tr -d '[:space:]' <app/VERSION)
-          zip="$DIST/bosun-app-$version.zip"
-          sum=$(shasum -a 256 "$zip" | cut -d' ' -f1)
+          # `build` checked that the tag is app-v<app/VERSION>.
+          version=${TAG#app-v}
+          zip="$RUNNER_TEMP/bosun-app-dist/bosun-app-$version.zip"
+          sum=$(sha256sum "$zip" | cut -d' ' -f1)
+          if [ -z "$SHA256" ] || [ "$sum" != "$SHA256" ]; then
+            echo "The artifact is not the zip the build job verified: not releasing." >&2
+            exit 1
+          fi
           {
             echo "bosun.app $version: signed with the publisher's Developer ID, notarized and stapled."
             echo
@@ -185,11 +231,3 @@ jobs:
           } >"$RUNNER_TEMP/app-notes.md"
           gh release create "$TAG" "$zip" --verify-tag --title "bosun.app $version" \
             --notes-file "$RUNNER_TEMP/app-notes.md" --latest=false
-      # Whatever happened above, the certificate and the key do not stay on the runner.
-      - name: Delete the throwaway keychain and the key file
-        if: always()
-        run: |
-          if [ -n "${KEYCHAIN:-}" ]; then
-            security delete-keychain "$KEYCHAIN" || echo "No keychain to delete."
-          fi
-          rm -f "${CERTIFICATE_FILE:-}" "${NOTARY_KEY_FILE:-}"
