@@ -4694,10 +4694,11 @@ PY
   ub ledger upsert 'review:acme/api#1' --kind review-request --title "Exporter retries" >/dev/null
   ub ledger upsert 'mypr:acme/api#2' --kind my-pr --title "Nightly export" >/dev/null
   ub kg import "$KG_FIXTURE" --apply --auto-confirm >/dev/null 2>&1
-  # Everything in the state and config folders (locks aside: taking one creates its file); and the data
-  # alone, a line per file (not the update's own record, folder, backups or logs).
+  # Everything in the state and config folders (locks aside: taking one creates its file; logs aside: saying
+  # what it did, in its day's log, changes nothing); and the data alone, a line per file (not the update's own
+  # record, folder, backups or logs).
   u_listed() { (cd "$U" && find state config -type f ! -name '*.lock' "$@" -print0 | LC_ALL=C sort -z | xargs -0 shasum); }
-  u_files() { u_listed | shasum; }
+  u_files() { u_listed ! -path 'state/logs/*' | shasum; }
   u_data_list() { u_listed ! -path 'state/update*' ! -path 'state/backups/*' ! -path 'state/logs/*'; }
   u_data_is() { # <list before>: the data as it was then; if not, which files differ
     local now
