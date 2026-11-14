@@ -219,7 +219,73 @@ class RerunLine(Source):
     def test_a_password_in_the_repository_address_is_not_printed(self) -> None:
         line = self.line(BOSUN_REPO="https://user:secret-token@git.example.com/acme/bosun.git")
         self.assertNotIn("secret-token", line)
-        self.assertIn("BOSUN_REPO=https://git.example.com/acme/bosun.git ", line)
+        self.assertIn("BOSUN_REPO='https://***@git.example.com/acme/bosun.git' ", line)
+
+    def test_a_credential_in_any_form_of_address_is_not_in_the_line(self) -> None:
+        for address in CREDENTIAL_FORMS:
+            with self.subTest(address=address):
+                line = self.line(BOSUN_REPO=address)
+                self.assertNotIn("ghp_secret", line)
+                self.assertNotIn("hunter2", line)
+
+
+CREDENTIAL_FORMS = [
+    "x-access-token:ghp_secret@github.com:acme/bosun.git",
+    "https://git.example.com/acme/bosun.git?token=ghp_secret",
+    "https://git.example.com/acme/bosun.git?a=1&access_token=ghp_secret",
+    "https://ghp_secret@github.com/acme/bosun.git",
+    "https://u:hunter2@git.example.com/a.git?key=ghp_secret",  # pragma: allowlist secret gitleaks:allow
+]
+
+
+class Shown(Source):
+    """`shown`: a repository address as get.sh prints it, with no secret in it."""
+
+    def shown(self, address: str) -> str:
+        done = subprocess.run(
+            ["sh", "-c", '. "$1"; shown "$2"', "_", str(self.source), address],
+            env=clean_env(),
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        self.assertEqual(done.returncode, 0, done.stderr)
+        return done.stdout
+
+    def test_the_userinfo_of_a_url_is_hidden_with_or_without_a_colon(self) -> None:
+        address = "https://u:pw@h.example.com/a/b.git"  # pragma: allowlist secret gitleaks:allow
+        self.assertEqual(self.shown(address), "https://***@h.example.com/a/b.git")
+        self.assertEqual(
+            self.shown("https://ghp_secret@github.com/a/b.git"), "https://***@github.com/a/b.git"
+        )
+
+    def test_the_userinfo_of_an_scp_style_address_is_hidden(self) -> None:
+        shown = self.shown("x-access-token:ghp_secret@github.com:acme/bosun.git")
+        self.assertEqual(shown, "***@github.com:acme/bosun.git")
+
+    def test_a_query_string_is_hidden(self) -> None:
+        self.assertEqual(
+            self.shown("https://h.example.com/a.git?token=ghp_secret"), "https://h.example.com/a.git?***"
+        )
+        self.assertEqual(
+            self.shown("https://u:p@h.example.com?access_token=x"), "https://***@h.example.com?***"
+        )
+
+    def test_an_address_with_no_secret_is_left_as_it_is(self) -> None:
+        for address in (
+            "git@github.com:acme/bosun.git",
+            "https://github.com/acme/bosun.git",
+            "/srv/acme/bosun.git",
+            "../a path/bosun.git",
+        ):
+            with self.subTest(address=address):
+                self.assertEqual(self.shown(address), address)
+
+    def test_a_value_with_spaces_is_handled(self) -> None:
+        self.assertEqual(
+            self.shown("https://u:p w@h.example.com/my repo.git"), "https://***@h.example.com/my repo.git"
+        )
+        self.assertEqual(self.shown("tok en@h.example.com:my repo.git"), "***@h.example.com:my repo.git")
 
 
 class Upstream(Source):
