@@ -517,7 +517,15 @@ log_to_file() { # <file> <line>
   fi
   return 0
 }
+# die: bosun failed (a tool, a file or a step went wrong); the line goes to the log file too, where the watchdog
+# alerts on it. refuse: what the person asked cannot be done as asked (a name that is not there, nothing to act
+# on, the wrong place to run it); the same line on stderr, never in the log file: no fault of bosun's to alert on.
 die() {
+  log "ERROR: $*" >&2
+  exit 1
+}
+refuse() {
+  local LOG_TO_FILE=0 # log() reads it
   log "ERROR: $*" >&2
   exit 1
 }
@@ -530,7 +538,6 @@ usage_of() { awk 'NR == 1 { next } /^#/ { sub(/^# ?/, ""); print; next } { exit 
 # Print the calling script's header for --help.
 usage() { usage_of "$0"; }
 
-# A usage error: exit 2, pointing at --help.
 # <url> as it may be shown: without a user name, password or token before its host (get.sh's
 # shown() does the same, in plain sh).
 url_without_credentials() { # <url>
@@ -547,7 +554,10 @@ url_without_credentials() { # <url>
   printf '%s://%s%s' "${1%%://*}" "${host##*@}" "${rest#"$host"}"
 }
 
+# A usage error: exit 2, pointing at --help. Like refuse, never written to the log file: a mistyped flag is not
+# bosun failing, and the watchdog alerts on every ERROR line there.
 die_usage() {
+  local LOG_TO_FILE=0 # log() reads it
   log "ERROR: $* (see --help)" >&2
   exit 2
 }

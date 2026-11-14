@@ -416,10 +416,37 @@ class LogErrorsTestCase(unittest.TestCase):
         self.assertIn("step 0", text)
         self.assertNotIn("step 7", text)
 
-    def test_the_watchdogs_own_log_finding_is_not_said_twice(self) -> None:
-        message = "2 new ERROR line(s) in the bosun logs: check-in.log: [checkin] ERROR: x"
-        out = snap(log_errors=self.LINES, checks=watchdog_checks(check("log-errors", "error", message)))
-        self.assertEqual((out["level"], out["problems"]), ("error", [message]))
+    WATCHDOGS = "2 new ERROR line(s) in the bosun logs: check-in.log: [checkin] ERROR: x"
+
+    def test_the_watchdogs_log_finding_alone_is_not_a_problem(self) -> None:
+        # Outside the awake window the watchdog holds its log offsets, so its finding stays until its next run
+        # inside the hours; the menu counts only the last hour
+        out = snap(checks=watchdog_checks(check("log-errors", "error", self.WATCHDOGS)))
+        self.assertEqual((out["level"], out["sentence"]), ("ok", "bosun is running"))
+        self.assertEqual((out["problems"], out["attention"]), ([], []))
+
+    def test_the_watchdogs_log_finding_naming_a_window_is_no_attention(self) -> None:
+        found = check("log-errors", "error", self.WATCHDOGS, window="exporter")
+        out = snap(checks=watchdog_checks(found))
+        self.assertEqual((out["level"], out["attention"]), ("ok", []))
+
+    def test_the_last_hours_lines_are_a_warning_with_or_without_the_watchdogs_finding(self) -> None:
+        expected = menu_status.log_problem(self.LINES)
+        for found in ((), (check("log-errors", "error", self.WATCHDOGS),)):
+            with self.subTest(watchdogs_finding=bool(found)):
+                out = snap(log_errors=self.LINES, checks=watchdog_checks(*found))
+                self.assertEqual((out["level"], out["problems"]), ("warning", [expected]))
+                self.assertEqual(out["sentence"], "bosun is running, with a warning")
+
+    def test_the_watchdogs_log_finding_does_not_make_a_resting_bosun_an_error(self) -> None:
+        saturday = datetime(2026, 11, 14, 10, 0, 0)
+        out = snap(
+            now=saturday,
+            windows=GONE,
+            gate=RESTING,
+            checks=watchdog_checks(check("log-errors", "error", self.WATCHDOGS)),
+        )
+        self.assertEqual((out["level"], out["sentence"]), ("ok", "bosun is resting until 08:00"))
 
 
 KEYS = [

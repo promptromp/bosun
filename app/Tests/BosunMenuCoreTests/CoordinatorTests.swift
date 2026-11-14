@@ -101,7 +101,7 @@ import Testing
   }
 
   /// A-I2: opening the app never runs the morning on a bosun that runs, whatever its level: one with an error
-  /// (an ERROR line logged, a finding), or one whose windows could not be read.
+  /// (a finding at the error level), or one whose windows could not be read.
   @Test func openedByYouOnABosunThatRunsWithAnErrorItStartsNothing() async throws {
     for status in ["status-running-error", "status-windows-unreadable"] {
       let world = try await World(status: status)
