@@ -3342,7 +3342,8 @@ plain_fake launchctl 113 # the fake above; this section's alone
 
 section settings "settings (bosun settings get|set: bosun.env through init's writer, the jobs and the wake)" covers 'libexec/bosun-settings,lib/settings.py'
 # Its own config, state and launchd label, so what it writes and reloads is its alone; launchd has a job while it
-# has its plist, pmset's repeating event is what $SET_SCHED holds, and sudo -v fails while $WORK/sudo-fails is there.
+# has its plist, pmset's repeating event is what $SET_SCHED holds, and sudo -v fails while $WORK/sudo-fails is there,
+# pmset repeat while $WORK/settings-pmset-fails is, launchctl bootstrap while $WORK/settings-bootstrap-fails is.
 SET_CFG="$WORK/settings-config"
 SET_STATE="$WORK/settings-state"
 SET_LABEL="com.bosun.smoke-settings"
@@ -3355,12 +3356,14 @@ cat >"$HOME/.local/bin/launchctl" <<EOF
 #!/bin/bash
 echo "launchctl \$*" >>"$SET_LOG"
 [ "\$1" != print ] || [ -e "\$HOME/Library/LaunchAgents/\${2##*/}.plist" ] || exit 113
+[ "\$1" != bootstrap ] || [ ! -e "$WORK/settings-bootstrap-fails" ] || exit 5
 exit 0
 EOF
 cat >"$HOME/.local/bin/pmset" <<EOF
 #!/bin/bash
 echo "pmset \$*" >>"$SET_LOG"
 if [ "\$1 \$2" = "-g sched" ] && [ -s "$SET_SCHED" ]; then cat "$SET_SCHED"; fi
+[ "\$1" != repeat ] || [ ! -e "$WORK/settings-pmset-fails" ] || exit 1
 exit 0
 EOF
 cat >"$HOME/.local/bin/sudo" <<EOF
@@ -3406,8 +3409,35 @@ pmset_sched "wakepoweron at 8:01AM weekdays only"
 check "with bosun's wake in pmset, set BOSUN_START_TIME=09:00 succeeds" settings_exits 0 set BOSUN_START_TIME=09:00
 check "... asking sudo first, then moving the wake with sudo pmset" bash -c 'grep -q "^sudo -n -v" "$1" && grep -qx "sudo pmset repeat wakeorpoweron MTWRF 09:01:00" "$1" && [ "$(grep -n "^sudo -n -v" "$1" | head -1 | cut -d: -f1)" -lt "$(grep -n "^sudo pmset" "$1" | cut -d: -f1)" ]' _ "$SET_LOG"
 
+# A step after the write that fails puts bosun.env back from the backup the write made, and the jobs with it.
 pmset_sched "wakepoweron at 9:01AM weekdays only"
 cp "$SET_CFG/bosun.env" "$WORK/settings-before.env"
+put_back_said() { # <what the line says>: the run failed in one ERROR line, the last, saying it; bosun.env as before
+  local errors
+  errors="$(grep -c 'ERROR: ' "$WORK/settings.err")"
+  if [ "$errors" != 1 ] || ! tail -1 "$WORK/settings.err" | grep -qF -- "$1"; then
+    echo "ERROR lines: $errors; stderr: $(cat "$WORK/settings.err")"
+    return 1
+  fi
+  cmp -s "$SET_CFG/bosun.env" "$WORK/settings-before.env" || {
+    echo "bosun.env changed"
+    return 1
+  }
+}
+morning_at_nine() { grep -q "<key>Hour</key><integer>9</integer><key>Minute</key><integer>0</integer>" "$SET_PLIST"; }
+touch "$WORK/settings-pmset-fails"
+check "when pmset repeat fails, set fails (exit 1)" settings_exits 1 set BOSUN_START_TIME=10:00
+check "... in one line saying bosun.env and the jobs were put back, and bosun.env is byte for byte as before" put_back_said "pmset did not take the new wake (pmset failed), so bosun.env and the jobs were put back as they were"
+check "... and the morning job is back at 09:00" morning_at_nine
+rm -f "$WORK/settings-pmset-fails"
+touch "$WORK/settings-bootstrap-fails"
+: >"$SET_LOG"
+check "when launchctl bootstrap fails in the reload, set fails (exit 1)" settings_exits 1 set BOSUN_START_TIME=10:00
+check "... in one line naming the reload, and bosun.env is byte for byte as before" put_back_said "could not reload bosun's launchd jobs (launchctl bootstrap failed for"
+check "... the morning job's plist is back at 09:00 (the put-back's reload writes it before launchd refuses it again)" morning_at_nine
+check "... and the wake was never moved" bash -c '! grep -q "pmset repeat" "$1"' _ "$SET_LOG"
+rm -f "$WORK/settings-bootstrap-fails"
+settings_cmd set BOSUN_START_TIME=09:00 >/dev/null 2>&1 # the jobs loaded again
 touch "$WORK/sudo-fails"
 check "when sudo -v fails, set is refused" fails_with "moving the Mac's wake needs your password: run this in Terminal" settings_cmd set BOSUN_START_TIME=10:00
 check "... and bosun.env is unchanged" cmp -s "$SET_CFG/bosun.env" "$WORK/settings-before.env"

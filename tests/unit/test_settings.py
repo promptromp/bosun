@@ -65,17 +65,27 @@ class TestView(unittest.TestCase):
         self.assertEqual((days["value"], days["valid"], days["set"]), ("MTWRF SU", False, True))
 
     def test_get_unreadable(self) -> None:
+        """A bosun.env that cannot be read shows no value at all: never the default (the spec's anti-goal)."""
         shown = get(None, "Permission denied")
         self.assertFalse(shown["readable"])
         self.assertEqual(shown["error"], "Permission denied")
         for key, setting in shown["settings"].items():
-            self.assertEqual(setting["value"], DEFAULTS[key])
-            self.assertFalse(setting["set"])
+            self.assertEqual(
+                {k: setting[k] for k in ("value", "default", "set", "valid")},
+                {"value": None, "default": DEFAULTS[key], "set": False, "valid": False},
+            )
+            self.assertTrue(setting["meaning"])
 
-    def test_get_does_not_read_a_file_the_shell_cannot(self) -> None:
-        shown = get('BOSUN_DAYS="SU"\n', "line 3: syntax error")
-        self.assertFalse(shown["readable"])
-        self.assertEqual(shown["settings"]["BOSUN_DAYS"]["value"], "MTWRF")
+    def test_get_of_a_file_the_shell_cannot_load(self) -> None:
+        """Readable text the shell cannot load: what it assigns, as written, and why the shell failed."""
+        shown = get('BOSUN_DAYS="SU"\nBOSUN_START_TIME=soon\n', "line 3: syntax error")
+        self.assertTrue(shown["readable"])
+        self.assertEqual(shown["error"], "line 3: syntax error")
+        days, start = shown["settings"]["BOSUN_DAYS"], shown["settings"]["BOSUN_START_TIME"]
+        self.assertEqual((days["value"], days["set"], days["valid"]), ("SU", True, True))
+        self.assertEqual((start["value"], start["set"], start["valid"]), ("soon", True, False))
+        until = shown["settings"]["BOSUN_AWAKE_UNTIL"]
+        self.assertEqual((until["value"], until["set"], until["valid"]), ("20:00", False, True))
 
     def test_get_says_whose_wake(self) -> None:
         self.assertEqual(get(wake="other")["wake"], "other")
@@ -234,7 +244,20 @@ class TestCommandLine(unittest.TestCase):
 
     def test_get_with_the_shells_error(self) -> None:
         shown = json.loads(run("get", *self.common, "--schedule", "", "--env-error", "it stops")[1])
-        self.assertEqual((shown["readable"], shown["error"]), (False, "it stops"))
+        self.assertEqual((shown["readable"], shown["error"]), (True, "it stops"))
+        self.assertEqual(shown["settings"]["BOSUN_START_TIME"]["value"], "08:00")
+        text = run("get", *self.common, "--schedule", "", "--env-error", "it stops", "--text")[1]
+        self.assertIn("bosun cannot load it (it stops)", text)
+
+    def test_get_of_a_bosun_env_that_cannot_be_read(self) -> None:
+        self.env.unlink()
+        self.env.mkdir()  # reading it fails, as an unreadable file does
+        shown = json.loads(run("get", *self.common, "--schedule", "", "--env-error", "the shell's")[1])
+        self.assertFalse(shown["readable"])
+        self.assertNotEqual(shown["error"], "the shell's")  # why Python could not read it
+        self.assertIsNone(shown["settings"]["BOSUN_DAYS"]["value"])
+        text = run("get", *self.common, "--schedule", "", "--text")[1]
+        self.assertIn("BOSUN_DAYS: cannot be read", text)
 
     def test_plan(self) -> None:
         status, out, _ = run("plan", *self.common, "BOSUN_START_TIME=09:00")
@@ -252,9 +275,43 @@ class TestCommandLine(unittest.TestCase):
     def test_write(self) -> None:
         status, out, _ = run("write", *self.common, "--stamp", "20261114-090000", "BOSUN_START_TIME=09:00")
         self.assertEqual(status, 0)
-        self.assertEqual(json.loads(out)["changed"], {"BOSUN_START_TIME": ["08:00", "09:00"]})
+        written = json.loads(out)
+        self.assertEqual(written["changed"], {"BOSUN_START_TIME": ["08:00", "09:00"]})
         self.assertEqual(init_plan.parse_env(self.env.read_text())["BOSUN_START_TIME"], "09:00")
-        self.assertEqual((self.dir / "bosun.env.pre-init-20261114-090000").read_text(), COMMENTED)
+        backup = self.dir / "bosun.env.pre-init-20261114-090000"
+        self.assertEqual(backup.read_text(), COMMENTED)
+        self.assertEqual((written["backup"], written["created"]), (str(backup), False))
+
+    def put_back(self, written: str) -> tuple[int, str]:
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err):
+            status = settings.main(["put-back", "--config-dir", str(self.dir)], stdin=io.StringIO(written))
+        return status, err.getvalue()
+
+    def test_put_back_restores_the_backup_the_write_made(self) -> None:
+        self.env.chmod(0o600)
+        out = run("write", *self.common, "--stamp", "s1", "BOSUN_START_TIME=09:00")[1]
+        self.assertEqual(self.put_back(out), (0, ""))
+        self.assertEqual(self.env.read_text(), COMMENTED)
+        self.assertEqual(self.env.stat().st_mode & 0o777, 0o600)
+
+    def test_put_back_of_a_bosun_env_the_write_made_removes_it(self) -> None:
+        self.env.unlink()
+        out = run("write", *self.common, "--stamp", "s2", "BOSUN_START_TIME=09:00")[1]
+        self.assertEqual((json.loads(out)["backup"], json.loads(out)["created"]), (None, True))
+        self.assertTrue(self.env.exists())
+        self.assertEqual(self.put_back(out)[0], 0)
+        self.assertFalse(self.env.exists())
+
+    def test_put_back_with_no_backup_leaves_bosun_env(self) -> None:
+        """A write that reports no backup and no bosun.env of its own: nothing is removed, and it says so."""
+        status, err = self.put_back(json.dumps({"changed": {}, "backup": None, "created": False}))
+        self.assertEqual(status, 1)
+        self.assertIn("no backup", err)
+        self.assertEqual(self.env.read_text(), COMMENTED)
+        missing = json.dumps({"changed": {}, "backup": str(self.dir / "gone"), "created": False})
+        self.assertEqual(self.put_back(missing)[0], 1)
+        self.assertEqual(self.env.read_text(), COMMENTED)
 
     def test_write_of_nothing_new_writes_nothing(self) -> None:
         status, out, _ = run("write", *self.common, "--stamp", "s", "BOSUN_START_TIME=08:00")

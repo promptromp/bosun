@@ -401,8 +401,8 @@ BOSUN_UPDATE_CHANNEL="main"
 
 def settings_samples() -> dict[str, Sample]:
     """`settings get --json` over an acme bosun.env, with the defaults the example config holds and bosun's
-    own wake; `set --json` moving the start and the until (learning's time moves with them), with the note
-    for another app's wake; and a value refused."""
+    own wake, and over one that cannot be read; `set --json` moving the start and the until (learning's time
+    moves with them), with the note for another app's wake; and a value refused."""
     known = settings.defaults(settings.EXAMPLE.read_text())
     change = settings.change(SETTINGS_ENV, ["BOSUN_START_TIME=09:00", "BOSUN_AWAKE_UNTIL=18:00"], known)
     try:
@@ -411,6 +411,10 @@ def settings_samples() -> dict[str, Sample]:
         error = str(refused)
     return {
         "settings-get": settings.view(SETTINGS_ENV, None, known, settings.OURS, "/Users/me/.config/bosun"),
+        # bosun.env could not be read: no value is shown, never the default
+        "settings-get-unreadable": settings.view(
+            None, "Permission denied", known, settings.NONE, "/Users/me/.config/bosun"
+        ),
         "settings-set": settings.result(change.changed, [settings.WAKE_LEFT]),
         "settings-set-refused": settings.failure(error),
     }

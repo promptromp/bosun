@@ -14,6 +14,9 @@ change needs done on the Mac (sudo, the launchd jobs, pmset, the keep-awake), wh
         whose the Mac's repeating wake is: ours, none or other
     settings.py write --config-dir D [--example F] --stamp S KEY=VALUE...
         the change written, and what changed as JSON
+    settings.py put-back --config-dir D
+        after a step of `set` that failed: bosun.env as `write` (its JSON on stdin) found it: the backup it
+        made copied back, or the bosun.env it made removed; neither (it reports no backup) is exit 1
     settings.py say [--json] [--wake-left]
         what `write` printed (on stdin) as the lines a person reads, or as `set --json`'s object; --wake-left:
         with the note that another app's repeating wake was left as it is
@@ -21,7 +24,7 @@ change needs done on the Mac (sudo, the launchd jobs, pmset, the keep-awake), wh
         `set --json`'s object for a failure
 
 <S> is what `pmset -g sched` printed; without --schedule it is asked (read-only). <E> is why the shell could
-not read `bosun.env` (lib/common.sh's read_config): bosun then reads none of it.
+not load `bosun.env` (lib/common.sh's read_config): bosun then runs on none of it, and refuses to start.
 """
 
 from __future__ import annotations
@@ -153,19 +156,21 @@ def assigned(text: str) -> dict[str, str]:
 def view(
     env_text: str | None, error: str | None, defaults: Mapping[str, str], wake: str, config_dir: str
 ) -> dict[str, Any]:
-    """`bosun settings get --json`. A `bosun.env` that cannot be read (<error>) is read not at all, as bosun
-    reads it: every setting shows its default, `set` false, and `readable` false says why."""
-    readable = error is None and env_text is not None
-    found = assigned(env_text) if readable and env_text is not None else {}
+    """`bosun settings get --json`. A value it cannot show is shown as such, never as the default: with
+    <env_text> None (bosun.env could not be read; <error> says why) every value is null and not valid. Text
+    the shell could not load (<error> says why) still shows what it assigns, as written, each with its own
+    `valid`."""
+    readable = env_text is not None
+    found = assigned(env_text) if env_text is not None else {}
     shown = {}
     for setting in SETTINGS:
         default = defaults.get(setting.key, "")
-        value = found.get(setting.key, default)
+        value = found.get(setting.key, default) if readable else None
         shown[setting.key] = {
             "value": value,
             "default": default,
             "set": setting.key in found,
-            "valid": setting.problem(value) is None,
+            "valid": value is not None and setting.problem(value) is None,
             "meaning": setting.meaning,
         }
     return {
@@ -283,9 +288,19 @@ WAKE_WORDS = {
 
 def describe(shown: Mapping[str, Any]) -> list[str]:
     """`bosun settings get` for a person: a line a setting, with what it means."""
-    folder = f"{shown['config_dir']}/{init_plan.ENV_FILE}"
-    head = [f"{folder}" if shown["readable"] else f"{folder} cannot be read ({shown['error']}): the defaults"]
+    folder, error = f"{shown['config_dir']}/{init_plan.ENV_FILE}", shown["error"]
+    if not shown["readable"]:
+        head = [f"{folder} cannot be read ({error}): fix it, or run bosun init"]
+    elif error:
+        head = [
+            f"{folder}: bosun cannot load it ({error}), so it runs on none of it: fix it, or run bosun init"
+        ]
+    else:
+        head = [folder]
     for key, setting in shown["settings"].items():
+        if setting["value"] is None:
+            head.append(f"{key}: cannot be read  {setting['meaning']}")
+            continue
         where = "set" if setting["set"] else "default"
         valid = "" if setting["valid"] else ", not one bosun can use: fix it with bosun init"
         head.append(f"{key}={setting['value']}  ({where}{valid})  {setting['meaning']}")
@@ -328,12 +343,13 @@ def _parser() -> _Parser:
     say.add_argument("--json", action="store_true")
     say.add_argument("--wake-left", action="store_true")
     commands.add_parser("error", allow_abbrev=False).add_argument("message")
+    commands.add_parser("put-back", allow_abbrev=False).add_argument("--config-dir", type=Path, required=True)
     return parser
 
 
 def _get(args: argparse.Namespace, known: Mapping[str, str], text: str | None, error: str | None) -> int:
-    error = args.env_error or error
-    wake = wake_owner(_schedule(args.schedule), assigned(text or "") if error is None else {}, known)
+    error = error if text is None else args.env_error or None  # why Python, else why the shell, could not
+    wake = wake_owner(_schedule(args.schedule), assigned(text) if text is not None else {}, known)
     shown = view(text, error, known, wake, str(args.config_dir))
     print("\n".join(describe(shown)) if args.text else json.dumps(shown))
     return 0
@@ -356,11 +372,43 @@ def _on_file(args: argparse.Namespace) -> int:
     if args.command == "plan":
         print("".join(f"{effect}\n" for effect in sorted(done.effects)), end="")
         return 0
+    path, backup, created = config_dir / init_plan.ENV_FILE, None, False
     if done.changed:
-        path = config_dir / init_plan.ENV_FILE
+        created = not path.exists()
         with contextlib.redirect_stdout(sys.stderr):  # its "backed up" line: stdout is the JSON
-            init.write_with_backup(path, done.text, args.stamp, found=path.exists())
-    print(json.dumps(result(done.changed, [])))
+            backup = init.write_with_backup(path, done.text, args.stamp, found=not created)
+    # what the put-back acts on: the backup this write made, or that the bosun.env is one it made
+    written = {**result(done.changed, []), "backup": str(backup) if backup else None, "created": created}
+    print(json.dumps(written))
+    return 0
+
+
+class PutBackError(Exception):
+    """bosun.env could not be put back as the write found it."""
+
+
+def put_back(path: Path, written: Mapping[str, Any]) -> None:
+    """<path> as the write that printed <written> found it: the backup it made copied back over it (its mode
+    with it), or, when the write made the file, the file removed. With neither, nothing is touched."""
+    backup = written.get("backup")
+    if backup:
+        try:
+            text = Path(backup).read_text()
+        except OSError as exc:
+            raise PutBackError(f"its backup {backup} cannot be read: {exc.strerror or exc}") from exc
+        init.write_file(path, text)
+    elif written.get("created") is True:
+        path.unlink(missing_ok=True)
+    else:
+        raise PutBackError("the write reported no backup, so bosun.env was left as it is")
+
+
+def _put_back(args: argparse.Namespace, stdin: TextIO) -> int:
+    try:
+        put_back(args.config_dir / init_plan.ENV_FILE, json.load(stdin))
+    except (PutBackError, OSError, ValueError) as exc:
+        print(f"could not put bosun.env back: {exc}", file=sys.stderr)
+        return 1
     return 0
 
 
@@ -380,6 +428,8 @@ def main(argv: Sequence[str], stdin: TextIO | None = None) -> int:
         args = _parser().parse_args(argv)
         if args.command == "say":
             return _say(args, stdin or sys.stdin)
+        if args.command == "put-back":
+            return _put_back(args, stdin or sys.stdin)
         if args.command == "error":
             print(json.dumps(failure(args.message)))
             return 0

@@ -6,10 +6,12 @@
 # (BOSUN_DAYS, BOSUN_START_TIME, BOSUN_AWAKE_UNTIL), starting at login (BOSUN_START_AT_LOGIN, 0 or 1) and
 # what bosun update follows (BOSUN_UPDATE_CHANNEL, releases or main). Design: docs/design/control-panel.md.
 #   get   each one's value: what bosun.env sets, else the default, and whether it is one bosun can use;
-#         and whose the Mac's repeating wake is. A bosun.env that cannot be read is said, with the defaults
-#         (bosun reads none of it then). --json: one object, for the app and anyone:
+#         and whose the Mac's repeating wake is. A bosun.env that cannot be read shows no values, never the
+#         defaults; one bosun cannot load shows what it assigns, and why. --json: one object, for the app and
+#         anyone:
 #           contract    1; a number that only grows, a field only ever being added
-#           readable    whether bosun.env could be read; error: why not, else null
+#           readable    whether bosun.env could be read (when not, each value is null and not valid)
+#           error       why it could not be read, or why bosun cannot load it; else null
 #           config_dir  the folder of bosun.env
 #           wake        ours (bosun's repeating wake), none, or other (another app's; pmset keeps one)
 #           settings    {KEY: {value, default, set, valid, meaning}}
@@ -21,8 +23,9 @@
 #         bosun's, and a running keep-awake's end moved with BOSUN_AWAKE_UNTIL. Moving the wake asks for your
 #         password first (sudo -v; without a terminal to ask in, it is refused unless sudo needs none), and
 #         when that is cancelled or fails nothing is written. If pmset or the reload fails, bosun.env is put
-#         back as it was and the jobs reloaded again. Another app's repeating wake is left as it is, and said,
-#         unless --replace-wake. Refused while bosun update runs. Prints a line a change ("KEY: old → new");
+#         back from the backup the write made (or removed, if the write made it) and the jobs reloaded again.
+#         Another app's repeating wake is left as it is, and said, unless --replace-wake. Refused while bosun
+#         update runs. Prints a line a change ("KEY: old → new");
 #         --json: {"contract": 1, "changed": {KEY: [before, after]}, "notes": [...]} (BOSUN_LEARN_AT among them
 #         when it moved along), and on a failure {"contract": 1, "error": "..."}, the line on stderr too
 # Exit status: 0 done, 1 refused or failed (one line saying why), 2 usage or a value it does not take.
@@ -102,17 +105,39 @@ ask_for_sudo() {
   fi
 }
 
-# bosun.env as the backup holds it (none: there was none), and the jobs reloaded to match: after a step that
-# failed, bosun.env, the jobs and the wake stay as they were, together.
-put_back() {
-  local env="$BOSUN_CONFIG_DIR/bosun.env" backup="$BOSUN_CONFIG_DIR/bosun.env.pre-init-$stamp"
-  if [ -f "$backup" ]; then
-    cp -p "$backup" "$env.settings-$$" && mv -f "$env.settings-$$" "$env"
-  else
-    rm -f "$env"
+# Runs <step> (a function of lib/common.sh): its lines go to stderr when it succeeds. When it fails they are kept
+# in step_said, neither shown nor logged: the one line the command then fails with says what happened.
+run_step() { # <step...>
+  step_said="$(
+    LOG_TO_FILE=0 # log() reads it; in this subshell only
+    "$@" 2>&1
+  )" || return 1
+  [ -z "$step_said" ] || printf '%s\n' "$step_said" >&2
+}
+
+# The last ERROR a failed step said (without the date and command before it), else its last line.
+step_error() {
+  local said
+  said="$(grep 'ERROR: ' <<<"$step_said" | tail -1)"
+  said="${said#*ERROR: }"
+  printf '%s' "${said:-${step_said##*$'\n'}}"
+}
+
+# After a step that failed: bosun.env as the write found it (settings.py put-back acts only on what the write
+# reported: the backup it made, or a bosun.env it made), and the jobs reloaded to match, so that bosun.env, the
+# jobs and the wake stay as they were, together. Prints how that went, to end the line the command fails with.
+put_back() { # <what settings.py write printed>
+  local said
+  if ! said="$(printf '%s' "$1" | on_env put-back 2>&1)"; then
+    printf 'and %s' "${said##*$'\n'}"
+    return 0
   fi
   load_config
-  reload_changed_jobs >&2
+  if run_step reload_changed_jobs 2>/dev/null; then
+    printf 'so bosun.env and the jobs were put back as they were'
+  else
+    printf 'so bosun.env was put back as it was, but the jobs could not be reloaded to match it (%s)' "$(step_error)"
+  fi
 }
 
 # Whether a keep-awake is held: its pid file names a live caffeinate.
@@ -174,13 +199,11 @@ set_settings() {
   stamp="$(date +%Y%m%d-%H%M%S)-$$"
   changes="$(on_env write --stamp "$stamp" "${assignments[@]}")" || fail die "could not write bosun.env"
   load_config
-  if grep -qx jobs <<<"$effects" && ! reload_changed_jobs >&2; then
-    put_back
-    fail die "could not reload bosun's launchd jobs, so bosun.env was put back as it was"
+  if grep -qx jobs <<<"$effects" && ! run_step reload_changed_jobs; then
+    fail die "could not reload bosun's launchd jobs ($(step_error)), $(put_back "$changes")"
   fi
-  if [ "$wake" = 1 ] && ! (set_wake) >&2; then
-    put_back
-    fail die "pmset did not take the new wake, so bosun.env and the jobs were put back as they were"
+  if [ "$wake" = 1 ] && ! run_step set_wake; then
+    fail die "pmset did not take the new wake ($(step_error)), $(put_back "$changes")"
   fi
   if grep -qx keep-awake <<<"$effects"; then follow_keep_awake; fi
   say_changes "$changes"
