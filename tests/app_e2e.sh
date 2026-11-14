@@ -556,6 +556,9 @@ step_10() {
     check "what the script runs, run in a terminal with the password typed: bosun settings set BOSUN_START_TIME=03:00" in_terminal_with_password "$BOSUN" settings set BOSUN_START_TIME=03:00
     pmset -g sched | sed 's/^/  note  pmset: /'
     check "... and the wake moved with it, to a minute past the new start, still bosun's" bash -c 'pmset -g sched | grep -q "at 3:01AM" && "$1" settings get --json | jq -e ".wake == \"ours\""' _ "$BOSUN"
+    # the window brought to the front reads bosun again: what bosun read, never the draft, the hand-off's line gone
+    click settings
+    check "Settings… after the hand-off: the window shows what bosun read, 03:00, with the line to finish in Terminal gone" wait_for 30 menu_says '.settings.values.BOSUN_START_TIME == "03:00" and .settings.message == null'
   else
     check "no wake of bosun's to move, so the Save of BOSUN_START_TIME=03:00 ran settings set" wait_for 60 log_has "$mark" '.command == ["settings", "set", "BOSUN_START_TIME=03:00", "--json"] and .outcome == "exited 0"'
     check "... and the window shows 03:00" wait_for 30 menu_says '.settings.values.BOSUN_START_TIME == "03:00"'
