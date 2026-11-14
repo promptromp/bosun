@@ -22,7 +22,7 @@ as `pull_request`) and merges it when they pass, so nobody updates a branch by h
 and minor updates of the GitHub Actions, the sandbox's Docker base image, the pre-commit hooks and the
 uv development dependencies get auto-merge turned on by `.github/workflows/dependabot-auto-merge.yml`,
 which only adds them to the queue once their checks pass; majors and production dependencies wait for
-a person. CI runs every unit test on Linux (Python 3.13 and 3.14; on macOS too once the smoke job is back), and
+a person. CI runs every unit test on Linux (Python 3.13 and 3.14; on macOS too in the nightly run), and
 keeps a floor under their coverage, measured through `sys.monitoring` (`COVERAGE_CORE=sysmon`) because 3.13's
 default, `sys.settrace`, made every test about a quarter slower. The menu bar app has its own job, `app`: when a pull request or merge group changes nothing under `app/` (or the two tools that feed it, `tools/contract_samples.py` and `tools/swift_coverage.py`, the workflow, `setup-uv`, `uv.lock` or `pyproject.toml`), it is skipped (a cheap Linux job, `changes`, looks first, so no macOS runner starts, and a skipped job counts as passing for the required check); otherwise it runs the Swift tests with warnings as errors, the coverage floor, SwiftLint, `swift format lint --strict` and an ad hoc signed build. For the forbidden-terms check to run there too, store your list as the
 `FORBIDDEN_TERMS` Actions secret with `gh secret set FORBIDDEN_TERMS <
@@ -48,7 +48,7 @@ Issues and pull requests are welcome: see [CONTRIBUTING.md](../CONTRIBUTING.md) 
 The smoke suite is in sections, each begun by a `section <id> "<name>"` line. `--list` prints them. `--only`
 runs the shared setup and the sections you name, plus any they `needs` (the list shows those), in the order of
 the file, and its summary says it was a partial run: it is for iterating on the area you changed, and never
-instead of the whole suite before you commit; CI (when its smoke job is on) runs the whole suite, and the pre-push hook the sections the change reaches (below). `--with-unit` and
+instead of the whole suite before you commit; the pre-push hook and CI's merge queue run the sections the change reaches (below), and CI's nightly run the whole suite. `--with-unit` and
 `--only` combine.
 
 To cut the waiting while you iterate: `-x` stops at the first failing check, after its `FAIL` line, and the
@@ -66,8 +66,9 @@ The pre-push hook runs `tests/smoke.sh --pre-push`, which skips the suite, with 
 of the commit you push (pre-commit's `PRE_COMMIT_TO_REF`) already passed a whole run in this checkout less than
 24 hours ago. Otherwise it runs only the sections the change can reach, which is the build-out setting: a push
 need not wait for the whole 18 minutes, and the whole suite on every push comes back once the project is past
-its release (CI runs it again at the MVP, when its smoke job is turned on with the repository variable
-`CI_SMOKE`). The choice is described in [Which sections a push runs](#which-sections-a-push-runs) below. A whole run (none of `--only`, `--last-failed` or `-x`) that ends with no failure records, in
+its release. CI's `smoke` job makes the same choice in the merge queue, from the merge group's base
+(`tests/smoke.sh --changed`), is skipped on pull requests (a skipped required check counts as passing), and
+runs the whole suite nightly on main. The choice is described in [Which sections a push runs](#which-sections-a-push-runs) below. A whole run (none of `--only`, `--last-failed` or `-x`) that ends with no failure records, in
 `tests/.smoke-cache/passes`, the tree it tested: the files on disk before the first section runs, uncommitted
 changes included (what `git add -A` stages, taken in a copy of the index, so yours is not touched). It records
 nothing unless the tree is the same at the end of the run: a test that writes a file into the repository, or
@@ -79,7 +80,7 @@ partial or failed run, an unreadable record, git failing; the record can make a 
 tree pass. `BOSUN_SMOKE_NO_CACHE=1 git push` makes the hook ignore the record and run the sections the change reaches (this is the knob, not
 pre-commit's `SKIP`, which this repository does not use). With several refs in one push pre-commit hands the
 hook only the first one that is not a deletion, and a branch deletion runs nothing. CI never uses the record:
-when its smoke job runs, it runs `tests/smoke.sh` in full.
+its merge queue runs `tests/smoke.sh --changed <the group's base>`, and its nightly run `tests/smoke.sh` in full.
 
 ### Which sections a push runs
 
@@ -196,7 +197,7 @@ the cheapest of these that can show what you changed:
 | How Antigravity (`agy`) behaves under bosun: its hooks and plugin, its screen, its dialogs, its login | `tests/sandbox.sh mac live agy` | the real `agy` in a VM with a window, where you sign in; then windows started by launchd, Esc, a reviewer's dialog, the plugin's approvals, a slow hook, connectors, uninstall | about 25 minutes, you at the start, and a personal account's free quota |
 | The wake itself | `bosun wake-test`, on real hardware | a real sleep and a real wake | 5 minutes |
 
-The first also runs in CI (the second's unit and smoke suites run there natively, once the smoke job is back), and so does the third on
+The first also runs in CI (the second's unit and smoke suites run there natively: the smoke sections a change reaches in the merge queue, everything nightly), and so does the third on
 a clean GitHub macOS runner, whenever the install could have changed (`.github/workflows/install.yml`). The sandboxes' scripts install for real, so they
 refuse to run anywhere else.
 

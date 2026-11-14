@@ -53,7 +53,7 @@ parts your change touches.
 
 Open them against `main`, one topic each, saying what changed, why, and how you tested it. CI runs
 the hooks, the unit tests on Python 3.13 and 3.14, the menu bar app's build and tests (quick when `app/` is
-untouched), gitleaks and CodeQL (the macOS smoke suite is off until the MVP; the pre-push hook still runs the smoke sections your change can reach);
+untouched), gitleaks and CodeQL; in the merge queue, the macOS smoke sections your change can reach, as the pre-push hook does (the whole suite runs nightly);
 `main` takes a pull request once those pass and its review threads are resolved, through the merge
 queue: `gh pr merge --squash` (or the Merge button) adds it to the queue, which runs the checks again
 on the pull request on top of the latest `main` and merges it (squashed) when they pass. You never

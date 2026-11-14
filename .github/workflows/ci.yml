@@ -3,7 +3,7 @@
 # for the local hooks. Pull requests and the merge queue's merge groups (each PR on top of the latest
 # main and the PRs ahead of it; without `merge_group` the queue would wait forever for checks that
 # never report), not again on the push to main: main only ever gets what
-# a pull request passed. The logs are public, so neither check prints what it
+# a pull request passed. Nightly, main's head is checked again, with the whole smoke suite. The logs are public, so neither check prints what it
 # matched: FORBIDDEN_TERMS_REDACT and gitleaks --redact.
 name: CI
 
@@ -14,6 +14,10 @@ on:
     types: [checks_requested]
     branches: [main]
   workflow_dispatch:
+  # Nightly on main: every job, and the whole smoke suite (`smoke`), before the weekly release's
+  # Monday 06:00 gate (.github/workflows/release.yml).
+  schedule:
+    - cron: "0 3 * * *"
 
 permissions:
   contents: read
@@ -100,27 +104,23 @@ jobs:
         env:
           COVERAGE_CORE: sysmon
 
-  # On macOS like the machines bosun runs on (the scripts use BSD date and /bin/bash 3.2): every
-  # unit test once, in parallel, then the end-to-end suite, which leaves the unit tests to the first
-  # step.
-  #
-  # Off until the feature-complete MVP (2026-11-13, the repo owner's decision): it takes 15-20
-  # minutes on a scarce macOS runner per pull request, while basic features are still being built.
-  # The smoke suite still runs locally, for the sections a push reaches (the pre-push hook,
-  # `tests/smoke.sh --pre-push`). To turn it back on, remove the `if` line (or set the repository variable CI_SMOKE to true; actionlint refuses a
-  # constant `if: false`) and re-add `smoke` to .github/rulesets/main.json's required checks, then
-  # apply the ruleset. While off it is skipped in merge groups too, and the queue does not
-  # wait on it.
+  # On macOS like the machines bosun runs on (the scripts use BSD date and /bin/bash 3.2). Skipped on pull
+  # requests, which a required check counts as passing: the full suite takes 15-25 minutes on a scarce macOS
+  # runner, which every push to a pull request would wait for (the repo owner's choice, 2026-11-14).
+  # - In the merge queue: the end-to-end sections the queued change can reach, from the merge group's base
+  #   (`tests/smoke.sh --changed`, the selection the pre-push hook makes, tools/smoke_select.py), which
+  #   fails closed to the whole suite. The unit tests ran on the pull request (`test`).
+  # - Nightly on main, and by hand: every unit test once, in parallel, then the whole suite. The weekly
+  #   release's gate reads main's head checks, so a nightly that failed holds the release.
   smoke:
-    if: ${{ vars.CI_SMOKE == 'true' }}
+    if: github.event_name != 'pull_request'
     runs-on: macos-latest
-    # The end-to-end suite took about 13 of the 20 minutes on GitHub's macOS runner, the unit tests,
-    # one at a time, the other 7.
-    timeout-minutes: 30
+    timeout-minutes: 50
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+          fetch-depth: 0 # the merge group's base, for the selection
       - uses: ./.github/actions/setup-uv
         with:
           python-version: "3.13"
@@ -131,9 +131,17 @@ jobs:
           HOMEBREW_NO_AUTO_UPDATE: "1"
           HOMEBREW_NO_INSTALL_CLEANUP: "1"
       - name: Unit tests
+        if: github.event_name != 'merge_group'
         run: uv run pytest -n auto
       - name: End to end
-        run: tests/smoke.sh
+        env:
+          BASE: ${{ github.event.merge_group.base_sha }}
+        run: |
+          if [ -n "$BASE" ]; then
+            tests/smoke.sh --changed "$BASE"
+          else
+            tests/smoke.sh
+          fi
 
   # Whether the menu bar app's job has anything to do: a cheap Linux job, so that a pull request that does not
   # touch the app never starts a macOS runner, which are scarce. Builds (build=true) unless it can show that
