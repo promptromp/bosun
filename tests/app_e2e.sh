@@ -13,7 +13,8 @@
 # and placed in ~/Applications the way `bosun app install` places an app (`bosun init` cannot offer an app that is
 # not the publisher's: there is no Team ID), BOSUN_MENU_APP and the console's job set as `bosun init` sets them
 # with the app. release: `bosun init` installs the published, notarized app, as a person gets it, and the suite
-# checks Gatekeeper accepts it (that run needs a release and a Team ID in app/publisher.json).
+# checks Gatekeeper accepts it and init turned Open at Login on, then turns it off for the driven steps (that run
+# needs a release and a Team ID in app/publisher.json).
 #
 # Checks pass shell snippets to `bash -c '...' _ args`; their $ must not expand here.
 # shellcheck disable=SC2016
@@ -133,6 +134,8 @@ place_built_app() {
 }
 
 # --from release: bosun init installed the notarized app, and opened it at login at once. What a person gets.
+# Then Open at Login goes off again, so the driven steps start where they start with a built app: step 4 checks
+# that an update does not make the login job, and step 7 turns it on from the menu.
 check_the_release() {
   spctl --status | grep -q "assessments enabled" || { sudo spctl --global-enable && echo "  note  assessments were disabled on this Mac: enabled"; }
   check "Gatekeeper accepts the download: source=Notarized Developer ID" bash -c 'spctl --assess --type execute -vv "$1" 2>&1 | grep -qx "source=Notarized Developer ID"' _ "$APP"
@@ -141,6 +144,9 @@ check_the_release() {
   check "... which started the app: it runs" wait_for 60 app_running
   python3 "$DIR/lib/app_install.py" quit >/dev/null 2>&1
   check "the app, without hooks, is quit again, for the one that is driven" wait_for 60 app_gone
+  check "bosun app login off: the login job's plist is gone, and the job is not loaded" bash -c '
+    "$1" app login off >/dev/null && test ! -e "$2" && ! launchctl print "$3/$4" >/dev/null 2>&1' _ "$BOSUN" "$APP_PLIST" "$DOMAIN" "$APP_JOB"
+  check "... and bosun app status --json says login false" bash -c '"$1" app status --json | jq -e ".login == false"' _ "$BOSUN"
 }
 
 app_is_installed() {
