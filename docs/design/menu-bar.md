@@ -207,8 +207,9 @@ Calls made from the research and the builder check, to check while reading:
   `bosun stop` today is `stopped` with the morning not paused; outside the awake hours it is resting (until the next
   scheduled start), and when the awake window has begun and the morning run is going or not yet due it is starting
   (never, at the error level: a crashed or hung morning run is named as failed). The yellow level also lists the ERROR
-  lines of the last hour after the watchdog has alerted them (the same line is an error until the watchdog's next
-  run, then a warning for the hour), and the watchdog itself not running (`watchdog --facts` says its launchd job is loaded or
+  lines of the last hour, which the status reads itself whatever the hour (the watchdog's `log-errors` finding is
+  never counted: outside the awake hours the watchdog holds its log offsets, so the finding would stay until its
+  next run inside them, and one line kept the menu red a whole weekend), and the watchdog itself not running (`watchdog --facts` says its launchd job is loaded or
   not and whether its plist is installed; a job that is installed and not loaded, or loaded with no run for three of its
   five-minute intervals of the Mac being awake (counted from the latest of its last run, the Mac's last wake, `sysctl -n
   kern.waketime`, and its boot, `kern.boottime`, so neither the morning's wake nor the minutes after a restart, before
@@ -506,7 +507,7 @@ Where what is built differs from what this note said before, or says more:
     click is the person's choice). It is greyed on a status that is not current (kept after a look that timed out).
     The start at launch is narrower: only with `running` false, on a current status, so opening the app never runs
     the morning while windows are open, the unfinished quit included. A red bosun with its windows open (an
-    error-level finding, an ERROR line the watchdog has not seen) or with its windows unread offers its problems
+    error-level finding) or with its windows unread offers its problems
     and no Start. `running` is new in `bosun status --json`; the app reads its absence as not known.
   - A `level` the app does not know is shown as a warning (yellow, Show What's Wrong…, no Start), not as "cannot be
     reached". A link that cannot be run is "bosun cannot be run"; "cannot be reached" (a status that could not be
