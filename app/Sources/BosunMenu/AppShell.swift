@@ -94,6 +94,10 @@ final class AppShell: AppUI {
       Task { await self.coordinator.menuWillOpen() }
     }
     statusItem = item
+    settingsWindow.onKey = { [weak self] in
+      guard let self else { return }
+      Task { await self.coordinator.refreshSettings() }
+    }
     wake = WakeObserver { [weak self] in
       guard let self else { return }
       Task { await self.coordinator.didWake() }

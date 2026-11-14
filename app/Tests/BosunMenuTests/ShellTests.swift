@@ -249,6 +249,20 @@ final class Flag {
     window.close()
   }
 
+  @Test func theWindowBecomingKeyAsksForAFreshRead() throws {
+    let controller = SettingsWindowController()
+    var asked = 0
+    controller.onKey = { asked += 1 }
+    controller.show(state) { _ in self.state }
+    let window = try #require(controller.window)
+    let before = asked
+    NotificationCenter.default.post(name: NSWindow.didBecomeKeyNotification, object: window)
+    #expect(asked == before + 1)
+    NotificationCenter.default.post(name: NSWindow.didBecomeKeyNotification, object: NSWindow())
+    #expect(asked == before + 1)
+    window.close()
+  }
+
   @Test func anEditShowsBusyThenWhatTheCoordinatorAnswers() async throws {
     let answer = SettingsState(view: nil, openAtLogin: false, message: "done", busy: false)
     var asked: [SettingsEdit] = []

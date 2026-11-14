@@ -108,9 +108,10 @@ public struct ScheduleDraft: Equatable, Sendable {
   }
 
   /// The draft the Schedule pane shows once `state` comes: started again from what bosun read on each new reading
-  /// (a Settings…, the read after a Save, refused or not), so the pane never shows an edit bosun did not take; kept
-  /// while the reading is the same (a Save under way, Open at Login switched, a change handed to Terminal, whose
-  /// message says it is to be finished there); none while there is nothing read.
+  /// (a Settings…, the read after a Save, refused or not, a change handed to Terminal, a read when the window comes
+  /// to the front after a hand-off or with other values: `SettingsState.read`), so the pane never shows an edit
+  /// bosun did not take; kept while the reading is the same (a Save under way, Open at Login switched, the window
+  /// back in front with the values as they were); none while there is nothing read.
   public static func next(_ draft: Self?, from old: SettingsState?, to state: SettingsState) -> Self? {
     guard let view = state.view else { return nil }
     guard let draft, let old, old.read == state.read, old.view == view else {

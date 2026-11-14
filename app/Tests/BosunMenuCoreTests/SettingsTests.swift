@@ -241,8 +241,46 @@ private func state(_ view: SettingsView?) -> SettingsState {
     let fresh = try view()
     let first = read(fresh, 1)
     #expect(ScheduleDraft.next(edited(fresh), from: first, to: first.starting()) == edited(fresh))
-    let handedOff = read(fresh, 1, message: "Finish the change in Terminal")
-    #expect(ScheduleDraft.next(edited(fresh), from: first, to: handedOff) == edited(fresh))
+    #expect(
+      ScheduleDraft.next(edited(fresh), from: first, to: first.with(openAtLogin: false)) == edited(fresh))
+  }
+
+  @Test func aHandOffToTerminalIsANewReadingOfWhatBosunReadBefore() throws {
+    let fresh = try view()
+    let first = read(fresh, 1)
+    let handedOff = first.handedOff(read: 2)
+    #expect(handedOff.handedOff)
+    #expect(handedOff.message == SettingsState.finishInTerminal)
+    #expect(handedOff.view == fresh)
+    #expect(ScheduleDraft.next(edited(fresh), from: first, to: handedOff) == ScheduleDraft(view: fresh))
+  }
+
+  @Test func backInFrontAfterAHandOffShowsTheReadNeverTheDraft() throws {
+    let fresh = try view()
+    let handedOff = read(fresh, 1).handedOff(read: 2)
+    let other = try view(key: SettingKey.startTime, value: "09:00")
+    for reread in [read(fresh, 3), read(other, 3)] {
+      let shown = handedOff.refreshed(by: reread)
+      #expect(shown == reread)
+      #expect(shown.message == nil)
+      #expect(!shown.handedOff)
+      #expect(
+        ScheduleDraft.next(edited(fresh), from: handedOff, to: shown) == ScheduleDraft(view: reread.view!))
+    }
+  }
+
+  @Test func backInFrontWithTheValuesAsTheyWereKeepsTheReading() throws {
+    let fresh = try view()
+    let first = read(fresh, 1, message: "refused")
+    let reread = SettingsState(view: fresh, openAtLogin: false, message: nil, busy: false, read: 2)
+    let shown = first.refreshed(by: reread)
+    #expect(shown.read == 1)
+    #expect(shown.message == "refused")
+    #expect(!shown.openAtLogin)
+    #expect(ScheduleDraft.next(edited(fresh), from: first, to: shown) == edited(fresh))
+    let other = try view(key: SettingKey.startTime, value: "09:00")
+    #expect(first.refreshed(by: read(other, 2)) == read(other, 2))
+    #expect(first.refreshed(by: read(nil, 2, message: "cannot read")) == read(nil, 2, message: "cannot read"))
   }
 
   @Test func aFirstStateOrAnotherViewStartsTheDraftAndNoViewHasNone() throws {

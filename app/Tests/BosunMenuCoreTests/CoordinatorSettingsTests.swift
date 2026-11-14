@@ -248,21 +248,114 @@ private func settingsCommands(_ world: World) async -> [[String]] {
       ScheduleDraft.next(draft, from: first, to: second) == ScheduleDraft(view: try #require(second.view)))
   }
 
-  @Test func afterATerminalHandOffTheNextReadStartsTheDraftAgain() async throws {
+  @Test func aTerminalHandOffShowsWhatBosunReadBefore() async throws {
     let world = try await opened()
     let first = try #require(world.ui.settingsShown.last)
     let draft = try edited(first)
     let handedOff = try await apply(world, .values([SettingKey.startTime: "09:00"]))
-    #expect(handedOff.message == AppCoordinator.finishInTerminal)
+    #expect(handedOff.message == SettingsState.finishInTerminal)
+    #expect(handedOff.handedOff)
+    #expect(handedOff.read == first.read + 1)
     #expect(handedOff.scheduleLine == first.scheduleLine)
-    let kept = ScheduleDraft.next(draft, from: first, to: handedOff)
-    #expect(kept == draft)
+    #expect(
+      ScheduleDraft.next(draft, from: first, to: handedOff) == ScheduleDraft(view: try #require(first.view)))
     // sudo cancelled in Terminal: bosun.env is as it was, and the next Settings… shows it
     await world.coordinator.perform(.settings)
     let reread = try #require(world.ui.settingsShown.last)
-    #expect(
-      ScheduleDraft.next(kept, from: handedOff, to: reread) == ScheduleDraft(view: try #require(reread.view)))
     #expect(reread.message == nil)
+  }
+
+  // MARK: the window back in front: bosun read again
+
+  /// A world whose Settings window shows a change of the start time handed to Terminal.
+  private func handedOff() async throws -> (World, SettingsState) {
+    let world = try await opened()
+    let state = try await apply(world, .values([SettingKey.startTime: "09:00"]))
+    #expect(state.handedOff)
+    return (world, state)
+  }
+
+  @Test func backInFrontAfterAHandOffShowsWhatBosunReadWithTheLineGone() async throws {
+    let (world, handed) = try await handedOff()
+    // sudo cancelled: the same values
+    let draft = try edited(handed)
+    await world.coordinator.refreshSettings()
+    let same = try #require(world.coordinator.settings)
+    #expect(same.message == nil)
+    #expect(same.read > handed.read)
+    #expect(same.view == handed.view)
+    #expect(ScheduleDraft.next(draft, from: handed, to: same) == ScheduleDraft(view: try #require(same.view)))
+    #expect(Array(await settingsCommands(world).suffix(1)) == [Bosun.settingsGet.args])
+  }
+
+  @Test func backInFrontAfterAHandOffThatTookShowsTheNewValues() async throws {
+    let (world, handed) = try await handedOff()
+    // sudo given: bosun.env has the new channel (a stand-in for the start time the fixture cannot change)
+    await world.replace(Bosun.settingsGet, exited(0, try settingsWith(channel: "releases")))
+    await world.coordinator.refreshSettings()
+    let fresh = try #require(world.coordinator.settings)
+    #expect(fresh.message == nil)
+    #expect(fresh.view?.settings[SettingKey.updateChannel]?.value == "releases")
+    #expect(
+      ScheduleDraft.next(try edited(handed), from: handed, to: fresh)
+        == ScheduleDraft(view: try #require(fresh.view)))
+  }
+
+  @Test func backInFrontWithTheSameValuesKeepsAnEditInProgress() async throws {
+    let world = try await opened()
+    let first = try #require(world.ui.settingsShown.last)
+    let draft = try edited(first)
+    await world.coordinator.refreshSettings()
+    let again = try #require(world.coordinator.settings)
+    #expect(again.read == first.read)
+    #expect(ScheduleDraft.next(draft, from: first, to: again) == draft)
+    #expect(await settingsCommands(world) == [Bosun.settingsGet.args, Bosun.settingsGet.args])
+  }
+
+  @Test func backInFrontWithOtherValuesShowsThem() async throws {
+    let world = try await opened()
+    let first = try #require(world.ui.settingsShown.last)
+    await world.replace(Bosun.settingsGet, exited(0, try settingsWith(channel: "releases")))
+    await world.coordinator.refreshSettings()
+    let fresh = try #require(world.coordinator.settings)
+    #expect(fresh.read > first.read)
+    #expect(fresh.view?.settings[SettingKey.updateChannel]?.value == "releases")
+  }
+
+  @Test func backInFrontReadsNothingBeforeTheWindowOrWhileASaveRuns() async throws {
+    let gate = Gate()
+    let values = [SettingKey.updateChannel: "releases"]
+    let world = try await World(gates: [Bosun.settingsSet(values).args: gate])
+    await world.refresh(.launch)
+    await world.coordinator.refreshSettings()
+    #expect(await settingsCommands(world).isEmpty)
+    try await world.reply(Bosun.settingsGet, fixture: "settings-get")
+    await world.coordinator.perform(.settings)
+    await world.reply(Bosun.settingsSet(values), exited(0, changedReply))
+    let save = Task { try await apply(world, .values(values)) }
+    #expect(await gate.waitForWaiter())
+    await world.coordinator.refreshSettings()
+    #expect(world.coordinator.settings?.busy == true)
+    await gate.open()
+    _ = try await save.value
+    #expect(await settingsCommands(world).filter { $0 == Bosun.settingsGet.args }.count == 2)
+  }
+
+  @Test func aReadThatASaveOvertookIsDropped() async throws {
+    let gate = Gate()
+    let world = try await World(gates: [Bosun.settingsGet.args: gate])
+    await world.refresh(.launch)
+    try await world.reply(Bosun.settingsGet, fixture: "settings-get")
+    let view = try Fixtures.decode(SettingsView.self, "settings-get")
+    let shown = SettingsState(view: view, openAtLogin: true, message: nil, busy: false, read: 1)
+    world.coordinator.settings = shown
+    let refresh = Task { await world.coordinator.refreshSettings() }
+    #expect(await gate.waitForWaiter())
+    let saving = shown.starting()
+    world.coordinator.settings = saving
+    await gate.open()
+    await refresh.value
+    #expect(world.coordinator.settings == saving)
   }
 
   @Test func eachReadIsANewReading() async throws {

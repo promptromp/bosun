@@ -325,7 +325,10 @@ take) is shown as such, with the wizard as the way to fix it.
   20:00"), and Save. A Save reloads bosun's jobs, so the morning job runs at the new time; a new until moves a running
   keep-awake's end too. When the days or the start time change and bosun set the Mac's wake, moving it needs an
   administrator (`sudo pmset`): the Save opens Terminal running `bosun settings set`, which asks for your password
-  first and writes nothing if that is cancelled; another app's repeating wake is left as it is, and said.
+  first and writes nothing if that is cancelled; another app's repeating wake is left as it is, and said. Meanwhile
+  the window shows the schedule bosun read before, and when you come back to it, it reads `bosun.env` again and shows
+  what is there, the change or not. Coming back to the window from another app keeps an unsaved edit while
+  `bosun.env` is as it was.
 
 ### Uninstalling
 

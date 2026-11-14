@@ -36,11 +36,19 @@ final class SettingsModel: ObservableObject {
   }
 }
 
-/// One window, made on the first Settings… and brought to the front with fresh values on the next.
+/// One window, made on the first Settings… and brought to the front with fresh values on the next. Each time it
+/// becomes the key window (back from Terminal, or from another app) it calls `onKey`, which has bosun read again
+/// (`AppCoordinator.refreshSettings`: what the window then shows is the core's).
 @MainActor
 final class SettingsWindowController {
+  private struct Handler: @unchecked Sendable {
+    let call: @MainActor () -> Void
+  }
+
   private(set) var window: NSWindow?
   private(set) var model: SettingsModel?
+  var onKey: @MainActor () -> Void = {}
+  private var keyToken: (any NSObjectProtocol)?
 
   func show(_ state: SettingsState, apply: @escaping @MainActor (SettingsEdit) async -> SettingsState) {
     if let model, let window {
@@ -57,6 +65,12 @@ final class SettingsWindowController {
     window.center()
     self.model = model
     self.window = window
+    let handler = Handler { [weak self] in self?.onKey() }
+    keyToken = NotificationCenter.default.addObserver(
+      forName: NSWindow.didBecomeKeyNotification, object: window, queue: .main
+    ) { _ in
+      MainActor.assumeIsolated { handler.call() }
+    }
     bringToFront(window)
   }
 

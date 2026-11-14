@@ -43,8 +43,9 @@ public struct SettingsState: Equatable, Sendable {
   public let message: String?
   /// A set is running: the form is disabled.
   public let busy: Bool
-  /// Which reading of bosun's settings this is: each `settings get` (each Settings…, and the read after each Save)
-  /// is a new one, after which the Schedule pane starts again from what bosun read (`ScheduleDraft.next`).
+  /// Which reading of bosun's settings this is: each `settings get` (each Settings…, the read after each Save, and
+  /// one when the window comes to the front that `refreshed` takes) and each change handed to Terminal is a new one,
+  /// after which the Schedule pane starts again from what bosun read (`ScheduleDraft.next`).
   public let read: Int
 
   public init(view: SettingsView?, openAtLogin: Bool, message: String?, busy: Bool, read: Int = 0) {
@@ -59,6 +60,22 @@ public struct SettingsState: Equatable, Sendable {
   /// is bosun's, which `pmset` needs an administrator for.
   public func needsTerminal(_ values: [String: String]) -> Bool {
     view?.wake == "ours" && values.keys.contains { SettingKey.wake.contains($0) }
+  }
+
+  /// The line a change that moves the wake leaves: it is finished in Terminal.
+  public static let finishInTerminal =
+    "Finish the change in Terminal: it asks for your password to move the Mac's wake"
+
+  /// Whether this is a change handed to Terminal, still to be finished there.
+  public var handedOff: Bool { message == Self.finishInTerminal }
+
+  /// What a read made when the window came to the front again (`fresh`, a new reading) leads to: after a change
+  /// handed to Terminal, or when bosun's values are not the ones shown, what bosun read (the draft started again,
+  /// the hand-off's line gone); otherwise this reading stays, with its line and Open at Login as read now, so an
+  /// edit in progress is kept across a switch to another app and back.
+  public func refreshed(by fresh: SettingsState) -> SettingsState {
+    if handedOff || fresh.view != view { return fresh }
+    return SettingsState(view: view, openAtLogin: fresh.openAtLogin, message: message, busy: busy, read: read)
   }
 
   /// The state while an edit runs: the form disabled, the last message gone.
