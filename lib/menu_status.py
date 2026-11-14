@@ -218,6 +218,11 @@ def next_start(window: awake.AwakeWindow | None, now: datetime) -> datetime | No
     return None
 
 
+def in_hours(window: awake.AwakeWindow | None, now: datetime) -> bool | None:
+    """Whether <now> is within your hours; None when the settings did not load."""
+    return None if window is None else window.contains(now)
+
+
 def log_problem(lines: tuple[str, ...]) -> str:
     return f"{plural(len(lines), 'ERROR line')} in the bosun logs in the last hour: {watchdog.listed(lines)}"
 
@@ -305,10 +310,12 @@ def not_running_sentence(facts: StatusFacts, level: str, now: datetime) -> str:
         if level == ERROR:
             return failed_sentence(facts)
         return with_level("bosun is starting (the morning run)", level)
-    start = next_start(facts.awake, now) if kind == RESTING else None
-    if start is None:
+    if kind != RESTING:
         return "bosun is not running"
-    return with_level(f"bosun is resting until {start:%H:%M}", level)
+    start = next_start(facts.awake, now)
+    if start is None:
+        return with_level("Resting: outside your hours", level)
+    return with_level(f"Resting: outside your hours · next start {start:%a %H:%M}", level)
 
 
 def running_sentence(facts: StatusFacts, level: str, count: int | None, now: datetime) -> str:
@@ -316,7 +323,8 @@ def running_sentence(facts: StatusFacts, level: str, count: int | None, now: dat
     if count is None:
         return "bosun's windows could not be read"
     if count > 0:
-        return with_level("bosun is running", level)
+        outside = " · outside your hours" if in_hours(facts.awake, now) is False else ""
+        return with_level(f"bosun is running{outside}", level)
     return not_running_sentence(facts, level, now)
 
 
@@ -428,6 +436,7 @@ def snapshot(facts: StatusFacts, now: datetime) -> dict[str, Any]:
         "waiting": waiting,
         "keep_awake_until": f"{kept:%H:%M}" if kept is not None and kept > now else None,
         "stopped": verdict.stopped,
+        "schedule": schedule_of(facts, now),
         "update": {
             "state": "running" if facts.update_running else "none",
             "waiting_for": list(facts.update_waiting_for),
@@ -437,6 +446,14 @@ def snapshot(facts: StatusFacts, now: datetime) -> dict[str, Any]:
         "problems": verdict.problems,
         "attention": [entry.as_json() for entry in attention],
         "logs": facts.log_dir,
+    }
+
+
+def schedule_of(facts: StatusFacts, now: datetime) -> dict[str, Any]:
+    start = next_start(facts.awake, now)
+    return {
+        "in_hours": in_hours(facts.awake, now),
+        "next_start": start.astimezone().isoformat(timespec="minutes") if start is not None else None,
     }
 
 
@@ -461,6 +478,7 @@ def failure(text: str, level: str = ERROR) -> dict[str, Any]:
         "waiting": [],
         "keep_awake_until": None,
         "stopped": None,
+        "schedule": {"in_hours": None, "next_start": None},
         "update": {"state": "none", "waiting_for": [], "last": None},
         "console": {"running": False, "url": None},
         "problems": [text],

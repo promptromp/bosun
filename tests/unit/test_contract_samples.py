@@ -87,6 +87,7 @@ class WhatTheAppReadsTest(unittest.TestCase):
                 "status-quit-unfinished": "error",
                 "status-resting": "ok",
                 "status-running-error": "error",
+                "status-running-outside-hours": "ok",
                 "status-stopped": "stopped",
                 "status-update-done": "ok",
                 "status-update-failed": "ok",
@@ -97,7 +98,9 @@ class WhatTheAppReadsTest(unittest.TestCase):
         )
         self.assertTrue(SAMPLES["status-stopped"]["stopped"]["morning_paused"])
         self.assertIn("did not finish", SAMPLES["status-quit-unfinished"]["sentence"])
-        self.assertIn("resting until 08:00", SAMPLES["status-resting"]["sentence"])
+        self.assertIn(
+            "Resting: outside your hours · next start Wed 08:00", SAMPLES["status-resting"]["sentence"]
+        )
         self.assertEqual(SAMPLES["status-update-running"]["update"]["state"], "running")
 
     def test_status_tells_the_record_the_last_update_left(self) -> None:
@@ -119,6 +122,7 @@ class WhatTheAppReadsTest(unittest.TestCase):
                 "status-quit-unfinished": True,
                 "status-resting": False,
                 "status-running-error": True,
+                "status-running-outside-hours": True,
                 "status-stopped": False,
                 "status-update-done": True,
                 "status-update-failed": True,

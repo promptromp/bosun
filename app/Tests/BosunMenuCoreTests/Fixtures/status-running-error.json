@@ -22,6 +22,10 @@
     "1 new ERROR line(s) in the bosun logs: check-in.log: [checkin] ERROR: the exporter's tests failed"
   ],
   "running": true,
+  "schedule": {
+    "in_hours": true,
+    "next_start": "2026-11-12T08:00+00:00"
+  },
   "sentence": "bosun is running, with an error",
   "stopped": null,
   "update": {

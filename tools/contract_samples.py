@@ -151,6 +151,7 @@ def status_samples() -> dict[str, Sample]:
         "status-resting": snapshot(
             NOW.replace(hour=6), windows=GONE, gate=SessionGate(menu_status.RESTING), keep_awake_until=None
         ),
+        "status-running-outside-hours": snapshot(NOW.replace(day=14)),
         "status-update-running": snapshot(
             update_running=True,
             update_waiting_for=("acme-exporter", "acme-web"),

@@ -122,7 +122,7 @@ private let tail: [ItemID] = [.checkForUpdates, .openAtLogin, .helpMenu, .quit]
   @Test func restingIsGreenAndNeedsNoStart() throws {
     let menu = model(try loaded("status-resting"))
     #expect(menu.header.dot == .green)
-    #expect(menu.header.sentence == "bosun is resting until 08:00")
+    #expect(menu.header.sentence == "Resting: outside your hours · next start Wed 08:00")
     #expect(!menu.has(.startBosun))
     #expect(menu.item(.openConsole).enabled)
   }

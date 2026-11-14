@@ -165,7 +165,9 @@ class LevelsTestCase(unittest.TestCase):
 
     def test_no_session_outside_the_awake_window_is_ok_and_resting(self) -> None:
         out = snap(NOW.replace(hour=21), windows=GONE, gate=RESTING)
-        self.assertEqual((out["level"], out["sentence"]), ("ok", "bosun is resting until 08:00"))
+        self.assertEqual(
+            (out["level"], out["sentence"]), ("ok", "Resting: outside your hours · next start Thu 08:00")
+        )
         self.assertEqual(out["problems"], [])
 
     def test_a_morning_run_that_is_still_going_is_ok_and_starting(self) -> None:
@@ -195,11 +197,11 @@ class LevelsTestCase(unittest.TestCase):
             gate=RESTING,
             awake=awake.AwakeWindow("MTWRF", time(7, 30), time(20, 0)),
         )
-        self.assertEqual(out["sentence"], "bosun is resting until 07:30")
+        self.assertEqual(out["sentence"], "Resting: outside your hours · next start Mon 07:30")
 
     def test_resting_before_the_start_on_a_scheduled_day_is_until_today(self) -> None:
         out = snap(NOW.replace(hour=6), windows=GONE, gate=RESTING)
-        self.assertEqual(out["sentence"], "bosun is resting until 08:00")
+        self.assertEqual(out["sentence"], "Resting: outside your hours · next start Wed 08:00")
 
     def test_resting_with_a_warning_says_so(self) -> None:
         out = snap(
@@ -209,7 +211,8 @@ class LevelsTestCase(unittest.TestCase):
             checks=watchdog_checks(check("waiting", "warn", "w1")),
         )
         self.assertEqual(
-            (out["level"], out["sentence"]), ("warning", "bosun is resting until 08:00, with a warning")
+            (out["level"], out["sentence"]),
+            ("warning", "Resting: outside your hours · next start Thu 08:00, with a warning"),
         )
 
     def test_an_error_while_resting_is_still_an_error(self) -> None:
@@ -220,7 +223,8 @@ class LevelsTestCase(unittest.TestCase):
             checks=watchdog_checks(check("morning-failed", "error", "e1")),
         )
         self.assertEqual(
-            (out["level"], out["sentence"]), ("error", "bosun is resting until 08:00, with an error")
+            (out["level"], out["sentence"]),
+            ("error", "Resting: outside your hours · next start Thu 08:00, with an error"),
         )
 
     def test_a_morning_run_that_failed_is_never_starting(self) -> None:
@@ -399,6 +403,41 @@ class UnreadFactsTestCase(unittest.TestCase):
         self.assertEqual((out["level"], out["sentence"]), ("warning", "bosun is not running"))
 
 
+SATURDAY = datetime(2026, 11, 14, 10, 0, 0)
+MONDAY = datetime(2026, 11, 16, 10, 0, 0)
+
+
+class ScheduleTestCase(unittest.TestCase):
+    def test_resting_names_the_next_start(self) -> None:
+        out = snap(SATURDAY, windows=GONE, gate=RESTING)
+        self.assertEqual(out["sentence"], "Resting: outside your hours · next start Mon 08:00")
+        monday = datetime(2026, 11, 16, 8, 0).astimezone().isoformat(timespec="minutes")
+        self.assertEqual(out["schedule"], {"in_hours": False, "next_start": monday})
+
+    def test_resting_with_no_scheduled_day(self) -> None:
+        out = snap(SATURDAY, windows=GONE, gate=RESTING, awake=awake.AwakeWindow("", time(8, 0), time(20, 0)))
+        self.assertEqual(out["sentence"], "Resting: outside your hours")
+        self.assertEqual(out["schedule"], {"in_hours": False, "next_start": None})
+
+    def test_running_outside_hours(self) -> None:
+        out = snap(SATURDAY, windows=[window("orch")])
+        self.assertEqual((out["level"], out["sentence"]), ("ok", "bosun is running · outside your hours"))
+        warned = snap(
+            SATURDAY, windows=[window("orch")], checks=watchdog_checks(check("waiting", "warn", "w1"))
+        )
+        self.assertEqual(warned["sentence"], "bosun is running · outside your hours, with a warning")
+
+    def test_running_in_hours_unchanged(self) -> None:
+        out = snap(MONDAY, windows=[window("orch")])
+        self.assertEqual(out["sentence"], "bosun is running")
+        self.assertTrue(out["schedule"]["in_hours"])
+
+    def test_schedule_unknown_without_settings(self) -> None:
+        out = snap(awake=None)
+        self.assertEqual(out["schedule"], {"in_hours": None, "next_start": None})
+        self.assertEqual(out["sentence"], "bosun is running")
+
+
 class LogErrorsTestCase(unittest.TestCase):
     LINES = ("check-in.log: [checkin] ERROR: the ledger is busy",)
 
@@ -432,6 +471,7 @@ KEYS = [
     "waiting",
     "keep_awake_until",
     "stopped",
+    "schedule",
     "update",
     "console",
     "problems",
