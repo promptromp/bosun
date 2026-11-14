@@ -1010,7 +1010,7 @@ def check_events(ctx: Context) -> Result:
 
 
 # The Slack watcher has stalled when no run started for this many of its intervals (at least
-# SLACK_WATCH_STALL_MIN_MINUTES) inside the awake window, while the check-in loop that runs it is up.
+# SLACK_WATCH_STALL_MIN_MINUTES), whatever the hour, while the check-in loop that runs it is up.
 SLACK_WATCH_STALL_INTERVALS = 2
 SLACK_WATCH_STALL_MIN_MINUTES = 10
 
@@ -1042,9 +1042,6 @@ def slack_watch_stalled(ctx: Context, state: slack_watch.State) -> Result:
             SLACK_WATCH_STALL_MIN_MINUTES, SLACK_WATCH_STALL_INTERVALS * ctx.config.slack_watch_minutes
         )
     )
-    window = ctx.config.awake.current(ctx.now)
-    if window is None or ctx.now - window[0] < limit:
-        return Result("runs inside the awake window")
     last = local_time(state.last_started) if state.last_started else None
     if last and ctx.now - last < limit:
         return Result(f"the last run started at {last:%H:%M}")
@@ -1506,8 +1503,8 @@ CHECKS: tuple[Check, ...] = (
     Check(
         "slack-watch",
         "warn",
-        "with BOSUN_SLACK_WATCH_ENABLED=1 and events on: no Slack watch for 2 intervals in the "
-        f"awake window, {slack_watch.MAX_FAILURES} failed runs in a row, or the daily budget spent",
+        "with BOSUN_SLACK_WATCH_ENABLED=1 and events on: no Slack watch for 2 intervals while "
+        f"the check-in loop runs, {slack_watch.MAX_FAILURES} failed runs in a row, or the daily budget spent",
         check_slack_watch,
     ),
     Check(

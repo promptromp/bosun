@@ -358,8 +358,8 @@ subtype unless it is "success" (a failed call can say that too), its short text,
 status and stderr (before 2026-10-24 a usage-limit failure logged only "failed (success)"). From the
 third failure in a row the log line says where the next successful run will scan from.
 Its log lines go to the check-in log; the watchdog's `slack-watch` check (not
-`log-errors`) alerts when no run started for two intervals inside the awake window while the loop
-runs, after three failed runs in a row, and once a day when the budget is spent.
+`log-errors`) alerts when no run started for two intervals while the loop
+runs, at any hour (alerts held outside the awake window, as for every check), after three failed runs in a row, and once a day when the budget is spent.
 
 **Dry run** (real Slack, 12 hours back, a scratch copy of the ledger): the call's tool list held only
 Slack's read tools; it ran the four searches as written; it found 7 messages (3 mentions, 1 DM, 3

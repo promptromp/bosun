@@ -484,14 +484,20 @@ class WatchdogCheckTest(WatchTestCase):
             self.check(NOW, last_started=slack_watch.iso(NOW - timedelta(minutes=20))).findings, []
         )
 
-    def test_stalled_for_two_intervals_in_the_awake_window(self) -> None:
+    def test_stalled_for_two_intervals_whatever_the_hour(self) -> None:
         outcome = self.check(NOW, last_started=slack_watch.iso(NOW - timedelta(minutes=31)))
         self.assertEqual(len(outcome.findings), 1)
         self.assertTrue(outcome.findings[0].key.startswith("slack-watch:stalled:"))
         self.assertTrue(outcome.findings[0].confirm)
-        early = datetime(2026, 1, 5, 8, 10).astimezone().astimezone(UTC)
-        self.assertEqual(self.check(early).findings, [], "not right after the window opens")
         self.assertEqual(self.check(NOW, loop=False).findings, [], "checkin-missing covers a missing loop")
+
+    def test_stalled_on_a_saturday_night_too(self) -> None:
+        night = datetime(2026, 1, 10, 23, 0).astimezone().astimezone(UTC)
+        outcome = self.check(night, last_started=slack_watch.iso(night - timedelta(minutes=45)))
+        self.assertEqual(len(outcome.findings), 1)
+        self.assertTrue(outcome.findings[0].key.startswith("slack-watch:stalled:"))
+        recent = self.check(night, last_started=slack_watch.iso(night - timedelta(minutes=20)))
+        self.assertEqual(recent.findings, [], "a run within the limit is no stall")
 
     def test_failures_in_a_row_and_the_budget(self) -> None:
         error = {"at": slack_watch.iso(NOW), "error": "claude exited 1"}
