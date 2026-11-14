@@ -483,14 +483,16 @@ checks, because a required check that did not run blocks a merge. `.github/workf
 with `lib/app_install.py verify-archive`, which is the install's own code, never a copy of it. `.github/workflows/docs.yml`
 publishes the docs site to GitHub Pages from `main` (the repository's Pages source is GitHub Actions). The
 logs are public, so neither check prints what it matched. `main` takes changes only through a pull
-request with those checks green, CodeQL's results clean (GitHub's default setup; no error alerts, no
+request with those checks green, CodeQL's results clean (`.github/workflows/codeql.yml`: the workflows, the
+console's JavaScript and the Python on every pull request, the app's Swift on a push to `main`, weekly and on a pull
+request that changes `app/`, since a macOS scan took 11-17 minutes for every pull request; no error alerts, no
 high or critical security alerts) and every review thread resolved (the ruleset also asks for a
 Copilot review on each push, which takes effect once Copilot code review is enabled for the
 organization), and then through the merge queue: `gh pr merge --squash` adds the pull request to the
 queue once its checks pass, and the queue builds it on top of the latest `main` and the pull requests
 ahead of it, runs the required checks on that merge group's commit and squash-merges it when they
 pass (the ruleset's `merge_queue` rule; so `strict_required_status_checks_policy` is off, the queue
-being what "up to date with `main`" was for, and nobody updates a branch by hand; CodeQL's default setup does not run on merge groups, and GitHub's
+being what "up to date with `main`" was for, and nobody updates a branch by hand; CodeQL does not run on merge groups, and GitHub's
 docs say the ruleset's code scanning protection does not apply to them, so CodeQL gates the pull
 request only; a merge group's checks may take 60 minutes, `check_response_timeout_minutes`, above the `app` job's
 30 and the wait for a macOS runner). The release gate

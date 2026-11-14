@@ -1,0 +1,109 @@
+# CodeQL, which the ruleset on main requires (`code_scanning`: no error alerts, no high or critical security
+# alerts). It was GitHub's default setup, which scanned every language on every pull request: the Swift scan of
+# the menu bar app took 11-17 minutes on a macOS runner even for a pull request that did not touch app/, and every
+# pull request waited for it. Here the languages that need no build (the workflows, the console's JavaScript, the
+# Python) are scanned on every pull request, in about a minute, and Swift on a push to main, weekly, and on a pull
+# request that changes app/ (or this file), the only ones whose Swift alerts can differ from main's.
+name: CodeQL
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+  schedule:
+    - cron: "30 4 * * 1" # Monday 04:30 UTC
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  # Whether the Swift scan has anything to do: always on main and by schedule; on a pull request only when the
+  # app (or this workflow) changed. A diff that cannot be made scans.
+  swift-changed:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      scan: ${{ steps.changed.outputs.scan }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - name: Did the app change?
+        id: changed
+        env:
+          EVENT: ${{ github.event_name }}
+          BASE: ${{ github.event.pull_request.base.sha }}
+          HEAD: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -u
+          if [ "$EVENT" != pull_request ]; then
+            echo "scan=true" >>"$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if ! files=$(git diff --name-only --no-renames "$BASE...$HEAD"); then
+            echo "No diff with the base branch: scanning."
+            echo "scan=true" >>"$GITHUB_OUTPUT"
+            exit 0
+          fi
+          scan=false
+          while IFS= read -r file; do
+            case $file in
+              app/* | .github/workflows/codeql.yml) scan=true ;;
+              *) ;;
+            esac
+          done <<<"$files"
+          echo "scan=$scan" >>"$GITHUB_OUTPUT"
+
+  analyze:
+    name: Analyze (${{ matrix.language }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      security-events: write
+    strategy:
+      fail-fast: false
+      matrix:
+        language: [actions, javascript-typescript, python]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: github/codeql-action/init@9b3254085494b55a0f7c4c2b3d2d52cc712ce370 # v4.39.1
+        with:
+          languages: ${{ matrix.language }}
+          build-mode: none
+      - uses: github/codeql-action/analyze@9b3254085494b55a0f7c4c2b3d2d52cc712ce370 # v4.39.1
+        with:
+          category: /language:${{ matrix.language }}
+
+  analyze-swift:
+    name: Analyze (swift)
+    needs: swift-changed
+    if: ${{ needs.swift-changed.outputs.scan == 'true' }}
+    runs-on: macos-latest
+    timeout-minutes: 40
+    permissions:
+      contents: read
+      security-events: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: github/codeql-action/init@9b3254085494b55a0f7c4c2b3d2d52cc712ce370 # v4.39.1
+        with:
+          languages: swift
+          build-mode: manual
+      # The app's own code, built once for the scan: the app and its library, not the tests.
+      - name: Build the app for the scan
+        run: swift build --package-path app --product BosunMenu
+      - uses: github/codeql-action/analyze@9b3254085494b55a0f7c4c2b3d2d52cc712ce370 # v4.39.1
+        with:
+          category: /language:swift
