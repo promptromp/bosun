@@ -3280,6 +3280,17 @@ now_rc=$?
 check "--at-login in your hours with nothing in the way starts the session, and the header says trigger=login whatever BOSUN_TRIGGER is" bash -c 'grep -q "starting bosun: you logged in during your hours" <<<"$1" && grep -q "=== morning run (trigger=login, " <<<"$1" && ! grep -q "trigger=launchd" <<<"$1" && grep -q "morning run complete" <<<"$1" && [ "$2" -eq 0 ] && tmux -L "$3" has-session -t =smoke' _ "$out" "$now_rc" "$SOCKET"
 out="$(at_login "${awake_inside[@]}" BOSUN_START_AT_LOGIN=1)"
 check "... a second login with the session running says it is running already" bash -c 'grep -q "not starting: bosun is running already" <<<"$1" && ! grep -q "=== morning run" <<<"$1"' _ "$out"
+now_clean
+rm -f "$BOSUN_STATE_DIR/stopped-smoke" # the stop above is a stop today, which comes before the running check
+cp "$HOME/.local/bin/launchctl" "$WORK/launchctl.plain"
+printf '#!/bin/sh\n[ "$1" != print ] || printf "\\tstate = running\\n"\nexit 0\n' >"$HOME/.local/bin/launchctl"
+out="$(at_login "${awake_inside[@]}" BOSUN_START_AT_LOGIN=1)"
+check "... and with the morning job running (a scheduled run going, no session yet), it says bosun is running and starts nothing" bash -c 'grep -q "not starting: bosun is running already" <<<"$1" && ! grep -q "=== morning run" <<<"$1"' _ "$out"
+cp "$WORK/launchctl.plain" "$HOME/.local/bin/launchctl"
+now_clean
+out="$(at_login "${awake_inside[@]}" BOSUN_START_AT_LOGIN=1 BOSUN_DAYS=X 2>&1)"
+now_rc=$?
+check "--at-login with a bad setting fails in one line that names it, not just a status" bash -c '[ "$2" -ne 0 ] && grep -q "BOSUN_DAYS" <<<"$1" && ! grep -q "could not be decided (status" <<<"$1"' _ "$out" "$now_rc"
 check "--at-login takes no other option" fails_with "--at-login takes no other option" now_morning "$BOSUN" morning --at-login --now
 now_clean
 
@@ -3700,6 +3711,19 @@ assert job.get("AbandonProcessGroup") is True, job.get("AbandonProcessGroup")
   log_lines="$(wc -l <"$WORK/system.log")"
   BOSUN_CONFIG_DIR="$INSTALL_CFG" "$ROOT/install.sh" >/dev/null 2>&1
   check "a second install leaves it loaded as it is" bash -c '! tail -n +$(($2 + 1)) "$1" | grep -q "launchctl bootstrap .*\.now"' _ "$WORK/system.log" "$log_lines"
+
+  # The login job (templates/launchd-login.plist): rendered only while BOSUN_START_AT_LOGIN=1; a reload leaves the
+  # marker that --at-login tells a reload by.
+  login_job() { bash -c 'source "$1/lib/common.sh"; load_config; shift; "$@"' _ "$ROOT" "$@"; }
+  LOGIN_LABEL="$BOSUN_LAUNCHD_LABEL.login"
+  login_plist="$(BOSUN_START_AT_LOGIN=1 login_job render_job "$LOGIN_LABEL")"
+  check "render_job renders the login job with BOSUN_START_AT_LOGIN=1: it runs morning --at-login at load" bash -c 'grep -q "morning --at-login" <<<"$1" && grep -A1 "<key>RunAtLoad</key>" <<<"$1" | grep -q "<true/>" && grep -q "login.launchd.out" <<<"$1" && grep -A1 "AbandonProcessGroup" <<<"$1" | grep -q "<true/>"' _ "$login_plist"
+  check "... and renders nothing with BOSUN_START_AT_LOGIN=0" test -z "$(BOSUN_START_AT_LOGIN=0 login_job render_job "$LOGIN_LABEL")"
+  check "... its plist is valid for plutil" bash -c 'printf "%s\n" "$1" >"$2" && plutil -lint -s "$2"' _ "$login_plist" "$WORK/login.plist"
+  check "install has loaded it (the default is on), named by the morning label plus .login" bash -c 'grep -q "launchctl bootstrap gui/$(id -u) .*\.login\.plist" "$1" && plutil -lint -s "$2"' _ "$WORK/system.log" "$HOME/Library/LaunchAgents/$LOGIN_LABEL.plist"
+  check "... and the job list for uninstall names it" contains "$(login_job job_labels)" "$LOGIN_LABEL"
+  rm -f "$BOSUN_STATE_DIR/login-reload" "$HOME/Library/LaunchAgents/$LOGIN_LABEL.plist"
+  check "reload_changed_jobs with the setting on loads it again and leaves the reload marker" test -n "$(BOSUN_START_AT_LOGIN=1 login_job reload_changed_jobs | grep "\.login$")" -a -s "$BOSUN_STATE_DIR/login-reload"
 
   # --background: launchd starts the run (the job above), so that nothing it starts is the caller's child.
   section morning-background "morning --now --background (fake launchctl)" needs install covers 'install.sh,templates/launchd-now.plist,libexec/bosun-morning,libexec/bosun-doctor'

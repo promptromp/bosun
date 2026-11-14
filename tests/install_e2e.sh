@@ -319,6 +319,7 @@ WINDOWS_ANSWERS_EXTRA='{"menu_app": false}' windows_by_answers acme-api
 console_job_for_real
 launchd_for_real
 now_job_for_real
+login_job_for_real
 quit_for_real
 # Only with an origin that has a release in it (tests/sandbox/mac.sh); a runner installs a branch's head.
 [ -z "${BOSUN_E2E_RELEASE:-}" ] || releases_for_real

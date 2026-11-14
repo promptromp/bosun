@@ -113,19 +113,23 @@ KEEP_AWAKE_PIDFILE="$(keep_awake_pidfile)"
 # --at-login's decision (lib/login_start.py), before begin_run: a skip ends the run here, with its one line and
 # no header. A start goes on as the scheduled run, which says trigger=login.
 decide_at_login() {
-  local running=0 line status
-  session_exists && running=1
+  local running=0 line status errors said
+  # A run launchd has started, by either job, counts as running even before its session exists.
+  if session_exists || job_running "$BOSUN_LAUNCHD_LABEL" || job_running "$(now_label)"; then running=1; fi
+  errors="$(mktemp)" || die "could not make a temporary file"
   line="$(python3 "$BOSUN_ROOT/lib/login_start.py" decide --state-dir "$BOSUN_STATE_DIR" \
     --session "$BOSUN_SESSION_NAME" --days "$BOSUN_DAYS" --start "$BOSUN_START_TIME" --until "$BOSUN_AWAKE_UNTIL" \
-    --enabled "$BOSUN_START_AT_LOGIN" --running "$running")"
+    --enabled "$BOSUN_START_AT_LOGIN" --running "$running" 2>"$errors")"
   status=$?
+  said="$(tail -n 1 "$errors")"
+  rm -f "$errors"
   case $status in
     0) log "$line" ;;
     3)
       log "$line"
       exit 0
       ;;
-    *) die "the login start could not be decided (status $status)" ;;
+    *) die "${said:-the login start could not be decided (status $status)}" ;;
   esac
   BOSUN_TRIGGER=login
 }

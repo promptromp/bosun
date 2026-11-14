@@ -147,7 +147,14 @@ Waking *before* the job would leave a gap in which an unattended Mac can doze of
 (`<BOSUN_LAUNCHD_LABEL>.learn`) and, with `BOSUN_CONSOLE_ALWAYS=1`, the [console](console.md#console)
 (`<BOSUN_LAUNCHD_LABEL>.console`). One more job, `<BOSUN_LAUNCHD_LABEL>.now`, has no schedule: it runs
 `bosun morning --now` when `bosun morning --now --background` (which the menu bar app's Start runs) kickstarts it,
-so that launchd, not the caller, is the parent of what the morning run starts.
+so that launchd, not the caller, is the parent of what the morning run starts. With `BOSUN_START_AT_LOGIN=1`
+(the default for a new setup; an install from before the setting keeps it at `0`), a last job,
+`<BOSUN_LAUNCHD_LABEL>.login`, runs `bosun morning --at-login` when you log in: bosun starts then if it is one of
+your days and inside your hours (`BOSUN_START_TIME` to `BOSUN_AWAKE_UNTIL`), you have not stopped or quit it
+today, and it is not running already (a run launchd started counts); otherwise it logs why not (the day's
+morning log) and does nothing. With `BOSUN_START_AT_LOGIN=0` there is no such job: bosun starts at the morning
+time or from Start. Reloading the jobs (an update, `install.sh`) makes launchd run the login job too; a
+marker the reload leaves (`login-reload` in the state folder) tells the run it is not a login.
 [`bosun uninstall`](#uninstall) reverses it. A checkout of your own like this one updates with git, not
 with `bosun update`.
 
@@ -416,7 +423,7 @@ as it was.
 | What | What happens |
 |---|---|
 | Your windows | Stopped, so any work in them stops. It says which are running first, and waits up to 15 seconds for what they started to end, so their last hooks finish first; what still runs then it names and leaves running, such as a background command a Codex window started |
-| The launchd jobs (morning, watchdog, learning, console, the job that runs `morning --now` for the menu bar app's Start, and the app's Open at Login job) | Unloaded and deleted, before the windows stop, so the watchdog cannot bring them back |
+| The launchd jobs (morning, watchdog, learning, console, the job that runs `morning --now` for the menu bar app's Start, the login job, and the app's Open at Login job) | Unloaded and deleted, before the windows stop, so the watchdog cannot bring them back |
 | The menu bar app, `~/Applications/bosun.app` (with `bosun app install`) | Asked to quit if it runs, then deleted, after its job and before the windows stop. The `~/Applications` folder stays |
 | The repeating wake | Cancelled with `sudo pmset repeat cancel`, if it is the one bosun set. `pmset` can only cancel every repeating event at once, so another event, or a wake at another time, stays and it says so |
 | Folder trust | Taken back for the folders bosun marked, in Claude Code and Codex (`agy` windows pass their folder at each start and mark nothing). A folder you had accepted yourself stays trusted. It goes by bosun's record of what it changed (`agent-changes.json`), kept since `bosun uninstall` was added; trust or notes from an install before that are not on it and stay |

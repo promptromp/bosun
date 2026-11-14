@@ -74,6 +74,7 @@ STATE_FILES = (
     (".update-skip.json.tmp", WORKING),
     ("quit.json", WORKING),  # bosun is stopped until started (lib/quit_state.py)
     (".quit.json.*", WORKING),  # what writing it left, cut short
+    ("login-reload", WORKING),  # a reload of the jobs, so the login job's run is not taken for a login
     ("update", WORKING),
     (".*.restoring", WORKING),  # what an update's restore was writing, cut short (lib/update_backups.py)
     ("agent-changes.json", WORKING),

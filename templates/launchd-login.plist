@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- Rendered by bosun install.sh. Edit bosun.env and re-run install.sh instead. -->
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>__LABEL__</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/bin/bash</string>
+    <string>-lc</string>
+    <string>exec "__BOSUN_ROOT__/bin/bosun" morning --at-login</string>
+  </array>
+  <key>EnvironmentVariables</key>
+  <dict>
+__ENV__
+  </dict>
+  <!-- launchd runs this at login, and again whenever bosun reloads its jobs (an update, install.sh), which the run
+       tells apart by a marker the reload leaves (bosun morning, with its at-login option; lib/login_start.py). Whether a
+       login starts bosun is its decision: BOSUN_START_AT_LOGIN, your hours, a stop or quit today. No schedule and
+       no KeepAlive. -->
+  <key>RunAtLoad</key>
+  <true/>
+  <!-- The tmux server and the keep-awake caffeinate outlive this job; without this launchd would kill them
+       when it exits. -->
+  <key>AbandonProcessGroup</key>
+  <true/>
+  <key>StandardOutPath</key>
+  <string>__LOG_DIR__/login.launchd.out</string>
+  <key>StandardErrorPath</key>
+  <string>__LOG_DIR__/login.launchd.err</string>
+</dict>
+</plist>

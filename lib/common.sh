@@ -1374,6 +1374,11 @@ console_mark_wanted() {
 # decides whom macOS names in its privacy prompts.
 now_label() { echo "$BOSUN_LAUNCHD_LABEL.now"; }
 
+# The job that runs `bosun morning --at-login` (templates/launchd-login.plist) at login, while
+# BOSUN_START_AT_LOGIN=1. launchd runs it at a reload too, so a reload leaves a marker the run tells it by.
+login_label() { echo "$BOSUN_LAUNCHD_LABEL.login"; }
+login_reload_marker() { echo "$BOSUN_STATE_DIR/login-reload"; }
+
 # The menu bar app's Open at Login job (templates/launchd-app.plist): there while its plist is, which
 # `bosun app login on` makes and `login off` removes. install.sh and `bosun update` keep a present one
 # current (render_job) and never make one.
@@ -1382,7 +1387,7 @@ app_plist() { echo "$HOME/Library/LaunchAgents/$(app_label).plist"; }
 app_bundle() { echo "$HOME/Applications/bosun.app"; }
 
 # Every launchd job bosun can have loaded: what `bosun uninstall` looks for.
-job_labels() { echo "$BOSUN_LAUNCHD_LABEL $(watchdog_label) $(learn_label) $(console_label) $(now_label) $(app_label) $(waketest_label)"; }
+job_labels() { echo "$BOSUN_LAUNCHD_LABEL $(watchdog_label) $(learn_label) $(console_label) $(now_label) $(login_label) $(app_label) $(waketest_label)"; }
 
 render_console_plist() {
   ENV_XML="$(launchd_env_xml)" LABEL="$(console_label)" ROOT="$BOSUN_INSTALL" LOGS="$BOSUN_LOG_DIR" WANTED="$(console_wanted_marker)" \
@@ -1398,6 +1403,14 @@ render_now_plist() {
       .gsub("__LABEL__", ENV["LABEL"]).gsub("__BOSUN_ROOT__", ENV["ROOT"])
       .gsub("__ENV__", ENV["ENV_XML"]).gsub("__LOG_DIR__", ENV["LOGS"])' \
     <"$BOSUN_ROOT/templates/launchd-now.plist"
+}
+
+render_login_plist() {
+  ENV_XML="$(launchd_env_xml)" LABEL="$(login_label)" ROOT="$BOSUN_INSTALL" LOGS="$BOSUN_LOG_DIR" \
+    ruby -e 'print STDIN.read
+      .gsub("__LABEL__", ENV["LABEL"]).gsub("__BOSUN_ROOT__", ENV["ROOT"])
+      .gsub("__ENV__", ENV["ENV_XML"]).gsub("__LOG_DIR__", ENV["LOGS"])' \
+    <"$BOSUN_ROOT/templates/launchd-login.plist"
 }
 
 render_app_plist() {
@@ -1419,8 +1432,8 @@ render_learn_plist() {
 
 # The plist of the launchd job <label> as this version renders it from the config: the morning job,
 # the watchdog, learning with BOSUN_LEARN_ENABLED=1, the console with BOSUN_CONSOLE_ALWAYS=1, the job
-# that runs the morning run now, and the app's login job while its plist is there; nothing for a job not
-# wanted.
+# that runs the morning run now, the login job with BOSUN_START_AT_LOGIN=1, and the app's login job while its
+# plist is there; nothing for a job not wanted.
 render_job() { # <label>
   case "$1" in
     "$BOSUN_LAUNCHD_LABEL") render_launchd_plist "$1" "$BOSUN_START_TIME" "$BOSUN_DAYS" "" BOSUN_TRIGGER=launchd ;;
@@ -1428,6 +1441,7 @@ render_job() { # <label>
     "$(learn_label)") if [ "$BOSUN_LEARN_ENABLED" = "1" ]; then render_learn_plist; fi ;;
     "$(console_label)") if [ "$BOSUN_CONSOLE_ALWAYS" = "1" ]; then render_console_plist; fi ;;
     "$(now_label)") render_now_plist ;;
+    "$(login_label)") if [ "$BOSUN_START_AT_LOGIN" = "1" ]; then render_login_plist; fi ;;
     "$(app_label)") if [ -e "$(app_plist)" ]; then render_app_plist; fi ;;
   esac
 }
@@ -1456,6 +1470,11 @@ reload_job() { # <label> <rendered> <installed>
     return 0
   fi
   mkdir -p "$(dirname "$3")" # a new macOS account may not have it yet
+  # launchd runs the login job as it loads; the marker is how that run knows it is a reload, not a login
+  if [ "$1" = "$(login_label)" ]; then
+    mkdir -p "$BOSUN_STATE_DIR"
+    date '+%F %T' >"$(login_reload_marker)"
+  fi
   if cp "$2" "$3" && launchctl bootstrap "gui/$(id -u)" "$3"; then return 0; fi
   log "ERROR: launchctl bootstrap failed for $3" >&2
   return 1
@@ -1485,7 +1504,7 @@ job_changed() { # <label> <rendered> <installed>
 reload_changed_jobs() { # [--dry-run]
   local label installed rendered status=0 changed
   rendered="$(mktemp)" || return 1
-  for label in "$BOSUN_LAUNCHD_LABEL" "$(watchdog_label)" "$(learn_label)" "$(console_label)" "$(now_label)" "$(app_label)"; do
+  for label in "$BOSUN_LAUNCHD_LABEL" "$(watchdog_label)" "$(learn_label)" "$(console_label)" "$(now_label)" "$(login_label)" "$(app_label)"; do
     installed="$HOME/Library/LaunchAgents/$label.plist"
     if ! render_job "$label" >"$rendered"; then
       log "ERROR: could not render the plist of $label" >&2
