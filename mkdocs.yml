@@ -112,6 +112,7 @@ nav:
       - Agents: design/harnesses.md
       - Antigravity windows: design/antigravity.md
       - The menu bar app: design/menu-bar.md
+      - The control panel and starting at login: design/control-panel.md
       - Connectors: design/connectors.md
       - Approvals: design/approvals.md
       - Events: design/events.md

@@ -49,7 +49,8 @@ ship a CLI and an app keep them in step).
 - A DMG download and a Homebrew cask: the next step, once this ships; the notarized app built here is what they
   will carry.
 - A Settings window, notifications from the app, and anything the console already does: the menu is a status
-  light and four actions.
+  light and four actions. (The Settings window, starting at login and a separate Stop and Quit are proposed in
+  [the control panel](control-panel.md), 2026-11-14.)
 - Linux and Intel Macs (macOS 27 is Apple silicon only; bosun's minimum macOS stays what it is).
 
 ## Anti-goals
