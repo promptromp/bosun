@@ -110,10 +110,14 @@ install() {
 
 # The windows a script wants, as it names them: `get.sh --unattended` sets up none on a first install,
 # since nobody chose them. (A release from before that set them up already, in an order of its own, so
-# --force: then sessions.yml may be rewritten, with a backup.)
+# --force: then sessions.yml may be rewritten, with a backup.) <WINDOWS_ANSWERS_EXTRA>, a JSON object, adds more
+# answers: install_e2e.sh sets {"menu_app": false}, since with the publisher's Team ID the answers that do not
+# say take the recommendation, a download of a release that may not exist yet (tests/app_e2e.sh tests the app).
+# work_e2e.sh does not: its release is from before the app, and refuses an answer it does not know.
 windows_by_answers() { # <repo folder name in ~/Development>...
-  local answers="$OUT/windows.json" name
-  jq -n '{repos: [$ARGS.positional[] | {dir: ("~/Development/" + .)}]}' --args "$@" >"$answers"
+  local answers="$OUT/windows.json" name extra="${WINDOWS_ANSWERS_EXTRA:-}"
+  [ -n "$extra" ] || extra='{}'
+  jq -n --argjson extra "$extra" '{repos: [$ARGS.positional[] | {dir: ("~/Development/" + .)}]} + $extra' --args "$@" >"$answers"
   check "the windows named with bosun init --answers: $*" bash -c '"$1" init --force --answers "$2" >"$3" 2>&1 || { tail -15 "$3"; exit 1; }' \
     _ "$HOME/.local/bin/bosun" "$answers" "$OUT/windows.txt"
   for name in "$@"; do

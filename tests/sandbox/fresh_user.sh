@@ -58,6 +58,18 @@ absent() { # <text> <file>
 files_hash() { cat "$CONFIG"/bosun.env "$CONFIG"/sessions.yml "$CONFIG"/setup.sh | cksum; }
 windows() { tmux -L bosun list-windows -t "=bosun" -F '#{window_name}' 2>/dev/null | sort | tr '\n' ' '; }
 
+# The publisher this machine's bosun has: its own, with a placeholder Team ID and bundle id, committed into
+# the sandbox's copy of the checkout (the installs clone it), so what the app questions see never depends on
+# the real app/publisher.json: that file's Team ID, once filled in, is what makes init offer the app.
+# The menu bar app is offered (a valid Team ID), but there is no network here and the stand-ins cannot run an
+# app: the wizard's answer is No, and `init --recommended`, which says yes, ends in a refused install.
+sandbox_publisher() {
+  local file="$ROOT/app/publisher.json"
+  echo '{"bundle_id": "com.example.bosun", "team_id": "ABCDE12345", "releases": "acme/bosun"}' >"$file"
+  git -C "$ROOT" add app/publisher.json
+  git -C "$ROOT" -c user.name=sandbox -c user.email=sandbox@example.com commit -q -m "the sandbox's publisher"
+}
+
 first_look() {
   local out="$HOME/first-look.txt"
   echo "first look: the plan changes nothing"
@@ -70,7 +82,8 @@ first_look() {
   check "... says why" says "your usual first prompt is 09:10" "$out"
   check "... says how sessions handle permissions" says "auto mode" "$out"
   check "... says what sudo is for" says "sudo pmset repeat wakeorpoweron MTWRF 08:31:00" "$out"
-  check "... and that the menu bar app is not offered yet" says "no signed build to install" "$out"
+  check "... the menu bar app, which has a publisher here, is in it" says "bosun app install   adds bosun.app to ~/Applications" "$out"
+  check "... and nothing says there is no build to install" absent "no signed build to install" "$out"
   check "... and changed nothing" bash -c '[ ! -e "$1" ] && [ ! -e "$2" ]' _ "$HOME/.local/bin/bosun" "$CONFIG"
 }
 
@@ -91,11 +104,13 @@ set_up() {
   check "the watchdog is loaded" says "com.bosun.morning.watchdog.plist" "$LOG"
   check "learning is loaded" says "com.bosun.morning.learn.plist" "$LOG"
   check "the wake went through sudo" says "sudo pmset repeat wakeorpoweron MTWRF 08:31:00" "$LOG"
-  # While app/publisher.json has no Team ID there is no signed build to install: the app is not offered (no
-  # question, nothing installed), and bosun.env does not claim one. Once it has one, this walks the app too.
-  check "the menu bar app is not offered, and bosun.env says it is not there" bash -c 'grep -q "^BOSUN_MENU_APP=\"0\"" "$1" && grep -q "^BOSUN_CONSOLE_ALWAYS=\"0\"" "$1"' _ "$CONFIG/bosun.env"
-  check "... the plan said why" says "no signed build to install" "$out"
-  check "... no console job was loaded for it" absent "com.bosun.morning.console.plist" "$LOG"
+  # The recommendation includes the menu bar app, which cannot be had here (no network): init says so in a
+  # line, goes on, and bosun.env stops claiming it. On a machine with no release of the app yet it is the same.
+  check "the menu bar app was tried, and its refusal is a line, not a failed init" says "bosun.app was not added" "$out"
+  check "... the refusal's reason is shown" says "could not download https://github.com/acme/bosun/" "$out"
+  check "... and bosun.env says it is not there" bash -c 'grep -q "^BOSUN_MENU_APP=\"0\"" "$1" && grep -q "^BOSUN_CONSOLE_ALWAYS=\"0\"" "$1"' _ "$CONFIG/bosun.env"
+  check "... the console's job it would have needed is gone again" test ! -e "$AGENTS/com.bosun.morning.console.plist"
+  check "... and there is no app" test ! -e "$HOME/Applications/bosun.app"
   check "it says what to do next" says "bosun is set up" "$out"
 }
 
@@ -239,7 +254,7 @@ the_wizard_quit() {
   check "q on the first screen" python3 "$DRIVE" "$out" "Which repos" "q" -- "$BOSUN" init
   check "... says so" says "Nothing was changed" "$out"
   check "... and nothing is there" test ! -e "$CONFIG"
-  check "q on the plan" python3 "$DRIVE" "$out" "Which repos" "<enter>" "When should" "<enter>" "How proactive" "<enter>" "Which model" "<enter>" "handle permissions" "<enter>" "wake by itself" "<enter>" "Nothing has changed yet" "q" -- "$BOSUN" init
+  check "q on the plan" python3 "$DRIVE" "$out" "Which repos" "<enter>" "When should" "<enter>" "How proactive" "<enter>" "Which model" "<enter>" "handle permissions" "<enter>" "wake by itself" "<enter>" "Add bosun to the menu bar and Applications?" "n" "Nothing has changed yet" "q" -- "$BOSUN" init
   check "... and nothing is there" test ! -e "$CONFIG"
   check "ctrl-c leaves too" python3 "$DRIVE" "$out" "Which repos" "<ctrl-c>" -- "$BOSUN" init
   check "... and says so" says "Nothing was changed" "$out"
@@ -248,7 +263,15 @@ the_wizard_quit() {
     "Which repos" "a" "Folder:" "~/Development/toy<enter>" "Development/toy" "<enter>" \
     "When should" "3" "Days, from" "MWF<enter>" "Start" "07:15<enter>" "Awake until" "16:45<enter>" \
     "How proactive" "<enter>" "Which model" "<enter>" "handle permissions" "<enter>" "wake by itself" "<enter>" \
+    "Add bosun to the menu bar and Applications?" "n" \
     "Mon, Wed, Fri, 07:15 to 16:45" "q" -- "$BOSUN" init
+  check "the menu bar app is asked, in init's words, and Yes puts it in the plan" python3 "$DRIVE" "$out" \
+    "Which repos" "<enter>" "When should" "<enter>" "How proactive" "<enter>" "Which model" "<enter>" \
+    "handle permissions" "<enter>" "wake by itself" "<enter>" \
+    "Add bosun to the menu bar and Applications?" "y" "bosun app install   adds bosun.app to ~/Applications" "q" -- "$BOSUN" init
+  check "... and No leaves it out" bash -c 'python3 "$1" "$2" "Which repos" "<enter>" "When should" "<enter>" "How proactive" "<enter>" "Which model" "<enter>" \
+    "handle permissions" "<enter>" "wake by itself" "<enter>" "Add bosun to the menu bar and Applications?" "n" "Nothing has changed yet" "q" -- "$3" init &&
+    ! grep -q "adds bosun.app to ~/Applications" "$2"' _ "$DRIVE" "$out" "$BOSUN"
   check "r goes back to the start" python3 "$DRIVE" "$out" "Which repos" "<enter>" "When should" "r" "Which repos" "q" -- "$BOSUN" init
   check "no answers without a terminal: only the plan" bash -c '"$1" init </dev/null | grep -q "Nothing has changed yet"' _ "$BOSUN"
   check "... and nothing is there" test ! -e "$CONFIG"
@@ -300,6 +323,7 @@ the_installer() {
     "Which model" "2" \
     "handle permissions" "<enter>" \
     "wake by itself" "<enter>" \
+    "Add bosun to the menu bar and Applications?" "n" \
     "Nothing has changed yet" "y" \
     "Start the windows now?" "y" \
     "The windows are up" "" \
@@ -395,6 +419,7 @@ the_first_day_on_codex() {
     "Which agent" "2" \
     "model should the orchestrator" "<enter>" \
     "wake by itself" "<enter>" \
+    "Add bosun to the menu bar and Applications?" "n" \
     "Nothing has changed yet" "y" \
     "Start the windows now?" "y" \
     "The windows are up" "" \
@@ -461,6 +486,7 @@ the_first_day_on_agy() {
     "Which agent" "2" \
     "model should the orchestrator" "<enter>" \
     "wake by itself" "<enter>" \
+    "Add bosun to the menu bar and Applications?" "n" \
     "Nothing has changed yet" "y" \
     "Start the windows now?" "y" \
     "The windows are up" "" \
@@ -497,6 +523,7 @@ the_first_day_on_agy() {
 }
 
 "$ROOT/tests/sandbox/world.sh"
+sandbox_publisher
 first_look
 set_up
 a_morning

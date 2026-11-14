@@ -204,6 +204,12 @@ tests/sandbox.sh shell    # that new user's machine, to try things by hand; it g
 Docker on a Mac is Linux, so `launchctl`, `pmset`, `caffeinate` and the like are stand-ins
 (`tests/sandbox/macos/`). It proves bosun's logic, never launchd, a real wake or the Keychain.
 
+The first-day scenario has a publisher of its own: it commits a placeholder `app/publisher.json` into its copy,
+so what it sees of the menu bar app never depends on the real file's Team ID. The wizard's question is asked
+and answered No (there is no network, and the stand-ins cannot run an app), and `init --recommended`, which
+says yes, ends in a refused download that is one line and not a failed init: what a Mac sees before the app's
+first release exists.
+
 ### A real Mac: `tests/sandbox.sh mac`
 
 macOS in a [Tart](https://tart.run) VM on your Mac (Apple silicon). A run clones a base image, boots it,

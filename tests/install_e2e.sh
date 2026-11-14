@@ -315,7 +315,7 @@ follow_what_it_says
 install
 check "... versions side by side, the install path a link to the version in use" side_by_side
 nothing_chosen
-windows_by_answers acme-api
+WINDOWS_ANSWERS_EXTRA='{"menu_app": false}' windows_by_answers acme-api
 console_job_for_real
 launchd_for_real
 now_job_for_real
