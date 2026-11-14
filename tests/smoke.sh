@@ -766,6 +766,19 @@ rm -f "$CFG/bosun.env"
 section common-functions "lib/common.sh functions" covers 'libexec/bosun-launch'
 fn() { bash -c 'source "$1/lib/common.sh"; shift; "$@"' _ "$ROOT" "$@"; }
 check "shift_time adds minutes" test "$(fn shift_time 08:00 1)" = 08:01
+log_dir="$WORK/log-checks"
+mkdir -p "$log_dir"
+log_day="$(date +%F)"
+BOSUN_LOG_DIR="$log_dir" BOSUN_COMMAND=probe fn log "hello file" >/dev/null
+check "a log line also goes to the day's file of the command that logs it" grep -q "\[probe\] hello file" "$log_dir/probe-$log_day.log"
+BOSUN_LOG_DIR="$log_dir" BOSUN_COMMAND=own LOG_TO_FILE=0 fn log "screen only" >/dev/null
+check "... but not for a command that keeps its own file (LOG_TO_FILE=0)" test ! -e "$log_dir/own-$log_day.log"
+for n in 1 2 3 4 5; do
+  BOSUN_LOG_FILE_MAX_BYTES=80 BOSUN_LOG_DIR="$log_dir" BOSUN_COMMAND=capped fn log "line $n of five, long enough to pass the cap" >/dev/null
+done
+check "a day's file stops at its cap, with one line that says so" bash -c '
+  [ "$(grep -c "of five" "$1")" -lt 5 ] && [ "$(grep -c "this log is capped" "$1")" = 1 ]' _ "$log_dir/capped-$log_day.log"
+check "a log line still reaches the screen without a log folder" test "$(BOSUN_LOG_DIR="$WORK/no-such-folder" fn log "on screen" | grep -c "on screen")" = 1
 check "shift_time wraps past midnight" test "$(fn shift_time 23:59 2)" = 00:01
 check "shift_time goes back past midnight" test "$(fn shift_time 00:00 -1)" = 23:59
 check "shift_time reads leading zeros as decimal" test "$(fn shift_time 08:09 1)" = 08:10

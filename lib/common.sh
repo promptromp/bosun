@@ -488,7 +488,35 @@ load_config() {
 # from bosun.env.
 is_env_override() { declare -p "$1" 2>/dev/null | grep -q '^declare -[a-zA-Z]*x'; }
 
-log() { printf '%s [%s] %s\n' "$(date '+%F %T')" "${BOSUN_COMMAND:-bosun}" "$*"; }
+# Each line also goes to the day's file of the command that logs it ($BOSUN_LOG_DIR/<command>-<date>.log), so
+# what a window or a job said is still there once its screen is gone. These are bosun's own messages (a
+# launch, a skip, a refusal), a few dozen a day, never one per tick or per tool call. A file stops at
+# LOG_FILE_MAX_BYTES a day with one line that says so (everything stays on screen), and the morning run prunes
+# the folder (lib/log_files.py). A command that keeps its own day's file (the morning run's output, the
+# check-in loop's, the hook's) sets LOG_TO_FILE=0: never exported, so what it starts (a window, through tmux)
+# still logs to its own. BOSUN_LOG_FILE_MAX_BYTES is for tests.
+LOG_FILE_MAX_BYTES="${BOSUN_LOG_FILE_MAX_BYTES:-$((2 * 1024 * 1024))}"
+log() {
+  local line
+  line="$(date '+%F %T') [${BOSUN_COMMAND:-bosun}] $*"
+  printf '%s\n' "$line"
+  [ "${LOG_TO_FILE:-1}" = 1 ] && [ -n "${BOSUN_LOG_DIR:-}" ] || return 0
+  log_to_file "$BOSUN_LOG_DIR/${BOSUN_COMMAND:-bosun}-${line%% *}.log" "$line"
+}
+
+# Appends <line> to <file>, within the day's cap. Never fails the command: a full disk or a log folder that is
+# not there (it is made by load_config) only loses the copy in the file.
+log_to_file() { # <file> <line>
+  local size=0
+  [ -d "${1%/*}" ] || return 0
+  [ -f "$1" ] && size="$(wc -c <"$1" 2>/dev/null | tr -d ' ')"
+  if [ "${size:-0}" -lt "$LOG_FILE_MAX_BYTES" ]; then
+    printf '%s\n' "$2" >>"$1" 2>/dev/null
+  elif ! tail -c 200 "$1" 2>/dev/null | grep -q "this log is capped"; then
+    printf '%s this log is capped at %s bytes for today; the rest is on screen only\n' "${2%% \[*}" "$LOG_FILE_MAX_BYTES" >>"$1" 2>/dev/null
+  fi
+  return 0
+}
 die() {
   log "ERROR: $*" >&2
   exit 1
@@ -1066,12 +1094,12 @@ launch_log() { echo "$BOSUN_LOG_DIR/launch-$(date +%F).log"; }
 
 # <window>'s lines from its agent's connectors module (lib/connectors_<agent>.py; <file>, its stderr: a name
 # not found, a lookup that failed, a list refused) logged where the launch's own go (stderr, the window's
-# screen), and, for a real launch (not CONNECTOR_LOOKUP=0, a fingerprint, which starts nothing), in the day's
-# launch log too.
-log_connector_lines() { # <window> <file>
-  local line log_file=/dev/null
-  [ "${CONNECTOR_LOOKUP:-1}" = 0 ] || log_file="$(launch_log)"
-  while IFS= read -r line; do log "$1: $line"; done <"$2" | tee -a "$log_file" >&2
+# screen, and log()'s day's file), but not in the file for a fingerprint (CONNECTOR_LOOKUP=0), which starts
+# nothing.
+log_connector_lines() {                      # <window> <file>
+  local line LOG_TO_FILE="${LOG_TO_FILE:-1}" # log() reads it: a fingerprint's lines stay off the file
+  [ "${CONNECTOR_LOOKUP:-1}" = 0 ] && LOG_TO_FILE=0
+  while IFS= read -r line; do log "$1: $line"; done <"$2" >&2
 }
 
 # `bosun alert` that <window> started without the names lib/connectors_claude.py left out (<missing file>, a JSON

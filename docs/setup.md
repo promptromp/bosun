@@ -469,10 +469,15 @@ State and logs go to `~/.local/state/bosun/`:
   `knowledge/journal/` of the config folder, see [Knowledge](knowledge.md#knowledge)), made once,
   and anew when a journal starts again (moved aside, emptied or removed); moved aside itself, it
   gives the Mac a new id too. Either way, both journals carry on under the new id
-- `logs/`: `morning-YYYY-MM-DD.log`, `checkin-YYYY-MM-DD.log`, `learn-YYYY-MM-DD.log`,
-  `impact-YYYY-MM-DD.log`, `hook-YYYY-MM-DD.log` (the repo sessions' prompt hook), `launch-YYYY-MM-DD.log`
-  (the alerts a window's launch sent, such as connectors it started without), and what launchd
-  captures from each job (`launchd.{out,err}`, `watchdog.launchd.{out,err}`, `learn.launchd.{out,err}`)
+- `logs/`: a file per command and day, `<command>-YYYY-MM-DD.log`, with what that command said on its screen:
+  `morning-…` (the morning run, all of it), `checkin-…`, `learn-…`, `impact-…`, `hook-…` (the repo
+  sessions' prompt hook, its errors), `launch-…` (each window's launch: which conversation it resumed or
+  started, connectors it started without, alerts it sent), and `start-…`, `refresh-…`, `send-…`,
+  `stop-…` and the other commands' when they said something. These are bosun's own messages, a few dozen
+  a day: a file stops at 2 MB a day with one line saying so, and everything still shows on screen. Then
+  what launchd captures from each job (`launchd.{out,err}`, `watchdog.launchd.{out,err}`,
+  `console.launchd.err`, ...). Each morning run keeps the folder in bounds: a day's file older than 30
+  days goes, and a launchd file past 1 MB is cut to its last 256 KB
 - `watchdog.json`: the watchdog's de-duplication state
 - `login.json`: the last Claude Code login check (see Claude Code login)
 - `codex-sessions.json`: which Codex session each window's name stands for

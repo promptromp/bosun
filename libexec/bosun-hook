@@ -48,6 +48,7 @@
 # ERROR lines). Design: docs/design/events.md.
 set -uo pipefail
 source "$(dirname "$0")/../lib/common.sh"
+LOG_TO_FILE=0 # it runs on every prompt, and writes its errors to its own day's file (log() in lib/common.sh)
 # The agent route never dies on the config: a bosun.env that cannot be read would otherwise exit 1, which an
 # agent takes as a refusal of every tool in every window. It reads what it can (read_config falls back to
 # the defaults and the environment) and says so in the hook log.
