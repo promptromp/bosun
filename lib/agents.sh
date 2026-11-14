@@ -170,6 +170,7 @@ run_preflight() { # [--quiet]
   # Without python3 the commands cannot be named; preflight then says that python3 is what is missing.
   if load_agent_profiles; then agent_bin_env; fi
   env BOSUN_HARNESSES="$(harnesses_in_use)" ${agent_bin_assignments[@]+"${agent_bin_assignments[@]}"} \
+    BOSUN_CLAUDE_FLAGS="$BOSUN_CLAUDE_FLAGS" BOSUN_ORCHESTRATOR_FLAGS="$BOSUN_ORCHESTRATOR_FLAGS" \
     sh "$BOSUN_ROOT/lib/preflight.sh" "$@"
 }
 

@@ -98,6 +98,8 @@ installed. The usual ones:
 | `missing  Homebrew` | Nothing to install the tools with | Install it from [brew.sh](https://brew.sh), then do what it prints at the end to add it to your PATH, and open a new terminal |
 | A tool you just installed is still `missing` | Your terminal has the old PATH | Open a new terminal |
 | `first-run screens not done` | Claude Code stops at its theme and security screens the first time, and a window nobody is watching would wait there for ever | Run `claude`, go through them, then `/exit` |
+| `not logged in: the login keychain is locked` | Claude Code keeps its login in your login keychain, and a session over ssh starts with it locked, even when the Mac's desktop unlocked it | Run `security unlock-keychain ~/Library/Keychains/login.keychain-db` (your login password), then the same line again |
+| `Claude in Chrome's screen not done` | bosun starts windows with Chrome on (`--chrome` in `BOSUN_CLAUDE_FLAGS` and `BOSUN_ORCHESTRATOR_FLAGS`), and Claude Code first shows what it may do in your browser and waits for Enter | Run `claude --chrome`, press Enter at that screen, then `/exit` |
 | `not logged in` under Claude Code | It has no login | Run `claude`, and follow what it asks |
 | `not logged in` under Codex | It has no login | Run `codex login`. With an API key: `printenv OPENAI_API_KEY \| codex login --with-api-key` |
 | A window is on a screen, and the watchdog reports `stalled-start` | The agent is asking something only you can answer, usually about trusting the folder | `bosun attach`, then read it. Do not just press Return: on several of Claude Code's screens the default is to exit, and on Codex's it says yes |
