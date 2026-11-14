@@ -7,22 +7,22 @@ import Testing
 /// Open at Login switched: one switch at a time, and a reading of it that began before the switch never puts the
 /// old state back.
 @MainActor @Suite struct CoordinatorLoginTests {
-  /// A-6: one switch at a time: the item is greyed while `app login` runs, so a second click waits.
-  @Test func openAtLoginIsGreyedWhileItIsSwitched() async throws {
+  /// A-6: one switch at a time: while `app login` runs a second switch is ignored.
+  @Test func aSecondSwitchWhileOneRunsIsIgnored() async throws {
     let gate = Gate()
     let world = try await World(login: false, gates: [Bosun.appLogin(on: true).args: gate])
     await world.refresh(.launch)
     await world.reply(Bosun.appLogin(on: true), exited(0))
     await world.replace(Bosun.appStatus, exited(0, try Fixtures.text("app-status")))
-    let toggle = Task { await world.coordinator.perform(.openAtLogin) }
+    let toggle = Task { await world.coordinator.toggleLogin() }
     #expect(await gate.waitForWaiter())
-    #expect(world.item(.openAtLogin)?.enabled == false)
-    await world.coordinator.perform(.openAtLogin)
+    #expect(world.coordinator.flow.active == .login)
+    await world.coordinator.toggleLogin()
     await gate.open()
     await toggle.value
     #expect(await world.commands.filter { $0.first == "app" && $0.dropFirst().first == "login" }.count == 1)
-    #expect(world.item(.openAtLogin)?.checked == true)
-    #expect(world.item(.openAtLogin)?.enabled == true)
+    #expect(world.coordinator.login == true)
+    #expect(world.coordinator.flow.isIdle)
   }
 
   /// A-6: a look's reading of Open at Login that began before a switch (it read the plist as it was) and lands
@@ -47,11 +47,44 @@ import Testing
     await hold.arm()
     let look = Task { await coordinator.menuWillOpen() }
     #expect(await hold.gate.waitForWaiter())
-    await coordinator.perform(.openAtLogin)
+    await coordinator.toggleLogin()
     #expect(coordinator.login == true)
     await hold.gate.open()
     await look.value
     #expect(coordinator.login == true)
-    #expect(ui.lastModel?.sections.flatMap { $0 }.first { $0.id == .openAtLogin }?.checked == true)
+  }
+
+  @Test func openAtLoginTurnsItOnAndShowsItChecked() async throws {
+    let world = try await World(login: false)
+    await world.refresh(.launch)
+    #expect(world.coordinator.login == false)
+    await world.reply(Bosun.appLogin(on: true), exited(0))
+    await world.replace(Bosun.appStatus, exited(0, try Fixtures.text("app-status")))
+    await world.coordinator.toggleLogin()
+    #expect(await world.commands.contains(["app", "login", "on"]))
+    #expect(world.coordinator.login == true)
+  }
+
+  @Test func openAtLoginTurnsItOffWhenItIsOn() async throws {
+    let world = try await World(login: true)
+    await world.refresh(.launch)
+    await world.reply(Bosun.appLogin(on: false), exited(0))
+    let off = try Fixtures.text("app-status").replacingOccurrences(
+      of: "\"login\": true", with: "\"login\": false")
+    await world.replace(Bosun.appStatus, exited(0, off))
+    await world.coordinator.toggleLogin()
+    #expect(await world.commands.contains(["app", "login", "off"]))
+    #expect(world.coordinator.login == false)
+  }
+
+  @Test func openAtLoginThatFailsShowsWhyAndChangesNothing() async throws {
+    let world = try await World(login: false)
+    await world.refresh(.launch)
+    await world.reply(Bosun.appLogin(on: true), exited(1, "", err: "bosun.app is not installed\n"))
+    world.ui.answer("OK")
+    await world.coordinator.toggleLogin()
+    #expect(world.ui.lastSpec?.title == "Cannot change Open at Login")
+    #expect(world.ui.lastSpec?.message == "bosun.app is not installed")
+    #expect(world.coordinator.login == false)
   }
 }

@@ -166,6 +166,19 @@ public struct WindowAttention: Decodable, Equatable, Sendable {
   }
 }
 
+/// `schedule`: whether now is within your hours (`BOSUN_DAYS`, from `BOSUN_START_TIME` to `BOSUN_AWAKE_UNTIL`),
+/// and the next automatic start (the morning job's next run, ISO 8601), each null when bosun cannot say. The next
+/// start is the next one even within the hours (tomorrow's then): it is no "resumes at" while `inHours` is true.
+public struct Schedule: Decodable, Equatable, Sendable {
+  public let inHours: Bool?
+  public let nextStart: String?
+
+  public init(inHours: Bool?, nextStart: String?) {
+    self.inHours = inHours
+    self.nextStart = nextStart
+  }
+}
+
 public struct StatusSnapshot: Decodable, Equatable, Sendable {
   public let contract: Int
   public let level: Level
@@ -185,6 +198,11 @@ public struct StatusSnapshot: Decodable, Equatable, Sendable {
   /// that does not say.
   public let attention: [WindowAttention]?
   public let logs: String
+  /// The schedule's state; nil from a bosun before it.
+  public let schedule: Schedule?
+
+  /// Whether now is outside your hours, as bosun says it (false when it does not say).
+  public var outsideHours: Bool { schedule?.inHours == false }
 
   /// The windows that need you, in bosun's order (empty from a bosun that does not say).
   public var needsYou: [WindowAttention] { attention ?? [] }
@@ -198,12 +216,14 @@ public struct StatusSnapshot: Decodable, Equatable, Sendable {
   /// (stopped, or a quit that did not finish), or it is not running though it should be (never started today,
   /// the morning run failed: an error with no window open). A bosun that runs with an error, or whose windows
   /// could not be read, is not started again: its problems are shown instead, since Start runs the morning's
-  /// setup and may restart the session.
+  /// setup and may restart the session. Outside your hours a bosun that is all well or has a warning, with no
+  /// window open, is resting until its next start: Start (now) is offered too.
   public var offersStart: Bool {
     switch level {
     case .stopped: return true
     case .error: return stopped != nil || running == false
-    case .ok, .warning, .unknown: return false
+    case .ok, .warning: return running == false && outsideHours
+    case .unknown: return false
     }
   }
 }

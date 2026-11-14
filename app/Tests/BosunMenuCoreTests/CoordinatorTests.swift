@@ -28,7 +28,7 @@ import Testing
     await world.refresh(.launch)
     #expect(world.ui.lastModel?.header.sentence == "bosun cannot be reached")
     #expect(
-      world.itemIDs == [.helpMenu, .help(.guide), .help(.doctor), .help(.logs), .help(.uninstall), .quit])
+      world.itemIDs == [.helpMenu, .help(.guide), .help(.doctor), .help(.logs), .help(.uninstall), .quitApp])
   }
 
   /// Review focus 2: a hang keeps the last state, marked as not current.
@@ -44,10 +44,10 @@ import Testing
   @Test func openAtLoginShowsWhatAppStatusSays() async throws {
     let on = try await World(login: true)
     await on.refresh(.launch)
-    #expect(on.item(.openAtLogin)?.checked == true)
+    #expect(on.coordinator.login == true)
     let off = try await World(login: false)
     await off.refresh(.launch)
-    #expect(off.item(.openAtLogin)?.checked == false)
+    #expect(off.coordinator.login == false)
   }
 
   @Test func theLoginIsLookedAtWhenTheMenuOpensAndNotEveryHalfMinute() async throws {
@@ -59,7 +59,7 @@ import Testing
     #expect(looks.count == 1)
     await world.replace(Bosun.appStatus, exited(0, try Fixtures.text("app-status")))
     await world.menuWillOpen()
-    #expect(world.item(.openAtLogin)?.checked == true)
+    #expect(world.coordinator.login == true)
   }
 
   @Test func anAppStatusThatCannotBeReadKeepsTheLoginAsItWas() async throws {
@@ -67,7 +67,7 @@ import Testing
     await world.refresh(.launch)
     await world.replace(Bosun.appStatus, exited(1, "", err: "nope\n"))
     await world.menuWillOpen()
-    #expect(world.item(.openAtLogin)?.checked == true)
+    #expect(world.coordinator.login == true)
   }
 
   /// Review focus 3: waking refreshes at once.
@@ -170,6 +170,7 @@ import Testing
 @MainActor @Suite struct CoordinatorActionTests {
   @Test func openConsoleOpensTheAddressBosunGives() async throws {
     let world = try await World()
+    await world.replace(Bosun.status, exited(0, try Fixtures.consoleRunning("status-ok")))
     await world.refresh(.launch)
     await world.reply(Bosun.consoleURL, exited(0, "http://127.0.0.1:8123/?t=abc\n"))
     await world.coordinator.perform(.openConsole)
@@ -178,6 +179,7 @@ import Testing
 
   @Test func openConsoleThatFailsShowsWhy() async throws {
     let world = try await World()
+    await world.replace(Bosun.status, exited(0, try Fixtures.consoleRunning("status-ok")))
     await world.refresh(.launch)
     await world.reply(Bosun.consoleURL, exited(1, "", err: "the console is not running\n"))
     world.ui.answer("OK")
@@ -189,6 +191,7 @@ import Testing
 
   @Test func openConsoleThatAnswersWithAnythingElseOpensNothing() async throws {
     let world = try await World()
+    await world.replace(Bosun.status, exited(0, try Fixtures.consoleRunning("status-ok")))
     await world.refresh(.launch)
     await world.reply(Bosun.consoleURL, exited(0, "file:///etc/passwd\n"))
     world.ui.answer("OK")
@@ -244,40 +247,6 @@ import Testing
     world.ui.answer("OK")
     await world.coordinator.perform(.startBosun)
     #expect(world.ui.lastSpec?.message == "bosun is not installed")
-  }
-
-  @Test func openAtLoginTurnsItOnAndShowsItChecked() async throws {
-    let world = try await World(login: false)
-    await world.refresh(.launch)
-    #expect(world.item(.openAtLogin)?.checked == false)
-    await world.reply(Bosun.appLogin(on: true), exited(0))
-    await world.replace(Bosun.appStatus, exited(0, try Fixtures.text("app-status")))
-    await world.coordinator.perform(.openAtLogin)
-    #expect(await world.commands.contains(["app", "login", "on"]))
-    #expect(world.item(.openAtLogin)?.checked == true)
-  }
-
-  @Test func openAtLoginTurnsItOffWhenItIsOn() async throws {
-    let world = try await World(login: true)
-    await world.refresh(.launch)
-    await world.reply(Bosun.appLogin(on: false), exited(0))
-    let off = try Fixtures.text("app-status").replacingOccurrences(
-      of: "\"login\": true", with: "\"login\": false")
-    await world.replace(Bosun.appStatus, exited(0, off))
-    await world.coordinator.perform(.openAtLogin)
-    #expect(await world.commands.contains(["app", "login", "off"]))
-    #expect(world.item(.openAtLogin)?.checked == false)
-  }
-
-  @Test func openAtLoginThatFailsShowsWhyAndChangesNothing() async throws {
-    let world = try await World(login: false)
-    await world.refresh(.launch)
-    await world.reply(Bosun.appLogin(on: true), exited(1, "", err: "bosun.app is not installed\n"))
-    world.ui.answer("OK")
-    await world.coordinator.perform(.openAtLogin)
-    #expect(world.ui.lastSpec?.title == "Cannot change Open at Login")
-    #expect(world.ui.lastSpec?.message == "bosun.app is not installed")
-    #expect(world.item(.openAtLogin)?.checked == false)
   }
 
   @Test func showWhatsWrongListsTheProblems() async throws {

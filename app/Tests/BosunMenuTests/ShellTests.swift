@@ -209,8 +209,8 @@ final class Flag {
       files: files, perform: { performed.append($0) }, answer: { _ in true }, dialogOpen: { false },
       interval: 0.02)
     runner.start()
-    try drop(#"{"item": "quit"}"#, "1.json", folder)
-    #expect(await eventually { performed == [.quit] })
+    try drop(#"{"item": "quitApp"}"#, "1.json", folder)
+    #expect(await eventually { performed == [.quitApp] })
     runner.stop()
   }
 }

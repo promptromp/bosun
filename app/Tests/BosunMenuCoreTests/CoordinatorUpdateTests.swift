@@ -263,7 +263,8 @@ private func checkCalls(_ world: World) async -> Int {
     await world.reply(Bosun.checkUpdates, exited(0, try Fixtures.text("update-check-available")))
     await world.refresh(.launch)
     world.ui.whileOpen = { _ in
-      await world.coordinator.perform(.quit)
+      await world.coordinator.perform(.quitApp)
+      await world.coordinator.perform(.stopBosun)
       await world.coordinator.perform(.checkForUpdates)
       await world.coordinator.perform(.startBosun)
     }

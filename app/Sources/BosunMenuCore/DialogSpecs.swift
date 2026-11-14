@@ -74,7 +74,6 @@ public struct DialogAnswer: Equatable, Sendable {
 private enum QuitBox {
   static let pause = "pauseMorning"
   static let sleep = "sleep"
-  static let keepIcon = "keepIcon"
 }
 
 private func quitBoxes(sleep: Bool) -> [DialogBox] {
@@ -86,31 +85,53 @@ private func quitBoxes(sleep: Bool) -> [DialogBox] {
   if sleep {
     boxes.append(DialogBox(id: QuitBox.sleep, title: "Let this Mac sleep now", on: defaults.sleep))
   }
-  boxes.append(DialogBox(id: QuitBox.keepIcon, title: "Keep bosun in the menu bar", on: defaults.keepIcon))
   return boxes
 }
 
-/// The first dialog: what quitting would meet, and the person's choices. The sleep box is only there while
-/// the Mac is being kept awake: with no keep-awake there is nothing for it to end.
+/// The first dialog of Stop: what stopping would meet, and the person's choices. The sleep box is only there
+/// while the Mac is being kept awake: with no keep-awake there is nothing for it to end.
 public func quitFirstSpec(_ plan: QuitPlan) -> DialogSpec {
   DialogSpec(
-    title: "Quit bosun?", message: (plan.lines + [plan.note].compactMap { $0 }).joined(separator: "\n"),
-    scroll: nil, boxes: quitBoxes(sleep: plan.keepAwakeUntil != nil), buttons: ["Quit bosun", "Cancel"],
+    title: "Stop bosun?", message: (plan.lines + [plan.note].compactMap { $0 }).joined(separator: "\n"),
+    scroll: nil, boxes: quitBoxes(sleep: plan.keepAwakeUntil != nil), buttons: ["Stop bosun", "Cancel"],
     cancel: 1)
 }
 
 /// Shown when `quit --plan` could not look (or did not answer): the reason, a Stop Now, which needs no look,
-/// and Quit bosun.app, which leaves bosun as it is. Stop Now ends every window, and bosun cannot tell whether
-/// agents are busy: so no button is the default (Return does nothing), and Escape cancels, as Apple's
-/// guidelines allow for a destructive action.
-public func quitUnavailableSpec(_ why: String) -> DialogSpec {
-  DialogSpec(
+/// and, when the app is quitting anyway (`quitsApp`), Quit bosun.app, which leaves bosun as it is. Stop Now
+/// ends every window, and bosun cannot tell whether agents are busy: so no button is the default (Return does
+/// nothing), and Escape cancels, as Apple's guidelines allow for a destructive action.
+public func quitUnavailableSpec(_ why: String, quitsApp: Bool) -> DialogSpec {
+  let stopNow = "\n\nStop Now ends every window without waiting for any agent."
+  return DialogSpec(
     title: "bosun cannot say what quitting would stop",
-    message: why
-      + "\n\nStop Now ends every window without waiting for any agent. Quit bosun.app leaves bosun "
-      + "as it is.",
-    scroll: nil, boxes: quitBoxes(sleep: true), buttons: ["Cancel", "Stop Now", "Quit bosun.app"], cancel: 0,
+    message: why + stopNow + (quitsApp ? " Quit bosun.app leaves bosun as it is." : ""),
+    scroll: nil, boxes: quitBoxes(sleep: true),
+    buttons: ["Cancel", "Stop Now"] + (quitsApp ? ["Quit bosun.app"] : []), cancel: 0,
     defaultButton: nil, style: .warning)
+}
+
+/// Quit bosun.app while the session runs: leaving it running is the default (Return), stopping it first is the
+/// Stop flow, and Escape cancels.
+public func quitAppSpec() -> DialogSpec {
+  DialogSpec(
+    title: "Quit bosun.app?",
+    message: "bosun keeps running without its menu bar icon. Open bosun.app to see it again.",
+    scroll: nil, boxes: [], buttons: ["Leave bosun Running", "Stop bosun and Quit…", "Cancel"], cancel: 2,
+    defaultButton: 0)
+}
+
+public enum QuitAppChoice: Equatable, Sendable {
+  case leaveRunning, stopAndQuit, cancel
+}
+
+/// The answer to `quitAppSpec`.
+public func quitAppChoice(_ answer: DialogAnswer) -> QuitAppChoice {
+  switch answer.button {
+  case 0: return .leaveRunning
+  case 1: return .stopAndQuit
+  default: return .cancel
+  }
 }
 
 public func quitBusySpec(_ names: [String]) -> DialogSpec {
@@ -134,24 +155,26 @@ public func quitNoteSpec(_ note: String) -> DialogSpec {
 }
 
 extension QuitChoices {
-  /// The choices the boxes were answered with; a box the dialog did not have keeps its default.
-  public init(answer: DialogAnswer) {
+  /// The choices the boxes were answered with; a box the dialog did not have keeps its default. `quitsApp` is
+  /// the entry point's, never a box's.
+  public init(answer: DialogAnswer, quitsApp: Bool = false) {
     let defaults = QuitChoices()
     self.init(
       pauseMorning: answer.boxes[QuitBox.pause] ?? defaults.pauseMorning,
       sleep: answer.boxes[QuitBox.sleep] ?? defaults.sleep,
-      keepIcon: answer.boxes[QuitBox.keepIcon] ?? defaults.keepIcon)
+      quitsApp: quitsApp)
   }
 }
 
-/// An answer to the dialog of a quit step, as the event of the flow.
-public func quitEvent(for step: QuitStep, answer: DialogAnswer) -> QuitEvent {
+/// An answer to the dialog of a quit step, as the event of the flow; `quitsApp` is whether the flow was started
+/// to quit the app too.
+public func quitEvent(for step: QuitStep, answer: DialogAnswer, quitsApp: Bool = false) -> QuitEvent {
   switch step {
   case .first:
-    return answer.button == 0 ? .confirmed(QuitChoices(answer: answer)) : .cancelled
+    return answer.button == 0 ? .confirmed(QuitChoices(answer: answer, quitsApp: quitsApp)) : .cancelled
   case .unavailable:
     switch answer.button {
-    case 1: return .confirmed(QuitChoices(answer: answer))
+    case 1: return .confirmed(QuitChoices(answer: answer, quitsApp: quitsApp))
     case 2: return .leaveApp
     default: return .cancelled
     }

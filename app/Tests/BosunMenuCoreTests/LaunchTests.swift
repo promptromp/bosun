@@ -60,6 +60,14 @@ import Testing
     #expect(try !shouldStartAtLaunch(opened, status: state("status-quit-unfinished")))
   }
 
+  /// Resting outside your hours offers "Start bosun now" in the menu, but opening the app starts nothing: the
+  /// schedule decides the automatic starts, and opening the app starts bosun only when it is stopped
+  /// (docs/design/control-panel.md, "Stop and Quit").
+  @Test func openedByYouWhileRestingOutsideYourHoursItStartsNothing() throws {
+    #expect(try Fixtures.status("status-resting").offersStart)
+    #expect(try !shouldStartAtLaunch(opened, status: state("status-resting")))
+  }
+
   @Test func aStatusThatIsNotCurrentStartsNothing() throws {
     let stale = StatusState.loaded(try Fixtures.status("status-stopped"), current: false)
     #expect(!shouldStartAtLaunch(opened, status: stale))

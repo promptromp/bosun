@@ -86,17 +86,17 @@ private func jsonObject(_ data: Data) throws -> [String: Any] {
 
   @Test func actionsAreTakenInTheOrderOfTheirNumbers() throws {
     let (hooks, folder) = try files()
-    try drop(#"{"item": "quit"}"#, as: "10.json", in: folder)
+    try drop(#"{"item": "quitApp"}"#, as: "10.json", in: folder)
     try drop(#"{"item": "startBosun"}"#, as: "9.json", in: folder)
     try drop(#"{"item": "openConsole"}"#, as: "2.json", in: folder)
     let taken = hooks.takeActions(dialogOpen: false)
-    #expect(taken == [.item(.openConsole), .item(.startBosun), .item(.quit)])
+    #expect(taken == [.item(.openConsole), .item(.startBosun), .item(.quitApp)])
   }
 
   /// The harness waits for its file to go: that is how it knows the action was taken.
   @Test func aTakenActionsFileIsRemoved() throws {
     let (hooks, folder) = try files()
-    try drop(#"{"item": "quit"}"#, as: "1.json", in: folder)
+    try drop(#"{"item": "quitApp"}"#, as: "1.json", in: folder)
     _ = hooks.takeActions(dialogOpen: false)
     #expect(!FileManager.default.fileExists(atPath: folder.appendingPathComponent("actions/1.json").path))
     #expect(hooks.takeActions(dialogOpen: false).isEmpty)
@@ -105,10 +105,10 @@ private func jsonObject(_ data: Data) throws -> [String: Any] {
   /// An answer is for the open dialog; with none open it waits, and so does what follows it.
   @Test func anAnswerWaitsForADialog() throws {
     let (hooks, folder) = try files()
-    try drop(#"{"item": "quit"}"#, as: "1.json", in: folder)
+    try drop(#"{"item": "quitApp"}"#, as: "1.json", in: folder)
     try drop(#"{"answer": {"button": "Cancel"}}"#, as: "2.json", in: folder)
     try drop(#"{"item": "startBosun"}"#, as: "3.json", in: folder)
-    #expect(hooks.takeActions(dialogOpen: false) == [.item(.quit)])
+    #expect(hooks.takeActions(dialogOpen: false) == [.item(.quitApp)])
     #expect(FileManager.default.fileExists(atPath: folder.appendingPathComponent("actions/2.json").path))
     // One answer a tick: what follows it is for the dialog after it, which is not open yet
     let later = hooks.takeActions(dialogOpen: true)
@@ -118,9 +118,9 @@ private func jsonObject(_ data: Data) throws -> [String: Any] {
 
   @Test func twoAnswersAreTakenOnTwoTicks() throws {
     let (hooks, folder) = try files()
-    try drop(#"{"answer": {"button": "Quit bosun"}}"#, as: "1.json", in: folder)
+    try drop(#"{"answer": {"button": "Stop bosun"}}"#, as: "1.json", in: folder)
     try drop(#"{"answer": {"button": "Let Them Finish"}}"#, as: "2.json", in: folder)
-    #expect(hooks.takeActions(dialogOpen: true) == [.answer(HookAnswer(button: "Quit bosun", boxes: [:]))])
+    #expect(hooks.takeActions(dialogOpen: true) == [.answer(HookAnswer(button: "Stop bosun", boxes: [:]))])
     #expect(
       hooks.takeActions(dialogOpen: true) == [.answer(HookAnswer(button: "Let Them Finish", boxes: [:]))])
     #expect(hooks.takeActions(dialogOpen: true).isEmpty)
@@ -128,17 +128,17 @@ private func jsonObject(_ data: Data) throws -> [String: Any] {
 
   @Test func onlyJSONFilesWithANumberAreActions() throws {
     let (hooks, folder) = try files()
-    try drop(#"{"item": "quit"}"#, as: "notes.txt", in: folder)
-    try drop(#"{"item": "quit"}"#, as: "abc.json", in: folder)
-    try drop(#"{"item": "quit"}"#, as: "1.json.tmp", in: folder)
+    try drop(#"{"item": "quitApp"}"#, as: "notes.txt", in: folder)
+    try drop(#"{"item": "quitApp"}"#, as: "abc.json", in: folder)
+    try drop(#"{"item": "quitApp"}"#, as: "1.json.tmp", in: folder)
     #expect(hooks.takeActions(dialogOpen: false).isEmpty)
   }
 
   @Test func aFileThatIsNotAnActionIsLoggedAndRemoved() throws {
     let (hooks, folder) = try files()
     try drop(#"{"item": "reboot"}"#, as: "1.json", in: folder)
-    try drop(#"{"item": "quit"}"#, as: "2.json", in: folder)
-    #expect(hooks.takeActions(dialogOpen: false) == [.item(.quit)])
+    try drop(#"{"item": "quitApp"}"#, as: "2.json", in: folder)
+    #expect(hooks.takeActions(dialogOpen: false) == [.item(.quitApp)])
     #expect(!FileManager.default.fileExists(atPath: folder.appendingPathComponent("actions/1.json").path))
     let lines = try logLines(folder)
     #expect(lines.count == 1)

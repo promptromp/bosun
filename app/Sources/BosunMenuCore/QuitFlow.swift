@@ -1,10 +1,12 @@
 import Foundation
 
-// Quit is option B of the mockups (docs/design/menu-bar.md): a short first dialog with the person's
-// choices (the morning start paused, the Mac let to sleep, the icon kept), a second only when agents are
-// busy (let them finish, or stop them now), and a third when the wait ran out with some still busy (keep
-// waiting, stop them now, cancel). The quit itself is one `bosun quit` command, which does the work and
-// prints one object; the app only collects the choices and shows the result.
+// Stopping bosun is option B of the mockups (docs/design/menu-bar.md): a short first dialog with the person's
+// choices (the morning start paused, the Mac let to sleep), a second only when agents are busy (let them finish,
+// or stop them now), and a third when the wait ran out with some still busy (keep waiting, stop them now,
+// cancel). The quit itself is one `bosun quit` command, which does the work and prints one object; the app only
+// collects the choices and shows the result. Two items start it (docs/design/control-panel.md, "Stop and
+// Quit"): "Stop bosun…", after which the app stays with the grey stopped status, and "Quit bosun.app"'s "Stop
+// bosun and Quit…", after which the app quits too. Which one it was is `QuitChoices.quitsApp`.
 
 public enum BusyChoice: Equatable, Sendable {
   case letFinish
@@ -49,7 +51,9 @@ public struct QuitWait: Equatable, Sendable {
 public struct QuitChoices: Equatable, Sendable {
   public var pauseMorning: Bool
   public var sleep: Bool
-  public var keepIcon: Bool
+  /// Whether the app quits once bosun is stopped: set by the item that started the flow (Quit bosun.app's
+  /// "Stop bosun and Quit…"), never by a box.
+  public var quitsApp: Bool
   public var busy: BusyChoice
   /// The wait a `--let-finish` quit is given, taken from the plan when the first dialog is answered, and
   /// kept for "Keep Waiting". Nil only for a plan that did not say (`QuitPlan.wait`): bosun's own default
@@ -57,19 +61,19 @@ public struct QuitChoices: Equatable, Sendable {
   public var wait: QuitWait?
 
   public init(
-    pauseMorning: Bool = true, sleep: Bool = true, keepIcon: Bool = false, busy: BusyChoice = .letFinish,
+    pauseMorning: Bool = true, sleep: Bool = true, quitsApp: Bool = false, busy: BusyChoice = .letFinish,
     wait: QuitWait? = nil
   ) {
     self.pauseMorning = pauseMorning
     self.sleep = sleep
-    self.keepIcon = keepIcon
+    self.quitsApp = quitsApp
     self.busy = busy
     self.wait = wait
   }
 }
 
 /// The `bosun quit` argv for the choices: `quit --let-finish[=<minutes>]|--stop-now [--pause-morning]
-/// [--sleep] --json`. `keepIcon` is the app's own and never the command's.
+/// [--sleep] --json`. `quitsApp` is the app's own and never the command's.
 public func quitCommand(_ choices: QuitChoices) -> [String] {
   var args = ["quit"]
   switch choices.busy {
@@ -87,7 +91,7 @@ public enum QuitStep: Equatable, Sendable {
   /// `quit --plan` said it could not look (the windows cannot be read), did not answer in time, or failed
   /// without an object: the reason, with the choices, "Stop Now", which does not need the look, and "Quit
   /// bosun.app", which leaves bosun as it is. This is how a quit that did not finish is finished. The wait is
-  /// the failure object's, nil when there was none.
+  /// the failure object's, nil when there was none. (Quit bosun.app is offered only when the app quits anyway.)
   case unavailable(String, QuitWait?)
   /// The first dialog: what quitting would meet, and the choices.
   case first(QuitPlan)
@@ -98,8 +102,9 @@ public enum QuitStep: Equatable, Sendable {
   /// `bosun quit` runs; the app does not poll `status` meanwhile.
   case running(QuitChoices)
   case failed(String)
-  /// The quit happened. The app quits itself unless the icon is kept; `note` is something to tell.
-  case done(keepIcon: Bool, note: String?)
+  /// The quit happened. The app quits itself when the flow was to (`QuitChoices.quitsApp`); `note` is something
+  /// to tell.
+  case done(quitsApp: Bool, note: String?)
   /// Only the app quits, and bosun is left as it is (chosen where bosun could not say what a quit would stop).
   case appOnly
   case cancelled
@@ -113,7 +118,7 @@ public enum QuitStep: Equatable, Sendable {
 
   public var quitsTheApp: Bool {
     switch self {
-    case .done(let keepIcon, _): return !keepIcon
+    case .done(let quitsApp, _): return quitsApp
     case .appOnly: return true
     default: return false
     }
@@ -198,7 +203,7 @@ private func running(_ choices: QuitChoices) -> (QuitStep, [Command]) {
 
 private func ended(_ outcome: QuitOutcome, _ choices: QuitChoices) -> QuitStep {
   switch outcome {
-  case .stopped(let note): return .done(keepIcon: choices.keepIcon, note: note)
+  case .stopped(let note): return .done(quitsApp: choices.quitsApp, note: note)
   case .busy(let names): return .stillBusy(names, choices)
   case .failed(let why): return .failed(why)
   }
@@ -312,19 +317,25 @@ private func planFailureObject(_ result: CommandResult) -> QuitResult? {
   return reply
 }
 
-// MARK: what Quit does
+// MARK: what Stop and Quit do
 
-public enum QuitAction: Equatable, Sendable {
-  /// No dialog: the app only quits, since there is no running bosun to stop (it is stopped, missing, or
-  /// cannot be asked).
-  case exitApp
-  /// The quit flow, from `startQuit()`.
-  case runFlow
+/// Whether "Stop bosun…" is in the menu: bosun is not stopped, and its session runs (or its windows could not be
+/// read), or a quit did not finish, which Stop finishes.
+public func showsStop(_ status: StatusSnapshot) -> Bool {
+  status.level != .stopped && (status.running != false || status.stopped != nil)
 }
 
-/// What choosing Quit does in a state.
-public func quitAction(for status: StatusState) -> QuitAction {
-  if case .loaded(let snapshot, _) = status, snapshot.level != .stopped { return .runFlow }
+public enum QuitAppAction: Equatable, Sendable {
+  /// No dialog: the app only quits, since there is no running session to ask about (it is stopped, missing,
+  /// cannot be asked, or its status is not current).
+  case exitApp
+  /// "Quit bosun.app?": leave bosun running, stop it and quit, or cancel.
+  case ask
+}
+
+/// What choosing Quit bosun.app does in a state: it asks only from a current status that shows Stop.
+public func quitAppAction(for status: StatusState) -> QuitAppAction {
+  if case .loaded(let snapshot, current: true) = status, showsStop(snapshot) { return .ask }
   return .exitApp
 }
 

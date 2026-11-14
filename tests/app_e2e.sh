@@ -135,7 +135,8 @@ place_built_app() {
 
 # --from release: bosun init installed the notarized app, and opened it at login at once. What a person gets.
 # Then Open at Login goes off again, so the driven steps start where they start with a built app: step 4 checks
-# that an update does not make the login job, and step 7 turns it on from the menu.
+# that an update does not make the login job, and step 7 turns it on (from the Settings window once Task 10 of
+# the control panel's plan drives it there: see step_7_login).
 check_the_release() {
   spctl --status | grep -q "assessments enabled" || { sudo spctl --global-enable && echo "  note  assessments were disabled on this Mac: enabled"; }
   check "Gatekeeper accepts the download: source=Notarized Developer ID" bash -c 'spctl --assess --type execute -vv "$1" 2>&1 | grep -qx "source=Notarized Developer ID"' _ "$APP"
@@ -178,7 +179,7 @@ step_1() {
   check "its menu is green, and says the windows are open" wait_for "$WAIT_POLL" menu_green_with_windows
   jq -c '.header' "$HOOKS/menu.json" | sed 's/^/  note  the header: /'
   check "... what bosun status --json says: the level, the sentence and the lines" wait_for 60 menu_matches_status
-  check "... Quit is in it, with the dialog's dots, and Open Console is enabled" menu_says '[.sections[][] | recurse(.children[]) | select(.id == "quit" or .id == "openConsole")] | map(.enabled) == [true, true]'
+  check "... Open Console, Stop bosun… and Quit bosun.app are in it, all enabled" menu_says '[.sections[][] | recurse(.children[]) | select(.id == "openConsole" or .id == "stopBosun" or .id == "quitApp")] | map(.enabled) == [true, true, true]'
   check "... and there is no Start (bosun runs) nor What's Wrong (nothing is)" bash -c '! jq -e "[.sections[][] | .id] | any(. == \"startBosun\" or . == \"showProblems\")" "$1"' _ "$HOOKS/menu.json"
   check "the app has not run anything but reading: status, the app's state and the update check" bash -c '
     jq -s -e "[.[] | select(.command != null) | .command[0]] | unique - [\"status\", \"app\", \"update\"] | length == 0" "$1"' _ "$HOOKS/log.jsonl"
@@ -291,15 +292,16 @@ step_4() {
   check "the app's own login job is not made by the update (Open at Login is still off)" test ! -e "$APP_PLIST"
 }
 
-# ---- 5. Quit with no busy agent, all defaults ------------------------------------------------------------------
+# ---- 5. Quit bosun.app, Stop bosun and Quit, no busy agent, all defaults ----------------------------------------
 
 step_5() {
   local paused mark
-  echo "5. Quit, no busy agent, all defaults: nothing of bosun is left, the app is gone"
+  echo "5. Quit bosun.app, Stop bosun and Quit, no busy agent, all defaults: nothing of bosun is left, the app is gone"
   mark="$(log_count)"
-  click quit
-  reply "Quit bosun"
-  check "Quit, and Quit bosun in the dialog (both taken)" wait_for 90 actions_taken
+  click quitApp
+  reply "Stop bosun and Quit…"
+  reply "Stop bosun"
+  check "Quit bosun.app, its Stop bosun and Quit…, and Stop bosun in the dialog (all three taken)" wait_for 90 actions_taken
   check "... the app ran the plan, then the quit, with the defaults" wait_for 120 log_has "$mark" '.command[0:2] == ["quit", "--let-finish=0"] and (.command | index("--pause-morning") != null) and (.command | index("--sleep") != null) and .outcome == "exited 0"'
   check "... and the app is gone" wait_for 60 app_gone
   check "no tmux server" no_tmux_server
@@ -319,11 +321,11 @@ step_5() {
   check "... and the app was not brought back by any of it" app_gone
 }
 
-# ---- 6. opened again: it starts bosun; a busy agent; Keep bosun in the menu bar --------------------------------
+# ---- 6. opened again: it starts bosun; a busy agent; Stop bosun… keeps the app ---------------------------------
 
 step_6() {
   local mark
-  echo "6. the app opened again: it starts bosun; Quit with a busy agent; Keep bosun in the menu bar"
+  echo "6. the app opened again: it starts bosun; Stop bosun and Quit with a busy agent; Stop bosun… keeps the app"
   mark="$(log_count)"
   launch_app
   check "opened with bosun stopped, the app starts it: morning --now --background, logged" wait_for 90 log_has "$mark" '.command == ["morning", "--now", "--background"] and .outcome == "exited 0"'
@@ -333,24 +335,25 @@ step_6() {
   agent acme-api busy
   check "a busy agent in acme-api" wait_for 60 busy_in_plan
   mark="$(log_count)"
-  click quit
-  reply "Quit bosun"
+  click quitApp
+  reply "Stop bosun and Quit…"
+  reply "Stop bosun"
   reply "Let Them Finish"
   reply "Stop It Now"
-  check "Quit, Quit bosun, the busy dialog's Let Them Finish, the still-busy dialog's Stop It Now (all four taken)" wait_for 180 actions_taken
+  check "Quit bosun.app, Stop bosun and Quit…, Stop bosun, the busy dialog's Let Them Finish, the still-busy dialog's Stop It Now (all five taken)" wait_for 180 actions_taken
   check "... the quit that let them finish waited 0 minutes, found acme-api busy (exit 3), and the app asked again" wait_for 120 log_has "$mark" '.command[0:2] == ["quit", "--let-finish=0"] and .outcome == "exited 3"'
   check "... then stopped them now" wait_for 120 log_has "$mark" '.command[0:2] == ["quit", "--stop-now"] and (.command | index("--pause-morning") != null) and .outcome == "exited 0"'
   check "... the app is gone" wait_for 60 app_gone
   check "... and bosun is stopped: no tmux server, status says stopped" bash -c '! tmux -L bosun info && "$1" status --json | jq -e ".level == \"stopped\""' _ "$BOSUN"
   agent acme-api idle
 
-  echo "6b. Quit with Keep bosun in the menu bar: the grey stopped menu, Start: green"
+  echo "6b. Stop bosun…: the grey stopped menu, the app stays, Start: green"
   mark="$(log_count)"
   launch_app
   check "opened again, it starts bosun and the menu is green" wait_for "$WAIT_POLL" menu_green_with_windows
-  click quit
-  reply "Quit bosun" '{"keepIcon": true}'
-  check "Quit, with the icon kept (both taken)" wait_for 120 actions_taken
+  click stopBosun
+  reply "Stop bosun"
+  check "Stop bosun…, and Stop bosun in the dialog (both taken)" wait_for 120 actions_taken
   check "... the menu is the grey stopped menu" wait_for "$WAIT_POLL" menu_stopped
   check "... bosun is stopped" no_tmux_server
   check "... the app stays: it runs" app_running
@@ -421,15 +424,15 @@ ask_the_app_to_quit_from_here() {
 }
 
 step_7_login() {
-  local mark
   echo "7. Open at Login on (the restart follows)"
-  mark="$(log_count)"
   check "bosun app status says login false before" bash -c '"$1" app status --json | jq -e ".login == false"' _ "$BOSUN"
-  click openAtLogin
-  check "choosing it runs bosun app login on" wait_for 60 log_has "$mark" '.command == ["app", "login", "on"] and .outcome == "exited 0"'
+  # TODO(Task 10 of the control panel's plan): Open at Login left the menu for the Settings window (bosun.app
+  # 0.1.3). Drive it through the Settings hook ({"settings": {"openAtLogin": true}}), and check again that the app
+  # ran `app login on` (its log) and that its settings state says it is on. Until then bosun turns it on itself,
+  # as the hook's switch would, so the restart that follows still starts the app at login.
+  check "bosun app login on (what the Settings window's switch runs)" "$BOSUN" app login on
   check "... the login job's plist is in LaunchAgents and loaded" bash -c 'test -f "$1" && launchctl print "$2/$3" >/dev/null' _ "$APP_PLIST" "$DOMAIN" "$APP_JOB"
   check "... bosun app status --json says login true" bash -c '"$1" app status --json | jq -e ".login == true"' _ "$BOSUN"
-  check "... and the menu item is checked" wait_for "$WAIT_POLL" menu_says '[.sections[][] | select(.id == "openAtLogin")] | first | .checked == true'
   check "loading the job ran the app at once (RunAtLoad): launchd ran it, and that second copy has exited" wait_for 60 login_job_ran_and_exited
   check "... so there is still one app process" test "$(app_count)" = 1
   check "... and it is still the first copy: it has the hooks" bash -c 'ps -o args= -p "$(pgrep -f "^$1( |\$)" | head -1)" | grep -q -- "--test-hooks"' _ "$APP_EXEC"

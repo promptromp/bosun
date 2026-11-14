@@ -10,7 +10,7 @@ import Testing
     #expect(model.header.sentence == "Checking bosun…")
     #expect(model.iconBadge == nil)
     let items = model.sections.flatMap { $0 }
-    #expect(items.map(\.id) == [.helpMenu, .quit])
+    #expect(items.map(\.id) == [.helpMenu, .quitApp])
     #expect(items.last?.title == "Quit bosun.app")
     // Nothing that runs bosun is offered before it is known to be there
     let help = items.first?.children ?? []

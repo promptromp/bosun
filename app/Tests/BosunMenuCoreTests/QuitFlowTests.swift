@@ -8,11 +8,11 @@ private let busyPlan = quitPlan(
   windows: ["acme-orchestrator", "acme-exporter", "acme-api"], busy: ["acme-exporter", "acme-api"])
 
 @Suite struct QuitCommandTests {
-  @Test func theDefaultsAreToPauseTheMorningLetTheMacSleepAndLeaveTheIcon() throws {
+  @Test func theDefaultsAreToPauseTheMorningLetTheMacSleepAndKeepTheApp() throws {
     let choices = QuitChoices()
     #expect(choices.pauseMorning)
     #expect(choices.sleep)
-    #expect(!choices.keepIcon)
+    #expect(!choices.quitsApp)
     #expect(choices.busy == .letFinish)
   }
 
@@ -24,7 +24,7 @@ private let busyPlan = quitPlan(
     for pause in [true, false] {
       for sleep in [true, false] {
         for busy in [BusyChoice.letFinish, .stopNow] {
-          let choices = QuitChoices(pauseMorning: pause, sleep: sleep, keepIcon: false, busy: busy)
+          let choices = QuitChoices(pauseMorning: pause, sleep: sleep, quitsApp: false, busy: busy)
           var expected = ["quit", busy == .letFinish ? "--let-finish" : "--stop-now"]
           if pause { expected.append("--pause-morning") }
           if sleep { expected.append("--sleep") }
@@ -33,11 +33,6 @@ private let busyPlan = quitPlan(
         }
       }
     }
-  }
-
-  @Test func keepingTheIconIsTheAppsAndNeverTheCommands() throws {
-    #expect(
-      quitCommand(QuitChoices(keepIcon: true)) == quitCommand(QuitChoices(keepIcon: false)))
   }
 
   @Test func theLetFinishCommandWaitsLongerThanTheStopNowOne() throws {
@@ -69,24 +64,24 @@ private let busyPlan = quitPlan(
     var (step, _) = start()
     (step, _) = next(step, on: .planned(quiet))
     #expect(step == .first(quiet))
-    let choices = QuitChoices(pauseMorning: false, sleep: true, keepIcon: false, busy: .stopNow)
+    let choices = QuitChoices(pauseMorning: false, sleep: true, quitsApp: false, busy: .stopNow)
     let (running, commands) = next(step, on: .confirmed(choices))
     // Nothing is busy, so there is nothing to stop: the safe way waits for anything that turns busy
     let wait = QuitWait(minutes: 10, lockSeconds: 180)  // what the plan said
     #expect(
       running
         == .running(
-          QuitChoices(pauseMorning: false, sleep: true, keepIcon: false, busy: .letFinish, wait: wait)))
+          QuitChoices(pauseMorning: false, sleep: true, quitsApp: false, busy: .letFinish, wait: wait)))
     #expect(commands.map(\.args) == [["quit", "--let-finish=10", "--sleep", "--json"]])
     let (done, none) = next(running, on: .ended(.stopped(note: nil)))
-    #expect(done == .done(keepIcon: false, note: nil))
+    #expect(done == .done(quitsApp: false, note: nil))
     #expect(none.isEmpty)
   }
 
-  @Test func theIconStaysWhenTheBoxWasChecked() throws {
-    let choices = QuitChoices(keepIcon: true)
+  @Test func theAppQuitsWhenTheFlowWasStartedToQuitIt() throws {
+    let choices = QuitChoices(quitsApp: true)
     let (running, _) = next(.first(quiet), on: .confirmed(choices))
-    #expect(next(running, on: .ended(.stopped(note: nil))).0 == .done(keepIcon: true, note: nil))
+    #expect(next(running, on: .ended(.stopped(note: nil))).0 == .done(quitsApp: true, note: nil))
   }
 
   @Test func busyAgentsAskASecondQuestionBeforeAnythingRuns() throws {
@@ -130,16 +125,16 @@ private let busyPlan = quitPlan(
       .stillBusy(["acme-exporter"], QuitChoices(busy: .letFinish)), on: .busyChosen(.stopNow))
     #expect(running == .running(QuitChoices(busy: .stopNow)))
     #expect(commands.map(\.args) == [["quit", "--stop-now", "--pause-morning", "--sleep", "--json"]])
-    #expect(next(running, on: .ended(.stopped(note: nil))).0 == .done(keepIcon: false, note: nil))
+    #expect(next(running, on: .ended(.stopped(note: nil))).0 == .done(quitsApp: false, note: nil))
   }
 
   @Test func busyThenFinishThenDoneIsTheWholeWalk() throws {
     var step = QuitStep.planning
     step = next(step, on: .planned(busyPlan)).0
-    step = next(step, on: .confirmed(QuitChoices(keepIcon: true))).0
+    step = next(step, on: .confirmed(QuitChoices(quitsApp: true))).0
     step = next(step, on: .busyChosen(.letFinish)).0
     step = next(step, on: .ended(.stopped(note: nil))).0
-    #expect(step == .done(keepIcon: true, note: nil))
+    #expect(step == .done(quitsApp: true, note: nil))
   }
 
   @Test func busyThenStillBusyThenStopIsTheWholeWalk() throws {
@@ -150,13 +145,13 @@ private let busyPlan = quitPlan(
     step = next(step, on: .ended(.busy(["acme-exporter"]))).0
     step = next(step, on: .busyChosen(.stopNow)).0
     step = next(step, on: .ended(.stopped(note: nil))).0
-    #expect(step == .done(keepIcon: false, note: nil))
+    #expect(step == .done(quitsApp: false, note: nil))
   }
 
   @Test func aConsoleStillRunningIsCarriedToTheEnd() throws {
     let note = "A console is still running on port 8765"
     let (step, _) = next(.running(QuitChoices()), on: .ended(.stopped(note: note)))
-    #expect(step == .done(keepIcon: false, note: note))
+    #expect(step == .done(quitsApp: false, note: note))
   }
 
   @Test func cancelAtAnyDialogStopsNothing() throws {
@@ -192,7 +187,7 @@ private let busyPlan = quitPlan(
 
   @Test func anEventThatMeansNothingInTheStepChangesNothing() throws {
     let nothing: [(QuitStep, QuitEvent)] = [
-      (.done(keepIcon: false, note: nil), .confirmed(QuitChoices())),
+      (.done(quitsApp: false, note: nil), .confirmed(QuitChoices())),
       (.cancelled, .busyChosen(.stopNow)),
       (.failed("x"), .ended(.stopped(note: nil))),
       (.planning, .confirmed(QuitChoices())),
@@ -208,7 +203,7 @@ private let busyPlan = quitPlan(
   }
 
   @Test func theFinishedStepsAreTheOnesTheFlowEndsIn() throws {
-    #expect(QuitStep.done(keepIcon: false, note: nil).isFinished)
+    #expect(QuitStep.done(quitsApp: false, note: nil).isFinished)
     #expect(QuitStep.failed("x").isFinished)
     #expect(QuitStep.cancelled.isFinished)
     #expect(!QuitStep.planning.isFinished)
@@ -216,9 +211,9 @@ private let busyPlan = quitPlan(
     #expect(!QuitStep.first(quiet).isFinished)
   }
 
-  @Test func onlyAFinishedQuitThatKeptNoIconQuitsTheApp() throws {
-    #expect(QuitStep.done(keepIcon: false, note: nil).quitsTheApp)
-    #expect(!QuitStep.done(keepIcon: true, note: nil).quitsTheApp)
+  @Test func onlyAFinishedQuitStartedToQuitTheAppQuitsIt() throws {
+    #expect(QuitStep.done(quitsApp: true, note: nil).quitsTheApp)
+    #expect(!QuitStep.done(quitsApp: false, note: nil).quitsTheApp)
     #expect(!QuitStep.failed("x").quitsTheApp)
     #expect(!QuitStep.cancelled.quitsTheApp)
   }

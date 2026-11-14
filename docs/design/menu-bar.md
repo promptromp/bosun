@@ -453,10 +453,11 @@ Where what is built differs from what this note said before, or says more:
   app launchd starts directly. A copy whose start cannot be read is left out, and one that cannot read its own stays.
 - The test hooks (`--test-hooks <dir>`, for the VM suite, and only then): `<dir>/menu.json` after each render (the
   menu, its icon badge and the status level); `<dir>/actions/<n>.json`, taken in the order of `n` once a second and
-  removed when taken: `{"item": "quit"}` (an item's name: `startBosun`, `showProblems`, `openConsole`,
-  `checkForUpdates`, `openAtLogin`, `updateBosun`, `help.guide|doctor|logs|uninstall`, `quit`), done as if clicked
-  when the menu has it enabled, or `{"answer": {"button": "<title>", "boxes": {"pauseMorning": true, "sleep": false,
-  "keepIcon": false}}}` for the open dialog (it waits for one); `<dir>/log.jsonl`, one object per line for each
+  removed when taken: `{"item": "quitApp"}` (an item's name: `startBosun`, `showProblems`, `openConsole`,
+  `checkForUpdates`, `settings`, `updateBosun`, `help.guide|doctor|logs|uninstall`, `stopBosun`, `quitApp`; since
+  bosun.app 0.1.3, [control-panel.md](control-panel.md)), done as if clicked when the menu has it enabled, or
+  `{"answer": {"button": "<title>", "boxes": {"pauseMorning": true, "sleep": false}}}` for the open dialog (it
+  waits for one); `<dir>/log.jsonl`, one object per line for each
   command run (`{"command": [...], "detached": false, "outcome": "exited 0"}`) and each address or file it would
   open (`{"open": "..."}`; with the hooks the app opens nothing).
 - Start is `bosun morning --now --background`, run as a short command (the status timeout) and not started as a

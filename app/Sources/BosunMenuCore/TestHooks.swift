@@ -28,22 +28,23 @@ extension HelpTopic {
 extension ItemID {
   /// Every item the menu has.
   private static let all: [ItemID] = [
-    .startBosun, .showProblems, .openConsole, .checkForUpdates, .openAtLogin, .updateBosun, .helpMenu,
-    .help(.guide), .help(.doctor), .help(.logs), .help(.uninstall), .quit,
+    .startBosun, .showProblems, .openConsole, .checkForUpdates, .settings, .updateBosun, .helpMenu,
+    .help(.guide), .help(.doctor), .help(.logs), .help(.uninstall), .stopBosun, .quitApp,
   ]
 
-  /// The name a hook action uses: `quit`, `help.doctor`.
+  /// The name a hook action uses: `quitApp`, `help.doctor`.
   public var name: String {
     switch self {
     case .startBosun: return "startBosun"
     case .showProblems: return "showProblems"
     case .openConsole: return "openConsole"
     case .checkForUpdates: return "checkForUpdates"
-    case .openAtLogin: return "openAtLogin"
+    case .settings: return "settings"
     case .updateBosun: return "updateBosun"
     case .helpMenu: return "helpMenu"
     case .help(let topic): return "help." + topic.name
-    case .quit: return "quit"
+    case .stopBosun: return "stopBosun"
+    case .quitApp: return "quitApp"
     }
   }
 
