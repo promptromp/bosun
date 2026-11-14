@@ -56,6 +56,27 @@ class StalledStartTest(unittest.TestCase):
         )
         self.assertEqual(facts.windows, (watchdog.WindowFact("api", None, 123),))
 
+    def test_a_shell_that_never_started_the_agent_is_a_stall_of_its_own(self) -> None:
+        """Its startup files ask something (oh-my-zsh's update question, seen in the Mac VM on 2026-11-14)."""
+        started = NOW.timestamp() - 6 * 60
+        shell = watchdog.WindowFact("api", None, None, 456)
+        with mock.patch.object(agent_files, "process_start", return_value=started):
+            findings = watchdog.check_stalled_start(context(shell)).findings
+        self.assertEqual([f.key for f in findings], ["stalled-start:api:456"])
+        self.assertIn("has not started its agent", findings[0].message)
+        self.assertIn("startup files", findings[0].message)
+        self.assertIn("bosun attach", findings[0].message)
+        with mock.patch.object(agent_files, "process_start", return_value=NOW.timestamp() - 60):
+            self.assertEqual(
+                watchdog.check_stalled_start(context(shell)).findings, []
+            )  # a start takes seconds
+
+    def test_the_facts_carry_the_launch_shell(self) -> None:
+        facts = watchdog.Facts.from_json(
+            {"windows": [{"name": "api", "agent_pid": None, "starting_pid": None, "launching_pid": 456}]}
+        )
+        self.assertEqual(facts.windows, (watchdog.WindowFact("api", None, None, 456),))
+
     def test_it_is_in_the_table(self) -> None:
         self.assertIn("stalled-start", [check.name for check in watchdog.CHECKS])
 
