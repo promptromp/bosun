@@ -4,7 +4,9 @@
 complexity limits (complexipy, lizard, and a shell checker in `tools/`), shellcheck, shfmt, hadolint for
 the Dockerfile, actionlint and zizmor for the workflows, spelling, the links between the docs, a build of
 the docs site, a secrets scan (detect-secrets) and the unit tests the change can reach; pushes also run
-the smoke suite ([Running the tests](#running-the-tests)). A
+the smoke suite ([Running the tests](#running-the-tests)). The hooks stop at the first one that fails, and the
+tests come last, so a lint or format failure never waits for them (CI's `lint` job runs every hook to the end,
+so it reports every finding at once). A
 forbidden-terms check (`tools/forbidden_terms.py`) refuses staged files and commit messages that
 contain a term from `~/.config/bosun/forbidden-terms.txt` (one case-insensitive regex
 per line, `#` comments), a list you keep outside the repo of names that must never be committed:
@@ -36,10 +38,11 @@ Issues and pull requests are welcome: see [CONTRIBUTING.md](../CONTRIBUTING.md) 
 
 | What | Command | When it runs by itself | Time on a 12-core Mac |
 |---|---|---|---|
-| The unit tests a change can reach | `uv run pytest -n auto --impacted` | every commit (the `unit-tests` hook) | seconds to a minute |
+| The unit tests a change can reach | `uv run pytest -n auto --impacted` | every commit (the `unit-tests` hook, skipped when these exact inputs already passed it) | seconds to a minute |
 | Every unit test | `uv run pytest -n auto` | CI, on Linux (with coverage) and on macOS | about a minute |
 | The end-to-end smoke suite | `tests/smoke.sh` | before every push, but only the sections the change can reach (`--pre-push`, the build-out setting: skipped if this exact tree already passed a whole run here in the last 24 hours, and a whole-suite choice left to the merge queue); CI's merge queue runs the same selection, and the whole suite nightly, in three shards | about 18 minutes in full |
 | The sections a change reaches | `tests/smoke.sh --changed <git ref>` | by the pre-push hook, against `origin/main`; in CI's merge queue, against the group's base, in three shards | what those sections take |
+| Which sections a change would run, and why, without running them | `tests/smoke.sh --changed <git ref> --list` | never | under a second |
 | One shard of a run split over N machines | `tests/smoke.sh --shard K/N`, with any of the above but `--pre-push` | CI's `smoke`, as `--shard 1/3`, `2/3` and `3/3` on three runners | about a Nth of the run |
 | Every unit test with a plain `python3`, then the smoke suite | `tests/smoke.sh --with-unit` | never | 8 more minutes |
 | One area of the smoke suite | `tests/smoke.sh --only <id>[,<id>...]` (ids: `tests/smoke.sh --list`) | never | seconds to a few minutes |
@@ -120,7 +123,9 @@ machine will do).
 `tests/smoke.sh --changed <git ref>` works out the files that changed since the merge-base of that ref and
 `HEAD`: committed since, staged, unstaged and untracked (not ignored) ones, since what is tested is the tree on
 disk. `--pre-push` does this against `origin/main` (`BOSUN_SMOKE_BASE` names another ref), after the tree check
-above. The answer is one of three, printed with the files that led to it:
+above. The answer is one of three, printed with the files that led to it (`--changed <git ref> --list` prints only
+that, and runs nothing; `--changed` alone runs what it chose, which for a change to `lib/common.sh` is the whole
+suite, about 18 minutes):
 
 - **the whole suite**, when any changed file is on the select-everything list, is used by `lib/common.sh` (which
   every command sources: the modules it names under `lib/`, and what imports those), or is covered by no section
@@ -172,12 +177,27 @@ follows the Python imports from `lib/` (an import root, like pytest's `pythonpat
 test files and the helpers of `tests/unit`; what it cannot see (a test that runs
 `bin/bosun`, reads a docs page, or a file `bosun` reads as it runs) is a rule in `pyproject.toml`'s
 `impacted_map` and `impacted_invalidate_all`. A rule may select more tests than it needs, never fewer:
-when unsure, it runs every test (`conftest.py`, the fixtures and what bosun reads as it runs do). A
+when unsure, it runs every test (`conftest.py` and the fixtures do). What bosun reads as it runs
+(`orchestrator/`, `templates/`, `console/`, `examples/`, `agents/`) counts as a change to its programs,
+`bin/bosun`, like `lib/*.sh`, plus the tests that read those files in their own process: about 15% of the
+suite for each folder, where it used to be all of it. A
 rule's `**` matches any depth, as the plugin reads it. Two checks keep the rules honest: `tests/unit/test_impacted_rules.py`
 runs in every selection and fails on a file no rule covers or a module whose importers would not be
 selected, and `tests/unit/impacted_guard.py` fails any test that reads or runs a file whose change
 would not select it, naming the line to add. `uv run impacted-tests --verbose` prints what the
 current changes select, without running it.
+
+The commit hook runs the selection through `tools/unit_hook.py`, which keeps a record of the runs that passed in
+`tests/.unit-cache/passes` (git-ignored, per checkout). A run whose key matches a pass of the last day is skipped,
+in one line. The key is a hash of everything the run could depend on that differs between two runs in one
+checkout: the files on disk (tracked, and untracked ones that are not ignored, as `git add -A` would stage them,
+taken in a copy of the index), the index's own tree (`git write-tree`: under the hook pre-commit has set the
+unstaged changes aside, so that is what the commit holds), HEAD, the Python that runs pytest, `uv.lock`,
+`pyproject.toml` (the selection's rules), the arguments, and the `PATH`, `PYTHON*`, `PYTEST*` and `BOSUN_*`
+variables. A pass is recorded only when the checkout is the same after the run as before it. Anything odd (git
+fails, the record is unreadable, a pass from the future) runs the tests; `BOSUN_UNIT_NO_CACHE=1` ignores the
+record. So a commit retried with only another message, or one after `uv run pre-commit run --all-files` with
+everything staged, does not run the same tests again.
 
 ## The docs site
 

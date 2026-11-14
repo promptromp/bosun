@@ -2,7 +2,8 @@
 # Hermetic smoke tests: temp HOME, fixture sessions, isolated tmux socket, no Claude calls,
 # no launchd or pmset changes.
 # Run: tests/smoke.sh [-x] [--with-unit] [--only <id>[,<id>...] | --last-failed | --changed <git ref>] [--shard K/N]
-#   or: tests/smoke.sh --list
+#   or: tests/smoke.sh --list           (the sections' ids and names)
+#   or: tests/smoke.sh --changed <git ref> --list   (which sections that change would run, and why; runs nothing)
 # The pre-push hook runs tests/smoke.sh --pre-push: see below.
 # End to end only by default: the commit hook runs the unit tests a change reaches, and CI all of
 # them. --with-unit runs them all first too, with a plain python3 (python3 -m unittest, no pytest).
@@ -24,7 +25,8 @@
 # (tools/smoke_select.py: its docstring has the rules), and prints which file selected which section. It fails closed:
 # a changed file on the select-everything list, one no section covers and nothing ignores, a ref that does not resolve,
 # a selection that fails, all run the whole suite; only ignored files (the docs) run nothing, exit 0. It does not
-# combine with --only or --last-failed; it combines with -x and --with-unit.
+# combine with --only or --last-failed; it combines with -x and --with-unit. --changed <ref> --list prints that report
+# and the answer and runs nothing (exit 0): the way to see the choice, since --changed alone runs it.
 # --shard K/N runs shard K of N (CI runs the shards on N machines at once): of the sections the run would run (the
 # whole suite, or what --only, --last-failed or --changed chose), each goes to exactly one shard, balanced by how long
 # they take (tests/smoke_weights.txt; tools/smoke_shard.py has the rules), and the shard runs its own as --only does,
@@ -74,7 +76,7 @@ always_run() {
 }
 
 smoke_usage() {
-  echo "usage: tests/smoke.sh [-x] [--with-unit] [--only <id>[,<id>...] | --last-failed | --changed <git ref> | --pre-push] [--shard K/N]  |  tests/smoke.sh --list" >&2
+  echo "usage: tests/smoke.sh [-x] [--with-unit] [--only <id>[,<id>...] | --last-failed | --changed <git ref> | --pre-push] [--shard K/N]  |  tests/smoke.sh [--changed <git ref>] --list" >&2
   exit 2
 }
 
@@ -303,6 +305,15 @@ DURATIONS_FILE="$CACHE_DIR/durations"
 # shellcheck source=tests/smoke_cache.sh
 . "$ROOT/tests/smoke_cache.sh"
 unset SMOKE_PARTIAL SMOKE_SHARD_OF SMOKE_FILTERED SMOKE_ROOT SMOKE_CACHE_DIR
+if [ "$LIST" = 1 ] && [ -n "$CHANGED" ]; then # --changed <ref> --list: the choice and its reasons, nothing run
+  select_changed "$CHANGED"
+  case "$SELECTED" in
+    only) echo "=> would run: ${SELECTED_IDS//,/ } (and what they need)" ;;
+    none) echo "=> would run: nothing" ;;
+    *) echo "=> would run: the whole suite" ;;
+  esac
+  exit 0
+fi
 if [ "$LIST" = 1 ]; then
   list_sections "$SCRIPT"
   exit 0

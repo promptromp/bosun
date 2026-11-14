@@ -50,3 +50,6 @@ app/dist
 
 # The last results of the smoke suite's sections (tests/smoke.sh --last-failed): per checkout
 tests/.smoke-cache/
+
+# The commit hook's record of the unit-test runs that passed (tools/unit_hook.py): per checkout
+tests/.unit-cache/
