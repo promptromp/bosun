@@ -1547,7 +1547,7 @@ printf '#!/bin/sh\necho "2.0.0 (Claude Code)"\n' >"$WORK/fake-claude"
 chmod +x "$WORK/fake-claude"
 export BOSUN_CLAUDE_BIN="$WORK/fake-claude"
 
-section tmux-session "tmux session (isolated socket, dry-run windows)" covers 'libexec/bosun-start,libexec/bosun-stop,libexec/bosun-send,libexec/bosun-refresh,libexec/bosun-ledger,lib/run_locked.py'
+section tmux-session "tmux session (isolated socket, dry-run windows)" covers 'libexec/bosun-attach,libexec/bosun-start,libexec/bosun-stop,libexec/bosun-send,libexec/bosun-refresh,libexec/bosun-ledger,lib/run_locked.py'
 "$BOSUN" start >/dev/null 2>&1
 wait_for 30 has_windows "alpha beta gamma "
 windows="$(tmux -L "$SOCKET" list-windows -t "=smoke" -F '#{window_name}' 2>/dev/null | tr '\n' ' ')"
@@ -1579,6 +1579,19 @@ check "a window whose agent is not installed says so, rather than becoming a pla
   bash -c 'cd "$1" && BOSUN_LAUNCH_DRY_RUN=0 BOSUN_CLAUDE_BIN="$2" "$3" launch alpha </dev/null' _ "$REPO_A" "$WORK/no-such-claude" "$BOSUN"
 check "send refuses windows without Claude" fails_with "is not running an agent" "$BOSUN" send alpha hello
 check "send refuses unknown windows" fails_with "no window 'no-such-window'" "$BOSUN" send no-such-window hello
+tmux -L "$SOCKET" select-window -t "=smoke:alpha"
+check "attach refuses a window the session does not have, naming those it has" fails_with "no window 'no-such-window' in session 'smoke'; its windows: alpha beta gamma" "$BOSUN" attach no-such-window
+check "... and selects no other window" test "$(tmux -L "$SOCKET" display-message -p -t "=smoke:" '#{window_name}')" = alpha
+check "attach takes one window at most" fails_with "one window at most" "$BOSUN" attach alpha beta
+check "attach from inside tmux refuses, saying what to run from a plain terminal" fails_with "from a plain terminal run: bosun attach beta" env TMUX="/tmp/tmux-0/$SOCKET,1,0" "$BOSUN" attach beta
+# In a terminal of its own (a pty from Python's pty module), so that tmux attaches for real; the pid is this run's own
+TERM=xterm python3 -c 'import pty, sys; pty.spawn(sys.argv[1:])' "$BOSUN" attach beta </dev/null >/dev/null 2>&1 &
+attach_pid=$!
+check "attach <window> attaches a client on that window" wait_for 30 bash -c '[ "$(tmux -L "$1" list-clients -t =smoke -F "#{window_name}")" = beta ]' _ "$SOCKET"
+tmux -L "$SOCKET" detach-client -s =smoke 2>/dev/null
+check "... and once it detaches, the session runs on with no client" wait_for 30 bash -c '[ -z "$(tmux -L "$1" list-clients -t =smoke)" ] && tmux -L "$1" has-session -t =smoke' _ "$SOCKET"
+kill "$attach_pid" 2>/dev/null
+wait "$attach_pid" 2>/dev/null
 check "stop rejects unknown arguments and keeps the session" bash -c '! "$1" stop --dry-run 2>/dev/null && tmux -L "$2" has-session -t =smoke' _ "$BOSUN" "$SOCKET"
 check "setup rejects unknown arguments" bash -c '! "$1" setup --dryrun 2>/dev/null' _ "$BOSUN"
 "$BOSUN" stop >/dev/null 2>&1

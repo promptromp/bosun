@@ -326,6 +326,7 @@ class WaitingTest(WatchdogCase):
         self.waiting(REPO_PID, at(MONDAY, "09:00"))
         sent = self.watch(at(MONDAY, "10:00"))
         self.assertIn("The alpha session has waited 60 min", sent[0])
+        self.assertIn("(bosun attach alpha, or Remote Control)", sent[0])
         self.assertFalse((self.state_dir / "alerted-alpha").exists())
 
     def test_a_prompt_the_check_in_loop_already_alerted_about_is_skipped(self) -> None:

@@ -34,7 +34,7 @@ class StalledStartTest(unittest.TestCase):
         self.assertEqual(len(findings), 1)
         self.assertEqual(findings[0].key, "stalled-start:api:123")
         self.assertIn("api", findings[0].message)
-        self.assertIn("bosun attach", findings[0].message)
+        self.assertIn("(bosun attach api)", findings[0].message)
         self.assertIn("Do not just press Return", findings[0].message)
 
     def test_a_normal_start_gets_time(self) -> None:
@@ -65,7 +65,7 @@ class StalledStartTest(unittest.TestCase):
         self.assertEqual([f.key for f in findings], ["stalled-start:api:456"])
         self.assertIn("has not started its agent", findings[0].message)
         self.assertIn("startup files", findings[0].message)
-        self.assertIn("bosun attach", findings[0].message)
+        self.assertIn("(bosun attach api)", findings[0].message)
         with mock.patch.object(agent_files, "process_start", return_value=NOW.timestamp() - 60):
             self.assertEqual(
                 watchdog.check_stalled_start(context(shell)).findings, []

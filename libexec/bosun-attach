@@ -1,7 +1,13 @@
 #!/bin/bash
-# Usage: bosun attach
+# Usage: bosun attach [<window>]
 #
-# Attach to the bosun tmux session, on its own tmux server (BOSUN_TMUX_SOCKET).
+# Attach to the bosun tmux session, on its own tmux server (BOSUN_TMUX_SOCKET). With <window>, the
+# window of that exact name is selected first (it is the session's current window for every client
+# attached to it); a name the session has no window of is refused, with the names it has. What needs
+# you in a window (a first-run screen, a question of your shell's startup files, a prompt) is answered
+# there; detach with the tmux prefix and d (Ctrl-b d by default), and the window runs on.
+#
+# Run it from a plain terminal, not from inside tmux.
 set -uo pipefail
 source "$(dirname "$0")/../lib/common.sh"
 load_config
@@ -11,12 +17,23 @@ case "${1:-}" in
     usage
     exit 0
     ;;
-  "") ;;
-  *) die_usage "unknown argument '$1'" ;;
 esac
+[ $# -le 1 ] || die_usage "one window at most, got $#: $*"
+window="${1:-}"
 
 session_exists || die "no tmux session '$BOSUN_SESSION_NAME'; start it with: bosun start"
+window_id=""
+if [ -n "$window" ]; then
+  # By exact name: a tmux target with an unknown name falls back to the current window
+  read -r _ window_id <<<"$(find_window "$window")"
+  [ -n "$window_id" ] || die "no window '$window' in session '$BOSUN_SESSION_NAME'; its windows: $(
+    tmux_cmd list-windows -t "=$BOSUN_SESSION_NAME" -F '#{window_name}' 2>/dev/null | paste -sd ' ' -
+  )"
+fi
 if [ -n "${TMUX:-}" ]; then
-  die "already inside tmux; from a plain terminal run: $(attach_hint)"
+  die "already inside tmux; from a plain terminal run: bosun attach${window:+ $window}"
+fi
+if [ -n "$window_id" ]; then
+  tmux_cmd select-window -t "$window_id" || die "could not select window '$window'"
 fi
 tmux_cmd attach -t "=$BOSUN_SESSION_NAME"
