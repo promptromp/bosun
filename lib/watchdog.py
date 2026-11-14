@@ -450,6 +450,10 @@ class Finding:
     # "<pid>:<statusUpdatedAt>"): honoured and kept up to date, so the two never alert twice.
     legacy_marker: Path | None = None
     legacy_value: str = ""
+    # The open window the finding is about: set by the checks that go over the session's windows one by
+    # one (a window tmux lists), never parsed from the key. `status_data` carries it, and `bosun status
+    # --json` lists it among the windows that need you (lib/menu_status.py's `attention`).
+    window: str | None = None
 
 
 @dataclass
@@ -571,6 +575,7 @@ def waiting_finding(ctx: Context, window: WindowFact, record: dict[str, Any]) ->
         message,
         legacy_marker=ctx.config.state_dir / f"alerted-{window.name}" if orchestrator else None,
         legacy_value=f"{window.agent_pid}:{updated}",
+        window=window.name,
     )
 
 
@@ -604,7 +609,7 @@ def stalled_finding(ctx: Context, window: WindowFact) -> Finding | None:
             f"probably on a first-run or trust screen only you can answer ({attach}). Do not just press "
             "Return: on several of these screens the default is to exit."
         )
-    return Finding(f"stalled-start:{window.name}:{pid}", message)
+    return Finding(f"stalled-start:{window.name}:{pid}", message, window=window.name)
 
 
 def check_stalled_start(ctx: Context) -> Result:
@@ -1129,7 +1134,7 @@ def long_shell_finding(
         f"A background command has kept {window} in shell for {hours:.0f}h (awake hours, since "
         f"{since:%a %H:%M}){what}: check it is still wanted. Meanwhile refresh does not restart that Claude."
     )
-    return Finding(f"{LONG_SHELL}:{window}:{episode['pid']}:{episode['since']}", message)
+    return Finding(f"{LONG_SHELL}:{window}:{episode['pid']}:{episode['since']}", message, window=window)
 
 
 def check_long_shell(ctx: Context) -> Result:
@@ -1254,7 +1259,7 @@ def stop_finding(window: str, stop: dict[str, Any], items: list[str]) -> Finding
         "the limit (/usage-credits in a Claude window asks your admin) or wait for it to reset; the "
         "watchdog then asks the window to resume."
     )
-    return Finding(f"{SPEND_LIMIT}:{window}:{stop['pid']}:{since:%Y-%m-%dT%H:%M}", message)
+    return Finding(f"{SPEND_LIMIT}:{window}:{stop['pid']}:{since:%Y-%m-%dT%H:%M}", message, window=window)
 
 
 def probe_note(probe: dict[str, str] | None) -> str:
@@ -1317,6 +1322,7 @@ def context_finding(ctx: Context, window: WindowFact) -> Finding | None:
         f"{hours:.0f} h (over {ctx.config.context_warn_tokens // 1000}k): every check-in, notification "
         "and resume there re-reads it all. Start it on a fresh conversation when it is idle and holds "
         "no unfinished work.",
+        window=window.name,
     )
 
 
@@ -1888,7 +1894,10 @@ def status_data(inputs: Inputs, checks: tuple[Check, ...], state: State | None =
                 "severity": check.severity,
                 "summary": check.summary,
                 "note": result.note,
-                "findings": [{"message": f.message, "decision": decided(f)} for f in result.findings],
+                "findings": [
+                    {"message": f.message, "decision": decided(f), "window": f.window}
+                    for f in result.findings
+                ],
             }
             for check, result in report.results
         ],

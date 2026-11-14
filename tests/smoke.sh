@@ -2856,7 +2856,7 @@ check "a start with it off again takes the marker away" test ! -e "$BOSUN_STATE_
 
 section status-json "status --json (the menu bar app's one source of how bosun is)" needs stopped-until-started covers 'libexec/bosun-status,libexec/bosun-start,libexec/bosun-stop,lib/menu_status*.py'
 "$BOSUN" stop >/dev/null 2>&1 # what a stop made today leaves (the section before ends with it too)
-check "it prints one object with contract 1 and the documented fields, and exits 0" status_has 'd["contract"] == 1 and sorted(d) == sorted("contract level sentence detail windows running waiting keep_awake_until stopped update console problems logs".split())'
+check "it prints one object with contract 1 and the documented fields, and exits 0" status_has 'd["contract"] == 1 and sorted(d) == sorted("contract level sentence detail windows running waiting keep_awake_until stopped update console problems attention logs".split())'
 check "... exit 0" "$BOSUN" status --json
 away_from_midnight() {
   local now=$((10#$(date +%H%M)))
@@ -2881,6 +2881,16 @@ status_seconds="$(python3 -I -c 'import subprocess, sys, time; t = time.monotoni
 echo "  note  bosun status --json took ${status_seconds}s with five windows (the app polls it)"
 check "... quick enough to poll: under 10 seconds" python3 -I -c 'import sys; sys.exit(not float(sys.argv[1]) < 10)' "$status_seconds"
 check "... a level of ok is one with no problems, anything else lists them" status_has '(d["level"] == "ok") == (d["problems"] == []) and all(isinstance(p, str) for p in d["problems"])'
+check "... and no window needs you" status_has 'd["attention"] == []'
+# A Claude in beta at a prompt (a stand-in: a sleep this run started, with a session record); its pid is killed after
+beta_waits="$(fake_claude beta waiting 1.0.0 60)"
+check "a window waiting at a prompt needs you, before the watchdog's waiting check names it" status_has 'd["waiting"] == ["beta"] and d["attention"] == [{"window": "beta", "problem": "The beta window is waiting for you at a permission prompt or question."}]'
+kill "$beta_waits"
+rm -f "$HOME/.claude/sessions/$beta_waits.json"
+beta_waits="$(fake_claude beta waiting 1.0.0 7200)"
+check "... and once the check names it, its finding is the problem that names the window, with bosun attach beta" status_has '[a["window"] for a in d["attention"]] == ["beta"] and "bosun attach beta" in d["attention"][0]["problem"] and d["attention"][0]["problem"] in d["problems"]'
+kill "$beta_waits"
+rm -f "$HOME/.claude/sessions/$beta_waits.json"
 ensure_watchdog_state
 cp -p "$BOSUN_STATE_DIR/watchdog.json" "$WORK/watchdog-before-status.json"
 : >"$BOSUN_STATE_DIR/watchdog.json"

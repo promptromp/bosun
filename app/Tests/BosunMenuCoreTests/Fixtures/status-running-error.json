@@ -1,4 +1,10 @@
 {
+  "attention": [
+    {
+      "problem": "The acme-web window is waiting for you at a permission prompt or question.",
+      "window": "acme-web"
+    }
+  ],
   "console": {
     "running": false,
     "url": null

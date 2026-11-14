@@ -81,6 +81,7 @@ class WhatTheAppReadsTest(unittest.TestCase):
         self.assertEqual(
             levels,
             {
+                "status-attention": "error",
                 "status-error": "error",
                 "status-ok": "ok",
                 "status-quit-unfinished": "error",
@@ -112,6 +113,7 @@ class WhatTheAppReadsTest(unittest.TestCase):
         self.assertEqual(
             running,
             {
+                "status-attention": True,
                 "status-error": False,
                 "status-ok": True,
                 "status-quit-unfinished": True,
@@ -127,6 +129,20 @@ class WhatTheAppReadsTest(unittest.TestCase):
         )
         self.assertIn("with an error", SAMPLES["status-running-error"]["sentence"])
         self.assertIn("could not be read", SAMPLES["status-windows-unreadable"]["sentence"])
+
+    def test_status_names_the_windows_that_need_you_from_a_finding_and_from_a_wait_at_a_prompt(self) -> None:
+        attention = SAMPLES["status-attention"]["attention"]
+        self.assertEqual([a["window"] for a in attention], ["acme-exporter", "acme-web"])
+        self.assertEqual(attention[0]["problem"], SAMPLES["status-attention"]["problems"][0])
+        self.assertIn("bosun attach acme-exporter", attention[0]["problem"])
+        self.assertNotIn(
+            attention[1]["problem"], SAMPLES["status-attention"]["problems"]
+        )  # no level counts it
+        warned = SAMPLES["status-warning"]["attention"]
+        self.assertEqual(
+            warned, [{"window": "acme-web", "problem": SAMPLES["status-warning"]["problems"][0]}]
+        )
+        self.assertEqual(SAMPLES["status-stopped"]["attention"], [])
 
     def test_status_has_windows_waiting_for_you_and_a_keep_awake_somewhere(self) -> None:
         self.assertTrue(SAMPLES["status-ok"]["waiting"])

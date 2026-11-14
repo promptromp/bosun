@@ -33,6 +33,7 @@ class StalledStartTest(unittest.TestCase):
         findings = self.check(6).findings
         self.assertEqual(len(findings), 1)
         self.assertEqual(findings[0].key, "stalled-start:api:123")
+        self.assertEqual(findings[0].window, "api")  # what bosun status --json lists as needing you
         self.assertIn("api", findings[0].message)
         self.assertIn("(bosun attach api)", findings[0].message)
         self.assertIn("Do not just press Return", findings[0].message)
