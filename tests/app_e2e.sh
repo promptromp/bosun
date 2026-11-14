@@ -522,12 +522,20 @@ step_automation_from_the_app() {
 
 # ---- 10. the Settings window: start at login, and the start time, which the morning job follows ------------------
 
+# What a person does with the script the app opened: runs it in Terminal and types the password at sudo's prompt.
+# Here a terminal (script's pty), whose sudo is asked first with the clone's password (admin/admin), so the
+# command's own `sudo -v` finds it given in the same terminal.
+in_terminal_with_password() { script -q /dev/null bash -c 'printf "admin\n" | sudo -S -v 2>/dev/null && "$@"' _ "$@"; }
+update_over() { "$BOSUN" status --json | jq -e '.update.state == "none"' >/dev/null; }
+
 settings_value_is() { "$BOSUN" settings get --json | jq -e --arg key "$1" --arg value "$2" '.settings[$key].value == $value' >/dev/null; }                      # <KEY> <value>
 calendar_is() { [ "$(plutil -extract StartCalendarInterval.Hour raw "$1")" = "$2" ] && [ "$(plutil -extract StartCalendarInterval.Minute raw "$1")" = "$3" ]; } # <plist> <hour> <minute>
 
 step_10() {
   local mark wake
   echo "10. the Settings window: start at login on, and the start time moved to 03:00: the morning job follows"
+  # settings set is refused while an update runs, and the one the app started goes on after the app quit
+  check "the update the app started is over: bosun status --json says none runs" wait_for 180 update_over
   mark="$(log_count)"
   act '{"settings": {"BOSUN_START_AT_LOGIN": "1"}}'
   check "a Save of BOSUN_START_AT_LOGIN=1: the app ran settings set" wait_for 60 log_has "$mark" '.command == ["settings", "set", "BOSUN_START_AT_LOGIN=1", "--json"] and .outcome == "exited 0"'
@@ -544,9 +552,9 @@ step_10() {
     check "... which runs bosun settings set BOSUN_START_TIME=03:00" bash -c 'grep -q "settings.*set.*BOSUN_START_TIME=03:00" "$(jq -r "select(.open? != null) | .open" "$1" | tail -1)"' _ "$HOOKS/log.jsonl"
     check "... the window says to finish it there" wait_for 30 menu_says '.settings.message | startswith("Finish the change in Terminal")'
     check "... and nothing is written until then" settings_value_is BOSUN_START_TIME 02:00
-    check "what the script runs, run here (sudo asks for no password on this Mac): bosun settings set BOSUN_START_TIME=03:00" "$BOSUN" settings set BOSUN_START_TIME=03:00
-    check "... and the wake moved with it: it is still bosun's, for the new schedule" bash -c '"$1" settings get --json | jq -e ".wake == \"ours\""' _ "$BOSUN"
+    check "what the script runs, run in a terminal with the password typed: bosun settings set BOSUN_START_TIME=03:00" in_terminal_with_password "$BOSUN" settings set BOSUN_START_TIME=03:00
     pmset -g sched | sed 's/^/  note  pmset: /'
+    check "... and the wake moved with it, to a minute past the new start, still bosun's" bash -c 'pmset -g sched | grep -q "at 3:01AM" && "$1" settings get --json | jq -e ".wake == \"ours\""' _ "$BOSUN"
   else
     check "no wake of bosun's to move, so the Save of BOSUN_START_TIME=03:00 ran settings set" wait_for 60 log_has "$mark" '.command == ["settings", "set", "BOSUN_START_TIME=03:00", "--json"] and .outcome == "exited 0"'
     check "... and the window shows 03:00" wait_for 30 menu_says '.settings.values.BOSUN_START_TIME == "03:00"'
