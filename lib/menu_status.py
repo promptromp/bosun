@@ -14,7 +14,9 @@ its own, so the menu and the watchdog never disagree.
   gate says you stopped it today with `bosun stop` (the morning run starts it as usual tomorrow).
 - error: no window is open and the gate says it should be running (the watchdog's own `session-missing`
   finding is then the problem listed, not a second line); or a check of severity error has a finding.
-- warning: a check of severity warn has a finding, an ERROR line was logged in the last hour, the watchdog
+- warning: a check of severity warn has a finding, an ERROR line was logged in the last hour (the status's own
+  scan, whatever the hour: the watchdog's `log-errors` finding is never counted, since outside the awake
+  window it holds its log offsets and its finding would stay until its next run inside them), the watchdog
   itself is not checking (its launchd job is installed but not loaded, or loaded and its last run is older
   than 3 of its intervals of the Mac being awake: counted from the latest of that run, the Mac's last wake and
   its boot, a time later than now, after the clock moved back, left out; not while an update holds it, and
@@ -177,10 +179,17 @@ def open_windows(windows: Iterable[Mapping[str, Any]] | None) -> int:
     return sum(1 for w in windows or [] if w.get("window"))
 
 
+def counted(checks: Mapping[str, Any] | None) -> list[Mapping[str, Any]]:
+    """The watchdog's checks that the status counts: all but its log check. Outside the awake window the
+    watchdog holds its log offsets (its alerts wait for the hours), so its finding would stay until its next
+    run inside them; the status counts the last hour's ERROR lines itself instead (log_problem)."""
+    return [item for item in (checks or {}).get("checks", []) if item["name"] != LOG_CHECK]
+
+
 def findings(checks: Mapping[str, Any] | None) -> list[tuple[str, str, str]]:
-    """Each finding of the watchdog's checks as (level, check name, message)."""
+    """Each finding of the watchdog's checks that the status counts, as (level, check name, message)."""
     found = []
-    for item in (checks or {}).get("checks", []):
+    for item in counted(checks):
         level = SEVERITY_LEVEL.get(item["severity"], WARNING)
         found += [(level, item["name"], f["message"]) for f in item["findings"]]
     return found
@@ -189,7 +198,7 @@ def findings(checks: Mapping[str, Any] | None) -> list[tuple[str, str, str]]:
 def window_findings(checks: Mapping[str, Any] | None) -> list[Attention]:
     """The findings of the watchdog's checks that name the window they are about, in findings()' order."""
     found = []
-    for item in (checks or {}).get("checks", []):
+    for item in counted(checks):
         found += [
             Attention(f["window"], f["message"], item["name"]) for f in item["findings"] if f.get("window")
         ]
@@ -280,7 +289,7 @@ def problems_of(facts: StatusFacts, missing: bool, now: datetime) -> list[tuple[
     if missing and SESSION_CHECK not in named:
         text = "bosun's tmux session is not running, though it should be. Start it with: bosun start"
         found.append((ERROR, text))
-    if facts.log_errors and LOG_CHECK not in named:
+    if facts.log_errors:
         found.append((WARNING, log_problem(facts.log_errors)))
     unwatched = watchdog_problem(facts, now)
     if unwatched:

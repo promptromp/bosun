@@ -113,8 +113,9 @@ def snapshot(now: datetime = NOW, **changes: Any) -> Sample:
 def status_samples() -> dict[str, Sample]:
     quit_at = datetime(2026, 11, 11, 9, 30, tzinfo=UTC)
     warning = "The acme-web window has waited at a prompt for 45 min."
-    logged = (
-        "1 new ERROR line(s) in the bosun logs: check-in.log: [checkin] ERROR: the exporter's tests failed"
+    down = (
+        "The orchestrator has been down for 16 min (since Wed 09:44): its Claude exited. Events, check-ins "
+        "and reports wait meanwhile; start it with: bosun refresh acme-orchestrator."
     )
     failed = "Today's morning run reported problems: setup.sh exited 1"
     stalled = (
@@ -137,7 +138,7 @@ def status_samples() -> dict[str, Sample]:
         ),
         "status-error": snapshot(windows=GONE, gate=SessionGate(menu_status.EXPECTED), keep_awake_until=None),
         # bosun runs, its windows open, and an error-severity finding: the app must not start it again
-        "status-running-error": snapshot(checks=watchdog_checks(check("log-errors", "error", logged))),
+        "status-running-error": snapshot(checks=watchdog_checks(check("orchestrator-down", "error", down))),
         # the windows could not be read (running is null) and a finding is an error: nor this
         "status-windows-unreadable": snapshot(
             windows=None,

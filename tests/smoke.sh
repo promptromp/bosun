@@ -442,6 +442,23 @@ fails_with() {
   contains "$output" "$text"
 }
 
+# refused_quietly <text> <command...>: the command fails saying <text> on stderr, and writes no line with <text>
+# in bosun's log folder, where the watchdog alerts on every ERROR line (a usage error or a refusal of what the
+# person typed is not bosun failing).
+refused_quietly() {
+  local text="$1" errors
+  shift
+  if errors="$("$@" 2>&1 >/dev/null)"; then
+    echo "succeeded"
+    return 1
+  fi
+  contains "$errors" "ERROR: $text" || return 1
+  ! grep -rnF -- "$text" "$BOSUN_LOG_DIR" || {
+    echo "logged, so the watchdog would alert on it"
+    return 1
+  }
+}
+
 # copy_tree <dest>: a copy of the working tree (tracked files and untracked ones that are not ignored)
 # in <dest>.
 copy_tree() {
@@ -837,6 +854,19 @@ BOSUN_LOG_DIR="$log_dir" BOSUN_COMMAND=probe fn log "hello file" >/dev/null
 check "a log line also goes to the day's file of the command that logs it" grep -q "\[probe\] hello file" "$log_dir/probe-$log_day.log"
 BOSUN_LOG_DIR="$log_dir" BOSUN_COMMAND=own LOG_TO_FILE=0 fn log "screen only" >/dev/null
 check "... but not for a command that keeps its own file (LOG_TO_FILE=0)" test ! -e "$log_dir/own-$log_day.log"
+# <command>|<exit status>|<stderr> of a common.sh function that ends the script, its stdout dropped
+ends_with() { # <command> <function> <args...>
+  local errors status
+  errors="$(BOSUN_LOG_DIR="$log_dir" BOSUN_COMMAND="$1" fn "${@:2}" 2>&1 >/dev/null)"
+  status=$?
+  printf '%s|%s' "$status" "${errors#* "[$1]" }"
+}
+check "die exits 1 and logs its ERROR line to the file too, for the watchdog" bash -c '
+  [ "$1" = "1|ERROR: it broke" ] && grep -q "\[dies\] ERROR: it broke" "$2"' _ "$(ends_with dies die "it broke")" "$log_dir/dies-$log_day.log"
+check "refuse exits 1 with the same line on stderr, and none in the file" bash -c '
+  [ "$1" = "1|ERROR: no such thing" ] && [ ! -e "$2" ]' _ "$(ends_with refuses refuse "no such thing")" "$log_dir/refuses-$log_day.log"
+check "die_usage exits 2 pointing at --help on stderr, and none in the file" bash -c '
+  [ "$1" = "2|ERROR: unknown argument (see --help)" ] && [ ! -e "$2" ]' _ "$(ends_with mistyped die_usage "unknown argument")" "$log_dir/mistyped-$log_day.log"
 for n in 1 2 3 4 5; do
   BOSUN_LOG_FILE_MAX_BYTES=80 BOSUN_LOG_DIR="$log_dir" BOSUN_COMMAND=capped fn log "line $n of five, long enough to pass the cap" >/dev/null
 done
@@ -1648,6 +1678,10 @@ check "attach refuses a window the session does not have, naming those it has" f
 check "... and selects no other window" test "$(tmux -L "$SOCKET" display-message -p -t "=smoke:" '#{window_name}')" = alpha
 check "attach takes one window at most" fails_with "one window at most" "$BOSUN" attach alpha beta
 check "attach from inside tmux refuses, saying what to run from a plain terminal" fails_with "from a plain terminal run: bosun attach beta" env TMUX="/tmp/tmux-0/$SOCKET,1,0" "$BOSUN" attach beta
+check "attach's refusal of a name is on stderr, and never in the logs for the watchdog to alert on" refused_quietly "no window 'no-such-window' in session 'smoke'; its windows" "$BOSUN" attach no-such-window
+check "... nor is its refusal inside tmux" refused_quietly "already inside tmux" env TMUX="/tmp/tmux-0/$SOCKET,1,0" "$BOSUN" attach beta
+check "... nor its usage error" refused_quietly "one window at most, got 2: alpha beta (see --help)" "$BOSUN" attach alpha beta
+check "... nor another command's usage error" refused_quietly "unknown argument '--dry-run' (see --help)" "$BOSUN" stop --dry-run
 # In a terminal of its own (a pty from Python's pty module), so that tmux attaches for real; the pid is this run's own
 TERM=xterm python3 -c 'import pty, sys; pty.spawn(sys.argv[1:])' "$BOSUN" attach beta </dev/null >/dev/null 2>&1 &
 attach_pid=$!
@@ -1660,6 +1694,7 @@ check "stop rejects unknown arguments and keeps the session" bash -c '! "$1" sto
 check "setup rejects unknown arguments" bash -c '! "$1" setup --dryrun 2>/dev/null' _ "$BOSUN"
 "$BOSUN" stop >/dev/null 2>&1
 check "stop kills the session" bash -c "! tmux -L '$SOCKET' has-session -t '=smoke'"
+check "attach with no session says to start it, on stderr and not in the logs" refused_quietly "no tmux session 'smoke'; start it with: bosun start" "$BOSUN" attach
 
 section refresh "refresh (fake Claude processes and status records)" covers 'libexec/bosun-refresh,libexec/bosun-send,libexec/bosun-start,libexec/bosun-ledger,lib/claude_state.py'
 "$BOSUN" start >/dev/null 2>&1

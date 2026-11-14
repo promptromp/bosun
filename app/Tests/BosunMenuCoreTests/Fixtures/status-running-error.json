@@ -19,7 +19,7 @@
   "level": "error",
   "logs": "/Users/me/.local/state/bosun/logs",
   "problems": [
-    "1 new ERROR line(s) in the bosun logs: check-in.log: [checkin] ERROR: the exporter's tests failed"
+    "The orchestrator has been down for 16 min (since Wed 09:44): its Claude exited. Events, check-ins and reports wait meanwhile; start it with: bosun refresh acme-orchestrator."
   ],
   "running": true,
   "schedule": {
