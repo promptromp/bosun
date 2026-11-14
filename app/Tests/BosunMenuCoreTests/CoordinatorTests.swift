@@ -290,6 +290,46 @@ import Testing
     #expect(world.ui.lastSpec?.scroll == problems.joined(separator: "\n"))
   }
 
+  @Test func showWhatsWrongOpensTheWindowThatNeedsYouInTerminal() async throws {
+    let world = try await World(status: "status-attention")
+    await world.refresh(.launch)
+    world.ui.answer("Open acme-exporter")
+    await world.coordinator.perform(.showProblems)
+    #expect(world.ui.lastSpec?.buttons == ["Open acme-exporter", "OK"])
+    #expect(world.scripts.written == [["attach", "acme-exporter"]])
+    #expect(world.ui.opened == [URL(fileURLWithPath: "/tmp/bosun-app/bosun-attach.command")])
+  }
+
+  @Test func showWhatsWrongClosedWithOKOpensNothing() async throws {
+    let world = try await World(status: "status-attention")
+    await world.refresh(.launch)
+    world.ui.answer("OK")
+    await world.coordinator.perform(.showProblems)
+    #expect(world.scripts.written.isEmpty)
+    #expect(world.ui.opened.isEmpty)
+  }
+
+  @Test func aWindowThatCannotBeOpenedInTerminalSaysWhy() async throws {
+    let world = try await World(status: "status-attention")
+    await world.refresh(.launch)
+    world.scripts.fails = true
+    world.ui.answer("Open acme-exporter")
+    world.ui.answer("OK")
+    await world.coordinator.perform(.showProblems)
+    #expect(world.ui.opened.isEmpty)
+    #expect(world.ui.lastSpec?.title == "Cannot open Terminal")
+  }
+
+  @Test func aBosunThatNamesNoWindowOffersOnlyOK() async throws {
+    let world = try await World(status: nil)
+    await world.reply(Bosun.status, exited(0, try Fixtures.withoutAttention("status-attention")))
+    await world.refresh(.launch)
+    world.ui.answer("OK")
+    await world.coordinator.perform(.showProblems)
+    #expect(world.ui.lastSpec?.buttons == ["OK"])
+    #expect(world.scripts.written.isEmpty)
+  }
+
   @Test func theGuideIsTheDocsSite() async throws {
     let world = try await World()
     await world.refresh(.launch)

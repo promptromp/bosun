@@ -218,9 +218,14 @@ public final class AppCoordinator {
     await refresh(.afterAction)
   }
 
+  /// What's Wrong: the problems, and the offer to open the first window that needs you, which runs `bosun attach
+  /// <window>` in Terminal (as Run Doctor runs `bosun doctor`).
   private func showProblems() async {
     guard let snapshot else { return }
-    _ = await ui.present(problemsSpec(snapshot.problems))
+    let answer = await ui.present(problemsSpec(snapshot.problems, attention: snapshot.needsYou))
+    if let window = problemsWindow(snapshot.needsYou, answer: answer) {
+      await openTerminal(running: ["attach", window])
+    }
   }
 
   private func openConsole() async {

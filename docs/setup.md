@@ -208,6 +208,12 @@ and "Show What's Wrong..." (yellow and red only), Open Console, Check for Update
 A status that is older than the last good one says "(not current)" after its sentence. The icon shows a small
 dot for a warning, an error or an update ready.
 
+When a window needs you (its agent is on a first-run or trust screen, its shell is at a question of your startup
+files, or it waits at a prompt), "Show What's Wrong..." names it and offers "Open <window>": that opens Terminal
+running `bosun attach <window>`, on that window, where you answer it. With several, it offers the first and names
+the others (`bosun attach <window>` opens any of them). Closing that Terminal window, or detaching with the tmux
+prefix and `d`, leaves the window running.
+
 The watchdog counts toward yellow in two ways. If its launchd job is installed but not loaded (booted out), the
 menu is yellow at once. If it is loaded but has not run, it is yellow only when the Mac has been awake for three of
 its five-minute intervals since its last run (counted from the latest of that run, the Mac's last wake and its

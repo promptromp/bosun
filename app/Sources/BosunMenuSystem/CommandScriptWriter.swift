@@ -2,7 +2,7 @@ import BosunMenuCore
 import Foundation
 
 /// Writes `bosun-<command>.command` into a folder, executable, replacing the last one: what Terminal opens
-/// to run `bosun doctor` or `bosun uninstall` (the text is `CommandScript.text`).
+/// to run `bosun doctor`, `bosun uninstall` or `bosun attach <window>` (the text is `CommandScript.text`).
 public struct CommandScriptWriter: ScriptWriting {
   public let executable: String
   public let folder: URL

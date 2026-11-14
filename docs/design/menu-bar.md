@@ -441,7 +441,12 @@ Where what is built differs from what this note said before, or says more:
   is only on the dialog while the Mac is kept awake. A check the person asked for that finds nothing says "bosun
   is up to date"; the six-hourly and menu-open checks (at most once a minute) only show the badge.
   `Show Logs` opens the folder `status --json` names; Run Doctor and Uninstall bosun… open a `.command` file in
-  the app's temporary folder, which runs the command and waits for Return.
+  the app's temporary folder, which runs the command and waits for Return. When the status names windows that need
+  you (`attention`), Show What's Wrong… offers "Open <window>" for the first (its default button; Escape is OK),
+  names the others in its text with `bosun attach <window>`, and lists a window's own line (a wait at a prompt, no
+  problem of any level) after the problems; Open runs `bosun attach <window>` the same way (2026-11-14, after a
+  window sat at Claude Code's once-only Claude in Chrome screen and another at oh-my-zsh's update question, and the
+  menu could only say "bosun attach"). A bosun that does not send the field is read as naming none.
 - One copy at a time reads each running copy's start with sysctl (`kp_proc.p_starttime`): `launchDate` is nil for an
   app launchd starts directly. A copy whose start cannot be read is left out, and one that cannot read its own stays.
 - The test hooks (`--test-hooks <dir>`, for the VM suite, and only then): `<dir>/menu.json` after each render (the

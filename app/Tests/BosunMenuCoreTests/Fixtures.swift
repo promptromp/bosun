@@ -46,6 +46,14 @@ enum Fixtures {
     try decode(QuitResult.self, name)
   }
 
+  /// A status as a bosun from before `attention` printed it: the fixture without that field.
+  static func withoutAttention(_ name: String) throws -> String {
+    var object = try #require(
+      try JSONSerialization.jsonObject(with: Data(text(name).utf8)) as? [String: Any])
+    object.removeValue(forKey: "attention")
+    return try #require(String(bytes: JSONSerialization.data(withJSONObject: object), encoding: .utf8))
+  }
+
   /// The text of a fixture with `"contract": 1` read as another number.
   static func text(_ name: String, contract: Int) throws -> String {
     try text(name).replacingOccurrences(of: "\"contract\": 1", with: "\"contract\": \(contract)")

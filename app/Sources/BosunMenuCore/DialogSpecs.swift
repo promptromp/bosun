@@ -232,10 +232,43 @@ public func failureSpec(_ title: String, _ why: String) -> DialogSpec {
     title: title, message: why, scroll: nil, boxes: [], buttons: ["OK"], cancel: nil, style: .warning)
 }
 
-public func problemsSpec(_ problems: [String]) -> DialogSpec {
-  DialogSpec(
-    title: "What's Wrong",
-    message: problems.isEmpty ? "bosun reports nothing wrong right now." : "bosun reports:",
-    scroll: problems.isEmpty ? nil : problems.joined(separator: "\n"), boxes: [], buttons: ["OK"],
-    cancel: nil)
+/// What's Wrong: the problems, and, when the status names windows that need you, an offer to open the first in
+/// Terminal (its first button, the default; Escape is OK). The others are named, with the command that opens
+/// each. A window's own line (one waiting at a prompt, which is no problem of any level) is listed after the
+/// problems.
+public func problemsSpec(_ problems: [String], attention: [WindowAttention] = []) -> DialogSpec {
+  let windows = windowNames(attention)
+  let lines = problems + attention.map(\.problem).filter { !problems.contains($0) }
+  guard let first = windows.first else {
+    return DialogSpec(
+      title: "What's Wrong",
+      message: lines.isEmpty ? "bosun reports nothing wrong right now." : "bosun reports:",
+      scroll: lines.isEmpty ? nil : lines.joined(separator: "\n"), boxes: [], buttons: ["OK"],
+      cancel: nil)
+  }
+  return DialogSpec(
+    title: "What's Wrong", message: needsYouText(first: first, others: Array(windows.dropFirst())),
+    scroll: lines.joined(separator: "\n"), boxes: [], buttons: ["Open \(first)", "OK"], cancel: 1)
+}
+
+/// The window the What's Wrong dialog's answer opens: the first that needs you, when its first button (Open) was
+/// chosen; nil for OK, or when no window needs you.
+public func problemsWindow(_ attention: [WindowAttention], answer: DialogAnswer) -> String? {
+  answer.button == 0 ? windowNames(attention).first : nil
+}
+
+/// Each window once, in bosun's order.
+private func windowNames(_ attention: [WindowAttention]) -> [String] {
+  attention.map(\.window).reduce(into: []) { names, name in
+    if !names.contains(name) { names.append(name) }
+  }
+}
+
+private func needsYouText(first: String, others: [String]) -> String {
+  let closing = "closing Terminal's window leaves it running."
+  if others.isEmpty {
+    return "The \(first) window needs you. Open \(first) shows it in Terminal, to answer it there; \(closing)"
+  }
+  return "These windows need you: \(([first] + others).joined(separator: ", ")). Open \(first) shows the "
+    + "first in Terminal, and `bosun attach <window>` any other; \(closing)"
 }
