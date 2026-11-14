@@ -42,6 +42,7 @@ Usage: claude_state.py resolve <workdir> <name>    the most recent session named
        claude_state.py trusted <dir>               exit 0 if Claude Code trusts <dir>
        claude_state.py onboarded                   exit 0 if its first-run screens are done
        claude_state.py bypass-accepted             exit 0 if its bypass-mode warning was accepted
+       claude_state.py chrome-onboarded            exit 0 if its Claude in Chrome screen was confirmed
        claude_state.py logged-in                   exit 0 if `claude auth status` says so
        claude_state.py set-trust <dir> true|false  record (or remove) folder trust
        claude_state.py prompts <transcript> [<ISO time>]
@@ -437,6 +438,12 @@ def onboarded() -> bool:
     """Whether someone went through the first-run screens (the theme, the security notes). Until then
     every interactive Claude stops at them, and no setting skips them."""
     return (read_object(CONFIG_FILE) or {}).get("hasCompletedOnboarding") is True
+
+
+def chrome_onboarded() -> bool:
+    """Whether someone went through the screen `claude --chrome` shows once ("Claude in Chrome": what it
+    may do in your browser, Enter to confirm). Until then every window started with --chrome stops at it."""
+    return (read_object(CONFIG_FILE) or {}).get("hasCompletedClaudeInChromeOnboarding") is True
 
 
 def bypass_accepted() -> bool:
@@ -1588,6 +1595,7 @@ COMMANDS: dict[str, Command] = {
     "trusted": (1, lambda args: 0 if trusted(args[0]) else NOT_FOUND),
     "onboarded": (0, lambda _args: 0 if onboarded() else NOT_FOUND),
     "bypass-accepted": (0, lambda _args: 0 if bypass_accepted() else NOT_FOUND),
+    "chrome-onboarded": (0, lambda _args: 0 if chrome_onboarded() else NOT_FOUND),
     "logged-in": (0, cmd_logged_in),
     "set-trust": (2, cmd_set_trust),
     "prompts": (None, cmd_prompts),

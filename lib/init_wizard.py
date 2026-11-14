@@ -22,6 +22,10 @@ from init_plan import Answers, Facts, Plan, Repo, RepoUse
 
 ENTER = "\n"
 BOLD, DIM, RESET = "\x1b[1m", "\x1b[2m", "\x1b[0m"
+# The terminal's own palette (16 colours, so its theme decides the shades): what is asked and the keys
+# that answer it in bold cyan, what is picked or recommended in green. The terminal strips it all where
+# colour is not wanted (lib/init_terminal.py, wants_color: NO_COLOR, TERM=dumb, not a terminal).
+ACCENT, GOOD = "\x1b[1;36m", "\x1b[32m"
 MAX_TOGGLES = 9  # one digit each
 BAR_START = "00"
 RULER = "00          06          12          18          24"
@@ -69,8 +73,21 @@ def dim(text: str) -> str:
     return f"{DIM}{text}{RESET}"
 
 
+def accent(text: str) -> str:
+    return f"{ACCENT}{text}{RESET}"
+
+
+def good(text: str) -> str:
+    return f"{GOOD}{text}{RESET}"
+
+
+def toggle(mark: bool, number: int) -> str:
+    """`[x] (1)` for a numbered choice that can be switched on and off."""
+    return f"[{good('x') if mark else ' '}] {accent(f'({number})')}"
+
+
 def header(step: int, steps: int, title: str, intro: Sequence[str] = ()) -> list[str]:
-    return [dim(f"bosun setup, step {step} of {steps}"), "", bold(title), *intro, ""]
+    return [dim(f"bosun setup, step {step} of {steps}"), "", accent(title), *intro, ""]
 
 
 def preview_lines(option: Option) -> list[str]:
@@ -85,8 +102,8 @@ def preview_lines(option: Option) -> list[str]:
 
 
 def option_lines(option: Option) -> list[str]:
-    label = f"{option.label} (recommended)" if option.recommended else option.label
-    return [bold(f"({option.key})  {label}"), *preview_lines(option), ""]
+    recommended = f" {good('(recommended)')}" if option.recommended else ""
+    return [f"{accent(f'({option.key})')}  {bold(option.label)}{recommended}", *preview_lines(option), ""]
 
 
 def footer(*keys: str) -> list[str]:
@@ -146,9 +163,9 @@ def repo_screen(top: Sequence[str], choices: Sequence[RepoChoice], chosen: set[s
     width = max((len(choice.directory) for choice in choices), default=0)
     lines = [*top]
     for number, choice in enumerate(choices, 1):
-        mark = "x" if choice.directory in chosen else " "
         used = f"{choice.prompts} prompts" if choice.prompts else ""
-        lines.append(f"  [{mark}] ({number})  {choice.directory:<{width}}  {dim(used)}".rstrip())
+        mark = toggle(choice.directory in chosen, number)
+        lines.append(f"  {mark}  {choice.directory:<{width}}  {dim(used)}".rstrip())
     if not choices:
         lines.append(dim("  None found. Add one, or carry on and add them to sessions.yml later."))
     lines.append("")
@@ -252,9 +269,8 @@ def connector_screen(top: Sequence[str], choices: Sequence[ConnectorChoice], cho
     width = max((len(choice.name) for choice in shown), default=0)
     lines = [*top]
     for number, choice in enumerate(shown, 1):
-        mark = "x" if choice.name in chosen else " "
         note = f"  {dim(choice.note)}" if choice.note else ""
-        lines.append(f"  [{mark}] ({number})  {choice.name:<{width}}{note}".rstrip())
+        lines.append(f"  {toggle(choice.name in chosen, number)}  {choice.name:<{width}}{note}".rstrip())
     if len(choices) > len(shown):
         hidden = len(choices) - len(shown)
         lines.append(dim(f"  {hidden} more, kept as they are: BOSUN_ORCHESTRATOR_CONNECTORS in bosun.env"))
@@ -599,7 +615,7 @@ START_PREVIEW = (START_TEXT,)
 
 
 def ask_start(ui: Ui) -> bool:
-    top = ["", bold("bosun is set up. Start the windows now?"), ""]
+    top = ["", accent("bosun is set up. Start the windows now?"), ""]
     options = [
         Option("y", "Yes, start them", preview=START_PREVIEW, recommended=True),
         Option("n", "Not now", preview=("They start at the scheduled time, or with `bosun start`.",)),

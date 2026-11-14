@@ -235,6 +235,8 @@ function meter(used, limit) {
 
 // ---- API --------------------------------------------------------------------------------------
 
+const EXPIRED_TEXT = "This link is out of date: open a fresh one (bosun console --url).";
+
 class ApiError extends Error {
   constructor(status, message) {
     super(message);
@@ -242,14 +244,49 @@ class ApiError extends Error {
   }
 }
 
+// Set by the first 401: the link's token no longer opens the console. From then on nothing is
+// requested (the timers stop, the views do not draw): a new link, or a reload, starts again.
+let linkExpired = false;
+let pollTimer = null;
+
+function expireLink() {
+  if (linkExpired) return;
+  linkExpired = true;
+  if (pollTimer !== null) clearInterval(pollTimer);
+  pollTimer = null;
+  stopConstellation();
+  showStatus("This link is out of date.", true);
+  document.title = "Link out of date - bosun console";
+  document.getElementById("main").replaceChildren(
+    el(
+      "section",
+      { className: "expired" },
+      el("h2", {}, "This link is out of date"),
+      el(
+        "p",
+        {},
+        "bosun has a new access key since this page was opened (it was reinstalled or its key was replaced), " +
+          "so the console cannot show anything here any more. Nothing was lost.",
+      ),
+      el("p", {}, "To get a fresh link, choose Open Console in the bosun menu bar icon's menu, or run:"),
+      copyable("bosun console --url"),
+      el("p", {}, "It prints the address to open. Then you can close this tab."),
+    ),
+  );
+}
+
 async function api(path, options = {}) {
+  if (linkExpired) throw new ApiError(401, EXPIRED_TEXT);
   let response;
   try {
     response = await fetch(path, { credentials: "same-origin", cache: "no-store", ...options });
   } catch (error) {
     throw new ApiError(0, "The console is not running (start it with bosun console).");
   }
-  if (response.status === 401) throw new ApiError(401, "Not signed in: open the URL that bosun console printed.");
+  if (response.status === 401) {
+    expireLink();
+    throw new ApiError(401, EXPIRED_TEXT);
+  }
   const body = await response.json().catch(() => ({}));
   if (!response.ok) throw new ApiError(response.status, body.error || `The console answered ${response.status}.`);
   return body;
@@ -305,6 +342,7 @@ function setNav(view) {
 }
 
 function render() {
+  if (linkExpired) return;
   stopConstellation();
   commitPending(); // a review decision still waiting for Z is sent when you leave
   const current = route();
@@ -3850,12 +3888,12 @@ function describe(version) {
 // Every POLL_MS while the page is visible: the ledger's version (and the open view when it
 // changed), the "Needs you" badge, and the Sessions view, whose facts change without the ledger.
 async function poll() {
-  if (document.hidden) return;
+  if (document.hidden || linkExpired) return;
   let version;
   try {
     version = await api("/api/version");
   } catch (error) {
-    showStatus(error.message, true);
+    if (!linkExpired) showStatus(error.message, true);
     return;
   }
   const [text, problem] = describe(version);
@@ -3882,5 +3920,5 @@ document.addEventListener("visibilitychange", () => {
 document.addEventListener("DOMContentLoaded", () => {
   render();
   poll();
-  setInterval(poll, POLL_MS);
+  pollTimer = setInterval(poll, POLL_MS);
 });

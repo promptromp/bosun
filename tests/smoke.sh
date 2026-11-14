@@ -766,6 +766,19 @@ rm -f "$CFG/bosun.env"
 section common-functions "lib/common.sh functions" covers 'libexec/bosun-launch'
 fn() { bash -c 'source "$1/lib/common.sh"; shift; "$@"' _ "$ROOT" "$@"; }
 check "shift_time adds minutes" test "$(fn shift_time 08:00 1)" = 08:01
+log_dir="$WORK/log-checks"
+mkdir -p "$log_dir"
+log_day="$(date +%F)"
+BOSUN_LOG_DIR="$log_dir" BOSUN_COMMAND=probe fn log "hello file" >/dev/null
+check "a log line also goes to the day's file of the command that logs it" grep -q "\[probe\] hello file" "$log_dir/probe-$log_day.log"
+BOSUN_LOG_DIR="$log_dir" BOSUN_COMMAND=own LOG_TO_FILE=0 fn log "screen only" >/dev/null
+check "... but not for a command that keeps its own file (LOG_TO_FILE=0)" test ! -e "$log_dir/own-$log_day.log"
+for n in 1 2 3 4 5; do
+  BOSUN_LOG_FILE_MAX_BYTES=80 BOSUN_LOG_DIR="$log_dir" BOSUN_COMMAND=capped fn log "line $n of five, long enough to pass the cap" >/dev/null
+done
+check "a day's file stops at its cap, with one line that says so" bash -c '
+  [ "$(grep -c "of five" "$1")" -lt 5 ] && [ "$(grep -c "this log is capped" "$1")" = 1 ]' _ "$log_dir/capped-$log_day.log"
+check "a log line still reaches the screen without a log folder" test "$(BOSUN_LOG_DIR="$WORK/no-such-folder" fn log "on screen" | grep -c "on screen")" = 1
 check "shift_time wraps past midnight" test "$(fn shift_time 23:59 2)" = 00:01
 check "shift_time goes back past midnight" test "$(fn shift_time 00:00 -1)" = 23:59
 check "shift_time reads leading zeros as decimal" test "$(fn shift_time 08:09 1)" = 08:10
@@ -917,6 +930,7 @@ plists="$(bash -c 'source "$1/lib/common.sh"; load_config; render_launchd_plist 
 check "a version's plists run the link" contains "$plists" "$LINK/"
 check "... never its own folder" not_contains "$plists" "bosun-versions/"
 check "a version's window command line names the link" contains "$(bash -c 'source "$1/lib/common.sh"; load_config; build_launch_command alpha; printf "%s\\n" "${launch_cmd[@]}"' _ "$V1")" "$LINK/bin/bosun"
+check "a window's shell says no to oh-my-zsh's update question, which would hold its launch" contains "$(bash -c 'source "$1/lib/common.sh"; load_config; build_launch_command alpha; printf "%s\\n" "${launch_cmd[@]}"' _ "$ROOT")" "DISABLE_AUTO_UPDATE=true"
 
 section window-list "window list" covers 'libexec/bosun-checkin,examples/generic/sessions.yml'
 specs() { bash -c 'source "$1/lib/common.sh"; load_config; window_specs' _ "$ROOT"; }
@@ -2835,7 +2849,7 @@ away_from_midnight() {
   local now=$((10#$(date +%H%M)))
   [ "$now" -gt 30 ] && [ "$now" -lt 2359 ]
 }
-check "with no window open, outside the awake hours, it does not say bosun is running: it is resting, not stopped" awake_outside status_has 'd["windows"] == 0 and d["sentence"] != "bosun is running" and d["sentence"].startswith("bosun is resting") and d["stopped"] is None and d["update"] == {"state": "none", "waiting_for": []}'
+check "with no window open, outside the awake hours, it does not say bosun is running: it is resting, not stopped" awake_outside status_has 'd["windows"] == 0 and d["sentence"] != "bosun is running" and d["sentence"].startswith("bosun is resting") and d["stopped"] is None and d["update"] == {"state": "none", "waiting_for": [], "last": None}'
 if away_from_midnight; then
   check "... and inside them, a stop made today is stopped, the morning not paused, and nothing is wrong" awake_all_day status_has 'd["windows"] == 0 and d["level"] == "stopped" and d["sentence"].startswith("bosun is stopped (bosun stop at ") and d["stopped"]["morning_paused"] is False and d["problems"] == []'
 fi
@@ -4680,10 +4694,11 @@ PY
   ub ledger upsert 'review:acme/api#1' --kind review-request --title "Exporter retries" >/dev/null
   ub ledger upsert 'mypr:acme/api#2' --kind my-pr --title "Nightly export" >/dev/null
   ub kg import "$KG_FIXTURE" --apply --auto-confirm >/dev/null 2>&1
-  # Everything in the state and config folders (locks aside: taking one creates its file); and the data
-  # alone, a line per file (not the update's own record, folder, backups or logs).
+  # Everything in the state and config folders (locks aside: taking one creates its file; logs aside: saying
+  # what it did, in its day's log, changes nothing); and the data alone, a line per file (not the update's own
+  # record, folder, backups or logs).
   u_listed() { (cd "$U" && find state config -type f ! -name '*.lock' "$@" -print0 | LC_ALL=C sort -z | xargs -0 shasum); }
-  u_files() { u_listed | shasum; }
+  u_files() { u_listed ! -path 'state/logs/*' | shasum; }
   u_data_list() { u_listed ! -path 'state/update*' ! -path 'state/backups/*' ! -path 'state/logs/*'; }
   u_data_is() { # <list before>: the data as it was then; if not, which files differ
     local now

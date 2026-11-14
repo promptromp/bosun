@@ -145,6 +145,15 @@ def update_facts(state_dir: Path) -> tuple[bool, tuple[str, ...]]:
     return True, tuple(waiting)
 
 
+def last_update(state_dir: Path) -> menu_status.LastUpdate | None:
+    """The record the last update left, read without the lock (it is written whole, renamed over), or None
+    where there is none or it cannot be read."""
+    record = update_state.read(state_dir)
+    if record is None:
+        return None
+    return menu_status.LastUpdate(id=record.id, started_at=record.started_at, step=record.step)
+
+
 def read_list(run: Run, *args: str) -> list[dict[str, Any]]:
     data = console_live.bosun_json(run, *args)
     if not isinstance(data, list):
@@ -274,6 +283,7 @@ def gather(
         gate=gate,
         update_running=updating,
         update_waiting_for=waiting_for,
+        update_last=last_update(state_dir),
         console_running=console_token.running(state_dir),
         keep_awake_until=keep_awake.keep_awake_until(state_dir, settings.session),
         log_errors=attempt("logs", lambda: recent_log_errors(settings.log_dir, now)) or (),

@@ -131,6 +131,16 @@ class RecordsTest(ResolveTestCase):
         self.assertEqual(resolve.main(["registered", "1"]), agent_files.NOT_FOUND)
 
 
+class FirstRunScreensTest(ResolveTestCase):
+    def test_claude_in_chrome_s_screen_is_read_from_its_flag(self) -> None:
+        resolve.CONFIG_FILE.write_text(json.dumps({"hasCompletedOnboarding": True}))
+        self.assertFalse(resolve.chrome_onboarded())
+        self.assertEqual(resolve.main(["chrome-onboarded"]), agent_files.NOT_FOUND)
+        resolve.CONFIG_FILE.write_text(json.dumps({"hasCompletedClaudeInChromeOnboarding": True}))
+        self.assertTrue(resolve.chrome_onboarded())
+        self.assertEqual(resolve.main(["chrome-onboarded"]), 0)
+
+
 class TrustTest(ResolveTestCase):
     def test_trust_keeps_the_rest_of_the_config(self) -> None:
         resolve.CONFIG_FILE.write_text(json.dumps({"theme": "dark", "projects": {"/other": {"x": 1}}}))

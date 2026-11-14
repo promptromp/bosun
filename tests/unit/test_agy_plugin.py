@@ -758,7 +758,7 @@ class RunHookTest(unittest.TestCase):
             f"sys.path.insert(0, {str(ROOT / 'lib')!r})\n"
             "import agy_state, hook\n"
             "def fake(argv, env):\n"
-            "    time.sleep(0.5)\n"
+            "    time.sleep(2)\n"
             "    try:\n"
             "        os.fstat(pipe)\n"
             "        still_open = True\n"
@@ -773,7 +773,7 @@ class RunHookTest(unittest.TestCase):
             "assert pipe >= 3\n"
             "start = time.time()\n"
             "agy_state.run_hook(['x', 'y'], {})\n"
-            "print('returned in', round(time.time() - start, 1))\n"
+            "print(round(time.time() - start, 2))\n"
         )
         with tempfile.TemporaryDirectory() as scratch:
             marker = Path(scratch) / "done"
@@ -786,9 +786,11 @@ class RunHookTest(unittest.TestCase):
                 pass_fds=(),
                 timeout=30,
             )
-            self.assertEqual(
-                (result.returncode, result.stdout.strip()), (0, "returned in 0.0"), result.stderr
-            )
+            # At once: before the child's work (2 s) is done, with room for a busy machine's fork, which made
+            # a 0.05 s bound fail under the commit hook's parallel run.
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertLess(float(result.stdout.strip()), 1.5)
+            self.assertFalse(marker.exists())  # the child is still at work
             for _ in range(100):
                 if marker.exists():
                     break

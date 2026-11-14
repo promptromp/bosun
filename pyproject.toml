@@ -112,6 +112,7 @@ impacted_map = [
     "tools/*.py=tests/unit/test_swift_coverage.py",
     "lib/*.py=tools/contract_samples.py",
     "tools/*.sh=tests/unit/test_impacted_rules.py",
+    "tools/swift_hook.sh=tests/unit/test_swift_hook.py",
     # The app's pictures, the tool that makes them from the logo, and the logo itself.
     "tools/app_icons.py=tests/unit/test_app_icons.py",
     "docs/assets/logo.png=tests/unit/test_app_icons.py",

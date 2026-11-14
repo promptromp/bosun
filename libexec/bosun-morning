@@ -92,6 +92,7 @@ start_in_background() {
 
 LOG_FILE="$BOSUN_LOG_DIR/morning-$(date +%F).log"
 exec > >(tee -a "$LOG_FILE") 2>&1
+LOG_TO_FILE=0 # all of its output goes to its day's file already (log() in lib/common.sh)
 
 KEEP_AWAKE_PIDFILE="$(keep_awake_pidfile)"
 
@@ -241,6 +242,13 @@ preview_start() {
   fi
 }
 
+# The log folder kept in bounds, once a day (lib/log_files.py): the days past its keep go, and launchd's own
+# files, which only grow, are trimmed to their end. What it did is in this run's log; a dry run changes nothing.
+tidy_logs() {
+  [ "$DRY_RUN" = "1" ] && return 0
+  python3 "$BOSUN_ROOT/lib/log_files.py" prune --log-dir "$BOSUN_LOG_DIR" 2>&1 | while IFS= read -r line; do log "logs: $line"; done
+}
+
 start_windows() {
   "$BOSUN" start --unless-active --unless-quit || problems+=("tmux")
   # A quit made while this run set up: that start skipped (and a quit that came after it stopped bosun).
@@ -253,6 +261,7 @@ start_windows() {
 }
 
 begin_run
+tidy_logs
 pmset -g batt | head -1 | sed 's/^/power: /'
 
 problems=()

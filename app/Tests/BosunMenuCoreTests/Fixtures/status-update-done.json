@@ -1,0 +1,32 @@
+{
+  "console": {
+    "running": false,
+    "url": null
+  },
+  "contract": 1,
+  "detail": [
+    "3 windows open",
+    "1 waiting for you: acme-web",
+    "Mac kept awake until 20:00"
+  ],
+  "keep_awake_until": "20:00",
+  "level": "ok",
+  "logs": "/Users/me/.local/state/bosun/logs",
+  "problems": [],
+  "running": true,
+  "sentence": "bosun is running",
+  "stopped": null,
+  "update": {
+    "last": {
+      "id": "20261111-095930-1a2b3c4-5d6e7f8",
+      "started_at": "2026-11-11T09:59:30+00:00",
+      "step": "done"
+    },
+    "state": "none",
+    "waiting_for": []
+  },
+  "waiting": [
+    "acme-web"
+  ],
+  "windows": 3
+}

@@ -42,7 +42,9 @@ class PreflightTest(unittest.TestCase):
         for name in ("git", "tmux", "jq", "ruby", "curl", "gh"):
             self.tool(name)
         self.claude("2.1.308", LOGGED_IN)
-        (self.home / ".claude.json").write_text('{"hasCompletedOnboarding": true}')
+        (self.home / ".claude.json").write_text(
+            '{"hasCompletedOnboarding": true, "hasCompletedClaudeInChromeOnboarding": true}'
+        )
 
     def tool(self, name: str, body: str = "exit 0") -> None:
         path = self.bin / name
@@ -127,6 +129,74 @@ esac""",
                     os.close(secondary)
                     os.close(primary)
                 self.assertEqual(result.stdout.strip(), version)
+
+    def test_logged_out_with_a_locked_keychain_says_to_unlock_it(self) -> None:
+        """Over ssh the keychain Claude Code keeps its login in starts locked: logging in again is not it."""
+        self.claude("2.1.308", LOGGED_OUT)
+        self.tool(
+            "security",
+            'echo "security: SecKeychainCopySettings x: User interaction is not allowed." >&2; exit 36',
+        )
+        result = self.run_it()
+        self.assertIn("not logged in: the login keychain is locked", result.stdout)
+        self.assertIn("security unlock-keychain ~/Library/Keychains/login.keychain-db", result.stdout)
+        self.assertNotIn("run claude, and follow what it asks", result.stdout)
+        self.tool("security", 'echo "Keychain x no-timeout"')  # unlocked: logged out is logged out
+        self.assertIn("Log in to Claude Code: run claude", self.run_it().stdout)
+
+    def run_to_a_terminal(self, **env: str) -> str:
+        """Its output as a terminal shows it (the lines' colours), with <env> added. Read while it runs:
+        on macOS what a pty holds is gone once its other end closes."""
+        primary, secondary = os.openpty()
+        # A terminal names itself in TERM (unset, /bin/sh makes it dumb).
+        environment = {
+            "PATH": str(self.bin),
+            "HOME": str(self.home),
+            "BOSUN_PLATFORM": "macos",
+            "TERM": "xterm-256color",
+        }
+        environment.update(env)
+        with subprocess.Popen(["/bin/sh", str(PREFLIGHT)], env=environment, stdout=secondary) as process:
+            os.close(secondary)
+            chunks = []
+            while True:
+                try:
+                    chunk = os.read(primary, 65536)
+                except OSError:  # the other end closed
+                    break
+                if not chunk:
+                    break
+                chunks.append(chunk)
+            process.wait(timeout=60)
+        os.close(primary)
+        return b"".join(chunks).decode()
+
+    def test_on_a_terminal_each_line_s_word_is_coloured_unless_no_color(self) -> None:
+        self.claude("2.1.308", LOGGED_OUT)
+        shown = self.run_to_a_terminal()
+        self.assertIn("\x1b[32mok", shown)
+        self.assertIn("\x1b[33mto do", shown)
+        self.assertNotIn("\x1b[", self.run_to_a_terminal(NO_COLOR="1"))
+        self.assertNotIn("\x1b[", self.run_to_a_terminal(TERM="dumb"))
+        self.assertNotIn("\x1b[", self.run_it().stdout)  # not a terminal
+
+    def test_claude_in_chrome_s_screen_is_a_step_while_windows_use_chrome(self) -> None:
+        """Its once-only screen waits for Enter, and an unattended window would wait there for ever."""
+        (self.home / ".claude.json").write_text('{"hasCompletedOnboarding": true}')
+        result = self.run_it()  # no flags given: bosun's defaults, which have --chrome
+        self.assertIn("Claude in Chrome's screen not done", result.stdout)
+        self.assertIn(
+            "run claude --chrome, press Enter at its Claude in Chrome screen, then /exit", result.stdout
+        )
+        self.assertEqual(result.returncode, 1)
+        without = self.run_it(BOSUN_CLAUDE_FLAGS="--permission-mode auto", BOSUN_ORCHESTRATOR_FLAGS="")
+        self.assertNotIn("Chrome", without.stdout)
+        self.assertEqual(without.returncode, 0)
+        orchestrator_only = self.run_it(BOSUN_CLAUDE_FLAGS="", BOSUN_ORCHESTRATOR_FLAGS="--chrome")
+        self.assertIn("Claude in Chrome's screen not done", orchestrator_only.stdout)
+
+    def test_claude_in_chrome_s_screen_done(self) -> None:
+        self.assertIn("ok         Claude in Chrome's screen done", self.run_it().stdout)
 
     def test_quiet_says_nothing_when_all_is_well(self) -> None:
         result = self.run_it("--quiet")
@@ -296,6 +366,7 @@ esac""",
                 "platform_manager_help",
                 "platform_install_command",
                 "platform_package",
+                "platform_keychain_locked",
             ),
             ROOT / "lib" / "harnesses": (
                 "harness_name",

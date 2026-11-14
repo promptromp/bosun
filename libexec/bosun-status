@@ -25,7 +25,8 @@
 #             keep_awake_until  HH:MM while the morning's keep-awake holds the Mac up, else null
 #             stopped           {"since": <ISO time>, "morning_paused": <bool>} after a quit (or, with
 #                               the morning not paused, a `bosun stop` today), else null
-#             update            {"state": "none"|"running", "waiting_for": [windows]}
+#             update            {"state": "none"|"running", "waiting_for": [windows], "last": the record
+#                               the last update left, {"id", "started_at" (UTC ISO), "step"}, or null}
 #             console           {"running": <bool>, "url": null} (the address carries the token: it is
 #                               what `bosun console --url` prints)
 #             problems          what is wrong, one line each: the watchdog's findings (a missing session

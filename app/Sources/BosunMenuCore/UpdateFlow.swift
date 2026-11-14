@@ -44,6 +44,10 @@ public enum UpdateEvent: Equatable, Sendable {
   /// The grace ran out while the app could not read bosun's status (its contract is newer): the update was
   /// started and cannot be watched, so it is let go without a verdict.
   case startUnwatched
+  /// The status shows no update running and the record of one that began after `update --yes` was started,
+  /// at a step that ends it (`endOfStartedUpdate`): it ended before any look saw it running. `failed`: it
+  /// ended with bosun as it was.
+  case startEnded(failed: Bool)
   case acknowledged
 }
 
@@ -51,6 +55,8 @@ public let noPlanText =
   "bosun made no plan: it is up to date, or the update was refused. Run bosun update in a terminal to see which."
 public let updateNeverStartedText =
   "The update did not start. Run bosun update in a terminal to see why."
+public let updateDidNotFinishText =
+  "The update did not finish, and bosun is as it was. Run bosun update in a terminal to see why."
 
 /// Choosing "Update bosun…" (bosun speaks a contract this app does not): the update flow, from its
 /// check, as for "Check for Updates…". The shell begins `Flow.update` and runs the commands.
@@ -128,9 +134,48 @@ private func nextWhileRunning(_ state: UpdateState, on event: UpdateEvent) -> St
     return (.failed(why), [])
   case (.starting, .startUnwatched):
     return (.idle, [])
+  case (.starting, .startEnded(failed: false)):
+    return (.checking, [Bosun.checkUpdates])
+  case (.starting, .startEnded(failed: true)):
+    return (.failed(updateDidNotFinishText), [])
   default:
     return nil
   }
+}
+
+/// Whether the status is to be looked at promptly (every few seconds, not every 30): while an update `update
+/// --yes` was started for has yet to show in the status (its grace is bounded), and while a status that is
+/// current shows one running, so that its end is drawn within seconds. A status that could not be read, or a
+/// kept one, is no reason to ask more often.
+public func wantsPromptLooks(_ update: UpdateState, status: StatusState?) -> Bool {
+  switch (update, status) {
+  case (.starting, _), (.running, .loaded(_, current: true)?): return true
+  default: return false
+  }
+}
+
+/// The steps of bosun's update record (`update_state.STEPS`) that end an update: `done`, and `agents` once no
+/// update runs (past its release, its windows left to the check-in loop), as it should; `failed` (cut short
+/// before anything changed, or its rehearsal failed) and `restored` (put back) with bosun as it was. Any
+/// other step, a newer bosun's among them, ends nothing: the grace is left to tell.
+let updateEndedSteps: Set<String> = ["done", "agents"]
+let updateFailedSteps: Set<String> = ["failed", "restored"]
+
+/// How much earlier than the app's start of `update --yes` the record may say it started: the record is to the
+/// second, and the clock is the same Mac's.
+let startedAtSlack: TimeInterval = 2
+
+/// The end of the update the app started at `startedAt`, as the status tells it: no update running, and the
+/// record of one that began at or after it at a step that ends it. Nil while it has not shown, so the grace
+/// stays the fallback for an update that never wrote its record (refused before it began).
+public func endOfStartedUpdate(_ progress: UpdateProgress, startedAt: Date) -> UpdateEvent? {
+  guard progress.state != .running, let last = progress.last,
+    let began = ISO8601DateFormatter().date(from: last.startedAt),
+    began >= startedAt.addingTimeInterval(-startedAtSlack)
+  else { return nil }
+  if updateEndedSteps.contains(last.step) { return .startEnded(failed: false) }
+  if updateFailedSteps.contains(last.step) { return .startEnded(failed: true) }
+  return nil
 }
 
 /// The same release is still on offer: what `update --yes` was to install has not been installed.

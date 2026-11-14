@@ -42,6 +42,7 @@
 # watchdog's login-expired check alerts you.
 set -uo pipefail
 source "$(dirname "$0")/../lib/common.sh"
+LOG_TO_FILE=0 # it puts what it says in its own day's file, checkin_log (log() in lib/common.sh)
 load_config
 need_profiles # here, so the agent lookups in substitutions below do not each read them
 

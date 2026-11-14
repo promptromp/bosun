@@ -17,6 +17,11 @@ Requirements, installation and configuration, and the morning's logins.
   [Running repo sessions on Codex](#running-repo-sessions-on-codex)
 - Optional, a preview: Google's Antigravity CLI (`agy`) 1.5.5 or newer, signed in. See
   [Running repo sessions on Antigravity](#running-repo-sessions-on-antigravity-a-preview)
+- Your login shell as it is: zsh (macOS's default) or bash, oh-my-zsh and Powerlevel10k included. Each window
+  starts through it as a terminal you open does (`<shell> -lic`), so your PATH and tools load. In those windows
+  oh-my-zsh's update question is switched off (`DISABLE_AUTO_UPDATE=true`: it would wait for a key and the
+  window would never start its agent; it counts while your `.zshrc` picks no update mode with `zstyle`), and
+  the helpers a prompt theme starts are stopped as the window's launch ends (`bosun orphans`)
 
 You do not have to check these yourself. `bosun preflight` does, changes nothing, and lists everything
 missing at once, with what to do about each. `bosun init` and `bosun doctor` start with the same check.
@@ -60,7 +65,8 @@ and `BOSUN_BRANCH`, as it keeps `BOSUN_HARNESS`, quoted for your shell, and show
 
 `bosun init` reads what this Mac already shows: the repos you use your agents in, the MCP servers and
 connectors `claude mcp list` shows, your usual hours, your logins. In a terminal it asks a few questions,
-one key each: Return takes the recommended answer, `r` starts again and `q` leaves with nothing changed. The last
+one key each: Return takes the recommended answer, `r` starts again and `q` leaves with nothing changed (in
+colour, in your terminal's own palette; `NO_COLOR=1` turns it off, as it does for the check before it). The last
 of them (once a signed build of it exists to install) is whether to add the menu bar app: `bosun.app` in
 `~/Applications`, opened at login (`bosun app install` adds it later; `bosun update` keeps an installed app
 current, and `BOSUN_MENU_APP=1` in `bosun.env` makes the watchdog say when it is gone).
@@ -98,6 +104,8 @@ installed. The usual ones:
 | `missing  Homebrew` | Nothing to install the tools with | Install it from [brew.sh](https://brew.sh), then do what it prints at the end to add it to your PATH, and open a new terminal |
 | A tool you just installed is still `missing` | Your terminal has the old PATH | Open a new terminal |
 | `first-run screens not done` | Claude Code stops at its theme and security screens the first time, and a window nobody is watching would wait there for ever | Run `claude`, go through them, then `/exit` |
+| `not logged in: the login keychain is locked` | Claude Code keeps its login in your login keychain, and a session over ssh starts with it locked, even when the Mac's desktop unlocked it | Run `security unlock-keychain ~/Library/Keychains/login.keychain-db` (your login password), then the same line again |
+| `Claude in Chrome's screen not done` | bosun starts windows with Chrome on (`--chrome` in `BOSUN_CLAUDE_FLAGS` and `BOSUN_ORCHESTRATOR_FLAGS`), and Claude Code first shows what it may do in your browser and waits for Enter | Run `claude --chrome`, press Enter at that screen, then `/exit` |
 | `not logged in` under Claude Code | It has no login | Run `claude`, and follow what it asks |
 | `not logged in` under Codex | It has no login | Run `codex login`. With an API key: `printenv OPENAI_API_KEY \| codex login --with-api-key` |
 | A window is on a screen, and the watchdog reports `stalled-start` | The agent is asking something only you can answer, usually about trusting the folder | `bosun attach`, then read it. Do not just press Return: on several of Claude Code's screens the default is to exit, and on Codex's it says yes |
@@ -466,10 +474,15 @@ State and logs go to `~/.local/state/bosun/`:
   `knowledge/journal/` of the config folder, see [Knowledge](knowledge.md#knowledge)), made once,
   and anew when a journal starts again (moved aside, emptied or removed); moved aside itself, it
   gives the Mac a new id too. Either way, both journals carry on under the new id
-- `logs/`: `morning-YYYY-MM-DD.log`, `checkin-YYYY-MM-DD.log`, `learn-YYYY-MM-DD.log`,
-  `impact-YYYY-MM-DD.log`, `hook-YYYY-MM-DD.log` (the repo sessions' prompt hook), `launch-YYYY-MM-DD.log`
-  (the alerts a window's launch sent, such as connectors it started without), and what launchd
-  captures from each job (`launchd.{out,err}`, `watchdog.launchd.{out,err}`, `learn.launchd.{out,err}`)
+- `logs/`: a file per command and day, `<command>-YYYY-MM-DD.log`, with what that command said on its screen:
+  `morning-…` (the morning run, all of it), `checkin-…`, `learn-…`, `impact-…`, `hook-…` (the repo
+  sessions' prompt hook, its errors), `launch-…` (each window's launch: which conversation it resumed or
+  started, connectors it started without, alerts it sent), and `start-…`, `refresh-…`, `send-…`,
+  `stop-…` and the other commands' when they said something. These are bosun's own messages, a few dozen
+  a day: a file stops at 2 MB a day with one line saying so, and everything still shows on screen. Then
+  what launchd captures from each job (`launchd.{out,err}`, `watchdog.launchd.{out,err}`,
+  `console.launchd.err`, ...). Each morning run keeps the folder in bounds: a day's file older than 30
+  days goes, and a launchd file past 1 MB is cut to its last 256 KB
 - `watchdog.json`: the watchdog's de-duplication state
 - `login.json`: the last Claude Code login check (see Claude Code login)
 - `codex-sessions.json`: which Codex session each window's name stands for

@@ -27,7 +27,7 @@ import Testing
     #expect(status.waiting == ["acme-web"])
     #expect(status.keepAwakeUntil == "20:00")
     #expect(status.stopped == nil)
-    #expect(status.update == UpdateProgress(state: .none, waitingFor: []))
+    #expect(status.update == UpdateProgress(state: .none, waitingFor: [], last: nil))
     #expect(status.console == ConsoleStatus(running: false, url: nil))
     #expect(status.detail == ["3 windows open", "1 waiting for you: acme-web", "Mac kept awake until 20:00"])
   }
@@ -53,7 +53,13 @@ import Testing
 
   @Test func anUpdateInProgressNamesTheWindowsItWaitsFor() throws {
     let status = try Fixtures.status("status-update-running")
-    #expect(status.update == UpdateProgress(state: .running, waitingFor: ["acme-exporter", "acme-web"]))
+    #expect(
+      status.update
+        == UpdateProgress(
+          state: .running, waitingFor: ["acme-exporter", "acme-web"],
+          last: LastUpdate(
+            id: "20261111-095930-1a2b3c4-5d6e7f8", startedAt: "2026-11-11T09:59:30+00:00", step: "agents")
+        ))
     #expect(status.updateEvent == .statusShows(running: true, waitingFor: ["acme-exporter", "acme-web"]))
     #expect(try Fixtures.status("status-ok").updateEvent == .statusShows(running: false, waitingFor: []))
   }

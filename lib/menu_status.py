@@ -30,7 +30,9 @@ its own, so the menu and the watchdog never disagree.
 The contract number (CONTRACT) is the app's check that it understands what it reads: it only ever grows,
 and a field is only ever added. A new level is a new word in `level`, which the app shows as a warning until
 it knows it (never as all well); `running` says whether bosun's windows are open (null when they could not be
-read), which with the level tells a bosun to start from one that runs with an error.
+read), which with the level tells a bosun to start from one that runs with an error. `update.last` is the
+record the last update left (`id`, `started_at`, `step`; null when there is none): an update that ended before
+any look saw it running is told by it, so the app can end "Updating…" for the one it started.
 """
 
 from __future__ import annotations
@@ -101,6 +103,20 @@ class WatchdogJob:
 
 
 @dataclass(frozen=True)
+class LastUpdate:
+    """The update's record (update.json), as far as the status tells it: which update, when it started
+    (UTC, ISO 8601 to the second) and the step it is at or ended at (`update_state.STEPS`, or a newer
+    bosun's)."""
+
+    id: str
+    started_at: str
+    step: str
+
+    def as_json(self) -> dict[str, str]:
+        return {"id": self.id, "started_at": self.started_at, "step": self.step}
+
+
+@dataclass(frozen=True)
 class StatusFacts:
     """What the snapshot is made of. A part that could not be read is None (or absent) and has its
     reason in <errors>, keyed by part (READ_PART)."""
@@ -112,6 +128,7 @@ class StatusFacts:
     gate: SessionGate | None = None  # None when it could not be told (the checks could not be made)
     update_running: bool = False
     update_waiting_for: tuple[str, ...] = ()
+    update_last: LastUpdate | None = None  # the record the last update left (it stays after it ends)
     console_running: bool = False
     keep_awake_until: datetime | None = None  # local and naive
     log_errors: tuple[str, ...] = ()  # "<log>: <line>" of the last hour's ERROR lines
@@ -371,6 +388,7 @@ def snapshot(facts: StatusFacts, now: datetime) -> dict[str, Any]:
         "update": {
             "state": "running" if facts.update_running else "none",
             "waiting_for": list(facts.update_waiting_for),
+            "last": facts.update_last.as_json() if facts.update_last is not None else None,
         },
         "console": {"running": facts.console_running, "url": None},  # the address carries the token
         "problems": verdict.problems,
@@ -399,7 +417,7 @@ def failure(text: str, level: str = ERROR) -> dict[str, Any]:
         "waiting": [],
         "keep_awake_until": None,
         "stopped": None,
-        "update": {"state": "none", "waiting_for": []},
+        "update": {"state": "none", "waiting_for": [], "last": None},
         "console": {"running": False, "url": None},
         "problems": [text],
         "logs": "",

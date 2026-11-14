@@ -136,9 +136,21 @@ def status_samples() -> dict[str, Sample]:
             NOW.replace(hour=6), windows=GONE, gate=SessionGate(menu_status.RESTING), keep_awake_until=None
         ),
         "status-update-running": snapshot(
-            update_running=True, update_waiting_for=("acme-exporter", "acme-web")
+            update_running=True,
+            update_waiting_for=("acme-exporter", "acme-web"),
+            update_last=last_update("agents"),
         ),
+        # an update that ended before any look saw it running: only its record tells it
+        "status-update-done": snapshot(update_last=last_update("done")),
+        "status-update-failed": snapshot(update_last=last_update("restored")),
     }
+
+
+def last_update(step: str) -> menu_status.LastUpdate:
+    """The record of an update started half a minute before NOW (in UTC, as `bosun update` writes it)."""
+    return menu_status.LastUpdate(
+        id="20261111-095930-1a2b3c4-5d6e7f8", started_at="2026-11-11T09:59:30+00:00", step=step
+    )
 
 
 # ---- bosun update --check --json, --dry-run --json ---------------------------------------------------------

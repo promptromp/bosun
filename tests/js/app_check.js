@@ -196,6 +196,7 @@ function fakeFetch(path, options = {}) {
   const method = (options.method || "GET").toUpperCase();
   const key = method === "GET" ? path : `${method} ${path}`;
   requested.push(key);
+  if (media.expired) return Promise.resolve({ ok: false, status: 401, json: () => Promise.resolve({ error: "unauthorised" }) });
   if (method !== "GET") posted.push({ path, options });
   const found = Object.prototype.hasOwnProperty.call(models, key);
   return Promise.resolve({
@@ -205,6 +206,7 @@ function fakeFetch(path, options = {}) {
   });
 }
 
+const cleared = []; // the interval ids the page stopped
 const frames = []; // requestAnimationFrame callbacks, run by runFrames()
 const media = { reduced: false };
 const sandbox = {
@@ -225,7 +227,8 @@ const sandbox = {
   fetch: fakeFetch,
   setTimeout: () => 0,
   clearTimeout: () => {},
-  setInterval: () => 0,
+  setInterval: () => 7,
+  clearInterval: (id) => cleared.push(id),
   Node: FakeNode,
   URL,
   URLSearchParams,
@@ -373,6 +376,8 @@ async function main() {
     const unknown = requested.filter((path) => !Object.prototype.hasOwnProperty.call(models, path));
     return unknown.length ? `unknown: ${unknown.join(", ")}` : null;
   });
+
+  await expiredChecks(); // last: the page is out of date from here on
 
   if (failures) {
     console.log(`${failures} JS check(s) failed`);
@@ -759,6 +764,37 @@ async function constellationChecks() {
 
   await rendered("#/knowledge?view=raw", 8);
   check("leaving the Constellation stops its animation", () => (live("star").running ? "still running" : null));
+}
+
+// A 401 (the link's token is no longer valid) shows one message in place of the content and stops
+// every timer; nothing is requested after it, not by a poll, a view or a route change.
+async function expiredChecks() {
+  vm.runInContext("pollTimer = 7", sandbox); // what DOMContentLoaded's setInterval would have stored
+  media.expired = true;
+  const before = requested.length;
+  await sandbox.poll();
+  await settle();
+  const sent = requested.length - before;
+  const main = document.getElementById("main");
+  check("a 401 shows the out-of-date message with the command for a fresh link, and stops the poll timer", () => {
+    const text = main.textContent;
+    if (!text.includes("This link is out of date")) return `shown "${text.slice(0, 80)}"`;
+    if (!text.includes("Open Console") || !text.includes("bosun console --url")) return "no way to a fresh link";
+    if (sent !== 1) return `${sent} requests for the first poll`;
+    if (!cleared.includes(7)) return "the poll timer was not cleared";
+    if (!document.getElementById("status").classList.contains("problem")) return "the status is not marked";
+    return problems(main);
+  });
+  const after = requested.length;
+  await sandbox.poll();
+  await sandbox.api("/api/needs-you").catch(() => null);
+  sandbox.location.hash = "#/sessions";
+  sandbox.render();
+  await settle();
+  check("after a 401 nothing more is requested and the message stays", () => {
+    if (requested.length !== after) return `${requested.length - after} more requests`;
+    return main.textContent.includes("This link is out of date") ? null : "the message was replaced";
+  });
 }
 
 // A knowledge base change while the Constellation is open shows the Reload chip and redraws

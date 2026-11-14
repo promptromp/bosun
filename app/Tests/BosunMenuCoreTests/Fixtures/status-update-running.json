@@ -18,6 +18,11 @@
   "sentence": "bosun is running",
   "stopped": null,
   "update": {
+    "last": {
+      "id": "20261111-095930-1a2b3c4-5d6e7f8",
+      "started_at": "2026-11-11T09:59:30+00:00",
+      "step": "agents"
+    },
     "state": "running",
     "waiting_for": [
       "acme-exporter",

@@ -90,6 +90,23 @@ def run(
 ALL_RECOMMENDED = [ENTER] * 7 + ["y"]
 
 
+class ColourTest(unittest.TestCase):
+    """The terminal strips these where colour is not wanted (test_init_terminal.py)."""
+
+    def test_keys_and_titles_are_accented_and_what_is_recommended_is_green(self) -> None:
+        line = init_wizard.option_lines(init_wizard.Option("y", "Yes, start them", recommended=True))[0]
+        self.assertIn(init_wizard.accent("(y)"), line)
+        self.assertIn(init_wizard.good("(recommended)"), line)
+        self.assertEqual(ANSI.sub("", line), "(y)  Yes, start them (recommended)")
+        self.assertIn(init_wizard.accent("Which repos?"), init_wizard.header(1, 7, "Which repos?"))
+
+    def test_a_switched_on_choice_is_marked_in_green(self) -> None:
+        self.assertEqual(
+            init_wizard.toggle(True, 3), f"[{init_wizard.good('x')}] {init_wizard.accent('(3)')}"
+        )
+        self.assertEqual(ANSI.sub("", init_wizard.toggle(False, 3)), "[ ] (3)")
+
+
 class FlowTest(unittest.TestCase):
     def test_return_all_the_way_takes_what_is_recommended(self) -> None:
         the_facts = facts()

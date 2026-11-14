@@ -30,9 +30,23 @@ problems=0
 steps=""
 packages=""
 
-check_ok() { [ "$QUIET" = 1 ] || printf '  %-10s %s\n' "ok" "$1"; }
+# The word that starts each line, in colour for a person at a terminal (https://no-color.org): ok in
+# green, what is left to do in yellow, what is missing or too old in red.
+status_line() { # <word> <what>
+  if [ -t 1 ] && [ -z "${NO_COLOR:-}" ] && [ "${TERM:-}" != dumb ]; then
+    case "$1" in
+      ok) colour='32' ;;
+      "to do" | later) colour='33' ;;
+      *) colour='31' ;;
+    esac
+    printf '  \033[%sm%-10s\033[0m %s\n' "$colour" "$1" "$2"
+  else
+    printf '  %-10s %s\n' "$1" "$2"
+  fi
+}
+check_ok() { [ "$QUIET" = 1 ] || status_line "ok" "$1"; }
 report() { # <what happened> <what> [the next step]
-  printf '  %-10s %s\n' "$1" "$2"
+  status_line "$1" "$2"
   problems=$((problems + 1))
   [ -z "${3:-}" ] || steps="$steps$3$NEWLINE"
 }
@@ -147,7 +161,7 @@ check_harness() {
   if python_ready; then
     harness_checks
   else
-    [ "$QUIET" = 1 ] || printf '  %-10s %s\n' "later" "its login is checked once Python is in place"
+    [ "$QUIET" = 1 ] || status_line "later" "its login is checked once Python is in place"
   fi
 }
 

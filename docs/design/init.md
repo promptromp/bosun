@@ -151,9 +151,12 @@ same line again.
 the flow:
 
 1. **The OS picks a platform profile**, `lib/platforms/<os>.sh`: its package manager, the line that
-   installs from it, how a tool's package is named, and what to say when any of that is missing.
+   installs from it, how a tool's package is named, what to say when any of that is missing, and whether
+   the login keychain is locked for this session (a session over ssh starts with it locked, which makes
+   Claude Code read as logged out).
 2. **Each agent in use picks a harness profile**, `lib/harnesses/<harness>.sh`: how to tell it is installed,
-   new enough, logged in, and past whatever it asks a person the first time. Those are Claude Code for
+   new enough, logged in, and past whatever it asks a person the first time (for Claude Code, its
+   first-run screens, and Claude in Chrome's screen while windows start with `--chrome`). Those are Claude Code for
    the orchestrator, `BOSUN_HARNESS`, and the `harness:` of any window.
 3. **The flow** in `lib/preflight.sh` knows neither. It checks everything and prints a list, then
    numbered next steps. Exit status 0 means all there, 1 something to do, 2 no profile for this OS or
