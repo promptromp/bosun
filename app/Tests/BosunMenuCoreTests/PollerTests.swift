@@ -157,6 +157,58 @@ actor Refreshes {
     #expect(await refreshes.reasons == [.launch])
   }
 
+  /// An update under way: the 30-second wait already begun is cut, and the timer asks every 2 seconds until
+  /// prompt looks are off again.
+  @Test func promptLooksAskEveryTwoSecondsAndThenThirtyAgain() async throws {
+    let clock = ManualClock()
+    let refreshes = Refreshes()
+    let poller = make(clock, refreshes)
+    await poller.start()
+    #expect(await clock.waitForSleeper(until: clock.now.advanced(by: .seconds(30))))
+    await poller.setPrompt(true)
+    #expect(await poller.isPrompt)
+    #expect(await clock.waitForSleeper(until: clock.now.advanced(by: .seconds(2))))
+    clock.advance(by: .seconds(2))
+    #expect(await eventually { await refreshes.count == 2 })
+    #expect(await clock.waitForSleeper(until: clock.now.advanced(by: .seconds(2))))
+    clock.advance(by: .seconds(2))
+    #expect(await eventually { await refreshes.count == 3 })
+    await poller.setPrompt(false)
+    #expect(await clock.waitForSleeper(until: clock.now.advanced(by: .seconds(30))))
+    #expect(clock.sleeperCount == 1)  // the 2-second wait was cut, not left beside the new one
+    clock.advance(by: .seconds(29))
+    #expect(await refreshes.count == 3)
+    clock.advance(by: .seconds(1))
+    #expect(await eventually { await refreshes.count == 4 })
+    #expect(await refreshes.reasons == [.launch, .timer, .timer, .timer])
+    await poller.stop()
+  }
+
+  @Test func promptLooksAskedForBeforeTheStartSetTheFirstWait() async throws {
+    let clock = ManualClock()
+    let refreshes = Refreshes()
+    let poller = make(clock, refreshes)
+    await poller.setPrompt(true)
+    #expect(clock.sleeperCount == 0)
+    await poller.start()
+    #expect(await clock.waitForSleeper(until: clock.now.advanced(by: .seconds(2))))
+    await poller.stop()
+    #expect(clock.sleeperCount == 0)
+  }
+
+  @Test func askingForThePaceItHasKeepsItsWait() async throws {
+    let clock = ManualClock()
+    let refreshes = Refreshes()
+    let poller = make(clock, refreshes)
+    await poller.start()
+    #expect(await clock.waitForSleeper(until: clock.now.advanced(by: .seconds(30))))
+    clock.advance(by: .seconds(10))
+    await poller.setPrompt(false)
+    clock.advance(by: .seconds(20))
+    #expect(await eventually { await refreshes.count == 2 })
+    await poller.stop()
+  }
+
   @Test func startingTwiceKeepsOneTimer() async throws {
     let clock = ManualClock()
     let refreshes = Refreshes()

@@ -33,6 +33,8 @@ public final class AppCoordinator {
   public internal(set) var update: UpdateState = .idle
   public internal(set) var flow = FlowState()
   public private(set) var login = false
+  /// Whether the poller looks every few seconds (an update under way) rather than every 30: see `followUpdate`.
+  public private(set) var looksPromptly = false
 
   // What the update flow keeps (AppCoordinator+Update.swift)
   var throttle = UpdateCheckThrottle()
@@ -84,7 +86,7 @@ public final class AppCoordinator {
 
   // MARK: looking
 
-  /// Draws what is known, and starts looking: now, then every 30 seconds.
+  /// Draws what is known, and starts looking: now, then every 30 seconds (every 2 while an update is under way).
   public func start() async {
     render()
     await poller.start()
@@ -129,6 +131,7 @@ public final class AppCoordinator {
       runInBackground(apply(snapshot.updateEvent))
     }
     render()
+    await followUpdate()
     if [.launch, .menuOpened, .resumed].contains(reason) {
       await readLogin()
       guard flow.pollsStatus else { return }
@@ -136,6 +139,16 @@ public final class AppCoordinator {
     }
     startAtLaunch(state)
     checkInBackground(reason)
+  }
+
+  /// The poller's cadence for the update's state: prompt looks while one is under way (`wantsPromptLooks`), so
+  /// its end is drawn within seconds, and the 30 seconds again once it is over. Asked after every look and
+  /// every run of the update flow's events.
+  func followUpdate() async {
+    let prompt = wantsPromptLooks(update, status: status)
+    guard prompt != looksPromptly else { return }
+    looksPromptly = prompt
+    await poller.setPrompt(prompt)
   }
 
   /// Whether Open at Login is on, as `bosun app status` says; a reading begun before the last switch is

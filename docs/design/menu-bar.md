@@ -159,7 +159,12 @@ Calls made from the research and the builder check, to check while reading:
     starts; never `bosun start`, which would make the tmux server the app's child);
   - `bosun app login on|off`.
   It refreshes the status when the menu opens and every 30 seconds otherwise; a menu open shows the last state at
-  once and updates in place.
+  once and updates in place. While an update is under way (one the app started that the status does not show yet,
+  or a current status saying one runs) it looks every 2 seconds instead, so the end of an update that took seconds
+  is drawn seconds after it and not at the next 30-second look; back to every 30 once the update is over, or when
+  the status cannot be read. The app does not watch the update's process for its end: `bosun update --yes` is left
+  running detached, and the update can outlive it (an interrupted wait for the windows is carried on by the check-in
+  loop), so the status stays what says the update is over.
 - **Version skew.** `bosun status --json` carries a `contract` number. An app that does not know the number says
   "bosun.app needs an update" in its status line and offers "Update bosun…" (which runs `bosun update`); a CLI that
   sees an older app than its checkout expects updates it (below).

@@ -133,6 +133,17 @@ private func nextWhileRunning(_ state: UpdateState, on event: UpdateEvent) -> St
   }
 }
 
+/// Whether the status is to be looked at promptly (every few seconds, not every 30): while an update `update
+/// --yes` was started for has yet to show in the status (its grace is bounded), and while a status that is
+/// current shows one running, so that its end is drawn within seconds. A status that could not be read, or a
+/// kept one, is no reason to ask more often.
+public func wantsPromptLooks(_ update: UpdateState, status: StatusState?) -> Bool {
+  switch (update, status) {
+  case (.starting, _), (.running, .loaded(_, current: true)?): return true
+  default: return false
+  }
+}
+
 /// The same release is still on offer: what `update --yes` was to install has not been installed.
 private func stillOffered(_ check: UpdateCheck, like before: UpdateCheck) -> Bool {
   check.error == nil && check.available && check.latest?.version == before.latest?.version

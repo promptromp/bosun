@@ -28,6 +28,7 @@ extension AppCoordinator {
       taken.append(event)
       for command in apply(event) { queue += await execute(command) }
     }
+    await followUpdate()
     return taken
   }
 
