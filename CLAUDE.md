@@ -485,7 +485,9 @@ publishes the docs site to GitHub Pages from `main` (the repository's Pages sour
 logs are public, so neither check prints what it matched. `main` takes changes only through a pull
 request with those checks green, CodeQL's results clean (`.github/workflows/codeql.yml`: the workflows, the
 console's JavaScript and the Python on every pull request, the app's Swift on a push to `main`, weekly and on a pull
-request that changes `app/`, since a macOS scan took 11-17 minutes for every pull request; no error alerts, no
+request that changes `app/`, since a macOS scan took 11-17 minutes for every pull request, and a pull request
+that does not gets main's latest Swift result carried over, since the ruleset needs every configuration main has
+("1 configuration not found" blocks the merge); no error alerts, no
 high or critical security alerts) and every review thread resolved (the ruleset also asks for a
 Copilot review on each push, which takes effect once Copilot code review is enabled for the
 organization), and then through the merge queue: `gh pr merge --squash` adds the pull request to the
