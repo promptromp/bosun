@@ -18,6 +18,14 @@
 
 VERSION="2.1.308"
 SANDBOX="$HOME/.sandbox/claude"
+
+# As Claude Code does (it runs on Bun, which cannot watch /dev/tty on macOS: kqueue, EINVAL): with its input
+# on /dev/tty it ends before it answers. get.sh starts `bosun init` on /dev/tty, so what init asks of it must
+# not inherit that (lib/claude_state.py, NO_TERMINAL). A window's terminal (a tmux pane) is not /dev/tty.
+if [ "$(tty 2>/dev/null)" = /dev/tty ]; then
+	echo "error: EINVAL: invalid argument, kqueue" >&2
+	exit 1
+fi
 BACKGROUND_COMMAND='sleep [0-9]+' # what it recognises in a prompt as its own background work
 BOSUN="$HOME/.local/bin/bosun"
 [ -x "$BOSUN" ] || BOSUN="bosun"
