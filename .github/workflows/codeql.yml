@@ -4,6 +4,11 @@
 # pull request waited for it. Here the languages that need no build (the workflows, the console's JavaScript, the
 # Python) are scanned on every pull request, in about a minute, and Swift on a push to main, weekly, and on a pull
 # request that changes app/ (or this file), the only ones whose Swift alerts can differ from main's.
+#
+# The ruleset's rule needs every configuration main has on the pull request too: a pull request without a Swift
+# result shows "1 configuration not found: /language:swift" and cannot merge (#69). So a pull request that does not
+# change app/ gets main's latest Swift result, carried over (its Swift code is main's), in about a minute; one when
+# main has none yet gets the scan.
 name: CodeQL
 
 on:
@@ -28,8 +33,12 @@ jobs:
   swift-changed:
     runs-on: ubuntu-latest
     timeout-minutes: 5
+    permissions:
+      contents: read
+      security-events: read # main's analyses, for the one to carry over
     outputs:
       scan: ${{ steps.changed.outputs.scan }}
+      carry: ${{ steps.changed.outputs.carry }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -41,6 +50,8 @@ jobs:
           EVENT: ${{ github.event_name }}
           BASE: ${{ github.event.pull_request.base.sha }}
           HEAD: ${{ github.event.pull_request.head.sha }}
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
         run: |
           set -u
           if [ "$EVENT" != pull_request ]; then
@@ -59,6 +70,18 @@ jobs:
               *) ;;
             esac
           done <<<"$files"
+          if [ "$scan" = false ]; then
+            # main's latest Swift analysis, to carry over; none (or an API that does not answer) scans
+            carry=$(gh api "repos/$REPO/code-scanning/analyses?ref=refs/heads/main&tool_name=CodeQL&per_page=100" \
+              --jq '[.[] | select(.category == "/language:swift")][0].id // empty' 2>/dev/null) || carry=""
+            if [ -z "$carry" ]; then
+              echo "main has no Swift result to carry over: scanning."
+              scan=true
+            else
+              echo "app/ unchanged: carrying main's Swift analysis $carry over."
+              echo "carry=$carry" >>"$GITHUB_OUTPUT"
+            fi
+          fi
           echo "scan=$scan" >>"$GITHUB_OUTPUT"
 
   analyze:
@@ -106,4 +129,31 @@ jobs:
         run: swift build --package-path app --product BosunMenu
       - uses: github/codeql-action/analyze@9b3254085494b55a0f7c4c2b3d2d52cc712ce370 # v4.39.1
         with:
+          category: /language:swift
+
+  # A pull request that does not change app/: main's latest Swift result, recorded for it, so the ruleset finds the
+  # configuration (its Swift code is main's, so the result is the same).
+  carry-swift:
+    name: Analyze (swift, carried over from main)
+    needs: swift-changed
+    if: ${{ needs.swift-changed.outputs.carry != '' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      security-events: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: main's Swift result
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          ANALYSIS: ${{ needs.swift-changed.outputs.carry }}
+        run: |
+          gh api -H "Accept: application/sarif+json" "repos/$REPO/code-scanning/analyses/$ANALYSIS" >"$RUNNER_TEMP/swift.sarif"
+      - uses: github/codeql-action/upload-sarif@9b3254085494b55a0f7c4c2b3d2d52cc712ce370 # v4.39.1
+        with:
+          sarif_file: ${{ runner.temp }}/swift.sarif
           category: /language:swift
