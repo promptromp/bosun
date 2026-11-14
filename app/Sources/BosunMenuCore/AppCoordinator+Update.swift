@@ -56,6 +56,7 @@ extension AppCoordinator {
   /// runs out and it is looked into. The grace's sleep is its own task, which leaving `starting` cancels; the
   /// work after it is never cancelled (it runs commands of its own).
   private func startUpdate(_ command: Command) async -> [UpdateEvent] {
+    updateStartedAt = now()
     let result = await cli.start(command)
     guard result.outcome == .started else { return [.startFailed(failureText(result))] }
     graceSleep?.cancel()
@@ -84,9 +85,13 @@ extension AppCoordinator {
   // MARK: outside a look
 
   /// Commands the status asked for (the check after an update has finished), run outside the look: one at
-  /// a time after the last, so a `git ls-remote` that hangs never holds a look.
+  /// a time after the last, so a `git ls-remote` that hangs never holds a look. With none, a failure the
+  /// status made (an update whose record says it did not finish) is still told.
   func runInBackground(_ commands: [Command]) {
-    guard !commands.isEmpty else { return }
+    guard !commands.isEmpty else {
+      surfaceFailureInBackground()
+      return
+    }
     let before = backgroundWork
     backgroundWork = Task {
       await before?.value

@@ -17,6 +17,7 @@
   "sentence": "bosun is running",
   "stopped": null,
   "update": {
+    "last": null,
     "state": "none",
     "waiting_for": []
   },

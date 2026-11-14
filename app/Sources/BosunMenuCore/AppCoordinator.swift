@@ -43,6 +43,8 @@ public final class AppCoordinator {
   /// The grace an `update --yes` was started with: its sleep, cancelled when the update leaves `starting`
   /// (so an earlier grace never fires for a later start), and the work that follows it.
   var graceSleep: Task<Void, any Error>?
+  /// When the app last started `update --yes`: a record that began before it is an earlier update's.
+  var updateStartedAt: Date?
   var graceWork: Task<Void, Never>?
 
   // Work that goes on outside a look, so a slow command never holds the next look. Each is chained after the
@@ -128,7 +130,7 @@ public final class AppCoordinator {
     guard flow.pollsStatus else { return }
     status = state
     if case .loaded(let snapshot, current: true) = state {
-      runInBackground(apply(snapshot.updateEvent))
+      runInBackground(updateEvents(snapshot).flatMap { apply($0) })
     }
     render()
     await followUpdate()
@@ -139,6 +141,15 @@ public final class AppCoordinator {
     }
     startAtLaunch(state)
     checkInBackground(reason)
+  }
+
+  /// What a status tells the update flow: whether an update runs, and, while the one the app started has not
+  /// shown, whether its record says it already ended.
+  private func updateEvents(_ snapshot: StatusSnapshot) -> [UpdateEvent] {
+    guard update.isStarting, let startedAt = updateStartedAt,
+      let end = endOfStartedUpdate(snapshot.update, startedAt: startedAt)
+    else { return [snapshot.updateEvent] }
+    return [snapshot.updateEvent, end]
   }
 
   /// The poller's cadence for the update's state: prompt looks while one is under way (`wantsPromptLooks`), so

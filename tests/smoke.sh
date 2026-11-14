@@ -2849,7 +2849,7 @@ away_from_midnight() {
   local now=$((10#$(date +%H%M)))
   [ "$now" -gt 30 ] && [ "$now" -lt 2359 ]
 }
-check "with no window open, outside the awake hours, it does not say bosun is running: it is resting, not stopped" awake_outside status_has 'd["windows"] == 0 and d["sentence"] != "bosun is running" and d["sentence"].startswith("bosun is resting") and d["stopped"] is None and d["update"] == {"state": "none", "waiting_for": []}'
+check "with no window open, outside the awake hours, it does not say bosun is running: it is resting, not stopped" awake_outside status_has 'd["windows"] == 0 and d["sentence"] != "bosun is running" and d["sentence"].startswith("bosun is resting") and d["stopped"] is None and d["update"] == {"state": "none", "waiting_for": [], "last": None}'
 if away_from_midnight; then
   check "... and inside them, a stop made today is stopped, the morning not paused, and nothing is wrong" awake_all_day status_has 'd["windows"] == 0 and d["level"] == "stopped" and d["sentence"].startswith("bosun is stopped (bosun stop at ") and d["stopped"]["morning_paused"] is False and d["problems"] == []'
 fi

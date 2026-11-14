@@ -87,6 +87,8 @@ class WhatTheAppReadsTest(unittest.TestCase):
                 "status-resting": "ok",
                 "status-running-error": "error",
                 "status-stopped": "stopped",
+                "status-update-done": "ok",
+                "status-update-failed": "ok",
                 "status-update-running": "ok",
                 "status-warning": "warning",
                 "status-windows-unreadable": "error",
@@ -96,6 +98,14 @@ class WhatTheAppReadsTest(unittest.TestCase):
         self.assertIn("did not finish", SAMPLES["status-quit-unfinished"]["sentence"])
         self.assertIn("resting until 08:00", SAMPLES["status-resting"]["sentence"])
         self.assertEqual(SAMPLES["status-update-running"]["update"]["state"], "running")
+
+    def test_status_tells_the_record_the_last_update_left(self) -> None:
+        self.assertIsNone(SAMPLES["status-ok"]["update"]["last"])
+        for name, step in (("status-update-done", "done"), ("status-update-failed", "restored")):
+            with self.subTest(name=name):
+                update = SAMPLES[name]["update"]
+                self.assertEqual((update["state"], update["last"]["step"]), ("none", step))
+                self.assertEqual(update["last"]["started_at"], "2026-11-11T09:59:30+00:00")
 
     def test_running_tells_a_bosun_to_start_from_one_that_runs_with_an_error(self) -> None:
         running = {name: SAMPLES[name]["running"] for name in names("status-")}
@@ -108,6 +118,8 @@ class WhatTheAppReadsTest(unittest.TestCase):
                 "status-resting": False,
                 "status-running-error": True,
                 "status-stopped": False,
+                "status-update-done": True,
+                "status-update-failed": True,
                 "status-update-running": True,
                 "status-warning": True,
                 "status-windows-unreadable": None,

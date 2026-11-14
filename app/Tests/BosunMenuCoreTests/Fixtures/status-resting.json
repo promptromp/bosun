@@ -13,6 +13,7 @@
   "sentence": "bosun is resting until 08:00",
   "stopped": null,
   "update": {
+    "last": null,
     "state": "none",
     "waiting_for": []
   },

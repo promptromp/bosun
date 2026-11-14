@@ -165,6 +165,14 @@ Calls made from the research and the builder check, to check while reading:
   the status cannot be read. The app does not watch the update's process for its end: `bosun update --yes` is left
   running detached, and the update can outlive it (an interrupted wait for the windows is carried on by the check-in
   loop), so the status stays what says the update is over.
+  An update that takes seconds can be over before any look sees it running, so the status also carries the record
+  the last update left (`update.last`: `id`, `started_at`, `step`; it stays after the update ends). The app notes
+  when it started `update --yes`; a status with no update running and a record that began at or after that time (up
+  to 2 seconds earlier: the record is to the second) ends "Updating…" at once: at `done`, or `agents` (past its
+  release, its windows left to the check-in loop), with a fresh check, as after an update seen running; at `failed`
+  or `restored` (bosun as it was) with "The update did not finish" and how to see why. Any other step ends nothing.
+  An update refused before it wrote a record (a quit in progress, say) leaves no such record: the 90-second grace
+  stays the fallback, and a record from an earlier update, which began before the start, is not taken for it.
 - **Version skew.** `bosun status --json` carries a `contract` number. An app that does not know the number says
   "bosun.app needs an update" in its status line and offers "Update bosun…" (which runs `bosun update`); a CLI that
   sees an older app than its checkout expects updates it (below).
@@ -181,7 +189,9 @@ Calls made from the research and the builder check, to check while reading:
 
 - **`bosun status --json`** (new, or the existing `bosun status` with `--json`): the level (`ok`, `warning`,
   `error`, `stopped`), the sentence and detail lines, the windows and how many wait for you, whether the windows
-  are open (`running`: false when none is, null when they could not be read), the keep-awake end, the update state (none, checking, available with version and notes, running with what it waits for), whether
+  are open (`running`: false when none is, null when they could not be read), the keep-awake end, the update state (none, checking, available with version and notes, running with what it waits for, and `last`: the
+  record the last update left, its `id`, `started_at` and `step`, or null; a field added under contract 1, which only
+  grows), whether
   bosun is stopped by a Quit and whether the morning start is paused, and the console's state. Its level comes
   from what the console's health view and the watchdog already compute (`lib/console_sessions.py`,
   `lib/watchdog.py`), in one pure function, so the menu, the console and the watchdog never disagree.

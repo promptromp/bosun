@@ -18,6 +18,7 @@
   "sentence": "bosun's windows could not be read",
   "stopped": null,
   "update": {
+    "last": null,
     "state": "none",
     "waiting_for": []
   },

@@ -93,7 +93,7 @@ class LevelsTestCase(unittest.TestCase):
         self.assertEqual(out["waiting"], [])
         self.assertIsNone(out["keep_awake_until"])
         self.assertIsNone(out["stopped"])
-        self.assertEqual(out["update"], {"state": "none", "waiting_for": []})
+        self.assertEqual(out["update"], {"state": "none", "waiting_for": [], "last": None})
         self.assertEqual(out["console"], {"running": False, "url": None})
 
     def test_a_warn_finding_is_a_warning(self) -> None:
@@ -326,13 +326,29 @@ class StateTestCase(unittest.TestCase):
     def test_an_update_running_is_still_ok_and_names_the_windows_it_waits_for(self) -> None:
         out = snap(update_running=True, update_waiting_for=("exporter", "docs"))
         self.assertEqual((out["level"], out["sentence"]), ("ok", "bosun is running"))
-        self.assertEqual(out["update"], {"state": "running", "waiting_for": ["exporter", "docs"]})
+        self.assertEqual(
+            out["update"], {"state": "running", "waiting_for": ["exporter", "docs"], "last": None}
+        )
         self.assertIn("An update is running, waiting for exporter, docs", out["detail"])
 
     def test_an_update_that_waits_for_nothing(self) -> None:
         out = snap(update_running=True)
-        self.assertEqual(out["update"], {"state": "running", "waiting_for": []})
+        self.assertEqual(out["update"], {"state": "running", "waiting_for": [], "last": None})
         self.assertIn("An update is running", out["detail"])
+
+    def test_the_record_the_last_update_left_is_told_after_it_ended(self) -> None:
+        last = menu_status.LastUpdate(id="u1", started_at="2026-11-11T09:59:30+00:00", step="done")
+        out = snap(update_last=last)
+        self.assertEqual(
+            out["update"],
+            {
+                "state": "none",
+                "waiting_for": [],
+                "last": {"id": "u1", "started_at": "2026-11-11T09:59:30+00:00", "step": "done"},
+            },
+        )
+        self.assertEqual(out["level"], "ok")
+        self.assertNotIn("An update is running", out["detail"])
 
     def test_windows_waiting_at_a_prompt_are_named_and_counted(self) -> None:
         windows = [window("orch"), window("exporter", "waiting"), window("docs", "waiting")]
@@ -793,8 +809,18 @@ class GatherTestCase(unittest.TestCase):
             found = self.gather()
         self.assertTrue(found.update_running)
         self.assertEqual(found.update_waiting_for, ("exporter",))
-        # the record of an update that is not running names nobody to wait for
-        self.assertEqual(self.gather().update_waiting_for, ())
+        self.assertEqual(found.update_last, menu_status.LastUpdate("u1", "2026-11-11T09:00:00", "agents"))
+        # the record of an update that is not running names nobody to wait for, and is still told
+        after = self.gather()
+        self.assertEqual(after.update_waiting_for, ())
+        self.assertEqual(after.update_last, menu_status.LastUpdate("u1", "2026-11-11T09:00:00", "agents"))
+
+    def test_no_record_or_one_that_cannot_be_read_tells_no_last_update(self) -> None:
+        self.assertIsNone(self.gather().update_last)
+        (self.state / update_state.STATE_FILE).write_text("{not json")
+        found = self.gather()
+        self.assertIsNone(found.update_last)
+        self.assertEqual(found.errors, {})
 
     def test_an_unreadable_state_folder_part_does_not_stop_the_rest(self) -> None:
         (self.state / "logs").rmdir()

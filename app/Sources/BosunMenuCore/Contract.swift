@@ -130,6 +130,23 @@ extension UpdateRun: Decodable {
 public struct UpdateProgress: Decodable, Equatable, Sendable {
   public let state: UpdateRun
   public let waitingFor: [String]
+  /// The record the last update left, which stays after it ended; nil when there is none (or a bosun that
+  /// does not say).
+  public let last: LastUpdate?
+}
+
+/// `update.last`: which update, when it started (UTC, ISO 8601 to the second), and the step it is at or
+/// ended at (one of bosun's `update_state.STEPS`, or a newer bosun's).
+public struct LastUpdate: Decodable, Equatable, Sendable {
+  public let id: String
+  public let startedAt: String
+  public let step: String
+
+  public init(id: String, startedAt: String, step: String) {
+    self.id = id
+    self.startedAt = startedAt
+    self.step = step
+  }
 }
 
 public struct ConsoleStatus: Decodable, Equatable, Sendable {
