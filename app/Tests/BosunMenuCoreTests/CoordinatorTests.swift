@@ -295,7 +295,7 @@ import Testing
     await world.refresh(.launch)
     world.ui.answer("Open acme-exporter")
     await world.coordinator.perform(.showProblems)
-    #expect(world.ui.lastSpec?.buttons == ["Open acme-exporter", "OK"])
+    #expect(world.ui.lastSpec?.buttons == ["OK", "Open acme-exporter"])
     #expect(world.scripts.written == [["attach", "acme-exporter"]])
     #expect(world.ui.opened == [URL(fileURLWithPath: "/tmp/bosun-app/bosun-attach.command")])
   }
