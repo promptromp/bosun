@@ -41,6 +41,8 @@ public final class AppCoordinator {
   public internal(set) var settings: SettingsState?
   /// A Save runs: a second one is not started.
   var settingsBusy = false
+  /// How many times bosun's settings were read: each reading's number (`SettingsState.read`).
+  var settingsReads = 0
   /// Whether the poller looks every few seconds (an update under way) rather than every 30: see `followUpdate`.
   public private(set) var looksPromptly = false
 

@@ -43,12 +43,16 @@ public struct SettingsState: Equatable, Sendable {
   public let message: String?
   /// A set is running: the form is disabled.
   public let busy: Bool
+  /// Which reading of bosun's settings this is: each `settings get` (each Settings…, and the read after each Save)
+  /// is a new one, after which the Schedule pane starts again from what bosun read (`ScheduleDraft.next`).
+  public let read: Int
 
-  public init(view: SettingsView?, openAtLogin: Bool, message: String?, busy: Bool) {
+  public init(view: SettingsView?, openAtLogin: Bool, message: String?, busy: Bool, read: Int = 0) {
     self.view = view
     self.openAtLogin = openAtLogin
     self.message = message
     self.busy = busy
+    self.read = read
   }
 
   /// Whether a change is to be made in Terminal: it moves the wake (the days or the start time) while the wake
@@ -59,7 +63,36 @@ public struct SettingsState: Equatable, Sendable {
 
   /// The state while an edit runs: the form disabled, the last message gone.
   public func starting() -> SettingsState {
-    SettingsState(view: view, openAtLogin: openAtLogin, message: nil, busy: true)
+    SettingsState(view: view, openAtLogin: openAtLogin, message: nil, busy: true, read: read)
+  }
+
+  /// What bosun read for `key`.
+  public func value(_ key: String) -> String? {
+    view?.settings[key]?.value
+  }
+
+  /// Whether bosun starts at login, as bosun read it, and the edit General's switch for it makes.
+  public var startsAtLogin: Bool { value(SettingKey.startAtLogin) == "1" }
+
+  public func startAtLoginEdit(_ on: Bool) -> SettingsEdit {
+    .values([SettingKey.startAtLogin: on ? "1" : "0"])
+  }
+
+  /// The schedule as bosun read it, said back: never the draft that is not saved.
+  public var scheduleLine: String? {
+    view.map(ScheduleDraft.init)?.summary
+  }
+
+  /// Whether the Schedule pane's Save is offered for `draft`: nothing running, and a change bosun can take.
+  public func canSave(_ draft: ScheduleDraft?) -> Bool {
+    guard !busy, let draft, let view else { return false }
+    return draft.canSave(view)
+  }
+
+  /// The edit the Schedule pane's Save makes: only what changed.
+  public func saveEdit(_ draft: ScheduleDraft?) -> SettingsEdit? {
+    guard canSave(draft), let draft, let view else { return nil }
+    return .values(draft.changes(from: view))
   }
 
   /// How the row of `key` shows.

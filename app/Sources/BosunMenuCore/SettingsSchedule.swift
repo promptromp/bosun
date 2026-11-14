@@ -106,4 +106,16 @@ public struct ScheduleDraft: Equatable, Sendable {
   public func canSave(_ view: SettingsView) -> Bool {
     problem == nil && !changes(from: view).isEmpty
   }
+
+  /// The draft the Schedule pane shows once `state` comes: started again from what bosun read on each new reading
+  /// (a Settings…, the read after a Save, refused or not), so the pane never shows an edit bosun did not take; kept
+  /// while the reading is the same (a Save under way, Open at Login switched, a change handed to Terminal, whose
+  /// message says it is to be finished there); none while there is nothing read.
+  public static func next(_ draft: Self?, from old: SettingsState?, to state: SettingsState) -> Self? {
+    guard let view = state.view else { return nil }
+    guard let draft, let old, old.read == state.read, old.view == view else {
+      return ScheduleDraft(view: view)
+    }
+    return draft
+  }
 }

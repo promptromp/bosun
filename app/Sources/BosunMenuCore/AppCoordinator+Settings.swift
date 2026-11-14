@@ -65,14 +65,17 @@ extension AppCoordinator {
   /// menu says). A read that fails shows no values (unknown), and says why.
   private func readSettings(after said: String? = nil) async -> SettingsState {
     await readLogin()
+    settingsReads += 1
     let state: SettingsState
     switch await fetch(SettingsView.self, Bosun.settingsGet, via: cli) {
     case .success(let view):
-      state = SettingsState(view: view, openAtLogin: login, message: said, busy: false)
+      state = SettingsState(
+        view: view, openAtLogin: login, message: said, busy: false, read: settingsReads)
     case .failure(let failure):
       let lines = [said, failure.message].compactMap { $0 }
       state = SettingsState(
-        view: nil, openAtLogin: login, message: lines.joined(separator: "\n"), busy: false)
+        view: nil, openAtLogin: login, message: lines.joined(separator: "\n"), busy: false,
+        read: settingsReads)
     }
     return shown(state)
   }
@@ -88,10 +91,10 @@ extension AppCoordinator {
 
 extension SettingsState {
   func with(openAtLogin: Bool) -> SettingsState {
-    SettingsState(view: view, openAtLogin: openAtLogin, message: message, busy: busy)
+    SettingsState(view: view, openAtLogin: openAtLogin, message: message, busy: busy, read: read)
   }
 
   func with(message: String?) -> SettingsState {
-    SettingsState(view: view, openAtLogin: openAtLogin, message: message, busy: busy)
+    SettingsState(view: view, openAtLogin: openAtLogin, message: message, busy: busy, read: read)
   }
 }

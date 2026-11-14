@@ -216,3 +216,75 @@ private func state(_ view: SettingsView?) -> SettingsState {
     #expect(blank.changes(from: unreadable).isEmpty)
   }
 }
+
+@Suite struct SettingsWindowRulesTests {
+  private func read(_ view: SettingsView?, _ number: Int, message: String? = nil) -> SettingsState {
+    SettingsState(view: view, openAtLogin: true, message: message, busy: false, read: number)
+  }
+
+  /// A draft with an edit bosun has not taken.
+  private func edited(_ view: SettingsView) -> ScheduleDraft {
+    var draft = ScheduleDraft(view: view)
+    draft.start = TimeOfDay(hour: 9, minute: 0)
+    draft.days[5] = true
+    return draft
+  }
+
+  @Test func aNewReadingStartsTheDraftAgainFromWhatBosunRead() throws {
+    let fresh = try view()
+    let draft = ScheduleDraft.next(
+      edited(fresh), from: read(fresh, 1), to: read(fresh, 2, message: "refused"))
+    #expect(draft == ScheduleDraft(view: fresh))
+  }
+
+  @Test func theSameReadingKeepsTheDraft() throws {
+    let fresh = try view()
+    let first = read(fresh, 1)
+    #expect(ScheduleDraft.next(edited(fresh), from: first, to: first.starting()) == edited(fresh))
+    let handedOff = read(fresh, 1, message: "Finish the change in Terminal")
+    #expect(ScheduleDraft.next(edited(fresh), from: first, to: handedOff) == edited(fresh))
+  }
+
+  @Test func aFirstStateOrAnotherViewStartsTheDraftAndNoViewHasNone() throws {
+    let fresh = try view()
+    #expect(ScheduleDraft.next(nil, from: nil, to: read(fresh, 1)) == ScheduleDraft(view: fresh))
+    #expect(ScheduleDraft.next(edited(fresh), from: nil, to: read(fresh, 1)) == ScheduleDraft(view: fresh))
+    let other = try view(key: SettingKey.startTime, value: "07:00")
+    #expect(
+      ScheduleDraft.next(edited(fresh), from: read(fresh, 1), to: read(other, 1))
+        == ScheduleDraft(view: other))
+    #expect(ScheduleDraft.next(edited(fresh), from: read(fresh, 1), to: read(nil, 2)) == nil)
+  }
+
+  @Test func theScheduleLineFollowsTheReadNotTheDraft() throws {
+    let state = read(try view(), 1)
+    #expect(state.scheduleLine == "bosun starts at 08:30 on weekdays, and lets the Mac sleep after 20:00")
+    #expect(read(nil, 1).scheduleLine == nil)
+    #expect(read(try Fixtures.decode(SettingsView.self, "settings-get-unreadable"), 1).scheduleLine == nil)
+  }
+
+  @Test func startingAtLoginIsOneOrZero() throws {
+    let state = read(try view(), 1)
+    #expect(state.startsAtLogin)
+    #expect(!read(try view(key: SettingKey.startAtLogin, value: "0"), 1).startsAtLogin)
+    #expect(state.startAtLoginEdit(false) == .values([SettingKey.startAtLogin: "0"]))
+    #expect(state.startAtLoginEdit(true) == .values([SettingKey.startAtLogin: "1"]))
+    #expect(state.value(SettingKey.updateChannel) == "main")
+    #expect(read(nil, 1).value(SettingKey.updateChannel) == nil)
+  }
+
+  @Test func saveIsOfferedForAChangeBosunCanTakeWhileNothingRuns() throws {
+    let fresh = try view()
+    let state = read(fresh, 1)
+    #expect(!state.canSave(ScheduleDraft(view: fresh)))
+    #expect(!state.canSave(nil))
+    #expect(state.canSave(edited(fresh)))
+    #expect(!state.starting().canSave(edited(fresh)))
+    #expect(!read(nil, 1).canSave(edited(fresh)))
+    #expect(
+      state.saveEdit(edited(fresh))
+        == .values([SettingKey.startTime: "09:00", SettingKey.days: "MTWRFS"]))
+    #expect(state.saveEdit(ScheduleDraft(view: fresh)) == nil)
+    #expect(state.starting().saveEdit(edited(fresh)) == nil)
+  }
+}

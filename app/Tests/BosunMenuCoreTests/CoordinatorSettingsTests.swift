@@ -215,4 +215,62 @@ private func settingsCommands(_ world: World) async -> [[String]] {
     _ = try await apply(world, .openConfigFolder)
     #expect(world.ui.opened.isEmpty)
   }
+
+  // MARK: the Schedule pane's draft over what the coordinator answers
+
+  /// The window's draft with an edit, as the person left it before Save.
+  private func edited(_ state: SettingsState) throws -> ScheduleDraft {
+    var draft = try #require(ScheduleDraft.next(nil, from: nil, to: state))
+    draft.start = TimeOfDay(hour: 9, minute: 0)
+    return draft
+  }
+
+  @Test func afterARefusalTheDraftIsWhatBosunReadAgain() async throws {
+    let world = try await opened()
+    let shown = try #require(world.ui.settingsShown.last)
+    let draft = try edited(shown)
+    let values = [SettingKey.awakeUntil: "25:00"]
+    await world.reply(Bosun.settingsSet(values), exited(2, try Fixtures.text("settings-set-refused")))
+    let refused = try await apply(world, .values(values))
+    let fresh = try #require(refused.view)
+    #expect(ScheduleDraft.next(draft, from: shown, to: refused) == ScheduleDraft(view: fresh))
+    #expect(refused.scheduleLine == "bosun starts at 08:30 on weekdays, and lets the Mac sleep after 20:00")
+  }
+
+  @Test func aReopenWithTheSameValuesStartsTheDraftAgain() async throws {
+    let world = try await opened()
+    let first = try #require(world.ui.settingsShown.last)
+    let draft = try edited(first)
+    await world.coordinator.perform(.settings)
+    let second = try #require(world.ui.settingsShown.last)
+    #expect(second.view == first.view)
+    #expect(
+      ScheduleDraft.next(draft, from: first, to: second) == ScheduleDraft(view: try #require(second.view)))
+  }
+
+  @Test func afterATerminalHandOffTheNextReadStartsTheDraftAgain() async throws {
+    let world = try await opened()
+    let first = try #require(world.ui.settingsShown.last)
+    let draft = try edited(first)
+    let handedOff = try await apply(world, .values([SettingKey.startTime: "09:00"]))
+    #expect(handedOff.message == AppCoordinator.finishInTerminal)
+    #expect(handedOff.scheduleLine == first.scheduleLine)
+    let kept = ScheduleDraft.next(draft, from: first, to: handedOff)
+    #expect(kept == draft)
+    // sudo cancelled in Terminal: bosun.env is as it was, and the next Settings… shows it
+    await world.coordinator.perform(.settings)
+    let reread = try #require(world.ui.settingsShown.last)
+    #expect(
+      ScheduleDraft.next(kept, from: handedOff, to: reread) == ScheduleDraft(view: try #require(reread.view)))
+    #expect(reread.message == nil)
+  }
+
+  @Test func eachReadIsANewReading() async throws {
+    let world = try await opened()
+    let first = try #require(world.ui.settingsShown.last)
+    let busy = first.starting()
+    #expect(busy.read == first.read)
+    await world.coordinator.perform(.settings)
+    #expect(try #require(world.ui.settingsShown.last).read == first.read + 1)
+  }
 }

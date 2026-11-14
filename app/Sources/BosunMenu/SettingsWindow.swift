@@ -6,7 +6,8 @@ import SwiftUI
 // the state and calls back with a `SettingsEdit`; what is shown, what a Save sends and what is said back are the
 // core's (Settings.swift, SettingsSchedule.swift), carried out by the coordinator (AppCoordinator+Settings.swift).
 
-/// What the window shows, and where its edits go.
+/// What the window shows, and where its edits go. What the Schedule pane's draft becomes, what Save sends and
+/// what each switch means are the core's (`ScheduleDraft.next`, `SettingsState.saveEdit`, `startAtLoginEdit`).
 @MainActor
 final class SettingsModel: ObservableObject {
   @Published private(set) var state: SettingsState
@@ -17,16 +18,12 @@ final class SettingsModel: ObservableObject {
   init(state: SettingsState, apply: @escaping @MainActor (SettingsEdit) async -> SettingsState) {
     self.state = state
     self.apply = apply
-    draft = state.view.map(ScheduleDraft.init)
+    draft = ScheduleDraft.next(nil, from: nil, to: state)
   }
 
-  /// Shows `state`; the Schedule pane's draft starts again from what bosun read when that changed.
   func show(_ state: SettingsState) {
-    // every render passes the coordinator's state on: the same one again changes nothing
-    if state == self.state { return }
-    let readAgain = state.view != self.state.view
+    draft = ScheduleDraft.next(draft, from: self.state, to: state)
     self.state = state
-    if readAgain || draft == nil { draft = state.view.map(ScheduleDraft.init) }
   }
 
   func send(_ edit: SettingsEdit) {
@@ -34,19 +31,8 @@ final class SettingsModel: ObservableObject {
     Task { show(await apply(edit)) }
   }
 
-  /// What bosun read for `key`.
-  func value(_ key: String) -> String? {
-    state.view?.settings[key]?.value
-  }
-
   func saveSchedule() {
-    guard let draft, let view = state.view else { return }
-    send(.values(draft.changes(from: view)))
-  }
-
-  var canSaveSchedule: Bool {
-    guard let draft, let view = state.view else { return false }
-    return !state.busy && draft.canSave(view)
+    if let edit = state.saveEdit(draft) { send(edit) }
   }
 }
 
@@ -159,8 +145,8 @@ struct GeneralPane: View {
       Toggle(
         label,
         isOn: Binding(
-          get: { model.value(SettingKey.startAtLogin) == "1" },
-          set: { model.send(.values([SettingKey.startAtLogin: $0 ? "1" : "0"])) }))
+          get: { model.state.startsAtLogin },
+          set: { model.send(model.state.startAtLoginEdit($0)) }))
     }
   }
 
@@ -169,7 +155,7 @@ struct GeneralPane: View {
       Picker(
         "Updates from",
         selection: Binding(
-          get: { model.value(SettingKey.updateChannel) ?? "" },
+          get: { model.state.value(SettingKey.updateChannel) ?? "" },
           set: { model.send(.values([SettingKey.updateChannel: $0])) })
       ) {
         Text("Releases").tag("releases")
@@ -203,11 +189,13 @@ struct SchedulePane: View {
         }
       }
       Section {
-        if let line = model.draft?.problem ?? model.draft?.summary { Text(line).foregroundStyle(.secondary) }
+        if let line = model.draft?.problem ?? model.state.scheduleLine {
+          Text(line).foregroundStyle(.secondary)
+        }
         HStack {
           Spacer()
           Button("Save") { model.saveSchedule() }
-            .disabled(!model.canSaveSchedule)
+            .disabled(!model.state.canSave(model.draft))
             .keyboardShortcut(.defaultAction)
         }
       }
