@@ -2468,6 +2468,17 @@ check "the loop waits one interval before the first check-in" bash -c '
   BOSUN_CHECKIN_MINUTES=1 "$1" checkin --loop >"$2" 2>&1 & pid=$!
   sleep 2; kill $pid 2>/dev/null; pkill -P $pid 2>/dev/null; wait $pid 2>/dev/null
   [ ! -s "$2" ]' _ "$BOSUN" "$WORK/checkin-loop.out"
+check "with events on, the dispatcher runs as the loop starts, not an interval later" bash -c '
+  state="$3/events/state.json"; before="$(grep -o "\"last_tick\": *\"[^\"]*\"" "$state" 2>/dev/null)"
+  BOSUN_CHECKIN_MINUTES=60 BOSUN_EVENTS_ENABLED=1 BOSUN_EVENTS_INTERVAL_SECONDS=600 "$1" checkin --loop >"$2" 2>&1 & pid=$!
+  ran=0
+  for _ in $(seq 1 40); do
+    now="$(grep -o "\"last_tick\": *\"[^\"]*\"" "$state" 2>/dev/null)"
+    if [ -n "$now" ] && [ "$now" != "$before" ]; then ran=1; break; fi
+    sleep 0.5
+  done
+  kill $pid 2>/dev/null; pkill -P $pid 2>/dev/null; wait $pid 2>/dev/null
+  [ "$ran" = 1 ]' _ "$BOSUN" "$WORK/events-start.out" "$BOSUN_STATE_DIR"
 check "one check-in refuses while check-ins are off" fails_with "check-ins are disabled" env BOSUN_CHECKIN_MINUTES=0 "$BOSUN" checkin
 check "the loop refuses with check-ins off unless events run without them" fails_with "BOSUN_EVENTS_WITHOUT_CHECKINS=1 keeps the loop" env BOSUN_CHECKIN_MINUTES=0 BOSUN_EVENTS_ENABLED=1 "$BOSUN" checkin --loop
 check "with events alone the loop keeps running and sends no check-in" bash -c '
