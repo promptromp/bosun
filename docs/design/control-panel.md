@@ -185,8 +185,8 @@ item (⌘,), in a window titled "<App> Settings", with panes only when there are
   scheduled day, quit paused, stopped today, running, the setting off, a reload); the wizard's question; the app's
   states, Stop and Quit flows and the Settings model.
 - Smoke: `bosun settings` round trips in the hermetic HOME; the login job's plist renders and loads with the fakes.
-- The Mac VM (`tests/sandbox.sh mac app`): a restart in hours starts bosun, one outside the hours shows "Resting"
-  with the next start, a Stop leaves the panel, Quit leaves bosun running, a Settings change of the start time moves
+- The Mac VM (`tests/sandbox.sh mac app`): a restart in hours starts bosun, outside the hours (made so by moving
+  the hours, without a restart: "Changes while building") it shows "Resting" with the next start, a Stop leaves the panel, Quit leaves bosun running, a Settings change of the start time moves
   the morning job, and a reload of the jobs after a Stop starts nothing.
 
 ## Left to the builder
@@ -218,8 +218,9 @@ The builder's calls on what the note left open, and the rulings made while build
   default beside it), never the default as the value; the Settings window shows those as values it cannot show.
 - **A Save that moves bosun's wake** goes to Terminal (`bosun settings set` there asks for the password, `sudo -v`,
   and writes nothing when that fails); the window says to finish it there, and shows what bosun read before.
-  Without a terminal to ask in, `settings set` moves the wake only where sudo needs no password (`sudo -n -v`), and
-  refuses otherwise. A failed `pmset` or reload puts `bosun.env` back from the backup the writer made.
+  Without a terminal to ask in, `settings set` moves the wake only when `sudo -n -v` succeeds, and refuses
+  otherwise: that fails whenever a sudoers rule that matches needs a password, even where a rule without one would
+  let `sudo pmset` run. A failed `pmset` or reload puts `bosun.env` back from the backup the writer made.
 - **The Settings window is SwiftUI in the AppKit app** (`app/Sources/BosunMenu/SettingsWindow.swift`), its state
   and its Schedule draft in the core (`Settings.swift`, `SettingsSchedule.swift`), so a refused Save, a hand-off to
   Terminal and a reopen all show what bosun read, never an unsaved draft. The window reads bosun again each time it
@@ -231,5 +232,6 @@ The builder's calls on what the note left open, and the rulings made while build
   Quit…", whose failure is "Quit did not finish").
 - **The Mac VM run** sets the clone's time zone so that its local time is about noon, since the restart in the
   hours and the watchdog's held alert depend on the hour; for Resting it moves the hours (a Save of
-  `BOSUN_AWAKE_UNTIL` an hour back), not the clock, since launchd keeps the zone it started with until the restart
-  and ran the morning job when the clock passed its time in that zone.
+  `BOSUN_AWAKE_UNTIL` an hour back), not the clock, since launchd most likely keeps the zone it started with until
+  the restart, and ran the morning job when the clock passed its time in that zone (inferred: the clone was gone
+  and there was no morning log to confirm it).

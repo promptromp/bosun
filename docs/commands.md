@@ -64,7 +64,8 @@ bosun settings set BOSUN_UPDATE_CHANNEL=main --json
   now is outside every window.
 - **The wake**: when the days or the start time change and the Mac's repeating wake is bosun's, `set` asks for your
   password first (`sudo -v`) and moves it with `sudo pmset repeat wakeorpoweron`. Without a terminal to ask in it is
-  refused (unless sudo needs no password), and when sudo is cancelled or fails nothing is written. pmset keeps one
+  refused unless `sudo -n -v` succeeds (it fails whenever a sudoers rule that matches needs a password, even where
+  one without would let `sudo pmset` run), and when sudo is cancelled or fails nothing is written. pmset keeps one
   repeating event: another app's is left as it is, and said, unless `--replace-wake`. If pmset or the reload of the
   jobs fails, `bosun.env` is put back from the backup that write made (or removed, when the write made it) and the
   jobs reloaded again, so the file, the jobs and the wake stay together; it fails in one line that says so.

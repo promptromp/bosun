@@ -150,9 +150,10 @@ Waking *before* the job would leave a gap in which an unattended Mac can doze of
 so that launchd, not the caller, is the parent of what the morning run starts. With `BOSUN_START_AT_LOGIN=1`
 (the default for a new setup; an install from before the setting keeps it at `0`), a last job,
 `<BOSUN_LAUNCHD_LABEL>.login`, runs `bosun morning --at-login` when you log in: bosun starts then if it is one of
-your days and inside your hours (`BOSUN_START_TIME` to `BOSUN_AWAKE_UNTIL`), you have not stopped or quit it
-today, and it is not running already (a run launchd started counts); otherwise it logs why not (the day's
-morning log) and does nothing. With `BOSUN_START_AT_LOGIN=0` there is no such job: bosun starts at the morning
+your days and inside your hours (`BOSUN_START_TIME` to `BOSUN_AWAKE_UNTIL`), you have not quit it with the
+morning start paused (on any day, until you start it again) or stopped it earlier the same day, and it is not
+running already (a run launchd started counts); otherwise it logs why not (the day's morning log) and does
+nothing. With `BOSUN_START_AT_LOGIN=0` there is no such job: bosun starts at the morning
 time or from Start. Reloading the jobs (an update, `install.sh`) makes launchd run the login job too; a
 marker the reload leaves (`login-reload` in the state folder) tells the run it is not a login.
 [`bosun uninstall`](#uninstall) reverses it. A checkout of your own like this one updates with git, not
@@ -247,7 +248,8 @@ The items:
   Update Now, Remind Me Later and Skip This Version. Update Now shows what `bosun update` would do (which windows
   restart, which ask you first) and then runs it; while it waits for a quiet moment the item reads "Updating...
   waiting for N windows". `bosun update` stays the one updater, of bosun and of the app.
-- **Open Console** opens the web console, signed in, in your browser. It is greyed while bosun is stopped.
+- **Open Console** opens the web console, signed in, in your browser. It is greyed while the console is not
+  running (`console.running` in `bosun status --json`).
 - **Settings...** (⌘,) opens the bosun Settings window: [Settings](#settings).
 - **Help** has "bosun Guide" (a web page), "Run bosun doctor", "Show Logs" (greyed when bosun has logged nothing)
   and **"Uninstall bosun..."**, which opens Terminal running `bosun uninstall` after a confirmation, so its
@@ -305,8 +307,8 @@ not after a quit that did not finish.
 
 The app opens at login when Open at Login is on (Settings, General): it only shows the icon. Starting bosun at login
 is bosun's own login job (`BOSUN_START_AT_LOGIN`, which [Install](#install) describes), so it works without the app:
-when you log in on one of your days, inside your hours, and you have not stopped or quit bosun today and it is not
-running already, it starts, and the morning log says "starting bosun: you logged in during your hours"; otherwise
+when you log in on one of your days, inside your hours, you have not quit bosun with the morning start paused (on
+any day, until you start it again) or stopped it earlier the same day, and it is not running already, it starts, and the morning log says "starting bosun: you logged in during your hours"; otherwise
 the log says why not. A reload of bosun's jobs (an update, `install.sh`) never starts it.
 
 ### Settings

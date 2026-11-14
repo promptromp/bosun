@@ -182,7 +182,8 @@ Calls made from the research and the builder check, to check while reading:
   sees an older app than its checkout expects updates it (below).
 - **Opening it.** Opened by you (Finder, Spotlight, Launchpad): if bosun is not running and no window is open (stopped or quit, or red with `running` false), it runs `bosun morning --now --background` (as Start does), then shows
   the menu bar icon. Opened at login (its launchd job passes `--at-login`): it only shows the icon; bosun's own
-  morning job starts bosun at its time. Opened while running: macOS brings up the running copy, which does nothing
+  jobs start bosun: the morning job at its time, and with `BOSUN_START_AT_LOGIN=1` the login job at login, inside
+  your hours (docs/design/control-panel.md, "Start at login"). Opened while running: macOS brings up the running copy, which does nothing
   new.
 - **Open at Login.** A LaunchAgent bosun renders like its others (`templates/launchd-app.plist`, RunAtLoad, not
   KeepAlive, `AbandonProcessGroup` true so that quitting the app never takes with it what it started, an update),

@@ -342,9 +342,10 @@ most change what the watcher lists, which code checks against the permalink form
 start, and which the orchestrator re-reads.
 
 **Cost.** A call with nothing new (a 30-minute window, the four searches) cost $0.017 with haiku; one
-that found 7 messages over 12 hours $0.067. Every 15 minutes over a 12-hour awake window that is 48 calls,
-so roughly $0.50 to $1 a day; `BOSUN_SLACK_WATCH_MAX_USD_PER_CALL` (0.25) and
-`..._MAX_USD_PER_DAY` (1.5) cap it. Each delivery is still one orchestrator turn, under the
+that found 7 messages over 12 hours $0.067. The watcher runs whenever the session does, all night on a Mac that
+stays awake, so every 15 minutes that is up to 96 calls a day, roughly $1 to $2; `BOSUN_SLACK_WATCH_MAX_USD_PER_CALL`
+(0.25) and `..._MAX_USD_PER_DAY` (1.5) cap it, and the night's calls come out of the same daily budget, so on a
+Mac that stays awake the daily cap may need raising for the day's calls to have room. Each delivery is still one orchestrator turn, under the
 dispatcher's own gates and daily cap.
 
 **State and failures.** `$BOSUN_STATE_DIR/slack-watch/state.json`: the watermark, when the

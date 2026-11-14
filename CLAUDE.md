@@ -209,7 +209,8 @@ of truth, so don't copy rules into this file.
   (pure: the level, sentence and lines from the watchdog's checks and its gate on a missing session
   (`watchdog.session_gate_kind`), `console_sessions.waiting_in` and the quit record, `snapshot`; its `CONTRACT` only grows) and `lib/menu_status_live.py` (its only I/O, through
   `console_live`'s readers; the command, which always prints the object). The keep-awake end is
-  `keep-awake-<session>.json`, written by `libexec/bosun-morning` and removed by `bosun stop`, read by
+  `keep-awake-<session>.json`, written by `record_keep_awake` in `lib/common.sh` (by `bosun morning`, and by
+  `bosun settings set` when a new until moves a running keep-awake's end) and removed by `bosun stop`, read by
   `lib/keep_awake.py` (status and quit). The app's Start is `bosun morning --now --background`, which only
   kickstarts the `.now` job (`now_label`, `templates/launchd-now.plist`, which runs `morning --now`) so that launchd
   and not the app is the parent of what the run starts; the morning logic stays in the `--now` path. `bosun update`

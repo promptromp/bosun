@@ -108,8 +108,8 @@ set_env() { # <KEY> <value>: in bosun.env, as bosun init writes it (replaced, or
 # The Mac's time zone, chosen so that its local time is about noon whatever the hour the run starts at: the schedule
 # below is all day but for the night, and the checks that the hours decide (the watchdog's alert held no longer, the
 # restart in the hours that starts bosun at login) must not depend on when the run happens. Etc/GMT-N is N hours
-# ahead of UTC (POSIX's sign). launchd goes on with the zone it started with until the restart, so the run never
-# moves the clock.
+# ahead of UTC (POSIX's sign). launchd most likely goes on with the zone it started with until the restart (inferred,
+# not seen), so the run never moves the clock.
 about_noon() { [ "$((10#$(date +%H)))" -ge 11 ] && [ "$((10#$(date +%H)))" -le 13 ]; }
 pin_the_hour() {
   local offset zone
@@ -577,8 +577,9 @@ save_until() {
   check "... and the window shows $1" wait_for 30 menu_says ".settings.values.BOSUN_AWAKE_UNTIL == \"$1\""
 }
 
-# Outside the hours by moving the hours, not the clock: launchd keeps the time zone it started with until the
-# restart (pin_the_hour changed it under it), so a clock moved past a job's time in either zone would run that job.
+# Outside the hours by moving the hours, not the clock: launchd most likely keeps the time zone it started with until
+# the restart (pin_the_hour changed it under it; inferred, not seen), so a clock moved past a job's time in either
+# zone would run that job.
 step_11() {
   local until expected
   until="$(date -v-1H +%H:%M)"
@@ -685,7 +686,7 @@ step_9() {
   echo "9. the app moved to the Trash: the watchdog says so; bosun uninstall leaves nothing"
   check "with the app in ~/Applications the watchdog's app-missing check finds nothing" bash -c '"$1" watchdog --status 2>&1 | grep -i "app-missing" | grep -qi "is in ~/Applications"' _ "$BOSUN"
   mv "$APP" "$trash/bosun.app"
-  check "moved to the Trash, the watchdog's app-missing check finds it gone (its alert, held no longer: the schedule is all day)" bash -c '"$1" watchdog --dry-run 2>&1 | tee "$2" | grep -q "bosun.app is not in ~/Applications"' _ "$BOSUN" "$OUT/watchdog-dry.txt"
+  check "moved to the Trash, the watchdog's app-missing check finds it gone (its alert, held no longer: now is inside the hours, 03:00 to 23:59)" bash -c '"$1" watchdog --dry-run 2>&1 | tee "$2" | grep -q "bosun.app is not in ~/Applications"' _ "$BOSUN" "$OUT/watchdog-dry.txt"
   sed 's/^/  note  /' "$OUT/watchdog-dry.txt"
   check "bosun watchdog --once records and sends it: app-missing is alerted" bash -c '"$1" watchdog --once >"$2" 2>&1; grep -q "app-missing" "$3/watchdog.json"' _ "$BOSUN" "$OUT/watchdog-once.txt" "$STATE"
   sed 's/^/  note  /' "$OUT/watchdog-once.txt"

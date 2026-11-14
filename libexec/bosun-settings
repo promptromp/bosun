@@ -21,7 +21,7 @@
 #         does. Then what the change needs: bosun's launchd jobs reloaded (the morning job at its new time),
 #         the Mac's repeating wake moved (sudo pmset) when the days or the start time change and the wake is
 #         bosun's, and a running keep-awake's end moved with BOSUN_AWAKE_UNTIL. Moving the wake asks for your
-#         password first (sudo -v; without a terminal to ask in, it is refused unless sudo needs none), and
+#         password first (sudo -v; without a terminal to ask in, it is refused unless sudo -n -v succeeds), and
 #         when that is cancelled or fails nothing is written. If pmset or the reload fails, bosun.env is put
 #         back from the backup the write made (or removed, if the write made it) and the jobs reloaded again.
 #         Another app's repeating wake is left as it is, and said, unless --replace-wake. Refused while bosun
