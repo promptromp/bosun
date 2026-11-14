@@ -485,7 +485,9 @@ class LogErrorsTestCase(unittest.TestCase):
             gate=RESTING,
             checks=watchdog_checks(check("log-errors", "error", self.WATCHDOGS)),
         )
-        self.assertEqual((out["level"], out["sentence"]), ("ok", "bosun is resting until 08:00"))
+        self.assertEqual(
+            (out["level"], out["sentence"]), ("ok", "Resting: outside your hours · next start Mon 08:00")
+        )
 
 
 KEYS = [
