@@ -218,19 +218,31 @@ agent_pid_starting() {                          # <pane_pid>
   return 1
 }
 
-# One line per window of the session: its name, the pid of the agent with a session in it, if any, and
-# the pid of one that has none yet.
+# The pane's process, while it is still the shell build_launch_command starts (`<shell> -lic '<bosun> launch
+# <window> ; exec <shell> -l'`): your startup files have not finished, or bosun's launch has not started its
+# agent. Once the launch ends, however it ends, the shell becomes `<shell> -l` and this says nothing; the
+# checkin window's shell runs `checkin --loop`, not a launch.
+launch_shell_waiting() { # <pane_pid>
+  case " $(ps -o command= -p "$1" 2>/dev/null) " in
+    *" -lic "*" launch "*) echo "$1" ;;
+    *) return 1 ;;
+  esac
+}
+
+# One line per window of the session: its name, the pid of the agent with a session in it, if any, the pid of
+# one that has none yet, and, with no agent at all, the pid of the shell that has not got as far as starting one.
 window_agent_facts() {
-  local name pane_pid pid starting
+  local name pane_pid pid starting launching
   need_profiles # once, before the substitutions below
   tmux_cmd list-windows -t "=$BOSUN_SESSION_NAME" -F '#{window_name}	#{pane_pid}' 2>/dev/null |
     while IFS=$'\t' read -r name pane_pid; do
       starting=""
+      launching=""
       pid="$(agent_pid_under "$pane_pid")" || {
         pid=""
-        starting="$(agent_pid_starting "$pane_pid")"
+        starting="$(agent_pid_starting "$pane_pid")" || launching="$(launch_shell_waiting "$pane_pid")"
       }
-      printf '%s\t%s\t%s\n' "$name" "$pid" "$starting"
+      printf '%s\t%s\t%s\t%s\n' "$name" "$pid" "$starting" "$launching"
     done
 }
 

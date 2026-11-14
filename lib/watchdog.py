@@ -221,6 +221,7 @@ class WindowFact:
     name: str
     agent_pid: int | None
     starting_pid: int | None = None  # a Claude in this window with no session record yet
+    launching_pid: int | None = None  # no agent at all: the window's shell, which has not started one yet
 
 
 def optional_pid(value: Any) -> int | None:
@@ -245,7 +246,10 @@ class Facts:
             session_exists=bool(data.get("session_exists")),
             windows=tuple(
                 WindowFact(
-                    str(w["name"]), optional_pid(w.get("agent_pid")), optional_pid(w.get("starting_pid"))
+                    str(w["name"]),
+                    optional_pid(w.get("agent_pid")),
+                    optional_pid(w.get("starting_pid")),
+                    optional_pid(w.get("launching_pid")),
                 )
                 for w in data.get("windows") or []
             ),
@@ -565,23 +569,35 @@ def waiting_finding(ctx: Context, window: WindowFact, record: dict[str, Any]) ->
 
 
 def stalled_finding(ctx: Context, window: WindowFact) -> Finding | None:
-    """A Claude that has been running for a while without ever writing its session record is on a screen
-    only a person can answer: every screen before a session has none, and a ready session always does.
-    That also covers screens that do not exist yet, so nothing here reads what is on the screen."""
-    if window.starting_pid is None:
+    """A window that has been starting for a while is waiting for a person. An agent that never wrote its
+    session record is on a screen only a person can answer: every screen before a session has none, and a
+    ready session always does. A shell that never got as far as starting the agent is in your startup files,
+    which are asking something (oh-my-zsh's update question, zsh's insecure directories; bosun turns oh-my-
+    zsh's off). Both also cover what nobody has seen yet, so nothing here reads what is on the screen."""
+    pid = window.starting_pid if window.starting_pid is not None else window.launching_pid
+    if pid is None:
         return None
-    started = agent_files.process_start(window.starting_pid)
+    started = agent_files.process_start(pid)
     if started is None:
         return None
     waited = ctx.now.timestamp() - started
     if waited < STALLED_START_MINUTES * SECONDS_PER_MINUTE:
         return None
-    return Finding(
-        f"stalled-start:{window.name}:{window.starting_pid}",
-        f"The {window.name} window's agent started {int(waited // SECONDS_PER_MINUTE)} min ago and never "
-        "reached a session: it is probably on a first-run or trust screen only you can answer (bosun "
-        "attach). Do not just press Return: on several of these screens the default is to exit.",
-    )
+    minutes = int(waited // SECONDS_PER_MINUTE)
+    if window.starting_pid is None:
+        message = (
+            f"The {window.name} window's shell started {minutes} min ago and has not started its agent: your "
+            "shell's startup files are probably waiting for an answer (an update question, or zsh's insecure "
+            "directories). Answer it in the window (bosun attach), or change your startup files so they "
+            "do not ask."
+        )
+    else:
+        message = (
+            f"The {window.name} window's agent started {minutes} min ago and never reached a session: it is "
+            "probably on a first-run or trust screen only you can answer (bosun attach). Do not just press "
+            "Return: on several of these screens the default is to exit."
+        )
+    return Finding(f"stalled-start:{window.name}:{pid}", message)
 
 
 def check_stalled_start(ctx: Context) -> Result:
@@ -1378,8 +1394,8 @@ CHECKS: tuple[Check, ...] = (
     Check(
         "stalled-start",
         "error",
-        f"a window's agent has run for {STALLED_START_MINUTES}+ min without reaching a session "
-        "(a first-run or trust screen)",
+        f"a window has been starting for {STALLED_START_MINUTES}+ min: its agent never reached a session (a "
+        "first-run or trust screen), or its shell never started the agent (a question in your startup files)",
         check_stalled_start,
     ),
     Check(

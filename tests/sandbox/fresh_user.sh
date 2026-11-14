@@ -290,6 +290,8 @@ preflight_stops_early() {
   check "first-run screens are for a person" bash -c '! "$1" init >"$2" 2>&1 && grep -q "run claude, then /exit" "$2"' _ "$BOSUN" "$out"
   check "doctor agrees" bash -c '! "$1" doctor >"$2" 2>&1; grep -q "first-run screens not done" "$2"' _ "$BOSUN" "$out"
   echo '{"hasCompletedOnboarding": true}' >"$HOME/.claude.json"
+  check "then Claude in Chrome's screen, as windows start with --chrome" bash -c '! "$1" preflight --quiet >"$2" 2>&1 && grep -q "run claude --chrome" "$2"' _ "$BOSUN" "$out"
+  echo '{"hasCompletedOnboarding": true, "hasCompletedClaudeInChromeOnboarding": true}' >"$HOME/.claude.json"
   check "and then it passes" "$BOSUN" preflight --quiet
   check "an OS with no profile says so" bash -c '[ "$(BOSUN_PLATFORM=plan9 "$1" preflight >/dev/null; echo $?)" = 2 ]' _ "$BOSUN"
   check "a harness with no profile says so" bash -c 'BOSUN_HARNESS=nosuch "$1" preflight | grep -q "no profile"' _ "$BOSUN"
