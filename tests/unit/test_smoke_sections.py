@@ -15,7 +15,10 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 SMOKE = ROOT / "tests" / "smoke.sh"
-MARKER = re.compile(r'^\s*section\s+(?P<id>\S+)\s+"(?P<name>[^"]*)"(?:\s+needs\s+(?P<needs>\S+))?\s*$')
+MARKER = re.compile(
+    r"""^\s*section\s+(?P<id>\S+)\s+"(?P<name>[^"]*)"(?:\s+needs\s+(?P<needs>[a-z0-9,-]+))?"""
+    r"""(?:\s+covers\s+'(?P<covers>[^']*)')?\s*$"""
+)
 ID = re.compile(r"^[a-z0-9]+(-[a-z0-9]+)*$")
 HEADER = re.compile(r'^\s*echo "[^"$\\]*"$')  # how a section's heading was printed before the markers
 

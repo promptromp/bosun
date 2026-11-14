@@ -57,6 +57,8 @@ impacted_tests_dir = "tests/unit"
 impacted_map = [
     # Any change runs the rules' own check: a new kind of file needs a rule before it is missed.
     "*=tests/unit/test_impacted_rules.py",
+    # ... and the smoke selection's: a new file needs a section's `covers` or a rule there, or it is missed.
+    "*=tests/unit/test_smoke_selection.py",
     # bosun's programs. The tests that run them, or read them, import nothing of what they run, and
     # the shell runs every lib/ module: a change to any of them counts as one to bin/bosun, and a
     # change to bin/bosun selects those tests.
@@ -77,6 +79,7 @@ impacted_map = [
     "bin/bosun=tests/unit/test_migrations.py",
     "bin/bosun=tests/unit/test_preflight.py",
     "bin/bosun=tests/unit/test_shell_functions.py",
+    "bin/bosun=tests/unit/test_smoke_selection.py",
     "bin/bosun=tests/unit/test_uninstall_plan.py",
     "bin/bosun=tests/unit/test_update.py",
     "bin/bosun=tests/unit/test_update_facts.py",
@@ -128,6 +131,14 @@ impacted_map = [
     "tests/smoke_cache.sh=tests/unit/test_smoke_cache.py",
     "tests/smoke.sh=tests/unit/test_smoke_state.py",
     "tests/smoke_cache.sh=tests/unit/test_smoke_state.py",
+    # ... and what the pre-push hook chooses sections by: their `covers`, tests/smoke_selection.txt, tools/smoke_select.py.
+    "tests/smoke.sh=tests/unit/test_smoke_select.py",
+    "tests/smoke.sh=tests/unit/test_smoke_selection.py",
+    "tests/smoke_cache.sh=tests/unit/test_smoke_select.py",
+    "tests/smoke_selection.txt=tests/unit/test_smoke_select.py",
+    "tests/smoke_selection.txt=tests/unit/test_smoke_selection.py",
+    "tools/*.py=tests/unit/test_smoke_select.py",
+    "tools/*.py=tests/unit/test_smoke_selection.py",
     "tests/llm/*.py=tests/unit/test_learn.py",
     "tests/llm/*.py=tests/unit/test_learn_digest.py",
     "tests/sandbox/mcp_probe_server.py=tests/unit/test_mcp_probe_server.py",

@@ -428,8 +428,9 @@ and CI agree on versions. On commit (`.pre-commit-config.yaml`; run all with `uv
   selects the same. A change to a module that many others import (`ledger.py`, but also small ones such
   as `similar.py` or `screen_text.py`) reaches most of the suite through the import graph, so such a
   commit pays nearly the full run (about a minute); that is the selection being right, not loose, and a
-  docs edit pays about ten seconds. Before a push, the smoke suite (end to end only; skipped if this exact tree passed it here
-  in the last 24 hours); in CI, every unit test (its smoke job, when it is on, always runs the whole suite).
+  docs edit pays about ten seconds. Before a push, the smoke sections the change can reach (end to end only; the build-out
+  setting: see below; skipped if this exact tree passed a whole run here in the last 24 hours); in CI, every
+  unit test (its smoke job, when it is on, always runs the whole suite).
 
 Which tests a change reaches: the plugin follows Python imports from `lib/` (an import root, as
 pytest's `pythonpath` entry; `impacted_module = "lib"`) and between the test files and the helpers of
@@ -464,7 +465,7 @@ test again on macOS and then the end-to-end smoke suite (`smoke`, which is off u
 feature-complete MVP: its job-level `if` in `ci.yml` wants the repository variable `CI_SMOKE` set
 to `true`, and it is not a required check in `.github/rulesets/main.json`; to turn it back on,
 remove that `if` (or set the variable), re-add `smoke` to the ruleset's required checks and apply
-it; the pre-push hook still runs the suite), the menu bar app (`app`, on macOS: `swift test`
+it; the pre-push hook still runs the sections the change reaches), the menu bar app (`app`, on macOS: `swift test`
 with warnings as errors, the coverage floor, SwiftLint, `swift format lint --strict`, and an ad hoc build whose
 bundle must verify; a cheap Linux job, `changes`, compares the pull request or merge group with its base, and `app`
 `needs` it and is skipped (no macOS runner starts, and a skipped job counts as passing) when nothing under `app/`,
@@ -518,12 +519,24 @@ prints the sections' ids, `tests/smoke.sh --only <id>[,<id>...]` runs the shared
 `needs`) in seconds (a few minutes for a section with prerequisites), and says in its summary that it was a
 partial run. While iterating use `--only`, `--last-failed` (`--lf`: only the sections whose last recorded
 result, in the git-ignored `tests/.smoke-cache/`, was a failure) and `-x` (stop at the first failing check);
-before committing, run the whole suite once with none of them. CI's smoke job, when it is on, runs all of it,
-and so does the pre-push hook (`tests/smoke.sh --pre-push`) unless that exact tree (uncommitted and untracked
-files included) passed a whole run in this checkout in the last 24 hours (`BOSUN_SMOKE_NO_CACHE=1` forces it;
-what the record is and why it can only make a run longer: `docs/development.md`). A test must not write into
+before committing, run the whole suite once with none of them. CI's smoke job, when it is on, runs all of it.
+The pre-push hook (`tests/smoke.sh --pre-push`) does less, for the build-out phase only: it skips the suite
+when that exact tree (uncommitted and untracked files included) passed a whole run in this checkout in the last
+24 hours (`BOSUN_SMOKE_NO_CACHE=1` ignores that record, `BOSUN_SMOKE_FULL=1` forces the whole suite; what the record is and why it can only make a run longer:
+`docs/development.md`), and otherwise runs the sections the change since `origin/main` can reach
+(`tests/smoke.sh --changed <ref>` shows the choice for any ref: which file selected which section, or why it
+chose everything), failing closed to the whole suite: a changed file that matches the select-everything list, that
+no section covers and no `ignore` rule lists, an `origin/main` that does not resolve. `BOSUN_SMOKE_FULL=1`
+forces the whole suite. This goes back to the whole suite on every push once the project is past its release
+(`--pre-push` without the selection); CI runs the whole suite again at the MVP, when its smoke job is turned on
+(`vars.CI_SMOKE`). The choice is `tools/smoke_select.py`; the two places that feed it are `covers` on each
+`section` line and `tests/smoke_selection.txt` (`all <glob>`: the whole suite; `ignore <glob>`: no section reaches it).
+`tests/unit/test_smoke_selection.py` fails on a tracked file that is none of covered, `all` or `ignore`, and on a
+section without `covers`, and says what to add. A test must not write into
 the repository: the run then records no pass and names the file. In `tests/smoke.sh`, a new section begins with
-`section <id> "<name>" [needs <id>,...]` (unique kebab-case id; `tests/unit/test_smoke_sections.py` fails
+`section <id> "<name>" [needs <id>,...] covers '<glob>,...'` (unique kebab-case id, and the files it runs or reads:
+its command, the lib modules it exercises, a template or a fixture; what imports or runs those is followed by the
+tool; `tests/unit/test_smoke_sections.py` and `test_smoke_selection.py` fail
 otherwise): set up what it uses itself, or say `needs` the section whose state it relies on; a helper or a
 constant that more than one section uses goes in the helpers by the fixture HOME, and an export every later
 section sees goes after an `always_run` line. Every section starts by checking that `osascript`, `aws`,

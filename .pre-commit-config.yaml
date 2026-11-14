@@ -189,7 +189,7 @@ repos:
         files: ^app/
         pass_filenames: false
       - id: smoke-tests
-        name: smoke tests (end to end)
+        name: smoke tests (end to end, the sections the push reaches)
         entry: tests/smoke.sh --pre-push
         language: system
         pass_filenames: false
