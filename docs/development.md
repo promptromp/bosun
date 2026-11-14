@@ -485,7 +485,9 @@ The menu bar app is released apart from bosun: a tag `app-v<version>` on `main`,
 ID in a keychain that exists for that run only, has Apple notarize it, staples the ticket, and attaches
 `bosun-app-<version>.zip` to a GitHub release. Before it publishes anything it puts the final zip through the install's own code
 (`lib/app_install.py verify-archive`: the archive's entries, the code requirement, Gatekeeper's `source=Notarized
-Developer ID` and the bundle id), so a release the install would refuse never goes out. You need an Apple Developer Program membership, a
+Developer ID` and the bundle id), so a release the install would refuse never goes out. The job that signs has a
+read-only token; a second job, with no secret, checks the zip's SHA-256 and is the only one that may write, to
+create the release. You need an Apple Developer Program membership, a
 *Developer ID Application* certificate and an App Store Connect API key (Users and Access, Integrations, with the
 Developer role). The values below come from your own files and your own terminal: never paste a certificate, a
 key or a password into a chat, an issue or a pull request.
