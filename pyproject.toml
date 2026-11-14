@@ -144,6 +144,8 @@ impacted_map = [
     "tests/smoke_selection.txt=tests/unit/test_smoke_selection.py",
     "tools/*.py=tests/unit/test_smoke_select.py",
     "tools/*.py=tests/unit/test_smoke_selection.py",
+    # ... and what --shard splits them by.
+    "tests/smoke_weights.txt=tests/unit/test_smoke_select.py",
     "tests/llm/*.py=tests/unit/test_learn.py",
     "tests/llm/*.py=tests/unit/test_learn_digest.py",
     "tests/sandbox/mcp_probe_server.py=tests/unit/test_mcp_probe_server.py",

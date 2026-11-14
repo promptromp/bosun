@@ -14,7 +14,7 @@ limits and conventions.
 
 On GitHub, every pull request to `main` runs the same checks (`.github/workflows/ci.yml`) and
 a gitleaks scan of the new commits (the smoke suite on macOS runs in the merge queue, for the sections the
-change can reach, and in full nightly), and `main` only takes pull requests
+change can reach, and in full nightly, split over three runners), and `main` only takes pull requests
 that pass them, through GitHub's merge queue: once a pull request's checks pass, `gh pr merge --squash`
 (or the Merge button) adds it to the queue, which builds it on top of the latest `main` and the pull
 requests ahead of it, runs the same checks again on that commit (CI listens for `merge_group` as well
@@ -38,8 +38,9 @@ Issues and pull requests are welcome: see [CONTRIBUTING.md](../CONTRIBUTING.md) 
 |---|---|---|---|
 | The unit tests a change can reach | `uv run pytest -n auto --impacted` | every commit (the `unit-tests` hook) | seconds to a minute |
 | Every unit test | `uv run pytest -n auto` | CI, on Linux (with coverage) and on macOS | about a minute |
-| The end-to-end smoke suite | `tests/smoke.sh` | before every push, but only the sections the change can reach (`--pre-push`, the build-out setting: skipped if this exact tree already passed a whole run here in the last 24 hours, and a whole-suite choice left to the merge queue); CI's merge queue runs the same selection, and the whole suite nightly | about 18 minutes in full |
-| The sections a change reaches | `tests/smoke.sh --changed <git ref>` | by the pre-push hook, against `origin/main` | what those sections take |
+| The end-to-end smoke suite | `tests/smoke.sh` | before every push, but only the sections the change can reach (`--pre-push`, the build-out setting: skipped if this exact tree already passed a whole run here in the last 24 hours, and a whole-suite choice left to the merge queue); CI's merge queue runs the same selection, and the whole suite nightly, in three shards | about 18 minutes in full |
+| The sections a change reaches | `tests/smoke.sh --changed <git ref>` | by the pre-push hook, against `origin/main`; in CI's merge queue, against the group's base, in three shards | what those sections take |
+| One shard of a run split over N machines | `tests/smoke.sh --shard K/N`, with any of the above but `--pre-push` | CI's `smoke`, as `--shard 1/3`, `2/3` and `3/3` on three runners | about a Nth of the run |
 | Every unit test with a plain `python3`, then the smoke suite | `tests/smoke.sh --with-unit` | never | 8 more minutes |
 | One area of the smoke suite | `tests/smoke.sh --only <id>[,<id>...]` (ids: `tests/smoke.sh --list`) | never | seconds to a few minutes |
 | Only the sections that failed last time | `tests/smoke.sh --last-failed` (`--lf`) | never | what those sections take |
@@ -68,7 +69,7 @@ of the commit you push (pre-commit's `PRE_COMMIT_TO_REF`) already passed a whole
 need not wait for the whole 18 minutes, and the whole suite on every push comes back once the project is past
 its release. CI's `smoke` job makes the same choice in the merge queue, from the merge group's base
 (`tests/smoke.sh --changed`), is skipped on pull requests (a skipped required check counts as passing), and
-runs the whole suite nightly on main. The choice is described in [Which sections a push runs](#which-sections-a-push-runs) below. A whole run (none of `--only`, `--last-failed` or `-x`) that ends with no failure records, in
+runs the whole suite nightly on main, both split over three runners ([Split over machines](#split-over-machines)). The choice is described in [Which sections a push runs](#which-sections-a-push-runs) below. A whole run (none of `--only`, `--last-failed` or `-x`) that ends with no failure records, in
 `tests/.smoke-cache/passes`, the tree it tested: the files on disk before the first section runs, uncommitted
 changes included (what `git add -A` stages, taken in a copy of the index, so yours is not touched). It records
 nothing unless the tree is the same at the end of the run: a test that writes a file into the repository, or
@@ -80,7 +81,39 @@ partial or failed run, an unreadable record, git failing; the record can make a 
 tree pass. `BOSUN_SMOKE_NO_CACHE=1 git push` makes the hook ignore the record and run the sections the change reaches (this is the knob, not
 pre-commit's `SKIP`, which this repository does not use). With several refs in one push pre-commit hands the
 hook only the first one that is not a deletion, and a branch deletion runs nothing. CI never uses the record:
-its merge queue runs `tests/smoke.sh --changed <the group's base>`, and its nightly run `tests/smoke.sh` in full.
+its merge queue runs `tests/smoke.sh --changed <the group's base> --shard K/3`, and its nightly run
+`tests/smoke.sh --shard K/3`, on three runners.
+
+### Split over machines
+
+`tests/smoke.sh --shard K/N` runs shard K of N: of the sections the run would run (the whole suite, or what
+`--only`, `--last-failed` or `--changed` chose), each goes to exactly one shard, and the shard runs its own the way
+`--only` does: with the sections they `needs` (run again, in that shard, as prerequisites), the shared setup and the
+`always_run` parts. Its summary says which shard of how many it was (`412 passed, 0 failed (shard 2 of 3, a partial
+run, not the whole suite: ...)`); a shard that no section falls in says so and exits 0. `--shard` combines with
+`-x`, `--with-unit` and the three ways to choose sections, not with `--pre-push`; anything but `K/N` with
+`1 <= K <= N` is a usage error (exit 2). CI's `smoke` runs `--shard 1/3`, `2/3` and `3/3` on three macOS runners at
+once (the `smoke-shard` matrix) and a small job named `smoke`, the required check, passes only when all three did.
+
+The shards are balanced by how long their sections take, not by how many: nine of the 64 sections take three fifths
+of the time (`update` and `install` about two minutes each, `send-new-start` nearly as long, then `connectors`,
+`orchestrator-refresh`, `refresh`, `quit`, `app` and `console-sessions`). `tests/smoke_weights.txt` holds one
+`<section id> <seconds>` line per section, and a section it does not list counts as the median. `tools/smoke_shard.py`
+makes the split: the longest section first, a section's length counting what it needs, each into the shard it adds
+least to among those it leaves within an even share (the selection's time over N, or the longest section's if that is
+more), and where it fits in none, into the one that leaves the longest shard shortest. What a section needs costs
+nothing in a shard that already runs it, so `update-convert` goes where `update` runs, and `uninstall` and `init` where
+`install` does: on the suite's own weights the three shards come out even and run nothing twice. Each shard works out
+the same split from the same files. If the split cannot be made (the tool fails, the weights file does not parse) the
+shard runs every selected section, so a broken split makes a run longer, never shorter. `uninstall-files`, which
+checks that uninstall knows every file the run left behind, runs in every shard that runs anything: each shard leaves
+only its own files, and together they check what a whole run leaves.
+
+Every run records how long each section took when it passed, in `tests/.smoke-cache/durations`. To measure the weights
+again, when sections are added or grow, run the whole suite, then
+`python3 tools/smoke_shard.py --script tests/smoke.sh --weights tests/smoke_weights.txt --record tests/.smoke-cache/durations`,
+which writes the file anew (a section the record lacks keeps its weight; only the ratios matter, so a run on any
+machine will do).
 
 ### Which sections a push runs
 

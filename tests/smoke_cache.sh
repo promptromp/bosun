@@ -4,6 +4,8 @@
 #   sections  one line per section: `<id> pass|fail`, its last result, for --last-failed. A run changes only the
 #             sections it ran.
 #   passes    one line per tree that a whole run passed: `<tree> <checks passed> <epoch seconds>`, for --pre-push.
+#   durations one line per section: `<id> <seconds>`, how long it took the last time it passed, which
+#             `tools/smoke_shard.py --record` turns into tests/smoke_weights.txt (what --shard balances by).
 # Everything here is best effort: a run never fails, and never passes, because of what it keeps. Whatever is
 # unreadable, missing, older than a day, or in doubt means the whole suite runs. Bash 3.2.
 
