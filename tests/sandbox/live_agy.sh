@@ -189,7 +189,7 @@ agy_install_bosun() {
   echo "logged in, then the rest of what it says (through the desktop session, where the login is seen)"
   check "the installer says Claude Code's first screens are for a person" gui_do bash -c '! sh "$1/get.sh" >"$2" 2>&1 && grep -q "first-run screens not done" "$2"' _ "$ROOT" "$out"
   first_run_screens
-  check "... and going through them is enough" jq -e '.hasCompletedOnboarding == true' "$HOME/.claude.json"
+  check "... and going through them is enough" jq -e '.hasCompletedOnboarding == true and .hasCompletedClaudeInChromeOnboarding == true' "$HOME/.claude.json"
   check "the same line then installs" gui_do bash -c 'sh "$1/get.sh" --unattended >"$2" 2>&1 || { tail -15 "$2"; exit 1; }' _ "$ROOT" "$out"
   echo '{"repos": [{"dir": "~/Development/exporter"}], "harness": "agy", "menu_app": false}' >"$OUT/answers.json"
   check "the repo's window, named with bosun init --answers" gui_do bash -c 'bosun init --answers "$1" >"$2" 2>&1 || { tail -15 "$2"; exit 1; }' _ "$OUT/answers.json" "$OUT/answers.txt"

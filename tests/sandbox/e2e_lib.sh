@@ -63,7 +63,7 @@ a_new_machine() {
   mkdir -p "$HOME/.local/bin"
   cp "$ROOT/tests/sandbox/claude-stand-in" "$HOME/.local/bin/claude"
   # A person went through its first-run screens, and accepted the folder trust for the repos' folder.
-  jq -n --arg dir "$HOME/Development" '{hasCompletedOnboarding: true, projects: {($dir): {hasTrustDialogAccepted: true}}}' >"$HOME/.claude.json"
+  jq -n --arg dir "$HOME/Development" '{hasCompletedOnboarding: true, hasCompletedClaudeInChromeOnboarding: true, projects: {($dir): {hasTrustDialogAccepted: true}}}' >"$HOME/.claude.json"
   # With GH_TOKEN the real gh counts as logged in; without one, it needs its stand-in too.
   [ -n "${GH_TOKEN:-}" ] || cp "$ROOT/tests/sandbox/gh-stand-in" "$HOME/.local/bin/gh"
   a_repo_by_hand acme-api https://github.com/acme/api.git

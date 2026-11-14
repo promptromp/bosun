@@ -113,6 +113,12 @@ first_run_screens() { # as a person goes through them: Return on each, which the
   done
   sleep 2
   tmux -L person kill-server 2>/dev/null
+  # Then Claude in Chrome's screen, which windows started with --chrome show once (Enter confirms it).
+  tmux -L person new-session -d -s chrome -x 110 -y 40 -c "$HOME" claude --chrome
+  sleep 8
+  tmux -L person send-keys -t chrome Enter 2>/dev/null
+  sleep 3
+  tmux -L person kill-server 2>/dev/null
 }
 
 install_it() {
@@ -120,7 +126,7 @@ install_it() {
   echo "logged in, then the rest of what it says"
   check "the installer says Claude Code's first screens are for a person" bash -c '! sh "$1/get.sh" >"$2" 2>&1 && grep -q "first-run screens not done" "$2"' _ "$ROOT" "$out"
   first_run_screens
-  check "... and going through them is enough" jq -e '.hasCompletedOnboarding == true' "$HOME/.claude.json"
+  check "... and going through them is enough" jq -e '.hasCompletedOnboarding == true and .hasCompletedClaudeInChromeOnboarding == true' "$HOME/.claude.json"
   check "the same line then installs" bash -c 'sh "$1/get.sh" --unattended >"$2" 2>&1 || { tail -15 "$2"; exit 1; }' _ "$ROOT" "$out"
   check "... with no repo window, since nobody chose one" grep -qx "sessions: \[\]" "$CONFIG/sessions.yml"
   echo '{"repos": [{"dir": "~/Development/exporter"}], "menu_app": false}' >"$OUT/answers.json"
