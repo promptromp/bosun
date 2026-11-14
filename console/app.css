@@ -229,43 +229,6 @@ ul {
 
 /* ---- top bar ---------------------------------------------------------------------------------- */
 
-
-.masthead-inner {
-  max-width: var(--content);
-  margin: 0 auto;
-  padding: var(--space-4) var(--space-5) var(--space-3);
-  display: flex;
-  align-items: flex-end;
-  gap: var(--space-5);
-  flex-wrap: wrap;
-}
-
-.masthead-logo {
-  margin: 0;
-  padding: 0;
-  background: none;
-  border: 0;
-  border-radius: 0;
-  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-  font-size: 0.8rem;
-  line-height: 1.15;
-  font-weight: 700;
-  color: var(--accent);
-  white-space: pre;
-}
-
-.masthead-tagline {
-  margin: 0 0 var(--space-1);
-  font-size: 0.9rem;
-  font-weight: 600;
-}
-
-@media (max-width: 640px) {
-  .masthead-logo {
-    font-size: 0.6rem;
-  }
-}
-
 .topbar {
   position: sticky;
   top: 0;
