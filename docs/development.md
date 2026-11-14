@@ -243,8 +243,9 @@ tests/sandbox.sh mac work                 # a week of work, through two updates:
 tests/sandbox.sh mac app                  # bosun.app driven through every state and choice, and a restart
 tests/sandbox.sh mac live codex           # the real agents: see below
 tests/sandbox.sh mac live agy             # Antigravity: you sign in in the VM's window, see below
-tests/sandbox.sh mac shell                # a window, to try the wizard as a new user would
-tests/sandbox.sh mac clean                # delete the base images (`tart prune` removes the pulled one)
+tests/sandbox.sh mac shell                # a window, to try the wizard as a new user would; a restart in it keeps it,
+                                          # and leaving its shell (exit) deletes it
+tests/sandbox.sh mac clean                # delete the clones and base images (`tart prune` removes the pulled one)
 ```
 
 If Homebrew refuses the tap, it wants to be told you trust it. These two are enough, not the whole tap:

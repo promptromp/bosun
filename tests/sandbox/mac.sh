@@ -30,7 +30,8 @@
 #           run ~/.local/bin/agy, sign in with Google (a personal account's free quota) and quit it; the run
 #           waits up to 15 minutes for that. The orchestrator stays on Claude Code (the Anthropic key only).
 #           Your sign-in stays in the clone, which is deleted at the end; no image is ever saved
-#   shell   a clone with a window, to try things as a new user would; deleted when you exit
+#   shell   a clone with a window, to try things as a new user would; a restart in it keeps it, and it is
+#           deleted when you leave its shell
 #   clean   delete the clones and base images (the pulled image stays: `tart prune` removes it)
 # Needs Tart: brew install openai/tools/tart. Guide: docs/development.md.
 set -uo pipefail
@@ -213,24 +214,30 @@ run() { # [--from-nothing]
   in_vm "$CLONE" 'BOSUN_REPO="$HOME/origin.git" BOSUN_E2E_RELEASE='"$RUN_RELEASE"' e2e/tests/install_e2e.sh'
 }
 
-# The clone restarted, as a Mac is: shutdown -r in the guest, then back at the desktop (the auto-login) with a
-# new boot time. Whether tart's VM process ends with the guest's restart or goes on, and when, is not assumed: on
-# every turn of the wait, a VM process that has ended is waited for and the clone started again; either way the
-# new boot is awaited by sysctl kern.boottime.
-reboot_clone() {
-  local before deadline=$((SECONDS + 2 * BOOT_SECONDS)) now
-  before="$(in_vm "$CLONE" 'sysctl -n kern.boottime')" || die "could not read the clone's boot time"
-  say "restarting the clone (sudo shutdown -r now in the guest)"
-  in_vm "$CLONE" 'sudo shutdown -r now' >/dev/null 2>&1
+# Waits until the clone is back at its desktop (the auto-login), with a boot time other than <before> when one is
+# given. Whether tart's VM process ends with a guest's restart or goes on, and when, is not assumed: on every turn of
+# the wait, a VM process that has ended is waited for and the clone started again, with <tart run flags>.
+await_the_clone() { # <boot time it must differ from, or ""> [tart run flags...]
+  local before="$1" deadline=$((SECONDS + 2 * BOOT_SECONDS)) now
+  shift
   until now="$(in_vm "$CLONE" 'sysctl -n kern.boottime' 2>/dev/null)" && [ "$now" != "$before" ] && logged_in "$CLONE"; do
-    [ "$SECONDS" -ge "$deadline" ] && die "the clone did not come back after the restart"
+    [ "$SECONDS" -ge "$deadline" ] && die "the clone did not come back to its desktop in $((2 * BOOT_SECONDS)) seconds"
     if ! kill -0 "$VM_PID" 2>/dev/null; then
       wait "$VM_PID" 2>/dev/null
       say "tart's VM process ended with the restart: starting the clone again"
-      boot "$CLONE" --no-graphics
+      boot "$CLONE" "$@"
     fi
     sleep 3
   done
+}
+
+# The clone restarted, as a Mac is: shutdown -r in the guest, then back at the desktop with a new boot time.
+reboot_clone() {
+  local before
+  before="$(in_vm "$CLONE" 'sysctl -n kern.boottime')" || die "could not read the clone's boot time"
+  say "restarting the clone (sudo shutdown -r now in the guest)"
+  in_vm "$CLONE" 'sudo shutdown -r now' >/dev/null 2>&1
+  await_the_clone "$before" --no-graphics
   say "the clone is back from its restart"
 }
 
@@ -348,19 +355,36 @@ live() { # [claude|codex|agy]
   in_vm_masked go "$agent" "${BOSUN_SANDBOX_CODEX_MODEL:-}"
 }
 
+# A clone with its window, and your shell in it, until you leave it. A restart in the clone (to try Open at Login,
+# say) drops the connection, not the clone: the shell comes back once the clone is at its desktop again. Leaving
+# the shell (exit, Ctrl-D) writes a mark in the clone, which a dropped connection never does; only then does this
+# end, and delete the clone.
 shell() {
+  local left=.sandbox-shell-left repo # in the clone's home, where each ssh command starts
+  repo="$(python3 -c 'import json, sys; print(json.load(open(sys.argv[1]))["releases"])' "$ROOT/app/publisher.json")" ||
+    die "could not read the releases' repository from app/publisher.json"
   prepare_clone "$DEV_MAC"
-  say "a window opens with a clone of $DEV_MAC. Log in as admin, password admin."
+  say "a window opens with a clone of $DEV_MAC, its desktop logged in as admin (password admin, for sudo)"
   boot "$CLONE"
   copy_checkout
-  in_vm "$CLONE" -t 'cat <<WELCOME
+  in_vm "$CLONE" -t "rm -f $left; cat <<'WELCOME'
 
-A throwaway Mac. This checkout is ~/repo.bundle. To try the installer as a new user would:
-  BOSUN_REPO=~/repo.bundle BOSUN_BRANCH='"$TREE_BRANCH"' sh e2e/get.sh
-It is all deleted when you leave this shell.
+A throwaway Mac, deleted when you leave this shell (exit). A restart in it keeps it: this shell comes back once
+its desktop is back. To try bosun as a person installs it, in Terminal in the window or here:
+
+  the published release:  curl -fsSL https://raw.githubusercontent.com/$repo/main/get.sh | sh
+  this checkout instead:  BOSUN_REPO=~/repo.bundle BOSUN_BRANCH=$TREE_BRANCH sh e2e/get.sh
+
+The wizard offers your repos: clone one first (git clone https://github.com/$repo ~/Development/bosun).
 
 WELCOME
-exec zsh -l'
+zsh -l; touch $left"
+  until in_vm "$CLONE" "test -e $left" 2>/dev/null; do
+    say "the connection to the clone ended (a restart?): your shell comes back once its desktop is back. Ctrl-C deletes the clone"
+    sleep 5
+    await_the_clone ""
+    in_vm "$CLONE" -t "rm -f $left; zsh -l; touch $left"
+  done
 }
 
 clean() {
