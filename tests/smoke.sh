@@ -4542,7 +4542,7 @@ FAKE
   git -C "$G_DIR" remote set-url origin "https://0000placeholder-token@example.com/acme/bosun.git" # gitleaks:allow
   out="$(get_dry_from_origin)"
   check "... and never saying the token in its URL" bash -c '
-    grep -qxF "  \$ git -c core.hooksPath=/dev/null clone --quiet --bare --no-tags --single-branch --branch main https://example.com/acme/bosun.git $2/bosun.git" <<<"$1" &&
+    grep -qxF "  \$ git -c core.hooksPath=/dev/null clone --quiet --bare --no-tags --single-branch --branch main https://***@example.com/acme/bosun.git $2/bosun.git" <<<"$1" &&
       ! grep -q 0000placeholder-token <<<"$1"' _ "$out" "$G_VERSIONS"
   git -C "$G_DIR" remote remove origin
   mv "$G_DIR" "$G/a-checkout"

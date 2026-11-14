@@ -65,18 +65,32 @@ die() {
   printf 'bosun: %s\n' "$*" >&2
   exit 1
 }
-# <arg> as this says it: a URL without its user and password (a token in https://<token>@host/...).
+# <arg> as this says it, with no secret in it: the userinfo of scheme://<userinfo>@host/... (a token,
+# or user:password) and of the scp-style <userinfo>@host:path is ***, but for the plain user git, and
+# a query string (?token=...) is ?***.
 shown() {
-  case "$1" in
-    *://*) ;;
+  url_text="$1"
+  case "$url_text" in
+    *\?*) url_text="${url_text%%\?*}?***" ;;
+  esac
+  case "$url_text" in
+    *://*)
+      url_rest="${url_text#*://}"
+      url_host="${url_rest%%[/?]*}"
+      case "$url_host" in
+        *@*) url_text="${url_text%%://*}://***@${url_host##*@}${url_rest#"$url_host"}" ;;
+      esac
+      ;;
     *)
-      printf '%s' "$1"
-      return 0
+      # scp-style: the userinfo ends at the last @ before the first /, and a : follows it
+      url_head="${url_text%%/*}"
+      case "$url_head" in
+        git@*) ;;
+        *@*:*) url_text="***@${url_text#"${url_head%@*}"@}" ;;
+      esac
       ;;
   esac
-  url_rest="${1#*://}"
-  url_host="${url_rest%%/*}"
-  printf '%s://%s%s' "${1%%://*}" "${url_host##*@}" "${url_rest#"$url_host"}"
+  printf '%s' "$url_text"
 }
 run() {
   printf '  $'

@@ -55,7 +55,7 @@ has no release yet gets the head of `main`, and `get.sh` says so. With `BOSUN_BR
 `BOSUN_HARNESS` above) it gets the head of that branch instead, and the install follows the branch, not the
 releases: `bosun init` writes `BOSUN_UPDATE_CHANNEL="main"` to `bosun.env` without asking, and `bosun update`
 goes on to the head of the branch (the line it prints to run again after what bosun needs is there keeps `BOSUN_REPO`, `BOSUN_DIR`
-and `BOSUN_BRANCH`, as it keeps `BOSUN_HARNESS`, quoted for your shell, and shows the repository without a password). The channel is the one setting; `bosun init --answers` takes it as
+and `BOSUN_BRANCH`, as it keeps `BOSUN_HARNESS`, quoted for your shell, and shows the repository with any credential in it hidden as `***`: a password or token in the address or its query string). The channel is the one setting; `bosun init --answers` takes it as
 `update_channel` (`releases` or `main`).
 
 `bosun init` reads what this Mac already shows: the repos you use your agents in, the MCP servers and
