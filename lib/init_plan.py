@@ -721,8 +721,9 @@ def menu_app_off(text: str, console: str = "0") -> str:
     return set_settings(text, {"BOSUN_MENU_APP": "0", "BOSUN_CONSOLE_ALWAYS": console})
 
 
-def set_settings(text: str, wanted: Mapping[str, str]) -> str:
-    """<text> with each of <wanted> assigned, every other line as it was, the missing ones added last."""
+def set_settings(text: str, wanted: Mapping[str, str], by: str = "bosun init") -> str:
+    """<text> with each of <wanted> assigned, every other line as it was, the missing ones added last under a
+    comment that names the command <by> (`bosun settings` writes through this too)."""
     missing = dict(wanted)
     lines = []
     for line in text.splitlines():
@@ -731,7 +732,7 @@ def set_settings(text: str, wanted: Mapping[str, str]) -> str:
             missing.pop(match.group(1), None)
         lines.append(merged_line(line, match, wanted))
     if missing:
-        lines += ["", "# Added by `bosun init`", *(f"{k}={env_value(v)}" for k, v in missing.items())]
+        lines += ["", f"# Added by `{by}`", *(f"{k}={env_value(v)}" for k, v in missing.items())]
     return "\n".join(lines) + "\n"
 
 

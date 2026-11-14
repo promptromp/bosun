@@ -1,0 +1,4 @@
+{
+  "contract": 1,
+  "error": "BOSUN_START_TIME: '25:00' must be HH:MM, 24-hour"
+}

@@ -5,8 +5,9 @@ Each fixture is made by part 1's own code, never typed by hand: the status objec
 by `update_plan.make_plan` inside `update.json_object` (the object `bosun update --dry-run --json` prints),
 the quit plans and each quit result by `quit.run` over fake ports (the world it would touch replaced, as
 tests/unit/test_quit.py does), with the exit status each run returned in `exits.json`, the app's state by
-`app_release.status`. A change on the Python side that alters what the app reads fails
-tests/unit/test_contract_samples.py until the fixtures are written again:
+`app_release.status`, the settings by `settings.view`, and a change of them by `settings.change` and
+`settings.result` (or `settings.failure` for one refused). A change on the Python side that alters what
+the app reads fails tests/unit/test_contract_samples.py until the fixtures are written again:
 
     uv run python tools/contract_samples.py
 
@@ -37,6 +38,7 @@ import awake
 import menu_status
 import quit as quit_cmd
 import quit_state
+import settings
 import update
 import update_check
 import update_plan
@@ -388,6 +390,32 @@ def app_samples() -> dict[str, Sample]:
     return {"app-status": app_status("0.1.0"), "app-status-not-installed": app_status(None)}
 
 
+# ---- bosun settings get --json, set --json ---------------------------------------------------------------
+
+SETTINGS_ENV = """\
+# acme's bosun: what differs from the defaults
+BOSUN_START_TIME="08:30"
+BOSUN_UPDATE_CHANNEL="main"
+"""
+
+
+def settings_samples() -> dict[str, Sample]:
+    """`settings get --json` over an acme bosun.env, with the defaults the example config holds and bosun's
+    own wake; `set --json` moving the start and the until (learning's time moves with them), with the note
+    for another app's wake; and a value refused."""
+    known = settings.defaults(settings.EXAMPLE.read_text())
+    change = settings.change(SETTINGS_ENV, ["BOSUN_START_TIME=09:00", "BOSUN_AWAKE_UNTIL=18:00"], known)
+    try:
+        settings.change(SETTINGS_ENV, ["BOSUN_START_TIME=25:00"], known)
+    except settings.SettingsError as refused:
+        error = str(refused)
+    return {
+        "settings-get": settings.view(SETTINGS_ENV, None, known, settings.OURS, "/Users/me/.config/bosun"),
+        "settings-set": settings.result(change.changed, [settings.WAKE_LEFT]),
+        "settings-set-refused": settings.failure(error),
+    }
+
+
 # ---- the files ---------------------------------------------------------------------------------------------
 
 
@@ -400,6 +428,7 @@ def samples() -> dict[str, Any]:
             **update_plan_samples(),
             **quit_samples(),
             **app_samples(),
+            **settings_samples(),
         }
 
 

@@ -17,6 +17,8 @@ Getting started
               each agent brought along
   app         Install, update or remove the menu bar app (bosun.app) and its Open at Login job; it accepts
               only the publisher's notarized build
+  settings    Show or change the schedule, starting at login and the update channel (get, set KEY=VALUE;
+              --json), written through bosun init's writer, the jobs and the wake moved with them
 
 Daily flow
   morning     Scheduled entry point: keep awake, run setup steps, start or refresh sessions

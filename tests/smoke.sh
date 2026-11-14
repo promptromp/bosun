@@ -3340,6 +3340,117 @@ stop_keep_awake_leaves_it() { # bosun stop --keep-awake keeps the caffeinate and
 check "bosun stop --keep-awake leaves the caffeinate and its files alone; a plain stop releases them" stop_keep_awake_leaves_it
 plain_fake launchctl 113 # the fake above; this section's alone
 
+section settings "settings (bosun settings get|set: bosun.env through init's writer, the jobs and the wake)" covers 'libexec/bosun-settings,lib/settings.py'
+# Its own config, state and launchd label, so what it writes and reloads is its alone; launchd has a job while it
+# has its plist, pmset's repeating event is what $SET_SCHED holds, and sudo -v fails while $WORK/sudo-fails is there.
+SET_CFG="$WORK/settings-config"
+SET_STATE="$WORK/settings-state"
+SET_LABEL="com.bosun.smoke-settings"
+SET_SCHED="$WORK/settings-pmset-sched"
+SET_LOG="$WORK/settings-system.log"
+SET_PLIST="$HOME/Library/LaunchAgents/$SET_LABEL.plist"
+mkdir -p "$SET_CFG" "$SET_STATE" "$HOME/Library/LaunchAgents"
+: >"$SET_LOG"
+cat >"$HOME/.local/bin/launchctl" <<EOF
+#!/bin/bash
+echo "launchctl \$*" >>"$SET_LOG"
+[ "\$1" != print ] || [ -e "\$HOME/Library/LaunchAgents/\${2##*/}.plist" ] || exit 113
+exit 0
+EOF
+cat >"$HOME/.local/bin/pmset" <<EOF
+#!/bin/bash
+echo "pmset \$*" >>"$SET_LOG"
+if [ "\$1 \$2" = "-g sched" ] && [ -s "$SET_SCHED" ]; then cat "$SET_SCHED"; fi
+exit 0
+EOF
+cat >"$HOME/.local/bin/sudo" <<EOF
+#!/bin/bash
+echo "sudo \$*" >>"$SET_LOG"
+[ "\$1" = -n ] && shift
+if [ "\$1" = -v ]; then [ ! -e "$WORK/sudo-fails" ]; exit; fi
+exec "\$@"
+EOF
+chmod +x "$HOME/.local/bin/launchctl" "$HOME/.local/bin/pmset" "$HOME/.local/bin/sudo"
+settings_cmd() { # <args>: bosun settings with this section's folders and label, and no terminal to ask in
+  BOSUN_CONFIG_DIR="$SET_CFG" BOSUN_STATE_DIR="$SET_STATE" BOSUN_LOG_DIR="$SET_STATE/logs" \
+    BOSUN_LAUNCHD_LABEL="$SET_LABEL" "$BOSUN" settings "$@" </dev/null
+}
+settings_exits() { # <status> <args>: bosun settings exits <status>
+  local want="$1" status
+  shift
+  settings_cmd "$@" >"$WORK/settings.out" 2>"$WORK/settings.err"
+  status=$?
+  [ "$status" -eq "$want" ] || {
+    echo "exit $status not $want: $(cat "$WORK/settings.err")"
+    return 1
+  }
+}
+settings_has() { python3 -c 'import json, sys; d = json.load(open(sys.argv[1])); sys.exit(0 if eval(sys.argv[2]) else 1)' "$WORK/settings.out" "$1"; }
+pmset_sched() { printf 'Repeating power events:\n  %s\n' "$1" >"$SET_SCHED"; }
+printf '# acme: the schedule\nBOSUN_START_TIME="08:00"\n\n# mine\nBOSUN_EVENTS_ENABLED="1"\n' >"$SET_CFG/bosun.env"
+
+check "get --json prints one object, contract 1, with each setting's value, default and meaning" settings_exits 0 get --json
+check "... BOSUN_START_TIME as bosun.env sets it, BOSUN_DAYS as the default, and no wake" settings_has 'd["contract"] == 1 and d["readable"] and d["settings"]["BOSUN_START_TIME"]["set"] and d["settings"]["BOSUN_DAYS"] == {**d["settings"]["BOSUN_DAYS"], "value": "MTWRF", "set": False, "valid": True} and d["wake"] == "none"'
+check "get, for a person, a line a setting" contains "$(settings_cmd get 2>&1)" "BOSUN_START_TIME=08:00  (set)"
+
+check "set BOSUN_START_TIME=09:00 succeeds" settings_exits 0 set BOSUN_START_TIME=09:00
+check "... and says what changed" contains "$(cat "$WORK/settings.out")" "BOSUN_START_TIME: 08:00 → 09:00"
+check "... bosun.env says 09:00, its other lines and comments kept" bash -c 'grep -qx "BOSUN_START_TIME=\"09:00\"" "$1" && grep -qx "# acme: the schedule" "$1" && grep -qx "# mine" "$1" && grep -qx "BOSUN_EVENTS_ENABLED=\"1\"" "$1"' _ "$SET_CFG/bosun.env"
+check "... a backup holds bosun.env as it was" bash -c 'grep -qx "BOSUN_START_TIME=\"08:00\"" "$1"/bosun.env.pre-init-*' _ "$SET_CFG"
+check "... the morning job's plist says 09:00, and launchd loaded it" bash -c 'grep -q "<key>Hour</key><integer>9</integer><key>Minute</key><integer>0</integer>" "$1" && grep -q "launchctl bootstrap gui/$(id -u) $1" "$2"' _ "$SET_PLIST" "$SET_LOG"
+check "... with no repeating wake, no sudo" bash -c '! grep -q "^sudo" "$1"' _ "$SET_LOG"
+
+settings_cmd set BOSUN_START_TIME=08:00 >/dev/null 2>&1
+pmset_sched "wakepoweron at 8:01AM weekdays only"
+: >"$SET_LOG"
+check "with bosun's wake in pmset, set BOSUN_START_TIME=09:00 succeeds" settings_exits 0 set BOSUN_START_TIME=09:00
+check "... asking sudo first, then moving the wake with sudo pmset" bash -c 'grep -q "^sudo -n -v" "$1" && grep -qx "sudo pmset repeat wakeorpoweron MTWRF 09:01:00" "$1" && [ "$(grep -n "^sudo -n -v" "$1" | head -1 | cut -d: -f1)" -lt "$(grep -n "^sudo pmset" "$1" | cut -d: -f1)" ]' _ "$SET_LOG"
+
+pmset_sched "wakepoweron at 9:01AM weekdays only"
+cp "$SET_CFG/bosun.env" "$WORK/settings-before.env"
+touch "$WORK/sudo-fails"
+check "when sudo -v fails, set is refused" fails_with "moving the Mac's wake needs your password: run this in Terminal" settings_cmd set BOSUN_START_TIME=10:00
+check "... and bosun.env is unchanged" cmp -s "$SET_CFG/bosun.env" "$WORK/settings-before.env"
+check "... as an object with --json too, exit 1" settings_exits 1 set BOSUN_START_TIME=10:00 --json
+check "... that says why" settings_has 'd == {"contract": 1, "error": "moving the Mac'"'"'s wake needs your password: run this in Terminal"}'
+rm -f "$WORK/sudo-fails"
+
+pmset_sched "wakepoweron at 6:30AM every day"
+: >"$SET_LOG"
+check "with another app's wake, set --json changes bosun.env" settings_exits 0 set BOSUN_DAYS=MTWRFS --json
+check "... and says the other wake was left as it is, which pmset never touched" bash -c 'python3 -c "import json, sys; d = json.load(open(sys.argv[1])); sys.exit(0 if d[\"changed\"] == {\"BOSUN_DAYS\": [\"MTWRF\", \"MTWRFS\"]} and \"left as it is\" in d[\"notes\"][0] else 1)" "$1" && ! grep -q "pmset repeat" "$2"' _ "$WORK/settings.out" "$SET_LOG"
+replaced_wake() { settings_cmd set BOSUN_DAYS=MTWRFSU --replace-wake >/dev/null 2>&1 && grep -qx "sudo pmset repeat wakeorpoweron MTWRFSU 09:01:00" "$SET_LOG"; }
+check "... and with --replace-wake it is replaced" replaced_wake
+rm -f "$SET_SCHED"
+
+python3 -I -c 'import fcntl, os, sys, time
+fd = os.open(sys.argv[1], os.O_RDWR | os.O_CREAT)
+fcntl.flock(fd, fcntl.LOCK_EX)
+print("held", flush=True)
+time.sleep(60)' "$SET_STATE/update.lock" >"$WORK/settings-update.out" &
+set_update_holder=$!
+wait_for 30 grep -q held "$WORK/settings-update.out"
+check "while bosun update runs, set is refused" fails_with "bosun update is running" settings_cmd set BOSUN_UPDATE_CHANNEL=main
+check "... with exit 1" settings_exits 1 set BOSUN_UPDATE_CHANNEL=main
+check "... and bosun.env unchanged" bash -c '! grep -q BOSUN_UPDATE_CHANNEL "$1"' _ "$SET_CFG/bosun.env"
+kill "$set_update_holder" 2>/dev/null
+wait "$set_update_holder" 2>/dev/null
+
+check "a bad value is refused, naming the setting" fails_with "BOSUN_START_TIME" settings_cmd set BOSUN_START_TIME=25:00
+check "... with exit 2, quietly (not an alert)" settings_exits 2 set BOSUN_START_TIME=25:00
+check "... and an unknown key too" settings_exits 2 set BOSUN_FOO=1 --json
+check "... as an object with --json, naming it" settings_has 'list(d) == ["contract", "error"] and "BOSUN_FOO" in d["error"]'
+: >"$SET_LOG"
+check "set BOSUN_UPDATE_CHANNEL=main succeeds" settings_exits 0 set BOSUN_UPDATE_CHANNEL=main
+check "... writes it and reloads no job" bash -c 'grep -qx "BOSUN_UPDATE_CHANNEL=\"main\"" "$2" && ! grep -q "^launchctl" "$1"' _ "$SET_LOG" "$SET_CFG/bosun.env"
+check "set BOSUN_AWAKE_UNTIL=18:00 succeeds" settings_exits 0 set BOSUN_AWAKE_UNTIL=18:00
+check "... and moves learning's time with it, as bosun init does" grep -qx 'BOSUN_LEARN_AT="16:30"' "$SET_CFG/bosun.env"
+check "a refusal is never logged as an error (the watchdog alerts on those)" bash -c '! grep -rqE "BOSUN_FOO|bosun update is running|needs your password" "$1/logs" 2>/dev/null' _ "$SET_STATE"
+rm -f "$HOME"/Library/LaunchAgents/"$SET_LABEL"*.plist
+plain_fake launchctl 113
+plain_fake pmset 0
+plain_fake sudo 1
+
 section console "console (local server on a free port, fixture ledger)" covers 'libexec/bosun-console,libexec/bosun-kg,console/**,tests/fixtures/console/**,tests/fixtures/knowledge/**,lib/console_*.py'
 CONSOLE_STATE="$WORK/console-state"
 mkdir -p "$CONSOLE_STATE"
