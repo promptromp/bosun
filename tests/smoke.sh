@@ -423,6 +423,9 @@ export BOSUN_LOG_DIR="$WORK/state/logs"
 export BOSUN_SESSION_NAME="smoke"
 export BOSUN_TMUX_SOCKET="$SOCKET"
 export BOSUN_LAUNCH_DRY_RUN=1
+# The journal's flushes without macOS's F_FULLFSYNC (lib/journal.py): with several checkouts' suites writing on
+# one drive, each full flush waits for the drive's whole cache, and the update section's 60-second waits ran out.
+export BOSUN_PLAIN_FSYNC=1
 export BOSUN_ORCHESTRATOR="" # orchestrator tests below enable it explicitly
 REPO_A="$WORK/repos/svc-a"
 REPO_B="$WORK/repos/svc-b"
@@ -1448,6 +1451,11 @@ rm -rf "$REPO_A/.claude/settings.json"
 out="$("${SN[@]}" BOSUN_ORCHESTRATOR=orch BOSUN_ORCHESTRATOR_DIR="$REPO_A" BOSUN_ORCHESTRATOR_CONNECTORS=all "$BOSUN" doctor 2>&1)"
 check "doctor says what each window reaches: a few" contains "$out" "ok    alpha: allowed by name: acme-local; allowed by pattern: https://mcp.example.com/*"
 check "... none" contains "$out" "ok    gamma: none (no MCP server or connector)"
+# The suite sets BOSUN_PLAIN_FSYNC for the commands it runs (it is for tests only): doctor says so while it is set, and
+# not otherwise.
+PLAIN_FSYNC_LINE="warn  BOSUN_PLAIN_FSYNC is set: writes are not flushed to the drive; it is for the test suite only"
+check "doctor warns while BOSUN_PLAIN_FSYNC is set, as the suite sets it" contains "$out" "$PLAIN_FSYNC_LINE"
+check "... and is quiet about it otherwise" bash -c '! env -u BOSUN_PLAIN_FSYNC "${@:2}" "$1" doctor 2>&1 | grep -qF "BOSUN_PLAIN_FSYNC"' _ "$BOSUN" "${SN[@]}" BOSUN_ORCHESTRATOR=orch BOSUN_ORCHESTRATOR_DIR="$REPO_A" BOSUN_ORCHESTRATOR_CONNECTORS=all
 check "... and warns while the orchestrator keeps every connector" contains "$out" \
   "warn  orch: all (every MCP server and connector): name the ones it needs in BOSUN_ORCHESTRATOR_CONNECTORS and drop all"
 out="$("${ORCH[@]}" BOSUN_ORCHESTRATOR_CONNECTORS="claude.ai Acme Chat, claude.ai Acme Gone" "$BOSUN" doctor 2>&1)"
@@ -4781,7 +4789,7 @@ PY
   guard_before="$(u_guard 2>&1)"
   "${U_ENV[@]}" UPDATE_PATCH_SLEEP=8 "$U_LINK/bin/bosun" update --yes >"$U/update.out" 2>&1 &
   updating=$!
-  check "--yes: it rehearses, holds, then pauses writes for the migration (the patch's sleep)" wait_for 60 u_step_is migrated
+  check "--yes: it rehearses, holds, then pauses writes for the migration (the patch's sleep)" wait_for 120 u_step_is migrated
   "${U_ENV[@]}" "$U_V1/bin/bosun" ledger upsert 'review:acme/api#3' --kind review-request --title "Written while paused" >"$U/writer.out" 2>&1 &
   writer=$!
   u_guard >"$U/guard.out" 2>&1 &
@@ -4881,7 +4889,7 @@ migrations.run(migrations.Context(pathlib.Path(sys.argv[2]), pathlib.Path(sys.ar
   u_reset
   "${U_ENV[@]}" UPDATE_PATCH_SLEEP=60 "$U_LINK/bin/bosun" update --yes >"$U/killed.out" 2>&1 &
   updating=$!
-  check "an update killed (kill -9) while writes are paused..." wait_for 60 u_step_is migrated
+  check "an update killed (kill -9) while writes are paused..." wait_for 120 u_step_is migrated
   {
     kill -9 "$updating"
     wait "$updating"
@@ -5053,7 +5061,7 @@ HAND
     jq -e ".windows[\"u-shell\"] == [\"repo\", \"take stock, then restart\", \"asked to take stock\", \"restarted\", \"answered\"]" "$1/update.json" >/dev/null &&
       ! kill -0 "$2" 2>/dev/null && grep -l "this session was restarted" "$3"/prompt.u-shell.* | xargs grep -q "sleep 600: the wait for CI"' _ "$U_STATE" "$shell_pid" "$U"
   check "... the busy one is left running, never restarted" bash -c 'kill -0 "$1" && [ "$(jq -c ".windows[\"u-busy\"]" "$2/update.json")" = "[\"repo\",\"wait until idle\"]" ]' _ "$busy_pid" "$U_STATE"
-  check "... and the update says it waits for it" wait_for 30 grep -q "Waiting for u-busy" "$U/agents.out"
+  check "... and the update says it waits for it" wait_for 120 grep -q "Waiting for u-busy" "$U/agents.out"
   kill -INT "$updating"
   wait "$updating"
   rc=$?

@@ -123,6 +123,13 @@ check_config() {
   done <<<"$sessions"
 }
 
+# BOSUN_PLAIN_FSYNC=1 (lib/journal.py) is for the test suite only: with it set, a write to either store is not
+# flushed to the drive itself, and a power cut can lose it.
+check_plain_fsync() {
+  [ "${BOSUN_PLAIN_FSYNC:-}" = 1 ] || return 0
+  warn "BOSUN_PLAIN_FSYNC is set: writes are not flushed to the drive; it is for the test suite only"
+}
+
 # An update cut short (docs/design/update.md): it stopped and left its hold, or its hold outlived
 # its hour. The watchdog's update-stuck check says the same.
 check_update() {
@@ -536,6 +543,7 @@ check_claude_login
 check_bypass_warning
 section "Config ($BOSUN_CONFIG_DIR)"
 check_config
+check_plain_fsync
 check_update
 check_knowledge
 section "Ledger ($BOSUN_STATE_DIR)"

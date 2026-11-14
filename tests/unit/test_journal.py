@@ -10,6 +10,7 @@ import io
 import json
 import os
 import stat
+import subprocess
 import sys
 import tempfile
 import threading
@@ -259,6 +260,27 @@ class Disk(JournalTestCase):
         ):
             jr.flush_to_disk(7)
         self.assertEqual(synced, [7])
+
+    def test_bosun_plain_fsync_leaves_out_the_full_flush_only_where_it_is_set(self) -> None:
+        """tests/smoke.sh sets it, so several suites on one drive never queue behind each other's full
+        flushes; a real run never has it."""
+        lib = str(Path(jr.__file__).resolve().parent)
+        code = "import sys; sys.path.insert(0, sys.argv[1]); import journal; print(journal.FULL_FSYNC)"
+        base = {k: v for k, v in os.environ.items() if k != "BOSUN_PLAIN_FSYNC"}
+
+        def full_fsync(**extra: str) -> str:
+            done = subprocess.run(
+                [sys.executable, "-I", "-c", code, lib],
+                env={**base, **extra},
+                capture_output=True,
+                text=True,
+                check=True,
+            )
+            return done.stdout.strip()
+
+        self.assertEqual(full_fsync(), str(getattr(fcntl, "F_FULLFSYNC", None)))
+        self.assertEqual(full_fsync(BOSUN_PLAIN_FSYNC="0"), str(getattr(fcntl, "F_FULLFSYNC", None)))
+        self.assertEqual(full_fsync(BOSUN_PLAIN_FSYNC="1"), "None")
 
     def test_an_atomic_replace_flushes_the_folder_after_the_rename(self) -> None:
         """A rename is an entry in its folder: flushed only with the folder, so that a power cut

@@ -129,6 +129,12 @@ impacted_map = [
     "tests/smoke.sh=tests/unit/test_smoke_cache.py",
     "tests/smoke_cache.sh=tests/unit/test_smoke_sections.py",
     "tests/smoke_cache.sh=tests/unit/test_smoke_cache.py",
+    "tests/smoke.sh=tests/unit/test_smoke_state.py",
+    "tests/smoke_cache.sh=tests/unit/test_smoke_state.py",
+    "tests/js_check.sh=tests/unit/test_smoke_state.py",
+    "tests/sandbox/update_patch.sh=tests/unit/test_smoke_state.py",
+    "tests/sandbox/agy-stand-in=tests/unit/test_smoke_state.py",
+    "tests/sandbox/codex-stand-in=tests/unit/test_smoke_state.py",
     # ... and what the pre-push hook chooses sections by: their `covers`, tests/smoke_selection.txt, tools/smoke_select.py.
     "tests/smoke.sh=tests/unit/test_smoke_select.py",
     "tests/smoke.sh=tests/unit/test_smoke_selection.py",

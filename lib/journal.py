@@ -23,7 +23,9 @@ sequence, the ids minted from it and its transaction stay as they were.
 Every byte reaches the file or the write fails (a short write is finished, one that makes no
 progress raises: `write_all`), and each append is flushed to the disk itself before the next file
 is written (`flush_to_disk`: F_FULLFSYNC on macOS, whose fsync leaves data in the drive's cache, so
-that a power cut cannot keep a later write and lose an earlier one). A file replaced or made whole
+that a power cut cannot keep a later write and lose an earlier one; TEST ONLY: the smoke suite sets
+BOSUN_PLAIN_FSYNC=1 for plain fsync instead, which weakens both stores' durability, so never set it in
+real use and see FULL_FSYNC below). A file replaced or made whole
 (`replace_durably`, `create_new`) has its folder flushed too, as a rename or a link is an entry
 there. Both stores' files go through these. Each file is numbered from seq 1 with no gap; a gap is
 damage.
@@ -72,7 +74,15 @@ REPLICA_ID = re.compile(r"[0-9a-f]{32}")  # also a file's stem: never "local", n
 LOCAL = "local"
 SUFFIX = ".jsonl"
 # fcntl's full flush where the platform has one (macOS); None elsewhere.
-FULL_FSYNC: int | None = getattr(fcntl, "F_FULLFSYNC", None)
+# TEST ONLY: BOSUN_PLAIN_FSYNC=1 in the environment leaves it out. tests/smoke.sh sets it for the commands it
+# runs; never set it in real use, it weakens the durability of both stores (a power cut can lose a write that
+# was acknowledged). F_FULLFSYNC waits for the whole drive's cache, so with several checkouts' suites (and
+# builds) writing at once every flush queued behind the others and the update section's waits ran out.
+# No suite on a Mac can show what the full flush adds; the Mac VM's runs (tests/sandbox.sh mac) and every real
+# run keep it, and `bosun doctor` warns while the variable is set.
+FULL_FSYNC: int | None = (
+    None if os.environ.get("BOSUN_PLAIN_FSYNC") == "1" else getattr(fcntl, "F_FULLFSYNC", None)
+)
 TORN = ".torn-"  # <file>.torn-<UTC time>: an unfinished transaction, moved aside
 # What writes cut short leave of local.jsonl, which a delete on request removes: its torn tails, and
 # the copy a rewrite was writing.
