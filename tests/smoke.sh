@@ -3176,7 +3176,7 @@ rm -f "$BOSUN_STATE_DIR/quit.json" "$BOSUN_STATE_DIR/console/wanted" "$BOSUN_STA
 # current time, so these hold whatever time the suite runs at: a window ending in 20 minutes that began 2 minutes
 # ago is inside (an end earlier than the start runs past midnight, which the window rule handles), one that is 10
 # to 20 minutes ahead is outside, and with every day but today's and yesterday's scheduled, no window holds now.
-section morning-now "morning --now (the morning run at any hour or day)" needs quit covers 'libexec/bosun-morning,libexec/bosun-quit,libexec/bosun-stop,libexec/bosun-ledger,lib/keep_awake.py'
+section morning-now "morning --now (the morning run at any hour or day)" needs quit covers 'libexec/bosun-morning,libexec/bosun-quit,libexec/bosun-stop,libexec/bosun-ledger,lib/keep_awake.py,lib/login_start.py'
 today_letter="$(printf MTWRFSU | cut -c "$(date +%u)")"
 yesterday_letter="$(printf MTWRFSU | cut -c "$(date -v-1d +%u)")"
 unscheduled_days="$(printf MTWRFSU | tr -d "$today_letter$yesterday_letter")"
@@ -3245,6 +3245,42 @@ check "... starting nothing" bash -c '! tmux -L "$1" has-session -t =smoke' _ "$
 out="$(now_morning "${awake_outside[@]}" BOSUN_SETUP_FILE="$WORK/quit-during-setup.sh" "$BOSUN" morning --now)"
 now_rc=$?
 check "a quit made while --now sets up survives its start, which logs that, and the run says so and exits 0" bash -c 'grep -q "bosun was quit at [0-9:]*: not starting it" <<<"$1" && grep -q "bosun quit during the morning run; not starting" <<<"$1" && ! grep -q "morning run complete" <<<"$1" && [ "$2" -eq 0 ] && [ -f "$3/quit.json" ] && ! tmux -L "$4" has-session -t =smoke' _ "$out" "$now_rc" "$BOSUN_STATE_DIR" "$SOCKET"
+now_clean
+
+# --at-login (lib/login_start.py): the decision comes before the run's header, so a skip leaves none.
+morning_log="$BOSUN_LOG_DIR/morning-$(date +%F).log"
+run_headers() { grep -c "=== morning run" "$morning_log" 2>/dev/null || true; }
+at_login() { # <VAR=value>...: bosun morning --at-login, with a stand-in caffeinate and no network
+  now_morning "$@" "$BOSUN" morning --at-login
+}
+now_clean
+headers_before="$(run_headers)"
+out="$(at_login "${awake_inside[@]}" BOSUN_START_AT_LOGIN=0)"
+now_rc=$?
+check "--at-login with BOSUN_START_AT_LOGIN=0 logs why, exits 0 and starts no session" bash -c 'grep -q "not starting: BOSUN_START_AT_LOGIN is 0" <<<"$1" && [ "$2" -eq 0 ] && ! tmux -L "$3" has-session -t =smoke' _ "$out" "$now_rc" "$SOCKET"
+check "... a skip writes no run header (the watchdog would read it as a run that never finished)" bash -c '! grep -q "=== morning run" <<<"$1" && [ "$(grep -c "=== morning run" "$2")" -eq "$3" ]' _ "$out" "$morning_log" "$headers_before"
+check "... its line is in the day's morning log" grep -q "not starting: BOSUN_START_AT_LOGIN is 0" "$morning_log"
+
+out="$(at_login "${awake_inside[@]}" BOSUN_START_AT_LOGIN=1)"
+check "--at-login after bosun stop says you stopped bosun today, and starts nothing" bash -c 'grep -q "not starting: you stopped bosun today at " <<<"$1" && ! grep -q "=== morning run" <<<"$1" && ! tmux -L "$2" has-session -t =smoke' _ "$out" "$SOCKET"
+out="$(at_login "${awake_outside[@]}" BOSUN_START_AT_LOGIN=1)"
+check "--at-login outside the hours says so" contains "$out" "not starting: outside your hours ("
+out="$(at_login "${awake_unscheduled[@]}" BOSUN_START_AT_LOGIN=1)"
+check "--at-login on a day that is not scheduled says so" contains "$out" "not starting: not one of your days ("
+write_quit paused
+out="$(at_login "${awake_inside[@]}" BOSUN_START_AT_LOGIN=1)"
+check "--at-login after a quit that paused the morning says so, and leaves the quit" bash -c 'grep -q "not starting: bosun was quit at [0-9:]* with the morning start paused" <<<"$1" && [ -f "$2/quit.json" ]' _ "$out" "$BOSUN_STATE_DIR"
+printf '%s\n' "$(date '+%F %T')" >"$BOSUN_STATE_DIR/login-reload"
+rm -f "$BOSUN_STATE_DIR/quit.json" "$BOSUN_STATE_DIR/stopped-smoke"
+out="$(at_login "${awake_inside[@]}" BOSUN_START_AT_LOGIN=1)"
+check "--at-login right after a reload of the jobs is not a login, and removes the reload marker" bash -c 'grep -q "not starting: a reload of bosun.s jobs, not a login" <<<"$1" && [ ! -e "$2/login-reload" ] && ! tmux -L "$3" has-session -t =smoke' _ "$out" "$BOSUN_STATE_DIR" "$SOCKET"
+
+out="$(at_login "${awake_inside[@]}" BOSUN_START_AT_LOGIN=1)"
+now_rc=$?
+check "--at-login in your hours with nothing in the way starts the session, and the header says trigger=login whatever BOSUN_TRIGGER is" bash -c 'grep -q "starting bosun: you logged in during your hours" <<<"$1" && grep -q "=== morning run (trigger=login, " <<<"$1" && ! grep -q "trigger=launchd" <<<"$1" && grep -q "morning run complete" <<<"$1" && [ "$2" -eq 0 ] && tmux -L "$3" has-session -t =smoke' _ "$out" "$now_rc" "$SOCKET"
+out="$(at_login "${awake_inside[@]}" BOSUN_START_AT_LOGIN=1)"
+check "... a second login with the session running says it is running already" bash -c 'grep -q "not starting: bosun is running already" <<<"$1" && ! grep -q "=== morning run" <<<"$1"' _ "$out"
+check "--at-login takes no other option" fails_with "--at-login takes no other option" now_morning "$BOSUN" morning --at-login --now
 now_clean
 
 stop_keep_awake_leaves_it() { # bosun stop --keep-awake keeps the caffeinate and its files; a plain stop releases them

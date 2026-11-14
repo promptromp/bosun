@@ -1,5 +1,6 @@
 #!/bin/bash
 # Usage: bosun morning [--now [--background]] [--dry-run] [--skip-setup] [--awake-minutes N]
+#        bosun morning --at-login
 #
 # The scheduled entry point (launchd runs this at BOSUN_START_TIME):
 #   1. promote the wake to a full wake and hold a keep-awake assertion until BOSUN_AWAKE_UNTIL
@@ -28,6 +29,14 @@
 #                      is going; exit 1, in one line, when the job is not loaded (run install.sh again, or
 #                      `bosun init`) or launchd would not start it; exit 2 for --background without --now, or
 #                      with --dry-run, --skip-setup or --awake-minutes, which the job's run cannot be given
+#   --at-login         what bosun's login job runs: the scheduled run, behind the
+#                      checks of lib/login_start.py, and no other option. It starts only when BOSUN_START_AT_LOGIN
+#                      is 1, the login is not a reload of bosun's jobs, bosun was not quit with the morning start
+#                      paused, today is one of BOSUN_DAYS and now is within the hours (BOSUN_START_TIME to
+#                      BOSUN_AWAKE_UNTIL), you did not stop bosun earlier today, and the session is not running.
+#                      It logs one line saying that it starts or why not, and a skip exits 0 before the run's header
+#                      (`=== morning run`) is written, so the watchdog never sees a run that did not happen. A start
+#                      is the scheduled run, its log header saying trigger=login
 #   --dry-run          report what would happen; no keep-awake, logins or tmux changes
 #   --skip-setup       skip step 3 (the agents' update, step 4, still runs)
 #   --awake-minutes N  hold the keep-awake for N minutes instead of until BOSUN_AWAKE_UNTIL (also with --now)
@@ -40,6 +49,7 @@ source "$(dirname "$0")/../lib/common.sh"
 load_config
 
 NOW=0
+AT_LOGIN=0
 BACKGROUND=0
 DRY_RUN=0
 SKIP_SETUP=0
@@ -47,6 +57,7 @@ AWAKE_MINUTES=""
 while [ $# -gt 0 ]; do
   case "$1" in
     --now) NOW=1 ;;
+    --at-login) AT_LOGIN=1 ;;
     --background) BACKGROUND=1 ;;
     --dry-run) DRY_RUN=1 ;;
     --skip-setup) SKIP_SETUP=1 ;;
@@ -62,6 +73,9 @@ while [ $# -gt 0 ]; do
   esac
   shift
 done
+
+[ "$AT_LOGIN" = "0" ] || [ "$NOW$BACKGROUND$DRY_RUN$SKIP_SETUP$AWAKE_MINUTES" = "0000" ] ||
+  die_usage "--at-login takes no other option"
 
 # The job runs plain `morning --now`: only that can be started in the background.
 start_in_background() {
@@ -95,6 +109,26 @@ exec > >(tee -a "$LOG_FILE") 2>&1
 LOG_TO_FILE=0 # all of its output goes to its day's file already (log() in lib/common.sh)
 
 KEEP_AWAKE_PIDFILE="$(keep_awake_pidfile)"
+
+# --at-login's decision (lib/login_start.py), before begin_run: a skip ends the run here, with its one line and
+# no header. A start goes on as the scheduled run, which says trigger=login.
+decide_at_login() {
+  local running=0 line status
+  session_exists && running=1
+  line="$(python3 "$BOSUN_ROOT/lib/login_start.py" decide --state-dir "$BOSUN_STATE_DIR" \
+    --session "$BOSUN_SESSION_NAME" --days "$BOSUN_DAYS" --start "$BOSUN_START_TIME" --until "$BOSUN_AWAKE_UNTIL" \
+    --enabled "$BOSUN_START_AT_LOGIN" --running "$running")"
+  status=$?
+  case $status in
+    0) log "$line" ;;
+    3)
+      log "$line"
+      exit 0
+      ;;
+    *) die "the login start could not be decided (status $status)" ;;
+  esac
+  BOSUN_TRIGGER=login
+}
 
 # What `bosun status --json` reads (keep_awake_file): when the hold ends and whose it is, written whole.
 record_keep_awake() { # <caffeinate pid> <seconds>
@@ -260,6 +294,7 @@ start_windows() {
   fi
 }
 
+[ "$AT_LOGIN" = "1" ] && decide_at_login
 begin_run
 tidy_logs
 pmset -g batt | head -1 | sed 's/^/power: /'

@@ -169,6 +169,7 @@ set_feature_defaults() {
   set_console_defaults
   set_quit_defaults
   set_app_defaults
+  set_login_defaults
   set_impact_defaults
   set_knowledge_defaults
   set_approval_defaults
@@ -394,6 +395,13 @@ set_app_defaults() {
   # keeps it at the version it expects, and the watchdog says when it is gone from ~/Applications.
   # 0: bosun never touches the app.
   BOSUN_MENU_APP="0"
+}
+
+set_login_defaults() {
+  # 1: bosun also starts when you log in to the Mac, on a scheduled day within these hours, unless you quit
+  # it with the morning paused or stopped it earlier that day (`bosun morning --at-login`, run by a login
+  # job). 0: it starts at the morning time, or from Start, as before.
+  BOSUN_START_AT_LOGIN="1"
 }
 
 set_impact_defaults() {

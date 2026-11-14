@@ -177,6 +177,14 @@ CONFIG_ADDED: tuple[AddedKey, ...] = (
         "background job from bosun start until bosun quit",
     ),
     AddedKey(
+        "BOSUN_START_AT_LOGIN",
+        "0",
+        "this install keeps today's behaviour: bosun starts at the morning time or from Start; "
+        "BOSUN_START_AT_LOGIN=1 makes it start at login during your hours",
+        "since this version bosun starts at login, on a scheduled day within your hours; "
+        "BOSUN_START_AT_LOGIN=0 keeps the old way (the morning time, or Start)",
+    ),
+    AddedKey(
         "BOSUN_CONNECTORS",
         None,
         "repo windows now start without connectors, a repo's own .mcp.json servers included; give one "
