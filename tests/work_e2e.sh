@@ -38,37 +38,7 @@ JOURNAL="$STATE/journal/ledger"
 KJOURNAL="$KNOWLEDGE/journal"
 T_FIRST="" # the first task the new bosun makes
 DAY=86400
-TODAY=0        # the day the clock is on: days after the first
-CLOCK_START="" # "<wall time> <monotonic time>" at the start: the real time, whatever `date` is set to later
-
-real_time() {
-  # shellcheck disable=SC2086 # two numbers
-  python3 -c 'import sys, time; wall, mono = map(float, sys.argv[1:]); print(int(wall + time.monotonic() - mono))' $CLOCK_START
-}
-set_clock() { # <seconds ahead of the real time>
-  local at
-  at=$(($(real_time) + $1))
-  sudo date -u "$(date -u -r "$at" +%m%d%H%M%Y.%S)" >/dev/null
-}
-clock_reads() { # <seconds ahead of the real time>: within a minute of it
-  local off
-  off=$(($(date +%s) - $(real_time) - $1))
-  [ "${off#-}" -le 60 ] || {
-    echo "the clock is $off seconds off: $(date)"
-    return 1
-  }
-}
-start_clock() { # the real time from here on; it is put back however this ends
-  CLOCK_START="$(python3 -c 'import time; print(time.time(), time.monotonic())')"
-  trap 'set_clock 0' EXIT
-  trap 'exit 1' INT TERM HUP
-  # Network time off, or timed may undo `sudo date`. It stays off: the clone is deleted after the run.
-  sudo systemsetup -setusingnetworktime off </dev/null 2>&1 | sed 's/^/  note  /'
-}
-put_the_clock_back() {
-  set_clock 0
-  check "the clock is back at the real time: $(date -u '+%a %F %R') UTC" clock_reads 0
-}
+TODAY=0 # the day the clock is on: days after the first
 
 jobs_quiet() { ! pgrep -f 'libexec/bosun-(morning|learn)' >/dev/null; }
 
