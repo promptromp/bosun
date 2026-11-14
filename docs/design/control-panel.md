@@ -4,8 +4,9 @@ bosun.app ([the menu bar app](menu-bar.md)) shows bosun's state and runs a few a
 person who runs bosun reaches for whatever the hour: a control panel that is there from login, apart from bosun's
 session (the orchestrator, the windows, the check-ins), which keeps to the schedule. It adds starting bosun at
 login, a separate Stop and Quit, and a Settings window. Status: approved 2026-11-14, with the person's answers of
-the same day. Plan: [control-panel.md](../plans/control-panel.md). (Builder's call in the plan: Open at Login
-moves from the menu into Settings → General, beside starting at login, so it lives in one place.)
+the same day; built ([plan](../plans/control-panel.md)), bosun.app 0.1.3, and run in the Mac VM (`tests/sandbox.sh
+mac app`); what changed while building is [at the end](#changes-while-building). (Builder's call in the plan: Open
+at Login moves from the menu into Settings → General, beside starting at login, so it lives in one place.)
 
 ## Why
 
@@ -194,3 +195,35 @@ item (⌘,), in a window titled "<App> Settings", with panes only when there are
 - Where its line is logged.
 - The Settings window's layout within Apple's conventions, and whether it is SwiftUI in an AppKit app or AppKit.
 - The exact wording of the lines, keeping the table's sense.
+
+## Changes while building
+
+The builder's calls on what the note left open, and the rulings made while building (2026-11-14):
+
+- **The login job tells a login from a reload by a marker**: reloading bosun's jobs (`reload_job` in
+  `lib/common.sh`) leaves `login-reload` in the state folder before it loads the login job, and a run that finds
+  one younger than two minutes is a reload, and starts nothing; the run removes it, whatever it decides. Its line
+  goes in the day's morning log ("starting bosun: you logged in during your hours", or "not starting: <why>"); a
+  skip writes no run header, so the watchdog does not count it as a morning run, and a start is the scheduled run
+  with `trigger=login`. A login run while the morning or the `.now` job's run is going counts as running already.
+- **The grey dot is the app's**: resting keeps the status level `ok` (the contract's levels mean what they meant),
+  and the app draws the dot grey when the level is `ok`, the hours say outside and no window is open; a warning or
+  an error keeps its colour. `schedule.next_start` is the next start after now, so in your hours it is tomorrow's.
+- **Opening bosun.app by hand does not start a resting bosun** (all well or a warning, outside your hours): the
+  schedule decides the automatic starts, and Start bosun now is one click; it still starts a stopped bosun, or a
+  red one with no window open, as before.
+- **The watchdog's stall check of the Slack watcher follows the session**, as the watcher does: it is no longer
+  gated on the awake window (its alerts are still held outside it).
+- **`settings get` on a `bosun.env` that cannot be read** gives every value as null and not valid (with its
+  default beside it), never the default as the value; the Settings window shows those as values it cannot show.
+- **A Save that moves bosun's wake** goes to Terminal (`bosun settings set` there asks for the password, `sudo -v`,
+  and writes nothing when that fails); the window says to finish it there, and shows what bosun read before.
+  Without a terminal to ask in, `settings set` moves the wake only where sudo needs no password (`sudo -n -v`), and
+  refuses otherwise. A failed `pmset` or reload puts `bosun.env` back from the backup the writer made.
+- **The Settings window is SwiftUI in the AppKit app** (`app/Sources/BosunMenu/SettingsWindow.swift`), its state
+  and its Schedule draft in the core (`Settings.swift`, `SettingsSchedule.swift`), so a refused Save, a hand-off to
+  Terminal and a reopen all show what bosun read, never an unsaved draft.
+- **The Stop flow's words speak of stopping** ("bosun cannot say what stopping would end", "Stopping…", Cancel),
+  and of quitting only where the app quits too (Quit bosun.app's "Stop bosun and Quit…").
+- **The Mac VM run** sets the clone's time zone so that its local time is about noon, since the restart in the
+  hours and the watchdog's held alert depend on the hour; it moves the clock to before the start time for Resting.

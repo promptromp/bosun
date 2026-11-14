@@ -161,9 +161,12 @@ with `bosun update`.
 ## The menu bar app
 
 `bosun.app` puts a small icon in the menu bar that says whether bosun is well, and has the few things you
-would otherwise type: update, open the console, quit and start again. It lives in `~/Applications`, has no Dock
-icon. It reads nothing of bosun's but what `bosun status --json` and its other
-`--json` commands print, so it never disagrees with them. Design: [design/menu-bar.md](design/menu-bar.md).
+would otherwise type: start and stop bosun, update, open the console, and its settings. It is a control panel, there
+from login whatever the hour, apart from bosun's session (the orchestrator, the windows, the check-ins), which keeps
+to your schedule. It lives in `~/Applications`, has no Dock icon. It reads nothing of bosun's but what
+`bosun status --json` and its other `--json` commands print, so it never disagrees with them, and changes
+settings only through [`bosun settings`](commands.md#changing-settings). Design: [design/menu-bar.md](design/menu-bar.md) and
+[design/control-panel.md](design/control-panel.md).
 
 ### Installing it
 
@@ -199,16 +202,20 @@ starts; see docs/design/menu-bar.md, the Mac VM run of the app)". macOS can stop
 ### The menu
 
 The first line is a coloured dot and one sentence, with grey lines of detail under it. The items follow in this
-order: "Start bosun" (only while bosun is not running: grey, red with no window open, or a quit that did not finish)
-and "Show What's Wrong..." (yellow and red only), Open Console, Check for Updates..., Open at Login, Help, and Quit.
+order: "Start bosun" (only while bosun is not running: stopped, resting outside your hours, red with no window open,
+or a quit that did not finish; it reads "Start bosun now" outside your hours) and "Show What's Wrong..." (yellow and
+red only), Open Console, Check for Updates..., Settings... (⌘,), Help, "Stop bosun..." (while bosun runs) and "Quit
+bosun.app" (⌘Q), always last.
 
 | Dot and sentence | Meaning | What the menu offers |
 |---|---|---|
-| Green, "bosun is running" | Windows are open, with how many wait for you and until when the Mac is kept awake | Everything but Start, with "Quit bosun..." |
+| Green, "bosun is running" | Windows are open, with how many wait for you and until when the Mac is kept awake | Everything but Start, with "Stop bosun..." |
+| Green, "bosun is running · outside your hours" | Windows are open outside your hours: you started it then, or a morning session runs on past `BOSUN_AWAKE_UNTIL`. Its check-ins and events run while it runs, whatever the hour; only the keep-awake ends at its time | As green |
+| Grey, "Resting: outside your hours · next start Mon 08:00" | Not running, all well, outside your hours (not one of `BOSUN_DAYS`, or outside `BOSUN_START_TIME` to `BOSUN_AWAKE_UNTIL`), with the next automatic start (the morning job's next run; no "next start" when none is scheduled) | "Start bosun now" first |
 | Yellow, "bosun is running, with a warning" | The watchdog is not running, a check warns, there were errors in the last hour, or a window could not start | "Show What's Wrong..." lists them; everything else as green |
-| Red, "bosun is not running" | It should be (inside its awake hours, and you did not quit it), or the morning run failed; a quit that did not finish shows as an error too | "Start bosun" first, then "Show What's Wrong..." |
+| Red, "bosun is not running" | It should be (inside your hours, and you did not stop it), or the morning run failed; a quit that did not finish shows as an error too | "Start bosun" first, then "Show What's Wrong..." |
 | Red, "bosun is running, with an error" | Windows are open and something is wrong at the error level: a check failed. An ERROR line in the logs is yellow, and only for the hour after it was logged, at any hour (the watchdog's own alert about it is not counted, since outside the awake hours it holds that alert until they begin). Red with "bosun's windows could not be read" is treated the same: bosun may be running | "Show What's Wrong..." first, and no Start: bosun runs (opening `bosun.app` does not start it again either) |
-| Grey, "bosun is stopped" | You quit it | "Start bosun" first; Open Console is greyed, and Quit reads "Quit bosun" with no dialog |
+| Grey, "bosun is stopped" | You stopped it: Stop bosun..., `bosun quit`, or `bosun stop` earlier today ("bosun is stopped (bosun stop at 18:40)", until your hours end) | "Start bosun" first; Open Console is greyed, and Quit bosun.app quits at once, with no dialog |
 | Red, "bosun cannot be reached" | `bosun status --json` failed, timed out with no earlier status to show, or its reply could not be read (a timeout after an earlier status shows that status with "(not current)") | Only Help, with Run bosun doctor (Show Logs and Uninstall are greyed), and "Quit bosun.app"; there is no Start |
 | Red, "bosun cannot be run" | There is something at `~/.local/bin/bosun` that cannot be run (a broken link, no permission) | Only Help (Run bosun doctor, Show Logs and Uninstall are greyed) and "Quit bosun.app" |
 | Grey, "bosun is not installed" | The app found no bosun | Only Help and "Quit bosun.app" |
@@ -241,48 +248,84 @@ The items:
   restart, which ask you first) and then runs it; while it waits for a quiet moment the item reads "Updating...
   waiting for N windows". `bosun update` stays the one updater, of bosun and of the app.
 - **Open Console** opens the web console, signed in, in your browser. It is greyed while bosun is stopped.
-- **Open at Login** toggles `bosun app login on|off`: a launchd job that opens the icon at login (it does not start
-  bosun; the morning job does that at its time). It is greyed while it is being switched.
+- **Settings...** (⌘,) opens the bosun Settings window: [Settings](#settings).
 - **Help** has "bosun Guide" (a web page), "Run bosun doctor", "Show Logs" (greyed when bosun has logged nothing)
   and **"Uninstall bosun..."**, which opens Terminal running `bosun uninstall` after a confirmation, so its
   questions and the administrator password the wake needs are asked where they can be. Show Logs and Uninstall
   need a status from bosun, Run bosun doctor only a bosun that can be run (it is what finds out why bosun cannot be
   reached), and Uninstall waits for an update or quit in progress.
 
-### Quit and Start
+### Stop, Quit and Start
 
-**Quit bosun...** opens a dialog listing what stops, with up to three boxes: "Pause the morning start until I open
-bosun again" (on by default); "Let this Mac sleep now" (on by default, and there only while the Mac is being kept
-awake; unchecked, the keep-awake runs to its end); and "Keep bosun in the menu bar" (off by default: unless you check
-it, the app quits itself once bosun has stopped, and opening `bosun.app` brings it back). It never touches the
-ledger, the knowledge base or the config.
+The app is the panel and bosun's session is the worker, and the menu keeps them apart: **Stop bosun...** ends the
+session and leaves the panel, **Quit bosun.app** closes the panel and leaves the session running unless you choose
+otherwise.
 
-If bosun cannot say what quitting would stop (it could not read its windows, did not answer in time, or failed
-without saying more), the dialog is "bosun cannot say what quitting would stop" instead, with Cancel, a Stop Now that
-ends every window without waiting, and "Quit bosun.app", which leaves bosun as it is and only quits the app; it
-always shows all three boxes. A quit that bosun refuses (an update runs) only says why.
+**Stop bosun...** (while bosun runs) opens a dialog listing what stops, with up to two boxes: "Pause the morning
+start until I open bosun again" (on by default) and "Let this Mac sleep now" (on by default, and there only while the
+Mac is being kept awake; unchecked, the keep-awake runs to its end). The app stays, with the grey "bosun is stopped"
+status and Start. It never touches the ledger, the knowledge base or the config.
 
-While the quit runs, a grey line under the status says what it does: "Quitting: waiting for <names> to finish..."
-while it lets agents finish, "Quitting: stopping bosun..." otherwise. The app gives `bosun quit` as long as bosun
-says it may take (the wait, the wait for a start that is setting up the windows, and the steps after it), so a
-quit is never cut short half way.
+**Quit bosun.app** (⌘Q, always) quits at once when bosun is not running. While it runs, it asks: **Leave bosun
+Running** (the default: bosun goes on without its icon, and opening `bosun.app` shows it again), **Stop bosun and
+Quit...** (the Stop dialogs above, then the app quits), or **Cancel**. The "Keep bosun in the menu bar" box the quit
+had before is gone: Stop is that.
+
+If bosun cannot say what stopping would end (it could not read its windows, did not answer in time, or failed
+without saying more), the dialog is "bosun cannot say what stopping would end" instead ("...what quitting would
+stop" from Quit bosun.app), with Cancel and a Stop Now that ends every window without waiting, and from Quit
+bosun.app also "Quit bosun.app", which leaves bosun as it is and only quits the app; it always shows both boxes. A
+stop that bosun refuses (an update runs) only says why.
+
+While the stop runs, a grey line under the status says what it does: "Stopping: waiting for <names> to finish..."
+while it lets agents finish, "Stopping bosun now..." otherwise ("Quitting: ..." when the app quits too). The app
+gives `bosun quit` as long as bosun says it may take (the wait, the wait for a start that is setting up the windows,
+and the steps after it), so a stop is never cut short half way.
 
 If agents are in the middle of a task, a second dialog names them: **Let Them Finish** waits (up to
-`BOSUN_QUIT_WAIT_MINUTES`, 10 by default), **Stop Them Now** quits at once, **Cancel** changes nothing. A window
+`BOSUN_QUIT_WAIT_MINUTES`, 10 by default), **Stop Them Now** stops at once, **Cancel** changes nothing. A window
 waiting for you at a question or permission prompt is not waited on; it is named and stopped with the rest. If
 agents are still busy when the wait ends, a third dialog, "Still busy", offers **Keep Waiting**, **Stop It Now**
-and **Cancel Quit**.
+and **Cancel** (**Cancel Quit** from Quit bosun.app).
 
-After a quit the launchd jobs stay loaded and do nothing until you start again: the watchdog and learning skip
+After a stop the launchd jobs stay loaded and do nothing until you start again: the watchdog and learning skip
 their runs, and the morning job skips too if you paused it. Nothing is left running that you did not choose to
 keep: no tmux server, no console, no keep-awake. The same is `bosun quit`, in a terminal.
 
-**Start bosun** (first in the menu when bosun is not running: stopped, or red with no window open, such as a
-morning run that failed, and also after a quit that did not finish, where the choice is yours; greyed on a status
-that is "(not current)") does what the morning run does, at any hour: `bosun morning --now --background`, which has
-launchd start the run so that macOS's privacy prompts name bosun's own processes and not the app. Opening
-`bosun.app` from Finder or Spotlight does it too, but only with no window open: never while bosun runs, even with
-an error, and not after a quit that did not finish.
+**Start bosun** (first in the menu when bosun is not running: stopped, resting, or red with no window open, such as
+a morning run that failed, and also after a quit that did not finish, where the choice is yours; greyed on a status
+that is "(not current)"; "Start bosun now" outside your hours) does what the morning run does, at any hour: `bosun
+morning --now --background`, which has launchd start the run so that macOS's privacy prompts name bosun's own
+processes and not the app. A start you make always starts; the automatic ones (the morning job, and the start at
+login) keep to your hours. Opening `bosun.app` from Finder or Spotlight starts bosun too, but only when it is stopped
+or red with no window open: never while bosun runs, even with an error, never while it rests outside your hours, and
+not after a quit that did not finish.
+
+### Starting at login
+
+The app opens at login when Open at Login is on (Settings, General): it only shows the icon. Starting bosun at login
+is bosun's own login job (`BOSUN_START_AT_LOGIN`, which [Install](#install) describes), so it works without the app:
+when you log in on one of your days, inside your hours, and you have not stopped or quit bosun today and it is not
+running already, it starts, and the morning log says "starting bosun: you logged in during your hours"; otherwise
+the log says why not. A reload of bosun's jobs (an update, `install.sh`) never starts it.
+
+### Settings
+
+**Settings...** (⌘,) opens one window, "bosun Settings", with two panes. It shows what bosun reads, through `bosun
+settings get`, and changes a setting only through [`bosun settings set`](commands.md#changing-settings), which writes
+`bosun.env` as `bosun init` does; a value it cannot show (a `bosun.env` that cannot be read, a value bosun does not
+take) is shown as such, with the wizard as the way to fix it.
+
+- **General**: "Open bosun.app at login" (`bosun app login on|off`, a launchd job that opens the icon at login); "Start
+  bosun when you log in, during your hours" (`BOSUN_START_AT_LOGIN`); "Updates from" releases or main
+  (`BOSUN_UPDATE_CHANNEL`); and Change windows and connectors... (Terminal with `bosun init`, for the windows, the
+  connectors, the agents, models and permissions, which the window does not edit), Open Config Folder and Show Logs.
+- **Schedule**: the days (`BOSUN_DAYS`), "Start at" (`BOSUN_START_TIME`) and "Keep the Mac awake until"
+  (`BOSUN_AWAKE_UNTIL`), said back in a line ("bosun starts at 08:00 on weekdays, and lets the Mac sleep after
+  20:00"), and Save. A Save reloads bosun's jobs, so the morning job runs at the new time; a new until moves a running
+  keep-awake's end too. When the days or the start time change and bosun set the Mac's wake, moving it needs an
+  administrator (`sudo pmset`): the Save opens Terminal running `bosun settings set`, which asks for your password
+  first and writes nothing if that is cancelled; another app's repeating wake is left as it is, and said.
 
 ### Uninstalling
 

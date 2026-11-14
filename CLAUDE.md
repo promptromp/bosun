@@ -40,8 +40,10 @@ of truth, so don't copy rules into this file.
   (`window_specs`: orchestrator, sessions.yml entries, checkin), tmux, the one
   launch path (`build_launch_command`, used by `start`, `refresh` and `send`), and the launchd
   labels and plist rendering (from `templates/launchd.plist`, `launchd-watchdog.plist`,
-  `launchd-learn.plist`, `launchd-console.plist`, `launchd-now.plist` and `launchd-app.plist`: one label helper
-  each, such as `now_label`, listed once in `job_labels`), and `one_at_a_time` (`lib/run_locked.py`: the rest of a shell command run
+  `launchd-learn.plist`, `launchd-console.plist`, `launchd-now.plist`, `launchd-login.plist` and `launchd-app.plist`:
+  one label helper each, such as `now_label`, listed once in `job_labels`; the login job (`login_label`, rendered only
+  with `BOSUN_START_AT_LOGIN=1`) runs `bosun morning --at-login`, whose decision is `lib/login_start.py`, and a reload
+  leaves it `login_reload_marker` so that the run knows it is no login), and `one_at_a_time` (`lib/run_locked.py`: the rest of a shell command run
   holding a lock that what it starts inherits; `start`, `refresh` and `init` use it). `lib/setup-helpers.sh`: the helpers a site's `setup.sh` calls
   (`run_step`, `ensure_aws_sso`, `ensure_claude_login`). `lib/ledger.py`: item kinds, id formats, Slack classes, state
   machines and the states that end a hand-over to a repo session (`work_done`), plus delegations
@@ -211,6 +213,11 @@ of truth, so don't copy rules into this file.
   kickstarts the `.now` job (`now_label`, `templates/launchd-now.plist`, which runs `morning --now`) so that launchd
   and not the app is the parent of what the run starts; the morning logic stays in the `--now` path. `bosun update`
   stays a detached child of the app (a job could boot itself out reloading plists).
+- Settings (`bosun settings get|set`, design: `docs/design/control-panel.md`): `lib/settings.py` (the table of the
+  keys it offers, their checks as `bosun init`'s, the view `get` prints, whose the Mac's wake is, and the write through
+  `init_plan.set_settings` and `init.write_with_backup`) and `libexec/bosun-settings` (the command: what a change needs
+  done, the reload, `sudo pmset` for the wake, the keep-awake, and the put-back when a step fails). The app's Settings
+  window is a view over these two commands.
 - The menu bar app's lifecycle (`bosun app`, design: `docs/design/menu-bar.md`): `libexec/bosun-app` (the commands, and
   `login on|off`, which render and load `templates/launchd-app.plist` through `render_app_plist`, `app_label` and
   `reload_job` in `lib/common.sh`; the login job is there while its plist is, which `reload_changed_jobs` keeps current
@@ -233,16 +240,18 @@ of truth, so don't copy rules into this file.
   renamed or removed, so an older app still reads a newer bosun). `app/` holds `Package.swift`, `Sources/`, `Tests/`,
   `Resources/` (`Info.plist.in`, the icons), `build.sh`, `publisher.json` and `VERSION`; Swift's lint is under Tooling.
   What the AppKit shell needs is split by whether it touches the system. Pure, in the core (so tested, and counted by the
-  floor): `AppCoordinator.swift` and `AppCoordinator+Update.swift` (what is chosen, as flows over `AppUI` and
-  `ScriptWriting`: the shell's whole surface), `DialogSpecs.swift` (every dialog's words, buttons and boxes, and what
+  floor): `AppCoordinator.swift`, `AppCoordinator+Update.swift` and `AppCoordinator+Settings.swift` (what is chosen, as
+  flows over `AppUI` and `ScriptWriting`: the shell's whole surface), `Settings.swift`, `SettingsSchedule.swift` and
+  `ContractSettings.swift` (the Settings window's state, its Schedule draft, and `settings get|set --json`),
+  `DialogSpecs.swift` (every dialog's words, buttons and boxes, and what
   each answer means to a flow), `Poller.swift` (the timing, on a clock it is given), `Launch.swift` (the arguments, the
   one-copy rule over a start-time reader it is given) and `TestHooks.swift` (the VM suite's hook formats, the menu as
   JSON). `Sources/BosunMenuSystem` (Foundation only, depends on the core) is what touches the system: `ProcessBosunCLI`
   (bosun run for real, with timeouts that stop a command's whole process group), `ProcessStartTime` (sysctl),
   `HookFiles` (the hooks' folder and `LoggingBosunCLI`) and `CommandScriptWriter` (the `.command` files); its tests are
   `BosunMenuSystemTests`. `Sources/BosunMenu` is only AppKit: `MenuRenderer` (a `MenuModel` as an `NSMenu`, updated in
-  place), `Dialogs` (a `DialogSpec` as an `NSAlert`), `StatusItemController`, `AppShell` (the `AppUI`), `AppDelegate`,
-  `main.swift`. Start is `bosun morning --now --background`, a short command, never a child the app leaves running
+  place), `Dialogs` (a `DialogSpec` as an `NSAlert`), `SettingsWindow` (the Settings window, SwiftUI over the core's
+  `SettingsState`), `StatusItemController`, `AppShell` (the `AppUI`), `AppDelegate`, `main.swift`. Start is `bosun morning --now --background`, a short command, never a child the app leaves running
   (the Mac's privacy prompts would name the app); only `update --yes` is started detached.
 - bosun.app's build (design: `docs/design/menu-bar.md`, "The bundle and its pictures"): `app/build.sh` (the bundle
   from `swift build`, `app/Resources/Info.plist.in`, signed with the bundle id from `app/publisher.json` as its

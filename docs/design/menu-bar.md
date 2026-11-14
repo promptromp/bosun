@@ -35,9 +35,12 @@ ship a CLI and an app keep them in step).
    stays the one updater, of bosun and of the app.
 3. **Open Console** (⌘O) opens the web console in the default browser, signed in. The console runs all the time,
    as a launchd job like the watchdog, while bosun runs.
-4. **Quit bosun…** (⌘Q) stops bosun cleanly (below), after a short dialog.
+4. **Quit bosun…** (⌘Q) stops bosun cleanly (below), after a short dialog. (Built since as two items, by [the
+   control panel](control-panel.md#stop-and-quit): "Stop bosun…", this quit's flow with the app staying, and "Quit
+   bosun.app", which leaves bosun running unless you choose otherwise.)
 5. **A bosun.app** in `~/Applications`: Spotlight and Launchpad find it; opening it starts bosun if it is stopped
-   and brings the icon back. "Open at Login" in the menu.
+   and brings the icon back. "Open at Login" in the menu. (Since the control panel, Open at Login is in the Settings
+   window's General pane, beside starting bosun at login: [the Settings window](control-panel.md#the-settings-window).)
 6. **Installing asks.** `bosun init` asks whether to add bosun to the menu bar and Applications (recommended
    yes); `bosun update` keeps the app current. **Uninstalling** is "Uninstall bosun…" in the Help submenu, which
    runs `bosun uninstall` after a confirmation.
@@ -49,7 +52,7 @@ ship a CLI and an app keep them in step).
 - A DMG download and a Homebrew cask: the next step, once this ships; the notarized app built here is what they
   will carry.
 - A Settings window, notifications from the app, and anything the console already does: the menu is a status
-  light and four actions. (The Settings window, starting at login and a separate Stop and Quit are proposed in
+  light and four actions. (The Settings window, starting at login and a separate Stop and Quit came since, with
   [the control panel](control-panel.md), 2026-11-14.)
 - Linux and Intel Macs (macOS 27 is Apple silicon only; bosun's minimum macOS stays what it is).
 
@@ -183,7 +186,8 @@ Calls made from the research and the builder check, to check while reading:
   new.
 - **Open at Login.** A LaunchAgent bosun renders like its others (`templates/launchd-app.plist`, RunAtLoad, not
   KeepAlive, `AbandonProcessGroup` true so that quitting the app never takes with it what it started, an update),
-  loaded or unloaded by `bosun app login on|off`; the menu item shows its state. A plain plist, as for
+  loaded or unloaded by `bosun app login on|off`; the menu item shows its state (since the control panel, the
+  Settings window's switch: [the Settings window](control-panel.md#the-settings-window)). A plain plist, as for
   bosun's other jobs: one place that manages launchd, and uninstall already knows how to take them back.
 
 ## The CLI side
@@ -278,7 +282,9 @@ Calls made from the research and the builder check, to check while reading:
   `failed`) and `error`; when it stopped bosun also `morning_paused`, `keep_awake`, `console` (a fixed set:
   `stopped`, `not running`, `still running`) and `console_port`. If a step after step 4 fails, `quit.json` stays
   (bosun is meant to be stopped) and the quit says so, with the two ways out: run `bosun quit --stop-now` again,
-  or `bosun start`. The app then quits itself, unless "Keep bosun in the menu bar" was checked.
+  or `bosun start`. The app then quits itself, unless "Keep bosun in the menu bar" was checked. (That box is gone
+  since the control panel: "Stop bosun…" leaves the app, "Quit bosun.app" closes it; [Stop and
+  Quit](control-panel.md#stop-and-quit).)
 - **`bosun start`** clears the stopped mark, loads the console job, and starts the session as today. `bosun start
   --unless-quit` instead logs that bosun was quit and exits 0, starting nothing and clearing nothing, checked under
   the same lock before the clear. The morning run passes it: it clears an unpaused quit when it begins, then runs

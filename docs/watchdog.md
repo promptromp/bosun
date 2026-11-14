@@ -44,7 +44,9 @@ How it avoids false alarms:
 - **Only in the awake window:** alerts go out on scheduled days (`BOSUN_DAYS`) between
   `BOSUN_START_TIME` and `BOSUN_AWAKE_UNTIL` (an end at or before the start runs past
   midnight: 08:00 to 01:00 ends at 1 am the next day). Anything found outside it is held: a prompt
-  left open overnight alerts when the window opens, and log lines are not consumed until then.
+  left open overnight alerts when the window opens, and log lines are not consumed until then. A session that is
+  missing outside the window is no finding: the gate says "outside the awake window", which `bosun status` and the
+  menu bar app show as "Resting: outside your hours · next start <day> <time>", with a grey dot.
 - **Confirmed first:** a missing morning run, session or check-in loop, or an unfinished morning
   run, must be seen by two runs in a row (5 minutes apart). After a wake the morning job may start a
   few seconds after the watchdog, and a window may be recreated just as it looks; a long gap
