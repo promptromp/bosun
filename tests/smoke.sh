@@ -372,6 +372,9 @@ export BOSUN_LOG_DIR="$WORK/state/logs"
 export BOSUN_SESSION_NAME="smoke"
 export BOSUN_TMUX_SOCKET="$SOCKET"
 export BOSUN_LAUNCH_DRY_RUN=1
+# The journal's flushes without macOS's F_FULLFSYNC (lib/journal.py): with several checkouts' suites writing on
+# one drive, each full flush waits for the drive's whole cache, and the update section's 60-second waits ran out.
+export BOSUN_PLAIN_FSYNC=1
 export BOSUN_ORCHESTRATOR="" # orchestrator tests below enable it explicitly
 REPO_A="$WORK/repos/svc-a"
 REPO_B="$WORK/repos/svc-b"

@@ -84,6 +84,14 @@ nothing above it. Every section begins by checking that the tools that reach out
 stand-ins in the run's own folder, and the run stops if one would be the real one. The run's HOME and those
 stand-ins exist before the first section, and a section that points bosun at another HOME gets them there too.
 
+Suites of several checkouts (git worktrees, parallel agents) can run on one Mac at the same time, so a run keeps all
+its state in its own temp folder: its HOME, state, config, tmux sockets (`bosun-smoke-<pid>`), stand-ins and the
+install under test (`tests/unit/test_smoke_state.py` fails on a fixed `/tmp/<name>` in the suite). The one thing they
+cannot help sharing is the drive, and macOS's `F_FULLFSYNC`, which the journal asks for on every write, waits for the
+whole drive's cache: with three writers it took the update section five times as long to reach the step its 60-second
+wait is for. So the suite sets `BOSUN_PLAIN_FSYNC=1` (`lib/journal.py` then flushes with a plain `fsync`, as the unit
+tests do); the Mac VM's runs and every real run keep the full flush.
+
 `-n auto` runs the tests in parallel, one worker per core (pytest-xdist). `--impacted`
 (pytest-impacted) runs only the tests that what git has uncommitted (staged or not, and new files)
 can reach, so `uv run pre-commit run --all-files` selects the same tests as the commit. The plugin
@@ -417,7 +425,11 @@ The menu bar app is a Swift package in `app/`, so it needs a Swift toolchain (Xc
 zips it; `bosun app install --build` runs it and installs the result. The commit hooks run `swift format lint`,
 SwiftLint and `swift test` with warnings as errors, only for a commit that touches `app/`, and skip with one line
 off a Mac (the app is AppKit; CI's Linux `lint` job has a `swift` that cannot build it) or without Swift; CI's macOS
-`app` job runs them, the coverage floor (`tools/swift_coverage.py`) and an ad hoc build. While
+`app` job runs them, the coverage floor (`tools/swift_coverage.py`) and an ad hoc build. SwiftPM keeps its dependencies' clones and
+downloads in one cache for the whole Mac, which the hooks of two checkouts running at once twice failed
+on (`'swiftlintplugins': Couldn't check out revision`; a rerun passed), so `tools/swift_hook.sh` runs `swift package resolve` holding a
+lock beside that cache and the check then finds its dependencies in the checkout's own `.build`; a warm checkout pays
+about a third of a second. CI's `app` job runs `swift` directly, on a runner with a cache of its own. While
 iterating, `cd app && swift test --filter <suite>`. The app talks to bosun only through its `--json` commands, so a
 change to what one prints needs `uv run python tools/contract_samples.py` to write the fixtures the Swift tests
 decode. What the real app does on a real desktop is `tests/sandbox.sh mac app` (see

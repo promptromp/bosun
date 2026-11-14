@@ -71,8 +71,14 @@ REPLICA_TEMP = WRITING.format(name=REPLICA_FILE, writer="{writer}")  # STATE_FIL
 REPLICA_ID = re.compile(r"[0-9a-f]{32}")  # also a file's stem: never "local", never a path
 LOCAL = "local"
 SUFFIX = ".jsonl"
-# fcntl's full flush where the platform has one (macOS); None elsewhere.
-FULL_FSYNC: int | None = getattr(fcntl, "F_FULLFSYNC", None)
+# fcntl's full flush where the platform has one (macOS); None elsewhere, and with BOSUN_PLAIN_FSYNC=1 in the
+# environment, which tests/smoke.sh sets for the commands it runs: F_FULLFSYNC waits for the whole drive's
+# cache, so with several checkouts' suites (and builds) writing at once every flush queued behind the others
+# and the update section's 60-second waits ran out. No suite on a Mac can show what the full flush adds
+# (surviving a power cut); the Mac VM's runs (tests/sandbox.sh mac) and every real run keep it.
+FULL_FSYNC: int | None = (
+    None if os.environ.get("BOSUN_PLAIN_FSYNC") == "1" else getattr(fcntl, "F_FULLFSYNC", None)
+)
 TORN = ".torn-"  # <file>.torn-<UTC time>: an unfinished transaction, moved aside
 # What writes cut short leave of local.jsonl, which a delete on request removes: its torn tails, and
 # the copy a rewrite was writing.

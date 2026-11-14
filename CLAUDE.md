@@ -403,7 +403,8 @@ and CI agree on versions. On commit (`.pre-commit-config.yaml`; run all with `uv
   toolchain's swift-format, `app/.swift-format`), SwiftLint (the SwiftLintPlugins package's command plugin, its version
   pinned in `app/Package.resolved`; `app/.swiftlint.yml` has the repo's limits: cyclomatic 10, function body 60, type
   body 300, file 400; `force_unwrapping`, `force_try` and `force_cast` errors in Sources, allowed in Tests; no `print`
-  in Sources) and `swift test -Xswiftc -warnings-as-errors`. Swift 6 language mode, so strict concurrency. The floor is
+  in Sources) and `swift test -Xswiftc -warnings-as-errors`. The hooks resolve SwiftPM's dependencies holding a lock beside its Mac-wide cache (`swift package resolve` in
+  `tools/swift_hook.sh`: parallel worktrees failed on that cache; never clear it to recover, report it). Swift 6 language mode, so strict concurrency. The floor is
   95% of the lines of each of `Sources/BosunMenuCore` and `Sources/BosunMenuSystem`: `cd app && swift test --enable-code-coverage -Xswiftc
   -warnings-as-errors`, then `uv run python tools/swift_coverage.py` (it reads `llvm-cov export -summary-only` and
   names the files under the floor). While iterating run `swift test --filter <suite>`, not the lot. When a limit
@@ -446,7 +447,9 @@ commit and fails on a file no rule covers, and on a test the plugin would not se
 it imports (through another test too: that is a map line); `tests/unit/impacted_guard.py` fails a
 test that reads or runs a file whose change would not select it, and says which line to add. The
 unit tests flush the journal with fsync, not F_FULLFSYNC (`conftest.py`): in parallel, F_FULLFSYNC
-queued every worker behind the drive.
+queued every worker behind the drive. The smoke suite does the same for the commands it runs (`BOSUN_PLAIN_FSYNC=1`, `lib/journal.py`),
+and keeps all its state in its own temp folder (`tests/unit/test_smoke_state.py`), so suites of several worktrees run
+side by side.
 
 CI (`.github/workflows/ci.yml`) runs the same on every pull request to `main` and on every merge group
 of the merge queue (`merge_group`: without it the queue waits forever for checks that never report): all the hooks
