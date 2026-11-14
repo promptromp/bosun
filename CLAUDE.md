@@ -124,7 +124,7 @@ of truth, so don't copy rules into this file.
   (read-only: what the Mac shows, Claude Code's files through `lib/claude_state.py`), `lib/init_plan.py`
   (pure: recommended answers, the config files' text, the plan), `lib/init_wizard.py` (pure over a `Ui`:
   the questions), `lib/init_terminal.py` (the keys and screens) and `lib/init.py` (the CLI: writes the
-  config with backups, trusts the folders, then runs `install.sh`, the one place that sets `pmset`; the
+  config with backups, trusts the folders, then runs `install.sh`, which runs `set_wake` (`lib/common.sh`), the one place that sets `pmset`; the
   launchd jobs are rendered and loaded by `lib/common.sh`, which `install.sh` and `bosun update` share).
   `lib/uninstall_detect.py` (read-only: what of bosun is here), `lib/uninstall_plan.py` (pure: the
   tables of what bosun's files are, what goes, what stays, how it reads), `lib/uninstall_macos.py` (launchd

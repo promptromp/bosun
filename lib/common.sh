@@ -644,6 +644,46 @@ keep_awake_pidfile() { echo "$BOSUN_STATE_DIR/keep-awake-$BOSUN_SESSION_NAME.pid
 # keep-awake ends and whose it is. `morning` writes it and `stop` removes it with the pid file.
 keep_awake_file() { echo "$BOSUN_STATE_DIR/keep-awake-$BOSUN_SESSION_NAME.json"; }
 
+# What `bosun status --json` reads (keep_awake_file): when the hold ends and whose it is, written whole.
+record_keep_awake() { # <caffeinate pid> <seconds>
+  local file temp until
+  file="$(keep_awake_file)"
+  temp="$(dirname "$file")/.$(basename "$file").$$"
+  until="$(date -v+"$2"S '+%Y-%m-%dT%H:%M:%S%z')"
+  printf '{"until": "%s", "pid": %s}\n' "$until" "$1" >"$temp" && mv "$temp" "$file"
+}
+
+# Hold the keep-awake for <seconds> (> 0): a full wake, the old caffeinate ended by its recorded pid (only
+# after `ps` says it is a caffeinate), a new one, and its pid file and record. `morning` works out the
+# seconds and handles a dry run; this uses nothing of any command's own.
+hold_keep_awake() { # <seconds>
+  local seconds="$1" pidfile old_pid pid
+  pidfile="$(keep_awake_pidfile)"
+  # Declaring user activity turns a scheduled (possibly dark) wake into a full wake.
+  caffeinate -u -t 2
+  if [ -f "$pidfile" ] && old_pid="$(cat "$pidfile")" &&
+    ps -p "$old_pid" -o comm= 2>/dev/null | grep -q caffeinate; then
+    kill "$old_pid"
+  fi
+  # -i: no idle sleep; -s: no system sleep while on AC power.
+  nohup caffeinate -i -s -t "$seconds" >/dev/null 2>&1 &
+  pid=$!
+  echo "$pid" >"$pidfile"
+  record_keep_awake "$pid" "$seconds"
+  log "holding keep-awake for $((seconds / 60)) minutes (caffeinate pid $pid)"
+}
+
+# End the keep-awake: its caffeinate, by its recorded pid and only if it still is one, and both files.
+release_keep_awake() {
+  local pidfile pid
+  pidfile="$(keep_awake_pidfile)"
+  if [ -f "$pidfile" ] && pid="$(cat "$pidfile")" && ps -p "$pid" -o comm= 2>/dev/null | grep -q caffeinate; then
+    kill "$pid"
+    log "released keep-awake (caffeinate pid $pid)"
+  fi
+  rm -f "$pidfile" "$(keep_awake_file)"
+}
+
 # When you stopped the session (`stop` writes it, `start` removes it). The watchdog does not
 # expect the session on a day you stopped it.
 stop_marker() { echo "$BOSUN_STATE_DIR/stopped-$BOSUN_SESSION_NAME"; }
@@ -1687,4 +1727,21 @@ repo_in_mask() { [ -n "$(printf '%s\n' "$1" | repo_mask_filter "")" ]; }
 # line, or with a key, that key of each JSON line.
 repo_mask_filter() { # <json-key, or "" for the first field>
   python3 "$BOSUN_ROOT/lib/repo_mask.py" "$BOSUN_REPO_MASK" ${1:+--json-key "$1"}
+}
+
+# The Mac's repeating wake: just after the job time, since launchd runs a calendar job missed during sleep as
+# soon as the Mac wakes, so the job starts within seconds of the wake and the Mac has no chance to doze off
+# first. `set_wake` sets it with sudo; `set_wake print` only says the command to run once.
+set_wake() { # [print]
+  local wake_time wake_cmd existing_repeat
+  wake_time="$(shift_time "$BOSUN_START_TIME" "$BOSUN_WAKE_DELAY_MINUTES"):00"
+  wake_cmd=(sudo pmset repeat wakeorpoweron "$BOSUN_DAYS" "$wake_time")
+  existing_repeat="$(pmset -g sched | sed -n '/Repeating power events/,/^[A-Z]/p' | grep -iE 'wake|power' || true)"
+  [ -n "$existing_repeat" ] && log "note: pmset already has a repeating event (pmset keeps only one):$existing_repeat"
+  if [ "${1:-}" = "print" ]; then
+    log "to wake the Mac on schedule, run once:  ${wake_cmd[*]}"
+  else
+    log "setting repeating wake: ${wake_cmd[*]}"
+    "${wake_cmd[@]}" || die "pmset failed"
+  fi
 }
