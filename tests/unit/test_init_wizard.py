@@ -254,6 +254,7 @@ class ReposTest(unittest.TestCase):
             "BOSUN_REPOS_DIR": "$HOME/elsewhere",
             "BOSUN_DAYS": "MTWRF",
             "BOSUN_ORCHESTRATOR_CONNECTORS": "",  # set: a config from before the key would ask about all
+            **APP_AND_LOGIN,
         }
         the_facts = facts(files={"sessions.yml": "...", "bosun.env": "..."}, sessions=listed, env=env)
         answers, _ = run(ALL_RECOMMENDED, the_facts)
@@ -266,9 +267,12 @@ FOUND = ("claude.ai Acme Mail", "plugin:acme-tracker:tracker", "acme-local")
 WITH_CONNECTORS = [ENTER, ENTER, *[ENTER] * 6, "y"]  # repos, connectors, then the six others
 
 
+APP_AND_LOGIN = {"BOSUN_MENU_APP": "1", "BOSUN_START_AT_LOGIN": "1"}  # a re-run keeping both
+
+
 def rerun_facts(value: str, found: tuple[str, ...] = FOUND) -> Facts:
     """A re-run whose bosun.env gives the orchestrator <value>."""
-    env = {"BOSUN_DAYS": "MTWRF", "BOSUN_ORCHESTRATOR_CONNECTORS": value}
+    env = {"BOSUN_DAYS": "MTWRF", "BOSUN_ORCHESTRATOR_CONNECTORS": value, **APP_AND_LOGIN}
     return facts(files={"bosun.env": "..."}, env=env, connectors=found)
 
 
@@ -521,21 +525,24 @@ class OtherQuestionsTest(unittest.TestCase):
         self.assertTrue(answers.menu_app)
         screen = ui.screens[6]
         self.assertIn("step 7 of 7", screen)
-        self.assertIn("Add bosun to the menu bar and Applications?", screen)
+        self.assertIn("Add bosun to the menu bar, and start it when you log in?", screen)
         self.assertIn("(recommended)", screen)
-        self.assertIn("Yes", screen)
+        self.assertIn("Show bosun in the menu bar and start it", screen)
         self.assertIn("Open at Login", screen)  # what yes does
         self.assertIn("wake by itself", ui.screens[5])
 
     def test_the_app_is_not_asked_while_there_is_no_signed_build_to_install(self) -> None:
         gone = facts(app_unavailable="app/publisher.json has no team_id yet")
-        answers, ui = run([*[ENTER] * 6, "y"], gone)
+        answers, ui = run([*[ENTER] * 7, "y"], gone)
         assert answers is not None
         self.assertFalse(answers.menu_app)
         self.assertFalse(any("menu bar" in screen.split("Nothing has changed")[0] for screen in ui.screens))
-        self.assertEqual(len(ui.screens), 7)
-        self.assertIn("step 1 of 6", ui.screens[0])
-        self.assertIn("step 6 of 6", ui.screens[5])
+        self.assertEqual(len(ui.screens), 8)
+        self.assertIn("step 1 of 7", ui.screens[0])
+        self.assertIn("step 6 of 7", ui.screens[5])
+        self.assertIn("Start bosun when you log in?", ui.screens[6])
+        self.assertIn("step 7 of 7", ui.screens[6])
+        self.assertTrue(answers.start_at_login)
         self.assertIn("no signed build to install", ui.screens[-1])
 
     def test_no_says_where_it_is_installed_that_the_app_stays(self) -> None:
@@ -546,9 +553,39 @@ class OtherQuestionsTest(unittest.TestCase):
         self.assertNotIn("bosun app remove", ui.screens[6])
 
     def test_no_to_the_menu_bar_app_is_the_answer(self) -> None:
-        answers, _ = run([*[ENTER] * 6, "n", "y"])
+        answers, _ = run([*[ENTER] * 6, "n", ENTER, "y"])
         assert answers is not None
         self.assertFalse(answers.menu_app)
+
+    def test_one_question_has_three_answers_for_the_app_and_the_start(self) -> None:
+        answers, ui = run([*[ENTER] * 6, "m", "y"])
+        assert answers is not None
+        self.assertEqual((answers.menu_app, answers.start_at_login), (True, False))
+        self.assertIn("It starts at the morning time, or when you click Start.", ui.screens[6])
+        self.assertIn("Show bosun in the menu bar and start it during your hours", ui.screens[6])
+        self.assertEqual(len(ui.screens), 8)  # no further question after m
+        self.assertIn("step 7 of 7", ui.screens[6])
+        answers, _ = run(ALL_RECOMMENDED)
+        assert answers is not None
+        self.assertEqual((answers.menu_app, answers.start_at_login), (True, True))
+
+    def test_after_no_the_start_alone_is_asked(self) -> None:
+        answers, ui = run([*[ENTER] * 6, "n", "y", "y"])
+        assert answers is not None
+        self.assertEqual((answers.menu_app, answers.start_at_login), (False, True))
+        self.assertIn("step 8 of 8", ui.screens[7])  # the total grows once "No" is the answer
+        self.assertIn("Yes, start it when I log in during my hours", ui.screens[7])
+        answers, _ = run([*[ENTER] * 6, "n", "n", "y"])
+        assert answers is not None
+        self.assertFalse(answers.start_at_login)
+
+    def test_the_recommended_answer_follows_the_answers(self) -> None:
+        def recommended(answers: Answers) -> list[str]:
+            return [o.key for o in init_wizard.menu_app_options(facts(), answers) if o.recommended]
+
+        self.assertEqual(recommended(Answers()), ["y"])
+        self.assertEqual(recommended(Answers(start_at_login=False)), ["m"])
+        self.assertEqual(recommended(Answers(menu_app=False)), ["n"])
 
     def test_aws_is_only_asked_when_there_are_profiles(self) -> None:
         _, ui = run(ALL_RECOMMENDED)

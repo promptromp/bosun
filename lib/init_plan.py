@@ -150,6 +150,7 @@ class Answers:
     aws_sso_profiles: tuple[str, ...] = ()
     wake: bool = True
     menu_app: bool = True  # BOSUN_MENU_APP: bosun.app in Applications, opened at login (bosun app)
+    start_at_login: bool = True  # BOSUN_START_AT_LOGIN: bosun starts when you log in, during your hours
     trust: bool = True
 
 
@@ -161,7 +162,9 @@ TIME = re.compile(r"^([01]\d|2[0-3]):[0-5]\d$")
 WINDOW_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]*$")
 MODEL_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._\[\]-]*$")
 CONTROL = re.compile(r"[\x00-\x1f\x7f]")
-BOOL_ANSWERS = ("events", "approvals", "learning", "slack_watch", "wake", "menu_app", "trust")
+BOOL_ANSWERS = (
+    *("events", "approvals", "learning", "slack_watch", "wake", "menu_app", "start_at_login", "trust"),
+)
 TEXT_ANSWERS = (
     "days",
     "start",
@@ -520,6 +523,7 @@ def recommend(facts: Facts) -> Answers:
         # pmset keeps only one repeating event: never replace someone else's by default.
         wake=not facts.repeating_wake or bool(facts.env),
         menu_app=not facts.app_unavailable and on("BOSUN_MENU_APP", True),
+        start_at_login=on("BOSUN_START_AT_LOGIN", True),
     )
 
 
@@ -630,6 +634,7 @@ def env_groups(answers: Answers) -> list[tuple[str, list[tuple[str, str]]]]:
             [
                 ("BOSUN_MENU_APP", flag[answers.menu_app]),
                 ("BOSUN_CONSOLE_ALWAYS", flag[answers.menu_app]),
+                ("BOSUN_START_AT_LOGIN", flag[answers.start_at_login]),
             ],
         ),
         (

@@ -167,9 +167,13 @@ icon. It reads nothing of bosun's but what `bosun status --json` and its other
 
 ### Installing it
 
-`bosun init` asks "Add bosun to the menu bar and Applications?" (recommended yes) once the publisher's signed build
-exists; answering yes sets `BOSUN_MENU_APP=1` and `BOSUN_CONSOLE_ALWAYS=1` (Open Console needs the console's job),
-installs the app and turns Open at Login on. On an install made before, or after answering no:
+`bosun init` asks "Add bosun to the menu bar, and start it when you log in?" once the publisher's signed build
+exists, with three answers: show bosun in the menu bar and start it during your hours (recommended), show it in the
+menu bar only (it starts at the morning time, or when you click Start), or no menu bar app. The first two set
+`BOSUN_MENU_APP=1` and `BOSUN_CONSOLE_ALWAYS=1` (Open Console needs the console's job), install the app and turn Open
+at Login on; the first also sets `BOSUN_START_AT_LOGIN=1`, the second `0`. After "no", or where no app can be
+installed, the wizard asks "Start bosun when you log in?" alone (recommended yes), since starting works without the
+app. On an install made before, or after answering no:
 
 ```bash
 bosun app install     # download the release this version expects, verify it, place it in ~/Applications
