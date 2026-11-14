@@ -459,6 +459,10 @@ def snapshot(facts: StatusFacts, now: datetime) -> dict[str, Any]:
 
 
 def schedule_of(facts: StatusFacts, now: datetime) -> dict[str, Any]:
+    """The `schedule` field: whether <now> is inside your hours (None when the settings did not load), and the
+    next scheduled start after now, ISO 8601 to the minute with its offset (None without the settings or a
+    scheduled day). While in your hours that is tomorrow's (the next scheduled day's), never today's, which
+    has passed: it is no "resumes at", as the app's `Schedule` (Contract.swift) says too."""
     start = next_start(facts.awake, now)
     return {
         "in_hours": in_hours(facts.awake, now),
