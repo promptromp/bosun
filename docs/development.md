@@ -118,13 +118,16 @@ nothing above it. Every section begins by checking that the tools that reach out
 stand-ins in the run's own folder, and the run stops if one would be the real one. The run's HOME and those
 stand-ins exist before the first section, and a section that points bosun at another HOME gets them there too.
 
-Suites of several checkouts (git worktrees, parallel agents) can run on one Mac at the same time, so a run keeps all
-its state in its own temp folder: its HOME, state, config, tmux sockets (`bosun-smoke-<pid>`), stand-ins and the
-install under test (`tests/unit/test_smoke_state.py` fails on a fixed `/tmp/<name>` in the suite). The one thing they
-cannot help sharing is the drive, and macOS's `F_FULLFSYNC`, which the journal asks for on every write, waits for the
-whole drive's cache: with three writers it took the update section five times as long to reach the step its 60-second
-wait is for. So the suite sets `BOSUN_PLAIN_FSYNC=1` (`lib/journal.py` then flushes with a plain `fsync`, as the unit
-tests do); the Mac VM's runs and every real run keep the full flush.
+Suites of several checkouts (git worktrees, parallel agents) can run on one Mac at the same time. A run keeps its
+HOME, state, config, tmux sockets (`bosun-smoke-<pid>`), stand-ins and the install under test in its own temp folder;
+`tests/unit/test_smoke_state.py` checks one thing about that: no script the suite runs (`tests/smoke.sh`, the update
+patch, the stand-ins) names a `/tmp/<name>` path of its own. A shared port, socket, label or file under the real home is
+not checked, only avoided by construction. What the runs cannot help sharing is the drive: macOS's `F_FULLFSYNC`,
+which the journal asks for on every write, waits for the whole drive's cache, and with three writers beside it the
+update section took five times as long to reach the step its migration wait is for (those waits are 120 s).
+So the suite sets `BOSUN_PLAIN_FSYNC=1`, and `lib/journal.py` then flushes with a plain `fsync`, as the unit tests do.
+It is for tests only: with it set, a write to either store can be lost to a power cut, so never set it in real use;
+`bosun doctor` warns while it is set, and the Mac VM's runs and every real run keep the full flush.
 
 `-n auto` runs the tests in parallel, one worker per core (pytest-xdist). `--impacted`
 (pytest-impacted) runs only the tests that what git has uncommitted (staged or not, and new files)
@@ -462,8 +465,8 @@ off a Mac (the app is AppKit; CI's Linux `lint` job has a `swift` that cannot bu
 `app` job runs them, the coverage floor (`tools/swift_coverage.py`) and an ad hoc build. SwiftPM keeps its dependencies' clones and
 downloads in one cache for the whole Mac, which the hooks of two checkouts running at once twice failed
 on (`'swiftlintplugins': Couldn't check out revision`; a rerun passed), so `tools/swift_hook.sh` runs `swift package resolve` holding a
-lock beside that cache and the check then finds its dependencies in the checkout's own `.build`; a warm checkout pays
-about a third of a second. CI's `app` job runs `swift` directly, on a runner with a cache of its own. While
+lock beside that cache (retried once, only for that checkout error) and the check then finds its dependencies in the
+checkout's own `.build`; a warm checkout pays about a third of a second. CI's `app` job runs `swift` directly, on a runner with a cache of its own. While
 iterating, `cd app && swift test --filter <suite>`. The app talks to bosun only through its `--json` commands, so a
 change to what one prints needs `uv run python tools/contract_samples.py` to write the fixtures the Swift tests
 decode. What the real app does on a real desktop is `tests/sandbox.sh mac app` (see
