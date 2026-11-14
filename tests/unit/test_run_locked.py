@@ -102,9 +102,48 @@ class RunLockedTest(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertTrue(self.lock.exists())
 
+    def take(self, wait: str, then: str) -> subprocess.CompletedProcess[str]:
+        """A shell that opens LOCK_FD on the lock, has --take lock it, then runs <then> ($s: its status)."""
+        script = f'exec 9>>"$1"; {sys.executable} {RUN_LOCKED} --take "$1" {wait}; s=$?; {then}'
+        return subprocess.run(
+            ["bash", "-c", script, "_", str(self.lock)],
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=30,
+        )
+
+    def test_take_leaves_the_shell_holding_it_and_what_it_starts_goes_on(self) -> None:
+        nested = f"{sys.executable} {RUN_LOCKED} --held {self.lock} && echo nested-goes-on"
+        check = f"{sys.executable} {Path(__file__).resolve()} --taken {self.lock} && echo taken"
+        result = self.take("0", f'echo "took $s"; {check}; {nested}')
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stdout.split(), ["took", "0", "taken", "nested-goes-on"])
+        self.assertFalse(taken(self.lock), "the lock outlived the shell that held it")
+
+    def test_take_while_another_holds_it_is_busy_and_says_nothing(self) -> None:
+        self.hold(5)
+        result = self.take("0", 'exit "$s"')
+        self.assertEqual(result.returncode, run_locked.BUSY)
+        self.assertEqual(result.stderr, "")
+
+    def test_take_without_its_descriptor_open_on_the_lock_is_a_usage_error(self) -> None:
+        self.lock.touch()
+        result = subprocess.run(
+            [sys.executable, RUN_LOCKED, "--take", str(self.lock), "0"],
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=30,
+        )
+        self.assertEqual(result.returncode, run_locked.USAGE)
+        self.assertIn("not open on", result.stderr)
+
     def test_bad_usage(self) -> None:
         self.assertEqual(run_locked.main([str(self.lock), "1", "message", "true"]), run_locked.USAGE)
 
 
 if __name__ == "__main__":
+    if sys.argv[1:2] == ["--taken"]:  # another process's look at the lock, for a shell that holds it
+        sys.exit(0 if taken(Path(sys.argv[2])) else 1)
     unittest.main()

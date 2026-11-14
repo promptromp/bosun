@@ -25,7 +25,9 @@
 #         when that is cancelled or fails nothing is written. If pmset or the reload fails, bosun.env is put
 #         back from the backup the write made (or removed, if the write made it) and the jobs reloaded again.
 #         Another app's repeating wake is left as it is, and said, unless --replace-wake. Refused while bosun
-#         update runs. Prints a line a change ("KEY: old → new");
+#         update runs, and while bosun init (the wizard) or another settings set runs: it holds init's lock
+#         from the check of the values to the last step, so neither writes over the other. Prints a line a
+#         change ("KEY: old → new");
 #         --json: {"contract": 1, "changed": {KEY: [before, after]}, "notes": [...]} (BOSUN_LEARN_AT among them
 #         when it moved along), and on a failure {"contract": 1, "error": "..."}, the line on stderr too
 # Exit status: 0 done, 1 refused or failed (one line saying why), 2 usage or a value it does not take.
@@ -183,14 +185,16 @@ say_changes() { # <changes>
   printf '%s' "$1" | settings_py "${say[@]}"
 }
 
-# The steps in their order: nothing is written while an update runs, a value is refused or sudo says no; a
-# reload or a wake that fails puts bosun.env back.
+# The steps in their order, holding init's lock (bosun init writes bosun.env from what it read when it started):
+# nothing is written while the wizard or an update runs, a value is refused or sudo says no; a reload or a wake
+# that fails puts bosun.env back.
 set_settings() {
   local changes
   effects="" wake=0 wake_left=0
   set_arguments "$@"
   [ -z "$BOSUN_ENV_ERROR" ] || fail refuse "$(env_unread), so none of it was read: fix it, or run bosun init"
   load_config
+  lock_here init 0 || fail refuse "bosun init or another bosun settings set is running; change settings when it ends"
   if python3 "$BOSUN_ROOT/lib/update_state.py" running --state-dir "$BOSUN_STATE_DIR" || update_hold_active; then
     fail refuse "bosun update is running; change settings when it ends"
   fi

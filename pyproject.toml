@@ -103,6 +103,7 @@ impacted_map = [
     "bin/bosun=tests/unit/test_shell_functions.py",
     "bin/bosun=tests/unit/test_smoke_selection.py",
     "bin/bosun=tests/unit/test_uninstall_plan.py",
+    "bin/bosun=tests/unit/test_settings.py",
     "bin/bosun=tests/unit/test_update.py",
     "bin/bosun=tests/unit/test_update_facts.py",
     "bin/bosun=tests/unit/test_update_gate.py",

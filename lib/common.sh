@@ -612,6 +612,20 @@ one_at_a_time() { # <name> <wait seconds> <message> "$0" "$@"
   exec python3 "$BOSUN_ROOT/lib/run_locked.py" "$lock" "$2" "$3" -- "${@:4}"
 }
 
+# One at a time, for a command that must not start again to hold the lock (`settings set`, whose refusal under
+# --json is an object): this shell holds lock <name> until it exits (lib/run_locked.py --take on LOCK_FD, 9),
+# waiting up to <wait> seconds for the one holding it, and what it starts holds it too, so a long-lived child
+# gets 9>&- (hold_keep_awake's caffeinate). Held already (a parent's), it goes on. Fails, saying nothing, while
+# another holds it: the caller says why. Call it after load_config.
+lock_here() { # <name> <wait seconds>
+  local lock="$BOSUN_STATE_DIR/$1.lock"
+  python3 "$BOSUN_ROOT/lib/run_locked.py" --held "$lock" && return 0
+  exec 9>>"$lock" || return 1
+  python3 "$BOSUN_ROOT/lib/run_locked.py" --take "$lock" "$2" && return 0
+  exec 9>&-
+  return 1
+}
+
 # The orchestrator's policy: orchestrator/policy.md, then the site's $BOSUN_CONFIG_DIR/policy.md
 # if there is one (additions for this machine or team, without forking the repo).
 orchestrator_policy() {
@@ -666,7 +680,8 @@ hold_keep_awake() { # <seconds>
     kill "$old_pid"
   fi
   # -i: no idle sleep; -s: no system sleep while on AC power.
-  nohup caffeinate -i -s -t "$seconds" >/dev/null 2>&1 &
+  # 9>&-: it outlives the command, and must not keep a lock the command holds (lock_here, one_at_a_time)
+  nohup caffeinate -i -s -t "$seconds" >/dev/null 2>&1 9>&- &
   pid=$!
   echo "$pid" >"$pidfile"
   record_keep_awake "$pid" "$seconds"

@@ -3351,7 +3351,7 @@ stop_keep_awake_leaves_it() { # bosun stop --keep-awake keeps the caffeinate and
 check "bosun stop --keep-awake leaves the caffeinate and its files alone; a plain stop releases them" stop_keep_awake_leaves_it
 plain_fake launchctl 113 # the fake above; this section's alone
 
-section settings "settings (bosun settings get|set: bosun.env through init's writer, the jobs and the wake)" covers 'libexec/bosun-settings,lib/settings.py'
+section settings "settings (bosun settings get|set: bosun.env through init's writer, the jobs and the wake)" covers 'libexec/bosun-settings,lib/settings.py,lib/run_locked.py'
 # Its own config, state and launchd label, so what it writes and reloads is its alone; launchd has a job while it
 # has its plist, pmset's repeating event is what $SET_SCHED holds, and sudo -v fails while $WORK/sudo-fails is there,
 # pmset repeat while $WORK/settings-pmset-fails is, launchctl bootstrap while $WORK/settings-bootstrap-fails is.
@@ -3476,6 +3476,30 @@ check "... with exit 1" settings_exits 1 set BOSUN_UPDATE_CHANNEL=main
 check "... and bosun.env unchanged" bash -c '! grep -q BOSUN_UPDATE_CHANNEL "$1"' _ "$SET_CFG/bosun.env"
 kill "$set_update_holder" 2>/dev/null
 wait "$set_update_holder" 2>/dev/null
+
+# bosun init holds its lock while it runs (one_at_a_time init), and writes bosun.env from what it read at its start
+python3 -I -c 'import fcntl, os, sys, time
+fd = os.open(sys.argv[1], os.O_RDWR | os.O_CREAT)
+fcntl.flock(fd, fcntl.LOCK_EX)
+print("held", flush=True)
+time.sleep(60)' "$SET_STATE/init.lock" >"$WORK/settings-init.out" &
+set_init_holder=$!
+wait_for 30 grep -q held "$WORK/settings-init.out"
+check "while bosun init runs, set is refused" fails_with "bosun init or another bosun settings set is running" settings_cmd set BOSUN_UPDATE_CHANNEL=main
+check "... with exit 1, and with --json as the refusal object" settings_exits 1 set BOSUN_UPDATE_CHANNEL=main --json
+check "... naming the wizard" settings_has 'list(d) == ["contract", "error"] and "bosun init" in d["error"]'
+check "... and bosun.env unchanged" bash -c '! grep -q BOSUN_UPDATE_CHANNEL "$1"' _ "$SET_CFG/bosun.env"
+kill "$set_init_holder" 2>/dev/null
+wait "$set_init_holder" 2>/dev/null
+# set's own hold (lock_here, the shell holding it), in a shell that then sleeps in its place
+BOSUN_CONFIG_DIR="$SET_CFG" BOSUN_STATE_DIR="$SET_STATE" BOSUN_LOG_DIR="$SET_STATE/logs" bash -c \
+  'source "$1/lib/common.sh"; load_config; lock_here init 0 && echo held && exec sleep 60' _ "$ROOT" >"$WORK/settings-lock-here.out" &
+set_init_holder=$!
+wait_for 30 grep -q held "$WORK/settings-lock-here.out"
+check "while set holds init's lock, bosun init is refused at once" fails_with "bosun init is already running (in another terminal?), or bosun settings set is" env BOSUN_CONFIG_DIR="$SET_CFG" BOSUN_STATE_DIR="$SET_STATE" BOSUN_LOG_DIR="$SET_STATE/logs" "$BOSUN" init --answers /dev/null
+check "... and so is another set" fails_with "bosun init or another bosun settings set is running" settings_cmd set BOSUN_UPDATE_CHANNEL=main
+kill "$set_init_holder" 2>/dev/null
+wait "$set_init_holder" 2>/dev/null
 
 check "a bad value is refused, naming the setting" fails_with "BOSUN_START_TIME" settings_cmd set BOSUN_START_TIME=25:00
 check "... with exit 2, quietly (not an alert)" settings_exits 2 set BOSUN_START_TIME=25:00

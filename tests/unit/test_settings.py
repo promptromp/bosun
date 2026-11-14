@@ -4,10 +4,14 @@
 from __future__ import annotations
 
 import contextlib
+import fcntl
 import io
 import json
+import os
+import subprocess
 import sys
 import tempfile
+import time
 import unittest
 from pathlib import Path
 from typing import Any
@@ -336,6 +340,88 @@ class TestCommandLine(unittest.TestCase):
         found = settings.defaults(example.read_text())
         self.assertEqual(found["BOSUN_DAYS"], init_plan.DEFAULT_DAYS)
         self.assertEqual(found["BOSUN_UPDATE_CHANNEL"], init_plan.DEFAULT_CHANNEL)
+
+
+ROOT = Path(__file__).resolve().parents[2]
+
+
+class TestSetHoldsInitsLock(unittest.TestCase):
+    """`bosun settings set` holds init's lock for its whole write: while the wizard holds it, set is refused,
+    in one line and under --json with the refusal object, and writes nothing."""
+
+    def setUp(self) -> None:
+        folder = tempfile.TemporaryDirectory()
+        self.addCleanup(folder.cleanup)
+        self.home = Path(folder.name)
+        self.config = self.home / "config"
+        self.state = self.home / "state"
+        self.config.mkdir()
+        self.env = self.config / "bosun.env"
+        self.env.write_text(COMMENTED)
+        self.lock = self.state / "init.lock"
+
+    def hold_inits_lock(self) -> None:
+        run_locked = str(ROOT / "lib" / "run_locked.py")
+        holder = subprocess.Popen(
+            [sys.executable, run_locked, str(self.lock), "0", "busy", "--", "sleep", "30"]
+        )
+        self.addCleanup(holder.wait)
+        self.addCleanup(holder.kill)
+        deadline = time.monotonic() + 10
+        while not self.taken() and time.monotonic() < deadline:
+            time.sleep(0.05)
+        self.assertTrue(self.taken(), "the holder never took init's lock")
+
+    def taken(self) -> bool:
+        if not self.lock.exists():
+            return False
+        with self.lock.open("a") as handle:
+            try:
+                fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except BlockingIOError:
+                return True
+            fcntl.flock(handle, fcntl.LOCK_UN)
+            return False
+
+    def settings_set(self, *args: str) -> subprocess.CompletedProcess[str]:
+        env = {
+            "HOME": str(self.home),
+            "PATH": os.environ["PATH"],
+            "BOSUN_CONFIG_DIR": str(self.config),
+            "BOSUN_STATE_DIR": str(self.state),
+            "BOSUN_LOG_DIR": str(self.state / "logs"),
+        }
+        return subprocess.run(
+            [str(ROOT / "bin" / "bosun"), "settings", "set", *args],
+            env=env,
+            stdin=subprocess.DEVNULL,
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=60,
+        )
+
+    def test_refused_with_the_object_while_init_holds_it(self) -> None:
+        self.hold_inits_lock()
+        result = self.settings_set("BOSUN_UPDATE_CHANNEL=main", "--json")
+        self.assertEqual(result.returncode, 1, result.stderr)
+        refusal = json.loads(result.stdout)
+        self.assertEqual(set(refusal), {"contract", "error"})
+        self.assertEqual(refusal["contract"], settings.CONTRACT)
+        self.assertIn("bosun init or another bosun settings set is running", refusal["error"])
+        self.assertEqual(result.stderr.count("\n"), 1, result.stderr)
+        self.assertEqual(self.env.read_text(), COMMENTED)
+        self.assertEqual(sorted(p.name for p in self.config.iterdir()), ["bosun.env"])
+
+    def test_refused_in_one_line_without_json(self) -> None:
+        self.hold_inits_lock()
+        result = self.settings_set("BOSUN_UPDATE_CHANNEL=main")
+        self.assertEqual(result.returncode, 1)
+        self.assertEqual(result.stdout, "")
+        self.assertRegex(
+            result.stderr, r"^[^\n]*ERROR: bosun init or another bosun settings set is running[^\n]*\n$"
+        )
+        self.assertEqual(self.env.read_text(), COMMENTED)
 
 
 if __name__ == "__main__":
