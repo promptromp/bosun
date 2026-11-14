@@ -124,17 +124,16 @@ a_morning() {
 }
 
 run_again() {
-  local before after sudo_before sudo_after backups_before
+  local before after sudo_before sudo_after
   echo "a re-run keeps what is theirs"
   before="$(files_hash)"
-  backups_before="$(find "$CONFIG" -name "*.pre-init-*" | wc -l)" # the first run kept bosun.env as it was before the app was refused
   sudo_before="$(grep -c "sudo pmset" "$LOG")"
   "$BOSUN" init --recommended >/dev/null 2>&1
   after="$(files_hash)"
   sudo_after="$(grep -c "sudo pmset" "$LOG")"
   check "the same answers change nothing" test "$before" = "$after"
   check "... and need no sudo" test "$sudo_before" = "$sudo_after"
-  check "... and back nothing up" test "$backups_before" = "$(find "$CONFIG" -name "*.pre-init-*" | wc -l)"
+  check "... and back nothing up" bash -c '! ls "$1"/*.pre-init-* >/dev/null 2>&1' _ "$CONFIG"
   printf '\n# mine\nBOSUN_ALERT_SLACK_USER="U000000"\n' >>"$CONFIG/bosun.env"
   printf 'setup_steps() { ensure_claude_login; run_step "mine" true; }\n' >"$CONFIG/setup.sh"
   cp "$CONFIG/setup.sh" "$HOME/my-setup.sh"
