@@ -29,6 +29,12 @@ if ! command -v swift >/dev/null 2>&1; then
   echo "swift is not installed: skipping the app's $check check (CI's app job runs it)"
   exit 0
 fi
+# A git hook runs with git's variables for this repository (GIT_INDEX_FILE, GIT_DIR, ...), and SwiftPM's own git
+# commands, which check its dependencies out under .build, took them: a checkout then used this repository's index
+# ("'swiftlintplugins': Couldn't check out revision ...: unable to read tree"), and could write the dependency's
+# files into it. That, not two resolves at once, was the failure the lock below was first added for. They go.
+unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_OBJECT_DIRECTORY GIT_ALTERNATE_OBJECT_DIRECTORIES GIT_COMMON_DIR \
+  GIT_NAMESPACE GIT_PREFIX
 here="$(cd "$(dirname "$0")" && pwd)"
 cd "$here/../app"
 
