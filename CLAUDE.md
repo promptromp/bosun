@@ -431,7 +431,7 @@ and CI agree on versions. On commit (`.pre-commit-config.yaml`; run all with `uv
   commit pays nearly the full run (about a minute); that is the selection being right, not loose, and a
   docs edit pays about ten seconds. Before a push, the smoke sections the change can reach (end to end only; the build-out
   setting: see below; skipped if this exact tree passed a whole run here in the last 24 hours); in CI, every
-  unit test (its smoke job, when it is on, always runs the whole suite).
+  unit test, and the smoke sections the change reaches in the merge queue (the whole suite nightly).
 
 Which tests a change reaches: the plugin follows Python imports from `lib/` (an import root, as
 pytest's `pythonpath` entry; `impacted_module = "lib"`) and between the test files and the helpers of
@@ -463,12 +463,11 @@ messages between its `base_sha` and `head_sha`), every unit test in parallel on
 Python 3.13 and 3.14 (the floor is `requires-python`; 3.15 comes back once it is released and the suite
 is fast) with a floor under coverage, measured through `sys.monitoring` (`COVERAGE_CORE=sysmon`: coverage's
 default on 3.13 is `sys.settrace`, which made every test about a quarter slower; the same lines are reported)
-(`test (<version>)`, never `--impacted`), every unit
-test again on macOS and then the end-to-end smoke suite (`smoke`, which is off until the
-feature-complete MVP: its job-level `if` in `ci.yml` wants the repository variable `CI_SMOKE` set
-to `true`, and it is not a required check in `.github/rulesets/main.json`; to turn it back on,
-remove that `if` (or set the variable), re-add `smoke` to the ruleset's required checks and apply
-it; the pre-push hook still runs the sections the change reaches), the menu bar app (`app`, on macOS: `swift test`
+(`test (<version>)`, never `--impacted`), the end-to-end smoke suite on macOS (`smoke`, a required check
+that is skipped on pull requests, which counts as passing: in the merge queue it runs the sections the queued
+change can reach from the merge group's base, `tests/smoke.sh --changed`, failing closed to the whole suite;
+nightly on main (`schedule`, every job) and by hand it runs every unit test on macOS and then the whole suite,
+and since the weekly release's gate reads main's head checks, a failed nightly holds the release), the menu bar app (`app`, on macOS: `swift test`
 with warnings as errors, the coverage floor, SwiftLint, `swift format lint --strict`, and an ad hoc build whose
 bundle must verify; a cheap Linux job, `changes`, compares the pull request or merge group with its base, and `app`
 `needs` it and is skipped (no macOS runner starts, and a skipped job counts as passing) when nothing under `app/`,
@@ -522,7 +521,8 @@ prints the sections' ids, `tests/smoke.sh --only <id>[,<id>...]` runs the shared
 `needs`) in seconds (a few minutes for a section with prerequisites), and says in its summary that it was a
 partial run. While iterating use `--only`, `--last-failed` (`--lf`: only the sections whose last recorded
 result, in the git-ignored `tests/.smoke-cache/`, was a failure) and `-x` (stop at the first failing check);
-before committing, run the whole suite once with none of them. CI's smoke job, when it is on, runs all of it.
+before committing, run the whole suite once with none of them. CI's smoke job runs the sections the change reaches
+in the merge queue, and all of it nightly.
 The pre-push hook (`tests/smoke.sh --pre-push`) does less, for the build-out phase only: it skips the suite
 when that exact tree (uncommitted and untracked files included) passed a whole run in this checkout in the last
 24 hours (`BOSUN_SMOKE_NO_CACHE=1` ignores that record, `BOSUN_SMOKE_FULL=1` forces the whole suite; what the record is and why it can only make a run longer:
@@ -531,8 +531,8 @@ when that exact tree (uncommitted and untracked files included) passed a whole r
 chose everything), failing closed to the whole suite: a changed file that matches the select-everything list, that
 no section covers and no `ignore` rule lists, an `origin/main` that does not resolve. `BOSUN_SMOKE_FULL=1`
 forces the whole suite. This goes back to the whole suite on every push once the project is past its release
-(`--pre-push` without the selection); CI runs the whole suite again at the MVP, when its smoke job is turned on
-(`vars.CI_SMOKE`). The choice is `tools/smoke_select.py`; the two places that feed it are `covers` on each
+(`--pre-push` without the selection); CI's merge queue makes the same selection, and its nightly run the whole
+suite. The choice is `tools/smoke_select.py`; the two places that feed it are `covers` on each
 `section` line and `tests/smoke_selection.txt` (`all <glob>`: the whole suite; `ignore <glob>`: no section reaches it).
 `tests/unit/test_smoke_selection.py` fails on a tracked file that is none of covered, `all` or `ignore`, and on a
 section without `covers`, and says what to add. A test must not write into
