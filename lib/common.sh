@@ -291,7 +291,7 @@ set_slack_defaults() {
   BOSUN_SLACK_LOOKBACK_HOURS="24"
   BOSUN_SLACK_MAX_LOOKBACK_HOURS="96"
   # The Slack watcher (`bosun slack-watch`; needs BOSUN_EVENTS_ENABLED=1). 1: the check-in
-  # loop runs it every MINUTES inside the awake window: one headless Claude (MODEL) that can only
+  # loop runs it every MINUTES while the session runs, at any hour: one headless Claude (MODEL) that can only
   # read Slack finds new mentions, DMs and replies in your threads, and each new one becomes an
   # event for the orchestrator. At most MAX_USD_PER_CALL a call and MAX_USD_PER_DAY a day.
   # MCP_CONFIG: an MCP config file with only your Slack server; empty: the Slack plugin's.

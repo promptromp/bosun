@@ -18,10 +18,10 @@ seen`, matched by channel and ts), messages in the conversation of open outreach
 chores handles those) and messages already queued, and queues one `slack` event per new message
 for the dispatcher (lib/events.py). It never posts and never writes the ledger.
 
---scheduled (the check-in loop, every tick) runs only with BOSUN_SLACK_WATCH_ENABLED=1, inside
-the awake window, BOSUN_SLACK_WATCH_MINUTES after the last run started; every run needs
-BOSUN_EVENTS_ENABLED=1 (nothing else would deliver what it finds), no other run going, and
-BOSUN_SLACK_WATCH_MAX_USD_PER_CALL left of BOSUN_SLACK_WATCH_MAX_USD_PER_DAY. --dry-run
+--scheduled (the check-in loop, every tick) runs only with BOSUN_SLACK_WATCH_ENABLED=1, at
+any hour (the loop runs only while bosun's session does), BOSUN_SLACK_WATCH_MINUTES after the last
+run started; every run needs BOSUN_EVENTS_ENABLED=1 (nothing else would deliver what it finds), no
+other run going, and BOSUN_SLACK_WATCH_MAX_USD_PER_CALL left of BOSUN_SLACK_WATCH_MAX_USD_PER_DAY. --dry-run
 calls Claude and prints what a run would queue; it queues nothing and writes no state. State:
 $BOSUN_STATE_DIR/slack-watch/state.json. BOSUN_SLACK_WATCH_NOW (epoch seconds) pins the
 clock for tests.
@@ -46,7 +46,6 @@ from typing import Any
 
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-import awake
 import claude_state
 import event_model
 import events
@@ -163,7 +162,6 @@ Clock = Callable[[], datetime]
 @dataclass(frozen=True)
 class Config:
     state_dir: Path
-    awake: awake.AwakeWindow
     enabled: bool = False
     events_enabled: bool = False
     minutes: float = 15
@@ -198,17 +196,8 @@ class Config:
 
         if not text("STATE_DIR"):
             raise WatchError("BOSUN_STATE_DIR is not set; run this as `bosun slack-watch`")
-        try:
-            window = awake.AwakeWindow(
-                text("DAYS", "MTWRF"),
-                awake.parse_hhmm(text("START_TIME", "08:00")),
-                awake.parse_hhmm(text("AWAKE_UNTIL", "20:00")),
-            )
-        except ValueError as exc:
-            raise WatchError("BOSUN_START_TIME and BOSUN_AWAKE_UNTIL must be HH:MM") from exc
         return cls(
             state_dir=Path(text("STATE_DIR")),
-            awake=window,
             enabled=text("SLACK_WATCH_ENABLED") == "1",
             events_enabled=text("EVENTS_ENABLED") == "1",
             minutes=number("SLACK_WATCH_MINUTES", 15),
@@ -304,8 +293,6 @@ def run_lock(directory: Path) -> Iterator[bool]:
 
 def schedule_gate(config: Config, state: State, now: datetime) -> str | None:
     """Why a scheduled run does not happen now (NOT_DUE: quietly), or None."""
-    if not config.awake.contains(now.astimezone().replace(tzinfo=None)):
-        return "outside the awake window"
     started = state.last_started
     if started and now - datetime.fromisoformat(started) < config.interval:
         return NOT_DUE
@@ -855,8 +842,8 @@ def render_status(config: Config, now: datetime) -> str:
     return "\n".join(
         [
             (
-                f"enabled: {enabled} (events {events_on}), every {config.minutes:g} min in the awake "
-                f"window, model {config.model}"
+                f"enabled: {enabled} (events {events_on}), every {config.minutes:g} min while the "
+                f"session runs, model {config.model}"
             ),
             (
                 f"budget: ${config.max_usd_per_call:.2f} a call, ${config.max_usd_per_day:.2f} a day; "

@@ -1,4 +1,4 @@
-"""Unit tests for lib/slack_watch.py: the scan start, the scheduling gates (interval, awake window,
+"""Unit tests for lib/slack_watch.py: the scan start, the scheduling gates (interval,
 events off, one run at a time, the daily budget), the restricted Claude command and its tool
 check, checking the JSON that comes back, sorting out what the ledger has processed and what
 belongs to outreach, the events it queues and how the dispatcher shows them, and the watchdog's
@@ -20,7 +20,6 @@ from typing import Any
 
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "lib"))
-import awake
 import claude_state
 import event_model
 import event_summary
@@ -79,7 +78,6 @@ class WatchTestCase(unittest.TestCase):
         mcp.write_text(json.dumps(SERVER))
         self.config = Config(
             state_dir=self.state_dir,
-            awake=awake.AwakeWindow("MTWRF", time(8, 0), time(20, 0)),
             enabled=True,
             events_enabled=True,
             minutes=15,
@@ -143,11 +141,12 @@ class SchedulingTest(WatchTestCase):
         self.assertIn("scanned from", self.watch(NOW + timedelta(minutes=15)))
         self.assertEqual(len(self.calls), 2)
 
-    def test_only_inside_the_awake_window(self) -> None:
-        evening = datetime(2026, 1, 5, 21, 0).astimezone().astimezone(UTC)
-        self.assertEqual(self.watch(evening), "skip: outside the awake window")
-        self.assertEqual(self.watch(evening + timedelta(minutes=1)), "", "a repeated reason is logged once")
-        self.assertEqual(self.calls, [])
+    def test_runs_outside_the_awake_window(self) -> None:
+        saturday = datetime(2026, 1, 10, 23, 0).astimezone()
+        state = State()
+        self.assertIsNone(slack_watch.schedule_gate(self.config, state, saturday))
+        state = State(last_started=slack_watch.iso(saturday - timedelta(minutes=1)))
+        self.assertEqual(slack_watch.schedule_gate(self.config, state, saturday), slack_watch.NOT_DUE)
 
     def test_a_run_by_hand_ignores_the_schedule_but_needs_events(self) -> None:
         evening = datetime(2026, 1, 5, 21, 0).astimezone().astimezone(UTC)

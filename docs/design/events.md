@@ -270,7 +270,7 @@ when they also @-mentioned me.
 
 **Shape.** `bosun slack-watch --scheduled` runs from the check-in loop on every tick, in the
 background (a slow call never delays the loop), and decides itself whether to run: only with the
-flag on, inside the awake window, `BOSUN_SLACK_WATCH_MINUTES` (15) after the last run started,
+flag on, at any hour while the session runs, `BOSUN_SLACK_WATCH_MINUTES` (15) after the last run started,
 with no other run holding its lock, and while the daily budget lasts. A run is one headless
 `claude -p` with a small model (`BOSUN_SLACK_WATCH_MODEL`, haiku) and the prompt in
 `orchestrator/slack-watch.md`. It reads my profile, searches four times from the scan start (the
