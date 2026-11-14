@@ -28,7 +28,8 @@
 # pushed (pre-commit's PRE_COMMIT_TO_REF) passed a whole run in this checkout less than 24 hours ago, and
 # otherwise runs what --changed origin/main selects (BOSUN_SMOKE_BASE=<ref> names another base; this is the
 # build-out setting, to go back to the whole suite once the project is past its release: drop the selection from
-# the `--pre-push` branch below). BOSUN_SMOKE_FULL=1 runs the whole suite. A whole run (none of --only,
+# the `--pre-push` branch below). When that is the whole suite, the hook leaves it to the merge queue, whose smoke
+# job runs it (defer_whole_run). BOSUN_SMOKE_FULL=1 runs the whole suite. A whole run (none of --only,
 # --last-failed, -x) that ends with no failure records its tree in tests/.smoke-cache/passes, but only if the tree is the same at its end as at
 # its start: the tree is the files on disk before the first section runs (what `git add -A` stages in a copy of
 # the index: tracked files, and untracked ones that are not git-ignored, which a commit lacking them will not match,
@@ -190,6 +191,15 @@ select_changed() {
   echo "${out%$'\n'*}"
 }
 
+# The pre-push hook leaves a whole run to the merge queue, whose smoke job makes the same choice from the merge
+# group's base (.github/workflows/ci.yml, `tests/smoke.sh --changed`): a change that reaches every section (a file on
+# the select-everything list, one no section covers, a base that does not resolve) waited out the whole suite here
+# and again there, about 15 minutes each. BOSUN_SMOKE_FULL=1 runs it here all the same.
+defer_whole_run() {
+  echo "smoke selection: the change reaches the whole suite, which the merge queue runs; BOSUN_SMOKE_FULL=1 runs it here"
+  exit 0
+}
+
 WITH_UNIT=0
 ONLY=""
 CHANGED=""
@@ -262,6 +272,7 @@ if [ -n "$CHANGED" ]; then
   case "$SELECTED" in
     none) exit 0 ;;
     only) ONLY="$SELECTED_IDS" ;;
+    full) [ "$PRE_PUSH" = 1 ] && defer_whole_run ;;
   esac
 fi
 if [ "$LAST_FAILED" = 1 ]; then

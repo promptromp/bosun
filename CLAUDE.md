@@ -529,8 +529,9 @@ when that exact tree (uncommitted and untracked files included) passed a whole r
 `docs/development.md`), and otherwise runs the sections the change since `origin/main` can reach
 (`tests/smoke.sh --changed <ref>` shows the choice for any ref: which file selected which section, or why it
 chose everything), failing closed to the whole suite: a changed file that matches the select-everything list, that
-no section covers and no `ignore` rule lists, an `origin/main` that does not resolve. `BOSUN_SMOKE_FULL=1`
-forces the whole suite. This goes back to the whole suite on every push once the project is past its release
+no section covers and no `ignore` rule lists, an `origin/main` that does not resolve. The hook leaves the whole
+suite to the merge queue, whose smoke job makes the same choice and runs it there (so a push does not wait about 15
+minutes for what the queue does anyway); `BOSUN_SMOKE_FULL=1` runs it before the push. This goes back to the whole suite on every push once the project is past its release
 (`--pre-push` without the selection); CI's merge queue makes the same selection, and its nightly run the whole
 suite. The choice is `tools/smoke_select.py`; the two places that feed it are `covers` on each
 `section` line and `tests/smoke_selection.txt` (`all <glob>`: the whole suite; `ignore <glob>`: no section reaches it).
