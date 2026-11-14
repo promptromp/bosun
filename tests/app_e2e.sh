@@ -108,7 +108,8 @@ set_env() { # <KEY> <value>: in bosun.env, as bosun init writes it (replaced, or
 # The Mac's time zone, chosen so that its local time is about noon whatever the hour the run starts at: the schedule
 # below is all day but for the night, and the checks that the hours decide (the watchdog's alert held no longer, the
 # restart in the hours that starts bosun at login) must not depend on when the run happens. Etc/GMT-N is N hours
-# ahead of UTC (POSIX's sign).
+# ahead of UTC (POSIX's sign). launchd goes on with the zone it started with until the restart, so the run never
+# moves the clock.
 about_noon() { [ "$((10#$(date +%H)))" -ge 11 ] && [ "$((10#$(date +%H)))" -le 13 ]; }
 pin_the_hour() {
   local offset zone
@@ -567,23 +568,33 @@ step_10() {
 # ---- 11. outside your hours: Resting, the next start, a grey dot ----------------------------------------------------
 
 resting_menu() { jq -e --arg s "$1" '.level == "ok" and .header.dot == "grey" and .header.sentence == $s' "$HOOKS/menu.json" >/dev/null 2>&1; } # <sentence>
+# <HH:MM>: a Save of BOSUN_AWAKE_UNTIL from the Settings window, which runs settings set itself (it moves no wake).
+save_until() {
+  local mark
+  mark="$(log_count)"
+  act "$(jq -cn --arg until "$1" '{settings: {BOSUN_AWAKE_UNTIL: $until}}')"
+  check "a Save of BOSUN_AWAKE_UNTIL=$1: the app ran settings set" wait_for 60 log_has "$mark" ".command == [\"settings\", \"set\", \"BOSUN_AWAKE_UNTIL=$1\", \"--json\"] and .outcome == \"exited 0\""
+  check "... and the window shows $1" wait_for 30 menu_says ".settings.values.BOSUN_AWAKE_UNTIL == \"$1\""
+}
 
+# Outside the hours by moving the hours, not the clock: launchd keeps the time zone it started with until the
+# restart (pin_the_hour changed it under it), so a clock moved past a job's time in either zone would run that job.
 step_11() {
-  local offset expected
-  echo "11. outside your hours: bosun stopped, the clock moved to 02:30 tomorrow: Resting, with the next start at 03:00"
+  local until expected
+  until="$(date -v-1H +%H:%M)"
+  echo "11. outside your hours: bosun stopped, the hours made to end at $until (an hour ago): Resting, with the next start at 03:00"
   "$BOSUN" stop >/dev/null 2>&1
   check "bosun stop: no tmux server" no_tmux_server
   check "... in the hours, the menu says it is stopped" wait_for "$WAIT_POLL" menu_says '.level == "stopped"'
-  start_clock
-  offset=$(($(date -j -v+1d -v2H -v30M -v0S +%s) - $(real_time)))
-  set_clock "$offset"
-  check "the clock reads 02:30 tomorrow: $(date '+%a %F %R')" clock_reads "$offset"
-  expected="Resting: outside your hours · next start $(date +%a) 03:00"
-  check "bosun status --json: not your hours, the next start at 03:00, and \"$expected\"" bash -c '"$1" status --json | jq -e --arg s "$2" --arg next "$3" ".level == \"ok\" and .schedule.in_hours == false and (.schedule.next_start | startswith(\$next)) and .sentence == \$s"' _ "$BOSUN" "$expected" "$(date +%FT)03:00"
+  save_until "$until"
+  expected="Resting: outside your hours · next start $(date -v+1d +%a) 03:00"
+  check "bosun status --json: not your hours, the next start tomorrow at 03:00, and \"$expected\"" bash -c '"$1" status --json | jq -e --arg s "$2" --arg next "$3" ".level == \"ok\" and .schedule.in_hours == false and (.schedule.next_start | startswith(\$next)) and .sentence == \$s"' _ "$BOSUN" "$expected" "$(date -v+1d +%FT)03:00"
   check "... the menu says the same, with the grey dot" wait_for "$WAIT_POLL" resting_menu "$expected"
   check "... and its Start reads Start bosun now" menu_title_is startBosun "Start bosun now"
-  put_the_clock_back
+  what_the_app_shows
+  save_until 23:59
   check "back in the hours, the menu says stopped again, and its Start reads Start bosun" wait_for "$WAIT_POLL" bash -c 'jq -e ".level == \"stopped\"" "$1" >/dev/null && [ "$(jq -r "[.sections[][] | select(.id == \"startBosun\")] | first | .title" "$1")" = "Start bosun" ]' _ "$HOOKS/menu.json"
+  what_the_app_shows
 }
 
 # ---- 12. a reload of bosun's jobs after a stop starts nothing --------------------------------------------------------
@@ -592,12 +603,23 @@ step_12() {
   local said="not starting: a reload of bosun's jobs, not a login" before
   echo "12. bosun stopped, a reload of its jobs (what bosun update and install.sh run): the login job runs, and starts nothing"
   before="$(morning_lines "$said")"
+  echo "  note  tmux's windows before the reload, if any: $(windows)"
   launchctl bootout "$DOMAIN/$LOGIN_JOB" # so the reload loads it, as an update does a job whose plist changed
   check "reload_changed_jobs loads the login job again" bash -c 'source "$1/lib/common.sh" && load_config && reload_changed_jobs | grep -qx "$2"' _ "$DIR" "$LOGIN_JOB"
   check "... launchd ran it at load, and it logged that this is a reload, not a login" wait_for 60 morning_lines_above "$said" "$before"
   sleep 10 # a dwell, on purpose: a start would have begun by now
   check "... it started nothing: no tmux server" no_tmux_server
   check "... and the reload's marker is read and gone" test ! -e "$STATE/login-reload"
+  echo "  note  the morning log's last lines:"
+  tail -6 "$STATE/logs/morning-$(date +%F).log" 2>/dev/null | sed 's/^/  note    /'
+  echo "  note  tmux's windows, if any: $(windows)"
+}
+
+# What the app shows and did, for a step whose checks read its menu: its processes, the menu's level, dot and
+# sentence, and the last lines of its log.
+what_the_app_shows() {
+  echo "  note  app processes: $(app_count); the menu: $(jq -c '[.level, .header.dot, .header.sentence]' "$HOOKS/menu.json" 2>&1)"
+  tail -4 "$HOOKS/log.jsonl" | sed 's/^/  note    /'
 }
 
 # Before the restart: bosun runs, started with `bosun start` (which clears the stop of step 11), so the restart ends

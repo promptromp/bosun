@@ -226,4 +226,6 @@ The builder's calls on what the note left open, and the rulings made while build
 - **The Stop flow's words speak of stopping** ("bosun cannot say what stopping would end", "Stopping…", Cancel),
   and of quitting only where the app quits too (Quit bosun.app's "Stop bosun and Quit…").
 - **The Mac VM run** sets the clone's time zone so that its local time is about noon, since the restart in the
-  hours and the watchdog's held alert depend on the hour; it moves the clock to before the start time for Resting.
+  hours and the watchdog's held alert depend on the hour; for Resting it moves the hours (a Save of
+  `BOSUN_AWAKE_UNTIL` an hour back), not the clock, since launchd keeps the zone it started with until the restart
+  and ran the morning job when the clock passed its time in that zone.
