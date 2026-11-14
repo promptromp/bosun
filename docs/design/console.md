@@ -83,6 +83,12 @@ bosun console [--port N] [--open] [--new-token]
 - The server re-reads the ledger when its stamp (the file's inode, mtime and size) changes (cheap;
   about 100 items today, fine to thousands), and the page polls `/api/version` every 15 s and
   refreshes the open view on change.
+- A 401 from the API means the link's token is no longer valid (bosun was reinstalled, or `--new-token`
+  or a per-start token replaced it). The page then shows one message in place of its content (open a
+  fresh link: the menu bar icon's Open Console, or `bosun console --url`) and stops: the poll timer is
+  cleared and no later call, view or route change requests anything, so a forgotten tab does not fill the
+  console's log with 401s. A reload tries again (the page itself needs no token, the API does). The server's
+  checks are unchanged.
 - Run on demand (`bosun console --open`). An optional `console` window in the tmux session can
   come later if it proves useful.
 

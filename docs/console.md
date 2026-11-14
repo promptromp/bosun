@@ -98,6 +98,8 @@ light or dark mode and works down to a narrow window.
   when the console restarts. A stored token that others could read, or a damaged file, is
   replaced by a new one. `bosun console --new-token` rotates it (signing out every tab), and
   `BOSUN_CONSOLE_PERSIST_TOKEN=0` makes it new on every start.
+  A tab left open from before a new token (a reinstall, `--new-token`) shows "This link is out of date" and
+  stops polling; open a fresh link from the menu bar icon's Open Console, or with `bosun console --url`.
 - Read-only: GET and HEAD only, a strict Content-Security-Policy, and only its own files are
   served. The one exception is a knowledge review decision (`POST /api/knowledge/review`): local
   data, never outward-facing, and only with the cookie, this page's Origin, a JSON body and a

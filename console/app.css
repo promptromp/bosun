@@ -2450,3 +2450,9 @@ a.kg-ego:hover {
   font-size: 0.8rem;
   color: var(--muted);
 }
+
+.expired {
+  display: grid;
+  gap: var(--space-3);
+  max-width: 40rem;
+}
