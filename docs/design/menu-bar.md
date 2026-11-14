@@ -210,8 +210,9 @@ Calls made from the research and the builder check, to check while reading:
   writes beside the pid file and `bosun stop` removes; a hold whose process is gone is not shown. A missing session is judged by the watchdog's own gate
   (`watchdog.session_gate_kind`), never by a rule of status's own: an error only when it should be running; a plain
   `bosun stop` today is `stopped` with the morning not paused; outside the awake hours it is resting (until the next
-  scheduled start), and when the awake window has begun and the morning run is going or not yet due it is starting
-  (never, at the error level: a crashed or hung morning run is named as failed). The yellow level also lists the ERROR
+  scheduled start), and when the awake window has begun and the morning run is going or not yet due it is starting,
+  as it is outside the hours while a morning run is going (Start bosun now) (never, at the error level: a crashed or
+  hung morning run is named as failed). The yellow level also lists the ERROR
   lines of the last hour, which the status reads itself whatever the hour (the watchdog's `log-errors` finding is
   never counted: outside the awake hours the watchdog holds its log offsets, so the finding would stay until its
   next run inside them, and one line kept the menu red a whole weekend), and the watchdog itself not running (`watchdog --facts` says its launchd job is loaded or

@@ -861,6 +861,27 @@ class GatherTestCase(unittest.TestCase):
         (self.state / "stopped-acme").write_text("2026-11-10 09:30:00\n")  # yesterday's stop is over
         self.assertEqual(gate(at(10)), SessionGate(menu_status.EXPECTED))
 
+    def test_a_morning_run_going_outside_the_hours_is_starting_not_resting(self) -> None:
+        # Start bosun now at 21:00, outside the 08:00-20:00 hours: the gate the watchdog keeps says outside
+        evening = NOW.replace(hour=21, minute=1)
+        log = self.state / "logs" / "morning-2026-11-11.log"
+        log.write_text(
+            "2026-11-11 21:00:10 [morning] === morning run (trigger=now, session=acme, dry_run=0) ===\n"
+        )
+        gone = [window(w["name"], exists=False) for w in WINDOWS]
+        facts_json = {**WATCHDOG_FACTS, "session_exists": False, "windows": []}
+        run = FakeCommands({"sessions --json": json.dumps(gone), "watchdog --facts": json.dumps(facts_json)})
+        found = menu_status_live.gather(self.env, evening, run, kernel_time=lambda _name: None)
+        self.assertEqual(found.gate, SessionGate(menu_status.STARTING))
+        out = menu_status.snapshot(found, evening)
+        self.assertEqual((out["level"], out["sentence"]), ("ok", "bosun is starting (the morning run)"))
+        self.assertIs(out["schedule"]["in_hours"], False)
+        # once it is done (and the session is up, or not), outside the hours is resting again
+        with log.open("a") as handle:
+            handle.write("2026-11-11 21:02:00 [morning] morning run complete\n")
+        found = menu_status_live.gather(self.env, evening, run, kernel_time=lambda _name: None)
+        self.assertEqual(found.gate, SessionGate(menu_status.RESTING))
+
     def test_a_morning_that_crashed_is_not_called_starting(self) -> None:
         # No end line, the launchd job not running with exit 1: outcome stays "running"
         header = (
