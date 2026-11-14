@@ -48,7 +48,8 @@ pythonpath = ["lib"]
 # follows the imports of lib/ (each `pythonpath` entry is an import root, so `import ledger` is
 # lib/ledger.py) and of the test files, including the helpers in tests/unit that tests import.
 # Everything else a test depends on is a rule here. A rule that is wrong must select more, never
-# less: what bosun's code reads as it runs invalidates all. tests/unit/test_impacted_rules.py checks
+# less: what bosun's code reads as it runs counts as a change to its programs (bin/bosun), the
+# fixtures and the tests' own loaders invalidate all. tests/unit/test_impacted_rules.py checks
 # that every file has a rule and that the plugin follows the imports here; impacted_guard.py that
 # each file a test reads or runs selects that test. `**` matches any depth, `*` one segment, both
 # from the right (pytest_impacted.strategies.matches_any_glob).
@@ -69,6 +70,25 @@ impacted_map = [
     "get.sh=bin/bosun",
     "install.sh=bin/bosun",
     "uninstall.sh=bin/bosun",
+    # What bosun's programs read as they run (the orchestrator's prompts, task files and settings, the
+    # launchd templates, the console's page, the example config, the agy plugin) counts as a change to
+    # them, as lib/*.sh does, plus the tests that read it in their own process (impacted_guard.py names
+    # a missing one). Measured: about 15% of the suite each, where they ran every test.
+    "orchestrator/**=bin/bosun",
+    "orchestrator/**=tests/unit/test_console_library.py",
+    "orchestrator/**=tests/unit/test_console_server.py",
+    "orchestrator/**=tests/unit/test_guard.py",
+    "orchestrator/**=tests/unit/test_learn.py",
+    "templates/*=bin/bosun",
+    "console/*=bin/bosun",
+    "console/*=tests/unit/test_app_icons.py",
+    "console/*=tests/unit/test_console_server.py",
+    "console/*=tests/unit/test_console_token.py",
+    "examples/*/*=bin/bosun",
+    "examples/*/*=tests/unit/test_init_plan.py",
+    "examples/*/*=tests/unit/test_workstreams.py",
+    "agents/*/*=bin/bosun",
+    "agents/*/*=tests/unit/test_agy_plugin.py",
     "bin/bosun=tests/unit/test_agent_names.py",
     "bin/bosun=tests/unit/test_agent_profiles.py",
     "bin/bosun=tests/unit/test_claude_state.py",
@@ -146,6 +166,11 @@ impacted_map = [
     "tools/*.py=tests/unit/test_smoke_selection.py",
     # ... and what --shard splits them by.
     "tests/smoke_weights.txt=tests/unit/test_smoke_select.py",
+    # The commit hook's unit-test run and its pass record, and the hooks' order around it (CI's lint
+    # job runs them all to the end).
+    "tools/unit_hook.py=tests/unit/test_unit_hook.py",
+    ".pre-commit-config.yaml=tests/unit/test_unit_hook.py",
+    ".github/workflows/ci.yml=tests/unit/test_unit_hook.py",
     "tests/llm/*.py=tests/unit/test_learn.py",
     "tests/llm/*.py=tests/unit/test_learn_digest.py",
     "tests/sandbox/mcp_probe_server.py=tests/unit/test_mcp_probe_server.py",
@@ -157,18 +182,14 @@ impacted_map = [
     "tests/js/*=tests/unit/test_impacted_rules.py",
     "tests/sandbox/**=tests/unit/test_impacted_rules.py",
 ]
-# Whatever bosun reads as it runs (its prompts, task files, templates, the console's page, the
-# example config, the agy plugin), the fixtures, and the tests' conftest with repo_guard.py, which every test loads
-# (and which imports lib/ modules, a dependency the plugin leaves out of its analysis): any test may
-# depend on them, so a change to one runs every test.
+# The fixtures, the app's version and publisher (which bosun reads as it runs, and the app's tests and
+# tools too), and the tests' conftest with repo_guard.py, which every test loads (and which imports
+# lib/ modules, a dependency the plugin leaves out of its analysis): any test may depend on them, so a
+# change to one runs every test. (The rest of what bosun reads as it runs counts as a change to
+# bin/bosun, above.)
 impacted_invalidate_all = [
-    "orchestrator/**",
-    "console/*",
-    "templates/*",
     "app/VERSION",
     "app/publisher.json",
-    "examples/*/*",
-    "agents/*/*",
     "tests/fixtures/**",
     "tests/unit/conftest.py",
     "tests/unit/repo_guard.py",

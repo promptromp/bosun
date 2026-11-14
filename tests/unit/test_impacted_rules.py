@@ -25,6 +25,14 @@ NO_PLUGIN = "pytest-impacted is not installed (uv sync installs the dev group)"
 HAVE_PYTEST = importlib.util.find_spec("pytest") is not None  # impacted_guard is a pytest plugin
 CATCH_ALL = "*"  # the glob that maps every change to this test
 DEPENDENCY_FILES = ("pyproject.toml", "uv.lock")  # the plugin runs every test for a change to one
+# What bosun's programs read as they run, one file of each folder: a change counts as one to bin/bosun.
+READ_AS_IT_RUNS = (
+    "orchestrator/policy.md",
+    "templates/launchd.plist",
+    "console/app.js",
+    "examples/generic/bosun.env",
+    "agents/agy-plugin/hooks.json",
+)
 
 
 def has_rule(name: str) -> bool:
@@ -57,8 +65,17 @@ class RulesTest(unittest.TestCase):
             with self.subTest(name):
                 self.assertIn("tests/unit/test_update.py", rules.selected_by(name))
 
-    def test_a_change_to_what_bosun_reads_runs_every_test(self) -> None:
-        for name in ("orchestrator/policy.md", "templates/launchd.plist", "console/app.js"):
+    def test_a_change_to_what_bosun_reads_selects_the_tests_that_run_its_programs(self) -> None:
+        programs = rules.selected_by("bin/bosun")
+        for name in READ_AS_IT_RUNS:
+            with self.subTest(name):
+                selected = rules.selected_by(name)
+                self.assertIsNot(selected, rules.ALL)
+                self.assertLessEqual(programs, selected)
+                self.assertIn("tests/unit/test_update.py", selected)
+
+    def test_the_fixtures_and_the_tests_loaders_still_run_every_test(self) -> None:
+        for name in ("tests/fixtures/console/acme-ledger.json", "tests/unit/conftest.py", "app/VERSION"):
             with self.subTest(name):
                 self.assertIs(rules.selected_by(name), rules.ALL)
 
@@ -101,6 +118,21 @@ class GuardTest(unittest.TestCase):
         self.assertEqual(self.started("/work/x/claude", "-p", "run bosun ledger show"), set())
         self.assertEqual(self.started("bash", "-c", "HOME=/x\n# bosun configuration\nX=1"), set())
         self.assertEqual(self.started("cp", "/work/a/setup.sh", "/work/b/setup.sh"), set())
+
+    def test_the_line_it_says_to_add(self) -> None:
+        import impacted_guard
+
+        test = "tests/unit/test_x.py"
+        self.assertEqual(
+            impacted_guard.hint("lib/common.sh", test),
+            f'"lib/common.sh={test}", or a glob in impacted_invalidate_all',
+        )
+        self.assertEqual(impacted_guard.hint("lib/ledger.py", test), f'"bin/bosun={test}"')
+        self.assertEqual(impacted_guard.hint("docs/ledger.md", test), f'"mkdocs.yml={test}"')
+        self.assertEqual(impacted_guard.hint("console/app.js", test), f'"console/*={test}"')
+        self.assertEqual(
+            impacted_guard.hint("orchestrator/tasks/review.md", test), f'"orchestrator/**={test}"'
+        )
 
     def test_the_repository_s_files_on_a_command_line(self) -> None:
         root = str(rules.ROOT)
@@ -151,6 +183,13 @@ class PluginTest(unittest.TestCase):
             self.selected(name),
             {name, "tests/unit/test_impacted_rules.py", "tests/unit/test_smoke_selection.py"},
         )
+
+    def test_the_plugin_selects_what_the_rules_say_for_what_bosun_reads(self) -> None:
+        for name in READ_AS_IT_RUNS:
+            with self.subTest(name):
+                expected = rules.selected_by(name)
+                assert expected is not rules.ALL
+                self.assertEqual(self.selected(name), set(expected))
 
     def test_a_change_to_the_docs_selects_only_the_tests_that_read_them(self) -> None:
         self.assertEqual(

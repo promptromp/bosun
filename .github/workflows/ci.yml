@@ -53,8 +53,15 @@ jobs:
         run: |
           mkdir -p "$RUNNER_TEMP/config"
           printf '%s\n' "$FORBIDDEN_TERMS" >"$RUNNER_TEMP/config/forbidden-terms.txt"
+      # The config stops at the first failing hook (fail_fast), so that a commit's lint failure does not
+      # pay for the unit tests after it; here every hook runs to the end, from a copy with fail_fast off,
+      # so one run reports every finding. The grep fails the step if that line ever stops matching.
       - name: pre-commit
-        run: uv run pre-commit run --all-files --show-diff-on-failure
+        run: |
+          config="$RUNNER_TEMP/pre-commit-every-hook.yaml"
+          sed 's/^fail_fast: true$/fail_fast: false/' .pre-commit-config.yaml >"$config"
+          grep -qx 'fail_fast: false' "$config"
+          uv run pre-commit run --config "$config" --all-files --show-diff-on-failure
         env:
           SKIP: unit-tests,no-commit-to-branch
           BOSUN_CONFIG_DIR: ${{ runner.temp }}/config

@@ -389,7 +389,9 @@ of truth, so don't copy rules into this file.
 
 One-time setup: `uv sync && uv run pre-commit install` (commit, commit-msg and pre-push hooks).
 All tools come from the uv-locked dev group in `pyproject.toml`, so `uv run <tool>`, the hooks
-and CI agree on versions. On commit (`.pre-commit-config.yaml`; run all with `uv run pre-commit run --all-files`):
+and CI agree on versions. On commit (`.pre-commit-config.yaml`; run all with `uv run pre-commit run --all-files`),
+in this order, stopping at the first hook that fails (`fail_fast`), so a lint or format failure never pays for the
+tests, which come last (CI's `lint` job runs a copy with `fail_fast: false`, so it reports every finding in one run):
 
 - Python: ruff (lint incl. McCabe complexity <= 10, isort, bugbear, security; format), mypy
   --strict, complexipy (cognitive complexity <= 15), lizard (cyclomatic <= 10, <= 60 lines).
@@ -426,7 +428,11 @@ and CI agree on versions. On commit (`.pre-commit-config.yaml`; run all with `uv
 - The unit tests the change can reach, in parallel (`pytest -n auto --impacted`, pytest-impacted
   and pytest-xdist; `--dist=worksteal` is in `pyproject.toml`'s `addopts`, so an idle worker takes
   queued tests from a busy one): the change is what git has uncommitted, so `pre-commit run --all-files`
-  selects the same. A change to a module that many others import (`ledger.py`, but also small ones such
+  selects the same. The hook runs them through `tools/unit_hook.py`, which skips the run in one line when
+  exactly these inputs passed it in the last day: its key is the files on disk (tracked and untracked, as
+  `git add -A` sees them), the index's tree, HEAD, the Python, `uv.lock`, `pyproject.toml`, the arguments
+  and the `PATH`, `PYTHON*`, `PYTEST*` and `BOSUN_*` variables, recorded in the git-ignored
+  `tests/.unit-cache/` (`BOSUN_UNIT_NO_CACHE=1` ignores it). A change to a module that many others import (`ledger.py`, but also small ones such
   as `similar.py` or `screen_text.py`) reaches most of the suite through the import graph, so such a
   commit pays nearly the full run (about a minute); that is the selection being right, not loose, and a
   docs edit pays about ten seconds. Before a push, the smoke sections the change can reach (end to end only; the build-out
@@ -440,9 +446,11 @@ pytest's `pythonpath` entry; `impacted_module = "lib"`) and between the test fil
 `tests/unit/impacted_rules.py`. A rule may select more than it needs, never less: when unsure, a glob
 in `impacted_invalidate_all`. A change to bosun's programs (`lib/*.sh`, `libexec/`, the installers)
 or to any `lib/*.py` counts as one to `bin/bosun`, which selects the tests that run or read the
-programs; a docs page counts as one to `mkdocs.yml`, which selects the tests that read the docs;
-what bosun reads as it runs (`orchestrator/`, `templates/`, `console/`, `examples/`, `agents/`), the
-fixtures and `conftest.py` run every test (the plugin leaves a conftest's imports out of its analysis, so
+programs; so does what bosun reads as it runs (`orchestrator/`, `templates/`, `console/`, `examples/`,
+`agents/`), plus the tests that read those files in their own process (a line per folder and test,
+`console/*=<test>`; about 15% of the suite each, where they ran all of it); a docs page counts as one to
+`mkdocs.yml`, which selects the tests that read the docs; the fixtures, `app/VERSION`,
+`app/publisher.json` and `conftest.py` run every test (the plugin leaves a conftest's imports out of its analysis, so
 `lib/journal.py` and `lib/change_log.py`, which it imports, select their importers, not every test). A
 glob's `**` matches any depth (`docs/**`, `tests/fixtures/**`), `*` one level, both from the right, as
 the plugin matches (`pytest_impacted.strategies.matches_any_glob`, which `impacted_rules.matches` calls). `tests/unit/test_impacted_rules.py` runs on every
@@ -545,8 +553,8 @@ The pre-push hook (`tests/smoke.sh --pre-push`) does less, for the build-out pha
 when that exact tree (uncommitted and untracked files included) passed a whole run in this checkout in the last
 24 hours (`BOSUN_SMOKE_NO_CACHE=1` ignores that record, `BOSUN_SMOKE_FULL=1` forces the whole suite; what the record is and why it can only make a run longer:
 `docs/development.md`), and otherwise runs the sections the change since `origin/main` can reach
-(`tests/smoke.sh --changed <ref>` shows the choice for any ref: which file selected which section, or why it
-chose everything), failing closed to the whole suite: a changed file that matches the select-everything list, that
+(`tests/smoke.sh --changed <ref> --list` shows the choice for any ref without running it: which file selected which
+section, or why it chose everything; `--changed <ref>` alone runs what it chose), failing closed to the whole suite: a changed file that matches the select-everything list, that
 no section covers and no `ignore` rule lists, an `origin/main` that does not resolve. The hook leaves the whole
 suite to the merge queue, whose smoke job makes the same choice and runs it there (so a push does not wait about 15
 minutes for what the queue does anyway); `BOSUN_SMOKE_FULL=1` runs it before the push. This goes back to the whole suite on every push once the project is past its release
