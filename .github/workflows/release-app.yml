@@ -154,12 +154,24 @@ jobs:
             echo "Apple did not accept the app (status: ${status:-unknown})." >&2
             exit 1
           fi
+      # Each stapler call asks Apple's ticket service (CloudKit), which can lag a fresh notarization: app-v0.1.1's
+      # staple worked and the validate right after got "CloudKit query ... failed due to (null)" (error 65). So
+      # up to 5 tries, 30 s apart. The zip's check below reads the stapled ticket offline (Gatekeeper) anyway.
       - name: Staple the ticket and make the zip again
         run: |
           set -eu
           version=$(tr -d '[:space:]' <app/VERSION)
-          xcrun stapler staple "$DIST/bosun.app"
-          xcrun stapler validate "$DIST/bosun.app"
+          again() {
+            n=1
+            until "$@"; do
+              [ "$n" -lt 5 ] || return 1
+              echo "$* failed (try $n of 5); trying again in 30 s" >&2
+              n=$((n + 1))
+              sleep 30
+            done
+          }
+          again xcrun stapler staple "$DIST/bosun.app"
+          again xcrun stapler validate "$DIST/bosun.app"
           app/build.sh --zip "$DIST/bosun.app" --out "$DIST"
           test -s "$DIST/bosun-app-$version.zip"
       # The final zip, put through the install's own code (lib/app_install.py): the archive's entries, ditto,
