@@ -100,11 +100,13 @@ public func quitFirstSpec(_ plan: QuitPlan) -> DialogSpec {
 /// Shown when `quit --plan` could not look (or did not answer): the reason, a Stop Now, which needs no look,
 /// and, when the app is quitting anyway (`quitsApp`), Quit bosun.app, which leaves bosun as it is. Stop Now
 /// ends every window, and bosun cannot tell whether agents are busy: so no button is the default (Return does
-/// nothing), and Escape cancels, as Apple's guidelines allow for a destructive action.
+/// nothing), and Escape cancels, as Apple's guidelines allow for a destructive action. It speaks of quitting
+/// only when the app quits too.
 public func quitUnavailableSpec(_ why: String, quitsApp: Bool) -> DialogSpec {
   let stopNow = "\n\nStop Now ends every window without waiting for any agent."
   return DialogSpec(
-    title: "bosun cannot say what quitting would stop",
+    title: quitsApp
+      ? "bosun cannot say what quitting would stop" : "bosun cannot say what stopping would end",
     message: why + stopNow + (quitsApp ? " Quit bosun.app leaves bosun as it is." : ""),
     scroll: nil, boxes: quitBoxes(sleep: true),
     buttons: ["Cancel", "Stop Now"] + (quitsApp ? ["Quit bosun.app"] : []), cancel: 0,
@@ -138,15 +140,17 @@ public func quitBusySpec(_ names: [String]) -> DialogSpec {
   DialogSpec(
     title: "Some agents are in the middle of a task",
     message: "These are busy: \(names.joined(separator: ", ")).\n\n"
-      + "Quit can wait for them to finish, and asks again if they take long, or stop them now.",
+      + "bosun can wait for them to finish, and ask again if they take long, or stop them now.",
     scroll: nil, boxes: [], buttons: ["Let Them Finish", "Stop Them Now", "Cancel"], cancel: 2)
 }
 
-public func quitStillBusySpec(_ names: [String]) -> DialogSpec {
+/// The wait ran out with agents still busy. Its cancel names the quit only when the app quits too.
+public func quitStillBusySpec(_ names: [String], quitsApp: Bool) -> DialogSpec {
   DialogSpec(
     title: "Still busy",
     message: "These are still working after the wait: \(names.joined(separator: ", ")).",
-    scroll: nil, boxes: [], buttons: ["Keep Waiting", "Stop It Now", "Cancel Quit"], cancel: 2)
+    scroll: nil, boxes: [], buttons: ["Keep Waiting", "Stop It Now", quitsApp ? "Cancel Quit" : "Cancel"],
+    cancel: 2)
 }
 
 public func quitNoteSpec(_ note: String) -> DialogSpec {

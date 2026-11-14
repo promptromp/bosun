@@ -348,7 +348,8 @@ public final class AppCoordinator {
     case .unavailable(let why, _):
       return await ask(quitUnavailableSpec(why, quitsApp: quitsApp), step, quitsApp)
     case .busy(let names, _): return await ask(quitBusySpec(names), step, quitsApp)
-    case .stillBusy(let names, _): return await ask(quitStillBusySpec(names), step, quitsApp)
+    case .stillBusy(let names, _):
+      return await ask(quitStillBusySpec(names, quitsApp: quitsApp), step, quitsApp)
     case .running(let choices): return await runQuit(choices, via: cli)
     case .planning: return await quitPlanEvent(via: cli)
     case .failed, .done, .appOnly, .cancelled: return .cancelled

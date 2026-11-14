@@ -184,8 +184,8 @@ final class StoppedWith {
   }
 
   /// `stopModal` from a timer ends the modal loop only once an event is taken; this is the event posted so a
-  /// VM that nobody touches has one. (Whether the loop then ends is Task 5's to see: showing a dialog is not
-  /// something a headless test can do.)
+  /// VM that nobody touches has one. (Whether the loop then ends is the Mac VM suite's to see, tests/app_e2e.sh:
+  /// showing a dialog is not something a headless test can do.)
   @Test func theEventThatWakesTheModalLoopIsAnApplicationDefinedOne() {
     #expect(Dialogs.wakeEvent()?.type == .applicationDefined)
   }

@@ -93,7 +93,7 @@ public enum QuitStep: Equatable, Sendable {
   /// bosun.app", which leaves bosun as it is. This is how a quit that did not finish is finished. The wait is
   /// the failure object's, nil when there was none. (Quit bosun.app is offered only when the app quits anyway.)
   case unavailable(String, QuitWait?)
-  /// The first dialog: what quitting would meet, and the choices.
+  /// The first dialog: what stopping would meet, and the choices.
   case first(QuitPlan)
   /// The second dialog: these agents are busy.
   case busy([String], QuitChoices)
@@ -235,13 +235,16 @@ extension QuitStep {
 }
 
 /// The line under the status while `bosun quit` runs: what it waits for (the agents named busy, which it lets
-/// finish), or that it stops bosun now. Nil in any other step.
+/// finish), or that it stops bosun now. It speaks of stopping, and of quitting only when the app quits too
+/// (Quit bosun.app's "Stop bosun and Quit…"). Nil in any other step.
 public func quittingLine(_ step: QuitStep, busy: [String]) -> String? {
   guard case .running(let choices) = step else { return nil }
+  let quits = choices.quitsApp
   switch choices.busy {
-  case .stopNow: return "Quitting: stopping bosun…"
+  case .stopNow: return quits ? "Quitting: stopping bosun…" : "Stopping bosun now…"
   case .letFinish:
-    return busy.isEmpty ? "Quitting…" : "Quitting: waiting for \(busy.joined(separator: ", ")) to finish…"
+    if busy.isEmpty { return quits ? "Quitting…" : "Stopping bosun…" }
+    return "\(quits ? "Quitting" : "Stopping"): waiting for \(busy.joined(separator: ", ")) to finish…"
   }
 }
 
@@ -251,7 +254,7 @@ let quitFailedText =
   "bosun quit did not complete. If bosun was meant to be stopped, run `bosun quit --stop-now` "
   + "again to finish, or `bosun start` to start bosun again."
 let quitPlanFailedText =
-  "bosun could not say what quitting would stop. Stop Now still works: it does not need to."
+  "bosun could not say what stopping it would end. Stop Now still works: it does not need to."
 let quitPlanRefusedText = "bosun refused to quit and did not say why. Run `bosun quit --plan` in a terminal."
 let quitTimedOutText =
   "bosun quit did not finish in time. Its record may stay, so bosun stays stopped: run "

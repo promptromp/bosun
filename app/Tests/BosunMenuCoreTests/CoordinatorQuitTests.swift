@@ -79,11 +79,11 @@ import Testing
     world.ui.answer("Let Them Finish")
     let quitting = Task { await world.coordinator.perform(.stopBosun) }
     #expect(await gate.waitForWaiter())
-    #expect(world.ui.lastModel?.header.detail.last == "Quitting: waiting for acme-exporter to finish…")
+    #expect(world.ui.lastModel?.header.detail.last == "Stopping: waiting for acme-exporter to finish…")
     await gate.open()
     await quitting.value
     #expect(world.coordinator.flow.detail == nil)
-    #expect(world.ui.lastModel?.header.detail.contains { $0.hasPrefix("Quitting") } == false)
+    #expect(world.ui.lastModel?.header.detail.contains { $0.hasPrefix("Stopping") } == false)
   }
 
   @Test func stopLeavesTheAppRunningAndLooksOnceMore() async throws {
@@ -284,13 +284,13 @@ import Testing
     #expect(world.ui.terminated == 1)
   }
 
-  @Test func cancelQuitAfterTheWaitLeavesBosunAsItIs() async throws {
+  @Test func cancelAfterTheWaitLeavesBosunAsItIs() async throws {
     let world = try await readyToQuit(busy: true)
     await world.reply(
       Command(args: letFinishCommand, timeout: .seconds(1)), try quitReply("quit-result-busy"))
     world.ui.answer("Stop bosun")
     world.ui.answer("Let Them Finish")
-    world.ui.answer("Cancel Quit")
+    world.ui.answer("Cancel")
     await world.coordinator.perform(.stopBosun)
     #expect(world.ui.terminated == 0)
     #expect(world.coordinator.flow.isIdle)

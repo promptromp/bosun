@@ -221,16 +221,16 @@ private let busyPlan = quitPlan(
 
 /// A-14: the line a running quit shows under the status.
 @Suite struct QuittingLineTests {
-  @Test func aQuitThatLetsAgentsFinishNamesThem() throws {
+  @Test func aStopThatLetsAgentsFinishNamesThem() throws {
     let running = QuitStep.running(QuitChoices(busy: .letFinish))
     #expect(
-      quittingLine(running, busy: ["acme-exporter"]) == "Quitting: waiting for acme-exporter to finish…")
-    #expect(quittingLine(running, busy: ["a", "b"]) == "Quitting: waiting for a, b to finish…")
-    #expect(quittingLine(running, busy: []) == "Quitting…")
+      quittingLine(running, busy: ["acme-exporter"]) == "Stopping: waiting for acme-exporter to finish…")
+    #expect(quittingLine(running, busy: ["a", "b"]) == "Stopping: waiting for a, b to finish…")
+    #expect(quittingLine(running, busy: []) == "Stopping bosun…")
   }
 
   @Test func stoppingNowSaysSo() throws {
-    #expect(quittingLine(.running(QuitChoices(busy: .stopNow)), busy: ["a"]) == "Quitting: stopping bosun…")
+    #expect(quittingLine(.running(QuitChoices(busy: .stopNow)), busy: ["a"]) == "Stopping bosun now…")
   }
 
   @Test func aDialogStepHasNoLine() throws {

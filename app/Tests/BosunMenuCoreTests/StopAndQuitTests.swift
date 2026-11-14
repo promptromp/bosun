@@ -29,3 +29,17 @@ import Testing
     #expect(!showsStop(try Fixtures.status("status-error")))
   }
 }
+
+/// The line a running stop shows under the status, when the stop is Quit bosun.app's "Stop bosun and Quit…": it
+/// speaks of quitting, since the app quits too (Stop bosun… alone speaks of stopping: QuittingLineTests).
+@Suite struct QuittingLineOfAQuitTests {
+  @Test func aStopThatQuitsTheAppSaysQuitting() throws {
+    let running = QuitStep.running(QuitChoices(quitsApp: true, busy: .letFinish))
+    #expect(
+      quittingLine(running, busy: ["acme-exporter"]) == "Quitting: waiting for acme-exporter to finish…")
+    #expect(quittingLine(running, busy: []) == "Quitting…")
+    #expect(
+      quittingLine(.running(QuitChoices(quitsApp: true, busy: .stopNow)), busy: ["a"])
+        == "Quitting: stopping bosun…")
+  }
+}

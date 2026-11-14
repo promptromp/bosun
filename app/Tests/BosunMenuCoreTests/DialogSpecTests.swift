@@ -75,10 +75,28 @@ import Testing
   }
 
   @Test func theStillBusyDialogAsksAgain() throws {
-    let spec = quitStillBusySpec(["acme-exporter"])
+    let spec = quitStillBusySpec(["acme-exporter"], quitsApp: false)
     #expect(spec.message.contains("acme-exporter"))
-    #expect(spec.buttons == ["Keep Waiting", "Stop It Now", "Cancel Quit"])
+    #expect(spec.buttons == ["Keep Waiting", "Stop It Now", "Cancel"])
     #expect(spec.cancel == 2)
+  }
+
+  /// Its cancel names the quit only when the app quits too.
+  @Test func theStillBusyDialogOfAQuitCancelsTheQuit() throws {
+    let spec = quitStillBusySpec(["a"], quitsApp: true)
+    #expect(spec.buttons == ["Keep Waiting", "Stop It Now", "Cancel Quit"])
+  }
+
+  /// The Stop flow's words speak of stopping: quitting is said only where the app quits.
+  @Test func theStopFlowsDialogsSpeakOfStopping() throws {
+    let busy = quitBusySpec(["acme-exporter"])
+    #expect(!busy.message.contains("Quit"))
+    #expect(busy.message.contains("bosun can wait for them to finish"))
+    let unavailable = quitUnavailableSpec("the windows cannot be read", quitsApp: false)
+    #expect(unavailable.title == "bosun cannot say what stopping would end")
+    #expect(!unavailable.message.lowercased().contains("quit"))
+    let quitting = quitUnavailableSpec("the windows cannot be read", quitsApp: true)
+    #expect(quitting.title == "bosun cannot say what quitting would stop")
   }
 
   @Test func whenThePlanCouldNotLookTheReasonAStopNowAndQuittingOnlyTheAppAreOffered() throws {
@@ -224,7 +242,7 @@ import Testing
       contract: 1, windows: [], busy: [], waiting: [], keepAwakeUntil: nil, refused: nil, note: nil,
       waitMinutes: nil, lockWaitSeconds: nil, stepsSeconds: nil)
     let specs = [
-      quitFirstSpec(plan), quitBusySpec(["a"]), quitStillBusySpec(["a"]), quitNoteSpec("n"),
+      quitFirstSpec(plan), quitBusySpec(["a"]), quitStillBusySpec(["a"], quitsApp: false), quitNoteSpec("n"),
       failureSpec("t", "m"), problemsSpec([]),
     ]
     for spec in specs { #expect(spec.defaultButton == 0, "\(spec.title)") }
