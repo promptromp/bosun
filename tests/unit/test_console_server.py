@@ -114,6 +114,8 @@ class ChecksTestCase(unittest.TestCase):
     def test_static_allowlist_is_exact(self) -> None:
         self.assertEqual(console_server.static_asset("/").file, "index.html")  # type: ignore[union-attr]
         self.assertEqual(console_server.static_asset("/app.js").file, "app.js")  # type: ignore[union-attr]
+        logo = console_server.static_asset("/logo.png")
+        self.assertEqual((logo.file, logo.content_type), ("logo.png", "image/png"))  # type: ignore[union-attr]
         for path in (
             "/../lib/ledger.py",
             "/%2e%2e/lib/ledger.py",

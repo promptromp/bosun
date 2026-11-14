@@ -108,7 +108,7 @@ installed. The usual ones:
 | `Claude in Chrome's screen not done` | bosun starts windows with Chrome on (`--chrome` in `BOSUN_CLAUDE_FLAGS` and `BOSUN_ORCHESTRATOR_FLAGS`), and Claude Code first shows what it may do in your browser and waits for Enter | Run `claude --chrome`, press Enter at that screen, then `/exit` |
 | `not logged in` under Claude Code | It has no login | Run `claude`, and follow what it asks |
 | `not logged in` under Codex | It has no login | Run `codex login`. With an API key: `printenv OPENAI_API_KEY \| codex login --with-api-key` |
-| A window is on a screen, and the watchdog reports `stalled-start` | The agent is asking something only you can answer, usually about trusting the folder | `bosun attach`, then read it. Do not just press Return: on several of Claude Code's screens the default is to exit, and on Codex's it says yes |
+| A window is on a screen, and the watchdog reports `stalled-start` | The agent is asking something only you can answer, usually about trusting the folder | `bosun attach <window>` (the finding names it), then read it. Do not just press Return: on several of Claude Code's screens the default is to exit, and on Codex's it says yes |
 | `does not run on <your OS> yet`, or `bosun runs on macOS today` | bosun runs on macOS today, and Linux is next | See the [roadmap](../ROADMAP.md) |
 | `bosun.env does not parse, so none of it was read` | An edit left a line bash cannot read: an unclosed quote, a stray word. Read half, the file would give a config that is neither yours nor the defaults, so every command stops instead | Fix the line it names, or move the file aside to run on the defaults |
 | `bosun.env stops before its end when read, so none of it was read` | A line stops the shell that reads it, usually a variable that is not set where bosun runs (`$SOMETHING` from your shell's startup files, which launchd's jobs do not have), so every command stops instead of running on half of it | Set the value in the file itself, or remove the line |
@@ -207,6 +207,12 @@ and "Show What's Wrong..." (yellow and red only), Open Console, Check for Update
 
 A status that is older than the last good one says "(not current)" after its sentence. The icon shows a small
 dot for a warning, an error or an update ready.
+
+When a window needs you (its agent is on a first-run or trust screen, its shell is at a question of your startup
+files, or it waits at a prompt), "Show What's Wrong..." names it and offers "Open <window>": that opens Terminal
+running `bosun attach <window>`, on that window, where you answer it. With several, it offers the first and names
+the others (`bosun attach <window>` opens any of them). Closing that Terminal window, or detaching with the tmux
+prefix and `d`, leaves the window running.
 
 The watchdog counts toward yellow in two ways. If its launchd job is installed but not loaded (booted out), the
 menu is yellow at once. If it is loaded but has not run, it is yellow only when the Mac has been awake for three of

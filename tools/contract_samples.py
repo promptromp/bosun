@@ -77,8 +77,9 @@ def window(name: str, status: str | None = "idle", exists: bool = True) -> dict[
     return {"name": name, "kind": "session", "window": exists, "agent": agent}
 
 
-def check(name: str, severity: str, *messages: str) -> dict[str, Any]:
-    findings = [{"message": m, "decision": "alerts now"} for m in messages]
+def check(name: str, severity: str, *messages: str, window: str | None = None) -> dict[str, Any]:
+    """A check as `watchdog.status_data` gives it; <window>: the window its findings are about."""
+    findings = [{"message": m, "decision": "alerts now", "window": window} for m in messages]
     return {"name": name, "severity": severity, "summary": "", "note": "", "findings": findings}
 
 
@@ -116,9 +117,24 @@ def status_samples() -> dict[str, Sample]:
         "1 new ERROR line(s) in the bosun logs: check-in.log: [checkin] ERROR: the exporter's tests failed"
     )
     failed = "Today's morning run reported problems: setup.sh exited 1"
+    stalled = (
+        "The acme-exporter window's agent started 7 min ago and never reached a session: it is probably on a "
+        "first-run or trust screen only you can answer (bosun attach acme-exporter)."
+    )
     return {
         "status-ok": snapshot(),
-        "status-warning": snapshot(checks=watchdog_checks(check("waiting", "warn", warning))),
+        "status-warning": snapshot(
+            checks=watchdog_checks(check("waiting", "warn", warning, window="acme-web"))
+        ),
+        # a window at a first-run screen (an error), and acme-web waiting at a prompt: both need you
+        "status-attention": snapshot(
+            windows=[
+                window("acme-orchestrator"),
+                window("acme-exporter", None),
+                window("acme-web", "waiting"),
+            ],
+            checks=watchdog_checks(check("stalled-start", "error", stalled, window="acme-exporter")),
+        ),
         "status-error": snapshot(windows=GONE, gate=SessionGate(menu_status.EXPECTED), keep_awake_until=None),
         # bosun runs, its windows open, and an error-severity finding: the app must not start it again
         "status-running-error": snapshot(checks=watchdog_checks(check("log-errors", "error", logged))),

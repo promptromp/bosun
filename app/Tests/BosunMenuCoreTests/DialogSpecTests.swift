@@ -265,6 +265,57 @@ import Testing
     #expect(spec.message.contains("nothing"))
   }
 
+  @Test func aWindowThatNeedsYouIsOfferedToOpenAndOKStaysTheDefaultAndTheEscape() throws {
+    let stalled = "The acme-exporter window's agent never reached a session (bosun attach acme-exporter)."
+    let spec = problemsSpec(
+      [stalled], attention: [WindowAttention(window: "acme-exporter", problem: stalled)])
+    #expect(spec.title == "What's Wrong")
+    #expect(spec.buttons == ["OK", "Open acme-exporter"])
+    #expect(spec.defaultButton == 0)
+    #expect(spec.cancel == 0)
+    #expect(spec.message.hasPrefix("The acme-exporter window needs you. Open acme-exporter shows it in"))
+    #expect(spec.message.contains("closing Terminal's window leaves it running"))
+    #expect(spec.scroll == stalled)  // the problem, once
+  }
+
+  @Test func severalWindowsAreNamedOnceTheFirstOfferedAndAWaitAtAPromptListedAfterTheProblems() throws {
+    let attention = [
+      WindowAttention(window: "acme-exporter", problem: "s1"),
+      WindowAttention(window: "acme-web", problem: "The acme-web window is waiting for you."),
+      WindowAttention(window: "acme-exporter", problem: "l1"),
+    ]
+    let spec = problemsSpec(["s1", "the watchdog has not run", "l1"], attention: attention)
+    #expect(spec.buttons == ["OK", "Open acme-exporter"])
+    #expect(spec.message.hasPrefix("These windows need you: acme-exporter, acme-web. Open acme-exporter"))
+    #expect(spec.message.contains("`bosun attach <window>` any other"))
+    #expect(
+      spec.scroll == "s1\nthe watchdog has not run\nl1\nThe acme-web window is waiting for you.")
+  }
+
+  @Test func theStatusesWindowsAreTheOnesTheDialogOffers() throws {
+    let status = try Fixtures.status("status-attention")
+    let spec = problemsSpec(status.problems, attention: status.needsYou)
+    #expect(spec.buttons == ["OK", "Open acme-exporter"])
+    #expect(spec.scroll?.components(separatedBy: "\n").count == 2)
+  }
+
+  @Test func openingIsTheSecondButtonAndOnlyWhenAWindowNeedsYou() throws {
+    let attention = [
+      WindowAttention(window: "acme-web", problem: "w"), WindowAttention(window: "acme-api", problem: "a"),
+    ]
+    let open = DialogAnswer(button: 1, boxes: [:])
+    #expect(problemsWindow(attention, answer: open) == "acme-web")
+    #expect(problemsWindow(attention, answer: DialogAnswer(button: 0, boxes: [:])) == nil)  // OK, the default
+    #expect(problemsWindow([], answer: DialogAnswer(button: 0, boxes: [:])) == nil)  // OK, the only button
+  }
+
+  @Test func returnAndEscapeOnlyClose() throws {
+    let spec = problemsSpec([], attention: [WindowAttention(window: "acme-web", problem: "w")])
+    #expect(spec.defaultButton == 0)
+    #expect(spec.cancel == 0)
+    #expect(spec.buttons[0] == "OK")
+  }
+
   @Test func aQuitNoteIsShownAsItIs() throws {
     let spec = quitNoteSpec("A console is still running on port 8765.")
     #expect(spec.title == "bosun is stopped")

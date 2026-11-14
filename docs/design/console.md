@@ -76,6 +76,7 @@ bosun console [--port N] [--open] [--new-token]
   lib/console_kg_sources.py      -> readable fact sources: a memory note's title and Library link,
                                     a session's name (cached by file and modification time)
   console/index.html, app.js, app.css   -> hash-routed single page (#/ledger, #/item/<id>, ...)
+  console/logo.png                       -> bosun's mark beside its name, and the tab's icon
 ```
 
 - The view models are pure over loaded data, like `lineage.py` and `activity.py`, so they and the

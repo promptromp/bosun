@@ -47,8 +47,8 @@ EXPECTED = SessionGate(menu_status.EXPECTED)
 RESTING = SessionGate(menu_status.RESTING)
 
 
-def check(name: str, severity: str, *messages: str) -> dict[str, Any]:
-    findings = [{"message": m, "decision": "alerts now"} for m in messages]
+def check(name: str, severity: str, *messages: str, window: str | None = None) -> dict[str, Any]:
+    findings = [{"message": m, "decision": "alerts now", "window": window} for m in messages]
     return {"name": name, "severity": severity, "summary": "", "note": "", "findings": findings}
 
 
@@ -91,6 +91,7 @@ class LevelsTestCase(unittest.TestCase):
     def test_the_fields_that_are_not_set_are_present_and_empty(self) -> None:
         out = snap()
         self.assertEqual(out["waiting"], [])
+        self.assertEqual(out["attention"], [])
         self.assertIsNone(out["keep_awake_until"])
         self.assertIsNone(out["stopped"])
         self.assertEqual(out["update"], {"state": "none", "waiting_for": [], "last": None})
@@ -434,8 +435,83 @@ KEYS = [
     "update",
     "console",
     "problems",
+    "attention",
     "logs",
 ]
+
+
+class AttentionTestCase(unittest.TestCase):
+    """`attention`: the windows that need you, each with its problem, for the app's offer to open one."""
+
+    STALLED = (
+        "The exporter window's agent started 7 min ago and never reached a session (bosun attach exporter)."
+    )
+
+    def test_a_finding_about_a_window_names_it_with_its_problem(self) -> None:
+        out = snap(checks=watchdog_checks(check("stalled-start", "error", self.STALLED, window="exporter")))
+        self.assertEqual(out["attention"], [{"window": "exporter", "problem": self.STALLED}])
+        self.assertEqual(out["problems"], [self.STALLED])
+
+    def test_a_finding_about_no_window_is_a_problem_and_no_window_that_needs_you(self) -> None:
+        out = snap(checks=watchdog_checks(check("morning-failed", "error", "e1")))
+        self.assertEqual((out["problems"], out["attention"]), (["e1"], []))
+
+    def test_they_come_in_the_order_of_the_problems_one_entry_per_problem(self) -> None:
+        out = snap(
+            checks=watchdog_checks(
+                check("stalled-start", "error", "s1", window="exporter"),
+                check("context-size", "warn", "c1", window="orch"),
+                check("long-shell", "warn", "l1", window="exporter"),
+            )
+        )
+        self.assertEqual(
+            [(a["window"], a["problem"]) for a in out["attention"]],
+            [("exporter", "s1"), ("orch", "c1"), ("exporter", "l1")],
+        )
+
+    def test_a_window_waiting_at_a_prompt_needs_you_before_the_waiting_check_names_it(self) -> None:
+        out = snap(windows=[window("orch"), window("exporter", "waiting")])
+        self.assertEqual(out["level"], "ok")
+        self.assertEqual(
+            out["attention"],
+            [
+                {
+                    "window": "exporter",
+                    "problem": "The exporter window is waiting for you at a permission prompt or question.",
+                }
+            ],
+        )
+
+    def test_once_the_waiting_check_names_it_its_finding_is_the_one_entry(self) -> None:
+        message = "The exporter session has waited 45 min at a permission prompt (bosun attach exporter)."
+        out = snap(
+            windows=[window("orch"), window("exporter", "waiting")],
+            checks=watchdog_checks(check("waiting", "warn", message, window="exporter")),
+        )
+        self.assertEqual(out["attention"], [{"window": "exporter", "problem": message}])
+
+    def test_another_checks_finding_about_a_waiting_window_does_not_hide_that_it_waits(self) -> None:
+        out = snap(
+            windows=[window("orch"), window("exporter", "waiting")],
+            checks=watchdog_checks(check("context-size", "warn", "c1", window="exporter")),
+        )
+        self.assertEqual([a["window"] for a in out["attention"]], ["exporter", "exporter"])
+        self.assertIn("is waiting for you", out["attention"][1]["problem"])
+
+    def test_a_stop_lists_no_finding_and_a_quit_that_did_not_finish_still_names_a_window_that_waits(
+        self,
+    ) -> None:
+        stalled = watchdog_checks(check("stalled-start", "error", "s1", window="exporter"))
+        stopped = snap(windows=GONE, quit=quit_state.QuitState(GONE_AT, False), checks=stalled)
+        self.assertEqual(stopped["attention"], [])
+        windows = [window("orch"), window("exporter", "waiting")]
+        unfinished = snap(windows=windows, quit=quit_state.QuitState(GONE_AT, False), checks=stalled)
+        self.assertEqual([a["window"] for a in unfinished["attention"]], ["exporter"])
+        self.assertNotIn("s1", [a["problem"] for a in unfinished["attention"]])
+
+    def test_the_failure_object_names_none(self) -> None:
+        self.assertEqual(menu_status.failure("x")["attention"], [])
+        self.assertEqual(menu_status.unreadable_config("x")["attention"], [])
 
 
 class JsonTestCase(unittest.TestCase):

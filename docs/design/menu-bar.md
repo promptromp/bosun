@@ -192,7 +192,12 @@ Calls made from the research and the builder check, to check while reading:
   are open (`running`: false when none is, null when they could not be read), the keep-awake end, the update state (none, checking, available with version and notes, running with what it waits for, and `last`: the
   record the last update left, its `id`, `started_at` and `step`, or null; a field added under contract 1, which only
   grows), whether
-  bosun is stopped by a Quit and whether the morning start is paused, and the console's state. Its level comes
+  bosun is stopped by a Quit and whether the morning start is paused, and the console's state. It also lists the
+  windows that need you (`attention`, added under contract 1 too: a `{"window", "problem"}` for each watchdog finding
+  about one window, which the finding names itself (`Finding.window`, set by the checks that go over the windows one
+  by one: `stalled-start`, `waiting`, `long-shell`, `spend-limit`, `context-size`; never parsed from its key), in the
+  order of `problems`, then each window waiting at a prompt that the `waiting` check has not named yet, which no level
+  counts), so the app can offer to open one (`bosun attach <window>`). Its level comes
   from what the console's health view and the watchdog already compute (`lib/console_sessions.py`,
   `lib/watchdog.py`), in one pure function, so the menu, the console and the watchdog never disagree.
   Built as `lib/menu_status.py` (the pure function, `snapshot`) and `lib/menu_status_live.py` (its facts, read-only,
@@ -436,7 +441,12 @@ Where what is built differs from what this note said before, or says more:
   is only on the dialog while the Mac is kept awake. A check the person asked for that finds nothing says "bosun
   is up to date"; the six-hourly and menu-open checks (at most once a minute) only show the badge.
   `Show Logs` opens the folder `status --json` names; Run Doctor and Uninstall bosun… open a `.command` file in
-  the app's temporary folder, which runs the command and waits for Return.
+  the app's temporary folder, which runs the command and waits for Return. When the status names windows that need
+  you (`attention`), Show What's Wrong… offers "Open <window>" for the first (its second button: OK stays the default, so Return and Escape only close it),
+  names the others in its text with `bosun attach <window>`, and lists a window's own line (a wait at a prompt, no
+  problem of any level) after the problems; Open runs `bosun attach <window>` the same way (2026-11-14, after a
+  window sat at Claude Code's once-only Claude in Chrome screen and another at oh-my-zsh's update question, and the
+  menu could only say "bosun attach"). A bosun that does not send the field is read as naming none.
 - One copy at a time reads each running copy's start with sysctl (`kp_proc.p_starttime`): `launchDate` is nil for an
   app launchd starts directly. A copy whose start cannot be read is left out, and one that cannot read its own stays.
 - The test hooks (`--test-hooks <dir>`, for the VM suite, and only then): `<dir>/menu.json` after each render (the

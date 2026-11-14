@@ -153,6 +153,16 @@ import Testing
     #expect(try decodeContract(StatusSnapshot.self, from: absent).running == nil)
   }
 
+  @Test func theWindowsThatNeedYouAreReadWithTheirProblemsAndMayBeAbsent() throws {
+    let status = try Fixtures.status("status-attention")
+    #expect(status.needsYou.map(\.window) == ["acme-exporter", "acme-web"])
+    #expect(status.needsYou.first?.problem == status.problems.first)
+    #expect(try Fixtures.status("status-stopped").needsYou.isEmpty)
+    let older = try decodeContract(StatusSnapshot.self, from: Fixtures.withoutAttention("status-attention"))
+    #expect(older.attention == nil)
+    #expect(older.needsYou.isEmpty)
+  }
+
   @Test func aCheckWhoseCommitCouldNotBeReadIsReadWithItsError() throws {
     let check = try Fixtures.decode(UpdateCheck.self, "update-check-failed-no-commit")
     #expect(check.installed.commit == nil)

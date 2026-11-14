@@ -28,7 +28,8 @@
 # pushed (pre-commit's PRE_COMMIT_TO_REF) passed a whole run in this checkout less than 24 hours ago, and
 # otherwise runs what --changed origin/main selects (BOSUN_SMOKE_BASE=<ref> names another base; this is the
 # build-out setting, to go back to the whole suite once the project is past its release: drop the selection from
-# the `--pre-push` branch below). BOSUN_SMOKE_FULL=1 runs the whole suite. A whole run (none of --only,
+# the `--pre-push` branch below). When that is the whole suite, the hook leaves it to the merge queue, whose smoke
+# job runs it (defer_whole_run). BOSUN_SMOKE_FULL=1 runs the whole suite. A whole run (none of --only,
 # --last-failed, -x) that ends with no failure records its tree in tests/.smoke-cache/passes, but only if the tree is the same at its end as at
 # its start: the tree is the files on disk before the first section runs (what `git add -A` stages in a copy of
 # the index: tracked files, and untracked ones that are not git-ignored, which a commit lacking them will not match,
@@ -190,6 +191,15 @@ select_changed() {
   echo "${out%$'\n'*}"
 }
 
+# The pre-push hook leaves a whole run to the merge queue, whose smoke job makes the same choice from the merge
+# group's base (.github/workflows/ci.yml, `tests/smoke.sh --changed`): a change that reaches every section (a file on
+# the select-everything list, one no section covers, a base that does not resolve) waited out the whole suite here
+# and again there, about 15 minutes each. BOSUN_SMOKE_FULL=1 runs it here all the same.
+defer_whole_run() {
+  echo "smoke selection: the change reaches the whole suite, which the merge queue runs; BOSUN_SMOKE_FULL=1 runs it here"
+  exit 0
+}
+
 WITH_UNIT=0
 ONLY=""
 CHANGED=""
@@ -262,6 +272,7 @@ if [ -n "$CHANGED" ]; then
   case "$SELECTED" in
     none) exit 0 ;;
     only) ONLY="$SELECTED_IDS" ;;
+    full) [ "$PRE_PUSH" = 1 ] && defer_whole_run ;;
   esac
 fi
 if [ "$LAST_FAILED" = 1 ]; then
@@ -1547,7 +1558,7 @@ printf '#!/bin/sh\necho "2.0.0 (Claude Code)"\n' >"$WORK/fake-claude"
 chmod +x "$WORK/fake-claude"
 export BOSUN_CLAUDE_BIN="$WORK/fake-claude"
 
-section tmux-session "tmux session (isolated socket, dry-run windows)" covers 'libexec/bosun-start,libexec/bosun-stop,libexec/bosun-send,libexec/bosun-refresh,libexec/bosun-ledger,lib/run_locked.py'
+section tmux-session "tmux session (isolated socket, dry-run windows)" covers 'libexec/bosun-attach,libexec/bosun-start,libexec/bosun-stop,libexec/bosun-send,libexec/bosun-refresh,libexec/bosun-ledger,lib/run_locked.py'
 "$BOSUN" start >/dev/null 2>&1
 wait_for 30 has_windows "alpha beta gamma "
 windows="$(tmux -L "$SOCKET" list-windows -t "=smoke" -F '#{window_name}' 2>/dev/null | tr '\n' ' ')"
@@ -1579,6 +1590,19 @@ check "a window whose agent is not installed says so, rather than becoming a pla
   bash -c 'cd "$1" && BOSUN_LAUNCH_DRY_RUN=0 BOSUN_CLAUDE_BIN="$2" "$3" launch alpha </dev/null' _ "$REPO_A" "$WORK/no-such-claude" "$BOSUN"
 check "send refuses windows without Claude" fails_with "is not running an agent" "$BOSUN" send alpha hello
 check "send refuses unknown windows" fails_with "no window 'no-such-window'" "$BOSUN" send no-such-window hello
+tmux -L "$SOCKET" select-window -t "=smoke:alpha"
+check "attach refuses a window the session does not have, naming those it has" fails_with "no window 'no-such-window' in session 'smoke'; its windows: alpha beta gamma" "$BOSUN" attach no-such-window
+check "... and selects no other window" test "$(tmux -L "$SOCKET" display-message -p -t "=smoke:" '#{window_name}')" = alpha
+check "attach takes one window at most" fails_with "one window at most" "$BOSUN" attach alpha beta
+check "attach from inside tmux refuses, saying what to run from a plain terminal" fails_with "from a plain terminal run: bosun attach beta" env TMUX="/tmp/tmux-0/$SOCKET,1,0" "$BOSUN" attach beta
+# In a terminal of its own (a pty from Python's pty module), so that tmux attaches for real; the pid is this run's own
+TERM=xterm python3 -c 'import pty, sys; pty.spawn(sys.argv[1:])' "$BOSUN" attach beta </dev/null >/dev/null 2>&1 &
+attach_pid=$!
+check "attach <window> attaches a client on that window" wait_for 30 bash -c '[ "$(tmux -L "$1" list-clients -t =smoke -F "#{window_name}")" = beta ]' _ "$SOCKET"
+tmux -L "$SOCKET" detach-client -s =smoke 2>/dev/null
+check "... and once it detaches, the session runs on with no client" wait_for 30 bash -c '[ -z "$(tmux -L "$1" list-clients -t =smoke)" ] && tmux -L "$1" has-session -t =smoke' _ "$SOCKET"
+kill "$attach_pid" 2>/dev/null
+wait "$attach_pid" 2>/dev/null
 check "stop rejects unknown arguments and keeps the session" bash -c '! "$1" stop --dry-run 2>/dev/null && tmux -L "$2" has-session -t =smoke' _ "$BOSUN" "$SOCKET"
 check "setup rejects unknown arguments" bash -c '! "$1" setup --dryrun 2>/dev/null' _ "$BOSUN"
 "$BOSUN" stop >/dev/null 2>&1
@@ -2843,7 +2867,7 @@ check "a start with it off again takes the marker away" test ! -e "$BOSUN_STATE_
 
 section status-json "status --json (the menu bar app's one source of how bosun is)" needs stopped-until-started covers 'libexec/bosun-status,libexec/bosun-start,libexec/bosun-stop,lib/menu_status*.py'
 "$BOSUN" stop >/dev/null 2>&1 # what a stop made today leaves (the section before ends with it too)
-check "it prints one object with contract 1 and the documented fields, and exits 0" status_has 'd["contract"] == 1 and sorted(d) == sorted("contract level sentence detail windows running waiting keep_awake_until stopped update console problems logs".split())'
+check "it prints one object with contract 1 and the documented fields, and exits 0" status_has 'd["contract"] == 1 and sorted(d) == sorted("contract level sentence detail windows running waiting keep_awake_until stopped update console problems attention logs".split())'
 check "... exit 0" "$BOSUN" status --json
 away_from_midnight() {
   local now=$((10#$(date +%H%M)))
@@ -2868,6 +2892,16 @@ status_seconds="$(python3 -I -c 'import subprocess, sys, time; t = time.monotoni
 echo "  note  bosun status --json took ${status_seconds}s with five windows (the app polls it)"
 check "... quick enough to poll: under 10 seconds" python3 -I -c 'import sys; sys.exit(not float(sys.argv[1]) < 10)' "$status_seconds"
 check "... a level of ok is one with no problems, anything else lists them" status_has '(d["level"] == "ok") == (d["problems"] == []) and all(isinstance(p, str) for p in d["problems"])'
+check "... and no window needs you" status_has 'd["attention"] == []'
+# A Claude in beta at a prompt (a stand-in: a sleep this run started, with a session record); its pid is killed after
+beta_waits="$(fake_claude beta waiting 1.0.0 60)"
+check "a window waiting at a prompt needs you, before the watchdog's waiting check names it" status_has 'd["waiting"] == ["beta"] and d["attention"] == [{"window": "beta", "problem": "The beta window is waiting for you at a permission prompt or question."}]'
+kill "$beta_waits"
+rm -f "$HOME/.claude/sessions/$beta_waits.json"
+beta_waits="$(fake_claude beta waiting 1.0.0 7200)"
+check "... and once the check names it, its finding is the problem that names the window, with bosun attach beta" status_has '[a["window"] for a in d["attention"]] == ["beta"] and "bosun attach beta" in d["attention"][0]["problem"] and d["attention"][0]["problem"] in d["problems"]'
+kill "$beta_waits"
+rm -f "$HOME/.claude/sessions/$beta_waits.json"
 ensure_watchdog_state
 cp -p "$BOSUN_STATE_DIR/watchdog.json" "$WORK/watchdog-before-status.json"
 : >"$BOSUN_STATE_DIR/watchdog.json"

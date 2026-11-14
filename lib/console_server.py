@@ -136,6 +136,7 @@ STATIC: dict[str, Asset] = {
     "/index.html": Asset("index.html", "text/html; charset=utf-8"),
     "/app.js": Asset("app.js", "text/javascript; charset=utf-8"),
     "/app.css": Asset("app.css", "text/css; charset=utf-8"),
+    "/logo.png": Asset("logo.png", "image/png"),  # beside the name in the top bar, and the tab's icon
 }
 NO_CONTENT_PATHS = ("/favicon.ico",)  # browsers ask; 204 keeps it out of the refusal log
 

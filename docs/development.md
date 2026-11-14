@@ -13,8 +13,8 @@ passes. `uv run pre-commit run --all-files` checks everything by hand. See `CLAU
 limits and conventions.
 
 On GitHub, every pull request to `main` runs the same checks (`.github/workflows/ci.yml`) and
-a gitleaks scan of the new commits (the smoke suite on macOS is off in CI until the feature-complete
-MVP; the pre-push hook still runs the sections the change can reach), and `main` only takes pull requests
+a gitleaks scan of the new commits (the smoke suite on macOS runs in the merge queue, for the sections the
+change can reach, and in full nightly), and `main` only takes pull requests
 that pass them, through GitHub's merge queue: once a pull request's checks pass, `gh pr merge --squash`
 (or the Merge button) adds it to the queue, which builds it on top of the latest `main` and the pull
 requests ahead of it, runs the same checks again on that commit (CI listens for `merge_group` as well
@@ -38,7 +38,7 @@ Issues and pull requests are welcome: see [CONTRIBUTING.md](../CONTRIBUTING.md) 
 |---|---|---|---|
 | The unit tests a change can reach | `uv run pytest -n auto --impacted` | every commit (the `unit-tests` hook) | seconds to a minute |
 | Every unit test | `uv run pytest -n auto` | CI, on Linux (with coverage) and on macOS | about a minute |
-| The end-to-end smoke suite | `tests/smoke.sh` | before every push, but only the sections the change can reach (`--pre-push`, the build-out setting: skipped if this exact tree already passed a whole run here in the last 24 hours); CI's macOS job is off until the MVP | about 18 minutes in full |
+| The end-to-end smoke suite | `tests/smoke.sh` | before every push, but only the sections the change can reach (`--pre-push`, the build-out setting: skipped if this exact tree already passed a whole run here in the last 24 hours, and a whole-suite choice left to the merge queue); CI's merge queue runs the same selection, and the whole suite nightly | about 18 minutes in full |
 | The sections a change reaches | `tests/smoke.sh --changed <git ref>` | by the pre-push hook, against `origin/main` | what those sections take |
 | Every unit test with a plain `python3`, then the smoke suite | `tests/smoke.sh --with-unit` | never | 8 more minutes |
 | One area of the smoke suite | `tests/smoke.sh --only <id>[,<id>...]` (ids: `tests/smoke.sh --list`) | never | seconds to a few minutes |
@@ -92,7 +92,9 @@ above. The answer is one of three, printed with the files that led to it:
 - **the whole suite**, when any changed file is on the select-everything list, is used by `lib/common.sh` (which
   every command sources: the modules it names under `lib/`, and what imports those), or is covered by no section
   and no `ignore` rule (a file nothing says is safe), when `origin/main` or the merge-base cannot be found, or when
-  the selection itself fails for any reason;
+  the selection itself fails for any reason. The pre-push hook leaves that to the merge queue, whose smoke job
+  makes the same choice from the merge group's base and runs it, saying so in one line (a push would otherwise
+  wait about 15 minutes for what the queue runs anyway); `BOSUN_SMOKE_FULL=1` runs it before the push;
 - **nothing**, when every changed file is ignored (the docs, which their own hooks check; the settings of the
   checks themselves; the unit and sandbox suites), saying so in one line;
 - **the sections that cover a changed file**, plus the ones they `needs`, plus the shared setup and the

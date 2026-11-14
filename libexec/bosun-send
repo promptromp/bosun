@@ -62,7 +62,7 @@ send_message() {
   harness="$(agent_session_field "$agent_pid" harness)"
   status="$(agent_session_field "$agent_pid" status)"
   ! tmux_cmd capture-pane -p -t "$window_id" 2>/dev/null | screen_reader question "$harness" ||
-    die "window '$window' is asking something on its screen, and Enter would answer it; nothing sent (bosun attach)"
+    die "window '$window' is asking something on its screen, and Enter would answer it; nothing sent (bosun attach $window)"
   agent_takes_input "$status" ||
     die "window '$window' is ${status:-in an unknown state} (a permission prompt or question waits for you there); not pasting into it"
   wait_until_pasteable "$window" "$window_id"
