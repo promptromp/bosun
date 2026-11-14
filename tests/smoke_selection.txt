@@ -12,11 +12,14 @@
 # lib/launch_record.py, is `all` too: the tool reads that from the file.)
 all lib/common.sh
 all bin/bosun
-# The suite itself: its shared setup, its stand-ins, the cache and this selection.
+# The suite itself: its shared setup, its stand-ins, the cache, this selection and the split into shards (a change to
+# the weights moves sections between shards, which the whole suite then shows still run apart).
 all tests/smoke.sh
 all tests/smoke_cache.sh
 all tests/smoke_selection.txt
 all tools/smoke_select.py
+all tools/smoke_shard.py
+all tests/smoke_weights.txt
 all tests/sandbox/macos/**
 # What every window's launch loads: the agents' shell sides (some are named in a variable, which no reader of the
 # files could follow), the orchestrator's policy, settings, plugin and task files (every section that starts or

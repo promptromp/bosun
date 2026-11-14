@@ -526,7 +526,15 @@ prints the sections' ids, `tests/smoke.sh --only <id>[,<id>...]` runs the shared
 partial run. While iterating use `--only`, `--last-failed` (`--lf`: only the sections whose last recorded
 result, in the git-ignored `tests/.smoke-cache/`, was a failure) and `-x` (stop at the first failing check);
 before committing, run the whole suite once with none of them. CI's smoke job runs the sections the change reaches
-in the merge queue, and all of it nightly.
+in the merge queue, and all of it nightly. `--shard K/N` runs shard K of N of what the run would run
+(the whole suite, or what `--only`, `--last-failed` or `--changed` chose), each section in exactly one shard, with what
+it `needs` run again as for `--only`, and the summary names the shard. The shards are balanced by
+`tests/smoke_weights.txt`, seconds per section (`tools/smoke_shard.py` has the split; a section it does not list
+counts as the median). Every run records how long each section took when it passed, in
+`tests/.smoke-cache/durations`; after a whole run, `python3 tools/smoke_shard.py --script tests/smoke.sh --weights
+tests/smoke_weights.txt --record tests/.smoke-cache/durations` writes the weights anew: do it when sections are added
+or grow, so the shards stay even. `uninstall-files`, which checks what the run left behind, runs in every shard
+(`EVERY_SHARD` there), so the shards together check what a whole run leaves.
 The pre-push hook (`tests/smoke.sh --pre-push`) does less, for the build-out phase only: it skips the suite
 when that exact tree (uncommitted and untracked files included) passed a whole run in this checkout in the last
 24 hours (`BOSUN_SMOKE_NO_CACHE=1` ignores that record, `BOSUN_SMOKE_FULL=1` forces the whole suite; what the record is and why it can only make a run longer:

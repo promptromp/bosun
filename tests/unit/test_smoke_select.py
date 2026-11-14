@@ -1,21 +1,27 @@
 """Which sections of the smoke suite a change reaches (tools/smoke_select.py, `tests/smoke.sh --changed
-<ref>` and the pre-push hook's use of it).
+<ref>` and the pre-push hook's use of it), and which of them one shard of a split run runs
+(tools/smoke_shard.py, `tests/smoke.sh --shard K/N`, CI's `smoke`).
 
-The pure parts (the globs, the section and rule files, the dependency scan) are called directly. The
-script's own options (`--changed`, `--pre-push` with its base) go through a script generated for the test,
-as in test_smoke_cache.py: the real script's setup and its `section`/`check` machinery around three fake
-sections, in a scratch git repository with its own tests/smoke_selection.txt. No real section runs here.
+The pure parts (the globs, the section and rule files, the dependency scan, the split) are called directly.
+The script's own options (`--changed`, `--pre-push` with its base, `--shard`) go through a script generated
+for the test, as in test_smoke_cache.py: the real script's setup and its `section`/`check` machinery around
+fake sections, in a scratch git repository with its own tests/smoke_selection.txt. No real section runs here.
 
 The rule under test is that selection can only fail towards running more: a file nothing covers, a file on
-the select-everything list, a ref git cannot resolve, a selection that crashes: the whole suite."""
+the select-everything list, a ref git cannot resolve, a selection that crashes: the whole suite. A split
+that cannot be made runs every selected section in the shard; one that can puts each in exactly one shard."""
 
 from __future__ import annotations
 
+import itertools
+import random
 import re
 import shutil
+import statistics
 import subprocess
 import sys
 import unittest
+from collections.abc import Sequence
 from pathlib import Path
 
 from test_smoke_cache import ROOT, SMOKE, Scratch, clean_env, git
@@ -23,6 +29,7 @@ from test_smoke_cache import ROOT, SMOKE, Scratch, clean_env, git
 
 sys.path.insert(0, str(ROOT / "tools"))
 import smoke_select as ss
+import smoke_shard as sh
 
 
 SELECTION = """# a scratch selection
@@ -229,8 +236,10 @@ class ScratchSuite(Scratch):
         last = re.search(r'^always_run "the repository this ran from"', text, re.MULTILINE)
         assert first is not None and last is not None
         script = self.dir / "smoke-fake.sh"
-        script.write_text(text[: first.start()] + FAKE_SECTIONS + "always_run\n" + text[last.start() :])
+        script.write_text(text[: first.start()] + self.fake_sections + "always_run\n" + text[last.start() :])
         return script
+
+    fake_sections = FAKE_SECTIONS
 
     def run_suite(self, *args: str, **env: str) -> subprocess.CompletedProcess[str]:
         return subprocess.run(
@@ -486,6 +495,323 @@ class PrePushTest(ScratchSuite):
         result = self.run_suite("--pre-push", BOSUN_SMOKE_BASE="HEAD")
         self.assertEqual(result.returncode, 1)
         self.assertIn("FAIL  beta one", result.stdout)
+
+
+def sections(*specs: str) -> list[ss.Section]:
+    """Sections from `id` or `id:need,need` specs, in that order."""
+    found = []
+    for spec in specs:
+        sid, _, needs = spec.partition(":")
+        found.append(ss.Section(sid, sid, tuple(n for n in needs.split(",") if n), ()))
+    return found
+
+
+# A made-up suite for the split: c needs a, e needs c, h needs f, k needs j; i and k are not weighed.
+MANY = sections("syntax", "a", "b", "c:a", "d", "e:c", "f", "g", "h:f", "i", "j", "uninstall-files", "k:j")
+WEIGHTS = {"syntax": 3, "a": 40, "b": 5, "c": 7, "d": 60, "e": 2, "f": 9, "g": 1, "h": 30, "j": 50}
+
+
+class ShardSplitTest(unittest.TestCase):
+    """The split itself (tools/smoke_shard.py), on sections made up for each test."""
+
+    def test_every_section_is_in_exactly_one_shard_and_brings_what_it_needs(self) -> None:
+        ids = [s.id for s in MANY]
+        for count in range(1, 6):
+            with self.subTest(count=count):
+                shards = sh.split(MANY, ids, WEIGHTS, count)
+                self.assertEqual(len(shards), count)
+                owned = [i for s in shards for i in s.own if i not in sh.EVERY_SHARD]
+                self.assertCountEqual(owned, [i for i in ids if i not in sh.EVERY_SHARD])
+                for shard in shards:
+                    self.assert_runs_what_it_needs(shard, ids)
+
+    def assert_runs_what_it_needs(self, shard: sh.Shard, ids: list[str]) -> None:
+        """<shard> runs what each of its sections needs, apart from them, in file order."""
+        needs = sh.requirements(MANY)
+        runs = set(shard.own) | set(shard.needed)
+        for own in shard.own:
+            self.assertLessEqual(needs[own], runs, f"{own} runs without what it needs")
+        self.assertFalse(set(shard.own) & set(shard.needed))
+        self.assertEqual(shard.needed, tuple(i for i in ids if i in shard.needed))
+
+    def test_what_a_section_needs_is_followed_all_the_way(self) -> None:
+        self.assertEqual(sh.requirements(MANY)["e"], {"c", "a"})
+        shards = sh.split(MANY, ["e"], WEIGHTS, 2)
+        self.assertEqual((shards[0].own, shards[0].needed), (("e",), ("a", "c")))
+        self.assertEqual(shards[1].own, ())
+
+    def test_the_shards_are_balanced_by_weight_not_by_count(self) -> None:
+        flat = sections("big", "s1", "s2", "s3", "s4", "s5")
+        weights = {"big": 100, "s1": 20, "s2": 20, "s3": 20, "s4": 20, "s5": 20}
+        shards = sh.split(flat, [s.id for s in flat], weights, 2)
+        self.assertEqual([s.own for s in shards], [("big",), ("s1", "s2", "s3", "s4", "s5")])
+        self.assertEqual([s.seconds for s in shards], [100, 100])
+
+    def test_the_longest_shard_is_as_short_as_any_split_can_make_it(self) -> None:
+        """d (60), j with k (58), a with c and e (49) start the three shards; f with h (39) must join one
+        of them, which the shortest takes: 88, no split does better. uninstall-files (8, the median) is in
+        each."""
+        shards = sh.split(MANY, [s.id for s in MANY], WEIGHTS, 3)
+        self.assertEqual(max(s.seconds for s in shards), 88 + 8, [s.seconds for s in shards])
+        longest = max(shards, key=lambda s: s.seconds)
+        self.assertEqual({*longest.own, *longest.needed}, {"a", "c", "e", "f", "h", "uninstall-files"})
+
+    def test_on_a_selection_it_comes_close_to_the_best_split_there_is(self) -> None:
+        """Against every way there is to split a few of the made-up sections (a seeded sample of them)."""
+        needs = sh.requirements(MANY)
+        fallback = round(statistics.median(WEIGHTS.values()))
+
+        def longest(groups: Sequence[Sequence[str]]) -> int:
+            runs = [set().union(*({s} | needs[s] for s in group)) for group in groups]
+            return max(sum(WEIGHTS.get(i, fallback) for i in run) for run in runs)
+
+        rng = random.Random(7)  # noqa: S311 - a seeded sample of test cases, not a secret
+        placeable = [s.id for s in MANY if s.id not in sh.EVERY_SHARD]
+        for _ in range(15):
+            chosen = rng.sample(placeable, rng.randint(3, 7))
+            count = rng.choice((2, 3))
+            best = min(
+                longest(
+                    [[s for s, k in zip(chosen, ks, strict=True) if k == shard] for shard in range(count)]
+                )
+                for ks in itertools.product(range(count), repeat=len(chosen))
+            )
+            got = max(s.seconds for s in sh.split(MANY, chosen, WEIGHTS, count))
+            self.assertLessEqual(got, best * 1.05, f"{chosen} in {count}")
+
+    def test_a_section_that_needs_a_long_one_goes_where_that_one_runs(self) -> None:
+        chain = sections("update", "small1", "small2", "convert:update")
+        weights = {"update": 300, "small1": 50, "small2": 50, "convert": 40}
+        shards = sh.split(chain, ["update", "small1", "small2", "convert"], weights, 2)
+        together = next(s for s in shards if "convert" in s.own)
+        self.assertIn("update", together.own)
+        self.assertEqual(sum(s.seconds for s in shards), 440)  # update runs once
+
+    def test_a_section_the_weights_do_not_list_counts_as_their_median(self) -> None:
+        flat = sections("x", "y", "z", "new")
+        shards = sh.split(flat, ["x", "y", "z", "new"], {"x": 10, "y": 30, "z": 20}, 1)
+        self.assertEqual(shards[0].seconds, 80)
+        self.assertEqual(sh.split(flat, ["new"], {}, 1)[0].seconds, 1)  # no weights: each counts one
+
+    def test_the_section_that_checks_what_the_run_left_runs_in_every_shard_that_runs_anything(self) -> None:
+        shards = sh.split(MANY, ["a", "d", "j", "uninstall-files"], WEIGHTS, 5)
+        busy = [s for s in shards if set(s.own) - {"uninstall-files"}]
+        self.assertEqual(len(busy), 3)
+        self.assertTrue(all("uninstall-files" in s.own for s in busy))
+        self.assertTrue(all(s.own == () for s in shards if s not in busy))
+        alone = sh.split(MANY, ["uninstall-files"], WEIGHTS, 3)
+        self.assertEqual([s.own for s in alone], [("uninstall-files",), (), ()])
+
+    def test_the_split_is_the_same_every_time_and_a_repeated_id_counts_once(self) -> None:
+        ids = [s.id for s in MANY]
+        first = sh.split(MANY, ids, WEIGHTS, 3)
+        self.assertEqual(sh.split(MANY, list(reversed(ids)), WEIGHTS, 3), first)
+        self.assertEqual(sh.split(MANY, ids + ids, WEIGHTS, 3), first)
+
+    def test_an_id_that_is_no_section_is_an_error(self) -> None:
+        with self.assertRaisesRegex(sh.ShardError, "no section nope"):
+            sh.split(MANY, ["a", "nope"], {}, 2)
+
+    def test_k_of_n(self) -> None:
+        self.assertEqual(sh.parse_shard("2/3"), (2, 3))
+        self.assertEqual(sh.parse_shard("1/1"), (1, 1))
+        for text in ("0/3", "4/3", "3", "1/0", "a/b", "01/3", "1/3/4", " 1/3", "", "-1/3"):
+            with self.subTest(text=text), self.assertRaisesRegex(sh.ShardError, "1 <= K <= N"):
+                sh.parse_shard(text)
+
+    def test_a_weights_file_is_id_and_seconds_with_comments_and_anything_else_names_its_line(self) -> None:
+        self.assertEqual(sh.parse_weights("# c\nalpha 12  # why\n\nbeta 0\n"), {"alpha": 12, "beta": 0})
+        for text in ("alpha\n", "alpha 1.5\n", "alpha -3\n", "Alpha 3\n", "alpha 3 4\n"):
+            with self.subTest(text=text), self.assertRaisesRegex(sh.ShardError, "line 1"):
+                sh.parse_weights(text)
+
+    def test_a_record_writes_the_weights_anew_keeping_what_it_did_not_measure(self) -> None:
+        text = sh.refreshed(MANY[:4], {"a": 40, "b": 5, "gone": 9}, {"syntax": 0, "b": 6, "c": 12})
+        self.assertTrue(text.startswith(sh.WEIGHTS_HEADER))
+        self.assertEqual(sh.parse_weights(text), {"syntax": 1, "a": 40, "b": 6, "c": 12})
+        self.assertIn("--record tests/.smoke-cache/durations", text)
+
+    def test_the_tool_says_all_when_it_cannot_split(self) -> None:
+        missing = Path("/nonexistent/smoke.sh")
+        out = sh.shard_report(missing, missing, "1/2", None)
+        self.assertEqual(out[-1], "=> all")
+        self.assertIn("this shard runs every selected section", out[0])
+
+
+class RealSplitTest(unittest.TestCase):
+    """The real suite and its weights file."""
+
+    sections: list[ss.Section]
+    weights: dict[str, int]
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.sections = ss.parse_sections(SMOKE.read_text())
+        cls.weights = sh.parse_weights((ROOT / "tests" / "smoke_weights.txt").read_text())
+
+    def test_the_weights_name_only_sections_there_are_and_most_of_them(self) -> None:
+        ids = {s.id for s in self.sections}
+        self.assertEqual(
+            sorted(set(self.weights) - ids), [], "weights of sections there are not: remove them"
+        )
+        self.assertGreater(len(self.weights), len(ids) // 2)
+
+    def test_the_sections_that_run_in_every_shard_are_sections(self) -> None:
+        self.assertLessEqual(set(sh.EVERY_SHARD), {s.id for s in self.sections})
+
+    def test_three_shards_take_every_section_once_and_each_about_a_third(self) -> None:
+        ids = [s.id for s in self.sections]
+        shards = sh.split(self.sections, ids, self.weights, 3)
+        owned = [i for s in shards for i in s.own if i not in sh.EVERY_SHARD]
+        self.assertCountEqual(owned, [i for i in ids if i not in sh.EVERY_SHARD])
+        whole = sum(self.weights.get(i, 0) for i in ids)
+        self.assertLess(max(s.seconds for s in shards), whole * 0.36, [s.seconds for s in shards])
+
+
+# The fake sections of a split run: what --shard sends where, through the script. delta needs gamma, which
+# needs alpha; uninstall-files checks what the run left, so it runs in every shard that runs anything.
+SHARD_SECTIONS = (
+    FAKE_SECTIONS
+    + """section delta "the fourth, which needs the third" needs gamma covers 'extra/**'
+check "delta one" true
+section uninstall-files "the one in every shard" covers 'templates/*.plist'
+check "uninstall-files one" true
+"""
+)
+OWN = re.compile(
+    r"^partial run, not the whole suite: (?P<own>.*?)(?: \(and, as they need them: (?P<needs>.*)\))?$"
+)
+
+
+class ShardOptionTest(ScratchSuite):
+    """`tests/smoke.sh --shard K/N` around the fake sections, with a weights file of the scratch checkout."""
+
+    fake_sections = SHARD_SECTIONS
+
+    def setUp(self) -> None:
+        super().setUp()
+        self.weights("syntax 1\nalpha 10\nbeta 30\ngamma 5\ndelta 5\nuninstall-files 1\n")
+
+    def weights(self, text: str) -> None:
+        self.write("tests/smoke_weights.txt", text)
+        self.commit("weights")
+
+    def own(self, result: subprocess.CompletedProcess[str]) -> tuple[list[str], list[str]]:
+        """The sections the shard ran as its own, and the ones it ran as they were needed."""
+        for line in result.stdout.splitlines():
+            match = OWN.match(line)
+            if match:
+                return match["own"].split(), sorted((match["needs"] or "").split())
+        return [], []
+
+    def test_every_section_runs_in_exactly_one_shard_whatever_the_count(self) -> None:
+        every = ["syntax", "alpha", "beta", "gamma", "delta"]
+        for count in (1, 2, 3, 4):
+            owned: list[str] = []
+            for k in range(1, count + 1):
+                with self.subTest(shard=f"{k}/{count}"):
+                    result = self.run_suite("--shard", f"{k}/{count}")
+                    self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                    own, _ = self.own(result)
+                    owned += [s for s in own if s != "uninstall-files"]
+                    if own:
+                        self.assertIn(f"failed (shard {k} of {count}, a partial run", result.stdout)
+                        self.assertIn("uninstall-files", own)
+                    else:
+                        self.assertIn(
+                            f"smoke shard {k} of {count}: no section falls in this shard", result.stdout
+                        )
+            self.assertCountEqual(owned, every, f"--shard K/{count}")
+
+    def test_a_section_goes_where_what_it_needs_runs_and_the_line_says_how_long(self) -> None:
+        result = self.run_suite("--shard", "1/2")
+        own, needs = self.own(result)
+        self.assertEqual((own, needs), (["beta", "uninstall-files"], []))  # beta (30) as long as the rest
+        result = self.run_suite("--shard", "2/2")
+        own, needs = self.own(result)
+        self.assertEqual((own, needs), (["syntax", "alpha", "gamma", "delta", "uninstall-files"], []))
+        self.assertIn("about 22 s by smoke_weights.txt (the shards: 31 s, 22 s)", result.stdout)
+
+    def test_with_only_the_split_is_of_the_named_sections_and_a_shard_runs_what_they_need(self) -> None:
+        self.weights("alpha 50\ngamma 5\ndelta 5\n")
+        first = self.run_suite("--only", "delta,beta", "--shard", "1/2")
+        second = self.run_suite("--only", "delta,beta", "--shard", "2/2")
+        self.assertEqual(self.own(first), (["delta"], ["alpha", "gamma"]))  # 60 s with what it needs
+        self.assertEqual(self.own(second), (["beta"], []))
+        self.assertIn("pass  alpha one", first.stdout)
+        self.assertNotIn("the second", first.stdout)
+        self.assertEqual(self.ran(first), ["alpha", "gamma"])
+
+    def test_with_changed_the_split_is_of_what_the_change_selected(self) -> None:
+        self.write("extra/deep/er/file.txt", "changed\n")  # beta and delta cover it
+        runs = [self.run_suite("--changed", "HEAD", "--shard", f"{k}/3") for k in (1, 2, 3)]
+        owned = sorted(s for r in runs for s in self.own(r)[0])
+        self.assertEqual(owned, ["beta", "delta"])
+        self.assertIn("smoke selection: 2 section(s)", runs[0].stdout)
+        self.assertIn("no section falls in this shard, nothing to run", runs[2].stdout)
+        self.assertEqual(runs[2].returncode, 0)
+
+    def test_a_bad_k_of_n_is_a_usage_error(self) -> None:
+        for value in ("0/2", "3/2", "2", "1/0", "x/2", "1/2/3"):
+            with self.subTest(value=value):
+                result = self.run_suite("--shard", value)
+                self.assertEqual(result.returncode, 2)
+                self.assertIn(
+                    f"--shard wants K/N with 1 <= K <= N (2/3: the second of three), not '{value}'",
+                    result.stderr,
+                )
+                self.assertEqual(result.stdout, "")
+        self.assertEqual(self.run_suite("--shard").returncode, 2)
+
+    def test_the_pre_push_hook_does_not_split_and_an_unknown_id_is_still_a_usage_error(self) -> None:
+        result = self.run_suite("--pre-push", "--shard", "1/2")
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("usage:", result.stderr)
+        result = self.run_suite("--only", "alpha,nope", "--shard", "1/2")
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("no section 'nope'", result.stderr)
+
+    def test_a_split_that_cannot_be_made_runs_every_selected_section_here(self) -> None:
+        self.weights("alpha lots\n")
+        result = self.run_suite("--only", "beta,delta", "--shard", "2/2")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("weights file, line 1", result.stdout)
+        self.assertIn("this shard runs every selected section", result.stdout)
+        self.assertEqual(self.own(result), (["beta", "delta"], ["alpha", "gamma"]))
+        self.assertIn("(shard 2 of 2, a partial run", result.stdout)
+
+    def test_a_tool_that_cannot_run_runs_the_whole_suite_in_the_shard(self) -> None:
+        (self.root / "tools").unlink()
+        (self.root / "tools").mkdir()
+        result = self.run_suite("--shard", "1/3")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn(
+            "tools/smoke_shard.py gave no answer, so this shard runs every selected section", result.stdout
+        )
+        self.assertEqual(self.ran(result), ["alpha", "beta", "gamma"])
+        self.assertIn("passed, 0 failed (shard 1 of 3)\n", result.stdout)
+
+    def test_without_a_weights_file_each_section_counts_the_same(self) -> None:
+        (self.root / "tests" / "smoke_weights.txt").unlink()
+        result = self.run_suite("--shard", "1/2")
+        self.assertIn("by count (smoke_weights.txt is missing)", result.stdout)
+        self.assertEqual(result.returncode, 0)
+
+    def test_a_failure_in_a_shard_fails_it(self) -> None:
+        text = self.script.read_text().replace('check "beta one" true', 'check "beta one" false')
+        self.script.write_text(text)
+        result = self.run_suite("--shard", "1/2")
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("FAIL  beta one", result.stdout)
+        self.assertIn("2 passed, 1 failed (shard 1 of 2", result.stdout)
+
+    def test_each_section_that_passed_records_how_long_it_took(self) -> None:
+        text = self.script.read_text().replace('check "beta one" true', 'check "beta one" false')
+        self.script.write_text(text)
+        self.run_suite()
+        durations = sh.parse_weights((self.cache / "durations").read_text())
+        self.assertEqual(sorted(durations), ["alpha", "delta", "gamma", "syntax", "uninstall-files"])
+        self.assertTrue(all(0 <= seconds < 60 for seconds in durations.values()))
 
 
 if __name__ == "__main__":

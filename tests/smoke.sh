@@ -1,7 +1,8 @@
 #!/bin/bash
 # Hermetic smoke tests: temp HOME, fixture sessions, isolated tmux socket, no Claude calls,
 # no launchd or pmset changes.
-# Run: tests/smoke.sh [-x] [--with-unit] [--only <id>[,<id>...] | --last-failed | --changed <git ref>]     or: tests/smoke.sh --list
+# Run: tests/smoke.sh [-x] [--with-unit] [--only <id>[,<id>...] | --last-failed | --changed <git ref>] [--shard K/N]
+#   or: tests/smoke.sh --list
 # The pre-push hook runs tests/smoke.sh --pre-push: see below.
 # End to end only by default: the commit hook runs the unit tests a change reaches, and CI all of
 # them. --with-unit runs them all first too, with a plain python3 (python3 -m unittest, no pytest).
@@ -24,6 +25,13 @@
 # a changed file on the select-everything list, one no section covers and nothing ignores, a ref that does not resolve,
 # a selection that fails, all run the whole suite; only ignored files (the docs) run nothing, exit 0. It does not
 # combine with --only or --last-failed; it combines with -x and --with-unit.
+# --shard K/N runs shard K of N (CI runs the shards on N machines at once): of the sections the run would run (the
+# whole suite, or what --only, --last-failed or --changed chose), each goes to exactly one shard, balanced by how long
+# they take (tests/smoke_weights.txt; tools/smoke_shard.py has the rules), and the shard runs its own as --only does,
+# with what they need and the shared setup. uninstall-files, which checks what the run left behind, runs in every
+# shard that runs anything. Its summary says which shard of how many it was; a shard with no section exits 0. It
+# combines with all of them but --pre-push; K/N that is not 1 <= K <= N is a usage error. Every run records how long
+# each section took when it passed in tests/.smoke-cache/durations, which --record of the tool turns into the weights.
 # --pre-push (what the pre-push hook runs) skips the suite, saying so in one line, if the tree of the commit being
 # pushed (pre-commit's PRE_COMMIT_TO_REF) passed a whole run in this checkout less than 24 hours ago, and
 # otherwise runs what --changed origin/main selects (BOSUN_SMOKE_BASE=<ref> names another base; this is the
@@ -54,6 +62,7 @@ section() {
   section_done
   CURRENT_SECTION="$1"
   SECTION_FAILED_AT="$failed"
+  SECTION_STARTED="$SECONDS"
   echo "$2"
   [ -z "${FAKES_READY:-}" ] || fakes_first
 }
@@ -65,7 +74,7 @@ always_run() {
 }
 
 smoke_usage() {
-  echo "usage: tests/smoke.sh [-x] [--with-unit] [--only <id>[,<id>...] | --last-failed | --changed <git ref> | --pre-push]  |  tests/smoke.sh --list" >&2
+  echo "usage: tests/smoke.sh [-x] [--with-unit] [--only <id>[,<id>...] | --last-failed | --changed <git ref> | --pre-push] [--shard K/N]  |  tests/smoke.sh --list" >&2
   exit 2
 }
 
@@ -81,15 +90,17 @@ failed_sections() {
 }
 
 # section_done: the section that was running is over: its result goes in the cache, as a failure if a check
-# failed in it.
+# failed in it, and if it passed, how long it took (what --shard balances by, once in tests/smoke_weights.txt).
 CURRENT_SECTION="" # "" between sections: the setup, and what an always_run begins
 SECTION_FAILED_AT=0
+SECTION_STARTED=0
 section_done() {
   [ -n "$CURRENT_SECTION" ] || return 0
   if [ "$failed" -gt "$SECTION_FAILED_AT" ]; then
     cache_update "$CACHE_FILE" "$CURRENT_SECTION" "$CURRENT_SECTION fail"
   else
     cache_update "$CACHE_FILE" "$CURRENT_SECTION" "$CURRENT_SECTION pass"
+    cache_update "$DURATIONS_FILE" "$CURRENT_SECTION" "$CURRENT_SECTION $((SECONDS - SECTION_STARTED))"
   fi
   CURRENT_SECTION=""
 }
@@ -166,8 +177,34 @@ run_chosen() {
   echo "partial run, not the whole suite: ${2//,/ }${needs:+ (and, as they need them: $needs)}"
   [ "$WITH_UNIT" = 1 ] && unit_flag=--with-unit
   [ "$EXITFIRST" = 1 ] && exit_flag=-x
-  SMOKE_PARTIAL="${2//,/ }${needs:+ + $needs}" SMOKE_FILTERED="$script" SMOKE_ROOT="$ROOT" SMOKE_CACHE_DIR="$CACHE_DIR" \
-    exec "$BASH" "$script" ${unit_flag:+"$unit_flag"} ${exit_flag:+"$exit_flag"}
+  SMOKE_PARTIAL="${2//,/ }${needs:+ + $needs}" SMOKE_SHARD_OF="$SHARD_OF" SMOKE_FILTERED="$script" SMOKE_ROOT="$ROOT" \
+    SMOKE_CACHE_DIR="$CACHE_DIR" exec "$BASH" "$script" ${unit_flag:+"$unit_flag"} ${exit_flag:+"$exit_flag"}
+}
+
+# shard_of <script> <ids>: of those sections (none: every section), the ones shard $SHARD runs as its own
+# (tools/smoke_shard.py: each section in one shard, balanced by tests/smoke_weights.txt). Prints its line, and sets
+# ONLY to them and SHARD_OF to what the summary says, or exits 0 when no section falls in this shard. Whatever goes
+# wrong (no python3, no answer, no split) leaves ONLY as it was: this shard runs every one of them.
+shard_of() {
+  local out last
+  [ -z "$2" ] || chosen_sections "$1" "$2" >/dev/null # an id that is no section is a usage error, as for --only
+  out="$(python3 "$ROOT/tools/smoke_shard.py" --script "$1" --weights "$ROOT/tests/smoke_weights.txt" \
+    --shard "$SHARD" ${2:+--sections "$2"} 2>&1)"
+  last="${out##*$'\n'}"
+  SHARD_OF="${SHARD%/*} of ${SHARD#*/}"
+  case "$last" in
+    "=> none")
+      echo "${out%$'\n'*}"
+      echo "smoke shard $SHARD_OF: no section falls in this shard, nothing to run"
+      exit 0
+      ;;
+    "=> only "?*)
+      echo "${out%$'\n'*}"
+      ONLY="${last#=> only }"
+      ;;
+    "=> all") echo "${out%$'\n'*}" ;;
+    *) echo "smoke shard $SHARD_OF: tools/smoke_shard.py gave no answer, so this shard runs every selected section${out:+: $out}" ;;
+  esac
 }
 
 # select_changed <git ref>: the sections the change since <ref> can reach (tools/smoke_select.py reads their
@@ -207,6 +244,7 @@ LIST=0
 EXITFIRST=0
 LAST_FAILED=0
 PRE_PUSH=0
+SHARD=""
 while [ $# -gt 0 ]; do
   case "$1" in
     --with-unit) WITH_UNIT=1 ;;
@@ -224,6 +262,11 @@ while [ $# -gt 0 ]; do
       ONLY="$2"
       shift
       ;;
+    --shard)
+      [ $# -ge 2 ] && [ -n "$2" ] || smoke_usage
+      SHARD="$2"
+      shift
+      ;;
     *) smoke_usage ;;
   esac
   shift
@@ -231,6 +274,11 @@ done
 [ "$LAST_FAILED" = 0 ] || [ -z "$ONLY" ] || smoke_usage                                                  # the two choose sections in their own ways
 [ "$PRE_PUSH" = 0 ] || { [ -z "$ONLY" ] && [ "$LAST_FAILED" = 0 ] && [ -z "$CHANGED" ]; } || smoke_usage # a hook chooses by itself
 [ -z "$CHANGED" ] || { [ -z "$ONLY" ] && [ "$LAST_FAILED" = 0 ]; } || smoke_usage                        # three ways to choose sections
+[ "$PRE_PUSH" = 0 ] || [ -z "$SHARD" ] || smoke_usage                                                    # nor does it split
+if [ -n "$SHARD" ] && ! { [[ $SHARD =~ ^([1-9][0-9]{0,2})/([1-9][0-9]{0,2})$ ]] && [ "${BASH_REMATCH[1]}" -le "${BASH_REMATCH[2]}" ]; }; then
+  echo "tests/smoke.sh: --shard wants K/N with 1 <= K <= N (2/3: the second of three), not '$SHARD'" >&2
+  exit 2
+fi
 export PYTHONDONTWRITEBYTECODE=1
 # Never touch the repository this runs from: a git hook (pre-push) or another repository's tooling
 # may export GIT_DIR, GIT_WORK_TREE, GIT_INDEX_FILE, GIT_COMMON_DIR, GIT_CONFIG*, ... and every git
@@ -244,15 +292,17 @@ SCRIPT="$0"
 # A partial run (run_chosen) is a copy of this script in a temporary file, which says where the checkout is.
 ROOT="${SMOKE_ROOT:-$(cd "$(dirname "$0")/.." && pwd)}"
 PARTIAL="${SMOKE_PARTIAL:-}"                    # which sections a partial run ran, for its summary
+SHARD_OF="${SMOKE_SHARD_OF:-}"                  # which shard of how many (--shard), for the summary too
 [ "${SMOKE_FILTERED:-}" != "$0" ] || rm -f "$0" # (an open script can be removed; bash reads it as it goes)
 # Where each section's last result is kept (see cache_merge), in the checkout: git-ignored, and the copies of the
 # tree that sections make leave it out.
 CACHE_DIR="${SMOKE_CACHE_DIR:-$ROOT/tests/.smoke-cache}"
 CACHE_FILE="$CACHE_DIR/sections"
 PASSES_FILE="$CACHE_DIR/passes"
+DURATIONS_FILE="$CACHE_DIR/durations"
 # shellcheck source=tests/smoke_cache.sh
 . "$ROOT/tests/smoke_cache.sh"
-unset SMOKE_PARTIAL SMOKE_FILTERED SMOKE_ROOT SMOKE_CACHE_DIR
+unset SMOKE_PARTIAL SMOKE_SHARD_OF SMOKE_FILTERED SMOKE_ROOT SMOKE_CACHE_DIR
 if [ "$LIST" = 1 ]; then
   list_sections "$SCRIPT"
   exit 0
@@ -283,6 +333,7 @@ if [ "$LAST_FAILED" = 1 ]; then
   fi
   echo "--last-failed: rerunning the sections that failed: ${ONLY//,/ }"
 fi
+[ -z "$SHARD" ] || shard_of "$SCRIPT" "$ONLY"
 [ -z "$ONLY" ] || run_chosen "$SCRIPT" "$ONLY"
 # What must not change during the run, in this checkout: its HEAD, what it has staged and core.bare (checked
 # at the end). Not the shared repository's HEAD: with git worktrees that is the main checkout's, and it moves
@@ -364,9 +415,11 @@ full_run_end() {
 
 # summary: what the run did; the end of a run, or of one that -x stops.
 summary() {
+  local note="${PARTIAL:+a partial run, not the whole suite: $PARTIAL}"
+  [ -z "$SHARD_OF" ] || note="shard $SHARD_OF${note:+, $note}"
   section_done
   echo
-  echo "$passed passed, $failed failed${PARTIAL:+ (a partial run, not the whole suite: $PARTIAL)}"
+  echo "$passed passed, $failed failed${note:+ ($note)}"
   [ -z "$STOPPED_AT" ] || echo "stopped at the first failure (-x): $STOPPED_AT"
 }
 

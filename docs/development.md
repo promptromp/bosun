@@ -40,6 +40,7 @@ Issues and pull requests are welcome: see [CONTRIBUTING.md](../CONTRIBUTING.md) 
 | Every unit test | `uv run pytest -n auto` | CI, on Linux (with coverage) and on macOS | about a minute |
 | The end-to-end smoke suite | `tests/smoke.sh` | before every push, but only the sections the change can reach (`--pre-push`, the build-out setting: skipped if this exact tree already passed a whole run here in the last 24 hours, and a whole-suite choice left to the merge queue); CI's merge queue runs the same selection, and the whole suite nightly | about 18 minutes in full |
 | The sections a change reaches | `tests/smoke.sh --changed <git ref>` | by the pre-push hook, against `origin/main` | what those sections take |
+| One shard of a run split over N machines | `tests/smoke.sh --shard K/N`, with any of the above but `--pre-push` | never | about a Nth of the run |
 | Every unit test with a plain `python3`, then the smoke suite | `tests/smoke.sh --with-unit` | never | 8 more minutes |
 | One area of the smoke suite | `tests/smoke.sh --only <id>[,<id>...]` (ids: `tests/smoke.sh --list`) | never | seconds to a few minutes |
 | Only the sections that failed last time | `tests/smoke.sh --last-failed` (`--lf`) | never | what those sections take |
@@ -81,6 +82,36 @@ tree pass. `BOSUN_SMOKE_NO_CACHE=1 git push` makes the hook ignore the record an
 pre-commit's `SKIP`, which this repository does not use). With several refs in one push pre-commit hands the
 hook only the first one that is not a deletion, and a branch deletion runs nothing. CI never uses the record:
 its merge queue runs `tests/smoke.sh --changed <the group's base>`, and its nightly run `tests/smoke.sh` in full.
+
+### Split over machines
+
+`tests/smoke.sh --shard K/N` runs shard K of N: of the sections the run would run (the whole suite, or what
+`--only`, `--last-failed` or `--changed` chose), each goes to exactly one shard, and the shard runs its own the way
+`--only` does: with the sections they `needs` (run again, in that shard, as prerequisites), the shared setup and the
+`always_run` parts. Its summary says which shard of how many it was (`412 passed, 0 failed (shard 2 of 3, a partial
+run, not the whole suite: ...)`); a shard that no section falls in says so and exits 0. `--shard` combines with
+`-x`, `--with-unit` and the three ways to choose sections, not with `--pre-push`; anything but `K/N` with
+`1 <= K <= N` is a usage error (exit 2).
+
+The shards are balanced by how long their sections take, not by how many: nine of the 64 sections take three fifths
+of the time (`update` and `install` about two minutes each, `send-new-start` nearly as long, then `connectors`,
+`orchestrator-refresh`, `refresh`, `quit`, `app` and `console-sessions`). `tests/smoke_weights.txt` holds one
+`<section id> <seconds>` line per section, and a section it does not list counts as the median. `tools/smoke_shard.py`
+makes the split: the longest section first, a section's length counting what it needs, each into the shard it adds
+least to among those it leaves within an even share (the selection's time over N, or the longest section's if that is
+more), and where it fits in none, into the one that leaves the longest shard shortest. What a section needs costs
+nothing in a shard that already runs it, so `update-convert` goes where `update` runs, and `uninstall` and `init` where
+`install` does: on the suite's own weights the three shards come out even and run nothing twice. Each shard works out
+the same split from the same files. If the split cannot be made (the tool fails, the weights file does not parse) the
+shard runs every selected section, so a broken split makes a run longer, never shorter. `uninstall-files`, which
+checks that uninstall knows every file the run left behind, runs in every shard that runs anything: each shard leaves
+only its own files, and together they check what a whole run leaves.
+
+Every run records how long each section took when it passed, in `tests/.smoke-cache/durations`. To measure the weights
+again, when sections are added or grow, run the whole suite, then
+`python3 tools/smoke_shard.py --script tests/smoke.sh --weights tests/smoke_weights.txt --record tests/.smoke-cache/durations`,
+which writes the file anew (a section the record lacks keeps its weight; only the ratios matter, so a run on any
+machine will do).
 
 ### Which sections a push runs
 
