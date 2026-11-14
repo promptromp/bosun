@@ -431,7 +431,8 @@ and CI agree on versions. On commit (`.pre-commit-config.yaml`; run all with `uv
   commit pays nearly the full run (about a minute); that is the selection being right, not loose, and a
   docs edit pays about ten seconds. Before a push, the smoke sections the change can reach (end to end only; the build-out
   setting: see below; skipped if this exact tree passed a whole run here in the last 24 hours); in CI, every
-  unit test, and the smoke sections the change reaches in the merge queue (the whole suite nightly).
+  unit test, and the smoke sections the change reaches in the merge queue (the whole suite nightly), split over
+  three macOS runners.
 
 Which tests a change reaches: the plugin follows Python imports from `lib/` (an import root, as
 pytest's `pythonpath` entry; `impacted_module = "lib"`) and between the test files and the helpers of
@@ -463,11 +464,16 @@ messages between its `base_sha` and `head_sha`), every unit test in parallel on
 Python 3.13 and 3.14 (the floor is `requires-python`; 3.15 comes back once it is released and the suite
 is fast) with a floor under coverage, measured through `sys.monitoring` (`COVERAGE_CORE=sysmon`: coverage's
 default on 3.13 is `sys.settrace`, which made every test about a quarter slower; the same lines are reported)
-(`test (<version>)`, never `--impacted`), the end-to-end smoke suite on macOS (`smoke`, a required check
-that is skipped on pull requests, which counts as passing: in the merge queue it runs the sections the queued
-change can reach from the merge group's base, `tests/smoke.sh --changed`, failing closed to the whole suite;
-nightly on main (`schedule`, every job) and by hand it runs every unit test on macOS and then the whole suite,
-and since the weekly release's gate reads main's head checks, a failed nightly holds the release), the menu bar app (`app`, on macOS: `swift test`
+(`test (<version>)`, never `--impacted`), the end-to-end smoke suite on macOS, split over three runners at once
+(the `smoke-shard` matrix, `tests/smoke.sh --shard K/3` on each, so a change that reaches every section waits about
+a third of the 15-25 minutes one runner took) and gathered in the required check `smoke`, a small Linux job that
+`needs` the shards and passes only when every shard did (`if: always()`: without it a failed or cancelled shard
+would skip it, and a skipped required check counts as passing; the ruleset names only `smoke`, the shards' checks
+carry their number). Both are skipped on pull requests, which counts as passing: in the merge queue the shards split
+the sections the queued change can reach from the merge group's base, `tests/smoke.sh --changed`, failing closed to
+the whole suite; nightly on main (`schedule`, every job) and by hand the first shard runs every unit test on macOS
+and the three the whole suite, and since the weekly release's gate reads main's head checks, a failed nightly holds
+the release), the menu bar app (`app`, on macOS: `swift test`
 with warnings as errors, the coverage floor, SwiftLint, `swift format lint --strict`, and an ad hoc build whose
 bundle must verify; a cheap Linux job, `changes`, compares the pull request or merge group with its base, and `app`
 `needs` it and is skipped (no macOS runner starts, and a skipped job counts as passing) when nothing under `app/`,
@@ -526,7 +532,7 @@ prints the sections' ids, `tests/smoke.sh --only <id>[,<id>...]` runs the shared
 partial run. While iterating use `--only`, `--last-failed` (`--lf`: only the sections whose last recorded
 result, in the git-ignored `tests/.smoke-cache/`, was a failure) and `-x` (stop at the first failing check);
 before committing, run the whole suite once with none of them. CI's smoke job runs the sections the change reaches
-in the merge queue, and all of it nightly. `--shard K/N` runs shard K of N of what the run would run
+in the merge queue, and all of it nightly, in three shards. `--shard K/N` runs shard K of N of what the run would run
 (the whole suite, or what `--only`, `--last-failed` or `--changed` chose), each section in exactly one shard, with what
 it `needs` run again as for `--only`, and the summary names the shard. The shards are balanced by
 `tests/smoke_weights.txt`, seconds per section (`tools/smoke_shard.py` has the split; a section it does not list

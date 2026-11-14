@@ -104,18 +104,30 @@ jobs:
         env:
           COVERAGE_CORE: sysmon
 
-  # On macOS like the machines bosun runs on (the scripts use BSD date and /bin/bash 3.2). Skipped on pull
-  # requests, which a required check counts as passing: the full suite takes 15-25 minutes on a scarce macOS
-  # runner, which every push to a pull request would wait for (the repo owner's choice, 2026-11-14).
+  # On macOS like the machines bosun runs on (the scripts use BSD date and /bin/bash 3.2), split over three
+  # runners at once (`tests/smoke.sh --shard K/3`: each section in one shard, with what it `needs`, balanced by
+  # how long the sections take, tests/smoke_weights.txt), so a change that reaches every section waits about a
+  # third of the 15-25 minutes the whole suite takes on one. Skipped on pull requests, which a required check
+  # counts as passing: every push to a pull request would wait for scarce macOS runners (the repo owner's
+  # choice, 2026-11-14).
   # - In the merge queue: the end-to-end sections the queued change can reach, from the merge group's base
   #   (`tests/smoke.sh --changed`, the selection the pre-push hook makes, tools/smoke_select.py), which
-  #   fails closed to the whole suite. The unit tests ran on the pull request (`test`).
-  # - Nightly on main, and by hand: every unit test once, in parallel, then the whole suite. The weekly
-  #   release's gate reads main's head checks, so a nightly that failed holds the release.
-  smoke:
+  #   fails closed to the whole suite; the shards split what it selected. The unit tests ran on the pull
+  #   request (`test`).
+  # - Nightly on main, and by hand: every unit test once, in parallel, in the first shard, and the whole
+  #   suite across the three. The weekly release's gate reads main's head checks, so a nightly that failed
+  #   holds the release.
+  # The ruleset requires `smoke` (below), which passes only when every shard did; the shards' own checks carry
+  # their number. Each shard works out the same split from the same files: N is the matrix's size.
+  smoke-shard:
+    name: smoke (${{ matrix.shard }} of ${{ strategy.job-total }})
     if: github.event_name != 'pull_request'
     runs-on: macos-latest
     timeout-minutes: 50
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -131,17 +143,35 @@ jobs:
           HOMEBREW_NO_AUTO_UPDATE: "1"
           HOMEBREW_NO_INSTALL_CLEANUP: "1"
       - name: Unit tests
-        if: github.event_name != 'merge_group'
+        if: github.event_name != 'merge_group' && matrix.shard == 1
         run: uv run pytest -n auto
       - name: End to end
         env:
           BASE: ${{ github.event.merge_group.base_sha }}
+          SHARD: ${{ matrix.shard }}/${{ strategy.job-total }}
         run: |
           if [ -n "$BASE" ]; then
-            tests/smoke.sh --changed "$BASE"
+            tests/smoke.sh --changed "$BASE" --shard "$SHARD"
           else
-            tests/smoke.sh
+            tests/smoke.sh --shard "$SHARD"
           fi
+
+  # The required check (.github/rulesets/main.json): whether every shard passed. Skipped on pull requests, as the
+  # shards are, which a required check counts as passing. Elsewhere it runs whatever became of the shards
+  # (`always()`): without it a failed or cancelled shard would skip this job, and a skipped required check passes.
+  # A failed, cancelled or skipped shard job fails it.
+  smoke:
+    needs: smoke-shard
+    if: always() && github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Every shard passed
+        env:
+          RESULT: ${{ needs.smoke-shard.result }}
+        run: |
+          echo "the shards: $RESULT"
+          [ "$RESULT" = success ]
 
   # Whether the menu bar app's job has anything to do: a cheap Linux job, so that a pull request that does not
   # touch the app never starts a macOS runner, which are scarce. Builds (build=true) unless it can show that
