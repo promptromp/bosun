@@ -112,11 +112,24 @@ def pytest_runtest_setup(item: pytest.Item) -> None:
     RUNNING[:] = [in_repository(item.path)]
 
 
+def read_as_it_runs(name: str) -> str | None:
+    """The glob that maps <name> to bin/bosun as a file bosun's programs read (orchestrator/**, console/*,
+    ...), not as one of their code."""
+    if PurePosixPath(name).parts[0] in ("lib", "libexec", "bin") or name.endswith(".sh"):
+        return None
+    return next(
+        (glob for glob, target in rules.file_map() if target == PROGRAMS and rules.matches(name, glob)), None
+    )
+
+
 def hint(name: str, test: str) -> str:
     if name == PROGRAMS or rules.matches(name, "lib/*.py"):
         return f'"{PROGRAMS}={test}"'
     if PurePosixPath(name).parts[0] == "docs" or name == "mkdocs.yml":
         return f'"mkdocs.yml={test}"'
+    folder = read_as_it_runs(name)
+    if folder:
+        return f'"{folder}={test}"'
     return f'"{name}={test}", or a glob in impacted_invalidate_all'
 
 

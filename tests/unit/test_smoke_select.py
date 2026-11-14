@@ -400,6 +400,28 @@ class ChangedTest(ScratchSuite):
         self.assertEqual(whole.returncode, 0, whole.stdout)
         self.assertRegex((self.cache / "passes").read_text(), r"^[0-9a-f]{40} \d+ \d+\n$")
 
+    def test_with_list_it_prints_the_choice_and_runs_nothing(self) -> None:
+        self.write("templates/job.plist", "<plist>changed</plist>\n")
+        self.write("docs/guide.md", "# changed\n")
+        result = self.run_suite("--changed", "HEAD", "--list")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(self.ran(result), [])
+        self.assertIn("  gamma: templates/job.plist", result.stdout)
+        self.assertIn("docs/guide.md is ignored", result.stdout)
+        self.assertIn("=> would run: gamma", result.stdout)
+        self.assertFalse(self.cache.exists())  # no section ran, so nothing was recorded
+
+    def test_with_list_the_whole_suite_and_nothing_are_said_too(self) -> None:
+        self.write("libexec/bosun-delta", "#!/bin/bash\necho delta changed\n")
+        result = self.run_suite("--list", "--changed", "HEAD")
+        self.assertEqual((result.returncode, self.ran(result)), (0, []), result.stdout)
+        self.assertIn("=> would run: the whole suite", result.stdout)
+        self.commit()
+        self.write("docs/guide.md", "# changed\n")
+        result = self.run_suite("--changed", "HEAD", "--list")
+        self.assertEqual((result.returncode, self.ran(result)), (0, []), result.stdout)
+        self.assertIn("=> would run: nothing", result.stdout)
+
     def test_it_does_not_combine_with_the_other_ways_to_choose(self) -> None:
         for args in (("--only", "alpha"), ("--last-failed",)):
             with self.subTest(args=args):
