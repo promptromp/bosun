@@ -310,7 +310,7 @@ the_installer() {
   check "it is plain sh" sh -n "$ROOT/get.sh"
   check "with something missing it gets bosun, says what to do and stops" bash -c '! cat "$1/get.sh" | sh >"$2" 2>&1 && grep -q "brew install gh" "$2"' _ "$ROOT" "$out"
   check "... and says to run the same line again" says "Then run this again: curl -fsSL" "$out"
-  check "... which keeps the branch it was asked for" says "| BOSUN_BRANCH=$branch sh" "$out"
+  check "... which keeps the repository and the branch it was asked for" says "BOSUN_REPO=$ROOT BOSUN_BRANCH=$branch sh" "$out"
   brew install gh
   # What a person does: run the line it printed, with nothing of the branch in the environment now (the
   # curl is this checkout's get.sh). The install stopped at what bosun needs, so this is init again, which

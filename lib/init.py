@@ -125,10 +125,11 @@ def apply_files(plan: Plan, config_dir: Path, stamp: str) -> None:
         print(f"wrote {path}")
 
 
-def write_with_backup(path: Path, text: str, stamp: str) -> None:
+def write_with_backup(path: Path, text: str, stamp: str, *, found: bool = True) -> None:
     """<text> as <path>, after a copy of what it was as `<name>.pre-init-<stamp>`: one per run, the first, so
-    it holds the file as the run found it, however many times the run writes it."""
-    if path.exists():
+    it holds the file as the run found it, however many times the run writes it. With <found> False the
+    file is one this run made: there is no copy of what the run itself wrote."""
+    if found and path.exists():
         backup = path.with_name(f"{path.name}.pre-init-{stamp}")
         if not backup.exists():
             shutil.copy2(path, backup)
@@ -178,15 +179,18 @@ def follow_the_config() -> None:
         )
 
 
-def add_the_app(plan: Plan, config_dir: Path, stamp: str) -> None:
+def add_the_app(plan: Plan, config_dir: Path, stamp: str, *, env_found: bool = True) -> None:
     """The menu bar app, once install.sh has made bosun work: installed, or updated where it is already there
     (a re-run must not relaunch an app in use), and opened at login (a no-op when it already is). A refused
     install, such as no network, is a line, never a failed init: bosun does not need the app, and bosun.env
-    goes back to saying it is not there. Init is the only writer of bosun.env: `bosun app` never is."""
+    goes back to saying it is not there (<env_found>: whether this run found a bosun.env, else the one it
+    writes back is its own, and gets no backup). Init is the only writer of bosun.env: `bosun app` is not."""
     if not bosun_app(plan.app_verb):
         if plan.app_verb == "install":
             env = config_dir / init_plan.ENV_FILE
-            write_with_backup(env, init_plan.menu_app_off(env.read_text(), plan.console_before), stamp)
+            write_with_backup(
+                env, init_plan.menu_app_off(env.read_text(), plan.console_before), stamp, found=env_found
+            )
             follow_the_config()  # install.sh loaded the console's job while the config still said yes
             print(
                 "\nbosun.app was not added, and bosun.env says so (BOSUN_MENU_APP is 0): bosun is set up "
@@ -227,13 +231,14 @@ def carry_out(plan: Plan, config_dir: Path) -> int:
         print("\nNothing was changed: fix what is under Blocked first.", file=sys.stderr)
         return EXIT_BLOCKED
     stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+    env_found = (config_dir / init_plan.ENV_FILE).exists()  # before this run writes it
     apply_files(plan, config_dir, stamp)
     status = run_steps(plan)
     if status != 0:
         print("\n`bosun doctor` found problems, listed above. Fix them and run it again.", file=sys.stderr)
         return EXIT_BLOCKED
     if plan.menu_app:
-        add_the_app(plan, config_dir, stamp)
+        add_the_app(plan, config_dir, stamp, env_found=env_found)
     print(path_note(), end="\n" if path_note() else "")
     return 0
 
