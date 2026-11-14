@@ -3,8 +3,9 @@ import Foundation
 // The app's behaviour, with no AppKit in it: it holds what the app knows (the status, the update's state,
 // which flow runs, whether Open at Login is on), draws the menu through `AppUI`, and carries out what is
 // chosen by running `bosun` commands and asking the person through dialogs. The shell implements `AppUI`
-// (the status item, the alerts, the workspace); everything the flows decide is here, tested with a fake
-// bosun and a fake shell. The update flow's side is in AppCoordinator+Update.swift.
+// (the status item, the alerts, the workspace, the Settings window); everything the flows decide is here, tested
+// with a fake bosun and a fake shell. The update flow's side is in AppCoordinator+Update.swift, the Settings
+// window's in AppCoordinator+Settings.swift.
 
 @MainActor
 public protocol AppUI: AnyObject {
@@ -15,6 +16,9 @@ public protocol AppUI: AnyObject {
   /// Opens a web address, a file or a folder with whatever the Mac opens it with.
   func open(_ url: URL)
   func terminate()
+  /// Shows the Settings window with `state` (one window: a second Settings… brings it to the front with the
+  /// fresh state); what it asks for goes to `apply`, whose answer is the state it shows next.
+  func showSettings(_ state: SettingsState, apply: @escaping @MainActor (SettingsEdit) async -> SettingsState)
 }
 
 @MainActor
@@ -33,6 +37,10 @@ public final class AppCoordinator {
   public internal(set) var update: UpdateState = .idle
   public internal(set) var flow = FlowState()
   public private(set) var login = false
+  /// What the Settings window shows: nil until it was first opened.
+  public internal(set) var settings: SettingsState?
+  /// A Save runs: a second one is not started.
+  var settingsBusy = false
   /// Whether the poller looks every few seconds (an update under way) rather than every 30: see `followUpdate`.
   public private(set) var looksPromptly = false
 
@@ -81,7 +89,7 @@ public final class AppCoordinator {
     ui.render(menuModel, status: status)
   }
 
-  private var snapshot: StatusSnapshot? {
+  var snapshot: StatusSnapshot? {
     if case .loaded(let snapshot, _)? = status { return snapshot }
     return nil
   }
@@ -164,7 +172,7 @@ public final class AppCoordinator {
 
   /// Whether Open at Login is on, as `bosun app status` says; a reading begun before the last switch is
   /// dropped (it may say the state from before it).
-  private func readLogin() async {
+  func readLogin() async {
     let asked = loginGeneration
     guard case .success(let app) = await fetch(AppStatus.self, Bosun.appStatus, via: cli) else { return }
     if asked == loginGeneration { login = app.login }
@@ -195,9 +203,8 @@ public final class AppCoordinator {
     case .openConsole: await openConsole()
     case .checkForUpdates: await checkForUpdates()
     case .updateBosun: await updateBosun()
-    // A submenu's own item does nothing; the Settings window comes with Task 9 of the control panel's plan
-    case .helpMenu, .settings: break
-    case .help(let topic): await help(topic)
+    case .settings: await openSettings()
+    case .helpMenu, .help: await helpItem(id)
     case .stopBosun: await stopBosun()
     case .quitApp: await quitApp()
     }
@@ -254,6 +261,11 @@ public final class AppCoordinator {
     render()
   }
 
+  /// The Help submenu: a topic, chosen; the submenu's own item does nothing.
+  private func helpItem(_ id: ItemID) async {
+    if case .help(let topic) = id { await help(topic) }
+  }
+
   private func help(_ topic: HelpTopic) async {
     switch topic {
     case .guide: ui.open(Links.guide)
@@ -263,11 +275,15 @@ public final class AppCoordinator {
     }
   }
 
-  private func openTerminal(running args: [String]) async {
+  /// Runs `bosun <args>` in Terminal; false (and told) when its script could not be written.
+  @discardableResult
+  func openTerminal(running args: [String]) async -> Bool {
     do {
       ui.open(try scripts.write(args: args))
+      return true
     } catch {
       await fail("Cannot open Terminal", error.localizedDescription)
+      return false
     }
   }
 

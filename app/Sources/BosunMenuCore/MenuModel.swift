@@ -198,7 +198,7 @@ private func loadedMenu(
   ]
   let stop = showsStop(status) ? [MenuItem(id: .stopBosun, title: Title.stop, enabled: idle)] : []
   let header = StatusHeader(
-    dot: dot(of: status.level),
+    dot: dot(of: status),
     sentence: current ? status.sentence : status.sentence + " (not current)",
     detail: status.detail + [flow.detail].compactMap { $0 })
   return MenuModel(
@@ -210,6 +210,13 @@ private func loadedMenu(
 /// "Quit bosun.app", the last item of every menu; greyed while a flow runs, so ⌘Q twice is one quit.
 private func quitAppItem(_ flow: FlowState) -> MenuItem {
   MenuItem(id: .quitApp, title: Title.quitApp, enabled: flow.isIdle, key: "q")
+}
+
+/// Resting (all well, outside your hours, no window open) is grey, as stopped is: the design's status table. A
+/// warning or an error keeps its colour.
+private func dot(of status: StatusSnapshot) -> Dot {
+  if status.level == .ok && status.outsideHours && status.running == false { return .grey }
+  return dot(of: status.level)
 }
 
 /// A level this app does not know is shown as a warning: never all well.

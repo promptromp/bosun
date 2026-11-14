@@ -163,3 +163,78 @@ private func jsonObject(_ data: Data) throws -> [String: Any] {
     #expect(HookAnswer(button: "Cancel", boxes: ["nothing": true]).resolve(for: spec) == nil)
   }
 }
+
+@Suite struct HookSettingsTests {
+  private func action(_ text: String) throws -> HookAction {
+    try HookAction.decode(Data(text.utf8))
+  }
+
+  @Test func testHookSettingsAction() throws {
+    #expect(
+      try action(#"{"settings": {"BOSUN_START_TIME": "09:00"}}"#)
+        == .settings(.values(["BOSUN_START_TIME": "09:00"])))
+    #expect(
+      try action(#"{"settings": {"BOSUN_DAYS": "MTWRFS", "BOSUN_AWAKE_UNTIL": "18:00"}}"#)
+        == .settings(.values(["BOSUN_DAYS": "MTWRFS", "BOSUN_AWAKE_UNTIL": "18:00"])))
+    #expect(try action(#"{"settings": {"openAtLogin": false}}"#) == .settings(.openAtLogin(false)))
+    #expect(try action(#"{"settings": {"openAtLogin": true}}"#) == .settings(.openAtLogin(true)))
+  }
+
+  @Test func settingsThatAreNotAnEditAreRefusedWithAReason() throws {
+    let refused = [
+      #"{"settings": {}}"#,
+      #"{"settings": {"openAtLogin": "no"}}"#,
+      #"{"settings": {"openAtLogin": true, "BOSUN_DAYS": "M"}}"#,
+      #"{"settings": {"BOSUN_DAYS": true}}"#,
+      #"{"settings": {"BOSUN_DAYS": 3}}"#,
+      #"{"settings": "BOSUN_DAYS=M"}"#,
+    ]
+    for text in refused {
+      #expect(throws: HookError.self, "\(text)") { try action(text) }
+    }
+    #expect(throws: HookError.badSettings) { try action(#"{"settings": {}}"#) }
+  }
+}
+
+@Suite struct MenuJSONSettingsTests {
+  private func settingsObject(_ settings: SettingsState?) throws -> Any? {
+    let state = try loaded("status-ok")
+    let model = menu(for: state, update: .idle, flow: FlowState())
+    return try jsonObject(menuJSON(model, status: state, settings: settings))["settings"]
+  }
+
+  @Test func noSettingsStateBeforeTheWindowWasOpened() throws {
+    #expect(try settingsObject(nil) is NSNull)
+  }
+
+  @Test func theSettingsStateIsWrittenWithTheValuesBosunRead() throws {
+    let view = try Fixtures.decode(SettingsView.self, "settings-get")
+    let object = try #require(
+      try settingsObject(SettingsState(view: view, openAtLogin: true, message: "a note", busy: false))
+        as? [String: Any])
+    #expect(object["open_at_login"] as? Bool == true)
+    #expect(object["message"] as? String == "a note")
+    #expect(object["busy"] as? Bool == false)
+    #expect(object["readable"] as? Bool == true)
+    #expect(object["wake"] as? String == "ours")
+    let values = try #require(object["values"] as? [String: Any])
+    #expect(values["BOSUN_START_TIME"] as? String == "08:30")
+    #expect(values.count == 5)
+  }
+
+  @Test func whatCouldNotBeReadIsNull() throws {
+    let unreadable = try Fixtures.decode(SettingsView.self, "settings-get-unreadable")
+    let object = try #require(
+      try settingsObject(SettingsState(view: unreadable, openAtLogin: false, message: nil, busy: true))
+        as? [String: Any])
+    #expect(object["message"] is NSNull)
+    #expect(object["readable"] as? Bool == false)
+    #expect((object["values"] as? [String: Any])?["BOSUN_DAYS"] is NSNull)
+    let none = try #require(
+      try settingsObject(SettingsState(view: nil, openAtLogin: false, message: "no", busy: false))
+        as? [String: Any])
+    #expect(none["values"] is NSNull)
+    #expect(none["readable"] is NSNull)
+    #expect(none["wake"] is NSNull)
+  }
+}

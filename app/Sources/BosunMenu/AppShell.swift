@@ -3,8 +3,8 @@ import BosunMenuCore
 import BosunMenuSystem
 
 // The shell that ties the pieces together: it is what the core's coordinator draws and asks through
-// (`AppUI`): the status item, the alerts, the workspace; and it routes what happens to the app (a menu item
-// chosen, the menu opening, the Mac waking) to the coordinator.
+// (`AppUI`): the status item, the alerts, the workspace, the Settings window; and it routes what happens to the
+// app (a menu item chosen, the menu opening, the Mac waking) to the coordinator.
 
 @MainActor
 protocol URLOpening {
@@ -50,6 +50,7 @@ final class WakeObserver {
 final class AppShell: AppUI {
   private let hookFiles: TestHookFiles?
   private let presenter = AlertPresenter()
+  private let settingsWindow = SettingsWindowController()
   private let opener: any URLOpening
   private let cli: any BosunCLI
   private let options: LaunchOptions
@@ -110,7 +111,11 @@ final class AppShell: AppUI {
         Task { await self.coordinator.perform(id) }
       },
       answer: { [weak self] hook in self?.presenter.answerOpenDialog(hook) ?? false },
-      dialogOpen: { [weak self] in self?.presenter.hasOpenDialog ?? false })
+      dialogOpen: { [weak self] in self?.presenter.hasOpenDialog ?? false },
+      settings: { [weak self] edit in
+        guard let self else { return }
+        Task { _ = await self.coordinator.applySettings(edit) }
+      })
     runner.start()
     hooks = runner
   }
@@ -124,9 +129,11 @@ final class AppShell: AppUI {
 
   func render(_ model: MenuModel, status: StatusState?) {
     statusItem?.show(model)
+    let settings = coordinator.settings
+    if let settings { settingsWindow.update(settings) }
     guard let files = hookFiles else { return }
     do {
-      try files.writeMenu(model, status: status)
+      try files.writeMenu(model, status: status, settings: settings)
     } catch {
       files.log(.error("cannot write menu.json: \(error.localizedDescription)"))
     }
@@ -142,5 +149,11 @@ final class AppShell: AppUI {
 
   func terminate() {
     NSApp.terminate(nil)
+  }
+
+  func showSettings(
+    _ state: SettingsState, apply: @escaping @MainActor (SettingsEdit) async -> SettingsState
+  ) {
+    settingsWindow.show(state, apply: apply)
   }
 }

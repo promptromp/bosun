@@ -114,11 +114,14 @@ import Testing
     #expect(world.ui.presented.count == 1)
   }
 
-  @Test func settingsDoesNothingYet() async throws {
+  /// Settings… opens the Settings window (CoordinatorSettingsTests), never a dialog, and reads only bosun's settings.
+  @Test func settingsOpensTheWindowAndNoDialog() async throws {
     let world = try await readyToQuit()
-    let before = await world.commands.count
+    let before = await world.commands
+    try await world.reply(Bosun.settingsGet, fixture: "settings-get")
     await world.coordinator.perform(.settings)
     #expect(world.ui.presented.isEmpty)
-    #expect(await world.commands.count == before)
+    #expect(world.ui.settingsShown.count == 1)
+    #expect(await world.commands == before + [Bosun.settingsGet.args])
   }
 }

@@ -5,10 +5,13 @@ import Foundation
 // live here, pure; the files are BosunMenuSystem's `TestHookFiles`; the shell only wires them up, and only
 // when it was given the argument.
 //
-//   <dir>/menu.json        the menu after each render: header, sections, icon badge, and the status level
+//   <dir>/menu.json        the menu after each render: header, sections, icon badge, the status level, and
+//                          the Settings window's state (null before it was first opened)
 //   <dir>/actions/<n>.json {"item": "<id>"} as if the item was clicked; {"answer": {"button": "<title>",
-//                          "boxes": {"<id>": true}}} for the open dialog; taken in the order of n and then
-//                          removed (the script waits for its file to go)
+//                          "boxes": {"<id>": true}}} for the open dialog; {"settings": {"BOSUN_START_TIME":
+//                          "09:00"}} as one Save of the Settings window, {"settings": {"openAtLogin": false}} as
+//                          its Open at Login switch; taken in the order of n and then removed (the script waits
+//                          for its file to go)
 //   <dir>/log.jsonl        one object per line: {"command": [...], "detached": false, "outcome": "exited 0"},
 //                          {"open": "<url or path>"}, {"error": "..."}
 
@@ -79,12 +82,15 @@ public enum HookError: Error, Equatable, Sendable, CustomStringConvertible {
   case unreadable(String)
   case unknownItem(String)
   case noAction
+  case badSettings
 
   public var description: String {
     switch self {
     case .unreadable(let why): return "the action could not be read: \(why)"
     case .unknownItem(let name): return "no menu item is called \"\(name)\""
-    case .noAction: return "the file has neither \"item\" nor \"answer\""
+    case .noAction: return "the file has neither \"item\" nor \"answer\" nor \"settings\""
+    case .badSettings:
+      return "\"settings\" is either {\"openAtLogin\": true|false} or {\"<KEY>\": \"<value>\", …}"
     }
   }
 }
@@ -92,10 +98,39 @@ public enum HookError: Error, Equatable, Sendable, CustomStringConvertible {
 public enum HookAction: Equatable, Sendable {
   case item(ItemID)
   case answer(HookAnswer)
+  /// An edit of the Settings window, as if made there.
+  case settings(SettingsEdit)
 
   private struct Raw: Decodable {
     let item: String?
     let answer: HookAnswer?
+    let settings: [String: HookSetting]?
+  }
+
+  /// A value of `settings`: Open at Login's switch, or a setting's text.
+  private enum HookSetting: Decodable {
+    case on(Bool)
+    case text(String)
+
+    init(from decoder: any Decoder) throws {
+      let value = try decoder.singleValueContainer()
+      if let on = try? value.decode(Bool.self) {
+        self = .on(on)
+      } else {
+        self = .text(try value.decode(String.self))
+      }
+    }
+  }
+
+  private static func edit(_ settings: [String: HookSetting]) throws(HookError) -> SettingsEdit {
+    if settings.count == 1, case .on(let on)? = settings["openAtLogin"] { return .openAtLogin(on) }
+    var values: [String: String] = [:]
+    for (key, setting) in settings {
+      guard case .text(let text) = setting else { throw HookError.badSettings }
+      values[key] = text
+    }
+    guard !values.isEmpty, values["openAtLogin"] == nil else { throw HookError.badSettings }
+    return .values(values)
   }
 
   public static func decode(_ data: Data) throws(HookError) -> HookAction {
@@ -103,13 +138,15 @@ public enum HookAction: Equatable, Sendable {
     do {
       raw = try JSONDecoder().decode(Raw.self, from: data)
     } catch {
-      throw HookError.unreadable("it is not {\"item\": …} or {\"answer\": {\"button\": …}}")
+      throw HookError.unreadable(
+        "it is not {\"item\": …}, {\"answer\": {\"button\": …}} or {\"settings\": {…}}")
     }
     if let name = raw.item {
       guard let id = ItemID(name: name) else { throw HookError.unknownItem(name) }
       return .item(id)
     }
     if let answer = raw.answer { return .answer(answer) }
+    if let settings = raw.settings { return .settings(try edit(settings)) }
     throw HookError.noAction
   }
 }
@@ -168,10 +205,26 @@ private func itemObject(_ item: MenuItem) -> [String: Any] {
   ]
 }
 
-/// The menu as the test hooks write it (`menu.json`), with the status level.
-public func menuJSON(_ model: MenuModel, status: StatusState?) -> Data {
+/// The Settings window's state as the hooks write it: each value bosun read (null when it could not), and
+/// null for what is not known.
+private func settingsObject(_ state: SettingsState?) -> Any {
+  guard let state else { return NSNull() }
+  let values: Any =
+    state.view.map { view in view.settings.mapValues { $0.value.map { $0 as Any } ?? NSNull() } } ?? NSNull()
+  return [
+    "open_at_login": state.openAtLogin, "busy": state.busy,
+    "message": state.message.map { $0 as Any } ?? NSNull(),
+    "readable": state.view.map { $0.readable as Any } ?? NSNull(),
+    "wake": state.view.map { $0.wake as Any } ?? NSNull(),
+    "values": values,
+  ]
+}
+
+/// The menu as the test hooks write it (`menu.json`), with the status level and the Settings window's state.
+public func menuJSON(_ model: MenuModel, status: StatusState?, settings: SettingsState? = nil) -> Data {
   let object: [String: Any] = [
     "level": statusLevelName(status),
+    "settings": settingsObject(settings),
     "header": [
       "dot": dotName(model.header.dot), "sentence": model.header.sentence, "detail": model.header.detail,
     ],

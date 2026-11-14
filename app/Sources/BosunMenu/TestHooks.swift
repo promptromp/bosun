@@ -13,18 +13,20 @@ final class HookRunner {
   private let perform: @MainActor (ItemID) -> Void
   private let answer: @MainActor (HookAnswer) -> Bool
   private let dialogOpen: @MainActor () -> Bool
+  private let settings: @MainActor (SettingsEdit) -> Void
   private let interval: TimeInterval
   private var timer: Timer?
 
   init(
     files: TestHookFiles, perform: @escaping @MainActor (ItemID) -> Void,
     answer: @escaping @MainActor (HookAnswer) -> Bool, dialogOpen: @escaping @MainActor () -> Bool,
-    interval: TimeInterval = 1
+    settings: @escaping @MainActor (SettingsEdit) -> Void = { _ in }, interval: TimeInterval = 1
   ) {
     self.files = files
     self.perform = perform
     self.answer = answer
     self.dialogOpen = dialogOpen
+    self.settings = settings
     self.interval = interval
   }
 
@@ -50,6 +52,8 @@ final class HookRunner {
         perform(id)
       case .answer(let hook):
         if !answer(hook) { files.log(.error("no open dialog could take the answer for \"\(hook.button)\"")) }
+      case .settings(let edit):
+        settings(edit)
       }
     }
   }

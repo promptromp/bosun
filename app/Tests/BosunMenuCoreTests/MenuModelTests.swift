@@ -123,12 +123,36 @@ private let stoppedTail: [ItemID] = [.checkForUpdates, .settings, .helpMenu, .qu
     #expect(menu.iconBadge == nil)
   }
 
-  @Test func restingIsGreenAndOffersStartNow() throws {
+  /// The design's table: outside your hours, not running, is grey; started by you, green; a problem keeps its colour.
+  @Test func restingIsGreyAndOffersStartNow() throws {
     let menu = model(try loaded("status-resting"))
-    #expect(menu.header.dot == .green)
+    #expect(menu.header.dot == .grey)
     #expect(menu.header.sentence == "Resting: outside your hours · next start Wed 08:00")
     #expect(menu.topIDs == [.startBosun, .openConsole] + stoppedTail)
     #expect(!menu.item(.openConsole).enabled)
+  }
+
+  @Test func runningOutsideYourHoursIsGreen() throws {
+    #expect(model(try loaded("status-running-outside-hours")).header.dot == .green)
+  }
+
+  @Test func restingWithAWarningIsYellow() throws {
+    let text = try Fixtures.text("status-resting").replacingOccurrences(
+      of: "\"level\": \"ok\"", with: "\"level\": \"warning\"")
+    let warned = try decodeContract(StatusSnapshot.self, from: text)
+    #expect(warned.level == .warning)
+    #expect(model(.loaded(warned, current: true)).header.dot == .yellow)
+  }
+
+  @Test func okWithinYourHoursOrWithWindowsUnreadIsGreen() throws {
+    let text = try Fixtures.text("status-resting")
+    let inHours = text.replacingOccurrences(of: "\"in_hours\": false", with: "\"in_hours\": true")
+    let unread = text.replacingOccurrences(of: "\n  \"running\": false", with: "\n  \"running\": null")
+    for variant in [inHours, unread] {
+      #expect(variant != text)
+      let status = try decodeContract(StatusSnapshot.self, from: variant)
+      #expect(model(.loaded(status, current: true)).header.dot == .green)
+    }
   }
 
   @Test func theSectionsAreTheActionsTheConsoleTheAppsOwnItemsAndQuit() throws {
