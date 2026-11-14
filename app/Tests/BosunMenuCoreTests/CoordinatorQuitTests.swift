@@ -129,7 +129,7 @@ import Testing
     await world.refresh(.launch)
     world.ui.answer("OK")
     await world.coordinator.perform(.stopBosun)
-    #expect(world.ui.lastSpec?.title == "Quit did not finish")
+    #expect(world.ui.lastSpec?.title == "Stopping bosun did not finish")
     #expect(world.ui.lastSpec?.message.contains("update is running") == true)
     #expect(world.ui.terminated == 0)
     #expect(world.coordinator.flow.isIdle)
@@ -142,9 +142,22 @@ import Testing
     world.ui.answer("Stop bosun")
     world.ui.answer("OK")
     await world.coordinator.perform(.stopBosun)
-    #expect(world.ui.lastSpec?.title == "Quit did not finish")
+    #expect(world.ui.lastSpec?.title == "Stopping bosun did not finish")
     #expect(world.ui.lastSpec?.message.contains("bosun quit --stop-now") == true)
     #expect(world.ui.terminated == 0)
+  }
+
+  @Test func aQuitOfTheAppThatFailedSpeaksOfQuitting() async throws {
+    let world = try await World(status: "status-ok", atLogin: true)
+    await world.reply(Bosun.quitPlan, try quitReply("quit-plan-refused"))
+    await world.refresh(.launch)
+    world.ui.answer("Stop bosun and Quit…")
+    world.ui.answer("OK")
+    await world.coordinator.perform(.quitApp)
+    #expect(world.ui.lastSpec?.title == "Quit did not finish")
+    #expect(world.ui.lastSpec?.message.contains("update is running") == true)
+    #expect(world.ui.terminated == 0)
+    #expect(world.coordinator.flow.isIdle)
   }
 
   @Test func aPlanThatCouldNotLookOffersStopNow() async throws {
@@ -181,7 +194,7 @@ import Testing
     await world.refresh(.launch)
     world.ui.answer("OK")
     await world.coordinator.perform(.stopBosun)
-    #expect(world.ui.presented.map(\.title) == ["Quit did not finish"])
+    #expect(world.ui.presented.map(\.title) == ["Stopping bosun did not finish"])
     #expect(world.ui.lastSpec?.buttons == ["OK"])
     #expect(world.ui.lastSpec?.message.contains("update is running") == true)
     #expect(world.ui.terminated == 0)

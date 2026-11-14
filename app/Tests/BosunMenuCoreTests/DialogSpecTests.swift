@@ -242,10 +242,25 @@ import Testing
       contract: 1, windows: [], busy: [], waiting: [], keepAwakeUntil: nil, refused: nil, note: nil,
       waitMinutes: nil, lockWaitSeconds: nil, stepsSeconds: nil)
     let specs = [
-      quitFirstSpec(plan), quitBusySpec(["a"]), quitStillBusySpec(["a"], quitsApp: false), quitNoteSpec("n"),
-      failureSpec("t", "m"), problemsSpec([]),
+      quitFirstSpec(plan), quitBusySpec(["a"]), quitStillBusySpec(["a"], quitsApp: false),
+      quitStillBusySpec(["a"], quitsApp: true), quitNoteSpec("n"), failureSpec("t", "m"), problemsSpec([]),
+      quitFailedSpec("w", quitsApp: false), quitFailedSpec("w", quitsApp: true),
     ]
     for spec in specs { #expect(spec.defaultButton == 0, "\(spec.title)") }
+  }
+
+  @Test func theStillBusyDialogsCancelNamesTheQuitOnlyWhenTheAppQuits() throws {
+    #expect(quitStillBusySpec(["a"], quitsApp: false).buttons == ["Keep Waiting", "Stop It Now", "Cancel"])
+    #expect(
+      quitStillBusySpec(["a"], quitsApp: true).buttons == ["Keep Waiting", "Stop It Now", "Cancel Quit"])
+  }
+
+  @Test func aFailedQuitSpeaksOfQuittingOnlyWhenTheAppQuits() throws {
+    let stop = quitFailedSpec("bosun update is running", quitsApp: false)
+    #expect(stop.title == "Stopping bosun did not finish")
+    #expect(stop.message == "bosun update is running")
+    #expect(stop.buttons == ["OK"])
+    #expect(quitFailedSpec("bosun update is running", quitsApp: true).title == "Quit did not finish")
   }
 
   @Test func aSpecSaysItsDefaultWithoutDefaultingTheCancelButton() throws {
@@ -343,57 +358,5 @@ import Testing
     let spec = quitFirstSpec(quitPlan(windows: []))
     #expect(spec.defaultAnswer == DialogAnswer(button: 1, boxes: ["pauseMorning": true]))
     #expect(failureSpec("t", "m").defaultAnswer == DialogAnswer(button: 0, boxes: [:]))
-  }
-}
-
-@Suite struct StopAndQuitAppDialogTests {
-  @Test func theFirstDialogIsStopBosun() throws {
-    let spec = quitFirstSpec(quitPlan())
-    #expect(spec.title == "Stop bosun?")
-    #expect(spec.buttons == ["Stop bosun", "Cancel"])
-    #expect(spec.cancel == 1)
-    #expect(!spec.boxes.contains { $0.title == "Keep bosun in the menu bar" })
-  }
-
-  @Test func quitBosunAppIsOfferedWhenThePlanCouldNotLookOnlyWhenTheAppQuits() throws {
-    let stop = quitUnavailableSpec("the windows cannot be read", quitsApp: false)
-    #expect(stop.buttons == ["Cancel", "Stop Now"])
-    #expect(!stop.message.contains("Quit bosun.app"))
-    let quit = quitUnavailableSpec("the windows cannot be read", quitsApp: true)
-    #expect(quit.buttons == ["Cancel", "Stop Now", "Quit bosun.app"])
-    #expect(quit.message.contains("Quit bosun.app leaves bosun as it is"))
-    #expect(quit.boxes.map(\.id) == ["pauseMorning", "sleep"])
-  }
-
-  @Test func quitAppAsksWhetherToLeaveBosunRunning() throws {
-    let spec = quitAppSpec()
-    #expect(spec.title == "Quit bosun.app?")
-    #expect(
-      spec.message == "bosun keeps running without its menu bar icon. Open bosun.app to see it again.")
-    #expect(spec.buttons == ["Leave bosun Running", "Stop bosun and Quit…", "Cancel"])
-    #expect(spec.defaultButton == 0)
-    #expect(spec.cancel == 2)
-    #expect(spec.boxes.isEmpty)
-  }
-
-  @Test func eachButtonOfQuitAppIsAChoice() throws {
-    func choice(_ button: Int) -> QuitAppChoice { quitAppChoice(DialogAnswer(button: button, boxes: [:])) }
-    #expect(choice(0) == .leaveRunning)
-    #expect(choice(1) == .stopAndQuit)
-    #expect(choice(2) == .cancel)
-  }
-
-  @Test func theEntryPointNotABoxSaysWhetherTheAppQuits() throws {
-    let answer = DialogAnswer(button: 0, boxes: ["pauseMorning": false])
-    #expect(
-      quitEvent(for: .first(quitPlan()), answer: answer, quitsApp: true)
-        == .confirmed(QuitChoices(pauseMorning: false, quitsApp: true)))
-    #expect(
-      quitEvent(for: .first(quitPlan()), answer: answer)
-        == .confirmed(QuitChoices(pauseMorning: false, quitsApp: false)))
-    let unavailable = QuitStep.unavailable("x", nil)
-    #expect(
-      quitEvent(for: unavailable, answer: DialogAnswer(button: 1, boxes: [:]), quitsApp: true)
-        == .confirmed(QuitChoices(quitsApp: true)))
   }
 }

@@ -323,7 +323,7 @@ public final class AppCoordinator {
     await poller.pause()
     render()
     let step = await driveQuit(quitsApp: quitsApp)
-    await finishQuit(step)
+    await finishQuit(step, quitsApp: quitsApp)
   }
 
   /// The quit flow's steps until it is finished: each step's dialog or command makes the next event. While
@@ -362,12 +362,12 @@ public final class AppCoordinator {
 
   /// What the quit left: a failure is told, a note too; the app leaves when the flow was to quit it (or leaves
   /// alone, bosun as it is, when that was chosen); else the poller is let go and looks once.
-  private func finishQuit(_ step: QuitStep) async {
+  private func finishQuit(_ step: QuitStep, quitsApp: Bool) async {
     switch step {
     case .done(_, let note):
       if let note { _ = await ui.present(quitNoteSpec(note)) }
     case .failed(let why):
-      await fail("Quit did not finish", why)
+      _ = await ui.present(quitFailedSpec(why, quitsApp: quitsApp))
     default:
       break
     }

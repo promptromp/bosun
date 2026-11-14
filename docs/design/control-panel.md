@@ -226,8 +226,9 @@ The builder's calls on what the note left open, and the rulings made while build
   comes to the front (`AppCoordinator.refreshSettings`): after a hand-off, or when the values are not the ones it
   shows, it shows the new reading and the hand-off's line goes; otherwise the reading stays, so an edit in progress
   survives a switch to another app and back.
-- **The Stop flow's words speak of stopping** ("bosun cannot say what stopping would end", "Stopping…", Cancel),
-  and of quitting only where the app quits too (Quit bosun.app's "Stop bosun and Quit…").
+- **The Stop flow's words speak of stopping** ("bosun cannot say what stopping would end", "Stopping…", Cancel,
+  "Stopping bosun did not finish"), and of quitting only where the app quits too (Quit bosun.app's "Stop bosun and
+  Quit…", whose failure is "Quit did not finish").
 - **The Mac VM run** sets the clone's time zone so that its local time is about noon, since the restart in the
   hours and the watchdog's held alert depend on the hour; for Resting it moves the hours (a Save of
   `BOSUN_AWAKE_UNTIL` an hour back), not the clock, since launchd keeps the zone it started with until the restart

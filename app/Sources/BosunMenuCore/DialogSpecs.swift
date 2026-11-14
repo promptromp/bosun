@@ -153,6 +153,12 @@ public func quitStillBusySpec(_ names: [String], quitsApp: Bool) -> DialogSpec {
     cancel: 2)
 }
 
+/// The failure of the quit flow (refused, or cut short), with bosun's reason: it speaks of quitting only when the
+/// app quits too, as the flow's other words do.
+public func quitFailedSpec(_ why: String, quitsApp: Bool) -> DialogSpec {
+  failureSpec(quitsApp ? "Quit did not finish" : "Stopping bosun did not finish", why)
+}
+
 public func quitNoteSpec(_ note: String) -> DialogSpec {
   DialogSpec(
     title: "bosun is stopped", message: note, scroll: nil, boxes: [], buttons: ["OK"], cancel: nil)
