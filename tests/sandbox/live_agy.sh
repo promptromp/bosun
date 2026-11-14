@@ -191,7 +191,7 @@ agy_install_bosun() {
   first_run_screens
   check "... and going through them is enough" jq -e '.hasCompletedOnboarding == true' "$HOME/.claude.json"
   check "the same line then installs" gui_do bash -c 'sh "$1/get.sh" --unattended >"$2" 2>&1 || { tail -15 "$2"; exit 1; }' _ "$ROOT" "$out"
-  echo '{"repos": [{"dir": "~/Development/exporter"}], "harness": "agy"}' >"$OUT/answers.json"
+  echo '{"repos": [{"dir": "~/Development/exporter"}], "harness": "agy", "menu_app": false}' >"$OUT/answers.json"
   check "the repo's window, named with bosun init --answers" gui_do bash -c 'bosun init --answers "$1" >"$2" 2>&1 || { tail -15 "$2"; exit 1; }' _ "$OUT/answers.json" "$OUT/answers.txt"
   check "... in sessions.yml" grep -q "name: exporter" "$CONFIG/sessions.yml"
   check "the config says agy" says 'BOSUN_HARNESS="agy"' "$CONFIG/bosun.env"

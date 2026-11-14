@@ -123,7 +123,7 @@ install_it() {
   check "... and going through them is enough" jq -e '.hasCompletedOnboarding == true' "$HOME/.claude.json"
   check "the same line then installs" bash -c 'sh "$1/get.sh" --unattended >"$2" 2>&1 || { tail -15 "$2"; exit 1; }' _ "$ROOT" "$out"
   check "... with no repo window, since nobody chose one" grep -qx "sessions: \[\]" "$CONFIG/sessions.yml"
-  echo '{"repos": [{"dir": "~/Development/exporter"}]}' >"$OUT/answers.json"
+  echo '{"repos": [{"dir": "~/Development/exporter"}], "menu_app": false}' >"$OUT/answers.json"
   check "the repo's window, named with bosun init --answers" bash -c 'bosun init --answers "$1" >"$2" 2>&1 || { tail -15 "$2"; exit 1; }' _ "$OUT/answers.json" "$OUT/answers.txt"
   check "... in sessions.yml" grep -q "name: exporter" "$CONFIG/sessions.yml"
   check "doctor passes" bash -c 'bosun doctor >"$1" 2>&1 || { tail -15 "$1"; exit 1; }' _ "$OUT/doctor.txt"
