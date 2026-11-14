@@ -60,7 +60,8 @@ and `BOSUN_BRANCH`, as it keeps `BOSUN_HARNESS`, quoted for your shell, and show
 
 `bosun init` reads what this Mac already shows: the repos you use your agents in, the MCP servers and
 connectors `claude mcp list` shows, your usual hours, your logins. In a terminal it asks a few questions,
-one key each: Return takes the recommended answer, `r` starts again and `q` leaves with nothing changed. The last
+one key each: Return takes the recommended answer, `r` starts again and `q` leaves with nothing changed (in
+colour, in your terminal's own palette; `NO_COLOR=1` turns it off, as it does for the check before it). The last
 of them (once a signed build of it exists to install) is whether to add the menu bar app: `bosun.app` in
 `~/Applications`, opened at login (`bosun app install` adds it later; `bosun update` keeps an installed app
 current, and `BOSUN_MENU_APP=1` in `bosun.env` makes the watchdog say when it is gone).

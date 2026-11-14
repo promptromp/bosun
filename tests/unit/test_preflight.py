@@ -144,6 +144,42 @@ esac""",
         self.tool("security", 'echo "Keychain x no-timeout"')  # unlocked: logged out is logged out
         self.assertIn("Log in to Claude Code: run claude", self.run_it().stdout)
 
+    def run_to_a_terminal(self, **env: str) -> str:
+        """Its output as a terminal shows it (the lines' colours), with <env> added. Read while it runs:
+        on macOS what a pty holds is gone once its other end closes."""
+        primary, secondary = os.openpty()
+        # A terminal names itself in TERM (unset, /bin/sh makes it dumb).
+        environment = {
+            "PATH": str(self.bin),
+            "HOME": str(self.home),
+            "BOSUN_PLATFORM": "macos",
+            "TERM": "xterm-256color",
+        }
+        environment.update(env)
+        with subprocess.Popen(["/bin/sh", str(PREFLIGHT)], env=environment, stdout=secondary) as process:
+            os.close(secondary)
+            chunks = []
+            while True:
+                try:
+                    chunk = os.read(primary, 65536)
+                except OSError:  # the other end closed
+                    break
+                if not chunk:
+                    break
+                chunks.append(chunk)
+            process.wait(timeout=60)
+        os.close(primary)
+        return b"".join(chunks).decode()
+
+    def test_on_a_terminal_each_line_s_word_is_coloured_unless_no_color(self) -> None:
+        self.claude("2.1.308", LOGGED_OUT)
+        shown = self.run_to_a_terminal()
+        self.assertIn("\x1b[32mok", shown)
+        self.assertIn("\x1b[33mto do", shown)
+        self.assertNotIn("\x1b[", self.run_to_a_terminal(NO_COLOR="1"))
+        self.assertNotIn("\x1b[", self.run_to_a_terminal(TERM="dumb"))
+        self.assertNotIn("\x1b[", self.run_it().stdout)  # not a terminal
+
     def test_claude_in_chrome_s_screen_is_a_step_while_windows_use_chrome(self) -> None:
         """Its once-only screen waits for Enter, and an unattended window would wait there for ever."""
         (self.home / ".claude.json").write_text('{"hasCompletedOnboarding": true}')
