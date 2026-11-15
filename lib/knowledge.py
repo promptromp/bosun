@@ -1082,12 +1082,11 @@ def proposed_at(facts: list[Record]) -> datetime | None:
     return max(times) if times else None
 
 
-def decision_words(args: argparse.Namespace, facts: list[Record]) -> Record | None:
-    """From an agent's session, a decision on <facts> (confirm, reject, a batch's answer, a
-    supersede) stands on my words: --from-user --quote, at least MIN_DECISION_QUOTE characters, in a
-    genuine prompt of that session made after the facts were proposed and within QUOTE_MAX_AGE; it
-    is refused otherwise. Returns those words as a user source. From no session (a terminal), None:
-    nothing changes."""
+def deciding_session(args: argparse.Namespace) -> agent_state.CallingSession | None:
+    """The agent session a decision (confirm, reject, a batch's answer, a supersede) is made from, which
+    then stands on my words: --from-user --quote, at least MIN_DECISION_QUOTE characters (checked in it
+    by decision_words, once the facts are known); refused here, before anything is read, when it cannot.
+    None from no session (a terminal): nothing changes."""
     session = agent_state.calling_session()
     if session is None:
         return None
@@ -1101,6 +1100,17 @@ def decision_words(args: argparse.Namespace, facts: list[Record]) -> Record | No
             f"from a session, {verb} with at least {MIN_DECISION_QUOTE} characters of your exact "
             "words in --quote"
         )
+    return session
+
+
+def decision_words(
+    args: argparse.Namespace, session: agent_state.CallingSession | None, facts: list[Record]
+) -> Record | None:
+    """The words a decision on <facts> from <session> (deciding_session) stands on, as a user source:
+    in a genuine prompt of that session made after the facts were proposed and within QUOTE_MAX_AGE,
+    or it is refused. None from no session."""
+    if session is None:
+        return None
     after = proposed_at(facts)
     words = user_source(args, session, after)
     if not words["verified"]:
@@ -1193,9 +1203,10 @@ def targets(kb: KB, refs: list[str]) -> list[str]:
 
 def cmd_review(args: argparse.Namespace, confirm: bool) -> str:
     verb = "confirm" if confirm else "reject"
+    session = deciding_session(args)
     with opened(True, f"{verb} {' '.join(args.refs)}") as kb:
         chosen = targets(kb, args.refs)
-        words = decision_words(args, [km.get_fact(kb, fact_id) for fact_id in chosen])
+        words = decision_words(args, session, [km.get_fact(kb, fact_id) for fact_id in chosen])
         note = decision_note(args.note or "", words)
         messages = km.review(kb, chosen, confirm, note, by=reviewer(words))
     return "\n".join(messages)
@@ -1209,14 +1220,22 @@ def cmd_reject(args: argparse.Namespace) -> str:
     return cmd_review(args, False)
 
 
-def supersede_words(kb: KB, args: argparse.Namespace) -> Record | None:
-    """The words a supersede stands on. From an agent's session, --close and --by need them, and any
-    form given them checks them as a review does (decision_words); a correction with only a --source
-    needs none. From a terminal, words given are checked as a proposal's are (--transcript)."""
-    if not args.from_user and args.by is None and not args.close:
+def needs_words(args: argparse.Namespace) -> bool:
+    """Whether a supersede stands on my words: given them, or closing (--close, --by). A correction with
+    only a --source needs none."""
+    return bool(args.from_user) or args.by is not None or bool(args.close)
+
+
+def supersede_words(
+    kb: KB, args: argparse.Namespace, session: agent_state.CallingSession | None
+) -> Record | None:
+    """The words a supersede stands on (needs_words). From an agent's session (<session>), checked as a
+    review's are (decision_words). From a terminal, words given are checked as a proposal's are
+    (--transcript)."""
+    if not needs_words(args):
         return None
     facts = [km.get_fact(kb, args.id), *([km.get_fact(kb, args.by)] if args.by else [])]
-    words = decision_words(args, facts)
+    words = decision_words(args, session, facts)
     if words is None and args.from_user:
         words = user_source(args, None)
         if not words["verified"]:
@@ -1240,8 +1259,9 @@ def cmd_supersede(args: argparse.Namespace) -> str:
     chosen = [args.value is not None, args.object is not None, args.by is not None, args.close]
     if sum(chosen) != 1:
         raise KnowledgeError("supersede takes exactly one of --value, --object, --by or --close")
+    session = deciding_session(args) if needs_words(args) else None
     with opened(True, f"supersede {args.id}") as kb:
-        words = supersede_words(kb, args)
+        words = supersede_words(kb, args, session)
         replacement = replacement_of(kb, args, words)
         note = decision_note(args.note or "", words)
         messages = km.supersede(kb, args.id, replacement, args.by, note, reviewer=reviewer(words))
@@ -1305,24 +1325,23 @@ def decision_clauses(args: argparse.Namespace, decision: str) -> list[kr.Clause]
     return clauses
 
 
-def batch_words(
-    kb: KB, args: argparse.Namespace, clauses: list[kr.Clause], decided: list[str]
-) -> Record | None:
-    """The words a batch's answer stands on (decision_words), which from a session must also name it:
-    batch_quote_refusal."""
-    words = decision_words(args, [km.get_fact(kb, fact_id) for fact_id in decided])
-    refusal = batch_quote_refusal(words["quote"], clauses) if words else ""
+def batch_session(args: argparse.Namespace, clauses: list[kr.Clause]) -> agent_state.CallingSession | None:
+    """The session a batch's answer is made from (deciding_session), whose quote must also name the
+    decision: batch_quote_refusal."""
+    session = deciding_session(args)
+    refusal = batch_quote_refusal(approvals.normalize(args.quote or ""), clauses) if session else ""
     if refusal:
         raise KnowledgeError(refusal)
-    return words
+    return session
 
 
 def batch_apply(args: argparse.Namespace, decision: str) -> str:
     clauses = decision_clauses(args, decision)
+    session = batch_session(args, clauses)
     with opened(True, "batch apply", dry_run=args.dry_run) as kb:
         batch = read_batch()
         decisions = kr.decide(clauses, [g["facts"] for g in batch["groups"]])
-        words = batch_words(kb, args, clauses, list(decisions))
+        words = decision_words(args, session, [km.get_fact(kb, fact_id) for fact_id in decisions])
         note, by = decision_note("batch", words), reviewer(words)
         confirm = [i for i, verb in decisions.items() if verb == kr.CONFIRM]
         reject = [i for i, verb in decisions.items() if verb == kr.REJECT]

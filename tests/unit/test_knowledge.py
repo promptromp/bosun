@@ -557,7 +557,7 @@ class SessionQuoteTest(KnowledgeTestCase):
 
     def test_a_decision_from_a_session_quotes_words_said_after_the_proposal(self) -> None:
         self.seed()
-        self.session(typed(f"yes, {QUOTE}", START - timedelta(minutes=30)))
+        self.session(typed(f"yes, {QUOTE}: 1", START - timedelta(minutes=30)))
         fact = self.proposed("gotcha")  # proposed at START, after I typed those words
         self.later(1 / 12)
         refusal = "since what it decides on was proposed .2026-10-21T09:00:00.00:00., so nothing was decided"
@@ -568,7 +568,7 @@ class SessionQuoteTest(KnowledgeTestCase):
             self.run_kg("supersede", fact, "--close", "--from-user", "--quote", QUOTE)
         self.run_kg("batch")
         with self.assertRaisesRegex(KnowledgeError, refusal):
-            self.run_kg("batch", "apply", "confirm 1", "--from-user", "--quote", QUOTE)
+            self.run_kg("batch", "apply", "confirm 1", "--from-user", "--quote", f"{QUOTE}: 1")
         self.assertEqual(self.fact(fact)["status"], km.PROPOSED)
 
     def test_a_batch_answer_from_a_session_names_its_groups(self) -> None:
