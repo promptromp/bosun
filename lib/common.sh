@@ -672,8 +672,12 @@ record_keep_awake() { # <caffeinate pid> <seconds>
 # Hold the keep-awake for <seconds> (> 0): a full wake, the old caffeinate ended by its recorded pid (only
 # after `ps` says it is a caffeinate), a new one, and its pid file and record. `morning` works out the
 # seconds and handles a dry run; this uses nothing of any command's own.
+# The new caffeinate gets a process group of its own (job control on, around the `&` only; macOS has no setsid
+# command): it outlives the command that started it, and whoever ends that command's whole group (the menu bar
+# app does, when `bosun settings set` runs past its timeout) must not end the keep-awake with it. launchd's
+# jobs say AbandonProcessGroup for the same reason; release_keep_awake ends it by its recorded pid.
 hold_keep_awake() { # <seconds>
-  local seconds="$1" pidfile old_pid pid
+  local seconds="$1" pidfile old_pid pid job_control=0
   pidfile="$(keep_awake_pidfile)"
   # Declaring user activity turns a scheduled (possibly dark) wake into a full wake.
   caffeinate -u -t 2
@@ -682,9 +686,13 @@ hold_keep_awake() { # <seconds>
     kill "$old_pid"
   fi
   # -i: no idle sleep; -s: no system sleep while on AC power.
-  # 9>&-: it outlives the command, and must not keep a lock the command holds (lock_here, one_at_a_time)
-  nohup caffeinate -i -s -t "$seconds" >/dev/null 2>&1 9>&- &
+  # 9>&-: it outlives the command, and must not keep a lock the command holds (lock_here, one_at_a_time).
+  # </dev/null: with job control on, bash no longer gives a background job /dev/null for its input itself.
+  case $- in *m*) job_control=1 ;; esac
+  set -m
+  nohup caffeinate -i -s -t "$seconds" </dev/null >/dev/null 2>&1 9>&- &
   pid=$!
+  [ "$job_control" = 1 ] || set +m
   echo "$pid" >"$pidfile"
   record_keep_awake "$pid" "$seconds"
   log "holding keep-awake for $((seconds / 60)) minutes (caffeinate pid $pid)"

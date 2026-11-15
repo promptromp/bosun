@@ -3540,10 +3540,61 @@ check "... writes it and reloads no job" bash -c 'grep -qx "BOSUN_UPDATE_CHANNEL
 check "set BOSUN_AWAKE_UNTIL=18:00 succeeds" settings_exits 0 set BOSUN_AWAKE_UNTIL=18:00
 check "... and moves learning's time with it, as bosun init does" grep -qx 'BOSUN_LEARN_AT="16:30"' "$SET_CFG/bosun.env"
 check "a refusal is never logged as an error (the watchdog alerts on those)" bash -c '! grep -rqE "BOSUN_FOO|bosun update is running|needs your password" "$1/logs" 2>/dev/null' _ "$SET_STATE"
+
+# A running keep-awake follows BOSUN_AWAKE_UNTIL (follow_keep_awake). caffeinate's stand-in lives for its -t
+# seconds as a process ps names caffeinate (a link to sleep, as the quit section's), keeping nothing awake. The
+# window is every day from an hour ago, so that now is in it at any hour.
+mkdir -p "$WORK/settings-caffeinate"
+ln -sf /bin/sleep "$WORK/settings-caffeinate/caffeinate"
+cat >"$HOME/.local/bin/caffeinate" <<EOF
+#!/bin/bash
+seconds=0
+while [ \$# -gt 0 ]; do
+  [ "\$1" = -t ] && seconds="\$2"
+  shift
+done
+exec "$WORK/settings-caffeinate/caffeinate" "\$seconds"
+EOF
+chmod +x "$HOME/.local/bin/caffeinate"
+set_keep_awake_pid() { cat "$SET_STATE/keep-awake-$(settings_session).pid" 2>/dev/null; }
+settings_session() { BOSUN_CONFIG_DIR="$SET_CFG" bash -c 'source "$1/lib/common.sh"; load_config; echo "$BOSUN_SESSION_NAME"' _ "$ROOT"; }
+is_caffeinate() { ps -p "$1" -o comm= 2>/dev/null | grep -q caffeinate; } # <pid>
+own_group() { [ "$(ps -o pgid= -p "$1" | tr -d ' ')" = "$1" ]; }          # <pid>: it leads a process group of its own
+settings_cmd set BOSUN_DAYS=MTWRFSU BOSUN_START_TIME="$(date -v-60M +%H:%M)" BOSUN_AWAKE_UNTIL="$(date -v+120M +%H:%M)" >/dev/null 2>&1
+BOSUN_CONFIG_DIR="$SET_CFG" BOSUN_STATE_DIR="$SET_STATE" BOSUN_LOG_DIR="$SET_STATE/logs" bash -c \
+  'source "$1/lib/common.sh"; load_config; hold_keep_awake 600' _ "$ROOT" >/dev/null 2>&1
+set_old_caffeinate="$(set_keep_awake_pid)"
+check "a keep-awake held (the stand-in caffeinate runs, as the morning starts it)" is_caffeinate "$set_old_caffeinate"
+check "... in a process group of its own" own_group "$set_old_caffeinate"
+# Run as the menu bar app runs it: in a process group of its own, which is killed whole once it is done (as on a
+# timeout); what the command started and left running must not be in it.
+python3 -I -c 'import os, signal, subprocess, sys
+child = subprocess.Popen(sys.argv[1:], process_group=0, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+status = child.wait()
+try:
+    os.killpg(child.pid, signal.SIGKILL)
+except ProcessLookupError:
+    pass
+sys.exit(status)' env BOSUN_CONFIG_DIR="$SET_CFG" BOSUN_STATE_DIR="$SET_STATE" BOSUN_LOG_DIR="$SET_STATE/logs" \
+  BOSUN_LAUNCHD_LABEL="$SET_LABEL" "$BOSUN" settings set BOSUN_AWAKE_UNTIL="$(date -v+180M +%H:%M)"
+set_status=$?
+set_new_caffeinate="$(set_keep_awake_pid)"
+check "set BOSUN_AWAKE_UNTIL three hours on, with a keep-awake held, succeeds" test "$set_status" = 0
+check "... and starts a new caffeinate, recorded in the pid file" bash -c '[ -n "$1" ] && [ "$1" != "$2" ]' _ "$set_new_caffeinate" "$set_old_caffeinate"
+check "... which ends where the new until does (about three hours: -t, from its command line)" bash -c 'left="$(ps -o args= -p "$1" | awk "{ print \$NF }")"; [ "$left" -gt 10000 ] && [ "$left" -le 10800 ]' _ "$set_new_caffeinate"
+check "... and outlived the command's process group, killed whole after it (the app's timeout)" is_caffeinate "$set_new_caffeinate"
+check "... being in a process group of its own" own_group "$set_new_caffeinate"
+check "... the old caffeinate ended, by its recorded pid" wait_for 10 bash -c '! ps -p "$1" >/dev/null 2>&1' _ "$set_old_caffeinate"
+check "... and the record bosun status reads names the new one" grep -q "\"pid\": $set_new_caffeinate}" "$SET_STATE/keep-awake-$(settings_session).json"
+check "set BOSUN_AWAKE_UNTIL to half an hour ago releases the keep-awake: now is outside every window" settings_exits 0 set BOSUN_AWAKE_UNTIL="$(date -v-30M +%H:%M)"
+check "... its caffeinate ended" wait_for 10 bash -c '! ps -p "$1" >/dev/null 2>&1' _ "$set_new_caffeinate"
+check "... and its files gone" bash -c '[ ! -e "$1/keep-awake-$2.pid" ] && [ ! -e "$1/keep-awake-$2.json" ]' _ "$SET_STATE" "$(settings_session)"
+kill "$set_old_caffeinate" "$set_new_caffeinate" 2>/dev/null # by their pids, in case a check above failed
 rm -f "$HOME"/Library/LaunchAgents/"$SET_LABEL"*.plist
 plain_fake launchctl 113
 plain_fake pmset 0
 plain_fake sudo 1
+plain_fake caffeinate 0
 
 section console "console (local server on a free port, fixture ledger)" covers 'libexec/bosun-console,libexec/bosun-kg,console/**,tests/fixtures/console/**,tests/fixtures/knowledge/**,lib/console_*.py'
 CONSOLE_STATE="$WORK/console-state"

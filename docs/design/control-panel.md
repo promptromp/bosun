@@ -228,6 +228,10 @@ The builder's calls on what the note left open, and the rulings made while build
   password.) `sudo -l` itself needs no password once any of your rules has `NOPASSWD` (sudoers' `listpw`), so the
   listing can pass where the command still needs one: `sudo -n pmset` then fails, as a failed `pmset` does. A
   failed `pmset` or reload puts `bosun.env` back from the backup the writer made.
+- **A moved keep-awake outlives a Save that timed out.** The new `caffeinate` that `settings set` starts when
+  `BOSUN_AWAKE_UNTIL` moves (`hold_keep_awake` in `lib/common.sh`, as the morning's) gets a process group of its
+  own, so the app, which kills the whole process group of a command that runs past its timeout, never ends the
+  keep-awake with it and leaves its pid file naming a dead process. It is ended by its recorded pid, as before.
 - **The Settings window is SwiftUI in the AppKit app** (`app/Sources/BosunMenu/SettingsWindow.swift`), its state
   and its Schedule draft in the core (`Settings.swift`, `SettingsSchedule.swift`), so a refused Save, a hand-off to
   Terminal and a reopen all show what bosun read, never an unsaved draft. The window reads bosun again each time it
