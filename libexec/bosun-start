@@ -37,7 +37,7 @@ done
 # Two starts at once (the morning job's and yours) would both build the windows, and the second, finding
 # half a session, add the ones the first had not made yet a second time.
 # BOSUN_WINDOWS_LOCK_WAIT_SECONDS is for tests.
-one_at_a_time windows "${BOSUN_WINDOWS_LOCK_WAIT_SECONDS:-180}" "another bosun start or refresh is setting up the windows, and did not finish in time" "$0" "$@"
+one_at_a_time windows "${BOSUN_WINDOWS_LOCK_WAIT_SECONDS:-180}" "another bosun start or refresh is setting up the windows, and did not finish in time"
 
 SESSION="$BOSUN_SESSION_NAME"
 # Under the lock, where a quit that took it first is seen and one that comes after waits for this start.

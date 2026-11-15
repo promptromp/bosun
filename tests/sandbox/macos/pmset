@@ -12,12 +12,19 @@ case "${1:-} ${2:-}" in
 	;;
 "repeat cancel") rm -f "$state" ;;
 "repeat wakeorpoweron")
-	# The days as real pmset prints them.
+	# The days as real pmset prints them (print_days_to_buf in Apple's pmset.m; lib/init_plan.py's pmset_days).
 	case "$3" in
 	MTWRFSU) days="every day" ;;
 	MTWRF) days="weekdays only" ;;
 	SU) days="weekends only" ;;
-	*) days="some days" ;;
+	M) days="Monday" ;;
+	T) days="Tuesday" ;;
+	W) days="Wednesday" ;;
+	R) days="Thursday" ;;
+	F) days="Friday" ;;
+	S) days="Saturday" ;;
+	U) days="Sunday" ;;
+	*) days="Some days" ;;
 	esac
 	hour=$((10#${4%%:*}))
 	rest="${4#*:}"

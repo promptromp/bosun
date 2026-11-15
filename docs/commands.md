@@ -63,10 +63,17 @@ bosun settings set BOSUN_UPDATE_CHANNEL=main --json
   new time); a change of `BOSUN_AWAKE_UNTIL` moves the end of a keep-awake that is held now, or releases it when
   now is outside every window.
 - **The wake**: when the days or the start time change and the Mac's repeating wake is bosun's, `set` asks for your
-  password first (`sudo -v`) and moves it with `sudo pmset repeat wakeorpoweron`. Without a terminal to ask in it is
-  refused unless `sudo -n -v` succeeds (it fails whenever a sudoers rule that matches needs a password, even where
-  one without would let `sudo pmset` run), and when sudo is cancelled or fails nothing is written. pmset keeps one
-  repeating event: another app's is left as it is, and said, unless `--replace-wake`. If pmset or the reload of the
+  password first (`sudo -v`) and moves it with `sudo pmset repeat wakeorpoweron`. Without a terminal to ask in it
+  asks sudoers first whether it lets that very `pmset` command run with no password (`sudo -n -l pmset repeat
+  wakeorpoweron <days> <time>`), so a `NOPASSWD` rule for just that command is enough, and is refused otherwise;
+  it then runs it with `sudo -n`, which never asks. When sudo is cancelled or refuses, nothing is written. `sudo -l`
+  needs no password as soon as one of your rules has `NOPASSWD` (sudoers' `listpw`), so it can say yes where the
+  command itself still needs one: `sudo -n pmset` then fails, and the put-back below undoes the write. pmset keeps one
+  repeating event: another app's is left as it is, and said, unless `--replace-wake`. The wake is bosun's only when
+  `pmset -g sched` shows exactly the one bosun sets: `wakepoweron`, at the start time plus
+  `BOSUN_WAKE_DELAY_MINUTES`, on `BOSUN_DAYS`. pmset names every day, weekdays, weekends and a single day, and
+  prints any other days only as "Some days": such a wake at bosun's minute counts as bosun's, since its days cannot
+  be read (another app's wake at that very minute would be taken for it). If pmset or the reload of the
   jobs fails, `bosun.env` is put back from the backup that write made (or removed, when the write made it) and the
   jobs reloaded again, so the file, the jobs and the wake stay together; it fails in one line that says so.
 - **One at a time**: `set` holds `bosun init`'s lock from the check of the values to its last step, so it is refused

@@ -432,6 +432,11 @@ class ScheduleTestCase(unittest.TestCase):
         self.assertEqual(out["sentence"], "bosun is running")
         self.assertTrue(out["schedule"]["in_hours"])
 
+    def test_resting_without_the_settings_names_no_start(self) -> None:
+        out = snap(SATURDAY, windows=GONE, gate=RESTING, awake=None)
+        self.assertEqual((out["level"], out["sentence"]), ("ok", "Resting: outside your hours"))
+        self.assertEqual(out["schedule"], {"in_hours": None, "next_start": None})
+
     def test_schedule_unknown_without_settings(self) -> None:
         out = snap(awake=None)
         self.assertEqual(out["schedule"], {"in_hours": None, "next_start": None})

@@ -149,7 +149,9 @@ item (⌘,), in a window titled "<App> Settings", with panes only when there are
     after 20:00"). A change that moves the wake (the days or the start time, while bosun sets a wake) runs `bosun
     settings set` in Terminal, which asks for an administrator first (`pmset` needs `sudo`) and writes nothing if
     that is cancelled or fails: `bosun.env`, the morning job and the wake stay as they were, together. As `bosun
-    init` does, it does not replace another app's repeating wake unless told to (`pmset` keeps one), and says so. A
+    init` does, it does not replace another app's repeating wake unless told to (`pmset` keeps one), and says so; a
+    wake is bosun's only when its type, time and days, as `pmset -g sched` prints them, are exactly the ones bosun
+    sets (`init_plan.is_our_wake`; days pmset prints only as "Some days" count by the minute alone). A
     change of `BOSUN_AWAKE_UNTIL` moves a running keep-awake's end too. The rest applies at once (bosun's jobs
     reloaded).
 - **Through bosun**: `bosun settings get --json` (each settable key: its value, its default, whether `bosun.env`
@@ -225,9 +227,16 @@ The builder's calls on what the note left open, and the rulings made while build
   default beside it), never the default as the value; the Settings window shows those as values it cannot show.
 - **A Save that moves bosun's wake** goes to Terminal (`bosun settings set` there asks for the password, `sudo -v`,
   and writes nothing when that fails); the window says to finish it there, and shows what bosun read before.
-  Without a terminal to ask in, `settings set` moves the wake only when `sudo -n -v` succeeds, and refuses
-  otherwise: that fails whenever a sudoers rule that matches needs a password, even where a rule without one would
-  let `sudo pmset` run. A failed `pmset` or reload puts `bosun.env` back from the backup the writer made.
+  Without a terminal to ask in, `settings set` moves the wake only when `sudo -n -l` says sudoers lets the very
+  `pmset` command it will run go with no password (a `NOPASSWD` rule for just that command is enough), and runs it
+  with `sudo -n`; it refuses otherwise. (It asked `sudo -n -v` before, which fails as soon as any rule needs a
+  password.) `sudo -l` itself needs no password once any of your rules has `NOPASSWD` (sudoers' `listpw`), so the
+  listing can pass where the command still needs one: `sudo -n pmset` then fails, as a failed `pmset` does. A
+  failed `pmset` or reload puts `bosun.env` back from the backup the writer made.
+- **A moved keep-awake outlives a Save that timed out.** The new `caffeinate` that `settings set` starts when
+  `BOSUN_AWAKE_UNTIL` moves (`hold_keep_awake` in `lib/common.sh`, as the morning's) gets a process group of its
+  own, so the app, which kills the whole process group of a command that runs past its timeout, never ends the
+  keep-awake with it and leaves its pid file naming a dead process. It is ended by its recorded pid, as before.
 - **The Settings window is SwiftUI in the AppKit app** (`app/Sources/BosunMenu/SettingsWindow.swift`), its state
   and its Schedule draft in the core (`Settings.swift`, `SettingsSchedule.swift`), so a refused Save, a hand-off to
   Terminal and a reopen all show what bosun read, never an unsaved draft. The window reads bosun again each time it

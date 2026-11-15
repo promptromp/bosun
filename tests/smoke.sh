@@ -1677,8 +1677,13 @@ wait_for 30 lock_taken "$BOSUN_STATE_DIR/windows.lock"
 check "a start while another sets up the windows waits, then gives up saying why" fails_with "another bosun start or refresh is setting up the windows" env BOSUN_WINDOWS_LOCK_WAIT_SECONDS=0 "$BOSUN" start
 check "... and so does a refresh" fails_with "another bosun start or refresh is setting up the windows" env BOSUN_WINDOWS_LOCK_WAIT_SECONDS=0 "$BOSUN" refresh
 check "... but not a dry run, which changes nothing" "$BOSUN" refresh --dry-run
+check "... exiting 75 (EX_TEMPFAIL: try again later)" bash -c 'BOSUN_WINDOWS_LOCK_WAIT_SECONDS=0 "$1" start >/dev/null 2>&1; [ $? -eq 75 ]' _ "$BOSUN"
 kill "$windows_holder"
 wait "$windows_holder" 2>/dev/null
+lock_free() { ! lock_taken "$1"; } # <lock file>
+check "the windows lock is free once the holder is gone, though the tmux server bosun start left runs on" lock_free "$BOSUN_STATE_DIR/windows.lock"
+check "a start under a parent that holds the windows lock goes on, and its refresh too (inherited, not waited for)" \
+  python3 "$ROOT/lib/run_locked.py" "$BOSUN_STATE_DIR/windows.lock" 0 busy -- env BOSUN_WINDOWS_LOCK_WAIT_SECONDS=0 "$BOSUN" start
 check "start --restart from inside bosun's tmux refuses: it would stop itself" fails_with "it would stop itself before starting again" env TMUX="/tmp/tmux-0/$SOCKET,1,0" "$BOSUN" start --restart
 check "a window whose agent is not installed says so, rather than becoming a plain shell" fails_with "its agent, $WORK/no-such-claude, is not installed for this window's shell" \
   bash -c 'cd "$1" && BOSUN_LAUNCH_DRY_RUN=0 BOSUN_CLAUDE_BIN="$2" "$3" launch alpha </dev/null' _ "$REPO_A" "$WORK/no-such-claude" "$BOSUN"
@@ -3361,8 +3366,11 @@ plain_fake launchctl 113 # the fake above; this section's alone
 
 section settings "settings (bosun settings get|set: bosun.env through init's writer, the jobs and the wake)" covers 'libexec/bosun-settings,lib/settings.py,lib/run_locked.py'
 # Its own config, state and launchd label, so what it writes and reloads is its alone; launchd has a job while it
-# has its plist, pmset's repeating event is what $SET_SCHED holds, and sudo -v fails while $WORK/sudo-fails is there,
-# pmset repeat while $WORK/settings-pmset-fails is, launchctl bootstrap while $WORK/settings-bootstrap-fails is.
+# has its plist, pmset's repeating event is what $SET_SCHED holds, pmset repeat fails while
+# $WORK/settings-pmset-fails is there, launchctl bootstrap while $WORK/settings-bootstrap-fails is. sudo is sudoers
+# in small: while $WORK/sudo-fails is there every rule needs a password (sudo -v and sudo -n fail), but for pmset
+# while $WORK/sudo-allows-pmset is (a NOPASSWD rule for it); $WORK/sudo-lists-only lets sudo -l say yes to any
+# command (sudoers' listpw: another rule has NOPASSWD) while running one still needs the password.
 SET_CFG="$WORK/settings-config"
 SET_STATE="$WORK/settings-state"
 SET_LABEL="com.bosun.smoke-settings"
@@ -3389,7 +3397,12 @@ cat >"$HOME/.local/bin/sudo" <<EOF
 #!/bin/bash
 echo "sudo \$*" >>"$SET_LOG"
 [ "\$1" = -n ] && shift
-if [ "\$1" = -v ]; then [ ! -e "$WORK/sudo-fails" ]; exit; fi
+needs_password() { [ -e "$WORK/sudo-fails" ] && ! { [ "\$1" = pmset ] && [ -e "$WORK/sudo-allows-pmset" ]; }; }
+case "\$1" in
+  -v) [ ! -e "$WORK/sudo-fails" ]; exit ;;
+  -l) ! needs_password "\$2" || [ -e "$WORK/sudo-lists-only" ]; exit ;;
+esac
+if needs_password "\$1"; then echo "sudo: a password is required" >&2; exit 1; fi
 exec "\$@"
 EOF
 chmod +x "$HOME/.local/bin/launchctl" "$HOME/.local/bin/pmset" "$HOME/.local/bin/sudo"
@@ -3426,7 +3439,7 @@ settings_cmd set BOSUN_START_TIME=08:00 >/dev/null 2>&1
 pmset_sched "wakepoweron at 8:01AM weekdays only"
 : >"$SET_LOG"
 check "with bosun's wake in pmset, set BOSUN_START_TIME=09:00 succeeds" settings_exits 0 set BOSUN_START_TIME=09:00
-check "... asking sudo first, then moving the wake with sudo pmset" bash -c 'grep -q "^sudo -n -v" "$1" && grep -qx "sudo pmset repeat wakeorpoweron MTWRF 09:01:00" "$1" && [ "$(grep -n "^sudo -n -v" "$1" | head -1 | cut -d: -f1)" -lt "$(grep -n "^sudo pmset" "$1" | cut -d: -f1)" ]' _ "$SET_LOG"
+check "... asking sudo first about the very pmset command, then moving the wake with it, sudo -n" bash -c 'grep -qx "sudo -n -l pmset repeat wakeorpoweron MTWRF 09:01:00" "$1" && grep -qx "sudo -n pmset repeat wakeorpoweron MTWRF 09:01:00" "$1" && [ "$(grep -n "^sudo -n -l" "$1" | head -1 | cut -d: -f1)" -lt "$(grep -n "^sudo -n pmset" "$1" | cut -d: -f1)" ]' _ "$SET_LOG"
 
 # A step after the write that fails puts bosun.env back from the backup the write made, and the jobs with it.
 pmset_sched "wakepoweron at 9:01AM weekdays only"
@@ -3454,21 +3467,34 @@ touch "$WORK/settings-bootstrap-fails"
 check "when launchctl bootstrap fails in the reload, set fails (exit 1)" settings_exits 1 set BOSUN_START_TIME=10:00
 check "... in one line naming the reload, and bosun.env is byte for byte as before" put_back_said "could not reload bosun's launchd jobs (launchctl bootstrap failed for"
 check "... the morning job's plist is back at 09:00 (the put-back's reload writes it before launchd refuses it again)" morning_at_nine
-check "... and the wake was never moved" bash -c '! grep -q "pmset repeat" "$1"' _ "$SET_LOG"
+check "... and the wake was never moved (sudo was asked, pmset never ran)" bash -c '! grep -q "^pmset repeat" "$1"' _ "$SET_LOG"
 rm -f "$WORK/settings-bootstrap-fails"
 settings_cmd set BOSUN_START_TIME=09:00 >/dev/null 2>&1 # the jobs loaded again
 touch "$WORK/sudo-fails"
-check "when sudo -v fails, set is refused" fails_with "moving the Mac's wake needs your password: run this in Terminal" settings_cmd set BOSUN_START_TIME=10:00
+check "when sudo needs a password for pmset, set is refused" fails_with "moving the Mac's wake needs your password: run this in Terminal" settings_cmd set BOSUN_START_TIME=10:00
 check "... and bosun.env is unchanged" cmp -s "$SET_CFG/bosun.env" "$WORK/settings-before.env"
 check "... as an object with --json too, exit 1" settings_exits 1 set BOSUN_START_TIME=10:00 --json
 check "... that says why" settings_has 'd == {"contract": 1, "error": "moving the Mac'"'"'s wake needs your password: run this in Terminal"}'
-rm -f "$WORK/sudo-fails"
+touch "$WORK/sudo-lists-only"
+: >"$SET_LOG"
+check "when sudo -l allows pmset but running it needs a password, set fails (exit 1)" settings_exits 1 set BOSUN_START_TIME=10:00
+check "... in one line saying bosun.env and the jobs were put back, and bosun.env is byte for byte as before" put_back_said "pmset did not take the new wake (pmset failed), so bosun.env and the jobs were put back as they were"
+check "... having run pmset only through sudo -n, which never asks" bash -c 'grep -qx "sudo -n pmset repeat wakeorpoweron MTWRF 10:01:00" "$1" && ! grep -q "^sudo pmset" "$1"' _ "$SET_LOG"
+check "... and the morning job is back at 09:00" morning_at_nine
+rm -f "$WORK/sudo-lists-only"
+touch "$WORK/sudo-allows-pmset"
+: >"$SET_LOG"
+check "with a NOPASSWD rule for just pmset, where sudo -v needs a password, set moves the wake" settings_exits 0 set BOSUN_START_TIME=10:00
+check "... with sudo -n pmset, after the write" bash -c 'grep -qx "sudo -n pmset repeat wakeorpoweron MTWRF 10:01:00" "$1" && ! grep -q "^sudo -n -v" "$1" && grep -qx "BOSUN_START_TIME=\"10:00\"" "$2"' _ "$SET_LOG" "$SET_CFG/bosun.env"
+rm -f "$WORK/sudo-allows-pmset" "$WORK/sudo-fails"
+pmset_sched "wakepoweron at 10:01AM weekdays only"
+settings_cmd set BOSUN_START_TIME=09:00 >/dev/null 2>&1
 
 pmset_sched "wakepoweron at 6:30AM every day"
 : >"$SET_LOG"
 check "with another app's wake, set --json changes bosun.env" settings_exits 0 set BOSUN_DAYS=MTWRFS --json
 check "... and says the other wake was left as it is, which pmset never touched" bash -c 'python3 -c "import json, sys; d = json.load(open(sys.argv[1])); sys.exit(0 if d[\"changed\"] == {\"BOSUN_DAYS\": [\"MTWRF\", \"MTWRFS\"]} and \"left as it is\" in d[\"notes\"][0] else 1)" "$1" && ! grep -q "pmset repeat" "$2"' _ "$WORK/settings.out" "$SET_LOG"
-replaced_wake() { settings_cmd set BOSUN_DAYS=MTWRFSU --replace-wake >/dev/null 2>&1 && grep -qx "sudo pmset repeat wakeorpoweron MTWRFSU 09:01:00" "$SET_LOG"; }
+replaced_wake() { settings_cmd set BOSUN_DAYS=MTWRFSU --replace-wake >/dev/null 2>&1 && grep -qx "sudo -n pmset repeat wakeorpoweron MTWRFSU 09:01:00" "$SET_LOG"; }
 check "... and with --replace-wake it is replaced" replaced_wake
 rm -f "$SET_SCHED"
 
@@ -3519,10 +3545,61 @@ check "... writes it and reloads no job" bash -c 'grep -qx "BOSUN_UPDATE_CHANNEL
 check "set BOSUN_AWAKE_UNTIL=18:00 succeeds" settings_exits 0 set BOSUN_AWAKE_UNTIL=18:00
 check "... and moves learning's time with it, as bosun init does" grep -qx 'BOSUN_LEARN_AT="16:30"' "$SET_CFG/bosun.env"
 check "a refusal is never logged as an error (the watchdog alerts on those)" bash -c '! grep -rqE "BOSUN_FOO|bosun update is running|needs your password" "$1/logs" 2>/dev/null' _ "$SET_STATE"
+
+# A running keep-awake follows BOSUN_AWAKE_UNTIL (follow_keep_awake). caffeinate's stand-in lives for its -t
+# seconds as a process ps names caffeinate (a link to sleep, as the quit section's), keeping nothing awake. The
+# window is every day from an hour ago, so that now is in it at any hour.
+mkdir -p "$WORK/settings-caffeinate"
+ln -sf /bin/sleep "$WORK/settings-caffeinate/caffeinate"
+cat >"$HOME/.local/bin/caffeinate" <<EOF
+#!/bin/bash
+seconds=0
+while [ \$# -gt 0 ]; do
+  [ "\$1" = -t ] && seconds="\$2"
+  shift
+done
+exec "$WORK/settings-caffeinate/caffeinate" "\$seconds"
+EOF
+chmod +x "$HOME/.local/bin/caffeinate"
+set_keep_awake_pid() { cat "$SET_STATE/keep-awake-$(settings_session).pid" 2>/dev/null; }
+settings_session() { BOSUN_CONFIG_DIR="$SET_CFG" bash -c 'source "$1/lib/common.sh"; load_config; echo "$BOSUN_SESSION_NAME"' _ "$ROOT"; }
+is_caffeinate() { ps -p "$1" -o comm= 2>/dev/null | grep -q caffeinate; } # <pid>
+own_group() { [ "$(ps -o pgid= -p "$1" | tr -d ' ')" = "$1" ]; }          # <pid>: it leads a process group of its own
+settings_cmd set BOSUN_DAYS=MTWRFSU BOSUN_START_TIME="$(date -v-60M +%H:%M)" BOSUN_AWAKE_UNTIL="$(date -v+120M +%H:%M)" >/dev/null 2>&1
+BOSUN_CONFIG_DIR="$SET_CFG" BOSUN_STATE_DIR="$SET_STATE" BOSUN_LOG_DIR="$SET_STATE/logs" bash -c \
+  'source "$1/lib/common.sh"; load_config; hold_keep_awake 600' _ "$ROOT" >/dev/null 2>&1
+set_old_caffeinate="$(set_keep_awake_pid)"
+check "a keep-awake held (the stand-in caffeinate runs, as the morning starts it)" is_caffeinate "$set_old_caffeinate"
+check "... in a process group of its own" own_group "$set_old_caffeinate"
+# Run as the menu bar app runs it: in a process group of its own, which is killed whole once it is done (as on a
+# timeout); what the command started and left running must not be in it.
+python3 -I -c 'import os, signal, subprocess, sys
+child = subprocess.Popen(sys.argv[1:], process_group=0, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+status = child.wait()
+try:
+    os.killpg(child.pid, signal.SIGKILL)
+except ProcessLookupError:
+    pass
+sys.exit(status)' env BOSUN_CONFIG_DIR="$SET_CFG" BOSUN_STATE_DIR="$SET_STATE" BOSUN_LOG_DIR="$SET_STATE/logs" \
+  BOSUN_LAUNCHD_LABEL="$SET_LABEL" "$BOSUN" settings set BOSUN_AWAKE_UNTIL="$(date -v+180M +%H:%M)"
+set_status=$?
+set_new_caffeinate="$(set_keep_awake_pid)"
+check "set BOSUN_AWAKE_UNTIL three hours on, with a keep-awake held, succeeds" test "$set_status" = 0
+check "... and starts a new caffeinate, recorded in the pid file" bash -c '[ -n "$1" ] && [ "$1" != "$2" ]' _ "$set_new_caffeinate" "$set_old_caffeinate"
+check "... which ends where the new until does (about three hours: -t, from its command line)" bash -c 'left="$(ps -o args= -p "$1" | awk "{ print \$NF }")"; [ "$left" -gt 10000 ] && [ "$left" -le 10800 ]' _ "$set_new_caffeinate"
+check "... and outlived the command's process group, killed whole after it (the app's timeout)" is_caffeinate "$set_new_caffeinate"
+check "... being in a process group of its own" own_group "$set_new_caffeinate"
+check "... the old caffeinate ended, by its recorded pid" wait_for 10 bash -c '! ps -p "$1" >/dev/null 2>&1' _ "$set_old_caffeinate"
+check "... and the record bosun status reads names the new one" grep -q "\"pid\": $set_new_caffeinate}" "$SET_STATE/keep-awake-$(settings_session).json"
+check "set BOSUN_AWAKE_UNTIL to half an hour ago releases the keep-awake: now is outside every window" settings_exits 0 set BOSUN_AWAKE_UNTIL="$(date -v-30M +%H:%M)"
+check "... its caffeinate ended" wait_for 10 bash -c '! ps -p "$1" >/dev/null 2>&1' _ "$set_new_caffeinate"
+check "... and its files gone" bash -c '[ ! -e "$1/keep-awake-$2.pid" ] && [ ! -e "$1/keep-awake-$2.json" ]' _ "$SET_STATE" "$(settings_session)"
+kill "$set_old_caffeinate" "$set_new_caffeinate" 2>/dev/null # by their pids, in case a check above failed
 rm -f "$HOME"/Library/LaunchAgents/"$SET_LABEL"*.plist
 plain_fake launchctl 113
 plain_fake pmset 0
 plain_fake sudo 1
+plain_fake caffeinate 0
 
 section console "console (local server on a free port, fixture ledger)" covers 'libexec/bosun-console,libexec/bosun-kg,console/**,tests/fixtures/console/**,tests/fixtures/knowledge/**,lib/console_*.py'
 CONSOLE_STATE="$WORK/console-state"
@@ -4393,10 +4470,14 @@ LATE
   cat >"$WORK/late-agent" <<'LATE'
 #!/bin/bash
 trap 'python3 "$1/late-hook.py" "$2" "$3" & (trap "" HUP TERM; exec sleep 60) & echo $! >"$4"; sleep 1; exit 0' HUP TERM
+: >"$1/late-ready"
 while :; do sleep 1; done
 LATE
   chmod +x "$WORK/late-agent"
+  rm -f "$WORK/late-ready"
   tmux -L "$SOCKET" new-session -d -s un-test -n w -- "$WORK/late-agent" "$WORK" "$WORK/un-state" "$WORK/late-written" "$WORK/late-helper"
+  # tmux returns before the agent has set its trap: a stop that came first would end it with no hook to wait for.
+  wait_for 10 test -e "$WORK/late-ready"
   # Each line uninstall says, with when it said it.
   PYTHONUNBUFFERED=1 un --yes 2>&1 |
     python3 -u -c 'import sys, time

@@ -24,11 +24,11 @@ from pathlib import Path
 
 import awake
 import quit_state
+import stop_marker
 
 
 RELOAD_SECONDS = 120  # a reload marker younger than this makes the run a reload of the jobs, not a login
-RELOAD_MARKER = "login-reload"  # in the state folder; the job's reload writes it (STAMP)
-STAMP = "%Y-%m-%d %H:%M:%S"  # the stop marker's and the reload marker's time, as `date '+%F %T'` writes it
+RELOAD_MARKER = "login-reload"  # in the state folder; the job's reload writes it (stop_marker.STAMP)
 SKIP = 3  # the exit status of `decide` for "do not start"
 STARTING = "starting bosun: you logged in during your hours"
 
@@ -107,13 +107,6 @@ def decide(facts: LoginFacts) -> tuple[bool, str]:
     return True, STARTING
 
 
-def _read_stamp(path: Path) -> datetime | None:
-    try:
-        return datetime.strptime(path.read_text().strip(), STAMP)
-    except (OSError, ValueError):
-        return None
-
-
 def main(argv: Sequence[str], now: datetime | None = None) -> int:
     parser = awake.OneLineParser(prog="login_start.py", allow_abbrev=False)
     parser.add_argument("command", choices=("decide",))
@@ -136,9 +129,9 @@ def main(argv: Sequence[str], now: datetime | None = None) -> int:
         window=window,
         now=now or datetime.now(),
         quit=quit_state.read(state),
-        stopped_at=_read_stamp(state / f"stopped-{args.session}"),
+        stopped_at=stop_marker.read(state, args.session),
         running=args.running == "1",
-        reloaded_at=_read_stamp(marker),
+        reloaded_at=stop_marker.read_stamp(marker),
     )
     marker.unlink(missing_ok=True)
     start, line = decide(facts)

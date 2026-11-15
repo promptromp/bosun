@@ -43,9 +43,11 @@ of truth, so don't copy rules into this file.
   `launchd-learn.plist`, `launchd-console.plist`, `launchd-now.plist`, `launchd-login.plist` and `launchd-app.plist`:
   one label helper each, such as `now_label`, listed once in `job_labels`; the login job (`login_label`, rendered only
   with `BOSUN_START_AT_LOGIN=1`) runs `bosun morning --at-login`, whose decision is `lib/login_start.py`, and a reload
-  leaves it `login_reload_marker` so that the run knows it is no login), and `one_at_a_time` (`lib/run_locked.py`: the rest of a shell command run
-  holding a lock that what it starts inherits; `start`, `refresh` and `init` use it; `lock_here` holds one in the
-  shell itself, for `settings set`, whose refusal under `--json` is an object). `lib/setup-helpers.sh`: the helpers a site's `setup.sh` calls
+  leaves it `login_reload_marker` so that the run knows it is no login), and `lock_here` (`lib/run_locked.py`: a lock
+  the shell itself holds on fd 9 until it exits, which what it starts inherits, so a nested command finds it held;
+  `settings set` uses it, whose refusal under `--json` is an object) with `one_at_a_time` on top of it (the same, saying
+  why and exiting 75 while another holds it; `start`, `refresh` and `init` use it). `lib/stop_marker.py` reads what
+  `bosun stop` leaves (`stop_marker`), for the login start and the watchdog. `lib/setup-helpers.sh`: the helpers a site's `setup.sh` calls
   (`run_step`, `ensure_aws_sso`, `ensure_claude_login`). `lib/ledger.py`: item kinds, id formats, Slack classes, state
   machines and the states that end a hand-over to a repo session (`work_done`), plus delegations
   and reports, outreach (what we wait on from other people: its channels table, reply

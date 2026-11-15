@@ -605,20 +605,12 @@ tmux_cmd() {
   fi
 }
 
-# One at a time: the rest of this command runs holding lock <name> (lib/run_locked.py), waiting up to
-# <wait> seconds for the one holding it; past that it stops with <message>, exit 75. What this command
-# starts holds it too, so a nested one goes on. Call it after load_config, passing "$0" "$@".
-one_at_a_time() { # <name> <wait seconds> <message> "$0" "$@"
-  local lock="$BOSUN_STATE_DIR/$1.lock"
-  python3 "$BOSUN_ROOT/lib/run_locked.py" --held "$lock" && return 0
-  exec python3 "$BOSUN_ROOT/lib/run_locked.py" "$lock" "$2" "$3" -- "${@:4}"
-}
-
-# One at a time, for a command that must not start again to hold the lock (`settings set`, whose refusal under
-# --json is an object): this shell holds lock <name> until it exits (lib/run_locked.py --take on LOCK_FD, 9),
-# waiting up to <wait> seconds for the one holding it, and what it starts holds it too, so a long-lived child
-# gets 9>&- (hold_keep_awake's caffeinate). Held already (a parent's), it goes on. Fails, saying nothing, while
-# another holds it: the caller says why. Call it after load_config.
+# One at a time: this shell holds lock <name> until it exits (lib/run_locked.py --take on LOCK_FD, 9), waiting
+# up to <wait> seconds for the one holding it, and what it starts holds it too (the lock belongs to the open file,
+# which children inherit), so a nested command finds it held and goes on, and a long-lived child gets 9>&- (tmux_cmd,
+# hold_keep_awake's caffeinate). Held already (a parent's), it goes on. Fails, saying nothing, while another holds
+# it: the caller says why (`settings set`, whose refusal under --json is an object), or one_at_a_time does. Call
+# it after load_config, which makes the state folder.
 lock_here() { # <name> <wait seconds>
   local lock="$BOSUN_STATE_DIR/$1.lock"
   python3 "$BOSUN_ROOT/lib/run_locked.py" --held "$lock" && return 0
@@ -626,6 +618,15 @@ lock_here() { # <name> <wait seconds>
   python3 "$BOSUN_ROOT/lib/run_locked.py" --take "$lock" "$2" && return 0
   exec 9>&-
   return 1
+}
+
+# lock_here for a command that stops when it cannot have the lock: the rest of this command runs holding lock
+# <name>, waiting up to <wait> seconds; past that it says "bosun: <message>" on stderr and exits 75 (EX_TEMPFAIL,
+# run_locked.py's BUSY). `start`, `refresh` and `init`. Call it after load_config.
+one_at_a_time() { # <name> <wait seconds> <message>
+  lock_here "$1" "$2" && return 0
+  echo "bosun: $3" >&2
+  exit 75
 }
 
 # The orchestrator's policy: orchestrator/policy.md, then the site's $BOSUN_CONFIG_DIR/policy.md
@@ -672,8 +673,12 @@ record_keep_awake() { # <caffeinate pid> <seconds>
 # Hold the keep-awake for <seconds> (> 0): a full wake, the old caffeinate ended by its recorded pid (only
 # after `ps` says it is a caffeinate), a new one, and its pid file and record. `morning` works out the
 # seconds and handles a dry run; this uses nothing of any command's own.
+# The new caffeinate gets a process group of its own (job control on, around the `&` only; macOS has no setsid
+# command): it outlives the command that started it, and whoever ends that command's whole group (the menu bar
+# app does, when `bosun settings set` runs past its timeout) must not end the keep-awake with it. launchd's
+# jobs say AbandonProcessGroup for the same reason; release_keep_awake ends it by its recorded pid.
 hold_keep_awake() { # <seconds>
-  local seconds="$1" pidfile old_pid pid
+  local seconds="$1" pidfile old_pid pid job_control=0
   pidfile="$(keep_awake_pidfile)"
   # Declaring user activity turns a scheduled (possibly dark) wake into a full wake.
   caffeinate -u -t 2
@@ -682,9 +687,13 @@ hold_keep_awake() { # <seconds>
     kill "$old_pid"
   fi
   # -i: no idle sleep; -s: no system sleep while on AC power.
-  # 9>&-: it outlives the command, and must not keep a lock the command holds (lock_here, one_at_a_time)
-  nohup caffeinate -i -s -t "$seconds" >/dev/null 2>&1 9>&- &
+  # 9>&-: it outlives the command, and must not keep a lock the command holds (lock_here, one_at_a_time).
+  # </dev/null: with job control on, bash no longer gives a background job /dev/null for its input itself.
+  case $- in *m*) job_control=1 ;; esac
+  set -m
+  nohup caffeinate -i -s -t "$seconds" </dev/null >/dev/null 2>&1 9>&- &
   pid=$!
+  [ "$job_control" = 1 ] || set +m
   echo "$pid" >"$pidfile"
   record_keep_awake "$pid" "$seconds"
   log "holding keep-awake for $((seconds / 60)) minutes (caffeinate pid $pid)"
@@ -1748,11 +1757,19 @@ repo_mask_filter() { # <json-key, or "" for the first field>
 
 # The Mac's repeating wake: just after the job time, since launchd runs a calendar job missed during sleep as
 # soon as the Mac wakes, so the job starts within seconds of the wake and the Mac has no chance to doze off
-# first. `set_wake` sets it with sudo; `set_wake print` only says the command to run once.
-set_wake() { # [print]
-  local wake_time wake_cmd existing_repeat
-  wake_time="$(shift_time "$BOSUN_START_TIME" "$BOSUN_WAKE_DELAY_MINUTES"):00"
-  wake_cmd=(sudo pmset repeat wakeorpoweron "$BOSUN_DAYS" "$wake_time")
+# first. wake_args_for puts pmset's arguments for it in wake_args, for <days> and <start> (the config's when not
+# given), so that what `bosun settings set` asks sudo about before it writes is what set_wake then runs.
+wake_args_for() { # [days] [start HH:MM]
+  wake_args=(repeat wakeorpoweron "${1:-$BOSUN_DAYS}" "$(shift_time "${2:-$BOSUN_START_TIME}" "$BOSUN_WAKE_DELAY_MINUTES"):00")
+}
+
+# `set_wake` sets the wake with sudo; `set_wake print` only says the command to run once; `set_wake no-prompt`
+# runs sudo -n, which fails at once instead of asking for a password (with no terminal to ask in).
+set_wake() { # [print|no-prompt]
+  local wake_cmd existing_repeat
+  wake_args_for
+  wake_cmd=(sudo pmset "${wake_args[@]}")
+  [ "${1:-}" = no-prompt ] && wake_cmd=(sudo -n pmset "${wake_args[@]}")
   existing_repeat="$(pmset -g sched | sed -n '/Repeating power events/,/^[A-Z]/p' | grep -iE 'wake|power' || true)"
   [ -n "$existing_repeat" ] && log "note: pmset already has a repeating event (pmset keeps only one):$existing_repeat"
   if [ "${1:-}" = "print" ]; then
