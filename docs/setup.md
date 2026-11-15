@@ -51,6 +51,8 @@ After the pipe, `sh -s -- --dry-run` says what it would do and does nothing, and
 asks nothing: it takes the recommended setup, or goes ahead with the update. On a first install that
 setup has no repo windows and gives the orchestrator no connectors, since nobody chose them, and its last
 line says so: run `bosun init` to add them, or name them in a file with `bosun init --answers` (below).
+It adds no menu bar app, which would open at login without anyone having said yes, but it does start
+bosun when you log in during your hours.
 Run again, it keeps what your config says. `BOSUN_DIR`, `BOSUN_REPO` and `BOSUN_BRANCH` override where it
 goes and what it gets; on an install that is already there, the defaults are what it came from, and a
 `BOSUN_REPO` given then is kept for the updates after it, and so is a `BOSUN_BRANCH` on the `main` channel (an install made with a branch is on it). On a releases install a branch given later is not followed until `BOSUN_UPDATE_CHANNEL="main"` is set.

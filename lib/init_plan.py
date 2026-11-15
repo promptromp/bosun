@@ -544,7 +544,8 @@ def first_run(facts: Facts) -> bool:
 def unattended(facts: Facts, recommended: Answers) -> Answers:
     """`--unattended` (get.sh's): on a first run the recommendation without what nobody chose, no repo
     windows (unless sessions.yml already lists some), no connectors and no menu bar app (it opens an app
-    at login: someone should say yes); on a re-run the recommendation."""
+    at login: someone should say yes), but with the start at login, which opens nothing and is what an
+    unattended install is for; on a re-run the recommendation."""
     if not first_run(facts):
         return recommended
     repos = recommended.repos if SESSIONS_FILE in facts.files else ()

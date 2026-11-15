@@ -507,6 +507,14 @@ class PlanTest(unittest.TestCase):
         rerun = self.configured(Answers(menu_app=True))
         self.assertTrue(init_plan.unattended(rerun, init_plan.recommend(rerun)).menu_app)
 
+    def test_unattended_first_run_starts_at_login(self) -> None:
+        # Starting during the hours is what an unattended install is for, though it adds no menu bar app.
+        the_facts = facts(repos=(use("api", 400),))
+        unattended = init_plan.unattended(the_facts, init_plan.recommend(the_facts))
+        self.assertTrue(unattended.start_at_login)
+        self.assertFalse(unattended.menu_app)
+        self.assertIn('BOSUN_START_AT_LOGIN="1"', init_plan.render_env(unattended))
+
     def test_unattended_keeps_windows_a_sessions_file_already_lists(self) -> None:
         listed = ({"name": "api", "dir": f"{HOME}/d/api"},)
         the_facts = facts(files={"sessions.yml": "..."}, sessions=listed)
