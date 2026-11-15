@@ -109,20 +109,27 @@ prepare() {
   [ "$AGENT" = "codex" ] && check "Codex installs" brew install codex
 }
 
-first_run_screens() { # as a person goes through them: Return on each, which the last of them ends
-  tmux -L person new-session -d -s first -x 110 -y 40 -c "$HOME" claude
-  for _ in 1 2 3; do
-    sleep 6
-    tmux -L person send-keys -t first Enter 2>/dev/null
+onboarded() { jq -e ".$1 == true" "$HOME/.claude.json" >/dev/null 2>&1; } # <flag in ~/.claude.json>
+
+# A screen as a person goes through it: Return, every few seconds, until Claude Code records it as done (<flag> in
+# ~/.claude.json), for up to 90 seconds; a first start can take a while, more so on a clone with its window.
+through_screen() { # <session> <flag> <claude args...>
+  local session="$1" flag="$2" deadline=$((SECONDS + 90))
+  shift 2
+  tmux -L person new-session -d -s "$session" -x 110 -y 40 -c "$HOME" "$@"
+  until onboarded "$flag" || [ "$SECONDS" -ge "$deadline" ]; do
+    sleep 4
+    tmux -L person send-keys -t "$session" Enter 2>/dev/null
   done
   sleep 2
   tmux -L person kill-server 2>/dev/null
+  onboarded "$flag"
+}
+
+first_run_screens() { # as a person goes through them: Return on each, until each is recorded as done
+  through_screen first hasCompletedOnboarding claude
   # Then Claude in Chrome's screen, which windows started with --chrome show once (Enter confirms it).
-  tmux -L person new-session -d -s chrome -x 110 -y 40 -c "$HOME" claude --chrome
-  sleep 8
-  tmux -L person send-keys -t chrome Enter 2>/dev/null
-  sleep 3
-  tmux -L person kill-server 2>/dev/null
+  through_screen chrome hasCompletedClaudeInChromeOnboarding claude --chrome
 }
 
 install_it() {
@@ -874,7 +881,7 @@ case "$STEP" in
       echo "ready is for claude and codex: agy needs a person to sign in" >&2
       exit 2
     }
-    ready "${3:?release or checkout}" "${4:?the model}" "${5:?the get.sh URL}"
+    ready "${3:?release or checkout}" "${4:?the model}" "${5:?the get.sh URL}" || failed=$((failed + 1))
     ;;
   login)
     [ "$AGENT" = "agy" ] || {

@@ -1,7 +1,7 @@
 #!/bin/bash
 # Usage: tests/sandbox/mac.sh setup | run [--from-nothing] | work [--base <git ref>]
-#        | app [--from build|release] | live [claude|codex|agy] | shell | try [--from release|checkout] [codex]
-#        | clean
+#        | app [--from build|release] | live [claude|codex|agy] | shell
+#        | try [--from release|checkout] [--run <script>] [codex] | clean
 #        (through tests/sandbox.sh mac)
 #
 # A real, throwaway Mac: macOS in a Tart VM on this machine, for what the Docker sandbox cannot show.
@@ -38,7 +38,9 @@
 #           key from the Keychain as its apiKeyHelper (as for live; the OpenAI key for codex), bosun installed
 #           unattended from the release (--from checkout: this checkout), the exporter repo as its window, the
 #           menu bar app (from the release), and started. Its agents use BOSUN_SANDBOX_TRY_MODEL (sonnet): the
-#           key is billed per request for as long as bosun runs in it, until you leave the shell
+#           key is billed per request for as long as bosun runs in it, until you leave the shell. --run <script>:
+#           instead of your shell, the script runs in the clone (zsh, its output here, masked), and the clone is
+#           deleted when it ends: bosun with the real agents, set up and checked with no one at it
 #   clean   delete the clones and base images (the pulled image stays: `tart prune` removes it)
 # Needs Tart: brew install openai/tools/tart. Guide: docs/development.md.
 set -uo pipefail
@@ -423,16 +425,21 @@ person_shell() {                 # <welcome>
 
 # `shell` with bosun set up, running and signed in (see the header). The keys go in as for live: through a pipe,
 # into a file only the clone's user can read, and the clone is deleted when you leave.
-try() { # [--from release|checkout] [claude|codex]
-  local from=release agent=claude repo model="${BOSUN_SANDBOX_TRY_MODEL:-sonnet}"
+try() { # [--from release|checkout] [--run <script>] [claude|codex]
+  local from=release agent=claude repo model="${BOSUN_SANDBOX_TRY_MODEL:-sonnet}" script=""
   while [ $# -gt 0 ]; do
     case "$1" in
       --from)
         from="${2:-}"
         shift
         ;;
+      --run)
+        script="${2:-}"
+        [ -f "$script" ] || die "--run takes a script file"
+        shift
+        ;;
       claude | codex) agent="$1" ;;
-      *) die "unknown '$1': try [--from release|checkout] [claude|codex]" ;;
+      *) die "unknown '$1': try [--from release|checkout] [--run <script>] [claude|codex]" ;;
     esac
     shift
   done
@@ -445,6 +452,11 @@ try() { # [--from release|checkout] [claude|codex]
   keys_into_vm "$agent"
   in_vm_masked ready "$agent" "$from" "$model" "https://raw.githubusercontent.com/$repo/main/get.sh" ||
     die "setting bosun up failed"
+  if [ -n "$script" ]; then
+    say "running $script in the clone"
+    in_vm "$CLONE" "zsh -l -s" <"$script" 2>&1 | sed -l -E -e "$KEY_SHAPE" -e "$TOKEN_SHAPE"
+    return "${PIPESTATUS[0]}"
+  fi
   person_shell "$(
     cat <<WELCOME
 

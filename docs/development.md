@@ -512,6 +512,7 @@ tests/sandbox.sh mac try                          # bosun from the published rel
 tests/sandbox.sh mac try --from checkout          # this checkout instead
 tests/sandbox.sh mac try codex                    # repo windows on Codex (and the OpenAI key)
 BOSUN_SANDBOX_TRY_MODEL=opus tests/sandbox.sh mac try
+tests/sandbox.sh mac try --run checks.sh          # no shell: your script runs in the clone, which then goes
 ```
 
 It runs `live`'s first step in the clone (the exporter repo, and the lines the installer prints for what is
@@ -521,6 +522,10 @@ app version may not be published) and starts bosun. Its agents use `BOSUN_SANDBO
 than bosun's defaults, the largest models, because the key is billed per request for as long as bosun runs:
 leaving the shell deletes the clone, and `bosun stop` in it stops the spending sooner. With a key, Claude Code
 has no Remote Control (it needs a claude.ai login).
+
+With `--run <script>` nobody needs to be there: the script runs in the clone (zsh, with bosun on its path), its
+output comes back with anything shaped like a key masked, and the clone is deleted when it ends, so a change can be
+tried against the real agents with one command.
 
 **The keys.** It reads two API keys from your Keychain, one for Anthropic, and for `live codex` one for OpenAI
 (`live agy` needs only the Anthropic one; the sign-in is its own).
