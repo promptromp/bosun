@@ -259,6 +259,8 @@ class TextCommandTest(unittest.TestCase):
             'bosun kg confirm f-3k9x2a --from-user --quote "$(id)"',
             'bosun kg reject f-3k9x2a --from-user --quote "`id`"',
             'bosun kg batch apply "confirm all" --from-user --quote "$(id)"',
+            'bosun kg add-entity repo/x --name "x" --summary "$(cat f)"',
+            "bosun kg add-entity repo/x --alias `id`",
             "/Users/a/.local/bin/bosun kg propose x rule --value v --from-user --quote hi$(id)",
             'Q=$(cat f); bosun kg propose x rule --value v --from-user --quote "$Q"',
         ]:
@@ -269,6 +271,8 @@ class TextCommandTest(unittest.TestCase):
         for command in [
             "bosun kg propose x rule --value v --from-user --quote 'run $(id) first'",
             "bosun kg supersede f-3k9x2a --close --from-user --quote 'not anymore'",
+            'bosun kg add-entity repo/x --name "x"',
+            "bosun kg add-entity repo/x --name x --summary 'exports $(id) nightly'",
             'bosun kg lookup "$entity"',
             'bosun kg search "$(echo words)"',
         ]:

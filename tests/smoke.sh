@@ -1368,7 +1368,8 @@ echo "Site rule: be brief." >"$BOSUN_CONFIG_DIR/policy.md"
 check "a site policy.md is appended to the orchestrator policy" contains "$(cd "$REPO_A" && BOSUN_ORCHESTRATOR=orch "$BOSUN" launch orch 2>&1)" "Site rule: be brief."
 rm "$BOSUN_CONFIG_DIR/policy.md"
 check "with the ontology on, the orchestrator's launch ends its policy with the ontology's rules" grep -qE -- '--append-system-prompt .*Look.before.asking' <<<"$(cd "$REPO_A" && BOSUN_ORCHESTRATOR=orch BOSUN_KNOWLEDGE_ENABLED=1 "$BOSUN" launch orch 2>&1)"
-check "... and off, it does not" bash -c '! grep -q "Look.before.asking" <<<"$1"' _ "$out"
+orch_off="$(cd "$REPO_A" && BOSUN_ORCHESTRATOR=orch BOSUN_KNOWLEDGE_ENABLED=0 "$BOSUN" launch orch 2>&1)"
+check "... and off, it does not" bash -c 'grep -q -- "--append-system-prompt" <<<"$1" && ! grep -q "Look.before.asking" <<<"$1"' _ "$orch_off"
 check "the orchestrator may read and write the ontology without asking, but not forget or import" bash -c '
   jq -e "(.permissions.allow | index(\"Bash(bosun kg propose:*)\") and index(\"Bash(bosun kg lookup:*)\") and index(\"Bash(bosun kg add-entity:*)\"))
     and ((.permissions.allow | map(select(test(\"kg (forget|import|identify)\"))) | length) == 0)" "$1"' _ "$ROOT/orchestrator/settings.json"
@@ -4632,6 +4633,9 @@ for line in sys.stdin:
   check "a window without a harness: stays on Claude Code" contains "$(CX launch cl)" "$WORK/fake-claude"
   check "BOSUN_CODEX_MODEL applies to a Codex window" contains "$(BOSUN_CODEX_MODEL=gpt-test CX launch cx)" "--model gpt-test"
   check "... and not BOSUN_MODEL" not_contains "$(BOSUN_MODEL=opus CX launch cx)" "--model opus"
+  out="$(BOSUN_KNOWLEDGE_ENABLED=1 CX launch cx)"
+  check "with the ontology on, a Codex window's launch carries none of its rules (its brief carries the pack)" bash -c '
+    grep -q -- "--no-daemon" <<<"$1" && ! grep -q -- "--append-system-prompt" <<<"$1" && ! grep -qE "Look.before.asking|The.ontology" <<<"$1"' _ "$out"
   out="$(BOSUN_HARNESS=codex BOSUN_MODEL=opus CX launch not-listed)"
   check "a window sessions.yml does not list runs on BOSUN_HARNESS" contains "$out" "--no-daemon"
   check "... with Codex's default model, not BOSUN_MODEL" not_contains "$out" "--model opus"
@@ -4772,6 +4776,9 @@ FAKE
   out="$(AGYD launch agyw)"
   check "a new agy window's dry run says what it would run" contains "$out" "dry-run: would run: $WORK/fake-agy"
   check "... with its folder trusted by --settings, in auto" contains "$out" 'agentMode'
+  out="$(BOSUN_KNOWLEDGE_ENABLED=1 AGYD launch agyw)"
+  check "with the ontology on, an agy window's launch carries none of the ontology's rules" bash -c '
+    grep -q "dry-run: would run:" <<<"$1" && ! grep -q -- "--append-system-prompt" <<<"$1" && ! grep -qE "Look.before.asking|The.ontology" <<<"$1"' _ "$out"
   check "... a log file named for its conversation, and Remote Control" bash -c 'grep -qF -- "--log-file $2/agy-agyw.log --remote-control" <<<"$1"' _ "$out" "$BOSUN_LOG_DIR"
   check "... and a first prompt of its own, ready to be answered" contains "$out" "--prompt-interactive=This\\ is\\ bosun\\'s\\ agyw\\ window"
   check "... none of the flags an agy window never gets" bash -c '! grep -qE -- " (--add-dir|--mode|-c|--continue|--dangerously-skip-permissions)( |$)" <<<"$1"' _ "$out"

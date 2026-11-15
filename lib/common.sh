@@ -659,6 +659,7 @@ orchestrator_policy() {
 # profile's verifies_quotes); nothing otherwise (the other agents get what the ontology knows in their briefs).
 window_knowledge_prompt() { # <harness>
   [ "$BOSUN_KNOWLEDGE_ENABLED" = "1" ] || return 0
+  # Only Claude's module calls this today; the check keeps it right for another agent that reuses it.
   [ "$(profile_field "$1" verifies_quotes 2>/dev/null)" = "yes" ] || return 0
   knowledge_rules
 }

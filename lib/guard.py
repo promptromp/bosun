@@ -165,8 +165,9 @@ LEDGER_TEXT_COMMANDS = {
     "fold",
     "ticket-sync",
 }
-# `bosun kg` subcommands that take a quote of my words (and a value or note that may hold someone's text).
-KG_TEXT_COMMANDS = {"propose", "supersede", "confirm", "reject", "batch"}
+# `bosun kg` subcommands that take a quote of my words, or a name, alias, summary, value or note that may
+# hold text from Slack, a PR or a ticket.
+KG_TEXT_COMMANDS = {"add-entity", "propose", "supersede", "confirm", "reject", "batch"}
 SEND_ITEM_FLAGS = {"--id", "--no-item"}
 SEND_INFO_FLAGS = {"--list", "-h", "--help"}
 SEND_START_WITHOUT_MESSAGE = 2  # send --start <window>
@@ -395,8 +396,9 @@ def text_command_risk(words: list[str], command: str) -> str | None:
     if carries_text(words) and runs_substitution(command):
         return (
             "text passed to bosun delegate/send, to ledger reach-out/ask/replied/propose/approve/"
-            "spawn/link/unlink/fold/ticket-sync, or to kg propose/supersede/confirm/reject/batch (its "
-            "--quote), must not be able to run commands. This checks the "
+            "spawn/link/unlink/fold/ticket-sync, or to kg add-entity/propose/supersede/confirm/reject/batch "
+            "(its --name, --alias, --summary, --value or --quote), must not be able to run commands. "
+            "This checks the "
             "whole Bash call: a $(...) or backticks anywhere in it count, also in another step joined "
             "with ; && | or in a variable set before the command. Run the bosun command as its own "
             "Bash call, with every value in single quotes or on stdin with a quoted heredoc "
