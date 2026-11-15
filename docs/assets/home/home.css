@@ -95,6 +95,21 @@
   margin: 0 0 1.2rem;
   text-wrap: balance;
 }
+/* The word, as a dictionary has it, between the headline and the lead. */
+.bx-home .md-typeset .bx-define {
+  margin: 0 0 1.1rem;
+  max-width: 34em;
+  line-height: 1.5;
+  color: var(--bx-muted);
+}
+.bx-define dfn {
+  font-style: normal;
+  font-weight: 800;
+  color: var(--bx-ink);
+}
+.bx-define__say {
+  margin: 0 0.3em;
+}
 .bx-hero .bx-lead {
   font-size: 1.2em;
   color: var(--bx-ink);
@@ -193,6 +208,79 @@
 }
 .bx-home .md-typeset details {
   margin-top: 2.2rem;
+}
+
+/* Points: not a sequence, so not numbered */
+.bx-home .md-typeset .bx-points {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 1.2rem;
+}
+.bx-home .md-typeset .bx-points > li {
+  margin: 0;
+  padding-left: 1rem;
+  border-left: 1.5px solid var(--bx-line);
+  color: var(--bx-muted);
+}
+.bx-points strong {
+  color: var(--bx-ink);
+}
+
+/* The menu bar app's menu while bosun runs, drawn in the Mac's own type: its items and their order are
+   app/Sources/BosunMenuCore/MenuModel.swift's, its status app/Tests/BosunMenuCoreTests/Fixtures/status-ok.json's. */
+.bx-menu {
+  justify-self: start;
+  width: min(100%, 17rem);
+  padding: 0.4rem 0.3rem;
+  font: 0.65rem/1.45 -apple-system, BlinkMacSystemFont, "Helvetica Neue", sans-serif;
+  color: var(--bx-ink);
+  background: var(--bx-surface);
+  border: 1px solid var(--bx-line);
+  border-radius: 10px;
+  box-shadow: 0 18px 40px -24px rgba(19, 42, 62, 0.5);
+}
+.bx-menu__status {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  padding: 0.1rem 0.6rem 0;
+  font-weight: 600;
+}
+.bx-menu__dot {
+  flex: none;
+  width: 0.55rem;
+  height: 0.55rem;
+  border-radius: 50%;
+  background: #2f9e44;
+}
+.bx-home .md-typeset .bx-menu__detail {
+  margin: 0.1rem 0 0.4rem;
+  padding: 0 0.6rem 0 1.6rem;
+  color: var(--bx-muted);
+}
+.bx-home .md-typeset .bx-menu__items {
+  list-style: none;
+  margin: 0;
+  padding: 0.35rem 0 0;
+  border-top: 1px solid var(--bx-line);
+}
+.bx-home .md-typeset .bx-menu__items > li {
+  display: flex;
+  justify-content: space-between;
+  margin: 0;
+  padding: 0.15rem 0.6rem;
+}
+.bx-home .md-typeset .bx-menu__items > li.bx-menu__gap {
+  margin-top: 0.35rem;
+  padding-top: 0.5rem;
+  border-top: 1px solid var(--bx-line);
+}
+.bx-home .md-typeset .bx-menu kbd {
+  all: unset;
+  margin-left: 1.5rem;
+  color: var(--bx-muted);
 }
 
 /* An example: its story on the left, the live example on the right */

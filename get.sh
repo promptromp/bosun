@@ -376,7 +376,7 @@ set_up() {
 }
 
 intro() {
-  say "bosun: agents write the code; bosun runs the rest of the day, and remembers it."
+  say "bosun: turn your coding agents into proactive teammates."
   case "$KIND" in
     new | unfinished)
       say "First it checks what it needs and tells you what to do about anything missing. Then a few"

@@ -3,12 +3,15 @@
 </p>
 
 <p align="center">
-  <strong>Agents write the code. Bosun runs the rest of the day, and remembers it.</strong>
+  <strong>Turn your coding agents into proactive teammates.</strong>
 </p>
 
-On a ship, the bosun runs the deck crew and the day's work so the captain can steer. This bosun
-runs a fleet of coding agents (Claude Code, Codex and Antigravity) and the work around the code: reviews,
-follow-ups, hand-offs and the people you are waiting on. Everything it handles becomes a
+> **bosun** /ˈboʊsən/ BOH-sən, *noun*: the senior hand who runs a ship's deck crew, the go-between for the
+> officers who set the course and the hands who do the work.
+
+This bosun is the go-between for you and your coding agents (Claude Code, Codex and Antigravity). It notices
+new work before you ask, hands each task to the right agent and follows it to done, and runs the work around
+the code: reviews, follow-ups, hand-offs and the people you are waiting on. Everything it handles becomes a
 structured record: a work ledger of what is in flight, and a knowledge graph of how your
 organization actually works, sourced, reviewed and improved every day. People and their agents
 start from what the organization already knows, instead of finding it out again.
@@ -60,7 +63,8 @@ bosun did for you.
 
 ## A day with bosun
 
-- **08:00.** Your Mac wakes, logins are refreshed and every repo session resumes where it stopped.
+- **08:00.** Your Mac wakes (or you log in during your hours), logins are refreshed and every repo session
+  resumes where it stopped. With the menu bar app, its icon turns green.
 - **Morning.** The orchestrator reads Slack, your pull requests and the reviews you were asked
   for, records each in the ledger and hands the work to the right session.
 - **All day.** Watchers turn new mentions and replies into events; repo sessions report back;

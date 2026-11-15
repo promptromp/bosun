@@ -13,10 +13,15 @@ acme data (tools/docs_examples.py); each one says so, and each says where the gu
 <section class="bx-hero" markdown>
 <div class="bx-hero__pitch" markdown>
 
-# Agents write the code. Bosun runs the rest of the day. { .bx-hero__title }
+# Turn your coding agents into proactive teammates. { .bx-hero__title }
 
-<p class="bx-lead">Bosun hands each task to the right coding agent, follows up on reviews and replies,
-and keeps a record of everything in flight. Nothing goes out under your name until you say yes.</p>
+<p class="bx-define"><dfn>bosun</dfn> <span class="bx-define__say">/ˈboʊsən/ BOH-sən</span> <i>noun</i><br>
+The senior hand who runs a ship's deck crew: the go-between for the officers who set the course and the
+hands who do the work.</p>
+
+<p class="bx-lead">Bosun is that go-between for you and your coding agents. It notices new work before you ask,
+hands each task to the right agent and follows it to done, and keeps a reviewed map of how your team
+works that every agent starts from. Nothing goes out under your name until you say yes.</p>
 
 <p class="bx-hero__actions" markdown>[Get started](setup.md){ .md-button .md-button--primary }
 [See it work](#how-it-works){ .md-button }</p>
@@ -35,6 +40,7 @@ curl -fsSL https://raw.githubusercontent.com/promptromp/bosun/main/get.sh | sh
 ```
 
 It checks what's missing, asks a few questions, and shows you its plan before it changes anything.
+It can add bosun to your menu bar and start it when you log in.
 
 <p class="bx-fine" markdown>Want to read it first? [The script](../get.sh) is short. Already running bosun?
 [Update it](setup.md#updating) or [take it off again](setup.md#uninstall).</p>
@@ -75,9 +81,50 @@ from your phone if you like.</li>
     ```
 
     The orchestrator and the repo sessions run in tmux. Claude Code sessions can be picked up from
-    your phone with Remote Control. A watchdog checks every five minutes that all of it is alive, and
-    a local console shows the ledger, the sessions and what bosun did for you.
-    [How a day runs](day.md) has the times.
+    your phone with Remote Control. A watchdog checks every five minutes that all of it is alive, a
+    local console shows the ledger, the sessions and what bosun did for you, and a menu bar app says
+    how bosun is at a glance. [How a day runs](day.md) has the times.
+
+</section>
+
+<section class="bx-section bx-example" markdown>
+
+## Is bosun all right? { data-toc-label="In your menu bar" }
+
+<p class="bx-lead">A small icon in the menu bar says how bosun is, from the moment you log in. It
+starts and stops bosun, updates it, opens the console, and holds its settings.</p>
+
+<div class="bx-example__body" markdown>
+<div class="bx-example__story" markdown>
+
+<ul class="bx-points" markdown>
+<li markdown>**A glance tells you.** Green while bosun runs, yellow or red when something needs a look,
+and grey while it rests outside your hours.</li>
+<li markdown>**It starts on its own.** At the start of your hours, or when you log in during them.
+Start and Stop are there for any other time.</li>
+<li markdown>**Change your hours in Settings.** The days, the start time, when the Mac may sleep, and
+whether bosun follows the dated releases or every change.</li>
+<li markdown>**Updates come to you.** Check for Updates says what is new, and your agents keep working
+while bosun updates.</li>
+</ul>
+
+</div>
+<div class="bx-menu" role="img" aria-label="bosun's menu while it runs: a green dot and the sentence bosun is running; 3 windows open, 1 waiting for you, Mac kept awake until 20:00; then Open Console, Check for Updates, Settings, Help, Stop bosun and Quit bosun.app.">
+<div class="bx-menu__status"><span class="bx-menu__dot"></span>bosun is running</div>
+<p class="bx-menu__detail">3 windows open<br>1 waiting for you: acme-web<br>Mac kept awake until 20:00</p>
+<ul class="bx-menu__items">
+<li>Open Console<kbd>⌘O</kbd></li>
+<li class="bx-menu__gap">Check for Updates…</li>
+<li>Settings…<kbd>⌘,</kbd></li>
+<li>Help<kbd aria-hidden="true">›</kbd></li>
+<li class="bx-menu__gap">Stop bosun…</li>
+<li>Quit bosun.app<kbd>⌘Q</kbd></li>
+</ul>
+</div>
+</div>
+
+<p class="bx-fine" markdown>The menu while bosun runs. [The menu bar app](setup.md#the-menu-bar-app) has every
+state and what each item does.</p>
 
 </section>
 
@@ -242,7 +289,7 @@ What bosun learns, how it is built, and what comes next.
 
 <div class="bx-today" markdown>
 
-- **macOS only, for now.** Linux is next.
+- **macOS only, for now,** with a menu bar app. Linux is next.
 - **Claude Code, Codex and Antigravity** run repo sessions; Antigravity is a preview. The orchestrator needs Claude Code.
 - **One engineer, one Mac.** A ledger and knowledge base shared across a team is next on the
   [roadmap](../ROADMAP.md).

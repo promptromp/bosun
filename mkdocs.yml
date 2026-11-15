@@ -3,7 +3,7 @@
 # `uv run mkdocs build --strict`, or preview it with `uv run mkdocs serve`;
 # .github/workflows/docs.yml publishes it from main.
 site_name: bosun
-site_description: Agents write the code. Bosun runs the rest of the day, and remembers it.
+site_description: Turn your coding agents into proactive teammates.
 site_url: https://promptromp.github.io/bosun/
 repo_name: promptromp/bosun
 repo_url: https://github.com/promptromp/bosun
