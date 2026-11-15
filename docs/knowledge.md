@@ -1,8 +1,8 @@
-# Knowledge
+# Ontology
 
-`bosun kg` keeps what bosun should know about your organization: people (work facts
-only), processes and the product, as atomic facts with sources, so a fact stated once is not lost
-when the conversation ends (design: [docs/design/knowledge.md](design/knowledge.md)). It
+`bosun kg` keeps bosun's ontology of your organization, what it should know about it: people
+(work facts only), processes and the product, as atomic facts with sources, so a fact stated once
+is not lost when the conversation ends (design: [docs/design/knowledge.md](design/knowledge.md)). It
 lives in `$BOSUN_CONFIG_DIR/knowledge/`, never in this repo, with its own git history (one
 commit per change; `BOSUN_KNOWLEDGE_GIT=0` turns it off, and it is skipped if git is missing). A lock
 that a git command cut short left there (the index's, `HEAD`'s or a branch's, older than 30 seconds)

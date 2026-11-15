@@ -490,8 +490,8 @@ as it was.
 | `~/.local/bin/bosun` and bosun's working files | Deleted |
 | What `get.sh` installed: `~/.local/share/bosun-versions` (its `bosun.git` and every version), the checkout from before versions kept there, and the link `~/.local/share/bosun` | Deleted, last. Each folder is checked as a checkout is, and anything of yours in any of them keeps them all, link included: changes, a stash, commits not pushed, a worktree elsewhere, a file git ignores. Versions you made yourself, without the installer's mark on `bosun.git`, stay |
 | A checkout of your own you run bosun from | Stays. One `get.sh` made before versions side by side is deleted, last, unless it has anything of yours in it |
-| Your ledger and learning history, your knowledge graph | It asks, and Enter keeps them |
-| The backups `bosun update` took (`backups/` in the state folder) | Deleted when either the ledger or the knowledge graph is, as each holds both (every person in it included). Kept only when you keep both |
+| Your ledger and learning history, your ontology | It asks, and Enter keeps them |
+| The backups `bosun update` took (`backups/` in the state folder) | Deleted when either the ledger or the ontology is, as each holds both (every person in it included). Kept only when you keep both |
 | `~/.config/bosun`: `bosun.env`, `sessions.yml`, `setup.sh`, `policy.md`, `learn.md`, `tasks/`, `workstreams.json`, the backups `bosun init` made (`*.pre-init-*`), and the copies of `bosun.env` that `bosun update` kept (`bosun.env.pre-update-*`) | Stay, and it says where. `--purge` deletes them too |
 | Anything else in those folders | Stays, and it names it. It only deletes what it knows is bosun's, and if you pointed `BOSUN_STATE_DIR` or `BOSUN_LOG_DIR` at a folder that also holds other files, it leaves that folder whole |
 
@@ -500,7 +500,7 @@ Claude Code nor Codex has them installed. (`agy` takes plugins only by installin
 your conversations.
 
 Install again with the same line, and bosun picks up what you kept. `replica.json`, this Mac's id in
-both journals, goes with the ledger: deleting the ledger while keeping the knowledge graph deletes
+both journals, goes with the ledger: deleting the ledger while keeping the ontology deletes
 it too, and the knowledge base's next write carries on under a new id. For scripts, `--yes` asks
 nothing and keeps your records; `--delete-ledger`, `--delete-knowledge` and `--purge` say otherwise. `--purge` leaves
 `forbidden-terms.txt`, which guards commits to this repo and is not part of running bosun. Run it from a
@@ -542,7 +542,7 @@ State and logs go to `~/.local/state/bosun/`:
   `<file>.torn-<time>` for a transaction a write left unfinished, moved aside and kept
   ([Sync and sharing](design/sync.md))
 - `replica.json`: this Mac's id in the journals (the ledger's, and the knowledge base's in
-  `knowledge/journal/` of the config folder, see [Knowledge](knowledge.md#knowledge)), made once,
+  `knowledge/journal/` of the config folder, see [Ontology](knowledge.md#ontology)), made once,
   and anew when a journal starts again (moved aside, emptied or removed); moved aside itself, it
   gives the Mac a new id too. Either way, both journals carry on under the new id
 - `logs/`: a file per command and day, `<command>-YYYY-MM-DD.log`, with what that command said on its screen:

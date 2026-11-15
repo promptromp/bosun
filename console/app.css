@@ -1621,7 +1621,7 @@ a.button {
   text-decoration: none;
 }
 
-/* the Knowledge Graph page's tabs: Briefing, Constellation, Raw data (and the Metro prototype, disabled) */
+/* the Ontology page's tabs: Briefing, Constellation, Raw data (and the Metro prototype, disabled) */
 .kg-tabs {
   display: flex;
   flex-wrap: wrap;
@@ -2319,7 +2319,7 @@ a.kg-ego:hover {
   }
 }
 
-/* ---- Knowledge Graph: the review call to action over the Briefing -------------------------- */
+/* ---- Ontology: the review call to action over the Briefing ---------------------------------- */
 
 .kg-review-cta {
   background: var(--surface);

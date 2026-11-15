@@ -195,7 +195,7 @@ of truth, so don't copy rules into this file.
   addressed by opaque keys, and the learning reports'), `lib/console_knowledge.py` (pure: the
   Knowledge view's cards, search, entity pages, process flows, review batch and decisions),
   `lib/console_kg_graph.py` (pure: the neighbourhood graph's walk and layout),
-  `lib/console_kg_views.py` (pure: the Knowledge Graph page's Briefing and Constellation; the
+  `lib/console_kg_views.py` (pure: the Ontology page's Briefing and Constellation; the
   approved prototype of its treatments is `docs/design/prototypes/knowledge-treatments/`) and
   `lib/console_kb.py` (its only I/O: reads the knowledge base, never identifiers; saves a review
   decision, the console's one write, `POST /api/knowledge/review`, guarded in `console_server.py`'s
@@ -277,7 +277,8 @@ of truth, so don't copy rules into this file.
   links at the site; published by `.github/workflows/docs.yml`; guide: `docs/development.md`, "The
   docs site"). The site's home page is `docs/index.md` with `theme/home.html`, its look `theme/` and
   `docs/assets/site.css`, and its live examples `docs/assets/home/examples.js`, fed by
-  `tools/docs_examples.py` from bosun's own tables and fixtures. A new page goes in `nav` and the
+  `tools/docs_examples.py` from bosun's own tables and fixtures, and its two pictures (`chart.js`, `whiteboard.js`
+  with the vendored rough.js; `docs/development.md`, "The docs site"). A new page goes in `nav` and the
   guide table of `README.md`.
 
 ## Common changes

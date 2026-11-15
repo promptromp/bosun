@@ -100,7 +100,7 @@ nav:
       - The ledger: ledger.md
       - Permissions: permissions.md
       - Events: events.md
-      - Knowledge: knowledge.md
+      - Ontology: knowledge.md
       - Learning: learning.md
       - Watchdog: watchdog.md
       - Console: console.md
@@ -119,7 +119,7 @@ nav:
       - Signals: design/signals.md
       - Lineage and trackers: design/lineage.md
       - Workstreams: design/workstreams.md
-      - Knowledge: design/knowledge.md
+      - Ontology: design/knowledge.md
       - Learning: design/learning.md
       - Console: design/console.md
       - Impact: design/impact.md

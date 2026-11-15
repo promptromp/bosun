@@ -648,7 +648,7 @@
     }
 
     root.replaceChildren(
-      bar("What bosun knows, around one process", h("button", { type: "button", class: "bx-btn bx-btn--quiet", onclick: () => { center = k.center; draw(true); } }, "Back to the start")),
+      bar("The ontology, around one process", h("button", { type: "button", class: "bx-btn bx-btn--quiet", onclick: () => { center = k.center; draw(true); } }, "Back to the start")),
       h("div", { class: "bx-map-layout" }, svg, details),
     );
     draw(false);

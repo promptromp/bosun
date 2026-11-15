@@ -12,7 +12,7 @@
 This bosun is the go-between for you and your coding agents (Claude Code, Codex and Antigravity). It notices
 new work before you ask, hands each task to the right agent and follows it to done, and runs the work around
 the code: reviews, follow-ups, hand-offs and the people you are waiting on. Everything it handles becomes a
-structured record: a work ledger of what is in flight, and a knowledge graph of how your
+structured record: a work ledger of what is in flight, and an ontology of how your
 organization actually works, sourced, reviewed and improved every day. People and their agents
 start from what the organization already knows, instead of finding it out again.
 
@@ -24,10 +24,10 @@ start from what the organization already knows, instead of finding it out again.
 - **A structured work ledger.** Every ask, task, pull request, ticket and person you are waiting on
   is a typed item with a state machine and evidence rules: work cannot be marked done on a guess,
   and nothing silently drops between days, sessions or people.
-- **Organizational knowledge that compounds.** A knowledge graph keeps how things are done here:
-  processes, owners, decisions, environments, lessons. Each fact carries its source and authority,
-  and you confirm facts in short review batches, so agents work from knowledge you trust rather
-  than from a guess or a stale wiki page.
+- **Organizational knowledge that compounds.** An ontology of people, process and product keeps
+  how things are done here: processes, owners, decisions, environments, lessons. Each fact carries
+  its source and authority, and you confirm facts in short review batches, so agents work from
+  knowledge you trust rather than from a guess or a stale wiki page.
 - **Continuous learning.** Every evening bosun reads the day's sessions and the ledger, finds what
   went wrong (a stalled task, a duplicate message, a rule that was missing) and proposes the fix,
   quoting its evidence. You approve what it learns.
@@ -36,7 +36,7 @@ start from what the organization already knows, instead of finding it out again.
   Each session reaches only the connectors you name for it: none for a repo session, unless you say.
 - **Built to be shared.** The waste that costs most sits between people: context explained again,
   hand-offs dropped, a lesson one team learned that another has to learn again. Bosun's ledger and
-  knowledge graph are records a whole organization can build on, so every engineer and every agent
+  ontology are records a whole organization can build on, so every engineer and every agent
   works from the same picture. Today they serve one engineer; sharing them across a team is next
   on the [roadmap](ROADMAP.md).
 
@@ -47,7 +47,7 @@ flowchart LR
   watchers["Watchers<br/>Slack, reviews, replies"] -->|events| orch
   you(("You<br/>phone or terminal")) <-->|"asks and approvals"| orch["Orchestrator"]
   orch <--> ledger[("Work ledger")]
-  orch <--> kg[("Knowledge graph")]
+  orch <--> kg[("Ontology")]
   orch -->|tasks| repos["Repo sessions<br/>Claude Code, Codex or Antigravity"]
   repos -->|reports| ledger
   orch -->|"approved actions only"| world["Slack, GitHub, tracker"]
@@ -135,7 +135,7 @@ The guides, design notes and roadmap are also a website, with search:
 | [The ledger](docs/ledger.md) | The record of every piece of work: kinds, states, rules, links, trackers |
 | [Permissions](docs/permissions.md) | What needs your approval, and approvals bound to the exact call |
 | [Events](docs/events.md) | Events from repo sessions and the Slack watcher |
-| [Knowledge](docs/knowledge.md) | The organizational knowledge graph |
+| [Ontology](docs/knowledge.md) | What bosun knows about your organization: people, process and product |
 | [Learning](docs/learning.md) | The daily learning run |
 | [Watchdog](docs/watchdog.md) | Health checks and alerts |
 | [Console](docs/console.md) | The local web console and the Impact view |

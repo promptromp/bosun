@@ -601,7 +601,7 @@ async function knowledgeChecks() {
   });
 }
 
-// ---- the Knowledge Graph's tabs: Briefing (and its review stack) and Constellation ----
+// ---- the Ontology page's tabs: Briefing (and its review stack) and Constellation ----
 
 function keydown(node, key) {
   for (const listener of node.listeners.keydown || []) listener({ key, preventDefault() {} });

@@ -21,7 +21,7 @@ const VIEWS = {
   stats: "Stats",
   impact: "Impact",
   learning: "Improvements",
-  knowledge: "Knowledge Graph",
+  knowledge: "Ontology",
   library: "Config",
 };
 const ITEM_ROUTE = "item";
@@ -2306,7 +2306,7 @@ function renderKnowledge(current) {
   const tab = kgTab(current.params);
   main().replaceChildren(
     ...present(
-      pageHead("Knowledge Graph", el("span", { className: "muted small" }, "People, process and product, with sources")),
+      pageHead("Ontology", el("span", { className: "muted small" }, "People, process and product, with sources")),
       kgTabs(tab),
       tab === "raw" ? card("", kgSearchForm(current.params)) : null,
       el("div", { id: "knowledge", className: `kg-view kg-view-${tab}` }, el("p", { className: "placeholder" }, "Loading...")),
@@ -2417,7 +2417,7 @@ function axisCard(c) {
   );
 }
 
-// ---- Knowledge Graph: the tabs ----
+// ---- Ontology: the tabs ----
 // #/knowledge is the Briefing; ?view=constellation and ?view=raw (the overview and entity browser)
 // are the other tabs. The Metro map is a prototype only (docs/design/prototypes/), shown disabled.
 
@@ -2435,7 +2435,7 @@ function kgTabs(active) {
     el("a", { href: kgTabHref(name), className: `kg-tab${name === active ? " active" : ""}`, role: "tab", "aria-selected": name === active ? "true" : "false" }, label),
   );
   tabs.push(el("span", { className: "kg-tab disabled", role: "tab", "aria-disabled": "true", "aria-selected": "false", title: KG_METRO_NOTE }, "Metro (prototype)"));
-  return el("div", { className: "kg-tabs", role: "tablist", "aria-label": "Knowledge Graph views" }, tabs);
+  return el("div", { className: "kg-tabs", role: "tablist", "aria-label": "Ontology views" }, tabs);
 }
 
 function reducedMotion() {
@@ -2446,7 +2446,7 @@ function percent(share) {
   return `${Math.round((Number(share) || 0) * 100)}%`;
 }
 
-// ---- Knowledge Graph: the Briefing ----
+// ---- Ontology: the Briefing ----
 // The headline (facts captured per day, the confirmed share, coverage per card, the rediscovery
 // placeholder), this week's timeline, today's review as a card stack, and the most connected.
 
@@ -2831,7 +2831,7 @@ function bindDrag(node) {
   node.addEventListener("pointercancel", end);
 }
 
-// ---- Knowledge Graph: the Constellation ----
+// ---- Ontology: the Constellation ----
 // Every entity (at most the model's cap) on a canvas, clustered by card with a small hand-written
 // force layout (charge, springs, a pull to each card's anchor; O(n^2) per frame, fine for a few
 // hundred nodes). Hover highlights a node's neighbours, a click opens its facts in a panel,
@@ -3625,7 +3625,7 @@ function entityPage(page, historyOpen) {
 function renderReview() {
   main().replaceChildren(
     el("a", { className: "back", href: "#/knowledge" }, "← Knowledge"),
-    pageHead("Knowledge Graph review"),
+    pageHead("Ontology review"),
     el("div", { id: "kg-result", "aria-live": "polite" }),
     el("div", { id: "kg-review" }, el("p", { className: "placeholder" }, "Loading...")),
   );

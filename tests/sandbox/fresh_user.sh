@@ -211,7 +211,7 @@ the_uninstall() { # <what the machine held before it was installed>
   check "yes, then Enter to keep your records" python3 "$DRIVE" "$out" \
     "Are you sure" "y<enter>" \
     "Keep your ledger" "<enter>" \
-    "Keep your knowledge graph" "<enter>" \
+    "Keep your ontology" "<enter>" \
     "bosun is uninstalled" "" \
     -- "$bosun" uninstall
   check "the windows have stopped" bash -c '! tmux -L bosun has-session -t "=bosun"'
@@ -222,7 +222,7 @@ the_uninstall() { # <what the machine held before it was installed>
   check "it said sudo first, and used it for the wake" bash -c 'grep -q "sudo.*pmset repeat cancel" "$1"' _ "$LOG"
   check "your settings are as you left them" test "$settings" = "$(cat "$CONFIG"/bosun.env "$CONFIG"/sessions.yml "$CONFIG"/setup.sh | cksum)"
   check "your ledger is as you left it" test "$ledger" = "$(cksum <"$state/ledger.json")"
-  check "your knowledge graph is there" test -s "$CONFIG/knowledge/facts.jsonl"
+  check "your ontology is there" test -s "$CONFIG/knowledge/facts.jsonl"
   check "only your records are left of the state" bash -c '[ "$(ls -A "$1" | tr "\n" " ")" = "ledger.json ledger.json.bak ledger.md " ] || ls -A "$1"' _ "$state"
   check "it says where they are" says ".config/bosun" "$out"
   check "... and how to come back" says "get.sh | sh" "$out"
@@ -232,17 +232,17 @@ the_uninstall() { # <what the machine held before it was installed>
   check "installing again picks it all up" bash -c 'cat "$1/get.sh" | sh -s -- --unattended >"$2" 2>&1 || { tail -5 "$2"; exit 1; }' _ "$ROOT" "$out"
   check "... your settings" test "$settings" = "$(cat "$CONFIG"/bosun.env "$CONFIG"/sessions.yml "$CONFIG"/setup.sh | cksum)"
   check "... your ledger" bash -c '"$1" ledger list | grep -q "Keep me"' _ "$bosun"
-  check "... your knowledge graph" test -s "$CONFIG/knowledge/facts.jsonl"
+  check "... your ontology" test -s "$CONFIG/knowledge/facts.jsonl"
   check "... the jobs" says "launchctl bootstrap gui/$(id -u) $AGENTS/com.bosun.morning.plist" "$LOG"
 
   check "this time no, and no" python3 "$DRIVE" "$out" \
     "Are you sure" "y<enter>" \
     "Keep your ledger" "n<enter>" \
-    "Keep your knowledge graph" "n<enter>" \
+    "Keep your ontology" "n<enter>" \
     "bosun is uninstalled" "" \
     -- "$bosun" uninstall
   check "the state folder is gone" test ! -e "$state"
-  check "the knowledge graph is gone" test ! -e "$CONFIG/knowledge"
+  check "the ontology is gone" test ! -e "$CONFIG/knowledge"
   check "your settings still are not" test -f "$CONFIG/bosun.env"
   rm -rf "$CONFIG"
   check "what is left is what the machine held before" same_files machine_files "$before_install"

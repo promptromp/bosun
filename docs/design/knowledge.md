@@ -2,7 +2,7 @@
 
 Status: accepted (2026-10-21); MVP 1 built (`bosun kg`, see [Implementation](#implementation-mvp-1));
 MVP 2 built (the console's Knowledge view, see [Console](#console-knowledge-view-knowledge-mvp-2)),
-with the Briefing and Constellation tabs (see [the page](#the-knowledge-graph-page-briefing-constellation-raw-data-2026-10-21)).
+with the Briefing and Constellation tabs (see [the page](#the-ontology-page-briefing-constellation-raw-data-2026-10-21)).
 Replaces the earlier ontology note (2026-10-16). Tracked in
 [ROADMAP.md](../../ROADMAP.md#4-organizational-knowledge-people-process-product).
 
@@ -209,13 +209,13 @@ one card by decision of 2026-10-21. Security notes:
   Like the CLI in MVP 1 (decision 8), the console does not ask for a verified quote: whoever holds
   the console's URL token is taken to be you, as whoever runs `kg confirm` is.
 
-### The Knowledge Graph page: Briefing, Constellation, Raw data (2026-10-21)
+### The Ontology page: Briefing, Constellation, Raw data (2026-10-21)
 
 Four treatments of the page were prototyped on invented acme data and kept for reference:
 [docs/design/prototypes/knowledge-treatments/](prototypes/knowledge-treatments/README.md)
 (Constellation, Metro map, Briefing, Radial explorer). Decision: the Briefing is the page's home,
 the Constellation is a second tab, and the overview and entity browser above stay as a third, "Raw
-data"; the Metro map needs work on realistic data first (ROADMAP.md, "Knowledge Graph: Metro map
+data"; the Metro map needs work on realistic data first (ROADMAP.md, "Ontology: Metro map
 treatment") and shows as a disabled tab. Built in `lib/console_kg_views.py` (pure) as described in
 docs/design/console.md, section 6. Its measures:
 
@@ -312,7 +312,7 @@ a stream of questions.
 |---|---|
 | MVP 1 (built) | Schema and storage, `kg` CLI (add-entity, identify, propose, confirm, reject, supersede, lookup, facts, search, neighbors, context, batch, import, lint, stats, schema, forget, expire), seed import as proposed |
 | MVP 2 (built) | Console Knowledge view: browser, entity pages, process flows, review queue (confirm, reject, defer), neighbourhood graph |
-| MVP 2b (built) | The Knowledge Graph page's tabs: Briefing (headline, this week, review card stack, most connected) and Constellation; Metro map prototyped only |
+| MVP 2b (built) | The Ontology page's tabs (called Knowledge Graph until 2026-11-15): Briefing (headline, this week, review card stack, most connected) and Constellation; Metro map prototyped only |
 | MVP 3 | Context packs in delegate briefs (flag), the orchestrator's lookup rule, capture from the user's own words in every window, a verified quote for confirm and reject from sessions |
 | Later | Knowledge pass in the learning run, console curation beyond review (supersede, edit aliases), embeddings search, document import, a team-shared variant |
 

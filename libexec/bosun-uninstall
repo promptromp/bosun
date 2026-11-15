@@ -9,17 +9,17 @@
 # gave folders, the memory notes it learned, the `bosun` link, its working files and what get.sh
 # installed: ~/.local/share/bosun-versions (bosun.git, every version, the checkout from before versions
 # kept there) and the link ~/.local/share/bosun, or the checkout an older get.sh made. It asks whether to
-# keep your ledger and your knowledge graph: Enter keeps them. Your settings stay in ~/.config/bosun, and
+# keep your ledger and your ontology: Enter keeps them. Your settings stay in ~/.config/bosun, and
 # it says where everything it left is. Installing again picks all of that up.
 #
 # It leaves what it cannot say is bosun's: another repeating wake, trust you gave a folder yourself, any
 # file it does not know, a checkout you made, and anything of yours in what get.sh installed (work not
 # pushed, changes, a stash), which keeps all of it.
 #   --dry-run           show what it would do, and do nothing
-#   --yes               ask nothing: uninstall, keeping your ledger and knowledge graph
+#   --yes               ask nothing: uninstall, keeping your ledger and ontology
 #   --delete-ledger     delete the ledger and the learning history without asking, and the backups
 #                       `bosun update` took, each of which holds both stores
-#   --delete-knowledge  delete the knowledge graph without asking, and those backups too
+#   --delete-knowledge  delete the ontology without asking, and those backups too
 #   --purge             also delete your settings (all but forbidden-terms.txt, which guards your commits)
 # Run it from a terminal outside bosun's windows: it stops them. Exit status: 0 done, or nothing was
 # changed; 1 something could not be removed, and it says what to run; 2 bad usage, or it refused.

@@ -389,7 +389,7 @@ such as an infrastructure request in their intake state) is theirs to move: its 
 ## Workstreams: what an item is for
 
 A **workstream** (`ws:<slug>`) is a time-bound effort you drive, such as "Widget search". It
-groups ledger items for a weekly stand-up, stats and, later, the knowledge graph. It is not a Jira
+groups ledger items for a weekly stand-up, stats and, later, the ontology. It is not a Jira
 epic (it may name one) and not a product area (it is part of one). Design, research and examples:
 [docs/design/workstreams.md](design/workstreams.md).
 

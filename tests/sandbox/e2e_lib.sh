@@ -311,7 +311,7 @@ uninstall_keeping_records() { # <settings> <ledger>
   check "yes, then Enter to keep your records" python3 "$ROOT/tests/sandbox/drive.py" "$out" \
     "Are you sure" "y<enter>" \
     "Keep your ledger" "<enter>" \
-    "Keep your knowledge graph" "<enter>" \
+    "Keep your ontology" "<enter>" \
     "bosun is uninstalled" "" \
     -- "$bosun" uninstall
   cat "$out"
@@ -323,7 +323,7 @@ uninstall_keeping_records() { # <settings> <ledger>
   check "the link is gone" test ! -e "$bosun"
   check "your settings are as you left them" test "$1" = "$(settings_sum)"
   check "your ledger is as you left it" test "$2" = "$(cksum <"$state/ledger.json")"
-  check "your knowledge graph is there" test -s "$CONFIG/knowledge/facts.jsonl"
+  check "your ontology is there" test -s "$CONFIG/knowledge/facts.jsonl"
   check "the trust it gave a repo is gone" bash -c '! jq -e --arg dir "$1" ".projects[\$dir].hasTrustDialogAccepted" "$HOME/.claude.json"' _ "$HOME/Development/acme-api"
   check "the trust you gave stays" trusted "$HOME/Development"
 }
