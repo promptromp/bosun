@@ -120,15 +120,18 @@ jobs:
   # - In the merge queue: the end-to-end sections the queued change can reach, from the merge group's base
   #   (`tests/smoke.sh --changed`, the selection the pre-push hook makes, tools/smoke_select.py), which
   #   fails closed to the whole suite; the shards split what it selected. The unit tests ran on the pull
-  #   request (`test`).
+  #   request (`test`). When it selects no section (a docs-only change, say), `changes` says so (smoke=false)
+  #   and the shards are skipped, so no macOS runner starts only to find nothing to run.
   # - Nightly on main, and by hand: every unit test once, in parallel, in the first shard, and the whole
   #   suite across the three. The weekly release's gate reads main's head checks, so a nightly that failed
   #   holds the release.
-  # The ruleset requires `smoke` (below), which passes only when every shard did; the shards' own checks carry
-  # their number. Each shard works out the same split from the same files: N is the matrix's size.
+  # The ruleset requires `smoke` (below), which passes when every shard did, or when `changes` found nothing for
+  # them to run; the shards' own checks carry their number. Each shard works out the same split from the same
+  # files: N is the matrix's size.
   smoke-shard:
     name: smoke (${{ matrix.shard }} of ${{ strategy.job-total }})
-    if: github.event_name != 'pull_request'
+    needs: changes
+    if: github.event_name != 'pull_request' && needs.changes.outputs.smoke == 'true'
     runs-on: macos-latest
     timeout-minutes: 50
     strategy:
@@ -166,23 +169,35 @@ jobs:
   # The required check (.github/rulesets/main.json): whether every shard passed. Skipped on pull requests, as the
   # shards are, which a required check counts as passing. Elsewhere it runs whatever became of the shards
   # (`always()`): without it a failed or cancelled shard would skip this job, and a skipped required check passes.
-  # A failed, cancelled or skipped shard job fails it.
+  # Shards skipped pass it only when `changes` itself passed and answered that the change reaches no section
+  # (smoke=false); a failed, cancelled or otherwise skipped shard job fails it, and so does a failed `changes`.
   smoke:
-    needs: smoke-shard
+    needs: [changes, smoke-shard]
     if: always() && github.event_name != 'pull_request'
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
-      - name: Every shard passed
+      - name: Every shard passed, or there was nothing to run
         env:
           RESULT: ${{ needs.smoke-shard.result }}
+          CHANGES: ${{ needs.changes.result }}
+          SMOKE: ${{ needs.changes.outputs.smoke }}
         run: |
-          echo "the shards: $RESULT"
-          [ "$RESULT" = success ]
+          echo "the shards: $RESULT; changes: $CHANGES, smoke=$SMOKE"
+          if [ "$RESULT" = success ]; then
+            exit 0
+          fi
+          if [ "$RESULT" = skipped ] && [ "$CHANGES" = success ] && [ "$SMOKE" = false ]; then
+            echo "The change reaches no smoke section: nothing to run."
+            exit 0
+          fi
+          exit 1
 
-  # Whether the menu bar app's job has anything to do: a cheap Linux job, so that a pull request that does not
-  # touch the app never starts a macOS runner, which are scarce. Builds (build=true) unless it can show that
-  # nothing the app depends on changed.
+  # Whether the macOS jobs have anything to do: a cheap Linux job, so that a change that cannot need them never
+  # starts a macOS runner, which are scarce.
+  # - build: the menu bar app's job. Builds (build=true) unless it can show that nothing the app depends on changed.
+  # - smoke: the smoke shards, in a merge group. Runs them (smoke=true) unless the selection answers that the change
+  #   reaches no section.
   changes:
     runs-on: ubuntu-latest
     timeout-minutes: 5
@@ -190,6 +205,7 @@ jobs:
       contents: read
     outputs:
       build: ${{ steps.changed.outputs.build }}
+      smoke: ${{ steps.smoke.outputs.smoke }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -229,6 +245,38 @@ jobs:
             echo "Nothing the app job depends on changed (app/, its two tools, this workflow, setup-uv, uv.lock, pyproject.toml): not building."
           fi
           echo "build=$build" >>"$GITHUB_OUTPUT"
+      # The same selection the shards make (`tests/smoke.sh --changed`), from the merge group's base to its head,
+      # which is what is checked out. Only the answer `=> none` from a run that succeeded skips them: a failed run,
+      # or no answer line, runs them (fail closed). The report names files only. Nightly and by hand the whole suite runs. On a pull request
+      # the shards are skipped whatever this says, so it says false there and runs nothing.
+      - name: Does the change reach a smoke section?
+        id: smoke
+        env:
+          EVENT: ${{ github.event_name }}
+          BASE: ${{ github.event.merge_group.base_sha }}
+        run: |
+          set -u
+          case $EVENT in
+            pull_request)
+              echo "A pull request: the shards are skipped on pull requests anyway."
+              echo "smoke=false" >>"$GITHUB_OUTPUT"
+              exit 0
+              ;;
+            merge_group) ;;
+            *)
+              echo "Not a merge group ($EVENT): the whole suite runs."
+              echo "smoke=true" >>"$GITHUB_OUTPUT"
+              exit 0
+              ;;
+          esac
+          status=0
+          report=$(python3 tools/smoke_select.py --root . --script tests/smoke.sh --selection tests/smoke_selection.txt --base "$BASE" 2>&1) || status=$?
+          echo "$report"
+          if [ "$status" = 0 ] && [ "$(printf '%s\n' "$report" | tail -n 1)" = "=> none" ]; then
+            echo "smoke=false" >>"$GITHUB_OUTPUT"
+          else
+            echo "smoke=true" >>"$GITHUB_OUTPUT"
+          fi
 
   # The menu bar app (app/, docs/design/menu-bar.md): its tests with warnings as errors, a floor under
   # the coverage of its core, SwiftLint, swift-format, and an ad hoc signed build that must verify.

@@ -486,13 +486,15 @@ default on 3.13 is `sys.settrace`, which made every test about a quarter slower;
 (`test (<version>)`, never `--impacted`), the end-to-end smoke suite on macOS, split over three runners at once
 (the `smoke-shard` matrix, `tests/smoke.sh --shard K/3` on each, so a change that reaches every section waits about
 a third of the 15-25 minutes one runner took) and gathered in the required check `smoke`, a small Linux job that
-`needs` the shards and passes only when every shard did (`if: always()`: without it a failed or cancelled shard
-would skip it, and a skipped required check counts as passing; the ruleset names only `smoke`, the shards' checks
-carry their number). Both are skipped on pull requests, which counts as passing: in the merge queue the shards split
-the sections the queued change can reach from the merge group's base, `tests/smoke.sh --changed`, failing closed to
-the whole suite; nightly on main (`schedule`, every job) and by hand the first shard runs every unit test on macOS
-and the three the whole suite, and since the weekly release's gate reads main's head checks, a failed nightly holds
-the release), the menu bar app (`app`, on macOS: `swift test`
+`needs` the shards and passes only when every shard did, or when `changes` answered that there was nothing for them
+to run (`if: always()`: without it a failed or cancelled shard would skip it, and a skipped required check counts as
+passing; the ruleset names only `smoke`, the shards' checks carry their number). Both are skipped on pull requests,
+which counts as passing: in the merge queue the shards split the sections the queued change can reach from the merge
+group's base, `tests/smoke.sh --changed`, failing closed to the whole suite, and when `changes` runs the same selection
+(`tools/smoke_select.py`) and it reaches no section, the shards are skipped, no macOS runner starts and `smoke`
+passes; nightly on main (`schedule`, every job) and by hand the first shard runs every unit test on macOS and the
+three the whole suite, and since the weekly release's gate reads main's head checks, a failed nightly holds the
+release), the menu bar app (`app`, on macOS: `swift test`
 with warnings as errors, the coverage floor, SwiftLint, `swift format lint --strict`, and an ad hoc build whose
 bundle must verify; a cheap Linux job, `changes`, compares the pull request or merge group with its base, and `app`
 `needs` it and is skipped (no macOS runner starts, and a skipped job counts as passing) when nothing under `app/`,
