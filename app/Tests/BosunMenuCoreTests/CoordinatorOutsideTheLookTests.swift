@@ -14,7 +14,7 @@ import Testing
     #expect(await eventually { world.ui.lastModel?.header.sentence == "bosun is running" })
     await hold.open()
     await look.value
-    #expect(world.item(.openAtLogin)?.checked == true)
+    #expect(world.coordinator.login == true)
   }
 
   @Test func aUpdateCheckThatHangsDoesNotHoldTheLooks() async throws {
@@ -106,7 +106,7 @@ import Testing
       seen.sentence = world.coordinator.menuModel.header.sentence
     }
     world.ui.answer("Cancel")
-    await world.coordinator.perform(.quit)
+    await world.coordinator.perform(.stopBosun)
     #expect(seen.sentence == "bosun is running")
   }
 }

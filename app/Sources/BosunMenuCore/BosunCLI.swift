@@ -86,6 +86,12 @@ public enum Bosun {
   public static let start = Command(args: ["morning", "--now", "--background"], timeout: .seconds(15))
   public static let consoleURL = Command(args: ["console", "--url"], timeout: .seconds(15))
   public static let appStatus = Command(args: ["app", "status", "--json"], timeout: .seconds(15))
+  /// The Settings window's: what bosun reads, and a change (which reloads bosun's jobs, so it gets 30 s).
+  public static let settingsGet = Command(args: ["settings", "get", "--json"], timeout: .seconds(15))
+
+  public static func settingsSet(_ values: [String: String]) -> Command {
+    Command(args: settingsSetArgs(values) + ["--json"], timeout: .seconds(30))
+  }
 
   public static func skip(version: String) -> Command {
     Command(args: ["update", "--skip", version], timeout: .seconds(15))

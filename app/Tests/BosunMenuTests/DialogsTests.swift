@@ -49,14 +49,13 @@ extension NSView {
     #expect(
       boxes.map(\.title) == [
         "Pause the morning start until I open bosun again", "Let this Mac sleep now",
-        "Keep bosun in the menu bar",
       ])
-    // On by default: the morning pause and the sleep; the icon is kept only when you say
-    #expect(boxes.map(\.state) == [.on, .on, .off])
-    #expect(built.alert.buttons.map(\.title) == ["Quit bosun", "Cancel"])
+    // On by default: the morning pause and the sleep
+    #expect(boxes.map(\.state) == [.on, .on])
+    #expect(built.alert.buttons.map(\.title) == ["Stop bosun", "Cancel"])
     #expect(built.alert.buttons[0].keyEquivalent == "\r")
     #expect(built.alert.buttons[1].keyEquivalent == "\u{1b}")
-    #expect(built.alert.messageText == "Quit bosun?")
+    #expect(built.alert.messageText == "Stop bosun?")
   }
 
   @Test func quitAlertNamesWhatItWouldMeet() {
@@ -69,9 +68,7 @@ extension NSView {
   @Test func theSleepBoxIsNotThereWhenTheMacIsNotKeptAwake() {
     let built = Dialogs.build(quitFirstSpec(quitPlan(keepAwake: nil)))
     #expect(
-      checkboxes(built).map(\.title) == [
-        "Pause the morning start until I open bosun again", "Keep bosun in the menu bar",
-      ])
+      checkboxes(built).map(\.title) == ["Pause the morning start until I open bosun again"])
   }
 
   @Test func quitAlertNamesBusyAgents() {
@@ -87,20 +84,18 @@ extension NSView {
     let built = Dialogs.build(quitFirstSpec(quitPlan()))
     let boxes = checkboxes(built)
     boxes[0].state = .off
-    boxes[2].state = .on
     let answer = Dialogs.answer(built, response: .alertFirstButtonReturn)
-    #expect(
-      answer == DialogAnswer(button: 0, boxes: ["pauseMorning": false, "sleep": true, "keepIcon": true]))
+    #expect(answer == DialogAnswer(button: 0, boxes: ["pauseMorning": false, "sleep": true]))
     let cancel = Dialogs.answer(built, response: .alertSecondButtonReturn)
     #expect(cancel.button == 1)
   }
 
   @Test func aTestHookAnswerSetsTheBoxesAndGivesTheResponse() {
     let built = Dialogs.build(quitFirstSpec(quitPlan()))
-    let hook = HookAnswer(button: "Quit bosun", boxes: ["sleep": false, "keepIcon": true])
+    let hook = HookAnswer(button: "Stop bosun", boxes: ["sleep": false])
     let response = Dialogs.apply(hook, to: built)
     #expect(response == .alertFirstButtonReturn)
-    #expect(checkboxes(built).map(\.state) == [.on, .off, .on])
+    #expect(checkboxes(built).map(\.state) == [.on, .off])
     let cancel = Dialogs.apply(HookAnswer(button: "Cancel", boxes: [:]), to: built)
     #expect(cancel == .alertSecondButtonReturn)
   }
@@ -109,7 +104,7 @@ extension NSView {
     let built = Dialogs.build(quitFirstSpec(quitPlan()))
     let response = Dialogs.apply(HookAnswer(button: "Shred", boxes: ["sleep": false]), to: built)
     #expect(response == nil)
-    #expect(checkboxes(built).map(\.state) == [.on, .on, .off])
+    #expect(checkboxes(built).map(\.state) == [.on, .on])
   }
 }
 
@@ -125,10 +120,17 @@ final class StoppedWith {
   /// A destructive action has no default button: Return does nothing, Escape cancels, Stop Now and Quit
   /// bosun.app have no key.
   @Test func theStopNowDialogHasNoDefaultButton() {
-    let built = Dialogs.build(quitUnavailableSpec("the windows cannot be read"))
+    let built = Dialogs.build(quitUnavailableSpec("the windows cannot be read", quitsApp: true))
     #expect(built.alert.buttons.map(\.title) == ["Cancel", "Stop Now", "Quit bosun.app"])
     #expect(keys(built) == ["\u{1b}", "", ""])
     #expect(!keys(built).contains("\r"))
+  }
+
+  /// Quit bosun.app: Return leaves bosun running, Escape cancels.
+  @Test func theQuitAppDialogLeavesBosunRunningOnReturn() {
+    let built = Dialogs.build(quitAppSpec())
+    #expect(built.alert.buttons.map(\.title) == ["Leave bosun Running", "Stop bosun and Quit…", "Cancel"])
+    #expect(keys(built) == ["\r", "", "\u{1b}"])
   }
 
   @Test func theFirstButtonIsTheDefaultWhenTheSpecSaysSo() {
@@ -167,7 +169,7 @@ final class StoppedWith {
   @Test func anAnsweredDialogTakesNoSecondAnswer() {
     let codes = StoppedWith()
     let presenter = presenterAnswering(codes)
-    #expect(presenter.answerOpenDialog(HookAnswer(button: "Quit bosun", boxes: [:])))
+    #expect(presenter.answerOpenDialog(HookAnswer(button: "Stop bosun", boxes: [:])))
     #expect(!presenter.hasOpenDialog)
     #expect(!presenter.answerOpenDialog(HookAnswer(button: "Cancel", boxes: [:])))
     #expect(codes.responses == [.alertFirstButtonReturn])
@@ -182,8 +184,8 @@ final class StoppedWith {
   }
 
   /// `stopModal` from a timer ends the modal loop only once an event is taken; this is the event posted so a
-  /// VM that nobody touches has one. (Whether the loop then ends is Task 5's to see: showing a dialog is not
-  /// something a headless test can do.)
+  /// VM that nobody touches has one. (Whether the loop then ends is the Mac VM suite's to see, tests/app_e2e.sh:
+  /// showing a dialog is not something a headless test can do.)
   @Test func theEventThatWakesTheModalLoopIsAnApplicationDefinedOne() {
     #expect(Dialogs.wakeEvent()?.type == .applicationDefined)
   }

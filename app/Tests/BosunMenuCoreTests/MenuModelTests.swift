@@ -16,13 +16,14 @@ private func loaded(_ name: String, current: Bool = true) throws -> StatusState 
 }
 
 private func model(
-  _ status: StatusState, update: UpdateState = .idle, flow: FlowState = FlowState(),
-  login: Bool = false
+  _ status: StatusState, update: UpdateState = .idle, flow: FlowState = FlowState()
 ) -> MenuModel {
-  menu(for: status, update: update, flow: flow, login: login)
+  menu(for: status, update: update, flow: flow)
 }
 
-private let tail: [ItemID] = [.checkForUpdates, .openAtLogin, .helpMenu, .quit]
+/// The items after the console's while the session runs, and while it does not.
+private let tail: [ItemID] = [.checkForUpdates, .settings, .helpMenu, .stopBosun, .quitApp]
+private let stoppedTail: [ItemID] = [.checkForUpdates, .settings, .helpMenu, .quitApp]
 
 @Suite struct MenuForEachLevelTests {
   @Test func runningIsGreenWithTheUsualItems() throws {
@@ -35,11 +36,13 @@ private let tail: [ItemID] = [.checkForUpdates, .openAtLogin, .helpMenu, .quit]
     #expect(menu.topIDs == [.openConsole] + tail)
     #expect(!menu.has(.showProblems))
     #expect(!menu.has(.startBosun))
-    #expect(menu.item(.openConsole).enabled)
+    // the fixture's console is not running
+    #expect(!menu.item(.openConsole).enabled)
     #expect(menu.item(.openConsole).key == "o")
     #expect(menu.item(.openConsole).title == "Open Console")
-    #expect(menu.item(.quit).title == "Quit bosun…")
-    #expect(menu.item(.quit).key == "q")
+    #expect(menu.item(.stopBosun).title == "Stop bosun…")
+    #expect(menu.item(.quitApp).title == "Quit bosun.app")
+    #expect(menu.item(.quitApp).key == "q")
     #expect(menu.iconBadge == nil)
   }
 
@@ -56,7 +59,7 @@ private let tail: [ItemID] = [.checkForUpdates, .openAtLogin, .helpMenu, .quit]
     let menu = model(try loaded("status-error"))
     #expect(menu.header.dot == .red)
     #expect(menu.header.sentence == "bosun is not running")
-    #expect(menu.topIDs == [.startBosun, .showProblems, .openConsole] + tail)
+    #expect(menu.topIDs == [.startBosun, .showProblems, .openConsole] + stoppedTail)
     #expect(menu.item(.startBosun).title == "Start bosun")
     #expect(menu.item(.startBosun).enabled)
     #expect(menu.iconBadge == .error)
@@ -89,7 +92,8 @@ private let tail: [ItemID] = [.checkForUpdates, .openAtLogin, .helpMenu, .quit]
     #expect(menu.has(.showProblems))
     #expect(!menu.has(.startBosun))
     #expect(menu.iconBadge == .warning)
-    #expect(menu.item(.quit).title == "Quit bosun…")
+    // its quit record (`stopped`) is a quit that may not have finished: Stop finishes it
+    #expect(menu.has(.stopBosun))
   }
 
   @Test func whatAFlowSaysIsALineUnderTheStatus() throws {
@@ -104,34 +108,58 @@ private let tail: [ItemID] = [.checkForUpdates, .openAtLogin, .helpMenu, .quit]
     let menu = model(try loaded("status-quit-unfinished"))
     #expect(menu.header.dot == .red)
     #expect(menu.topIDs.prefix(2) == [.startBosun, .showProblems])
-    #expect(menu.item(.quit).title == "Quit bosun…")
+    #expect(menu.has(.stopBosun))
   }
 
-  @Test func stoppedIsGreyWithStartFirstAConsoleThatIsGreyedAndAQuitWithoutDots() throws {
+  @Test func stoppedIsGreyWithStartFirstAConsoleThatIsGreyedAndNoStop() throws {
     let menu = model(try loaded("status-stopped"))
     #expect(menu.header.dot == .grey)
     #expect(menu.header.sentence == "bosun is stopped")
-    #expect(menu.topIDs == [.startBosun, .openConsole] + tail)
+    #expect(menu.topIDs == [.startBosun, .openConsole] + stoppedTail)
     #expect(!menu.item(.openConsole).enabled)
-    #expect(menu.item(.quit).title == "Quit bosun")
-    #expect(menu.item(.quit).enabled)
+    #expect(menu.item(.quitApp).title == "Quit bosun.app")
+    #expect(menu.item(.quitApp).enabled)
     #expect(!menu.has(.showProblems))
     #expect(menu.iconBadge == nil)
   }
 
-  @Test func restingIsGreenAndNeedsNoStart() throws {
+  /// The design's table: outside your hours, not running, is grey; started by you, green; a problem keeps its colour.
+  @Test func restingIsGreyAndOffersStartNow() throws {
     let menu = model(try loaded("status-resting"))
-    #expect(menu.header.dot == .green)
-    #expect(menu.header.sentence == "bosun is resting until 08:00")
-    #expect(!menu.has(.startBosun))
-    #expect(menu.item(.openConsole).enabled)
+    #expect(menu.header.dot == .grey)
+    #expect(menu.header.sentence == "Resting: outside your hours · next start Wed 08:00")
+    #expect(menu.topIDs == [.startBosun, .openConsole] + stoppedTail)
+    #expect(!menu.item(.openConsole).enabled)
+  }
+
+  @Test func runningOutsideYourHoursIsGreen() throws {
+    #expect(model(try loaded("status-running-outside-hours")).header.dot == .green)
+  }
+
+  @Test func restingWithAWarningIsYellow() throws {
+    let text = try Fixtures.text("status-resting").replacingOccurrences(
+      of: "\"level\": \"ok\"", with: "\"level\": \"warning\"")
+    let warned = try decodeContract(StatusSnapshot.self, from: text)
+    #expect(warned.level == .warning)
+    #expect(model(.loaded(warned, current: true)).header.dot == .yellow)
+  }
+
+  @Test func okWithinYourHoursOrWithWindowsUnreadIsGreen() throws {
+    let text = try Fixtures.text("status-resting")
+    let inHours = text.replacingOccurrences(of: "\"in_hours\": false", with: "\"in_hours\": true")
+    let unread = text.replacingOccurrences(of: "\n  \"running\": false", with: "\n  \"running\": null")
+    for variant in [inHours, unread] {
+      #expect(variant != text)
+      let status = try decodeContract(StatusSnapshot.self, from: variant)
+      #expect(model(.loaded(status, current: true)).header.dot == .green)
+    }
   }
 
   @Test func theSectionsAreTheActionsTheConsoleTheAppsOwnItemsAndQuit() throws {
     let menu = model(try loaded("status-error"))
     #expect(
       menu.sections.map { $0.map(\.id) } == [
-        [.startBosun, .showProblems], [.openConsole], [.checkForUpdates, .openAtLogin, .helpMenu], [.quit],
+        [.startBosun, .showProblems], [.openConsole], [.checkForUpdates, .settings, .helpMenu], [.quitApp],
       ])
   }
 
@@ -148,10 +176,9 @@ private let tail: [ItemID] = [.checkForUpdates, .openAtLogin, .helpMenu, .quit]
     #expect(menu.topIDs == [.showProblems, .openConsole] + tail)
   }
 
-  @Test func openAtLoginShowsTheStateItWasGiven() throws {
-    #expect(try model(loaded("status-ok"), login: true).item(.openAtLogin).checked)
-    #expect(try !model(loaded("status-ok"), login: false).item(.openAtLogin).checked)
-    #expect(try model(loaded("status-ok")).item(.openAtLogin).title == "Open at Login")
+  /// Open at Login moved into the Settings window.
+  @Test func openAtLoginIsNoLongerInTheMenu() throws {
+    #expect(try !model(loaded("status-ok")).allItems.contains { $0.title == "Open at Login" })
   }
 }
 
@@ -166,8 +193,9 @@ private let tail: [ItemID] = [.checkForUpdates, .openAtLogin, .helpMenu, .quit]
     let menu = model(.notInstalled)
     #expect(menu.header.sentence == "bosun is not installed")
     #expect(menu.header.dot == .grey)
-    #expect(enabledLeaves(menu) == [.help(.guide), .quit])
-    #expect(menu.item(.quit).title == "Quit bosun.app")
+    #expect(enabledLeaves(menu) == [.help(.guide), .quitApp])
+    #expect(menu.item(.quitApp).title == "Quit bosun.app")
+    #expect(!menu.has(.settings))
     #expect(menu.iconBadge == nil)
   }
 
@@ -177,7 +205,7 @@ private let tail: [ItemID] = [.checkForUpdates, .openAtLogin, .helpMenu, .quit]
     #expect(menu.header.sentence == "bosun cannot be reached")
     #expect(menu.header.detail == ["bosun did not answer in time"])
     #expect(menu.header.dot == .red)
-    #expect(enabledLeaves(menu) == [.help(.guide), .help(.doctor), .quit])
+    #expect(enabledLeaves(menu) == [.help(.guide), .help(.doctor), .quitApp])
     #expect(menu.iconBadge == .error)
   }
 
@@ -187,9 +215,9 @@ private let tail: [ItemID] = [.checkForUpdates, .openAtLogin, .helpMenu, .quit]
     #expect(menu.header.sentence == "bosun cannot be run")
     #expect(menu.header.detail == ["~/.local/bin/bosun cannot be run (a broken link, or not executable)"])
     #expect(menu.header.dot == .red)
-    #expect(enabledLeaves(menu) == [.help(.guide), .quit])
+    #expect(enabledLeaves(menu) == [.help(.guide), .quitApp])
     #expect(menu.iconBadge == .error)
-    #expect(menu.item(.quit).title == "Quit bosun.app")
+    #expect(menu.item(.quitApp).title == "Quit bosun.app")
   }
 
   @Test func theHelpMenuKeepsItsFourItemsButOnlyTheGuideIsEnabledThen() throws {
@@ -207,10 +235,11 @@ private let tail: [ItemID] = [.checkForUpdates, .openAtLogin, .helpMenu, .quit]
         "If bosun is up to date, run `bosun app update` in a terminal.",
       ])
     #expect(menu.header.dot == .yellow)
-    #expect(menu.topIDs == [.updateBosun, .helpMenu, .quit])
+    #expect(menu.topIDs == [.updateBosun, .helpMenu, .quitApp])
     #expect(menu.item(.updateBosun).title == "Update bosun…")
     #expect(menu.item(.updateBosun).enabled)
-    #expect(enabledLeaves(menu) == [.updateBosun, .help(.guide), .help(.doctor), .help(.uninstall), .quit])
+    #expect(
+      enabledLeaves(menu) == [.updateBosun, .help(.guide), .help(.doctor), .help(.uninstall), .quitApp])
     #expect(menu.iconBadge == .warning)
   }
 
@@ -280,26 +309,22 @@ private let tail: [ItemID] = [.checkForUpdates, .openAtLogin, .helpMenu, .quit]
 }
 
 @Suite struct MenuWhileAFlowRunsTests {
-  @Test func startQuitAndUninstallWaitButTheConsoleAndTheProblemsDoNot() throws {
-    let menu = model(try loaded("status-error"), flow: flowRunning(.quit))
+  @Test func startStopQuitAndUninstallWaitButTheProblemsAndSettingsDoNot() throws {
+    let menu = model(try loaded("status-quit-unfinished"), flow: flowRunning(.quit))
     #expect(!menu.item(.startBosun).enabled)
-    #expect(!menu.item(.quit).enabled)
+    #expect(!menu.item(.stopBosun).enabled)
+    #expect(!menu.item(.quitApp).enabled)
     #expect(!menu.item(.help(.uninstall)).enabled)
-    #expect(menu.item(.openConsole).enabled)
     #expect(menu.item(.showProblems).enabled)
+    #expect(menu.item(.settings).enabled)
     #expect(menu.item(.help(.doctor)).enabled)
   }
 
-  @Test func openAtLoginWaitsForAFlowAndForItsOwnSwitch() throws {
-    #expect(!model(try loaded("status-ok"), flow: flowRunning(.login)).item(.openAtLogin).enabled)
-    #expect(!model(try loaded("status-ok"), flow: flowRunning(.quit)).item(.openAtLogin).enabled)
-    #expect(model(try loaded("status-ok")).item(.openAtLogin).enabled)
-  }
-
   @Test func withNoFlowTheyAreAllThere() throws {
-    let menu = model(try loaded("status-error"))
+    let menu = model(try loaded("status-quit-unfinished"))
     #expect(menu.item(.startBosun).enabled)
-    #expect(menu.item(.quit).enabled)
+    #expect(menu.item(.stopBosun).enabled)
+    #expect(menu.item(.quitApp).enabled)
     #expect(menu.item(.help(.uninstall)).enabled)
   }
 }

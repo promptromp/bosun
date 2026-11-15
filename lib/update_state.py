@@ -327,9 +327,11 @@ def windows_pending(state_dir: Path) -> bool:
 
 def main(argv: list[str]) -> int:
     parser = argparse.ArgumentParser(prog="update_state.py")
-    parser.add_argument("command", choices=("hold-active", "stuck", "windows-pending"))
+    parser.add_argument("command", choices=("hold-active", "running", "stuck", "windows-pending"))
     parser.add_argument("--state-dir", type=Path, required=True)
     args = parser.parse_args(argv)
+    if args.command == "running":
+        return 0 if running(args.state_dir) else 1
     if args.command == "hold-active":
         return 0 if holding(args.state_dir, time.time()) else 1
     if args.command == "windows-pending":

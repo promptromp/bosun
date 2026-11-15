@@ -13,8 +13,13 @@
 # and placed in ~/Applications the way `bosun app install` places an app (`bosun init` cannot offer an app that is
 # not the publisher's: there is no Team ID), BOSUN_MENU_APP and the console's job set as `bosun init` sets them
 # with the app. release: `bosun init` installs the published, notarized app, as a person gets it, and the suite
-# checks Gatekeeper accepts it and init turned Open at Login on, then turns it off for the driven steps (that run
-# needs a release and a Team ID in app/publisher.json).
+# checks Gatekeeper accepts it and init turned Open at Login on, then turns it off for the driven steps, through
+# the Settings window's switch (that run needs a release and a Team ID in app/publisher.json).
+#
+# The control panel (docs/design/control-panel.md): Stop bosun… leaves the app with the grey stopped menu, Quit
+# bosun.app's Leave bosun Running leaves bosun running, the Settings window's Save moves the morning job, outside
+# the hours the menu says Resting with the next start, a reload of the jobs after a stop starts nothing, and the
+# restart in the hours starts bosun at login.
 #
 # Checks pass shell snippets to `bash -c '...' _ args`; their $ must not expand here.
 # shellcheck disable=SC2016
@@ -30,6 +35,8 @@ APP="$HOME/Applications/bosun.app"
 APP_EXEC="$APP/Contents/MacOS/bosun"
 APP_JOB="$LABEL.app"
 APP_PLIST="$HOME/Library/LaunchAgents/$APP_JOB.plist"
+LOGIN_JOB="$LABEL.login" # bosun's own login job (BOSUN_START_AT_LOGIN), not the app's
+MORNING_PLIST="$HOME/Library/LaunchAgents/$LABEL.plist"
 RESULTS="$HOME/.app-e2e-results"
 STAND_IN="$HOME/.sandbox/claude"
 WAIT_POLL=100 # seconds: the app asks for the status every 30, and a check on it may follow a change by that long
@@ -98,8 +105,24 @@ set_env() { # <KEY> <value>: in bosun.env, as bosun init writes it (replaced, or
   fi
 }
 
-# bosun init's answers: the one repo window, the schedule open from 02:00 to 23:59 every day (so no check depends on the
-# hour the run happens at; not from 00:00, whose wake `bosun doctor` reads as 12:01AM where pmset says 0:01AM) and no learning.
+# The Mac's time zone, chosen so that its local time is about noon whatever the hour the run starts at: the schedule
+# below is all day but for the night, and the checks that the hours decide (the watchdog's alert held no longer, the
+# restart in the hours that starts bosun at login) must not depend on when the run happens. Etc/GMT-N is N hours
+# ahead of UTC (POSIX's sign). launchd most likely goes on with the zone it started with until the restart (inferred,
+# not seen), so the run never moves the clock.
+about_noon() { [ "$((10#$(date +%H)))" -ge 11 ] && [ "$((10#$(date +%H)))" -le 13 ]; }
+pin_the_hour() {
+  local offset zone
+  offset=$((12 - 10#$(date -u +%H)))
+  if [ "$offset" -ge 0 ]; then zone="Etc/GMT-$offset"; else zone="Etc/GMT+${offset#-}"; fi
+  # systemsetup may not know the Etc zones (and exits 0 when it refuses): then the link it would make, made here
+  sudo systemsetup -settimezone "$zone" </dev/null >/dev/null 2>&1
+  about_noon || sudo ln -sf "/var/db/timezone/zoneinfo/$zone" /etc/localtime
+  check "the Mac's local time is about noon (time zone $zone): $(date '+%H:%M %Z')" about_noon
+}
+
+# bosun init's answers: the one repo window, the schedule open from 02:00 to 23:59 every day (not from 00:00, whose wake
+# `bosun doctor` reads as 12:01AM where pmset says 0:01AM) and no learning.
 init_with_answers() {
   local menu_app=false answers="$OUT/answers.json"
   [ "$FROM" = release ] && menu_app=true
@@ -134,8 +157,9 @@ place_built_app() {
 }
 
 # --from release: bosun init installed the notarized app, and opened it at login at once. What a person gets.
-# Then Open at Login goes off again, so the driven steps start where they start with a built app: step 4 checks
-# that an update does not make the login job, and step 7 turns it on from the menu.
+# Then that copy is quit, and step 1 turns Open at Login off through the Settings window's switch, so the driven
+# steps go on where they go on with a built app: step 4 checks that an update does not make the login job, and
+# step 7 turns it on again from the Settings window.
 check_the_release() {
   spctl --status | grep -q "assessments enabled" || { sudo spctl --global-enable && echo "  note  assessments were disabled on this Mac: enabled"; }
   check "Gatekeeper accepts the download: source=Notarized Developer ID" bash -c 'spctl --assess --type execute -vv "$1" 2>&1 | grep -qx "source=Notarized Developer ID"' _ "$APP"
@@ -144,9 +168,6 @@ check_the_release() {
   check "... which started the app: it runs" wait_for 60 app_running
   python3 "$DIR/lib/app_install.py" quit >/dev/null 2>&1
   check "the app, without hooks, is quit again, for the one that is driven" wait_for 60 app_gone
-  check "bosun app login off: the login job's plist is gone, and the job is not loaded" bash -c '
-    "$1" app login off >/dev/null && test ! -e "$2" && ! launchctl print "$3/$4" >/dev/null 2>&1' _ "$BOSUN" "$APP_PLIST" "$DOMAIN" "$APP_JOB"
-  check "... and bosun app status --json says login false" bash -c '"$1" app status --json | jq -e ".login == false"' _ "$BOSUN"
 }
 
 app_is_installed() {
@@ -158,6 +179,7 @@ app_is_installed() {
 
 install_with_the_app() {
   a_new_machine
+  pin_the_hour
   follow_what_it_says
   install
   check "... versions side by side, the install path a link to the version in use" side_by_side
@@ -178,10 +200,23 @@ step_1() {
   check "its menu is green, and says the windows are open" wait_for "$WAIT_POLL" menu_green_with_windows
   jq -c '.header' "$HOOKS/menu.json" | sed 's/^/  note  the header: /'
   check "... what bosun status --json says: the level, the sentence and the lines" wait_for 60 menu_matches_status
-  check "... Quit is in it, with the dialog's dots, and Open Console is enabled" menu_says '[.sections[][] | recurse(.children[]) | select(.id == "quit" or .id == "openConsole")] | map(.enabled) == [true, true]'
+  check "... Open Console, Stop bosun… and Quit bosun.app are in it, all enabled" menu_says '[.sections[][] | recurse(.children[]) | select(.id == "openConsole" or .id == "stopBosun" or .id == "quitApp")] | map(.enabled) == [true, true, true]'
   check "... and there is no Start (bosun runs) nor What's Wrong (nothing is)" bash -c '! jq -e "[.sections[][] | .id] | any(. == \"startBosun\" or . == \"showProblems\")" "$1"' _ "$HOOKS/menu.json"
   check "the app has not run anything but reading: status, the app's state and the update check" bash -c '
     jq -s -e "[.[] | select(.command != null) | .command[0]] | unique - [\"status\", \"app\", \"update\"] | length == 0" "$1"' _ "$HOOKS/log.jsonl"
+  if [ "$FROM" = release ]; then open_at_login_off; fi
+}
+
+# Open at Login, which bosun init turned on with the released app, off again through the Settings window's switch
+# (the hooks' settings action): the app runs `bosun app login off`, and the window shows what bosun then reads.
+open_at_login_off() {
+  local mark
+  mark="$(log_count)"
+  act '{"settings": {"openAtLogin": false}}'
+  check "the Settings window's Open at Login switch, turned off: the app ran bosun app login off" wait_for 60 log_has "$mark" '.command == ["app", "login", "off"] and .outcome == "exited 0"'
+  check "... the login job's plist is gone, and the job is not loaded" bash -c 'test ! -e "$1" && ! launchctl print "$2/$3" >/dev/null 2>&1' _ "$APP_PLIST" "$DOMAIN" "$APP_JOB"
+  check "... bosun app status --json says login false" bash -c '"$1" app status --json | jq -e ".login == false"' _ "$BOSUN"
+  check "... and the window shows it off" wait_for 30 menu_says '.settings.open_at_login == false'
 }
 
 # ---- 2. a problem: yellow, "Show What's Wrong…" lists it; and back --------------------------------------------
@@ -291,15 +326,16 @@ step_4() {
   check "the app's own login job is not made by the update (Open at Login is still off)" test ! -e "$APP_PLIST"
 }
 
-# ---- 5. Quit with no busy agent, all defaults ------------------------------------------------------------------
+# ---- 5. Quit bosun.app, Stop bosun and Quit, no busy agent, all defaults ----------------------------------------
 
 step_5() {
   local paused mark
-  echo "5. Quit, no busy agent, all defaults: nothing of bosun is left, the app is gone"
+  echo "5. Quit bosun.app, Stop bosun and Quit, no busy agent, all defaults: nothing of bosun is left, the app is gone"
   mark="$(log_count)"
-  click quit
-  reply "Quit bosun"
-  check "Quit, and Quit bosun in the dialog (both taken)" wait_for 90 actions_taken
+  click quitApp
+  reply "Stop bosun and Quit…"
+  reply "Stop bosun"
+  check "Quit bosun.app, its Stop bosun and Quit…, and Stop bosun in the dialog (all three taken)" wait_for 90 actions_taken
   check "... the app ran the plan, then the quit, with the defaults" wait_for 120 log_has "$mark" '.command[0:2] == ["quit", "--let-finish=0"] and (.command | index("--pause-morning") != null) and (.command | index("--sleep") != null) and .outcome == "exited 0"'
   check "... and the app is gone" wait_for 60 app_gone
   check "no tmux server" no_tmux_server
@@ -319,11 +355,11 @@ step_5() {
   check "... and the app was not brought back by any of it" app_gone
 }
 
-# ---- 6. opened again: it starts bosun; a busy agent; Keep bosun in the menu bar --------------------------------
+# ---- 6. opened again: it starts bosun; a busy agent; Stop bosun… keeps the app ---------------------------------
 
 step_6() {
   local mark
-  echo "6. the app opened again: it starts bosun; Quit with a busy agent; Keep bosun in the menu bar"
+  echo "6. the app opened again: it starts bosun; Stop bosun and Quit with a busy agent; Stop bosun… keeps the app"
   mark="$(log_count)"
   launch_app
   check "opened with bosun stopped, the app starts it: morning --now --background, logged" wait_for 90 log_has "$mark" '.command == ["morning", "--now", "--background"] and .outcome == "exited 0"'
@@ -333,25 +369,27 @@ step_6() {
   agent acme-api busy
   check "a busy agent in acme-api" wait_for 60 busy_in_plan
   mark="$(log_count)"
-  click quit
-  reply "Quit bosun"
+  click quitApp
+  reply "Stop bosun and Quit…"
+  reply "Stop bosun"
   reply "Let Them Finish"
   reply "Stop It Now"
-  check "Quit, Quit bosun, the busy dialog's Let Them Finish, the still-busy dialog's Stop It Now (all four taken)" wait_for 180 actions_taken
+  check "Quit bosun.app, Stop bosun and Quit…, Stop bosun, the busy dialog's Let Them Finish, the still-busy dialog's Stop It Now (all five taken)" wait_for 180 actions_taken
   check "... the quit that let them finish waited 0 minutes, found acme-api busy (exit 3), and the app asked again" wait_for 120 log_has "$mark" '.command[0:2] == ["quit", "--let-finish=0"] and .outcome == "exited 3"'
   check "... then stopped them now" wait_for 120 log_has "$mark" '.command[0:2] == ["quit", "--stop-now"] and (.command | index("--pause-morning") != null) and .outcome == "exited 0"'
   check "... the app is gone" wait_for 60 app_gone
   check "... and bosun is stopped: no tmux server, status says stopped" bash -c '! tmux -L bosun info && "$1" status --json | jq -e ".level == \"stopped\""' _ "$BOSUN"
   agent acme-api idle
 
-  echo "6b. Quit with Keep bosun in the menu bar: the grey stopped menu, Start: green"
+  echo "6b. Stop bosun…: the grey stopped menu, the app stays, Start: green"
   mark="$(log_count)"
   launch_app
   check "opened again, it starts bosun and the menu is green" wait_for "$WAIT_POLL" menu_green_with_windows
-  click quit
-  reply "Quit bosun" '{"keepIcon": true}'
-  check "Quit, with the icon kept (both taken)" wait_for 120 actions_taken
+  click stopBosun
+  reply "Stop bosun"
+  check "Stop bosun…, and Stop bosun in the dialog (both taken)" wait_for 120 actions_taken
   check "... the menu is the grey stopped menu" wait_for "$WAIT_POLL" menu_stopped
+  check "... which says bosun is stopped" menu_says '.header.sentence | startswith("bosun is stopped")'
   check "... bosun is stopped" no_tmux_server
   check "... the app stays: it runs" app_running
   check "... and offers Start bosun, with Open Console greyed" bash -c 'jq -e "([.sections[][] | select(.id == \"startBosun\")] | length == 1) and ([.sections[][] | select(.id == \"openConsole\")] | first | .enabled == false)" "$1"' _ "$HOOKS/menu.json"
@@ -360,6 +398,26 @@ step_6() {
   check "Start bosun runs morning --now --background" wait_for 60 log_has "$mark" '.command == ["morning", "--now", "--background"] and .outcome == "exited 0"'
   check "... and the menu is green again, with the windows" wait_for "$WAIT_POLL" menu_green_with_windows
   check "... bosun's windows are up" has_window orchestrator
+  step_6c
+}
+
+no_quit_logged() { ! log_has "$1" '.command[0] == "quit"'; } # <lines to skip>
+
+step_6c() {
+  local mark
+  echo "6c. Quit bosun.app, Leave bosun Running: the app is gone and bosun runs on; opened again, it starts nothing"
+  mark="$(log_count)"
+  click quitApp
+  reply "Leave bosun Running"
+  check "Quit bosun.app, and Leave bosun Running in its dialog (both taken)" wait_for 60 actions_taken
+  check "... the app is gone" wait_for 60 app_gone
+  check "... and it ran no quit: bosun is left as it is" no_quit_logged "$mark"
+  check "... bosun runs on: its session is there, and bosun status --json says it runs" bash -c 'tmux -L bosun has-session -t =bosun && "$1" status --json | jq -e ".running == true"' _ "$BOSUN"
+  mark="$(log_count)"
+  launch_app
+  check "opened again, its menu is green, with the windows" wait_for "$WAIT_POLL" menu_green_with_windows
+  sleep 10 # a dwell, on purpose: a start at launch is decided on the first status, which the menu above shows
+  check "... and it starts nothing: no morning --now --background since it opened" no_start_logged "$mark"
 }
 
 # ---- 8. launched again while running: still one process --------------------------------------------------------
@@ -422,14 +480,14 @@ ask_the_app_to_quit_from_here() {
 
 step_7_login() {
   local mark
-  echo "7. Open at Login on (the restart follows)"
-  mark="$(log_count)"
+  echo "7. Open at Login on, from the Settings window (the restart follows)"
   check "bosun app status says login false before" bash -c '"$1" app status --json | jq -e ".login == false"' _ "$BOSUN"
-  click openAtLogin
-  check "choosing it runs bosun app login on" wait_for 60 log_has "$mark" '.command == ["app", "login", "on"] and .outcome == "exited 0"'
+  mark="$(log_count)"
+  act '{"settings": {"openAtLogin": true}}'
+  check "the Settings window's Open at Login switch, turned on: the app ran bosun app login on" wait_for 60 log_has "$mark" '.command == ["app", "login", "on"] and .outcome == "exited 0"'
+  check "... the window shows it on" wait_for 30 menu_says '.settings.open_at_login == true'
   check "... the login job's plist is in LaunchAgents and loaded" bash -c 'test -f "$1" && launchctl print "$2/$3" >/dev/null' _ "$APP_PLIST" "$DOMAIN" "$APP_JOB"
   check "... bosun app status --json says login true" bash -c '"$1" app status --json | jq -e ".login == true"' _ "$BOSUN"
-  check "... and the menu item is checked" wait_for "$WAIT_POLL" menu_says '[.sections[][] | select(.id == "openAtLogin")] | first | .checked == true'
   check "loading the job ran the app at once (RunAtLoad): launchd ran it, and that second copy has exited" wait_for 60 login_job_ran_and_exited
   check "... so there is still one app process" test "$(app_count)" = 1
   check "... and it is still the first copy: it has the hooks" bash -c 'ps -o args= -p "$(pgrep -f "^$1( |\$)" | head -1)" | grep -q -- "--test-hooks"' _ "$APP_EXEC"
@@ -463,6 +521,125 @@ step_automation_from_the_app() {
   rm -f "$HOME/.sandbox/quit-probe"
 }
 
+# ---- 10. the Settings window: start at login, and the start time, which the morning job follows ------------------
+
+# What a person does with the script the app opened: runs it in Terminal and types the password at sudo's prompt.
+# Here a terminal (script's pty), whose sudo is asked first with the clone's password (admin/admin), so the
+# command's own `sudo -v` finds it given in the same terminal.
+in_terminal_with_password() { script -q /dev/null bash -c 'printf "admin\n" | sudo -S -v 2>/dev/null && "$@"' _ "$@"; }
+update_over() { "$BOSUN" status --json | jq -e '.update.state == "none"' >/dev/null; }
+
+settings_value_is() { "$BOSUN" settings get --json | jq -e --arg key "$1" --arg value "$2" '.settings[$key].value == $value' >/dev/null; }                      # <KEY> <value>
+calendar_is() { [ "$(plutil -extract StartCalendarInterval.Hour raw "$1")" = "$2" ] && [ "$(plutil -extract StartCalendarInterval.Minute raw "$1")" = "$3" ]; } # <plist> <hour> <minute>
+
+step_10() {
+  local mark wake
+  echo "10. the Settings window: start at login on, and the start time moved to 03:00: the morning job follows"
+  # settings set is refused while an update runs, and the one the app started goes on after the app quit
+  check "the update the app started is over: bosun status --json says none runs" wait_for 180 update_over
+  mark="$(log_count)"
+  act '{"settings": {"BOSUN_START_AT_LOGIN": "1"}}'
+  check "a Save of BOSUN_START_AT_LOGIN=1: the app ran settings set" wait_for 60 log_has "$mark" '.command == ["settings", "set", "BOSUN_START_AT_LOGIN=1", "--json"] and .outcome == "exited 0"'
+  check "... the window shows what bosun read after it: 1" wait_for 30 menu_says '.settings.values.BOSUN_START_AT_LOGIN == "1"'
+  check "... and bosun's login job is loaded, its plist in LaunchAgents" bash -c 'test -f "$1/$2.plist" && launchctl print "$3/$2" >/dev/null' _ "$HOME/Library/LaunchAgents" "$LOGIN_JOB" "$DOMAIN"
+  wake="$(jq -r '.settings.wake' "$HOOKS/menu.json")"
+  echo "  note  whose the Mac's repeating wake is, as the window read it: $wake"
+  check "the morning job runs at 02:00 before" calendar_is "$MORNING_PLIST" 2 0
+  mark="$(log_count)"
+  act '{"settings": {"BOSUN_START_TIME": "03:00"}}'
+  if [ "$wake" = ours ]; then
+    # bosun's wake moves with the start time, which needs sudo: the app hands the Save to Terminal
+    check "bosun's wake is set, so the Save of BOSUN_START_TIME=03:00 is finished in Terminal: the app opened a script" wait_for 60 log_has "$mark" '(.open? // "") | endswith(".command")'
+    check "... which runs bosun settings set BOSUN_START_TIME=03:00" bash -c 'grep -q "settings.*set.*BOSUN_START_TIME=03:00" "$(jq -r "select(.open? != null) | .open" "$1" | tail -1)"' _ "$HOOKS/log.jsonl"
+    check "... the window says to finish it there" wait_for 30 menu_says '.settings.message | startswith("Finish the change in Terminal")'
+    check "... and nothing is written until then" settings_value_is BOSUN_START_TIME 02:00
+    check "what the script runs, run in a terminal with the password typed: bosun settings set BOSUN_START_TIME=03:00" in_terminal_with_password "$BOSUN" settings set BOSUN_START_TIME=03:00
+    pmset -g sched | sed 's/^/  note  pmset: /'
+    check "... and the wake moved with it, to a minute past the new start, still bosun's" bash -c 'pmset -g sched | grep -q "at 3:01AM" && "$1" settings get --json | jq -e ".wake == \"ours\""' _ "$BOSUN"
+    # the window brought to the front reads bosun again: what bosun read, never the draft, the hand-off's line gone
+    click settings
+    check "Settings… after the hand-off: the window shows what bosun read, 03:00, with the line to finish in Terminal gone" wait_for 30 menu_says '.settings.values.BOSUN_START_TIME == "03:00" and .settings.message == null'
+  else
+    check "no wake of bosun's to move, so the Save of BOSUN_START_TIME=03:00 ran settings set" wait_for 60 log_has "$mark" '.command == ["settings", "set", "BOSUN_START_TIME=03:00", "--json"] and .outcome == "exited 0"'
+    check "... and the window shows 03:00" wait_for 30 menu_says '.settings.values.BOSUN_START_TIME == "03:00"'
+  fi
+  check "bosun settings get --json: BOSUN_START_TIME is 03:00" settings_value_is BOSUN_START_TIME 03:00
+  check "the morning job's plist follows: it runs at 03:00" calendar_is "$MORNING_PLIST" 3 0
+  check "... and the job is loaded" launchctl print "$DOMAIN/$LABEL"
+}
+
+# ---- 11. outside your hours: Resting, the next start, a grey dot ----------------------------------------------------
+
+resting_menu() { jq -e --arg s "$1" '.level == "ok" and .header.dot == "grey" and .header.sentence == $s' "$HOOKS/menu.json" >/dev/null 2>&1; } # <sentence>
+# <HH:MM>: a Save of BOSUN_AWAKE_UNTIL from the Settings window, which runs settings set itself (it moves no wake).
+save_until() {
+  local mark
+  mark="$(log_count)"
+  act "$(jq -cn --arg until "$1" '{settings: {BOSUN_AWAKE_UNTIL: $until}}')"
+  check "a Save of BOSUN_AWAKE_UNTIL=$1: the app ran settings set" wait_for 60 log_has "$mark" ".command == [\"settings\", \"set\", \"BOSUN_AWAKE_UNTIL=$1\", \"--json\"] and .outcome == \"exited 0\""
+  check "... and the window shows $1" wait_for 30 menu_says ".settings.values.BOSUN_AWAKE_UNTIL == \"$1\""
+}
+
+# Outside the hours by moving the hours, not the clock: launchd most likely keeps the time zone it started with until
+# the restart (pin_the_hour changed it under it; inferred, not seen), so a clock moved past a job's time in either
+# zone would run that job.
+step_11() {
+  local until expected
+  until="$(date -v-1H +%H:%M)"
+  echo "11. outside your hours: bosun stopped, the hours made to end at $until (an hour ago): Resting, with the next start at 03:00"
+  "$BOSUN" stop >/dev/null 2>&1
+  check "bosun stop: no tmux server" no_tmux_server
+  check "... in the hours, the menu says it is stopped" wait_for "$WAIT_POLL" menu_says '.level == "stopped"'
+  save_until "$until"
+  expected="Resting: outside your hours · next start $(date -v+1d +%a) 03:00"
+  check "bosun status --json: not your hours, the next start tomorrow at 03:00, and \"$expected\"" bash -c '"$1" status --json | jq -e --arg s "$2" --arg next "$3" ".level == \"ok\" and .schedule.in_hours == false and (.schedule.next_start | startswith(\$next)) and .sentence == \$s"' _ "$BOSUN" "$expected" "$(date -v+1d +%FT)03:00"
+  check "... the menu says the same, with the grey dot" wait_for "$WAIT_POLL" resting_menu "$expected"
+  check "... and its Start reads Start bosun now" menu_title_is startBosun "Start bosun now"
+  what_the_app_shows
+  save_until 23:59
+  check "back in the hours, the menu says stopped again, and its Start reads Start bosun" wait_for "$WAIT_POLL" bash -c 'jq -e ".level == \"stopped\"" "$1" >/dev/null && [ "$(jq -r "[.sections[][] | select(.id == \"startBosun\")] | first | .title" "$1")" = "Start bosun" ]' _ "$HOOKS/menu.json"
+  what_the_app_shows
+}
+
+# ---- 12. a reload of bosun's jobs after a stop starts nothing --------------------------------------------------------
+
+step_12() {
+  local said="not starting: a reload of bosun's jobs, not a login" before
+  echo "12. bosun stopped, a reload of its jobs (what bosun update and install.sh run): the login job runs, and starts nothing"
+  before="$(morning_lines "$said")"
+  echo "  note  tmux's windows before the reload, if any: $(windows)"
+  launchctl bootout "$DOMAIN/$LOGIN_JOB" # so the reload loads it, as an update does a job whose plist changed
+  check "reload_changed_jobs loads the login job again" bash -c 'source "$1/lib/common.sh" && load_config && reload_changed_jobs | grep -qx "$2"' _ "$DIR" "$LOGIN_JOB"
+  check "... launchd ran it at load, and it logged that this is a reload, not a login" wait_for 60 morning_lines_above "$said" "$before"
+  sleep 10 # a dwell, on purpose: a start would have begun by now
+  check "... it started nothing: no tmux server" no_tmux_server
+  check "... and the reload's marker is read and gone" test ! -e "$STATE/login-reload"
+  echo "  note  the morning log's last lines:"
+  tail -6 "$STATE/logs/morning-$(date +%F).log" 2>/dev/null | sed 's/^/  note    /'
+  echo "  note  tmux's windows, if any: $(windows)"
+}
+
+# What the app shows and did, for a step whose checks read its menu: its processes, the menu's level, dot and
+# sentence, and the last lines of its log.
+what_the_app_shows() {
+  echo "  note  app processes: $(app_count); the menu: $(jq -c '[.level, .header.dot, .header.sentence]' "$HOOKS/menu.json" 2>&1)"
+  tail -4 "$HOOKS/log.jsonl" | sed 's/^/  note    /'
+}
+
+# Before the restart: bosun runs, started with `bosun start` (which clears the stop of step 11), so the restart ends
+# it with no stop of the day on record, as a Mac's restart does; the app is quit with Leave bosun Running.
+before_the_restart() {
+  echo "the restart: bosun runs, with no stop today, and the app is quit leaving it running"
+  check "bosun start brings the windows up" "$BOSUN" start
+  check "... and leaves no stop of today on record" test ! -e "$STATE/stopped-bosun"
+  check "the menu shows bosun running: it has Stop bosun… (so Quit bosun.app asks)" wait_for "$WAIT_POLL" menu_says '[.sections[][] | .id] | index("stopBosun") != null'
+  click quitApp
+  reply "Leave bosun Running"
+  check "Quit bosun.app, Leave bosun Running (both taken): the app is gone" wait_for 60 app_gone
+  check "... bosun runs" bash -c 'tmux -L bosun has-session -t =bosun'
+  check "... Open at Login is still on, and bosun's login job loaded" bash -c 'test -f "$1" && launchctl print "$2/$3" >/dev/null' _ "$APP_PLIST" "$DOMAIN" "$LOGIN_JOB"
+}
+
 before_reboot() {
   install_with_the_app
   step_1
@@ -477,10 +654,12 @@ before_reboot() {
   launch_app
   check "the app, opened again with the hooks, shows its menu" wait_for 60 menu_says '.level != null'
   step_automation_from_the_app
-  echo "the restart: bosun is stopped (bosun stop) so that nothing but the schedule could start it, and the app is not running"
-  "$BOSUN" stop >/dev/null 2>&1
-  check "bosun is stopped before the restart: no tmux server" no_tmux_server
-  check "... Open at Login is still on" test -f "$APP_PLIST"
+  launch_app
+  check "the app, opened again with the hooks after the update, shows its menu" wait_for 60 menu_says '.level != null'
+  step_10
+  step_11
+  step_12
+  before_the_restart
   echo "$passed $failed" >"$RESULTS"
 }
 
@@ -489,16 +668,18 @@ before_reboot() {
 app_args() { ps -o args= -p "$(app_pids | head -1)"; }
 
 step_7_after() {
-  echo "7. after the restart and the login: the app runs with --at-login, and bosun is not started"
+  local log
+  log="$STATE/logs/morning-$(date +%F).log"
+  echo "7. after the restart and the login, in the hours: the app runs with --at-login, and bosun's login job starts bosun"
   check "launchd's login job started the app: it runs" wait_for 180 app_running
   check "... as the login job runs it, with --at-login and no hooks" bash -c 'args="$(ps -o args= -p "$(pgrep -f "^$1( |\$)" | head -1)")"; echo "$args"; [[ "$args" == *--at-login* && "$args" != *--test-hooks* ]]' _ "$APP_EXEC"
   check "... one app process" test "$(app_count)" = 1
   check "... and the login job is loaded, its plist still in LaunchAgents" bash -c 'test -f "$1" && launchctl print "$2/$3" >/dev/null' _ "$APP_PLIST" "$DOMAIN" "$APP_JOB"
-  sleep 20 # a dwell, on purpose: a start by the app or the login would come within seconds of the app being up
-  check "bosun was not started: no tmux server, no caffeinate" bash -c '! tmux -L bosun info && ! pgrep -x caffeinate'
-  echo "  note  the console's job runs again at login, as its marker is still there (bosun stop does not remove it, bosun quit does): $(pgrep -f 'lib/console_server\.py' | tr '\n' ' ')"
-  check "... and bosun status --json says stopped" status_says '.level == "stopped"'
-  check "the other jobs came back with the login: the morning, watchdog and console jobs are loaded" bash -c 'for job in "$2" "$2.watchdog" "$2.console"; do launchctl print "$1/$job" >/dev/null || exit 1; done' _ "$DOMAIN" "$LABEL"
+  check "bosun's login job started bosun: its windows come up" wait_for 180 has_window orchestrator
+  check "... the morning log says why: starting bosun: you logged in during your hours" grep -q "starting bosun: you logged in during your hours" "$log"
+  check "... and its run is the login's (trigger=login)" grep -q "=== morning run (trigger=login, " "$log"
+  check "... bosun status --json says it runs" wait_for 60 status_says '.running == true'
+  check "the other jobs came back with the login: the morning, watchdog, console and login jobs are loaded" bash -c 'for job in "$2" "$2.watchdog" "$2.console" "$2.login"; do launchctl print "$1/$job" >/dev/null || exit 1; done' _ "$DOMAIN" "$LABEL"
 }
 
 # ---- 9. the app moved to the Trash; uninstall ----------------------------------------------------------------------
@@ -508,7 +689,7 @@ step_9() {
   echo "9. the app moved to the Trash: the watchdog says so; bosun uninstall leaves nothing"
   check "with the app in ~/Applications the watchdog's app-missing check finds nothing" bash -c '"$1" watchdog --status 2>&1 | grep -i "app-missing" | grep -qi "is in ~/Applications"' _ "$BOSUN"
   mv "$APP" "$trash/bosun.app"
-  check "moved to the Trash, the watchdog's app-missing check finds it gone (its alert, held no longer: the schedule is all day)" bash -c '"$1" watchdog --dry-run 2>&1 | tee "$2" | grep -q "bosun.app is not in ~/Applications"' _ "$BOSUN" "$OUT/watchdog-dry.txt"
+  check "moved to the Trash, the watchdog's app-missing check finds it gone (its alert, held no longer: now is inside the hours, 03:00 to 23:59)" bash -c '"$1" watchdog --dry-run 2>&1 | tee "$2" | grep -q "bosun.app is not in ~/Applications"' _ "$BOSUN" "$OUT/watchdog-dry.txt"
   sed 's/^/  note  /' "$OUT/watchdog-dry.txt"
   check "bosun watchdog --once records and sends it: app-missing is alerted" bash -c '"$1" watchdog --once >"$2" 2>&1; grep -q "app-missing" "$3/watchdog.json"' _ "$BOSUN" "$OUT/watchdog-once.txt" "$STATE"
   sed 's/^/  note  /' "$OUT/watchdog-once.txt"

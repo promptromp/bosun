@@ -22,16 +22,16 @@ import Testing
     let (step, none) = next(QuitStep.planning, on: QuitEvent.planUnavailable(reason, wait))
     #expect(step == .unavailable(reason, wait))
     #expect(none.isEmpty)
-    let choices = QuitChoices(pauseMorning: false, sleep: true, keepIcon: true)
+    let choices = QuitChoices(pauseMorning: false, sleep: true, quitsApp: true)
     let (running, commands) = next(step, on: .confirmed(choices))
     #expect(
       running
-        == .running(QuitChoices(pauseMorning: false, sleep: true, keepIcon: true, busy: .stopNow, wait: wait))
+        == .running(QuitChoices(pauseMorning: false, sleep: true, quitsApp: true, busy: .stopNow, wait: wait))
     )
     #expect(commands.map(\.args) == [["quit", "--stop-now", "--sleep", "--json"]])
     // the lock wait, the steps and the margin: longer than bosun's own lock wait and its stop
     #expect(commands.map(\.timeout) == [.seconds(465)])  // 180 + 225 + 60
-    #expect(next(running, on: .ended(.stopped(note: nil))).0 == .done(keepIcon: true, note: nil))
+    #expect(next(running, on: .ended(.stopped(note: nil))).0 == .done(quitsApp: true, note: nil))
   }
 
   @Test func withNoWaitSaidStopNowGetsTheLongestTimeout() throws {
@@ -143,26 +143,35 @@ import Testing
   }
 }
 
-@Suite struct QuitActionTests {
+@Suite struct QuitAppActionTests {
   private func loaded(_ name: String) throws -> StatusState {
     .loaded(try Fixtures.status(name), current: true)
   }
 
-  @Test func aRunningBosunRunsTheQuitFlowWhateverItsLevel() throws {
-    let names = ["status-ok", "status-warning", "status-error", "status-quit-unfinished", "status-resting"]
+  @Test func aRunningSessionIsAskedAboutWhateverItsLevel() throws {
+    let names = [
+      "status-ok", "status-warning", "status-running-error", "status-quit-unfinished",
+      "status-running-outside-hours", "status-windows-unreadable",
+    ]
     for name in names {
-      #expect(try quitAction(for: loaded(name)) == .runFlow, "\(name)")
+      #expect(try quitAppAction(for: loaded(name)) == .ask, "\(name)")
     }
-    #expect(quitAction(for: .loaded(try Fixtures.status("status-ok"), current: false)) == .runFlow)
   }
 
-  @Test func whileStoppedThereIsNoDialogAndTheAppQuits() throws {
-    #expect(try quitAction(for: loaded("status-stopped")) == .exitApp)
+  /// A status kept after a look that timed out may no longer be true: the app only quits.
+  @Test func aStatusThatIsNotCurrentIsNotAskedAbout() throws {
+    #expect(quitAppAction(for: .loaded(try Fixtures.status("status-ok"), current: false)) == .exitApp)
+  }
+
+  @Test func withNoSessionRunningThereIsNoDialogAndTheAppQuits() throws {
+    for name in ["status-stopped", "status-resting", "status-error"] {
+      #expect(try quitAppAction(for: loaded(name)) == .exitApp, "\(name)")
+    }
   }
 
   @Test func whenBosunCannotBeAskedTheAppOnlyQuits() throws {
-    #expect(quitAction(for: .notInstalled) == .exitApp)
-    #expect(quitAction(for: .unreachable("x")) == .exitApp)
-    #expect(quitAction(for: .contractTooNew(2)) == .exitApp)
+    #expect(quitAppAction(for: .notInstalled) == .exitApp)
+    #expect(quitAppAction(for: .unreachable("x")) == .exitApp)
+    #expect(quitAppAction(for: .contractTooNew(2)) == .exitApp)
   }
 }

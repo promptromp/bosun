@@ -807,6 +807,23 @@ class PlanTest(unittest.TestCase):
         off = init_plan.parse_env(init_plan.render_env(Answers(menu_app=False)))
         self.assertEqual((off["BOSUN_MENU_APP"], off["BOSUN_CONSOLE_ALWAYS"]), ("0", "0"))
 
+    def test_env_has_start_at_login(self) -> None:
+        text = init_plan.render_env(Answers(start_at_login=False))
+        self.assertIn('BOSUN_START_AT_LOGIN="0"', text)
+        self.assertIn('BOSUN_START_AT_LOGIN="1"', init_plan.render_env(Answers()))
+
+    def test_recommend_reads_start_at_login(self) -> None:
+        self.assertTrue(init_plan.recommend(facts()).start_at_login)
+        self.assertFalse(init_plan.recommend(facts(env={"BOSUN_START_AT_LOGIN": "0"})).start_at_login)
+        self.assertTrue(init_plan.recommend(facts(env={"BOSUN_START_AT_LOGIN": "1"})).start_at_login)
+        # an install from before the key kept the old way
+        self.assertFalse(init_plan.recommend(facts(env={"BOSUN_DAYS": "MTWRF"})).start_at_login)
+
+    def test_start_at_login_answer_round_trips(self) -> None:
+        answers = Answers(start_at_login=False)
+        self.assertIs(init_plan.answers_to_json(answers)["start_at_login"], False)
+        self.assertEqual(init_plan.answers_from_json(init_plan.answers_to_json(answers), Answers()), answers)
+
     def merged(self, env: dict[str, str], answers: Answers) -> dict[str, str]:
         """What a re-run on a bosun.env that sets <env> leaves it as, for <answers>."""
         text = "".join(f'{key}="{value}"\n' for key, value in env.items())

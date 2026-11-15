@@ -8,8 +8,17 @@ held and goes on, and the kernel drops it when they exit, killed or not: no lock
 long-lived child must not keep it: tmux, whose server outlives the command, gets LOCK_FD closed
 (tmux_cmd).
 
+A shell that must not start again holding it (`bosun settings set`, whose refusal under --json is an
+object) opens LOCK_FD on the lock file itself and has --take lock it: the lock belongs to that open file,
+so it stays held by the shell once this exits, until the shell closes LOCK_FD or exits (lock_here in
+lib/common.sh).
+
 Usage: run_locked.py --held <lock file>
            exit 0 if this process holds the lock on LOCK_FD already, 1 if not
+       run_locked.py --take <lock file> <wait seconds>
+           locks LOCK_FD, which the caller opened on <lock file>, waiting up to <wait seconds> for the one
+           holding it: exit 0 when locked, BUSY past that (saying nothing: the caller says why), USAGE if
+           LOCK_FD is not open on <lock file>
        run_locked.py <lock file> <wait seconds> <busy message> -- <command> [args...]
            runs the command holding the lock, waiting up to <wait seconds> for the one holding it; past
            that it prints "bosun: <busy message>" and exits BUSY
@@ -39,25 +48,42 @@ def held(path: str) -> bool:
     return (mine.st_dev, mine.st_ino) == (there.st_dev, there.st_ino)
 
 
-def acquire(path: str, wait: float) -> int | None:
-    """A descriptor of <path> holding its lock, waiting up to <wait> seconds; None if it stayed taken."""
-    os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
-    fd = os.open(path, os.O_RDWR | os.O_CREAT, 0o600)
+def lock(fd: int, wait: float) -> bool:
+    """Whether <fd>'s file is locked, waiting up to <wait> seconds for the one holding it."""
     deadline = time.monotonic() + wait
     while True:
         try:
             fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
-            return fd
+            return True
         except BlockingIOError:
             if time.monotonic() >= deadline:
-                os.close(fd)
-                return None
+                return False
             time.sleep(POLL_SECONDS)
+
+
+def acquire(path: str, wait: float) -> int | None:
+    """A descriptor of <path> holding its lock, waiting up to <wait> seconds; None if it stayed taken."""
+    os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+    fd = os.open(path, os.O_RDWR | os.O_CREAT, 0o600)
+    if lock(fd, wait):
+        return fd
+    os.close(fd)
+    return None
+
+
+def take(path: str, wait: float) -> int:
+    """--take: LOCK_FD, which the caller opened on <path>, locked for the caller."""
+    if not held(path):
+        print(f"bosun: file descriptor {LOCK_FD} is not open on {path}", file=sys.stderr)
+        return USAGE
+    return 0 if lock(LOCK_FD, wait) else BUSY
 
 
 def main(argv: Sequence[str]) -> int:
     if len(argv) == 2 and argv[0] == "--held":  # noqa: PLR2004 (the flag and its file)
         return 0 if held(argv[1]) else 1
+    if len(argv) == 3 and argv[0] == "--take":  # noqa: PLR2004 (the flag, its file and the wait)
+        return take(argv[1], float(argv[2]))
     if len(argv) < 5 or argv[3] != "--":  # noqa: PLR2004 (three arguments, --, a command)
         print(__doc__, file=sys.stderr)
         return USAGE

@@ -40,11 +40,14 @@ public struct LaunchOptions: Equatable, Sendable {
 /// Opened by you, with bosun stopped or not running when it should be (`StatusSnapshot.offersStart`), and no
 /// window open (`running` false, on a current status): start it, once. Never while windows are open, even with
 /// an error or in a quit that did not finish: the morning run would run its setup again and may restart the
-/// session; there the menu's Start is the person's choice. At login the app only shows the icon. Where bosun
-/// cannot be run there is nothing to start.
+/// session; there the menu's Start is the person's choice. Nor while bosun rests outside your hours (all well,
+/// or a warning, with Start offered as "Start bosun now"): the schedule decides the automatic starts
+/// (docs/design/control-panel.md). At login the app only shows the icon. Where bosun cannot be run there is
+/// nothing to start.
 public func shouldStartAtLaunch(_ options: LaunchOptions, status: StatusState) -> Bool {
   guard !options.atLogin, case .loaded(let snapshot, current: true) = status else { return false }
-  return snapshot.offersStart && snapshot.running == false
+  let resting = snapshot.level == .ok || snapshot.level == .warning
+  return snapshot.offersStart && snapshot.running == false && !resting
 }
 
 // MARK: one copy at a time

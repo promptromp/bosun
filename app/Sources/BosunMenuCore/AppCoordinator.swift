@@ -3,8 +3,9 @@ import Foundation
 // The app's behaviour, with no AppKit in it: it holds what the app knows (the status, the update's state,
 // which flow runs, whether Open at Login is on), draws the menu through `AppUI`, and carries out what is
 // chosen by running `bosun` commands and asking the person through dialogs. The shell implements `AppUI`
-// (the status item, the alerts, the workspace); everything the flows decide is here, tested with a fake
-// bosun and a fake shell. The update flow's side is in AppCoordinator+Update.swift.
+// (the status item, the alerts, the workspace, the Settings window); everything the flows decide is here, tested
+// with a fake bosun and a fake shell. The update flow's side is in AppCoordinator+Update.swift, the Settings
+// window's in AppCoordinator+Settings.swift.
 
 @MainActor
 public protocol AppUI: AnyObject {
@@ -15,6 +16,9 @@ public protocol AppUI: AnyObject {
   /// Opens a web address, a file or a folder with whatever the Mac opens it with.
   func open(_ url: URL)
   func terminate()
+  /// Shows the Settings window with `state` (one window: a second Settings… brings it to the front with the
+  /// fresh state); what it asks for goes to `apply`, whose answer is the state it shows next.
+  func showSettings(_ state: SettingsState, apply: @escaping @MainActor (SettingsEdit) async -> SettingsState)
 }
 
 @MainActor
@@ -33,6 +37,12 @@ public final class AppCoordinator {
   public internal(set) var update: UpdateState = .idle
   public internal(set) var flow = FlowState()
   public private(set) var login = false
+  /// What the Settings window shows: nil until it was first opened.
+  public internal(set) var settings: SettingsState?
+  /// A Save runs: a second one is not started.
+  var settingsBusy = false
+  /// How many times bosun's settings were read: each reading's number (`SettingsState.read`).
+  var settingsReads = 0
   /// Whether the poller looks every few seconds (an update under way) rather than every 30: see `followUpdate`.
   public private(set) var looksPromptly = false
 
@@ -74,14 +84,14 @@ public final class AppCoordinator {
 
   public var menuModel: MenuModel {
     guard let status else { return loadingMenu(flow: flow) }
-    return menu(for: status, update: update, flow: flow, login: login)
+    return menu(for: status, update: update, flow: flow)
   }
 
   func render() {
     ui.render(menuModel, status: status)
   }
 
-  private var snapshot: StatusSnapshot? {
+  var snapshot: StatusSnapshot? {
     if case .loaded(let snapshot, _)? = status { return snapshot }
     return nil
   }
@@ -164,7 +174,7 @@ public final class AppCoordinator {
 
   /// Whether Open at Login is on, as `bosun app status` says; a reading begun before the last switch is
   /// dropped (it may say the state from before it).
-  private func readLogin() async {
+  func readLogin() async {
     let asked = loginGeneration
     guard case .success(let app) = await fetch(AppStatus.self, Bosun.appStatus, via: cli) else { return }
     if asked == loginGeneration { login = app.login }
@@ -195,10 +205,10 @@ public final class AppCoordinator {
     case .openConsole: await openConsole()
     case .checkForUpdates: await checkForUpdates()
     case .updateBosun: await updateBosun()
-    case .openAtLogin: await toggleLogin()
-    case .helpMenu: break
-    case .help(let topic): await help(topic)
-    case .quit: await quit()
+    case .settings: await openSettings()
+    case .helpMenu, .help: await helpItem(id)
+    case .stopBosun: await stopBosun()
+    case .quitApp: await quitApp()
     }
   }
 
@@ -235,9 +245,9 @@ public final class AppCoordinator {
     }
   }
 
-  /// Open at Login, switched: one at a time (the item is greyed meanwhile), and what a look read before or
-  /// during the switch is dropped.
-  private func toggleLogin() async {
+  /// Open at Login, switched (from the Settings window): one at a time, and what a look read before or during
+  /// the switch is dropped.
+  func toggleLogin() async {
     guard flow.begin(.login) else { return }
     render()
     loginGeneration += 1
@@ -253,6 +263,11 @@ public final class AppCoordinator {
     render()
   }
 
+  /// The Help submenu: a topic, chosen; the submenu's own item does nothing.
+  private func helpItem(_ id: ItemID) async {
+    if case .help(let topic) = id { await help(topic) }
+  }
+
   private func help(_ topic: HelpTopic) async {
     switch topic {
     case .guide: ui.open(Links.guide)
@@ -262,31 +277,58 @@ public final class AppCoordinator {
     }
   }
 
-  private func openTerminal(running args: [String]) async {
+  /// Runs `bosun <args>` in Terminal; false (and told) when its script could not be written.
+  @discardableResult
+  func openTerminal(running args: [String]) async -> Bool {
     do {
       ui.open(try scripts.write(args: args))
+      return true
     } catch {
       await fail("Cannot open Terminal", error.localizedDescription)
+      return false
     }
   }
 
-  // MARK: Quit
+  // MARK: Stop and Quit
 
-  private func quit() async {
-    guard let status, quitAction(for: status) == .runFlow else {
+  /// Stop bosun…: the quit flow for the session; the app stays, with the grey stopped status.
+  private func stopBosun() async {
+    guard flow.begin(.quit) else { return }
+    await runQuitFlow(quitsApp: false)
+  }
+
+  /// Quit bosun.app: at once when no session runs (or its status is not current), else it asks first: leave bosun
+  /// running and quit, stop it and quit (the quit flow, which quits the app once bosun is stopped), or cancel.
+  /// The question holds the quit flow's place, so ⌘Q twice is one question.
+  private func quitApp() async {
+    guard let status, quitAppAction(for: status) == .ask else {
       ui.terminate()
       return
     }
     guard flow.begin(.quit) else { return }
+    render()
+    switch quitAppChoice(await ui.present(quitAppSpec())) {
+    case .leaveRunning:
+      ui.terminate()
+    case .stopAndQuit:
+      await runQuitFlow(quitsApp: true)
+    case .cancel:
+      flow.end(.quit)
+      render()
+    }
+  }
+
+  /// The quit flow, its place (`Flow.quit`) taken: the poller paused, the steps, and what they left.
+  private func runQuitFlow(quitsApp: Bool) async {
     await poller.pause()
     render()
-    let step = await driveQuit()
-    await finishQuit(step)
+    let step = await driveQuit(quitsApp: quitsApp)
+    await finishQuit(step, quitsApp: quitsApp)
   }
 
   /// The quit flow's steps until it is finished: each step's dialog or command makes the next event. While
   /// `bosun quit` runs, a line under the status says what it waits for.
-  private func driveQuit() async -> QuitStep {
+  private func driveQuit(quitsApp: Bool) async -> QuitStep {
     var (step, _) = startQuit()
     var event = await quitPlanEvent(via: cli)
     var busy: [String] = []
@@ -296,34 +338,36 @@ public final class AppCoordinator {
       busy = step.busyNames ?? busy
       flow.detail = quittingLine(step, busy: busy)
       render()
-      event = await nextQuitEvent(after: step)
+      event = await nextQuitEvent(after: step, quitsApp: quitsApp)
     }
   }
 
-  private func nextQuitEvent(after step: QuitStep) async -> QuitEvent {
+  private func nextQuitEvent(after step: QuitStep, quitsApp: Bool) async -> QuitEvent {
     switch step {
-    case .first(let plan): return await ask(quitFirstSpec(plan), step)
-    case .unavailable(let why, _): return await ask(quitUnavailableSpec(why), step)
-    case .busy(let names, _): return await ask(quitBusySpec(names), step)
-    case .stillBusy(let names, _): return await ask(quitStillBusySpec(names), step)
+    case .first(let plan): return await ask(quitFirstSpec(plan), step, quitsApp)
+    case .unavailable(let why, _):
+      return await ask(quitUnavailableSpec(why, quitsApp: quitsApp), step, quitsApp)
+    case .busy(let names, _): return await ask(quitBusySpec(names), step, quitsApp)
+    case .stillBusy(let names, _):
+      return await ask(quitStillBusySpec(names, quitsApp: quitsApp), step, quitsApp)
     case .running(let choices): return await runQuit(choices, via: cli)
     case .planning: return await quitPlanEvent(via: cli)
     case .failed, .done, .appOnly, .cancelled: return .cancelled
     }
   }
 
-  private func ask(_ spec: DialogSpec, _ step: QuitStep) async -> QuitEvent {
-    quitEvent(for: step, answer: await ui.present(spec))
+  private func ask(_ spec: DialogSpec, _ step: QuitStep, _ quitsApp: Bool) async -> QuitEvent {
+    quitEvent(for: step, answer: await ui.present(spec), quitsApp: quitsApp)
   }
 
-  /// What the quit left: a failure is told, a note too; the app leaves unless the icon is kept (or leaves
+  /// What the quit left: a failure is told, a note too; the app leaves when the flow was to quit it (or leaves
   /// alone, bosun as it is, when that was chosen); else the poller is let go and looks once.
-  private func finishQuit(_ step: QuitStep) async {
+  private func finishQuit(_ step: QuitStep, quitsApp: Bool) async {
     switch step {
     case .done(_, let note):
       if let note { _ = await ui.present(quitNoteSpec(note)) }
     case .failed(let why):
-      await fail("Quit did not finish", why)
+      _ = await ui.present(quitFailedSpec(why, quitsApp: quitsApp))
     default:
       break
     }

@@ -13,6 +13,10 @@
     "bosun's tmux session is not running, though it should be. Start it with: bosun start"
   ],
   "running": false,
+  "schedule": {
+    "in_hours": true,
+    "next_start": "2026-11-12T08:00+00:00"
+  },
   "sentence": "bosun is not running",
   "stopped": null,
   "update": {

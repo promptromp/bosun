@@ -22,6 +22,10 @@
     "The orchestrator has been down for 16 min (since Wed 09:44): its Claude exited. Events, check-ins and reports wait meanwhile; start it with: bosun refresh acme-orchestrator."
   ],
   "running": true,
+  "schedule": {
+    "in_hours": true,
+    "next_start": "2026-11-12T08:00+00:00"
+  },
   "sentence": "bosun is running, with an error",
   "stopped": null,
   "update": {

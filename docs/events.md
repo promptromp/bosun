@@ -47,8 +47,8 @@ the policy (`bosun send --no-item orchestrator "re-read orchestrator/policy.md: 
 
 Off by default (`BOSUN_SLACK_WATCH_ENABLED=0`; needs events on); design: [docs/design/events.md](design/events.md#slack-watcher).
 Without it the orchestrator sees Slack only at the hourly check-in. With it, the check-in loop runs
-`bosun slack-watch --scheduled` every `BOSUN_SLACK_WATCH_MINUTES` (15) inside the awake
-window: one headless `claude -p` with `BOSUN_SLACK_WATCH_MODEL` (haiku) lists the messages since
+`bosun slack-watch --scheduled` every `BOSUN_SLACK_WATCH_MINUTES` (15) while the session
+runs, at any hour: one headless `claude -p` with `BOSUN_SLACK_WATCH_MODEL` (haiku) lists the messages since
 the last watch that @-mention or name you, DMs and group DMs to you, and replies in threads you
 started or replied in, as strict JSON. Code checks each entry, drops what the ledger has processed
 (`ledger seen`), what belongs to open outreach (step 5 handles those), what is already queued and

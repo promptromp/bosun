@@ -169,6 +169,7 @@ set_feature_defaults() {
   set_console_defaults
   set_quit_defaults
   set_app_defaults
+  set_login_defaults
   set_impact_defaults
   set_knowledge_defaults
   set_approval_defaults
@@ -291,7 +292,7 @@ set_slack_defaults() {
   BOSUN_SLACK_LOOKBACK_HOURS="24"
   BOSUN_SLACK_MAX_LOOKBACK_HOURS="96"
   # The Slack watcher (`bosun slack-watch`; needs BOSUN_EVENTS_ENABLED=1). 1: the check-in
-  # loop runs it every MINUTES inside the awake window: one headless Claude (MODEL) that can only
+  # loop runs it every MINUTES while the session runs, at any hour: one headless Claude (MODEL) that can only
   # read Slack finds new mentions, DMs and replies in your threads, and each new one becomes an
   # event for the orchestrator. At most MAX_USD_PER_CALL a call and MAX_USD_PER_DAY a day.
   # MCP_CONFIG: an MCP config file with only your Slack server; empty: the Slack plugin's.
@@ -394,6 +395,13 @@ set_app_defaults() {
   # keeps it at the version it expects, and the watchdog says when it is gone from ~/Applications.
   # 0: bosun never touches the app.
   BOSUN_MENU_APP="0"
+}
+
+set_login_defaults() {
+  # 1: bosun also starts when you log in to the Mac, on a scheduled day within these hours, unless you quit
+  # it with the morning paused or stopped it earlier that day (`bosun morning --at-login`, run by a login
+  # job). 0: it starts at the morning time, or from Start, as before.
+  BOSUN_START_AT_LOGIN="1"
 }
 
 set_impact_defaults() {
@@ -604,6 +612,20 @@ one_at_a_time() { # <name> <wait seconds> <message> "$0" "$@"
   exec python3 "$BOSUN_ROOT/lib/run_locked.py" "$lock" "$2" "$3" -- "${@:4}"
 }
 
+# One at a time, for a command that must not start again to hold the lock (`settings set`, whose refusal under
+# --json is an object): this shell holds lock <name> until it exits (lib/run_locked.py --take on LOCK_FD, 9),
+# waiting up to <wait> seconds for the one holding it, and what it starts holds it too, so a long-lived child
+# gets 9>&- (hold_keep_awake's caffeinate). Held already (a parent's), it goes on. Fails, saying nothing, while
+# another holds it: the caller says why. Call it after load_config.
+lock_here() { # <name> <wait seconds>
+  local lock="$BOSUN_STATE_DIR/$1.lock"
+  python3 "$BOSUN_ROOT/lib/run_locked.py" --held "$lock" && return 0
+  exec 9>>"$lock" || return 1
+  python3 "$BOSUN_ROOT/lib/run_locked.py" --take "$lock" "$2" && return 0
+  exec 9>&-
+  return 1
+}
+
 # The orchestrator's policy: orchestrator/policy.md, then the site's $BOSUN_CONFIG_DIR/policy.md
 # if there is one (additions for this machine or team, without forking the repo).
 orchestrator_policy() {
@@ -635,6 +657,47 @@ keep_awake_pidfile() { echo "$BOSUN_STATE_DIR/keep-awake-$BOSUN_SESSION_NAME.pid
 # Beside the pid file, what `bosun status --json` reads: {"until": "<ISO time>", "pid": N}, when the
 # keep-awake ends and whose it is. `morning` writes it and `stop` removes it with the pid file.
 keep_awake_file() { echo "$BOSUN_STATE_DIR/keep-awake-$BOSUN_SESSION_NAME.json"; }
+
+# What `bosun status --json` reads (keep_awake_file): when the hold ends and whose it is, written whole.
+record_keep_awake() { # <caffeinate pid> <seconds>
+  local file temp until
+  file="$(keep_awake_file)"
+  temp="$(dirname "$file")/.$(basename "$file").$$"
+  until="$(date -v+"$2"S '+%Y-%m-%dT%H:%M:%S%z')"
+  printf '{"until": "%s", "pid": %s}\n' "$until" "$1" >"$temp" && mv "$temp" "$file"
+}
+
+# Hold the keep-awake for <seconds> (> 0): a full wake, the old caffeinate ended by its recorded pid (only
+# after `ps` says it is a caffeinate), a new one, and its pid file and record. `morning` works out the
+# seconds and handles a dry run; this uses nothing of any command's own.
+hold_keep_awake() { # <seconds>
+  local seconds="$1" pidfile old_pid pid
+  pidfile="$(keep_awake_pidfile)"
+  # Declaring user activity turns a scheduled (possibly dark) wake into a full wake.
+  caffeinate -u -t 2
+  if [ -f "$pidfile" ] && old_pid="$(cat "$pidfile")" &&
+    ps -p "$old_pid" -o comm= 2>/dev/null | grep -q caffeinate; then
+    kill "$old_pid"
+  fi
+  # -i: no idle sleep; -s: no system sleep while on AC power.
+  # 9>&-: it outlives the command, and must not keep a lock the command holds (lock_here, one_at_a_time)
+  nohup caffeinate -i -s -t "$seconds" >/dev/null 2>&1 9>&- &
+  pid=$!
+  echo "$pid" >"$pidfile"
+  record_keep_awake "$pid" "$seconds"
+  log "holding keep-awake for $((seconds / 60)) minutes (caffeinate pid $pid)"
+}
+
+# End the keep-awake: its caffeinate, by its recorded pid and only if it still is one, and both files.
+release_keep_awake() {
+  local pidfile pid
+  pidfile="$(keep_awake_pidfile)"
+  if [ -f "$pidfile" ] && pid="$(cat "$pidfile")" && ps -p "$pid" -o comm= 2>/dev/null | grep -q caffeinate; then
+    kill "$pid"
+    log "released keep-awake (caffeinate pid $pid)"
+  fi
+  rm -f "$pidfile" "$(keep_awake_file)"
+}
 
 # When you stopped the session (`stop` writes it, `start` removes it). The watchdog does not
 # expect the session on a day you stopped it.
@@ -1376,6 +1439,11 @@ console_mark_wanted() {
 # decides whom macOS names in its privacy prompts.
 now_label() { echo "$BOSUN_LAUNCHD_LABEL.now"; }
 
+# The job that runs `bosun morning --at-login` (templates/launchd-login.plist) at login, while
+# BOSUN_START_AT_LOGIN=1. launchd runs it at a reload too, so a reload leaves a marker the run tells it by.
+login_label() { echo "$BOSUN_LAUNCHD_LABEL.login"; }
+login_reload_marker() { echo "$BOSUN_STATE_DIR/login-reload"; }
+
 # The menu bar app's Open at Login job (templates/launchd-app.plist): there while its plist is, which
 # `bosun app login on` makes and `login off` removes. install.sh and `bosun update` keep a present one
 # current (render_job) and never make one.
@@ -1384,7 +1452,7 @@ app_plist() { echo "$HOME/Library/LaunchAgents/$(app_label).plist"; }
 app_bundle() { echo "$HOME/Applications/bosun.app"; }
 
 # Every launchd job bosun can have loaded: what `bosun uninstall` looks for.
-job_labels() { echo "$BOSUN_LAUNCHD_LABEL $(watchdog_label) $(learn_label) $(console_label) $(now_label) $(app_label) $(waketest_label)"; }
+job_labels() { echo "$BOSUN_LAUNCHD_LABEL $(watchdog_label) $(learn_label) $(console_label) $(now_label) $(login_label) $(app_label) $(waketest_label)"; }
 
 render_console_plist() {
   ENV_XML="$(launchd_env_xml)" LABEL="$(console_label)" ROOT="$BOSUN_INSTALL" LOGS="$BOSUN_LOG_DIR" WANTED="$(console_wanted_marker)" \
@@ -1400,6 +1468,14 @@ render_now_plist() {
       .gsub("__LABEL__", ENV["LABEL"]).gsub("__BOSUN_ROOT__", ENV["ROOT"])
       .gsub("__ENV__", ENV["ENV_XML"]).gsub("__LOG_DIR__", ENV["LOGS"])' \
     <"$BOSUN_ROOT/templates/launchd-now.plist"
+}
+
+render_login_plist() {
+  ENV_XML="$(launchd_env_xml)" LABEL="$(login_label)" ROOT="$BOSUN_INSTALL" LOGS="$BOSUN_LOG_DIR" \
+    ruby -e 'print STDIN.read
+      .gsub("__LABEL__", ENV["LABEL"]).gsub("__BOSUN_ROOT__", ENV["ROOT"])
+      .gsub("__ENV__", ENV["ENV_XML"]).gsub("__LOG_DIR__", ENV["LOGS"])' \
+    <"$BOSUN_ROOT/templates/launchd-login.plist"
 }
 
 render_app_plist() {
@@ -1421,8 +1497,8 @@ render_learn_plist() {
 
 # The plist of the launchd job <label> as this version renders it from the config: the morning job,
 # the watchdog, learning with BOSUN_LEARN_ENABLED=1, the console with BOSUN_CONSOLE_ALWAYS=1, the job
-# that runs the morning run now, and the app's login job while its plist is there; nothing for a job not
-# wanted.
+# that runs the morning run now, the login job with BOSUN_START_AT_LOGIN=1, and the app's login job while its
+# plist is there; nothing for a job not wanted.
 render_job() { # <label>
   case "$1" in
     "$BOSUN_LAUNCHD_LABEL") render_launchd_plist "$1" "$BOSUN_START_TIME" "$BOSUN_DAYS" "" BOSUN_TRIGGER=launchd ;;
@@ -1430,6 +1506,7 @@ render_job() { # <label>
     "$(learn_label)") if [ "$BOSUN_LEARN_ENABLED" = "1" ]; then render_learn_plist; fi ;;
     "$(console_label)") if [ "$BOSUN_CONSOLE_ALWAYS" = "1" ]; then render_console_plist; fi ;;
     "$(now_label)") render_now_plist ;;
+    "$(login_label)") if [ "$BOSUN_START_AT_LOGIN" = "1" ]; then render_login_plist; fi ;;
     "$(app_label)") if [ -e "$(app_plist)" ]; then render_app_plist; fi ;;
   esac
 }
@@ -1458,6 +1535,11 @@ reload_job() { # <label> <rendered> <installed>
     return 0
   fi
   mkdir -p "$(dirname "$3")" # a new macOS account may not have it yet
+  # launchd runs the login job as it loads; the marker is how that run knows it is a reload, not a login
+  if [ "$1" = "$(login_label)" ]; then
+    mkdir -p "$BOSUN_STATE_DIR"
+    date '+%F %T' >"$(login_reload_marker)"
+  fi
   if cp "$2" "$3" && launchctl bootstrap "gui/$(id -u)" "$3"; then return 0; fi
   log "ERROR: launchctl bootstrap failed for $3" >&2
   return 1
@@ -1487,7 +1569,7 @@ job_changed() { # <label> <rendered> <installed>
 reload_changed_jobs() { # [--dry-run]
   local label installed rendered status=0 changed
   rendered="$(mktemp)" || return 1
-  for label in "$BOSUN_LAUNCHD_LABEL" "$(watchdog_label)" "$(learn_label)" "$(console_label)" "$(now_label)" "$(app_label)"; do
+  for label in "$BOSUN_LAUNCHD_LABEL" "$(watchdog_label)" "$(learn_label)" "$(console_label)" "$(now_label)" "$(login_label)" "$(app_label)"; do
     installed="$HOME/Library/LaunchAgents/$label.plist"
     if ! render_job "$label" >"$rendered"; then
       log "ERROR: could not render the plist of $label" >&2
@@ -1660,4 +1742,21 @@ repo_in_mask() { [ -n "$(printf '%s\n' "$1" | repo_mask_filter "")" ]; }
 # line, or with a key, that key of each JSON line.
 repo_mask_filter() { # <json-key, or "" for the first field>
   python3 "$BOSUN_ROOT/lib/repo_mask.py" "$BOSUN_REPO_MASK" ${1:+--json-key "$1"}
+}
+
+# The Mac's repeating wake: just after the job time, since launchd runs a calendar job missed during sleep as
+# soon as the Mac wakes, so the job starts within seconds of the wake and the Mac has no chance to doze off
+# first. `set_wake` sets it with sudo; `set_wake print` only says the command to run once.
+set_wake() { # [print]
+  local wake_time wake_cmd existing_repeat
+  wake_time="$(shift_time "$BOSUN_START_TIME" "$BOSUN_WAKE_DELAY_MINUTES"):00"
+  wake_cmd=(sudo pmset repeat wakeorpoweron "$BOSUN_DAYS" "$wake_time")
+  existing_repeat="$(pmset -g sched | sed -n '/Repeating power events/,/^[A-Z]/p' | grep -iE 'wake|power' || true)"
+  [ -n "$existing_repeat" ] && log "note: pmset already has a repeating event (pmset keeps only one):$existing_repeat"
+  if [ "${1:-}" = "print" ]; then
+    log "to wake the Mac on schedule, run once:  ${wake_cmd[*]}"
+  else
+    log "setting repeating wake: ${wake_cmd[*]}"
+    "${wake_cmd[@]}" || die "pmset failed"
+  fi
 }

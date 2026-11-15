@@ -125,16 +125,19 @@ def apply_files(plan: Plan, config_dir: Path, stamp: str) -> None:
         print(f"wrote {path}")
 
 
-def write_with_backup(path: Path, text: str, stamp: str, *, found: bool = True) -> None:
+def write_with_backup(path: Path, text: str, stamp: str, *, found: bool = True) -> Path | None:
     """<text> as <path>, after a copy of what it was as `<name>.pre-init-<stamp>`: one per run, the first, so
     it holds the file as the run found it, however many times the run writes it. With <found> False the
-    file is one this run made: there is no copy of what the run itself wrote."""
+    file is one this run made: there is no copy of what the run itself wrote. Returns that copy, or None when
+    there is none (no file was there, or <found> is False)."""
+    backup = None
     if found and path.exists():
         backup = path.with_name(f"{path.name}.pre-init-{stamp}")
         if not backup.exists():
             shutil.copy2(path, backup)
             print(f"backed up {path.name} as {backup.name}")
     write_file(path, text)
+    return backup
 
 
 def can_ask_for_sudo() -> bool:

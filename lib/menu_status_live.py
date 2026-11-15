@@ -106,12 +106,20 @@ GATE_KINDS = {
 
 def gate_of(ctx: watchdog.Context) -> SessionGate:
     """Whether the watchdog expects the session to run now: its own `session_gate_kind` over the context its
-    checks are made from, as a fact (never its text)."""
+    checks are made from, as a fact (never its text). Outside the hours a morning run that is going (Start
+    bosun now, the `.now` job's run) is starting, not resting: the watchdog expects no session then, rightly,
+    but the menu must not look as if the click did nothing."""
     found = watchdog.session_gate_kind(ctx)
     if found is None:
         return SessionGate(menu_status.EXPECTED)
     if found[0] == watchdog.GATE_STOPPED:
         return SessionGate(menu_status.STOPPED_BY_STOP, watchdog.stopped_today(ctx))
+    if (
+        found[0] == watchdog.GATE_OUTSIDE
+        and ctx.morning_run is not None
+        and ctx.morning_run.outcome == "running"
+    ):
+        return SessionGate(menu_status.STARTING)
     return SessionGate(GATE_KINDS[found[0]])
 
 

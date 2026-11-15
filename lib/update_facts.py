@@ -113,11 +113,14 @@ def bosun(
     return command([str(root / "bin" / "bosun"), *args], stdin=stdin, detached=detached, env=env)
 
 
-def shell(root: Path, script: str, *args: str) -> subprocess.CompletedProcess[str]:
+def shell(
+    root: Path, script: str, *args: str, env: Mapping[str, str] | None = None
+) -> subprocess.CompletedProcess[str]:
     """<script> run by bash with the config loaded by the version in <root> (lib/common.sh), <args>
-    its "$@"."""
+    its "$@", and <env> as overrides of what bosun.env sets."""
     return command(
-        ["bash", "-c", f'source "$1/lib/common.sh"; load_config; shift; {script}', "_", str(root), *args]
+        ["bash", "-c", f'source "$1/lib/common.sh"; load_config; shift; {script}', "_", str(root), *args],
+        env=env,
     )
 
 
@@ -446,10 +449,11 @@ def config_renames(config_dir: Path) -> list[tuple[str, str]]:
     return sorted((old, new) for old, new in migrations.config_names().items() if old in assigned)
 
 
-def jobs(root: Path) -> tuple[list[str], list[str]]:
-    """The launchd jobs the version in <root> would reload (reload_changed_jobs --dry-run), and a
-    blocker, in one line, if a job's plist cannot be rendered or renders invalid."""
-    done = shell(root, "reload_changed_jobs --dry-run")
+def jobs(root: Path, kept: Mapping[str, str] | None = None) -> tuple[list[str], list[str]]:
+    """The launchd jobs the version in <root> would reload (reload_changed_jobs --dry-run) once the update
+    wrote <kept> to bosun.env (an older install's BOSUN_START_AT_LOGIN=0: no login job), and a blocker, in
+    one line, if a job's plist cannot be rendered or renders invalid."""
+    done = shell(root, "reload_changed_jobs --dry-run", env=kept)
     if done.returncode != 0:
         said = "; ".join(line.strip() for line in done.stderr.splitlines() if line.strip()) or "it failed"
         return [], [f"the new version cannot render its launchd jobs: {said}"]
@@ -483,7 +487,7 @@ def plan_for(old_root: Path, new_root: Path, state_dir: Path, config_dir: Path) 
     # install's orchestrator that keeps every connector is no launch change.
     kept = migrations.keys_to_keep(config_dir, new.keys - old.keys)
     cut_short, unreadable_kb = deletion_cut_short(state_dir, config_dir)
-    reloads, unrenderable = jobs(new_root)
+    reloads, unrenderable = jobs(new_root, kept)
     plan = update_plan.make_plan(
         old,
         new,

@@ -11,6 +11,9 @@ final class FakeUI: AppUI {
   private(set) var presented: [DialogSpec] = []
   private(set) var opened: [URL] = []
   private(set) var terminated = 0
+  /// Each state the Settings window was shown with (a second Settings… shows it again), and how it applies.
+  private(set) var settingsShown: [SettingsState] = []
+  private(set) var settingsApply: (@MainActor (SettingsEdit) async -> SettingsState)?
   private var answers: [(title: String, boxes: [String: Bool])] = []
   /// Runs while a dialog is open (what happens when a key is pressed or a click comes in meanwhile).
   var whileOpen: (@MainActor (DialogSpec) async -> Void)?
@@ -44,6 +47,13 @@ final class FakeUI: AppUI {
   func open(_ url: URL) { opened.append(url) }
 
   func terminate() { terminated += 1 }
+
+  func showSettings(
+    _ state: SettingsState, apply: @escaping @MainActor (SettingsEdit) async -> SettingsState
+  ) {
+    settingsShown.append(state)
+    settingsApply = apply
+  }
 }
 
 /// Writes no files: remembers what it was asked to write, and says where it would have.

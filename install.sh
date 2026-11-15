@@ -77,18 +77,8 @@ done
 [ -n "$reloaded" ] || log "the launchd jobs are loaded and up to date"
 log "the morning run at $BOSUN_START_TIME on $BOSUN_DAYS; bosun watchdog every $((WATCHDOG_INTERVAL_SECONDS / 60)) minutes"
 
-# Wake just after the job time: launchd runs a calendar job missed during sleep as soon as the Mac
-# wakes, so the job starts within seconds of the wake and the Mac has no chance to doze off first.
-wake_time="$(shift_time "$BOSUN_START_TIME" "$BOSUN_WAKE_DELAY_MINUTES"):00"
-wake_cmd=(sudo pmset repeat wakeorpoweron "$BOSUN_DAYS" "$wake_time")
-existing_repeat="$(pmset -g sched | sed -n '/Repeating power events/,/^[A-Z]/p' | grep -iE 'wake|power' || true)"
-[ -n "$existing_repeat" ] && log "note: pmset already has a repeating event (pmset keeps only one):$existing_repeat"
-if [ "$WITH_WAKE" = "1" ]; then
-  log "setting repeating wake: ${wake_cmd[*]}"
-  "${wake_cmd[@]}" || die "pmset failed"
-else
-  log "to wake the Mac on schedule, run once:  ${wake_cmd[*]}"
-fi
+# Wake just after the job time (set_wake, lib/common.sh).
+if [ "$WITH_WAKE" = "1" ]; then set_wake; else set_wake print; fi
 
 # Last: get.sh takes this link for an install that is set up, and runs `bosun update` on it; made any
 # earlier, an install cut short after it (at the jobs, or at sudo for the wake) would never be finished.

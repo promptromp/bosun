@@ -68,8 +68,8 @@ public struct TestHookFiles: Sendable {
     try FileManager.default.createDirectory(at: actionsFolder, withIntermediateDirectories: true)
   }
 
-  public func writeMenu(_ model: MenuModel, status: StatusState?) throws {
-    try menuJSON(model, status: status).write(
+  public func writeMenu(_ model: MenuModel, status: StatusState?, settings: SettingsState? = nil) throws {
+    try menuJSON(model, status: status, settings: settings).write(
       to: directory.appendingPathComponent("menu.json"), options: .atomic)
   }
 

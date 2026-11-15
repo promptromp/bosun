@@ -20,6 +20,10 @@
   "logs": "/Users/me/.local/state/bosun/logs",
   "problems": [],
   "running": true,
+  "schedule": {
+    "in_hours": true,
+    "next_start": "2026-11-12T08:00+00:00"
+  },
   "sentence": "bosun is running",
   "stopped": null,
   "update": {

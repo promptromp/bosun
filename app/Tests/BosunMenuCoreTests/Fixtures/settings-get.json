@@ -1,0 +1,44 @@
+{
+  "config_dir": "/Users/me/.config/bosun",
+  "contract": 1,
+  "error": null,
+  "readable": true,
+  "settings": {
+    "BOSUN_AWAKE_UNTIL": {
+      "default": "20:00",
+      "meaning": "Until when the Mac is kept awake (HH:MM; at or before the start time means past midnight)",
+      "set": false,
+      "valid": true,
+      "value": "20:00"
+    },
+    "BOSUN_DAYS": {
+      "default": "MTWRF",
+      "meaning": "The days bosun starts on, in pmset's letters: MTWRFSU, Monday first",
+      "set": false,
+      "valid": true,
+      "value": "MTWRF"
+    },
+    "BOSUN_START_AT_LOGIN": {
+      "default": "1",
+      "meaning": "Start bosun when you log in, during your hours (1), or only at the start time and from Start (0)",
+      "set": false,
+      "valid": true,
+      "value": "1"
+    },
+    "BOSUN_START_TIME": {
+      "default": "08:00",
+      "meaning": "When bosun starts on those days (HH:MM); the Mac is woken just after it",
+      "set": true,
+      "valid": true,
+      "value": "08:30"
+    },
+    "BOSUN_UPDATE_CHANNEL": {
+      "default": "releases",
+      "meaning": "What bosun update follows: the dated releases, or the head of main",
+      "set": true,
+      "valid": true,
+      "value": "main"
+    }
+  },
+  "wake": "ours"
+}

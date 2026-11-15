@@ -27,14 +27,7 @@ done
 # You stopped it on purpose: the watchdog does not alert about a missing session today.
 date '+%F %T' >"$(stop_marker)"
 
-if [ "$keep_awake" = 0 ]; then
-  pidfile="$(keep_awake_pidfile)"
-  if [ -f "$pidfile" ] && pid="$(cat "$pidfile")" && ps -p "$pid" -o comm= 2>/dev/null | grep -q caffeinate; then
-    kill "$pid"
-    log "released keep-awake (caffeinate pid $pid)"
-  fi
-  rm -f "$pidfile" "$(keep_awake_file)"
-fi
+[ "$keep_awake" = 0 ] && release_keep_awake
 
 if session_exists; then
   reap_session_helpers

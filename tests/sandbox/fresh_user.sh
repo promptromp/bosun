@@ -95,7 +95,7 @@ set_up() {
   check "the schedule is in bosun.env" says 'BOSUN_START_TIME="08:30"' "$CONFIG/bosun.env"
   check "the mask is the repos' owner" says 'BOSUN_REPO_MASK="acme"' "$CONFIG/bosun.env"
   check "learning runs before the window ends" says 'BOSUN_LEARN_AT="17:30"' "$CONFIG/bosun.env"
-  check "bosun.env is short: only what differs" bash -c '[ "$(grep -c "^BOSUN_" "$1")" -lt 20 ]' _ "$CONFIG/bosun.env"
+  check "bosun.env is short: only what differs" bash -c '[ "$(grep -c "^BOSUN_" "$1")" -lt 25 ]' _ "$CONFIG/bosun.env"
   check "the window is in sessions.yml" says "dir: ~/Development/api" "$CONFIG/sessions.yml"
   check "... and only that one" absent "web" "$CONFIG/sessions.yml"
   check "the orchestrator gets no connectors" says 'BOSUN_ORCHESTRATOR_CONNECTORS=""' "$CONFIG/bosun.env"
@@ -254,7 +254,7 @@ the_wizard_quit() {
   check "q on the first screen" python3 "$DRIVE" "$out" "Which repos" "q" -- "$BOSUN" init
   check "... says so" says "Nothing was changed" "$out"
   check "... and nothing is there" test ! -e "$CONFIG"
-  check "q on the plan" python3 "$DRIVE" "$out" "Which repos" "<enter>" "When should" "<enter>" "How proactive" "<enter>" "Which model" "<enter>" "handle permissions" "<enter>" "wake by itself" "<enter>" "Add bosun to the menu bar and Applications?" "n" "Nothing has changed yet" "q" -- "$BOSUN" init
+  check "q on the plan" python3 "$DRIVE" "$out" "Which repos" "<enter>" "When should" "<enter>" "How proactive" "<enter>" "Which model" "<enter>" "handle permissions" "<enter>" "wake by itself" "<enter>" "Add bosun to the menu bar, and start it when you log in?" "n" "Start bosun when you log in?" "n" "Nothing has changed yet" "q" -- "$BOSUN" init
   check "... and nothing is there" test ! -e "$CONFIG"
   check "ctrl-c leaves too" python3 "$DRIVE" "$out" "Which repos" "<ctrl-c>" -- "$BOSUN" init
   check "... and says so" says "Nothing was changed" "$out"
@@ -263,14 +263,14 @@ the_wizard_quit() {
     "Which repos" "a" "Folder:" "~/Development/toy<enter>" "Development/toy" "<enter>" \
     "When should" "3" "Days, from" "MWF<enter>" "Start" "07:15<enter>" "Awake until" "16:45<enter>" \
     "How proactive" "<enter>" "Which model" "<enter>" "handle permissions" "<enter>" "wake by itself" "<enter>" \
-    "Add bosun to the menu bar and Applications?" "n" \
+    "Add bosun to the menu bar, and start it when you log in?" "n" "Start bosun when you log in?" "n" \
     "Mon, Wed, Fri, 07:15 to 16:45" "q" -- "$BOSUN" init
   check "the menu bar app is asked, in init's words, and Yes puts it in the plan" python3 "$DRIVE" "$out" \
     "Which repos" "<enter>" "When should" "<enter>" "How proactive" "<enter>" "Which model" "<enter>" \
     "handle permissions" "<enter>" "wake by itself" "<enter>" \
-    "Add bosun to the menu bar and Applications?" "y" "bosun app install   adds bosun.app to ~/Applications" "q" -- "$BOSUN" init
+    "Add bosun to the menu bar, and start it when you log in?" "y" "bosun app install   adds bosun.app to ~/Applications" "q" -- "$BOSUN" init
   check "... and No leaves it out" bash -c 'python3 "$1" "$2" "Which repos" "<enter>" "When should" "<enter>" "How proactive" "<enter>" "Which model" "<enter>" \
-    "handle permissions" "<enter>" "wake by itself" "<enter>" "Add bosun to the menu bar and Applications?" "n" "Nothing has changed yet" "q" -- "$3" init &&
+    "handle permissions" "<enter>" "wake by itself" "<enter>" "Add bosun to the menu bar, and start it when you log in?" "n" "Start bosun when you log in?" "n" "Nothing has changed yet" "q" -- "$3" init &&
     ! grep -q "adds bosun.app to ~/Applications" "$2"' _ "$DRIVE" "$out" "$BOSUN"
   check "r goes back to the start" python3 "$DRIVE" "$out" "Which repos" "<enter>" "When should" "r" "Which repos" "q" -- "$BOSUN" init
   check "no answers without a terminal: only the plan" bash -c '"$1" init </dev/null | grep -q "Nothing has changed yet"' _ "$BOSUN"
@@ -325,7 +325,7 @@ the_installer() {
     "Which model" "2" \
     "handle permissions" "<enter>" \
     "wake by itself" "<enter>" \
-    "Add bosun to the menu bar and Applications?" "n" \
+    "Add bosun to the menu bar, and start it when you log in?" "n" "Start bosun when you log in?" "n" \
     "Nothing has changed yet" "y" \
     "Start the windows now?" "y" \
     "The windows are up" "" \
@@ -421,7 +421,7 @@ the_first_day_on_codex() {
     "Which agent" "2" \
     "model should the orchestrator" "<enter>" \
     "wake by itself" "<enter>" \
-    "Add bosun to the menu bar and Applications?" "n" \
+    "Add bosun to the menu bar, and start it when you log in?" "n" "Start bosun when you log in?" "n" \
     "Nothing has changed yet" "y" \
     "Start the windows now?" "y" \
     "The windows are up" "" \
@@ -488,7 +488,7 @@ the_first_day_on_agy() {
     "Which agent" "2" \
     "model should the orchestrator" "<enter>" \
     "wake by itself" "<enter>" \
-    "Add bosun to the menu bar and Applications?" "n" \
+    "Add bosun to the menu bar, and start it when you log in?" "n" "Start bosun when you log in?" "n" \
     "Nothing has changed yet" "y" \
     "Start the windows now?" "y" \
     "The windows are up" "" \

@@ -422,7 +422,7 @@ def ask_model(ui: Ui, answers: Answers, top: Sequence[str]) -> Answers:
     return replace(answers, **picked.changes)
 
 
-ALWAYS_ASKED = 5  # repos, schedule, features, model, wake (and the menu bar app, when there is one to offer)
+ALWAYS_ASKED = 5  # repos, schedule, features, model, wake; the menu bar question is added in total_steps
 AUTO_PREVIEW = (
     "A safety check reviews each action and blocks risky ones.",
     "Nothing to accept first, and it uses slightly more tokens.",
@@ -480,22 +480,68 @@ def ask_wake(ui: Ui, facts: Facts, answers: Answers, top: Sequence[str]) -> Answ
 
 
 def menu_app_options(facts: Facts, answers: Answers) -> list[Option]:
-    yes = (
+    both = (
         "bosun.app goes in ~/Applications; its menu bar icon says at a glance whether bosun is well.",
         "It opens at login (Open at Login: `bosun app login on`), and the console runs as a job for it.",
-        "bosun update keeps it current.",
+        "When you log in on a scheduled day, within your hours, bosun starts (BOSUN_START_AT_LOGIN=1).",
+        "bosun update keeps the app current.",
+    )
+    only = (
+        both[0],
+        both[1],
+        "It starts at the morning time, or when you click Start.",
+        both[3],
     )
     no = ["bosun runs as before; `bosun app install` adds the app whenever you like."]
     if facts.app_present:
         no = ["bosun.app stays in ~/Applications, as it is; `bosun app remove` takes it away."]
+    app, login = answers.menu_app, answers.start_at_login
     return [
-        Option("y", "Yes, add it", {"menu_app": True}, yes, recommended=answers.menu_app),
-        Option("n", "No", {"menu_app": False}, tuple(no), recommended=not answers.menu_app),
+        Option(
+            "y",
+            "Show bosun in the menu bar and start it during your hours",
+            {"menu_app": True, "start_at_login": True},
+            both,
+            recommended=app and login,
+        ),
+        Option(
+            "m",
+            "Show bosun in the menu bar only",
+            {"menu_app": True, "start_at_login": False},
+            only,
+            recommended=app and not login,
+        ),
+        Option("n", "No menu bar app", {"menu_app": False}, tuple(no), recommended=not app),
+    ]
+
+
+MENU_APP_TITLE = "Add bosun to the menu bar, and start it when you log in?"
+
+
+def start_at_login_options(answers: Answers) -> list[Option]:
+    preview = (
+        "When you log in on a scheduled day, within your hours, bosun starts (BOSUN_START_AT_LOGIN=1).",
+        "It never overrides a Quit or Stop that day, and a reload of bosun's jobs never starts it.",
+    )
+    off = ("bosun starts at the morning time, or when you run `bosun start`.",)
+    return [
+        Option(
+            "y",
+            "Yes, start it when I log in during my hours",
+            {"start_at_login": True},
+            preview,
+            recommended=answers.start_at_login,
+        ),
+        Option("n", "No", {"start_at_login": False}, off, recommended=not answers.start_at_login),
     ]
 
 
 def ask_menu_app(ui: Ui, facts: Facts, answers: Answers, top: Sequence[str]) -> Answers:
     return replace(answers, **choose(ui, top, menu_app_options(facts, answers)).changes)
+
+
+def ask_start_at_login(ui: Ui, answers: Answers, top: Sequence[str]) -> Answers:
+    return replace(answers, **choose(ui, top, start_at_login_options(answers)).changes)
 
 
 def ask_aws(ui: Ui, facts: Facts, answers: Answers, top: Sequence[str]) -> Answers:
@@ -544,7 +590,8 @@ def ask_harness(ui: Ui, facts: Facts, answers: Answers, top: Sequence[str]) -> A
 def total_steps(facts: Facts, answers: Answers, asks_connectors: bool) -> int:
     return (
         ALWAYS_ASKED
-        + (not facts.app_unavailable)
+        + 1  # the menu bar question, or the start at login one alone when there is no app to offer
+        + (not facts.app_unavailable and not answers.menu_app)  # the start question after "No"
         + asks_connectors
         + has_a_choice_of_agents(facts)
         + (answers.harness == agent_state.ORCHESTRATOR_HARNESS)
@@ -578,7 +625,9 @@ def ask_all(ui: Ui, facts: Facts, answers: Answers, machine: Machine) -> Answers
         answers = ask_permissions(ui, answers, top("How should repo sessions handle permissions?"))
     answers = ask_wake(ui, facts, answers, top("Should the Mac wake by itself?"))
     if not facts.app_unavailable:  # with no signed build to install, there is nothing to offer
-        answers = ask_menu_app(ui, facts, answers, top("Add bosun to the menu bar and Applications?"))
+        answers = ask_menu_app(ui, facts, answers, top(MENU_APP_TITLE))
+    if facts.app_unavailable or not answers.menu_app:  # the start alone: it works without the app
+        answers = ask_start_at_login(ui, answers, top("Start bosun when you log in?"))
     if facts.aws_sso_profiles:
         answers = ask_aws(ui, facts, answers, top("Which AWS SSO profiles should each morning log in to?"))
     return answers

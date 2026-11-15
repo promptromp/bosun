@@ -145,6 +145,11 @@ class FileTables(unittest.TestCase):
         self.assertIn(("codex-sessions.json", up.WORKING), up.STATE_FILES)
         self.assertIn((".codex-sessions.json.*", up.WORKING), up.STATE_FILES)
 
+    def test_the_login_jobs_marker_and_logs_go_with_bosun(self) -> None:
+        self.assertEqual(up.kind_of("login-reload", up.STATE_FILES), up.WORKING)
+        for name in ("login.launchd.out", "login.launchd.err"):
+            self.assertEqual(up.kind_of(name, up.LOG_FILES), up.WORKING, name)
+
     def test_what_each_file_is(self) -> None:
         for name, kind in (
             ("ledger.json", up.LEDGER),

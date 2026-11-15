@@ -20,11 +20,9 @@ func snapshot(level: String, sentence: String = "bosun is running") -> StatusSna
 
 func model(
   _ level: String = "ok", sentence: String = "bosun is running", update: UpdateState = .idle,
-  flow: FlowState = FlowState(), login: Bool = false
+  flow: FlowState = FlowState()
 ) -> MenuModel {
-  menu(
-    for: .loaded(snapshot(level: level, sentence: sentence), current: true), update: update, flow: flow,
-    login: login)
+  menu(for: .loaded(snapshot(level: level, sentence: sentence), current: true), update: update, flow: flow)
 }
 
 typealias Chosen = @MainActor (ItemID) -> Void
@@ -74,9 +72,9 @@ extension NSMenu {
     #expect(
       menu.titles == [
         "● bosun is running", "3 windows open", "Mac kept awake until 20:00", "—",
-        "Start bosun", "Show What's Wrong…", "—", "Open Console", "—", "Check for Updates…", "Open at Login",
+        "Start bosun", "Show What's Wrong…", "—", "Open Console", "—", "Check for Updates…", "Settings…",
         "Help",
-        "—", "Quit bosun…",
+        "—", "Quit bosun.app",
       ])
   }
 
@@ -85,7 +83,8 @@ extension NSMenu {
     #expect(!render(model("ok")).titles.contains("Start bosun"))
     #expect(render(model("warning")).titles.contains("Show What's Wrong…"))
     #expect(!render(model("ok")).titles.contains("Show What's Wrong…"))
-    #expect(render(model("stopped")).titles.last == "Quit bosun")
+    #expect(render(model("stopped")).titles.last == "Quit bosun.app")
+    #expect(render(model("ok")).titles.suffix(2) == ["Stop bosun…", "Quit bosun.app"])
   }
 
   @Test func enabledStatesAreTheModelsAndNotAppKitsOwn() {
@@ -100,11 +99,14 @@ extension NSMenu {
   @Test func keyEquivalentsAreTheModelsWithCommand() {
     let menu = render(model("ok"))
     let console = menu.items.first { $0.title == "Open Console" }
-    let quit = menu.items.first { $0.title == "Quit bosun…" }
+    let quit = menu.items.first { $0.title == "Quit bosun.app" }
+    let settings = menu.items.first { $0.title == "Settings…" }
     #expect(console?.keyEquivalent == "o")
     #expect(console?.keyEquivalentModifierMask == .command)
     #expect(quit?.keyEquivalent == "q")
     #expect(quit?.keyEquivalentModifierMask == .command)
+    #expect(settings?.keyEquivalent == ",")
+    #expect(settings?.keyEquivalentModifierMask == .command)
     let start = menu.items.first { $0.title == "Check for Updates…" }
     #expect(start?.keyEquivalent == "")
   }
@@ -116,11 +118,14 @@ extension NSMenu {
     #expect(help?.submenu?.autoenablesItems == false)
   }
 
-  @Test func openAtLoginIsCheckedWhenItIsOn() {
-    let on = render(model("ok", login: true)).items.first { $0.title == "Open at Login" }
-    let off = render(model("ok", login: false)).items.first { $0.title == "Open at Login" }
-    #expect(on?.state == .on)
-    #expect(off?.state == .off)
+  @Test func aCheckedItemIsShownChecked() {
+    let header = StatusHeader(dot: .green, sentence: "s", detail: [])
+    func item(checked: Bool) -> NSMenuItem? {
+      let items = [MenuItem(id: .settings, title: "Settings…", checked: checked)]
+      return render(MenuModel(header: header, sections: [items], iconBadge: nil)).items.last
+    }
+    #expect(item(checked: true)?.state == .on)
+    #expect(item(checked: false)?.state == .off)
   }
 
   @Test func anUpdateIsBadged() {
@@ -151,7 +156,7 @@ extension NSMenu {
     }
     #expect(
       chosen == [
-        .startBosun, .showProblems, .openConsole, .checkForUpdates, .openAtLogin, .quit, .help(.guide),
+        .startBosun, .showProblems, .openConsole, .checkForUpdates, .settings, .quitApp, .help(.guide),
         .help(.doctor), .help(.logs), .help(.uninstall),
       ])
   }
@@ -189,9 +194,9 @@ extension NSMenu {
     renderer.render(model("ok", flow: flow), into: menu)
     #expect(menu.items.count == items.count)
     #expect(zip(menu.items, items).allSatisfy { $0 === $1 })
-    #expect(menu.items.first { $0.title == "Quit bosun…" }?.isEnabled == false)
+    #expect(menu.items.first { $0.title == "Quit bosun.app" }?.isEnabled == false)
     renderer.render(model("ok"), into: menu)
-    #expect(menu.items.first { $0.title == "Quit bosun…" }?.isEnabled == true)
+    #expect(menu.items.first { $0.title == "Quit bosun.app" }?.isEnabled == true)
   }
 
   @Test func theSameMenuObjectIsKeptWhenTheShapeChanges() {

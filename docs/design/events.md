@@ -270,7 +270,7 @@ when they also @-mentioned me.
 
 **Shape.** `bosun slack-watch --scheduled` runs from the check-in loop on every tick, in the
 background (a slow call never delays the loop), and decides itself whether to run: only with the
-flag on, inside the awake window, `BOSUN_SLACK_WATCH_MINUTES` (15) after the last run started,
+flag on, at any hour while the session runs, `BOSUN_SLACK_WATCH_MINUTES` (15) after the last run started,
 with no other run holding its lock, and while the daily budget lasts. A run is one headless
 `claude -p` with a small model (`BOSUN_SLACK_WATCH_MODEL`, haiku) and the prompt in
 `orchestrator/slack-watch.md`. It reads my profile, searches four times from the scan start (the
@@ -342,9 +342,10 @@ most change what the watcher lists, which code checks against the permalink form
 start, and which the orchestrator re-reads.
 
 **Cost.** A call with nothing new (a 30-minute window, the four searches) cost $0.017 with haiku; one
-that found 7 messages over 12 hours $0.067. Every 15 minutes over a 12-hour awake window that is 48 calls,
-so roughly $0.50 to $1 a day; `BOSUN_SLACK_WATCH_MAX_USD_PER_CALL` (0.25) and
-`..._MAX_USD_PER_DAY` (1.5) cap it. Each delivery is still one orchestrator turn, under the
+that found 7 messages over 12 hours $0.067. The watcher runs whenever the session does, all night on a Mac that
+stays awake, so every 15 minutes that is up to 96 calls a day, roughly $1 to $2; `BOSUN_SLACK_WATCH_MAX_USD_PER_CALL`
+(0.25) and `..._MAX_USD_PER_DAY` (1.5) cap it, and the night's calls come out of the same daily budget, so on a
+Mac that stays awake the daily cap may need raising for the day's calls to have room. Each delivery is still one orchestrator turn, under the
 dispatcher's own gates and daily cap.
 
 **State and failures.** `$BOSUN_STATE_DIR/slack-watch/state.json`: the watermark, when the
@@ -358,8 +359,8 @@ subtype unless it is "success" (a failed call can say that too), its short text,
 status and stderr (before 2026-10-24 a usage-limit failure logged only "failed (success)"). From the
 third failure in a row the log line says where the next successful run will scan from.
 Its log lines go to the check-in log; the watchdog's `slack-watch` check (not
-`log-errors`) alerts when no run started for two intervals inside the awake window while the loop
-runs, after three failed runs in a row, and once a day when the budget is spent.
+`log-errors`) alerts when no run started for two intervals while the loop
+runs, at any hour (alerts held outside the awake window, as for every check), after three failed runs in a row, and once a day when the budget is spent.
 
 **Dry run** (real Slack, 12 hours back, a scratch copy of the ledger): the call's tool list held only
 Slack's read tools; it ran the four searches as written; it found 7 messages (3 mentions, 1 DM, 3

@@ -219,6 +219,15 @@ now_runs_settle_at() { # <count>: and stay there a while, as a second run would 
   [ "$(now_runs)" = "$1" ]
 }
 
+# The login job: loaded by the install (BOSUN_START_AT_LOGIN is on by default), valid, and what it runs is
+# `morning --at-login`.
+login_job_for_real() {
+  local job="$LABEL.login" plist="$HOME/Library/LaunchAgents/$LABEL.login.plist"
+  echo "the login job"
+  check "$job is loaded" launchctl print "$DOMAIN/$job"
+  check "$job's plist is valid and runs morning --at-login" bash -c 'plutil -lint -s "$1" && grep -q "morning --at-login" "$1"' _ "$plist"
+}
+
 # `bosun morning --now --background`, from a stopped bosun: launchd's job runs the morning run now. Only for a
 # bosun that has the job and the option: install_e2e.sh calls it, and work_e2e.sh once it is on this checkout (the
 # release it starts from has neither).
@@ -261,7 +270,7 @@ launchd_for_real() {
 }
 
 jobs_are_gone() {
-  for job in "$LABEL" "$LABEL.watchdog" "$LABEL.learn" "$LABEL.console"; do
+  for job in "$LABEL" "$LABEL.watchdog" "$LABEL.learn" "$LABEL.console" "$LABEL.login"; do
     check "$job is unloaded" bash -c '! launchctl print "$1"' _ "$DOMAIN/$job"
     check "... launchd cannot run it" bash -c '! launchctl kickstart "$1"' _ "$DOMAIN/$job"
     check "... and its plist is gone" test ! -e "$HOME/Library/LaunchAgents/$job.plist"

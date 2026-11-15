@@ -2966,13 +2966,13 @@ check "a start with it off again takes the marker away" test ! -e "$BOSUN_STATE_
 
 section status-json "status --json (the menu bar app's one source of how bosun is)" needs stopped-until-started covers 'libexec/bosun-status,libexec/bosun-start,libexec/bosun-stop,lib/menu_status*.py'
 "$BOSUN" stop >/dev/null 2>&1 # what a stop made today leaves (the section before ends with it too)
-check "it prints one object with contract 1 and the documented fields, and exits 0" status_has 'd["contract"] == 1 and sorted(d) == sorted("contract level sentence detail windows running waiting keep_awake_until stopped update console problems attention logs".split())'
+check "it prints one object with contract 1 and the documented fields, and exits 0" status_has 'd["contract"] == 1 and sorted(d) == sorted("contract level sentence detail windows running waiting keep_awake_until stopped schedule update console problems attention logs".split())'
 check "... exit 0" "$BOSUN" status --json
 away_from_midnight() {
   local now=$((10#$(date +%H%M)))
   [ "$now" -gt 30 ] && [ "$now" -lt 2359 ]
 }
-check "with no window open, outside the awake hours, it does not say bosun is running: it is resting, not stopped" awake_outside status_has 'd["windows"] == 0 and d["sentence"] != "bosun is running" and d["sentence"].startswith("bosun is resting") and d["stopped"] is None and d["update"] == {"state": "none", "waiting_for": [], "last": None}'
+check "with no window open, outside the awake hours, it does not say bosun is running: it is resting, not stopped, and says the hours" awake_outside status_has 'd["windows"] == 0 and d["sentence"] != "bosun is running" and d["sentence"].startswith("Resting: outside your hours") and d["schedule"]["in_hours"] is False and d["stopped"] is None and d["update"] == {"state": "none", "waiting_for": [], "last": None}'
 if away_from_midnight; then
   check "... and inside them, a stop made today is stopped, the morning not paused, and nothing is wrong" awake_all_day status_has 'd["windows"] == 0 and d["level"] == "stopped" and d["sentence"].startswith("bosun is stopped (bosun stop at ") and d["stopped"]["morning_paused"] is False and d["problems"] == []'
 fi
@@ -3222,7 +3222,7 @@ rm -f "$BOSUN_STATE_DIR/quit.json" "$BOSUN_STATE_DIR/console/wanted" "$BOSUN_STA
 # current time, so these hold whatever time the suite runs at: a window ending in 20 minutes that began 2 minutes
 # ago is inside (an end earlier than the start runs past midnight, which the window rule handles), one that is 10
 # to 20 minutes ahead is outside, and with every day but today's and yesterday's scheduled, no window holds now.
-section morning-now "morning --now (the morning run at any hour or day)" needs quit covers 'libexec/bosun-morning,libexec/bosun-quit,libexec/bosun-stop,libexec/bosun-ledger,lib/keep_awake.py'
+section morning-now "morning --now (the morning run at any hour or day)" needs quit covers 'libexec/bosun-morning,libexec/bosun-quit,libexec/bosun-stop,libexec/bosun-ledger,lib/keep_awake.py,lib/login_start.py'
 today_letter="$(printf MTWRFSU | cut -c "$(date +%u)")"
 yesterday_letter="$(printf MTWRFSU | cut -c "$(date -v-1d +%u)")"
 unscheduled_days="$(printf MTWRFSU | tr -d "$today_letter$yesterday_letter")"
@@ -3293,6 +3293,53 @@ now_rc=$?
 check "a quit made while --now sets up survives its start, which logs that, and the run says so and exits 0" bash -c 'grep -q "bosun was quit at [0-9:]*: not starting it" <<<"$1" && grep -q "bosun quit during the morning run; not starting" <<<"$1" && ! grep -q "morning run complete" <<<"$1" && [ "$2" -eq 0 ] && [ -f "$3/quit.json" ] && ! tmux -L "$4" has-session -t =smoke' _ "$out" "$now_rc" "$BOSUN_STATE_DIR" "$SOCKET"
 now_clean
 
+# --at-login (lib/login_start.py): the decision comes before the run's header, so a skip leaves none.
+morning_log="$BOSUN_LOG_DIR/morning-$(date +%F).log"
+run_headers() { grep -c "=== morning run" "$morning_log" 2>/dev/null || true; }
+at_login() { # <VAR=value>...: bosun morning --at-login, with a stand-in caffeinate and no network
+  now_morning "$@" "$BOSUN" morning --at-login
+}
+now_clean
+headers_before="$(run_headers)"
+out="$(at_login "${awake_inside[@]}" BOSUN_START_AT_LOGIN=0)"
+now_rc=$?
+check "--at-login with BOSUN_START_AT_LOGIN=0 logs why, exits 0 and starts no session" bash -c 'grep -q "not starting: BOSUN_START_AT_LOGIN is 0" <<<"$1" && [ "$2" -eq 0 ] && ! tmux -L "$3" has-session -t =smoke' _ "$out" "$now_rc" "$SOCKET"
+check "... a skip writes no run header (the watchdog would read it as a run that never finished)" bash -c '! grep -q "=== morning run" <<<"$1" && [ "$(grep -c "=== morning run" "$2")" -eq "$3" ]' _ "$out" "$morning_log" "$headers_before"
+check "... its line is in the day's morning log" grep -q "not starting: BOSUN_START_AT_LOGIN is 0" "$morning_log"
+
+out="$(at_login "${awake_inside[@]}" BOSUN_START_AT_LOGIN=1)"
+check "--at-login after bosun stop says you stopped bosun today, and starts nothing" bash -c 'grep -q "not starting: you stopped bosun today at " <<<"$1" && ! grep -q "=== morning run" <<<"$1" && ! tmux -L "$2" has-session -t =smoke' _ "$out" "$SOCKET"
+out="$(at_login "${awake_outside[@]}" BOSUN_START_AT_LOGIN=1)"
+check "--at-login outside the hours says so" contains "$out" "not starting: outside your hours ("
+out="$(at_login "${awake_unscheduled[@]}" BOSUN_START_AT_LOGIN=1)"
+check "--at-login on a day that is not scheduled says so" contains "$out" "not starting: not one of your days ("
+write_quit paused
+out="$(at_login "${awake_inside[@]}" BOSUN_START_AT_LOGIN=1)"
+check "--at-login after a quit that paused the morning says so, and leaves the quit" bash -c 'grep -q "not starting: bosun was quit at [0-9:]* with the morning start paused" <<<"$1" && [ -f "$2/quit.json" ]' _ "$out" "$BOSUN_STATE_DIR"
+printf '%s\n' "$(date '+%F %T')" >"$BOSUN_STATE_DIR/login-reload"
+rm -f "$BOSUN_STATE_DIR/quit.json" "$BOSUN_STATE_DIR/stopped-smoke"
+out="$(at_login "${awake_inside[@]}" BOSUN_START_AT_LOGIN=1)"
+check "--at-login right after a reload of the jobs is not a login, and removes the reload marker" bash -c 'grep -q "not starting: a reload of bosun.s jobs, not a login" <<<"$1" && [ ! -e "$2/login-reload" ] && ! tmux -L "$3" has-session -t =smoke' _ "$out" "$BOSUN_STATE_DIR" "$SOCKET"
+
+out="$(at_login "${awake_inside[@]}" BOSUN_START_AT_LOGIN=1)"
+now_rc=$?
+check "--at-login in your hours with nothing in the way starts the session, and the header says trigger=login whatever BOSUN_TRIGGER is" bash -c 'grep -q "starting bosun: you logged in during your hours" <<<"$1" && grep -q "=== morning run (trigger=login, " <<<"$1" && ! grep -q "trigger=launchd" <<<"$1" && grep -q "morning run complete" <<<"$1" && [ "$2" -eq 0 ] && tmux -L "$3" has-session -t =smoke' _ "$out" "$now_rc" "$SOCKET"
+out="$(at_login "${awake_inside[@]}" BOSUN_START_AT_LOGIN=1)"
+check "... a second login with the session running says it is running already" bash -c 'grep -q "not starting: bosun is running already" <<<"$1" && ! grep -q "=== morning run" <<<"$1"' _ "$out"
+now_clean
+rm -f "$BOSUN_STATE_DIR/stopped-smoke" # the stop above is a stop today, which comes before the running check
+cp "$HOME/.local/bin/launchctl" "$WORK/launchctl.plain"
+printf '#!/bin/sh\n[ "$1" != print ] || printf "\\tstate = running\\n"\nexit 0\n' >"$HOME/.local/bin/launchctl"
+out="$(at_login "${awake_inside[@]}" BOSUN_START_AT_LOGIN=1)"
+check "... and with the morning job running (a scheduled run going, no session yet), it says bosun is running and starts nothing" bash -c 'grep -q "not starting: bosun is running already" <<<"$1" && ! grep -q "=== morning run" <<<"$1"' _ "$out"
+cp "$WORK/launchctl.plain" "$HOME/.local/bin/launchctl"
+now_clean
+out="$(at_login "${awake_inside[@]}" BOSUN_START_AT_LOGIN=1 BOSUN_DAYS=X 2>&1)"
+now_rc=$?
+check "--at-login with a bad setting fails in one line that names it, not just a status" bash -c '[ "$2" -ne 0 ] && grep -q "BOSUN_DAYS" <<<"$1" && ! grep -q "could not be decided (status" <<<"$1"' _ "$out" "$now_rc"
+check "--at-login takes no other option" fails_with "--at-login takes no other option" now_morning "$BOSUN" morning --at-login --now
+now_clean
+
 stop_keep_awake_leaves_it() { # bosun stop --keep-awake keeps the caffeinate and its files; a plain stop releases them
   start_keep_awake
   "$BOSUN" stop --keep-awake >/dev/null 2>&1
@@ -3303,6 +3350,171 @@ stop_keep_awake_leaves_it() { # bosun stop --keep-awake keeps the caffeinate and
 }
 check "bosun stop --keep-awake leaves the caffeinate and its files alone; a plain stop releases them" stop_keep_awake_leaves_it
 plain_fake launchctl 113 # the fake above; this section's alone
+
+section settings "settings (bosun settings get|set: bosun.env through init's writer, the jobs and the wake)" covers 'libexec/bosun-settings,lib/settings.py,lib/run_locked.py'
+# Its own config, state and launchd label, so what it writes and reloads is its alone; launchd has a job while it
+# has its plist, pmset's repeating event is what $SET_SCHED holds, and sudo -v fails while $WORK/sudo-fails is there,
+# pmset repeat while $WORK/settings-pmset-fails is, launchctl bootstrap while $WORK/settings-bootstrap-fails is.
+SET_CFG="$WORK/settings-config"
+SET_STATE="$WORK/settings-state"
+SET_LABEL="com.bosun.smoke-settings"
+SET_SCHED="$WORK/settings-pmset-sched"
+SET_LOG="$WORK/settings-system.log"
+SET_PLIST="$HOME/Library/LaunchAgents/$SET_LABEL.plist"
+mkdir -p "$SET_CFG" "$SET_STATE" "$HOME/Library/LaunchAgents"
+: >"$SET_LOG"
+cat >"$HOME/.local/bin/launchctl" <<EOF
+#!/bin/bash
+echo "launchctl \$*" >>"$SET_LOG"
+[ "\$1" != print ] || [ -e "\$HOME/Library/LaunchAgents/\${2##*/}.plist" ] || exit 113
+[ "\$1" != bootstrap ] || [ ! -e "$WORK/settings-bootstrap-fails" ] || exit 5
+exit 0
+EOF
+cat >"$HOME/.local/bin/pmset" <<EOF
+#!/bin/bash
+echo "pmset \$*" >>"$SET_LOG"
+if [ "\$1 \$2" = "-g sched" ] && [ -s "$SET_SCHED" ]; then cat "$SET_SCHED"; fi
+[ "\$1" != repeat ] || [ ! -e "$WORK/settings-pmset-fails" ] || exit 1
+exit 0
+EOF
+cat >"$HOME/.local/bin/sudo" <<EOF
+#!/bin/bash
+echo "sudo \$*" >>"$SET_LOG"
+[ "\$1" = -n ] && shift
+if [ "\$1" = -v ]; then [ ! -e "$WORK/sudo-fails" ]; exit; fi
+exec "\$@"
+EOF
+chmod +x "$HOME/.local/bin/launchctl" "$HOME/.local/bin/pmset" "$HOME/.local/bin/sudo"
+settings_cmd() { # <args>: bosun settings with this section's folders and label, and no terminal to ask in
+  BOSUN_CONFIG_DIR="$SET_CFG" BOSUN_STATE_DIR="$SET_STATE" BOSUN_LOG_DIR="$SET_STATE/logs" \
+    BOSUN_LAUNCHD_LABEL="$SET_LABEL" "$BOSUN" settings "$@" </dev/null
+}
+settings_exits() { # <status> <args>: bosun settings exits <status>
+  local want="$1" status
+  shift
+  settings_cmd "$@" >"$WORK/settings.out" 2>"$WORK/settings.err"
+  status=$?
+  [ "$status" -eq "$want" ] || {
+    echo "exit $status not $want: $(cat "$WORK/settings.err")"
+    return 1
+  }
+}
+settings_has() { python3 -c 'import json, sys; d = json.load(open(sys.argv[1])); sys.exit(0 if eval(sys.argv[2]) else 1)' "$WORK/settings.out" "$1"; }
+pmset_sched() { printf 'Repeating power events:\n  %s\n' "$1" >"$SET_SCHED"; }
+printf '# acme: the schedule\nBOSUN_START_TIME="08:00"\n\n# mine\nBOSUN_EVENTS_ENABLED="1"\n' >"$SET_CFG/bosun.env"
+
+check "get --json prints one object, contract 1, with each setting's value, default and meaning" settings_exits 0 get --json
+check "... BOSUN_START_TIME as bosun.env sets it, BOSUN_DAYS as the default, and no wake" settings_has 'd["contract"] == 1 and d["readable"] and d["settings"]["BOSUN_START_TIME"]["set"] and d["settings"]["BOSUN_DAYS"] == {**d["settings"]["BOSUN_DAYS"], "value": "MTWRF", "set": False, "valid": True} and d["wake"] == "none"'
+check "get, for a person, a line a setting" contains "$(settings_cmd get 2>&1)" "BOSUN_START_TIME=08:00  (set)"
+
+check "set BOSUN_START_TIME=09:00 succeeds" settings_exits 0 set BOSUN_START_TIME=09:00
+check "... and says what changed" contains "$(cat "$WORK/settings.out")" "BOSUN_START_TIME: 08:00 → 09:00"
+check "... bosun.env says 09:00, its other lines and comments kept" bash -c 'grep -qx "BOSUN_START_TIME=\"09:00\"" "$1" && grep -qx "# acme: the schedule" "$1" && grep -qx "# mine" "$1" && grep -qx "BOSUN_EVENTS_ENABLED=\"1\"" "$1"' _ "$SET_CFG/bosun.env"
+check "... a backup holds bosun.env as it was" bash -c 'grep -qx "BOSUN_START_TIME=\"08:00\"" "$1"/bosun.env.pre-init-*' _ "$SET_CFG"
+check "... the morning job's plist says 09:00, and launchd loaded it" bash -c 'grep -q "<key>Hour</key><integer>9</integer><key>Minute</key><integer>0</integer>" "$1" && grep -q "launchctl bootstrap gui/$(id -u) $1" "$2"' _ "$SET_PLIST" "$SET_LOG"
+check "... with no repeating wake, no sudo" bash -c '! grep -q "^sudo" "$1"' _ "$SET_LOG"
+
+settings_cmd set BOSUN_START_TIME=08:00 >/dev/null 2>&1
+pmset_sched "wakepoweron at 8:01AM weekdays only"
+: >"$SET_LOG"
+check "with bosun's wake in pmset, set BOSUN_START_TIME=09:00 succeeds" settings_exits 0 set BOSUN_START_TIME=09:00
+check "... asking sudo first, then moving the wake with sudo pmset" bash -c 'grep -q "^sudo -n -v" "$1" && grep -qx "sudo pmset repeat wakeorpoweron MTWRF 09:01:00" "$1" && [ "$(grep -n "^sudo -n -v" "$1" | head -1 | cut -d: -f1)" -lt "$(grep -n "^sudo pmset" "$1" | cut -d: -f1)" ]' _ "$SET_LOG"
+
+# A step after the write that fails puts bosun.env back from the backup the write made, and the jobs with it.
+pmset_sched "wakepoweron at 9:01AM weekdays only"
+cp "$SET_CFG/bosun.env" "$WORK/settings-before.env"
+put_back_said() { # <what the line says>: the run failed in one ERROR line, the last, saying it; bosun.env as before
+  local errors
+  errors="$(grep -c 'ERROR: ' "$WORK/settings.err")"
+  if [ "$errors" != 1 ] || ! tail -1 "$WORK/settings.err" | grep -qF -- "$1"; then
+    echo "ERROR lines: $errors; stderr: $(cat "$WORK/settings.err")"
+    return 1
+  fi
+  cmp -s "$SET_CFG/bosun.env" "$WORK/settings-before.env" || {
+    echo "bosun.env changed"
+    return 1
+  }
+}
+morning_at_nine() { grep -q "<key>Hour</key><integer>9</integer><key>Minute</key><integer>0</integer>" "$SET_PLIST"; }
+touch "$WORK/settings-pmset-fails"
+check "when pmset repeat fails, set fails (exit 1)" settings_exits 1 set BOSUN_START_TIME=10:00
+check "... in one line saying bosun.env and the jobs were put back, and bosun.env is byte for byte as before" put_back_said "pmset did not take the new wake (pmset failed), so bosun.env and the jobs were put back as they were"
+check "... and the morning job is back at 09:00" morning_at_nine
+rm -f "$WORK/settings-pmset-fails"
+touch "$WORK/settings-bootstrap-fails"
+: >"$SET_LOG"
+check "when launchctl bootstrap fails in the reload, set fails (exit 1)" settings_exits 1 set BOSUN_START_TIME=10:00
+check "... in one line naming the reload, and bosun.env is byte for byte as before" put_back_said "could not reload bosun's launchd jobs (launchctl bootstrap failed for"
+check "... the morning job's plist is back at 09:00 (the put-back's reload writes it before launchd refuses it again)" morning_at_nine
+check "... and the wake was never moved" bash -c '! grep -q "pmset repeat" "$1"' _ "$SET_LOG"
+rm -f "$WORK/settings-bootstrap-fails"
+settings_cmd set BOSUN_START_TIME=09:00 >/dev/null 2>&1 # the jobs loaded again
+touch "$WORK/sudo-fails"
+check "when sudo -v fails, set is refused" fails_with "moving the Mac's wake needs your password: run this in Terminal" settings_cmd set BOSUN_START_TIME=10:00
+check "... and bosun.env is unchanged" cmp -s "$SET_CFG/bosun.env" "$WORK/settings-before.env"
+check "... as an object with --json too, exit 1" settings_exits 1 set BOSUN_START_TIME=10:00 --json
+check "... that says why" settings_has 'd == {"contract": 1, "error": "moving the Mac'"'"'s wake needs your password: run this in Terminal"}'
+rm -f "$WORK/sudo-fails"
+
+pmset_sched "wakepoweron at 6:30AM every day"
+: >"$SET_LOG"
+check "with another app's wake, set --json changes bosun.env" settings_exits 0 set BOSUN_DAYS=MTWRFS --json
+check "... and says the other wake was left as it is, which pmset never touched" bash -c 'python3 -c "import json, sys; d = json.load(open(sys.argv[1])); sys.exit(0 if d[\"changed\"] == {\"BOSUN_DAYS\": [\"MTWRF\", \"MTWRFS\"]} and \"left as it is\" in d[\"notes\"][0] else 1)" "$1" && ! grep -q "pmset repeat" "$2"' _ "$WORK/settings.out" "$SET_LOG"
+replaced_wake() { settings_cmd set BOSUN_DAYS=MTWRFSU --replace-wake >/dev/null 2>&1 && grep -qx "sudo pmset repeat wakeorpoweron MTWRFSU 09:01:00" "$SET_LOG"; }
+check "... and with --replace-wake it is replaced" replaced_wake
+rm -f "$SET_SCHED"
+
+python3 -I -c 'import fcntl, os, sys, time
+fd = os.open(sys.argv[1], os.O_RDWR | os.O_CREAT)
+fcntl.flock(fd, fcntl.LOCK_EX)
+print("held", flush=True)
+time.sleep(60)' "$SET_STATE/update.lock" >"$WORK/settings-update.out" &
+set_update_holder=$!
+wait_for 30 grep -q held "$WORK/settings-update.out"
+check "while bosun update runs, set is refused" fails_with "bosun update is running" settings_cmd set BOSUN_UPDATE_CHANNEL=main
+check "... with exit 1" settings_exits 1 set BOSUN_UPDATE_CHANNEL=main
+check "... and bosun.env unchanged" bash -c '! grep -q BOSUN_UPDATE_CHANNEL "$1"' _ "$SET_CFG/bosun.env"
+kill "$set_update_holder" 2>/dev/null
+wait "$set_update_holder" 2>/dev/null
+
+# bosun init holds its lock while it runs (one_at_a_time init), and writes bosun.env from what it read at its start
+python3 -I -c 'import fcntl, os, sys, time
+fd = os.open(sys.argv[1], os.O_RDWR | os.O_CREAT)
+fcntl.flock(fd, fcntl.LOCK_EX)
+print("held", flush=True)
+time.sleep(60)' "$SET_STATE/init.lock" >"$WORK/settings-init.out" &
+set_init_holder=$!
+wait_for 30 grep -q held "$WORK/settings-init.out"
+check "while bosun init runs, set is refused" fails_with "bosun init or another bosun settings set is running" settings_cmd set BOSUN_UPDATE_CHANNEL=main
+check "... with exit 1, and with --json as the refusal object" settings_exits 1 set BOSUN_UPDATE_CHANNEL=main --json
+check "... naming the wizard" settings_has 'list(d) == ["contract", "error"] and "bosun init" in d["error"]'
+check "... and bosun.env unchanged" bash -c '! grep -q BOSUN_UPDATE_CHANNEL "$1"' _ "$SET_CFG/bosun.env"
+kill "$set_init_holder" 2>/dev/null
+wait "$set_init_holder" 2>/dev/null
+# set's own hold (lock_here, the shell holding it), in a shell that then sleeps in its place
+BOSUN_CONFIG_DIR="$SET_CFG" BOSUN_STATE_DIR="$SET_STATE" BOSUN_LOG_DIR="$SET_STATE/logs" bash -c \
+  'source "$1/lib/common.sh"; load_config; lock_here init 0 && echo held && exec sleep 60' _ "$ROOT" >"$WORK/settings-lock-here.out" &
+set_init_holder=$!
+wait_for 30 grep -q held "$WORK/settings-lock-here.out"
+check "while set holds init's lock, bosun init is refused at once" fails_with "bosun init is already running (in another terminal?), or bosun settings set is" env BOSUN_CONFIG_DIR="$SET_CFG" BOSUN_STATE_DIR="$SET_STATE" BOSUN_LOG_DIR="$SET_STATE/logs" "$BOSUN" init --answers /dev/null
+check "... and so is another set" fails_with "bosun init or another bosun settings set is running" settings_cmd set BOSUN_UPDATE_CHANNEL=main
+kill "$set_init_holder" 2>/dev/null
+wait "$set_init_holder" 2>/dev/null
+
+check "a bad value is refused, naming the setting" fails_with "BOSUN_START_TIME" settings_cmd set BOSUN_START_TIME=25:00
+check "... with exit 2, quietly (not an alert)" settings_exits 2 set BOSUN_START_TIME=25:00
+check "... and an unknown key too" settings_exits 2 set BOSUN_FOO=1 --json
+check "... as an object with --json, naming it" settings_has 'list(d) == ["contract", "error"] and "BOSUN_FOO" in d["error"]'
+: >"$SET_LOG"
+check "set BOSUN_UPDATE_CHANNEL=main succeeds" settings_exits 0 set BOSUN_UPDATE_CHANNEL=main
+check "... writes it and reloads no job" bash -c 'grep -qx "BOSUN_UPDATE_CHANNEL=\"main\"" "$2" && ! grep -q "^launchctl" "$1"' _ "$SET_LOG" "$SET_CFG/bosun.env"
+check "set BOSUN_AWAKE_UNTIL=18:00 succeeds" settings_exits 0 set BOSUN_AWAKE_UNTIL=18:00
+check "... and moves learning's time with it, as bosun init does" grep -qx 'BOSUN_LEARN_AT="16:30"' "$SET_CFG/bosun.env"
+check "a refusal is never logged as an error (the watchdog alerts on those)" bash -c '! grep -rqE "BOSUN_FOO|bosun update is running|needs your password" "$1/logs" 2>/dev/null' _ "$SET_STATE"
+rm -f "$HOME"/Library/LaunchAgents/"$SET_LABEL"*.plist
+plain_fake launchctl 113
+plain_fake pmset 0
+plain_fake sudo 1
 
 section console "console (local server on a free port, fixture ledger)" covers 'libexec/bosun-console,libexec/bosun-kg,console/**,tests/fixtures/console/**,tests/fixtures/knowledge/**,lib/console_*.py'
 CONSOLE_STATE="$WORK/console-state"
@@ -3710,6 +3922,19 @@ assert job.get("AbandonProcessGroup") is True, job.get("AbandonProcessGroup")
   log_lines="$(wc -l <"$WORK/system.log")"
   BOSUN_CONFIG_DIR="$INSTALL_CFG" "$ROOT/install.sh" >/dev/null 2>&1
   check "a second install leaves it loaded as it is" bash -c '! tail -n +$(($2 + 1)) "$1" | grep -q "launchctl bootstrap .*\.now"' _ "$WORK/system.log" "$log_lines"
+
+  # The login job (templates/launchd-login.plist): rendered only while BOSUN_START_AT_LOGIN=1; a reload leaves the
+  # marker that --at-login tells a reload by.
+  login_job() { bash -c 'source "$1/lib/common.sh"; load_config; shift; "$@"' _ "$ROOT" "$@"; }
+  LOGIN_LABEL="$BOSUN_LAUNCHD_LABEL.login"
+  login_plist="$(BOSUN_START_AT_LOGIN=1 login_job render_job "$LOGIN_LABEL")"
+  check "render_job renders the login job with BOSUN_START_AT_LOGIN=1: it runs morning --at-login at load" bash -c 'grep -q "morning --at-login" <<<"$1" && grep -A1 "<key>RunAtLoad</key>" <<<"$1" | grep -q "<true/>" && grep -q "login.launchd.out" <<<"$1" && grep -A1 "AbandonProcessGroup" <<<"$1" | grep -q "<true/>"' _ "$login_plist"
+  check "... and renders nothing with BOSUN_START_AT_LOGIN=0" test -z "$(BOSUN_START_AT_LOGIN=0 login_job render_job "$LOGIN_LABEL")"
+  check "... its plist is valid for plutil" bash -c 'printf "%s\n" "$1" >"$2" && plutil -lint -s "$2"' _ "$login_plist" "$WORK/login.plist"
+  check "install has loaded it (the default is on), named by the morning label plus .login" bash -c 'grep -q "launchctl bootstrap gui/$(id -u) .*\.login\.plist" "$1" && plutil -lint -s "$2"' _ "$WORK/system.log" "$HOME/Library/LaunchAgents/$LOGIN_LABEL.plist"
+  check "... and the job list for uninstall names it" contains "$(login_job job_labels)" "$LOGIN_LABEL"
+  rm -f "$BOSUN_STATE_DIR/login-reload" "$HOME/Library/LaunchAgents/$LOGIN_LABEL.plist"
+  check "reload_changed_jobs with the setting on loads it again and leaves the reload marker" test -n "$(BOSUN_START_AT_LOGIN=1 login_job reload_changed_jobs | grep "\.login$")" -a -s "$BOSUN_STATE_DIR/login-reload"
 
   # --background: launchd starts the run (the job above), so that nothing it starts is the caller's child.
   section morning-background "morning --now --background (fake launchctl)" needs install covers 'install.sh,templates/launchd-now.plist,libexec/bosun-morning,libexec/bosun-doctor'
@@ -4963,7 +5188,7 @@ PY
   u_summary_is() { # the summary the update ended with, as the design lays it out
     grep -qE "^bosun updated: ${U_V1_COMMIT:0:7} -> ${U_V2_COMMIT:0:7} \(1 commit\) in [0-9]+(m [0-9]+)?s$" "$1" &&
       grep -qE "^  ledger      format 1 -> 2 \([0-9]+ items migrated\)$" "$1" && grep -qx "  knowledge   format 1, unchanged" "$1" &&
-      grep -qx "Prompts changed: 1 (policy.md)" "$1" && grep -qx "Jobs reloaded: morning, watchdog, now" "$1" &&
+      grep -qx "Prompts changed: 1 (policy.md)" "$1" && grep -qx "Jobs reloaded: morning, watchdog, now, login" "$1" &&
       ! grep -q "^  FAIL: " "$1" && grep -qE "^  [0-9]+ already failing before the update$" "$1" &&
       grep -qE "^  [0-9]+ warnings?: run bosun doctor$" "$1" &&
       grep -qxE "Backup: $2 \([0-9.]+ (bytes|KB|MB|GB)\)" "$1" && [ "$(tail -1 "$1")" = "Going back: docs/setup.md#going-back" ] || {

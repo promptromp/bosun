@@ -1,10 +1,11 @@
 import Foundation
 
-// The menu each state becomes (docs/design/menu-bar.md): pure, so the AppKit shell only renders it.
-// Titles and states are the design note's: the status line's dot per level, "Show What's Wrong…" only on
-// a warning or an error, "Start bosun" first only when bosun is not running and is to be (stopped, or red
-// with no window open: `StatusSnapshot.offersStart`), Open Console greyed while stopped, and a Quit without
-// "…" when no dialog follows.
+// The menu each state becomes (docs/design/menu-bar.md, docs/design/control-panel.md): pure, so the AppKit shell
+// only renders it. Titles and states are the design notes': the status line's dot per level, "Show What's Wrong…"
+// only on a warning or an error, Start first only when bosun is not running and is to be (stopped, red with no
+// window open, or resting outside your hours: `StatusSnapshot.offersStart`), "Start bosun now" outside your hours,
+// Open Console enabled while the console runs, "Settings…" (⌘,), "Stop bosun…" while the session runs
+// (`showsStop`), and "Quit bosun.app" (⌘Q), always last.
 
 public enum Dot: Equatable, Sendable {
   case green, yellow, red, grey
@@ -20,12 +21,17 @@ public enum HelpTopic: Hashable, Sendable {
 }
 
 public enum ItemID: Hashable, Sendable {
-  case startBosun, showProblems, openConsole, checkForUpdates, openAtLogin
+  case startBosun, showProblems, openConsole, checkForUpdates
+  /// "Settings…" (⌘,): the Settings window.
+  case settings
   /// "Update bosun…", when bosun speaks a contract this app does not.
   case updateBosun
   case helpMenu
   case help(HelpTopic)
-  case quit
+  /// "Stop bosun…": the quit flow for the session; the app stays.
+  case stopBosun
+  /// "Quit bosun.app": the app; while the session runs it asks first whether to leave it running.
+  case quitApp
 }
 
 public struct MenuItem: Equatable, Sendable {
@@ -71,11 +77,12 @@ public struct MenuModel: Equatable, Sendable {
 
 public enum Flow: Equatable, Sendable {
   case quit, update, start
-  /// Open at Login being switched (`bosun app login on|off`): a second click waits for the first.
+  /// Open at Login being switched (`bosun app login on|off`, from the Settings window): a second switch waits
+  /// for the first.
   case login
 }
 
-/// Which flow runs. One at a time: ⌘Q twice, or Quit while an update dialog is open, is ignored.
+/// Which flow runs. One at a time: ⌘Q twice, or Quit or Stop while an update dialog is open, is ignored.
 public struct FlowState: Equatable, Sendable {
   public private(set) var active: Flow?
   /// A line under the status while the flow runs (what a quit waits for); gone when it ends.
@@ -135,13 +142,11 @@ public func shouldExitAsSecondCopy(running: [RunningApp], me: RunningApp, bundle
 
 // MARK: the menu
 
-/// The menu for a state. `login` is whether Open at Login is on (`bosun app status`).
-public func menu(
-  for status: StatusState, update: UpdateState, flow: FlowState, login: Bool = false
-) -> MenuModel {
+/// The menu for a state.
+public func menu(for status: StatusState, update: UpdateState, flow: FlowState) -> MenuModel {
   switch status {
   case .loaded(let snapshot, let current):
-    return loadedMenu(snapshot, current: current, update: update, flow: flow, login: login)
+    return loadedMenu(snapshot, current: current, update: update, flow: flow)
   case .notInstalled:
     return offlineMenu(
       StatusHeader(
@@ -163,41 +168,55 @@ public func menu(
 
 private enum Title {
   static let start = "Start bosun"
+  static let startNow = "Start bosun now"
   static let problems = "Show What's Wrong…"
   static let console = "Open Console"
-  static let login = "Open at Login"
+  static let settings = "Settings…"
   static let help = "Help"
+  static let stop = "Stop bosun…"
+  static let quitApp = "Quit bosun.app"
 }
 
 private func loadedMenu(
-  _ status: StatusSnapshot, current: Bool, update: UpdateState, flow: FlowState, login: Bool
+  _ status: StatusSnapshot, current: Bool, update: UpdateState, flow: FlowState
 ) -> MenuModel {
   let idle = flow.isIdle
-  let stopped = status.level == .stopped
   var actions: [MenuItem] = []
   if status.offersStart {
     // Only from a current status: one kept after a look that timed out may no longer be true
-    actions.append(MenuItem(id: .startBosun, title: Title.start, enabled: idle && current))
+    let title = status.outsideHours ? Title.startNow : Title.start
+    actions.append(MenuItem(id: .startBosun, title: title, enabled: idle && current))
   }
   if showsProblems(status.level) {
     actions.append(MenuItem(id: .showProblems, title: Title.problems))
   }
-  let console = MenuItem(id: .openConsole, title: Title.console, enabled: !stopped, key: "o")
+  let console = MenuItem(id: .openConsole, title: Title.console, enabled: status.console.running, key: "o")
   let own = [
     updateItem(update, enabled: idle),
-    MenuItem(id: .openAtLogin, title: Title.login, enabled: idle, checked: login),
+    MenuItem(id: .settings, title: Title.settings, key: ","),
     helpItem(runsBosun: true, doctor: true, logs: !status.logs.isEmpty, idle: idle),
   ]
-  let quit = MenuItem(
-    id: .quit, title: stopped ? "Quit bosun" : "Quit bosun…", enabled: idle, key: "q")
+  let stop = showsStop(status) ? [MenuItem(id: .stopBosun, title: Title.stop, enabled: idle)] : []
   let header = StatusHeader(
-    dot: dot(of: status.level),
+    dot: dot(of: status),
     sentence: current ? status.sentence : status.sentence + " (not current)",
     detail: status.detail + [flow.detail].compactMap { $0 })
   return MenuModel(
     header: header,
-    sections: [actions, [console], own, [quit]].filter { !$0.isEmpty },
+    sections: [actions, [console], own, stop + [quitAppItem(flow)]].filter { !$0.isEmpty },
     iconBadge: badge(status.level, update))
+}
+
+/// "Quit bosun.app", the last item of every menu; greyed while a flow runs, so ⌘Q twice is one quit.
+private func quitAppItem(_ flow: FlowState) -> MenuItem {
+  MenuItem(id: .quitApp, title: Title.quitApp, enabled: flow.isIdle, key: "q")
+}
+
+/// Resting (all well, outside your hours, no window open) is grey, as stopped is: the design's status table. A
+/// warning or an error keeps its colour.
+private func dot(of status: StatusSnapshot) -> Dot {
+  if status.level == .ok && status.outsideHours && status.running == false { return .grey }
+  return dot(of: status.level)
 }
 
 /// A level this app does not know is shown as a warning: never all well.
@@ -276,7 +295,8 @@ private func helpItem(runsBosun: Bool, doctor: Bool, logs: Bool, idle: Bool) -> 
 }
 
 /// bosun is missing, cannot be run or cannot be asked: nothing is offered that acts on it (Run bosun doctor
-/// only where bosun runs and its status could not be had), and Quit only leaves the app.
+/// only where bosun runs and its status could not be had; no Settings, which are bosun's), and Quit only leaves
+/// the app.
 private func offlineMenu(
   _ header: StatusHeader, badge: IconBadge?, flow: FlowState, doctor: Bool = false
 ) -> MenuModel {
@@ -284,7 +304,7 @@ private func offlineMenu(
     header: header,
     sections: [
       [helpItem(runsBosun: false, doctor: doctor, logs: false, idle: flow.isIdle)],
-      [MenuItem(id: .quit, title: "Quit bosun.app", enabled: flow.isIdle, key: "q")],
+      [quitAppItem(flow)],
     ],
     iconBadge: badge)
 }
@@ -307,7 +327,7 @@ private func tooNewMenu(_ number: Int, update: UpdateState, flow: FlowState) -> 
     sections: [
       [updateBosunItem(update, idle: flow.isIdle)],
       [helpItem(runsBosun: true, doctor: true, logs: false, idle: flow.isIdle)],
-      [MenuItem(id: .quit, title: "Quit bosun.app", enabled: flow.isIdle, key: "q")],
+      [quitAppItem(flow)],
     ],
     iconBadge: .warning)
 }

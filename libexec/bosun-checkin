@@ -243,8 +243,8 @@ events_at_start() {
 }
 
 # Look for new Slack activity (with events on). In the background, writing straight to the log, so
-# a slow search never delays the loop; slack-watch keeps its own interval, the awake window, one run
-# at a time and the budget, and is quiet while nothing is due.
+# a slow search never delays the loop; slack-watch keeps its own interval, one run at a time and the
+# budget, runs whenever the session does (not only in the awake window), and is quiet while nothing is due.
 slack_watch_once() {
   [ "$BOSUN_EVENTS_ENABLED" = "1" ] || return 0
   if [ "$DRY_RUN" = "1" ]; then

@@ -397,6 +397,11 @@ build, CI's `app` job, the release workflow and the VM suite (`tests/sandbox.sh 
 [The menu bar app](docs/setup.md#the-menu-bar-app). Not yet released: `bosun app install` refuses until
 `app/publisher.json` has a Team ID and the publisher's secrets exist, so no install offers the app yet.
 
+**Done (2026-11-14), the control panel** ([design](docs/design/control-panel.md), [plan](docs/plans/control-panel.md)):
+bosun.app 0.1.3 is there from login whatever the hour, with Stop bosun… and Quit bosun.app apart, a Settings window
+(General, Schedule) over the new `bosun settings get|set`, and the schedule in the status ("Resting: outside your
+hours · next start …"); bosun starts when you log in during your hours (`BOSUN_START_AT_LOGIN`, its own launchd job).
+
 **Next:** a DMG download of the notarized app, and a Homebrew cask, which carry what part 2 builds.
 
 ### Other agents and other operating systems

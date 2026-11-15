@@ -11,7 +11,11 @@
   "logs": "/Users/me/.local/state/bosun/logs",
   "problems": [],
   "running": false,
-  "sentence": "bosun is resting until 08:00",
+  "schedule": {
+    "in_hours": false,
+    "next_start": "2026-11-11T08:00+00:00"
+  },
+  "sentence": "Resting: outside your hours \u00b7 next start Wed 08:00",
   "stopped": null,
   "update": {
     "last": null,

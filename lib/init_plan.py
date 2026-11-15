@@ -150,6 +150,7 @@ class Answers:
     aws_sso_profiles: tuple[str, ...] = ()
     wake: bool = True
     menu_app: bool = True  # BOSUN_MENU_APP: bosun.app in Applications, opened at login (bosun app)
+    start_at_login: bool = True  # BOSUN_START_AT_LOGIN: bosun starts when you log in, during your hours
     trust: bool = True
 
 
@@ -161,7 +162,9 @@ TIME = re.compile(r"^([01]\d|2[0-3]):[0-5]\d$")
 WINDOW_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]*$")
 MODEL_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._\[\]-]*$")
 CONTROL = re.compile(r"[\x00-\x1f\x7f]")
-BOOL_ANSWERS = ("events", "approvals", "learning", "slack_watch", "wake", "menu_app", "trust")
+BOOL_ANSWERS = (
+    *("events", "approvals", "learning", "slack_watch", "wake", "menu_app", "start_at_login", "trust"),
+)
 TEXT_ANSWERS = (
     "days",
     "start",
@@ -520,6 +523,7 @@ def recommend(facts: Facts) -> Answers:
         # pmset keeps only one repeating event: never replace someone else's by default.
         wake=not facts.repeating_wake or bool(facts.env),
         menu_app=not facts.app_unavailable and on("BOSUN_MENU_APP", True),
+        start_at_login=on("BOSUN_START_AT_LOGIN", True),
     )
 
 
@@ -630,6 +634,7 @@ def env_groups(answers: Answers) -> list[tuple[str, list[tuple[str, str]]]]:
             [
                 ("BOSUN_MENU_APP", flag[answers.menu_app]),
                 ("BOSUN_CONSOLE_ALWAYS", flag[answers.menu_app]),
+                ("BOSUN_START_AT_LOGIN", flag[answers.start_at_login]),
             ],
         ),
         (
@@ -721,8 +726,9 @@ def menu_app_off(text: str, console: str = "0") -> str:
     return set_settings(text, {"BOSUN_MENU_APP": "0", "BOSUN_CONSOLE_ALWAYS": console})
 
 
-def set_settings(text: str, wanted: Mapping[str, str]) -> str:
-    """<text> with each of <wanted> assigned, every other line as it was, the missing ones added last."""
+def set_settings(text: str, wanted: Mapping[str, str], by: str = "bosun init") -> str:
+    """<text> with each of <wanted> assigned, every other line as it was, the missing ones added last under a
+    comment that names the command <by> (`bosun settings` writes through this too)."""
     missing = dict(wanted)
     lines = []
     for line in text.splitlines():
@@ -731,7 +737,7 @@ def set_settings(text: str, wanted: Mapping[str, str]) -> str:
             missing.pop(match.group(1), None)
         lines.append(merged_line(line, match, wanted))
     if missing:
-        lines += ["", "# Added by `bosun init`", *(f"{k}={env_value(v)}" for k, v in missing.items())]
+        lines += ["", f"# Added by `{by}`", *(f"{k}={env_value(v)}" for k, v in missing.items())]
     return "\n".join(lines) + "\n"
 
 

@@ -202,6 +202,18 @@ final class Flag {
     #expect(text.contains("Shred"))
   }
 
+  @Test func aSettingsEditGoesToTheSettings() throws {
+    let (files, folder) = try setUp()
+    var edits: [SettingsEdit] = []
+    let runner = HookRunner(
+      files: files, perform: { _ in }, answer: { _ in true }, dialogOpen: { false },
+      settings: { edits.append($0) })
+    try drop(#"{"settings": {"BOSUN_START_TIME": "09:00"}}"#, "1.json", folder)
+    try drop(#"{"settings": {"openAtLogin": false}}"#, "2.json", folder)
+    runner.tick()
+    #expect(edits == [.values(["BOSUN_START_TIME": "09:00"]), .openAtLogin(false)])
+  }
+
   @Test func theTimerTicksOnItsOwn() async throws {
     let (files, folder) = try setUp()
     var performed: [ItemID] = []
@@ -209,8 +221,8 @@ final class Flag {
       files: files, perform: { performed.append($0) }, answer: { _ in true }, dialogOpen: { false },
       interval: 0.02)
     runner.start()
-    try drop(#"{"item": "quit"}"#, "1.json", folder)
-    #expect(await eventually { performed == [.quit] })
+    try drop(#"{"item": "quitApp"}"#, "1.json", folder)
+    #expect(await eventually { performed == [.quitApp] })
     runner.stop()
   }
 }
@@ -218,5 +230,55 @@ final class Flag {
 @MainActor @Suite struct LaunchOptionsFromTheProcessTests {
   @Test func theHooksAreOffWithoutTheirArgument() {
     #expect(LaunchOptions.parse(CommandLine.arguments).testHooks == nil)
+  }
+}
+
+@MainActor @Suite struct SettingsWindowTests {
+  private let state = SettingsState(
+    view: nil, openAtLogin: true, message: "bosun.env could not be loaded", busy: false)
+
+  @Test func theWindowIsBosunSettingsAndASecondShowReusesIt() throws {
+    let controller = SettingsWindowController()
+    controller.show(state) { _ in self.state }
+    let window = try #require(controller.window)
+    #expect(window.title == "bosun Settings")
+    let fresh = SettingsState(view: nil, openAtLogin: false, message: nil, busy: false)
+    controller.show(fresh) { _ in fresh }
+    #expect(controller.window === window)
+    #expect(controller.model?.state == fresh)
+    window.close()
+  }
+
+  @Test func theWindowBecomingKeyAsksForAFreshRead() throws {
+    let controller = SettingsWindowController()
+    var asked = 0
+    controller.onKey = { asked += 1 }
+    controller.show(state) { _ in self.state }
+    let window = try #require(controller.window)
+    let before = asked
+    NotificationCenter.default.post(name: NSWindow.didBecomeKeyNotification, object: window)
+    #expect(asked == before + 1)
+    NotificationCenter.default.post(name: NSWindow.didBecomeKeyNotification, object: NSWindow())
+    #expect(asked == before + 1)
+    window.close()
+  }
+
+  @Test func anEditShowsBusyThenWhatTheCoordinatorAnswers() async throws {
+    let answer = SettingsState(view: nil, openAtLogin: false, message: "done", busy: false)
+    var asked: [SettingsEdit] = []
+    let model = SettingsModel(state: state) { edit in
+      asked.append(edit)
+      return answer
+    }
+    model.send(.openAtLogin(false))
+    #expect(model.state.busy)
+    #expect(model.state.message == nil)
+    #expect(await eventually { model.state == answer })
+    #expect(asked == [.openAtLogin(false)])
+  }
+
+  @Test func timesGoToTheDatePickerAndBack() {
+    let time = TimeOfDay(hour: 8, minute: 30)
+    #expect(TimeOfDay.time(of: TimeOfDay.date(of: time)) == time)
   }
 }

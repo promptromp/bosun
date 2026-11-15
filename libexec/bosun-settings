@@ -1,0 +1,222 @@
+#!/bin/bash
+# Usage: bosun settings get [--json]
+#        bosun settings set KEY=VALUE... [--replace-wake] [--json]
+#
+# The settings the menu bar app's Settings window shows and changes, and you can at a terminal: the schedule
+# (BOSUN_DAYS, BOSUN_START_TIME, BOSUN_AWAKE_UNTIL), starting at login (BOSUN_START_AT_LOGIN, 0 or 1) and
+# what bosun update follows (BOSUN_UPDATE_CHANNEL, releases or main). Design: docs/design/control-panel.md.
+#   get   each one's value: what bosun.env sets, else the default, and whether it is one bosun can use;
+#         and whose the Mac's repeating wake is. A bosun.env that cannot be read shows no values, never the
+#         defaults; one bosun cannot load shows what it assigns, and why. --json: one object, for the app and
+#         anyone:
+#           contract    1; a number that only grows, a field only ever being added
+#           readable    whether bosun.env could be read (when not, each value is null and not valid)
+#           error       why it could not be read, or why bosun cannot load it; else null
+#           config_dir  the folder of bosun.env
+#           wake        ours (bosun's repeating wake), none, or other (another app's; pmset keeps one)
+#           settings    {KEY: {value, default, set, valid, meaning}}
+#   set   check each value as bosun init does (the days and times together), refuse a key it does not offer,
+#         and write bosun.env through bosun init's writer: a backup (bosun.env.pre-init-<stamp>), every other
+#         line and comment kept. A move of the start or the until moves BOSUN_LEARN_AT along, as bosun init
+#         does. Then what the change needs: bosun's launchd jobs reloaded (the morning job at its new time),
+#         the Mac's repeating wake moved (sudo pmset) when the days or the start time change and the wake is
+#         bosun's, and a running keep-awake's end moved with BOSUN_AWAKE_UNTIL. Moving the wake asks for your
+#         password first (sudo -v; without a terminal to ask in, it is refused unless sudo -n -v succeeds), and
+#         when that is cancelled or fails nothing is written. If pmset or the reload fails, bosun.env is put
+#         back from the backup the write made (or removed, if the write made it) and the jobs reloaded again.
+#         Another app's repeating wake is left as it is, and said, unless --replace-wake. Refused while bosun
+#         update runs, and while bosun init (the wizard) or another settings set runs: it holds init's lock
+#         from the check of the values to the last step, so neither writes over the other. Prints a line a
+#         change ("KEY: old → new");
+#         --json: {"contract": 1, "changed": {KEY: [before, after]}, "notes": [...]} (BOSUN_LEARN_AT among them
+#         when it moved along), and on a failure {"contract": 1, "error": "..."}, the line on stderr too
+# Exit status: 0 done, 1 refused or failed (one line saying why), 2 usage or a value it does not take.
+set -uo pipefail
+source "$(dirname "$0")/../lib/common.sh"
+
+json=0
+for arg in "$@"; do
+  case "$arg" in
+    -h | --help)
+      usage
+      exit 0
+      ;;
+    --json) json=1 ;;
+  esac
+done
+read_config
+
+settings_py() { python3 "$BOSUN_ROOT/lib/settings.py" "$@"; }
+on_env() { settings_py "$1" --config-dir "$BOSUN_CONFIG_DIR" "${@:2}"; } # <command> [args]: one that reads bosun.env
+
+# Stops the command: with --json the reason as the object the app reads (stdout), and always the ERROR line on
+# stderr. <how>: usage (exit 2), refuse (exit 1, what you asked cannot be done) or die (exit 1, bosun failed).
+fail() { # <how> <message>
+  [ "$json" = 1 ] && settings_py error "$2"
+  case "$1" in
+    usage) die_usage "$2" ;;
+    refuse) refuse "$2" ;;
+    *) die "$2" ;;
+  esac
+}
+
+env_unread() { [ -z "$BOSUN_ENV_ERROR" ] || echo "bosun.env $BOSUN_ENV_FAULT: ${BOSUN_ENV_ERROR//$'\n'/ }"; }
+
+get_settings() {
+  local arg unread
+  for arg in "$@"; do [ "$arg" = --json ] || fail usage "unknown argument '$arg'"; done
+  unread="$(env_unread)"
+  if [ "$json" = 1 ]; then
+    on_env get ${unread:+--env-error "$unread"} || fail die "could not read the settings"
+  else
+    on_env get --text ${unread:+--env-error "$unread"} || fail die "could not read the settings"
+  fi
+}
+
+# effects: what the change needs done (lib/settings.py's, one a line); or the refusal: a value it does not take
+# is exit 2, as a usage error.
+plan_change() { # <KEY=VALUE...>
+  local said status
+  said="$(on_env plan "$@" 2>&1)"
+  status=$?
+  [ "$status" = 0 ] && effects="$said" && return 0
+  [ "$status" = 2 ] && fail usage "$said"
+  fail die "could not check the settings: ${said##*$'\n'}"
+}
+
+# wake=1 when the change moves the Mac's repeating wake: it is bosun's, or another app's with --replace-wake,
+# and sudo has said yes; wake_left=1 for another app's that stays (the note says so).
+decide_wake() { # <replace-wake: 0|1>
+  local owner
+  grep -qx wake <<<"$effects" || return 0
+  owner="$(on_env wake-owner)" || fail die "could not read the Mac's wake schedule"
+  if [ "$owner" = ours ] || { [ "$owner" = other ] && [ "$1" = 1 ]; }; then
+    wake=1
+    ask_for_sudo
+  elif [ "$owner" = other ]; then
+    wake_left=1
+  fi
+}
+
+# sudo's password, asked now, before anything is written: cancelled or failed, nothing changes.
+ask_for_sudo() {
+  if [ -t 0 ]; then
+    sudo -v || fail refuse "sudo was cancelled or failed, so nothing was changed"
+  else
+    sudo -n -v 2>/dev/null || fail refuse "moving the Mac's wake needs your password: run this in Terminal"
+  fi
+}
+
+# Runs <step> (a function of lib/common.sh): its lines go to stderr when it succeeds. When it fails they are kept
+# in step_said, neither shown nor logged: the one line the command then fails with says what happened.
+run_step() { # <step...>
+  step_said="$(
+    LOG_TO_FILE=0 # log() reads it; in this subshell only
+    "$@" 2>&1
+  )" || return 1
+  [ -z "$step_said" ] || printf '%s\n' "$step_said" >&2
+}
+
+# The last ERROR a failed step said (without the date and command before it), else its last line.
+step_error() {
+  local said
+  said="$(grep 'ERROR: ' <<<"$step_said" | tail -1)"
+  said="${said#*ERROR: }"
+  printf '%s' "${said:-${step_said##*$'\n'}}"
+}
+
+# After a step that failed: bosun.env as the write found it (settings.py put-back acts only on what the write
+# reported: the backup it made, or a bosun.env it made), and the jobs reloaded to match, so that bosun.env, the
+# jobs and the wake stay as they were, together. Prints how that went, to end the line the command fails with.
+put_back() { # <what settings.py write printed>
+  local said
+  if ! said="$(printf '%s' "$1" | on_env put-back 2>&1)"; then
+    printf 'and %s' "${said##*$'\n'}"
+    return 0
+  fi
+  load_config
+  if run_step reload_changed_jobs 2>/dev/null; then
+    printf 'so bosun.env and the jobs were put back as they were'
+  else
+    printf 'so bosun.env was put back as it was, but the jobs could not be reloaded to match it (%s)' "$(step_error)"
+  fi
+}
+
+# Whether a keep-awake is held: its pid file names a live caffeinate.
+keep_awake_held() {
+  local pid
+  pid="$(cat "$(keep_awake_pidfile)" 2>/dev/null)" && [ -n "$pid" ] &&
+    ps -p "$pid" -o comm= 2>/dev/null | grep -q caffeinate
+}
+
+# A running keep-awake ended where the new BOSUN_AWAKE_UNTIL ends the window now is in, or released when now is
+# outside every window.
+follow_keep_awake() {
+  local seconds status
+  keep_awake_held || return 0
+  seconds="$(awake_seconds_left)"
+  status=$?
+  if [ "$status" = 0 ] && [ "$seconds" -gt 0 ]; then
+    hold_keep_awake "$seconds" >&2
+  elif [ "$status" = 0 ] || [ "$status" = 3 ]; then
+    release_keep_awake >&2
+  fi
+}
+
+# assignments and replace_wake, from set's arguments.
+set_arguments() {
+  local arg
+  assignments=() replace_wake=0
+  for arg in "$@"; do
+    case "$arg" in
+      --json) ;;
+      --replace-wake) replace_wake=1 ;;
+      -*) fail usage "unknown argument '$arg'" ;;
+      *) assignments+=("$arg") ;;
+    esac
+  done
+}
+
+# What changed, from what `settings.py write` printed (<changes>), with the notes: lines, or with --json the object.
+say_changes() { # <changes>
+  local -a say=(say)
+  [ "$json" = 1 ] && say+=(--json)
+  [ "$wake_left" = 1 ] && say+=(--wake-left)
+  printf '%s' "$1" | settings_py "${say[@]}"
+}
+
+# The steps in their order, holding init's lock (bosun init writes bosun.env from what it read when it started):
+# nothing is written while the wizard or an update runs, a value is refused or sudo says no; a reload or a wake
+# that fails puts bosun.env back.
+set_settings() {
+  local changes
+  effects="" wake=0 wake_left=0
+  set_arguments "$@"
+  [ -z "$BOSUN_ENV_ERROR" ] || fail refuse "$(env_unread), so none of it was read: fix it, or run bosun init"
+  load_config
+  lock_here init 0 || fail refuse "bosun init or another bosun settings set is running; change settings when it ends"
+  if python3 "$BOSUN_ROOT/lib/update_state.py" running --state-dir "$BOSUN_STATE_DIR" || update_hold_active; then
+    fail refuse "bosun update is running; change settings when it ends"
+  fi
+  plan_change ${assignments[@]+"${assignments[@]}"}
+  decide_wake "$replace_wake"
+  stamp="$(date +%Y%m%d-%H%M%S)-$$"
+  changes="$(on_env write --stamp "$stamp" "${assignments[@]}")" || fail die "could not write bosun.env"
+  load_config
+  if grep -qx jobs <<<"$effects" && ! run_step reload_changed_jobs; then
+    fail die "could not reload bosun's launchd jobs ($(step_error)), $(put_back "$changes")"
+  fi
+  if [ "$wake" = 1 ] && ! run_step set_wake; then
+    fail die "pmset did not take the new wake ($(step_error)), $(put_back "$changes")"
+  fi
+  if grep -qx keep-awake <<<"$effects"; then follow_keep_awake; fi
+  say_changes "$changes"
+}
+
+sub="${1:-}"
+[ $# -eq 0 ] || shift
+case "$sub" in
+  get) get_settings "$@" ;;
+  set) set_settings "$@" ;;
+  *) fail usage "say get or set" ;;
+esac

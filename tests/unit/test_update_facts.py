@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -12,6 +13,7 @@ from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "lib"))
 import knowledge_store
+import migrations
 import update_facts
 import update_gate
 import update_notes
@@ -145,6 +147,66 @@ class ConversionFactsTest(World):
             self.assertEqual(update_facts.checkin_loop_pid(self.new), 4242)
         with self.ran("", code=1):
             self.assertIsNone(update_facts.checkin_loop_pid(self.new))
+
+
+ROOT = Path(__file__).resolve().parents[2]
+LOGIN = "BOSUN_START_AT_LOGIN"
+
+
+class JobsTest(World):
+    """The jobs the plan lists are the ones the release reloads: the dry run reads bosun.env as the update
+    leaves it, so an older install's (which keeps BOSUN_START_AT_LOGIN=0, CONFIG_ADDED) gets no login job."""
+
+    def setUp(self) -> None:
+        super().setUp()
+        home = self.state.parent / "home"
+        tools = home / ".local" / "bin"
+        tools.mkdir(parents=True)
+        for tool, status in (("plutil", 0), ("launchctl", 1)):  # every plist valid; no job loaded
+            (tools / tool).write_text(f"#!/bin/sh\nexit {status}\n")
+            (tools / tool).chmod(0o755)
+        self.enterContext(
+            mock.patch.dict(os.environ, {"HOME": str(home), "BOSUN_LOG_DIR": str(self.state / "logs")})
+        )
+        os.environ.pop(LOGIN, None)
+        (self.config / "bosun.env").write_text('BOSUN_DAYS="MTWRF"\nBOSUN_START_TIME="08:00"\n')  # no key
+        self.login = update_facts.shell(ROOT, "login_label").stdout.strip()
+
+    def test_an_older_install_s_plan_does_not_list_the_login_job(self) -> None:
+        kept = migrations.keys_to_keep(self.config, {LOGIN})
+        self.assertEqual(kept, {LOGIN: "0"})
+        reloads, blockers = update_facts.jobs(ROOT, kept)
+        self.assertEqual(blockers, [])
+        self.assertTrue(reloads, "the dry run listed no job at all")
+        self.assertNotIn(self.login, reloads)
+
+    def test_without_a_kept_value_the_new_default_lists_it(self) -> None:
+        reloads, _ = update_facts.jobs(ROOT)
+        self.assertIn(self.login, reloads)
+
+    def test_the_plan_runs_the_dry_run_with_what_the_update_writes(self) -> None:
+        asked: list[object] = []
+
+        def jobs(_root: Path, kept: object = None) -> tuple[list[str], list[str]]:
+            asked.append(kept)
+            return [], []
+
+        def keys(root: Path) -> frozenset[str]:
+            return frozenset({LOGIN}) if root == self.new else frozenset()
+
+        with (
+            mock.patch.object(
+                versions, "commit_of", side_effect=lambda root: FROM if root == self.old else TO
+            ),
+            mock.patch.object(update_facts, "config_keys", side_effect=keys),
+            mock.patch.object(update_facts, "window_facts", return_value=[]),
+            mock.patch.object(update_facts, "jobs", side_effect=jobs),
+            mock.patch.object(update_facts, "missing", return_value=[]),
+            mock.patch.object(update_facts, "commits", return_value=[]),
+        ):
+            plan = update_facts.plan_for(self.old, self.new, self.state, self.config)
+        self.assertEqual(asked, [{LOGIN: "0"}])
+        self.assertEqual(plan.kept, ((LOGIN, "0"),))
 
 
 class FactsTest(World):

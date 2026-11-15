@@ -1,0 +1,20 @@
+{
+  "changed": {
+    "BOSUN_AWAKE_UNTIL": [
+      "20:00",
+      "18:00"
+    ],
+    "BOSUN_LEARN_AT": [
+      "18:30",
+      "16:30"
+    ],
+    "BOSUN_START_TIME": [
+      "08:30",
+      "09:00"
+    ]
+  },
+  "contract": 1,
+  "notes": [
+    "another app's repeating wake was left as it is (pmset keeps one), so the Mac does not wake for bosun's schedule; --replace-wake replaces it"
+  ]
+}

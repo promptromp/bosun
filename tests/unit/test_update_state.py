@@ -298,6 +298,7 @@ class StuckTest(unittest.TestCase):
     def test_a_hold_with_no_lock_is_not_active(self) -> None:
         update_state.write(self.dir, state("holding", hold_until=10**12))
         self.assertEqual(self.cli("hold-active").returncode, 1)
+        self.assertEqual(self.cli("running").returncode, 1)
         out = self.cli("stuck")
         self.assertEqual(out.returncode, 0)
         self.assertTrue(out.stdout.strip())
@@ -319,6 +320,7 @@ class StuckTest(unittest.TestCase):
             assert child.stdout is not None
             self.assertEqual(child.stdout.readline().strip(), "held")
             self.assertEqual(self.cli("hold-active").returncode, 0)
+            self.assertEqual(self.cli("running").returncode, 0)
             self.assertEqual(self.cli("stuck").returncode, 1)
         finally:
             child.kill()

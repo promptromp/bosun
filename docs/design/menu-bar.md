@@ -35,9 +35,12 @@ ship a CLI and an app keep them in step).
    stays the one updater, of bosun and of the app.
 3. **Open Console** (⌘O) opens the web console in the default browser, signed in. The console runs all the time,
    as a launchd job like the watchdog, while bosun runs.
-4. **Quit bosun…** (⌘Q) stops bosun cleanly (below), after a short dialog.
+4. **Quit bosun…** (⌘Q) stops bosun cleanly (below), after a short dialog. (Built since as two items, by [the
+   control panel](control-panel.md#stop-and-quit): "Stop bosun…", this quit's flow with the app staying, and "Quit
+   bosun.app", which leaves bosun running unless you choose otherwise.)
 5. **A bosun.app** in `~/Applications`: Spotlight and Launchpad find it; opening it starts bosun if it is stopped
-   and brings the icon back. "Open at Login" in the menu.
+   and brings the icon back. "Open at Login" in the menu. (Since the control panel, Open at Login is in the Settings
+   window's General pane, beside starting bosun at login: [the Settings window](control-panel.md#the-settings-window).)
 6. **Installing asks.** `bosun init` asks whether to add bosun to the menu bar and Applications (recommended
    yes); `bosun update` keeps the app current. **Uninstalling** is "Uninstall bosun…" in the Help submenu, which
    runs `bosun uninstall` after a confirmation.
@@ -49,7 +52,8 @@ ship a CLI and an app keep them in step).
 - A DMG download and a Homebrew cask: the next step, once this ships; the notarized app built here is what they
   will carry.
 - A Settings window, notifications from the app, and anything the console already does: the menu is a status
-  light and four actions.
+  light and four actions. (The Settings window, starting at login and a separate Stop and Quit came since, with
+  [the control panel](control-panel.md), 2026-11-14.)
 - Linux and Intel Macs (macOS 27 is Apple silicon only; bosun's minimum macOS stays what it is).
 
 ## Anti-goals
@@ -178,11 +182,13 @@ Calls made from the research and the builder check, to check while reading:
   sees an older app than its checkout expects updates it (below).
 - **Opening it.** Opened by you (Finder, Spotlight, Launchpad): if bosun is not running and no window is open (stopped or quit, or red with `running` false), it runs `bosun morning --now --background` (as Start does), then shows
   the menu bar icon. Opened at login (its launchd job passes `--at-login`): it only shows the icon; bosun's own
-  morning job starts bosun at its time. Opened while running: macOS brings up the running copy, which does nothing
+  jobs start bosun: the morning job at its time, and with `BOSUN_START_AT_LOGIN=1` the login job at login, inside
+  your hours (docs/design/control-panel.md, "Start at login"). Opened while running: macOS brings up the running copy, which does nothing
   new.
 - **Open at Login.** A LaunchAgent bosun renders like its others (`templates/launchd-app.plist`, RunAtLoad, not
   KeepAlive, `AbandonProcessGroup` true so that quitting the app never takes with it what it started, an update),
-  loaded or unloaded by `bosun app login on|off`; the menu item shows its state. A plain plist, as for
+  loaded or unloaded by `bosun app login on|off`; the menu item shows its state (since the control panel, the
+  Settings window's switch: [the Settings window](control-panel.md#the-settings-window)). A plain plist, as for
   bosun's other jobs: one place that manages launchd, and uninstall already knows how to take them back.
 
 ## The CLI side
@@ -205,8 +211,9 @@ Calls made from the research and the builder check, to check while reading:
   writes beside the pid file and `bosun stop` removes; a hold whose process is gone is not shown. A missing session is judged by the watchdog's own gate
   (`watchdog.session_gate_kind`), never by a rule of status's own: an error only when it should be running; a plain
   `bosun stop` today is `stopped` with the morning not paused; outside the awake hours it is resting (until the next
-  scheduled start), and when the awake window has begun and the morning run is going or not yet due it is starting
-  (never, at the error level: a crashed or hung morning run is named as failed). The yellow level also lists the ERROR
+  scheduled start), and when the awake window has begun and the morning run is going or not yet due it is starting,
+  as it is outside the hours while a morning run is going (Start bosun now) (never, at the error level: a crashed or
+  hung morning run is named as failed). The yellow level also lists the ERROR
   lines of the last hour, which the status reads itself whatever the hour (the watchdog's `log-errors` finding is
   never counted: outside the awake hours the watchdog holds its log offsets, so the finding would stay until its
   next run inside them, and one line kept the menu red a whole weekend), and the watchdog itself not running (`watchdog --facts` says its launchd job is loaded or
@@ -277,7 +284,9 @@ Calls made from the research and the builder check, to check while reading:
   `failed`) and `error`; when it stopped bosun also `morning_paused`, `keep_awake`, `console` (a fixed set:
   `stopped`, `not running`, `still running`) and `console_port`. If a step after step 4 fails, `quit.json` stays
   (bosun is meant to be stopped) and the quit says so, with the two ways out: run `bosun quit --stop-now` again,
-  or `bosun start`. The app then quits itself, unless "Keep bosun in the menu bar" was checked.
+  or `bosun start`. The app then quits itself, unless "Keep bosun in the menu bar" was checked. (That box is gone
+  since the control panel: "Stop bosun…" leaves the app, "Quit bosun.app" closes it; [Stop and
+  Quit](control-panel.md#stop-and-quit).)
 - **`bosun start`** clears the stopped mark, loads the console job, and starts the session as today. `bosun start
   --unless-quit` instead logs that bosun was quit and exits 0, starting nothing and clearing nothing, checked under
   the same lock before the clear. The morning run passes it: it clears an unpaused quit when it begins, then runs
@@ -452,10 +461,11 @@ Where what is built differs from what this note said before, or says more:
   app launchd starts directly. A copy whose start cannot be read is left out, and one that cannot read its own stays.
 - The test hooks (`--test-hooks <dir>`, for the VM suite, and only then): `<dir>/menu.json` after each render (the
   menu, its icon badge and the status level); `<dir>/actions/<n>.json`, taken in the order of `n` once a second and
-  removed when taken: `{"item": "quit"}` (an item's name: `startBosun`, `showProblems`, `openConsole`,
-  `checkForUpdates`, `openAtLogin`, `updateBosun`, `help.guide|doctor|logs|uninstall`, `quit`), done as if clicked
-  when the menu has it enabled, or `{"answer": {"button": "<title>", "boxes": {"pauseMorning": true, "sleep": false,
-  "keepIcon": false}}}` for the open dialog (it waits for one); `<dir>/log.jsonl`, one object per line for each
+  removed when taken: `{"item": "quitApp"}` (an item's name: `startBosun`, `showProblems`, `openConsole`,
+  `checkForUpdates`, `settings`, `updateBosun`, `help.guide|doctor|logs|uninstall`, `stopBosun`, `quitApp`; since
+  bosun.app 0.1.3, [control-panel.md](control-panel.md)), done as if clicked when the menu has it enabled, or
+  `{"answer": {"button": "<title>", "boxes": {"pauseMorning": true, "sleep": false}}}` for the open dialog (it
+  waits for one); `<dir>/log.jsonl`, one object per line for each
   command run (`{"command": [...], "detached": false, "outcome": "exited 0"}`) and each address or file it would
   open (`{"open": "..."}`; with the hooks the app opens nothing).
 - Start is `bosun morning --now --background`, run as a short command (the status timeout) and not started as a

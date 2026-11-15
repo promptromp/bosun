@@ -15,7 +15,7 @@ import Testing
 
   @Test func theFirstDialogShowsWhatQuittingWouldMeet() throws {
     let spec = quitFirstSpec(plan(busy: ["acme-exporter"], waiting: ["acme-web"]))
-    #expect(spec.title == "Quit bosun?")
+    #expect(spec.title == "Stop bosun?")
     #expect(spec.message.contains("2 windows open: acme-orchestrator, acme-exporter"))
     #expect(spec.message.contains("Busy: acme-exporter"))
     #expect(spec.message.contains("Waiting for you (quit stops them): acme-web"))
@@ -24,15 +24,14 @@ import Testing
 
   @Test func theFirstDialogsCheckboxesAndTheirDefaults() throws {
     let spec = quitFirstSpec(plan())
-    #expect(spec.boxes.map(\.id) == ["pauseMorning", "sleep", "keepIcon"])
+    #expect(spec.boxes.map(\.id) == ["pauseMorning", "sleep"])
     #expect(
       spec.boxes.map(\.title) == [
         "Pause the morning start until I open bosun again", "Let this Mac sleep now",
-        "Keep bosun in the menu bar",
       ])
-    // The morning pause and the sleep are on, the icon is kept only when asked
-    #expect(spec.boxes.map(\.on) == [true, true, false])
-    #expect(spec.buttons == ["Quit bosun", "Cancel"])
+    // The morning pause and the sleep are on
+    #expect(spec.boxes.map(\.on) == [true, true])
+    #expect(spec.buttons == ["Stop bosun", "Cancel"])
     #expect(spec.cancel == 1)
   }
 
@@ -42,12 +41,11 @@ import Testing
     let spec = quitFirstSpec(plan())
     #expect(spec.boxes.first { $0.id == "pauseMorning" }?.on == defaults.pauseMorning)
     #expect(spec.boxes.first { $0.id == "sleep" }?.on == defaults.sleep)
-    #expect(spec.boxes.first { $0.id == "keepIcon" }?.on == defaults.keepIcon)
   }
 
   @Test func theSleepBoxIsOnlyOfferedWhileTheMacIsKeptAwake() throws {
     let spec = quitFirstSpec(plan(keepAwake: nil))
-    #expect(spec.boxes.map(\.id) == ["pauseMorning", "keepIcon"])
+    #expect(spec.boxes.map(\.id) == ["pauseMorning"])
   }
 
   @Test func theNoteOfAPlanThatCouldNotReadTheWindowsIsShown() throws {
@@ -56,14 +54,14 @@ import Testing
   }
 
   @Test func theBoxesAnsweredBecomeTheChoices() throws {
-    let answer = DialogAnswer(button: 0, boxes: ["pauseMorning": false, "sleep": false, "keepIcon": true])
+    let answer = DialogAnswer(button: 0, boxes: ["pauseMorning": false, "sleep": false])
     let choices = QuitChoices(answer: answer)
-    #expect(choices == QuitChoices(pauseMorning: false, sleep: false, keepIcon: true))
+    #expect(choices == QuitChoices(pauseMorning: false, sleep: false))
   }
 
   /// With no sleep box on the dialog, the choice is the default, never "off".
   @Test func aBoxThatWasNotShownKeepsItsDefault() throws {
-    let answer = DialogAnswer(button: 0, boxes: ["pauseMorning": true, "keepIcon": false])
+    let answer = DialogAnswer(button: 0, boxes: ["pauseMorning": true])
     #expect(QuitChoices(answer: answer) == QuitChoices())
   }
 
@@ -77,14 +75,32 @@ import Testing
   }
 
   @Test func theStillBusyDialogAsksAgain() throws {
-    let spec = quitStillBusySpec(["acme-exporter"])
+    let spec = quitStillBusySpec(["acme-exporter"], quitsApp: false)
     #expect(spec.message.contains("acme-exporter"))
-    #expect(spec.buttons == ["Keep Waiting", "Stop It Now", "Cancel Quit"])
+    #expect(spec.buttons == ["Keep Waiting", "Stop It Now", "Cancel"])
     #expect(spec.cancel == 2)
   }
 
+  /// Its cancel names the quit only when the app quits too.
+  @Test func theStillBusyDialogOfAQuitCancelsTheQuit() throws {
+    let spec = quitStillBusySpec(["a"], quitsApp: true)
+    #expect(spec.buttons == ["Keep Waiting", "Stop It Now", "Cancel Quit"])
+  }
+
+  /// The Stop flow's words speak of stopping: quitting is said only where the app quits.
+  @Test func theStopFlowsDialogsSpeakOfStopping() throws {
+    let busy = quitBusySpec(["acme-exporter"])
+    #expect(!busy.message.contains("Quit"))
+    #expect(busy.message.contains("bosun can wait for them to finish"))
+    let unavailable = quitUnavailableSpec("the windows cannot be read", quitsApp: false)
+    #expect(unavailable.title == "bosun cannot say what stopping would end")
+    #expect(!unavailable.message.lowercased().contains("quit"))
+    let quitting = quitUnavailableSpec("the windows cannot be read", quitsApp: true)
+    #expect(quitting.title == "bosun cannot say what quitting would stop")
+  }
+
   @Test func whenThePlanCouldNotLookTheReasonAStopNowAndQuittingOnlyTheAppAreOffered() throws {
-    let spec = quitUnavailableSpec("the windows cannot be read")
+    let spec = quitUnavailableSpec("the windows cannot be read", quitsApp: true)
     #expect(spec.message.contains("the windows cannot be read"))
     #expect(spec.message.contains("Quit bosun.app leaves bosun as it is"))
     // Stop Now ends every window: Escape is Cancel's
@@ -92,7 +108,7 @@ import Testing
     #expect(spec.cancel == 0)
     // ...and there is no default button: Return does nothing
     #expect(spec.defaultButton == nil)
-    #expect(spec.boxes.map(\.id) == ["pauseMorning", "sleep", "keepIcon"])
+    #expect(spec.boxes.map(\.id) == ["pauseMorning", "sleep"])
   }
 
   @Test func eachButtonOfEachDialogIsAnEventOfTheFlow() throws {
@@ -226,10 +242,25 @@ import Testing
       contract: 1, windows: [], busy: [], waiting: [], keepAwakeUntil: nil, refused: nil, note: nil,
       waitMinutes: nil, lockWaitSeconds: nil, stepsSeconds: nil)
     let specs = [
-      quitFirstSpec(plan), quitBusySpec(["a"]), quitStillBusySpec(["a"]), quitNoteSpec("n"),
-      failureSpec("t", "m"), problemsSpec([]),
+      quitFirstSpec(plan), quitBusySpec(["a"]), quitStillBusySpec(["a"], quitsApp: false),
+      quitStillBusySpec(["a"], quitsApp: true), quitNoteSpec("n"), failureSpec("t", "m"), problemsSpec([]),
+      quitFailedSpec("w", quitsApp: false), quitFailedSpec("w", quitsApp: true),
     ]
     for spec in specs { #expect(spec.defaultButton == 0, "\(spec.title)") }
+  }
+
+  @Test func theStillBusyDialogsCancelNamesTheQuitOnlyWhenTheAppQuits() throws {
+    #expect(quitStillBusySpec(["a"], quitsApp: false).buttons == ["Keep Waiting", "Stop It Now", "Cancel"])
+    #expect(
+      quitStillBusySpec(["a"], quitsApp: true).buttons == ["Keep Waiting", "Stop It Now", "Cancel Quit"])
+  }
+
+  @Test func aFailedQuitSpeaksOfQuittingOnlyWhenTheAppQuits() throws {
+    let stop = quitFailedSpec("bosun update is running", quitsApp: false)
+    #expect(stop.title == "Stopping bosun did not finish")
+    #expect(stop.message == "bosun update is running")
+    #expect(stop.buttons == ["OK"])
+    #expect(quitFailedSpec("bosun update is running", quitsApp: true).title == "Quit did not finish")
   }
 
   @Test func aSpecSaysItsDefaultWithoutDefaultingTheCancelButton() throws {
@@ -325,7 +356,7 @@ import Testing
 
   @Test func aDialogsDefaultAnswerIsItsCancelButtonOrItsLast() throws {
     let spec = quitFirstSpec(quitPlan(windows: []))
-    #expect(spec.defaultAnswer == DialogAnswer(button: 1, boxes: ["pauseMorning": true, "keepIcon": false]))
+    #expect(spec.defaultAnswer == DialogAnswer(button: 1, boxes: ["pauseMorning": true]))
     #expect(failureSpec("t", "m").defaultAnswer == DialogAnswer(button: 0, boxes: [:]))
   }
 }
