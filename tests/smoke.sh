@@ -3361,8 +3361,11 @@ plain_fake launchctl 113 # the fake above; this section's alone
 
 section settings "settings (bosun settings get|set: bosun.env through init's writer, the jobs and the wake)" covers 'libexec/bosun-settings,lib/settings.py,lib/run_locked.py'
 # Its own config, state and launchd label, so what it writes and reloads is its alone; launchd has a job while it
-# has its plist, pmset's repeating event is what $SET_SCHED holds, and sudo -v fails while $WORK/sudo-fails is there,
-# pmset repeat while $WORK/settings-pmset-fails is, launchctl bootstrap while $WORK/settings-bootstrap-fails is.
+# has its plist, pmset's repeating event is what $SET_SCHED holds, pmset repeat fails while
+# $WORK/settings-pmset-fails is there, launchctl bootstrap while $WORK/settings-bootstrap-fails is. sudo is sudoers
+# in small: while $WORK/sudo-fails is there every rule needs a password (sudo -v and sudo -n fail), but for pmset
+# while $WORK/sudo-allows-pmset is (a NOPASSWD rule for it); $WORK/sudo-lists-only lets sudo -l say yes to any
+# command (sudoers' listpw: another rule has NOPASSWD) while running one still needs the password.
 SET_CFG="$WORK/settings-config"
 SET_STATE="$WORK/settings-state"
 SET_LABEL="com.bosun.smoke-settings"
@@ -3389,7 +3392,12 @@ cat >"$HOME/.local/bin/sudo" <<EOF
 #!/bin/bash
 echo "sudo \$*" >>"$SET_LOG"
 [ "\$1" = -n ] && shift
-if [ "\$1" = -v ]; then [ ! -e "$WORK/sudo-fails" ]; exit; fi
+needs_password() { [ -e "$WORK/sudo-fails" ] && ! { [ "\$1" = pmset ] && [ -e "$WORK/sudo-allows-pmset" ]; }; }
+case "\$1" in
+  -v) [ ! -e "$WORK/sudo-fails" ]; exit ;;
+  -l) ! needs_password "\$2" || [ -e "$WORK/sudo-lists-only" ]; exit ;;
+esac
+if needs_password "\$1"; then echo "sudo: a password is required" >&2; exit 1; fi
 exec "\$@"
 EOF
 chmod +x "$HOME/.local/bin/launchctl" "$HOME/.local/bin/pmset" "$HOME/.local/bin/sudo"
@@ -3426,7 +3434,7 @@ settings_cmd set BOSUN_START_TIME=08:00 >/dev/null 2>&1
 pmset_sched "wakepoweron at 8:01AM weekdays only"
 : >"$SET_LOG"
 check "with bosun's wake in pmset, set BOSUN_START_TIME=09:00 succeeds" settings_exits 0 set BOSUN_START_TIME=09:00
-check "... asking sudo first, then moving the wake with sudo pmset" bash -c 'grep -q "^sudo -n -v" "$1" && grep -qx "sudo pmset repeat wakeorpoweron MTWRF 09:01:00" "$1" && [ "$(grep -n "^sudo -n -v" "$1" | head -1 | cut -d: -f1)" -lt "$(grep -n "^sudo pmset" "$1" | cut -d: -f1)" ]' _ "$SET_LOG"
+check "... asking sudo first about the very pmset command, then moving the wake with it, sudo -n" bash -c 'grep -qx "sudo -n -l pmset repeat wakeorpoweron MTWRF 09:01:00" "$1" && grep -qx "sudo -n pmset repeat wakeorpoweron MTWRF 09:01:00" "$1" && [ "$(grep -n "^sudo -n -l" "$1" | head -1 | cut -d: -f1)" -lt "$(grep -n "^sudo -n pmset" "$1" | cut -d: -f1)" ]' _ "$SET_LOG"
 
 # A step after the write that fails puts bosun.env back from the backup the write made, and the jobs with it.
 pmset_sched "wakepoweron at 9:01AM weekdays only"
@@ -3454,21 +3462,34 @@ touch "$WORK/settings-bootstrap-fails"
 check "when launchctl bootstrap fails in the reload, set fails (exit 1)" settings_exits 1 set BOSUN_START_TIME=10:00
 check "... in one line naming the reload, and bosun.env is byte for byte as before" put_back_said "could not reload bosun's launchd jobs (launchctl bootstrap failed for"
 check "... the morning job's plist is back at 09:00 (the put-back's reload writes it before launchd refuses it again)" morning_at_nine
-check "... and the wake was never moved" bash -c '! grep -q "pmset repeat" "$1"' _ "$SET_LOG"
+check "... and the wake was never moved (sudo was asked, pmset never ran)" bash -c '! grep -q "^pmset repeat" "$1"' _ "$SET_LOG"
 rm -f "$WORK/settings-bootstrap-fails"
 settings_cmd set BOSUN_START_TIME=09:00 >/dev/null 2>&1 # the jobs loaded again
 touch "$WORK/sudo-fails"
-check "when sudo -v fails, set is refused" fails_with "moving the Mac's wake needs your password: run this in Terminal" settings_cmd set BOSUN_START_TIME=10:00
+check "when sudo needs a password for pmset, set is refused" fails_with "moving the Mac's wake needs your password: run this in Terminal" settings_cmd set BOSUN_START_TIME=10:00
 check "... and bosun.env is unchanged" cmp -s "$SET_CFG/bosun.env" "$WORK/settings-before.env"
 check "... as an object with --json too, exit 1" settings_exits 1 set BOSUN_START_TIME=10:00 --json
 check "... that says why" settings_has 'd == {"contract": 1, "error": "moving the Mac'"'"'s wake needs your password: run this in Terminal"}'
-rm -f "$WORK/sudo-fails"
+touch "$WORK/sudo-lists-only"
+: >"$SET_LOG"
+check "when sudo -l allows pmset but running it needs a password, set fails (exit 1)" settings_exits 1 set BOSUN_START_TIME=10:00
+check "... in one line saying bosun.env and the jobs were put back, and bosun.env is byte for byte as before" put_back_said "pmset did not take the new wake (pmset failed), so bosun.env and the jobs were put back as they were"
+check "... having run pmset only through sudo -n, which never asks" bash -c 'grep -qx "sudo -n pmset repeat wakeorpoweron MTWRF 10:01:00" "$1" && ! grep -q "^sudo pmset" "$1"' _ "$SET_LOG"
+check "... and the morning job is back at 09:00" morning_at_nine
+rm -f "$WORK/sudo-lists-only"
+touch "$WORK/sudo-allows-pmset"
+: >"$SET_LOG"
+check "with a NOPASSWD rule for just pmset, where sudo -v needs a password, set moves the wake" settings_exits 0 set BOSUN_START_TIME=10:00
+check "... with sudo -n pmset, after the write" bash -c 'grep -qx "sudo -n pmset repeat wakeorpoweron MTWRF 10:01:00" "$1" && ! grep -q "^sudo -n -v" "$1" && grep -qx "BOSUN_START_TIME=\"10:00\"" "$2"' _ "$SET_LOG" "$SET_CFG/bosun.env"
+rm -f "$WORK/sudo-allows-pmset" "$WORK/sudo-fails"
+pmset_sched "wakepoweron at 10:01AM weekdays only"
+settings_cmd set BOSUN_START_TIME=09:00 >/dev/null 2>&1
 
 pmset_sched "wakepoweron at 6:30AM every day"
 : >"$SET_LOG"
 check "with another app's wake, set --json changes bosun.env" settings_exits 0 set BOSUN_DAYS=MTWRFS --json
 check "... and says the other wake was left as it is, which pmset never touched" bash -c 'python3 -c "import json, sys; d = json.load(open(sys.argv[1])); sys.exit(0 if d[\"changed\"] == {\"BOSUN_DAYS\": [\"MTWRF\", \"MTWRFS\"]} and \"left as it is\" in d[\"notes\"][0] else 1)" "$1" && ! grep -q "pmset repeat" "$2"' _ "$WORK/settings.out" "$SET_LOG"
-replaced_wake() { settings_cmd set BOSUN_DAYS=MTWRFSU --replace-wake >/dev/null 2>&1 && grep -qx "sudo pmset repeat wakeorpoweron MTWRFSU 09:01:00" "$SET_LOG"; }
+replaced_wake() { settings_cmd set BOSUN_DAYS=MTWRFSU --replace-wake >/dev/null 2>&1 && grep -qx "sudo -n pmset repeat wakeorpoweron MTWRFSU 09:01:00" "$SET_LOG"; }
 check "... and with --replace-wake it is replaced" replaced_wake
 rm -f "$SET_SCHED"
 

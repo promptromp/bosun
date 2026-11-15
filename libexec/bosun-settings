@@ -21,8 +21,9 @@
 #         does. Then what the change needs: bosun's launchd jobs reloaded (the morning job at its new time),
 #         the Mac's repeating wake moved (sudo pmset) when the days or the start time change and the wake is
 #         bosun's, and a running keep-awake's end moved with BOSUN_AWAKE_UNTIL. Moving the wake asks for your
-#         password first (sudo -v; without a terminal to ask in, it is refused unless sudo -n -v succeeds), and
-#         when that is cancelled or fails nothing is written. If pmset or the reload fails, bosun.env is put
+#         password first (sudo -v; without a terminal to ask in, it is refused unless sudo -n -l says sudoers
+#         lets the pmset command run with no password, which is then run with sudo -n), and when that is
+#         cancelled or fails nothing is written. If pmset or the reload fails, bosun.env is put
 #         back from the backup the write made (or removed, if the write made it) and the jobs reloaded again.
 #         Another app's repeating wake is left as it is, and said, unless --replace-wake. Refused while bosun
 #         update runs, and while bosun init (the wizard) or another settings set runs: it holds init's lock
@@ -98,13 +99,31 @@ decide_wake() { # <replace-wake: 0|1>
   fi
 }
 
-# sudo's password, asked now, before anything is written: cancelled or failed, nothing changes.
+# The value <key> has after the change: its assignment, else what the config says now.
+value_after() { # <key>
+  local assignment value="${!1}"
+  for assignment in ${assignments[@]+"${assignments[@]}"}; do
+    [ "${assignment%%=*}" = "$1" ] && value="${assignment#*=}"
+  done
+  printf '%s' "$value"
+}
+
+# sudo, asked now, before anything is written: cancelled or failed, nothing changes. At a terminal, the password
+# (sudo -v). Without one, sudo -n -l asks sudoers whether it allows the very pmset command set_wake will run,
+# without a password: a rule with NOPASSWD for just that command is enough, where sudo -n -v fails as soon as any
+# rule needs one. sudo -l needs no password when one of your rules has NOPASSWD (sudoers' listpw, by default), so
+# it can pass where the command itself still needs one: set_wake then runs sudo -n, which fails at once, and the
+# put-back after a failed step undoes the write. wake_sudo is how set_wake runs sudo.
 ask_for_sudo() {
   if [ -t 0 ]; then
     sudo -v || fail refuse "sudo was cancelled or failed, so nothing was changed"
-  else
-    sudo -n -v 2>/dev/null || fail refuse "moving the Mac's wake needs your password: run this in Terminal"
+    wake_sudo=""
+    return 0
   fi
+  wake_args_for "$(value_after BOSUN_DAYS)" "$(value_after BOSUN_START_TIME)"
+  sudo -n -l pmset "${wake_args[@]}" >/dev/null 2>&1 ||
+    fail refuse "moving the Mac's wake needs your password: run this in Terminal"
+  wake_sudo=no-prompt
 }
 
 # Runs <step> (a function of lib/common.sh): its lines go to stderr when it succeeds. When it fails they are kept
@@ -190,7 +209,7 @@ say_changes() { # <changes>
 # that fails puts bosun.env back.
 set_settings() {
   local changes
-  effects="" wake=0 wake_left=0
+  effects="" wake=0 wake_left=0 wake_sudo=""
   set_arguments "$@"
   [ -z "$BOSUN_ENV_ERROR" ] || fail refuse "$(env_unread), so none of it was read: fix it, or run bosun init"
   load_config
@@ -206,7 +225,7 @@ set_settings() {
   if grep -qx jobs <<<"$effects" && ! run_step reload_changed_jobs; then
     fail die "could not reload bosun's launchd jobs ($(step_error)), $(put_back "$changes")"
   fi
-  if [ "$wake" = 1 ] && ! run_step set_wake; then
+  if [ "$wake" = 1 ] && ! run_step set_wake ${wake_sudo:+"$wake_sudo"}; then
     fail die "pmset did not take the new wake ($(step_error)), $(put_back "$changes")"
   fi
   if grep -qx keep-awake <<<"$effects"; then follow_keep_awake; fi

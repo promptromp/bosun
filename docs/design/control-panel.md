@@ -222,9 +222,12 @@ The builder's calls on what the note left open, and the rulings made while build
   default beside it), never the default as the value; the Settings window shows those as values it cannot show.
 - **A Save that moves bosun's wake** goes to Terminal (`bosun settings set` there asks for the password, `sudo -v`,
   and writes nothing when that fails); the window says to finish it there, and shows what bosun read before.
-  Without a terminal to ask in, `settings set` moves the wake only when `sudo -n -v` succeeds, and refuses
-  otherwise: that fails whenever a sudoers rule that matches needs a password, even where a rule without one would
-  let `sudo pmset` run. A failed `pmset` or reload puts `bosun.env` back from the backup the writer made.
+  Without a terminal to ask in, `settings set` moves the wake only when `sudo -n -l` says sudoers lets the very
+  `pmset` command it will run go with no password (a `NOPASSWD` rule for just that command is enough), and runs it
+  with `sudo -n`; it refuses otherwise. (It asked `sudo -n -v` before, which fails as soon as any rule needs a
+  password.) `sudo -l` itself needs no password once any of your rules has `NOPASSWD` (sudoers' `listpw`), so the
+  listing can pass where the command still needs one: `sudo -n pmset` then fails, as a failed `pmset` does. A
+  failed `pmset` or reload puts `bosun.env` back from the backup the writer made.
 - **The Settings window is SwiftUI in the AppKit app** (`app/Sources/BosunMenu/SettingsWindow.swift`), its state
   and its Schedule draft in the core (`Settings.swift`, `SettingsSchedule.swift`), so a refused Save, a hand-off to
   Terminal and a reopen all show what bosun read, never an unsaved draft. The window reads bosun again each time it

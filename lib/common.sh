@@ -1748,11 +1748,19 @@ repo_mask_filter() { # <json-key, or "" for the first field>
 
 # The Mac's repeating wake: just after the job time, since launchd runs a calendar job missed during sleep as
 # soon as the Mac wakes, so the job starts within seconds of the wake and the Mac has no chance to doze off
-# first. `set_wake` sets it with sudo; `set_wake print` only says the command to run once.
-set_wake() { # [print]
-  local wake_time wake_cmd existing_repeat
-  wake_time="$(shift_time "$BOSUN_START_TIME" "$BOSUN_WAKE_DELAY_MINUTES"):00"
-  wake_cmd=(sudo pmset repeat wakeorpoweron "$BOSUN_DAYS" "$wake_time")
+# first. wake_args_for puts pmset's arguments for it in wake_args, for <days> and <start> (the config's when not
+# given), so that what `bosun settings set` asks sudo about before it writes is what set_wake then runs.
+wake_args_for() { # [days] [start HH:MM]
+  wake_args=(repeat wakeorpoweron "${1:-$BOSUN_DAYS}" "$(shift_time "${2:-$BOSUN_START_TIME}" "$BOSUN_WAKE_DELAY_MINUTES"):00")
+}
+
+# `set_wake` sets the wake with sudo; `set_wake print` only says the command to run once; `set_wake no-prompt`
+# runs sudo -n, which fails at once instead of asking for a password (with no terminal to ask in).
+set_wake() { # [print|no-prompt]
+  local wake_cmd existing_repeat
+  wake_args_for
+  wake_cmd=(sudo pmset "${wake_args[@]}")
+  [ "${1:-}" = no-prompt ] && wake_cmd=(sudo -n pmset "${wake_args[@]}")
   existing_repeat="$(pmset -g sched | sed -n '/Repeating power events/,/^[A-Z]/p' | grep -iE 'wake|power' || true)"
   [ -n "$existing_repeat" ] && log "note: pmset already has a repeating event (pmset keeps only one):$existing_repeat"
   if [ "${1:-}" = "print" ]; then
