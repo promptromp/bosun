@@ -53,6 +53,7 @@ import login
 import quit_state
 import signals
 import slack_watch
+import stop_marker
 import update_state
 
 
@@ -687,13 +688,8 @@ def check_log_errors(ctx: Context) -> Result:
 
 def stopped_today(ctx: Context) -> datetime | None:
     """When you stopped the session today with `bosun stop`, if you did."""
-    try:
-        stopped = datetime.strptime(
-            (ctx.config.state_dir / f"stopped-{ctx.config.session}").read_text().strip(), STAMP
-        )
-    except (OSError, ValueError):
-        return None
-    return stopped if stopped.date() == ctx.today else None
+    stopped = stop_marker.read(ctx.config.state_dir, ctx.config.session)
+    return stopped if stopped is not None and stopped.date() == ctx.today else None
 
 
 # Why the session is not expected to run now (gate_kind): the awake window is not on, the morning is not
