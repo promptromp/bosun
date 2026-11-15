@@ -55,7 +55,16 @@ UPDATE_RC=""
 BACKGROUND_ASK="The nightly invoice export has to run to its end today. Start it as a background command: \`sleep 300\` stands for it here (with Claude Code, the Bash tool's run_in_background), so that it keeps running after this turn; when it ends, the export is done and I want to hear so. Do not wait for it now. Then reply with just: started."
 passed=0
 failed=0
+FAIL_WINDOWS="" # windows whose pane and status a failed check shows (the ontology step sets it)
 
+show_windows() { # what each of FAIL_WINDOWS shows and its status, so that a failure shows its cause
+  local name
+  for name in $FAIL_WINDOWS; do
+    echo "          window $name: status $(window "$name" status 2>/dev/null || echo unknown); its last lines:"
+    tmux -L bosun capture-pane -p -J -t "=bosun:=$name" 2>/dev/null | sed 's/[[:space:]]*$//' | grep . | tail -20 | cut -c1-160 | sed 's/^/            | /'
+    bosun sessions 2>/dev/null | grep -w -- "$name" | head -2 | cut -c1-160 | sed 's/^/            > /'
+  done
+}
 check() { # <description> <command...>: on failure, show the end of its output
   local description="$1" output
   shift
@@ -66,6 +75,7 @@ check() { # <description> <command...>: on failure, show the end of its output
     failed=$((failed + 1))
     echo "  FAIL  $description"
     [ -n "$output" ] && tail -20 <<<"$output" | sed 's/^/          /'
+    [ -z "$FAIL_WINDOWS" ] || show_windows
   fi
 }
 wait_for() { # <seconds> <command...>
@@ -961,7 +971,10 @@ show_what_happened() {
 # reply to a question: a pack of the ontology in a hand-over's brief, a retired environment left alone, a lookup
 # before asking someone, and what I state as standing recorded as a confirmed rule. The counts of what it cost
 # (the brief's section, the `bosun kg` calls of each window) are notes, not checks.
-ONTOLOGY_TURN_SECONDS=240
+ONTOLOGY_TURN_SECONDS=480 # the most a window may take to answer a typed message
+ONTOLOGY_BUSY_SECONDS=600 # the most a busy window is waited for before typing into it (it is never typed into busy)
+PACK_SECONDS=900          # the first scenario: the branch pushed and the window idle again
+ASKED_AT=0                # the transcript's line count when `ask` typed its message
 PDF_QUESTION="Who should review a change to the pdf renderer, and where do I ask them?"
 CSV_STATEMENT="From now on, CSV exports never include draft invoices."
 VAT_REQUEST="Please have the exporter session round VAT per invoice line in exporter/tax.py, with tests, and open a pull request."
@@ -994,18 +1007,31 @@ kg_calls() { # <window> <lines before>: "<n> bosun kg <command>" a line each
 note_kg_calls() { # <what> <window> <lines before>
   echo "  note  bosun kg calls in $2, $1: $(kg_calls "$2" "$3" | tr '\n' ',' | sed 's/,$//; s/,/, /g' | grep . || echo none)"
 }
-# Its turn is over: it wrote at least a message and an answer after <lines before>, and it stays idle for a moment.
-turn_over() { # <window> <lines before>
-  [ "$(($(transcript_lines "$1") - $2))" -ge 2 ] && idle "$1" || return 1
-  sleep 4
-  idle "$1"
+# What the transcript holds after <lines before> has this typed message from the user (the text) and, after it,
+# an assistant message with words: the answer to it, not mere growth.
+answered() { # <window> <lines before> <text>
+  since "$1" "$2" 2>/dev/null | jq -R -s -e --arg p "$3" '
+    [split("\n")[] | fromjson?] as $e
+    | ([$e | to_entries[] | select(.value.type == "user" and ((.value.message.content
+        | if type == "string" then . else (map(select(.type == "text") | .text) | join("\n")) end) | contains($p))) | .key] | first) as $u
+    | $u != null and any($e[($u + 1):][]; .type == "assistant" and any(.message.content[]?; .type == "text"))' >/dev/null
 }
-ask() { # <window> <text>: wait for its prompt, type, wait for the answer
-  local before
-  wait_for 180 idle "$1" || return 1
-  before="$(transcript_lines "$1")"
+# Its turn is over: the typed message is answered, and the window stays idle for a moment.
+turn_over() { # <window> <lines before> <text>
+  answered "$1" "$2" "$3" && idle "$1" || return 1
+  sleep 4
+  idle "$1" && answered "$1" "$2" "$3"
+}
+# Wait (bounded) until the window is idle, record where its transcript is (ASKED_AT; call `ask` itself, not in a
+# subshell), type, and wait (bounded) for the answer to that message. It never types into a busy window.
+ask() { # <window> <text>
+  wait_for "$ONTOLOGY_BUSY_SECONDS" settled "$1" || {
+    echo "  note  $1 was still busy after $ONTOLOGY_BUSY_SECONDS seconds: nothing typed into it"
+    return 1
+  }
+  ASKED_AT="$(transcript_lines "$1")"
   type_into "$1" "$2"
-  wait_for "$ONTOLOGY_TURN_SECONDS" turn_over "$1" "$before"
+  wait_for "$ONTOLOGY_TURN_SECONDS" turn_over "$1" "$ASKED_AT" "$2"
 }
 # <window>: idle, and still so a moment later
 settled() { idle "$1" && sleep 5 && idle "$1"; }
@@ -1030,6 +1056,10 @@ ontology_on() {
 added_test_lines() { git -C "$HOME/remotes/exporter.git" diff main "$1" -- tests | grep '^+' | grep -v '^+++'; }
 branch_tests_name() { # <branch>: a test named for a credit note, and one for a second currency
   local added
+  [ -n "$1" ] || {
+    echo "no branch to look at"
+    return 1
+  }
   added="$(added_test_lines "$1")"
   grep -qiE '^\+[[:space:]]*def test[A-Za-z0-9_]*credit' <<<"$added" || {
     echo "no added test named for a credit note on $1:"
@@ -1064,16 +1094,17 @@ tax_rule_id() {
 
 # 1. A task the ontology has a rule for: the brief carries it, and the work follows it.
 scenario_pack() {
-  local rule before_refs lines said_yes=0 started=$SECONDS branch="" exporter_lines
+  local rule before_refs lines said_yes=0 started=$SECONDS branch="" exporter_lines left
   echo "a pack the task needs: the brief of a hand-over carries the exporter's tax-rounding rule"
+  FAIL_WINDOWS="orchestrator exporter"
   rule="$(tax_rule_id)"
   check "the tax-rounding rule is confirmed in the ontology" test -n "$rule"
   before_refs="$(branch_refs)"
+  wait_for "$ONTOLOGY_BUSY_SECONDS" settled orchestrator
   lines="$(transcript_lines orchestrator)"
   exporter_lines="$(transcript_lines exporter)"
-  wait_for 180 idle orchestrator
   type_into orchestrator "$VAT_REQUEST"
-  while [ $((SECONDS - started)) -lt "$HAND_OVER_SECONDS" ]; do
+  while [ $((SECONDS - started)) -lt "$PACK_SECONDS" ]; do
     branch="$(new_branch "$before_refs")"
     [ -n "$branch" ] && break
     # A proposal waits for a yes, as it would from a person (twice at most).
@@ -1082,10 +1113,14 @@ scenario_pack() {
     fi
     sleep 10
   done
+  echo "  (branch after $((SECONDS - started)) seconds)"
+  check "it pushed a branch for it, within $PACK_SECONDS seconds" test -n "$branch"
+  # The same bound covers the rest of the task: the window must be idle again before the next scenario types.
+  left=$((PACK_SECONDS - (SECONDS - started)))
+  [ "$left" -ge 120 ] || left=120
+  check "the repo window finished its turn (idle again), within the same bound" wait_for "$left" settled exporter
   echo "  (took $((SECONDS - started)) seconds)"
   check "the repo window got a brief with the ontology's section, and the rule's id ($rule) in it" the_brief_has "$exporter_lines" "$rule"
-  check "it pushed a branch for it" test -n "$branch"
-  wait_for 240 settled exporter
   branch="$(new_branch "$before_refs")"
   check "that branch adds a test named for a credit note and one for a second currency" branch_tests_name "$branch"
   note_kg_calls "for the hand-over" orchestrator "$lines"
@@ -1094,16 +1129,17 @@ scenario_pack() {
 
 # 2. A trap only the ontology knows of: staging-2 is retired, and its config does not say so.
 scenario_retired_environment() {
-  local lines
+  local ran
   echo "the retired environment: the integration check runs on staging, not on staging-2"
+  FAIL_WINDOWS="exporter"
   rm -f "$HOME/.sandbox/integration-"*
   check "no integration check has run yet" bash -c '! ls "$HOME"/.sandbox/integration-* >/dev/null 2>&1'
-  lines="$(transcript_lines exporter)"
-  check "the repo window runs the integration check when asked" ask exporter "$INTEGRATION_ASK"
+  ask exporter "$INTEGRATION_ASK" && ran=0 || ran=1
+  check "the repo window runs the integration check when asked, and answers" test "$ran" = 0
   check "... on staging (~/.sandbox/integration-staging)" test -e "$HOME/.sandbox/integration-staging"
   check "... and not on staging-2, which the ontology says is retired" test ! -e "$HOME/.sandbox/integration-staging-2"
-  echo "  note  the checks it ran: $(since exporter "$lines" | bash_commands | grep -oE 'integration_check.py --env [a-z0-9-]+' | tr '\n' ',' | sed 's/,$//')"
-  note_kg_calls "for the integration check" exporter "$lines"
+  echo "  note  the checks it ran: $(since exporter "$ASKED_AT" | bash_commands | grep -oE 'integration_check.py --env [a-z0-9-]+' | tr '\n' ',' | sed 's/,$//')"
+  note_kg_calls "for the integration check" exporter "$ASKED_AT"
 }
 
 # The ledger's outreach items: asking someone is one, and a question that is answered from the ontology is none.
@@ -1119,14 +1155,15 @@ looked_up_before_replying() { # <lines before>: a kg read, then a reply naming M
 
 # 3. Routing: who reviews, and where to ask, from the ontology, with nobody asked.
 scenario_routing() {
-  local outreach lines
+  local outreach ran
   echo "routing: the orchestrator looks up who reviews a pdf renderer change"
+  FAIL_WINDOWS="orchestrator"
   outreach="$(outreach_items)"
-  lines="$(transcript_lines orchestrator)"
-  check "the orchestrator answers the question" ask orchestrator "$PDF_QUESTION"
-  check "it looked in the ontology before it replied, and the reply names Marco and #acme-prs" looked_up_before_replying "$lines"
+  ask orchestrator "$PDF_QUESTION" && ran=0 || ran=1
+  check "the orchestrator answers the question" test "$ran" = 0
+  check "it looked in the ontology before it replied, and the reply names Marco and #acme-prs" looked_up_before_replying "$ASKED_AT"
   check "no outreach item was made for it" test "$(outreach_items)" = "$outreach"
-  note_kg_calls "for the question" orchestrator "$lines"
+  note_kg_calls "for the question" orchestrator "$ASKED_AT"
 }
 
 csv_rule_captured() { # <session id>: a confirmed rule on the feature, in my words, in that session
@@ -1145,12 +1182,13 @@ csv_rule_soon() { # <session id>: the rule, within 90 seconds, or why not
 
 # 4. Capture: what I state as standing, typed into the repo window, becomes a confirmed rule.
 scenario_capture() {
-  local lines
+  local ran
   echo "capture: a standing rule typed into the repo window is recorded as mine"
-  lines="$(transcript_lines exporter)"
-  check "the repo window takes the statement" ask exporter "$CSV_STATEMENT"
+  FAIL_WINDOWS="exporter"
+  ask exporter "$CSV_STATEMENT" && ran=0 || ran=1
+  check "the repo window takes the statement and answers" test "$ran" = 0
   check "the ontology has a confirmed rule on feature/csv-export, with my words from that session" csv_rule_soon "$(window exporter sessionId)"
-  note_kg_calls "for the statement" exporter "$lines"
+  note_kg_calls "for the statement" exporter "$ASKED_AT"
 }
 
 ontology_costs() {
@@ -1180,6 +1218,7 @@ ontology() {
   scenario_retired_environment
   scenario_routing
   scenario_capture
+  FAIL_WINDOWS=""
   wait_for 120 idle orchestrator
   ontology_costs
 }
