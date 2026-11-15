@@ -116,8 +116,10 @@ It only reads where and when prompts were typed, never what they say.
   a backup (one that lists none does not: there is nothing to lose; one that cannot be read does).
   `setup.sh` is code: once it exists it is never changed.
 - **Grant what nobody chose.** `bosun init --recommended --unattended` on a first run (no `bosun.env`) is
-  the recommendation without repo windows (unless a `sessions.yml` already lists some) and without
-  connectors for the orchestrator. Its last line says what that set up, from the answers carried out:
+  the recommendation without repo windows (unless a `sessions.yml` already lists some), without
+  connectors for the orchestrator and without the menu bar app, which would open an app at login. It keeps
+  the start at login (`BOSUN_START_AT_LOGIN=1`), which opens nothing: bosun starting during your hours is
+  what an unattended install is for. Its last line says what that set up, from the answers carried out:
   `No repo windows or connectors were set up, since nobody chose them: run bosun init to add them.`, or
   the windows a `sessions.yml` already listed, by name. On a re-run it is `--recommended`. `get.sh
   --unattended` asks for it with `BOSUN_INIT_UNATTENDED=1` and `init --recommended`, the way it hands over
