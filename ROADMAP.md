@@ -401,6 +401,8 @@ build, CI's `app` job, the release workflow and the VM suite (`tests/sandbox.sh 
 bosun.app 0.1.3 is there from login whatever the hour, with Stop bosun… and Quit bosun.app apart, a Settings window
 (General, Schedule) over the new `bosun settings get|set`, and the schedule in the status ("Resting: outside your
 hours · next start …"); bosun starts when you log in during your hours (`BOSUN_START_AT_LOGIN`, its own launchd job).
+bosun.app 0.1.4 shows a morning run that Start bosun now set going outside your hours as starting (`starting` in the
+status: no grey dot, no second Start), and Open at Login as unknown when the app could not tell.
 
 **Next:** a DMG download of the notarized app, and a Homebrew cask, which carry what part 2 builds.
 

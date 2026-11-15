@@ -116,6 +116,7 @@ item (⌘,), in a window titled "<App> Settings", with panes only when there are
   |---|---|---|
   | Your hours, running | green | Running · 3 windows open |
   | Outside your hours, not running | grey | Resting: outside your hours · next start Mon 08:00 |
+  | Outside your hours, Start bosun now pressed, the morning run setting up | green | bosun is starting (the morning run), with no Start: `starting` in the status (bosun.app 0.1.4) |
   | Outside your hours, started by you | green | Running · outside your hours |
   | Your hours, you quit or stopped it today | grey | Stopped · you quit at 18:40 (as now) |
   | Your hours, not running and nobody stopped it (a missed start, a crash) | red | as now: the watchdog's gate (`session_gate_kind`), so the menu, the console and the watchdog agree |
@@ -137,7 +138,10 @@ item (⌘,), in a window titled "<App> Settings", with panes only when there are
 ### The Settings window
 
 - **"Settings…" with ⌘,** in the menu, a window titled "bosun Settings", one at a time, with two panes:
-  - **General**: Open bosun.app at login (today's toggle, `bosun app login on|off`); Start bosun when you log in,
+  - **General**: Open bosun.app at login (today's toggle, `bosun app login on|off`; from 0.1.4, until `bosun app
+    status` has answered it is unknown, never off: "unknown", a line saying bosun could not tell, and Turn On and
+    Turn Off, each idempotent, in place of a switch drawn off; `bosun app status`'s `login` stays a bool, and a
+    later read that fails keeps what was known); Start bosun when you log in,
     during your hours (`BOSUN_START_AT_LOGIN`); updates from: releases or main (`BOSUN_UPDATE_CHANNEL`); and
     buttons: Change windows and connectors… (opens Terminal with `bosun init`), Open Config Folder, Show Logs.
   - **Schedule**: the days (`BOSUN_DAYS`), the start time (`BOSUN_START_TIME`) and until when the Mac is kept awake
@@ -209,8 +213,9 @@ The builder's calls on what the note left open, and the rulings made while build
   skip writes no run header, so the watchdog does not count it as a morning run, and a start is the scheduled run
   with `trigger=login`. A login run while the morning or the `.now` job's run is going counts as running already.
 - **The grey dot is the app's**: resting keeps the status level `ok` (the contract's levels mean what they meant),
-  and the app draws the dot grey when the level is `ok`, the hours say outside and no window is open; a warning or
-  an error keeps its colour. `schedule.next_start` is the next start after now, so in your hours it is tomorrow's.
+  and the app draws the dot grey when the level is `ok`, the hours say outside, no window is open and the status
+  does not say `starting` (a morning run setting bosun up, after Start bosun now, which also offers no Start: from
+  0.1.4; 0.1.3 drew it grey with a second Start); a warning or an error keeps its colour. `schedule.next_start` is the next start after now, so in your hours it is tomorrow's.
 - **Opening bosun.app by hand does not start a resting bosun** (all well or a warning, outside your hours): the
   schedule decides the automatic starts, and Start bosun now is one click; it still starts a stopped bosun, or a
   red one with no window open, as before.

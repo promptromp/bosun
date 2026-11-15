@@ -21,7 +21,8 @@ extension AppCoordinator {
     guard !settingsBusy else { return current.starting() }
     switch edit {
     case .openAtLogin(let on):
-      if on != login { await toggleLogin() }
+      // from unknown (nil) too: `app login on|off` makes it so whatever it was
+      if on != login { await switchLogin(to: on) }
       return shown(current.with(openAtLogin: login))
     case .values(let values):
       return await save(values, current)
@@ -105,7 +106,7 @@ extension AppCoordinator {
 }
 
 extension SettingsState {
-  func with(openAtLogin: Bool) -> SettingsState {
+  func with(openAtLogin: Bool?) -> SettingsState {
     SettingsState(view: view, openAtLogin: openAtLogin, message: message, busy: busy, read: read)
   }
 

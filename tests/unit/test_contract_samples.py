@@ -88,6 +88,7 @@ class WhatTheAppReadsTest(unittest.TestCase):
                 "status-resting": "ok",
                 "status-running-error": "error",
                 "status-running-outside-hours": "ok",
+                "status-starting-outside-hours": "ok",
                 "status-stopped": "stopped",
                 "status-update-done": "ok",
                 "status-update-failed": "ok",
@@ -123,6 +124,7 @@ class WhatTheAppReadsTest(unittest.TestCase):
                 "status-resting": False,
                 "status-running-error": True,
                 "status-running-outside-hours": True,
+                "status-starting-outside-hours": False,
                 "status-stopped": False,
                 "status-update-done": True,
                 "status-update-failed": True,
@@ -133,6 +135,13 @@ class WhatTheAppReadsTest(unittest.TestCase):
         )
         self.assertIn("with an error", SAMPLES["status-running-error"]["sentence"])
         self.assertIn("could not be read", SAMPLES["status-windows-unreadable"]["sentence"])
+
+    def test_starting_is_said_only_while_the_morning_run_sets_bosun_up(self) -> None:
+        starting = [name for name in names("status-") if SAMPLES[name]["starting"]]
+        self.assertEqual(starting, ["status-starting-outside-hours"])
+        sample = SAMPLES["status-starting-outside-hours"]
+        self.assertEqual(sample["sentence"], "bosun is starting (the morning run)")
+        self.assertEqual((sample["running"], sample["schedule"]["in_hours"]), (False, False))
 
     def test_status_names_the_windows_that_need_you_from_a_finding_and_from_a_wait_at_a_prompt(self) -> None:
         attention = SAMPLES["status-attention"]["attention"]

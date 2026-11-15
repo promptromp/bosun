@@ -14,10 +14,10 @@ import Testing
     await world.refresh(.launch)
     await world.reply(Bosun.appLogin(on: true), exited(0))
     await world.replace(Bosun.appStatus, exited(0, try Fixtures.text("app-status")))
-    let toggle = Task { await world.coordinator.toggleLogin() }
+    let toggle = Task { await world.coordinator.switchLogin(to: true) }
     #expect(await gate.waitForWaiter())
     #expect(world.coordinator.flow.active == .login)
-    await world.coordinator.toggleLogin()
+    await world.coordinator.switchLogin(to: true)
     await gate.open()
     await toggle.value
     #expect(await world.commands.filter { $0.first == "app" && $0.dropFirst().first == "login" }.count == 1)
@@ -47,7 +47,7 @@ import Testing
     await hold.arm()
     let look = Task { await coordinator.menuWillOpen() }
     #expect(await hold.gate.waitForWaiter())
-    await coordinator.toggleLogin()
+    await coordinator.switchLogin(to: true)
     #expect(coordinator.login == true)
     await hold.gate.open()
     await look.value
@@ -60,7 +60,7 @@ import Testing
     #expect(world.coordinator.login == false)
     await world.reply(Bosun.appLogin(on: true), exited(0))
     await world.replace(Bosun.appStatus, exited(0, try Fixtures.text("app-status")))
-    await world.coordinator.toggleLogin()
+    await world.coordinator.switchLogin(to: true)
     #expect(await world.commands.contains(["app", "login", "on"]))
     #expect(world.coordinator.login == true)
   }
@@ -72,7 +72,7 @@ import Testing
     let off = try Fixtures.text("app-status").replacingOccurrences(
       of: "\"login\": true", with: "\"login\": false")
     await world.replace(Bosun.appStatus, exited(0, off))
-    await world.coordinator.toggleLogin()
+    await world.coordinator.switchLogin(to: false)
     #expect(await world.commands.contains(["app", "login", "off"]))
     #expect(world.coordinator.login == false)
   }
@@ -82,9 +82,60 @@ import Testing
     await world.refresh(.launch)
     await world.reply(Bosun.appLogin(on: true), exited(1, "", err: "bosun.app is not installed\n"))
     world.ui.answer("OK")
-    await world.coordinator.toggleLogin()
+    await world.coordinator.switchLogin(to: true)
     #expect(world.ui.lastSpec?.title == "Cannot change Open at Login")
     #expect(world.ui.lastSpec?.message == "bosun.app is not installed")
     #expect(world.coordinator.login == false)
+  }
+
+  /// `bosun app status` that cannot be read leaves Open at Login unknown (nil), never off.
+  @Test func aLoginThatCannotBeReadIsUnknown() async throws {
+    let world = try await World(login: nil)
+    await world.refresh(.launch)
+    #expect(world.coordinator.login == nil)
+  }
+
+  /// From unknown, a switch runs the one chosen (`app login on|off` makes it so, whatever it was).
+  @Test func fromUnknownASwitchRunsTheOneChosen() async throws {
+    for on in [true, false] {
+      let world = try await World(login: nil)
+      await world.refresh(.launch)
+      await world.reply(Bosun.appLogin(on: on), exited(0))
+      await world.coordinator.switchLogin(to: on)
+      #expect(await world.commands.contains(Bosun.appLogin(on: on).args))
+      // the read after it still fails: what the switch made stands
+      #expect(world.coordinator.login == on)
+    }
+  }
+
+  /// A switch from unknown that fails leaves it unknown.
+  @Test func fromUnknownASwitchThatFailsLeavesItUnknown() async throws {
+    let world = try await World(login: nil)
+    await world.refresh(.launch)
+    await world.reply(Bosun.appLogin(on: true), exited(1, "", err: "bosun.app is not installed\n"))
+    world.ui.answer("OK")
+    await world.coordinator.switchLogin(to: true)
+    #expect(world.ui.lastSpec?.title == "Cannot change Open at Login")
+    #expect(world.coordinator.login == nil)
+  }
+
+  /// `bosun app status` could not be read: the window shows Open at Login as unknown, with its line, and a choice
+  /// (Turn On or Turn Off) runs that one.
+  @Test func openAtLoginUnknownIsShownSoAndAChoiceRunsIt() async throws {
+    let world = try await World(login: nil)
+    await world.refresh(.launch)
+    try await world.reply(Bosun.settingsGet, fixture: "settings-get")
+    await world.coordinator.perform(.settings)
+    let shown = try #require(world.ui.settingsShown.last)
+    #expect(shown.openAtLogin == nil)
+    #expect(
+      shown.openAtLoginRow
+        == SettingRow(editable: true, text: "unknown", note: SettingsState.openAtLoginUnknown))
+    await world.reply(Bosun.appLogin(on: false), exited(0))
+    let apply = try #require(world.ui.settingsApply)
+    let state = await apply(.openAtLogin(false))
+    #expect(await world.commands.contains(["app", "login", "off"]))
+    #expect(state.openAtLogin == false)
+    #expect(state.openAtLoginRow == SettingRow(editable: true, text: nil, note: nil))
   }
 }

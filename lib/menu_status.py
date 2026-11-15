@@ -34,7 +34,12 @@ and a field is only ever added. A new level is a new word in `level`, which the 
 it knows it (never as all well); `running` says whether bosun's windows are open (null when they could not be
 read), which with the level tells a bosun to start from one that runs with an error. `update.last` is the
 record the last update left (`id`, `started_at`, `step`; null when there is none): an update that ended before
-any look saw it running is told by it, so the app can end "Updating…" for the one it started.
+any look saw it running is told by it, so the app can end "Updating…" for the one it started. `starting` is
+true exactly when the sentence says "bosun is starting (the morning run)": no window open, the gate says the
+morning run is going or about to, and the level is not an error (which names the run as failed instead). It is
+a fact of its own, not a word for the app to find in the sentence, because outside your hours the same run
+(Start bosun now) is otherwise all well with no window open, which reads as resting: with it the app shows a
+starting run as it does inside the hours (no grey dot, no second Start).
 
 `attention` lists the windows that need you, each as `{"window", "problem"}`, so the app can offer to open one
 (`bosun attach <window>`): first the problems about one window (a watchdog finding that names its window:
@@ -166,6 +171,7 @@ class Verdict:
     problems: list[str]
     stopped: dict[str, Any] | None = None  # the `stopped` field, when this is a stop
     attention: list[Attention] = field(default_factory=list)  # the problems above that are about one window
+    starting: bool = False  # the `starting` field: the sentence says the morning run is starting
 
 
 def plural(count: int, noun: str) -> str:
@@ -366,6 +372,7 @@ def running_verdict(facts: StatusFacts, now: datetime, waiting: list[str]) -> Ve
         state_lines(facts, count or 0, waiting, now),
         [text for _level, text in problems],
         attention=window_findings(facts.checks),
+        starting=gate_says(facts, count, STARTING) and level != ERROR,
     )
 
 
@@ -442,6 +449,7 @@ def snapshot(facts: StatusFacts, now: datetime) -> dict[str, Any]:
         "detail": verdict.detail,
         "windows": open_windows(facts.windows),
         "running": None if facts.windows is None else open_windows(facts.windows) > 0,
+        "starting": verdict.starting,
         "waiting": waiting,
         "keep_awake_until": f"{kept:%H:%M}" if kept is not None and kept > now else None,
         "stopped": verdict.stopped,
@@ -488,6 +496,7 @@ def failure(text: str, level: str = ERROR) -> dict[str, Any]:
         "detail": [],
         "windows": 0,
         "running": None,  # not known
+        "starting": False,
         "waiting": [],
         "keep_awake_until": None,
         "stopped": None,

@@ -27,6 +27,7 @@
     "next_start": "2026-11-12T08:00+00:00"
   },
   "sentence": "bosun is running, with an error",
+  "starting": false,
   "stopped": null,
   "update": {
     "last": null,

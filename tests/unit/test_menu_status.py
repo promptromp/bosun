@@ -497,6 +497,7 @@ KEYS = [
     "detail",
     "windows",
     "running",
+    "starting",
     "waiting",
     "keep_awake_until",
     "stopped",
@@ -633,6 +634,42 @@ class RunningTestCase(unittest.TestCase):
         out = snap(quit=quit_state.QuitState(GONE_AT, False))
         self.assertEqual((out["level"], out["running"]), ("error", True))
         self.assertIsNotNone(out["stopped"])
+
+
+class StartingTestCase(unittest.TestCase):
+    """`starting`: true exactly when the sentence says the morning run is starting, so the app shows a run
+    that is setting up outside your hours as starting (not resting, and no second Start)."""
+
+    def test_a_morning_run_that_is_going_is_starting_inside_and_outside_the_hours(self) -> None:
+        gate = SessionGate(menu_status.STARTING)
+        for moment in (NOW, NOW.replace(hour=21)):
+            with self.subTest(at=f"{moment:%H:%M}"):
+                out = snap(moment, windows=GONE, gate=gate)
+                self.assertEqual(out["sentence"], "bosun is starting (the morning run)")
+                self.assertIs(out["starting"], True)
+                self.assertIs(out["running"], False)
+        mild = snap(windows=GONE, gate=gate, checks=watchdog_checks(check("waiting", "warn", "w1")))
+        self.assertEqual((mild["level"], mild["starting"]), ("warning", True))
+
+    def test_a_morning_run_named_as_failed_is_not_starting(self) -> None:
+        failed = check("morning-failed", "error", "The morning run did not finish.")
+        out = snap(windows=GONE, gate=SessionGate(menu_status.STARTING), checks=watchdog_checks(failed))
+        self.assertEqual((out["level"], out["starting"]), ("error", False))
+
+    def test_nothing_else_is_starting(self) -> None:
+        for out in (
+            snap(),  # running: its windows are open
+            snap(gate=SessionGate(menu_status.STARTING)),  # windows open, whatever the gate says
+            snap(windows=GONE, gate=RESTING),
+            snap(windows=GONE, gate=EXPECTED),
+            snap(windows=None, gate=SessionGate(menu_status.STARTING), errors={"sessions": "x"}),
+            snap(windows=GONE, quit=quit_state.QuitState(GONE_AT, True)),
+            snap(windows=GONE, gate=SessionGate(menu_status.STOPPED_BY_STOP, NOW)),
+        ):
+            with self.subTest(sentence=out["sentence"]):
+                self.assertIs(out["starting"], False)
+        self.assertIs(menu_status.failure("x")["starting"], False)
+        self.assertIs(menu_status.unreadable_config("x")["starting"], False)
 
 
 class KeepAwakeTestCase(unittest.TestCase):
@@ -876,6 +913,7 @@ class GatherTestCase(unittest.TestCase):
         out = menu_status.snapshot(found, evening)
         self.assertEqual((out["level"], out["sentence"]), ("ok", "bosun is starting (the morning run)"))
         self.assertIs(out["schedule"]["in_hours"], False)
+        self.assertIs(out["starting"], True)  # so the app shows no grey dot and no second Start
         # once it is done (and the session is up, or not), outside the hours is resting again
         with log.open("a") as handle:
             handle.write("2026-11-11 21:02:00 [morning] morning run complete\n")

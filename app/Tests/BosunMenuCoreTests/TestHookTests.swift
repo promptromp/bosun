@@ -236,5 +236,10 @@ private func jsonObject(_ data: Data) throws -> [String: Any] {
     #expect(none["values"] is NSNull)
     #expect(none["readable"] is NSNull)
     #expect(none["wake"] is NSNull)
+    #expect(none["open_at_login"] as? Bool == false)
+    let unknown = try #require(
+      try settingsObject(SettingsState(view: nil, openAtLogin: nil, message: nil, busy: false))
+        as? [String: Any])
+    #expect(unknown["open_at_login"] is NSNull)
   }
 }

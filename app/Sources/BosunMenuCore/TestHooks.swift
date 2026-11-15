@@ -206,13 +206,13 @@ private func itemObject(_ item: MenuItem) -> [String: Any] {
 }
 
 /// The Settings window's state as the hooks write it: each value bosun read (null when it could not), and
-/// null for what is not known.
+/// null for what is not known (Open at Login too, when `bosun app status` could not be read).
 private func settingsObject(_ state: SettingsState?) -> Any {
   guard let state else { return NSNull() }
   let values: Any =
     state.view.map { view in view.settings.mapValues { $0.value.map { $0 as Any } ?? NSNull() } } ?? NSNull()
   return [
-    "open_at_login": state.openAtLogin, "busy": state.busy,
+    "open_at_login": state.openAtLogin.map { $0 as Any } ?? NSNull(), "busy": state.busy,
     "message": state.message.map { $0 as Any } ?? NSNull(),
     "readable": state.view.map { $0.readable as Any } ?? NSNull(),
     "wake": state.view.map { $0.wake as Any } ?? NSNull(),

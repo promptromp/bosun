@@ -155,6 +155,10 @@ def status_samples() -> dict[str, Sample]:
             NOW.replace(hour=6), windows=GONE, gate=SessionGate(menu_status.RESTING), keep_awake_until=None
         ),
         "status-running-outside-hours": snapshot(NOW.replace(day=14)),
+        # Start bosun now at 21:00, outside your hours: the morning run sets up, no window is open yet
+        "status-starting-outside-hours": snapshot(
+            NOW.replace(hour=21), windows=GONE, gate=SessionGate(menu_status.STARTING), keep_awake_until=None
+        ),
         "status-update-running": snapshot(
             update_running=True,
             update_waiting_for=("acme-exporter", "acme-web"),

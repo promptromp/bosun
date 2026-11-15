@@ -18,8 +18,8 @@
 #
 # The control panel (docs/design/control-panel.md): Stop bosun… leaves the app with the grey stopped menu, Quit
 # bosun.app's Leave bosun Running leaves bosun running, the Settings window's Save moves the morning job, outside
-# the hours the menu says Resting with the next start, a reload of the jobs after a stop starts nothing, and the
-# restart in the hours starts bosun at login.
+# the hours the menu says Resting with the next start and, after Start bosun now, starting (green, no Start), a
+# reload of the jobs after a stop starts nothing, and the restart in the hours starts bosun at login.
 #
 # Checks pass shell snippets to `bash -c '...' _ args`; their $ must not expand here.
 # shellcheck disable=SC2016
@@ -596,9 +596,55 @@ step_11() {
   check "... the menu says the same, with the grey dot" wait_for "$WAIT_POLL" resting_menu "$expected"
   check "... and its Start reads Start bosun now" menu_title_is startBosun "Start bosun now"
   what_the_app_shows
+  step_11b "$expected"
   save_until 23:59
   check "back in the hours, the menu says stopped again, and its Start reads Start bosun" wait_for "$WAIT_POLL" bash -c 'jq -e ".level == \"stopped\"" "$1" >/dev/null && [ "$(jq -r "[.sections[][] | select(.id == \"startBosun\")] | first | .title" "$1")" = "Start bosun" ]' _ "$HOOKS/menu.json"
   what_the_app_shows
+}
+
+# ---- 11b. outside your hours, Start bosun now: starting, not resting ------------------------------------------------
+
+SETUP_KEPT="$HOME/e2e-setup-kept.sh" # no bosun in these names: the last check looks for what bosun left
+SETUP_GO="$HOME/e2e-setup-go"
+# The morning run held in its setup until SETUP_GO is there (at most 5 minutes), so that its start can be looked at:
+# setup.sh's own steps, after a wait, as bosun setup sources it.
+hold_the_morning_setup() {
+  cp "$CONFIG/setup.sh" "$SETUP_KEPT"
+  cat >>"$CONFIG/setup.sh" <<EOF
+
+# tests/app_e2e.sh, step 11b: the morning run waits here until the suite lets it go
+eval "\$(declare -f setup_steps | sed '1s/^setup_steps/app_e2e_setup_steps/')"
+setup_steps() {
+  local waited=0
+  while [ ! -e "$SETUP_GO" ] && [ "\$waited" -lt 300 ]; do sleep 1; waited=\$((waited + 1)); done
+  app_e2e_setup_steps
+}
+EOF
+}
+put_the_setup_back() { mv "$SETUP_KEPT" "$CONFIG/setup.sh" && rm -f "$SETUP_GO"; }
+status_says_starting() { "$BOSUN" status --json | jq -e '.starting == true and .running == false and .schedule.in_hours == false and .sentence == "bosun is starting (the morning run)"' >/dev/null; }
+starting_menu() { menu_says '.level == "ok" and .header.dot == "green" and .header.sentence == "bosun is starting (the morning run)" and ([.sections[][] | .id] | index("startBosun") == null)'; }
+starts_since() { tail -n +"$(($1 + 1))" "$HOOKS/log.jsonl" 2>/dev/null | jq -c 'select(.command == ["morning", "--now", "--background"])' | wc -l | tr -d ' '; } # <lines to skip>
+
+# <the resting sentence>: Start bosun now while resting; the run held in its setup is starting (green, no Start), then
+# runs outside the hours; a bosun stop rests it again.
+step_11b() {
+  local mark
+  echo "11b. outside your hours, Start bosun now: while the morning run sets up, the menu says starting, green, with no Start"
+  hold_the_morning_setup
+  mark="$(log_count)"
+  click startBosun
+  check "Start bosun now runs morning --now --background" wait_for 60 log_has "$mark" '.command == ["morning", "--now", "--background"] and .outcome == "exited 0"'
+  check "... bosun status --json: starting, outside your hours, no window open (the run waits in its setup)" wait_for 60 status_says_starting
+  check "... the menu says the same, green, with no Start" wait_for "$WAIT_POLL" starting_menu
+  what_the_app_shows
+  check "... and the app started one run, not a second" test "$(starts_since "$mark")" = 1
+  touch "$SETUP_GO"
+  check "let go, the run opens the windows: bosun is running · outside your hours" wait_for 180 menu_says '.header.sentence == "bosun is running · outside your hours"'
+  put_the_setup_back
+  "$BOSUN" stop >/dev/null 2>&1
+  check "bosun stop: no tmux server" no_tmux_server
+  check "... and the menu rests again, grey" wait_for "$WAIT_POLL" resting_menu "$1"
 }
 
 # ---- 12. a reload of bosun's jobs after a stop starts nothing --------------------------------------------------------

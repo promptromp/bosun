@@ -45,7 +45,7 @@ private func settingsCommands(_ world: World) async -> [[String]] {
     let shown = try #require(world.ui.settingsShown.last)
     #expect(world.ui.settingsShown.count == 1)
     #expect(shown.view == (try Fixtures.decode(SettingsView.self, "settings-get")))
-    #expect(!shown.openAtLogin)
+    #expect(shown.openAtLogin == false)
     #expect(shown.message == nil)
     #expect(!shown.busy)
     #expect(world.coordinator.settings == shown)
@@ -182,7 +182,7 @@ private func settingsCommands(_ world: World) async -> [[String]] {
     await world.replace(Bosun.appStatus, exited(0, off))
     let state = try await apply(world, .openAtLogin(false))
     #expect(await world.commands.contains(["app", "login", "off"]))
-    #expect(!state.openAtLogin)
+    #expect(state.openAtLogin == false)
     #expect(world.coordinator.flow.isIdle)
   }
 
@@ -190,7 +190,7 @@ private func settingsCommands(_ world: World) async -> [[String]] {
     let world = try await opened(login: true)
     let state = try await apply(world, .openAtLogin(true))
     #expect(!(await world.commands.contains { $0.starts(with: ["app", "login"]) }))
-    #expect(state.openAtLogin)
+    #expect(state.openAtLogin == true)
   }
 
   @Test func changeWindowsOpensTheWizardInTerminal() async throws {
