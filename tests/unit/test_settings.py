@@ -198,9 +198,12 @@ class TestWakeOwner(unittest.TestCase):
         )
         on_weekends = schedule("wakepoweron at 8:01AM weekends only")
         self.assertEqual(settings.wake_owner(on_weekends, {}, DEFAULTS), "other")  # the defaults are weekdays
-        some_days = {"BOSUN_DAYS": "MWF"}
+        some_days = {"BOSUN_DAYS": "MWF"}  # what pmset prints only as "Some days": bosun's at its own minute
         self.assertEqual(
-            settings.wake_owner(schedule("wakepoweron at 8:01AM Some days"), some_days, DEFAULTS), "other"
+            settings.wake_owner(schedule("wakepoweron at 8:01AM Some days"), some_days, DEFAULTS), "ours"
+        )
+        self.assertEqual(
+            settings.wake_owner(schedule("wakepoweron at 9:01AM Some days"), some_days, DEFAULTS), "other"
         )
         self.assertEqual(settings.wake_owner(schedule("wakepoweron at"), {}, DEFAULTS), "other")
 

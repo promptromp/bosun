@@ -72,8 +72,8 @@ bosun settings set BOSUN_UPDATE_CHANNEL=main --json
   repeating event: another app's is left as it is, and said, unless `--replace-wake`. The wake is bosun's only when
   `pmset -g sched` shows exactly the one bosun sets: `wakepoweron`, at the start time plus
   `BOSUN_WAKE_DELAY_MINUTES`, on `BOSUN_DAYS`. pmset names every day, weekdays, weekends and a single day, and
-  prints any other days as "Some days", which cannot say they are bosun's, so such a wake counts as another app's
-  (`--replace-wake` moves it). If pmset or the reload of the
+  prints any other days only as "Some days": such a wake at bosun's minute counts as bosun's, since its days cannot
+  be read (another app's wake at that very minute would be taken for it). If pmset or the reload of the
   jobs fails, `bosun.env` is put back from the backup that write made (or removed, when the write made it) and the
   jobs reloaded again, so the file, the jobs and the wake stay together; it fails in one line that says so.
 - **One at a time**: `set` holds `bosun init`'s lock from the check of the values to its last step, so it is refused

@@ -905,15 +905,21 @@ def pmset_days(days: str) -> str:
     return PMSET_DAY_NAMES.get(letters, PMSET_SOME_DAYS)
 
 
-def is_our_wake(event: str, days: str, wake_at: str) -> bool:
+def same_days(one: str, other: str) -> bool:
+    """Whether two sets of pmset's day letters name the same days, in whatever order."""
+    return set(one.upper()) == set(other.upper())
+
+
+def is_our_wake(event: str, days: str, wake_at: str, last_days: str) -> bool:
     """Whether <event>, a repeating event as `pmset -g sched` prints it ("wakepoweron at 8:01AM weekdays
     only", printed by print_repeating_report in pmset.m as "<type> at <time> <days>"), is exactly the wake
-    bosun sets for <days> at <wake_at> (HH:MM). Days pmset prints as "Some days" cannot be told apart, so they
-    never match, nor does anything not in this form: another app's wake is never taken for bosun's."""
+    bosun sets for <days> at <wake_at> (HH:MM); nothing not in this form is. pmset prints most sets of days
+    only as "Some days", which cannot say which days: such a wake at bosun's minute is bosun's while <days>
+    are the days bosun last set (<last_days>, bosun.env's BOSUN_DAYS), and is set again once they change."""
     printed = pmset_days(days)
-    if printed == PMSET_SOME_DAYS:
+    if event.split() != [PMSET_WAKE_TYPE, "at", pmset_label(wake_at), *printed.split()]:
         return False
-    return event.split() == [PMSET_WAKE_TYPE, "at", pmset_label(wake_at), *printed.split()]
+    return printed != PMSET_SOME_DAYS or same_days(days, last_days)
 
 
 def wake_command(facts: Facts, answers: Answers) -> str:
@@ -923,7 +929,7 @@ def wake_command(facts: Facts, answers: Answers) -> str:
         return ""
     delay = int(facts.env.get("BOSUN_WAKE_DELAY_MINUTES", DEFAULT_WAKE_DELAY_MINUTES))
     wake_at = clock(minutes(answers.start) + delay)
-    current = is_our_wake(facts.repeating_wake, answers.days, wake_at)
+    current = is_our_wake(facts.repeating_wake, answers.days, wake_at, facts.env.get("BOSUN_DAYS", ""))
     return "" if current else f"sudo pmset repeat wakeorpoweron {answers.days} {wake_at}:00"
 
 

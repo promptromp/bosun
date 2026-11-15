@@ -4470,10 +4470,14 @@ LATE
   cat >"$WORK/late-agent" <<'LATE'
 #!/bin/bash
 trap 'python3 "$1/late-hook.py" "$2" "$3" & (trap "" HUP TERM; exec sleep 60) & echo $! >"$4"; sleep 1; exit 0' HUP TERM
+: >"$1/late-ready"
 while :; do sleep 1; done
 LATE
   chmod +x "$WORK/late-agent"
+  rm -f "$WORK/late-ready"
   tmux -L "$SOCKET" new-session -d -s un-test -n w -- "$WORK/late-agent" "$WORK" "$WORK/un-state" "$WORK/late-written" "$WORK/late-helper"
+  # tmux returns before the agent has set its trap: a stop that came first would end it with no hook to wait for.
+  wait_for 10 test -e "$WORK/late-ready"
   # Each line uninstall says, with when it said it.
   PYTHONUNBUFFERED=1 un --yes 2>&1 |
     python3 -u -c 'import sys, time

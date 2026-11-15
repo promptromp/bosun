@@ -648,7 +648,9 @@ class PlanTest(unittest.TestCase):
                 self.assertEqual(init_plan.pmset_days(days), printed)
 
     def test_only_the_exact_wake_bosun_sets_is_its_own(self) -> None:
-        mine = init_plan.is_our_wake
+        def mine(event: str, days: str, wake_at: str) -> bool:
+            return init_plan.is_our_wake(event, days, wake_at, last_days=days)
+
         self.assertTrue(mine("wakepoweron at 8:01AM weekdays only", "MTWRF", "08:01"))
         self.assertTrue(mine("wakepoweron at 8:01AM Thursday", "R", "08:01"))
         self.assertTrue(mine("wakepoweron at 12:01PM weekends only", "SU", "12:01"))
@@ -656,8 +658,10 @@ class PlanTest(unittest.TestCase):
         self.assertFalse(mine("wakepoweron at 8:01AM Friday", "R", "08:01"))
         self.assertFalse(mine("wake at 8:01AM weekdays only", "MTWRF", "08:01"))  # another type
         self.assertFalse(mine("wakepoweron at 8:01PM weekdays only", "MTWRF", "08:01"))
-        # pmset prints most sets of days as "Some days", which cannot say they are bosun's.
-        self.assertFalse(mine("wakepoweron at 8:01AM Some days", "MWF", "08:01"))
+        # pmset prints most sets of days as "Some days": at bosun's minute, bosun's while its days stay.
+        self.assertTrue(mine("wakepoweron at 8:01AM Some days", "MWF", "08:01"))
+        self.assertFalse(mine("wakepoweron at 9:01AM Some days", "MWF", "08:01"))
+        self.assertFalse(mine("wakepoweron at 8:01AM Some days", "MTWRF", "08:01"))  # those print as weekdays
         for unreadable in (
             "",
             "wakepoweron",
@@ -666,6 +670,13 @@ class PlanTest(unittest.TestCase):
         ):
             with self.subTest(unreadable):
                 self.assertFalse(mine(unreadable, "MTWRF", "08:01"))
+
+    def test_some_days_changed_to_other_some_days_are_set_again(self) -> None:
+        some_days = "wakepoweron at 9:01AM Some days"
+        changed = facts(env={"BOSUN_DAYS": "MWF"}, repeating_wake=some_days)
+        self.assertIn("TR 09:01:00", self.plan(changed, Answers(days="TR", start="09:00")).wake_command)
+        same = facts(env={"BOSUN_DAYS": "FWM"}, repeating_wake=some_days)  # the same days, another order
+        self.assertEqual(self.plan(same, Answers(days="MWF", start="09:00")).wake_command, "")
 
     def test_pmset_prints_a_twelve_hour_clock(self) -> None:
         for clock_time, label in (
