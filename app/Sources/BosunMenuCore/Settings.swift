@@ -38,7 +38,9 @@ public struct SettingRow: Equatable, Sendable {
 public struct SettingsState: Equatable, Sendable {
   /// What `settings get` read; nil until read, or when it could not be.
   public let view: SettingsView?
-  public let openAtLogin: Bool
+  /// Whether bosun.app opens at login (`bosun app status`'s `login`); nil when that could not be read: unknown,
+  /// shown as such and never as off.
+  public let openAtLogin: Bool?
   /// The last failure or note, shown under the form.
   public let message: String?
   /// A set is running: the form is disabled.
@@ -48,7 +50,7 @@ public struct SettingsState: Equatable, Sendable {
   /// after which the Schedule pane starts again from what bosun read (`ScheduleDraft.next`).
   public let read: Int
 
-  public init(view: SettingsView?, openAtLogin: Bool, message: String?, busy: Bool, read: Int = 0) {
+  public init(view: SettingsView?, openAtLogin: Bool?, message: String?, busy: Bool, read: Int = 0) {
     self.view = view
     self.openAtLogin = openAtLogin
     self.message = message
@@ -81,6 +83,17 @@ public struct SettingsState: Equatable, Sendable {
   /// The state while an edit runs: the form disabled, the last message gone.
   public func starting() -> SettingsState {
     SettingsState(view: view, openAtLogin: openAtLogin, message: nil, busy: true, read: read)
+  }
+
+  /// The line under Open at Login while it is unknown.
+  public static let openAtLoginUnknown =
+    "bosun could not tell whether bosun.app opens at login: Turn On or Turn Off sets it"
+
+  /// How Open at Login's row shows: its switch while it is known, else "unknown" with the line, and the two
+  /// choices (each makes it so, whatever it was).
+  public var openAtLoginRow: SettingRow {
+    guard openAtLogin == nil else { return SettingRow(editable: !busy, text: nil, note: nil) }
+    return SettingRow(editable: !busy, text: "unknown", note: Self.openAtLoginUnknown)
   }
 
   /// What bosun read for `key`.

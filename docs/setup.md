@@ -215,6 +215,7 @@ bosun.app" (⌘Q), always last.
 | Green, "bosun is running" | Windows are open, with how many wait for you and until when the Mac is kept awake | Everything but Start, with "Stop bosun..." |
 | Green, "bosun is running · outside your hours" | Windows are open outside your hours: you started it then, or a morning session runs on past `BOSUN_AWAKE_UNTIL`. Its check-ins and events run while it runs, whatever the hour; only the keep-awake ends at its time | As green |
 | Grey, "Resting: outside your hours · next start Mon 08:00" | Not running, all well, outside your hours (not one of `BOSUN_DAYS`, or outside `BOSUN_START_TIME` to `BOSUN_AWAKE_UNTIL`), with the next automatic start (the morning job's next run; no "next start" when none is scheduled) | "Start bosun now" first |
+| Green, "bosun is starting (the morning run)" | The morning run is setting bosun up and no window is open yet: at your start time, or after Start bosun now outside your hours (yellow, "..., with a warning", if something warns meanwhile) | Everything but Start and "Stop bosun...": the run is the start (opening `bosun.app` starts no second one) |
 | Yellow, "bosun is running, with a warning" | The watchdog is not running, a check warns, there were errors in the last hour, or a window could not start | "Show What's Wrong..." lists them; everything else as green |
 | Red, "bosun is not running" | It should be (inside your hours, and you did not stop it), or the morning run failed; a quit that did not finish shows as an error too | "Start bosun" first, then "Show What's Wrong..." |
 | Red, "bosun is running, with an error" | Windows are open and something is wrong at the error level: a check failed. An ERROR line in the logs is yellow, and only for the hour after it was logged, at any hour (the watchdog's own alert about it is not counted, since outside the awake hours it holds that alert until they begin). Red with "bosun's windows could not be read" is treated the same: bosun may be running | "Show What's Wrong..." first, and no Start: bosun runs (opening `bosun.app` does not start it again either) |
@@ -320,7 +321,9 @@ settings get`, and changes a setting only through [`bosun settings set`](command
 `bosun.env` as `bosun init` does; a value it cannot show (a `bosun.env` that cannot be read, a value bosun does not
 take) is shown as such, with the wizard as the way to fix it.
 
-- **General**: "Open bosun.app at login" (`bosun app login on|off`, a launchd job that opens the icon at login); "Start
+- **General**: "Open bosun.app at login" (`bosun app login on|off`, a launchd job that opens the icon at login; if
+  the app could not tell whether it is on, because `bosun app status` did not answer, it says "unknown", with a line
+  saying so and Turn On and Turn Off, either of which makes it so, instead of a switch that would look off); "Start
   bosun when you log in, during your hours" (`BOSUN_START_AT_LOGIN`); "Updates from" releases or main
   (`BOSUN_UPDATE_CHANNEL`); and Change windows and connectors... (Terminal with `bosun init`, for the windows, the
   connectors, the agents, models and permissions, which the window does not edit), Open Config Folder and Show Logs.

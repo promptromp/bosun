@@ -188,6 +188,9 @@ public struct StatusSnapshot: Decodable, Equatable, Sendable {
   /// Whether bosun's windows are open: false when none is, nil when they could not be read (or a bosun that
   /// does not say).
   public let running: Bool?
+  /// Whether the morning run is setting bosun up (its sentence says "bosun is starting"): no window is open yet,
+  /// and none of its problems is an error; nil from a bosun before it, which counts as false.
+  public let starting: Bool?
   public let waiting: [String]
   public let keepAwakeUntil: String?
   public let stopped: Stopped?
@@ -204,6 +207,17 @@ public struct StatusSnapshot: Decodable, Equatable, Sendable {
   /// Whether now is outside your hours, as bosun says it (false when it does not say).
   public var outsideHours: Bool { schedule?.inHours == false }
 
+  /// Whether the morning run is setting bosun up, as bosun says it (false when it does not say).
+  public var isStarting: Bool { starting == true }
+
+  /// Resting: all well, outside your hours, no window open, and no morning run setting bosun up (Start bosun now
+  /// was pressed: that run is starting, as inside the hours). Grey, as stopped is, with "Start bosun now".
+  public var isResting: Bool { level == .ok && restsOutsideHours }
+
+  /// No window open outside your hours with nothing starting: what a bosun all well or with a warning is until
+  /// its next start, when Start (now) is offered.
+  private var restsOutsideHours: Bool { running == false && outsideHours && !isStarting }
+
   /// The windows that need you, in bosun's order (empty from a bosun that does not say).
   public var needsYou: [WindowAttention] { attention ?? [] }
 
@@ -217,12 +231,13 @@ public struct StatusSnapshot: Decodable, Equatable, Sendable {
   /// the morning run failed: an error with no window open). A bosun that runs with an error, or whose windows
   /// could not be read, is not started again: its problems are shown instead, since Start runs the morning's
   /// setup and may restart the session. Outside your hours a bosun that is all well or has a warning, with no
-  /// window open, is resting until its next start: Start (now) is offered too.
+  /// window open, is resting until its next start: Start (now) is offered too, but not while a morning run sets it
+  /// up (`starting`): that run is the start, as inside your hours.
   public var offersStart: Bool {
     switch level {
     case .stopped: return true
     case .error: return stopped != nil || running == false
-    case .ok, .warning: return running == false && outsideHours
+    case .ok, .warning: return restsOutsideHours
     case .unknown: return false
     }
   }

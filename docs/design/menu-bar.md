@@ -213,7 +213,10 @@ Calls made from the research and the builder check, to check while reading:
   `bosun stop` today is `stopped` with the morning not paused; outside the awake hours it is resting (until the next
   scheduled start), and when the awake window has begun and the morning run is going or not yet due it is starting,
   as it is outside the hours while a morning run is going (Start bosun now) (never, at the error level: a crashed or
-  hung morning run is named as failed). The yellow level also lists the ERROR
+  hung morning run is named as failed). `starting` (true or false; added with bosun.app 0.1.4) says the same as a
+  fact, true exactly when the sentence says "bosun is starting", so the app draws a run outside the hours as it does
+  inside them, with no grey dot and no Start, and never reads its sentence for it; an older bosun sends none, which
+  the app takes as false. The yellow level also lists the ERROR
   lines of the last hour, which the status reads itself whatever the hour (the watchdog's `log-errors` finding is
   never counted: outside the awake hours the watchdog holds its log offsets, so the finding would stay until its
   next run inside them, and one line kept the menu red a whole weekend), and the watchdog itself not running (`watchdog --facts` says its launchd job is loaded or

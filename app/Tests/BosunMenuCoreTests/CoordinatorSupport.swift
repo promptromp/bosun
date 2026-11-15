@@ -180,7 +180,7 @@ struct World {
   let scripts: FakeScripts
 
   init(
-    status: String? = "status-ok", login: Bool = true, atLogin: Bool = false,
+    status: String? = "status-ok", login: Bool? = true, atLogin: Bool = false,
     now: @escaping @Sendable () -> Date = { Date(timeIntervalSince1970: 1_800_000_000) },
     gates: [[String]: Gate] = [:]
   ) async throws {
@@ -189,9 +189,14 @@ struct World {
     clock = ManualClock()
     scripts = FakeScripts()
     if let status { await cli.reply(Bosun.status.args, exited(0, try Fixtures.text(status))) }
-    let app = try Fixtures.text("app-status").replacingOccurrences(
-      of: "\"login\": true", with: "\"login\": \(login)")
-    await cli.reply(Bosun.appStatus.args, exited(0, app))
+    if let login {
+      let app = try Fixtures.text("app-status").replacingOccurrences(
+        of: "\"login\": true", with: "\"login\": \(login)")
+      await cli.reply(Bosun.appStatus.args, exited(0, app))
+    } else {
+      // `bosun app status` fails: Open at Login is unknown
+      await cli.reply(Bosun.appStatus.args, exited(1, "", err: "bosun: app status failed\n"))
+    }
     await cli.reply(Bosun.start.args, exited(0))
     coordinator = AppCoordinator(
       cli: GatedCLI(inner: cli, gates: gates), ui: ui,

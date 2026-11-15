@@ -42,8 +42,9 @@ public struct LaunchOptions: Equatable, Sendable {
 /// an error or in a quit that did not finish: the morning run would run its setup again and may restart the
 /// session; there the menu's Start is the person's choice. Nor while bosun rests outside your hours (all well,
 /// or a warning, with Start offered as "Start bosun now"): the schedule decides the automatic starts
-/// (docs/design/control-panel.md). At login the app only shows the icon. Where bosun cannot be run there is
-/// nothing to start.
+/// (docs/design/control-panel.md). Nor while a morning run sets bosun up (`starting`, at any hour), which is a
+/// start already: no Start is offered then. At login the app only shows the icon. Where bosun cannot be run there
+/// is nothing to start.
 public func shouldStartAtLaunch(_ options: LaunchOptions, status: StatusState) -> Bool {
   guard !options.atLogin, case .loaded(let snapshot, current: true) = status else { return false }
   let resting = snapshot.level == .ok || snapshot.level == .warning

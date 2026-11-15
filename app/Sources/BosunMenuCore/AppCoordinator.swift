@@ -36,7 +36,9 @@ public final class AppCoordinator {
   public private(set) var status: StatusState?
   public internal(set) var update: UpdateState = .idle
   public internal(set) var flow = FlowState()
-  public private(set) var login = false
+  /// Whether Open at Login is on, as `bosun app status` last said: nil (unknown, never shown as off) until a read of
+  /// it succeeded.
+  public private(set) var login: Bool?
   /// What the Settings window shows: nil until it was first opened.
   public internal(set) var settings: SettingsState?
   /// A Save runs: a second one is not started.
@@ -172,8 +174,9 @@ public final class AppCoordinator {
     await poller.setPrompt(prompt)
   }
 
-  /// Whether Open at Login is on, as `bosun app status` says; a reading begun before the last switch is
-  /// dropped (it may say the state from before it).
+  /// Whether Open at Login is on, as `bosun app status` says; a read that fails keeps what was known (unknown
+  /// before any read succeeded). A reading begun before the last switch is dropped (it may say the state from
+  /// before it).
   func readLogin() async {
     let asked = loginGeneration
     guard case .success(let app) = await fetch(AppStatus.self, Bosun.appStatus, via: cli) else { return }
@@ -245,16 +248,17 @@ public final class AppCoordinator {
     }
   }
 
-  /// Open at Login, switched (from the Settings window): one at a time, and what a look read before or during
-  /// the switch is dropped.
-  func toggleLogin() async {
+  /// Open at Login, switched on or off (from the Settings window): one at a time, and what a look read before or
+  /// during the switch is dropped. `bosun app login on|off` makes it so whatever it was, so a switch from unknown
+  /// runs the one chosen; once it is done, a read that fails keeps what it made.
+  func switchLogin(to on: Bool) async {
     guard flow.begin(.login) else { return }
     render()
     loginGeneration += 1
-    let result = await cli.run(Bosun.appLogin(on: !login))
+    let result = await cli.run(Bosun.appLogin(on: on))
     loginGeneration += 1
     if result.outcome == .exited(0) {
-      login.toggle()
+      login = on
       await readLogin()
     } else {
       await fail("Cannot change Open at Login", failureText(result))

@@ -212,11 +212,11 @@ private func quitAppItem(_ flow: FlowState) -> MenuItem {
   MenuItem(id: .quitApp, title: Title.quitApp, enabled: flow.isIdle, key: "q")
 }
 
-/// Resting (all well, outside your hours, no window open) is grey, as stopped is: the design's status table. A
-/// warning or an error keeps its colour.
+/// Resting (all well, outside your hours, no window open, nothing starting) is grey, as stopped is: the design's
+/// status table. A morning run setting bosun up outside your hours is green, as inside them. A warning or an error
+/// keeps its colour.
 private func dot(of status: StatusSnapshot) -> Dot {
-  if status.level == .ok && status.outsideHours && status.running == false { return .grey }
-  return dot(of: status.level)
+  status.isResting ? .grey : dot(of: status.level)
 }
 
 /// A level this app does not know is shown as a warning: never all well.

@@ -133,11 +133,7 @@ struct GeneralPane: View {
   var body: some View {
     Form {
       Section {
-        Toggle(
-          "Open bosun.app at login",
-          isOn: Binding(get: { model.state.openAtLogin }, set: { model.send(.openAtLogin($0)) })
-        )
-        .disabled(model.state.busy)
+        openAtLogin
         startAtLogin
         updates
       }
@@ -151,6 +147,30 @@ struct GeneralPane: View {
       MessageSection(state: model.state)
     }
     .formStyle(.grouped)
+  }
+
+  /// Its switch while bosun could tell, else "unknown" with a line and the two choices: a switch drawn off would
+  /// say it is off, and a mixed switch would not say which way a click goes.
+  @ViewBuilder private var openAtLogin: some View {
+    let label = "Open bosun.app at login"
+    let row = model.state.openAtLoginRow
+    if let text = row.text {
+      LabeledContent(label) {
+        HStack {
+          Text(text).foregroundStyle(.secondary)
+          Button("Turn On") { model.send(.openAtLogin(true)) }
+          Button("Turn Off") { model.send(.openAtLogin(false)) }
+        }
+        .disabled(!row.editable)
+      }
+      if let note = row.note { Text(note).font(.caption).foregroundStyle(.secondary) }
+    } else {
+      Toggle(
+        label,
+        isOn: Binding(get: { model.state.openAtLogin == true }, set: { model.send(.openAtLogin($0)) })
+      )
+      .disabled(!row.editable)
+    }
   }
 
   private var startAtLogin: some View {

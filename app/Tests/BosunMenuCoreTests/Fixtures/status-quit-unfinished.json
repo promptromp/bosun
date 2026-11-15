@@ -25,6 +25,7 @@
     "next_start": "2026-11-12T08:00+00:00"
   },
   "sentence": "bosun quit did not finish",
+  "starting": false,
   "stopped": {
     "morning_paused": false,
     "since": "2026-11-11T09:30:00+00:00"

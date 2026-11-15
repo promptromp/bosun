@@ -269,6 +269,24 @@ private func state(_ view: SettingsView?) -> SettingsState {
     }
   }
 
+  /// Open at Login as `bosun app status` read it, now: a reading that could not tell makes it unknown.
+  @Test func backInFrontOpenAtLoginIsAsReadNowUnknownToo() throws {
+    let fresh = try view()
+    let first = read(fresh, 1)
+    let unknown = SettingsState(view: fresh, openAtLogin: nil, message: nil, busy: false, read: 2)
+    #expect(first.refreshed(by: unknown).openAtLogin == nil)
+  }
+
+  @Test func openAtLoginRowIsItsSwitchWhileKnownAndUnknownWithItsLineOtherwise() throws {
+    let known = SettingsState(view: nil, openAtLogin: false, message: nil, busy: false)
+    #expect(known.openAtLoginRow == SettingRow(editable: true, text: nil, note: nil))
+    #expect(known.starting().openAtLoginRow == SettingRow(editable: false, text: nil, note: nil))
+    let unknown = SettingsState(view: nil, openAtLogin: nil, message: nil, busy: false)
+    let line = SettingsState.openAtLoginUnknown
+    #expect(unknown.openAtLoginRow == SettingRow(editable: true, text: "unknown", note: line))
+    #expect(unknown.starting().openAtLoginRow == SettingRow(editable: false, text: "unknown", note: line))
+  }
+
   @Test func backInFrontWithTheValuesAsTheyWereKeepsTheReading() throws {
     let fresh = try view()
     let first = read(fresh, 1, message: "refused")
@@ -276,7 +294,7 @@ private func state(_ view: SettingsView?) -> SettingsState {
     let shown = first.refreshed(by: reread)
     #expect(shown.read == 1)
     #expect(shown.message == "refused")
-    #expect(!shown.openAtLogin)
+    #expect(shown.openAtLogin == false)
     #expect(ScheduleDraft.next(edited(fresh), from: first, to: shown) == edited(fresh))
     let other = try view(key: SettingKey.startTime, value: "09:00")
     #expect(first.refreshed(by: read(other, 2)) == read(other, 2))

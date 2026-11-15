@@ -21,6 +21,7 @@
     "next_start": "2026-11-12T08:00+00:00"
   },
   "sentence": "bosun's windows could not be read",
+  "starting": false,
   "stopped": null,
   "update": {
     "last": null,
