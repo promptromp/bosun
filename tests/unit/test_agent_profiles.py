@@ -90,21 +90,25 @@ class AgentProfileTest(unittest.TestCase):
         with contextlib.redirect_stdout(captured):
             assert agent_state.main(["profiles"]) == 0
         assert captured.getvalue().splitlines() == [
-            "claude\tBOSUN_CLAUDE_BIN\tBOSUN_CLAUDE_FLAGS\tBOSUN_MODEL\tyes\tyes\tyes\tyes\tidle,busy,shell,waiting\t-",
-            "codex\tBOSUN_CODEX_BIN\tBOSUN_CODEX_FLAGS\tBOSUN_CODEX_MODEL\tno\tno\tno\tno\tidle,busy\t-",
-            "agy\tBOSUN_AGY_BIN\tBOSUN_AGY_FLAGS\tBOSUN_AGY_MODEL\tno\tyes\tno\tno\tidle,busy,shell,waiting\tupdate",
+            "claude\tBOSUN_CLAUDE_BIN\tBOSUN_CLAUDE_FLAGS\tBOSUN_MODEL\tyes\tyes\tyes\tyes\tidle,busy,shell,waiting\t-\tyes",
+            "codex\tBOSUN_CODEX_BIN\tBOSUN_CODEX_FLAGS\tBOSUN_CODEX_MODEL\tno\tno\tno\tno\tidle,busy\t-\tno",
+            "agy\tBOSUN_AGY_BIN\tBOSUN_AGY_FLAGS\tBOSUN_AGY_MODEL\tno\tyes\tno\tno\tidle,busy,shell,waiting\tupdate\tno",
         ]
 
     def test_profiles_print_update_args(self) -> None:
+        verifies = {"claude": "yes", "codex": "no"}
         for harness in ("claude", "codex"):
             assert AGENTS[harness].PROFILE.update_args == ()
-            assert agent_state.profile_line(harness, AGENTS[harness].PROFILE).endswith("\t-")
+            line = agent_state.profile_line(harness, AGENTS[harness].PROFILE)
+            assert line.endswith("\t-\t" + verifies[harness])
         assert AGENTS["agy"].PROFILE.update_args == ("update",)
         assert agent_state.profile_line("agy", AGENTS["agy"].PROFILE).endswith(
-            "\tidle,busy,shell,waiting\tupdate"
+            "\tidle,busy,shell,waiting\tupdate\tno"
         )
         updating = dataclasses.replace(claude_state.PROFILE, update_args=("update", "--now"))
-        assert agent_state.profile_line("stub", updating).endswith("\tidle,busy,shell,waiting\tupdate --now")
+        assert agent_state.profile_line("stub", updating).endswith(
+            "\tidle,busy,shell,waiting\tupdate --now\tyes"
+        )
 
     def test_every_agent_but_the_orchestrators_has_its_setup_texts(self) -> None:
         for name, agent in AGENTS.items():

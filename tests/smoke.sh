@@ -798,6 +798,25 @@ check "an empty auto-compact setting leaves Claude Code's default" bash -c '! gr
 check "an auto-compact window out of range is refused" fails_with "must be auto or 100000-1000000" env BOSUN_AUTOCOMPACT_TOKENS=5000 "$BOSUN" launch alpha
 out="$(cd "$REPO_A" && "$BOSUN" launch alpha 2>&1)"
 check "repo sessions get the compaction hook" bash -c 'grep -q "SessionStart" <<<"$1" && grep -qE "compact-context.{0,2} --window.{0,2} alpha" <<<"$1"' _ "$out"
+# The ontology's standing rules (orchestrator/knowledge.md), for a window on an agent whose quotes bosun can check.
+# Off, the launch is what it was; the launch record's fingerprint tells the two apart (the policy's text itself is not in it).
+off_fingerprint="$(jq -r .fingerprint.args "$BOSUN_STATE_DIR/launches/smoke/alpha.json")"
+out_on="$(cd "$REPO_A" && BOSUN_KNOWLEDGE_ENABLED=1 "$BOSUN" launch alpha 2>&1)"
+check "with the ontology on, a repo window's launch carries its rules, after the model and effort" grep -qE -- '--model opus --settings .*--append-system-prompt .*Look.before.asking.*--autocompact 300000 --name alpha' <<<"$out_on"
+check "... recorded as a launch with a policy argument, so a window launched before is seen to differ" bash -c '
+  [ "$(jq -r .fingerprint.args "$1/launches/smoke/alpha.json")" != "$2" ]' _ "$BOSUN_STATE_DIR" "$off_fingerprint"
+out_off="$(cd "$REPO_A" && BOSUN_KNOWLEDGE_ENABLED=0 "$BOSUN" launch alpha 2>&1)"
+check "with it off, a repo window launches with no system prompt, as before" bash -c '
+  ! grep -q -- "--append-system-prompt" <<<"$1" && ! grep -q "Look.before.asking" <<<"$1"' _ "$out_off"
+check "... and records the fingerprint it had" test "$(jq -r .fingerprint.args "$BOSUN_STATE_DIR/launches/smoke/alpha.json")" = "$off_fingerprint"
+policy_off="$WORK/policy-ontology-off.txt"
+policy_on="$WORK/policy-ontology-on.txt"
+bash -c 'source "$1/lib/common.sh"; BOSUN_CONFIG_DIR="$2"; load_config; orchestrator_policy' _ "$ROOT" "$WORK/no-site-config" >"$policy_off"
+BOSUN_KNOWLEDGE_ENABLED=1 bash -c 'source "$1/lib/common.sh"; BOSUN_CONFIG_DIR="$2"; load_config; orchestrator_policy' _ "$ROOT" "$WORK/no-site-config" >"$policy_on"
+check "with the ontology off, the orchestrator's policy is policy.md and nothing else" cmp -s "$policy_off" "$ROOT/orchestrator/policy.md"
+check "... and on, it ends with the ontology's rules" bash -c '
+  head -c "$(wc -c <"$2")" "$1" | cmp -s - "$2" && tail -c "$(wc -c <"$3")" "$1" | cmp -s - "$3" && grep -q "^# The ontology$" "$1"' _ \
+  "$policy_on" "$policy_off" "$ROOT/orchestrator/knowledge.md"
 check "BOSUN_COMPACT_CONTEXT=0 leaves the hook out" bash -c '! grep -q "compact-context" <<<"$1"' _ "$(cd "$REPO_A" && BOSUN_COMPACT_CONTEXT=0 "$BOSUN" launch alpha 2>&1)"
 out="$(printf '{"hook_event_name":"SessionStart","source":"compact"}' | "$BOSUN" hook compact-context --window alpha)"
 check "the compaction hook adds the window's items as SessionStart context" bash -c 'jq -e ".hookSpecificOutput.hookEventName == \"SessionStart\" and (.hookSpecificOutput.additionalContext | test(\"compacted\"))" <<<"$1" >/dev/null' _ "$out"
@@ -1348,6 +1367,11 @@ rm -f "$HOME/.local/bin/date"
 echo "Site rule: be brief." >"$BOSUN_CONFIG_DIR/policy.md"
 check "a site policy.md is appended to the orchestrator policy" contains "$(cd "$REPO_A" && BOSUN_ORCHESTRATOR=orch "$BOSUN" launch orch 2>&1)" "Site rule: be brief."
 rm "$BOSUN_CONFIG_DIR/policy.md"
+check "with the ontology on, the orchestrator's launch ends its policy with the ontology's rules" grep -qE -- '--append-system-prompt .*Look.before.asking' <<<"$(cd "$REPO_A" && BOSUN_ORCHESTRATOR=orch BOSUN_KNOWLEDGE_ENABLED=1 "$BOSUN" launch orch 2>&1)"
+check "... and off, it does not" bash -c '! grep -q "Look.before.asking" <<<"$1"' _ "$out"
+check "the orchestrator may read and write the ontology without asking, but not forget or import" bash -c '
+  jq -e "(.permissions.allow | index(\"Bash(bosun kg propose:*)\") and index(\"Bash(bosun kg lookup:*)\"))
+    and ((.permissions.allow | map(select(test(\"kg (forget|import|identify)\"))) | length) == 0)" "$1"' _ "$ROOT/orchestrator/settings.json"
 check "orchestrator settings are valid JSON" jq -e '.permissions.ask | index("Bash(gh pr merge:*)")' "$ROOT/orchestrator/settings.json"
 guard_says() { # <command>: the guard's decision for an orchestrator Bash command ("" = allowed)
   jq -n --arg c "$1" '{tool_name: "Bash", tool_input: {command: $c}}' | "$BOSUN" guard |

@@ -632,14 +632,35 @@ one_at_a_time() { # <name> <wait seconds> <message>
   exit 75
 }
 
+# The ontology's standing rules (orchestrator/knowledge.md: look before asking, record what I state as standing),
+# with their heading. Both the orchestrator's policy and a repo window's prompt end with them.
+knowledge_rules() {
+  printf '# The ontology\n\n'
+  cat "$BOSUN_ROOT/orchestrator/knowledge.md"
+}
+
 # The orchestrator's policy: orchestrator/policy.md, then the site's $BOSUN_CONFIG_DIR/policy.md
-# if there is one (additions for this machine or team, without forking the repo).
+# if there is one (additions for this machine or team, without forking the repo), then, with
+# BOSUN_KNOWLEDGE_ENABLED=1, the ontology's rules. With it off, the policy is what it was without them.
 orchestrator_policy() {
   cat "$BOSUN_ROOT/orchestrator/policy.md"
   if [ -f "$BOSUN_CONFIG_DIR/policy.md" ]; then
     printf '\n\n# Site policy (%s)\n\n' "$BOSUN_CONFIG_DIR/policy.md"
     cat "$BOSUN_CONFIG_DIR/policy.md"
   fi
+  if [ "$BOSUN_KNOWLEDGE_ENABLED" = "1" ]; then
+    printf '\n\n'
+    knowledge_rules
+  fi
+}
+
+# What a repo window's system prompt gets from the ontology: its rules when BOSUN_KNOWLEDGE_ENABLED=1 and the
+# agent the window runs on (<harness>) is one whose sessions bosun can check a quote of my words in (its
+# profile's verifies_quotes); nothing otherwise (the other agents get what the ontology knows in their briefs).
+window_knowledge_prompt() { # <harness>
+  [ "$BOSUN_KNOWLEDGE_ENABLED" = "1" ] || return 0
+  [ "$(profile_field "$1" verifies_quotes 2>/dev/null)" = "yes" ] || return 0
+  knowledge_rules
 }
 
 # The keep-awake (caffeinate) pid file that `morning` writes and `stop` releases.

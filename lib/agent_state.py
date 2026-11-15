@@ -244,7 +244,16 @@ def profile_line(harness: str, profile: Profile) -> str:
     statuses = ",".join(status for status in STATUS_ORDER if status in profile.statuses)
     update = " ".join(profile.update_args) or "-"
     return "\t".join(
-        [harness, profile.bin_key, profile.flags_key, profile.model_key, *yes_no, statuses, update]
+        [
+            harness,
+            profile.bin_key,
+            profile.flags_key,
+            profile.model_key,
+            *yes_no,
+            statuses,
+            update,
+            "yes" if profile.verifies_quotes else "no",
+        ]
     )
 
 
