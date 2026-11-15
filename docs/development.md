@@ -675,8 +675,9 @@ Work up the levels; each one exercises more of the real chain.
    --status` and `--dry-run` show what the watchdog sees and would alert, without sending.
 3. **Session start, now:** `bosun start`, then `bosun attach`. Preview the
    steady-state path with `bosun refresh --dry-run`, then run it for real.
-4. **Through launchd, now:** `launchctl kickstart gui/$(id -u)/com.bosun.morning`, then
-   `bosun status`.
+4. **Through launchd, now:** `bosun morning --now --background` (what the menu bar app's Start runs:
+   it kickstarts the `com.bosun.morning.now` job), or `launchctl kickstart gui/$(id -u)/com.bosun.morning`
+   for the scheduled job itself, then `bosun status`.
 5. **Real sleep and wake:** `bosun wake-test 3` loads a temporary launchd job due in 2 minutes,
    schedules a one-off wake in 3 minutes (the same order as production) and puts the Mac to sleep,
    retrying if a touch or notification cancels the sleep. Scheduling the wake needs

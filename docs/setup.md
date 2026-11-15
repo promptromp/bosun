@@ -165,8 +165,8 @@ with `bosun update`.
 
 `bosun.app` puts a small icon in the menu bar that says whether bosun is well, and has the few things you
 would otherwise type: start and stop bosun, update, open the console, and its settings. It is a control panel, there
-from login whatever the hour, apart from bosun's session (the orchestrator, the windows, the check-ins), which keeps
-to your schedule. It lives in `~/Applications`, has no Dock icon. It reads nothing of bosun's but what
+from login whatever the hour, apart from bosun's session (the orchestrator, the windows, the check-ins), whose
+automatic starts keep to your schedule. It lives in `~/Applications`, has no Dock icon. It reads nothing of bosun's but what
 `bosun status --json` and its other `--json` commands print, so it never disagrees with them, and changes
 settings only through [`bosun settings`](commands.md#changing-settings). Design: [design/menu-bar.md](design/menu-bar.md) and
 [design/control-panel.md](design/control-panel.md).
@@ -350,7 +350,8 @@ bosun update --yes       # goes ahead without asking
 ```
 
 `bosun update --check` says whether there is a newer release and changes nothing (one line, or `--json`), and
-`bosun update --skip <version>` stops it being offered again. It updates bosun to the newest release, or on the `main` channel (`BOSUN_UPDATE_CHANNEL="main"`, which an install
+`bosun update --skip <version>` stops it being offered again; the menu bar app's Check for Updates... runs the same
+check, and its Settings window sets the channel. It updates bosun to the newest release, or on the `main` channel (`BOSUN_UPDATE_CHANNEL="main"`, which an install
 made with `BOSUN_BRANCH` follows) to the head of the branch the install follows, while the agents keep working. It gets the new version into a folder of its own, beside
 the one you run, and that version shows its plan: the commits, the migrations your data needs, the
 prompts that changed, what each window gets, the launchd jobs to reload, and anything that stops it. In a
@@ -551,6 +552,10 @@ State and logs go to `~/.local/state/bosun/`:
   `console.launchd.err`, ...). Each morning run keeps the folder in bounds: a day's file older than 30
   days goes, and a launchd file past 1 MB is cut to its last 256 KB
 - `watchdog.json`: the watchdog's de-duplication state
+- what starting and stopping leave: `quit.json` (a `bosun quit`, and whether it paused the morning start),
+  `stopped-<session>` (a `bosun stop` today), `keep-awake-<session>.pid` and `.json` (the keep-awake and until
+  when), `login-reload` (a reload of the jobs, so the login job knows it is no login), `console/wanted` (the
+  console's job runs while it is there) and `update-skip.json` (a release `bosun update --skip` passed over)
 - `login.json`: the last Claude Code login check (see Claude Code login)
 - `codex-sessions.json`: which Codex session each window's name stands for
 - `connectors.json`: the URL or command line `claude mcp list` last showed for each name a list holds

@@ -24,8 +24,9 @@ uv sync && uv run pre-commit install
 
 Commits then run ruff, mypy --strict, the complexity limits, shellcheck, shfmt, hadolint, actionlint,
 zizmor, spelling and link checks, a build of the [docs site](docs/development.md#the-docs-site), the
-secrets scans and the unit tests the change can reach; pushes also run the smoke suite (unless this exact tree
-passed it here in the last 24 hours).
+secrets scans and the unit tests the change can reach (and for a change under `app/`, on a Mac with Swift,
+`swift format lint`, SwiftLint and `swift test`); pushes also run the smoke sections the change can reach (unless
+this exact tree passed the whole suite here in the last 24 hours).
 
 ## Making a change
 

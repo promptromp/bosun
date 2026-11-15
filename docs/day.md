@@ -23,6 +23,11 @@ Every morning bosun:
    see waits for your approval, which you can give from your phone. A **ledger**
    with stable ids and state machines makes this idempotent across runs and days.
 
+If bosun is not running when you log in (after a restart, say), it starts then, on one of
+your days and inside your hours, unless you stopped it earlier that day (`BOSUN_START_AT_LOGIN`, on for new installs; see
+[Starting at login](setup.md#starting-at-login)). With the [menu bar app](setup.md#the-menu-bar-app), its icon
+says all along whether bosun is well, and Start bosun runs the morning at any hour.
+
 ```
 pmset wake 08:01 ─> launchd runs the 08:00 job it missed during sleep ──> bosun morning
                    ├─ caffeinate -i -s until 20:00
@@ -58,7 +63,10 @@ pmset wake 08:01 ─> launchd runs the 08:00 job it missed during sleep ──> 
 - **18:30, learning** (with `BOSUN_LEARN_ENABLED=1`, `BOSUN_LEARN_AT`): a headless Claude reads the day's
   sessions, the ledger and the logs and proposes fixes for your approval. See [Learning](learning.md).
 - **20:00** (`BOSUN_AWAKE_UNTIL`): bosun stops keeping the Mac awake. The sessions stay in tmux, and the next
-  morning starts from where they are.
+  morning starts from where they are. The work follows the session, not the clock: while it runs (the Mac
+  awake, or a session you started at the weekend), the check-ins, events and the Slack watcher go on, the
+  watcher at a slower pace outside your hours. The clock only decides the automatic starts, the keep-awake's
+  end, when the watchdog holds its alerts, and learning's time.
 
 ## Stopping before the evening, and starting again
 
@@ -68,7 +76,11 @@ pmset wake 08:01 ─> launchd runs the 08:00 job it missed during sleep ──> 
   and with `--sleep` the keep-awake too (without it the keep-awake the morning started goes on until its time),
   and records itself in `quit.json`: the watchdog and the scheduled learning run skip while it is there, so nothing
   restarts what you stopped. Tomorrow's morning run starts bosun again, unless you quit with `--pause-morning`.
-  `bosun stop` only ends the windows, as before.
+  `bosun stop` only ends the windows and the keep-awake, for the rest of the day: the watchdog expects no
+  session and the start at login does not start it again, but tomorrow's morning run does. In the menu bar app,
+  **Stop bosun...** is the quit, with boxes for pausing the morning start and letting the Mac sleep; **Quit
+  bosun.app** only closes the icon and leaves bosun running, unless you choose to stop it too (see
+  [Stop, Quit and Start](setup.md#stop-quit-and-start)).
 - **`bosun start`** brings the windows back and ends a quit, and so does **`bosun morning --now`**, the morning
   run at any hour (`--background` has launchd start it: what the menu bar app's Start runs). `bosun status
   --json` says in one object how bosun is, including whether it is stopped. See [Commands](commands.md) for each

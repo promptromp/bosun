@@ -37,6 +37,9 @@ tracker, so these are the reports we most want:
   token;
 - secrets or personal data that reach logs, the ledger, learning digests or the knowledge base
   without redaction (`lib/redact.py`);
+- the menu bar app's install (`bosun app install`, and `bosun update`'s `app update`; `lib/app_install.py`,
+  `lib/app_release.py`): an app placed in `~/Applications` that does not meet the publisher's Developer ID
+  requirement or is not notarized;
 - the launchd jobs and scripts: a way to make them run code that another user can write.
 
 Problems in Claude Code itself go to Anthropic, in Codex itself to OpenAI, and in Antigravity itself to Google, through their responsible
