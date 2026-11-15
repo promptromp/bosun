@@ -64,11 +64,12 @@ SUBDIR = "events"
 QUEUE_FILE = "queue.jsonl"
 STATE_FILE = "state.json"
 LOCK_FILE = "lock"
-# Prompts bosun pasted into a window (`bosun send`), by hash, so the window's hook does
-# not take them for mine; how long one counts (a queued prompt may wait for a long turn), and how
+# Prompts bosun pasted into a window (`bosun send`), by hash, so neither the window's hook nor a
+# quote of my words (kg --from-user) takes them for mine; how long one counts (a queued prompt may
+# wait for a long turn; at least knowledge.QUOTE_MAX_AGE, as long as a quote looks back), and how
 # many lines the file keeps.
 PASTED_FILE = "pasted.jsonl"
-PASTED_HOURS = 12
+PASTED_HOURS = 24
 PASTED_KEEP = 500
 SECONDS_PER_HOUR = 3600
 DELIVERED_RETENTION_DAYS = 7

@@ -29,6 +29,7 @@ from unittest import mock
 
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "lib"))
+import agent_state
 import change_log
 import journal as jr
 import knowledge
@@ -355,6 +356,37 @@ class ClassesTest(JournalTestCase):
         for kind in ("user", "transcript"):
             stated = {**add, "fact": {**add["fact"], "sources": [{"kind": kind, "ref": "0123", "at": "x"}]}}
             self.assertTrue(kc.record_edit(stated, facts).local, kind)
+
+    def test_a_decision_on_my_words_is_local_and_the_console_s_is_not(self) -> None:
+        fact: dict[str, Any] = {"id": "f-aaaaaa", "subject": "repo/x", "object": None}
+        fact["sources"] = [{"kind": "ledger", "ref": "a", "at": "x"}]
+        facts = {"f-aaaaaa": fact}
+        mine = {"kind": "user", "ref": "0123", "quote": QUOTE, "at": "x"}
+        console = {"kind": "user", "ref": "console", "at": "x"}
+        for by, local in ((mine, True), (console, False)):
+            update: dict[str, Any] = {"op": "update", "id": "f-aaaaaa", "at": "x", "event": "confirmed"}
+            update["set"] = {"status": "confirmed", "reviewed_by": by}
+            self.assertEqual(kc.record_edit(update, facts).local, local, by["ref"])
+
+    def test_a_confirmation_from_a_session_keeps_my_quote_on_this_mac(self) -> None:
+        self.seed()
+        self.run_kg("propose", "release", "has_step", "step/merge", "--source", "ledger:a")
+        fact_id = self.fact_id("process/release", "has_step")
+        transcript = self.tmp / "0123456789abcdef-acme-session.jsonl"
+        transcript.write_text(json.dumps(typed(f"yes, {QUOTE}", START + timedelta(minutes=5))) + "\n")
+        self.now += timedelta(minutes=10)
+        session = agent_state.CallingSession("claude", 4242, transcript, True)
+        with mock.patch.object(agent_state, "calling_session", return_value=session):
+            self.assertIn(
+                f"ok: {fact_id} confirmed", self.run_kg("confirm", fact_id, "--from-user", "--quote", QUOTE)
+            )
+        private = (self.root / "journal" / f"{self.replica()}.jsonl").read_text()
+        self.assertIn(fact_id, private)  # its proposal is no one's words
+        self.assertNotIn(QUOTE, private)
+        self.assertEqual((self.local()[-1]["op"], self.local()[-1]["target"]), ("fact.update", fact_id))
+        decided = self.kb().facts[fact_id]
+        self.assertEqual(decided["reviewed_by"]["quote"], QUOTE)
+        self.assertIn(f'your words: "{QUOTE}"', decided["history"][-1]["note"])
 
     def test_edits_compare_entities_and_take_the_new_records(self) -> None:
         self.seed()

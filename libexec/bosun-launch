@@ -95,10 +95,11 @@ require_agent_bin() { # <window>
 # Sets agent_args for window <name> (lib/launch/<harness>.sh's build_agent_args), and session_name,
 # harness, model and effort: what it resumes, which agent runs it, and with what. Also input_args, what
 # the record and --fingerprint go by: the same arguments for the conversation name <conversation>,
-# since a new day's or a fresh conversation's name is no launch input.
+# since a new day's or a fresh conversation's name is no launch input; and launch_texts, the files in the
+# install whose text build_agent_args put into an argument (a repo window's ontology rules), which count too.
 # shellcheck disable=SC2154  # build_agent_args, in the sourced lib/launch/<harness>.sh, sets agent_args
 set_agent_args() { # <name>
-  local agent_module
+  local agent_module text
   need_profiles # here, so the lookups in substitutions below do not each read them
   session_name="$(expected_session_name "$1")"
   IFS=$'\t' read -r model effort <<<"$(window_model_effort "$1")"
@@ -114,8 +115,11 @@ set_agent_args() { # <name>
   # Before the arguments are built: some ask the agent itself (its connectors), and a missing one would then
   # fail with that, not with the word that it is not installed. A dry run and --fingerprint start nothing.
   [ "$BOSUN_LAUNCH_DRY_RUN" = "1" ] || [ "$fingerprint" = "1" ] || require_agent_bin "$1"
+  launch_texts=()
   build_agent_args "$1" "<conversation>" "$model" "$effort"
   input_args=("${agent_args[@]}")
+  text_args=()
+  for text in ${launch_texts[@]+"${launch_texts[@]}"}; do text_args+=(--text-from "$text"); done
   build_agent_args "$1" "$session_name" "$model" "$effort"
 }
 
@@ -143,7 +147,8 @@ print_fingerprint() { # <name>
   [ -n "$dir" ] || die "no window '$1' in the window list, and no launch of it recorded"
   cd "$dir" || die "cannot enter $1's directory '$dir'"
   set_agent_args "$1"
-  python3 "$BOSUN_ROOT/lib/launch_record.py" fingerprint --install "$BOSUN_INSTALL" --root "$BOSUN_ROOT" -- "${input_args[@]}"
+  python3 "$BOSUN_ROOT/lib/launch_record.py" fingerprint --install "$BOSUN_INSTALL" --root "$BOSUN_ROOT" \
+    ${text_args[@]+"${text_args[@]}"} -- "${input_args[@]}"
 }
 
 # Record what this window is launched with, for an update to compare and to start it again the same
@@ -156,7 +161,7 @@ record_launch() {
     --window "$name" --commit "${commit:-unknown}" --harness "$harness" --dir "$PWD" \
     --model="${model:--}" --effort="${effort:--}" \
     --model-override="$model_override" --effort-override="$effort_override" \
-    --install "$BOSUN_INSTALL" -- "${input_args[@]}" ||
+    --install "$BOSUN_INSTALL" ${text_args[@]+"${text_args[@]}"} -- "${input_args[@]}" ||
     log "warning: could not record what '$name' is launched with (lib/launch_record.py)"
 }
 

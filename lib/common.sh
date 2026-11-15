@@ -1697,11 +1697,12 @@ find_window() {
     awk -F'\t' -v name="$1" '$1 == name && !found { print $2; found = 1 } END { exit !found }'
 }
 
-# With events on, tell <window>'s prompt hook that <text> is bosun's, not yours, so it is not
-# recorded as something you said (`ledger said`, user-said events): every prompt bosun gives a
-# window, pasted (`send`) or passed at launch (refresh's fresh conversation, `send --new`).
+# Note that <text> is bosun's, not yours, so it is never taken for something you said: by <window>'s
+# prompt hook (`ledger said`, user-said events) or as your words in a quote (`kg --from-user`, which
+# runs whatever the events key says): every prompt bosun gives a window, pasted (`send`) or passed at
+# launch (refresh's fresh conversation, `send --new`).
 note_bosun_prompt() { # <window> <text>
-  [ "$BOSUN_EVENTS_ENABLED" = "1" ] && [ -n "$2" ] || return 0
+  [ -n "$2" ] || return 0
   BOSUN_STATE_DIR="$BOSUN_STATE_DIR" python3 "$BOSUN_ROOT/lib/events.py" pasted "$1" <<<"$2" ||
     log "warning: could not note bosun's prompt for $1's prompt hook"
 }

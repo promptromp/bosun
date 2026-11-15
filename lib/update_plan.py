@@ -20,12 +20,15 @@ import migrations
 
 PROMPTS = (
     "orchestrator/policy.md",
+    "orchestrator/knowledge.md",
     "orchestrator/plugin/commands/chores.md",
     "orchestrator/tasks/*.md",
     "orchestrator/learn.md",
     "orchestrator/slack-watch.md",
 )
-REREAD = ("orchestrator/policy.md", "orchestrator/tasks/*.md")
+# What the orchestrator re-reads when it changed (its policy ends with the ontology's rules, with the key
+# on); a repo window whose prompt holds those rules is restarted instead (launch_record counts their file).
+REREAD = ("orchestrator/policy.md", "orchestrator/knowledge.md", "orchestrator/tasks/*.md")
 TASK = "orchestrator/tasks/{}.md"  # a task type's built-in text
 # The rules every task gets, whatever its types: a site's own _common.md only adds to them.
 COMMON = TASK.format("_common")

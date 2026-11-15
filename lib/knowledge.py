@@ -13,6 +13,7 @@ import functools
 import itertools
 import json
 import os
+import re
 import sys
 from collections.abc import Callable, Iterator, Mapping
 from dataclasses import dataclass, field
@@ -56,6 +57,9 @@ from validation import Finding
 
 MAX_QUOTE_LENGTH = 500
 QUOTE_MAX_AGE = timedelta(hours=24)  # a quote of my words counts from a prompt this recent
+# The fewest characters (whitespace-normalized) of my words a decision from an agent's session quotes:
+# "ok", "yes" or "k" is in nearly every prompt, so it says nothing about which fact.
+MIN_DECISION_QUOTE = 8
 # The journal every write goes through (lib/journal.py, docs/design/sync.md), next to the files:
 # the knowledge base's stream; the version of the rules its changes are checked against when
 # rebuilt (knowledge_changes.APPLIED, SKIPPED and CHECKED), bumped by hand when a change to them
@@ -928,14 +932,18 @@ def speaker() -> approvals.Speaker:
     return approvals.Speaker(frozenset(pasted), SETTINGS.drain_prompt)
 
 
-def quote_verified(quote: str, transcript: Path) -> bool:
+def quote_verified(quote: str, transcript: Path, after: datetime | None = None) -> bool:
     """Whether <quote> is in a prompt I typed (or sent from my phone) in that session in the last
-    QUOTE_MAX_AGE: the same check as an approval's quote. Pasted and injected text and tool results
-    never count."""
+    QUOTE_MAX_AGE, and after <after> when given (when what it decides on was proposed): the same
+    check as an approval's quote. Pasted and injected text and tool results never count."""
     who = speaker()
     since = CLOCK() - QUOTE_MAX_AGE
     prompts = claude_state.delivered_prompts(transcript)
-    texts = [p.text for p in prompts if p.at >= since and approvals.is_genuine(p.text, who)]
+    texts = [
+        p.text
+        for p in prompts
+        if p.at >= since and (after is None or p.at > after) and approvals.is_genuine(p.text, who)
+    ]
     return approvals.quote_in(quote, texts)
 
 
@@ -948,12 +956,15 @@ def agent_name(session: agent_state.CallingSession) -> str:
     return agent_state.AGENTS[session.agent].PROFILE.display_name
 
 
-def unverified_reason(session: agent_state.CallingSession | None) -> str:
-    """Why a quote of my words does not count."""
+def unverified_reason(session: agent_state.CallingSession | None, after: datetime | None = None) -> str:
+    """Why a quote of my words does not count (<after>: what it decides on was proposed then)."""
     if session is not None and not session.verifies_quotes:
         return f"bosun cannot check your words in {agent_name(session)}"
     hours = int(QUOTE_MAX_AGE.total_seconds() // 3600)
-    return f"the quote is not in anything you typed in that session in the last {hours} hours"
+    reason = f"the quote is not in anything you typed in that session in the last {hours} hours"
+    if after is not None and after > CLOCK() - QUOTE_MAX_AGE:
+        reason += f" since what it decides on was proposed ({km.iso(after)})"
+    return reason
 
 
 def own_transcript(given: str, session: agent_state.CallingSession) -> bool:
@@ -995,7 +1006,9 @@ def session_or_refuse(args: argparse.Namespace, session: agent_state.CallingSess
     return session.transcript
 
 
-def user_source(args: argparse.Namespace, session: agent_state.CallingSession | None) -> Record:
+def user_source(
+    args: argparse.Namespace, session: agent_state.CallingSession | None, after: datetime | None = None
+) -> Record:
     quote = approvals.normalize(args.quote or "")
     if not quote or len(quote) > MAX_QUOTE_LENGTH:
         raise KnowledgeError(
@@ -1009,7 +1022,7 @@ def user_source(args: argparse.Namespace, session: agent_state.CallingSession | 
         "ref": transcript.stem if transcript is not None else unchecked,
         "quote": quote,
         "at": km.iso(CLOCK()),
-        "verified": transcript is not None and quote_verified(quote, transcript),
+        "verified": transcript is not None and quote_verified(quote, transcript, after),
     }
 
 
@@ -1027,7 +1040,12 @@ def proposal_of(
     obj: str | None,
     session: agent_state.CallingSession | None,
 ) -> Proposal:
-    sources = sources_of(args, session)
+    return proposal_from(args, subject, predicate, obj, sources_of(args, session))
+
+
+def proposal_from(
+    args: argparse.Namespace, subject: str, predicate: str, obj: str | None, sources: list[Record]
+) -> Proposal:
     authority = args.authority or (ks.USER_SAID if args.from_user else ks.OBSERVED)
     return Proposal(
         subject,
@@ -1050,22 +1068,79 @@ def unverified_note(proposal: Proposal, session: agent_state.CallingSession | No
     return ""
 
 
-REVIEW_VERBS = {"confirm": "confirm", "reject": "reject", "batch": "answer the batch"}
+DECISION_VERBS = {
+    "confirm": "confirm",
+    "reject": "reject",
+    "batch": "answer the batch",
+    "supersede": "supersede",
+}
 
 
-def require_my_words(args: argparse.Namespace) -> None:
-    """From an agent's session, a review stands on my words: a quote (--from-user --quote) that
-    counts, checked in that session. From no session (a terminal), nothing changes."""
+def proposed_at(facts: list[Record]) -> datetime | None:
+    """When the latest of <facts> was proposed (added, or observed again)."""
+    times = [km.parse_time(str(t)) for f in facts for t in (f.get("recorded_at"), f.get("observed_at")) if t]
+    return max(times) if times else None
+
+
+def decision_words(args: argparse.Namespace, facts: list[Record]) -> Record | None:
+    """From an agent's session, a decision on <facts> (confirm, reject, a batch's answer, a
+    supersede) stands on my words: --from-user --quote, at least MIN_DECISION_QUOTE characters, in a
+    genuine prompt of that session made after the facts were proposed and within QUOTE_MAX_AGE; it
+    is refused otherwise. Returns those words as a user source. From no session (a terminal), None:
+    nothing changes."""
     session = agent_state.calling_session()
     if session is None:
-        return
-    verb = REVIEW_VERBS[args.command]
+        return None
+    verb = DECISION_VERBS[args.command]
     if not session.verifies_quotes:
         raise KnowledgeError(f"{unverified_reason(session)}: {verb} from a terminal or the console")
     if not args.from_user:
         raise KnowledgeError(f"from a session, {verb} with --from-user --quote '<your exact words>'")
-    if not user_source(args, session)["verified"]:
-        raise KnowledgeError(f"{unverified_reason(session)}, so nothing was decided")
+    if len(approvals.normalize(args.quote or "")) < MIN_DECISION_QUOTE:
+        raise KnowledgeError(
+            f"from a session, {verb} with at least {MIN_DECISION_QUOTE} characters of your exact "
+            "words in --quote"
+        )
+    after = proposed_at(facts)
+    words = user_source(args, session, after)
+    if not words["verified"]:
+        raise KnowledgeError(f"{unverified_reason(session, after)}, so nothing was decided")
+    return words
+
+
+def reviewer(words: Record | None) -> Record | None:
+    """Who decided, as a fact's reviewed_by records it: me, in the session of <words>, with my quote
+    (which keeps the record on this Mac: knowledge_changes.quotes_me); None from a terminal."""
+    return {"kind": ks.USER_SOURCE, "ref": words["ref"], "quote": words["quote"]} if words else None
+
+
+def decision_note(note: str, words: Record | None) -> str:
+    """A decision's note, my words in it when it stands on them."""
+    if not words:
+        return note
+    said = f'your words: "{words["quote"]}"'
+    return f"{note}; {said}" if note else said
+
+
+def batch_quote_names(quote: str, refs: list[str]) -> bool:
+    """Whether <quote> holds every group number of <refs>, or the word all when they say all."""
+    words = set(re.findall(r"[a-z]+|\d+", quote.casefold()))
+    if kr.ALL in refs and kr.ALL in words:
+        return True
+    numbers = {match.group(1) for ref in refs if (match := kr.REF.match(ref))}
+    return bool(numbers) and numbers <= words
+
+
+def batch_quote_refusal(quote: str, clauses: list[kr.Clause]) -> str:
+    """Why <quote> does not answer the batch as <clauses> do ("" when it does): it holds every group
+    number the decision names, or the word all when the decision says all."""
+    refs = [ref for clause in clauses for ref in (*clause.targets, *clause.excepts)]
+    if batch_quote_names(quote, refs):
+        return ""
+    numbers = sorted({match.group(1) for ref in refs if (match := kr.REF.match(ref))}, key=int)
+    named = f"every group number it names ({', '.join(numbers)})" if numbers else ""
+    say_all = "the word all" if kr.ALL in refs else ""
+    return f"the quote does not hold {' or '.join(filter(None, (named, say_all)))}, so nothing was decided"
 
 
 # ---- writing commands ---------------------------------------------------------------------------
@@ -1118,9 +1193,11 @@ def targets(kb: KB, refs: list[str]) -> list[str]:
 
 def cmd_review(args: argparse.Namespace, confirm: bool) -> str:
     verb = "confirm" if confirm else "reject"
-    require_my_words(args)
     with opened(True, f"{verb} {' '.join(args.refs)}") as kb:
-        messages = km.review(kb, targets(kb, args.refs), confirm, args.note or "")
+        chosen = targets(kb, args.refs)
+        words = decision_words(args, [km.get_fact(kb, fact_id) for fact_id in chosen])
+        note = decision_note(args.note or "", words)
+        messages = km.review(kb, chosen, confirm, note, by=reviewer(words))
     return "\n".join(messages)
 
 
@@ -1132,17 +1209,31 @@ def cmd_reject(args: argparse.Namespace) -> str:
     return cmd_review(args, False)
 
 
-def replacement_of(kb: KB, args: argparse.Namespace) -> Proposal | None:
+def supersede_words(kb: KB, args: argparse.Namespace) -> Record | None:
+    """The words a supersede stands on. From an agent's session, --close and --by need them, and any
+    form given them checks them as a review does (decision_words); a correction with only a --source
+    needs none. From a terminal, words given are checked as a proposal's are (--transcript)."""
+    if not args.from_user and args.by is None and not args.close:
+        return None
+    facts = [km.get_fact(kb, args.id), *([km.get_fact(kb, args.by)] if args.by else [])]
+    words = decision_words(args, facts)
+    if words is None and args.from_user:
+        words = user_source(args, None)
+        if not words["verified"]:
+            correcting = args.value is not None or args.object is not None
+            instead = "; give a --source instead" if correcting else ", so nothing was decided"
+            raise KnowledgeError(unverified_reason(None) + instead)
+    return words
+
+
+def replacement_of(kb: KB, args: argparse.Namespace, words: Record | None) -> Proposal | None:
     if args.value is None and args.object is None:
         return None
     old = km.get_fact(kb, args.id)
-    session = calling_session(args)
-    proposal = proposal_of(args, old["subject"], old["predicate"], args.object, session)
-    if args.from_user and not km.verified_user(proposal.sources):
-        raise KnowledgeError(f"{unverified_reason(session)}; give a --source instead")
-    if not proposal.sources:
+    sources = [*([words] if words else []), *(km.parse_source(s, CLOCK()) for s in args.source or [])]
+    if not sources:
         raise KnowledgeError("a correction needs its source: --source kind:ref, or --from-user --quote ...")
-    return proposal
+    return proposal_from(args, old["subject"], old["predicate"], args.object, sources)
 
 
 def cmd_supersede(args: argparse.Namespace) -> str:
@@ -1150,8 +1241,10 @@ def cmd_supersede(args: argparse.Namespace) -> str:
     if sum(chosen) != 1:
         raise KnowledgeError("supersede takes exactly one of --value, --object, --by or --close")
     with opened(True, f"supersede {args.id}") as kb:
-        replacement = replacement_of(kb, args)
-        messages = km.supersede(kb, args.id, replacement, args.by, args.note or "")
+        words = supersede_words(kb, args)
+        replacement = replacement_of(kb, args, words)
+        note = decision_note(args.note or "", words)
+        messages = km.supersede(kb, args.id, replacement, args.by, note, reviewer=reviewer(words))
     return "\n".join(messages)
 
 
@@ -1212,15 +1305,28 @@ def decision_clauses(args: argparse.Namespace, decision: str) -> list[kr.Clause]
     return clauses
 
 
+def batch_words(
+    kb: KB, args: argparse.Namespace, clauses: list[kr.Clause], decided: list[str]
+) -> Record | None:
+    """The words a batch's answer stands on (decision_words), which from a session must also name it:
+    batch_quote_refusal."""
+    words = decision_words(args, [km.get_fact(kb, fact_id) for fact_id in decided])
+    refusal = batch_quote_refusal(words["quote"], clauses) if words else ""
+    if refusal:
+        raise KnowledgeError(refusal)
+    return words
+
+
 def batch_apply(args: argparse.Namespace, decision: str) -> str:
     clauses = decision_clauses(args, decision)
-    require_my_words(args)
     with opened(True, "batch apply", dry_run=args.dry_run) as kb:
         batch = read_batch()
         decisions = kr.decide(clauses, [g["facts"] for g in batch["groups"]])
+        words = batch_words(kb, args, clauses, list(decisions))
+        note, by = decision_note("batch", words), reviewer(words)
         confirm = [i for i, verb in decisions.items() if verb == kr.CONFIRM]
         reject = [i for i, verb in decisions.items() if verb == kr.REJECT]
-        messages = km.review(kb, confirm, True, "batch") + km.review(kb, reject, False, "batch")
+        messages = km.review(kb, confirm, True, note, by=by) + km.review(kb, reject, False, note, by=by)
         if not args.dry_run:
             mark_answered(batch, kb)
     left = sum(len(g["facts"]) for g in batch["groups"]) - len(decisions)

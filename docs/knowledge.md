@@ -157,8 +157,9 @@ bosun kg context --for releases         # a small cited pack of confirmed facts
 
 ## In the agents' hands
 
-One key, `BOSUN_KNOWLEDGE_ENABLED` (default `0`, so an install changes nothing until you set it; `bosun init`
-recommends `1`), puts the ontology to work in three ways:
+One key, `BOSUN_KNOWLEDGE_ENABLED` (default `0`, so briefs and system prompts stay as they were until you set
+it; `bosun init` recommends `1`), switches on the packs and the rules below. The check of your words is not part
+of it: it is always on.
 
 - **Packs in briefs.** `bosun delegate` adds "What bosun knows about this work": the pack for the task's repo and
   area (at most 1500 tokens in all, its first line included). A repo is found by its slug, alias or last path
@@ -170,11 +171,17 @@ recommends `1`), puts the ontology to work in three ways:
   name it, and say in one line what was recorded or why it stays proposed. Codex and Antigravity windows get
   packs in their briefs but not these rules: bosun cannot check their transcripts, so a fact from them would
   never be confirmed.
-- **Words that count.** Inside an agent session, `--from-user --quote` needs no `--transcript`: `kg` finds the
-  session that ran it by walking up its process tree to an agent's session record. A quote is checked against
-  that session only (another session's transcript is refused), and only genuine prompts of the last 24 hours
-  count. `kg confirm`, `reject` and `batch apply` run from a session need `--from-user --quote` that verifies;
-  from a terminal, and in the console's review, they work as before.
+
+**Words that count** (always on, whatever the key says). Inside an agent session, `--from-user --quote` needs no
+`--transcript`: `kg` finds the session that ran it by walking up its process tree to an agent's session record. A
+quote is checked against that session only (another session's transcript is refused), and only genuine prompts of
+the last 24 hours count, from a terminal with `--transcript` too. Text bosun pasted into the window (a brief, a
+`bosun send`) is never your words. `kg confirm`, `reject`, `batch apply`, and `supersede --close` or `--by`, run
+from a session, need `--from-user --quote` that verifies, at least 8 characters, typed after the facts they decide
+on were proposed; for `batch apply` the quote holds each group number the decision names (or "all", when it says
+all). The quote is kept in the decision's note, on this Mac only. A correction with `--value` or `--object` needs a
+source: your words, checked the same way, or a `--source`. From a terminal, and in the console's review, they work
+as before.
 
 `kg lookup` prints at most 800 tokens (`--max-tokens`), five waiting facts and a count, and says how to see
 more; `kg search` shows 10 hits; `--json` is complete. Your own profile facts and identifiers never reach a

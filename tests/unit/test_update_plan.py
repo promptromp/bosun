@@ -123,6 +123,21 @@ class TestMakePlan(unittest.TestCase):
         self.assertEqual(plan(new=new, windows=windows).windows, (("orchestrator", T.REREAD),))
         self.assertEqual(plan(new=new, windows=windows).kinds, (("orchestrator", "orchestrator"),))
 
+    def test_changed_ontology_rules_are_reread_by_the_orchestrator_and_restart_a_repo_window(self) -> None:
+        """The orchestrator's policy ends with orchestrator/knowledge.md (re-read, as policy.md is); a repo
+        window's prompt holding it shows as a changed launch (launch_record counts the file)."""
+        rules = "orchestrator/knowledge.md"
+        old = facts(prompts={**BASE_PROMPTS, rules: "k1"})
+        new = facts("bbb", prompts={**BASE_PROMPTS, rules: "k2"})
+        windows = [
+            up.WindowFacts("orchestrator", "orchestrator", "idle", False),
+            up.WindowFacts("api", "repo", "idle", True),
+            up.WindowFacts("web", "repo", "idle", False),  # a Codex window, or the key off: no rules
+        ]
+        got = plan(old=old, new=new, windows=windows)
+        self.assertEqual(got.prompts, (rules,))
+        self.assertEqual(got.windows, (("orchestrator", T.REREAD), ("api", T.RESTART), ("web", T.LEAVE)))
+
     def test_migrations_between_the_formats(self) -> None:
         got = plan(new=facts("bbb", formats={"ledger": 2}), steps=lambda s, a, b: [(1, 2)])
         self.assertEqual(got.migrations, (("ledger", 1, 2),))

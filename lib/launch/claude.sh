@@ -33,9 +33,14 @@ build_agent_args() { # <window> <session name> <model> <effort>
     # shellcheck disable=SC2206  # the flags are words, on purpose
     agent_args=($BOSUN_CLAUDE_FLAGS ${model_effort_args[@]+"${model_effort_args[@]}"})
     # With BOSUN_KNOWLEDGE_ENABLED=1, the ontology's rules, after the model and effort (launch_settings reads
-    # those back from ps); nothing is added with it off.
+    # those back from ps); nothing is added with it off. Their file is a launch input (launch_texts): an update
+    # that changes it restarts the window, which cannot be asked to re-read what its system prompt holds.
     knowledge_prompt="$(window_knowledge_prompt "$harness")"
-    [ -z "$knowledge_prompt" ] || agent_args+=(--append-system-prompt "$knowledge_prompt")
+    if [ -n "$knowledge_prompt" ]; then
+      agent_args+=(--append-system-prompt "$knowledge_prompt")
+      # shellcheck disable=SC2034  # for the launch record and --fingerprint, in libexec/bosun-launch
+      launch_texts=("$BOSUN_INSTALL/orchestrator/knowledge.md")
+    fi
   fi
   # BOSUN_AUTOCOMPACT_TOKENS: Claude Code compacts the conversation past that size by itself.
   set_autocompact_flag "$1"

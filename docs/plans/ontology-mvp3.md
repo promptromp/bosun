@@ -9,7 +9,7 @@ own words, confirmed when those words check out against its own transcript. And 
 repos, about thirty facts) proves all of it in the macOS VM with the real agents.
 
 **Architecture:** one config key, `BOSUN_KNOWLEDGE_ENABLED` (default `0`, recommended by `bosun init` with the other
-proactive parts), switches three things on:
+proactive parts), switches the first two of these on; the third is always on:
 
 1. `bosun delegate` appends a context pack (`lib/knowledge_query.py`) to each new brief.
 2. One rules file, `orchestrator/knowledge.md`, is appended to the orchestrator's system prompt, and to the
@@ -28,16 +28,18 @@ design note in Task 8.
 
 ## My calls (where the design is silent)
 
-1. **One key for all three parts,** named like the other proactive parts (`BOSUN_EVENTS_ENABLED`,
-   `BOSUN_LEARN_ENABLED`). Its default is `0`, so an existing install changes nothing (no `CONFIG_ADDED` entry). `bosun
-   init` recommends `1`. The design's "packs become the default once measured" stays open.
+1. **One key for packs and the rules,** named like the other proactive parts (`BOSUN_EVENTS_ENABLED`,
+   `BOSUN_LEARN_ENABLED`). Its default is `0`, so briefs and system prompts stay as they were (no `CONFIG_ADDED`
+   entry). `bosun init` recommends `1`. The quote check (3 below) is always on, whatever the key says: the safer
+   reading of Decision 8. The design's "packs become the default once measured" stays open.
 2. **"The session that ran me"** is found by walking up from `bosun kg`'s own process to the nearest ancestor that an
    agent module recognizes as a session (`record(pid)`), through the `AGENTS` table. Inside such a session:
    - `--transcript` may be left out;
    - one naming another session's transcript is refused;
    - a quote counts only from a genuine prompt of the last 24 hours (`QUOTE_MAX_AGE`).
 
-   With no agent ancestor (a terminal), it behaves as today.
+   With no agent ancestor (a terminal), it behaves as today, but for that 24-hour window, which applies to a
+   `--transcript` too.
 3. **Confirm, reject and `batch apply` from inside a session** need `--from-user --quote` that verifies. With no
    session around them they work as today, and so does the console's review.
 4. **A pack leaves out people's own profile facts.** It keeps facts that link a person to the target ("Dana reviews

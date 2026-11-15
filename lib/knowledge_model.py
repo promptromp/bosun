@@ -654,8 +654,9 @@ def update_record(kb: KB, fact: Record, event: str, changes: Record, **extra: An
     }
 
 
-def close(kb: KB, fact: Record, by: str | None, note: str) -> None:
-    changes = {"valid_to": iso(kb.now), "superseded_by": by}
+def close(kb: KB, fact: Record, by: str | None, note: str, *, reviewer: Record | None = None) -> None:
+    """Close <fact> (superseded by fact <by>, or by nothing); <reviewer> says who decided it."""
+    changes = {"valid_to": iso(kb.now), "superseded_by": by, **decided_by(kb, reviewer)}
     kb.add_record(update_record(kb, fact, "superseded", changes, note=note))
 
 
@@ -710,7 +711,7 @@ def review(
 
 
 def replacement_fact(
-    kb: KB, replacement: Proposal | None, by: str | None, note: str
+    kb: KB, replacement: Proposal | None, by: str | None, note: str, reviewer: Record | None = None
 ) -> tuple[str | None, list[str]]:
     """The confirmed fact that replaces another (an existing one, or a new one), if any."""
     if by is None and replacement is None:
@@ -722,13 +723,22 @@ def replacement_fact(
         new_id, messages = outcome.fact_id, outcome.messages
     new = get_fact(kb, str(new_id))
     if new["status"] != CONFIRMED:
-        messages += confirm_fact(kb, new, CORRECTION, note)
+        messages += confirm_fact(kb, new, CORRECTION, note, by=reviewer)
     return new_id, messages
 
 
-def supersede(kb: KB, old_id: str, replacement: Proposal | None, by: str | None, note: str = "") -> list[str]:
+def supersede(
+    kb: KB,
+    old_id: str,
+    replacement: Proposal | None,
+    by: str | None,
+    note: str = "",
+    *,
+    reviewer: Record | None = None,
+) -> list[str]:
     """Close a current fact: replaced by an existing fact (--by), by a new one (confirmed: a
-    correction is a decision), or by nothing (it simply stopped holding)."""
+    correction is a decision), or by nothing (it simply stopped holding). <reviewer> says who
+    decided (recorded as reviewed_by on what it confirms and closes)."""
     old = get_fact(kb, old_id)
     if not is_current(old):
         raise KnowledgeError(
@@ -736,10 +746,10 @@ def supersede(kb: KB, old_id: str, replacement: Proposal | None, by: str | None,
         )
     if by == old_id:
         raise KnowledgeError("a fact cannot supersede itself")
-    new_id, messages = replacement_fact(kb, replacement, by, note)
+    new_id, messages = replacement_fact(kb, replacement, by, note, reviewer)
     if is_current(kb.facts[old_id]):
         default = f"superseded by {new_id}" if new_id else "no longer holds"
-        close(kb, kb.facts[old_id], new_id, note or default)
+        close(kb, kb.facts[old_id], new_id, note or default, reviewer=reviewer)
         messages.append(f"ok: {old_id} closed" + (f", superseded by {new_id}" if new_id else ""))
     return messages
 

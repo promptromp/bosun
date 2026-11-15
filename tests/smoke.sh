@@ -1683,6 +1683,12 @@ printf '{"pid":%d,"sessionId":"%s","cwd":"%s"}' $$ "$kg_session" "$WORK" >"$HOME
 check "from a Claude session, my words are checked in its own transcript" contains "$(kg propose repo/pdf-renderer caveat --value 'renders slowly' --from-user --quote 'the pdf renderer renders slowly')" "confirmed (your own words"
 check "... another transcript is refused there" fails_with "not this session's transcript" kg propose repo/pdf-renderer caveat --value x --from-user --quote 'the pdf renderer renders slowly' --transcript "$transcript"
 check "... and a review there needs my words" fails_with "from a session, confirm with --from-user --quote" kg confirm repo/pdf-renderer
+# What bosun pasted into the window (a `bosun send`, events off) is in its transcript as a prompt, but not mine.
+kg_pasted="note for later: the exporter rounds per line"
+printf '{"type":"user","timestamp":"%s","origin":{"kind":"human"},"message":{"role":"user","content":"%s"}}\n' \
+  "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$kg_pasted" >>"$kg_own"
+BOSUN_EVENTS_ENABLED=0 bash -c 'source "$1/lib/common.sh" && note_bosun_prompt kg-window "$2"' _ "$ROOT" "$kg_pasted"
+check "... and text bosun pasted into the window is not my words, with events off too" contains "$(BOSUN_CALLER_WINDOW=kg-window kg propose repo/pdf-renderer caveat --value 'rounds per line' --from-user --quote 'the exporter rounds per line')" "stays proposed"
 rm -f "$kg_own"
 mv "$WORK/own-session.json" "$HOME/.claude/sessions/$$.json"
 

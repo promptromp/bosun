@@ -305,22 +305,31 @@ a stream of questions.
 6. Batches stay painless: 8 facts a group, 40 a batch, 10 groups; "except" defers, it never
    rejects.
 7. `ticket` text stays untrusted, and a site's schema can never add a predicate about a person.
-8. Confirming or rejecting from a session (`kg confirm`, `kg reject`, `kg batch apply`)
-   requires a verified quote of your words since MVP 3, as `kg propose --from-user` does; in
-   MVP 1 any caller of the CLI could confirm. From a terminal and in the console, nothing changed.
+8. Confirming or rejecting from a session (`kg confirm`, `kg reject`, `kg batch apply`, and closing
+   a fact with `kg supersede --close` or `--by`) requires a verified quote of your words since MVP 3,
+   as `kg propose --from-user` does; in MVP 1 any caller of the CLI could confirm. From a terminal and
+   in the console, nothing changed.
 
 ## MVP 3 decisions (2026-11-15)
 
 Where the design was silent (plan: [ontology-mvp3](../plans/ontology-mvp3.md)):
 
-1. **One key,** `BOSUN_KNOWLEDGE_ENABLED`, for packs, the rules and the quote check, named like the other proactive
-   parts. Default `0`, so an install changes nothing (no `CONFIG_ADDED` entry); `bosun init` recommends `1`.
-   Packs as the default once measured stays open.
+1. **One key,** `BOSUN_KNOWLEDGE_ENABLED`, for packs and the rules, named like the other proactive parts. Default
+   `0`, so briefs and system prompts stay as they were (no `CONFIG_ADDED` entry); `bosun init` recommends `1`.
+   The quote check is not behind it: it is always on (the safer reading of Decision 8). Packs as the default once
+   measured stays open.
 2. **The session that ran `kg`** is found by walking up from its process to the nearest ancestor an agent module
    recognizes as a session (`calling_session`). Inside one, `--transcript` may be left out, another session's is
-   refused, and a quote counts only from a genuine prompt of the last 24 hours. With no agent ancestor, nothing
-   changes. The walk guards against mistakes, not a hostile agent: a double fork escapes it.
-3. **Confirm, reject and `batch apply` from a session** need `--from-user --quote` that verifies.
+   refused, and a quote counts only from a genuine prompt of the last 24 hours (from a terminal with
+   `--transcript` too). With no agent ancestor, nothing else changes. Text bosun pasted is never my words, events
+   on or off: `bosun send` records each paste's hash, and remembers it at least as long as a quote looks back. The
+   walk guards against mistakes, not a hostile agent: a double fork escapes it.
+3. **Confirm, reject, `batch apply`, and `supersede --close` or `--by`, from a session,** need `--from-user
+   --quote` that verifies, as approvals bound a quote: at least 8 characters (normalised), in a genuine prompt made
+   after the facts it decides on were proposed (the latest of them), and for `batch apply` holding each group
+   number the decision names, or "all" when it says all. The quote is kept in the decision's note and its
+   `reviewed_by`, which keep that record in the local journal (`knowledge_changes.quotes_me`). A supersede given
+   `--from-user` in any form checks it the same way; a correction with only a `--source` needs no words.
 4. **A pack leaves out people's own profile facts** (timezone, hours, preferences, title) and keeps facts that link
    a person to the target ("Dana reviews the invoice exporter"). Identifiers and unconfirmed facts stay out.
 5. **The rules reach agents whose transcripts bosun can check** (`Profile.verifies_quotes`: Claude). Codex and

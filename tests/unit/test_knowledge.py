@@ -31,6 +31,7 @@ from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "lib"))
 import agent_state
+import events
 import knowledge
 import knowledge_model as km
 import knowledge_query as kq
@@ -389,6 +390,23 @@ class SessionQuoteTest(KnowledgeTestCase):
             "note: the quote is not in anything you typed in that session in the last 24 hours", out
         )
 
+    def test_text_bosun_pasted_into_the_window_is_not_my_words(self) -> None:
+        """An unprefixed `bosun send` (events on or off: note_bosun_prompt records it either way)."""
+        self.seed()
+        knowledge.configure(self.root, git=self.git, state_dir=str(self.state), caller_window="alpha")
+        pasted = f"note for later: {QUOTE}"
+        events.note_pasted(self.state, "alpha", pasted)
+        self.session(typed(pasted, START - timedelta(hours=1)))
+        out = self.propose_mine()
+        self.assertEqual(self.fact(self.f(1))["status"], km.PROPOSED)
+        self.assertIn("stays proposed", out)
+
+    def test_a_paste_is_remembered_as_long_as_a_quote_looks_back(self) -> None:
+        self.assertLessEqual(knowledge.QUOTE_MAX_AGE, timedelta(hours=events.PASTED_HOURS))
+        events.note_pasted(self.state, "alpha", "a brief")
+        later = datetime.now(UTC) + knowledge.QUOTE_MAX_AGE - timedelta(minutes=1)
+        self.assertEqual(len(events.pasted_hashes(self.state, "alpha", later)), 1)
+
     def test_a_quote_of_the_last_day_still_counts(self) -> None:
         self.seed()
         self.session(typed(QUOTE, START - knowledge.QUOTE_MAX_AGE))
@@ -420,21 +438,86 @@ class SessionQuoteTest(KnowledgeTestCase):
     def test_a_correction_in_my_words_is_checked_in_the_session(self) -> None:
         self.seed()
         self.run_kg("propose", "environment/staging-2", "status", "--value", "active", "--source", "memory:a")
-        self.session(typed("it is retired", START - timedelta(hours=2)))
+        self.session(typed("it is retired now", START + timedelta(hours=1)))
+        self.later(1 / 12)
         out = self.run_kg(
-            "supersede", self.f(1), "--value", "retired", "--from-user", "--quote", "it is retired"
+            "supersede", self.f(1), "--value", "retired", "--from-user", "--quote", "it is retired now"
         )
         self.assertIn(f"{self.f(1)} closed, superseded by {self.f(2)}", out)
+        self.assertEqual(self.fact(self.f(2))["sources"][0]["quote"], "it is retired now")
         self.later(2)
         with self.assertRaisesRegex(
             KnowledgeError, "not in anything you typed in that session in the last 24"
         ):
-            self.run_kg("supersede", self.f(2), "--value", "back", "--from-user", "--quote", "it is retired")
+            self.run_kg(
+                "supersede", self.f(2), "--value", "back", "--from-user", "--quote", "it is retired now"
+            )
+
+    def test_a_correction_from_a_source_needs_no_words_in_a_session(self) -> None:
+        self.seed()
+        self.run_kg("propose", "environment/staging-2", "status", "--value", "active", "--source", "memory:a")
+        self.session(typed("something else", START))
+        out = self.run_kg(
+            "supersede", self.f(1), "--value", "retired", "--source", "ledger:task:2026-10-21/1"
+        )
+        self.assertIn(f"{self.f(1)} closed, superseded by {self.f(2)}", out)
+
+    def test_closing_or_replacing_by_another_fact_from_a_session_needs_my_words(self) -> None:
+        self.seed()
+        old, new = self.proposed("runs nightly"), self.proposed("runs hourly")
+        self.run_kg("confirm", old)
+        self.session(typed("the exporter no longer runs nightly", START + timedelta(hours=1)))
+        self.later(1 / 12)
+        for form in (["--close"], ["--by", new]):
+            with self.subTest(form=form):
+                with self.assertRaisesRegex(
+                    KnowledgeError, "from a session, supersede with --from-user --quote"
+                ):
+                    self.run_kg("supersede", old, *form)
+                with self.assertRaisesRegex(KnowledgeError, "not in anything you typed"):
+                    self.run_kg("supersede", old, *form, "--from-user", "--quote", "it runs hourly instead")
+                self.assertIsNone(self.fact(old)["valid_to"])
+        out = self.run_kg("supersede", old, "--close", "--from-user", "--quote", "no longer runs nightly")
+        self.assertIn(f"ok: {old} closed", out)
+        closed = self.fact(old)
+        self.assertEqual(closed["history"][-1]["note"], 'your words: "no longer runs nightly"')
+        self.assertEqual(closed["reviewed_by"]["quote"], "no longer runs nightly")
+
+    def test_a_close_from_a_terminal_checks_words_given_and_needs_none(self) -> None:
+        self.seed()
+        first, second = self.proposed("runs nightly"), self.proposed("runs weekly")
+        transcript = self.transcript(typed("it does not run nightly", START))
+        with self.assertRaisesRegex(KnowledgeError, "not in anything you typed"):
+            self.run_kg(
+                "supersede",
+                first,
+                "--close",
+                "--from-user",
+                "--quote",
+                "never said",
+                "--transcript",
+                transcript,
+            )
+        self.assertIn(f"ok: {first} closed", self.run_kg("supersede", first, "--close"))
+        self.assertIn(
+            f"ok: {second} closed",
+            self.run_kg(
+                "supersede",
+                second,
+                "--close",
+                "--from-user",
+                "--quote",
+                "not run",
+                "--transcript",
+                transcript,
+            ),
+        )
 
     def test_confirming_from_a_session_needs_my_words(self) -> None:
         self.seed()
         first, second, third = (self.proposed(f"gotcha {n}") for n in range(3))
-        self.session(typed(f"yes, {QUOTE}", START - timedelta(hours=1)))
+        self.session(typed(f"yes, {QUOTE}; confirm all of them", START + timedelta(hours=1)))
+        self.later(1 / 12)
         with self.assertRaisesRegex(KnowledgeError, "from a session, confirm with --from-user --quote"):
             self.run_kg("confirm", first)
         with self.assertRaisesRegex(KnowledgeError, "not in anything you typed in that session"):
@@ -443,6 +526,7 @@ class SessionQuoteTest(KnowledgeTestCase):
         self.assertIn(
             f"ok: {first} confirmed", self.run_kg("confirm", first, "--from-user", "--quote", QUOTE)
         )
+        self.assertEqual(self.fact(first)["history"][-1]["note"], f'your words: "{QUOTE}"')
         with self.assertRaisesRegex(KnowledgeError, "from a session, reject with --from-user --quote"):
             self.run_kg("reject", second)
         self.assertIn(
@@ -453,9 +537,59 @@ class SessionQuoteTest(KnowledgeTestCase):
             KnowledgeError, "from a session, answer the batch with --from-user --quote"
         ):
             self.run_kg("batch", "apply", "confirm all")
-        out = self.run_kg("batch", "apply", "confirm all", "--from-user", "--quote", QUOTE)
+        out = self.run_kg("batch", "apply", "confirm all", "--from-user", "--quote", "confirm all of them")
         self.assertIn("1 confirmed", out)
         self.assertEqual(self.fact(third)["status"], km.CONFIRMED)
+        self.assertEqual(self.fact(third)["history"][-1]["note"], 'batch; your words: "confirm all of them"')
+
+    def test_a_decision_from_a_session_quotes_at_least_eight_characters(self) -> None:
+        self.seed()
+        fact = self.proposed("gotcha")
+        self.session(typed("ok thanks", START + timedelta(hours=1)))
+        self.later(1 / 12)
+        for quote in ("k", "ok", "  ok   th  "):
+            with self.subTest(quote=quote), self.assertRaisesRegex(KnowledgeError, "at least 8 characters"):
+                self.run_kg("confirm", fact, "--from-user", "--quote", quote)
+        self.assertEqual(self.fact(fact)["status"], km.PROPOSED)
+        self.assertIn(
+            f"ok: {fact} confirmed", self.run_kg("confirm", fact, "--from-user", "--quote", "ok thanks")
+        )
+
+    def test_a_decision_from_a_session_quotes_words_said_after_the_proposal(self) -> None:
+        self.seed()
+        self.session(typed(f"yes, {QUOTE}", START - timedelta(minutes=30)))
+        fact = self.proposed("gotcha")  # proposed at START, after I typed those words
+        self.later(1 / 12)
+        refusal = "since what it decides on was proposed .2026-10-21T09:00:00.00:00., so nothing was decided"
+        for verb in ("confirm", "reject"):
+            with self.subTest(verb=verb), self.assertRaisesRegex(KnowledgeError, refusal):
+                self.run_kg(verb, fact, "--from-user", "--quote", QUOTE)
+        with self.assertRaisesRegex(KnowledgeError, refusal):
+            self.run_kg("supersede", fact, "--close", "--from-user", "--quote", QUOTE)
+        self.run_kg("batch")
+        with self.assertRaisesRegex(KnowledgeError, refusal):
+            self.run_kg("batch", "apply", "confirm 1", "--from-user", "--quote", QUOTE)
+        self.assertEqual(self.fact(fact)["status"], km.PROPOSED)
+
+    def test_a_batch_answer_from_a_session_names_its_groups(self) -> None:
+        self.seed()
+        self.proposed("gotcha one")
+        self.run_kg("propose", "process/release", "gated_by", "gate/smoke-tests", "--source", "memory:a")
+        self.session(typed("yes, those look right to me; 1 and 2", START + timedelta(hours=1)))
+        self.later(1 / 12)
+        self.run_kg("batch")
+        groups = len(json.loads(knowledge.paths().batch.read_text())["groups"])
+        self.assertEqual(groups, 2)
+        with self.assertRaisesRegex(KnowledgeError, r"does not hold every group number it names \(1, 2\)"):
+            self.run_kg("batch", "apply", "confirm 1 reject 2", "--from-user", "--quote", "those look right")
+        with self.assertRaisesRegex(KnowledgeError, "does not hold the word all"):
+            self.run_kg("batch", "apply", "confirm all", "--from-user", "--quote", "those look right")
+        with self.assertRaisesRegex(KnowledgeError, r"group number it names \(2\)"):
+            self.run_kg("batch", "apply", "--confirm", "2", "--from-user", "--quote", "those look right")
+        out = self.run_kg(
+            "batch", "apply", "confirm 1 reject 2", "--from-user", "--quote", "right to me; 1 and 2"
+        )
+        self.assertIn("1 confirmed, 1 rejected", out)
 
     def test_confirming_from_a_terminal_is_unchanged(self) -> None:
         self.seed()

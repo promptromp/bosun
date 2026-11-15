@@ -17,10 +17,14 @@ The fingerprint has two parts:
 - `args`: the agent's arguments, as `build_agent_args` makes them for the conversation name
   `<conversation>` (a new day's or a fresh conversation's name is no launch input), with the text
   after `--append-system-prompt` left out: the orchestrator's policy, which a running session is
-  asked to re-read instead;
+  asked to re-read instead, or a repo window's ontology rules, which count through their file;
 - `files`: the content of every file under an argument that is a path inside the install (the
-  plugin folder, a settings file), read through that path, as the agent reads it. So the plugin's
-  `chores.md` is a launch input, and `policy.md`, whose text goes in as an argument, is not.
+  plugin folder, a settings file), read through that path, as the agent reads it, and of every
+  file the launch put the text of into an argument and names as such (`--text-from`: a repo
+  window's `orchestrator/knowledge.md`, with BOSUN_KNOWLEDGE_ENABLED=1). So the plugin's `chores.md`
+  and a repo window's rules are launch inputs, and `policy.md` (with the rules in the orchestrator's
+  policy), whose text goes in as an argument and is re-read, is not. Without a `--text-from` the
+  fingerprint is what it was before the rules existed.
 
 `launch --fingerprint` reads those files from its own version's folder instead (`root`): the new
 version's, before an update switches the link to it, so that the plan says which windows need a
@@ -79,14 +83,17 @@ def _files_under(path: Path) -> list[list[str]]:
     return [[p.relative_to(path).as_posix(), _file_digest(p)] for p in found]
 
 
-def fingerprint(args: Sequence[str], install: Path, root: Path | None = None) -> dict[str, str]:
+def fingerprint(
+    args: Sequence[str], install: Path, root: Path | None = None, texts: Sequence[str] = ()
+) -> dict[str, str]:
     """{"args": <digest>, "files": <digest>} of what an agent launched with <args> starts from, for
     the install at <install> (the path the arguments name), its files read through it, or from the
     version folder <root> when given (what a launch from <root> would hand over once the link leads
-    there). A path that is not there counts as one with no files."""
+    there). <texts>: files in the install whose text the launch put into an argument, counted with
+    the files after them. A path that is not there counts as one with no files."""
     files = [
         [arg, *entry]
-        for arg in args
+        for arg in [*args, *texts]
         if _in_install(arg, install)
         for entry in _files_under(_read_from(arg, install, root))
     ]
@@ -159,6 +166,12 @@ def build_parser() -> argparse.ArgumentParser:
     print_it.add_argument("--root", type=Path, help="read the files under --install from this folder")
     for sub in (print_it, write_it):
         sub.add_argument("--install", type=Path, required=True)
+        sub.add_argument(
+            "--text-from",
+            action="append",
+            default=[],
+            help="a file whose text the launch put into an argument",
+        )
         sub.add_argument("args", nargs="*", help="the agent's arguments, after --")
     return parser
 
@@ -171,7 +184,7 @@ def main(argv: list[str]) -> int:
             return 1
         print(json.dumps(shown, sort_keys=True))
         return 0
-    fp = fingerprint(args.args, args.install, getattr(args, "root", None))
+    fp = fingerprint(args.args, args.install, getattr(args, "root", None), args.text_from)
     if args.command == "fingerprint":
         print(json.dumps(fp, sort_keys=True))
         return 0
