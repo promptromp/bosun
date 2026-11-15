@@ -91,16 +91,22 @@ to_vm() { # <vm> <local file> <remote path>
   SSH_ASKPASS="$WORK/askpass" SSH_ASKPASS_REQUIRE=force scp "${ssh_options[@]}" "$2" "admin@$(tart ip "$1"):$3"
 }
 
+# Without sound (--no-audio): no test needs it, and the VM's sound device waits on the Mac's audio service. Once
+# that service had restarted, every boot hung before the guest started: no IP, and nothing in tart's output.
 boot() { # <vm> [tart run flags...]: start it and wait for ssh
   local vm="$1" deadline=$((SECONDS + BOOT_SECONDS))
   shift
-  tart run "$@" "$vm" >"$WORK/run.log" 2>&1 &
+  tart run --no-audio "$@" "$vm" >"$WORK/run.log" 2>&1 &
   VM_PID=$!
-  tart ip "$vm" --wait "$BOOT_SECONDS" >/dev/null 2>&1 || die "$vm got no IP address"
+  tart ip "$vm" --wait "$BOOT_SECONDS" >/dev/null 2>&1 || boot_failed "$vm got no IP address"
   until logged_in "$vm"; do
-    [ "$SECONDS" -ge "$deadline" ] && die "$vm did not finish starting"
+    [ "$SECONDS" -ge "$deadline" ] && boot_failed "$vm did not finish starting"
     sleep 2
   done
+}
+boot_failed() { # <message>: what tart run printed (the cleanup deletes it), then the message
+  [ -s "$WORK/run.log" ] && say "tart run printed:" && tail -20 "$WORK/run.log" >&2
+  die "$1"
 }
 
 # ssh comes up before the auto-login, and launchd has no gui domain until then.
