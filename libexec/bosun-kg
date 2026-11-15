@@ -28,11 +28,11 @@
 #                                      whose words bosun cannot check, the fact stays proposed);
 #                                      from a terminal, the one --transcript names, which it needs
 #   confirm <fact-id|group-key> ... [--from-user --quote Q] [--note N]
-#                                      confirm facts after review (a group key: an entity id, or
 #   reject <fact-id|group-key> ... [--from-user --quote Q] [--note N]
-#                                      <entity>#reviews|owns|approves, as kg batch groups them).
-#                                      From an agent's session, only with a quote of my words that
-#                                      counts in it, as for propose; from a terminal, as it is
+#                                      confirm or reject facts after review (a group key: an entity
+#                                      id, or <entity>#reviews|owns|approves, as kg batch groups
+#                                      them). From an agent's session, only with a quote of my words
+#                                      that counts in it, as for propose; from a terminal, as it is
 #   supersede <fact-id> (--value V | --object E | --by <fact-id> | --close) [--source ... |
 #             --from-user --quote Q [--transcript P]] [--note N]
 #                                      close a fact (valid_to, superseded_by), never delete it; a
@@ -67,8 +67,10 @@
 #         [--closed] [--json]          facts about an entity, now or as they held at --as-of
 #   search <text> [--limit N]          entities by name, alias, related term, summary or fact text
 #   neighbors <entity> [--hops N]      linked entities within N hops (default 1, at most 3)
-#   context --for <entity|repo|topic> [--max-tokens N]
-#                                      a small pack of confirmed, cited facts (about 1.5k tokens)
+#   context --for <entity|repo|topic> [--for ...] [--max-tokens N]
+#                                      a small pack of confirmed, cited facts (about 1.5k tokens,
+#                                      shared by the targets; a person's own profile facts are left
+#                                      out unless the person is the target; owner/repo finds repo/repo)
 #   lint [--stale-days N] [--json] [--strict]
 #                                      contradictions, expired proposals, retention, stale facts, alias
 #                                      collisions, merge suggestions, orphans (--strict: exit 1 if any)

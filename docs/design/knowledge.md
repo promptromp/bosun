@@ -158,7 +158,9 @@ Examples, in the fictional acme world:
   - `kg neighbors <entity> [--hops 2]`
 - **Context packs:** `kg context --for <repo|process|topic>` returns at most about 1.5k tokens of
   cited, current, confirmed facts. `bosun delegate` appends the pack for the task's repo and
-  area to each brief (behind a flag, MVP 3). The orchestrator policy gains one rule: check
+  area to each brief (`BOSUN_KNOWLEDGE_ENABLED`, off by default; built in MVP 3): the repos of its
+  items, then their area and their workstream's area, one section each in one 1.5k budget, a
+  neighbouring person's profile facts left out (who reviews or owns the target stays). The orchestrator policy gains one rule: check
   `kg lookup` before asking the user about routing, reviewers, channels or process.
 - **Measurement** (planned, with the learning run's knowledge pass): the learning run counts
   rediscovery and rework episodes per week. Packs stay only if that count falls, and pack size and

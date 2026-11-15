@@ -54,7 +54,12 @@
 #
 # Every --id must exist in the ledger and be of a kind the type takes (e.g. `review` takes
 # review-request items).
+#
+# With BOSUN_KNOWLEDGE_ENABLED=1, a task also carries what the knowledge base says about its repo and
+# area (`bosun kg context`: confirmed, cited facts, about 1.5k tokens; none are added when it holds
+# none), after the task's rules. A moved task (--update --window) does not get it again.
 set -uo pipefail
 source "$(dirname "$0")/../lib/common.sh"
 load_config
-BOSUN_CONFIG_DIR="$BOSUN_CONFIG_DIR" exec python3 "$BOSUN_ROOT/lib/delegate.py" "$@"
+BOSUN_CONFIG_DIR="$BOSUN_CONFIG_DIR" BOSUN_KNOWLEDGE_ENABLED="$BOSUN_KNOWLEDGE_ENABLED" \
+  exec python3 "$BOSUN_ROOT/lib/delegate.py" "$@"

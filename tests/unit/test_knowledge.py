@@ -365,6 +365,15 @@ class SessionQuoteTest(KnowledgeTestCase):
             self.propose_mine("--transcript", other)
         self.assertEqual(self.kb().facts, {})
 
+    def test_a_session_whose_transcript_bosun_cannot_find_says_so(self) -> None:
+        self.seed()
+        self.in_session(agent_state.CallingSession("claude", 4242, None, True))  # no cwd or sessionId
+        other = self.transcript(typed(QUOTE, START))
+        with self.assertRaisesRegex(KnowledgeError, "bosun cannot find this session's transcript"):
+            self.propose_mine("--transcript", other)
+        with self.assertRaisesRegex(KnowledgeError, "transcript is not there"):
+            self.propose_mine()
+
     def test_its_own_transcript_named_is_taken(self) -> None:
         self.seed()
         own = self.session(typed(QUOTE, START))
@@ -1039,6 +1048,82 @@ class ContextTest(KnowledgeTestCase):
             self.assertIn("more: kg lookup repo/invoice-exporter", pack)
             for line in pack.splitlines()[1:-1]:
                 self.assertRegex(line, r"\[f-\w{6}; \w+:")
+
+    # What a pack holds when it goes into a brief: repos as the ledger names them, who reviews the
+    # work but not anyone's profile, and several targets in one budget.
+
+    def confirm_people(self) -> None:
+        """Every fact about a person is confirmed (so that only the pack's rule keeps one out)."""
+        for fact in self.kb().facts.values():
+            if fact["subject"].startswith("person/") and fact["status"] == km.PROPOSED:
+                self.run_kg("confirm", fact["id"])
+
+    def test_owner_slash_repo_finds_the_repo(self) -> None:
+        self.run_kg("add-entity", "repo/invoice-exporter", "--alias", "acme/exporter")
+        self.assertIn("depends on pdf renderer", self.run_kg("context", "--for", "acme/exporter"))
+        self.run_kg("add-entity", "repo/ledger-sync", "--name", "ledger sync")
+        self.run_kg(
+            "propose",
+            "repo/ledger-sync",
+            "caveat",
+            "--value",
+            "Syncs only on weekdays.",
+            "--source",
+            "memory:sync.md",
+            "--source",
+            "report:task:2026-10-01/2",
+        )
+        pack = self.run_kg("context", "--for", "acme/ledger-sync")  # no alias: through repo/ledger-sync
+        self.assertIn("Knowledge for ledger sync (repo/ledger-sync)", pack)
+        self.assertIn("Syncs only on weekdays.", pack)
+
+    def test_a_pack_keeps_who_reviews_but_not_their_profile(self) -> None:
+        self.confirm_people()
+        facts = self.kb().facts.values()
+        self.assertTrue(any(f["predicate"] == "timezone" and f["status"] == km.CONFIRMED for f in facts))
+        pack = self.run_kg("context", "--for", "acme/invoice-exporter")
+        self.assertIn("Dana Example reviews invoice exporter", pack)
+        self.assertIn("Lee Sample reviews invoice exporter", pack)
+        for profile in ("Lisbon", "09:00-17:00", "prefers to be asked", "acme-prs", "team", "U0000000002"):
+            self.assertNotIn(profile, pack)
+        # asked about the person herself, her own facts are the answer
+        self.assertIn("Lisbon", self.run_kg("context", "--for", "person/dana"))
+
+    def test_several_targets_share_one_budget(self) -> None:
+        self.run_kg("add-entity", "repo/ledger-sync", "--name", "ledger sync", "--alias", "acme/ledger-sync")
+        for number in range(120):
+            self.run_kg("add-entity", f"system/tool-{number}", "--name", f"tool {number} " + "x" * 40)
+            for subject in ("repo/invoice-exporter", "repo/ledger-sync"):
+                self.run_kg(
+                    "propose",
+                    subject,
+                    "depends_on",
+                    f"system/tool-{number}",
+                    "--source",
+                    f"ledger:{number}",
+                    "--source",
+                    f"report:{number}",
+                )
+        pack = self.run_kg("context", "--for", "acme/invoice-exporter", "--for", "acme/ledger-sync")
+        self.assertLessEqual(len(pack), 1500 * 4)
+        self.assertIn("Knowledge for invoice exporter (repo/invoice-exporter)", pack)
+        self.assertIn("Knowledge for ledger sync (repo/ledger-sync)", pack)
+        self.assertEqual(pack.count("more: kg lookup"), 2)
+        small = self.run_kg("context", "--for", "exporter", "--for", "ledger sync", "--max-tokens", "300")
+        self.assertLessEqual(len(small), 300 * 4)
+        self.assertIn("Knowledge for ledger sync", small)
+
+    def test_a_target_named_twice_or_by_two_names_is_one_section(self) -> None:
+        pack = self.run_kg("context", "--for", "exporter", "--for", "acme/invoice-exporter")
+        self.assertEqual(pack.count("Knowledge for invoice exporter"), 1)
+
+    def test_a_target_that_names_nothing_is_left_out(self) -> None:
+        pack = self.run_kg("context", "--for", "quantum", "--for", "exporter")
+        self.assertTrue(pack.startswith("Knowledge for invoice exporter"))
+        self.assertIn(
+            "No knowledge recorded for 'quantum', 'teleport'",
+            self.run_kg("context", "--for", "quantum", "--for", "teleport"),
+        )
 
 
 class QueryTest(KnowledgeTestCase):

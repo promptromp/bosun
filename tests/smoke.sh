@@ -2693,6 +2693,23 @@ PY
 check "the task table in docs/orchestrator.md matches the task files, row for row" bash -c '
   table="$(sed -n "/^## Delegated tasks/,/^## /p" "$2" | grep "^| " | grep -v "^| Task |")"
   diff <(sort <<<"$1") <(sort <<<"$table")' _ "$("$BOSUN" delegate --list --markdown)" "$ROOT/docs/orchestrator.md"
+# What the ontology says about the work: its own knowledge base (the fixture's six facts that confirm
+# themselves are enough), read by delegate only while BOSUN_KNOWLEDGE_ENABLED is 1.
+dkg() { BOSUN_CONFIG_DIR="$WORK/kg-delegate" "$BOSUN" "$@"; }
+dkg kg import "$KG_FIXTURE" --apply --auto-confirm >/dev/null 2>&1
+L upsert 'review:acme/invoice-exporter#5' --kind review-request --title 'Round tax per line' >/dev/null
+pack_opening="What bosun knows about this work (its ontology; cite a fact's [id] when you rely on it, and tell me if one is wrong):"
+brief="$(BOSUN_KNOWLEDGE_ENABLED=1 dkg delegate review --id 'review:acme/invoice-exporter#5' --ask "review it" --print 2>&1)"
+check "with the key on, a brief carries the pack for its repo, named as the ledger names it (owner/repo)" contains "$brief" "$pack_opening"
+check "... with its confirmed facts and their ids" bash -c 'grep -Eq "^- invoice exporter depends on pdf renderer \[f-[0-9a-z]{6}; " <<<"$1"' _ "$brief"
+check "... after the task's rules and before the shared ones" bash -c '
+  [ "$(grep -n "submit it as APPROVE" <<<"$1" | head -1 | cut -d: -f1)" -lt "$(grep -nF "$2" <<<"$1" | cut -d: -f1)" ] &&
+    [ "$(grep -nF "$2" <<<"$1" | cut -d: -f1)" -lt "$(grep -n "^In every task:" <<<"$1" | cut -d: -f1)" ]' _ "$brief" "$pack_opening"
+check "... and no unconfirmed fact" bash -c '! grep -q "tax rounding needs a test" <<<"$1"' _ "$brief"
+brief="$(BOSUN_KNOWLEDGE_ENABLED=0 dkg delegate review --id 'review:acme/invoice-exporter#5' --ask "review it" --print 2>&1)"
+check "with the key off, it does not" bash -c '! grep -qF "What bosun knows about this work" <<<"$1"' _ "$brief"
+brief="$(BOSUN_KNOWLEDGE_ENABLED=1 "$BOSUN" delegate review --id 'review:acme/invoice-exporter#5' --ask "review it" --print 2>&1)"
+check "with the key on but nothing known about the repo, there is no section" bash -c '! grep -qF "What bosun knows about this work" <<<"$1"' _ "$brief"
 
 section chores-dry-run "chores dry run (fake claude)" covers 'libexec/bosun-chores,libexec/bosun-ledger'
 cat >"$WORK/fake-claude" <<FAKE

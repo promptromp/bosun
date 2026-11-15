@@ -960,6 +960,21 @@ def own_transcript(given: str, session: agent_state.CallingSession) -> bool:
     return session.transcript is not None and Path(given).resolve() == session.transcript.resolve()
 
 
+def refuse_other_transcript(given: str, session: agent_state.CallingSession) -> None:
+    """A --transcript <given> that is not <session>'s own transcript is refused, saying why."""
+    if own_transcript(given, session):
+        return
+    if session.verifies_quotes and session.transcript is None:
+        raise KnowledgeError(
+            "bosun cannot find this session's transcript (its record has no session id or working "
+            f"directory), so it cannot tell whether --transcript {given} is it"
+        )
+    raise KnowledgeError(
+        f"--transcript {given} is not this session's transcript; leave it out: the quote is "
+        "checked in the session that ran kg"
+    )
+
+
 def session_or_refuse(args: argparse.Namespace, session: agent_state.CallingSession | None) -> Path | None:
     """The transcript a --from-user quote is checked in. From an agent's session (<session>), its
     own, and a --transcript of another is refused; None when its agent's transcripts cannot be
@@ -971,11 +986,8 @@ def session_or_refuse(args: argparse.Namespace, session: agent_state.CallingSess
                 "--from-user needs --transcript <the session's .jsonl> to check the quote in"
             )
         return Path(given)
-    if given and not own_transcript(given, session):
-        raise KnowledgeError(
-            f"--transcript {given} is not this session's transcript; leave it out: the quote is "
-            "checked in the session that ran kg"
-        )
+    if given:
+        refuse_other_transcript(given, session)
     if not session.verifies_quotes:
         return None
     if session.transcript is None or not session.transcript.is_file():
@@ -1399,7 +1411,7 @@ def cmd_neighbors(args: argparse.Namespace) -> str:
 
 def cmd_context(args: argparse.Namespace) -> str:
     with opened(False) as kb:
-        return kq.context_pack(kb, args.target, args.max_tokens)
+        return kq.context_pack(kb, args.targets, args.max_tokens)
 
 
 def cmd_lint(args: argparse.Namespace) -> str | tuple[str, int]:
@@ -1610,7 +1622,7 @@ COMMANDS: dict[str, tuple[Handler, Arguments]] = {
     "context": (
         cmd_context,
         [
-            (("--for",), {"dest": "target", "required": True}),
+            (("--for",), {"dest": "targets", "action": "append", "required": True}),
             (("--max-tokens",), {"type": int, "default": kq.DEFAULT_PACK_TOKENS}),
         ],
     ),

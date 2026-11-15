@@ -12,11 +12,18 @@ import os
 import re
 import subprocess
 import sys
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping
 from pathlib import Path
 from typing import Any
 
 import agent_state
+import knowledge_query
+import knowledge_store
+import workstreams
+from change_log import ChangeLogError
+from journal import JournalError
+from knowledge_model import KnowledgeError
+from knowledge_schema import SchemaError
 
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -198,7 +205,9 @@ def check_work_item(item: dict[str, Any]) -> None:
         )
 
 
-def check_ids(ids: list[str], chosen: list[Task]) -> None:
+def check_ids(ids: list[str], chosen: list[Task]) -> dict[str, dict[str, Any]]:
+    """Check each item is one these task types take; returns the items by id."""
+    items: dict[str, dict[str, Any]] = {}
     for item_id in ids:
         item = ledger_item(item_id)
         check_work_item(item)
@@ -207,6 +216,100 @@ def check_ids(ids: list[str], chosen: list[Task]) -> None:
             kinds = task["kinds"].split()
             if ANY_KIND not in kinds and kind not in kinds:
                 raise DelegateError(f"{task['name']} tasks take {task['kinds']} items; {item_id} is a {kind}")
+        items[item_id] = item
+    return items
+
+
+# ---- what the ontology says about the work ------------------------------------------------------------
+
+KNOWLEDGE_KEY = "BOSUN_KNOWLEDGE_ENABLED"
+PACK_OPENING = (
+    "What bosun knows about this work (its ontology; cite a fact's [id] when you rely on it, "
+    "and tell me if one is wrong):"
+)
+
+
+# What reading the knowledge base can fail with (never a reason to refuse a hand-over).
+READ_ERRORS = (
+    KnowledgeError,
+    SchemaError,
+    knowledge_store.StoreError,
+    JournalError,
+    ChangeLogError,
+    OSError,
+    ValueError,
+)
+
+
+def knowledge_enabled() -> bool:
+    return os.environ.get(KNOWLEDGE_KEY) == "1"
+
+
+def workstream_id(item: Mapping[str, Any]) -> str:
+    """The workstream `ledger show` resolved the item into ("" if none)."""
+    return str(((item.get("derived") or {}).get("workstream") or {}).get("id") or "")
+
+
+def with_workstreams(items: dict[str, dict[str, Any]]) -> dict[str, dict[str, Any]]:
+    """<items> and the workstreams they resolve into (their area names knowledge); one that cannot be
+    read is left out: a brief goes without its area before it fails over it."""
+    found = dict(items)
+    for item in items.values():
+        ws = workstream_id(item)
+        if ws and ws not in found:
+            try:
+                found[ws] = ledger_item(ws)
+            except DelegateError:
+                continue
+    return found
+
+
+def pack_targets_of(items: Mapping[str, dict[str, Any]]) -> list[str]:
+    """What the brief's pack is about: each item's repos, then its area, then its workstream's area
+    (the workstream is an item of <items>, if it was read), without duplicates."""
+    targets: list[str] = []
+    for item_id, item in items.items():
+        ws_item = items.get(workstream_id(item)) or {}
+        areas = [(item.get("fields") or {}).get("area"), (ws_item.get("fields") or {}).get("area")]
+        for target in [*sorted(workstreams.item_repos(item_id, item)), *areas]:
+            if target and str(target) not in targets:
+                targets.append(str(target))
+    return targets
+
+
+def read_pack(targets: list[str]) -> str:
+    """The pack of <targets> from the knowledge base, read-only and without its identifiers: "" if
+    it holds no confirmed fact about any of them."""
+    import knowledge  # noqa: PLC0415  (a big module, and not needed while the key is off)
+
+    config_dir = os.environ.get("BOSUN_CONFIG_DIR")
+    if not config_dir:
+        return ""
+    knowledge.configure(Path(config_dir) / "knowledge", git=False)
+    p = knowledge.paths()
+    with knowledge_store.locked(p, False):
+        kb = knowledge.load(p, identifiers=False)
+    pack = knowledge_query.pack_of(kb, targets, topics=False)
+    return "\n".join(pack.lines) if pack.facts else ""
+
+
+def knowledge_pack(targets: list[str]) -> str:
+    """The brief's section on what the ontology says about <targets> ("" while the key is off, with no
+    targets or nothing confirmed). It never fails a hand-over: what cannot be read is one line."""
+    if not targets or not knowledge_enabled():
+        return ""
+    try:
+        pack = read_pack(targets)
+    except READ_ERRORS as error:
+        return f"(the ontology could not be read: {error})"
+    return f"{PACK_OPENING}\n{pack}" if pack else ""
+
+
+def brief_pack(items: dict[str, dict[str, Any]]) -> str:
+    """The pack section for the items being handed over, "" while the key is off."""
+    if not knowledge_enabled():
+        return ""
+    return knowledge_pack(pack_targets_of(with_workstreams(items)))
 
 
 def active_delegation(item_id: str) -> dict[str, Any] | None:
@@ -232,9 +335,12 @@ def check_not_awaiting(ids: list[str]) -> None:
             )
 
 
-def render(args: argparse.Namespace, chosen: list[Task], preamble: str = "", lead: str = "") -> str:
+def render(
+    args: argparse.Namespace, chosen: list[Task], preamble: str = "", lead: str = "", pack: str = ""
+) -> str:
     """The task: the subagent preamble, a lead paragraph (for a moved task), the header (ledger
-    ids, link, requester, ask, details), each type's rules, then the shared rules."""
+    ids, link, requester, ask, details), each type's rules, what the ontology says (<pack>, if any),
+    then the shared rules."""
     header = [f"Ledger id{'s' if len(args.id) > 1 else ''}: {', '.join(args.id)}"]
     if args.link:
         header.append(f"Link: {args.link}")
@@ -248,6 +354,7 @@ def render(args: argparse.Namespace, chosen: list[Task], preamble: str = "", lea
         + ([lead] if lead else [])
         + ["\n".join(header)]
         + [task["body"] for task in chosen]
+        + ([pack] if pack else [])
         + [common_rules()]
     )
     return "\n\n".join(parts)
@@ -331,7 +438,7 @@ def can_use_subagents(args: argparse.Namespace) -> bool:
     return agent is not None and agent.PROFILE.subagents
 
 
-def hand_over(args: argparse.Namespace, chosen: list[Task]) -> int:
+def hand_over(args: argparse.Namespace, chosen: list[Task], pack: str = "") -> int:
     """Print the task or send it to its target, at the task's model and effort."""
     model, effort = task_model_effort(chosen, args.model, args.effort)
     if args.new:
@@ -340,11 +447,11 @@ def hand_over(args: argparse.Namespace, chosen: list[Task]) -> int:
             *(["--model", model] if model != SESSION else []),
             *(["--effort", effort] if effort != SESSION else []),
         ]
-        return send("--new", *launch, args.new[0], args.new[1], render(args, chosen))
+        return send("--new", *launch, args.new[0], args.new[1], render(args, chosen, pack=pack))
     # A running (or resumed) session keeps its own settings; the task runs in a subagent, where it can.
     wants_own_settings = (model, effort) != (SESSION, SESSION)
     preamble = subagent_preamble(model, effort) if wants_own_settings and can_use_subagents(args) else ""
-    task = render(args, chosen, preamble)
+    task = render(args, chosen, preamble, pack=pack)
     if args.print:
         print(task)
         return 0
@@ -591,10 +698,10 @@ def main(argv: list[str]) -> int:
     check_request(args)
     if args.details:
         args.details = read_details(args.details)
-    check_ids(args.id, chosen)
+    items = check_ids(args.id, chosen)
     if target_window(args) and not args.again:
         check_not_awaiting(args.id)
-    code = hand_over(args, chosen)
+    code = hand_over(args, chosen, brief_pack(items))
     if code == 0:
         record_delegation(args)
     return code

@@ -135,6 +135,17 @@ bosun kg context --for releases         # a small cited pack of confirmed facts
   and the next write makes a new key. A `secret.key` that is not a key (empty, the wrong length, unreadable)
   while no such record needs it is moved aside by the next write, kept as
   `secret.key.aside-<time>` (not in the history), and made again, with a line on stderr.
+- **Context packs:** `kg context --for <entity|repo|topic> [--for ...] [--max-tokens N]` prints at
+  most about 1.5k tokens of confirmed, current facts, each citing its `[id]` and source, with one
+  section per target and one budget for all. A repo can be named as the ledger does
+  (`acme/invoice-exporter`), by id, name or alias. A pack names who reviews or owns the work and
+  leaves a person's own profile (timezone, hours, preferences, title) out unless the person is the
+  target; identifiers and unconfirmed facts never appear. With `BOSUN_KNOWLEDGE_ENABLED=1` in
+  `bosun.env` (default `0`), `bosun delegate` adds the pack for the task's repos, its area and
+  its workstream's area to the brief, after the task's rules, under "What bosun knows about this
+  work", and adds nothing when the knowledge base holds no confirmed fact about them. A task moved
+  to another window does not get it again. A knowledge base that cannot be read costs the brief one
+  line saying so, never the hand-over.
 - **Seeding:** `kg import <file>` reads entities and facts as JSON lines, records every fact as a
   proposal (`--auto-confirm` applies the rules above), is a dry run unless `--apply`, and says how
   many daily batches the review takes; `tools/survey_to_kg.py` converts a survey's markdown tables, with a mapping file kept

@@ -365,6 +365,9 @@ set_knowledge_defaults() {
   BOSUN_KNOWLEDGE_GROUP_FACTS="8"
   # `kg lint` reports confirmed facts not observed for this many days as stale.
   BOSUN_KNOWLEDGE_STALE_DAYS="180"
+  # 1: `bosun delegate` adds what the knowledge base says about the task's repo and area (a context
+  # pack of confirmed, cited facts) to each brief. 0: a brief is the same as without it.
+  BOSUN_KNOWLEDGE_ENABLED="0"
 }
 
 set_console_defaults() {
