@@ -109,22 +109,13 @@ while bosun updates.</li>
 </ul>
 
 </div>
-<div class="bx-menu" role="img" aria-label="bosun's menu while it runs: a green dot and the sentence bosun is running; 3 windows open, 1 waiting for you, Mac kept awake until 20:00; then Open Console, Check for Updates, Settings, Help, Stop bosun and Quit bosun.app.">
-<div class="bx-menu__status"><span class="bx-menu__dot"></span>bosun is running</div>
-<p class="bx-menu__detail">3 windows open<br>1 waiting for you: acme-web<br>Mac kept awake until 20:00</p>
-<ul class="bx-menu__items">
-<li>Open Console<kbd>⌘O</kbd></li>
-<li class="bx-menu__gap">Check for Updates…</li>
-<li>Settings…<kbd>⌘,</kbd></li>
-<li>Help<kbd aria-hidden="true">›</kbd></li>
-<li class="bx-menu__gap">Stop bosun…</li>
-<li>Quit bosun.app<kbd>⌘Q</kbd></li>
-</ul>
+<div class="bx-demo" data-example="menubar">
+<p class="bx-demo__fallback">This example needs JavaScript. <a href="setup.md#the-menu-bar-app">The menu bar app</a> shows every state of its menu.</p>
 </div>
 </div>
 
-<p class="bx-fine" markdown>The menu while bosun runs. [The menu bar app](setup.md#the-menu-bar-app) has every
-state and what each item does.</p>
+<p class="bx-fine" markdown>Pick a state to see its menu, drawn from what bosun reports. [The menu bar
+app](setup.md#the-menu-bar-app) has every state and what each item does.</p>
 
 </section>
 

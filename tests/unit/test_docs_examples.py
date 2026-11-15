@@ -8,6 +8,7 @@ import re
 import sys
 import unittest
 from pathlib import Path
+from typing import Any, ClassVar
 
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "tools"))
@@ -113,6 +114,51 @@ class LedgerGuideTest(unittest.TestCase):
         for kind, diagram in zip(("task", "outreach"), diagrams, strict=True):
             with self.subTest(kind=kind):
                 self.assertEqual(drawn_moves(diagram), table_moves(kind))
+
+
+class MenubarExampleTest(unittest.TestCase):
+    STATES: ClassVar[dict[str, Any]] = {state["key"]: state for state in DATA["menubar"]}
+
+    def titles(self, key: str) -> list[list[str]]:
+        return [[item["title"] for item in section] for section in self.STATES[key]["sections"]]
+
+    def test_every_title_is_the_apps_own(self) -> None:
+        # The menu's rules are restated in Python; a title the app no longer has fails here.
+        source = (ROOT / "app/Sources/BosunMenuCore/MenuModel.swift").read_text()
+        for state in DATA["menubar"]:
+            for section in state["sections"]:
+                for item in section:
+                    with self.subTest(state=state["key"], title=item["title"]):
+                        self.assertIn('"' + item["title"].split(":")[0], source)
+
+    def test_the_icon_is_the_apps_picture(self) -> None:
+        app = (ROOT / "app/Resources/MenuBarIcon@2x.png").read_bytes()
+        self.assertEqual((ROOT / "docs/assets/home/menubar-icon.png").read_bytes(), app)
+
+    def test_running_offers_stop_and_no_start(self) -> None:
+        running = self.STATES["running"]
+        self.assertEqual((running["dot"], running["badge"]), ("green", None))
+        self.assertEqual(running["sentence"], "bosun is running")
+        self.assertEqual(self.titles("running")[-1], ["Stop bosun…", "Quit bosun.app"])
+        self.assertNotIn("Start bosun", str(self.titles("running")))
+
+    def test_resting_is_grey_with_start_now_first_and_no_stop(self) -> None:
+        resting = self.STATES["resting"]
+        self.assertEqual(resting["dot"], "grey")
+        self.assertTrue(resting["sentence"].startswith("Resting: outside your hours"))
+        self.assertEqual(self.titles("resting")[0], ["Start bosun now"])
+        self.assertEqual(self.titles("resting")[-1], ["Quit bosun.app"])
+
+    def test_a_warning_shows_whats_wrong_and_marks_the_icon(self) -> None:
+        warning = self.STATES["warning"]
+        self.assertEqual((warning["dot"], warning["badge"]), ("yellow", "warning"))
+        self.assertEqual(self.titles("warning")[0], ["Show What's Wrong…"])
+
+    def test_an_update_ready_names_the_release_and_marks_the_icon(self) -> None:
+        update = self.STATES["update"]
+        self.assertEqual(update["badge"], "update")
+        offered = [item for section in update["sections"] for item in section if item["badge"]]
+        self.assertEqual([item["title"] for item in offered], ["Update Available: v2026.11.11…"])
 
 
 if __name__ == "__main__":

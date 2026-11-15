@@ -228,61 +228,6 @@
   color: var(--bx-ink);
 }
 
-/* The menu bar app's menu while bosun runs, drawn in the Mac's own type: its items and their order are
-   app/Sources/BosunMenuCore/MenuModel.swift's, its status app/Tests/BosunMenuCoreTests/Fixtures/status-ok.json's. */
-.bx-menu {
-  justify-self: start;
-  width: min(100%, 17rem);
-  padding: 0.4rem 0.3rem;
-  font: 0.65rem/1.45 -apple-system, BlinkMacSystemFont, "Helvetica Neue", sans-serif;
-  color: var(--bx-ink);
-  background: var(--bx-surface);
-  border: 1px solid var(--bx-line);
-  border-radius: 10px;
-  box-shadow: 0 18px 40px -24px rgba(19, 42, 62, 0.5);
-}
-.bx-menu__status {
-  display: flex;
-  align-items: center;
-  gap: 0.45rem;
-  padding: 0.1rem 0.6rem 0;
-  font-weight: 600;
-}
-.bx-menu__dot {
-  flex: none;
-  width: 0.55rem;
-  height: 0.55rem;
-  border-radius: 50%;
-  background: #2f9e44;
-}
-.bx-home .md-typeset .bx-menu__detail {
-  margin: 0.1rem 0 0.4rem;
-  padding: 0 0.6rem 0 1.6rem;
-  color: var(--bx-muted);
-}
-.bx-home .md-typeset .bx-menu__items {
-  list-style: none;
-  margin: 0;
-  padding: 0.35rem 0 0;
-  border-top: 1px solid var(--bx-line);
-}
-.bx-home .md-typeset .bx-menu__items > li {
-  display: flex;
-  justify-content: space-between;
-  margin: 0;
-  padding: 0.15rem 0.6rem;
-}
-.bx-home .md-typeset .bx-menu__items > li.bx-menu__gap {
-  margin-top: 0.35rem;
-  padding-top: 0.5rem;
-  border-top: 1px solid var(--bx-line);
-}
-.bx-home .md-typeset .bx-menu kbd {
-  all: unset;
-  margin-left: 1.5rem;
-  color: var(--bx-muted);
-}
-
 /* An example: its story on the left, the live example on the right */
 .bx-example__body {
   display: grid;
@@ -897,6 +842,164 @@
   display: flex;
   gap: 0.5rem;
   margin-top: 1rem;
+}
+
+/* ---------- The menu bar app: a corner of a Mac's screen ---------- */
+
+/* Its menu bar with bosun's icon (menubar-icon.png: the app's own picture, app/Resources/MenuBarIcon@2x.png,
+   which tests/unit/test_docs_examples.py holds this copy to; a template image, so it takes the bar's ink) and
+   the menu open under it, in the Mac's own type. The dots are the Mac's system colours, as the app draws them. */
+.bx-mac__states {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+}
+.bx-mac__states .bx-btn[aria-pressed="true"] {
+  border-color: var(--bx-teal);
+  background: var(--bx-teal-soft);
+  color: var(--bx-ink);
+}
+/* Its wallpaper is the page's masthead, the fleet seen from above. Tall enough for the longest menu (a warning's). */
+.bx-mac {
+  position: relative;
+  height: 18.6rem;
+  margin-top: 0.9rem;
+  overflow: hidden;
+  border: 1px solid var(--bx-line);
+  border-radius: 10px;
+  background: var(--bx-shallows) var(--bx-masthead) 100% 38% / 260% auto no-repeat;
+  font: 0.65rem/1.45 -apple-system, BlinkMacSystemFont, "Helvetica Neue", sans-serif;
+  color: var(--bx-ink);
+}
+.bx-mac__bar {
+  display: flex;
+  justify-content: flex-end;
+  align-items: center;
+  gap: 0.75rem;
+  height: 1.6rem;
+  padding: 0 0.75rem;
+  background: color-mix(in srgb, var(--bx-surface) 70%, transparent);
+  -webkit-backdrop-filter: blur(12px);
+  backdrop-filter: blur(12px);
+  font-weight: 500;
+}
+.bx-mac__item {
+  position: relative;
+  display: grid;
+  place-items: center;
+  width: 1.7rem;
+  height: 1.3rem;
+  border-radius: 4px;
+}
+.bx-mac__item--open {
+  background: color-mix(in srgb, var(--bx-ink) 15%, transparent);
+}
+.bx-mac__icon {
+  width: 0.95rem;
+  height: 0.95rem;
+  background: currentColor;
+  -webkit-mask: url("menubar-icon.png") center / contain no-repeat;
+  mask: url("menubar-icon.png") center / contain no-repeat;
+}
+.bx-mac__badge {
+  position: absolute;
+  right: 0.15rem;
+  bottom: 0.12rem;
+  width: 0.4rem;
+  height: 0.4rem;
+  border-radius: 50%;
+}
+.bx-mac__badge--warning {
+  background: #ffcc00;
+}
+.bx-mac__badge--error {
+  background: #ff3b30;
+}
+.bx-mac__badge--update,
+.bx-mac__new {
+  background: #007aff;
+}
+.bx-mac__glyph {
+  width: 1rem;
+  height: 0.8rem;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.5;
+  stroke-linecap: round;
+}
+.bx-mac__fill {
+  fill: currentColor;
+  stroke: none;
+}
+.bx-mac__menu {
+  position: absolute;
+  top: 1.8rem;
+  right: 0.45rem;
+  width: min(calc(100% - 0.9rem), 15.5rem);
+  padding: 0.4rem 0.3rem 0.35rem;
+  background: color-mix(in srgb, var(--bx-surface) 90%, transparent);
+  -webkit-backdrop-filter: blur(16px);
+  backdrop-filter: blur(16px);
+  border: 1px solid var(--bx-line);
+  border-radius: 9px;
+  box-shadow: 0 16px 36px -18px rgba(19, 42, 62, 0.55);
+}
+.bx-mac__status {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  padding: 0 0.55rem;
+  font-weight: 600;
+}
+.bx-mac__dot {
+  flex: none;
+  width: 0.55rem;
+  height: 0.55rem;
+  border-radius: 50%;
+}
+.bx-mac__dot--green {
+  background: #34c759;
+}
+.bx-mac__dot--yellow {
+  background: #ffcc00;
+}
+.bx-mac__dot--red {
+  background: #ff3b30;
+}
+.bx-mac__dot--grey {
+  background: #8e8e93;
+}
+.bx-home .md-typeset .bx-mac__detail {
+  margin: 0.1rem 0 0;
+  padding: 0 0.55rem 0 1.55rem;
+  color: var(--bx-muted);
+}
+.bx-home .md-typeset .bx-mac__section {
+  list-style: none;
+  margin: 0.35rem 0 0;
+  padding: 0.35rem 0 0;
+  border-top: 1px solid var(--bx-line);
+}
+.bx-home .md-typeset .bx-mac__section > li {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin: 0;
+  padding: 0.12rem 0.55rem;
+}
+.bx-mac__new {
+  display: inline-block;
+  width: 0.4rem;
+  height: 0.4rem;
+  margin-left: 0.4rem;
+  border-radius: 50%;
+  vertical-align: 0.05em;
+}
+.bx-home .md-typeset .bx-mac kbd,
+.bx-mac__more {
+  all: unset;
+  margin-left: 1.5rem;
+  color: var(--bx-muted);
 }
 
 /* ---------- Narrow screens ---------- */
