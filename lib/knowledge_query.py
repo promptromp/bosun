@@ -235,13 +235,22 @@ def repo_by_last_segment(kb: KB, target: str) -> str:
     return found if found.startswith("repo/") else ""
 
 
+def named_entity(kb: KB, target: str) -> str:
+    """The entity <target> names, or ""."""
+    try:
+        return km.resolve(kb, target)
+    except km.KnowledgeError:
+        return ""
+
+
 def pack_targets(kb: KB, target: str, *, topics: bool = True) -> list[str]:
     """The entities a pack is for: the one <target> names (or <type>/<target> for the usual types;
-    for owner/repo, repo/<repo>), else, with <topics>, the best search matches for it as a topic."""
-    try:
-        return [km.resolve(kb, target)]
-    except km.KnowledgeError:
-        pass
+    for owner/repo, repo/<repo>), else, with <topics>, the best search matches for it as a topic.
+    Without <topics> (a brief's repo or area), a target that names a person is none: a person's own
+    profile is nothing to put in a brief."""
+    named = named_entity(kb, target)
+    if named:
+        return [named] if topics or not ks.is_person(named) else []
     slug = target.strip().lower()
     candidates = [f"{entity_type}/{slug}" for entity_type in PACK_TYPES]
     for candidate in candidates:
@@ -300,13 +309,30 @@ class Pack:
     facts: int
 
 
+def section_head(kb: KB, entities: list[str], budget: int) -> list[str]:
+    """A section's header and the summaries that fit in <budget> characters after it; none when
+    the header itself does not fit."""
+    names = ", ".join(f"{km.label(kb, t)} ({t})" for t in entities)
+    lines = [f"Knowledge for {names}: confirmed facts only; cite the [id] when you rely on one."]
+    used = len(lines[0]) + 1
+    if used > budget:
+        return []
+    for entity_id in entities:
+        summary = kb.entities[entity_id].get("summary")
+        line = f"{entity_id}: {summary}"
+        if summary and used + len(line) + 1 <= budget:
+            lines.append(line)
+            used += len(line) + 1
+    return lines
+
+
 def pack_section(kb: KB, entities: list[str], budget: int, shown: set[str]) -> tuple[list[str], int, int]:
     """The header, summaries and facts of one target (not those <shown> already), within <budget>
     characters; returns its lines, the facts among them and the characters those took (the line
     that counts what did not fit is not among them: pack_of keeps room for it)."""
-    names = ", ".join(f"{km.label(kb, t)} ({t})" for t in entities)
-    lines = [f"Knowledge for {names}: confirmed facts only; cite the [id] when you rely on one."]
-    lines += [f"{t}: {kb.entities[t]['summary']}" for t in entities if kb.entities[t].get("summary")]
+    lines = section_head(kb, entities, budget)
+    if not lines:
+        return [], 0, 0
     used = sum(len(line) + 1 for line in lines)
     facts = [f for f in pack_facts(kb, entities) if f["id"] not in shown]
     count = 0
@@ -339,8 +365,15 @@ def pack_of(
     facts = 0
     shown: set[str] = set()
     for index, entities in enumerate(sections):
-        share = remaining // (len(sections) - index)
-        section, count, used = pack_section(kb, entities, share, shown)
+        later = len(sections) - index - 1
+        section, count, used = pack_section(kb, entities, remaining // (later + 1), shown)
+        if not section:
+            # its share cannot hold even its header: it takes what is left, the room kept for the
+            # later sections' last lines too, and no later section comes
+            section, count, _ = pack_section(kb, entities, remaining + MORE_LINE_RESERVE * later, shown)
+            lines += section
+            facts += count
+            break
         remaining -= used
         lines += section
         facts += count

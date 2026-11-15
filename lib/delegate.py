@@ -278,9 +278,15 @@ def read_pack(targets: list[str], max_tokens: int) -> str:
     return "\n".join(pack.lines) if pack.facts else ""
 
 
+UNREADABLE_REASON = 200  # characters of an error a brief may carry
+
+
 def unreadable(error: Exception) -> str:
-    """The one line a brief gets when its pack could not be made."""
+    """The one line a brief gets when its pack could not be made (the error's text cut at
+    UNREADABLE_REASON characters)."""
     reason = " ".join(str(error).split()) or type(error).__name__
+    if len(reason) > UNREADABLE_REASON:
+        reason = reason[: UNREADABLE_REASON - 3].rstrip() + "..."
     return f"(the ontology could not be read: {reason})"
 
 

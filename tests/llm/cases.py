@@ -1413,7 +1413,7 @@ def pack_used(outcome: Outcome) -> list[str]:
         check=True,
     ).stdout.splitlines()
     wrote = " ".join(
-        (outcome.world.repo / line[3:]).read_text()
+        (outcome.world.repo / line[3:]).read_text(errors="replace")
         for line in changed
         if (outcome.world.repo / line[3:]).is_file()
     )

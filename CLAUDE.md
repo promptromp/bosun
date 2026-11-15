@@ -412,7 +412,9 @@ tests, which come last (CI's `lint` job runs a copy with `fail_fast: false`, so 
 - Shell: shellcheck (`-S style`, follows `source` via `.shellcheckrc`), shfmt (2-space indent,
   indented `case`, from `.editorconfig`), and `tools/shell_complexity.py` (functions: branch
   count <= 15 and <= 60 lines; script bodies <= 25 and <= 120 lines), since the Python tools do
-  not read shell.
+  not read shell; and `tools/bash32_hook.sh`, every script parsed by macOS's own `/bin/bash` 3.2
+  (`bash -n`), which caught what shellcheck and bash 5 missed, skipping in one line where
+  `/bin/bash` is not 3.2 (CI's Linux `lint`).
 - Swift (the menu bar app in `app/`; three hooks on `files: ^app/`, so a Python-only commit pays nothing, each
   run only on a Mac and skipping with one line elsewhere or when `swift` is absent, through `tools/swift_hook.sh`:
   CI's Linux `lint` job has a `swift` that cannot build AppKit, and the macOS `app` job runs them): `swift format lint --strict` (the

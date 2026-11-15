@@ -1042,6 +1042,38 @@ class ContextTest(KnowledgeTestCase):
         for target in ("remotes/nothing-like-it", "remotes/", "exporter-less", "acme/release"):
             self.assertEqual(kq.pack_targets(kb, target, topics=False), [], target)
 
+    def test_a_brief_s_target_that_names_a_person_is_none(self) -> None:
+        kb = self.kb()
+        for target in ("person/dana", "Dana Example"):
+            self.assertEqual(kq.pack_targets(kb, target, topics=False), [], target)
+        self.assertEqual(kq.pack_targets(kb, "person/dana"), ["person/dana"])  # asked about her: her
+
+    def test_five_targets_stay_within_the_budget(self) -> None:
+        names = [f"repo/area-{n}" for n in range(5)]
+        for number, repo in enumerate(names):
+            self.run_kg("add-entity", repo, "--name", f"area {number} " + "n" * 120, "--summary", "s" * 700)
+            for fact in range(12):
+                self.run_kg(
+                    "add-entity", f"system/dep-{number}-{fact}", "--name", f"dep {number}-{fact} " + "d" * 60
+                )
+                self.run_kg(
+                    "propose",
+                    repo,
+                    "depends_on",
+                    f"system/dep-{number}-{fact}",
+                    "--source",
+                    f"ledger:{fact}",
+                    "--source",
+                    f"report:{fact}",
+                )
+        for budget in (kq.DEFAULT_PACK_TOKENS, 300, 120):
+            pack = kq.context_pack(self.kb(), names, budget, topics=False)
+            with self.subTest(budget=budget):
+                self.assertLessEqual(len(pack), budget * kq.CHARS_PER_TOKEN)
+                self.assertTrue(pack.startswith("Knowledge for area 0"))
+        small = kq.context_pack(self.kb(), names, 120, topics=False)
+        self.assertLess(small.count("Knowledge for"), 5)  # no header past the budget
+
     def test_a_pack_stays_within_its_budget(self) -> None:
         for number in range(120):
             self.run_kg("add-entity", f"system/tool-{number}", "--name", f"tool {number} " + "x" * 40)

@@ -230,6 +230,14 @@ class PackTest(unittest.TestCase):
                 self.assertEqual(pack, line.format(str(error)))
                 self.assertIn(pack, self.brief())
 
+    def test_a_long_error_is_cut_short_in_the_brief(self) -> None:
+        error = KnowledgeError("x" * 5000)
+        with mock.patch.object(knowledge, "load", side_effect=error):
+            pack = delegate.knowledge_pack(["acme/invoice-exporter"])
+        reason = pack.removeprefix("(the ontology could not be read: ").removesuffix(")")
+        self.assertEqual(len(reason), delegate.UNREADABLE_REASON)
+        self.assertTrue(reason.endswith("..."))
+
     def test_items_that_cannot_be_read_for_targets_are_one_line_too(self) -> None:
         line = "(the ontology could not be read: odd item)"
         items = {"task:2026-11-01/1": self.ITEM}

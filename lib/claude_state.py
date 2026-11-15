@@ -386,11 +386,15 @@ def record(pid: int | str) -> dict[str, Any] | None:
 
 def is_stale(entry: dict[str, Any]) -> bool:
     """A record whose pid now belongs to a process started after the record was written: Claude
-    exited without cleaning up and the pid was reused."""
+    exited without cleaning up and the pid was reused. A record without a pid (written partly) is
+    no live session's either."""
+    pid = entry.get("pid")
+    if not isinstance(pid, int):
+        return True
     started_at = entry.get("startedAt")
     if not isinstance(started_at, (int, float)):
         return False
-    began = process_start(entry["pid"])
+    began = process_start(pid)
     return began is not None and began > started_at / 1000 + START_TIME_TOLERANCE_SECONDS
 
 

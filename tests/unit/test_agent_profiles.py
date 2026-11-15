@@ -216,6 +216,10 @@ class CallingSessionTest(unittest.TestCase):
         assert expected.name == "0f1e2d3c.jsonl" and expected.is_relative_to(home)
         assert agent_state.calling_session(100) == agent_state.CallingSession("claude", 4242, expected, True)
         assert claude_state.session_transcript({"pid": 4242}) is None
+        # a record written partly (no pid) is no session: kg runs on as from a terminal
+        (sessions / "4242.json").write_text(json.dumps({"sessionId": "0f1e2d3c", "cwd": str(home / "repo")}))
+        assert agent_state.calling_session(100) is None
+        assert claude_state.is_stale({"pid": "4242"}) and claude_state.is_stale({})
 
     def test_only_claude_code_checks_quotes_and_the_others_keep_no_stale_records(self) -> None:
         assert claude_state.PROFILE.verifies_quotes
