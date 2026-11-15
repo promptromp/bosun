@@ -8,6 +8,7 @@ touches this Mac's bosun, git settings or ~/.claude."""
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import re
@@ -29,6 +30,10 @@ LIVE = ROOT / "tests" / "sandbox" / "live"
 WORLD = LIVE / "knowledge.jsonl"
 REPOS = ("exporter", "pdf-renderer", "ledger-sync")
 GH = LIVE / "gh"
+# The smoke suite counts the shared fixture: it never changes.
+FIXTURE_SHA256 = (
+    "daa0ef519f838ac7f37bc2cce220c65a2bb50791f1c01bfbbe0db4e15849ed1a"  # pragma: allowlist secret
+)
 
 
 def records(path: Path) -> list[dict[str, Any]]:
@@ -76,7 +81,7 @@ class WorldKnowledgeTest(KnowledgeTestCase):
         for fact_id, fact in before.items():
             self.assertEqual(after[fact_id]["subject"], fact["subject"])
             self.assertEqual(after[fact_id]["predicate"], fact["predicate"])
-        self.assertEqual(len(records(FIXTURE)), 37)
+        self.assertEqual(hashlib.sha256(FIXTURE.read_bytes()).hexdigest(), FIXTURE_SHA256)
 
     def test_nothing_waits_after_the_seed(self) -> None:
         self.seed_world()
@@ -102,8 +107,13 @@ class WorldKnowledgeTest(KnowledgeTestCase):
     def test_the_process_and_its_rules(self) -> None:
         self.seed_world()
         self.assertTrue(self.confirmed("process/release", "gated_by", "gate/smoke-tests"))
-        canary = self.confirmed("process/release", "has_step", "gate/canary")
-        self.assertEqual([f["order"] for f in canary], [3])
+        self.assertTrue(self.confirmed("step/rollout", "gated_by", "gate/canary"))
+        steps = [
+            f["order"]
+            for f in self.kb().facts.values()
+            if f["predicate"] == "has_step" and f["subject"] == "process/release"
+        ]
+        self.assertEqual(len(steps), len(set(steps)))  # no two steps of the release share a number
         self.assertTrue(self.confirmed("process/review", "entry_point", "channel/acme-prs"))
         self.assertTrue(
             self.confirmed("process/review", "rule", "exporter/tax.py needs Dana Example's review")
@@ -133,6 +143,13 @@ class WorldKnowledgeTest(KnowledgeTestCase):
         pack = self.run_kg("context", "--for", "acme/exporter")
         self.assertIn("tax rounding", pack)
         self.assertIn("round per line", pack)
+
+    def test_the_context_pack_of_the_exporter_warns_of_the_retired_environment(self) -> None:
+        self.seed_world()
+        pack = self.run_kg("context", "--for", "acme/exporter")
+        self.assertIn("staging-2", pack.lower().replace("staging 2", "staging-2"))
+        self.assertRegex(pack.lower(), r"retired environment|never point new test runs")
+        self.assertLess(len(pack), 6000)
 
 
 class WorldRepoTest(unittest.TestCase):

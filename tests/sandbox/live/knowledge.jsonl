@@ -24,7 +24,8 @@
 {"type": "fact", "subject": "team/platform", "predicate": "owns", "object": "repo/ledger-sync", "sources": ["ledger:review:acme/ledger-sync#57", "memory:ownership.md"]}
 {"type": "fact", "subject": "team/platform", "predicate": "purpose", "value": "Runs the shared services: the ledger sync and the deploy bot.", "sources": ["memory:ownership.md", "ledger:review:acme/ledger-sync#57"]}
 {"type": "fact", "subject": "process/release", "predicate": "gated_by", "object": "gate/smoke-tests", "sources": ["memory:deploys.md", "ledger:mypr:acme/invoice-exporter#102"]}
-{"type": "fact", "subject": "process/release", "predicate": "has_step", "object": "gate/canary", "sources": ["memory:deploys.md", "report:task:2026-10-01/1"], "order": 3}
+{"type": "fact", "subject": "step/rollout", "predicate": "gated_by", "object": "gate/canary", "sources": ["memory:deploys.md", "report:task:2026-10-01/1"]}
+{"type": "fact", "subject": "lesson/retired-env", "predicate": "about", "object": "repo/invoice-exporter", "sources": ["memory:staging-2.md", "ledger:task:2026-10-02/3"]}
 {"type": "fact", "subject": "gate/canary", "predicate": "purpose", "value": "Serves 5% of exports for an hour before the gradual rollout.", "sources": ["memory:deploys.md", "report:task:2026-10-01/1"]}
 {"type": "fact", "subject": "process/release", "predicate": "actor", "object": "person/lena", "sources": ["memory:deploys.md", "ledger:mypr:acme/invoice-exporter#102"]}
 {"type": "fact", "subject": "process/review", "predicate": "entry_point", "object": "channel/acme-prs", "sources": ["memory:review.md", "ledger:out:mypr:acme/invoice-exporter#102/1"]}

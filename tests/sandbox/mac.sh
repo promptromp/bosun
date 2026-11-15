@@ -430,6 +430,24 @@ person_shell() {                 # <welcome>
 
 # `shell` with bosun set up, running and signed in (see the header). The keys go in as for live: through a pipe,
 # into a file only the clone's user can read, and the clone is deleted when you leave.
+welcome_text() { # <from> <model>: what `mac try` tells a person (a function: bash 3.2 misparses this heredoc inside $( ))
+  local from="$1" model="$2"
+  cat <<WELCOME
+
+A throwaway Mac with bosun running in it, from the $from, signed in with your Anthropic key (as its
+apiKeyHelper), its agents on $model. The key is billed per request for as long as bosun runs: leaving
+this shell (exit) deletes the clone, and \`bosun stop\` stops it sooner. A restart keeps it.
+
+  bosun status          how it is (and the menu bar icon in the window)
+  bosun attach          the windows: the orchestrator, and a session for each of the three repos
+  bosun console         the web console
+
+The repos (~/Development/exporter, pdf-renderer, ledger-sync) push to a local stand-in of GitHub, so nothing leaves the Mac
+but requests to the agents' APIs. Remote Control needs a claude.ai login: it does not work with a key.
+
+WELCOME
+}
+
 try() { # [--from release|checkout] [--run <script>] [claude|codex]
   local from=release agent=claude repo model="${BOSUN_SANDBOX_TRY_MODEL:-sonnet}" script=""
   while [ $# -gt 0 ]; do
@@ -468,22 +486,7 @@ try() { # [--from release|checkout] [--run <script>] [claude|codex]
       in_vm "$CLONE" "zsh -l -s" 2>&1 | sed -l -E -e "$KEY_SHAPE" -e "$TOKEN_SHAPE"
     return "${PIPESTATUS[1]}" # the script's, through ssh
   fi
-  person_shell "$(
-    cat <<WELCOME
-
-A throwaway Mac with bosun running in it, from the $from, signed in with your Anthropic key (as its
-apiKeyHelper), its agents on $model. The key is billed per request for as long as bosun runs: leaving
-this shell (exit) deletes the clone, and \`bosun stop\` stops it sooner. A restart keeps it.
-
-  bosun status          how it is (and the menu bar icon in the window)
-  bosun attach          the windows: the orchestrator, and a session for each of the three repos
-  bosun console         the web console
-
-The repos (~/Development/exporter, pdf-renderer, ledger-sync) push to a local stand-in of GitHub, so nothing leaves the Mac
-but requests to the agents' APIs. Remote Control needs a claude.ai login: it does not work with a key.
-
-WELCOME
-  )"
+  person_shell "$(welcome_text "$from" "$model")"
 }
 
 clean() {

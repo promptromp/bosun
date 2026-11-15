@@ -112,11 +112,13 @@ answers() { # <menu_app: true|false>
 # the world's own, auto-confirmed where the rules allow it, then every fact still waiting confirmed by hand (the
 # high-risk ones never confirm by themselves, nor a fact about a person). From this shell, never from an agent's.
 KNOWLEDGE_FILES=("$ROOT/tests/fixtures/knowledge/acme-import.jsonl" "$ROOT/tests/sandbox/live/knowledge.jsonl")
-waiting_facts() { # the ids of the facts that still wait for review
-  local entity
+waiting_facts() { # the ids of the facts that still wait for review; fails when a listing does
+  local entity ids all=""
   for entity in $(jq -r 'select(.type == "entity").id' "${KNOWLEDGE_FILES[@]}"); do
-    bosun kg facts "$entity" --status proposed --json | jq -r '.[].id'
-  done | sort -u
+    ids="$(bosun kg facts "$entity" --status proposed --json | jq -r '.[].id')" || return 1
+    all="$all$ids"$'\n'
+  done
+  printf '%s' "$all" | sed '/^$/d' | sort -u
 }
 seed_knowledge() {
   local file
@@ -125,7 +127,14 @@ seed_knowledge() {
   done
   waiting_facts | xargs bosun kg confirm --note "the sandbox's world" >/dev/null
 }
-seeded() { seed_knowledge && [ -z "$(waiting_facts)" ]; }
+seeded() { # the world imported and confirmed, and a listing that works (a failing one is no proof of nothing waiting)
+  local waiting confirmed
+  seed_knowledge || return 1
+  waiting="$(waiting_facts)" || return 1
+  [ -z "$waiting" ] || return 1
+  confirmed="$(bosun kg facts repo/invoice-exporter --status confirmed --json | jq 'length')" || return 1
+  [ "$confirmed" -ge 3 ]
+}
 every_repo_has_a_window() {
   local name
   for name in "${WORLD_REPOS[@]}"; do grep -q "name: $name" "$CONFIG/sessions.yml" || return 1; done
