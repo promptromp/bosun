@@ -880,13 +880,50 @@ def pmset_label(clock_time: str) -> str:
     return f"{shown}:{mins:02d}{'AM' if hours < 12 else 'PM'}"  # noqa: PLR2004 (noon)
 
 
+# How `pmset -g sched` names a set of days, from print_days_to_buf in pmset/pmset.m of Apple's
+# PowerManagement (github.com/apple-oss-distributions/PowerManagement): the whole week, the five weekdays,
+# the weekend and each single day have a name; any other set is printed as "Some days", which says not which.
+PMSET_DAY_NAMES = {
+    DAY_LETTERS: "every day",
+    "MTWRF": "weekdays only",
+    "SU": "weekends only",
+    **dict(
+        zip(
+            DAY_LETTERS,
+            ("Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"),
+            strict=True,
+        )
+    ),
+}
+PMSET_SOME_DAYS = "Some days"
+PMSET_WAKE_TYPE = "wakepoweron"  # how pmset prints the type `pmset repeat wakeorpoweron` sets
+
+
+def pmset_days(days: str) -> str:
+    """How `pmset -g sched` prints the days <days> (pmset's letters, in any order) of a repeating event."""
+    letters = "".join(letter for letter in DAY_LETTERS if letter in days.upper())
+    return PMSET_DAY_NAMES.get(letters, PMSET_SOME_DAYS)
+
+
+def is_our_wake(event: str, days: str, wake_at: str) -> bool:
+    """Whether <event>, a repeating event as `pmset -g sched` prints it ("wakepoweron at 8:01AM weekdays
+    only", printed by print_repeating_report in pmset.m as "<type> at <time> <days>"), is exactly the wake
+    bosun sets for <days> at <wake_at> (HH:MM). Days pmset prints as "Some days" cannot be told apart, so they
+    never match, nor does anything not in this form: another app's wake is never taken for bosun's."""
+    printed = pmset_days(days)
+    if printed == PMSET_SOME_DAYS:
+        return False
+    return event.split() == [PMSET_WAKE_TYPE, "at", pmset_label(wake_at), *printed.split()]
+
+
 def wake_command(facts: Facts, answers: Answers) -> str:
-    """The sudo line for the wake, or nothing if it is not wanted or already set for this schedule."""
+    """The sudo line for the wake, or nothing if it is not wanted or the Mac's repeating wake is already
+    exactly the one it would set."""
     if not answers.wake:
         return ""
     delay = int(facts.env.get("BOSUN_WAKE_DELAY_MINUTES", DEFAULT_WAKE_DELAY_MINUTES))
     wake_at = clock(minutes(answers.start) + delay)
-    current = facts.env.get("BOSUN_DAYS") == answers.days and pmset_label(wake_at) in facts.repeating_wake
+    current = is_our_wake(facts.repeating_wake, answers.days, wake_at)
     return "" if current else f"sudo pmset repeat wakeorpoweron {answers.days} {wake_at}:00"
 
 

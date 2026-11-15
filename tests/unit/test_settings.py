@@ -184,6 +184,26 @@ class TestWakeOwner(unittest.TestCase):
             settings.wake_owner(schedule("wakepoweron at 9:01AM weekdays only"), moved, DEFAULTS), "ours"
         )
 
+    def test_the_days_and_the_time_are_compared_exactly(self) -> None:
+        early = {"BOSUN_START_TIME": "01:00", "BOSUN_DAYS": "MTWRFSU"}
+        self.assertEqual(
+            settings.wake_owner(schedule("wakepoweron at 1:01AM every day"), early, DEFAULTS), "ours"
+        )
+        self.assertEqual(
+            settings.wake_owner(schedule("wakepoweron at 11:01AM every day"), early, DEFAULTS), "other"
+        )
+        midnight = {"BOSUN_START_TIME": "00:00", "BOSUN_DAYS": "MTWRFSU"}
+        self.assertEqual(
+            settings.wake_owner(schedule("wakepoweron at 10:01AM every day"), midnight, DEFAULTS), "other"
+        )
+        on_weekends = schedule("wakepoweron at 8:01AM weekends only")
+        self.assertEqual(settings.wake_owner(on_weekends, {}, DEFAULTS), "other")  # the defaults are weekdays
+        some_days = {"BOSUN_DAYS": "MWF"}
+        self.assertEqual(
+            settings.wake_owner(schedule("wakepoweron at 8:01AM Some days"), some_days, DEFAULTS), "other"
+        )
+        self.assertEqual(settings.wake_owner(schedule("wakepoweron at"), {}, DEFAULTS), "other")
+
     def test_a_start_that_does_not_parse_owns_no_wake(self) -> None:
         ours = schedule("wakepoweron at 8:01AM weekdays only")
         self.assertEqual(settings.wake_owner(ours, {"BOSUN_START_TIME": "soon"}, DEFAULTS), "other")
@@ -273,7 +293,9 @@ class TestCommandLine(unittest.TestCase):
         self.assertEqual(self.env.read_text(), COMMENTED)
 
     def test_wake_owner(self) -> None:
-        status, out, _ = run("wake-owner", *self.common, "--schedule", schedule("wakepoweron at 8:01AM"))
+        status, out, _ = run(
+            "wake-owner", *self.common, "--schedule", schedule("wakepoweron at 8:01AM weekdays only")
+        )
         self.assertEqual((status, out), (0, "ours\n"))
 
     def test_write(self) -> None:

@@ -66,7 +66,11 @@ bosun settings set BOSUN_UPDATE_CHANNEL=main --json
   password first (`sudo -v`) and moves it with `sudo pmset repeat wakeorpoweron`. Without a terminal to ask in it is
   refused unless `sudo -n -v` succeeds (it fails whenever a sudoers rule that matches needs a password, even where
   one without would let `sudo pmset` run), and when sudo is cancelled or fails nothing is written. pmset keeps one
-  repeating event: another app's is left as it is, and said, unless `--replace-wake`. If pmset or the reload of the
+  repeating event: another app's is left as it is, and said, unless `--replace-wake`. The wake is bosun's only when
+  `pmset -g sched` shows exactly the one bosun sets: `wakepoweron`, at the start time plus
+  `BOSUN_WAKE_DELAY_MINUTES`, on `BOSUN_DAYS`. pmset names every day, weekdays, weekends and a single day, and
+  prints any other days as "Some days", which cannot say they are bosun's, so such a wake counts as another app's
+  (`--replace-wake` moves it). If pmset or the reload of the
   jobs fails, `bosun.env` is put back from the backup that write made (or removed, when the write made it) and the
   jobs reloaded again, so the file, the jobs and the wake stay together; it fails in one line that says so.
 - **One at a time**: `set` holds `bosun init`'s lock from the check of the values to its last step, so it is refused

@@ -145,7 +145,9 @@ item (⌘,), in a window titled "<App> Settings", with panes only when there are
     after 20:00"). A change that moves the wake (the days or the start time, while bosun sets a wake) runs `bosun
     settings set` in Terminal, which asks for an administrator first (`pmset` needs `sudo`) and writes nothing if
     that is cancelled or fails: `bosun.env`, the morning job and the wake stay as they were, together. As `bosun
-    init` does, it does not replace another app's repeating wake unless told to (`pmset` keeps one), and says so. A
+    init` does, it does not replace another app's repeating wake unless told to (`pmset` keeps one), and says so; a
+    wake is bosun's only when its type, time and days, as `pmset -g sched` prints them, are exactly the ones bosun
+    sets (`init_plan.is_our_wake`; days pmset prints as "Some days" never are). A
     change of `BOSUN_AWAKE_UNTIL` moves a running keep-awake's end too. The rest applies at once (bosun's jobs
     reloaded).
 - **Through bosun**: `bosun settings get --json` (each settable key: its value, its default, whether `bosun.env`

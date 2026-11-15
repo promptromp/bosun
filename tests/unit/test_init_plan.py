@@ -605,12 +605,67 @@ class PlanTest(unittest.TestCase):
         self.assertEqual(self.plan(facts(), Answers(trust=False), untrusted=("/x",)).trust, ())
 
     def test_a_wake_already_set_needs_no_sudo(self) -> None:
-        env = {"BOSUN_DAYS": "MWF"}
-        current = facts(env=env, repeating_wake="wakepoweron at 9:01AM MWF")
-        answers = Answers(days="MWF", start="09:00")
+        current = facts(env={"BOSUN_DAYS": "MTWRF"}, repeating_wake="wakepoweron at 9:01AM weekdays only")
+        answers = Answers(days="MTWRF", start="09:00")
         self.assertEqual(self.plan(current, answers).wake_command, "")
-        self.assertIn("MTWRF", self.plan(current, replace(answers, days="MTWRF")).wake_command)
+        self.assertIn("MTWRFSU", self.plan(current, replace(answers, days="MTWRFSU")).wake_command)
         self.assertIn("10:01:00", self.plan(current, replace(answers, start="10:00")).wake_command)
+
+    def test_the_days_pmset_prints_are_compared_not_the_settings(self) -> None:
+        # bosun.env says the same days as the answer, but the Mac's wake is on other days: it is not bosun's.
+        weekends = facts(env={"BOSUN_DAYS": "MTWRF"}, repeating_wake="wakepoweron at 9:01AM weekends only")
+        self.assertIn(
+            "MTWRF 09:01:00", self.plan(weekends, Answers(days="MTWRF", start="09:00")).wake_command
+        )
+
+    def test_a_time_inside_another_is_not_the_same_time(self) -> None:
+        for event, start in (
+            ("wakepoweron at 11:01AM every day", "01:00"),  # 1:01AM is inside 11:01AM
+            ("wakepoweron at 10:01AM every day", "00:00"),  # 0:01AM is inside 10:01AM
+            ("wakepoweron at 11:01PM every day", "13:00"),
+        ):
+            with self.subTest(event):
+                answers = Answers(days="MTWRFSU", start=start)
+                self.assertNotEqual(self.plan(facts(repeating_wake=event), answers).wake_command, "")
+        ours = facts(repeating_wake="wakepoweron at 0:01AM every day")
+        self.assertEqual(self.plan(ours, Answers(days="MTWRFSU", start="00:00")).wake_command, "")
+
+    def test_pmset_names_the_days_as_pmset_m_does(self) -> None:
+        for days, printed in (
+            ("MTWRFSU", "every day"),
+            ("UMTWRFS", "every day"),
+            ("MTWRF", "weekdays only"),
+            ("FRWTM", "weekdays only"),
+            ("SU", "weekends only"),
+            ("M", "Monday"),
+            ("R", "Thursday"),
+            ("S", "Saturday"),
+            ("U", "Sunday"),
+            ("MWF", "Some days"),
+            ("MTWRFS", "Some days"),
+        ):
+            with self.subTest(days):
+                self.assertEqual(init_plan.pmset_days(days), printed)
+
+    def test_only_the_exact_wake_bosun_sets_is_its_own(self) -> None:
+        mine = init_plan.is_our_wake
+        self.assertTrue(mine("wakepoweron at 8:01AM weekdays only", "MTWRF", "08:01"))
+        self.assertTrue(mine("wakepoweron at 8:01AM Thursday", "R", "08:01"))
+        self.assertTrue(mine("wakepoweron at 12:01PM weekends only", "SU", "12:01"))
+        self.assertFalse(mine("wakepoweron at 8:01AM every day", "MTWRF", "08:01"))  # other days
+        self.assertFalse(mine("wakepoweron at 8:01AM Friday", "R", "08:01"))
+        self.assertFalse(mine("wake at 8:01AM weekdays only", "MTWRF", "08:01"))  # another type
+        self.assertFalse(mine("wakepoweron at 8:01PM weekdays only", "MTWRF", "08:01"))
+        # pmset prints most sets of days as "Some days", which cannot say they are bosun's.
+        self.assertFalse(mine("wakepoweron at 8:01AM Some days", "MWF", "08:01"))
+        for unreadable in (
+            "",
+            "wakepoweron",
+            "wakepoweron at 8:01AM",
+            "wakepoweron at 8:01AM weekdays only x",
+        ):
+            with self.subTest(unreadable):
+                self.assertFalse(mine(unreadable, "MTWRF", "08:01"))
 
     def test_pmset_prints_a_twelve_hour_clock(self) -> None:
         for clock_time, label in (
