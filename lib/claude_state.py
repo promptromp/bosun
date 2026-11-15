@@ -1324,6 +1324,18 @@ class ProbeResult:
     cost_usd: float = 0.0
 
 
+def credential_settings() -> list[str]:
+    """The one setting of mine a headless call that loads no settings files (`--setting-sources ""`, so
+    no allow rules or hooks of mine) still needs: the `apiKeyHelper` in ~/.claude/settings.json, when
+    Claude Code signs in with an API key that way. It goes as `--settings`, alone; a helper is a command
+    line, never the key itself, so nothing secret is in the arguments. Without one, nothing: a login, or
+    ANTHROPIC_API_KEY, which the call gets from its environment."""
+    helper = (read_object(SETTINGS_FILE) or {}).get("apiKeyHelper")
+    if not isinstance(helper, str) or not helper.strip():
+        return []
+    return ["--settings", json.dumps({"apiKeyHelper": helper})]
+
+
 def probe_command(claude_bin: str) -> list[str]:
     return [
         claude_bin,
@@ -1341,6 +1353,7 @@ def probe_command(claude_bin: str) -> list[str]:
         "--disable-slash-commands",
         "--setting-sources",
         "",
+        *credential_settings(),
         "--output-format",
         "stream-json",
         "--verbose",

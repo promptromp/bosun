@@ -335,6 +335,20 @@ class ProbeTest(unittest.TestCase):
             self.assertIn(flag, command)
         self.assertEqual(command[command.index("--model") + 1], claude_state.PROBE_MODEL)
 
+    def test_an_api_key_helper_is_the_one_setting_it_keeps(self) -> None:
+        # No settings files, so no allow rules or hooks of mine; but a helper that signs Claude Code in
+        # with an API key is how it authenticates: without it the check said a working sign-in needs a
+        # login. The helper is a command that prints a key, not a key.
+        helper = {"apiKeyHelper": "cat ~/.key"}  # pragma: allowlist secret gitleaks:allow
+        with tempfile.TemporaryDirectory() as tmp:
+            settings = Path(tmp) / "settings.json"
+            with unittest.mock.patch.object(claude_state, "SETTINGS_FILE", settings):
+                self.assertNotIn("--settings", claude_state.probe_command("claude"))
+                settings.write_text(json.dumps({**helper, "hooks": {"Stop": []}}))
+                command = claude_state.probe_command("claude")
+        self.assertEqual(command[command.index("--setting-sources") + 1], "")
+        self.assertEqual(json.loads(command[command.index("--settings") + 1]), helper)
+
 
 class FakeClaude:
     """`claude auth status` and the login check request, as an Env sees them."""
