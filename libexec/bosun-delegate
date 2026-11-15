@@ -62,4 +62,5 @@ set -uo pipefail
 source "$(dirname "$0")/../lib/common.sh"
 load_config
 BOSUN_CONFIG_DIR="$BOSUN_CONFIG_DIR" BOSUN_KNOWLEDGE_ENABLED="$BOSUN_KNOWLEDGE_ENABLED" \
+  BOSUN_LOG_DIR="$BOSUN_LOG_DIR" \
   exec python3 "$BOSUN_ROOT/lib/delegate.py" "$@"

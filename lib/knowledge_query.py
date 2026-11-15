@@ -69,8 +69,10 @@ def entity_header(kb: KB, entity: Record) -> list[str]:
 
 
 def within(lines: list[str], budget: int) -> tuple[list[str], int]:
-    """The leading <lines> that fit in <budget> characters, keeping room for a "more" line; returns
-    them and how many facts were left out (a "linked from:" heading is no fact)."""
+    """All of <lines> if they fit in <budget> characters, else the leading ones that fit with room for a
+    "more" line; returns them and how many facts were left out (a "linked from:" heading is no fact)."""
+    if sum(len(line) + 1 for line in lines) <= budget:
+        return lines, 0
     used = 0
     for index, line in enumerate(lines):
         used += len(line) + 1
@@ -93,7 +95,8 @@ def waiting_lines(kb: KB, entity_id: str) -> list[str]:
 
 def lookup(kb: KB, ref: str, max_tokens: int = LOOKUP_TOKENS) -> str:
     """An entity's current confirmed facts with sources, what links to it, and what waits: the facts
-    and links within <max_tokens> (then how many more: `kg facts`), at most LOOKUP_PENDING waiting ones."""
+    and links within <max_tokens> (then how many more, and the command that shows them), at most
+    LOOKUP_PENDING waiting ones."""
     entity = kb.entities[km.resolve(kb, ref)]
     entity_id = entity["id"]
     own, links = outgoing(kb, entity_id), incoming(kb, entity_id)
@@ -105,7 +108,7 @@ def lookup(kb: KB, ref: str, max_tokens: int = LOOKUP_TOKENS) -> str:
     fixed = sum(len(line) + 1 for line in head + tail)
     shown, left = within(body, max_tokens * CHARS_PER_TOKEN - fixed)
     if left:
-        shown.append(f"({left} more: kg facts {entity_id})")
+        shown.append(f"({left} more: kg lookup {entity_id} --max-tokens {max_tokens * 4})")
     return "\n".join(head + shown + tail)
 
 

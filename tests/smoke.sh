@@ -2735,6 +2735,8 @@ brief="$(BOSUN_KNOWLEDGE_ENABLED=0 dkg delegate review --id 'review:acme/invoice
 check "with the key off, it does not" bash -c '! grep -qF "What bosun knows about this work" <<<"$1"' _ "$brief"
 brief="$(BOSUN_KNOWLEDGE_ENABLED=1 "$BOSUN" delegate review --id 'review:acme/invoice-exporter#5' --ask "review it" --print 2>&1)"
 check "with the key on but nothing known about the repo, there is no section" bash -c '! grep -qF "What bosun knows about this work" <<<"$1"' _ "$brief"
+BOSUN_KNOWLEDGE_ENABLED=1 dkg delegate review --id 'review:acme/invoice-exporter#5' --ask "review it" --print >/dev/null 2>&1
+check "a pack's size is logged in the delegate log" bash -c 'grep -Eq "\[delegate\] pack for .*: [0-9]+ facts, ~[0-9]+ tokens" "$1"/delegate-*.log' _ "$BOSUN_LOG_DIR"
 
 section chores-dry-run "chores dry run (fake claude)" covers 'libexec/bosun-chores,libexec/bosun-ledger'
 cat >"$WORK/fake-claude" <<FAKE

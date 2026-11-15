@@ -1177,9 +1177,20 @@ class QueryTest(KnowledgeTestCase):
         self.confirmed_many(200)
         out = self.run_kg("lookup", "pdf-renderer")
         self.assertLessEqual(kq.estimate_tokens(out), kq.LOOKUP_TOKENS)
-        self.assertRegex(out.splitlines()[-1], r"^\(\d+ more: kg facts repo/pdf-renderer\)$")
+        more = r"^\(\d+ more: kg lookup repo/pdf-renderer --max-tokens 3200\)$"
+        self.assertRegex(out.splitlines()[-1], more)
+        fuller = self.run_kg("lookup", "pdf-renderer", "--max-tokens", "3200")
+        self.assertGreater(len(fuller), len(out))
         small = self.run_kg("lookup", "pdf-renderer", "--max-tokens", "100")
         self.assertLessEqual(kq.estimate_tokens(small), 100)
+
+    def test_a_lookup_that_exactly_fits_loses_nothing(self) -> None:
+        self.confirmed_many(5)
+        full = self.run_kg("lookup", "pdf-renderer", "--max-tokens", "100000")
+        self.assertNotIn(" more", full)
+        tokens = str(-(-len(full) // kq.CHARS_PER_TOKEN))
+        exact = self.run_kg("lookup", "pdf-renderer", "--max-tokens", tokens)
+        self.assertEqual(exact, full)
 
     def test_a_small_lookup_has_no_more_line(self) -> None:
         self.assertNotIn(" more", self.run_kg("lookup", "smoke"))
