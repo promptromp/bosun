@@ -78,7 +78,7 @@ first_look() {
   check "... the most used repo, and no other" says "Windows    api (plus" "$out"
   check "... no connectors for the orchestrator" says "Connectors none, for the orchestrator" "$out"
   check "... the schedule from the history" says "Mon-Fri, 08:30 to 19:00" "$out"
-  check "... the recommended features" says "events, approvals, learning on; Slack watcher off" "$out"
+  check "... the recommended features" says "events, approvals, learning, ontology on; Slack watcher off" "$out"
   check "... says why" says "your usual first prompt is 09:10" "$out"
   check "... says how sessions handle permissions" says "auto mode" "$out"
   check "... says what sudo is for" says "sudo pmset repeat wakeorpoweron MTWRF 08:31:00" "$out"

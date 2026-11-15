@@ -435,13 +435,19 @@ class OtherQuestionsTest(unittest.TestCase):
     def test_proactive_without_the_watcher_can_be_picked(self) -> None:
         answers, _ = run([ENTER, ENTER, "2", ENTER, ENTER, ENTER, ENTER, "y"], facts(slack_plugin=True))
         assert answers is not None
-        self.assertTrue(answers.events and answers.learning)
+        self.assertTrue(answers.events and answers.learning and answers.knowledge)
         self.assertFalse(answers.slack_watch)
 
     def test_little_else_turns_it_all_off(self) -> None:
         answers, _ = run([ENTER, ENTER, "2", ENTER, ENTER, ENTER, ENTER, "y"])
         assert answers is not None
-        self.assertFalse(answers.events or answers.approvals or answers.learning or answers.slack_watch)
+        self.assertFalse(
+            answers.events
+            or answers.approvals
+            or answers.learning
+            or answers.knowledge
+            or answers.slack_watch
+        )
 
     def test_the_model_follows_the_plan_and_can_be_changed(self) -> None:
         _, ui = run([ENTER, ENTER, ENTER, "q"], facts(claude_plan="pro"))

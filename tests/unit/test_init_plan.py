@@ -96,6 +96,14 @@ class RecommendTest(unittest.TestCase):
         self.assertTrue(answers.events and answers.approvals and answers.learning)
         self.assertFalse(answers.slack_watch)
 
+    def test_the_ontology_is_recommended_and_the_config_is_kept(self) -> None:
+        self.assertTrue(init_plan.recommend(facts()).knowledge)
+        kept = init_plan.recommend(facts(env={"BOSUN_KNOWLEDGE_ENABLED": "0", "BOSUN_DAYS": "MTWRF"}))
+        self.assertFalse(kept.knowledge)
+        text = init_plan.render_env(kept)
+        self.assertIn('BOSUN_KNOWLEDGE_ENABLED="0"', text)
+        self.assertIn('BOSUN_KNOWLEDGE_ENABLED="1"', init_plan.render_env(init_plan.recommend(facts())))
+
     def test_the_slack_watcher_only_with_the_slack_plugin(self) -> None:
         self.assertTrue(init_plan.recommend(facts(slack_plugin=True)).slack_watch)
 
@@ -867,7 +875,7 @@ class PlanTest(unittest.TestCase):
             "Windows    api",
             "Connectors none, for the orchestrator",
             "Mon-Fri, 09:00 to 21:30",
-            "events, approvals, learning on; Slack watcher off",
+            "events, approvals, learning, ontology on; Slack watcher off",
             "Files in ~/.config/bosun",
             "bosun trust --any ~/d/api",
             "./install.sh --with-wake",
