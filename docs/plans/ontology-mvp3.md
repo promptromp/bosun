@@ -308,6 +308,56 @@ untouched because the smoke suite counts it). The import's auto-confirm settles 
   three windows now.
 - [ ] **Step 5:** commit `Sandbox: a fictional acme world for the VM, three repos with history and an ontology`.
 
+### Task 5a: Bounded output and what it costs
+
+Added 2026-11-15 at the user's request ("pay attention to efficiency: context use, input and output tokens, how the
+ontology is queried"). Measured on the fixture knowledge base:
+
+- The rules file is about 500 tokens, in the system prompt of the orchestrator and of every Claude repo window.
+- `kg lookup` takes 90 to 200 tokens there, but nothing bounds it: it lists every confirmed fact, every link and
+  every fact waiting for review.
+- `--json` is about twice the text.
+- Packs are bounded at 1500.
+
+**Files:**
+
+- Modify: `lib/knowledge_query.py` (`lookup`, `search`), `lib/knowledge.py` (their parsers: `--max-tokens` for lookup),
+  `libexec/bosun-kg` usage, `orchestrator/knowledge.md`, `lib/delegate.py` (one log line per pack)
+- Test: `tests/unit/test_knowledge.py` (`QueryTest`), `tests/unit/test_delegate.py`
+
+**Interfaces:**
+
+- Produces: `kq.LOOKUP_TOKENS = 800`, `kq.LOOKUP_PENDING = 5`, `kq.SEARCH_HITS = 10`.
+- Produces: `kq.lookup(kb, entity_id, max_tokens=LOOKUP_TOKENS) -> str`. It lists confirmed facts and links within the
+  budget, then `({n} more: kg facts {entity})`. Waiting facts are listed at most `LOOKUP_PENDING`, then `(+{n} more
+  waiting for review)`. `kg lookup --json` stays complete, for scripts.
+
+- [ ] **Step 1: failing tests:**
+  - `QueryTest.test_a_lookup_stays_within_its_budget`: an entity with 200 confirmed facts prints at most 800 tokens
+    and ends with the "more" line.
+  - `QueryTest.test_a_lookup_lists_five_waiting_facts_and_counts_the_rest`.
+  - `QueryTest.test_lookup_json_is_complete`.
+  - `QueryTest.test_search_lists_at_most_ten_hits`.
+  - `PackTest.test_a_pack_is_logged_with_its_size`: one line naming the targets, the facts and the estimated tokens,
+    in the log the delegate already writes to (or `$BOSUN_LOG_DIR/delegate.log`, through the existing helper).
+- [ ] **Step 2:** they fail.
+- [ ] **Step 3:** build it.
+  - **Rules file:** tighten `orchestrator/knowledge.md` to at most about 300 tokens (`estimate_tokens`), keeping its
+    five points.
+  - **Two new lines in it:**
+    - "A brief's ontology section already holds what is known for its repo: look up only what it lacks."
+    - "Read the text output; never `--json`."
+  - **Add a unit test** that the file stays within 300 tokens.
+- [ ] **Step 4:** run `uv run pytest -n auto tests/unit/test_knowledge.py tests/unit/test_delegate.py </dev/null`, then
+  `timeout 590 tests/smoke.sh --only knowledge,delegate,orchestrator`.
+- [ ] **Step 5:** commit `kg: bounded lookups and searches, a shorter rules file, each pack's size logged`.
+
+**Measured afterwards:**
+
+- **Task 6** reports each case's cost and turns (`free_text.py` already prints them), with the K cases run once more
+  with the key off as a baseline.
+- **Task 7** reports each brief's pack size and the number of `bosun kg` calls per window, from the transcripts.
+
 ### Task 6: The real-Claude cases
 
 **Files:**
