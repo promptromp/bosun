@@ -3,8 +3,8 @@
    Plain JavaScript with no build step and nothing loaded from elsewhere. Each example draws into
    its placeholder (an element with data-example) from the JSON the page carries (#bosun-examples),
    which tools/docs_examples.py makes from bosun's own tables and its fictional acme data: the
-   ledger's state machines, the console's fixture ledger, the fixture knowledge base and the
-   console's map layout. Text from the data is only ever set as text, never as markup. */
+   ledger's state machines, the console's fixture ledger, the fixture knowledge base, the
+   console's map layout and bosun's status as the menu bar app reads it. Text from the data is only ever set as text, never as markup. */
 (function () {
   "use strict";
 
@@ -769,6 +769,106 @@
     show(true);
   }
 
+  /* ---------- The menu bar app: its icon in the menu bar, and the menu open under it ---------- */
+
+  const BADGE_WORDS = { warning: "a warning", error: "an error", update: "an update is ready" };
+
+  // The Mac's own status icons beside bosun's, drawn plainly: they only say where bosun's icon sits.
+  function glyph(kind) {
+    const shapes = {
+      wifi: ["0 0 18 14", [
+        s("path", { d: "M2 5.6a10 10 0 0 1 14 0" }),
+        s("path", { d: "M4.7 8.3a6.2 6.2 0 0 1 8.6 0" }),
+        s("path", { d: "M7.4 11a2.4 2.4 0 0 1 3.2 0" }),
+      ]],
+      battery: ["0 0 25 14", [
+        s("rect", { x: 1, y: 2.5, width: 20, height: 9, rx: 2.6 }),
+        s("rect", { x: 3, y: 4.5, width: 12, height: 5, rx: 1, class: "bx-mac__fill" }),
+        s("path", { d: "M23 5.6v2.8" }),
+      ]],
+      controls: ["0 0 18 14", [
+        s("rect", { x: 1, y: 1.5, width: 16, height: 4.6, rx: 2.3 }),
+        s("circle", { cx: 14.6, cy: 3.8, r: 1.3, class: "bx-mac__fill" }),
+        s("rect", { x: 1, y: 7.9, width: 16, height: 4.6, rx: 2.3 }),
+        s("circle", { cx: 3.4, cy: 10.2, r: 1.3, class: "bx-mac__fill" }),
+      ]],
+    };
+    const [viewBox, parts] = shapes[kind];
+    return s("svg", { class: "bx-mac__glyph", viewBox, "aria-hidden": "true" }, parts);
+  }
+
+  function macMenuBar(state) {
+    const label = "bosun's icon" + (state.badge ? ", with a dot for " + BADGE_WORDS[state.badge] : "");
+    return h(
+      "div",
+      { class: "bx-mac__bar" },
+      h(
+        "span",
+        { class: "bx-mac__item bx-mac__item--open" },
+        h("span", { class: "bx-mac__icon", role: "img", "aria-label": label }),
+        state.badge ? h("span", { class: "bx-mac__badge bx-mac__badge--" + state.badge, "aria-hidden": "true" }) : null,
+      ),
+      glyph("wifi"),
+      glyph("battery"),
+      glyph("controls"),
+      h("span", { class: "bx-mac__clock" }, state.clock),
+    );
+  }
+
+  function macMenu(state) {
+    const detail = state.detail.flatMap((line, i) => (i ? [h("br"), line] : [line]));
+    return h(
+      "div",
+      { class: "bx-mac__menu" },
+      h("div", { class: "bx-mac__status" }, h("span", { class: "bx-mac__dot bx-mac__dot--" + state.dot, "aria-hidden": "true" }), state.sentence),
+      detail.length ? h("p", { class: "bx-mac__detail" }, detail) : null,
+      state.sections.map((section) =>
+        h(
+          "ul",
+          { class: "bx-mac__section" },
+          section.map((item) =>
+            h(
+              "li",
+              null,
+              h("span", null, item.title, item.badge ? h("span", { class: "bx-mac__new", role: "img", "aria-label": "new" }) : null),
+              item.key ? h("kbd", null, item.key) : item.submenu ? h("span", { class: "bx-mac__more", "aria-hidden": "true" }, "›") : null,
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  function menubarExample(placeholder, data) {
+    const states = data.menubar;
+    let current = states[0].key;
+    const picker = h("div", { class: "bx-mac__states", role: "group", "aria-label": "Show the menu while bosun is" });
+    const screen = h("div", { class: "bx-mac" });
+    function show() {
+      const state = states.find((each) => each.key === current);
+      picker.replaceChildren(
+        ...states.map((each) =>
+          h(
+            "button",
+            {
+              type: "button",
+              class: "bx-btn bx-btn--quiet",
+              "aria-pressed": String(each.key === current),
+              onclick: () => {
+                current = each.key;
+                show();
+              },
+            },
+            each.label,
+          ),
+        ),
+      );
+      screen.replaceChildren(macMenuBar(state), macMenu(state));
+    }
+    placeholder.replaceChildren(bar("bosun in your menu bar", h("span", null, "From bosun's own status")), picker, screen);
+    show();
+  }
+
   /* ---------- The "On this page" rail follows the reader ---------- */
 
   function followReader() {
@@ -793,7 +893,13 @@
   const source = document.getElementById("bosun-examples");
   if (!source) return;
   const data = JSON.parse(source.textContent);
-  const EXAMPLES = { ledger: ledgerExample, "needs-you": needsYouExample, knowledge: knowledgeExample, day: dayExample };
+  const EXAMPLES = {
+    ledger: ledgerExample,
+    "needs-you": needsYouExample,
+    knowledge: knowledgeExample,
+    day: dayExample,
+    menubar: menubarExample,
+  };
   for (const placeholder of document.querySelectorAll("[data-example]")) {
     const draw = EXAMPLES[placeholder.dataset.example];
     if (draw) draw(placeholder, data);

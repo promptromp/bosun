@@ -7,7 +7,12 @@ The examples show bosun's own rules on its fictional acme world, never a drawing
 - the knowledge example's map is the console's own neighbourhood walk (lib/console_kg_graph.py)
   over the fixture knowledge base (tests/fixtures/knowledge/acme-import.jsonl); the page lays it
   out wider than the console, to fit its frame;
-- "needs you" lists the fixture ledger's pending proposals.
+- "needs you" lists the fixture ledger's pending proposals;
+- the menu bar example draws bosun.app's menu over bosun's own status: the contract fixtures that
+  tools/contract_samples.py writes from bosun's code (what `bosun status --json` and `bosun update
+  --check --json` print). The menu's rules are the app's (app/Sources/BosunMenuCore/MenuModel.swift),
+  which is Swift, so they are restated here for the states shown; tests/unit/test_docs_examples.py
+  holds every title to the app's source, and the icon to the app's picture.
 
 tools/mkdocs_hooks.py puts `page_data()` into the home page as JSON when the site is built, so a
 change to those tables or fixtures shows on the site with nothing to copy by hand.
@@ -35,6 +40,7 @@ ROOT = Path(__file__).resolve().parents[1]
 Record = dict[str, Any]
 
 LEDGER_FIXTURE = ROOT / "tests/fixtures/console/acme-ledger.json"
+APP_FIXTURES = ROOT / "app/Tests/BosunMenuCoreTests/Fixtures"
 KNOWLEDGE_FIXTURE = ROOT / "tests/fixtures/knowledge/acme-import.jsonl"
 
 # The ledger example: one ask from a colleague, and everything that came of it.
@@ -209,6 +215,97 @@ def fact_data(fact: Mapping[str, Any]) -> Record:
     }
 
 
+# The menu bar example's states: its key, the button's words, the status fixture, whether an update is ready
+# (update-check-available.json's), and the menu bar's clock, on the fixtures' days: bosun runs on Wednesday,
+# and rests on Tuesday evening with Wednesday's start next.
+MENU_STATES = (
+    ("running", "Running", "status-ok.json", False, "Wed 10:42"),
+    ("resting", "Resting", "status-resting.json", False, "Tue 21:15"),
+    ("warning", "A warning", "status-warning.json", False, "Wed 10:42"),
+    ("update", "Update ready", "status-ok.json", True, "Wed 10:42"),
+)
+UPDATE_FIXTURE = "update-check-available.json"
+# The status line's dot for each level; a level not known is yellow.
+LEVEL_DOTS = {"ok": "green", "warning": "yellow", "error": "red", "stopped": "grey"}
+
+
+def outside_hours(status: Mapping[str, Any]) -> bool:
+    return (status.get("schedule") or {}).get("in_hours") is False
+
+
+def offers_start(status: Mapping[str, Any]) -> bool:
+    """Whether the menu offers Start: `StatusSnapshot.offersStart`, in the app's Contract.swift."""
+    level, running = status["level"], status.get("running")
+    if level == "stopped":
+        return True
+    if level == "error":
+        return status.get("stopped") is not None or running is False
+    return level in ("ok", "warning") and running is False and outside_hours(status)
+
+
+def menu_item(title: str, key: str | None = None, badge: bool = False, submenu: bool = False) -> Record:
+    return {"title": title, "key": key, "badge": badge, "submenu": submenu}
+
+
+def shows_stop(status: Mapping[str, Any]) -> bool:
+    """Whether the menu offers Stop bosun…: `showsStop`, in the app's QuitFlow.swift."""
+    if status["level"] == "stopped":
+        return False
+    return status.get("running") is not False or status.get("stopped") is not None
+
+
+def menu_sections(status: Mapping[str, Any], update: str | None) -> list[list[Record]]:
+    """The menu's items in its sections, as MenuModel.swift's `menu(for:)` makes them for a current status
+    with nothing under way. Open Console is shown running: with the app, `bosun init` sets
+    BOSUN_CONSOLE_ALWAYS=1, so the console's job runs (the fixtures leave it off)."""
+    actions = []
+    if offers_start(status):
+        actions.append(menu_item("Start bosun now" if outside_hours(status) else "Start bosun"))
+    if status["level"] in ("warning", "error"):
+        actions.append(menu_item("Show What's Wrong…"))
+    checks = menu_item("Check for Updates…")
+    if update:
+        checks = menu_item(f"Update Available: {update}…", badge=True)
+    own = [checks, menu_item("Settings…", key="⌘,"), menu_item("Help", submenu=True)]
+    stop = [menu_item("Stop bosun…")] if shows_stop(status) else []
+    last = [*stop, menu_item("Quit bosun.app", key="⌘Q")]
+    return [section for section in (actions, [menu_item("Open Console", key="⌘O")], own, last) if section]
+
+
+def menu_dot(status: Mapping[str, Any]) -> str:
+    """The status line's dot: grey while all is well and bosun rests outside your hours."""
+    if status["level"] == "ok" and outside_hours(status) and status.get("running") is False:
+        return "grey"
+    return LEVEL_DOTS.get(status["level"], "yellow")
+
+
+def menu_badge(status: Mapping[str, Any], update: str | None) -> str | None:
+    """The small dot on the icon: an error, a warning, or else an update ready."""
+    return {"error": "error", "warning": "warning"}.get(status["level"]) or ("update" if update else None)
+
+
+def menubar_example(fixtures: Path) -> list[Record]:
+    """Each state of the menu bar example: the icon's dot, the status line and the menu."""
+    ready = json.loads((fixtures / UPDATE_FIXTURE).read_text())["latest"]["version"]
+    states = []
+    for key, label, name, has_update, clock in MENU_STATES:
+        status = json.loads((fixtures / name).read_text())
+        update = ready if has_update else None
+        states.append(
+            {
+                "key": key,
+                "label": label,
+                "clock": clock,
+                "dot": menu_dot(status),
+                "sentence": status["sentence"],
+                "detail": list(status["detail"]),
+                "badge": menu_badge(status, update),
+                "sections": menu_sections(status, update),
+            }
+        )
+    return states
+
+
 def page_data(root: Path = ROOT) -> Record:
     """Everything the home page's examples read, from the tables and fixtures above."""
     fixture = json.loads((root / LEDGER_FIXTURE.relative_to(ROOT)).read_text())
@@ -217,6 +314,7 @@ def page_data(root: Path = ROOT) -> Record:
         "ledger": ledger_example(ledger.KINDS, fixture["items"]),
         "needs_you": needs_you(fixture["items"]),
         "knowledge": knowledge_example(json.loads(line) for line in lines if line.strip()),
+        "menubar": menubar_example(root / APP_FIXTURES.relative_to(ROOT)),
     }
 
 

@@ -178,7 +178,7 @@ class HomeExamplesTest(unittest.TestCase):
 
     def test_the_home_page_gets_the_data(self) -> None:
         data = json.loads(str(self.context(mkdocs_hooks.HOME_TEMPLATE)["examples"]))
-        self.assertEqual(set(data), {"ledger", "needs_you", "knowledge"})
+        self.assertEqual(set(data), {"ledger", "needs_you", "knowledge", "menubar"})
 
     def test_other_pages_do_not(self) -> None:
         self.assertNotIn("examples", self.context(None))
