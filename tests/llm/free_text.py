@@ -3,7 +3,7 @@
 
 Usage: uv run python tests/llm/free_text.py [--runs N] [--only ID,...] [--jobs N]
                                             [--max-cost-per-run USD] [--work DIR] [--keep]
-                                            [--with-mcp]
+                                            [--with-mcp] [--knowledge on|off]
 
 Checks that what I say in my own words ("ask Dana whether ...", "ping Priya again", "Marco
 answered, go ahead with b") becomes the right outreach steps in the ledger, both for the
@@ -36,6 +36,7 @@ import tempfile
 import threading
 from collections.abc import Iterable
 from concurrent.futures import ThreadPoolExecutor
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -76,6 +77,12 @@ OUTWARD_TOOLS = [
 ]
 REPO_ALLOWED = [
     "Bash(bosun ledger:*)",
+    "Bash(bosun kg lookup:*)",
+    "Bash(bosun kg search:*)",
+    "Bash(bosun kg facts:*)",
+    "Bash(bosun kg context:*)",
+    "Bash(bosun kg propose:*)",
+    "Bash(bosun kg supersede:*)",
     "Bash(bosun delegate --list:*)",
     "Bash(bosun update note:*)",
     "Bash(sleep:*)",
@@ -89,6 +96,14 @@ REPO_ALLOWED = [
     "Edit",
     "Write",
 ]
+
+
+def knowledge_rules(world: World) -> str:
+    """The ontology's rules under their heading, as `knowledge_rules` (lib/common.sh) prints them, for a
+    world with BOSUN_KNOWLEDGE_ENABLED=1; "" for one without (the baseline: the prompts as they were)."""
+    if not world.knowledge:
+        return ""
+    return "# The ontology\n\n" + (ROOT / "orchestrator" / "knowledge.md").read_text()
 
 
 def site_settings_file() -> Path:
@@ -134,7 +149,8 @@ def orchestrator_command(
 ) -> tuple[list[str], Path, list[str]]:
     """The orchestrator's command (without its output format or prompt), its folder, and the turns."""
     settings, ask = orchestrator_settings(world)
-    policy = (ROOT / "orchestrator" / "policy.md").read_text() + NOTICE
+    rules = knowledge_rules(world)
+    policy = (ROOT / "orchestrator" / "policy.md").read_text() + (f"\n\n{rules}" if rules else "") + NOTICE
     command = [
         "claude", "-p", "--permission-mode", "auto", "--model", MODEL, "--settings", str(settings),
         "--no-session-persistence", "--max-budget-usd", str(max_cost),
@@ -169,6 +185,9 @@ def repo_command(
         "--allowedTools", *REPO_ALLOWED,
         "--disallowedTools", *ask, *OUTWARD_TOOLS, *mcp_flags(with_mcp),
     ]  # fmt: skip
+    rules = knowledge_rules(world)
+    if rules:
+        command += ["--append-system-prompt", rules]
     turns = turns_of(world, case)
     return command, world.repo, [repo_prompt(world, case, turns[0]), *turns[1:]]
 
@@ -243,8 +262,21 @@ def run_claude(command: list[str], turns: list[str], cwd: Path, env: dict[str, s
     return {**claude_result(done), "stderr": done.stderr[-RESULT_PREVIEW:]}
 
 
-def run_case(case: Case, run: int, work: Path, max_cost: float, keep: bool, with_mcp: bool) -> dict[str, Any]:
-    world = build_world(work / f"{case.id}-run{run}", f"bosun-llm-{os.getpid()}-{case.id}-{run}")
+@dataclass(frozen=True)
+class Options:
+    """What a run takes from the command line, besides its case."""
+
+    max_cost: float
+    keep: bool
+    with_mcp: bool
+    knowledge: bool
+
+
+def run_case(case: Case, run: int, work: Path, options: Options) -> dict[str, Any]:
+    max_cost, keep, with_mcp = options.max_cost, options.keep, options.with_mcp
+    world = build_world(
+        work / f"{case.id}-run{run}", f"bosun-llm-{os.getpid()}-{case.id}-{run}", options.knowledge
+    )
     try:
         for seed in case.seeds:
             seed(world)
@@ -266,7 +298,7 @@ def run_case(case: Case, run: int, work: Path, max_cost: float, keep: bool, with
             "denials": result.get("permission_denials", []),
             "stderr": str(result.get("stderr") or "") if failures else "",
         }
-    except (RuntimeError, OSError, subprocess.SubprocessError, KeyError, IndexError) as error:
+    except (RuntimeError, OSError, subprocess.SubprocessError, KeyError, IndexError, StopIteration) as error:
         return {
             "case": case.id,
             "run": run,
@@ -307,6 +339,13 @@ def main() -> int:
     parser.add_argument(
         "--with-mcp", action="store_true", help="load my MCP servers (default: none, --strict-mcp-config)"
     )
+    parser.add_argument(
+        "--knowledge",
+        choices=("on", "off"),
+        default="on",
+        help="the ontology's rules in the prompts and its pack in a brief (default on, as "
+        "BOSUN_KNOWLEDGE_ENABLED=1); off is the baseline",
+    )
     args = parser.parse_args()
     wanted = [token for token in args.only.split(",") if token]
     chosen = [case for case in CASES if not wanted or any(case.id.startswith(token) for token in wanted)]
@@ -314,10 +353,11 @@ def main() -> int:
     work.mkdir(parents=True, exist_ok=True)
     jobs = [(case, run) for run in range(1, args.runs + 1) for case in chosen]
     print(f"{len(jobs)} run(s) of {len(chosen)} case(s); scratch: {work}", flush=True)
+    options = Options(args.max_cost_per_run, args.keep, args.with_mcp, args.knowledge == "on")
     with ThreadPoolExecutor(max_workers=args.jobs) as pool:
         results = list(
             pool.map(
-                lambda job: run_case(job[0], job[1], work, args.max_cost_per_run, args.keep, args.with_mcp),
+                lambda job: run_case(job[0], job[1], work, options),
                 jobs,
             )
         )

@@ -55,6 +55,8 @@ PUSH_BASH = re.compile(r"(?:^|[;&|]\s*)git\s+push\b", re.MULTILINE)
 OPTION_B = r"\bb\b|every|zero|schedule|its own|separate"
 
 Item = dict[str, Any]
+VAT_ASK = "round the VAT per line in exporter/tax.py, not once on the total"
+NO_DRAFTS = "from now on, CSV exports never include draft invoices"
 
 
 # ---- seeds: the fictional ledger each case starts from ------------------------------------------
@@ -430,6 +432,86 @@ def seed_ticket(world: World) -> None:
     title = "Sam Lee: EXP-42 export fails intermittently (Jira EXP-42, reported by Sam Lee)"
     mention(world, TICKET, title, "--url", "https://jira.example.com/browse/EXP-42")
     delegated(world, TICKET, "exporter", "investigate", "find why EXP-42 exports fail intermittently")
+
+
+# ---- the ontology: the acme world's knowledge base, and the cases' checks on what Claude did with it ---
+
+KNOWLEDGE_FILES = (
+    ROOT / "tests" / "fixtures" / "knowledge" / "acme-import.jsonl",
+    ROOT / "tests" / "sandbox" / "live" / "knowledge.jsonl",
+)
+EXPORTER_REPO = "slack:C0000000002/1700000080.000080"
+KG_READS = ("lookup", "search", "context")
+
+
+def seed_knowledge(world: World) -> None:
+    """The VM's world (tests/sandbox/live.sh seed_knowledge): both files imported, the facts the import
+    leaves waiting confirmed, as a person would from a terminal."""
+    entities: list[str] = []
+    for file in KNOWLEDGE_FILES:
+        world.bosun("kg", "import", str(file), "--apply", "--auto-confirm")
+        entities += [e["id"] for e in map(json.loads, file.read_text().splitlines()) if e["type"] == "entity"]
+    waiting: set[str] = set()
+    for entity in entities:
+        listing = world.bosun("kg", "facts", entity, "--status", "proposed", "--json")
+        waiting.update(fact["id"] for fact in json.loads(listing))
+    if waiting:
+        world.bosun("kg", "confirm", *sorted(waiting), "--note", "the test world")
+    # The fact that Lee reviews the exporter, which case K5 corrects: found before any run can change it.
+    listing = world.bosun("kg", "facts", "person/lee", "--status", "all", "--json")
+    world.named["LEE_REVIEWS"] = next(f["id"] for f in json.loads(listing) if f["predicate"] == "reviews")
+
+
+def seed_exporter_task(world: World) -> None:
+    """A task in the exporter window about the exporter repo (its brief carries the pack of that repo)."""
+    url = "https://github.com/acme/exporter/issues/120"
+    title = "Dana: the VAT on an exported invoice is rounded once, on the total, not per line"
+    world.bosun("ledger", "upsert", EXPORTER_REPO, "--kind", "mention", "--title", title, "--url", url)
+    world.bosun("ledger", "transition", EXPORTER_REPO, "surfaced", "--note", "surfaced")
+    delegated(world, EXPORTER_REPO, "exporter", "new-work", VAT_ASK)
+
+
+def kg_calls(outcome: Outcome, verb: str) -> list[list[str]]:
+    return [call for call in outcome.world.new_calls() if call[:2] == ["kg", verb]]
+
+
+def quote_of(call: list[str]) -> str | None:
+    """The words after --quote (or --quote=) in a bosun call."""
+    for index, word in enumerate(call):
+        if word == "--quote" and index + 1 < len(call):
+            return call[index + 1]
+        if word.startswith("--quote="):
+            return word.removeprefix("--quote=")
+    return None
+
+
+def squeezed(text: str) -> str:
+    """Words as a check compares them: one space between, any case, straight apostrophes."""
+    return " ".join(text.replace("\u2019", "'").casefold().split())
+
+
+def quotes_me(call: list[str], said: str) -> list[str]:
+    """The call is `--from-user` with a --quote that is a part of what I said."""
+    quote = quote_of(call)
+    problems = [] if "--from-user" in call else [f"`{' '.join(call)}` is not --from-user"]
+    if not quote or squeezed(quote) not in squeezed(said):
+        problems.append(f"its --quote {quote!r} is not a part of what I said ({said!r})")
+    return problems
+
+
+def recorded_rule(outcome: Outcome, said: str, subject: str, predicate: str) -> list[str]:
+    """`kg propose <subject> <predicate> ...`, from me, in my words (the write itself fails in the rehearsal,
+    which has no session record: the call is what is checked)."""
+    found = [call for call in kg_calls(outcome, "propose") if call[2:4] == [subject, predicate]]
+    if not found:
+        proposed_calls = [" ".join(call) for call in kg_calls(outcome, "propose")]
+        return [f"no `bosun kg propose {subject} {predicate}` (calls: {proposed_calls})"]
+    return quotes_me(found[0], said)
+
+
+def not_recorded(outcome: Outcome) -> list[str]:
+    writes = [call for verb in ("propose", "supersede") for call in kg_calls(outcome, verb)]
+    return [f"it recorded what I said as standing: {' '.join(call)}" for call in writes]
 
 
 # ---- what a run left behind, and the checks -----------------------------------------------------
@@ -1299,4 +1381,102 @@ def repo_cases() -> list[Case]:
     ]
 
 
-CASES = orchestrator_cases() + repo_cases()
+def reviewer_routing(outcome: Outcome) -> list[str]:
+    reply = str(outcome.result.get("result", ""))
+    problems = (
+        [] if any(kg_calls(outcome, verb) for verb in KG_READS) else ["it never looked in the ontology"]
+    )
+    problems += no_outreach(outcome)
+    return problems + contains("marco", reply, "the reply") + contains("acme-prs", reply, "the reply")
+
+
+def corrected_reviewer(outcome: Outcome, said: str) -> list[str]:
+    found = [
+        call for call in kg_calls(outcome, "supersede") if call[2:3] == [outcome.world.named["LEE_REVIEWS"]]
+    ]
+    if not found:
+        return ["no `bosun kg supersede` of Lee's `reviews` fact"]
+    call = found[0]
+    problems = (
+        [] if "--close" in call or "--by" in call else [f"`{' '.join(call)}` neither closes nor replaces it"]
+    )
+    return problems + quotes_me(call, said)
+
+
+def pack_used(outcome: Outcome) -> list[str]:
+    """What the exporter's brief said about tax rounding (a credit note and a multi-currency test) is in
+    what the session wrote or told me."""
+    changed = subprocess.run(
+        ["git", "-C", str(outcome.world.repo), "status", "--porcelain", "-uall"],
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout.splitlines()
+    wrote = " ".join(
+        (outcome.world.repo / line[3:]).read_text()
+        for line in changed
+        if (outcome.world.repo / line[3:]).is_file()
+    )
+    seen = f"{outcome.result.get('result', '')} {wrote}"
+    return contains(r"credit[- ]?note", seen, "what it wrote and said") + contains(
+        r"multi[- ]?currenc|several currenc|(?:two|different|mixed|multiple) currenc",
+        seen,
+        "what it wrote and said",
+    )
+
+
+def ontology_cases() -> list[Case]:
+    lee = "Lee doesn't review the exporter anymore"
+    return [
+        Case(
+            "K1-routing",
+            "orchestrator",
+            "who should review a change to the pdf renderer, and where do I ask?",
+            (seed_knowledge,),
+            reviewer_routing,
+        ),
+        Case(
+            "K2-standing-rule",
+            "orchestrator",
+            NO_DRAFTS,
+            (seed_knowledge,),
+            lambda o: recorded_rule(o, NO_DRAFTS, "feature/csv-export", "rule"),
+        ),
+        Case(
+            "K3-standing-rule-in-window",
+            "repo",
+            f"{NO_DRAFTS}, whatever else you do in this task",
+            (seed_knowledge, seed_discounts),
+            lambda o: recorded_rule(
+                o, f"{NO_DRAFTS}, whatever else you do in this task", "feature/csv-export", "rule"
+            ),
+            **DISCOUNTS_TASK,
+        ),
+        Case(
+            "K4-one-off",
+            "orchestrator",
+            "for this PR, skip the changelog",
+            (seed_knowledge,),
+            not_recorded,
+        ),
+        Case(
+            "K5-correction",
+            "orchestrator",
+            lee,
+            (seed_knowledge,),
+            lambda o: corrected_reviewer(o, lee),
+        ),
+        Case(
+            "K6-pack-used",
+            "repo",
+            "start now: make the change and its tests, then tell me what you changed and what you tested",
+            (seed_knowledge, seed_exporter_task),
+            pack_used,
+            holder=EXPORTER_REPO,
+            task="new-work",
+            ask=VAT_ASK,
+        ),
+    ]
+
+
+CASES = orchestrator_cases() + repo_cases() + ontology_cases()

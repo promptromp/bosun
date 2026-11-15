@@ -49,6 +49,8 @@ REPO_FILES = {
         '    return [line for line in note["lines"] if "discount" not in line]\n'
     ),
     "README.md": "# exporter\n\nacme's invoice exporter (fictional test fixture).\n",
+    # The tax rounding the ontology has a rule about (case K6): the sandbox world's own file.
+    "exporter/tax.py": (ROOT / "tests" / "sandbox" / "live" / "exporter" / "exporter" / "tax.py").read_text(),
 }
 WRAPPER = """#!/bin/bash
 # bosun for a scratch world: this checkout, scratch HOME/config/state, sends only logged.
@@ -67,6 +69,7 @@ BOSUN_NUDGE_AFTER_BUSINESS_DAYS="1"
 BOSUN_MAX_NUDGES="2"
 BOSUN_MAX_REVIEW_NUDGES="0"
 BOSUN_REVIEW_ESCALATE_AFTER_NUDGES="3"
+BOSUN_KNOWLEDGE_ENABLED="{knowledge}"
 """
 
 
@@ -79,6 +82,8 @@ class World:
     # Task and outreach ids are minted, so a seed names the ones it made: a check reads them here,
     # and a case's words say $NAME where the id goes (fill).
     named: dict[str, str] = field(default_factory=dict)
+    # BOSUN_KNOWLEDGE_ENABLED for this world: the ontology's rules in the prompts, and a pack in a brief.
+    knowledge: bool = True
 
     @property
     def home(self) -> Path:
@@ -146,6 +151,8 @@ class World:
         return string.Template(text).safe_substitute(self.named)
 
     def ledger(self) -> dict[str, Any]:
+        if not (self.state / "ledger.json").exists():  # a world no seed wrote an item in
+            return {"items": {}}
         data: dict[str, Any] = json.loads((self.state / "ledger.json").read_text())
         return data
 
@@ -178,8 +185,8 @@ class World:
             shutil.rmtree(self.base, ignore_errors=True)
 
 
-def build_world(base: Path, socket: str) -> World:
-    world = World(base=base, socket=socket)
+def build_world(base: Path, socket: str, knowledge: bool = True) -> World:
+    world = World(base=base, socket=socket, knowledge=knowledge)
     for directory in (
         world.home / ".claude" / "sessions",
         world.state,
@@ -201,7 +208,11 @@ def build_world(base: Path, socket: str) -> World:
     wrapper.chmod(0o755)
     (world.config / "bosun.env").write_text(
         ENV_FILE.format(
-            session=SESSION, socket=socket, orchestrator_dir=world.orchestrator_dir, repos=world.repo.parent
+            session=SESSION,
+            socket=socket,
+            orchestrator_dir=world.orchestrator_dir,
+            repos=world.repo.parent,
+            knowledge="1" if knowledge else "0",
         )
     )
     make_repo(world.repo)

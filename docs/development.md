@@ -743,7 +743,10 @@ Work up the levels; each one exercises more of the real chain.
    yours, read tools only). Each run has a scratch world: scratch HOME, ledger
    and tmux server, sends only logged, outward tools denied. It costs money (about $0.3 per case
    and run, for each case in `tests/llm/cases.py`), so neither the smoke suite nor the hooks run
-   it; run it after changing `policy.md`, `chores.md` or the task files.
+   it; run it after changing `policy.md`, `chores.md`, the task files or `knowledge.md`. The run has
+   the ontology on (`BOSUN_KNOWLEDGE_ENABLED=1`: its rules in the prompts, the acme world's knowledge
+   base seeded for the K cases, a pack in a repo brief); `--knowledge off` runs the same cases without
+   it, as the baseline of what the rules cost and change.
 8. **What learning finds:** `uv run python tests/llm/learn_eval.py [--runs 2]` builds a
    fictional world (acme's invoice exporter, three days) with planted problems (an overnight
    permission prompt, a repeated guard denial, a duplicate hand-over, a correction made twice, a
