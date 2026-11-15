@@ -150,6 +150,9 @@ class BringAlongTest(Folder):
             )
         )
         self.loop = stack.enter_context(mock.patch.object(update_facts, "loop_runs", return_value=True))
+        self.knowledge_on = stack.enter_context(
+            mock.patch.object(update_facts, "knowledge_on", return_value=False)
+        )
         self.said: list[str] = []
         self.at_turns: list[tuple[str, tuple[str, ...]]] = []
         update_state.write(self.state_dir, update_state.advanced(bringing({}), "released", pending=()))
@@ -163,7 +166,7 @@ class BringAlongTest(Folder):
             rules=(),
             keys_added=(),
             renames=(),
-            prompts=("orchestrator/policy.md", "orchestrator/learn.md"),
+            prompts=("orchestrator/knowledge.md", "orchestrator/policy.md", "orchestrator/learn.md"),
             windows=(
                 ("orchestrator", Treatment.REREAD),
                 ("api", Treatment.WAIT),
@@ -222,6 +225,17 @@ class BringAlongTest(Folder):
         waited = [line for line in self.said if line.startswith("Waiting for")]
         self.assertEqual(len(waited), 2)  # said when the list changed, not every turn
         self.assertIn("orchestrator, api", waited[0])
+
+    def test_the_ontology_rules_are_reread_only_with_the_key_on(self) -> None:
+        """As the plan's treatment (update_plan.reread_patterns): with the key off (above) only the policy;
+        with it on, the rules too."""
+        self.knowledge_on.return_value = True
+        with self.turns([]):
+            done = self.bring_along()
+        install = install_paths.install_path(Path(done.to_root))
+        rules, policy = (str(install / "orchestrator" / name) for name in ("knowledge.md", "policy.md"))
+        self.assertEqual(done.reread, (rules, policy))
+        self.knowledge_on.assert_called_with(Path(done.to_root))
 
     def test_ctrl_c_leaves_the_windows_to_the_check_in_loop(self) -> None:
         before = signal.getsignal(signal.SIGINT)

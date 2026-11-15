@@ -124,19 +124,42 @@ class TestMakePlan(unittest.TestCase):
         self.assertEqual(plan(new=new, windows=windows).kinds, (("orchestrator", "orchestrator"),))
 
     def test_changed_ontology_rules_are_reread_by_the_orchestrator_and_restart_a_repo_window(self) -> None:
-        """The orchestrator's policy ends with orchestrator/knowledge.md (re-read, as policy.md is); a repo
-        window's prompt holding it shows as a changed launch (launch_record counts the file)."""
+        """With the key on, the orchestrator's policy ends with orchestrator/knowledge.md (re-read, as
+        policy.md is); a repo window's prompt holding it shows as a changed launch (launch_record counts
+        the file)."""
         rules = "orchestrator/knowledge.md"
         old = facts(prompts={**BASE_PROMPTS, rules: "k1"})
         new = facts("bbb", prompts={**BASE_PROMPTS, rules: "k2"})
         windows = [
             up.WindowFacts("orchestrator", "orchestrator", "idle", False),
             up.WindowFacts("api", "repo", "idle", True),
-            up.WindowFacts("web", "repo", "idle", False),  # a Codex window, or the key off: no rules
+            up.WindowFacts("web", "repo", "idle", False),  # a Codex window: no rules
         ]
-        got = plan(old=old, new=new, windows=windows)
+        got = plan(old=old, new=new, windows=windows, knowledge_on=True)
         self.assertEqual(got.prompts, (rules,))
         self.assertEqual(got.windows, (("orchestrator", T.REREAD), ("api", T.RESTART), ("web", T.LEAVE)))
+
+    def test_with_the_key_off_new_ontology_rules_ask_nothing_of_the_orchestrator(self) -> None:
+        """With BOSUN_KNOWLEDGE_ENABLED off the policy never held the rules: the first update that brings
+        orchestrator/knowledge.md (new, so changed) still lists it, but the orchestrator is left as it is."""
+        rules = "orchestrator/knowledge.md"
+        new = facts("bbb", prompts={**BASE_PROMPTS, rules: "k1"})
+        windows = [up.WindowFacts("orchestrator", "orchestrator", "idle", False)]
+        got = plan(new=new, windows=windows)
+        self.assertEqual(got.prompts, (rules,))
+        self.assertEqual(got.windows, (("orchestrator", T.LEAVE),))
+        on = plan(new=new, windows=windows, knowledge_on=True)
+        self.assertEqual(on.windows, (("orchestrator", T.REREAD),))
+
+    def test_with_the_key_off_the_policy_is_still_reread_beside_the_rules(self) -> None:
+        new = facts("bbb", prompts={**BASE_PROMPTS, POLICY: "a2", "orchestrator/knowledge.md": "k1"})
+        windows = [up.WindowFacts("orchestrator", "orchestrator", "idle", False)]
+        self.assertEqual(plan(new=new, windows=windows).windows, (("orchestrator", T.REREAD),))
+
+    def test_reread_patterns_name_the_rules_only_with_the_key_on(self) -> None:
+        self.assertNotIn(up.KNOWLEDGE_RULES, up.reread_patterns(False))
+        self.assertIn(up.KNOWLEDGE_RULES, up.reread_patterns(True))
+        self.assertEqual(set(up.reread_patterns(True)) - set(up.reread_patterns(False)), {up.KNOWLEDGE_RULES})
 
     def test_migrations_between_the_formats(self) -> None:
         got = plan(new=facts("bbb", formats={"ledger": 2}), steps=lambda s, a, b: [(1, 2)])

@@ -324,9 +324,11 @@ Each window gets one of three treatments, decided from the plan and the window's
 - **Nothing it was launched with changed.** It is left alone. This is the case for most updates. The
   next bosun command or hook it runs uses the new version.
 - **Only the orchestrator's prompts changed** (`policy.md`, `knowledge.md`, the task files). Once it is idle, it
-  gets the update prompt, which asks it to re-read those files. A repo window whose system prompt holds the
-  ontology's rules (`BOSUN_KNOWLEDGE_ENABLED=1`, a Claude window) cannot re-read it: their file is part of its
-  fingerprint (below), so a change to it restarts the window. Tasks already handed to repo sessions keep
+  gets the update prompt, which asks it to re-read those files; `knowledge.md` only with
+  `BOSUN_KNOWLEDGE_ENABLED=1`, as its policy holds the ontology's rules only then (with the key off, the update
+  that brings them lists them among the changed prompts and asks nothing of the orchestrator for them). A
+  repo window whose system prompt holds the ontology's rules (`BOSUN_KNOWLEDGE_ENABLED=1`, a Claude window)
+  cannot re-read it: their file is part of its fingerprint (below), so a change to it restarts the window. Tasks already handed to repo sessions keep
   their text, as today; the summary lists them, so I can send `delegate --update` if a rule matters:
   each item handed a task type whose file changed (`delegate review,fix` hands both; a type the site
   replaces in its own `tasks/` is the site's text, which an update never changes), and every item

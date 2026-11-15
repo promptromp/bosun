@@ -402,7 +402,8 @@ class SessionQuoteTest(KnowledgeTestCase):
         self.assertIn("stays proposed", out)
 
     def test_a_paste_is_remembered_as_long_as_a_quote_looks_back(self) -> None:
-        self.assertLessEqual(knowledge.QUOTE_MAX_AGE, timedelta(hours=events.PASTED_HOURS))
+        """Longer, in fact: a paste queued behind a long turn reaches the transcript hours later."""
+        self.assertLess(knowledge.QUOTE_MAX_AGE, timedelta(hours=events.PASTED_HOURS))
         events.note_pasted(self.state, "alpha", "a brief")
         later = datetime.now(UTC) + knowledge.QUOTE_MAX_AGE - timedelta(minutes=1)
         self.assertEqual(len(events.pasted_hashes(self.state, "alpha", later)), 1)

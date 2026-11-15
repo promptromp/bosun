@@ -360,6 +360,31 @@ class QueueTest(unittest.TestCase):
             later = datetime.now(UTC) + timedelta(hours=events.PASTED_HOURS + 1)
             self.assertEqual(events.pasted_hashes(state_dir, "exporter", later), set())
 
+    def test_the_pasted_log_keeps_only_the_hours_a_paste_counts(self) -> None:
+        """Pruned by age on the next paste (and at most PASTED_KEEP lines); a broken line goes too. A
+        paste counts longer than a quote looks back (test_knowledge), for one queued behind a long turn."""
+        with tempfile.TemporaryDirectory() as tmp:
+            state_dir = Path(tmp)
+            log = events.events_dir(state_dir) / events.PASTED_FILE
+            log.parent.mkdir(parents=True, exist_ok=True)
+            old = (datetime.now(UTC) - timedelta(hours=events.PASTED_HOURS + 1)).isoformat(timespec="seconds")
+            recent = (datetime.now(UTC) - timedelta(hours=events.PASTED_HOURS - 1)).isoformat(
+                timespec="seconds"
+            )
+            log.write_text(
+                json.dumps({"at": old, "window": "exporter", "hash": "old"})
+                + "\nnot json\n"
+                + json.dumps({"at": recent, "window": "exporter", "hash": "recent"})
+                + "\n"
+            )
+            events.note_pasted(state_dir, "exporter", "next")
+            kept = [json.loads(line)["hash"] for line in log.read_text().splitlines()]
+            self.assertEqual(kept, ["recent", activity.prompt_hash("next")])
+            self.assertEqual(
+                events.pasted_hashes(state_dir, "exporter", datetime.now(UTC)),
+                {"recent", activity.prompt_hash("next")},
+            )
+
     def test_config_from_the_environment(self) -> None:
         config = Config.from_env(ENV)
         self.assertEqual(config.max_per_day, 30)

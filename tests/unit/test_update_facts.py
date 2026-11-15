@@ -91,6 +91,24 @@ class BlockerTest(World):
             with mock.patch.object(update_facts, "shell", return_value=done):
                 self.assertFalse(update_facts.console_job(self.new))
 
+    def test_the_ontology_key_is_read_as_the_new_version_reads_the_config(self) -> None:
+        """Only BOSUN_KNOWLEDGE_ENABLED=1 is on; a shell that fails is off. The plan's treatment of the
+        orchestrator goes by it (update_plan.reread_patterns)."""
+        for code, out, on in ((0, "1", True), (0, "0", False), (0, "", False), (1, "1", False)):
+            done = subprocess.CompletedProcess([], code, out, "")
+            with mock.patch.object(update_facts, "shell", return_value=done) as shell:
+                self.assertIs(update_facts.knowledge_on(self.new), on)
+            self.assertEqual(shell.call_args.args[0], self.new)
+        rules = {"orchestrator/knowledge.md": "k1"}
+        with (
+            mock.patch.object(
+                update_facts, "prompts", side_effect=lambda r: {} if r == self.old else dict(rules)
+            ),
+            mock.patch.object(update_facts, "knowledge_on", return_value=True) as on,
+        ):
+            self.assertEqual(self.plan().prompts, ("orchestrator/knowledge.md",))
+        on.assert_called_once_with(self.new)
+
     def test_the_plan_says_which_kept_values_it_writes_to_bosun_env(self) -> None:
         """A key the update adds with a kept value (migrations.CONFIG_ADDED), that bosun.env does not
         set: the plan shows it, so the person saying yes sees bosun.env change."""

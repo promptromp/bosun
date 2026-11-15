@@ -65,11 +65,11 @@ QUEUE_FILE = "queue.jsonl"
 STATE_FILE = "state.json"
 LOCK_FILE = "lock"
 # Prompts bosun pasted into a window (`bosun send`), by hash, so neither the window's hook nor a
-# quote of my words (kg --from-user) takes them for mine; how long one counts (a queued prompt may
-# wait for a long turn; at least knowledge.QUOTE_MAX_AGE, as long as a quote looks back), and how
-# many lines the file keeps.
+# quote of my words (kg --from-user) takes them for mine; how long one counts and is kept (longer than
+# knowledge.QUOTE_MAX_AGE, as long as a quote looks back, by the hours a queued paste may wait behind a
+# long turn), and how many lines the file keeps at most.
 PASTED_FILE = "pasted.jsonl"
-PASTED_HOURS = 24
+PASTED_HOURS = 30
 PASTED_KEEP = 500
 SECONDS_PER_HOUR = 3600
 DELIVERED_RETENTION_DAYS = 7
@@ -198,17 +198,26 @@ def before(at: str, cutoff: float) -> bool:
 
 def note_pasted(state_dir: Path, window: str, text: str) -> None:
     """`bosun send` is about to paste <text> into <window>."""
+    now = datetime.now(UTC)
     line = json.dumps(
-        {
-            "at": datetime.now(UTC).isoformat(timespec="seconds"),
-            "window": window,
-            "hash": activity.prompt_hash(text),
-        }
+        {"at": now.isoformat(timespec="seconds"), "window": window, "hash": activity.prompt_hash(text)}
     )
     with locked(state_dir) as directory:
         path = directory / PASTED_FILE
         lines = path.read_text().splitlines() if path.exists() else []
-        path.write_text("\n".join([*lines[-PASTED_KEEP:], line]) + "\n")
+        recent = [old for old in lines if _pasted_since(old, now) is not None]
+        path.write_text("\n".join([*recent[-PASTED_KEEP:], line]) + "\n")
+
+
+def _pasted_since(line: str, now: datetime) -> dict[str, Any] | None:
+    """The entry of the pasted log's <line> if it is from the last PASTED_HOURS before <now>; None if
+    older, or not an entry."""
+    cutoff = now.timestamp() - PASTED_HOURS * SECONDS_PER_HOUR
+    with contextlib.suppress(json.JSONDecodeError, KeyError, TypeError, ValueError):
+        entry = json.loads(line)
+        if isinstance(entry, dict) and not before(entry["at"], cutoff):
+            return entry
+    return None
 
 
 def pasted_hashes(state_dir: Path, window: str, now: datetime) -> set[str]:
@@ -217,14 +226,12 @@ def pasted_hashes(state_dir: Path, window: str, now: datetime) -> set[str]:
         lines = (events_dir(state_dir) / PASTED_FILE).read_text().splitlines()
     except FileNotFoundError:
         return set()
-    cutoff = now.timestamp() - PASTED_HOURS * SECONDS_PER_HOUR
-    found = set()
-    for line in lines:
-        with contextlib.suppress(json.JSONDecodeError, KeyError, TypeError, ValueError):
-            entry = json.loads(line)
-            if entry["window"] == window and not before(entry["at"], cutoff):
-                found.add(str(entry["hash"]))
-    return found
+    entries = (_pasted_since(line, now) for line in lines)
+    return {
+        str(entry["hash"])
+        for entry in entries
+        if entry is not None and entry.get("window") == window and "hash" in entry
+    }
 
 
 # ---- the dispatcher ----------------------------------------------------------------------------
