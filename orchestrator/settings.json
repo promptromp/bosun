@@ -8,6 +8,7 @@
       "Bash(bosun kg search:*)",
       "Bash(bosun kg facts:*)",
       "Bash(bosun kg context:*)",
+      "Bash(bosun kg add-entity:*)",
       "Bash(bosun kg propose:*)",
       "Bash(bosun kg supersede:*)",
       "Bash(bosun kg confirm:*)",

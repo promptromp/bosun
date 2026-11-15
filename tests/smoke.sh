@@ -1370,7 +1370,7 @@ rm "$BOSUN_CONFIG_DIR/policy.md"
 check "with the ontology on, the orchestrator's launch ends its policy with the ontology's rules" grep -qE -- '--append-system-prompt .*Look.before.asking' <<<"$(cd "$REPO_A" && BOSUN_ORCHESTRATOR=orch BOSUN_KNOWLEDGE_ENABLED=1 "$BOSUN" launch orch 2>&1)"
 check "... and off, it does not" bash -c '! grep -q "Look.before.asking" <<<"$1"' _ "$out"
 check "the orchestrator may read and write the ontology without asking, but not forget or import" bash -c '
-  jq -e "(.permissions.allow | index(\"Bash(bosun kg propose:*)\") and index(\"Bash(bosun kg lookup:*)\"))
+  jq -e "(.permissions.allow | index(\"Bash(bosun kg propose:*)\") and index(\"Bash(bosun kg lookup:*)\") and index(\"Bash(bosun kg add-entity:*)\"))
     and ((.permissions.allow | map(select(test(\"kg (forget|import|identify)\"))) | length) == 0)" "$1"' _ "$ROOT/orchestrator/settings.json"
 check "orchestrator settings are valid JSON" jq -e '.permissions.ask | index("Bash(gh pr merge:*)")' "$ROOT/orchestrator/settings.json"
 guard_says() { # <command>: the guard's decision for an orchestrator Bash command ("" = allowed)
