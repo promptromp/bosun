@@ -232,7 +232,7 @@ class Step:
 class Stay:
     path: str
     why: str
-    record: bool = False  # your ledger or knowledge graph, which you may be asked about
+    record: bool = False  # your ledger or ontology, which you may be asked about
 
 
 @dataclass(frozen=True)
@@ -494,7 +494,7 @@ def records_stay(facts: Facts, choices: Choices) -> list[Stay]:
         stays.append(Stay(where, f"your ledger and learning history{ledger_count(facts)}", record=True))
     if choices.keep_knowledge and has_knowledge(facts):
         where = str(Path(facts.config_dir) / "knowledge")
-        stays.append(Stay(where, f"your knowledge graph{knowledge_count(facts)}", record=True))
+        stays.append(Stay(where, f"your ontology{knowledge_count(facts)}", record=True))
     return stays
 
 
@@ -579,7 +579,7 @@ def questions(facts: Facts, choices: Choices) -> tuple[Question, ...]:
         found.append(Question(LEDGER, text))
     if choices.keep_knowledge and has_knowledge(facts):
         where = tilde(str(Path(facts.config_dir) / "knowledge"), facts.home)
-        text = f"Keep your knowledge graph{knowledge_count(facts)}, in {where}?"
+        text = f"Keep your ontology{knowledge_count(facts)}, in {where}?"
         found.append(Question(KNOWLEDGE, text))
     return tuple(found)
 

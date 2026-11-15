@@ -21,7 +21,7 @@ Two goals, in this order:
 
 1. **Sync and restore my own state** across my machines, and onto a new one. This is the MVP.
 2. **Collaborate across people and their agents**, soon after. Two examples:
-   - a colleague's agent benefits from what my knowledge graph has learned;
+   - a colleague's agent benefits from what my ontology has learned;
    - a colleague's agent sees that my ledger already has a review of a PR, so we don't both do work
      that only one of us has to do.
 
@@ -253,7 +253,7 @@ new journal's first transaction (genesis) and the files refuse every write after
 that cut is finished by the next write like any other, the files being behind the journal. A cut
 between the new id and that save makes one more id at the next write, from which nothing was ever
 minted. The knowledge base's way out is the same, with `knowledge/journal/`
-([Knowledge](../knowledge.md)).
+([Ontology](../knowledge.md)).
 
 **A change made outside the journal is adopted.** `ledger.json` can still be changed by something
 that does not journal: by hand, or by an older bosun (after a downgrade, or a checkout's bosun on
@@ -359,7 +359,7 @@ Three ledger behaviours change meaning:
 
 ### Knowledge changes
 
-The knowledge graph needs less:
+The ontology needs less:
 
 - `add` and `update` records gain the envelope.
 - Entity changes become changes in the same log; `entities.jsonl` becomes a rebuilt file.

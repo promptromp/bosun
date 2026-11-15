@@ -1,0 +1,597 @@
+/* The home page's two pictures (docs/index.md): the chart and the log under "How it works" (chart.js), and the
+   whiteboard under "How does it all fit together?" (whiteboard.js). Colours are the site's tokens (../site.css):
+   teal is bosun at work, amber is what waits for you, a dashed line is what comes next. */
+
+.bx-home {
+  --bx-pic-shadow: 0 18px 40px -28px rgba(19, 42, 62, 0.45);
+  --bx-pic-font: var(--md-text-font-family);
+  --bx-pic-mono: var(--md-code-font-family);
+}
+[data-md-color-scheme="slate"] .bx-home {
+  --bx-pic-shadow: 0 18px 40px -26px rgba(0, 0, 0, 0.8);
+}
+
+/* ---------- The chart: the knowledge graph as a sea chart ---------- */
+
+.bx-chart {
+  position: relative;
+  margin-top: 2rem;
+  --land: color-mix(in srgb, var(--bx-amber) 9%, var(--bx-surface));
+}
+.bx-chart svg {
+  display: block;
+  width: 100%;
+  height: auto;
+  border-radius: 6px;
+  font-family: var(--bx-pic-font);
+}
+.bx-chart .paper {
+  fill: var(--bx-surface);
+}
+.bx-chart .neat {
+  fill: none;
+  stroke: var(--bx-ink);
+  stroke-width: 1;
+}
+.bx-chart .neat-outer {
+  fill: none;
+  stroke: var(--bx-ink);
+  stroke-width: 2;
+}
+.bx-chart .tick {
+  fill: color-mix(in srgb, var(--bx-ink) 75%, transparent);
+}
+.bx-chart .shoal {
+  fill: var(--bx-shallows);
+}
+.bx-chart .contour {
+  fill: none;
+  stroke: color-mix(in srgb, var(--bx-teal) 45%, transparent);
+  stroke-width: 0.8;
+}
+.bx-chart .contour.deep {
+  stroke-dasharray: 3 3;
+  opacity: 0.7;
+}
+.bx-chart .land {
+  fill: var(--land);
+  stroke: var(--bx-ink);
+  stroke-width: 1.3;
+}
+.bx-chart .ghost-land {
+  fill: none;
+  stroke: color-mix(in srgb, var(--bx-ink) 45%, transparent);
+  stroke-width: 1.2;
+  stroke-dasharray: 5 4;
+}
+.bx-chart .fade-a {
+  stop-color: var(--bx-surface);
+  stop-opacity: 0;
+}
+.bx-chart .fade-b {
+  stop-color: var(--bx-surface);
+  stop-opacity: 1;
+}
+.bx-chart .region {
+  font-style: italic;
+  font-weight: 700;
+  font-size: 17px;
+  fill: var(--bx-ink);
+  letter-spacing: 0.06em;
+}
+.bx-chart .region-sub {
+  font-style: italic;
+  font-weight: 400;
+  font-size: 11px;
+  fill: var(--bx-muted);
+  letter-spacing: 0;
+}
+.bx-chart .mark {
+  fill: var(--bx-surface);
+  stroke: var(--bx-ink);
+  stroke-width: 1.4;
+}
+.bx-chart .mark-dot {
+  fill: var(--bx-ink);
+}
+.bx-chart .mark-label,
+.bx-chart .mark-type {
+  paint-order: stroke;
+  stroke: var(--land);
+  stroke-width: 3.5px;
+  stroke-linejoin: round;
+}
+.bx-chart .mark-label {
+  font-size: 12px;
+  fill: var(--bx-ink);
+}
+.bx-chart .mark-type {
+  font-family: var(--bx-pic-mono);
+  font-size: 9.5px;
+  fill: var(--bx-muted);
+}
+.bx-chart .lead {
+  fill: none;
+  stroke: var(--bx-ink);
+  stroke-width: 0.9;
+  stroke-dasharray: 1 3;
+  stroke-linecap: round;
+  opacity: 0.75;
+}
+.bx-chart .pred {
+  font-family: var(--bx-pic-mono);
+  font-size: 10px;
+  fill: var(--bx-muted);
+  paint-order: stroke;
+  stroke: var(--bx-surface);
+  stroke-width: 4px;
+  stroke-linejoin: round;
+}
+.bx-chart .bearing {
+  fill: none;
+  stroke: var(--bx-teal);
+  stroke-width: 1.2;
+  stroke-dasharray: 6 4;
+}
+.bx-chart .bearing.is-drawing {
+  transition: stroke-dashoffset 1.4s cubic-bezier(0.3, 0.7, 0.2, 1);
+}
+.bx-chart .bearing-label {
+  font-size: 11px;
+  font-style: italic;
+  fill: var(--bx-teal);
+  paint-order: stroke;
+  stroke: var(--bx-surface);
+  stroke-width: 4px;
+}
+.bx-chart .hull {
+  fill: var(--bx-surface);
+  stroke: var(--bx-ink);
+  stroke-width: 1.3;
+}
+.bx-chart .hull.lead-boat {
+  fill: var(--bx-teal);
+  stroke: var(--bx-teal);
+}
+.bx-chart .wake {
+  fill: none;
+  stroke: color-mix(in srgb, var(--bx-ink) 35%, transparent);
+  stroke-width: 0.9;
+}
+.bx-chart .boat-label {
+  font-size: 11.5px;
+  fill: var(--bx-ink);
+  paint-order: stroke;
+  stroke: var(--bx-surface);
+  stroke-width: 4px;
+  stroke-linejoin: round;
+}
+.bx-chart .boat-label .sub {
+  fill: var(--bx-muted);
+  font-size: 10.5px;
+  font-weight: 400;
+}
+.bx-chart .boat-label.big {
+  font-weight: 800;
+  font-size: 13px;
+}
+.bx-chart .rose line,
+.bx-chart .rose circle {
+  stroke: color-mix(in srgb, var(--bx-ink) 55%, transparent);
+  fill: none;
+  stroke-width: 0.8;
+}
+.bx-chart .rose path {
+  fill: color-mix(in srgb, var(--bx-ink) 70%, transparent);
+}
+.bx-chart .rose path.light {
+  fill: var(--bx-surface);
+  stroke: color-mix(in srgb, var(--bx-ink) 70%, transparent);
+  stroke-width: 0.8;
+}
+.bx-chart .rose text {
+  font-size: 10px;
+  font-weight: 700;
+  fill: var(--bx-ink);
+  text-anchor: middle;
+}
+.bx-chart .cartouche rect {
+  fill: var(--bx-surface);
+  stroke: var(--bx-ink);
+  stroke-width: 1;
+}
+.bx-chart .cartouche .t {
+  font-size: 15px;
+  font-weight: 800;
+  fill: var(--bx-ink);
+}
+.bx-chart .cartouche .s {
+  font-size: 11px;
+  fill: var(--bx-muted);
+}
+.bx-chart .uncharted {
+  font-size: 12px;
+  fill: var(--bx-muted);
+}
+.bx-chart .uncharted .h {
+  font-weight: 700;
+  fill: var(--bx-ink);
+}
+.bx-chart .next-pill rect {
+  fill: none;
+  stroke: var(--bx-muted);
+  stroke-dasharray: 3 2;
+}
+.bx-chart .next-pill text {
+  font-size: 10.5px;
+  font-weight: 700;
+  fill: var(--bx-muted);
+}
+
+/* A landmark or a boat: hover, focus, and the one a log entry points at */
+.bx-chart [tabindex] {
+  cursor: pointer;
+  outline: none;
+}
+.bx-chart [tabindex]:focus-visible .mark,
+.bx-chart [tabindex]:focus-visible .hull {
+  stroke: var(--bx-teal);
+  stroke-width: 3;
+}
+.bx-chart .is-hl .mark,
+.bx-chart .is-hl .hull:not(.lead-boat) {
+  fill: var(--bx-teal-soft);
+  stroke: var(--bx-teal);
+  stroke-width: 2.4;
+}
+.bx-chart .is-hl .hull.lead-boat {
+  stroke: var(--bx-ink);
+  stroke-width: 2;
+}
+.bx-chart .is-hl .mark-label,
+.bx-chart .is-hl .boat-label {
+  fill: var(--bx-teal);
+  font-weight: 700;
+}
+.bx-chart__tip {
+  position: absolute;
+  z-index: 3;
+  max-width: 250px;
+  padding: 0.5rem 0.7rem;
+  border-radius: 8px;
+  background: var(--bx-ink);
+  color: var(--bx-bg);
+  font-size: 0.8rem;
+  line-height: 1.4;
+  pointer-events: none;
+  box-shadow: var(--bx-pic-shadow);
+}
+.bx-chart__tip b {
+  display: block;
+}
+.bx-chart__tip span {
+  opacity: 0.8;
+}
+.bx-home .md-typeset .bx-chart__hint {
+  margin: 0.6rem 0 0;
+  font-size: 0.8em;
+  color: var(--bx-muted);
+}
+
+/* ---------- Under the chart: the ship's log (the ledger) and tonight's correction (learning) ---------- */
+
+.bx-voyage {
+  display: grid;
+  grid-template-columns: minmax(0, 1.5fr) minmax(0, 1fr);
+  gap: 1.4rem;
+  align-items: start;
+  margin-top: 1.4rem;
+}
+.bx-home .md-typeset .bx-log {
+  position: relative;
+  background: var(--bx-surface);
+  border: 1px solid var(--bx-line);
+  border-radius: 10px;
+  padding: 0.9rem 0.9rem 0.6rem;
+  box-shadow: var(--bx-pic-shadow);
+}
+.bx-home .md-typeset .bx-log h3,
+.bx-home .md-typeset .bx-notice h3 {
+  margin: 0;
+  font-size: 0.9rem;
+  font-weight: 800;
+}
+.bx-home .md-typeset .bx-log__sub {
+  margin: 0 0 0.5rem;
+  font-size: 0.74em;
+  color: var(--bx-muted);
+}
+.bx-home .md-typeset .bx-log ol {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  border-top: 1.5px solid var(--bx-ink);
+}
+.bx-home .md-typeset .bx-log li {
+  margin: 0;
+  border-bottom: 1px solid var(--bx-line);
+}
+.bx-home .md-typeset .bx-log button {
+  all: unset;
+  box-sizing: border-box;
+  width: 100%;
+  display: grid;
+  grid-template-columns: 2.9rem minmax(0, 1fr) auto;
+  column-gap: 0.55rem;
+  padding: 0.38rem 0.3rem;
+  cursor: pointer;
+  border-radius: 4px;
+  font-size: 0.77em;
+  line-height: 1.35;
+}
+.bx-home .md-typeset .bx-log button:hover,
+.bx-home .md-typeset .bx-log button[aria-pressed="true"] {
+  background: var(--bx-teal-soft);
+}
+.bx-home .md-typeset .bx-log button:focus-visible {
+  outline: 2px solid var(--bx-teal);
+  outline-offset: 1px;
+}
+.bx-log time {
+  font-family: var(--bx-pic-mono);
+  font-size: 0.9em;
+  color: var(--bx-muted);
+  padding-top: 1px;
+}
+.bx-log .id {
+  display: block;
+  font-family: var(--bx-pic-mono);
+  font-size: 0.85em;
+  color: var(--bx-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.bx-log .what {
+  color: var(--bx-ink);
+}
+.bx-home .md-typeset .bx-log .what code {
+  font-size: 0.85em;
+  padding: 0 0.3em;
+  color: var(--bx-teal);
+  background: var(--bx-teal-soft);
+}
+.bx-log .st {
+  align-self: start;
+  font-size: 0.85em;
+  font-weight: 700;
+  padding: 0 7px;
+  border-radius: 999px;
+  border: 1px solid var(--bx-line);
+  color: var(--bx-muted);
+  white-space: nowrap;
+}
+.bx-log .st.work {
+  color: var(--bx-teal);
+  border-color: color-mix(in srgb, var(--bx-teal) 45%, transparent);
+}
+.bx-log .st.wait {
+  color: var(--bx-amber-text);
+  border-color: color-mix(in srgb, var(--bx-amber) 60%, transparent);
+  background: var(--bx-amber-soft);
+}
+.bx-home .md-typeset .bx-log__foot {
+  margin: 0.5rem 0 0;
+  font-size: 0.72em;
+  color: var(--bx-muted);
+}
+.bx-home .md-typeset .bx-notice {
+  padding: 0.8rem 0.9rem;
+  border-radius: 10px;
+  border: 1.5px dashed color-mix(in srgb, var(--bx-amber) 70%, transparent);
+  background: var(--bx-amber-soft);
+  font-size: 0.8em;
+  line-height: 1.45;
+}
+.bx-home .md-typeset .bx-notice h3 {
+  color: var(--bx-amber-text);
+}
+.bx-home .md-typeset .bx-notice p {
+  margin: 0.3rem 0 0;
+}
+.bx-home .md-typeset .bx-notice .bx-notice__ev {
+  color: var(--bx-muted);
+  font-size: 0.93em;
+}
+.bx-home .md-typeset .bx-notice__item {
+  margin-top: 0.55rem;
+}
+.bx-home .md-typeset .bx-notice__item + .bx-notice__item {
+  margin-top: 0.8rem;
+  padding-top: 0.8rem;
+  border-top: 1px dashed color-mix(in srgb, var(--bx-amber) 55%, transparent);
+}
+.bx-home .md-typeset .bx-notice strong {
+  color: var(--bx-ink);
+}
+.bx-home .md-typeset .bx-notice__at {
+  all: unset;
+  margin-left: 0.5rem;
+  font-size: 0.9em;
+  color: var(--bx-teal);
+  text-decoration: underline;
+  text-decoration-color: color-mix(in srgb, var(--bx-teal) 45%, transparent);
+  text-underline-offset: 0.18em;
+  cursor: pointer;
+}
+.bx-home .md-typeset .bx-notice__at:focus-visible {
+  outline: 2px solid var(--bx-teal);
+  outline-offset: 2px;
+  border-radius: 3px;
+}
+.bx-home .md-typeset .bx-notice__at[aria-pressed="true"] {
+  font-weight: 700;
+}
+.bx-notice__yes {
+  display: inline-block;
+  margin-top: 0.45rem;
+  font-weight: 700;
+  font-size: 0.9em;
+  padding: 0 9px;
+  border-radius: 999px;
+  background: var(--bx-amber);
+  color: #241600;
+}
+
+/* The points under the chart: the third one comes next, so its rule is dashed */
+.bx-home .md-typeset .bx-points--two {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 1.3rem 2rem;
+  margin-top: 2.2rem;
+}
+.bx-home .md-typeset .bx-points > li.is-next {
+  border-left-style: dashed;
+}
+.bx-next {
+  display: inline-block;
+  vertical-align: 0.12em;
+  margin-right: 0.35em;
+  padding: 0 0.5em;
+  border: 1px dashed currentColor;
+  border-radius: 999px;
+  font-size: 0.72em;
+  font-weight: 700;
+  line-height: 1.55;
+  color: var(--bx-muted);
+}
+
+/* ---------- The whiteboard ---------- */
+
+.bx-board {
+  position: relative;
+  margin-top: 2rem;
+  border: 1px solid var(--bx-line);
+  border-radius: 14px;
+  background-color: var(--bx-surface);
+  background-image: radial-gradient(color-mix(in srgb, var(--bx-ink) 13%, transparent) 1px, transparent 1.2px);
+  background-size: 22px 22px;
+  overflow: hidden;
+}
+.bx-board svg {
+  display: block;
+  width: 100%;
+  height: auto;
+  font-family: var(--bx-pic-font);
+}
+.bx-board text {
+  fill: var(--bx-ink);
+}
+.bx-board .t-title {
+  font-size: 19px;
+  font-weight: 800;
+}
+.bx-board .t-corner {
+  font-size: 16px;
+}
+.bx-board .t-next-title {
+  font-size: 17px;
+  fill: var(--bx-muted);
+}
+.bx-board .t-body {
+  font-size: 14px;
+  fill: var(--bx-muted);
+}
+.bx-board .t-small {
+  font-size: 12.5px;
+}
+.bx-board .t-note {
+  font-size: 14px;
+  font-style: italic;
+  fill: var(--bx-teal);
+}
+.bx-board .t-note.t-quiet {
+  font-size: 13px;
+  fill: var(--bx-muted);
+}
+.bx-board .t-mono {
+  font-family: var(--bx-pic-mono);
+  font-size: 12px;
+  fill: var(--bx-muted);
+}
+.bx-board .t-chip {
+  font-size: 12px;
+  font-weight: 700;
+  fill: var(--bx-teal);
+}
+.bx-board .t-ink {
+  fill: var(--bx-ink);
+}
+.bx-board .t-teal {
+  fill: var(--bx-teal);
+}
+.bx-board .t-bold {
+  font-weight: 700;
+}
+.bx-board .t-sticky {
+  font-size: 15px;
+  font-weight: 700;
+  fill: #3d2700;
+}
+[data-md-color-scheme="slate"] .bx-board .t-sticky {
+  fill: var(--bx-amber-text);
+}
+.bx-board .t-num {
+  font-size: 15px;
+  font-weight: 800;
+  fill: var(--bx-teal);
+  text-anchor: middle;
+}
+.bx-board .t-num.is-next,
+.bx-board .t-next {
+  fill: var(--bx-muted);
+}
+.bx-board .t-next {
+  font-size: 13px;
+  font-weight: 700;
+}
+.bx-board .stage {
+  transition: opacity 0.5s;
+}
+.bx-board .is-drawing path {
+  transition: stroke-dashoffset 0.9s cubic-bezier(0.4, 0.1, 0.3, 1);
+}
+.bx-home .md-typeset .bx-board__replay {
+  position: absolute;
+  right: 10px;
+  top: 10px;
+  font: inherit;
+  font-size: 0.75rem;
+  padding: 0.15rem 0.7rem;
+  border-radius: 999px;
+  border: 1px solid var(--bx-line);
+  background: var(--bx-surface);
+  color: var(--bx-muted);
+  cursor: pointer;
+}
+.bx-home .md-typeset .bx-board__replay:hover {
+  color: var(--bx-teal);
+  border-color: var(--bx-teal);
+}
+
+@media screen and (max-width: 60em) {
+  .bx-voyage {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+@media screen and (max-width: 38em) {
+  .bx-home .md-typeset .bx-points--two {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .bx-chart .bearing.is-drawing,
+  .bx-board .stage,
+  .bx-board .is-drawing path {
+    transition: none;
+  }
+}

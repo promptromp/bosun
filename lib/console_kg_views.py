@@ -1,4 +1,4 @@
-"""The Knowledge Graph page's two pictures of the whole knowledge base (design: docs/design/console.md,
+"""The Ontology page's two pictures of the whole knowledge base (design: docs/design/console.md,
 section 6): the Briefing (/api/knowledge/briefing) and the Constellation
 (/api/knowledge/constellation). Pure over a knowledge_model.KB and a time zone; lib/console_kb.py
 reads the knowledge base (never identifiers.jsonl) and lib/console_knowledge.py supplies what every

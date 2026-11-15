@@ -84,6 +84,57 @@ class KnowledgeExampleTest(unittest.TestCase):
         self.assertEqual(docs_examples.fact_status({}), "confirmed")
 
 
+class ChartTest(unittest.TestCase):
+    """The home page's chart (docs/assets/home/chart.js) is a picture, not a live example, so its names are
+    written in the script: they must still be the acme world's, as the examples below it show it."""
+
+    CHART: ClassVar[str] = (ROOT / "docs/assets/home/chart.js").read_text()
+    ISLANDS: ClassVar[dict[str, set[str]]] = {
+        "people": {"person", "team"},
+        "process": {"process", "gate", "step", "channel", "system"},
+        "product": {"repo", "environment", "lesson"},
+    }
+
+    @classmethod
+    def fixture(cls) -> list[dict[str, Any]]:
+        lines = docs_examples.KNOWLEDGE_FIXTURE.read_text().splitlines()
+        return [json.loads(line) for line in lines if line.strip()]
+
+    def marks(self) -> list[tuple[str, str, str, str]]:
+        mark = r'\["([a-z]+/[^"]+)", "(people|process|product)", "([^"]+)", "([a-z]+)"'
+        found = re.findall(mark, self.CHART)
+        self.assertGreater(len(found), 5)
+        return found
+
+    def test_its_landmarks_are_the_fixture_s_entities_on_their_island(self) -> None:
+        names = {r["id"]: r["name"] for r in self.fixture() if r["type"] == "entity"}
+        for entity_id, island, label, kind in self.marks():
+            with self.subTest(entity=entity_id):
+                self.assertIn(entity_id, names)
+                self.assertTrue(names[entity_id].lower().startswith(label.lower()), names[entity_id])
+                self.assertEqual(kind, docs_examples.entity_type(entity_id))
+                self.assertIn(kind, self.ISLANDS[island])
+
+    def test_its_lines_are_the_fixture_s_facts(self) -> None:
+        records = [r for r in self.fixture() if r["type"] == "fact"]
+        facts = {(r["subject"], r["predicate"], r.get("object")) for r in records}
+        lines = re.findall(r'\["([a-z]+/[^"]+)", "([a-z]+/[^"]+)", "([a-z_]+)"\]', self.CHART)
+        self.assertTrue(lines)
+        for subject, obj, predicate in lines:
+            with self.subTest(fact=(subject, predicate, obj)):
+                self.assertIn((subject, predicate, obj), facts)
+
+    def test_its_log_is_the_ledger_example_s_story_and_points_at_the_chart(self) -> None:
+        page = (ROOT / "docs/index.md").read_text()
+        log = page[page.index('<ol id="bx-log">') : page.index("</ol>", page.index('<ol id="bx-log">'))]
+        self.assertTrue(set(re.findall(r'<span class="id">([^<]+)</span>', log)) <= set(docs_examples.STORY))
+        boats = set(re.findall(r'\["(b-[a-z]+)", "acme/', self.CHART))
+        targets = {m[0] for m in self.marks()} | boats | {"orchestrator"}
+        for at in re.findall(r'data-at="([^"]+)"', page):
+            with self.subTest(at=at):
+                self.assertIn(at, targets)
+
+
 class ScriptJsonTest(unittest.TestCase):
     def test_nothing_in_it_can_end_the_script_element(self) -> None:
         text = docs_examples.script_json({"title": "</script><script>alert(1)</script>"})

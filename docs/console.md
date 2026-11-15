@@ -45,7 +45,7 @@ light or dark mode and works down to a narrow window.
   cost) with a link to each run's report, rendered in the page; every `learn:` proposal with its
   finding, evidence, reason, the exact change and where it goes, and when and how it was applied
   or rejected; and the findings learning remembers, with how often each was seen.
-- **Knowledge Graph** (`#/knowledge`): the knowledge base (`bosun kg`) in three tabs. The
+- **Ontology** (`#/knowledge`): the ontology (`bosun kg`, its knowledge base) in three tabs. The
   **Briefing** (the home): facts captured per day, the confirmed share, coverage per card, what
   changed this week (before -> after) and the new facts, today's review as a card stack (Y/N/S
   keys or drag, Z undoes), and the most connected entities. The **Constellation**

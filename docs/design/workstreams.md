@@ -8,7 +8,7 @@ in [ROADMAP.md](../../ROADMAP.md#3-ledger-as-the-protocol-between-sessions).
 
 The ledger groups work by where it came from (reviews, my PRs, mentions, outreach, tasks) and by
 lineage (what came from what). Neither answers "what did I do on X this week?". A weekly stand-up,
-stats per effort, the knowledge graph and learning all need to know which effort an item belongs
+stats per effort, the ontology and learning all need to know which effort an item belongs
 to, without guessing and without counting an item twice.
 
 A **workstream** is a time-bound effort I drive, such as "Widget search" in the acme world. It is
@@ -16,7 +16,7 @@ not:
 
 - **a Jira epic.** An epic is an external container that someone else may own and that outlives or
   undercuts my effort. A workstream may *name* its epic, and the epic then assigns work to it.
-- **a knowledge-graph product area or feature.** Those are long-lived capabilities. A workstream is
+- **an ontology product area or feature.** Those are long-lived capabilities. A workstream is
   *part of* an area for a while and then ends.
 - **lineage.** Lineage says how items arose (`spawned_from`, `produces`). A workstream says which
   effort they serve. Lineage is how a workstream spreads from a tagged root to everything that came
@@ -101,7 +101,7 @@ precise answer, and it lies within the other.
   - `channels`: Slack channel ids;
   - `repos`;
   - `started`, `ended`, `target`: dates;
-  - `area`: a knowledge-graph entity id, e.g. `feature/widget-search`;
+  - `area`: an ontology entity id, e.g. `feature/widget-search`;
   - `aliases`: other names it answers to.
 
   The title is free to change, and the id never does. Every `<ws>` argument takes the id, the slug
@@ -213,10 +213,10 @@ ledger assign --dry-run                                 # rule and epic matches,
 ledger summary --ws widget-platform --since 2026-10-19 --markdown
 ```
 
-## Knowledge graph
+## Ontology
 
-The knowledge graph holds long-lived facts, and a workstream is a ledger item with a lifetime. So
-the knowledge graph does **not** mirror workstreams as entities: two sources of truth would drift,
+The ontology holds long-lived facts, and a workstream is a ledger item with a lifetime. So
+the ontology does **not** mirror workstreams as entities: two sources of truth would drift,
 and a finished workstream would leave a stale entity behind. Instead:
 
 - a workstream names its product area in the `area` field, as a knowledge entity id

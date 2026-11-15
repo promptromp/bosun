@@ -235,6 +235,11 @@ The site has its own look on top of Material:
   those shows on the site, and `tests/unit/test_docs_examples.py` checks the data and that
   `docs/ledger.md`'s state diagrams match `KINDS`. `mkdocs serve` does not reload `tools/`: restart it
   after changing them.
+- **Its two pictures** are illustrations, not live examples: the chart under "How it works"
+  (`docs/assets/home/chart.js`, no library) and the whiteboard further down (`whiteboard.js`, drawn with
+  rough.js, vendored unchanged in `docs/assets/home/vendor/` with its MIT licence), both styled by
+  `pictures.css`. Their names are written in the scripts, and `tests/unit/test_docs_examples.py` holds
+  the chart's to the fixture knowledge base and its log to the ledger example's story.
 
 ## Which sandbox for what
 

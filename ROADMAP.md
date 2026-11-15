@@ -118,7 +118,7 @@ day; the watchdog's `slack-watch` check covers stalls, failures and the budget. 
 watcher" in [docs/design/events.md](docs/design/events.md#slack-watcher).
 
 **Done (2026-10-21): workstreams.** Nothing said which effort an item served, so a weekly
-stand-up, stats per effort and the knowledge graph had to guess. Now: a `workstream` kind
+stand-up, stats per effort and the ontology had to guess. Now: a `workstream` kind
 (`ws:<slug>`, active, paused or done, with an epic, channels, repos, dates, an area and aliases),
 one `part_of` per item (two levels of workstreams at most), and resolution on read: explicit,
 then inherited through lineage, then a tracked ticket's epic (`ticket-sync --parent`), then site
@@ -127,7 +127,7 @@ candidates, as a proposal. Commands: `ws`, `assign --dry-run|--apply`, `summary`
 draft), `lint`, `list --ws`; the console API filters by workstream and stats roll up per
 workstream. Design and research: [docs/design/workstreams.md](docs/design/workstreams.md).
 **Next:** the console's workstream filter and stats in the page; saved, dated status updates with
-a health rating; context packs per workstream once the knowledge graph has them.
+a health rating; context packs per workstream once the ontology has them.
 
 **Next (Slack):** a real push instead of polling: a Slack app or a cloud trigger that receives
 Slack's events API and wakes the orchestrator, which needs a host that is always on (see the cloud
@@ -192,8 +192,8 @@ related ledger items), process flows, a neighbourhood graph, and the review queu
 confirm, reject or defer facts (the console's only write, behind the cookie, an Origin check and a
 CSRF token).
 
-**Done (2026-10-21), the Knowledge Graph page's tabs:** four treatments prototyped on invented
-data ([docs/design/prototypes/knowledge-treatments/](docs/design/prototypes/knowledge-treatments/README.md));
+**Done (2026-10-21), the Ontology page's tabs (then called Knowledge Graph):** four treatments prototyped
+on invented data ([docs/design/prototypes/knowledge-treatments/](docs/design/prototypes/knowledge-treatments/README.md));
 the **Briefing** is the page's home (facts captured per day, the confirmed share, coverage per
 card, this week's changes before -> after and new facts, today's review as a card stack with keys,
 drag and undo, the most connected with mini ego graphs; "rediscovery saved" a placeholder until
@@ -206,9 +206,9 @@ the overview and entity browser a third, **Raw data**. The Metro map is the next
 pass in the learning run (counting rediscovery and rework episodes) and a team-shared variant
 after a privacy review.
 
-### 4a. Knowledge Graph: Metro map treatment
+### 4a. Ontology: Metro map treatment
 
-**Why:** in the prototype of the Knowledge Graph page
+**Why:** in the prototype of the Ontology page
 ([docs/design/prototypes/knowledge-treatments/](docs/design/prototypes/knowledge-treatments/README.md),
 treatment B) the processes drawn as metro lines were the clearest picture of how work moves: each
 process a line through its steps, the steps, gates, systems and people that several processes share
@@ -516,7 +516,7 @@ which learnings were applied, what the policy says right now.
 2026-10-20). A read-only, local-only (`127.0.0.1`, a token) page served by `bosun
 console` with stdlib `http.server` and one static page, no build step and no new dependencies.
 It reads the ledger as a snapshot (never its lock) and never touches the panes. Views: Ledger,
-Sessions, Stats, Learning, Library; a knowledge graph is phase 2. Write actions are out of the
+Sessions, Stats, Learning, Library; a graph of the ledger is phase 2. Write actions are out of the
 MVP; later ones only queue an instruction to the orchestrator. (Since built: the Knowledge view,
 whose review decisions are the console's one direct write, local data only; Learning and Library
 are now titled Improvements and Config.)
@@ -537,7 +537,7 @@ SVG charts, and a node-based check of `app.js` in a fake DOM (skipped without no
 (learning and library) built: `/api/learn` (runs, `learn:` items, findings remembered, reports by
 key), `/api/library` (repo and site files by opaque key, config masked, effective task types,
 memory notes opt-in) and a safe Markdown renderer. The Knowledge view (knowledge MVP 2) built: its
-review queue is the console's one write. The Knowledge Graph page got its tabs (2026-10-21):
+review queue is the console's one write. The Ontology page got its tabs (2026-10-21):
 Briefing (the home), Constellation and Raw data, with the Metro map on the roadmap (4a). Next: step
 6, polish.
 

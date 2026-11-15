@@ -49,9 +49,7 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument("--dry-run", action="store_true", help="show what it would do, and do nothing")
     parser.add_argument("--yes", action="store_true", help="ask nothing; your records stay unless told")
     parser.add_argument("--delete-ledger", action="store_true", help="delete the ledger without asking")
-    parser.add_argument(
-        "--delete-knowledge", action="store_true", help="delete the knowledge graph without asking"
-    )
+    parser.add_argument("--delete-knowledge", action="store_true", help="delete the ontology without asking")
     parser.add_argument("--purge", action="store_true", help="delete your settings and records too")
     return parser.parse_args(argv)
 

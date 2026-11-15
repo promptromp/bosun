@@ -70,7 +70,7 @@ bosun console [--port N] [--open] [--new-token]
   lib/console_knowledge.py       -> pure: the Knowledge view (cards, search, entity pages, flows,
                                     review batch, decisions)
   lib/console_kg_graph.py        -> pure: the neighbourhood graph's walk and radial layout
-  lib/console_kg_views.py        -> pure: the Knowledge Graph page's Briefing and Constellation
+  lib/console_kg_views.py        -> pure: the Ontology page's Briefing and Constellation
   lib/console_kb.py              -> the Knowledge view's only I/O: reads the knowledge base (never
                                     identifiers.jsonl), saves a review decision
   lib/console_kg_sources.py      -> readable fact sources: a memory note's title and Library link,
@@ -563,7 +563,7 @@ prompting time, cost, cost per task, overhead, and what learning has produced. P
 - `#/impact/internals` shows bosun's own diagnostics from the same model (the overhead fixes
   before and after, context per window, cost per turn, the guardrails), kept off the Impact page.
 
-### Phase 2: knowledge graph (`#/graph`)
+### Phase 2: the ledger as a graph (`#/graph`)
 
 - Nodes: ledger items, people (outreach recipients and requesters), repositories, tickets and Slack
   channels.
@@ -672,7 +672,8 @@ Steps 1 to 3 already give a usable console; 4 and 5 can follow in either order.
 
 Nav labels (2026-10-21): Learning became **Improvements** (what bosun proposes to change about
 its own prompts and rules), Knowledge became **Knowledge Graph**, and Library became **Config**
-(prompts, task types and site overlays). The routes keep their old names, so links still work.
+(prompts, task types and site overlays). On 2026-11-15 Knowledge Graph became **Ontology**, the word the
+home page and the guides use. The routes keep their old names, so links still work.
 **Impact** joined the nav with the Impact view (section 7, 2026-10-27).
 
 ## Decisions (2026-10-20)

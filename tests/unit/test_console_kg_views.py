@@ -1,4 +1,4 @@
-"""Unit tests for the Knowledge Graph page's Briefing and Constellation (lib/console_kg_views.py):
+"""Unit tests for the Ontology page's Briefing and Constellation (lib/console_kg_views.py):
 the coverage definition, the confirmed share, the captured-per-day series, this week's timeline
 (grouped by day, newest first, with before -> after pairs), the most-connected strip, the
 Constellation's nodes, edges, days and cap, determinism, and that the restricted identifiers never
