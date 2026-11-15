@@ -107,7 +107,7 @@ installed. The usual ones:
 | A tool you just installed is still `missing` | Your terminal has the old PATH | Open a new terminal |
 | `first-run screens not done` | Claude Code stops at its theme and security screens the first time, and a window nobody is watching would wait there for ever | Run `claude`, go through them, then `/exit` |
 | `not logged in: the login keychain is locked` | Claude Code keeps its login in your login keychain, and a session over ssh starts with it locked, even when the Mac's desktop unlocked it | Run `security unlock-keychain ~/Library/Keychains/login.keychain-db` (your login password), then the same line again |
-| `Claude in Chrome's screen not done` | bosun starts windows with Chrome on (`--chrome` in `BOSUN_CLAUDE_FLAGS` and `BOSUN_ORCHESTRATOR_FLAGS`), and Claude Code first shows what it may do in your browser and waits for Enter | Run `claude --chrome`, press Enter at that screen, then `/exit` |
+| `later  Claude in Chrome's screen not seen` | bosun starts windows with Chrome on (`--chrome` in `BOSUN_CLAUDE_FLAGS` and `BOSUN_ORCHESTRATOR_FLAGS`), and some versions of Claude Code first show what it may do in your browser and wait for Enter (newer ones show nothing). Nothing stops for it | Nothing now. If a window does stop at that screen, the watchdog names it (`stalled-start`, and the menu bar app's "Show What's Wrong..."): answer it there once, with `bosun attach <window>` |
 | `not logged in` under Claude Code | It has no login | Run `claude`, and follow what it asks |
 | `not logged in` under Codex | It has no login | Run `codex login`. With an API key: `printenv OPENAI_API_KEY \| codex login --with-api-key` |
 | A window is on a screen, and the watchdog reports `stalled-start` | The agent is asking something only you can answer, usually about trusting the folder | `bosun attach <window>` (the finding names it), then read it. Do not just press Return: on several of Claude Code's screens the default is to exit, and on Codex's it says yes |
@@ -862,7 +862,7 @@ prompts would keep reporting them delivered. bosun reads, best signal first
    the server revoked still shows `loggedIn: true`. It does catch a missing login (`loggedIn:
    false`, exit 1).
 3. **A login check request:** one tiny headless request (`claude -p`, a small model, no tools,
-   settings, MCP servers or transcript; about $0.002). `ensure_claude_login` makes one each
+   settings, MCP servers or transcript, but the API key helper below if you use one; about $0.002). `ensure_claude_login` makes one each
    morning; the check-in loop makes one while the orchestrator needs a login or the last check
    failed, at most every 30 minutes, to learn when the login works again (a `/login` itself is not
    written to any transcript). A failure before any request (for example settings that could not
@@ -888,6 +888,21 @@ What happens then:
   opens, together with the morning run's own failure (see ROADMAP, urgent alerts).
 - **`bosun status`** shows the login and each window's state; **`bosun doctor`** fails when
   Claude Code is logged out, the last check failed, or a running window gets only login errors.
+
+### With an API key instead of a login
+
+Claude Code can sign in with an Anthropic API key, billed per request on your Console account, instead of a
+claude.ai login. For bosun, give it the key through the `apiKeyHelper` setting in `~/.claude/settings.json`: a
+command that prints the key, which every Claude bosun starts reads, in a window, under launchd or headless. From
+the Keychain, so the key is in no file, the command is `security find-generic-password -s anthropic-api-key -w`,
+after storing the key once with `security add-generic-password -U -a "$USER" -s anthropic-api-key -w` (it asks
+for it).
+`claude auth status` then says `api_key_helper`, and bosun's login check and the Slack watcher, which load no
+settings files of yours, still get that one setting. Not `ANTHROPIC_API_KEY`: an interactive Claude asks once
+whether to use a key from the environment, which a window bosun starts would wait at, and launchd's jobs do not
+have your shell's environment. With a key, Claude Code has no Remote Control (it needs a claude.ai login), and the
+models bosun uses (`BOSUN_MODEL`, `BOSUN_ORCHESTRATOR_MODEL`, `BOSUN_LEARN_MODEL`) cost per request: smaller ones
+cost less.
 
 ## AWS SSO
 

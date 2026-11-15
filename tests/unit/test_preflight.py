@@ -180,20 +180,18 @@ esac""",
         self.assertNotIn("\x1b[", self.run_to_a_terminal(TERM="dumb"))
         self.assertNotIn("\x1b[", self.run_it().stdout)  # not a terminal
 
-    def test_claude_in_chrome_s_screen_is_a_step_while_windows_use_chrome(self) -> None:
-        """Its once-only screen waits for Enter, and an unattended window would wait there for ever."""
+    def test_claude_in_chrome_s_screen_not_seen_is_said_and_stops_nothing(self) -> None:
+        """Claude Code 2.1.308 shows no such screen and records nothing, so its absence cannot be a step; a
+        window that does stop at it is the watchdog's stalled-start."""
         (self.home / ".claude.json").write_text('{"hasCompletedOnboarding": true}')
         result = self.run_it()  # no flags given: bosun's defaults, which have --chrome
-        self.assertIn("Claude in Chrome's screen not done", result.stdout)
-        self.assertIn(
-            "run claude --chrome, press Enter at its Claude in Chrome screen, then /exit", result.stdout
-        )
-        self.assertEqual(result.returncode, 1)
+        self.assertIn("later      Claude in Chrome's screen not seen", result.stdout)
+        self.assertIn("bosun attach <window>", result.stdout)
+        self.assertEqual(result.returncode, 0)
         without = self.run_it(BOSUN_CLAUDE_FLAGS="--permission-mode auto", BOSUN_ORCHESTRATOR_FLAGS="")
         self.assertNotIn("Chrome", without.stdout)
-        self.assertEqual(without.returncode, 0)
         orchestrator_only = self.run_it(BOSUN_CLAUDE_FLAGS="", BOSUN_ORCHESTRATOR_FLAGS="--chrome")
-        self.assertIn("Claude in Chrome's screen not done", orchestrator_only.stdout)
+        self.assertIn("Claude in Chrome's screen not seen", orchestrator_only.stdout)
 
     def test_claude_in_chrome_s_screen_done(self) -> None:
         self.assertIn("ok         Claude in Chrome's screen done", self.run_it().stdout)

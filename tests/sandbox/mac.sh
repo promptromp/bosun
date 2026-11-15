@@ -1,6 +1,7 @@
 #!/bin/bash
 # Usage: tests/sandbox/mac.sh setup | run [--from-nothing] | work [--base <git ref>]
-#        | app [--from build|release] | live [claude|codex|agy] | shell | clean
+#        | app [--from build|release] | live [claude|codex|agy] | shell
+#        | try [--from release|checkout] [--run <script>] [codex] | clean
 #        (through tests/sandbox.sh mac)
 #
 # A real, throwaway Mac: macOS in a Tart VM on this machine, for what the Docker sandbox cannot show.
@@ -32,6 +33,14 @@
 #           Your sign-in stays in the clone, which is deleted at the end; no image is ever saved
 #   shell   a clone with a window, to try things as a new user would; a restart in it keeps it, and it is
 #           deleted when you leave its shell
+#   try     the same, with bosun already set up and running in it, signed in: Claude Code (and Codex with
+#           `codex`) installed by the installer's own lines, its first-run screens gone through, your Anthropic
+#           key from the Keychain as its apiKeyHelper (as for live; the OpenAI key for codex), bosun installed
+#           unattended from the release (--from checkout: this checkout), the exporter repo as its window, the
+#           menu bar app (from the release), and started. Its agents use BOSUN_SANDBOX_TRY_MODEL (sonnet): the
+#           key is billed per request for as long as bosun runs in it, until you leave the shell. --run <script>:
+#           instead of your shell, the script runs in the clone (zsh, its output here, masked), and the clone is
+#           deleted when it ends: bosun with the real agents, set up and checked with no one at it
 #   clean   delete the clones and base images (the pulled image stays: `tart prune` removes it)
 # Needs Tart: brew install openai/tools/tart. Guide: docs/development.md.
 set -uo pipefail
@@ -365,15 +374,31 @@ live() { # [claude|codex|agy]
 # say) drops the connection, not the clone: the shell comes back once the clone is at its desktop again. Leaving
 # the shell (exit, Ctrl-D) writes a mark in the clone, which a dropped connection never does; only then does this
 # end, and delete the clone.
-shell() {
-  local left=.sandbox-shell-left repo # in the clone's home, where each ssh command starts
-  repo="$(python3 -c 'import json, sys; print(json.load(open(sys.argv[1]))["releases"])' "$ROOT/app/publisher.json")" ||
+# The repository the releases are published in (get.sh's own), from app/publisher.json.
+releases_repo() {
+  python3 -c 'import json, sys; print(json.load(open(sys.argv[1]))["releases"])' "$ROOT/app/publisher.json" ||
     die "could not read the releases' repository from app/publisher.json"
+}
+
+# A clone of the developer's Mac with its window, logged in as admin, and this checkout in it. --no-graphics: no
+# window (nobody is there to see it); the desktop session is there either way.
+clone_for_a_person() { # [--no-graphics]
   prepare_clone "$DEV_MAC"
-  say "a window opens with a clone of $DEV_MAC, its desktop logged in as admin (password admin, for sudo)"
-  boot "$CLONE"
+  if [ "${1:-}" = "--no-graphics" ]; then
+    say "booting a clone of $DEV_MAC"
+  else
+    say "a window opens with a clone of $DEV_MAC, its desktop logged in as admin (password admin, for sudo)"
+  fi
+  boot "$CLONE" "$@"
   copy_checkout
-  in_vm "$CLONE" -t "rm -f $left; cat <<'WELCOME'
+}
+
+shell() {
+  local repo
+  repo="$(releases_repo)" || exit 1
+  clone_for_a_person
+  person_shell "$(
+    cat <<WELCOME
 
 A throwaway Mac, deleted when you leave this shell (exit). A restart in it keeps it: this shell comes back once
 its desktop is back. To try bosun as a person installs it, in Terminal in the window or here:
@@ -384,13 +409,81 @@ its desktop is back. To try bosun as a person installs it, in Terminal in the wi
 The wizard offers your repos: clone one first (git clone https://github.com/$repo ~/Development/bosun).
 
 WELCOME
-zsh -l; touch $left"
+  )"
+}
+
+# What `shell` and `try` end with: <welcome>, then your shell in the clone until you leave it. A restart in the
+# clone (to try Open at Login, say) drops the connection, not the clone: the shell comes back once the clone is at
+# its desktop again. Leaving the shell (exit, Ctrl-D) writes a mark in the clone, which a dropped connection never
+# does; only then does this end, and the clone is deleted.
+person_shell() {                 # <welcome>
+  local left=.sandbox-shell-left # in the clone's home, where each ssh command starts
+  printf '%s\n' "$1" | in_vm "$CLONE" "cat >.sandbox-welcome" || die "could not greet you in the clone"
+  in_vm "$CLONE" -t "rm -f $left; cat .sandbox-welcome; zsh -l; touch $left"
   until in_vm "$CLONE" "test -e $left" 2>/dev/null; do
     say "the connection to the clone ended (a restart?): your shell comes back once its desktop is back. Ctrl-C deletes the clone"
     sleep 5
     await_the_clone ""
     in_vm "$CLONE" -t "rm -f $left; zsh -l; touch $left"
   done
+}
+
+# `shell` with bosun set up, running and signed in (see the header). The keys go in as for live: through a pipe,
+# into a file only the clone's user can read, and the clone is deleted when you leave.
+try() { # [--from release|checkout] [--run <script>] [claude|codex]
+  local from=release agent=claude repo model="${BOSUN_SANDBOX_TRY_MODEL:-sonnet}" script=""
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --from)
+        from="${2:-}"
+        shift
+        ;;
+      --run)
+        script="${2:-}"
+        [ -f "$script" ] || die "--run takes a script file"
+        shift
+        ;;
+      claude | codex) agent="$1" ;;
+      *) die "unknown '$1': try [--from release|checkout] [--run <script>] [claude|codex]" ;;
+    esac
+    shift
+  done
+  case "$from" in release | checkout) ;; *) die "--from takes release or checkout" ;; esac
+  need_key "$ANTHROPIC_ITEM"
+  [ "$agent" = "codex" ] && need_key "$OPENAI_ITEM"
+  repo="$(releases_repo)" || exit 1
+  if [ -n "$script" ]; then clone_for_a_person --no-graphics; else clone_for_a_person; fi
+  in_vm_masked prepare "$agent" || die "preparing it failed"
+  keys_into_vm "$agent"
+  in_vm_masked ready "$agent" "$from" "$model" "https://raw.githubusercontent.com/$repo/main/get.sh" ||
+    die "setting bosun up failed"
+  if [ -n "$script" ]; then
+    say "running $script in the clone"
+    # bosun's own line on the path is in ~/.zshrc, which a shell reading a script does not run
+    # shellcheck disable=SC2016 # expands in the clone
+    {
+      printf 'export PATH="$HOME/.local/bin:$PATH"\n'
+      cat "$script"
+    } |
+      in_vm "$CLONE" "zsh -l -s" 2>&1 | sed -l -E -e "$KEY_SHAPE" -e "$TOKEN_SHAPE"
+    return "${PIPESTATUS[1]}" # the script's, through ssh
+  fi
+  person_shell "$(
+    cat <<WELCOME
+
+A throwaway Mac with bosun running in it, from the $from, signed in with your Anthropic key (as its
+apiKeyHelper), its agents on $model. The key is billed per request for as long as bosun runs: leaving
+this shell (exit) deletes the clone, and \`bosun stop\` stops it sooner. A restart keeps it.
+
+  bosun status          how it is (and the menu bar icon in the window)
+  bosun attach          the windows: the orchestrator, the exporter repo's session
+  bosun console         the web console
+
+The exporter repo (~/Development/exporter) pushes to a local stand-in of GitHub, so nothing leaves the Mac
+but requests to the agents' APIs. Remote Control needs a claude.ai login: it does not work with a key.
+
+WELCOME
+  )"
 }
 
 clean() {
@@ -424,6 +517,10 @@ case "${1:-}" in
     live "$@"
     ;;
   shell) shell ;;
+  try)
+    shift
+    try "$@"
+    ;;
   clean) clean ;;
   -h | --help) awk 'NR == 1 { next } /^#/ { sub(/^# ?/, ""); print; next } { exit }' "$0" ;;
   *) die "unknown '${1:-}' (see --help)" ;;

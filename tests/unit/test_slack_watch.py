@@ -282,6 +282,16 @@ class CommandTest(WatchTestCase):
         self.assertEqual(allowed, [PREFIX + t for t in slack_watch.READ_TOOLS])
         self.assertIn(PREFIX + "slack_send_message", command)
         self.assertNotIn("Bash", joined)
+        self.assertNotIn("--settings", command)
+
+    def test_it_keeps_the_api_key_helper_it_signs_in_with(self) -> None:
+        # a command that prints a key, not a key
+        helper = {"apiKeyHelper": "cat ~/.key"}  # pragma: allowlist secret gitleaks:allow
+        settings = self.state_dir / "settings.json"
+        settings.write_text(json.dumps({**helper, "permissions": {"allow": ["Bash"]}}))
+        with unittest.mock.patch.object(claude_state, "SETTINGS_FILE", settings):
+            command = slack_watch.claude_command(self.config, self.state_dir / "mcp.json", PREFIX, "prompt")
+        self.assertEqual(json.loads(command[command.index("--settings") + 1]), helper)
 
     def test_a_call_that_could_see_a_write_tool_or_another_tool_is_refused(self) -> None:
         self.assertIsNone(

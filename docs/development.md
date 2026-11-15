@@ -252,6 +252,7 @@ the cheapest of these that can show what you changed:
 | What an update does to an install in use, its windows, its ledger and knowledge base, and what real use does to them: their journals, ids, writes, privacy | `tests/sandbox.sh mac work` | a week of work through the first update's conversion and a mid-afternoon update on a year of data, on real macOS: launchd, a moving clock, racing writers, writes cut short, files changed outside the journal, going back | 16 minutes |
 | How an agent behaves: launching it, its screens and files, a task handed to it, an update's prompts, which MCP servers a window reaches | `tests/sandbox.sh mac live claude`, `... live codex` | the real agents from nothing, through setup, sessions, an update and connectors | about 10 minutes and a dollar each |
 | How Antigravity (`agy`) behaves under bosun: its hooks and plugin, its screen, its dialogs, its login | `tests/sandbox.sh mac live agy` | the real `agy` in a VM with a window, where you sign in; then windows started by launchd, Esc, a reviewer's dialog, the plugin's approvals, a slow hook, connectors, uninstall | about 25 minutes, you at the start, and a personal account's free quota |
+| How bosun feels to use, by hand, with the real agents and no setup of yours | `tests/sandbox.sh mac try` | bosun installed, signed in by your key and running in a VM with a window, for you to try until you leave its shell | about 10 minutes to set up, then the key's requests while it runs |
 | The wake itself | `bosun wake-test`, on real hardware | a real sleep and a real wake | 5 minutes |
 
 The first also runs in CI (the second's unit and smoke suites run there natively: the smoke sections a change reaches in the merge queue, everything nightly), and so does the third on
@@ -302,6 +303,7 @@ tests/sandbox.sh mac live codex           # the real agents: see below
 tests/sandbox.sh mac live agy             # Antigravity: you sign in in the VM's window, see below
 tests/sandbox.sh mac shell                # a window, to try the wizard as a new user would; a restart in it keeps it,
                                           # and leaving its shell (exit) deletes it
+tests/sandbox.sh mac try                  # the same with bosun set up, signed in by your key and running: see below
 tests/sandbox.sh mac clean                # delete the clones and base images (`tart prune` removes the pulled one)
 ```
 
@@ -499,6 +501,31 @@ facts are recorded, not judged, and printed at the end (what `SessionStart` carr
 hook, whether `run_command` has a working-directory argument, what the sandbox lets a nested `.git` do,
 whether `safe.bareRepository=explicit` and the window's git configuration hold). It costs a few cents of the
 Anthropic key (the orchestrator's start) and the Google account's free quota.
+
+### bosun to try, signed in: `tests/sandbox.sh mac try`
+
+`mac shell` leaves the setup to you, and Claude Code's login is a browser sign-in. `mac try` does all of it
+first, then gives you the same window and shell, until you leave it:
+
+```bash
+tests/sandbox.sh mac try                          # bosun from the published release, as a person gets it
+tests/sandbox.sh mac try --from checkout          # this checkout instead
+tests/sandbox.sh mac try codex                    # repo windows on Codex (and the OpenAI key)
+BOSUN_SANDBOX_TRY_MODEL=opus tests/sandbox.sh mac try
+tests/sandbox.sh mac try --run checks.sh          # no shell: your script runs in the clone, which then goes
+```
+
+It runs `live`'s first step in the clone (the exporter repo, and the lines the installer prints for what is
+missing), puts your key in as for `live`, goes through Claude Code's first-run screens, installs bosun
+unattended, makes the exporter repo its window, adds the menu bar app (from the release only: this checkout's
+app version may not be published) and starts bosun. Its agents use `BOSUN_SANDBOX_TRY_MODEL` (`sonnet`) rather
+than bosun's defaults, the largest models, because the key is billed per request for as long as bosun runs:
+leaving the shell deletes the clone, and `bosun stop` in it stops the spending sooner. With a key, Claude Code
+has no Remote Control (it needs a claude.ai login).
+
+With `--run <script>` nobody needs to be there: the script runs in the clone (zsh, with bosun on its path), its
+output comes back with anything shaped like a key masked, and the clone is deleted when it ends, so a change can be
+tried against the real agents with one command.
 
 **The keys.** It reads two API keys from your Keychain, one for Anthropic, and for `live codex` one for OpenAI
 (`live agy` needs only the Anthropic one; the sign-in is its own).

@@ -29,15 +29,16 @@ harness_checks() {
     check_todo "first-run screens not done" \
       "Open Claude Code once, to choose a theme and read its security notes: run claude, then /exit"
   fi
-  # Windows started with --chrome (bosun's default, BOSUN_CLAUDE_FLAGS and BOSUN_ORCHESTRATOR_FLAGS) show
-  # Claude in Chrome's screen once, and an unattended one would wait there; unset means the default.
+  # Windows started with --chrome (bosun's default, BOSUN_CLAUDE_FLAGS and BOSUN_ORCHESTRATOR_FLAGS; unset means
+  # the default) stopped at Claude in Chrome's screen once, on the Claude Code of 2026-11-14. The one of
+  # 2026-11-15 (2.1.308) shows none, with Chrome or without, and records nothing, so its absence cannot be a step:
+  # it is said, and a window that does stop at it is the watchdog's stalled-start, which names it.
   case " ${BOSUN_CLAUDE_FLAGS---chrome} ${BOSUN_ORCHESTRATOR_FLAGS---chrome} " in
     *" --chrome "*)
       if python3 "$ROOT/lib/claude_state.py" chrome-onboarded; then
         check_ok "Claude in Chrome's screen done"
       else
-        check_todo "Claude in Chrome's screen not done" \
-          "Open Claude Code once with Chrome, to read what it may do in your browser: run claude --chrome, press Enter at its Claude in Chrome screen, then /exit"
+        check_later "Claude in Chrome's screen not seen: if a window stops at it, answer it there once (bosun attach <window>)"
       fi
       ;;
   esac

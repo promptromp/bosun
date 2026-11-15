@@ -1,6 +1,7 @@
 #!/bin/bash
 # Usage: live.sh prepare <claude|codex|agy> | go <claude|codex|agy> [codex model] | login agy
-#        (through tests/sandbox.sh mac live)
+#        | ready <claude|codex> <release|checkout> <model> <the release's get.sh URL>
+#        (through tests/sandbox.sh mac live, and mac try for ready)
 #
 # The real agents, on a real throwaway Mac: what a new user does from nothing, following only what the
 # installer prints, then a real task from a real orchestrator to a real repo session, and an update while
@@ -9,6 +10,9 @@
 # runs it by itself.
 #   prepare   the repo, the installer stopping for what is missing, and doing what it says
 #   login     agy only: waits for a person to sign in to Antigravity in the VM's window (up to 15 minutes)
+#   ready     for `mac try`, after prepare: what a person would do next, done, with no checks of it: the
+#             first-run screens, bosun installed unattended (from the release, or this checkout), the exporter
+#             repo as its window, the menu bar app (from the release only), the agents on <model>, started
 #   go        the first-run screens, the install, real windows, a restart and the hand-over; then whether a
 #             running Claude picks up a changed command file of its plugin, and `bosun update` to the next
 #             version (this checkout and tests/sandbox/update_patch.sh) while the repo window waits on a
@@ -105,20 +109,51 @@ prepare() {
   [ "$AGENT" = "codex" ] && check "Codex installs" brew install codex
 }
 
-first_run_screens() { # as a person goes through them: Return on each, which the last of them ends
-  tmux -L person new-session -d -s first -x 110 -y 40 -c "$HOME" claude
-  for _ in 1 2 3; do
-    sleep 6
-    tmux -L person send-keys -t first Enter 2>/dev/null
+onboarded() { jq -e ".$1 == true" "$HOME/.claude.json" >/dev/null 2>&1; } # <flag in ~/.claude.json>
+
+# The answer a person gives the screen <session> shows: Return, but on the folder-trust screen the answer yes,
+# which is not its default (seen 2026-11-15: the cursor starts on "No, exit", which Return picks).
+answer_screen() { # <session>
+  local screen
+  screen="$(tmux -L person capture-pane -p -t "$1" 2>/dev/null)"
+  if grep -q "❯ No, exit" <<<"$screen" && grep -q "Yes, I trust this folder" <<<"$screen"; then
+    tmux -L person send-keys -t "$1" Down Enter 2>/dev/null
+  else
+    tmux -L person send-keys -t "$1" Enter 2>/dev/null
+  fi
+}
+
+# A screen as a person goes through it, in a folder of its own (what it trusts is that folder, never the home
+# folder): the answers above every few seconds, until Claude Code records it as done (<flag> in ~/.claude.json),
+# for up to 90 seconds; a first start can take a while.
+through_screen() { # <session> <flag> <claude args...>
+  local session="$1" flag="$2" deadline=$((SECONDS + 90))
+  shift 2
+  mkdir -p "$HOME/first-run"
+  # Kept on the screen when it ends, with how it ended, so that a run that gives up can show it.
+  tmux -L person new-session -d -s "$session" -x 110 -y 40 -c "$HOME/first-run" \
+    bash -c '"$@"; echo "(it exited with $?)"; sleep 600' _ "$@"
+  until onboarded "$flag" || [ "$SECONDS" -ge "$deadline" ]; do
+    sleep 4
+    answer_screen "$session"
   done
   sleep 2
+  if ! onboarded "$flag"; then # what it showed instead, for whoever reads the run
+    echo "  $flag was not recorded in 90 seconds; the screen showed:"
+    tmux -L person capture-pane -p -t "$session" 2>/dev/null | grep -v '^[[:space:]]*$' | tail -20 | sed 's/^/    | /'
+  fi
   tmux -L person kill-server 2>/dev/null
-  # Then Claude in Chrome's screen, which windows started with --chrome show once (Enter confirms it).
-  tmux -L person new-session -d -s chrome -x 110 -y 40 -c "$HOME" claude --chrome
-  sleep 8
-  tmux -L person send-keys -t chrome Enter 2>/dev/null
-  sleep 3
-  tmux -L person kill-server 2>/dev/null
+  onboarded "$flag"
+}
+
+first_run_screens() { # [--no-chrome]: as a person goes through them, until each is recorded as done
+  through_screen first hasCompletedOnboarding claude || return 1
+  [ "${1:-}" != "--no-chrome" ] || return 0
+  # Then Claude in Chrome's screen, which windows started with --chrome showed once (Enter confirms it), where this
+  # Claude Code still shows it: 2.1.308 shows none and records nothing, so not seeing it is no failure.
+  through_screen chrome hasCompletedClaudeInChromeOnboarding claude --chrome ||
+    echo "  (no Claude in Chrome screen recorded: this Claude Code shows none)"
+  return 0
 }
 
 install_it() {
@@ -126,7 +161,7 @@ install_it() {
   echo "logged in, then the rest of what it says"
   check "the installer says Claude Code's first screens are for a person" bash -c '! sh "$1/get.sh" >"$2" 2>&1 && grep -q "first-run screens not done" "$2"' _ "$ROOT" "$out"
   first_run_screens
-  check "... and going through them is enough" jq -e '.hasCompletedOnboarding == true and .hasCompletedClaudeInChromeOnboarding == true' "$HOME/.claude.json"
+  check "... and going through them is enough" jq -e '.hasCompletedOnboarding == true' "$HOME/.claude.json"
   check "the same line then installs" bash -c 'sh "$1/get.sh" --unattended >"$2" 2>&1 || { tail -15 "$2"; exit 1; }' _ "$ROOT" "$out"
   check "... with no repo window, since nobody chose one" grep -qx "sessions: \[\]" "$CONFIG/sessions.yml"
   echo '{"repos": [{"dir": "~/Development/exporter"}], "menu_app": false}' >"$OUT/answers.json"
@@ -140,6 +175,48 @@ install_it() {
   else
     check "repo sessions are in auto mode" says "permission-mode auto" "$CONFIG/bosun.env"
   fi
+}
+
+# `mac try`: bosun set up and running for a person to try, signed in by the key mac.sh put in. From the release
+# as a person gets it (get.sh from main takes the newest release), or this checkout; the agents on the model it is
+# given, since the key is billed per request and bosun's defaults are the largest models.
+quietly() { # <command...>: its output only if it fails, the end of it
+  "$@" >"$OUT/quietly.txt" 2>&1 && return 0
+  tail -20 "$OUT/quietly.txt"
+  return 1
+}
+
+ready() { # <release|checkout> <model> <get.sh URL>
+  local from="$1" model="$2" url="$3" menu_app=false as_installed=()
+  echo "setting bosun up from the $from, on $model"
+  # The clone has no Chrome, so its windows run without Claude in Chrome (bosun's flags but for --chrome), and
+  # there is no screen of it to go through.
+  export BOSUN_CLAUDE_FLAGS="--permission-mode auto" BOSUN_ORCHESTRATOR_FLAGS="--permission-mode auto"
+  first_run_screens --no-chrome || return 1
+  if [ "$from" = checkout ]; then
+    quietly sh "$ROOT/get.sh" --unattended || return 1
+  else
+    # The release's app (this checkout's version may not be published), and the shell a person has.
+    menu_app=true
+    as_installed=(env -u BOSUN_REPO -u BOSUN_BRANCH -u BOSUN_UPDATE_CHANNEL)
+    quietly "${as_installed[@]}" sh -c 'curl -fsSL "$1" | sh -s -- --unattended' _ "$url" || return 1
+  fi
+  printf '{"repos": [{"dir": "~/Development/exporter"}], "menu_app": %s}\n' "$menu_app" >"$OUT/answers.json"
+  quietly ${as_installed[@]+"${as_installed[@]}"} bosun init --answers "$OUT/answers.json" || return 1
+  printf 'BOSUN_MODEL="%s"\nBOSUN_ORCHESTRATOR_MODEL="%s"\nBOSUN_LEARN_MODEL="%s"\n' "$model" "$model" "$model" \
+    >>"$CONFIG/bosun.env"
+  printf 'BOSUN_CLAUDE_FLAGS="%s"\nBOSUN_ORCHESTRATOR_FLAGS="%s"\n' "$BOSUN_CLAUDE_FLAGS" "$BOSUN_ORCHESTRATOR_FLAGS" \
+    >>"$CONFIG/bosun.env"
+  # Through launchd, as the app's Start does, so the session inherits nothing of this script's environment.
+  echo "starting it (the morning run, through its launchd job)"
+  quietly bosun morning --now --background || return 1
+  if ! wait_for 600 bash -c 'bosun status --json | jq -e ".running == true"'; then
+    echo "its windows did not open in 10 minutes"
+    bosun status 2>&1 | head -20
+    return 1
+  fi
+  if [ -d "$HOME/Applications/bosun.app" ]; then open "$HOME/Applications/bosun.app"; fi
+  bosun status 2>&1 | head -12 || true # how it is, to read: a warning in it is not a failed setup
 }
 
 real_windows() {
@@ -827,6 +904,13 @@ source "$(dirname "$0")/live_agy.sh"
 case "$STEP" in
   prepare)
     if [ "$AGENT" = "agy" ]; then agy_prepare; else prepare; fi
+    ;;
+  ready)
+    [ "$AGENT" != "agy" ] || {
+      echo "ready is for claude and codex: agy needs a person to sign in" >&2
+      exit 2
+    }
+    ready "${3:?release or checkout}" "${4:?the model}" "${5:?the get.sh URL}" || failed=$((failed + 1))
     ;;
   login)
     [ "$AGENT" = "agy" ] || {

@@ -401,11 +401,13 @@ def mcp_document(config: Config) -> dict[str, Any]:
 
 def claude_command(config: Config, mcp_file: Path, prefix: str, prompt: str) -> list[str]:
     """One headless Claude that may use only Slack's read tools: no built-in tools, only the Slack
-    MCP server, no settings files (so no allow rules or hooks of mine), the write tools removed,
-    and anything else denied without a prompt."""
+    MCP server, no settings files (so no allow rules or hooks of mine) but the API key helper it signs in
+    with, if any (claude_state.credential_settings), the write tools removed, and anything else denied
+    without a prompt."""
     return [
         config.claude_bin, "-p", "--model", config.model,
-        "--setting-sources", "", "--strict-mcp-config", "--mcp-config", str(mcp_file), "--tools", "",
+        "--setting-sources", "", *claude_state.credential_settings(),
+        "--strict-mcp-config", "--mcp-config", str(mcp_file), "--tools", "",
         "--allowedTools", *(prefix + tool for tool in READ_TOOLS),
         "--disallowedTools", *(prefix + tool for tool in DENIED_TOOLS),
         "--permission-mode", "dontAsk", "--permission-prompts", "none",
