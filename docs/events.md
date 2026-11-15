@@ -47,8 +47,11 @@ the policy (`bosun send --no-item orchestrator "re-read orchestrator/policy.md: 
 
 Off by default (`BOSUN_SLACK_WATCH_ENABLED=0`; needs events on); design: [docs/design/events.md](design/events.md#slack-watcher).
 Without it the orchestrator sees Slack only at the hourly check-in. With it, the check-in loop runs
-`bosun slack-watch --scheduled` every `BOSUN_SLACK_WATCH_MINUTES` (15) while the session
-runs, at any hour: one headless `claude -p` with `BOSUN_SLACK_WATCH_MODEL` (haiku) lists the messages since
+`bosun slack-watch --scheduled` while the session runs, at any hour: every `BOSUN_SLACK_WATCH_MINUTES` (15)
+in your hours (`BOSUN_DAYS`, from `BOSUN_START_TIME` to `BOSUN_AWAKE_UNTIL`) and every
+`BOSUN_SLACK_WATCH_MINUTES_OUTSIDE_HOURS` (120) outside them, such as the night of a Mac that stays awake
+(0: not outside them; a run you start yourself still runs). Each run is one headless `claude -p` with
+`BOSUN_SLACK_WATCH_MODEL` (haiku) that lists the messages since
 the last watch that @-mention or name you, DMs and group DMs to you, and replies in threads you
 started or replied in, as strict JSON. Code checks each entry, drops what the ledger has processed
 (`ledger seen`), what belongs to open outreach (step 5 handles those), what is already queued and
@@ -67,7 +70,8 @@ orchestrator runs chores step 1 for exactly those permalinks, reading each messa
 - **Untrusted text stays out:** an event carries the permalink, the kind, the author and a redacted
   excerpt of at most 120 characters, labelled untrusted.
 - **Cost:** at most `BOSUN_SLACK_WATCH_MAX_USD_PER_CALL` (0.25) a call and
-  `BOSUN_SLACK_WATCH_MAX_USD_PER_DAY` (1.5) a day; a quiet call costs a few cents.
+  `BOSUN_SLACK_WATCH_MAX_USD_PER_DAY` (1.5) a day; a quiet call costs a few cents. The night's calls come out
+  of the same day's budget, which the longer interval outside your hours keeps them from spending.
 - `--dry-run` calls Claude and prints what it would queue (and the tools the call could see); it
   queues nothing and writes no state. `--status` shows the last run, the spend and failures; the
   watchdog's `slack-watch` check alerts when it stalls, fails three times in a row or spends its

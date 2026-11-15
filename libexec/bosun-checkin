@@ -25,7 +25,8 @@
 # starts and every BOSUN_EVENTS_INTERVAL_SECONDS, which pushes events from the repo sessions to an idle
 # orchestrator; a check-in that goes out covers the events pending at that moment. With events on,
 # each tick also runs `bosun slack-watch --scheduled` in the background, which looks for new
-# Slack activity every BOSUN_SLACK_WATCH_MINUTES once BOSUN_SLACK_WATCH_ENABLED=1, and
+# Slack activity every BOSUN_SLACK_WATCH_MINUTES (outside your hours every
+# BOSUN_SLACK_WATCH_MINUTES_OUTSIDE_HOURS) once BOSUN_SLACK_WATCH_ENABLED=1, and
 # every BOSUN_REVIEW_WATCH_MINUTES `bosun review-watch` in the background (new reviews on my
 # PRs after their last hand-over become events). With check-ins off (BOSUN_CHECKIN_MINUTES=0)
 # and BOSUN_EVENTS_WITHOUT_CHECKINS=1, --loop still does all of that and the waiting alerts, and

@@ -150,6 +150,7 @@ class Config:
     events_interval_seconds: float = 30
     slack_watch_enabled: bool = False
     slack_watch_minutes: float = 15
+    slack_watch_outside_minutes: float = 120
     claude_bin: str = "claude"
     long_shell_hours: float = 4
     context_warn_tokens: int = 300_000
@@ -206,6 +207,7 @@ class Config:
             events_interval_seconds=float(env.get("BOSUN_EVENTS_INTERVAL_SECONDS") or 30),
             slack_watch_enabled=env.get("BOSUN_SLACK_WATCH_ENABLED") == "1",
             slack_watch_minutes=float(env.get("BOSUN_SLACK_WATCH_MINUTES") or 15),
+            slack_watch_outside_minutes=float(env.get("BOSUN_SLACK_WATCH_MINUTES_OUTSIDE_HOURS") or 120),
             claude_bin=env.get("BOSUN_CLAUDE_BIN") or "claude",
             long_shell_hours=float(env.get("BOSUN_LONG_SHELL_HOURS") or 4),
             context_warn_tokens=int(float(env.get("BOSUN_CONTEXT_WARN_TOKENS") or 300_000)),
@@ -1010,7 +1012,8 @@ def check_events(ctx: Context) -> Result:
 
 
 # The Slack watcher has stalled when no run started for this many of its intervals (at least
-# SLACK_WATCH_STALL_MIN_MINUTES), whatever the hour, while the check-in loop that runs it is up.
+# SLACK_WATCH_STALL_MIN_MINUTES), whatever the hour, while the check-in loop that runs it is up; the
+# interval is the longer of the ones in force at its last start and now (slack_watch_stall_limit).
 SLACK_WATCH_STALL_INTERVALS = 2
 SLACK_WATCH_STALL_MIN_MINUTES = 10
 
@@ -1034,15 +1037,31 @@ def slack_watch_problems(ctx: Context, state: slack_watch.State) -> list[Finding
     return found
 
 
+def slack_watch_stall_limit(config: Config, last: datetime | None, now: datetime) -> timedelta | None:
+    """How long since its last start the watcher may go without a run; None: it has no scheduled runs now
+    (outside your hours with BOSUN_SLACK_WATCH_MINUTES_OUTSIDE_HOURS=0). The longer interval of the last
+    start's and now's: the longer one outside your hours is waited out when they end, and a run the night's
+    interval let wait is not counted as stalled when they begin, before the first tick of the day."""
+
+    def interval(moment: datetime) -> timedelta | None:
+        return slack_watch.interval_at(
+            config.awake, config.slack_watch_minutes, config.slack_watch_outside_minutes, moment
+        )
+
+    current = interval(now)
+    if current is None:
+        return None
+    longest = max(current, (interval(last) if last else None) or current)
+    return max(timedelta(minutes=SLACK_WATCH_STALL_MIN_MINUTES), SLACK_WATCH_STALL_INTERVALS * longest)
+
+
 def slack_watch_stalled(ctx: Context, state: slack_watch.State) -> Result:
     if not (ctx.facts.session_exists and ctx.facts.checkin_loop):
         return Result("the check-in loop is not running (see checkin-missing)")
-    limit = timedelta(
-        minutes=max(
-            SLACK_WATCH_STALL_MIN_MINUTES, SLACK_WATCH_STALL_INTERVALS * ctx.config.slack_watch_minutes
-        )
-    )
     last = local_time(state.last_started) if state.last_started else None
+    limit = slack_watch_stall_limit(ctx.config, last, ctx.now)
+    if limit is None:
+        return Result(f"no scheduled runs now: {slack_watch.OUTSIDE_HOURS}")
     if last and ctx.now - last < limit:
         return Result(f"the last run started at {last:%H:%M}")
     since = f"since {last:%a %H:%M}" if last else "yet"
@@ -1503,8 +1522,9 @@ CHECKS: tuple[Check, ...] = (
     Check(
         "slack-watch",
         "warn",
-        "with BOSUN_SLACK_WATCH_ENABLED=1 and events on: no Slack watch for 2 intervals while "
-        f"the check-in loop runs, {slack_watch.MAX_FAILURES} failed runs in a row, or the daily budget spent",
+        "with BOSUN_SLACK_WATCH_ENABLED=1 and events on: no Slack watch for 2 intervals (the longer one "
+        "outside your hours) while the check-in loop runs, "
+        f"{slack_watch.MAX_FAILURES} failed runs in a row, or the daily budget spent",
         check_slack_watch,
     ),
     Check(

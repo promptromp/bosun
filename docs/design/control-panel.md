@@ -83,7 +83,9 @@ item (⌘,), in a window titled "<App> Settings", with panes only when there are
   clock decides only the automatic starts, the keep-awake's end, the watchdog's holding of alerts, learning's time,
   and the status's "outside your hours". One rule, no marker of how the session started; the check-ins already work
   this way, and the Slack watcher follows (it stopped at `BOSUN_AWAKE_UNTIL`). The other way, the work following the
-  clock (a running session quiet outside the hours), was not taken.
+  clock (a running session quiet outside the hours), was not taken. The clock still sets the watcher's pace
+  (2026-11-15, after its first night spent the day's budget): every `BOSUN_SLACK_WATCH_MINUTES` (15) in the hours,
+  every `BOSUN_SLACK_WATCH_MINUTES_OUTSIDE_HOURS` (120) outside them, a setting in `bosun.env`.
 - The status says it by the clock: "Running · outside your hours".
 
 ### Start at login

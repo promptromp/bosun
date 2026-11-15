@@ -15,7 +15,9 @@
 #   --once       a run now (the default): needs BOSUN_EVENTS_ENABLED=1, no other run going, and
 #                BOSUN_SLACK_WATCH_MAX_USD_PER_CALL left of BOSUN_SLACK_WATCH_MAX_USD_PER_DAY
 #   --scheduled  what the check-in loop runs: also only with BOSUN_SLACK_WATCH_ENABLED=1, at any
-#                hour while the session runs, BOSUN_SLACK_WATCH_MINUTES after the last run started
+#                hour while the session runs, one interval after the last run started: the one in
+#                force now, BOSUN_SLACK_WATCH_MINUTES in your hours (BOSUN_DAYS, BOSUN_START_TIME to
+#                BOSUN_AWAKE_UNTIL), BOSUN_SLACK_WATCH_MINUTES_OUTSIDE_HOURS outside them (0: not then)
 #   --dry-run    call Claude and print what a run would queue; queues nothing and writes no state
 #   --status     the settings, the last run, the budget spent today, failures
 set -uo pipefail
@@ -40,7 +42,8 @@ done
 # lib/slack_watch.py gets the settings it uses explicitly (load_config does not export them).
 settings=()
 for name in BOSUN_STATE_DIR BOSUN_CLAUDE_BIN BOSUN_EVENTS_ENABLED BOSUN_SLACK_LOOKBACK_HOURS BOSUN_SLACK_WATCH_ENABLED \
-  BOSUN_SLACK_WATCH_MINUTES BOSUN_SLACK_WATCH_MODEL BOSUN_SLACK_WATCH_MAX_USD_PER_CALL \
+  BOSUN_DAYS BOSUN_START_TIME BOSUN_AWAKE_UNTIL \
+  BOSUN_SLACK_WATCH_MINUTES BOSUN_SLACK_WATCH_MINUTES_OUTSIDE_HOURS BOSUN_SLACK_WATCH_MODEL BOSUN_SLACK_WATCH_MAX_USD_PER_CALL \
   BOSUN_SLACK_WATCH_MAX_USD_PER_DAY BOSUN_SLACK_WATCH_MCP_CONFIG BOSUN_SLACK_WATCH_QUIET_AUTHORS; do
   settings+=("$name=${!name}")
 done
