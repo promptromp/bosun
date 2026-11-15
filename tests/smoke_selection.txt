@@ -31,6 +31,10 @@ all lib/platforms/**
 all orchestrator/**
 # Decides which files count as the tree (what is tracked and what is not), and so what selection can see.
 all .gitignore
+# The smoke job's own definition and the setup it shares: a change to them runs the shards in the merge queue,
+# which would otherwise skip them (`.github/**` reaches no section) and catch a broken shard only at night.
+all .github/workflows/ci.yml
+all .github/actions/**
 
 # --- ignore: no section runs or reads these ----------------------------------------------------------------------
 # Prose, and the site made from it. The docs hooks check them (links, anchors, the build); the smoke suite reads

@@ -71,7 +71,8 @@ of the commit you push (pre-commit's `PRE_COMMIT_TO_REF`) already passed a whole
 24 hours ago. Otherwise it runs only the sections the change can reach, which is the build-out setting: a push
 need not wait for the whole 18 minutes, and the whole suite on every push comes back once the project is past
 its release. CI's `smoke` job makes the same choice in the merge queue, from the merge group's base
-(`tests/smoke.sh --changed`), is skipped on pull requests (a skipped required check counts as passing), and
+(`tests/smoke.sh --changed`; when that selects no section, a docs-only change say, the shards are skipped, no macOS
+runner starts, and `smoke` passes), is skipped on pull requests (a skipped required check counts as passing), and
 runs the whole suite nightly on main, both split over three runners ([Split over machines](#split-over-machines)). The choice is described in [Which sections a push runs](#which-sections-a-push-runs) below. A whole run (none of `--only`, `--last-failed` or `-x`) that ends with no failure records, in
 `tests/.smoke-cache/passes`, the tree it tested: the files on disk before the first section runs, uncommitted
 changes included (what `git add -A` stages, taken in a copy of the index, so yours is not touched). It records
@@ -96,7 +97,8 @@ its merge queue runs `tests/smoke.sh --changed <the group's base> --shard K/3`, 
 run, not the whole suite: ...)`); a shard that no section falls in says so and exits 0. `--shard` combines with
 `-x`, `--with-unit` and the three ways to choose sections, not with `--pre-push`; anything but `K/N` with
 `1 <= K <= N` is a usage error (exit 2). CI's `smoke` runs `--shard 1/3`, `2/3` and `3/3` on three macOS runners at
-once (the `smoke-shard` matrix) and a small job named `smoke`, the required check, passes only when all three did.
+once (the `smoke-shard` matrix) and a small job named `smoke`, the required check, passes only when all three did,
+or, in the merge queue, when the Linux job `changes` found that the change reaches no section and skipped them.
 
 The shards are balanced by how long their sections take, not by how many: nine of the 64 sections take three fifths
 of the time (`update` and `install` about two minutes each, `send-new-start` nearly as long, then `connectors`,
