@@ -33,6 +33,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "lib"))
 import agent_state
 import knowledge
 import knowledge_model as km
+import knowledge_query as kq
 import knowledge_review as kr
 import knowledge_store as store
 import update_backups as ub
@@ -1150,6 +1151,56 @@ class QueryTest(KnowledgeTestCase):
         out = self.run_kg("search", "exporter").splitlines()
         self.assertTrue(out[0].startswith("repo/invoice-exporter"))
         self.assertIn("lesson/retired-env", self.run_kg("search", "follow-up"))
+
+    def many(self, facts: int, status: str = "confirmed") -> Path:
+        """An import of <facts> rules about repo/pdf-renderer (a file in the scratch folder)."""
+        path = self.root.parent / f"many-{facts}-{status}.jsonl"
+        rows = [
+            {
+                "type": "fact",
+                "subject": "repo/pdf-renderer",
+                "predicate": "rule",
+                "value": f"rule number {n}: keep the renderer's fonts pinned and its output stable",
+                "sources": ["memory:renderer.md"],
+            }
+            for n in range(facts)
+        ]
+        path.write_text("\n".join(json.dumps(row) for row in rows))
+        return path
+
+    def confirmed_many(self, facts: int) -> None:
+        self.run_kg("import", str(self.many(facts)), "--apply")
+        waiting = [f["id"] for f in self.kb().facts.values() if f["subject"] == "repo/pdf-renderer"]
+        self.run_kg("confirm", *waiting)
+
+    def test_a_lookup_stays_within_its_budget(self) -> None:
+        self.confirmed_many(200)
+        out = self.run_kg("lookup", "pdf-renderer")
+        self.assertLessEqual(kq.estimate_tokens(out), kq.LOOKUP_TOKENS)
+        self.assertRegex(out.splitlines()[-1], r"^\(\d+ more: kg facts repo/pdf-renderer\)$")
+        small = self.run_kg("lookup", "pdf-renderer", "--max-tokens", "100")
+        self.assertLessEqual(kq.estimate_tokens(small), 100)
+
+    def test_a_small_lookup_has_no_more_line(self) -> None:
+        self.assertNotIn(" more", self.run_kg("lookup", "smoke"))
+
+    def test_a_lookup_lists_five_waiting_facts_and_counts_the_rest(self) -> None:
+        self.run_kg("import", str(self.many(8)), "--apply")
+        out = self.run_kg("lookup", "pdf-renderer")
+        self.assertIn("unconfirmed (8, not used in context packs):", out)
+        self.assertEqual(out.count("rule number"), kq.LOOKUP_PENDING)
+        self.assertIn("(+3 more waiting for review)", out)
+
+    def test_lookup_json_is_complete(self) -> None:
+        self.confirmed_many(200)
+        found = json.loads(self.run_kg("lookup", "pdf-renderer", "--json"))
+        self.assertGreaterEqual(len(found["facts"]), 200)
+
+    def test_search_lists_at_most_ten_hits(self) -> None:
+        rows = [f"repo/x{n}" for n in range(15)]
+        for row in rows:
+            self.run_kg("add-entity", row, "--name", f"renderer helper {row[-2:]}")
+        self.assertEqual(len(self.run_kg("search", "renderer").splitlines()), kq.SEARCH_HITS)
 
     def test_schema_lists_the_whitelist(self) -> None:
         self.assertIn("people whitelist: alias_of, approves", self.run_kg("schema"))

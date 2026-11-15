@@ -22,7 +22,9 @@ from knowledge_model import KB, Record
 DEFAULT_PACK_TOKENS = 1500
 CHARS_PER_TOKEN = 4  # a rough estimate, enough to keep a pack small
 MAX_HOPS = 3
-DEFAULT_SEARCH_LIMIT = 10
+LOOKUP_TOKENS = 800  # what `kg lookup` prints at most (its --json stays complete)
+LOOKUP_PENDING = 5  # waiting facts a lookup lists; it counts the rest
+SEARCH_HITS = 10
 PACK_TOPIC_ENTITIES = 3
 MORE_LINE_RESERVE = 80  # room for the "(N more: ...)" line
 # Context packs try these types when --for names neither an entity nor an alias.
@@ -66,22 +68,45 @@ def entity_header(kb: KB, entity: Record) -> list[str]:
     return lines
 
 
-def lookup(kb: KB, ref: str) -> str:
-    """An entity's current confirmed facts with sources, what links to it, and what waits."""
+def within(lines: list[str], budget: int) -> tuple[list[str], int]:
+    """The leading <lines> that fit in <budget> characters, keeping room for a "more" line; returns
+    them and how many facts were left out (a "linked from:" heading is no fact)."""
+    used = 0
+    for index, line in enumerate(lines):
+        used += len(line) + 1
+        if used > budget - MORE_LINE_RESERVE:
+            return lines[:index], sum(1 for rest in lines[index:] if rest[0] == " ")
+    return lines, 0
+
+
+def waiting_lines(kb: KB, entity_id: str) -> list[str]:
+    """The facts about <entity_id> that wait for review: LOOKUP_PENDING of them, then a count."""
+    pending = by_order([f for f in kr.waiting(kb) if entity_id in (f["subject"], f.get("object"))])
+    if not pending:
+        return []
+    lines = [f"unconfirmed ({len(pending)}, not used in context packs):"]
+    lines += [f"  {fact_line(kb, f)}" for f in pending[:LOOKUP_PENDING]]
+    if len(pending) > LOOKUP_PENDING:
+        lines.append(f"(+{len(pending) - LOOKUP_PENDING} more waiting for review)")
+    return lines
+
+
+def lookup(kb: KB, ref: str, max_tokens: int = LOOKUP_TOKENS) -> str:
+    """An entity's current confirmed facts with sources, what links to it, and what waits: the facts
+    and links within <max_tokens> (then how many more: `kg facts`), at most LOOKUP_PENDING waiting ones."""
     entity = kb.entities[km.resolve(kb, ref)]
     entity_id = entity["id"]
-    lines = entity_header(kb, entity)
     own, links = outgoing(kb, entity_id), incoming(kb, entity_id)
-    lines.append("facts:" if own else "facts: none confirmed")
-    lines += [f"  {fact_line(kb, f)}" for f in own]
+    head = [*entity_header(kb, entity), "facts:" if own else "facts: none confirmed"]
+    tail = waiting_lines(kb, entity_id)
+    body = [f"  {fact_line(kb, f)}" for f in own]
     if links:
-        lines.append("linked from:")
-        lines += [f"  {fact_line(kb, f)}" for f in links]
-    pending = [f for f in kr.waiting(kb) if entity_id in (f["subject"], f.get("object"))]
-    if pending:
-        lines.append(f"unconfirmed ({len(pending)}, not used in context packs):")
-        lines += [f"  {fact_line(kb, f)}" for f in by_order(pending)]
-    return "\n".join(lines)
+        body += ["linked from:", *[f"  {fact_line(kb, f)}" for f in links]]
+    fixed = sum(len(line) + 1 for line in head + tail)
+    shown, left = within(body, max_tokens * CHARS_PER_TOKEN - fixed)
+    if left:
+        shown.append(f"({left} more: kg facts {entity_id})")
+    return "\n".join(head + shown + tail)
 
 
 @dataclass(frozen=True)
@@ -145,7 +170,7 @@ def fact_text_hits(kb: KB, wanted: str) -> list[tuple[Record, str]]:
     return hits
 
 
-def search(kb: KB, text: str, limit: int = DEFAULT_SEARCH_LIMIT) -> list[tuple[int, str, str]]:
+def search(kb: KB, text: str, limit: int = SEARCH_HITS) -> list[tuple[int, str, str]]:
     """(score, entity id, why) for entities matching <text> in a name, alias, summary or the value
     of a fact about them (current facts only; unconfirmed ones count too, marked as such)."""
     wanted = km.norm(text)

@@ -152,9 +152,9 @@ Examples, in the fictional acme world:
 ## How it is used (retrieval)
 
 - **CLI:**
-  - `kg lookup <entity>` (current facts with sources)
+  - `kg lookup <entity> [--max-tokens N]` (current facts with sources, at most 800 tokens, then `(N more: kg facts <entity>)`; at most 5 waiting facts, then a count; `--json` is complete)
   - `kg facts <subject> [--predicate] [--as-of]`
-  - `kg search <text>`
+  - `kg search <text>` (10 hits by default)
   - `kg neighbors <entity> [--hops 2]`
 - **Context packs:** `kg context --for <repo|process|topic>` returns at most about 1.5k tokens of
   cited, current, confirmed facts. `bosun delegate` appends the pack for the task's repo and

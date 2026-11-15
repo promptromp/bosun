@@ -1384,7 +1384,7 @@ def cmd_lookup(args: argparse.Namespace) -> str:
             entity_id = km.resolve(kb, args.entity)
             facts = kq.outgoing(kb, entity_id) + kq.incoming(kb, entity_id)
             return json.dumps({"entity": kb.entities[entity_id], "facts": facts}, indent=2)
-        return kq.lookup(kb, args.entity)
+        return kq.lookup(kb, args.entity, args.max_tokens)
 
 
 def cmd_facts(args: argparse.Namespace) -> str:
@@ -1602,7 +1602,10 @@ COMMANDS: dict[str, tuple[Handler, Arguments]] = {
     ),
     "forget": (cmd_forget, [(("entity",), {}), *DRY]),
     "expire": (cmd_expire, DRY),
-    "lookup": (cmd_lookup, [(("entity",), {}), *JSON]),
+    "lookup": (
+        cmd_lookup,
+        [(("entity",), {}), (("--max-tokens",), {"type": int, "default": kq.LOOKUP_TOKENS}), *JSON],
+    ),
     "facts": (
         cmd_facts,
         [
@@ -1616,7 +1619,7 @@ COMMANDS: dict[str, tuple[Handler, Arguments]] = {
     ),
     "search": (
         cmd_search,
-        [(("text",), {}), (("--limit",), {"type": int, "default": kq.DEFAULT_SEARCH_LIMIT})],
+        [(("text",), {}), (("--limit",), {"type": int, "default": kq.SEARCH_HITS})],
     ),
     "neighbors": (cmd_neighbors, [(("entity",), {}), (("--hops",), {"type": int, "default": 1})]),
     "context": (

@@ -13,6 +13,7 @@ import re
 import subprocess
 import sys
 from collections.abc import Iterable, Mapping
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -294,7 +295,26 @@ def knowledge_pack(targets: list[str]) -> str:
         pack = read_pack(targets, budget)
     except Exception as error:  # noqa: BLE001  (a pack is a help: no failure of it stops the hand-over)
         return unreadable(error)
+    log_pack(targets, pack)
     return f"{PACK_OPENING}\n{pack}" if pack else ""
+
+
+def log_pack(targets: list[str], pack: str) -> None:
+    """One line in today's delegate log (when there is a log dir): what the pack was for, how many facts
+    it holds and about how many tokens it costs the brief."""
+    log_dir = os.environ.get("BOSUN_LOG_DIR")
+    if not log_dir:
+        return
+    facts = sum(1 for line in pack.splitlines() if line.startswith("- "))
+    tokens = knowledge_query.estimate_tokens(f"{PACK_OPENING}\n{pack}") if pack else 0
+    stamp = f"{datetime.now():%Y-%m-%d %H:%M:%S}"
+    line = f"{stamp} [delegate] pack for {', '.join(targets)}: {facts} facts, ~{tokens} tokens\n"
+    try:
+        Path(log_dir).mkdir(parents=True, exist_ok=True)
+        with (Path(log_dir) / f"delegate-{datetime.now():%Y-%m-%d}.log").open("a") as handle:
+            handle.write(line)
+    except OSError:
+        return  # a log is a help: no failure of it stops the hand-over
 
 
 def brief_pack(items: dict[str, dict[str, Any]]) -> str:

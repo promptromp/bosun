@@ -184,6 +184,22 @@ class PackTest(unittest.TestCase):
                 self.assertNotIn(fact["id"], text)
         self.assertNotIn("U0000000002", text)
 
+    def test_a_pack_is_logged_with_its_size(self) -> None:
+        logs = self.tmp / "logs"
+        with mock.patch.dict("os.environ", {"BOSUN_LOG_DIR": str(logs)}):
+            pack = delegate.knowledge_pack(["repo/invoice-exporter", "process/release"])
+        (log,) = logs.glob("delegate-*.log")
+        (line,) = log.read_text().splitlines()
+        facts = sum(1 for row in pack.splitlines() if row.startswith("- "))
+        tokens = knowledge_query.estimate_tokens(pack)
+        self.assertIn("pack for repo/invoice-exporter, process/release", line)
+        self.assertIn(f": {facts} facts, ~{tokens} tokens", line)
+        self.assertGreater(facts, 0)
+
+    def test_the_rules_file_stays_within_300_tokens(self) -> None:
+        rules = (Path(__file__).resolve().parents[2] / "orchestrator" / "knowledge.md").read_text()
+        self.assertLessEqual(knowledge_query.estimate_tokens(rules), 300)
+
     def test_with_the_key_off_the_brief_is_unchanged(self) -> None:
         plain = delegate.render(args(id=["task:2026-11-01/1"]), [self.types["new-work"]])
         for off in ("0", ""):

@@ -135,6 +135,10 @@ bosun kg context --for releases         # a small cited pack of confirmed facts
   and the next write makes a new key. A `secret.key` that is not a key (empty, the wrong length, unreadable)
   while no such record needs it is moved aside by the next write, kept as
   `secret.key.aside-<time>` (not in the history), and made again, with a line on stderr.
+- **Bounded reads:** `kg lookup` prints at most 800 tokens (`--max-tokens N`; the rest is
+  `(N more: kg facts <entity>)`) and five waiting facts, then a count; `kg search` shows 10 hits
+  (`--limit`); `--json` is complete. `bosun delegate` logs each pack's size, one line in
+  `delegate-<date>.log` of the log folder.
 - **Context packs:** `kg context --for <entity|repo|topic> [--for ...] [--max-tokens N]` prints at
   most about 1.5k tokens of confirmed, current facts, each citing its `[id]` and source, with one
   section per target and one budget for all. A repo can be named as the ledger does
