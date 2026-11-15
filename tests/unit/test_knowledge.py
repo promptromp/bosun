@@ -1030,6 +1030,18 @@ class ContextTest(KnowledgeTestCase):
         self.assertIn("staging 2", self.run_kg("context", "--for", "retired environment"))
         self.assertIn("No knowledge recorded", self.run_kg("context", "--for", "quantum"))
 
+    def test_a_repo_is_found_by_its_last_path_segment(self) -> None:
+        kb = self.kb()
+        for target in (
+            "remotes/exporter",
+            "/Users/x/remotes/exporter.git",
+            "github.com/acme/exporter",
+            "acme/invoice-exporter",
+        ):
+            self.assertEqual(kq.pack_targets(kb, target, topics=False), ["repo/invoice-exporter"], target)
+        for target in ("remotes/nothing-like-it", "remotes/", "exporter-less", "acme/release"):
+            self.assertEqual(kq.pack_targets(kb, target, topics=False), [], target)
+
     def test_a_pack_stays_within_its_budget(self) -> None:
         for number in range(120):
             self.run_kg("add-entity", f"system/tool-{number}", "--name", f"tool {number} " + "x" * 40)

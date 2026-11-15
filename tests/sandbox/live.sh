@@ -1036,9 +1036,8 @@ branch_tests_name() { # <branch>: a test named for a credit note, and one for a 
     grep -E '^\+[[:space:]]*def test' <<<"$added"
     return 1
   }
-  grep -qiE '^\+[[:space:]]*def test[A-Za-z0-9_]*(currenc|eur|usd|gbp|chf|multi)' <<<"$added" ||
-    [ "$(grep -oE '(^|[^A-Za-z])(EUR|USD|GBP|CHF|JPY|SEK)([^A-Za-z]|$)' <<<"$added" | tr -dc 'A-Z\n' | sort -u | wc -l | tr -d ' ')" -ge 2 ] || {
-    echo "no added test for a second currency on $1:"
+  grep -qiE '^\+[[:space:]]*def test[A-Za-z0-9_]*(currenc|eur|usd|gbp|chf)' <<<"$added" || {
+    echo "no added test named for a second currency on $1:"
     grep -E '^\+[[:space:]]*def test' <<<"$added"
     return 1
   }
@@ -1057,7 +1056,7 @@ new_branch() { # <refs before>: a branch that is new or moved since, its name
 # <lines before>: the briefs with the ontology's section that the exporter was given since
 briefed() { since exporter "$1" | said_by_user | grep -F "What bosun knows about this work"; }
 # <lines before> <fact id>
-the_brief_has() { briefed "$1" | grep -qF -- "$2"; }
+the_brief_has() { [ -n "$2" ] && briefed "$1" | grep -qF -- "$2"; }
 tax_rule_id() {
   bosun kg facts repo/invoice-exporter --predicate rule --status confirmed --json |
     jq -r '[.[] | select((.value // "") | test("tax rounding"; "i"))][0].id // empty'
@@ -1157,7 +1156,7 @@ scenario_capture() {
 ontology_costs() {
   local name
   echo "  note  the ontology section of each brief, from the delegate log:"
-  grep -h 'pack for' "$STATE"/logs/delegate-*.log 2>/dev/null | sed 's/^/  note    /'
+  grep -h 'pack for' "$STATE"/logs/delegate-*.log 2>/dev/null | sed 's/^/  note    /' | grep . || echo "  note    none"
   for name in orchestrator "${WORLD_REPOS[@]}"; do
     note_kg_calls "in all" "$name" 0
   done

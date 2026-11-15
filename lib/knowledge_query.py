@@ -219,6 +219,22 @@ def links_of(entity_id: str, links: list[Record], used: set[str]) -> list[Record
 # ---- context packs ------------------------------------------------------------------------------
 
 
+def repo_by_last_segment(kb: KB, target: str) -> str:
+    """The repo a path or URL names by its last segment (owner/repo, remotes/repo, a local path or
+    host/owner/repo.git, which is how a remote that is rewritten to a folder reads): the repo's slug,
+    name or strong alias. "" if <target> has no slash or the segment names no repo."""
+    segment = target.strip().rstrip("/").rpartition("/")[2].removesuffix(".git")
+    if "/" not in target or not segment:
+        return ""
+    if f"repo/{segment}" in kb.entities:
+        return f"repo/{segment}"
+    try:
+        found = km.resolve(kb, segment)
+    except km.KnowledgeError:
+        return ""
+    return found if found.startswith("repo/") else ""
+
+
 def pack_targets(kb: KB, target: str, *, topics: bool = True) -> list[str]:
     """The entities a pack is for: the one <target> names (or <type>/<target> for the usual types;
     for owner/repo, repo/<repo>), else, with <topics>, the best search matches for it as a topic."""
@@ -228,11 +244,12 @@ def pack_targets(kb: KB, target: str, *, topics: bool = True) -> list[str]:
         pass
     slug = target.strip().lower()
     candidates = [f"{entity_type}/{slug}" for entity_type in PACK_TYPES]
-    if "/" in slug:  # a repo as the ledger names it: owner/repo
-        candidates.append(f"repo/{slug.rpartition('/')[2]}")
     for candidate in candidates:
         if candidate in kb.entities:
             return [candidate]
+    repo = repo_by_last_segment(kb, slug)
+    if repo:
+        return [repo]
     if not topics:
         return []
     return [entity_id for _, entity_id, _ in search(kb, target, PACK_TOPIC_ENTITIES)]
