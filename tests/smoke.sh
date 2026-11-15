@@ -2215,13 +2215,17 @@ printf '{"pid":%d,"status":"shell","version":"2.0.0","statusUpdatedAt":%d,"name"
 check "one whose turn is over while a background command runs (shell) would get them" contains "$(EV --dry-run)" "dry-run: would deliver:"
 printf '{"pid":%d,"status":"idle","version":"2.0.0","statusUpdatedAt":%d,"name":"orch-%s"}' "$orch_pid" $((($(date +%s) - 3600) * 1000)) "$(date +%F)" >"$HOME/.claude/sessions/$orch_pid.json"
 check "a dry run shows the one batched summary" contains "$(EV --dry-run)" "dry-run: would deliver:"
+delivery_day=$(date +%F) # a delivery just before midnight is yesterday's by the time its status is read
 check "an idle orchestrator gets the summary" contains "$(EV)" "delivered "
 check "... once" bash -c '[ "$("$1" events --list)" = "(no events)" ] && [ -z "$(BOSUN_EVENTS_ENABLED=1 "$1" events 2>&1)" ]' _ "$BOSUN"
 L report 'slack:C1/6' --summary 'found the cause' >/dev/null
 check "with events off the ledger queues nothing" bash -c '[ "$("$1" events --list)" = "(no events)" ]' _ "$BOSUN"
 BOSUN_EVENTS_ENABLED=1 L report 'slack:C1/6' --summary 'found the cause, again' >/dev/null
 check "a check-in covers what is pending" contains "$("$BOSUN" events --covered)" "1 pending event(s) covered by the check-in"
-check "status shows the dispatcher's last run" contains "$("$BOSUN" events --status)" "deliveries today: 1"
+events_status=$("$BOSUN" events --status)
+deliveries_line="deliveries today: 1"
+[ "$(date +%F)" = "$delivery_day" ] || deliveries_line="deliveries today: " # the run crossed midnight
+check "status shows the dispatcher's last run" contains "$events_status" "$deliveries_line"
 
 section slack-watcher "slack watcher (fake claude with fixture JSON)" needs orchestrator-refresh covers 'libexec/bosun-checkin,libexec/bosun-events,libexec/bosun-slack-watch,libexec/bosun-watchdog'
 # The orchestrator is idle, as the section before leaves it (a dispatcher run delivers to an idle one).
