@@ -89,38 +89,6 @@ from your phone if you like.</li>
 
 <section class="bx-section bx-example" markdown>
 
-## Is bosun all right? { data-toc-label="In your menu bar" }
-
-<p class="bx-lead">A small icon in the menu bar says how bosun is, from the moment you log in. It
-starts and stops bosun, updates it, opens the console, and holds its settings.</p>
-
-<div class="bx-example__body" markdown>
-<div class="bx-example__story" markdown>
-
-<ul class="bx-points" markdown>
-<li markdown>**A glance tells you.** Green while bosun runs, yellow or red when something needs a look,
-and grey while it rests outside your hours.</li>
-<li markdown>**It starts on its own.** At the start of your hours, or when you log in during them.
-Start and Stop are there for any other time.</li>
-<li markdown>**Change your hours in Settings.** The days, the start time, when the Mac may sleep, and
-whether bosun follows the dated releases or every change.</li>
-<li markdown>**Updates come to you.** Check for Updates says what is new, and your agents keep working
-while bosun updates.</li>
-</ul>
-
-</div>
-<div class="bx-demo" data-example="menubar">
-<p class="bx-demo__fallback">This example needs JavaScript. <a href="setup.md#the-menu-bar-app">The menu bar app</a> shows every state of its menu.</p>
-</div>
-</div>
-
-<p class="bx-fine" markdown>Pick a state to see its menu, drawn from what bosun reports. [The menu bar
-app](setup.md#the-menu-bar-app) has every state and what each item does.</p>
-
-</section>
-
-<section class="bx-section bx-example" markdown>
-
 ## What became of Priya's ask? { data-toc-label="The ledger" }
 
 <p class="bx-lead">Every ask, task, pull request and ticket is an item in the ledger. Each one has a
@@ -227,6 +195,38 @@ moments that need you.</p>
 <div class="bx-demo bx-demo--wide" data-example="day">
 <p class="bx-demo__fallback">This example needs JavaScript. <a href="day.md">How a day runs</a> has the same day in words.</p>
 </div>
+
+</section>
+
+<section class="bx-section bx-example" markdown>
+
+## Works natively with macOS { data-toc-label="On your Mac" }
+
+<p class="bx-lead">bosun.app sits in your menu bar from the moment you log in. It says how bosun
+is, starts and stops it, updates it, opens the console, and holds its settings.</p>
+
+<div class="bx-example__body" markdown>
+<div class="bx-example__story" markdown>
+
+<ul class="bx-points" markdown>
+<li markdown>**A glance tells you.** Green while bosun runs, yellow or red when something needs a look,
+and grey while it rests outside your hours.</li>
+<li markdown>**It starts on its own.** At the start of your hours, or when you log in during them.
+Start and Stop are there for any other time.</li>
+<li markdown>**Change your hours in Settings.** The days, the start time, when the Mac may sleep, and
+whether bosun follows the dated releases or every change.</li>
+<li markdown>**Updates come to you.** Check for Updates says what is new, and your agents keep working
+while bosun updates.</li>
+</ul>
+
+</div>
+<div class="bx-demo" data-example="menubar">
+<p class="bx-demo__fallback">This example needs JavaScript. <a href="setup.md#the-menu-bar-app">The menu bar app</a> shows every state of its menu.</p>
+</div>
+</div>
+
+<p class="bx-fine" markdown>Pick a state to see its menu, drawn from what bosun reports. [The menu bar
+app](setup.md#the-menu-bar-app) has every state and what each item does.</p>
 
 </section>
 
