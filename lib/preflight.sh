@@ -51,6 +51,7 @@ report() { # <what happened> <what> [the next step]
   [ -z "${3:-}" ] || steps="$steps$3$NEWLINE"
 }
 check_todo() { report "to do" "$1" "$2"; }
+check_later() { [ "$QUIET" = 1 ] || status_line "later" "$1"; } # said, and nothing for you to do now
 have() { command -v "$1" >/dev/null 2>&1; }
 want_package() { packages="$packages $(platform_package "$1")"; }
 
@@ -161,7 +162,7 @@ check_harness() {
   if python_ready; then
     harness_checks
   else
-    [ "$QUIET" = 1 ] || status_line "later" "its login is checked once Python is in place"
+    check_later "its login is checked once Python is in place"
   fi
 }
 

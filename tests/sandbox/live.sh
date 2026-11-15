@@ -111,25 +111,49 @@ prepare() {
 
 onboarded() { jq -e ".$1 == true" "$HOME/.claude.json" >/dev/null 2>&1; } # <flag in ~/.claude.json>
 
-# A screen as a person goes through it: Return, every few seconds, until Claude Code records it as done (<flag> in
-# ~/.claude.json), for up to 90 seconds; a first start can take a while, more so on a clone with its window.
+# The answer a person gives the screen <session> shows: Return, but on the folder-trust screen the answer yes,
+# which is not its default (seen 2026-11-15: the cursor starts on "No, exit", which Return picks).
+answer_screen() { # <session>
+  local screen
+  screen="$(tmux -L person capture-pane -p -t "$1" 2>/dev/null)"
+  if grep -q "❯ No, exit" <<<"$screen" && grep -q "Yes, I trust this folder" <<<"$screen"; then
+    tmux -L person send-keys -t "$1" Down Enter 2>/dev/null
+  else
+    tmux -L person send-keys -t "$1" Enter 2>/dev/null
+  fi
+}
+
+# A screen as a person goes through it, in a folder of its own (what it trusts is that folder, never the home
+# folder): the answers above every few seconds, until Claude Code records it as done (<flag> in ~/.claude.json),
+# for up to 90 seconds; a first start can take a while.
 through_screen() { # <session> <flag> <claude args...>
   local session="$1" flag="$2" deadline=$((SECONDS + 90))
   shift 2
-  tmux -L person new-session -d -s "$session" -x 110 -y 40 -c "$HOME" "$@"
+  mkdir -p "$HOME/first-run"
+  # Kept on the screen when it ends, with how it ended, so that a run that gives up can show it.
+  tmux -L person new-session -d -s "$session" -x 110 -y 40 -c "$HOME/first-run" \
+    bash -c '"$@"; echo "(it exited with $?)"; sleep 600' _ "$@"
   until onboarded "$flag" || [ "$SECONDS" -ge "$deadline" ]; do
     sleep 4
-    tmux -L person send-keys -t "$session" Enter 2>/dev/null
+    answer_screen "$session"
   done
   sleep 2
+  if ! onboarded "$flag"; then # what it showed instead, for whoever reads the run
+    echo "  $flag was not recorded in 90 seconds; the screen showed:"
+    tmux -L person capture-pane -p -t "$session" 2>/dev/null | grep -v '^[[:space:]]*$' | tail -20 | sed 's/^/    | /'
+  fi
   tmux -L person kill-server 2>/dev/null
   onboarded "$flag"
 }
 
-first_run_screens() { # as a person goes through them: Return on each, until each is recorded as done
-  through_screen first hasCompletedOnboarding claude
-  # Then Claude in Chrome's screen, which windows started with --chrome show once (Enter confirms it).
-  through_screen chrome hasCompletedClaudeInChromeOnboarding claude --chrome
+first_run_screens() { # [--no-chrome]: as a person goes through them, until each is recorded as done
+  through_screen first hasCompletedOnboarding claude || return 1
+  [ "${1:-}" != "--no-chrome" ] || return 0
+  # Then Claude in Chrome's screen, which windows started with --chrome showed once (Enter confirms it), where this
+  # Claude Code still shows it: 2.1.308 shows none and records nothing, so not seeing it is no failure.
+  through_screen chrome hasCompletedClaudeInChromeOnboarding claude --chrome ||
+    echo "  (no Claude in Chrome screen recorded: this Claude Code shows none)"
+  return 0
 }
 
 install_it() {
@@ -137,7 +161,7 @@ install_it() {
   echo "logged in, then the rest of what it says"
   check "the installer says Claude Code's first screens are for a person" bash -c '! sh "$1/get.sh" >"$2" 2>&1 && grep -q "first-run screens not done" "$2"' _ "$ROOT" "$out"
   first_run_screens
-  check "... and going through them is enough" jq -e '.hasCompletedOnboarding == true and .hasCompletedClaudeInChromeOnboarding == true' "$HOME/.claude.json"
+  check "... and going through them is enough" jq -e '.hasCompletedOnboarding == true' "$HOME/.claude.json"
   check "the same line then installs" bash -c 'sh "$1/get.sh" --unattended >"$2" 2>&1 || { tail -15 "$2"; exit 1; }' _ "$ROOT" "$out"
   check "... with no repo window, since nobody chose one" grep -qx "sessions: \[\]" "$CONFIG/sessions.yml"
   echo '{"repos": [{"dir": "~/Development/exporter"}], "menu_app": false}' >"$OUT/answers.json"
@@ -165,7 +189,10 @@ quietly() { # <command...>: its output only if it fails, the end of it
 ready() { # <release|checkout> <model> <get.sh URL>
   local from="$1" model="$2" url="$3" menu_app=false as_installed=()
   echo "setting bosun up from the $from, on $model"
-  first_run_screens
+  # The clone has no Chrome, so its windows run without Claude in Chrome (bosun's flags but for --chrome), and
+  # there is no screen of it to go through.
+  export BOSUN_CLAUDE_FLAGS="--permission-mode auto" BOSUN_ORCHESTRATOR_FLAGS="--permission-mode auto"
+  first_run_screens --no-chrome || return 1
   if [ "$from" = checkout ]; then
     quietly sh "$ROOT/get.sh" --unattended || return 1
   else
@@ -178,6 +205,8 @@ ready() { # <release|checkout> <model> <get.sh URL>
   quietly ${as_installed[@]+"${as_installed[@]}"} bosun init --answers "$OUT/answers.json" || return 1
   printf 'BOSUN_MODEL="%s"\nBOSUN_ORCHESTRATOR_MODEL="%s"\nBOSUN_LEARN_MODEL="%s"\n' "$model" "$model" "$model" \
     >>"$CONFIG/bosun.env"
+  printf 'BOSUN_CLAUDE_FLAGS="%s"\nBOSUN_ORCHESTRATOR_FLAGS="%s"\n' "$BOSUN_CLAUDE_FLAGS" "$BOSUN_ORCHESTRATOR_FLAGS" \
+    >>"$CONFIG/bosun.env"
   # Through launchd, as the app's Start does, so the session inherits nothing of this script's environment.
   echo "starting it (the morning run, through its launchd job)"
   quietly bosun morning --now --background || return 1
@@ -187,7 +216,7 @@ ready() { # <release|checkout> <model> <get.sh URL>
     return 1
   fi
   if [ -d "$HOME/Applications/bosun.app" ]; then open "$HOME/Applications/bosun.app"; fi
-  bosun status 2>&1 | head -12
+  bosun status 2>&1 | head -12 || true # how it is, to read: a warning in it is not a failed setup
 }
 
 real_windows() {

@@ -380,11 +380,16 @@ releases_repo() {
     die "could not read the releases' repository from app/publisher.json"
 }
 
-# A clone of the developer's Mac with its window, logged in as admin, and this checkout in it.
-clone_for_a_person() {
+# A clone of the developer's Mac with its window, logged in as admin, and this checkout in it. --no-graphics: no
+# window (nobody is there to see it); the desktop session is there either way.
+clone_for_a_person() { # [--no-graphics]
   prepare_clone "$DEV_MAC"
-  say "a window opens with a clone of $DEV_MAC, its desktop logged in as admin (password admin, for sudo)"
-  boot "$CLONE"
+  if [ "${1:-}" = "--no-graphics" ]; then
+    say "booting a clone of $DEV_MAC"
+  else
+    say "a window opens with a clone of $DEV_MAC, its desktop logged in as admin (password admin, for sudo)"
+  fi
+  boot "$CLONE" "$@"
   copy_checkout
 }
 
@@ -447,15 +452,21 @@ try() { # [--from release|checkout] [--run <script>] [claude|codex]
   need_key "$ANTHROPIC_ITEM"
   [ "$agent" = "codex" ] && need_key "$OPENAI_ITEM"
   repo="$(releases_repo)" || exit 1
-  clone_for_a_person
+  if [ -n "$script" ]; then clone_for_a_person --no-graphics; else clone_for_a_person; fi
   in_vm_masked prepare "$agent" || die "preparing it failed"
   keys_into_vm "$agent"
   in_vm_masked ready "$agent" "$from" "$model" "https://raw.githubusercontent.com/$repo/main/get.sh" ||
     die "setting bosun up failed"
   if [ -n "$script" ]; then
     say "running $script in the clone"
-    in_vm "$CLONE" "zsh -l -s" <"$script" 2>&1 | sed -l -E -e "$KEY_SHAPE" -e "$TOKEN_SHAPE"
-    return "${PIPESTATUS[0]}"
+    # bosun's own line on the path is in ~/.zshrc, which a shell reading a script does not run
+    # shellcheck disable=SC2016 # expands in the clone
+    {
+      printf 'export PATH="$HOME/.local/bin:$PATH"\n'
+      cat "$script"
+    } |
+      in_vm "$CLONE" "zsh -l -s" 2>&1 | sed -l -E -e "$KEY_SHAPE" -e "$TOKEN_SHAPE"
+    return "${PIPESTATUS[1]}" # the script's, through ssh
   fi
   person_shell "$(
     cat <<WELCOME

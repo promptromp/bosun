@@ -441,8 +441,9 @@ def onboarded() -> bool:
 
 
 def chrome_onboarded() -> bool:
-    """Whether someone went through the screen `claude --chrome` shows once ("Claude in Chrome": what it
-    may do in your browser, Enter to confirm). Until then every window started with --chrome stops at it."""
+    """Whether someone went through the screen `claude --chrome` showed once ("Claude in Chrome": what it
+    may do in your browser, Enter to confirm), on the Claude Code versions that show it (2.1.308 shows
+    none)."""
     return (read_object(CONFIG_FILE) or {}).get("hasCompletedClaudeInChromeOnboarding") is True
 
 
