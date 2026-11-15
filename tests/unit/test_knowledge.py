@@ -30,6 +30,7 @@ from unittest import mock
 
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "lib"))
+import agent_state
 import knowledge
 import knowledge_model as km
 import knowledge_review as kr
@@ -74,7 +75,9 @@ def tool_result(text: str, moment: datetime) -> dict[str, Any]:
 
 class KnowledgeTestCase(unittest.TestCase):
     """A scratch knowledge directory (no git unless a test asks) and state folder (this Mac's
-    replica id, as the journal uses it), a pinned clock, and a few entities of the acme world."""
+    replica id, as the journal uses it), a pinned clock, and a few entities of the acme world.
+    kg runs from no agent's session (a terminal) unless a test says otherwise: the suite itself
+    may run inside one, which must not count."""
 
     git = False
 
@@ -87,6 +90,13 @@ class KnowledgeTestCase(unittest.TestCase):
         knowledge.configure(self.root, git=self.git, state_dir=str(self.state))
         self.addCleanup(shutil.rmtree, self.tmp, ignore_errors=True)
         self.addCleanup(setattr, knowledge, "CLOCK", knowledge.clock)
+        self.in_session(None)
+
+    def in_session(self, session: agent_state.CallingSession | None) -> None:
+        """Run kg from <session>, as the agent session that ran it; None: from a terminal."""
+        patcher = mock.patch.object(agent_state, "calling_session", return_value=session)
+        patcher.start()
+        self.addCleanup(patcher.stop)
 
     def run_kg(self, *argv: str) -> str:
         args = knowledge.build_parser().parse_args(list(argv))
@@ -311,6 +321,148 @@ class AutoConfirmTest(KnowledgeTestCase):
             self.run_kg("propose", "person/dana", "strengths", "--value", "fast", "--source", "ledger:x")
         with self.assertRaisesRegex(KnowledgeError, "needs --transcript"):
             self.run_kg("propose", "process/release", "has_step", "step/merge", "--from-user", "--quote", "x")
+
+
+SESSION_ID = "0f1e2d3c-4b5a-4968-8776-655443322110"
+
+
+class SessionQuoteTest(KnowledgeTestCase):
+    """A quote of my words is checked in the session that ran kg, in a prompt of the last day; and
+    from a session, confirming or rejecting needs such a quote."""
+
+    def session(self, *entries: dict[str, Any], verifies: bool = True) -> Path:
+        """kg runs from a session whose transcript holds <entries>."""
+        transcript = self.tmp / f"{SESSION_ID}.jsonl"
+        transcript.write_text("".join(json.dumps(e) + "\n" for e in entries))
+        agent = "claude" if verifies else "codex"
+        self.in_session(agent_state.CallingSession(agent, 4242, transcript if verifies else None, verifies))
+        return transcript
+
+    def propose_mine(self, *extra: str) -> str:
+        argv = ["propose", "process/release", "gated_by", "gate/smoke-tests", "--from-user", "--quote", QUOTE]
+        return self.run_kg(*argv, *extra)
+
+    def proposed(self, value: str) -> str:
+        self.run_kg(
+            "propose", "repo/invoice-exporter", "caveat", "--value", value, "--source", "memory:ci.md"
+        )
+        return list(self.kb().facts)[-1]
+
+    def test_inside_a_session_the_quote_is_checked_in_its_own_transcript(self) -> None:
+        self.seed()
+        self.session(typed(f"remember: {QUOTE}", START - timedelta(hours=1)))
+        out = self.propose_mine()
+        self.assertIn("confirmed (your own words", out)
+        source = self.fact(self.f(1))["sources"][0]
+        self.assertEqual(source["ref"], SESSION_ID)
+        self.assertTrue(source["verified"])
+
+    def test_inside_a_session_another_transcript_is_refused(self) -> None:
+        self.seed()
+        self.session(typed(QUOTE, START))
+        other = self.transcript(typed(QUOTE, START))
+        with self.assertRaisesRegex(KnowledgeError, "not this session's transcript"):
+            self.propose_mine("--transcript", other)
+        self.assertEqual(self.kb().facts, {})
+
+    def test_its_own_transcript_named_is_taken(self) -> None:
+        self.seed()
+        own = self.session(typed(QUOTE, START))
+        self.assertIn("confirmed (your own words", self.propose_mine("--transcript", str(own)))
+
+    def test_a_quote_older_than_a_day_stays_proposed(self) -> None:
+        self.seed()
+        self.session(typed(QUOTE, START - timedelta(hours=25)))
+        out = self.propose_mine()
+        self.assertEqual(self.fact(self.f(1))["status"], km.PROPOSED)
+        self.assertIn(
+            "note: the quote is not in anything you typed in that session in the last 24 hours", out
+        )
+
+    def test_a_quote_of_the_last_day_still_counts(self) -> None:
+        self.seed()
+        self.session(typed(QUOTE, START - knowledge.QUOTE_MAX_AGE))
+        self.assertIn("confirmed (your own words", self.propose_mine())
+
+    def test_outside_a_session_the_transcript_is_still_required(self) -> None:
+        self.seed()
+        with self.assertRaisesRegex(KnowledgeError, "needs --transcript"):
+            self.propose_mine()
+
+    def test_outside_a_session_an_old_quote_stays_proposed_too(self) -> None:
+        self.seed()
+        transcript = self.transcript(typed(QUOTE, START - timedelta(days=2)))
+        out = self.propose_mine("--transcript", transcript)
+        self.assertIn("stays proposed", out)
+        self.assertEqual(self.fact(self.f(1))["status"], km.PROPOSED)
+
+    def test_in_a_session_of_an_agent_that_cannot_check_quotes_my_words_stay_proposed(self) -> None:
+        self.seed()
+        self.session(typed(QUOTE, START), verifies=False)
+        out = self.propose_mine()
+        self.assertEqual(self.fact(self.f(1))["status"], km.PROPOSED)
+        self.assertIn("note: bosun cannot check your words in Codex, so it stays proposed", out)
+        with self.assertRaisesRegex(KnowledgeError, "not this session's transcript"):
+            self.propose_mine("--transcript", self.transcript(typed(QUOTE, START)))
+        with self.assertRaisesRegex(KnowledgeError, "bosun cannot check your words in Codex"):
+            self.run_kg("supersede", self.f(1), "--value", "x", "--from-user", "--quote", QUOTE)
+
+    def test_a_correction_in_my_words_is_checked_in_the_session(self) -> None:
+        self.seed()
+        self.run_kg("propose", "environment/staging-2", "status", "--value", "active", "--source", "memory:a")
+        self.session(typed("it is retired", START - timedelta(hours=2)))
+        out = self.run_kg(
+            "supersede", self.f(1), "--value", "retired", "--from-user", "--quote", "it is retired"
+        )
+        self.assertIn(f"{self.f(1)} closed, superseded by {self.f(2)}", out)
+        self.later(2)
+        with self.assertRaisesRegex(
+            KnowledgeError, "not in anything you typed in that session in the last 24"
+        ):
+            self.run_kg("supersede", self.f(2), "--value", "back", "--from-user", "--quote", "it is retired")
+
+    def test_confirming_from_a_session_needs_my_words(self) -> None:
+        self.seed()
+        first, second, third = (self.proposed(f"gotcha {n}") for n in range(3))
+        self.session(typed(f"yes, {QUOTE}", START - timedelta(hours=1)))
+        with self.assertRaisesRegex(KnowledgeError, "from a session, confirm with --from-user --quote"):
+            self.run_kg("confirm", first)
+        with self.assertRaisesRegex(KnowledgeError, "not in anything you typed in that session"):
+            self.run_kg("confirm", first, "--from-user", "--quote", "words I never typed")
+        self.assertEqual(self.fact(first)["status"], km.PROPOSED)
+        self.assertIn(
+            f"ok: {first} confirmed", self.run_kg("confirm", first, "--from-user", "--quote", QUOTE)
+        )
+        with self.assertRaisesRegex(KnowledgeError, "from a session, reject with --from-user --quote"):
+            self.run_kg("reject", second)
+        self.assertIn(
+            f"ok: {second} rejected", self.run_kg("reject", second, "--from-user", "--quote", QUOTE)
+        )
+        self.run_kg("batch")
+        with self.assertRaisesRegex(
+            KnowledgeError, "from a session, answer the batch with --from-user --quote"
+        ):
+            self.run_kg("batch", "apply", "confirm all")
+        out = self.run_kg("batch", "apply", "confirm all", "--from-user", "--quote", QUOTE)
+        self.assertIn("1 confirmed", out)
+        self.assertEqual(self.fact(third)["status"], km.CONFIRMED)
+
+    def test_confirming_from_a_terminal_is_unchanged(self) -> None:
+        self.seed()
+        fact, other = self.proposed("gotcha"), self.proposed("another")
+        self.assertIn(f"ok: {fact} confirmed", self.run_kg("confirm", fact))
+        self.assertIn(f"ok: {other} rejected", self.run_kg("reject", other))
+
+    def test_a_session_of_an_agent_that_cannot_check_quotes_cannot_confirm(self) -> None:
+        self.seed()
+        fact = self.proposed("gotcha")
+        self.session(typed(QUOTE, START), verifies=False)
+        refusal = "bosun cannot check your words in Codex: confirm from a terminal or the console"
+        with self.assertRaisesRegex(KnowledgeError, refusal):
+            self.run_kg("confirm", fact, "--from-user", "--quote", QUOTE)
+        with self.assertRaisesRegex(KnowledgeError, "Codex: reject from a terminal or the console"):
+            self.run_kg("reject", fact)
+        self.assertEqual(self.fact(fact)["status"], km.PROPOSED)
 
 
 class LifecycleTest(KnowledgeTestCase):

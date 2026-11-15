@@ -1606,6 +1606,9 @@ rm -f "$HOME/.claude/settings.json"
 rm -f "$WORK/mcp-claude.calls" "$BOSUN_STATE_DIR/connectors.json" "$LAUNCH_LOG"
 
 section knowledge "knowledge (kg, fixture acme knowledge base)" covers 'libexec/bosun-kg,libexec/bosun-context,tests/fixtures/knowledge/**'
+# kg runs from a terminal here: kg asks the agent session that ran it for my words, and this run's own process
+# is a running Claude's record (above), so the record is set aside until the session checks at the end.
+mv "$HOME/.claude/sessions/$$.json" "$WORK/own-session.json"
 out="$(kg import "$KG_FIXTURE" 2>&1)"
 check "import is a dry run first: counts and refusals, nothing written" bash -c 'grep -q "confirmed automatically: 0; waiting for review: 20" <<<"$1" && grep -q "refused: 2 people whitelist" <<<"$1" && [ ! -e "$2" ]' _ "$out" "$KG_DIR"
 check "import --apply --auto-confirm writes the knowledge base" contains "$(kg import "$KG_FIXTURE" --apply --auto-confirm 2>&1)" "confirmed automatically: 6; waiting for review: 14"
@@ -1644,6 +1647,19 @@ check "kg usage errors exit 2" bash -c '
     "$1" kg $args >/dev/null 2>&1
     [ $? -eq 2 ] || { echo "kg $args did not exit 2"; exit 1; }
   done' _ "$BOSUN"
+# From a Claude session (this run's process, with a session of its own for now): a quote of my words is
+# checked in that session's own transcript, a review needs one, and another transcript is refused.
+kg_session="44444444-0000-0000-0000-000000000001"
+kg_own="$(python3 -c 'import sys; sys.path.insert(0, sys.argv[1]); import claude_state; print(claude_state.transcript_path(sys.argv[2], sys.argv[3]))' "$ROOT/lib" "$WORK" "$kg_session")"
+mkdir -p "$(dirname "$kg_own")"
+printf '{"type":"user","timestamp":"%s","origin":{"kind":"human"},"message":{"role":"user","content":"the pdf renderer renders slowly"}}\n' \
+  "$(date -u +%Y-%m-%dT%H:%M:%SZ)" >"$kg_own"
+printf '{"pid":%d,"sessionId":"%s","cwd":"%s"}' $$ "$kg_session" "$WORK" >"$HOME/.claude/sessions/$$.json"
+check "from a Claude session, my words are checked in its own transcript" contains "$(kg propose repo/pdf-renderer caveat --value 'renders slowly' --from-user --quote 'the pdf renderer renders slowly')" "confirmed (your own words"
+check "... another transcript is refused there" fails_with "not this session's transcript" kg propose repo/pdf-renderer caveat --value x --from-user --quote 'the pdf renderer renders slowly' --transcript "$transcript"
+check "... and a review there needs my words" fails_with "from a session, confirm with --from-user --quote" kg confirm repo/pdf-renderer
+rm -f "$kg_own"
+mv "$WORK/own-session.json" "$HOME/.claude/sessions/$$.json"
 
 always_run
 # From here on `claude` is this fake (refresh asks it for the installed version), never a real

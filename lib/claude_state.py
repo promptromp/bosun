@@ -135,6 +135,7 @@ PROFILE = Profile(
     setup_preview=("One Claude Code session per repo, and the orchestrator runs on it too.",),
     screen=Screen(claude_typed_text, never_asks, unknown_command_lines),
     connectors="connectors_claude",
+    verifies_quotes=True,
 )
 MODEL_FLAG = re.compile(r"(?:^|\s)--model\s+(\S+)")
 EFFORT_SETTING = re.compile(r'"effortLevel":"([a-z]+)"')
@@ -200,6 +201,14 @@ def resolve(workdir: str, name: str) -> str | None:
 
 def transcript_path(workdir: str, session_id: str) -> Path:
     return project_dir(workdir) / f"{session_id}.jsonl"
+
+
+def session_transcript(entry: dict[str, Any]) -> Path | None:
+    """The transcript of the session in <entry>, a running-session record: where its prompts are kept."""
+    workdir, session_id = entry.get("cwd"), entry.get("sessionId")
+    if not (isinstance(workdir, str) and isinstance(session_id, str) and workdir and session_id):
+        return None
+    return transcript_path(workdir, session_id)
 
 
 @dataclass(frozen=True)

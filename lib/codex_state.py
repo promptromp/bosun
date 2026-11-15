@@ -224,6 +224,17 @@ def record(pid: int | str) -> dict[str, Any] | None:
     return build_record(pid, rollout) if rollout else None
 
 
+def is_stale(_entry: dict[str, Any]) -> bool:
+    """Never: a record of a running Codex is built from the rollout file the running process holds open."""
+    return False
+
+
+def session_transcript(_entry: dict[str, Any]) -> Path | None:
+    """None: bosun does not read my prompts out of Codex's files to check a quote of my words in them
+    (PROFILE.verifies_quotes is false)."""
+    return None
+
+
 def describe(pid: str) -> dict[str, Any] | None:
     """What `bosun sessions` shows of a running Codex: all of its record."""
     return record(pid)

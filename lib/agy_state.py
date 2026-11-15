@@ -430,6 +430,18 @@ def record(pid: int | str) -> dict[str, Any] | None:
     return build_record(int(pid), name, status) if name and status.get("conversationId") else None
 
 
+def is_stale(_entry: dict[str, Any]) -> bool:
+    """Never: a record of a running agy is built from the running process's command line and its status
+    file."""
+    return False
+
+
+def session_transcript(_entry: dict[str, Any]) -> Path | None:
+    """None: bosun does not read my prompts out of agy's files to check a quote of my words in them
+    (PROFILE.verifies_quotes is false)."""
+    return None
+
+
 def describe(pid: str) -> dict[str, Any] | None:
     """What `bosun sessions` shows of a running agy: all of its record."""
     return record(pid)

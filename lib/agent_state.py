@@ -23,8 +23,10 @@ from __future__ import annotations
 
 import json
 import os
+import subprocess
 import sys
 from collections.abc import Iterable, Iterator
+from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Protocol
@@ -45,6 +47,8 @@ class Agent(Protocol):
     PROFILE: Profile
 
     def record(self, pid: int | str) -> dict[str, Any] | None: ...
+    def is_stale(self, entry: dict[str, Any]) -> bool: ...  # its pid now belongs to another process
+    def session_transcript(self, entry: dict[str, Any]) -> Path | None: ...  # None: bosun reads none of it
     def registered(self, pids: Iterable[str]) -> str | None: ...
     def describe(self, pid: str) -> dict[str, Any] | None: ...
     def live_pid(self, session_id: str) -> int | None: ...
@@ -70,6 +74,18 @@ DEFAULT_HARNESS = claude_state.HARNESS  # the agent a window runs when nothing s
 # lib/agents.sh), whichever agent the repo windows default to.
 ORCHESTRATOR_HARNESS = claude_state.HARNESS
 STATUS_ORDER = ("idle", "busy", "shell", "waiting")
+MAX_ANCESTORS = 64  # how far up from a command calling_session looks for the agent that ran it
+
+
+@dataclass(frozen=True)
+class CallingSession:
+    """The agent session a command was run from: its nearest ancestor process that is an agent with a
+    session."""
+
+    agent: str  # which agent (its key in AGENTS)
+    pid: int
+    transcript: Path | None  # where its prompts are kept; None when bosun reads none of it
+    verifies_quotes: bool  # whether bosun can check a quote of my words in it (the agent's Profile)
 
 
 def record(pid: int | str) -> dict[str, Any] | None:
@@ -78,6 +94,47 @@ def record(pid: int | str) -> dict[str, Any] | None:
         entry = agent.record(pid)
         if entry is not None:
             return {**entry, "harness": harness}
+    return None
+
+
+def parent_pid(pid: int) -> int | None:
+    result = subprocess.run(
+        ["ps", "-o", "ppid=", "-p", str(pid)],
+        check=False,
+        stdin=subprocess.DEVNULL,
+        capture_output=True,
+        text=True,
+    )
+    try:
+        return int(result.stdout.strip())
+    except ValueError:  # gone
+        return None
+
+
+def session_at(pid: int) -> CallingSession | None:
+    """The session of the agent running as <pid>, if one is; a record left by one that exited, whose pid was
+    reused, is none."""
+    for harness, agent in AGENTS.items():
+        entry = agent.record(pid)
+        if entry is not None and not agent.is_stale(entry):
+            return CallingSession(
+                harness, pid, agent.session_transcript(entry), agent.PROFILE.verifies_quotes
+            )
+    return None
+
+
+def calling_session(pid: int | None = None) -> CallingSession | None:
+    """The agent session that ran this command: <pid> (by default this process's parent) or its nearest
+    ancestor that is an agent with a session, at most MAX_ANCESTORS up; None from a terminal, launchd or
+    anything else no agent ran. Agents' records are read under $HOME, as their modules read them."""
+    current = os.getppid() if pid is None else pid
+    for _ in range(MAX_ANCESTORS):
+        if current <= 1:
+            return None
+        session = session_at(current)
+        if session is not None:
+            return session
+        current = parent_pid(current) or 0
     return None
 
 

@@ -6,7 +6,9 @@ import contextlib
 import dataclasses
 import importlib
 import io
+import json
 import os
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -128,6 +130,98 @@ class AgentProfileTest(unittest.TestCase):
 
     def test_the_orchestrators_agent(self) -> None:
         assert agent_state.ORCHESTRATOR_HARNESS == claude_state.HARNESS
+
+
+def fake_agent(sessions: dict[int, dict[str, object]], verifies: bool = True) -> types.SimpleNamespace:
+    """An agent whose running sessions are <sessions> by pid; a record with "stale" set is a stale one."""
+    return types.SimpleNamespace(
+        PROFILE=dataclasses.replace(claude_state.PROFILE, verifies_quotes=verifies),
+        record=lambda pid: sessions.get(int(pid)),
+        is_stale=lambda entry: bool(entry.get("stale")),
+        session_transcript=lambda entry: Path(str(entry["transcript"])) if entry.get("transcript") else None,
+    )
+
+
+class CallingSessionTest(unittest.TestCase):
+    """calling_session: the agent session that ran a command, from its process's ancestors. Nothing here reads
+    the real agents' records: the suite itself may run inside an agent's session."""
+
+    def ancestors(self, parents: dict[int, int]) -> None:
+        patcher = mock.patch.object(agent_state, "parent_pid", side_effect=parents.get)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def agents(self, **agents: object) -> None:
+        patcher = mock.patch.dict(agent_state.AGENTS, agents, clear=True)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def test_the_nearest_ancestor_that_is_an_agent_with_a_session(self) -> None:
+        self.ancestors({100: 200, 200: 300, 300: 400, 400: 1})
+        self.agents(
+            near=fake_agent({300: {"transcript": "/scratch/near.jsonl"}}),
+            other=fake_agent({400: {"transcript": "/scratch/far.jsonl"}}, verifies=False),
+        )
+        session = agent_state.calling_session(100)
+        assert session == agent_state.CallingSession("near", 300, Path("/scratch/near.jsonl"), True)
+        assert agent_state.calling_session(400) == agent_state.CallingSession(
+            "other", 400, Path("/scratch/far.jsonl"), False
+        )
+
+    def test_a_stale_record_is_no_session(self) -> None:
+        self.ancestors({100: 200, 200: 300, 300: 1})
+        self.agents(stub=fake_agent({200: {"stale": True}, 300: {}}))
+        assert agent_state.calling_session(100) == agent_state.CallingSession("stub", 300, None, True)
+
+    def test_no_agent_above_is_none(self) -> None:
+        self.ancestors({100: 200, 200: 1})
+        self.agents(stub=fake_agent({}))
+        assert agent_state.calling_session(100) is None
+        self.ancestors({100: 200})  # 200 has gone: ps finds no parent
+        assert agent_state.calling_session(100) is None
+
+    def test_it_looks_at_most_max_ancestors_up(self) -> None:
+        looked: list[int] = []
+        self.ancestors({pid: pid + 1 for pid in range(10, 10 + 2 * agent_state.MAX_ANCESTORS)})
+        stub = fake_agent({})
+        stub.record = lambda pid: looked.append(int(pid))
+        self.agents(stub=stub)
+        assert agent_state.calling_session(10) is None
+        assert len(looked) == agent_state.MAX_ANCESTORS
+
+    def test_it_starts_from_the_parent_of_this_process(self) -> None:
+        self.ancestors({})
+        self.agents(stub=fake_agent({4242: {}}))
+        with mock.patch("os.getppid", return_value=4242):
+            assert agent_state.calling_session() == agent_state.CallingSession("stub", 4242, None, True)
+
+    def test_a_claude_code_session_is_checked_in_its_own_transcript(self) -> None:
+        home = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, home, ignore_errors=True)
+        sessions = home / ".claude" / "sessions"
+        sessions.mkdir(parents=True)
+        entry = {"pid": 4242, "sessionId": "0f1e2d3c", "cwd": str(home / "repo")}
+        (sessions / "4242.json").write_text(json.dumps(entry))
+        for name, value in (("LIVE_SESSIONS_DIR", sessions), ("PROJECTS_DIR", home / ".claude" / "projects")):
+            patcher = mock.patch.object(claude_state, name, value)
+            patcher.start()
+            self.addCleanup(patcher.stop)
+        self.ancestors({100: 4242, 4242: 1})
+        self.agents(claude=claude_state)
+        expected = claude_state.transcript_path(str(home / "repo"), "0f1e2d3c")
+        assert expected.name == "0f1e2d3c.jsonl" and expected.is_relative_to(home)
+        assert agent_state.calling_session(100) == agent_state.CallingSession("claude", 4242, expected, True)
+        assert claude_state.session_transcript({"pid": 4242}) is None
+
+    def test_only_claude_code_checks_quotes_and_the_others_keep_no_stale_records(self) -> None:
+        assert claude_state.PROFILE.verifies_quotes
+        for agent in (codex_state, agy_state):
+            assert not agent.PROFILE.verifies_quotes
+            assert agent.session_transcript({"pid": 1, "sessionId": "x", "cwd": "/scratch"}) is None
+            assert not agent.is_stale({"pid": 1})
+
+    def test_the_parent_of_a_process_from_ps(self) -> None:
+        assert agent_state.parent_pid(os.getpid()) == os.getppid()
 
 
 class AgentSetupCommandTest(unittest.TestCase):
