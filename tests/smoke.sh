@@ -1677,8 +1677,13 @@ wait_for 30 lock_taken "$BOSUN_STATE_DIR/windows.lock"
 check "a start while another sets up the windows waits, then gives up saying why" fails_with "another bosun start or refresh is setting up the windows" env BOSUN_WINDOWS_LOCK_WAIT_SECONDS=0 "$BOSUN" start
 check "... and so does a refresh" fails_with "another bosun start or refresh is setting up the windows" env BOSUN_WINDOWS_LOCK_WAIT_SECONDS=0 "$BOSUN" refresh
 check "... but not a dry run, which changes nothing" "$BOSUN" refresh --dry-run
+check "... exiting 75 (EX_TEMPFAIL: try again later)" bash -c 'BOSUN_WINDOWS_LOCK_WAIT_SECONDS=0 "$1" start >/dev/null 2>&1; [ $? -eq 75 ]' _ "$BOSUN"
 kill "$windows_holder"
 wait "$windows_holder" 2>/dev/null
+lock_free() { ! lock_taken "$1"; } # <lock file>
+check "the windows lock is free once the holder is gone, though the tmux server bosun start left runs on" lock_free "$BOSUN_STATE_DIR/windows.lock"
+check "a start under a parent that holds the windows lock goes on, and its refresh too (inherited, not waited for)" \
+  python3 "$ROOT/lib/run_locked.py" "$BOSUN_STATE_DIR/windows.lock" 0 busy -- env BOSUN_WINDOWS_LOCK_WAIT_SECONDS=0 "$BOSUN" start
 check "start --restart from inside bosun's tmux refuses: it would stop itself" fails_with "it would stop itself before starting again" env TMUX="/tmp/tmux-0/$SOCKET,1,0" "$BOSUN" start --restart
 check "a window whose agent is not installed says so, rather than becoming a plain shell" fails_with "its agent, $WORK/no-such-claude, is not installed for this window's shell" \
   bash -c 'cd "$1" && BOSUN_LAUNCH_DRY_RUN=0 BOSUN_CLAUDE_BIN="$2" "$3" launch alpha </dev/null' _ "$REPO_A" "$WORK/no-such-claude" "$BOSUN"

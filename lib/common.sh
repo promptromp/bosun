@@ -605,20 +605,12 @@ tmux_cmd() {
   fi
 }
 
-# One at a time: the rest of this command runs holding lock <name> (lib/run_locked.py), waiting up to
-# <wait> seconds for the one holding it; past that it stops with <message>, exit 75. What this command
-# starts holds it too, so a nested one goes on. Call it after load_config, passing "$0" "$@".
-one_at_a_time() { # <name> <wait seconds> <message> "$0" "$@"
-  local lock="$BOSUN_STATE_DIR/$1.lock"
-  python3 "$BOSUN_ROOT/lib/run_locked.py" --held "$lock" && return 0
-  exec python3 "$BOSUN_ROOT/lib/run_locked.py" "$lock" "$2" "$3" -- "${@:4}"
-}
-
-# One at a time, for a command that must not start again to hold the lock (`settings set`, whose refusal under
-# --json is an object): this shell holds lock <name> until it exits (lib/run_locked.py --take on LOCK_FD, 9),
-# waiting up to <wait> seconds for the one holding it, and what it starts holds it too, so a long-lived child
-# gets 9>&- (hold_keep_awake's caffeinate). Held already (a parent's), it goes on. Fails, saying nothing, while
-# another holds it: the caller says why. Call it after load_config.
+# One at a time: this shell holds lock <name> until it exits (lib/run_locked.py --take on LOCK_FD, 9), waiting
+# up to <wait> seconds for the one holding it, and what it starts holds it too (the lock belongs to the open file,
+# which children inherit), so a nested command finds it held and goes on, and a long-lived child gets 9>&- (tmux_cmd,
+# hold_keep_awake's caffeinate). Held already (a parent's), it goes on. Fails, saying nothing, while another holds
+# it: the caller says why (`settings set`, whose refusal under --json is an object), or one_at_a_time does. Call
+# it after load_config, which makes the state folder.
 lock_here() { # <name> <wait seconds>
   local lock="$BOSUN_STATE_DIR/$1.lock"
   python3 "$BOSUN_ROOT/lib/run_locked.py" --held "$lock" && return 0
@@ -626,6 +618,15 @@ lock_here() { # <name> <wait seconds>
   python3 "$BOSUN_ROOT/lib/run_locked.py" --take "$lock" "$2" && return 0
   exec 9>&-
   return 1
+}
+
+# lock_here for a command that stops when it cannot have the lock: the rest of this command runs holding lock
+# <name>, waiting up to <wait> seconds; past that it says "bosun: <message>" on stderr and exits 75 (EX_TEMPFAIL,
+# run_locked.py's BUSY). `start`, `refresh` and `init`. Call it after load_config.
+one_at_a_time() { # <name> <wait seconds> <message>
+  lock_here "$1" "$2" && return 0
+  echo "bosun: $3" >&2
+  exit 75
 }
 
 # The orchestrator's policy: orchestrator/policy.md, then the site's $BOSUN_CONFIG_DIR/policy.md

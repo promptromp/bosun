@@ -71,7 +71,7 @@ one_refresh_at_a_time() {
   case " $* " in
     *" --dry-run "* | *" -h "* | *" --help "*) return 0 ;;
   esac
-  one_at_a_time windows "${BOSUN_WINDOWS_LOCK_WAIT_SECONDS:-180}" "another bosun start or refresh is setting up the windows, and did not finish in time" "$0" "$@"
+  one_at_a_time windows "${BOSUN_WINDOWS_LOCK_WAIT_SECONDS:-180}" "another bosun start or refresh is setting up the windows, and did not finish in time"
 }
 one_refresh_at_a_time "$@"
 

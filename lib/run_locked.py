@@ -1,17 +1,17 @@
-"""One at a time, for bosun's shell commands (lib/common.sh's one_at_a_time): runs a command holding a
-lock, so that two of them never interleave (the morning job's `bosun start` and one you typed would both
-build the same windows).
+"""One at a time, for bosun's shell commands (lib/common.sh's lock_here, and one_at_a_time on it): a lock
+held by the command's shell, so that two of them never interleave (the morning job's `bosun start` and one
+you typed would both build the same windows; `bosun init` and `bosun settings set` would write bosun.env
+over each other).
 
-The lock is a flock on <lock file>, held on file descriptor LOCK_FD of the command it runs. Whatever that
-command starts inherits it, so a nested command that asks (`bosun refresh` from `bosun start`) finds it
-held and goes on, and the kernel drops it when they exit, killed or not: no lock is ever left behind. A
-long-lived child must not keep it: tmux, whose server outlives the command, gets LOCK_FD closed
-(tmux_cmd).
+The lock is a flock on <lock file>, held on file descriptor LOCK_FD. The shell opens LOCK_FD on the lock file
+itself and has --take lock it: the lock belongs to that open file, so it stays held by the shell once this
+exits, until the shell closes LOCK_FD or exits. Whatever the shell starts inherits it, so a nested command
+that asks (`bosun refresh` from `bosun start`) finds it held (--held) and goes on, and the kernel drops it
+when they all exit, killed or not: no lock is ever left behind. A long-lived child must not keep it: tmux,
+whose server outlives the command, gets LOCK_FD closed (tmux_cmd), and so does the keep-awake's caffeinate.
 
-A shell that must not start again holding it (`bosun settings set`, whose refusal under --json is an
-object) opens LOCK_FD on the lock file itself and has --take lock it: the lock belongs to that open file,
-so it stays held by the shell once this exits, until the shell closes LOCK_FD or exits (lock_here in
-lib/common.sh).
+The third form runs a command holding the lock, for what is not a bosun shell (tools/swift_hook.sh, the
+tests' holders).
 
 Usage: run_locked.py --held <lock file>
            exit 0 if this process holds the lock on LOCK_FD already, 1 if not
