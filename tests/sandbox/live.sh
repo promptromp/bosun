@@ -1,5 +1,5 @@
 #!/bin/bash
-# Usage: live.sh prepare <claude|codex|agy> | go <claude|codex|agy> [codex model] | login agy
+# Usage: live.sh prepare <claude|codex|agy> | go <claude|codex|agy> [codex model] | ontology claude | login agy
 #        | ready <claude|codex> <release|checkout> <model> <the release's get.sh URL>
 #        (through tests/sandbox.sh mac live, and mac try for ready)
 #
@@ -22,6 +22,9 @@
 #             a window with BOSUN_CONNECTORS reaches only the local test servers it names, also resumed;
 #             on Claude Code a repo whose own settings allow more keeps it from starting until the list
 #             names that, and whether `claude mcp list` writes ~/.claude.json
+#             On Claude Code, right after the hand-over (before the update, whose end uninstalls bosun, and before the
+#             connectors, whose list would limit the windows): the ontology end to end, below
+#   ontology  claude only: the install and the real windows, then the ontology step alone (`go` runs it too)
 # The keys go in between, from mac.sh, so this script never sees where they come from. `agy` has steps of its
 # own (tests/sandbox/live_agy.sh, which this sources): the repo window on Antigravity, the orchestrator on
 # Claude Code, and what the design note's Testing list asks of the real agy.
@@ -950,6 +953,238 @@ show_what_happened() {
   tmux -L bosun capture-pane -p -t "=bosun:=exporter" | grep -v '^[[:space:]]*$' | tail -8 | cut -c1-100
 }
 
+# ---- the ontology in the agents' hands (Claude Code only) -----------------------------------------------
+
+# Four things a person does with the ontology on, typed into the windows as a person types (tmux's send-keys in
+# the windows' own server, never `bosun send`, whose pastes bosun records as its own: only what a person typed
+# counts as their words), each checked in what the agents did, never in what they say they did, but for the
+# reply to a question: a pack of the ontology in a hand-over's brief, a retired environment left alone, a lookup
+# before asking someone, and what I state as standing recorded as a confirmed rule. The counts of what it cost
+# (the brief's section, the `bosun kg` calls of each window) are notes, not checks.
+ONTOLOGY_TURN_SECONDS=240
+PDF_QUESTION="Who should review a change to the pdf renderer, and where do I ask them?"
+CSV_STATEMENT="From now on, CSV exports never include draft invoices."
+VAT_REQUEST="Please have the exporter session round VAT per invoice line in exporter/tax.py, with tests, and open a pull request."
+INTEGRATION_ASK="Run the integration check for this change on the exporter's environments, and tell me which ones you ran it on."
+
+type_into() { # <window> <text>: typed into the window's input box, then Return, as a person does
+  tmux -L bosun send-keys -t "=bosun:=$1" -l "$2"
+  sleep 1
+  tmux -L bosun send-keys -t "=bosun:=$1" Enter
+}
+transcript_of() { window "$1" transcript; } # <window>: the file its Claude writes its conversation to
+# <window>: how many lines its transcript holds now (0 without one)
+transcript_lines() {
+  local file
+  file="$(transcript_of "$1")"
+  if [ -n "$file" ] && [ -f "$file" ]; then wc -l <"$file" | tr -d ' '; else echo 0; fi
+}
+since() { tail -n +$(($2 + 1)) "$(transcript_of "$1")"; } # <window> <lines it held before>: what it wrote after
+# From a transcript on stdin: what the assistant ran in Bash (a command a line), the assistant's words (a line
+# each), what the user side said (a JSON string each; tool results are none of it).
+bash_commands() {
+  jq -R -r 'fromjson? | select(.type == "assistant") | .message.content[]? | select(.type == "tool_use" and .name == "Bash") | .input.command // empty'
+}
+said_by_user() {
+  jq -R -r 'fromjson? | select(.type == "user") | .message.content | if type == "string" then . else (map(select(.type == "text") | .text) | join("\n")) end | select(. != "") | @json'
+}
+kg_calls() { # <window> <lines before>: "<n> bosun kg <command>" a line each
+  since "$1" "$2" 2>/dev/null | bash_commands | grep -oE 'bosun kg [a-z-]+' | sort | uniq -c | sed 's/^ *//'
+}
+note_kg_calls() { # <what> <window> <lines before>
+  echo "  note  bosun kg calls in $2, $1: $(kg_calls "$2" "$3" | tr '\n' ',' | sed 's/,$//; s/,/, /g' | grep . || echo none)"
+}
+# Its turn is over: it wrote at least a message and an answer after <lines before>, and it stays idle for a moment.
+turn_over() { # <window> <lines before>
+  [ "$(($(transcript_lines "$1") - $2))" -ge 2 ] && idle "$1" || return 1
+  sleep 4
+  idle "$1"
+}
+ask() { # <window> <text>: wait for its prompt, type, wait for the answer
+  local before
+  wait_for 180 idle "$1" || return 1
+  before="$(transcript_lines "$1")"
+  type_into "$1" "$2"
+  wait_for "$ONTOLOGY_TURN_SECONDS" turn_over "$1" "$before"
+}
+# <window>: idle, and still so a moment later
+settled() { idle "$1" && sleep 5 && idle "$1"; }
+launch_line_has() { ps -o command= -p "$(pid_of "$1")" | grep -qF -- "$2"; } # <window> <text>
+
+both_idle() { idle orchestrator && idle exporter; }
+ontology_on() {
+  local file="$CONFIG/bosun.env"
+  if grep -q '^BOSUN_KNOWLEDGE_ENABLED="1"' "$file"; then
+    echo "  note  BOSUN_KNOWLEDGE_ENABLED=1 was already in bosun.env (bosun init recommends it)"
+  else
+    echo 'BOSUN_KNOWLEDGE_ENABLED="1"' >>"$file"
+    bosun stop >/dev/null 2>&1
+    bosun start >/dev/null 2>&1
+    check "the key is on and the windows are back" wait_for 180 both_idle
+  fi
+  check "the orchestrator's launch carries the ontology's rules" launch_line_has orchestrator "Look before asking"
+  check "the repo window's launch carries them too" launch_line_has exporter "Look before asking"
+}
+
+# <branch>'s added lines in the exporter's tests, against main of the bare remote.
+added_test_lines() { git -C "$HOME/remotes/exporter.git" diff main "$1" -- tests | grep '^+' | grep -v '^+++'; }
+branch_tests_name() { # <branch>: a test named for a credit note, and one for a second currency
+  local added
+  added="$(added_test_lines "$1")"
+  grep -qiE '^\+[[:space:]]*def test[A-Za-z0-9_]*credit' <<<"$added" || {
+    echo "no added test named for a credit note on $1:"
+    grep -E '^\+[[:space:]]*def test' <<<"$added"
+    return 1
+  }
+  grep -qiE '^\+[[:space:]]*def test[A-Za-z0-9_]*(currenc|eur|usd|gbp|chf|multi)' <<<"$added" ||
+    [ "$(grep -oE '(^|[^A-Za-z])(EUR|USD|GBP|CHF|JPY|SEK)([^A-Za-z]|$)' <<<"$added" | tr -dc 'A-Z\n' | sort -u | wc -l | tr -d ' ')" -ge 2 ] || {
+    echo "no added test for a second currency on $1:"
+    grep -E '^\+[[:space:]]*def test' <<<"$added"
+    return 1
+  }
+}
+branch_refs() { git -C "$HOME/remotes/exporter.git" for-each-ref --format='%(refname:short) %(objectname)' refs/heads | grep -v '^main '; }
+new_branch() { # <refs before>: a branch that is new or moved since, its name
+  local line
+  while read -r line; do
+    grep -qxF -- "$line" <<<"$1" || {
+      echo "${line%% *}"
+      return 0
+    }
+  done < <(branch_refs)
+  return 1
+}
+# <lines before>: the briefs with the ontology's section that the exporter was given since
+briefed() { since exporter "$1" | said_by_user | grep -F "What bosun knows about this work"; }
+# <lines before> <fact id>
+the_brief_has() { briefed "$1" | grep -qF -- "$2"; }
+tax_rule_id() {
+  bosun kg facts repo/invoice-exporter --predicate rule --status confirmed --json |
+    jq -r '[.[] | select((.value // "") | test("tax rounding"; "i"))][0].id // empty'
+}
+
+# 1. A task the ontology has a rule for: the brief carries it, and the work follows it.
+scenario_pack() {
+  local rule before_refs lines said_yes=0 started=$SECONDS branch="" exporter_lines
+  echo "a pack the task needs: the brief of a hand-over carries the exporter's tax-rounding rule"
+  rule="$(tax_rule_id)"
+  check "the tax-rounding rule is confirmed in the ontology" test -n "$rule"
+  before_refs="$(branch_refs)"
+  lines="$(transcript_lines orchestrator)"
+  exporter_lines="$(transcript_lines exporter)"
+  wait_for 180 idle orchestrator
+  type_into orchestrator "$VAT_REQUEST"
+  while [ $((SECONDS - started)) -lt "$HAND_OVER_SECONDS" ]; do
+    branch="$(new_branch "$before_refs")"
+    [ -n "$branch" ] && break
+    # A proposal waits for a yes, as it would from a person (twice at most).
+    if [ "$said_yes" -lt 2 ] && [ $((SECONDS - started - said_yes * 100)) -gt 45 ] && idle orchestrator && ! briefed "$exporter_lines" >/dev/null; then
+      type_into orchestrator "yes, go ahead" && said_yes=$((said_yes + 1))
+    fi
+    sleep 10
+  done
+  echo "  (took $((SECONDS - started)) seconds)"
+  check "the repo window got a brief with the ontology's section, and the rule's id ($rule) in it" the_brief_has "$exporter_lines" "$rule"
+  check "it pushed a branch for it" test -n "$branch"
+  wait_for 240 settled exporter
+  branch="$(new_branch "$before_refs")"
+  check "that branch adds a test named for a credit note and one for a second currency" branch_tests_name "$branch"
+  note_kg_calls "for the hand-over" orchestrator "$lines"
+  note_kg_calls "for the hand-over" exporter "$exporter_lines"
+}
+
+# 2. A trap only the ontology knows of: staging-2 is retired, and its config does not say so.
+scenario_retired_environment() {
+  local lines
+  echo "the retired environment: the integration check runs on staging, not on staging-2"
+  rm -f "$HOME/.sandbox/integration-"*
+  check "no integration check has run yet" bash -c '! ls "$HOME"/.sandbox/integration-* >/dev/null 2>&1'
+  lines="$(transcript_lines exporter)"
+  check "the repo window runs the integration check when asked" ask exporter "$INTEGRATION_ASK"
+  check "... on staging (~/.sandbox/integration-staging)" test -e "$HOME/.sandbox/integration-staging"
+  check "... and not on staging-2, which the ontology says is retired" test ! -e "$HOME/.sandbox/integration-staging-2"
+  echo "  note  the checks it ran: $(since exporter "$lines" | bash_commands | grep -oE 'integration_check.py --env [a-z0-9-]+' | tr '\n' ',' | sed 's/,$//')"
+  note_kg_calls "for the integration check" exporter "$lines"
+}
+
+# The ledger's outreach items: asking someone is one, and a question that is answered from the ontology is none.
+outreach_items() { bosun ledger list --kind outreach 2>/dev/null | grep -vc 'no items' || true; }
+looked_up_before_replying() { # <lines before>: a kg read, then a reply naming Marco and #acme-prs
+  since orchestrator "$1" | jq -R -r '
+    fromjson? | select(.type == "assistant") | .message.content[]? |
+    if .type == "tool_use" and .name == "Bash" and ((.input.command // "") | test("bosun kg (lookup|search|context|facts|neighbors)")) then "KG"
+    elif .type == "text" then "TEXT " + (.text | gsub("\\s+"; " "))
+    else empty end' |
+    awk '/^KG/ { kg = 1 } /^TEXT/ && /Marco/ && /acme-prs/ { found = kg; exit } END { exit !found }'
+}
+
+# 3. Routing: who reviews, and where to ask, from the ontology, with nobody asked.
+scenario_routing() {
+  local outreach lines
+  echo "routing: the orchestrator looks up who reviews a pdf renderer change"
+  outreach="$(outreach_items)"
+  lines="$(transcript_lines orchestrator)"
+  check "the orchestrator answers the question" ask orchestrator "$PDF_QUESTION"
+  check "it looked in the ontology before it replied, and the reply names Marco and #acme-prs" looked_up_before_replying "$lines"
+  check "no outreach item was made for it" test "$(outreach_items)" = "$outreach"
+  note_kg_calls "for the question" orchestrator "$lines"
+}
+
+csv_rule_captured() { # <session id>: a confirmed rule on the feature, in my words, in that session
+  bosun kg facts feature/csv-export --predicate rule --status confirmed --json |
+    jq -e --arg sid "$1" 'any(.[]; any(.sources[]?; .kind == "user" and .ref == $sid and ((.quote // "") | test("draft invoices"; "i"))))' >/dev/null || {
+    echo "the feature's rules, whatever their status:"
+    bosun kg facts feature/csv-export --predicate rule --status all | cut -c1-200
+    return 1
+  }
+}
+
+csv_rule_soon() { # <session id>: the rule, within 90 seconds, or why not
+  wait_for 90 csv_rule_captured "$1"
+  csv_rule_captured "$1"
+}
+
+# 4. Capture: what I state as standing, typed into the repo window, becomes a confirmed rule.
+scenario_capture() {
+  local lines
+  echo "capture: a standing rule typed into the repo window is recorded as mine"
+  lines="$(transcript_lines exporter)"
+  check "the repo window takes the statement" ask exporter "$CSV_STATEMENT"
+  check "the ontology has a confirmed rule on feature/csv-export, with my words from that session" csv_rule_soon "$(window exporter sessionId)"
+  note_kg_calls "for the statement" exporter "$lines"
+}
+
+ontology_costs() {
+  local name
+  echo "  note  the ontology section of each brief, from the delegate log:"
+  grep -h 'pack for' "$STATE"/logs/delegate-*.log 2>/dev/null | sed 's/^/  note    /'
+  for name in orchestrator "${WORLD_REPOS[@]}"; do
+    note_kg_calls "in all" "$name" 0
+  done
+}
+
+# The step on its own, for a cheaper run than `go`'s (mac.sh: BOSUN_SANDBOX_LIVE_STEP=ontology).
+ontology_alone() {
+  [ "$AGENT" = "claude" ] || {
+    echo "ontology is for claude: the repo window's quotes are only checked in its sessions" >&2
+    exit 2
+  }
+  install_it
+  real_windows
+  ontology
+}
+
+ontology() {
+  echo "the ontology, end to end, with the real agents"
+  ontology_on
+  scenario_pack
+  scenario_retired_environment
+  scenario_routing
+  scenario_capture
+  wait_for 120 idle orchestrator
+  ontology_costs
+}
+
 source "$(dirname "$0")/live_agy.sh"
 
 case "$STEP" in
@@ -978,12 +1213,16 @@ case "$STEP" in
       real_windows
       hand_over
       show_what_happened
+      [ "$AGENT" != "claude" ] || ontology
       picks_up_commands
       update_with_agents_at_work
       show_what_happened
       connectors
       off_again
     fi
+    ;;
+  ontology)
+    ontology_alone
     ;;
   *)
     echo "unknown step $STEP" >&2

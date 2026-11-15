@@ -26,6 +26,8 @@
 #           real money, about a dollar. It reads API keys from your Keychain, as BOSUN_SANDBOX_ANTHROPIC_ITEM
 #           and BOSUN_SANDBOX_OPENAI_ITEM name them; they never leave the clone, which is deleted.
 #           BOSUN_SANDBOX_CODEX_MODEL picks a cheaper model than Codex's default.
+#           On Claude Code it includes the ontology end to end (live.sh's `ontology`, after the hand-over);
+#           BOSUN_SANDBOX_LIVE_STEP=ontology runs only that, after the install (about 15 minutes).
 #           live agy needs you: its login is a browser sign-in, in the desktop session. The clone boots with
 #           its window, agy is installed with Google's installer, and you are told to open Terminal there,
 #           run ~/.local/bin/agy, sign in with Google (a personal account's free quota) and quit it; the run
@@ -367,7 +369,7 @@ live() { # [claude|codex|agy]
   # The keys first: a failure of theirs, or a Keychain prompt on this Mac, never comes after the sign-in.
   keys_into_vm "$agent"
   [ "$agent" = "agy" ] && { in_vm_masked login agy || die "the sign-in to Antigravity did not finish"; }
-  in_vm_masked go "$agent" "${BOSUN_SANDBOX_CODEX_MODEL:-}"
+  in_vm_masked "${BOSUN_SANDBOX_LIVE_STEP:-go}" "$agent" "${BOSUN_SANDBOX_CODEX_MODEL:-}"
 }
 
 # A clone with its window, and your shell in it, until you leave it. A restart in the clone (to try Open at Login,
