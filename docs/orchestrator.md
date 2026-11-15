@@ -13,7 +13,9 @@ answer it from your phone. It hands tasks to repo windows whichever agent runs i
   file keeps its rules), as `bosun update` asks it to re-read files there and Claude Code asks first
   before a read outside its working directories.
 - loads `orchestrator/policy.md` as an appended system prompt and the `orchestrator/plugin`
-  commands. The main one is `/bosun:chores morning|check-in`.
+  commands. The main one is `/bosun:chores morning|check-in`. With `BOSUN_KNOWLEDGE_ENABLED=1` the prompt ends
+  with the [ontology's rules](knowledge.md#in-the-agents-hands) (`orchestrator/knowledge.md`): look before
+  asking, record what you state as standing. `bosun chores --dry-run` gets them too.
 - reaches only the **connectors `BOSUN_ORCHESTRATOR_CONNECTORS` names** (empty: none), such as
   `claude.ai Slack` and a tracker: see [Connectors](setup.md#connectors-what-each-window-may-reach). A
   name it cannot find at launch is left out, and `bosun alert` tells you which.

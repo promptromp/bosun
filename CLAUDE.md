@@ -162,7 +162,7 @@ of truth, so don't copy rules into this file.
   files are), `lib/knowledge_store.py` (files, lock, git), `lib/knowledge.py` + `libexec/bosun-kg`
   (the CLI and import, and the write boundary: the journal first, then the files and `view.json`;
   reads caught up with the journal, `knowledge.load` being the one reader, which the console calls with the identifiers, forgotten records and key left out; `kg validate`). Quotes of my words are checked
-  with `lib/approvals.py`'s genuine-prompt test. `tools/survey_to_kg.py` converts a survey into an
+  with `lib/approvals.py`'s genuine-prompt test, in the session that ran `kg` (`calling_session` in `lib/agent_state.py`, through the `AGENTS` table). With `BOSUN_KNOWLEDGE_ENABLED=1`, `bosun delegate` adds the pack, and the orchestrator's and Claude windows' prompts end with `orchestrator/knowledge.md` (`knowledge_rules`, `window_knowledge_prompt` in `lib/common.sh`; `Profile.verifies_quotes` says which agents). `tools/survey_to_kg.py` converts a survey into an
   import file; the fixture knowledge base is `tests/fixtures/knowledge/acme-import.jsonl`.
 - Agents (design: `docs/design/harnesses.md`): an adapter per agent, `lib/claude_state.py`,
   `lib/codex_state.py` and `lib/agy_state.py`, each a module with the functions of `Agent` in `lib/agent_state.py`, whose `AGENTS`

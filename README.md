@@ -37,7 +37,7 @@ start from what the organization already knows, instead of finding it out again.
 - **Built to be shared.** The waste that costs most sits between people: context explained again,
   hand-offs dropped, a lesson one team learned that another has to learn again. Bosun's ledger and
   ontology are records a whole organization can build on, so every engineer and every agent
-  works from the same picture. Today they serve one engineer; sharing them across a team is next
+  works from the same picture (the ontology reaches the agents with `BOSUN_KNOWLEDGE_ENABLED=1`, which `bosun init` recommends). Today they serve one engineer; sharing them across a team is next
   on the [roadmap](ROADMAP.md).
 
 ## How it works

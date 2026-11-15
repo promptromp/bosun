@@ -1,6 +1,7 @@
 # Design note: organizational knowledge (People, Process, Product)
 
 Status: accepted (2026-10-21); MVP 1 built (`bosun kg`, see [Implementation](#implementation-mvp-1));
+MVP 3 built (the ontology in the agents' hands, see [Decisions](#mvp-3-decisions-2026-11-15); Decision 8 is in force);
 MVP 2 built (the console's Knowledge view, see [Console](#console-knowledge-view-knowledge-mvp-2)),
 with the Briefing and Constellation tabs (see [the page](#the-ontology-page-briefing-constellation-raw-data-2026-10-21)).
 Replaces the earlier ontology note (2026-10-16). Tracked in
@@ -128,9 +129,9 @@ Examples, in the fictional acme world:
 1. **From the user's own words, the most valuable source.** Today you run
    `bosun kg propose ... --from-user --quote '<their words>' --transcript <session>` by hand.
    Confirmation reuses the approvals check: if the quote appears in a genuine user prompt in that
-   transcript, the fact is confirmed. Otherwise it stays proposed. Planned for MVP 3: when the
-   user states a standing fact or rule in any window ("deploys are announced in #deploys"), the
-   session runs that command itself. No prompt or task rule asks for it yet.
+   transcript, the fact is confirmed. Otherwise it stays proposed. With `BOSUN_KNOWLEDGE_ENABLED=1`,
+   when the user states a standing fact or rule in a Claude window ("deploys are announced in
+   #deploys"), the session runs that command itself, asked by `orchestrator/knowledge.md`.
 2. **From the daily learning run** (planned, Later). `bosun learn` already reads the week's
    sessions and the ledger, but it has no knowledge pass yet. That pass would propose facts with
    sources (reports, ledger items, permalinks), and flag facts that were rediscovered or caused
@@ -304,9 +305,36 @@ a stream of questions.
 6. Batches stay painless: 8 facts a group, 40 a batch, 10 groups; "except" defers, it never
    rejects.
 7. `ticket` text stays untrusted, and a site's schema can never add a predicate about a person.
-8. Confirming or rejecting from a session (`kg confirm`, `kg reject`, `kg batch apply`) will
-   require a verified quote of your words with MVP 3, as `kg propose --from-user` does now; in
-   MVP 1 any caller of the CLI can confirm.
+8. Confirming or rejecting from a session (`kg confirm`, `kg reject`, `kg batch apply`)
+   requires a verified quote of your words since MVP 3, as `kg propose --from-user` does; in
+   MVP 1 any caller of the CLI could confirm. From a terminal and in the console, nothing changed.
+
+## MVP 3 decisions (2026-11-15)
+
+Where the design was silent (plan: [ontology-mvp3](../plans/ontology-mvp3.md)):
+
+1. **One key,** `BOSUN_KNOWLEDGE_ENABLED`, for packs, the rules and the quote check, named like the other proactive
+   parts. Default `0`, so an install changes nothing (no `CONFIG_ADDED` entry); `bosun init` recommends `1`.
+   Packs as the default once measured stays open.
+2. **The session that ran `kg`** is found by walking up from its process to the nearest ancestor an agent module
+   recognizes as a session (`calling_session`). Inside one, `--transcript` may be left out, another session's is
+   refused, and a quote counts only from a genuine prompt of the last 24 hours. With no agent ancestor, nothing
+   changes. The walk guards against mistakes, not a hostile agent: a double fork escapes it.
+3. **Confirm, reject and `batch apply` from a session** need `--from-user --quote` that verifies.
+4. **A pack leaves out people's own profile facts** (timezone, hours, preferences, title) and keeps facts that link
+   a person to the target ("Dana reviews the invoice exporter"). Identifiers and unconfirmed facts stay out.
+5. **The rules reach agents whose transcripts bosun can check** (`Profile.verifies_quotes`: Claude). Codex and
+   Antigravity windows get packs in their briefs only.
+6. **Bounded output:** a pack is 1500 tokens at most, first line included; `kg lookup` 800, `kg search` 10 hits;
+   each pack's size is logged.
+7. **A pack skips the topic search for a repo it does not know,** so a new repo costs the brief nothing.
+8. **`bosun chores --dry-run` also gets the rules** with the key on (headless, harmless).
+9. **A site's own `--append-system-prompt`** in `BOSUN_CLAUDE_FLAGS` plus bosun's gives two; how Claude Code combines
+   them is not checked.
+10. **The fictional world** reconciles the names in use: `repo/invoice-exporter` has the strong alias `acme/exporter`.
+
+Measured with real Claude (`tests/llm/free_text.py`, cases K1-K6): 12 of 12 runs with the rules; with them off K2,
+K3, K5 and K6 fail, at about the same cost and turns. The VM's `ontology` step runs it end to end.
 
 ## Phasing
 
@@ -315,7 +343,7 @@ a stream of questions.
 | MVP 1 (built) | Schema and storage, `kg` CLI (add-entity, identify, propose, confirm, reject, supersede, lookup, facts, search, neighbors, context, batch, import, lint, stats, schema, forget, expire), seed import as proposed |
 | MVP 2 (built) | Console Knowledge view: browser, entity pages, process flows, review queue (confirm, reject, defer), neighbourhood graph |
 | MVP 2b (built) | The Ontology page's tabs (called Knowledge Graph until 2026-11-15): Briefing (headline, this week, review card stack, most connected) and Constellation; Metro map prototyped only |
-| MVP 3 | Context packs in delegate briefs (flag), the orchestrator's lookup rule, capture from the user's own words in every window, a verified quote for confirm and reject from sessions |
+| MVP 3 (built) | Context packs in delegate briefs (flag), the orchestrator's lookup rule, capture from the user's own words in every window, a verified quote for confirm and reject from sessions |
 | Later | Knowledge pass in the learning run, console curation beyond review (supersede, edit aliases), embeddings search, document import, a team-shared variant |
 
 ## Implementation (MVP 1)

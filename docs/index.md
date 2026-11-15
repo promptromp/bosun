@@ -21,7 +21,7 @@ hands who do the work.</p>
 
 <p class="bx-lead">Bosun is that go-between for you and your coding agents. It notices new work before you ask,
 hands each task to the right agent and follows it to done, and keeps a reviewed ontology of your team's
-people, process and product that every agent starts from. Nothing goes out under your name until you say yes.</p>
+people, process and product that every agent starts from (once switched on; `bosun init` recommends it). Nothing goes out under your name until you say yes.</p>
 
 <p class="bx-hero__actions" markdown>[Get started](setup.md){ .md-button .md-button--primary }
 [See it work](#how-it-works){ .md-button }</p>

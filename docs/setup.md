@@ -72,6 +72,8 @@ colour, in your terminal's own palette; `NO_COLOR=1` turns it off, as it does fo
 of them (once a signed build of it exists to install) is whether to add the menu bar app: `bosun.app` in
 `~/Applications`, opened at login (`bosun app install` adds it later; `bosun update` keeps an installed app
 current, and `BOSUN_MENU_APP=1` in `bosun.env` makes the watchdog say when it is gone).
+Among the proactive parts it asks whether to put the [ontology](knowledge.md#in-the-agents-hands) in the
+agents' hands (`BOSUN_KNOWLEDGE_ENABLED`, recommended yes).
 It says why it recommends what it does, and lists every file and command for you to accept before it
 touches anything. Then it writes the config, trusts the folders, and runs `install.sh`.
 
