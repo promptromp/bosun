@@ -5188,6 +5188,11 @@ PY
   printf '# acme: an install from before connectors\n' >"$U_CONFIG/bosun.env"
   ug() { git -C "$U_UP" -c core.hooksPath=/dev/null -c commit.gpgsign=false -c user.name=acme -c user.email=dev@example.com "$@"; }
   ug init -q -b main
+  # No housekeeping after upstream's commits: git (2.54 at least) starts a detached repack after a commit of
+  # a few hundred objects, and a local clone (here, update-convert's) hardlinks upstream's objects while that
+  # repack writes its tmp_pack, and dies ("hardlink different from source"). As lib/knowledge_store.py does.
+  ug config maintenance.auto false
+  ug config gc.auto 0
   ug add -A
   ug commit -qm v1
   U_V1_COMMIT="$(ug rev-parse HEAD)"
