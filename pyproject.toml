@@ -188,6 +188,8 @@ impacted_map = [
     "tests/*.sh=tests/unit/test_impacted_rules.py",
     "tests/js/*=tests/unit/test_impacted_rules.py",
     "tests/sandbox/**=tests/unit/test_impacted_rules.py",
+    # The VM's fictional acme world: its repositories, their history script, the gh stand-in and the ontology.
+    "tests/sandbox/live/**=tests/unit/test_live_world.py",
 ]
 # The fixtures, the app's version and publisher (which bosun reads as it runs, and the app's tests and
 # tools too), and the tests' conftest with repo_guard.py, which every test loads (and which imports

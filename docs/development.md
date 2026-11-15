@@ -451,7 +451,11 @@ BOSUN_SANDBOX_CODEX_MODEL=<a cheap model> tests/sandbox.sh mac live codex
 
 On a clone of the developer's Mac it does what a new user does, following only what the installer prints:
 it stops for what is missing, runs the line it gave, logs in, goes through Claude Code's first screens, and
-installs. Then real windows, a restart that must come back on the same session, and a real task: the real
+installs. The world it installs for is fictional acme's (`tests/sandbox/live/`): three small repositories
+(`exporter`, `pdf-renderer`, `ledger-sync`), each with a README, a `CODEOWNERS`, tests and a scripted history of
+a few commits by different people (`history.sh`), each a window, and the ontology about them
+(`knowledge.jsonl`, imported after `tests/fixtures/knowledge/acme-import.jsonl` and confirmed by hand, as
+`seed_knowledge` in `live.sh` does). Then real windows, a restart that must come back on the same session, and a real task: the real
 orchestrator hands a fix to the real repo session, which must report to the ledger, push a branch whose
 tests pass and open a pull request, and the orchestrator must link it. `live codex` runs the repo window on
 Codex and the orchestrator on Claude Code. GitHub is a stand-in and the remote a local bare repo, so nothing
@@ -520,9 +524,10 @@ BOSUN_SANDBOX_TRY_MODEL=opus tests/sandbox.sh mac try
 tests/sandbox.sh mac try --run checks.sh          # no shell: your script runs in the clone, which then goes
 ```
 
-It runs `live`'s first step in the clone (the exporter repo, and the lines the installer prints for what is
-missing), puts your key in as for `live`, goes through Claude Code's first-run screens, installs bosun
-unattended, makes the exporter repo its window, adds the menu bar app (from the release only: this checkout's
+It runs `live`'s first step in the clone (the acme world's three repositories, and the lines the installer prints
+for what is missing), puts your key in as for `live`, goes through Claude Code's first-run screens, installs bosun
+unattended, makes the three repositories its windows (with `--from checkout`, the world's ontology too: a release
+has not the ontology's rules), adds the menu bar app (from the release only: this checkout's
 app version may not be published) and starts bosun. Its agents use `BOSUN_SANDBOX_TRY_MODEL` (`sonnet`) rather
 than bosun's defaults, the largest models, because the key is billed per request for as long as bosun runs:
 leaving the shell deletes the clone, and `bosun stop` in it stops the spending sooner. With a key, Claude Code

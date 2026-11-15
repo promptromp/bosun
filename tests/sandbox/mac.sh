@@ -36,8 +36,8 @@
 #   try     the same, with bosun already set up and running in it, signed in: Claude Code (and Codex with
 #           `codex`) installed by the installer's own lines, its first-run screens gone through, your Anthropic
 #           key from the Keychain as its apiKeyHelper (as for live; the OpenAI key for codex), bosun installed
-#           unattended from the release (--from checkout: this checkout), the exporter repo as its window, the
-#           menu bar app (from the release), and started. Its agents use BOSUN_SANDBOX_TRY_MODEL (sonnet): the
+#           unattended from the release (--from checkout: this checkout, with the ontology), the acme world's three
+#           repos as its windows, the menu bar app (from the release), and started. Its agents use BOSUN_SANDBOX_TRY_MODEL (sonnet): the
 #           key is billed per request for as long as bosun runs in it, until you leave the shell. --run <script>:
 #           instead of your shell, the script runs in the clone (zsh, its output here, masked), and the clone is
 #           deleted when it ends: bosun with the real agents, set up and checked with no one at it
@@ -476,10 +476,10 @@ apiKeyHelper), its agents on $model. The key is billed per request for as long a
 this shell (exit) deletes the clone, and \`bosun stop\` stops it sooner. A restart keeps it.
 
   bosun status          how it is (and the menu bar icon in the window)
-  bosun attach          the windows: the orchestrator, the exporter repo's session
+  bosun attach          the windows: the orchestrator, and a session for each of the three repos
   bosun console         the web console
 
-The exporter repo (~/Development/exporter) pushes to a local stand-in of GitHub, so nothing leaves the Mac
+The repos (~/Development/exporter, pdf-renderer, ledger-sync) push to a local stand-in of GitHub, so nothing leaves the Mac
 but requests to the agents' APIs. Remote Control needs a claude.ai login: it does not work with a key.
 
 WELCOME

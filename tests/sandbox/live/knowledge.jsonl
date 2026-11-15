@@ -1,0 +1,44 @@
+{"type": "entity", "id": "repo/invoice-exporter", "name": "invoice exporter", "aliases": ["exporter", "acme/invoice-exporter", "acme/exporter"]}
+{"type": "entity", "id": "repo/ledger-sync", "name": "ledger sync", "aliases": ["acme/ledger-sync"], "summary": "Posts the exporter's invoices and credit notes to the ledger."}
+{"type": "entity", "id": "team/platform", "name": "Platform team"}
+{"type": "entity", "id": "person/marco", "name": "Marco Placeholder"}
+{"type": "entity", "id": "person/lena", "name": "Lena Placeholder"}
+{"type": "entity", "id": "person/priya", "name": "Priya Placeholder"}
+{"type": "entity", "id": "feature/csv-export", "name": "CSV export"}
+{"type": "entity", "id": "feature/credit-notes", "name": "credit notes"}
+{"type": "entity", "id": "service/sftp-upload", "name": "SFTP upload", "aliases": ["sftp"]}
+{"type": "entity", "id": "environment/staging", "name": "staging"}
+{"type": "entity", "id": "process/month-end-freeze", "name": "Month-end freeze", "aliases": ["freeze"]}
+{"type": "entity", "id": "process/review", "name": "Review process", "aliases": ["code review"]}
+{"type": "entity", "id": "gate/canary", "name": "Canary", "aliases": ["canary checks"]}
+{"type": "fact", "subject": "person/marco", "predicate": "member_of", "object": "team/platform", "sources": ["profile:directory"]}
+{"type": "fact", "subject": "person/marco", "predicate": "owns", "object": "repo/pdf-renderer", "sources": ["ledger:mypr:acme/pdf-renderer#7", "report:task:2026-10-01/2"]}
+{"type": "fact", "subject": "person/marco", "predicate": "reviews", "object": "repo/pdf-renderer", "sources": ["ledger:review:acme/pdf-renderer#9", "report:task:2026-10-01/2"]}
+{"type": "fact", "subject": "person/marco", "predicate": "prefers_channel", "object": "channel/acme-prs", "sources": ["ledger:out:review:acme/pdf-renderer#9/1"]}
+{"type": "fact", "subject": "person/lena", "predicate": "role", "value": "QA sign-off for releases", "sources": ["profile:directory"]}
+{"type": "fact", "subject": "person/lena", "predicate": "timezone", "value": "Europe/Berlin", "sources": ["profile:directory"]}
+{"type": "fact", "subject": "person/priya", "predicate": "reviews", "object": "service/sftp-upload", "sources": ["ledger:review:acme/invoice-exporter#98", "report:task:2026-10-01/1"]}
+{"type": "fact", "subject": "person/priya", "predicate": "title", "value": "Security engineer", "sources": ["profile:directory"]}
+{"type": "fact", "subject": "person/dana", "predicate": "role", "value": "finance owner of invoice numbering", "sources": ["profile:directory"]}
+{"type": "fact", "subject": "team/billing", "predicate": "owns", "object": "repo/invoice-exporter", "sources": ["ledger:mypr:acme/invoice-exporter#102", "memory:ownership.md"]}
+{"type": "fact", "subject": "team/platform", "predicate": "owns", "object": "repo/ledger-sync", "sources": ["ledger:review:acme/ledger-sync#57", "memory:ownership.md"]}
+{"type": "fact", "subject": "team/platform", "predicate": "purpose", "value": "Runs the shared services: the ledger sync and the deploy bot.", "sources": ["memory:ownership.md", "ledger:review:acme/ledger-sync#57"]}
+{"type": "fact", "subject": "process/release", "predicate": "gated_by", "object": "gate/smoke-tests", "sources": ["memory:deploys.md", "ledger:mypr:acme/invoice-exporter#102"]}
+{"type": "fact", "subject": "process/release", "predicate": "has_step", "object": "gate/canary", "sources": ["memory:deploys.md", "report:task:2026-10-01/1"], "order": 3}
+{"type": "fact", "subject": "gate/canary", "predicate": "purpose", "value": "Serves 5% of exports for an hour before the gradual rollout.", "sources": ["memory:deploys.md", "report:task:2026-10-01/1"]}
+{"type": "fact", "subject": "process/release", "predicate": "actor", "object": "person/lena", "sources": ["memory:deploys.md", "ledger:mypr:acme/invoice-exporter#102"]}
+{"type": "fact", "subject": "process/review", "predicate": "entry_point", "object": "channel/acme-prs", "sources": ["memory:review.md", "ledger:out:mypr:acme/invoice-exporter#102/1"]}
+{"type": "fact", "subject": "process/review", "predicate": "rule", "value": "A change to exporter/tax.py needs Dana Example's review.", "sources": ["memory:review.md", "transcript:00000000-0000-0000-0000-000000000011"], "authority": "user_said"}
+{"type": "fact", "subject": "process/month-end-freeze", "predicate": "rule", "value": "No exporter or ledger-sync release on the last business day of the month.", "sources": ["memory:deploys.md", "transcript:00000000-0000-0000-0000-000000000012"], "authority": "user_said"}
+{"type": "fact", "subject": "process/month-end-freeze", "predicate": "purpose", "value": "Keeps the books stable while finance closes the month.", "sources": ["memory:deploys.md", "ledger:task:2026-10-02/4"]}
+{"type": "fact", "subject": "repo/invoice-exporter", "predicate": "rule", "value": "A change to tax rounding needs a test with a credit note and a multi-currency invoice.", "sources": ["ledger:mypr:acme/invoice-exporter#102", "report:task:2026-10-01/1"]}
+{"type": "fact", "subject": "feature/credit-notes", "predicate": "lives_in", "object": "repo/invoice-exporter", "sources": ["ledger:mypr:acme/invoice-exporter#104", "report:task:2026-10-01/1"]}
+{"type": "fact", "subject": "feature/credit-notes", "predicate": "caveat", "value": "Credit notes are negative and reuse the invoice sequence per customer.", "sources": ["memory:exporter-numbering.md", "ledger:mypr:acme/invoice-exporter#104"]}
+{"type": "fact", "subject": "feature/csv-export", "predicate": "lives_in", "object": "repo/invoice-exporter", "sources": ["ledger:task:2026-10-02/5", "report:task:2026-10-01/1"]}
+{"type": "fact", "subject": "service/sftp-upload", "predicate": "lives_in", "object": "repo/invoice-exporter", "sources": ["ledger:review:acme/invoice-exporter#98", "report:task:2026-10-01/1"]}
+{"type": "fact", "subject": "service/sftp-upload", "predicate": "purpose", "value": "Delivers the nightly invoice export to customers' SFTP servers.", "sources": ["memory:sftp.md", "report:task:2026-10-01/1"]}
+{"type": "fact", "subject": "service/sftp-upload", "predicate": "rule", "value": "Per-customer keys only; never a shared password.", "sources": ["memory:sftp.md", "ledger:review:acme/invoice-exporter#98"]}
+{"type": "fact", "subject": "repo/ledger-sync", "predicate": "caveat", "value": "The ledger API answers 429 under load; retry with backoff.", "sources": ["memory:ledger-sync.md", "ledger:review:acme/ledger-sync#57"]}
+{"type": "fact", "subject": "repo/ledger-sync", "predicate": "depends_on", "object": "repo/invoice-exporter", "sources": ["ledger:review:acme/ledger-sync#57", "report:task:2026-10-01/1"]}
+{"type": "fact", "subject": "repo/pdf-renderer", "predicate": "purpose", "value": "Lays out an invoice for print; the exporter calls render(invoice).", "sources": ["memory:exporter-pdf.md", "report:task:2026-10-01/2"]}
+{"type": "fact", "subject": "environment/staging", "predicate": "purpose", "value": "Where every release and test run goes before production.", "sources": ["memory:deploys.md", "report:task:2026-10-01/1"]}

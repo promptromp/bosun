@@ -1,0 +1,9 @@
+# Where the exporter's integration checks may run (scripts/integration_check.py --env <name>).
+
+[environments.staging]
+url = "https://staging.exporter.acme.example"
+purpose = "every release is checked here before production"
+
+[environments.staging-2]
+url = "https://staging-2.exporter.acme.example"
+purpose = "second staging, for a parallel release train"

@@ -8,11 +8,13 @@
 # they work. GitHub is a stand-in (tests/sandbox/live/gh) and the remote a local bare repo, so nothing
 # leaves the Mac but requests to the agents' APIs. It costs real money, about a dollar a run, so nothing
 # runs it by itself.
-#   prepare   the repo, the installer stopping for what is missing, and doing what it says
+#   prepare   the three repos of the world, each with a history, the installer stopping for what is missing, and
+#             doing what it says
 #   login     agy only: waits for a person to sign in to Antigravity in the VM's window (up to 15 minutes)
 #   ready     for `mac try`, after prepare: what a person would do next, done, with no checks of it: the
-#             first-run screens, bosun installed unattended (from the release, or this checkout), the exporter
-#             repo as its window, the menu bar app (from the release only), the agents on <model>, started
+#             first-run screens, bosun installed unattended (from the release, or this checkout), the world's
+#             three repos as its windows (and, from this checkout, the ontology about them), the menu bar app
+#             (from the release only), the agents on <model>, started
 #   go        the first-run screens, the install, real windows, a restart and the hand-over; then whether a
 #             running Claude picks up a changed command file of its plugin, and `bosun update` to the next
 #             version (this checkout and tests/sandbox/update_patch.sh) while the repo window waits on a
@@ -79,18 +81,54 @@ repo_agent() { window exporter harness; }
 reported() { bosun ledger list 2>/dev/null | grep -q '(reported)'; }
 pushed_branch() { git -C "$HOME/remotes/exporter.git" branch --format='%(refname:short)' | grep -v '^main$' | head -1; }
 
+# The fictional acme world (tests/sandbox/live/): three repositories, each a window, and the ontology about them
+# (live/knowledge.jsonl). exporter is the one the hand-over works on.
+WORLD_REPOS=(exporter pdf-renderer ledger-sync)
+
 the_repo() {
+  local name
   git config --global user.name "A Sandbox"
   git config --global user.email sandbox@example.com
   git config --global init.defaultBranch main
   # Looks like GitHub to bosun; every fetch and push lands in a local bare repo instead.
   git config --global url."$HOME/remotes/".insteadOf "https://github.com/acme/"
   mkdir -p "$HOME/remotes" "$HOME/Development" "$HOME/.local/bin"
-  git init -q --bare "$HOME/remotes/exporter.git"
-  cp -R "$ROOT/tests/sandbox/live/exporter" "$HOME/Development/exporter"
   cp "$ROOT/tests/sandbox/live/gh" "$HOME/.local/bin/gh"
-  (cd "$HOME/Development/exporter" && git init -q && git add -A && git commit -qm "the exporter" &&
-    git remote add origin https://github.com/acme/exporter.git && git push -q -u origin main)
+  for name in "${WORLD_REPOS[@]}"; do
+    git init -q --bare "$HOME/remotes/$name.git"
+    # Its scripted history (a few commits by different people), then the remote and the push.
+    bash "$ROOT/tests/sandbox/live/history.sh" "$name" "$HOME/Development/$name" &&
+      git -C "$HOME/Development/$name" remote add origin "https://github.com/acme/$name.git" &&
+      git -C "$HOME/Development/$name" push -q -u origin main || return 1
+  done
+}
+
+# bosun init's answers: a window for each repository of the world.
+answers() { # <menu_app: true|false>
+  printf '%s\n' "${WORLD_REPOS[@]}" | jq -Rn --argjson menu_app "$1" '{repos: [inputs | {dir: ("~/Development/" + .)}], menu_app: $menu_app}'
+}
+
+# The ontology of the world, as a person would have built it over the first weeks: the test suite's import and
+# the world's own, auto-confirmed where the rules allow it, then every fact still waiting confirmed by hand (the
+# high-risk ones never confirm by themselves, nor a fact about a person). From this shell, never from an agent's.
+KNOWLEDGE_FILES=("$ROOT/tests/fixtures/knowledge/acme-import.jsonl" "$ROOT/tests/sandbox/live/knowledge.jsonl")
+waiting_facts() { # the ids of the facts that still wait for review
+  local entity
+  for entity in $(jq -r 'select(.type == "entity").id' "${KNOWLEDGE_FILES[@]}"); do
+    bosun kg facts "$entity" --status proposed --json | jq -r '.[].id'
+  done | sort -u
+}
+seed_knowledge() {
+  local file
+  for file in "${KNOWLEDGE_FILES[@]}"; do
+    bosun kg import "$file" --apply --auto-confirm >/dev/null || return 1
+  done
+  waiting_facts | xargs bosun kg confirm --note "the sandbox's world" >/dev/null
+}
+seeded() { seed_knowledge && [ -z "$(waiting_facts)" ]; }
+every_repo_has_a_window() {
+  local name
+  for name in "${WORLD_REPOS[@]}"; do grep -q "name: $name" "$CONFIG/sessions.yml" || return 1; done
 }
 
 prepare() {
@@ -164,9 +202,10 @@ install_it() {
   check "... and going through them is enough" jq -e '.hasCompletedOnboarding == true' "$HOME/.claude.json"
   check "the same line then installs" bash -c 'sh "$1/get.sh" --unattended >"$2" 2>&1 || { tail -15 "$2"; exit 1; }' _ "$ROOT" "$out"
   check "... with no repo window, since nobody chose one" grep -qx "sessions: \[\]" "$CONFIG/sessions.yml"
-  echo '{"repos": [{"dir": "~/Development/exporter"}], "menu_app": false}' >"$OUT/answers.json"
+  answers false >"$OUT/answers.json"
   check "the repo's window, named with bosun init --answers" bash -c 'bosun init --answers "$1" >"$2" 2>&1 || { tail -15 "$2"; exit 1; }' _ "$OUT/answers.json" "$OUT/answers.txt"
-  check "... in sessions.yml" grep -q "name: exporter" "$CONFIG/sessions.yml"
+  check "... in sessions.yml, one for each repository of the world" every_repo_has_a_window
+  check "the ontology of the world is seeded, and nothing waits for review" seeded
   check "doctor passes" bash -c 'bosun doctor >"$1" 2>&1 || { tail -15 "$1"; exit 1; }' _ "$OUT/doctor.txt"
   if [ "$AGENT" = "codex" ]; then
     check "the config says Codex" says 'BOSUN_HARNESS="codex"' "$CONFIG/bosun.env"
@@ -201,8 +240,11 @@ ready() { # <release|checkout> <model> <get.sh URL>
     as_installed=(env -u BOSUN_REPO -u BOSUN_BRANCH -u BOSUN_UPDATE_CHANNEL)
     quietly "${as_installed[@]}" sh -c 'curl -fsSL "$1" | sh -s -- --unattended' _ "$url" || return 1
   fi
-  printf '{"repos": [{"dir": "~/Development/exporter"}], "menu_app": %s}\n' "$menu_app" >"$OUT/answers.json"
+  answers "$menu_app" >"$OUT/answers.json"
   quietly ${as_installed[@]+"${as_installed[@]}"} bosun init --answers "$OUT/answers.json" || return 1
+  if [ "$from" = checkout ]; then # a release has not the ontology's rules
+    quietly seed_knowledge || return 1
+  fi
   printf 'BOSUN_MODEL="%s"\nBOSUN_ORCHESTRATOR_MODEL="%s"\nBOSUN_LEARN_MODEL="%s"\n' "$model" "$model" "$model" \
     >>"$CONFIG/bosun.env"
   printf 'BOSUN_CLAUDE_FLAGS="%s"\nBOSUN_ORCHESTRATOR_FLAGS="%s"\n' "$BOSUN_CLAUDE_FLAGS" "$BOSUN_ORCHESTRATOR_FLAGS" \
