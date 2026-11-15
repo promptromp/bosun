@@ -292,7 +292,8 @@ set_slack_defaults() {
   BOSUN_SLACK_LOOKBACK_HOURS="24"
   BOSUN_SLACK_MAX_LOOKBACK_HOURS="96"
   # The Slack watcher (`bosun slack-watch`; needs BOSUN_EVENTS_ENABLED=1). 1: the check-in
-  # loop runs it every MINUTES while the session runs, at any hour: one headless Claude (MODEL) that can only
+  # loop runs it while the session runs, at any hour, every MINUTES in your hours and every
+  # MINUTES_OUTSIDE_HOURS outside them (0: not then): one headless Claude (MODEL) that can only
   # read Slack finds new mentions, DMs and replies in your threads, and each new one becomes an
   # event for the orchestrator. At most MAX_USD_PER_CALL a call and MAX_USD_PER_DAY a day.
   # MCP_CONFIG: an MCP config file with only your Slack server; empty: the Slack plugin's.
@@ -300,6 +301,7 @@ set_slack_defaults() {
   # events; the check-in's Slack scan still reads their messages.
   BOSUN_SLACK_WATCH_ENABLED="0"
   BOSUN_SLACK_WATCH_MINUTES="15"
+  BOSUN_SLACK_WATCH_MINUTES_OUTSIDE_HOURS="120"
   BOSUN_SLACK_WATCH_MODEL="haiku"
   BOSUN_SLACK_WATCH_MAX_USD_PER_CALL="0.25"
   BOSUN_SLACK_WATCH_MAX_USD_PER_DAY="1.5"
@@ -1379,7 +1381,7 @@ WATCHDOG_SETTINGS="BOSUN_STATE_DIR BOSUN_LOG_DIR BOSUN_SESSION_NAME BOSUN_ORCHES
   BOSUN_WATCHDOG_DELEGATED_HOURS BOSUN_LONG_SHELL_HOURS BOSUN_WATCHDOG_ORCHESTRATOR_DOWN_MINUTES
   BOSUN_WATCHDOG_ORCHESTRATOR_RESTART BOSUN_HOOK_SIGNALS BOSUN_LEARN_ENABLED BOSUN_LEARN_AT BOSUN_LEARN_TIMEOUT_MINUTES
   BOSUN_EVENTS_ENABLED BOSUN_EVENTS_INTERVAL_SECONDS BOSUN_SLACK_WATCH_ENABLED
-  BOSUN_SLACK_WATCH_MINUTES BOSUN_CLAUDE_BIN BOSUN_CONTEXT_WARN_TOKENS
+  BOSUN_SLACK_WATCH_MINUTES BOSUN_SLACK_WATCH_MINUTES_OUTSIDE_HOURS BOSUN_CLAUDE_BIN BOSUN_CONTEXT_WARN_TOKENS
   BOSUN_OVERHEAD_WARN_SHARE BOSUN_MENU_APP"
 
 # "NAME=value" for each setting named, one per line (for `env`).

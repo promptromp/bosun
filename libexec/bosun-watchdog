@@ -27,8 +27,9 @@
 #                    crashed or runs past BOSUN_LEARN_TIMEOUT_MINUTES
 #   events           with BOSUN_EVENTS_ENABLED=1: the check-in loop stopped dispatching events
 #                    to the orchestrator, or a delivery failed
-#   slack-watch      with BOSUN_SLACK_WATCH_ENABLED=1 and events on: no Slack watch for two
-#                    intervals while the check-in loop runs, 3 failed runs in a row, or the daily budget spent
+#   slack-watch      with BOSUN_SLACK_WATCH_ENABLED=1 and events on: no Slack watch for two intervals (the
+#                    longer one outside your hours) while the check-in loop runs, 3 failed runs in a row,
+#                    or the daily budget spent
 #   update-stuck     an update stopped and left its hold (or paused writes), or its hold
 #                    outlived its hour (the watchdog skips its runs while an update holds)
 #   app-missing      with BOSUN_MENU_APP=1: bosun.app is not in ~/Applications (moved to the Trash?);

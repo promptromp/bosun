@@ -19,8 +19,10 @@ chores handles those) and messages already queued, and queues one `slack` event 
 for the dispatcher (lib/events.py). It never posts and never writes the ledger.
 
 --scheduled (the check-in loop, every tick) runs only with BOSUN_SLACK_WATCH_ENABLED=1, at
-any hour (the loop runs only while bosun's session does), BOSUN_SLACK_WATCH_MINUTES after the last
-run started; every run needs BOSUN_EVENTS_ENABLED=1 (nothing else would deliver what it finds), no
+any hour (the loop runs only while bosun's session does), one interval after the last run started: the
+interval in force now, BOSUN_SLACK_WATCH_MINUTES in your hours (BOSUN_DAYS, from BOSUN_START_TIME to
+BOSUN_AWAKE_UNTIL) and BOSUN_SLACK_WATCH_MINUTES_OUTSIDE_HOURS outside them (0: no scheduled runs
+then); every run needs BOSUN_EVENTS_ENABLED=1 (nothing else would deliver what it finds), no
 other run going, and BOSUN_SLACK_WATCH_MAX_USD_PER_CALL left of BOSUN_SLACK_WATCH_MAX_USD_PER_DAY. --dry-run
 calls Claude and prints what a run would queue; it queues nothing and writes no state. State:
 $BOSUN_STATE_DIR/slack-watch/state.json. BOSUN_SLACK_WATCH_NOW (epoch seconds) pins the
@@ -40,12 +42,13 @@ import sys
 import tempfile
 from collections.abc import Callable, Iterator, Mapping
 from dataclasses import asdict, dataclass, field, replace
-from datetime import UTC, date, datetime, timedelta
+from datetime import UTC, date, datetime, time, timedelta
 from pathlib import Path
 from typing import Any
 
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
+import awake
 import claude_state
 import event_model
 import events
@@ -81,6 +84,9 @@ MAX_FAILURES = 3
 RETENTION_DAYS = 7
 RUNS_KEPT = 20
 NOT_DUE = "not due"
+OUTSIDE_HOURS = "outside your hours (BOSUN_SLACK_WATCH_MINUTES_OUTSIDE_HOURS=0)"
+# lib/common.sh's BOSUN_DAYS, BOSUN_START_TIME and BOSUN_AWAKE_UNTIL, for a caller that passes none.
+DEFAULT_HOURS = awake.AwakeWindow("MTWRF", time(8, 0), time(20, 0))
 KINDS = ("mention", "dm", "thread-reply")
 # The Slack MCP tools (by name, without the server's prefix) the call may use, and those it never
 # sees. Anything else the server offers is denied by --permission-mode dontAsk.
@@ -164,7 +170,9 @@ class Config:
     state_dir: Path
     enabled: bool = False
     events_enabled: bool = False
-    minutes: float = 15
+    minutes: float = 15  # the interval in your hours
+    outside_minutes: float = 120  # outside them; 0: no scheduled runs then
+    hours: awake.AwakeWindow = DEFAULT_HOURS
     model: str = "haiku"
     max_usd_per_call: float = 0.25
     max_usd_per_day: float = 1.5
@@ -183,6 +191,9 @@ class Config:
     def interval(self) -> timedelta:
         return timedelta(minutes=self.minutes)
 
+    def interval_at(self, moment: datetime) -> timedelta | None:
+        return interval_at(self.hours, self.minutes, self.outside_minutes, moment)
+
     @classmethod
     def from_env(cls, env: Mapping[str, str]) -> Config:
         def text(name: str, default: str = "") -> str:
@@ -196,11 +207,21 @@ class Config:
 
         if not text("STATE_DIR"):
             raise WatchError("BOSUN_STATE_DIR is not set; run this as `bosun slack-watch`")
+        try:
+            hours = awake.window_from_settings(
+                text("DAYS", DEFAULT_HOURS.days),
+                text("START_TIME", f"{DEFAULT_HOURS.start:%H:%M}"),
+                text("AWAKE_UNTIL", f"{DEFAULT_HOURS.until:%H:%M}"),
+            )
+        except awake.SettingsError as exc:
+            raise WatchError(str(exc)) from exc
         return cls(
             state_dir=Path(text("STATE_DIR")),
             enabled=text("SLACK_WATCH_ENABLED") == "1",
             events_enabled=text("EVENTS_ENABLED") == "1",
             minutes=number("SLACK_WATCH_MINUTES", 15),
+            outside_minutes=number("SLACK_WATCH_MINUTES_OUTSIDE_HOURS", 120),
+            hours=hours,
             model=text("SLACK_WATCH_MODEL") or "haiku",
             max_usd_per_call=number("SLACK_WATCH_MAX_USD_PER_CALL", 0.25),
             max_usd_per_day=number("SLACK_WATCH_MAX_USD_PER_DAY", 1.5),
@@ -209,6 +230,17 @@ class Config:
             quiet_authors=author_set(text("SLACK_WATCH_QUIET_AUTHORS")),
             claude_bin=text("CLAUDE_BIN") or "claude",
         )
+
+
+def interval_at(
+    hours: awake.AwakeWindow, minutes: float, outside_minutes: float, moment: datetime
+) -> timedelta | None:
+    """The scheduler's interval at <moment> (aware, or naive in local time): <minutes> in your hours,
+    <outside_minutes> outside them; None outside them when that is 0 or less (no scheduled runs then).
+    The watchdog's stall check asks it too."""
+    if hours.contains(moment.astimezone().replace(tzinfo=None)):
+        return timedelta(minutes=minutes)
+    return timedelta(minutes=outside_minutes) if outside_minutes > 0 else None
 
 
 def author_set(names: str) -> frozenset[str]:
@@ -292,9 +324,13 @@ def run_lock(directory: Path) -> Iterator[bool]:
 
 
 def schedule_gate(config: Config, state: State, now: datetime) -> str | None:
-    """Why a scheduled run does not happen now (NOT_DUE: quietly), or None."""
+    """Why a scheduled run does not happen now (NOT_DUE: quietly), or None: it is due one interval, the one
+    in force now, after the last run started."""
+    interval = config.interval_at(now)
+    if interval is None:
+        return OUTSIDE_HOURS
     started = state.last_started
-    if started and now - datetime.fromisoformat(started) < config.interval:
+    if started and now - datetime.fromisoformat(started) < interval:
         return NOT_DUE
     return None
 
@@ -839,11 +875,12 @@ def render_status(config: Config, now: datetime) -> str:
     events_on = "on" if config.events_enabled else "off"
     spent = state.spent_on(local_date(now))
     next_start = scan_start(config, state, now, chores_scan(read_ledger(config.state_dir)))
+    outside = f"every {config.outside_minutes:g} min" if config.outside_minutes > 0 else "not"
     return "\n".join(
         [
             (
-                f"enabled: {enabled} (events {events_on}), every {config.minutes:g} min while the "
-                f"session runs, model {config.model}"
+                f"enabled: {enabled} (events {events_on}), every {config.minutes:g} min in your hours and "
+                f"{outside} outside them while the session runs, model {config.model}"
             ),
             (
                 f"budget: ${config.max_usd_per_call:.2f} a call, ${config.max_usd_per_day:.2f} a day; "

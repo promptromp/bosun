@@ -1,8 +1,9 @@
-"""Unit tests for lib/slack_watch.py: the scan start, the scheduling gates (interval,
-events off, one run at a time, the daily budget), the restricted Claude command and its tool
-check, checking the JSON that comes back, sorting out what the ledger has processed and what
-belongs to outreach, the events it queues and how the dispatcher shows them, and the watchdog's
-`slack-watch` check. Claude is never called. Fictional data: acme's invoice exporter."""
+"""Unit tests for lib/slack_watch.py: the settings, the scan start, the scheduling gates (the
+interval in and outside your hours, events off, one run at a time, the daily budget), its status,
+the restricted Claude command and its tool check, checking the JSON that comes back, sorting out
+what the ledger has processed and what belongs to outreach, the events it queues and how the
+dispatcher shows them, and the watchdog's `slack-watch` check. Claude is never called. Fictional
+data: acme's invoice exporter."""
 
 from __future__ import annotations
 
@@ -16,10 +17,11 @@ import unittest.mock
 from dataclasses import replace
 from datetime import UTC, datetime, time, timedelta
 from pathlib import Path
-from typing import Any
+from typing import Any, ClassVar
 
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "lib"))
+import awake
 import claude_state
 import event_model
 import event_summary
@@ -35,6 +37,13 @@ RENDER = event_summary.Render(inline_chars=600, max_lines=10)
 
 # Monday 2026-01-05, 10:00 local time.
 NOW = datetime(2026, 1, 5, 10, 0).astimezone().astimezone(UTC)
+
+
+def local(day: int, hour: int, minute: int = 0) -> datetime:
+    """January <day> 2026 at <hour>:<minute> local time (the 5th is a Monday, the 10th a Saturday), in UTC."""
+    return datetime(2026, 1, day, hour, minute).astimezone().astimezone(UTC)
+
+
 SLACK = "https://acme.slack.com/archives/"
 CHANNEL = "C0000000001"
 DM = "D0000000002"
@@ -141,12 +150,38 @@ class SchedulingTest(WatchTestCase):
         self.assertIn("scanned from", self.watch(NOW + timedelta(minutes=15)))
         self.assertEqual(len(self.calls), 2)
 
-    def test_runs_outside_the_awake_window(self) -> None:
-        saturday = datetime(2026, 1, 10, 23, 0).astimezone()
-        state = State()
-        self.assertIsNone(slack_watch.schedule_gate(self.config, state, saturday))
-        state = State(last_started=slack_watch.iso(saturday - timedelta(minutes=1)))
-        self.assertEqual(slack_watch.schedule_gate(self.config, state, saturday), slack_watch.NOT_DUE)
+    def gate(self, now: datetime, last_started: datetime | None, config: Config | None = None) -> str | None:
+        state = State(last_started=slack_watch.iso(last_started) if last_started else None)
+        return slack_watch.schedule_gate(config or self.config, state, now)
+
+    def test_outside_your_hours_it_runs_at_the_longer_interval(self) -> None:
+        saturday = local(10, 23)
+        self.assertIsNone(self.gate(saturday, None))
+        self.assertEqual(self.gate(saturday, saturday - timedelta(minutes=119)), slack_watch.NOT_DUE)
+        self.assertIsNone(self.gate(saturday, saturday - timedelta(minutes=120)))
+        self.assertIsNone(self.gate(NOW, NOW - timedelta(minutes=15)), "in your hours: every 15 minutes")
+
+    def test_a_session_past_the_end_of_your_hours_slows_down(self) -> None:
+        last = local(5, 19, 55)
+        self.assertEqual(self.gate(local(5, 20, 10), last), slack_watch.NOT_DUE)
+        self.assertEqual(self.gate(local(5, 21, 54), last), slack_watch.NOT_DUE)
+        self.assertIsNone(self.gate(local(5, 21, 55), last))
+
+    def test_your_hours_begin_with_a_run(self) -> None:
+        self.assertEqual(self.gate(local(5, 7, 59), local(5, 7, 30)), slack_watch.NOT_DUE)
+        self.assertIsNone(self.gate(local(5, 8, 0), local(5, 7, 30)))
+
+    def test_with_no_outside_interval_it_does_not_run_outside_your_hours(self) -> None:
+        off = replace(self.config, outside_minutes=0)
+        evening = local(5, 21)
+        self.assertEqual(self.gate(evening, None, off), slack_watch.OUTSIDE_HOURS)
+        self.assertIsNone(self.gate(NOW, None, off))
+        self.assertIn(f"skip: {slack_watch.OUTSIDE_HOURS}", self.watch(evening, config=off))
+        later = evening + timedelta(minutes=1)
+        self.assertEqual(self.watch(later, config=off), "", "said once, not every tick")
+        by_hand = self.watch(evening, scheduled=False, config=off)
+        self.assertIn("scanned from", by_hand, "a run by hand still runs")
+        self.assertEqual(len(self.calls), 1)
 
     def test_a_run_by_hand_ignores_the_schedule_but_needs_events(self) -> None:
         evening = datetime(2026, 1, 5, 21, 0).astimezone().astimezone(UTC)
@@ -461,6 +496,45 @@ class EventsTest(WatchTestCase):
         self.assertFalse((self.config.directory / slack_watch.STATE_FILE).exists())
 
 
+class SettingsTest(WatchTestCase):
+    ENV: ClassVar[dict[str, str]] = {"BOSUN_STATE_DIR": "/state"}
+
+    def test_the_intervals_and_your_hours_from_the_settings(self) -> None:
+        config = Config.from_env(
+            {
+                **self.ENV,
+                "BOSUN_SLACK_WATCH_MINUTES_OUTSIDE_HOURS": "0",
+                "BOSUN_DAYS": "SU",
+                "BOSUN_START_TIME": "09:30",
+                "BOSUN_AWAKE_UNTIL": "01:00",
+            }
+        )
+        self.assertEqual((config.minutes, config.outside_minutes), (15, 0))
+        self.assertEqual(config.hours, awake.AwakeWindow("SU", time(9, 30), time(1, 0)))
+
+    def test_the_defaults_are_those_of_lib_common(self) -> None:
+        config = Config.from_env(self.ENV)
+        self.assertEqual((config.minutes, config.outside_minutes), (15, 120))
+        self.assertEqual(config.hours, awake.AwakeWindow("MTWRF", time(8, 0), time(20, 0)))
+
+    def test_a_setting_that_does_not_parse_is_refused_in_one_line(self) -> None:
+        for name, value in (
+            ("BOSUN_SLACK_WATCH_MINUTES_OUTSIDE_HOURS", "two hours"),
+            ("BOSUN_DAYS", "MTX"),
+            ("BOSUN_START_TIME", "8am"),
+        ):
+            with self.subTest(name), self.assertRaisesRegex(slack_watch.WatchError, name):
+                Config.from_env({**self.ENV, name: value})
+
+    def test_status_says_both_intervals(self) -> None:
+        self.assertIn(
+            "every 15 min in your hours and every 120 min outside them while the session runs",
+            slack_watch.render_status(self.config, NOW),
+        )
+        off = replace(self.config, outside_minutes=0)
+        self.assertIn("every 15 min in your hours and not outside them", slack_watch.render_status(off, NOW))
+
+
 class WatchdogCheckTest(WatchTestCase):
     def watchdog_config(self) -> watchdog.Config:
         return watchdog.Config(
@@ -470,11 +544,13 @@ class WatchdogCheckTest(WatchTestCase):
             slack_watch_enabled=True, slack_watch_minutes=15,
         )  # fmt: skip
 
-    def check(self, now: datetime, loop: bool = True, **state: Any) -> watchdog.Result:
+    def check(
+        self, now: datetime, loop: bool = True, config: watchdog.Config | None = None, **state: Any
+    ) -> watchdog.Result:
         with slack_watch.locked_state(self.config.directory) as current:
             for key, value in state.items():
                 setattr(current, key, value)
-        config = self.watchdog_config()
+        config = config or self.watchdog_config()
         facts = watchdog.Facts(session_exists=True, checkin_window=True, checkin_loop=loop)
         local = now.astimezone().replace(tzinfo=None)
         return watchdog.check_slack_watch(watchdog.Context(config, facts, local, watchdog.State()))
@@ -491,13 +567,28 @@ class WatchdogCheckTest(WatchTestCase):
         self.assertTrue(outcome.findings[0].confirm)
         self.assertEqual(self.check(NOW, loop=False).findings, [], "checkin-missing covers a missing loop")
 
-    def test_stalled_on_a_saturday_night_too(self) -> None:
-        night = datetime(2026, 1, 10, 23, 0).astimezone().astimezone(UTC)
-        outcome = self.check(night, last_started=slack_watch.iso(night - timedelta(minutes=45)))
+    def test_stalled_on_a_saturday_night_too_after_two_of_the_nights_intervals(self) -> None:
+        night = local(10, 23)
+        outcome = self.check(night, last_started=slack_watch.iso(night - timedelta(minutes=241)))
         self.assertEqual(len(outcome.findings), 1)
         self.assertTrue(outcome.findings[0].key.startswith("slack-watch:stalled:"))
-        recent = self.check(night, last_started=slack_watch.iso(night - timedelta(minutes=20)))
-        self.assertEqual(recent.findings, [], "a run within the limit is no stall")
+        recent = self.check(night, last_started=slack_watch.iso(night - timedelta(minutes=45)))
+        self.assertEqual(recent.findings, [], "a run within two of the night's intervals is no stall")
+
+    def test_the_longer_interval_counts_where_your_hours_end_or_begin(self) -> None:
+        evening = self.check(local(5, 21), last_started=slack_watch.iso(local(5, 19, 58)))
+        self.assertEqual(evening.findings, [], "the night's interval is waited out")
+        morning = self.check(local(5, 8, 5), last_started=slack_watch.iso(local(5, 6, 30)))
+        self.assertEqual(morning.findings, [], "the night's run is not stalled before the day's first tick")
+
+    def test_no_stall_while_it_has_no_scheduled_runs(self) -> None:
+        config = replace(self.watchdog_config(), slack_watch_outside_minutes=0)
+        night = local(10, 23)
+        outcome = self.check(night, config=config, last_started=slack_watch.iso(night - timedelta(hours=27)))
+        self.assertEqual(outcome.findings, [])
+        self.assertIn("no scheduled runs now", outcome.note)
+        day = self.check(NOW, config=config, last_started=slack_watch.iso(NOW - timedelta(minutes=31)))
+        self.assertEqual(len(day.findings), 1, "in your hours it is checked as before")
 
     def test_failures_in_a_row_and_the_budget(self) -> None:
         error = {"at": slack_watch.iso(NOW), "error": "claude exited 1"}

@@ -2268,9 +2268,13 @@ check "... which the event list shows with its permalink" contains "$("$BOSUN" e
 check "... and the dispatcher frames as untrusted, for chores step 1" contains "$(BOSUN_EVENTS_ENABLED=1 BOSUN_EVENTS_FAST_DEBOUNCE_SECONDS=0 BOSUN_SEND_DRY_RUN=1 "$BOSUN" events --dry-run 2>&1)" "untrusted excerpt: \"can you check the exporter header?\""
 check "the next watch does not queue it again" contains "$(SWE)" "1 already queued"
 check "a scheduled watch waits for its interval" test -z "$(BOSUN_SLACK_WATCH_ENABLED=1 BOSUN_DAYS=MTWRFSU BOSUN_START_TIME=00:00 BOSUN_AWAKE_UNTIL=00:00 SWE --scheduled)"
+letters=MTWRFSU today=$(($(date +%u) - 1)) # every day but today, and none past midnight: now is outside your hours
+not_today="${letters:0:today}${letters:today+1}"
+check "outside your hours with no runs then, a scheduled watch says so" contains "$(BOSUN_SLACK_WATCH_ENABLED=1 BOSUN_SLACK_WATCH_MINUTES_OUTSIDE_HOURS=0 BOSUN_DAYS="$not_today" BOSUN_START_TIME=08:00 BOSUN_AWAKE_UNTIL=20:00 SWE --scheduled)" "skip: outside your hours (BOSUN_SLACK_WATCH_MINUTES_OUTSIDE_HOURS=0)"
 check "a call that could see a write tool is refused" bash -c 'out="$(SLACK_FAKE=write "$@")"; [ $? -eq 1 ] && grep -q "ERROR: the Slack watch failed (1 in a row): tool restriction not in force" <<<"$out"' _ env BOSUN_EVENTS_ENABLED=1 BOSUN_CLAUDE_BIN="$WORK/slack-claude" BOSUN_SLACK_WATCH_MCP_CONFIG="$WORK/slack-mcp.json" "$BOSUN" slack-watch
 check "output that is not the JSON is a failure" contains "$(SLACK_FAKE=garbage SWE)" "failed (2 in a row)"
 check "status shows the failures and today's spend, a refused call's included" bash -c 'grep -q "failures in a row: 2" <<<"$1" && grep -q "spent today \$0.09" <<<"$1"' _ "$(SW --status)"
+check "... and both intervals" contains "$(SW --status)" "every 15 min in your hours and every 120 min outside them"
 check "the watchdog checks the watcher once it is enabled" contains "$(BOSUN_EVENTS_ENABLED=1 BOSUN_SLACK_WATCH_ENABLED=1 "$BOSUN" watchdog --status 2>&1)" "slack-watch      "
 check "the check-in loop runs the watcher with events on" contains "$(BOSUN_EVENTS_ENABLED=1 "$BOSUN" checkin --dry-run 2>&1)" "dry-run: would run bosun slack-watch --scheduled"
 "$BOSUN" events --covered >/dev/null
