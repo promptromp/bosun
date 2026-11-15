@@ -196,6 +196,13 @@ class CommandTest(unittest.TestCase):
         self.assertEqual(status, 3)
         self.assertIn("with the morning start paused", line)
 
+    def test_a_quit_today_that_left_the_morning_on_logs_the_stop_it_made(self) -> None:
+        # bosun quit stops bosun with `bosun stop`, which leaves the stop marker. A quit that did not pause
+        # the morning start is no reason of its own, so the login that day says it was stopped, as for a stop.
+        quit_state.write(self.state, False, datetime(2026, 11, 16, 10, 15).astimezone())
+        (self.state / "stopped-smoke").write_text("2026-11-16 10:15:00\n")
+        self.assertEqual(run_cli(self.state), (3, "not starting: you stopped bosun today at 10:15\n"))
+
     def test_the_reload_marker_is_read_then_removed(self) -> None:
         marker = self.state / login_start.RELOAD_MARKER
         marker.write_text(MONDAY_NOON.strftime("%Y-%m-%d %H:%M:%S\n"))

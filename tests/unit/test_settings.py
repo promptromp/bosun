@@ -234,7 +234,9 @@ def run(*argv: str) -> tuple[int, str, str]:
 
 class TestCommandLine(unittest.TestCase):
     def setUp(self) -> None:
-        self.dir = Path(tempfile.mkdtemp())
+        folder = tempfile.TemporaryDirectory()
+        self.addCleanup(folder.cleanup)
+        self.dir = Path(folder.name)
         self.env = self.dir / "bosun.env"
         self.env.write_text(COMMENTED)
         self.example = self.dir / "example.env"
