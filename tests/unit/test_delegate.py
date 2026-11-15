@@ -20,6 +20,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "lib"))
 import agent_state
 import delegate
 import knowledge
+import knowledge_query
+import workstreams
 from knowledge_model import KnowledgeError
 
 
@@ -205,11 +207,50 @@ class PackTest(unittest.TestCase):
         self.assertEqual(delegate.handover_ids(text), ["task:2026-11-01/1"])
 
     def test_an_unreadable_ontology_adds_one_line_and_the_hand_over_goes_on(self) -> None:
-        broken = mock.patch.object(knowledge, "load", side_effect=KnowledgeError("a file does not parse"))
-        with broken:
-            pack = delegate.knowledge_pack(["acme/invoice-exporter"])
-            self.assertEqual(pack, "(the ontology could not be read: a file does not parse)")
-            self.assertIn(pack, self.brief())
+        line = "(the ontology could not be read: {})"
+        for error in (KnowledgeError("a file does not parse"), KeyError("fact"), TypeError("odd record")):
+            with self.subTest(error=error), mock.patch.object(knowledge, "load", side_effect=error):
+                pack = delegate.knowledge_pack(["acme/invoice-exporter"])
+                self.assertEqual(pack, line.format(str(error)))
+                self.assertIn(pack, self.brief())
+
+    def test_items_that_cannot_be_read_for_targets_are_one_line_too(self) -> None:
+        line = "(the ontology could not be read: odd item)"
+        items = {"task:2026-11-01/1": self.ITEM}
+        with mock.patch.object(workstreams, "item_repos", side_effect=AttributeError("odd item")):
+            self.assertEqual(delegate.brief_pack(items), line)
+        with mock.patch.object(delegate, "ledger_item", side_effect=RuntimeError("odd item")):
+            derived = {"task:2026-11-01/1": {**self.ITEM, "derived": {"workstream": {"id": "ws:x"}}}}
+            self.assertEqual(delegate.brief_pack(derived), line)
+        # ... and a command whose item reads oddly still renders its brief, with that line
+        shown = json.dumps({"id": "task:2026-11-01/1", **self.ITEM})
+        with (
+            mock.patch.object(delegate, "ledger", mock.Mock(return_value=completed(stdout=shown))),
+            mock.patch.object(delegate, "pack_targets_of", side_effect=TypeError("odd item")),
+            mock.patch("sys.stdout", io.StringIO()) as out,
+        ):
+            code = delegate.main(["new-work", "--id", "task:2026-11-01/1", "--ask", "a", "--print"])
+        self.assertEqual(code, 0)
+        self.assertIn("\n\n(the ontology could not be read: odd item)\n\nIn every task:", out.getvalue())
+
+    def test_the_whole_section_stays_within_the_pack_budget_opening_included(self) -> None:
+        for number in range(120):
+            self.run_kg("add-entity", f"system/tool-{number}", "--name", f"tool {number} " + "x" * 40)
+            for subject in ("repo/invoice-exporter", "repo/pdf-renderer"):
+                self.run_kg(
+                    "propose",
+                    subject,
+                    "depends_on",
+                    f"system/tool-{number}",
+                    "--source",
+                    f"ledger:{number}",
+                    "--source",
+                    f"report:{number}",
+                )
+        pack = delegate.knowledge_pack(["acme/invoice-exporter", "acme/pdf-renderer"])
+        self.assertTrue(pack.startswith(delegate.PACK_OPENING))
+        self.assertEqual(pack.count("more: kg lookup"), 2)
+        self.assertLessEqual(knowledge_query.estimate_tokens(pack), knowledge_query.DEFAULT_PACK_TOKENS)
 
     def test_the_targets_are_the_repos_then_the_area_then_the_workstreams_area(self) -> None:
         items: dict[str, dict[str, Any]] = {

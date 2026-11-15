@@ -20,10 +20,6 @@ import agent_state
 import knowledge_query
 import knowledge_store
 import workstreams
-from change_log import ChangeLogError
-from journal import JournalError
-from knowledge_model import KnowledgeError
-from knowledge_schema import SchemaError
 
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -229,18 +225,6 @@ PACK_OPENING = (
 )
 
 
-# What reading the knowledge base can fail with (never a reason to refuse a hand-over).
-READ_ERRORS = (
-    KnowledgeError,
-    SchemaError,
-    knowledge_store.StoreError,
-    JournalError,
-    ChangeLogError,
-    OSError,
-    ValueError,
-)
-
-
 def knowledge_enabled() -> bool:
     return os.environ.get(KNOWLEDGE_KEY) == "1"
 
@@ -277,9 +261,9 @@ def pack_targets_of(items: Mapping[str, dict[str, Any]]) -> list[str]:
     return targets
 
 
-def read_pack(targets: list[str]) -> str:
-    """The pack of <targets> from the knowledge base, read-only and without its identifiers: "" if
-    it holds no confirmed fact about any of them."""
+def read_pack(targets: list[str], max_tokens: int) -> str:
+    """The pack of <targets> from the knowledge base (at most about <max_tokens>), read-only and
+    without its identifiers: "" if it holds no confirmed fact about any of them."""
     import knowledge  # noqa: PLC0415  (a big module, and not needed while the key is off)
 
     config_dir = os.environ.get("BOSUN_CONFIG_DIR")
@@ -289,27 +273,40 @@ def read_pack(targets: list[str]) -> str:
     p = knowledge.paths()
     with knowledge_store.locked(p, False):
         kb = knowledge.load(p, identifiers=False)
-    pack = knowledge_query.pack_of(kb, targets, topics=False)
+    pack = knowledge_query.pack_of(kb, targets, max_tokens, topics=False)
     return "\n".join(pack.lines) if pack.facts else ""
+
+
+def unreadable(error: Exception) -> str:
+    """The one line a brief gets when its pack could not be made."""
+    reason = " ".join(str(error).split()) or type(error).__name__
+    return f"(the ontology could not be read: {reason})"
 
 
 def knowledge_pack(targets: list[str]) -> str:
     """The brief's section on what the ontology says about <targets> ("" while the key is off, with no
-    targets or nothing confirmed). It never fails a hand-over: what cannot be read is one line."""
+    targets or nothing confirmed), in all within the pack budget (the opening line is part of it).
+    It never fails a hand-over: whatever goes wrong in reading is one line."""
     if not targets or not knowledge_enabled():
         return ""
+    budget = knowledge_query.DEFAULT_PACK_TOKENS - knowledge_query.estimate_tokens(PACK_OPENING + "\n")
     try:
-        pack = read_pack(targets)
-    except READ_ERRORS as error:
-        return f"(the ontology could not be read: {error})"
+        pack = read_pack(targets, budget)
+    except Exception as error:  # noqa: BLE001  (a pack is a help: no failure of it stops the hand-over)
+        return unreadable(error)
     return f"{PACK_OPENING}\n{pack}" if pack else ""
 
 
 def brief_pack(items: dict[str, dict[str, Any]]) -> str:
-    """The pack section for the items being handed over, "" while the key is off."""
+    """The pack section for the items being handed over, "" while the key is off. It never fails a
+    hand-over either: items that cannot be read for their repos and areas are one line, too."""
     if not knowledge_enabled():
         return ""
-    return knowledge_pack(pack_targets_of(with_workstreams(items)))
+    try:
+        targets = pack_targets_of(with_workstreams(items))
+    except Exception as error:  # noqa: BLE001  (as above)
+        return unreadable(error)
+    return knowledge_pack(targets)
 
 
 def active_delegation(item_id: str) -> dict[str, Any] | None:
