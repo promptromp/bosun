@@ -147,9 +147,7 @@ class State:
         return cls(**{k: data[k] for k in cls.__dataclass_fields__ if k in data})
 
     def save(self, directory: Path) -> None:
-        tmp = directory / (STATE_FILE + ".tmp")
-        tmp.write_text(json.dumps(asdict(self), indent=2, sort_keys=True))
-        tmp.replace(directory / STATE_FILE)
+        replace_text(directory / STATE_FILE, json.dumps(asdict(self), indent=2, sort_keys=True))
 
     def mark(self, events: list[Event], via: str, when: datetime) -> None:
         for event in events:
@@ -184,9 +182,18 @@ def prune(directory: Path, state: State, now: datetime) -> None:
 
 
 def rewrite_queue(directory: Path, events: list[Event]) -> None:
-    tmp = directory / (QUEUE_FILE + ".tmp")
-    tmp.write_text("".join(json.dumps(asdict(e), sort_keys=True) + "\n" for e in events))
-    tmp.replace(directory / QUEUE_FILE)
+    replace_text(
+        directory / QUEUE_FILE, "".join(json.dumps(asdict(e), sort_keys=True) + "\n" for e in events)
+    )
+
+
+def replace_text(path: Path, text: str) -> None:
+    """Write <path> whole through a temporary file beside it and a rename, under the events lock the
+    caller holds: a reader that takes no lock (the hook, the guard, kg reading pasted.jsonl) sees the
+    file before or after, never one truncated or half written."""
+    tmp = path.with_name(path.name + ".tmp")
+    tmp.write_text(text)
+    tmp.replace(path)
 
 
 def before(at: str, cutoff: float) -> bool:
@@ -206,7 +213,7 @@ def note_pasted(state_dir: Path, window: str, text: str) -> None:
         path = directory / PASTED_FILE
         lines = path.read_text().splitlines() if path.exists() else []
         recent = [old for old in lines if _pasted_since(old, now) is not None]
-        path.write_text("\n".join([*recent[-PASTED_KEEP:], line]) + "\n")
+        replace_text(path, "\n".join([*recent[-PASTED_KEEP:], line]) + "\n")
 
 
 def _pasted_since(line: str, now: datetime) -> dict[str, Any] | None:
