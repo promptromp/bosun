@@ -16,11 +16,16 @@ best first (everything Claude Code-specific is read through lib/claude_state.py)
 4. Fallback: a loose reading of the reply's text (or, without a transcript, of the window's last
    lines), only where no structured field exists. Verdicts from it say "pattern fallback".
 
+The login is this Mac's, not one window's: a login check that worked, or a reply the API gave in
+any window, after every window's last login error clears them all (see Worked). `status`, the
+watchdog and the console read every window; `window` reads only its own.
+
 A window can also get nothing but "Credit balance too low" (billing_error: an API key whose
 organization has no credit that covers Claude Code): no-credit. Its login works, so it is not
 gated: as with a usage limit, the check-in loop keeps sending to it, and the watchdog's no-credit
 check alerts. The login check request cannot tell when credit was added (`claude -p` works
-without it), so only a normal reply ends it.
+without it), so only a normal reply ends it, in that window or (credit being the organization's)
+in another one after every window's last credit error.
 
 Usage: login.py window <name> <claude pid> [--after <epoch>] [--wait <seconds>] [--probe] [--pane -]
                          [--dry-run]
@@ -49,7 +54,7 @@ import json
 import os
 import sys
 import time
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Iterable, Iterator, Mapping
 from dataclasses import asdict, dataclass, field
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -179,28 +184,96 @@ def credit_detail(error: ApiError) -> str:
     return f"every reply since {shown(error.since)} is 'credit balance too low' ({error.code})"
 
 
-def transcript_verdict(error: ApiError | None, probe: Probe | None) -> Verdict:
+# The login and the credit are this Mac's, not one window's: a sign that one works, later than the
+# last error of its kind in every window read, clears those windows: for the login, a login check
+# that worked or a reply the API gave in any window; for the credit, only such a reply (`claude -p`,
+# the login check, works without credit). Every window bosun starts uses the same credentials (one
+# ~/.claude, one apiKeyHelper, one environment). A window cleared wrongly shows again with its next
+# prompt, which fails the same way.
+
+
+@dataclass(frozen=True)
+class Worked:
+    """A sign that the login works, or that credit covers Claude Code: when, and what it was."""
+
+    at: datetime
+    how: str  # "a login check at Mon 09:10 worked", "alpha got a reply at Mon 09:12"
+
+
+def probe_worked(probe: Probe | None) -> Worked | None:
+    if probe is None or probe.outcome != claude_state.PROBE_OK:
+        return None
+    return Worked(probe.at, f"a login check at {shown(probe.at)} worked")
+
+
+def latest_answer(transcripts: Mapping[str, Path]) -> Worked | None:
+    """The latest reply the API gave in any of these windows' transcripts."""
+    answers = [(at, name) for name, path in transcripts.items() if (at := claude_state.last_answer_at(path))]
+    if not answers:
+        return None
+    at, name = max(answers, key=lambda answer: answer[0])
+    return Worked(at, f"{name} got a reply at {shown(at)}")
+
+
+def later_than_all(sign: Worked, category: str, errors: Iterable[ApiError | None]) -> bool:
+    """Whether <sign> came after every error of <category> (an error with no time: never)."""
+    times = [error.at for error in errors if error and error.category == category]
+    return all(at is not None and sign.at > at for at in times)
+
+
+def cleared_by(
+    probe: Probe | None, answer: Worked | None, errors: Iterable[ApiError | None]
+) -> dict[str, Worked]:
+    """Per category (auth, credit), the sign that clears the windows' errors of it, if any."""
+    found = list(errors)
+    signs = {claude_state.AUTH: latest(probe_worked(probe), answer), claude_state.CREDIT: answer}
+    return {kind: sign for kind, sign in signs.items() if sign and later_than_all(sign, kind, found)}
+
+
+def latest(*signs: Worked | None) -> Worked | None:
+    found = [sign for sign in signs if sign]
+    return max(found, key=lambda sign: sign.at) if found else None
+
+
+def transcript_verdict(error: ApiError | None, cleared: Mapping[str, Worked] | None = None) -> Verdict:
+    """A window's verdict from its latest error; <cleared>: what clears an error of each category."""
     if error is None:
         return Verdict(OK, "its latest reply is a normal one")
+    sign = (cleared or {}).get(error.category)
     if error.category == claude_state.CREDIT:
+        if sign:
+            return Verdict(OK, f"{sign.how}, after its last 'credit balance too low'")
         return Verdict(NO_CREDIT, credit_detail(error), error.since)
     if error.category != claude_state.AUTH:
         return Verdict(OK, f"its latest reply is a {error.category} error ({error.code}), not a login error")
-    if probe and probe.outcome == claude_state.PROBE_OK and error.at and probe.at > error.at:
-        return Verdict(OK, f"a login check at {shown(probe.at)} worked, after its last login error")
+    if sign:
+        return Verdict(OK, f"{sign.how}, after its last login error")
     return Verdict(NEEDS_LOGIN, error_detail(error), error.since)
 
 
 def window_verdict(transcript: Path | None, probe: Probe | None, pane: str = "") -> Verdict:
-    """Whether the session in a window gets real replies, from its transcript; without one, from the
-    window's last lines (the pattern fallback)."""
+    """Whether the session in a window gets real replies, from its transcript and the last login
+    check; without a transcript, from the window's last lines (the pattern fallback)."""
     if transcript is not None:
-        return transcript_verdict(claude_state.last_api_error(transcript), probe)
+        error = claude_state.last_api_error(transcript)
+        return transcript_verdict(error, cleared_by(probe, None, [error]))
     if pane and claude_state.pane_auth_error(pane):
         return Verdict(
             NEEDS_LOGIN, "no transcript; its last lines read like a login error (pattern fallback)"
         )
     return Verdict(UNKNOWN, "no transcript to read yet")
+
+
+def window_verdicts(transcripts: Mapping[str, Path | None], probe: Probe | None) -> dict[str, Verdict]:
+    """Each window's verdict from its transcript (none: unknown), the last login check and what the
+    other windows show (see Worked)."""
+    read = {name: path for name, path in transcripts.items() if path is not None}
+    errors = {name: claude_state.last_api_error(path) for name, path in read.items()}
+    cleared = cleared_by(probe, latest_answer(read), errors.values())
+    return {
+        name: transcript_verdict(errors[name], cleared) if name in read else window_verdict(None, probe)
+        for name in transcripts
+    }
 
 
 def login_failure(status: AuthStatus, probe: Probe | None) -> Verdict | None:
@@ -323,8 +396,8 @@ def render_status(env: Env, windows: list[tuple[str, str]]) -> str:
     overall = global_verdict(env.auth_status(env.claude_bin), state.last_probe)
     width = max([STATUS_NAME_WIDTH, *(len(name) for name, _ in windows)])
     lines = [f"{'login':<{width}} {overall.state:<12} {overall.detail}"]
-    for name, pid in windows:
-        verdict = window_verdict(window_transcript(env, pid), state.last_probe)
+    verdicts = window_verdicts({name: window_transcript(env, pid) for name, pid in windows}, state.last_probe)
+    for name, verdict in verdicts.items():
         lines.append(f"{name:<{width}} {verdict.state:<12} {verdict.detail}")
     return "\n".join(lines)
 

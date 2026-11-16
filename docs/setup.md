@@ -891,6 +891,11 @@ What happens then:
   (events stay pending) until it works again: a normal reply (run `/login` in any Claude window,
   then talk to it) or a login check that succeeds. After each delivery it waits up to 15 seconds
   for the reply, so a check-in that just failed is logged as such.
+- **One login for every window:** the login is the Mac's, so once a login check works, or any
+  window gets a normal reply, after the last login error of every window, `bosun status`, the
+  watchdog and the console count all the windows as working again, an idle one too, which gets no
+  prompt to show it. (The check-in loop's gate reads only the orchestrator's own replies and the
+  login check.)
 - **Watchdog:** `login-expired` alerts once per outage, for the login and for every Claude window
   (repo sessions too), and alerts again if it comes back after recovering. Like every check it
   alerts only inside the awake window: an outage overnight or on a weekend alerts when the window
@@ -901,7 +906,9 @@ What happens then:
   `no-credit` in `bosun status`, fails `bosun doctor` and alerts through the watchdog's `no-credit`
   check, once per window and row of such replies. Its login works, so check-ins and events still go
   to it, as on a usage limit; the login check request works without credit, so only a normal reply
-  ends it ([With an API key](#with-an-api-key-instead-of-a-login) says why it happens).
+  ends it: its own, or one in any window after the last such reply of every window (the credit is
+  the organization's, and every window bosun starts uses the same key)
+  ([With an API key](#with-an-api-key-instead-of-a-login) says why it happens).
 
 ### With an API key instead of a login
 

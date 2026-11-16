@@ -1087,21 +1087,28 @@ LOGIN_CHECK = "login-expired"
 NO_CREDIT = "no-credit"
 
 
-def window_verdicts(ctx: Context) -> Iterator[tuple[str, login.Verdict]]:
-    """Each Claude window's verdict from its transcript (lib/login.py); a window without one is
-    left out."""
+def window_transcripts(ctx: Context) -> dict[str, Path]:
+    """Each Claude window's transcript; a window without one is left out."""
+    found = {}
     for window in ctx.facts.windows if ctx.facts.session_exists else ():
         entry = ctx.record(window.agent_pid) if window.agent_pid else None
         transcript = claude_state.transcript_of(entry) if entry else None
         if transcript:
-            yield window.name, login.window_verdict(transcript, None)
+            found[window.name] = transcript
+    return found
 
 
-def window_logins(ctx: Context) -> list[str]:
+def window_verdicts(ctx: Context, probe: login.Probe | None) -> dict[str, login.Verdict]:
+    """Each Claude window's verdict (lib/login.py: its transcript, the last login check <probe> and what
+    the other windows show), as `bosun status` and the console have it."""
+    return login.window_verdicts(window_transcripts(ctx), probe)
+
+
+def window_logins(ctx: Context, probe: login.Probe | None) -> list[str]:
     """The Claude windows whose latest replies are all login errors, with since when."""
     return [
         f"{name} (since {login.shown(verdict.since)})"
-        for name, verdict in window_verdicts(ctx)
+        for name, verdict in window_verdicts(ctx, probe).items()
         if verdict.state == login.NEEDS_LOGIN
     ]
 
@@ -1109,10 +1116,9 @@ def window_logins(ctx: Context) -> list[str]:
 def check_login(ctx: Context) -> Result:
     """The login itself (`claude auth status`, the last login check) and every Claude window's
     latest replies. One alert per outage: the key stays the same until everything works again."""
-    overall = login.global_verdict(
-        ctx.auth_status(ctx.config.claude_bin), login.State.load(ctx.config.state_dir).last_probe
-    )
-    windows = window_logins(ctx)
+    probe = login.State.load(ctx.config.state_dir).last_probe
+    overall = login.global_verdict(ctx.auth_status(ctx.config.claude_bin), probe)
+    windows = window_logins(ctx, probe)
     if overall.state != login.NEEDS_LOGIN and not windows:
         return Result(f"Claude Code {overall.detail}; no window answers only with login errors")
     problems = [overall.detail] if overall.state == login.NEEDS_LOGIN else []
@@ -1139,9 +1145,10 @@ def credit_finding(window: str, since: datetime | None) -> Finding:
 def check_no_credit(ctx: Context) -> Result:
     """Every Claude window whose latest replies are all "Credit balance too low", from its transcript.
     One alert per row of such replies: a normal reply in between starts a new one."""
+    verdicts = window_verdicts(ctx, login.State.load(ctx.config.state_dir).last_probe)
     findings = [
         credit_finding(name, verdict.since)
-        for name, verdict in window_verdicts(ctx)
+        for name, verdict in verdicts.items()
         if verdict.state == login.NO_CREDIT
     ]
     return Result("no Claude window gets only 'Credit balance too low'", findings)

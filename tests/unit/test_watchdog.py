@@ -1114,6 +1114,24 @@ class LoginExpiredTest(TranscriptCase):
         )
         self.assertIn("FAIL  login-expired", text)
 
+    def test_a_login_check_that_worked_clears_an_idle_window_and_the_next_outage_alerts(self) -> None:
+        # Overnight both windows got a login error; in the morning a check-in's login check works and
+        # the orchestrator replies, while alpha gets no prompt.
+        self.login_error(ORCH_PID, at(MONDAY, "21:00"))
+        self.login_error(REPO_PID, at(MONDAY, "21:05"))
+        self.assertEqual(len(self.watch(at(TUESDAY, "08:05"), only="login-expired")), 1)
+        worked = login.Probe(at(TUESDAY, "08:10").astimezone(UTC), claude_state.PROBE_OK)
+        login.State(probe=worked.to_json()).save(self.state_dir)
+        self.assertEqual(self.watch(at(TUESDAY, "08:15"), only="login-expired"), [])
+        self.assertNotIn("login-expired:outage", self.state()["alerted"])
+        self.login_error(ORCH_PID, at(TUESDAY, "11:00"))
+        self.assertEqual(len(self.watch(at(TUESDAY, "11:05"), only="login-expired")), 1)
+
+    def test_a_reply_in_another_window_clears_it(self) -> None:
+        self.login_error(REPO_PID, at(MONDAY, "09:00"))
+        self.reply(ORCH_PID, at(MONDAY, "09:30"))
+        self.assertEqual(self.watch(at(MONDAY, "09:35"), only="login-expired"), [])
+
     def test_credit_errors_are_no_login_error(self) -> None:
         self.credit_error(ORCH_PID, at(MONDAY, "09:00"))
         self.assertEqual(self.watch(at(MONDAY, "09:05"), only="login-expired"), [])
@@ -1153,6 +1171,17 @@ class NoCreditTest(TranscriptCase):
         sent = self.watch(at(MONDAY, "11:05"), only="no-credit")
         self.assertEqual(len(sent), 1)
         self.assertIn(f"since {login.shown(at(MONDAY, '11:00'))}", sent[0])
+
+    def test_a_reply_in_another_window_shows_that_credit_is_back(self) -> None:
+        self.credit_error(REPO_PID, at(MONDAY, "09:00"))
+        self.reply(ORCH_PID, at(MONDAY, "09:30"))
+        self.assertEqual(self.watch(at(MONDAY, "09:35"), only="no-credit"), [])
+
+    def test_a_login_check_that_worked_does_not(self) -> None:
+        self.credit_error(REPO_PID, at(MONDAY, "09:00"))
+        worked = login.Probe(at(MONDAY, "09:30").astimezone(UTC), claude_state.PROBE_OK)
+        login.State(probe=worked.to_json()).save(self.state_dir)
+        self.assertEqual(len(self.watch(at(MONDAY, "09:35"), only="no-credit")), 1)
 
     def test_login_errors_are_not_it(self) -> None:
         self.login_error(ORCH_PID, at(MONDAY, "09:00"))

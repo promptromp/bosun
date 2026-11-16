@@ -37,6 +37,7 @@ from claude_state import (  # noqa: E402
 T0 = datetime(2026, 1, 10, 17, 0, tzinfo=UTC)  # a Saturday
 WORKDIR = "/work/invoice-exporter"
 SESSION = "00000000-0000-0000-0000-00000000000a"
+OTHER_SESSION = "00000000-0000-0000-0000-00000000000b"  # a second window's
 
 
 def stamp(minutes: float) -> str:
@@ -553,6 +554,98 @@ class NoCreditTest(WindowCase):
             lines[1],
             r"^orch +no-credit +every reply since .+ is 'credit balance too low' \(billing_error/400\)$",
         )
+
+
+class LastAnswerTest(TmpCase):
+    def test_the_latest_reply_the_api_gave(self) -> None:
+        self.add(prompt(0), reply(1), prompt(30), error_reply(30, "Login expired", **EXPIRED))
+        self.assertEqual(claude_state.last_answer_at(self.transcript), T0 + timedelta(minutes=1))
+
+    def test_claude_codes_own_notices_are_no_answer(self) -> None:
+        notice = reply(5, "No response requested.")
+        notice["message"]["model"] = claude_state.SYNTHETIC_MODEL
+        self.add(prompt(0), reply(1), notice)
+        self.assertEqual(claude_state.last_answer_at(self.transcript), T0 + timedelta(minutes=1))
+
+    def test_none_without_one(self) -> None:
+        self.add(prompt(0), error_reply(0, "Credit balance is too low", **NO_CREDIT))
+        self.assertIsNone(claude_state.last_answer_at(self.transcript))
+
+
+class AcrossWindowsTest(TmpCase):
+    """The login and the credit are the Mac's: what one window shows clears the others."""
+
+    def setUp(self) -> None:
+        super().setUp()
+        self.other = claude_state.transcript_path(WORKDIR, OTHER_SESSION)
+
+    def verdicts(self, probe: login.Probe | None = None) -> dict[str, login.Verdict]:
+        return login.window_verdicts({"orch": self.transcript, "alpha": self.other, "beta": None}, probe)
+
+    def login_errors_overnight(self) -> None:
+        self.add(prompt(0), reply(1), prompt(60), error_reply(60, "Login expired", **EXPIRED))
+        write(self.other, prompt(0), reply(2), prompt(70), error_reply(70, "Login expired", **EXPIRED))
+
+    def test_a_login_check_that_worked_clears_an_idle_window_too(self) -> None:
+        self.login_errors_overnight()
+        worked = login.Probe(T0 + timedelta(hours=10), claude_state.PROBE_OK)
+        verdicts = self.verdicts(worked)
+        self.assertEqual([v.state for v in verdicts.values()], ["ok", "ok", "unknown"])
+        self.assertEqual(
+            verdicts["alpha"].detail,
+            f"a login check at {login.shown(worked.at)} worked, after its last login error",
+        )
+
+    def test_a_reply_in_another_window_clears_it(self) -> None:
+        self.login_errors_overnight()
+        self.add(prompt(600, "carry on"), reply(601))
+        alpha = self.verdicts()["alpha"]
+        self.assertEqual(alpha.state, "ok")
+        reply_at = login.shown(T0 + timedelta(minutes=601))
+        self.assertEqual(alpha.detail, f"orch got a reply at {reply_at}, after its last login error")
+
+    def test_a_later_login_error_anywhere_keeps_them_all(self) -> None:
+        self.login_errors_overnight()
+        self.add(prompt(600, "carry on"), reply(601))
+        self.add(prompt(620), error_reply(620, "Login expired", **EXPIRED))
+        worked = login.Probe(T0 + timedelta(minutes=610), claude_state.PROBE_OK)
+        verdicts = self.verdicts(worked)
+        self.assertEqual((verdicts["orch"].state, verdicts["alpha"].state), ("needs-login", "needs-login"))
+
+    def test_a_reply_in_another_window_shows_that_credit_is_back(self) -> None:
+        self.add(prompt(0), reply(1), prompt(60), error_reply(60, "Credit balance is too low", **NO_CREDIT))
+        write(self.other, prompt(90), reply(91))
+        orch = self.verdicts()["orch"]
+        self.assertEqual(orch.state, "ok")
+        reply_at = login.shown(T0 + timedelta(minutes=91))
+        expected = f"alpha got a reply at {reply_at}, after its last 'credit balance too low'"
+        self.assertEqual(orch.detail, expected)
+
+    def test_a_login_check_that_worked_says_nothing_of_credit(self) -> None:
+        self.add(prompt(0), reply(1), prompt(60), error_reply(60, "Credit balance is too low", **NO_CREDIT))
+        write(self.other, prompt(0), reply(2))
+        worked = login.Probe(T0 + timedelta(hours=10), claude_state.PROBE_OK)
+        self.assertEqual(self.verdicts(worked)["orch"].state, "no-credit")
+
+    def test_a_notice_in_another_window_is_no_reply(self) -> None:
+        self.login_errors_overnight()
+        notice = reply(600, "No response requested.")
+        notice["message"]["model"] = claude_state.SYNTHETIC_MODEL
+        write(self.other, notice)
+        self.assertEqual(self.verdicts()["orch"].state, "needs-login")
+
+    def test_status_reads_every_window(self) -> None:
+        self.login_errors_overnight()
+        self.add(prompt(600, "carry on"), reply(601))
+        sessions = {"101": SESSION, "102": OTHER_SESSION}
+        env = login.Env(
+            self.root / "state",
+            "claude",
+            auth_status=lambda _bin: claude_state.AuthStatus(True, "claude.ai"),
+            record=lambda pid: {"cwd": WORKDIR, "sessionId": sessions[str(pid)]},
+        )
+        lines = login.render_status(env, [("orch", "101"), ("alpha", "102")]).splitlines()
+        self.assertRegex(lines[2], r"^alpha +ok +orch got a reply at ")
 
 
 class GlobalTest(unittest.TestCase):

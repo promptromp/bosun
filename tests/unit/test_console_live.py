@@ -219,6 +219,22 @@ class CollectTestCase(unittest.TestCase):
         self.assertEqual(list(facts.window_logins), ["orch"])
         self.assertEqual(facts.window_logins["orch"].state, login.OK)
 
+    def test_a_reply_in_another_window_clears_a_login_error(self) -> None:
+        def entry(at: str, **error: Any) -> str:
+            flagged = {"isApiErrorMessage": True, **error} if error else {}
+            return json.dumps({"type": "assistant", "timestamp": at, "message": {"model": "m"}, **flagged})
+
+        orch, exporter = self.state / "orch.jsonl", self.state / "exporter.jsonl"
+        orch.write_text(entry("2026-01-05T09:30:00Z") + "\n")
+        exporter.write_text(entry("2026-01-05T09:00:00Z", error="authentication_failed") + "\n")
+        windows = [
+            {**w, "agent": {**w["agent"], "transcript": str(path)}}
+            for w, path in ((WINDOWS[0], orch), (WINDOWS[1], exporter))
+        ]
+        facts = Collector(self.settings, FakeCommands({"sessions --json": json.dumps(windows)})).collect()
+        self.assertEqual(facts.window_logins["exporter"].state, login.OK)
+        self.assertIn("orch got a reply at", facts.window_logins["exporter"].detail)
+
 
 class RunCommandTestCase(unittest.TestCase):
     def test_output_and_failures(self) -> None:

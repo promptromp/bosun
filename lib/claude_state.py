@@ -1281,6 +1281,19 @@ def last_reply_at(transcript: Path) -> datetime | None:
     return next((entry_time(entry) for entry in replies_last_first(transcript)), None)
 
 
+SYNTHETIC_MODEL = "<synthetic>"  # Claude Code's own notices and error replies: no request made them
+
+
+def answered(entry: dict[str, Any]) -> bool:
+    """A reply the API gave: no error, and none of Claude Code's own <synthetic> notices."""
+    return reply_error(entry) is None and (entry.get("message") or {}).get("model") != SYNTHETIC_MODEL
+
+
+def last_answer_at(transcript: Path) -> datetime | None:
+    """When the API last answered the session (answered): the login worked then, and credit covered it."""
+    return next((entry_time(entry) for entry in replies_last_first(transcript) if answered(entry)), None)
+
+
 @dataclass(frozen=True)
 class AuthStatus:
     logged_in: bool | None  # None: no answer that could be read

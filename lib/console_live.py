@@ -174,13 +174,14 @@ def watchdog_status(settings: Settings, facts: dict[str, Any], now: datetime | N
 
 
 def window_logins(windows: list[dict[str, Any]], state: login.State) -> dict[str, login.Verdict]:
-    """Each Claude window's login verdict from its transcript (none without one: no pane is read)."""
-    found = {}
+    """Each Claude window's login verdict from its transcript, the last login check and the other
+    windows (lib/login.py's window_verdicts; none without a transcript: no pane is read)."""
+    transcripts: dict[str, Path | None] = {}
     for window in windows:
         transcript = (window.get("agent") or {}).get("transcript")
         if transcript:
-            found[str(window["name"])] = login.window_verdict(Path(transcript), state.last_probe)
-    return found
+            transcripts[str(window["name"])] = Path(transcript)
+    return login.window_verdicts(transcripts, state.last_probe)
 
 
 def morning_log(settings: Settings) -> Path:
