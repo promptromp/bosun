@@ -235,7 +235,15 @@ A Claude Code login can expire or be revoked at any time. Every window then answ
   logged out, the last check failed, or a running window gets only login errors.
 
 To fix it, run `/login` in any Claude window, then talk to it, or run `claude` in a terminal. bosun picks up that
-the login works again from the next normal reply, or from its next login check.
+the login works again from the next normal reply, or from its next login check. The login is the Mac's, so that sign
+counts for every window.
+
+**No credit.** A window whose latest replies are all "Credit balance too low" (`billing_error`) is `no-credit` in
+`bosun status`, fails `bosun doctor`, and alerts through the watchdog's `no-credit` check, once per window and row of
+such replies. Its login works, so check-ins and events still go to it, as on a usage limit. The login check request
+works without credit, so only a normal reply ends it: its own, or one in any window after the last such reply of
+every window, since the credit is the organization's and every window bosun starts uses the same key.
+[With an API key](#with-an-api-key-instead-of-a-login) says why it happens, and what to do.
 
 <details class="note" markdown>
 <summary>How bosun tells that a login is gone</summary>
@@ -245,8 +253,8 @@ It reads, best signal first (`lib/login.py`; the Claude Code formats are in `lib
 1. **The transcript's error fields.** A failed request is written as a synthetic reply flagged
    `isApiErrorMessage`, with `error` (`authentication_failed`, `rate_limit`, `server_error`, ...), often the HTTP
    status (`apiErrorStatus`: 401, 429, 529) and a finer `apiError` (`no_response`, `usage_limit_reached`). These
-   map to auth, rate-limit, overloaded, network or other; only auth counts. Exact and free, but known only once a
-   prompt has failed.
+   map to auth, usage-limit, credit (`billing_error`: no credit for an API key), rate-limit, overloaded, network or
+   other; only auth counts as a login error. Exact and free, but known only once a prompt has failed.
 2. **`claude auth status --json`** (`loggedIn`, `authMethod`): free, but it reads the stored credentials only and
    makes no request (it answers the same with the network cut off), so a token the server revoked still shows
    `loggedIn: true`. It does catch a missing login (`loggedIn: false`, exit 1).
@@ -261,8 +269,18 @@ It reads, best signal first (`lib/login.py`; the Claude Code formats are in `lib
    last lines. Verdicts from it say "pattern fallback".
 
 After each check-in or event delivery, the loop waits up to 15 seconds for the reply, so a delivery that just
-failed is logged as such. An outage overnight or on a weekend alerts when your hours begin, together with the
-morning run's own failure.
+failed is logged as such. While it holds the orchestrator's check-ins and events back for a login, the watchdog's
+`events` check does not call the dispatcher stalled. An outage overnight or on a weekend alerts when your hours
+begin, together with the morning run's own failure.
+
+**One login for every window.** The login is the Mac's, so once a login check works, or any window gets a normal
+reply, after the last login error of every window, `bosun status`, the watchdog and the console count all the windows
+as working again, an idle one too, which gets no prompt to show it, and the check-in loop lets the orchestrator go
+(while it holds it back, it reads the other windows too). A window that fails again after such a sign starts a new
+row: its "since" is its first error after the sign, so the watchdog's `no-credit` alerts again. This assumes that
+every window bosun starts uses the same credentials, as it does unless a repository's own `.claude/settings.json`
+sets an API key in its `env` or an `apiKeyHelper`: then that window's replies say nothing about the others' login or
+credit, and can clear them wrongly until their next prompt fails again.
 
 </details>
 
@@ -284,9 +302,18 @@ cost less.
 
 The key's organization needs purchased credit. The API credits a subscription adds to the Console (the
 "Promotional credits" of a Max, Ultra or Team plan) cover the Claude API and the Agent SDK but not Claude
-Code, so the windows reply "Credit balance too low · Add funds" while `claude -p` and the API still work. Add
-funds to the organization, or sign in with a login instead
-([which credits cover what](https://platform.claude.com/docs/en/about-claude/api-credits-for-subscribers)).
+Code, so the windows reply "Credit balance too low · Add funds" while `claude -p` and the API still work. The
+watchdog's `no-credit` check alerts on such a window, and `bosun status` and `bosun doctor` name it. Two ways out:
+
+1. **Add credit** in the Console's billing
+   ([which credits cover what](https://platform.claude.com/docs/en/about-claude/api-credits-for-subscribers)), then
+   tell the window to carry on (`bosun send <window> ...`).
+2. **Or use your subscription.** An API key (`ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN` or `apiKeyHelper`)
+   outranks a subscription login
+   ([authentication precedence](https://code.claude.com/docs/en/authentication#authentication-precedence)), and a
+   running window keeps the key it started with, so `/login` alone changes nothing. Remove the API key
+   (`ANTHROPIC_API_KEY` in your shell profile, or `apiKeyHelper` in `~/.claude/settings.json`), restart the window
+   (`bosun refresh <window>`), then `/login` in it.
 
 ### AWS SSO
 

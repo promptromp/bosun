@@ -39,8 +39,11 @@
 #
 # When the orchestrator answers only with login errors (an expired or revoked Claude Code login),
 # it logs "<window> needs /login" once and sends it no check-ins or events until it works again: a
-# normal reply (after you run /login and talk to it), or a login check request that succeeds. The
-# watchdog's login-expired check alerts you.
+# normal reply (after you run /login and talk to it, there or in any other Claude window: the login
+# is the Mac's), or a login check request that succeeds. The
+# watchdog's login-expired check alerts you. One whose every reply is "Credit balance too low"
+# (no credit for its API key) still gets them, as on a usage limit; the watchdog's no-credit check
+# alerts you.
 set -uo pipefail
 source "$(dirname "$0")/../lib/common.sh"
 LOG_TO_FILE=0 # it puts what it says in its own day's file, checkin_log (log() in lib/common.sh)
@@ -200,16 +203,45 @@ deliver_checkin() { # <window_id> <agent_pid>
 
 # Whether <window>'s Claude still gets real replies, not only login errors (lib/login.py: its
 # transcript, else its last lines), logging when that changes. Options go to `login.py window`.
+# Only needs-login holds it back (no-credit does not); the verdict's first word decides, never
+# login.py's exit status. No verdict (login.py failed) never counts as working: a window held back
+# stays held, any other goes on as for unknown.
 login_ok() { # <window> <window_id> <agent_pid> [--probe | --after <epoch> --wait <seconds>]
-  local window="$1" window_id="$2" verdict
+  local window="$1" window_id="$2" verdict option others=()
   shift 2
+  while IFS= read -r option; do others+=("$option"); done < <(login_others "$window")
   verdict="$(tmux_cmd capture-pane -p -t "$window_id" 2>/dev/null |
-    claude_login window "$window" "$@" --pane - ${LOGIN_DRY_RUN[@]+"${LOGIN_DRY_RUN[@]}"})"
+    claude_login window "$window" "$@" --pane - ${LOGIN_DRY_RUN[@]+"${LOGIN_DRY_RUN[@]}"} ${others[@]+"${others[@]}"})"
   case "$verdict" in
     "needs-login new "*) log "$window needs /login: ${verdict#needs-login new }; check-ins and events to it pause until it works again" ;;
     "ok recovered "*) log "$window works again (${verdict#ok recovered }); check-ins and events resume" ;;
+    "no-credit recovered "*) log "$window's login works again, but it has no credit (${verdict#no-credit recovered }); check-ins and events resume" ;;
   esac
-  [ "${verdict%% *}" != "needs-login" ]
+  case "${verdict%% *}" in
+    ok | no-credit | unknown) return 0 ;;
+    needs-login) return 1 ;;
+  esac
+  if login_gated "$window"; then
+    log "$window: no verdict from login.py; it stays held back for its login"
+    return 1
+  fi
+  log "$window: no verdict from login.py; going on as for an unknown state"
+  return 0
+}
+
+# Whether login.json holds <window> back for its login.
+login_gated() { grep -qF "\"$1\"" "$BOSUN_STATE_DIR/login.json" 2>/dev/null; }
+
+# The other Claude windows, as `login.py window` options (--also <name>=<pid>), while <window> is held
+# back for its login (login.json names it): a reply in any of them, or a login check that worked,
+# after every window's last login error lets it go, as the watchdog reads them. Only then: listing
+# them costs a process or two per window, every tick.
+login_others() { # <window>
+  local name pid
+  login_gated "$1" || return 0
+  window_agent_pids | while IFS=$'\t' read -r name pid; do
+    if [ -n "$pid" ] && [ "$name" != "$1" ]; then printf -- '--also\n%s=%s\n' "$name" "$pid"; fi
+  done
 }
 
 # Push pending events to the orchestrator (with BOSUN_EVENTS_ENABLED=1), unless it only gets

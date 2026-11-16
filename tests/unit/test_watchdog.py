@@ -20,6 +20,7 @@ from typing import Any
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "lib"))
 import app_release
 import claude_state
+import events
 import login
 import quit_state
 import signals
@@ -1016,8 +1017,8 @@ class InputsTest(unittest.TestCase):
         self.assertIn("unknown check", err.getvalue())
 
 
-class LoginExpiredTest(WatchdogCase):
-    """An expired or revoked Claude Code login (fictional transcripts)."""
+class TranscriptCase(WatchdogCase):
+    """Windows whose Claude has a transcript (fictional ones), each with a normal reply first."""
 
     def setUp(self) -> None:
         super().setUp()
@@ -1047,6 +1048,16 @@ class LoginExpiredTest(WatchdogCase):
         message = {"model": "<synthetic>", "content": [{"type": "text", "text": "Login expired"}]}
         entry = {"type": "assistant", "timestamp": iso(moment), "isApiErrorMessage": True, "message": message}
         self.add(pid, {**entry, "error": "authentication_failed"})
+
+    def credit_error(self, pid: int, moment: datetime) -> None:
+        """Claude Code 2.1.308's reply to every prompt while its API key's organization has no credit."""
+        message = {"model": "<synthetic>", "content": [{"type": "text", "text": "Credit balance is too low"}]}
+        entry = {"type": "assistant", "timestamp": iso(moment), "isApiErrorMessage": True, "message": message}
+        self.add(pid, {**entry, "error": "billing_error", "apiErrorStatus": 400})
+
+
+class LoginExpiredTest(TranscriptCase):
+    """An expired or revoked Claude Code login."""
 
     def test_healthy_windows_do_not_alert(self) -> None:
         self.assertEqual(self.runs(at(MONDAY, "10:00"), 3, only="login-expired"), [])
@@ -1103,6 +1114,129 @@ class LoginExpiredTest(WatchdogCase):
             self.inputs(at(MONDAY, "09:05")), watchdog.select_checks("login-expired")
         )
         self.assertIn("FAIL  login-expired", text)
+
+    def test_a_login_check_that_worked_clears_an_idle_window_and_the_next_outage_alerts(self) -> None:
+        # Overnight both windows got a login error; in the morning a check-in's login check works and
+        # the orchestrator replies, while alpha gets no prompt.
+        self.login_error(ORCH_PID, at(MONDAY, "21:00"))
+        self.login_error(REPO_PID, at(MONDAY, "21:05"))
+        self.assertEqual(len(self.watch(at(TUESDAY, "08:05"), only="login-expired")), 1)
+        worked = login.Probe(at(TUESDAY, "08:10").astimezone(UTC), claude_state.PROBE_OK)
+        login.State(probe=worked.to_json()).save(self.state_dir)
+        self.assertEqual(self.watch(at(TUESDAY, "08:15"), only="login-expired"), [])
+        self.assertNotIn("login-expired:outage", self.state()["alerted"])
+        self.login_error(ORCH_PID, at(TUESDAY, "11:00"))
+        self.assertEqual(len(self.watch(at(TUESDAY, "11:05"), only="login-expired")), 1)
+
+    def test_a_reply_in_another_window_clears_it(self) -> None:
+        self.login_error(REPO_PID, at(MONDAY, "09:00"))
+        self.reply(ORCH_PID, at(MONDAY, "09:30"))
+        self.assertEqual(self.watch(at(MONDAY, "09:35"), only="login-expired"), [])
+
+    def test_credit_errors_are_no_login_error(self) -> None:
+        self.credit_error(ORCH_PID, at(MONDAY, "09:00"))
+        self.assertEqual(self.watch(at(MONDAY, "09:05"), only="login-expired"), [])
+
+
+class NoCreditTest(TranscriptCase):
+    """A window whose every reply is "Credit balance too low"."""
+
+    def test_healthy_windows_do_not_alert(self) -> None:
+        self.assertEqual(self.runs(at(MONDAY, "10:00"), 3, only="no-credit"), [])
+
+    def test_it_alerts_once_per_row_naming_the_window_and_what_to_do(self) -> None:
+        self.credit_error(ORCH_PID, at(MONDAY, "09:00"))
+        sent = self.watch(at(MONDAY, "09:05"), only="no-credit")
+        self.assertEqual(len(sent), 1)
+        since = login.shown(at(MONDAY, "09:00"))
+        self.assertIn(f"orch: every prompt gets 'Credit balance too low' since {since}", sent[0])
+        self.assertIn(
+            "Add credit in the Console's billing, then tell the window to carry on (bosun send orch ...); or "
+            "use your subscription: remove the API key (ANTHROPIC_API_KEY in your shell profile, or "
+            "apiKeyHelper in ~/.claude/settings.json), restart the window (bosun refresh orch), then /login "
+            "in it.",
+            sent[0],
+        )
+        self.assertIn("bosun send orch", sent[0])
+        self.credit_error(ORCH_PID, at(MONDAY, "10:00"))
+        self.assertEqual(self.runs(at(MONDAY, "10:05"), 6, only="no-credit"), [])
+
+    def test_the_finding_names_its_window(self) -> None:
+        self.credit_error(REPO_PID, at(MONDAY, "09:00"))
+        result = watchdog.check_no_credit(self.inputs(at(MONDAY, "09:05")).context(watchdog.State()))
+        self.assertEqual([f.window for f in result.findings], ["alpha"])
+        self.assertTrue(result.findings[0].key.startswith("no-credit:alpha:"))
+
+    def test_a_normal_reply_ends_it_and_a_new_row_alerts_again(self) -> None:
+        self.credit_error(ORCH_PID, at(MONDAY, "09:00"))
+        self.watch(at(MONDAY, "09:05"), only="no-credit")
+        self.reply(ORCH_PID, at(MONDAY, "09:30"))
+        self.assertEqual(self.watch(at(MONDAY, "09:35"), only="no-credit"), [])
+        self.credit_error(ORCH_PID, at(MONDAY, "11:00"))
+        sent = self.watch(at(MONDAY, "11:05"), only="no-credit")
+        self.assertEqual(len(sent), 1)
+        self.assertIn(f"since {login.shown(at(MONDAY, '11:00'))}", sent[0])
+
+    def test_a_reply_in_another_window_shows_that_credit_is_back(self) -> None:
+        self.credit_error(REPO_PID, at(MONDAY, "09:00"))
+        self.reply(ORCH_PID, at(MONDAY, "09:30"))
+        self.assertEqual(self.watch(at(MONDAY, "09:35"), only="no-credit"), [])
+
+    def test_a_login_check_that_worked_does_not(self) -> None:
+        self.credit_error(REPO_PID, at(MONDAY, "09:00"))
+        worked = login.Probe(at(MONDAY, "09:30").astimezone(UTC), claude_state.PROBE_OK)
+        login.State(probe=worked.to_json()).save(self.state_dir)
+        self.assertEqual(len(self.watch(at(MONDAY, "09:35"), only="no-credit")), 1)
+
+    def test_credit_back_then_gone_again_alerts_again_from_its_new_first_error(self) -> None:
+        self.credit_error(REPO_PID, at(MONDAY, "09:00"))
+        self.assertEqual(len(self.watch(at(MONDAY, "09:05"), only="no-credit")), 1)
+        self.reply(ORCH_PID, at(MONDAY, "09:30"))  # credit was added: another window works
+        self.assertEqual(self.watch(at(MONDAY, "09:35"), only="no-credit"), [])
+        self.credit_error(REPO_PID, at(MONDAY, "11:00"))  # and it ran out again
+        sent = self.watch(at(MONDAY, "11:05"), only="no-credit")
+        self.assertEqual(len(sent), 1)
+        self.assertIn(
+            f"alpha: every prompt gets 'Credit balance too low' since {login.shown(at(MONDAY, '11:00'))}",
+            sent[0],
+        )
+
+    def test_login_errors_are_not_it(self) -> None:
+        self.login_error(ORCH_PID, at(MONDAY, "09:00"))
+        self.assertEqual(self.watch(at(MONDAY, "09:05"), only="no-credit"), [])
+
+    def test_status_shows_it(self) -> None:
+        self.credit_error(ORCH_PID, at(MONDAY, "09:00"))
+        text = watchdog.render_status(self.inputs(at(MONDAY, "09:05")), watchdog.select_checks("no-credit"))
+        self.assertIn("FAIL  no-credit        orch: every prompt gets 'Credit balance too low'", text)
+
+
+class EventsHeldTest(TranscriptCase):
+    """The events check while the check-in loop holds events back for the orchestrator's login."""
+
+    def setUp(self) -> None:
+        super().setUp()
+        self.config = replace(self.config, events_enabled=True, events_interval_seconds=30)
+        directory = events.events_dir(self.state_dir)
+        directory.mkdir(parents=True)
+        events.State(last_tick=iso(at(MONDAY, "09:00"))).save(directory)
+        self.login_error(ORCH_PID, at(MONDAY, "09:01"))
+        login.State(gated={"orch": iso(at(MONDAY, "09:01"))}).save(self.state_dir)
+
+    def check(self, now: datetime) -> watchdog.Result:
+        return watchdog.check_events(self.inputs(now).context(watchdog.State()))
+
+    def test_no_stall_while_the_orchestrator_needs_a_login(self) -> None:
+        result = self.check(at(MONDAY, "09:40"))
+        self.assertEqual(result.findings, [])
+        self.assertIn("holds events back while orch needs /login (since Mon 09:01", result.note)
+
+    def test_a_gate_held_past_a_reply_in_another_window_is_a_stall(self) -> None:
+        # The loop lets the gate go on the same signs; one that has not runs older code.
+        self.reply(REPO_PID, at(MONDAY, "09:10"))
+        [finding] = self.check(at(MONDAY, "09:40")).findings
+        self.assertTrue(finding.key.startswith("events:stalled:"))
+        self.assertIn("bosun refresh checkin", finding.message)
 
 
 if __name__ == "__main__":

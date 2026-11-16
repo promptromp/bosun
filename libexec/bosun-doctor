@@ -518,8 +518,15 @@ check_orphans() {
 # made here: `claude auth status` only sees stored credentials; the morning's ensure_claude_login
 # step makes a real one.
 NEEDS_LOGIN="needs-login" # lib/login.py's state for a window that gets only login errors
+NO_CREDIT="no-credit"     # ... and for one whose every reply is "Credit balance too low"
+no_credit_fix() {         # <window>: what to do, as the watchdog's no-credit check says it
+  printf '%s' "its API key's organization has no credit for Claude Code: add credit in the Console's billing," \
+    " then tell it to carry on (bosun send $1 ...); or use your subscription: remove the API key" \
+    " (ANTHROPIC_API_KEY in your shell profile, or apiKeyHelper in ~/.claude/settings.json)," \
+    " restart the window (bosun refresh $1), then /login in it"
+}
 check_claude_login() {
-  local verdict line
+  local verdict name state detail
   if verdict="$(claude_login global)"; then
     ok "Claude Code login: $verdict"
   elif [ $? -eq 1 ]; then
@@ -528,9 +535,12 @@ check_claude_login() {
     warn "Claude Code login unknown: $verdict"
   fi
   session_exists || return 0
-  while IFS= read -r line; do
-    fail "window $(sed -E 's/ +/ /g' <<<"$line"); run /login there"
-  done < <(window_agent_pids | claude_login status | tail -n +2 | grep -F " $NEEDS_LOGIN ")
+  while read -r name state detail; do
+    case "$state" in
+      "$NEEDS_LOGIN") fail "window $name $state $detail; run /login there" ;;
+      "$NO_CREDIT") fail "window $name $state $detail; $(no_credit_fix "$name")" ;;
+    esac
+  done < <(window_agent_pids | claude_login status | tail -n +2)
   return 0
 }
 

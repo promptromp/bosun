@@ -479,6 +479,8 @@ class Context:
     alive: Callable[[int], bool] = pid_alive
     auth_status: Callable[[str], claude_state.AuthStatus] = claude_state.auth_status
     morning_run: MorningRun | None = field(init=False)
+    # Each Claude window's login verdict, read once a run by the first check that asks (window_verdicts).
+    login_verdicts: dict[str, login.Verdict] | None = field(default=None, init=False)
 
     def __post_init__(self) -> None:
         self.morning_run = last_real_run(self.morning_log)
@@ -1004,7 +1006,22 @@ def check_events(ctx: Context) -> Result:
         return Result(findings=[Finding(f"events:failed:{ctx.today}", message)])
     if not (ctx.facts.session_exists and ctx.facts.checkin_loop):
         return Result("the check-in loop is not running (see checkin-missing)")
-    return events_stalled(ctx, state)
+    held = events_held(ctx)
+    return Result(held) if held else events_stalled(ctx, state)
+
+
+def events_held(ctx: Context) -> str:
+    """Why the check-in loop runs no dispatcher on purpose, or "": while the orchestrator needs a login
+    (the gate the loop itself keeps in login.json) it holds events back, and its last tick ages. Only
+    while this run's own verdict agrees (or has none: no transcript): the loop lets the gate go on the
+    same signs, so a gate held past them is a loop running older code, which the stall's fix restarts."""
+    since = login.State.load(ctx.config.state_dir).gated.get(ctx.config.orchestrator)
+    own = window_verdicts(ctx).get(ctx.config.orchestrator)
+    if since is None or (own is not None and own.state != login.NEEDS_LOGIN):
+        return ""
+    when = login.shown(login.parse_stamp(since))
+    who = ctx.config.orchestrator
+    return f"the check-in loop holds events back while {who} needs /login (since {when}; see login-expired)"
 
 
 # The Slack watcher has stalled when no run started for this many of its intervals (at least
@@ -1081,26 +1098,46 @@ def check_slack_watch(ctx: Context) -> Result:
 
 # An expired or revoked Claude Code login: every prompt gets an error reply and nothing else.
 LOGIN_CHECK = "login-expired"
+# An API key whose organization has no credit that covers Claude Code: every prompt gets "Credit
+# balance too low" (lib/login.py's no-credit). Not spend-limit's probe: the login check request works
+# without credit, so it cannot tell when credit was added. A new row of such replies alerts again.
+NO_CREDIT = "no-credit"
+
+
+def window_transcripts(ctx: Context) -> dict[str, Path]:
+    """Each Claude window's transcript; a window without one is left out."""
+    found = {}
+    for window in ctx.facts.windows if ctx.facts.session_exists else ():
+        entry = ctx.record(window.agent_pid) if window.agent_pid else None
+        transcript = claude_state.transcript_of(entry) if entry else None
+        if transcript:
+            found[window.name] = transcript
+    return found
+
+
+def window_verdicts(ctx: Context) -> dict[str, login.Verdict]:
+    """Each Claude window's verdict (lib/login.py: its transcript, the last login check and what the other
+    windows show), as `bosun status`, the console and the check-in loop have it; read once a run."""
+    if ctx.login_verdicts is None:
+        probe = login.State.load(ctx.config.state_dir).last_probe
+        ctx.login_verdicts = login.window_verdicts(window_transcripts(ctx), probe)
+    return ctx.login_verdicts
 
 
 def window_logins(ctx: Context) -> list[str]:
     """The Claude windows whose latest replies are all login errors, with since when."""
-    found = []
-    for window in ctx.facts.windows if ctx.facts.session_exists else ():
-        entry = ctx.record(window.agent_pid) if window.agent_pid else None
-        transcript = claude_state.transcript_of(entry) if entry else None
-        verdict = login.window_verdict(transcript, None) if transcript else None
-        if verdict and verdict.state == login.NEEDS_LOGIN:
-            found.append(f"{window.name} (since {login.shown(verdict.since)})")
-    return found
+    return [
+        f"{name} (since {login.shown(verdict.since)})"
+        for name, verdict in window_verdicts(ctx).items()
+        if verdict.state == login.NEEDS_LOGIN
+    ]
 
 
 def check_login(ctx: Context) -> Result:
     """The login itself (`claude auth status`, the last login check) and every Claude window's
     latest replies. One alert per outage: the key stays the same until everything works again."""
-    overall = login.global_verdict(
-        ctx.auth_status(ctx.config.claude_bin), login.State.load(ctx.config.state_dir).last_probe
-    )
+    probe = login.State.load(ctx.config.state_dir).last_probe
+    overall = login.global_verdict(ctx.auth_status(ctx.config.claude_bin), probe)
     windows = window_logins(ctx)
     if overall.state != login.NEEDS_LOGIN and not windows:
         return Result(f"Claude Code {overall.detail}; no window answers only with login errors")
@@ -1112,6 +1149,30 @@ def check_login(ctx: Context) -> Result:
         "attach) or claude auth login; check-ins pause until the orchestrator works again."
     )
     return Result(findings=[Finding(f"{LOGIN_CHECK}:outage", message)])
+
+
+def credit_finding(window: str, since: datetime | None) -> Finding:
+    message = (
+        f"{window}: every prompt gets 'Credit balance too low' since {login.shown(since)}: the API key's "
+        "organization has no credit that covers Claude Code (a subscription's promotional credits do "
+        f"not). Add credit in the Console's billing, then tell the window to carry on (bosun send {window} "
+        "...); or use your subscription: remove the API key (ANTHROPIC_API_KEY in your shell profile, or "
+        f"apiKeyHelper in ~/.claude/settings.json), restart the window (bosun refresh {window}), then /login "
+        "in it."
+    )
+    row = f"{naive(since):%Y-%m-%dT%H:%M}" if since else "?"
+    return Finding(f"{NO_CREDIT}:{window}:{row}", message, window=window)
+
+
+def check_no_credit(ctx: Context) -> Result:
+    """Every Claude window whose latest replies are all "Credit balance too low", from its transcript.
+    One alert per row of such replies: a normal reply in between starts a new one."""
+    findings = [
+        credit_finding(name, verdict.since)
+        for name, verdict in window_verdicts(ctx).items()
+        if verdict.state == login.NO_CREDIT
+    ]
+    return Result("no Claude window gets only 'Credit balance too low'", findings)
 
 
 # A background command (a Bash tool call run in the background) keeps a Claude in "shell" once its
@@ -1530,6 +1591,13 @@ CHECKS: tuple[Check, ...] = (
         "with login errors; once per outage",
         check_login,
         rearms=True,
+    ),
+    Check(
+        NO_CREDIT,
+        "error",
+        "every prompt in a Claude window gets 'Credit balance too low' (an API key whose organization "
+        "has no credit that covers Claude Code); once per window and row of such replies",
+        check_no_credit,
     ),
     Check(
         "update-stuck",

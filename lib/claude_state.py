@@ -19,9 +19,9 @@ None of these are public APIs. If a Claude Code update changes them, this is the
   index, and one note file per memory)
 - failed requests (read by lib/login.py): a synthetic `assistant` entry with isApiErrorMessage,
   `error` (the Agent SDK's assistant-message error: authentication_failed, rate_limit,
-  server_error, ...), sometimes `apiErrorStatus` (HTTP status) and `apiError` (a finer code such as
-  no_response); `claude -p --output-format stream-json` reports the same `error` on its assistant
-  message and `is_error` / `api_error_status` on its result
+  billing_error, server_error, ...), sometimes `apiErrorStatus` (HTTP status) and `apiError` (a
+  finer code such as no_response); `claude -p --output-format stream-json` reports the same `error`
+  on its assistant message and `is_error` / `api_error_status` on its result
 - `claude auth status --json`: `loggedIn` and `authMethod`, from the stored credentials only (it
   makes no request, so a token the server revoked still shows as logged in)
 - ~/.claude/plugins/installed_plugins.json (`plugins`: per plugin, its installs and `installPath`)
@@ -1082,6 +1082,11 @@ AUTH = "auth"
 # resets ("You've hit your individual spend limit", error rate_limit, apiError usage_limit_reached,
 # HTTP 429 on 2.1.30x). Not a short rate limit, so it is its own category.
 USAGE_LIMIT = "usage-limit"
+# No credit to bill: an API key whose organization has no purchased credit that covers Claude Code
+# (a subscription's "Promotional credits" do not) gets "Credit balance too low · Add funds" for every
+# prompt (error billing_error, HTTP 400 on 2.1.308), while `claude -p` still works. It stays so until
+# credit is added. After USAGE_LIMIT in ERROR_RULES, so a usage limit's apiError still wins.
+CREDIT = "credit"
 RATE_LIMIT = "rate-limit"
 OVERLOADED = "overloaded"
 NETWORK = "network"
@@ -1113,6 +1118,7 @@ ERROR_RULES = (
         frozenset({401}),
     ),
     ErrorRule(USAGE_LIMIT, api_errors=frozenset({"usage_limit_reached"})),
+    ErrorRule(CREDIT, frozenset({"billing_error"})),
     ErrorRule(RATE_LIMIT, frozenset({"rate_limit"}), statuses=frozenset({429})),
     ErrorRule(OVERLOADED, frozenset({"overloaded"}), frozenset({"overloaded"}), frozenset({529})),
     ErrorRule(NETWORK, api_errors=frozenset({"no_response"})),
@@ -1176,7 +1182,7 @@ def error_category(code: object, api_error: object, status: object) -> str | Non
 
 @dataclass(frozen=True)
 class ApiError:
-    category: str  # auth, usage-limit, rate-limit, overloaded, network or other
+    category: str  # auth, usage-limit, credit, rate-limit, overloaded, network or other
     source: str  # structured (from the fields) or pattern (the fallback over the text)
     code: str  # the structured fields, e.g. "authentication_failed/401", for logs; never the text
     at: datetime | None = None  # the latest such reply
@@ -1220,19 +1226,29 @@ def replies_last_first(transcript: Path, sidechain: bool = False) -> Iterator[di
             yield entry
 
 
-def last_api_error(transcript: Path, sidechain: bool = False) -> ApiError | None:
+def last_api_error(
+    transcript: Path, sidechain: bool = False, after: datetime | None = None
+) -> ApiError | None:
     """The error the session's latest reply reports, or None if that reply is a normal one (or there
     is none yet). `since` is the first of the error replies of that category in a row, so it stays
     put while every new prompt fails the same way; any normal reply ends the row. <sidechain>: a
-    subagent's transcript."""
+    subagent's transcript. <after>: a moment the row was broken elsewhere (another window's normal
+    reply): when its latest error came later, the row starts at its first error after that moment."""
     latest: ApiError | None = None
     for entry in replies_last_first(transcript, sidechain):
         error = reply_error(entry)
         if error is None or (latest is not None and error.category != latest.category):
             break
         at = entry_time(entry)
+        if latest is not None and broken(after, latest.at, at):
+            break
         latest = replace(error, at=at, since=at) if latest is None else replace(latest, since=at)
     return latest
+
+
+def broken(after: datetime | None, last: datetime | None, at: datetime | None) -> bool:
+    """Whether a row whose latest error came at <last> was broken at <after>, before its error at <at>."""
+    return after is not None and last is not None and last > after and (at is None or at <= after)
 
 
 CONTEXT_FIELDS = ("input_tokens", "cache_read_input_tokens", "cache_creation_input_tokens")
@@ -1273,6 +1289,19 @@ def context_run(transcript: Path, threshold: int) -> ContextRun | None:
 def last_reply_at(transcript: Path) -> datetime | None:
     """When the session last replied (normally or with an error)."""
     return next((entry_time(entry) for entry in replies_last_first(transcript)), None)
+
+
+SYNTHETIC_MODEL = "<synthetic>"  # Claude Code's own notices and error replies: no request made them
+
+
+def answered(entry: dict[str, Any]) -> bool:
+    """A reply the API gave: no error, and none of Claude Code's own <synthetic> notices."""
+    return reply_error(entry) is None and (entry.get("message") or {}).get("model") != SYNTHETIC_MODEL
+
+
+def last_answer_at(transcript: Path) -> datetime | None:
+    """When the API last answered the session (answered): the login worked then, and credit covered it."""
+    return next((entry_time(entry) for entry in replies_last_first(transcript) if answered(entry)), None)
 
 
 @dataclass(frozen=True)

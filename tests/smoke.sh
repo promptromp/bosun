@@ -2287,7 +2287,7 @@ check "... logging the skip once, not on every retry" test "$(grep -c 'skip: orc
 check "... while events keep flowing during the wait" grep -q "\[events\] dry-run: " "$WORK/deferred-loop.out"
 orch_status busy 3600 orch
 
-section expired-login "expired Claude login (fake claude, fictional transcripts)" needs orchestrator-refresh covers 'libexec/bosun-checkin,libexec/bosun-status,libexec/bosun-watchdog,lib/login.py,lib/signals.py'
+section expired-login "expired Claude login, and no credit (fake claude, fictional transcripts)" needs orchestrator-refresh covers 'libexec/bosun-checkin,libexec/bosun-doctor,libexec/bosun-status,libexec/bosun-watchdog,lib/login.py,lib/signals.py'
 ORCH_TRANSCRIPT="$(project_dir "$REPO_A")/0000000a-0000-0000-0000-000000000000.jsonl"
 mkdir -p "$(dirname "$ORCH_TRANSCRIPT")"
 login_reply() { # <seconds ago> [error fields]: a reply in the orchestrator's transcript
@@ -2313,6 +2313,23 @@ check "the next check-in only skips, quietly" bash -c 'grep -q "skip: orch needs
 check "... and makes no new login check request yet" test "$(probes)" = 1
 check "status shows the window that needs a login" bash -c 'grep -q "Claude login" <<<"$1" && grep -E "^  orch +needs-login" <<<"$1"' _ "$(LC status)"
 check "the watchdog's status shows it" bash -c 'grep "FAIL  login-expired" <<<"$1" | grep -q "every prompt in orch (since"' _ "$(LC watchdog --status --only login-expired)"
+# A reply in another window after every window's last login error lets the gate go too: the login is the Mac's.
+other_pid="$(fake_claude alpha idle 2.0.0 60)"
+printf '{"pid":%d,"status":"idle","version":"2.0.0","statusUpdatedAt":%d,"name":"alpha","cwd":"%s","sessionId":"0000000b-0000-0000-0000-000000000000"}' \
+  "$other_pid" $((($(date +%s) - 60) * 1000)) "$REPO_A" >"$HOME/.claude/sessions/$other_pid.json"
+OTHER_TRANSCRIPT="$(project_dir "$REPO_A")/0000000b-0000-0000-0000-000000000000.jsonl"
+printf '{"type":"assistant","timestamp":"%s","message":{"model":"claude-model","content":[{"type":"text","text":"Done."}]}}\n' \
+  "$(date -u -r $(($(date +%s) - 120)) +%Y-%m-%dT%H:%M:%S.000Z)" >"$OTHER_TRANSCRIPT"
+check "a reply in another window lets the gate go, as the watchdog reads it" bash -c 'grep -q "orch works again (alpha got a reply at .*, after its last login error)" <<<"$1" && grep -q "would send" <<<"$1"' _ "$(BOSUN_CHECKIN_MAX_QUIET_HOURS=0 LC checkin --dry-run)"
+check "... and the watchdog no longer names the window" bash -c '! grep -q "every prompt in orch" <<<"$1"' _ "$(LC watchdog --status --only login-expired)"
+kill "$other_pid" 2>/dev/null
+rm -f "$OTHER_TRANSCRIPT" "$HOME/.claude/sessions/$other_pid.json"
+# login.py failing (here its lock is a folder) gives no verdict, which never counts as working.
+rm -f "$BOSUN_STATE_DIR/login.lock"
+mkdir "$BOSUN_STATE_DIR/login.lock"
+out="$(BOSUN_CHECKIN_MAX_QUIET_HOURS=0 LC checkin)"
+check "no verdict from login.py keeps a window held back for its login" bash -c 'grep -q "orch: no verdict from login.py; it stays held back for its login" <<<"$1" && grep -q "skip: orch needs /login" <<<"$1" && ! grep -q delivered <<<"$1"' _ "$out"
+rmdir "$BOSUN_STATE_DIR/login.lock"
 login_reply 60
 check "a normal reply resumes check-ins" bash -c 'grep -q "orch works again" <<<"$1" && grep -q "would send" <<<"$1"' _ "$(LC checkin --dry-run)"
 check "the dry run left the record alone" contains "$(cat "$BOSUN_STATE_DIR/login.json")" '"orch"'
@@ -2325,6 +2342,17 @@ check "... and is not read as a login error" bash -c '! grep -q "every prompt in
 probes_before="$(probes)"
 out="$(LC watchdog --dry-run --only spend-limit)"
 check "the dry run names it and makes no login check request" bash -c 'grep -q "dry-run: spend-limit: .*orch: it stopped on a usage limit" <<<"$1" && [ "$2" = "$3" ]' _ "$out" "$probes_before" "$(probes)"
+# An API key whose organization has no credit that covers Claude Code: every reply is "Credit balance too low".
+# First a login error that holds check-ins back; then the /login with such a key.
+login_reply 25 '"error":"authentication_failed","apiErrorStatus":401'
+check "a login error holds check-ins back again" contains "$(BOSUN_CHECKIN_MAX_QUIET_HOURS=0 FAKE_PROBE=auth LC checkin)" "skip: orch needs /login"
+login_reply 20 '"error":"billing_error","apiErrorStatus":400'
+login_reply 10 '"error":"billing_error","apiErrorStatus":400'
+check "a window whose every reply is 'Credit balance too low' shows in the watchdog's status" bash -c 'grep "FAIL  no-credit" <<<"$1" | grep -q "orch: every prompt gets .Credit balance too low. since"' _ "$(LC watchdog --status --only no-credit)"
+check "... and is neither a login error nor a usage limit" bash -c '! grep -q "every prompt in orch" <<<"$1" && ! grep -q "FAIL  spend-limit" <<<"$2"' _ "$(LC watchdog --status --only login-expired)" "$(LC watchdog --status --only spend-limit)"
+check "status shows that the window has no credit" bash -c 'grep -qE "^  orch +no-credit +every reply since .+ is .credit balance too low. \(billing_error/400\)" <<<"$1"' _ "$(LC status)"
+check "doctor fails the window, saying what to do" bash -c 'grep -qF "FAIL  window orch no-credit every reply since" <<<"$1" && grep -qF "then tell it to carry on (bosun send orch ...); or use your subscription: remove the API key (ANTHROPIC_API_KEY in your shell profile, or apiKeyHelper in ~/.claude/settings.json), restart the window (bosun refresh orch), then /login in it" <<<"$1"' _ "$(LC doctor)"
+check "its login works, so check-ins go to it again, as on a usage limit" bash -c 'grep -q "orch.s login works again, but it has no credit (every reply since" <<<"$1" && grep -q "would send" <<<"$1"' _ "$(BOSUN_CHECKIN_MAX_QUIET_HOURS=0 LC checkin --dry-run)"
 # Back to the busy orchestrator the events tests expect, and no state from the real check-ins.
 rm -f "$ORCH_TRANSCRIPT" "$BOSUN_STATE_DIR/login.json" "$BOSUN_STATE_DIR/watchdog.json"
 printf '{"pid":%d,"status":"busy","version":"2.0.0","statusUpdatedAt":%d,"name":"orch"}' "$orch_pid" $((($(date +%s) - 3600) * 1000)) >"$HOME/.claude/sessions/$orch_pid.json"

@@ -36,6 +36,12 @@ the transcript's structured error fields. The signals add what those cannot say:
   names a spend or usage limit counts as a stop when the transcript shows none, until a later Stop
   (a turn finished). The transcript's `apiError: usage_limit_reached` stays the primary signal: a
   StopFailure only has the error type and the text, and `rate_limit` also covers short throttling.
+  In a transcript, `billing_error` alone is no credit, not a usage limit (`lib/claude_state.py`'s
+  credit category, the watchdog's `no-credit`): a spend limit has been measured as `rate_limit`/429
+  with `apiError: usage_limit_reached`, which wins when both are there, and an API key without
+  credit as `billing_error`/400 with the text "Credit balance is too low". So the StopFailure
+  fallback keeps `billing_error` among its error types but counts it as a stop only when the text
+  names a spend or usage limit, which a credit error's does not.
 
 ## What was measured before choosing (2.1.312, a lab session on its own tmux socket)
 

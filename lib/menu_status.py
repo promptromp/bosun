@@ -43,9 +43,9 @@ starting run as it does inside the hours (no grey dot, no second Start).
 
 `attention` lists the windows that need you, each as `{"window", "problem"}`, so the app can offer to open one
 (`bosun attach <window>`): first the problems about one window (a watchdog finding that names its window:
-stalled-start, waiting, long-shell, spend-limit, context-size), in the order of `problems`, then each window
-waiting at a prompt that the waiting check has not named yet (`waiting`, which no level counts), with a line
-of its own. A window can be listed more than once, one entry per problem.
+stalled-start, waiting, long-shell, spend-limit, context-size, no-credit), in the order of `problems`, then
+each window waiting at a prompt that the waiting check has not named yet (`waiting`, which no level counts),
+with a line of its own. A window can be listed more than once, one entry per problem.
 """
 
 from __future__ import annotations
