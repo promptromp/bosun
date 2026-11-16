@@ -309,9 +309,11 @@ def card_model(
 
 
 def matching_entities(kb: KB, search: Search) -> list[tuple[str, str]]:
-    """(entity id, why) for the search: by name, alias, related term or fact text, best first."""
+    """(entity id, why) for the search: by name, alias, related term or fact text, best first. By the
+    whole text only, as matching_facts finds facts, so that the two lists of one search agree."""
     if search.q:
-        hits = [(entity_id, why) for _, entity_id, why in kq.search(kb, search.q, SEARCH_LIMIT * 2)]
+        ranked = kq.search(kb, search.q, SEARCH_LIMIT * 2, words=False)
+        hits = [(entity_id, why) for _, entity_id, why in ranked]
     else:
         hits = [(e["id"], "type") for e in by_name(kb.entities.values())]
     found = [(i, why) for i, why in hits if i in kb.entities]
