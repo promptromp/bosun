@@ -111,7 +111,7 @@ installed. The usual ones:
 | `not logged in: the login keychain is locked` | Claude Code keeps its login in your login keychain, and a session over ssh starts with it locked, even when the Mac's desktop unlocked it | Run `security unlock-keychain ~/Library/Keychains/login.keychain-db` (your login password), then the same line again |
 | `later  Claude in Chrome's screen not seen` | bosun starts windows with Chrome on (`--chrome` in `BOSUN_CLAUDE_FLAGS` and `BOSUN_ORCHESTRATOR_FLAGS`), and some versions of Claude Code first show what it may do in your browser and wait for Enter (newer ones show nothing). Nothing stops for it | Nothing now. If a window does stop at that screen, the watchdog names it (`stalled-start`, and the menu bar app's "Show What's Wrong..."): answer it there once, with `bosun attach <window>` |
 | `not logged in` under Claude Code | It has no login | Run `claude`, and follow what it asks |
-| A window answers "Credit balance too low · Add funds" while `claude -p` still works (the watchdog's `no-credit`, and `no-credit` in `bosun status` and `bosun doctor`) | Claude Code is signed in with an API key whose organization has only subscriber credits ("Promotional credits"), which do not cover Claude Code | Buy credit for the key's organization, or use a login (see [With an API key](#with-an-api-key-instead-of-a-login)); then tell the window to carry on |
+| A window answers "Credit balance too low · Add funds" while `claude -p` still works (the watchdog's `no-credit`, and `no-credit` in `bosun status` and `bosun doctor`) | Claude Code is signed in with an API key whose organization has only subscriber credits ("Promotional credits"), which do not cover Claude Code | Add credit in the Console's billing, or use your subscription instead: remove the API key (`ANTHROPIC_API_KEY` in your shell profile, or `apiKeyHelper` in `~/.claude/settings.json`), then `/login` (see [With an API key](#with-an-api-key-instead-of-a-login)); then tell the window to carry on |
 | `not logged in` under Codex | It has no login | Run `codex login`. With an API key: `printenv OPENAI_API_KEY \| codex login --with-api-key` |
 | A window is on a screen, and the watchdog reports `stalled-start` | The agent is asking something only you can answer, usually about trusting the folder | `bosun attach <window>` (the finding names it), then read it. Do not just press Return: on several of Claude Code's screens the default is to exit, and on Codex's it says yes |
 | `does not run on <your OS> yet`, or `bosun runs on macOS today` | bosun runs on macOS today, and Linux is next | See the [roadmap](../ROADMAP.md) |
@@ -897,7 +897,11 @@ What happens then:
   watchdog and the console count all the windows as working again, an idle one too, which gets no
   prompt to show it, and the check-in loop lets the orchestrator go (while it holds it back, it reads
   the other windows too). A window that fails again after such a sign starts a new row: its "since"
-  is its first error after the sign, so the watchdog's `no-credit` alerts again.
+  is its first error after the sign, so the watchdog's `no-credit` alerts again. This assumes that
+  every window bosun starts uses the same credentials, as it does unless a repository's own
+  `.claude/settings.json` sets an API key in its `env` or an `apiKeyHelper`: then that window's
+  replies say nothing about the others' login or credit, and can clear them wrongly until their next
+  prompt fails again.
 - **Watchdog:** `login-expired` alerts once per outage, for the login and for every Claude window
   (repo sessions too), and alerts again if it comes back after recovering. Like every check it
   alerts only inside the awake window: an outage overnight or on a weekend alerts when the window
@@ -931,9 +935,14 @@ The key's organization needs purchased credit. The API credits a subscription ad
 "Promotional credits" of a Max, Ultra or Team plan) cover the Claude API and the Agent SDK but not Claude
 Code, so the windows reply "Credit balance too low · Add funds" while `claude -p` and the API still work. The
 watchdog's `no-credit` check alerts on such a window, and `bosun status` and `bosun doctor` name it. Add
-funds to the organization, or sign in with a login instead
-([which credits cover what](https://platform.claude.com/docs/en/about-claude/api-credits-for-subscribers)), then
-tell the window to carry on (`bosun send <window> ...`).
+credit in the Console's billing
+([which credits cover what](https://platform.claude.com/docs/en/about-claude/api-credits-for-subscribers)), or
+use your subscription instead: an API key (`ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN` or `apiKeyHelper`)
+outranks a subscription login
+([authentication precedence](https://code.claude.com/docs/en/authentication#authentication-precedence)), so
+`/login` alone changes nothing. Remove the key (`ANTHROPIC_API_KEY` in your shell profile, or `apiKeyHelper` in
+`~/.claude/settings.json`; a window started with the variable keeps it until it is restarted, `bosun refresh
+<window>`), then `/login`. Then tell the window to carry on (`bosun send <window> ...`).
 
 ## AWS SSO
 
