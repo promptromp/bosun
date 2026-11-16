@@ -525,6 +525,33 @@ class OtherWindowsTest(WindowCase):
         self.assertEqual(raised.exception.code, 2)
 
 
+class UnreadableTranscriptTest(WindowCase):
+    """A transcript that is found but cannot be read (no permission, or gone since): never a crash."""
+
+    def unreadable(self, path: Path) -> None:
+        path.chmod(0)
+        self.addCleanup(path.chmod, 0o600)
+
+    def test_another_windows_counts_for_nothing(self) -> None:
+        self.login_error(60)
+        self.assertEqual(self.window(), ("needs-login", "new"))
+        other = write(claude_state.transcript_path(WORKDIR, OTHER_SESSION), prompt(90), reply(91))
+        self.unreadable(other)
+        self.assertEqual(self.window("--also", "alpha=102"), ("needs-login", "same"))
+        verdicts = login.window_verdicts({"orch": self.transcript, "alpha": other}, None)
+        self.assertEqual(verdicts["alpha"], login.UNREADABLE)
+        self.assertEqual(verdicts["orch"].state, "needs-login")
+
+    def test_its_own_is_unknown(self) -> None:
+        self.login_error(60)
+        self.unreadable(self.transcript)
+        self.assertEqual(self.window("--after", "0", "--wait", "1"), ("unknown", "-"))
+
+    def test_one_gone_after_it_was_found_is_unknown(self) -> None:
+        with mock.patch.object(claude_state, "last_api_error", side_effect=FileNotFoundError):
+            self.assertEqual(self.window(), ("unknown", "-"))
+
+
 class NoCreditTest(WindowCase):
     """A window whose every reply is "Credit balance too low": its own state, never gated."""
 

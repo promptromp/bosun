@@ -2318,6 +2318,12 @@ check "a reply in another window lets the gate go, as the watchdog reads it" bas
 check "... and the watchdog no longer names the window" bash -c '! grep -q "every prompt in orch" <<<"$1"' _ "$(LC watchdog --status --only login-expired)"
 kill "$other_pid" 2>/dev/null
 rm -f "$OTHER_TRANSCRIPT" "$HOME/.claude/sessions/$other_pid.json"
+# login.py failing (here its lock is a folder) gives no verdict, which never counts as working.
+rm -f "$BOSUN_STATE_DIR/login.lock"
+mkdir "$BOSUN_STATE_DIR/login.lock"
+out="$(BOSUN_CHECKIN_MAX_QUIET_HOURS=0 LC checkin)"
+check "no verdict from login.py keeps a window held back for its login" bash -c 'grep -q "orch: no verdict from login.py; it stays held back for its login" <<<"$1" && grep -q "skip: orch needs /login" <<<"$1" && ! grep -q delivered <<<"$1"' _ "$out"
+rmdir "$BOSUN_STATE_DIR/login.lock"
 login_reply 60
 check "a normal reply resumes check-ins" bash -c 'grep -q "orch works again" <<<"$1" && grep -q "would send" <<<"$1"' _ "$(LC checkin --dry-run)"
 check "the dry run left the record alone" contains "$(cat "$BOSUN_STATE_DIR/login.json")" '"orch"'

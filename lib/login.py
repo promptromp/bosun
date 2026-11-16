@@ -209,9 +209,30 @@ def probe_worked(probe: Probe | None) -> Worked | None:
     return Worked(probe.at, f"a login check at {shown(probe.at)} worked")
 
 
-def latest_answer(transcripts: Mapping[str, Path]) -> Worked | None:
-    """The latest reply the API gave in any of these windows' transcripts."""
-    answers = [(at, name) for name, path in transcripts.items() if (at := claude_state.last_answer_at(path))]
+@dataclass(frozen=True)
+class Reading:
+    """What a window's transcript shows: its latest error (None: a normal reply, or none yet) and
+    when the API last answered it."""
+
+    path: Path
+    error: ApiError | None
+    answered: datetime | None
+
+
+UNREADABLE = Verdict(UNKNOWN, "its transcript could not be read (gone, or no permission)")
+
+
+def read_transcript(path: Path) -> Reading | None:
+    """<path> read, or None if it cannot be (gone since it was found, or no permission)."""
+    try:
+        return Reading(path, claude_state.last_api_error(path), claude_state.last_answer_at(path))
+    except OSError:
+        return None
+
+
+def latest_answer(answered: Mapping[str, datetime | None]) -> Worked | None:
+    """The latest reply the API gave in any of these windows (name -> when it last answered)."""
+    answers = [(at, name) for name, at in answered.items() if at]
     if not answers:
         return None
     at, name = max(answers, key=lambda answer: answer[0])
@@ -244,7 +265,10 @@ def restarted(
     sign = signs.get(error.category) if error else None
     if error is None or sign is None or not (error.since and error.at and error.since <= sign.at < error.at):
         return error
-    return claude_state.last_api_error(transcript, after=sign.at)
+    try:
+        return claude_state.last_api_error(transcript, after=sign.at)
+    except OSError:
+        return error  # gone or unreadable since it was read: its row as it was
 
 
 def latest(*signs: Worked | None) -> Worked | None:
@@ -282,17 +306,32 @@ def window_verdicts(
 ) -> dict[str, Verdict]:
     """Whether the session in each window gets real replies, from its transcript, the last login check
     and what the other windows show (see Worked); a window without a transcript, from its last lines in
-    <panes>, if given (the pattern fallback)."""
-    read = {name: path for name, path in transcripts.items() if path is not None}
-    signs = signs_of(probe, latest_answer(read))
-    errors = {name: restarted(path, claude_state.last_api_error(path), signs) for name, path in read.items()}
+    <panes>, if given (the pattern fallback). A transcript that cannot be read counts for nothing, and
+    its window's verdict is unknown."""
+    readings = {name: read_transcript(path) for name, path in transcripts.items() if path is not None}
+    read = {name: reading for name, reading in readings.items() if reading is not None}
+    signs = signs_of(probe, latest_answer({name: reading.answered for name, reading in read.items()}))
+    errors = {name: restarted(reading.path, reading.error, signs) for name, reading in read.items()}
     cleared = cleared_by(signs, errors.values())
     return {
-        name: transcript_verdict(errors[name], cleared)
-        if name in read
-        else pane_verdict((panes or {}).get(name, ""))
-        for name in transcripts
+        name: verdict_in(name, readings, errors, cleared, (panes or {}).get(name, "")) for name in transcripts
     }
+
+
+def verdict_in(
+    name: str,
+    readings: Mapping[str, Reading | None],
+    errors: Mapping[str, ApiError | None],
+    cleared: Mapping[str, Worked],
+    pane: str,
+) -> Verdict:
+    """<name>'s verdict: from its transcript's latest error, unknown if it could not be read, from
+    <pane> if it has none."""
+    if name not in readings:
+        return pane_verdict(pane)
+    if name not in errors:
+        return UNREADABLE
+    return transcript_verdict(errors[name], cleared)
 
 
 def login_failure(status: AuthStatus, probe: Probe | None) -> Verdict | None:
@@ -375,7 +414,10 @@ def wait_for_reply(env: Env, transcript: Path, after: float, seconds: float) -> 
     """Wait up to <seconds> for a reply written after <after> (epoch seconds)."""
     deadline = time.monotonic() + seconds
     while True:
-        latest = claude_state.last_reply_at(transcript)
+        try:
+            latest = claude_state.last_reply_at(transcript)
+        except OSError:
+            return  # gone or unreadable: the verdict says so
         if (latest and latest.timestamp() > after) or time.monotonic() >= deadline:
             return
         env.sleep(REPLY_POLL_SECONDS)
