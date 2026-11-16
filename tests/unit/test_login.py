@@ -23,6 +23,7 @@ import claude_state  # noqa: E402
 import login  # noqa: E402
 from claude_state import (  # noqa: E402
     AUTH,
+    CREDIT,
     NETWORK,
     OTHER,
     OVERLOADED,
@@ -67,6 +68,9 @@ SPEND_LIMIT: dict[str, Any] = {
     "apiErrorStatus": 429,
 }
 OVERLOAD: dict[str, Any] = {"error": "server_error", "apiErrorStatus": 529}
+# An API key whose organization has no credit that covers Claude Code (2.1.308; the text is
+# "Credit balance is too low").
+NO_CREDIT: dict[str, Any] = {"error": "billing_error", "apiErrorStatus": 400}
 NO_RESPONSE: dict[str, Any] = {"error": "server_error", "apiError": "no_response"}
 DROPPED: dict[str, Any] = {"error": "server_error"}
 
@@ -102,12 +106,16 @@ class ErrorCategoryTest(unittest.TestCase):
                 {"apiErrorStatus": 401},
                 {"error": "x", "apiError": "org_disabled_credential"},
             ],
-            USAGE_LIMIT: [SPEND_LIMIT, {"apiError": "usage_limit_reached"}],
+            USAGE_LIMIT: [
+                SPEND_LIMIT,
+                {"apiError": "usage_limit_reached"},
+                {"error": "billing_error", "apiError": "usage_limit_reached"},
+            ],
+            CREDIT: [NO_CREDIT, {"error": "billing_error"}],
             RATE_LIMIT: [{"error": "rate_limit"}, {"apiErrorStatus": 429}],
             OVERLOADED: [OVERLOAD],
             NETWORK: [NO_RESPONSE, DROPPED],
             OTHER: [
-                {"error": "billing_error"},
                 {"error": "invalid_request", "apiErrorStatus": 400},
                 {"error": "server_error", "apiErrorStatus": 500},
                 {"error": "unknown"},
@@ -156,6 +164,7 @@ class LastApiErrorTest(TmpCase):
     def test_each_category_from_a_transcript(self) -> None:
         cases: list[tuple[dict[str, Any], str]] = [
             (SPEND_LIMIT, USAGE_LIMIT),
+            (NO_CREDIT, CREDIT),
             (OVERLOAD, OVERLOADED),
             (NO_RESPONSE, NETWORK),
             (DROPPED, NETWORK),
@@ -167,6 +176,17 @@ class LastApiErrorTest(TmpCase):
                 error = claude_state.last_api_error(self.transcript)
                 assert error is not None
                 self.assertEqual(error.category, category)
+
+    def test_a_row_of_credit_errors_gives_since(self) -> None:
+        self.add(prompt(0), reply(1))
+        for minutes in (30, 60, 90):
+            self.add(prompt(minutes), error_reply(minutes, "Credit balance is too low", **NO_CREDIT))
+        error = claude_state.last_api_error(self.transcript)
+        assert error is not None
+        self.assertEqual(
+            (error.category, error.source, error.code), (CREDIT, STRUCTURED, "billing_error/400")
+        )
+        self.assertEqual((error.since, error.at), (T0 + timedelta(minutes=30), T0 + timedelta(minutes=90)))
 
     def test_since_restarts_when_the_category_changes(self) -> None:
         self.add(error_reply(0, "API Error: no response", **NO_RESPONSE))
@@ -366,8 +386,8 @@ class FakeClaude:
         return claude_state.ProbeResult(self.probe_outcome, code="fake")
 
 
-class GateTest(TmpCase):
-    """The check-in loop's view: `login.py window` for the orchestrator, over time."""
+class WindowCase(TmpCase):
+    """`login.py window` for the orchestrator, over time."""
 
     def setUp(self) -> None:
         super().setUp()
@@ -393,6 +413,13 @@ class GateTest(TmpCase):
 
     def login_error(self, minutes: float) -> None:
         self.add(prompt(minutes), error_reply(minutes, "Login expired · Please run /login", **EXPIRED))
+
+    def credit_error(self, minutes: float) -> None:
+        self.add(prompt(minutes), error_reply(minutes, "Credit balance is too low", **NO_CREDIT))
+
+
+class GateTest(WindowCase):
+    """The check-in loop's view."""
 
     def test_healthy(self) -> None:
         self.assertEqual(self.window(), ("ok", "-"))
@@ -466,6 +493,66 @@ class GateTest(TmpCase):
         self.assertIn("pattern fallback", verdict.detail)
         verdict, _ = login.check_window(self.env(), args, "> hi\n⏺ Hello!")
         self.assertEqual(verdict.state, "unknown")
+
+
+class NoCreditTest(WindowCase):
+    """A window whose every reply is "Credit balance too low": its own state, never gated."""
+
+    def test_its_verdict_says_since_when(self) -> None:
+        self.credit_error(60)
+        self.credit_error(120)
+        verdict = login.window_verdict(self.transcript, None)
+        since = T0 + timedelta(minutes=60)
+        self.assertEqual((verdict.state, verdict.since), (login.NO_CREDIT, since))
+        self.assertEqual(
+            verdict.detail,
+            f"every reply since {login.shown(since)} is 'credit balance too low' (billing_error/400)",
+        )
+
+    def test_a_normal_reply_ends_it(self) -> None:
+        self.credit_error(60)
+        self.add(prompt(90, "carry on"), reply(91))
+        self.assertEqual(login.window_verdict(self.transcript, None).state, login.OK)
+
+    def test_check_ins_are_not_held_back(self) -> None:
+        self.credit_error(60)
+        self.assertEqual(self.window("--probe"), ("no-credit", "-"))
+        self.assertEqual(self.claude.probes, 0)
+        self.assertEqual(json.loads((self.root / "state" / login.STATE_FILE).read_text())["gated"], {})
+
+    def test_a_window_gated_on_its_login_is_gated_no_more(self) -> None:
+        self.login_error(60)
+        self.assertEqual(self.window(), ("needs-login", "new"))
+        self.credit_error(90)  # a /login with an API key whose organization has no credit
+        self.assertEqual(self.window(), ("no-credit", "recovered"))
+        self.assertEqual(self.window(), ("no-credit", "-"))
+
+    def test_a_login_check_that_works_does_not_end_it(self) -> None:
+        failed = login.Probe(T0 + timedelta(minutes=30), AUTH, STRUCTURED, "authentication_failed")
+        (self.root / "state").mkdir()
+        login.State(probe=failed.to_json()).save(self.root / "state")
+        self.credit_error(60)
+        self.assertEqual(self.window("--probe"), ("no-credit", "-"))
+        self.assertEqual(self.claude.probes, 1)
+
+    def test_the_command_has_an_exit_code_of_its_own(self) -> None:
+        self.credit_error(60)
+        args = login.build_parser().parse_args(["window", "orch", "101"])
+        out = io.StringIO()
+        with redirect_stdout(out):
+            code = login.run(args, self.env())
+        self.assertEqual(code, 4)
+        self.assertTrue(out.getvalue().startswith("no-credit - every reply since "))
+        self.assertEqual(len(set(login.EXIT_CODES.values())), len(login.EXIT_CODES))
+        self.assertNotIn(2, login.EXIT_CODES.values())  # 2 is a usage error
+
+    def test_status_shows_it(self) -> None:
+        self.credit_error(60)
+        lines = login.render_status(self.env(), [("orch", "101")]).splitlines()
+        self.assertRegex(
+            lines[1],
+            r"^orch +no-credit +every reply since .+ is 'credit balance too low' \(billing_error/400\)$",
+        )
 
 
 class GlobalTest(unittest.TestCase):

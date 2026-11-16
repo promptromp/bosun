@@ -111,7 +111,7 @@ installed. The usual ones:
 | `not logged in: the login keychain is locked` | Claude Code keeps its login in your login keychain, and a session over ssh starts with it locked, even when the Mac's desktop unlocked it | Run `security unlock-keychain ~/Library/Keychains/login.keychain-db` (your login password), then the same line again |
 | `later  Claude in Chrome's screen not seen` | bosun starts windows with Chrome on (`--chrome` in `BOSUN_CLAUDE_FLAGS` and `BOSUN_ORCHESTRATOR_FLAGS`), and some versions of Claude Code first show what it may do in your browser and wait for Enter (newer ones show nothing). Nothing stops for it | Nothing now. If a window does stop at that screen, the watchdog names it (`stalled-start`, and the menu bar app's "Show What's Wrong..."): answer it there once, with `bosun attach <window>` |
 | `not logged in` under Claude Code | It has no login | Run `claude`, and follow what it asks |
-| A window answers "Credit balance too low · Add funds" while `claude -p` still works | Claude Code is signed in with an API key whose organization has only subscriber credits ("Promotional credits"), which do not cover Claude Code | Buy credit for the key's organization, or use a login (see [With an API key](#with-an-api-key-instead-of-a-login)) |
+| A window answers "Credit balance too low · Add funds" while `claude -p` still works (the watchdog's `no-credit`, and `no-credit` in `bosun status` and `bosun doctor`) | Claude Code is signed in with an API key whose organization has only subscriber credits ("Promotional credits"), which do not cover Claude Code | Buy credit for the key's organization, or use a login (see [With an API key](#with-an-api-key-instead-of-a-login)); then tell the window to carry on |
 | `not logged in` under Codex | It has no login | Run `codex login`. With an API key: `printenv OPENAI_API_KEY \| codex login --with-api-key` |
 | A window is on a screen, and the watchdog reports `stalled-start` | The agent is asking something only you can answer, usually about trusting the folder | `bosun attach <window>` (the finding names it), then read it. Do not just press Return: on several of Claude Code's screens the default is to exit, and on Codex's it says yes |
 | `does not run on <your OS> yet`, or `bosun runs on macOS today` | bosun runs on macOS today, and Linux is next | See the [roadmap](../ROADMAP.md) |
@@ -863,8 +863,9 @@ prompts would keep reporting them delivered. bosun reads, best signal first
 1. **The transcript's error fields.** A failed request is written as a synthetic reply flagged
    `isApiErrorMessage`, with `error` (`authentication_failed`, `rate_limit`, `server_error`, ...),
    often the HTTP status (`apiErrorStatus`: 401, 429, 529) and a finer `apiError` (`no_response`,
-   `usage_limit_reached`). These map to auth, rate-limit, overloaded, network or other; only auth
-   counts. Exact and free, but known only once a prompt has failed.
+   `usage_limit_reached`). These map to auth, usage-limit, credit (`billing_error`: no credit for
+   an API key, below), rate-limit, overloaded, network or other; only auth counts as a login error.
+   Exact and free, but known only once a prompt has failed.
 2. **`claude auth status --json`** (`loggedIn`, `authMethod`): free, but it reads the stored
    credentials only and makes no request (it answers the same with the network cut off), so a token
    the server revoked still shows `loggedIn: true`. It does catch a missing login (`loggedIn:
@@ -896,6 +897,11 @@ What happens then:
   opens, together with the morning run's own failure (see ROADMAP, urgent alerts).
 - **`bosun status`** shows the login and each window's state; **`bosun doctor`** fails when
   Claude Code is logged out, the last check failed, or a running window gets only login errors.
+- **No credit:** a window whose latest replies are all "Credit balance too low" (`billing_error`) is
+  `no-credit` in `bosun status`, fails `bosun doctor` and alerts through the watchdog's `no-credit`
+  check, once per window and row of such replies. Its login works, so check-ins and events still go
+  to it, as on a usage limit; the login check request works without credit, so only a normal reply
+  ends it ([With an API key](#with-an-api-key-instead-of-a-login) says why it happens).
 
 ### With an API key instead of a login
 
@@ -914,9 +920,11 @@ cost less.
 
 The key's organization needs purchased credit. The API credits a subscription adds to the Console (the
 "Promotional credits" of a Max, Ultra or Team plan) cover the Claude API and the Agent SDK but not Claude
-Code, so the windows reply "Credit balance too low · Add funds" while `claude -p` and the API still work. Add
+Code, so the windows reply "Credit balance too low · Add funds" while `claude -p` and the API still work. The
+watchdog's `no-credit` check alerts on such a window, and `bosun status` and `bosun doctor` name it. Add
 funds to the organization, or sign in with a login instead
-([which credits cover what](https://platform.claude.com/docs/en/about-claude/api-credits-for-subscribers)).
+([which credits cover what](https://platform.claude.com/docs/en/about-claude/api-credits-for-subscribers)), then
+tell the window to carry on (`bosun send <window> ...`).
 
 ## AWS SSO
 

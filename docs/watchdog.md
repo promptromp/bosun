@@ -26,10 +26,11 @@ is missing.
 | `update-stuck` | an update stopped and left its hold (or paused writes) with nothing running it, or a running update's hold (which pauses the watchdog, learning and the check-in loop) outlived its hour | update (alerts again for the next update) |
 | `app-missing` | with `BOSUN_MENU_APP=1`: `bosun.app` is not in `~/Applications`, say moved to the Trash. bosun still runs: the alert says so, and that `bosun uninstall` removes bosun and `bosun app install` brings the app back | outage (alerts again if the app came back and went) |
 | `login-expired` | Claude Code is logged out (`claude auth status`), the last login check request got a login error, or any Claude window's latest replies are all login errors (see Claude Code login); alerts at once, but like every check only inside the awake window | outage (alerts again after it recovered) |
+| `no-credit` | a Claude window's latest replies are all "Credit balance too low" (`billing_error`): Claude Code is signed in with an API key whose organization has no credit that covers it (a subscription's promotional credits do not; see [With an API key](setup.md#with-an-api-key-instead-of-a-login)). The alert says since when and what to do: add credit in the Console's billing, or sign in with your subscription (`/login`), then tell the window to carry on (`bosun send <window> ...`). Check-ins are not held back, as for a usage limit; the login check request works without credit, so only a normal reply ends it | window and since when (a normal reply in between starts a new one) |
 
 Some checks cannot fire on a Codex window yet. Its session file records only busy or idle, so a
 question it waits on reads as busy (`waiting`) and a background command does not show
-(`long-shell`); `spend-limit` and `context-size` read Claude Code's transcripts; and
+(`long-shell`); `spend-limit`, `context-size` and `no-credit` read Claude Code's transcripts; and
 `login-expired` does not see a revoked Codex login. See
 [what windows do not have yet](design/harnesses.md#what-windows-do-not-have-yet).
 

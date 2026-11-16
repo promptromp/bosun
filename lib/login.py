@@ -16,20 +16,27 @@ best first (everything Claude Code-specific is read through lib/claude_state.py)
 4. Fallback: a loose reading of the reply's text (or, without a transcript, of the window's last
    lines), only where no structured field exists. Verdicts from it say "pattern fallback".
 
+A window can also get nothing but "Credit balance too low" (billing_error: an API key whose
+organization has no credit that covers Claude Code): no-credit. Its login works, so it is not
+gated: as with a usage limit, the check-in loop keeps sending to it, and the watchdog's no-credit
+check alerts. The login check request cannot tell when credit was added (`claude -p` works
+without it), so only a normal reply ends it.
+
 Usage: login.py window <name> <claude pid> [--after <epoch>] [--wait <seconds>] [--probe] [--pane -]
                          [--dry-run]
        login.py global [--probe]
        login.py status          (lines "<window>\\t<claude pid>" on stdin, as window_agent_pids)
 
-`window` prints "<state> <change> <detail>": state ok, needs-login or unknown; change new (it has
-just started needing a login), same, recovered or -. It records the windows that need a login,
-and the last login check, in $BOSUN_STATE_DIR/login.json. --after/--wait: first wait up to
-<seconds> for a reply newer than <epoch> (after a delivery). --probe: if the window needs a login,
-or the last login check failed, make the login check request when one is due. --pane -: the
-window's visible text on stdin, read only when there is no transcript. --dry-run: record nothing.
+`window` prints "<state> <change> <detail>": state ok, needs-login, no-credit or unknown; change
+new (it has just started needing a login), same, recovered (it no longer does) or -. It records
+the windows that need a login, and the last login check, in $BOSUN_STATE_DIR/login.json.
+--after/--wait: first wait up to <seconds> for a reply newer than <epoch> (after a delivery).
+--probe: if the window needs a login, or the last login check failed, make the login check
+request when one is due. --pane -: the window's visible text on stdin, read only when there is no
+transcript. --dry-run: record nothing.
 `global` prints the state of the login itself; --probe makes the login check request.
 `status` prints both for `bosun status`, changing nothing.
-Exit codes: 0 ok, 1 needs a login, 3 unknown, 2 usage. Settings: BOSUN_STATE_DIR,
+Exit codes: 0 ok, 1 needs a login, 3 unknown, 4 no credit, 2 usage. Settings: BOSUN_STATE_DIR,
 BOSUN_CLAUDE_BIN.
 """
 
@@ -56,8 +63,10 @@ from claude_state import ApiError, AuthStatus, ProbeResult
 
 OK = "ok"
 NEEDS_LOGIN = "needs-login"
+NO_CREDIT = "no-credit"  # every reply is "Credit balance too low"; never gated
 UNKNOWN = "unknown"
-EXIT_CODES = {OK: 0, NEEDS_LOGIN: 1, UNKNOWN: 3}
+EXIT_CODES = {OK: 0, NEEDS_LOGIN: 1, UNKNOWN: 3, NO_CREDIT: 4}
+LOGIN_WORKS = frozenset({OK, NO_CREDIT})  # the window's replies show that its login works
 NEW, SAME, RECOVERED, UNCHANGED = "new", "same", "recovered", "-"
 STATE_FILE = "login.json"
 LOCK_FILE = "login.lock"
@@ -156,9 +165,9 @@ def locked_state(state_dir: Path) -> Iterator[State]:
 
 @dataclass(frozen=True)
 class Verdict:
-    state: str  # ok, needs-login or unknown
+    state: str  # ok, needs-login, no-credit or unknown
     detail: str
-    since: datetime | None = None  # needs-login: since when
+    since: datetime | None = None  # needs-login, no-credit: since when
 
 
 def error_detail(error: ApiError) -> str:
@@ -166,9 +175,15 @@ def error_detail(error: ApiError) -> str:
     return f"every reply since {shown(error.since)} is a login error ({how})"
 
 
+def credit_detail(error: ApiError) -> str:
+    return f"every reply since {shown(error.since)} is 'credit balance too low' ({error.code})"
+
+
 def transcript_verdict(error: ApiError | None, probe: Probe | None) -> Verdict:
     if error is None:
         return Verdict(OK, "its latest reply is a normal one")
+    if error.category == claude_state.CREDIT:
+        return Verdict(NO_CREDIT, credit_detail(error), error.since)
     if error.category != claude_state.AUTH:
         return Verdict(OK, f"its latest reply is a {error.category} error ({error.code}), not a login error")
     if probe and probe.outcome == claude_state.PROBE_OK and error.at and probe.at > error.at:
@@ -215,12 +230,13 @@ def global_verdict(status: AuthStatus, probe: Probe | None, fresh: bool = False)
 
 
 def update_gate(state: State, window: str, verdict: Verdict) -> str:
-    """Record whether <window> needs a login; how that changed."""
+    """Record whether <window> needs a login; how that changed. A window with no credit is not
+    gated (nor is one on a usage limit): its replies come from the API, so its login works."""
     before = state.gated.get(window)
     if verdict.state == NEEDS_LOGIN:
         state.gated[window] = stamp(verdict.since) or "?"
         return SAME if before == state.gated[window] else NEW
-    if verdict.state == OK and before is not None:
+    if verdict.state in LOGIN_WORKS and before is not None:
         del state.gated[window]
         return RECOVERED
     return UNCHANGED

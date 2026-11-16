@@ -1081,18 +1081,29 @@ def check_slack_watch(ctx: Context) -> Result:
 
 # An expired or revoked Claude Code login: every prompt gets an error reply and nothing else.
 LOGIN_CHECK = "login-expired"
+# An API key whose organization has no credit that covers Claude Code: every prompt gets "Credit
+# balance too low" (lib/login.py's no-credit). Not spend-limit's probe: the login check request works
+# without credit, so it cannot tell when credit was added. A new row of such replies alerts again.
+NO_CREDIT = "no-credit"
+
+
+def window_verdicts(ctx: Context) -> Iterator[tuple[str, login.Verdict]]:
+    """Each Claude window's verdict from its transcript (lib/login.py); a window without one is
+    left out."""
+    for window in ctx.facts.windows if ctx.facts.session_exists else ():
+        entry = ctx.record(window.agent_pid) if window.agent_pid else None
+        transcript = claude_state.transcript_of(entry) if entry else None
+        if transcript:
+            yield window.name, login.window_verdict(transcript, None)
 
 
 def window_logins(ctx: Context) -> list[str]:
     """The Claude windows whose latest replies are all login errors, with since when."""
-    found = []
-    for window in ctx.facts.windows if ctx.facts.session_exists else ():
-        entry = ctx.record(window.agent_pid) if window.agent_pid else None
-        transcript = claude_state.transcript_of(entry) if entry else None
-        verdict = login.window_verdict(transcript, None) if transcript else None
-        if verdict and verdict.state == login.NEEDS_LOGIN:
-            found.append(f"{window.name} (since {login.shown(verdict.since)})")
-    return found
+    return [
+        f"{name} (since {login.shown(verdict.since)})"
+        for name, verdict in window_verdicts(ctx)
+        if verdict.state == login.NEEDS_LOGIN
+    ]
 
 
 def check_login(ctx: Context) -> Result:
@@ -1112,6 +1123,28 @@ def check_login(ctx: Context) -> Result:
         "attach) or claude auth login; check-ins pause until the orchestrator works again."
     )
     return Result(findings=[Finding(f"{LOGIN_CHECK}:outage", message)])
+
+
+def credit_finding(window: str, since: datetime | None) -> Finding:
+    message = (
+        f"{window}: every prompt gets 'Credit balance too low' since {login.shown(since)}: the API key's "
+        "organization has no credit that covers Claude Code (a subscription's promotional credits do "
+        "not). Add credit in the Console's billing, or sign in with your subscription (/login); then "
+        f"tell the window to carry on (bosun send {window} ...)."
+    )
+    row = f"{naive(since):%Y-%m-%dT%H:%M}" if since else "?"
+    return Finding(f"{NO_CREDIT}:{window}:{row}", message, window=window)
+
+
+def check_no_credit(ctx: Context) -> Result:
+    """Every Claude window whose latest replies are all "Credit balance too low", from its transcript.
+    One alert per row of such replies: a normal reply in between starts a new one."""
+    findings = [
+        credit_finding(name, verdict.since)
+        for name, verdict in window_verdicts(ctx)
+        if verdict.state == login.NO_CREDIT
+    ]
+    return Result("no Claude window gets only 'Credit balance too low'", findings)
 
 
 # A background command (a Bash tool call run in the background) keeps a Claude in "shell" once its
@@ -1530,6 +1563,13 @@ CHECKS: tuple[Check, ...] = (
         "with login errors; once per outage",
         check_login,
         rearms=True,
+    ),
+    Check(
+        NO_CREDIT,
+        "error",
+        "every prompt in a Claude window gets 'Credit balance too low' (an API key whose organization "
+        "has no credit that covers Claude Code); once per window and row of such replies",
+        check_no_credit,
     ),
     Check(
         "update-stuck",

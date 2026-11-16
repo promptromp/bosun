@@ -48,6 +48,7 @@ const SORT_CHOICES = [
   ["kind", "Kind"],
 ];
 const CLAUDE_STATUSES = ["idle", "busy", "shell", "waiting"];
+const LOGIN_PROBLEMS = ["needs-login", "no-credit"]; // lib/login.py's window states that need you
 const SECONDS = { d: 86400, h: 3600, m: 60 };
 const STATS_PERIODS = [7, 30, 90]; // /api/stats takes these and nothing else
 const SVG_NS = "http://www.w3.org/2000/svg";
@@ -915,7 +916,7 @@ function windowCard(w) {
       ["model", model],
       ["agent", agent ? [agent.harness || "", agent.version ? ` v${agent.version}` : "", agent.name ? ` ${agent.name}` : ""].join("") : ""],
       ["folder", w.dir ? el("span", { className: "dir mono" }, w.dir) : ""],
-      ["login", w.login ? el("span", { className: w.login.state === "needs-login" ? "problem" : "" }, `${w.login.state}: ${w.login.detail}`) : ""],
+      ["login", w.login ? el("span", { className: LOGIN_PROBLEMS.includes(w.login.state) ? "problem" : "" }, `${w.login.state}: ${w.login.detail}`) : ""],
     ]),
     heldList(w),
     w.last_report

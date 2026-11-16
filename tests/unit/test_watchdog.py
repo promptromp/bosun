@@ -1016,8 +1016,8 @@ class InputsTest(unittest.TestCase):
         self.assertIn("unknown check", err.getvalue())
 
 
-class LoginExpiredTest(WatchdogCase):
-    """An expired or revoked Claude Code login (fictional transcripts)."""
+class TranscriptCase(WatchdogCase):
+    """Windows whose Claude has a transcript (fictional ones), each with a normal reply first."""
 
     def setUp(self) -> None:
         super().setUp()
@@ -1047,6 +1047,16 @@ class LoginExpiredTest(WatchdogCase):
         message = {"model": "<synthetic>", "content": [{"type": "text", "text": "Login expired"}]}
         entry = {"type": "assistant", "timestamp": iso(moment), "isApiErrorMessage": True, "message": message}
         self.add(pid, {**entry, "error": "authentication_failed"})
+
+    def credit_error(self, pid: int, moment: datetime) -> None:
+        """Claude Code 2.1.308's reply to every prompt while its API key's organization has no credit."""
+        message = {"model": "<synthetic>", "content": [{"type": "text", "text": "Credit balance is too low"}]}
+        entry = {"type": "assistant", "timestamp": iso(moment), "isApiErrorMessage": True, "message": message}
+        self.add(pid, {**entry, "error": "billing_error", "apiErrorStatus": 400})
+
+
+class LoginExpiredTest(TranscriptCase):
+    """An expired or revoked Claude Code login."""
 
     def test_healthy_windows_do_not_alert(self) -> None:
         self.assertEqual(self.runs(at(MONDAY, "10:00"), 3, only="login-expired"), [])
@@ -1103,6 +1113,55 @@ class LoginExpiredTest(WatchdogCase):
             self.inputs(at(MONDAY, "09:05")), watchdog.select_checks("login-expired")
         )
         self.assertIn("FAIL  login-expired", text)
+
+    def test_credit_errors_are_no_login_error(self) -> None:
+        self.credit_error(ORCH_PID, at(MONDAY, "09:00"))
+        self.assertEqual(self.watch(at(MONDAY, "09:05"), only="login-expired"), [])
+
+
+class NoCreditTest(TranscriptCase):
+    """A window whose every reply is "Credit balance too low"."""
+
+    def test_healthy_windows_do_not_alert(self) -> None:
+        self.assertEqual(self.runs(at(MONDAY, "10:00"), 3, only="no-credit"), [])
+
+    def test_it_alerts_once_per_row_naming_the_window_and_what_to_do(self) -> None:
+        self.credit_error(ORCH_PID, at(MONDAY, "09:00"))
+        sent = self.watch(at(MONDAY, "09:05"), only="no-credit")
+        self.assertEqual(len(sent), 1)
+        since = login.shown(at(MONDAY, "09:00"))
+        self.assertIn(f"orch: every prompt gets 'Credit balance too low' since {since}", sent[0])
+        self.assertIn(
+            "Add credit in the Console's billing, or sign in with your subscription (/login)", sent[0]
+        )
+        self.assertIn("bosun send orch", sent[0])
+        self.credit_error(ORCH_PID, at(MONDAY, "10:00"))
+        self.assertEqual(self.runs(at(MONDAY, "10:05"), 6, only="no-credit"), [])
+
+    def test_the_finding_names_its_window(self) -> None:
+        self.credit_error(REPO_PID, at(MONDAY, "09:00"))
+        result = watchdog.check_no_credit(self.inputs(at(MONDAY, "09:05")).context(watchdog.State()))
+        self.assertEqual([f.window for f in result.findings], ["alpha"])
+        self.assertTrue(result.findings[0].key.startswith("no-credit:alpha:"))
+
+    def test_a_normal_reply_ends_it_and_a_new_row_alerts_again(self) -> None:
+        self.credit_error(ORCH_PID, at(MONDAY, "09:00"))
+        self.watch(at(MONDAY, "09:05"), only="no-credit")
+        self.reply(ORCH_PID, at(MONDAY, "09:30"))
+        self.assertEqual(self.watch(at(MONDAY, "09:35"), only="no-credit"), [])
+        self.credit_error(ORCH_PID, at(MONDAY, "11:00"))
+        sent = self.watch(at(MONDAY, "11:05"), only="no-credit")
+        self.assertEqual(len(sent), 1)
+        self.assertIn(f"since {login.shown(at(MONDAY, '11:00'))}", sent[0])
+
+    def test_login_errors_are_not_it(self) -> None:
+        self.login_error(ORCH_PID, at(MONDAY, "09:00"))
+        self.assertEqual(self.watch(at(MONDAY, "09:05"), only="no-credit"), [])
+
+    def test_status_shows_it(self) -> None:
+        self.credit_error(ORCH_PID, at(MONDAY, "09:00"))
+        text = watchdog.render_status(self.inputs(at(MONDAY, "09:05")), watchdog.select_checks("no-credit"))
+        self.assertIn("FAIL  no-credit        orch: every prompt gets 'Credit balance too low'", text)
 
 
 if __name__ == "__main__":
