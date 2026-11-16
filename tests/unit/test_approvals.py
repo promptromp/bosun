@@ -184,22 +184,75 @@ class MatchingTest(unittest.TestCase):
 
 
 class QuoteRuleTest(unittest.TestCase):
-    """What counts as my approval of a proposal (approvals.approval_quote_in): all of a prompt, or at
-    least MIN_QUOTE_CHARS of its whole words holding an approving word or the proposal's id."""
+    """What counts as my approval of a proposal (approvals.approval_quote_in, QUOTE_RULE): a quote that
+    says yes. All of a prompt holding an approving word, the id or a bare choice; or at least
+    MIN_QUOTE_CHARS of its whole words holding an approving word or the id. Never with a negation in its
+    sentence, nor in a question without an approving word."""
 
     def counts(self, quote: str, *prompts: str, item_id: str = PR) -> bool:
         return approvals.approval_quote_in(quote, prompts, item_id)
 
-    def test_a_whole_prompt_counts_however_short(self) -> None:
+    def test_a_whole_prompt_counts_when_it_says_yes(self) -> None:
         for quote, prompt in [
             ("yes", "yes"),
             ("send it", "Send it!"),
+            ("Yes!", "yes"),
             ("1 and 3", "  1 and\n3 "),
-            ("y", "y."),
-            ("go with option 2", "go with option 2"),
+            ("1,3", "1,3"),
+            ("2b", "2b."),
+            ("all", "all"),
+            ("both", "Both"),
+            ("all of them", "all of them!"),
+            (PR, PR),
+            ("Yeah, go ahead", "yeah, go ahead"),
+            ("\uff59\uff45\uff53", "yes"),  # fullwidth letters are letters (NFKC)
+            ("\u201cyes\u201d", "yes"),
         ]:
             with self.subTest(quote=quote):
                 self.assertTrue(self.counts(quote, prompt))
+
+    def test_a_whole_prompt_that_says_no_yes_counts_for_nothing(self) -> None:
+        """review round 1: any whole prompt approved, so "no", or an unrelated question quoted whole, did."""
+        for prompt in [
+            "what is on my plate today?",
+            "no",
+            "wait",
+            "stop",
+            "hold on",
+            "cancel that",
+            "no, don't send it",
+            "go with option 2",  # not a bare choice
+            "y",
+            "\U0001f44d",  # an emoji: later (M9)
+            "!",
+            "?",
+            "",
+        ]:
+            with self.subTest(prompt=prompt):
+                self.assertFalse(self.counts(prompt, prompt))
+
+    def test_a_negation_in_the_sentence_takes_the_yes_back(self) -> None:
+        for quote, prompt in [
+            ("don't send it", "no, don't send it yet, I want to reword it"),
+            ("I don't think we should send", "I don't think we should send that message"),
+            ("not fine", "that is not fine at all"),
+            ("do not approve", "do not approve that"),
+            ("never ok", "never ok to merge on friday"),
+            ("go ahead and send it", "go ahead and send it, no wait"),
+            ("ok to send it", "it is not ok to send it"),  # the negation before the quote, same sentence
+            ("yes, send it", "Yes, send it\u2026 actually don\u2019t"),  # a typographic apostrophe
+            ("sure, send it", "sure, send it, but hold the second one"),
+            ("1 yes", "1 yes, 2 no"),
+        ]:
+            with self.subTest(quote=quote):
+                self.assertFalse(self.counts(quote, prompt))
+        self.assertTrue(self.counts("yes, send it.", "Don't wait for CI. Yes, send it."))  # another sentence
+
+    def test_in_a_question_only_an_approving_word_says_yes(self) -> None:
+        self.assertFalse(self.counts(PR, f"why is {PR} still open?"))
+        self.assertFalse(self.counts(f"why is {PR} still open?", f"why is {PR} still open?"))
+        self.assertFalse(self.counts("1 and 3", "1 and 3?"))
+        self.assertTrue(self.counts("can you send it now?", "can you send it now?"))
 
     def test_a_part_needs_whole_words_the_length_and_an_approving_word_or_the_id(self) -> None:
         prompt = "1 and 3 YES, 2 skip; also check why the exporter's CI is red today"
@@ -207,6 +260,7 @@ class QuoteRuleTest(unittest.TestCase):
         self.assertTrue(self.counts("1 and 3 yes, 2 skip", prompt))
         self.assertTrue(self.counts(f"{PR} go", f"for {PR} go, the rest later"))
         self.assertTrue(self.counts("ok, send that", "fine by me. OK, send that one"))
+        self.assertTrue(self.counts("go ahead with 1 and 3", "sure, go ahead with 1 and 3 and tell me after"))
         for quote in [
             "e",  # one letter of any prompt
             "today",  # a whole word, but short and approving nothing
@@ -215,9 +269,11 @@ class QuoteRuleTest(unittest.TestCase):
             "1 and 3 ye",  # cuts it at the other end
             "yes",  # an approving word, too short as a part of a longer prompt
             "check why the exporter's",  # long, but no approving word
+            "1 and 3",  # a bare choice, but not all of the prompt
         ]:
             with self.subTest(quote=quote):
                 self.assertFalse(self.counts(quote, prompt))
+        self.assertFalse(self.counts("yes and look", "yes", "and look"))  # across two prompts
 
     def test_an_approving_word_inside_another_word_is_none(self) -> None:
         prompt = "yesterday's okayish draft is in the doc"
@@ -490,7 +546,13 @@ class ChatApprovalTest(ApprovalsTestCase):
         self.approving_in(agent_state.CallingSession("claude", 4242, self.transcript, True))
         self.propose_touch()
         self.say(typed("what is on my plate today?", self.now()))
-        for quote in ("e", "today", "on my plate", "what is on my plate today? yes"):
+        for quote in (
+            "e",
+            "today",
+            "on my plate",
+            "what is on my plate today?",
+            "what is on my plate today? yes",
+        ):
             with self.subTest(quote=quote):
                 with self.assertRaises(ledger.LedgerError) as refused:
                     run("approve", PR, "--quote", quote)
@@ -502,6 +564,25 @@ class ChatApprovalTest(ApprovalsTestCase):
         self.say(typed("1 and 3 yes, and look at the CI", self.now()))
         run("approve", PR, "--quote", QUOTE)
         self.assertTrue(self.allowed(self.event("Bash", command=TOUCH)))
+
+    def test_a_reply_that_says_no_yes_approves_nothing(self) -> None:
+        """review round 1 (test_forge): a whole unrelated prompt, a "no", a negated "send". Refused by
+        approve in the session, and by the guard when approve was run where it could not check."""
+        for typed_text, quote in [
+            ("what is on my plate today?", "what is on my plate today?"),
+            ("no", "no"),
+            ("no, don't send it yet, I want to reword it", "don't send it"),
+        ]:
+            with self.subTest(quote=quote):
+                self.transcript.write_text("")
+                self.approving_in(agent_state.CallingSession("claude", 4242, self.transcript, True))
+                self.propose_touch()
+                self.say(typed(typed_text, self.now()))
+                with self.assertRaisesRegex(ledger.LedgerError, "does not count as my approval"):
+                    run("approve", PR, "--quote", quote)
+                self.approving_in(None)
+                run("approve", PR, "--quote", quote)
+                self.assertFalse(self.allowed(self.event("Bash", command=TOUCH)))
 
     def test_approve_records_unchecked_where_it_cannot_read_the_session(self) -> None:
         """From a terminal (the base case) or an agent whose prompts bosun cannot read, approve records

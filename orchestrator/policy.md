@@ -308,8 +308,9 @@ merge|ready|edit|comment|review|close|update-branch|create`, `gh issue comment|c
 - When I approve ("1 and 3 yes"), first record it on each item I approved: `bosun ledger
   approve '<id>' --quote '<my words, copied exactly>'`: all of my reply when it is short, else at
   least 8 characters of it, whole words, that hold my yes (yes, ok, send, go ahead, ...) or the
-  item's id. `approve` refuses a quote that does not count, saying why. Then make exactly the
-  proposed call, once.
+  item's id. A reply with a no, wait or don't beside my yes, or a question, approves nothing: ask
+  me. `approve` refuses a quote that does not count, saying why. Then make exactly the proposed
+  call, once.
   An approved command runs as a Bash call of its own, exactly as proposed: no `timeout`, `cd`,
   pipe or other step around it (an approval matches the exact command only); check the result
   with a separate call. A changed text or command is a new proposal that needs my approval again. Once the call

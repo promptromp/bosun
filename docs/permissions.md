@@ -65,12 +65,14 @@ the orchestrator's next start; design: [docs/design/approvals.md](design/approva
   --channel C --text -`, `--run '<command>'`, `--tool <tool> --args-json -`). When you approve
   ("1 and 3 yes"), it records your words (`ledger approve <id> --quote '1 and 3 yes'`) and makes
   the call; a PermissionRequest hook (`bosun guard --permission-request`) lets exactly that
-  call through, once, if your words are a prompt you typed (or sent from your phone) in that
-  session after the proposal: all of it ("yes", "1 and 3"), or at least 8 characters of its whole
-  words that hold an approving word (yes, ok, send, go ahead, lgtm, ...) or the item's id. Tool
-  results, pasted and injected text never count, and `ledger approve` refuses a quote that does
-  not. It cannot tell what your yes answered: a "yes" to another question after the proposal
-  counts for it too.
+  call through, once, if your words say yes in a prompt you typed (or sent from your phone) in that
+  session after the proposal: all of the prompt holding an approving word (yes, ok, send, go ahead,
+  lgtm, ...), the item's id or a bare choice ("1 and 3", "all"); or at least 8 characters of its
+  whole words holding an approving word or the id. A no, not, never, wait, stop, hold, cancel or a
+  word ending in n't in the same sentence, or a question without an approving word, never counts;
+  nor do tool results, pasted and injected text. `ledger approve` refuses a quote that does not
+  count. It cannot tell what your yes answered: a "yes" to another question after the proposal
+  counts for it too, and so does a yes you take back in a later sentence or prompt.
 - A tool call whose arguments hold a decimal number (`{"story_points": 2.5}`) cannot be proposed:
   the ledger's journal holds whole numbers and text only, so `propose` refuses it, naming the
   field. Make such a call yourself, or set `BOSUN_APPROVALS_DENY_UNAPPROVED=0` so that it asks at

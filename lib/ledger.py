@@ -2046,7 +2046,8 @@ def check_approval_quote(
     raise LedgerError(
         f"the quote {approval['quote']!r} does not count as my approval of {item_id} in this session, so "
         f"nothing was recorded: {approvals.QUOTE_RULE}. Quote my reply as I typed it: all of it when it is "
-        "short, else the words of it that approve this item"
+        "short and says yes, else the words of it that say yes to this item; when it says no or only asks "
+        "something, ask me instead"
     )
 
 

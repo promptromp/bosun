@@ -46,10 +46,11 @@
 #                                                for (an action spec; the action defaults to it)
 #   approve <id> --quote '<my exact words>'      I approved the pending proposal's action spec in
 #                                                chat: the guard lets exactly that call through,
-#                                                once, while my words are in the session: all of
-#                                                a prompt, or 8+ characters of its whole words
-#                                                with my yes or the id (refused here when they
-#                                                are not, from the session that runs it)
+#                                                once, while my words say yes in the session: a
+#                                                whole prompt with my yes, the id or a bare
+#                                                choice, or 8+ characters of its whole words with
+#                                                my yes or the id, never beside a no (refused
+#                                                here when they do not, from the session)
 #                                                (BOSUN_APPROVALS_ENABLED; docs/design/approvals.md)
 #   approvals [--since T] [--auto]               calls the guard let through: approved in chat, or
 #                                                (--auto: only) under a standing class
