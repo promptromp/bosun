@@ -3909,6 +3909,13 @@ async function poll() {
   else updateNeedsBadge();
 }
 
+// "Skip to content" focuses the main region and leaves the hash alone: the hash is the route, so
+// following its #main would show the default view and send a decision still waiting for Z.
+function skipToContent(event) {
+  event.preventDefault();
+  document.getElementById("main").focus();
+}
+
 window.addEventListener("pagehide", () => commitPending());
 window.addEventListener("hashchange", () => {
   render();
@@ -3918,6 +3925,8 @@ document.addEventListener("visibilitychange", () => {
   if (!document.hidden) poll();
 });
 document.addEventListener("DOMContentLoaded", () => {
+  const skip = document.querySelector(".skip-link");
+  if (skip) skip.addEventListener("click", skipToContent);
   render();
   poll();
   pollTimer = setInterval(poll, POLL_MS);

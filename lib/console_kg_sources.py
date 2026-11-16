@@ -50,9 +50,10 @@ def title_of(transcript: Path) -> str:
 
 
 def summary_of(note: Path) -> str:
-    """A memory note's front-matter description (its one-line summary), or ''."""
+    """A memory note's front-matter description (its one-line summary), redacted as the Library
+    shows it, or ''."""
     text, _ = console_files.read(note)
-    fields = dict(console_library.front_matter(text)[0]) if text else {}
+    fields = console_library.shown_fields(text, console_library.MARKDOWN, MEMORY) if text else {}
     return str(fields.get("description") or "").strip().strip('"')
 
 

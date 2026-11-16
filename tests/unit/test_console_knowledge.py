@@ -420,6 +420,15 @@ class ReviewTest(KnowledgeWorld):
         self.assertTrue(all(k["id"] not in shown for b in blocks for k in b["known"]))
         self.assertLessEqual(max(len(b["known"]) for b in blocks), ck.CONTEXT_FACTS)
 
+    def test_a_block_heading_never_shows_a_person_s_summary(self) -> None:
+        kb = self.kb()
+        kb.entities["person/dana"] = {**kb.entities["person/dana"], "summary": "a free-text note by hand"}
+        self.assertEqual(ck.block_head(kb, "person/dana")["summary"], "")
+        self.assertEqual(ck.block_head(kb, "person/dana")["type_label"], "person")
+        repo = "repo/invoice-exporter"
+        kb.entities[repo] = {**kb.entities[repo], "summary": "the exporter"}
+        self.assertEqual(ck.block_head(kb, repo)["summary"], "the exporter")
+
     def test_facts_that_place_an_entity_are_its_subtitle(self) -> None:
         kb = self.kb()
         subject = {"id": "decision/numbering"}

@@ -366,6 +366,13 @@ async function main() {
     });
   }
 
+  check("Skip to content focuses the main region instead of following #main, which is no route", () => {
+    let prevented = false;
+    sandbox.skipToContent({ preventDefault: () => (prevented = true) });
+    if (!prevented) return "the link's own jump to #main (the default view) was not stopped";
+    return document.activeElement === document.getElementById("main") ? null : "the main region has no focus";
+  });
+
   await expandableChecks();
   await impactChecks();
   await knowledgeChecks();
