@@ -1226,19 +1226,29 @@ def replies_last_first(transcript: Path, sidechain: bool = False) -> Iterator[di
             yield entry
 
 
-def last_api_error(transcript: Path, sidechain: bool = False) -> ApiError | None:
+def last_api_error(
+    transcript: Path, sidechain: bool = False, after: datetime | None = None
+) -> ApiError | None:
     """The error the session's latest reply reports, or None if that reply is a normal one (or there
     is none yet). `since` is the first of the error replies of that category in a row, so it stays
     put while every new prompt fails the same way; any normal reply ends the row. <sidechain>: a
-    subagent's transcript."""
+    subagent's transcript. <after>: a moment the row was broken elsewhere (another window's normal
+    reply): when its latest error came later, the row starts at its first error after that moment."""
     latest: ApiError | None = None
     for entry in replies_last_first(transcript, sidechain):
         error = reply_error(entry)
         if error is None or (latest is not None and error.category != latest.category):
             break
         at = entry_time(entry)
+        if latest is not None and broken(after, latest.at, at):
+            break
         latest = replace(error, at=at, since=at) if latest is None else replace(latest, since=at)
     return latest
+
+
+def broken(after: datetime | None, last: datetime | None, at: datetime | None) -> bool:
+    """Whether a row whose latest error came at <last> was broken at <after>, before its error at <at>."""
+    return after is not None and last is not None and last > after and (at is None or at <= after)
 
 
 CONTEXT_FIELDS = ("input_tokens", "cache_read_input_tokens", "cache_creation_input_tokens")

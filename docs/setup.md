@@ -895,8 +895,9 @@ What happens then:
 - **One login for every window:** the login is the Mac's, so once a login check works, or any
   window gets a normal reply, after the last login error of every window, `bosun status`, the
   watchdog and the console count all the windows as working again, an idle one too, which gets no
-  prompt to show it. (The check-in loop's gate reads only the orchestrator's own replies and the
-  login check.)
+  prompt to show it, and the check-in loop lets the orchestrator go (while it holds it back, it reads
+  the other windows too). A window that fails again after such a sign starts a new row: its "since"
+  is its first error after the sign, so the watchdog's `no-credit` alerts again.
 - **Watchdog:** `login-expired` alerts once per outage, for the login and for every Claude window
   (repo sessions too), and alerts again if it comes back after recovering. Like every check it
   alerts only inside the awake window: an outage overnight or on a weekend alerts when the window

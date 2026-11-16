@@ -18,7 +18,7 @@ best first (everything Claude Code-specific is read through lib/claude_state.py)
 
 The login is this Mac's, not one window's: a login check that worked, or a reply the API gave in
 any window, after every window's last login error clears them all (see Worked). `status`, the
-watchdog and the console read every window; `window` reads only its own.
+watchdog and the console read every window; `window` its own and those --also names.
 
 A window can also get nothing but "Credit balance too low" (billing_error: an API key whose
 organization has no credit that covers Claude Code): no-credit. Its login works, so it is not
@@ -28,7 +28,7 @@ without it), so only a normal reply ends it, in that window or (credit being the
 in another one after every window's last credit error.
 
 Usage: login.py window <name> <claude pid> [--after <epoch>] [--wait <seconds>] [--probe] [--pane -]
-                         [--dry-run]
+                         [--dry-run] [--also <name>=<claude pid>]...
        login.py global [--probe]
        login.py status          (lines "<window>\\t<claude pid>" on stdin, as window_agent_pids)
 
@@ -38,7 +38,9 @@ the windows that need a login, and the last login check, in $BOSUN_STATE_DIR/log
 --after/--wait: first wait up to <seconds> for a reply newer than <epoch> (after a delivery).
 --probe: if the window needs a login, or the last login check failed, make the login check
 request when one is due. --pane -: the window's visible text on stdin, read only when there is no
-transcript. --dry-run: record nothing.
+transcript. --dry-run: record nothing. --also: another Claude window, whose replies count too (the
+check-in loop passes them while the window is held back, so it is let go on the same signs as the
+watchdog's).
 `global` prints the state of the login itself; --probe makes the login check request.
 `status` prints both for `bosun status`, changing nothing.
 Exit codes: 0 ok, 1 needs a login, 3 unknown, 4 no credit, 2 usage. Settings: BOSUN_STATE_DIR,
@@ -187,9 +189,10 @@ def credit_detail(error: ApiError) -> str:
 # The login and the credit are this Mac's, not one window's: a sign that one works, later than the
 # last error of its kind in every window read, clears those windows: for the login, a login check
 # that worked or a reply the API gave in any window; for the credit, only such a reply (`claude -p`,
-# the login check, works without credit). Every window bosun starts uses the same credentials (one
-# ~/.claude, one apiKeyHelper, one environment). A window cleared wrongly shows again with its next
-# prompt, which fails the same way.
+# the login check, works without credit). This assumes that every window bosun starts uses the same
+# credentials (one ~/.claude, one apiKeyHelper, one environment); a repo's own .claude/settings.json
+# can set `env` or `apiKeyHelper`, and then its replies say nothing of the others. A window cleared
+# wrongly shows again with its next prompt, which fails the same way, as a new row (restarted).
 
 
 @dataclass(frozen=True)
@@ -221,13 +224,27 @@ def later_than_all(sign: Worked, category: str, errors: Iterable[ApiError | None
     return all(at is not None and sign.at > at for at in times)
 
 
-def cleared_by(
-    probe: Probe | None, answer: Worked | None, errors: Iterable[ApiError | None]
-) -> dict[str, Worked]:
-    """Per category (auth, credit), the sign that clears the windows' errors of it, if any."""
+def signs_of(probe: Probe | None, answer: Worked | None) -> dict[str, Worked | None]:
+    """The latest sign, per category, that it works: the login, from a login check that worked or a
+    reply; the credit, from a reply only."""
+    return {claude_state.AUTH: latest(probe_worked(probe), answer), claude_state.CREDIT: answer}
+
+
+def cleared_by(signs: Mapping[str, Worked | None], errors: Iterable[ApiError | None]) -> dict[str, Worked]:
+    """Per category, the sign that clears the windows' errors of it, if any."""
     found = list(errors)
-    signs = {claude_state.AUTH: latest(probe_worked(probe), answer), claude_state.CREDIT: answer}
     return {kind: sign for kind, sign in signs.items() if sign and later_than_all(sign, kind, found)}
+
+
+def restarted(
+    transcript: Path, error: ApiError | None, signs: Mapping[str, Worked | None]
+) -> ApiError | None:
+    """<error>, its row starting again after the latest sign of its kind when that came within the row:
+    it worked then, so only the errors after it count (for `since`, and so the watchdog's key)."""
+    sign = signs.get(error.category) if error else None
+    if error is None or sign is None or not (error.since and error.at and error.since <= sign.at < error.at):
+        return error
+    return claude_state.last_api_error(transcript, after=sign.at)
 
 
 def latest(*signs: Worked | None) -> Worked | None:
@@ -251,12 +268,8 @@ def transcript_verdict(error: ApiError | None, cleared: Mapping[str, Worked] | N
     return Verdict(NEEDS_LOGIN, error_detail(error), error.since)
 
 
-def window_verdict(transcript: Path | None, probe: Probe | None, pane: str = "") -> Verdict:
-    """Whether the session in a window gets real replies, from its transcript and the last login
-    check; without a transcript, from the window's last lines (the pattern fallback)."""
-    if transcript is not None:
-        error = claude_state.last_api_error(transcript)
-        return transcript_verdict(error, cleared_by(probe, None, [error]))
+def pane_verdict(pane: str) -> Verdict:
+    """A window with no transcript: its last lines, if given (the pattern fallback)."""
     if pane and claude_state.pane_auth_error(pane):
         return Verdict(
             NEEDS_LOGIN, "no transcript; its last lines read like a login error (pattern fallback)"
@@ -264,14 +277,20 @@ def window_verdict(transcript: Path | None, probe: Probe | None, pane: str = "")
     return Verdict(UNKNOWN, "no transcript to read yet")
 
 
-def window_verdicts(transcripts: Mapping[str, Path | None], probe: Probe | None) -> dict[str, Verdict]:
-    """Each window's verdict from its transcript (none: unknown), the last login check and what the
-    other windows show (see Worked)."""
+def window_verdicts(
+    transcripts: Mapping[str, Path | None], probe: Probe | None, panes: Mapping[str, str] | None = None
+) -> dict[str, Verdict]:
+    """Whether the session in each window gets real replies, from its transcript, the last login check
+    and what the other windows show (see Worked); a window without a transcript, from its last lines in
+    <panes>, if given (the pattern fallback)."""
     read = {name: path for name, path in transcripts.items() if path is not None}
-    errors = {name: claude_state.last_api_error(path) for name, path in read.items()}
-    cleared = cleared_by(probe, latest_answer(read), errors.values())
+    signs = signs_of(probe, latest_answer(read))
+    errors = {name: restarted(path, claude_state.last_api_error(path), signs) for name, path in read.items()}
+    cleared = cleared_by(signs, errors.values())
     return {
-        name: transcript_verdict(errors[name], cleared) if name in read else window_verdict(None, probe)
+        name: transcript_verdict(errors[name], cleared)
+        if name in read
+        else pane_verdict((panes or {}).get(name, ""))
         for name in transcripts
     }
 
@@ -362,20 +381,31 @@ def wait_for_reply(env: Env, transcript: Path, after: float, seconds: float) -> 
         env.sleep(REPLY_POLL_SECONDS)
 
 
+def verdict_of(name: str, windows: Mapping[str, Path | None], probe: Probe | None, pane: str) -> Verdict:
+    """<name>'s verdict among <windows> (name -> transcript); <pane>: its last lines."""
+    return window_verdicts(windows, probe, {name: pane})[name]
+
+
+def other_transcripts(env: Env, others: list[tuple[str, str]]) -> dict[str, Path | None]:
+    """The transcripts of the windows --also names (name, pid)."""
+    return {name: window_transcript(env, pid) for name, pid in others}
+
+
 def check_window(env: Env, args: argparse.Namespace, pane: str) -> tuple[Verdict, str]:
     transcript = window_transcript(env, args.pid)
     if transcript is not None and args.after is not None:
         wait_for_reply(env, transcript, args.after, args.wait)
+    windows = {**other_transcripts(env, args.also), args.name: transcript}
     if args.dry_run:
         state = State.load(env.state_dir)
-        verdict = window_verdict(transcript, state.last_probe, pane)
+        verdict = verdict_of(args.name, windows, state.last_probe, pane)
         return verdict, update_gate(state, args.name, verdict)  # not saved
     with locked_state(env.state_dir) as state:
-        verdict = window_verdict(transcript, state.last_probe, pane)
+        verdict = verdict_of(args.name, windows, state.last_probe, pane)
         last = state.last_probe
         failing = verdict.state == NEEDS_LOGIN or (last is not None and last.outcome == claude_state.AUTH)
         if args.probe and failing and probe_due(last, env.now()):
-            verdict = window_verdict(transcript, check_login(env, state) or last, pane)
+            verdict = verdict_of(args.name, windows, check_login(env, state) or last, pane)
         return verdict, update_gate(state, args.name, verdict)
 
 
@@ -405,6 +435,14 @@ def render_status(env: Env, windows: list[tuple[str, str]]) -> str:
 # ---- command line ------------------------------------------------------------------------------
 
 
+def other_window(value: str) -> tuple[str, str]:
+    """--also's value: another window and the pid of the Claude in it."""
+    name, _, pid = value.rpartition("=")
+    if not name or not pid:
+        raise argparse.ArgumentTypeError(f"expected NAME=PID, not {value!r}")
+    return name, pid
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="login.py", description=__doc__)
     commands = parser.add_subparsers(dest="command", required=True)
@@ -416,6 +454,7 @@ def build_parser() -> argparse.ArgumentParser:
     window.add_argument("--probe", action="store_true")
     window.add_argument("--pane", choices=["-"])
     window.add_argument("--dry-run", action="store_true")
+    window.add_argument("--also", action="append", default=[], type=other_window, metavar="NAME=PID")
     overall = commands.add_parser("global")
     overall.add_argument("--probe", action="store_true")
     commands.add_parser("status")

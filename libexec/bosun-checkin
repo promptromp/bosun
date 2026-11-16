@@ -39,7 +39,8 @@
 #
 # When the orchestrator answers only with login errors (an expired or revoked Claude Code login),
 # it logs "<window> needs /login" once and sends it no check-ins or events until it works again: a
-# normal reply (after you run /login and talk to it), or a login check request that succeeds. The
+# normal reply (after you run /login and talk to it, there or in any other Claude window: the login
+# is the Mac's), or a login check request that succeeds. The
 # watchdog's login-expired check alerts you. One whose every reply is "Credit balance too low"
 # (no credit for its API key) still gets them, as on a usage limit; the watchdog's no-credit check
 # alerts you.
@@ -205,16 +206,29 @@ deliver_checkin() { # <window_id> <agent_pid>
 # Only needs-login holds it back (no-credit does not); the verdict's first word decides, never
 # login.py's exit status.
 login_ok() { # <window> <window_id> <agent_pid> [--probe | --after <epoch> --wait <seconds>]
-  local window="$1" window_id="$2" verdict
+  local window="$1" window_id="$2" verdict option others=()
   shift 2
+  while IFS= read -r option; do others+=("$option"); done < <(login_others "$window")
   verdict="$(tmux_cmd capture-pane -p -t "$window_id" 2>/dev/null |
-    claude_login window "$window" "$@" --pane - ${LOGIN_DRY_RUN[@]+"${LOGIN_DRY_RUN[@]}"})"
+    claude_login window "$window" "$@" --pane - ${LOGIN_DRY_RUN[@]+"${LOGIN_DRY_RUN[@]}"} ${others[@]+"${others[@]}"})"
   case "$verdict" in
     "needs-login new "*) log "$window needs /login: ${verdict#needs-login new }; check-ins and events to it pause until it works again" ;;
     "ok recovered "*) log "$window works again (${verdict#ok recovered }); check-ins and events resume" ;;
     "no-credit recovered "*) log "$window's login works again, but it has no credit (${verdict#no-credit recovered }); check-ins and events resume" ;;
   esac
   [ "${verdict%% *}" != "needs-login" ]
+}
+
+# The other Claude windows, as `login.py window` options (--also <name>=<pid>), while <window> is held
+# back for its login (login.json names it): a reply in any of them, or a login check that worked,
+# after every window's last login error lets it go, as the watchdog reads them. Only then: listing
+# them costs a process or two per window, every tick.
+login_others() { # <window>
+  local name pid
+  grep -qF "\"$1\"" "$BOSUN_STATE_DIR/login.json" 2>/dev/null || return 0
+  window_agent_pids | while IFS=$'\t' read -r name pid; do
+    if [ -n "$pid" ] && [ "$name" != "$1" ]; then printf -- '--also\n%s=%s\n' "$name" "$pid"; fi
+  done
 }
 
 # Push pending events to the orchestrator (with BOSUN_EVENTS_ENABLED=1), unless it only gets

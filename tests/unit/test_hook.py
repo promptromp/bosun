@@ -401,6 +401,13 @@ class WatchdogEventsCheckTest(unittest.TestCase):
         [finding] = self.check().findings
         self.assertTrue(finding.key.startswith("events:stalled:"))
 
+    def test_a_gate_with_no_time_says_so(self) -> None:
+        self.save(last_tick=self.utc(NOON - timedelta(minutes=40)))
+        login.State(gated={"orch": "?"}).save(self.state_dir)
+        result = self.check()
+        self.assertEqual(result.findings, [])
+        self.assertIn("needs /login (since an unknown time; see login-expired)", result.note)
+
     def test_a_failed_delivery_alerts_once_a_day(self) -> None:
         self.save(last_tick=self.utc(NOON), last_error={"at": self.utc(NOON), "error": "window is waiting"})
         [finding] = self.check().findings

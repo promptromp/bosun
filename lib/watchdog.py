@@ -479,6 +479,8 @@ class Context:
     alive: Callable[[int], bool] = pid_alive
     auth_status: Callable[[str], claude_state.AuthStatus] = claude_state.auth_status
     morning_run: MorningRun | None = field(init=False)
+    # Each Claude window's login verdict, read once a run by the first check that asks (window_verdicts).
+    login_verdicts: dict[str, login.Verdict] | None = field(default=None, init=False)
 
     def __post_init__(self) -> None:
         self.morning_run = last_real_run(self.morning_log)
@@ -1010,9 +1012,12 @@ def check_events(ctx: Context) -> Result:
 
 def events_held(ctx: Context) -> str:
     """Why the check-in loop runs no dispatcher on purpose, or "": while the orchestrator needs a login
-    (the gate the loop itself keeps in login.json) it holds events back, and its last tick ages."""
+    (the gate the loop itself keeps in login.json) it holds events back, and its last tick ages. Only
+    while this run's own verdict agrees (or has none: no transcript): the loop lets the gate go on the
+    same signs, so a gate held past them is a loop running older code, which the stall's fix restarts."""
     since = login.State.load(ctx.config.state_dir).gated.get(ctx.config.orchestrator)
-    if since is None:
+    own = window_verdicts(ctx).get(ctx.config.orchestrator)
+    if since is None or (own is not None and own.state != login.NEEDS_LOGIN):
         return ""
     when = login.shown(login.parse_stamp(since))
     who = ctx.config.orchestrator
@@ -1110,17 +1115,20 @@ def window_transcripts(ctx: Context) -> dict[str, Path]:
     return found
 
 
-def window_verdicts(ctx: Context, probe: login.Probe | None) -> dict[str, login.Verdict]:
-    """Each Claude window's verdict (lib/login.py: its transcript, the last login check <probe> and what
-    the other windows show), as `bosun status` and the console have it."""
-    return login.window_verdicts(window_transcripts(ctx), probe)
+def window_verdicts(ctx: Context) -> dict[str, login.Verdict]:
+    """Each Claude window's verdict (lib/login.py: its transcript, the last login check and what the other
+    windows show), as `bosun status`, the console and the check-in loop have it; read once a run."""
+    if ctx.login_verdicts is None:
+        probe = login.State.load(ctx.config.state_dir).last_probe
+        ctx.login_verdicts = login.window_verdicts(window_transcripts(ctx), probe)
+    return ctx.login_verdicts
 
 
-def window_logins(ctx: Context, probe: login.Probe | None) -> list[str]:
+def window_logins(ctx: Context) -> list[str]:
     """The Claude windows whose latest replies are all login errors, with since when."""
     return [
         f"{name} (since {login.shown(verdict.since)})"
-        for name, verdict in window_verdicts(ctx, probe).items()
+        for name, verdict in window_verdicts(ctx).items()
         if verdict.state == login.NEEDS_LOGIN
     ]
 
@@ -1130,7 +1138,7 @@ def check_login(ctx: Context) -> Result:
     latest replies. One alert per outage: the key stays the same until everything works again."""
     probe = login.State.load(ctx.config.state_dir).last_probe
     overall = login.global_verdict(ctx.auth_status(ctx.config.claude_bin), probe)
-    windows = window_logins(ctx, probe)
+    windows = window_logins(ctx)
     if overall.state != login.NEEDS_LOGIN and not windows:
         return Result(f"Claude Code {overall.detail}; no window answers only with login errors")
     problems = [overall.detail] if overall.state == login.NEEDS_LOGIN else []
@@ -1157,10 +1165,9 @@ def credit_finding(window: str, since: datetime | None) -> Finding:
 def check_no_credit(ctx: Context) -> Result:
     """Every Claude window whose latest replies are all "Credit balance too low", from its transcript.
     One alert per row of such replies: a normal reply in between starts a new one."""
-    verdicts = window_verdicts(ctx, login.State.load(ctx.config.state_dir).last_probe)
     findings = [
         credit_finding(name, verdict.since)
-        for name, verdict in verdicts.items()
+        for name, verdict in window_verdicts(ctx).items()
         if verdict.state == login.NO_CREDIT
     ]
     return Result("no Claude window gets only 'Credit balance too low'", findings)

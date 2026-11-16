@@ -20,6 +20,7 @@ from typing import Any
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "lib"))
 import app_release
 import claude_state
+import events
 import login
 import quit_state
 import signals
@@ -1183,6 +1184,19 @@ class NoCreditTest(TranscriptCase):
         login.State(probe=worked.to_json()).save(self.state_dir)
         self.assertEqual(len(self.watch(at(MONDAY, "09:35"), only="no-credit")), 1)
 
+    def test_credit_back_then_gone_again_alerts_again_from_its_new_first_error(self) -> None:
+        self.credit_error(REPO_PID, at(MONDAY, "09:00"))
+        self.assertEqual(len(self.watch(at(MONDAY, "09:05"), only="no-credit")), 1)
+        self.reply(ORCH_PID, at(MONDAY, "09:30"))  # credit was added: another window works
+        self.assertEqual(self.watch(at(MONDAY, "09:35"), only="no-credit"), [])
+        self.credit_error(REPO_PID, at(MONDAY, "11:00"))  # and it ran out again
+        sent = self.watch(at(MONDAY, "11:05"), only="no-credit")
+        self.assertEqual(len(sent), 1)
+        self.assertIn(
+            f"alpha: every prompt gets 'Credit balance too low' since {login.shown(at(MONDAY, '11:00'))}",
+            sent[0],
+        )
+
     def test_login_errors_are_not_it(self) -> None:
         self.login_error(ORCH_PID, at(MONDAY, "09:00"))
         self.assertEqual(self.watch(at(MONDAY, "09:05"), only="no-credit"), [])
@@ -1191,6 +1205,34 @@ class NoCreditTest(TranscriptCase):
         self.credit_error(ORCH_PID, at(MONDAY, "09:00"))
         text = watchdog.render_status(self.inputs(at(MONDAY, "09:05")), watchdog.select_checks("no-credit"))
         self.assertIn("FAIL  no-credit        orch: every prompt gets 'Credit balance too low'", text)
+
+
+class EventsHeldTest(TranscriptCase):
+    """The events check while the check-in loop holds events back for the orchestrator's login."""
+
+    def setUp(self) -> None:
+        super().setUp()
+        self.config = replace(self.config, events_enabled=True, events_interval_seconds=30)
+        directory = events.events_dir(self.state_dir)
+        directory.mkdir(parents=True)
+        events.State(last_tick=iso(at(MONDAY, "09:00"))).save(directory)
+        self.login_error(ORCH_PID, at(MONDAY, "09:01"))
+        login.State(gated={"orch": iso(at(MONDAY, "09:01"))}).save(self.state_dir)
+
+    def check(self, now: datetime) -> watchdog.Result:
+        return watchdog.check_events(self.inputs(now).context(watchdog.State()))
+
+    def test_no_stall_while_the_orchestrator_needs_a_login(self) -> None:
+        result = self.check(at(MONDAY, "09:40"))
+        self.assertEqual(result.findings, [])
+        self.assertIn("holds events back while orch needs /login (since Mon 09:01", result.note)
+
+    def test_a_gate_held_past_a_reply_in_another_window_is_a_stall(self) -> None:
+        # The loop lets the gate go on the same signs; one that has not runs older code.
+        self.reply(REPO_PID, at(MONDAY, "09:10"))
+        [finding] = self.check(at(MONDAY, "09:40")).findings
+        self.assertTrue(finding.key.startswith("events:stalled:"))
+        self.assertIn("bosun refresh checkin", finding.message)
 
 
 if __name__ == "__main__":

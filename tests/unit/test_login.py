@@ -38,6 +38,7 @@ T0 = datetime(2026, 1, 10, 17, 0, tzinfo=UTC)  # a Saturday
 WORKDIR = "/work/invoice-exporter"
 SESSION = "00000000-0000-0000-0000-00000000000a"
 OTHER_SESSION = "00000000-0000-0000-0000-00000000000b"  # a second window's
+THIRD_SESSION = "00000000-0000-0000-0000-00000000000c"  # and a third's
 
 
 def stamp(minutes: float) -> str:
@@ -188,6 +189,14 @@ class LastApiErrorTest(TmpCase):
             (error.category, error.source, error.code), (CREDIT, STRUCTURED, "billing_error/400")
         )
         self.assertEqual((error.since, error.at), (T0 + timedelta(minutes=30), T0 + timedelta(minutes=90)))
+
+    def test_a_row_broken_elsewhere_starts_after_that_moment(self) -> None:
+        for minutes in (30, 60, 90):
+            self.add(prompt(minutes), error_reply(minutes, "Credit balance is too low", **NO_CREDIT))
+        error = claude_state.last_api_error(self.transcript, after=T0 + timedelta(minutes=45))
+        self.assertEqual(error.since if error else None, T0 + timedelta(minutes=60))
+        error = claude_state.last_api_error(self.transcript, after=T0 + timedelta(minutes=95))
+        self.assertEqual(error.since if error else None, T0 + timedelta(minutes=30))  # after the whole row
 
     def test_since_restarts_when_the_category_changes(self) -> None:
         self.add(error_reply(0, "API Error: no response", **NO_RESPONSE))
@@ -403,7 +412,7 @@ class WindowCase(TmpCase):
             now=lambda: self.now,
             auth_status=self.claude.auth_status,
             probe=self.claude.probe,
-            record=lambda _pid: {"cwd": WORKDIR, "sessionId": SESSION},
+            record=lambda pid: {"cwd": WORKDIR, "sessionId": OTHER_SESSION if str(pid) == "102" else SESSION},
             sleep=lambda _seconds: None,
         )
 
@@ -496,13 +505,33 @@ class GateTest(WindowCase):
         self.assertEqual(verdict.state, "unknown")
 
 
+class OtherWindowsTest(WindowCase):
+    """--also: the other windows' replies count for the gate too, as the watchdog reads them."""
+
+    def test_a_reply_in_another_window_lets_the_gate_go(self) -> None:
+        self.login_error(60)
+        self.assertEqual(self.window(), ("needs-login", "new"))
+        write(claude_state.transcript_path(WORKDIR, OTHER_SESSION), prompt(90, "after /login"), reply(91))
+        self.assertEqual(self.window(), ("needs-login", "same"))  # its own replies alone
+        self.assertEqual(self.window("--also", "alpha=102"), ("ok", "recovered"))
+
+    def test_the_window_itself_among_them_is_read_once(self) -> None:
+        self.login_error(60)
+        self.assertEqual(self.window("--also", "orch=101"), ("needs-login", "new"))
+
+    def test_a_malformed_value_is_a_usage_error(self) -> None:
+        with mock.patch("sys.stderr", io.StringIO()), self.assertRaises(SystemExit) as raised:
+            login.build_parser().parse_args(["window", "orch", "101", "--also", "alpha"])
+        self.assertEqual(raised.exception.code, 2)
+
+
 class NoCreditTest(WindowCase):
     """A window whose every reply is "Credit balance too low": its own state, never gated."""
 
     def test_its_verdict_says_since_when(self) -> None:
         self.credit_error(60)
         self.credit_error(120)
-        verdict = login.window_verdict(self.transcript, None)
+        verdict = login.window_verdicts({"orch": self.transcript}, None)["orch"]
         since = T0 + timedelta(minutes=60)
         self.assertEqual((verdict.state, verdict.since), (login.NO_CREDIT, since))
         self.assertEqual(
@@ -513,7 +542,7 @@ class NoCreditTest(WindowCase):
     def test_a_normal_reply_ends_it(self) -> None:
         self.credit_error(60)
         self.add(prompt(90, "carry on"), reply(91))
-        self.assertEqual(login.window_verdict(self.transcript, None).state, login.OK)
+        self.assertEqual(login.window_verdicts({"orch": self.transcript}, None)["orch"].state, login.OK)
 
     def test_check_ins_are_not_held_back(self) -> None:
         self.credit_error(60)
@@ -633,6 +662,32 @@ class AcrossWindowsTest(TmpCase):
         notice["message"]["model"] = claude_state.SYNTHETIC_MODEL
         write(self.other, notice)
         self.assertEqual(self.verdicts()["orch"].state, "needs-login")
+
+    def test_a_row_starts_again_after_a_reply_in_another_window(self) -> None:
+        for fields, text in ((NO_CREDIT, "Credit balance is too low"), (EXPIRED, "Login expired")):
+            with self.subTest(text=text):
+                self.transcript.unlink(missing_ok=True)
+                self.other.unlink(missing_ok=True)
+                self.add(prompt(0), reply(1), prompt(60), error_reply(60, text, **fields))
+                write(self.other, prompt(90), reply(91))  # it worked again here
+                self.add(prompt(120), error_reply(120, text, **fields))  # and failed again there
+                orch = self.verdicts()["orch"]
+                self.assertNotEqual(orch.state, "ok")
+                self.assertEqual(orch.since, T0 + timedelta(minutes=120))
+                self.assertIn(f"since {login.shown(T0 + timedelta(minutes=120))}", orch.detail)
+
+    def test_a_sign_after_a_whole_row_keeps_its_since(self) -> None:
+        # alpha's reply came after orch's errors, but beta failed after it: orch is not cleared, and its
+        # row (and so the watchdog's key for it) stays as it was.
+        third = claude_state.transcript_path(WORKDIR, THIRD_SESSION)
+        self.add(prompt(0), reply(1))
+        self.add(*(error_reply(m, "Credit balance is too low", **NO_CREDIT) for m in (60, 70)))
+        write(self.other, prompt(90), reply(91))
+        write(third, prompt(100), error_reply(100, "Credit balance is too low", **NO_CREDIT))
+        orch = login.window_verdicts({"orch": self.transcript, "alpha": self.other, "beta": third}, None)[
+            "orch"
+        ]
+        self.assertEqual((orch.state, orch.since), ("no-credit", T0 + timedelta(minutes=60)))
 
     def test_status_reads_every_window(self) -> None:
         self.login_errors_overnight()
