@@ -124,6 +124,18 @@ class TicketSyncTest(TicketTestCase):
         output = run("ticket-sync", "jira:EXP-9", "--status", "Done")
         self.assertIn("unsynced -> done", output)
 
+    def test_the_fields_its_id_gives_are_never_set_by_hand(self) -> None:
+        for name in ("system", "key", "project"):
+            with self.subTest(name=name), self.assertRaisesRegex(ledger.LedgerError, "come from its id"):
+                run("upsert", TICKET, "--field", f"{name}=OTHER")
+            with (
+                self.subTest(name=name, new=True),
+                self.assertRaisesRegex(ledger.LedgerError, "come from its id"),
+            ):
+                run("upsert", "jira:EXP-77", "--kind", "ticket", "--field", f"{name}=OTHER")
+        self.assertEqual(self.item(TICKET)["fields"]["key"], "EXP-123")
+        self.assertIn("updated", run("upsert", TICKET, "--field", "note=checked"))
+
     def test_tickets_are_never_transitioned_by_bosun(self) -> None:
         with self.assertRaisesRegex(ledger.LedgerError, "mirrors its tracker.*ticket-sync"):
             run("transition", TICKET, "done", "--note", "merged")

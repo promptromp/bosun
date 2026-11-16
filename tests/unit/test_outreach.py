@@ -666,6 +666,13 @@ class RecordEditTest(OutreachTestCase):
         run("upsert", self.first, "--field", "options=")
         self.assertNotIn("options:", run("outreach"))
 
+    def test_the_fields_its_commands_keep_are_never_set_by_hand(self) -> None:
+        for field, command in (("messages=foo", "bosun ledger sent"), (f"parent={MENTION}", "reach-out")):
+            with self.subTest(field=field), self.assertRaisesRegex(ledger.LedgerError, command):
+                run("upsert", self.first, "--field", field)
+        self.assertEqual(self.item(self.first)["fields"]["parent"], PARENT)
+        self.assertIn("sent", self.sent())  # the list of messages is intact
+
     def test_bad_values_are_refused(self) -> None:
         for field in ("subject=", "to=", "subject=two\nlines"):
             with self.subTest(field=field), self.assertRaisesRegex(ledger.LedgerError, "one non-empty line"):
