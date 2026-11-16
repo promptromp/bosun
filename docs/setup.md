@@ -111,6 +111,7 @@ installed. The usual ones:
 | `not logged in: the login keychain is locked` | Claude Code keeps its login in your login keychain, and a session over ssh starts with it locked, even when the Mac's desktop unlocked it | Run `security unlock-keychain ~/Library/Keychains/login.keychain-db` (your login password), then the same line again |
 | `later  Claude in Chrome's screen not seen` | bosun starts windows with Chrome on (`--chrome` in `BOSUN_CLAUDE_FLAGS` and `BOSUN_ORCHESTRATOR_FLAGS`), and some versions of Claude Code first show what it may do in your browser and wait for Enter (newer ones show nothing). Nothing stops for it | Nothing now. If a window does stop at that screen, the watchdog names it (`stalled-start`, and the menu bar app's "Show What's Wrong..."): answer it there once, with `bosun attach <window>` |
 | `not logged in` under Claude Code | It has no login | Run `claude`, and follow what it asks |
+| A window answers "Credit balance too low · Add funds" while `claude -p` still works | Claude Code is signed in with an API key whose organization has only subscriber credits ("Promotional credits"), which do not cover Claude Code | Buy credit for the key's organization, or use a login (see [With an API key](#with-an-api-key-instead-of-a-login)) |
 | `not logged in` under Codex | It has no login | Run `codex login`. With an API key: `printenv OPENAI_API_KEY \| codex login --with-api-key` |
 | A window is on a screen, and the watchdog reports `stalled-start` | The agent is asking something only you can answer, usually about trusting the folder | `bosun attach <window>` (the finding names it), then read it. Do not just press Return: on several of Claude Code's screens the default is to exit, and on Codex's it says yes |
 | `does not run on <your OS> yet`, or `bosun runs on macOS today` | bosun runs on macOS today, and Linux is next | See the [roadmap](../ROADMAP.md) |
@@ -905,6 +906,12 @@ whether to use a key from the environment, which a window bosun starts would wai
 have your shell's environment. With a key, Claude Code has no Remote Control (it needs a claude.ai login), and the
 models bosun uses (`BOSUN_MODEL`, `BOSUN_ORCHESTRATOR_MODEL`, `BOSUN_LEARN_MODEL`) cost per request: smaller ones
 cost less.
+
+The key's organization needs purchased credit. The API credits a subscription adds to the Console (the
+"Promotional credits" of a Max, Ultra or Team plan) cover the Claude API and the Agent SDK but not Claude
+Code, so the windows reply "Credit balance too low · Add funds" while `claude -p` and the API still work. Add
+funds to the organization, or sign in with a login instead
+([which credits cover what](https://platform.claude.com/docs/en/about-claude/api-credits-for-subscribers)).
 
 ## AWS SSO
 

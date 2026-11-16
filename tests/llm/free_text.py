@@ -89,6 +89,12 @@ REPO_ALLOWED = [
     "Bash(git status:*)",
     "Bash(git log:*)",
     "Bash(git diff:*)",
+    # new-work puts its worktree inside the repository and lists it in .git/info/exclude
+    "Bash(git worktree:*)",
+    "Bash(mkdir:*)",
+    "Bash(echo:*)",
+    "Bash(cd:*)",
+    "Bash(cat:*)",
     "Bash(ls:*)",
     "Read",
     "Grep",
