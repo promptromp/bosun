@@ -999,7 +999,8 @@ def check_events(ctx: Context) -> Result:
     if state.last_error:
         failed_at = local_time(state.last_error["at"])
         error = state.last_error["error"]
-        message = f"Events could not be delivered to the orchestrator at {failed_at:%H:%M}: {error}"
+        when = f"{failed_at:%H:%M}" if failed_at.date() == ctx.today else f"{failed_at:%Y-%m-%d %H:%M}"
+        message = f"Events could not be delivered to the orchestrator at {when}: {error}"
         # Once a day: a failing transport fails on every dispatcher run until it is fixed.
         return Result(findings=[Finding(f"events:failed:{ctx.today}", message)])
     if not (ctx.facts.session_exists and ctx.facts.checkin_loop):

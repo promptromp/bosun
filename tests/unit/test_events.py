@@ -276,6 +276,29 @@ class FailureTest(DispatcherTestCase):
         self.assertEqual(self.dispatch(NOW + timedelta(seconds=30)), f"delivered 1 event(s) to {ORCH}")
         self.assertIsNone(self.state().last_error)
 
+    def test_a_check_in_that_covers_what_failed_clears_the_error(self) -> None:
+        # The send failed, then a check-in covered the events before any retry worked: the error is old news,
+        # or the watchdog would alert it again every day.
+        self.event(100)
+        self.failure = "window 'orchestrator' is waiting"
+        self.dispatch()
+        self.assertIsNotNone(self.state().last_error)
+        events.cover(self.state_dir, NOW + timedelta(seconds=30))
+        self.assertIsNone(self.state().last_error)
+        self.assertIn("last delivery error: none", events.render_status(self.state_dir, NOW))
+
+    def test_nothing_pending_clears_an_old_error(self) -> None:
+        self.event(100)
+        self.failure = "window 'orchestrator' is waiting"
+        self.dispatch()
+        with events.locked(self.state_dir) as directory:  # covered some other way, as an older loop did
+            state = events.State.load(directory)
+            state.mark(events.pending(directory, state), events.VIA_CHECKIN, NOW)
+            state.save(directory)
+        self.assertIsNotNone(self.state().last_error)
+        self.assertEqual(self.dispatch(NOW + timedelta(seconds=30)), "")
+        self.assertIsNone(self.state().last_error)
+
     def test_an_unreadable_state_is_an_error_not_a_fresh_start(self) -> None:
         directory = events.events_dir(self.state_dir)
         directory.mkdir(parents=True)

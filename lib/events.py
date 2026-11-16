@@ -484,6 +484,8 @@ def dispatch(inputs: Inputs, dry_run: bool = False) -> str:
         for event in waiting_windows(config, inputs.facts, state, now, inputs.record):
             write(directory, event)
         tick = plan(inputs, state, directory)
+        if tick.reason == NOTHING_PENDING:
+            state.last_error = None  # what failed to go out went another way (a check-in), or is gone
         state.last_tick = now.isoformat(timespec="seconds")
         reason = re.sub(r"\d+", "#", tick.reason)  # "busy (for 27s)" and "(for 37s)" are one reason
         repeated, state.last_reason = reason == state.last_reason, reason
@@ -526,11 +528,12 @@ def record_delivery(
 
 def cover(state_dir: Path, now: datetime) -> str:
     """A check-in went out: it reads the reports and what I said since its scan start, so the
-    pending events need no delivery of their own."""
+    pending events need no delivery of their own, and a delivery of them that failed is no longer news."""
     with locked(state_dir) as directory:
         state = State.load(directory)
         queued = pending(directory, state)
         state.mark(queued, VIA_CHECKIN, now)
+        state.last_error = None
         if queued:
             state.deliveries.append(
                 {
