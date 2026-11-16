@@ -2308,18 +2308,16 @@ check "... and makes no new login check request yet" test "$(probes)" = 1
 check "status shows the window that needs a login" bash -c 'grep -q "Claude login" <<<"$1" && grep -E "^  orch +needs-login" <<<"$1"' _ "$(LC status)"
 check "the watchdog's status shows it" bash -c 'grep "FAIL  login-expired" <<<"$1" | grep -q "every prompt in orch (since"' _ "$(LC watchdog --status --only login-expired)"
 # A reply in another window after every window's last login error lets the gate go too: the login is the Mac's.
-read -r other_name other_pid <<<"$("$BOSUN" sessions --json | jq -r --argjson orch "$orch_pid" \
-  '[.[] | select(.agent != null and .agent.pid != $orch)][0] | "\(.name) \(.agent.pid)"')"
-other_record="$HOME/.claude/sessions/$other_pid.json"
-cp "$other_record" "$WORK/other-record.json"
-python3 -I -c 'import json, sys; d = json.load(open(sys.argv[1])); d.update(cwd=sys.argv[2], sessionId="0000000b-0000-0000-0000-000000000000"); json.dump(d, open(sys.argv[1], "w"))' "$other_record" "$REPO_A"
+other_pid="$(fake_claude alpha idle 2.0.0 60)"
+printf '{"pid":%d,"status":"idle","version":"2.0.0","statusUpdatedAt":%d,"name":"alpha","cwd":"%s","sessionId":"0000000b-0000-0000-0000-000000000000"}' \
+  "$other_pid" $((($(date +%s) - 60) * 1000)) "$REPO_A" >"$HOME/.claude/sessions/$other_pid.json"
 OTHER_TRANSCRIPT="$(project_dir "$REPO_A")/0000000b-0000-0000-0000-000000000000.jsonl"
 printf '{"type":"assistant","timestamp":"%s","message":{"model":"claude-model","content":[{"type":"text","text":"Done."}]}}\n' \
   "$(date -u -r $(($(date +%s) - 120)) +%Y-%m-%dT%H:%M:%S.000Z)" >"$OTHER_TRANSCRIPT"
-check "a reply in another window lets the gate go, as the watchdog reads it" bash -c 'grep -q "orch works again ($2 got a reply at .*, after its last login error)" <<<"$1" && grep -q "would send" <<<"$1"' _ "$(BOSUN_CHECKIN_MAX_QUIET_HOURS=0 LC checkin --dry-run)" "$other_name"
+check "a reply in another window lets the gate go, as the watchdog reads it" bash -c 'grep -q "orch works again (alpha got a reply at .*, after its last login error)" <<<"$1" && grep -q "would send" <<<"$1"' _ "$(BOSUN_CHECKIN_MAX_QUIET_HOURS=0 LC checkin --dry-run)"
 check "... and the watchdog no longer names the window" bash -c '! grep -q "every prompt in orch" <<<"$1"' _ "$(LC watchdog --status --only login-expired)"
-mv "$WORK/other-record.json" "$other_record"
-rm -f "$OTHER_TRANSCRIPT"
+kill "$other_pid" 2>/dev/null
+rm -f "$OTHER_TRANSCRIPT" "$HOME/.claude/sessions/$other_pid.json"
 login_reply 60
 check "a normal reply resumes check-ins" bash -c 'grep -q "orch works again" <<<"$1" && grep -q "would send" <<<"$1"' _ "$(LC checkin --dry-run)"
 check "the dry run left the record alone" contains "$(cat "$BOSUN_STATE_DIR/login.json")" '"orch"'
