@@ -1143,6 +1143,45 @@ class ImportTest(KnowledgeTestCase):
         self.assertIn("refused: 1 format, 1 unresolved or invalid", out)
         self.assertIn("record 2: no entity 'repo/missing'", out)
 
+    def test_fields_of_the_wrong_type_are_refused_with_a_reason(self) -> None:
+        self.run_kg("import", str(FIXTURE), "--apply")
+        step = {
+            "type": "fact",
+            "subject": "process/release",
+            "predicate": "has_step",
+            "sources": ["memory:a"],
+        }
+        bad = {
+            "order '2'": {**step, "object": "step/merge", "order": "2"},
+            "order true": {**step, "object": "step/merge", "order": True},
+            "observations 'x'": {**step, "object": "step/merge", "observations": "x"},
+            "observations 0": {**step, "object": "step/merge", "observations": 0},
+            "a numeric object": {**step, "object": 7},
+            "a numeric value": {
+                **step,
+                "predicate": "caveat",
+                "subject": "repo/invoice-exporter",
+                "value": 3,
+            },
+        }
+        path = self.tmp / "import.json"
+        path.write_text(json.dumps([*bad.values(), {**step, "object": "step/merge", "order": 2}]))
+        out = self.run_kg("import", str(path), "--apply")
+        self.assertIn("facts: 0 new, 1 re-observed", out)
+        self.assertIn(f"refused: {len(bad)} unresolved or invalid", out)
+        for number, reason in enumerate(
+            (
+                "order must be a whole number, not '2'",
+                "order must be a whole number, not True",
+                "observations must be a whole number of at least 1, not 'x'",
+                "observations must be a whole number of at least 1, not 0",
+                "object must be a string, not 7",
+                "value must be a string, not 3",
+            ),
+            start=1,
+        ):
+            self.assertIn(f"record {number}: {reason}", out)
+
 
 class ContextTest(KnowledgeTestCase):
     def setUp(self) -> None:

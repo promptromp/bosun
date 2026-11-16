@@ -1415,7 +1415,25 @@ def import_entity(kb: KB, record: Record, report: ImportReport) -> None:
         report.entities_added += 1
 
 
+def check_import_fields(record: Record) -> None:
+    """Refuse a fact record whose fields are not of the types `kg propose` takes: a whole-number
+    order, at least one observation, a string value, object and valid_from."""
+    order, observations = record.get("order"), record.get("observations")
+    if order is not None and not is_whole(order):
+        raise KnowledgeError(f"order must be a whole number, not {order!r}")
+    if observations is not None and not (is_whole(observations) and observations >= 1):
+        raise KnowledgeError(f"observations must be a whole number of at least 1, not {observations!r}")
+    for name in ("value", "object", "valid_from"):
+        if record.get(name) is not None and not isinstance(record[name], str):
+            raise KnowledgeError(f"{name} must be a string, not {record[name]!r}")
+
+
+def is_whole(value: object) -> bool:
+    return isinstance(value, int) and not isinstance(value, bool)
+
+
 def import_fact(kb: KB, record: Record, report: ImportReport) -> None:
+    check_import_fields(record)
     sources = [import_source(s, kb.now) for s in record.get("sources") or [record.get("source")] if s]
     proposal = Proposal(
         str(record.get("subject", "")),
@@ -1428,7 +1446,7 @@ def import_fact(kb: KB, record: Record, report: ImportReport) -> None:
         record.get("order"),
         bool(record.get("rework")),
         str(record.get("note") or ""),
-        int(record.get("observations") or 1),
+        record.get("observations") or 1,
     )
     outcome = km.propose(kb, proposal)
     if outcome.action == "added":
