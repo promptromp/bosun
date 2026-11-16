@@ -584,11 +584,22 @@ class ChatApprovalTest(ApprovalsTestCase):
                 run("approve", PR, "--quote", quote)
                 self.assertFalse(self.allowed(self.event("Bash", command=TOUCH)))
 
-    def test_approve_records_unchecked_where_it_cannot_read_the_session(self) -> None:
-        """From a terminal (the base case) or an agent whose prompts bosun cannot read, approve records
-        the quote, and the guard checks it when the call is made."""
-        self.approving_in(agent_state.CallingSession("codex", 4242, None, False))
+    def test_approve_refuses_where_it_cannot_check_and_records_from_a_terminal(self) -> None:
+        """review round 1: a Codex or agy window, or a session whose transcript is not there, recorded the
+        quote unchecked and said to make the call, which the guard then denied. They are refused, saying
+        why; from a terminal (the base case) approve records, and the guard checks at the call."""
         self.propose_touch()
+        self.approving_in(agent_state.CallingSession("codex", 4242, None, False))
+        with self.assertRaisesRegex(ledger.LedgerError, "bosun cannot check my words in Codex"):
+            run("approve", PR, "--quote", QUOTE)
+        gone = self.transcript.with_name("gone.jsonl")
+        for transcript in (None, gone):
+            with self.subTest(transcript=transcript):
+                self.approving_in(agent_state.CallingSession("claude", 4242, transcript, True))
+                with self.assertRaisesRegex(ledger.LedgerError, "transcript is not there"):
+                    run("approve", PR, "--quote", QUOTE)
+        self.assertNotIn("approval", self.item(PR)["proposal"])
+        self.approving_in(None)
         run("approve", PR, "--quote", "e")
         self.assertFalse(self.allowed(self.event("Bash", command=TOUCH)))
         self.assertIn("does not count", self.denial(self.event("Bash", command=TOUCH)) or "")

@@ -954,14 +954,10 @@ def calling_session(args: argparse.Namespace) -> agent_state.CallingSession | No
     return agent_state.calling_session() if getattr(args, "from_user", False) else None
 
 
-def agent_name(session: agent_state.CallingSession) -> str:
-    return agent_state.AGENTS[session.agent].PROFILE.display_name
-
-
 def unverified_reason(session: agent_state.CallingSession | None, after: datetime | None = None) -> str:
     """Why a quote of my words does not count (<after>: what it decides on was proposed then)."""
     if session is not None and not session.verifies_quotes:
-        return f"bosun cannot check your words in {agent_name(session)}"
+        return f"bosun cannot check your words in {session.agent_name}"
     hours = int(QUOTE_MAX_AGE.total_seconds() // 3600)
     reason = f"the quote is not in anything you typed in that session in the last {hours} hours"
     if after is not None and after > CLOCK() - QUOTE_MAX_AGE:

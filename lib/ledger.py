@@ -2020,14 +2020,23 @@ class SessionPrompts:
 
 
 def approving_session() -> SessionPrompts | None:
-    """The prompts of the agent session that runs `ledger approve` (agent_state.calling_session), when
-    bosun can check a quote of my words there; None from a terminal, or from an agent whose prompts bosun
-    cannot read: the guard still checks the quote when the call is made."""
+    """The prompts of the agent session that runs `ledger approve` (agent_state.calling_session), to
+    check a quote of my words in; None from a terminal (the guard checks the quote when the call is
+    made). Refused, as kg refuses a quote it cannot check (knowledge.session_or_refuse), in an agent
+    whose prompts bosun cannot read or a session whose transcript is not there: recorded unchecked,
+    the approval would only be denied at the call."""
     session = agent_state.calling_session()
-    if session is None or not session.verifies_quotes or session.transcript is None:
+    if session is None:
         return None
-    if not session.transcript.is_file():
-        return None
+    if not session.verifies_quotes:
+        raise LedgerError(
+            f"bosun cannot check my words in {session.agent_name}, so nothing was recorded: record my "
+            "approval in the orchestrator's session, where I gave it, or from a terminal"
+        )
+    if session.transcript is None or not session.transcript.is_file():
+        raise LedgerError(
+            "this session's transcript is not there to check the quote in, so nothing was recorded"
+        )
     window = STORE.orchestrator
     pasted = events.pasted_hashes(STORE.state_dir, window, datetime.now(UTC)) if window else set()
     speaker = approvals.Speaker(frozenset(pasted), STORE.drain_prompt)
