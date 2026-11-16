@@ -125,8 +125,10 @@ bosun kg context --for releases         # a small cited pack of confirmed facts
   short left of that file, `local.jsonl.torn-*`, goes too, and so does what they left in the
   knowledge folder, `*.tmp`, such as a `kg batch`'s `batch.json.tmp`; the history never holds a torn
   file). It does not reach their name where it is free text elsewhere (another entity's summary
-  or aliases, a fact's value or note, a quote): it lists where it still occurs (`--dry-run` too),
-  and you edit those yourself. What it keeps is a keyed hash of the id, under `secret.key` in the
+  or aliases, a fact's value or note, a quote): it lists those places as "still named in"
+  (`--dry-run` too). An edit does not take the name out of them for good: the shared journal and
+  the history keep every earlier text, and a fact's text can only be superseded, which keeps the
+  old fact. What it keeps is a keyed hash of the id, under `secret.key` in the
   knowledge folder (made on the first write, readable only by you, not in the history, never
   leaving this Mac). Once such records exist, `kg forget` and adding a person need that key; if
   it is missing the command refuses and names its path, so restore it from a backup. If it is

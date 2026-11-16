@@ -1277,8 +1277,7 @@ def cmd_forget(args: argparse.Namespace) -> str:
     history = "" if args.dry_run or not SETTINGS.git else "; the knowledge history was restarted without it"
     said = f"ok: {done} the person, {gone.facts} facts and {gone.identifiers} identifiers{history}"
     if gone.still_named:
-        said += "\ntheir name or an alias still occurs where forget does not reach; edit these yourself:"
-        said += "".join(f"\n  {place}" for place in gone.still_named)
+        said += "\nstill named in:" + "".join(f"\n  {place}" for place in gone.still_named)
     return said
 
 
@@ -1405,6 +1404,7 @@ def import_source(value: Any, now: datetime) -> Record:
 
 
 def import_entity(kb: KB, record: Record, report: ImportReport) -> None:
+    check_entity_fields(record)
     aliases = record.get("aliases") or []
     strong = aliases.get("strong", []) if isinstance(aliases, dict) else list(aliases)
     weak = (aliases.get("weak", []) if isinstance(aliases, dict) else []) + list(
@@ -1421,25 +1421,61 @@ def import_entity(kb: KB, record: Record, report: ImportReport) -> None:
         report.entities_added += 1
 
 
-def check_import_fields(record: Record) -> None:
-    """Refuse a fact record whose fields are not of the types `kg propose` takes: a whole-number
-    order, at least one observation, a string value, object and valid_from."""
-    order, observations = record.get("order"), record.get("observations")
-    if order is not None and not is_whole(order):
-        raise KnowledgeError(f"order must be a whole number, not {order!r}")
-    if observations is not None and not (is_whole(observations) and observations >= 1):
-        raise KnowledgeError(f"observations must be a whole number of at least 1, not {observations!r}")
-    for name in ("value", "object", "valid_from"):
-        if record.get(name) is not None and not isinstance(record[name], str):
-            raise KnowledgeError(f"{name} must be a string, not {record[name]!r}")
-
-
 def is_whole(value: object) -> bool:
     return isinstance(value, int) and not isinstance(value, bool)
 
 
+def is_string(value: object) -> bool:
+    return isinstance(value, str)
+
+
+def is_string_list(value: object) -> bool:
+    return isinstance(value, list) and all(isinstance(item, str) for item in value)
+
+
+FieldCheck = tuple[str, Callable[[Any], bool], str]  # field, its test, what it must be
+# The types `kg propose` and `kg add-entity` take, for an import record's fields.
+FACT_FIELDS: tuple[FieldCheck, ...] = (
+    ("order", is_whole, "a whole number"),
+    ("observations", lambda value: is_whole(value) and value >= 1, "a whole number of at least 1"),
+    ("value", is_string, "a string"),
+    ("object", is_string, "a string"),
+    ("valid_from", is_string, "a string"),
+    ("rework", lambda value: isinstance(value, bool), "true or false"),
+)
+ENTITY_FIELDS: tuple[FieldCheck, ...] = (
+    ("name", is_string, "a string"),
+    ("summary", is_string, "a string"),
+    ("aliases", is_string_list, "a list of strings"),
+    ("aliases.strong", is_string_list, "a list of strings"),
+    ("aliases.weak", is_string_list, "a list of strings"),
+    ("weak_aliases", is_string_list, "a list of strings"),
+)
+
+
+def check_fields(fields: Mapping[str, Any], checks: tuple[FieldCheck, ...]) -> None:
+    """Refuse the first field present that is not of its type, naming it and its value."""
+    for name, test, what in checks:
+        value = fields.get(name)
+        if value is not None and not test(value):
+            raise KnowledgeError(f"{name} must be {what}, not {value!r}")
+
+
+def check_entity_fields(record: Record) -> None:
+    """An entity record's fields, its aliases a list or {strong, weak} lists."""
+    aliases = record.get("aliases")
+    if isinstance(aliases, dict):
+        record = {
+            **record,
+            "aliases": None,
+            "aliases.strong": aliases.get("strong"),
+            "aliases.weak": aliases.get("weak"),
+        }
+    check_fields(record, ENTITY_FIELDS)
+
+
 def import_fact(kb: KB, record: Record, report: ImportReport) -> None:
-    check_import_fields(record)
+    check_fields(record, FACT_FIELDS)
     sources = [import_source(s, kb.now) for s in record.get("sources") or [record.get("source")] if s]
     proposal = Proposal(
         str(record.get("subject", "")),

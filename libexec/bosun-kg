@@ -67,8 +67,10 @@
 #                                      changes in the journal (placeholders) and the git history
 #                                      (restarted); of those only a hash and counts are kept. Their
 #                                      name as free text elsewhere (another entity's summary or
-#                                      aliases, a fact's value or note, a quote) it does not reach:
-#                                      it lists where it still occurs, for you to edit
+#                                      aliases, a fact's value or note, a quote) it does not reach,
+#                                      and lists as "still named in": the shared journal and the
+#                                      history keep those texts even if you edit them, and a fact's
+#                                      text can only be superseded, which keeps the old one
 #   expire [--dry-run]                 record expired proposals (unreviewed for 30 days) and delete
 #                                      person facts not re-observed for 12 months
 #

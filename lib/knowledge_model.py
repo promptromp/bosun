@@ -769,7 +769,8 @@ def remove_facts(kb: KB, fact_ids: set[str]) -> None:
 @dataclass(frozen=True)
 class Forgotten:
     """What a forget deleted, and where the person's name or aliases still occur as free text, which
-    it does not reach (it names those places; it never edits them)."""
+    it does not reach: it names those places and never edits them (the journal and the history keep
+    them in any case, and a fact's text is only ever superseded)."""
 
     facts: int
     identifiers: int

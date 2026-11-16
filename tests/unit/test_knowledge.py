@@ -832,7 +832,7 @@ class RetentionAndForgetTest(KnowledgeTestCase):
         caveat = self.f(1)
         self.run_kg("propose", "process/release", "has_step", "step/merge", "--source", "ledger:a")
         expected = [
-            "their name or an alias still occurs where forget does not reach; edit these yourself:",
+            "still named in:",
             "  entity team/billing (summary)",
             f"  fact {caveat} (value)",
         ]
@@ -1191,6 +1191,40 @@ class ImportTest(KnowledgeTestCase):
         out = self.run_kg("import", str(path))
         self.assertIn("refused: 1 format, 1 unresolved or invalid", out)
         self.assertIn("record 2: no entity 'repo/missing'", out)
+
+    def test_entity_fields_and_rework_of_the_wrong_type_are_refused_with_a_reason(self) -> None:
+        bad = [
+            ({"type": "entity", "id": "repo/x", "aliases": 5}, "aliases must be a list of strings, not 5"),
+            (
+                {"type": "entity", "id": "repo/y", "aliases": {"strong": "abc"}},
+                "aliases.strong must be a list of strings, not 'abc'",
+            ),
+            (
+                {"type": "entity", "id": "repo/z", "weak_aliases": 5},
+                "weak_aliases must be a list of strings, not 5",
+            ),
+            (
+                {"type": "entity", "id": "repo/w", "summary": {"x": 1}},
+                "summary must be a string, not {'x': 1}",
+            ),
+            (
+                {
+                    "type": "fact",
+                    "subject": "repo/invoice-exporter",
+                    "predicate": "caveat",
+                    "value": "x",
+                    "rework": "no",
+                    "sources": ["memory:a"],
+                },
+                "rework must be true or false, not 'no'",
+            ),
+        ]
+        path = self.tmp / "import.json"
+        path.write_text(json.dumps([{"type": "entity", "id": "repo/invoice-exporter"}, *(r for r, _ in bad)]))
+        out = self.run_kg("import", str(path))
+        self.assertIn(f"refused: {len(bad)} unresolved or invalid", out)
+        for reason in (reason for _, reason in bad):
+            self.assertIn(reason, out)
 
     def test_fields_of_the_wrong_type_are_refused_with_a_reason(self) -> None:
         self.run_kg("import", str(FIXTURE), "--apply")
