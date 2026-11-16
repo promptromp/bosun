@@ -190,5 +190,99 @@ You rarely type these. The orchestrator and the agents use them, and they are ha
 | `bosun ledger summary --ws <ws>` | A stand-up draft for one workstream |
 | `bosun ledger validate` | Every rule checked, with what to do about a finding |
 
-The [Orchestrator guide](orchestrator.md#ledger-idempotency-and-state) describes every field and command
-in full, and [Work-item lineage](design/lineage.md) is the design behind the links.
+[Commands](commands.md#bosun-ledger) lists every subcommand, the [Orchestrator guide](orchestrator.md) says how
+outreach, tasks, tickets and workstreams are used, and [Work-item lineage](design/lineage.md) is the design behind
+the links.
+
+## Reference
+
+### What the ledger keeps
+
+- **Items** with stable ids: `review:<owner>/<repo>#<n>`, `td:<page-id>`, `mypr:<owner>/<repo>#<n>`,
+  `slack:<channel>/<ts>`, outreach `out:<parent-id>/<id>`, learning proposals `learn:<YYYY-MM-DD>/<id>`, tasks
+  `task:<YYYY-MM-DD>/<id>`, tickets `jira:<KEY>-<n>` or `ghissue:<owner>/<repo>#<n>`, and workstreams `ws:<slug>`.
+  Each kind has a state machine (`bosun ledger kinds`), and a move it does not allow is refused. The date in a task,
+  outreach or learning id is the UTC day it was made, and `<id>` is six characters such as `7k2m9q`, hashed from this
+  Mac's replica id and where the ledger's journal is (for learning, from the finding and the run), so two Macs never
+  make the same id and a pruned one never comes back. Copy ids from what the command printed. Ids made before,
+  ending in a number (`task:2026-10-15/1`), stay valid. Each item keeps its last 200 history entries; the journal
+  keeps all of them.
+- **Links** between items (`spawned_from`, `produces`, `blocked_by`, `duplicate_of`, `folded_into`, `tracks`,
+  `part_of`, `relates_to`), stored once and read both ways.
+- **Sources:** every processed Slack message, by its link. A message still in tomorrow's scan window is recognised
+  and skipped.
+- **Proposals:** actions waiting for your approval, which survive the daily restart.
+- **Runs:** when each chores mode last ran, which sets the check-in's scan window.
+- **Delegations and reports:** `bosun delegate` records which window works on an item (and the task's header, so the
+  task can be sent again), and `delegate --update` sends that window addenda framed with the item's id. Repo windows
+  record their outcome with `bosun ledger report <id> --summary ... --result <URL or path> [--open ...] [--state
+  ...]`, which the orchestrator reads with `ledger reports`, so no step depends on chat history or on a window's
+  screen.
+- **What you said in repo windows** (`said`), with [events](events.md#events-from-repo-sessions) on: each prompt you
+  type there, on the item it is about, read with `ledger said [<id>]`.
+
+<details class="note" markdown>
+<summary>When a hand-over ends, and when a window is free</summary>
+
+A hand-over ends with a report, or when the item reaches a state that shows the work done (`work_done` in `ledger
+kinds`: `reviewed`, `commented`, `awaiting-review`, `approved`, or a final state). Until then `ledger list` shows
+`@<window> (awaiting report)`, `delegate` refuses the item without `--again`, and `delegate --update <id> --window
+<window>` can move it: the new window gets the whole task, the old one a stop notice by id (if it cannot take it, the
+move is still made and the history says so).
+
+A report ends the hand-over, not the work: `ledger list` shows `(working)` while the window's agent is in the middle
+of a turn on the item (its active item: the latest hand-over, report, `ledger working` or something you said there),
+and `ledger delegation` has `"working"`. A window is free only when none of its items is working.
+
+</details>
+
+### The re-review rule
+
+`reviewed` to `rereview-requested` (and `commented` to `rereview-requested` for tech designs) requires `--evidence`
+of a new, explicit request after your last review: GitHub re-requesting you, or a new Slack message asking again.
+Nudges follow the chores procedure (the prompt, not code): only for your non-draft pull request in
+`awaiting-review`, never once it is `approved`.
+
+### Checking it: `ledger validate`
+
+`bosun ledger validate [--journal] [--json]` checks every rule (a state its kind does not have, a link lineage would
+refuse, a second `part_of`, a link to an unknown item, with the `ledger unlink` that clears it, since only a prune
+from before it kept lineage whole leaves one) and exits 1 on any finding. `--journal` also rebuilds the journal and
+lists its conflicts and each item where the rebuild and `ledger.json` differ ([Sync and sharing](design/sync.md)),
+and says when `ledger.json` was changed outside the journal (the next write adopts it). A ledger from before journals
+is not a failure: it prints "no journal yet; the next write starts it" and exits 0. With `--json` each finding has a
+`severity`: `error` where writes are refused or a rebuild would lose data (journal damage, a position that does not
+match, a rebuild that differs), `warning` for the rest, `note`. `bosun doctor` runs it, and fails on an error but only
+warns on a warning.
+
+### Writes, the journal, and repairing it
+
+Writes take a file lock and replace `ledger.json` in one step, keeping the version before as `ledger.json.bak`;
+`ledger.md`, the readable view, is made again after each one. Each write first appends what it changed to the journal
+(`journal/ledger/` in the state folder), and `ledger.json` is the rebuild of that journal, recording the position it
+reflects and a digest of what it holds.
+
+<details class="note" markdown>
+<summary>Cut writes, hand edits, damage, and starting the journal again</summary>
+
+- **A write cut short** between the journal and `ledger.json` is completed by the next write (a command that only
+  reads shows it without saving), and one cut short inside the journal is set aside (`*.torn-<time>`, kept) and left
+  out ([Sync and sharing](design/sync.md#changes-not-files)).
+- **Copying `ledger.json.bak`**, or any older `ledger.json`, back does not undo a write: the journal brings it
+  forward again. Undo a write with the command that reverses it.
+- **A hand edit.** A change made to `ledger.json` by hand, or by an older bosun, is adopted by the next write: it
+  goes into the journal as a transaction named `adopt`, with a line on stderr. What the journal cannot hold, such as
+  removing a history entry (history only grows), is undone by that write, which says so and keeps the edited file as
+  `ledger.json.bak` until the next write.
+- **Damage.** Writes stop and say so when a journal file has gone missing or lost lines (the journal is behind
+  `ledger.json`), or a line at the end of one, which every write reads, is damaged. Damage further up, or a gap in a
+  file's numbering, stops only a write that has to rebuild (after a write cut short or a hand edit); until then `bosun
+  ledger validate --journal` and `bosun doctor` report it.
+- **Starting the journal again.** Either way, move `journal/ledger` aside, and the next write starts a new journal
+  from `ledger.json`, as a new replica. `replica.json` may stay: a journal that starts again (moved aside, emptied or
+  removed) always gets a new id, made by that write in place of the old one, so that no id is minted twice.
+  `replica.json` is this Mac's id in the ontology's journal too, so the Mac gets a new id in both, which the ontology
+  carries on under as well (its old replica file stays in its journal). A write cut short as it starts the new
+  journal is finished by the next write, as any other.
+
+</details>
