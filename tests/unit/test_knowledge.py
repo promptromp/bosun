@@ -470,13 +470,56 @@ class SessionQuoteTest(KnowledgeTestCase):
             )
 
     def test_a_correction_from_a_source_needs_no_words_in_a_session(self) -> None:
+        """It is confirmed as a proposal on those sources would be (a profile source gives a person's
+        timezone; two trusted kinds, a low-risk fact), the fact it corrects counting as no contradiction."""
         self.seed()
-        self.run_kg("propose", "environment/staging-2", "status", "--value", "active", "--source", "memory:a")
+        self.run_kg("propose", "person/dana", "timezone", "--value", "Europe/Berlin", "--source", "profile:a")
+        berlin = self.f(1)
+        self.assertEqual(self.fact(berlin)["status"], km.CONFIRMED)
         self.session(typed("something else", START))
+        out = self.run_kg("supersede", berlin, "--value", "America/New_York", "--source", "profile:b")
+        self.assertIn(f"{berlin} superseded by {self.f(2)}", out)
+        self.assertEqual(self.fact(self.f(2))["status"], km.CONFIRMED)
+        self.assertEqual(self.fact(berlin)["superseded_by"], self.f(2))
+        caveat = self.proposed("runs nightly")
         out = self.run_kg(
-            "supersede", self.f(1), "--value", "retired", "--source", "ledger:task:2026-10-21/1"
+            "supersede", caveat, "--value", "runs hourly", "--source", "memory:ci.md", "--source", "ledger:x"
         )
-        self.assertIn(f"{self.f(1)} closed, superseded by {self.f(2)}", out)
+        self.assertIn(f"{caveat} closed, superseded by {self.f(4)}", out)
+        self.assertEqual(self.fact(self.f(4))["status"], km.CONFIRMED)
+
+    def test_a_correction_on_untrusted_text_alone_waits_and_leaves_the_fact_open(self) -> None:
+        """Slack, PR, ticket and doc text never confirms a fact, nor a correction's (review-stores I1): the
+        replacement waits for review and the confirmed fact holds until it is confirmed (a single-valued
+        one closes then; another says how to close it)."""
+        self.seed()
+        self.run_kg("propose", "person/dana", "timezone", "--value", "Europe/Berlin", "--source", "profile:a")
+        berlin = self.f(1)
+        self.session(typed("something else", START))
+        for n, source in enumerate(
+            [
+                "slack:https://acme.slack.com/archives/C0/p1",
+                "pr:acme/exporter#7",
+                "ticket:EXP-1",
+                "doc:wiki/tz",
+            ]
+        ):
+            with self.subTest(source=source):
+                out = self.run_kg("supersede", berlin, "--value", f"America/Zone_{n}", "--source", source)
+                fact = list(self.kb().facts)[-1]
+                self.assertIn(f"{fact} proposed as the correction of {berlin}; it waits for review", out)
+                self.assertIn(f"{berlin} stays open until then (confirming {fact} closes it)", out)
+                self.assertEqual(self.fact(fact)["status"], km.PROPOSED)
+                self.assertIsNone(self.fact(berlin)["valid_to"])
+                self.assertEqual(self.fact(berlin)["status"], km.CONFIRMED)
+        caveat = self.proposed("runs nightly")
+        out = self.run_kg("supersede", caveat, "--value", "runs hourly", "--source", "pr:acme/exporter#7")
+        hourly = list(self.kb().facts)[-1]
+        self.assertIn(f"once {hourly} is confirmed, close it: kg supersede {caveat} --by {hourly}", out)
+        self.assertIsNone(self.fact(caveat)["valid_to"])
+        self.in_session(None)  # my review, from a terminal, closes the single-valued fact it replaces
+        self.assertIn(f"{berlin} superseded by", self.run_kg("confirm", self.f(2)))
+        self.assertEqual(self.fact(berlin)["superseded_by"], self.f(2))
 
     def test_closing_or_replacing_by_another_fact_from_a_session_needs_my_words(self) -> None:
         self.seed()
@@ -706,6 +749,10 @@ class TimelineTest(KnowledgeTestCase):
         out = self.run_kg(
             "supersede", self.f(1), "--value", "retired", "--source", "ledger:task:2026-10-02/3"
         )
+        # One trusted source confirms no high-risk fact, a correction's neither: it waits for my review.
+        self.assertIn(f"{self.f(2)} proposed as the correction of {self.f(1)}", out)
+        self.assertIsNone(self.fact(self.f(1))["valid_to"])
+        out = self.run_kg("confirm", self.f(2))
         self.assertIn(f"{self.f(1)} superseded by {self.f(2)}", out)
         old, new = self.fact(self.f(1)), self.fact(self.f(2))
         self.assertEqual(old["superseded_by"], self.f(2))
