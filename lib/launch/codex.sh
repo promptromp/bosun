@@ -59,7 +59,8 @@ codex_disables() { # <index> <feature>: codex_connector_args from <index> are `-
 }
 
 # What Codex's sandbox must let a session reach. It keeps a repo's .git read-only by default, so nothing
-# could be committed; a task also goes through bosun's state, and the network for git and gh.
+# could be committed; a task also goes through bosun's state, and the network for git and gh; a worktree
+# it makes goes in the window's worktrees folder (worktrees_folder, lib/common.sh; the new-work rule).
 # What needs more than that (a login in the Keychain) goes past the sandbox through the reviewer.
 # No update screen: once Codex has seen a newer version of itself, a start waits at one for a key, which
 # stalls an unattended start and which the Enter `bosun send` presses would answer.
@@ -67,7 +68,7 @@ build_agent_args() { # <window> <session name> <model> <effort>
   local git_dir roots notify
   git_dir="$(git rev-parse --path-format=absolute --git-common-dir 2>/dev/null)"
   roots="$(jq -cn --arg state "$BOSUN_STATE_DIR" --arg logs "$BOSUN_LOG_DIR" --arg git "$git_dir" \
-    '[$state, $logs, $git] | map(select(. != ""))')"
+    --arg worktrees "$(worktrees_folder)" '[$state, $logs, $git, $worktrees] | map(select(. != ""))')"
   notify="$(jq -cn --arg bosun "$BOSUN_CMD" --arg window "$1" --arg name "$2" \
     '[$bosun, "hook", "turn-end", "--harness", "codex", "--window", $window, "--conversation", $name]')"
   # shellcheck disable=SC2206  # the flags are words, on purpose

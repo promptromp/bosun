@@ -208,6 +208,21 @@ def setups_made(state_dir: Path) -> tuple[tuple[str, str], ...]:
     return tuple((harness, setup_description(harness)) for harness in agent_changes.setups_made(state_dir))
 
 
+def worktree_folders(state_dir: Path) -> tuple[tuple[str, int], ...]:
+    """(folder, how many entries it holds, or UNREADABLE) for each worktrees folder bosun recorded making
+    beside a window's repository that is still a folder there: one gone, or a link now, is not bosun's."""
+    found = []
+    for folder in agent_changes.folders_made(state_dir):
+        path = Path(folder)
+        if path.is_symlink() or not path.is_dir():
+            continue
+        try:
+            found.append((folder, len(os.listdir(path))))
+        except OSError:
+            found.append((folder, UNREADABLE))
+    return tuple(found)
+
+
 def same(one: Path, other: Path) -> bool:
     try:
         return os.path.samefile(one, other)
@@ -287,6 +302,7 @@ def detect(env: Mapping[str, str], root: Path) -> Facts:
         trust=trust_still_given(state_dir),
         setups=setups_made(state_dir),
         notes=tuple(note for note in agent_changes.notes(state_dir) if Path(note).exists()),
+        worktree_folders=worktree_folders(state_dir),
         state_entries=entries(state_dir),
         config_entries=entries(config_dir),
         log_entries=entries(log_dir),

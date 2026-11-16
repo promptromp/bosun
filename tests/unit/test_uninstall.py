@@ -1333,6 +1333,69 @@ class AgentsFiles(World):
         self.assertEqual(self.run_it("--yes")[0], 0)
 
 
+class WorktreeFolders(World):
+    """The worktrees folders bosun launch made beside a window's repository, by its record."""
+
+    def setUp(self) -> None:
+        super().setUp()
+        self.empty = self.home / "Development" / "exporter.worktrees"
+        self.full = self.home / "Development" / "billing.worktrees"
+        self.yours = self.home / "Development" / "mine.worktrees"
+        self.yours.mkdir(parents=True)  # there before bosun: launch does not record it
+        for folder in (self.empty, self.full, self.yours):
+            self.assertEqual(agent_changes.main(["make-folder", str(self.state), str(folder)]), 0)
+        (self.full / "fix-qty").mkdir()
+
+    def test_an_empty_one_goes_and_one_with_a_worktree_stays(self) -> None:
+        status, output = self.run_it("--yes")
+        self.assertEqual(status, 0)
+        self.assertFalse(self.empty.exists())
+        self.assertTrue((self.full / "fix-qty").is_dir())
+        self.assertTrue(self.yours.is_dir())
+        self.assertIn(
+            "removed the empty worktrees folder bosun made, ~/Development/exporter.worktrees", output
+        )
+        still_here = output.split("Still here, and yours:")[1]
+        self.assertIn("~/Development/billing.worktrees", still_here)
+        self.assertIn("unfinished work", still_here)
+        self.assertNotIn("mine.worktrees", output)
+        self.assertIn("bosun is uninstalled", output)
+
+    def test_one_a_worktree_went_into_since_the_plan_stays_and_is_no_error(self) -> None:
+        facts = uninstall_detect.detect(os.environ, self.root)
+        (self.empty / "late-branch").mkdir()
+        carrying = uninstall.Carrying(facts, can_ask=False)
+        output = io.StringIO()
+        with contextlib.redirect_stdout(output):
+            carrying.run(
+                tuple(step for step in up.build_plan(facts, up.Choices()).steps if step.kind == up.WORKTREES)
+            )
+        self.assertEqual(carrying.failed, [])
+        self.assertTrue((self.empty / "late-branch").is_dir())
+        self.assertIn("left ~/Development/exporter.worktrees: it is not empty now", output.getvalue())
+        self.assertNotIn("could not remove", output.getvalue())
+        status, done = self.run_it("--yes")
+        self.assertEqual(status, 0)
+        self.assertIn("~/Development/exporter.worktrees", done.split("Still here, and yours:")[1])
+
+    def test_one_gone_or_a_link_now_is_left_alone(self) -> None:
+        self.empty.rmdir()
+        target = self.home / "Development" / "elsewhere"
+        target.mkdir()
+        self.empty.symlink_to(target)
+        status, output = self.run_it("--yes")
+        self.assertEqual(status, 0)
+        self.assertTrue(self.empty.is_symlink())
+        self.assertTrue(target.is_dir())
+        self.assertNotIn("exporter.worktrees", output)
+
+    def test_a_dry_run_lists_them_and_removes_nothing(self) -> None:
+        status, output = self.run_it("--dry-run")
+        self.assertEqual(status, 0)
+        self.assertIn("the empty worktrees folder bosun made, ~/Development/exporter.worktrees", output)
+        self.assertTrue(self.empty.is_dir())
+
+
 class Detect(World):
     def facts(self) -> up.Facts:
         return uninstall_detect.detect(os.environ, self.root)
@@ -1353,6 +1416,21 @@ class Detect(World):
         self.facts()
         self.assertEqual(self.tree(), before)
         self.assertEqual(self.mac.calls, [])
+
+    def test_only_the_worktrees_folders_on_record_that_are_still_there(self) -> None:
+        development = self.home / "Development"
+        empty, full, gone, file, unrecorded = (
+            development / f"{name}.worktrees" for name in ("empty", "full", "gone", "file", "unrecorded")
+        )
+        for folder in (empty, full, gone, unrecorded):
+            folder.mkdir(parents=True, exist_ok=True)
+        (full / "a").mkdir()
+        (full / "b").mkdir()
+        for folder in (empty, full, gone, file):
+            agent_changes.record_folder(self.state, str(folder))
+        gone.rmdir()
+        file.write_text("not a folder\n")
+        self.assertEqual(self.facts().worktree_folders, ((str(empty), 0), (str(full), 2)))
 
     def test_a_ledger_it_cannot_read_counts_as_something(self) -> None:
         for content in (b"{ cut short", b"\xff\xfe not text"):

@@ -779,13 +779,41 @@ check "a dry-run launch records what the window was launched with: bosun's commi
 check "launch --fingerprint prints the same fingerprint, from any directory" bash -c '
   [ "$(cd / && "$1" launch --fingerprint alpha | jq -cS .)" = "$(jq -cS .fingerprint "$2/launches/smoke/alpha.json")" ]' _ "$BOSUN" "$BOSUN_STATE_DIR"
 resumed_fingerprint="$(jq -cS .fingerprint "$BOSUN_STATE_DIR/launches/smoke/alpha.json")"
-out="$(cd "$REPO_B" && "$BOSUN" launch alpha 2>&1)" # no conversation named alpha there: a fresh one
+# A fresh conversation, as refresh starts one: none by its name in the window's folder. In that same folder,
+# since the folder is a launch input (the worktrees folder beside it).
+mkdir -p "$BOSUN_STATE_DIR/conversations"
+echo alpha-2026-01-05-1 >"$BOSUN_STATE_DIR/conversations/alpha"
+out="$(cd "$REPO_A" && "$BOSUN" launch alpha 2>&1)"
+rm "$BOSUN_STATE_DIR/conversations/alpha"
 check "a fresh launch records the same fingerprint as a resumed one" bash -c '
   grep -q "starting a new one" <<<"$1" && [ "$(jq -cS .fingerprint "$2/launches/smoke/alpha.json")" = "$3" ]' _ "$out" "$BOSUN_STATE_DIR" "$resumed_fingerprint"
 printf '#!/bin/sh\ntouch "%s"\n' "$WORK/fingerprint-started-claude" >"$WORK/marker-claude"
 chmod +x "$WORK/marker-claude"
 out="$(BOSUN_LAUNCH_DRY_RUN=0 BOSUN_CLAUDE_BIN="$WORK/marker-claude" BOSUN_STATE_DIR="$WORK/fingerprint-state" "$BOSUN" launch --fingerprint alpha 2>&1)"
 check "... and starts nothing, records nothing" bash -c '[ ! -e "$1/fingerprint-started-claude" ] && [ ! -e "$1/fingerprint-state/launches" ] && jq -e .args <<<"$2"' _ "$WORK" "$out"
+check "... and makes no worktrees folder beside the window's repository, nor does a dry run" test ! -e "$REPO_A.worktrees"
+# A real launch, of an agent that says whether the window's worktrees folder was there when it started.
+WT_STATE="$WORK/worktrees-state"
+WT_REPO="$WORK/worktrees/exporter"
+WT_THERE="$WORK/worktrees/billing"
+mkdir -p "$WT_REPO" "$WT_THERE" "$WT_THERE.worktrees"
+WT_REPO="$(cd "$WT_REPO" && pwd -P)"
+WT_THERE="$(cd "$WT_THERE" && pwd -P)"
+printf '#!/bin/sh\ntouch "%s"\n[ -d "$PWD.worktrees" ] && touch "%s"\nexit 0\n' "$WORK/worktrees-agent-ran" "$WORK/worktrees-agent-saw-it" >"$WORK/worktrees-claude"
+chmod +x "$WORK/worktrees-claude"
+wt_launch() { (cd "$1" && BOSUN_LAUNCH_DRY_RUN=0 BOSUN_CLAUDE_BIN="$WORK/worktrees-claude" BOSUN_STATE_DIR="$WT_STATE" BOSUN_LOG_DIR="$WT_STATE/logs" "$BOSUN" launch alpha 2>&1); }
+wt_launch "$WT_REPO" >/dev/null
+check "a real launch of a repo window makes its worktrees folder before the agent starts" bash -c '[ -d "$1.worktrees" ] && [ -e "$2" ]' _ "$WT_REPO" "$WORK/worktrees-agent-saw-it"
+check "... and puts it on record for uninstall" jq -e --arg d "$WT_REPO.worktrees" '.folders == [$d]' "$WT_STATE/agent-changes.json"
+wt_launch "$WT_REPO" >/dev/null
+wt_launch "$WT_THERE" >/dev/null
+check "... once, and never one that was there before" jq -e --arg d "$WT_REPO.worktrees" '.folders == [$d]' "$WT_STATE/agent-changes.json"
+rm -f "$WORK/worktrees-agent-ran"
+rmdir "$WT_THERE.worktrees"
+printf 'mine\n' >"$WT_THERE.worktrees"
+out="$(wt_launch "$WT_THERE")"
+check "one that cannot be made is a line, and the window starts anyway" bash -c '
+  grep -q "warning: .alpha.: $2.worktrees is there, but is not a folder; it starts without it" <<<"$1" && [ -e "$3" ]' _ "$out" "$WT_THERE" "$WORK/worktrees-agent-ran"
 out="$(cd "$REPO_B" && "$BOSUN" launch gamma 2>&1)"
 check "a sessions.yml entry overrides model and effort" bash -c 'grep -q -- "--model sonnet" <<<"$1" && grep -q "effortLevel\\\\\":\\\\\"high" <<<"$1"' _ "$out"
 out="$(cd "$REPO_B" && "$BOSUN" launch --model haiku --effort low gamma 2>&1)"
@@ -1467,11 +1495,21 @@ allows() {
 }
 CN=(env BOSUN_CLAUDE_BIN="$WORK/mcp-claude" BOSUN_ALERT_SLACK_USER="")
 ORCH=("${CN[@]}" BOSUN_ORCHESTRATOR=orch BOSUN_ORCHESTRATOR_DIR="$REPO_A")
-check "a repo window's settings add its repository's parent directory as a working directory" bash -c '
-  jq -e --arg d "$2" ".permissions.additionalDirectories == [\$d]" <<<"$1" >/dev/null' _ "$(launch_settings "$(cd "$REPO_A" && "$BOSUN" launch alpha 2>&1)")" "$(dirname "$REPO_A")"
+# grants <launch output> <jq test of its additionalDirectories, as $d>: the test holds, or say what it got.
+grants() {
+  local settings
+  settings="$(launch_settings "$1")" || return 1
+  jq -e "(.permissions.additionalDirectories // \"no key\") as \$d | $2" <<<"$settings" >/dev/null || {
+    echo "additionalDirectories: $(jq -c '.permissions.additionalDirectories // "no key"' <<<"$settings")"
+    return 1
+  }
+}
+check "a repo window's settings grant it the worktrees folder beside its repository, and nothing more" \
+  grants "$(cd "$REPO_A" && "$BOSUN" launch alpha 2>&1)" "\$d == [\"$REPO_A.worktrees\"]"
 mkdir -p "$HOME/directly-in-home"
-check "... but none when that parent is the home folder itself" bash -c '
-  ! jq -e ".permissions.additionalDirectories" <<<"$1" >/dev/null 2>&1' _ "$(launch_settings "$(cd "$HOME/directly-in-home" && "$BOSUN" launch alpha 2>&1)")"
+check "... in the home folder too: the grant is that folder, not the home folder" \
+  grants "$(cd "$HOME/directly-in-home" && "$BOSUN" launch alpha 2>&1)" "\$d == [\"$HOME/directly-in-home.worktrees\"]"
+check "... and none for a window whose folder is in / itself" grants "$(cd /usr && "$BOSUN" launch alpha 2>&1)" '$d == "no key"'
 check "a repo window reaches no connector by default" allows "$(cd "$REPO_A" && "${CN[@]}" "$BOSUN" launch alpha 2>&1)" '$a == []'
 check "... and every one with BOSUN_CONNECTORS=all" allows "$(cd "$REPO_A" && "${CN[@]}" BOSUN_CONNECTORS=all "$BOSUN" launch alpha 2>&1)" '$a == "no key"'
 check "... and looked up none of them" test ! -e "$WORK/mcp-claude.calls"
@@ -1480,6 +1518,7 @@ check "the orchestrator reaches a claude.ai connector by the URL claude mcp list
 check "... looked up once per launch, in the window's folder" test "$(cat "$WORK/mcp-claude.calls")" = "$REPO_A"
 check "... and kept for when the lookup fails" jq -e '."claude.ai Acme Chat" == "https://chat.example.com/mcp"' "$BOSUN_STATE_DIR/connectors.json"
 check "... and nothing was missing, so no alert" not_contains "$out" "started without connector"
+check "the orchestrator gets no worktrees folder" grants "$out" '$d == "no key"'
 rm "$WORK/mcp-list.out"
 out="$(cd "$REPO_A" && "${ORCH[@]}" BOSUN_ORCHESTRATOR_CONNECTORS="claude.ai Acme Chat" "$BOSUN" launch orch 2>&1)"
 check "a failed lookup uses the URL kept" allows "$out" '$a == [{"serverUrl": "https://chat.example.com/mcp"}]'
@@ -4524,6 +4563,14 @@ assert job.get("AbandonProcessGroup") is True, job.get("AbandonProcessGroup")
   printf 'Repeating power events:\n  wakepoweron at 9:01AM every day\n' >"$WORK/pmset-sched"
   BOSUN_STATE_DIR="$WORK/un-state" "$BOSUN" trust --any "$UN_REPO" >/dev/null
   echo "# mine" >"$WORK/un-state/a-file-of-mine"
+  # Two worktrees folders a launch made beside windows' repositories, as it makes them: one empty, one that
+  # holds a worktree now.
+  UN_WORKTREES="$WORK/un-repos"
+  mkdir -p "$UN_WORKTREES"
+  for folder in exporter billing; do
+    python3 "$ROOT/lib/agent_changes.py" make-folder "$WORK/un-state" "$UN_WORKTREES/$folder.worktrees"
+  done
+  mkdir "$UN_WORKTREES/billing.worktrees/fix-qty"
   # A window whose agent, stopped, starts a hook in a session of its own that writes a signal two seconds
   # later, as Claude Code starts its async SessionEnd hook, and a helper in its window's session that
   # outlives it, as Claude Code's caffeinate does; it ends a second later. Uninstall must wait for the hook
@@ -4565,6 +4612,10 @@ for line in sys.stdin:
     kill -0 "$(cat "$2")" && ! grep -q "still running" <<<"$1"' _ "$UN_OUT" "$WORK/late-helper"
   kill "$(cat "$WORK/late-helper")" 2>/dev/null
   check "uninstall takes back the trust it gave" bash -c '! python3 "$1/lib/claude_state.py" trusted "$2"' _ "$ROOT" "$UN_REPO"
+  check "... removes the empty worktrees folder a launch made" bash -c '
+    [ ! -e "$1/exporter.worktrees" ] && grep -q "removed the empty worktrees folder bosun made, $1/exporter.worktrees" <<<"$2"' _ "$UN_WORKTREES" "$UN_OUT"
+  check "... and leaves the one that holds a worktree, saying why" bash -c '
+    [ -d "$1/billing.worktrees/fix-qty" ] && grep -A1 "^  $1/billing.worktrees\$" <<<"$2" | grep -q "unfinished work"' _ "$UN_WORKTREES" "$UN_OUT"
   check "... cancels its wake, through sudo" grep -q "sudo .*pmset repeat cancel" "$WORK/system.log"
   check "... says it is done" contains "$UN_OUT" "bosun is uninstalled"
   check "... says where your settings are" contains "$UN_OUT" "your settings: bosun.env"
@@ -4638,6 +4689,7 @@ for line in sys.stdin:
   out="$(CX launch cx)"
   check "a new Codex session starts with what keeps it unattended" contains "$out" "--no-daemon --approve-for-me"
   check "... can reach git and bosun's state" contains "$out" "sandbox_workspace_write.writable_roots"
+  check "... and the worktrees folder beside its repository" contains "$out" "\\\"$CX_REPO.worktrees\\\""
   check "... reports when a turn ends, by the agent's own name" contains "$out" "turn-end"
   check "... not by the name only Codex had" not_contains "$out" "codex-turn-end"
   check "... and always has a first prompt" contains "$out" 'nothing\ to\ do\ yet'
@@ -5740,7 +5792,7 @@ knows_all_of() { # <state dir> <config dir>: names what it does not know
     return 1
   }
 }
-for state in "$WORK/state" "$WORK/approvals-state"; do
+for state in "$WORK/state" "$WORK/approvals-state" "$WORK/worktrees-state"; do
   check "what a run left in $(basename "$state")" knows_all_of "$state" "$WORK/config"
 done
 check "what it left in the knowledge base's config" knows_all_of "$WORK/state" "$WORK/kg-config"
