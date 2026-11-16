@@ -14,9 +14,10 @@ import re
 from collections.abc import Callable
 
 
-# A word that may make a name secret: it does when it is a whole part of the name (secret_name:
-# AWS_SECRET_ACCESS_KEY, access_token, apiKey; not input_tokens or tokenizer). The console's Config
-# view masks config keys by these words anywhere in them, and by any KEY (console_library).
+# A word that may make a name secret: it does when it is a whole part of the name or ends it
+# (secret_name: AWS_SECRET_ACCESS_KEY, access_token, apiKey, dbpassword; not input_tokens or
+# tokenizer). The console's Config view masks config keys by these words anywhere in them, and by
+# any KEY (console_library).
 CREDENTIAL_WORD = (
     r"(?:password|passwd|secret|token|api[_-]?key|access[_-]?key|private[_-]?key|credential|cookie)"
 )
@@ -36,6 +37,7 @@ SECRET_PARTS = (
     ("credentials",),
     ("cookie",),
 )
+SECRET_ENDINGS = tuple("".join(words) for words in SECRET_PARTS)  # the end of a name's last part
 NAME_SEPARATORS = re.compile(r"[_.-]+")
 CAMEL_PARTS = re.compile(r"[A-Z]+(?![a-z])|[A-Z]?[a-z]+|\d+")  # APIKey: API, Key; accessToken
 # Where a name starts: after no word character or backslash, or after an escaped line break or tab
@@ -72,8 +74,11 @@ KEY_LENGTH = 20_000  # characters a whole key may span between its markers (a PG
 
 
 def secret_name(name: str) -> bool:
-    """Whether a secret word is a whole part of <name>, split at _ - . and camelCase."""
+    """Whether a secret word is a whole part of <name>, split at _ - . and camelCase, or the end of
+    its last part (dbpassword, GITHUBTOKEN; not tokens or secretary)."""
     parts = [part.lower() for chunk in NAME_SEPARATORS.split(name) for part in CAMEL_PARTS.findall(chunk)]
+    if parts and parts[-1].endswith(SECRET_ENDINGS):
+        return True
     return any(
         tuple(parts[start : start + len(words)]) == words
         for words in SECRET_PARTS

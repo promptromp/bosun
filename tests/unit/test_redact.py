@@ -136,8 +136,22 @@ class SecretNameTest(unittest.TestCase):
                 self.assertTrue(redact_module.secret_name(name))
                 self.assertEqual(redact(f"{name}={FAKE}"), f"{name}=<redacted>")
 
+    def test_names_that_end_in_a_secret_word(self) -> None:
+        for name in ("dbpassword", "mypassword", "githubtoken", "GITHUBTOKEN", "DBPASSWORD", "x_myapikey"):
+            with self.subTest(name=name):
+                self.assertTrue(redact_module.secret_name(name))
+                self.assertEqual(redact(f"{name}={FAKE}"), f"{name}=<redacted>")
+
     def test_names_that_only_hold_a_secret_word_inside_a_part(self) -> None:
-        for name in ("input_tokens", "max_tokens", "TOKENS", "tokenizer", "secretary", "dbpasswords"):
+        for name in (
+            "input_tokens",
+            "max_tokens",
+            "TOKENS",
+            "tokenizer",
+            "secretary",
+            "dbpasswords",
+            "dbpassword_hash",
+        ):
             with self.subTest(name=name):
                 self.assertFalse(redact_module.secret_name(name))
                 self.assertEqual(redact(f"{name}={FAKE}"), f"{name}={FAKE}")
