@@ -246,8 +246,22 @@ class Folders(unittest.TestCase):
             self.assertEqual(up.kind_of(name, up.LOG_FILES), up.WORKING, name)
             if name.endswith(".log"):
                 self.assertIsNotNone(log_files.day_of(name), name)  # what the morning run prunes, too
-        for name in ("Zoom.log", "vpn-client.log", "Install-2026-11-02.log", "report-2026-11.log"):
+        for name in (
+            "Zoom.log",
+            "vpn-client.log",
+            "Install-2026-11-02.log",
+            "report-2026-11.log",
+            "backup-2026-11-01.log",  # someone else's day file in a shared folder
+            "rsync-backup-2026-11-01.log",
+        ):
             self.assertEqual(up.kind_of(name, up.LOG_FILES), up.UNKNOWN, name)
+            self.assertIsNone(log_files.day_of(name), name)  # nor does the morning run prune it
+
+    def test_bosun_s_log_writers_are_its_commands_and_install_sh(self) -> None:
+        """lib/common.sh's log names its file after the command bin/bosun runs (libexec/bosun-<command>)."""
+        libexec = Path(__file__).resolve().parents[2] / "libexec"
+        commands = {path.name.removeprefix("bosun-") for path in libexec.glob("bosun-*")}
+        self.assertEqual(set(log_files.WRITERS), commands | {"install", "bosun"})
 
     def test_an_unsafe_folder_is_left_whole_and_named(self) -> None:
         plan = up.build_plan(facts(state_dir=HOME, log_dir=f"{HOME}/logs"), Choices(keep_ledger=False))

@@ -24,6 +24,7 @@ from pathlib import Path
 
 import agent_state
 import init_plan
+import log_files
 from checkout_work import Checkout, why_kept
 from init_plan import tilde
 
@@ -133,9 +134,9 @@ CONFIG_FILES = (
 LOG_FILES = tuple(
     (pattern, WORKING)
     for pattern in (
-        # A day's file, `<command>-YYYY-MM-DD.log`: every command's (lib/common.sh's log), the morning run's,
-        # the check-in loop's, learning's... (lib/log_files.py's DAY_FILE, which the morning run prunes)
-        "[a-z]*-[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9].log",
+        # A day's file, `<writer>-YYYY-MM-DD.log`, of bosun's own writers only (lib/log_files.py's WRITERS,
+        # what the morning run prunes): another program's day files in a shared folder stay
+        *(f"{writer}-[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9].log" for writer in log_files.WRITERS),
         "hook-*.log*",
         "launchd.out",
         "launchd.err",

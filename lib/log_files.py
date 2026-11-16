@@ -1,7 +1,8 @@
 """bosun's log folder kept in bounds, once a day by the morning run (`tidy_logs` in libexec/bosun-morning).
 
-- A day's file (`<command>-YYYY-MM-DD.log`, which lib/common.sh's `log` and the jobs write) older than
-  KEEP_DAYS, by the date in its name, is removed.
+- A day's file (`<command>-YYYY-MM-DD.log`, which lib/common.sh's `log` and the jobs write: WRITERS, bosun's
+  own names, so that another program's day files in a shared folder are never taken) older than KEEP_DAYS, by
+  the date in its name, is removed.
 - What launchd captures from a job (`*.launchd.out`, `*.launchd.err`) has no day in its name and only grows:
   past LAUNCHD_MAX_BYTES it keeps its last LAUNCHD_KEEP_BYTES, from the start of a line. It is cut in place,
   the same file, because launchd keeps it open and appends to it; a new file would leave launchd writing to
@@ -25,7 +26,28 @@ from pathlib import Path
 KEEP_DAYS = 30
 LAUNCHD_MAX_BYTES = 1024 * 1024
 LAUNCHD_KEEP_BYTES = 256 * 1024
-DAY_FILE = re.compile(r"^[a-z][a-z0-9-]*-(?P<day>\d{4}-\d{2}-\d{2})\.log$")
+# Whose day files are bosun's: lib/common.sh's `log` names a file after the command bin/bosun runs
+# (BOSUN_COMMAND, a libexec/bosun-<command>), install.sh's own, and "bosun" when no command is set; the jobs
+# and the other writers (the morning run, the check-in loop, the hook, learning, delegate, impact, launch) are
+# commands too. tests/unit/test_uninstall_plan.py holds it to libexec/.
+WRITERS = (
+    *("alert", "app", "attach", "checkin", "chores", "console", "context", "delegate", "doctor", "events"),
+    *("guard", "hook", "impact", "init", "kg", "launch", "learn", "ledger", "morning", "my-prs", "orphans"),
+    *(
+        "pr-threads",
+        "preflight",
+        "quit",
+        "refresh",
+        "resolve",
+        "review-watch",
+        "send",
+        "sessions",
+        "settings",
+    ),
+    *("setup", "slack-watch", "start", "status", "stop", "trust", "uninstall", "update", "wake-test"),
+    *("watchdog", "install", "bosun"),
+)
+DAY_FILE = re.compile(rf"^(?:{'|'.join(map(re.escape, WRITERS))})-(?P<day>\d{{4}}-\d{{2}}-\d{{2}})\.log$")
 LAUNCHD_SUFFIXES = (".launchd.out", ".launchd.err")
 
 
