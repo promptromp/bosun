@@ -17,6 +17,11 @@
 # What differs per agent (BOSUN_HARNESS, or a window's `harness:` in sessions.yml) is in lib/launch/<harness>.sh:
 # build_agent_args, first_prompt, run_new and run_resumed.
 #
+# A repo window's agent may read and write in the folder its worktrees go in, beside its repository's main
+# working tree: <parent>/<repository>.worktrees (Claude Code: an additional working directory; Codex: a
+# writable root). Launch makes that folder before the agent starts (never in a dry run or for --fingerprint),
+# and puts one it made on record for `bosun uninstall`, which removes it while it is empty.
+#
 # The orchestrator window is special: it runs a fresh conversation named <name>-YYYY-MM-DD each
 # day (the ledger carries state across days), uses BOSUN_ORCHESTRATOR_FLAGS instead of
 # BOSUN_CLAUDE_FLAGS, loads the orchestrator settings, plugin and policy, and starts each day
@@ -195,6 +200,21 @@ set_up_agent() {
 }
 set_up_agent
 
+# A repo window's worktrees folder (worktrees_folder, lib/common.sh), made here, whatever the agent, once it is
+# about to start: Claude Code drops a working directory that is not there when the session starts. Never for
+# the orchestrator. On record when this launch made it, never when it was there (lib/agent_changes.py), so
+# uninstall removes exactly what bosun made. One that cannot be made is a line, and the window starts anyway.
+make_worktrees_folder() {
+  local folder why
+  is_orchestrator "$name" && return 0
+  folder="$(worktrees_folder)"
+  [ -n "$folder" ] && [ ! -d "$folder" ] || return 0
+  # Bosun's own folders, which it never makes one in.
+  why="$(env BOSUN_CONFIG_DIR="$BOSUN_CONFIG_DIR" BOSUN_LOG_DIR="$BOSUN_LOG_DIR" BOSUN_INSTALL="$BOSUN_INSTALL" \
+    python3 "$BOSUN_ROOT/lib/agent_changes.py" make-folder "$BOSUN_STATE_DIR" "$folder" 2>&1)" ||
+    log "warning: '$name': ${why:-could not make $folder, so the window starts without it}"
+}
+
 run_agent() {
   record_launch
   if [ "$BOSUN_LAUNCH_DRY_RUN" = "1" ]; then
@@ -204,6 +224,7 @@ run_agent() {
     return 0
   fi
   require_agent_bin "$name"
+  make_worktrees_folder
   # exec: no bash process stays behind reading this script while the agent runs, so editing the
   # script can never make a running launcher execute the wrong lines when the agent exits.
   exec "$AGENT_BIN" "$@"

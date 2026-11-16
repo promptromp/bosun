@@ -434,6 +434,59 @@ class AgentSetups(unittest.TestCase):
         self.assertIn(("agent-setup.lock", up.WORKING), up.STATE_FILES)
 
 
+class WorktreeFolders(unittest.TestCase):
+    """The worktrees folders bosun made beside a window's repository: removed while empty, never otherwise."""
+
+    EMPTY = f"{HOME}/Development/exporter.worktrees"
+    FULL = f"{HOME}/Development/billing.worktrees"
+
+    def plan(self, *folders: tuple[str, int], **changes: object) -> up.Plan:
+        return up.build_plan(facts(worktree_folders=folders, **changes), Choices())
+
+    def test_an_empty_one_is_removed_with_rmdir_only(self) -> None:
+        plan = self.plan((self.EMPTY, 0))
+        step = Step(up.WORKTREES, self.EMPTY, by_hand=f"rmdir {self.EMPTY}")
+        self.assertIn(step, plan.steps)
+        self.assertNotIn(self.EMPTY, stays(plan))
+
+    def test_one_with_anything_in_it_stays_saying_why(self) -> None:
+        for held in (1, up.UNREADABLE):
+            plan = self.plan((self.FULL, held))
+            self.assertEqual(targets(plan, up.WORKTREES), set(), held)
+            (stay,) = [stay for stay in plan.stays if stay.path == self.FULL]
+            self.assertIn("worktrees", stay.why)
+            self.assertIn("unfinished work", stay.why)
+            self.assertFalse(stay.record)
+
+    def test_the_plan_names_both(self) -> None:
+        both = facts(worktree_folders=((self.EMPTY, 0), (self.FULL, 2)))
+        text = up.render_plan(up.build_plan(both, Choices()), both)
+        removes, leaves = text.split("It leaves:")
+        self.assertIn("the empty worktrees folder bosun made, ~/Development/exporter.worktrees", removes)
+        self.assertIn("~/Development/billing.worktrees", leaves)
+        self.assertNotIn("billing", removes)
+
+    def test_it_goes_after_the_windows_stop(self) -> None:
+        kinds = [step.kind for step in self.plan((self.EMPTY, 0)).steps]
+        self.assertLess(kinds.index(up.STOP), kinds.index(up.WORKTREES))
+        self.assertLess(kinds.index(up.WORKTREES), kinds.index(up.FILE))
+
+    def test_the_record_stays_while_an_empty_one_is_there_to_remove(self) -> None:
+        entries = ("agent-changes.json", "agent-changes.lock", "logs")
+        bare = {"state_entries": entries, "trust": (), "notes": ()}
+        planned = targets(self.plan((self.EMPTY, 0), **bare))
+        self.assertNotIn(f"{STATE}/agent-changes.json", planned)
+        self.assertIn(f"{STATE}/agent-changes.lock", planned)
+        for left in ((self.FULL, 3),), ():
+            self.assertIn(f"{STATE}/agent-changes.json", targets(self.plan(*left, **bare)), left)
+
+    def test_none_no_step(self) -> None:
+        self.assertNotIn(up.WORKTREES, [step.kind for step in self.plan().steps])
+
+    def test_the_lock_is_bosuns_own(self) -> None:
+        self.assertIn(("agent-changes.lock", up.WORKING), up.STATE_FILES)
+
+
 class CheckoutRules(unittest.TestCase):
     def test_only_what_the_installer_made_with_no_work_in_it(self) -> None:
         for checkout, why in (

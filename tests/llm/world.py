@@ -6,7 +6,8 @@
   with a Claude session record in the scratch HOME), so `bosun context` and `send --list` look
   like a live session.
 - A fictional git repo (acme/exporter) with no reachable remote, as the repos dir and the repo
-  session's working directory.
+  session's working directory, and beside it its worktrees folder (exporter.worktrees), which the repo
+  session may write in as a window bosun launched may.
 
 The real HOME is only used by Claude itself (login, and MCP servers with --with-mcp); its outward
 tools are denied.
@@ -104,6 +105,11 @@ class World:
     @property
     def repo(self) -> Path:
         return self.base / "repos" / "exporter"
+
+    @property
+    def worktrees(self) -> Path:
+        """The folder beside the repo its worktrees go in, as bosun launch makes it (worktrees_folder)."""
+        return self.repo.parent / f"{self.repo.name}.worktrees"
 
     @property
     def orchestrator_dir(self) -> Path:
@@ -216,6 +222,7 @@ def build_world(base: Path, socket: str, knowledge: bool = True) -> World:
         )
     )
     make_repo(world.repo)
+    world.worktrees.mkdir()  # before the session starts, or Claude Code drops it as a working directory
     start_windows(world)
     return world
 

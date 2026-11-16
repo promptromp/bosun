@@ -5,8 +5,21 @@
 # shellcheck disable=SC2034  # for run_agent, in the script that sources this
 AGENT_BIN="$BOSUN_CLAUDE_BIN"
 
+# A repo window's worktrees folder (worktrees_folder, lib/common.sh) as an additional working directory, so
+# that a worktree the agent makes there (the new-work rule) does not stop the window at Claude Code's question
+# about a read outside its working directories; nobody may be there to answer it. That folder only, never
+# the repository's parent, which would reach every repository beside it. Nothing when there is no such folder.
+# Claude Code drops a directory that does not exist when the session starts, so the launch makes it first.
+worktrees_folder_settings() {
+  local folder
+  folder="$(worktrees_folder)"
+  [ -n "$folder" ] || return 0
+  jq -cn --arg folder "$folder" '{permissions: {additionalDirectories: [$folder]}}'
+}
+
 # The orchestrator has its own flags, settings, plugin and policy, and the hooks of
-# orchestrator_extra_settings; a repo session gets the hooks of repo_session_settings (lib/common.sh).
+# orchestrator_extra_settings; a repo session gets the hooks of repo_session_settings (lib/common.sh) and
+# its worktrees folder (worktrees_folder_settings).
 # Both get the connectors their list names (connector_settings), in place of any the settings file names.
 # shellcheck disable=SC2154  # build_model_effort_args and set_autocompact_flag (lib/common.sh) set their arrays; harness: libexec/bosun-launch's
 build_agent_args() { # <window> <session name> <model> <effort>
@@ -27,6 +40,7 @@ build_agent_args() { # <window> <session name> <model> <effort>
   else
     build_model_effort_args "$3" "$4" "" "$({
       repo_session_settings "$1"
+      worktrees_folder_settings
       connector_settings "$1"
     } | merge_settings)"
     require_connector_limit "$1" "$connector_settings_json"

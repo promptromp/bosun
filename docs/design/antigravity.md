@@ -180,7 +180,9 @@ sandbox.
 - **Trust.** Each launch passes the folder, as given, in `--settings` (`trustedWorkspaces`), so the trust
   screen never shows and `agy`'s settings are never written. `agy` compares the folder as given, not its
   resolved path, and a trusted folder does not cover the folders under it. `bosun trust` has nothing to do for
-  `agy`.
+  `agy`. So the worktrees folder a launch makes beside a repo window's repository (`<repo>.worktrees`, which
+  Claude Code and Codex windows may write in) is made for an `agy` window too but not passed: trusting it would
+  not cover a worktree in it.
 - **Connectors.** `agy` takes no MCP limit per launch, and switching servers off in the shared config would
   race between windows and change the app's setup. So before a launch the adapter lists every server `agy`
   would start there: the global `~/.gemini/config/mcp_config.json`, each `.agents/mcp_config.json` from the

@@ -12,8 +12,11 @@ Exit status: 0 done, or nothing was changed; 1 something could not be removed; 2
 from __future__ import annotations
 
 import argparse
+import dataclasses
+import errno
 import os
 import shutil
+import stat
 import subprocess
 import sys
 import time
@@ -29,6 +32,7 @@ import uninstall_detect
 import uninstall_macos
 import uninstall_plan as up
 from agent_state import AGENTS
+from init_plan import tilde
 from uninstall_plan import Choices, Facts, Plan, Step
 
 
@@ -42,6 +46,10 @@ STOPPED_POLL_SECONDS = 0.05
 
 class StepFailed(Exception):
     pass
+
+
+class StepKept(Exception):
+    """What a step was to remove is left after all, for the reason it gives, as a plan made now would."""
 
 
 def parse_args(argv: list[str]) -> argparse.Namespace:
@@ -190,6 +198,7 @@ class Carrying:
             up.TRUST: self.revoke_trust,
             up.SETUP: self.undo_setup,
             up.NOTE: self.remove_note,
+            up.WORKTREES: self.remove_worktrees_folder,
             up.LINK: lambda step: remove_path(Path(step.target)),
             up.FILE: lambda step: remove_path(Path(step.target)),
             up.CHECKOUT: lambda step: shutil.rmtree(step.target),
@@ -241,10 +250,30 @@ class Carrying:
         claude_state.remove_memory_note(Path(step.target))
         agent_changes.forget_note(self.state_dir, step.target)
 
+    def remove_worktrees_folder(self, step: Step) -> None:
+        """Only while it is a folder (not a link to one: os.lstat, right before) and empty (os.rmdir, never
+        more): one a worktree went into since the plan stays, and that is no error. Forgotten once it is gone,
+        or is no folder bosun made any more."""
+        path = os.path.normpath(step.target)
+        try:
+            if not stat.S_ISDIR(os.lstat(path).st_mode):
+                agent_changes.forget_folder(self.state_dir, step.target)
+                raise StepKept("it is not the folder bosun made now, but a link or a file")
+            os.rmdir(path)
+        except FileNotFoundError:
+            pass
+        except OSError as error:
+            if error.errno in (errno.ENOTEMPTY, errno.EEXIST):
+                raise StepKept("it is not empty now: its worktrees may hold unfinished work") from error
+            raise
+        agent_changes.forget_folder(self.state_dir, step.target)
+
     def run(self, steps: tuple[Step, ...]) -> None:
         for step in steps:
             try:
                 self.actions[step.kind](step)
+            except StepKept as kept:
+                print(f"left {tilde(step.target, self.facts.home)}: {kept}")
             except Exception as error:  # noqa: BLE001 (one step's trouble must not stop the others)
                 print(f"could not remove {up.describe(step, self.facts.home)}: {error}")
                 self.failed.append(step)
@@ -284,6 +313,12 @@ def inside_install(facts: Facts) -> bool:
     return any(here.is_relative_to(place) for place in places) and not ROOT.exists()
 
 
+def with_folders_left(plan: Plan, stays: list[up.Stay]) -> Plan:
+    """<plan>, saying also those of <stays> whose folder is still there, unless it says them already."""
+    left = tuple(stay for stay in stays if os.path.isdir(stay.path) and stay not in plan.stays)
+    return dataclasses.replace(plan, stays=(*plan.stays, *left))
+
+
 def carry_out(env: Mapping[str, str], choices: Choices, *, can_ask: bool) -> int:
     """In goes, looking again before each: stopping the windows writes a file of its own, and only a look at
     the end says what is really gone."""
@@ -296,9 +331,13 @@ def carry_out(env: Mapping[str, str], choices: Choices, *, can_ask: bool) -> int
     first = Carrying(facts, can_ask=can_ask, env=env)
     first.run(tuple(step for step in plan.steps if step.kind != up.FILE))
     facts, plan = plan_now()
+    # The worktrees folders bosun leaves are named by the record that goes with the state folder now, so the
+    # end says them again from here, those still there.
+    worktrees = up.worktrees_stays(facts)
     Carrying(facts, can_ask=can_ask).run(tuple(step for step in plan.steps if step.kind == up.FILE))
     remove_empty_folders(facts)
     facts, plan = plan_now()
+    plan = with_folders_left(plan, worktrees)
     # A failed stop is left to do though the final look finds no window: the session may be gone while
     # what failed is not (bosun stop's timeout). The install stays, for the run again it names.
     stopped_not = tuple(step for step in first.failed if step.kind == up.STOP)

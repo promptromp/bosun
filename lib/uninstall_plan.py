@@ -79,6 +79,7 @@ STATE_FILES = (
     (".*.restoring", WORKING),  # what an update's restore was writing, cut short (lib/update_backups.py)
     ("agent-changes.json", WORKING),
     ("agent-setup.lock", WORKING),  # held while an agent's one-time setup is made
+    ("agent-changes.lock", WORKING),  # held while agent-changes.json is written (lib/agent_changes.py)
     (".agent-changes.json.*", WORKING),
     ("alerted-*", WORKING),  # what the check-in loop left, before the watchdog
     ("alerts", WORKING),
@@ -156,6 +157,7 @@ STOP = "stop"
 TRUST = "trust"
 SETUP = "setup"
 NOTE = "note"
+WORKTREES = "worktrees"  # an empty worktrees folder bosun made beside a window's repository
 LINK = "link"
 FILE = "file"
 CHECKOUT = "checkout"
@@ -201,6 +203,8 @@ class Facts:
     trust: tuple[tuple[str, str], ...] = ()  # (harness, folder) bosun marked, and the agent may still trust
     setups: tuple[tuple[str, str], ...] = ()  # (harness, what it is called) of each one-time setup bosun made
     notes: tuple[str, ...] = ()  # memory notes bosun wrote that are still there
+    # (folder, how many entries it holds, or UNREADABLE) of each worktrees folder bosun made, still there
+    worktree_folders: tuple[tuple[str, int], ...] = ()
     state_entries: tuple[str, ...] = ()  # the names directly in each folder
     config_entries: tuple[str, ...] = ()
     log_entries: tuple[str, ...] = ()  # only for a log folder outside the state folder
@@ -403,6 +407,26 @@ def agent_steps(facts: Facts) -> list[Step]:
     return [*trust, *setups, *(Step(NOTE, note, by_hand=f"rm {quoted(note)}") for note in facts.notes)]
 
 
+def worktrees_steps(facts: Facts) -> list[Step]:
+    """A worktrees folder bosun made goes while it is empty, and only then (rmdir, never more)."""
+    return [
+        Step(WORKTREES, folder, by_hand=f"rmdir {quoted(folder)}")
+        for folder, held in facts.worktree_folders
+        if held == 0
+    ]
+
+
+def worktrees_stays(facts: Facts) -> list[Stay]:
+    """One with anything in it stays: a worktree in it may hold work not committed or pushed anywhere."""
+    full = "bosun made it for the window's worktrees, and it is not empty: they may hold unfinished work"
+    unread = "bosun made it for the window's worktrees, and cannot see into it: they may hold unfinished work"
+    return [
+        Stay(folder, unread if held == UNREADABLE else full)
+        for folder, held in facts.worktree_folders
+        if held != 0
+    ]
+
+
 def link_steps(facts: Facts) -> list[Step]:
     links = [facts.link] if facts.link else []
     paths = (*links, *facts.old_files, *facts.leftover_links)
@@ -424,9 +448,10 @@ def wanted_gone(kind: str, facts: Facts, choices: Choices) -> bool:
 
 def goes(kind: str, name: str, facts: Facts, choices: Choices) -> bool:
     """The record of what bosun changed in the agents' files stays as long as something it lists is still
-    there: it is how a second run finishes the job."""
+    there for uninstall to take back (a worktrees folder bosun leaves, not empty, no longer counts): it is how
+    a second run finishes the job."""
     if name.startswith(("agent-changes.json", ".agent-changes.json")) and (
-        facts.trust or facts.setups or facts.notes
+        facts.trust or facts.setups or facts.notes or worktrees_steps(facts)
     ):
         return False
     return wanted_gone(kind, facts, choices)
@@ -543,6 +568,7 @@ def build_plan(facts: Facts, choices: Choices) -> Plan:
             *app_steps(facts),
             *stop_steps(facts),
             *agent_steps(facts),
+            *worktrees_steps(facts),
             *link_steps(facts),
             *file_steps(facts, choices),
         ),
@@ -552,6 +578,7 @@ def build_plan(facts: Facts, choices: Choices) -> Plan:
             *records_stay(facts, choices),
             *app_stays(facts),
             *folder_stays(facts),
+            *worktrees_stays(facts),
             *install_stays(facts),
             *wake_stays(facts),
         ),
@@ -597,6 +624,7 @@ def describe(step: Step, home: str) -> str:
         TRUST: f"the trust bosun gave {target} ({step.harness})",
         SETUP: f"{step.target} ({step.harness})",
         NOTE: f"the memory note bosun learned, {target}",
+        WORKTREES: f"the empty worktrees folder bosun made, {target}",
     }.get(step.kind, target)
 
 
