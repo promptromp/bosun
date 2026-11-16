@@ -66,7 +66,10 @@ failing from then on.
   - `sensitivity`: internal, or personal for anything naming a person
   - `prevents_rework`: whether not knowing it caused rework
 - `identifiers.jsonl` (restricted, mode 0600): chat member ids, tracker account ids, code-host
-  logins, needed for mentions and routing. Never shown in context packs.
+  logins, needed for mentions and routing. Never shown in context packs, and never in the local git
+  history (`GIT_IGNORE`, `knowledge_store.PRIVATE_FILES`), whose objects git writes readable to anyone who
+  can read the folder. Nothing restores or rebuilds from that history, and the journal does not hold the
+  identifiers either: this file and the update's backups are their only copies.
 - `journal/`: every change to entities and facts, which each write appends to before it writes the
   files above, one transaction per command ([Sync and sharing](sync.md#knowledge-changes)):
   `<replica>.jsonl` for this Mac's changes, `local.jsonl` for those that never leave this Mac:
@@ -74,8 +77,11 @@ failing from then on.
   of a fact I stated (one whose sources hold my quote or name one of my sessions), whole, from the
   write that brings my words on; its records written before then stay private.
   `view.json` records the journal position the files reflect and a digest of what they hold. Both
-  are in the local git history like the other files; what a write cut short left
-  (`<file>.torn-<time>`) is not.
+  are in the local git history like the other files, but for `local.jsonl`, which holds my words and
+  what names a person; what a write cut short left (`<file>.torn-<time>`) is not either. Since
+  2026-11-16 a history that tracked `identifiers.jsonl` or `local.jsonl` untracks them at its next
+  commit; its earlier commits keep them until the history restarts (`kg forget` restarts it, or
+  delete `.git`).
 - `format.json` holds `{"format": n}`, the version of this folder's format (`KNOWLEDGE_FORMAT`; a
   folder without it is format 1). It is in the local git history, and a new knowledge base gets it
   with its first write.

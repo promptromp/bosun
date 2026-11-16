@@ -4,15 +4,16 @@ optional local git history (one commit per change).
 
 - journal/: every change, one transaction per write (lib/journal.py, docs/design/sync.md): this
   Mac's changes in <replica>.jsonl, those naming a person or holding my words in local.jsonl,
-  which never leaves it. A write appends there first, then writes the files below. What a write
-  cut short left there (<file>.torn-<time>) is ignored by the history.
+  which never leaves it, nor goes in the history. A write appends there first, then writes the
+  files below. What a write cut short left there (<file>.torn-<time>) is ignored by the history.
 - format.json: the version of this folder's format ({"format": n}, KNOWLEDGE_FORMAT; a folder from
   before it is format 1), which bosun update's migrations move forward.
 - view.json: the journal position the files reflect and a digest of what each data file holds.
 - entities.jsonl: one entity per line, rewritten atomically when an entity changes.
 - facts.jsonl: append-only log of fact records ({"op": "add"} and {"op": "update"}); only a
   delete on request (`kg forget`) or the retention purge rewrites it.
-- identifiers.jsonl: Slack, tracker and code-host ids of people (restricted: mode 0600).
+- identifiers.jsonl: Slack, tracker and code-host ids of people (restricted: mode 0600, never in the
+  history, where git would keep them readable by anyone who can read the folder).
 - forgotten.jsonl: what was deleted on request or by retention (hashed ids and counts, no content).
 - secret.key: the key of the forgotten hashes (mode 0600, ignored by the history, never leaves this Mac);
   a file there that was not a key, and that no keyed record needed, kept as secret.key.aside-<time>.
@@ -39,7 +40,7 @@ from typing import Any
 
 import change_log
 import knowledge_changes
-from journal import TORN, JournalError, create_new, flush_to_disk, replace_durably, write_all
+from journal import LOCAL, TORN, JournalError, create_new, flush_to_disk, replace_durably, write_all
 
 
 Record = dict[str, Any]
@@ -50,10 +51,18 @@ KEY_FILE = "secret.key"
 # format_digest changes (tests/unit/test_store_formats.py pins it; CLAUDE.md, "A data format change").
 KNOWLEDGE_FORMAT = 1
 KEY_ASIDE = f"{KEY_FILE}.aside-"  # <KEY_FILE>.aside-<UTC time>: a key file that was not a key, kept
+IDENTIFIERS_FILE = "identifiers.jsonl"
+JOURNAL_DIR = "journal"
+# The restricted files the history never holds: people's ids (mode 0600, which git does not keep) and
+# the journal's local.jsonl (what names a person, and my words). A history made before 2026-11-16
+# tracked them: record untracks them (its earlier commits keep them until the history restarts).
+PRIVATE_FILES = (IDENTIFIERS_FILE, f"{JOURNAL_DIR}/{LOCAL}.jsonl")
 # What the history never holds: the lock, temporary files, the last batch, the forgotten hashes'
-# key (and a file kept aside that was meant to be it), and what a write cut short left in the
-# journal (a torn tail can name someone kg forget deletes; forget deletes the local ones).
-GIT_IGNORE = f"knowledge.lock\n*.tmp\nbatch.json\n{KEY_FILE}\n{KEY_ASIDE}*\n*{TORN}*\n"
+# key (and a file kept aside that was meant to be it), what a write cut short left in the journal (a
+# torn tail can name someone kg forget deletes; forget deletes the local ones), and PRIVATE_FILES.
+GIT_IGNORE = f"knowledge.lock\n*.tmp\nbatch.json\n{KEY_FILE}\n{KEY_ASIDE}*\n*{TORN}*\n" + "".join(
+    f"{name}\n" for name in PRIVATE_FILES
+)
 # Also: no git process stays in the history after a command returns, as a write that deletes it
 # (kg forget) would race it, and a repack could make .git again after the delete, a folder that is
 # no repository. So git's housekeeping after a commit (a repack, once it counts enough loose
@@ -106,7 +115,7 @@ class Paths:
 
     @property
     def journal(self) -> Path:
-        return self.root / "journal"
+        return self.root / JOURNAL_DIR
 
     @property
     def format(self) -> Path:
@@ -126,7 +135,7 @@ class Paths:
 
     @property
     def identifiers(self) -> Path:
-        return self.root / "identifiers.jsonl"
+        return self.root / IDENTIFIERS_FILE
 
     @property
     def forgotten(self) -> Path:
@@ -544,7 +553,8 @@ def record(root: Path, message: str) -> str:
     if not ensure_repository(root):
         return f"warning: could not create a git repository in {root}; no history recorded"
     clear_stale_git_locks(root)
-    added = git(root, "add", "-A")
+    untracked = git(root, "rm", "-q", "--cached", "--ignore-unmatch", "--", *PRIVATE_FILES)
+    added = git(root, "add", "-A") if untracked.returncode == 0 else untracked
     status = git(root, "status", "--porcelain") if added.returncode == 0 else added
     if status.returncode != 0:
         return f"warning: git commit failed: {status.stderr.strip()}"

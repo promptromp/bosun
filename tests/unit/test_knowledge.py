@@ -1500,6 +1500,36 @@ class GitHistoryTest(KnowledgeTestCase):
         self.assertNotIn("secret.key", tracked)
         self.assertIn("entities.jsonl", tracked)
 
+    def test_peoples_ids_and_the_local_journal_never_enter_the_history(self) -> None:
+        """identifiers.jsonl (mode 0600, which git does not keep) and journal/local.jsonl (what names a
+        person, my words) stay on this Mac's disk only (review-stores M1)."""
+        self.seed()
+        self.run_kg("identify", "person/dana", "slack", "U00000000DA")
+        self.assertTrue((self.root / "journal" / "local.jsonl").exists())
+        self.assertEqual((self.root / "identifiers.jsonl").stat().st_mode & 0o777, 0o600)
+        tracked = self.git_out(self.root, "ls-files").split()
+        self.assertNotIn("identifiers.jsonl", tracked)
+        self.assertNotIn("journal/local.jsonl", tracked)
+        self.assertIn("entities.jsonl", tracked)
+        self.assertNotIn("U00000000DA", self.git_out(self.root, "log", "-p", "--all"))
+
+    def test_a_history_that_tracked_them_untracks_them_at_its_next_commit(self) -> None:
+        """A history made before 2026-11-16 committed both: the next write's commit takes them out of
+        the tree (its earlier commits keep them until the history restarts) and leaves the files."""
+        self.seed()
+        self.run_kg("identify", "person/dana", "slack", "U00000000DA")
+        (self.root / ".gitignore").write_text("knowledge.lock\n*.tmp\nbatch.json\n")  # an older one
+        self.git_out(self.root, "add", "-f", ".gitignore", "identifiers.jsonl", "journal/local.jsonl")
+        self.git_out(self.root, "-c", "user.name=t", "-c", "user.email=t@example.com", "commit", "-qm", "old")
+        self.assertIn("identifiers.jsonl", self.git_out(self.root, "ls-files").split())
+        self.run_kg("add-entity", "repo/other")
+        tracked = self.git_out(self.root, "ls-files").split()
+        self.assertNotIn("identifiers.jsonl", tracked)
+        self.assertNotIn("journal/local.jsonl", tracked)
+        self.assertIn("identifiers.jsonl", (self.root / ".gitignore").read_text().splitlines())
+        self.assertIn("u00000000da", (self.root / "identifiers.jsonl").read_text().casefold())
+        self.assertTrue((self.root / "journal" / "local.jsonl").exists())
+
     def test_one_commit_per_change_and_forget_restarts_history(self) -> None:
         self.seed()
         self.run_kg("propose", "person/dana", "reviews", "exporter", "--source", "ledger:a")
@@ -1681,7 +1711,8 @@ class GitHistoryTest(KnowledgeTestCase):
         ):
             self.assertEqual(knowledge.main(), 0)
         self.assertEqual(self.processes_naming(token), [])
-        self.assertIn("warning: git commit failed: git add ran past 0.5 s and was stopped\n", said.getvalue())
+        # the commit's first git command (untracking the restricted files) ran past its time
+        self.assertIn("warning: git commit failed: git rm ran past 0.5 s and was stopped\n", said.getvalue())
         self.assertIn("repo/other", self.kb().entities)
         go.touch()
         time.sleep(1)  # the grandchild, if it were still there, would have written the mark by now
