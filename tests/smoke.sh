@@ -1717,6 +1717,12 @@ out="$(kg batch --cap 2)"
 check "the batch lists capped groups, rework-preventing first" bash -c 'grep -q "^1\. Process: other facts: 5 facts \[prevents rework\]" <<<"$1" && grep -q "(1 more group waits for a later batch)" <<<"$1"' _ "$out"
 check "a one-line decision answers it" contains "$(kg batch apply 'confirm all except 1a')" "8 confirmed, 0 rejected, 1 left proposed"
 check "the context pack cites confirmed facts only" bash -c 'grep -Eq "\[f-[0-9a-z]{6}; ledger:" <<<"$1" && ! grep -q "canary checks pass" <<<"$1"' _ "$(kg context --for release)"
+check "search matches the words of a question" bash -c 'head -1 <<<"$1" | grep -qx "repo/pdf-renderer  pdf renderer  (words: pdf, renderer)"' _ "$(kg search 'who reviews the pdf renderer')"
+check "the batch's last group, the people's facts, is confirmed" contains "$(kg confirm axis:people)" "confirmed"
+# Lee prefers #acme-prs; Dana has no preference of her own.
+check "a lookup says where each reviewer prefers to be asked, by their own confirmed preference" bash -c '
+  grep -Eq "^  f-[0-9a-hjkmnp-tv-z]{6} Lee Sample reviews invoice exporter \[[^]]*\]; prefers to be asked in #acme-prs \[f-[0-9a-hjkmnp-tv-z]{6}\]$" <<<"$1" &&
+    grep -Eq "^  f-[0-9a-hjkmnp-tv-z]{6} Dana Example reviews invoice exporter \[[^]]*\]$" <<<"$1"' _ "$(kg lookup exporter)"
 transcript="$WORK/kg-transcript.jsonl"
 printf '{"type":"user","timestamp":"%s","origin":{"kind":"human"},"message":{"role":"user","content":"note: the pdf renderer repo is archived"}}\n' \
   "$(date -u +%Y-%m-%dT%H:%M:%SZ)" >"$transcript"

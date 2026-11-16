@@ -135,10 +135,22 @@ bosun kg context --for releases         # a small cited pack of confirmed facts
   and the next write makes a new key. A `secret.key` that is not a key (empty, the wrong length, unreadable)
   while no such record needs it is moved aside by the next write, kept as
   `secret.key.aside-<time>` (not in the history), and made again, with a line on stderr.
+- **Who and where in one lookup:** `kg lookup "<name>"` lists what links to an entity, and on the
+  first line of each person or team that reviews, owns or approves it says where they prefer to be
+  asked: their own confirmed `prefers_channel` facts with their ids (`f-0ahnvb Marco Placeholder owns
+  pdf renderer [...]; prefers to be asked in #acme-prs [f-dm2y00]`), never their team's. A lookup of a
+  person lists their own preference among their facts, as before.
+- **Search by words:** `kg search` matches the whole text first, as one phrase. A text of several
+  words also matches by its words, each of three characters or more and not one of a few such as
+  "who", "should" or "the", at the start of a word (so "review" finds "reviews" and "reviewer"), in
+  the same names, aliases, related terms, summaries and fact values; an entity matching more of them
+  comes first, every one after the whole-text matches, and the reason says which words matched. So
+  "who reviews the pdf renderer" finds `repo/pdf-renderer`. A context pack's topic is still found by
+  the whole text only, so a pack never pulls in what is only loosely related.
 - **Bounded reads:** `kg lookup` prints at most 800 tokens (`--max-tokens N`; the rest is
-  `(N more: kg facts <entity>)`) and five waiting facts, then a count; `kg search` shows 10 hits
-  (`--limit`); `--json` is complete. `bosun delegate` logs each pack's size, one line in
-  `delegate-<date>.log` of the log folder.
+  `(N more: kg lookup <entity> --max-tokens 3200)`), where to ask included, and five waiting facts,
+  then a count; `kg search` shows 10 hits (`--limit`); `--json` is complete. `bosun delegate` logs
+  each pack's size, one line in `delegate-<date>.log` of the log folder.
 - **Context packs:** `kg context --for <entity|repo|topic> [--for ...] [--max-tokens N]` prints at
   most about 1.5k tokens of confirmed, current facts, each citing its `[id]` and source, with one
   section per target and one budget for all. A repo can be named as the ledger does
@@ -166,9 +178,10 @@ of it: it is always on.
   segment. It never fails a hand-over, and each pack's size is logged to `delegate-<date>.log` in
   `$BOSUN_LOG_DIR`.
 - **Look before asking.** The orchestrator's system prompt, and every Claude repo window's, end with
-  `orchestrator/knowledge.md` (about 300 tokens): look a fact up before asking you, record what you state as
-  standing in your exact words, supersede it when you correct it, confirm or reject a waiting fact only when you
-  name it, and say in one line what was recorded or why it stays proposed. Codex and Antigravity windows get
+  `orchestrator/knowledge.md` (about 300 tokens): look a fact up before asking you (one lookup of a name says who
+  reviews, owns or approves it and where to ask each), record what you state as standing in your exact words,
+  supersede it when you correct it, confirm or reject a waiting fact only when you name it, and say in one line
+  what was recorded or why it stays proposed. Codex and Antigravity windows get
   packs in their briefs but not these rules: bosun cannot check their transcripts, so a fact from them would
   never be confirmed.
 

@@ -52,8 +52,9 @@ light or dark mode and works down to a narrow window.
   (`?view=constellation`): the whole knowledge base as a force-laid graph with hover, a facts
   panel, search, card chips and an "as of" slider (at most 400 entities). **Raw data**
   (`?view=raw`): four cards, People, Process, Product and Systems, with entity counts, confirmed
-  and proposed facts and what changed last, and a search over names, aliases and fact text with a
-  type filter. A disabled Metro tab marks the map still on the roadmap.
+  and proposed facts and what changed last, and a search over names, aliases and fact text (several
+  words also match one by one, as in `kg search`) with a type filter. A disabled Metro tab marks the
+  map still on the roadmap.
   An entity's page (`#/knowledge/<key>`) shows its current facts by predicate with who stands
   behind each (user, stakeholder, observed, inferred), its status, dates and sources (web links
   and ledger items link; a memory note links to the Config view when

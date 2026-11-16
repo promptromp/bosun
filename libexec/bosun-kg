@@ -69,13 +69,17 @@
 #
 # Reading:
 #   lookup <entity> [--max-tokens N] [--json]
-#                                      current confirmed facts with sources, links to it, what waits
+#                                      current confirmed facts with sources, links to it (a person or
+#                                      team that reviews, owns or approves it, with where they prefer
+#                                      to be asked: their own confirmed prefers_channel), what waits
 #                                      (at most N tokens, default 800, and 5 waiting facts, then
 #                                      counts; --json is complete)
 #   facts <entity> [--predicate P] [--as-of T] [--status confirmed|proposed|rejected|expired|all]
 #         [--closed] [--json]          facts about an entity, now or as they held at --as-of
 #   search <text> [--limit N]          entities (10 by default) by name, alias, related term, summary or
-#                                      fact text
+#                                      fact text; a text of several words also by its words (of 3 or
+#                                      more characters, no "who", "the"...), each at the start of a
+#                                      word, more words first, all after what matches the whole text
 #   neighbors <entity> [--hops N]      linked entities within N hops (default 1, at most 3)
 #   context --for <entity|repo|topic> [--for ...] [--max-tokens N]
 #                                      a small pack of confirmed, cited facts (about 1.5k tokens,
