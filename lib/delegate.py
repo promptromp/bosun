@@ -48,6 +48,7 @@ OUTREACH_PREFIX = "out:"
 OUTREACH_KIND = "outreach"
 # Tasks (ledger kind task) are handed over once I accepted them; record-delegation moves them on.
 TASK_KIND = "task"
+DIRECT_TASK = "direct"  # lib/ledger.py's: the task of an item a window took on itself (ledger working)
 TASK_DELEGABLE = ("accepted", "delegated")
 STATE_CHANGE = " -> "  # in the ledger's output when recording the delegation moved the item on
 TELL_ME = "tell me the reply, then: bosun ledger transition '<out-id>' applied --note 'told the user'"
@@ -561,8 +562,10 @@ def check_update_request(args: argparse.Namespace) -> None:
 
 def render_moved_task(item_id: str, delegation: dict[str, Any], details: str) -> str:
     """The whole task again, from what the ledger kept of the hand-over, led by the move and the
-    update, for a window that has never seen it."""
-    chosen = chosen_types(delegation["task"], load_task_types())
+    update, for a window that has never seen it. An item a window took on itself had no hand-over:
+    it goes with the header, the lead and the shared rules, no type's rules."""
+    direct = delegation["task"] == DIRECT_TASK
+    chosen = [] if direct else chosen_types(delegation["task"], load_task_types())
     header = argparse.Namespace(
         id=[item_id],
         link=delegation.get("link"),
@@ -570,11 +573,12 @@ def render_moved_task(item_id: str, delegation: dict[str, Any], details: str) ->
         ask=delegation.get("ask") or f"(not recorded; see bosun ledger show {item_id})",
         details=delegation.get("details"),
     )
-    model, effort = task_model_effort(chosen, None, None)
+    model, effort = task_model_effort(chosen, None, None) if chosen else (SESSION, SESSION)
     preamble = subagent_preamble(model, effort) if (model, effort) != (SESSION, SESSION) else ""
+    began = "it was taken on" if direct else "its task was handed over"
     lead = (
-        f"Ledger item {item_id} moves to this window from window {delegation['window']}, where its "
-        f"task was handed over at {delegation['at']}; that window is told to stop. First check "
+        f"Ledger item {item_id} moves to this window from window {delegation['window']}, where "
+        f"{began} at {delegation['at']}; that window is told to stop. First check "
         f"what was done there (bosun ledger show {item_id}: history, reports, notes; any "
         f"branch or PR) and continue from it.\n\nUpdate: {details}"
     )
